@@ -404,6 +404,7 @@ async function handleHttpRequest(req, res) {
       const r = hubAuth.createUser({ login: b.login, name: b.name, role: 'admin', password: b.password });
       if (!r.ok) return jsonResponse(res, 400, r);
       welcome.clearSetupToken();
+      welcome.markStarted();   // "/" brings this admin back to /welcome until setup is finished or skipped
       finishSignIn(hubAuth.getUser(r.user.id), { totpOk: true });
       return jsonResponse(res, 200, { ok: true, user: r.user });
     }
@@ -422,10 +423,17 @@ async function handleHttpRequest(req, res) {
         out.totp = !!(u && u.totp && u.totp.enabled);
         out.providers = welcome.providerSummary();
         out.hasProvider = welcome.hasProvider();
+        out.unfinished = welcome.unfinished();
         const lead = (await getAgents()).find(a => a.name === 'maestro') || (await getAgents())[0] || null;
         out.lead = lead ? { name: lead.name, display: lead.display || lead.name, model: lead.model } : null;
       }
       return jsonResponse(res, 200, out);
+    }
+    if (pathname === '/api/welcome/finish' && req.method === 'POST') {
+      // Setup done (Maestro answered) or skipped: "/" stops sending this admin back to the Welcome page.
+      const b = (await authJson()) || {};
+      require('./lib/welcome').getWelcome().markFinished(b.how === 'skip' ? 'skip' : 'done');
+      return jsonResponse(res, 200, { ok: true });
     }
     if (pathname === '/api/welcome/api-key' && req.method === 'POST') {
       const b = (await authJson()) || {};
@@ -2646,6 +2654,11 @@ async function handleHttpRequest(req, res) {
       // First run: until the first admin account exists, the home page is the Welcome page (lib/welcome). Once it
       // exists, "/" is the hub; the page shows a notice linking to /welcome while no AI provider is configured.
       if (!hubAuth.hasUsers()) { res.writeHead(302, { Location: '/welcome' }); return res.end(); }
+      // Setup started on the Welcome page and not finished (its tab was closed, or Claude's sign-in page replaced it):
+      // the administrator goes back there, to the step they had reached. The installer's Desktop shortcut opens "/".
+      if (access.isAdmin(req.hubUser) && !req.hubPendingTotp && require('./lib/welcome').getWelcome().unfinished()) {
+        res.writeHead(302, { Location: '/welcome' }); return res.end();
+      }
       filePath = path.join(__dirname, 'index.html');
     } else if (pathname === '/setup' || pathname === '/setup-admin') {
       // The old provider wizard and first-admin form are now steps of the Welcome page.

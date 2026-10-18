@@ -127,9 +127,52 @@ test('a failed Claude turn caused by the sign-in gets the fix in plain words; ot
 test('server: the first account needs the setup code; the code is printed at start while no account exists', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /if \(!welcome\.checkSetupToken\(b\.setupToken\)\) return jsonResponse\(res, 403, \{ error: 'setup_code'/);
-  assert.match(src, /welcome\.clearSetupToken\(\);\s*\n\s*finishSignIn\(hubAuth\.getUser\(r\.user\.id\), \{ totpOk: true \}\);/);
+  assert.match(src, /welcome\.clearSetupToken\(\);\s*\n\s*welcome\.markStarted\(\);[^\n]*\n\s*finishSignIn\(hubAuth\.getUser\(r\.user\.id\), \{ totpOk: true \}\);/);
   assert.match(src, /First-time setup: http:\/\/localhost:\$\{PORT\}\/welcome\?token=\$\{code\}/);
   assert.match(src, /function isSetupNeeded\(\) \{[\s\S]*?if \(!hubAuth\.hasUsers\(\)\) return true;\s*\n\s*return !require\('\.\/lib\/welcome'\)\.getWelcome\(\)\.hasProvider\(\);/);
   assert.ok(!src.includes("'/api/setup/save'") && !src.includes("'/api/setup/test-gateway'"), 'the old wizard routes (one rewrote .env wholesale) are gone');
   for (const r of ["'/api/welcome/state'", "'/api/welcome/api-key'", "'/api/welcome/claude-check'", "'/api/welcome/local'"]) assert.ok(src.includes(r), r);
+});
+
+test('setup progress: started with the first account, finished at the first hello or a skip; kept 0600; never restarts', () => {
+  const dir = tmp();
+  const w = createWelcome({ dataDir: dir, env: {}, settings: fakeSettings(), claudeAuth: noClaude });
+  assert.strictEqual(w.unfinished(), false, 'an install that never used the Welcome page (or an upgraded hub) is not "unfinished"');
+  w.markStarted();
+  const started = w.progress().startedAt;
+  assert.ok(started && w.unfinished());
+  assert.strictEqual(fs.statSync(w.progressFile).mode & 0o777, 0o600);
+  w.markStarted();
+  assert.strictEqual(w.progress().startedAt, started, 'a second start keeps the first time');
+  w.markFinished('skip');
+  assert.strictEqual(w.unfinished(), false);
+  assert.strictEqual(w.progress().how, 'skip');
+  w.markFinished('done');
+  assert.strictEqual(w.progress().how, 'skip', 'the first finish is the one recorded');
+  const w2 = createWelcome({ dataDir: tmp(), env: {}, settings: fakeSettings(), claudeAuth: noClaude });
+  w2.markStarted(); w2.markFinished('anything else');
+  assert.strictEqual(w2.progress().how, 'done');
+});
+
+test('resume: "/" sends an admin with unfinished setup back to /welcome; the page says how to get back and checks Claude on return', () => {
+  const root = path.join(__dirname, '..');
+  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+  assert.ok(server.includes("welcome.markStarted();   // \"/\" brings this admin back to /welcome until setup is finished or skipped"), 'started with the first account');
+  assert.match(server, /if \(access\.isAdmin\(req\.hubUser\) && !req\.hubPendingTotp && require\('\.\/lib\/welcome'\)\.getWelcome\(\)\.unfinished\(\)\) \{\s*res\.writeHead\(302, \{ Location: '\/welcome' \}\);/, 'the redirect');
+  assert.ok(server.includes("if (pathname === '/api/welcome/finish' && req.method === 'POST') {"), 'finish route');
+  assert.ok(server.includes('out.unfinished = welcome.unfinished();'));
+  const access = fs.readFileSync(path.join(root, 'lib', 'access.js'), 'utf8');
+  assert.ok(!/'\/api\/welcome\/finish'/.test(access), 'finish is not public: admins only, like the other Welcome writes');
+
+  const page = fs.readFileSync(path.join(root, 'welcome.html'), 'utf8');
+  assert.ok(page.includes('<p class="resume" id="resume" hidden>Bookmark this page. If it gets closed or replaced, open <b class="origin">'), 'how to get back, on every setup step');
+  assert.ok(page.includes("Claude's sign-in opens in your browser and may take over this page."), 'the warning in the Claude card');
+  assert.ok(page.includes("window.addEventListener('pageshow', (e) => { if (e.persisted) route(); });"), 'Back after the sign-in: the hub decides the step');
+  assert.match(page, /if \(leftForSignIn && claudeCardOpen\(\)\) \{ leftForSignIn = false; claudeCheck\(\); \}/, 'checks Claude by itself on return');
+  assert.ok(page.includes("await finishSetup('done');   // the interview has started"), 'finished at the first answer');
+  assert.ok((page.match(/data-skip/g) || []).length >= 3, 'skip on the AI and Meet steps (and its handler)');
+  assert.ok(page.includes("if (state.unfinished === false) return show('s-done', 0);"), 'a finished setup shows "You\'re all set"');
+
+  const installer = fs.readFileSync(path.join(root, 'install', 'install.sh'), 'utf8');
+  assert.ok(installer.includes('shortcut is on your Desktop. If the setup page gets closed or replaced'), 'the installer says where to go back');
 });

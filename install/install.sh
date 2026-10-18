@@ -290,6 +290,7 @@ add_shortcut() {
     printf '[Desktop Entry]\nType=Link\nName=My Maestro AI\nURL=%s\nIcon=web-browser\n' "$url" > "$desk/my-maestro-ai.desktop"
     chmod 755 "$desk/my-maestro-ai.desktop" 2>/dev/null || true
   fi
+  SHORTCUT="$desk"   # finish() tells the owner: the shortcut opens the hub, and an unfinished setup resumes there
 }
 
 finish() {
@@ -316,7 +317,15 @@ finish() {
     say "  then open the link above there."
     say ""
   fi
-  say "  Your hub lives at http://localhost:$PORT (bookmark it). Day to day, in a new terminal window:"
+  say "  Your hub lives at http://localhost:$PORT (bookmark it)."
+  if [ -n "${SHORTCUT:-}" ]; then
+    say "  A \"My Maestro AI\" shortcut is on your Desktop. If the setup page gets closed or replaced (signing in to"
+    say "  Claude can do that), open the shortcut: setup continues where you left off."
+  else
+    say "  If the setup page gets closed or replaced, open http://localhost:$PORT again: setup continues where you left off."
+  fi
+  say ""
+  say "  Day to day, in a new terminal window:"
   say "    mymaestro status   ·   mymaestro restart   ·   mymaestro logs   ·   mymaestro update   ·   mymaestro backup"
   say ""
 }

@@ -68,12 +68,16 @@
   ul.next { margin: 8px 0 0 18px; font-size: 14px; } ul.next li { margin: 6px 0; }
   .foot { margin-top: 18px; font-size: 12px; color: var(--text-dim); text-align: center; }
   @media (max-width: 480px) { .card { padding: 20px 16px; } .codes { grid-template-columns: 1fr; } }
+  .resume { font-size: 12px; color: var(--text-dim); margin: -6px 0 14px; line-height: 1.5; }
+  .resume b { color: var(--text); font-weight: 600; }
+  .skip { margin-top: 14px; text-align: center; }
 </style>
 </head>
 <body>
 <div class="card">
   <div class="brand"><div class="logo">🧠</div><h1>My Maestro AI</h1></div>
   <div class="steps" id="steps" hidden><span data-s="1">1 · Your account</span><span data-s="2">2 · Your AI</span><span data-s="3">3 · Meet Maestro</span></div>
+  <p class="resume" id="resume" hidden>Bookmark this page. If it gets closed or replaced, open <b class="origin">this hub's address</b> again, or the <b>My Maestro AI</b> shortcut on your Desktop: setup continues where you left off.</p>
   <div id="loading" class="sub"><span class="spin"></span>Loading…</div>
 
   <!-- No setup code -->
@@ -138,6 +142,7 @@
             <li>Open a <b>new</b> terminal window, type <code>claude</code> and press Enter. Choose your Claude account, sign in in the browser, then type <code>/exit</code>.</li>
             <li>Press Check. My Maestro AI asks Claude a one-word question to confirm it works.</li>
           </ol>
+          <p class="hint" style="margin:0 0 10px">Claude's sign-in opens in your browser and may take over this page. That's fine: once Claude says you're signed in, press <b>Back</b> or open <b class="origin">this hub's address</b> again. This page continues at this step and checks Claude by itself.</p>
           <button class="secondary" id="claude-check">Check</button>
           <div class="msg" id="claude-msg"></div>
         </div>
@@ -165,6 +170,7 @@
       </div>
     </div>
     <button class="primary" id="ai-go" disabled>Continue</button>
+    <p class="skip"><button class="link" type="button" data-skip>Skip for now and open My Maestro AI</button></p>
   </section>
 
   <!-- Step 3: meet the lead agent -->
@@ -173,12 +179,13 @@
     <p class="sub"><span class="lead-name">Maestro</span> is your lead agent, and it knows how My Maestro AI works. Next it interviews you for a few minutes: who you are, which agents you'd like (a Doc, a lawyer, a developer, a personal assistant…), their models and personalities. Then it builds them, shows you what each can do, and helps you set up the phone app.</p>
     <label for="m-model">The model <span class="lead-name">Maestro</span> thinks with</label>
     <select id="m-model"></select>
-    <div class="hint">You can change this any time from the chat header.</div>
+    <div class="hint">You can change this any time from the chat header. <button class="link" type="button" id="m-change">Use a different AI</button></div>
     <button class="primary" id="hello">Start the setup interview</button>
     <div class="msg" id="meet-msg"></div>
     <div id="reply"></div>
     <button class="primary" id="open-app" hidden>Continue with <span class="lead-name">Maestro</span></button>
     <p class="hint" id="open-hint" hidden>The interview continues in the app. The <b>?</b> button at the top right has how-tos and help if anything goes wrong.</p>
+    <p class="skip" id="meet-skip"><button class="link" type="button" data-skip>Skip for now and open My Maestro AI</button></p>
   </section>
 
   <!-- Done (revisiting a finished setup) -->
@@ -225,6 +232,7 @@
     $('loading').hidden = true;
     document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === id));
     $('steps').hidden = !step;
+    $('resume').hidden = !step;
     document.querySelectorAll('#steps span').forEach(sp => {
       const n = Number(sp.dataset.s); sp.className = n === step ? 'now' : (n < step ? 'done' : '');
     });
@@ -247,6 +255,18 @@
     navigator.clipboard.writeText(b.dataset.copy).then(() => { const t = b.textContent; b.textContent = 'Copied'; setTimeout(() => { b.textContent = t; }, 1500); });
   });
 
+  // ── Getting back here: the address, and the steps already done ──
+  document.querySelectorAll('.origin').forEach(el => { el.textContent = location.origin; });
+  $('origin') && ($('origin').textContent = location.origin);
+  async function finishSetup(how) { await api('POST', '/api/welcome/finish', { how }); }
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-skip]'); if (!b) return;
+    b.disabled = true; await finishSetup('skip'); location.href = '/';
+  });
+  // Back from the page where a restored tab left off (Back button after Claude's sign-in replaced this page): ask the
+  // hub where setup stands instead of showing what this tab last drew.
+  window.addEventListener('pageshow', (e) => { if (e.persisted) route(); });
+
   // ── Where to start ──
   async function route() {
     const res = await api('GET', '/api/welcome/state' + (setupCode ? `?token=${encodeURIComponent(setupCode)}` : ''));
@@ -257,6 +277,7 @@
     if (!state.isAdmin) return show('s-member', 0);
     if (!state.totp) return startTotp();
     if (!state.hasProvider) return startAi();
+    if (state.unfinished === false) return show('s-done', 0);
     return startMeet();
   }
 
@@ -336,13 +357,26 @@
     if (!was) opt.classList.add('open');
   }));
   function aiReady(model, note) { chosenModel = model; $('ai-go').disabled = false; if (note) $('ai-go').textContent = note; }
-  $('claude-check').addEventListener('click', async () => {
-    $('claude-check').disabled = true; busy('claude-msg', 'Asking Claude a one-word question… this can take up to a minute the first time.');
+  let claudeOk = false, claudeBusy = false, leftForSignIn = false;
+  async function claudeCheck() {
+    if (claudeBusy || claudeOk) return;
+    claudeBusy = true; $('claude-check').disabled = true;
+    busy('claude-msg', 'Asking Claude a one-word question… this can take up to a minute the first time.');
     const res = await api('POST', '/api/welcome/claude-check', {});
-    $('claude-check').disabled = false;
-    if (res.body && res.body.ok) { say('claude-msg', '✓ Claude is connected through your subscription.', 'ok'); aiReady(res.body.model || 'claude-sdk/default'); }
+    claudeBusy = false; $('claude-check').disabled = false;
+    if (res.body && res.body.ok) { claudeOk = true; say('claude-msg', '✓ Claude is connected through your subscription.', 'ok'); aiReady(res.body.model || 'claude-sdk/default'); }
     else say('claude-msg', errText(res, 'Claude did not answer.'), res.body && res.body.state === 'limit' ? 'warn' : 'err', res.body && res.body.detail);
+  }
+  $('claude-check').addEventListener('click', claudeCheck);
+  // Signing in to Claude happens in a terminal and the browser: when the owner comes back to this page with the
+  // Claude card open, check by itself.
+  const claudeCardOpen = () => $('s-ai').classList.contains('on') && $('o-claude').classList.contains('open');
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { if (claudeCardOpen()) leftForSignIn = true; return; }
+    if (leftForSignIn && claudeCardOpen()) { leftForSignIn = false; claudeCheck(); }
   });
+  window.addEventListener('blur', () => { if (claudeCardOpen()) leftForSignIn = true; });
+  window.addEventListener('focus', () => { if (leftForSignIn && claudeCardOpen()) { leftForSignIn = false; claudeCheck(); } });
   const KEY_URLS = { anthropic: ['https://console.anthropic.com/settings/keys', 'console.anthropic.com'], openai: ['https://platform.openai.com/api-keys', 'platform.openai.com'], google: ['https://aistudio.google.com/apikey', 'aistudio.google.com'] };
   $('k-provider').addEventListener('change', () => { const [u, t] = KEY_URLS[$('k-provider').value]; $('k-where').href = u; $('k-where').textContent = t; });
   $('k-go').addEventListener('click', async () => {
@@ -381,6 +415,7 @@
     for (const m of models) { const o = document.createElement('option'); o.value = m; o.textContent = m; if (m === selected) o.selected = true; sel.appendChild(o); }
   }
   $('ai-go').addEventListener('click', () => startMeet());
+  $('m-change').addEventListener('click', () => startAi());
 
   // ── Step 3: meet the lead agent ──
   async function startMeet() {
@@ -412,7 +447,8 @@
     const who = document.createElement('span'); who.className = 'who'; who.textContent = lead.display || lead.name;
     box.append(who, document.createTextNode(text.trim()));
     $('reply').appendChild(box);
-    $('hello').hidden = true; $('open-app').hidden = false; $('open-hint').hidden = false;
+    $('hello').hidden = true; $('open-app').hidden = false; $('open-hint').hidden = false; $('meet-skip').hidden = true;
+    await finishSetup('done');   // the interview has started: "/" now opens the app
   });
   $('open-app').addEventListener('click', () => { const lead = (state && state.lead) || { name: 'maestro' }; location.href = '/?agent=' + encodeURIComponent(lead.name); });
 
