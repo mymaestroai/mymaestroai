@@ -1469,6 +1469,134 @@
         <p style="margin:6px 0 0;font-size:12px"><a href="/help" target="_blank" rel="noopener">Open help in its own tab</a></p>`, { dock: true, title: '❓ Help' });
     }
 
+    // Settings groups: openSettings() draws its sections in one column, then groupSettings() folds them into these
+    // groups, closed until opened. Sections are matched by id; one this list doesn't know lands in the last group,
+    // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
+    const ST_GROUPS = [
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section'] },
+      { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
+      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
+      { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
+      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-cx-section', 'st-modules-section'] },
+      { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
+    ];
+    const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
+    let stSearchSnap = null;   // which groups were open before a search, put back when the search is cleared
+
+    // Set one part of a group's summary line; the section loaders call this as their data arrives.
+    function stSum(group, key, text, crit = false) {
+      (stSumParts[group] ||= {})[key] = { text: text || '', crit: !!crit };
+      const el = document.getElementById(`st-sum-${group}`);
+      if (!el) return;
+      const parts = Object.values(stSumParts[group]);
+      el.textContent = parts.map(p => p.text).filter(Boolean).join(' · ');
+      el.classList.toggle('st-sum-crit', parts.some(p => p.crit && p.text));
+    }
+
+    // Open or close a group without counting it as the person's choice (searches, deep links, a critical finding).
+    function stSetOpen(g, open) {
+      if (!g || g.open === open) return;
+      g.dataset.auto = '1';
+      g.open = open;
+    }
+    function stOpenGroup(groupId) { stSetOpen(document.getElementById(`st-group-${groupId}`), true); }
+
+    function stSaveOpen() {
+      const open = {};
+      for (const g of document.querySelectorAll('#st-groups details.st-group')) if (g.open) open[g.dataset.group] = true;
+      try { localStorage.setItem('hub-settings-open', JSON.stringify(open)); } catch {}
+    }
+
+    function groupSettings(data) {
+      const modal = document.querySelector('#st-overlay .st-modal');
+      if (!modal) return;
+      const sections = [...modal.children].filter(el => el.classList.contains('st-section'));
+      if (!sections.length) return;
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem('hub-settings-open') || '{}') || {}; } catch {}
+      for (const k of Object.keys(stSumParts)) delete stSumParts[k];
+      stSearchSnap = null;
+      const wrap = document.createElement('div');
+      wrap.id = 'st-groups';
+      wrap.innerHTML = `<div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
+        + ST_GROUPS.map(g => `<details class="st-group" id="st-group-${g.id}" data-group="${g.id}"${saved[g.id] ? ' open' : ''}><summary><span class="st-group-title">${esc(g.title)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></summary><div class="st-group-body"></div></details>`).join('');
+      modal.insertBefore(wrap, sections[0]);
+      const body = (id) => wrap.querySelector(`#st-group-${id} .st-group-body`);
+      const placed = new Set();
+      for (const g of ST_GROUPS) for (const id of g.sections) {
+        const s = sections.find(el => el.id === id);
+        if (s) { body(g.id).appendChild(s); placed.add(s); }
+      }
+      for (const s of sections) if (!placed.has(s)) body(ST_GROUPS[ST_GROUPS.length - 1].id).appendChild(s);
+      for (const d of wrap.querySelectorAll('details.st-group')) d.addEventListener('toggle', () => {
+        if (d.dataset.auto) { delete d.dataset.auto; return; }
+        if (!stSearchSnap) stSaveOpen();   // during a search nothing is remembered
+      });
+      const input = wrap.querySelector('#st-search');
+      input.addEventListener('input', () => stSearch(input.value));
+      input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { e.stopPropagation(); input.value = ''; stSearch(''); } });
+
+      // What the settings already say; the loaders fill in the rest (checks, plan, spend, search chain…).
+      const pv = (data && data.providers) || {};
+      const keys = PROVIDERS.filter(p => p.hasKey && pv[p.id] && pv[p.id].hasKey).length;   // server URLs always have a default, so they say nothing
+      stSum('status', 'setup', 'Setup: checking…');
+      stSum('status', 'security', 'Security: checking…');
+      stSum('models', 'prov', keys ? `${keys} provider key${keys === 1 ? '' : 's'}` : 'no provider keys');
+      for (const k of ['or', 'plan', 'local']) stSum('models', k, '');
+      const sbd = (data && data.sandboxDefaults) || {};
+      stSum('agents', 'sb', `Sandboxes: members' agents ${sbd.member || 'container'}, admin-side ${sbd.admin || 'off'}`);
+      stSum('agents', 'appr', `approval cards ${data && data.approvalsEnabled === true ? 'on' : 'off'}`);
+      const qa = data && data.notify ? data.notify.questionAfterMinutes : undefined;
+      stSum('notify', 'q', qa === null ? 'Question reminders off' : `Questions: ${qa === 0 ? 'right away' : `after ${qa === undefined ? 3 : qa} min`}`);
+      stSum('notify', 'push', '');
+      for (const k of ['search', 'cx']) stSum('tools', k, '');
+      for (const k of ['spend', 'caps']) stSum('money', k, '');
+    }
+
+    // Search: show the sections whose words match (a group's title matching shows all of it), open their groups,
+    // hide the rest. Clearing the box puts every group back the way it was.
+    function stSearch(q) {
+      q = String(q || '').trim().toLowerCase();
+      const groups = [...document.querySelectorAll('#st-groups details.st-group')];
+      const none = document.getElementById('st-search-none');
+      if (!q) {
+        for (const g of groups) {
+          g.style.display = '';
+          for (const s of g.querySelectorAll('.st-section')) { s.style.display = ''; s.classList.remove('st-match'); }
+          if (stSearchSnap) stSetOpen(g, !!stSearchSnap[g.dataset.group]);
+        }
+        stSearchSnap = null;
+        if (none) none.hidden = true;
+        return;
+      }
+      if (!stSearchSnap) { stSearchSnap = {}; for (const g of groups) stSearchSnap[g.dataset.group] = g.open; }
+      let any = false;
+      for (const g of groups) {
+        const titleHit = g.querySelector('.st-group-title').textContent.toLowerCase().includes(q);
+        let n = 0;
+        for (const s of g.querySelectorAll('.st-section')) {
+          const hit = titleHit || s.textContent.toLowerCase().includes(q);
+          s.style.display = hit ? '' : 'none';
+          s.classList.toggle('st-match', hit && !titleHit);
+          if (hit) n++;
+        }
+        g.style.display = n ? '' : 'none';
+        if (n) stSetOpen(g, true);
+        any = any || n > 0;
+      }
+      if (none) none.hidden = any;
+    }
+
+    // Links into Settings (the plan badge, the setup and security banners, today's spend) open the group that
+    // holds the section, then scroll to it.
+    async function openSettingsAt(sectionId) {
+      await openSettings();
+      const s = document.getElementById(sectionId);
+      if (!s) return;
+      stSetOpen(s.closest('details.st-group'), true);
+      setTimeout(() => s.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+    }
+
     async function openSettings() {
       stModal(`<h3>Loading settings...</h3>`);
       let data;
@@ -1481,7 +1609,7 @@
         return;
       }
 
-      let html = `<h3>⚙️ Settings</h3><p class="st-sub">Provider keys and URLs. Changes take effect immediately.</p>`;
+      let html = `<h3>⚙️ Settings</h3><p class="st-sub">Open a group, or search for a setting. Provider keys and agent defaults are kept with Save at the bottom; every other box saves on its own.</p>`;
 
       // Setup checklist (lib/readiness): what this machine is missing and what to do about it, in its own words.
       html += `<div class="st-section" id="st-ready-section"><h4>Setup checklist</h4>
@@ -1506,9 +1634,9 @@
       html += `<div class="st-section" id="st-local-models-section"><h4>Local models</h4>
         <div class="st-hint">Run models on this machine through one proxy that starts the right engine (llama.cpp, NInfer or a command of your own), keeps a model loaded while it is in use and swaps when another is asked for. Models appear as <code>local/…</code>. <a href="/local-models" style="color:var(--accent)">Open the Local models page</a> <span id="st-local-models-status" class="st-dim"></span></div>
       </div>`;
-      setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${(j.models || []).length} model(s)${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; } catch {} }, 0);
+      setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${(j.models || []).length} model(s)${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; if (j && j.ok !== false && j.enabled) stSum('models', 'local', `local models ${j.running ? 'running' : 'stopped'}`); } catch {} }, 0);
 
-      html += `<div class="st-section"><h4>LLM Providers</h4>`;
+      html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>`;
       for (const p of PROVIDERS) {
         const pdata = data.providers?.[p.id] || {};
         if (p.hasKey) {
@@ -1538,7 +1666,7 @@
       </div>`;
       setTimeout(() => loadOpenRouterBox(false), 0);
 
-      html += `<div class="st-section"><h4>Agent Defaults</h4>
+      html += `<div class="st-section" id="st-defaults-section"><h4>Agent Defaults</h4>
         <div class="st-row">
           <label>Max tokens</label>
           <input type="text" id="st-maxTokens" value="${data.maxCompletionTokens || 32000}"
@@ -1557,7 +1685,7 @@
         const qaVal = qa === null ? 'off' : (qa === undefined ? '3' : String(qa));
         const qaOpts = [['off', 'Never'], ['0', 'Right away'], ['1', 'After 1 minute'], ['3', 'After 3 minutes'], ['5', 'After 5 minutes'], ['10', 'After 10 minutes']];
         if (!qaOpts.some(o => o[0] === qaVal)) qaOpts.push([qaVal, `After ${qaVal} minutes`]);
-        html += `<div class="st-section"><h4>Notifications</h4>
+        html += `<div class="st-section" id="st-notify-section"><h4>Notifications</h4>
         <div class="st-row">
           <label>🔔 Push</label>
           <button class="st-test-btn" id="st-push-btn" onclick="toggleDesktopPush()">…</button>
@@ -1571,7 +1699,7 @@
       </div>`;
       }
 
-      html += `<div class="st-section"><h4>Emergency</h4>
+      html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
         <div class="st-row">
           <label>Kill switch</label>
           <button class="st-test-btn" style="color:#fff;background:#b71c1c" onclick="haltHub()">⛔ Halt all agents</button>
@@ -1584,7 +1712,7 @@
         <div class="st-hint">After rate limits or outages a provider runs one call at a time, then ramps back up. Resume restores full parallel right away.</div>
       </div>`;
 
-      html += `<div class="st-section"><h4>Approval cards</h4>
+      html += `<div class="st-section" id="st-approvals-section"><h4>Approval cards</h4>
         <div class="st-row">
           <label style="flex-basis:150px">Ask before risky actions</label>
           <label class="toggle-switch"><input type="checkbox" id="st-approvals" ${data.approvalsEnabled === true ? 'checked' : ''} onchange="saveApprovalsToggle(this.checked)"><span class="toggle-slider"></span></label>
@@ -1619,7 +1747,7 @@
       {
         const ac = data.autoClassifier || {};
         const sel = (id, opts, cur) => `<select id="${id}" style="padding:4px">${opts.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
-        html += `<div class="st-section"><h4>Auto model classifier</h4>
+        html += `<div class="st-section" id="st-classifier-section"><h4>Auto model classifier</h4>
         <div class="st-hint">Decides the model for agents with Auto model on (the checkbox on each agent's settings page); in shadow mode it also watches every other agent's turns, logging what it would have picked. Off (builtin) keeps today's behaviour. A decider reads each prompt and names the kind of work (simple, code, math, vision, reasoning, hardest); the routing table picks the model. Guards: a confidence floor keeps the agent's own model, an agent's minimum model is never undercut, keep-on-box agents never use a hosted classifier, and shadow mode logs verdicts without changing anything.</div>
         <div class="st-row"><label style="flex-basis:150px">Classifier</label>${sel('st-cl-backend', [['builtin', 'builtin (off: keyword chain)'], ['local', 'local model (NInfer / LM Studio / Ollama)'], ['perplexity', 'Perplexity decider (hosted)'], ['local+perplexity', 'local, then Perplexity if local is down']], ac.backend || 'builtin')}</div>
         <div class="st-row"><label style="flex-basis:150px">Local server</label>${sel('st-cl-provider', [['auto', 'first reachable'], ['ninfer', 'NInfer'], ['lmstudio', 'LM Studio'], ['ollama', 'Ollama']], ac.localProvider || 'auto')} &nbsp; model <input type="text" id="st-cl-model" value="${esc(ac.localModel || '')}" placeholder="(server's first model)" style="width:200px"> &nbsp; <label><input type="checkbox" id="st-cl-think" ${ac.localThinking === false ? '' : 'checked'}> think briefly (slower, more accurate)</label></div>
@@ -1691,7 +1819,7 @@
       </div>`;
       setTimeout(loadConnectors, 0);
 
-      html += `<div class="st-section"><h4>Spend</h4>
+      html += `<div class="st-section" id="st-spend-section"><h4>Spend</h4>
         <div class="st-row">
           <label style="flex-basis:150px">Today</label>
           <div id="st-spend" style="flex:1;font-size:0.8rem;color:var(--text-dim)">Loading…</div>
@@ -1715,6 +1843,7 @@
       </div>`;
 
       stModal(html);
+      groupSettings(data);
       paintDesktopPush();
       paintPacingSettings();
       paintSpendSettings();
@@ -1799,7 +1928,9 @@
           <div style="flex:1"><div style="color:var(--text);font-weight:${i.level === 'ok' ? 400 : 600}">${esc(i.title)}</div>
             <div>${esc(i.detail || '')}</div>${i.fix ? `<div style="margin-top:2px">${readinessFixHtml(i.fix)}${readinessActionHtml(i.action)}</div>` : readinessActionHtml(i.action)}</div></div>`).join('') || 'Nothing to report.';
         if (state) state.textContent = `${d.critical ? `${d.critical} to fix` : 'nothing critical'}${d.warnings ? `, ${d.warnings} warning(s)` : ''}; checked ${new Date(d.checkedAt).toLocaleTimeString()} on ${d.mac ? 'macOS' : d.platform}.`;
-      } catch (e) { el.textContent = 'Could not run the checks: ' + e.message; }
+        stSum('status', 'setup', d.critical ? `Setup: ${d.critical} to fix` : d.warnings ? `Setup: ${d.warnings} warning${d.warnings === 1 ? '' : 's'}` : 'Setup: all good', !!d.critical);
+        if (d.critical) stOpenGroup('status');
+      } catch (e) { el.textContent = 'Could not run the checks: ' + e.message; stSum('status', 'setup', 'Setup: could not check'); }
     }
     async function readinessAction(api, method, btn) {
       if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
@@ -1819,7 +1950,7 @@
       const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider');   // those two have their own banners
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:#7a3b12;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettings(); return false" style="color:#fff;text-decoration:underline">Open the setup checklist</a>.`;
+      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:#fff;text-decoration:underline">Open the setup checklist</a>.`;
       layoutBanners();
     }
     // The setup banner and the security banner are both fixed at the top; when both show, the security one sits
@@ -1847,7 +1978,9 @@
             <div>${esc(i.detail || '')}</div>${i.fix ? `<div style="margin-top:2px">${readinessFixHtml(i.fix)}${securityActionHtml(i.action)}</div>` : securityActionHtml(i.action)}</div></div>`).join('') || 'Nothing to report.';
         const skipped = (d.skipped || []).length ? ` Not checked here: ${d.skipped.map(s => s.reason).join('; ')}.` : '';
         if (state) state.textContent = `${d.critical ? `${d.critical} critical` : 'nothing critical'}${d.warnings ? `, ${d.warnings} warning(s)` : ''}${d.infos ? `, ${d.infos} note(s)` : ''}; ${d.cached ? 'last run' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.${skipped}`;
-      } catch (e) { el.textContent = 'Could not run the security check: ' + e.message; if (state) state.textContent = ''; }
+        stSum('status', 'security', d.critical ? `Security: ${d.critical} critical` : d.warnings ? `Security: ${d.warnings} warning${d.warnings === 1 ? '' : 's'}` : 'Security: all good', !!d.critical);
+        if (d.critical) stOpenGroup('status');
+      } catch (e) { el.textContent = 'Could not run the security check: ' + e.message; if (state) state.textContent = ''; stSum('status', 'security', 'Security: could not check'); }
     }
     function securityActionHtml(a) {
       if (!a) return '';
@@ -1873,7 +2006,7 @@
       const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts');   // no-accounts has its own banner
       if (!crit.length) { if (bar) bar.remove(); return; }
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-security-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:#7a1212;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettings(); return false" style="color:#fff;text-decoration:underline">Open the security check</a>.`;
+      bar.innerHTML = `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:#fff;text-decoration:underline">Open the security check</a>.`;
       layoutBanners();
     }
     // Web search and fetch (lib/web-search, lib/web-fetch): backend chain, keys, SearXNG container, fetch guards.
@@ -1883,6 +2016,7 @@
         const d = await (await fetch('/api/websearch/status', { credentials: 'include' })).json();
         const s = d.search || {}, f = d.fetch || {};
         const chain = (s.chain || []).join(' → ') || 'none';
+        stSum('tools', 'search', `Search: ${chain}`);
         const off = (s.backends || []).filter(b => !b.configured).map(b => `${b.id} (needs ${b.needs})`).join(', ');
         const sx = s.searxng || {};
         const sxState = sx.container ? `container ${sx.name} ${sx.container}${sx.healthy ? ', healthy' : ', not answering'}` : sx.url ? (sx.healthy ? `external at ${sx.url}, healthy` : `${sx.url} not answering`) : 'not running';
@@ -2006,6 +2140,8 @@
       try {
         cxState.data = await cxApi('/api/connectors');
         cxStatus('');
+        const n = ((cxState.data && cxState.data.connectors) || []).length;
+        stSum('tools', 'cx', `${n} data connector${n === 1 ? '' : 's'}`);
       } catch (e) {
         cxState.data = { connectors: [], groups: [] };
         cxStatus('Could not load connectors: ' + e.message, true);
@@ -2427,6 +2563,7 @@
         const r = await fetch('/api/openrouter' + (refresh ? '?refresh=1' : ''), { credentials: 'include' });
         orView = await r.json();
       } catch (e) { body.textContent = 'Could not load the OpenRouter list: ' + e.message; return; }
+      if (orView && orView.hasKey) stSum('models', 'or', `OpenRouter: ${(orView.chosen || []).length} models`);
       renderOpenRouterBox();
     }
     function orPrice(m) {
@@ -2579,8 +2716,7 @@
       }
     }
     async function openPlanSettings() {
-      await openSettings();
-      setTimeout(() => document.getElementById('st-plan-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+      await openSettingsAt('st-plan-section');
     }
     async function loadPlanBox(readNow = false) {
       const usageEl = document.getElementById('st-plan-usage');
@@ -2594,6 +2730,8 @@
         if (!r.ok) throw new Error(d.error || r.status);
       } catch (e) { usageEl.textContent = `Could not read the plan: ${e.message}`; if (state) state.textContent = ''; return; }
       planLast = d; paintPlanChip(); paintPlanBadges();
+      const worst = (d.weekly || []).reduce((a, w) => (Number(w.utilization) || 0) > (a ? Number(a.utilization) || 0 : -1) ? w : a, null);
+      stSum('models', 'plan', worst ? `${worst.family ? worst.label : 'Claude plan'} ${Math.round(Number(worst.utilization) || 0)}% this week` : '');
       if (state) state.textContent = d.fetchedAt ? `read ${new Date(d.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : (d.error ? `last read failed: ${String(d.error).slice(25, 140)}` : '');
       const levels = (d.warn && Array.isArray(d.warn.at)) ? d.warn.at : [];
       const first = levels.length ? levels[0] : 101; const last = levels.length ? levels[levels.length - 1] : 101;
@@ -2706,10 +2844,12 @@
       if (!box) return;
       if (fetchFirst || !spendToday) await refreshSpendToday();
       const t = spendToday;
-      if (!t) { box.textContent = 'No ledger on this hub.'; return; }
+      if (!t) { box.textContent = 'No ledger on this hub.'; stSum('money', 'spend', 'no spend ledger'); return; }
       const top = (t.agents || []).slice(0, 5).map(a => `${esc(agentDisplayName(a.agent))} ${usd(a.cost)} (${a.turns})`).join(' · ');
       box.innerHTML = `<b style="color:var(--text)">${usd(t.total)}</b> over ${t.turns || 0} turn${t.turns === 1 ? '' : 's'}${top ? `<div style="margin-top:2px">${top}</div>` : ''}`;
       const caps = t.caps || {};
+      stSum('money', 'spend', `Today ${usd(t.total)}`);
+      stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} whole hub` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
       const agentInp = document.getElementById('st-cap-agent');
       const hubInp = document.getElementById('st-cap-hub');
       if (agentInp && document.activeElement !== agentInp) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
@@ -2755,10 +2895,11 @@
       const btn = document.getElementById('st-push-btn');
       const hint = document.getElementById('st-push-hint');
       if (!btn) return;
-      if (!desktopPushSupported()) { btn.textContent = 'Not supported'; btn.disabled = true; return; }
-      if (Notification.permission === 'denied') { btn.textContent = 'Blocked'; btn.disabled = true; if (hint) hint.textContent = 'Notifications are blocked for this site in the browser settings.'; return; }
+      if (!desktopPushSupported()) { btn.textContent = 'Not supported'; btn.disabled = true; stSum('notify', 'push', 'push not available in this browser'); return; }
+      if (Notification.permission === 'denied') { btn.textContent = 'Blocked'; btn.disabled = true; if (hint) hint.textContent = 'Notifications are blocked for this site in the browser settings.'; stSum('notify', 'push', 'push blocked in this browser'); return; }
       const sub = await desktopPushSubscription();
       btn.textContent = sub ? 'Turn off' : 'Turn on';
+      stSum('notify', 'push', sub ? 'push on for this computer' : 'push off for this computer');
       btn.disabled = false;
     }
 
