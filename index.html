@@ -449,7 +449,9 @@
     .header-btn:hover { background: rgba(255,255,255,0.15); color: var(--text-primary); }
     .header-btn.restarting { opacity: 0.5; pointer-events: none; animation: pulse 1s infinite; }
     .chat-actions .resync-btn { font-size: 1rem; line-height: 1; padding: 6px 10px; }
-    .chat-actions .notify-done-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }   /* "Notify me when done" is on */
+    /* "Notify me when done": next to Interject while a reply runs; filled once clicked. */
+    .input-area .notify-done-btn { border: 1px solid var(--accent); color: var(--accent); background: rgba(61,123,255,.10); font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .input-area .notify-done-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
     .chat-actions .resync-btn.spinning { animation: spin 0.9s linear infinite; pointer-events: none; opacity: 0.7; }
     #hub-toast { position: fixed; left: 50%; top: 150px; transform: translateX(-50%); background: rgba(30,34,44,0.96); color: var(--text-primary); border: 1px solid rgba(255,255,255,0.15); padding: 10px 16px; border-radius: 20px; font-size: 14px; z-index: 100000; display: none; max-width: 90%; text-align: center; }
     #hub-toast.on { display: block; }

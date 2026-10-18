@@ -831,13 +831,13 @@ function paintChatStatus() {
   // this device is streaming. The send button is then Interject rather than Stop.
   const stopBtn = $('chat-stop-btn');
   if (stopBtn) stopBtn.hidden = !working && !own;
-  // "Notify me when done" sits next to Stop and shows exactly when Stop does: while a reply runs.
+  // "Notify me when done": next to the Interject button, shown exactly while a reply runs (gone when it is done).
   const bell = $('chat-notify-btn');
   if (bell) { bell.hidden = !working && !own; paintNotifyBtn(); }
   setSendMode(own);
 }
 
-// ── "Notify me when done" (the 🔔 next to Stop while a reply runs): the hub keeps who asked on the running turn and
+// ── "Notify me when done" (the 🔔 next to Interject while a reply runs): the hub keeps who asked on the running turn and
 // sends one notification to that person's devices when it ends (lib/push); turn_notify keeps every page in step. ──
 const notifyArmed = {};   // agent -> turnId this person asked to be notified about
 function myNotifyId() { return (hubMe && hubMe.user && hubMe.user.id) ? String(hubMe.user.id) : '*'; }
@@ -3065,7 +3065,6 @@ function wire() {
   $('files-upload-input').addEventListener('change', (e) => { filesUpload(e.target.files); e.target.value = ''; });
   $('menu-signout').addEventListener('click', signOut);
   $('chat-stop-btn')?.addEventListener('click', stopRemoteTurn);
-  $('chat-notify-btn')?.addEventListener('click', toggleNotifyDone);
   $('chat-resync')?.addEventListener('click', resyncClick);
   document.addEventListener('click', () => $('menu').classList.remove('open'));
   $('menu-clear').addEventListener('click', confirmClear);
@@ -3099,6 +3098,12 @@ function wire() {
   sendBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
   sendBtn.addEventListener('pointerup', (e) => { e.preventDefault(); sentAt = Date.now(); sendMessage(); });
   sendBtn.addEventListener('click', () => { if (Date.now() - sentAt < 700) return; sendMessage(); });   // keyboard / assistive tech
+  // The 🔔 beside it the same way: a tap that took focus off the message box would move the button before it landed.
+  const bellBtn = $('chat-notify-btn');
+  let bellAt = 0;
+  bellBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
+  bellBtn.addEventListener('pointerup', (e) => { e.preventDefault(); bellAt = Date.now(); toggleNotifyDone(); });
+  bellBtn.addEventListener('click', () => { if (Date.now() - bellAt < 700) return; toggleNotifyDone(); });
 
   $('attach-btn').addEventListener('click', () => $('file-input').click());
   $('camera-btn').addEventListener('click', () => $('camera-input').click());

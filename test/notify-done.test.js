@@ -56,32 +56,42 @@ test('push: the hub wires owners and the question delay; replies push only for t
   assert.ok(p.includes("remind(`q:${ev.request_id || ev.agent}`") && p.includes("remind(`a:${ev.id}`") && p.includes("ev.type === 'approval_request'"));
 });
 
-test('desktop: the bell sits next to Cancel, shows exactly while a reply runs, toggles on the hub, follows turn_notify and the turn view', () => {
+test('desktop: the bell sits next to Send/Interject, shows exactly while a reply runs, toggles on the hub, follows turn_notify and the turn view', () => {
   const app = read('app.js');
-  assert.ok(app.includes(`<button onclick="cancelRequest('\${chatId}')" id="cancel-\${chatId}" style="display:none;">⏹️ Cancel</button>
-          <button onclick="toggleNotifyDone('\${chatId}')" id="notify-\${chatId}" class="notify-done-btn" style="display:none;" aria-pressed="false"`), 'next to Cancel');
-  assert.match(app, /if \(cancelBtn\) cancelBtn\.style\.display = 'inline-block';\s*showNotifyBtn\(chatId, true\);/, 'shown with Cancel for the own stream');
-  assert.ok((app.match(/showNotifyBtn\(chatId, false\);/g) || []).length >= 2, 'hidden when paused or idle');
+  assert.ok(app.includes(`<button onclick="toggleNotifyDone('\${chatId}')" id="notify-\${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
+          <button onclick="sendSoloMessage('\${chatId}')" id="send-\${chatId}">Send</button>`), 'right before Send, which becomes Interject while a reply runs');
+  assert.ok(!app.includes(`⏹️ Cancel</button>
+          <button onclick="toggleNotifyDone(`), 'not in the top bar');
+  assert.match(app, /if \(cancelBtn\) cancelBtn\.style\.display = 'inline-block';\s*showNotifyBtn\(chatId, true\);/, 'shown when the reply starts');
+  assert.ok((app.match(/showNotifyBtn\(chatId, false\);/g) || []).length >= 2, 'gone when paused or done');
   assert.ok(app.includes('showNotifyBtn(solo.chatId || solo.id, busy || question);'), 'and for a turn started elsewhere');
+  assert.ok(app.includes("if (btn) btn.style.display = show ? 'inline-block' : 'none';"));
+  assert.ok(app.includes("btn.textContent = on ? '🔔 Notifying' : '🔔 Notify me';"));
   assert.ok(app.includes("r = await fetch(`/api/agents/${encodeURIComponent(agent)}/notify`, { method: 'POST'"), 'toggles on the hub');
   assert.ok(app.includes("source.addEventListener('turn_notify', e => {") && app.includes("if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;"), 'follows this person\'s bell from other devices');
   assert.ok(app.includes("if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }"), 'cleared when the turn ends');
   assert.ok(app.includes('if (turn) applyTurnNotify(chat.agent, turn);'), 'the turn view says whether it is on (a reload, another device)');
   assert.ok(app.includes('No device of yours has notifications turned on yet.'), 'says when no device would hear it');
   assert.ok(app.includes('<select id="st-question-after" onchange="saveQuestionAfter(this.value)">') && app.includes("body: JSON.stringify({ notify: { questionAfterMinutes } })"), 'Settings: the question delay');
-  assert.ok(read('index.html').includes('.chat-actions .notify-done-btn.on {'));
+  const css = read('index.html');
+  assert.ok(css.includes('.input-area .notify-done-btn {') && css.includes('.input-area .notify-done-btn.on {'));
 });
 
-test('phone: the bell sits next to Stop in the chat header, shows exactly when Stop does, toggles on the hub and follows other devices', () => {
+test('phone: the bell sits next to the send/interject button, shows exactly while a reply runs, toggles on the hub and follows other devices', () => {
   const m = read('mobile.js'), html = read('mobile.html');
-  assert.ok(html.includes('<button class="iconbtn notify-done" id="chat-notify-btn" aria-label="Notify me when this reply is done"') && html.indexOf('id="chat-notify-btn"') < html.indexOf('id="chat-stop-btn"'), 'next to Stop');
-  assert.ok(html.includes('#chat-notify-btn.on {') && html.includes('#chat-notify-btn:not(.on) {'));
-  assert.ok(m.includes("if (bell) { bell.hidden = !working && !own; paintNotifyBtn(); }"), 'same condition as Stop');
+  assert.ok(html.includes(`<textarea id="msg-input" rows="1" placeholder="Message"></textarea>
+        <button class="notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
+        <button id="send-btn" aria-label="Send">&#x27A4;</button>`), 'right before the send button, which becomes Interject while a reply runs');
+  assert.ok(!html.slice(html.indexOf('id="chat-head"'), html.indexOf('id="chat-scroll"')).includes('chat-notify-btn'), 'not in the header');
+  assert.ok(html.includes('#composer .notify-chip {') && html.includes('#composer .notify-chip.on {') && html.includes('#composer .notify-chip[hidden] { display: none; }'));
+  assert.ok(m.includes("if (bell) { bell.hidden = !working && !own; paintNotifyBtn(); }"), 'same condition as Stop: only while a reply runs');
   assert.ok(m.includes("r = await api(`/api/agents/${encodeURIComponent(agent)}/notify`, { method: 'POST'"));
   assert.ok(m.includes("on('turn_notify', onTurnNotify);") && m.includes("if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;"));
   assert.ok(m.includes("if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }"), 'cleared when the turn ends');
   assert.ok(m.includes('applyTurnNotify(ra.agent, turn);') && m.includes('applyTurnNotify(agent, d.turn);'), 'the turn view says whether it is on');
-  assert.ok(m.includes("$('chat-notify-btn')?.addEventListener('click', toggleNotifyDone);"));
+  // Like Send: the tap acts on pointerup and pointerdown keeps the message box focused, so the layout does not jump
+  // under the finger (a plain click missed on the first try in the test with the box focused).
+  assert.ok(m.includes("bellBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });") && m.includes("bellBtn.addEventListener('pointerup', (e) => { e.preventDefault(); bellAt = Date.now(); toggleNotifyDone(); });") && m.includes("bellBtn.addEventListener('click', () => { if (Date.now() - bellAt < 700) return; toggleNotifyDone(); });"));
   assert.ok(m.includes('Notifications are off on this phone: turn them on in the ⋮ menu first'), 'says when no device would hear it');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v41'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v44'/);
 });

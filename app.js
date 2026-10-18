@@ -5452,7 +5452,6 @@
           <button onclick="openRecallPanel('${chatId}')" id="recall-btn-${chatId}" title="Search this agent's whole history">🔎 Recall</button>
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
-          <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none;" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
 
           <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" title="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="fillModelPick('${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
         </div>
@@ -5465,6 +5464,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
+          <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
       `;
@@ -5686,7 +5686,7 @@
       URL.revokeObjectURL(url);
     }
     
-    // ── "Notify me when done": the 🔔 next to Cancel while a reply runs. The hub keeps who asked on the running turn
+    // ── "Notify me when done": the 🔔 next to Interject while a reply runs. The hub keeps who asked on the running turn
     // and sends one notification to that person's devices when it ends (lib/push); turn_notify keeps every page in step.
     const notifyArmed = {};   // agent -> turnId this person asked to be notified about
     function myNotifyId() { const me = window.hubMe; return (me && me.user && me.user.id) ? String(me.user.id) : '*'; }
@@ -5703,6 +5703,7 @@
       }
     }
     function showNotifyBtn(chatId, show) {
+      // Next to Interject, only while the reply runs; gone the moment the turn is complete.
       const btn = document.getElementById(`notify-${chatId}`);
       if (btn) btn.style.display = show ? 'inline-block' : 'none';
       const chat = chats[chatId];
