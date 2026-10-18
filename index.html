@@ -1797,6 +1797,23 @@
     .gs-btn:hover { background: var(--accent-hover); }
     .gs-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .gs-btn.secondary { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); }
+    /* OpenRouter: every model, searched from the chat header's model picker (openOrPicker in app.js) */
+    .gs-modal.or-pick { max-width: 720px; }
+    .or-pick-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+    .or-pick-tools input[type="search"] { flex: 1; min-width: 220px; padding: 7px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.85rem; }
+    .or-pick-tools label { display: flex; gap: 4px; align-items: center; font-size: 0.78rem; color: var(--text-dim); white-space: nowrap; cursor: pointer; }
+    .or-pick-msg { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 6px; min-height: 1em; }
+    .or-pick-list { max-height: 52vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+    .or-pick-row { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 7px 12px; background: none; border: 0; border-bottom: 1px solid var(--border); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+    .or-pick-row:last-child { border-bottom: 0; }
+    .or-pick-row:hover { background: rgba(255,255,255,0.04); }
+    .or-pick-row:disabled { opacity: 0.5; cursor: wait; }
+    .or-pick-row.cur { box-shadow: inset 3px 0 0 var(--accent); }
+    .or-pick-name { font-size: 0.86rem; }
+    .or-pick-tag { font-size: 0.72rem; color: var(--accent); margin-left: 4px; }
+    .or-pick-row code { font-size: 0.72rem; color: var(--text-dim); word-break: break-all; }
+    .or-pick-meta { font-size: 0.72rem; color: var(--text-tertiary); }
+    .or-pick-legend { font-size: 0.72rem; color: var(--text-dim); margin: 8px 0 4px; }
     /* Task scheduler view bar (📅 panel): time range, sections shown, new-task form toggle. */
     .sched-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 12px; font-size: 0.8rem; }
     .sched-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }

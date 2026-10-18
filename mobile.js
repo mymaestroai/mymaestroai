@@ -585,7 +585,8 @@ async function fillModelPick() {
     const cur = String(a.model || '');
     let html = '';
     if (cur && !models.includes(cur)) html += `<option value="${esc(cur)}">${esc(mpLabel(cur))} (current)</option>`;
-    for (const [label, rows] of mpGroups(models)) html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}">${esc(mpLabel(m))}</option>`).join('') + '</optgroup>';
+    // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
+    for (const [label, rows] of mpGroups(models)) html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}">${esc(mpLabel(m))}</option>`).join('') + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
     sel.innerHTML = html; sel.value = cur; sel.dataset.agent = a.name;
     sel.hidden = !html; wrap && wrap.classList.toggle('pickable', !!html);
   } catch (e) { sel.hidden = true; wrap && wrap.classList.remove('pickable'); }
@@ -699,14 +700,118 @@ function paintPlan() {
 async function changeModelFromPick() {
   const sel = $('chat-model-pick');
   const name = sel.dataset.agent; const a = agentByName(name); const model = sel.value;
+  if (model === OR_MORE) { sel.value = a ? a.model : ''; if (a) openOrSheet(name); return; }
   if (!a || !model || model === a.model) return;
   try {
     const r = await api(`/api/agents/${encodeURIComponent(name)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.success) { sel.value = a.model; toast(`Could not change the model: ${d.error || r.status}`); return; }
-    toast(isBusy(name) || streams.has(name) ? `${a.display || name} switches to ${mpLabel(model)} after this reply` : `${a.display || name} now runs on ${mpLabel(model)}`);
-    if (!isBusy(name) && !streams.has(name)) { a.model = model; paintChatStatus(); fillEffortPick(); }
+    modelChanged(a, name, model);
   } catch (e) { sel.value = a.model; toast(`Could not change the model: ${e.message}`); }
+}
+function modelChanged(a, name, model, note = '') {
+  toast((isBusy(name) || streams.has(name) ? `${a.display || name} switches to ${mpLabel(model)} after this reply` : `${a.display || name} now runs on ${mpLabel(model)}`) + note);
+  if (!isBusy(name) && !streams.has(name)) { a.model = model; if (current === name) { paintChatStatus(); fillEffortPick(); } }
+}
+
+// ── OpenRouter: every model, from the chat header's picker ───────────────────────────────────────────────────────
+// The picker offers only the OpenRouter models ticked in Settings → OpenRouter (8 by default, out of ~400). The last
+// line of its OpenRouter group, "🔎 More OpenRouter models…", opens this sheet: a search over the whole catalogue
+// (GET /api/openrouter, admins only). Tapping a model adds it to that list (POST /api/openrouter), so every picker
+// offers it from then on, and switches the agent to it through the usual route.
+const OR_MORE = '__or_more__';
+let orSheetView = null;   // { at, view }: the catalogue and the current list, reused for 10 minutes
+/** The rows the search shows: tool-capable models unless `all`, every word of `q` in the id or name, newest first. */
+function orSheetList(models, q, all) {
+  const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  return (models || []).filter(m => (all || m.tools) && !/:batch/.test(m.id))
+    .filter(m => { const hay = `${m.id} ${m.name || ''}`.toLowerCase(); return words.every(w => hay.includes(w)); })
+    .sort((a, b) => (b.created || 0) - (a.created || 0));
+}
+/** The offered list after adding `id`: the current one (the default offer until a list is saved), without repeats. */
+function orOfferWith(chosen, id) { const list = Array.isArray(chosen) ? chosen.slice() : []; if (!list.includes(id)) list.push(id); return list; }
+/** One model's line under its name: what it can do, its context window, its price per million tokens in / out. */
+function orMeta(m) {
+  const ctx = !m.context ? '' : m.context >= 1e6 ? `${(m.context / 1e6).toFixed(m.context % 1e6 ? 1 : 0)}M context` : `${Math.round(m.context / 1000)}K context`;
+  const f = (x) => { const v = x * 1e6; return v === 0 ? '0' : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(0); };
+  const price = m.prompt == null || m.completion == null ? '' : `$${f(m.prompt)} / $${f(m.completion)} per M`;
+  const can = `${m.tools ? '🛠' : ''}${m.reasoning ? ' 🧠' : ''}${m.images ? ' 🖼' : ''}`.trim();
+  return [can, ctx, price].filter(Boolean).join(' · ');
+}
+async function openOrSheet(name) {
+  const sheet = $('or-sheet'); const a = agentByName(name);
+  if (!sheet || !a) return;
+  if (!sheet.dataset.ready) {
+    sheet.innerHTML = `
+      <h3 id="ors-title">OpenRouter models</h3>
+      <div class="ors-hint">Tap a model to switch to it. It's also added to your OpenRouter list, so every model picker offers it from now on.</div>
+      <input type="search" id="ors-q" placeholder="grok, deepseek, kimi, qwen, llama…" autocomplete="off" enterkeyhint="search">
+      <label class="ors-all"><input type="checkbox" id="ors-all"> Show models without tools</label>
+      <div class="ors-msg" id="ors-msg"></div>
+      <div class="ors-list" id="ors-list"></div>
+      <div class="ors-legend">🛠 can use tools (agents need this) · 🧠 takes a reasoning level · 🖼 reads images · price in / out per million tokens</div>
+      <div class="ors-close"><button id="ors-close">Close</button></div>`;
+    $('ors-q').addEventListener('input', orSheetRender);
+    $('ors-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+    $('ors-all').addEventListener('change', orSheetRender);
+    $('ors-close').addEventListener('click', () => sheet.close());
+    $('ors-list').addEventListener('click', onOrSheetClick);
+    sheet.dataset.ready = '1';
+  }
+  sheet.dataset.agent = name;
+  $('ors-title').textContent = `OpenRouter models · ${a.display || name}`;
+  $('ors-q').value = '';
+  if (!sheet.open) sheet.showModal();
+  if (!orSheetView || Date.now() - orSheetView.at > 10 * 60000) {
+    $('ors-msg').textContent = 'Loading the OpenRouter list…'; $('ors-list').innerHTML = '';
+    try {
+      const r = await api('/api/openrouter'); const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
+      orSheetView = { at: Date.now(), view: d };
+    } catch (e) { $('ors-msg').textContent = `Could not load the OpenRouter list: ${e.message}`; return; }
+  }
+  orSheetRender();
+}
+function orSheetRender() {
+  const sheet = $('or-sheet'); const list = $('ors-list'); const msg = $('ors-msg');
+  if (!sheet || !list || !orSheetView) return;
+  const v = orSheetView.view; const a = agentByName(sheet.dataset.agent);
+  const cur = String(a?.model || ''); const offered = new Set(v.chosen || []);
+  const rows = orSheetList(v.models, $('ors-q').value, $('ors-all').checked); const shown = rows.slice(0, 150);
+  msg.textContent = !v.hasKey ? 'No OpenRouter key yet: add one in Settings → LLM Providers on the full page.'
+    : rows.length ? `${rows.length} model${rows.length === 1 ? '' : 's'}, newest first${rows.length > shown.length ? `. Showing ${shown.length}: type to narrow it down.` : '.'}` : 'No model matches.';
+  list.innerHTML = shown.map(m => {
+    const isCur = `openrouter/${m.id}` === cur;
+    const tag = isCur ? '<small>current</small>' : offered.has(m.id) ? '<small>✓ in your list</small>' : '';
+    return `<button type="button" class="ors-row${isCur ? ' cur' : ''}" data-id="${esc(m.id)}"><span class="ors-name">${esc(m.name || m.id)} ${tag}</span><span class="ors-id">${esc(m.id)}</span><span class="ors-meta">${esc(orMeta(m))}</span></button>`;
+  }).join('');
+}
+async function onOrSheetClick(e) {
+  const btn = e.target.closest('.ors-row'); if (!btn) return;
+  const sheet = $('or-sheet'); const name = sheet.dataset.agent; const a = agentByName(name);
+  const id = btn.dataset.id; const model = `openrouter/${id}`;
+  if (!a) return;
+  if (model === a.model) { sheet.close(); return; }
+  const v = orSheetView ? orSheetView.view : {};
+  btn.disabled = true; $('ors-msg').textContent = `Switching ${a.display || name} to ${id}…`;
+  let note = '';
+  if (!(v.chosen || []).includes(id)) {   // add it to the offer first, so the picker lists it from now on
+    note = '. It could not be added to the OpenRouter list';
+    try {
+      const r = await api('/api/openrouter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ models: orOfferWith(v.chosen, id) }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok !== false) { orSheetView = { at: Date.now(), view: d }; if ((d.chosen || []).includes(id)) note = ''; }
+    } catch { /* the note says so */ }
+    _modelListCache = null;
+  }
+  try {
+    const r = await api(`/api/agents/${encodeURIComponent(name)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.success) { btn.disabled = false; $('ors-msg').textContent = `Could not change the model: ${d.error || r.status}`; return; }
+  } catch (err) { btn.disabled = false; $('ors-msg').textContent = `Could not change the model: ${err.message}`; return; }
+  sheet.close();
+  modelChanged(a, name, model, note);
+  if (current === name) fillModelPick();
 }
 
 function displayName(name) {

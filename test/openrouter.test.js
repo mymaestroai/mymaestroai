@@ -123,6 +123,8 @@ test('settings.openrouter is cleaned: model ids (vendor/model), null = the defau
   assert.deepStrictEqual(cleanOpenRouterSettings({ models: ['x-ai/grok-4.7', 'x-ai/grok-4.7', 'bad id', '<script>/x', 'deepseek/deepseek-v4.1:free'], privacy: 0 }), { models: ['x-ai/grok-4.7', 'deepseek/deepseek-v4.1:free'], privacy: false });
   assert.deepStrictEqual(cleanOpenRouterSettings({ models: null }), { models: null });
   assert.deepStrictEqual(cleanOpenRouterSettings('junk'), {});
+  // OpenRouter's "latest" aliases start with ~ (~x-ai/grok-latest); only one, and only at the start.
+  assert.deepStrictEqual(cleanOpenRouterSettings({ models: ['~x-ai/grok-latest', '~~x-ai/grok', 'x-ai/~grok', '~/x', '~<b>/x'] }), { models: ['~x-ai/grok-latest'] });
 });
 
 test('labels: an OpenRouter model is billed per use (API), shown under OpenRouter, named vendor/model', () => {

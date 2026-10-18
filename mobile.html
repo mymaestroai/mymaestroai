@@ -366,6 +366,25 @@
   #recall-sheet .rc-row .rc-text { max-height: 200px; overflow: auto; }
   #recall-sheet .rc-empty { padding: 24px 0; text-align: center; color: var(--text-dim); font-size: 14px; }
   #recall-sheet .rc-close { display: flex; justify-content: flex-end; margin-top: 10px; }
+  /* OpenRouter: every model, searched from the chat header's model picker (openOrSheet in mobile.js) */
+  #or-sheet { width: min(94vw, 460px); max-height: 88vh; overflow-y: auto; }
+  #or-sheet h3 { margin-bottom: 6px; }
+  #or-sheet .ors-hint, #or-sheet .ors-legend { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+  #or-sheet .ors-legend { margin: 8px 0 0; }
+  #or-sheet input[type="search"] { width: 100%; min-height: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 16px; }
+  #or-sheet .ors-all { display: flex; align-items: center; gap: 6px; min-height: 36px; font-size: 13px; color: var(--text-dim); }
+  #or-sheet .ors-msg { min-height: 1em; font-size: 13px; color: var(--text-dim); margin-bottom: 4px; }
+  #or-sheet .ors-list { display: flex; flex-direction: column; }
+  #or-sheet .ors-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 48px; padding: 8px 4px; text-align: left; border-bottom: 1px solid var(--border); }
+  #or-sheet .ors-row:active { background: var(--border); }
+  #or-sheet .ors-row:disabled { opacity: .5; }
+  #or-sheet .ors-row.cur { box-shadow: inset 3px 0 0 var(--accent); padding-left: 10px; }
+  #or-sheet .ors-name { font-size: 15px; font-weight: 600; }
+  #or-sheet .ors-name small { font-weight: 400; font-size: 12px; color: var(--accent-hover); }
+  #or-sheet .ors-id { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: var(--text-dim); word-break: break-all; }
+  #or-sheet .ors-meta { font-size: 12px; color: var(--text-tertiary); }
+  #or-sheet .ors-close { display: flex; justify-content: flex-end; margin-top: 10px; }
+  #or-sheet .ors-close button { min-height: 40px; padding: 0 14px; border-radius: 8px; background: var(--border); color: var(--text); }
 
   /* Visual blocks: ```svg ```mermaid ```chart ```html fences drawn in the chat (mobile.js renderVisualBlocks) */
   .visual { position: relative; margin: 6px 0; border: 1px solid var(--border); border-radius: 6px; background: #1a1a19; overflow: hidden; max-width: 100%; }
@@ -460,6 +479,7 @@
   <dialog id="security-sheet"></dialog>
   <dialog id="files-sheet"></dialog>
   <dialog id="recall-sheet"></dialog>
+  <dialog id="or-sheet"></dialog>
   <input type="file" id="files-upload-input" multiple hidden>
 
   <script src="mobile.js"></script>

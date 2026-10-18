@@ -4371,21 +4371,116 @@
         // "Subscription (Claude sign-in) / claude-fable-5-1". The route is in the text, not in a grey group label.
         let html = '';
         if (cur && !models.includes(cur)) html += `<option value="${esc(cur)}" selected>${esc(billingDisplay(cur, true))} (current; not in the hub's list)</option>`;
+        // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
         for (const [label, rows] of groupModels(models)) {
-          html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc((billing[m] && billing[m].short) || billingDisplay(m, true))}</option>`).join('') + '</optgroup>';
+          html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc((billing[m] && billing[m].short) || billingDisplay(m, true))}</option>`).join('')
+            + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
         }
         if (html) { sel.innerHTML = html; sel.value = cur; }
       } catch (e) { delete sel.dataset.filled; console.warn('[model-pick] list failed:', e.message); }
     }
     async function changeChatModel(chatId, model) {
       const chat = chats[chatId]; const sel = document.getElementById(`model-pick-${chatId}`);
-      if (!chat || !model || model === chat.model) return;
+      if (chat && model === OR_MORE) { if (sel) sel.value = chat.model; openOrPicker(chatId); return false; }
+      if (!chat || !model || model === chat.model) return false;
       try {
         const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ model }) });
         const d = await r.json().catch(() => ({}));
-        if (!r.ok || !d.success) { if (sel) sel.value = chat.model; alert(`Could not change the model: ${d.error || r.status}`); return; }
+        if (!r.ok || !d.success) { if (sel) sel.value = chat.model; alert(`Could not change the model: ${d.error || r.status}`); return false; }
         // The hub's agent_updated event relabels the header (or parks the change until the current turn ends).
-      } catch (e) { if (sel) sel.value = chat.model; alert(`Could not change the model: ${e.message}`); }
+        return true;
+      } catch (e) { if (sel) sel.value = chat.model; alert(`Could not change the model: ${e.message}`); return false; }
+    }
+
+    // ── OpenRouter: every model, from the chat header's picker ──
+    // The picker offers only the OpenRouter models ticked in Settings → OpenRouter (8 by default, out of ~400). The last
+    // line of its OpenRouter group, "🔎 More OpenRouter models…", opens this window: a search over the whole catalogue
+    // (GET /api/openrouter, admins only). Choosing a model adds it to that list (POST /api/openrouter), so every picker
+    // offers it from then on, and switches the agent to it through changeChatModel.
+    const OR_MORE = '__or_more__';
+    let orPickView = null;   // { at, view }: the catalogue and the current list, reused for 10 minutes
+    /** The rows the search shows: tool-capable models unless `all`, every word of `q` in the id or name, newest first. */
+    function orPickList(models, q, all) {
+      const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+      return (models || []).filter(m => (all || m.tools) && !/:batch/.test(m.id))
+        .filter(m => { const hay = `${m.id} ${m.name || ''}`.toLowerCase(); return words.every(w => hay.includes(w)); })
+        .sort((a, b) => (b.created || 0) - (a.created || 0));
+    }
+    /** The offered list after adding `id`: the current one (the default offer until a list is saved), without repeats. */
+    function orOfferWith(chosen, id) { const list = Array.isArray(chosen) ? chosen.slice() : []; if (!list.includes(id)) list.push(id); return list; }
+    function orPickMeta(m) {
+      const ctx = !m.context ? '' : m.context >= 1e6 ? `${(m.context / 1e6).toFixed(m.context % 1e6 ? 1 : 0)}M context` : `${Math.round(m.context / 1000)}K context`;
+      const can = `${m.tools ? '🛠' : ''}${m.reasoning ? ' 🧠' : ''}${m.images ? ' 🖼' : ''}`.trim();
+      return [can, ctx, orPrice(m)].filter(Boolean).join(' · ');
+    }
+    function closeOrPicker() { const ov = document.getElementById('or-pick-overlay'); if (ov) ov.remove(); }
+    async function openOrPicker(chatId) {
+      const chat = chats[chatId]; if (!chat) return;
+      closeOrPicker();
+      const ov = document.createElement('div');
+      ov.className = 'gs-overlay'; ov.id = 'or-pick-overlay'; ov.dataset.chat = chatId;
+      ov.innerHTML = `<div class="gs-modal or-pick" role="dialog" aria-label="OpenRouter models">
+          <h3>OpenRouter models · ${hubEsc(chat.display || capName(chat.agent))}</h3>
+          <div class="gs-sub">Choose a model to switch this agent to it. It is also added to your OpenRouter list (Settings → OpenRouter), so every model picker offers it from now on.</div>
+          <div class="or-pick-tools"><input type="search" id="or-pick-q" placeholder="grok, deepseek, kimi, qwen, llama, claude…" autocomplete="off">
+            <label><input type="checkbox" id="or-pick-all"> show models without tools</label></div>
+          <div id="or-pick-msg" class="or-pick-msg">Loading the OpenRouter list…</div>
+          <div id="or-pick-list" class="or-pick-list"></div>
+          <div class="or-pick-legend">🛠 can use tools (agents need this) · 🧠 takes a reasoning level · 🖼 reads images · price in / out per million tokens</div>
+          <div class="gs-actions"><button class="gs-btn secondary" onclick="closeOrPicker()">Close</button></div>
+        </div>`;
+      ov.addEventListener('click', (e) => { if (e.target === ov) closeOrPicker(); });
+      ov.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOrPicker(); });
+      document.body.appendChild(ov);
+      document.getElementById('or-pick-q').addEventListener('input', renderOrPicker);
+      document.getElementById('or-pick-all').addEventListener('change', renderOrPicker);
+      document.getElementById('or-pick-list').addEventListener('click', (e) => { const b = e.target.closest('.or-pick-row'); if (b) chooseOrModel(b.dataset.id, b); });
+      document.getElementById('or-pick-q').focus();
+      if (!orPickView || Date.now() - orPickView.at > 10 * 60000) {
+        try {
+          const r = await fetch('/api/openrouter', { credentials: 'include' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
+          orPickView = { at: Date.now(), view: d };
+        } catch (e) { const msg = document.getElementById('or-pick-msg'); if (msg) msg.textContent = 'Could not load the OpenRouter list: ' + e.message; return; }
+      }
+      renderOrPicker();
+    }
+    function renderOrPicker() {
+      const ov = document.getElementById('or-pick-overlay'); const list = document.getElementById('or-pick-list'); const msg = document.getElementById('or-pick-msg');
+      if (!ov || !list || !orPickView) return;
+      const v = orPickView.view; const chat = chats[ov.dataset.chat];
+      const cur = String((chat && chat.model) || ''); const offered = new Set(v.chosen || []);
+      const rows = orPickList(v.models, document.getElementById('or-pick-q').value, document.getElementById('or-pick-all').checked); const shown = rows.slice(0, 200);
+      msg.textContent = !v.hasKey ? 'No OpenRouter key yet: add one in Settings → LLM Providers.'
+        : rows.length ? `${rows.length} model${rows.length === 1 ? '' : 's'}, newest first${rows.length > shown.length ? `. Showing ${shown.length}: type to narrow it down.` : '.'}` : 'No model matches.';
+      list.innerHTML = shown.map(m => {
+        const isCur = `openrouter/${m.id}` === cur;
+        const tag = isCur ? '<span class="or-pick-tag">current</span>' : offered.has(m.id) ? '<span class="or-pick-tag">✓ in your list</span>' : '';
+        return `<button type="button" class="or-pick-row${isCur ? ' cur' : ''}" data-id="${esc(m.id)}"><span class="or-pick-name"><b>${esc(m.name || m.id)}</b> ${tag}</span><code>${esc(m.id)}</code><span class="or-pick-meta">${esc(orPickMeta(m))}</span></button>`;
+      }).join('');
+    }
+    async function chooseOrModel(id, btn) {
+      const ov = document.getElementById('or-pick-overlay'); const chatId = ov && ov.dataset.chat; const chat = chats[chatId];
+      if (!chat) { closeOrPicker(); return; }
+      const model = `openrouter/${id}`;
+      if (model === chat.model) { closeOrPicker(); return; }
+      if (btn) btn.disabled = true;
+      const msg = document.getElementById('or-pick-msg'); if (msg) msg.textContent = `Switching to ${id}…`;
+      const v = orPickView ? orPickView.view : {};
+      let note = '';
+      if (!(v.chosen || []).includes(id)) {   // add it to the offer first, so every picker lists it from now on
+        note = '. It could not be added to the OpenRouter list';
+        try {
+          const r = await fetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ models: orOfferWith(v.chosen, id) }) });
+          const j = await r.json().catch(() => ({}));
+          if (r.ok && j.ok !== false) { orPickView = { at: Date.now(), view: j }; if (orView) orView = j; if ((j.chosen || []).includes(id)) note = ''; }
+        } catch { /* the note says so */ }
+        __modelListCache = null;   // every open chat's picker refetches the list next time it opens
+        document.querySelectorAll('select.model-pick[data-filled]').forEach(s => { delete s.dataset.filled; });
+      }
+      closeOrPicker();
+      if (await changeChatModel(chatId, model)) hubToast(`${chat.display || capName(chat.agent)} switches to ${billingDisplay(model, true)}${note}`, note ? 6000 : 3000);
     }
 
     // Reasoning effort in the chat header, next to the model (lib/effort). Admins choose it for any agent; members see
