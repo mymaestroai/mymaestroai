@@ -61,7 +61,7 @@ test('an API key is proven by listing models (no tokens spent), saved only when 
   const r1 = await bad.connectApiKey('anthropic', 'sk-ant-api03-' + 'x'.repeat(40));
   assert.strictEqual(r1.ok, false); assert.match(r1.error, /refused this key/); assert.strictEqual(s._s.providers.anthropic, undefined, 'a refused key is not saved');
   assert.match((await bad.connectApiKey('anthropic', 'short')).error, /does not look like a complete key/);
-  assert.match((await bad.connectApiKey('perplexity', 'x'.repeat(30))).error, /Anthropic, OpenAI or Google/);
+  assert.match((await bad.connectApiKey('perplexity', 'x'.repeat(30))).error, /Anthropic, OpenAI, Google or OpenRouter/);
   const openai = createWelcome({ dataDir: tmp(), env: {}, settings: s, claudeAuth: noClaude, fetch: json(200, { data: [
     { id: 'gpt-4-0613' }, { id: 'text-embedding-3-large' }, { id: 'gpt-5.5' }, { id: 'gpt-5.5-mini' }, { id: 'gpt-6' }, { id: 'gpt-realtime' }, { id: 'gpt-5.4-2026-03-05' }, { id: 'tts-1' }] }) });
   const r2 = await openai.connectApiKey('openai', '  sk-proj-' + 'y'.repeat(40) + '\n');

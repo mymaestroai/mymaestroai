@@ -151,7 +151,7 @@
         <button class="head" type="button"><span><span class="t">An API key</span><span class="d">Anthropic, OpenAI or Google. Pay as you go, billed by the provider.</span></span></button>
         <div class="body">
           <label for="k-provider">Provider</label>
-          <select id="k-provider"><option value="anthropic">Anthropic (Claude API)</option><option value="openai">OpenAI (GPT API)</option><option value="google">Google (Gemini API)</option></select>
+          <select id="k-provider"><option value="anthropic">Anthropic (Claude API)</option><option value="openai">OpenAI (GPT API)</option><option value="google">Google (Gemini API)</option><option value="openrouter">OpenRouter (many vendors, one key)</option></select>
           <div class="hint">Get a key: <a id="k-where" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. The key is stored on this computer only.</div>
           <label for="k-key">API key</label>
           <input type="password" id="k-key" autocomplete="off" spellcheck="false">
@@ -381,7 +381,7 @@
   });
   window.addEventListener('blur', () => { if (claudeCardOpen()) leftForSignIn = true; });
   window.addEventListener('focus', () => { if (leftForSignIn && claudeCardOpen()) { leftForSignIn = false; claudeCheck(); } });
-  const KEY_URLS = { anthropic: ['https://console.anthropic.com/settings/keys', 'console.anthropic.com'], openai: ['https://platform.openai.com/api-keys', 'platform.openai.com'], google: ['https://aistudio.google.com/apikey', 'aistudio.google.com'] };
+  const KEY_URLS = { anthropic: ['https://console.anthropic.com/settings/keys', 'console.anthropic.com'], openai: ['https://platform.openai.com/api-keys', 'platform.openai.com'], google: ['https://aistudio.google.com/apikey', 'aistudio.google.com'], openrouter: ['https://openrouter.ai/keys', 'openrouter.ai/keys'] };
   $('k-provider').addEventListener('change', () => { const [u, t] = KEY_URLS[$('k-provider').value]; $('k-where').href = u; $('k-where').textContent = t; });
   $('k-go').addEventListener('click', async () => {
     $('k-go').disabled = true; busy('key-msg', 'Checking the key…');

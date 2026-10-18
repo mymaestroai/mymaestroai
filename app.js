@@ -1456,6 +1456,7 @@
       { id: 'openai',     label: 'OpenAI', hasKey: true, hasUrl: false },
       { id: 'google',     label: 'Google (Gemini)', hasKey: true, hasUrl: false },
       { id: 'perplexity', label: 'Perplexity', hasKey: true, hasUrl: false },
+      { id: 'openrouter', label: 'OpenRouter', hasKey: true, hasUrl: false },
       { id: 'lmstudio',   label: 'LM Studio', hasKey: false, hasUrl: true },
       { id: 'ollama',     label: 'Ollama', hasKey: false, hasUrl: true },
       { id: 'omlx',       label: 'oMLX (Apple Silicon)', hasKey: false, hasUrl: true },
@@ -1529,6 +1530,13 @@
         }
       }
       html += `</div>`;
+
+      // OpenRouter (lib/openrouter): which of its models the pickers offer, and the privacy switch.
+      html += `<div class="st-section" id="st-or-section"><h4>OpenRouter</h4>
+        <div class="st-hint">One key, models from many vendors (Grok, DeepSeek, Kimi, Qwen, Mistral, GLM, Llama, and Claude, GPT and Gemini too). Tick the ones the model pickers should offer; each runs with the same tools and memory as every other agent, and OpenRouter's reported cost goes into the daily spend.</div>
+        <div id="st-or-body" class="st-hint" style="margin-left:0">Loading…</div>
+      </div>`;
+      setTimeout(() => loadOpenRouterBox(false), 0);
 
       html += `<div class="st-section"><h4>Agent Defaults</h4>
         <div class="st-row">
@@ -2409,6 +2417,72 @@
     }
 
     // Per-class approval cards (settings.approvalClasses): these kinds get a card even while the switch is off.
+    // ── OpenRouter box: the catalogue with search, the offer (ticked), privacy (only providers that do not store or
+    // train on prompts), defaults (the newest tool-capable model of each vendor the hub has no key for). ──
+    let orView = null;
+    async function loadOpenRouterBox(refresh) {
+      const body = document.getElementById('st-or-body');
+      if (!body) return;
+      try {
+        const r = await fetch('/api/openrouter' + (refresh ? '?refresh=1' : ''), { credentials: 'include' });
+        orView = await r.json();
+      } catch (e) { body.textContent = 'Could not load the OpenRouter list: ' + e.message; return; }
+      renderOpenRouterBox();
+    }
+    function orPrice(m) {
+      if (m.prompt == null || m.completion == null) return '';
+      const f = (x) => { const v = x * 1e6; return v === 0 ? '0' : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(0); };
+      return `$${f(m.prompt)} / $${f(m.completion)} per M`;
+    }
+    function renderOpenRouterBox() {
+      const body = document.getElementById('st-or-body');
+      if (!body || !orView) return;
+      const v = orView;
+      const q = (document.getElementById('st-or-q')?.value || '').trim().toLowerCase();
+      const all = !!document.getElementById('st-or-all')?.checked;
+      const chosen = new Set(v.chosen || []);
+      const list = (v.models || []).filter(m => (all || m.tools) && !/:batch/.test(m.id))
+        .filter(m => !q || m.id.toLowerCase().includes(q) || String(m.name || '').toLowerCase().includes(q))
+        .sort((a, b) => (chosen.has(b.id) - chosen.has(a.id)) || (b.created - a.created));
+      const ctx = (n) => !n ? '' : n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : `${Math.round(n / 1000)}K`;
+      const rows = list.slice(0, 300).map(m => `<label class="or-row" style="display:flex;gap:8px;align-items:baseline;padding:2px 0;cursor:pointer">
+          <input type="checkbox" class="st-or-pick" value="${esc(m.id)}"${chosen.has(m.id) ? ' checked' : ''}>
+          <span style="flex:1;min-width:0"><b>${esc(m.name || m.id)}</b> <code style="font-size:0.75rem;color:var(--text-dim)">${esc(m.id)}</code></span>
+          <span style="font-size:0.75rem;color:var(--text-dim);white-space:nowrap">${m.tools ? '🛠' : ''}${m.reasoning ? ' 🧠' : ''}${m.images ? ' 🖼' : ''} ${ctx(m.context)} ${esc(orPrice(m))}</span>
+        </label>`).join('');
+      const keyLine = v.hasKey ? '' : `<div style="color:var(--warning);margin-bottom:6px">No OpenRouter key yet: get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.ai/keys</a>, paste it in LLM Providers above, press Test, then Save. The models below show up in the pickers once the key is saved.</div>`;
+      body.innerHTML = `${keyLine}
+        <div class="st-row"><label style="flex-basis:150px">Privacy</label><label style="flex:1;display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="st-or-privacy"${v.privacy ? ' checked' : ''} onchange="saveOpenRouter()"> Only use providers that do not store or train on prompts</label></div>
+        <div class="st-row"><label style="flex-basis:150px">Offered</label><span>${(v.chosen || []).length} model(s)${v.custom ? '' : ' (the default offer)'} · catalogue ${(v.models || []).length} models${v.fetchedAt ? `, read ${esc(new Date(v.fetchedAt).toLocaleString())}` : ''}</span></div>
+        <div class="st-row" style="flex-wrap:wrap"><label style="flex-basis:150px">Find</label><input type="text" id="st-or-q" value="${esc(q)}" placeholder="grok, deepseek, kimi, qwen, llama, claude…" oninput="renderOpenRouterBox()" style="flex:1;min-width:160px">
+          <label style="display:flex;gap:4px;align-items:center;margin-left:8px;font-size:0.8rem;white-space:nowrap"><input type="checkbox" id="st-or-all"${all ? ' checked' : ''} onchange="renderOpenRouterBox()"> show models without tools</label></div>
+        <div id="st-or-list" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">${rows || '<i>No model matches.</i>'}${list.length > 300 ? `<div style="color:var(--text-dim)">… ${list.length - 300} more: narrow the search.</div>` : ''}</div>
+        <div class="st-hint" style="margin-top:8px">🛠 can use tools (agents need this) · 🧠 takes a reasoning level · 🖼 reads images · context window · price in / out per million tokens</div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveOpenRouter(true)">Save the ticked models</button>
+          <button class="st-test-btn" onclick="openRouterDefaults()" style="margin-left:6px">Use the defaults</button>
+          <button class="st-test-btn" onclick="loadOpenRouterBox(true)" style="margin-left:6px">Refresh the list</button></div>`;
+      const qEl = document.getElementById('st-or-q');
+      if (q && qEl) { qEl.focus(); qEl.setSelectionRange(q.length, q.length); }
+    }
+    async function postOpenRouter(payload, done) {
+      try {
+        const r = await fetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const j = await r.json();
+        if (!r.ok || !j.ok) { hubToast(j.error || 'Could not save.'); return; }
+        orView = j; renderOpenRouterBox(); __modelListCache = null;   // the pickers refetch the model list
+        if (done) hubToast(done(j));
+      } catch (e) { hubToast('Could not save: ' + e.message); }
+    }
+    function saveOpenRouter(withModels) {
+      const privacy = !!document.getElementById('st-or-privacy')?.checked;
+      if (!withModels) return postOpenRouter({ privacy }, () => (privacy ? 'OpenRouter: only providers that do not store or train on prompts.' : 'OpenRouter: any provider.'));
+      // Keep ticks that the current search hides: start from the saved offer, apply the visible boxes.
+      const keep = new Set(orView && orView.chosen || []);
+      for (const b of document.querySelectorAll('.st-or-pick')) { if (b.checked) keep.add(b.value); else keep.delete(b.value); }
+      postOpenRouter({ privacy, models: [...keep] }, (j) => `OpenRouter: ${j.chosen.length} model(s) offered in the pickers.`);
+    }
+    function openRouterDefaults() { postOpenRouter({ models: null }, (j) => `OpenRouter: back to the default offer (${j.chosen.length} models).`); }
+
     async function saveQuestionAfter(v) {
       const questionAfterMinutes = v === 'off' ? null : Number(v);
       try {
@@ -4250,11 +4324,11 @@
 
     // Who pays, from the model id alone (mirrors lib/billing so the header can say it before any list is fetched):
     // "Subscription (Claude sign-in) / claude-fable-5-1", "API / gpt-6-astra", "Local (ninfer) / qwen3.8-27b".
-    const VENDOR_OF = { 'claude-sdk': 'Anthropic', anthropic: 'Anthropic', 'codex-cli': 'OpenAI', codex: 'OpenAI', openai: 'OpenAI', google: 'Google', perplexity: 'Perplexity', lmstudio: 'Local', ollama: 'Local', omlx: 'Local', ninfer: 'Local', local: 'Local' };
-    const VENDOR_ORDER = ['Anthropic', 'OpenAI', 'Google', 'Perplexity', 'Local'];
+    const VENDOR_OF = { 'claude-sdk': 'Anthropic', anthropic: 'Anthropic', 'codex-cli': 'OpenAI', codex: 'OpenAI', openai: 'OpenAI', google: 'Google', perplexity: 'Perplexity', openrouter: 'OpenRouter', lmstudio: 'Local', ollama: 'Local', omlx: 'Local', ninfer: 'Local', local: 'Local' };
+    const VENDOR_ORDER = ['Anthropic', 'OpenAI', 'Google', 'Perplexity', 'OpenRouter', 'Local'];
     function billingDisplay(model, compact = false) {
       const m = String(model || ''); const p = m.includes('/') ? m.split('/')[0] : ''; const name = m.includes('/') ? m.slice(m.indexOf('/') + 1) : m;
-      const full = p === 'claude-sdk' ? 'Subscription (Claude sign-in)' : (p === 'codex-cli' || p === 'codex') ? 'Subscription (ChatGPT)' : ['anthropic', 'openai', 'google', 'perplexity'].includes(p) ? 'API $' : ['lmstudio', 'ollama', 'omlx', 'ninfer', 'local'].includes(p) ? `Local (${p})` : '?';
+      const full = p === 'claude-sdk' ? 'Subscription (Claude sign-in)' : (p === 'codex-cli' || p === 'codex') ? 'Subscription (ChatGPT)' : ['anthropic', 'openai', 'google', 'perplexity', 'openrouter'].includes(p) ? 'API $' : ['lmstudio', 'ollama', 'omlx', 'ninfer', 'local'].includes(p) ? `Local (${p})` : '?';
       const short = full.startsWith('Subscription') ? 'Subscription' : full.startsWith('Local') ? 'Local' : full;
       return `${name} · ${compact ? short : full}`;   // model first: the name is what the operator looks for
     }
@@ -4263,7 +4337,7 @@
     // Pickers group by vendor AND route, so subscription and API models never interleave:
     // "Anthropic · Subscription (Claude sign-in)", "Anthropic · API $", "OpenAI · Subscription (ChatGPT)", "OpenAI · API $", "Local".
     const ROUTE_ORDER = ['Subscription', 'API', 'Local', '?'];
-    function routeOf(model) { const p = String(model || '').split('/')[0]; return p === 'claude-sdk' || p === 'codex-cli' || p === 'codex' ? 'Subscription' : ['anthropic', 'openai', 'google', 'perplexity'].includes(p) ? 'API' : ['lmstudio', 'ollama', 'omlx', 'ninfer', 'local'].includes(p) ? 'Local' : '?'; }
+    function routeOf(model) { const p = String(model || '').split('/')[0]; return p === 'claude-sdk' || p === 'codex-cli' || p === 'codex' ? 'Subscription' : ['anthropic', 'openai', 'google', 'perplexity', 'openrouter'].includes(p) ? 'API' : ['lmstudio', 'ollama', 'omlx', 'ninfer', 'local'].includes(p) ? 'Local' : '?'; }
     function pickerGroup(model) {
       const v = vendorOf(model); const r = routeOf(model);
       const full = billingDisplay(model).split(' · ')[1] || r;

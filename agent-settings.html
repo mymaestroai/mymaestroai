@@ -992,7 +992,7 @@
   }
 
   // Vendor from the model id prefix (same table as lib/billing): the group is the company, the route is in each line.
-  const VENDOR_OF = { 'claude-sdk': 'Anthropic', anthropic: 'Anthropic', 'codex-cli': 'OpenAI', codex: 'OpenAI', openai: 'OpenAI', google: 'Google', perplexity: 'Perplexity', lmstudio: 'Local', ollama: 'Local', omlx: 'Local', ninfer: 'Local', local: 'Local' };
+  const VENDOR_OF = { 'claude-sdk': 'Anthropic', anthropic: 'Anthropic', 'codex-cli': 'OpenAI', codex: 'OpenAI', openai: 'OpenAI', google: 'Google', perplexity: 'Perplexity', openrouter: 'OpenRouter', lmstudio: 'Local', ollama: 'Local', omlx: 'Local', ninfer: 'Local', local: 'Local' };
   // Family = vendor + route, so subscription and API models never share a group:
   // "Anthropic · Subscription (Claude sign-in)", "Anthropic · API $", "OpenAI · Subscription (ChatGPT)", "OpenAI · API $", "Local".
   function getModelFamily(modelId) {
@@ -1005,12 +1005,12 @@
   // "API / gpt-6-astra", "Subscription (Claude sign-in) / claude-fable-5-1", "Local (ninfer) / qwen3.8-27b"
   function billingDisplay(modelId) {
     const m = String(modelId || ''); const p = m.includes('/') ? m.split('/')[0] : ''; const name = m.includes('/') ? m.slice(m.indexOf('/') + 1) : m;
-    const route = p === 'claude-sdk' ? 'Subscription (Claude sign-in)' : (p === 'codex-cli' || p === 'codex') ? 'Subscription (ChatGPT)' : ['anthropic', 'openai', 'google', 'perplexity'].includes(p) ? 'API $' : ['lmstudio', 'ollama', 'omlx', 'ninfer', 'local'].includes(p) ? `Local (${p})` : '?';
+    const route = p === 'claude-sdk' ? 'Subscription (Claude sign-in)' : (p === 'codex-cli' || p === 'codex') ? 'Subscription (ChatGPT)' : ['anthropic', 'openai', 'google', 'perplexity', 'openrouter'].includes(p) ? 'API $' : ['lmstudio', 'ollama', 'omlx', 'ninfer', 'local'].includes(p) ? `Local (${p})` : '?';
     return `${name} · ${route}`;   // model first
   }
 
   // Sort order for groups; anything not listed follows alphabetically
-  const FAMILY_ORDER = ['Anthropic · Subscription (Claude sign-in)', 'Anthropic · API $', 'OpenAI · Subscription (ChatGPT)', 'OpenAI · API $', 'Google · API $', 'Perplexity · API $', 'Local'];
+  const FAMILY_ORDER = ['Anthropic · Subscription (Claude sign-in)', 'Anthropic · API $', 'OpenAI · Subscription (ChatGPT)', 'OpenAI · API $', 'Google · API $', 'Perplexity · API $', 'OpenRouter · API $', 'Local'];
 
   // The hub is rebuilding its model list (startup after an update, a new provider key): say so instead of
   // leaving a short list in the dropdown, and refetch every few seconds until the list is final.

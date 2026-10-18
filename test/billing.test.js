@@ -17,7 +17,7 @@ test('billingOf by prefix', () => {
   assert.strictEqual(B.billingOf('ninfer/qwen3.8-27b').display, 'qwen3.8-27b · Local (ninfer)');
   assert.strictEqual(B.billingOf('ninfer/qwen3.8-27b').short, 'qwen3.8-27b · Local');
   assert.deepStrictEqual(['claude-sdk/x', 'anthropic/x', 'openai/x', 'codex-cli/x', 'google/x', 'ninfer/x', 'foo/x'].map(m => B.billingOf(m).vendor), ['Anthropic', 'Anthropic', 'OpenAI', 'OpenAI', 'Google', 'Local', 'Foo']);
-  assert.deepStrictEqual(['Anthropic', 'Local', 'Foo'].map(B.vendorRank), [0, 4, 5]);
+  assert.deepStrictEqual(['Anthropic', 'OpenRouter', 'Local', 'Foo'].map(B.vendorRank), [0, 4, 5, 6]);
   assert.strictEqual(B.billingOf('codex-cli/gpt-6-astra').via, 'ChatGPT');
   assert.strictEqual(B.billingOf('codex/gpt-5.5').kind, 'subscription');
   assert.deepStrictEqual([B.billingOf('anthropic/claude-opus-5-5').kind, B.billingOf('openai/gpt-5.6-sol').kind, B.billingOf('google/gemini-pro-latest').kind, B.billingOf('perplexity/sonar').kind], ['api', 'api', 'api', 'api']);
@@ -53,7 +53,7 @@ test('wiring: the Claude client env has no API key; /api/models carries billing;
   const page = read('agent-settings.html');
   assert.match(page, /function billingDisplay\(modelId\)/);
   assert.match(page, /opt\.textContent = `✅ \$\{billingDisplay\(m\)\} \(\$\{health\.latency\}ms\)`;/);
-  assert.match(page, /const FAMILY_ORDER = \['Anthropic · Subscription \(Claude sign-in\)', 'Anthropic · API \$', 'OpenAI · Subscription \(ChatGPT\)', 'OpenAI · API \$', 'Google · API \$', 'Perplexity · API \$', 'Local'\];/);
+  assert.match(page, /const FAMILY_ORDER = \['Anthropic · Subscription \(Claude sign-in\)', 'Anthropic · API \$', 'OpenAI · Subscription \(ChatGPT\)', 'OpenAI · API \$', 'Google · API \$', 'Perplexity · API \$', 'OpenRouter · API \$', 'Local'\];/);
   assert.match(page, /return `\$\{vendor\} · \$\{route\}`;/, 'settings page families are vendor + route');
   assert.match(read('index.html'), /\.cyber-tag\.billing-api \{/);
 });

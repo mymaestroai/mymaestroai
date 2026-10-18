@@ -1949,6 +1949,7 @@ async function handleHttpRequest(req, res) {
           // Claude plan: warning levels, and the optional automatic switch (merged onto the stored policy, so its map survives).
           if (patch && patch.planWarn !== undefined) patch.planWarn = require('./lib/plan-usage').cleanWarn(patch.planWarn);
           if (patch && patch.notify !== undefined) patch.notify = require('./lib/push').cleanNotifySettings(patch.notify);
+          if (patch && patch.openrouter !== undefined) patch.openrouter = require('./lib/openrouter').cleanOpenRouterSettings(patch.openrouter);
           if (patch && patch.planFallback !== undefined) patch.planFallback = require('./lib/plan-usage').cleanPolicy(patch.planFallback, hubSettings.getSetting('planFallback'));
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
@@ -2008,6 +2009,11 @@ async function handleHttpRequest(req, res) {
             return jsonResponse(res, 200, { ok: r.ok, status: r.status });
           }
 
+          if (provider === 'openrouter') {   // the free key check (account details), never a paid request
+            const c = await require('./lib/openrouter').getOpenRouter().checkKey(testKey);
+            return jsonResponse(res, 200, { ok: c.ok, status: c.status || (c.ok ? 200 : 0), ...(c.ok ? { remaining: c.remaining, freeTier: c.freeTier } : { error: c.error }) });
+          }
+
           if (provider === 'perplexity') {
             const r = await fetch('https://api.perplexity.ai/chat/completions', {
               method: 'POST',
@@ -2024,6 +2030,23 @@ async function handleHttpRequest(req, res) {
         }
       });
       return;
+    }
+
+    // ── OpenRouter: the catalogue, the models the pickers offer, the privacy switch (Settings → OpenRouter) ──
+    if (pathname === '/api/openrouter' && req.method === 'GET') {
+      const or = require('./lib/openrouter').getOpenRouter();
+      if (new URL(req.url, 'http://x').searchParams.get('refresh') === '1') await or.refresh({ force: true });
+      else if (!or.catalog().length) await or.refresh();
+      return jsonResponse(res, 200, { ok: true, ...or.view() });
+    }
+    if (pathname === '/api/openrouter' && req.method === 'POST') {
+      const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
+      const cur = hubSettings.get().openrouter || {};
+      const next = { ...cur, ...require('./lib/openrouter').cleanOpenRouterSettings(b) };
+      if (next.models === null) delete next.models;   // back to the default offer
+      hubSettings.updateSettings({ openrouter: next });
+      try { require('./lib/model-discovery').runDiscovery(); } catch {}   // the pickers follow the new offer
+      return jsonResponse(res, 200, { ok: true, ...require('./lib/openrouter').getOpenRouter().view() });
     }
 
     // ── Update from GitHub (pull only — see lib/git-sync.js) ────────

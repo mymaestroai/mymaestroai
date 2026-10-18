@@ -542,14 +542,14 @@ function agentByName(name) {
 // Tap the model line under the agent's name: the phone's own picker lists every model the hub can reach, grouped
 // like the desktop picker (vendor + who pays: "Anthropic · Subscription (Claude sign-in)", "OpenAI · API $", "Local").
 // Same route as the desktop (/api/agents/:name/model); the hub's agent_updated event relabels the header. Admins only.
-const MP_VENDOR = { 'claude-sdk': 'Anthropic', anthropic: 'Anthropic', 'codex-cli': 'OpenAI', codex: 'OpenAI', openai: 'OpenAI', google: 'Google', perplexity: 'Perplexity', lmstudio: 'Local', ollama: 'Local', omlx: 'Local', ninfer: 'Local', local: 'Local' };
-const MP_VENDOR_ORDER = ['Anthropic', 'OpenAI', 'Google', 'Perplexity', 'Local'];
+const MP_VENDOR = { 'claude-sdk': 'Anthropic', anthropic: 'Anthropic', 'codex-cli': 'OpenAI', codex: 'OpenAI', openai: 'OpenAI', google: 'Google', perplexity: 'Perplexity', openrouter: 'OpenRouter', lmstudio: 'Local', ollama: 'Local', omlx: 'Local', ninfer: 'Local', local: 'Local' };
+const MP_VENDOR_ORDER = ['Anthropic', 'OpenAI', 'Google', 'Perplexity', 'OpenRouter', 'Local'];
 const MP_ROUTE_ORDER = ['Subscription', 'API', 'Local', '?'];
 function mpRoute(model, full = false) {
   const p = String(model || '').split('/')[0];
   if (p === 'claude-sdk') return full ? 'Subscription (Claude sign-in)' : 'Subscription';
   if (p === 'codex-cli' || p === 'codex') return full ? 'Subscription (ChatGPT)' : 'Subscription';
-  if (['anthropic', 'openai', 'google', 'perplexity'].includes(p)) return full ? 'API $' : 'API';
+  if (['anthropic', 'openai', 'google', 'perplexity', 'openrouter'].includes(p)) return full ? 'API $' : 'API';
   if (['lmstudio', 'ollama', 'omlx', 'ninfer', 'local'].includes(p)) return 'Local';
   return '?';
 }

@@ -59,7 +59,7 @@ agents, models, reminders, the phone app, and what to do when something is wrong
 | **Interjection** | Type while an agent is working; it takes your message into account mid-turn (Claude SDK and gateway agents) |
 | **Tiger Team recovery** | Durable checkpoints: multi-agent runs resume after a crash, disconnect or restart without redoing finished work |
 | **Tool confirmation** | Toggle auto-approve vs manual confirmation for mutating operations |
-| **Multi-provider LLM** | Route to Anthropic, OpenAI, Google, Perplexity, LM Studio, Ollama |
+| **Multi-provider LLM** | Route to Anthropic, OpenAI, Google, Perplexity, OpenRouter (one key, hundreds of models from many vendors), LM Studio, Ollama |
 | **Claude SDK** | Direct Claude SDK integration via OAuth for Claude Pro/Max subscribers; always loads the newest SDK installed |
 | **On-chain wallets** | A dedicated agent can trade on Base through DEXs and call any contract, with simulate-first, dry-run paper trading, an encrypted keystore, a pause switch and a full audit log. Losses are capped by what you put in the wallet |
 | **Localhost by default** | Listens on `127.0.0.1` only; network access is an explicit opt-in that requires Basic auth |
@@ -109,8 +109,8 @@ Skills are configured in `lib/skills/skill-manager.js`. Each needs:
 
 The model id says who pays. `claude-sdk/…` runs through the Claude Code client on this machine's Claude sign-in
 (Max or Pro) and `codex-cli/…` on the ChatGPT subscription: no per-token bill. `anthropic/…`, `openai/…`,
-`google/…` and `perplexity/…` run through the hub on that provider's API key and are billed per token to your
-credits. Local providers are free. Pickers label every group, the agent list badges API-key agents with "API $",
+`google/…`, `perplexity/…` and `openrouter/<vendor>/…` run through the hub on that provider's API key and are billed
+per token to your credits (OpenRouter reports each call's cost; the daily spend shows it). Local providers are free. Pickers label every group, the agent list badges API-key agents with "API $",
 and the Claude client never sees the Anthropic API key, so adding one (to use `anthropic/` models) cannot move
 subscription agents onto the API bill.
 

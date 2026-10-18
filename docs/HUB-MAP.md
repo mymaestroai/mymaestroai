@@ -21,7 +21,7 @@ Three ways an agent reaches a model, chosen by the prefix of its model id:
 |---|---|---|---|
 | `claude-sdk/…` | Claude client | The hub starts the Claude Code client per turn (Claude Agent SDK), resumes the agent's client session, and plugs hub tools in over MCP. Sign-in via `claude login` on the machine. | Claude subscription (Pro/Max) |
 | `codex-cli/…` | Codex client | The hub drives the Codex CLI app-server (ChatGPT sign-in), with hub tools bridged over MCP. | ChatGPT subscription |
-| `anthropic/`, `openai/`, `google/`, `perplexity/`, `lmstudio/`, `ollama/`, `omlx/`, `ninfer/` | Gateway | The hub assembles the prompt itself, calls the provider's API (`lib/gateway-client.js`), and runs the tool loop with the hub's own tools. | API key (per token) or local (free) |
+| `anthropic/`, `openai/`, `google/`, `perplexity/`, `openrouter/<vendor>/…`, `lmstudio/`, `ollama/`, `omlx/`, `ninfer/` | Gateway | The hub assembles the prompt itself, calls the provider's API (`lib/gateway-client.js`), and runs the tool loop with the hub's own tools. | API key (per token) or local (free) |
 | `codex/…` | Responses, text only | OpenAI Responses API without tools. | API key |
 
 The same hub capabilities (memory, Records, recall, consults, jobs, scheduling, files, images, policy gate) exist on all routes. Differences are listed in section 7.
@@ -179,6 +179,7 @@ Keep `.env` mode 600. Never commit it.
 | `memberModels` | the models a member may move their own agents onto (empty or absent = only an admin changes models) | settings file |
 | `compactionMode`, `compactionAt`, `recordsMaxBytes` | defaults for context compression and the Records cap | Settings / agent page |
 | `promptCache` (`enabled`, `ttl`) | prompt caching on API-key routes | Settings |
+| `openrouter` (`models`: ids offered in the pickers, unset = the default offer; `privacy`, default on) | OpenRouter (`lib/openrouter.js`): the catalogue comes from its public `/models` (cached 12 h in `data/openrouter-models.json`); the default offer is the newest tool-capable model of each vendor the hub has no key for (Grok, DeepSeek, Kimi, Qwen, Mistral, GLM, Llama, MiniMax; Claude/GPT/Gemini too when those keys are missing); `privacy` sends `provider.data_collection: deny`; every request asks for its cost (`usage.include`, booked by the ledger as reported), gets cache breakpoints on Claude models, OpenRouter's reasoning form and the model's output limit; the key (`OPENROUTER_API_KEY` or Settings) is checked with the free `GET /api/v1/key`; routes `GET/POST /api/openrouter` | Settings → OpenRouter |
 | `planWarn` (`at`: levels, default `[75, 90]`) | warn when a weekly Claude plan allowance passes each level (sidebar chip, push to admins, one line in each affected agent's reply; the usage badge next to each Claude agent's model turns gold/orange); `[]` = no warnings | Settings → Claude plan |
 | `planFallback` (`enabled` default **false**, `at`, `map`) | optional: at `at` % of a weekly allowance, run an agent's turns on the mapped cheaper model until the reset; off = the owner chooses models | Settings → Claude plan |
 | `autoClassifier` | the optional per-prompt model classifier (off by default) | Settings |
