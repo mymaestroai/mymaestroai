@@ -62,7 +62,7 @@ test('mobile composer interjects into a running turn; Stop moves to the header; 
   assert.match(js, /stopBtn\.hidden = !working && !own/, 'header Stop also covers a stream this phone started');
   assert.ok(js.includes('function stopOwnTurn') && js.includes('function sendInterjection'));
   assert.ok(html.includes('#send-btn.interject') && html.includes('.note.interject'));
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v39'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v40'/);
   assert.ok(js.includes("addEventListener('controllerchange'"), 'a new build reloads the installed app once it takes control');
 });
 
@@ -92,7 +92,7 @@ test('mobile push: the phone re-registers when the hub no longer knows its subsc
 test('service worker: a forced (test) push shows its banner even when the app is open in front', () => {
   const sw = read('sw.js');
   assert.ok(sw.includes("if (!data.force && list.some(c => c.focused && c.visibilityState === 'visible')) return;"));
-  assert.match(sw, /const VERSION = 'hub-mobile-v39'/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v40'/);
 });
 
 test('ask_user dialogs: a click only highlights the choice and a Submit button sends it (desktop and phone)', () => {
@@ -102,7 +102,7 @@ test('ask_user dialogs: a click only highlights the choice and a Submit button s
   assert.ok(m.includes("else { b.classList.add('selected'); selected[i] = opt.label; }") && m.includes('<button class="qsubmit" disabled>Submit</button>'), 'phone selects then submits');
   assert.ok(app.includes('if (was) delete selected[qi];') && m.includes('if (was) delete selected[i];'), 'a second click on the highlighted option clears it');
   assert.ok(ih.includes('.question-option.selected {') && mh.includes('.question button.opt.selected {'), 'selected styles on both pages');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v39'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v40'/);
 });
 
 test('a pending ask_user question is re-shown from the hub event stream and on turn catch-up, on both pages (dedup by request id)', () => {
@@ -113,10 +113,19 @@ test('a pending ask_user question is re-shown from the hub event stream and on t
   assert.ok(app.includes("source.addEventListener('ask_user_done'") && app.includes("showQuestionModal({ request_id: ev.request_id, questions: ev.questions }"), 'desktop shows it from the event stream');
   assert.ok(app.includes("if (turn.question && turn.question.request_id && !turn.ended) showQuestionModal(turn.question, chatId)"), 'desktop shows it on catch-up');
   assert.ok(app.includes("if (shownQuestions.has(request_id)) return resolve();"), 'desktop dedups');
-  assert.ok(m.includes("if (chatOpenFor(ev.agent)) showQuestion(q); else pendingQuestionsByAgent.set(ev.agent, q);"), 'phone shows or parks it');
+  assert.ok(m.includes("if (chatOpenFor(ev.agent)) showQuestion(q);") && m.includes("pendingQuestionsByAgent.set(ev.agent, q);"), 'phone shows or parks it');
+  assert.ok(m.includes("toast(`❓ ${displayName(ev.agent)} is asking you something. Tap to answer.`, 8000, () => navigate('chat', ev.agent));"), 'a parked question says so, and the notice opens that chat');
+  assert.ok(m.includes("t.onclick = onTap ? () => { t.classList.remove('on'); onTap(); } : null;"), 'the toast can lead somewhere');
   assert.ok(m.includes("if (d.turn.question && d.turn.question.request_id && !d.turn.ended) showQuestion(d.turn.question);"), 'phone shows it on catch-up');
-  assert.ok(m.includes("on('ask_user_done'") && m.includes("if (shownQuestions.has(request_id)) return;"), 'phone closes and dedups');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v39'/);
+  // Joining a running turn (the app opened mid-turn, or reopened) shows the question that turn waits on: this path
+  // used to fetch the turn and drop the question, so a question asked before the phone joined never appeared.
+  assert.ok(m.includes("if (!turn.ended && turn.question && turn.question.request_id) {\n    if (chatOpenFor(ra.agent)) showQuestion(turn.question); else pendingQuestionsByAgent.set(ra.agent, turn.question);"), 'phone shows it when re-attaching');
+  // Parked questions are shown when their chat opens (the old lookup used the global `name`, so they never were).
+  assert.ok(m.includes("const parked = pendingQuestionsByAgent.get(name);\n  if (parked) { pendingQuestionsByAgent.delete(name); showQuestion(parked); }"), 'opening the chat shows a parked question');
+  assert.ok(m.includes("const pq = pendingQuestionsByAgent.get(rec.agent);") && !m.includes("const pq = pendingQuestionsByAgent.get(name);"), 'own-stream path looks up its own agent');
+  assert.ok(m.includes("on('ask_user_done'") && m.includes("if (shownQuestions.has(request_id)) {"), 'phone closes and dedups');
+  assert.ok(m.includes("if (old && !old.isConnected) { chatEl().appendChild(old); scrollChat(); }"), 'an unanswered question survives the chat being closed and reopened');
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v40'/);
 });
 
 test('after a hub restart both pages reload themselves: hello carries the boot id, a changed id triggers a reload once nothing streams', () => {
@@ -130,7 +139,7 @@ test('after a hub restart both pages reload themselves: hello carries the boot i
   const app = read('app.js'), m = read('mobile.js');
   assert.ok(app.includes("ev.boot !== window.__hubBoot") && app.includes("Object.values(chats).some(c => c && c.controller)") && app.includes('location.reload()'), 'desktop reloads when idle');
   assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("if (streams.size) { setTimeout(go, 2000); return; }"), 'phone reloads when idle');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v39'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v40'/);
 });
 
 test('a pasted image with no words is a valid chat message (no HTTP 400)', () => {

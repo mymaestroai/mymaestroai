@@ -50,7 +50,7 @@ test('phone: plan usage in the chat header for Claude agents; no plan pop-ups', 
   assert.match(mjs, /await loadMe\(\);\s*\n\s*applyMultiUser\(\);\s*\n\s*refreshPlanUsage\(\);/, 'read at start');
   assert.ok(mjs.includes('paintCtx(); refreshCtx(name); paintPlan();'), 'painted on open');
   assert.ok(mjs.includes('if (refreshPlanUsage.tries <= 8) next = Math.min(next, 15000);'), 'asks again soon while the hub has no reading yet');
-  assert.ok(mjs.includes('function toast(text, ms = 3000) {'), 'toast duration kept');
+  assert.ok(mjs.includes('function toast(text, ms = 3000, onTap = null) {'), 'toast duration kept');
 });
 
 test('both chat renderers show a whole line in underscores (the hub\'s notices) in italics', () => {

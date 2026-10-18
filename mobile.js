@@ -68,9 +68,11 @@ function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function toast(text, ms = 3000) {
+function toast(text, ms = 3000, onTap = null) {
   const t = $('toast');
   t.textContent = text;
+  t.onclick = onTap ? () => { t.classList.remove('on'); onTap(); } : null;   // a notice that leads somewhere
+  t.style.cursor = onTap ? 'pointer' : '';
   t.classList.add('on');
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => t.classList.remove('on'), ms);
@@ -1304,6 +1306,10 @@ async function openChat(name) {
   // status snapshot the hub's turn endpoint says whether there is a turn to follow.
   if (!statusKnown && !streams.has(name) && !reattaches.has(name) && !inProgress) probeTurn(name);
   reattachIfIdle(name, inProgress ? String(inProgress.content || '') : '');
+  // A question this agent asked while its chat was closed (parked by the ask_user event) is shown now; one the hub
+  // still holds for a running turn comes with the turn view (catchUpReattach / catchUpOpenAgent).
+  const parked = pendingQuestionsByAgent.get(name);
+  if (parked) { pendingQuestionsByAgent.delete(name); showQuestion(parked); }
   paintChatStatus();
   scrollChat(true);
 }
@@ -1317,8 +1323,8 @@ function attachStreamBubble(rec) {
   if (!rec.gotAny) { b.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>'; return; }
   paintReply(rec, rec.full);   // text and activity rows in the order they happened
   if (rec.question) showQuestion(rec.question, () => { rec.question = null; });
-  const pq = pendingQuestionsByAgent.get(name);
-  if (pq) { pendingQuestionsByAgent.delete(name); showQuestion(pq); }
+  const pq = pendingQuestionsByAgent.get(rec.agent);
+  if (pq) { pendingQuestionsByAgent.delete(rec.agent); showQuestion(pq); }
 }
 
 // ── Turn activity feed: tool calls and workers inside the in-progress bubble ─────────────────
@@ -1671,6 +1677,10 @@ async function catchUpReattach(ra) {
   }
   applyTurnFeed(ra, turn);
   if (!turn.ended) applyTurnProgress(ra.agent, turn, ra);
+  // The turn is waiting on a question asked before this phone joined (the app was closed, or opened mid-turn).
+  if (!turn.ended && turn.question && turn.question.request_id) {
+    if (chatOpenFor(ra.agent)) showQuestion(turn.question); else pendingQuestionsByAgent.set(ra.agent, turn.question);
+  }
   if (typeof turn.text === 'string' && turn.text.length >= (ra.partial || '').length) ra.partial = turn.text;
   if (turn.ended) {
     const ok = turn.ended.ok !== false;
@@ -2189,7 +2199,12 @@ function closeQuestion(requestId, how) {
 function showQuestion(data, onAnswered) {
   const { request_id, questions } = data;
   if (!request_id || !Array.isArray(questions)) return;
-  if (shownQuestions.has(request_id)) return;
+  if (shownQuestions.has(request_id)) {
+    // Shown before and still unanswered, but the chat was redrawn since (closed and reopened): put the same box back.
+    const old = questionBoxes.get(request_id);
+    if (old && !old.isConnected) { chatEl().appendChild(old); scrollChat(); }
+    return;
+  }
   shownQuestions.add(request_id);
   const box = document.createElement('div');
   box.className = 'question';
@@ -2549,7 +2564,11 @@ function connectEvents() {
     // The question itself: shown now if that chat is open, else kept until it is (dedup by request id in showQuestion).
     if (ev.request_id && Array.isArray(ev.questions)) {
       const q = { request_id: ev.request_id, questions: ev.questions };
-      if (chatOpenFor(ev.agent)) showQuestion(q); else pendingQuestionsByAgent.set(ev.agent, q);
+      if (chatOpenFor(ev.agent)) showQuestion(q);
+      else {
+        pendingQuestionsByAgent.set(ev.agent, q);
+        toast(`❓ ${displayName(ev.agent)} is asking you something. Tap to answer.`, 8000, () => navigate('chat', ev.agent));
+      }
     }
   });
   on('ask_user_done', (ev) => { if (!ev) return; pendingQuestionsByAgent.delete(ev.agent); if (ev.request_id) closeQuestion(ev.request_id, ev.result); });

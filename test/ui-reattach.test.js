@@ -30,13 +30,13 @@ test('mobile: same re-attach on snapshot and when opening a busy agent\'s chat; 
   assert.match(m, /if \(!agent \|\| !chatOpenFor\(agent\) \|\| streams\.has\(agent\) \|\| reattaches\.has\(agent\)\) return;/);
   assert.match(m, /enterReattach\(agent, null, addAssistantBubble\(\), '', partial, s\.busySince \|\| null\)/);
   assert.match(m, /if \(current && map\[current\] && map\[current\]\.busy && !Object\.values\(hubTurns\)\.some\(t => t\.agent === current\)\) reattachIfIdle\(current\);/);
-  assert.match(m, /reattachIfIdle\(name, inProgress \? String\(inProgress\.content \|\| ''\) : ''\);\s*paintChatStatus\(\);\s*scrollChat\(true\);/);
+  assert.match(m, /reattachIfIdle\(name, inProgress \? String\(inProgress\.content \|\| ''\) : ''\);[\s\S]{0,420}if \(parked\) \{ pendingQuestionsByAgent\.delete\(name\); showQuestion\(parked\); \}\s*paintChatStatus\(\);\s*scrollChat\(true\);/);
   assert.match(m, /function enterReattach\(agent, text, bubble, partialHtml, partial, since = null\)/);
   assert.match(m, /if \(ra\.text\) for \(let i = hist\.length - 1; i >= 0; i--\)/);
   assert.match(m, /\} else if \(!ra\.text && ra\.since\) \{/);
   assert.match(m, /if \(stillBusy === true \|\| reply\.inProgress\) \{[^\n]*\n\s*\/\/ Still working/);
   assert.match(m, /if \(ui < 0 && ra\.text\) \{/);
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v39'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v40'/);
 });
 
 test('a chat opened while its agent is mid-turn (reload, or reopened from the sidebar) follows the turn at once', () => {
