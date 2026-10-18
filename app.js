@@ -2431,7 +2431,7 @@
     }
     function orPrice(m) {
       if (m.prompt == null || m.completion == null) return '';
-      const f = (x) => { const v = x * 1e6; return v === 0 ? '0' : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(0); };
+      const f = (x) => { const v = Number((x * 1e6).toPrecision(12)); return v === 0 ? '0' : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(0); };
       return `$${f(m.prompt)} / $${f(m.completion)} per M`;
     }
     function renderOpenRouterBox() {

@@ -30,6 +30,7 @@ function harness(respond, toolHandlers = {}) {
     MAX_TOOL_TURNS: 12, MAX_TRUNCATION_RESUMES: 3, MAX_LENGTH_CONTINUATIONS: 3, REASON_FLUSH_MS: 250,
     drainInterjections: () => [], interjectionQueues: new Map(),
     providerPacing: require('../lib/provider-pacing'),   // the gateway catch emits a typed turn_error for the pacing layer
+    errorHelp: require('../lib/error-help'),   // ...and the error in plain words for the reply text
     chatCompletionStream: async (messages, opts) => {
       requests.push(structuredClone(messages));
       assert.equal(opts.noRetries, true);

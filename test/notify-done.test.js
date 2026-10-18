@@ -93,5 +93,5 @@ test('phone: the bell sits next to the send/interject button, shows exactly whil
   // under the finger (a plain click missed on the first try in the test with the box focused).
   assert.ok(m.includes("bellBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });") && m.includes("bellBtn.addEventListener('pointerup', (e) => { e.preventDefault(); bellAt = Date.now(); toggleNotifyDone(); });") && m.includes("bellBtn.addEventListener('click', () => { if (Date.now() - bellAt < 700) return; toggleNotifyDone(); });"));
   assert.ok(m.includes('Notifications are off on this phone: turn them on in the ⋮ menu first'), 'says when no device would hear it');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v46'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v47'/);
 });

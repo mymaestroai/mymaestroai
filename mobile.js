@@ -755,7 +755,7 @@ function orOfferWith(chosen, id) { const list = Array.isArray(chosen) ? chosen.s
 /** One model's line under its name: what it can do, its context window, its price per million tokens in / out. */
 function orMeta(m) {
   const ctx = !m.context ? '' : m.context >= 1e6 ? `${(m.context / 1e6).toFixed(m.context % 1e6 ? 1 : 0)}M context` : `${Math.round(m.context / 1000)}K context`;
-  const f = (x) => { const v = x * 1e6; return v === 0 ? '0' : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(0); };
+  const f = (x) => { const v = Number((x * 1e6).toPrecision(12)); return v === 0 ? '0' : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(0); };
   const price = m.prompt == null || m.completion == null ? '' : `$${f(m.prompt)} / $${f(m.completion)} per M`;
   const can = `${m.tools ? '🛠' : ''}${m.reasoning ? ' 🧠' : ''}${m.images ? ' 🖼' : ''}`.trim();
   return [can, ctx, price].filter(Boolean).join(' · ');
