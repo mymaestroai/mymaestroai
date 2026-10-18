@@ -135,7 +135,7 @@ git log -1 --date=local --format='%h %ad %s'
 ### 4.1 Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mymaestroai/mymaestroai/main/install/install.sh | bash     # = install/install.sh in the repository
+curl -fsSL https://mymaestroai.ai/install.sh | bash     # = install/install.sh in the repository
 ```
 
 The installer (no sudo): its own Node.js 22.23.3 in `~/.mymaestroai/node` (SHA-256 pinned per platform), the code in `~/mymaestroai` by git (public download, else the user's GitHub SSH key, else a read-only token kept in `~/.mymaestroai/git-credentials` 0600 and wired as the repo's credential helper), `npm ci --omit=dev --ignore-scripts` then `npm rebuild better-sqlite3`, `.env` (PORT) 0600 and `data/` 0700, `data/install.json`, `~/.local/bin/mymaestro`, the service (`mymaestro service install`: systemd user unit `mymaestroai.service` + linger, or launchd agent `ai.mymaestro.hub`; output to `server.log`), then it opens `/welcome?token=…`. Flags: `--dir --port --channel stable|experimental --repo --no-service --no-open --no-profile --yes --dry-run --uninstall`; env `MM_STATE_DIR MM_BIN_DIR MM_DESKTOP_DIR`. A channel without `scripts/hub-cli.js` (older than the installer) is refused with a pointer to `--channel experimental`. By hand: `git clone`, `npm ci --omit=dev`, `node server.js`, then `node scripts/hub-cli.js service install`.

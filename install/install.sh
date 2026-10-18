@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # My Maestro AI installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/mymaestroai/mymaestroai/main/install/install.sh | bash
+#   curl -fsSL https://mymaestroai.ai/install.sh | bash
 #
-# Or download, read, then run:   curl -fsSLO https://raw.githubusercontent.com/mymaestroai/mymaestroai/main/install/install.sh && less install.sh && bash install.sh
+# Or download, read, then run:   curl -fsSLO https://mymaestroai.ai/install.sh && less install.sh && bash install.sh
 #
 # What it does, all inside your home folder, without sudo:
 #   1. Downloads Node.js (nodejs.org, checksum verified) into ~/.mymaestroai/node, used only by My Maestro AI.

@@ -7,10 +7,10 @@ Multi-agent AI chat platform with multi-provider LLM routing. Run AI agents with
 One command, on a Mac or a Linux machine (Ubuntu, Debian; on Windows, inside WSL):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mymaestroai/mymaestroai/main/install/install.sh | bash
+curl -fsSL https://mymaestroai.ai/install.sh | bash
 ```
 
-Or download it, read it, then run it: `curl -fsSLO https://raw.githubusercontent.com/mymaestroai/mymaestroai/main/install/install.sh && less install.sh && bash install.sh`.
+Or download it, read it, then run it: `curl -fsSLO https://mymaestroai.ai/install.sh && less install.sh && bash install.sh`.
 The same script is `install/install.sh` in this repository. Inside your home folder and without sudo, it:
 
 1. downloads Node.js 22 from nodejs.org (checksum verified) into `~/.mymaestroai/node`, used only by My Maestro AI;
