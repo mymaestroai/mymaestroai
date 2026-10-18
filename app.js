@@ -4356,7 +4356,7 @@
       if (__modelListCache) return __modelListCache;
       const r = await fetch('/api/models', { credentials: 'include' });
       const d = await r.json();
-      __modelListCache = { models: d.models || [], transport: d.transport || {}, billing: d.billing || {} };
+      __modelListCache = { models: d.models || [], transport: d.transport || {}, billing: d.billing || {}, health: d.health || {} };
       setTimeout(() => { __modelListCache = null; }, 5 * 60000);
       return __modelListCache;
     }
@@ -4365,7 +4365,7 @@
       if (!chat || !sel || sel.dataset.filled) return;
       sel.dataset.filled = '1';
       try {
-        const { models, billing } = await modelList();
+        const { models, billing, health } = await modelList();
         const cur = String(chat.model || '');
         // Groups by vendor (Anthropic, OpenAI, Google, ...); every line starts with the route: "API / gpt-6-astra",
         // "Subscription (Claude sign-in) / claude-fable-5-1". The route is in the text, not in a grey group label.
@@ -4373,16 +4373,17 @@
         if (cur && !models.includes(cur)) html += `<option value="${esc(cur)}" selected>${esc(billingDisplay(cur, true))} (current; not in the hub's list)</option>`;
         // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
         for (const [label, rows] of groupModels(models)) {
-          html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc((billing[m] && billing[m].short) || billingDisplay(m, true))}</option>`).join('')
+          html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(((billing[m] && billing[m].short) || billingDisplay(m, true)) + healthNote(health && health[m]))}</option>`).join('')
             + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
         }
         if (html) { sel.innerHTML = html; sel.value = cur; }
       } catch (e) { delete sel.dataset.filled; console.warn('[model-pick] list failed:', e.message); }
     }
-    async function changeChatModel(chatId, model) {
+    async function changeChatModel(chatId, model, opts = {}) {
       const chat = chats[chatId]; const sel = document.getElementById(`model-pick-${chatId}`);
       if (chat && model === OR_MORE) { if (sel) sel.value = chat.model; openOrPicker(chatId); return false; }
       if (!chat || !model || model === chat.model) return false;
+      if (!opts.tested && !(await testBeforeSwitch(model))) { if (sel) sel.value = chat.model; return false; }
       try {
         const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ model }) });
         const d = await r.json().catch(() => ({}));
@@ -4390,6 +4391,33 @@
         // The hub's agent_updated event relabels the header (or parks the change until the current turn ends).
         return true;
       } catch (e) { if (sel) sel.value = chat.model; alert(`Could not change the model: ${e.message}`); return false; }
+    }
+
+    // What the hub has seen a model do (lib/model-health): " — ⚠ blocked by the privacy setting" after its name in the
+    // pickers when its last reply or test failed for a reason that belongs to the model; nothing otherwise.
+    function healthNote(h) { return h && (h.state === 'fail' || h.state === 'warn') && h.short ? ` — ⚠ ${h.short}` : ''; }
+    function hideHubToast() { const t = document.getElementById('hub-toast'); if (t) t.classList.remove('on'); clearTimeout(hubToast.timer); }
+    // Before an agent moves to a model this hub hasn't seen answer, one tiny test request (POST /api/models/test): a
+    // refusal or a model that can't use tools is caught here, with the reason and what to do, not in the agent's next
+    // reply. Subscription models (Claude, Codex) are not tested per request.
+    async function testBeforeSwitch(model) {
+      if (!String(model).includes('/') || /^(claude-sdk|codex-cli|codex)\//.test(model)) return true;
+      const h = ((__modelListCache && __modelListCache.health) || {})[model];
+      if (h && h.state === 'ok') return true;   // it has answered here
+      const name = String(model).split('/').pop();
+      hubToast(`Testing ${name} before switching…`, 90000);
+      let r = null;
+      try {
+        const resp = await fetch('/api/models/test', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+        r = await resp.json().catch(() => null);
+        if (!resp.ok || !r) throw new Error((r && r.error) || `HTTP ${resp.status}`);
+      } catch (e) { hideHubToast(); return confirm(`Couldn't test ${name}: ${e.message}\n\nSwitch anyway?`); }
+      __modelListCache = null;   // the pickers pick up the new mark (or its absence) when they next open
+      document.querySelectorAll('select.model-pick[data-filled]').forEach(s => { delete s.dataset.filled; });
+      const passed = r.ok !== undefined ? r.ok : r.success;   // r.success: the answer of a hub not yet restarted
+      if (passed && r.toolCall !== false) { hubToast(`✓ ${name} works here${r.ms != null ? ` (${(r.ms / 1000).toFixed(1)} s)` : ''}`); return true; }
+      hideHubToast();
+      return confirm(`${r.title || `${name} may not work here.`} ${r.what || r.error || ''}\n\nWhat to do: ${r.fix || 'pick another model.'}\n\nSwitch anyway?`);
     }
 
     // ── OpenRouter: every model, from the chat header's picker ──
@@ -4408,6 +4436,19 @@
     }
     /** The offered list after adding `id`: the current one (the default offer until a list is saved), without repeats. */
     function orOfferWith(chosen, id) { const list = Array.isArray(chosen) ? chosen.slice() : []; if (!list.includes(id)) list.push(id); return list; }
+    /** Warnings for one OpenRouter row: from the catalogue, the privacy setting and what the hub has seen (model health). */
+    function orWarnings(m, { privacy, ids, health } = {}) {
+      const out = []; const free = /:free$/.test(m.id);
+      const paid = free && ids && ids.has(m.id.replace(/:free$/, '')) ? m.id.replace(/:free$/, '') : null;
+      if (free && privacy) out.push({ level: 'block', text: `⛔ Blocked by your privacy setting${paid ? `; paid version: ${paid}` : ''}` });
+      else if (free) out.push({ level: 'warn', text: 'Free version: may train on your prompts; low rate limits' });
+      if (!m.tools) out.push({ level: 'warn', text: "⚠ Can't use tools" });
+      if (m.context && m.context < 32000) out.push({ level: 'warn', text: `⚠ Small context window (${Math.round(m.context / 1000)}K): the hub's instructions alone take about 18K tokens` });
+      const h = health && health[`openrouter/${m.id}`];
+      if (h && (h.state === 'fail' || h.state === 'warn') && h.short) out.push({ level: 'warn', text: `⚠ Last check here: ${h.short}` });
+      else if (h && h.okAt) out.push({ level: 'ok', text: '✓ Works here' });
+      return out;
+    }
     function orPickMeta(m) {
       const ctx = !m.context ? '' : m.context >= 1e6 ? `${(m.context / 1e6).toFixed(m.context % 1e6 ? 1 : 0)}M context` : `${Math.round(m.context / 1000)}K context`;
       const can = `${m.tools ? '🛠' : ''}${m.reasoning ? ' 🧠' : ''}${m.images ? ' 🖼' : ''}`.trim();
@@ -4436,6 +4477,7 @@
       document.getElementById('or-pick-all').addEventListener('change', renderOrPicker);
       document.getElementById('or-pick-list').addEventListener('click', (e) => { const b = e.target.closest('.or-pick-row'); if (b) chooseOrModel(b.dataset.id, b); });
       document.getElementById('or-pick-q').focus();
+      try { await modelList(); } catch { /* no marks, the rows still show */ }
       if (!orPickView || Date.now() - orPickView.at > 10 * 60000) {
         try {
           const r = await fetch('/api/openrouter', { credentials: 'include' });
@@ -4451,13 +4493,19 @@
       if (!ov || !list || !orPickView) return;
       const v = orPickView.view; const chat = chats[ov.dataset.chat];
       const cur = String((chat && chat.model) || ''); const offered = new Set(v.chosen || []);
-      const rows = orPickList(v.models, document.getElementById('or-pick-q').value, document.getElementById('or-pick-all').checked); const shown = rows.slice(0, 200);
+      const ids = new Set((v.models || []).map(m => m.id)); const health = (__modelListCache && __modelListCache.health) || {};
+      const warn = (m) => orWarnings(m, { privacy: v.privacy, ids, health });
+      const blocked = (m) => (warn(m).some(w => w.level === 'block') ? 1 : 0);
+      const rows = orPickList(v.models, document.getElementById('or-pick-q').value, document.getElementById('or-pick-all').checked)
+        .sort((a, b) => blocked(a) - blocked(b));   // stable: newest first within each group, blocked ones last
+      const shown = rows.slice(0, 200);
       msg.textContent = !v.hasKey ? 'No OpenRouter key yet: add one in Settings → LLM Providers.'
         : rows.length ? `${rows.length} model${rows.length === 1 ? '' : 's'}, newest first${rows.length > shown.length ? `. Showing ${shown.length}: type to narrow it down.` : '.'}` : 'No model matches.';
       list.innerHTML = shown.map(m => {
         const isCur = `openrouter/${m.id}` === cur;
         const tag = isCur ? '<span class="or-pick-tag">current</span>' : offered.has(m.id) ? '<span class="or-pick-tag">✓ in your list</span>' : '';
-        return `<button type="button" class="or-pick-row${isCur ? ' cur' : ''}" data-id="${esc(m.id)}"><span class="or-pick-name"><b>${esc(m.name || m.id)}</b> ${tag}</span><code>${esc(m.id)}</code><span class="or-pick-meta">${esc(orPickMeta(m))}</span></button>`;
+        const notes = warn(m).map(w => `<span class="or-pick-warn ${w.level}">${esc(w.text)}</span>`).join('');
+        return `<button type="button" class="or-pick-row${isCur ? ' cur' : ''}" data-id="${esc(m.id)}"><span class="or-pick-name"><b>${esc(m.name || m.id)}</b> ${tag}</span><code>${esc(m.id)}</code><span class="or-pick-meta">${esc(orPickMeta(m))}</span>${notes}</button>`;
       }).join('');
     }
     async function chooseOrModel(id, btn) {
@@ -4466,7 +4514,9 @@
       const model = `openrouter/${id}`;
       if (model === chat.model) { closeOrPicker(); return; }
       if (btn) btn.disabled = true;
-      const msg = document.getElementById('or-pick-msg'); if (msg) msg.textContent = `Switching to ${id}…`;
+      const msg = document.getElementById('or-pick-msg'); if (msg) msg.textContent = `Testing ${id}…`;
+      if (!(await testBeforeSwitch(model))) { if (btn) btn.disabled = false; if (msg) msg.textContent = `Not switched: ${chat.display || capName(chat.agent)} stays on ${String(chat.model || '').split('/').pop()}.`; return; }
+      if (msg) msg.textContent = `Switching to ${id}…`;
       const v = orPickView ? orPickView.view : {};
       let note = '';
       if (!(v.chosen || []).includes(id)) {   // add it to the offer first, so every picker lists it from now on
@@ -4480,7 +4530,7 @@
         document.querySelectorAll('select.model-pick[data-filled]').forEach(s => { delete s.dataset.filled; });
       }
       closeOrPicker();
-      if (await changeChatModel(chatId, model)) hubToast(`${chat.display || capName(chat.agent)} switches to ${billingDisplay(model, true)}${note}`, note ? 6000 : 3000);
+      if (await changeChatModel(chatId, model, { tested: true })) hubToast(`${chat.display || capName(chat.agent)} switches to ${billingDisplay(model, true)}${note}`, note ? 6000 : 3000);
     }
 
     // Reasoning effort in the chat header, next to the model (lib/effort). Admins choose it for any agent; members see

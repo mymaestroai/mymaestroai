@@ -567,12 +567,38 @@ function mpGroups(models) {
   return [...groups.entries()].sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0])).map(([k, g]) => [k, g.models.slice().sort((x, y) => mpLabel(x).localeCompare(mpLabel(y)))]);
 }
 let _modelListCache = null;
+let _modelHealth = {};   // what the hub has seen each model do (lib/model-health), from /api/models
 async function mpModelList() {
   if (_modelListCache && Date.now() - _modelListCache.at < 5 * 60000) return _modelListCache.models;
   const r = await api('/api/models');
   const d = await r.json();
   _modelListCache = { at: Date.now(), models: d.models || [] };
+  _modelHealth = d.health || {};
   return _modelListCache.models;
+}
+// " — ⚠ blocked by the privacy setting" after a model's name when its last reply or test failed for a reason that
+// belongs to the model; nothing otherwise.
+function healthNote(h) { return h && (h.state === 'fail' || h.state === 'warn') && h.short ? ` — ⚠ ${h.short}` : ''; }
+// Before an agent moves to a model this hub hasn't seen answer, one tiny test request (POST /api/models/test): a
+// refusal or a model that can't use tools is caught here, with the reason and what to do, not in the agent's next
+// reply. Subscription models (Claude, Codex) are not tested per request.
+async function testBeforeSwitch(model) {
+  if (!String(model).includes('/') || /^(claude-sdk|codex-cli|codex)\//.test(model)) return true;
+  const h = _modelHealth[model];
+  if (h && h.state === 'ok') return true;   // it has answered here
+  const name = String(model).split('/').pop();
+  toast(`Testing ${name} before switching…`, 90000);
+  let r = null;
+  try {
+    const resp = await api('/api/models/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+    r = await resp.json().catch(() => null);
+    if (!resp.ok || !r) throw new Error((r && r.error) || `HTTP ${resp.status}`);
+  } catch (e) { $('toast').classList.remove('on'); return confirm(`Couldn't test ${name}: ${e.message}\n\nSwitch anyway?`); }
+  _modelListCache = null;   // the picker picks up the new mark (or its absence) when it refills
+  const passed = r.ok !== undefined ? r.ok : r.success;   // r.success: the answer of a hub not yet restarted
+  if (passed && r.toolCall !== false) { toast(`✓ ${name} works here${r.ms != null ? ` (${(r.ms / 1000).toFixed(1)} s)` : ''}`); return true; }
+  $('toast').classList.remove('on');
+  return confirm(`${r.title || `${name} may not work here.`} ${r.what || r.error || ''}\n\nWhat to do: ${r.fix || 'pick another model.'}\n\nSwitch anyway?`);
 }
 async function fillModelPick() {
   const sel = $('chat-model-pick'); const wrap = sel && sel.parentElement;
@@ -586,7 +612,7 @@ async function fillModelPick() {
     let html = '';
     if (cur && !models.includes(cur)) html += `<option value="${esc(cur)}">${esc(mpLabel(cur))} (current)</option>`;
     // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
-    for (const [label, rows] of mpGroups(models)) html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}">${esc(mpLabel(m))}</option>`).join('') + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
+    for (const [label, rows] of mpGroups(models)) html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}">${esc(mpLabel(m) + healthNote(_modelHealth[m]))}</option>`).join('') + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
     sel.innerHTML = html; sel.value = cur; sel.dataset.agent = a.name;
     sel.hidden = !html; wrap && wrap.classList.toggle('pickable', !!html);
   } catch (e) { sel.hidden = true; wrap && wrap.classList.remove('pickable'); }
@@ -724,6 +750,7 @@ async function changeModelFromPick() {
   const name = sel.dataset.agent; const a = agentByName(name); const model = sel.value;
   if (model === OR_MORE) { sel.value = a ? a.model : ''; if (a) openOrSheet(name); return; }
   if (!a || !model || model === a.model) return;
+  if (!(await testBeforeSwitch(model))) { sel.value = a.model; return; }
   try {
     const r = await api(`/api/agents/${encodeURIComponent(name)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
     const d = await r.json().catch(() => ({}));
@@ -749,6 +776,19 @@ function orSheetList(models, q, all) {
   return (models || []).filter(m => (all || m.tools) && !/:batch/.test(m.id))
     .filter(m => { const hay = `${m.id} ${m.name || ''}`.toLowerCase(); return words.every(w => hay.includes(w)); })
     .sort((a, b) => (b.created || 0) - (a.created || 0));
+}
+/** Warnings for one OpenRouter row: from the catalogue, the privacy setting and what the hub has seen (model health). */
+function orWarnings(m, { privacy, ids, health } = {}) {
+  const out = []; const free = /:free$/.test(m.id);
+  const paid = free && ids && ids.has(m.id.replace(/:free$/, '')) ? m.id.replace(/:free$/, '') : null;
+  if (free && privacy) out.push({ level: 'block', text: `⛔ Blocked by your privacy setting${paid ? `; paid version: ${paid}` : ''}` });
+  else if (free) out.push({ level: 'warn', text: 'Free version: may train on your prompts; low rate limits' });
+  if (!m.tools) out.push({ level: 'warn', text: "⚠ Can't use tools" });
+  if (m.context && m.context < 32000) out.push({ level: 'warn', text: `⚠ Small context window (${Math.round(m.context / 1000)}K): the hub's instructions alone take about 18K tokens` });
+  const h = health && health[`openrouter/${m.id}`];
+  if (h && (h.state === 'fail' || h.state === 'warn') && h.short) out.push({ level: 'warn', text: `⚠ Last check here: ${h.short}` });
+  else if (h && h.okAt) out.push({ level: 'ok', text: '✓ Works here' });
+  return out;
 }
 /** The offered list after adding `id`: the current one (the default offer until a list is saved), without repeats. */
 function orOfferWith(chosen, id) { const list = Array.isArray(chosen) ? chosen.slice() : []; if (!list.includes(id)) list.push(id); return list; }
@@ -784,6 +824,7 @@ async function openOrSheet(name) {
   $('ors-title').textContent = `OpenRouter models · ${a.display || name}`;
   $('ors-q').value = '';
   if (!sheet.open) sheet.showModal();
+  try { await mpModelList(); } catch { /* no marks, the rows still show */ }
   if (!orSheetView || Date.now() - orSheetView.at > 10 * 60000) {
     $('ors-msg').textContent = 'Loading the OpenRouter list…'; $('ors-list').innerHTML = '';
     try {
@@ -799,13 +840,18 @@ function orSheetRender() {
   if (!sheet || !list || !orSheetView) return;
   const v = orSheetView.view; const a = agentByName(sheet.dataset.agent);
   const cur = String(a?.model || ''); const offered = new Set(v.chosen || []);
-  const rows = orSheetList(v.models, $('ors-q').value, $('ors-all').checked); const shown = rows.slice(0, 150);
+  const ids = new Set((v.models || []).map(m => m.id));
+  const warn = (m) => orWarnings(m, { privacy: v.privacy, ids, health: _modelHealth });
+  const blocked = (m) => (warn(m).some(w => w.level === 'block') ? 1 : 0);
+  const rows = orSheetList(v.models, $('ors-q').value, $('ors-all').checked).sort((a, b) => blocked(a) - blocked(b));   // blocked ones last
+  const shown = rows.slice(0, 150);
   msg.textContent = !v.hasKey ? 'No OpenRouter key yet: add one in Settings → LLM Providers on the full page.'
     : rows.length ? `${rows.length} model${rows.length === 1 ? '' : 's'}, newest first${rows.length > shown.length ? `. Showing ${shown.length}: type to narrow it down.` : '.'}` : 'No model matches.';
   list.innerHTML = shown.map(m => {
     const isCur = `openrouter/${m.id}` === cur;
     const tag = isCur ? '<small>current</small>' : offered.has(m.id) ? '<small>✓ in your list</small>' : '';
-    return `<button type="button" class="ors-row${isCur ? ' cur' : ''}" data-id="${esc(m.id)}"><span class="ors-name">${esc(m.name || m.id)} ${tag}</span><span class="ors-id">${esc(m.id)}</span><span class="ors-meta">${esc(orMeta(m))}</span></button>`;
+    const notes = warn(m).map(w => `<span class="ors-warn ${w.level}">${esc(w.text)}</span>`).join('');
+    return `<button type="button" class="ors-row${isCur ? ' cur' : ''}" data-id="${esc(m.id)}"><span class="ors-name">${esc(m.name || m.id)} ${tag}</span><span class="ors-id">${esc(m.id)}</span><span class="ors-meta">${esc(orMeta(m))}</span>${notes}</button>`;
   }).join('');
 }
 async function onOrSheetClick(e) {
@@ -815,7 +861,9 @@ async function onOrSheetClick(e) {
   if (!a) return;
   if (model === a.model) { sheet.close(); return; }
   const v = orSheetView ? orSheetView.view : {};
-  btn.disabled = true; $('ors-msg').textContent = `Switching ${a.display || name} to ${id}…`;
+  btn.disabled = true; $('ors-msg').textContent = `Testing ${id}…`;
+  if (!(await testBeforeSwitch(model))) { btn.disabled = false; $('ors-msg').textContent = `Not switched: ${a.display || name} stays on ${shortModel(a.model)}.`; return; }
+  $('ors-msg').textContent = `Switching ${a.display || name} to ${id}…`;
   let note = '';
   if (!(v.chosen || []).includes(id)) {   // add it to the offer first, so the picker lists it from now on
     note = '. It could not be added to the OpenRouter list';

@@ -25,7 +25,7 @@ test('the list comes from /api/models once, grouped by provider, with the curren
 });
 
 test('a change posts to the same route the settings page uses and reverts the select on failure', () => {
-  assert.match(app, /async function changeChatModel\(chatId, model\) \{[\s\S]*?fetch\(`\/api\/agents\/\$\{encodeURIComponent\(chat\.agent\)\}\/model`, \{ method: 'POST'[\s\S]*?body: JSON\.stringify\(\{ model \}\)/);
+  assert.match(app, /async function changeChatModel\(chatId, model, opts = \{\}\) \{[\s\S]*?fetch\(`\/api\/agents\/\$\{encodeURIComponent\(chat\.agent\)\}\/model`, \{ method: 'POST'[\s\S]*?body: JSON\.stringify\(\{ model \}\)/);
   assert.match(app, /if \(!r\.ok \|\| !d\.success\) \{ if \(sel\) sel\.value = chat\.model; alert\(/);
 });
 

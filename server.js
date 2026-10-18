@@ -879,8 +879,10 @@ async function handleHttpRequest(req, res) {
         discovering: md.isDiscovering(),
         stale: !!dcache.stale,
         discoveredAt: dcache.discoveredAt || null,
+        health: require('./lib/model-health').getModelHealth().view(),   // marks for the pickers (lib/model-health)
       });
     }
+
 
     if (pathname === '/api/models/test' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
@@ -899,6 +901,17 @@ async function handleHttpRequest(req, res) {
         const err = st.detail || 'Codex CLI not logged in';
         _modelHealthCache[model] = st.loggedIn ? { working: true, latency: 0, testedAt: Date.now() } : { working: false, error: err, testedAt: Date.now() };
         return jsonResponse(res, 200, st.loggedIn ? { success: true, model, latency: 0, response: `Codex CLI (${st.mode === 'chatgpt' ? 'ChatGPT subscription' : st.mode || 'logged in'})` } : { success: false, model, error: err });
+      }
+
+      // API, OpenRouter and local models: one tiny request through the same route an agent's reply takes, with one
+      // tool to call (lib/model-health). It catches refusals (privacy setting, key, credit), models that can't use
+      // tools and servers that aren't running, explains them in plain words, and marks the model for the pickers.
+      // Also used before an agent is switched to a model the hub has not seen answer.
+      if (!isMythosModel(model)) {
+        const r = await require('./lib/model-health').getModelHealth().test(String(model).slice(0, 200), { ledger: getLedger(), force: !!body.force });
+        _modelHealthCache[model] = r.ok ? { working: true, latency: r.ms, testedAt: Date.now() } : { working: false, error: `${r.title} ${r.what}`.slice(0, 300), testedAt: Date.now() };
+        return jsonResponse(res, 200, { success: !!r.ok, model, latency: r.ms,
+          ...(r.ok ? { response: r.toolCall ? 'called the test tool' : 'answered without calling the test tool' } : { error: `${r.title} ${r.what} What to do: ${r.fix}` }), ...r });
       }
 
       try {

@@ -15,7 +15,10 @@ const app = read('app.js'), mjs = read('mobile.js'), mhtml = read('mobile.html')
 function extract(src, name) {
   const at = src.indexOf(`function ${name}(`);
   assert.ok(at >= 0, `${name} present`);
-  let i = src.indexOf('{', at); let depth = 0;
+  // Skip the parameter list first (a default such as `opts = {}` holds braces), then take the body.
+  let p = src.indexOf('(', at); let pd = 0;
+  for (; p < src.length; p++) { if (src[p] === '(') pd++; else if (src[p] === ')' && --pd === 0) break; }
+  let i = src.indexOf('{', p); let depth = 0;
   for (; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}' && --depth === 0) break; }
   return src.slice(at, i + 1);
 }
@@ -99,7 +102,7 @@ test('desktop: the picker\'s OpenRouter group ends with the search entry, and ch
   assert.match(open, /if \(e\.target === ov\) closeOrPicker\(\);/, 'a click outside closes it');
   assert.match(open, /if \(e\.key === 'Escape'\) closeOrPicker\(\);/);
   const choose = extract(app, 'chooseOrModel');
-  const add = choose.indexOf("fetch('/api/openrouter', { method: 'POST'"); const sw = choose.indexOf('await changeChatModel(chatId, model)');
+  const add = choose.indexOf("fetch('/api/openrouter', { method: 'POST'"); const sw = choose.indexOf('await changeChatModel(chatId, model, { tested: true })');
   assert.ok(add > 0 && sw > add, 'the list is saved before the agent switches');
   assert.match(choose, /body: JSON\.stringify\(\{ models: orOfferWith\(v\.chosen, id\) \}\)/);
   assert.match(choose, /__modelListCache = null;/);
@@ -157,5 +160,5 @@ test('the catalogue and the list are admin-only routes', () => {
 });
 
 test('the phone app version moved on, so phones load the new code', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v47'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v48'/);
 });

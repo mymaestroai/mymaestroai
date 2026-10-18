@@ -1241,7 +1241,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model }),
       });
-      if (result.success) {
+      if (result.success && result.toolCall === false) {
+        // It answered, but did not call the test tool: agents here need tools (lib/model-health).
+        btn.className = 'btn btn-test fail';
+        btn.textContent = '⚠ No tools';
+        showStatus('model-status', 'error', `⚠ ${result.title || model} ${result.what || ''} ${result.fix || ''}`);
+      } else if (result.success) {
         btn.className = 'btn btn-test pass';
         btn.textContent = `✅ ${result.latency}ms`;
         showStatus('model-status', 'success', `✅ ${model} — responded in ${result.latency}ms: "${result.response}"`);
