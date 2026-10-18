@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Fierce tiger head - angular aggressive style -->
+  <!-- Outer mane/fur -->
+  <path d="M100 15 L140 25 L165 50 L175 85 L170 120 L155 150 L130 170 L100 180 L70 170 L45 150 L30 120 L25 85 L35 50 L60 25 Z" fill="#1a1a1a"/>
+  <!-- Ears -->
+  <path d="M60 25 L50 5 L75 30 Z" fill="#f59e0b"/>
+  <path d="M140 25 L150 5 L125 30 Z" fill="#f59e0b"/>
+  <path d="M62 22 L55 10 L72 28 Z" fill="#dc2626"/>
+  <path d="M138 22 L145 10 L128 28 Z" fill="#dc2626"/>
+  <!-- Face base -->
+  <path d="M100 30 L135 40 L155 65 L160 95 L150 130 L130 155 L100 165 L70 155 L50 130 L40 95 L45 65 L65 40 Z" fill="#f59e0b"/>
+  <!-- Stripes -->
+  <path d="M100 30 L95 50 L100 45 L105 50 Z" fill="#1a1a1a"/>
+  <path d="M80 35 L75 55 L82 50 Z" fill="#1a1a1a"/>
+  <path d="M120 35 L125 55 L118 50 Z" fill="#1a1a1a"/>
+  <path d="M65 45 L55 65 L68 58 Z" fill="#1a1a1a"/>
+  <path d="M135 45 L145 65 L132 58 Z" fill="#1a1a1a"/>
+  <path d="M50 75 L42 90 L55 82 Z" fill="#1a1a1a"/>
+  <path d="M150 75 L158 90 L145 82 Z" fill="#1a1a1a"/>
+  <!-- Eye sockets -->
+  <path d="M65 70 L85 65 L90 80 L85 90 L65 88 L60 78 Z" fill="#1a1a1a"/>
+  <path d="M135 70 L115 65 L110 80 L115 90 L135 88 L140 78 Z" fill="#1a1a1a"/>
+  <!-- Eyes - red/fierce -->
+  <ellipse cx="77" cy="78" rx="8" ry="6" fill="#dc2626"/>
+  <ellipse cx="123" cy="78" rx="8" ry="6" fill="#dc2626"/>
+  <!-- Pupils -->
+  <ellipse cx="77" cy="78" rx="3" ry="5" fill="#1a1a1a"/>
+  <ellipse cx="123" cy="78" rx="3" ry="5" fill="#1a1a1a"/>
+  <!-- Eye highlights -->
+  <circle cx="74" cy="76" r="2" fill="#fff" opacity="0.8"/>
+  <circle cx="120" cy="76" r="2" fill="#fff" opacity="0.8"/>
+  <!-- Brow furrow -->
+  <path d="M60 65 L90 60 L100 65 L110 60 L140 65" fill="none" stroke="#1a1a1a" stroke-width="3"/>
+  <!-- Nose -->
+  <path d="M93 100 L100 95 L107 100 L105 108 L100 112 L95 108 Z" fill="#1a1a1a"/>
+  <!-- Muzzle -->
+  <path d="M75 105 L90 100 L100 112 L110 100 L125 105 L125 125 L115 140 L100 145 L85 140 L75 125 Z" fill="#e5a649"/>
+  <!-- Whisker dots -->
+  <circle cx="82" cy="115" r="2" fill="#1a1a1a"/>
+  <circle cx="78" cy="120" r="2" fill="#1a1a1a"/>
+  <circle cx="82" cy="125" r="2" fill="#1a1a1a"/>
+  <circle cx="118" cy="115" r="2" fill="#1a1a1a"/>
+  <circle cx="122" cy="120" r="2" fill="#1a1a1a"/>
+  <circle cx="118" cy="125" r="2" fill="#1a1a1a"/>
+  <!-- Mouth/snarl -->
+  <path d="M85 135 L95 130 L100 133 L105 130 L115 135" fill="none" stroke="#1a1a1a" stroke-width="2"/>
+  <!-- Fangs -->
+  <path d="M88 135 L90 145 L93 136" fill="#fff"/>
+  <path d="M107 136 L110 145 L112 135" fill="#fff"/>
+  <!-- Lower jaw hint -->
+  <path d="M85 140 L100 150 L115 140" fill="#c2410c" opacity="0.6"/>
+  <!-- Side fur/mane accents -->
+  <path d="M30 90 L40 85 L42 100 L35 105 Z" fill="#374151"/>
+  <path d="M170 90 L160 85 L158 100 L165 105 Z" fill="#374151"/>
+  <path d="M35 110 L45 105 L47 120 L38 125 Z" fill="#374151"/>
+  <path d="M165 110 L155 105 L153 120 L162 125 Z" fill="#374151"/>
+</svg>

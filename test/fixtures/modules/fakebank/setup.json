@@ -1,0 +1,10 @@
+{ "steps": [
+  { "id": "intro", "type": "explain", "title": "About", "body": "Test." },
+  { "id": "outside", "type": "outside", "title": "Do something", "body": "x", "confirm": "Done it", "links": [{ "label": "Site", "url": "https://example.com" }] },
+  { "id": "install", "type": "install", "title": "Install" },
+  { "id": "key", "type": "secrets", "title": "Key", "fields": ["FAKEBANK_TOKEN"], "keyFile": { "fields": { "FAKEBANK_TOKEN": ["token", "secret"] } } },
+  { "id": "verify", "type": "check", "check": "token", "title": "Check" },
+  { "id": "limits", "type": "settings", "title": "Limits", "fields": ["tradingEnabled", "maxUsd", "pairs"] },
+  { "id": "agents", "type": "grant", "title": "Agents" },
+  { "id": "done", "type": "finish", "title": "Finish" }
+] }

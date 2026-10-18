@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Maestro AI — Local models</title>
+<style>
+  :root {
+    --bg-dark: #090B0F; --bg-card: #14171F; --bg-input: #040507; --border: #222632; --border-strong: #333846;
+    --text: #F3F4F6; --text-dim: #9CA3AF; --text-tertiary: #6B7280; --accent: #3D7BFF; --accent-hover: #5A93FF;
+    --error: #FF4C4C; --warning: #F5A623; --success: #00D395; --radius: 4px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-dark); color: var(--text); font-size: 14px; }
+  .top { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--bg-card); position: sticky; top: 0; z-index: 2; }
+  .top a { color: var(--text-dim); text-decoration: none; font-size: 13px; }
+  .top a:hover { color: var(--text); }
+  .top h1 { font-size: 16px; font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 18px; }
+  .intro { color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+  section { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
+  .spacer { flex: 1; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { color: var(--text-dim); font-weight: 500; font-size: 12px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .dim { color: var(--text-dim); }
+  .tiny { font-size: 11px; color: var(--text-tertiary); }
+  button { font: inherit; font-size: 12px; padding: 5px 9px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--error); border-color: rgba(255, 76, 76, .5); }
+  input[type="text"], input[type="number"], select, textarea { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--text); }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .grid2 { display: grid; grid-template-columns: 160px 1fr; gap: 8px 12px; align-items: center; max-width: 760px; }
+  .grid2 label { color: var(--text-dim); font-size: 12px; }
+  .grid2 input[type="text"], .grid2 select, .grid2 textarea { width: 100%; }
+  .hint { color: var(--text-dim); font-size: 12px; margin-top: 6px; line-height: 1.4; }
+  .msg { font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .msg.ok { color: var(--success); } .msg.error { color: var(--error); } .msg.info { color: var(--text-dim); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border-strong); color: var(--text-dim); }
+  .pill.on { color: var(--success); border-color: var(--success); }
+  .pill.off { color: var(--warning); border-color: var(--warning); }
+  .pill.loaded { color: var(--accent); border-color: var(--accent); }
+  pre.log { background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; max-height: 320px; overflow: auto; font-size: 11.5px; line-height: 1.4; white-space: pre-wrap; }
+  .kv { display: grid; grid-template-columns: 170px 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv div:nth-child(odd) { color: var(--text-dim); }
+  .hidden { display: none; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } .opt { display: none; } }
+</style>
+</head>
+<body>
+<div class="top"><a href="/">← Back</a><h1>Local models</h1><span id="proxy-pill" class="pill">…</span><span class="spacer"></span><span id="me" class="dim"></span></div>
+<main>
+  <div class="intro">One proxy (llama-swap) runs all local models: it starts the engine a request needs, keeps the model loaded while it is used, swaps when a different model is asked for, and unloads idle ones. Models appear to agents as <span class="mono">local/&lt;id&gt;</span>. Engines: <b>llama.cpp</b> for GGUF files (any model llama.cpp supports, with vision projector and speculative draft files), <b>NInfer</b> for .ninfer files, or any <b>command</b> that serves an OpenAI-compatible API on <span class="mono">${PORT}</span>. Keep LM Studio's and Ollama's own servers off while this is on: one scheduler per GPU.</div>
+
+  <section id="engine">
+    <h2>Proxy and engines <span class="spacer"></span><button id="btn-refresh">Refresh</button></h2>
+    <div class="kv" id="engine-kv"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="btn-start" class="primary">Start</button><button id="btn-stop">Stop</button><button id="btn-restart">Restart</button><button id="btn-apply">Apply config</button><button id="btn-unload-all">Unload all</button>
+      <span class="spacer"></span>
+      <button id="btn-install-swap">Install llama-swap</button><button id="btn-build-llama">Build llama.cpp</button><button id="btn-discover">Refresh hub model list</button>
+    </div>
+    <div class="hint">Start and Stop act on the proxy only; models load on first request. Apply config rewrites the proxy's config file after edits (the proxy watches it; a port change needs Restart). Build llama.cpp compiles llama-server for this machine in the background (5 to 15 minutes; CUDA when present, Homebrew on a Mac). Refresh hub model list makes new <span class="mono">local/…</span> ids appear in every model picker.</div>
+    <div id="engine-msg" class="msg"></div>
+  </section>
+
+  <section id="models">
+    <h2>Models <span class="spacer"></span><button id="btn-scan">Scan folders</button></h2>
+    <table><thead><tr><th>Id</th><th>Engine</th><th class="opt">File</th><th>Context</th><th>Idle unload</th><th>State</th><th></th></tr></thead><tbody id="model-rows"><tr><td colspan="7" class="dim">Loading…</td></tr></tbody></table>
+    <div id="scan-box" class="hidden" style="margin-top:12px">
+      <h2>Found in the model folders</h2>
+      <table><thead><tr><th>File</th><th>Kind</th><th>Size</th><th></th></tr></thead><tbody id="scan-rows"></tbody></table>
+    </div>
+    <div id="models-msg" class="msg"></div>
+  </section>
+
+  <section id="add">
+    <h2 id="form-title">Add a model</h2>
+    <form id="model-form">
+      <div class="grid2">
+        <label>Id (what agents use: local/&lt;id&gt;)</label><input type="text" id="f-id" required placeholder="qwen3.8-27b">
+        <label>Engine</label><select id="f-engine"><option value="llama.cpp">llama.cpp (GGUF)</option><option value="ninfer">NInfer (.ninfer)</option><option value="command">Command (OpenAI-compatible server)</option></select>
+        <label>Display name</label><input type="text" id="f-name" placeholder="optional">
+        <label class="f-file">Model file</label><input type="text" id="f-path" class="f-file mono" placeholder="/path/to/model.gguf">
+        <label class="f-llama">Vision projector (mmproj)</label><input type="text" id="f-mmproj" class="f-llama mono" placeholder="optional, for image input">
+        <label class="f-llama">Draft model (speculative)</label><input type="text" id="f-draft" class="f-llama mono" placeholder="optional, e.g. a DFlash draft file">
+        <label class="f-llama">Draft arguments</label><input type="text" id="f-draftArgs" class="f-llama mono" placeholder="optional, e.g. --spec-type draft-dflash --spec-draft-n-max 15">
+        <label class="f-llama">GPU layers (-ngl)</label><input type="number" id="f-ngl" class="f-llama" value="99" min="0">
+        <label class="f-cmd">Command</label><input type="text" id="f-cmd" class="f-cmd mono" placeholder="my-server --port ${PORT} --model …">
+        <label>Context window (tokens)</label><input type="number" id="f-ctx" min="0" placeholder="e.g. 32768; 0 = engine default">
+        <label>Max output tokens</label><input type="number" id="f-maxOutput" min="0" placeholder="optional">
+        <label>Idle unload (seconds)</label><input type="number" id="f-ttl" min="0" placeholder="blank = global setting; 0 = never">
+        <label>Aliases</label><input type="text" id="f-aliases" placeholder="comma separated, optional">
+        <label>Extra arguments</label><input type="text" id="f-extraArgs" class="mono" placeholder="appended to the engine command">
+        <label>Environment</label><textarea id="f-env" rows="2" placeholder="KEY=VALUE per line, optional"></textarea>
+        <label>Notes</label><input type="text" id="f-notes" placeholder="optional">
+      </div>
+      <div class="row" style="margin-top:10px"><button class="primary" type="submit">Save model</button><button type="button" id="btn-cancel-edit" class="hidden">Cancel edit</button><span id="form-msg" class="msg"></span></div>
+    </form>
+  </section>
+
+  <section id="settings">
+    <h2>Settings</h2>
+    <div class="grid2">
+      <label>Local models</label><label><input type="checkbox" id="s-enabled"> enabled (the hub lists local/… models and watches the proxy)</label>
+      <label>Proxy port</label><input type="number" id="s-port" min="1024" max="65535">
+      <label>First engine port</label><input type="number" id="s-startPort" min="1024" max="65535">
+      <label>Idle unload, global (seconds)</label><input type="number" id="s-globalTTL" min="0">
+      <label>Engine start timeout (seconds)</label><input type="number" id="s-healthCheckTimeout" min="0">
+      <label>Model folders (one per line)</label><textarea id="s-modelsDirs" rows="3" class="mono"></textarea>
+      <label>llama-server path</label><input type="text" id="s-llamaServer" class="mono" placeholder="blank = detect">
+      <label>ninfer-serve path</label><input type="text" id="s-ninferServe" class="mono" placeholder="blank = detect">
+    </div>
+    <div class="row" style="margin-top:10px"><button id="btn-save-settings" class="primary">Save settings</button><span id="settings-msg" class="msg"></span></div>
+  </section>
+
+  <section id="logs">
+    <h2>Proxy log <span class="spacer"></span><button id="btn-logs">Refresh</button></h2>
+    <pre class="log" id="log-pre">…</pre>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  let status = null; let editing = null;
+  function setMsg(id, text, kind) { const el = $(id); el.textContent = text || ''; el.className = 'msg' + (text ? ' ' + (kind || 'info') : ''); if (text && kind === 'ok') setTimeout(() => { if (el.textContent === text) el.className = 'msg'; }, 6000); }
+  async function api(url, opts = {}) {
+    const init = { credentials: 'include', ...opts };
+    if (opts.body !== undefined && typeof opts.body !== 'string') { init.body = JSON.stringify(opts.body); init.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }; }
+    let r; try { r = await fetch(url, init); } catch { throw new Error('Could not reach the hub.'); }
+    if (r.status === 401) { location.href = `/login?next=${encodeURIComponent(location.pathname)}`; throw new Error('Signed out'); }
+    if (r.status === 403) throw new Error('This page needs an admin account.');
+    let data = {}; try { data = await r.json(); } catch {}
+    if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+  async function act(btn, msgId, fn, okText) {
+    if (btn) btn.disabled = true; setMsg(msgId, '');
+    try { const out = await fn(); setMsg(msgId, typeof okText === 'function' ? okText(out) : (okText || 'Done.'), 'ok'); await load(); return out; }
+    catch (e) { setMsg(msgId, e.message, 'error'); return null; }
+    finally { if (btn) btn.disabled = false; }
+  }
+  function pill(el, on, text) { el.className = 'pill ' + (on ? 'on' : 'off'); el.textContent = text; }
+
+  async function load() {
+    status = await api('/api/local-models');
+    const d = status.detect || {};
+    pill($('proxy-pill'), status.running, status.running ? `proxy running on ${status.port}` : (status.enabled ? 'proxy stopped' : 'off'));
+    const loaded = (status.loaded || []).map(x => `${esc(x.model || x.id || x)} (${esc(x.state || 'loaded')})`).join(', ') || 'none';
+    $('engine-kv').innerHTML = [
+      ['Proxy', status.running ? `running, pid ${status.pid}, <span class="mono">${esc(status.baseUrl)}</span>` : (status.pid ? 'process present but not answering' : 'not running')],
+      ['Loaded now', loaded],
+      ['llama-swap', d.llamaSwap && d.llamaSwap.path ? `<span class="mono">${esc(d.llamaSwap.path)}</span> ${esc(d.llamaSwap.version || '')} (pinned v${esc(d.llamaSwap.pinned)})` : `not installed (pinned release v${esc(d.llamaSwap ? d.llamaSwap.pinned : '')})`],
+      ['llama-server', d.llamaServer && d.llamaServer.path ? `<span class="mono">${esc(d.llamaServer.path)}</span> <span class="tiny">${esc(d.llamaServer.source)}</span>` : `not found <span class="tiny">(${esc(d.llamaServer ? d.llamaServer.source : '')})</span>`],
+      ['ninfer-serve', d.ninferServe && d.ninferServe.path ? `<span class="mono">${esc(d.ninferServe.path)}</span> <span class="tiny">${esc(d.ninferServe.source)}</span>` : 'not found'],
+      ['Machine', `${esc(d.platform)}/${esc(d.arch)}, CUDA ${d.cuda ? 'yes' : 'no'}, cmake ${d.cmake ? 'yes' : 'no'}, git ${d.git ? 'yes' : 'no'}${d.brew ? ', Homebrew yes' : ''}`],
+      ['Config file', `<span class="mono">${esc(status.configFile)}</span>`],
+    ].map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join('');
+    const loadedIds = new Set((status.loaded || []).map(x => String(x.model || x.id || x)));
+    const rows = (status.models || []);
+    $('model-rows').innerHTML = rows.length ? rows.map(m => `<tr data-id="${esc(m.id)}">
+      <td><b>${esc(m.id)}</b>${m.aliases && m.aliases.length ? `<div class="tiny">aliases: ${esc(m.aliases.join(', '))}</div>` : ''}${m.enabled === false ? '<div class="tiny">disabled</div>' : ''}</td>
+      <td>${esc(m.engine)}</td><td class="opt mono tiny">${esc(m.engine === 'command' ? m.cmd : m.path)}</td>
+      <td>${m.ctx ? esc(m.ctx.toLocaleString()) : '<span class="dim">engine default</span>'}</td>
+      <td>${m.ttl == null ? `<span class="dim">${esc(status.globalTTL)} s (global)</span>` : (m.ttl === 0 ? 'never' : esc(m.ttl) + ' s')}</td>
+      <td>${loadedIds.has(m.id) ? '<span class="pill loaded">loaded</span>' : '<span class="pill">idle</span>'}</td>
+      <td class="row"><button data-act="load">Load</button><button data-act="test">Test</button><button data-act="unload">Unload</button><button data-act="edit">Edit</button><button data-act="remove" class="danger">Remove</button></td></tr>`).join('')
+      : '<tr><td colspan="7" class="dim">No models yet. Scan your model folders or add one below.</td></tr>';
+    $('s-enabled').checked = !!status.enabled; $('s-port').value = status.port; $('s-startPort').value = status.startPort; $('s-globalTTL').value = status.globalTTL; $('s-healthCheckTimeout').value = status.healthCheckTimeout;
+    $('s-modelsDirs').value = (status.modelsDirs || []).join('\n'); $('s-llamaServer').value = status.llamaServer || ''; $('s-ninferServe').value = status.ninferServe || '';
+  }
+  async function loadLogs() { try { const r = await api('/api/local-models/logs?n=200'); $('log-pre').textContent = r.text || '(empty)'; $('log-pre').scrollTop = $('log-pre').scrollHeight; } catch (e) { $('log-pre').textContent = e.message; } }
+
+  // engine buttons
+  $('btn-refresh').addEventListener('click', () => act(null, 'engine-msg', load, 'Refreshed.'));
+  $('btn-start').addEventListener('click', (e) => act(e.target, 'engine-msg', () => api('/api/local-models/start', { method: 'POST' }), (r) => r.ok ? `Proxy up (pid ${r.pid}).` + (r.problems && r.problems.length ? ` Config problems: ${r.problems.join('; ')}` : '') : 'Started, not healthy yet; check the log.'));
+  $('btn-stop').addEventListener('click', (e) => act(e.target, 'engine-msg', () => api('/api/local-models/stop', { method: 'POST' }), 'Proxy stopped (and its engines with it).'));
+  $('btn-restart').addEventListener('click', (e) => act(e.target, 'engine-msg', () => api('/api/local-models/restart', { method: 'POST' }), 'Proxy restarted.'));
+  $('btn-apply').addEventListener('click', (e) => act(e.target, 'engine-msg', () => api('/api/local-models/apply', { method: 'POST' }), (r) => `Config written${r.problems && r.problems.length ? ' with problems: ' + r.problems.join('; ') : ''}.`));
+  $('btn-unload-all').addEventListener('click', (e) => act(e.target, 'engine-msg', () => api('/api/local-models/unload', { method: 'POST', body: {} }), 'Unloaded.'));
+  $('btn-install-swap').addEventListener('click', (e) => { if (!confirm('Download the pinned llama-swap release from GitHub (about 25 MB, checksum verified)?')) return; act(e.target, 'engine-msg', () => api('/api/local-models/install/llama-swap', { method: 'POST' }), (r) => `Installed llama-swap v${r.version}.`); });
+  $('btn-build-llama').addEventListener('click', (e) => { if (!confirm('Build llama.cpp from source in the background (git, cmake, compiler; 5 to 15 minutes)? On a Mac this runs brew install llama.cpp.')) return; act(e.target, 'engine-msg', () => api('/api/local-models/install/llama-cpp', { method: 'POST' }), (r) => `Build started as job ${r.jobId}; watch the jobs panel or come back in ten minutes and press Refresh.`); });
+  $('btn-discover').addEventListener('click', (e) => act(e.target, 'engine-msg', () => api('/api/local-models/discover', { method: 'POST' }), (r) => `Hub model list refreshed: ${r.count} local model(s) listed.`));
+  $('btn-logs').addEventListener('click', loadLogs);
+
+  // model rows
+  $('model-rows').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act]'); if (!btn) return;
+    const id = btn.closest('tr').dataset.id; const actn = btn.dataset.act;
+    if (actn === 'edit') { const m = (status.models || []).find(x => x.id === id); if (m) fillForm(m); window.scrollTo({ top: $('add').offsetTop - 60, behavior: 'smooth' }); return; }
+    if (actn === 'remove') { if (!confirm(`Remove "${id}" from the registry? The model file is not deleted.`)) return; return act(btn, 'models-msg', () => api(`/api/local-models/models/${encodeURIComponent(id)}`, { method: 'DELETE' }), `Removed ${id}.`); }
+    if (actn === 'unload') return act(btn, 'models-msg', () => api('/api/local-models/unload', { method: 'POST', body: { id } }), `Unloaded ${id}.`);
+    if (actn === 'load') { setMsg('models-msg', `Loading ${id}… (big models take a while)`, 'info'); return act(btn, 'models-msg', () => api('/api/local-models/load', { method: 'POST', body: { id } }), (r) => `${id} loaded in ${(r.ms / 1000).toFixed(1)} s.`); }
+    if (actn === 'test') { const prompt = window.prompt('Test prompt', 'Reply with one short sentence: what model are you?'); if (prompt == null) return; setMsg('models-msg', `Asking ${id}…`, 'info'); return act(btn, 'models-msg', () => api('/api/local-models/test', { method: 'POST', body: { id, prompt } }), (r) => `${id} answered in ${(r.ms / 1000).toFixed(1)} s${r.tokensPerSec ? `, ${r.tokensPerSec} tok/s` : ''}: ${r.text}`); }
+  });
+
+  // scan
+  $('btn-scan').addEventListener('click', async (e) => {
+    const out = await act(e.target, 'models-msg', () => api('/api/local-models/scan', { method: 'POST', body: {} }), (r) => `${r.found.length} file(s) found in ${r.dirs.length} folder(s).`);
+    if (!out) return;
+    $('scan-box').classList.remove('hidden');
+    const known = new Set((status.models || []).map(m => m.path));
+    $('scan-rows').innerHTML = out.found.length ? out.found.map(f => `<tr><td class="mono tiny">${esc(f.path)}</td><td>${esc(f.kind)}</td><td>${esc(f.sizeText)}</td><td>${known.has(f.path) ? '<span class="dim">in registry</span>' : (f.kind === 'gguf' || f.kind === 'ninfer' ? `<button data-add="${esc(f.path)}" data-kind="${esc(f.kind)}" data-id="${esc(f.suggestedId)}">Add</button>` : '<span class="tiny">use as projector / draft on a model</span>')}</td></tr>`).join('') : `<tr><td colspan="4" class="dim">Nothing found. Set model folders in Settings (${esc((out.dirs || []).join(', ') || 'none')}).</td></tr>`;
+  });
+  $('scan-rows').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-add]'); if (!b) return;
+    fillForm({ id: b.dataset.id, engine: b.dataset.kind === 'ninfer' ? 'ninfer' : 'llama.cpp', path: b.dataset.add, ngl: 99 });
+    window.scrollTo({ top: $('add').offsetTop - 60, behavior: 'smooth' });
+  });
+
+  // form
+  function showEngineFields() {
+    const eng = $('f-engine').value;
+    document.querySelectorAll('.f-file').forEach(el => el.classList.toggle('hidden', eng === 'command'));
+    document.querySelectorAll('.f-llama').forEach(el => el.classList.toggle('hidden', eng !== 'llama.cpp'));
+    document.querySelectorAll('.f-cmd').forEach(el => el.classList.toggle('hidden', eng !== 'command'));
+  }
+  $('f-engine').addEventListener('change', showEngineFields);
+  function fillForm(m) {
+    editing = m.id && (status.models || []).some(x => x.id === m.id) ? m.id : null;
+    $('form-title').textContent = editing ? `Edit model: ${editing}` : 'Add a model';
+    $('btn-cancel-edit').classList.toggle('hidden', !editing);
+    for (const k of ['id', 'name', 'path', 'mmproj', 'draft', 'draftArgs', 'cmd', 'ctx', 'maxOutput', 'ttl', 'extraArgs', 'notes']) $('f-' + k).value = m[k] == null ? '' : m[k];
+    $('f-engine').value = m.engine || 'llama.cpp'; $('f-ngl').value = m.ngl == null ? 99 : m.ngl;
+    $('f-aliases').value = (m.aliases || []).join(', '); $('f-env').value = (m.env || []).join('\n');
+    showEngineFields();
+  }
+  $('btn-cancel-edit').addEventListener('click', () => fillForm({}));
+  $('model-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type=submit]');
+    const body = { id: $('f-id').value.trim(), engine: $('f-engine').value, name: $('f-name').value, path: $('f-path').value, mmproj: $('f-mmproj').value, draft: $('f-draft').value, draftArgs: $('f-draftArgs').value, ngl: $('f-ngl').value, cmd: $('f-cmd').value, ctx: $('f-ctx').value, maxOutput: $('f-maxOutput').value, ttl: $('f-ttl').value, aliases: $('f-aliases').value, extraArgs: $('f-extraArgs').value, env: $('f-env').value, notes: $('f-notes').value };
+    const out = await act(btn, 'form-msg', () => api('/api/local-models/models', { method: 'POST', body }), (r) => `Saved ${r.model.id}${r.running ? ' (proxy config updated)' : ''}. ${r.problems && r.problems.length ? 'Config problems: ' + r.problems.join('; ') : ''}`);
+    if (out) fillForm({});
+  });
+
+  // settings
+  $('btn-save-settings').addEventListener('click', (e) => act(e.target, 'settings-msg', () => api('/api/local-models/settings', { method: 'POST', body: { enabled: $('s-enabled').checked, port: $('s-port').value, startPort: $('s-startPort').value, globalTTL: $('s-globalTTL').value, healthCheckTimeout: $('s-healthCheckTimeout').value, modelsDirs: $('s-modelsDirs').value, llamaServer: $('s-llamaServer').value, ninferServe: $('s-ninferServe').value } }), (r) => `Saved.${r.note ? ' ' + r.note : ''}`));
+
+  (async () => {
+    try { const st = await api('/api/auth/status'); if (st.user) $('me').textContent = `${st.user.name} · ${st.user.role}`; } catch {}
+    try { await load(); } catch (e) { setMsg('engine-msg', e.message, 'error'); }
+    showEngineFields(); loadLogs();
+    if (status && !(status.modelsDirs || []).length) { try { const r = await api('/api/local-models/default-dirs'); if (r.dirs && r.dirs.length) $('s-modelsDirs').placeholder = 'suggested: ' + r.dirs.join('\n'); } catch {} }
+  })();
+})();
+</script>
+</body>
+</html>

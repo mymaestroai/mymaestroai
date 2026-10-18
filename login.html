@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#090B0F">
+<title>My Maestro AI — Sign in</title>
+<style>
+  :root {
+    --bg-dark: #090B0F;
+    --bg-card: #14171F;
+    --bg-input: #040507;
+    --border: #222632;
+    --border-strong: #333846;
+    --text: #F3F4F6;
+    --text-dim: #9CA3AF;
+    --accent: #3D7BFF;
+    --accent-hover: #5A93FF;
+    --error: #FF4C4C;
+    --warning: #F5A623;
+    --success: #00D395;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-dark); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px; padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  .card {
+    width: 100%; max-width: 380px; background: var(--bg-card);
+    border: 1px solid var(--border); border-radius: 12px; padding: 24px 22px 20px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .brand .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+  .brand h1 { font-size: 15px; font-weight: 600; letter-spacing: .2px; }
+  h2 { font-size: 19px; font-weight: 600; margin-bottom: 4px; }
+  .sub { color: var(--text-dim); font-size: 13px; margin-bottom: 18px; line-height: 1.4; }
+  form { display: none; }
+  form.on { display: block; }
+  label { display: block; font-size: 12px; color: var(--text-dim); margin: 12px 0 5px; }
+  input[type="text"], input[type="email"], input[type="password"] {
+    width: 100%; padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-input); color: var(--text); font-size: 16px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  input[readonly] { color: var(--text-dim); }
+  input.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 4px; text-align: center; font-size: 20px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--text-dim); cursor: pointer; }
+  .check input { width: 18px; height: 18px; accent-color: var(--accent); }
+  button.primary {
+    width: 100%; margin-top: 18px; padding: 12px; border: none; border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  button.primary:hover { background: var(--accent-hover); }
+  button.primary:disabled { opacity: .55; cursor: wait; }
+  .link { background: none; border: none; color: var(--accent); font-size: 13px; cursor: pointer; padding: 0; margin-top: 12px; }
+  .link:hover { text-decoration: underline; }
+  .error { display: none; margin-top: 14px; padding: 9px 11px; border-radius: 8px; font-size: 13px; line-height: 1.4;
+    background: rgba(255, 76, 76, .1); border: 1px solid rgba(255, 76, 76, .35); color: var(--error); white-space: pre-wrap; }
+  .error.on { display: block; }
+  .error.warn { background: rgba(245, 166, 35, .1); border-color: rgba(245, 166, 35, .35); color: var(--warning); }
+  .error.ok { background: rgba(0, 211, 149, .1); border-color: rgba(0, 211, 149, .35); color: var(--success); }
+  .foot { margin-top: 16px; font-size: 12px; color: var(--text-dim); text-align: center; }
+  #loading { color: var(--text-dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand"><div class="logo">🧠</div><h1>My Maestro AI</h1></div>
+  <div id="loading">Loading…</div>
+
+  <!-- (a) Sign in -->
+  <form id="f-login" autocomplete="on">
+    <h2>Sign in</h2>
+    <div class="sub">Use the email and password for your My Maestro AI account.</div>
+    <label for="login-email">Email</label>
+    <input type="email" id="login-email" name="username" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" required>
+    <label for="login-password">Password</label>
+    <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+    <button class="primary" type="submit">Sign in</button>
+    <div class="error" id="login-error"></div>
+  </form>
+
+  <!-- (a2) Two-factor code -->
+  <form id="f-totp" autocomplete="off">
+    <h2>Two-factor code</h2>
+    <div class="sub">Enter the 6-digit code from your authenticator app.</div>
+    <label for="totp-code">Code</label>
+    <input type="text" id="totp-code" class="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]*" required>
+    <label class="check"><input type="checkbox" id="totp-trust"> Trust this browser for 30 days</label>
+    <button class="primary" type="submit">Verify</button>
+    <button class="link" type="button" id="totp-recovery">Use a recovery code instead</button>
+    <div class="error" id="totp-error"></div>
+  </form>
+
+
+  <!-- (c) Invite acceptance -->
+  <form id="f-invite" autocomplete="on">
+    <h2>Accept your invitation</h2>
+    <div class="sub" id="invite-sub">Choose a password to finish creating your account.</div>
+    <label for="invite-email">Email (your login)</label>
+    <input type="email" id="invite-email" name="username" autocomplete="username" readonly tabindex="-1">
+    <label for="invite-name">Your name</label>
+    <input type="text" id="invite-name" name="name" autocomplete="name" required>
+    <label for="invite-password">Password (at least 12 characters)</label>
+    <input type="password" id="invite-password" name="new-password" autocomplete="new-password" minlength="12" required>
+    <label for="invite-password2">Password again</label>
+    <input type="password" id="invite-password2" autocomplete="new-password" minlength="12" required>
+    <button class="primary" type="submit">Create my account</button>
+    <div class="error" id="invite-error"></div>
+  </form>
+
+  <!-- Dead invite link -->
+  <form id="f-invite-bad">
+    <h2>Invitation not available</h2>
+    <div class="error on" id="invite-bad-error"></div>
+    <div class="foot">Ask the hub administrator for a new invitation link.</div>
+    <button class="link" type="button" onclick="location.href = '/login'">Go to sign in</button>
+  </form>
+  <div class="foot"><a href="/help#trouble" style="color:var(--accent);text-decoration:none">Trouble signing in? Help</a></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token') || '';
+  const next = params.get('next') || '';
+
+  // Where to go after a successful sign-in: the requested page, else the hub (phone users get the mobile app).
+  function destination() {
+    if (next && next.startsWith('/') && !next.startsWith('//')) return next;
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ? '/mobile' : '/';
+  }
+
+  function show(formId) {
+    $('loading').style.display = 'none';
+    for (const f of document.querySelectorAll('form')) f.classList.toggle('on', f.id === formId);
+    const form = $(formId);
+    if (!form) return;
+    document.title = `My Maestro AI — ${form.querySelector('h2').textContent}`;
+    const first = form.querySelector('input:not([readonly]):not([type=checkbox])');
+    if (first) setTimeout(() => first.focus(), 0);
+  }
+
+  function setError(id, msg, kind) {
+    const el = $(id);
+    el.textContent = msg || '';
+    el.className = 'error' + (msg ? ' on' : '') + (kind ? ' ' + kind : '');
+  }
+
+  // POST JSON; resolves to { status, body }. Network errors become a readable message.
+  async function post(url, body) {
+    let r;
+    try {
+      r = await fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } catch (e) {
+      return { status: 0, body: { error: 'Could not reach the hub. Check your connection and try again.' } };
+    }
+    let data = {};
+    try { data = await r.json(); } catch { data = {}; }
+    return { status: r.status, body: data };
+  }
+
+  function errorText(res, fallback) {
+    if (res.body && res.body.error) return res.body.error;
+    if (res.status === 429) return 'Too many attempts. Try again in 15 minutes.';
+    if (res.status === 401) return 'Wrong email or password.';
+    if (res.status === 0) return res.body.error;
+    return fallback || `Request failed (HTTP ${res.status})`;
+  }
+
+  // Wire a form: disable the submit button while the request runs, submit on Enter (native form submit).
+  function onSubmit(formId, errId, handler) {
+    const form = $(formId);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = form.querySelector('button.primary');
+      setError(errId, '');
+      btn.disabled = true;
+      try { await handler(); }
+      catch (err) { setError(errId, err && err.message ? err.message : String(err)); }
+      finally { btn.disabled = false; }
+    });
+  }
+
+  // (a) Sign in
+  onSubmit('f-login', 'login-error', async () => {
+    const login = $('login-email').value.trim(), password = $('login-password').value;
+    if (!login || !password) { setError('login-error', 'Enter your email and password.'); return; }
+    const res = await post('/api/auth/login', { login, password });
+    if (res.status !== 200 || !res.body.ok) { setError('login-error', errorText(res)); return; }
+    if (res.body.needsTotp) { show('f-totp'); return; }
+    location.href = destination();
+  });
+
+  // (a2) Two-factor code; a recovery code ("ab12-cd34") widens the input.
+  onSubmit('f-totp', 'totp-error', async () => {
+    const code = $('totp-code').value.trim();
+    if (!code) { setError('totp-error', 'Enter the code.'); return; }
+    const res = await post('/api/auth/totp/verify', { code, trust: $('totp-trust').checked });
+    if (res.status === 401 && res.body && /sign in first/i.test(res.body.error || '')) { show('f-login'); setError('login-error', 'Your session expired. Sign in again.'); return; }
+    if (res.status !== 200 || !res.body.ok) { setError('totp-error', errorText(res, 'That code was not accepted.')); $('totp-code').select(); return; }
+    if (res.body.recovery) {
+      const n = res.body.remaining;
+      setError('totp-error', `Recovery code accepted.${typeof n === 'number' ? ` ${n} recovery code${n === 1 ? '' : 's'} left.` : ''}`, 'warn');
+      setTimeout(() => { location.href = destination(); }, 1200);
+      return;
+    }
+    location.href = destination();
+  });
+  $('totp-recovery').addEventListener('click', () => {
+    const inp = $('totp-code');
+    inp.classList.remove('code');
+    inp.maxLength = 20; inp.removeAttribute('pattern'); inp.inputMode = 'text'; inp.autocomplete = 'off';
+    inp.placeholder = 'ab12-cd34'; inp.value = '';
+    $('f-totp').querySelector('.sub').textContent = 'Enter one of your recovery codes. Each code works once.';
+    $('totp-recovery').style.display = 'none';
+    inp.focus();
+  });
+
+  // (c) Invite acceptance
+  onSubmit('f-invite', 'invite-error', async () => {
+    const name = $('invite-name').value.trim();
+    const password = $('invite-password').value, again = $('invite-password2').value;
+    if (password !== again) { setError('invite-error', 'The two passwords do not match.'); $('invite-password2').focus(); return; }
+    const res = await post('/api/auth/invite/accept', { token, password, name });
+    if (res.status !== 200 || !res.body.ok) { setError('invite-error', errorText(res, 'Could not accept the invitation.')); return; }
+    // Admin invitees must enrol a second factor: the hub page opens its security dialog.
+    location.href = res.body.needsTotpEnrol ? '/?security=1' : destination();
+  });
+
+  async function loadInvite() {
+    let r, data = {};
+    try { r = await fetch(`/api/auth/invite?token=${encodeURIComponent(token)}`, { credentials: 'include' }); }
+    catch { show('f-invite-bad'); $('invite-bad-error').textContent = 'Could not reach the hub. Check your connection and reload.'; return; }
+    try { data = await r.json(); } catch { data = {}; }
+    if (!r.ok || !data.ok || !data.invite) { show('f-invite-bad'); $('invite-bad-error').textContent = data.error || 'This invite link is invalid or has expired'; return; }
+    const inv = data.invite;
+    $('invite-email').value = inv.login || '';
+    $('invite-name').value = inv.name || '';
+    $('invite-sub').textContent = `You were invited as ${inv.role === 'admin' ? 'an administrator' : 'a member'}. Choose a password to finish creating your account.`;
+    show('f-invite');
+  }
+
+  async function init() {
+    if (token) return loadInvite();
+    if (location.pathname === '/invite') { show('f-invite-bad'); $('invite-bad-error').textContent = 'This invite link is missing its token. Open the full link you were sent.'; return; }
+    let status = null;
+    try { const r = await fetch('/api/auth/status', { credentials: 'include' }); if (r.ok) status = await r.json(); } catch {}
+    if (!status) { show('f-login'); setError('login-error', 'Could not reach the hub. Check your connection and reload.'); return; }
+    if (status.setupNeeded) { location.replace('/welcome' + location.search); return; }   // first account: the Welcome page
+    if (status.signedIn && status.pendingTotp) return show('f-totp');
+    if (status.signedIn) { location.replace(destination()); return; }
+    show('f-login');
+  }
+  init();
+})();
+</script>
+</body>
+</html>

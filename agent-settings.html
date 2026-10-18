@@ -1,0 +1,1566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Settings</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1a2e; color: #e0e0e0; padding: 16px;
+  }
+  h2 { margin-bottom: 12px; color: #fff; font-size: 18px; }
+  h3 { margin: 16px 0 8px; color: #aaa; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+
+  .section { margin-bottom: 16px; }
+
+  label { display: block; font-size: 13px; color: #aaa; margin-bottom: 4px; }
+
+  select, input[type="text"] {
+    width: 100%; padding: 8px 10px; border: 1px solid #333; border-radius: 6px;
+    background: #0f0f23; color: #e0e0e0; font-size: 14px; outline: none;
+  }
+  select:focus, input:focus { border-color: #4a9eff; }
+
+  select option.model-broken {
+    color: #666;
+  }
+  select option.model-working {
+    color: #e0e0e0;
+  }
+  .health-status {
+    font-size: 11px; color: #888; margin-top: 4px;
+  }
+  .health-status.loading { color: #4a9eff; }
+  .health-status.done { color: #4caf50; }
+
+  textarea {
+    width: 100%; min-height: 200px; padding: 10px; border: 1px solid #333;
+    border-radius: 6px; background: #0f0f23; color: #e0e0e0; font-family: monospace;
+    font-size: 13px; resize: vertical; outline: none; line-height: 1.5;
+  }
+  textarea:focus { border-color: #4a9eff; }
+
+  /* Shared folders picker (Tool policy section) */
+  .folder-picker { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 12px; padding: 10px; border: 1px solid #333; border-radius: 6px; background: #0f0f23; }
+  .folder-group { min-width: 180px; }
+  .folder-group-title { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+  .folder-item { display: block; font-size: 13px; color: #ddd; margin: 2px 0; cursor: pointer; white-space: nowrap; }
+  .folder-item input { margin-right: 6px; vertical-align: middle; }
+
+  .tabs { display: flex; gap: 2px; margin-bottom: 12px; }
+  .tab {
+    padding: 6px 14px; background: #222; border: none; color: #888;
+    cursor: pointer; border-radius: 6px 6px 0 0; font-size: 13px;
+  }
+  .tab.active { background: #0f0f23; color: #fff; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .btn {
+    padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: 500;
+  }
+  .btn-primary { background: #4a9eff; color: #fff; }
+  .btn-primary:hover { background: #3a8eef; }
+  .btn-danger { background: #e74c3c; color: #fff; }
+  .btn-danger:hover { background: #c0392b; }
+  .btn-test { background: #2d2d44; color: #e0e0e0; border: 1px solid #444; white-space: nowrap; }
+  .btn-test:hover { background: #3d3d54; border-color: #4a9eff; }
+  .btn-test.testing { opacity: 0.6; cursor: wait; }
+  .btn-test.pass { background: #1a3a1a; color: #4caf50; border-color: #4caf50; }
+  .btn-test.fail { background: #3a1a1a; color: #e74c3c; border-color: #e74c3c; }
+  .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+
+  .status {
+    font-size: 12px; padding: 4px 8px; border-radius: 4px;
+    margin-top: 8px; display: none;
+  }
+  .status.success { display: block; background: #1a3a1a; color: #4caf50; }
+  .status.error { display: block; background: #3a1a1a; color: #e74c3c; }
+
+  .model-filter {
+    margin-bottom: 8px;
+  }
+</style>
+</head>
+<body>
+
+<h2 id="agent-title">Agent Settings</h2>
+
+<div class="section">
+  <label>Agent Slug (internal ID - used in filenames, API calls, consult_agent)</label>
+  <div style="display:flex;gap:8px;">
+    <input type="text" id="agent-slug" placeholder="e.g. fraud-worker" style="font-family:monospace;">
+    <button class="btn btn-primary" onclick="renameSlug()" style="white-space:nowrap;">Rename</button>
+  </div>
+  <small style="color:#777;">Lowercase, hyphens OK.  Renames workspace folder, conversation file, and config key.  Requires page reload.</small>
+  <div id="slug-status" class="status"></div>
+</div>
+
+<div class="section">
+  <label>Display Name</label>
+  <div style="display:flex;gap:8px;">
+    <input type="text" id="display-name" placeholder="Display name shown in sidebar">
+    <button class="btn btn-primary" onclick="saveDisplayName()" style="white-space:nowrap;">Save Name</button>
+  </div>
+  <div id="display-status" class="status"></div>
+</div>
+
+<div class="section">
+  <label>Category</label>
+  <div style="display:flex;gap:8px;">
+    <select id="agent-category" onchange="saveCategory()" style="flex:1;">
+      <option value="primary" title="Primary agents are the ones you talk to (team heads). Lead powers are a separate checkbox in agent settings.">⭐ Primary Agent</option>
+      <option value="specialist">🔬 Domain Specialist</option>
+      <option value="worker">⚙️ Worker Agent</option>
+    </select>
+  </div>
+  <div id="category-status" class="status"></div>
+  <label style="display:flex;align-items:center;gap:10px;margin-top:10px;cursor:pointer;">
+    <input type="checkbox" id="agent-lead" onchange="saveLead()" style="width:18px;height:18px;">
+    <span>👑 <strong>Lead agent</strong> — may schedule tasks for <em>other</em> agents and see, edit or cancel their tasks; default route for messaging channels. Every agent can already schedule its own tasks.</span>
+  </label>
+  <div id="lead-status" class="status"></div>
+  <div style="margin-top:10px;">
+    <label>Short description <span style="opacity:.7;font-weight:normal">(hover tooltip, one line)</span></label>
+    <div style="display:flex;gap:8px;">
+      <input type="text" id="agent-blurb" maxlength="120" placeholder="e.g. Family GP: history, diagnosis, coordinates specialists" style="flex:1;">
+      <button onclick="saveBlurb()">Save</button>
+    </div>
+    <div id="blurb-status" class="status"></div>
+  </div>
+</div>
+
+<div class="section" id="owner-section">
+  <label>Owner &amp; sharing</label>
+  <small style="color:#999;display:block;margin-bottom:8px;">Admins see every agent. <b>Infrastructure</b> agents (no owner) and agents owned by an admin are admin-only. An agent owned by a member is seen by that member and every admin; sharing lets other members use it too.</small>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <span style="font-size:13px;color:#aaa;white-space:nowrap;">Owner</span>
+    <select id="agent-owner" onchange="saveOwner()" style="flex:1;"><option value="">Infrastructure (no owner)</option></select>
+  </div>
+  <div id="owner-status" class="status"></div>
+  <div style="margin-top:10px;">
+    <span style="font-size:13px;color:#aaa;">Shared with</span>
+    <div id="agent-shared" style="display:flex;flex-direction:column;gap:6px;margin-top:6px;"><small style="color:#777;">Loading users…</small></div>
+  </div>
+  <div id="shared-status" class="status"></div>
+</div>
+
+<div class="section" id="policy-section">
+  <label>Tool policy</label>
+  <small style="color:#999;display:block;margin-bottom:8px;">Every tool call is classed by what it does and decided per agent: <b>allow</b> runs it, <b>ask</b> pauses it on an approval card (desktop, mobile and push) until you answer, <b>deny</b> refuses it with a note the agent can act on. Defaults come from the role (<span id="policy-role">…</span>); set an override here to change one class for this agent.</small>
+  <table id="policy-table" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:10px;">
+    <thead><tr style="color:#888;text-align:left;"><th style="padding:4px 6px;font-weight:500;">Action class</th><th style="padding:4px 6px;font-weight:500;">Effective</th><th style="padding:4px 6px;font-weight:500;">Role default</th><th style="padding:4px 6px;font-weight:500;">Override</th></tr></thead>
+    <tbody id="policy-rows"></tbody>
+  </table>
+  <label>Root (sudo)</label>
+  <small style="color:#999;display:block;margin-bottom:6px;">Commands run as root are reserved for the lead agent. You can hand this agent root for a limited time; every root command it runs is logged, and a card is shown if "root commands" is ticked under Settings → Approval cards.</small>
+  <div id="root-grant-box" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+    <span id="root-grant-status" style="font-size:13px;color:#aaa;">Loading…</span>
+    <select id="root-grant-minutes" style="padding:4px 6px;font-size:13px;display:none;">
+      <option value="15">15 minutes</option><option value="60" selected>1 hour</option><option value="240">4 hours</option><option value="1440">24 hours</option>
+    </select>
+    <button class="btn btn-test" id="root-grant-btn" style="display:none;" onclick="grantRoot()">Grant root</button>
+    <button class="btn btn-danger" id="root-revoke-btn" style="display:none;" onclick="revokeRoot()">Revoke now</button>
+  </div>
+  <div id="root-grant-msg" class="status"></div>
+  <label>Shared folders</label>
+  <small style="color:#999;display:block;margin-bottom:6px;">A sandboxed agent sees exactly these folders (plus its own workspace and Files folder); changing them rebuilds its container on its next turn.</small>
+  <div id="policy-folders" class="folder-picker"><span style="color:#777;">Loading…</span></div>
+  <label>Other folders (one path per line, <code>~</code> allowed)</label>
+  <textarea id="policy-roots" rows="3" style="min-height:64px;" placeholder="~/projects/site&#10;/srv/data/reports"></textarea>
+  <small id="policy-roots-hint" style="color:#777;display:block;margin-top:4px;"></small>
+  <div class="btn-row" style="margin-top:8px;">
+    <button class="btn btn-primary" onclick="savePolicy()">Save policy</button>
+    <button class="btn btn-test" onclick="resetPolicy()" title="Remove every override and extra folder for this agent">Reset to role defaults</button>
+  </div>
+  <div id="policy-status" class="status"></div>
+</div>
+
+<div class="section" id="records-section">
+  <label>Records</label>
+  <small style="color:#999;display:block;margin-bottom:8px;">Records are loaded in full into this agent's context on every turn: they are its source of truth (standing facts, lists, rules), unlike memory notes which are searched. Keep them small: the total cap is <span id="records-cap">…</span>.</small>
+  <div id="records-total" style="font-size:12px;color:#888;margin-bottom:6px;"></div>
+  <div id="records-list" style="margin-bottom:8px;font-size:13px;"></div>
+  <div class="btn-row" style="margin-bottom:8px;">
+    <button class="btn btn-test" onclick="newRecord()">+ New record</button>
+    <button class="btn btn-test" onclick="loadRecords()" title="Reload the list">↻ Refresh</button>
+  </div>
+  <div id="records-editor" style="display:none;">
+    <label>Editing <code id="records-editing-name"></code></label>
+    <textarea id="records-content" rows="12" style="min-height:160px;" spellcheck="false"></textarea>
+    <div class="btn-row" style="margin-top:8px;">
+      <button class="btn btn-primary" onclick="saveRecord()">Save record</button>
+      <button class="btn btn-danger" onclick="deleteRecord()">Delete</button>
+      <button class="btn btn-test" onclick="closeRecordEditor()">Close</button>
+    </div>
+  </div>
+  <div id="records-status" class="status"></div>
+</div>
+
+<div class="section" id="compaction-section">
+  <label>Context compression</label>
+  <small style="color:#999;display:block;margin-bottom:8px;">When the context window fills up past the threshold, the agent writes its own carry-forward (the record <code>working-brief.md</code>); the provider never summarises on its behalf.<br>Dry run = the brief only, the session goes on. On = the brief, then a fresh session seeded from Records + recent turns + recall.</small>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
+    <div style="flex:1;min-width:220px;">
+      <label for="compaction-mode" style="font-size:12px;">Mode</label>
+      <select id="compaction-mode">
+        <option value="off">Off</option>
+        <option value="dry">Dry run (brief only)</option>
+        <option value="on">On (brief, then fresh session)</option>
+        <option value="assisted">Assisted (small / local models: the hub feeds the transcript in slices sized to the window; the agent extracts into its Records from each slice, then writes the brief on a fixed template; then a fresh start)</option>
+      </select>
+      <div id="compaction-local-hint" style="display:none;font-size:12px;color:#f5a623;margin-top:4px;">Local model: assisted mode at 60% is the default.</div>
+    </div>
+    <div style="flex:1;min-width:220px;">
+      <label for="compaction-at" style="font-size:12px;">Threshold</label>
+      <select id="compaction-at">
+        <option value="0.5">50% of context window</option>
+        <option value="0.55">55% of context window</option>
+        <option value="0.6">60% of context window</option>
+        <option value="0.65">65% of context window</option>
+        <option value="0.7">70% of context window</option>
+        <option value="0.75">75% of context window</option>
+        <option value="0.8">80% of context window</option>
+        <option value="0.85">85% of context window</option>
+        <option value="0.9">90% of context window</option>
+      </select>
+    </div>
+    <div style="flex:1;min-width:220px;">
+      <label for="compaction-window" style="font-size:12px;">Context window (tokens)</label>
+      <input type="number" id="compaction-window" min="1000" step="1000" placeholder="detect" style="width:100%;box-sizing:border-box;">
+      <div style="font-size:11px;color:#777;margin-top:4px;">Leave blank to detect (LM Studio reports the loaded model's window; cloud models use a table)</div>
+    </div>
+  </div>
+  <div id="compaction-now" style="font-size:13px;color:#ccc;margin-bottom:4px;">Context now: …</div>
+  <div id="compaction-last" style="font-size:13px;color:#ccc;margin-bottom:4px;">Last compression: …</div>
+  <div id="compaction-running" style="display:none;font-size:13px;color:#f5a623;margin-bottom:4px;">⚙ Compression running… the agent is writing its working brief.</div>
+  <div class="btn-row" style="margin-top:8px;">
+    <button class="btn btn-primary" onclick="saveCompaction()">Save</button>
+    <button class="btn btn-test" id="compaction-run-btn" onclick="compressNow()">⚙ Compress now</button>
+    <button class="btn btn-test" id="compaction-brief-btn" onclick="openBrief()" style="display:none;">Done, read the brief</button>
+    <button class="btn btn-test" onclick="loadCompaction()" title="Reload the status">↻ Refresh</button>
+  </div>
+  <div id="compaction-status" class="status"></div>
+</div>
+
+<div class="section">
+  <label>Icon (emoji)</label>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <span id="icon-preview" style="font-size:1.8rem;"></span>
+    <input type="text" id="agent-icon" placeholder="🤖" style="width:60px;text-align:center;font-size:1.2rem;" oninput="document.getElementById('icon-preview').textContent = this.value || '🤖'">
+    <button class="btn btn-primary" onclick="saveIcon()" style="white-space:nowrap;">Save Icon</button>
+    <button class="btn btn-test" onclick="resetIcon()" title="Auto-generate based on name/model">🔄 Auto</button>
+  </div>
+  <div id="icon-status" class="status"></div>
+</div>
+
+<div class="section">
+  <label>Model</label>
+  <input type="text" id="model-filter" class="model-filter" placeholder="Filter models..." oninput="filterModels()">
+  <div style="display:flex;gap:8px;align-items:center;">
+    <select id="model-select" onchange="saveModel()" style="flex:1;"></select>
+    <button class="btn btn-test" id="test-btn" onclick="testModel()" title="Test if this model responds">⚡ Test</button>
+  </div>
+  <div id="model-status" class="status"></div>
+  <div id="health-status" class="health-status"></div>
+  <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+    <input type="checkbox" id="auto-model" onchange="saveAutoModel()" style="width:auto;">
+    <label for="auto-model" style="margin:0;cursor:pointer;">Autoselect model per prompt</label>
+  </div>
+  <small id="auto-model-help" style="color:#999;display:block;margin-top:4px;">When on, a classifier sorts each message into one of six kinds of work and the turn runs on the model the hub's routing table names for that kind. The model above is the fallback; the minimum model and allowed list below still apply. The classifier and the table are set on the Settings page.</small>
+  <div id="auto-model-status" class="status"></div>
+  <div style="display:flex;align-items:center;gap:8px;margin-top:14px;">
+    <label for="sandbox-mode" style="margin:0;">Sandbox</label>
+    <select id="sandbox-mode" onchange="saveSandbox()" style="width:auto;">
+      <option value="inherit">Hub default (members: container, admins: off)</option>
+      <option value="container">Container: shell and files inside its own box</option>
+      <option value="off">Off: runs on the host</option>
+    </select>
+  </div>
+  <small id="sandbox-help" style="color:#999;display:block;margin-top:4px;">In a sandbox the agent's shell and file tools run in a container that holds only this agent's folders: no hub data, no keys, no other agents. Memory, Records, consultations and the policy gate stay in the hub. Needs Docker and the sandbox image (Settings page). Without them a sandboxed agent gets no shell rather than running on the host.</small>
+  <div id="sandbox-status" class="status"></div>
+  <div id="effort-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
+    <label for="effort-mode" style="margin:0;">Reasoning effort</label>
+    <select id="effort-mode" onchange="saveEffort()" style="width:auto;">
+      <option value="default">Default (the model's own)</option>
+      <option value="low">Low: fastest, least thinking</option>
+      <option value="medium">Medium</option>
+      <option value="high">High: deeper reasoning</option>
+      <option value="xhigh">Extra high</option>
+      <option value="max">Max: the deepest (select models)</option>
+    </select>
+  </div>
+  <small id="effort-help" style="color:#999;display:block;margin-top:4px;">How hard the model thinks before answering. Higher is slower and uses more of the subscription or API budget. The hub translates the level for each provider (Claude takes all of them; OpenAI tops out at extra high; Gemini at high); local models ignore it. Also adjustable from the chat header by admins; members cannot change it.</small>
+  <div id="effort-status" class="status"></div>
+  <div id="tools-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
+    <label for="tools-mode" style="margin:0;">Tools</label>
+    <select id="tools-mode" onchange="saveToolsMode()" style="width:auto;">
+      <option value="inherit">Hub default</option>
+      <option value="hub">Hub tools: the same Bash, Read, Edit, Grep, Glob and web tools every agent gets</option>
+      <option value="client">Client tools: the Claude Code / Codex client's own built-ins</option>
+    </select>
+  </div>
+  <small id="tools-help" style="color:#999;display:block;margin-top:4px;">Only for agents on a Claude Code or Codex client model; gateway and local models always use the hub's tools. With hub tools the client's own shell and file tools are switched off and the hub's versions take their place: same names and parameters, every call through the policy gate, PDFs and images readable, and in a sandbox the hands work inside the container while the client stays on the host, so no sign-in ever enters the box. Switching changes nothing about the agent's session, memory or Records.</small>
+  <div id="tools-status" class="status"></div>
+  <div id="sandbox-status" class="status"></div>
+  <div id="auto-model-allowed" style="display:none;margin-top:10px;padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+    <small style="color:#aaa;display:block;margin-bottom:8px;">Allowed models for auto-selection:</small>
+    <div id="auto-model-checkboxes" style="display:flex;flex-direction:column;gap:6px;"></div>
+    <div style="margin-top:8px;display:flex;gap:8px;">
+      <button class="btn btn-primary" onclick="saveAllowedModels()" style="font-size:12px;">Save</button>
+      <button class="btn" onclick="selectAllModels()" style="font-size:12px;background:rgba(255,255,255,0.06);">All</button>
+    </div>
+    <div id="allowed-models-status" class="status"></div>
+  </div>
+</div>
+
+<div class="section">
+  <label>Context & Output Limits</label>
+  <div style="display:flex;gap:12px;align-items:center;">
+    <div style="flex:1;">
+      <small style="color:#999;">Max Context Messages</small>
+      <input type="number" id="max-context-messages" placeholder="Global default" min="1" max="200" style="width:100%;">
+    </div>
+    <div style="flex:1;">
+      <small style="color:#999;">Max Output Tokens</small>
+      <input type="number" id="max-output-tokens" placeholder="Global default" min="100" max="128000" style="width:100%;">
+    </div>
+    <div style="flex:1;">
+      <small style="color:#999;" title="Claude SDK agents only. Tokens the agent may use before its session compacts at 80%. Blank = the model's full window (200K, or 1M for [1m] models). Minimum 125K. Applies from the next message.">Context Budget (tokens)</small>
+      <input type="number" id="context-budget" placeholder="Model's full window" min="125000" max="1000000" step="1000" style="width:100%;">
+    </div>
+    <button class="btn btn-primary" onclick="saveLimits()" style="white-space:nowrap;align-self:flex-end;">Save</button>
+  </div>
+  <div id="limits-status" class="status"></div>
+</div>
+
+<div class="tabs" id="file-tabs"></div>
+<div id="file-panels"></div>
+
+<div class="btn-row">
+  <button class="btn btn-primary" onclick="saveCurrentFile()">Save File</button>
+  <button class="btn btn-danger" onclick="if(confirm('Delete this agent?')) deleteAgent()">Delete Agent</button>
+</div>
+<div id="file-status" class="status"></div>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const agentName = params.get('agent');
+  document.getElementById('agent-title').textContent = `${agentName} — Settings`;
+  document.title = `${agentName} Settings`;
+
+  let allModels = [];
+  let modelHealth = {};  // { modelId: { working: bool, latency?, error? } }
+  let currentFile = null;
+  let fileContents = {};
+
+  async function apiFetch(url, opts = {}) {
+    const r = await fetch(url, { credentials: 'include', ...opts });
+    return r.json();
+  }
+
+  // ── Icon ─────────────────────────────────────────────────────────────
+  async function saveIcon() {
+    const icon = document.getElementById('agent-icon').value.trim();
+    if (!icon) return showStatus('icon-status', 'error', 'Enter an emoji');
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/icon`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ icon }),
+      });
+      if (result.success) {
+        showStatus('icon-status', 'success', `Icon set to ${result.icon}`);
+        document.getElementById('icon-preview').textContent = result.icon;
+        if (window.opener) {
+          try { window.opener.loadAgents?.(); } catch {}
+        }
+      } else {
+        showStatus('icon-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      showStatus('icon-status', 'error', e.message);
+    }
+  }
+
+  async function resetIcon() {
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/icon`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ icon: '' }), // empty = auto-generate
+      });
+      if (result.success) {
+        document.getElementById('agent-icon').value = result.icon;
+        document.getElementById('icon-preview').textContent = result.icon;
+        showStatus('icon-status', 'success', `Icon auto-set to ${result.icon}`);
+        if (window.opener) {
+          try { window.opener.loadAgents?.(); } catch {}
+        }
+      }
+    } catch (e) {
+      showStatus('icon-status', 'error', e.message);
+    }
+  }
+
+  // ── Owner & sharing (lib/access.js: owner = user id | null for infrastructure; sharedWith = member ids) ──
+  let hubUsers = [];
+  let agentOwner = null;        // from the agent record (GET /api/agents)
+  let agentShared = [];
+
+  async function loadOwnership(agent) {
+    agentOwner = agent?.owner ? String(agent.owner) : null;
+    agentShared = Array.isArray(agent?.sharedWith) ? agent.sharedWith.map(String) : [];
+    const sel = document.getElementById('agent-owner');
+    const box = document.getElementById('agent-shared');
+    try {
+      const r = await fetch('/api/users', { credentials: 'include' });
+      if (r.status === 401 || r.status === 403) { box.innerHTML = '<small style="color:#777;">Admin only.</small>'; sel.disabled = true; return; }
+      if (r.status === 404) { box.innerHTML = '<small style="color:#777;">This hub has no user accounts (older server).</small>'; sel.disabled = true; return; }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      hubUsers = (await r.json()).users || [];
+    } catch (e) {
+      showStatus('owner-status', 'error', e.message);
+      return;
+    }
+    sel.innerHTML = '<option value="">Infrastructure (no owner)</option>' + hubUsers.map(u =>
+      `<option value="${escapeHtml(u.id)}">${escapeHtml(u.name)} (${escapeHtml(u.role)}${u.disabled ? ', disabled' : ''})</option>`).join('');
+    sel.value = agentOwner && hubUsers.some(u => u.id === agentOwner) ? agentOwner : '';
+    if (agentOwner && sel.value === '') {
+      sel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(agentOwner)}">unknown user ${escapeHtml(agentOwner)}</option>`);
+      sel.value = agentOwner;
+    }
+    renderShared();
+  }
+
+  function renderShared() {
+    const box = document.getElementById('agent-shared');
+    const members = hubUsers.filter(u => u.role === 'member');
+    if (!members.length) { box.innerHTML = '<small style="color:#777;">No member accounts yet. Invite members from the Users page.</small>'; return; }
+    box.innerHTML = members.map(u => {
+      const owner = agentOwner === u.id;
+      return `<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;color:#e0e0e0;font-size:13px;">
+        <input type="checkbox" class="shared-user" value="${escapeHtml(u.id)}" ${agentShared.includes(u.id) ? 'checked' : ''} ${owner ? 'disabled' : ''} onchange="saveShared()" style="width:16px;height:16px;">
+        <span>${escapeHtml(u.name)} <span style="color:#777;">${escapeHtml(u.login || '')}${u.disabled ? ', disabled' : ''}${owner ? ', the owner' : ''}</span></span>
+      </label>`;
+    }).join('');
+  }
+
+  async function saveOwner() {
+    const sel = document.getElementById('agent-owner');
+    const owner = sel.value || null;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ owner }),
+      });
+      if (result.success) {
+        agentOwner = owner;
+        const u = hubUsers.find(x => x.id === owner);
+        showStatus('owner-status', 'success', owner ? `Owner set to ${u ? u.name : owner}` : 'Now an infrastructure agent (admin-only)');
+        renderShared();
+        if (window.opener) { try { window.opener.loadAgents?.(); } catch {} }
+      } else {
+        sel.value = agentOwner || '';
+        showStatus('owner-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      sel.value = agentOwner || '';
+      showStatus('owner-status', 'error', e.message);
+    }
+  }
+
+  async function saveShared() {
+    const sharedWith = [...document.querySelectorAll('#agent-shared .shared-user:checked')].map(c => c.value);
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sharedWith }),
+      });
+      if (result.success) {
+        agentShared = sharedWith;
+        showStatus('shared-status', 'success', sharedWith.length ? `Shared with ${sharedWith.length} member${sharedWith.length === 1 ? '' : 's'}` : 'Not shared with any member');
+        if (window.opener) { try { window.opener.loadAgents?.(); } catch {} }
+      } else {
+        renderShared();
+        showStatus('shared-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      renderShared();
+      showStatus('shared-status', 'error', e.message);
+    }
+  }
+
+  // ── Tool policy (lib/tool-policy.js: role defaults + per-agent overrides and extra roots) ──
+  const POLICY_CLASSES = [
+    ['web', 'Web search and fetch'],
+    ['read_outside', 'Read files outside its folders'],
+    ['write_outside', 'Write outside its folders'],
+    ['send', 'Send off this machine (email, Telegram, git push, POST elsewhere)'],
+    ['admin', 'Change hub data / another agent'],
+    ['destroy', 'Destructive action (rm -r, kill, reset --hard, force push)'],
+    ['money', 'Move money (wallet / exchange tools)'],
+  ];
+  const POLICY_OVERRIDABLE = ['web', 'read_outside', 'write_outside', 'send', 'admin', 'destroy'];
+  // Member-owned agents: only these can be opened up; the rest stay denied whatever is set.
+  const MEMBER_GRANTABLE = ['web', 'read_outside', 'write_outside', 'send'];
+  const SOURCE_LABELS = { role: 'role default', hub: 'hub member default', member: "member's grant", agent: 'this agent' };
+  // Mirror of ROLE_DEFAULTS in lib/tool-policy.js, for the "Role default" column.
+  const ROLE_DEFAULTS = {
+    worker: { web: 'allow', read_outside: 'allow', write_outside: 'deny', send: 'deny', admin: 'deny', destroy: 'deny', money: 'deny' },
+    head:   { web: 'allow', read_outside: 'allow', write_outside: 'ask', send: 'ask', admin: 'ask', destroy: 'deny', money: 'deny' },
+    lead:   { web: 'allow', read_outside: 'allow', write_outside: 'ask', send: 'ask', admin: 'ask', destroy: 'ask', money: 'deny' },
+    wallet: { web: 'allow', read_outside: 'allow', write_outside: 'deny', send: 'deny', admin: 'deny', destroy: 'deny', money: 'firewall' },
+    member: { web: 'deny', read_outside: 'deny', write_outside: 'deny', send: 'deny', admin: 'deny', destroy: 'deny', money: 'deny' },
+  };
+  const ROLE_LABELS = { member: 'member-owned: nothing beyond its own folders unless an admin grants it (Settings, Users page, or here)', worker: 'worker: nothing leaves the box, nothing outside its own folders', head: 'team head: asks before sending or writing outside, never destroys', lead: 'lead: asks for everything decided, including destructive actions', wallet: 'wallet agent: the wallet firewall governs money, otherwise a worker' };
+  const DECISION_COLORS = { allow: '#4caf50', ask: '#f5a623', deny: '#e74c3c', firewall: '#4a9eff' };
+
+  async function loadPolicy() {
+    const rows = document.getElementById('policy-rows');
+    try {
+      const r = await fetch(`/api/policy/${encodeURIComponent(agentName)}`, { credentials: 'include' });
+      if (r.status === 404) { rows.innerHTML = '<tr><td colspan="4" style="padding:6px;color:#777;">This hub has no tool policy (older server).</td></tr>'; return; }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const p = await r.json();
+      const role = p.role || 'worker';
+      const defaults = ROLE_DEFAULTS[role] || ROLE_DEFAULTS.worker;
+      const overrides = p.overrides || {};
+      document.getElementById('policy-role').textContent = ROLE_LABELS[role] || role;
+      rows.innerHTML = '';
+      for (const [cls, label] of POLICY_CLASSES) {
+        const effective = (p.rules && p.rules[cls]) || defaults[cls];
+        const tr = document.createElement('tr');
+        tr.style.borderTop = '1px solid #2a2a40';
+        const overridable = role === 'member' ? MEMBER_GRANTABLE.includes(cls) : POLICY_OVERRIDABLE.includes(cls);
+        const srcNote = p.source && p.source[cls] && p.source[cls] !== 'role' ? `<br><small style="color:#777;">from ${escapeHtml(SOURCE_LABELS[p.source[cls]] || p.source[cls])}</small>` : '';
+        const overrideCell = overridable
+          ? `<select data-policy-class="${cls}" style="padding:4px 6px;font-size:13px;">
+              <option value="">role default (${escapeHtml(defaults[cls])})</option>
+              <option value="allow"${overrides[cls] === 'allow' ? ' selected' : ''}>allow</option>
+              <option value="ask"${overrides[cls] === 'ask' ? ' selected' : ''}>ask</option>
+              <option value="deny"${overrides[cls] === 'deny' ? ' selected' : ''}>deny</option>
+            </select>`
+          : `<span style="color:#666;">${role === 'member' ? 'never for member agents' : 'not overridable'}</span>`;
+        tr.innerHTML = `<td style="padding:6px;"><b style="font-weight:500;">${escapeHtml(cls)}</b><br><small style="color:#777;">${escapeHtml(label)}</small></td>` +
+          `<td style="padding:6px;color:${DECISION_COLORS[effective] || '#ccc'};font-weight:600;">${escapeHtml(effective)}${srcNote}</td>` +
+          `<td style="padding:6px;color:#999;">${escapeHtml(defaults[cls])}</td>` +
+          `<td style="padding:6px;">${overrideCell}</td>`;
+        rows.appendChild(tr);
+      }
+      await loadFolderPicker(p.extraRoots || []);
+      loadRootGrant();
+      document.getElementById('policy-roots-hint').textContent = `Writable without asking: ${(p.roots || []).join(', ') || '(none)'}`;
+    } catch (e) {
+      rows.innerHTML = `<tr><td colspan="4" style="padding:6px;color:#e74c3c;">Could not load policy: ${escapeHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  // ── Root grant (GET/POST/DELETE /api/root-grants, lib/root-grants): the operator hands this agent root for a while.
+  //    The lead always has it; a member's agent never; a sandboxed agent has no sudo in its box.
+  async function loadRootGrant() {
+    const status = document.getElementById('root-grant-status'), sel = document.getElementById('root-grant-minutes');
+    const grantBtn = document.getElementById('root-grant-btn'), revokeBtn = document.getElementById('root-revoke-btn');
+    if (!status) return;
+    for (const el of [sel, grantBtn, revokeBtn]) el.style.display = 'none';
+    let d = null;
+    try { d = await apiFetch(`/api/root-grants?agent=${encodeURIComponent(agentName)}`); } catch (e) { status.textContent = `Could not load: ${e.message}`; return; }
+    if (!d || d.error) { status.textContent = d && d.error === 'admin_only' ? 'Only an admin can grant root.' : `Could not load${d && d.error ? `: ${d.error}` : ''}.`; return; }
+    if (d.lead) { status.textContent = 'This is the lead agent: it always has root (every root command is logged).'; return; }
+    if (d.memberOwned) { status.textContent = 'A member\'s agent never gets root.'; return; }
+    if (d.sandboxed) { status.textContent = 'This agent\'s shell runs inside a container, where there is no sudo. Switch its sandbox off above if it must run on the host.'; return; }
+    if (d.grant) {
+      const until = new Date(d.grant.until);
+      status.innerHTML = `<b style="color:#e67e22;">Root granted</b> until ${escapeHtml(until.toLocaleString())}${d.grant.by ? ` by ${escapeHtml(d.grant.by)}` : ''}${d.grant.note ? ` — ${escapeHtml(d.grant.note)}` : ''}.`;
+      revokeBtn.style.display = '';
+    } else {
+      status.textContent = 'No root grant: this agent\'s sudo commands are refused.';
+      sel.style.display = ''; grantBtn.style.display = '';
+    }
+  }
+  async function grantRoot() {
+    const minutes = Number(document.getElementById('root-grant-minutes').value) || 60;
+    const note = prompt('Why does this agent need root right now? (kept in the audit log)', '') ;
+    if (note === null) return;
+    const msg = document.getElementById('root-grant-msg');
+    try {
+      const r = await apiFetch('/api/root-grants', { method: 'POST', body: JSON.stringify({ agent: agentName, minutes, note }) });
+      if (!r || r.error) throw new Error((r && r.error) || 'failed');
+      msg.textContent = `Root granted for ${minutes} minutes.`; msg.className = 'status ok';
+    } catch (e) { msg.textContent = `Could not grant: ${e.message}`; msg.className = 'status error'; }
+    loadRootGrant();
+  }
+  async function revokeRoot() {
+    const msg = document.getElementById('root-grant-msg');
+    try {
+      const r = await apiFetch(`/api/root-grants/${encodeURIComponent(agentName)}`, { method: 'DELETE' });
+      if (!r || r.error) throw new Error((r && r.error) || 'failed');
+      msg.textContent = 'Root grant revoked.'; msg.className = 'status ok';
+    } catch (e) { msg.textContent = `Could not revoke: ${e.message}`; msg.className = 'status error'; }
+    loadRootGrant();
+  }
+
+  // ── Shared folders picker (GET /api/folders?agent=<name>, lib/folders): checkboxes grouped by kind, pre-ticked
+  //    from the agent's policy.roots (compared as resolved absolute paths: `granted` is extraRoots resolved, same
+  //    order). Paths shown as a checkbox are kept out of the "Other folders" textarea; save joins both.
+  const FOLDER_GROUPS = [['common', 'Common'], ['files', 'Files folders'], ['team', 'Team folders'], ['workspace', 'Workspaces']];
+  let folderList = [];
+  async function loadFolderPicker(extraRoots) {
+    const box = document.getElementById('policy-folders');
+    const ta = document.getElementById('policy-roots');
+    let d = null;
+    try { d = await apiFetch(`/api/folders?agent=${encodeURIComponent(agentName)}`); } catch {}
+    if (!d || !Array.isArray(d.folders)) {
+      folderList = [];
+      box.innerHTML = `<span style="color:#e74c3c;">Could not load the folder list${d && d.error ? `: ${escapeHtml(d.error)}` : ''}.</span>`;
+      ta.value = (extraRoots || []).join('\n');
+      return;
+    }
+    folderList = d.folders;
+    const shown = new Set(folderList.map(f => f.path));
+    const granted = Array.isArray(d.granted) ? d.granted : [];
+    const checked = new Set(granted.filter(p => shown.has(p)));
+    // The textarea keeps every custom root whose resolved path is not one of the checkboxes.
+    ta.value = (extraRoots || []).filter((r, i) => !shown.has(granted[i])).join('\n');
+    box.innerHTML = FOLDER_GROUPS.map(([kind, title]) => {
+      const items = folderList.filter(f => f.kind === kind);
+      if (!items.length) return '';
+      return `<div class="folder-group"><div class="folder-group-title">${escapeHtml(title)}</div>` +
+        items.map(f => `<label class="folder-item" title="${escapeHtml(f.path)}"><input type="checkbox" data-folder="${escapeHtml(f.path)}"${checked.has(f.path) ? ' checked' : ''}> ${escapeHtml(f.label)}</label>`).join('') +
+        '</div>';
+    }).join('') || '<span style="color:#777;">No shared folders on this hub yet.</span>';
+  }
+  function pickedFolders() {
+    return Array.from(document.querySelectorAll('#policy-folders input[data-folder]')).filter(i => i.checked).map(i => i.dataset.folder);
+  }
+
+  async function patchPolicy(policy, okText) {
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy }),
+      });
+      if (result.success) {
+        showStatus('policy-status', 'success', okText);
+        if (window.opener) { try { window.opener.loadAgents?.(); } catch {} }
+        loadPolicy();
+      } else {
+        showStatus('policy-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      showStatus('policy-status', 'error', e.message);
+    }
+  }
+
+  async function savePolicy() {
+    const overrides = {};
+    for (const sel of document.querySelectorAll('#policy-rows select[data-policy-class]')) if (sel.value) overrides[sel.dataset.policyClass] = sel.value;
+    const typed = document.getElementById('policy-roots').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const roots = [...new Set([...pickedFolders(), ...typed])];
+    const policy = {};
+    if (Object.keys(overrides).length) policy.overrides = overrides;
+    if (roots.length) policy.roots = roots;
+    await patchPolicy(policy, Object.keys(policy).length ? 'Policy saved (applies to the next tool call)' : 'No overrides: role defaults apply');
+  }
+
+  async function resetPolicy() {
+    if (!confirm('Remove every override and extra folder for this agent and go back to the role defaults?')) return;
+    await patchPolicy({}, 'Back to role defaults');
+  }
+
+  // ── Category ────────────────────────────────────────────────────────
+  async function saveBlurb() {
+    const blurb = document.getElementById('agent-blurb').value.trim();
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blurb }),
+      });
+      if (result.success) { showStatus('blurb-status', 'success', 'Saved'); if (window.opener) { try { window.opener.loadAgents?.(); } catch {} } }
+      else showStatus('blurb-status', 'error', result.error || 'Failed');
+    } catch (e) { showStatus('blurb-status', 'error', e.message); }
+  }
+
+  async function saveLead() {
+    const lead = document.getElementById('agent-lead').checked;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead }),
+      });
+      if (result.success) {
+        showStatus('lead-status', 'success', lead ? 'Lead powers granted (takes effect for scheduling at the next hub restart)' : 'Lead powers removed');
+        if (window.opener) { try { window.opener.loadAgents?.(); } catch {} }
+        loadPolicy();   // the role, and with it the defaults, changed
+      } else {
+        showStatus('lead-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      showStatus('lead-status', 'error', e.message);
+    }
+  }
+
+  async function saveCategory() {
+    const category = document.getElementById('agent-category').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category }),
+      });
+      if (result.success) {
+        showStatus('category-status', 'success', `Category updated`);
+        if (window.opener) {
+          try { window.opener.loadAgents?.(); } catch {}
+        }
+        loadPolicy();   // primary = team head: different role defaults
+      } else {
+        showStatus('category-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      showStatus('category-status', 'error', e.message);
+    }
+  }
+
+  async function saveLimits() {
+    const maxCtx = document.getElementById('max-context-messages').value;
+    const maxOut = document.getElementById('max-output-tokens').value;
+    const ctxBudget = document.getElementById('context-budget').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          maxContextMessages: maxCtx ? parseInt(maxCtx) : null,
+          maxOutputTokens: maxOut ? parseInt(maxOut) : null,
+          contextBudget: ctxBudget ? parseInt(ctxBudget) : null,
+        }),
+      });
+      if (result.success) {
+        showStatus('limits-status', 'success', 'Limits saved');
+      } else {
+        showStatus('limits-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      showStatus('limits-status', 'error', e.message);
+    }
+  }
+
+  async function saveSandbox() {
+    const v = document.getElementById('sandbox-mode').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sandbox: v }) });
+      if (result && (result.success || result.ok)) showStatus('sandbox-status', 'success', v === 'container' ? 'Sandbox on: takes effect on the next turn' : v === 'off' ? 'Sandbox off' : 'Following the hub default');
+      else showStatus('sandbox-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('sandbox-status', 'error', e.message); }
+  }
+  async function saveEffort() {
+    const v = document.getElementById('effort-mode').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ effort: v }) });
+      if (result && (result.success || result.ok)) showStatus('effort-status', 'success', v === 'default' ? 'Using the model\'s default effort from the next turn' : `Effort ${v}: takes effect on the next turn`);
+      else showStatus('effort-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('effort-status', 'error', e.message); }
+  }
+  async function saveToolsMode() {
+    const v = document.getElementById('tools-mode').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: v }) });
+      if (result && (result.success || result.ok)) showStatus('tools-status', 'success', v === 'hub' ? 'Hub tools: takes effect on the next turn' : v === 'client' ? 'Client tools: takes effect on the next turn' : 'Following the hub default');
+      else showStatus('tools-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('tools-status', 'error', e.message); }
+  }
+  async function saveAutoModel() {
+    const on = document.getElementById('auto-model').checked;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoModel: on }),
+      });
+      if (result.success) {
+        showStatus('auto-model-status', 'success', on ? 'Autoselect ON' : 'Autoselect OFF');
+        document.getElementById('auto-model-allowed').style.display = on ? 'block' : 'none';
+        if (on) loadAllowedModels();
+      } else {
+        showStatus('auto-model-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      showStatus('auto-model-status', 'error', e.message);
+    }
+  }
+
+  // ── Auto-Model Allowed Models ─────────────────────────────────────────
+  let _autoModelRoutes = null;
+
+  // The help line under the Autoselect checkbox is built from the live routing table and the classifier's state,
+  // so it cannot go stale when the owner edits either on the Settings page.
+  async function fillAutoModelHelp(agentModel) {
+    const el = document.getElementById('auto-model-help');
+    if (!el) return;
+    try {
+      const data = await apiFetch('/api/auto-model/routes');
+      const sdk = /^claude-sdk\//.test(String(agentModel || ''));
+      const routes = (sdk ? data.sdkRoutes : data.routes) || {};
+      const short = (m) => String(m || '').replace(/^[a-z-]+\//, '');
+      const pairs = ['simple', 'code', 'math', 'vision', 'reasoning', 'hardest'].filter(k => routes[k]).map(k => `${k}→${short(routes[k])}`).join(', ');
+      const c = data.classifier || { backend: 'builtin', shadow: false };
+      const who = c.backend === 'builtin' ? 'the builtin keyword rule' : `the ${c.backend} classifier`;
+      const shadow = c.shadow && c.backend !== 'builtin' ? ' Shadow mode is on: verdicts are logged for every agent and nothing is changed yet.' : '';
+      el.textContent = `When on, ${who} sorts each message into a kind of work and the turn runs on the routing table's model for it (${pairs}). The model above is the fallback; the minimum model and allowed list below still apply. Classifier and table: Settings page.${shadow}`;
+    } catch {}
+  }
+
+  async function loadAllowedModels() {
+    try {
+      const data = await apiFetch('/api/auto-model/routes');
+      _autoModelRoutes = data.routes;
+      const models = data.models; // unique model strings
+      const container = document.getElementById('auto-model-checkboxes');
+      container.innerHTML = '';
+
+      // Get agent's current allowed list (null = all)
+      const agentData = await apiFetch(`/api/agents`);
+      const agents = agentData.agents || agentData;
+      const agent = agents.find(a => a.name === agentName);
+      const allowed = agent?.autoModelAllowedModels || null; // null = all
+
+      // Category labels for each model
+      const catMap = {};
+      for (const [cat, m] of Object.entries(data.routes)) {
+        if (!catMap[m]) catMap[m] = [];
+        catMap[m].push(cat);
+      }
+
+      models.forEach(m => {
+        const checked = allowed === null || allowed.includes(m);
+        const cats = (catMap[m] || []).join(', ');
+        const div = document.createElement('div');
+        div.style.cssText = 'display:flex;align-items:center;gap:8px;';
+        div.innerHTML = `<input type="checkbox" data-model="${m}" ${checked ? 'checked' : ''} style="width:auto;">
+          <span style="font-size:13px;color:#ccc;">${m}</span>
+          <span style="font-size:11px;color:#777;margin-left:auto;">${cats}</span>`;
+        container.appendChild(div);
+      });
+    } catch (e) {
+      console.error('Failed to load auto-model routes:', e);
+    }
+  }
+
+  async function saveAllowedModels() {
+    const checkboxes = document.querySelectorAll('#auto-model-checkboxes input[type=checkbox]');
+    const allowed = [];
+    checkboxes.forEach(cb => { if (cb.checked) allowed.push(cb.dataset.model); });
+
+    if (allowed.length === 0) {
+      return showStatus('allowed-models-status', 'error', 'Must allow at least one model');
+    }
+
+    // If all are checked, save null (meaning "all allowed")
+    const allChecked = allowed.length === checkboxes.length;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoModelAllowedModels: allChecked ? null : allowed }),
+      });
+      if (result.success) {
+        showStatus('allowed-models-status', 'success', allChecked ? 'All models allowed' : `${allowed.length} models allowed`);
+      } else {
+        showStatus('allowed-models-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      showStatus('allowed-models-status', 'error', e.message);
+    }
+  }
+
+  function selectAllModels() {
+    document.querySelectorAll('#auto-model-checkboxes input[type=checkbox]').forEach(cb => cb.checked = true);
+  }
+
+  // ── Agent Slug (Rename) ──────────────────────────────────────────────
+  document.getElementById('agent-slug').value = agentName;
+
+  async function renameSlug() {
+    const newName = document.getElementById('agent-slug').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    if (!newName) return showStatus('slug-status', 'error', 'Slug cannot be empty');
+    if (newName === agentName) return showStatus('slug-status', 'error', 'Same as current slug');
+    if (!confirm(`Rename agent "${agentName}" to "${newName}"?  This renames the workspace folder, conversation file, and config entry.`)) return;
+    try {
+      const result = await apiFetch('/api/agents/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldName: agentName, newName }),
+      });
+      if (result.success) {
+        showStatus('slug-status', 'success', `Renamed to "${newName}" - reloading...`);
+        if (window.opener) {
+          try { window.opener.loadAgents?.(); } catch {}
+        }
+        setTimeout(() => {
+          window.location.href = `agent-settings.html?agent=${encodeURIComponent(newName)}`;
+        }, 1000);
+      } else {
+        showStatus('slug-status', 'error', result.error || 'Rename failed');
+      }
+    } catch (e) {
+      showStatus('slug-status', 'error', e.message);
+    }
+  }
+
+  // ── Display Name ────────────────────────────────────────────────────
+  async function saveDisplayName() {
+    const display = document.getElementById('display-name').value.trim();
+    if (!display) return showStatus('display-status', 'error', 'Name cannot be empty');
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/display`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ display }),
+      });
+      if (result.success) {
+        showStatus('display-status', 'success', `Display name set to "${result.display}"`);
+        document.getElementById('agent-title').textContent = `${result.display} (${agentName}) — Settings`;
+        if (window.opener) {
+          try { window.opener.loadAgents?.(); } catch {}
+        }
+      } else {
+        showStatus('display-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      showStatus('display-status', 'error', e.message);
+    }
+  }
+
+  // ── Load Models ─────────────────────────────────────────────────────
+  async function loadModels() {
+    try {
+      const [agentsData, modelsData] = await Promise.all([
+        apiFetch('/api/agents'),
+        apiFetch('/api/models'),
+      ]);
+      const agent = agentsData.agents?.find(a => a.name === agentName);
+      allModels = modelsData.models || [];
+      const currentModel = agent?.model || '';
+
+      // Set display name and icon fields
+      const displayName = agent?.display || agentName.charAt(0).toUpperCase() + agentName.slice(1);
+      document.getElementById('display-name').value = displayName;
+      document.getElementById('agent-title').textContent = `${displayName} (${agentName}) — Settings`;
+      const agentIcon = agent?.icon || '🤖';
+      document.getElementById('agent-icon').value = agentIcon;
+      document.getElementById('icon-preview').textContent = agentIcon;
+
+      // Set category
+      const category = agent?.category || 'specialist';
+      document.getElementById('agent-category').value = category;
+      document.getElementById('agent-lead').checked = agent?.lead === true;
+      document.getElementById('agent-blurb').value = agent?.blurb || '';
+
+      // Set limits
+      document.getElementById('max-context-messages').value = agent?.maxContextMessages || '';
+      document.getElementById('max-output-tokens').value = agent?.maxOutputTokens || '';
+      document.getElementById('context-budget').value = agent?.contextBudget || '';
+
+      // Autoselect
+      document.getElementById('auto-model').checked = !!agent?.autoModel;
+      fillAutoModelHelp(agent?.model || currentModel);
+      const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
+      const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
+      const effSel = document.getElementById('effort-mode'); if (effSel) effSel.value = agent?.effort || 'default';
+      const toolsRow = document.getElementById('tools-row'); if (toolsRow) { const clientModel = /^(claude-sdk|codex-cli)\//.test(agent?.model || currentModel || ''); toolsRow.style.display = clientModel ? 'flex' : 'none'; const th = document.getElementById('tools-help'); if (th) th.style.display = clientModel ? 'block' : 'none'; }
+      const allowedPanel = document.getElementById('auto-model-allowed');
+      if (agent?.autoModel) {
+        allowedPanel.style.display = 'block';
+        loadAllowedModels();
+      } else {
+        allowedPanel.style.display = 'none';
+      }
+
+      renderModelSelect(allModels, currentModel);
+      watchModelRebuild(modelsData);
+      loadOwnership(agent);
+    } catch (e) {
+      showStatus('model-status', 'error', e.message);
+    }
+  }
+
+  // Vendor from the model id prefix (same table as lib/billing): the group is the company, the route is in each line.
+  const VENDOR_OF = { 'claude-sdk': 'Anthropic', anthropic: 'Anthropic', 'codex-cli': 'OpenAI', codex: 'OpenAI', openai: 'OpenAI', google: 'Google', perplexity: 'Perplexity', lmstudio: 'Local', ollama: 'Local', omlx: 'Local', ninfer: 'Local', local: 'Local' };
+  // Family = vendor + route, so subscription and API models never share a group:
+  // "Anthropic · Subscription (Claude sign-in)", "Anthropic · API $", "OpenAI · Subscription (ChatGPT)", "OpenAI · API $", "Local".
+  function getModelFamily(modelId) {
+    const p = String(modelId || '').split('/')[0];
+    const vendor = VENDOR_OF[p] || (/^claude/i.test(modelId) ? 'Anthropic' : /^gpt|^o\d/i.test(modelId) ? 'OpenAI' : /^gemini/i.test(modelId) ? 'Google' : (p ? p.charAt(0).toUpperCase() + p.slice(1) : 'Other'));
+    if (vendor === 'Local') return 'Local';
+    const route = billingDisplay(modelId).split(' · ')[1] || '?';
+    return `${vendor} · ${route}`;
+  }
+  // "API / gpt-6-astra", "Subscription (Claude sign-in) / claude-fable-5-1", "Local (ninfer) / qwen3.8-27b"
+  function billingDisplay(modelId) {
+    const m = String(modelId || ''); const p = m.includes('/') ? m.split('/')[0] : ''; const name = m.includes('/') ? m.slice(m.indexOf('/') + 1) : m;
+    const route = p === 'claude-sdk' ? 'Subscription (Claude sign-in)' : (p === 'codex-cli' || p === 'codex') ? 'Subscription (ChatGPT)' : ['anthropic', 'openai', 'google', 'perplexity'].includes(p) ? 'API $' : ['lmstudio', 'ollama', 'omlx', 'ninfer', 'local'].includes(p) ? `Local (${p})` : '?';
+    return `${name} · ${route}`;   // model first
+  }
+
+  // Sort order for groups; anything not listed follows alphabetically
+  const FAMILY_ORDER = ['Anthropic · Subscription (Claude sign-in)', 'Anthropic · API $', 'OpenAI · Subscription (ChatGPT)', 'OpenAI · API $', 'Google · API $', 'Perplexity · API $', 'Local'];
+
+  // The hub is rebuilding its model list (startup after an update, a new provider key): say so instead of
+  // leaving a short list in the dropdown, and refetch every few seconds until the list is final.
+  let _rebuildTimer = null;
+  function watchModelRebuild(modelsData) {
+    if (!modelsData || !(modelsData.discovering || modelsData.stale)) return;
+    showStatus('model-status', 'info', modelsData.discovering ? '⏳ Model list is rebuilding… the dropdown refreshes when it is done.' : '⏳ Model list is from before the last update; refreshing…');
+    if (_rebuildTimer) clearInterval(_rebuildTimer);
+    let polls = 0;
+    _rebuildTimer = setInterval(async () => {
+      polls++;
+      try {
+        const d = await apiFetch('/api/models');
+        if (d.discovering || d.stale) { if (polls >= 40) { clearInterval(_rebuildTimer); _rebuildTimer = null; } return; }
+        clearInterval(_rebuildTimer); _rebuildTimer = null;
+        allModels = d.models || [];
+        const select = document.getElementById('model-select');
+        renderModelSelect(allModels, select ? select.value : '');
+        showStatus('model-status', 'success', `Model list refreshed: ${allModels.length} models.`);
+      } catch { /* keep polling */ }
+    }, 5000);
+  }
+  function renderModelSelect(models, currentModel) {
+    const select = document.getElementById('model-select');
+    select.innerHTML = '';
+    // The agent's configured model always stays selectable, even when the hub's list no longer carries it (an
+    // alias the Claude client dropped, a provider temporarily unreachable). Otherwise the dropdown silently
+    // shows another model and a Save would switch the agent off the model it is running on.
+    const notListed = new Set();
+    if (currentModel && !models.includes(currentModel)) { models = models.concat([currentModel]); notListed.add(currentModel); }
+
+    // Group models by provider family
+    const groups = {};
+    for (const m of models) {
+      const family = getModelFamily(m);
+      if (!groups[family]) groups[family] = [];
+      groups[family].push(m);
+    }
+
+    // Render in defined order (then any other vendor alphabetically) — working models first within each group
+    const families = FAMILY_ORDER.concat(Object.keys(groups).filter(f => !FAMILY_ORDER.includes(f)).sort());
+    for (const family of families) {
+      const groupModels = groups[family];
+      if (!groupModels || groupModels.length === 0) continue;
+      const optgroup = document.createElement('optgroup');
+
+      // Sort: working first, then broken, alphabetical within each
+      const sorted = groupModels.sort((a, b) => {
+        const aHealth = modelHealth[a];
+        const bHealth = modelHealth[b];
+        const aWorking = aHealth ? (aHealth.working ? 0 : 1) : 0.5;
+        const bWorking = bHealth ? (bHealth.working ? 0 : 1) : 0.5;
+        if (aWorking !== bWorking) return aWorking - bWorking;
+        return a.localeCompare(b);
+      });
+
+      // Count working/broken for label
+      const testedCount = sorted.filter(m => modelHealth[m]).length;
+      const workingCount = sorted.filter(m => modelHealth[m]?.working).length;
+      const brokenCount = sorted.filter(m => modelHealth[m] && !modelHealth[m].working).length;
+
+      if (testedCount > 0) {
+        optgroup.label = `${family} — ${workingCount} working, ${brokenCount} unavailable`;
+      } else {
+        optgroup.label = `${family} (${sorted.length})`;
+      }
+
+      for (const m of sorted) {
+        const opt = document.createElement('option');
+        opt.value = m;
+        const health = modelHealth[m];
+        if (health) {
+          if (health.working) {
+            opt.textContent = `✅ ${billingDisplay(m)} (${health.latency}ms)`;
+            opt.className = 'model-working';
+          } else {
+            opt.textContent = `⛔ ${billingDisplay(m)} — unavailable`;
+            opt.className = 'model-broken';
+            opt.style.color = '#666';
+          }
+        } else {
+          opt.textContent = notListed.has(m) ? `${billingDisplay(m)} (current; not in the hub's list)` : billingDisplay(m);
+        }
+        opt.selected = m === currentModel;
+        optgroup.appendChild(opt);
+      }
+      select.appendChild(optgroup);
+    }
+
+    // If current model not in list, add it at top
+    if (currentModel && !models.includes(currentModel)) {
+      const opt = document.createElement('option');
+      opt.value = currentModel;
+      opt.textContent = currentModel + ' ⚠️ (not in gateway)';
+      opt.selected = true;
+      select.prepend(opt);
+    }
+  }
+
+  function filterModels() {
+    const query = document.getElementById('model-filter').value.toLowerCase();
+    const select = document.getElementById('model-select');
+    const currentModel = select.value;
+    const filtered = query
+      ? allModels.filter(m => m.toLowerCase().includes(query))
+      : allModels;
+    renderModelSelect(filtered, currentModel);
+  }
+
+  async function saveModel() {
+    const model = document.getElementById('model-select').value;
+    if (!model) return;
+    // Reset test button when model changes
+    const testBtn = document.getElementById('test-btn');
+    testBtn.className = 'btn btn-test';
+    testBtn.textContent = '⚡ Test';
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      });
+      if (result.success) {
+        showStatus('model-status', 'success', `Model set to ${model}`);
+        // Notify parent window to refresh agent list
+        if (window.opener) {
+          try { window.opener.loadAgents?.(); } catch {}
+        }
+      } else {
+        showStatus('model-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) {
+      showStatus('model-status', 'error', e.message);
+    }
+  }
+
+  // ── Load Files ──────────────────────────────────────────────────────
+  async function loadFiles() {
+    try {
+      const data = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/files`);
+      fileContents = data.files || {};
+
+      const tabsEl = document.getElementById('file-tabs');
+      const panelsEl = document.getElementById('file-panels');
+      tabsEl.innerHTML = '';
+      panelsEl.innerHTML = '';
+
+      const possibleFiles = ['SOUL.md', 'IDENTITY.md', 'MEMORY.md', 'TOOLS.md', 'USER.md', 'TASKS.md'];
+      let first = true;
+
+      for (const fname of possibleFiles) {
+        const tab = document.createElement('button');
+        tab.className = 'tab' + (first ? ' active' : '');
+        tab.textContent = fname.replace('.md', '');
+        tab.onclick = () => switchTab(fname);
+        tabsEl.appendChild(tab);
+
+        const panel = document.createElement('div');
+        panel.className = 'tab-panel' + (first ? ' active' : '');
+        panel.id = `panel-${fname}`;
+        panel.innerHTML = `<textarea id="editor-${fname}" spellcheck="false">${escapeHtml(fileContents[fname] || '')}</textarea>`;
+        panelsEl.appendChild(panel);
+
+        if (first) currentFile = fname;
+        first = false;
+      }
+    } catch (e) {
+      showStatus('file-status', 'error', e.message);
+    }
+  }
+
+  function switchTab(fname) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    const idx = ['SOUL.md', 'IDENTITY.md', 'MEMORY.md', 'TOOLS.md', 'USER.md', 'TASKS.md'].indexOf(fname);
+    document.querySelectorAll('.tab')[idx]?.classList.add('active');
+    document.getElementById(`panel-${fname}`)?.classList.add('active');
+    currentFile = fname;
+  }
+
+  async function saveCurrentFile() {
+    if (!currentFile) return;
+    const content = document.getElementById(`editor-${currentFile}`)?.value || '';
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/files/${encodeURIComponent(currentFile)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      });
+      if (result.success) {
+        showStatus('file-status', 'success', `${currentFile} saved`);
+      } else {
+        showStatus('file-status', 'error', result.error || 'Save failed');
+      }
+    } catch (e) {
+      showStatus('file-status', 'error', e.message);
+    }
+  }
+
+  async function deleteAgent() {
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'DELETE' });
+      if (result.success) {
+        if (window.opener) {
+          try { window.opener.loadAgents?.(); } catch {}
+        }
+        window.close();
+      } else {
+        showStatus('file-status', 'error', result.error || 'Delete failed');
+      }
+    } catch (e) {
+      showStatus('file-status', 'error', e.message);
+    }
+  }
+
+  // ── Test Model ──────────────────────────────────────────────────────
+  async function testModel() {
+    const model = document.getElementById('model-select').value;
+    if (!model) return;
+    const btn = document.getElementById('test-btn');
+    btn.className = 'btn btn-test testing';
+    btn.textContent = '⏳ Testing...';
+    btn.disabled = true;
+    showStatus('model-status', 'success', `Testing ${model}...`);
+    try {
+      const result = await apiFetch('/api/models/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      });
+      if (result.success) {
+        btn.className = 'btn btn-test pass';
+        btn.textContent = `✅ ${result.latency}ms`;
+        showStatus('model-status', 'success', `✅ ${model} — responded in ${result.latency}ms: "${result.response}"`);
+      } else {
+        btn.className = 'btn btn-test fail';
+        btn.textContent = '❌ Failed';
+        showStatus('model-status', 'error', `❌ ${model} — ${result.error}`);
+      }
+    } catch (e) {
+      btn.className = 'btn btn-test fail';
+      btn.textContent = '❌ Error';
+      showStatus('model-status', 'error', `❌ ${e.message}`);
+    }
+    btn.disabled = false;
+    setTimeout(() => {
+      btn.className = 'btn btn-test';
+      btn.textContent = '⚡ Test';
+    }, 5000);
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────────
+  function showStatus(id, type, msg) {
+    const el = document.getElementById(id);
+    el.className = `status ${type}`;
+    el.textContent = msg;
+    setTimeout(() => { el.style.display = 'none'; el.className = 'status'; }, 4000);
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Keyboard shortcut: Ctrl+S to save (the record editor when the cursor is in it, otherwise the identity file)
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      if (document.activeElement && document.activeElement.id === 'records-content') saveRecord();
+      else saveCurrentFile();
+    }
+  });
+
+  // ── Records: files loaded in full into the agent's context every turn ───
+  // Server: GET /api/agents/<name>/records -> { ok, folder, records:[{ name, bytes, mtime, symlink, target }], maxBytes }
+  //         GET/PUT/DELETE /api/agents/<name>/records/<file> (PUT body { content } or { content, append:true })
+  const recordsState = { records: [], maxBytes: 0, folder: '', current: null };
+  const recordsBase = () => `/api/agents/${encodeURIComponent(agentName)}/records`;
+  const recordUrl = (name) => `${recordsBase()}/${encodeURIComponent(name)}`;
+  function recordsStatus(type, msg) {
+    const el = document.getElementById('records-status');
+    el.style.display = '';                                   // showStatus hides with an inline style after 4 s
+    showStatus('records-status', type, msg);
+  }
+  function humanBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  async function loadRecords() {
+    const list = document.getElementById('records-list');
+    let data;
+    try { data = await apiFetch(recordsBase()); }
+    catch (e) { list.innerHTML = `<span style="color:#e74c3c;">Could not load records: ${escapeHtml(e.message)}</span>`; return; }
+    if (!data || !data.ok) { list.innerHTML = `<span style="color:#e74c3c;">Could not load records: ${escapeHtml((data && data.error) || 'unknown error')}</span>`; return; }
+    recordsState.records = Array.isArray(data.records) ? data.records : [];
+    recordsState.maxBytes = Number(data.maxBytes) || 0;
+    recordsState.folder = data.folder || '';
+    document.getElementById('records-cap').textContent = recordsState.maxBytes ? humanBytes(recordsState.maxBytes) : 'not set';
+    renderRecords();
+  }
+  function renderRecords() {
+    const list = document.getElementById('records-list');
+    const total = recordsState.records.reduce((s, r) => s + (Number(r.bytes) || 0), 0);
+    const over = recordsState.maxBytes && total > recordsState.maxBytes;
+    const totalEl = document.getElementById('records-total');
+    totalEl.style.color = over ? '#e74c3c' : '#888';
+    totalEl.innerHTML = `${recordsState.records.length} record${recordsState.records.length === 1 ? '' : 's'}, ${humanBytes(total)} of ${recordsState.maxBytes ? humanBytes(recordsState.maxBytes) : '∞'}`
+      + (over ? ' <b>— over the cap: the agent will not get all of this on each turn. Trim or remove records.</b>' : '')
+      + (recordsState.folder ? ` · <code style="color:#777;">${escapeHtml(recordsState.folder)}</code>` : '');
+    if (!recordsState.records.length) { list.innerHTML = '<span style="color:#777;">No records yet. A record is a small file the agent always has in front of it.</span>'; return; }
+    list.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr style="color:#888;text-align:left;"><th style="padding:4px 6px;font-weight:500;">Name</th><th style="padding:4px 6px;font-weight:500;text-align:right;">Size</th><th style="padding:4px 6px;font-weight:500;">Updated</th></tr></thead><tbody>'
+      + recordsState.records.map((r, i) => {
+        const when = r.mtime ? new Date(r.mtime) : null;
+        const link = r.symlink ? `<div style="font-size:11px;color:#777;">link → ${escapeHtml(r.target || '?')}</div>` : '';
+        const active = recordsState.current === r.name ? 'background:#1f1f33;' : '';
+        return `<tr style="border-top:1px solid #2a2a3a;${active}">`
+          + `<td style="padding:6px;"><a href="#" onclick="openRecord(${i}); return false;" style="color:#4a9eff;text-decoration:none;">${escapeHtml(r.name)}</a>${link}</td>`
+          + `<td style="padding:6px;text-align:right;white-space:nowrap;color:#aaa;">${humanBytes(r.bytes)}</td>`
+          + `<td style="padding:6px;white-space:nowrap;color:#aaa;">${when && !isNaN(when) ? escapeHtml(when.toLocaleString()) : ''}</td></tr>`;
+      }).join('')
+      + '</tbody></table>';
+  }
+  async function openRecord(i) {
+    const r = recordsState.records[i]; if (!r) return;
+    let data;
+    try { data = await apiFetch(recordUrl(r.name)); }
+    catch (e) { recordsStatus('error', `❌ Could not open ${r.name}: ${e.message}`); return; }
+    if (!data || !data.ok) { recordsStatus('error', `❌ Could not open ${r.name}: ${(data && data.error) || 'unknown error'}`); return; }
+    recordsState.current = r.name;
+    document.getElementById('records-editing-name').textContent = data.name || r.name;
+    document.getElementById('records-content').value = data.content || '';
+    document.getElementById('records-editor').style.display = '';
+    renderRecords();
+    document.getElementById('records-content').focus();
+  }
+  function closeRecordEditor() {
+    recordsState.current = null;
+    document.getElementById('records-editor').style.display = 'none';
+    renderRecords();
+  }
+  async function saveRecord() {
+    const name = recordsState.current; if (!name) return;
+    const content = document.getElementById('records-content').value;
+    let data;
+    try { data = await apiFetch(recordUrl(name), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) }); }
+    catch (e) { recordsStatus('error', `❌ Save failed: ${e.message}`); return; }
+    if (!data || !data.ok) { recordsStatus('error', `❌ Save failed: ${(data && data.error) || 'unknown error'}`); return; }
+    recordsStatus('success', `✅ Saved ${name}`);
+    await loadRecords();
+  }
+  async function deleteRecord() {
+    const name = recordsState.current; if (!name) return;
+    if (!confirm(`Delete the record "${name}"? The agent will no longer see it.`)) return;
+    let data;
+    try { data = await apiFetch(recordUrl(name), { method: 'DELETE' }); }
+    catch (e) { recordsStatus('error', `❌ Delete failed: ${e.message}`); return; }
+    if (!data || !data.ok) { recordsStatus('error', `❌ Delete failed: ${(data && data.error) || 'unknown error'}`); return; }
+    recordsStatus('success', `✅ Deleted ${name}`);
+    closeRecordEditor();
+    await loadRecords();
+  }
+  async function newRecord() {
+    let name = prompt('Name for the new record (a file name, e.g. clients.md):', '');
+    if (name === null) return;
+    name = name.trim();
+    if (!name) return;
+    if (/[\/\\]/.test(name)) { recordsStatus('error', '❌ A record name cannot contain slashes.'); return; }
+    if (recordsState.records.some(r => r.name === name)) { recordsStatus('error', `❌ ${name} already exists; open it from the list.`); return; }
+    let data;
+    try { data = await apiFetch(recordUrl(name), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '' }) }); }
+    catch (e) { recordsStatus('error', `❌ Could not create ${name}: ${e.message}`); return; }
+    if (!data || !data.ok) { recordsStatus('error', `❌ Could not create ${name}: ${(data && data.error) || 'unknown error'}`); return; }
+    recordsStatus('success', `✅ Created ${name}`);
+    await loadRecords();
+    const i = recordsState.records.findIndex(r => r.name === name);
+    if (i >= 0) openRecord(i);
+  }
+
+  // ── Context compression (agent-authored working brief) ───────────────
+  // GET/PUT /api/agents/<name>/compaction and POST .../compaction/run; the brief itself is the
+  // record working-brief.md, opened in the Records editor above.
+  const compactionState = { data: null, poll: null, briefFile: 'working-brief.md' };
+  const compactionUrl = () => `/api/agents/${encodeURIComponent(agentName)}/compaction`;
+  function compactionStatus(type, msg) {
+    const el = document.getElementById('compaction-status');
+    el.style.display = '';                                   // showStatus hides with an inline style after 4 s
+    showStatus('compaction-status', type, msg);
+  }
+  const COMPACTION_MODES = { off: 'off', dry: 'dry run', on: 'on', assisted: 'assisted' };
+  function compactionModeLabel(mode) { return COMPACTION_MODES[mode] || String(mode || 'off'); }
+  function renderCompaction() {
+    const d = compactionState.data;
+    if (!d) return;
+    const modeEl = document.getElementById('compaction-mode');
+    const atEl = document.getElementById('compaction-at');
+    if (modeEl && document.activeElement !== modeEl) modeEl.value = COMPACTION_MODES[d.mode] ? d.mode : 'off';
+    if (atEl && document.activeElement !== atEl) {
+      const at = Number(d.at);
+      const v = at > 0 && at < 1 ? String(Math.round(at * 20) / 20) : '0.75';   // nearest 5 % step
+      atEl.value = [...atEl.options].some(o => o.value === v) ? v : '0.75';
+    }
+    document.getElementById('compaction-local-hint').style.display = d.local ? '' : 'none';
+    const pct = Math.round(Number(d.pct) || 0);
+    const tokens = Number(d.tokens) || 0, limit = Number(d.limit) || 0;
+    document.getElementById('compaction-now').textContent = limit
+      ? `Context now: ${pct}% (${tokens.toLocaleString()} of ${limit.toLocaleString()} tokens)${d.model ? ` · ${d.model}` : ''}`
+      : 'Context now: no session yet';
+    let last = 'Last compression: never';
+    if (d.lastRunAt) {
+      const when = new Date(Number(d.lastRunAt));
+      const bits = [compactionModeLabel(d.lastMode), d.lastReason].filter(Boolean).join(', ');
+      last = `Last compression: ${isNaN(when) ? '?' : when.toLocaleString()}${bits ? ` (${bits})` : ''}${d.lastReset ? ', session reset' : ''}`;
+      if (d.lastOk === false) last += ` — failed: ${d.lastError || 'unknown error'}`;
+    }
+    document.getElementById('compaction-last').textContent = last;
+    const running = !!(d.running || d.requested);
+    document.getElementById('compaction-running').style.display = running ? '' : 'none';
+    document.getElementById('compaction-run-btn').disabled = running;
+    document.getElementById('compaction-run-btn').textContent = running ? '⚙ Compressing…' : '⚙ Compress now';
+    if (d.briefFile) compactionState.briefFile = d.briefFile;
+  }
+  // The per-agent contextWindow override lives on the agent record (GET /api/agents, PATCH /api/agents/<name>).
+  async function loadContextWindow() {
+    const el = document.getElementById('compaction-window');
+    if (document.activeElement === el) return;
+    try {
+      const agentData = await apiFetch('/api/agents');
+      const agents = agentData.agents || agentData;
+      const agent = Array.isArray(agents) ? agents.find(a => a.name === agentName) : null;
+      const cw = agent && agent.contextWindow;
+      el.value = cw ? String(cw) : '';
+      compactionState.contextWindow = cw || null;
+    } catch { /* leave as is */ }
+  }
+  async function loadCompaction() {
+    let data;
+    try { data = await apiFetch(compactionUrl()); }
+    catch (e) { document.getElementById('compaction-now').textContent = `Context now: unavailable (${e.message})`; return null; }
+    if (!data || !data.ok) { document.getElementById('compaction-now').textContent = `Context now: unavailable (${(data && data.error) || 'unknown error'})`; return null; }
+    compactionState.data = data;
+    renderCompaction();
+    return data;
+  }
+  // Save = PUT compaction { mode, at } + PATCH agent { contextWindow } (only when the window changed).
+  async function saveCompaction() {
+    const mode = document.getElementById('compaction-mode').value;
+    const at = Number(document.getElementById('compaction-at').value);
+    const raw = document.getElementById('compaction-window').value.trim();
+    const contextWindow = raw ? Math.round(Number(raw)) : null;
+    if (raw && !(contextWindow > 0)) { compactionStatus('error', '❌ Context window must be a number of tokens, or blank to detect.'); return; }
+    let data;
+    try { data = await apiFetch(compactionUrl(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, at }) }); }
+    catch (e) { compactionStatus('error', `❌ Save failed: ${e.message}`); return; }
+    if (!data || !data.success) { compactionStatus('error', `❌ Save failed: ${(data && data.error) || 'unknown error'}`); return; }
+    compactionState.data = { ...(compactionState.data || {}), ...data, ok: true };
+    if (contextWindow !== (compactionState.contextWindow || null)) {
+      let r;
+      try { r = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contextWindow }) }); }
+      catch (e) { compactionStatus('error', `❌ Mode saved, but the context window was not: ${e.message}`); return; }
+      if (!r || !r.success) { compactionStatus('error', `❌ Mode saved, but the context window was not: ${(r && r.error) || 'unknown error'}`); return; }
+      compactionState.contextWindow = contextWindow;
+      loadCompaction();   // the limit (and so the %) may have changed
+    } else {
+      renderCompaction();
+    }
+    const win = contextWindow ? `, window ${contextWindow.toLocaleString()} tokens` : '';
+    compactionStatus('success', mode === 'off' ? `✅ Saved: compression off${win}` : `✅ Saved: ${compactionModeLabel(mode)} at ${Math.round(at * 100)}%${win}`);
+  }
+  function compactionPollStop() { if (compactionState.poll) { clearInterval(compactionState.poll); compactionState.poll = null; } }
+  // After "Compress now": the agent's compression turn runs for minutes; poll GET every 5 s until running is false.
+  function compactionPollStart() {
+    compactionPollStop();
+    compactionState.poll = setInterval(async () => {
+      const d = await loadCompaction();
+      if (!d) return;
+      if (d.running || d.requested) return;
+      compactionPollStop();
+      if (d.lastOk === false) { compactionStatus('error', `❌ Compression failed: ${d.lastError || 'unknown error'}`); return; }
+      compactionStatus('success', d.lastReset ? '✅ Done: brief written, fresh session started' : '✅ Done, read the brief');
+      document.getElementById('compaction-brief-btn').style.display = '';
+    }, 5000);
+  }
+  async function compressNow() {
+    const d = compactionState.data || {};
+    const mode = document.getElementById('compaction-mode').value || d.mode || 'off';
+    const what = mode === 'on'
+      ? `${agentName} will write its working brief (working-brief.md), then its session is reset and seeded from Records, recent turns and recall.`
+      : mode === 'assisted'
+        ? `${agentName} gets its transcript in slices sized to its window, extracts into its Records from each slice, writes its working brief on a fixed template, then starts fresh (assisted).`
+      : mode === 'dry'
+        ? `${agentName} will write its working brief (working-brief.md); the session goes on unchanged (dry run).`
+        : `Compression is off for ${agentName}. The hub will run it as a dry run: the brief only, the session goes on unchanged.`;
+    if (!confirm(`Compress now?\n\n${what}\n\nThis takes a turn of the agent (it can run for minutes).`)) return;
+    const btn = document.getElementById('compaction-run-btn');
+    btn.disabled = true;
+    document.getElementById('compaction-brief-btn').style.display = 'none';
+    let data;
+    try { data = await apiFetch(`${compactionUrl()}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); }
+    catch (e) { btn.disabled = false; compactionStatus('error', `❌ Could not start: ${e.message}`); return; }
+    if (!data || !data.ok) { btn.disabled = false; compactionStatus('error', `❌ Could not start: ${(data && data.error) || 'unknown error'}`); return; }
+    compactionState.data = { ...d, running: true, requested: true, mode: data.mode || mode };
+    renderCompaction();
+    compactionStatus('success', `⚙ Started (${compactionModeLabel(data.mode || mode)})… this page checks every 5 s.`);
+    compactionPollStart();
+  }
+  // "Done, read the brief": open working-brief.md in the Records editor above.
+  async function openBrief() {
+    await loadRecords();
+    const name = compactionState.briefFile || 'working-brief.md';
+    const i = recordsState.records.findIndex(r => r.name === name);
+    if (i < 0) { compactionStatus('error', `❌ No record ${name} yet.`); return; }
+    await openRecord(i);
+    document.getElementById('records-editor').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ── Model Health ─────────────────────────────────────────────────────
+  async function loadModelHealth() {
+    const healthEl = document.getElementById('health-status');
+    healthEl.className = 'health-status loading';
+    healthEl.textContent = '⏳ Testing model availability...';
+    try {
+      const data = await apiFetch('/api/models/health');
+      modelHealth = data.models || {};
+      const working = Object.values(modelHealth).filter(h => h.working).length;
+      const broken = Object.values(modelHealth).filter(h => !h.working).length;
+      healthEl.className = 'health-status done';
+      healthEl.textContent = `✅ ${working} models available, ${broken} unavailable` +
+        (data.cached ? ' (cached)' : '');
+      // Re-render dropdown with health data
+      const select = document.getElementById('model-select');
+      const currentModel = select.value;
+      renderModelSelect(allModels, currentModel);
+    } catch (e) {
+      healthEl.className = 'health-status';
+      healthEl.textContent = `⚠️ Health check failed: ${e.message}`;
+    }
+  }
+
+  // ── Init ────────────────────────────────────────────────────────────
+  (async () => {
+    await loadModels();
+    loadModelHealth(); // runs in background, re-renders when done
+  })();
+  loadFiles();
+  loadPolicy();
+  loadRecords();
+  loadCompaction();
+  loadContextWindow();
+</script>
+</body>
+</html>

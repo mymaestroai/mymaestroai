@@ -1,0 +1,11 @@
+{
+  "id": "fakebank", "name": "Fake Bank", "category": "Test", "summary": "A test module with a money tool.", "risk": "money",
+  "server": { "type": "mcp-stdio", "script": "server.js", "env": { "FAKEBANK_MODE": "test" }, "dataEnv": "FAKEBANK_HOME" },
+  "secrets": [ { "name": "FAKEBANK_TOKEN", "label": "Token" } ],
+  "settings": [
+    { "key": "tradingEnabled", "type": "boolean", "default": false, "label": "Trading on" },
+    { "key": "maxUsd", "type": "number", "default": 10, "min": 1, "label": "Largest order" },
+    { "key": "pairs", "type": "list", "default": ["BTC-USD"], "pattern": "^[A-Z]+-USD$", "label": "Pairs" }
+  ],
+  "tools": { "get_price": "read", "place_order": "money", "whoami": "read", "delete_everything": "off" }
+}

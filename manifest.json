@@ -1,0 +1,23 @@
+{
+  "name": "My Maestro AI",
+  "short_name": "My Maestro",
+  "start_url": "/mobile.html",
+  "scope": "/mobile",
+  "display": "standalone",
+  "background_color": "#090B0F",
+  "theme_color": "#090B0F",
+  "icons": [
+    {
+      "src": "/icons/hub-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/hub-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

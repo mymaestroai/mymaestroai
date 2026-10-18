@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Maestro AI — Modules</title>
+<style>
+  :root {
+    --bg-dark: #090B0F; --bg-card: #14171F; --bg-input: #040507; --border: #222632; --border-strong: #333846;
+    --text: #F3F4F6; --text-dim: #9CA3AF; --text-tertiary: #6B7280; --accent: #3D7BFF; --accent-hover: #5A93FF;
+    --error: #FF4C4C; --warning: #F5A623; --success: #00D395; --radius: 4px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-dark); color: var(--text); font-size: 14px; }
+  .top { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--bg-card); position: sticky; top: 0; z-index: 2; }
+  .top a { color: var(--text-dim); text-decoration: none; font-size: 13px; }
+  .top a:hover { color: var(--text); }
+  .top h1 { font-size: 16px; font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 18px; }
+  .intro { color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+  h2.cat { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin: 6px 0 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; }
+  .card:hover { border-color: var(--accent); }
+  .card .head { display: flex; align-items: center; gap: 8px; }
+  .card .icon { font-size: 22px; }
+  .card .name { font-weight: 600; }
+  .card .sum { color: var(--text-dim); font-size: 13px; line-height: 1.45; }
+  .card .note { color: var(--text-tertiary); font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border-strong); color: var(--text-dim); white-space: nowrap; }
+  .pill.ready { color: var(--success); border-color: var(--success); }
+  .pill.setup { color: var(--accent); border-color: var(--accent); }
+  .pill.attention, .pill.broken { color: var(--warning); border-color: var(--warning); }
+  .pill.money { color: #f0a35e; border-color: #d95926; }
+  .spacer { flex: 1; }
+  section.panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; display: none; }
+  section.panel.open { display: block; }
+  .panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .panel-head h2 { font-size: 18px; }
+  .layout { display: grid; grid-template-columns: 230px 1fr; gap: 18px; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+  ol.steps { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+  ol.steps li { padding: 7px 9px; border-radius: 6px; cursor: pointer; color: var(--text-dim); font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  ol.steps li:hover { background: rgba(61, 123, 255, .08); }
+  ol.steps li.cur { background: rgba(61, 123, 255, .14); color: var(--text); }
+  ol.steps li .mark { width: 18px; text-align: center; }
+  ol.steps li.done .mark { color: var(--success); }
+  .step h3 { font-size: 16px; margin-bottom: 10px; }
+  .body { line-height: 1.55; color: #d6d8de; }
+  .body p { margin: 0 0 10px; }
+  .body ul, .body ol { margin: 0 0 10px 20px; }
+  .body li { margin: 3px 0; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .links a { color: var(--accent); }
+  label.chk { display: flex; gap: 8px; align-items: flex-start; margin: 12px 0; cursor: pointer; }
+  .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+  .field .lbl { font-size: 13px; }
+  .field .help { color: var(--text-tertiary); font-size: 12px; }
+  input[type="text"], input[type="password"], input[type="number"], textarea, select {
+    font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); color: var(--text); outline: none; width: 100%;
+  }
+  textarea { min-height: 80px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  textarea.secret { -webkit-text-security: disc; text-security: disc; }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+  button { font: inherit; font-size: 13px; padding: 7px 12px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: transparent; color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: var(--accent-hover); }
+  button.danger { color: var(--error); border-color: rgba(255, 76, 76, .5); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+  .msg { margin-top: 12px; padding: 9px 11px; border-radius: 6px; font-size: 13px; display: none; white-space: pre-wrap; }
+  .msg.show { display: block; }
+  .msg.ok { background: rgba(0, 211, 149, .1); border: 1px solid rgba(0, 211, 149, .4); }
+  .msg.err { background: rgba(255, 76, 76, .1); border: 1px solid rgba(255, 76, 76, .4); }
+  .msg.warn { background: rgba(245, 166, 35, .1); border: 1px solid rgba(245, 166, 35, .4); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .dim { color: var(--text-dim); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-dim); font-weight: 500; }
+  .agent-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
+  .agent-row.no { color: var(--text-tertiary); }
+  .saved { color: var(--success); font-size: 12px; }
+  .ready-box { display: flex; flex-direction: column; gap: 10px; }
+</style>
+</head>
+<body>
+<div class="top">
+  <a href="/">← Back</a>
+  <h1>Modules</h1>
+  <span class="spacer"></span>
+  <a href="/users">Users</a>
+</div>
+<main>
+  <p class="intro">Optional capabilities for your agents. Each module walks you through its setup, keeps its keys encrypted in this hub, and only reaches the agents you choose. Money modules can only go to wallet agents, and the hub enforces their limits on every call.</p>
+  <div id="list"></div>
+  <section class="panel" id="panel"></section>
+</main>
+<script>
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const STATE_LABEL = { available: 'Not set up', setup: 'Setup in progress', ready: 'On', off: 'Off', attention: 'Needs attention', broken: 'Broken' };
+let current = null;      // module detail
+let selected = null;     // step id on screen
+
+// Small, safe text formatting for step bodies: paragraphs, **bold**, "- " and "1. " lists.
+function md(text) {
+  const blocks = String(text || '').split(/\n\s*\n/);
+  return blocks.map(b => {
+    const lines = b.split('\n');
+    const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    if (lines.every(l => /^\s*-\s+/.test(l))) return '<ul>' + lines.map(l => `<li>${inline(l.replace(/^\s*-\s+/, ''))}</li>`).join('') + '</ul>';
+    if (lines.every(l => /^\s*\d+\.\s+/.test(l))) return '<ol>' + lines.map(l => `<li>${inline(l.replace(/^\s*\d+\.\s+/, ''))}</li>`).join('') + '</ol>';
+    const head = lines.filter(l => !/^\s*-\s+/.test(l)); const items = lines.filter(l => /^\s*-\s+/.test(l));
+    return `<p>${head.map(inline).join('<br>')}</p>` + (items.length ? '<ul>' + items.map(l => `<li>${inline(l.replace(/^\s*-\s+/, ''))}</li>`).join('') + '</ul>' : '');
+  }).join('');
+}
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, credentials: 'include', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  let j = {}; try { j = await r.json(); } catch {}
+  if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.data = j; throw e; }
+  return j;
+}
+
+async function loadList() {
+  const { modules } = await api('GET', '/api/modules');
+  const cats = {};
+  for (const m of modules) (cats[m.category] = cats[m.category] || []).push(m);
+  document.getElementById('list').innerHTML = Object.keys(cats).sort().map(c => `<h2 class="cat">${esc(c)}</h2><div class="grid">${cats[c].map(m => `
+    <div class="card" onclick="openModule('${esc(m.id)}')" id="card-${esc(m.id)}">
+      <div class="head"><span class="icon">${esc(m.icon || '🧩')}</span><span class="name">${esc(m.name)}</span><span class="spacer"></span>
+        ${m.risk === 'money' ? '<span class="pill money">money</span>' : ''}<span class="pill ${esc(m.state)}">${esc(STATE_LABEL[m.state] || m.state)}</span></div>
+      <div class="sum">${esc(m.summary)}</div>
+      ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
+    </div>`).join('')}</div>`).join('') || '<p class="dim">No modules are installed in this hub.</p>';
+}
+
+async function openModule(id, stepId) {
+  const { module } = await api('GET', `/api/modules/${id}`);
+  current = module;
+  const firstOpen = module.steps.find(s => !s.done);
+  selected = stepId || (module.finishedAt ? null : (firstOpen ? firstOpen.id : null));
+  render();
+  history.replaceState(null, '', `#${id}`);
+  document.getElementById('panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function render() {
+  const m = current; const p = document.getElementById('panel');
+  p.classList.add('open');
+  const steps = m.steps.map((s, i) => `<li class="${s.done ? 'done' : ''} ${s.id === selected ? 'cur' : ''}" onclick="selectStep('${esc(s.id)}')"><span class="mark">${s.done ? '✓' : i + 1}</span>${esc(s.title)}</li>`).join('');
+  p.innerHTML = `
+    <div class="panel-head"><span style="font-size:24px">${esc(m.icon || '🧩')}</span><h2>${esc(m.name)}</h2>
+      ${m.risk === 'money' ? '<span class="pill money">money</span>' : ''}<span class="pill ${esc(m.state)}">${esc(STATE_LABEL[m.state] || m.state)}</span>
+      <span class="spacer"></span><button onclick="closePanel()">Close</button></div>
+    ${m.problems && m.problems.length ? `<div class="msg err show">This module's files have problems: ${esc(m.problems.join('; '))}</div>` : ''}
+    <div class="layout">
+      <div><ol class="steps">${steps}<li class="${selected === null ? 'cur' : ''}" onclick="selectStep(null)"><span class="mark">⚙</span>${m.finishedAt ? 'Status and limits' : 'Overview'}</li></ol></div>
+      <div id="step-area">${selected ? stepHtml(m.steps.find(s => s.id === selected)) : overviewHtml()}</div>
+    </div>`;
+}
+function selectStep(id) { selected = id; render(); }
+function closePanel() { document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
+
+function setMsg(kind, text) { const el = document.getElementById('step-msg'); if (!el) return; el.className = `msg show ${kind}`; el.textContent = text; }
+
+function settingField(st, value) {
+  const id = `set-${st.key}`;
+  const help = st.help ? `<span class="help">${esc(st.help)}</span>` : '';
+  if (st.type === 'boolean') return `<label class="chk"><input type="checkbox" id="${id}" ${value ? 'checked' : ''}><span><span class="lbl">${esc(st.label)}</span><br>${help}</span></label>`;
+  if (st.type === 'choice' && st.multiple) return `<div class="field"><span class="lbl">${esc(st.label)}</span>${st.options.map(o => { const v = typeof o === 'object' ? o.value : o; return `<label class="chk" style="margin:2px 0"><input type="checkbox" data-multi="${esc(st.key)}" value="${esc(v)}" ${(value || []).includes(v) ? 'checked' : ''}> ${esc(typeof o === 'object' ? o.label : o)}</label>`; }).join('')}${help}</div>`;
+  if (st.type === 'choice') return `<div class="field"><span class="lbl">${esc(st.label)}</span><select id="${id}">${st.options.map(o => { const v = typeof o === 'object' ? o.value : o; return `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(typeof o === 'object' ? o.label : o)}</option>`; }).join('')}</select>${help}</div>`;
+  if (st.type === 'list') return `<div class="field"><span class="lbl">${esc(st.label)}</span><input type="text" id="${id}" value="${esc((value || []).join(', '))}">${help}</div>`;
+  return `<div class="field"><span class="lbl">${esc(st.label)}</span><input type="${st.type === 'number' ? 'number' : 'text'}" id="${id}" value="${esc(value)}" ${st.min !== undefined ? `min="${st.min}"` : ''} ${st.max !== undefined ? `max="${st.max}"` : ''}>${help}</div>`;
+}
+function readSettings(keys) {
+  const out = {};
+  for (const st of current.manifest.settings || []) {
+    if (keys && !keys.includes(st.key)) continue;
+    if (st.type === 'boolean') out[st.key] = document.getElementById(`set-${st.key}`).checked;
+    else if (st.type === 'choice' && st.multiple) out[st.key] = [...document.querySelectorAll(`input[data-multi="${st.key}"]:checked`)].map(i => i.value);
+    else out[st.key] = document.getElementById(`set-${st.key}`).value;
+  }
+  return out;
+}
+
+function stepHtml(s) {
+  const m = current;
+  const links = (s.links || []).map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)} ↗</a>`).join('');
+  let inner = '';
+  if (s.type === 'explain' || s.type === 'outside') {
+    inner = (s.confirm ? `<label class="chk"><input type="checkbox" id="confirm"><span>${esc(s.confirm)}</span></label>` : '') +
+      `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { confirmed: ${s.confirm ? "document.getElementById('confirm').checked" : 'true'} })">Continue</button></div>`;
+  } else if (s.type === 'install') {
+    inner = `<p class="dim">${m.installed ? 'Installed.' : 'Not installed yet.'}</p><div class="actions"><button class="primary" id="btn-go" onclick="doStep('${esc(s.id)}', {}, this)">${m.installed ? 'Check the install' : 'Install'}</button></div>`;
+  } else if (s.type === 'secrets') {
+    const secrets = (m.manifest.secrets || []).filter(x => (s.fields || []).includes(x.name));
+    inner = (s.keyFile ? `<div class="field"><span class="lbl">${esc(s.keyFile.label || 'Key file')}</span><input type="file" id="keyfile" accept=".json,application/json"><span class="help">Read in your browser and sent once to this hub; it is not stored as a file.</span></div><p class="dim" style="margin:6px 0">or enter the values:</p>` : '') +
+      secrets.map(x => `<div class="field"><span class="lbl">${esc(x.label)} ${m.secretsSet.includes(x.name) ? '<span class="saved">✓ saved</span>' : ''}</span>${x.multiline ? `<textarea class="secret" id="sec-${esc(x.name)}" autocomplete="off" spellcheck="false" placeholder="${m.secretsSet.includes(x.name) ? 'saved; paste to replace' : ''}"></textarea>` : `<input type="password" id="sec-${esc(x.name)}" autocomplete="off" placeholder="${m.secretsSet.includes(x.name) ? 'saved; type to replace' : ''}">`}${x.help ? `<span class="help">${esc(x.help)}</span>` : ''}</div>`).join('') +
+      `<div class="actions"><button class="primary" onclick="saveSecrets('${esc(s.id)}', this)">Save</button></div>`;
+  } else if (s.type === 'check') {
+    const lc = m.lastCheck;
+    inner = (lc ? `<div class="msg show ${lc.ok ? (lc.warnings.length ? 'warn' : 'ok') : 'err'}">${esc(lc.summary)}${lc.lines.length ? '\n' + esc(lc.lines.join('\n')) : ''}${lc.warnings.length ? '\n⚠ ' + esc(lc.warnings.join('\n⚠ ')) : ''}\n<span class="dim">${esc(lc.at)}</span></div>` : '') +
+      `<div id="ack-area"></div><div class="actions"><button class="primary" onclick="runCheck('${esc(s.id)}', this)">Run the check</button></div>`;
+  } else if (s.type === 'settings') {
+    inner = (m.manifest.settings || []).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +
+      `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { values: readSettings(${esc(JSON.stringify(s.fields || []))}) }, this)">Save</button></div>`;
+  } else if (s.type === 'grant') {
+    inner = (m.candidates.length ? m.candidates.map(c => `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${m.agents.includes(c.name) ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`).join('') : '<p class="dim">No agents.</p>') +
+      (m.risk === 'money' && !m.candidates.some(c => c.eligible) ? '<div class="msg warn show">No agent is a wallet agent yet. The hub owner adds one by name to "walletAgents" in data/settings.json (deliberately not a button).</div>' : '') +
+      `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { agents: [...document.querySelectorAll('input.grant:checked')].map(i => i.value) }, this)">Save</button></div>`;
+  } else if (s.type === 'finish') {
+    const open = m.steps.filter(x => x.type !== 'finish' && !x.optional && !x.done);
+    inner = open.length ? `<div class="msg warn show">Still to do: ${esc(open.map(x => x.title).join('; '))}</div>` :
+      `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', {}, this)">${m.finishedAt ? 'Done' : 'Switch it on'}</button></div>`;
+  }
+  return `<div class="step"><h3>${esc(s.title)}</h3><div class="body">${md(s.body)}</div><div class="links">${links}</div>${inner}<div class="msg" id="step-msg"></div></div>`;
+}
+
+function overviewHtml() {
+  const m = current;
+  if (!m.finishedAt) return `<div class="body">${md(m.summary)}</div><div class="actions"><button class="primary" onclick="selectStep('${esc((m.steps.find(s => !s.done) || m.steps[0]).id)}')">${m.state === 'available' ? 'Start the setup' : 'Continue the setup'}</button></div>`;
+  const lc = m.lastCheck;
+  return `<div class="ready-box">
+    <div class="body">${md(m.summary)}</div>
+    <div><b>Agents:</b> ${m.agents.length ? esc(m.agents.join(', ')) : '<span class="dim">none</span>'} · <b>Status:</b> ${esc(STATE_LABEL[m.state] || m.state)}${m.note ? ` <span class="dim">(${esc(m.note)})</span>` : ''}</div>
+    ${lc ? `<div class="dim">Last check ${esc(lc.at)}: ${esc(lc.summary)}</div>` : ''}
+    <div class="actions">
+      ${m.enabled ? `<button onclick="toggle(false, this)">Switch off</button>` : `<button class="primary" onclick="toggle(true, this)">Switch on</button>`}
+      <button onclick="recheck(this)">Check now</button>
+      <button onclick="showAudit(this)">Activity log</button>
+      <button class="danger" onclick="removeModule(this)">Remove</button>
+    </div>
+    <h3 style="font-size:14px;margin-top:8px">Limits and settings</h3>
+    ${(m.manifest.settings || []).map(st => settingField(st, m.settings[st.key])).join('')}
+    <div class="actions"><button class="primary" onclick="saveAll(this)">Save settings</button></div>
+    ${m.manifest.docs && m.manifest.docs.revoke ? `<p class="dim" style="margin-top:10px">${esc(m.manifest.docs.revoke)}</p>` : ''}
+    <div class="msg" id="step-msg"></div><div id="audit"></div></div>`;
+}
+
+async function busy(btn, fn) { if (btn) btn.disabled = true; try { await fn(); } finally { if (btn) btn.disabled = false; } }
+async function doStep(stepId, input, btn) {
+  await busy(btn, async () => {
+    try {
+      const r = await api('POST', `/api/modules/${current.id}/step`, { step: stepId, input });
+      current = r.module;
+      const idx = current.steps.findIndex(s => s.id === stepId);
+      const next = current.steps.slice(idx + 1).find(s => !s.done) || current.steps.find(s => !s.done);
+      selected = current.finishedAt && stepId === current.steps[current.steps.length - 1].id ? null : (next ? next.id : null);
+      render(); loadList();
+    } catch (e) {
+      setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message + (e.data && e.data.check && e.data.check.lines && e.data.check.lines.length ? '\n' + e.data.check.lines.join('\n') : ''));
+      if (e.data && e.data.needsAck) document.getElementById('ack-area').innerHTML = `<label class="chk"><input type="checkbox" id="ack"> <span>I understand; continue with this key</span></label>`;
+    }
+  });
+}
+async function saveSecrets(stepId, btn) {
+  const s = current.steps.find(x => x.id === stepId);
+  const input = { values: {} };
+  const f = document.getElementById('keyfile');
+  if (f && f.files && f.files[0]) input.keyFile = await f.files[0].text();
+  for (const name of s.fields || []) { const el = document.getElementById(`sec-${name}`); if (el && el.value.trim()) input.values[name] = el.value; }
+  await doStep(stepId, input, btn);
+}
+async function runCheck(stepId, btn) {
+  const ack = document.getElementById('ack');
+  await doStep(stepId, { acknowledged: !!(ack && ack.checked) }, btn);
+}
+async function toggle(on, btn) { await busy(btn, async () => { try { current = (await api('POST', `/api/modules/${current.id}/${on ? 'enable' : 'disable'}`)).module; render(); loadList(); } catch (e) { setMsg('err', e.message); } }); }
+async function recheck(btn) { await busy(btn, async () => { try { const r = await api('POST', `/api/modules/${current.id}/check`, {}); current = r.module; render(); setMsg(r.check.ok ? 'ok' : 'err', r.check.summary + (r.check.lines.length ? '\n' + r.check.lines.join('\n') : '')); loadList(); } catch (e) { setMsg('err', e.message); } }); }
+async function saveAll(btn) { await busy(btn, async () => { try { current = (await api('POST', `/api/modules/${current.id}/settings`, { values: readSettings() })).module; render(); setMsg('ok', 'Saved. The new limits apply to the next call.'); } catch (e) { setMsg('err', e.message); } }); }
+async function showAudit(btn) {
+  await busy(btn, async () => {
+    const { entries } = await api('GET', `/api/modules/${current.id}/audit`);
+    document.getElementById('audit').innerHTML = entries.length ? `<h3 style="font-size:14px;margin:12px 0 6px">Activity (newest first)</h3><table><tr><th>When</th><th>Tool</th><th>Result</th><th>Detail</th></tr>${entries.map(e => `<tr><td class="mono">${esc(String(e.ts).replace('T', ' ').slice(0, 19))}</td><td class="mono">${esc(e.tool)}</td><td>${esc(e.decision)}</td><td class="dim">${esc(e.reason || e.note || e.result || '')}</td></tr>`).join('')}</table>` : '<p class="dim" style="margin-top:10px">No activity yet.</p>';
+  });
+}
+async function removeModule(btn) {
+  if (!confirm(`Remove ${current.name}? Its key is deleted from this hub and no agent can use it. The activity log is kept.`)) return;
+  await busy(btn, async () => { try { await api('DELETE', `/api/modules/${current.id}`); closePanel(); loadList(); } catch (e) { setMsg('err', e.message); } });
+}
+
+loadList().then(() => { const id = location.hash.slice(1); if (id) openModule(id).catch(() => {}); }).catch(e => { document.getElementById('list').innerHTML = `<div class="msg err show">${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>

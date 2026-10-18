@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Maestro AI — Users</title>
+<style>
+  :root {
+    --bg-dark: #090B0F;
+    --bg-card: #14171F;
+    --bg-input: #040507;
+    --border: #222632;
+    --border-strong: #333846;
+    --text: #F3F4F6;
+    --text-dim: #9CA3AF;
+    --text-tertiary: #6B7280;
+    --accent: #3D7BFF;
+    --accent-hover: #5A93FF;
+    --error: #FF4C4C;
+    --warning: #F5A623;
+    --success: #00D395;
+    --radius: 4px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-dark); color: var(--text); font-size: 14px; }
+  .top { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--bg-card); position: sticky; top: 0; z-index: 2; }
+  .top a { color: var(--text-dim); text-decoration: none; font-size: 13px; }
+  .top a:hover { color: var(--text); }
+  .top h1 { font-size: 16px; font-weight: 600; }
+  .top .me { margin-left: auto; color: var(--text-dim); font-size: 12px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 18px; }
+  section { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+  section h2 .spacer { flex: 1; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { color: var(--text-dim); font-weight: 500; font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  tr.disabled td { color: var(--text-tertiary); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .dim { color: var(--text-dim); }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border-strong); color: var(--text-dim); }
+  .pill.admin { color: var(--accent); border-color: var(--accent); }
+  .pill.on { color: var(--success); border-color: var(--success); }
+  .pill.off { color: var(--text-tertiary); }
+  .pill.bad { color: var(--error); border-color: var(--error); }
+  .actions { display: flex; flex-wrap: wrap; gap: 4px; }
+  button { font: inherit; font-size: 12px; padding: 5px 9px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: var(--accent-hover); }
+  button.danger { color: var(--error); border-color: rgba(255, 76, 76, .5); }
+  button.danger:hover { background: rgba(255, 76, 76, .12); border-color: var(--error); }
+  input[type="text"], input[type="email"], input[type="password"], select {
+    font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); color: var(--text); outline: none; min-width: 0;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row input[type="text"], .row input[type="email"], .row input[type="password"] { flex: 1 1 160px; }
+  .msg { display: none; margin-top: 10px; padding: 8px 10px; border-radius: var(--radius); font-size: 13px; white-space: pre-wrap; line-height: 1.4; }
+  .msg.on { display: block; }
+  .msg.error { background: rgba(255, 76, 76, .1); border: 1px solid rgba(255, 76, 76, .35); color: var(--error); }
+  .msg.ok { background: rgba(0, 211, 149, .1); border: 1px solid rgba(0, 211, 149, .35); color: var(--success); }
+  .msg.info { background: rgba(61, 123, 255, .1); border: 1px solid rgba(61, 123, 255, .35); color: var(--text); }
+  .linkbox { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .linkbox input { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .inline-form { margin-top: 8px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: rgba(255, 255, 255, .02); }
+  .inline-form .row + .row { margin-top: 8px; }
+  .hint { color: var(--text-dim); font-size: 12px; margin-top: 6px; line-height: 1.4; }
+  .requests td.desc { white-space: pre-wrap; word-break: break-word; max-width: 360px; line-height: 1.4; }
+  .requests td.act { min-width: 220px; }
+  .requests .act .row { gap: 6px; }
+  .requests .act input[type="text"], .requests .act select { font-size: 12px; padding: 5px 7px; }
+  .requests .act input.note { flex: 1 1 100%; }
+  .audit { max-height: 420px; overflow: auto; }
+  .audit td { padding: 4px 8px; }
+  .empty { color: var(--text-tertiary); font-size: 13px; padding: 6px 0; }
+  @media (max-width: 700px) {
+    th.opt, td.opt { display: none; }
+    main { padding: 10px; }
+  }
+</style>
+</head>
+<body>
+<div class="top">
+  <a href="/" id="back">← Back to hub</a>
+  <h1>Users</h1>
+  <span class="me" id="me"></span>
+</div>
+<main>
+  <section id="users-section">
+    <h2>Users <span class="spacer"></span><button id="users-refresh">Refresh</button></h2>
+    <div class="hint">Everyone with the <b>admin</b> role manages this hub with you: settings, users, every agent, approvals. Add as many admins as you like (invite or Edit → admin); the hub never lets the last admin be demoted, disabled or deleted. Each admin needs two-factor. Every change is in the audit log below.</div>
+    <table>
+      <thead><tr>
+        <th>Name</th><th>Login</th><th>Role</th><th>2FA</th><th>Status</th><th class="opt">Last login</th><th>Agents</th><th class="opt">Shared</th><th>Actions</th>
+      </tr></thead>
+      <tbody id="users-rows"><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
+    </table>
+    <div id="users-msg" class="msg"></div>
+    <div id="users-panel"></div>
+  </section>
+
+  <section id="requests-section">
+    <h2>Requests <span class="dim" style="text-transform:none;letter-spacing:0;">agents and teams asked for by members' agents</span><span class="spacer"></span><button id="requests-refresh">Refresh</button></h2>
+    <table class="requests">
+      <thead><tr>
+        <th>When</th><th>Who</th><th>Kind</th><th>Name</th><th>Description</th><th>Actions</th>
+      </tr></thead>
+      <tbody id="requests-rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+    <div id="requests-msg" class="msg"></div>
+    <details id="requests-recent" style="margin-top:10px;">
+      <summary class="dim" style="cursor:pointer;font-size:13px;">Recent decisions <span id="requests-recent-count"></span></summary>
+      <table class="requests" style="margin-top:8px;">
+        <thead><tr><th>Status</th><th>When</th><th>Who</th><th>What</th><th>Created</th></tr></thead>
+        <tbody id="requests-recent-rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </details>
+  </section>
+
+  <section id="invite-section">
+    <h2>Invite a user</h2>
+    <form id="invite-form" class="row">
+      <input type="email" id="invite-login" placeholder="email (their login)" autocomplete="off" required>
+      <input type="text" id="invite-name" placeholder="name" autocomplete="off">
+      <select id="invite-role"><option value="member">member</option><option value="admin">admin</option></select>
+      <button class="primary" type="submit">Create invite link</button>
+    </form>
+    <div class="hint">No email is sent. Copy the link and pass it on yourself; it expires, and the invitee chooses their own password. Admin invitees are asked to set up two-factor sign-in right away.</div>
+    <div id="invite-readiness" class="hint" style="display:none;border-left:3px solid #d95926;padding-left:10px"></div>
+    <div id="invite-msg" class="msg"></div>
+    <div id="invite-result" style="display:none;">
+      <div class="linkbox"><input type="text" id="invite-link" readonly><button id="invite-copy">Copy</button></div>
+      <div class="hint" id="invite-expires"></div>
+    </div>
+
+    <h2 style="margin-top:16px;">Pending invites</h2>
+    <table>
+      <thead><tr><th>Login</th><th>Name</th><th>Role</th><th class="opt">Created</th><th>Expires</th><th></th></tr></thead>
+      <tbody id="invite-rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section id="create-section">
+    <h2>Create with password</h2>
+    <form id="create-form" class="row">
+      <input type="email" id="create-login" placeholder="email (their login)" autocomplete="off" required>
+      <input type="text" id="create-name" placeholder="name" autocomplete="off">
+      <select id="create-role"><option value="member">member</option><option value="admin">admin</option></select>
+      <input type="password" id="create-password" placeholder="password (12+ characters)" autocomplete="new-password" required>
+      <button class="primary" type="submit">Create user</button>
+    </form>
+    <div class="hint">For accounts you set up in person. Tell them the password out of band; they can change it from the hub's security dialog.</div>
+    <div id="create-msg" class="msg"></div>
+  </section>
+
+  <section id="tokens-section">
+    <h2>API tokens for scripts <span class="dim" style="text-transform:none;letter-spacing:0;">programs that call the hub without a person signed in</span><span class="spacer"></span><button id="tokens-refresh">Refresh</button></h2>
+    <table>
+      <thead><tr><th>Name</th><th>Scopes</th><th>Agents</th><th class="opt">Created</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
+      <tbody id="token-rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+    <h2 style="margin-top:16px;">Create a token</h2>
+    <form id="token-form">
+      <div class="row">
+        <input type="text" id="token-name" placeholder="name (e.g. trading-bots)" autocomplete="off" required maxlength="60">
+        <input type="text" id="token-agents" placeholder="agents it may talk to (comma separated)" autocomplete="off">
+        <input type="text" id="token-expires" placeholder="expires in days (blank = never)" autocomplete="off" inputmode="numeric" style="flex:0 1 220px">
+      </div>
+      <div class="row" id="token-scopes" style="margin-top:8px;"></div>
+      <div class="row" style="margin-top:8px;">
+        <label class="dim" style="font-size:12px;"><input type="checkbox" id="token-local" checked> This machine only (refused through a proxy such as Tailscale Serve)</label>
+        <span class="spacer"></span>
+        <button class="primary" type="submit">Create token</button>
+      </div>
+    </form>
+    <div class="hint">The token is shown once. A program sends it as <span class="mono">Authorization: Bearer hub_…</span>. It can call only the routes its scopes list, and chat / interject only for its agents. Revoke it here when the program is retired. The same from the terminal: <span class="mono">node scripts/hub-token.js</span>.</div>
+    <div id="token-msg" class="msg"></div>
+    <div id="token-result" style="display:none;">
+      <div class="linkbox"><input type="text" id="token-secret" readonly><button id="token-copy">Copy</button></div>
+      <div class="hint" id="token-made"></div>
+    </div>
+  </section>
+
+  <section id="audit-section">
+    <h2>Audit log <span class="dim" style="text-transform:none;letter-spacing:0;">last 200, newest first</span><span class="spacer"></span><button id="audit-refresh">Refresh</button></h2>
+    <div class="audit">
+      <table>
+        <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th><th class="opt">IP</th></tr></thead>
+        <tbody id="audit-rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div id="audit-msg" class="msg"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  let users = [];        // from GET /api/users
+  let me = null;         // signed-in admin (GET /api/auth/status)
+  const usersById = () => Object.fromEntries(users.map(u => [u.id, u]));
+
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function when(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso); if (isNaN(d)) return esc(iso);
+    return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  function ago(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso); if (isNaN(d)) return esc(iso);
+    const s = Math.max(0, Math.round((Date.now() - d) / 1000));
+    if (s < 60) return 'just now';
+    const m = Math.round(s / 60); if (m < 60) return `${m} min ago`;
+    const h = Math.round(m / 60); if (h < 48) return `${h} h ago`;
+    const days = Math.round(h / 24); if (days < 30) return `${days} d ago`;
+    return when(iso);
+  }
+  function setMsg(id, text, kind) {
+    const el = $(id); if (!el) return;
+    el.textContent = text || '';
+    el.className = 'msg' + (text ? ' on ' + (kind || 'error') : '');
+    if (text && kind === 'ok') setTimeout(() => { if (el.textContent === text) el.className = 'msg'; }, 5000);
+  }
+
+  // JSON fetch with the session cookie; a 401 means the session is gone.
+  async function api(url, opts = {}) {
+    const init = { credentials: 'include', ...opts };
+    if (opts.body !== undefined && typeof opts.body !== 'string') { init.body = JSON.stringify(opts.body); init.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }; }
+    let r;
+    try { r = await fetch(url, init); }
+    catch (e) { throw new Error('Could not reach the hub. Check your connection and try again.'); }
+    if (r.status === 401) { location.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`; throw new Error('Signed out'); }
+    if (r.status === 403) throw new Error('This page needs an admin account.');
+    let data = {};
+    try { data = await r.json(); } catch { data = {}; }
+    if (!r.ok || data.ok === false || data.success === false) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+
+  // Runs an action: disables the button while it runs, shows the server's error text inline, reloads the table after.
+  async function act(btn, msgId, fn, okText) {
+    if (btn) btn.disabled = true;
+    setMsg(msgId, '');
+    try {
+      const out = await fn();
+      if (okText) setMsg(msgId, typeof okText === 'function' ? okText(out) : okText, 'ok');
+      await loadUsers();
+      loadAudit();
+      return out;
+    } catch (e) {
+      setMsg(msgId, e.message, 'error');
+      return null;
+    } finally { if (btn) btn.disabled = false; }
+  }
+
+  // ── Users table ──
+  async function loadUsers() {
+    let data;
+    try { data = await api('/api/users'); }
+    catch (e) { $('users-rows').innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`; return; }
+    users = data.users || [];
+    renderUsers();
+    renderInvites(data.invites || []);
+  }
+
+  function renderUsers() {
+    const tb = $('users-rows');
+    if (!users.length) { tb.innerHTML = '<tr><td colspan="9" class="empty">No users yet.</td></tr>'; return; }
+    tb.innerHTML = users.map(u => {
+      const agents = u.agents || [], shared = u.shared || [];
+      const self = me && me.id === u.id;
+      return `<tr class="${u.disabled ? 'disabled' : ''}" data-id="${esc(u.id)}">
+        <td>${esc(u.name)}${self ? ' <span class="dim">(you)</span>' : ''}</td>
+        <td class="mono">${esc(u.login)}</td>
+        <td><span class="pill ${u.role === 'admin' ? 'admin' : ''}">${esc(u.role)}</span></td>
+        <td><span class="pill ${u.totpEnabled ? 'on' : 'off'}">${u.totpEnabled ? 'on' : 'off'}</span></td>
+        <td><span class="pill ${u.disabled ? 'bad' : 'on'}">${u.disabled ? 'disabled' : 'active'}</span></td>
+        <td class="opt dim">${when(u.lastLoginAt)}</td>
+        <td title="${esc(agents.join(', ') || 'owns no agents')}">${agents.length}</td>
+        <td class="opt" title="${esc(shared.join(', ') || 'nothing shared')}">${shared.length}</td>
+        <td><div class="actions">
+          <button data-act="edit">Edit</button>
+          <button data-act="toggle" ${self ? 'disabled title="You cannot disable yourself"' : ''}>${u.disabled ? 'Enable' : 'Disable'}</button>
+          <button data-act="password">Set password</button>
+          <button data-act="totp" ${u.totpEnabled ? '' : 'disabled title="2FA is not enabled"'}>Reset 2FA</button>
+          <button data-act="team">Create team</button>
+          ${u.role === 'member' ? '<button data-act="grants" title="What this member\'s agents may do beyond their own folders">Agent permissions</button>' : ''}
+          <button data-act="delete" class="danger" ${self ? 'disabled title="You cannot delete yourself"' : ''}>Delete</button>
+        </div></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // One inline panel at a time under the table (edit / password / team / delete confirmations).
+  function openPanel(html) { const p = $('users-panel'); p.innerHTML = `<div class="inline-form">${html}</div>`; const f = p.querySelector('input,select'); if (f) f.focus(); return p; }
+  function closePanel() { $('users-panel').innerHTML = ''; }
+
+  $('users-rows').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act]'); if (!btn) return;
+    const id = btn.closest('tr').dataset.id; const u = usersById()[id]; if (!u) return;
+    const act_ = btn.dataset.act;
+    if (act_ === 'edit') {
+      const p = openPanel(`<div class="row"><b>Edit ${esc(u.name)}</b></div>
+        <div class="row"><input type="text" id="p-name" value="${esc(u.name)}" placeholder="name">
+        <select id="p-role"><option value="member">member</option><option value="admin">admin</option></select>
+        <button class="primary" id="p-save">Save</button><button id="p-cancel">Cancel</button></div>`);
+      p.querySelector('#p-role').value = u.role;
+      p.querySelector('#p-cancel').onclick = closePanel;
+      p.querySelector('#p-save').onclick = async (ev) => {
+        const patch = { name: p.querySelector('#p-name').value.trim(), role: p.querySelector('#p-role').value };
+        const out = await act(ev.target, 'users-msg', () => api(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch }), `Saved ${patch.name || u.name}`);
+        if (out) closePanel();
+      };
+    } else if (act_ === 'grants') {
+      // Member grants (lib/tool-policy): one level above the hub default (Settings page), below per-agent overrides
+      // (agent settings page). Changing the hub, destroying things and moving money are never grantable.
+      const g = u.grants || {}; const pol = g.policy || {};
+      const CLASSES = [['web', 'Web search and fetch'], ['read_outside', 'Read files outside their own folders'], ['write_outside', 'Write outside their own folders'], ['send', 'Send anything off this machine (email, messages, uploads)']];
+      const sel = (k) => `<select data-grant="${k}"><option value="">hub default</option>${['allow', 'ask', 'deny'].map(v => `<option value="${v}"${pol[k] === v ? ' selected' : ''}>${v}</option>`).join('')}</select>`;
+      const p = openPanel(`<div class="row"><b>Agent permissions for ${esc(u.name)}</b></div>
+        <div class="hint">Applies to every agent ${esc(u.name)} owns, on top of the hub default (Settings → Member agents). <b>ask</b> puts an approval card on an admin's screen. Changing the hub, destructive actions and money are never allowed for member agents.</div>
+        ${CLASSES.map(([k, l]) => `<div class="row"><span style="flex:0 0 330px">${l}</span>${sel(k)}</div>`).join('')}
+        <div class="row"><span style="flex:0 0 330px">May also consult (agent names, comma-separated)</span><input type="text" id="p-consult" value="${esc((g.consult || []).join(', '))}" placeholder="e.g. maestro" style="flex:1"></div>
+        <div class="hint">Their agents can always consult each other. Names here are outside agents they may consult as well, for example maestro to ask for a new specialist.</div>
+        <div class="row"><button class="primary" id="p-save">Save permissions</button><button id="p-cancel">Cancel</button></div>`);
+      p.querySelector('#p-cancel').onclick = closePanel;
+      p.querySelector('#p-save').onclick = async (ev) => {
+        const policy = {};
+        for (const el of p.querySelectorAll('select[data-grant]')) if (el.value) policy[el.dataset.grant] = el.value;
+        const consult = p.querySelector('#p-consult').value.split(',').map(x => x.trim()).filter(Boolean);
+        const out = await act(ev.target, 'users-msg', () => api(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: { grants: { policy, consult } } }), `Saved agent permissions for ${u.name}`);
+        if (out) closePanel();
+      };
+    } else if (act_ === 'toggle') {
+      const disabled = !u.disabled;
+      await act(btn, 'users-msg', () => api(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: { disabled } }), `${u.name} ${disabled ? 'disabled: their sessions end and they cannot sign in' : 'enabled'}`);
+    } else if (act_ === 'password') {
+      const p = openPanel(`<div class="row"><b>New password for ${esc(u.name)}</b></div>
+        <div class="row"><input type="password" id="p-pw" placeholder="at least 12 characters" autocomplete="new-password">
+        <input type="password" id="p-pw2" placeholder="again" autocomplete="new-password">
+        <button class="primary" id="p-save">Set password</button><button id="p-cancel">Cancel</button></div>
+        <div class="hint">Their other sessions are signed out. Tell them the new password out of band.</div>`);
+      p.querySelector('#p-cancel').onclick = closePanel;
+      p.querySelector('#p-save').onclick = async (ev) => {
+        const pw = p.querySelector('#p-pw').value, pw2 = p.querySelector('#p-pw2').value;
+        if (pw !== pw2) { setMsg('users-msg', 'The two passwords do not match.', 'error'); return; }
+        const out = await act(ev.target, 'users-msg', () => api(`/api/users/${encodeURIComponent(id)}/password`, { method: 'POST', body: { password: pw } }), `Password set for ${u.name}`);
+        if (out) closePanel();
+      };
+    } else if (act_ === 'totp') {
+      const p = openPanel(`<div class="row"><b>Reset two-factor for ${esc(u.name)}?</b></div>
+        <div class="hint">Their authenticator and recovery codes stop working. They sign in with the password alone until they enrol again${u.role === 'admin' ? ' (admins are asked to enrol at their next sign-in)' : ''}.</div>
+        <div class="row" style="margin-top:8px;"><button class="danger" id="p-confirm">Reset 2FA</button><button id="p-cancel">Cancel</button></div>`);
+      p.querySelector('#p-cancel').onclick = closePanel;
+      p.querySelector('#p-confirm').onclick = async (ev) => {
+        const out = await act(ev.target, 'users-msg', () => api(`/api/users/${encodeURIComponent(id)}/totp/reset`, { method: 'POST', body: {} }), `Two-factor reset for ${u.name}`);
+        if (out) closePanel();
+      };
+    } else if (act_ === 'team') {
+      const p = openPanel(`<div class="row"><b>Create a team for ${esc(u.name)}</b></div>
+        <div class="row"><select id="p-template"><option value="medical">medical (GP and specialists)</option><option value="legal">legal (Counsel and specialists)</option></select>
+        <input type="text" id="p-prefix" placeholder="prefix (optional, e.g. jane)" autocomplete="off">
+        <button class="primary" id="p-create">Create team</button><button id="p-cancel">Cancel</button></div>
+        <div class="hint">Copies the template agents under the prefix and makes ${esc(u.name)} their owner. The prefix defaults to one derived from their name.</div>`);
+      p.querySelector('#p-cancel').onclick = closePanel;
+      p.querySelector('#p-create').onclick = async (ev) => {
+        const body = { template: p.querySelector('#p-template').value };
+        const prefix = p.querySelector('#p-prefix').value.trim(); if (prefix) body.prefix = prefix;
+        const out = await act(ev.target, 'users-msg', () => api(`/api/users/${encodeURIComponent(id)}/team`, { method: 'POST', body }),
+          (r) => `Team created for ${u.name}${r.head ? ` (head: ${r.head})` : ''}: ${(r.agents || []).join(', ')}`);
+        if (out) closePanel();
+      };
+    } else if (act_ === 'delete') {
+      const n = (u.agents || []).length;
+      const p = openPanel(`<div class="row"><b>Delete ${esc(u.name)} (${esc(u.login)})?</b></div>
+        <div class="hint">Their sessions end and the account is removed; past audit rows keep their user id. ${n ? `The ${n} agent${n === 1 ? '' : 's'} they own (${esc((u.agents || []).join(', '))}) become infrastructure agents: admin-only, nothing is deleted.` : 'They own no agents.'}</div>
+        <div class="row" style="margin-top:8px;"><button class="danger" id="p-confirm">Delete user</button><button id="p-cancel">Cancel</button></div>`);
+      p.querySelector('#p-cancel').onclick = closePanel;
+      p.querySelector('#p-confirm').onclick = async (ev) => {
+        const out = await act(ev.target, 'users-msg', () => api(`/api/users/${encodeURIComponent(id)}`, { method: 'DELETE' }), `Deleted ${u.name}`);
+        if (out) closePanel();
+      };
+    }
+  });
+  $('users-refresh').addEventListener('click', () => loadUsers());
+
+  // ── Agent requests (filed by members' agents; admins approve or decline) ──
+  function whoFor(r) {
+    const owner = r.ownerId ? usersById()[r.ownerId] : null;
+    return `<span class="mono">${esc(r.byAgent || '—')}</span><div class="dim" title="${esc(r.ownerId || '')}">${owner ? esc(owner.name) : esc(r.ownerId || 'no owner')}</div>`;
+  }
+  function createdText(c) {
+    if (!c) return '—';
+    const names = (c.agents || []).join(', ');
+    if (c.kind === 'team') return `team${c.head ? `, head ${c.head}` : ''}${names ? `: ${names}` : ''}`;
+    return names || c.head || 'agent';
+  }
+  async function loadRequests() {
+    const tb = $('requests-rows'), rb = $('requests-recent-rows');
+    setMsg('requests-msg', '');
+    let data;
+    try { data = await api('/api/agent-requests'); }
+    catch (e) { setMsg('requests-msg', e.message, 'error'); return; }
+    const all = (data.requests || []).slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    const pending = all.filter(r => r.status === 'pending');
+    const decided = all.filter(r => r.status !== 'pending')
+      .sort((a, b) => String(b.resolvedAt || b.createdAt || '').localeCompare(String(a.resolvedAt || a.createdAt || ''))).slice(0, 20);
+    if (!pending.length) tb.innerHTML = '<tr><td colspan="6" class="empty">No requests waiting.</td></tr>';
+    else tb.innerHTML = pending.map(r => {
+      const team = r.kind === 'team';
+      const tpl = r.template === 'legal' ? 'legal' : 'medical';
+      const picker = team
+        ? `<select class="template" title="team template"><option value="medical" ${tpl === 'medical' ? 'selected' : ''}>medical</option><option value="legal" ${tpl === 'legal' ? 'selected' : ''}>legal</option></select>`
+        : `<input type="text" class="name" value="${esc(r.name || '')}" placeholder="short name" title="agent name (optional override)" autocomplete="off" style="flex:1 1 110px;">`;
+      return `<tr data-id="${esc(r.id)}" data-kind="${esc(r.kind)}">
+        <td class="dim" style="white-space:nowrap;" title="${esc(when(r.createdAt))}">${ago(r.createdAt)}</td>
+        <td>${whoFor(r)}</td>
+        <td><span class="pill">${esc(r.kind)}</span></td>
+        <td class="mono">${esc(r.name || '—')}${team && r.template ? `<div class="dim">${esc(r.template)}</div>` : ''}</td>
+        <td class="desc">${esc(r.description || '')}</td>
+        <td class="act"><div class="row">${picker}<button class="primary" data-act="approve">Approve</button><button class="danger" data-act="decline">Decline</button></div>
+          <div class="row" style="margin-top:6px;"><input type="text" class="note" placeholder="note to the requester, optional" autocomplete="off"></div></td>
+      </tr>`;
+    }).join('');
+    $('requests-recent-count').textContent = decided.length ? `(${decided.length})` : '';
+    if (!decided.length) rb.innerHTML = '<tr><td colspan="5" class="empty">No decisions yet.</td></tr>';
+    else rb.innerHTML = decided.map(r => {
+      const by = r.resolvedBy ? usersById()[r.resolvedBy] : null;
+      return `<tr>
+        <td><span class="pill ${r.status === 'approved' ? 'on' : 'bad'}">${esc(r.status)}</span></td>
+        <td class="dim" style="white-space:nowrap;" title="${esc(when(r.resolvedAt || r.createdAt))}${by ? ` by ${esc(by.name)}` : ''}">${ago(r.resolvedAt || r.createdAt)}</td>
+        <td>${whoFor(r)}</td>
+        <td><span class="pill">${esc(r.kind)}</span> <span class="mono">${esc(r.name || '')}</span>${r.note ? `<div class="dim" style="white-space:pre-wrap;">${esc(r.note)}</div>` : ''}</td>
+        <td class="mono dim" style="white-space:pre-wrap;">${esc(createdText(r.created))}</td>
+      </tr>`;
+    }).join('');
+  }
+  $('requests-rows').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act]'); if (!btn) return;
+    const tr = btn.closest('tr'); const id = tr.dataset.id, kind = tr.dataset.kind, action = btn.dataset.act;
+    const body = { action };
+    const note = tr.querySelector('input.note')?.value.trim(); if (note) body.note = note;
+    if (action === 'approve') {
+      if (kind === 'team') { const t = tr.querySelector('select.template'); if (t) body.template = t.value; }
+      else { const n = tr.querySelector('input.name')?.value.trim(); if (n) body.name = n; }
+    }
+    const other = tr.querySelector(`button[data-act="${action === 'approve' ? 'decline' : 'approve'}"]`); if (other) other.disabled = true;
+    try {
+      await act(btn, 'requests-msg', () => api(`/api/agent-requests/${encodeURIComponent(id)}`, { method: 'POST', body }),
+        (r) => action === 'approve' ? `Approved: created ${createdText(r.created)}` : 'Declined');
+    } finally { if (other) other.disabled = false; }
+    loadRequests();
+  });
+  $('requests-refresh').addEventListener('click', loadRequests);
+
+  // ── Invites ──
+  function renderInvites(invites) {
+    const tb = $('invite-rows');
+    if (!invites.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">No pending invites.</td></tr>'; return; }
+    tb.innerHTML = invites.map(i => `<tr data-login="${esc(i.login)}">
+      <td class="mono">${esc(i.login)}</td><td>${esc(i.name)}</td><td><span class="pill ${i.role === 'admin' ? 'admin' : ''}">${esc(i.role)}</span></td>
+      <td class="opt dim">${when(i.createdAt)}</td><td class="dim">${when(i.expiresAt)}</td>
+      <td><button data-act="revoke" class="danger">Revoke</button></td></tr>`).join('');
+  }
+  $('invite-rows').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act="revoke"]'); if (!btn) return;
+    const login = btn.closest('tr').dataset.login;
+    await act(btn, 'invite-msg', () => api('/api/users/invite', { method: 'DELETE', body: { login } }), `Invite for ${login} revoked`);
+  });
+  // Before an invite: a member's agents are sandboxed in Docker; say now if this machine cannot do that yet.
+  (async () => {
+    const el = $('invite-readiness'); if (!el) return;
+    try {
+      const r = await fetch('/api/readiness', { credentials: 'include' }); if (!r.ok) return;
+      const d = await r.json();
+      const hits = (d.items || []).filter(i => ['docker', 'sandbox-image', 'tools-default'].includes(i.id) && i.level !== 'ok');
+      if (!hits.length) return;
+      el.innerHTML = '<b>Before you invite a member:</b> ' + hits.map(i => `${i.title}. ${i.fix || ''}`.replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))).join(' ') + ' <a href="/">Open Settings → Setup checklist</a>.';
+      el.style.display = '';
+    } catch {}
+  })();
+  $('invite-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type=submit]');
+    $('invite-result').style.display = 'none';
+    const body = { invite: true, login: $('invite-login').value.trim(), name: $('invite-name').value.trim(), role: $('invite-role').value };
+    const out = await act(btn, 'invite-msg', () => api('/api/users', { method: 'POST', body }));
+    if (!out) return;
+    $('invite-link').value = out.link || '';
+    $('invite-expires').textContent = `Invite for ${out.login || body.login}${out.expiresAt ? `, expires ${when(out.expiresAt)}` : ''}. Send this link to them.`;
+    $('invite-result').style.display = 'block';
+    $('invite-login').value = ''; $('invite-name').value = '';
+    $('invite-link').focus(); $('invite-link').select();
+  });
+  $('invite-copy').addEventListener('click', async () => {
+    const text = $('invite-link').value; if (!text) return;
+    let ok = false;
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); ok = true; } } catch {}
+    if (!ok) { const inp = $('invite-link'); inp.focus(); inp.select(); try { ok = document.execCommand('copy'); } catch {} }
+    const btn = $('invite-copy'); btn.textContent = ok ? 'Copied' : 'Select and copy'; setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+  });
+
+  // ── Create with password ──
+  $('create-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type=submit]');
+    const body = { login: $('create-login').value.trim(), name: $('create-name').value.trim(), role: $('create-role').value, password: $('create-password').value };
+    const out = await act(btn, 'create-msg', () => api('/api/users', { method: 'POST', body }), (r) => `Created ${r.user ? r.user.name + ' (' + r.user.login + ')' : body.login}`);
+    if (out) { $('create-login').value = ''; $('create-name').value = ''; $('create-password').value = ''; }
+  });
+
+  // ── API tokens for scripts ──
+  let tokenScopes = {};
+  function renderScopeBoxes() {
+    $('token-scopes').innerHTML = Object.entries(tokenScopes).map(([k, v]) => `<label class="dim" style="font-size:12px;" title="${esc(v)}"><input type="checkbox" name="scope" value="${esc(k)}"> ${esc(k)}</label>`).join('');
+  }
+  async function loadTokens() {
+    const tb = $('token-rows');
+    let data;
+    try { data = await api('/api/tokens'); }
+    catch (e) { setMsg('token-msg', e.message, 'error'); return; }
+    if (data.scopes && !Object.keys(tokenScopes).length) { tokenScopes = data.scopes; renderScopeBoxes(); }
+    const rows = (data.tokens || []).filter(t => !t.revokedAt);
+    if (!rows.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">No tokens. A bot, dashboard or other program needs one to call the hub.</td></tr>'; return; }
+    tb.innerHTML = rows.map(t => `<tr data-id="${esc(t.id)}">
+      <td><b>${esc(t.name)}</b><div class="mono dim">${esc(t.id)}${t.loopbackOnly ? ' · this machine only' : ' · any host'}</div></td>
+      <td class="mono">${esc((t.scopes || []).join(', '))}</td><td class="mono">${t.agents ? esc(t.agents.join(', ')) : '—'}</td>
+      <td class="opt dim">${when(t.createdAt)}</td><td class="dim">${t.lastUsed ? ago(t.lastUsed) : 'never'}</td>
+      <td class="dim">${t.expiresAt ? (Date.parse(t.expiresAt) < Date.now() ? 'expired ' : '') + when(t.expiresAt) : 'never'}</td>
+      <td><button class="danger" data-act="revoke">Revoke</button></td></tr>`).join('');
+  }
+  $('token-rows').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act=revoke]'); if (!btn) return;
+    const tr = btn.closest('tr'); const id = tr && tr.dataset.id; if (!id) return;
+    const name = tr.querySelector('b') ? tr.querySelector('b').textContent : id;
+    if (!confirm(`Revoke the token "${name}"? Programs using it stop working at once.`)) return;
+    btn.disabled = true;
+    try { await api(`/api/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' }); setMsg('token-msg', `Revoked ${name}.`, 'ok'); }
+    catch (err) { setMsg('token-msg', err.message, 'error'); btn.disabled = false; }
+    await loadTokens(); loadAudit();
+  });
+  $('token-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type=submit]');
+    $('token-result').style.display = 'none';
+    const scopes = [...document.querySelectorAll('#token-scopes input[name=scope]:checked')].map(i => i.value);
+    const body = { name: $('token-name').value.trim(), scopes, agents: $('token-agents').value.trim() || null, loopbackOnly: $('token-local').checked, expiresDays: $('token-expires').value.trim() || null };
+    btn.disabled = true; setMsg('token-msg', '');
+    let out = null;
+    try { out = await api('/api/tokens', { method: 'POST', body }); }
+    catch (err) { setMsg('token-msg', err.message, 'error'); }
+    btn.disabled = false;
+    if (!out) return;
+    $('token-secret').value = out.token || '';
+    const t = out.record || {};
+    $('token-made').textContent = `Token "${t.name}" (${t.id}): scopes ${(t.scopes || []).join(', ')}${t.agents ? `; agents ${t.agents.join(', ')}` : ''}; ${t.loopbackOnly ? 'this machine only' : 'any host'}; expires ${t.expiresAt ? when(t.expiresAt) : 'never'}. Copy it now: it is not shown again.`;
+    $('token-result').style.display = 'block';
+    $('token-name').value = ''; $('token-agents').value = ''; $('token-expires').value = '';
+    document.querySelectorAll('#token-scopes input[name=scope]').forEach(i => { i.checked = false; });
+    $('token-secret').focus(); $('token-secret').select();
+    await loadTokens(); loadAudit();
+  });
+  $('token-copy').addEventListener('click', async () => {
+    const text = $('token-secret').value; if (!text) return;
+    let ok = false;
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); ok = true; } } catch {}
+    if (!ok) { const inp = $('token-secret'); inp.focus(); inp.select(); try { ok = document.execCommand('copy'); } catch {} }
+    const btn = $('token-copy'); btn.textContent = ok ? 'Copied' : 'Select and copy'; setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+  });
+  $('tokens-refresh').addEventListener('click', loadTokens);
+
+  // ── Audit ──
+  async function loadAudit() {
+    const tb = $('audit-rows');
+    setMsg('audit-msg', '');
+    let data;
+    try { data = await api('/api/users/audit'); }
+    catch (e) { setMsg('audit-msg', e.message, 'error'); return; }
+    const rows = (data.audit || []).slice().sort((a, b) => String(b.ts).localeCompare(String(a.ts))).slice(0, 200);
+    if (!rows.length) { tb.innerHTML = '<tr><td colspan="5" class="empty">Nothing recorded yet.</td></tr>'; return; }
+    const byId = usersById();
+    tb.innerHTML = rows.map(r => {
+      const u = r.user_id ? byId[r.user_id] : null;
+      return `<tr><td class="dim" style="white-space:nowrap;">${when(r.ts)}</td>
+        <td class="mono" title="${esc(r.user_id || '')}">${u ? esc(u.name) : esc(r.user_id || '—')}</td>
+        <td>${esc(r.action)}</td><td>${esc(r.detail)}</td><td class="opt mono dim">${esc(r.ip || '')}</td></tr>`;
+    }).join('');
+  }
+  $('audit-refresh').addEventListener('click', loadAudit);
+
+  // ── Init ──
+  (async () => {
+    try {
+      const st = await api('/api/auth/status');
+      me = st.user || null;
+      if (me) $('me').textContent = `${me.name} · ${me.role}`;
+    } catch {}
+    await loadUsers();
+    await loadRequests();
+    await loadTokens();
+    await loadAudit();
+  })();
+})();
+</script>
+</body>
+</html>

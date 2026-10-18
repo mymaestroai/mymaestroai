@@ -1,0 +1,87 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets
+.env
+.env.local
+.env.*
+
+# Personal data - NEVER commit.
+# Everything the hub writes under data/ is runtime state (accounts, sessions, ledgers, transcripts, keys, backups):
+# ignore all of it and allow only the shipped example. The list below stays for older checkouts and as documentation.
+/data/*
+!/data/agents.example.json
+/agent-groups.json
+/agent-voices.json
+/agents_new.json
+data/conversations/
+data/memory.db*
+data/agent-sessions.json
+data/discovered-models.json
+data/tool-learning.db*
+data/query-cache.db*
+data/task-logs/
+data/skill-tokens.json
+data/sdk-sessions.json
+data/pending-interjections.json*
+data/consult-queue.json*
+data/model-telemetry.db*
+data/tiger-team-checkpoints/
+data/tiger-team-artifacts/
+data/tiger-team-events/
+data/auth-http.db*
+data/uploads/
+data/slack-*.json
+data/slack-*.db*
+data/org-*.yaml
+data/org-*.db*
+data/panther-dashboard.db*
+data/task-queue.db*
+data/hardware-state.json
+data/model-sizes.json
+data/settings.json
+data/tiger-teams/
+data/agents.json
+data/alert-secret
+data/jobs/
+
+# Agent workspaces - contain personal memories. Anchored to the repo root on purpose:
+# an unanchored `workspaces/` also ignored templates/workspaces/, so new agent templates
+# were silently skipped by `git add`.
+/workspaces/
+
+# Logs and runtime
+logs/
+*.log
+*.pid
+.server.pid
+
+# Build artifacts
+dist/
+
+# macOS
+.DS_Store
+._*
+
+# Backups and archives
+*.tar.gz
+*.zip
+backups/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Trading wallet: encrypted keys, state and audit trail never belong in git
+data/wallet-keystore.json*
+data/wallet-state.json
+data/wallet-audit.jsonl
+data/wallet-*
+
+# Messaging channels (Telegram etc): tokens, config and audit trail never belong in git
+data/comms/
+
+# Machine-specific scripts stay on the machine they were written for
+scripts/local/

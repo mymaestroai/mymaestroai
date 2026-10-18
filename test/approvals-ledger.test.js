@@ -1,0 +1,75 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { createApprovals, hashArgs } = require('../lib/approvals');
+const { createLedger, estimateCost, priceFor } = require('../lib/ledger');
+const { createAllowances } = require('../lib/tool-policy');
+
+test('approvals: request -> owner allow with remember=1h records an allowance; events published', async () => {
+  const events = [];
+  const al = createAllowances();
+  const ap = createApprovals({ onEvent: (e) => events.push(e), allowances: al, log: () => {}, timeoutMs: 60000 });
+  const { id, promise } = ap.request({ agent: 'gp', tool: 'comms_send', input: { to: 'owner', text: 'x' }, cls: 'send', summary: 'telegram to owner', allowKey: 'gp|send|telegram:owner' });
+  assert.strictEqual(ap.list().length, 1);
+  assert.strictEqual(ap.pendingFor('gp')[0].id, id);
+  assert.strictEqual(events[0].type, 'approval_request');
+  assert.strictEqual(events[0].argsHash, hashArgs('comms_send', { to: 'owner', text: 'x' }));
+  const r = ap.resolve(id, 'allow', { remember: '1h' });
+  assert.deepStrictEqual(r, { ok: true, decision: 'allow', by: 'owner', remember: '1h' });
+  assert.deepStrictEqual(await promise, { decision: 'allow', by: 'owner', remember: '1h' });
+  assert.ok(al.has('gp|send|telegram:owner'));
+  assert.strictEqual(ap.list().length, 0);
+  assert.strictEqual(events[1].type, 'approval_resolved');
+  assert.strictEqual(ap.recent()[0].decision, 'allow');
+  assert.strictEqual(ap.resolve(id, 'allow').ok, false, 'answering twice is refused');
+  assert.strictEqual(ap.resolve('nope', 'bogus').ok, false);
+});
+
+test('approvals: timeout denies; cancelFor denies everything pending for an agent', async () => {
+  const fn = createApprovals({ log: () => {}, timeoutMs: () => 90000 });
+  assert.strictEqual(fn.timeoutMs, 90000, 'window may be a function read per request');
+  assert.strictEqual(createApprovals({ log: () => {}, timeoutMs: () => 0 }).timeoutMs, 3600000, 'zero or bad values fall back to an hour');
+  const ap = createApprovals({ log: () => {}, timeoutMs: 20 });
+  const { promise } = ap.request({ agent: 'gp', tool: 'Bash', input: { command: 'x' }, cls: 'send', summary: 's' });
+  assert.deepStrictEqual(await promise, { decision: 'deny', by: 'timeout', remember: null });
+  const ap2 = createApprovals({ log: () => {}, timeoutMs: 60000 });
+  const a = ap2.request({ agent: 'gp', tool: 'Bash', input: {}, cls: 'send', summary: 'a' });
+  const b = ap2.request({ agent: 'counsel', tool: 'Bash', input: {}, cls: 'send', summary: 'b' });
+  assert.strictEqual(ap2.cancelFor('gp'), 1);
+  assert.deepStrictEqual(await a.promise, { decision: 'deny', by: 'cancelled', remember: null });
+  assert.strictEqual(ap2.list().length, 1);
+  ap2.resolve(b.id, 'deny');
+  assert.deepStrictEqual(await b.promise, { decision: 'deny', by: 'owner', remember: null });
+});
+
+test('ledger: records turns, totals today per agent, estimates cost from the price table, caps off by default', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-'));
+  let capsCfg = {};
+  const l = createLedger({ file: path.join(dir, 'ledger.db'), getCaps: () => capsCfg });
+  assert.deepStrictEqual(l.record({ agent: 'gp', model: 'claude-fable-5-1', inputTokens: 1000, outputTokens: 500, costUsd: 0.05, durationMs: 1200, tools: 3 }), { cost: 0.05, source: 'reported' });
+  const est = l.record({ agent: 'gemini', model: 'google/gemini-pro-latest', inputTokens: 1_000_000, outputTokens: 0, durationMs: 10 });
+  assert.strictEqual(est.source, 'estimated');
+  assert.strictEqual(est.cost, 1.25);
+  assert.deepStrictEqual(l.record({ agent: 'qwen36', model: 'lmstudio/qwen/qwen3.6-27b', inputTokens: 10, outputTokens: 10 }), { cost: 0, source: 'estimated' });
+  assert.strictEqual(l.record({ agent: 'x', model: 'mystery/model', inputTokens: 10, outputTokens: 10 }).source, 'none');
+  const t = l.today();
+  assert.strictEqual(t.turns, 4);
+  assert.ok(Math.abs(t.total - 1.30) < 1e-9);
+  assert.strictEqual(t.agents[0].agent, 'gemini');
+  assert.deepStrictEqual(l.caps(), { perAgentDailyUsd: null, hubDailyUsd: null });
+  assert.strictEqual(l.overCap('gemini').capped, false, 'no caps configured = unlimited');
+  capsCfg = { perAgentDailyUsd: 1, hubDailyUsd: 100 };
+  assert.strictEqual(l.overCap('gemini').capped, true);
+  assert.match(l.overCap('gemini').reason, /gemini is over its daily cap/);
+  assert.strictEqual(l.overCap('gp').capped, false);
+  capsCfg = { hubDailyUsd: 1 };
+  assert.match(l.overCap('gp').reason, /hub is over its daily cap/);
+  assert.strictEqual(l.days().length, 1);
+  assert.strictEqual(priceFor('claude-sdk/claude-haiku-4-5-20251001')[0], 1);
+  assert.strictEqual(estimateCost('openai/gpt-5.4-mini', 1_000_000, 1_000_000), 2.0);
+  assert.strictEqual(estimateCost('nope/nope', 1, 1), null);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

@@ -1,0 +1,10 @@
+My Maestro AI
+Copyright 2026 Jeff Lunglhofer
+
+Licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE).
+Commercial licenses are available from the copyright holder.
+
+Third-party components bundled under vendor/ keep their own licenses:
+  Chart.js 4.5.1 (MIT), DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0), mermaid 12.1.0 (MIT),
+  marked 18.1.1 (MIT, vendor/marked.umd.js, license in vendor/LICENSE-marked.txt), qrcode (MIT).
+Dependencies installed under node_modules keep their own licenses.

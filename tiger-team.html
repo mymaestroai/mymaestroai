@@ -1,0 +1,1829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <title>Tiger Team // War Room</title>
+  <style>
+    :root {
+      --bg-dark: #090B0F;
+      --bg-card: #14171F;
+      --bg-input: #040507;
+      --accent: #3D7BFF;
+      --accent-hover: #5A93FF;
+      --text: #F3F4F6;
+      --text-dim: #9CA3AF;
+      --text-tertiary: #6B7280;
+      --success: #00D395;
+      --warning: #F5A623;
+      --error: #FF4C4C;
+      --border: #222632;
+      --border-strong: #333846;
+      --radius: 6px;
+      --tiger: #f97316;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 13px;
+      background: var(--bg-dark);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Agent Color Palette (10 distinct colors) ── */
+    .agent-color-0  { --agent-color: #f97316; --agent-bg: rgba(249,115,22,0.08); --agent-border: rgba(249,115,22,0.25); }
+    .agent-color-1  { --agent-color: #3b82f6; --agent-bg: rgba(59,130,246,0.08); --agent-border: rgba(59,130,246,0.25); }
+    .agent-color-2  { --agent-color: #a855f7; --agent-bg: rgba(168,85,247,0.08); --agent-border: rgba(168,85,247,0.25); }
+    .agent-color-3  { --agent-color: #14b8a6; --agent-bg: rgba(20,184,166,0.08); --agent-border: rgba(20,184,166,0.25); }
+    .agent-color-4  { --agent-color: #ec4899; --agent-bg: rgba(236,72,153,0.08); --agent-border: rgba(236,72,153,0.25); }
+    .agent-color-5  { --agent-color: #eab308; --agent-bg: rgba(234,179,8,0.08); --agent-border: rgba(234,179,8,0.25); }
+    .agent-color-6  { --agent-color: #06b6d4; --agent-bg: rgba(6,182,212,0.08); --agent-border: rgba(6,182,212,0.25); }
+    .agent-color-7  { --agent-color: #84cc16; --agent-bg: rgba(132,204,22,0.08); --agent-border: rgba(132,204,22,0.25); }
+    .agent-color-8  { --agent-color: #f43f5e; --agent-bg: rgba(244,63,94,0.08); --agent-border: rgba(244,63,94,0.25); }
+    .agent-color-9  { --agent-color: #8b5cf6; --agent-bg: rgba(139,92,246,0.08); --agent-border: rgba(139,92,246,0.25); }
+
+    /* ── Header ── */
+    .tt-header {
+      background: linear-gradient(180deg, #111318 0%, #090B0F 100%);
+      border-bottom: 1px solid var(--tiger);
+      box-shadow: 0 1px 0 rgba(249,115,22,0.25), 0 4px 12px rgba(0,0,0,0.4);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .tt-header .tiger-icon { display: flex; align-items: center; filter: drop-shadow(0 0 5px rgba(249,115,22,0.6)); }
+    .tt-header .objective {
+      flex: 1;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .tt-header .objective.expanded {
+      white-space: pre-wrap;
+      overflow: visible;
+      text-overflow: unset;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .tt-header .objective .obj-label {
+      color: var(--tiger);
+      font-weight: 700;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      margin-right: 8px;
+      font-family: 'Geist Mono', monospace;
+    }
+    .tt-controls { display: flex; align-items: center; gap: 8px; }
+    .tt-btn {
+      padding: 5px 14px;
+      border-radius: 2px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-dark);
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-family: 'Geist Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .tt-btn:hover { border-color: var(--text-dim); color: var(--text); }
+    .tt-btn.stop { border-color: rgba(255,76,76,0.4); color: var(--error); }
+    .tt-btn.stop:hover { background: rgba(255,76,76,0.1); border-color: var(--error); }
+    .tt-btn.save { border-color: rgba(76,175,80,0.4); color: #4caf50; }
+    .tt-btn.save:hover { background: rgba(76,175,80,0.1); border-color: #4caf50; }
+    .tt-btn.load { border-color: rgba(100,181,246,0.4); color: #64b5f6; }
+    .tt-btn.load:hover { background: rgba(100,181,246,0.1); border-color: #64b5f6; }
+    .tt-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .status-badge {
+      padding: 3px 10px;
+      border-radius: 2px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      font-family: 'Geist Mono', monospace;
+    }
+    .status-badge.running { background: rgba(249,115,22,0.2); color: var(--tiger); border: 1px solid rgba(249,115,22,0.3); }
+    .status-badge.running::before { content: '● '; font-size: 10px; color: var(--tiger); animation: blink 1s step-end infinite; }
+    .status-badge.complete { background: rgba(0,211,149,0.2); color: var(--success); border: 1px solid rgba(0,211,149,0.3); }
+    .status-badge.error { background: rgba(255,76,76,0.2); color: var(--error); border: 1px solid rgba(255,76,76,0.3); }
+    .round-counter { font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--tiger); background: rgba(249,115,22,0.08); padding: 4px 10px; border-radius: 2px; border: 1px solid rgba(249,115,22,0.3); letter-spacing: 0.12em; text-transform: uppercase; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ── Layout ── */
+    .tt-body { flex: 1; display: flex; overflow: hidden; }
+
+    /* ── Roster Panel ── */
+    .roster-panel {
+      width: 200px;
+      min-width: 160px;
+      background: linear-gradient(180deg, #0d1117 0%, #14171F 100%);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow-y: auto;
+    }
+    .roster-section { padding: 12px; }
+    .roster-section h4 { font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--tiger); margin-bottom: 12px; font-family: 'Geist Mono', monospace; font-weight: 700; }
+    .roster-agent {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      transition: all 0.2s;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      position: relative;
+    }
+    .roster-agent:hover { background: rgba(255,255,255,0.06); border-color: var(--border-strong); }
+    .roster-agent.active { border-color: var(--agent-color, var(--tiger)); background: var(--agent-bg, rgba(249,115,22,0.08)); box-shadow: 0 0 12px rgba(249,115,22,0.15); }
+    .roster-agent .agent-icon { font-size: 22px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border-radius: 6px; flex-shrink: 0; }
+    .roster-agent .agent-name { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.2; }
+    .roster-agent .agent-role { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+    .roster-agent .color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .roster-agent .activity-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); flex-shrink: 0; }
+    .roster-agent .activity-dot.working { background: var(--tiger); animation: pulse 1s infinite; }
+    .roster-agent .remove-btn { display: none; background: none; border: none; color: var(--text-dim); font-size: 16px; cursor: pointer; padding: 2px 6px; line-height: 1; opacity: 0.6; position: absolute; top: 6px; right: 6px; }
+    .roster-agent .remove-btn:hover { color: #ef4444; opacity: 1; }
+    .roster-agent:hover .remove-btn { display: inline; }
+    .add-participant-btn { display: flex; align-items: center; gap: 8px; padding: 10px 14px; margin-top: 10px; background: none; border: 1px dashed var(--border); border-radius: 6px; color: var(--text-dim); font-size: 13px; cursor: pointer; width: 100%; font-weight: 500; }
+    .add-participant-btn:hover { border-color: var(--tiger); color: var(--tiger); background: rgba(249,115,22,0.05); }
+    .add-dropdown { position: absolute; left: 10px; right: 10px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; max-height: 240px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 16px rgba(0,0,0,0.6); }
+    .add-dropdown-item { padding: 10px 14px; font-size: 14px; cursor: pointer; color: var(--text); display: flex; align-items: center; gap: 10px; }
+    .add-dropdown-item:hover { background: rgba(249,115,22,0.15); }
+    .roster-agent .activity-dot.done { background: var(--success); }
+
+    /* ── Timeline ── */
+    .timeline-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+    .timeline-panel::after {
+      content: '';
+      position: absolute; inset: 0; pointer-events: none; z-index: 5;
+      background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.015) 3px, rgba(0,0,0,0.015) 6px);
+    }
+    .timeline-scroll { flex: 1; overflow-y: auto; padding: 14px 20px; }
+    .timeline-scroll::-webkit-scrollbar { width: 6px; }
+    .timeline-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+
+    /* ── Agent Response Blocks ── */
+    .agent-block {
+      margin-bottom: 16px;
+      border-radius: 2px;
+      overflow: hidden;
+      background: var(--agent-bg);
+      border: 1px solid var(--agent-border);
+      border-left: 3px solid var(--agent-color, var(--tiger));
+    }
+    .agent-block-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--agent-color);
+      background: var(--agent-bg);
+      border-bottom: 1px solid var(--agent-border);
+    }
+    .agent-block-header .block-icon { font-size: 16px; }
+    .agent-block-header .block-agent { font-size: 13px; font-weight: 700; }
+    .agent-block-header .block-role {
+      font-size: 10px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      opacity: 0.7;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: rgba(255,255,255,0.05);
+    }
+    .agent-block-header .block-time { margin-left: auto; font-size: 10px; color: var(--text-tertiary); font-family: 'Geist Mono', monospace; }
+
+    .agent-block-body { padding: 12px 16px; font-size: 13px; line-height: 1.7; color: var(--text-dim); }
+    .agent-block.user-inject { --agent-color: #e2e8f0; --agent-bg: rgba(226,232,240,0.05); --agent-border: rgba(226,232,240,0.2); }
+
+    /* ── Tool Calls (matching main UI style) ── */
+    .tool-calls-container {
+      margin: 8px 0 12px 0;
+      padding: 8px 0;
+      border-top: 1px solid rgba(100,100,120,0.15);
+      border-bottom: 1px solid rgba(100,100,120,0.15);
+    }
+    .tool-call-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 12px;
+      font-size: 0.75rem;
+      font-family: 'Geist Mono', monospace;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+    .tool-call-line + .tool-call-line { margin-top: 2px; }
+    .tool-call-line.running { color: var(--text-dim); }
+    .tool-call-line.done { opacity: 0.7; }
+    .tool-call-line.error { opacity: 0.9; }
+    .tool-call-spinner {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(100,100,120,0.25);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: tool-spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes tool-spin { to { transform: rotate(360deg); } }
+    .tool-call-icon { flex-shrink: 0; font-size: 0.75rem; width: 12px; text-align: center; }
+    .tool-call-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .tool-call-name { font-weight: 600; color: var(--accent); white-space: nowrap; }
+    .tool-call-input { color: var(--text-dim); opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 500px; }
+    .tool-call-status { font-size: 0.65rem; font-weight: 500; white-space: nowrap; }
+    .tool-call-status.done { color: #4ade80; }
+    .tool-call-status.error { color: #f87171; }
+    .tool-call-result {
+      margin-top: 4px;
+      margin-left: 20px;
+      padding: 6px 10px;
+      background: rgba(100,100,120,0.08);
+      border-radius: 4px;
+      border-left: 2px solid rgba(100,100,120,0.2);
+      font-size: 0.68rem;
+      font-family: 'Geist Mono', monospace;
+      color: var(--text-dim);
+      max-height: 150px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: none;
+    }
+    .tool-call-result.visible { display: block; }
+    .tool-call-toggle { font-size: 0.63rem; color: var(--accent); cursor: pointer; opacity: 0.6; white-space: nowrap; }
+    .tool-call-toggle:hover { opacity: 1; }
+
+    /* ── Dividers ── */
+    .tl-divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 18px 0;
+      color: var(--text-tertiary);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .tl-divider::before, .tl-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .tl-divider.round { color: var(--tiger); }
+    .tl-divider.round::before, .tl-divider.round::after { background: rgba(249,115,22,0.3); }
+    .tl-divider.complete { color: var(--success); }
+    .tl-divider.complete::before, .tl-divider.complete::after { background: rgba(0,211,149,0.3); }
+
+    .system-msg {
+      padding: 4px 12px;
+      font-size: 11px;
+      color: var(--text-tertiary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .system-msg .sys-time { font-family: 'Geist Mono', monospace; font-size: 10px; margin-left: auto; }
+
+    /* ── Markdown ── */
+    .agent-block-body h1, .agent-block-body h2, .agent-block-body h3, .agent-block-body h4 { margin: 10px 0 4px; font-weight: 700; color: var(--text); }
+    .agent-block-body h1 { font-size: 16px; }
+    .agent-block-body h2 { font-size: 15px; }
+    .agent-block-body h3 { font-size: 14px; }
+    .agent-block-body h4 { font-size: 13px; }
+    .agent-block-body p { margin: 3px 0; }
+    .agent-block-body ul, .agent-block-body ol { margin: 3px 0; padding-left: 18px; }
+    .agent-block-body li { margin: 2px 0; }
+    .agent-block-body code { font-family: 'Geist Mono', monospace; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+    .agent-block-body pre { background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 4px; overflow-x: auto; margin: 6px 0; }
+    .agent-block-body pre code { background: transparent; padding: 0; }
+    .agent-block-body table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+    .agent-block-body th, .agent-block-body td { padding: 4px 8px; border: 1px solid var(--border); text-align: left; }
+    .agent-block-body th { background: rgba(255,255,255,0.05); font-weight: 600; }
+    .agent-block-body a { color: var(--accent); text-decoration: none; }
+    .agent-block-body a:hover { text-decoration: underline; }
+    .agent-block-body strong { font-weight: 600; color: var(--text); }
+    .agent-block-body em { font-style: italic; }
+    .agent-block-body blockquote { border-left: 3px solid var(--border-strong); padding-left: 10px; margin: 4px 0; color: var(--text-dim); }
+
+    /* ── Input Bar ── */
+    .input-bar {
+      flex-shrink: 0;
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .input-bar .input-label { font-size: 11px; color: var(--text-dim); font-weight: 600; white-space: nowrap; }
+    .input-bar input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .input-bar input:focus { border-color: var(--accent); }
+    .input-bar input::placeholder { color: var(--text-tertiary); }
+    .input-bar input:disabled { opacity: 0.4; }
+    .input-bar .send-btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .input-bar .send-btn:hover { background: var(--accent-hover); }
+    .input-bar .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="tt-header">
+    <span class="tiger-icon"><img src="/images/tiger-logo.svg" width="32" height="32" alt="Tiger Team"></span>
+    <div class="objective" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse">
+      <span class="obj-label">Mission</span>
+      <span id="objective-text">Loading...</span>
+    </div>
+    <div class="tt-controls">
+      <span class="round-counter" id="round-counter">-</span>
+      <button class="tt-btn" id="btn-resume" onclick="resumeInterruptedTeam()" style="display:none; border-color: rgba(245,158,11,0.5); color: #f59e0b;" title="Resume this interrupted/stopped/blocked investigation">▶ Resume Interrupted</button>
+      <button class="tt-btn stop" id="btn-stop" onclick="stopSession()" disabled>⏹ Stop</button>
+      <button class="tt-btn save" id="btn-save" onclick="saveSession()" disabled>💾 Save</button>
+      <button class="tt-btn" onclick="reconcileUnknownOutcomes()" title="Record verified outcomes for uncertain operations">Resolve Unknowns</button>
+      <button class="tt-btn" onclick="downloadFullRecord()" title="Download prompts, stream events, full tool results and raw artifacts">Full Record</button>
+      <button class="tt-btn load" id="btn-load" onclick="toggleSavedPanel()">📂 Load</button>
+      <span class="status-badge running" id="status-badge">Starting</span>
+    </div>
+  </div>
+  <div id="tt-error-banner" style="display:none; background: rgba(255,76,76,0.12); border-bottom: 1px solid rgba(255,76,76,0.4); color: var(--error); padding: 6px 20px; font-size: 12px; font-weight:600;"></div>
+  <div id="tt-retry-banner" style="display:none; background: rgba(245,158,11,0.12); border-bottom: 1px solid rgba(245,158,11,0.4); color: #f59e0b; padding: 6px 20px; font-size: 12px; font-weight:600;"></div>
+
+  <!-- Body -->
+  <div class="tt-body">
+    <div class="roster-panel" id="roster-panel">
+      <div class="roster-section" id="coord-section">
+        <h4>👑 Coordinator</h4>
+        <div id="coordinator-roster"></div>
+      </div>
+      <div class="roster-section" id="part-section" style="position:relative;">
+        <h4>👥 Participants</h4>
+        <div id="participants-roster"></div>
+        <button class="add-participant-btn" id="btn-add-participant" onclick="showAddDropdown()">+ Add Agent</button>
+        <div class="add-dropdown" id="add-dropdown" style="display:none;"></div>
+      </div>
+      <div class="roster-section" id="challenger-section" style="display:none;">
+        <h4>⚔️ Challenger</h4>
+        <div id="challenger-roster"></div>
+      </div>
+    </div>
+    <div class="timeline-panel">
+      <div class="timeline-scroll" id="timeline"></div>
+    </div>
+  </div>
+
+  <!-- Input Bar -->
+  <div class="input-bar" id="input-bar">
+    <span class="input-label">💬 Inject:</span>
+    <select id="interject-target" title="Who receives it now" style="padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:inherit;font:inherit;margin-right:6px">
+      <option value="team">Team: coordinator + everyone working now</option>
+      <option value="coordinator">Coordinator only</option>
+    </select>
+    <input type="text" id="user-input" placeholder="Interject: tell the team something now..." disabled>
+    <button class="send-btn" id="btn-send" onclick="injectMessage()" disabled>Interject</button>
+  </div>
+
+  <!-- Saved Sessions Panel (overlay) -->
+  <div id="saved-panel" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.8); z-index:9999; overflow-y:auto; padding:40px;">
+    <div style="max-width:700px; margin:0 auto; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:24px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2 style="margin:0; color:var(--text); font-size:18px;">📂 Saved Tiger Teams</h2>
+        <button onclick="toggleSavedPanel()" style="background:none; border:none; color:var(--text-dim); font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+      <div id="saved-list" style="display:flex; flex-direction:column; gap:8px;">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Vendored, pinned (see NOTICE): marked 18.1.1 (MIT), DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0). No CDN. -->
+  <script src="/vendor/marked.umd.js"></script>
+  <script src="/vendor/purify.min.js"></script>
+  <script>
+    // Every agent- or server-supplied string that goes into markup passes through this.
+    function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+    // ── Parse URL params ──
+    const params = new URLSearchParams(window.location.search);
+    const launchId = params.get('launch');
+    let coordinator = params.get('coordinator');
+    let participants = (params.get('participants') || '').split(',').filter(Boolean);
+    let objective = params.get('objective') || 'No objective specified';
+    let maxRounds = parseInt(params.get('maxRounds') || '5', 10);
+    let context = params.get('context') || '';
+    let mode = params.get('mode') || 'led';
+    let challenger = params.get('challenger') || '';
+    let challengerDirective = params.get('challengerDirective') || '';
+    let directives = (() => { try { return JSON.parse(params.get('directives') || '{}'); } catch { return {}; } })();
+    let alertId = params.get('alert_id') || '';
+    let autoLaunched = params.get('autoLaunched') === '1';
+
+    // If launched via staged params, fetch them from server
+    let stagedReady = !launchId; // true if no staged fetch needed
+    async function fetchStagedParams() {
+      if (!launchId) return;
+      try {
+        const res = await fetch(`/api/tiger-team/staged/${launchId}`);
+        if (!res.ok) throw new Error(`Staged params not found (${res.status})`);
+        const data = await res.json();
+        coordinator = data.coordinator || coordinator;
+        participants = data.participants || participants;
+        objective = data.objective || objective;
+        maxRounds = data.max_rounds || maxRounds;
+        context = data.context || context;
+        mode = data.mode || mode;
+        challenger = data.challenger || challenger;
+        challengerDirective = data.challengerDirective || challengerDirective;
+        directives = data.directives || directives;
+        alertId = data.alert_id || alertId;
+        autoLaunched = data.autoLaunched || autoLaunched;
+        stagedReady = true;
+      } catch (e) {
+        document.body.innerHTML = `<div style="color: #e94560; padding: 40px; font-size: 16px;">Error loading Tiger Team: ${e.message}<br><br>The launch may have expired (5 min TTL). Try launching again.</div>`;
+      }
+    }
+
+    // ── State ──
+    let agents = {};
+    let currentBlock = null;
+    let currentAgent = null;
+    const skipToolIds = new Set();
+    let startTime = Date.now();
+    let toolMap = new Map();
+    let suppressToolNames = new Set(['consult_agent']);
+    let sessionId = null;
+    let tigerTeamId = null;
+    let saveKey = null; // Stable key for auto-save - set ONCE, never changes across continuations
+    let isRunning = false;
+    let autoSaveInterval = null;
+    let lastAutoSave = 0;
+    let continuationInFlight = false; // Guards against double continue/resume/approve calls
+    let backendRecoveryAvailable = true; // Flipped false if /status 404s in a way indicating old backend
+
+    // ── Agent color assignment ──
+    const agentColorMap = new Map();
+    let colorIndex = 0;
+    function getAgentColorClass(slug) {
+      if (!agentColorMap.has(slug)) {
+        agentColorMap.set(slug, colorIndex % 10);
+        colorIndex++;
+      }
+      return 'agent-color-' + agentColorMap.get(slug);
+    }
+
+    // ── Marked config ──
+    if (typeof marked !== 'undefined') {
+      marked.setOptions({ breaks: true, gfm: true });
+    }
+
+    const purifyReady = () => typeof DOMPurify !== 'undefined' && typeof DOMPurify.sanitize === 'function';
+    function md(text) {
+      if (!text) return '';
+      // Fail closed: without the sanitizer, agent output is shown as escaped text, never parsed as HTML.
+      if (!purifyReady()) return esc(text).replace(/\n/g, '<br>');
+      const html = typeof marked !== 'undefined' ? marked.parse(text) : esc(text).replace(/\n/g, '<br>');
+      return DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: ['b','i','em','strong','code','pre','br','p','ul','ol','li','h1','h2','h3','h4','h5','h6','a','blockquote','hr','span','div','table','thead','tbody','tr','th','td','img','details','summary','del','s','sub','sup'],
+        ALLOWED_ATTR: ['href','target','rel','src','alt','class','id'],
+        ALLOW_DATA_ATTR: false,
+        FORBID_ATTR: ['onerror','onload','onclick','onmouseover','onfocus','onblur','style']
+      });
+    }
+
+    function elapsed() {
+      const s = Math.floor((Date.now() - startTime) / 1000);
+      return s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`;
+    }
+
+    let userScrolledUp = false;
+    function scrollBottom() {
+      if (userScrolledUp) return;
+      const tl = document.getElementById('timeline');
+      tl.scrollTop = tl.scrollHeight;
+    }
+    // Detect user scrolling up; re-enable auto-scroll when near bottom
+    document.addEventListener('DOMContentLoaded', () => {
+      const tl = document.getElementById('timeline');
+      if (tl) {
+        tl.addEventListener('scroll', () => {
+          const atBottom = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 80;
+          userScrolledUp = !atBottom;
+        });
+      }
+    });
+
+    // ── Initialize ──
+    const loadParam = params.get('load');
+    const loadOnly = loadParam === 'true';
+    const loadSaveId = (loadParam && loadParam !== 'true') ? loadParam : null;
+
+    // Probe the recovery backend once at load - if /status 404s (old server
+    // that hasn't been restarted with this feature yet), disable all Resume
+    // UI rather than offering a button that will always fail.
+    async function checkBackendRecovery() {
+      try {
+        const resp = await fetch('/api/tiger-team/status?id=__probe__');
+        // 404 for a real-but-missing id is expected and FINE (endpoint exists).
+        // Only a routing-level 404 body without our error shape indicates the
+        // endpoint itself doesn't exist yet - but since our own handler always
+        // returns the same jsonResponse shape for "not found", any JSON 400/404
+        // response here proves the route exists.  A non-JSON response or a
+        // generic "Not found" (the server's catch-all 404) means it's missing.
+        if (resp.status === 404) {
+          const data = await resp.json().catch(() => null);
+          if (!data || data.error === 'Not found') {
+            backendRecoveryAvailable = false;
+          }
+        }
+      } catch {
+        backendRecoveryAvailable = false;
+      }
+      if (!backendRecoveryAvailable) {
+        document.getElementById('btn-resume').style.display = 'none';
+        console.warn('[tiger-team] Backend recovery endpoints unavailable - Resume disabled until server restart.');
+      }
+    }
+
+    async function init() {
+      // Fetch staged params if launched via launchId
+      if (launchId && !loadSaveId) await fetchStagedParams();
+      if (!stagedReady && !loadSaveId) return;
+
+      // Awaited (cheap single GET) so loadSaved()'s Resume-button visibility
+      // check below sees the correct backendRecoveryAvailable value.
+      await checkBackendRecovery();
+
+      document.getElementById('objective-text').textContent = loadOnly ? 'Select a saved session to load' : objective;
+      try {
+        const res = await fetch('/api/agents');
+        const data = await res.json();
+        const list = data.agents || data;
+        for (const a of list) agents[a.name] = a;
+      } catch (e) { console.error('Agent fetch failed:', e); }
+
+      if (loadSaveId) {
+        // Direct load of a specific save by ID
+        await loadSaved(loadSaveId);
+        return;
+      }
+      if (loadOnly) {
+        // Open saved panel immediately
+        toggleSavedPanel();
+        return;
+      }
+
+      // Pre-assign colors: coordinator first, then participants
+      getAgentColorClass(coordinator);
+      participants.forEach(p => getAgentColorClass(p));
+
+      buildRoster();
+      startTigerTeam();
+    }
+
+    function buildRoster() {
+      const coordEl = document.getElementById('coordinator-roster');
+      const partEl = document.getElementById('participants-roster');
+      const challEl = document.getElementById('challenger-roster');
+      const challSection = document.getElementById('challenger-section');
+
+      if (mode === 'roundtable') {
+        document.getElementById('coord-section').style.display = 'none';
+        document.querySelector('#part-section h4').textContent = '👥 Participants';
+        const all = [coordinator, ...participants];
+        partEl.innerHTML = all.map(slug => agentRosterHTML(slug, 'Participant')).join('');
+        challSection.style.display = 'none';
+      } else {
+        coordEl.innerHTML = agentRosterHTML(coordinator, 'Coordinator', true);
+        partEl.innerHTML = participants.map(slug => agentRosterHTML(slug, 'Participant')).join('');
+        if (challenger && agents[challenger]) {
+          challSection.style.display = 'block';
+          challEl.innerHTML = agentRosterHTML(challenger, 'Challenger', true);
+        } else {
+          challSection.style.display = 'none';
+        }
+      }
+    }
+
+    function agentRosterHTML(slug, role, isCoord = false) {
+      const a = agents[slug] || { display: slug, icon: '🤖' };
+      const colorClass = getAgentColorClass(slug);
+      const removeBtn = isCoord ? '' : `<button class="remove-btn" onclick="removeParticipant('${esc(slug)}')" title="Remove">×</button>`;
+      return `
+        <div class="roster-agent ${colorClass}" id="roster-${esc(slug)}">
+          <span class="agent-icon">${esc(a.icon || '🤖')}</span>
+          <div style="flex:1">
+            <div class="agent-name">${esc(a.display || slug)}</div>
+            <div class="agent-role">${role}</div>
+          </div>
+          ${removeBtn}
+          <span class="activity-dot" id="dot-${slug}"></span>
+        </div>`;
+    }
+
+    function setDot(slug, status) {
+      const dot = document.getElementById('dot-' + slug);
+      if (dot) dot.className = 'activity-dot ' + status;
+      const row = document.getElementById('roster-' + slug);
+      if (row) row.classList.toggle('active', status === 'working');
+    }
+
+    async function removeParticipant(slug) {
+      participants = participants.filter(p => p !== slug);
+      buildRoster();
+      await syncParticipants();
+    }
+
+    async function addParticipant(slug) {
+      if (participants.includes(slug) || slug === coordinator) return;
+      participants.push(slug);
+      getAgentColorClass(slug);
+      buildRoster();
+      hideAddDropdown();
+      await syncParticipants();
+    }
+
+    function showAddDropdown() {
+      const dd = document.getElementById('add-dropdown');
+      const available = Object.keys(agents).filter(s => s !== coordinator && !participants.includes(s));
+      if (!available.length) { dd.innerHTML = '<div class="add-dropdown-item" style="color:var(--text-dim)">No agents available</div>'; }
+      else { dd.innerHTML = available.map(s => { const a = agents[s]; return `<div class="add-dropdown-item" onclick="addParticipant('${esc(s)}')">${esc(a.icon || '🤖')} ${esc(a.display || s)}</div>`; }).join(''); }
+      dd.style.display = 'block';
+      document.addEventListener('click', hideAddOnOutsideClick, { once: true });
+    }
+
+    function hideAddDropdown() { document.getElementById('add-dropdown').style.display = 'none'; }
+    function hideAddOnOutsideClick(e) { if (!e.target.closest('#add-dropdown') && !e.target.closest('#btn-add-participant')) hideAddDropdown(); }
+
+    async function syncParticipants() {
+      try {
+        await fetch('/api/tiger-team/update-participants', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ participants, session_id: sessionId })
+        });
+      } catch (e) { console.error('Failed to sync participants:', e); }
+    }
+
+    function setStatus(cls, text) {
+      const b = document.getElementById('status-badge');
+      b.className = 'status-badge ' + cls;
+      b.textContent = text;
+    }
+
+    function setRunning(running) {
+      isRunning = running;
+      document.getElementById('btn-stop').disabled = !running;
+      if (running) {
+        document.getElementById('btn-send').onclick = injectMessage;
+        document.getElementById('user-input').disabled = false;
+        document.getElementById('btn-send').disabled = false;
+        document.getElementById('user-input').placeholder = 'Interject: tell the team something now...';
+        document.querySelector('.input-label').textContent = '💬 Interject:';
+        document.getElementById('interject-target').style.display = '';
+      }
+    }
+
+    // ── Stop ──
+    async function stopSession() {
+      if (!sessionId) return;
+      try {
+        await fetch('/api/tiger-team/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId }) });
+      } catch (e) { console.error('Stop failed:', e); }
+    }
+
+    // ── Inject ──
+    let lastInterjectBlock = null;
+    async function injectMessage() {
+      const input = document.getElementById('user-input');
+      const msg = input.value.trim();
+      if (!msg || !sessionId) return;
+      input.value = '';
+
+      closeBlock();
+      const tl = document.getElementById('timeline');
+      const block = document.createElement('div');
+      block.className = 'agent-block user-inject';
+      const target = (document.getElementById('interject-target') || {}).value || 'team';
+      block.innerHTML = `
+        <div class="agent-block-header">
+          <span class="block-icon">👤</span>
+          <span class="block-agent">You</span>
+          <span class="block-role">Interjection</span>
+          <span class="block-time">${elapsed()}</span>
+        </div>
+        <div class="agent-block-body"><div class="text-content">${md(msg)}</div><div class="interject-status" style="font-size:11px;color:var(--text-dim);margin-top:4px">sending…</div></div>`;
+      tl.appendChild(block);
+      scrollBottom();
+      lastInterjectBlock = block;
+
+      try {
+        const ir = await fetch('/api/tiger-team/inject', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId, message: msg, target }) });
+        const ij = await ir.json().catch(() => ({}));
+        const st = block.querySelector('.interject-status');
+        if (!ir.ok) { st.textContent = '✗ ' + (ij.error || `HTTP ${ir.status}`); st.style.color = '#ef4444'; }
+        else st.textContent = (ij.delivered || []).map(d => `${d.agent} (${d.how === 'live' ? 'now' : 'at its next step'})`).join(', ') ? 'sent to ' + (ij.delivered || []).map(d => `${d.agent} (${d.how === 'live' ? 'now' : 'at its next step'})`).join(', ') + ' · waiting for pickup…' : 'sent';
+      } catch (e) { addSystemMsg('Inject failed: ' + e.message); }
+    }
+
+    // ── Additional Rounds Approval ──
+    function showRoundsApproval(justification, proposedRounds) {
+      // Disable the main inject/continue input globally while an approval
+      // decision is pending - prevents the input box AND the approve button
+      // from both being simultaneously actionable (double-trigger source).
+      document.getElementById('user-input').disabled = true;
+      document.getElementById('btn-send').disabled = true;
+
+      const tl = document.getElementById('timeline');
+      const block = document.createElement('div');
+      block.className = 'agent-block user-inject';
+      block.style.borderColor = '#f59e0b';
+      block.style.background = 'rgba(245,158,11,0.05)';
+      block.innerHTML = `
+        <div class="agent-block-header">
+          <span class="block-icon">⚠️</span>
+          <span class="block-agent" style="color:#f59e0b">Additional Rounds Requested</span>
+          <span class="block-time">${elapsed()}</span>
+        </div>
+        <div class="agent-block-body">
+          <div class="text-content">
+            <p><strong>The coordinator is requesting ${esc(proposedRounds)} additional round${proposedRounds > 1 ? 's' : ''}.</strong></p>
+            <p><strong>Justification:</strong> ${esc(justification)}</p>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:10px">
+            <button class="approve-rounds-btn" style="padding:8px 16px;background:#22c55e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">✓ Approve</button>
+            <button onclick="denyAdditionalRounds()" style="padding:8px 16px;background:#ef4444;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">✗ Deny</button>
+          </div>
+        </div>`;
+      // The justification is agent text: it is never placed inside an inline handler.
+      const approveBtn = block.querySelector('.approve-rounds-btn');
+      if (approveBtn) approveBtn.addEventListener('click', () => approveAdditionalRounds(String(justification || '').slice(0, 200)));
+      tl.appendChild(block);
+      scrollBottom();
+    }
+
+    async function approveAdditionalRounds(justification) {
+      if (continuationInFlight) return; // Guard against double-click firing two /continue POSTs
+      continuationInFlight = true;
+
+      // Remove the approval buttons
+      const btns = event.target.closest('div');
+      btns.innerHTML = '<span style="color:#22c55e;font-weight:600">✓ Approved - Continuing...</span>';
+
+      addDivider('Reconvening Team (Additional Rounds)', 'round');
+      setStatus('running', 'Continuing...');
+      document.title = '⏳ Tiger Team - Additional Rounds';
+
+      try {
+        const resp = await fetch('/api/tiger-team/continue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: tigerTeamId, message: 'Approved. Continue your investigation. ' + justification }),
+        });
+
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          if (resp.status === 409) {
+            addSystemMsg('⚠ ' + (errData.error || 'A continuation is already in progress for this session.'));
+          } else {
+            addSystemMsg('Continuation failed: ' + (errData.error || `HTTP ${resp.status}`));
+          }
+          setStatus('error', 'Error');
+          return;
+        }
+
+        isRunning = true;
+        document.getElementById('btn-stop').disabled = false;
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6).trim();
+            if (raw === '[DONE]') continue;
+            try { handleEvent(JSON.parse(raw)); } catch (e) { console.warn('Parse error:', e); }
+          }
+        }
+        if (isRunning) handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream ended without completion' } });
+      } catch (e) {
+        handleEvent({ gateway: { type: 'tt_interrupted', reason: e.message } });
+      } finally {
+        continuationInFlight = false;
+      }
+    }
+
+    function denyAdditionalRounds() {
+      const btns = event.target.closest('div');
+      btns.innerHTML = '<span style="color:#ef4444;font-weight:600">✗ Denied - Session ending as-is</span>';
+      setStatus('complete', 'Complete');
+      setRunning(false);
+      showContinueUI();
+    }
+
+    // ── Continue (after completion) ──
+    function showContinueUI() {
+      const input = document.getElementById('user-input');
+      const btn = document.getElementById('btn-send');
+      const label = document.querySelector('.input-label');
+      input.disabled = false;
+      input.placeholder = 'Ask a follow-up question or give a new directive to reconvene the team...';
+      input.value = '';
+      btn.disabled = false;
+      btn.onclick = continueSession;
+      label.textContent = '🔄 Continue:';
+    }
+
+    async function continueSession() {
+      if (continuationInFlight) return; // Guard against double-submit (Enter + click, or double-click)
+      const input = document.getElementById('user-input');
+      const msg = input.value.trim();
+      if (!msg || !tigerTeamId) return;
+      continuationInFlight = true;
+      input.value = '';
+      input.disabled = true;
+      document.getElementById('btn-send').disabled = true;
+
+      // Show user's continuation message
+      closeBlock();
+      const tl = document.getElementById('timeline');
+      const block = document.createElement('div');
+      block.className = 'agent-block user-inject';
+      block.innerHTML = `
+        <div class="agent-block-header">
+          <span class="block-icon">👤</span>
+          <span class="block-agent">You</span>
+          <span class="block-role">Continuation</span>
+          <span class="block-time">${elapsed()}</span>
+        </div>
+        <div class="agent-block-body"><div class="text-content">${md(msg)}</div></div>`;
+      tl.appendChild(block);
+      scrollBottom();
+
+      addDivider('Reconvening Team...', 'round');
+      setStatus('running', 'Continuing...');
+      document.title = '⏳ Tiger Team - Continuing...';
+
+      // Start the continuation SSE stream
+      try {
+        const resp = await fetch('/api/tiger-team/continue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: tigerTeamId, message: msg }),
+        });
+
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          if (resp.status === 409) {
+            addSystemMsg('⚠ ' + (errData.error || 'A continuation is already in progress for this session.'));
+          } else {
+            addSystemMsg('Continue failed: ' + (errData.error || `HTTP ${resp.status}`));
+          }
+          setStatus('error', 'Error');
+          input.disabled = false;
+          document.getElementById('btn-send').disabled = false;
+          return;
+        }
+
+        isRunning = true;
+        document.getElementById('btn-stop').disabled = false;
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6).trim();
+            if (raw === '[DONE]') continue;
+            try {
+              const evt = JSON.parse(raw);
+              handleEvent(evt);
+            } catch {}
+          }
+        }
+        if (isRunning) handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream ended without completion' } });
+      } catch (e) {
+        handleEvent({ gateway: { type: 'tt_interrupted', reason: e.message } });
+      } finally {
+        continuationInFlight = false;
+      }
+    }
+
+    // ── Block Management ──
+    function openBlock(slug, role) {
+      closeBlock();
+      const tl = document.getElementById('timeline');
+      const a = agents[slug] || { display: slug, icon: '🤖' };
+      const colorClass = getAgentColorClass(slug);
+
+      const block = document.createElement('div');
+      block.className = `agent-block ${colorClass}`;
+      block.innerHTML = `
+        <div class="agent-block-header">
+          <span class="block-icon">${a.icon || '🤖'}</span>
+          <span class="block-agent">${a.display || slug}</span>
+          <span class="block-role">${role}</span>
+          <span class="block-time">${elapsed()}</span>
+        </div>
+        <div class="agent-block-body">
+          <div class="text-content"></div>
+          <div class="tool-calls-container" style="display:none"></div>
+        </div>`;
+      tl.appendChild(block);
+
+      setDot(slug, 'working');
+
+      currentBlock = {
+        element: block,
+        toolsEl: block.querySelector('.tool-calls-container'),
+        textEl: block.querySelector('.text-content'),
+        slug,
+        role,
+        rawText: '',
+        toolCount: 0,
+      };
+      currentAgent = slug;
+      scrollBottom();
+    }
+
+    function appendBlockText(text) {
+      if (!currentBlock) return;
+      currentBlock.rawText += text;
+      currentBlock.textEl.innerHTML = md(currentBlock.rawText);
+      scrollBottom();
+    }
+
+    function markUnfinishedTools() {
+      document.querySelectorAll('.tool-call-line.running').forEach(line => {
+        line.classList.remove('running');
+        const status = line.querySelector('.tool-call-status');
+        if (status) status.textContent = 'Interrupted / unknown';
+        const spinner = line.querySelector('.tool-call-spinner');
+        if (spinner) { spinner.className = 'tool-call-icon'; spinner.textContent = '?'; }
+      });
+    }
+
+    function closeBlock() {
+      if (currentBlock) {
+        currentBlock.textEl.innerHTML = md(currentBlock.rawText);
+        // Finalize any still-running tools in this block
+        currentBlock.element.querySelectorAll('.tool-call-line.running').forEach(line => {
+          line.className = 'tool-call-line done';
+          const spinner = line.querySelector('.tool-call-spinner');
+          if (spinner) { spinner.className = 'tool-call-icon'; spinner.textContent = '✓'; }
+          const status = line.querySelector('.tool-call-status');
+          if (status) { status.className = 'tool-call-status done'; status.textContent = 'Done'; }
+        });
+        setDot(currentBlock.slug, 'done');
+        currentBlock = null;
+      }
+    }
+
+    function addTool(name, callId, input) {
+      if (!currentBlock) return;
+      if (suppressToolNames.has(name)) return;
+
+      currentBlock.toolCount++;
+      currentBlock.toolsEl.style.display = 'block';
+
+      // Move tools container before text for proper ordering
+      const body = currentBlock.element.querySelector('.agent-block-body');
+      body.insertBefore(currentBlock.toolsEl, currentBlock.textEl);
+
+      const inputSummary = input ? (typeof input === 'string' ? input : JSON.stringify(input)).slice(0, 100) : '';
+
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = `
+        <div class="tool-call-line running" id="tool-${callId}">
+          <span class="tool-call-spinner"></span>
+          <div class="tool-call-info">
+            <span class="tool-call-name">${esc(name)}</span>
+            ${inputSummary ? `<span class="tool-call-input">${esc(inputSummary)}</span>` : ''}
+          </div>
+          <span class="tool-call-status"></span>
+          <span class="tool-call-toggle" data-call-id="${esc(callId)}">▶ output</span>
+        </div>
+        <div class="tool-call-result" id="tool-result-${esc(callId)}"></div>`;
+      currentBlock.toolsEl.appendChild(wrapper);
+      toolMap.set(callId, { wrapper, name });
+      scrollBottom();
+    }
+
+    function completeTool(callId, result) {
+      const entry = toolMap.get(callId);
+      if (!entry) return;
+      const line = document.getElementById('tool-' + callId);
+      if (line) {
+        line.className = 'tool-call-line done';
+        const spinner = line.querySelector('.tool-call-spinner');
+        if (spinner) { spinner.className = 'tool-call-icon'; spinner.textContent = '✓'; }
+        const status = line.querySelector('.tool-call-status');
+        if (status) { status.className = 'tool-call-status done'; status.textContent = 'Done'; }
+      }
+      const resultEl = document.getElementById('tool-result-' + callId);
+      if (resultEl && result) {
+        resultEl.textContent = result;
+      }
+      scrollBottom();
+    }
+
+    function toggleToolResult(callId) {
+      const el = document.getElementById('tool-result-' + callId);
+      if (el) el.classList.toggle('visible');
+    }
+    // One delegated listener for every "▶ output" toggle, live or re-inserted from a saved transcript
+    // (whose inline onclick handlers are stripped): the id comes from a data attribute, else the next sibling.
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest && e.target.closest('.tool-call-toggle');
+      if (!t) return;
+      const id = t.dataset.callId;
+      const line = t.closest('.tool-call-line');
+      const el = (id && document.getElementById('tool-result-' + id)) || (line && line.nextElementSibling && line.nextElementSibling.classList.contains('tool-call-result') ? line.nextElementSibling : null);
+      if (el) el.classList.toggle('visible');
+    });
+
+    function finalizeAllTools() {
+      // Force all still-running tools to show as done (handles missed tool_result events)
+      document.querySelectorAll('.tool-call-line.running').forEach(line => {
+        line.className = 'tool-call-line done';
+        const spinner = line.querySelector('.tool-call-spinner');
+        if (spinner) { spinner.className = 'tool-call-icon'; spinner.textContent = '✓'; }
+        const status = line.querySelector('.tool-call-status');
+        if (status) { status.className = 'tool-call-status done'; status.textContent = 'Done'; }
+      });
+    }
+
+    function addDivider(text, type) {
+      closeBlock();
+      const tl = document.getElementById('timeline');
+      const d = document.createElement('div');
+      d.className = 'tl-divider ' + (type || '');
+      d.textContent = text;
+      tl.appendChild(d);
+      scrollBottom();
+    }
+
+    function addSystemMsg(text) {
+      const tl = document.getElementById('timeline');
+      const m = document.createElement('div');
+      m.className = 'system-msg';
+      m.textContent = `⚙ ${text} (${elapsed()})`;
+      tl.appendChild(m);
+      scrollBottom();
+    }
+
+    // ── SSE Stream ──
+    function startTigerTeam() {
+      addDivider(mode === 'roundtable' ? 'Roundtable Starting' : 'Tiger Team Starting', 'round');
+      setStatus('running', 'Running');
+      setRunning(true);
+
+      const body = JSON.stringify({ coordinator, participants, objective, max_rounds: maxRounds, context, mode, challenger, challengerDirective, directives, alert_id: alertId || undefined, autoLaunched: autoLaunched || undefined });
+
+      fetch('/api/tiger-team/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
+      .then(response => {
+        if (!response.ok) {
+          return response.text().then(t => {
+            setStatus('error', 'Error');
+            setRunning(false);
+            addSystemMsg(`API Error ${response.status}: ${t}`);
+          });
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        function read() {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              if (isRunning) {
+                handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream ended without a completion event' } });
+              }
+              return;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              const raw = line.slice(6).trim();
+              if (raw === '[DONE]') continue;
+              try { handleEvent(JSON.parse(raw)); } catch (e) { console.warn('Parse error:', e, raw.slice(0, 200)); }
+            }
+            read();
+          }).catch(err => {
+            handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream error: ' + err.message } });
+          });
+        }
+        read();
+      }).catch(err => {
+        handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Connection failed: ' + err.message } });
+      });
+    }
+
+    // ── Event Handler ──
+    function handleEvent(evt) {
+      const gw = evt.gateway;
+
+      if (gw) {
+        switch (gw.type) {
+          case 'tt_session':
+            sessionId = gw.session_id;
+            if (!saveKey) saveKey = String(gw.session_id).replace(/^(auto_)+/, '');
+            break;
+
+          case 'tt_started':
+            if (gw.tiger_team_id) {
+              tigerTeamId = gw.tiger_team_id;
+              if (backendRecoveryAvailable) {
+              // Persist the canonical tigerTeamId into the URL so a refresh
+              // loads THIS prior investigation via ?load=<id> instead of
+              // blindly launching a brand-new one from the original params.
+              try {
+                const url = new URL(window.location.href);
+                url.searchParams.set('load', tigerTeamId);
+                url.searchParams.delete('launch');
+                history.replaceState(null, '', url.toString());
+              } catch (e) { console.warn('URL update failed:', e); }
+              }
+            }
+            if (tigerTeamId && backendRecoveryAvailable) saveKey = tigerTeamId;
+            else if (!saveKey) saveKey = String(sessionId || '').replace(/^(auto_)+/, '') || null;
+            startAutoSave();
+            if (mode === 'roundtable') {
+              addSystemMsg('Participants: ' + [gw.coordinator_display, ...(gw.participant_names || [])].join(', '));
+            } else {
+              let teamInfo = 'Coordinator: ' + gw.coordinator_display + '  ·  Team: ' + (gw.participant_names || []).join(', ');
+              if (gw.challenger_display) teamInfo += '  ·  ⚔️ Challenger: ' + gw.challenger_display;
+              addSystemMsg(teamInfo);
+              const displayMax = (gw.max_rounds >= 50 || maxRounds === 0) ? '∞' : (gw.max_rounds || maxRounds);
+              document.getElementById('round-counter').textContent = 'Turn 0/' + displayMax;
+            }
+            break;
+
+          case 'tt_coordinator_start':
+            if (!currentBlock || currentBlock.slug !== coordinator) {
+              openBlock(coordinator, 'Coordinator');
+            }
+            break;
+
+          case 'auto_model':
+            // Show which model was auto-selected for this agent
+            let targetBlock = currentBlock;
+            if (!targetBlock) {
+              // If currentBlock is null, find the most recent agent block for this agent
+              const recentBlocks = Array.from(document.querySelectorAll('.agent-block'));
+              if (recentBlocks.length > 0) {
+                const lastBlock = recentBlocks[recentBlocks.length - 1];
+                const agentName = lastBlock.querySelector('.block-agent')?.textContent || '';
+                // Get the agent name from the event or use the most recent block
+                targetBlock = { element: lastBlock };
+              }
+            }
+            if (targetBlock && targetBlock.element) {
+              const modelBadge = document.createElement('span');
+              modelBadge.className = 'auto-model-badge';
+              modelBadge.textContent = (gw.model || '').split('/').pop();
+              modelBadge.style.cssText = 'font-size:11px;color:#8ab4f8;opacity:0.8;margin-left:8px;font-weight:normal;';
+              const blockAgent = targetBlock.element.querySelector('.block-agent');
+              if (blockAgent) blockAgent.appendChild(modelBadge);
+            }
+            break;
+
+          case 'tt_round_start':
+            const rMax = gw.max_rounds >= 50 ? '∞' : gw.max_rounds;
+            addDivider('Round ' + gw.round + ' of ' + rMax, 'round');
+            document.getElementById('round-counter').textContent = 'R' + gw.round + '/' + rMax;
+            break;
+
+          case 'tt_round_complete':
+            closeBlock();
+            break;
+
+          case 'tt_dispatch':
+            // Update turn counter for Led mode
+            if (gw.turn && gw.max_rounds) {
+              const dMax = gw.max_rounds >= 50 ? '∞' : gw.max_rounds;
+              document.getElementById('round-counter').textContent = 'Turn ' + gw.turn + '/' + dMax;
+            }
+            // If coordinator block is empty (no text, just tool calls), remove it entirely
+            if (currentBlock && currentBlock.slug === coordinator && !currentBlock.rawText.trim()) {
+              currentBlock.element.remove();
+              currentBlock = null;
+            } else {
+              closeBlock();
+            }
+            const dispAgent = agents[gw.agent] || { display: gw.agent };
+            openBlock(gw.agent, 'Participant');
+            break;
+
+          case 'tt_dispatch_complete':
+            closeBlock();
+            setDot(gw.agent, 'done');
+            autoSave(); // Save after each participant completes
+            // Don't eagerly open coordinator block - wait for actual content
+            // It will open on-demand when text or tools arrive
+            break;
+
+          case 'tt_user_message':
+            break;
+
+          case 'interjection_received': {
+            // An agent picked the interjection up: say who and when, under the interjection it belongs to.
+            const who = gw.agent || 'agent';
+            const st = lastInterjectBlock && lastInterjectBlock.querySelector('.interject-status');
+            if (st) { st.textContent = (st.textContent.replace(/ · waiting for pickup…$/, '') + ` · ✓ ${who} picked it up ${elapsed()}`).replace(/^sending…/, 'sent'); st.style.color = '#22c55e'; }
+            else addSystemMsg(`✓ ${who} picked up the interjection`);
+            break;
+          }
+
+          case 'tt_request_rounds':
+            closeBlock();
+            showRoundsApproval(gw.justification, gw.proposed_rounds || 3);
+            break;
+
+          case 'tt_verdict':
+            // Notify dashboard via localStorage cross-tab communication
+            localStorage.setItem('panther_verdict_update', JSON.stringify({ alert_id: gw.alert_id, verdict: gw.verdict, ts: Date.now() }));
+            break;
+
+          case 'tt_soft_close':
+            // Notify dashboard about soft-closed related alerts
+            localStorage.setItem('panther_verdict_update', JSON.stringify({ alert_ids: gw.alert_ids, verdict: 'soft_close', reason: gw.reason, source_alert: gw.source_alert, ts: Date.now() }));
+            addSystemMsg(`↳ Soft-closed ${gw.alert_ids.length} related alert(s): ${gw.alert_ids.join(', ')} — ${gw.reason}`);
+            break;
+
+          case 'tt_complete':
+            document.getElementById('btn-resume').style.display = 'none';
+            document.getElementById('tt-error-banner').style.display = 'none';
+            document.getElementById('tt-retry-banner').style.display = 'none';
+            closeBlock();
+            finalizeAllTools();
+            setStatus('complete', 'Complete');
+            setRunning(false);
+            stopAutoSave();
+            addDivider(gw.reason || 'Session Complete', 'complete');
+            document.title = '✅ Tiger Team - Complete';
+            document.getElementById('btn-save').disabled = false;
+            showContinueUI();
+            // Also notify dashboard that TT completed
+            const alertId = new URLSearchParams(window.location.search).get('alert_id');
+            if (alertId) localStorage.setItem('panther_tt_complete', JSON.stringify({ alert_id: alertId, ts: Date.now() }));
+            break;
+
+          case 'tt_notice':
+          case 'notice':
+            addSystemMsg(gw.message || '');
+            break;
+
+          case 'tt_error':
+            markUnfinishedTools();
+            closeBlock();
+            setStatus('error', 'Error');
+            setRunning(false);
+            stopAutoSave();
+            addSystemMsg('Error: ' + gw.message);
+            document.title = '❌ Tiger Team - Error';
+            {
+              const banner = document.getElementById('tt-error-banner');
+              banner.textContent = '⚠ ' + gw.message;
+              banner.style.display = 'block';
+            }
+            // tt_error must NEVER be treated as a successful completion - do
+            // NOT call showContinueUI() here.  Offer Resume instead, since
+            // the run ended in a blocked/failed state, not a clean finish.
+            if (tigerTeamId && backendRecoveryAvailable) {
+              document.getElementById('btn-resume').style.display = 'inline-flex';
+              document.getElementById('btn-resume').disabled = false;
+              document.getElementById('btn-resume').textContent = '▶ Resume Interrupted';
+            }
+            break;
+
+          // Interrupted mid-stream (disconnect grace window expired server-side,
+          // or the stream otherwise ended abnormally).  Explicitly distinct from
+          // tt_complete - must never render as success.
+          case 'tt_interrupted':
+            markUnfinishedTools();
+            closeBlock();
+            setStatus('error', gw.status === 'blocked' ? 'Needs attention' : 'Interrupted');
+            const errorBanner = document.getElementById('tt-error-banner');
+            errorBanner.textContent = gw.message || gw.reason || 'Connection interrupted';
+            errorBanner.style.display = 'block';
+            document.getElementById('user-input').disabled = true;
+            document.getElementById('btn-send').disabled = true;
+            setRunning(false);
+            stopAutoSave();
+            addDivider(gw.reason || 'Session Interrupted', '');
+            addSystemMsg('⚠ Session interrupted: ' + (gw.message || gw.reason || 'connection lost or process restarted') + '. Prior progress was checkpointed - use Resume to continue.');
+            document.title = '⏸ Tiger Team - Interrupted';
+            if (tigerTeamId && backendRecoveryAvailable) {
+              document.getElementById('btn-resume').style.display = 'inline-flex';
+              document.getElementById('btn-resume').disabled = false;
+              document.getElementById('btn-resume').textContent = '▶ Resume Interrupted';
+            }
+            break;
+
+          // Coordinator/dispatch is retrying a failed call - surface it so the
+          // user knows the system is working the problem, not silently stuck.
+          case 'tt_retry':
+            {
+              const banner = document.getElementById('tt-retry-banner');
+              const delaySec = gw.delay_ms ? Math.round(gw.delay_ms / 1000) : null;
+              banner.textContent = `↻ Retrying (attempt ${gw.attempt || '?'}${delaySec ? `, waiting ${delaySec}s` : ''}): ${gw.message || 'transient error'}`;
+              banner.style.display = 'block';
+              setTimeout(() => { banner.style.display = 'none'; }, 8000);
+            }
+            addSystemMsg(`↻ Retry attempt ${gw.attempt || '?'}: ${gw.message || 'transient error'}`);
+            break;
+
+          case 'tool_start':
+            // Skip consult_agent tool events - they're redundant with tt_dispatch
+            if (gw.tool === 'consult_agent') {
+              if (gw.tool_call_id) skipToolIds.add(gw.tool_call_id);
+              break;
+            }
+            if (!currentBlock) openBlock(coordinator, 'Coordinator');
+            addTool(gw.tool, gw.tool_call_id || gw.tool, gw.input);
+            break;
+
+          case 'tool_use':
+            // Update tool input display (tool_use carries the input summary)
+            if (gw.tool === 'consult_agent') break;
+            if (!currentBlock) break;
+            const toolId = gw.tool_call_id || gw.tool;
+            const toolLine = document.getElementById('tool-' + toolId);
+            if (toolLine && gw.input) {
+              let inputEl = toolLine.querySelector('.tool-call-input');
+              if (!inputEl) {
+                const infoEl = toolLine.querySelector('.tool-call-info');
+                if (infoEl) {
+                  inputEl = document.createElement('span');
+                  inputEl.className = 'tool-call-input';
+                  infoEl.appendChild(inputEl);
+                }
+              }
+              if (inputEl) inputEl.textContent = String(gw.input).slice(0, 100);
+            }
+            break;
+
+          case 'tool_result':
+            // Skip consult_agent results - represented by tt_dispatch_complete
+            if (skipToolIds.has(gw.tool_call_id)) {
+              skipToolIds.delete(gw.tool_call_id);
+              break;
+            }
+            completeTool(gw.tool_call_id || gw.tool, gw.output);
+            break;
+        }
+      }
+
+      // Text deltas
+      const content = evt.choices?.[0]?.delta?.content;
+      if (content) {
+        if (!currentBlock) openBlock(coordinator, 'Coordinator');
+        appendBlockText(content);
+      }
+    }
+
+    // Enter key sends
+    document.getElementById('user-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('btn-send').click(); }
+    });
+
+    // ── Save Session ──
+    let loadedSaveId = null;
+    let loadedSaveTitle = null;
+
+    async function saveSession() {
+      const timeline = document.getElementById('timeline');
+      const transcript = timeline.innerHTML;
+      // If loaded from existing save, overwrite it directly (no prompt)
+      let title = loadedSaveTitle;
+      let saveId = loadedSaveId;
+      if (!saveId) {
+        title = prompt('Name this investigation:', objectiveText?.slice(0, 80) || 'Untitled');
+        if (!title) return;
+      }
+      try {
+        const resp = await fetch('/api/tiger-team/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            save_id: saveId || undefined,
+            title,
+            objective: objectiveText,
+            coordinator,
+            participants,
+            transcript,
+            mode,
+          })
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          // Track the save ID so subsequent saves also overwrite
+          loadedSaveId = data.id;
+          loadedSaveTitle = title;
+          addSystemMsg(`💾 Session saved as "${title}"`);
+        } else {
+          addSystemMsg('Save failed: ' + (data.error || 'Unknown error'));
+        }
+      } catch (e) { addSystemMsg('Save failed: ' + e.message); }
+    }
+
+    // ── Load Saved Panel ──
+    let savedPanelOpen = false;
+    async function toggleSavedPanel() {
+      const panel = document.getElementById('saved-panel');
+      if (savedPanelOpen) {
+        panel.style.display = 'none';
+        savedPanelOpen = false;
+        return;
+      }
+      panel.style.display = 'block';
+      savedPanelOpen = true;
+      const list = document.getElementById('saved-list');
+      list.innerHTML = 'Loading...';
+      try {
+        const resp = await fetch('/api/tiger-team/saved');
+        const data = await resp.json();
+        if (!data.sessions || data.sessions.length === 0) {
+          list.innerHTML = '<p style="color:var(--text-dim);">No saved sessions yet.</p>';
+          return;
+        }
+        list.innerHTML = data.sessions.map(s => {
+          const statusBadge = ['interrupted', 'stopped', 'blocked'].includes(s.status)
+            ? '<span style="color:#ffb74d;margin-left:8px">' + s.status.toUpperCase() + ' - RESUMABLE</span>'
+            : s.status === 'in_progress' 
+            ? '<span style="background:rgba(255,152,0,0.2); color:#ffb74d; padding:1px 6px; border-radius:3px; font-size:10px; margin-left:8px;">IN PROGRESS</span>'
+            : s.auto_saved 
+              ? '<span style="background:rgba(76,175,80,0.2); color:#81c784; padding:1px 6px; border-radius:3px; font-size:10px; margin-left:8px;">AUTO-SAVED</span>'
+              : '';
+          return `
+          <div style="border:1px solid var(--border); border-radius:6px; padding:12px; cursor:pointer; transition:border-color 0.2s;" 
+               onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'"
+               onclick="loadSaved('${esc(s.id)}')">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <strong style="color:var(--text);">${esc(s.title)}${statusBadge}</strong>
+              <span style="font-size:11px; color:var(--text-dim);">${new Date(s.saved_at).toLocaleDateString()} ${new Date(s.saved_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+            </div>
+            <div style="font-size:12px; color:var(--text-dim); margin-top:4px;">${esc(s.objective || '')}</div>
+            <div style="font-size:11px; color:var(--text-dim); margin-top:4px;">👑 ${esc(s.coordinator)} · 👥 ${esc((s.participants||[]).join(', '))}</div>
+            <button onclick="event.stopPropagation(); deleteSaved('${esc(s.id)}', this.closest('div[style*=border]'))"
+                    style="margin-top:8px; background:none; border:1px solid rgba(255,76,76,0.3); color:var(--error); padding:2px 8px; border-radius:4px; cursor:pointer; font-size:11px;">🗑 Delete</button>
+          </div>`;
+        }).join('');
+      } catch (e) {
+        list.innerHTML = `<p style="color:var(--error);">Error: ${e.message}</p>`;
+      }
+    }
+
+    async function reconcileUnknownOutcomes() {
+      if (!tigerTeamId || isRunning) { alert('Load a stopped investigation first.'); return; }
+      try {
+        const status = await fetch('/api/tiger-team/status?id=' + encodeURIComponent(tigerTeamId));
+        const data = await status.json();
+        if (!status.ok) throw new Error(data.error || 'Status failed');
+        if (!data.unresolved?.length) { alert('No uncertain tool outcomes.'); return; }
+        for (const tool of data.unresolved) {
+          const label = tool.name + ' [' + tool.callKey + ' / ' + tool.toolId + ']';
+          const evidence = prompt('Verify this operation outside the agent before continuing: ' + label + '\nEnter how you verified its actual outcome (Cancel leaves it blocked):');
+          if (!evidence?.trim()) return;
+          const result = prompt('Enter the verified result for ' + label + '.  This is recorded as operator-supplied evidence, not a rerun:');
+          if (!result?.trim()) return;
+          if (!confirm('Record this verified outcome and allow Resume?\n' + label + '\n' + result)) return;
+          const resp = await fetch('/api/tiger-team/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: tigerTeamId, callKey: tool.callKey, toolId: tool.toolId, result, evidence }) });
+          const saved = await resp.json();
+          if (!resp.ok) throw new Error(saved.error || 'Reconciliation failed');
+        }
+        addSystemMsg('Verified outcomes recorded.  Resume is available.  No tools were replayed.');
+      } catch (e) { alert(e.message); }
+    }
+
+    function downloadFullRecord() {
+      if (!tigerTeamId) { alert('Start or load an investigation first.'); return; }
+      const link = document.createElement('a');
+      link.href = '/api/tiger-team/archive/' + encodeURIComponent(tigerTeamId) + '?download=1';
+      link.download = tigerTeamId + '-full-record.json';
+      link.click();
+    }
+
+    async function loadSaved(id) {
+      try {
+        const resp = await fetch(`/api/tiger-team/saved/${id}`);
+        const data = await resp.json();
+        if (!resp.ok) { alert(data.error || 'Load failed'); return; }
+        
+        // Restore UI state
+        document.getElementById('saved-panel').style.display = 'none';
+        savedPanelOpen = false;
+        
+        // Set header
+        objectiveText = data.objective;
+        document.getElementById('objective-text').textContent = data.objective || '';
+        const status = data.status || 'complete';
+        const statusLabelMap = { completed: 'Complete', running: 'Running elsewhere', retrying: 'Retrying', stopping: 'Stopping', complete: 'Loaded', interrupted: 'Interrupted', stopped: 'Stopped', blocked: 'Blocked', in_progress: 'In Progress (stale)' };
+        const statusClassMap = { completed: 'complete', running: 'running', retrying: 'running', stopping: 'error', complete: 'complete', interrupted: 'error', stopped: 'error', blocked: 'error', in_progress: 'error' };
+        document.getElementById('status-badge').textContent = statusLabelMap[status] || 'Loaded';
+        document.getElementById('status-badge').className = 'status-badge ' + (statusClassMap[status] || 'complete');
+        
+        // Restore roster
+        coordinator = data.coordinator;
+        mode = data.mode || 'led';
+        participants = data.participants || [];
+        buildRoster();
+        
+        // Restore transcript.  Durable-only entries (recovered from a
+        // checkpoint with no legacy HTML save) have no `transcript` HTML -
+        // render plainTranscript safely as escaped/markdown text instead of
+        // assuming HTML is present.
+        const timeline = document.getElementById('timeline');
+        if (data.transcript && data.transcript.trim()) {
+          const rawTranscript = data.transcript;
+          if (purifyReady()) {
+            // No inline handlers survive a save: the "▶ output" toggles work through the delegated
+            // listener (data-call-id, else the sibling result block); approval buttons are history.
+            timeline.innerHTML = DOMPurify.sanitize(rawTranscript, {
+              ADD_ATTR: ['target','rel','class','id','data-call-id'],
+              FORBID_TAGS: ['script','iframe','object','embed','form','input','textarea','select','style'],
+              FORBID_ATTR: ['style','onerror','onload','onclick','onmouseover','onfocus','onblur','onmouseenter','onanimationend']
+            });
+          } else {
+            timeline.textContent = rawTranscript;   // fail closed: no sanitizer, no HTML
+          }
+        } else if (data.plainTranscript && data.plainTranscript.trim()) {
+          // Text/markdown-safe render - never trust this as raw HTML.
+          if (purifyReady()) timeline.innerHTML = md(data.plainTranscript);
+          else timeline.textContent = data.plainTranscript;
+        } else {
+          timeline.innerHTML = '<p style="color:var(--text-dim);">No transcript data.</p>';
+        }
+        
+        // Set session IDs so continue/resume work
+        tigerTeamId = data.tiger_team_id || (data.durable ? data.session_id : null) || id;
+        sessionId = id;
+        // Stable save key: original session_id if present, else id stripped of auto_ prefixes
+        saveKey = String(data.session_id || id).replace(/^(auto_)+/, '');
+        // Track loaded save so Save button overwrites same file
+        loadedSaveId = id;
+        loadedSaveTitle = data.title;
+        if (backendRecoveryAvailable) {
+          const url = new URL(window.location.href);
+          url.searchParams.set('load', tigerTeamId); url.searchParams.delete('launch');
+          history.replaceState(null, '', url.toString());
+        }
+        
+        const btn = document.getElementById('btn-send');
+        const input = document.getElementById('user-input');
+        const label = document.querySelector('.input-label');
+        const resumeBtn = document.getElementById('btn-resume');
+        document.getElementById('btn-save').disabled = false;
+
+        if (['interrupted', 'stopped', 'blocked', 'running', 'retrying', 'stopping', 'in_progress'].includes(status)) {
+          // Offer Resume for anything that did not reach a clean completion.
+          input.disabled = true;
+          btn.disabled = true;
+          if (label) label.textContent = '⏸ Not running:';
+          resumeBtn.style.display = backendRecoveryAvailable ? 'inline-flex' : 'none';
+          if (data.error) {
+            const banner = document.getElementById('tt-error-banner');
+            banner.textContent = '⚠ ' + data.error;
+            banner.style.display = 'block';
+          }
+        } else {
+          // Completed (or legacy in_progress with no durable status) - normal continue flow.
+          resumeBtn.style.display = 'none';
+          input.disabled = false;
+          input.placeholder = 'Ask a follow-up question or give a new directive to reconvene the team...';
+          btn.disabled = false;
+          btn.onclick = continueSession;
+          if (label) label.textContent = '🔄 Continue:';
+        }
+        
+        addSystemMsg(`📂 Loaded saved session: "${data.title}"${data.durable ? ' (recovered from checkpoint)' : ''}`);
+      } catch (e) { alert('Load failed: ' + e.message); }
+    }
+
+    // ── Resume Interrupted Team ──
+    // GET /status first to avoid a duplicate launch if the team turns out to
+    // already be running (e.g. two tabs open on the same investigation).
+    // No automatic retry on failure - resume outcome is ambiguous if the
+    // request fails mid-flight, so the user must explicitly click again.
+    async function resumeInterruptedTeam() {
+      if (!tigerTeamId || continuationInFlight) return;
+      const resumeBtn = document.getElementById('btn-resume');
+      resumeBtn.disabled = true;
+      resumeBtn.textContent = '⏳ Checking status...';
+      document.getElementById('tt-error-banner').style.display = 'none';
+
+      try {
+        const statusResp = await fetch(`/api/tiger-team/status?id=${encodeURIComponent(tigerTeamId)}`);
+        if (statusResp.status === 404) {
+          resumeBtn.disabled = false;
+          resumeBtn.textContent = '▶ Resume Interrupted';
+          addSystemMsg('No saved recovery state was found for this investigation.  Try loading its latest saved session.');
+          return;
+        }
+        if (!statusResp.ok) throw new Error('Status check HTTP ' + statusResp.status);
+        const statusData = await statusResp.json();
+        if (statusData.id) tigerTeamId = statusData.id;
+        if (statusData.status === 'completed') { await loadSaved(tigerTeamId); return; }
+        if (statusResp.ok && ['running', 'retrying', 'stopping'].includes(statusData.status)) {
+          addSystemMsg('⚠ This Tiger Team is already running elsewhere - not launching a duplicate. Check other open tabs.');
+          resumeBtn.disabled = false;
+          resumeBtn.textContent = '▶ Resume Interrupted';
+          return;
+        }
+      } catch (e) {
+        addSystemMsg('Status check failed: ' + e.message + ' - resume aborted (no automatic retry).');
+        resumeBtn.disabled = false;
+        resumeBtn.textContent = '▶ Resume Interrupted';
+        return;
+      }
+
+      continuationInFlight = true;
+      resumeBtn.textContent = '⏳ Resuming...';
+      addDivider('Resuming Interrupted Team', 'round');
+      setStatus('running', 'Resuming...');
+      document.title = '⏳ Tiger Team - Resuming';
+      const input = document.getElementById('user-input');
+      const sendBtn = document.getElementById('btn-send');
+      input.disabled = true;
+      sendBtn.disabled = true;
+
+      try {
+        const resp = await fetch('/api/tiger-team/resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: tigerTeamId }),
+        });
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          addSystemMsg('Resume failed: ' + (errData.error || `HTTP ${resp.status}`));
+          setStatus('error', 'Resume Failed');
+          resumeBtn.disabled = false;
+          resumeBtn.textContent = '▶ Resume Interrupted';
+          continuationInFlight = false;
+          return;
+        }
+
+        isRunning = true;
+        resumeBtn.style.display = 'none';
+        document.getElementById('btn-stop').disabled = false;
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6).trim();
+            if (raw === '[DONE]') continue;
+            try { handleEvent(JSON.parse(raw)); } catch (e) { console.warn('Parse error:', e); }
+          }
+        }
+        // Raw EOF with no tt_complete/tt_error means the connection dropped
+        // mid-stream - that is an interruption, NOT a successful completion.
+        if (isRunning) handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream ended without completion' } });
+      } catch (e) {
+        handleEvent({ gateway: { type: 'tt_interrupted', reason: e.message } });
+      } finally {
+        continuationInFlight = false;
+      }
+    }
+
+    async function deleteSaved(id, element) {
+      if (!confirm('Delete this saved session?')) return;
+      try {
+        await fetch(`/api/tiger-team/saved/${id}`, { method: 'DELETE' });
+        if (element) element.remove();
+      } catch (e) { alert('Delete failed: ' + e.message); }
+    }
+
+    // Store objective text for save
+    let objectiveText = objective;
+
+    // ── Auto-save system ──
+    async function autoSave() {
+      if (!saveKey && !sessionId && !tigerTeamId) return;
+      const now = Date.now();
+      if (now - lastAutoSave < 10000) return; // Debounce: no more than every 10s
+      lastAutoSave = now;
+      const timeline = document.getElementById('timeline');
+      const transcript = timeline ? timeline.innerHTML : '';
+      try {
+        await fetch('/api/tiger-team/autosave', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: saveKey || sessionId || tigerTeamId,
+            objective: objectiveText,
+            coordinator,
+            participants,
+            transcript,
+            mode,
+            status: isRunning ? 'in_progress' : (document.getElementById('status-badge').classList.contains('complete') ? 'complete' : 'interrupted'),
+          })
+        });
+      } catch (e) { /* silent - auto-save is best-effort */ }
+    }
+
+    function startAutoSave() {
+      if (autoSaveInterval) clearInterval(autoSaveInterval);
+      autoSaveInterval = setInterval(autoSave, 30000); // Every 30s
+    }
+
+    function stopAutoSave() {
+      if (autoSaveInterval) { clearInterval(autoSaveInterval); autoSaveInterval = null; }
+      autoSave(); // Final save on stop
+    }
+
+    // Save on page unload (navigation away, close tab)
+    window.addEventListener('beforeunload', () => {
+      if (saveKey || sessionId || tigerTeamId) {
+        const timeline = document.getElementById('timeline');
+        const transcript = timeline ? timeline.innerHTML : '';
+        // Use sendBeacon with Blob for reliable save on unload
+        const blob = new Blob([JSON.stringify({
+          session_id: saveKey || sessionId || tigerTeamId,
+          objective: objectiveText,
+          coordinator,
+          participants,
+          transcript,
+          mode,
+          status: isRunning ? 'in_progress' : (document.getElementById('status-badge').classList.contains('complete') ? 'complete' : 'interrupted'),
+        })], { type: 'application/json' });
+        navigator.sendBeacon('/api/tiger-team/autosave', blob);
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

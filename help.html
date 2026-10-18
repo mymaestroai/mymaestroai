@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#090B0F">
+<title>Help — My Maestro AI</title>
+<style>
+  :root { --bg: #090B0F; --card: #14171F; --soft: #1B1F29; --input: #040507; --border: #222632; --text: #F3F4F6; --dim: #9CA3AF; --accent: #3D7BFF; --warn: #F5A623; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px 16px 40px; }
+  body.embed { padding: 4px 6px 30px; background: transparent; }
+  main { max-width: 760px; margin: 0 auto; }
+  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .top a { color: var(--accent); text-decoration: none; font-size: 14px; }
+  body.embed .top { display: none; }
+  h1 { font-size: 24px; margin: 6px 0 6px; } h2 { font-size: 18px; margin: 30px 0 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+  h3 { font-size: 15px; margin: 18px 0 4px; }
+  p, li { color: var(--text); } .dim { color: var(--dim); }
+  .tip { background: var(--soft); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
+  .warn { border-left-color: var(--warn); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: var(--input); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
+  pre { font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: var(--input); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+  ol, ul { padding-left: 22px; } li { margin: 5px 0; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 4px; }
+  nav.toc a { font-size: 13px; color: var(--text); background: var(--soft); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; text-decoration: none; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; } td { border-top: 1px solid var(--border); padding: 7px 8px 7px 0; vertical-align: top; } td:first-child { white-space: nowrap; }
+</style>
+</head>
+<body>
+<main id="help-content">
+  <div class="top"><a href="/" id="back">← Back to My Maestro AI</a></div>
+  <h1>Help</h1>
+  <div class="tip"><b>The quickest way: ask Maestro.</b> It can answer any question about My Maestro AI and do the setup work for you: create and change agents, pick their models, write their personalities, set up reminders, and work out what's wrong when something fails. Just tell it what you want.</div>
+  <nav class="toc"><a href="#agents">Agents</a><a href="#models">Models</a><a href="#work">Reminders &amp; files</a><a href="#family">Family</a><a href="#phone">Phone app</a><a href="#trouble">Something's wrong</a><a href="#terminal">Terminal commands</a></nav>
+
+  <h2 id="agents">Agents</h2>
+  <h3>Talk to an agent</h3>
+  <p>Click it in the list on the left, type, and press Enter. Drop a file or photo into the chat (or use the paperclip) and it reads it. Type while it's working to add a note it takes into account; the Stop button stops it.</p>
+  <h3>Create an agent</h3>
+  <ul>
+    <li><b>Ask Maestro</b>: "Make me a travel planner that's upbeat and keeps things short." It picks a model and writes the personality.</li>
+    <li><b>Or by hand</b>: <b>+ New Agent</b> above the agent list. Give it a name, a model and a description of its role.</li>
+  </ul>
+  <p class="dim">New agents are ready at once. No restart is needed. If one doesn't show in the list, reload the page.</p>
+  <h3>Change an agent</h3>
+  <ul>
+    <li><b>Ask Maestro</b>: "Make Doc more concise", "Give Counsel a Record with my lease dates".</li>
+    <li><b>Or by hand</b>: the gear (⚙) on the agent in the list opens its settings: personality, identity, Records (documents it reads every time), model, tools and shared folders.</li>
+  </ul>
+
+  <h2 id="models">Models</h2>
+  <ul>
+    <li><b>Change an agent's model</b>: click the model name at the top of its chat and pick another. Next to it you can set how hard it thinks.</li>
+    <li><b>Add a way to think</b>: Settings (⚙ at the top right) → LLM Providers, for an API key; or ask Maestro to walk you through it.</li>
+    <li><b>Costs</b>: models marked Subscription use your Claude (or ChatGPT) plan; API models are billed per use by the provider; Local models are free and never leave this computer.</li>
+  </ul>
+
+  <h2 id="work">Reminders, scheduled work and files</h2>
+  <ul>
+    <li><b>Reminders and repeating tasks</b>: ask any agent, for example "Every Monday at 9am, summarise my week". See and manage them under 📅 at the top right.</li>
+    <li><b>Files</b>: 📁 Files at the top right uploads, downloads and browses the files your agents can read.</li>
+    <li><b>Updates</b>: ⋯ at the top right → Update from GitHub. It installs and restarts by itself; open pages reload on their own.</li>
+  </ul>
+
+  <h2 id="family">Family members</h2>
+  <p>Your account menu (your name at the bottom left) → <b>Users</b> → invite someone by email. They get their own sign-in with two-factor, and agents of their own that stay private unless you share them.</p>
+
+  <h2 id="phone">The phone app (Tailscale)</h2>
+  <p>My Maestro AI only listens on this computer. The safe way to use it from your phone is Tailscale, a private network between your own devices (free for personal use). Maestro can walk you through this; the steps are:</p>
+  <ol>
+    <li><b>On this computer</b>, install Tailscale and sign in. Mac: "Tailscale" from the Mac App Store. Linux: <code>curl -fsSL https://tailscale.com/install.sh | sh</code> then <code>sudo tailscale up</code>.</li>
+    <li><b>On your phone</b>, install the Tailscale app and sign in with the same account.</li>
+    <li><b>Publish the hub to your devices</b>: in a terminal, in the My Maestro AI folder, run <code>bash scripts/tailscale-setup.sh</code>. It prints an https address and restarts the hub by itself. (On Linux it may first ask you to run <code>sudo tailscale set --operator=$USER</code> once.)</li>
+    <li><b>On your phone</b>, open that https address, sign in, then add it to your home screen: iPhone, Share → Add to Home Screen; Android, menu → Install app.</li>
+    <li>In the phone app's menu, turn on <b>notifications</b> and send a test notification.</li>
+  </ol>
+
+  <h2 id="trouble">When something's wrong</h2>
+  <div class="tip warn"><b>A Claude agent says "not signed in", "authentication" or "expired".</b> The Claude sign-in on this computer is missing or has run out. Open a terminal, type <code>claude</code> and press Enter, sign in, then type <code>/exit</code>. Send your message again. No restart is needed. (<code>mymaestro doctor</code> tests the sign-in.)</div>
+  <table>
+    <tr><td><b>An agent seems stuck</b></td><td>Press ↻ in the chat bar to re-sync, or reload the page. Still stuck: press Stop and send the message again.</td></tr>
+    <tr><td><b>"Usage limit reached"</b></td><td>Your plan's limit is used up until it resets. Meanwhile switch the agent's model at the top of its chat.</td></tr>
+    <tr><td><b>An API key is refused</b></td><td>Settings → LLM Providers: paste a fresh key from the provider's website.</td></tr>
+    <tr><td><b>A local model doesn't answer</b></td><td>Start LM Studio or Ollama with the model loaded, or open Local models in your account menu.</td></tr>
+    <tr><td><b>The page won't load at all</b></td><td>The hub is stopped. In a terminal: <code>mymaestro status</code>, then <code>mymaestro restart</code>. If it still won't start, <code>mymaestro logs</code> shows why.</td></tr>
+    <tr><td><b>Lost the phone with your two-factor app</b></td><td>Sign in with one of your recovery codes. Or, on this computer: <code>mymaestro reset-2fa you@example.com</code>, then set two-factor up again under Security.</td></tr>
+    <tr><td><b>Lost the first-time setup link</b></td><td><code>mymaestro setup-link</code> shows it again (it works until the first account exists).</td></tr>
+  </table>
+  <p class="dim">If <code>mymaestro</code> is "not found", open a new terminal window, or use the full path: <code>~/.local/bin/mymaestro</code>.</p>
+
+  <h2 id="terminal">Terminal commands</h2>
+  <p>Open a terminal on the computer running My Maestro AI. These work even when the hub is stopped.</p>
+  <pre>mymaestro status        is it running? address, version, setup link
+mymaestro restart       restart it (also: start, stop)
+mymaestro logs -f       watch what it's doing
+mymaestro open          open it in the browser
+mymaestro update        newest version, then restart
+mymaestro doctor        security and setup checks, Claude sign-in test
+mymaestro backup        your data, settings and agents in one archive
+mymaestro setup-link    the first-time setup link
+mymaestro reset-2fa you@example.com   turn off two-factor for an account
+mymaestro service install             start by itself at boot or login</pre>
+</main>
+<script>
+  // Inside the app's Help panel (?embed=1): no back link, transparent background; links open in the app's tab.
+  if (new URLSearchParams(location.search).get('embed') === '1') {
+    document.body.classList.add('embed');
+    document.querySelectorAll('a[href^="/"]').forEach(a => { a.target = '_top'; });
+  }
+  if (history.length > 1) document.getElementById('back').addEventListener('click', (e) => { e.preventDefault(); history.back(); });
+</script>
+</body>
+</html>
