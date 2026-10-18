@@ -92,6 +92,21 @@ test('an install from before the installer is found by its unit\'s WorkingDirect
   assert.ok(!fs.existsSync(path.join(home, '.config/systemd/user/agent-hub-v5.service')));
 });
 
+test('a broken link among the user\'s units (a removed service) does not hide the hub\'s unit; same for LaunchAgents', () => {
+  const { home, dir } = sandbox();
+  const units = path.join(home, '.config/systemd/user');
+  fs.mkdirSync(units, { recursive: true });
+  fs.symlinkSync('/nonexistent/aaa-removed.service', path.join(units, 'aaa-removed.service'));
+  fs.writeFileSync(path.join(units, 'zzz-hub.service'), `[Service]\nWorkingDirectory=${dir}\nExecStart=/usr/bin/node ${path.join(dir, 'server.js')}\n`);
+  const r = recorder({});
+  assert.deepStrictEqual(createServiceManager({ dir, home, platform: 'linux', exec: r.exec }).detect(), { kind: 'systemd', unit: 'zzz-hub.service' });
+  const agents = path.join(home, 'Library/LaunchAgents');
+  fs.mkdirSync(agents, { recursive: true });
+  fs.symlinkSync('/nonexistent/aaa.plist', path.join(agents, 'aaa.plist'));
+  fs.writeFileSync(path.join(agents, 'zzz.hub.plist'), `<plist><string>${path.join(dir, 'server.js')}</string></plist>`);
+  assert.deepStrictEqual(createServiceManager({ dir, home, platform: 'darwin', exec: r.exec }).detect(), { kind: 'launchd', label: 'zzz.hub' });
+});
+
 test('the mymaestro command: help and version run, and every command named in the help exists', () => {
   const { execFileSync } = require('child_process');
   const cli = path.join(__dirname, '..', 'scripts', 'hub-cli.js');
