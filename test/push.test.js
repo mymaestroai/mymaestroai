@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createPush } = require('../lib/push');
+const { createPush, questionDelayFrom, cleanNotifySettings, QUESTION_DELAY_MS } = require('../lib/push');
 const hubEvents = require('../lib/hub-events');
 
 const SUB = (n = 1) => ({ endpoint: `https://push.example.test/send/${n}`, keys: { p256dh: 'BPkey' + n, auth: 'auth' + n } });
@@ -17,6 +17,8 @@ function mk(o = {}) {
   const fail = o.fail || (() => null);
   const push = createPush({
     dir, now: () => clock.t, minGapMs: 20000,
+    ...(o.questionDelayMs !== undefined ? { questionDelayMs: o.questionDelayMs } : {}),
+    ...(o.ownerOf ? { ownerOf: o.ownerOf } : {}),
     displayName: (a) => ({ trader: 'Trader', maestro: 'Maestro' }[a] || a),
     webpush: { generateVAPIDKeys: () => ({ publicKey: 'PUBKEY', privateKey: 'PRIVKEY' }) },
     sender: async (sub, body, opts) => {
@@ -26,7 +28,10 @@ function mk(o = {}) {
   });
   return { push, dir, clock, sent };
 }
-const end = (agent, extra = {}) => ({ type: 'turn_end', turnId: `${agent}-${Math.random()}`, agent, ok: true, origin: { kind: 'user' }, reply: 'SECRET REPLY TEXT', ...extra });
+// A finished turn someone tapped "Notify me when done" on (an admin); pass notify: [] for a turn nobody asked about.
+const ADMIN_BELL = [{ id: 'u_admin', role: 'admin' }];
+const end = (agent, extra = {}) => ({ type: 'turn_end', turnId: `${agent}-${Math.random()}`, agent, ok: true, origin: { kind: 'user' }, reply: 'SECRET REPLY TEXT', notify: ADMIN_BELL, ...extra });
+const ask = (agent, id, extra = {}) => ({ type: 'ask_user', agent, request_id: id, questions: [{ question: 'Is the SSN 123-45-6789?', options: [{ label: 'Yes' }] }], ...extra });
 const flush = () => new Promise(r => setImmediate(r));
 
 test('VAPID keys are generated on first use, persisted at mode 0600, and reused', () => {
@@ -77,7 +82,7 @@ test('subscribe rejects malformed subscriptions', () => {
   assert.strictEqual(push.subscriptions().length, 0);
 });
 
-test('a turn_end push carries a title, a deep link and NO message content', async () => {
+test('a finished turn someone asked about says "<Agent> is done" with a deep link, high urgency and NO message content', async () => {
   const { push, sent } = mk();
   push.subscribe(SUB(1));
   push.onEvent(end('trader', { reply: 'The wallet holds 12,345 USDC' }));
@@ -85,94 +90,151 @@ test('a turn_end push carries a title, a deep link and NO message content', asyn
   assert.strictEqual(sent.length, 1);
   const p = sent[0].body;
   assert.deepStrictEqual(Object.keys(p).sort(), ['body', 'tag', 'title', 'ts', 'url']);
-  assert.strictEqual(p.title, 'Trader replied');
-  assert.strictEqual(p.body, 'Tap to open');
+  assert.strictEqual(p.title, 'Trader is done');
+  assert.strictEqual(p.body, 'Tap to open the reply');
   assert.strictEqual(p.url, '/mobile#chat=trader');
-  assert.strictEqual(p.tag, 'agent-trader');
+  assert.strictEqual(p.tag, 'done-trader');
   assert.ok(!JSON.stringify(sent[0]).includes('12,345'));
   assert.ok(!JSON.stringify(sent[0]).includes('SECRET'));
   assert.strictEqual(sent[0].opts.TTL, 300);
-  assert.strictEqual(sent[0].opts.urgency, 'normal');
+  assert.strictEqual(sent[0].opts.urgency, 'high');
   assert.strictEqual(sent[0].opts.vapidDetails.publicKey, 'PUBKEY');
 });
 
-test('ask_user pushes "<Agent> has a question" with high urgency and never the question text', async () => {
+test('no bell, no push: finished replies (yours, consults, workers, scheduled tasks) notify no one', async () => {
   const { push, sent } = mk();
   push.subscribe(SUB(1));
-  push.onEvent({ type: 'ask_user', agent: 'maestro', request_id: 'r1', question: 'Is the SSN 123-45-6789?', options: ['Yes', 'No'] });
+  push.onEvent(end('maestro', { notify: [] }));
+  push.onEvent(end('fable', { notify: undefined, origin: { kind: 'consultation', from: 'maestro' } }));
+  push.onEvent(end('tw-maestro-1-abcd', { notify: [] }));
+  push.onEvent(end('trader', { notify: [], origin: { kind: 'schedule', from: 'Nightly', label: 'Nightly' } }));
   await flush();
-  assert.strictEqual(sent[0].body.title, 'Maestro has a question');
-  assert.strictEqual(sent[0].opts.urgency, 'high');
-  assert.ok(!JSON.stringify(sent[0]).includes('123-45'));
+  assert.strictEqual(sent.length, 0);
 });
 
-test('scheduled turns say "Scheduled task ran: <agent>"; stopped turns and repeats of a turn do not push', async () => {
-  const { push, sent, clock } = mk();
+test('a failed turn someone asked about says "stopped with an error"; stopped turns and repeats of a turn do not push', async () => {
+  const { push, sent } = mk();
   push.subscribe(SUB(1));
-  push.onEvent(end('trader', { origin: { kind: 'schedule', from: 'Nightly', label: 'Nightly' } }));
+  push.onEvent(end('trader', { ok: false, error: 'provider error' }));
   await flush();
-  assert.strictEqual(sent[0].body.title, 'Scheduled task ran: trader');
-  assert.ok(!JSON.stringify(sent[0].body).includes('Nightly'));
-
-  clock.t += 60000;
+  assert.strictEqual(sent[0].body.title, 'Trader stopped with an error');
   const e = end('maestro');
   push.onEvent(e); push.onEvent(e);
   await flush();
   assert.strictEqual(sent.length, 2, 'the same turn_end pushes once');
-  clock.t += 60000;
   push.onEvent(end('maestro', { ok: false, error: 'stopped' }));
   push.onEvent({ type: 'turn_delta', agent: 'maestro', text: 'x' });
   push.onEvent({ type: 'turn_start', agent: 'maestro' });
   await flush();
-  assert.strictEqual(sent.length, 2);
+  assert.strictEqual(sent.length, 2, 'you stopped it yourself: nothing to tell');
 });
 
-test('only subscriptions that follow the agent are notified', async () => {
+test('the bell reaches the devices of the person who tapped it; devices registered before accounts count as an admin\'s; "*" (no accounts) reaches all', async () => {
   const { push, sent } = mk();
-  push.subscribe(SUB(1), ['trader']);
-  push.subscribe(SUB(2), ['maestro']);
-  push.subscribe(SUB(3), null);
+  push.subscribe(SUB(1), null, { id: 'u_admin', role: 'admin' });
+  push.subscribe(SUB(2), null, { id: 'u_member', role: 'member' });
+  push.subscribe(SUB(3), ['someone-else'], { id: 'u_admin', role: 'admin' });   // the follow list does not apply: you asked
+  push.subscribe(SUB(4), null);
   push.onEvent(end('trader'));
   await flush();
-  assert.deepStrictEqual(sent.map(s => s.sub.endpoint).sort(), [SUB(1).endpoint, SUB(3).endpoint]);
+  assert.deepStrictEqual(sent.map(x => x.sub.endpoint).sort(), [SUB(1).endpoint, SUB(3).endpoint, SUB(4).endpoint]);
+  sent.length = 0;
+  push.onEvent(end('kids', { notify: [{ id: 'u_member', role: 'member' }] }));
+  await flush();
+  assert.deepStrictEqual(sent.map(x => x.sub.endpoint), [SUB(2).endpoint], 'a member\'s bell: that member\'s device only');
+  sent.length = 0;
+  push.onEvent(end('trader', { notify: [{ id: '*', role: 'admin' }] }));
+  await flush();
+  assert.strictEqual(sent.length, 4);
+  assert.strictEqual(push.devicesFor({ id: 'u_admin', role: 'admin' }), 3);
+  assert.strictEqual(push.devicesFor({ id: 'u_member', role: 'member' }), 1);
+  assert.strictEqual(push.devicesFor({ id: '*' }), 4);
+  assert.strictEqual(push.devicesFor(null), 0);
 });
 
-test('rate limit: one push per agent per 20 s; the rest coalesce into a single trailing push', async (t) => {
+test('a question notifies only after it waited 3 minutes unanswered, once, never with its text; answered sooner: nothing', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { push, sent, clock } = mk();
+  const { push, sent } = mk();
   push.subscribe(SUB(1));
-  for (let i = 0; i < 4; i++) push.onEvent(end('trader'));
+  push.onEvent(ask('maestro', 'r1'));
   await flush();
-  assert.strictEqual(sent.length, 1, 'first goes out at once');
-  push.onEvent(end('maestro'));                    // another agent has its own window
-  await flush();
-  assert.strictEqual(sent.length, 2);
-
-  clock.t += 19000; t.mock.timers.tick(19000); await flush();
-  assert.strictEqual(sent.length, 2, 'still inside the window');
-  clock.t += 1000; t.mock.timers.tick(1000); await flush();
-  assert.strictEqual(sent.length, 3, 'three coalesced events become one trailing push');
-  assert.strictEqual(sent[2].body.title, 'Trader replied');
-
-  clock.t += 25000; t.mock.timers.tick(25000); await flush();
-  assert.strictEqual(sent.length, 3, 'nothing left pending');
-  push.onEvent(end('trader')); await flush();
-  assert.strictEqual(sent.length, 4, 'after a quiet window the next one goes out at once');
-});
-
-test('coalesced pushes: a pending question outranks a pending reply', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { push, sent, clock } = mk();
-  push.subscribe(SUB(1));
-  push.onEvent(end('trader'));
-  push.onEvent({ type: 'ask_user', agent: 'trader', request_id: 'r', question: 'q', options: [] });
-  push.onEvent(end('trader'));
-  await flush();
+  assert.strictEqual(sent.length, 0, 'not at once');
+  t.mock.timers.tick(QUESTION_DELAY_MS - 1000); await flush();
+  assert.strictEqual(sent.length, 0, 'not before 3 minutes');
+  t.mock.timers.tick(1000); await flush();
   assert.strictEqual(sent.length, 1);
-  clock.t += 20000; t.mock.timers.tick(20000); await flush();
+  assert.strictEqual(sent[0].body.title, 'Maestro has a question');
+  assert.strictEqual(sent[0].body.body, 'Waiting for your answer for 3 min. Tap to answer');
+  assert.strictEqual(sent[0].body.tag, 'question-maestro');
+  assert.strictEqual(sent[0].opts.urgency, 'high');
+  assert.ok(!JSON.stringify(sent[0]).includes('123-45'));
+  push.onEvent(ask('maestro', 'r1')); t.mock.timers.tick(QUESTION_DELAY_MS * 2); await flush();
+  assert.strictEqual(sent.length, 2, 'a repeat of the event for a question already reminded waits its own 3 minutes once');
+
+  push.onEvent(ask('trader', 'r2'));
+  t.mock.timers.tick(60000);
+  push.onEvent({ type: 'ask_user_done', agent: 'trader', request_id: 'r2', result: 'answered' });
+  t.mock.timers.tick(QUESTION_DELAY_MS); await flush();
+  assert.strictEqual(sent.length, 2, 'answered after one minute: no reminder');
+  push.onEvent(ask('trader', 'r3'));
+  push.onEvent(end('trader', { notify: [] }));    // the turn ended (timed out, stopped): its question went with it
+  t.mock.timers.tick(QUESTION_DELAY_MS); await flush();
   assert.strictEqual(sent.length, 2);
-  assert.strictEqual(sent[1].body.title, 'Trader has a question');
-  assert.strictEqual(sent[1].opts.urgency, 'high');
+  assert.strictEqual(push.waitingCount(), 0);
+});
+
+test('the question delay comes from settings: unset = 3 min, null = never, 0 = at once; the settings box value is cleaned', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const never = mk({ questionDelayMs: () => null });
+  never.push.subscribe(SUB(1));
+  never.push.onEvent(ask('maestro', 'n1')); t.mock.timers.tick(QUESTION_DELAY_MS * 3); await flush();
+  assert.strictEqual(never.sent.length, 0);
+  const now = mk({ questionDelayMs: () => 0 });
+  now.push.subscribe(SUB(1));
+  now.push.onEvent(ask('maestro', 'z1')); t.mock.timers.tick(0); await flush();
+  assert.strictEqual(now.sent.length, 1);
+  assert.strictEqual(now.sent[0].body.body, 'Tap to answer');
+  assert.strictEqual(questionDelayFrom({}), QUESTION_DELAY_MS);
+  assert.strictEqual(questionDelayFrom({ notify: { questionAfterMinutes: null } }), null);
+  assert.strictEqual(questionDelayFrom({ notify: { questionAfterMinutes: 0 } }), 0);
+  assert.strictEqual(questionDelayFrom({ notify: { questionAfterMinutes: 10 } }), 600000);
+  assert.strictEqual(questionDelayFrom({ notify: { questionAfterMinutes: 'x' } }), QUESTION_DELAY_MS);
+  assert.deepStrictEqual(cleanNotifySettings({ questionAfterMinutes: '5' }), { questionAfterMinutes: 5 });
+  assert.deepStrictEqual(cleanNotifySettings({ questionAfterMinutes: 999 }), { questionAfterMinutes: 120 });
+  assert.deepStrictEqual(cleanNotifySettings({ questionAfterMinutes: -2 }), { questionAfterMinutes: 0 });
+  assert.deepStrictEqual(cleanNotifySettings({ questionAfterMinutes: null }), { questionAfterMinutes: null });
+  assert.deepStrictEqual(cleanNotifySettings({ questionAfterMinutes: 'off' }), { questionAfterMinutes: null });
+  assert.deepStrictEqual(cleanNotifySettings('junk'), { questionAfterMinutes: 3 });
+});
+
+test('question reminders follow the device\'s agent list; a member\'s own agents remind only that member\'s devices', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { push, sent } = mk({ ownerOf: (a) => (a === 'kids' ? 'u_member' : null) });
+  push.subscribe(SUB(1), ['trader'], { id: 'u_admin', role: 'admin' });
+  push.subscribe(SUB(2), ['maestro'], { id: 'u_admin', role: 'admin' });
+  push.subscribe(SUB(3), null, { id: 'u_member', role: 'member' });
+  push.subscribe(SUB(4), null);
+  push.onEvent(ask('trader', 'q1')); t.mock.timers.tick(QUESTION_DELAY_MS); await flush();
+  assert.deepStrictEqual(sent.map(s => s.sub.endpoint).sort(), [SUB(1).endpoint, SUB(4).endpoint], 'household agent: admins\' devices that follow it, and older devices; not the member\'s');
+  sent.length = 0;
+  push.onEvent(ask('kids', 'q2')); t.mock.timers.tick(QUESTION_DELAY_MS); await flush();
+  assert.deepStrictEqual(sent.map(s => s.sub.endpoint), [SUB(3).endpoint], 'the member\'s own agent: the member\'s device only');
+});
+
+test('approvals wait like questions and are dropped when decided in time', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { push, sent } = mk();
+  push.subscribe(SUB(1));
+  push.onEvent({ type: 'approval_request', id: 'ap1', agent: 'trader', cls: 'send', summary: 'email to someone' });
+  t.mock.timers.tick(QUESTION_DELAY_MS); await flush();
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent[0].body.title, 'Trader wants to send something');
+  assert.match(sent[0].body.body, /tap to approve or deny/);
+  push.onEvent({ type: 'approval_request', id: 'ap2', agent: 'trader', cls: 'destroy', summary: 'rm' });
+  t.mock.timers.tick(30000);
+  push.onEvent({ type: 'approval_resolved', id: 'ap2', agent: 'trader', decision: 'deny' });
+  t.mock.timers.tick(QUESTION_DELAY_MS); await flush();
+  assert.strictEqual(sent.length, 1);
 });
 
 test('a subscription is removed after 3 consecutive 404/410 answers; other errors and successes reset or are ignored', async () => {
@@ -215,9 +277,10 @@ test('start() hooks hub-events: a published turn_end reaches the sender', async 
   push.subscribe(SUB(1));
   const ev = hubEvents.createHubEvents();
   const stop = push.start(ev);
-  ev.publish('turn_end', { turnId: 't1', agent: 'trader', origin: { kind: 'user' }, ok: true, error: null, reply: 'hi' });
+  ev.publish('turn_end', { turnId: 't0', agent: 'trader', origin: { kind: 'user' }, ok: true, error: null, reply: 'hi', notify: [] });
+  ev.publish('turn_end', { turnId: 't1', agent: 'trader', origin: { kind: 'user' }, ok: true, error: null, reply: 'hi', notify: ADMIN_BELL });
   await flush();
-  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent.length, 1, 'only the turn someone asked about');
   stop();
   ev.publish('turn_end', { turnId: 't2', agent: 'maestro', origin: { kind: 'user' }, ok: true, error: null, reply: 'hi' });
   await flush();
@@ -247,7 +310,7 @@ test('has()/count(): the phone can ask whether the hub still knows its subscript
   assert.match(logs[logs.length - 1], /subscription removed/);
 });
 
-test('a test push is marked force (the phone shows it even with the app in front); reply pushes log sent/failed', async () => {
+test('a test push is marked force (the phone shows it even with the app in front); done pushes log sent/failed', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'push-'));
   const logs = []; const sent = [];
   const push = createPush({ dir, now: () => 1_000_000, log: (...a) => logs.push(a.join(' ')),
@@ -256,10 +319,10 @@ test('a test push is marked force (the phone shows it even with the app in front
   push.subscribe(SUB(1));
   await push.test();
   assert.equal(sent[0].force, true);
-  push.onEvent({ type: 'turn_end', turnId: 't1', agent: 'trader', ok: true, origin: { kind: 'user' } });
+  push.onEvent({ type: 'turn_end', turnId: 't1', agent: 'trader', ok: true, origin: { kind: 'user' }, notify: ADMIN_BELL });
   await new Promise(r => setImmediate(r));
-  assert.equal(sent[1].force, undefined, 'reply pushes are not forced');
-  assert.ok(logs.some(l => /reply push for trader: sent 1, failed 0/.test(l)), logs.join('|'));
+  assert.equal(sent[1].force, undefined, 'done pushes are not forced (the app in front already shows the reply)');
+  assert.ok(logs.some(l => /done push for trader: sent 1, failed 0/.test(l)), logs.join('|'));
 });
 
 test('notify: hub notices (plan warnings) go to every device, or only to admins\' and to devices registered before accounts were recorded', async () => {

@@ -365,7 +365,7 @@ One Docker container per agent (`hub-agent-<name>`, image `agent-hub-sandbox:lat
 - **Wallet** (`lib/wallet/`): an encrypted keystore, a firewall of caps and allow-lists, a scoped executor for scripts (`/api/wallet/execute` with its own token), Hyperliquid support. Only agents listed in `walletAgents` get wallet tools.
 - **Tiger Team** (`/tiger-team`): multi-agent runs on the gateway route with durable checkpoints.
 - **Images**: `generate_image` (Google or OpenAI image models, `imageModels`), served only from hub folders.
-- **Phone app** (`/mobile`): installable PWA; push notifications via `data/push/` (VAPID); "Send a test notification" in its menu.
+- **Phone app** (`/mobile`): installable PWA; push notifications via `data/push/` (VAPID); "Send a test notification" in its menu. What notifies (`lib/push.js`): a finished reply only when someone tapped **🔔 Notify me** next to Stop while it ran (`POST /api/agents/<name>/notify {on}`; kept on the running turn, `turnFor().notify`, event `turn_notify`; one push to that person's devices when the turn ends); a question (ask_user) or approval still unanswered after `settings.notify.questionAfterMinutes` (default 3; `null` = never; Settings → Notifications), sent to the agent owner's devices (a member's agent: that member's; the household's: admins'); and the rare hub notices (an agent asking for a new agent, provider pacing, hub halted, Claude plan limits). Nothing else: consulted agents and workers never notify.
 
 ---
 
@@ -398,7 +398,7 @@ One Docker container per agent (`hub-agent-<name>`, image `agent-hub-sandbox:lat
 | Memory, recall | `GET /api/memory/stats`, `/api/memory/shared`, `/api/memory/shared/search`, `POST /api/memory/distill`; `GET /api/recall`, `/api/recall/context`; `/api/dream*` |
 | Models, settings | `GET /api/models`, `/api/models/discovered`, `/api/models/health`, `POST /api/models/discover\|test`; `GET/POST /api/settings`, `POST /api/settings/test-provider`; `/api/plan-usage*`; `/api/auto-model/*`; `/api/model-telemetry*`; `/api/max_completion_tokens`, `/api/max_context_messages` |
 | Work | `GET /api/jobs`, `POST /api/jobs/cancel`; `/api/scheduled-tasks*`; `/api/scheduler*`; `/api/workers`, `/api/sdk_workers`, `/api/cancel-worker`; `/api/task-queue` |
-| Files, push | `/api/files`, `/api/files/upload\|download\|mkdir\|rename`; `/api/push/vapid-public-key\|subscribe\|unsubscribe\|status\|test` |
+| Files, push | `/api/files`, `/api/files/upload\|download\|mkdir\|rename`; `/api/push/vapid-public-key\|subscribe\|unsubscribe\|status\|test`; `POST /api/agents/<name>/notify` (the 🔔 on a running reply) |
 | Policy, spend | `/api/approvals*`, `/api/tool_confirm`, `/api/confirm_tools_toggle`, `/api/prescan_tools`, `/api/lazy_tools`, `/api/caveman_mode`; `/api/ledger/today\|days\|caps`; `/api/tool-learning/*` |
 | Extensions | `/api/skills*`, `/api/connectors*`, `/api/connector-groups*`, `/api/modules*`, `/api/websearch/*`, `/api/sandbox/*`, `/api/wallet/*`, `/api/tiger-team/*`, `/api/codex-bridge/rpc` (loopback) |
 | Operations | `POST /api/restart`, `GET /api/restart/log\|pending`; `/api/git-sync/status\|update\|force-update\|rewrite-update`; `/api/setup/status` |

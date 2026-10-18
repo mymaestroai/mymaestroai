@@ -831,7 +831,49 @@ function paintChatStatus() {
   // this device is streaming. The send button is then Interject rather than Stop.
   const stopBtn = $('chat-stop-btn');
   if (stopBtn) stopBtn.hidden = !working && !own;
+  // "Notify me when done" sits next to Stop and shows exactly when Stop does: while a reply runs.
+  const bell = $('chat-notify-btn');
+  if (bell) { bell.hidden = !working && !own; paintNotifyBtn(); }
   setSendMode(own);
+}
+
+// ── "Notify me when done" (the 🔔 next to Stop while a reply runs): the hub keeps who asked on the running turn and
+// sends one notification to that person's devices when it ends (lib/push); turn_notify keeps every page in step. ──
+const notifyArmed = {};   // agent -> turnId this person asked to be notified about
+function myNotifyId() { return (hubMe && hubMe.user && hubMe.user.id) ? String(hubMe.user.id) : '*'; }
+function paintNotifyBtn() {
+  const bell = $('chat-notify-btn');
+  if (!bell) return;
+  const on = !!(current && notifyArmed[current]);
+  bell.classList.toggle('on', on);
+  bell.setAttribute('aria-pressed', on ? 'true' : 'false');
+  bell.title = on ? 'You will get a notification when this reply is done. Tap to cancel.' : 'Get a notification when this reply is done';
+}
+function applyTurnNotify(agent, turn) {
+  if (!agent || !turn) return;
+  notifyArmed[agent] = (turn.active !== false && !turn.ended && Array.isArray(turn.notify) && turn.notify.includes(myNotifyId())) ? turn.turnId : null;
+  if (agent === current) paintNotifyBtn();
+}
+async function toggleNotifyDone() {
+  const agent = current;
+  if (!agent) return;
+  const on = !notifyArmed[agent];
+  let r, d = {};
+  try {
+    r = await api(`/api/agents/${encodeURIComponent(agent)}/notify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
+    d = await r.json().catch(() => ({}));
+  } catch { toast('Could not reach the hub'); return; }
+  if (r.status === 409) { notifyArmed[agent] = null; paintNotifyBtn(); toast(`${displayName(agent)} is not working on a reply right now`); return; }
+  if (!r.ok) { toast(d.detail || d.error || 'Could not change the notification'); return; }
+  notifyArmed[agent] = d.on ? d.turnId : null;
+  paintNotifyBtn();
+  if (d.on && !d.devices) toast('Notifications are off on this phone: turn them on in the ⋮ menu first', 6000);
+  else toast(d.on ? `🔔 You will get a notification when ${displayName(agent)} is done` : 'Notification cancelled');
+}
+function onTurnNotify(ev) {
+  if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;   // someone else's bell
+  notifyArmed[ev.agent] = ev.on ? ev.turnId : null;
+  if (ev.agent === current) paintNotifyBtn();
 }
 
 // Stop for a reply this device is streaming (or re-attaching) for the given agent only;
@@ -1663,6 +1705,7 @@ async function catchUpReattach(ra) {
   if (!d || !d.turn || reattaches.get(ra.agent) !== ra) return;   // history polling takes it from here
   const turn = d.turn;
   if (!turnMatches(ra, turn)) return;
+  applyTurnNotify(ra.agent, turn);
   ra.turnId = turn.turnId || ra.turnId;
   if (!ra.since && turn.startedAt) ra.since = turn.startedAt;
   if (!ra.text && !ra.msgShown && typeof turn.message === 'string' && turn.message && bubbleLive(ra)) {
@@ -1711,6 +1754,7 @@ async function catchUpOpenAgent() {
   if (entry) {
     const d = await fetchTurn(agent);
     if (!d || !d.turn || d.turn.turnId !== entry[0] || !hubTurns[entry[0]] || !chatOpenFor(agent)) return;
+    applyTurnNotify(agent, d.turn);
     applyTurnFeed(entry[1], d.turn);
     if (d.turn.text) setReplyText(entry[1], d.turn.text);
     if (!d.turn.ended) applyTurnProgress(agent, d.turn, entry[1]);
@@ -2559,6 +2603,7 @@ function connectEvents() {
   on('turn_progress', onTurnProgress);
   on('turn_worker_delta', onTurnWorkerDelta);
   on('turn_end', onTurnEnd);
+  on('turn_notify', onTurnNotify);
   on('ask_user', (ev) => {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
     // The question itself: shown now if that chat is open, else kept until it is (dedup by request id in showQuestion).
@@ -2764,6 +2809,7 @@ function onTurnProgress(ev) {
 
 function onTurnEnd(ev) {
   setLive(ev.agent, { busy: false });
+  if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }
   if (ev.agent && ev.agent === current) setTimeout(() => refreshCtx(ev.agent), 3500);   // the hub records the size 2.5 s after the turn
   const reply = ev.reply || (ev.ok ? '(no reply)' : `⚠ turn failed: ${ev.error || 'unknown error'}`);
   const t = hubTurns[ev.turnId];
@@ -3019,6 +3065,7 @@ function wire() {
   $('files-upload-input').addEventListener('change', (e) => { filesUpload(e.target.files); e.target.value = ''; });
   $('menu-signout').addEventListener('click', signOut);
   $('chat-stop-btn')?.addEventListener('click', stopRemoteTurn);
+  $('chat-notify-btn')?.addEventListener('click', toggleNotifyDone);
   $('chat-resync')?.addEventListener('click', resyncClick);
   document.addEventListener('click', () => $('menu').classList.remove('open'));
   $('menu-clear').addEventListener('click', confirmClear);

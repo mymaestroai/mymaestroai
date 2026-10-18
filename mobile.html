@@ -309,6 +309,10 @@
   /* Narrow phones: the square alone (red outline, aria-label), so the line under the agent's name keeps room to say
      what the agent is doing. */
   @media (max-width: 430px) { #chat-stop-btn .stop-label { display: none; } #chat-head .iconbtn.stop-remote { min-width: 40px; padding: 0 8px; } }
+  /* "Notify me when done" (shown while a reply runs): dim until tapped, then lit. */
+  #chat-notify-btn { font-size: 1.05rem; }
+  #chat-notify-btn:not(.on) { opacity: .55; filter: grayscale(1); }
+  #chat-notify-btn.on { opacity: 1; filter: none; background: rgba(61,123,255,.22); border-radius: 8px; }
   /* Files sheet (upload, download, browse) */
   #files-sheet { width: min(94vw, 460px); max-height: 88vh; overflow-y: auto; }
   #files-sheet h3 { margin-bottom: 6px; }
@@ -393,6 +397,7 @@
       <span class="agent-icon" id="chat-icon"></span>
       <div id="chat-title"><b id="chat-name">Chat</b><span class="sub-row"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span></span></div>
       <button class="iconbtn" id="chat-resync" aria-label="Re-sync" title="Re-sync with the hub">&#x21BB;</button>
+      <button class="iconbtn notify-done" id="chat-notify-btn" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" aria-pressed="false" hidden>&#x1F514;</button>
       <button class="iconbtn stop-remote" id="chat-stop-btn" aria-label="Stop this agent" title="Stop this agent's current turn" hidden>&#x25A0;<span class="stop-label"> Stop</span></button>
       <button class="iconbtn" id="chat-menu-btn" aria-label="Menu">&#x22EE;</button>
     </div>

@@ -1543,13 +1543,25 @@
         </div>
       </div>`;
 
-      html += `<div class="st-section"><h4>Notifications</h4>
+      {
+        // When a question (or an approval) still waits: settings.notify.questionAfterMinutes (unset 3, null never).
+        const qa = data.notify ? data.notify.questionAfterMinutes : undefined;
+        const qaVal = qa === null ? 'off' : (qa === undefined ? '3' : String(qa));
+        const qaOpts = [['off', 'Never'], ['0', 'Right away'], ['1', 'After 1 minute'], ['3', 'After 3 minutes'], ['5', 'After 5 minutes'], ['10', 'After 10 minutes']];
+        if (!qaOpts.some(o => o[0] === qaVal)) qaOpts.push([qaVal, `After ${qaVal} minutes`]);
+        html += `<div class="st-section"><h4>Notifications</h4>
         <div class="st-row">
           <label>🔔 Push</label>
           <button class="st-test-btn" id="st-push-btn" onclick="toggleDesktopPush()">…</button>
         </div>
-        <div class="st-hint" id="st-push-hint">Browser notification when an agent finishes a turn or asks you something, even with this tab closed.</div>
+        <div class="st-hint" id="st-push-hint">Notifications on this computer as well as the phone, even with this tab closed.</div>
+        <div class="st-row">
+          <label>Questions</label>
+          <select id="st-question-after" onchange="saveQuestionAfter(this.value)">${qaOpts.map(([v, l]) => `<option value="${v}"${v === qaVal ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        </div>
+        <div class="st-hint">A notification when an agent's question (or an approval) is still unanswered after this long. Finished replies notify only when you click 🔔 Notify me next to Cancel while the reply is running.</div>
       </div>`;
+      }
 
       html += `<div class="st-section"><h4>Emergency</h4>
         <div class="st-row">
@@ -2397,6 +2409,14 @@
     }
 
     // Per-class approval cards (settings.approvalClasses): these kinds get a card even while the switch is off.
+    async function saveQuestionAfter(v) {
+      const questionAfterMinutes = v === 'off' ? null : Number(v);
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ notify: { questionAfterMinutes } }) });
+        hubToast(r.ok ? (questionAfterMinutes === null ? 'Questions will not send notifications.' : questionAfterMinutes === 0 ? 'Questions notify right away.' : `Questions notify after ${questionAfterMinutes} min unanswered.`) : 'Could not save.');
+      } catch (e) { alert('Could not save: ' + e.message); }
+    }
+
     async function saveApprovalClasses() {
       const approvalClasses = [...document.querySelectorAll('#st-approval-classes input[type=checkbox]')].filter(b => b.checked).map(b => b.value);
       try {
@@ -4662,6 +4682,7 @@
         if (solo && !solo.controller) {
           const cancelBtn = document.getElementById(`cancel-${solo.chatId || solo.id}`);
           if (cancelBtn) { cancelBtn.style.display = (busy || question) ? '' : 'none'; cancelBtn.title = (busy || question) ? `Stop ${name}'s current turn (${activity})` : ''; }
+          showNotifyBtn(solo.chatId || solo.id, busy || question);
         }
       } catch {}
       let line = btn.querySelector('.agent-busy-line');
@@ -4999,6 +5020,7 @@
       if (!chat || chat.controller || chat.isWorker || chat.isGroup || !chat.agent) return;   // an own stream shows its turn itself
       const d = await fetchTurn(chat.agent);
       const turn = d && d.turn;
+      if (turn) applyTurnNotify(chat.agent, turn);   // the bell's state for this person (tapped here or on another device)
       if (!turn || !chats[chatId] || chat.controller) return;   // nothing to show: history polling takes over
       const ra = chat.reattach;
       const entry = Object.entries(hubTurns).find(([, t]) => t.chatId === chatId);
@@ -5073,6 +5095,7 @@
 
     function onHubTurnEnd(ev) {
       setAgentLive(ev.agent, { busy: false });
+      if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
       { const c = findSoloChat(ev.agent); if (c) { c.inProgress = null; setTimeout(() => compactionRefresh(c.id), 3500); } }   // context % moved (the hub records it 2.5 s after the turn)
       const t = hubTurns[ev.turnId]; delete hubTurns[ev.turnId];
       if (!t) {
@@ -5197,6 +5220,12 @@
       source.addEventListener('turn_progress', e => { const ev = parse(e); if (ev) onHubTurnProgress(ev); });
       source.addEventListener('turn_worker_delta', e => { const ev = parse(e); if (ev) onHubTurnWorkerDelta(ev); });
       source.addEventListener('turn_end', e => { const ev = parse(e); if (ev) { onHubTurnEnd(ev); scheduleSpendRefresh(); } });
+      source.addEventListener('turn_notify', e => {
+        const ev = parse(e);
+        if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;   // someone else's bell
+        notifyArmed[ev.agent] = ev.on ? ev.turnId : null;
+        paintNotifyBtns(ev.agent);
+      });
       source.addEventListener('ask_user', e => {
         const ev = parse(e); if (!ev) return;
         setAgentLive(ev.agent, { busy: true, pendingQuestion: true });
@@ -5423,6 +5452,7 @@
           <button onclick="openRecallPanel('${chatId}')" id="recall-btn-${chatId}" title="Search this agent's whole history">🔎 Recall</button>
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
+          <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none;" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
 
           <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" title="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="fillModelPick('${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
         </div>
@@ -5656,6 +5686,51 @@
       URL.revokeObjectURL(url);
     }
     
+    // ── "Notify me when done": the 🔔 next to Cancel while a reply runs. The hub keeps who asked on the running turn
+    // and sends one notification to that person's devices when it ends (lib/push); turn_notify keeps every page in step.
+    const notifyArmed = {};   // agent -> turnId this person asked to be notified about
+    function myNotifyId() { const me = window.hubMe; return (me && me.user && me.user.id) ? String(me.user.id) : '*'; }
+    function paintNotifyBtns(agent) {
+      for (const [chatId, chat] of Object.entries(chats)) {
+        if (!chat || chat.agent !== agent) continue;
+        const btn = document.getElementById(`notify-${chatId}`);
+        if (!btn) continue;
+        const on = !!notifyArmed[agent];
+        btn.classList.toggle('on', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.textContent = on ? '🔔 Notifying' : '🔔 Notify me';
+        btn.title = on ? 'You will get a notification when this reply is done. Click to cancel.' : 'Get a notification on your phone when this reply is done';
+      }
+    }
+    function showNotifyBtn(chatId, show) {
+      const btn = document.getElementById(`notify-${chatId}`);
+      if (btn) btn.style.display = show ? 'inline-block' : 'none';
+      const chat = chats[chatId];
+      if (chat && chat.agent) paintNotifyBtns(chat.agent);
+    }
+    function applyTurnNotify(agent, turn) {
+      if (!agent || !turn) return;
+      notifyArmed[agent] = (turn.active !== false && !turn.ended && Array.isArray(turn.notify) && turn.notify.includes(myNotifyId())) ? turn.turnId : null;
+      paintNotifyBtns(agent);
+    }
+    async function toggleNotifyDone(chatId) {
+      const chat = chats[chatId];
+      if (!chat || !chat.agent) return;
+      const agent = chat.agent, who = chat.display || capName(agent), on = !notifyArmed[agent];
+      let r, d = {};
+      try {
+        r = await fetch(`/api/agents/${encodeURIComponent(agent)}/notify`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
+        d = await r.json().catch(() => ({}));
+      } catch { hubToast('Could not reach the hub.'); return; }
+      if (r.status === 409) { notifyArmed[agent] = null; showNotifyBtn(chatId, false); hubToast(`${who} is not working on a reply right now.`); return; }
+      if (!r.ok) { hubToast(d.detail || d.error || 'Could not change the notification.'); return; }
+      notifyArmed[agent] = d.on ? d.turnId : null;
+      paintNotifyBtns(agent);
+      if (d.on && !d.devices) hubToast('No device of yours has notifications turned on yet. On the phone: the ⋮ menu, Notifications.', 9000);
+      else if (d.on) hubToast(`You will get a notification when ${who} is done.`);
+      else hubToast('Notification cancelled.');
+    }
+
     // Ask the hub to stop the agent's running turn.  Closing the stream alone no longer stops it
     // (the server keeps working through disconnects), so Stop/Pause tell the server explicitly.
     // Older hubs answer 404 here; that is ignored.
@@ -5739,6 +5814,7 @@
       if (status === 'thinking') {
         if (pauseBtn) pauseBtn.style.display = 'inline-block';
         if (cancelBtn) cancelBtn.style.display = 'inline-block';
+        showNotifyBtn(chatId, true);
         // Enable interjection mode - user can type while agent runs
         if (sendBtn) {
           sendBtn.disabled = false;
@@ -5750,6 +5826,7 @@
       } else if (status === 'paused') {
         if (pauseBtn) pauseBtn.style.display = 'none';
         if (cancelBtn) cancelBtn.style.display = 'none';
+        showNotifyBtn(chatId, false);
         if (sendBtn) {
           sendBtn.disabled = false;
           sendBtn.textContent = 'Send';
@@ -5759,6 +5836,7 @@
       } else {
         if (pauseBtn) pauseBtn.style.display = 'none';
         if (cancelBtn) cancelBtn.style.display = 'none';
+        showNotifyBtn(chatId, false);
         if (sendBtn) {
           sendBtn.disabled = false;
           sendBtn.textContent = 'Send';

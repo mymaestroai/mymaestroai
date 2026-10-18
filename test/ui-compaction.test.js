@@ -71,7 +71,7 @@ test('desktop: a context line under each solo chat toolbar from the first readin
   assert.ok(app.indexOf('id="compaction-line-${chatId}"') > app.indexOf('id="recall-btn-${chatId}"') && app.indexOf('id="compaction-line-${chatId}"') < app.indexOf('<div class="messages" id="messages-${chatId}"></div>'), 'between the toolbar and the messages');
   assert.ok(app.includes('filesApi(`/api/agents/${encodeURIComponent(chat.agent)}/compaction`)'), 'GET compaction');
   assert.match(app, /renderSoloChatPanel\(chatId\);\s*\n\s*switchToChat\(chatId\);[\s\S]{0,200}compactionRefresh\(chatId\);/, 'fetched once when a chat opens');
-  assert.match(app, /function onHubTurnEnd\(ev\) \{[\s\S]{0,200}setTimeout\(\(\) => compactionRefresh\(c\.id\), 3500\);/, 'and after turn_end for that agent, once the hub has recorded the size');
+  assert.match(app, /function onHubTurnEnd\(ev\) \{[\s\S]{0,400}setTimeout\(\(\) => compactionRefresh\(c\.id\), 3500\);/, 'and after turn_end for that agent, once the hub has recorded the size');
   assert.ok(app.includes("if (!d || (!pct && !tokens)) { el.style.display = 'none'; el.textContent = ''; return; }"), 'hidden only until the first reading (no 50% floor)');
   assert.ok(app.includes('el.textContent = `context ${pct}%${size}${mode}${d.running ? \' · writing the brief…\' : \'\'}`;'), 'status line "context 14% · 141K of 1M tokens · compression: on at 90%"');
   assert.ok(app.includes("const mode = !d.mode ? '' : d.mode === 'off' ? ' · compression: off' : ` · compression: ${compactionModeLabel(d.mode)} at ${at}%`;"), 'mode and threshold');
@@ -85,7 +85,7 @@ test('phone: the chat header shows "N% context" from the compaction GET and the 
   assert.ok(mhtml.includes('<span class="sub" id="chat-ctx" hidden></span>') && mhtml.includes('#chat-ctx.hot'), 'header element + style');
   assert.ok(mjs.includes('el.textContent = `${pct}% context`;'), 'label');
   assert.match(mjs, /fillModelPick\(\); fillEffortPick\(\);\s*\n\s*paintCtx\(\); refreshCtx\(name\);/, 'on open');
-  assert.match(mjs, /function onTurnEnd\(ev\) \{[\s\S]{0,160}setTimeout\(\(\) => refreshCtx\(ev\.agent\), 3500\);/, 'after each turn, once the hub has recorded the size');
+  assert.match(mjs, /function onTurnEnd\(ev\) \{[\s\S]{0,400}setTimeout\(\(\) => refreshCtx\(ev\.agent\), 3500\);/, 'after each turn, once the hub has recorded the size');
   assert.ok(mjs.includes("case 'context_health': noteCtxReading(rec.agent, g); break;"), 'live during the reply');
 });
 
@@ -122,5 +122,5 @@ test('mobile: the same notices in the open chat, and a chat-only Compress now me
 });
 
 test('service worker cache bumped to v18', () => {
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v40';"));
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v41';"));
 });

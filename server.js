@@ -583,6 +583,24 @@ async function handleHttpRequest(req, res) {
         return jsonResponse(res, 200, { ok: true, agent: agentName, active: !!(turn && turn.active), turn });
       }
     }
+    // "Notify me when done": the 🔔 next to Stop while a reply runs. One push to this person's devices when that turn
+    // ends (lib/push); every page of theirs shows the bell's state (turn_notify). A person on a page, not a program.
+    {
+      const nm = pathname.match(/^\/api\/agents\/([^/]+)\/notify$/);
+      if (nm && req.method === 'POST') {
+        const agentName = decodeURIComponent(nm[1]);
+        if (req.hubToken || req.hubService) return jsonResponse(res, 403, { error: 'session_only', detail: 'turned on by a person from a page' });
+        const who = req.hubUser || null;
+        if (who && !access.isAdmin(who) && !access.canAccessAgent(who, agentName, { agents: await getAgents(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
+        const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
+        const user = who ? { id: who.id, role: who.role } : { id: '*', role: 'admin' };   // a hub without accounts
+        const r = require('./lib/hub-events').events.setTurnNotify(agentName, { on: b.on !== false, user, turnId: typeof b.turnId === 'string' ? b.turnId : null });
+        if (!r) return jsonResponse(res, 409, { error: 'not_running', detail: `${agentName} is not working on a reply right now` });
+        let devices = 0;
+        try { devices = require('./lib/push').getPush().devicesFor(user); } catch {}
+        return jsonResponse(res, 200, { ok: true, agent: agentName, turnId: r.turnId, on: r.on, devices });
+      }
+    }
     {
       const cm = pathname.match(/^\/api\/agents\/([^/]+)\/compaction(?:\/(run))?$/);
       if (cm) {
@@ -1930,6 +1948,7 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.approvalClasses !== undefined) { const ok = require('./lib/policy-gate').APPROVAL_CLASSES; patch.approvalClasses = Array.isArray(patch.approvalClasses) ? [...new Set(patch.approvalClasses.map(String).filter(c => ok.includes(c)))] : []; }
           // Claude plan: warning levels, and the optional automatic switch (merged onto the stored policy, so its map survives).
           if (patch && patch.planWarn !== undefined) patch.planWarn = require('./lib/plan-usage').cleanWarn(patch.planWarn);
+          if (patch && patch.notify !== undefined) patch.notify = require('./lib/push').cleanNotifySettings(patch.notify);
           if (patch && patch.planFallback !== undefined) patch.planFallback = require('./lib/plan-usage').cleanPolicy(patch.planFallback, hubSettings.getSetting('planFallback'));
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
