@@ -249,6 +249,8 @@
   function busy(id, text) { const el = $(id); el.className = 'msg on warn'; el.innerHTML = '<span class="spin"></span>'; el.appendChild(document.createTextNode(text)); }
   function clear(id) { $(id).className = 'msg'; $(id).textContent = ''; }
   function errText(res, fallback) { return (res.body && (res.body.detail || res.body.error)) || fallback; }
+  // The Claude and API-key checks answer { error: what to do, detail: the raw text }: show the advice, the raw text under Details.
+  function adviceText(res, fallback) { return (res.body && (res.body.error || res.body.detail)) || fallback; }
 
   document.addEventListener('click', (e) => {
     const b = e.target.closest('[data-copy]'); if (!b) return;
@@ -345,8 +347,10 @@
     show('s-ai', 2);
     const p = (state && state.providers) || {};
     if (p.claude) {
+      // Claude Code is on this computer: find out right away whether it is signed in (one tiny question) instead of
+      // asking the owner to press Check. Signed out, the answer says what to do; coming back re-checks by itself.
       $('o-claude').classList.add('open');
-      say('claude-msg', 'Claude Code is already on this computer. Press Check to confirm it is signed in.', 'warn');
+      claudeCheck('Claude Code is on this computer: checking that it is signed in…');
     }
   }
 
@@ -358,16 +362,16 @@
   }));
   function aiReady(model, note) { chosenModel = model; $('ai-go').disabled = false; if (note) $('ai-go').textContent = note; }
   let claudeOk = false, claudeBusy = false, leftForSignIn = false;
-  async function claudeCheck() {
+  async function claudeCheck(note) {
     if (claudeBusy || claudeOk) return;
     claudeBusy = true; $('claude-check').disabled = true;
-    busy('claude-msg', 'Asking Claude a one-word question… this can take up to a minute the first time.');
+    busy('claude-msg', note || 'Asking Claude a one-word question… this can take up to a minute the first time.');
     const res = await api('POST', '/api/welcome/claude-check', {});
     claudeBusy = false; $('claude-check').disabled = false;
     if (res.body && res.body.ok) { claudeOk = true; say('claude-msg', '✓ Claude is connected through your subscription.', 'ok'); aiReady(res.body.model || 'claude-sdk/default'); }
-    else say('claude-msg', errText(res, 'Claude did not answer.'), res.body && res.body.state === 'limit' ? 'warn' : 'err', res.body && res.body.detail);
+    else say('claude-msg', adviceText(res, 'Claude did not answer.'), res.body && res.body.state === 'limit' ? 'warn' : 'err', res.body && res.body.detail);
   }
-  $('claude-check').addEventListener('click', claudeCheck);
+  $('claude-check').addEventListener('click', () => claudeCheck());
   // Signing in to Claude happens in a terminal and the browser: when the owner comes back to this page with the
   // Claude card open, check by itself.
   const claudeCardOpen = () => $('s-ai').classList.contains('on') && $('o-claude').classList.contains('open');
@@ -384,7 +388,7 @@
     const res = await api('POST', '/api/welcome/api-key', { provider: $('k-provider').value, apiKey: $('k-key').value });
     $('k-go').disabled = false;
     if (res.body && res.body.ok) { $('k-key').value = ''; say('key-msg', `✓ ${res.body.label} is connected: ${res.body.models.length} models available.`, 'ok'); fillModels(res.body.models, res.body.suggested); aiReady(res.body.suggested); }
-    else say('key-msg', errText(res, 'The key did not work.'), 'err', res.body && res.body.detail);
+    else say('key-msg', adviceText(res, 'The key did not work.'), 'err', res.body && res.body.detail);
   });
   $('local-find').addEventListener('click', async () => {
     $('local-find').disabled = true; busy('local-msg', 'Looking for local models…');

@@ -48,7 +48,8 @@ test('a way to think: an API key, the Claude client, or a local engine; an empty
   assert.strictEqual(w.hasProvider(), false);
   s._s.providers.openai = { apiKey: 'sk-x' }; assert.strictEqual(w.hasProvider(), true);
   delete s._s.providers.openai;
-  assert.strictEqual(createWelcome({ dataDir: dir, env: {}, settings: s, claudeAuth: { hasSdkCredentials: () => true } }).hasProvider(), true);
+  assert.strictEqual(createWelcome({ dataDir: dir, env: {}, settings: s, claudeAuth: { hasSdkCredentials: () => true, hasSignIn: () => true } }).hasProvider(), true, 'signed in to Claude');
+  assert.strictEqual(createWelcome({ dataDir: dir, env: {}, settings: s, claudeAuth: { hasSdkCredentials: () => true, hasSignIn: () => false } }).hasProvider(), false, 'Claude installed but signed out is not a way to think');
   assert.strictEqual(createWelcome({ dataDir: dir, env: { OLLAMA_URL: 'http://x' }, settings: s, claudeAuth: noClaude }).hasProvider(), true);
   fs.writeFileSync(path.join(dir, 'local-models.json'), JSON.stringify({ enabled: true }));
   assert.strictEqual(w.hasProvider(), true, 'the Local models proxy, switched on');
@@ -175,4 +176,33 @@ test('resume: "/" sends an admin with unfinished setup back to /welcome; the pag
 
   const installer = fs.readFileSync(path.join(root, 'install', 'install.sh'), 'utf8');
   assert.ok(installer.includes('shortcut is on your Desktop. If the setup page gets closed or replaced'), 'the installer says where to go back');
+});
+
+test('Claude counts as ready only when really signed in or a Welcome check passed; the summary still says it is on this computer', async () => {
+  const dir = tmp();
+  const signedOut = { hasSdkCredentials: () => true, hasSignIn: () => false };
+  const w = createWelcome({ dataDir: dir, env: {}, settings: fakeSettings(), claudeAuth: signedOut });
+  assert.strictEqual(w.claudeReady(), false);
+  assert.deepStrictEqual([w.providerSummary().claude, w.providerSummary().claudeReady], [true, false], 'the card opens (and checks) because Claude Code is here');
+  const sdk = { query: () => (async function* () { yield { type: 'result', is_error: false, result: 'OK' }; })() };
+  const w2 = createWelcome({ dataDir: dir, env: {}, settings: fakeSettings(), claudeAuth: signedOut, sdkLoader: { loadSdk: async () => sdk, cliOptions: () => ({}) }, clientEnv: (e) => e });
+  const r = await w2.checkClaude({ timeoutMs: 5000 });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.ok(w2.progress().claudeOkAt, 'a passed check is remembered');
+  assert.strictEqual(w2.claudeReady(), true);
+  assert.strictEqual(w2.hasProvider(), true);
+  assert.strictEqual(w2.providerSummary().local, false, 'a Claude check is not a local engine');
+  const before = createWelcome({ dataDir: tmp(), env: {}, settings: fakeSettings({ welcome: { provider: 'claude', at: 'x' } }), claudeAuth: signedOut });
+  assert.deepStrictEqual([before.claudeReady(), before.localConfigured(), before.hasProvider()], [true, false, true], 'a check that passed before this update still counts');
+  const proxy = createWelcome({ dataDir: tmp(), env: {}, settings: fakeSettings({ welcome: { provider: 'local', at: 'x' } }), claudeAuth: signedOut });
+  assert.deepStrictEqual([proxy.claudeReady(), proxy.localConfigured()], [false, true], 'the hub\'s own proxy, connected on the Welcome page, is a local engine');
+});
+
+test('the Welcome page checks Claude by itself when Claude Code is found (no Check press needed)', () => {
+  const page = fs.readFileSync(path.join(__dirname, '..', 'welcome.html'), 'utf8');
+  assert.match(page, /if \(p\.claude\) \{[\s\S]{0,400}claudeCheck\('Claude Code is on this computer: checking that it is signed in…'\);/);
+  assert.ok(page.includes("$('claude-check').addEventListener('click', () => claudeCheck());"), 'the button passes no event as the message');
+  assert.ok(!page.includes('Press Check to confirm it is signed in'), 'the old "press Check" note is gone');
+  assert.ok(page.includes("say('claude-msg', adviceText(res, 'Claude did not answer.')") && page.includes("say('key-msg', adviceText(res, 'The key did not work.')"), 'a failed check shows the advice, the raw text under Details');
+  assert.match(page, /function adviceText\(res, fallback\) \{ return \(res\.body && \(res\.body\.error \|\| res\.body\.detail\)\) \|\| fallback; \}/);
 });

@@ -62,3 +62,20 @@ test('the Tailscale helper works on Linux and Mac, and restarts through the serv
   assert.match(ts, /sudo tailscale set --operator=\$USER/);
   assert.match(ts, /"\$NODE" scripts\/hub-cli\.js restart/);
 });
+
+test('the installer says whether Claude Code is here and signed in (the Welcome page then proves it)', () => {
+  const src = fs.readFileSync(SH, 'utf8');
+  assert.ok(src.includes('security find-generic-password -s "Claude Code-credentials"'), 'the same Keychain entry the hub reads on a Mac');
+  const run = (setup) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'install-claude-'));
+    const home = path.join(root, 'home'); fs.mkdirSync(home);
+    setup(home);
+    const env = { PATH: '/usr/bin:/bin', HOME: home, MM_STATE_DIR: path.join(root, 'state'), MM_BIN_DIR: path.join(root, 'bin'), SHELL: '/bin/bash' };
+    const r = spawnSync('bash', [SH, '--dry-run', '--yes', '--no-open', '--dir', path.join(root, 'app'), '--repo', '/nonexistent/repo.git'], { env, encoding: 'utf8', timeout: 60000 });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    return r.stdout;
+  };
+  assert.match(run(() => {}), /Claude: Claude Code is not on this computer\./);
+  assert.match(run((h) => { fs.mkdirSync(path.join(h, '.claude')); fs.writeFileSync(path.join(h, '.claude', '.credentials.json'), '{"claudeAiOauth":{}}'); }), /Claude: Claude Code is on this computer and signed in\./);
+  assert.match(run((h) => { fs.mkdirSync(path.join(h, '.local', 'bin'), { recursive: true }); fs.writeFileSync(path.join(h, '.local', 'bin', 'claude'), '#!/bin/sh\n'); fs.chmodSync(path.join(h, '.local', 'bin', 'claude'), 0o755); }), /Claude: Claude Code is on this computer but not signed in yet\./);
+});

@@ -293,8 +293,31 @@ add_shortcut() {
   SHORTCUT="$desk"   # finish() tells the owner: the shortcut opens the hub, and an unfinished setup resumes there
 }
 
+# Is Claude Code on this computer, and signed in? Informational: the Welcome page proves it with one real question.
+# Signed in = the token the client uses exists (its sign-in file, or the macOS Keychain entry), as the hub reads it.
+claude_status() {
+  local bin="" signed=0
+  bin="$(command -v claude 2>/dev/null || true)"
+  if [ -z "$bin" ] && [ -x "$HOME/.local/bin/claude" ]; then bin="$HOME/.local/bin/claude"; fi
+  if [ -z "$bin" ] && [ -x "$HOME/.claude/local/claude" ]; then bin="$HOME/.claude/local/claude"; fi
+  if [ -s "$HOME/.claude/.credentials.json" ]; then signed=1; fi
+  if [ "$signed" = 0 ] && [ "${OS:-}" = darwin ] && have security; then
+    if security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1; then signed=1; fi
+  fi
+  if [ "$signed" = 1 ]; then echo signed-in; elif [ -n "$bin" ]; then echo installed; else echo missing; fi
+}
+claude_line() {
+  case "$(claude_status)" in
+    signed-in) say "  Claude: Claude Code is on this computer and signed in. The Welcome page confirms it with one quick question." ;;
+    installed) say "  Claude: Claude Code is on this computer but not signed in yet. To use your Claude plan, open a new terminal,"
+               say "  type claude, sign in in the browser, then type /exit. The Welcome page checks it." ;;
+    *)         say "  Claude: Claude Code is not on this computer. To use a Claude plan, the Welcome page shows the two steps;"
+               say "  an API key or a model on this computer works too." ;;
+  esac
+}
+
 finish() {
-  if [ "$DRY" = 1 ]; then say ""; say "Dry run finished: nothing was changed."; say ""; return 0; fi
+  if [ "$DRY" = 1 ]; then say ""; claude_line; say ""; say "Dry run finished: nothing was changed."; say ""; return 0; fi
   local link=""
   if [ "$DRY" != 1 ]; then link="$("$NODE" "$DIR/scripts/hub-cli.js" setup-link --plain 2>/dev/null || true)"; fi
   [ -n "$link" ] || link="http://localhost:$PORT/"
@@ -324,6 +347,8 @@ finish() {
   else
     say "  If the setup page gets closed or replaced, open http://localhost:$PORT again: setup continues where you left off."
   fi
+  say ""
+  claude_line
   say ""
   say "  Day to day, in a new terminal window:"
   say "    mymaestro status   ·   mymaestro restart   ·   mymaestro logs   ·   mymaestro update   ·   mymaestro backup"
