@@ -6342,13 +6342,14 @@
     // history, so the window re-attaches to that instead.
     const REATTACH_GIVE_UP_MS = 30 * 60 * 1000;   // only used when the hub cannot tell us whether the agent is busy
 
-    function enterReattach(chatId, msgId, content, partialText, reason, since = null) {
+    function enterReattach(chatId, msgId, content, partialText, reason, since = null, sentAt = null) {
       const chat = chats[chatId];
       if (!chat) return;
       chat.controller = null;
       // content: the user message this window sent (null when the turn was started elsewhere or before
-      // this page loaded); since: when the hub says the turn began, used to find the reply in history.
-      chat.reattach = { msgId, content, since, partial: partialText || '', startedAt: Date.now(), checking: false, turnId: null, items: new Map(), workers: new Set() };
+      // this page loaded); since: when the hub says the turn began, used to find the reply in history;
+      // sentAt: when this window sent content (its own clock).
+      chat.reattach = { msgId, content, since, sentAt, partial: partialText || '', startedAt: Date.now(), checking: false, turnId: null, items: new Map(), workers: new Set() };
       chat.lastMsgId = msgId;
       console.warn(`[re-attach] ${chat.agent}: ${reason}`);
       paintReattach(chatId, `⟳ Connection lost; ${chat.display || chat.agent} is still working on the server…`);
@@ -6403,6 +6404,21 @@
       } catch { return null; }
     }
 
+    // Which history entry is the message this window sent before its connection dropped? The hub stamps a
+    // user entry when it receives it, so that entry can't be older than the send. An identical earlier message
+    // (an earlier "Build it") must never be taken for it, or that message's old reply is shown as the answer to
+    // a message the hub never got. The send time is moved onto the hub's clock with the history response's
+    // Date header, so a computer clock that is off doesn't matter; ten seconds cover the header's whole seconds.
+    function ownEntryIndex(history, content, sentAt, hubDate, now = Date.now()) {
+      const hubNow = Date.parse(hubDate || '');
+      const floor = (Number.isFinite(hubNow) ? hubNow - (now - sentAt) : sentAt) - 10000;
+      for (let i = history.length - 1; i >= 0; i--) {
+        const m = history[i];
+        if (m.role === 'user' && m.content === content && Date.parse(m.ts) >= floor) return i;
+      }
+      return -1;
+    }
+
     // Reload the tail of the agent's history and finish the bubble once a reply newer than our
     // own user entry is there.  Otherwise keep waiting while the agent is busy.
     async function reattachCheck(chatId) {
@@ -6414,12 +6430,7 @@
         const r = await fetch(`/api/history/${encodeURIComponent(chat.agent)}`, { credentials: 'include', signal: AbortSignal.timeout(8000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const history = (await r.json()).history || [];
-        let ui = -1;
-        if (ra.content) {
-          for (let i = history.length - 1; i >= 0; i--) {
-            if (history[i].role === 'user' && history[i].content === ra.content) { ui = i; break; }
-          }
-        }
+        const ui = ra.content ? ownEntryIndex(history, ra.content, ra.sentAt || ra.startedAt, r.headers.get('Date')) : -1;
         const userTs = ui >= 0 ? Date.parse(history[ui].ts) : NaN;
         let reply = ui >= 0
           ? history.slice(ui + 1).find(m => m.role === 'assistant' && (isNaN(userTs) || !m.ts || Date.parse(m.ts) >= userTs))
@@ -6599,6 +6610,7 @@
 
       const msgId = chat.lastMsgId || appendMessage(chatId, 'assistant', '⏳ Thinking...');
       chat.lastMsgId = msgId;
+      const sentAt = Date.now();   // after a lost connection, only history the hub saved since then can be this message
 
       try {
         // Send only the raw user message — server manages conversation history
@@ -6703,7 +6715,7 @@
           if (isConnectionLoss) {
             // ── Connection lost: NEVER resend.  The server keeps running the turn; re-attach to it. ──
             if (partialText) chat.messages.push({ role: 'assistant', content: partialText, partial: true });
-            enterReattach(chatId, msgId, content, partialText, err.message);
+            enterReattach(chatId, msgId, content, partialText, err.message, null, sentAt);
             return;
           }
           // A real error from the hub (4xx, bad request, ...)
