@@ -598,7 +598,29 @@ function effortSupported(model) {
   if (p === 'claude-sdk' || p === 'codex-cli' || p === 'anthropic') return true;
   if (p === 'openai') return /^(gpt-5|gpt-6|o[1-9])/.test(n);
   if (p === 'google') return /gemini-(2\.5|[3-9])|gemini-(pro|flash)(-lite)?-latest/.test(n);
+  if (p === 'openrouter') return orReasons(n);
   return false;
+}
+// OpenRouter: its catalogue says which models take a reasoning level (lib/effort reads the same flag). The app learns
+// it from GET /api/openrouter (admins only, the same list the "More OpenRouter models" sheet uses); until it has
+// arrived, or for members, the effort picker stays hidden, and it repaints once the list is in.
+let orCatalogueTriedAt = 0;
+function orReasons(id) {
+  const v = orSheetView && orSheetView.view;
+  if (!v) { orLoadCatalogue(); return false; }
+  const m = (v.models || []).find(x => x.id === id);
+  return !!(m && m.reasoning);
+}
+function orLoadCatalogue() {
+  if (!isAdmin() || Date.now() - orCatalogueTriedAt < 60000) return;   // one try a minute, also after a failure
+  orCatalogueTriedAt = Date.now();
+  (async () => {
+    try {
+      const r = await api('/api/openrouter'); const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok !== false) orSheetView = { at: Date.now(), view: d };
+    } catch { /* stays unknown: no effort picker for OpenRouter models */ }
+    if (orSheetView) fillEffortPick();
+  })();
 }
 function fillEffortPick() {
   const wrap = $('chat-effort-wrap'); const sel = $('chat-effort-pick'); const txt = $('chat-effort');

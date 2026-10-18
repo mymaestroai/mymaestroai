@@ -109,6 +109,47 @@ test('desktop: the picker\'s OpenRouter group ends with the search entry, and ch
   assert.match(index, /\.or-pick-row \{[^}]*cursor: pointer;/);
 });
 
+// Reasoning effort in the chat header: OpenRouter models show the picker when OpenRouter's catalogue marks them as
+// taking a reasoning level (the flag lib/effort reads too); unknown until the list arrives, then the picker repaints.
+const CAT = { models: [
+  { id: 'x-ai/grok-4.7', reasoning: true }, { id: 'meta-llama/llama-4-maverick', reasoning: false }, { id: '~x-ai/grok-latest', reasoning: true },
+] };
+const effortOf = (src, viewName, view) => {
+  const loads = { n: 0 };
+  const fn = new Function(viewName, 'orLoadCatalogue', `${extract(src, 'effortSupported')}\n${extract(src, 'orReasons')}; return effortSupported;`)(view, () => { loads.n++; });
+  return { fn, loads };
+};
+for (const [label, src, viewName] of [['phone', mjs, 'orSheetView'], ['desktop', app, 'orPickView']]) {
+  test(`${label}: the effort picker shows for OpenRouter models that take a reasoning level, and only those`, () => {
+    const { fn, loads } = effortOf(src, viewName, { at: 1, view: CAT });
+    assert.strictEqual(fn('openrouter/x-ai/grok-4.7'), true);
+    assert.strictEqual(fn('openrouter/~x-ai/grok-latest'), true, 'aliases too');
+    assert.strictEqual(fn('openrouter/meta-llama/llama-4-maverick'), false);
+    assert.strictEqual(fn('openrouter/nobody/unknown'), false);
+    assert.strictEqual(fn('claude-sdk/opus'), true, 'other routes unchanged');
+    assert.strictEqual(fn('google/gemini-4-argon'), true);
+    assert.strictEqual(fn('local/qwen3.8-27b'), false);
+    assert.strictEqual(loads.n, 0, 'a loaded list is not fetched again');
+  });
+  test(`${label}: before the OpenRouter list is in, the picker stays hidden and the list is fetched`, () => {
+    const { fn, loads } = effortOf(src, viewName, null);
+    assert.strictEqual(fn('openrouter/x-ai/grok-4.7'), false);
+    assert.strictEqual(loads.n, 1);
+    assert.strictEqual(fn('claude-sdk/opus'), true);
+    assert.strictEqual(loads.n, 1, 'only OpenRouter models need it');
+  });
+}
+test('the list for effort is fetched by admins only, at most once a minute, then the picker repaints', () => {
+  const ph = extract(mjs, 'orLoadCatalogue'); const dk = extract(app, 'orLoadCatalogue');
+  assert.match(ph, /if \(!isAdmin\(\) \|\| Date\.now\(\) - orCatalogueTriedAt < 60000\) return;/);
+  assert.match(ph, /await api\('\/api\/openrouter'\)/);
+  assert.match(ph, /if \(orSheetView\) fillEffortPick\(\);/);
+  assert.match(dk, /if \(!isHubAdmin\(\) \|\| Date\.now\(\) - orCatalogueTriedAt < 60000\) return;/);
+  assert.match(dk, /fetch\('\/api\/openrouter', \{ credentials: 'include' \}\)/);
+  assert.match(dk, /if \(orPickView\) for \(const c of Object\.values\(chats\)\) if \(c && c\.id\) refreshEffortPick\(c\);/);
+  assert.match(read('agent-settings.html'), /OpenRouter models that take a reasoning level, marked 🧠 in the OpenRouter list, at high/);
+});
+
 test('the catalogue and the list are admin-only routes', () => {
   const { classifyRoute } = require('../lib/access');
   assert.strictEqual(classifyRoute('/api/openrouter', 'GET').kind, 'admin');
@@ -116,5 +157,5 @@ test('the catalogue and the list are admin-only routes', () => {
 });
 
 test('the phone app version moved on, so phones load the new code', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v45'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v46'/);
 });
