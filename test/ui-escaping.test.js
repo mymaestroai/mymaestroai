@@ -53,6 +53,28 @@ test('autolinker: strict charset, a quote never reaches the href, the rest stays
   assert.strictEqual(safe.autolinkEscaped('https://'), 'https://', 'no host, no link');
 });
 
+test('autolinker: sentence punctuation after a URL stays outside the link; balanced brackets stay inside', () => {
+  const link = (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`;
+  const al = (t) => safe.autolinkEscaped(safe.escapeHtml(t));
+  // The reported case: "live at https://efpsolutions.com, next to..." linked the comma.
+  assert.strictEqual(al('live at https://efpsolutions.com, next to it'), `live at ${link('https://efpsolutions.com')}, next to it`);
+  assert.strictEqual(al('See https://x.y/a.'), `See ${link('https://x.y/a')}.`);
+  assert.strictEqual(al('really https://x.y/a?!'), `really ${link('https://x.y/a')}?!`);
+  assert.strictEqual(al('one https://x.y/a; two https://x.y/b: done'), `one ${link('https://x.y/a')}; two ${link('https://x.y/b')}: done`);
+  assert.strictEqual(al('(see https://x.y/a)'), `(see ${link('https://x.y/a')})`, 'unbalanced closing paren is text');
+  assert.strictEqual(al('(https://x.y/a).'), `(${link('https://x.y/a')}).`);
+  assert.strictEqual(al('https://en.wikipedia.org/wiki/Foo_(bar) ok'), `${link('https://en.wikipedia.org/wiki/Foo_(bar)')} ok`, 'balanced parens are part of the URL');
+  assert.strictEqual(al('[https://x.y/a]'), `[${link('https://x.y/a')}]`);
+  assert.strictEqual(al('https://x.y/a.html?q=1,2&r=3 end'), `${link('https://x.y/a.html?q=1,2&amp;r=3')} end`, 'inner dots and commas stay');
+  assert.strictEqual(al('https://x.y:8888/'), link('https://x.y:8888/'), 'a port is kept');
+  assert.strictEqual(al('https://.'), 'https://.', 'nothing left after trimming: no link');
+  assert.strictEqual(al('https://x.y/?a=1& next'), `${link('https://x.y/?a=1')}&amp; next`, 'a bare trailing & is text, whole');
+  assert.strictEqual(al('wait https://x.y/a...'), `wait ${link('https://x.y/a')}...`);
+  assert.strictEqual(al('(x https://x.y/(a)))'), `(x ${link('https://x.y/(a)')}))`);
+  const t0 = Date.now(); al('https://x.y/' + ')'.repeat(100000));
+  assert.ok(Date.now() - t0 < 500, 'a long run of closing brackets trims in linear time');
+});
+
 test('markdown link targets: controls and whitespace stripped before the scheme check; only http(s), mailto, same-origin paths', () => {
   assert.strictEqual(safe.safeLinkUrl('java\u0000script:alert(1)'), null);
   assert.strictEqual(safe.safeLinkUrl(' \tJavaScript:alert(1)'), null);

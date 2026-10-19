@@ -112,8 +112,22 @@ function autolinkEscaped(text, attrs) {
     const cut = url.search(/&quot;|&#39;|&lt;|&gt;/);
     const u = cut >= 0 ? url.slice(0, cut) : url;
     const rest = cut >= 0 ? url.slice(cut) : '';
-    if (!/^https?:\/\/[A-Za-z0-9]/.test(u)) return m;
-    return `${lead}<a href="${u}" target="_blank" rel="noopener noreferrer"${attrs || ''}>${u}</a>${rest}`;
+    // Sentence punctuation after a URL is text, not part of it: trailing . , ; : ! ? and a ) or ] with no
+    // opening partner inside the URL ("see https://x.y/a, then", "(https://x.y/a)"); a balanced (...) stays.
+    // A bare trailing & arrives escaped as &amp; and goes as one unit. Bracket counts are taken once (linear time).
+    let href = u;
+    const n = { '(': 0, ')': 0, '[': 0, ']': 0 };
+    for (const c of href) if (c in n) n[c]++;
+    for (;;) {
+      if (href.endsWith('&amp;')) { href = href.slice(0, -5); continue; }
+      const last = href.slice(-1);
+      const open = last === ')' ? '(' : last === ']' ? '[' : '';
+      if (open && n[open] < n[last]) { n[last]--; href = href.slice(0, -1); }
+      else if (/[.,;:!?]/.test(last)) href = href.slice(0, -1);
+      else break;
+    }
+    if (!/^https?:\/\/[A-Za-z0-9]/.test(href)) return m;
+    return `${lead}<a href="${href}" target="_blank" rel="noopener noreferrer"${attrs || ''}>${href}</a>${u.slice(href.length)}${rest}`;
   });
 }
 function safeLinkUrl(url) {
