@@ -14,6 +14,7 @@ const EXCLUDE = new Set(['test/integration.test.js', 'test/agent-workers.test.js
 function find(dir) {
   const out = [];
   for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+    if (e.name.startsWith('.')) continue;   // hidden files, e.g. the ._name copies macOS leaves on other disks
     const rel = path.posix.join(dir, e.name);
     if (e.isDirectory()) out.push(...find(rel));
     else if (e.isFile() && e.name.endsWith('.test.js') && !EXCLUDE.has(rel)) out.push(rel);
