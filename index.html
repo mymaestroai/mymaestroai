@@ -1731,6 +1731,31 @@
       transition: opacity 0.3s;
     }
     .st-saved.show { opacity: 1; }
+    /* Settings groups (app.js groupSettings): the sections folded into six groups, closed until opened */
+    .st-search { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .st-search input {
+      flex: 1; padding: 7px 10px; font-size: 0.82rem; background: var(--bg-input);
+      border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+    }
+    .st-search input:focus { outline: none; border-color: var(--accent); }
+    #st-search-none { font-size: 0.78rem; color: var(--text-dim); }
+    details.st-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+    details.st-group > summary {
+      list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 10px;
+      padding: 10px 12px; user-select: none;
+    }
+    details.st-group > summary::-webkit-details-marker { display: none; }
+    details.st-group > summary::before { content: '▸'; color: var(--text-dim); flex: 0 0 0.8em; transition: transform 0.15s; }
+    details.st-group[open] > summary::before { transform: rotate(90deg); }
+    details.st-group > summary:hover .st-group-title { color: var(--accent); }
+    .st-group-title { flex: 0 0 auto; font-weight: 600; font-size: 0.9rem; color: var(--text); }
+    .st-group-sum {
+      flex: 1; min-width: 0; font-size: 0.75rem; color: var(--text-dim);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .st-group-sum.st-sum-crit { color: var(--error); font-weight: 600; }
+    .st-group-body { padding: 12px 14px 0; border-top: 1px solid var(--border); }
+    .st-section.st-match > h4 { color: var(--accent); border-bottom-color: var(--accent); }
     /* Data connectors box (Settings) */
     .cx-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
     .cx-row:last-child { border-bottom: none; }
@@ -2030,7 +2055,7 @@
       <div class="sidebar-header-text">
         <h1>🟦 My Maestro AI</h1>
         <p>Multi-agent chat · Multi-provider LLM</p>
-        <span id="agents-working" onclick="toggleBusyFilter()" title="Click to show only the agents that are working"></span><span id="spend-today" onclick="openSettings()" title="API-equivalent spend today; click for caps"></span><span id="plan-warn" onclick="openPlanSettings()"></span>
+        <span id="agents-working" onclick="toggleBusyFilter()" title="Click to show only the agents that are working"></span><span id="spend-today" onclick="openSettingsAt('st-spend-section')" title="API-equivalent spend today; click for caps"></span><span id="plan-warn" onclick="openPlanSettings()"></span>
       </div>
       <button class="sidebar-collapse-btn" onclick="collapseSidebar()" title="Collapse sidebar">◀</button>
     </div>
