@@ -305,7 +305,7 @@ All five personality files are editable on the agent settings page. The context 
 
 - Claude client: a real client session per agent, resumed each turn (ids in `agent-sessions.json`). The client keeps the system prompt it started with, so the hub sends a `<hub_context_update>` block at the top of the next message with any changed sections (personality, Records, memory) (`lib/context-refresh.js`); a client-side compaction resets that baseline.
 - Codex client: a thread per agent, resumed.
-- Gateway: the hub replays recent history within an elastic budget (`lib/context-budget.js`: reply reserve, Records, recent messages, recall hits, scaled to the model's window) and replays nothing from before the agent's last compression.
+- Gateway: the hub replays recent history within an elastic budget (`lib/context-budget.js`: reply reserve, Records, recent messages, recall hits, scaled to the model's window) and replays nothing from before the agent's last compression. Claude models on an API key take their window from `lib/context-window.js` (1M for Fable 5, Opus 4.7+, Sonnet 5+, Haiku 5.5; else 200K). While a Claude model thinks, Anthropic sends only a ping about every 30 s; the stream adapter (`createAnthropicStreamAdapter` in `lib/gateway-client.js`) passes each as an SSE comment so the idle watchdog (`GATEWAY_STREAM_STALL_MS`, default 120 s) only trips on real silence. Claude 5 output is capped at the API's 128K; above Medium effort a turn gets at least 64K unless the agent sets `maxOutputTokens`; a think that uses the whole allowance without writing ends with an explanation instead of "continue" retries.
 
 ### 7.4 Compression (`lib/compaction.js`)
 
