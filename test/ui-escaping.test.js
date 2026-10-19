@@ -68,6 +68,11 @@ test('autolinker: sentence punctuation after a URL stays outside the link; balan
   assert.strictEqual(al('https://x.y/a.html?q=1,2&r=3 end'), `${link('https://x.y/a.html?q=1,2&amp;r=3')} end`, 'inner dots and commas stay');
   assert.strictEqual(al('https://x.y:8888/'), link('https://x.y:8888/'), 'a port is kept');
   assert.strictEqual(al('https://.'), 'https://.', 'nothing left after trimming: no link');
+  assert.strictEqual(al('https://x.y/?a=1& next'), `${link('https://x.y/?a=1')}&amp; next`, 'a bare trailing & is text, whole');
+  assert.strictEqual(al('wait https://x.y/a...'), `wait ${link('https://x.y/a')}...`);
+  assert.strictEqual(al('(x https://x.y/(a)))'), `(x ${link('https://x.y/(a)')}))`);
+  const t0 = Date.now(); al('https://x.y/' + ')'.repeat(100000));
+  assert.ok(Date.now() - t0 < 500, 'a long run of closing brackets trims in linear time');
 });
 
 test('markdown link targets: controls and whitespace stripped before the scheme check; only http(s), mailto, same-origin paths', () => {
