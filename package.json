@@ -1,12 +1,12 @@
 {
   "name": "agent-hub",
-  "version": "5.4.0",
+  "version": "5.5.0",
   "description": "My Maestro AI — Multi-agent chat with multi-provider LLM routing.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test 'test/**/*.test.js'",
+    "test": "node scripts/run-tests.js",
     "security-check": "node scripts/security-check.js"
   },
   "dependencies": {

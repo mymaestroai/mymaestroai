@@ -33,7 +33,8 @@ test('server: account, user-management, me, filtered agents/status/events, login
   assert.ok(server.includes("access.visibleAgents(req.hubUser, all, { ownerFilter: access.isAdmin(req.hubUser) ? ownerFilter : null })"));
   assert.ok(server.includes("events.subscribe(req, res, { isAdmin, visibleAgent: visible, filter: (ev) => visible(ev.agent) })"));
   assert.ok(server.includes("createAgent(body.name, body.model, body.personality, body.skills, body.category, body.owner || null)"));
-  assert.ok(server.includes("pathname === '/login' || pathname === '/invite' || pathname === '/setup-admin'"));
+  assert.ok(server.includes("pathname === '/login' || pathname === '/invite'"));
+  assert.ok(server.includes("pathname === '/setup' || pathname === '/setup-admin'"), 'old setup links are still answered (the Welcome page replaced the page)');
   assert.ok(server.includes("['index.html', 'mobile.html'].includes(path.basename(filePath))"));
 });
 

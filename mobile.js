@@ -1791,8 +1791,14 @@ function paintFeedRow(feed, it, list = null) {
   it.el.className = `frow ${it.kind} ${it.status}${it.open ? ' open' : ''}`;
   const [line, sub, det] = it.el.children;
   if (it.kind === 'tool') {
-    const mark = it.status === 'done' ? (/^(Error|⚠|✗)/.test(it.output || '') ? '✗' : '✓') : '⚙';
-    line.textContent = `${mark} ${it.tool}${it.summary ? ` · ${clipText(it.summary, 80)}` : ''}`;
+    const failed = it.status === 'done' && /^(Error|⚠|✗)/.test(it.output || '');
+    const mark = it.status === 'done' ? (failed ? '✗' : '✓') : '⚙';
+    // The tool's name in bold, then what it did: tool calls read apart from the reply (light blue, mobile.html .frow.tool).
+    const name = document.createElement('span');
+    name.className = 'ftname';
+    name.textContent = it.tool;
+    line.replaceChildren(`${mark} `, name, it.summary ? ` · ${clipText(it.summary, 80)}` : '');
+    if (failed) it.el.classList.add('failed');
     sub.textContent = '';
     det.textContent = it.open ? [it.summary, it.output ? String(it.output).slice(0, 3000) : ''].filter(Boolean).join('\n\n') : '';
     return;
@@ -2147,7 +2153,7 @@ async function sendMessage(fallback) {
       // Connection dropped (phone slept, network changed, hub restarted). Never resend:
       // the hub keeps running the turn and the reply lands in history.
       lost = true;
-      enterReattach(agent, text, rec.bubble, rec.gotAny ? rec.bubble.body.innerHTML : '', rec.full);
+      enterReattach(agent, text, rec.bubble, rec.gotAny ? rec.bubble.body.innerHTML : '', rec.full, null, rec.startedAt);
     } else if (bubbleLive(rec)) {
       rec.bubble.el.classList.add('error');
       const msg = document.createElement('div');
@@ -2169,10 +2175,11 @@ async function sendMessage(fallback) {
 
 // ── Re-attach after a lost connection (one per agent) ───────────────────────
 
-function enterReattach(agent, text, bubble, partialHtml, partial, since = null) {
+function enterReattach(agent, text, bubble, partialHtml, partial, since = null, sentAt = null) {
   // text: the message this phone sent (null when the turn started elsewhere, or before this page
-  // loaded / woke from a blank screen); since: when the hub says the turn began.
-  const ra = { agent, text, bubble, line: null, partial: partial || '', partialHtml, since, startedAt: Date.now(), turnId: null, feed: null, painted: null };
+  // loaded / woke from a blank screen); since: when the hub says the turn began; sentAt: when this
+  // phone sent text (its own clock).
+  const ra = { agent, text, sentAt, bubble, line: null, partial: partial || '', partialHtml, since, startedAt: Date.now(), turnId: null, feed: null, painted: null };
   // A stream this phone lost: its bubble keeps the text and activity rows painted so far.
   const rec = streams.get(agent);
   if (rec && rec.bubble === bubble) { ra.feed = rec.feed; ra._blocks = rec._blocks; ra._sig = rec._sig; ra.replyText = rec.full; if (!ra.partial) ra.partial = rec.full; }
@@ -2232,6 +2239,21 @@ function finishReattach(ra, reply, ok = true) {
   if (current === ra.agent) scrollChat();
 }
 
+// Which history entry is the message this phone sent before its connection dropped? The hub stamps a user
+// entry when it receives it, so that entry can't be older than the send. An identical earlier message (an
+// earlier "Build it") must never be taken for it, or that message's old reply is shown as the answer to a
+// message the hub never got. The send time is moved onto the hub's clock with the history response's Date
+// header, so a phone clock that is off doesn't matter; ten seconds cover the header's whole seconds.
+function ownEntryIndex(hist, text, sentAt, hubDate, now = Date.now()) {
+  const hubNow = Date.parse(hubDate || '');
+  const floor = (Number.isFinite(hubNow) ? hubNow - (now - sentAt) : sentAt) - 10000;
+  for (let i = hist.length - 1; i >= 0; i--) {
+    const m = hist[i];
+    if (m.role === 'user' && m.content === text && Date.parse(m.ts) >= floor) return i;
+  }
+  return -1;
+}
+
 function stopReattach(ra) {
   if (!ra) return;
   stopTurn(ra.agent);
@@ -2251,8 +2273,7 @@ async function reattachCheck(ra) {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const hist = (await r.json()).history || [];
     if (reattaches.get(ra.agent) !== ra) return;
-    let ui = -1;
-    if (ra.text) for (let i = hist.length - 1; i >= 0; i--) if (hist[i].role === 'user' && hist[i].content === ra.text) { ui = i; break; }
+    const ui = ra.text ? ownEntryIndex(hist, ra.text, ra.sentAt || ra.startedAt, r.headers.get('Date')) : -1;
     let reply = null;
     if (ui >= 0) {
       const uts = hist[ui].ts ? new Date(hist[ui].ts).getTime() : 0;
@@ -2280,7 +2301,7 @@ async function reattachCheck(ra) {
       if (ui < 0 && ra.text) {
         const input = $('msg-input');
         if (input && !input.value && current === ra.agent) input.value = ra.text;
-        finishReattach(ra, '⚠ The hub never received this message; it is back in the input box.', false);
+        finishReattach(ra, '⚠ The hub has no record of this message, so it is back in the input box. If you are not sure it was lost, reload the chat before sending it again.', false);
       } else {
         finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ ${displayName(ra.agent)} stopped without a reply (the hub may have restarted).`, false);
       }
