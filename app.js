@@ -1481,6 +1481,8 @@
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
     ];
     const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
+    const stSandboxText = (sbd) => `Sandboxes: members' agents ${sbd.member || 'container'}, admin-side ${sbd.admin || 'off'}`;
+    const stQuestionsText = (qa) => qa === null ? 'Question reminders off' : `Questions: ${qa === 0 ? 'right away' : `after ${qa === undefined ? 3 : qa} min`}`;
     let stSearchSnap = null;   // which groups were open before a search, put back when the search is cleared
 
     // Set one part of a group's summary line; the section loaders call this as their data arrives.
@@ -1497,13 +1499,21 @@
     function stSetOpen(g, open) {
       if (!g || g.open === open) return;
       g.dataset.auto = '1';
+      if (open) g.dataset.autoOpen = '1';   // opened for them: not remembered unless they click it themselves
       g.open = open;
     }
-    function stOpenGroup(groupId) { stSetOpen(document.getElementById(`st-group-${groupId}`), true); }
+    function stOpenGroup(groupId) {
+      const g = document.getElementById(`st-group-${groupId}`);
+      if (stSearchSnap) {   // a search is in progress: show the group now, and keep it open when the search is cleared
+        stSearchSnap[groupId] = true;
+        if (g) { g.style.display = ''; for (const s of g.querySelectorAll('.st-section')) s.style.display = ''; }
+      }
+      stSetOpen(g, true);
+    }
 
     function stSaveOpen() {
       const open = {};
-      for (const g of document.querySelectorAll('#st-groups details.st-group')) if (g.open) open[g.dataset.group] = true;
+      for (const g of document.querySelectorAll('#st-groups details.st-group')) if (g.open && !g.dataset.autoOpen) open[g.dataset.group] = true;
       try { localStorage.setItem('hub-settings-open', JSON.stringify(open)); } catch {}
     }
 
@@ -1530,6 +1540,7 @@
       for (const s of sections) if (!placed.has(s)) body(ST_GROUPS[ST_GROUPS.length - 1].id).appendChild(s);
       for (const d of wrap.querySelectorAll('details.st-group')) d.addEventListener('toggle', () => {
         if (d.dataset.auto) { delete d.dataset.auto; return; }
+        delete d.dataset.autoOpen;   // they clicked it: from now on it is their choice
         if (!stSearchSnap) stSaveOpen();   // during a search nothing is remembered
       });
       const input = wrap.querySelector('#st-search');
@@ -1544,10 +1555,10 @@
       stSum('models', 'prov', keys ? `${keys} provider key${keys === 1 ? '' : 's'}` : 'no provider keys');
       for (const k of ['or', 'plan', 'local']) stSum('models', k, '');
       const sbd = (data && data.sandboxDefaults) || {};
-      stSum('agents', 'sb', `Sandboxes: members' agents ${sbd.member || 'container'}, admin-side ${sbd.admin || 'off'}`);
+      stSum('agents', 'sb', stSandboxText(sbd));
       stSum('agents', 'appr', `approval cards ${data && data.approvalsEnabled === true ? 'on' : 'off'}`);
       const qa = data && data.notify ? data.notify.questionAfterMinutes : undefined;
-      stSum('notify', 'q', qa === null ? 'Question reminders off' : `Questions: ${qa === 0 ? 'right away' : `after ${qa === undefined ? 3 : qa} min`}`);
+      stSum('notify', 'q', stQuestionsText(qa));
       stSum('notify', 'push', '');
       for (const k of ['search', 'cx']) stSum('tools', k, '');
       for (const k of ['spend', 'caps']) stSum('money', k, '');
@@ -1572,7 +1583,8 @@
       if (!stSearchSnap) { stSearchSnap = {}; for (const g of groups) stSearchSnap[g.dataset.group] = g.open; }
       let any = false;
       for (const g of groups) {
-        const titleHit = g.querySelector('.st-group-title').textContent.toLowerCase().includes(q);
+        // a group whose summary is red (something critical) stays in view whatever is typed
+        const titleHit = g.querySelector('.st-group-title').textContent.toLowerCase().includes(q) || !!g.querySelector('.st-group-sum.st-sum-crit');
         let n = 0;
         for (const s of g.querySelectorAll('.st-section')) {
           const hit = titleHit || s.textContent.toLowerCase().includes(q);
@@ -1895,6 +1907,7 @@
       try {
         await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sandboxDefaults: { member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }, toolsDefault: (document.getElementById('st-tools-default') || {}).value === 'hub' ? 'hub' : 'client' }) });
         if (state) state.textContent = 'Saved. Applies to agents set to "hub default" from their next turn.';
+        stSum('agents', 'sb', stSandboxText({ member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }));
       } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
     }
     async function buildSandboxImage() {
@@ -2532,6 +2545,7 @@
       try {
         await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ approvalsEnabled: !!on }) });
         if (state) state.textContent = on ? 'On: your agents pause on a card for sending, destructive and admin actions.' : 'Off: your agents just run. Members\' agents stay sandboxed either way.';
+        stSum('agents', 'appr', `approval cards ${on ? 'on' : 'off'}`);
       } catch (e) { alert('Could not save: ' + e.message); }
     }
 
@@ -2625,6 +2639,7 @@
       try {
         const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ notify: { questionAfterMinutes } }) });
         hubToast(r.ok ? (questionAfterMinutes === null ? 'Questions will not send notifications.' : questionAfterMinutes === 0 ? 'Questions notify right away.' : `Questions notify after ${questionAfterMinutes} min unanswered.`) : 'Could not save.');
+        if (r.ok) stSum('notify', 'q', stQuestionsText(questionAfterMinutes));
       } catch (e) { alert('Could not save: ' + e.message); }
     }
 
@@ -6606,7 +6621,7 @@
             // The hub never got the message: hand it back, never resend on our own.
             const input = document.getElementById(`input-${chatId}`);
             if (input && !input.value) input.value = ra.content;
-            finishReattach(chatId, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ The hub never received this message. It is back in the input box; press Send to resend.`, false);
+            finishReattach(chatId, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ The hub has no record of this message, so it is back in the input box. If you are not sure it was lost, reload the chat before sending it again.`, false);
           } else {
             finishReattach(chatId, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ ${chat.display || chat.agent} stopped without a reply (the hub may have restarted).`, false);
           }

@@ -80,9 +80,12 @@ test('the adapter passes a keep-alive comment for events with no output, and Ant
 
 test('the turn loop: provider errors in the stream, a stall message, room to think, and no paid re-asks after an empty think', () => {
   const sdk = read('lib/sdk-chat.js');
-  assert.match(sdk, /if \(chunk\.error\) \{\s*const pe = chunk\.error;\s*const status = \{ overloaded_error: 529,[^\n]*\}\[pe\.type\] \|\| Number\(pe\.code\) \|\| 500;\s*const streamErr = new Error\(`Provider \$\{status\}: \$\{JSON\.stringify\(\{ error: pe \}\)\}`\);/);
+  assert.match(sdk, /if \(chunk\.error\) \{ streamError = chunk\.error; break; \}/);
+  // the call's usage is booked first, then the provider's error is reported in its own words
+  assert.match(sdk, /turnUsage\.costSeen = true; \}\s*\}\s*if \(streamError\) \{\s*const pe = streamError;\s*const status = \{ overloaded_error: 529,[^\n]*\}\[pe\.type\] \|\| Number\(pe\.code\) \|\| 500;\s*const streamErr = new Error\(`Provider \$\{status\}: \$\{JSON\.stringify\(\{ error: pe \}\)\}`\);/);
   assert.match(sdk, /if \(streamState\.stalled\) throw new Error\(`No data from \$\{prov\} for \$\{Math\.round\(\(streamState\.stallMs \|\| 120000\) \/ 1000\)\} s, not even a keep-alive/);
-  assert.match(sdk, /if \(\/\^anthropic\\\/claude-\(\?:fable\|opus\|sonnet\|haiku\)-5\/i\.test\(model\) && !\['low', 'medium'\]\.includes\(turnEffort\) && !\(agentConfig && agentConfig\.maxOutputTokens\)\) maxTokens = Math\.max\(maxTokens, 64000\);/);
+  assert.match(sdk, /const hubMaxLowered = Number\(global\.__maxCompletionTokens\) > 0 && Number\(global\.__maxCompletionTokens\) < 32000;/);
+  assert.match(sdk, /if \(\/\^anthropic\\\/claude-\(\?:fable\|opus\|sonnet\|haiku\)-5\/i\.test\(model\) && !\['low', 'medium'\]\.includes\(turnEffort\) && !\(agentConfig && agentConfig\.maxOutputTokens\) && !hubMaxLowered\) maxTokens = Math\.max\(maxTokens, 64000\);/);
   assert.match(sdk, /if \(\/claude-\(\?:fable\|opus\|sonnet\|haiku\)-5\/i\.test\(m\)\) return 128000;/);
   const i = sdk.indexOf("if (lastFinishReason === 'length') {");
   const block = sdk.slice(i, i + 700);
@@ -91,9 +94,9 @@ test('the turn loop: provider errors in the stream, a stall message, room to thi
 });
 
 test('plain words for the two new failures', () => {
-  const think = errorHelp.explain(new Error('anthropic/claude-fable-5-1 used its whole output allowance (64,000 tokens) thinking and wrote nothing.'), { model: 'anthropic/claude-fable-5-1' });
+  const think = errorHelp.explain(new Error('anthropic/claude-fable-5-1 used its whole output allowance (64,000 tokens) before writing a reply.'), { model: 'anthropic/claude-fable-5-1' });
   assert.strictEqual(think.kind, 'thinking_budget');
-  assert.match(think.what, /claude-fable-5-1 spent its whole output allowance thinking/);
+  assert.match(think.what, /claude-fable-5-1 used its whole output allowance before writing a reply/);
   assert.match(think.fix, /lower its effort/);
   const stall = errorHelp.explain(new Error('No data from anthropic for 120 s, not even a keep-alive, so the hub closed the connection.'), { model: 'anthropic/claude-fable-5-1' });
   assert.strictEqual(stall.kind, 'stalled');

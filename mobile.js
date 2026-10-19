@@ -2301,7 +2301,7 @@ async function reattachCheck(ra) {
       if (ui < 0 && ra.text) {
         const input = $('msg-input');
         if (input && !input.value && current === ra.agent) input.value = ra.text;
-        finishReattach(ra, '⚠ The hub never received this message; it is back in the input box.', false);
+        finishReattach(ra, '⚠ The hub has no record of this message, so it is back in the input box. If you are not sure it was lost, reload the chat before sending it again.', false);
       } else {
         finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ ${displayName(ra.agent)} stopped without a reply (the hub may have restarted).`, false);
       }

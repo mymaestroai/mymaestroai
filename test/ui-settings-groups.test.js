@@ -53,7 +53,16 @@ test('the panel is grouped right after it is drawn; groups start closed unless t
   // A section the list doesn't know yet lands in the last group instead of disappearing
   assert.match(app, /for \(const s of sections\) if \(!placed\.has\(s\)\) body\(ST_GROUPS\[ST_GROUPS\.length - 1\]\.id\)\.appendChild\(s\);/);
   // Opening by search, a link or a critical finding is not remembered as the person's choice
-  assert.match(app, /if \(d\.dataset\.auto\) \{ delete d\.dataset\.auto; return; \}\s*if \(!stSearchSnap\) stSaveOpen\(\);/);
+  assert.match(app, /if \(d\.dataset\.auto\) \{ delete d\.dataset\.auto; return; \}\s*delete d\.dataset\.autoOpen;[^\n]*\n\s*if \(!stSearchSnap\) stSaveOpen\(\);/);
+  // a group the hub opened (critical finding, link, search) is not remembered until clicked; a search keeps it open
+  assert.match(app, /if \(open\) g\.dataset\.autoOpen = '1';/);
+  assert.match(app, /if \(g\.open && !g\.dataset\.autoOpen\) open\[g\.dataset\.group\] = true;/);
+  assert.match(app, /if \(stSearchSnap\) \{[^\n]*\n\s*stSearchSnap\[groupId\] = true;\s*if \(g\) \{ g\.style\.display = '';/);
+  assert.match(app, /\|\| !!g\.querySelector\('\.st-group-sum\.st-sum-crit'\);/, 'a red Status stays in view during a search');
+  // summaries follow changes made inside Settings
+  assert.match(app, /stSum\('agents', 'appr', `approval cards \$\{on \? 'on' : 'off'\}`\);/);
+  assert.match(app, /if \(r\.ok\) stSum\('notify', 'q', stQuestionsText\(questionAfterMinutes\)\);/);
+  assert.match(app, /stSum\('agents', 'sb', stSandboxText\(\{ member: document\.getElementById\('st-sb-member'\)\.value/);
 });
 
 test('search shows matching sections, opens their groups, and clearing it puts the groups back', () => {
@@ -62,7 +71,7 @@ test('search shows matching sections, opens their groups, and clearing it puts t
   assert.match(app, /input\.addEventListener\('input', \(\) => stSearch\(input\.value\)\);/);
   assert.match(app, /if \(!stSearchSnap\) \{ stSearchSnap = \{\}; for \(const g of groups\) stSearchSnap\[g\.dataset\.group\] = g\.open; \}/);
   assert.match(app, /if \(stSearchSnap\) stSetOpen\(g, !!stSearchSnap\[g\.dataset\.group\]\);/);
-  assert.match(app, /const titleHit = g\.querySelector\('\.st-group-title'\)\.textContent\.toLowerCase\(\)\.includes\(q\);/);
+  assert.match(app, /const titleHit = g\.querySelector\('\.st-group-title'\)\.textContent\.toLowerCase\(\)\.includes\(q\) \|\| /);
   assert.match(app, /if \(none\) none\.hidden = any;/);
 });
 
