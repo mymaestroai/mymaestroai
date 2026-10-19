@@ -369,8 +369,10 @@ const FAKE_NPM = path.join(TMP, 'fake-npm.js');
 fs.writeFileSync(FAKE_NPM, `#!/usr/bin/env node
 const fs = require('fs'), path = require('path');
 const [cmd, ...rest] = process.argv.slice(2);
-fs.appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ cmd, rest, cwd: process.cwd(), env: Object.keys(process.env), path0: (process.env.PATH || '').split(path.delimiter)[0] }) + '\\n');
-const mode = process.env.FAKE_NPM_MODE || 'ok';
+const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'fake-npm.json'), 'utf8'));   // npm gets an allow-listed env, so settings come from a file
+let head = null; try { head = require('child_process').execFileSync('git', ['-C', '..', 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch {}
+fs.appendFileSync(cfg.log, JSON.stringify({ cmd, rest, cwd: process.cwd(), head, env: Object.keys(process.env), path0: (process.env.PATH || '').split(path.delimiter)[0] }) + '\\n');
+const mode = cfg.mode || 'ok';
 if (cmd === 'ci') {
   if (mode === 'fail') { process.stderr.write('npm error code E404\\nnpm error 404 Not Found - GET https://registry.example.invalid/nope\\n'); process.exit(1); }
   for (const d of Object.keys(JSON.parse(fs.readFileSync('package.json', 'utf8')).dependencies || {})) {
@@ -382,6 +384,7 @@ if (cmd === 'ci') {
   fs.writeFileSync(path.join('node_modules', '.marker'), 'new');
 }
 if (cmd === 'rebuild') fs.writeFileSync(path.join('node_modules', rest[0], 'built'), '1');
+if (mode === 'steal' && cmd === 'ci') fs.writeFileSync(path.join('..', '.update.lock'), JSON.stringify({ pid: process.ppid, at: Date.now(), token: 'someone-else' }));
 `, { mode: 0o755 });
 const PKG = JSON.stringify({ name: 'hub', version: '1.0.0', dependencies: { 'better-sqlite3': '^1.0.0', 'left-pad': '^1.0.0' } }) + '\n';
 async function withNpm(vars, fn) {
@@ -390,14 +393,19 @@ async function withNpm(vars, fn) {
   try { return await fn(); } finally { for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
 }
 const npmCalls = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
-const npmVars = (s, mode, extra = {}) => ({ HUB_NPM: FAKE_NPM, FAKE_NPM_LOG: path.join(s.root, 'npm.log'), FAKE_NPM_MODE: mode, ...extra });
+const npmVars = (s, mode, extra = {}) => {
+  fs.writeFileSync(path.join(TMP, 'fake-npm.json'), JSON.stringify({ log: path.join(s.root, 'npm.log'), mode }));
+  return { HUB_NPM: FAKE_NPM, ...extra };
+};
 
-test('packages changed: npm ci --omit=dev --ignore-scripts in a side folder, native module rebuilt and loaded, then swapped in; no keys reach npm; nothing tracked rewritten', async () => {
+test('packages changed: installed BEFORE the code moves (npm ci --omit=dev --ignore-scripts in a side folder, native module rebuilt and loaded), then swapped in; no keys reach npm; nothing tracked rewritten', async () => {
   const s = scenario();
   put(s.work, 'node_modules/.marker', 'old');
+  const before = g(s.work, 'rev-parse', 'HEAD');
   s.publish('package.json', PKG, 'deps');
   s.publish('package-lock.json', '{}\n', 'lock');
-  const r = await withNpm(npmVars(s, 'ok', { ANTHROPIC_API_KEY: 'test-not-real', GH_TOKEN: 'test-not-real' }), () => s.sync.runUpdate());
+  const r = await withNpm(npmVars(s, 'ok', { ANTHROPIC_API_KEY: 'test-not-real', GH_TOKEN: 'test-not-real', SSH_AUTH_SOCK: '/tmp/agent.sock',
+    DBUS_SESSION_BUS_ADDRESS: 'unix:path=/tmp/bus', npm_config_registry: 'https://registry.example.invalid/', npm_config__authToken: 'test-not-real' }), () => s.sync.runUpdate());
   assert.strictEqual(r.success, true, r.error);
   assert.strictEqual(r.installed, true);
   assert.ok(r.steps.includes('Installed the updated packages'), r.steps.join(' | '));
@@ -409,14 +417,17 @@ test('packages changed: npm ci --omit=dev --ignore-scripts in a side folder, nat
   assert.deepStrictEqual(calls.map(c => c.cmd), ['ci', 'rebuild']);
   assert.deepStrictEqual(calls[0].rest.slice(0, 2), ['--omit=dev', '--ignore-scripts']);
   assert.strictEqual(calls[0].cwd, path.join(s.work, '.update-staging'));
+  assert.strictEqual(calls[0].head, before, 'the install ran while the code still stood where it was');
+  assert.strictEqual(g(s.work, 'rev-parse', 'HEAD'), g(s.other, 'rev-parse', 'HEAD'), 'then the code moved');
   assert.strictEqual(calls[1].rest[0], 'better-sqlite3');
   for (const c of calls) {
-    assert.ok(!c.env.includes('ANTHROPIC_API_KEY') && !c.env.includes('GH_TOKEN'), 'keys and tokens are not passed to npm');
+    for (const k of ['ANTHROPIC_API_KEY', 'GH_TOKEN', 'SSH_AUTH_SOCK', 'DBUS_SESSION_BUS_ADDRESS', 'npm_config__authToken']) assert.ok(!c.env.includes(k), `${k} is not passed to npm`);
+    for (const k of ['HOME', 'PATH', 'npm_config_registry']) assert.ok(c.env.includes(k), `${k} is passed to npm`);
     assert.strictEqual(c.path0, path.dirname(process.execPath), "the hub's own Node is first on npm's PATH");
   }
 });
 
-test('a failed or incomplete install puts the code back, leaves the working packages alone and reports failure, so nothing restarts', async () => {
+test('a failed or incomplete install stops the update before anything moves: code and packages as they were, failure reported, nothing restarts', async () => {
   const s = scenario();
   put(s.work, 'node_modules/.marker', 'old');
   const before = g(s.work, 'rev-parse', 'HEAD');
@@ -424,9 +435,9 @@ test('a failed or incomplete install puts the code back, leaves the working pack
   s.publish('package-lock.json', '{}\n', 'lock');
   let r = await withNpm(npmVars(s, 'fail'), () => s.sync.runUpdate());
   assert.strictEqual(r.success, false);
-  assert.strictEqual(r.rolledBack, true);
-  assert.match(r.error, /^Update stopped: the updated packages could not be installed \(E404: 404 Not Found - GET https:\/\/registry\.example\.invalid\/nope\)\. Nothing changed/);
-  assert.match(r.error, new RegExp(`the hub stays on ${before.slice(0, 7)}`));
+  assert.strictEqual(r.rolledBack, false, 'nothing had moved, so nothing to put back');
+  assert.match(r.error, /^Update stopped before changing anything: the updated packages could not be installed \(E404: 404 Not Found - GET https:\/\/registry\.example\.invalid\/nope\)\. The hub stays on /);
+  assert.match(r.error, new RegExp(`The hub stays on ${before.slice(0, 7)}, with its packages as they were`));
   assert.strictEqual(g(s.work, 'rev-parse', 'HEAD'), before, 'the code is back where it was');
   assert.ok(!fs.existsSync(path.join(s.work, 'package.json')));
   assert.strictEqual(fs.readFileSync(path.join(s.work, 'node_modules', '.marker'), 'utf8'), 'old', 'the working packages are untouched');
@@ -446,10 +457,12 @@ test('a channel switch that changes the packages installs them; when that fails 
   commit(s.other, 'package.json', PKG, 'dev deps');
   commit(s.other, 'package-lock.json', '{}\n', 'dev lock');
   g(s.other, 'push', '-q', '-u', 'origin', 'dev');
+  const mainHead = g(s.work, 'rev-parse', 'HEAD');
   let r = await withNpm(npmVars(s, 'fail'), () => s.sync.runUpdate({ channel: 'experimental' }));
   assert.strictEqual(r.success, false);
-  assert.strictEqual(r.rolledBack, true, r.error);
-  assert.strictEqual(g(s.work, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main', 'back on the channel it was on');
+  assert.match(r.error, /^Update stopped before changing anything/);
+  assert.strictEqual(g(s.work, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main', 'still on the channel it was on: the switch never happened');
+  assert.strictEqual(npmCalls(path.join(s.root, 'npm.log'))[0].head, mainHead, 'the install ran before the switch');
   r = await withNpm(npmVars(s, 'ok'), () => s.sync.runUpdate({ channel: 'experimental' }));
   assert.strictEqual(r.success, true, r.error);
   assert.strictEqual(r.installed, true);
@@ -461,7 +474,8 @@ test('one update at a time: a second request while one runs is refused', async (
   s.publish('a.txt', 'two\n', 'upstream');
   const [a, b] = await Promise.all([s.sync.runUpdate(), s.sync.runUpdate()]);
   assert.strictEqual(a.success, true, a.error);
-  assert.deepStrictEqual(b, { success: false, error: 'An update is already running. Wait for it to finish.' });
+  assert.strictEqual(b.success, false);
+  assert.match(b.error, /^Another update is running, or one was interrupted and left its lock behind \(.*\.update\.lock\)\. If no update is running, delete that file, then try again\.$/);
   assert.strictEqual((await s.sync.runUpdate()).error, 'Already up to date.', 'the lock is released afterwards');
 });
 
@@ -473,8 +487,109 @@ test('rewritten history + failed install: back on the old history, with the per-
   const oldHead = g(s.work, 'rev-parse', 'HEAD');
   const r = await withNpm(npmVars(s, 'fail'), () => s.sync.runRewriteUpdate());
   assert.strictEqual(r.success, false);
-  assert.strictEqual(r.rolledBack, true, r.error);
+  assert.match(r.error, /^Update stopped before changing anything/);
   assert.strictEqual(g(s.work, 'rev-parse', 'HEAD'), oldHead);
+  assert.strictEqual(g(s.work, 'branch', '--list', 'backup/before-rewrite-*'), '', 'no backup branch: nothing moved');
   assert.strictEqual(fs.readFileSync(path.join(s.work, 'roster.json'), 'utf8'), '{"groups":["edited at runtime"]}\n');
   assert.strictEqual(fs.readFileSync(path.join(s.work, 'b.txt'), 'utf8'), 'name: Alice\n');
+});
+
+test('packages left in the side folder by an interrupted swap are put back, even when the next install fails', async () => {
+  const s = scenario();
+  put(s.work, '.update-staging/node_modules.old/.marker', 'old');   // killed between the two renames: no node_modules
+  s.publish('package.json', PKG, 'deps');
+  s.publish('package-lock.json', '{}\n', 'lock');
+  const r = await withNpm(npmVars(s, 'fail'), () => s.sync.runUpdate());
+  assert.strictEqual(r.success, false);
+  assert.strictEqual(fs.readFileSync(path.join(s.work, 'node_modules', '.marker'), 'utf8'), 'old', 'moved back before anything else');
+  assert.ok(!fs.existsSync(path.join(s.work, '.update-staging')), 'and only then was the side folder cleared');
+  assert.match(r.error, /^Update stopped before changing anything/);
+});
+
+test('a damaged install (a dependency missing) is repaired by the next update, even one that does not touch the packages', async () => {
+  const s = scenario();
+  s.publish('package.json', PKG, 'deps');
+  s.publish('package-lock.json', '{}\n', 'lock');
+  let r = await withNpm(npmVars(s, 'ok'), () => s.sync.runUpdate());
+  assert.strictEqual(r.success, true, r.error);
+  fs.rmSync(path.join(s.work, 'node_modules', 'left-pad'), { recursive: true, force: true });
+  s.publish('a.txt', 'two\n', 'not a package change');
+  r = await withNpm(npmVars(s, 'ok'), () => s.sync.runUpdate());
+  assert.strictEqual(r.success, true, r.error);
+  assert.ok(r.steps.includes('Reinstalled missing packages (left-pad)'), r.steps.join(' | '));
+  assert.ok(fs.existsSync(path.join(s.work, 'node_modules', 'left-pad', 'package.json')));
+  s.publish('b.txt', 'b\n', 'nothing missing now');
+  r = await withNpm(npmVars(s, 'ok'), () => s.sync.runUpdate());
+  assert.strictEqual(r.installed, false, 'an intact install is left alone');
+});
+
+test('switching to a channel whose branch here has commits GitHub lacks: lands on that branch as it is, and says so', async () => {
+  const s = scenario();
+  g(s.other, 'checkout', '-q', '-b', 'dev');
+  commit(s.other, 'c.txt', 'c\n', 'dev work');
+  g(s.other, 'push', '-q', '-u', 'origin', 'dev');
+  g(s.work, 'fetch', '-q', 'origin');
+  g(s.work, 'checkout', '-q', '-b', 'dev', 'origin/dev');
+  commit(s.work, 'mine.txt', 'mine\n', 'local dev work');
+  const localTip = g(s.work, 'rev-parse', 'HEAD');
+  g(s.work, 'checkout', '-q', 'main');
+  commit(s.other, 'd.txt', 'd\n', 'more dev work on GitHub');
+  g(s.other, 'push', '-q', 'origin', 'dev');
+  const r = await s.sync.runUpdate({ channel: 'experimental' });
+  assert.strictEqual(r.success, true, r.error);
+  assert.strictEqual(g(s.work, 'rev-parse', 'HEAD'), localTip, 'its own commits kept, nothing reset');
+  assert.ok(r.steps.some(x => /^Not fast-forwarded: this install's dev branch has commits that are not on GitHub$/.test(x)), r.steps.join(' | '));
+});
+
+test('the lock is released only by its owner', async () => {
+  const s = scenario();
+  s.publish('package.json', PKG, 'deps');
+  s.publish('package-lock.json', '{}\n', 'lock');
+  const r = await withNpm(npmVars(s, 'steal'), () => s.sync.runUpdate());
+  assert.strictEqual(r.success, true, r.error);
+  const left = JSON.parse(fs.readFileSync(path.join(s.work, '.update.lock'), 'utf8'));
+  assert.strictEqual(left.token, 'someone-else', "another holder's lock is left alone");
+});
+
+test('packages stranded by a killed swap are put back even by an update that does not touch the packages', async () => {
+  const s = scenario();
+  put(s.work, '.update-staging/node_modules.old/.marker', 'old');
+  s.publish('a.txt', 'two\n', 'not a package change');
+  const r = await s.sync.runUpdate();
+  assert.strictEqual(r.success, true, r.error);
+  assert.strictEqual(fs.readFileSync(path.join(s.work, 'node_modules', '.marker'), 'utf8'), 'old');
+});
+
+test('a new version whose package.json cannot be read stops the update: no code moves without its packages checked', async () => {
+  const s = scenario();
+  s.publish('package.json', PKG, 'deps');
+  s.publish('package-lock.json', '{}\n', 'lock');
+  let r = await withNpm(npmVars(s, 'ok'), () => s.sync.runUpdate());
+  assert.strictEqual(r.success, true, r.error);
+  const before = g(s.work, 'rev-parse', 'HEAD');
+  g(s.other, 'rm', '-q', 'package.json'); g(s.other, 'commit', '-q', '-m', 'drop package.json'); g(s.other, 'push', '-q', 'origin', 'main');
+  r = await withNpm(npmVars(s, 'ok'), () => s.sync.runUpdate());
+  assert.strictEqual(r.success, false);
+  assert.match(r.error, /^Update stopped before changing anything: the new version's packages could not be read \(package\.json of [0-9a-f]{7}: /);
+  assert.strictEqual(g(s.work, 'rev-parse', 'HEAD'), before);
+});
+
+
+test('the update lock is shared across processes and never removed automatically, not even when its holder is gone', async () => {
+  const s = scenario();
+  s.publish('a.txt', 'two\n', 'upstream');
+  const lock = path.join(s.work, '.update.lock');
+  for (const left of [JSON.stringify({ pid: process.pid, at: Date.now(), token: 'live' }),       // another updater running
+                      JSON.stringify({ pid: 999999999, at: Date.now() - 86400000, token: 'dead' }), // one that was killed
+                      '']) {                                                                         // one killed mid-write
+    fs.writeFileSync(lock, left);
+    const r = await s.sync.runUpdate();
+    assert.strictEqual(r.success, false, `refused with lock ${JSON.stringify(left)}`);
+    assert.match(r.error, /left its lock behind \(.*\.update\.lock\)\. If no update is running, delete that file/);
+    assert.strictEqual(fs.readFileSync(lock, 'utf8'), left, 'the lock is left exactly as it was');
+  }
+  fs.rmSync(lock);                                                                                   // removed by hand
+  const r = await s.sync.runUpdate();
+  assert.strictEqual(r.success, true, r.error);
+  assert.deepStrictEqual(fs.readdirSync(s.work).filter(f => f.startsWith('.update')), [], 'released afterwards, nothing left');
 });

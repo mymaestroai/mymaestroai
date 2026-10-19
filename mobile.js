@@ -3408,7 +3408,7 @@ async function paintMenuCredit() {
   const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
   const cap = (n) => Number.isInteger(Number(n)) ? `$${Number(n)}` : usd(n);
   const period = (c) => c.resetDay === 1 ? 'this month' : `since ${new Date(`${c.since}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
-  el.textContent = list.map(c => `${names[c.provider] || c.provider} API credit: ${usd(c.spent)} of ${cap(c.monthlyUsd)} ${period(c)}`).join('\n');
+  el.textContent = list.map(c => `${names[c.provider] || c.provider} API credit: ${usd(c.spent)} of ${cap(c.monthlyUsd)} ${period(c)}${c.unpriced ? ` (+${c.unpriced} unpriced)` : ''}`).join('\n');
   const worst = Math.max(...list.map(c => c.spent / c.monthlyUsd));
   el.classList.toggle('hot', worst >= 0.9);
   el.classList.toggle('warn', worst >= 0.75 && worst < 0.9);

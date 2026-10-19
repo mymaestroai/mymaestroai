@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createLedger, creditPeriodStart, cleanCredit, CREDIT_PROVIDERS } = require('../lib/ledger');
+const { createLedger, creditPeriod, creditPeriodStart, cleanCredit, CREDIT_PROVIDERS } = require('../lib/ledger');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const at = (y, m, d, h = 12) => new Date(y, m - 1, d, h).getTime();
@@ -18,6 +18,9 @@ test('creditPeriodStart: the latest renewal day on or before today, across month
   assert.strictEqual(creditPeriodStart(15, at(2027, 1, 10)), '2026-12-15');
   assert.strictEqual(creditPeriodStart(31, at(2026, 10, 30)), '2026-10-28', 'renewal days past 28 are treated as the 28th');
   assert.strictEqual(creditPeriodStart(0, at(2026, 10, 19)), '2026-10-01');
+  assert.deepStrictEqual(creditPeriod(1, at(2026, 10, 19)), { since: '2026-10-01', until: '2026-11-01' });
+  assert.deepStrictEqual(creditPeriod(20, at(2026, 10, 19)), { since: '2026-09-20', until: '2026-10-20' });
+  assert.deepStrictEqual(creditPeriod(15, at(2027, 1, 10)), { since: '2026-12-15', until: '2027-01-15' });
 });
 
 test('cleanCredit: blank or zero means none; amounts and renewal days are checked', () => {
@@ -26,6 +29,7 @@ test('cleanCredit: blank or zero means none; amounts and renewal days are checke
   assert.strictEqual(cleanCredit(null), null);
   assert.deepStrictEqual(cleanCredit({ monthlyUsd: '$200' }), { monthlyUsd: 200, resetDay: 1 });
   assert.deepStrictEqual(cleanCredit({ monthlyUsd: '12.345', resetDay: '15' }), { monthlyUsd: 12.35, resetDay: 15 });
+  assert.strictEqual(cleanCredit({ monthlyUsd: '0.004' }), null, 'rounds to zero: no credit (never a zero to divide by)');
   assert.throws(() => cleanCredit({ monthlyUsd: 'lots' }), /dollar amount/);
   assert.throws(() => cleanCredit({ monthlyUsd: -5 }), /dollar amount/);
   assert.throws(() => cleanCredit({ monthlyUsd: 200, resetDay: 29 }), /from 1 to 28/);
@@ -44,8 +48,13 @@ test('credits(): one provider\'s spend since the period began; subscription turn
     l.record({ agent: 'doc', model: 'anthropic/claude-fable-5-1', costUsd: 1.5, ok: false });      // a failed call was still billed
     l.record({ agent: 'maestro', model: 'claude-sdk/claude-opus-5-5', costUsd: 10 });               // subscription, API-equivalent only
     l.record({ agent: 'tester', model: 'openrouter/anthropic/claude-fable-5.1', costUsd: 2 });     // billed by OpenRouter
+    l.record({ agent: 'doc', model: 'anthropic/zz-unknown-model', inputTokens: 1000, outputTokens: 100 });   // no known price
+    clock.t = at(2026, 11, 2);
+    l.record({ agent: 'doc', model: 'anthropic/claude-fable-5-1', costUsd: 9 });                   // next period
+    clock.t = at(2026, 10, 25);
+    l.record({ agent: 'doc', model: 'anthropic/claude-fable-5-1', costUsd: 7 });                   // later this period, i.e. after "now" below: mis-dated
     clock.t = at(2026, 10, 19);
-    assert.deepStrictEqual(l.credits(), [{ provider: 'anthropic', monthlyUsd: 200, resetDay: 1, since: '2026-10-01', spent: 4.5, turns: 2 }]);
+    assert.deepStrictEqual(l.credits(), [{ provider: 'anthropic', monthlyUsd: 200, resetDay: 1, since: '2026-10-01', until: '2026-11-01', spent: 4.5, turns: 3, unpriced: 1 }]);
     credits = { anthropic: { monthlyUsd: 200, resetDay: 1 }, openrouter: { monthlyUsd: 20, resetDay: 1 } };
     assert.deepStrictEqual(l.credits().map(c => [c.provider, c.spent]), [['anthropic', 4.5], ['openrouter', 2]]);
     credits = {};
@@ -85,4 +94,12 @@ test('phone: the ⋮ menu shows the credit to admins when one is set', () => {
   assert.match(js, /if \(menu\.classList\.contains\('open'\)\) paintMenuCredit\(\);/);
   assert.match(js, /async function paintMenuCredit\(\) \{[\s\S]*?if \(!isAdmin\(\)\) \{ el\.hidden = true; return; \}[\s\S]*?api\('\/api\/ledger\/today'\)/);
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v52'/);
+});
+
+test('no ledger: no credit figures, rather than a reassuring $0', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-none-'));
+  fs.writeFileSync(path.join(dir, 'a-file'), '');   // the ledger's folder would have to be inside a file: it cannot open
+  const l = createLedger({ file: path.join(dir, 'a-file', 'ledger.db'), getCredits: () => ({ anthropic: { monthlyUsd: 200 } }) });
+  const orig = console.error; console.error = () => {};
+  try { assert.deepStrictEqual(l.credits(), []); } finally { console.error = orig; fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -2874,7 +2874,7 @@
     const creditSince = (day) => { const d = new Date(`${day}T12:00:00`); return isNaN(d) ? day : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
     function creditLine(c) {
       const pct = c.monthlyUsd ? Math.round(100 * c.spent / c.monthlyUsd) : 0;
-      return `${creditLabel(c.provider)}: ${usd(c.spent)} of ${cap(c.monthlyUsd)} since ${creditSince(c.since)} (${pct}%)`;
+      return `${creditLabel(c.provider)}: ${usd(c.spent)} of ${cap(c.monthlyUsd)} since ${creditSince(c.since)} (${pct}%)${c.unpriced ? `, plus ${c.unpriced} call${c.unpriced === 1 ? '' : 's'} with no known price` : ''}`;
     }
     function paintCreditMeter() {
       const el = document.getElementById('credit-meter');
@@ -2909,7 +2909,7 @@
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         if (spendToday) spendToday.credits = d.credits || [];
-        paintCreditMeter(); paintSpendSettings(false);
+        paintCreditMeter(); paintSpendSettings(false); fillCreditInputs();
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
       } catch (e) {
         if (btn) { btn.className = 'st-test-btn fail'; btn.textContent = 'Failed'; }
