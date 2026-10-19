@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.5.0] - 2026-10-19
+
+Everything since 5.4.0 (2026-09-22). For a hub that was already on the previous stable (2026-10-18), only the first five entries below are new.
+
 - **Tool calls stand out in the phone app.** In a reply, each tool call used to be grey code-style text that was easy to mix up with the reply. It is now light blue on a faint blue panel with a blue bar, with the tool's name in bold ("✓ **Bash** · grep -c error server.log"). A call that failed is red. The reply's own text is unchanged. Phone app version v50.
 - **Claude on an API key no longer fails while it thinks.** Claude 5 models think by default, and while they do, Anthropic's stream carries only a keep-alive ping about every 30 seconds and hands over the whole thinking block at the end (measured on `claude-fable-5-1` at effort Max). The hub's stream reader dropped those pings, so its two-minute silence timer cut off any longer think as "The model returned nothing (empty stream from anthropic)", about every other turn for an agent on Max effort. Now:
   - **Thinking keeps the connection alive:** every event without output passes a keep-alive to the silence timer. A connection that really goes silent still closes, with "Anthropic sent nothing at all for 120 seconds" in place of "returned nothing".
@@ -995,4 +999,5 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/commits/main
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.5.0...dev
+[5.5.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.5.0
