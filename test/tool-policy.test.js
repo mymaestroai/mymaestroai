@@ -73,11 +73,12 @@ test('classifyCommand: reads, inside writes, outside writes, sends, destroys', (
   const c = (cmd) => tp.classifyCommand(cmd, o).cls;
   assert.strictEqual(c('ls -la && grep -rn foo .'), 'read');
   assert.strictEqual(c('cat /etc/hosts | head'), 'read_outside', 'a read outside the roots is its own class (allowed for admin-side roles, denied for members)');
-  assert.strictEqual(c('cat ~/agent-hub/medical/patients/pat.md'), 'read', 'inside a root');
+  const PAT = path.join(tp.HUB_HOME, 'medical', 'patients');   // the hub home, wherever the install sits (CI clones elsewhere)
+  assert.strictEqual(c(`cat "${PAT}/pat.md"`), 'read', 'inside a root');
   assert.strictEqual(c('cat ' + path.join(HUB, '.env')), 'admin', 'secrets are admin even to read');
   assert.strictEqual(c('sqlite3 ' + path.join(HUB, 'data', 'memory.db') + ' .tables'), 'admin', 'other agents\' memory is not readable raw');
   assert.strictEqual(c('echo hi > notes.txt'), 'write_inside');
-  assert.strictEqual(c('mkdir -p ~/agent-hub/medical/patients/x && cp a.pdf ~/agent-hub/medical/patients/x/'), 'write_inside');
+  assert.strictEqual(c(`mkdir -p "${PAT}/x" && cp a.pdf "${PAT}/x/"`), 'write_inside');
   assert.strictEqual(c('cp report.md ~/Desktop/report.md'), 'write_outside');
   assert.strictEqual(c('echo x >> ' + path.join(HUB, 'data', 'agents.json')), 'admin');
   assert.strictEqual(c('sed -i s/a/b/ /etc/ssh/sshd_config'), 'admin');
@@ -119,7 +120,7 @@ test('classifyCommand: regex literals, comparisons and quoted text are not write
   assert.strictEqual(c(`cat a | tee ~/Desktop/out.txt`), 'write_outside');
   assert.strictEqual(c(`cp -r ./build ~/Desktop/site`), 'write_outside');
   assert.strictEqual(c(`chmod 600 ~/Desktop/secret`), 'write_outside');
-  assert.strictEqual(c(`sed -i 's/a/b/' ~/agent-hub/medical/patients/pat.md`), 'write_inside');
+  assert.strictEqual(c(`sed -i 's/a/b/' "${path.join(tp.HUB_HOME, 'medical', 'patients', 'pat.md')}"`), 'write_inside');
   assert.strictEqual(c(`sed -i 's/a/b/' /etc/ssh/sshd_config`), 'admin');
   assert.strictEqual(c(`tar -xzf x.tgz -C /opt/stuff`), 'write_outside');
   assert.strictEqual(c(`git clone https://example.com/r.git ~/Desktop/r`), 'write_outside');
