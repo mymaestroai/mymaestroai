@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **A job-runner test no longer fails at random.** It cancelled a job before the job had recorded its process, then deleted the job's folder while the job was still starting, which collided on busy machines (seen once on GitHub's test runner). It now waits for the process to start and to be gone.
+
 ## [5.5.0] - 2026-10-19
 
 Everything since 5.4.0 (2026-09-22). For a hub that was already on the previous stable (2026-10-18), only the first five entries below are new.
