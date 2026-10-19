@@ -36,7 +36,7 @@ test('mobile: same re-attach on snapshot and when opening a busy agent\'s chat; 
   assert.match(m, /\} else if \(!ra\.text && ra\.since\) \{/);
   assert.match(m, /if \(stillBusy === true \|\| reply\.inProgress\) \{[^\n]*\n\s*\/\/ Still working/);
   assert.match(m, /if \(ui < 0 && ra\.text\) \{/);
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v49'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v50'/);
 });
 
 test('a chat opened while its agent is mid-turn (reload, or reopened from the sidebar) follows the turn at once', () => {

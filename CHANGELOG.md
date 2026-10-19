@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Tool calls stand out in the phone app.** In a reply, each tool call used to be grey code-style text that was easy to mix up with the reply. It is now light blue on a faint blue panel with a blue bar, with the tool's name in bold ("✓ **Bash** · grep -c error server.log"). A call that failed is red. The reply's own text is unchanged. Phone app version v50.
 - **Claude on an API key no longer fails while it thinks.** Claude 5 models think by default, and while they do, Anthropic's stream carries only a keep-alive ping about every 30 seconds and hands over the whole thinking block at the end (measured on `claude-fable-5-1` at effort Max). The hub's stream reader dropped those pings, so its two-minute silence timer cut off any longer think as "The model returned nothing (empty stream from anthropic)", about every other turn for an agent on Max effort. Now:
   - **Thinking keeps the connection alive:** every event without output passes a keep-alive to the silence timer. A connection that really goes silent still closes, with "Anthropic sent nothing at all for 120 seconds" in place of "returned nothing".
   - **Anthropic's own errors are shown:** an error inside an open stream (for example "Overloaded") now says the provider is busy, instead of "returned nothing".

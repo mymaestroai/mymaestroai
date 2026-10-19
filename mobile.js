@@ -1791,8 +1791,14 @@ function paintFeedRow(feed, it, list = null) {
   it.el.className = `frow ${it.kind} ${it.status}${it.open ? ' open' : ''}`;
   const [line, sub, det] = it.el.children;
   if (it.kind === 'tool') {
-    const mark = it.status === 'done' ? (/^(Error|⚠|✗)/.test(it.output || '') ? '✗' : '✓') : '⚙';
-    line.textContent = `${mark} ${it.tool}${it.summary ? ` · ${clipText(it.summary, 80)}` : ''}`;
+    const failed = it.status === 'done' && /^(Error|⚠|✗)/.test(it.output || '');
+    const mark = it.status === 'done' ? (failed ? '✗' : '✓') : '⚙';
+    // The tool's name in bold, then what it did: tool calls read apart from the reply (light blue, mobile.html .frow.tool).
+    const name = document.createElement('span');
+    name.className = 'ftname';
+    name.textContent = it.tool;
+    line.replaceChildren(`${mark} `, name, it.summary ? ` · ${clipText(it.summary, 80)}` : '');
+    if (failed) it.el.classList.add('failed');
     sub.textContent = '';
     det.textContent = it.open ? [it.summary, it.output ? String(it.output).slice(0, 3000) : ''].filter(Boolean).join('\n\n') : '';
     return;

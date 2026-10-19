@@ -159,14 +159,15 @@
     .msg.error { border-color: var(--error); color: var(--error); }
     .note { align-self: center; font-size: 12px; color: var(--text-tertiary); text-align: center; padding: 2px 8px; }
     .note.interject { align-self: flex-end; font-style: italic; margin-top: -4px; }
-    .toolline { font-size: 12px; color: var(--text-dim); font-family: 'Geist Mono', ui-monospace, monospace; margin-top: 6px; overflow-wrap: anywhere; }
-    /* Activity feed in an in-progress bubble: tool calls and workers, reply text below it. */
-    .feed { margin: 0 0 8px; border-left: 2px solid var(--border-strong); padding-left: 8px; font-size: 12px; color: var(--text-dim); }
+    .toolline { font-size: 12px; color: #8AB4FF; font-family: 'Geist Mono', ui-monospace, monospace; margin-top: 6px; overflow-wrap: anywhere; }
+    /* Activity feed in an in-progress bubble: tool calls and workers, reply text below it. Tool calls read apart from the
+       reply: light blue on a faint blue panel with a blue bar; a failed call turns red. */
+    .feed { margin: 0 0 8px; border-left: 2px solid rgba(61, 123, 255, 0.65); background: rgba(61, 123, 255, 0.07); border-radius: 0 6px 6px 0; padding: 2px 8px; font-size: 12px; color: var(--text-dim); }
     .feed:last-child { margin-bottom: 0; }
     /* Activity rows between the reply's text, where they happened (mobile.js paintReply) */
     .feed.fgroup { margin: 6px 0 8px; }
     .seg[hidden] { display: none; }
-    .feed-head { display: none; width: 100%; text-align: left; min-height: 28px; padding: 2px 0; color: var(--text-tertiary); font-size: 12px; }
+    .feed-head { display: none; width: 100%; text-align: left; min-height: 28px; padding: 2px 0; color: #7FA3E6; font-size: 12px; }
     .feed.done .feed-head { display: block; }
     .feed.done .feed-list { display: none; }
     .feed.done.open .feed-list { display: block; }
@@ -176,7 +177,9 @@
     .frow .fline::after { content: ''; display: none; flex: none; width: 9px; height: 9px; border: 1.5px solid var(--text-tertiary); border-top-color: var(--warning); border-radius: 50%; animation: fspin .9s linear infinite; }
     .frow.running .fline::after { display: inline-block; }
     @keyframes fspin { to { transform: rotate(360deg); } }
-    .frow.failed .fline { color: var(--error); }
+    .frow.tool .fline, .ftool { color: #8AB4FF; }
+    .ftname { font-weight: 600; color: #B5CEFF; }
+    .frow.failed .fline, .frow.failed .ftname { color: var(--error); }
     .fsub { color: var(--text-tertiary); padding-left: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .fsub:empty, .fdet:empty { display: none; }
     .fdet { margin: 4px 0 2px 18px; padding: 6px 8px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; white-space: pre-wrap; font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 11.5px; max-height: 40vh; overflow: auto; color: var(--text-dim); }
