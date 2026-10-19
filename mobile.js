@@ -3392,6 +3392,26 @@ function toggleMenu(e) {
   const menu = $('menu');
   menu.classList.toggle('no-chat', !$('screen-chat').classList.contains('active'));
   menu.classList.toggle('open');
+  if (menu.classList.contains('open')) paintMenuCredit();
+}
+
+// Monthly API credit (set on the desktop, Settings → Spend): this period's spend through the hub against it.
+async function paintMenuCredit() {
+  const el = $('menu-credit');
+  if (!el) return;
+  if (!isAdmin()) { el.hidden = true; return; }
+  let list = [];
+  try { const r = await api('/api/ledger/today'); if (r.ok) list = (await r.json()).credits || []; } catch { /* keep it hidden */ }
+  el.hidden = !list.length;
+  if (!list.length) return;
+  const names = { anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google', openrouter: 'OpenRouter', perplexity: 'Perplexity' };
+  const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+  const cap = (n) => Number.isInteger(Number(n)) ? `$${Number(n)}` : usd(n);
+  const period = (c) => c.resetDay === 1 ? 'this month' : `since ${new Date(`${c.since}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+  el.textContent = list.map(c => `${names[c.provider] || c.provider} API credit: ${usd(c.spent)} of ${cap(c.monthlyUsd)} ${period(c)}`).join('\n');
+  const worst = Math.max(...list.map(c => c.spent / c.monthlyUsd));
+  el.classList.toggle('hot', worst >= 0.9);
+  el.classList.toggle('warn', worst >= 0.75 && worst < 0.9);
 }
 
 async function signOut() {

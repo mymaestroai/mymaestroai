@@ -334,6 +334,16 @@
     }
     #spend-today.on { display: inline-block; }
     #spend-today:hover { color: var(--text); }
+    /* Monthly API credit (Settings → Spend): this period's spend through the hub against the credit; amber from 75%, rose from 90%. */
+    #credit-meter {
+      display: none; margin: 4px 0 0 4px; padding: 2px 8px; border-radius: var(--radius);
+      font-size: 0.72rem; color: var(--text-tertiary); background: var(--bg-input); white-space: nowrap;
+      cursor: pointer; user-select: none; font-family: 'Geist Mono', monospace;
+    }
+    #credit-meter.on { display: inline-block; }
+    #credit-meter:hover { color: var(--text); }
+    #credit-meter.warn { color: #c9a227; background: rgba(201, 162, 39, 0.12); }
+    #credit-meter.hot { color: #d4588b; background: rgba(212, 88, 139, 0.12); }
     /* Claude plan warning (lib/plan-usage): shown while a weekly allowance is past a warning level; click to choose models. */
     #plan-warn {
       display: none; margin: 4px 0 0 4px; padding: 2px 8px; border-radius: var(--radius);
@@ -2055,7 +2065,7 @@
       <div class="sidebar-header-text">
         <h1>🟦 My Maestro AI</h1>
         <p>Multi-agent chat · Multi-provider LLM</p>
-        <span id="agents-working" onclick="toggleBusyFilter()" title="Click to show only the agents that are working"></span><span id="spend-today" onclick="openSettingsAt('st-spend-section')" title="API-equivalent spend today; click for caps"></span><span id="plan-warn" onclick="openPlanSettings()"></span>
+        <span id="agents-working" onclick="toggleBusyFilter()" title="Click to show only the agents that are working"></span><span id="spend-today" onclick="openSettingsAt('st-spend-section')" title="API-equivalent spend today; click for caps"></span><span id="credit-meter" onclick="openSettingsAt('st-spend-section')"></span><span id="plan-warn" onclick="openPlanSettings()"></span>
       </div>
       <button class="sidebar-collapse-btn" onclick="collapseSidebar()" title="Collapse sidebar">◀</button>
     </div>

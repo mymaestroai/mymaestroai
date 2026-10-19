@@ -104,7 +104,7 @@
       document.body.classList.add('member-view');
       // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
       for (const id of ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
-                        'settings-btn', 'schedule-btn', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap']) {
+                        'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap']) {
         const el = document.getElementById(id);
         if (!el) continue;
         const row = el.closest('.more-item, .more-row') || el;
@@ -1846,6 +1846,18 @@
           <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save</button>
         </div>
         <div class="st-hint" style="margin-left:158px">Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
+        <div class="st-row">
+          <label style="flex-basis:150px" title="A monthly API credit, for example the one that comes with a Claude Max plan. The header then shows this period's spend through the hub against it.">Monthly API credit ($)</label>
+          <select id="st-credit-provider" onchange="fillCreditInputs()" style="max-width:120px">${CREDIT_PROVIDERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
+          <input type="text" id="st-credit-amount" placeholder="none" inputmode="decimal" style="max-width:80px">
+          <span style="font-size:0.78rem;color:var(--text-dim)">renews on day</span>
+          <input type="text" id="st-credit-day" placeholder="1" inputmode="numeric" style="max-width:44px">
+          <button class="st-test-btn" id="st-credit-save" onclick="saveCredit()">Save</button>
+        </div>
+        <div class="st-row">
+          <label style="flex-basis:150px"></label>
+          <div id="st-credit-list" style="flex:1;font-size:0.8rem;color:var(--text-dim)"></div>
+        </div>
       </div>`;
 
       html += `<div class="st-actions">
@@ -2837,6 +2849,7 @@
         spendToday = await r.json();
       } catch { return; }
       paintSpendToday();
+      paintCreditMeter();
       paintSpendSettings(false);
     }
     function scheduleSpendRefresh() {
@@ -2854,6 +2867,56 @@
       const top = (t.agents || []).slice(0, 3).map(a => `${agentDisplayName(a.agent)} ${usd(a.cost)}`).join(', ');
       el.title = `API-equivalent spend today: ${usd(t.total)} over ${t.turns || 0} turn${t.turns === 1 ? '' : 's'}${top ? ` · ${top}` : ''}. Click for caps.`;
     }
+    // Monthly API credits (settings.apiCredits, POST /api/ledger/credits): the header shows the fullest one.
+    const CREDIT_PROVIDERS = [['anthropic', 'Anthropic'], ['openai', 'OpenAI'], ['google', 'Google'], ['openrouter', 'OpenRouter'], ['perplexity', 'Perplexity']];
+    const creditLabel = (p) => (CREDIT_PROVIDERS.find(x => x[0] === p) || [p, p])[1];
+    const cap = (n) => Number.isInteger(Number(n)) ? `$${Number(n)}` : usd(n);   // $200, not $200.00
+    const creditSince = (day) => { const d = new Date(`${day}T12:00:00`); return isNaN(d) ? day : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+    function creditLine(c) {
+      const pct = c.monthlyUsd ? Math.round(100 * c.spent / c.monthlyUsd) : 0;
+      return `${creditLabel(c.provider)}: ${usd(c.spent)} of ${cap(c.monthlyUsd)} since ${creditSince(c.since)} (${pct}%)`;
+    }
+    function paintCreditMeter() {
+      const el = document.getElementById('credit-meter');
+      if (!el) return;
+      const list = (spendToday && spendToday.credits) || [];
+      el.classList.toggle('on', list.length > 0);
+      if (!list.length) { el.textContent = ''; el.title = ''; el.classList.remove('warn', 'hot'); return; }
+      const top = list.slice().sort((a, b) => b.spent / b.monthlyUsd - a.spent / a.monthlyUsd)[0];
+      const pct = top.spent / top.monthlyUsd;
+      el.textContent = `${list.length > 1 ? `${creditLabel(top.provider)} ` : ''}credit ${usd(top.spent)} of ${cap(top.monthlyUsd)}`;
+      el.classList.toggle('hot', pct >= 0.9);
+      el.classList.toggle('warn', pct >= 0.75 && pct < 0.9);
+      el.title = `${list.map(creditLine).join('\n')}\nSpend through this hub, as its ledger books it. The provider's billing page has the exact figure. Click to change.`;
+    }
+    function fillCreditInputs() {
+      const p = document.getElementById('st-credit-provider')?.value;
+      const c = ((spendToday && spendToday.credits) || []).find(x => x.provider === p);
+      const amt = document.getElementById('st-credit-amount'), day = document.getElementById('st-credit-day');
+      if (amt) amt.value = c ? String(c.monthlyUsd) : '';
+      if (day) day.value = c ? String(c.resetDay) : '';
+    }
+    async function saveCredit() {
+      const btn = document.getElementById('st-credit-save');
+      const body = {
+        provider: document.getElementById('st-credit-provider')?.value,
+        monthlyUsd: (document.getElementById('st-credit-amount')?.value || '').trim(),
+        resetDay: (document.getElementById('st-credit-day')?.value || '').trim(),
+      };
+      if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+      try {
+        const r = await fetch('/api/ledger/credits', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        if (spendToday) spendToday.credits = d.credits || [];
+        paintCreditMeter(); paintSpendSettings(false);
+        if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
+      } catch (e) {
+        if (btn) { btn.className = 'st-test-btn fail'; btn.textContent = 'Failed'; }
+        alert(`Could not save the credit: ${e.message}`);
+      }
+      if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save'; }, 3000); }
+    }
     async function paintSpendSettings(fetchFirst = true) {
       const box = document.getElementById('st-spend');
       if (!box) return;
@@ -2865,6 +2928,18 @@
       const caps = t.caps || {};
       stSum('money', 'spend', `Today ${usd(t.total)}`);
       stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} whole hub` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
+      const credits = t.credits || [];
+      const listEl = document.getElementById('st-credit-list');
+      if (listEl) listEl.textContent = credits.length ? credits.map(creditLine).join(' · ') : 'None set. Enter an amount to see it next to today\'s spend.';
+      if (credits.length) stSum('money', 'credit', credits.map(c => `${creditLabel(c.provider)} credit ${usd(c.spent)} of ${cap(c.monthlyUsd)}`).join(', '),
+        credits.some(c => c.spent >= 0.9 * c.monthlyUsd));
+      else stSum('money', 'credit', '');
+      const provEl = document.getElementById('st-credit-provider');
+      if (provEl && !provEl.dataset.ready) {
+        if (credits.length) provEl.value = credits[0].provider;
+        provEl.dataset.ready = '1';
+        fillCreditInputs();
+      }
       const agentInp = document.getElementById('st-cap-agent');
       const hubInp = document.getElementById('st-cap-hub');
       if (agentInp && document.activeElement !== agentInp) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
