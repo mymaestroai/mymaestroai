@@ -112,8 +112,17 @@ function autolinkEscaped(text, attrs) {
     const cut = url.search(/&quot;|&#39;|&lt;|&gt;/);
     const u = cut >= 0 ? url.slice(0, cut) : url;
     const rest = cut >= 0 ? url.slice(cut) : '';
-    if (!/^https?:\/\/[A-Za-z0-9]/.test(u)) return m;
-    return `${lead}<a href="${u}" target="_blank" rel="noopener noreferrer"${attrs || ''}>${u}</a>${rest}`;
+    // Sentence punctuation after a URL is text, not part of it: trailing . , ; : ! ? and a ) or ] with no
+    // opening partner inside the URL ("see https://x.y/a, then", "(https://x.y/a)"); a balanced (...) stays.
+    let href = u;
+    for (;;) {
+      const last = href.slice(-1);
+      const open = last === ')' ? '(' : last === ']' ? '[' : '';
+      if (/[.,;:!?]/.test(last) || (open && href.split(open).length < href.split(last).length)) href = href.slice(0, -1);
+      else break;
+    }
+    if (!/^https?:\/\/[A-Za-z0-9]/.test(href)) return m;
+    return `${lead}<a href="${href}" target="_blank" rel="noopener noreferrer"${attrs || ''}>${href}</a>${u.slice(href.length)}${rest}`;
   });
 }
 function safeLinkUrl(url) {

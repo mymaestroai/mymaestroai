@@ -106,6 +106,29 @@ test('serveImage serves only files under the allowed roots (upload dir, image-ge
   assert.strictEqual(trav.status, 404, '.. traversal out of an allowed root is refused');
 });
 
+test('hub home is the folder holding the install, wherever it is: its share/, users/, medical/, legal/ are servable', () => {
+  // Regression: HUB_HOME was fixed at ~/agent-hub, so with the install at e.g. ~/dev/mymaestroai/mymaestroai every
+  // Files-folder image (share/<agent>/...) was a 404 and chat previews were blank. The home here is under /var/tmp
+  // (or /dev/shm), outside every other root, so only the hub-home rule can make these files servable.
+  const home = path.join(FORBIDDEN, 'hubhome');
+  fs.mkdirSync(path.join(home, 'install', 'lib'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '..', 'lib', 'images.js'), path.join(home, 'install', 'lib', 'images.js'));
+  const placed = require(path.join(home, 'install', 'lib', 'images.js'));
+  const realHome = fs.realpathSync(home);                  // macOS: /var is a link to /private/var
+  assert.strictEqual(placed.HUB_HOME, realHome);
+  for (const sub of ['share', 'users', 'medical', 'legal']) assert.ok(placed.SERVE_ROOTS.includes(path.join(realHome, sub)), sub);
+  assert.ok(!placed.SERVE_ROOTS.includes(path.join(os.homedir(), 'agent-hub', 'share')) || home === path.join(os.homedir(), 'agent-hub'), 'no fixed ~/agent-hub root');
+  const preview = path.join(home, 'share', 'agent-lead', 'preview', 'gh-desktop.png');
+  fs.mkdirSync(path.dirname(preview), { recursive: true }); fs.writeFileSync(preview, PNG);
+  const ok = fakeRes(); placed.serveImage(enc(preview), ok);
+  assert.strictEqual(ok.status, 200, 'a Files-folder image under the real hub home is served');
+  assert.strictEqual(ok.headers['Content-Type'], 'image/png');
+  // A sibling of the hub home's folders is still outside: only the known subfolders are roots, not the home itself.
+  const stray = path.join(home, 'backups', 'x.png'); fs.mkdirSync(path.dirname(stray), { recursive: true }); fs.writeFileSync(stray, PNG);
+  const no = fakeRes(); placed.serveImage(enc(stray), no);
+  assert.strictEqual(no.status, 404, 'backups/ under the hub home is not servable');
+});
+
 test('serveImage: missing, outside, non-image and directory paths all give the same 404 (no existence oracle)', () => {
   const expect404 = (p, label) => { const r = fakeRes(); images.serveImage(enc(p), r); assert.strictEqual(r.status, 404, label); assert.strictEqual(r.body, 'Image not found', label); };
   const exists = path.join(FORBIDDEN, 'notes.txt'); fs.writeFileSync(exists, 'hi');
