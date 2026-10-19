@@ -25,7 +25,7 @@ test('consult_agent runs under the shared pacing keyed by the consulted agent\'s
 
 test('the consulted turn\'s typed turn_error becomes a typed rejection the pacing layer can classify', () => {
   assert.ok(sdk.includes("if (gw && gw.type === 'turn_error') turnError = gw;"));
-  assert.ok(sdk.includes("err.pacing = { kind: turnError.kind || 'error', retryAfterMs: turnError.retryAfterMs || null };"));
+  assert.ok(sdk.includes("err.pacing = { kind: turnError.kind || 'error', retryAfterMs: turnError.retryAfterMs || null, ...(turnError.help ? { help: String(turnError.help).slice(0, 900) } : {}) };"));
 });
 
 test('every agent path emits turn_error: SDK result is_error, SDK crash, gateway failure, Codex stop and Codex crash', () => {

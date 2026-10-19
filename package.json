@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test 'test/**/*.test.js'",
+    "test": "node scripts/run-tests.js",
     "security-check": "node scripts/security-check.js"
   },
   "dependencies": {

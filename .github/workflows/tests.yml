@@ -1,0 +1,43 @@
+# Runs the test suite on every pull request into dev or main, and on each merge into them.
+# The install mirrors install/install.sh: the same Node version, packages without install scripts, then a rebuild of
+# the one native module (better-sqlite3). Third-party actions are pinned to full commit hashes.
+name: tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces its run. Every other run (after a merge, or started by hand) gets a group of
+# its own, so none is replaced while it waits.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('tests-pr-{0}', github.ref) || format('tests-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+          cache: npm
+      - name: Install packages (as the installer does)
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild better-sqlite3
+          node -e "new (require('better-sqlite3'))(':memory:').prepare('select 1').get()"
+      # npm test = scripts/run-tests.js: every test file except integration.test.js (needs a running hub) and
+      # agent-workers.test.js (runs real agents).
+      - name: Run the test suite
+        run: npm test
