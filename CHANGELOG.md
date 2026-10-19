@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Updates install packages safely, and say so when they can't.** When an update changes the hub's packages, the in-app updater used to run a plain `npm install`. That ran install scripts, could rewrite the lockfile (which then blocked the next update), and on failure still reported success, so the page restarted the hub into code whose packages were missing. Now it installs the way the installer does: `npm ci --omit=dev --ignore-scripts`, then a rebuild of better-sqlite3, using the npm that ships with the hub's own Node, with none of the hub's keys or tokens in npm's environment. The install runs in a side folder, and the new packages replace the old ones only once every dependency is in place and the database module loads. If anything fails, the code goes back to where it was and the update reports the failure in plain words; the pages and `mymaestro update` restart only after a successful update. A channel switch that changes the packages now installs them too, and two updates can no longer run at once.
 - **A job-runner test no longer fails at random.** It cancelled a job before the job had recorded its process, then deleted the job's folder while the job was still starting, which collided on busy machines (seen once on GitHub's test runner). It now waits for the process to start and to be gone.
 
 ## [5.5.0] - 2026-10-19

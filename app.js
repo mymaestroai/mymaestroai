@@ -1355,7 +1355,7 @@
         }</div>`;
       }
       if (s.needsInstall) {
-        html += `<p class="gs-sub">Dependencies changed — npm install will run.</p>`;
+        html += `<p class="gs-sub">Packages changed: the update installs them first. If that fails, it puts everything back and nothing restarts.</p>`;
       }
 
       html += `<div class="gs-actions">${gsClose}`;
