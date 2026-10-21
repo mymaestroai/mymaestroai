@@ -21,13 +21,13 @@ umask 077
 export LC_ALL=C
 
 PRODUCT="My Maestro AI"
-NODE_VERSION="22.23.3"
-# SHA-256 of the official node-v22.23.3 archives (nodejs.org SHASUMS256.txt, release-key signature checked when this
+NODE_VERSION="22.23.4"
+# SHA-256 of the official node-v22.23.4 archives (nodejs.org SHASUMS256.txt, release-key signature checked when this
 # installer was published).
-NODE_SHA_darwin_arm64="23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53"
-NODE_SHA_darwin_x64="8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8"
-NODE_SHA_linux_arm64="5ced2d48d1d7198739b7f86804de0171aefb6823b684b12341d3321afc3cb0b2"
-NODE_SHA_linux_x64="1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af"
+NODE_SHA_darwin_arm64="c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428"
+NODE_SHA_darwin_x64="efcc2b0db6f94bf53eddb038fe2b370277a042bd29e4f19b8f8e23598795b819"
+NODE_SHA_linux_arm64="f7a1e486dbc8b286847815b477d4fb5e9fb963ed4489c3e1588853d685f589f9"
+NODE_SHA_linux_x64="b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406"
 # The one place the code's GitHub location is set (owner/name). MM_REPO_SLUG overrides it; --repo takes any git URL.
 REPO_SLUG="${MM_REPO_SLUG:-mymaestroai/mymaestroai}"
 REPO_HTTPS="https://github.com/$REPO_SLUG.git"
@@ -189,6 +189,12 @@ get_code() {
     confirm "  Update it to the newest $CHANNEL version? Your data stays as it is." || die "Stopped. Nothing was changed."
     [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no 2>/dev/null)" ] && die "$DIR has local code changes. Commit or stash them, or use the Update button in the hub."
     run git_cred -C "$DIR" fetch --quiet origin "$BRANCH" || die "Could not fetch updates."
+    # Never reset a branch past commits of its own: checkout -B below would leave them behind. This checks the branch
+    # being checked out, whichever branch is current (a switch from the other channel resets it too).
+    if [ "$DRY" != 1 ] && git -C "$DIR" show-ref --verify --quiet "refs/heads/$BRANCH" \
+      && ! git -C "$DIR" merge-base --is-ancestor "refs/heads/$BRANCH" "refs/remotes/origin/$BRANCH" 2>/dev/null; then
+      die "$DIR has commits of its own on $BRANCH that GitHub does not have, so the installer will not move it. Use the Update button in the hub instead."
+    fi
     run git -C "$DIR" checkout --quiet -B "$BRANCH" "origin/$BRANCH" || die "Could not switch to the $CHANNEL channel."
   elif [ -e "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then
     die "$DIR exists and is not empty. Choose another folder with --dir."

@@ -12,6 +12,12 @@ All notable changes to My Maestro AI are recorded here. The format follows
 - **Updates install packages safely, and say so when they can't.** When an update changes the hub's packages, the in-app updater used to run a plain `npm install`. That ran install scripts, could rewrite the lockfile (which then blocked the next update), and on failure still reported success, so the page restarted the hub into code whose packages were missing. Now it installs the way the installer does: `npm ci --omit=dev --ignore-scripts`, then a rebuild of better-sqlite3, using the npm that ships with the hub's own Node. npm gets only the environment it needs: none of the hub's keys or tokens, nor the desktop's SSH agent or keyring. The packages for the incoming code are installed in a side folder before any code moves, and they replace the old ones only once every dependency is in place and the database module loads. So a hub stopped during a slow install still starts, on its old code with its old packages. If the install fails, nothing changes and the update says why in plain words; the pages and `mymaestro update` restart only after a successful update. A channel switch that changes the packages now installs them too, a package missing from an install is put back by the next update, and two updates can no longer run at once, from the pages or `mymaestro update` (if an update is ever killed mid-way, its lock file is named in the message, to be deleted by hand).
 - **A job-runner test no longer fails at random.** It cancelled a job before the job had recorded its process, then deleted the job's folder while the job was still starting, which collided on busy machines (seen once on GitHub's test runner). It now waits for the process to start and to be gone.
 
+## [5.5.1] - 2026-10-21
+
+A security release. For a hub on 5.5.0, this is the only change.
+
+- **Security: Node.js 22.23.4.** Node.js issued security fixes on 2026-10-21 (the highest rated HIGH for the 22.x line), touching outgoing HTTP connections, DNS lookups, TLS checks of IP addresses and Brotli decompression. New installs now get Node.js 22.23.4 (its checksums taken from nodejs.org's signed list), and the automatic tests run on it. An install made with the one-line installer keeps its own Node.js until the installer runs again: running the same one-line command again updates that install in place to the newest version of its channel, replaces its Node.js and keeps your settings, agents and data (an install that follows experimental adds `bash -s -- --channel experimental`). The installer now refuses to move an install whose branch has commits of its own that GitHub does not have. A hub that runs on the computer's own Node.js gets the fix from the system's updates; restart the hub afterwards. Hubs no longer miss this quietly: once a hub has this update, a Node.js older than its line's last security release turns the security check red when Node rated that release HIGH or CRITICAL (the admin banner shows it, with the exact fix for that install), and Maestro raises it with you at the start of its next reply and offers to do the upgrade, which it does only once you agree.
+
 ## [5.5.0] - 2026-10-19
 
 Everything since 5.4.0 (2026-09-22). For a hub that was already on the previous stable (2026-10-18), only the first five entries below are new.
@@ -1005,5 +1011,6 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.5.0...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.5.1...dev
+[5.5.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.5.1
 [5.5.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.5.0

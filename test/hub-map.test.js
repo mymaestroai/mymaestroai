@@ -21,6 +21,7 @@ function deps(over = {}) {
     providersWithKeys: () => ['openai', 'google'],
     hasSdkCredentials: () => true,
     supervisor: () => 'systemd user service',
+    nodeSecurity: () => null,   // the real check would follow the Node.js running the tests
     readiness: () => ({ check: async () => ({ critical: 1, warnings: 1, items: [{ id: 'docker', level: 'ok' }, { id: 'sandbox-image', level: 'ok' }, { id: 'accounts', level: 'critical' }, { id: 'poppler', level: 'warn' }, { id: 'search', level: 'info' }] }) }),
     ...over,
   };
@@ -102,4 +103,16 @@ test('brief: the models the lead agent can assign, newest first, without preview
   assert.match(line, /claude-sdk\/ uses the owner's Claude subscription; the others bill per use, except local ones, which are free\./);
   const none = createHubMap(deps({ models: () => [] })).init({ port: 9000 });
   assert.ok(!(await none.briefFor('maestro')).includes('Models you can assign'), 'no line when nothing is known');
+});
+
+test('brief: a Node.js security release the hub misses becomes a SECURITY line for the lead agent only', async () => {
+  const ns = { behind: true, version: 'v22.23.3', floor: '22.23.4', rated: 'HIGH', date: '2026-10-20', managed: true, how: 'run the one-line installer again ...: curl -fsSL https://mymaestroai.ai/install.sh | bash -s -- --yes' };
+  const hm = createHubMap(deps({ nodeSecurity: () => ns })).init({ port: 8888, host: '127.0.0.1', exposed: () => false, setupNeeded: () => false });
+  const text = await hm.briefFor('maestro');
+  assert.match(text, /- SECURITY \(act on this\): Node\.js v22\.23\.3, which runs this hub, misses the security fixes Node\.js published on 2026-10-20 \(rated HIGH; fixed in 22\.23\.4\)\. At the start of your next reply, tell the owner/);
+  assert.match(text, /Only with the owner's OK: run the one-line installer again/);
+  assert.match(text, /start it as a background job \(run_job\)/);
+  assert.strictEqual(await hm.briefFor('worker'), '', 'not for other agents');
+  const clean = createHubMap(deps({ nodeSecurity: () => ({ ...ns, behind: false }) })).init({ port: 8888, host: '127.0.0.1', exposed: () => false, setupNeeded: () => false });
+  assert.doesNotMatch(await clean.briefFor('maestro'), /SECURITY/);
 });
