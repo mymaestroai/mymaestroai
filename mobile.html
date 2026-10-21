@@ -268,6 +268,20 @@
     #update-sheet .upd-err { color: var(--error); }
     #update-sheet details { margin: 8px 0; font-size: 13px; }
     #update-sheet details div { color: var(--text-dim, #aaa); font-size: 12px; padding: 2px 0; }
+    /* Update available (lib/update-check): the card on the agent list, and the same text in the sheet a notification opens. */
+    #update-card { margin: 8px 12px 0; padding: 12px 14px; border-radius: 12px; background: rgba(61, 123, 255, 0.10); border: 1px solid rgba(61, 123, 255, 0.55); font-size: 14px; line-height: 1.4; }
+    #update-card.sec { border-color: rgba(201, 162, 39, 0.75); background: rgba(201, 162, 39, 0.08); }
+    #update-card .uc-head, #update-sheet .uc-head { font-weight: 700; font-size: 16px; margin-bottom: 2px; }
+    #update-card .uc-sub, #update-sheet .uc-sub { color: var(--text-dim, #aaa); font-size: 13px; }
+    #update-card .uc-sec, #update-sheet .uc-sec { color: #c9a227; }
+    #update-card .uc-notes, #update-sheet .uc-notes { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+    #update-card .uc-notes li, #update-sheet .uc-notes li { margin: 2px 0; }
+    #update-card .uc-more, #update-sheet .uc-more { list-style: none; margin-left: -18px; color: var(--text-dim, #aaa); }
+    #update-card .uc-warn, #update-sheet .uc-warn { color: #c9a227; font-size: 13px; margin: 8px 0 0; }
+    #update-card .uc-actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
+    #update-card .uc-btn { padding: 9px 14px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.18); background: transparent; color: inherit; font-weight: 600; font-size: 14px; }
+    #update-card .uc-primary { background: #3d7bff; border-color: #3d7bff; color: #fff; }
+    #menu-update-note { color: #8AB4FF; font-weight: 600; }
     .lead-badge { font-size: 0.85em; filter: drop-shadow(0 0 2px rgba(245,197,66,0.6)); }
     /* Action approval: a bottom sheet (non-modal dialog) above the tab bar, on every screen */
     #tabbar .tabdot.warn { background: var(--warning); color: #000; }
@@ -419,6 +433,7 @@
 <body>
   <section id="screen-agents" class="screen active">
     <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button class="iconbtn" id="agents-refresh" aria-label="Refresh">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
+    <div id="update-card" hidden></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <button id="working-chip" title="Tap to show only the agents that are working"></button>
     <div class="scroll" id="agents-list"></div>
@@ -480,7 +495,7 @@
     <a id="menu-help" href="/help">&#x2753; Help</a>
     <a id="menu-users" href="/users" hidden>&#x1F465; Users</a>
     <button id="menu-signout">Sign out</button>
-    <button id="menu-update">&#x2B07;&#xFE0F; Update hub</button>
+    <button id="menu-update">&#x2B07;&#xFE0F; Update hub<span id="menu-update-note"></span></button>
     <button id="menu-restart" class="danger">&#x21BB; Restart hub</button>
   </div>
   <div id="toast"></div>

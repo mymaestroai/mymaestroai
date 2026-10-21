@@ -2791,6 +2791,71 @@ async function runUpdateFromPhone(channel) {
   setTimeout(() => { d.close(); restartHub(); }, 800);   // the same restart-and-wait path as the Restart button
 }
 
+// ── Update available (lib/update-check): the server looks at GitHub once a day. While an update waits, admins see a
+// card on the agent list (Update now / Later) and a note on the ⋮ menu's Update item; the push notification opens
+// /mobile?update=1, which shows the same choice as a sheet. "Update now" is the Update sheet's own update and restart. ──
+let ucState = null;
+async function refreshUpdateCheck() {
+  if (!hubMe || !isAdmin()) { paintUpdateCard(); return null; }
+  try { const r = await api('/api/update-check'); if (!r.ok) return null; ucState = await r.json(); } catch { return null; }
+  paintUpdateCard();
+  return ucState;
+}
+function ucBody(s) {
+  const busy = agents.map(a => a.name).filter(n => isBusy(n));
+  const notes = (s.titles || []).map(t => `<li>${esc(t)}</li>`).join('') + (s.more ? `<li class="uc-more">and ${s.more} more</li>` : '');
+  const have = s.latestVersion && s.latestVersion !== s.currentVersion && s.currentVersion ? `You have ${esc(s.currentVersion)}.` : `You're on ${esc(s.channel || s.branch || 'this channel')}.`;
+  const warn = s.blocked
+    ? `<p class="uc-warn">This hub has ${s.ahead} change${s.ahead === 1 ? '' : 's'} of its own that ${s.ahead === 1 ? "isn't" : "aren't"} on GitHub, so it can't update by itself. Open Details to choose.</p>`
+    : busy.length ? `<p class="uc-warn">${busy.length === 1 ? `${esc(displayName(busy[0]))} is` : `${busy.length} agents are`} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short.</p>` : '';
+  return `<div class="uc-head">⬇️ ${esc(s.headline || 'An update is ready')}</div><div class="uc-sub">${have}${s.security ? ' <b class="uc-sec">Includes a security fix.</b>' : ''}</div>${notes ? `<ul class="uc-notes">${notes}</ul>` : ''}${warn}`;
+}
+function paintUpdateCard() {
+  const card = $('update-card'), note = $('menu-update-note');
+  const s = isAdmin() ? ucState : null;
+  const avail = !!(s && s.enabled && s.available);
+  if (note) note.textContent = avail ? ` · ${s.latestVersion && s.latestVersion !== s.currentVersion ? s.latestVersion : 'new version'} ready` : '';
+  if (!card) return;
+  if (!avail || s.snoozed) { card.hidden = true; card.innerHTML = ''; return; }
+  card.classList.toggle('sec', !!s.security);
+  card.innerHTML = `${ucBody(s)}<div class="uc-actions">${s.blocked
+    ? '<button class="uc-btn" data-uc="later">Later</button><button class="uc-btn uc-primary" data-uc="details">Details</button>'
+    : '<button class="uc-btn" data-uc="details">Details</button><button class="uc-btn" data-uc="later">Later</button><button class="uc-btn uc-primary" data-uc="now">Update now</button>'}</div>`;
+  card.hidden = false;
+}
+// The notification's tap lands here (/mobile?update=1): the card's choice, as a sheet.
+async function openUpdatePrompt() {
+  const s = ucState || await refreshUpdateCheck();
+  if (!s || !s.available) { openUpdateSheet(); return; }
+  const d = $('update-sheet');
+  d.dataset.uc = '1';
+  d.innerHTML = `${ucBody(s)}<div class="btns">${s.blocked
+    ? '<button data-uc="later">Later</button><button class="go accent" data-uc="details">Details</button>'
+    : '<button data-uc="later">Later</button><button class="go accent" id="upd-go" data-uc="now">Update now</button>'}</div>`;
+  if (!d.open) d.showModal();
+}
+async function updateLater() {
+  const d = $('update-sheet');
+  if (d.open && d.dataset.uc === '1') d.close();
+  if ($('update-card')) $('update-card').hidden = true;
+  try { const r = await api('/api/update-check/later', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); if (r.ok) ucState = await r.json(); } catch { /* back on the next look */ }
+  paintUpdateCard();
+}
+function updateNowFromPhone() {
+  const d = $('update-sheet');
+  d.dataset.uc = '';
+  d.innerHTML = '<h3>Updating…</h3><p>Getting the new version ready. The hub restarts when it is done.</p><div class="btns"><button id="upd-go" class="go accent" disabled>Updating…</button></div>';
+  if (!d.open) d.showModal();
+  runUpdateFromPhone(null);
+}
+function onUpdateChoice(e) {
+  const b = e.target.closest('[data-uc]');
+  if (!b) return;
+  if (b.dataset.uc === 'later') updateLater();
+  else if (b.dataset.uc === 'now') updateNowFromPhone();
+  else if (b.dataset.uc === 'details') { const d = $('update-sheet'); d.dataset.uc = ''; openUpdateSheet(); }
+}
+
 // ── Restart the hub (same POST /api/restart the desktop button uses; the
 // service manager brings the hub back, so the page only has to wait) ─────────
 function confirmRestart() {
@@ -3356,6 +3421,8 @@ function wire() {
   $('confirm-yes').addEventListener('click', clearSession);
   $('menu-restart').addEventListener('click', confirmRestart);
   $('menu-update').addEventListener('click', openUpdateSheet);
+  $('update-card').addEventListener('click', onUpdateChoice);
+  $('update-sheet').addEventListener('click', onUpdateChoice);
   $('restart-no').addEventListener('click', () => $('restart-confirm').close());
   $('restart-yes').addEventListener('click', restartHub);
   for (const b of document.querySelectorAll('.pacing-bar')) b.addEventListener('click', confirmPacingReset);
@@ -3992,6 +4059,12 @@ async function init() {
   updateDots();
   connectEvents();
   paintPush();
+  // Update available: look now and every 30 minutes; a tap on the update notification arrives as ?update=1, which
+  // opens the choice once and is then dropped from the address (so the next notification opens it again).
+  const fromUpdatePush = new URLSearchParams(location.search).get('update') === '1';
+  if (fromUpdatePush) { const u = new URL(location.href); u.searchParams.delete('update'); window.history.replaceState(window.history.state, '', u.pathname + u.search + u.hash); }
+  refreshUpdateCheck().then(() => { if (fromUpdatePush) openUpdatePrompt(); });
+  setInterval(refreshUpdateCheck, 30 * 60 * 1000);
 }
 
 init();

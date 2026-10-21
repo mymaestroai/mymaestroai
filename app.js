@@ -48,6 +48,8 @@
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
+      paintUpdateCard().catch(() => {});
+      if (!window.__ucTimer) window.__ucTimer = setInterval(() => paintUpdateCard().catch(() => {}), 30 * 60 * 1000);
       return window.hubMe;
     }
     // An install updated from before multi-user has provider keys but no admin account, so the setup wizard never
@@ -104,7 +106,7 @@
       document.body.classList.add('member-view');
       // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
       for (const id of ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
-                        'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap']) {
+                        'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
         const el = document.getElementById(id);
         if (!el) continue;
         const row = el.closest('.more-item, .more-row') || el;
@@ -1473,7 +1475,7 @@
     // groups, closed until opened. Sections are matched by id; one this list doesn't know lands in the last group,
     // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-updates-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
@@ -1636,6 +1638,13 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadSecurityCheck(true)">Run now</button><span id="st-sec-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadSecurityCheck, 0);
+      // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
+      html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
+        <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
+        <div class="st-row"><label style="flex-basis:150px">Check every day</label><input type="checkbox" id="st-uc-on" onchange="saveUpdateCheck(this.checked)"><span id="st-uc-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px">Checking…</span></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="checkUpdatesNow(this)">Check now</button></div>
+      </div>`;
+      setTimeout(loadUpdateCheck, 0);
       // Modules (lib/modules): optional capabilities with guided setup live on their own page.
       html += `<div class="st-section" id="st-modules-section"><h4>Modules</h4>
         <div class="st-hint">Optional capabilities for agents (crypto exchanges, wallets, mail, search...), each with a step-by-step setup, encrypted keys and per-agent access. <a href="/modules" style="color:var(--accent)">Open the Modules page →</a></div>
@@ -2033,6 +2042,105 @@
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-security-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:#7a1212;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
       bar.innerHTML = `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:#fff;text-decoration:underline">Open the security check</a>.`;
       layoutBanners();
+    }
+    // ── Update available (lib/update-check): the server looks at GitHub once a day. While an update waits, admins see
+    // a card at the bottom right (Update now / Later) and a chip in the sidebar; the chip stays after Later and brings
+    // the card back. "Update now" is the Update dialog's own update and restart, for the current channel. ──
+    let ucLast = null;
+    async function paintUpdateCard() {
+      const me = window.hubMe;
+      const chip = document.getElementById('update-chip');
+      if (!me || !me.isAdmin) { document.getElementById('hub-update-card')?.remove(); chip?.classList.remove('on'); return; }
+      let s;
+      try { const r = await fetch('/api/update-check', { credentials: 'include' }); if (!r.ok) return; s = await r.json(); } catch { return; }
+      ucLast = s;
+      const show = !!(s && s.enabled && s.available);
+      if (chip) {
+        chip.classList.toggle('on', show);
+        chip.classList.toggle('sec', show && !!s.security);
+        chip.textContent = show ? `⬇ ${s.latestVersion && s.latestVersion !== s.currentVersion ? s.latestVersion : 'Update'}` : '';
+        chip.title = show ? `${s.headline}: click to update now or later` : '';
+      }
+      if (show && !s.snoozed) showUpdateCard();
+      else if (!show) document.getElementById('hub-update-card')?.remove();
+    }
+    function showUpdateCard() {
+      const s = ucLast;
+      if (!s || !s.available) return;
+      let card = document.getElementById('hub-update-card');
+      if (!card) { card = document.createElement('div'); card.id = 'hub-update-card'; card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', 'Update available'); document.body.appendChild(card); }
+      card.classList.toggle('sec', !!s.security);
+      const busy = busyAgentNames();
+      const notes = (s.titles || []).map(t => `<li>${esc(t)}</li>`).join('') + (s.more ? `<li class="uc-more">and ${s.more} more</li>` : '');
+      const have = s.latestVersion && s.latestVersion !== s.currentVersion && s.currentVersion ? `You have ${esc(s.currentVersion)}.` : `You're on ${esc(s.channel || s.branch || 'this channel')}.`;
+      const warn = s.blocked
+        ? `<div class="uc-warn">This hub has ${s.ahead} change${s.ahead === 1 ? '' : 's'} of its own that ${s.ahead === 1 ? "isn't" : "aren't"} on GitHub, so it can't update by itself. Open Details to choose what to do.</div>`
+        : busy.length ? `<div class="uc-warn">${busy.length === 1 ? `${esc(agentDisplayName(busy[0]))} is` : `${busy.length} agents are`} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short.</div>` : '';
+      card.innerHTML = `<div class="uc-head">⬇️ ${esc(s.headline || 'An update is ready')}</div>
+        <div class="uc-sub">${have}${s.security ? ' <span class="uc-sec">Includes a security fix.</span>' : ''}</div>
+        ${notes ? `<div class="uc-label">What's new</div><ul class="uc-notes">${notes}</ul>` : ''}${warn}
+        <div class="uc-msg" id="uc-msg"></div>
+        <div class="uc-actions">${s.blocked
+          ? `<button class="uc-btn" id="uc-later" onclick="updateLater()">Later</button><button class="uc-btn uc-primary" onclick="openGitSync()">Details</button>`
+          : `<a href="#" class="uc-details" onclick="openGitSync(); return false">Details…</a><button class="uc-btn" id="uc-later" onclick="updateLater()">Later</button><button class="uc-btn uc-primary" id="uc-now" onclick="updateNow()">Update now</button>`}</div>`;
+    }
+    async function updateLater() {
+      document.getElementById('hub-update-card')?.remove();
+      try { const r = await fetch('/api/update-check/later', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' }); if (r.ok) ucLast = await r.json(); } catch { /* the card comes back on the next look */ }
+    }
+    async function updateNow() {
+      const now = document.getElementById('uc-now'), later = document.getElementById('uc-later'), msg = document.getElementById('uc-msg');
+      if (now) { now.disabled = true; now.textContent = 'Updating…'; }
+      if (later) later.disabled = true;
+      let r;
+      try { r = await (await fetch('/api/git-sync/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
+      catch (e) { r = { success: false, error: e.message }; }
+      if (!r || !r.success) {
+        if (msg) msg.innerHTML = `<div class="uc-err">The update didn't run: ${esc((r && r.error) || 'unknown error')}</div>`;
+        if (now) { now.disabled = false; now.textContent = 'Try again'; }
+        if (later) later.disabled = false;
+        return;
+      }
+      if (msg) msg.innerHTML = `<div class="uc-ok">✓ Updated. Restarting the hub…</div>`;
+      // The Update dialog's own restart: flush the active replies, restart, wait for the new boot.
+      const rbtn = document.getElementById('restart-hub-btn');
+      try { await fetch('/api/restart', { method: 'POST', credentials: 'include' }); } catch { /* expected: the server goes away */ }
+      setTimeout(() => pollForRestart(rbtn), 8000);
+    }
+    // Settings → Status → Updates.
+    function ucStateText(s) {
+      const when = s.checkedAt ? ` (checked ${new Date(s.checkedAt).toLocaleString()})` : '';
+      if (s.error && !s.available) return `Could not check: ${s.error}${when}`;
+      if (s.available) return `${s.headline}${s.snoozed && s.laterUntil ? `; card hidden until ${new Date(s.laterUntil).toLocaleString()}` : ''}${when}`;
+      return s.checkedAt ? `Up to date${s.currentVersion ? ` on ${s.currentVersion}` : ''}${when}` : 'Not checked yet';
+    }
+    async function loadUpdateCheck(s) {
+      const box = document.getElementById('st-uc-on'), state = document.getElementById('st-uc-state');
+      if (!box) return;
+      try { if (!s) s = await (await fetch('/api/update-check', { credentials: 'include' })).json(); }
+      catch (e) { if (state) state.textContent = 'Could not read: ' + e.message; return; }
+      box.checked = s.enabled !== false;
+      if (state) state.textContent = ucStateText(s);
+      stSum('status', 'updates', s.enabled === false ? 'Update check off' : s.available ? 'Update available' : 'Up to date');
+    }
+    async function saveUpdateCheck(on) {
+      const state = document.getElementById('st-uc-state');
+      try {
+        const r = await fetch('/api/update-check/settings', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !!on }) });
+        const s = await r.json();
+        if (!r.ok) throw new Error(s.error || `HTTP ${r.status}`);
+        loadUpdateCheck(s);
+        paintUpdateCard().catch(() => {});
+      } catch (e) { if (state) state.textContent = 'Not saved: ' + e.message; }
+    }
+    async function checkUpdatesNow(btn) {
+      if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+      try {
+        const s = await (await fetch('/api/update-check/now', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+        loadUpdateCheck(s);
+        paintUpdateCard().catch(() => {});
+      } catch (e) { const st = document.getElementById('st-uc-state'); if (st) st.textContent = 'Could not check: ' + e.message; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
     }
     // Web search and fetch (lib/web-search, lib/web-fetch): backend chain, keys, SearXNG container, fetch guards.
     async function loadWebSearchStatus() {

@@ -2125,6 +2125,33 @@ async function handleHttpRequest(req, res) {
       }
     }
 
+    // ── Update check (lib/update-check.js): the daily look at GitHub behind the "Update available" card. Admin
+    // routes (lib/access classes every /api path not listed elsewhere as admin-only). ──
+    if (pathname === '/api/update-check' && req.method === 'GET') {
+      try { return jsonResponse(res, 200, await require('./lib/update-check').getUpdateCheck().status(req.hubUser)); }
+      catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+    if (pathname === '/api/update-check/now' && req.method === 'POST') {
+      try { const uc = require('./lib/update-check').getUpdateCheck(); await uc.check({ reason: 'manual' }); return jsonResponse(res, 200, await uc.status(req.hubUser)); }
+      catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+    if (pathname === '/api/update-check/later' && req.method === 'POST') {
+      try { return jsonResponse(res, 200, await require('./lib/update-check').getUpdateCheck().later(req.hubUser)); }
+      catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+    if (pathname === '/api/update-check/settings' && req.method === 'POST') {
+      let body = {};
+      try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
+      if (typeof body.enabled !== 'boolean') return jsonResponse(res, 400, { error: 'enabled must be true or false' });
+      try {
+        const settingsLib = require('./lib/settings');
+        settingsLib.updateSettings({ updateCheck: { ...(settingsLib.getSetting('updateCheck', {}) || {}), enabled: body.enabled } });
+        const uc = require('./lib/update-check').getUpdateCheck();
+        uc.start();
+        return jsonResponse(res, 200, await uc.status(req.hubUser));
+      } catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+
     // ── Manual restart via UI button ──
     if (pathname === '/api/restart' && req.method === 'POST') {
       console.log('[Server] Manual restart triggered via UI button');
@@ -2852,6 +2879,10 @@ server.listen(PORT, HOST, () => {
       onResult: (r) => { try { require('./lib/hub-events').events.publish('security_check', { critical: r.critical, warnings: r.warnings, checkedAt: r.checkedAt }); } catch {} },
     });
   } catch (e) { console.warn(`[security] ${e.message}`); }
+
+  // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
+  // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).
+  try { require('./lib/update-check').getUpdateCheck().start(); } catch (e) { console.warn(`[update-check] ${e.message}`); }
 
   // Detached jobs: reconcile jobs that ended while the hub was down, announce them, start polling.
   try { const jr = getJobRunner().start(); console.log(`[jobs] runner started (${jr.mode()}; ${jr.list(null).filter(j => j.status === 'running').length} running)`); }
