@@ -1502,6 +1502,7 @@ async function openChat(name) {
   if (same && ((rec && bubbleLive(rec)) || (ra && bubbleLive(ra)))) { paintChatStatus(); return; }
   pendingImages = [];
   renderPreviews();
+  if (!same) restoreDraft(name);   // each chat keeps its own draft; the box no longer carries text from another agent
   chatEl().innerHTML = '';
   addNote('Loading…');
   stick = true;
@@ -2032,6 +2033,7 @@ async function sendInterjection(agent) {
   if (!text) { if (pendingImages.length) toast('Images cannot be interjected; send them when the turn ends'); return; }
   input.value = '';
   input.style.height = 'auto';
+  saveDraft(agent, '');
   stick = true;
   const userEl = addUserBubble(text, null);
   const noteEl = addNote('⤵ delivering mid-turn…');
@@ -2062,7 +2064,7 @@ async function sendInterjection(agent) {
     return;
   }
   noteEl.textContent = `⚠ not delivered: ${error}`;
-  if (current === agent && !input.value) input.value = text;
+  if (current === agent && !input.value) { input.value = text; saveDraft(agent, text); }
 }
 
 // The hub no longer stops a turn when the browser goes away, so Stop has to say so explicitly.
@@ -2120,6 +2122,28 @@ function sendAndClose() {
   if ((hadText && !input.value.trim()) || (hadImages && !pendingImages.length)) input.blur();
 }
 
+// The message box keeps a draft per agent in localStorage (2026-10-21: a half-typed message vanished when the app
+// reloaded itself for a new version as a reply finished). So a reload, a hub restart or switching chats never loses
+// what was being typed; a send clears it. Text only: pasted images are not kept.
+const DRAFTS_KEY = 'hub-mobile-drafts';
+function draftsAll() { try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {}; } catch { return {}; } }
+function saveDraft(agent, text) {
+  if (!agent) return;
+  const all = draftsAll();
+  if (text && text.trim()) all[agent] = { text, at: Date.now() }; else delete all[agent];
+  try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(all)); } catch {}
+}
+function restoreDraft(agent) {
+  const input = $('msg-input'); if (!input) return;
+  const d = draftsAll()[agent];
+  input.value = d && typeof d.text === 'string' ? d.text : '';
+  input.style.height = 'auto';
+  if (input.value) input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
+}
+// A reload the app wants (a new version, a hub restart) waits while the message box is in use: focused or holding
+// text. At most 10 minutes; the draft is saved either way, so even a reload that has to happen brings the text back.
+function typingNow() { const i = $('msg-input'); return !!i && (document.activeElement === i || !!i.value.trim()); }
+
 // `fallback` is set when an interjection found the turn already over: the text and its user
 // bubble are reused instead of being read from the composer again.
 async function sendMessage(fallback) {
@@ -2136,6 +2160,7 @@ async function sendMessage(fallback) {
   if (!fallback) {
     input.value = '';
     input.style.height = 'auto';
+    saveDraft(agent, '');
     pendingImages = [];
     renderPreviews();
   }
@@ -2171,6 +2196,7 @@ async function sendMessage(fallback) {
       fallback?.noteEl?.remove();
       if (current === agent) {
         input.value = text;
+        saveDraft(agent, text);
         pendingImages = images;
         renderPreviews();
         toast('Agent is busy; it will finish first');
@@ -2835,7 +2861,8 @@ function connectEvents() {
       else if (ev.boot !== window.__hubBoot && !window.__hubReloading) {
         window.__hubReloading = true;
         toast('The hub restarted. Reloading to the new version…');
-        const go = () => { if (streams.size) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800); };
+        const since = Date.now();
+        const go = () => { if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800); };
         go();
       }
     }
@@ -3336,7 +3363,7 @@ function wire() {
   $('pacing-yes').addEventListener('click', resetPacing);
 
   const input = $('msg-input');
-  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
+  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; saveDraft(current, input.value); });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
   // Send, and the 🔔 beside it, act on the touch itself (onComposerTap). Once a send has taken the text,
@@ -3949,7 +3976,8 @@ async function init() {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (reloading || !navigator.serviceWorker.controller) return;
       reloading = true;
-      const go = () => { if (streams.size || reattaches.size) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => location.reload(), 800); };
+      const since = Date.now();
+      const go = () => { if (streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => location.reload(), 800); };
       go();
     });
   }

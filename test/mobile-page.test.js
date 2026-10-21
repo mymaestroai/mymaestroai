@@ -140,7 +140,7 @@ test('after a hub restart both pages reload themselves: hello carries the boot i
   assert.ok(writes.some(w => w.includes('"boot":"boot-test-1"')), writes.join('|').slice(0, 300));
   const app = read('app.js'), m = read('mobile.js');
   assert.ok(app.includes("ev.boot !== window.__hubBoot") && app.includes("Object.values(chats).some(c => c && c.controller)") && app.includes('location.reload()'), 'desktop reloads when idle');
-  assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("if (streams.size) { setTimeout(go, 2000); return; }"), 'phone reloads when idle');
+  assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; }"), 'phone reloads when idle and not typing');
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v55'/);
 });
 
@@ -187,4 +187,25 @@ test('after a send the message box lets go so the keyboard closes; nothing to se
   assert.match(fn, /if \(\(hadText && !input\.value\.trim\(\)\) \|\| \(hadImages && !pendingImages\.length\)\) input\.blur\(\);/);
   assert.ok(fn.indexOf('sendMessage();') < fn.indexOf('input.blur()'), 'the box lets go only after the send has taken the text');
   assert.ok(!js.includes('tapLog') && !js.includes('menu-tapreport'), 'the temporary tap recorder is gone');
+});
+
+test('the message box keeps a draft per agent: saved as you type, restored when the chat opens, cleared by a send', () => {
+  const js = read('mobile.js');
+  assert.ok(js.includes("const DRAFTS_KEY = 'hub-mobile-drafts';") && js.includes('function saveDraft(agent, text)') && js.includes('function restoreDraft(agent)'));
+  assert.ok(js.includes('saveDraft(current, input.value); });'), 'every keystroke is kept');
+  assert.ok(js.includes('if (!same) restoreDraft(name);'), 'opening a chat brings its draft back (also after a reload)');
+  const send = js.slice(js.indexOf('async function sendMessage('), js.indexOf('async function sendMessage(') + 1400);
+  assert.ok(send.includes("input.style.height = 'auto';\n    saveDraft(agent, '');"), 'a send clears the draft');
+  assert.ok(js.includes("input.value = text;\n        saveDraft(agent, text);"), 'a refused send (409) puts the text back and keeps it');
+  const inter = js.slice(js.indexOf('async function sendInterjection('), js.indexOf('async function sendInterjection(') + 2200);
+  assert.ok(inter.includes("saveDraft(agent, '');") && inter.includes('{ input.value = text; saveDraft(agent, text); }'), 'interjections too');
+});
+
+test('the app does not reload itself while the message box is in use (focused or holding text), for up to 10 minutes', () => {
+  const js = read('mobile.js');
+  assert.ok(js.includes("function typingNow() { const i = $('msg-input'); return !!i && (document.activeElement === i || !!i.value.trim()); }"));
+  const reloads = js.split('location.reload()').length - 1;
+  assert.strictEqual(reloads, 3, 'three reload sites: hub back after Restart, hub restarted, new app version');
+  assert.ok(js.includes("if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800);"), 'after a hub restart');
+  assert.ok(js.includes("if (streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } toast('Updating to the new version…');"), 'after a new app version');
 });
