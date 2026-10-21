@@ -177,6 +177,7 @@
     .add-dropdown-item { padding: 10px 14px; font-size: 14px; cursor: pointer; color: var(--text); display: flex; align-items: center; gap: 10px; }
     .add-dropdown-item:hover { background: rgba(249,115,22,0.15); }
     .roster-agent .activity-dot.done { background: var(--success); }
+    .roster-agent .activity-dot.failed { background: #ef4444; }
 
     /* ── Timeline ── */
     .timeline-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
@@ -198,6 +199,12 @@
       border: 1px solid var(--agent-border);
       border-left: 3px solid var(--agent-color, var(--tiger));
     }
+    .agent-block.failed { border-color: rgba(239,68,68,0.5); }
+    /* A short line inside a card: the task a member was given, a member waiting its turn, why it failed. */
+    .block-note { font-size: 12px; color: var(--text-dim); margin-top: 6px; line-height: 1.4; }
+    .block-note.task { margin-top: 0; margin-bottom: 6px; font-style: italic; }
+    .block-note.waiting { color: #f59e0b; }
+    .block-note.failed { color: #ef4444; font-weight: 600; }
     .agent-block-header {
       display: flex;
       align-items: center;
@@ -505,6 +512,13 @@
     let lastAutoSave = 0;
     let continuationInFlight = false; // Guards against double continue/resume/approve calls
     let backendRecoveryAvailable = true; // Flipped false if /status 404s in a way indicating old backend
+    // Members work at the same time: each dispatch has its own card, found by the call key its events carry (tt_call).
+    const callBlocks = new Map();
+    let lastSeq = 0;              // the team's last event drawn here (tt_seq): a reconnect asks for what came after it
+    let eventNow = null;          // the time of the event being drawn (tt_at), so a replay shows when things happened
+    let clockSet = false;         // the timeline clock starts at the team's first event, not at page load
+    let streamSupported = null;   // false on a hub without live replay: the old behaviour
+    const sentInterjections = []; // interjections this page drew itself, so their echo is not drawn twice
 
     // ── Agent color assignment ──
     const agentColorMap = new Map();
@@ -537,7 +551,7 @@
     }
 
     function elapsed() {
-      const s = Math.floor((Date.now() - startTime) / 1000);
+      const s = Math.max(0, Math.floor(((eventNow || Date.now()) - startTime) / 1000));
       return s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`;
     }
 
@@ -608,7 +622,9 @@
       } catch (e) { console.error('Agent fetch failed:', e); }
 
       if (loadSaveId) {
-        // Direct load of a specific save by ID
+        // Direct load of a specific save by ID: a team journaled since live replay is redrawn from its own events
+        // (and followed while it still works); older saves show their saved transcript.
+        if (await loadTeam(loadSaveId)) return;
         await loadSaved(loadSaveId);
         return;
       }
@@ -705,7 +721,7 @@
         await fetch('/api/tiger-team/update-participants', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ participants, session_id: sessionId })
+          body: JSON.stringify({ participants, session_id: sessionId, tiger_team_id: tigerTeamId || undefined })
         });
       } catch (e) { console.error('Failed to sync participants:', e); }
     }
@@ -731,10 +747,13 @@
 
     // ── Stop ──
     async function stopSession() {
-      if (!sessionId) return;
+      // The team id works from any page, a reloaded one included; the session id is the page that started it.
+      if (!sessionId && !tigerTeamId) return;
       try {
-        await fetch('/api/tiger-team/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId }) });
-      } catch (e) { console.error('Stop failed:', e); }
+        const r = await fetch('/api/tiger-team/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId || undefined, tiger_team_id: tigerTeamId || undefined }) });
+        if (r.ok) addSystemMsg('■ Stopping the team…');
+        else addSystemMsg('Stop failed: ' + ((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`));
+      } catch (e) { console.error('Stop failed:', e); addSystemMsg('Stop failed: ' + e.message); }
     }
 
     // ── Inject ──
@@ -742,8 +761,9 @@
     async function injectMessage() {
       const input = document.getElementById('user-input');
       const msg = input.value.trim();
-      if (!msg || !sessionId) return;
+      if (!msg || (!sessionId && !tigerTeamId)) return;
       input.value = '';
+      sentInterjections.push(msg);   // drawn here now; its echo from the team's stream is skipped
 
       closeBlock();
       const tl = document.getElementById('timeline');
@@ -763,7 +783,7 @@
       lastInterjectBlock = block;
 
       try {
-        const ir = await fetch('/api/tiger-team/inject', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId, message: msg, target }) });
+        const ir = await fetch('/api/tiger-team/inject', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId || undefined, tiger_team_id: tigerTeamId || undefined, message: msg, target }) });
         const ij = await ir.json().catch(() => ({}));
         const st = block.querySelector('.interject-status');
         if (!ir.ok) { st.textContent = '✗ ' + (ij.error || `HTTP ${ir.status}`); st.style.color = '#ef4444'; }
@@ -839,25 +859,10 @@
 
         isRunning = true;
         document.getElementById('btn-stop').disabled = false;
+        sentInterjections.push('Approved. Continue your investigation. ' + justification);   // drawn here as the divider above
 
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let sseBuffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          sseBuffer += decoder.decode(value, { stream: true });
-          const lines = sseBuffer.split('\n');
-          sseBuffer = lines.pop();
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-            if (raw === '[DONE]') continue;
-            try { handleEvent(JSON.parse(raw)); } catch (e) { console.warn('Parse error:', e); }
-          }
-        }
-        if (isRunning) handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream ended without completion' } });
+        try { await readSSE(resp); await afterStreamEnd('Stream ended without completion'); }
+        catch (e) { await afterStreamEnd(e.message); }
       } catch (e) {
         handleEvent({ gateway: { type: 'tt_interrupted', reason: e.message } });
       } finally {
@@ -895,6 +900,7 @@
       input.value = '';
       input.disabled = true;
       document.getElementById('btn-send').disabled = true;
+      sentInterjections.push(msg);   // drawn just below; its echo from the team's stream is skipped
 
       // Show user's continuation message
       closeBlock();
@@ -940,27 +946,8 @@
         isRunning = true;
         document.getElementById('btn-stop').disabled = false;
 
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let sseBuffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          sseBuffer += decoder.decode(value, { stream: true });
-          const lines = sseBuffer.split('\n');
-          sseBuffer = lines.pop();
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-            if (raw === '[DONE]') continue;
-            try {
-              const evt = JSON.parse(raw);
-              handleEvent(evt);
-            } catch {}
-          }
-        }
-        if (isRunning) handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream ended without completion' } });
+        try { await readSSE(resp); await afterStreamEnd('Stream ended without completion'); }
+        catch (e) { await afterStreamEnd(e.message); }
       } catch (e) {
         handleEvent({ gateway: { type: 'tt_interrupted', reason: e.message } });
       } finally {
@@ -969,8 +956,9 @@
     }
 
     // ── Block Management ──
-    function openBlock(slug, role) {
-      closeBlock();
+    // One card on the timeline. The coordinator's card is `currentBlock`; each member dispatch has its own card in
+    // callBlocks (members run at the same time, so their output must never land in whichever card is newest).
+    function makeBlock(slug, role) {
       const tl = document.getElementById('timeline');
       const a = agents[slug] || { display: slug, icon: '🤖' };
       const colorClass = getAgentColorClass(slug);
@@ -979,9 +967,9 @@
       block.className = `agent-block ${colorClass}`;
       block.innerHTML = `
         <div class="agent-block-header">
-          <span class="block-icon">${a.icon || '🤖'}</span>
-          <span class="block-agent">${a.display || slug}</span>
-          <span class="block-role">${role}</span>
+          <span class="block-icon">${esc(a.icon || '🤖')}</span>
+          <span class="block-agent">${esc(a.display || slug)}</span>
+          <span class="block-role">${esc(role)}</span>
           <span class="block-time">${elapsed()}</span>
         </div>
         <div class="agent-block-body">
@@ -991,8 +979,8 @@
       tl.appendChild(block);
 
       setDot(slug, 'working');
-
-      currentBlock = {
+      scrollBottom();
+      return {
         element: block,
         toolsEl: block.querySelector('.tool-calls-container'),
         textEl: block.querySelector('.text-content'),
@@ -1001,15 +989,55 @@
         rawText: '',
         toolCount: 0,
       };
+    }
+
+    function openBlock(slug, role) {
+      closeBlock();
+      currentBlock = makeBlock(slug, role);
       currentAgent = slug;
+    }
+
+    /** The card of one member dispatch (made on its first event if its dispatch event was missed). */
+    function callBlock(key, slug, role) {
+      let b = callBlocks.get(key);
+      if (!b) { b = makeBlock(slug || 'member', role || 'Participant'); b.key = key; callBlocks.set(key, b); }
+      return b;
+    }
+
+    function appendBlockText(text, block = currentBlock) {
+      if (!block) return;
+      block.rawText += text;
+      block.textEl.innerHTML = md(block.rawText);
       scrollBottom();
     }
 
-    function appendBlockText(text) {
-      if (!currentBlock) return;
-      currentBlock.rawText += text;
-      currentBlock.textEl.innerHTML = md(currentBlock.rawText);
+    /** A short line inside a card: a member waiting for its turn, or why it failed. */
+    function addBlockNote(block, text, kind) {
+      if (!block) return;
+      const el = document.createElement('div');
+      el.className = 'block-note' + (kind ? ' ' + kind : '');
+      el.textContent = text;
+      const body = block.element.querySelector('.agent-block-body');
+      if (kind === 'task') body.insertBefore(el, body.firstChild); else body.appendChild(el);   // the task heads the card
       scrollBottom();
+    }
+
+    /** A member's card is finished: its text drawn in full, its tools marked done, its roster dot updated. */
+    function finishCallBlock(block, failed) {
+      if (!block || block.done) return;
+      block.done = true;
+      block.textEl.innerHTML = md(block.rawText);
+      block.element.querySelectorAll('.tool-call-line.running').forEach(line => {
+        line.className = 'tool-call-line done';
+        const spinner = line.querySelector('.tool-call-spinner');
+        if (spinner) { spinner.className = 'tool-call-icon'; spinner.textContent = '✓'; }
+        const status = line.querySelector('.tool-call-status');
+        if (status) { status.className = 'tool-call-status done'; status.textContent = 'Done'; }
+      });
+      if (failed) block.element.classList.add('failed');
+      // The dot shows the agent's latest dispatch: working while any of its cards is still open.
+      const stillWorking = [...callBlocks.values()].some(b => b.slug === block.slug && !b.done);
+      if (!stillWorking) setDot(block.slug, failed ? 'failed' : 'done');
     }
 
     function markUnfinishedTools() {
@@ -1038,22 +1066,22 @@
       }
     }
 
-    function addTool(name, callId, input) {
-      if (!currentBlock) return;
+    function addTool(name, callId, input, block = currentBlock) {
+      if (!block) return;
       if (suppressToolNames.has(name)) return;
 
-      currentBlock.toolCount++;
-      currentBlock.toolsEl.style.display = 'block';
+      block.toolCount++;
+      block.toolsEl.style.display = 'block';
 
       // Move tools container before text for proper ordering
-      const body = currentBlock.element.querySelector('.agent-block-body');
-      body.insertBefore(currentBlock.toolsEl, currentBlock.textEl);
+      const body = block.element.querySelector('.agent-block-body');
+      body.insertBefore(block.toolsEl, block.textEl);
 
       const inputSummary = input ? (typeof input === 'string' ? input : JSON.stringify(input)).slice(0, 100) : '';
 
       const wrapper = document.createElement('div');
       wrapper.innerHTML = `
-        <div class="tool-call-line running" id="tool-${callId}">
+        <div class="tool-call-line running" id="tool-${esc(callId)}">
           <span class="tool-call-spinner"></span>
           <div class="tool-call-info">
             <span class="tool-call-name">${esc(name)}</span>
@@ -1063,7 +1091,7 @@
           <span class="tool-call-toggle" data-call-id="${esc(callId)}">▶ output</span>
         </div>
         <div class="tool-call-result" id="tool-result-${esc(callId)}"></div>`;
-      currentBlock.toolsEl.appendChild(wrapper);
+      block.toolsEl.appendChild(wrapper);
       toolMap.set(callId, { wrapper, name });
       scrollBottom();
     }
@@ -1140,50 +1168,155 @@
       const body = JSON.stringify({ coordinator, participants, objective, max_rounds: maxRounds, context, mode, challenger, challengerDirective, directives, alert_id: alertId || undefined, autoLaunched: autoLaunched || undefined });
 
       fetch('/api/tiger-team/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
-      .then(response => {
+      .then(async response => {
         if (!response.ok) {
-          return response.text().then(t => {
-            setStatus('error', 'Error');
-            setRunning(false);
-            addSystemMsg(`API Error ${response.status}: ${t}`);
-          });
+          const t = await response.text();
+          setStatus('error', 'Error');
+          setRunning(false);
+          addSystemMsg(`API Error ${response.status}: ${t}`);
+          return;
         }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        function read() {
-          reader.read().then(({ done, value }) => {
-            if (done) {
-              if (isRunning) {
-                handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream ended without a completion event' } });
-              }
-              return;
-            }
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-            for (const line of lines) {
-              if (!line.startsWith('data: ')) continue;
-              const raw = line.slice(6).trim();
-              if (raw === '[DONE]') continue;
-              try { handleEvent(JSON.parse(raw)); } catch (e) { console.warn('Parse error:', e, raw.slice(0, 200)); }
-            }
-            read();
-          }).catch(err => {
-            handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream error: ' + err.message } });
-          });
-        }
-        read();
+        // The team keeps working if this connection drops: afterStreamEnd follows it again from the last event drawn.
+        try { await readSSE(response); await afterStreamEnd('Stream ended without a completion event'); }
+        catch (err) { await afterStreamEnd('Stream error: ' + err.message); }
       }).catch(err => {
         handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Connection failed: ' + err.message } });
       });
     }
 
+    /** Read one event stream to its end, drawing every event. Throws on a network error. */
+    async function readSSE(response) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') continue;
+          try { handleEvent(JSON.parse(raw)); } catch (e) { console.warn('Parse error:', e, raw.slice(0, 200)); }
+        }
+      }
+    }
+
+    /**
+     * A stream ended. If no final event came, the team may still be working (only Stop ends a team now): follow it
+     * again from the last event drawn, retrying while the network is away. Old hubs without live replay keep the
+     * old behaviour (the session counts as interrupted).
+     */
+    async function afterStreamEnd(reason) {
+      if (!isRunning) return;
+      if (tigerTeamId && streamSupported !== false && await followTeam()) return;
+      if (isRunning) handleEvent({ gateway: { type: 'tt_interrupted', reason } });
+    }
+
+    let following = false;
+    async function followTeam() {
+      if (following) return true;
+      following = true;
+      try {
+        for (let attempt = 0; isRunning; attempt++) {
+          if (attempt) await new Promise(r => setTimeout(r, Math.min(15000, 2000 * 2 ** Math.min(attempt - 1, 3))));
+          let resp;
+          try { resp = await fetch(`/api/tiger-team/stream?id=${encodeURIComponent(tigerTeamId)}&since=${lastSeq}`); }
+          catch { if (attempt === 1) addSystemMsg('Connection lost. The team keeps working; reconnecting…'); continue; }
+          if (resp.status === 404 || resp.status === 400) {
+            const d = await resp.json().catch(() => ({}));
+            if (d.legacy || d.error === 'Not found') streamSupported = false;   // a team from before live replay, or an old hub
+            return false;
+          }
+          if (!resp.ok) continue;
+          streamSupported = true;
+          if (attempt) addSystemMsg('↻ Reconnected to the team');
+          try { await readSSE(resp); } catch { /* dropped again: loop */ }
+        }
+        return true;
+      } finally { following = false; }
+    }
+
+    /**
+     * Draw a journaled team from its own events (every card as it happened), then follow it live when it is still
+     * working. Returns false for teams saved before live replay (the caller shows the saved transcript instead).
+     */
+    async function loadTeam(id) {
+      let s;
+      try {
+        const r = await fetch('/api/tiger-team/status?id=' + encodeURIComponent(id));
+        if (!r.ok) return false;
+        s = await r.json();
+      } catch { return false; }
+      if (!s || !s.has_stream) return false;
+      tigerTeamId = s.id; saveKey = s.id; sessionId = null;
+      coordinator = s.coordinator; participants = s.participants || []; mode = s.mode || 'led'; challenger = s.challenger || '';
+      objective = s.objective || objective; objectiveText = objective;
+      document.getElementById('objective-text').textContent = objective;
+      getAgentColorClass(coordinator); participants.forEach(p => getAgentColorClass(p));
+      buildRoster();
+      document.getElementById('timeline').innerHTML = '';
+      callBlocks.clear(); currentBlock = null; lastSeq = 0; clockSet = false;
+      document.getElementById('btn-save').disabled = false;
+      isRunning = true;   // until the history says how it ended (a final event, or tt_state at the end of the replay)
+      setStatus('running', s.live ? 'Running' : 'Loading…');
+      try {
+        const resp = await fetch(`/api/tiger-team/stream?id=${encodeURIComponent(tigerTeamId)}&since=0`);
+        if (!resp.ok) { isRunning = false; return false; }
+        streamSupported = true;
+        await readSSE(resp);
+      } catch { /* the network dropped mid-replay: afterStreamEnd follows from the last event drawn */ }
+      eventNow = null;
+      await afterStreamEnd('Stream ended without a completion event');
+      return true;
+    }
+
     // ── Event Handler ──
     function handleEvent(evt) {
+      if (!evt || typeof evt !== 'object') return;
+      // Numbered events (a hub with live replay): draw each once, even when a reconnect's replay overlaps.
+      if (evt.tt_seq) { if (evt.tt_seq <= lastSeq) return; lastSeq = evt.tt_seq; }
+      eventNow = evt.tt_at ? Date.parse(evt.tt_at) : null;
+      if (eventNow && !clockSet) { startTime = eventNow; clockSet = true; }
       const gw = evt.gateway;
+      // A member's own events (its text, tools and notices) carry its dispatch (tt_call) and go to its card.
+      // The coordinator's events, and every event from an older hub, take the single-card path below.
+      const member = evt.tt_call && (evt.tt_role === 'participant' || evt.tt_role === 'challenger')
+        ? callBlock(evt.tt_call, evt.tt_agent, evt.tt_role === 'challenger' ? 'Challenger' : 'Participant') : null;
+
+      if (gw && member) {
+        switch (gw.type) {
+          case 'tool_start':
+            if (gw.tool !== 'consult_agent') addTool(gw.tool, gw.tool_call_id || gw.tool, gw.input, member);
+            return;
+          case 'tool_use': {
+            const line = document.getElementById('tool-' + (gw.tool_call_id || gw.tool));
+            if (line && gw.input) {
+              let inputEl = line.querySelector('.tool-call-input');
+              if (!inputEl) { const info = line.querySelector('.tool-call-info'); if (info) { inputEl = document.createElement('span'); inputEl.className = 'tool-call-input'; info.appendChild(inputEl); } }
+              if (inputEl) inputEl.textContent = String(gw.input).slice(0, 100);
+            }
+            return;
+          }
+          case 'tool_result':
+            completeTool(gw.tool_call_id || gw.tool, gw.output);
+            return;
+          case 'tt_member_notice':
+            addBlockNote(member, '⏳ ' + (gw.message || ''), 'waiting');
+            return;
+          case 'auto_model': {
+            const badge = document.createElement('span');
+            badge.className = 'auto-model-badge';
+            badge.textContent = (gw.model || '').split('/').pop();
+            badge.style.cssText = 'font-size:11px;color:#8ab4f8;opacity:0.8;margin-left:8px;font-weight:normal;';
+            const name = member.element.querySelector('.block-agent');
+            if (name) name.appendChild(badge);
+            return;
+          }
+        }
+      }
 
       if (gw) {
         switch (gw.type) {
@@ -1210,6 +1343,11 @@
             if (tigerTeamId && backendRecoveryAvailable) saveKey = tigerTeamId;
             else if (!saveKey) saveKey = String(sessionId || '').replace(/^(auto_)+/, '') || null;
             startAutoSave();
+            // A run (re)started: whatever an earlier interruption showed no longer applies.
+            document.getElementById('tt-error-banner').style.display = 'none';
+            document.getElementById('btn-resume').style.display = 'none';
+            setStatus('running', 'Running');
+            setRunning(true);
             if (mode === 'roundtable') {
               addSystemMsg('Participants: ' + [gw.coordinator_display, ...(gw.participant_names || [])].join(', '));
             } else {
@@ -1266,26 +1404,84 @@
               const dMax = gw.max_rounds >= 50 ? '∞' : gw.max_rounds;
               document.getElementById('round-counter').textContent = 'Turn ' + gw.turn + '/' + dMax;
             }
-            // If coordinator block is empty (no text, just tool calls), remove it entirely
-            if (currentBlock && currentBlock.slug === coordinator && !currentBlock.rawText.trim()) {
+            // If coordinator block is empty (no text and no tool calls), remove it entirely
+            if (currentBlock && currentBlock.slug === coordinator && !currentBlock.rawText.trim() && !currentBlock.toolCount) {
               currentBlock.element.remove();
               currentBlock = null;
             } else {
               closeBlock();
             }
-            const dispAgent = agents[gw.agent] || { display: gw.agent };
-            openBlock(gw.agent, 'Participant');
+            if (gw.call_key) {
+              // This dispatch's own card; members dispatched together all work at once, each in its card.
+              const b = callBlock(gw.call_key, gw.agent, gw.role === 'challenger' ? 'Challenger' : 'Participant');
+              if (gw.task && !b.taskShown) { b.taskShown = true; addBlockNote(b, 'Task: ' + String(gw.task).replace(/\s+/g, ' ').slice(0, 200) + (String(gw.task).length > 200 ? '…' : ''), 'task'); }
+            } else {
+              openBlock(gw.agent, 'Participant');   // an older hub: one member at a time, in the newest card
+            }
             break;
 
           case 'tt_dispatch_complete':
-            closeBlock();
-            setDot(gw.agent, 'done');
+            if (gw.call_key && callBlocks.has(gw.call_key)) finishCallBlock(callBlocks.get(gw.call_key));
+            else { closeBlock(); setDot(gw.agent, 'done'); }
             autoSave(); // Save after each participant completes
             // Don't eagerly open coordinator block - wait for actual content
             // It will open on-demand when text or tools arrive
             break;
 
-          case 'tt_user_message':
+          case 'tt_dispatch_failed': {
+            // One member could not do its part; the coordinator was told why and carries on.
+            const b = callBlock(gw.call_key, gw.agent, 'Participant');
+            // When the member's own reply already explains the error, one line says how it ended; else the reason too.
+            const who = gw.agent_display || gw.agent;
+            addBlockNote(b, b.rawText.trim() ? `✗ ${who} could not finish this task.` : `✗ ${who} could not finish this task. ${gw.error || ''}`.trim(), 'failed');
+            finishCallBlock(b, true);
+            autoSave();
+            break;
+          }
+
+          case 'worker_failed':
+            // A member's turn ended because the team is stopping (or its journal failed): close its card as such.
+            if (gw.call_key && callBlocks.has(gw.call_key)) {
+              const b = callBlocks.get(gw.call_key);
+              if (!b.done) { addBlockNote(b, gw.error === 'Stopped' ? '■ Stopped' : '■ Ended: ' + (gw.error || 'stopped'), 'failed'); finishCallBlock(b, true); }
+            }
+            break;
+
+          case 'tt_user_message': {
+            // An interjection: drawn by the page that sent it; any other page (or a replay) draws it from here.
+            const mine = sentInterjections.indexOf(gw.message);
+            if (mine !== -1) { sentInterjections.splice(mine, 1); break; }
+            closeBlock();
+            const block = document.createElement('div');
+            block.className = 'agent-block user-inject';
+            block.innerHTML = `
+              <div class="agent-block-header">
+                <span class="block-icon">👤</span>
+                <span class="block-agent">You</span>
+                <span class="block-role">${gw.kind === 'continuation' ? 'Continuation' : 'Interjection'}${gw.target && gw.target !== 'team' ? ' → ' + esc(gw.target) : ''}</span>
+                <span class="block-time">${elapsed()}</span>
+              </div>
+              <div class="agent-block-body"><div class="text-content">${md(gw.message || '')}</div><div class="interject-status" style="font-size:11px;color:var(--text-dim);margin-top:4px"></div></div>`;
+            const who = (gw.delivered || []).map(d => `${d.agent} (${d.how === 'live' ? 'now' : 'at its next step'})`).join(', ');
+            block.querySelector('.interject-status').textContent = who ? 'sent to ' + who : 'sent';
+            document.getElementById('timeline').appendChild(block);
+            lastInterjectBlock = block;
+            scrollBottom();
+            break;
+          }
+
+          case 'tt_state':
+            // The end of a replay of a team that is not running: how it ended, when no final event said so
+            // (a hub restart mid-run leaves none).
+            if (!isRunning) break;
+            if (gw.status === 'completed') {
+              closeBlock(); finalizeAllTools(); setStatus('complete', 'Complete'); setRunning(false); stopAutoSave();
+              document.title = '✅ Tiger Team - Complete';
+              document.getElementById('btn-save').disabled = false;
+              showContinueUI();
+            } else {
+              handleEvent({ gateway: { type: 'tt_interrupted', status: gw.status, message: gw.error || ('Not running (' + gw.status + ')') } });
+            }
             break;
 
           case 'interjection_received': {
@@ -1362,26 +1558,29 @@
           // Interrupted mid-stream (disconnect grace window expired server-side,
           // or the stream otherwise ended abnormally).  Explicitly distinct from
           // tt_complete - must never render as success.
-          case 'tt_interrupted':
+          case 'tt_interrupted': {
+            const stopped = gw.status === 'stopped';   // ended by Stop, not by a failure
             markUnfinishedTools();
             closeBlock();
-            setStatus('error', gw.status === 'blocked' ? 'Needs attention' : 'Interrupted');
+            setStatus('error', gw.status === 'blocked' ? 'Needs attention' : stopped ? 'Stopped' : 'Interrupted');
             const errorBanner = document.getElementById('tt-error-banner');
-            errorBanner.textContent = gw.message || gw.reason || 'Connection interrupted';
+            errorBanner.textContent = stopped ? 'Stopped. Everything so far is saved; Resume carries on from here.' : (gw.message || gw.reason || 'Connection interrupted');
             errorBanner.style.display = 'block';
             document.getElementById('user-input').disabled = true;
             document.getElementById('btn-send').disabled = true;
             setRunning(false);
             stopAutoSave();
-            addDivider(gw.reason || 'Session Interrupted', '');
-            addSystemMsg('⚠ Session interrupted: ' + (gw.message || gw.reason || 'connection lost or process restarted') + '. Prior progress was checkpointed - use Resume to continue.');
-            document.title = '⏸ Tiger Team - Interrupted';
+            addDivider(stopped ? 'Session Stopped' : (gw.reason || 'Session Interrupted'), '');
+            if (stopped) addSystemMsg('■ Stopped. Prior progress was checkpointed - use Resume to continue.');
+            else addSystemMsg('⚠ Session interrupted: ' + (gw.message || gw.reason || 'connection lost or process restarted') + '. Prior progress was checkpointed - use Resume to continue.');
+            document.title = stopped ? '⏹ Tiger Team - Stopped' : '⏸ Tiger Team - Interrupted';
             if (tigerTeamId && backendRecoveryAvailable) {
               document.getElementById('btn-resume').style.display = 'inline-flex';
               document.getElementById('btn-resume').disabled = false;
-              document.getElementById('btn-resume').textContent = '▶ Resume Interrupted';
+              document.getElementById('btn-resume').textContent = stopped ? '▶ Resume' : '▶ Resume Interrupted';
             }
             break;
+          }
 
           // Coordinator/dispatch is retrying a failed call - surface it so the
           // user knows the system is working the problem, not silently stuck.
@@ -1440,6 +1639,7 @@
       // Text deltas
       const content = evt.choices?.[0]?.delta?.content;
       if (content) {
+        if (member) { appendBlockText(content, member); return; }
         if (!currentBlock) openBlock(coordinator, 'Coordinator');
         appendBlockText(content);
       }
@@ -1522,7 +1722,7 @@
           return `
           <div style="border:1px solid var(--border); border-radius:6px; padding:12px; cursor:pointer; transition:border-color 0.2s;" 
                onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'"
-               onclick="loadSaved('${esc(s.id)}')">
+               onclick="openSaved('${esc(s.id)}')">
             <div style="display:flex; justify-content:space-between; align-items:center;">
               <strong style="color:var(--text);">${esc(s.title)}${statusBadge}</strong>
               <span style="font-size:11px; color:var(--text-dim);">${new Date(s.saved_at).toLocaleDateString()} ${new Date(s.saved_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
@@ -1567,6 +1767,15 @@
       link.href = '/api/tiger-team/archive/' + encodeURIComponent(tigerTeamId) + '?download=1';
       link.download = tigerTeamId + '-full-record.json';
       link.click();
+    }
+
+    /** A saved session from the list: redrawn from its own events when it has them, else its saved transcript. */
+    async function openSaved(id) {
+      if (isRunning) { window.open('/tiger-team?load=' + encodeURIComponent(id), '_blank'); return; }   // this page follows a running team
+      document.getElementById('saved-panel').style.display = 'none';
+      savedPanelOpen = false;
+      if (await loadTeam(id)) return;
+      await loadSaved(id);
     }
 
     async function loadSaved(id) {
@@ -1688,9 +1897,13 @@
         if (!statusResp.ok) throw new Error('Status check HTTP ' + statusResp.status);
         const statusData = await statusResp.json();
         if (statusData.id) tigerTeamId = statusData.id;
-        if (statusData.status === 'completed') { await loadSaved(tigerTeamId); return; }
+        if (statusData.status === 'completed') { if (!(await loadTeam(tigerTeamId))) await loadSaved(tigerTeamId); return; }
         if (statusResp.ok && ['running', 'retrying', 'stopping'].includes(statusData.status)) {
+          // Still working (a closed page no longer stops a team): follow it instead of starting a second run.
+          resumeBtn.style.display = 'none';
+          if (statusData.has_stream && await loadTeam(tigerTeamId)) return;
           addSystemMsg('⚠ This Tiger Team is already running elsewhere - not launching a duplicate. Check other open tabs.');
+          resumeBtn.style.display = 'inline-flex';
           resumeBtn.disabled = false;
           resumeBtn.textContent = '▶ Resume Interrupted';
           return;
@@ -1732,25 +1945,10 @@
         resumeBtn.style.display = 'none';
         document.getElementById('btn-stop').disabled = false;
 
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let sseBuffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          sseBuffer += decoder.decode(value, { stream: true });
-          const lines = sseBuffer.split('\n');
-          sseBuffer = lines.pop();
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-            if (raw === '[DONE]') continue;
-            try { handleEvent(JSON.parse(raw)); } catch (e) { console.warn('Parse error:', e); }
-          }
-        }
-        // Raw EOF with no tt_complete/tt_error means the connection dropped
-        // mid-stream - that is an interruption, NOT a successful completion.
-        if (isRunning) handleEvent({ gateway: { type: 'tt_interrupted', reason: 'Stream ended without completion' } });
+        // Raw EOF with no tt_complete/tt_error means the connection dropped mid-stream - that is not a successful
+        // completion: afterStreamEnd follows the team again, or reports the interruption on an old hub.
+        try { await readSSE(resp); await afterStreamEnd('Stream ended without completion'); }
+        catch (e) { await afterStreamEnd(e.message); }
       } catch (e) {
         handleEvent({ gateway: { type: 'tt_interrupted', reason: e.message } });
       } finally {
