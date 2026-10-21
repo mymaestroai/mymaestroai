@@ -69,6 +69,21 @@ test('noteEvent: a rejection marks the family at 100% at once and publishes plan
   assert.strictEqual(pu.snapshot().events.length, 2);
 });
 
+test('noteEvent: the client\'s utilization is a fraction (0.76 = 76%); it is stored as a percentage, never as "1%"', () => {
+  const { pu } = rig({ settings: {} });
+  // The shape the Claude client streams (2026-10-21): fractions, with surpassedThreshold and unifiedWindows alongside.
+  pu.noteEvent({ status: 'allowed_warning', resetsAt: Math.floor(Date.parse(later) / 1000), rateLimitType: 'seven_day', utilization: 0.76, isUsingOverage: false, surpassedThreshold: 0.75,
+    unifiedWindows: { five_hour: { utilization: 0.02 }, seven_day: { utilization: 0.76 } } }, 'claude-opus-5-5', 'maestro');
+  assert.strictEqual(pu.snapshot().windows.seven_day.utilization, 76);
+  assert.strictEqual(pu.snapshot().events[0].utilization, 76, 'the event log shows percentages too');
+  pu.noteEvent({ status: 'allowed', rateLimitType: 'five_hour', utilization: 0.023 }, 'claude-opus-5-5', 'maestro');
+  assert.strictEqual(pu.snapshot().windows.five_hour.utilization, 2.3, 'one decimal kept');
+  pu.noteEvent({ status: 'allowed', rateLimitType: 'seven_day', utilization: 1 }, 'claude-opus-5-5', 'maestro');
+  assert.strictEqual(pu.snapshot().windows.seven_day.utilization, 100, '1.0 is a full window');
+  pu.noteEvent({ status: 'allowed', rateLimitType: 'seven_day', utilization: 'n/a' }, 'claude-opus-5-5', 'maestro');
+  assert.strictEqual(pu.snapshot().windows.seven_day.utilization, 100, 'a non-number changes nothing');
+});
+
 test('refresh: reads the client\'s usage answer (per-model "Fable" bucket, classic windows, extra usage); announce broadcasts once per agent and window', async () => {
   const usage = { subscription_type: 'max', rate_limits_available: true, rate_limits: { five_hour: { utilization: 1, resets_at: later }, seven_day: { utilization: 53, resets_at: later }, model_scoped: [{ display_name: 'Fable', utilization: 100, resets_at: later }], extra_usage: { is_enabled: false, monthly_limit: 5000, used_credits: 0, utilization: 0 } } };
   const { pu, published } = rig({ usage });
