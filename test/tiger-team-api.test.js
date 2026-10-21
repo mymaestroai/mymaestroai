@@ -267,4 +267,6 @@ test('the war room draws each member in its own card, follows a team after a dro
   assert.match(html, /async function followTeam\(\)[\s\S]*\/api\/tiger-team\/stream\?id=\$\{encodeURIComponent\(tigerTeamId\)\}&since=\$\{lastSeq\}/);
   assert.match(html, /if \(await loadTeam\(loadSaveId\)\) return;/);
   assert.match(html, /tiger_team_id: tigerTeamId \|\| undefined/, 'Stop and Interject name the team, so they work after a reload');
+  assert.match(page, /case 'tt_interrupted': \{[\s\S]{0,400}for \(const b of callBlocks\.values\(\)\) if \(!b\.done\) \{ addBlockNote\(b, stopped \? '■ Stopped' : '■ Interrupted', 'failed'\); finishCallBlock\(b, true\); \}/, 'a stop closes every open member card');
+  assert.match(page, /if \(callBlocks\.has\(gw\.call_key\) && callBlocks\.get\(gw\.call_key\)\.done\) callBlocks\.delete\(gw\.call_key\);/, 'a resumed dispatch gets a fresh card');
 });

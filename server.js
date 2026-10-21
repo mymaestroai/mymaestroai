@@ -2702,7 +2702,7 @@ async function handleHttpRequest(req, res) {
       const until = following ? (state.eventSeq || 0) : Infinity;
       try { await ttLive.replay(ttStore, id, res, since, until); }
       catch (e) { if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify({ gateway: { type: 'tt_notice', message: 'Part of this team\'s history could not be read: ' + e.message } })}\n\n`); }
-      if (following) { live.release(res); return; }
+      if (following) { await live.release(res); return; }
       if (res.destroyed || res.writableEnded) return;
       // Not running: say how it ended, for runs that stopped without a final event (a hub restart mid-run).
       res.write(`data: ${JSON.stringify({ gateway: { type: 'tt_state', status: state.status, error: state.error || null, unresolved: ttRecovery.unresolved(state).length } })}\n\n`);

@@ -1573,6 +1573,9 @@
           // tt_complete - must never render as success.
           case 'tt_interrupted': {
             const stopped = gw.status === 'stopped';   // ended by Stop, not by a failure
+            // Every member card still open ends here (a roundtable turn or a challenger has no failure event of its
+            // own), so a Resume opens fresh cards and its tools left running read "unknown", not "Done".
+            for (const b of callBlocks.values()) if (!b.done) { addBlockNote(b, stopped ? '■ Stopped' : '■ Interrupted', 'failed'); finishCallBlock(b, true); }
             markUnfinishedTools();
             closeBlock();
             setStatus('error', gw.status === 'blocked' ? 'Needs attention' : stopped ? 'Stopped' : 'Interrupted');

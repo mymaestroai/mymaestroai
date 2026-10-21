@@ -58,7 +58,7 @@ test('a TeamStream numbers, journals and fans out frames; pages attach, drop and
   s.write('data: {"gateway":{"type":"during_replay"}}\n\n');   // arrives while b replays: held, not lost
   assert.equal(await live.replay(store, 'team-1', b, 1, until), 2);
   assert.deepEqual(data(b.writes).map(e => e.tt_seq), [2, 4]);
-  s.release(b);
+  await s.release(b);
   s.write('data: {"gateway":{"type":"tt_complete"}}\n\n');
   assert.deepEqual(data(b.writes).map(e => e.tt_seq), [2, 4, 5, 6]);
   assert.equal(a.writes.some(w => w.includes('tt_complete')), false, 'nothing reaches a page that left');
@@ -72,14 +72,14 @@ test('a TeamStream numbers, journals and fans out frames; pages attach, drop and
   assert.deepEqual(data(c.writes).map(e => e.tt_seq), [1, 2, 4, 5, 6]);
 });
 
-test('a page still replaying when the run ends gets its held events, then the end', () => {
+test('a page still replaying when the run ends gets its held events, then the end', async () => {
   const state = { id: 'team-3' };
   const s = new live.TeamStream({ store: { append: (id, st) => ({ seq: (st.eventSeq = (st.eventSeq || 0) + 1) }) }, getState: () => state, heartbeatMs: 0 }).bind('team-3');
   const p = page(); s.attach(p, { hold: true });
   s.write('data: {"gateway":{"type":"tt_complete"}}\n\n');
   s.end();
   assert.equal(p.writableEnded, undefined, 'not closed while it replays');
-  s.release(p);
+  await s.release(p);
   assert.equal(data(p.writes)[0].gateway.type, 'tt_complete');
   assert.equal(p.writes.at(-1), 'data: [DONE]\n\n'); assert.equal(p.writableEnded, true);
 });
@@ -128,4 +128,32 @@ test('waitUntilFree: free at once, free later, never free, and stopped while wai
   assert.equal(await live.waitUntilFree(() => true, { sleep, stepMs: 1, maxMs: 15 }), false);
   const ac = new AbortController(); setTimeout(() => ac.abort(), 10);
   await assert.rejects(live.waitUntilFree(() => true, { sleep, stepMs: 2, signal: ac.signal }), { name: 'AbortError' });
+});
+
+test('held events count bytes too, and a release waits for a full connection while new events queue behind', async () => {
+  const state = { id: 'team-5' };
+  const mk = () => new live.TeamStream({ store: { append: (id, st) => ({ seq: (st.eventSeq = (st.eventSeq || 0) + 1) }) }, getState: () => state, heartbeatMs: 0, log: () => {} }).bind('team-5');
+  // 1. Big events while a page replays: dropped once the held bytes pass the limit, though far below the count limit.
+  let s = mk();
+  const big = page(); big.destroy = () => { big.destroyed = true; };
+  s.attach(big, { hold: true });
+  for (let i = 0; i < 300 && !big.destroyed; i++) s.write(`data: {"x":"${'y'.repeat(32 * 1024)}"}\n\n`);
+  assert.equal(big.destroyed, true, 'dropped by bytes');
+  s.end();
+  // 2. A full connection during release: it waits for drain, and an event arriving meanwhile goes out after, in order.
+  s = mk();
+  const slow = page(); let full = true;
+  slow.write = f => { slow.writes.push(f); return !full; };
+  s.attach(slow, { hold: true });
+  s.write('data: {"n":1}\n\n'); s.write('data: {"n":2}\n\n');
+  const r = s.release(slow);
+  await new Promise(res => setImmediate(res));
+  assert.deepEqual(data(slow.writes).map(e => e.n), [1], 'waits after a refused write');
+  s.write('data: {"n":3}\n\n');
+  full = false; slow.emit('drain');
+  await r;
+  assert.deepEqual(data(slow.writes).map(e => e.n), [1, 2, 3]);
+  s.write('data: {"n":4}\n\n');
+  assert.deepEqual(data(slow.writes).map(e => e.n), [1, 2, 3, 4], 'then follows live');
+  s.end();
 });
