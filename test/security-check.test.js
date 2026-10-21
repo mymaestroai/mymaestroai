@@ -223,8 +223,15 @@ test('nodeSecurity: installer-managed or the computer\'s own Node.js, branch, qu
   }
   const renamed = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/home/u/.mymaestroai/node/bin/node', home: '/home/u', env: { HUB_STABLE_BRANCH: 'stable' }, root: '/home/u/mymaestroai', platform: 'linux', branch: 'stable' });
   assert.match(renamed.how, /do not re-run it/, 'the installer knows only main and dev');
-  const nogit = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/home/u/.mymaestroai/node/bin/node', home: '/home/u', env: {}, root: '/home/u/mymaestroai', platform: 'linux', branch: 'unknown' });
-  assert.match(nogit.how, /--yes --dir '\/home\/u\/mymaestroai' \(add --channel experimental if this install follows experimental\)/);
+  const named = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/home/u/.mymaestroai/node/bin/node', home: '/home/u', env: {}, root: '/home/u/mymaestroai', platform: 'linux', branch: 'unknown' });
+  assert.match(named.how, /this install is on the branch unknown/, 'a branch really named "unknown" is just another branch');
+  const nogit = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/home/u/.mymaestroai/node/bin/node', home: '/home/u', env: {}, root: '/home/u/mymaestroai', platform: 'linux',
+    lookupBranch: () => { const e = new Error('spawn git ENOENT'); e.code = 'ENOENT'; throw e; } });
+  assert.match(nogit.how, /^git could not run here/);
+  assert.doesNotMatch(nogit.how, /curl/);
+  const detached = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/home/u/.mymaestroai/node/bin/node', home: '/home/u', env: {}, root: '/home/u/mymaestroai', platform: 'linux',
+    lookupBranch: () => { const e = new Error('not a symbolic ref'); e.status = 1; throw e; } });
+  assert.match(detached.how, /a detached checkout/);
   const sys = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/usr/bin/node', home: '/home/u', env: {}, platform: 'linux', branch: 'main' });
   assert.strictEqual(sys.managed, false);
   assert.match(sys.how, /sudo apt-get update && sudo apt-get install --only-upgrade nodejs/);
