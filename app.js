@@ -2059,10 +2059,10 @@
         chip.classList.toggle('on', show);
         chip.classList.toggle('sec', show && !!s.security);
         chip.textContent = show ? `⬇ ${s.latestVersion && s.latestVersion !== s.currentVersion ? s.latestVersion : 'Update'}` : '';
-        chip.title = show ? `${s.headline}: click to update now or later` : '';
+        chip.title = !show ? '' : s.snoozed && s.laterUntil ? `${s.headline}. Card hidden until ${new Date(s.laterUntil).toLocaleString()}: click to see it now` : `${s.headline}: click to update now or later`;
       }
       if (show && !s.snoozed) showUpdateCard();
-      else if (!show) document.getElementById('hub-update-card')?.remove();
+      else document.getElementById('hub-update-card')?.remove();   // also when Later was pressed on another device
     }
     function showUpdateCard() {
       const s = ucLast;
@@ -2074,7 +2074,7 @@
       const notes = (s.titles || []).map(t => `<li>${esc(t)}</li>`).join('') + (s.more ? `<li class="uc-more">and ${s.more} more</li>` : '');
       const have = s.latestVersion && s.latestVersion !== s.currentVersion && s.currentVersion ? `You have ${esc(s.currentVersion)}.` : `You're on ${esc(s.channel || s.branch || 'this channel')}.`;
       const warn = s.blocked
-        ? `<div class="uc-warn">This hub has ${s.ahead} change${s.ahead === 1 ? '' : 's'} of its own that ${s.ahead === 1 ? "isn't" : "aren't"} on GitHub, so it can't update by itself. Open Details to choose what to do.</div>`
+        ? `<div class="uc-warn">This hub has ${s.ahead ? `${s.ahead} commit${s.ahead === 1 ? '' : 's'} of its own that GitHub doesn't have` : `${s.dirty} changed file${s.dirty === 1 ? '' : 's'} that ${s.dirty === 1 ? "isn't" : "aren't"} committed`}, so it can't update by itself. Open Details to choose what to do.</div>`
         : busy.length ? `<div class="uc-warn">${busy.length === 1 ? `${esc(agentDisplayName(busy[0]))} is` : `${busy.length} agents are`} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short.</div>` : '';
       card.innerHTML = `<div class="uc-head">⬇️ ${esc(s.headline || 'An update is ready')}</div>
         <div class="uc-sub">${have}${s.security ? ' <span class="uc-sec">Includes a security fix.</span>' : ''}</div>
@@ -2086,25 +2086,32 @@
     }
     async function updateLater() {
       document.getElementById('hub-update-card')?.remove();
-      try { const r = await fetch('/api/update-check/later', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' }); if (r.ok) ucLast = await r.json(); } catch { /* the card comes back on the next look */ }
+      // Later names the version on the card: a newer one found meanwhile still shows.
+      try { const r = await fetch('/api/update-check/later', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote: (ucLast && ucLast.remote) || null }) }); if (r.ok) ucLast = await r.json(); } catch { /* the card comes back on the next look */ }
     }
     async function updateNow() {
       const now = document.getElementById('uc-now'), later = document.getElementById('uc-later'), msg = document.getElementById('uc-msg');
+      // Who is working now, not when the card was drawn: the restart cuts their replies short.
+      const busy = busyAgentNames();
+      if (busy.length && !confirm(`${busy.map(agentDisplayName).join(', ')} ${busy.length === 1 ? 'is' : 'are'} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short. Update now anyway?`)) return;
       if (now) { now.disabled = true; now.textContent = 'Updating…'; }
       if (later) later.disabled = true;
       let r;
       try { r = await (await fetch('/api/git-sync/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
       catch (e) { r = { success: false, error: e.message }; }
       if (!r || !r.success) {
+        // The Update dialog has the ways out (discard changes, move to a rewritten history): send the admin there.
         if (msg) msg.innerHTML = `<div class="uc-err">The update didn't run: ${esc((r && r.error) || 'unknown error')}</div>`;
-        if (now) { now.disabled = false; now.textContent = 'Try again'; }
+        if (now) { now.disabled = false; now.textContent = 'Details'; now.onclick = () => openGitSync(); }
         if (later) later.disabled = false;
         return;
       }
       if (msg) msg.innerHTML = `<div class="uc-ok">✓ Updated. Restarting the hub…</div>`;
       // The Update dialog's own restart: flush the active replies, restart, wait for the new boot.
       const rbtn = document.getElementById('restart-hub-btn');
-      try { await fetch('/api/restart', { method: 'POST', credentials: 'include' }); } catch { /* expected: the server goes away */ }
+      let refused = null;
+      try { const rr = await fetch('/api/restart', { method: 'POST', credentials: 'include' }); if (!rr.ok) refused = rr.status; } catch { /* expected: the server goes away */ }
+      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but the hub refused to restart (HTTP ${refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
     // Settings → Status → Updates.

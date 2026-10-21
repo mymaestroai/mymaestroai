@@ -2783,8 +2783,9 @@ async function runUpdateFromPhone(channel) {
     r = await resp.json();
   } catch (e) { r = { success: false, error: e.message }; }
   if (!r || !r.success) {
-    d.innerHTML = `<p class="upd-err">Update failed: ${esc((r && r.error) || 'unknown error')}</p><div class="btns"><button id="upd-close">Close</button></div>`;
+    d.innerHTML = `<p class="upd-err">Update failed: ${esc((r && r.error) || 'unknown error')}</p><div class="btns"><button id="upd-close">Close</button><button id="upd-details" class="go">Details</button></div>`;
     $('upd-close').addEventListener('click', () => d.close());
+    $('upd-details').addEventListener('click', () => openUpdateSheet());
     return;
   }
   d.innerHTML = `<p>Updated to ${esc(r.head)}.</p>${(r.steps || []).map(st => `<div><small>• ${esc(st)}</small></div>`).join('')}<p>Restarting…</p>`;
@@ -2806,7 +2807,7 @@ function ucBody(s) {
   const notes = (s.titles || []).map(t => `<li>${esc(t)}</li>`).join('') + (s.more ? `<li class="uc-more">and ${s.more} more</li>` : '');
   const have = s.latestVersion && s.latestVersion !== s.currentVersion && s.currentVersion ? `You have ${esc(s.currentVersion)}.` : `You're on ${esc(s.channel || s.branch || 'this channel')}.`;
   const warn = s.blocked
-    ? `<p class="uc-warn">This hub has ${s.ahead} change${s.ahead === 1 ? '' : 's'} of its own that ${s.ahead === 1 ? "isn't" : "aren't"} on GitHub, so it can't update by itself. Open Details to choose.</p>`
+    ? `<p class="uc-warn">This hub has ${s.ahead ? `${s.ahead} commit${s.ahead === 1 ? '' : 's'} of its own that GitHub doesn't have` : `${s.dirty} changed file${s.dirty === 1 ? '' : 's'} that ${s.dirty === 1 ? "isn't" : "aren't"} committed`}, so it can't update by itself. Open Details to choose.</p>`
     : busy.length ? `<p class="uc-warn">${busy.length === 1 ? `${esc(displayName(busy[0]))} is` : `${busy.length} agents are`} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short.</p>` : '';
   return `<div class="uc-head">⬇️ ${esc(s.headline || 'An update is ready')}</div><div class="uc-sub">${have}${s.security ? ' <b class="uc-sec">Includes a security fix.</b>' : ''}</div>${notes ? `<ul class="uc-notes">${notes}</ul>` : ''}${warn}`;
 }
@@ -2838,10 +2839,14 @@ async function updateLater() {
   const d = $('update-sheet');
   if (d.open && d.dataset.uc === '1') d.close();
   if ($('update-card')) $('update-card').hidden = true;
-  try { const r = await api('/api/update-check/later', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); if (r.ok) ucState = await r.json(); } catch { /* back on the next look */ }
+  // Later names the version on the card: a newer one found meanwhile still shows.
+  try { const r = await api('/api/update-check/later', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote: (ucState && ucState.remote) || null }) }); if (r.ok) ucState = await r.json(); } catch { /* back on the next look */ }
   paintUpdateCard();
 }
 function updateNowFromPhone() {
+  // Who is working now, not when the card was drawn: the restart cuts their replies short.
+  const busy = agents.map(a => a.name).filter(n => isBusy(n));
+  if (busy.length && !confirm(`${busy.map(displayName).join(', ')} ${busy.length === 1 ? 'is' : 'are'} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short. Update now anyway?`)) return;
   const d = $('update-sheet');
   d.dataset.uc = '';
   d.innerHTML = '<h3>Updating…</h3><p>Getting the new version ready. The hub restarts when it is done.</p><div class="btns"><button id="upd-go" class="go accent" disabled>Updating…</button></div>';

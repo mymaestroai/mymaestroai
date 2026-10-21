@@ -2136,7 +2136,9 @@ async function handleHttpRequest(req, res) {
       catch (e) { return jsonResponse(res, 500, { error: e.message }); }
     }
     if (pathname === '/api/update-check/later' && req.method === 'POST') {
-      try { return jsonResponse(res, 200, await require('./lib/update-check').getUpdateCheck().later(req.hubUser)); }
+      let body = {}; try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
+      const remote = body && typeof body.remote === 'string' && /^[0-9a-f]{40,64}$/.test(body.remote) ? body.remote : null;
+      try { return jsonResponse(res, 200, await require('./lib/update-check').getUpdateCheck().later(req.hubUser, remote)); }
       catch (e) { return jsonResponse(res, 500, { error: e.message }); }
     }
     if (pathname === '/api/update-check/settings' && req.method === 'POST') {

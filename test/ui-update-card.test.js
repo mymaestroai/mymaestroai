@@ -53,6 +53,17 @@ test('phone: a card on the agent list, a note on the menu, and the notification 
   assert.match(mobile, /\$\('update-sheet'\)\.addEventListener\('click', onUpdateChoice\)/);
 });
 
+test('review fixes: Later names its version, busy agents are confirmed at the click, a refused restart is reported', () => {
+  assert.match(app, /body: JSON\.stringify\(\{ remote: \(ucLast && ucLast\.remote\) \|\| null \}\)/);
+  assert.match(mobile, /body: JSON\.stringify\(\{ remote: \(ucState && ucState\.remote\) \|\| null \}\)/);
+  const now = app.slice(app.indexOf('async function updateNow()'), app.indexOf('// Settings → Status → Updates.'));
+  assert.ok(now.indexOf('busyAgentNames()') < now.indexOf("/api/git-sync/update"), 'desktop asks before updating');
+  assert.match(now, /if \(refused\)/);
+  const phoneNow = mobile.slice(mobile.indexOf('function updateNowFromPhone()'), mobile.indexOf('function onUpdateChoice('));
+  assert.ok(phoneNow.indexOf('isBusy(n)') < phoneNow.indexOf('runUpdateFromPhone(null)'), 'phone asks before updating');
+  assert.match(app, /else document\.getElementById\('hub-update-card'\)\?\.remove\(\);   \/\/ also when Later was pressed on another device/);
+});
+
 test('the push goes to admins and opens the phone prompt', () => {
   const uc = read('lib/update-check.js');
   assert.match(uc, /url: '\/mobile\?update=1'/);

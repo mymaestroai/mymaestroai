@@ -85,6 +85,9 @@ test('peekUpdate: commits without changelog entries list their subjects; local c
   assert.strictEqual(r.latestVersion, '1.0.0');
   assert.deepStrictEqual(r.titles, ['Fix the thing']);
   assert.strictEqual(r.security, false);
+  assert.strictEqual(r.dirty, 0);
+  put(s.work, 'b.txt', 'changed here\n');   // b.txt is tracked here (a.txt exists only upstream)
+  assert.strictEqual((await s.sync.peekUpdate()).dirty, 1, 'uncommitted changes to tracked files are counted');
 });
 
 test('changelogTitles: top-level bold leads only, final stop dropped, no duplicates', () => {
@@ -100,15 +103,20 @@ function harness(over = {}) {
   const dir = fs.mkdtempSync(path.join(TMP, 'uc-'));
   const calls = { peek: 0, notify: [] };
   const h = {
-    result: { ok: true, branch: 'main', channel: 'stable', head: 'h1', remote: 'r1', behind: 2, ahead: 0, currentVersion: '1.0.0', latestVersion: '1.1.0', titles: ['A', 'B', 'C'], more: 1, security: false },
-    headValue: 'h1', sent: 1, settings: {}, running: false,
+    result: { ok: true, branch: 'main', channel: 'stable', head: 'h1', remote: 'r1', behind: 2, ahead: 0, dirty: 0, currentVersion: '1.0.0', latestVersion: '1.1.0', titles: ['A', 'B', 'C'], more: 1, security: false },
+    headValue: 'h1', devices: { d1: true }, settings: {}, running: false,
   };
   const uc = createUpdateCheck({
     stateFile: path.join(dir, 'update-check.json'),
     peek: async () => { calls.peek++; return typeof h.result === 'function' ? h.result() : h.result; },
     headNow: async () => h.headValue,
     updateRunning: () => h.running,
-    notify: async (payload, opts) => { calls.notify.push({ payload, opts }); return { sent: h.sent }; },
+    // Admin devices: id -> whether delivery succeeds. skip(id) leaves out the ones that already have it.
+    notifyEach: async (payload, opts) => {
+      const ids = Object.keys(h.devices).filter(id => !opts.skip(id));
+      if (ids.length) calls.notify.push({ payload, opts, ids });
+      return { results: ids.map(id => ({ id, ok: h.devices[id] })) };
+    },
     settings: () => h.settings,
     env: {}, now: () => clock, log: () => {},
     ...over,
@@ -125,7 +133,8 @@ test('one push per new version, to admins, opening the phone prompt', async () =
   assert.strictEqual(calls.notify[0].payload.title, 'My Maestro AI 1.1.0 is ready');
   assert.strictEqual(calls.notify[0].payload.url, '/mobile?update=1');
   assert.match(calls.notify[0].payload.body, /^A · B · and more\. Tap to update now or later\.$/);
-  assert.deepStrictEqual(calls.notify[0].opts, { adminsOnly: true, urgency: 'normal' });
+  assert.strictEqual(calls.notify[0].opts.adminsOnly, true);
+  assert.strictEqual(calls.notify[0].opts.urgency, 'normal');
   await uc.check();
   assert.strictEqual(calls.notify.length, 1, 'the same version is announced once');
   h.result = { ...h.result, remote: 'r2', latestVersion: '1.2.0', security: true };
@@ -134,15 +143,21 @@ test('one push per new version, to admins, opening the phone prompt', async () =
   assert.strictEqual(calls.notify[1].opts.urgency, 'high', 'a security fix is urgent');
 });
 
-test('no device got it: the next check announces again', async () => {
+test('per device: one that failed is tried again, the others are not; a device added later gets it too', async () => {
   const { uc, h, calls } = harness();
-  h.sent = 0;
+  h.devices = { d1: true, d2: false };
   await uc.check();
+  assert.deepStrictEqual(calls.notify[0].ids, ['d1', 'd2']);
   await uc.check();
-  assert.strictEqual(calls.notify.length, 2);
-  h.sent = 1;
-  await uc.check(); await uc.check();
-  assert.strictEqual(calls.notify.length, 3);
+  assert.deepStrictEqual(calls.notify[1].ids, ['d2'], 'only the device that missed it');
+  h.devices = { d1: true, d2: true, d3: true };
+  await uc.check();
+  assert.deepStrictEqual(calls.notify[2].ids, ['d2', 'd3'], 'the retry and the new phone');
+  await uc.check();
+  assert.strictEqual(calls.notify.length, 3, 'everyone has it now');
+  h.result = { ...h.result, remote: 'r2' };
+  await uc.check();
+  assert.deepStrictEqual(calls.notify[3].ids, ['d1', 'd2', 'd3'], 'a newer version goes to every device again');
 });
 
 test('status: available with the headline and notes; Later hides it for that admin, that version, one day', async () => {
@@ -164,6 +179,8 @@ test('status: available with the headline and notes; Later hides it for that adm
   h.result = { ...h.result, remote: 'r2', latestVersion: '1.2.0' };
   await uc.check();
   assert.strictEqual((await uc.status(admin)).snoozed, false, 'a newer version shows at once');
+  assert.strictEqual((await uc.later(admin, 'r1')).snoozed, false, 'Later for the card of an older version does not hide the newer one');
+  assert.strictEqual((await uc.later(admin, 'r2')).snoozed, true);
 });
 
 test('after an update moved the code, the old result is not shown and a new check follows', async () => {
@@ -185,6 +202,12 @@ test('blocked when this install has its own commits; experimental changes withou
   assert.strictEqual(s.blocked, true);
   assert.strictEqual(s.headline, '2 new changes on experimental');
   assert.strictEqual(headline({ behind: 1, channel: 'experimental' }), '1 new change on experimental');
+  h.result = { ...h.result, ahead: 0, dirty: 2, remote: 'r9' };
+  await uc.check();
+  const d = await uc.status(admin);
+  assert.strictEqual(d.blocked, true, 'uncommitted changes block Update now too');
+  assert.strictEqual(d.dirty, 2);
+  assert.strictEqual(d.remote, 'r9');
 });
 
 test('switched off: no push, no schedule; the Settings "Check now" still looks', async () => {
@@ -209,6 +232,17 @@ test('stays out of a running update; a failed check keeps the last result and re
   const s = await uc.status(admin);
   assert.strictEqual(s.available, true);
   assert.strictEqual(s.error, 'Could not reach GitHub: timeout');
+  const before = calls.notify.length;
+  h.result = { ok: true, branch: 'main', channel: 'stable', head: 'h1', remote: 'r5', behind: 1, ahead: 0, dirty: 0, titles: [], more: 0 };
+  h.running = false;
+  const realRunning = h.running;
+  // An update that starts during the look: nothing is announced.
+  let calls2 = 0; const uc2 = harness({ updateRunning: () => (calls2++ > 0) });
+  await uc2.uc.check();
+  assert.strictEqual(uc2.calls.peek, 1);
+  assert.strictEqual(uc2.calls.notify.length, 0, 'no push while an update runs');
+  assert.strictEqual(calls.notify.length, before);
+  assert.strictEqual(realRunning, false);
 });
 
 test('overlapping checks share one look; the state file is private', async () => {
