@@ -502,7 +502,11 @@
     let currentAgent = null;
     const skipToolIds = new Set();
     let startTime = Date.now();
-    let toolMap = new Map();
+    let toolMap = new Map();   // tool key (dispatch + tool id) -> its row; two members may use the same tool id
+    const toolIdPrefix = 't' + Math.random().toString(36).slice(2, 7) + '-';   // DOM ids unique per page, even next to a loaded transcript
+    let toolSeq = 0;
+    /** A tool's key: the dispatch it belongs to (tt_call) plus its id, so parallel members never share a row. */
+    function toolKey(evt, gw) { return ((evt && evt.tt_call) || '') + '|' + (gw.tool_call_id || gw.tool); }
     let suppressToolNames = new Set(['consult_agent']);
     let sessionId = null;
     let tigerTeamId = null;
@@ -1028,10 +1032,16 @@
       block.done = true;
       block.textEl.innerHTML = md(block.rawText);
       block.element.querySelectorAll('.tool-call-line.running').forEach(line => {
-        line.className = 'tool-call-line done';
         const spinner = line.querySelector('.tool-call-spinner');
-        if (spinner) { spinner.className = 'tool-call-icon'; spinner.textContent = '✓'; }
         const status = line.querySelector('.tool-call-status');
+        if (failed) {   // cut off before its result: it may or may not have happened
+          line.classList.remove('running');
+          if (spinner) { spinner.className = 'tool-call-icon'; spinner.textContent = '?'; }
+          if (status) status.textContent = 'Interrupted / unknown';
+          return;
+        }
+        line.className = 'tool-call-line done';
+        if (spinner) { spinner.className = 'tool-call-icon'; spinner.textContent = '✓'; }
         if (status) { status.className = 'tool-call-status done'; status.textContent = 'Done'; }
       });
       if (failed) block.element.classList.add('failed');
@@ -1079,27 +1089,28 @@
 
       const inputSummary = input ? (typeof input === 'string' ? input : JSON.stringify(input)).slice(0, 100) : '';
 
+      const domId = toolIdPrefix + (++toolSeq);
       const wrapper = document.createElement('div');
       wrapper.innerHTML = `
-        <div class="tool-call-line running" id="tool-${esc(callId)}">
+        <div class="tool-call-line running" id="tool-${domId}">
           <span class="tool-call-spinner"></span>
           <div class="tool-call-info">
             <span class="tool-call-name">${esc(name)}</span>
             ${inputSummary ? `<span class="tool-call-input">${esc(inputSummary)}</span>` : ''}
           </div>
           <span class="tool-call-status"></span>
-          <span class="tool-call-toggle" data-call-id="${esc(callId)}">▶ output</span>
+          <span class="tool-call-toggle" data-call-id="${domId}">▶ output</span>
         </div>
-        <div class="tool-call-result" id="tool-result-${esc(callId)}"></div>`;
+        <div class="tool-call-result" id="tool-result-${domId}"></div>`;
       block.toolsEl.appendChild(wrapper);
-      toolMap.set(callId, { wrapper, name });
+      toolMap.set(callId, { wrapper, name, line: wrapper.querySelector('.tool-call-line'), resultEl: wrapper.querySelector('.tool-call-result') });
       scrollBottom();
     }
 
     function completeTool(callId, result) {
       const entry = toolMap.get(callId);
       if (!entry) return;
-      const line = document.getElementById('tool-' + callId);
+      const line = entry.line;
       if (line) {
         line.className = 'tool-call-line done';
         const spinner = line.querySelector('.tool-call-spinner');
@@ -1107,7 +1118,7 @@
         const status = line.querySelector('.tool-call-status');
         if (status) { status.className = 'tool-call-status done'; status.textContent = 'Done'; }
       }
-      const resultEl = document.getElementById('tool-result-' + callId);
+      const resultEl = entry.resultEl;
       if (resultEl && result) {
         resultEl.textContent = result;
       }
@@ -1289,10 +1300,10 @@
       if (gw && member) {
         switch (gw.type) {
           case 'tool_start':
-            if (gw.tool !== 'consult_agent') addTool(gw.tool, gw.tool_call_id || gw.tool, gw.input, member);
+            if (gw.tool !== 'consult_agent') addTool(gw.tool, toolKey(evt, gw), gw.input, member);
             return;
           case 'tool_use': {
-            const line = document.getElementById('tool-' + (gw.tool_call_id || gw.tool));
+            const line = (toolMap.get(toolKey(evt, gw)) || {}).line;
             if (line && gw.input) {
               let inputEl = line.querySelector('.tool-call-input');
               if (!inputEl) { const info = line.querySelector('.tool-call-info'); if (info) { inputEl = document.createElement('span'); inputEl.className = 'tool-call-input'; info.appendChild(inputEl); } }
@@ -1301,7 +1312,7 @@
             return;
           }
           case 'tool_result':
-            completeTool(gw.tool_call_id || gw.tool, gw.output);
+            completeTool(toolKey(evt, gw), gw.output);
             return;
           case 'tt_member_notice':
             addBlockNote(member, '⏳ ' + (gw.message || ''), 'waiting');
@@ -1413,6 +1424,8 @@
             }
             if (gw.call_key) {
               // This dispatch's own card; members dispatched together all work at once, each in its card.
+              // A dispatch that runs again (Resume after a stop) gets a fresh card; the finished one stays as history.
+              if (callBlocks.has(gw.call_key) && callBlocks.get(gw.call_key).done) callBlocks.delete(gw.call_key);
               const b = callBlock(gw.call_key, gw.agent, gw.role === 'challenger' ? 'Challenger' : 'Participant');
               if (gw.task && !b.taskShown) { b.taskShown = true; addBlockNote(b, 'Task: ' + String(gw.task).replace(/\s+/g, ' ').slice(0, 200) + (String(gw.task).length > 200 ? '…' : ''), 'task'); }
             } else {
@@ -1598,19 +1611,18 @@
           case 'tool_start':
             // Skip consult_agent tool events - they're redundant with tt_dispatch
             if (gw.tool === 'consult_agent') {
-              if (gw.tool_call_id) skipToolIds.add(gw.tool_call_id);
+              if (gw.tool_call_id) skipToolIds.add(toolKey(evt, gw));
               break;
             }
             if (!currentBlock) openBlock(coordinator, 'Coordinator');
-            addTool(gw.tool, gw.tool_call_id || gw.tool, gw.input);
+            addTool(gw.tool, toolKey(evt, gw), gw.input);
             break;
 
           case 'tool_use':
             // Update tool input display (tool_use carries the input summary)
             if (gw.tool === 'consult_agent') break;
             if (!currentBlock) break;
-            const toolId = gw.tool_call_id || gw.tool;
-            const toolLine = document.getElementById('tool-' + toolId);
+            const toolLine = (toolMap.get(toolKey(evt, gw)) || {}).line;
             if (toolLine && gw.input) {
               let inputEl = toolLine.querySelector('.tool-call-input');
               if (!inputEl) {
@@ -1627,11 +1639,11 @@
 
           case 'tool_result':
             // Skip consult_agent results - represented by tt_dispatch_complete
-            if (skipToolIds.has(gw.tool_call_id)) {
-              skipToolIds.delete(gw.tool_call_id);
+            if (skipToolIds.has(toolKey(evt, gw))) {
+              skipToolIds.delete(toolKey(evt, gw));
               break;
             }
-            completeTool(gw.tool_call_id || gw.tool, gw.output);
+            completeTool(toolKey(evt, gw), gw.output);
             break;
         }
       }

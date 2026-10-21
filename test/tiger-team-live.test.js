@@ -26,7 +26,7 @@ test('tagFrame names the dispatch; the innermost tag wins; other frames pass unc
   for (const f of [': heartbeat\n\n', 'data: [DONE]\n\n', 'data: not json\n\n', 'data: [1,2]\n\n', 'event: x\n\n']) assert.equal(live.tagFrame(f, t), f);
 });
 
-test('a TeamStream numbers, journals and fans out frames; pages attach, drop and replay without loss or repeats', t => {
+test('a TeamStream numbers, journals and fans out frames; pages attach, drop and replay without loss or repeats', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tt-live-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const store = new recovery.CheckpointStore(dir);
@@ -49,13 +49,18 @@ test('a TeamStream numbers, journals and fans out frames; pages attach, drop and
   assert.ok(seen.slice(1).every(e => typeof e.tt_at === 'string'));
   assert.equal(a.writes.includes(': heartbeat\n\n'), true);
   assert.equal(state.hasStream, true);
-  // A page that dropped after seq 1 replays exactly what it missed, then follows live.
+  // A page that dropped after seq 1 attaches (its new events held), replays exactly what it missed up to where the
+  // journal ended when it attached, then gets the held events and follows live.
   a.destroyed = true; a.emit('close');
   const b = page();
-  assert.equal(live.replay(store, 'team-1', b, 1), 2);
-  assert.equal(s.attach(b), true);
+  assert.equal(s.attach(b, { hold: true }), true);
+  const until = state.eventSeq;
+  s.write('data: {"gateway":{"type":"during_replay"}}\n\n');   // arrives while b replays: held, not lost
+  assert.equal(await live.replay(store, 'team-1', b, 1, until), 2);
+  assert.deepEqual(data(b.writes).map(e => e.tt_seq), [2, 4]);
+  s.release(b);
   s.write('data: {"gateway":{"type":"tt_complete"}}\n\n');
-  assert.deepEqual(data(b.writes).map(e => e.tt_seq), [2, 4, 5]);
+  assert.deepEqual(data(b.writes).map(e => e.tt_seq), [2, 4, 5, 6]);
   assert.equal(a.writes.some(w => w.includes('tt_complete')), false, 'nothing reaches a page that left');
   assert.equal(s.viewerCount, 1);
   s.end();
@@ -63,8 +68,33 @@ test('a TeamStream numbers, journals and fans out frames; pages attach, drop and
   assert.equal(live.get('team-1'), null);
   assert.equal(s.attach(page()), false, 'an ended run takes no new pages');
   // A whole replay from the start draws the same frames in the same order.
-  const c = page(); live.replay(store, 'team-1', c, 0);
-  assert.deepEqual(data(c.writes).map(e => e.tt_seq), [1, 2, 4, 5]);
+  const c = page(); await live.replay(store, 'team-1', c, 0);
+  assert.deepEqual(data(c.writes).map(e => e.tt_seq), [1, 2, 4, 5, 6]);
+});
+
+test('a page still replaying when the run ends gets its held events, then the end', () => {
+  const state = { id: 'team-3' };
+  const s = new live.TeamStream({ store: { append: (id, st) => ({ seq: (st.eventSeq = (st.eventSeq || 0) + 1) }) }, getState: () => state, heartbeatMs: 0 }).bind('team-3');
+  const p = page(); s.attach(p, { hold: true });
+  s.write('data: {"gateway":{"type":"tt_complete"}}\n\n');
+  s.end();
+  assert.equal(p.writableEnded, undefined, 'not closed while it replays');
+  s.release(p);
+  assert.equal(data(p.writes)[0].gateway.type, 'tt_complete');
+  assert.equal(p.writes.at(-1), 'data: [DONE]\n\n'); assert.equal(p.writableEnded, true);
+});
+
+test('a page that falls behind is dropped (it reconnects from its last event); the others keep going', () => {
+  const state = { id: 'team-4' }, logs = [];
+  const s = new live.TeamStream({ store: { append: (id, st) => ({ seq: (st.eventSeq = (st.eventSeq || 0) + 1) }) }, getState: () => state, heartbeatMs: 0, log: m => logs.push(m) }).bind('team-4');
+  const slow = page(), fast = page();
+  slow.writableLength = 9 * 1024 * 1024; slow.destroy = () => { slow.destroyed = true; };
+  s.attach(slow); s.attach(fast);
+  s.write('data: {"x":1}\n\n');
+  assert.equal(slow.destroyed, true); assert.equal(slow.writes.length, 0);
+  assert.equal(data(fast.writes).length, 1); assert.equal(s.viewerCount, 1);
+  assert.match(logs[0], /fell behind/);
+  s.end();
 });
 
 test('a stream whose journal fails keeps sending (the work journal fails closed elsewhere)', () => {

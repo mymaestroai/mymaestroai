@@ -110,7 +110,7 @@ test('failed model turn pauses rather than falsely completing; same call resumes
   assert.equal(attempts, 2);
 });
 
-test('a challenger that cannot review leaves the report standing; a resume reruns only the review', async () => {
+test('a challenger that cannot review stops the run with its reason; Resume reruns only the review', async () => {
   const calls = []; let failed = false;
   const ctx = harness(async (agent) => {
     calls.push(agent);
@@ -124,16 +124,35 @@ test('a challenger that cannot review leaves the report standing; a resume rerun
   await ctx.runTigerTeam({ coordinator: 'coord', participants: [], challenger: 'critic', objective: 'Test' }, ctx.res, 'test');
   const id = [...ctx.activeTigerTeams.keys()][0];
   assert.deepEqual(calls, ['coord', 'critic']);
-  // A challenger that cannot review leaves the report standing, says so, and marks its own card failed.
-  assert.equal(ctx.activeTigerTeams.get(id).status, 'completed');
-  assert.match(ctx.activeTigerTeams.get(id).finalResult, /NOT REVIEWED[\s\S]*critic/);
-  const failedEv = ctx.res.events.find(e => e.gateway?.type === 'tt_dispatch_failed');
-  assert.equal(failedEv.gateway.call_key, id + '-challenger');
-  assert.equal(ctx.activeTigerTeams.get(id).calls[id + '-challenger'].status, 'failed');
-  // A resume runs only the review that failed (and the coordinator's answer to it), never the finished report.
+  const st = ctx.activeTigerTeams.get(id);
+  assert.notEqual(st.status, 'completed', 'an unreviewed report is not a finished run');
+  assert.match(st.error, /^The challenger \(critic\) could not review the report\. .*Resume runs only the review again\.$/s);
+  assert.equal(ctx.res.events.find(e => e.gateway?.type === 'tt_dispatch_failed').gateway.call_key, id + '-challenger');
+  assert.equal(ctx.res.events.some(e => e.gateway?.type === 'tt_complete'), false);
   await ctx.resumeTigerTeam(id, ctx.res, {});
   assert.deepEqual(calls, ['coord', 'critic', 'critic', 'coord']);
   assert.equal(ctx.activeTigerTeams.get(id).status, 'completed');
+});
+
+test('an unknown tool outcome or a blocked source in a member ends the run; it is never "carry on"', async () => {
+  for (const code of ['TT_RECONCILIATION_REQUIRED', 'TT_SOURCE_BLOCKED']) {
+    const calls = [];
+    const ctx = harness(async agent => {
+      calls.push(agent);
+      if (agent === 'part') throw Object.assign(new Error('Recovery blocked: tool outcome needs explicit reconciliation'), { code });
+      return 'complete';
+    });
+    await ctx.runRoundtable({ objective: 'test', coordinator: 'coord', participants: ['part'], max_rounds: 2 }, ctx.res);
+    const st = [...ctx.activeTigerTeams.values()][0];
+    assert.equal(st.status, 'blocked', code);
+    assert.deepEqual(calls, ['coord', 'part'], 'nobody speaks after it');
+    assert.equal(ctx.res.events.some(e => e.gateway?.type === 'tt_dispatch_failed'), false);
+    assert.equal(ctx.ttMustStop(Object.assign(new Error('x'), { code }), null), true);
+  }
+  const ctx = harness();
+  assert.equal(ctx.ttMustStop(new Error('fetch failed'), null), false, 'an ordinary failure is reported and the team goes on');
+  assert.equal(ctx.ttMustStop(new Error('x'), { aborted: true }), true);
+  assert.equal(ctx.ttMustStop(Object.assign(new Error('x'), { code: 'TT_PERSISTENCE_FAILED' }), null), true);
 });
 
 test('stop is targeted and does not release running reservation prematurely', async () => {
