@@ -85,3 +85,7 @@ data/comms/
 
 # Machine-specific scripts stay on the machine they were written for
 scripts/local/
+
+# Side folder the in-app updater installs packages into before swapping them in (lib/git-sync.js)
+/.update-staging/
+/.update.lock

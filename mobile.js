@@ -2080,6 +2080,46 @@ function markUnread(agent) {
   updateDots();
 }
 
+// The buttons beside the message box act on the touch itself. A plain click handler needed two taps on
+// phones: the first tap moved focus off the textarea, the keyboard collapsed, the page re-laid out and the
+// button slid out from under the finger before the click fired. So:
+// - pointerdown preventDefault keeps the textarea focused (the keyboard stays) and pointerup acts;
+// - touchstart is cancelled too (the two taps came back on a phone on 2026-10-20 with only the above), which
+//   takes the browser's own tap handling (focus change, scroll start, the click) out of the way;
+// - so the browser no longer cancels a drag: a release more than a finger's width from where the button was
+//   at the press does nothing, as on a native button; and only the primary button counts (no right-click);
+// - click stays for the keyboard and screen readers (TalkBack), ignored within 700 ms of a press that acted.
+function onComposerTap(btn, act) {
+  let down = null, actedAt = 0;
+  btn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (e.button === 0 && e.isPrimary) down = { id: e.pointerId, r: btn.getBoundingClientRect() };   // a second finger changes nothing
+  });
+  btn.addEventListener('pointercancel', (e) => { if (down && e.pointerId === down.id) down = null; });
+  btn.addEventListener('pointerup', (e) => {
+    e.preventDefault();
+    const d = down;
+    if (!d || e.pointerId !== d.id) return;
+    down = null;
+    const slop = 16;
+    if (e.clientX < d.r.left - slop || e.clientX > d.r.right + slop || e.clientY < d.r.top - slop || e.clientY > d.r.bottom + slop) return;
+    actedAt = Date.now(); act();
+  });
+  btn.addEventListener('click', () => { if (Date.now() - actedAt < 700) return; act(); });
+}
+
+// A tap on Send sends, then the keyboard goes away (2026-10-21: the owner wants the box let go after a
+// send). The box keeps focus until sendMessage has taken its text, which happens before its first await,
+// and only lets go if the text or images really went: a tap with nothing to send keeps the keyboard up.
+function sendAndClose() {
+  const input = $('msg-input');
+  const hadText = !!input.value.trim();
+  const hadImages = pendingImages.length > 0;
+  sendMessage();
+  if ((hadText && !input.value.trim()) || (hadImages && !pendingImages.length)) input.blur();
+}
+
 // `fallback` is set when an interjection found the turn already over: the text and its user
 // bubble are reused instead of being read from the composer again.
 async function sendMessage(fallback) {
@@ -3299,21 +3339,10 @@ function wire() {
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
-  // Send on the touch itself. A plain click handler needed two taps on phones: the first tap moved
-  // focus off the textarea, the keyboard collapsed, the page re-laid out and the button slid out
-  // from under the finger before the click fired. preventDefault on pointerdown keeps the textarea
-  // focused (keyboard stays), pointerup sends, and the click that follows is ignored.
-  const sendBtn = $('send-btn');
-  let sentAt = 0;
-  sendBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
-  sendBtn.addEventListener('pointerup', (e) => { e.preventDefault(); sentAt = Date.now(); sendMessage(); });
-  sendBtn.addEventListener('click', () => { if (Date.now() - sentAt < 700) return; sendMessage(); });   // keyboard / assistive tech
-  // The 🔔 beside it the same way: a tap that took focus off the message box would move the button before it landed.
-  const bellBtn = $('chat-notify-btn');
-  let bellAt = 0;
-  bellBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
-  bellBtn.addEventListener('pointerup', (e) => { e.preventDefault(); bellAt = Date.now(); toggleNotifyDone(); });
-  bellBtn.addEventListener('click', () => { if (Date.now() - bellAt < 700) return; toggleNotifyDone(); });
+  // Send, and the 🔔 beside it, act on the touch itself (onComposerTap). Once a send has taken the text,
+  // sendAndClose lets go of the box so the keyboard goes away.
+  onComposerTap($('send-btn'), sendAndClose);
+  onComposerTap($('chat-notify-btn'), toggleNotifyDone);
 
   $('attach-btn').addEventListener('click', () => $('file-input').click());
   $('camera-btn').addEventListener('click', () => $('camera-input').click());
@@ -3392,6 +3421,26 @@ function toggleMenu(e) {
   const menu = $('menu');
   menu.classList.toggle('no-chat', !$('screen-chat').classList.contains('active'));
   menu.classList.toggle('open');
+  if (menu.classList.contains('open')) paintMenuCredit();
+}
+
+// Monthly API credit (set on the desktop, Settings → Spend): this period's spend through the hub against it.
+async function paintMenuCredit() {
+  const el = $('menu-credit');
+  if (!el) return;
+  if (!isAdmin()) { el.hidden = true; return; }
+  let list = [];
+  try { const r = await api('/api/ledger/today'); if (r.ok) list = (await r.json()).credits || []; } catch { /* keep it hidden */ }
+  el.hidden = !list.length;
+  if (!list.length) return;
+  const names = { anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google', openrouter: 'OpenRouter', perplexity: 'Perplexity' };
+  const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+  const cap = (n) => Number.isInteger(Number(n)) ? `$${Number(n)}` : usd(n);
+  const period = (c) => c.resetDay === 1 ? 'this month' : `since ${new Date(`${c.since}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+  el.textContent = list.map(c => `${names[c.provider] || c.provider} API credit: ${usd(c.spent)} of ${cap(c.monthlyUsd)} ${period(c)}${c.unpriced ? ` (+${c.unpriced} unpriced)` : ''}`).join('\n');
+  const worst = Math.max(...list.map(c => c.spent / c.monthlyUsd));
+  el.classList.toggle('hot', worst >= 0.9);
+  el.classList.toggle('warn', worst >= 0.75 && worst < 0.9);
 }
 
 async function signOut() {
