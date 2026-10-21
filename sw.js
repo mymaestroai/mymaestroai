@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = 'hub-mobile-v52';
+const VERSION = 'hub-mobile-v53';
 // Pre-cached at install (must all exist). '/mobile' is only cached once it answers 200 (it needs the server route).
 const SHELL = ['/mobile.html', '/mobile.js'];
 // Visual-block libraries (svg sanitizer, mermaid, Chart.js): lazy-loaded by the page on first use and

@@ -3308,9 +3308,14 @@ function wire() {
   sendBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
   sendBtn.addEventListener('pointerup', (e) => { e.preventDefault(); sentAt = Date.now(); sendMessage(); });
   sendBtn.addEventListener('click', () => { if (Date.now() - sentAt < 700) return; sendMessage(); });   // keyboard / assistive tech
+  // The two taps came back on a phone (2026-10-20) with all of the above in place. Cancelling the touch
+  // itself takes the browser's own tap handling (focus change, scroll start, the click) out of the way;
+  // the pointer events still arrive, so pointerup sends as before.
+  sendBtn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
   // The 🔔 beside it the same way: a tap that took focus off the message box would move the button before it landed.
   const bellBtn = $('chat-notify-btn');
   let bellAt = 0;
+  bellBtn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
   bellBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
   bellBtn.addEventListener('pointerup', (e) => { e.preventDefault(); bellAt = Date.now(); toggleNotifyDone(); });
   bellBtn.addEventListener('click', () => { if (Date.now() - bellAt < 700) return; toggleNotifyDone(); });

@@ -221,6 +221,8 @@
     #send-btn.stop { background: var(--error); }
     #send-btn.interject { background: var(--warning); color: #000; }
     #send-btn:disabled { opacity: .5; }
+    /* A touch on the buttons beside the message box is always a tap, never the start of a scroll. */
+    #send-btn, #composer .notify-chip { touch-action: none; }
     .qcustom button { min-height: 44px; padding: 0 14px; border-radius: 8px; background: var(--accent); color: #fff; }
 
     /* Activity */
