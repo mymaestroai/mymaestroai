@@ -2080,6 +2080,34 @@ function markUnread(agent) {
   updateDots();
 }
 
+// The buttons beside the message box act on the touch itself. A plain click handler needed two taps on
+// phones: the first tap moved focus off the textarea, the keyboard collapsed, the page re-laid out and the
+// button slid out from under the finger before the click fired. So:
+// - pointerdown preventDefault keeps the textarea focused (the keyboard stays) and pointerup acts;
+// - touchstart is cancelled too (the two taps came back on a phone on 2026-10-20 with only the above), which
+//   takes the browser's own tap handling (focus change, scroll start, the click) out of the way;
+// - so the browser no longer cancels a drag: a release more than a finger's width from where the button was
+//   at the press does nothing, as on a native button; and only the primary button counts (no right-click);
+// - click stays for the keyboard and screen readers (TalkBack), ignored within 700 ms of a press that acted.
+function onComposerTap(btn, act) {
+  let down = null, actedAt = 0;
+  btn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    down = e.button === 0 && e.isPrimary ? { id: e.pointerId, r: btn.getBoundingClientRect() } : null;
+  });
+  btn.addEventListener('pointercancel', () => { down = null; });
+  btn.addEventListener('pointerup', (e) => {
+    e.preventDefault();
+    const d = down; down = null;
+    if (!d || e.pointerId !== d.id) return;
+    const slop = 16;
+    if (e.clientX < d.r.left - slop || e.clientX > d.r.right + slop || e.clientY < d.r.top - slop || e.clientY > d.r.bottom + slop) return;
+    actedAt = Date.now(); act();
+  });
+  btn.addEventListener('click', () => { if (Date.now() - actedAt < 700) return; act(); });
+}
+
 // A tap on Send sends, then the keyboard goes away (2026-10-21: the owner wants the box let go after a
 // send). The box keeps focus until sendMessage has taken its text, which happens before its first await,
 // and only lets go if the text or images really went: a tap with nothing to send keeps the keyboard up.
@@ -3310,27 +3338,10 @@ function wire() {
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
-  // Send on the touch itself. A plain click handler needed two taps on phones: the first tap moved
-  // focus off the textarea, the keyboard collapsed, the page re-laid out and the button slid out
-  // from under the finger before the click fired. preventDefault on pointerdown keeps the textarea
-  // focused (keyboard stays), pointerup sends, and the click that follows is ignored. Once the send has
-  // taken the text, sendAndClose lets go of the box so the keyboard goes away.
-  const sendBtn = $('send-btn');
-  let sentAt = 0;
-  sendBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
-  sendBtn.addEventListener('pointerup', (e) => { e.preventDefault(); sentAt = Date.now(); sendAndClose(); });
-  sendBtn.addEventListener('click', () => { if (Date.now() - sentAt < 700) return; sendMessage(); });   // keyboard / assistive tech
-  // The two taps came back on a phone (2026-10-20) with all of the above in place. Cancelling the touch
-  // itself takes the browser's own tap handling (focus change, scroll start, the click) out of the way;
-  // the pointer events still arrive, so pointerup sends as before.
-  sendBtn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
-  // The 🔔 beside it the same way: a tap that took focus off the message box would move the button before it landed.
-  const bellBtn = $('chat-notify-btn');
-  let bellAt = 0;
-  bellBtn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
-  bellBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
-  bellBtn.addEventListener('pointerup', (e) => { e.preventDefault(); bellAt = Date.now(); toggleNotifyDone(); });
-  bellBtn.addEventListener('click', () => { if (Date.now() - bellAt < 700) return; toggleNotifyDone(); });
+  // Send, and the 🔔 beside it, act on the touch itself (onComposerTap). Once a send has taken the text,
+  // sendAndClose lets go of the box so the keyboard goes away.
+  onComposerTap($('send-btn'), sendAndClose);
+  onComposerTap($('chat-notify-btn'), toggleNotifyDone);
 
   $('attach-btn').addEventListener('click', () => $('file-input').click());
   $('camera-btn').addEventListener('click', () => $('camera-input').click());

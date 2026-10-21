@@ -62,7 +62,7 @@ test('mobile composer interjects into a running turn; Stop moves to the header; 
   assert.match(js, /stopBtn\.hidden = !working && !own/, 'header Stop also covers a stream this phone started');
   assert.ok(js.includes('function stopOwnTurn') && js.includes('function sendInterjection'));
   assert.ok(html.includes('#send-btn.interject') && html.includes('.note.interject'));
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v55'/);
   assert.ok(js.includes("addEventListener('controllerchange'"), 'a new build reloads the installed app once it takes control');
 });
 
@@ -74,9 +74,11 @@ test('desktop banner is dismissible and only shown on narrow screens', () => {
 
 test('send button sends on the touch itself (pointerdown preventDefault keeps the keyboard; pointerup sends; the trailing click is ignored)', () => {
   const js = read('mobile.js');
-  assert.match(js, /sendBtn\.addEventListener\('pointerdown', \(e\) => \{ e\.preventDefault\(\); \}\);/);
-  assert.match(js, /sendBtn\.addEventListener\('pointerup', \(e\) => \{ e\.preventDefault\(\); sentAt = Date\.now\(\); sendAndClose\(\); \}\);/);
-  assert.match(js, /sendBtn\.addEventListener\('click', \(\) => \{ if \(Date\.now\(\) - sentAt < 700\) return; sendMessage\(\); \}\);/);
+  const fn = js.slice(js.indexOf('function onComposerTap(btn, act)'), js.indexOf('function sendAndClose()'));
+  assert.ok(fn.includes("btn.addEventListener('pointerdown', (e) => {\n    e.preventDefault();"), 'pointerdown keeps the box focused');
+  assert.ok(fn.includes('actedAt = Date.now(); act();'), 'pointerup acts');
+  assert.ok(fn.includes("btn.addEventListener('click', () => { if (Date.now() - actedAt < 700) return; act(); });"), 'click is the keyboard / screen-reader path, ignored right after a press that acted');
+  assert.ok(js.includes("onComposerTap($('send-btn'), sendAndClose);"), 'Send uses it, keyboard and TalkBack activation included');
   assert.ok(!js.includes("$('send-btn').addEventListener('click', () => sendMessage());"), 'the old click-only binding is gone');
 });
 
@@ -92,7 +94,7 @@ test('mobile push: the phone re-registers when the hub no longer knows its subsc
 test('service worker: a forced (test) push shows its banner even when the app is open in front', () => {
   const sw = read('sw.js');
   assert.ok(sw.includes("if (!data.force && list.some(c => c.focused && c.visibilityState === 'visible')) return;"));
-  assert.match(sw, /const VERSION = 'hub-mobile-v54'/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v55'/);
 });
 
 test('ask_user dialogs: a click only highlights the choice and a Submit button sends it (desktop and phone)', () => {
@@ -102,7 +104,7 @@ test('ask_user dialogs: a click only highlights the choice and a Submit button s
   assert.ok(m.includes("else { b.classList.add('selected'); selected[i] = opt.label; }") && m.includes('<button class="qsubmit" disabled>Submit</button>'), 'phone selects then submits');
   assert.ok(app.includes('if (was) delete selected[qi];') && m.includes('if (was) delete selected[i];'), 'a second click on the highlighted option clears it');
   assert.ok(ih.includes('.question-option.selected {') && mh.includes('.question button.opt.selected {'), 'selected styles on both pages');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v55'/);
 });
 
 test('a pending ask_user question is re-shown from the hub event stream and on turn catch-up, on both pages (dedup by request id)', () => {
@@ -125,7 +127,7 @@ test('a pending ask_user question is re-shown from the hub event stream and on t
   assert.ok(m.includes("const pq = pendingQuestionsByAgent.get(rec.agent);") && !m.includes("const pq = pendingQuestionsByAgent.get(name);"), 'own-stream path looks up its own agent');
   assert.ok(m.includes("on('ask_user_done'") && m.includes("if (shownQuestions.has(request_id)) {"), 'phone closes and dedups');
   assert.ok(m.includes("if (old && !old.isConnected) { chatEl().appendChild(old); scrollChat(); }"), 'an unanswered question survives the chat being closed and reopened');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v55'/);
 });
 
 test('after a hub restart both pages reload themselves: hello carries the boot id, a changed id triggers a reload once nothing streams', () => {
@@ -139,7 +141,7 @@ test('after a hub restart both pages reload themselves: hello carries the boot i
   const app = read('app.js'), m = read('mobile.js');
   assert.ok(app.includes("ev.boot !== window.__hubBoot") && app.includes("Object.values(chats).some(c => c && c.controller)") && app.includes('location.reload()'), 'desktop reloads when idle');
   assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("if (streams.size) { setTimeout(go, 2000); return; }"), 'phone reloads when idle');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v55'/);
 });
 
 test('a pasted image with no words is a valid chat message (no HTTP 400)', () => {
@@ -159,13 +161,23 @@ test('phone: Update hub in the menu (admins only) asks the channel like the desk
   assert.ok(js.includes('setTimeout(() => { d.close(); restartHub(); }, 800);'), 'reuses the Restart button\'s wait-for-hub path');
 });
 
-test('send and notify buttons take the whole touch: touch-action none, touchstart cancelled, pointerup still sends', () => {
+test('send and notify buttons take the whole touch: touch-action none, touchstart cancelled, pointerup still acts', () => {
   const js = read('mobile.js');
   const html = read('mobile.html');
   assert.match(html, /#send-btn, #composer \.notify-chip \{ touch-action: none; \}/);
-  assert.match(js, /sendBtn\.addEventListener\('touchstart', \(e\) => \{ if \(e\.cancelable\) e\.preventDefault\(\); \}, \{ passive: false \}\);/);
-  assert.match(js, /bellBtn\.addEventListener\('touchstart', \(e\) => \{ if \(e\.cancelable\) e\.preventDefault\(\); \}, \{ passive: false \}\);/);
-  assert.match(js, /sendBtn\.addEventListener\('pointerup', \(e\) => \{ e\.preventDefault\(\); sentAt = Date\.now\(\); sendAndClose\(\); \}\);/);
+  const fn = js.slice(js.indexOf('function onComposerTap(btn, act)'), js.indexOf('function sendAndClose()'));
+  assert.ok(fn.includes("btn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });"));
+  assert.ok(js.includes("onComposerTap($('send-btn'), sendAndClose);") && js.includes("onComposerTap($('chat-notify-btn'), toggleNotifyDone);"), 'both buttons');
+});
+
+test('a press only acts as a tap: primary button, same pointer, released near where the button was; a cancel forgets it', () => {
+  const js = read('mobile.js');
+  const fn = js.slice(js.indexOf('function onComposerTap(btn, act)'), js.indexOf('function sendAndClose()'));
+  assert.ok(fn.includes('down = e.button === 0 && e.isPrimary ? { id: e.pointerId, r: btn.getBoundingClientRect() } : null;'), 'right-click and second fingers do nothing');
+  assert.ok(fn.includes("btn.addEventListener('pointercancel', () => { down = null; });"));
+  assert.ok(fn.includes('if (!d || e.pointerId !== d.id) return;'));
+  assert.match(fn, /if \(e\.clientX < d\.r\.left - slop \|\| e\.clientX > d\.r\.right \+ slop \|\| e\.clientY < d\.r\.top - slop \|\| e\.clientY > d\.r\.bottom \+ slop\) return;/, 'dragging off the button cancels');
+  assert.ok(fn.includes('slop) return;\n    actedAt = Date.now(); act();'), 'it acts only after the checks');
 });
 
 test('after a send the message box lets go so the keyboard closes; nothing to send keeps it up', () => {
