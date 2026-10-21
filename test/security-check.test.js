@@ -108,7 +108,7 @@ test('a clean install reports nothing critical and no warnings', async () => {
     sandboxStatus: async () => ({ docker: true, imageReady: true, containers: [] }),
     git: async () => ({ branch: 'main', dirty: [], tracked: [], historySecrets: [], fetchAgeDays: 2 }),
     hubStartedAt: () => new Date('2026-10-17T12:30:00Z'), codeNewestMtime: () => new Date('2026-10-17T12:00:00Z'),
-    nodeVersion: 'v22.23.2', publicAddress: () => null, pushEndpoints: () => ['fcm.googleapis.com'], lockfilePresent: () => true,
+    nodeVersion: 'v22.23.4', publicAddress: () => null, pushEndpoints: () => ['fcm.googleapis.com'], lockfilePresent: () => true,
     backupTimers: async () => ['hub-backup.timer'], otherAccounts: async () => 0, unitInfo: async () => ({ kind: 'systemd-system', unit: 'agent-hub.service', noNewPrivileges: true }),
   }).check();
   assert.strictEqual(r.critical, 0, JSON.stringify(r.items.filter(i => i.level === 'critical').map(i => i.id)));
@@ -192,4 +192,39 @@ test('wiring: routes, nightly schedule, Settings box, banner, docs, npm script',
   assert.ok(read('README.md').includes('## Security Check'));
   assert.ok(read('docs/HUB-MAP.md').includes('security-check.js'));
   assert.ok(JSON.parse(read('package.json')).scripts['security-check'] === 'node scripts/security-check.js');
+});
+
+// ── Node.js security releases (2026-10-21): the October releases, rated HIGH, make an older Node.js critical, and the
+// fix names the right command for this install (the installer's own Node.js, or the computer's). ──
+test('Node.js behind a HIGH-rated security release is critical, with the fix that fits the install', async () => {
+  assert.deepStrictEqual(sc.NODE_FLOORS, { 22: '22.23.4', 24: '24.22.1', 26: '26.12.1' });
+  assert.strictEqual(sc.NODE_SECURITY_RELEASE.rated, 'HIGH');
+  const r = await sc.createSecurityCheck({ ...BAD, nodeVersion: 'v22.23.3' }).check();
+  const n = byId(r, 'node');
+  assert.strictEqual(n.level, 'critical');
+  assert.match(n.title, /Node\.js v22\.23\.3 is missing security fixes rated HIGH \(fixed in 22\.23\.4\)/);
+  assert.match(n.fix || '', /^To fix it, /);
+  const ok = await sc.createSecurityCheck({ ...BAD, nodeVersion: 'v22.23.4' }).check();
+  assert.strictEqual(byId(ok, 'node').level, 'ok');
+});
+
+test('nodeSecurity: installer-managed or the computer\'s own Node.js, channel and folder in the command', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nodesec-'));
+  fs.mkdirSync(path.join(root, '.git'));
+  fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/dev\n');
+  const m = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/home/u/.mymaestroai/node/bin/node', home: '/home/u', env: {}, root, platform: 'linux' });
+  assert.strictEqual(m.behind, true);
+  assert.strictEqual(m.managed, true);
+  assert.match(m.how, /curl -fsSL https:\/\/mymaestroai\.ai\/install\.sh \| bash -s -- --yes --channel experimental --dir /);
+  const plain = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/opt/mm/node/bin/node', home: '/home/u', env: { MM_STATE_DIR: '/opt/mm' }, root: '/home/u/mymaestroai', platform: 'linux' });
+  assert.strictEqual(plain.managed, true, 'MM_STATE_DIR moves the installer\'s Node.js');
+  assert.doesNotMatch(plain.how, /--channel|--dir/, 'stable install in the default folder: the plain command');
+  const sys = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/usr/bin/node', home: '/home/u', env: {}, root, platform: 'linux' });
+  assert.strictEqual(sys.managed, false);
+  assert.match(sys.how, /sudo apt-get update && sudo apt-get install --only-upgrade nodejs/);
+  assert.match(sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/opt/homebrew/bin/node', home: '/Users/u', env: {}, root, platform: 'darwin' }).how, /brew upgrade node@22/);
+  assert.strictEqual(sc.nodeSecurity({ nodeVersion: 'v22.23.4', execPath: '/usr/bin/node', env: {}, root }).behind, false);
+  assert.strictEqual(sc.nodeSecurity({ nodeVersion: 'v24.22.0', execPath: '/usr/bin/node', env: {}, root }).behind, true);
+  assert.strictEqual(sc.nodeSecurity({ nodeVersion: 'v26.12.1', execPath: '/usr/bin/node', env: {}, root }).behind, false);
+  fs.rmSync(root, { recursive: true, force: true });
 });
