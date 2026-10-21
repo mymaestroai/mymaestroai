@@ -22,7 +22,7 @@ test('a dry run prints the plan and the exact downloads, and writes nothing at a
   fs.mkdirSync(env.HOME);
   const r = spawnSync('bash', [SH, '--dry-run', '--yes', '--no-open', '--dir', path.join(root, 'app'), '--repo', '/nonexistent/repo.git'], { env, encoding: 'utf8', timeout: 60000 });
   assert.strictEqual(r.status, 0, r.stderr + r.stdout);
-  assert.match(r.stdout, /would download https:\/\/nodejs\.org\/dist\/v22\.23\.3\/node-v22\.23\.3-(linux|darwin)-(x64|arm64)\.tar\.gz and check SHA-256 [0-9a-f]{64}/);
+  assert.match(r.stdout, /would download https:\/\/nodejs\.org\/dist\/v22\.23\.4\/node-v22\.23\.4-(linux|darwin)-(x64|arm64)\.tar\.gz and check SHA-256 [0-9a-f]{64}/);
   assert.match(r.stdout, /would run: git_cred clone --quiet --branch main \/nonexistent\/repo\.git /);
   assert.match(r.stdout, /Dry run finished: nothing was changed\./);
   assert.deepStrictEqual(fs.readdirSync(root).sort(), ['home'], 'no state folder, no bin, no app');
