@@ -6,6 +6,12 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.5.1] - 2026-10-21
+
+A security release. For a hub on 5.5.0, this is the only change.
+
+- **Security: Node.js 22.23.4.** Node.js issued security fixes on 2026-10-20 (the highest rated HIGH for the 22.x line), touching outgoing HTTP connections, DNS lookups, TLS checks of IP addresses and Brotli decompression. New installs now get Node.js 22.23.4 (its checksums taken from nodejs.org's signed list), and the automatic tests run on it. An install made with the one-line installer keeps its own Node.js until the installer runs again: running the same one-line command again updates that install in place to the newest version of its channel, replaces its Node.js and keeps your settings, agents and data (an install that follows experimental adds `bash -s -- --channel experimental`). A hub that runs on the computer's own Node.js gets the fix from the system's updates; restart the hub afterwards. Hubs no longer miss this quietly: once a hub has this update, a Node.js older than its line's last security release turns the security check red when Node rated that release HIGH or CRITICAL (the admin banner shows it, with the exact fix for that install), and Maestro raises it with you at the start of its next reply and offers to do the upgrade, which it does only once you agree.
+
 ## [5.5.0] - 2026-10-19
 
 Everything since 5.4.0 (2026-09-22). For a hub that was already on the previous stable (2026-10-18), only the first five entries below are new.
@@ -999,5 +1005,6 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.5.0...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.5.1...dev
+[5.5.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.5.1
 [5.5.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.5.0
