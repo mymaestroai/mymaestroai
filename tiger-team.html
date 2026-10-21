@@ -1241,10 +1241,19 @@
             if (d.legacy || d.error === 'Not found') streamSupported = false;   // a team from before live replay, or an old hub
             return false;
           }
+          if (resp.status === 401 || resp.status === 403) { addSystemMsg('Signed out: reload the page and sign in to follow the team again.'); return false; }
           if (!resp.ok) continue;
           streamSupported = true;
           if (attempt) addSystemMsg('↻ Reconnected to the team');
+          const before = lastSeq;
           try { await readSSE(resp); } catch { /* dropped again: loop */ }
+          if (isRunning && lastSeq === before) {
+            // A round that brought nothing new: ask how the team stands, so a finished team never leaves this page waiting.
+            try {
+              const st = await (await fetch('/api/tiger-team/status?id=' + encodeURIComponent(tigerTeamId))).json();
+              if (st && st.status && !['running', 'retrying', 'stopping'].includes(st.status)) handleEvent({ gateway: { type: 'tt_state', status: st.status, error: st.error || null } });
+            } catch { /* offline: the next round asks again */ }
+          }
         }
         return true;
       } finally { following = false; }

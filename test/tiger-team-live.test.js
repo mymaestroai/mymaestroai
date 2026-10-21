@@ -157,3 +157,14 @@ test('held events count bytes too, and a release waits for a full connection whi
   assert.deepEqual(data(slow.writes).map(e => e.n), [1, 2, 3, 4], 'then follows live');
   s.end();
 });
+
+test('held bytes are bytes on the wire (UTF-8), so non-Latin text cannot slip past the limit', () => {
+  const state = { id: 'team-6' };
+  const s = new live.TeamStream({ store: { append: (id, st) => ({ seq: (st.eventSeq = (st.eventSeq || 0) + 1) }) }, getState: () => state, heartbeatMs: 0 }).bind('team-6');
+  const p = page(); s.attach(p, { hold: true });
+  s.write(`data: {"t":"${'漢'.repeat(1000)}"}\n\n`);
+  const held = s.held.get(p);
+  assert.equal(held.bytes, Buffer.byteLength(held.frames[0].frame, 'utf8'));
+  assert.ok(held.bytes > 3000, 'three bytes per character, not one');
+  s.end();
+});
