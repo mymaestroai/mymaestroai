@@ -208,23 +208,33 @@ test('Node.js behind a HIGH-rated security release is critical, with the fix tha
   assert.strictEqual(byId(ok, 'node').level, 'ok');
 });
 
-test('nodeSecurity: installer-managed or the computer\'s own Node.js, channel and folder in the command', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nodesec-'));
-  fs.mkdirSync(path.join(root, '.git'));
-  fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/dev\n');
-  const m = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/home/u/.mymaestroai/node/bin/node', home: '/home/u', env: {}, root, platform: 'linux' });
+test('nodeSecurity: installer-managed or the computer\'s own Node.js, branch, quoted folder, prereleases', () => {
+  const m = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/home/u/.mymaestroai/node/bin/node', home: '/home/u', env: {}, root: "/home/u/My Hub's", platform: 'linux', branch: 'dev' });
   assert.strictEqual(m.behind, true);
   assert.strictEqual(m.managed, true);
-  assert.match(m.how, /curl -fsSL https:\/\/mymaestroai\.ai\/install\.sh \| bash -s -- --yes --channel experimental --dir /);
-  const plain = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/opt/mm/node/bin/node', home: '/home/u', env: { MM_STATE_DIR: '/opt/mm' }, root: '/home/u/mymaestroai', platform: 'linux' });
-  assert.strictEqual(plain.managed, true, 'MM_STATE_DIR moves the installer\'s Node.js');
-  assert.doesNotMatch(plain.how, /--channel|--dir/, 'stable install in the default folder: the plain command');
-  const sys = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/usr/bin/node', home: '/home/u', env: {}, root, platform: 'linux' });
+  assert.ok(m.how.endsWith(`curl -fsSL https://mymaestroai.ai/install.sh | bash -s -- --yes --channel experimental --dir '/home/u/My Hub'\\''s'`), m.how);
+  const stable = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/opt/mm/node/bin/node', home: '/home/u', env: { MM_STATE_DIR: '/opt/mm' }, root: '/home/u/mymaestroai', platform: 'linux', branch: 'main' });
+  assert.strictEqual(stable.managed, true, 'MM_STATE_DIR moves the installer\'s Node.js');
+  assert.ok(stable.how.endsWith("bash -s -- --yes --dir '/home/u/mymaestroai'"), stable.how);
+  for (const branch of ['feature-x', null]) {
+    const odd = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/home/u/.mymaestroai/node/bin/node', home: '/home/u', env: {}, root: '/home/u/mymaestroai', platform: 'linux', branch });
+    assert.doesNotMatch(odd.how, /curl/, 'the installer would move this checkout to stable');
+    assert.match(odd.how, /do not re-run it/);
+  }
+  const sys = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/usr/bin/node', home: '/home/u', env: {}, platform: 'linux', branch: 'main' });
   assert.strictEqual(sys.managed, false);
   assert.match(sys.how, /sudo apt-get update && sudo apt-get install --only-upgrade nodejs/);
-  assert.match(sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/opt/homebrew/bin/node', home: '/Users/u', env: {}, root, platform: 'darwin' }).how, /brew upgrade node@22/);
-  assert.strictEqual(sc.nodeSecurity({ nodeVersion: 'v22.23.4', execPath: '/usr/bin/node', env: {}, root }).behind, false);
-  assert.strictEqual(sc.nodeSecurity({ nodeVersion: 'v24.22.0', execPath: '/usr/bin/node', env: {}, root }).behind, true);
-  assert.strictEqual(sc.nodeSecurity({ nodeVersion: 'v26.12.1', execPath: '/usr/bin/node', env: {}, root }).behind, false);
-  fs.rmSync(root, { recursive: true, force: true });
+  assert.match(sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/opt/homebrew/bin/node', home: '/Users/u', env: {}, platform: 'darwin', branch: 'main' }).how, /brew upgrade node@22, or brew upgrade node; nvm: nvm install 22\.23\.4/);
+  const b = (v) => sc.nodeSecurity({ nodeVersion: v, execPath: '/usr/bin/node', env: {}, branch: 'main' }).behind;
+  assert.strictEqual(b('v22.23.4'), false);
+  assert.strictEqual(b('v22.23.4-rc.1'), true, 'a prerelease of the fix is not the fix');
+  assert.strictEqual(b('v22.24.0-rc.1'), false);
+  assert.strictEqual(b('v24.22.0'), true);
+  assert.strictEqual(b('v26.12.1'), false);
+});
+
+test('a Node.js line with no security floor (odd or end-of-life) is a warning, never ok', async () => {
+  const r = await sc.createSecurityCheck({ ...BAD, nodeVersion: 'v25.1.0' }).check();
+  assert.strictEqual(byId(r, 'node').level, 'warn');
+  assert.match(byId(r, 'node').title, /no security support here/);
 });

@@ -189,6 +189,11 @@ get_code() {
     confirm "  Update it to the newest $CHANNEL version? Your data stays as it is." || die "Stopped. Nothing was changed."
     [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no 2>/dev/null)" ] && die "$DIR has local code changes. Commit or stash them, or use the Update button in the hub."
     run git_cred -C "$DIR" fetch --quiet origin "$BRANCH" || die "Could not fetch updates."
+    # Never move a branch past commits of its own: checkout -B below would leave them behind.
+    if [ "$DRY" != 1 ] && [ "$(git -C "$DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" = "$BRANCH" ] \
+      && ! git -C "$DIR" merge-base --is-ancestor HEAD "origin/$BRANCH" 2>/dev/null; then
+      die "$DIR has commits of its own on $BRANCH that GitHub does not have, so the installer will not move it. Use the Update button in the hub instead."
+    fi
     run git -C "$DIR" checkout --quiet -B "$BRANCH" "origin/$BRANCH" || die "Could not switch to the $CHANNEL channel."
   elif [ -e "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then
     die "$DIR exists and is not empty. Choose another folder with --dir."
