@@ -75,7 +75,7 @@ test('mobile: one bottom sheet for every screen, badge on the Agents tab, servic
   assert.match(mobile, /ap\.classList\.toggle\('on', approvals\.size > 0\)/);
   assert.ok(mobile.includes('sheet.show()'), 'non-modal: the rest of the app stays usable');
   assert.ok(mobile.includes("api('/api/approvals'"), 'pending list fetched on poll / foreground');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v53'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
 });
 
 test('agent settings: tool policy section reads /api/policy/<agent> and PATCHes policy (empty = role defaults)', () => {

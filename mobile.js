@@ -2080,6 +2080,17 @@ function markUnread(agent) {
   updateDots();
 }
 
+// A tap on Send sends, then the keyboard goes away (2026-10-21: the owner wants the box let go after a
+// send). The box keeps focus until sendMessage has taken its text, which happens before its first await,
+// and only lets go if the text or images really went: a tap with nothing to send keeps the keyboard up.
+function sendAndClose() {
+  const input = $('msg-input');
+  const hadText = !!input.value.trim();
+  const hadImages = pendingImages.length > 0;
+  sendMessage();
+  if ((hadText && !input.value.trim()) || (hadImages && !pendingImages.length)) input.blur();
+}
+
 // `fallback` is set when an interjection found the turn already over: the text and its user
 // bubble are reused instead of being read from the composer again.
 async function sendMessage(fallback) {
@@ -3302,11 +3313,12 @@ function wire() {
   // Send on the touch itself. A plain click handler needed two taps on phones: the first tap moved
   // focus off the textarea, the keyboard collapsed, the page re-laid out and the button slid out
   // from under the finger before the click fired. preventDefault on pointerdown keeps the textarea
-  // focused (keyboard stays), pointerup sends, and the click that follows is ignored.
+  // focused (keyboard stays), pointerup sends, and the click that follows is ignored. Once the send has
+  // taken the text, sendAndClose lets go of the box so the keyboard goes away.
   const sendBtn = $('send-btn');
   let sentAt = 0;
   sendBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
-  sendBtn.addEventListener('pointerup', (e) => { e.preventDefault(); sentAt = Date.now(); sendMessage(); });
+  sendBtn.addEventListener('pointerup', (e) => { e.preventDefault(); sentAt = Date.now(); sendAndClose(); });
   sendBtn.addEventListener('click', () => { if (Date.now() - sentAt < 700) return; sendMessage(); });   // keyboard / assistive tech
   // The two taps came back on a phone (2026-10-20) with all of the above in place. Cancelling the touch
   // itself takes the browser's own tap handling (focus change, scroll start, the click) out of the way;

@@ -62,7 +62,7 @@ test('mobile composer interjects into a running turn; Stop moves to the header; 
   assert.match(js, /stopBtn\.hidden = !working && !own/, 'header Stop also covers a stream this phone started');
   assert.ok(js.includes('function stopOwnTurn') && js.includes('function sendInterjection'));
   assert.ok(html.includes('#send-btn.interject') && html.includes('.note.interject'));
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v53'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
   assert.ok(js.includes("addEventListener('controllerchange'"), 'a new build reloads the installed app once it takes control');
 });
 
@@ -75,7 +75,7 @@ test('desktop banner is dismissible and only shown on narrow screens', () => {
 test('send button sends on the touch itself (pointerdown preventDefault keeps the keyboard; pointerup sends; the trailing click is ignored)', () => {
   const js = read('mobile.js');
   assert.match(js, /sendBtn\.addEventListener\('pointerdown', \(e\) => \{ e\.preventDefault\(\); \}\);/);
-  assert.match(js, /sendBtn\.addEventListener\('pointerup', \(e\) => \{ e\.preventDefault\(\); sentAt = Date\.now\(\); sendMessage\(\); \}\);/);
+  assert.match(js, /sendBtn\.addEventListener\('pointerup', \(e\) => \{ e\.preventDefault\(\); sentAt = Date\.now\(\); sendAndClose\(\); \}\);/);
   assert.match(js, /sendBtn\.addEventListener\('click', \(\) => \{ if \(Date\.now\(\) - sentAt < 700\) return; sendMessage\(\); \}\);/);
   assert.ok(!js.includes("$('send-btn').addEventListener('click', () => sendMessage());"), 'the old click-only binding is gone');
 });
@@ -92,7 +92,7 @@ test('mobile push: the phone re-registers when the hub no longer knows its subsc
 test('service worker: a forced (test) push shows its banner even when the app is open in front', () => {
   const sw = read('sw.js');
   assert.ok(sw.includes("if (!data.force && list.some(c => c.focused && c.visibilityState === 'visible')) return;"));
-  assert.match(sw, /const VERSION = 'hub-mobile-v53'/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v54'/);
 });
 
 test('ask_user dialogs: a click only highlights the choice and a Submit button sends it (desktop and phone)', () => {
@@ -102,7 +102,7 @@ test('ask_user dialogs: a click only highlights the choice and a Submit button s
   assert.ok(m.includes("else { b.classList.add('selected'); selected[i] = opt.label; }") && m.includes('<button class="qsubmit" disabled>Submit</button>'), 'phone selects then submits');
   assert.ok(app.includes('if (was) delete selected[qi];') && m.includes('if (was) delete selected[i];'), 'a second click on the highlighted option clears it');
   assert.ok(ih.includes('.question-option.selected {') && mh.includes('.question button.opt.selected {'), 'selected styles on both pages');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v53'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
 });
 
 test('a pending ask_user question is re-shown from the hub event stream and on turn catch-up, on both pages (dedup by request id)', () => {
@@ -125,7 +125,7 @@ test('a pending ask_user question is re-shown from the hub event stream and on t
   assert.ok(m.includes("const pq = pendingQuestionsByAgent.get(rec.agent);") && !m.includes("const pq = pendingQuestionsByAgent.get(name);"), 'own-stream path looks up its own agent');
   assert.ok(m.includes("on('ask_user_done'") && m.includes("if (shownQuestions.has(request_id)) {"), 'phone closes and dedups');
   assert.ok(m.includes("if (old && !old.isConnected) { chatEl().appendChild(old); scrollChat(); }"), 'an unanswered question survives the chat being closed and reopened');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v53'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
 });
 
 test('after a hub restart both pages reload themselves: hello carries the boot id, a changed id triggers a reload once nothing streams', () => {
@@ -139,7 +139,7 @@ test('after a hub restart both pages reload themselves: hello carries the boot i
   const app = read('app.js'), m = read('mobile.js');
   assert.ok(app.includes("ev.boot !== window.__hubBoot") && app.includes("Object.values(chats).some(c => c && c.controller)") && app.includes('location.reload()'), 'desktop reloads when idle');
   assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("if (streams.size) { setTimeout(go, 2000); return; }"), 'phone reloads when idle');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v53'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
 });
 
 test('a pasted image with no words is a valid chat message (no HTTP 400)', () => {
@@ -165,5 +165,14 @@ test('send and notify buttons take the whole touch: touch-action none, touchstar
   assert.match(html, /#send-btn, #composer \.notify-chip \{ touch-action: none; \}/);
   assert.match(js, /sendBtn\.addEventListener\('touchstart', \(e\) => \{ if \(e\.cancelable\) e\.preventDefault\(\); \}, \{ passive: false \}\);/);
   assert.match(js, /bellBtn\.addEventListener\('touchstart', \(e\) => \{ if \(e\.cancelable\) e\.preventDefault\(\); \}, \{ passive: false \}\);/);
-  assert.match(js, /sendBtn\.addEventListener\('pointerup', \(e\) => \{ e\.preventDefault\(\); sentAt = Date\.now\(\); sendMessage\(\); \}\);/);
+  assert.match(js, /sendBtn\.addEventListener\('pointerup', \(e\) => \{ e\.preventDefault\(\); sentAt = Date\.now\(\); sendAndClose\(\); \}\);/);
+});
+
+test('after a send the message box lets go so the keyboard closes; nothing to send keeps it up', () => {
+  const js = read('mobile.js');
+  const fn = js.slice(js.indexOf('function sendAndClose()'), js.indexOf('async function sendMessage('));
+  assert.ok(fn.includes('sendMessage();'), 'it sends first');
+  assert.match(fn, /if \(\(hadText && !input\.value\.trim\(\)\) \|\| \(hadImages && !pendingImages\.length\)\) input\.blur\(\);/);
+  assert.ok(fn.indexOf('sendMessage();') < fn.indexOf('input.blur()'), 'the box lets go only after the send has taken the text');
+  assert.ok(!js.includes('tapLog') && !js.includes('menu-tapreport'), 'the temporary tap recorder is gone');
 });

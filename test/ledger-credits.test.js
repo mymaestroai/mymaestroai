@@ -93,7 +93,7 @@ test('phone: the ⋮ menu shows the credit to admins when one is set', () => {
   assert.match(html, /<div id="menu">\n\s+<div id="menu-credit" hidden><\/div>/);
   assert.match(js, /if \(menu\.classList\.contains\('open'\)\) paintMenuCredit\(\);/);
   assert.match(js, /async function paintMenuCredit\(\) \{[\s\S]*?if \(!isAdmin\(\)\) \{ el\.hidden = true; return; \}[\s\S]*?api\('\/api\/ledger\/today'\)/);
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v53'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v54'/);
 });
 
 test('no ledger: no credit figures, rather than a reassuring $0', () => {
