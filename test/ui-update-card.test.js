@@ -62,6 +62,9 @@ test('review fixes: Later names its version, busy agents are confirmed at the cl
   assert.match(mobile, /<button id="upd-force">Discard changes &amp; update<\/button>/);
   assert.match(mobile, /if \(confirm\(`Discard \$\{s\.dirty\.length\}[\s\S]*?runUpdateFromPhone\(null, true\)/);
   assert.match(mobile, /force \? '\/api\/git-sync\/force-update' : '\/api\/git-sync\/update'/);
+  assert.match(mobile, /if \(\$\('upd-force'\)\) \$\('upd-force'\)\.disabled = !!other;/, 'phone: no discard while another channel is chosen');
+  assert.match(mobile, /'click', \(\) => \{ if \(chosen\(\)\) return;/);
+  assert.match(app, /const force = document\.getElementById\('gs-force'\); if \(force\) force\.disabled = !!c;/, 'desktop: the same');
   const now = app.slice(app.indexOf('async function updateNow()'), app.indexOf('// Settings → Status → Updates.'));
   assert.ok(now.indexOf('busyAgentNames()') < now.indexOf("/api/git-sync/update"), 'desktop asks before updating');
   assert.match(now, /if \(refused\)/);

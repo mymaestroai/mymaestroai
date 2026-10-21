@@ -2762,13 +2762,15 @@ async function openUpdateSheet() {
   const stayLabel = s.canUpdate ? 'Update & restart' : (s.upToDate ? 'Up to date' : 'Blocked');
   const force = s.canForce ? `<p><small>The changed files are application files, not your data: they can be discarded.</small></p>` : '';
   d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${s.canForce ? '<button id="upd-force">Discard changes &amp; update</button>' : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
-  if (s.canForce) $('upd-force').addEventListener('click', () => { if (confirm(`Discard ${s.dirty.length} changed application file${s.dirty.length === 1 ? '' : 's'} and update? Your chats, agents and data are not touched.`)) runUpdateFromPhone(null, true); });
+  // Discarding updates the current channel only, so it is off while another channel is chosen.
+  if (s.canForce) $('upd-force').addEventListener('click', () => { if (chosen()) return; if (confirm(`Discard ${s.dirty.length} changed application file${s.dirty.length === 1 ? '' : 's'} and update ${s.branch}? Your chats, agents and data are not touched.`)) runUpdateFromPhone(null, true); });
   const go = $('upd-go');
   const chosen = () => { const sel = d.querySelector('input[name="upd-channel"]:checked'); return sel && sel.value !== ch.current ? sel.value : null; };
   const refresh = () => {
     const other = chosen() ? ch.channels.find(c => c.id === chosen()) : null;
     if (other) { go.disabled = false; go.textContent = `Switch to ${other.label} & restart`; }
     else { go.disabled = !s.canUpdate; go.textContent = stayLabel; }
+    if ($('upd-force')) $('upd-force').disabled = !!other;
   };
   for (const r of d.querySelectorAll('input[name="upd-channel"]')) r.addEventListener('change', refresh);
   $('upd-close').addEventListener('click', () => d.close());

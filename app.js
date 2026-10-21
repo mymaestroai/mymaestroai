@@ -1389,6 +1389,8 @@
       const c = other && gsStatus && gsStatus.channels ? gsStatus.channels.channels.find(x => x.id === other) : null;
       if (c) { go.disabled = false; go.innerHTML = `Switch to ${esc(c.label)} &amp; Restart`; }
       else { go.disabled = !(gsStatus && gsStatus.canUpdate); go.innerHTML = gsStatus && gsStatus.canUpdate ? 'Update &amp; Restart' : 'Up to date'; }
+      // Discarding updates the current channel only, so it is off while another channel is chosen.
+      const force = document.getElementById('gs-force'); if (force) force.disabled = !!c;
     }
 
     async function runGitSync(force) {
