@@ -2760,7 +2760,9 @@ async function openUpdateSheet() {
   const blockers = s.blockers && s.blockers.length ? `<p class="upd-err">Update blocked: ${esc(s.blockers.join('; '))}</p>` : '';
   const incoming = s.commits && s.commits.length ? `<details><summary>${s.commits.length} incoming commit${s.commits.length === 1 ? '' : 's'}</summary>${s.commits.map(c => `<div>${esc(c)}</div>`).join('')}</details>` : '';
   const stayLabel = s.canUpdate ? 'Update & restart' : (s.upToDate ? 'Up to date' : 'Blocked');
-  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${incoming}<div class="btns"><button id="upd-close">Cancel</button><button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
+  const force = s.canForce ? `<p><small>The changed files are application files, not your data: they can be discarded.</small></p>` : '';
+  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${s.canForce ? '<button id="upd-force">Discard changes &amp; update</button>' : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
+  if (s.canForce) $('upd-force').addEventListener('click', () => { if (confirm(`Discard ${s.dirty.length} changed application file${s.dirty.length === 1 ? '' : 's'} and update? Your chats, agents and data are not touched.`)) runUpdateFromPhone(null, true); });
   const go = $('upd-go');
   const chosen = () => { const sel = d.querySelector('input[name="upd-channel"]:checked'); return sel && sel.value !== ch.current ? sel.value : null; };
   const refresh = () => {
@@ -2773,13 +2775,13 @@ async function openUpdateSheet() {
   go.addEventListener('click', () => runUpdateFromPhone(chosen()));
 }
 
-async function runUpdateFromPhone(channel) {
+async function runUpdateFromPhone(channel, force = false) {
   const d = $('update-sheet');
   const go = $('upd-go');
   if (go) { go.disabled = true; go.textContent = channel ? 'Switching…' : 'Updating…'; }
   let r;
   try {
-    const resp = await api('/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel ? { channel } : {}) });
+    const resp = await api(force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !force ? { channel } : {}) });
     r = await resp.json();
   } catch (e) { r = { success: false, error: e.message }; }
   if (!r || !r.success) {
@@ -2819,6 +2821,7 @@ function paintUpdateCard() {
   if (!card) return;
   if (!avail || s.snoozed) { card.hidden = true; card.innerHTML = ''; return; }
   card.classList.toggle('sec', !!s.security);
+  card.dataset.remote = s.remote || '';   // Later names the version this card shows
   card.innerHTML = `${ucBody(s)}<div class="uc-actions">${s.blocked
     ? '<button class="uc-btn" data-uc="later">Later</button><button class="uc-btn uc-primary" data-uc="details">Details</button>'
     : '<button class="uc-btn" data-uc="details">Details</button><button class="uc-btn" data-uc="later">Later</button><button class="uc-btn uc-primary" data-uc="now">Update now</button>'}</div>`;
@@ -2830,17 +2833,18 @@ async function openUpdatePrompt() {
   if (!s || !s.available) { openUpdateSheet(); return; }
   const d = $('update-sheet');
   d.dataset.uc = '1';
+  d.dataset.remote = s.remote || '';
   d.innerHTML = `${ucBody(s)}<div class="btns">${s.blocked
     ? '<button data-uc="later">Later</button><button class="go accent" data-uc="details">Details</button>'
     : '<button data-uc="later">Later</button><button class="go accent" id="upd-go" data-uc="now">Update now</button>'}</div>`;
   if (!d.open) d.showModal();
 }
-async function updateLater() {
+async function updateLater(shown) {
   const d = $('update-sheet');
   if (d.open && d.dataset.uc === '1') d.close();
   if ($('update-card')) $('update-card').hidden = true;
   // Later names the version on the card: a newer one found meanwhile still shows.
-  try { const r = await api('/api/update-check/later', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote: (ucState && ucState.remote) || null }) }); if (r.ok) ucState = await r.json(); } catch { /* back on the next look */ }
+  try { const r = await api('/api/update-check/later', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote: shown || (ucState && ucState.remote) || null }) }); if (r.ok) ucState = await r.json(); } catch { /* back on the next look */ }
   paintUpdateCard();
 }
 function updateNowFromPhone() {
@@ -2856,7 +2860,7 @@ function updateNowFromPhone() {
 function onUpdateChoice(e) {
   const b = e.target.closest('[data-uc]');
   if (!b) return;
-  if (b.dataset.uc === 'later') updateLater();
+  if (b.dataset.uc === 'later') updateLater((b.closest('#update-sheet, #update-card') || {}).dataset?.remote || '');
   else if (b.dataset.uc === 'now') updateNowFromPhone();
   else if (b.dataset.uc === 'details') { const d = $('update-sheet'); d.dataset.uc = ''; openUpdateSheet(); }
 }

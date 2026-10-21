@@ -54,8 +54,14 @@ test('phone: a card on the agent list, a note on the menu, and the notification 
 });
 
 test('review fixes: Later names its version, busy agents are confirmed at the click, a refused restart is reported', () => {
-  assert.match(app, /body: JSON\.stringify\(\{ remote: \(ucLast && ucLast\.remote\) \|\| null \}\)/);
-  assert.match(mobile, /body: JSON\.stringify\(\{ remote: \(ucState && ucState\.remote\) \|\| null \}\)/);
+  assert.match(app, /card\.dataset\.remote = s\.remote \|\| ''/);
+  assert.match(app, /remote: shown \|\| \(ucLast && ucLast\.remote\) \|\| null/);
+  assert.match(mobile, /card\.dataset\.remote = s\.remote \|\| ''/);
+  assert.match(mobile, /d\.dataset\.remote = s\.remote \|\| ''/);
+  assert.match(mobile, /updateLater\(\(b\.closest\('#update-sheet, #update-card'\) \|\| \{\}\)\.dataset\?\.remote \|\| ''\)/);
+  assert.match(mobile, /<button id="upd-force">Discard changes &amp; update<\/button>/);
+  assert.match(mobile, /if \(confirm\(`Discard \$\{s\.dirty\.length\}[\s\S]*?runUpdateFromPhone\(null, true\)/);
+  assert.match(mobile, /force \? '\/api\/git-sync\/force-update' : '\/api\/git-sync\/update'/);
   const now = app.slice(app.indexOf('async function updateNow()'), app.indexOf('// Settings → Status → Updates.'));
   assert.ok(now.indexOf('busyAgentNames()') < now.indexOf("/api/git-sync/update"), 'desktop asks before updating');
   assert.match(now, /if \(refused\)/);

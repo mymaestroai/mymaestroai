@@ -2070,6 +2070,7 @@
       let card = document.getElementById('hub-update-card');
       if (!card) { card = document.createElement('div'); card.id = 'hub-update-card'; card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', 'Update available'); document.body.appendChild(card); }
       card.classList.toggle('sec', !!s.security);
+      card.dataset.remote = s.remote || '';   // Later names the version this card shows
       const busy = busyAgentNames();
       const notes = (s.titles || []).map(t => `<li>${esc(t)}</li>`).join('') + (s.more ? `<li class="uc-more">and ${s.more} more</li>` : '');
       const have = s.latestVersion && s.latestVersion !== s.currentVersion && s.currentVersion ? `You have ${esc(s.currentVersion)}.` : `You're on ${esc(s.channel || s.branch || 'this channel')}.`;
@@ -2085,9 +2086,10 @@
           : `<a href="#" class="uc-details" onclick="openGitSync(); return false">Details…</a><button class="uc-btn" id="uc-later" onclick="updateLater()">Later</button><button class="uc-btn uc-primary" id="uc-now" onclick="updateNow()">Update now</button>`}</div>`;
     }
     async function updateLater() {
+      const shown = document.getElementById('hub-update-card')?.dataset.remote || '';
       document.getElementById('hub-update-card')?.remove();
       // Later names the version on the card: a newer one found meanwhile still shows.
-      try { const r = await fetch('/api/update-check/later', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote: (ucLast && ucLast.remote) || null }) }); if (r.ok) ucLast = await r.json(); } catch { /* the card comes back on the next look */ }
+      try { const r = await fetch('/api/update-check/later', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote: shown || (ucLast && ucLast.remote) || null }) }); if (r.ok) ucLast = await r.json(); } catch { /* the card comes back on the next look */ }
     }
     async function updateNow() {
       const now = document.getElementById('uc-now'), later = document.getElementById('uc-later'), msg = document.getElementById('uc-msg');

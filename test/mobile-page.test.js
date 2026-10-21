@@ -156,7 +156,7 @@ test('phone: Update hub in the menu (admins only) asks the channel like the desk
   assert.ok(js.includes('async function openUpdateSheet()') && js.includes("$('menu-update').addEventListener('click', openUpdateSheet);"));
   assert.ok(js.includes("const r = await api('/api/git-sync/status');"), 'reads the same status as the desktop dialog');
   assert.ok(js.includes(`name="upd-channel"`) && js.includes('Switch to ${other.label} & restart'), 'channel radios with the switch label');
-  assert.ok(js.includes("await api('/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel ? { channel } : {}) });"));
+  assert.ok(js.includes("await api(force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !force ? { channel } : {}) });"), 'the update, or with confirmation the discard-and-update');
   assert.ok(js.includes("if (hubMe && !hubMe.isAdmin) { $('menu-restart').hidden = true; $('menu-update').hidden = true; }"), 'members see neither Update nor Restart');
   assert.ok(js.includes('setTimeout(() => { d.close(); restartHub(); }, 800);'), 'reuses the Restart button\'s wait-for-hub path');
 });

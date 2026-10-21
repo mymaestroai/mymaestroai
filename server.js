@@ -2137,7 +2137,9 @@ async function handleHttpRequest(req, res) {
     }
     if (pathname === '/api/update-check/later' && req.method === 'POST') {
       let body = {}; try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
-      const remote = body && typeof body.remote === 'string' && /^[0-9a-f]{40,64}$/.test(body.remote) ? body.remote : null;
+      // Later names the version the card showed; without it a newer version found meanwhile could be hidden unseen.
+      const remote = body && typeof body.remote === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(body.remote) ? body.remote : null;
+      if (!remote) return jsonResponse(res, 400, { error: 'remote (the commit the card shows) is required' });
       try { return jsonResponse(res, 200, await require('./lib/update-check').getUpdateCheck().later(req.hubUser, remote)); }
       catch (e) { return jsonResponse(res, 500, { error: e.message }); }
     }

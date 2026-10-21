@@ -168,14 +168,15 @@ test('status: available with the headline and notes; Later hides it for that adm
   assert.strictEqual(s.headline, 'My Maestro AI 1.1.0 is ready');
   assert.deepStrictEqual(s.titles, ['A', 'B', 'C']);
   assert.strictEqual(s.snoozed, false);
-  s = await uc.later(admin);
+  assert.strictEqual((await uc.later(admin)).snoozed, false, 'Later must name the version it hides');
+  s = await uc.later(admin, 'r1');
   assert.strictEqual(s.snoozed, true);
   assert.strictEqual((await uc.status(admin2)).snoozed, false, 'another admin still sees it');
   tick(LATER_MS - 1000);
   assert.strictEqual((await uc.status(admin)).snoozed, true);
   tick(2000);
   assert.strictEqual((await uc.status(admin)).snoozed, false, 'back after a day');
-  await uc.later(admin);
+  await uc.later(admin, 'r1');
   h.result = { ...h.result, remote: 'r2', latestVersion: '1.2.0' };
   await uc.check();
   assert.strictEqual((await uc.status(admin)).snoozed, false, 'a newer version shows at once');
