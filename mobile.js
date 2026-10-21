@@ -2094,13 +2094,14 @@ function onComposerTap(btn, act) {
   btn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
   btn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    down = e.button === 0 && e.isPrimary ? { id: e.pointerId, r: btn.getBoundingClientRect() } : null;
+    if (e.button === 0 && e.isPrimary) down = { id: e.pointerId, r: btn.getBoundingClientRect() };   // a second finger changes nothing
   });
-  btn.addEventListener('pointercancel', () => { down = null; });
+  btn.addEventListener('pointercancel', (e) => { if (down && e.pointerId === down.id) down = null; });
   btn.addEventListener('pointerup', (e) => {
     e.preventDefault();
-    const d = down; down = null;
+    const d = down;
     if (!d || e.pointerId !== d.id) return;
+    down = null;
     const slop = 16;
     if (e.clientX < d.r.left - slop || e.clientX > d.r.right + slop || e.clientY < d.r.top - slop || e.clientY > d.r.bottom + slop) return;
     actedAt = Date.now(); act();

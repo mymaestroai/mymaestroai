@@ -173,9 +173,9 @@ test('send and notify buttons take the whole touch: touch-action none, touchstar
 test('a press only acts as a tap: primary button, same pointer, released near where the button was; a cancel forgets it', () => {
   const js = read('mobile.js');
   const fn = js.slice(js.indexOf('function onComposerTap(btn, act)'), js.indexOf('function sendAndClose()'));
-  assert.ok(fn.includes('down = e.button === 0 && e.isPrimary ? { id: e.pointerId, r: btn.getBoundingClientRect() } : null;'), 'right-click and second fingers do nothing');
-  assert.ok(fn.includes("btn.addEventListener('pointercancel', () => { down = null; });"));
-  assert.ok(fn.includes('if (!d || e.pointerId !== d.id) return;'));
+  assert.ok(fn.includes('if (e.button === 0 && e.isPrimary) down = { id: e.pointerId, r: btn.getBoundingClientRect() };'), 'right-click and second fingers do nothing, and do not cancel the first finger');
+  assert.ok(fn.includes("btn.addEventListener('pointercancel', (e) => { if (down && e.pointerId === down.id) down = null; });"), 'only the pressing pointer can cancel');
+  assert.ok(fn.includes('if (!d || e.pointerId !== d.id) return;\n    down = null;'), 'another pointer lifting leaves the press alone');
   assert.match(fn, /if \(e\.clientX < d\.r\.left - slop \|\| e\.clientX > d\.r\.right \+ slop \|\| e\.clientY < d\.r\.top - slop \|\| e\.clientY > d\.r\.bottom \+ slop\) return;/, 'dragging off the button cancels');
   assert.ok(fn.includes('slop) return;\n    actedAt = Date.now(); act();'), 'it acts only after the checks');
 });

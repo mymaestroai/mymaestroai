@@ -80,8 +80,9 @@ test('noteEvent: the client\'s utilization is a fraction (0.76 = 76%); it is sto
   assert.strictEqual(pu.snapshot().windows.five_hour.utilization, 2.3, 'one decimal kept');
   pu.noteEvent({ status: 'allowed', rateLimitType: 'seven_day', utilization: 1 }, 'claude-opus-5-5', 'maestro');
   assert.strictEqual(pu.snapshot().windows.seven_day.utilization, 100, '1.0 is a full window');
-  pu.noteEvent({ status: 'allowed', rateLimitType: 'seven_day', utilization: 'n/a' }, 'claude-opus-5-5', 'maestro');
-  assert.strictEqual(pu.snapshot().windows.seven_day.utilization, 100, 'a non-number changes nothing');
+  for (const bad of ['n/a', '', ' ', true, false, -0.2, NaN, Infinity, '0.5'])
+    pu.noteEvent({ status: 'allowed', rateLimitType: 'seven_day', utilization: bad }, 'claude-opus-5-5', 'maestro');
+  assert.strictEqual(pu.snapshot().windows.seven_day.utilization, 100, 'booleans, strings, negatives and non-finite values change nothing');
 });
 
 test('refresh: reads the client\'s usage answer (per-model "Fable" bucket, classic windows, extra usage); announce broadcasts once per agent and window', async () => {
