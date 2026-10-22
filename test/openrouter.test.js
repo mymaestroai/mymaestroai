@@ -139,13 +139,17 @@ test('the Welcome page: OpenRouter is a fourth way in; the key is proved for fre
   const saved = {};
   const settings = { get: () => ({}), updateSettings: (p) => Object.assign(saved, p), hasAnyApiKey: () => false, getProviderKey: () => '' };
   const { or } = mk({ keys: { anthropic: 'k', openai: 'k', google: 'k' } });
-  const w = createWelcome({ dataDir: dir, env: {}, settings, claudeAuth: { hasSdkCredentials: () => false }, openrouter: { ...or, checkKey: async () => ({ ok: true, remaining: 10 }) } });
+  // runDiscovery: a stand-in. The real one refreshed the hub's own data/discovered-models.json from inside the test,
+  // with only the keys in settings.json, and emptied the OpenAI, Google and Perplexity models of the hub running here.
+  let refreshed = 0;
+  const w = createWelcome({ dataDir: dir, env: {}, settings, claudeAuth: { hasSdkCredentials: () => false }, openrouter: { ...or, checkKey: async () => ({ ok: true, remaining: 10 }) }, runDiscovery: () => { refreshed++; } });
   const r = await w.connectApiKey('openrouter', 'test-openrouter-key-not-real');
   assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(refreshed, 1, 'the model pickers are refreshed after a new OpenRouter key');
   assert.strictEqual(r.suggested, 'openrouter/anthropic/claude-sonnet-5.5');
   assert.ok(r.models.includes('openrouter/x-ai/grok-4.7'));
   assert.strictEqual(saved.providers.openrouter.apiKey, 'test-openrouter-key-not-real', 'saved only after the check');
-  const w2 = createWelcome({ dataDir: dir, env: {}, settings, claudeAuth: { hasSdkCredentials: () => false }, openrouter: { ...or, checkKey: async () => ({ ok: false, status: 401, error: 'OpenRouter refused this key. Check that you copied all of it and that it is not disabled.' }) } });
+  const w2 = createWelcome({ dataDir: dir, env: {}, settings, claudeAuth: { hasSdkCredentials: () => false }, runDiscovery: () => { refreshed++; }, openrouter: { ...or, checkKey: async () => ({ ok: false, status: 401, error: 'OpenRouter refused this key. Check that you copied all of it and that it is not disabled.' }) } });
   const bad = await w2.connectApiKey('openrouter', 'sk-or-v1-wrongwrongwrong');
   assert.strictEqual(bad.ok, false); assert.match(bad.error, /refused this key/);
   assert.ok(read('welcome.html').includes('<option value="openrouter">OpenRouter (many vendors, one key)</option>'));

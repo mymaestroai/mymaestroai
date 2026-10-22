@@ -4710,10 +4710,26 @@
       setTimeout(() => { __modelListCache = null; }, 5 * 60000);
       return __modelListCache;
     }
-    async function fillModelPick(chatId) {
-      const chat = chats[chatId]; const sel = document.getElementById(`model-pick-${chatId}`);
-      if (!chat || !sel || sel.dataset.filled) return;
-      sel.dataset.filled = '1';
+    // The picker holds only the current model until its list is filled. A native list that opened before that showed
+    // one line, then jumped and was cut off when the list arrived while it was open (2026-10-21). So the list is filled
+    // when the chat opens, and a click that still comes first is held until the list is there, then the list opens.
+    const modelPickFilling = {};   // chatId -> the fill in progress
+    function modelPickDown(ev, chatId) {
+      const sel = document.getElementById(`model-pick-${chatId}`);
+      if (!sel || sel.dataset.filled === 'done') return true;
+      ev.preventDefault();
+      fillModelPick(chatId).then(() => { sel.focus(); try { if (sel.showPicker) sel.showPicker(); } catch { /* the next click opens it */ } });
+      return false;
+    }
+    function fillModelPick(chatId) {
+      const sel = document.getElementById(`model-pick-${chatId}`);
+      if (!chats[chatId] || !sel || sel.dataset.filled === 'done') return Promise.resolve();
+      if (!modelPickFilling[chatId]) modelPickFilling[chatId] = fillModelPickNow(chatId, sel).finally(() => { delete modelPickFilling[chatId]; });
+      return modelPickFilling[chatId];
+    }
+    async function fillModelPickNow(chatId, sel) {
+      const chat = chats[chatId];
+      sel.dataset.filled = 'pending';
       try {
         const { models, billing, health } = await modelList();
         const cur = String(chat.model || '');
@@ -4727,6 +4743,7 @@
             + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
         }
         if (html) { sel.innerHTML = html; sel.value = cur; }
+        sel.dataset.filled = 'done';
       } catch (e) { delete sel.dataset.filled; console.warn('[model-pick] list failed:', e.message); }
     }
     async function changeChatModel(chatId, model, opts = {}) {
@@ -6045,7 +6062,7 @@
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
 
-          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" title="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="fillModelPick('${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
+          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" title="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="return modelPickDown(event, '${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
@@ -6061,6 +6078,8 @@
         </div>
       `;
       panels.appendChild(panel);
+      // Fill the model picker now, so its list is complete before the first click (modelPickDown).
+      setTimeout(() => fillModelPick(chatId), 0);
       
       // Initialize pending images array for this chat
       chats[chatId].pendingImages = [];
