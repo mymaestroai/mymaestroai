@@ -174,14 +174,22 @@ test('job runner: run() refuses while halted, cancelAll stops only running jobs'
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-halt-jobs-'));
   let refusal = null;
   const runner = new JobRunner({ dataDir, spawnMode: 'setsid', pollMs: 100, log: () => {}, notify: async () => {}, isAgentActive: () => false, agentExists: async () => true, defaultCwd: async () => dataDir, haltRefusal: () => refusal });
+  const waitFor = async (cond, ms = 10000) => { const end = Date.now() + ms; while (!cond() && Date.now() < end) await new Promise(r => setTimeout(r, 25)); return cond(); };
+  const pidOf = (id) => { try { return parseInt(fs.readFileSync(path.join(path.dirname(runner.status(id).log), 'pid'), 'utf8'), 10) || null; } catch { return null; } };
+  const groupAlive = (pid) => { try { process.kill(-pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
   try {
     const j = await runner.run({ owner: 'maestro', name: 'sleeper', command: 'sleep 30' });
     assert.strictEqual(j.status, 'running');
+    // The wrapper writes its pid a moment after run() returns; cancelling before that has nothing to signal yet.
+    assert.ok(await waitFor(() => pidOf(j.id)), 'the job wrote its pid file');
     refusal = 'hub is halted (x)';
     await assert.rejects(runner.run({ owner: 'maestro', name: 'late', command: 'true' }), /hub is halted/);
     assert.deepStrictEqual(runner.cancelAll(), [j.id]);
     assert.strictEqual(runner.status(j.id).status, 'cancelling');
     assert.deepStrictEqual(runner.cancelAll(), [], 'already cancelling: nothing more to stop');
+    // Clean up only once the job is gone: a live wrapper still writes into its folder (ENOTEMPTY on CI).
+    const pid = pidOf(j.id);
+    assert.ok(await waitFor(() => !groupAlive(pid)), 'the cancelled job and its children exited');
   } finally { runner.stop(); fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
 });
 

@@ -807,7 +807,21 @@ async function handleHttpRequest(req, res) {
     }
     if (pathname === '/api/ledger/today' && req.method === 'GET') {
       const l = getLedger();
-      return jsonResponse(res, 200, { ...l.today(), caps: l.caps() });
+      return jsonResponse(res, 200, { ...l.today(), caps: l.caps(), credits: l.credits() });
+    }
+    // Monthly API credit per provider (e.g. the API credit with a Claude Max plan): { provider, monthlyUsd, resetDay }.
+    if (pathname === '/api/ledger/credits' && req.method === 'POST') {
+      let body = {};
+      try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
+      const { CREDIT_PROVIDERS, cleanCredit } = require('./lib/ledger');
+      const provider = String(body.provider || '');
+      if (!CREDIT_PROVIDERS.includes(provider)) return jsonResponse(res, 400, { error: `Credits can be tracked for ${CREDIT_PROVIDERS.join(', ')}.` });
+      let c;
+      try { c = cleanCredit(body); } catch (e) { return jsonResponse(res, 400, { error: e.message }); }
+      const next = { ...(hubSettings.getSetting('apiCredits', {}) || {}) };
+      if (c) next[provider] = c; else delete next[provider];
+      hubSettings.updateSettings({ apiCredits: next });
+      return jsonResponse(res, 200, { credits: getLedger().credits() });
     }
     if (pathname === '/api/ledger/days' && req.method === 'GET') {
       return jsonResponse(res, 200, { days: getLedger().days(30) });
