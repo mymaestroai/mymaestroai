@@ -49,7 +49,7 @@ test/                  the test suite (node --test)
 vendor/ icons/ images/ static assets
 data/                  ALL runtime state (ignored by git except agents.example.json)   section 2.2
 workspaces/<agent>/    per-agent personality, memory files, records/ (ignored by git)
-.env                   environment: port, provider keys, bind host (section 4.2)
+.env                   environment: port, bind host and other process settings (section 4.2); API keys live in data/settings.json
 README.md CHANGELOG.md LICENSE NOTICE docs/
 ```
 
@@ -58,7 +58,7 @@ README.md CHANGELOG.md LICENSE NOTICE docs/
 | File or folder | What it is | Secret |
 |---|---|---|
 | `agents.json` | the agent registry (one record per agent; section 6.1); `agents.example.json` seeds a fresh install with one agent, `maestro` | no |
-| `settings.json` | hub settings (section 4.3); hand edits are picked up live (the hub re-reads it when its mtime changes) | provider keys live here or in `.env` |
+| `settings.json` | hub settings (section 4.3); hand edits are picked up live (the hub re-reads it when its mtime changes) | every AI provider and web-search key lives here (section 4.2) |
 | `users.json` | accounts (admins and members, password hashes, TOTP secrets encrypted with `data/.auth-key`) | yes (0600) |
 | `.auth-key` | the key that encrypts TOTP secrets and connector secrets | yes |
 | `auth.db` | sessions, trusted devices, login attempts, audit log, API tokens (SQLite, WAL) | hashes only |
@@ -153,13 +153,13 @@ The **Security check** (Settings page, Status group, second box; `GET /api/secur
 | `HUB_ALLOWED_HOSTS` | extra host names the origin guard and the live event stream accept (a reverse proxy's name); Tailscale names (`*.ts.net`) need no entry |
 | `HUB_TAILNET_USERS` | if set, only these Tailscale logins (header `Tailscale-User-Login`) may reach the hub through Tailscale Serve |
 | `HUB_WALLET_OWNER`, `HUB_WALLET_OWNER_LABEL` | the owner's receiving address for wallet value, preferred over `settings.walletOwner` (which `POST /api/settings` no longer accepts) |
-| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `PERPLEXITY_API_KEY` | provider keys for the gateway route (the Settings page can store them in `settings.json` instead) |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY` | not kept here: at startup the hub moves any line like `OPENAI_API_KEY=…` in the `.env` file into `settings.json` (surrounding quotes dropped; `export` lines and Windows line endings are never loaded, so they are left alone) (`lib/settings` adoptEnvFileKeys), keeps the old file as `.env.bak-<time>` (mode 600) and turns each line into a comment; Settings shows where each key comes from. Keys from the process environment proper (a service file, Docker) still work as a fallback. `HUB_KEEP_ENV_KEYS=1` keeps them in `.env` |
 | `LM_STUDIO_URL`, `OLLAMA_URL` | local servers (defaults in `lib/settings.js` PROVIDER_DEFAULTS; oMLX and NInfer have defaults too) |
 | `CLAUDE_SDK_PATH` | pin the Claude Agent SDK directory (otherwise the hub finds the newest installed copy) |
 | `HUB_AGENT_PERMISSION_MODE` | `acceptEdits` (default) or `bypassPermissions` for the Claude client's own permission system; the hub's policy gate still applies |
 | `HUB_WORKER_DEFAULT_SCOPE` | default tool scope for temporary workers (`spawn_workers`): `read` unless set to `full`, which gives them write and run access by default |
 | `HUB_AUTH_USERNAME` / `HUB_AUTH_PASSWORD` | legacy single-password login: honoured only while no accounts exist; ignored (with a warning and a checklist item) once an admin account exists |
-| `BRAVE_SEARCH_API_KEY`, `SERPER_API_KEY`, `TAVILY_API_KEY`, `SEARXNG_URL` | web search back ends (optional; Perplexity and DuckDuckGo work without them) |
+| `BRAVE_SEARCH_API_KEY`, `SERPER_API_KEY`, `TAVILY_API_KEY`, `SEARXNG_URL` | web search back ends (optional; Perplexity and DuckDuckGo work without them); the three keys move into `settings.json` (`webSearch.keys`) like the provider keys |
 | `USER_EMAIL`, `SLACK_USER_ID`, `GITHUB_*`, `PAGERDUTY_*`, `SPLUNK_*`, `SOURCEGRAPH_*`, `DD_*` | identity for disclosure lines and credentials for optional MCP skills |
 
 Keep `.env` mode 600. Never commit it.
@@ -202,7 +202,7 @@ Setup progress is kept in `data/welcome.json` (0600): `startedAt` when the first
 ### 4.5 Providers
 
 - Subscription routes need the client signed in on the machine: `claude login` for Claude (the hub never copies the sign-in anywhere unless a sandbox is used with client-inside mode); `codex login` for Codex.
-- API routes need a key in `.env` or on the Settings page; after saving, run model discovery (Settings → LLM Providers → discover, or `POST /api/models/discover`). Discovered models appear in every model picker, grouped by vendor and by who pays (Subscription, API $, Local).
+- API routes need a key on the Settings page (or in `.env`, from where it moves into Settings at the next start); after saving, run model discovery (Settings → LLM Providers → discover, or `POST /api/models/discover`). Discovered models appear in every model picker, grouped by vendor and by who pays (Subscription, API $, Local).
 - Local servers (LM Studio, Ollama, oMLX, NInfer) are discovered from their URLs; they are free and count as "Local". Their context windows are probed from the server when it reports them.
 - `GET /api/models` lists what is usable now, with billing kind per model and `discovering`/`stale` flags after an update.
 
@@ -442,7 +442,7 @@ Logs to read: `server.log` (or the supervisor's log), `data/restart.log`, `data/
 
 Each recipe says what to do, with the file, page or route involved. Confirm with the owner before anything one-way (restart, delete, send, expose).
 
-1. **Add a provider key.** Settings → LLM Providers → paste the key (or put `OPENAI_API_KEY=…` in `.env` and restart) → run discovery → the models appear grouped "API $". Verify: `GET /api/models` lists them.
+1. **Add a provider key.** Settings → LLM Providers → paste the key (a key put in `.env` moves into Settings at the next restart) → run discovery → the models appear grouped "API $". Verify: `GET /api/models` lists them.
 2. **Create the admin account.** Open the setup link (`mymaestro setup-link`) → `/welcome` → account → two-factor with an authenticator app → save the recovery codes. Verify: `GET /api/me` shows `isAdmin: true`.
 3. **Invite a member.** Users page → Invite → copy the link to them. They set a password; admins invited this way enrol two-factor at once. Then set their agent permissions (Users page → Agent permissions) and, if wanted, a team (Create team).
 4. **Create an agent.** Agents → Create (name, model, a paragraph of personality) or the `create_agent` tool. Then open the agent page and edit `SOUL.md` and `IDENTITY.md` until the voice is right; set category, effort, compaction. Verify with one chat turn.

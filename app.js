@@ -1659,13 +1659,16 @@
       </div>`;
       setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${(j.models || []).length} model(s)${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; if (j && j.ok !== false && j.enabled) stSum('models', 'local', `local models ${j.running ? 'running' : 'stopped'}`); } catch {} }, 0);
 
-      html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>`;
+      html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>
+        <div class="st-hint">Keys are kept in one place: <code>data/settings.json</code>, readable only by this computer's account. A key typed into <code>.env</code> moves here when the hub starts.</div>`;
       for (const p of PROVIDERS) {
         const pdata = data.providers?.[p.id] || {};
         if (p.hasKey) {
+          // A key the hub gets from its environment (a service file, Docker) is used until one is saved here.
+          const hint = pdata.hasKey ? `${pdata.keyHint}${pdata.keySource === 'environment' ? ' (from the environment)' : ''}` : 'Not set';
           html += `<div class="st-row">
             <label>${esc(p.label)}</label>
-            <input type="password" id="st-key-${p.id}" placeholder="${pdata.hasKey ? pdata.keyHint : 'Not set'}"
+            <input type="password" id="st-key-${p.id}" placeholder="${esc(hint)}"
               data-provider="${p.id}" data-field="apiKey">
             <button class="st-test-btn" onclick="testProvider('${p.id}')">Test</button>
           </div>`;

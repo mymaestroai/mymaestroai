@@ -74,6 +74,15 @@ function ttTeamOf(body) {
 }
 // ── Setup Detection ──────────────────────────────────────────────────────
 const ENV_FILE = path.join(__dirname, '.env');
+// API keys live in one place, Settings (data/settings.json). Keys still typed into .env move there once, with a
+// copy of the old .env kept beside it (lib/settings adoptEnvFileKeys; HUB_KEEP_ENV_KEYS=1 leaves them in .env).
+try {
+  const r = require('./lib/settings').adoptEnvFileKeys({ envFile: ENV_FILE });
+  const names = [...r.moved, ...r.duplicates, ...r.unused];
+  if (r.error) console.warn(`[settings] API keys in .env were not moved: ${r.error}`);
+  else if (r.kept) console.log('[settings] HUB_KEEP_ENV_KEYS is set: API keys stay in .env');
+  else if (names.length) console.log(`[settings] moved ${names.join(', ')} from .env into Settings (the old .env is kept as ${path.basename(r.backup)})`);
+} catch (e) { console.warn('[settings] could not move API keys out of .env:', e.message); }
 function isSetupNeeded() {
   // First-run setup (the Welcome page, lib/welcome) is needed until the hub has an admin account and at least one way
   // for agents to think: an API key, a Claude sign-in or a local model. An .env file alone no longer counts.
