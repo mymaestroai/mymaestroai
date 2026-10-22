@@ -82,7 +82,7 @@ README.md CHANGELOG.md LICENSE NOTICE docs/
 | `uploads/`, `image-gen/`, `tiger-teams/`, `task-logs/`, `codex-bridge/` | attachments, generated images, Tiger Team runs, scheduler logs, Codex bridge state | varies |
 | `restart.log` | what the last in-hub restart did | no |
 
-The **hub home** is the parent of the install folder (`HUB_HOME`). It holds what is not code and not hub state: `share/<agent>/` (each admin-side agent's Files folder, visible in the Files panel), `users/<id>/files/` (a member's agents' Files folder), `medical/` and `legal/` (team folders; an agent is on a team when its own folder grants include the folder), `backups/`.
+The **hub home** (`HUB_HOME`, `lib/hub-home.js`) holds what is not code and not hub state. New installs keep it inside the install, `<install>/hub-home/`; installs made before 5.6 keep it in the folder that holds the install (here `~/agent-hub`, beside `~/agent-hub/agent-hub-5.1.0`). The rule, in order: `HUB_HOME` from the environment; `<install>/hub-home` when it exists; the parent folder when it already holds the hub's folders (in a home folder only `share/common`, `share/<an agent>` or `users/<id>/files` count); otherwise `<install>/hub-home`. An install whose folders sit loose in the home folder (the installer's `~/mymaestroai` before 5.6) can move them with `mymaestro move-home --yes` (links stay at the old places; paths in `data/agents.json` and `data/settings.json` are rewritten; agent sandbox containers are renewed); the security check suggests it. It holds: `share/<agent>/` (each admin-side agent's Files folder, visible in the Files panel), `users/<id>/files/` (a member's agents' Files folder), `medical/` and `legal/` (team folders; an agent is on a team when its own folder grants include the folder), `backups/`.
 
 ### 2.3 `lib/` modules by concern
 
@@ -377,7 +377,7 @@ One Docker container per agent (`hub-agent-<name>`, image `agent-hub-sandbox:lat
 
 - The Files panel shows an agent's Files folder: `share/<agent>/` for admin-side agents, `users/<id>/files/` for a member's agents, the team folder for medical and legal team agents. Uploads go to the same place; agents treat what the owner uploads there as theirs to open. Routes `/api/files*` (list, upload, download, mkdir, rename, delete).
 - Attachments to a chat message are stored under `data/uploads/`; images are shown inline when the file is under a hub folder.
-- Backups: copy `data/`, `workspaces/`, `.env`, and the hub home's `share/`, `users/`, `medical/`, `legal/`. Keep `backups/` under the hub home. Restore by putting the folders back and starting the hub.
+- Backups: copy `data/`, `workspaces/`, `.env`, and the hub home's `share/`, `users/`, `medical/`, `legal/` (`mymaestro backup` includes `hub-home/` when it is inside the install). Keep `backups/` under the hub home. Restore by putting the folders back and starting the hub.
 
 ---
 

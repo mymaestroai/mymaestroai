@@ -10,9 +10,10 @@
  *   mymaestro setup-link             the first-run Welcome link (until the first account exists)
  *   mymaestro update [--channel stable|experimental]   newest version of the channel, then restart (the Update button)
  *   mymaestro doctor                 security and setup checks (scripts/security-check.js)
- *   mymaestro backup [--to <dir>]    data, settings, agents and their memory, in one archive
+ *   mymaestro backup [--to <dir>]    data, settings, agents and their memory (and the shared folders kept inside the install), in one archive
  *   mymaestro reset-2fa <email>      turn off two-factor for an account (lost phone); it is set up again at next sign-in
  *   mymaestro service install|remove start by itself at boot (Linux) or login (Mac)
+ *   mymaestro move-home [--yes]      move shared folders (share/, users/...) out of your home folder into the install; --yes does it
  *   mymaestro uninstall              remove the service, this command and the private Node; keeps the folder and data
  *   mymaestro version
  */
@@ -165,7 +166,7 @@ const commands = {
       if (/\.db$/.test(rel)) { pending.push(rel); return; }
       fs.copyFileSync(src, path.join(stage, rel));
     }
-    for (const rel of ['data', 'workspaces', '.env']) copyTree(rel);
+    for (const rel of ['data', 'workspaces', '.env', 'hub-home']) copyTree(rel);   // hub-home: the shared folders of newer installs (lib/hub-home)
     return (async () => {
       for (const rel of pending) { const db = new Database(path.join(DIR, rel), { readonly: true, fileMustExist: true }); await db.backup(path.join(stage, rel)); db.close(); }
       fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
@@ -193,6 +194,40 @@ const commands = {
     }
     if (sub === 'remove') { const r = svc().remove(); out(r.removed.kind === 'none' ? 'There was no service.' : `Service removed (${r.removed.unit || r.removed.label}).`); return; }
     fail('Usage: mymaestro service install | remove');
+  },
+  // Older installs made by the installer keep share/, users/ (and granted medical/, legal/) loose in the home folder:
+  // move them into <install>/hub-home (lib/hub-home moveHome). Without --yes it only shows what would move.
+  async 'move-home'() {
+    const { moveHome } = require(path.join(DIR, 'lib', 'hub-home'));
+    const plan = moveHome({ root: DIR });
+    if (!plan.ok) fail(plan.error);
+    if (!plan.plan.length) { for (const n of plan.notes) out(n); return; }
+    out(`These folders move from your home folder into ${plan.target}:`);
+    for (const s of plan.plan) out(`  ${s.from}  ->  ${s.to}`);
+    out('A link stays at each old place, so paths your agents wrote down keep working.');
+    if (!argv.includes('--yes')) { out('\nNothing has been moved yet. To move them (the hub stops and starts again): mymaestro move-home --yes'); return; }
+    const wasRunning = await up();
+    if (wasRunning) {
+      out('Stopping the hub...');
+      const r = await svc().stop();
+      if (!r.ok) fail(`Could not stop it (${r.error || 'unknown error'}); nothing was moved.`);
+      for (let i = 0; i < 30 && await up(); i++) await new Promise(res => setTimeout(res, 1000));
+      if (await up()) fail('The hub still answers, so nothing was moved. Stop it (mymaestro stop) and try again.');
+    }
+    const docker = (args) => execFileSync('docker', args, { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] });
+    let r;
+    try { r = moveHome({ root: DIR, apply: true, docker }); }
+    catch (e) { r = { ok: false, partial: true, error: `Moving stopped unexpectedly (${e.message}). Check ${path.join(DIR, 'hub-home')} and your home folder before starting the hub.`, notes: [] }; }
+    if (r.ok) out(`Moved ${r.done.map(s => s.name).join(', ')} into ${r.target}.`);
+    else out(r.error);
+    for (const n of r.notes) out(n);
+    // Start it again when the move worked or was cleanly undone; never on a half-moved layout.
+    if (wasRunning && !r.partial) {
+      out('Starting the hub...');
+      const s = svc().start(); if (!s.ok) fail(`Could not start it: ${s.error}`);
+      out((await waitUp(60)) ? `Running at ${URL_BASE}` : 'It did not answer within a minute. See: mymaestro logs');
+    } else if (wasRunning) out('The hub stays stopped until the folders above are back in place; then: mymaestro start');
+    if (!r.ok) process.exitCode = 1;
   },
   async uninstall() {
     const m = svc(); const inst = m.readInstall();
