@@ -196,9 +196,12 @@ test('desktop page: the panel survives message rewrites, follows turns from anyw
   assert.match(body('clearLiveActivity'), /finishReasoning\(msgId\);/);
   assert.match(app, /for \(const \[mid, st\] of reasonState\) if \(st\.live && st\.chatId === chatId\) finishReasoning\(mid\);/);
   // open, close, size, full size; Esc in the full view never reaches the chat box (where it pauses the reply)
-  assert.match(app, /const RSN_OPEN_KEY = 'hub-reasoning-open';/);
+  // every panel starts minimized, live or saved, and opening one is never carried over to the next
+  assert.match(body('paintReasoning'), /box\.classList\.add\('collapsed'\);/);
+  assert.doesNotMatch(body('paintReasoning'), /classList\.toggle\('collapsed'/);
+  assert.doesNotMatch(body('toggleReasoningPanel'), /localStorage/);
+  assert.doesNotMatch(app, /hub-reasoning-open|RSN_OPEN_KEY|rsnOpenPref/);
   assert.match(app, /const RSN_HEIGHT_KEY = 'hub-reasoning-height';/);
-  assert.match(app, /if \(box\.classList\.contains\('live'\)\) localStorage\.setItem\(RSN_OPEN_KEY, open \? '1' : '0'\);/);
   assert.match(app, /if \(e\.key === 'Escape'\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); closeReasoningFull\(\); return; \}/);
   assert.match(app, /ov\.querySelector\('\.rsn-full-body'\)\.focus\(\{ preventScroll: true \}\);/);
   assert.match(app, /\(document\.activeElement === close \? body : close\)\.focus\(\);/, 'Tab stays inside the full view');
@@ -233,6 +236,12 @@ test('phone: the panel sits outside the reply body, follows every holder and sho
   assert.match(m, /if \(t\) reasoningEnd\(t\);/);
   assert.match(m, /if \(onReasoningClick\(e\)\) return;/);
   assert.match(m, /\$\('messages'\)\.addEventListener\('pointerdown', onReasoningGrip\);/);
+  // every panel starts closed, live or saved; a tap opens it, and that is never carried over to the next panel
+  const mfn = (name) => { const i = m.indexOf(`function ${name}(`); return m.slice(i, m.indexOf('\n}\n', i)); };
+  assert.match(mfn('paintReasoning'), /box\.classList\.add\('closed'\);/);
+  assert.doesNotMatch(mfn('paintReasoning'), /classList\.toggle\('closed'/);
+  assert.doesNotMatch(mfn('toggleReasoning'), /localStorage/);
+  assert.doesNotMatch(m, /hub-mobile-reasoning-open|RSN_OPEN_KEY|rsnOpenPref/);
   const html = read('mobile.html');
   for (const sel of ['.rsn-grip', '.rsn.closed .rsn-body', '.rsn-sheet.open', '.rsn-sheet-body']) assert.ok(html.includes(sel), sel);
 });

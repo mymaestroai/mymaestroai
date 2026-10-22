@@ -1395,13 +1395,11 @@ function legacyCopy(text) {
 // ── Reasoning panel ─────────────────────────────────────────────────────────
 // The model's reasoning (Claude's summarized thinking, Codex's reasoning summary, the reasoning field of OpenRouter and
 // local models) in a panel at the top of its reply bubble, outside the reply body (which repaints). Tap the header to
-// open or close it, drag the grip under it for any height, ⤢ for the whole screen. A live panel opens as the last live
-// one was left (open unless closed); saved replies show theirs closed. Text only (textContent), never markup.
+// open or close it, drag the grip under it for any height, ⤢ for the whole screen. Every panel starts closed, live or
+// saved: the header (word count, "thinking…") shows, and a tap opens it. Text only (textContent), never markup.
 // State lives on the holder (own stream, re-attach, followed turn, saved reply): holder.rsn = { text, total, live, v }.
 const RSN_KEEP = 200000;   // chars kept per reply (the newest)
-const RSN_OPEN_KEY = 'hub-mobile-reasoning-open';
 const RSN_HEIGHT_KEY = 'hub-mobile-reasoning-height';
-const rsnOpenPref = () => localStorage.getItem(RSN_OPEN_KEY) !== '0';
 const rsnHeightPref = () => { const h = Number(localStorage.getItem(RSN_HEIGHT_KEY)); return Number.isFinite(h) && h >= 60 ? h : 180; };
 const rsnWords = (t) => { let n = 0; const re = /\S+/g; while (re.exec(t)) n++; return n; };
 const rsnHolders = new WeakMap();   // panel element -> its holder
@@ -1496,7 +1494,7 @@ function paintReasoning(holder) {
       '<div class="rsn-body"></div>' +
       '<div class="rsn-grip" aria-hidden="true"></div>';
     box.querySelector('.rsn-body').style.height = `${rsnHeightPref()}px`;
-    box.classList.toggle('closed', !(r.live && rsnOpenPref()));
+    box.classList.add('closed');   // closed until the reader opens it
     el.insertBefore(box, holder.bubble.body && holder.bubble.body.parentNode === el ? holder.bubble.body : el.firstChild);
   }
   rsnHolders.set(box, holder);
@@ -1521,11 +1519,7 @@ function toggleReasoning(box) {
   box.classList.toggle('closed', !open);
   box.querySelector('.rsn-head').setAttribute('aria-expanded', String(open));
   box.querySelector('.rsn-chev').textContent = open ? '▾' : '▸';
-  // A live panel's choice is the one the next live panel starts with; peeking at a saved one changes nothing.
-  if (box.classList.contains('live')) {
-    localStorage.setItem(RSN_OPEN_KEY, open ? '1' : '0');
-    if (open) { const body = box.querySelector('.rsn-body'); body.scrollTop = body.scrollHeight; }
-  }
+  if (open && box.classList.contains('live')) { const body = box.querySelector('.rsn-body'); body.scrollTop = body.scrollHeight; }
 }
 
 // ⤢: the whole screen, live while the turn runs.

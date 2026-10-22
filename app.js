@@ -9144,14 +9144,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // ── Reasoning panel ────────────────────────────────────────────────
     // The model's reasoning (Claude's summarized thinking, Codex's reasoning summary, the reasoning field of OpenRouter
     // and local models) in a panel at the top of its reply. The header opens and closes it, the grip under it sets any
-    // height, ⤢ shows it at the size of the window. A live panel opens as the last live one was left (open unless
-    // closed); saved replies show theirs closed. Text only (textContent), never markup. The panel is one node that
-    // message rewrites keep (setMessageHtml), so its height and scroll position stay where the reader left them.
+    // height, ⤢ shows it at the size of the window. Every panel starts minimized, live or saved: the header (with the
+    // word count and "thinking…") shows, and a click opens it. Text only (textContent), never markup. The panel is one
+    // node that message rewrites keep (setMessageHtml), so its height and scroll position stay where the reader left them.
     const reasonState = new Map();   // msgId -> { text, total, live, v, raf, chatId }
     const REASON_KEEP = 200000;      // chars kept per reply (the newest); the hub keeps 120,000 of a turn, 40,000 when saved
-    const RSN_OPEN_KEY = 'hub-reasoning-open';
     const RSN_HEIGHT_KEY = 'hub-reasoning-height';
-    const rsnOpenPref = () => localStorage.getItem(RSN_OPEN_KEY) !== '0';
     const rsnHeightPref = () => { const h = Number(localStorage.getItem(RSN_HEIGHT_KEY)); return Number.isFinite(h) && h >= 60 ? h : 220; };
     const rsnWords = (t) => { let n = 0; const re = /\S+/g; while (re.exec(t)) n++; return n; };
     // Shown as plain text: a summary's **headings** (Codex writes them) lose their asterisks; a cut start is marked.
@@ -9253,7 +9251,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           '<div class="rs-body"></div>' +
           '<div class="rs-grip" title="Drag to resize"></div>';
         box.querySelector('.rs-body').style.height = `${rsnHeightPref()}px`;
-        box.classList.toggle('collapsed', !(st.live && rsnOpenPref()));
+        box.classList.add('collapsed');   // minimized until the reader opens it
         placeReasoningPanel(host, box);
       }
       box.classList.toggle('live', st.live);
@@ -9345,8 +9343,6 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       box.classList.toggle('collapsed', !open);
       box.querySelector('.rs-head').setAttribute('aria-expanded', String(open));
       box.querySelector('.rs-toggle').textContent = open ? 'hide' : 'show';
-      // A live panel's choice is the one the next live panel starts with; peeking at a saved one changes nothing.
-      if (box.classList.contains('live')) localStorage.setItem(RSN_OPEN_KEY, open ? '1' : '0');
       if (open && box.classList.contains('live')) { const body = box.querySelector('.rs-body'); body.scrollTop = body.scrollHeight; }
     }
     document.addEventListener('click', (e) => {
