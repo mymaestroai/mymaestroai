@@ -22,5 +22,5 @@ test('tool calls are blue on a tinted panel; failed calls stay red (the rule com
   const tool = h.indexOf('.frow.tool .fline, .ftool');
   const failed = h.indexOf('.frow.failed .fline, .frow.failed .ftname { color: var(--error); }');
   assert.ok(tool > 0 && failed > tool, 'the red rule follows the blue one, so a failed call wins');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v56'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v57'/);
 });

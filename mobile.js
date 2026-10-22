@@ -14,6 +14,8 @@ let agents = [];
 let screen = 'agents';
 let current = null;            // agent name whose chat is loaded
 let chatHistory = [];              // full history array of the open chat
+let histGen = 0;                   // bumped whenever chatHistory is replaced (a fetch, a clear)
+let histReadSeq = 0;               // the newest history re-read wins (rereadHistory)
 let shown = 0;                 // how many trailing history entries are rendered
 // Replies this phone is streaming, one per agent: several chats can run at once and each one
 // keeps running in the background while another chat is open.
@@ -1390,7 +1392,217 @@ function legacyCopy(text) {
   return ok;
 }
 
+// ── Reasoning panel ─────────────────────────────────────────────────────────
+// The model's reasoning (Claude's summarized thinking, Codex's reasoning summary, the reasoning field of OpenRouter and
+// local models) in a panel at the top of its reply bubble, outside the reply body (which repaints). Tap the header to
+// open or close it, drag the grip under it for any height, ⤢ for the whole screen. A live panel opens as the last live
+// one was left (open unless closed); saved replies show theirs closed. Text only (textContent), never markup.
+// State lives on the holder (own stream, re-attach, followed turn, saved reply): holder.rsn = { text, total, live, v }.
+const RSN_KEEP = 200000;   // chars kept per reply (the newest)
+const RSN_OPEN_KEY = 'hub-mobile-reasoning-open';
+const RSN_HEIGHT_KEY = 'hub-mobile-reasoning-height';
+const rsnOpenPref = () => localStorage.getItem(RSN_OPEN_KEY) !== '0';
+const rsnHeightPref = () => { const h = Number(localStorage.getItem(RSN_HEIGHT_KEY)); return Number.isFinite(h) && h >= 60 ? h : 180; };
+const rsnWords = (t) => { let n = 0; const re = /\S+/g; while (re.exec(t)) n++; return n; };
+const rsnHolders = new WeakMap();   // panel element -> its holder
+let rsnSheetFor = null;             // the holder shown full screen
+
+function rsnOf(holder) {
+  if (!holder.rsn) holder.rsn = { text: '', total: 0, live: false, v: 0, raf: 0 };
+  return holder.rsn;
+}
+function rsnAdd(r, text) {
+  r.text += text; r.total += text.length; r.v++;
+  if (r.text.length > RSN_KEEP) r.text = r.text.slice(-RSN_KEEP);
+}
+// The own stream's 'reasoning' event, or a followed turn's turn_reasoning { at, text }: false when text is missing
+// before it (then the hub's turn view is fetched, which has the reasoning so far).
+function reasoningAdd(holder, text, at) {
+  if (!holder || typeof text !== 'string' || !text) return true;
+  const r = rsnOf(holder);
+  r.live = true;
+  if (Number.isFinite(at)) {
+    if (at > r.total) return false;
+    if (at + text.length <= r.total) return true;   // already shown (a replay)
+    text = text.slice(r.total - at);
+  }
+  rsnAdd(r, text);
+  reasoningSchedule(holder);
+  return true;
+}
+// The hub's copy (turn view, saved reply). total = the turn's whole length (the text may be its newest part only).
+// onlyIfLonger: keep what is shown when it already has as much (live events can be ahead of a saved copy).
+function reasoningSet(holder, text, { live = false, total, onlyIfLonger = false } = {}) {
+  if (!holder || typeof text !== 'string' || !text) return;
+  const r = rsnOf(holder);
+  const tot = Number.isFinite(total) && total >= text.length ? total : text.length;
+  if (!(onlyIfLonger && r.total >= tot)) { r.text = text.length > RSN_KEEP ? text.slice(-RSN_KEEP) : text; r.total = tot; }
+  r.live = live; r.v++;
+  reasoningSchedule(holder);
+}
+// A reply in the open chat has finished (this phone's own, a re-attached one, one followed from another device): read
+// the chat's history back from the hub, which saved the exchange (with its reasoning and tool calls) before the stream
+// ended or turn_end went out. The local history that "Load earlier" and "Copy chat" rebuild from then holds exactly
+// what the hub holds; it used to miss this phone's own exchanges and could hold a reply twice. The newest read wins;
+// a read is dropped when the chat moved on meanwhile (another chat, a newer read, a new turn); the next open reads it.
+async function rereadHistory(agent, attempt = 0) {
+  const seq = ++histReadSeq;
+  const gen = histGen;
+  let hist = null;
+  try {
+    const r = await api(`/api/history/${encodeURIComponent(agent)}`);
+    if (r.ok) { const d = await r.json(); if (Array.isArray(d.history)) hist = d.history; }
+  } catch { /* tried again below */ }
+  if (seq !== histReadSeq || gen !== histGen || current !== agent || streams.has(agent) || reattaches.has(agent)) return;
+  if (!hist) {   // the hub did not answer: again in 1, 2, 4 s (a newer read, or the chat moving on, cancels it)
+    if (attempt < 3) setTimeout(() => { if (seq === histReadSeq && gen === histGen) rereadHistory(agent, attempt + 1); }, 1000 * 2 ** attempt);
+    return;
+  }
+  if (hist.length && hist[hist.length - 1].inProgress) hist.pop();   // a new turn's reply so far (the live turn shows it)
+  chatHistory = hist; histGen++;
+}
+function reasoningEnd(holder) {
+  const r = holder && holder.rsn;
+  if (!r || !r.live) return;
+  r.live = false; r.v++;
+  reasoningSchedule(holder);
+}
+function reasoningSchedule(holder) {
+  const r = holder.rsn;
+  if (r && !r.raf) r.raf = requestAnimationFrame(() => { r.raf = 0; paintReasoning(holder); });
+}
+// Shown as plain text: a summary's **headings** (Codex writes them) lose their asterisks; a cut start is marked.
+function rsnText(r) {
+  return (r.total > r.text.length ? '… (the start is not kept)\n\n' : '') + r.text.replace(/\*\*([^*\n]+)\*\*/g, '$1');
+}
+function rsnCount(r) {
+  const n = rsnWords(r.text);
+  return `${n.toLocaleString()} word${n === 1 ? '' : 's'}`;
+}
+
+function paintReasoning(holder) {
+  const r = holder && holder.rsn;
+  const el = holder && holder.bubble && holder.bubble.el;
+  if (!r || !el || !el.isConnected) return;
+  let box = el.querySelector(':scope > .rsn');
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'rsn';
+    box.innerHTML =
+      '<div class="rsn-head" role="button" tabindex="0">' +
+        '<span class="rsn-dot"></span><span class="rsn-label">Reasoning</span><span class="rsn-count"></span>' +
+        '<button type="button" class="rsn-full" aria-label="Show reasoning full screen">⤢</button><span class="rsn-chev"></span>' +
+      '</div>' +
+      '<div class="rsn-body"></div>' +
+      '<div class="rsn-grip" aria-hidden="true"></div>';
+    box.querySelector('.rsn-body').style.height = `${rsnHeightPref()}px`;
+    box.classList.toggle('closed', !(r.live && rsnOpenPref()));
+    el.insertBefore(box, holder.bubble.body && holder.bubble.body.parentNode === el ? holder.bubble.body : el.firstChild);
+  }
+  rsnHolders.set(box, holder);
+  box.classList.toggle('live', r.live);
+  const open = !box.classList.contains('closed');
+  box.querySelector('.rsn-head').setAttribute('aria-expanded', String(open));
+  box.querySelector('.rsn-chev').textContent = open ? '▾' : '▸';
+  box.querySelector('.rsn-count').textContent = `· ${rsnCount(r)}${r.live ? ' · thinking…' : ''}`;
+  const body = box.querySelector('.rsn-body');
+  if (body.dataset.v !== String(r.v)) {
+    const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+    body.textContent = rsnText(r);
+    body.dataset.v = String(r.v);
+    if (atEnd && r.live) body.scrollTop = body.scrollHeight;
+  }
+  if (r.live && current === holder.agent) scrollChat();   // keep a growing live panel in view (unless scrolled up)
+  if (rsnSheetFor === holder) paintReasoningSheet();
+}
+
+function toggleReasoning(box) {
+  const open = box.classList.contains('closed');
+  box.classList.toggle('closed', !open);
+  box.querySelector('.rsn-head').setAttribute('aria-expanded', String(open));
+  box.querySelector('.rsn-chev').textContent = open ? '▾' : '▸';
+  // A live panel's choice is the one the next live panel starts with; peeking at a saved one changes nothing.
+  if (box.classList.contains('live')) {
+    localStorage.setItem(RSN_OPEN_KEY, open ? '1' : '0');
+    if (open) { const body = box.querySelector('.rsn-body'); body.scrollTop = body.scrollHeight; }
+  }
+}
+
+// ⤢: the whole screen, live while the turn runs.
+function openReasoningSheet(holder) {
+  if (!holder || !holder.rsn) return;
+  let sh = $('rsn-sheet');
+  if (!sh) {
+    sh = document.createElement('div');
+    sh.id = 'rsn-sheet';
+    sh.className = 'rsn-sheet';
+    sh.setAttribute('role', 'dialog');
+    sh.setAttribute('aria-modal', 'true');
+    sh.setAttribute('aria-label', 'Reasoning');
+    sh.innerHTML =
+      '<div class="rsn-sheet-head"><span class="rsn-dot"></span><span class="rsn-sheet-title"></span><span class="rsn-sheet-count"></span>' +
+      '<button type="button" class="rsn-sheet-close" aria-label="Close">✕</button></div>' +
+      '<div class="rsn-sheet-body" tabindex="-1"></div>';
+    sh.querySelector('.rsn-sheet-close').addEventListener('click', closeReasoningSheet);
+    sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeReasoningSheet(); } });
+    document.body.appendChild(sh);
+  }
+  rsnSheetFor = holder;
+  const who = holder.agent ? displayName(holder.agent) : '';
+  sh.querySelector('.rsn-sheet-title').textContent = who ? `Reasoning · ${who}` : 'Reasoning';
+  sh.querySelector('.rsn-sheet-body').dataset.v = '';
+  sh.classList.add('open');
+  paintReasoningSheet();
+  const body = sh.querySelector('.rsn-sheet-body');
+  body.scrollTop = body.scrollHeight;
+  body.focus({ preventScroll: true });
+}
+function paintReasoningSheet() {
+  const sh = $('rsn-sheet');
+  const r = rsnSheetFor && rsnSheetFor.rsn;
+  if (!sh || !r) return;
+  sh.classList.toggle('live', r.live);
+  sh.querySelector('.rsn-sheet-count').textContent = `${rsnCount(r)}${r.live ? ' · thinking…' : ''}`;
+  const body = sh.querySelector('.rsn-sheet-body');
+  if (body.dataset.v !== String(r.v)) {
+    const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+    body.textContent = rsnText(r);
+    body.dataset.v = String(r.v);
+    if (atEnd) body.scrollTop = body.scrollHeight;
+  }
+}
+function closeReasoningSheet() {
+  const sh = $('rsn-sheet');
+  if (sh) sh.classList.remove('open');
+  rsnSheetFor = null;
+}
+
+// Taps on a panel (from the chat's click handler): ⤢ or the header. True when the tap was the panel's.
+function onReasoningClick(e) {
+  const box = e.target.closest('.rsn');
+  if (!box) return false;
+  if (e.target.closest('.rsn-full')) { e.stopPropagation(); openReasoningSheet(rsnHolders.get(box)); return true; }
+  if (e.target.closest('.rsn-head')) { e.stopPropagation(); toggleReasoning(box); return true; }
+  return true;   // a tap inside the text: nothing (and not a feed row)
+}
+// The grip: drag for any height (60 px to most of the screen); the size is kept for the next panels.
+function onReasoningGrip(e) {
+  const grip = e.target.closest && e.target.closest('.rsn .rsn-grip');
+  if (!grip) return;
+  e.preventDefault();
+  const body = grip.closest('.rsn').querySelector('.rsn-body');
+  const y0 = e.clientY, h0 = body.getBoundingClientRect().height;
+  const move = (ev) => { body.style.height = `${Math.round(Math.max(60, Math.min(window.innerHeight * 0.8, h0 + ev.clientY - y0)))}px`; };
+  const up = () => {
+    grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+    localStorage.setItem(RSN_HEIGHT_KEY, String(parseInt(body.style.height, 10) || rsnHeightPref()));
+  };
+  try { grip.setPointerCapture(e.pointerId); } catch {}
+  grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+}
+
 function onMessagesClick(e) {
+  if (onReasoningClick(e)) return;
   const b = e.target.closest('.copy');
   if (!b) { onFeedClick(e); return; }
   e.stopPropagation();
@@ -1436,6 +1648,7 @@ function renderEntry(m) {
     const saved = Array.isArray(m.activity) && m.activity.length;
     const b = addAssistantBubble(saved ? undefined : m.content);
     if (saved) paintSaved(b, m);
+    if (typeof m.reasoning === 'string' && m.reasoning) reasoningSet({ agent: current, bubble: b }, m.reasoning, { total: Number(m.reasoningChars) });
   }
 }
 
@@ -1510,6 +1723,7 @@ async function openChat(name) {
     const r = await api(`/api/history/${encodeURIComponent(name)}`);
     chatHistory = r.ok ? ((await r.json()).history || []) : [];
   } catch { chatHistory = []; }
+  histGen++;
   if (current !== name) return;
   // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place, with its
   // tool calls, so it is not shown twice. The hub flags it only while that turn runs.
@@ -1529,6 +1743,7 @@ async function openChat(name) {
     r.line = null;
     r._blocks = null; r._sig = null;
     r.painted = null;
+    if (r.rsn) paintReasoning(r);
     paintReattach(r, reattachLine(r));
     reattachCheck(r);
     catchUpReattach(r);
@@ -1552,6 +1767,7 @@ function attachStreamBubble(rec) {
   const b = addAssistantBubble();
   rec.bubble = b;
   rec._blocks = null; rec._sig = null;
+  if (rec.rsn) paintReasoning(rec);
   if (!rec.gotAny) { b.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>'; return; }
   paintReply(rec, rec.full);   // text and activity rows in the order they happened
   if (rec.question) showQuestion(rec.question, () => { rec.question = null; });
@@ -1915,6 +2131,7 @@ async function catchUpReattach(ra) {
     }
   }
   applyTurnFeed(ra, turn);
+  if (typeof turn.reasoning === 'string' && turn.reasoning) reasoningSet(ra, turn.reasoning, { live: !turn.ended, total: Number(turn.reasoningChars), onlyIfLonger: true });
   if (!turn.ended) applyTurnProgress(ra.agent, turn, ra);
   // The turn is waiting on a question asked before this phone joined (the app was closed, or opened mid-turn).
   if (!turn.ended && turn.question && turn.question.request_id) {
@@ -1952,6 +2169,7 @@ async function catchUpOpenAgent() {
     if (!d || !d.turn || d.turn.turnId !== entry[0] || !hubTurns[entry[0]] || !chatOpenFor(agent)) return;
     applyTurnNotify(agent, d.turn);
     applyTurnFeed(entry[1], d.turn);
+    if (typeof d.turn.reasoning === 'string' && d.turn.reasoning) reasoningSet(entry[1], d.turn.reasoning, { live: !d.turn.ended, total: Number(d.turn.reasoningChars), onlyIfLonger: true });
     if (d.turn.text) setReplyText(entry[1], d.turn.text);
     if (!d.turn.ended) applyTurnProgress(agent, d.turn, entry[1]);
     if (d.turn.question && d.turn.question.request_id && !d.turn.ended) showQuestion(d.turn.question);
@@ -2208,6 +2426,7 @@ async function sendMessage(fallback) {
     } else {
       await readStream(r, rec);
       if (!rec.gotAny && bubbleLive(rec)) rec.bubble.body.innerHTML = '<span style="opacity:.6">[No response]</span>';
+      if (current === agent) rereadHistory(agent);   // the finished exchange, as the hub saved it
     }
   } catch (e) {
     if (e.name === 'AbortError') {
@@ -2229,7 +2448,7 @@ async function sendMessage(fallback) {
       toast(`${displayName(agent)}: ${e.message || 'request failed'}`);
     }
   } finally {
-    if (!lost) feedEnd(rec);   // fold the activity feed under the finished reply
+    if (!lost) { feedEnd(rec); reasoningEnd(rec); }   // fold the activity feed under the finished reply; the reasoning is done
     if (streams.get(agent) === rec) streams.delete(agent);
     recentOwn.set(agent, Date.now());
     // Finished while another chat was open: the reply is in history; flag the agent.
@@ -2248,7 +2467,7 @@ function enterReattach(agent, text, bubble, partialHtml, partial, since = null, 
   const ra = { agent, text, sentAt, bubble, line: null, partial: partial || '', partialHtml, since, startedAt: Date.now(), turnId: null, feed: null, painted: null };
   // A stream this phone lost: its bubble keeps the text and activity rows painted so far.
   const rec = streams.get(agent);
-  if (rec && rec.bubble === bubble) { ra.feed = rec.feed; ra._blocks = rec._blocks; ra._sig = rec._sig; ra.replyText = rec.full; if (!ra.partial) ra.partial = rec.full; }
+  if (rec && rec.bubble === bubble) { ra.feed = rec.feed; ra._blocks = rec._blocks; ra._sig = rec._sig; ra.replyText = rec.full; ra.rsn = rec.rsn; if (!ra.partial) ra.partial = rec.full; }
   reattaches.set(agent, ra);
   if (!partialHtml && bubbleLive(ra)) clearPlaceholder(bubble.body);
   paintReattach(ra, text ? `⟳ Connection lost; ${displayName(agent)} is still working on the server…` : `⟳ ${displayName(agent)} is working on the server; the reply will appear here…`);
@@ -2291,12 +2510,13 @@ function paintReattach(ra, line) {
 function finishReattach(ra, reply, ok = true) {
   if (!ra || reattaches.get(ra.agent) !== ra) return;
   reattaches.delete(ra.agent);
+  reasoningEnd(ra);
   if (bubbleLive(ra)) {
     ra.line?.remove();
     setReplyText(ra, reply);
     feedEnd(ra);
     ra.bubble.el.classList.toggle('error', !ok);
-    if (ok) chatHistory.push({ role: 'assistant', content: reply });
+    if (ok) rereadHistory(ra.agent);   // the finished exchange, as the hub saved it
   } else if (!chatOpenFor(ra.agent)) {
     markUnread(ra.agent);
   }
@@ -2357,7 +2577,8 @@ async function reattachCheck(ra) {
         // view and live events are fresher: take it only when it holds more text. Keep waiting for turn_end.
         if (reply.content.length > (ra.partial || '').length) ra.partial = reply.content;
       } else {
-        if (chatOpenFor(ra.agent)) chatHistory = hist;
+        if (chatOpenFor(ra.agent)) { chatHistory = hist; histGen++; }
+        if (typeof reply.reasoning === 'string' && reply.reasoning) reasoningSet(ra, reply.reasoning, { total: Number(reply.reasoningChars), onlyIfLonger: true });
         finishReattach(ra, reply.content, true);
         return;
       }
@@ -2466,9 +2687,10 @@ async function readStream(response, rec) {
       case 'worker_failed':
         feedUpsert(rec, { kind: 'worker', id: `w:${g.worker_id}`, workerId: g.worker_id, status: g.type === 'worker_completed' ? 'completed' : 'failed', error: g.error });
         break;
+      case 'reasoning': reasoningAdd(rec, g.text); break;   // the panel above the reply (painted only while the chat is open)
       case 'session_interrupted': if (visible()) addNote('⚠ Session interrupted'); break;
       case 'context_exhausted': if (visible()) addNote('⚠ Context is full; use Clear chat / new session'); break;
-      default: break;   // session_id, context_health, token_usage, expression_change, auto_model, progress, reasoning, ...
+      default: break;   // session_id, context_health, token_usage, expression_change, auto_model, progress, ...
     }
   };
 
@@ -2909,7 +3131,7 @@ async function clearSession() {
   try {
     const r = await api(`/api/session/${encodeURIComponent(name)}`, { method: 'DELETE' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    chatHistory = [];
+    chatHistory = []; histGen++;
     shown = 0;
     renderHistory();
     toast('New session started');
@@ -2952,6 +3174,7 @@ function connectEvents() {
   on('provider_recovered', (ev) => { if (ev && ev.provider) clearPacing(ev.provider); });
   on('turn_start', onTurnStart);
   on('turn_delta', onTurnDelta);
+  on('turn_reasoning', onTurnReasoning);
   on('turn_activity', onTurnActivity);
   on('turn_progress', onTurnProgress);
   on('turn_worker_delta', onTurnWorkerDelta);
@@ -3132,6 +3355,15 @@ function onTurnActivity(ev) {
   if (reattaches.get(ev.agent) === h) paintReattach(h, reattachLine(h));
 }
 
+// turn_reasoning { turnId, agent, at, text }: the next piece of the turn's reasoning. A piece this phone never got (the
+// hub does not replay them) brings the hub's turn view, which has the reasoning so far.
+let rsnCatchUp = 0;
+function onTurnReasoning(ev) {
+  const h = ev && turnHolder(ev);
+  if (!h || reasoningAdd(h, typeof ev.text === 'string' ? ev.text : '', Number(ev.at)) || rsnCatchUp) return;
+  rsnCatchUp = setTimeout(() => { rsnCatchUp = 0; catchUpOpenAgent(); }, 400);
+}
+
 // turn_worker_delta { turnId, agent, workerId, text }: the worker's text so far.
 function onTurnWorkerDelta(ev) {
   const h = ev && turnHolder(ev);
@@ -3171,10 +3403,11 @@ function onTurnEnd(ev) {
   // A turn this device streamed itself: sendMessage paints and flags it; the hub's event is a duplicate.
   const ownStream = streams.has(ev.agent) || (Date.now() - (recentOwn.get(ev.agent) || 0) < 15000);
   const ra = reattaches.get(ev.agent);
+  if (t) reasoningEnd(t);
   if (t && chatOpenFor(t.agent) && t.el.isConnected) {
     setReplyText(t, reply);
     feedEnd(t);
-    chatHistory.push({ role: 'assistant', content: reply });
+    rereadHistory(t.agent);   // the finished exchange (its message came from elsewhere), as the hub saved it
     scrollChat();
   } else if (ra) {
     if (ev.reply) finishReattach(ra, ev.reply, true);
@@ -3182,7 +3415,7 @@ function onTurnEnd(ev) {
     else reattachCheck(ra);
   } else if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !ownTurn) {
     addAssistantBubble(reply);
-    chatHistory.push({ role: 'assistant', content: reply });
+    rereadHistory(ev.agent);
     scrollChat();
   } else if (!chatOpenFor(ev.agent) && !ownStream) {
     markUnread(ev.agent);
@@ -3425,6 +3658,14 @@ function wire() {
   $('menu-notify').addEventListener('click', togglePush);
   $('menu-notify-test')?.addEventListener('click', testPush);
   $('messages').addEventListener('click', onMessagesClick);
+  $('messages').addEventListener('pointerdown', onReasoningGrip);
+  $('messages').addEventListener('keydown', (e) => {   // Enter or Space on a reasoning panel's header opens or closes it
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const head = e.target.closest && e.target.closest('.rsn-head');
+    if (!head || e.target.closest('.rsn-full')) return;
+    e.preventDefault();
+    toggleReasoning(head.closest('.rsn'));
+  });
   $('push-banner-on').addEventListener('click', enablePush);
   $('push-banner-later').addEventListener('click', () => { saveJson(PUSH_PREF, 'later'); paintPush(); });
   $('working-chip').addEventListener('click', () => { workingFilter = !workingFilter; renderAgents(); });

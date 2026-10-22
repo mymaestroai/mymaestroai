@@ -1265,49 +1265,75 @@
       50% { opacity: 0.5; }
     }
 
-    /* ── Live reasoning stream (model extended-thinking, display only) ── */
+    /* ── Reasoning panel: the model's reasoning at the top of its reply (app.js paintReasoning). The header opens and
+       closes it, the grip sets the height, ⤢ shows it at the size of the window. ── */
     .reason-stream {
-      margin: 8px 0 6px;
+      margin: 0 26px 12px 0;   /* clear of the message's copy button */
       border: 1px solid rgba(167,139,250,0.25);
       border-left: 3px solid rgba(167,139,250,0.55);
       border-radius: 8px;
       background: rgba(167,139,250,0.05);
-      overflow: hidden;
     }
+    .reason-stream:not(.live) { border-left-color: rgba(167,139,250,0.3); background: rgba(167,139,250,0.03); }
     .reason-stream .rs-head {
       display: flex; align-items: center; gap: 8px;
-      padding: 5px 10px; cursor: pointer;
-      font-size: 0.7rem; letter-spacing: 0.06em;
+      padding: 5px 10px; cursor: pointer; border-radius: 8px;
+      font-size: 0.72rem; letter-spacing: 0.04em;
       user-select: none;
     }
     .reason-stream .rs-head:hover { background: rgba(167,139,250,0.08); }
-    .reason-stream .rs-dot {
+    .reason-stream .rs-head:focus-visible { outline: 2px solid rgba(167,139,250,0.6); outline-offset: -2px; }
+    .reason-stream .rs-dot, .rsn-full-head .rs-dot {
       width: 6px; height: 6px; border-radius: 50%;
-      background: #a78bfa; flex-shrink: 0;
-      animation: la-pulse 1.4s ease-in-out infinite;
+      background: #a78bfa; flex-shrink: 0; opacity: 0.4;
     }
-    .reason-stream .rs-label { color: #a78bfa; font-weight: 700; }
+    .reason-stream.live .rs-dot, .rsn-full-overlay.live .rs-dot { opacity: 1; animation: la-pulse 1.4s ease-in-out infinite; }
+    .reason-stream .rs-label { color: #a78bfa; font-weight: 700; text-transform: uppercase; }
     .reason-stream .rs-count { color: var(--text-dim); opacity: 0.75; }
-    .reason-stream .rs-status {
-      margin-left: auto; color: #a78bfa; opacity: 0.8;
-      font-variant: small-caps;
+    .reason-stream .rs-status { color: #a78bfa; opacity: 0.85; }
+    .reason-stream .rs-full {
+      margin-left: auto; background: none; border: 1px solid transparent; border-radius: 5px;
+      color: var(--text-dim); font-size: 0.85rem; line-height: 1.3; padding: 0 5px; cursor: pointer;
     }
-    .reason-stream .rs-toggle { color: var(--text-dim); opacity: 0.6; }
+    .reason-stream .rs-full:hover, .reason-stream .rs-full:focus-visible { color: var(--text); border-color: rgba(167,139,250,0.45); }
+    .reason-stream .rs-toggle { color: var(--text-dim); opacity: 0.7; min-width: 2.4em; text-align: right; }
     .reason-stream .rs-body {
-      margin: 0; padding: 0 10px 8px;
-      max-height: 190px; overflow-y: auto;
+      padding: 2px 12px 8px; overflow-y: auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.72rem; line-height: 1.5;
-      color: var(--text-dim); opacity: 0.82;
+      font-size: 0.74rem; line-height: 1.5;
+      color: var(--text-dim);
       white-space: pre-wrap; word-break: break-word;
     }
-    .reason-stream.collapsed .rs-body { display: none; }
-    .reason-stream.done {
-      border-left-color: rgba(167,139,250,0.28);
-      background: rgba(167,139,250,0.03);
+    .reason-stream .rs-grip { height: 10px; cursor: ns-resize; touch-action: none; border-top: 1px solid rgba(167,139,250,0.14); }
+    .reason-stream .rs-grip::after {
+      content: ''; display: block; width: 38px; height: 3px; margin: 3px auto 0;
+      border-radius: 2px; background: rgba(167,139,250,0.35);
     }
-    .reason-stream.done .rs-dot { animation: none; opacity: 0.4; }
-    .reason-stream.done .rs-status { opacity: 0.45; }
+    .reason-stream .rs-grip:hover::after { background: rgba(167,139,250,0.7); }
+    .reason-stream.collapsed .rs-body, .reason-stream.collapsed .rs-grip { display: none; }
+    .rsn-full-overlay {
+      position: fixed; inset: 0; z-index: 9995; display: none;
+      align-items: center; justify-content: center; background: rgba(0,0,0,0.6);
+    }
+    .rsn-full-overlay.open { display: flex; }
+    .rsn-full-box {
+      width: min(1100px, 94vw); height: 88vh; display: flex; flex-direction: column;
+      background: var(--bg-card); border: 1px solid rgba(167,139,250,0.35); border-radius: 10px;
+      box-shadow: 0 12px 48px rgba(0,0,0,0.55); outline: none;
+    }
+    .rsn-full-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+    .rsn-full-title { color: #a78bfa; font-weight: 700; }
+    .rsn-full-count { color: var(--text-dim); font-size: 0.78rem; }
+    .rsn-full-close {
+      margin-left: auto; background: none; border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text-dim); font-size: 0.85rem; padding: 2px 8px; cursor: pointer;
+    }
+    .rsn-full-close:hover { color: var(--text); border-color: rgba(167,139,250,0.6); }
+    .rsn-full-body {
+      flex: 1; overflow-y: auto; padding: 14px 18px; margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.84rem; line-height: 1.6;
+      color: var(--text); white-space: pre-wrap; word-break: break-word;
+    }
     /* pulsing dot so it is obvious the stream is alive even when idle-looking */
     .la-pulse {
       width: 7px; height: 7px; border-radius: 50%;
