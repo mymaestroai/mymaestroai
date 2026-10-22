@@ -11,10 +11,11 @@ const os = require('os');
 const path = require('path');
 
 const HUB_ROOT = path.resolve(__dirname, '..');
-const HUB_HOME = path.resolve(HUB_ROOT, '..');
+const { HUB_HOME } = require('../lib/hub-home');   // the folder above the install on older installs, <install>/hub-home on new ones
+const BASE = HUB_HOME.startsWith(HUB_ROOT + path.sep) ? HUB_ROOT : HUB_HOME;   // one folder that holds every tree below
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-teams-'));
 const TREES = [path.join(HUB_HOME, 'users'), path.join(HUB_ROOT, 'data'), path.join(HUB_ROOT, 'workspaces')];   // the only trees the module touches
-const remap = (p) => (typeof p === 'string' && TREES.some(t => p === t || p.startsWith(t + path.sep)) ? path.join(TMP, p.slice(HUB_HOME.length)) : p);
+const remap = (p) => (typeof p === 'string' && TREES.some(t => p === t || p.startsWith(t + path.sep)) ? path.join(TMP, p.slice(BASE.length)) : p);
 const real = { readFileSync: fs.readFileSync, writeFileSync: fs.writeFileSync, existsSync: fs.existsSync };
 fs.readFileSync = (p, ...r) => real.readFileSync(remap(p), ...r);
 fs.writeFileSync = (p, ...r) => real.writeFileSync(remap(p), ...r);
@@ -31,8 +32,9 @@ const T = require('../lib/teams');
 T.useTemplates({ medical: { folder: 'medical', members: ['gp', 'labs', 'pharm', 'nutrition', 'sleep', 'vision', 'fitness', 'dental', 'secondopinion', 'wellness'], head: 'gp' }, legal: { folder: 'legal', members: ['contracts', 'counsel', 'benefits', 'property', 'taxes', 'business', 'legaldocs', 'legalreview', 'homefix'], head: 'counsel' } });
 T.TEMPLATES = T.templates();
 
-const DATA = path.join(TMP, path.basename(HUB_ROOT), 'data');
-const WS = path.join(TMP, path.basename(HUB_ROOT), 'workspaces');
+const DATA = remap(path.join(HUB_ROOT, 'data'));         // where the module's data/ and workspaces/ land in TMP
+const WS = remap(path.join(HUB_ROOT, 'workspaces'));
+const USERS = remap(path.join(HUB_HOME, 'users'));        // members' folders, wherever the hub home is
 const readAgents = () => JSON.parse(real.readFileSync(path.join(DATA, 'agents.json'), 'utf8'));
 const rd = (...p) => real.readFileSync(path.join(...p), 'utf8');
 const ann = { id: 'u_ann1', login: 'Ann.Lee@example.com', name: 'Ann Lee' };
@@ -108,7 +110,7 @@ test('createTeamForUser: validation before any write', async () => {
   const list = readAgents().filter(a => a.name !== 'labs');
   real.writeFileSync(path.join(DATA, 'agents.json'), JSON.stringify(list));
   assert.match((await T.createTeamForUser({ user: ann, template: 'Medical', fsImpl })).error, /template agents missing on this hub: labs/);
-  assert.ok(!real.existsSync(path.join(WS, 'annlee_gp')) && !real.existsSync(path.join(TMP, 'users')), 'nothing created');
+  assert.ok(!real.existsSync(path.join(WS, 'annlee_gp')) && !real.existsSync(USERS), 'nothing created');
 });
 
 test('createTeamForUser: copies .md files with names and folders rewritten, writes USER.md, registers owned agents', async () => {
@@ -119,7 +121,7 @@ test('createTeamForUser: copies .md files with names and folders rewritten, writ
   assert.strictEqual(r.head, 'annlee_gp');
   assert.deepStrictEqual(r.agents, T.TEMPLATES.medical.members.map(n => `annlee_${n}`));
   assert.strictEqual(r.folder, path.join(HUB_HOME, 'users', 'u_ann1', 'medical'), 'folder is the real (unremapped) path the agents will use');
-  for (const sub of ['inbox', 'patients', 'matters', 'documents', 'reference']) assert.ok(real.existsSync(path.join(TMP, 'users', 'u_ann1', 'medical', sub)), sub);
+  for (const sub of ['inbox', 'patients', 'matters', 'documents', 'reference']) assert.ok(real.existsSync(path.join(USERS, 'u_ann1', 'medical', sub)), sub);
   const soul = rd(WS, 'annlee_gp', 'SOUL.md');
   assert.strictEqual(soul, `Head of the team. Consult annlee_labs and annlee_pharm; docs folder: ${r.folder}/patients and ${r.folder}/inbox. The vision_specialist alias and "annlee_wellness." stay distinct.`);
   assert.strictEqual(rd(WS, 'annlee_labs', 'IDENTITY.md'), 'annlee_labs reports to annlee_gp');
@@ -138,7 +140,7 @@ test('createTeamForUser: copies .md files with names and folders rewritten, writ
   assert.match(again.error, /^agents already exist: annlee_gp, .*choose another prefix\)$/);
   const legal = await T.createTeamForUser({ user: ann, template: 'legal', prefix: 'Lex 2', fsImpl });
   assert.ok(legal.ok && legal.head === 'lex2_counsel' && legal.agents.length === 9);
-  assert.ok(real.existsSync(path.join(TMP, 'users', 'u_ann1', 'legal', 'matters')));
+  assert.ok(real.existsSync(path.join(USERS, 'u_ann1', 'legal', 'matters')));
 });
 
 test('createDefaultAssistant: one personal agent, existed:true on the second call', async () => {
@@ -150,7 +152,7 @@ test('createDefaultAssistant: one personal agent, existed:true on the second cal
   assert.strictEqual(rd(WS, 'annlee_assistant', 'SOUL.md'), T.assistantSoul(ann));
   assert.ok(rd(WS, 'annlee_assistant', 'IDENTITY.md').includes("## Role\nAnn Lee's personal assistant on My Maestro AI."));
   assert.ok(rd(WS, 'annlee_assistant', 'USER.md').includes('you are its head'));
-  assert.ok(real.existsSync(path.join(TMP, 'users', 'u_ann1', 'files')), 'Files folder created');
+  assert.ok(real.existsSync(path.join(USERS, 'u_ann1', 'files')), 'Files folder created');
   assert.deepStrictEqual(await T.createDefaultAssistant(ann, { model: 'other', fsImpl }), { ok: true, name: 'annlee_assistant', existed: true });
   assert.strictEqual(readAgents().filter(a => a.name === 'annlee_assistant').length, 1);
   assert.deepStrictEqual(await T.createDefaultAssistant(null, { fsImpl }), { ok: false, error: 'user required' });

@@ -111,7 +111,8 @@ test('a stream whose journal fails keeps sending (the work journal fails closed 
 
 test('the team folder lives under share/common, the one folder every admin-side agent can open', () => {
   const p = live.teamFolderFor('tiger-team-1-abc');
-  assert.equal(p, path.join(path.resolve(__dirname, '..', '..'), 'share', 'common', 'tiger-teams', 'tiger-team-1-abc'));
+  // Under the hub home, wherever it is: the folder above the install on older installs, <install>/hub-home on new ones (lib/hub-home).
+  assert.equal(p, path.join(require('../lib/hub-home').HUB_HOME, 'share', 'common', 'tiger-teams', 'tiger-team-1-abc'));
 });
 
 test('tools that cannot change anything', () => {
