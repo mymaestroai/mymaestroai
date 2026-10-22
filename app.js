@@ -48,6 +48,8 @@
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
+      paintUpdateCard().catch(() => {});
+      if (!window.__ucTimer) window.__ucTimer = setInterval(() => paintUpdateCard().catch(() => {}), 30 * 60 * 1000);
       return window.hubMe;
     }
     // An install updated from before multi-user has provider keys but no admin account, so the setup wizard never
@@ -104,7 +106,7 @@
       document.body.classList.add('member-view');
       // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
       for (const id of ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
-                        'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap']) {
+                        'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
         const el = document.getElementById(id);
         if (!el) continue;
         const row = el.closest('.more-item, .more-row') || el;
@@ -1387,6 +1389,8 @@
       const c = other && gsStatus && gsStatus.channels ? gsStatus.channels.channels.find(x => x.id === other) : null;
       if (c) { go.disabled = false; go.innerHTML = `Switch to ${esc(c.label)} &amp; Restart`; }
       else { go.disabled = !(gsStatus && gsStatus.canUpdate); go.innerHTML = gsStatus && gsStatus.canUpdate ? 'Update &amp; Restart' : 'Up to date'; }
+      // Discarding updates the current channel only, so it is off while another channel is chosen.
+      const force = document.getElementById('gs-force'); if (force) force.disabled = !!c;
     }
 
     async function runGitSync(force) {
@@ -1473,7 +1477,7 @@
     // groups, closed until opened. Sections are matched by id; one this list doesn't know lands in the last group,
     // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-updates-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
@@ -1636,6 +1640,13 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadSecurityCheck(true)">Run now</button><span id="st-sec-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadSecurityCheck, 0);
+      // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
+      html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
+        <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
+        <div class="st-row"><label style="flex-basis:150px">Check every day</label><input type="checkbox" id="st-uc-on" onchange="saveUpdateCheck(this.checked)"><span id="st-uc-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px">Checking…</span></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="checkUpdatesNow(this)">Check now</button></div>
+      </div>`;
+      setTimeout(loadUpdateCheck, 0);
       // Modules (lib/modules): optional capabilities with guided setup live on their own page.
       html += `<div class="st-section" id="st-modules-section"><h4>Modules</h4>
         <div class="st-hint">Optional capabilities for agents (crypto exchanges, wallets, mail, search...), each with a step-by-step setup, encrypted keys and per-agent access. <a href="/modules" style="color:var(--accent)">Open the Modules page →</a></div>
@@ -1648,13 +1659,16 @@
       </div>`;
       setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${(j.models || []).length} model(s)${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; if (j && j.ok !== false && j.enabled) stSum('models', 'local', `local models ${j.running ? 'running' : 'stopped'}`); } catch {} }, 0);
 
-      html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>`;
+      html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>
+        <div class="st-hint">Keys are kept in one place: <code>data/settings.json</code>, readable only by this computer's account. A key typed into <code>.env</code> moves here when the hub starts.</div>`;
       for (const p of PROVIDERS) {
         const pdata = data.providers?.[p.id] || {};
         if (p.hasKey) {
+          // A key the hub gets from its environment (a service file, Docker) is used until one is saved here.
+          const hint = pdata.hasKey ? `${pdata.keyHint}${pdata.keySource === 'environment' ? ' (from the environment)' : ''}` : 'Not set';
           html += `<div class="st-row">
             <label>${esc(p.label)}</label>
-            <input type="password" id="st-key-${p.id}" placeholder="${pdata.hasKey ? pdata.keyHint : 'Not set'}"
+            <input type="password" id="st-key-${p.id}" placeholder="${esc(hint)}"
               data-provider="${p.id}" data-field="apiKey">
             <button class="st-test-btn" onclick="testProvider('${p.id}')">Test</button>
           </div>`;
@@ -2033,6 +2047,114 @@
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-security-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:#7a1212;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
       bar.innerHTML = `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:#fff;text-decoration:underline">Open the security check</a>.`;
       layoutBanners();
+    }
+    // ── Update available (lib/update-check): the server looks at GitHub once a day. While an update waits, admins see
+    // a card at the bottom right (Update now / Later) and a chip in the sidebar; the chip stays after Later and brings
+    // the card back. "Update now" is the Update dialog's own update and restart, for the current channel. ──
+    let ucLast = null;
+    async function paintUpdateCard() {
+      const me = window.hubMe;
+      const chip = document.getElementById('update-chip');
+      if (!me || !me.isAdmin) { document.getElementById('hub-update-card')?.remove(); chip?.classList.remove('on'); return; }
+      let s;
+      try { const r = await fetch('/api/update-check', { credentials: 'include' }); if (!r.ok) return; s = await r.json(); } catch { return; }
+      ucLast = s;
+      const show = !!(s && s.enabled && s.available);
+      if (chip) {
+        chip.classList.toggle('on', show);
+        chip.classList.toggle('sec', show && !!s.security);
+        chip.textContent = show ? `⬇ ${s.latestVersion && s.latestVersion !== s.currentVersion ? s.latestVersion : 'Update'}` : '';
+        chip.title = !show ? '' : s.snoozed && s.laterUntil ? `${s.headline}. Card hidden until ${new Date(s.laterUntil).toLocaleString()}: click to see it now` : `${s.headline}: click to update now or later`;
+      }
+      if (show && !s.snoozed) showUpdateCard();
+      else document.getElementById('hub-update-card')?.remove();   // also when Later was pressed on another device
+    }
+    function showUpdateCard() {
+      const s = ucLast;
+      if (!s || !s.available) return;
+      let card = document.getElementById('hub-update-card');
+      if (!card) { card = document.createElement('div'); card.id = 'hub-update-card'; card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', 'Update available'); document.body.appendChild(card); }
+      card.classList.toggle('sec', !!s.security);
+      card.dataset.remote = s.remote || '';   // Later names the version this card shows
+      const busy = busyAgentNames();
+      const notes = (s.titles || []).map(t => `<li>${esc(t)}</li>`).join('') + (s.more ? `<li class="uc-more">and ${s.more} more</li>` : '');
+      const have = s.latestVersion && s.latestVersion !== s.currentVersion && s.currentVersion ? `You have ${esc(s.currentVersion)}.` : `You're on ${esc(s.channel || s.branch || 'this channel')}.`;
+      const warn = s.blocked
+        ? `<div class="uc-warn">This hub has ${s.ahead ? `${s.ahead} commit${s.ahead === 1 ? '' : 's'} of its own that GitHub doesn't have` : `${s.dirty} changed file${s.dirty === 1 ? '' : 's'} that ${s.dirty === 1 ? "isn't" : "aren't"} committed`}, so it can't update by itself. Open Details to choose what to do.</div>`
+        : busy.length ? `<div class="uc-warn">${busy.length === 1 ? `${esc(agentDisplayName(busy[0]))} is` : `${busy.length} agents are`} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short.</div>` : '';
+      card.innerHTML = `<div class="uc-head">⬇️ ${esc(s.headline || 'An update is ready')}</div>
+        <div class="uc-sub">${have}${s.security ? ' <span class="uc-sec">Includes a security fix.</span>' : ''}</div>
+        ${notes ? `<div class="uc-label">What's new</div><ul class="uc-notes">${notes}</ul>` : ''}${warn}
+        <div class="uc-msg" id="uc-msg"></div>
+        <div class="uc-actions">${s.blocked
+          ? `<button class="uc-btn" id="uc-later" onclick="updateLater()">Later</button><button class="uc-btn uc-primary" onclick="openGitSync()">Details</button>`
+          : `<a href="#" class="uc-details" onclick="openGitSync(); return false">Details…</a><button class="uc-btn" id="uc-later" onclick="updateLater()">Later</button><button class="uc-btn uc-primary" id="uc-now" onclick="updateNow()">Update now</button>`}</div>`;
+    }
+    async function updateLater() {
+      const shown = document.getElementById('hub-update-card')?.dataset.remote || '';
+      document.getElementById('hub-update-card')?.remove();
+      // Later names the version on the card: a newer one found meanwhile still shows.
+      try { const r = await fetch('/api/update-check/later', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote: shown || (ucLast && ucLast.remote) || null }) }); if (r.ok) ucLast = await r.json(); } catch { /* the card comes back on the next look */ }
+    }
+    async function updateNow() {
+      const now = document.getElementById('uc-now'), later = document.getElementById('uc-later'), msg = document.getElementById('uc-msg');
+      // Who is working now, not when the card was drawn: the restart cuts their replies short.
+      const busy = busyAgentNames();
+      if (busy.length && !confirm(`${busy.map(agentDisplayName).join(', ')} ${busy.length === 1 ? 'is' : 'are'} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short. Update now anyway?`)) return;
+      if (now) { now.disabled = true; now.textContent = 'Updating…'; }
+      if (later) later.disabled = true;
+      let r;
+      try { r = await (await fetch('/api/git-sync/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
+      catch (e) { r = { success: false, error: e.message }; }
+      if (!r || !r.success) {
+        // The Update dialog has the ways out (discard changes, move to a rewritten history): send the admin there.
+        if (msg) msg.innerHTML = `<div class="uc-err">The update didn't run: ${esc((r && r.error) || 'unknown error')}</div>`;
+        if (now) { now.disabled = false; now.textContent = 'Details'; now.onclick = () => openGitSync(); }
+        if (later) later.disabled = false;
+        return;
+      }
+      if (msg) msg.innerHTML = `<div class="uc-ok">✓ Updated. Restarting the hub…</div>`;
+      // The Update dialog's own restart: flush the active replies, restart, wait for the new boot.
+      const rbtn = document.getElementById('restart-hub-btn');
+      let refused = null;
+      try { const rr = await fetch('/api/restart', { method: 'POST', credentials: 'include' }); if (!rr.ok) refused = rr.status; } catch { /* expected: the server goes away */ }
+      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but the hub refused to restart (HTTP ${refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
+      setTimeout(() => pollForRestart(rbtn), 8000);
+    }
+    // Settings → Status → Updates.
+    function ucStateText(s) {
+      const when = s.checkedAt ? ` (checked ${new Date(s.checkedAt).toLocaleString()})` : '';
+      if (s.error && !s.available) return `Could not check: ${s.error}${when}`;
+      if (s.available) return `${s.headline}${s.snoozed && s.laterUntil ? `; card hidden until ${new Date(s.laterUntil).toLocaleString()}` : ''}${when}`;
+      return s.checkedAt ? `Up to date${s.currentVersion ? ` on ${s.currentVersion}` : ''}${when}` : 'Not checked yet';
+    }
+    async function loadUpdateCheck(s) {
+      const box = document.getElementById('st-uc-on'), state = document.getElementById('st-uc-state');
+      if (!box) return;
+      try { if (!s) s = await (await fetch('/api/update-check', { credentials: 'include' })).json(); }
+      catch (e) { if (state) state.textContent = 'Could not read: ' + e.message; return; }
+      box.checked = s.enabled !== false;
+      if (state) state.textContent = ucStateText(s);
+      stSum('status', 'updates', s.enabled === false ? 'Update check off' : s.available ? 'Update available' : 'Up to date');
+    }
+    async function saveUpdateCheck(on) {
+      const state = document.getElementById('st-uc-state');
+      try {
+        const r = await fetch('/api/update-check/settings', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !!on }) });
+        const s = await r.json();
+        if (!r.ok) throw new Error(s.error || `HTTP ${r.status}`);
+        loadUpdateCheck(s);
+        paintUpdateCard().catch(() => {});
+      } catch (e) { if (state) state.textContent = 'Not saved: ' + e.message; }
+    }
+    async function checkUpdatesNow(btn) {
+      if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+      try {
+        const s = await (await fetch('/api/update-check/now', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+        loadUpdateCheck(s);
+        paintUpdateCard().catch(() => {});
+      } catch (e) { const st = document.getElementById('st-uc-state'); if (st) st.textContent = 'Could not check: ' + e.message; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
     }
     // Web search and fetch (lib/web-search, lib/web-fetch): backend chain, keys, SearXNG container, fetch guards.
     async function loadWebSearchStatus() {
@@ -4591,10 +4713,26 @@
       setTimeout(() => { __modelListCache = null; }, 5 * 60000);
       return __modelListCache;
     }
-    async function fillModelPick(chatId) {
-      const chat = chats[chatId]; const sel = document.getElementById(`model-pick-${chatId}`);
-      if (!chat || !sel || sel.dataset.filled) return;
-      sel.dataset.filled = '1';
+    // The picker holds only the current model until its list is filled. A native list that opened before that showed
+    // one line, then jumped and was cut off when the list arrived while it was open (2026-10-21). So the list is filled
+    // when the chat opens, and a click that still comes first is held until the list is there, then the list opens.
+    const modelPickFilling = {};   // chatId -> the fill in progress
+    function modelPickDown(ev, chatId) {
+      const sel = document.getElementById(`model-pick-${chatId}`);
+      if (!sel || sel.dataset.filled === 'done') return true;
+      ev.preventDefault();
+      fillModelPick(chatId).then(() => { sel.focus(); try { if (sel.showPicker) sel.showPicker(); } catch { /* the next click opens it */ } });
+      return false;
+    }
+    function fillModelPick(chatId) {
+      const sel = document.getElementById(`model-pick-${chatId}`);
+      if (!chats[chatId] || !sel || sel.dataset.filled === 'done') return Promise.resolve();
+      if (!modelPickFilling[chatId]) modelPickFilling[chatId] = fillModelPickNow(chatId, sel).finally(() => { delete modelPickFilling[chatId]; });
+      return modelPickFilling[chatId];
+    }
+    async function fillModelPickNow(chatId, sel) {
+      const chat = chats[chatId];
+      sel.dataset.filled = 'pending';
       try {
         const { models, billing, health } = await modelList();
         const cur = String(chat.model || '');
@@ -4608,6 +4746,7 @@
             + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
         }
         if (html) { sel.innerHTML = html; sel.value = cur; }
+        sel.dataset.filled = 'done';
       } catch (e) { delete sel.dataset.filled; console.warn('[model-pick] list failed:', e.message); }
     }
     async function changeChatModel(chatId, model, opts = {}) {
@@ -5926,7 +6065,7 @@
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
 
-          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" title="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="fillModelPick('${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
+          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" title="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="return modelPickDown(event, '${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
@@ -5942,6 +6081,8 @@
         </div>
       `;
       panels.appendChild(panel);
+      // Fill the model picker now, so its list is complete before the first click (modelPickDown).
+      setTimeout(() => fillModelPick(chatId), 0);
       
       // Initialize pending images array for this chat
       chats[chatId].pendingImages = [];

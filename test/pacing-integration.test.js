@@ -19,8 +19,9 @@ test('consult_agent runs under the shared pacing keyed by the consulted agent\'s
   assert.ok(body.includes("if (opts.tigerTeam || opts.temporal) return consultViaHubNow("));
   assert.ok(body.includes('temporalWorkers.providerOf(await getAgentModel(agentName))'));
   assert.ok(body.includes('pacing.run(provider, () => consultViaHubNow('));
-  // both tool handlers hand the typed failure text to the coordinator
-  assert.strictEqual((sdk.match(/pacing\.failureText\(e, agent\)/g) || []).length, 2);
+  // both tool handlers hand the typed failure text to the coordinator, and so does a Tiger Team member's failure
+  assert.strictEqual((sdk.match(/pacing\.failureText\(e, agent\)/g) || []).length, 3);
+  assert.match(sdk, /function ttMemberFailureWhy\([^)]*\) \{(?:(?!\n\}\n)[\s\S])*?e && e\.pacing \? pacing\.failureText\(e, agent\)/);
 });
 
 test('the consulted turn\'s typed turn_error becomes a typed rejection the pacing layer can classify', () => {

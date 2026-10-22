@@ -62,7 +62,7 @@ test('mobile composer interjects into a running turn; Stop moves to the header; 
   assert.match(js, /stopBtn\.hidden = !working && !own/, 'header Stop also covers a stream this phone started');
   assert.ok(js.includes('function stopOwnTurn') && js.includes('function sendInterjection'));
   assert.ok(html.includes('#send-btn.interject') && html.includes('.note.interject'));
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v55'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v56'/);
   assert.ok(js.includes("addEventListener('controllerchange'"), 'a new build reloads the installed app once it takes control');
 });
 
@@ -94,7 +94,7 @@ test('mobile push: the phone re-registers when the hub no longer knows its subsc
 test('service worker: a forced (test) push shows its banner even when the app is open in front', () => {
   const sw = read('sw.js');
   assert.ok(sw.includes("if (!data.force && list.some(c => c.focused && c.visibilityState === 'visible')) return;"));
-  assert.match(sw, /const VERSION = 'hub-mobile-v55'/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v56'/);
 });
 
 test('ask_user dialogs: a click only highlights the choice and a Submit button sends it (desktop and phone)', () => {
@@ -104,7 +104,7 @@ test('ask_user dialogs: a click only highlights the choice and a Submit button s
   assert.ok(m.includes("else { b.classList.add('selected'); selected[i] = opt.label; }") && m.includes('<button class="qsubmit" disabled>Submit</button>'), 'phone selects then submits');
   assert.ok(app.includes('if (was) delete selected[qi];') && m.includes('if (was) delete selected[i];'), 'a second click on the highlighted option clears it');
   assert.ok(ih.includes('.question-option.selected {') && mh.includes('.question button.opt.selected {'), 'selected styles on both pages');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v55'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v56'/);
 });
 
 test('a pending ask_user question is re-shown from the hub event stream and on turn catch-up, on both pages (dedup by request id)', () => {
@@ -127,7 +127,7 @@ test('a pending ask_user question is re-shown from the hub event stream and on t
   assert.ok(m.includes("const pq = pendingQuestionsByAgent.get(rec.agent);") && !m.includes("const pq = pendingQuestionsByAgent.get(name);"), 'own-stream path looks up its own agent');
   assert.ok(m.includes("on('ask_user_done'") && m.includes("if (shownQuestions.has(request_id)) {"), 'phone closes and dedups');
   assert.ok(m.includes("if (old && !old.isConnected) { chatEl().appendChild(old); scrollChat(); }"), 'an unanswered question survives the chat being closed and reopened');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v55'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v56'/);
 });
 
 test('after a hub restart both pages reload themselves: hello carries the boot id, a changed id triggers a reload once nothing streams', () => {
@@ -140,8 +140,8 @@ test('after a hub restart both pages reload themselves: hello carries the boot i
   assert.ok(writes.some(w => w.includes('"boot":"boot-test-1"')), writes.join('|').slice(0, 300));
   const app = read('app.js'), m = read('mobile.js');
   assert.ok(app.includes("ev.boot !== window.__hubBoot") && app.includes("Object.values(chats).some(c => c && c.controller)") && app.includes('location.reload()'), 'desktop reloads when idle');
-  assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("if (streams.size) { setTimeout(go, 2000); return; }"), 'phone reloads when idle');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v55'/);
+  assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; }"), 'phone reloads when idle and not typing');
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v56'/);
 });
 
 test('a pasted image with no words is a valid chat message (no HTTP 400)', () => {
@@ -156,7 +156,7 @@ test('phone: Update hub in the menu (admins only) asks the channel like the desk
   assert.ok(js.includes('async function openUpdateSheet()') && js.includes("$('menu-update').addEventListener('click', openUpdateSheet);"));
   assert.ok(js.includes("const r = await api('/api/git-sync/status');"), 'reads the same status as the desktop dialog');
   assert.ok(js.includes(`name="upd-channel"`) && js.includes('Switch to ${other.label} & restart'), 'channel radios with the switch label');
-  assert.ok(js.includes("await api('/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel ? { channel } : {}) });"));
+  assert.ok(js.includes("await api(force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !force ? { channel } : {}) });"), 'the update, or with confirmation the discard-and-update');
   assert.ok(js.includes("if (hubMe && !hubMe.isAdmin) { $('menu-restart').hidden = true; $('menu-update').hidden = true; }"), 'members see neither Update nor Restart');
   assert.ok(js.includes('setTimeout(() => { d.close(); restartHub(); }, 800);'), 'reuses the Restart button\'s wait-for-hub path');
 });
@@ -187,4 +187,25 @@ test('after a send the message box lets go so the keyboard closes; nothing to se
   assert.match(fn, /if \(\(hadText && !input\.value\.trim\(\)\) \|\| \(hadImages && !pendingImages\.length\)\) input\.blur\(\);/);
   assert.ok(fn.indexOf('sendMessage();') < fn.indexOf('input.blur()'), 'the box lets go only after the send has taken the text');
   assert.ok(!js.includes('tapLog') && !js.includes('menu-tapreport'), 'the temporary tap recorder is gone');
+});
+
+test('the message box keeps a draft per agent: saved as you type, restored when the chat opens, cleared by a send', () => {
+  const js = read('mobile.js');
+  assert.ok(js.includes("const DRAFTS_KEY = 'hub-mobile-drafts';") && js.includes('function saveDraft(agent, text)') && js.includes('function restoreDraft(agent)'));
+  assert.ok(js.includes('saveDraft(current, input.value); });'), 'every keystroke is kept');
+  assert.ok(js.includes('if (!same) restoreDraft(name);'), 'opening a chat brings its draft back (also after a reload)');
+  const send = js.slice(js.indexOf('async function sendMessage('), js.indexOf('async function sendMessage(') + 1400);
+  assert.ok(send.includes("input.style.height = 'auto';\n    saveDraft(agent, '');"), 'a send clears the draft');
+  assert.ok(js.includes("input.value = text;\n        saveDraft(agent, text);"), 'a refused send (409) puts the text back and keeps it');
+  const inter = js.slice(js.indexOf('async function sendInterjection('), js.indexOf('async function sendInterjection(') + 2200);
+  assert.ok(inter.includes("saveDraft(agent, '');") && inter.includes('{ input.value = text; saveDraft(agent, text); }'), 'interjections too');
+});
+
+test('the app does not reload itself while the message box is in use (focused or holding text), for up to 10 minutes', () => {
+  const js = read('mobile.js');
+  assert.ok(js.includes("function typingNow() { const i = $('msg-input'); return !!i && (document.activeElement === i || !!i.value.trim()); }"));
+  const reloads = js.split('location.reload()').length - 1;
+  assert.strictEqual(reloads, 3, 'three reload sites: hub back after Restart, hub restarted, new app version');
+  assert.ok(js.includes("if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800);"), 'after a hub restart');
+  assert.ok(js.includes("if (streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } toast('Updating to the new version…');"), 'after a new app version');
 });

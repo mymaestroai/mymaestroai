@@ -99,5 +99,5 @@ test('agent settings: a Records section after Tool policy lists, edits, creates 
 });
 
 test('service worker cache bumped to v18', () => {
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v55';"));
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v56';"));
 });

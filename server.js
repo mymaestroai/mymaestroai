@@ -63,8 +63,26 @@ const ttListCheckpoints = () => ttStore.list().map(cp => {
   return live ? ttRecovery.snapshot(cp.id, live) : ttRecovery.snapshot(cp.id, ttRecovery.restore(cp));
 });
 const ttGetDurableState = id => getTigerTeamState(id);
+// A run writes to its own stream, not to the page that started it: pages attach, drop and replay (lib/tiger-team-live).
+const ttLive = require('./lib/tiger-team-live');
+const ttNewStream = () => new ttLive.TeamStream({ store: ttStore, getState: id => activeTigerTeams.get(id) || null });
+/** The team a war-room request is about: its tiger_team_id, else the team of the session that started it (older pages). */
+function ttTeamOf(body) {
+  if (body && typeof body.tiger_team_id === 'string' && ttValidId(body.tiger_team_id)) return body.tiger_team_id;
+  const s = body && global.__tigerTeamSessions && global.__tigerTeamSessions[body.session_id];
+  return (s && s.tigerTeamId) || null;
+}
 // ── Setup Detection ──────────────────────────────────────────────────────
 const ENV_FILE = path.join(__dirname, '.env');
+// API keys live in one place, Settings (data/settings.json). Keys still typed into .env move there once, with a
+// copy of the old .env kept beside it (lib/settings adoptEnvFileKeys; HUB_KEEP_ENV_KEYS=1 leaves them in .env).
+try {
+  const r = require('./lib/settings').adoptEnvFileKeys({ envFile: ENV_FILE });
+  const names = [...r.moved, ...r.duplicates, ...r.unused];
+  if (r.error) console.warn(`[settings] API keys in .env were not moved: ${r.error}`);
+  else if (r.kept) console.log('[settings] HUB_KEEP_ENV_KEYS is set: API keys stay in .env');
+  else if (names.length) console.log(`[settings] moved ${names.join(', ')} from .env into Settings (the old .env is kept as ${path.basename(r.backup)})`);
+} catch (e) { console.warn('[settings] could not move API keys out of .env:', e.message); }
 function isSetupNeeded() {
   // First-run setup (the Welcome page, lib/welcome) is needed until the hub has an admin account and at least one way
   // for agents to think: an API key, a Claude sign-in or a local model. An .env file alone no longer counts.
@@ -2116,6 +2134,37 @@ async function handleHttpRequest(req, res) {
       }
     }
 
+    // ── Update check (lib/update-check.js): the daily look at GitHub behind the "Update available" card. Admin
+    // routes (lib/access classes every /api path not listed elsewhere as admin-only). ──
+    if (pathname === '/api/update-check' && req.method === 'GET') {
+      try { return jsonResponse(res, 200, await require('./lib/update-check').getUpdateCheck().status(req.hubUser)); }
+      catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+    if (pathname === '/api/update-check/now' && req.method === 'POST') {
+      try { const uc = require('./lib/update-check').getUpdateCheck(); await uc.check({ reason: 'manual' }); return jsonResponse(res, 200, await uc.status(req.hubUser)); }
+      catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+    if (pathname === '/api/update-check/later' && req.method === 'POST') {
+      let body = {}; try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
+      // Later names the version the card showed; without it a newer version found meanwhile could be hidden unseen.
+      const remote = body && typeof body.remote === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(body.remote) ? body.remote : null;
+      if (!remote) return jsonResponse(res, 400, { error: 'remote (the commit the card shows) is required' });
+      try { return jsonResponse(res, 200, await require('./lib/update-check').getUpdateCheck().later(req.hubUser, remote)); }
+      catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+    if (pathname === '/api/update-check/settings' && req.method === 'POST') {
+      let body = {};
+      try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
+      if (typeof body.enabled !== 'boolean') return jsonResponse(res, 400, { error: 'enabled must be true or false' });
+      try {
+        const settingsLib = require('./lib/settings');
+        settingsLib.updateSettings({ updateCheck: { ...(settingsLib.getSetting('updateCheck', {}) || {}), enabled: body.enabled } });
+        const uc = require('./lib/update-check').getUpdateCheck();
+        uc.start();
+        return jsonResponse(res, 200, await uc.status(req.hubUser));
+      } catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+
     // ── Manual restart via UI button ──
     if (pathname === '/api/restart' && req.method === 'POST') {
       console.log('[Server] Manual restart triggered via UI button');
@@ -2185,11 +2234,13 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/tiger-team/inject' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
       const { session_id, message } = body;
-      if (!session_id || !message) return jsonResponse(res, 400, { error: 'Missing session_id or message' });
+      if ((!session_id && !body.tiger_team_id) || !message) return jsonResponse(res, 400, { error: 'Missing tiger_team_id or message' });
       if (!global.__tigerTeamSessions) global.__tigerTeamSessions = {};
-      const session = global.__tigerTeamSessions[session_id];
-      if (!session) return jsonResponse(res, 404, { error: 'Session not found' });
-      const state = session.tigerTeamId && getTigerTeamState(session.tigerTeamId);
+      // A page names its team (tiger_team_id); older pages name the session that started it.
+      const session = global.__tigerTeamSessions[session_id] || null;
+      const ttId = ttTeamOf(body);
+      if (!session && !ttId) return jsonResponse(res, 404, { error: 'Session not found' });
+      const state = ttId && getTigerTeamState(ttId);
       if (!state) return jsonResponse(res, 409, { error: 'Team is still starting.  Retry after it is ready.' });
       // Interject: the coordinator gets it durably (journaled; picked up before its next model
       // call, survives resume). With target "team" (default) every participant working RIGHT NOW
@@ -2201,14 +2252,18 @@ async function handleHttpRequest(req, res) {
       const live = target === 'team' ? [...new Set(running)] : (target !== 'coordinator' && running.includes(target)) ? [target] : [];
       if (target !== 'team' && target !== 'coordinator' && !live.length) return jsonResponse(res, 409, { error: `"${target}" is not working right now; send it to the team or the coordinator instead.` });
       const delivered = [];
-      if (target === 'team' || target === 'coordinator') { ttRecovery.queueDirective(ttStore, session.tigerTeamId, state, message); delivered.push({ agent: state.coordinator, how: 'queued' }); }
+      if (target === 'team' || target === 'coordinator') { ttRecovery.queueDirective(ttStore, ttId, state, message); delivered.push({ agent: state.coordinator, how: 'queued' }); }
       for (const agent of live) { const r = ttInterject({ agent, message: `[Interjection from the war room, addressed to the whole team]: ${message}` }); if (r.success) delivered.push({ agent, how: 'live' }); }
-      try { ttStore.append(session.tigerTeamId, state, { type: 'tt_interjection', message, target, delivered, at: new Date().toISOString() }); } catch {}
-      console.log(`[tiger-team] interjection for ${session.tigerTeamId} (${target}): ${delivered.map(d => `${d.agent}:${d.how}`).join(', ') || 'nobody'}`);
+      try { ttStore.append(ttId, state, { type: 'tt_interjection', message, target, delivered, at: new Date().toISOString() }); } catch {}
+      console.log(`[tiger-team] interjection for ${ttId} (${target}): ${delivered.map(d => `${d.agent}:${d.how}`).join(', ') || 'nobody'}`);
+      // Every page on this team sees the interjection (and a page that replays later draws it too).
+      const frame = `data: ${JSON.stringify({ gateway: { type: 'tt_user_message', message, target, delivered } })}\n\n`;
+      const stream = ttLive.get(ttId);
       try {
-        if (!session.res.destroyed && !session.res.writableEnded) session.res.write(`data: ${JSON.stringify({ gateway: { type: 'tt_user_message', message, target, delivered } })}\n\n`);
+        if (stream) stream.write(frame);
+        else if (session && session.res && !session.res.destroyed && !session.res.writableEnded) session.res.write(frame);
       } catch {}
-      return jsonResponse(res, 200, { ok: true, target, delivered, queued: (session.pendingMessages || []).length });
+      return jsonResponse(res, 200, { ok: true, target, delivered, queued: (state.pendingMessages || []).length });
     }
 
     // Tiger Team update participants
@@ -2218,7 +2273,7 @@ async function handleHttpRequest(req, res) {
       if (!Array.isArray(participants)) return jsonResponse(res, 400, { error: 'participants must be an array' });
       // Update the active Tiger Team state in sdk-chat
       const { updateTigerTeamParticipants } = require('./lib/sdk-chat');
-      const updated = updateTigerTeamParticipants(participants);
+      const updated = updateTigerTeamParticipants(participants, ttTeamOf(body));
       if (!updated) return jsonResponse(res, 404, { error: 'No active Tiger Team found' });
       return jsonResponse(res, 200, { ok: true, participants });
     }
@@ -2228,18 +2283,17 @@ async function handleHttpRequest(req, res) {
       const body = JSON.parse(await readBody(req));
       const { session_id } = body;
       if (!global.__tigerTeamSessions) global.__tigerTeamSessions = {};
-      const session = global.__tigerTeamSessions[session_id];
-      if (!session) return jsonResponse(res, 404, { error: 'Session not found' });
-      session.stopped = true;
-      // Target ONLY this session's own Tiger Team, not every running TT -
-      // stopTigerTeam(null) previously killed every concurrent investigation.
-      if (session.tigerTeamId) stopTigerTeam(session.tigerTeamId);
-      else session.abortController?.abort();
-      try {
-        if (!session.res.destroyed && !session.res.writableEnded) session.res.write(`data: ${JSON.stringify({ gateway: { type: 'tt_interrupted', reason: 'User stopped the session' } })}\n\n`);
-        if (!session.res.destroyed && !session.res.writableEnded) session.res.write('data: [DONE]\n\n');
-        if (!session.res.destroyed && !session.res.writableEnded) session.res.end();
-      } catch {}
+      // A page names its team (tiger_team_id, which works after a reload too); older pages name their session.
+      const session = global.__tigerTeamSessions[session_id] || null;
+      const ttId = ttTeamOf(body);
+      if (!session && !ttId) return jsonResponse(res, 404, { error: 'Session not found' });
+      if (session) session.stopped = true;
+      // Target ONLY this team, not every running TT - stopTigerTeam(null) previously killed every concurrent
+      // investigation. The run then ends itself and tells every attached page (tt_interrupted, status stopped).
+      if (ttId) {
+        for (const s of Object.values(global.__tigerTeamSessions)) if (s.tigerTeamId === ttId) s.stopped = true;
+        stopTigerTeam(ttId);
+      } else session.abortController?.abort();
       return jsonResponse(res, 200, { ok: true });
     }
 
@@ -2482,6 +2536,7 @@ async function handleHttpRequest(req, res) {
         } catch {}
       }
       if (!state) return jsonResponse(res, 404, { error: 'Tiger Team not found (no live state or checkpoint)' });
+      const liveStream = ttLive.get(state.id);
       return jsonResponse(res, 200, {
         id: state.id,
         status: state.status,
@@ -2491,7 +2546,12 @@ async function handleHttpRequest(req, res) {
         objective: (state.objective || '').slice(0, 300),
         coordinator: state.coordinator,
         participants: state.participants,
+        challenger: state.challenger || '',
         mode: state.mode,
+        // Live replay: a page follows the team with /api/tiger-team/stream (has_stream: its events were journaled).
+        live: !!liveStream, viewers: liveStream ? liveStream.viewerCount : 0,
+        has_stream: !!(state.hasStream || liveStream), last_seq: state.eventSeq || 0,
+        team_folder: state.teamFolder || null,
       });
     }
 
@@ -2533,25 +2593,21 @@ async function handleHttpRequest(req, res) {
       global.__tigerTeamSessions ||= {};
       global.__tigerTeamSessions[sessionId] = session;
       ttRecovery.attachSession(state, session);
-      let closed = false;
-      let heartbeat;
+      // As at start: the run writes to the team's stream and this page is one viewer of it, so closing the page
+      // leaves the team working. The new events continue the team's journal after the ones already there.
+      const stream = ttNewStream().bind(id);
       try {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.write('data: ' + JSON.stringify({ gateway: { type: 'tt_session', session_id: sessionId } }) + '\n\n');
-        res.on('close', () => {
-          if (closed || res.writableEnded || session.stopped) return;
-          session.stopped = true;
-          stopTigerTeam(id, 'disconnect');
-        });
-        heartbeat = setInterval(() => { if (!res.destroyed && !res.writableEnded) res.write(': heartbeat\n\n'); }, 15000);
+        stream.attach(res);
         if (resume && !state.legacyRecovery) {
-          await resumeTigerTeam(id, res, session);
+          await resumeTigerTeam(id, stream, session);
         } else {
           if (resume) {
-            res.write('data: ' + JSON.stringify({ gateway: { type: 'tt_notice', message: 'Legacy save: recovering from transcript only.  In-flight tool outcomes are unknown and must be verified before repeating actions.' } }) + '\n\n');
+            stream.write('data: ' + JSON.stringify({ gateway: { type: 'tt_notice', message: 'Legacy save: recovering from transcript only.  In-flight tool outcomes are unknown and must be verified before repeating actions.' } }) + '\n\n');
             message = 'Resume the interrupted investigation using the saved findings.  Do not repeat completed work.  This is a legacy transcript without a tool journal: verify uncertain actions using read-only checks before repeating anything that changes state.';
           }
-          await continueTigerTeam(id, message, res);
+          await continueTigerTeam(id, message, stream);
         }
       } catch (e) {
         const current = getTigerTeamState(id);
@@ -2563,14 +2619,13 @@ async function handleHttpRequest(req, res) {
             e = new Error(e.message + '.  STORAGE FAILURE: ' + storageError.message);
           }
         }
-        if (!res.destroyed && !res.writableEnded) res.write('data: ' + JSON.stringify({ gateway: { type: 'tt_interrupted', message: e.message } }) + '\n\n');
+        stream.write('data: ' + JSON.stringify({ gateway: { type: 'tt_interrupted', message: e.message } }) + '\n\n');
       } finally {
-        closed = true;
         state.apiReserved = false;
         const current = getTigerTeamState(id);
         if (current) current.apiReserved = false;
-        clearInterval(heartbeat);
         delete global.__tigerTeamSessions[sessionId];
+        stream.end();   // [DONE] to every page still attached, this one included
         if (!res.destroyed && !res.writableEnded) { res.write('data: [DONE]\n\n'); res.end(); }
       }
       return;
@@ -2619,87 +2674,79 @@ async function handleHttpRequest(req, res) {
       const session = { res, stopped: false, pendingMessages: [], abortController: new AbortController() };
       global.__tigerTeamSessions[sessionId] = session;
 
-      // Handle client disconnect.  Distinguishes an intentional /stop (which
-      // sets session.stopped BEFORE closing the SSE response itself) from an
-      // unannounced disconnect (page refresh / network blip): unannounced
-      // disconnects get a short grace window before aborting, so a refresh
-      // can reconnect (via Resume) without killing in-flight work instantly.
-      // Only THIS session's own Tiger Team is targeted - never all running
-      // teams - so concurrent investigations in other tabs are unaffected.
-      res.on('close', () => {
-        if (session.stopped || session.completed || res.writableEnded) {
-          // Already an intentional stop (handled by /api/tiger-team/stop) -
-          // that endpoint already aborted and checkpointed; nothing more to do.
-          clearInterval(heartbeat);
-          delete global.__tigerTeamSessions[sessionId];
-          return;
-        }
-        const graceMs = 8000;
-        setTimeout(() => {
-          const stillTracked = global.__tigerTeamSessions[sessionId];
-          if (!stillTracked || stillTracked.stopped) return; // stopped/finished normally during grace window
-          console.log(`[tiger-team-api] Client disconnected (session ${sessionId}${session.tigerTeamId ? `, tt ${session.tigerTeamId}` : ''}), grace window expired - stopping this TT only`);
-          session.stopped = true;
-          stopTigerTeam(session.tigerTeamId || sessionId, 'disconnect');
-          session.abortController?.abort();
-          delete global.__tigerTeamSessions[sessionId];
-        }, graceMs);
-      });
+      // The team runs on its own stream; this page is only its first viewer. Closing, reloading or losing the page
+      // no longer stops the team (it used to, eight seconds after the page went away): the page re-attaches through
+      // /api/tiger-team/stream and replays what it missed. Only Stop ends a team early.
+      const stream = ttNewStream();
+      stream.attach(res);
 
-      // Send session ID to client
+      // Send session ID to client (this page only: not part of the team's journal)
       if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify({ gateway: { type: 'tt_session', session_id: sessionId } })}\n\n`);
-
-      // Heartbeat to keep connection alive
-      const heartbeat = setInterval(() => {
-        try { if (!res.destroyed && !res.writableEnded) res.write(':\n\n'); } catch {}
-      }, 15000);
 
       try {
         let result;
         if (mode === 'roundtable') {
           result = await runRoundtable(
             { objective, coordinator, participants: effectiveParticipants, max_rounds: max_rounds || 3, context: context || '', session },
-            res
+            stream
           );
         } else {
           result = await runTigerTeam(
             { objective, coordinator, participants: effectiveParticipants, max_rounds: max_rounds || 5, context: context || '', challenger: challenger || '', challengerDirective: challengerDirective || '', directives: directives || {}, session },
-            res,
+            stream,
             'tiger-team-ui'
           );
         }
-        // Mark completed IMMEDIATELY so the res.on('close') handler treats this as a normal finish
+        // A run that got going reports its own end (tt_complete or tt_interrupted). Only a refusal before it
+        // started (an unknown agent) comes back as text with no team behind it.
         const runState = session.tigerTeamId ? getTigerTeamState(session.tigerTeamId) : null;
-        const runFailed = runState ? runState.status !== 'completed' : (typeof result === 'string' && /^(Error:|Tiger Team failed:)/.test(result));
-        if (!runFailed) {
-          session.completed = true;
-        }
-        // Stop may already have ended this stream.  Guard writes explicitly;
-        // write-after-end emits an asynchronous error that try/catch cannot catch.
-        // Surface validation errors that are returned as strings
-        if (runFailed) {
+        if (!runState && typeof result === 'string' && /^(Error:|Tiger Team failed:)/.test(result)) {
           console.error('[tiger-team-api] Validation error:', result);
-          try {
-            if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify({ gateway: { type: 'tt_error', message: result } })}\n\n`);
-          } catch {}
+          stream.write(`data: ${JSON.stringify({ gateway: { type: 'tt_error', message: result } })}\n\n`);
+        } else if (runState && runState.status !== 'completed') {
+          console.log(`[tiger-team-api] ${session.tigerTeamId} ended ${runState.status}${runState.error ? `: ${runState.error}` : ''}`);
         }
       } catch (e) {
         console.error('[tiger-team-api] Error:', e.message);
-        try {
-          if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify({ gateway: { type: 'tt_error', message: e.message } })}\n\n`);
-        } catch {}
+        stream.write(`data: ${JSON.stringify({ gateway: { type: 'tt_error', message: e.message } })}\n\n`);
       } finally {
-        // Mark this session's own close-handler grace window as moot - the
-        // run reached a real terminal state normally (completed or errored
-        // above), so the delayed disconnect-abort must not fire for it.
         session.stopped = true;
-        clearInterval(heartbeat);
         delete global.__tigerTeamSessions[sessionId];
+        stream.end();   // [DONE] to every page still attached, this one included
+        // Stop may already have ended this response.  Guard writes explicitly;
+        // write-after-end emits an asynchronous error that try/catch cannot catch.
         try {
           if (!res.destroyed && !res.writableEnded) res.write('data: [DONE]\n\n');
           if (!res.destroyed && !res.writableEnded) res.end();
         } catch {}
       }
+      return;
+    }
+
+    // Follow a team from any page: replay its journaled events after ?since=<tt_seq>, then stay attached while it
+    // runs. A team from before the stream journal answers 404 { legacy: true } and the page shows its saved transcript.
+    if (pathname === '/api/tiger-team/stream' && req.method === 'GET') {
+      const params = new URL(req.url, 'http://127.0.0.1').searchParams;
+      const id = params.get('id');
+      const since = Math.max(0, Math.trunc(Number(params.get('since')) || 0));
+      if (!ttValidId(id)) return jsonResponse(res, 400, { error: 'Missing or invalid id' });
+      const state = getTigerTeamState(id);
+      if (!state) return jsonResponse(res, 404, { error: 'Tiger Team not found' });
+      const live = ttLive.get(id);
+      if (!state.hasStream && !live) return jsonResponse(res, 404, { error: 'This team was saved before live replay existed', legacy: true });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+      // A running team: attach first, holding its new events for this page, and note where the journal ends at that
+      // moment (all synchronous, so nothing falls between). Then replay up to there at the connection's pace, then
+      // send what was held and follow live. No event is lost or repeated, and a slow page never piles up memory.
+      const following = !!(live && live.attach(res, { hold: true }));
+      const until = following ? (state.eventSeq || 0) : Infinity;
+      try { await ttLive.replay(ttStore, id, res, since, until); }
+      catch (e) { if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify({ gateway: { type: 'tt_notice', message: 'Part of this team\'s history could not be read: ' + e.message } })}\n\n`); }
+      if (following) { await live.release(res); return; }
+      if (res.destroyed || res.writableEnded) return;
+      // Not running: say how it ended, for runs that stopped without a final event (a hub restart mid-run).
+      res.write(`data: ${JSON.stringify({ gateway: { type: 'tt_state', status: state.status, error: state.error || null, unresolved: ttRecovery.unresolved(state).length } })}\n\n`);
+      res.write('data: [DONE]\n\n'); res.end();
       return;
     }
 
@@ -2845,6 +2892,10 @@ server.listen(PORT, HOST, () => {
       onResult: (r) => { try { require('./lib/hub-events').events.publish('security_check', { critical: r.critical, warnings: r.warnings, checkedAt: r.checkedAt }); } catch {} },
     });
   } catch (e) { console.warn(`[security] ${e.message}`); }
+
+  // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
+  // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).
+  try { require('./lib/update-check').getUpdateCheck().start(); } catch (e) { console.warn(`[update-check] ${e.message}`); }
 
   // Detached jobs: reconcile jobs that ended while the hub was down, announce them, start polling.
   try { const jr = getJobRunner().start(); console.log(`[jobs] runner started (${jr.mode()}; ${jr.list(null).filter(j => j.status === 'running').length} running)`); }

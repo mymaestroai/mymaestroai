@@ -1502,6 +1502,7 @@ async function openChat(name) {
   if (same && ((rec && bubbleLive(rec)) || (ra && bubbleLive(ra)))) { paintChatStatus(); return; }
   pendingImages = [];
   renderPreviews();
+  if (!same) restoreDraft(name);   // each chat keeps its own draft; the box no longer carries text from another agent
   chatEl().innerHTML = '';
   addNote('Loading…');
   stick = true;
@@ -2032,6 +2033,7 @@ async function sendInterjection(agent) {
   if (!text) { if (pendingImages.length) toast('Images cannot be interjected; send them when the turn ends'); return; }
   input.value = '';
   input.style.height = 'auto';
+  saveDraft(agent, '');
   stick = true;
   const userEl = addUserBubble(text, null);
   const noteEl = addNote('⤵ delivering mid-turn…');
@@ -2062,7 +2064,7 @@ async function sendInterjection(agent) {
     return;
   }
   noteEl.textContent = `⚠ not delivered: ${error}`;
-  if (current === agent && !input.value) input.value = text;
+  if (current === agent && !input.value) { input.value = text; saveDraft(agent, text); }
 }
 
 // The hub no longer stops a turn when the browser goes away, so Stop has to say so explicitly.
@@ -2120,6 +2122,28 @@ function sendAndClose() {
   if ((hadText && !input.value.trim()) || (hadImages && !pendingImages.length)) input.blur();
 }
 
+// The message box keeps a draft per agent in localStorage (2026-10-21: a half-typed message vanished when the app
+// reloaded itself for a new version as a reply finished). So a reload, a hub restart or switching chats never loses
+// what was being typed; a send clears it. Text only: pasted images are not kept.
+const DRAFTS_KEY = 'hub-mobile-drafts';
+function draftsAll() { try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {}; } catch { return {}; } }
+function saveDraft(agent, text) {
+  if (!agent) return;
+  const all = draftsAll();
+  if (text && text.trim()) all[agent] = { text, at: Date.now() }; else delete all[agent];
+  try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(all)); } catch {}
+}
+function restoreDraft(agent) {
+  const input = $('msg-input'); if (!input) return;
+  const d = draftsAll()[agent];
+  input.value = d && typeof d.text === 'string' ? d.text : '';
+  input.style.height = 'auto';
+  if (input.value) input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
+}
+// A reload the app wants (a new version, a hub restart) waits while the message box is in use: focused or holding
+// text. At most 10 minutes; the draft is saved either way, so even a reload that has to happen brings the text back.
+function typingNow() { const i = $('msg-input'); return !!i && (document.activeElement === i || !!i.value.trim()); }
+
 // `fallback` is set when an interjection found the turn already over: the text and its user
 // bubble are reused instead of being read from the composer again.
 async function sendMessage(fallback) {
@@ -2136,6 +2160,7 @@ async function sendMessage(fallback) {
   if (!fallback) {
     input.value = '';
     input.style.height = 'auto';
+    saveDraft(agent, '');
     pendingImages = [];
     renderPreviews();
   }
@@ -2171,6 +2196,7 @@ async function sendMessage(fallback) {
       fallback?.noteEl?.remove();
       if (current === agent) {
         input.value = text;
+        saveDraft(agent, text);
         pendingImages = images;
         renderPreviews();
         toast('Agent is busy; it will finish first');
@@ -2734,35 +2760,111 @@ async function openUpdateSheet() {
   const blockers = s.blockers && s.blockers.length ? `<p class="upd-err">Update blocked: ${esc(s.blockers.join('; '))}</p>` : '';
   const incoming = s.commits && s.commits.length ? `<details><summary>${s.commits.length} incoming commit${s.commits.length === 1 ? '' : 's'}</summary>${s.commits.map(c => `<div>${esc(c)}</div>`).join('')}</details>` : '';
   const stayLabel = s.canUpdate ? 'Update & restart' : (s.upToDate ? 'Up to date' : 'Blocked');
-  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${incoming}<div class="btns"><button id="upd-close">Cancel</button><button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
+  const force = s.canForce ? `<p><small>The changed files are application files, not your data: they can be discarded.</small></p>` : '';
+  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${s.canForce ? '<button id="upd-force">Discard changes &amp; update</button>' : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
+  // Discarding updates the current channel only, so it is off while another channel is chosen.
+  if (s.canForce) $('upd-force').addEventListener('click', () => { if (chosen()) return; if (confirm(`Discard ${s.dirty.length} changed application file${s.dirty.length === 1 ? '' : 's'} and update ${s.branch}? Your chats, agents and data are not touched.`)) runUpdateFromPhone(null, true); });
   const go = $('upd-go');
   const chosen = () => { const sel = d.querySelector('input[name="upd-channel"]:checked'); return sel && sel.value !== ch.current ? sel.value : null; };
   const refresh = () => {
     const other = chosen() ? ch.channels.find(c => c.id === chosen()) : null;
     if (other) { go.disabled = false; go.textContent = `Switch to ${other.label} & restart`; }
     else { go.disabled = !s.canUpdate; go.textContent = stayLabel; }
+    if ($('upd-force')) $('upd-force').disabled = !!other;
   };
   for (const r of d.querySelectorAll('input[name="upd-channel"]')) r.addEventListener('change', refresh);
   $('upd-close').addEventListener('click', () => d.close());
   go.addEventListener('click', () => runUpdateFromPhone(chosen()));
 }
 
-async function runUpdateFromPhone(channel) {
+async function runUpdateFromPhone(channel, force = false) {
   const d = $('update-sheet');
   const go = $('upd-go');
   if (go) { go.disabled = true; go.textContent = channel ? 'Switching…' : 'Updating…'; }
   let r;
   try {
-    const resp = await api('/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel ? { channel } : {}) });
+    const resp = await api(force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !force ? { channel } : {}) });
     r = await resp.json();
   } catch (e) { r = { success: false, error: e.message }; }
   if (!r || !r.success) {
-    d.innerHTML = `<p class="upd-err">Update failed: ${esc((r && r.error) || 'unknown error')}</p><div class="btns"><button id="upd-close">Close</button></div>`;
+    d.innerHTML = `<p class="upd-err">Update failed: ${esc((r && r.error) || 'unknown error')}</p><div class="btns"><button id="upd-close">Close</button><button id="upd-details" class="go">Details</button></div>`;
     $('upd-close').addEventListener('click', () => d.close());
+    $('upd-details').addEventListener('click', () => openUpdateSheet());
     return;
   }
   d.innerHTML = `<p>Updated to ${esc(r.head)}.</p>${(r.steps || []).map(st => `<div><small>• ${esc(st)}</small></div>`).join('')}<p>Restarting…</p>`;
   setTimeout(() => { d.close(); restartHub(); }, 800);   // the same restart-and-wait path as the Restart button
+}
+
+// ── Update available (lib/update-check): the server looks at GitHub once a day. While an update waits, admins see a
+// card on the agent list (Update now / Later) and a note on the ⋮ menu's Update item; the push notification opens
+// /mobile?update=1, which shows the same choice as a sheet. "Update now" is the Update sheet's own update and restart. ──
+let ucState = null;
+async function refreshUpdateCheck() {
+  if (!hubMe || !isAdmin()) { paintUpdateCard(); return null; }
+  try { const r = await api('/api/update-check'); if (!r.ok) return null; ucState = await r.json(); } catch { return null; }
+  paintUpdateCard();
+  return ucState;
+}
+function ucBody(s) {
+  const busy = agents.map(a => a.name).filter(n => isBusy(n));
+  const notes = (s.titles || []).map(t => `<li>${esc(t)}</li>`).join('') + (s.more ? `<li class="uc-more">and ${s.more} more</li>` : '');
+  const have = s.latestVersion && s.latestVersion !== s.currentVersion && s.currentVersion ? `You have ${esc(s.currentVersion)}.` : `You're on ${esc(s.channel || s.branch || 'this channel')}.`;
+  const warn = s.blocked
+    ? `<p class="uc-warn">This hub has ${s.ahead ? `${s.ahead} commit${s.ahead === 1 ? '' : 's'} of its own that GitHub doesn't have` : `${s.dirty} changed file${s.dirty === 1 ? '' : 's'} that ${s.dirty === 1 ? "isn't" : "aren't"} committed`}, so it can't update by itself. Open Details to choose.</p>`
+    : busy.length ? `<p class="uc-warn">${busy.length === 1 ? `${esc(displayName(busy[0]))} is` : `${busy.length} agents are`} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short.</p>` : '';
+  return `<div class="uc-head">⬇️ ${esc(s.headline || 'An update is ready')}</div><div class="uc-sub">${have}${s.security ? ' <b class="uc-sec">Includes a security fix.</b>' : ''}</div>${notes ? `<ul class="uc-notes">${notes}</ul>` : ''}${warn}`;
+}
+function paintUpdateCard() {
+  const card = $('update-card'), note = $('menu-update-note');
+  const s = isAdmin() ? ucState : null;
+  const avail = !!(s && s.enabled && s.available);
+  if (note) note.textContent = avail ? ` · ${s.latestVersion && s.latestVersion !== s.currentVersion ? s.latestVersion : 'new version'} ready` : '';
+  if (!card) return;
+  if (!avail || s.snoozed) { card.hidden = true; card.innerHTML = ''; return; }
+  card.classList.toggle('sec', !!s.security);
+  card.dataset.remote = s.remote || '';   // Later names the version this card shows
+  card.innerHTML = `${ucBody(s)}<div class="uc-actions">${s.blocked
+    ? '<button class="uc-btn" data-uc="later">Later</button><button class="uc-btn uc-primary" data-uc="details">Details</button>'
+    : '<button class="uc-btn" data-uc="details">Details</button><button class="uc-btn" data-uc="later">Later</button><button class="uc-btn uc-primary" data-uc="now">Update now</button>'}</div>`;
+  card.hidden = false;
+}
+// The notification's tap lands here (/mobile?update=1): the card's choice, as a sheet.
+async function openUpdatePrompt() {
+  const s = ucState || await refreshUpdateCheck();
+  if (!s || !s.available) { openUpdateSheet(); return; }
+  const d = $('update-sheet');
+  d.dataset.uc = '1';
+  d.dataset.remote = s.remote || '';
+  d.innerHTML = `${ucBody(s)}<div class="btns">${s.blocked
+    ? '<button data-uc="later">Later</button><button class="go accent" data-uc="details">Details</button>'
+    : '<button data-uc="later">Later</button><button class="go accent" id="upd-go" data-uc="now">Update now</button>'}</div>`;
+  if (!d.open) d.showModal();
+}
+async function updateLater(shown) {
+  const d = $('update-sheet');
+  if (d.open && d.dataset.uc === '1') d.close();
+  if ($('update-card')) $('update-card').hidden = true;
+  // Later names the version on the card: a newer one found meanwhile still shows.
+  try { const r = await api('/api/update-check/later', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote: shown || (ucState && ucState.remote) || null }) }); if (r.ok) ucState = await r.json(); } catch { /* back on the next look */ }
+  paintUpdateCard();
+}
+function updateNowFromPhone() {
+  // Who is working now, not when the card was drawn: the restart cuts their replies short.
+  const busy = agents.map(a => a.name).filter(n => isBusy(n));
+  if (busy.length && !confirm(`${busy.map(displayName).join(', ')} ${busy.length === 1 ? 'is' : 'are'} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short. Update now anyway?`)) return;
+  const d = $('update-sheet');
+  d.dataset.uc = '';
+  d.innerHTML = '<h3>Updating…</h3><p>Getting the new version ready. The hub restarts when it is done.</p><div class="btns"><button id="upd-go" class="go accent" disabled>Updating…</button></div>';
+  if (!d.open) d.showModal();
+  runUpdateFromPhone(null);
+}
+function onUpdateChoice(e) {
+  const b = e.target.closest('[data-uc]');
+  if (!b) return;
+  if (b.dataset.uc === 'later') updateLater((b.closest('#update-sheet, #update-card') || {}).dataset?.remote || '');
+  else if (b.dataset.uc === 'now') updateNowFromPhone();
+  else if (b.dataset.uc === 'details') { const d = $('update-sheet'); d.dataset.uc = ''; openUpdateSheet(); }
 }
 
 // ── Restart the hub (same POST /api/restart the desktop button uses; the
@@ -2835,7 +2937,8 @@ function connectEvents() {
       else if (ev.boot !== window.__hubBoot && !window.__hubReloading) {
         window.__hubReloading = true;
         toast('The hub restarted. Reloading to the new version…');
-        const go = () => { if (streams.size) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800); };
+        const since = Date.now();
+        const go = () => { if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800); };
         go();
       }
     }
@@ -3329,6 +3432,8 @@ function wire() {
   $('confirm-yes').addEventListener('click', clearSession);
   $('menu-restart').addEventListener('click', confirmRestart);
   $('menu-update').addEventListener('click', openUpdateSheet);
+  $('update-card').addEventListener('click', onUpdateChoice);
+  $('update-sheet').addEventListener('click', onUpdateChoice);
   $('restart-no').addEventListener('click', () => $('restart-confirm').close());
   $('restart-yes').addEventListener('click', restartHub);
   for (const b of document.querySelectorAll('.pacing-bar')) b.addEventListener('click', confirmPacingReset);
@@ -3336,7 +3441,7 @@ function wire() {
   $('pacing-yes').addEventListener('click', resetPacing);
 
   const input = $('msg-input');
-  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
+  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; saveDraft(current, input.value); });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
   // Send, and the 🔔 beside it, act on the touch itself (onComposerTap). Once a send has taken the text,
@@ -3949,7 +4054,8 @@ async function init() {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (reloading || !navigator.serviceWorker.controller) return;
       reloading = true;
-      const go = () => { if (streams.size || reattaches.size) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => location.reload(), 800); };
+      const since = Date.now();
+      const go = () => { if (streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => location.reload(), 800); };
       go();
     });
   }
@@ -3964,6 +4070,12 @@ async function init() {
   updateDots();
   connectEvents();
   paintPush();
+  // Update available: look now and every 30 minutes; a tap on the update notification arrives as ?update=1, which
+  // opens the choice once and is then dropped from the address (so the next notification opens it again).
+  const fromUpdatePush = new URLSearchParams(location.search).get('update') === '1';
+  if (fromUpdatePush) { const u = new URL(location.href); u.searchParams.delete('update'); window.history.replaceState(window.history.state, '', u.pathname + u.search + u.hash); }
+  refreshUpdateCheck().then(() => { if (fromUpdatePush) openUpdatePrompt(); });
+  setInterval(refreshUpdateCheck, 30 * 60 * 1000);
 }
 
 init();
