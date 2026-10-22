@@ -1996,6 +1996,8 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.notify !== undefined) patch.notify = require('./lib/push').cleanNotifySettings(patch.notify);
           if (patch && patch.openrouter !== undefined) patch.openrouter = require('./lib/openrouter').cleanOpenRouterSettings(patch.openrouter);
           if (patch && patch.planFallback !== undefined) patch.planFallback = require('./lib/plan-usage').cleanPolicy(patch.planFallback, hubSettings.getSetting('planFallback'));
+          // The reasoning panel (lib/sdk-chat showReasoning): on unless turned off.
+          if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
           // A new key or URL changes which models exist — rediscover now
