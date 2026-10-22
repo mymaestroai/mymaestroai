@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.6.0] - 2026-10-21
+
+Five changes since 5.5.1: the phone's Send button and keyboard, the Claude plan figure, a monthly API credit meter, safer updates, and a test that no longer fails at random. A hub on 5.5.1 gets them by pressing Update.
+
 - **The Claude plan figure no longer drops to about 1%.** After any reply on the Claude subscription, the plan chip and badges could read "Plan 1%" for a week at 76%, until the next check put it right. The Claude client reports usage with each reply as a fraction (0.76), and the hub stored it as if it were a percentage. It's now converted, so the chip, the warnings and the Settings → Claude plan box stay on the real figure.
 - **The phone's Send button takes the whole touch.** On a phone the first tap on Send could still only close the keyboard, leaving the message in the box. The Send and 🔔 buttons now cancel the touch itself and handle it themselves, so the browser can't turn it into a scroll or move focus off the message box. Once the message has gone, the box lets go and the keyboard closes; a tap with nothing to send leaves it open. As on any button, sliding off before letting go does nothing, and only the main mouse button counts. Mouse, keyboard and screen-reader activation still send, and a screen reader's send closes the keyboard too.
 - **See your monthly API credit at a glance.** Set a provider's monthly credit in Settings → Money and safety → Spend: an amount, and the day it renews. One example is the API credit that comes with a Claude Max plan. A chip beside today's spend then reads "credit $41.20 of $200". It turns amber at 75% and rose at 90%, and its tooltip names the provider and the period. On the phone, the same figure sits at the top of the ⋮ menu. It counts calls made through the hub, at the cost its spend ledger books, so the provider's billing page stays the exact figure; calls with no known price are listed apart, not counted as free. Claude subscription turns never count. Admins only; nothing shows until an amount is set.
@@ -1011,6 +1015,7 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.5.1...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.6.0...dev
+[5.6.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.6.0
 [5.5.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.5.1
 [5.5.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.5.0
