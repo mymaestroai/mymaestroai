@@ -2005,6 +2005,7 @@
         if (state) state.textContent = `${d.critical ? `${d.critical} critical` : 'nothing critical'}${d.warnings ? `, ${d.warnings} warning(s)` : ''}${d.infos ? `, ${d.infos} note(s)` : ''}; ${d.cached ? 'last run' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.${skipped}`;
         stSum('status', 'security', d.critical ? `Security: ${d.critical} critical` : d.warnings ? `Security: ${d.warnings} warning${d.warnings === 1 ? '' : 's'}` : 'Security: all good', !!d.critical);
         if (d.critical) stOpenGroup('status');
+        paintSecurityBanner().catch(() => {});   // a Run now that resolves or finds something updates the banner at once
       } catch (e) { el.textContent = 'Could not run the security check: ' + e.message; if (state) state.textContent = ''; stSum('status', 'security', 'Security: could not check'); }
     }
     function securityActionHtml(a) {
@@ -2021,17 +2022,38 @@
         setTimeout(() => loadSecurityCheck(true), 800);
       } catch (e) { if (btn) btn.textContent = 'Failed: ' + e.message; }
     }
-    // Banner for admins while the last security check found something critical (below the setup banner when both show).
+    // Banner for admins from the last security check (below the setup banner when both show).
+    // Critical: red, cannot be dismissed; it goes away once the check no longer finds it (Run now, or the next run).
+    // Warnings only: dark yellow with an X. Dismissing hides it for this browser session; it comes back on the next
+    // visit, or at once if the set of warnings changes, until the warnings are resolved.
+    const SEC_DISMISS_KEY = 'hub-security-warn-dismissed';
+    function securityWarnKey(items) { return items.map(i => i.id).sort().join(','); }
+    function dismissSecurityBanner(key) {
+      try { sessionStorage.setItem(SEC_DISMISS_KEY, key); } catch {}
+      const bar = document.getElementById('hub-security-notice'); if (bar) bar.remove();
+      layoutBanners();
+    }
     async function paintSecurityBanner() {
       const me = window.hubMe;
       let bar = document.getElementById('hub-security-notice');
       if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
       let d = null;
       try { d = await (await fetch('/api/security-check', { credentials: 'include' })).json(); } catch { return; }
-      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts');   // no-accounts has its own banner
-      if (!crit.length) { if (bar) bar.remove(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-security-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:#7a1212;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:#fff;text-decoration:underline">Open the security check</a>.`;
+      const items = (d && d.items || []).filter(i => i.id !== 'accounts');   // no-accounts has its own banner
+      const crit = items.filter(i => i.level === 'critical');
+      const warn = items.filter(i => i.level === 'warn');
+      let dismissed = ''; try { dismissed = sessionStorage.getItem(SEC_DISMISS_KEY) || ''; } catch {}
+      const key = securityWarnKey(warn);
+      if (!crit.length && (!warn.length || dismissed === key)) { if (bar) bar.remove(); layoutBanners(); return; }
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-security-notice'; document.body.prepend(bar); }
+      const level = crit.length ? 'critical' : 'warn';
+      bar.dataset.level = level;
+      bar.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9995;background:${level === 'critical' ? '#7a1212' : '#8a6a00'};color:#fff;padding:6px 44px 6px 14px;font-weight:600;box-sizing:border-box`;
+      const link = `<a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:#fff;text-decoration:underline">Open the security check</a>`;
+      bar.innerHTML = level === 'critical'
+        ? `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. ${link}.`
+        : `Security: ${warn.length} warning${warn.length === 1 ? '' : 's'} to review. ${link}.`
+          + `<button type="button" aria-label="Dismiss security warnings" title="Dismiss until your next visit" onclick="dismissSecurityBanner('${esc(key)}')" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:#fff;font-size:20px;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>`;
       layoutBanners();
     }
     // Web search and fetch (lib/web-search, lib/web-fetch): backend chain, keys, SearXNG container, fetch guards.

@@ -250,3 +250,59 @@ test('a Node.js line with no security floor (odd or end-of-life) is a warning, n
   assert.strictEqual(byId(r, 'node').level, 'warn');
   assert.match(byId(r, 'node').title, /no security support here/);
 });
+
+test('banner levels: critical is red with no dismiss; warnings are dark yellow with an X that hides them for the session until the set changes', async () => {
+  const vm = require('vm');
+  const app = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  const a = app.indexOf("    const SEC_DISMISS_KEY = 'hub-security-warn-dismissed';");
+  const b = app.indexOf('    // Web search and fetch (lib/web-search, lib/web-fetch)');
+  assert.ok(a > 0 && b > a, 'banner block found');
+  let nodes = {}, store = {}, result = { items: [] };
+  const mkBar = () => ({ id: '', style: {}, dataset: {}, innerHTML: '', remove() { delete nodes[this.id]; } });
+  const ctx = {
+    window: { hubMe: { isAdmin: true, user: { id: 'u1' } } },
+    document: { getElementById: (id) => nodes[id] || null, createElement: () => mkBar(), body: { prepend: (n) => { nodes[n.id] = n; } } },
+    sessionStorage: { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); } },
+    fetch: async () => ({ json: async () => result }),
+    esc: (s) => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`),
+    layoutBanners: () => {}, openSettingsAt: () => {},
+  };
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(a, b) + '\nthis.paint = paintSecurityBanner; this.dismiss = dismissSecurityBanner;', ctx);
+  const bar = () => nodes['hub-security-notice'];
+
+  result = { items: [{ id: 'node', level: 'critical', title: 'Node.js misses fixes' }, { id: 'totp', level: 'warn', title: 'No 2FA' }] };
+  await ctx.paint();
+  assert.strictEqual(bar().dataset.level, 'critical');
+  assert.match(bar().style.cssText, /#7a1212/);
+  assert.ok(!/Dismiss/.test(bar().innerHTML), 'critical has no dismiss button');
+  ctx.dismiss('node,totp'); await ctx.paint();
+  assert.ok(bar(), 'critical comes back even if someone dismisses');
+
+  result = { items: [{ id: 'totp', level: 'warn', title: 'No 2FA' }, { id: 'approvals', level: 'warn', title: 'Cards off' }, { id: 'ok1', level: 'ok', title: 'fine' }] };
+  await ctx.paint();
+  assert.strictEqual(bar().dataset.level, 'warn');
+  assert.match(bar().style.cssText, /#8a6a00/);
+  assert.match(bar().innerHTML, /2 warnings to review/);
+  assert.match(bar().innerHTML, /dismissSecurityBanner\('approvals,totp'\)/);
+  ctx.dismiss('approvals,totp');
+  assert.ok(!bar(), 'X hides it');
+  await ctx.paint();
+  assert.ok(!bar(), 'stays hidden this session for the same warnings');
+
+  result = { items: [{ id: 'totp', level: 'warn', title: 'No 2FA' }, { id: 'approvals', level: 'warn', title: 'Cards off' }, { id: 'exposed', level: 'warn', title: 'Open port' }] };
+  await ctx.paint();
+  assert.ok(bar(), 'a new warning brings it back');
+
+  store = {}; result = { items: [{ id: 'totp', level: 'warn', title: 'No 2FA' }] };
+  await ctx.paint();
+  assert.ok(bar(), 'a new session (next visit) shows it again');
+
+  result = { items: [{ id: 'totp', level: 'ok', title: 'fine' }] };
+  await ctx.paint();
+  assert.ok(!bar(), 'resolved: no banner');
+
+  ctx.window.hubMe = { isAdmin: false, user: { id: 'm' } }; result = { items: [{ id: 'node', level: 'critical', title: 'x' }] };
+  await ctx.paint();
+  assert.ok(!bar(), 'members never see it');
+});
