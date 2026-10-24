@@ -1753,9 +1753,11 @@ async function handleHttpRequest(req, res) {
     }
 
     if (pathname === '/api/cancel-worker' && req.method === 'POST') {
+      // ⏹ Stop on a worker card. The page names the worker and the agent it belongs to (the caller); a member may stop
+      // only calls of their own agents (the agent check above, then cancelWorker's).
       const body = JSON.parse(await readBody(req));
-      const result = cancelWorker(body.workerId);
-      return jsonResponse(res, result.success ? 200 : 400, result);
+      const result = cancelWorker(body.worker_id || body.workerId, { agent: String(body.agent || ''), admin: !!req.hubService || access.isAdmin(req.hubUser) });
+      return jsonResponse(res, result.success ? 200 : (result.status || 400), result);
     }
 
     // ── Session/History Routes ──────────────────────────────────────

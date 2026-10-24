@@ -5670,10 +5670,10 @@
       const status = w.status === 'started' ? 'running' : w.status;
       const over = status === 'completed' || status === 'failed';
       if (changed) paintWorkerRun(run, over);
-      // handleWorkerEvent's completed/failed paths append notices: run them once per worker (a run this
-      // page stopped following still takes its real outcome).
+      // handleWorkerEvent's completed/failed paths append notices: run them once per worker (a run
+      // was marked stopped still takes the outcome the hub reports).
       if (over && run.status !== 'completed' && run.status !== 'failed') {
-        handleWorkerEvent(chatId, { type: status === 'completed' ? 'worker_completed' : 'worker_failed', worker_id: id, error: w.error || undefined });
+        handleWorkerEvent(chatId, { type: status === 'completed' ? 'worker_completed' : 'worker_failed', worker_id: id, error: w.error || undefined, cancelled: w.cancelled === true });
       }
     }
 
@@ -6469,6 +6469,7 @@
       const chat = chats[chatId];
       cleanupWorkerTabs(chatId);
       chat.cancelled = true;
+      for (const a of Object.keys(chat.controllers || {})) stopAgentTurn(a);   // stop the agents on the hub, not just this page's streams
       Object.values(chat.controllers).forEach(c => c?.abort());
       chat.controllers = {};
       setStatus(chatId, 'idle');
@@ -9714,12 +9715,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       setStatus(workerChatId, status, statusText);
     }
 
-    // A run this page stops following (Stop, or its coordinator stopped): its notice and reply stop saying it
-    // works. The hub may still finish it, and then the card shows that.
+    // A stopped run (Stop on its card, or its caller was stopped; the hub stops it too): its notice and reply stop
+    // saying it works.
     function markWorkerRunCancelled(chat, run) {
       run.status = 'cancelled';
       if (run.noticeEl) {
-        run.noticeEl.textContent = `⏹ ${chat.agentLabel || 'Agent'}: stopped following (it may still finish)`;
+        run.noticeEl.textContent = `⏹ ${chat.agentLabel || 'Agent'} Stopped`;
         run.noticeEl.className = 'system-notice notice-failed';
       }
       if (run.text || run.tools.length || run.turnTools) paintWorkerRun(run);   // no longer drawn as streaming (an empty one keeps its "...")
@@ -9886,7 +9887,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!w) return false;
         const { workerChatId, chat, run } = w;
         if (run.status === 'completed' || run.status === 'failed') return true;   // already ended (a repeat)
-        const failLabel = oc.cancelled ? 'Cancelled' : 'Failed';
+        if (oc.cancelled) {   // stopped by the owner, on its card or with its caller
+          if (run.status !== 'cancelled') markWorkerRunCancelled(chat, run);
+          settleWorkerCard(workerChatId, 'error', 'Stopped');
+          return true;
+        }
+        const failLabel = 'Failed';
         run.status = 'failed';
         if (oc.error) {
           // Under this run's reply: a later call to the agent may already show below it
@@ -9949,7 +9955,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         </div>
         <div class="chat-actions">
           <button data-w="back" id="worker-back-${workerChatId}"></button>
-          <button data-w="stop" id="cancel-${workerChatId}" title="Stop following this card's calls (the hub may still finish them)">&#x23F9; Stop</button>
+          <button data-w="stop" id="cancel-${workerChatId}" title="Stop the calls running in this card">&#x23F9; Stop</button>
           <span class="agent-name" id="worker-name-${workerChatId}"></span>${cyberHeaderTag(chat.model)}
         </div>
         <div class="messages" id="messages-${workerChatId}"></div>
@@ -9958,6 +9964,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // The caller can change when the card re-activates: both buttons read the card at click time
       panel.querySelector('[data-w="back"]').addEventListener('click', () => { const c = chats[workerChatId]; if (c) switchToChat(c.parentChatId); });
       panel.querySelector('[data-w="stop"]').addEventListener('click', () => cancelWorkerCard(workerChatId));
+      if (chat.agent === 'sdk-agent') panel.querySelector('[data-w="stop"]').title = 'Stop: this sub-agent runs inside its caller\'s reply, so that reply stops too';
       panels.appendChild(panel);
       paintWorkerCaller(workerChatId);
     }
@@ -10007,7 +10014,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         for (const run of Object.values(wChat.runs)) {
           if (run.parentChatId === coordinatorChatId && run.status === 'running') { markWorkerRunCancelled(wChat, run); ended = true; }
         }
-        if (ended) settleWorkerCard(wChatId, 'error', 'Stopped following');
+        if (ended) settleWorkerCard(wChatId, 'error', 'Stopped');
       }
     }
 
@@ -10051,27 +10058,43 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       cleanupWorkerTabs(coordinatorChatId);
     }
 
-    // ⏹ Stop on a card: every call still running in it.
+    // ⏹ Stop on a card: every call still running in it, stopped on the hub. A Claude-client sub-agent runs inside its
+    // caller's reply, so stopping it means stopping that reply.
     function cancelWorkerCard(workerChatId) {
       const chat = chats[workerChatId];
-      if (!chat || !chat.runs) return;
-      for (const run of Object.values(chat.runs)) if (run.status === 'running') cancelWorker(run.id);
+      if (!chat || !chat.runs) return Promise.resolve([]);
+      const callers = new Set(), stops = [];
+      for (const run of Object.values(chat.runs)) {
+        if (run.status !== 'running') continue;
+        if (chat.agent !== 'sdk-agent') { stops.push(cancelWorker(run.id)); continue; }
+        const p = run.parentChatId;
+        if (!chats[p] || callers.has(p)) continue;
+        callers.add(p);
+        if (chats[p].isGroup) cancelGroupRequest(p); else cancelRequest(p);
+      }
+      return Promise.all(stops);
     }
 
+    // Stop one call on the hub. The card says Stopped once the hub has stopped it (or its end event says so first).
     async function cancelWorker(workerId) {
       const w = workerRunOf(workerId);
-      if (w) {
-        markWorkerRunCancelled(w.chat, w.run);
-        settleWorkerCard(w.workerChatId, 'error', 'Stopped following');
+      const caller = w ? chats[w.run.parentChatId] : null;
+      let r = null;
+      try {
+        const res = await fetch('/api/cancel-worker', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worker_id: workerId, agent: (caller && !caller.isGroup && caller.agent) || (w && w.chat.agent) || undefined }),
+        });
+        r = await res.json().catch(() => null);
+      } catch {}
+      const now = workerRunOf(workerId);
+      if (now && r && r.success && now.run.status === 'running') {
+        markWorkerRunCancelled(now.chat, now.run);
+        settleWorkerCard(now.workerChatId, 'error', 'Stopped');
       }
-
-      // Notify server (fire-and-forget)
-      fetch('/api/cancel-worker', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ worker_id: workerId }),
-      }).catch(() => {});
+      return r;
     }
 
     // ── Visual blocks ─────────────────────────────────────────────────────────────────────────────
@@ -10992,7 +11015,8 @@ Report what you found, did, or discovered.`;
       const chat = chats[chatId];
       if (chat) {
         chat.stopRequested = true;
-        addOrchMessage(chatId, 'system', 'System', '🛑 Stop requested... finishing current operation.');
+        for (const a of chat.orchActive || []) stopAgentTurn(a);   // the agent working now stops on the hub too
+        addOrchMessage(chatId, 'system', 'System', '🛑 Stopped.');
       }
     }
     
@@ -11025,6 +11049,8 @@ Report what you found, did, or discovered.`;
     
     async function callOrchAgent(chatId, agent, prompt, msgDiv = null, opts = {}) {
       console.log('[orch] callOrchAgent called for agent:', agent, 'msgDiv:', !!msgDiv);
+      const orchChat = chats[chatId];
+      if (orchChat) (orchChat.orchActive ||= new Set()).add(agent);   // Stop reaches it (stopOrchestration)
 
       try {
         const fetchBody = { agent, message: prompt };
@@ -11175,6 +11201,8 @@ Report what you found, did, or discovered.`;
       } catch (err) {
         console.error('[orch] callOrchAgent error:', err);
         throw err;
+      } finally {
+        orchChat?.orchActive?.delete(agent);
       }
     }
     

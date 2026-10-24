@@ -108,7 +108,7 @@ test('a failed turn ends with ok:false and the error text', () => {
 test('wiring: chat handler taps hub-initiated turns and every hub caller tags its origin', () => {
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const hubEvents = require\('\.\/hub-events'\)/);
-  assert.match(chat, /consulted_by, origin \} = body;/);
+  assert.match(chat, /consulted_by, origin, turn_link \} = body;/);
   assert.match(chat, /hubEvents\.events\.tapTurn\(res, \{ agent, origin: turnOrigin, message, turnId, startedAt \}\)/);
   assert.match(chat, /tap\.finish\(!turnError && !stopped, turnError \? turnError\.message : stopped \? 'stopped' : null\)/);
   assert.match(chat, /origin: \{ kind: opts\.temporal \? 'task' : 'consultation', from: coordinatorName \|\| null \}/);
