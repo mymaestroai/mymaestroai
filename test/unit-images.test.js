@@ -12,6 +12,8 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-images-'));
 const HUB = path.join(ROOT, 'hub');
 fs.mkdirSync(path.join(HUB, 'lib'), { recursive: true });
 fs.copyFileSync(path.join(__dirname, '..', 'lib', 'images.js'), path.join(HUB, 'lib', 'images.js'));
+fs.copyFileSync(path.join(__dirname, '..', 'lib', 'hub-home.js'), path.join(HUB, 'lib', 'hub-home.js'));
+fs.mkdirSync(path.join(ROOT, 'share'));                // an existing install's layout: share/ beside it keeps the hub home there (lib/hub-home)
 const OUTSIDE = path.join(ROOT, 'outside');            // under os.tmpdir(): a servable root
 fs.mkdirSync(OUTSIDE);
 // A writable dir that is NOT under any servable root (/tmp, the hub dirs, ~/agent-hub/*): /var/tmp or /dev/shm.
@@ -113,6 +115,8 @@ test('hub home is the folder holding the install, wherever it is: its share/, us
   const home = path.join(FORBIDDEN, 'hubhome');
   fs.mkdirSync(path.join(home, 'install', 'lib'), { recursive: true });
   fs.copyFileSync(path.join(__dirname, '..', 'lib', 'images.js'), path.join(home, 'install', 'lib', 'images.js'));
+  fs.copyFileSync(path.join(__dirname, '..', 'lib', 'hub-home.js'), path.join(home, 'install', 'lib', 'hub-home.js'));
+  fs.mkdirSync(path.join(home, 'share'));               // an install made before 5.6: its folders sit beside it (lib/hub-home)
   const placed = require(path.join(home, 'install', 'lib', 'images.js'));
   const realHome = fs.realpathSync(home);                  // macOS: /var is a link to /private/var
   assert.strictEqual(placed.HUB_HOME, realHome);

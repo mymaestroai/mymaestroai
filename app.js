@@ -48,6 +48,8 @@
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
+      paintUpdateCard().catch(() => {});
+      if (!window.__ucTimer) window.__ucTimer = setInterval(() => paintUpdateCard().catch(() => {}), 30 * 60 * 1000);
       return window.hubMe;
     }
     // An install updated from before multi-user has provider keys but no admin account, so the setup wizard never
@@ -104,7 +106,7 @@
       document.body.classList.add('member-view');
       // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
       for (const id of ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
-                        'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap']) {
+                        'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
         const el = document.getElementById(id);
         if (!el) continue;
         const row = el.closest('.more-item, .more-row') || el;
@@ -1387,6 +1389,8 @@
       const c = other && gsStatus && gsStatus.channels ? gsStatus.channels.channels.find(x => x.id === other) : null;
       if (c) { go.disabled = false; go.innerHTML = `Switch to ${esc(c.label)} &amp; Restart`; }
       else { go.disabled = !(gsStatus && gsStatus.canUpdate); go.innerHTML = gsStatus && gsStatus.canUpdate ? 'Update &amp; Restart' : 'Up to date'; }
+      // Discarding updates the current channel only, so it is off while another channel is chosen.
+      const force = document.getElementById('gs-force'); if (force) force.disabled = !!c;
     }
 
     async function runGitSync(force) {
@@ -1473,7 +1477,7 @@
     // groups, closed until opened. Sections are matched by id; one this list doesn't know lands in the last group,
     // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-updates-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
@@ -1636,6 +1640,13 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadSecurityCheck(true)">Run now</button><span id="st-sec-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadSecurityCheck, 0);
+      // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
+      html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
+        <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
+        <div class="st-row"><label style="flex-basis:150px">Check every day</label><input type="checkbox" id="st-uc-on" onchange="saveUpdateCheck(this.checked)"><span id="st-uc-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px">Checking…</span></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="checkUpdatesNow(this)">Check now</button></div>
+      </div>`;
+      setTimeout(loadUpdateCheck, 0);
       // Modules (lib/modules): optional capabilities with guided setup live on their own page.
       html += `<div class="st-section" id="st-modules-section"><h4>Modules</h4>
         <div class="st-hint">Optional capabilities for agents (crypto exchanges, wallets, mail, search...), each with a step-by-step setup, encrypted keys and per-agent access. <a href="/modules" style="color:var(--accent)">Open the Modules page →</a></div>
@@ -1648,13 +1659,16 @@
       </div>`;
       setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${(j.models || []).length} model(s)${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; if (j && j.ok !== false && j.enabled) stSum('models', 'local', `local models ${j.running ? 'running' : 'stopped'}`); } catch {} }, 0);
 
-      html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>`;
+      html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>
+        <div class="st-hint">Keys are kept in one place: <code>data/settings.json</code>, readable only by this computer's account. A key typed into <code>.env</code> moves here when the hub starts.</div>`;
       for (const p of PROVIDERS) {
         const pdata = data.providers?.[p.id] || {};
         if (p.hasKey) {
+          // A key the hub gets from its environment (a service file, Docker) is used until one is saved here.
+          const hint = pdata.hasKey ? `${pdata.keyHint}${pdata.keySource === 'environment' ? ' (from the environment)' : ''}` : 'Not set';
           html += `<div class="st-row">
             <label>${esc(p.label)}</label>
-            <input type="password" id="st-key-${p.id}" placeholder="${pdata.hasKey ? pdata.keyHint : 'Not set'}"
+            <input type="password" id="st-key-${p.id}" placeholder="${esc(hint)}"
               data-provider="${p.id}" data-field="apiKey">
             <button class="st-test-btn" onclick="testProvider('${p.id}')">Test</button>
           </div>`;
@@ -1689,6 +1703,12 @@
           <input type="text" id="st-maxContext" value="${data.maxContextMessages || 40}"
             placeholder="40" style="max-width:120px">
         </div>
+        <div class="st-row">
+          <label>Reasoning</label>
+          <label class="toggle-switch"><input type="checkbox" id="st-reasoning" ${data.showReasoning !== false ? 'checked' : ''} onchange="saveReasoningToggle(this.checked)"><span class="toggle-slider"></span></label>
+          <span id="st-reasoning-state" style="font-size:0.8rem;color:var(--text-dim)">${data.showReasoning !== false ? 'Shown above each reply.' : 'Not shown.'}</span>
+        </div>
+        <div class="st-hint">Models that reason before they answer (Claude, Codex, DeepSeek, Grok, Qwen…) show it in a panel above the reply: open or close it, drag its bottom edge to any height, ⤢ for the full window. Starts with the next reply.</div>
       </div>`;
 
       {
@@ -2055,6 +2075,114 @@
         : `Security: ${warn.length} warning${warn.length === 1 ? '' : 's'} to review. ${link}.`
           + `<button type="button" aria-label="Dismiss security warnings" title="Dismiss until your next visit" onclick="dismissSecurityBanner('${esc(key)}')" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:#fff;font-size:20px;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>`;
       layoutBanners();
+    }
+    // ── Update available (lib/update-check): the server looks at GitHub once a day. While an update waits, admins see
+    // a card at the bottom right (Update now / Later) and a chip in the sidebar; the chip stays after Later and brings
+    // the card back. "Update now" is the Update dialog's own update and restart, for the current channel. ──
+    let ucLast = null;
+    async function paintUpdateCard() {
+      const me = window.hubMe;
+      const chip = document.getElementById('update-chip');
+      if (!me || !me.isAdmin) { document.getElementById('hub-update-card')?.remove(); chip?.classList.remove('on'); return; }
+      let s;
+      try { const r = await fetch('/api/update-check', { credentials: 'include' }); if (!r.ok) return; s = await r.json(); } catch { return; }
+      ucLast = s;
+      const show = !!(s && s.enabled && s.available);
+      if (chip) {
+        chip.classList.toggle('on', show);
+        chip.classList.toggle('sec', show && !!s.security);
+        chip.textContent = show ? `⬇ ${s.latestVersion && s.latestVersion !== s.currentVersion ? s.latestVersion : 'Update'}` : '';
+        chip.title = !show ? '' : s.snoozed && s.laterUntil ? `${s.headline}. Card hidden until ${new Date(s.laterUntil).toLocaleString()}: click to see it now` : `${s.headline}: click to update now or later`;
+      }
+      if (show && !s.snoozed) showUpdateCard();
+      else document.getElementById('hub-update-card')?.remove();   // also when Later was pressed on another device
+    }
+    function showUpdateCard() {
+      const s = ucLast;
+      if (!s || !s.available) return;
+      let card = document.getElementById('hub-update-card');
+      if (!card) { card = document.createElement('div'); card.id = 'hub-update-card'; card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', 'Update available'); document.body.appendChild(card); }
+      card.classList.toggle('sec', !!s.security);
+      card.dataset.remote = s.remote || '';   // Later names the version this card shows
+      const busy = busyAgentNames();
+      const notes = (s.titles || []).map(t => `<li>${esc(t)}</li>`).join('') + (s.more ? `<li class="uc-more">and ${s.more} more</li>` : '');
+      const have = s.latestVersion && s.latestVersion !== s.currentVersion && s.currentVersion ? `You have ${esc(s.currentVersion)}.` : `You're on ${esc(s.channel || s.branch || 'this channel')}.`;
+      const warn = s.blocked
+        ? `<div class="uc-warn">This hub has ${s.ahead ? `${s.ahead} commit${s.ahead === 1 ? '' : 's'} of its own that GitHub doesn't have` : `${s.dirty} changed file${s.dirty === 1 ? '' : 's'} that ${s.dirty === 1 ? "isn't" : "aren't"} committed`}, so it can't update by itself. Open Details to choose what to do.</div>`
+        : busy.length ? `<div class="uc-warn">${busy.length === 1 ? `${esc(agentDisplayName(busy[0]))} is` : `${busy.length} agents are`} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short.</div>` : '';
+      card.innerHTML = `<div class="uc-head">⬇️ ${esc(s.headline || 'An update is ready')}</div>
+        <div class="uc-sub">${have}${s.security ? ' <span class="uc-sec">Includes a security fix.</span>' : ''}</div>
+        ${notes ? `<div class="uc-label">What's new</div><ul class="uc-notes">${notes}</ul>` : ''}${warn}
+        <div class="uc-msg" id="uc-msg"></div>
+        <div class="uc-actions">${s.blocked
+          ? `<button class="uc-btn" id="uc-later" onclick="updateLater()">Later</button><button class="uc-btn uc-primary" onclick="openGitSync()">Details</button>`
+          : `<a href="#" class="uc-details" onclick="openGitSync(); return false">Details…</a><button class="uc-btn" id="uc-later" onclick="updateLater()">Later</button><button class="uc-btn uc-primary" id="uc-now" onclick="updateNow()">Update now</button>`}</div>`;
+    }
+    async function updateLater() {
+      const shown = document.getElementById('hub-update-card')?.dataset.remote || '';
+      document.getElementById('hub-update-card')?.remove();
+      // Later names the version on the card: a newer one found meanwhile still shows.
+      try { const r = await fetch('/api/update-check/later', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote: shown || (ucLast && ucLast.remote) || null }) }); if (r.ok) ucLast = await r.json(); } catch { /* the card comes back on the next look */ }
+    }
+    async function updateNow() {
+      const now = document.getElementById('uc-now'), later = document.getElementById('uc-later'), msg = document.getElementById('uc-msg');
+      // Who is working now, not when the card was drawn: the restart cuts their replies short.
+      const busy = busyAgentNames();
+      if (busy.length && !confirm(`${busy.map(agentDisplayName).join(', ')} ${busy.length === 1 ? 'is' : 'are'} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short. Update now anyway?`)) return;
+      if (now) { now.disabled = true; now.textContent = 'Updating…'; }
+      if (later) later.disabled = true;
+      let r;
+      try { r = await (await fetch('/api/git-sync/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
+      catch (e) { r = { success: false, error: e.message }; }
+      if (!r || !r.success) {
+        // The Update dialog has the ways out (discard changes, move to a rewritten history): send the admin there.
+        if (msg) msg.innerHTML = `<div class="uc-err">The update didn't run: ${esc((r && r.error) || 'unknown error')}</div>`;
+        if (now) { now.disabled = false; now.textContent = 'Details'; now.onclick = () => openGitSync(); }
+        if (later) later.disabled = false;
+        return;
+      }
+      if (msg) msg.innerHTML = `<div class="uc-ok">✓ Updated. Restarting the hub…</div>`;
+      // The Update dialog's own restart: flush the active replies, restart, wait for the new boot.
+      const rbtn = document.getElementById('restart-hub-btn');
+      let refused = null;
+      try { const rr = await fetch('/api/restart', { method: 'POST', credentials: 'include' }); if (!rr.ok) refused = rr.status; } catch { /* expected: the server goes away */ }
+      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but the hub refused to restart (HTTP ${refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
+      setTimeout(() => pollForRestart(rbtn), 8000);
+    }
+    // Settings → Status → Updates.
+    function ucStateText(s) {
+      const when = s.checkedAt ? ` (checked ${new Date(s.checkedAt).toLocaleString()})` : '';
+      if (s.error && !s.available) return `Could not check: ${s.error}${when}`;
+      if (s.available) return `${s.headline}${s.snoozed && s.laterUntil ? `; card hidden until ${new Date(s.laterUntil).toLocaleString()}` : ''}${when}`;
+      return s.checkedAt ? `Up to date${s.currentVersion ? ` on ${s.currentVersion}` : ''}${when}` : 'Not checked yet';
+    }
+    async function loadUpdateCheck(s) {
+      const box = document.getElementById('st-uc-on'), state = document.getElementById('st-uc-state');
+      if (!box) return;
+      try { if (!s) s = await (await fetch('/api/update-check', { credentials: 'include' })).json(); }
+      catch (e) { if (state) state.textContent = 'Could not read: ' + e.message; return; }
+      box.checked = s.enabled !== false;
+      if (state) state.textContent = ucStateText(s);
+      stSum('status', 'updates', s.enabled === false ? 'Update check off' : s.available ? 'Update available' : 'Up to date');
+    }
+    async function saveUpdateCheck(on) {
+      const state = document.getElementById('st-uc-state');
+      try {
+        const r = await fetch('/api/update-check/settings', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !!on }) });
+        const s = await r.json();
+        if (!r.ok) throw new Error(s.error || `HTTP ${r.status}`);
+        loadUpdateCheck(s);
+        paintUpdateCard().catch(() => {});
+      } catch (e) { if (state) state.textContent = 'Not saved: ' + e.message; }
+    }
+    async function checkUpdatesNow(btn) {
+      if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+      try {
+        const s = await (await fetch('/api/update-check/now', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+        loadUpdateCheck(s);
+        paintUpdateCard().catch(() => {});
+      } catch (e) { const st = document.getElementById('st-uc-state'); if (st) st.textContent = 'Could not check: ' + e.message; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
     }
     // Web search and fetch (lib/web-search, lib/web-fetch): backend chain, keys, SearXNG container, fetch guards.
     async function loadWebSearchStatus() {
@@ -2571,6 +2699,16 @@
         renderConnectorList();
         if (cxState.form && cxState.form.id && !cxFind(cxState.form.id)) { cxState.form = null; const box = document.getElementById('st-cx-form'); if (box) box.innerHTML = ''; cxStatus(`Connector ${ev && ev.id ? ev.id : ''} was removed elsewhere.`); }
       }, 250);
+    }
+
+    // Reasoning panel on/off (settings.showReasoning, on unless turned off): saved at once, from the next reply.
+    async function saveReasoningToggle(on) {
+      const state = document.getElementById('st-reasoning-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ showReasoning: !!on }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (state) state.textContent = on ? 'Shown above each reply.' : 'Not shown.';
+      } catch (e) { alert('Could not save: ' + e.message); }
     }
 
     // Approval cards on/off: saved at once, takes effect on the next tool call of any agent.
@@ -4613,10 +4751,26 @@
       setTimeout(() => { __modelListCache = null; }, 5 * 60000);
       return __modelListCache;
     }
-    async function fillModelPick(chatId) {
-      const chat = chats[chatId]; const sel = document.getElementById(`model-pick-${chatId}`);
-      if (!chat || !sel || sel.dataset.filled) return;
-      sel.dataset.filled = '1';
+    // The picker holds only the current model until its list is filled. A native list that opened before that showed
+    // one line, then jumped and was cut off when the list arrived while it was open (2026-10-21). So the list is filled
+    // when the chat opens, and a click that still comes first is held until the list is there, then the list opens.
+    const modelPickFilling = {};   // chatId -> the fill in progress
+    function modelPickDown(ev, chatId) {
+      const sel = document.getElementById(`model-pick-${chatId}`);
+      if (!sel || sel.dataset.filled === 'done') return true;
+      ev.preventDefault();
+      fillModelPick(chatId).then(() => { sel.focus(); try { if (sel.showPicker) sel.showPicker(); } catch { /* the next click opens it */ } });
+      return false;
+    }
+    function fillModelPick(chatId) {
+      const sel = document.getElementById(`model-pick-${chatId}`);
+      if (!chats[chatId] || !sel || sel.dataset.filled === 'done') return Promise.resolve();
+      if (!modelPickFilling[chatId]) modelPickFilling[chatId] = fillModelPickNow(chatId, sel).finally(() => { delete modelPickFilling[chatId]; });
+      return modelPickFilling[chatId];
+    }
+    async function fillModelPickNow(chatId, sel) {
+      const chat = chats[chatId];
+      sel.dataset.filled = 'pending';
       try {
         const { models, billing, health } = await modelList();
         const cur = String(chat.model || '');
@@ -4630,6 +4784,7 @@
             + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
         }
         if (html) { sel.innerHTML = html; sel.value = cur; }
+        sel.dataset.filled = 'done';
       } catch (e) { delete sel.dataset.filled; console.warn('[model-pick] list failed:', e.message); }
     }
     async function changeChatModel(chatId, model, opts = {}) {
@@ -4893,6 +5048,7 @@
               chats[chatId].messages.push({ role: msg.role, content: msg.content });
               const hid = appendMessage(chatId, msg.role, msg.content);
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
+              if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
             }
             // Scroll to bottom after loading history
             const panel = document.getElementById(`messages-${chatId}`);
@@ -5533,6 +5689,9 @@
       }
       for (const item of turn.activity || []) turnActivityApply(chatId, t, item);
       for (const w of turn.workers || []) if (w && w.id) turnWorkerUpsert(chatId, t, w);
+      if (typeof turn.reasoning === 'string' && turn.reasoning) {
+        setReasoning(ra ? ra.msgId : t.msgId, turn.reasoning, { live: !turn.ended, total: Number(turn.reasoningChars), onlyIfLonger: true });
+      }
       if (!turn.ended) applyTurnProgress(chatId, ra ? ra.msgId : t.msgId, turn);
       if (turn.question && turn.question.request_id && !turn.ended) showQuestionModal(turn.question, chatId).catch(() => {});
       if (ra) {
@@ -5579,6 +5738,19 @@
     }
 
     // turn_worker_delta { turnId, agent, workerId, text }: the worker's text so far.
+    // turn_reasoning { turnId, agent, at, text }: the next piece of the turn's reasoning (the panel at the top of the reply).
+    // A piece this page never got (the hub does not replay them) brings the hub's turn view, which has the reasoning so far.
+    const rsnCatchUps = new Set();
+    function onHubTurnReasoning(ev) {
+      const h = hubTurnTracker(ev);
+      if (!h) return;
+      const msgId = h.ra ? h.ra.msgId : h.t.msgId;
+      if (!msgId || addReasoningAt(msgId, Number(ev.at), typeof ev.text === 'string' ? ev.text : '')) return;
+      if (rsnCatchUps.has(h.chatId)) return;
+      rsnCatchUps.add(h.chatId);
+      setTimeout(() => { rsnCatchUps.delete(h.chatId); catchUpTurn(h.chatId); }, 400);
+    }
+
     function onHubTurnWorkerDelta(ev) {
       const h = hubTurnTracker(ev);
       if (!h) return;
@@ -5712,6 +5884,7 @@
       source.addEventListener('turn_start', e => { const ev = parse(e); if (ev) onHubTurnStart(ev).catch(err => console.error('[hub-events]', err)); });
       source.addEventListener('turn_delta', e => { const ev = parse(e); if (ev) onHubTurnDelta(ev); });
       source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) onHubTurnActivity(ev); });
+      source.addEventListener('turn_reasoning', e => { const ev = parse(e); if (ev) onHubTurnReasoning(ev); });
       source.addEventListener('turn_progress', e => { const ev = parse(e); if (ev) onHubTurnProgress(ev); });
       source.addEventListener('turn_worker_delta', e => { const ev = parse(e); if (ev) onHubTurnWorkerDelta(ev); });
       source.addEventListener('turn_end', e => { const ev = parse(e); if (ev) { onHubTurnEnd(ev); scheduleSpendRefresh(); } });
@@ -5948,7 +6121,7 @@
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
 
-          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" title="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="fillModelPick('${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
+          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" title="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="return modelPickDown(event, '${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
@@ -5964,6 +6137,8 @@
         </div>
       `;
       panels.appendChild(panel);
+      // Fill the model picker now, so its list is complete before the first click (modelPickDown).
+      setTimeout(() => fillModelPick(chatId), 0);
       
       // Initialize pending images array for this chat
       chats[chatId].pendingImages = [];
@@ -6107,6 +6282,7 @@
       document.getElementById(`tab-${chatId}`)?.remove();
       document.getElementById(`panel-${chatId}`)?.remove();
       delete chats[chatId];
+      rsnSweep();
       updateWorkerBarVisibility();
 
       const remaining = Object.keys(chats);
@@ -6287,6 +6463,7 @@
       // Stop tool tracker when leaving thinking state
       if (status !== 'thinking') {
         stopToolTracker(chatId);
+        for (const [mid, st] of reasonState) if (st.live && st.chatId === chatId) finishReasoning(mid);   // its own stream's reasoning panels
       }
 
       // Tab status
@@ -6566,6 +6743,7 @@
 
     function handleKeyDown(event, chatId) {
       if (event.key === 'Escape') {
+        if (rsnFullFor) { event.preventDefault(); closeReasoningFull(); return; }   // the open reasoning view goes first
         const chat = chats[chatId];
         if (chat && chat.status === 'thinking' && !chat.isGroup) {
           event.preventDefault();
@@ -6711,7 +6889,11 @@
           setTimeout(() => reattachCheck(chatId), 10000);
           return;
         }
-        if (reply) { finishReattach(chatId, reply.content); return; }
+        if (reply) {
+          if (typeof reply.reasoning === 'string' && reply.reasoning) setReasoning(ra.msgId, reply.reasoning, { total: Number(reply.reasoningChars), onlyIfLonger: true });
+          finishReattach(chatId, reply.content);
+          return;
+        }
         const waited = Date.now() - ra.startedAt;
         if (stillBusy === false && waited > 15000) {
           if (ui < 0 && ra.content) {
@@ -7610,6 +7792,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 onApprovalEvent(oc);
                 continue;
               }
+              if (oc.type === 'reasoning') {
+                appendReasoning(msgId, chatId, oc);
+                continue;
+              }
               if (oc.type === 'tool_start') {
                 displayContent += `\n⚡ ${oc.tool}`;
                 if (isSynthesis) {
@@ -7975,6 +8161,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         updateThinkingPanel(chatId, '', agentName, false);
         stopToolTracker(chatId);
       }
+      finishReasoning(msgId);
 
       // Final render — mark all tools as done (no spinners)
       if (toolActivity.length > 0) {
@@ -8091,6 +8278,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               }
               if (oc3.type === 'approval_request' || oc3.type === 'approval_resolved') {
                 onApprovalEvent(oc3);
+                continue;
+              }
+              if (oc3.type === 'reasoning') {
+                appendReasoning(msgId, chatId, oc3);
                 continue;
               }
               if (oc3.type === 'tool_start') {
@@ -8653,7 +8844,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         let html = formatContent(content);
         html += imageGalleryHtml(images);
 
-        el.innerHTML = html;
+        setMessageHtml(el, html);
         decorateMessage(el, content);
         renderVisualBlocks(el);
 
@@ -8969,60 +9160,246 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const host = msgId && document.getElementById(msgId);
       const bar = host && host.querySelector('.live-activity');
       if (bar) bar.remove();
-      const rs = host && host.querySelector('.reason-stream');
-      if (rs) {
-        rs.classList.add('done');
-        rs.classList.add('collapsed');
-        const st = rs.querySelector('.rs-status');
-        if (st) st.textContent = 'done';
-      }
-      reasonState.delete(msgId);
+      finishReasoning(msgId);
     }
 
-    // ── Live reasoning stream ──────────────────────────────────────────
-    const reasonState = new Map();
-    const REASON_TAIL_CHARS = 20000;
+    // ── Reasoning panel ────────────────────────────────────────────────
+    // The model's reasoning (Claude's summarized thinking, Codex's reasoning summary, the reasoning field of OpenRouter
+    // and local models) in a panel at the top of its reply. The header opens and closes it, the grip under it sets any
+    // height, ⤢ shows it at the size of the window. A live panel opens as the last live one was left (open unless
+    // closed); saved replies show theirs closed. Text only (textContent), never markup. The panel is one node that
+    // message rewrites keep (setMessageHtml), so its height and scroll position stay where the reader left them.
+    const reasonState = new Map();   // msgId -> { text, total, live, v, raf, chatId }
+    const REASON_KEEP = 200000;      // chars kept per reply (the newest); the hub keeps 120,000 of a turn, 40,000 when saved
+    const RSN_OPEN_KEY = 'hub-reasoning-open';
+    const RSN_HEIGHT_KEY = 'hub-reasoning-height';
+    const rsnOpenPref = () => localStorage.getItem(RSN_OPEN_KEY) !== '0';
+    const rsnHeightPref = () => { const h = Number(localStorage.getItem(RSN_HEIGHT_KEY)); return Number.isFinite(h) && h >= 60 ? h : 220; };
+    const rsnWords = (t) => { let n = 0; const re = /\S+/g; while (re.exec(t)) n++; return n; };
+    // Shown as plain text: a summary's **headings** (Codex writes them) lose their asterisks; a cut start is marked.
+    const rsnShown = (st) => (st.total > st.text.length ? '… (the start is not kept)\n\n' : '') + st.text.replace(/\*\*([^*\n]+)\*\*/g, '$1');
 
-    function appendReasoning(msgId, chatId, ev) {
-      const host = document.getElementById(msgId);
-      if (!host) return;
+    function rsnState(msgId) {
       let st = reasonState.get(msgId);
-      if (!st) { st = { chars: 0, text: '' }; reasonState.set(msgId, st); }
-      st.text += (ev.text || '');
-      if (st.text.length > REASON_TAIL_CHARS) st.text = st.text.slice(-REASON_TAIL_CHARS);
-      st.chars = ev.chars || st.chars + (ev.text || '').length;
+      if (!st) { rsnSweep(); st = { text: '', total: 0, live: false, v: 0, raf: 0, chatId: null }; reasonState.set(msgId, st); }
+      return st;
+    }
+    // Messages that left the page (a closed chat) take their reasoning with them.
+    function rsnSweep() {
+      for (const [id, st] of reasonState) if (!document.getElementById(id)) { if (st.raf) cancelAnimationFrame(st.raf); reasonState.delete(id); }
+      if (rsnFullFor && !reasonState.has(rsnFullFor)) closeReasoningFull();
+    }
+    function rsnAdd(st, text) {
+      st.text += text; st.total += text.length; st.v++;
+      if (st.text.length > REASON_KEEP) st.text = st.text.slice(-REASON_KEEP);
+    }
+    function rsnSchedule(msgId) {
+      const st = reasonState.get(msgId);
+      if (st && !st.raf) st.raf = requestAnimationFrame(() => paintReasoning(msgId));
+    }
 
-      let box = host.querySelector('.reason-stream');
+    // The own stream's 'reasoning' event.
+    function appendReasoning(msgId, chatId, ev) {
+      const text = ev && typeof ev.text === 'string' ? ev.text : '';
+      if (!text || !msgId || !document.getElementById(msgId)) return;
+      const st = rsnState(msgId);
+      st.live = true;
+      if (chatId) st.chatId = chatId;
+      rsnAdd(st, text);
+      rsnSchedule(msgId);
+    }
+    // A followed turn's turn_reasoning { at, text }: false when text is missing before it (fetch the hub's copy).
+    function addReasoningAt(msgId, at, text) {
+      if (typeof text !== 'string' || !text || !msgId || !document.getElementById(msgId)) return true;
+      const st = rsnState(msgId);
+      st.live = true;
+      if (Number.isFinite(at)) {
+        if (at > st.total) return false;
+        if (at + text.length <= st.total) return true;   // already shown (a replay)
+        text = text.slice(st.total - at);
+      }
+      rsnAdd(st, text);
+      rsnSchedule(msgId);
+      return true;
+    }
+    // The hub's copy (turn view, saved reply). total = the turn's whole length (the text may be its newest part only).
+    // onlyIfLonger: keep what is shown when it already has as much (live events can be ahead of a saved copy).
+    function setReasoning(msgId, text, { live = false, total, onlyIfLonger = false } = {}) {
+      if (typeof text !== 'string' || !text || !msgId || !document.getElementById(msgId)) return;
+      const st = rsnState(msgId);
+      const tot = Number.isFinite(total) && total >= text.length ? total : text.length;
+      if (!(onlyIfLonger && st.total >= tot)) {
+        st.text = text.length > REASON_KEEP ? text.slice(-REASON_KEEP) : text;
+        st.total = tot;
+      }
+      st.live = live;
+      st.v++;
+      rsnSchedule(msgId);
+    }
+    function finishReasoning(msgId) {
+      const st = msgId && reasonState.get(msgId);
+      if (!st || !st.live) return;
+      st.live = false; st.v++;
+      rsnSchedule(msgId);
+    }
+
+    // Where the panel goes: first in the message, after a group chat's agent label.
+    function placeReasoningPanel(host, box) {
+      const label = host.querySelector(':scope > .agent-label, :scope > .synthesis-label');
+      if (label) label.after(box); else host.insertBefore(box, host.firstChild);
+    }
+    // Message rewrites keep the panel node (and so its size, scroll position and open state).
+    function setMessageHtml(el, html) {
+      const box = el.querySelector(':scope > .reason-stream');
+      el.innerHTML = html;
+      if (box) placeReasoningPanel(el, box);
+    }
+
+    function paintReasoning(msgId) {
+      const st = reasonState.get(msgId);
+      if (!st) return;
+      st.raf = 0;
+      const host = document.getElementById(msgId);
+      if (!host) { reasonState.delete(msgId); return; }
+      let box = host.querySelector(':scope > .reason-stream');
       if (!box) {
         box = document.createElement('div');
         box.className = 'reason-stream';
         box.innerHTML =
-          '<div class="rs-head">' +
-            '<span class="rs-dot"></span>' +
-            '<span class="rs-label">REASONING</span>' +
-            '<span class="rs-count"></span>' +
-            '<span class="rs-status">live</span>' +
-            '<span class="rs-toggle">hide</span>' +
+          '<div class="rs-head" role="button" tabindex="0">' +
+            '<span class="rs-dot"></span><span class="rs-label">Reasoning</span><span class="rs-count"></span>' +
+            '<span class="rs-status"></span>' +
+            '<button type="button" class="rs-full" title="Show at full size">⤢</button>' +
+            '<span class="rs-toggle"></span>' +
           '</div>' +
-          '<pre class="rs-body"></pre>';
-        box.querySelector('.rs-head').addEventListener('click', () => {
-          box.classList.toggle('collapsed');
-          box.querySelector('.rs-toggle').textContent =
-            box.classList.contains('collapsed') ? 'show' : 'hide';
-        });
-        const bar = host.querySelector('.live-activity');
-        if (bar) host.insertBefore(box, bar); else host.appendChild(box);
+          '<div class="rs-body"></div>' +
+          '<div class="rs-grip" title="Drag to resize"></div>';
+        box.querySelector('.rs-body').style.height = `${rsnHeightPref()}px`;
+        box.classList.toggle('collapsed', !(st.live && rsnOpenPref()));
+        placeReasoningPanel(host, box);
       }
-      const cnt = box.querySelector('.rs-count');
-      if (cnt) cnt.textContent = `${st.chars.toLocaleString()} chars`;
+      box.classList.toggle('live', st.live);
+      const open = !box.classList.contains('collapsed');
+      box.querySelector('.rs-head').setAttribute('aria-expanded', String(open));
+      box.querySelector('.rs-toggle').textContent = open ? 'hide' : 'show';
+      box.querySelector('.rs-status').textContent = st.live ? 'thinking…' : '';
+      const words = rsnWords(st.text);
+      box.querySelector('.rs-count').textContent = `· ${words.toLocaleString()} word${words === 1 ? '' : 's'}`;
       const body = box.querySelector('.rs-body');
-      if (body) {
-        body.textContent = st.text;
-        const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
-        if (nearBottom) body.scrollTop = body.scrollHeight;
+      if (body.dataset.v !== String(st.v)) {
+        const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+        body.textContent = rsnShown(st);
+        body.dataset.v = String(st.v);
+        if (atEnd && st.live) body.scrollTop = body.scrollHeight;
       }
-      if (chatId) updateToolActivity(chatId, `Reasoning: ${st.chars.toLocaleString()} chars`, true);
+      if (st.live && st.chatId) updateToolActivity(st.chatId, `Reasoning · ${words.toLocaleString()} words`, true);
+      if (st.live && host.parentElement) autoScroll(host.parentElement);   // keep a growing live panel in view (unless scrolled up)
+      if (rsnFullFor === msgId) paintReasoningFull();
     }
+
+    // ⤢: the reasoning at the size of the window (live while the turn runs). Esc, ✕ or a click outside closes it.
+    let rsnFullFor = null;
+    let rsnFullReturn = null;
+    function openReasoningFull(msgId) {
+      if (!reasonState.has(msgId)) return;
+      let ov = document.getElementById('rsn-full');
+      if (!ov) {
+        ov = document.createElement('div');
+        ov.id = 'rsn-full';
+        ov.className = 'rsn-full-overlay';
+        ov.innerHTML =
+          '<div class="rsn-full-box" role="dialog" aria-modal="true" aria-label="Reasoning" tabindex="-1">' +
+            '<div class="rsn-full-head"><span class="rs-dot"></span><span class="rsn-full-title"></span>' +
+            '<span class="rsn-full-count"></span><button type="button" class="rsn-full-close" title="Close (Esc)">✕</button></div>' +
+            '<div class="rsn-full-body" tabindex="0"></div>' +
+          '</div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('.rsn-full-close')) closeReasoningFull(); });
+        // Esc closes it here, before the chat box's Esc (which pauses a running reply) could see it; Tab stays inside
+        // (the text, then ✕). A question or approval dialog that opens above it keeps its own focus, and the chat box's
+        // Esc closes this view first (handleKeyDown).
+        ov.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeReasoningFull(); return; }
+          if (e.key !== 'Tab') return;
+          e.preventDefault();
+          const body = ov.querySelector('.rsn-full-body'), close = ov.querySelector('.rsn-full-close');
+          (document.activeElement === close ? body : close).focus();
+        });
+        document.body.appendChild(ov);
+      }
+      rsnFullFor = msgId;
+      rsnFullReturn = document.activeElement;
+      const host = document.getElementById(msgId);
+      const chatId = host && host.parentElement && host.parentElement.id.startsWith('messages-') ? host.parentElement.id.slice(9) : null;
+      const who = chatId && chats[chatId] ? (chats[chatId].display || chats[chatId].agent || '') : '';
+      ov.querySelector('.rsn-full-title').textContent = who ? `Reasoning · ${who}` : 'Reasoning';
+      ov.querySelector('.rsn-full-body').dataset.v = '';
+      ov.classList.add('open');
+      paintReasoningFull();
+      const b = ov.querySelector('.rsn-full-body');
+      b.scrollTop = b.scrollHeight;
+      ov.querySelector('.rsn-full-body').focus({ preventScroll: true });
+    }
+    function paintReasoningFull() {
+      const ov = document.getElementById('rsn-full');
+      const st = rsnFullFor && reasonState.get(rsnFullFor);
+      if (!ov || !st) return;
+      ov.classList.toggle('live', st.live);
+      const words = rsnWords(st.text);
+      ov.querySelector('.rsn-full-count').textContent = `${words.toLocaleString()} word${words === 1 ? '' : 's'}${st.live ? ' · thinking…' : ''}`;
+      const body = ov.querySelector('.rsn-full-body');
+      if (body.dataset.v !== String(st.v)) {
+        const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+        body.textContent = rsnShown(st);
+        body.dataset.v = String(st.v);
+        if (atEnd) body.scrollTop = body.scrollHeight;
+      }
+    }
+    function closeReasoningFull() {
+      const ov = document.getElementById('rsn-full');
+      if (ov) ov.classList.remove('open');
+      rsnFullFor = null;
+      const back = rsnFullReturn; rsnFullReturn = null;
+      if (back && back.isConnected && typeof back.focus === 'function') { try { back.focus({ preventScroll: true }); } catch {} }
+    }
+
+    function toggleReasoningPanel(box) {
+      const open = box.classList.contains('collapsed');
+      box.classList.toggle('collapsed', !open);
+      box.querySelector('.rs-head').setAttribute('aria-expanded', String(open));
+      box.querySelector('.rs-toggle').textContent = open ? 'hide' : 'show';
+      // A live panel's choice is the one the next live panel starts with; peeking at a saved one changes nothing.
+      if (box.classList.contains('live')) localStorage.setItem(RSN_OPEN_KEY, open ? '1' : '0');
+      if (open && box.classList.contains('live')) { const body = box.querySelector('.rs-body'); body.scrollTop = body.scrollHeight; }
+    }
+    document.addEventListener('click', (e) => {
+      const box = e.target.closest && e.target.closest('.reason-stream');
+      if (!box) return;
+      const host = box.parentElement;
+      if (e.target.closest('.rs-full')) { e.preventDefault(); if (host && host.id) openReasoningFull(host.id); return; }
+      if (e.target.closest('.rs-head')) { e.preventDefault(); toggleReasoningPanel(box); }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const head = e.target.closest && e.target.closest('.reason-stream .rs-head');
+      if (!head || e.target.closest('.rs-full')) return;
+      e.preventDefault();
+      toggleReasoningPanel(head.closest('.reason-stream'));
+    });
+    // The grip: drag for any height (60 px to most of the window); the size is kept for the next panels.
+    document.addEventListener('pointerdown', (e) => {
+      const grip = e.target.closest && e.target.closest('.reason-stream .rs-grip');
+      if (!grip || e.button !== 0) return;
+      e.preventDefault();
+      const body = grip.closest('.reason-stream').querySelector('.rs-body');
+      const y0 = e.clientY, h0 = body.getBoundingClientRect().height;
+      const move = (ev) => { body.style.height = `${Math.round(Math.max(60, Math.min(window.innerHeight * 0.85, h0 + ev.clientY - y0)))}px`; };
+      const up = () => {
+        grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+        localStorage.setItem(RSN_HEIGHT_KEY, String(parseInt(body.style.height, 10) || rsnHeightPref()));
+      };
+      try { grip.setPointerCapture(e.pointerId); } catch {}
+      grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+    });
 
     function escapeHtmlSafe(s) {
       return String(s == null ? '' : s)
@@ -9098,7 +9475,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Append images (escaped; click handled by the delegated listener)
       html += imageGalleryHtml(images);
 
-      el.innerHTML = html;
+      setMessageHtml(el, html);
       decorateMessage(el, steps.map(st => st.text).filter(t => t && t.trim()).join('\n\n'));
 
       if (thinkWasCollapsed) {
@@ -9106,12 +9483,6 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (b) b.classList.add('collapsed');
       }
 
-      // innerHTML wiped the reasoning stream — rebuild it from state first so
-      // it lands ABOVE the live-activity bar.
-      if (isStreaming && reasonState.has(msgId)) {
-        const st = reasonState.get(msgId);
-        appendReasoning(msgId, null, { text: '', chars: st.chars });
-      }
       // innerHTML wiped the live-activity footer — put it back if still active
       if (isStreaming && liveActivity.has(msgId)) renderLiveActivity(msgId);
       // innerHTML wiped the token-usage bar — put it back (always, so it persists after streaming ends)
@@ -9131,7 +9502,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         let html = buildToolsHtml(toolActivity, showStatus) + formatContent(content);
         html += imageGalleryHtml(images);
 
-        el.innerHTML = html;
+        setMessageHtml(el, html);
         decorateMessage(el, content);
         renderVisualBlocks(el);
 
@@ -9172,7 +9543,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (el) {
         const thinkWas = el.querySelector('.inline-thinking.collapsed') !== null;
         const color = AGENT_COLORS[colorIndex % AGENT_COLORS.length];
-        el.innerHTML = `<div class="agent-label" style="background: ${color}33; color: ${color}">${agentName}</div>${formatContent(content)}`;
+        setMessageHtml(el, `<div class="agent-label" style="background: ${color}33; color: ${color}">${agentName}</div>${formatContent(content)}`);
         decorateMessage(el, content);
         renderVisualBlocks(el);
         if (thinkWas) { const b = el.querySelector('.inline-thinking'); if (b) b.classList.add('collapsed'); }
@@ -9184,7 +9555,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function updateSynthesisMessage(msgId, content, round) {
       const el = document.getElementById(msgId);
       if (el) {
-        el.innerHTML = `<div class="synthesis-label">📋 Synthesis - Round ${round}</div>${formatContent(content)}`;
+        setMessageHtml(el, `<div class="synthesis-label">📋 Synthesis - Round ${round}</div>${formatContent(content)}`);
         decorateMessage(el, content);
         renderVisualBlocks(el);
         const container = el.parentElement;

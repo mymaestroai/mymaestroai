@@ -167,7 +167,10 @@ test('tiger-team.html: vendored pinned libraries, fail-closed markdown, no oncli
   assert.match(tiger, /if \(!purifyReady\(\)\) return esc\(text\)\.replace\(\/\\n\/g, '<br>'\);/, 'md() fails closed');
   assert.ok(!/ADD_ATTR: \[[^\]]*'onclick'/.test(tiger), 'no ADD_ATTR onclick');
   assert.match(tiger, /timeline\.textContent = rawTranscript;\s*\/\/ fail closed/);
-  assert.match(tiger, /data-call-id="\$\{esc\(callId\)\}"/, 'toggle carries a data attribute');
+  // The toggle carries a data attribute: a page-made id (random prefix + counter), never agent or provider text.
+  assert.match(tiger, /data-call-id="\$\{domId\}"/, 'toggle carries a data attribute');
+  assert.match(tiger, /const domId = toolIdPrefix \+ \(\+\+toolSeq\);/);
+  assert.match(tiger, /const toolIdPrefix = 't' \+ Math\.random\(\)\.toString\(36\)\.slice\(2, 7\) \+ '-';/);
   assert.match(tiger, /e\.target\.closest\('\.tool-call-toggle'\)/, 'delegated toggle listener');
   assert.ok(!tiger.includes("approveAdditionalRounds('${"), 'justification is not inside an inline handler');
   assert.match(tiger, /<p><strong>Justification:<\/strong> \$\{esc\(justification\)\}<\/p>/);
@@ -197,5 +200,5 @@ test('svg blocks carry no CSS; the sealed html document is built by the hub with
 });
 
 test('service worker cache bumped so phones pick up the new page', () => {
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v55';"));
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v57';"));
 });

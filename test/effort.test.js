@@ -51,7 +51,7 @@ test('wired: Claude client query option, gateway option, Codex; agent field vali
   assert.match(chat, /const sdkEffort = effortLib\.forModel\(`claude-sdk\/\$\{sdkModel\}`, await agentEffort\(agentName\)\);/);
   assert.match(chat, /\.\.\.\(sdkEffort \? \{ effort: sdkEffort \} : \{\}\),/);
   assert.match(chat, /agent: agentName, effort: turnEffort \}/);
-  assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort \}\);/);
+  assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null \}\);/);
   const agents = read('lib/agents.js');
   assert.match(agents, /effort: require\('\.\/effort'\)\.normalize\(a\.effort\)/);
   assert.match(agents, /'tools', 'effort'\];/);

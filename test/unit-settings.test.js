@@ -166,11 +166,13 @@ test('getForUI never returns a raw key: masked hint, hasKey flag, unknown provid
   process.env.PERPLEXITY_API_KEY = 'pplx-env-SECRET-ENV-KEY';
   const { s } = load({ providers: { anthropic: { apiKey: longKey }, openai: { apiKey: 'short' }, custom: { apiKey: 'custom-SECRET-KEY' } }, theme: 'dark' });
   const ui = s.getForUI();
-  assert.deepStrictEqual(ui.providers.anthropic, { hasKey: true, keyHint: 'sk-a...wxyz', url: 'https://api.anthropic.com', defaultUrl: 'https://api.anthropic.com' });
+  assert.deepStrictEqual(ui.providers.anthropic, { hasKey: true, keyHint: 'sk-a...wxyz', keySource: 'settings', url: 'https://api.anthropic.com', defaultUrl: 'https://api.anthropic.com' });
   assert.deepStrictEqual(ui.providers.openai.keyHint, '****', 'keys of 8 chars or fewer are fully masked');
   assert.strictEqual(ui.providers.google.hasKey, false);
   assert.strictEqual(ui.providers.google.keyHint, '');
   assert.strictEqual(ui.providers.perplexity.hasKey, true, 'env key counts');
+  assert.strictEqual(ui.providers.perplexity.keySource, 'environment');
+  assert.strictEqual(ui.providers.google.keySource, '');
   assert.deepStrictEqual(Object.keys(ui.providers).sort(), Object.keys(s.PROVIDER_DEFAULTS).sort());
   assert.strictEqual(ui.theme, 'dark', 'other settings pass through');
   const json = JSON.stringify(ui);

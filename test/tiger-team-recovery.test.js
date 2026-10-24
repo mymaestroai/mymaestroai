@@ -78,8 +78,15 @@ function harness(run = async () => 'A confirmed result.  '.repeat(20)) {
     makeChunk: (content, model, gateway) => ({ content, model, gateway }),
     streamViaGateway: run,
     isAgentActive: name => ctx.pendingChatRequests.has(name),
+    // The team folder is not created on disk here; member failures are explained as in production.
+    ttLive: { ...require('../lib/tiger-team-live'), ensureTeamFolder: id => '/hub/share/common/tiger-teams/' + id },
+    errorHelp: require('../lib/error-help'),
+    pacing: { failureText: (e, target) => `[FAILED] "${target}": ${e.message}` },
   };
+  ctx.require = m => m === './settings' ? { getProviderKey: p => (p === 'anthropic' ? ctx.anthropicKey || '' : '') } : require(m);
   vm.createContext(ctx);
+  vm.runInContext(source.match(/^function ttBindStream\(.*$/m)[0], ctx);
+  { const s = source.indexOf('function ttClaudeApiNote('); vm.runInContext(source.slice(s, source.indexOf('\n}\n', s) + 2), ctx); }
   let start = source.indexOf('async function consultTigerTeam('), end = source.indexOf('\nfunction consultViaHub', start);
   vm.runInContext(source.slice(start, end), ctx);
   start = source.indexOf('async function runTigerTeam('); end = source.indexOf('// Prune completed Tiger Teams', start);
@@ -103,7 +110,7 @@ test('failed model turn pauses rather than falsely completing; same call resumes
   assert.equal(attempts, 2);
 });
 
-test('challenger failure resumes without rerunning completed coordinator', async () => {
+test('a challenger that cannot review stops the run with its reason; Resume reruns only the review', async () => {
   const calls = []; let failed = false;
   const ctx = harness(async (agent) => {
     calls.push(agent);
@@ -117,9 +124,35 @@ test('challenger failure resumes without rerunning completed coordinator', async
   await ctx.runTigerTeam({ coordinator: 'coord', participants: [], challenger: 'critic', objective: 'Test' }, ctx.res, 'test');
   const id = [...ctx.activeTigerTeams.keys()][0];
   assert.deepEqual(calls, ['coord', 'critic']);
+  const st = ctx.activeTigerTeams.get(id);
+  assert.notEqual(st.status, 'completed', 'an unreviewed report is not a finished run');
+  assert.match(st.error, /^The challenger \(critic\) could not review the report\. .*Resume runs only the review again\.$/s);
+  assert.equal(ctx.res.events.find(e => e.gateway?.type === 'tt_dispatch_failed').gateway.call_key, id + '-challenger');
+  assert.equal(ctx.res.events.some(e => e.gateway?.type === 'tt_complete'), false);
   await ctx.resumeTigerTeam(id, ctx.res, {});
   assert.deepEqual(calls, ['coord', 'critic', 'critic', 'coord']);
   assert.equal(ctx.activeTigerTeams.get(id).status, 'completed');
+});
+
+test('an unknown tool outcome or a blocked source in a member ends the run; it is never "carry on"', async () => {
+  for (const code of ['TT_RECONCILIATION_REQUIRED', 'TT_SOURCE_BLOCKED']) {
+    const calls = [];
+    const ctx = harness(async agent => {
+      calls.push(agent);
+      if (agent === 'part') throw Object.assign(new Error('Recovery blocked: tool outcome needs explicit reconciliation'), { code });
+      return 'complete';
+    });
+    await ctx.runRoundtable({ objective: 'test', coordinator: 'coord', participants: ['part'], max_rounds: 2 }, ctx.res);
+    const st = [...ctx.activeTigerTeams.values()][0];
+    assert.equal(st.status, 'blocked', code);
+    assert.deepEqual(calls, ['coord', 'part'], 'nobody speaks after it');
+    assert.equal(ctx.res.events.some(e => e.gateway?.type === 'tt_dispatch_failed'), false);
+    assert.equal(ctx.ttMustStop(Object.assign(new Error('x'), { code }), null), true);
+  }
+  const ctx = harness();
+  assert.equal(ctx.ttMustStop(new Error('fetch failed'), null), false, 'an ordinary failure is reported and the team goes on');
+  assert.equal(ctx.ttMustStop(new Error('x'), { aborted: true }), true);
+  assert.equal(ctx.ttMustStop(Object.assign(new Error('x'), { code: 'TT_PERSISTENCE_FAILED' }), null), true);
 });
 
 test('stop is targeted and does not release running reservation prematurely', async () => {
@@ -170,19 +203,96 @@ test('continuation stop uses a fresh signal and remains resumable', async () => 
   assert.equal(ctx.activeTigerTeams.get('old').status, 'completed');
 });
 
-test('roundtable resumes completed contributions without rerunning them', async () => {
-  const calls = []; let failed = false;
-  const ctx = harness(async agent => {
+test('a roundtable participant that cannot speak is skipped with a note; the others carry on', async () => {
+  const calls = [], prompts = [];
+  const ctx = harness(async (agent, prompt) => {
+    calls.push(agent); prompts.push(prompt);
+    if (agent === 'part') throw new Error('fetch failed');
+    return 'complete';
+  });
+  await ctx.runRoundtable({ objective: 'test', coordinator: 'coord', participants: ['part'], max_rounds: 2 }, ctx.res);
+  const id = [...ctx.activeTigerTeams.keys()][0];
+  const st = ctx.activeTigerTeams.get(id);
+  assert.equal(st.status, 'completed');
+  assert.deepEqual(calls, ['coord', 'part', 'coord', 'part']);
+  assert.equal(st.discussion.filter(d => d.failed).length, 2);
+  assert.match(prompts[2], /part:\*\* \(Could not contribute this round\./, 'the next speaker hears why');
+  assert.equal(ctx.res.events.filter(e => e.gateway?.type === 'tt_dispatch_failed').length, 2);
+  assert.equal(ctx.res.events.filter(e => e.gateway?.type === 'tt_dispatch' && e.gateway.call_key).length, 4, 'every turn names its card');
+});
+
+test('a stopped roundtable resumes without rerunning finished contributions', async () => {
+  const calls = []; let stopped = false; let ctx;
+  ctx = harness(async agent => {
     calls.push(agent);
-    if (agent === 'part' && !failed) { failed = true; throw new Error('fetch failed'); }
+    if (agent === 'part' && !stopped) { stopped = true; ctx.stopTigerTeam([...ctx.activeTigerTeams.keys()][0]); throw recovery.abortError(); }
     return 'complete';
   });
   await ctx.runRoundtable({ objective: 'test', coordinator: 'coord', participants: ['part'], max_rounds: 1 }, ctx.res);
   const id = [...ctx.activeTigerTeams.keys()][0];
-  assert.equal(ctx.activeTigerTeams.get(id).status, 'interrupted');
+  assert.equal(ctx.activeTigerTeams.get(id).status, 'stopped');
   await ctx.resumeTigerTeam(id, ctx.res, {});
   assert.deepEqual(calls, ['coord', 'part', 'part']);
   assert.equal(ctx.activeTigerTeams.get(id).status, 'completed');
+});
+
+test('every frame of a member names its dispatch; a nested frame keeps its own tag', async () => {
+  const ctx = harness(async (agent, prompt, images, res) => {
+    res.write('data: {"choices":[{"delta":{"content":"hello"}}]}\n\n');
+    res.write('data: {"tt_call":"inner","tt_agent":"x","tt_role":"participant","choices":[{"delta":{"content":"nested"}}]}\n\n');
+    res.write(': heartbeat\n\n');
+    res.write('data: {"gateway":{"type":"turn_outcome","status":"completed"}}\n\n');
+    return 'done';
+  });
+  const writes = []; ctx.res.write = s => writes.push(s);
+  ctx.reconstituteTigerTeam('old', { objective: 'test', coordinator: 'coord', participants: ['part'], findings: [] });
+  assert.equal(await ctx.consultTigerTeam('part', 'task', 'dispatch-a', ctx.res, 'coord', { tigerTeamId: 'old', ttRole: 'participant' }), 'done');
+  const data = writes.filter(w => w.startsWith('data: ')).map(w => JSON.parse(w.slice(6)));
+  assert.deepEqual([data[0].tt_call, data[0].tt_agent, data[0].tt_role], ['dispatch-a', 'part', 'participant']);
+  assert.equal(data[1].tt_call, 'inner', 'the innermost call keeps its tag');
+  assert.equal(writes.includes(': heartbeat\n\n'), true, 'comments pass through unchanged');
+  assert.equal(data.some(d => d.gateway?.type === 'turn_outcome'), false, 'a member turn outcome is not the team\'s');
+});
+
+test('a member that is mid-turn elsewhere is waited for, then does the work', async () => {
+  const ctx = harness(async () => 'worked');
+  const real = require('../lib/tiger-team-live');
+  ctx.ttLive = { ...ctx.ttLive, waitUntilFree: (isActive, o) => real.waitUntilFree(isActive, { ...o, stepMs: 5 }) };
+  const writes = []; ctx.res.write = s => writes.push(s);
+  ctx.reconstituteTigerTeam('old', { objective: 'test', coordinator: 'coord', participants: ['part'], findings: [] });
+  ctx.pendingChatRequests.add('part');   // a chat with "part" is running
+  setTimeout(() => ctx.pendingChatRequests.delete('part'), 40);
+  assert.equal(await ctx.consultTigerTeam('part', 'task', 'dispatch-b', ctx.res, 'coord', { tigerTeamId: 'old' }), 'worked');
+  const notice = writes.map(w => w.startsWith('data: ') ? JSON.parse(w.slice(6)) : null).find(d => d?.gateway?.type === 'tt_member_notice');
+  assert.match(notice.gateway.message, /part is busy with another conversation/);
+  assert.equal(notice.tt_call, 'dispatch-b');
+  assert.equal(ctx.pendingChatRequests.has('part'), false);
+});
+
+test('a member that stays busy fails with TT_BUSY, its call marked failed and the other turn untouched', async () => {
+  const ctx = harness(async () => 'never');
+  const real = require('../lib/tiger-team-live');
+  ctx.ttLive = { ...ctx.ttLive, waitUntilFree: (isActive, o) => real.waitUntilFree(isActive, { ...o, stepMs: 5, maxMs: 30 }) };
+  ctx.reconstituteTigerTeam('old', { objective: 'test', coordinator: 'coord', participants: ['part'], findings: [] });
+  ctx.pendingChatRequests.add('part');
+  await assert.rejects(ctx.consultTigerTeam('part', 'task', 'dispatch-c', ctx.res, 'coord', { tigerTeamId: 'old' }), { code: 'TT_BUSY' });
+  assert.equal(ctx.activeTigerTeams.get('old').calls['dispatch-c'].status, 'failed');
+  assert.equal(ctx.pendingChatRequests.has('part'), true, 'the other turn still owns the agent');
+  assert.match(ctx.ttMemberFailureText(Object.assign(new Error('x'), { code: 'TT_BUSY' }), 'part', 'Part'), /^\[TEAM MEMBER BUSY\] Part \(part\)/);
+  assert.match(ctx.ttMemberFailureText(new Error('fetch failed'), 'part', 'Part', 'google/gemini-x'), /^\[TEAM MEMBER FAILED\] Part \(part\) could not finish this task\. .*What to do:/);
+  assert.match(ctx.ttMemberFailureText(new Error('Tool result unavailable'), 'part', 'part'), /could not finish this task\. Tool result unavailable\nThe rest of the team is not affected/);
+});
+
+test('the coordinator is told about the team folder and that dispatches run at the same time', async () => {
+  const prompts = [];
+  const ctx = harness(async (agent, prompt) => { prompts.push(prompt); return 'Report.  '.repeat(20); });
+  await ctx.runTigerTeam({ coordinator: 'coord', participants: ['part'], objective: 'Test' }, ctx.res, 'test');
+  const [id, state] = [...ctx.activeTigerTeams][0];
+  assert.equal(state.teamFolder, '/hub/share/common/tiger-teams/' + id);
+  assert.match(prompts[0], new RegExp('\\*\\*TEAM FOLDER:\\*\\* /hub/share/common/tiger-teams/' + id));
+  assert.match(prompts[0], /cannot see your own Files folder or workspace/);
+  assert.match(prompts[0], /Several consult_agent calls in one message run at the same time/);
+  assert.doesNotMatch(prompts[0], /execute one at a time/);
 });
 
 test('same prompt in two different dispatches is not incorrectly cached', async () => {
@@ -192,4 +302,24 @@ test('same prompt in two different dispatches is not incorrectly cached', async 
   assert.equal(await ctx.consultTigerTeam('part', 'same prompt', 'dispatch1', ctx.res, 'coord', opts), 'result-1');
   assert.equal(await ctx.consultTigerTeam('part', 'same prompt', 'dispatch1', ctx.res, 'coord', opts), 'result-1');
   assert.equal(await ctx.consultTigerTeam('part', 'same prompt', 'dispatch2', ctx.res, 'coord', opts), 'result-2');
+});
+
+test('a team with Claude-subscription members says they run on the API key, or that they will fail without one', async () => {
+  const ctx = harness(async () => 'Report.  '.repeat(20));
+  ctx.getAgents = async () => [
+    { name: 'coord', display: 'Sonnet', model: 'claude-sdk/claude-sonnet-5-5' },
+    { name: 'part', display: 'Gemini', model: 'google/gemini-4-argon' },
+    { name: 'critic', display: 'Haiku', model: 'claude-sdk/claude-haiku-4-5' },
+  ];
+  const notes = () => ctx.res.events.filter(e => e.gateway?.type === 'tt_notice').map(e => e.gateway.message);
+  ctx.anthropicKey = 'test-anthropic-key-not-real';
+  await ctx.runTigerTeam({ coordinator: 'coord', participants: ['part'], challenger: 'critic', objective: 'Test' }, ctx.res, 'test');
+  assert.deepEqual(notes(), ['Claude agents in this team (Sonnet, Haiku) are answered through your Anthropic API key, not your Claude subscription. Their use counts as API spend (Settings → Spend).']);
+  ctx.res.events.length = 0; ctx.anthropicKey = '';
+  await ctx.runRoundtable({ objective: 'test', coordinator: 'coord', participants: ['part'], max_rounds: 1 }, ctx.res);
+  assert.match(notes()[0], /^Sonnet is set to your Claude subscription, but a Tiger Team answers Claude agents through the Anthropic API and this hub has no Anthropic API key, so it will fail\./);
+  ctx.res.events.length = 0;
+  ctx.getAgents = async () => [{ name: 'coord', display: 'Gemini', model: 'google/gemini-4-argon' }, { name: 'part', display: 'Qwen', model: 'local/qwen' }];
+  await ctx.runTigerTeam({ coordinator: 'coord', participants: ['part'], objective: 'Test' }, ctx.res, 'test');
+  assert.deepEqual(notes(), [], 'nothing to say when no member is on the subscription');
 });

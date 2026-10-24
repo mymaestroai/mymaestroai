@@ -7,6 +7,14 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const source = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '../tiger-team.html'), 'utf8');
+/** The war-room helpers (ttLive, ttNewStream, ttTeamOf) exactly as server.js defines them, run in ctx. */
+function addHelpers(ctx) {
+  const helpers = source.slice(source.indexOf('// A run writes to its own stream'), source.indexOf('// ── Setup Detection'));
+  const req = ctx.require;
+  ctx.require = m => m === './lib/tiger-team-live' ? require('../lib/tiger-team-live') : req(m);
+  vm.runInContext(helpers.replace(/^const /gm, 'var '), ctx);
+}
+const journal = () => ({ save() {}, append: (id, st, ev) => ({ ...ev, seq: (st.eventSeq = (st.eventSeq || 0) + 1) }), *events() {} });
 function load(run) {
   const state = { id: 'tt', status: 'interrupted', completedAt: 1, coordinator: 'coord' };
   const ctx = { require, console, path, fs, ttRecovery: require('../lib/tiger-team-recovery'), __dirname: path.join(__dirname, '..'), global: {},
@@ -14,11 +22,13 @@ function load(run) {
     getTigerTeamState: id => id === 'tt' ? state : null,
     resumeTigerTeam: run || (async () => { state.status = 'completed'; }),
     continueTigerTeam: async () => {}, reconstituteTigerTeam: () => {},
-    stopTigerTeam: () => { state.status = 'stopping'; }, ttStore: { save() {} },
+    stopTigerTeam: () => { state.status = 'stopping'; }, ttStore: journal(),
     jsonResponse: (res, status, body) => { res.status = status; res.body = body; },
     setInterval: () => 1, clearInterval() {},
+    activeTigerTeams: new Map([['tt', state]]),
   };
   vm.createContext(ctx);
+  addHelpers(ctx);
   const start = source.indexOf("    if (['/api/tiger-team/continue', '/api/tiger-team/resume']");
   const end = source.indexOf('    // Store TT launch params', start);
   vm.runInContext('this.route = async (pathname, req, res) => {' + source.slice(start, end) + '};', ctx);
@@ -40,11 +50,16 @@ test('normal SSE close does not cancel completed work', async () => {
   const h = load(); const res = h.response(); await h.ctx.route('/api/tiger-team/resume', h.req, res);
   assert.equal(res.status, 200); assert.equal(h.state.status, 'completed');
 });
-test('unexpected response disconnect requests targeted stop', async () => {
-  let release; const h = load(() => new Promise(r => release = r)); const res = h.response();
+test('a page that disconnects leaves the team running; only Stop ends it', async () => {
+  let release; const h = load(async (id, stream) => { await new Promise(r => release = r); stream.write('data: {"gateway":{"type":"tt_complete"}}\n\n'); h.state.status = 'completed'; });
+  const res = h.response();
   const run = h.ctx.route('/api/tiger-team/resume', h.req, res);
   while (!release) await new Promise(r => setImmediate(r));
-  res.emit('close'); assert.equal(h.state.status, 'stopping'); release(); await run;
+  res.destroyed = true; res.emit('close');
+  assert.notEqual(h.state.status, 'stopping', 'closing the page does not stop the team');
+  release(); await run;
+  assert.equal(h.state.status, 'completed');
+  assert.equal(res.writes.some(w => /tt_complete/.test(w)), false, 'nothing is written to the page that left');
 });
 test('completed team requires Continue, not Resume', async () => {
   const h = load(); h.state.status = 'completed'; const res = h.response();
@@ -98,12 +113,18 @@ for (const mode of ['roundtable', 'led']) {
       getTigerTeamState: () => state,
       stopTigerTeam: () => { state.status = 'stopped'; release('Tiger Team failed: Tiger Team stopped'); },
       setInterval, clearInterval, setTimeout,
+      ttValidId: id => /^[a-zA-Z0-9_-]+$/.test(id), ttStore: journal(), activeTigerTeams: new Map(),
     };
-    ctx.runRoundtable = ctx.runTigerTeam = async ({ session }) => {
+    // Like the real engine, a stopped run reports its own end on its stream (the Stop route writes nothing itself).
+    ctx.runRoundtable = ctx.runTigerTeam = async ({ session }, stream) => {
       session.tigerTeamId = 'synthetic';
-      return new Promise(resolve => { release = resolve; started(); });
+      return new Promise(resolve => {
+        release = (r) => { stream.write(`data: ${JSON.stringify({ gateway: { type: 'tt_interrupted', status: 'stopped', message: 'Tiger Team stopped' } })}\n\n`); resolve(r); };
+        started();
+      });
     };
     vm.createContext(ctx);
+    addHelpers(ctx);
     const stopStart = source.indexOf("    if (pathname === '/api/tiger-team/stop'");
     const stopEnd = source.indexOf('    // Tiger Team save', stopStart);
     const start = source.indexOf("    if (pathname === '/api/tiger-team/start'");
@@ -172,4 +193,80 @@ test('full-record export streams valid JSON containing exact artifacts and sourc
   const data = JSON.parse(text);
   assert.equal(data.artifacts[artifact.hash], 'full'.repeat(10000));
   assert.equal(data.events[0].type, 'model_request'); assert.equal(res.writableEnded, true);
+});
+
+// GET /api/tiger-team/stream: any page follows a team. Replay of the journal after ?since=, then live.
+function streamRoute(state, store) {
+  const ctx = { require: m => m === './lib/tiger-team-live' ? require('../lib/tiger-team-live') : require(m), console, URL, JSON,
+    ttValidId: require('../lib/tiger-team-recovery').validId, ttRecovery: require('../lib/tiger-team-recovery'), ttStore: store,
+    getTigerTeamState: id => (state && id === state.id ? state : null), activeTigerTeams: new Map(state ? [[state.id, state]] : []),
+    jsonResponse: (res, status, body) => { res.status = status; res.body = body; }, global: {} };
+  vm.createContext(ctx);
+  addHelpers(ctx);
+  const start = source.indexOf('    // Follow a team from any page');
+  const end = source.indexOf('    // ── Image Routes', start);
+  vm.runInContext('this.route = async (pathname, req, res) => {' + source.slice(start, end) + '};', ctx);
+  return ctx;
+}
+function sseResponse() {
+  const res = new EventEmitter(); res.writes = [];
+  res.writeHead = n => { res.status = n; }; res.write = s => { res.writes.push(s); return true; };
+  res.end = () => { res.writableEnded = true; res.emit('close'); };
+  return res;
+}
+const frames = res => res.writes.filter(w => w.startsWith('data: {')).map(w => JSON.parse(w.slice(6)));
+
+test('stream route: replays after since, follows a live team, and ends a finished one with its state', async t => {
+  const os = require('node:os');
+  const recovery = require('../lib/tiger-team-recovery');
+  const live = require('../lib/tiger-team-live');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tt-api-stream-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new recovery.CheckpointStore(dir);
+  const state = { id: 'tt-live', status: 'running', coordinator: 'coord' };
+  const ctx = streamRoute(state, store);
+  const stream = ctx.ttNewStream().bind('tt-live');
+  for (const n of [1, 2, 3]) stream.write(`data: {"choices":[{"delta":{"content":"part ${n}"}}]}\n\n`);
+  const req = since => ({ method: 'GET', url: `/api/tiger-team/stream?id=tt-live&since=${since}` });
+  const a = sseResponse();
+  await ctx.route('/api/tiger-team/stream', req(1), a);
+  assert.equal(a.status, 200);
+  assert.deepEqual(frames(a).map(f => f.tt_seq), [2, 3], 'only what came after since');
+  assert.equal(a.writableEnded, undefined, 'a live team keeps the page attached');
+  stream.write('data: {"gateway":{"type":"tt_complete"}}\n\n');
+  assert.equal(frames(a).at(-1).gateway.type, 'tt_complete');
+  state.status = 'completed'; stream.end();
+  assert.equal(a.writableEnded, true);
+  // Opened later: the whole history, then how it ended.
+  const b = sseResponse();
+  await ctx.route('/api/tiger-team/stream', req(0), b);
+  assert.deepEqual(frames(b).map(f => f.tt_seq || f.gateway.type), [1, 2, 3, 4, 'tt_state']);
+  assert.equal(frames(b).at(-1).gateway.status, 'completed');
+  assert.equal(b.writableEnded, true);
+  assert.equal(live.get('tt-live'), null);
+});
+
+test('stream route: a team saved before live replay is 404 legacy; bad and unknown ids are refused', async () => {
+  const old = { id: 'tt-old', status: 'completed' };
+  const ctx = streamRoute(old, { *events() {} });
+  const res = sseResponse();
+  await ctx.route('/api/tiger-team/stream', { method: 'GET', url: '/api/tiger-team/stream?id=tt-old' }, res);
+  assert.equal(res.status, 404); assert.equal(res.body.legacy, true);
+  const bad = sseResponse(); await ctx.route('/api/tiger-team/stream', { method: 'GET', url: '/api/tiger-team/stream?id=../x' }, bad);
+  assert.equal(bad.status, 400);
+  const none = sseResponse(); await ctx.route('/api/tiger-team/stream', { method: 'GET', url: '/api/tiger-team/stream?id=nope' }, none);
+  assert.equal(none.status, 404);
+});
+
+test('the war room draws each member in its own card, follows a team after a drop and redraws a saved team from its events', () => {
+  const page = html.slice(html.indexOf('function handleEvent('), html.indexOf('// Enter key sends'));
+  assert.match(page, /evt\.tt_call && \(evt\.tt_role === 'participant' \|\| evt\.tt_role === 'challenger'\)/);
+  assert.match(page, /if \(member\) \{ appendBlockText\(content, member\); return; \}/);
+  assert.match(page, /if \(evt\.tt_seq\) \{ if \(evt\.tt_seq <= lastSeq\) return;/, 'a replay that overlaps draws nothing twice');
+  assert.match(page, /case 'tt_dispatch_failed'/);
+  assert.match(html, /async function followTeam\(\)[\s\S]*\/api\/tiger-team\/stream\?id=\$\{encodeURIComponent\(tigerTeamId\)\}&since=\$\{lastSeq\}/);
+  assert.match(html, /if \(await loadTeam\(loadSaveId\)\) return;/);
+  assert.match(html, /tiger_team_id: tigerTeamId \|\| undefined/, 'Stop and Interject name the team, so they work after a reload');
+  assert.match(page, /case 'tt_interrupted': \{[\s\S]{0,400}for \(const b of callBlocks\.values\(\)\) if \(!b\.done\) \{ addBlockNote\(b, stopped \? '■ Stopped' : '■ Interrupted', 'failed'\); finishCallBlock\(b, true\); \}/, 'a stop closes every open member card');
+  assert.match(page, /if \(callBlocks\.has\(gw\.call_key\) && callBlocks\.get\(gw\.call_key\)\.done\) callBlocks\.delete\(gw\.call_key\);/, 'a resumed dispatch gets a fresh card');
 });
