@@ -5481,7 +5481,7 @@
       const running = [...t.items.values()].filter(it => !it.done).pop();
       if (running) parts.push(`running ${running.tool}${running.input ? `: ${running.input.slice(0, 60)}` : ''}`);
       let busy = 0;
-      for (const id of t.workers || []) if (chats[`worker-${id}`]?.status === 'thinking') busy++;
+      for (const id of t.workers || []) if (workerRunOf(id)?.run.status === 'running') busy++;
       if (busy) parts.push(`${busy} worker${busy === 1 ? '' : 's'} working`);
       return parts.join(' · ');
     }
@@ -5578,58 +5578,67 @@
       }
       if (item.kind === 'worker') { turnWorkerUpsert(chatId, t, item); return 'worker'; }
       if (item.kind === 'worker_tool') {
-        const wc = chats[`worker-${item.workerId}`];
-        if (!wc) return null;
-        if (!wc._turnTools) wc._turnTools = [];
-        let line = wc._turnTools.find(x => x.id === item.id);
-        if (!line) { line = { id: item.id, tool: 'tool', input: '' }; wc._turnTools.push(line); }
+        const w = workerRunOf(item.workerId);
+        if (!w) return null;
+        const run = w.run;
+        if (!run.turnTools) run.turnTools = [];
+        let line = run.turnTools.find(x => x.id === item.id);
+        if (!line) { line = { id: item.id, tool: 'tool', input: '' }; run.turnTools.push(line); }
         if (item.tool) line.tool = String(item.tool);
         if (item.summary) line.input = String(item.summary);
-        paintWorkerTurn(wc);
+        paintWorkerRun(run);
         return 'worker_tool';
       }
       return null;
     }
 
     // A worker known from the hub's turn view (activity item or turn.workers[] record) through
-    // handleWorkerEvent: worker_started once per id, text and tool lines in place, then the end.
+    // handleWorkerEvent: worker_started once per id (its agent's open card takes it, as live), text
+    // and tool lines in place, then the end.
     function turnWorkerUpsert(chatId, t, w) {
       const id = String(w.workerId || w.id || '');
-      if (!id) return;
-      const wcid = `worker-${id}`;
-      if (!chats[wcid]) {
-        handleWorkerEvent(chatId, { type: 'worker_started', worker_id: id, agent_type: w.agent || 'worker', description: w.description || 'Worker', model: w.model || '', prompt: w.prompt || w.description || '' });
-        if (chats[wcid] && w.startedAt && !isNaN(Date.parse(w.startedAt))) chats[wcid].startedAt = Date.parse(w.startedAt);
+      if (!id || closedWorkerRuns.has(id)) return;
+      if (!workerRunOf(id)) {
+        handleWorkerEvent(chatId, { type: 'worker_started', worker_id: id, agent_type: w.agent || '', description: w.description || 'Worker', model: w.model || '', prompt: w.prompt || '' });
+        const started = workerRunOf(id);
+        if (started && w.startedAt && !isNaN(Date.parse(w.startedAt))) {
+          started.run.startedAt = Date.parse(w.startedAt);
+          if (started.chat.workerId === id) started.chat.startedAt = started.run.startedAt;
+        }
       }
-      const wc = chats[wcid];
-      if (!wc) return;
+      const found = workerRunOf(id);
+      if (!found) return;
+      const run = found.run;
       t.workers.add(id);
+      // A start from the turn's activity list carries no prompt (the card showed its label); the worker record does
+      if (!run.promptShown && typeof w.prompt === 'string' && w.prompt) { run.promptShown = true; updateMessage(run.promptMsgId, w.prompt); }
       let changed = false;
-      if (typeof w.text === 'string' && w.text && w.text !== wc._fullText) { wc._fullText = w.text; changed = true; }
+      if (typeof w.text === 'string' && w.text && w.text !== run.text) { run.text = w.text; changed = true; }
       if (Array.isArray(w.tools) && w.tools.length) {
-        wc._turnTools = w.tools.map(x => ({ id: x.id, tool: String(x.tool || 'tool'), input: String(x.summary || '') }));
+        run.turnTools = w.tools.map(x => ({ id: x.id, tool: String(x.tool || 'tool'), input: String(x.summary || '') }));
         changed = true;
       }
       const status = w.status === 'started' ? 'running' : w.status;
       const over = status === 'completed' || status === 'failed';
-      if (changed) paintWorkerTurn(wc, over);
-      // handleWorkerEvent's completed/failed paths append notices: run them once per worker.
-      if (over && wc.status === 'thinking') {
+      if (changed) paintWorkerRun(run, over);
+      // handleWorkerEvent's completed/failed paths append notices: run them once per worker (a run this
+      // page stopped following still takes its real outcome).
+      if (over && run.status !== 'completed' && run.status !== 'failed') {
         handleWorkerEvent(chatId, { type: status === 'completed' ? 'worker_completed' : 'worker_failed', worker_id: id, error: w.error || undefined });
       }
     }
 
-    // Worker card from hub-fed lines: every line but the newest counts as done (the hub keeps no
+    // A worker's reply from hub-fed lines: every line but the newest counts as done (the hub keeps no
     // per-line status); once the worker is over, all of them.
-    function paintWorkerTurn(wc, done = false) {
-      if (wc._turnTools) {
-        wc.toolActivity = [];
-        wc._turnTools.forEach((l, i) => {
-          wc.toolActivity.push({ type: 'call', tool: l.tool, input: l.input });
-          if (done || i < wc._turnTools.length - 1) wc.toolActivity.push({ type: 'result', output: '' });
+    function paintWorkerRun(run, done = false) {
+      if (run.turnTools) {
+        run.tools = [];
+        run.turnTools.forEach((l, i) => {
+          run.tools.push({ type: 'call', tool: l.tool, input: l.input });
+          if (done || i < run.turnTools.length - 1) run.tools.push({ type: 'result', output: '' });
         });
       }
-      if (wc.lastMsgId) updateMessageWithTools(wc.lastMsgId, wc._fullText || '', wc.toolActivity, [], !done && wc.status === 'thinking');
+      if (run.msgId) updateMessageWithTools(run.msgId, run.text || '', run.tools, [], !done && run.status === 'running');
     }
 
     // Does a fetched turn belong to this re-attach? Our own message must be the turn's message; a
@@ -5732,10 +5741,10 @@
     function onHubTurnWorkerDelta(ev) {
       const h = hubTurnTracker(ev);
       if (!h) return;
-      const wc = chats[`worker-${ev.workerId}`];
-      if (!wc || typeof ev.text !== 'string') return;
-      wc._fullText = ev.text;
-      paintWorkerTurn(wc);
+      const w = workerRunOf(ev.workerId);
+      if (!w || typeof ev.text !== 'string') return;
+      w.run.text = ev.text;
+      paintWorkerRun(w.run);
     }
 
     function onHubTurnEnd(ev) {
@@ -5759,7 +5768,7 @@
       clearLiveActivity(t.msgId);
       if (el) { t.text = reply; paintTurn(t.chatId, t, reply, false); }
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
-      for (const id of t.workers || []) { const wc = chats[`worker-${id}`]; if (wc && wc.status === 'thinking') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
+      for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
       const last = chat.messages[chat.messages.length - 1];
       if (!(last && last.role === 'assistant' && last.content === reply)) chat.messages.push({ role: 'assistant', content: reply });
       setStatus(t.chatId, ev.ok ? 'idle' : 'error', ev.ok ? null : 'Hub turn failed');
@@ -6232,30 +6241,11 @@
       if (chat.controllers) Object.values(chat.controllers).forEach(c => c?.abort());
       if (chat.timerInterval) clearInterval(chat.timerInterval);
 
-      // If closing a worker tab, clean up mappings
-      if (chat.isWorker && chat.workerId) {
-        workerTabMap.delete(chat.workerId);
-        workerParentMap.delete(chatId);
-      }
+      // If closing a worker tab, clean up mappings (closed by the user: its runs stay closed)
+      if (chat.isWorker) forgetWorkerCard(chatId, true);
 
-      // If closing a coordinator, also close all its child worker tabs
-      if (!chat.isWorker) {
-        const childWorkerIds = [];
-        for (const [wChatId, pChatId] of workerParentMap) {
-          if (pChatId === chatId) childWorkerIds.push(wChatId);
-        }
-        for (const wChatId of childWorkerIds) {
-          const wChat = chats[wChatId];
-          if (wChat) {
-            if (wChat.timerInterval) clearInterval(wChat.timerInterval);
-            if (wChat.workerId) workerTabMap.delete(wChat.workerId);
-          }
-          workerParentMap.delete(wChatId);
-          document.getElementById(`tab-${wChatId}`)?.remove();
-          document.getElementById(`panel-${wChatId}`)?.remove();
-          delete chats[wChatId];
-        }
-      }
+      // If closing a coordinator, also close the worker tabs it called last
+      if (!chat.isWorker) closeWorkerCardsOf(chatId);
 
       document.getElementById(`tab-${chatId}`)?.remove();
       document.getElementById(`panel-${chatId}`)?.remove();
@@ -6785,7 +6775,7 @@
       clearLiveActivity(ra.msgId);
       if (ra.items && ra.items.size) renderSteps(ra.msgId, turnSteps(ra, text), turnToolActivity(ra), [], false); else updateMessage(ra.msgId, text);
       if (tokenUsageState.has(ra.msgId)) finalizeTokenUsage(ra.msgId);
-      for (const id of ra.workers || []) { const wc = chats[`worker-${id}`]; if (wc && wc.status === 'thinking') handleWorkerEvent(chatId, { type: 'worker_completed', worker_id: id }); }
+      for (const id of ra.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(chatId, { type: 'worker_completed', worker_id: id }); }
       const existingIdx = chat.messages.findIndex(m => m.role === 'assistant' && m.partial);
       if (existingIdx >= 0) chat.messages.splice(existingIdx, 1);
       if (ok) chat.messages.push({ role: 'assistant', content: text });
@@ -9630,15 +9620,110 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
 
     // ==================== WORKER TABS ====================
+    // One card per named agent: when an agent that already has an open card is called again, that card
+    // comes back to work and shows the new call under the earlier ones, instead of a second card for the
+    // same agent. Temporary workers (spawn_workers) and the Claude client's sub-agents keep a card per
+    // call. Each call is a run inside its card, keyed by its worker id, so two calls to one agent that
+    // overlap still stream into their own replies.
 
-    // Map workerId -> workerChatId (the chat tab created for this worker)
+    // Map workerId -> workerChatId (the card that shows this worker's run)
     const workerTabMap = new Map();
-    // Map workerChatId -> coordinatorChatId (to know which coordinator spawned it)
+    // Map workerChatId -> coordinatorChatId (the chat behind the card's newest run)
     const workerParentMap = new Map();
+    // Map card key -> workerChatId: the open card of each named agent
+    const workerCardByKey = new Map();
+    // Worker ids whose card the user closed: a replayed start or a catch-up never brings them back
+    const closedWorkerRuns = new Set();
+
+    // Which calls share a card: a named agent's share one (its name), a one-off worker's never (null).
+    function workerCardKey(oc) {
+      const agent = typeof oc.agent_type === 'string' ? oc.agent_type.trim() : '';
+      if (!agent || agent === 'temporal' || agent === 'sdk-agent') return null;
+      return `${oc.tiger_team ? 'tt' : 'agent'}:${agent}`;
+    }
+
+    // The card and run showing a worker id, or null (unknown, or its card was closed).
+    function workerRunOf(workerId) {
+      const workerChatId = workerTabMap.get(String(workerId));
+      const chat = workerChatId ? chats[workerChatId] : null;
+      const run = chat && chat.runs ? chat.runs[String(workerId)] : null;
+      return run ? { workerChatId, chat, run } : null;
+    }
+
+    function workerRunsActive(chat) {
+      return Object.values(chat.runs || {}).some(r => r.status === 'running');
+    }
+
+    // A run ended: the card stops working (timer and status) once none of its runs is still running;
+    // until then its timer follows the newest run still running.
+    function settleWorkerCard(workerChatId, status, statusText) {
+      const chat = chats[workerChatId];
+      if (!chat) return;
+      const live = Object.values(chat.runs || {}).filter(r => r.status === 'running').sort((a, b) => b.startedAt - a.startedAt)[0];
+      if (live) { chat.startedAt = live.startedAt; updateWorkerTabTimer(workerChatId); return; }
+      if (chat.timerInterval) { clearInterval(chat.timerInterval); chat.timerInterval = null; }
+      setStatus(workerChatId, status, statusText);
+    }
+
+    // A run this page stops following (Stop, or its coordinator stopped): its notice and reply stop saying it
+    // works. The hub may still finish it, and then the card shows that.
+    function markWorkerRunCancelled(chat, run) {
+      run.status = 'cancelled';
+      if (run.noticeEl) {
+        run.noticeEl.textContent = `⏹ ${chat.agentLabel || 'Agent'}: stopped following (it may still finish)`;
+        run.noticeEl.className = 'system-notice notice-failed';
+      }
+      if (run.text || run.tools.length || run.turnTools) paintWorkerRun(run);   // no longer drawn as streaming (an empty one keeps its "...")
+    }
+
+    // One call to the card's agent: its prompt and a reply placeholder in the card, a notice in the
+    // caller's chat, and the card (back) at work.
+    function startWorkerRun(workerChatId, chatId, oc) {
+      const chat = chats[workerChatId];
+      const workerId = String(oc.worker_id);
+      const again = Object.keys(chat.runs).length > 0;
+      workerTabMap.set(workerId, workerChatId);
+      workerParentMap.set(workerChatId, chatId);
+      chat.workerId = workerId;   // the newest run's
+      chat.parentChatId = chatId;
+      chat.externalSource = oc.external_source || null;
+      chat.workerPrompt = oc.prompt || oc.description || '';
+      if (oc.model) chat.model = oc.model;
+      paintWorkerCaller(workerChatId);
+      if (again) appendSystemNotice(workerChatId, `↻ Called again by ${workerCallerLabel(chat)} · ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`, 'worker-again');
+
+      // The coordinator's prompt, then the reply placeholder
+      const promptMsgId = appendMessage(workerChatId, 'user', oc.prompt || oc.description || '(no prompt)');
+      const msgId = appendMessage(workerChatId, 'assistant', '...');
+
+      // "Working" notice in the caller's chat
+      const label = chat.agentLabel || 'Agent';
+      const noticeEl = appendSystemNotice(chatId, `${chat.isTigerTeam ? '🐯' : '⏳'} ${label} is Working...`, chat.isTigerTeam ? 'tiger-working' : 'working');
+
+      const startedAt = Date.now();
+      chat.runs[workerId] = { id: workerId, parentChatId: chatId, externalSource: chat.externalSource, msgId, promptMsgId, promptShown: !!oc.prompt, text: '', tools: [], turnTools: null, noticeEl, startedAt, status: 'running' };
+      chat.lastMsgId = msgId;
+      chat.workingNoticeEl = noticeEl;
+      chat.startedAt = startedAt;
+      if (again) setStatus(workerChatId, 'thinking', 'Working...');
+
+      // Elapsed timer (the newest call's)
+      if (!chat.timerInterval) chat.timerInterval = setInterval(() => updateWorkerTabTimer(workerChatId), 1000);
+      updateWorkerTabTimer(workerChatId);
+      flashTab(workerChatId);
+    }
 
     function handleWorkerEvent(chatId, oc) {
       if (oc.type === 'worker_started') {
-        const workerChatId = `worker-${oc.worker_id}`;
+        const workerId = String(oc.worker_id);
+        if (workerRunOf(workerId) || closedWorkerRuns.has(workerId)) return true;   // already shown (a replay), or its card was closed
+        const key = workerCardKey(oc);
+        const open = key ? workerCardByKey.get(key) : null;
+        if (open && chats[open] && document.getElementById(`tab-${open}`)) {
+          startWorkerRun(open, chatId, oc);   // this agent's card is open: it re-activates
+          return true;
+        }
+        const workerChatId = `worker-${workerId}`;
         if (chats[workerChatId]) return true;
         const isTigerTeam = !!oc.tiger_team;
 
@@ -9652,113 +9737,76 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           isWorker: true,
           externalSource: oc.external_source || null,
           isTigerTeam,
-          workerId: oc.worker_id,
+          workerId,
           parentChatId: chatId,
           workerPrompt: oc.prompt || oc.description || '',
           startedAt: Date.now(),
           timerInterval: null,
-          toolActivity: [],
-          _fullText: '',
+          cardKey: key,
+          runs: {},
+          // Extract agent name from description
+          agentLabel: (oc.description || 'Worker').replace(/^Worker:\s*/, '').replace(/^🐯\s*/, ''),
           lastMsgId: null,
           controller: null,
         };
-
-        workerTabMap.set(oc.worker_id, workerChatId);
-        workerParentMap.set(workerChatId, chatId);
+        if (key) workerCardByKey.set(key, workerChatId);
 
         renderWorkerChatTab(workerChatId);
         renderWorkerChatPanel(workerChatId);
-        flashTab(workerChatId);
-
-        // Show the coordinator's prompt as the first message
-        const promptText = oc.prompt || oc.description || '(no prompt)';
-        appendMessage(workerChatId, 'user', promptText);
-
-        // Start the assistant response placeholder
-        const msgId = appendMessage(workerChatId, 'assistant', '...');
-        chats[workerChatId].lastMsgId = msgId;
-
-        // Extract agent name from description
-        const agentLabel = (oc.description || 'Worker').replace(/^Worker:\s*/, '').replace(/^🐯\s*/, '');
-        chats[workerChatId].agentLabel = agentLabel;
-
-        // Show "working" notice in parent chat
-        const noticePrefix = isTigerTeam ? '🐯' : '⏳';
-        const noticeEl = appendSystemNotice(chatId, `${noticePrefix} ${agentLabel} is Working...`, isTigerTeam ? 'tiger-working' : 'working');
-        chats[workerChatId].workingNoticeEl = noticeEl;
-
-        // Start elapsed timer
-        chats[workerChatId].timerInterval = setInterval(() => updateWorkerTabTimer(workerChatId), 1000);
-
+        startWorkerRun(workerChatId, chatId, oc);
         return true;
       }
 
       if (oc.type === 'worker_text_delta') {
-        const workerChatId = workerTabMap.get(oc.worker_id);
-        if (!workerChatId || !chats[workerChatId]) return false;
-        const chat = chats[workerChatId];
-
-        chat._fullText += oc.text;
-        if (chat.lastMsgId) {
-          updateMessageWithTools(chat.lastMsgId, chat._fullText, chat.toolActivity);
-        }
+        const w = workerRunOf(oc.worker_id);
+        if (!w) return false;
+        w.run.text += oc.text;
+        updateMessageWithTools(w.run.msgId, w.run.text, w.run.tools);
         return true;
       }
 
       if (oc.type === 'worker_tool_start') {
-        const workerChatId = workerTabMap.get(oc.worker_id);
-        if (!workerChatId || !chats[workerChatId]) return false;
-        const chat = chats[workerChatId];
-
-        chat.toolActivity.push({ type: 'call', tool: oc.tool, input: '' });
-        if (chat.lastMsgId) {
-          updateMessageWithTools(chat.lastMsgId, chat._fullText, chat.toolActivity);
-        }
+        const w = workerRunOf(oc.worker_id);
+        if (!w) return false;
+        w.run.tools.push({ type: 'call', tool: oc.tool, input: '' });
+        updateMessageWithTools(w.run.msgId, w.run.text, w.run.tools);
         return true;
       }
 
       if (oc.type === 'worker_tool_use') {
-        const workerChatId = workerTabMap.get(oc.worker_id);
-        if (!workerChatId || !chats[workerChatId]) return false;
-        const chat = chats[workerChatId];
-
+        const w = workerRunOf(oc.worker_id);
+        if (!w) return false;
         // Update the most recent matching tool call with its input
-        const last = [...chat.toolActivity].reverse().find(t => t.type === 'call' && t.tool === oc.tool);
+        const last = [...w.run.tools].reverse().find(t => t.type === 'call' && t.tool === oc.tool);
         if (last) last.input = oc.input || '';
-        if (chat.lastMsgId) {
-          updateMessageWithTools(chat.lastMsgId, chat._fullText, chat.toolActivity);
-        }
+        updateMessageWithTools(w.run.msgId, w.run.text, w.run.tools);
         return true;
       }
 
       if (oc.type === 'worker_tool_result') {
-        const workerChatId = workerTabMap.get(oc.worker_id);
-        if (!workerChatId || !chats[workerChatId]) return false;
-        const chat = chats[workerChatId];
-
+        const w = workerRunOf(oc.worker_id);
+        if (!w) return false;
         if (oc.output) {
-          chat.toolActivity.push({ type: 'result', output: oc.output });
-          if (chat.lastMsgId) {
-            updateMessageWithTools(chat.lastMsgId, chat._fullText, chat.toolActivity);
-          }
+          w.run.tools.push({ type: 'result', output: oc.output });
+          updateMessageWithTools(w.run.msgId, w.run.text, w.run.tools);
         }
         return true;
       }
 
       if (oc.type === 'worker_completed') {
-        const workerChatId = workerTabMap.get(oc.worker_id);
-        if (!workerChatId || !chats[workerChatId]) return false;
-        const chat = chats[workerChatId];
-
-        if (chat.timerInterval) { clearInterval(chat.timerInterval); chat.timerInterval = null; }
-        setStatus(workerChatId, 'idle', 'Completed');
+        const w = workerRunOf(oc.worker_id);
+        if (!w) return false;
+        const { workerChatId, chat, run } = w;
+        if (run.status === 'completed' || run.status === 'failed') return true;   // already ended (a repeat)
+        run.status = 'completed';
+        settleWorkerCard(workerChatId, 'idle', 'Completed');
 
         // Update the working notice
         const label = chat.agentLabel || 'Agent';
         const doneIcon = chat.isTigerTeam ? '🐯 ✅' : '✅';
-        if (chat.workingNoticeEl) {
-          chat.workingNoticeEl.textContent = `${doneIcon} ${label} is Complete`;
-          chat.workingNoticeEl.className = 'system-notice notice-complete';
+        if (run.noticeEl) {
+          run.noticeEl.textContent = `${doneIcon} ${label} is Complete`;
+          run.noticeEl.className = 'system-notice notice-complete';
         } else {
           appendSystemNotice(chatId, `${doneIcon} ${label} is Complete`, 'complete');
         }
@@ -9785,19 +9833,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
 
       if (oc.type === 'worker_failed') {
-        const workerChatId = workerTabMap.get(oc.worker_id);
-        if (!workerChatId || !chats[workerChatId]) return false;
-        const chat = chats[workerChatId];
-
-        if (chat.timerInterval) { clearInterval(chat.timerInterval); chat.timerInterval = null; }
+        const w = workerRunOf(oc.worker_id);
+        if (!w) return false;
+        const { workerChatId, chat, run } = w;
+        if (run.status === 'completed' || run.status === 'failed') return true;   // already ended (a repeat)
         const failLabel = oc.cancelled ? 'Cancelled' : 'Failed';
-        if (oc.error) appendMessage(workerChatId, 'system', `Worker ${failLabel.toLowerCase()}: ${oc.error}`);
-        setStatus(workerChatId, 'error', failLabel);
+        run.status = 'failed';
+        if (oc.error) {
+          // Under this run's reply: a later call to the agent may already show below it
+          const errEl = document.getElementById(appendMessage(workerChatId, 'system', `Worker ${failLabel.toLowerCase()}: ${oc.error}`));
+          const replyEl = document.getElementById(run.msgId);
+          if (errEl && replyEl && replyEl.nextElementSibling !== errEl) replyEl.after(errEl);
+        }
+        settleWorkerCard(workerChatId, 'error', failLabel);
 
         const agentLabel = chat.agentLabel || 'Agent';
-        if (chat.workingNoticeEl) {
-          chat.workingNoticeEl.textContent = `❌ ${agentLabel} ${failLabel}`;
-          chat.workingNoticeEl.className = 'system-notice notice-failed';
+        if (run.noticeEl) {
+          run.noticeEl.textContent = `❌ ${agentLabel} ${failLabel}`;
+          run.noticeEl.className = 'system-notice notice-failed';
         } else {
           appendSystemNotice(chatId, `❌ ${agentLabel} ${failLabel}`, 'failed');
         }
@@ -9807,20 +9860,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return false;
     }
 
+    // Labels go in as text: a worker's description can come from a model (a temporary worker's label,
+    // a sub-agent's description).
     function renderWorkerChatTab(workerChatId) {
       const chat = chats[workerChatId];
       const workerBar = document.getElementById('worker-tabs');
       const tab = document.createElement('div');
       tab.className = 'chat-tab worker' + (chat.isTigerTeam ? ' tiger-team-tab' : '');
       tab.id = `tab-${workerChatId}`;
-      const shortDesc = (chat.display || 'Worker').length > 30
-        ? (chat.display || 'Worker').slice(0, 28) + '...'
-        : (chat.display || 'Worker');
-      tab.innerHTML = `
-        <span class="status thinking"></span>
-        <span class="name">${shortDesc}</span>
-        <span class="close-tab" onclick="closeChat('${workerChatId}', event)">&#x2715;</span>
-      `;
+      const desc = chat.display || 'Worker';
+      tab.innerHTML = '<span class="status thinking"></span><span class="name"></span><span class="close-tab">&#x2715;</span>';
+      tab.querySelector('.name').textContent = desc.length > 30 ? desc.slice(0, 28) + '...' : desc;
+      tab.querySelector('.close-tab').addEventListener('click', (e) => closeChat(workerChatId, e));
       tab.addEventListener('click', () => switchToChat(workerChatId));
       workerBar.appendChild(tab);
       updateWorkerBarVisibility();
@@ -9839,11 +9890,6 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       panel.className = 'chat-container';
       panel.id = `panel-${workerChatId}`;
 
-      const _agData = AGENTS.find(a => a.name === chat.agent);
-      const modelShort = (chat.model || '').split('/').pop() || chat.model;
-      const parentChat = chats[chat.parentChatId];
-      const parentLabel = chat.externalSource || (parentChat ? (parentChat.display || parentChat.agent || 'Coordinator') : 'Coordinator');
-
       panel.innerHTML = `
         <div class="status-bar" id="status-bar-${workerChatId}">
           <div class="status-item">
@@ -9853,14 +9899,36 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           </div>
         </div>
         <div class="chat-actions">
-          <button onclick="switchToChat('${chat.parentChatId}')" title="Switch to ${parentLabel}">&#x21A9; ${parentLabel}</button>
-          <button onclick="cancelWorker('${chat.workerId}')" id="cancel-${workerChatId}" title="Stop this worker">&#x23F9; Stop</button>
-          <span class="agent-name">${chat.display} (${modelShort})</span>${cyberHeaderTag(chat.model)}
+          <button data-w="back" id="worker-back-${workerChatId}"></button>
+          <button data-w="stop" id="cancel-${workerChatId}" title="Stop following this card's calls (the hub may still finish them)">&#x23F9; Stop</button>
+          <span class="agent-name" id="worker-name-${workerChatId}"></span>${cyberHeaderTag(chat.model)}
         </div>
         <div class="messages" id="messages-${workerChatId}"></div>
-        <div class="worker-readonly-footer">Read-only worker view &mdash; output streams from ${parentLabel}</div>
+        <div class="worker-readonly-footer" id="worker-from-${workerChatId}"></div>
       `;
+      // The caller can change when the card re-activates: both buttons read the card at click time
+      panel.querySelector('[data-w="back"]').addEventListener('click', () => { const c = chats[workerChatId]; if (c) switchToChat(c.parentChatId); });
+      panel.querySelector('[data-w="stop"]').addEventListener('click', () => cancelWorkerCard(workerChatId));
       panels.appendChild(panel);
+      paintWorkerCaller(workerChatId);
+    }
+
+    function workerCallerLabel(chat) {
+      const parentChat = chats[chat.parentChatId];
+      return chat.externalSource || (parentChat ? (parentChat.display || parentChat.agent || 'Coordinator') : 'Coordinator');
+    }
+
+    // The card's header and footer: its agent and model, and who called it last.
+    function paintWorkerCaller(workerChatId) {
+      const chat = chats[workerChatId];
+      if (!chat) return;
+      const label = workerCallerLabel(chat);
+      const back = document.getElementById(`worker-back-${workerChatId}`);
+      if (back) { back.textContent = `↩ ${label}`; back.title = `Switch to ${label}`; }
+      const name = document.getElementById(`worker-name-${workerChatId}`);
+      if (name) name.textContent = `${chat.display} (${(chat.model || '').split('/').pop() || chat.model})`;
+      const from = document.getElementById(`worker-from-${workerChatId}`);
+      if (from) from.textContent = `Read-only worker view — output streams from ${label}`;
     }
 
     function updateWorkerTabTimer(workerChatId) {
@@ -9882,28 +9950,70 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
 
     function cleanupWorkerTabs(coordinatorChatId) {
-      // Stop timers on any running worker tabs spawned by this coordinator
-      for (const [wChatId, pChatId] of workerParentMap) {
-        if (pChatId === coordinatorChatId) {
-          const wChat = chats[wChatId];
-          if (wChat && wChat.timerInterval) {
-            clearInterval(wChat.timerInterval);
-            wChat.timerInterval = null;
-          }
-          if (wChat && wChat.status === 'thinking') {
-            setStatus(wChatId, 'error', 'Cancelled');
-          }
+      // This coordinator's stream stopped: its calls still running end as cancelled
+      for (const wChatId of new Set(workerTabMap.values())) {
+        const wChat = chats[wChatId];
+        if (!wChat || !wChat.runs) continue;
+        let ended = false;
+        for (const run of Object.values(wChat.runs)) {
+          if (run.parentChatId === coordinatorChatId && run.status === 'running') { markWorkerRunCancelled(wChat, run); ended = true; }
         }
+        if (ended) settleWorkerCard(wChatId, 'error', 'Stopped following');
       }
     }
 
+    // A card going away: its runs' ids and its agent's slot are freed (that agent's next call opens a new card).
+    // Closed by the user (dismissed), its runs never come back on this page.
+    function forgetWorkerCard(workerChatId, dismissed = false) {
+      const chat = chats[workerChatId];
+      if (!chat) return;
+      if (chat.timerInterval) { clearInterval(chat.timerInterval); chat.timerInterval = null; }
+      for (const id of Object.keys(chat.runs || {})) {
+        if (dismissed) closedWorkerRuns.add(id);
+        if (workerTabMap.get(id) === workerChatId) workerTabMap.delete(id);
+      }
+      if (chat.cardKey && workerCardByKey.get(chat.cardKey) === workerChatId) workerCardByKey.delete(chat.cardKey);
+      workerParentMap.delete(workerChatId);
+    }
+
+    // A coordinator chat closing: the cards it called last close with it, unless another open chat called
+    // that agent too; then the card stays and follows that chat (one whose call still runs first). Its
+    // runs still going elsewhere are no longer followed.
+    function closeWorkerCardsOf(coordinatorChatId) {
+      for (const [wChatId, pChatId] of [...workerParentMap]) {
+        if (pChatId !== coordinatorChatId) continue;
+        const wChat = chats[wChatId];
+        const survivor = Object.values(wChat?.runs || {})
+          .filter(r => r.parentChatId !== coordinatorChatId && chats[r.parentChatId])
+          .sort((a, b) => ((b.status === 'running') - (a.status === 'running')) || (b.startedAt - a.startedAt))[0];   // a running call first
+        if (survivor) {
+          wChat.parentChatId = survivor.parentChatId;
+          wChat.externalSource = survivor.externalSource || null;
+          workerParentMap.set(wChatId, survivor.parentChatId);
+          paintWorkerCaller(wChatId);
+          continue;
+        }
+        forgetWorkerCard(wChatId);
+        workerParentMap.delete(wChatId);
+        document.getElementById(`tab-${wChatId}`)?.remove();
+        document.getElementById(`panel-${wChatId}`)?.remove();
+        delete chats[wChatId];
+      }
+      cleanupWorkerTabs(coordinatorChatId);
+    }
+
+    // ⏹ Stop on a card: every call still running in it.
+    function cancelWorkerCard(workerChatId) {
+      const chat = chats[workerChatId];
+      if (!chat || !chat.runs) return;
+      for (const run of Object.values(chat.runs)) if (run.status === 'running') cancelWorker(run.id);
+    }
+
     async function cancelWorker(workerId) {
-      // Find the worker tab for this workerId
-      const workerChatId = workerTabMap.get(workerId);
-      if (workerChatId && chats[workerChatId]) {
-        const chat = chats[workerChatId];
-        if (chat.timerInterval) { clearInterval(chat.timerInterval); chat.timerInterval = null; }
-        setStatus(workerChatId, 'error', 'Cancelled');
+      const w = workerRunOf(workerId);
+      if (w) {
+        markWorkerRunCancelled(w.chat, w.run);
+        settleWorkerCard(w.workerChatId, 'error', 'Stopped following');
       }
 
       // Notify server (fire-and-forget)
