@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.7.0] - 2026-10-24
+
+Eleven changes since 5.6.0: see how a model reasons before it answers, a notice when an update is ready, Tiger Teams whose members work side by side, security warnings at the top, API keys kept in Settings, new installs that keep their folders inside the install, a plain message when a reply runs out of steps, and fixes for the phone, the model list and the workers bar. Your Maestro on 5.6.0 gets them when you press Update.
+
 - **One card per agent in the workers bar.** When an agent asked another agent for help several times, the desktop's workers bar opened a new card for every call, so a review that went back and forth left a row of identical cards. Now an agent that already has an open card gets its next call in that card: the card goes back to working, and the new request and reply appear under the earlier ones after a "Called again" line. Calls that overlap each stream into their own reply, and the caller's chat still gets one notice per call. Temporary workers and the Claude client's own sub-agents still get a card per call. A card you close stays closed, and the agent's next call opens a fresh one. A page reloaded in the middle of a call rebuilds the single card, with each call's request (it used to show the card's label instead). Worker names and descriptions, which can come from a model, are now shown as text, never read as HTML. ⏹ Stop on a card now says what it does: the page stops following the call, which the hub may still finish.
 
 - **Security warnings show at the top too, and can be hidden; critical problems can't.** The security banner used to appear only for critical problems. Warnings now show in a dark-yellow banner with an × that hides it in that browser until the list of warnings changes: a new warning brings it straight back, and a critical problem always shows, in red, with no ×. Running the check in Settings updates the banner at once. The notices at the top of the page now stack below each other instead of covering one another, also when the window narrows.
@@ -1037,7 +1041,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.6.0...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.7.0...dev
+[5.7.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.0
 [5.6.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.6.0
 [5.5.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.5.1
 [5.5.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.5.0
