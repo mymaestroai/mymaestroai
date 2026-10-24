@@ -74,13 +74,14 @@
       let needed = false;
       try { const r = await fetch('/api/setup/status', { credentials: 'include' }); if (r.ok) needed = !!(await r.json()).setupNeeded; } catch { return; }
       let bar = document.getElementById('hub-setup-notice');
-      if (!needed) { if (bar) bar.remove(); return; }
+      if (!needed) { if (bar) { bar.remove(); layoutBanners(); } return; }
       if (bar) return;
       bar = document.createElement('div');
       bar.id = 'hub-setup-notice';
       bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:#1f4e79;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box';
       bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:#fff;text-decoration:underline">Open the Welcome page</a> to connect a Claude subscription, an API key or a local model.';
       document.body.prepend(bar);
+      layoutBanners();
     }
     function renderOwnerSwitcher() {
       const sel = document.getElementById('owner-view');
@@ -1998,13 +1999,20 @@
       bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:#fff;text-decoration:underline">Open the setup checklist</a>.`;
       layoutBanners();
     }
-    // The setup banner and the security banner are both fixed at the top; when both show, the security one sits
-    // below the setup one (whichever painted first).
+    // The notices fixed at the top stack in this order, whichever painted first: no AI provider yet, the setup
+    // checklist, security. Each one sits below the ones above it, so none covers another (or its X).
     function layoutBanners() {
-      const setup = document.getElementById('hub-readiness-notice');
-      const sec = document.getElementById('hub-security-notice');
-      if (sec) sec.style.top = setup ? `${setup.offsetHeight}px` : '0';
+      let top = 0;
+      for (const id of ['hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
+        const n = document.getElementById(id);
+        if (!n) continue;
+        n.style.top = `${top}px`;
+        top += n.offsetHeight || 0;
+      }
     }
+    // A notice's height can change after it is drawn (the web font arrives, the window narrows and its text wraps).
+    window.addEventListener('resize', () => layoutBanners());
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => layoutBanners(), () => {});
     // Security check (lib/security-check): the same rows as the checklist, each tagged with its group; "Run now"
     // runs it fresh, otherwise the last result (nightly or under an hour old) is shown.
     async function loadSecurityCheck(runNow = false) {
@@ -2025,6 +2033,7 @@
         if (state) state.textContent = `${d.critical ? `${d.critical} critical` : 'nothing critical'}${d.warnings ? `, ${d.warnings} warning(s)` : ''}${d.infos ? `, ${d.infos} note(s)` : ''}; ${d.cached ? 'last run' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.${skipped}`;
         stSum('status', 'security', d.critical ? `Security: ${d.critical} critical` : d.warnings ? `Security: ${d.warnings} warning${d.warnings === 1 ? '' : 's'}` : 'Security: all good', !!d.critical);
         if (d.critical) stOpenGroup('status');
+        paintSecurityBanner().catch(() => {});   // a Run now that resolves or finds something updates the banner at once
       } catch (e) { el.textContent = 'Could not run the security check: ' + e.message; if (state) state.textContent = ''; stSum('status', 'security', 'Security: could not check'); }
     }
     function securityActionHtml(a) {
@@ -2041,17 +2050,57 @@
         setTimeout(() => loadSecurityCheck(true), 800);
       } catch (e) { if (btn) btn.textContent = 'Failed: ' + e.message; }
     }
-    // Banner for admins while the last security check found something critical (below the setup banner when both show).
+    // Banner for admins from the last security check (below the setup banner when both show).
+    // Critical: red, cannot be dismissed; it goes away once the check no longer finds it (Run now, or the next run).
+    // Warnings only: dark yellow with an X. Dismissing hides it in this browser until the set of warnings changes:
+    // a different set (a new warning, or one fixed and back) shows it again, and a critical finding always does.
+    const SEC_DISMISS_KEY = 'hub-security-warn-dismissed';
+    let secPaintSeq = 0, secShownSeq = 0;   // paints overlap (page load, the check in Settings): an answer older than the one shown is dropped
+    function securityWarnKey(items) { return items.map(i => i.id).sort().join(','); }
+    function dismissSecurityBanner() {
+      const bar = document.getElementById('hub-security-notice');
+      if (!bar || bar.dataset.level !== 'warn') return;   // a critical banner cannot be dismissed
+      try { localStorage.setItem(SEC_DISMISS_KEY, bar.dataset.key || ''); } catch {}
+      bar.remove();
+      layoutBanners();
+    }
     async function paintSecurityBanner() {
+      const seq = ++secPaintSeq;
       const me = window.hubMe;
-      let bar = document.getElementById('hub-security-notice');
-      if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
+      if (!me || !me.isAdmin || !me.user) {
+        secShownSeq = seq;   // and no earlier answer still on its way may draw
+        const old = document.getElementById('hub-security-notice'); if (old) { old.remove(); layoutBanners(); }
+        return;
+      }
       let d = null;
-      try { d = await (await fetch('/api/security-check', { credentials: 'include' })).json(); } catch { return; }
-      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts');   // no-accounts has its own banner
-      if (!crit.length) { if (bar) bar.remove(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-security-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:#7a1212;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:#fff;text-decoration:underline">Open the security check</a>.`;
+      try {
+        const r = await fetch('/api/security-check', { credentials: 'include' });
+        if (!r.ok) return;   // an error is not "all clear": whatever shows stays
+        d = await r.json();
+      } catch { return; }
+      if (!d || !Array.isArray(d.items)) return;
+      if (seq < secShownSeq || window.hubMe !== me) return;   // a newer answer already shows, or the signed-in user changed
+      secShownSeq = seq;
+      let bar = document.getElementById('hub-security-notice');   // after the wait: it may have gone, or been made
+      const items = d.items.filter(i => i.id !== 'accounts');   // no-accounts has its own banner
+      const crit = items.filter(i => i.level === 'critical');
+      const warn = items.filter(i => i.level === 'warn');
+      const key = securityWarnKey(warn);
+      let dismissed = ''; try { dismissed = localStorage.getItem(SEC_DISMISS_KEY) || ''; } catch {}
+      if (dismissed && dismissed !== key) { dismissed = ''; try { localStorage.removeItem(SEC_DISMISS_KEY); } catch {} }   // the set changed
+      if (!crit.length && (!warn.length || dismissed === key)) { if (bar) bar.remove(); layoutBanners(); return; }
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-security-notice'; document.body.prepend(bar); }
+      const level = crit.length ? 'critical' : 'warn';
+      bar.dataset.level = level;
+      bar.dataset.key = level === 'warn' ? key : '';
+      bar.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9995;background:${level === 'critical' ? '#7a1212' : '#8a6a00'};color:#fff;padding:6px 44px 6px 14px;font-weight:600;box-sizing:border-box`;
+      const link = `<a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:#fff;text-decoration:underline">Open the security check</a>`;
+      bar.innerHTML = level === 'critical'
+        ? `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. ${link}.`
+        : `Security: ${warn.length} warning${warn.length === 1 ? '' : 's'} to review. ${link}.`
+          + `<button type="button" class="sec-dismiss" aria-label="Dismiss security warnings" title="Hide until the warnings change" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:#fff;font-size:20px;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>`;
+      const x = bar.querySelector('.sec-dismiss');
+      if (x) x.addEventListener('click', () => dismissSecurityBanner());
       layoutBanners();
     }
     // ── Update available (lib/update-check): the server looks at GitHub once a day. While an update waits, admins see

@@ -250,3 +250,163 @@ test('a Node.js line with no security floor (odd or end-of-life) is a warning, n
   assert.strictEqual(byId(r, 'node').level, 'warn');
   assert.match(byId(r, 'node').title, /no security support here/);
 });
+
+// The banner code runs in a VM against a stand-in page: nodes by id, a bar whose X button records its click handler,
+// localStorage, and a fetch the test answers (now, or later to make two paints overlap).
+function bannerPage() {
+  const vm = require('vm');
+  const app = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  const a = app.indexOf("    const SEC_DISMISS_KEY = 'hub-security-warn-dismissed';");
+  const b = app.indexOf('    // Web search and fetch (lib/web-search, lib/web-fetch)');
+  assert.ok(a > 0 && b > a, 'banner block found');
+  const page = { nodes: {}, store: {}, result: { items: [] }, held: null, fail: null, layouts: 0, made: 0 };
+  const mkBar = () => {
+    page.made++;
+    const bar = { id: '', style: {}, dataset: {}, innerHTML: '', x: null,
+      remove() { if (page.nodes[this.id] === this) delete page.nodes[this.id]; },
+      querySelector(sel) { if (sel !== '.sec-dismiss' || !/class="sec-dismiss"/.test(this.innerHTML)) return null; const owner = this; return { addEventListener: (ev, fn) => { if (ev === 'click') owner.x = fn; } }; } };
+    return bar;
+  };
+  const ctx = {
+    window: { hubMe: { isAdmin: true, user: { id: 'u1' } } },
+    document: { getElementById: (id) => page.nodes[id] || null, createElement: () => mkBar(), body: { prepend: (n) => { page.nodes[n.id] = n; } } },
+    localStorage: { getItem: (k) => page.store[k] ?? null, setItem: (k, v) => { page.store[k] = String(v); }, removeItem: (k) => { delete page.store[k]; } },
+    fetch: async () => {
+      if (page.held) { const h = page.held; page.held = null; return new Promise((r, j) => { h.release = (res) => r({ ok: true, json: async () => res }); h.fail = () => j(new Error('offline')); }); }
+      const f = page.fail; page.fail = null;
+      if (f === 'throw') throw new Error('offline');
+      if (f === 'http') return { ok: false, json: async () => ({ error: 'unavailable' }) };
+      if (f === 'garbage') return { ok: true, json: async () => ({ hello: 1 }) };
+      const res = page.result; return { ok: true, json: async () => res };
+    },
+    esc: (s) => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`),
+    layoutBanners: () => { page.layouts++; }, openSettingsAt: () => {},
+  };
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(a, b) + '\nthis.paint = paintSecurityBanner; this.dismiss = dismissSecurityBanner;', ctx);
+  page.ctx = ctx;
+  page.bar = () => page.nodes['hub-security-notice'];
+  return page;
+}
+const W = (id, level = 'warn') => ({ id, level, title: id });
+
+test('banner levels: critical is red and cannot be dismissed; warnings are dark yellow with an X that hides them until the set of warnings changes', async () => {
+  const p = bannerPage(), { ctx } = p, bar = p.bar;
+  p.result = { items: [{ id: 'node', level: 'critical', title: 'Node.js misses fixes' }, W('totp')] };
+  await ctx.paint();
+  assert.strictEqual(bar().dataset.level, 'critical');
+  assert.match(bar().style.cssText, /#7a1212/);
+  assert.ok(!/Dismiss/.test(bar().innerHTML), 'critical has no dismiss button');
+  assert.strictEqual(bar().x, null);
+  ctx.dismiss();
+  assert.ok(bar(), 'nothing can dismiss a critical banner');
+  assert.strictEqual(p.store['hub-security-warn-dismissed'], undefined);
+
+  p.result = { items: [W('totp'), W('approvals'), W('ok1', 'ok')] };
+  await ctx.paint();
+  assert.strictEqual(bar().dataset.level, 'warn');
+  assert.match(bar().style.cssText, /#8a6a00/);
+  assert.match(bar().innerHTML, /2 warnings to review/);
+  assert.strictEqual(bar().dataset.key, 'approvals,totp');
+  assert.doesNotMatch(bar().innerHTML, /onclick="dismiss/, 'no handler built into the HTML');
+  assert.match(bar().innerHTML, /title="Hide until the warnings change"/);
+  bar().x();   // the X
+  assert.ok(!bar(), 'X hides it');
+  await ctx.paint();
+  assert.ok(!bar(), 'stays hidden for the same warnings');
+
+  const again = bannerPage(); again.store = p.store; again.result = p.result;   // a new tab or a reload: same browser storage
+  await again.ctx.paint();
+  assert.ok(!again.bar(), 'and in a new tab');
+
+  p.result = { items: [W('totp'), W('approvals'), W('exposed')] };
+  await ctx.paint();
+  assert.ok(bar(), 'a new warning brings it back');
+  p.result = { items: [W('totp'), W('approvals')] };
+  await ctx.paint();
+  assert.ok(bar(), 'the set changed and came back: it shows again');
+
+  p.result = { items: [{ id: 'node', level: 'critical', title: 'x' }, W('totp'), W('approvals')] };
+  bar().x(); await ctx.paint();
+  assert.strictEqual(bar().dataset.level, 'critical', 'a critical finding shows even over dismissed warnings');
+
+  p.result = { items: [W('totp', 'ok')] };
+  await ctx.paint();
+  assert.ok(!bar(), 'resolved: no banner');
+
+  ctx.window.hubMe = { isAdmin: false, user: { id: 'm' } }; p.result = { items: [{ id: 'node', level: 'critical', title: 'x' }] };
+  await ctx.paint();
+  assert.ok(!bar(), 'members never see it');
+});
+
+test('banner: two paints that overlap draw once, the newest result wins, and the bar makes room for itself', async () => {
+  const p = bannerPage(), { ctx } = p, bar = p.bar;
+  const slow = {}; p.held = slow;                 // the page-load paint waits on its fetch...
+  const first = ctx.paint();
+  p.result = { items: [W('totp')] };              // ...while Settings' check paints the newer result
+  await ctx.paint();
+  assert.strictEqual(bar().dataset.level, 'warn');
+  slow.release({ items: [{ id: 'node', level: 'critical', title: 'old' }] });
+  await first;
+  assert.strictEqual(bar().dataset.level, 'warn', 'the older result is dropped');
+  assert.strictEqual(p.made, 1, 'one bar');
+  // a bar removed while a fetch was out is not painted into: the paint after it makes a new one, on the page
+  const slow2 = {}; p.held = slow2;
+  const second = ctx.paint();
+  bar().x();
+  slow2.release({ items: [{ id: 'node', level: 'critical', title: 'Node.js misses fixes' }] });
+  await second;
+  assert.strictEqual(bar().dataset.level, 'critical', 'drawn on the page, not into the removed bar');
+  assert.ok(p.layouts >= 3, 'every paint lays the banners out');
+});
+
+test('banner: an error, or an answer without items, never clears what shows; a newer paint that fails does not drop an older answer', async () => {
+  const p = bannerPage(), { ctx } = p, bar = p.bar;
+  p.result = { items: [{ id: 'node', level: 'critical', title: 'Node.js misses fixes' }] };
+  await ctx.paint();
+  for (const f of ['http', 'garbage', 'throw']) {
+    p.fail = f; await ctx.paint();
+    assert.strictEqual(bar() && bar().dataset.level, 'critical', `a ${f} answer is not "all clear"`);
+  }
+  p.result = { items: [W('totp')] }; await ctx.paint(); bar().x();
+  p.fail = 'http'; await ctx.paint();
+  assert.strictEqual(p.store['hub-security-warn-dismissed'], 'totp', 'nor does it clear a dismissal');
+  // the page-load paint waits; Settings' paint fails; the page-load answer (critical) still draws
+  delete p.store['hub-security-warn-dismissed'];
+  p.result = { items: [W('totp')] }; await ctx.paint();
+  const slow = {}; p.held = slow;
+  const first = ctx.paint();
+  p.fail = 'throw'; await ctx.paint();
+  slow.release({ items: [{ id: 'node', level: 'critical', title: 'found later' }] });
+  await first;
+  assert.strictEqual(bar().dataset.level, 'critical', 'the only answer that came back is shown');
+  // signing out while a paint waits: that answer never draws for the next user
+  const slow2 = {}; p.held = slow2;
+  const pending = ctx.paint();
+  ctx.window.hubMe = { isAdmin: false, user: { id: 'member' } }; await ctx.paint();
+  assert.ok(!bar(), 'removed for a member');
+  slow2.release({ items: [{ id: 'node', level: 'critical', title: 'x' }] });
+  await pending;
+  assert.ok(!bar(), 'the earlier admin answer does not come back');
+});
+
+test('banner: Run now repaints it, and it sits below the setup banner', () => {
+  const app = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  const i = app.indexOf('async function loadSecurityCheck(');
+  assert.match(app.slice(i, app.indexOf('\n    }\n', i)), /paintSecurityBanner\(\)\.catch\(\(\) => \{\}\);/);
+  const j = app.indexOf('function layoutBanners() {');
+  const fn = new Function('document', app.slice(j, app.indexOf('\n    }\n', j) + 6) + '\nreturn layoutBanners;');
+  const page = (nodes) => ({ getElementById: (id) => nodes[id] || null });
+  const sec = { style: {}, offsetHeight: 34 }, checklist = { style: {}, offsetHeight: 37 }, noProvider = { style: {}, offsetHeight: 30 };
+  fn(page({ 'hub-security-notice': sec, 'hub-readiness-notice': checklist }))();
+  assert.deepStrictEqual([checklist.style.top, sec.style.top], ['0px', '37px'], 'below the setup checklist');
+  fn(page({ 'hub-security-notice': sec, 'hub-readiness-notice': checklist, 'hub-setup-notice': noProvider }))();
+  assert.deepStrictEqual([noProvider.style.top, checklist.style.top, sec.style.top], ['0px', '30px', '67px'], 'all three stack; none covers another');
+  fn(page({ 'hub-security-notice': sec }))();
+  assert.strictEqual(sec.style.top, '0px');
+  // the no-provider notice lays the stack out when it appears and when it goes
+  const k = app.indexOf('async function paintSetupNotice(');
+  const setupFn = app.slice(k, app.indexOf('\n    }\n', k));
+  assert.match(setupFn, /if \(bar\) \{ bar\.remove\(\); layoutBanners\(\); \} return;/);
+  assert.match(setupFn, /document\.body\.prepend\(bar\);\s*layoutBanners\(\);/);
+});
