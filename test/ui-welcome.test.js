@@ -36,11 +36,28 @@ test('the hand-over: the first message starts the setup interview, then the app 
   const soul = read('templates/workspaces/maestro/SOUL.md');
   assert.match(soul, /When a message starts with \*\*\[First-time setup\]\*\*[\s\S]*read `SETUP-INTERVIEW\.md`/);
   const iv = read('templates/workspaces/maestro/SETUP-INTERVIEW.md');
-  for (const s of ['## Step 1 — About them', '## Step 2 — Their team', '## Step 3 — Build each one', '## Step 4 — Show them', '## Step 5 — The phone', '## Step 6 — Wrap up', '## If something fails']) assert.ok(iv.includes(s), s);
+  for (const s of ['## Step 1 — About them', '## Step 2 — Their team', '## Step 3 — Build each one', '## Step 4 — Show them', '## Step 5 — The phone', '## Step 6 — A security check of this computer', '## Step 7 — Wrap up', '## If something fails']) assert.ok(iv.includes(s), s);
   assert.match(iv, /\*\*You do the work\.\*\*/);
   assert.match(iv, /\*\*Model: you pick it\.\*\*/);
   assert.match(iv, /nothing you do in this interview does/);
   assert.match(iv, /Do \*\*not\*\* use ask_user in that first reply/, 'the Welcome page cannot show question cards');
+});
+
+test('the setup interview offers a security check; the review only looks, and the owner runs anything that needs a password', () => {
+  const iv = read('templates/workspaces/maestro/SETUP-INTERVIEW.md');
+  assert.match(iv, /a quick demonstration, the phone app, a security check of this computer\)/, 'the first reply says it is coming');
+  assert.match(iv, /## Step 6 — A security check of this computer \(offer it; skip it if they say no\)\n\nOffer it in one short message/);
+  assert.match(iv, /If they say yes, follow `docs\/SECURITY-REVIEW\.md`/);
+  assert.match(read('templates/workspaces/maestro/SOUL.md'), /follow `docs\/SECURITY-REVIEW\.md` in the install folder\. It only looks/);
+  const rv = read('docs/SECURITY-REVIEW.md');
+  for (const s of ['**Look first, change nothing.**', '**Never ask for a password.**', '**No secrets in the chat.**', '**This computer only.**', "**Don't fix the hub's packages yourself.**", '**Inside a sandbox you can\'t see the computer.**',
+    'node scripts/security-check.js', 'Never add `--fix-modes` without a yes', '`ss -tuln`', '`netstat -an -p tcp | grep LISTEN`', '`systemctl is-active ufw firewalld`', '`tailscale funnel status`',
+    '`apt list --upgradable`', '`softwareupdate -l`', '`npm audit --omit=dev`', '`fdesetup status`', '**Fix now**', '**Looks good**']) assert.ok(rv.includes(s), s);
+  for (const line of rv.split('\n')) assert.doesNotMatch(line, /`(cat|less|more|head|tail)\b[^`]*(\.env|settings\.json)/, 'no command prints a secret file');
+  assert.match(welcome, /helps you set up the phone app, and offers to check this computer for security problems\./);
+  assert.ok(help.includes('id="security"') && help.includes('<a href="#security">Security</a>'));
+  assert.match(help, /Ask <b>Maestro<\/b>: <i>"Check this computer's security\."<\/i>/);
+  assert.match(read('docs/HUB-MAP.md'), /18\. \*\*Security review of the install and its computer\.\*\* Follow `docs\/SECURITY-REVIEW\.md`/);
 });
 
 test('Help: the ? button opens it beside the chat; phone menu and sign-in page link to it; it is public', () => {

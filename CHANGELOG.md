@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Maestro offers a security check of your computer.** During the setup interview, Maestro now offers to check the install and the computer it runs on for security problems: network services other devices can reach, missing security updates, known vulnerabilities in the software, and weak settings such as password logins or a disk without encryption. It follows a step-by-step guide (`docs/SECURITY-REVIEW.md`), only looks, changes nothing without your yes on each change, and never asks for your password. You can ask for a review any time; the Help page has a new Security section.
+
+- **A file named reboot-required no longer counts as a reboot.** The command policy refused any command that mentioned `/var/run/reboot-required` (the file that says an installed update waits for a restart), as if it were a reboot. Reading that file is now allowed. Everything that really restarts or stops the computer still counts, and a few more forms now do too: `kexec`, `init 6` and `telinit 0`, the sysrq trigger, and the D-Bus Reboot call.
+
 ## [5.7.0] - 2026-10-24
 
 Eleven changes since 5.6.0: see how a model reasons before it answers, a notice when an update is ready, Tiger Teams whose members work side by side, security warnings at the top, API keys kept in Settings, new installs that keep their folders inside the install, a plain message when a reply runs out of steps, and fixes for the phone, the model list and the workers bar. Your Maestro on 5.6.0 gets them when you press Update.

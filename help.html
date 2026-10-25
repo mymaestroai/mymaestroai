@@ -32,7 +32,7 @@
   <div class="top"><a href="/" id="back">← Back to My Maestro AI</a></div>
   <h1>Help</h1>
   <div class="tip"><b>The quickest way: ask Maestro.</b> It can answer any question about My Maestro AI and do the setup work for you: create and change agents, pick their models, write their personalities, set up reminders, and work out what's wrong when something fails. Just tell it what you want.</div>
-  <nav class="toc"><a href="#agents">Agents</a><a href="#models">Models</a><a href="#work">Reminders &amp; files</a><a href="#family">Family</a><a href="#phone">Phone app</a><a href="#trouble">Something's wrong</a><a href="#terminal">Terminal commands</a></nav>
+  <nav class="toc"><a href="#agents">Agents</a><a href="#models">Models</a><a href="#work">Reminders &amp; files</a><a href="#family">Family</a><a href="#phone">Phone app</a><a href="#security">Security</a><a href="#trouble">Something's wrong</a><a href="#terminal">Terminal commands</a></nav>
 
   <h2 id="agents">Agents</h2>
   <h3>Talk to an agent</h3>
@@ -75,6 +75,10 @@
     <li><b>On your phone</b>, open that https address, sign in, then add it to your home screen: iPhone, Share → Add to Home Screen; Android, menu → Install app.</li>
     <li>In the phone app's menu, turn on <b>notifications</b> and send a test notification.</li>
   </ol>
+
+  <h2 id="security">Security</h2>
+  <p>Ask <b>Maestro</b>: <i>"Check this computer's security."</i> It reviews the hub and the computer it runs on: network services other devices can reach, missing updates, known vulnerabilities, and settings such as password logins. Then it explains each finding and how to fix it. It only looks: nothing changes unless you say yes to that change, and it never asks for your password.</p>
+  <p>The banner at the top of the app shows the hub's own security check: red for a critical problem, dark yellow for warnings you can hide until they change. In a terminal, <code>mymaestro doctor</code> runs the same check.</p>
 
   <h2 id="trouble">When something's wrong</h2>
   <div class="tip warn"><b>A Claude agent says "not signed in", "authentication" or "expired".</b> The Claude sign-in on this computer is missing or has run out. Open a terminal, type <code>claude</code> and press Enter, sign in, then type <code>/exit</code>. Send your message again. No restart is needed. (<code>mymaestro doctor</code> tests the sign-in.)</div>
