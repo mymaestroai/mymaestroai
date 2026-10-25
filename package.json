@@ -1,6 +1,6 @@
 {
   "name": "agent-hub",
-  "version": "5.7.1",
+  "version": "5.7.2",
   "description": "My Maestro AI — Multi-agent chat with multi-provider LLM routing.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "main": "server.js",
