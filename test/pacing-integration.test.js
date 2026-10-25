@@ -16,9 +16,9 @@ const sdk = read('lib/sdk-chat.js');
 test('consult_agent runs under the shared pacing keyed by the consulted agent\'s provider (not Tiger Team, not temporal workers)', () => {
   const i = sdk.indexOf('async function consultViaHub(');
   const body = sdk.slice(i, sdk.indexOf('\n}', i));
-  assert.ok(body.includes("if (opts.tigerTeam || opts.temporal) return consultViaHubNow("));
+  assert.ok(body.includes("if (opts.tigerTeam || opts.temporal) return await consultViaHubNow("));
   assert.ok(body.includes('temporalWorkers.providerOf(await getAgentModel(agentName))'));
-  assert.ok(body.includes('pacing.run(provider, () => consultViaHubNow('));
+  assert.ok(body.includes("pacing.run(provider, () => (stopped() ? Promise.resolve(stoppedText(agentName, '')) : consultViaHubNow("));   // a call stopped while it waited never starts
   // both tool handlers hand the typed failure text to the coordinator, and so does a Tiger Team member's failure
   assert.strictEqual((sdk.match(/pacing\.failureText\(e, agent\)/g) || []).length, 3);
   assert.match(sdk, /function ttMemberFailureWhy\([^)]*\) \{(?:(?!\n\}\n)[\s\S])*?e && e\.pacing \? pacing\.failureText\(e, agent\)/);

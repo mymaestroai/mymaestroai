@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Stop always stops.** Stopping an agent stopped only that agent's own reply: the agents it had asked for help (consultations, temporary workers, stand-ins) kept working to the end, because each runs as a reply of its own. ⏹ Stop on a worker card stopped nothing at all, and the group-chat and orchestration Stops only stopped the page from listening. Now Stop on an agent also stops everything that reply started, and what those started in turn, and drops the requests it had queued for busy agents. ⏹ Stop on a worker card stops that one call (a call still waiting for its agent never starts, and a stand-in running it stops too); the caller is told the owner stopped it and carries on. A Claude-client sub-agent runs inside its caller's reply, so its Stop stops that reply. Group-chat and orchestration Stops now stop their agents. Cards and notices say "Stopped" only once the hub has stopped the call, and still do after a reload. Members may stop only calls of agents they can use. Consultation ids no longer repeat when two calls start in the same millisecond.
+
 ## [5.7.1] - 2026-10-24
 
 Three changes since 5.7.0: package updates that clear 11 security advisories, a security check of your computer that Maestro offers in the setup interview, and a fix to the command policy found while testing it. Press Update in your Maestro to get them; on 5.7.0 it also tells you when an update is ready.

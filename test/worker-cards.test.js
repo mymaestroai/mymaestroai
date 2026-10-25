@@ -11,8 +11,9 @@ const path = require('path');
 const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 function extract(src, name) {
-  const at = src.indexOf(`function ${name}(`);
+  let at = src.indexOf(`function ${name}(`);
   assert.ok(at >= 0, `${name} present`);
+  if (src.slice(at - 6, at) === 'async ') at -= 6;   // keep an async function async
   let p = src.indexOf('(', at); let pd = 0;
   for (; p < src.length; p++) { if (src[p] === '(') pd++; else if (src[p] === ')' && --pd === 0) break; }
   let i = src.indexOf('{', p); let depth = 0;
@@ -23,11 +24,12 @@ function extract(src, name) {
 const NAMES = ['workerCardKey', 'workerRunOf', 'workerRunsActive', 'settleWorkerCard', 'startWorkerRun', 'handleWorkerEvent',
   'workerCallerLabel', 'paintWorkerCaller', 'cleanupWorkerTabs', 'forgetWorkerCard', 'cancelWorkerCard', 'cancelWorker',
   'turnWorkerUpsert', 'paintWorkerRun', 'markWorkerRunCancelled', 'closeWorkerCardsOf'];
+const ok = { success: true, stopped: 'running', turns: 1 };
 
 // A stand-in page: each chat's messages area is an ordered list of elements; tabs exist once rendered.
 function page() {
   const els = new Map(); const order = {}; let seq = 0;
-  const env = { chats: {}, tabs: [], panels: [], statuses: [], rendered: {}, posts: [], flashes: [], timers: new Set() };
+  const env = { chats: {}, tabs: [], panels: [], statuses: [], rendered: {}, posts: [], flashes: [], timers: new Set(), stopReply: ok, callerStops: [] };
   const el = (chatId, props) => {
     const e = { id: `m${++seq}`, chatId, ...props,
       after(other) { const list = order[chatId]; list.splice(list.indexOf(other.id), 1); list.splice(list.indexOf(e.id) + 1, 0, other.id); },
@@ -45,8 +47,9 @@ function page() {
     renderWorkerChatPanel: (id) => { env.panels.push(id); },
     updateWorkerTabTimer: () => {}, flashTab: (id) => env.flashes.push(id),
     setInterval: () => { const t = { timer: true }; env.timers.add(t); return t; }, clearInterval: (t) => env.timers.delete(t),
-    fetch: (url, opts) => { env.posts.push([url, JSON.parse(opts.body)]); return Promise.resolve(); },
+    fetch: (url, opts) => { env.posts.push([url, JSON.parse(opts.body)]); return Promise.resolve({ json: async () => env.stopReply }); },
     switchToChat: () => {}, closeChat: () => {},
+    cancelRequest: (id) => env.callerStops.push(['chat', id]), cancelGroupRequest: (id) => env.callerStops.push(['group', id]),
     updateMessage: (msgId, content) => { const e = els.get(msgId); if (e) e.content = content; },
     // what a chat's messages area shows, in order: [role, text]
     shown: (chatId) => (order[chatId] || []).map(id => els.get(id)).map(e => [e.role, e.role === 'notice' ? e.textContent : (env.rendered[e.id]?.content ?? e.content)]),
@@ -55,7 +58,8 @@ function page() {
   env.chats.c1 = { id: 'c1', agent: 'maestro', display: 'Maestro' };
   env.chats.c2 = { id: 'c2', agent: 'counsel', display: 'Counsel' };
   const body = `const { chats, document, appendMessage, appendSystemNotice, setStatus, updateMessageWithTools, renderWorkerChatTab,
-      renderWorkerChatPanel, updateWorkerTabTimer, flashTab, setInterval, clearInterval, fetch, switchToChat, closeChat, updateMessage } = env;
+      renderWorkerChatPanel, updateWorkerTabTimer, flashTab, setInterval, clearInterval, fetch, switchToChat, closeChat, updateMessage,
+      cancelRequest, cancelGroupRequest } = env;
     const workerTabMap = new Map(); const workerParentMap = new Map(); const workerCardByKey = new Map(); const closedWorkerRuns = new Set();
     ${NAMES.map(n => extract(app, n)).join('\n')}
     return { ${NAMES.join(', ')}, workerTabMap, workerParentMap, workerCardByKey, closedWorkerRuns };`;
@@ -194,7 +198,7 @@ test('the hub\'s turn view folds into the agent\'s card, once, with each call\'s
   assert.strictEqual(card.runs.h4.promptShown, true);
 });
 
-test('a stopped coordinator ends only its own calls; Stop on a card ends every call still running in it', () => {
+test('a stopped coordinator ends only its own calls; Stop on a card ends every call still running in it', async () => {
   const { env, api } = page();
   api.handleWorkerEvent('c1', consult('k1', 'gemini', 'from maestro'));
   api.handleWorkerEvent('c2', consult('k2', 'gemini', 'from counsel'));
@@ -205,13 +209,13 @@ test('a stopped coordinator ends only its own calls; Stop on a card ends every c
   assert.strictEqual(env.chats[card].runs.k1.status, 'cancelled');
   assert.strictEqual(env.chats[card].status, 'thinking', 'Counsel\'s call still runs');
   api.cleanupWorkerTabs('c2');
-  assert.deepStrictEqual(env.statuses.at(-1), [card, 'error', 'Stopped following']);
+  assert.deepStrictEqual(env.statuses.at(-1), [card, 'error', 'Stopped']);
   api.handleWorkerEvent('c1', consult('k3', 'gemini', 'again'));
   api.handleWorkerEvent('c1', consult('k4', 'gemini', 'and again'));
-  api.cancelWorkerCard(card);
+  await api.cancelWorkerCard(card);
   assert.deepStrictEqual(env.posts.map(p => p[1].worker_id), ['k3', 'k4']);
-  assert.deepStrictEqual(env.statuses.at(-1), [card, 'error', 'Stopped following']);
-  api.cancelWorkerCard(card);
+  assert.deepStrictEqual(env.statuses.at(-1), [card, 'error', 'Stopped']);
+  await api.cancelWorkerCard(card);
   assert.strictEqual(env.posts.length, 2, 'nothing left to stop');
 });
 
@@ -283,7 +287,7 @@ test('a card the user closed never comes back from a replay or a catch-up; a new
   assert.strictEqual(api.closedWorkerRuns.has('d2'), false);
 });
 
-test('an ended call ignores repeated end events; a call this page stopped still shows how it really ended', () => {
+test('an ended call ignores repeated end events; a call this page stopped still shows how it really ended', async () => {
   const { env, api } = page();
   const card = 'worker-e1';
   api.handleWorkerEvent('c1', consult('e1', 'legalreview', 'p'));
@@ -295,8 +299,8 @@ test('an ended call ignores repeated end events; a call this page stopped still 
   assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['❌ Agent legalreview Failed']);
   api.handleWorkerEvent('c1', consult('e2', 'legalreview', 'p2'));
   api.handleWorkerEvent('c1', { type: 'worker_text_delta', worker_id: 'e2', text: 'partial' });
-  api.cancelWorkerCard(card);
-  assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['❌ Agent legalreview Failed', '⏹ Agent legalreview: stopped following (it may still finish)']);
+  await api.cancelWorkerCard(card);
+  assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['❌ Agent legalreview Failed', '⏹ Agent legalreview Stopped']);
   assert.strictEqual(env.rendered[env.chats[card].runs.e2.msgId].streaming, false, 'the reply is no longer drawn as streaming');
   api.handleWorkerEvent('c1', { type: 'worker_completed', worker_id: 'e2' });   // the hub kept it going
   assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['❌ Agent legalreview Failed', '✅ Agent legalreview is Complete']);
@@ -307,16 +311,16 @@ test('a stopped coordinator\'s calls say so in its chat; an empty reply keeps it
   const { env, api } = page();
   api.handleWorkerEvent('c1', consult('f1', 'gemini', 'p'));
   api.cleanupWorkerTabs('c1');
-  assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['⏹ Agent gemini: stopped following (it may still finish)']);
+  assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['⏹ Agent gemini Stopped']);
   assert.strictEqual(env.rendered[env.chats['worker-f1'].runs.f1.msgId], undefined, 'nothing to repaint: the "..." stays');
-  assert.deepStrictEqual(env.statuses.at(-1), ['worker-f1', 'error', 'Stopped following']);
+  assert.deepStrictEqual(env.statuses.at(-1), ['worker-f1', 'error', 'Stopped']);
 });
 
-test('a call this page stopped following takes its real outcome from the hub\'s turn view; a running caller is followed first', () => {
+test('a stopped call takes its real outcome from the hub\'s turn view; a running caller is followed first', async () => {
   const { env, api } = page();
   const card = 'worker-g1';
   api.handleWorkerEvent('c1', consult('g1', 'helper', 'p'));
-  api.cancelWorkerCard(card);
+  await api.cancelWorkerCard(card);
   assert.strictEqual(env.chats[card].runs.g1.status, 'cancelled');
   api.turnWorkerUpsert('c1', { workers: new Set() }, { id: 'g1', agent: 'helper', description: 'Worker: Agent helper', prompt: 'p', status: 'completed', text: 'FINAL' });
   assert.strictEqual(env.chats[card].runs.g1.status, 'completed');
@@ -332,4 +336,71 @@ test('a call this page stopped following takes its real outcome from the hub\'s 
   api.closeWorkerCardsOf('c3'); delete env.chats.c3;
   assert.strictEqual(env.chats[card].parentChatId, 'c1');
   assert.strictEqual(env.chats[card].status, 'thinking');
+});
+
+test('Stop on a card asks the hub to stop each running call, naming the caller; the card says Stopped only when the hub did', async () => {
+  const { env, api } = page();
+  const card = 'worker-s1';
+  api.handleWorkerEvent('c1', consult('s1', 'helper', 'p'));
+  env.stopReply = { success: false, error: 'not running' };   // it had just finished on the hub
+  await api.cancelWorkerCard(card);
+  assert.deepStrictEqual(env.posts.at(-1), ['/api/cancel-worker', { worker_id: 's1', agent: 'maestro' }]);
+  assert.strictEqual(env.chats[card].runs.s1.status, 'running', 'not marked: its own end event will say how it ended');
+  env.stopReply = ok;
+  await api.cancelWorkerCard(card);
+  assert.strictEqual(env.chats[card].runs.s1.status, 'cancelled');
+  assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['⏹ Agent helper Stopped']);
+  assert.deepStrictEqual(env.statuses.at(-1), [card, 'error', 'Stopped']);
+  // the hub's own end event for the stopped call changes nothing more
+  api.handleWorkerEvent('c1', { type: 'worker_failed', worker_id: 's1', cancelled: true, error: 'Stopped' });
+  assert.strictEqual(env.shown(card).filter(s => s[0] === 'system').length, 0, 'no error line for a stop');
+  assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['⏹ Agent helper Stopped']);
+});
+
+test('a call stopped with its caller (the hub says so) reads Stopped, without an error line', () => {
+  const { env, api } = page();
+  api.handleWorkerEvent('c1', consult('t1', 'helper', 'p'));
+  api.handleWorkerEvent('c1', { type: 'worker_failed', worker_id: 't1', cancelled: true, error: 'Stopped' });
+  assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['⏹ Agent helper Stopped']);
+  assert.deepStrictEqual(env.statuses.at(-1), ['worker-t1', 'error', 'Stopped']);
+  assert.strictEqual(env.shown('worker-t1').filter(s => s[0] === 'system').length, 0);
+});
+
+test('a Claude-client sub-agent is stopped by stopping the reply it runs inside, once per caller', async () => {
+  const { env, api } = page();
+  const sub = (id, chat) => api.handleWorkerEvent(chat, { type: 'worker_started', worker_id: id, agent_type: 'sdk-agent', description: 'SDK Worker: search', prompt: 'p' });
+  sub('u1', 'c1');
+  await api.cancelWorkerCard('worker-u1');
+  assert.deepStrictEqual(env.callerStops, [['chat', 'c1']]);
+  assert.strictEqual(env.posts.length, 0, 'the hub has no handle on a sub-agent itself');
+  env.chats.g1 = { id: 'g1', isGroup: true, display: 'Group' };
+  sub('u2', 'g1');
+  await api.cancelWorkerCard('worker-u2');
+  assert.deepStrictEqual(env.callerStops, [['chat', 'c1'], ['group', 'g1']]);
+});
+
+test('group chat and orchestration Stop stop their agents on the hub', () => {
+  const group = extract(app, 'cancelGroupRequest'), orch = extract(app, 'stopOrchestration'), call = extract(app, 'callOrchAgent');
+  assert.match(group, /for \(const a of Object\.keys\(chat\.controllers \|\| \{\}\)\) stopAgentTurn\(a\);/);
+  assert.ok(group.indexOf('stopAgentTurn(a)') < group.indexOf('.abort()'), 'the hub is told before the streams are dropped');
+  assert.match(orch, /for \(const a of chat\.orchActive \|\| \[\]\) stopAgentTurn\(a\);/);
+  assert.match(call, /\(orchChat\.orchActive \|\|= new Set\(\)\)\.add\(agent\);/);
+  assert.match(call, /finally \{\s*orchChat\?\.orchActive\?\.delete\(agent\);\s*\}/);
+  // the stop runs: a stand-in page with two agents mid-reply
+  const stops = [], aborted = [];
+  const run = new Function('chats', 'stopAgentTurn', 'cleanupWorkerTabs', 'setStatus', 'addOrchMessage', `${group}\n${orch}\nreturn { cancelGroupRequest, stopOrchestration };`);
+  const chats = { g: { controllers: { pharm: { abort: () => aborted.push('pharm') }, gi: { abort: () => aborted.push('gi') } } }, o: { orchActive: new Set(['counsel']) } };
+  const fns = run(chats, (a) => stops.push(a), () => {}, () => {}, () => {});
+  fns.cancelGroupRequest('g');
+  fns.stopOrchestration('o');
+  assert.deepStrictEqual(stops, ['pharm', 'gi', 'counsel']);
+  assert.deepStrictEqual(aborted, ['pharm', 'gi']);
+});
+
+test('a reloaded page shows a call stopped earlier as Stopped, from the hub\'s turn view', () => {
+  const { env, api } = page();
+  api.turnWorkerUpsert('c1', { workers: new Set() }, { id: 'r9', agent: 'helper', description: 'Worker: Agent helper', prompt: 'p', status: 'failed', error: 'Stopped', cancelled: true, text: 'partial' });
+  assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['⏹ Agent helper Stopped']);
+  assert.deepStrictEqual(env.statuses.at(-1), ['worker-r9', 'error', 'Stopped']);
+  assert.strictEqual(env.shown('worker-r9').filter(s => s[0] === 'system').length, 0, 'no "Worker failed" line');
 });
