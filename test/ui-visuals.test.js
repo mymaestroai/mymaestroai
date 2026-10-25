@@ -25,8 +25,10 @@ test('both pages detect the four fence types and emit a placeholder, never raw H
     // The placeholder holds the escaped source inside <pre><code>, in a data-kind element.
     assert.match(src, /<div class="visual visual-\$\{kind\}" data-kind="\$\{kind\}"><pre class="visual-src"><code>\$\{escapedSource\}<\/code><\/pre><\/div>/, `${name}: placeholder`);
     assert.match(src, /visualPlaceholder\(kind, (?:esc\(code\)|code\.replace\(\/&\/g, '&amp;'\)\.replace\(\/<\/g, '&lt;'\)\.replace\(\/>\/g, '&gt;'\))\)/, `${name}: source escaped`);
-    // Tokens are re-inserted with a function replacer so `$&` / `$'` in source cannot expand.
-    assert.match(src, /__VIS_TOKEN_\$\{i\}__`, \(\) => /, `${name}: function replacer`);
+    // Tokens are re-inserted with a function replacer so `$&` / `$'` in source cannot expand, and the
+    // placeholder is a per-render random marker so model/user text cannot forge one (R3).
+    assert.match(src, /mk\('V', i\), \(\) => /, `${name}: function replacer`);
+    assert.match(src, /const MARK = 'm' \+ \(\(window\.crypto && crypto\.getRandomValues\)/, `${name}: per-render random marker`);
     // Visual fences are held out before the image/link/table passes, so `[a](b)` or `![a](b)`
     // inside an svg/html block cannot be rewritten into the source.
     const fence = src.indexOf('const kind = visualKind(lang);');

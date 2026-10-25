@@ -14,6 +14,7 @@ function load() {
   const hub = path.join(root, 'hub');
   fs.mkdirSync(path.join(hub, 'lib'), { recursive: true });
   fs.copyFileSync(path.join(REAL, 'lib', 'records.js'), path.join(hub, 'lib', 'records.js'));
+  fs.copyFileSync(path.join(REAL, 'lib', 'path-confine.js'), path.join(hub, 'lib', 'path-confine.js'));
   fs.writeFileSync(path.join(hub, 'lib', 'settings.js'), 'module.exports = { getSetting: (k, d) => (k === "recordsMaxBytes" ? (global.__recCap || 0) : d) };');
   return { rec: require(path.join(hub, 'lib', 'records.js')), hub, root };
 }
@@ -30,17 +31,56 @@ test('write / list / read / describe; names are cleaned; append adds; symlinked 
   assert.strictEqual(rec.write('gp', '.hidden', 'x'), 'Bad record name.');
   rec.write('gp', 'sam.md', '\nLane 3', { append: true });
   assert.strictEqual(rec.read('gp', 'sam.md'), '# Sam\nTeam blue\nLane 3');
-  const outside = path.join(root, 'projects', 'garden.md');
-  fs.mkdirSync(path.dirname(outside), { recursive: true }); fs.writeFileSync(outside, '# Garden');
-  fs.symlinkSync(outside, path.join(hub, 'workspaces', 'gp', 'records', 'garden.md'));
+  // A legitimate record symlink that stays inside the agent's own workspace is written through, link kept.
+  const linked = path.join(hub, 'workspaces', 'gp', 'docs', 'garden.md');
+  fs.mkdirSync(path.dirname(linked), { recursive: true }); fs.writeFileSync(linked, '# Garden');
+  fs.symlinkSync(linked, path.join(hub, 'workspaces', 'gp', 'records', 'garden.md'));
   const l = rec.list('gp');
   assert.deepStrictEqual(l.map(x => [x.name, x.symlink]), [['evil.md', false], ['garden.md', true], ['sam.md', false]]);
   rec.write('gp', 'garden.md', '# Garden\nupdated');
-  assert.strictEqual(fs.readFileSync(outside, 'utf8'), '# Garden\nupdated', 'the real file behind the link is updated, link kept');
+  assert.strictEqual(fs.readFileSync(linked, 'utf8'), '# Garden\nupdated', 'the real file behind the link is updated, link kept');
   assert.ok(fs.lstatSync(path.join(hub, 'workspaces', 'gp', 'records', 'garden.md')).isSymbolicLink());
   assert.match(rec.describe('gp'), /garden\.md: \d+ bytes.*link to/);
+  // R1: a record symlink that escapes the workspaces / hub-home tree is refused for read, write and listing.
+  const escaped = path.join(root, 'projects', 'secret.md');
+  fs.mkdirSync(path.dirname(escaped), { recursive: true }); fs.writeFileSync(escaped, 'SECRET');
+  fs.symlinkSync(escaped, path.join(hub, 'workspaces', 'gp', 'records', 'leak.md'));
+  assert.strictEqual(rec.read('gp', 'leak.md'), null, 'an escaping symlink is not readable');
+  assert.ok(!rec.list('gp').some(x => x.name === 'leak.md'), 'an escaping symlink is not listed or loaded');
+  assert.match(rec.write('gp', 'leak.md', 'overwrite'), /outside your records area/, 'writing through an escaping symlink is refused');
+  assert.strictEqual(fs.readFileSync(escaped, 'utf8'), 'SECRET', 'the host file behind the escaping link is untouched');
+  // A dangling symlink to outside (target not created yet) is refused too, so a write cannot create a host file.
+  fs.symlinkSync(path.join(root, 'projects', 'notyet.md'), path.join(hub, 'workspaces', 'gp', 'records', 'dangling.md'));
+  assert.match(rec.write('gp', 'dangling.md', 'x'), /outside your records area/, 'writing through a dangling escaping symlink is refused');
+  assert.ok(!fs.existsSync(path.join(root, 'projects', 'notyet.md')), 'the dangling target was not created outside');
+  // A record linked THROUGH a symlinked directory to a not-yet-created outside file is refused (nested dangling).
+  fs.symlinkSync(path.join(root, 'projects'), path.join(hub, 'workspaces', 'gp', 'records', 'outdir'));
+  fs.symlinkSync(path.join(hub, 'workspaces', 'gp', 'records', 'outdir', 'new.md'), path.join(hub, 'workspaces', 'gp', 'records', 'nested.md'));
+  assert.match(rec.write('gp', 'nested.md', 'x'), /outside your records area/, 'writing through a nested escaping symlink is refused');
+  assert.ok(!fs.existsSync(path.join(root, 'projects', 'new.md')), 'the nested dangling target was not created outside');
   assert.strictEqual(rec.remove('gp', 'evil.md'), true);
   assert.strictEqual(rec.remove('gp', 'evil.md'), false);
+});
+
+test('a records folder replaced with a symlink cannot land a new record on the host', () => {
+  const { rec, hub, root } = load();
+  const recDir = path.join(hub, 'workspaces', 'gp2', 'records');
+  fs.mkdirSync(path.join(hub, 'workspaces', 'gp2'), { recursive: true });
+  const target = path.join(root, 'elsewhere'); fs.mkdirSync(target, { recursive: true });
+  fs.symlinkSync(target, recDir);   // workspaces/gp2/records -> root/elsewhere (outside the workspaces tree)
+  assert.match(rec.write('gp2', 'x', 'data'), /outside your records area/, 'writing a new record through a symlinked records folder is refused');
+  assert.ok(!fs.existsSync(path.join(target, 'x.md')), 'nothing was written outside');
+});
+
+test('targetAllowed confines record symlinks to the hub home and workspaces, never secrets or code', () => {
+  const rec = require(path.join(REAL, 'lib', 'records.js'));
+  const hh = require(path.join(REAL, 'lib', 'hub-home'));
+  assert.ok(rec.targetAllowed(path.join(hh.HUB_HOME, 'medical', 'patients', 'patient.md')), 'a link into medical/ is allowed');
+  assert.ok(rec.targetAllowed(path.join(REAL, 'workspaces', 'doc', 'records', 'x.md')), 'a link into workspaces/ is allowed');
+  assert.ok(!rec.targetAllowed('/etc/passwd'), 'a link to /etc is refused');
+  assert.ok(!rec.targetAllowed(path.join(REAL, 'data', 'settings.json')), 'a link to data/ is refused');
+  assert.ok(!rec.targetAllowed(path.join(REAL, '.env')), 'a link to .env is refused');
+  assert.ok(!rec.targetAllowed(path.join(REAL, 'lib', 'sdk-chat.js')), 'a link to the hub code is refused');
 });
 
 test('contextSection: every record in full, cap by bytes (agent field, settings, default 256 KB), files index appended', () => {
