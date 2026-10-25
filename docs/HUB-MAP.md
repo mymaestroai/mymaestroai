@@ -462,6 +462,7 @@ Each recipe says what to do, with the file, page or route involved. Confirm with
 15. **Move or restore an install.** Install the code, copy back `data/`, `workspaces/`, `.env` and the hub home folders, sign the clients in (`claude login`, `codex login`), start, run the Setup checklist.
 16. **Local models.** Local models page → Install llama-swap → Build llama.cpp (background job) or set a path → Scan folders → Add the model (engine, file, context window, idle unload) → Start → Load or Test → Refresh hub model list → set an agent's model to `local/<id>`. NInfer models: point at the `.ninfer` file with the engine's own flags in extra arguments; stop any standalone NInfer or LM Studio server first.
 17. **Update.** Settings → Update from GitHub → if it reports local commits or a rewritten history, follow the dialog (it keeps a backup branch) → restart → check the checklist and the model list.
+18. **Security review of the install and its computer.** Follow `docs/SECURITY-REVIEW.md`: the hub's own check (`node scripts/security-check.js`), listening services and the firewall, SSH and Tailscale exposure, operating-system updates and `npm audit`, disk encryption and logins, then a report by urgency. It only reads; every change needs the owner's yes, sudo commands go to the owner, and `npm audit fix` is never run inside an install (it changes a tracked file and blocks updates). The setup interview offers it (Step 6).
 
 ---
 
