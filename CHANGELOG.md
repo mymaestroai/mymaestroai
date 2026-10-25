@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Package updates for 11 security advisories.** `npm audit` flagged 11 of the packages My Maestro AI depends on (1 critical, 7 high, 3 moderate), mostly in parts of the agent-tool (MCP) library that it never runs. All of them now use their fixed versions, among them the agent-tool library (1.29.0 to 1.32.2), undici (7.24.7 to 7.30.1) and zod (4.3.6 to 4.6.7), and `npm audit` finds nothing. Updating installs the new packages before any code moves, as before.
+
 - **Maestro offers a security check of your computer.** During the setup interview, Maestro now offers to check the install and the computer it runs on for security problems: network services other devices can reach, missing security updates, known vulnerabilities in the software, and weak settings such as password logins or a disk without encryption. It follows a step-by-step guide (`docs/SECURITY-REVIEW.md`), only looks, changes nothing without your yes on each change, and never asks for your password. You can ask for a review any time; the Help page has a new Security section.
 
 - **A file named reboot-required no longer counts as a reboot.** The command policy refused any command that mentioned `/var/run/reboot-required` (the file that says an installed update waits for a restart), as if it were a reboot. Reading that file is now allowed. Everything that really restarts or stops the computer still counts, and a few more forms now do too: `kexec`, `init 6` and `telinit 0`, the sysrq trigger, and the D-Bus Reboot call.
