@@ -6,6 +6,14 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.7.3] - 2026-10-25
+
+Two security fixes since 5.7.2. Boxed agents' file tools now check where links lead before following them, and a way for chat messages to run script is closed. Press Update in your Maestro to get them; on 5.7.0 or later it also tells you when an update is ready.
+
+- **Security fix: boxed agents' file tools check where links lead before following them.** An agent that runs in a box could reach files elsewhere on the computer through a link. The file tools that work outside the box (Read, Write, Edit, Glob and Grep) and Records now check where a path really leads and refuse it when it ends outside the folders that agent may use. A Record that links into a folder that agent may use keeps working; a Record that links outside those folders is no longer loaded or written.
+
+- **Security fix: closes a way for chat messages to run script.** A specially crafted message, for example text that a model copied from a web page, could make the desktop chat run script with your signed-in session, without a click. This release fixes the formatting step that allowed it, in the desktop chat and on the phone.
+
 ## [5.7.2] - 2026-10-24
 
 One change since 5.7.1: the Stop button now also stops the agents a reply asked for help, and the requests it had queued for busy agents. Press Update in your Maestro to get it; on 5.7.0 or later it also tells you when an update is ready.
@@ -1057,7 +1065,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.7.2...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.7.3...dev
+[5.7.3]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.3
 [5.7.2]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.2
 [5.7.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.1
 [5.7.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.0

@@ -468,12 +468,18 @@ function formatContent(content) {
   // renderVisualBlocks). They are held out first, before the image/link/table passes and the
   // inline formatting, so their source reaches the renderer byte for byte (escaped here, inside
   // <pre><code>; never parsed as markup). Other fences take the usual code-block path below.
+  // R3: per-render, unguessable markers (same approach as app.js formatContent). Model or user text cannot
+  // predict one, so a marker for one kind cannot be smuggled inside another kind's content (e.g. a table
+  // marker inside image alt text) and then be substituted. The ~ terminates the index; markers are plain
+  // [a-z0-9~], untouched by escaping and inline formatting.
+  const MARK = 'm' + ((window.crypto && crypto.getRandomValues) ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => (b % 36).toString(36)).join('') : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+  const mk = (kind, i) => `${MARK}${kind}${i}~`;
   const visuals = [];
   const withVisuals = response.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => {
     const kind = visualKind(lang);
     if (!kind) return m;
     visuals.push(visualPlaceholder(kind, esc(code)));
-    return `__VIS_TOKEN_${visuals.length - 1}__`;
+    return mk('V', visuals.length - 1);
   });
 
   const images = [];
@@ -483,12 +489,12 @@ function formatContent(content) {
       try { imgSrc = '/api/image/' + btoa(src); } catch { imgSrc = null; }
     }
     images.push({ alt, src: imgSrc });
-    return `__IMG_TOKEN_${images.length - 1}__`;
+    return mk('I', images.length - 1);
   });
   const links = [];
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, label, url) => {
     links.push({ label, url });
-    return `__LINK_TOKEN_${links.length - 1}__`;
+    return mk('L', links.length - 1);
   });
   const tables = [];
   text = text.replace(/(^|\n)(\|[^\n]+\|\s*\n\|(?:\s*:?-+:?\s*\|)+\s*\n(?:\|[^\n]+\|\s*\n?)+)/g, (m, lead, body) => {
@@ -498,7 +504,7 @@ function formatContent(content) {
     let html = '<table><thead><tr>' + cells(lines[0]).map(h => `<th>${cell(h)}</th>`).join('') + '</tr></thead><tbody>';
     for (const row of lines.slice(2)) html += '<tr>' + cells(row).map(c => `<td>${cell(c)}</td>`).join('') + '</tr>';
     tables.push(html + '</tbody></table>');
-    return lead + `__TABLE_TOKEN_${tables.length - 1}__`;
+    return lead + mk('T', tables.length - 1);
   });
 
   let out = escapeHtml(text)   // all five characters: the autolinker below relies on quotes being entities, never raw
@@ -511,17 +517,17 @@ function formatContent(content) {
   // Bare URLs: strict charset, cut before any quote or angle bracket (the text is already escaped).
   out = autolinkEscaped(out).replace(/\n/g, '<br>');
 
-  visuals.forEach((v, i) => { out = out.replace(`__VIS_TOKEN_${i}__`, () => v); });
+  visuals.forEach((v, i) => { out = out.replace(mk('V', i), () => v); });
   images.forEach((im, i) => {
     const tag = imageHtml(im.src, im.alt);
-    out = out.replace(`__IMG_TOKEN_${i}__`, () => tag);
+    out = out.replace(mk('I', i), () => tag);
   });
   links.forEach((l, i) => {
     const u = safeLinkUrl(l.url);
     const tag = u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>` : `<code>[blocked link: ${esc(l.label)}]</code>`;
-    out = out.replace(`__LINK_TOKEN_${i}__`, () => tag);
+    out = out.replace(mk('L', i), () => tag);
   });
-  tables.forEach((t, i) => { out = out.replace(`__TABLE_TOKEN_${i}__`, t); });
+  tables.forEach((t, i) => { out = out.replace(mk('T', i), () => t); });
   return thinkHtml + out;
 }
 

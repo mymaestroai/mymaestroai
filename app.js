@@ -10488,12 +10488,19 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // renderVisualBlocks). They are held out first, before the image/link/table passes and the
       // inline formatting, so their source reaches the renderer byte for byte (escaped here, inside
       // <pre><code>; never parsed as markup). Other fences take the usual code-block path below.
+      // R3: per-render, unguessable markers. Model or user text cannot predict one, so a marker for one
+      // kind (say a table) cannot be smuggled inside another kind's content (say image alt text) and then
+      // get substituted when that kind is re-inserted. The ~ terminates the index so one marker is never a
+      // prefix of another (V1~ vs V11~). Markers are plain [a-z0-9~], so escaping and inline formatting
+      // leave them untouched.
+      const MARK = 'm' + ((window.crypto && crypto.getRandomValues) ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => (b % 36).toString(36)).join('') : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+      const mk = (kind, i) => `${MARK}${kind}${i}~`;
       const visualTokens = [];
       const withVisualPlaceholders = response.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
         const kind = visualKind(lang);
         if (!kind) return match;
         visualTokens.push(visualPlaceholder(kind, code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')));
-        return `__VIS_TOKEN_${visualTokens.length - 1}__`;
+        return mk('V', visualTokens.length - 1);
       });
 
       // Extract markdown links BEFORE HTML-escaping (URLs contain special chars)
@@ -10509,14 +10516,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           imgSrc = '/api/image/' + btoa(src);
         }
         imageTokens.push({ alt, src: imgSrc });
-        return `__IMG_TOKEN_${idx}__`;
+        return mk('I', idx);
       });
 
       // Extract markdown links [text](url) BEFORE HTML-escaping
       const withLinkPlaceholders = withImagePlaceholders.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, text, url) => {
         const idx = linkTokens.length;
         linkTokens.push({ text, url });
-        return `__LINK_TOKEN_${idx}__`;
+        return mk('L', idx);
       });
 
       // Extract tables before HTML-escaping
@@ -10528,7 +10535,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const rows = lines.slice(2).map(line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|'));
         
         const fmtCell = (c) => c.trim()
-          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
           .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
           .replace(/\*([^*]+)\*/g, '<em>$1</em>')
           .replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -10542,7 +10549,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         });
         tableHtml += '</tbody></table>';
         tableTokens.push(tableHtml);
-        return p1 + `__TABLE_TOKEN_${idx}__`;
+        return p1 + mk('T', idx);
       });
 
       let formatted = escapeHtml(withTablePlaceholders)   // all five characters: the autolinker relies on quotes being entities, never raw
@@ -10550,22 +10557,23 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         .replace(/`([^`]+)`/g, '<code>$1</code>')
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
         .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-        // A whole line in underscores is italic: the hub's one-line notices (plan, auto model, sandbox...). Placeholder tokens
-        // start with "__" and snake_case inside a sentence is never a whole line, so neither matches.
+        // A whole line in underscores is italic: the hub's one-line notices (plan, auto model, sandbox...).
+        // snake_case inside a sentence is never a whole line, and the markers above carry no underscores,
+        // so neither matches.
         .replace(/(^|\n)_(?=[^\s_])([^\n]*?[^\s_])_(?=\n|$)/g, '$1<em>$2</em>');
       // Bare URLs: strict charset, cut before any quote or angle bracket (the text is already escaped).
       formatted = autolinkEscaped(formatted, ' style="color: #6ea8fe; text-decoration: underline;"')
         .replace(/\n/g, '<br>');
 
       for (let i = 0; i < visualTokens.length; i++) {
-        formatted = formatted.replace(`__VIS_TOKEN_${i}__`, () => visualTokens[i]);
+        formatted = formatted.replace(mk('V', i), () => visualTokens[i]);
       }
 
       // Re-insert extracted images: inline when same-origin / data: / blob:, a link for any other host.
       for (let i = 0; i < imageTokens.length; i++) {
         const { alt, src } = imageTokens[i];
         const imgTag = imageHtml(src, alt, 'max-height:300px;');
-        formatted = formatted.replace(`__IMG_TOKEN_${i}__`, () => imgTag);
+        formatted = formatted.replace(mk('I', i), () => imgTag);
       }
 
       // Re-insert extracted links: only http(s), mailto and same-origin paths; everything escaped.
@@ -10576,12 +10584,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const linkTag = u
           ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: #6ea8fe; text-decoration: underline;">${eText}</a>`
           : `<code>[blocked link: ${eText}]</code>`;
-        formatted = formatted.replace(`__LINK_TOKEN_${i}__`, () => linkTag);
+        formatted = formatted.replace(mk('L', i), () => linkTag);
       }
 
-      // Re-insert extracted tables
+      // Re-insert extracted tables (function replacer so $-sequences in the HTML are literal).
       for (let i = 0; i < tableTokens.length; i++) {
-        formatted = formatted.replace(`__TABLE_TOKEN_${i}__`, tableTokens[i]);
+        formatted = formatted.replace(mk('T', i), () => tableTokens[i]);
       }
 
       return thinkingHtml + formatted;

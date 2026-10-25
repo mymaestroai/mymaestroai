@@ -59,6 +59,6 @@ test('both chat renderers show a whole line in underscores (the hub\'s notices) 
   assert.ok(mjs.includes(rule), 'phone formatContent');
   const re = /(^|\n)_(?=[^\s_])([^\n]*?[^\s_])_(?=\n|$)/g;
   assert.strictEqual('_⚠️ Fable has used 90% (resets Wed 8:00 PM)._\n\nOK.'.replace(re, '$1<em>$2</em>'), '<em>⚠️ Fable has used 90% (resets Wed 8:00 PM).</em>\n\nOK.');
-  assert.strictEqual('__TABLE_TOKEN_0__'.replace(re, '$1<em>$2</em>'), '__TABLE_TOKEN_0__', 'placeholders untouched');
+  assert.strictEqual('m0a1b2T0~'.replace(re, '$1<em>$2</em>'), 'm0a1b2T0~', 'render markers untouched');
   assert.strictEqual('see my_file_name here'.replace(re, '$1<em>$2</em>'), 'see my_file_name here', 'snake_case untouched');
 });

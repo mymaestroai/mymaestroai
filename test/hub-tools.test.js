@@ -227,6 +227,31 @@ test('sandbox: Bash runs through the box, file tools stay inside the mounts, Glo
   assert.match((await t.call('Grep', { pattern: 'a', path: d })).text, /not available inside/);
   assert.match((await t.call('Read', { file_path: 'b.js' })).text, /function beta/, 'relative paths resolve against the box cwd');
   assert.match((await t.call('Read', { file_path: path.join(d, 'src', '..', 'a.txt') })).text, /not available inside/, 'no escaping with ..');
+
+  // R1: a symlink planted inside the box must not be followed out to a host file.
+  fs.mkdirSync(path.join(d, 'outside'), { recursive: true });
+  fs.writeFileSync(path.join(d, 'outside', 'secret.txt'), 'TOPSECRET');
+  fs.symlinkSync(path.join(d, 'outside', 'secret.txt'), path.join(d, 'src', 'leak.txt'));
+  fs.symlinkSync(path.join(d, 'outside'), path.join(d, 'src', 'out'));
+  assert.match((await t.call('Read', { file_path: path.join(d, 'src', 'leak.txt') })).text, /not available inside/, 'read through a symlink to a host file is refused');
+  assert.match((await t.call('Write', { file_path: path.join(d, 'src', 'out', 'new.txt'), content: 'x' })).text, /not available inside/, 'write through a symlinked dir is refused');
+  assert.ok(!fs.existsSync(path.join(d, 'outside', 'new.txt')), 'nothing was written outside the box');
+  fs.writeFileSync(path.join(d, 'src', 'normal.txt'), 'hi');
+  const g = (await t.call('Glob', { pattern: '*.txt' })).text;
+  assert.ok(g.includes('normal.txt'), 'a real file inside the box is listed');
+  assert.ok(!g.includes('leak.txt'), 'a symlink that escapes the box is not listed');
+  // A symlink that stays inside the box still works (the feature is not broken).
+  fs.writeFileSync(path.join(d, 'src', 'real.txt'), 'REALDATA');
+  fs.symlinkSync(path.join(d, 'src', 'real.txt'), path.join(d, 'src', 'alias.txt'));
+  assert.match((await t.call('Read', { file_path: path.join(d, 'src', 'alias.txt') })).text, /REALDATA/, 'a symlink that stays inside the box still reads');
+  // A dangling symlink (its target does not exist yet) must also be refused: a write through it would create a host file.
+  fs.symlinkSync(path.join(d, 'outside', 'notyet.txt'), path.join(d, 'src', 'dangling.txt'));
+  assert.match((await t.call('Write', { file_path: path.join(d, 'src', 'dangling.txt'), content: 'x' })).text, /not available inside/, 'write through a dangling symlink to outside is refused');
+  assert.ok(!fs.existsSync(path.join(d, 'outside', 'notyet.txt')), 'the dangling target was not created outside the box');
+  // Nested: a path through a symlinked directory to a not-yet-created outside file is refused too.
+  fs.symlinkSync(path.join(d, 'outside'), path.join(d, 'src', 'outdir'));
+  assert.match((await t.call('Write', { file_path: path.join(d, 'src', 'outdir', 'nested.txt'), content: 'x' })).text, /not available inside/, 'write through a symlinked directory is refused');
+  assert.ok(!fs.existsSync(path.join(d, 'outside', 'nested.txt')), 'the nested target was not created outside the box');
 });
 
 test('unknown tools and thrown errors become text, never exceptions', async () => {
