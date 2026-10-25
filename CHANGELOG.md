@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Security fix: boxed agents' file tools stay inside their folders.** An agent that runs in a box could reach files on the computer outside the folders it was given, through a link (a symlink). The file tools that work outside the box (Read, Write, Edit, Glob and Grep) and Records now check where a path really leads, link by link, and refuse anything that ends outside the agent's own folders. Links that stay inside them, such as a Record that points into a team folder the agent was granted, keep working.
+
+- **Security fix: a chat message can no longer run script in the chat.** A specially crafted message, for example text a model copied from a web page, could make the desktop chat run script with your signed-in session. The chat's formatting now uses markers that message text can't imitate, and table cells escape quotes. The phone chat has the same change.
+
 ## [5.7.2] - 2026-10-24
 
 One change since 5.7.1: the Stop button now also stops the agents a reply asked for help, and the requests it had queued for busy agents. Press Update in your Maestro to get it; on 5.7.0 or later it also tells you when an update is ready.
