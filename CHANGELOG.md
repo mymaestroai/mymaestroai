@@ -6,7 +6,11 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
-- **Stop always stops.** Stopping an agent stopped only that agent's own reply: the agents it had asked for help (consultations, temporary workers, stand-ins) kept working to the end, because each runs as a reply of its own. ⏹ Stop on a worker card stopped nothing at all, and the group-chat and orchestration Stops only stopped the page from listening. Now Stop on an agent also stops everything that reply started, and what those started in turn, and drops the requests it had queued for busy agents. ⏹ Stop on a worker card stops that one call (a call still waiting for its agent never starts, and a stand-in running it stops too); the caller is told the owner stopped it and carries on. A Claude-client sub-agent runs inside its caller's reply, so its Stop stops that reply. Group-chat and orchestration Stops now stop their agents. Cards and notices say "Stopped" only once the hub has stopped the call, and still do after a reload. Members may stop only calls of agents they can use. Consultation ids no longer repeat when two calls start in the same millisecond.
+## [5.7.2] - 2026-10-24
+
+One change since 5.7.1: the Stop button now also stops the agents a reply asked for help, and the requests it had queued for busy agents. Press Update in your Maestro to get it; on 5.7.0 or later it also tells you when an update is ready.
+
+- **The Stop button now stops the helpers too.** Stopping an agent stopped only that agent's own reply: the agents it had asked for help (consultations, temporary workers, stand-ins) kept working to the end, because each runs as a reply of its own. ⏹ Stop on a worker card stopped nothing at all, and the group-chat and orchestration Stops only stopped the page from listening. Now Stop on an agent also stops the agents that reply asked for help, and the ones those asked in turn, and drops the requests it had queued for busy agents; background jobs keep running, as they always have. ⏹ Stop on a worker card stops that one call (a call still waiting for its agent never starts, and a stand-in running it stops too); the caller is told the owner stopped it and carries on. A Claude-client sub-agent runs inside its caller's reply, so its Stop stops that reply. Group-chat and orchestration Stops now stop their agents. Cards and notices say "Stopped" only once the hub has stopped the call, and still do after a reload. Members may stop only calls of agents they can use. Consultation ids no longer repeat when two calls start in the same millisecond.
 
 ## [5.7.1] - 2026-10-24
 
@@ -1053,7 +1057,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.7.1...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.7.2...dev
+[5.7.2]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.2
 [5.7.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.1
 [5.7.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.0
 [5.6.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.6.0
