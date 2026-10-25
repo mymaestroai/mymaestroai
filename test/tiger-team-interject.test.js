@@ -17,13 +17,18 @@ function load({ running = ['alice', 'bob'], active = ['alice', 'bob'] } = {}) {
   const session = { tigerTeamId: 'tt', pendingMessages: state.pendingMessages, res: { destroyed: false, writableEnded: false, write: s => writes.push(s) } };
   const ctx = {
     console: { log() {} }, JSON, Object, Set, String, Array, Date,
-    require: (m) => m === './lib/sdk-chat' ? { isAgentActive: a => active.includes(a), handleInterjection: ({ agent, message }) => { interjections.push({ agent, message }); return { success: true }; } } : require(m),
+    require: (m) => m === './lib/sdk-chat' ? { isAgentActive: a => active.includes(a), handleInterjection: ({ agent, message }) => { interjections.push({ agent, message }); return { success: true }; } }
+      : m === './lib/tiger-team-live' ? require('../lib/tiger-team-live') : require(m),
     readBody: async req => JSON.stringify(req.body), global: { __tigerTeamSessions: { tt: session } },
     getTigerTeamState: id => id === 'tt' ? state : null, ttRecovery: require('../lib/tiger-team-recovery'),
     ttStore: { save() {}, append: (id, st, ev) => appended.push(ev) },
     jsonResponse: (res, status, body) => { res.status = status; res.body = body; },
+    ttValidId: require('../lib/tiger-team-recovery').validId, activeTigerTeams: new Map(),
   };
   vm.createContext(ctx);
+  // The war-room helpers (ttLive, ttNewStream, ttTeamOf) as server.js defines them.
+  const helpers = source.slice(source.indexOf('// A run writes to its own stream'), source.indexOf('// ── Setup Detection'));
+  vm.runInContext(helpers.replace(/^const /gm, 'var '), ctx);
   const start = source.indexOf("    if (pathname === '/api/tiger-team/inject' && req.method === 'POST') {");
   const end = source.indexOf('    // Tiger Team update participants', start);
   assert.ok(start > 0 && end > start, 'inject route not found in server.js');

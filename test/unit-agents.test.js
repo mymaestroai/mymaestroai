@@ -17,6 +17,7 @@ function load({ agents, example, llm } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-agents-'));
   roots.push(root);
   const hub = path.join(root, 'hub');                       // files.js puts share/, users/, medical/ next to the hub dir -> inside `root`
+  fs.mkdirSync(path.join(root, 'share'));                   // an existing install's layout: share/ beside it keeps the hub home there (lib/hub-home)
   fs.cpSync(REAL_LIB, path.join(hub, 'lib'), { recursive: true });
   fs.copyFileSync(path.join(REAL_ROOT, 'package.json'), path.join(hub, 'package.json'));
   fs.symlinkSync(path.join(REAL_ROOT, 'node_modules'), path.join(hub, 'node_modules'));

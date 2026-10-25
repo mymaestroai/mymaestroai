@@ -47,7 +47,7 @@ function harness(respond, toolHandlers = {}) {
     queryCache: { get: () => null, put() {} }, recordToolError() {}, getInlineErrorGuidance: () => '', getToolGuidance: () => '',
     temporalWorkers: { isVirtual: () => false }, jobs: { policyText: () => '' }, scheduledTasks: { policyText: () => '' },
     checkpointTeam: () => saves.push(structuredClone(state)), ttRecovery: recovery,
-    ttArtifacts: require('../lib/tiger-team-artifacts'),
+    ttArtifacts: require('../lib/tiger-team-artifacts'), ttLive: require('../lib/tiger-team-live'),
     accumulateToolCallDelta: require('../lib/tool-call-deltas').accumulateToolCallDelta,
     ttStore: { append(id, st, ev) { (st.events ||= []).push(ev); }, artifact() { return { hash: 'test-artifact' }; } },
     sendSSEDone() {}, safeEnd: res => res.end(),
@@ -168,4 +168,28 @@ test('throwing tool leaves unknown outcome and never generates speculative follo
   await assert.rejects(h.run(), { code: 'TT_RECONCILIATION_REQUIRED' });
   assert.equal(count, 1); assert.equal(h.requests.length, 1);
   assert.equal(h.call.tools['write-unknown'].status, 'unknown');
+});
+
+test('a tool that cannot change anything just fails: the model gets the error and the team goes on', async () => {
+  let reads = 0;
+  const h = harness(n => ({ events: [n === 1 ? tool('read-bad', 'read_tiger_team_archive') : text('Carried on')] }), {
+    read_tiger_team_archive: async () => { reads++; throw new Error('Unknown archived call'); },
+  });
+  await h.run();
+  assert.equal(reads, 1);
+  assert.equal(h.requests.length, 2, 'one more model call, with the error as the tool result');
+  assert.equal(h.requests[1].some(m => m.role === 'tool' && /Error executing read_tiger_team_archive: Unknown archived call/.test(m.content)), true);
+  assert.equal(h.call.tools['read-bad'].status, 'completed');
+  assert.equal(h.call.tools['read-bad'].error, 'Unknown archived call');
+  assert.equal(h.call.status, 'completed');
+});
+
+test('a claude-sdk agent answered on this path is booked as Anthropic API spend', async () => {
+  const records = [];
+  const h = harness(() => ({ events: [text('Hi')] }));
+  h.ctx.ledger = { record: r => records.push(r) };
+  h.ctx.getAgentModel = async () => 'claude-sdk/claude-haiku-4-5';
+  await h.run();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].model, 'anthropic/claude-haiku-4-5');
 });

@@ -31,13 +31,13 @@ test('six groups, and every section openSettings draws belongs to exactly one of
   assert.deepStrictEqual(groups.map(g => g.title), ['🩺 Status', '🧠 AI models', '🤖 Agents', '🔔 Notifications', '🧰 Tools and data', '💰 Money and safety']);
   const src = settingsSource(app);
   const drawn = [...src.matchAll(/class="st-section" id="(st-[a-z0-9-]+-section)"/g)].map(m => m[1]);
-  assert.strictEqual(drawn.length, 17, 'all 17 sections carry an id');
+  assert.strictEqual(drawn.length, 18, 'all 18 sections carry an id');
   assert.doesNotMatch(src, /class="st-section">/, 'no section without an id');
   const grouped = groups.flatMap(g => g.sections);
   assert.strictEqual(new Set(grouped).size, grouped.length, 'no section in two groups');
   assert.deepStrictEqual([...grouped].sort(), [...drawn].sort(), 'the groups name exactly the sections drawn');
   const byId = Object.fromEntries(groups.map(g => [g.id, g.sections]));
-  assert.deepStrictEqual(byId.status, ['st-ready-section', 'st-sec-section']);
+  assert.deepStrictEqual(byId.status, ['st-ready-section', 'st-sec-section', 'st-updates-section']);
   assert.deepStrictEqual(byId.money, ['st-spend-section', 'st-emergency-section']);
   assert.ok(byId.models.includes('st-plan-section') && byId.models.includes('st-or-section') && byId.models.includes('st-prov-section'));
   assert.ok(byId.agents.includes('st-sb-section') && byId.agents.includes('st-approvals-section'));
