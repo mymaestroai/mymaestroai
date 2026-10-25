@@ -282,3 +282,16 @@ test('root: sudo/doas/pkexec/su make a command admin (or worse) and flag it; onl
   assert.strictEqual(tp.decide({ agent: head, tool: 'run_job', input: { name: 'x', command: 'sudo reboot' }, cwd: cwd(head) }).decision, 'deny');
   assert.strictEqual(tp.decide({ agent: lead, tool: 'mcp__agent-hub__run_job', input: { name: 'x', command: 'sudo -n apt update' }, cwd: cwd(lead) }).detail.sudo, true);
 });
+
+test('reboot words: reading the reboot-required file is not a reboot; real reboots, shutdowns and their systemd targets still are (2026-10-24)', () => {
+  const tpr = require('../lib/tool-policy');
+  const cls = (c) => tpr.classifyCommand(c, { cwd: '/tmp', roots: ['/tmp'], agentName: 'reviewer' }).cls;
+  for (const c of ['ls /var/run/reboot-required', 'ls /var/run/reboot-required 2>&1; systemctl is-enabled unattended-upgrades', 'test -e /var/run/reboot-required && echo restart-needed',
+    'cat /var/run/reboot-required.pkgs', 'cat /proc/sys/kernel/sysrq', 'git init', 'git init 0', 'npm init -y']) assert.notStrictEqual(cls(c), 'destroy', c);
+  for (const c of ['reboot', 'sudo reboot', 'sudo shutdown now', 'systemctl reboot', 'shutdown -r now', '/sbin/shutdown -h now', 'poweroff', 'halt -p', 'nohup reboot &',
+    'echo bye; reboot', 'reboot&&echo done', '(reboot)', 'systemctl isolate reboot.target', 'systemctl start poweroff.target', 'systemctl start halt.target', 'systemctl isolate poweroff.target', 'echo x; init 6', 'exec init 6', 'nohup init 6 &', 'x=1 init 6',
+    'poweroff --force', 'systemctl soft-reboot', 'systemctl kexec', 'kexec -e', 'init 6', 'telinit 0', 'sudo init 0', '/sbin/init 6',
+    // classification strings only, never run: systemd unit actions and the D-Bus call reboot the machine too
+    'systemd-run --property=SuccessAction=reboot-force /usr/bin/true', 'systemd-run -p FailureAction=poweroff-immediate false',
+    'busctl call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager Reboot b false', 'echo b > /proc/sysrq-trigger']) assert.strictEqual(cls(c), 'destroy', c);
+});

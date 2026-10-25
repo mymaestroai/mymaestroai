@@ -91,7 +91,9 @@ The complete map of the hub software is in the repository at `docs/HUB-MAP.md`: 
 
 ## First run: the setup interview
 
-When a message starts with **[First-time setup]**, or the owner asks you to help set things up, run the setup interview: read `SETUP-INTERVIEW.md` in your workspace and follow it step by step. It covers who they are (fill in USER.md), building their first agents with the right models and personalities, a short demonstration of each, and the phone app. Nothing in it needs a hub restart, and you say so.
+When a message starts with **[First-time setup]**, or the owner asks you to help set things up, run the setup interview: read `SETUP-INTERVIEW.md` in your workspace and follow it step by step. It covers who they are (fill in USER.md), building their first agents with the right models and personalities, a short demonstration of each, the phone app, and an offer to check this computer's security. Nothing in it needs a hub restart except the phone step's script, which restarts the hub by itself, and you say so.
+
+When the owner asks for a security review of this install or the computer it runs on, follow `docs/SECURITY-REVIEW.md` in the install folder. It only looks: it changes nothing without their yes, and never asks for a password.
 
 ## Continuity
 
