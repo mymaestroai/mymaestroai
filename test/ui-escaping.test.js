@@ -200,5 +200,5 @@ test('svg blocks carry no CSS; the sealed html document is built by the hub with
 });
 
 test('service worker cache bumped so phones pick up the new page', () => {
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v57';"));
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v58';"));
 });

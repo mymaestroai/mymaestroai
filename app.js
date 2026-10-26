@@ -49,6 +49,8 @@
       paintReadinessBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
       paintUpdateCard().catch(() => {});
+      paintVersionLabel().catch(() => {});
+      if (!window.__hvTimer) window.__hvTimer = setInterval(() => paintVersionLabel().catch(() => {}), 5 * 60 * 1000);
       if (!window.__ucTimer) window.__ucTimer = setInterval(() => paintUpdateCard().catch(() => {}), 30 * 60 * 1000);
       return window.hubMe;
     }
@@ -10680,6 +10682,114 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try { return { kind: new URL(u).origin === String(origin || '') ? 'same' : 'external', url: u }; } catch { return null; }
     }
     // ── safe-text helpers (end) ──
+
+    // Shared verbatim with lib/ui-version-label.js and mobile.js (test/ui-version-label.test.js keeps the three in step).
+    // ── version-label helpers (begin) ──
+    function versionLabel(v) {
+      if (!v || !v.version) return null;
+      const sha = v.commit ? String(v.commit).slice(0, 12) : '';
+      if (v.channel === 'stable') return { text: `v${v.version} · stable`, kind: 'stable', title: `My Maestro AI ${v.version}, stable channel` };
+      if (v.channel === 'experimental') return { text: `v${v.version}-dev${sha ? ` · ${sha}` : ''}`, kind: 'experimental', title: `My Maestro AI ${v.version}, experimental channel (branch ${v.branch || 'dev'})${sha ? `, commit ${sha}` : ''}` };
+      const where = v.branch || 'no branch';
+      return { text: `v${v.version} · ${where}${sha ? ` · ${sha}` : ''}`, kind: 'other', title: `My Maestro AI ${v.version}, branch ${where}${sha ? `, commit ${sha}` : ''}` };
+    }
+    function updateStatusText(s) {
+      if (!s || typeof s !== 'object') return null;
+      if (s.enabled === false) return 'Check off';
+      if (s.available) {
+        if (s.latestVersion && s.latestVersion !== s.currentVersion) return `${s.latestVersion} available`;
+        const n = Number(s.behind) || 0;
+        return n > 0 ? `${n} new change${n === 1 ? '' : 's'} available` : 'Update available';
+      }
+      if (s.error) return `Check failed: ${s.error}`;
+      if (s.checking) return 'Checking…';
+      return s.checkedAt ? 'Up to date' : 'Not checked yet';
+    }
+    function versionDetailsText(v, u, ua) {
+      v = v || {};
+      const when = (t) => { const d = new Date(t); return t && !isNaN(d) ? `${d.toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'unknown'; };
+      const channel = v.channel ? `${v.channel}${v.branch ? ` (branch ${v.branch})` : ''}` : (v.branch ? `branch ${v.branch}` : 'unknown');
+      const lines = [
+        `My Maestro AI ${v.version || 'unknown'}`,
+        `Channel: ${channel}`,
+        `Commit: ${v.commit || 'unknown'}${v.commitDate ? ` (${v.commitDate})` : ''}`,
+        `Hub started: ${when(v.startedAt)}`,
+        `Node.js: ${v.node || 'unknown'}`,
+        `Restart pending: ${v.restartPending ? 'yes (code on disk is newer than the running hub)' : 'no'}`,
+      ];
+      const up = updateStatusText(u);
+      if (up) lines.push(`Update: ${up}`);
+      if (ua) lines.push(`Browser: ${ua}`);
+      return lines.join('\n');
+    }
+    // ── version-label helpers (end) ──
+
+    // ── Version label and About box (GET /api/version, lib/hub-map versionInfo). The dim line under the title shows the
+    // version and channel (experimental and other branches in their own colour, plus a dot while a restart is pending);
+    // clicking it, or "About My Maestro AI" in the ⋯ menu, opens the About box. ──
+    let hubVersion = null;
+    async function paintVersionLabel() {
+      const el = document.getElementById('hub-version');
+      let v;
+      try { const r = await fetch('/api/version', { credentials: 'include' }); if (!r.ok) return hubVersion; v = await r.json(); } catch { return hubVersion; }
+      hubVersion = v;
+      const l = versionLabel(v);
+      if (!el) return v;
+      if (!l) { el.hidden = true; return v; }
+      el.className = `hub-version ${l.kind}`;
+      el.innerHTML = `<span class="hv-text">${escapeHtml(l.text)}</span>${v.restartPending ? '<span class="hv-dot" title="Restart pending: code on disk is newer than the running hub"></span>' : ''}`;
+      el.title = v.restartPending ? 'Restart pending: code on disk is newer than the running hub. Click for details.' : `${l.title}. Click for details.`;
+      el.setAttribute('aria-label', `${l.text}${v.restartPending ? ', restart pending' : ''}: about this hub`);
+      el.hidden = false;
+      return v;
+    }
+    // The update line is for admins (the update check is an admin route); a hub with no accounts is its owner's alone.
+    async function aboutUpdateStatus() {
+      if (window.hubMe && !window.hubMe.isAdmin) return null;
+      try { const r = await fetch('/api/update-check', { credentials: 'include' }); if (!r.ok) return null; ucLast = await r.json(); return ucLast; } catch { return null; }
+    }
+    async function openAboutDialog() {
+      document.getElementById('about-overlay')?.remove();
+      const overlay = document.createElement('div');
+      overlay.className = 'question-overlay';
+      overlay.id = 'about-overlay';
+      overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+      overlay.innerHTML = `
+        <div class="question-modal about-modal" role="dialog" aria-modal="true" aria-labelledby="about-title">
+          <h3 id="about-title">About My Maestro AI</h3>
+          <div id="about-body" class="about-body">Loading…</div>
+          <div class="about-actions"><button class="sec-btn" id="about-copy" disabled>Copy details</button><button class="sec-btn" id="about-close">Close</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#about-close').onclick = () => overlay.remove();
+      overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+      overlay.querySelector('#about-close').focus();
+      const [v, u] = await Promise.all([paintVersionLabel(), aboutUpdateStatus()]);
+      const body = document.getElementById('about-body');
+      if (!body) return;   // closed meanwhile
+      if (!v) { body.textContent = 'Could not read the version from the hub.'; return; }
+      const l = versionLabel(v) || { kind: 'other' };
+      const started = v.startedAt ? new Date(v.startedAt) : null;
+      const row = (k, val) => `<div class="about-k">${k}</div><div class="about-v">${val}</div>`;
+      const up = updateStatusText(u);
+      const upBtn = u && u.available ? (u.blocked
+        ? '<button class="sec-btn" id="about-update" data-act="details">Details…</button>'
+        : '<button class="sec-btn about-primary" id="about-update" data-act="card">Update…</button>') : '';
+      body.innerHTML = `<div class="about-grid">
+        ${row('Version', `${escapeHtml(v.version || 'unknown')} <span class="hub-version ${l.kind} about-chip">${escapeHtml(v.channel || v.branch || 'no branch')}</span>`)}
+        ${row('Branch', escapeHtml(v.branch || '—'))}
+        ${row('Commit', `<code>${escapeHtml(v.commit || '—')}</code>${v.commitDate ? ` · ${escapeHtml(v.commitDate)}` : ''}`)}
+        ${row('Hub started', started && !isNaN(started) ? escapeHtml(started.toLocaleString()) : '—')}
+        ${v.restartPending ? row('Restart', '<span class="about-warn"><span class="hv-dot"></span>Restart pending: code on disk is newer than the running hub</span>') : ''}
+        ${row('Node.js', escapeHtml(v.node || '—'))}
+        ${up ? row('Updates', `${escapeHtml(up)}${upBtn ? ` ${upBtn}` : ''}`) : ''}
+      </div>`;
+      const ub = document.getElementById('about-update');
+      if (ub) ub.onclick = () => { overlay.remove(); if (ub.dataset.act === 'card') showUpdateCard(); else openGitSync(); };
+      const copy = document.getElementById('about-copy');
+      copy.disabled = false;
+      copy.onclick = () => filesCopy(versionDetailsText(v, u, navigator.userAgent), copy);
+    }
 
     // A markdown image: same-origin, data: and blob: sources are shown inline; any other host is shown as a
     // link with the alt text and the host, never fetched (an off-site image is a zero-click beacon that can

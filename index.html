@@ -132,6 +132,28 @@
     }
     .sidebar-header-text h1 { font-size: 0.85rem; margin-bottom: 2px; font-weight: 600; letter-spacing: -0.01em; }
     .sidebar-header-text p { color: var(--text-tertiary); font-size: 0.65rem; letter-spacing: 0.02em; }
+    /* Version label under the title (app.js paintVersionLabel) and the About box (openAboutDialog) */
+    .hub-version { display: flex; align-items: center; gap: 5px; margin: 0 0 2px; padding: 0; background: none; border: 0; color: var(--text-tertiary); font: inherit; font-size: 0.65rem; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; cursor: pointer; text-align: left; }
+    .hub-version[hidden] { display: none; }
+    .hub-version:hover .hv-text, .hub-version:focus-visible .hv-text { text-decoration: underline; }
+    .hub-version:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+    .hub-version.experimental { color: var(--purple); }
+    .hub-version.other { color: var(--blue); }
+    .hv-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--warning); flex: none; }
+    .about-modal { max-width: 460px; }
+    .about-grid { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; font-size: 0.85rem; align-items: baseline; }
+    .about-k { color: var(--text-dim); }
+    .about-v { color: var(--text); word-break: break-word; }
+    .about-v code { font-size: 0.8rem; }
+    .about-chip { display: inline-flex; margin: 0 0 0 6px; padding: 1px 7px; border: 1px solid currentColor; border-radius: 8px; font-size: 0.68rem; cursor: default; }
+    .about-chip.stable { color: var(--success); }
+    .about-warn { display: inline-flex; align-items: center; gap: 6px; color: var(--warning); }
+    .about-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 18px; }
+    .about-modal .sec-btn { padding: 6px 14px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 0.8rem; }
+    .about-modal .sec-btn:hover { border-color: var(--accent); }
+    .about-modal .sec-btn:disabled { opacity: 0.5; cursor: default; }
+    .about-v .sec-btn { margin-left: 6px; padding: 3px 10px; }
+    .about-modal .about-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     
     /* Tabs */
     .tabs { display: flex; border-bottom: 1px solid var(--border); }
@@ -2202,6 +2224,7 @@
     <div class="sidebar-header">
       <div class="sidebar-header-text">
         <h1>🟦 My Maestro AI</h1>
+        <button type="button" id="hub-version" class="hub-version" hidden onclick="openAboutDialog()"></button>
         <p>Multi-agent chat · Multi-provider LLM</p>
         <span id="agents-working" onclick="toggleBusyFilter()" title="Click to show only the agents that are working"></span><span id="spend-today" onclick="openSettingsAt('st-spend-section')" title="API-equivalent spend today; click for caps"></span><span id="credit-meter" onclick="openSettingsAt('st-spend-section')"></span><span id="update-chip" onclick="showUpdateCard()" title="An update is ready"></span><span id="plan-warn" onclick="openPlanSettings()"></span>
       </div>
@@ -2371,6 +2394,7 @@
         <div class="more-wrap" id="more-wrap">
           <button id="more-btn" class="header-btn" aria-label="More" title="More options" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" onclick="toggleMoreMenu()">⋯<span class="more-badge" id="more-badge">Advanced</span></button>
           <div id="more-menu" class="more-menu" role="menu" aria-label="More options">
+            <button id="about-btn" class="more-item" role="menuitem" title="Version, channel, commit and update status of this hub" onclick="closeMoreMenu(); openAboutDialog()">ℹ️ About My Maestro AI</button>
             <button id="comms-btn" class="more-item" role="menuitem" title="Messaging channels (Telegram etc)" onclick="closeMoreMenu(); openCommsPanel()">💬 Messaging</button>
             <button id="wallet-btn" class="more-item" role="menuitem" title="Trading wallets (on-chain)" onclick="closeMoreMenu(); openWalletPanel()">👛 Wallets</button>
             <button id="dream-btn" class="more-item" role="menuitem" title="Agent Dreaming — consolidate learnings" onclick="closeMoreMenu(); startDream()">💤 Dream (consolidate learnings)</button>

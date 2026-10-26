@@ -152,6 +152,47 @@ function imageSrcKind(src, origin) {
 }
 // ── safe-text helpers (end) ──
 
+// Shared verbatim with lib/ui-version-label.js and app.js (test/ui-version-label.test.js keeps the three in step).
+// ── version-label helpers (begin) ──
+function versionLabel(v) {
+  if (!v || !v.version) return null;
+  const sha = v.commit ? String(v.commit).slice(0, 12) : '';
+  if (v.channel === 'stable') return { text: `v${v.version} · stable`, kind: 'stable', title: `My Maestro AI ${v.version}, stable channel` };
+  if (v.channel === 'experimental') return { text: `v${v.version}-dev${sha ? ` · ${sha}` : ''}`, kind: 'experimental', title: `My Maestro AI ${v.version}, experimental channel (branch ${v.branch || 'dev'})${sha ? `, commit ${sha}` : ''}` };
+  const where = v.branch || 'no branch';
+  return { text: `v${v.version} · ${where}${sha ? ` · ${sha}` : ''}`, kind: 'other', title: `My Maestro AI ${v.version}, branch ${where}${sha ? `, commit ${sha}` : ''}` };
+}
+function updateStatusText(s) {
+  if (!s || typeof s !== 'object') return null;
+  if (s.enabled === false) return 'Check off';
+  if (s.available) {
+    if (s.latestVersion && s.latestVersion !== s.currentVersion) return `${s.latestVersion} available`;
+    const n = Number(s.behind) || 0;
+    return n > 0 ? `${n} new change${n === 1 ? '' : 's'} available` : 'Update available';
+  }
+  if (s.error) return `Check failed: ${s.error}`;
+  if (s.checking) return 'Checking…';
+  return s.checkedAt ? 'Up to date' : 'Not checked yet';
+}
+function versionDetailsText(v, u, ua) {
+  v = v || {};
+  const when = (t) => { const d = new Date(t); return t && !isNaN(d) ? `${d.toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'unknown'; };
+  const channel = v.channel ? `${v.channel}${v.branch ? ` (branch ${v.branch})` : ''}` : (v.branch ? `branch ${v.branch}` : 'unknown');
+  const lines = [
+    `My Maestro AI ${v.version || 'unknown'}`,
+    `Channel: ${channel}`,
+    `Commit: ${v.commit || 'unknown'}${v.commitDate ? ` (${v.commitDate})` : ''}`,
+    `Hub started: ${when(v.startedAt)}`,
+    `Node.js: ${v.node || 'unknown'}`,
+    `Restart pending: ${v.restartPending ? 'yes (code on disk is newer than the running hub)' : 'no'}`,
+  ];
+  const up = updateStatusText(u);
+  if (up) lines.push(`Update: ${up}`);
+  if (ua) lines.push(`Browser: ${ua}`);
+  return lines.join('\n');
+}
+// ── version-label helpers (end) ──
+
 // A markdown image: same-origin, data: and blob: sources are shown inline; any other host becomes a link
 // with the alt text and the host, never fetched (an off-site image is a zero-click beacon). Unsafe: blocked.
 function imageHtml(src, alt) {
@@ -3315,6 +3356,51 @@ function onUpdateChoice(e) {
   else if (b.dataset.uc === 'details') { const d = $('update-sheet'); d.dataset.uc = ''; openUpdateSheet(); }
 }
 
+// ── Version label and About (GET /api/version, lib/hub-map versionInfo): the ⋮ menu's first item carries the label
+// (experimental and other branches in their own colour, a dot while a restart is pending) and opens the About sheet. ──
+let hubVersion = null;
+async function paintVersionLabel() {
+  try { const r = await api('/api/version'); if (r.ok) hubVersion = await r.json(); } catch { /* keep the last one */ }
+  const el = $('menu-version'), l = versionLabel(hubVersion);
+  if (!el) return hubVersion;
+  el.className = l ? `menu-version ${l.kind}` : 'menu-version';
+  el.innerHTML = l ? `${esc(l.text)}${hubVersion.restartPending ? ' <span class="hv-dot" title="Restart pending: code on disk is newer than the running hub"></span>' : ''}` : '';
+  return hubVersion;
+}
+async function openAboutSheet() {
+  $('menu').classList.remove('open');
+  const d = $('about-sheet');
+  d.innerHTML = '<h3>About My Maestro AI</h3><p>Loading…</p><div class="btns"><button data-ab="close">Close</button></div>';
+  if (!d.open) d.showModal();
+  const [v, u] = await Promise.all([paintVersionLabel(), isAdmin() ? refreshUpdateCheck() : Promise.resolve(null)]);
+  if (!d.open) return;
+  if (!v) { d.innerHTML = '<h3>About My Maestro AI</h3><p>Could not read the version from the hub.</p><div class="btns"><button data-ab="close">Close</button></div>'; return; }
+  const l = versionLabel(v) || { kind: 'other' };
+  const started = v.startedAt ? new Date(v.startedAt) : null;
+  const up = updateStatusText(u);
+  const row = (k, val) => `<dt>${k}</dt><dd>${val}</dd>`;
+  d.innerHTML = `<h3>About My Maestro AI</h3><dl class="about-grid">
+    ${row('Version', `${esc(v.version || 'unknown')} <span class="menu-version ${l.kind} about-chip">${esc(v.channel || v.branch || 'no branch')}</span>`)}
+    ${row('Branch', esc(v.branch || '—'))}
+    ${row('Commit', `<code>${esc(v.commit || '—')}</code>${v.commitDate ? ` · ${esc(v.commitDate)}` : ''}`)}
+    ${row('Started', started && !isNaN(started) ? esc(started.toLocaleString()) : '—')}
+    ${v.restartPending ? row('Restart', '<span class="about-warn"><span class="hv-dot"></span> pending: code on disk is newer than the running hub</span>') : ''}
+    ${row('Node.js', esc(v.node || '—'))}
+    ${up ? row('Updates', esc(up)) : ''}
+  </dl><div class="btns">${u && u.available ? '<button data-ab="update">Update…</button>' : ''}<button data-ab="copy">Copy details</button><button class="go accent" data-ab="close">Close</button></div>`;
+  d._about = { v, u };
+}
+function onAboutClick(e) {
+  const d = $('about-sheet');
+  if (e.target === d) { d.close(); return; }   // a tap on the backdrop
+  const b = e.target.closest('[data-ab]');
+  if (!b) return;
+  const { v, u } = d._about || {};
+  if (b.dataset.ab === 'copy') copyText(versionDetailsText(v, u, navigator.userAgent));
+  else if (b.dataset.ab === 'update') { d.close(); openUpdatePrompt(); }
+  else d.close();
+}
+
 // ── Restart the hub (same POST /api/restart the desktop button uses; the
 // service manager brings the hub back, so the page only has to wait) ─────────
 function confirmRestart() {
@@ -3870,6 +3956,8 @@ function wire() {
 
   $('chat-menu-btn').addEventListener('click', toggleMenu);
   $('agents-menu-btn').addEventListener('click', toggleMenu);
+  $('menu-about').addEventListener('click', (e) => { e.stopPropagation(); openAboutSheet(); });
+  $('about-sheet').addEventListener('click', onAboutClick);
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -4002,6 +4090,7 @@ function toggleMenu(e) {
   menu.classList.toggle('no-chat', !$('screen-chat').classList.contains('active'));
   menu.classList.toggle('open');
   if (menu.classList.contains('open')) paintMenuCredit();
+  if (menu.classList.contains('open')) paintVersionLabel();
 }
 
 // Monthly API credit (set on the desktop, Settings → Spend): this period's spend through the hub against it.
@@ -4550,6 +4639,7 @@ async function init() {
   const fromUpdatePush = new URLSearchParams(location.search).get('update') === '1';
   if (fromUpdatePush) { const u = new URL(location.href); u.searchParams.delete('update'); window.history.replaceState(window.history.state, '', u.pathname + u.search + u.hash); }
   refreshUpdateCheck().then(() => { if (fromUpdatePush) openUpdatePrompt(); });
+  paintVersionLabel();
   setInterval(refreshUpdateCheck, 30 * 60 * 1000);
 }
 

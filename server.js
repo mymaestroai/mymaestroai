@@ -2138,6 +2138,13 @@ async function handleHttpRequest(req, res) {
       }
     }
 
+    // ── Version (lib/hub-map versionInfo): the sidebar's version label and the About box. Any signed-in user (lib/access
+    // SESSION_EXACT); not public, so a visitor cannot read which version (and so which known fixes) a hub has. ──
+    if (pathname === '/api/version' && req.method === 'GET') {
+      try { return jsonResponse(res, 200, require('./lib/hub-map').getHubMap().versionInfo()); }
+      catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+
     // ── Update check (lib/update-check.js): the daily look at GitHub behind the "Update available" card. Admin
     // routes (lib/access classes every /api path not listed elsewhere as admin-only). ──
     if (pathname === '/api/update-check' && req.method === 'GET') {
