@@ -37,7 +37,7 @@ test('desktop: steps from the hub view interleave text and tool calls like the o
     [' Found it. Now the config.', ['Read', 'Grep']],
     [' Done.', []],
   ]);
-  assert.deepStrictEqual(steps[0].tools[0], { tool: 'Bash', input: 'tail log', result: 'ok', status: 'done', startedAt: Date.parse('2026-10-17T10:00:00Z'), durationMs: 2000 });
+  assert.deepStrictEqual(steps[0].tools[0], { id: 'a1', tool: 'Bash', input: 'tail log', result: 'ok', status: 'done', startedAt: Date.parse('2026-10-17T10:00:00Z'), durationMs: 2000 });
   assert.deepStrictEqual([steps[1].tools[0].status, steps[1].tools[1].status], ['running', 'error']);
   // an older hub (no offsets): the tool calls go first, then the text, as before
   assert.deepStrictEqual(turnSteps({ items: new Map([['x', { tool: 'Bash', done: true, output: '' }]]) }, 'Hi.').map(s => [s.text, s.tools.length]), [['', 1], ['Hi.', 0]]);
