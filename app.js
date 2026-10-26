@@ -540,7 +540,14 @@
     }
     async function filesCopy(text, btn) {
       let ok = false;
-      try { await navigator.clipboard.writeText(text); ok = true; } catch (e) { /* no clipboard */ }
+      try { await navigator.clipboard.writeText(text); ok = true; } catch (e) { /* no clipboard: an http:// address on the home network */ }
+      if (!ok) {   // the older way (as copyMessageText); the textarea goes inside the button's dialog, so it can be selected there
+        const back = document.activeElement;
+        const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.tabIndex = -1; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        ((btn && btn.closest('dialog, .question-overlay')) || document.body).appendChild(ta);
+        ta.select(); try { ok = document.execCommand('copy'); } catch { ok = false; } ta.remove();
+        if (back && back.isConnected && typeof back.focus === 'function') { try { back.focus({ preventScroll: true }); } catch {} }
+      }
       if (btn) { const old = btn.textContent; btn.textContent = ok ? 'Copied' : 'Copy failed'; setTimeout(() => { btn.textContent = old; }, 1500); }
       return ok;
     }
@@ -10715,7 +10722,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         `Commit: ${v.commit || 'unknown'}${v.commitDate ? ` (${v.commitDate})` : ''}`,
         `Hub started: ${when(v.startedAt)}`,
         `Node.js: ${v.node || 'unknown'}`,
-        `Restart pending: ${v.restartPending ? 'yes (code on disk is newer than the running hub)' : 'no'}`,
+        `Restart pending: ${v.restartPending == null ? 'unknown' : v.restartPending ? 'yes (code on disk is newer than the running hub)' : 'no'}`,
       ];
       const up = updateStatusText(u);
       if (up) lines.push(`Update: ${up}`);
@@ -10749,11 +10756,32 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try { const r = await fetch('/api/update-check', { credentials: 'include' }); if (!r.ok) return null; ucLast = await r.json(); return ucLast; } catch { return null; }
     }
     async function openAboutDialog() {
-      document.getElementById('about-overlay')?.remove();
+      const earlier = document.getElementById('about-overlay');
+      const opener = earlier ? earlier._opener : document.activeElement;   // where focus goes back on close
+      earlier?.remove();
       const overlay = document.createElement('div');
       overlay.className = 'question-overlay';
       overlay.id = 'about-overlay';
-      overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+      overlay._opener = opener;
+      const onKey = (e) => {
+        if (!overlay.isConnected) { document.removeEventListener('keydown', onKey, true); return; }
+        const t = e.target;
+        if (t && t.closest && !overlay.contains(t) && t.closest('[class*="overlay"], dialog, [role="dialog"], [aria-modal="true"]')) return;   // any other box or panel has its own keys
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+        if (e.key !== 'Tab') return;
+        const f = [...overlay.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')];
+        if (!f.length) return;
+        e.preventDefault();
+        const i = f.indexOf(document.activeElement);
+        f[i < 0 ? 0 : (i + (e.shiftKey ? -1 : 1) + f.length) % f.length].focus();
+      };
+      const close = () => {
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        const back = opener && opener.isConnected && opener.offsetParent !== null ? opener : document.getElementById('more-btn');   // the ⋯ menu has closed
+        if (back && typeof back.focus === 'function') { try { back.focus({ preventScroll: true }); } catch {} }
+      };
+      overlay.onclick = (e) => { if (e.target === overlay) close(); };
       overlay.innerHTML = `
         <div class="question-modal about-modal" role="dialog" aria-modal="true" aria-labelledby="about-title">
           <h3 id="about-title">About My Maestro AI</h3>
@@ -10761,12 +10789,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           <div class="about-actions"><button class="sec-btn" id="about-copy" disabled>Copy details</button><button class="sec-btn" id="about-close">Close</button></div>
         </div>`;
       document.body.appendChild(overlay);
-      overlay.querySelector('#about-close').onclick = () => overlay.remove();
-      overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+      overlay.querySelector('#about-close').onclick = close;
+      // Esc closes it; Tab and Shift+Tab go round its buttons and never leave it. Held on the page (capture), so the keys
+      // reach it wherever focus is.
+      document.addEventListener('keydown', onKey, true);
       overlay.querySelector('#about-close').focus();
       const [v, u] = await Promise.all([paintVersionLabel(), aboutUpdateStatus()]);
-      const body = document.getElementById('about-body');
-      if (!body) return;   // closed meanwhile
+      if (!overlay.isConnected) return;   // closed, or opened again, meanwhile
+      const body = overlay.querySelector('#about-body');
       if (!v) { body.textContent = 'Could not read the version from the hub.'; return; }
       const l = versionLabel(v) || { kind: 'other' };
       const started = v.startedAt ? new Date(v.startedAt) : null;
@@ -10784,9 +10814,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         ${row('Node.js', escapeHtml(v.node || '—'))}
         ${up ? row('Updates', `${escapeHtml(up)}${upBtn ? ` ${upBtn}` : ''}`) : ''}
       </div>`;
-      const ub = document.getElementById('about-update');
-      if (ub) ub.onclick = () => { overlay.remove(); if (ub.dataset.act === 'card') showUpdateCard(); else openGitSync(); };
-      const copy = document.getElementById('about-copy');
+      const ub = overlay.querySelector('#about-update');
+      if (ub) ub.onclick = () => { close(); if (ub.dataset.act === 'card') showUpdateCard(); else openGitSync(); };
+      const copy = overlay.querySelector('#about-copy');
       copy.disabled = false;
       copy.onclick = () => filesCopy(versionDetailsText(v, u, navigator.userAgent), copy);
     }

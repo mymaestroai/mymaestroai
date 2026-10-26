@@ -2142,7 +2142,7 @@ async function handleHttpRequest(req, res) {
     // SESSION_EXACT); not public, so a visitor cannot read which version (and so which known fixes) a hub has. ──
     if (pathname === '/api/version' && req.method === 'GET') {
       try { return jsonResponse(res, 200, require('./lib/hub-map').getHubMap().versionInfo()); }
-      catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+      catch (e) { console.warn('[version] could not read the version:', e.message); return jsonResponse(res, 500, { error: 'Could not read the version' }); }   // no paths in the answer
     }
 
     // ── Update check (lib/update-check.js): the daily look at GitHub behind the "Update available" card. Admin

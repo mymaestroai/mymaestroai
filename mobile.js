@@ -184,7 +184,7 @@ function versionDetailsText(v, u, ua) {
     `Commit: ${v.commit || 'unknown'}${v.commitDate ? ` (${v.commitDate})` : ''}`,
     `Hub started: ${when(v.startedAt)}`,
     `Node.js: ${v.node || 'unknown'}`,
-    `Restart pending: ${v.restartPending ? 'yes (code on disk is newer than the running hub)' : 'no'}`,
+    `Restart pending: ${v.restartPending == null ? 'unknown' : v.restartPending ? 'yes (code on disk is newer than the running hub)' : 'no'}`,
   ];
   const up = updateStatusText(u);
   if (up) lines.push(`Update: ${up}`);
@@ -1431,7 +1431,10 @@ function legacyCopy(text) {
   ta.setAttribute('readonly', '');
   ta.style.position = 'fixed';
   ta.style.opacity = '0';
-  document.body.appendChild(ta);
+  // Inside the open dialog, if any: while a dialog is modal, everything outside it is inert and cannot be selected.
+  let host = null;
+  try { host = document.querySelector('dialog:modal'); } catch { /* a browser without :modal */ }
+  (host || document.querySelector('dialog[open]') || document.body).appendChild(ta);
   ta.select();
   let ok = false;
   try { ok = document.execCommand('copy'); } catch { ok = false; }
@@ -3370,10 +3373,12 @@ async function paintVersionLabel() {
 async function openAboutSheet() {
   $('menu').classList.remove('open');
   const d = $('about-sheet');
+  const opening = {};   // this opening: one still loading from an earlier opening must not fill it
+  d._opening = opening;
   d.innerHTML = '<h3>About My Maestro AI</h3><p>Loading…</p><div class="btns"><button data-ab="close">Close</button></div>';
   if (!d.open) d.showModal();
   const [v, u] = await Promise.all([paintVersionLabel(), isAdmin() ? refreshUpdateCheck() : Promise.resolve(null)]);
-  if (!d.open) return;
+  if (!d.open || d._opening !== opening) return;
   if (!v) { d.innerHTML = '<h3>About My Maestro AI</h3><p>Could not read the version from the hub.</p><div class="btns"><button data-ab="close">Close</button></div>'; return; }
   const l = versionLabel(v) || { kind: 'other' };
   const started = v.startedAt ? new Date(v.startedAt) : null;
