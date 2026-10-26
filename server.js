@@ -2871,6 +2871,13 @@ try { fs.chmodSync(path.join(__dirname, 'data'), 0o700); } catch {}
 try { require('./lib/push').getPush().start(require('./lib/hub-events').events); } catch (e) { console.error('[push] not started:', e.message); }
 
 server.listen(PORT, HOST, () => {
+  // Maestro is the lead agent. New installs are seeded with the mark; an older install that marks no lead (and so
+  // counted every admin-side primary agent as one) gets maestro marked once (lib/agents ensureMaestroLead). It runs
+  // here, once this process owns the port, so a second copy started on the same data never gets this far; it is
+  // synchronous, so no request is handled before it finishes.
+  try {
+    if (require('./lib/agents').ensureMaestroLead().changed) console.log('[agents] marked maestro as the lead agent (no agent was marked)');
+  } catch (e) { console.warn('[agents] could not mark the lead agent:', e.message); }
   console.log(`\n  My Maestro AI v${require('./package.json').version} (multi-provider)`);
   console.log(`  Server:   http://${URL_HOST}:${PORT}  (${BIND.exposed ? 'NETWORK-EXPOSED' : 'localhost only'})`);
   if (BIND.warning) console.warn(`  WARNING:  ${BIND.warning}`);

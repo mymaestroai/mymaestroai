@@ -70,3 +70,42 @@ test('no flag: a member\'s own primary assistant is never a lead by default (rev
   // a flagged lead is a lead whoever owns it: the flag is the owner's explicit choice
   assert.deepStrictEqual(leadAgentNames([{ name: 'sam_doc', category: 'primary', owner: 'u_x', lead: true }]), ['sam_doc']);
 });
+
+test('shouldMarkMaestroLead: only when no agent is marked and maestro is the owner\'s', () => {
+  const { shouldMarkMaestroLead } = require('../lib/agents');
+  const admins = new Set(['u_admin']);
+  assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', category: 'primary' }, { name: 'doc', category: 'primary' }], admins), true, 'an install that marks no lead');
+  assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', category: 'primary', owner: 'u_admin' }], admins), true, 'an admin owns maestro');
+  assert.strictEqual(shouldMarkMaestroLead(HUB, admins), false, 'maestro is already marked');
+  assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro' }, { name: 'doc', lead: true }], admins), false, 'the owner marked another agent');
+  assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', owner: 'u_member' }], admins), false, "a member's own maestro");
+  assert.strictEqual(shouldMarkMaestroLead(UNFLAGGED, admins), false, 'no maestro on this install');
+  assert.strictEqual(shouldMarkMaestroLead(null, admins), false);
+  assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', lead: 'yes' }], admins), true, 'only an exact true counts as a mark');
+});
+
+test('new installs: the seed marks maestro as the lead, and server.js runs the one-time check at start', () => {
+  const fs = require('fs'); const path = require('path');
+  const seed = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'agents.example.json'), 'utf8'));
+  assert.strictEqual(seed.find(a => a.name === 'maestro').lead, true);
+  assert.deepStrictEqual(leadAgentNames(seed), ['maestro']);
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(server, /require\('\.\/lib\/agents'\)\.ensureMaestroLead\(\)/);
+});
+
+test('shouldMarkMaestroLead never promotes a repurposed maestro, and respects an explicit lead: false', () => {
+  const { shouldMarkMaestroLead } = require('../lib/agents');
+  const admins = new Set();
+  assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', category: 'worker' }, { name: 'doc', category: 'primary' }], admins), false, 'a worker maestro next to primary agents was never a lead');
+  assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', category: 'specialist' }], admins), true, 'no primary agents: maestro is already the lead by its name');
+  assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', category: 'primary', lead: false }], admins), false, "the owner's explicit choice");
+});
+
+test('server.js runs the lead check inside the listen callback, so a second copy that cannot get the port never runs it', () => {
+  const fs = require('fs'); const path = require('path');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const listen = server.indexOf('server.listen(PORT, HOST, () => {');
+  const call = server.indexOf("require('./lib/agents').ensureMaestroLead()");
+  assert.ok(listen > 0 && call > listen, 'the check comes after the port is bound');
+  assert.ok(!server.slice(0, listen).includes('ensureMaestroLead'), 'and nowhere before it');
+});

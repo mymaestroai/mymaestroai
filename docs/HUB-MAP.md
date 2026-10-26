@@ -251,7 +251,7 @@ By default the hub listens on loopback only. The recommended way to reach it fro
 | `display`, `icon`, `blurb` | shown in the UI; the blurb is also what other agents see when choosing whom to consult |
 | `model` | model id with route prefix (section 1); change from the chat header picker, the agent page, or `POST /api/agents/<name>/model` |
 | `category` | `primary` (a person's main agents), `specialist`, `worker` (consultable helpers; a busy worker is replaced by a stand-in), `experimental` |
-| `lead` | the lead agent (Maestro): may schedule tasks for other agents |
+| `lead` | marks a lead agent: may schedule and manage other agents' tasks, is the default messaging route and gets the lead role in the command policy. New installs mark maestro; an install that marks no lead gets maestro marked once at start, if it is the owner's and already counted as a lead (lib/agents ensureMaestroLead; data/lead-check.json records the check) |
 | `owner`, `sharedWith` | member ownership and sharing (admins own "infra" agents) |
 | `policy` | `{ roots: [folders], overrides: { class: allow\|ask\|deny } }` folder grants and tool-class overrides (section 8.3) |
 | `tools` | `inherit` \| `client` \| `hub`: whose hands a Claude/Codex client agent uses (section 8.2) |
