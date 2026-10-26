@@ -3,6 +3,7 @@
     "name": "maestro",
     "model": "claude-sdk/default",
     "display": "Maestro",
-    "category": "primary"
+    "category": "primary",
+    "lead": true
   }
 ]

@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Maestro is the lead agent from the start.** New installs now mark Maestro as the lead agent (👑 Lead agent in its settings). Before, nothing was marked, and an install with no mark counts every primary agent you own as a lead, so agents you created later, such as a health organizer, also got the lead's extra rights, like managing other agents' schedules. The first time your Maestro starts after this update, if no agent is marked and Maestro is yours (not a member's) and already counts as a lead, Maestro is marked, and agents that were leads only because nothing was marked lose that. Tick 👑 Lead agent on any agent that should keep it. The check runs once and respects later changes: to choose a different lead, tick that agent before unticking Maestro, because with no agent ticked the old rule applies again and every primary agent you own counts as a lead.
+
 ## [5.7.3] - 2026-10-25
 
 Two security fixes since 5.7.2. Boxed agents' file tools now check where links lead before following them, and a way for chat messages to run script is closed. Press Update in your Maestro to get them; on 5.7.0 or later it also tells you when an update is ready.

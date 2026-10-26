@@ -303,3 +303,67 @@ test('createAgent: agents created at the same time are all kept (the personality
   assert.deepStrictEqual(dup.map(r => r.success).sort(), [false, true], 'the same name twice at once: one wins');
   assert.strictEqual(a.readJson().filter(x => x.name === 'four').length, 1);
 });
+
+test('ensureMaestroLead marks maestro once on an install that marks no lead, and leaves every other case alone', () => {
+  const a = load({ agents: [{ name: 'maestro', category: 'primary' }, { name: 'doc', category: 'primary' }] });
+  assert.ok(a.ag.leadAgentNames().includes('doc'), 'before: every primary agent counts as a lead');
+  assert.deepStrictEqual(a.ag.ensureMaestroLead(), { changed: true });
+  assert.strictEqual(a.readJson().find(x => x.name === 'maestro').lead, true, 'written to disk');
+  assert.deepStrictEqual(a.ag.leadAgentNames(), ['maestro'], 'after: maestro only (the cache was dropped)');
+  assert.strictEqual(a.ag.ensureMaestroLead().changed, false, 'the next start has nothing to do');
+
+  const b = load({ agents: [{ name: 'maestro', category: 'primary' }, { name: 'doc', category: 'primary', lead: true }] });
+  assert.strictEqual(b.ag.ensureMaestroLead().changed, false);
+  assert.strictEqual(b.readJson().find(x => x.name === 'maestro').lead, undefined, "the owner's own mark is respected");
+
+  const c = load({ agents: [{ name: 'maestro', category: 'primary', owner: 'u_member' }] });
+  assert.strictEqual(c.ag.ensureMaestroLead().changed, false, "a member's maestro is never made the lead");
+
+  const d = load({ agents: '{ not json' });
+  assert.strictEqual(d.ag.ensureMaestroLead().changed, false);
+  assert.strictEqual(fs.readFileSync(path.join(d.hub, 'data', 'agents.json'), 'utf8'), '{ not json', 'an unreadable agents.json is never rewritten');
+
+  const e = load();
+  assert.strictEqual(e.ag.ensureMaestroLead().changed, false, 'first run: the seed does it');
+});
+
+test('first run without a seed file: the default maestro is marked as the lead', () => {
+  const b = load();
+  assert.strictEqual(b.ag.getAgentsSync()[0].lead, true);
+  assert.strictEqual(b.readJson()[0].lead, true);
+});
+
+test('ensureMaestroLead runs once per install: an untick sticks, and a non-list agents.json is left alone for next time', () => {
+  const a = load({ agents: [{ name: 'maestro', category: 'primary' }, { name: 'doc', category: 'primary' }] });
+  assert.strictEqual(a.ag.ensureMaestroLead().changed, true);
+  const check = path.join(a.hub, 'data', 'lead-check.json');
+  assert.strictEqual(JSON.parse(fs.readFileSync(check, 'utf8')).changed, true, 'the check is recorded');
+  assert.strictEqual(fs.statSync(check).mode & 0o777, 0o600);
+  const unticked = a.readJson().map(x => { const y = { ...x }; delete y.lead; return y; });
+  fs.writeFileSync(path.join(a.hub, 'data', 'agents.json'), JSON.stringify(unticked));
+  assert.deepStrictEqual(a.ag.ensureMaestroLead(), { changed: false, reason: 'already checked' });
+  assert.strictEqual(a.readJson().find(x => x.name === 'maestro').lead, undefined, "the owner's untick sticks");
+
+  const b = load({ agents: '{"maestro": {}}' });
+  assert.strictEqual(b.ag.ensureMaestroLead().changed, false);
+  assert.strictEqual(fs.readFileSync(path.join(b.hub, 'data', 'agents.json'), 'utf8'), '{"maestro": {}}', 'a non-list file is never rewritten');
+  assert.ok(!fs.existsSync(path.join(b.hub, 'data', 'lead-check.json')), 'and is checked again next start');
+
+  const c = load({ agents: [{ name: 'maestro', category: 'worker' }, { name: 'doc', category: 'primary' }] });
+  assert.strictEqual(c.ag.ensureMaestroLead().changed, false, 'a repurposed maestro is not promoted');
+  assert.ok(fs.existsSync(path.join(c.hub, 'data', 'lead-check.json')), 'a no is recorded too');
+});
+
+test('ensureMaestroLead: when the marker cannot be written it warns, and the check simply runs again next start', () => {
+  const a = load({ agents: [{ name: 'maestro', category: 'primary', lead: true }] });
+  const data = path.join(a.hub, 'data');
+  const warns = []; const w = console.warn; console.warn = (...m) => warns.push(m.join(' '));
+  fs.chmodSync(data, 0o555);
+  try {
+    assert.deepStrictEqual(a.ag.ensureMaestroLead(), { changed: false });
+    assert.ok(!fs.existsSync(path.join(data, 'lead-check.json')), 'no marker');
+    assert.ok(warns.some(m => /could not record the lead check/.test(m)), 'a warning says so');
+  } finally { fs.chmodSync(data, 0o755); console.warn = w; }
+  assert.deepStrictEqual(a.ag.ensureMaestroLead(), { changed: false }, 'next start: checked again, now recorded');
+  assert.ok(fs.existsSync(path.join(data, 'lead-check.json')));
+});
