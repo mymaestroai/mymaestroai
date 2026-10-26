@@ -1501,7 +1501,7 @@ function paintReasoning(holder) {
       '<div class="rsn-grip" aria-hidden="true"></div>';
     box.querySelector('.rsn-body').style.height = `${rsnHeightPref()}px`;
     box.classList.add('closed');   // closed until the reader opens it
-    el.insertBefore(box, holder.bubble.body && holder.bubble.body.parentNode === el ? holder.bubble.body : el.firstChild);
+    el.insertBefore(box, el.querySelector(':scope > .tsn') || (holder.bubble.body && holder.bubble.body.parentNode === el ? holder.bubble.body : el.firstChild));
   }
   rsnHolders.set(box, holder);
   box.classList.toggle('live', r.live);
@@ -1603,6 +1603,7 @@ function onReasoningGrip(e) {
 
 function onMessagesClick(e) {
   if (onReasoningClick(e)) return;
+  if (onToolsClick(e)) return;
   const b = e.target.closest('.copy');
   if (!b) { onFeedClick(e); return; }
   e.stopPropagation();
@@ -1658,9 +1659,9 @@ function paintSaved(bubble, m) {
   feed.ended = true;
   for (const a of m.activity) {
     if (!a || !a.id) continue;
-    if (a.kind === 'tool') feed.items.set(a.id, { kind: 'tool', id: a.id, tool: a.tool || 'tool', status: 'done', summary: a.summary || '', output: a.output || '', open: false, el: null, at: a.at });
+    if (a.kind === 'tool') feed.items.set(a.id, { kind: 'tool', id: a.id, tool: a.tool || 'tool', status: 'done', summary: a.summary || '', output: a.output || '', open: false, el: null, at: a.at, t0: Date.parse(a.ts) || null, t1: Date.parse(a.doneTs) || null });
     else if (a.kind === 'worker') {
-      const w = { kind: 'worker', id: a.id, workerId: String(a.workerId || a.id), status: a.status === 'failed' ? 'failed' : 'completed', description: a.description || '', model: a.model || '', agent: a.agent || null, error: a.error || null, text: '', tools: [], last: null, open: false, el: null, at: a.at };
+      const w = { kind: 'worker', id: a.id, workerId: String(a.workerId || a.id), status: a.status === 'failed' ? 'failed' : 'completed', description: a.description || '', model: a.model || '', agent: a.agent || null, error: a.error || null, text: '', tools: [], last: null, open: false, el: null, at: a.at, t0: Date.parse(a.ts) || null, t1: Date.parse(a.doneTs) || null };
       feed.items.set(a.id, w); feed.byWorker.set(w.workerId, w);
     }
   }
@@ -1700,6 +1701,7 @@ function bubbleLive(rec) {
 async function openChat(name) {
   const a = agentByName(name);
   const same = current === name;
+  if (!same && tsnSheetFor) closeToolsSheet();   // the full screen of another chat's calls
   current = name;
   localStorage.setItem('hub-mobile-last', name);
   if (!same && $('files-sheet')?.open) filesRefresh(); // the Files sheet follows the open agent
@@ -1866,32 +1868,25 @@ function paintReply(holder, text, changed = null) {
   const full = holder.replyText || '';
   const blocks = replyBlocks(holder, full);
   const sig = blocks.map(b => (b.type === 'text' ? `t${b.from}` : `g${b.items.map(i => i.id).join(',')}`)).join('|');
-  const intact = holder._blocks && holder._sig === sig && holder._blocks.every(b => b.el && b.el.parentNode === body);
-  const feed = holder.feed ? holderFeed(holder) : null;
+  const intact = holder._blocks && holder._sig === sig && holder._blocks.every(b => b.type !== 'text' || (b.el && b.el.parentNode === body));
   if (!intact) {
     resetLayout(holder);
     for (const n of [...body.children]) if (n.classList.contains('seg') || n.classList.contains('feed')) n.remove();
     clearPlaceholder(body);
     const before = [...body.children].find(n => n.tagName === 'IMG') || null;   // attached images stay last
     for (const b of blocks) {
+      if (b.type !== 'text') continue;   // the calls go into the tool panel (paintTools)
       b.el = document.createElement('div');
-      if (b.type === 'text') b.el.className = 'seg';
-      else {
-        b.el.className = 'feed fgroup';
-        b.list = document.createElement('div'); b.list.className = 'feed-list'; b.el.appendChild(b.list);
-        if (feed) feedEls.set(b.el, feed);
-        for (const it of b.items) { it.el = null; paintFeedRow(feed, it, b.list); }
-      }
+      b.el.className = 'seg';
       body.insertBefore(b.el, before);
     }
     holder._blocks = blocks; holder._sig = sig;
   } else {
     // Same structure: keep the elements; the last text block grows with the stream.
-    blocks.forEach((b, i) => { const old = holder._blocks[i]; b.el = old.el; b.list = old.list; b.raw = old.raw; });
+    blocks.forEach((b, i) => { const old = holder._blocks[i]; b.el = old.el; b.raw = old.raw; });
     holder._blocks = blocks;
-    if (changed) paintFeedRow(feed, changed);
-    else for (const b of blocks) if (b.type === 'group') for (const it of b.items) paintFeedRow(feed, it, b.list);
   }
+  paintTools(holder, blocks, changed);
   for (const b of holder._blocks) {
     if (b.type !== 'text') continue;
     const piece = full.slice(b.from, b.to);
@@ -1930,20 +1925,22 @@ function feedUpsert(holder, item) {
     it = w;
   } else if (item.kind === 'tool') {
     it = feed.items.get(item.id);
-    if (!it) { it = { kind: 'tool', id: item.id, tool: 'tool', status: 'running', summary: '', output: '', open: false, el: null, at: placeOf(holder, feed, item) }; feed.items.set(item.id, it); }
+    if (!it) { it = { kind: 'tool', id: item.id, tool: 'tool', status: 'running', summary: '', output: '', open: false, el: null, at: placeOf(holder, feed, item), t0: Date.parse(item.ts) || Date.now(), t1: null }; feed.items.set(item.id, it); }
     if (item.tool) it.tool = String(item.tool);
     it.status = item.status === 'done' ? 'done' : 'running';
+    if (it.status === 'done' && !it.t1) it.t1 = Date.parse(item.doneTs) || Date.now();
     if (item.summary) it.summary = String(item.summary);
     if (item.output != null) it.output = typeof item.output === 'string' ? item.output : JSON.stringify(item.output);
   } else if (item.kind === 'worker') {
     const wid = String(item.workerId || item.id);
     it = feed.byWorker.get(wid);
     if (!it) {
-      it = { kind: 'worker', id: item.id, workerId: wid, status: 'running', description: '', model: '', agent: null, error: null, text: '', tools: [], last: null, open: false, el: null, at: placeOf(holder, feed, item) };
+      it = { kind: 'worker', id: item.id, workerId: wid, status: 'running', description: '', model: '', agent: null, error: null, text: '', tools: [], last: null, open: false, el: null, at: placeOf(holder, feed, item), t0: Date.parse(item.ts) || Date.now(), t1: null };
       feed.items.set(item.id, it);
       feed.byWorker.set(wid, it);
     }
     it.status = item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'running';
+    if (it.status !== 'running' && !it.t1) it.t1 = Date.parse(item.doneTs) || Date.now();
     if (item.description) it.description = String(item.description);
     if (item.model) it.model = String(item.model);
     if (item.agent) it.agent = String(item.agent);
@@ -1993,6 +1990,235 @@ function feedStatus(feed) {
 // every row when `it` is omitted (a bubble that was just built or rebuilt).
 function paintFeed(holder, it) {
   paintReply(holder, undefined, it || null);
+}
+
+// ── Tool panel: every tool call and worker of a reply in one panel under its reasoning panel ──────────────────────
+// Closed until tapped, so a reply that runs many tools no longer grows a row per call. The header updates in place:
+// the calls done, a red count of the failed ones, the time; while the reply works, a second line says what runs now.
+// Opened, one line per call (a tap shows its output); ⤢ shows every call with its output on the whole screen, and the
+// grip sets the height. The text the agent writes between calls stays in the reply (paintReply).
+const TSN_HEIGHT_KEY = 'hub-mobile-tools-height';
+const tsnHeightPref = () => { const h = Number(localStorage.getItem(TSN_HEIGHT_KEY)); return Number.isFinite(h) && h >= 60 ? h : 300; };
+const tsnHolders = new WeakMap();   // panel element -> holder
+let tsnTimer = 0;
+let tsnSheetFor = null;
+let tsnSheetReturn = null;
+
+function tsnDur(ms) {
+  if (ms < 1000) return ms < 100 ? '<0.1s' : `${(ms / 1000).toFixed(1)}s`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+function tsnFailed(it) {
+  return it.kind === 'worker' ? it.status === 'failed' : it.status === 'done' && /^(Error|⚠|✗)/.test(it.output || '');
+}
+// The time the calls took: the union of their intervals (calls side by side count once). Null unless every call has a
+// start and an end (a call cut off when the reply ended, or a reply saved by an older version, shows no total).
+function tsnSpan(items) {
+  if (!items.length || items.some(x => !x.t0 || !x.t1 || x.t1 < x.t0)) return null;
+  const iv = items.map(x => [x.t0, x.t1]).sort((a, b) => a[0] - b[0]);
+  let total = 0; let [s, e] = iv[0];
+  for (const [a, b] of iv.slice(1)) { if (a > e) { total += e - s; s = a; e = b; } else if (b > e) e = b; }
+  return total + (e - s);
+}
+function tsnModel(feed) {
+  const items = [...feed.items.values()];
+  const live = !feed.ended;
+  const running = live ? items.filter(x => x.status === 'running') : [];
+  return { items, live, running, done: items.filter(x => x.status !== 'running').length, failed: items.filter(tsnFailed).length, spanMs: tsnSpan(items) };
+}
+// The header's words: calls done (or running) while the reply works, the number of calls once it is over.
+function tsnSummary(m) {
+  const n = m.items.length;
+  if (!m.live) return `${n} call${n === 1 ? '' : 's'}`;
+  return m.done ? `${m.done} done` : `${m.running.length || n} running`;
+}
+function paintTsnHead(box, m) {
+  const q = (s) => box.querySelector(s);
+  const open = !box.classList.contains('closed');
+  q('.tsn-head').setAttribute('aria-expanded', String(open));
+  q('.tsn-chev').textContent = open ? '▾' : '▸';
+  const k = m.running.length ? 'run' : m.live ? 'wait' : 'done';
+  const st = q('.tsn-state');
+  if (st.dataset.k !== k) { st.dataset.k = k; st.className = `tsn-state ${k}`; st.textContent = k === 'done' ? '✓' : ''; }
+  q('.tsn-count').textContent = tsnSummary(m);
+  const f = q('.tsn-fail');
+  f.textContent = m.failed ? `${m.failed} failed` : '';
+  f.hidden = !m.failed;
+  const now = q('.tsn-now'), t = q('.tsn-time');
+  const cur = m.running[m.running.length - 1];
+  if (cur) {
+    const name = document.createElement('b');
+    let what;
+    if (cur.kind === 'tool') { name.textContent = cur.tool; what = cur.summary ? ` · ${clipText(cur.summary, 120)}` : ''; }
+    else {
+      name.textContent = `👷 ${workerName(cur)}`;
+      const lt = cur.tools[cur.tools.length - 1];
+      what = cur.last === 'tool' && lt ? ` · ${lt.tool}${lt.summary ? ` ${clipText(lt.summary, 80)}` : ''}` : ' · working…';
+    }
+    now.replaceChildren('now: ', name, `${what}${m.running.length > 1 ? `  +${m.running.length - 1}` : ''}`);
+    now.hidden = false;
+    if (cur.t0) {
+      t.dataset.started = String(cur.t0); t.textContent = tsnDur(Date.now() - cur.t0);
+      if (!tsnTimer) tsnTimer = setInterval(tsnTick, 1000);
+    } else { delete t.dataset.started; t.textContent = ''; }
+  } else {
+    now.hidden = true; now.textContent = '';
+    delete t.dataset.started;
+    t.textContent = !m.live && m.spanMs != null ? tsnDur(m.spanMs) : '';
+  }
+}
+function paintTools(holder, blocks, changed) {
+  const feed = holder.feed;
+  const el = holder.bubble.el;
+  let box = el.querySelector(':scope > .tsn');
+  if (!feed || !feed.items.size) { if (box) box.remove(); return; }
+  holderFeed(holder);
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'tsn closed';   // closed until the reader opens it
+    box.innerHTML =
+      '<div class="tsn-head" role="button" tabindex="0">' +
+        '<span class="tsn-state"></span><span class="tsn-label">Tools</span><span class="tsn-count"></span>' +
+        '<span class="tsn-fail" hidden></span><span class="tsn-time"></span>' +
+        '<button type="button" class="tsn-full" aria-label="Show every tool call full screen">⤢</button><span class="tsn-chev"></span>' +
+      '</div>' +
+      '<div class="tsn-now" hidden></div>' +
+      '<div class="tsn-body"></div>' +
+      '<div class="tsn-grip" aria-hidden="true"></div>';
+    box.querySelector('.tsn-body').style.maxHeight = `${tsnHeightPref()}px`;
+    const rsn = el.querySelector(':scope > .rsn');
+    el.insertBefore(box, rsn ? rsn.nextSibling : (holder.bubble.body && holder.bubble.body.parentNode === el ? holder.bubble.body : el.firstChild));
+  }
+  tsnHolders.set(box, holder);
+  feedEls.set(box, feed);   // a tap on a row opens that call's output (onFeedClick)
+  const m = tsnModel(feed);
+  box.classList.toggle('live', m.live);
+  paintTsnHead(box, m);
+  // The rows: rebuilt when a call starts (a thin line between the groups of calls), else updated in place.
+  const list = box.querySelector('.tsn-body');
+  const groups = blocks.filter(b => b.type === 'group');
+  const gsig = groups.map(g => g.items.map(i => i.id).join(',')).join('|');
+  if (list.dataset.sig !== gsig) {
+    const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+    const top = list.scrollTop;
+    list.textContent = '';
+    groups.forEach((g, gi) => {
+      if (gi) { const s = document.createElement('div'); s.className = 'tsn-sep'; list.appendChild(s); }
+      for (const it of g.items) { it.el = null; paintFeedRow(feed, it, list); }
+    });
+    list.dataset.sig = gsig;
+    list.scrollTop = atEnd && m.live ? list.scrollHeight : top;
+  } else if (changed) paintFeedRow(feed, changed);
+  else for (const it of feed.items.values()) paintFeedRow(feed, it, list);
+  if (m.live && !tsnTimer) tsnTimer = setInterval(tsnTick, 1000);
+  if (tsnSheetFor === holder) paintToolsSheet();
+}
+// The time of the call running now ticks while a reply works; the timer stops when nothing runs.
+function tsnTick() {
+  const els = document.querySelectorAll('.tsn.live .tsn-time[data-started]');
+  if (!els.length) { clearInterval(tsnTimer); tsnTimer = 0; return; }
+  const now = Date.now();
+  for (const t of els) { const s = Number(t.dataset.started); if (s) t.textContent = tsnDur(now - s); }
+}
+function toggleTools(box) {
+  box.classList.toggle('closed');
+  const h = tsnHolders.get(box);
+  if (h && h.feed) paintTsnHead(box, tsnModel(h.feed));
+  if (!box.classList.contains('closed') && box.classList.contains('live')) { const b = box.querySelector('.tsn-body'); b.scrollTop = b.scrollHeight; }
+}
+// Taps on a tool panel (from the chat's click handler): ⤢, the header or the "now" line. A tap on a row is the feed's.
+function onToolsClick(e) {
+  const box = e.target.closest('.tsn');
+  if (!box) return false;
+  if (e.target.closest('.tsn-full')) { e.stopPropagation(); openToolsSheet(tsnHolders.get(box)); return true; }
+  if (e.target.closest('.tsn-head, .tsn-now')) { e.stopPropagation(); toggleTools(box); return true; }
+  return false;
+}
+// The grip: drag for any height (60 px to most of the screen); the size is kept for the next panels.
+function onToolsGrip(e) {
+  const grip = e.target.closest && e.target.closest('.tsn .tsn-grip');
+  if (!grip) return;
+  e.preventDefault();
+  const body = grip.closest('.tsn').querySelector('.tsn-body');
+  const y0 = e.clientY, h0 = body.getBoundingClientRect().height;
+  const move = (ev) => { body.style.maxHeight = `${Math.round(Math.max(60, Math.min(window.innerHeight * 0.8, h0 + ev.clientY - y0)))}px`; };
+  const up = () => {
+    grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+    localStorage.setItem(TSN_HEIGHT_KEY, String(parseInt(body.style.maxHeight, 10) || tsnHeightPref()));
+  };
+  try { grip.setPointerCapture(e.pointerId); } catch {}
+  grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+}
+// ⤢: every call with its output on the whole screen, live while the reply works.
+function openToolsSheet(holder) {
+  if (!holder || !holder.feed) return;
+  let sh = $('tsn-sheet');
+  if (!sh) {
+    sh = document.createElement('div');
+    sh.id = 'tsn-sheet';
+    sh.className = 'rsn-sheet tsn-sheet';
+    sh.setAttribute('role', 'dialog');
+    sh.setAttribute('aria-modal', 'true');
+    sh.setAttribute('aria-label', 'Tool calls');
+    sh.innerHTML =
+      '<div class="rsn-sheet-head"><span class="rsn-sheet-title"></span><span class="rsn-sheet-count"></span>' +
+      '<button type="button" class="rsn-sheet-close" aria-label="Close">✕</button></div>' +
+      '<div class="rsn-sheet-body" tabindex="0"></div>';
+    sh.querySelector('.rsn-sheet-close').addEventListener('click', closeToolsSheet);
+    sh.addEventListener('keydown', (e) => {   // Esc closes it; Tab stays inside (the list, then ✕)
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeToolsSheet(); return; }
+      if (e.key !== 'Tab') return;
+      e.preventDefault();
+      const body = sh.querySelector('.rsn-sheet-body'), close = sh.querySelector('.rsn-sheet-close');
+      (document.activeElement === close ? body : close).focus();
+    });
+    document.body.appendChild(sh);
+  }
+  tsnSheetFor = holder;
+  tsnSheetReturn = document.activeElement;
+  const who = holder.agent ? displayName(holder.agent) : '';
+  sh.querySelector('.rsn-sheet-title').textContent = who ? `Tools · ${who}` : 'Tools';
+  sh.querySelector('.rsn-sheet-body')._text = null;
+  sh.classList.add('open');
+  paintToolsSheet();
+  const body = sh.querySelector('.rsn-sheet-body');
+  body.scrollTop = body.scrollHeight;
+  body.focus({ preventScroll: true });
+}
+function tsnEntryText(it) {
+  if (it.kind === 'tool') {
+    const mark = it.status === 'running' ? '⚙' : tsnFailed(it) ? '✗' : '✓';
+    return `${mark} ${it.tool}${it.summary ? ` · ${it.summary}` : ''}\n${it.status === 'running' ? 'Running…' : (it.output ? String(it.output) : '(no output)')}`;
+  }
+  const mark = it.status === 'completed' ? '✓' : it.status === 'failed' ? '✗' : '👷';
+  const tools = it.tools.map(t => `  ⚙ ${t.tool}${t.summary ? ` · ${clipText(t.summary, 160)}` : ''}`).join('\n');
+  return `${mark} ${workerName(it)}${it.model ? ` · ${shortModel(it.model)}` : ''}${it.error ? `\n⚠ ${it.error}` : ''}${tools ? `\n${tools}` : ''}${it.text ? `\n${it.text}` : ''}`;
+}
+function paintToolsSheet() {
+  const sh = $('tsn-sheet');
+  const feed = tsnSheetFor && tsnSheetFor.feed;
+  if (!sh || !feed) return;
+  if (!tsnSheetFor.bubble || !tsnSheetFor.bubble.el.isConnected) { closeToolsSheet(); return; }
+  const m = tsnModel(feed);
+  sh.classList.toggle('live', m.live);
+  sh.querySelector('.rsn-sheet-count').textContent = `${tsnSummary(m)}${m.failed ? ` · ${m.failed} failed` : ''}${!m.live && m.spanMs != null ? ` · ${tsnDur(m.spanMs)}` : ''}`;
+  const text = m.items.map(tsnEntryText).join('\n\n');
+  const body = sh.querySelector('.rsn-sheet-body');
+  if (body._text !== text) {
+    const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+    body.textContent = text;
+    body._text = text;
+    if (atEnd) body.scrollTop = body.scrollHeight;
+  }
+}
+function closeToolsSheet() {
+  const sh = $('tsn-sheet');
+  if (sh) sh.classList.remove('open');
+  tsnSheetFor = null;
+  const back = tsnSheetReturn; tsnSheetReturn = null;
+  if (back && back.isConnected && typeof back.focus === 'function') { try { back.focus({ preventScroll: true }); } catch {} }
 }
 
 function paintFeedRow(feed, it, list = null) {
@@ -2050,7 +2276,7 @@ function feedEnd(holder) {
 // Tap on the folded summary toggles the list; tap on a row toggles its detail.
 function onFeedClick(e) {
   if (e.target.closest('a')) return;
-  const root = e.target.closest('.feed');
+  const root = e.target.closest('.feed, .tsn');
   const feed = root && feedEls.get(root);
   if (!feed) return;
   if (e.target.closest('.feed-head')) {
@@ -3659,12 +3885,20 @@ function wire() {
   $('menu-notify-test')?.addEventListener('click', testPush);
   $('messages').addEventListener('click', onMessagesClick);
   $('messages').addEventListener('pointerdown', onReasoningGrip);
+  $('messages').addEventListener('pointerdown', onToolsGrip);
   $('messages').addEventListener('keydown', (e) => {   // Enter or Space on a reasoning panel's header opens or closes it
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const head = e.target.closest && e.target.closest('.rsn-head');
     if (!head || e.target.closest('.rsn-full')) return;
     e.preventDefault();
     toggleReasoning(head.closest('.rsn'));
+  });
+  $('messages').addEventListener('keydown', (e) => {   // the same for a tool panel's header
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const head = e.target.closest && e.target.closest('.tsn-head');
+    if (!head || e.target.closest('.tsn-full')) return;
+    e.preventDefault();
+    toggleTools(head.closest('.tsn'));
   });
   $('push-banner-on').addEventListener('click', enablePush);
   $('push-banner-later').addEventListener('click', () => { saveJson(PUSH_PREF, 'later'); paintPush(); });

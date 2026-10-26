@@ -65,7 +65,7 @@ README.md CHANGELOG.md LICENSE NOTICE docs/
 | `memory.db` | long-term memory sections per agent, session notes, shared memory pool, distillation log | no |
 | `transcript.db` | the transcript archive: every turn of every agent incl. tool results, full-text searchable (recall) | contains everything agents saw |
 | `ledger.db` | spend ledger, one row per turn (tokens, cost, cache reads) | no |
-| `conversations/<agent>.jsonl` | chat history shown in the UI, one JSON line per message; an assistant entry may carry `activity` (its turn's tool calls and workers, `at` = offset in the saved text) | no |
+| `conversations/<agent>.jsonl` | chat history shown in the UI, one JSON line per message; an assistant entry may carry `activity` (its turn's tool calls and workers, `at` = offset in the saved text; the pages show them in the reply's Tools panel, closed until opened) | no |
 | `agent-sessions.json`, `sdk-sessions.json`, `codex-sessions.json` | map agent → client session id (Claude / Codex routes) | no |
 | `context-refresh/<agent>.json` | what a resumed Claude session has already been told (section 7.4) | no |
 | `compaction.json` | per-agent context-compression state | no |

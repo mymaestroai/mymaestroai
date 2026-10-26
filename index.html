@@ -1334,6 +1334,88 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.84rem; line-height: 1.6;
       color: var(--text); white-space: pre-wrap; word-break: break-word;
     }
+    /* ── Tool panel: every tool call of a reply, under its reasoning panel (app.js paintToolPanel). The header opens and
+       closes it and says what runs now; the grip sets the height, ⤢ shows every call with its output. ── */
+    .tool-stream {
+      margin: 0 26px 12px 0;
+      border: 1px solid rgba(61,123,255,0.25); border-left: 3px solid rgba(61,123,255,0.6);
+      border-radius: 8px; background: rgba(61,123,255,0.05);
+    }
+    .tool-stream:not(.live) { border-left-color: rgba(61,123,255,0.3); background: rgba(61,123,255,0.03); }
+    .tool-stream .ts-head {
+      display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer; border-radius: 8px;
+      font-size: 0.72rem; letter-spacing: 0.04em; user-select: none; white-space: nowrap; overflow: hidden;
+    }
+    .tool-stream .ts-head:hover { background: rgba(61,123,255,0.07); }
+    .tool-stream .ts-head:focus-visible, .ts-row:focus-visible { outline: 1px solid rgba(61,123,255,0.6); outline-offset: -1px; }
+    .ts-state { flex-shrink: 0; width: 10px; text-align: center; color: #4ade80; }
+    .ts-state.wait::before {
+      content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #7aa7ff;
+      animation: la-pulse 1.4s ease-in-out infinite;
+    }
+    .ts-state.run::before, .ts-spin {
+      content: ''; display: inline-block; width: 10px; height: 10px; box-sizing: border-box; vertical-align: middle;
+      border: 2px solid rgba(100,100,120,0.3); border-top-color: var(--accent); border-radius: 50%;
+      animation: tool-spin 0.7s linear infinite;
+    }
+    .tool-stream .ts-label { color: #7aa7ff; font-weight: 700; text-transform: uppercase; }
+    .tool-stream .ts-count { color: var(--text-dim); opacity: 0.85; }
+    .tool-stream .ts-fail {
+      flex-shrink: 0; color: #f87171; border: 1px solid rgba(248,113,113,0.45); border-radius: 999px;
+      padding: 0 7px; font-size: 0.66rem; letter-spacing: 0;
+    }
+    .tool-stream .ts-fail[hidden] { display: none; }
+    .tool-stream .ts-now {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); opacity: 0.9;
+      font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.7rem; letter-spacing: 0;
+    }
+    .tool-stream .ts-now b { color: #7aa7ff; font-weight: 600; }
+    .tool-stream .ts-more { color: var(--text-dim); }
+    .tool-stream .ts-time { flex-shrink: 0; color: var(--text-dim); font-family: 'SF Mono', 'Fira Code', monospace; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+    .ts-time .tool-elapsed, .ts-row .tool-elapsed { font-size: inherit; }
+    .tool-stream .ts-full {
+      margin-left: auto; flex-shrink: 0; background: none; border: none; color: var(--text-dim);
+      font-size: 0.85rem; line-height: 1; padding: 0 5px; cursor: pointer;
+    }
+    .tool-stream .ts-full:hover { color: var(--text); }
+    .tool-stream .ts-toggle { flex-shrink: 0; color: var(--text-dim); opacity: 0.7; min-width: 2.4em; text-align: right; }
+    .tool-stream .ts-body { padding: 2px 6px 6px; overflow-y: auto; }
+    .tool-stream .ts-grip { height: 10px; cursor: ns-resize; touch-action: none; border-top: 1px solid rgba(61,123,255,0.14); }
+    .tool-stream .ts-grip::after {
+      content: ''; display: block; width: 38px; height: 3px; margin: 3px auto 0;
+      border-radius: 2px; background: rgba(61,123,255,0.35);
+    }
+    .tool-stream .ts-grip:hover::after { background: rgba(61,123,255,0.7); }
+    .tool-stream.collapsed .ts-body, .tool-stream.collapsed .ts-grip { display: none; }
+    .ts-row {
+      display: grid; grid-template-columns: 16px auto minmax(0, 1fr) auto 12px; gap: 8px; align-items: center;
+      padding: 3px 6px; border-radius: 5px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.72rem; color: var(--text-dim);
+    }
+    .tool-stream .ts-row { cursor: pointer; }
+    .tool-stream .ts-row:hover { background: rgba(61,123,255,0.07); }
+    .ts-row .ts-ic { color: #4ade80; text-align: center; }
+    .ts-row .ts-name { color: #7aa7ff; font-weight: 600; min-width: 70px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ts-row .ts-in { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
+    .ts-row .ts-d { font-variant-numeric: tabular-nums; }
+    .ts-row .ts-d .tool-elapsed[data-frozen] { color: var(--text-dim); }
+    .ts-row .ts-chev { opacity: 0.5; }
+    .ts-row.error { color: #fca5a5; }
+    .ts-row.error .ts-ic, .ts-row.error .ts-name { color: #f87171; }
+    .ts-row.stopped .ts-ic { color: var(--text-dim); }
+    .ts-sep { height: 1px; margin: 3px 6px; background: rgba(61,123,255,0.12); }
+    .ts-detail {
+      margin: 2px 6px 6px 30px; padding: 6px 10px; border-left: 2px solid rgba(61,123,255,0.35); border-radius: 4px;
+      background: rgba(100,100,120,0.08); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.68rem;
+      color: var(--text-dim); white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto;
+    }
+    .ts-row.error + .ts-detail { border-left-color: rgba(248,113,113,0.45); }
+    .tools-full .rsn-full-box { border-color: rgba(61,123,255,0.35); }
+    .tools-full .rsn-full-title { color: #7aa7ff; }
+    .tools-full .rsn-full-close:hover { border-color: rgba(61,123,255,0.6); }
+    .tools-full .ts-full-body { white-space: normal; font-size: 0.8rem; }
+    .tools-full .ts-row { grid-template-columns: 16px auto minmax(0, 1fr) auto; font-size: 0.78rem; }
+    .tools-full .ts-row .ts-in { white-space: normal; word-break: break-word; }
+    .tools-full .ts-detail { max-height: none; font-size: 0.74rem; }
     /* pulsing dot so it is obvious the stream is alive even when idle-looking */
     .la-pulse {
       width: 7px; height: 7px; border-radius: 50%;

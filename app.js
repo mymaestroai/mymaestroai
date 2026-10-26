@@ -5551,7 +5551,7 @@
       const steps = [];
       let cur = { text: '', tools: [] };
       let pos = 0;
-      for (const it of (t && t.items ? t.items.values() : [])) {
+      for (const [id, it] of (t && t.items ? t.items.entries() : [])) {
         const at = Math.max(pos, Math.min(Number.isFinite(it.at) ? it.at : 0, body.length));
         if (at > pos) {
           if (cur.tools.length) { steps.push(cur); cur = { text: '', tools: [] }; }
@@ -5559,7 +5559,7 @@
         }
         const started = it.ts ? Date.parse(it.ts) : NaN;
         const ended = it.doneTs ? Date.parse(it.doneTs) : NaN;
-        cur.tools.push({ tool: it.tool, input: it.input || '', result: it.done ? (it.output || '') : null,
+        cur.tools.push({ id, tool: it.tool, input: it.input || '', result: it.done ? (it.output || '') : null,
           status: it.done ? (/^(Error|⚠|✗)/.test(it.output || '') ? 'error' : 'done') : 'running',
           startedAt: Number.isFinite(started) ? started : null, durationMs: Number.isFinite(started) && Number.isFinite(ended) ? ended - started : undefined });
       }
@@ -6762,6 +6762,7 @@
     function handleKeyDown(event, chatId) {
       if (event.key === 'Escape') {
         if (rsnFullFor) { event.preventDefault(); closeReasoningFull(); return; }   // the open reasoning view goes first
+        if (toolsFullFor) { event.preventDefault(); closeToolsFull(); return; }     // so does the open tool view
         const chat = chats[chatId];
         if (chat && chat.status === 'thinking' && !chat.isGroup) {
           event.preventDefault();
@@ -8101,7 +8102,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 const last = toolActivity.findLast(t => t.type === 'call' && t.tool === oc2.tool);
                 if (last) last.input = oc2.input || '';
                 const currentStep = steps[steps.length - 1];
-                const lastStepTool = currentStep.tools.findLast(t => t.tool === oc2.tool);
+                // the call this input belongs to: by its id when the hub sends one (two calls of one tool can run side by side)
+                const lastStepTool = (oc2.tool_call_id && currentStep.tools.find(t => t.toolCallId === oc2.tool_call_id)) || currentStep.tools.findLast(t => t.tool === oc2.tool);
                 if (lastStepTool) lastStepTool.input = oc2.input || '';
                 renderSteps(msgId, steps, toolActivity, images, true);
                 if (chatId) updateToolActivity(chatId, oc2.tool + (oc2.input ? `: ${oc2.input}` : ''));
@@ -8112,7 +8114,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   toolActivity.push({ type: 'result', output: oc2.output });
                 }
                 const currentStep = steps[steps.length - 1];
-                const runningTool = currentStep.tools.find(t => t.status === 'running');
+                const runningTool = (oc2.tool_call_id && currentStep.tools.find(t => t.toolCallId === oc2.tool_call_id && t.status === 'running')) || currentStep.tools.find(t => t.status === 'running');
                 if (runningTool) {
                   runningTool.result = oc2.output || '';
                   runningTool.status = oc2.output?.startsWith('Error') ? 'error' : 'done';
@@ -9179,6 +9181,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const bar = host && host.querySelector('.live-activity');
       if (bar) bar.remove();
       finishReasoning(msgId);
+      finishToolPanel(msgId);
     }
 
     // ── Reasoning panel ────────────────────────────────────────────────
@@ -9266,9 +9269,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // Message rewrites keep the panel node (and so its size, scroll position and open state).
     function setMessageHtml(el, html) {
+      const tools = el.querySelector(':scope > .tool-stream');
+      const kept = [tools, el.querySelector(':scope > .reason-stream')].find(n => n && n.contains(document.activeElement));
+      const focused = kept ? document.activeElement : null;   // a reader on a panel's header or row stays there
       const box = el.querySelector(':scope > .reason-stream');
       el.innerHTML = html;
       if (box) placeReasoningPanel(el, box);
+      if (tools) placeToolPanel(el, tools);
+      if (focused && focused.isConnected) focused.focus({ preventScroll: true });
     }
 
     function paintReasoning(msgId) {
@@ -9415,6 +9423,281 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
     });
 
+    // ── Tool panel ─────────────────────────────────────────────────────
+    // Every tool call of a reply in one panel under its reasoning panel, closed until the reader opens it, so a reply
+    // that runs many tools no longer grows a line per call. The header is one line that updates in place: the calls
+    // done, a red count of the failed ones, the call running now and for how long; once the reply is over, the number
+    // of calls and the time they took. Opened, one short line per call (a click shows what went in and what came out);
+    // a long list scrolls inside the panel and the grip sets its height; ⤢ shows every call with its output at the size
+    // of the window. The text the agent writes between calls stays in the reply. Tool names, inputs and outputs are
+    // text (escaped), never markup. The panel is one node that message rewrites keep (setMessageHtml).
+    const TOOLS_HEIGHT_KEY = 'hub-tools-height';
+    const toolsHeightPref = () => { const h = Number(localStorage.getItem(TOOLS_HEIGHT_KEY)); return Number.isFinite(h) && h >= 60 ? h : 260; };
+    const TOOL_DETAIL_MAX = 20000;   // characters of one call's output shown in a detail
+    let toolsFullFor = null;      // the message whose calls the full view shows
+    let toolsFullReturn = null;
+
+    // The panel's model from the reply's steps: a row per call, `group` its step (a thin line between groups). A call
+    // still marked running once the reply is over did not finish ('stopped').
+    function toolPanelModel(steps, live) {
+      const rows = [];
+      (steps || []).forEach((st, group) => {
+        for (const tc of (st && st.tools) || []) {
+          const status = tc.status === 'running' ? (live ? 'running' : 'stopped') : tc.status === 'error' ? 'error' : 'done';
+          rows.push({ id: tc.id || tc.toolCallId || null, tool: String(tc.tool || 'tool'), input: String(tc.input || ''), result: tc.result == null ? '' : String(tc.result), status,
+            startedAt: Number(tc.startedAt) || null, durationMs: Number.isFinite(tc.durationMs) ? tc.durationMs : null, group });
+        }
+      });
+      // A row's identity across repaints (an opened row stays open): the call's own id, else when it started, what it is
+      // and what went in.
+      const seen = new Map();
+      for (const r of rows) {
+        if (r.id) { r.key = `id:${r.id}`; continue; }
+        const base = `${r.startedAt || ''}|${r.tool}|${r.input}`; const n = seen.get(base) || 0; seen.set(base, n + 1); r.key = `${base}|${n}`;
+      }
+      return {
+        rows, live: !!live,
+        running: rows.filter(r => r.status === 'running'),
+        done: rows.filter(r => r.status === 'done' || r.status === 'error').length,
+        failed: rows.filter(r => r.status === 'error').length,
+        spanMs: toolSpanMs(rows),
+      };
+    }
+    // The time the calls took: the union of their intervals (calls that ran side by side count once). Null unless every
+    // call has a start and an end (a call that did not finish, or a reply saved by an older version, shows no total).
+    function toolSpanMs(rows) {
+      if (!rows.length || rows.some(r => !r.startedAt || r.durationMs == null)) return null;
+      const iv = rows.map(r => [r.startedAt, r.startedAt + Math.max(0, r.durationMs)]).sort((a, b) => a[0] - b[0]);
+      let total = 0; let [s, e] = iv[0];
+      for (const [a, b] of iv.slice(1)) { if (a > e) { total += e - s; s = a; e = b; } else if (b > e) e = b; }
+      return total + (e - s);
+    }
+    // The header's words: calls done (or running) while the reply works, the number of calls once it is over.
+    function toolSummaryText(m) {
+      const n = m.rows.length;
+      if (!m.live) return `${n} call${n === 1 ? '' : 's'}`;
+      return m.done ? `${m.done} done` : `${m.running.length || n} running`;
+    }
+    function toolDurHtml(r) {
+      const running = r.status === 'running';
+      const ms = !r.startedAt ? null : running ? Date.now() - r.startedAt : r.durationMs;
+      if (ms == null) return '<span class="ts-d"></span>';
+      return `<span class="ts-d"><span class="tool-elapsed ${durClass(ms)}" data-started="${r.startedAt}"${running ? '' : ' data-frozen="1"'}>${fmtDur(ms)}</span></span>`;
+    }
+    function toolDetailText(r, full = false) {
+      let out = r.status === 'running' ? 'Running…' : r.status === 'stopped' ? 'Stopped before it finished.' : (r.result || '(no output)');
+      if (!full && out.length > TOOL_DETAIL_MAX) out = `${out.slice(0, TOOL_DETAIL_MAX)}\n… (${(out.length - TOOL_DETAIL_MAX).toLocaleString()} more characters not shown)`;
+      return `${r.tool}${r.input ? `: ${r.input}` : ''}\n\n${out}`;
+    }
+    // The rows: `open` (a Set of row numbers) shows those calls' details; `all` shows every detail (the full view).
+    function toolRowsHtml(m, open, all = false) {
+      let html = ''; let group = null;
+      m.rows.forEach((r, i) => {
+        if (group !== null && r.group !== group) html += '<div class="ts-sep"></div>';
+        group = r.group;
+        const shown = all || !!(open && open.has(r.key));
+        const icon = r.status === 'running' ? '<span class="ts-spin"></span>' : r.status === 'error' ? '✗' : r.status === 'stopped' ? '⏹' : '✓';
+        html += `<div class="ts-row ${r.status}" data-i="${i}"${all ? '' : ` role="button" tabindex="0" aria-expanded="${shown}"`}>` +
+          `<span class="ts-ic">${icon}</span><span class="ts-name">${escapeHtmlSafe(r.tool)}</span><span class="ts-in">${escapeHtmlSafe(r.input)}</span>` +
+          `${toolDurHtml(r)}${all ? '' : `<span class="ts-chev">${shown ? '⌄' : '›'}</span>`}</div>`;
+        if (shown) html += `<div class="ts-detail">${escapeHtmlSafe(toolDetailText(r, all))}</div>`;
+      });
+      return html;
+    }
+    function paintToolHead(box, m) {
+      const q = (s) => box.querySelector(s);
+      const open = !box.classList.contains('collapsed');
+      q('.ts-head').setAttribute('aria-expanded', String(open));
+      q('.ts-toggle').textContent = open ? 'hide' : 'show';
+      const k = m.running.length ? 'run' : m.live ? 'wait' : 'done';
+      const st = q('.ts-state');
+      if (st.dataset.k !== k) { st.dataset.k = k; st.className = `ts-state ${k}`; st.textContent = k === 'done' ? '✓' : ''; }
+      q('.ts-count').textContent = `· ${toolSummaryText(m)}`;
+      const f = q('.ts-fail');
+      f.textContent = m.failed ? `${m.failed} failed` : '';
+      f.hidden = !m.failed;
+      // What runs now and for how long (the time ticks with the other tool timers); the totals once the reply is over.
+      const now = q('.ts-now'), t = q('.ts-time');
+      const cur = m.running[m.running.length - 1];
+      const key = cur ? `${cur.startedAt}|${cur.tool}|${cur.input}|${m.running.length}` : `-|${m.live}|${m.spanMs}`;
+      if (now.dataset.k === key) return;
+      now.dataset.k = key;
+      if (cur) {
+        const more = m.running.length > 1 ? `+${m.running.length - 1}` : '';
+        now.innerHTML = `now: <b>${escapeHtmlSafe(cur.tool)}</b> ${escapeHtmlSafe(cur.input)}${more ? ` <span class="ts-more">${more}</span>` : ''}`;
+        t.innerHTML = cur.startedAt ? `<span class="tool-elapsed" data-started="${cur.startedAt}">${fmtDur(Date.now() - cur.startedAt)}</span>` : '';
+      } else {
+        now.textContent = '';
+        t.textContent = !m.live && m.spanMs != null ? fmtDur(m.spanMs) : '';
+      }
+    }
+    // Whether two models show the same rows: compared by value (a string that did not change is the same string).
+    function sameToolRows(a, b) {
+      if (!a || !b || a.live !== b.live || a.rows.length !== b.rows.length) return false;
+      return b.rows.every((y, i) => { const x = a.rows[i]; return x.key === y.key && x.group === y.group && x.status === y.status && x.tool === y.tool && x.startedAt === y.startedAt && x.durationMs === y.durationMs && x.input === y.input && x.result === y.result; });
+    }
+    function paintToolPanel(host, msgId, steps, live) {
+      const m = toolPanelModel(steps, live);
+      let box = host.querySelector(':scope > .tool-stream');
+      if (!m.rows.length) { if (box) box.remove(); return; }
+      if (!box) {
+        box = document.createElement('div');
+        box.className = 'tool-stream collapsed';   // closed until the reader opens it
+        box.innerHTML =
+          '<div class="ts-head" role="button" tabindex="0">' +
+            '<span class="ts-state"></span><span class="ts-label">Tools</span><span class="ts-count"></span>' +
+            '<span class="ts-fail" hidden></span><span class="ts-now"></span><span class="ts-time"></span>' +
+            '<button type="button" class="ts-full" title="Every call with its output, at full size">⤢</button>' +
+            '<span class="ts-toggle"></span>' +
+          '</div>' +
+          '<div class="ts-body"></div>' +
+          '<div class="ts-grip" title="Drag to resize"></div>';
+        box.querySelector('.ts-body').style.maxHeight = `${toolsHeightPref()}px`;
+        box._open = new Set();
+        placeToolPanel(host, box);
+      }
+      const prev = box._model;
+      box._steps = steps; box._model = m; box.dataset.msg = msgId;
+      box.classList.toggle('live', m.live);
+      paintToolHead(box, m);
+      // The rows are rebuilt only when a call starts, ends or changes; the running timers tick on their own.
+      const body = box.querySelector('.ts-body');
+      if (!body.dataset.built || !sameToolRows(prev, m)) {
+        const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+        const top = body.scrollTop;
+        const fRow = body.contains(document.activeElement) ? document.activeElement.closest('.ts-row') : null;
+        const fKey = fRow && prev && prev.rows[Number(fRow.dataset.i)] ? prev.rows[Number(fRow.dataset.i)].key : null;
+        body.innerHTML = toolRowsHtml(m, box._open);
+        body.dataset.built = '1';
+        box._rev = (box._rev || 0) + 1;
+        body.scrollTop = atEnd && m.live ? body.scrollHeight : top;
+        const j = fKey ? m.rows.findIndex(r => r.key === fKey) : -1;
+        if (j >= 0) body.querySelector(`.ts-row[data-i="${j}"]`)?.focus({ preventScroll: true });
+      }
+      if (toolsFullFor === msgId) paintToolsFull();
+    }
+    // Where the panel goes: right under the reasoning panel, else first in the message (after a group chat's label).
+    function placeToolPanel(host, box) {
+      const rsn = host.querySelector(':scope > .reason-stream');
+      if (rsn) { rsn.after(box); return; }
+      const label = host.querySelector(':scope > .agent-label, :scope > .synthesis-label');
+      if (label) label.after(box); else host.insertBefore(box, host.firstChild);
+    }
+    // The reply is over (done, stopped or failed): the header shows the totals; a call still running did not finish.
+    function finishToolPanel(msgId) {
+      const host = msgId && document.getElementById(msgId);
+      const box = host && host.querySelector(':scope > .tool-stream');
+      if (box && box._model && box._model.live) paintToolPanel(host, msgId, box._steps, false);
+    }
+    function toggleToolPanel(box) {
+      box.classList.toggle('collapsed');
+      if (box._model) paintToolHead(box, box._model);
+      if (!box.classList.contains('collapsed') && box.classList.contains('live')) { const b = box.querySelector('.ts-body'); b.scrollTop = b.scrollHeight; }
+    }
+    function toggleToolRow(box, row, keyboard = false) {
+      const i = Number(row.dataset.i);
+      const r = Number.isInteger(i) && box._model ? box._model.rows[i] : null;
+      if (!r) return;
+      if (box._open.has(r.key)) box._open.delete(r.key); else box._open.add(r.key);
+      const body = box.querySelector('.ts-body');
+      const top = body.scrollTop;
+      body.innerHTML = toolRowsHtml(box._model, box._open);
+      body.scrollTop = top;
+      if (keyboard) body.querySelector(`.ts-row[data-i="${i}"]`)?.focus({ preventScroll: true });
+    }
+    document.addEventListener('click', (e) => {
+      const box = e.target.closest && e.target.closest('.tool-stream');
+      if (!box) return;
+      if (e.target.closest('.ts-full')) { e.preventDefault(); if (box.dataset.msg) openToolsFull(box.dataset.msg); return; }
+      if (e.target.closest('.ts-head')) { e.preventDefault(); toggleToolPanel(box); return; }
+      const row = e.target.closest('.ts-row');
+      if (row && !String(window.getSelection ? window.getSelection() : '')) toggleToolRow(box, row);   // not while selecting text
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const t = e.target.closest && e.target.closest('.tool-stream .ts-head, .tool-stream .ts-row');
+      if (!t || e.target.closest('.ts-full')) return;
+      e.preventDefault();
+      const box = t.closest('.tool-stream');
+      if (t.classList.contains('ts-head')) toggleToolPanel(box); else toggleToolRow(box, t, true);
+    });
+    // The grip: drag for any height (60 px to most of the window); the size is kept for the next panels.
+    document.addEventListener('pointerdown', (e) => {
+      const grip = e.target.closest && e.target.closest('.tool-stream .ts-grip');
+      if (!grip || e.button !== 0) return;
+      e.preventDefault();
+      const body = grip.closest('.tool-stream').querySelector('.ts-body');
+      const y0 = e.clientY, h0 = body.getBoundingClientRect().height;
+      const move = (ev) => { body.style.maxHeight = `${Math.round(Math.max(60, Math.min(window.innerHeight * 0.85, h0 + ev.clientY - y0)))}px`; };
+      const up = () => {
+        grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+        localStorage.setItem(TOOLS_HEIGHT_KEY, String(parseInt(body.style.maxHeight, 10) || toolsHeightPref()));
+      };
+      try { grip.setPointerCapture(e.pointerId); } catch {}
+      grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+    });
+    // ⤢: every call with what went in and what came out, at the size of the window (live while the reply runs). Esc,
+    // ✕ or a click outside closes it; Tab stays inside (the list, then ✕).
+    function openToolsFull(msgId) {
+      let ov = document.getElementById('tools-full');
+      if (!ov) {
+        ov = document.createElement('div');
+        ov.id = 'tools-full';
+        ov.className = 'rsn-full-overlay tools-full';
+        ov.innerHTML =
+          '<div class="rsn-full-box" role="dialog" aria-modal="true" aria-label="Tool calls" tabindex="-1">' +
+            '<div class="rsn-full-head"><span class="rsn-full-title"></span><span class="rsn-full-count"></span>' +
+            '<button type="button" class="rsn-full-close" title="Close (Esc)">✕</button></div>' +
+            '<div class="rsn-full-body ts-full-body" tabindex="0"></div>' +
+          '</div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('.rsn-full-close')) closeToolsFull(); });
+        ov.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeToolsFull(); return; }
+          if (e.key !== 'Tab') return;
+          e.preventDefault();
+          const body = ov.querySelector('.rsn-full-body'), close = ov.querySelector('.rsn-full-close');
+          (document.activeElement === close ? body : close).focus();
+        });
+        document.body.appendChild(ov);
+      }
+      toolsFullFor = msgId;
+      toolsFullReturn = document.activeElement;
+      const host = document.getElementById(msgId);
+      const chatId = host && host.parentElement && host.parentElement.id.startsWith('messages-') ? host.parentElement.id.slice(9) : null;
+      const who = chatId && chats[chatId] ? (chats[chatId].display || chats[chatId].agent || '') : '';
+      ov.querySelector('.rsn-full-title').textContent = who ? `Tools · ${who}` : 'Tools';
+      ov.querySelector('.rsn-full-body').dataset.rev = '';
+      ov.classList.add('open');
+      paintToolsFull();
+      const b = ov.querySelector('.rsn-full-body');
+      b.scrollTop = b.scrollHeight;
+      b.focus({ preventScroll: true });
+    }
+    function paintToolsFull() {
+      const ov = document.getElementById('tools-full');
+      const host = toolsFullFor && document.getElementById(toolsFullFor);
+      const box = host && host.querySelector(':scope > .tool-stream');
+      if (!ov || !box || !box._model) { if (ov && toolsFullFor) closeToolsFull(); return; }
+      const m = box._model;
+      ov.classList.toggle('live', m.live);
+      ov.querySelector('.rsn-full-count').textContent = `${toolSummaryText(m)}${m.failed ? ` · ${m.failed} failed` : ''}${!m.live && m.spanMs != null ? ` · ${fmtDur(m.spanMs)}` : ''}`;
+      const body = ov.querySelector('.rsn-full-body');
+      const rev = String(box._rev || 0);
+      if (body.dataset.rev !== rev) {
+        const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+        body.innerHTML = toolRowsHtml(m, null, true);
+        body.dataset.rev = rev;
+        if (atEnd) body.scrollTop = body.scrollHeight;
+      }
+    }
+    function closeToolsFull() {
+      const ov = document.getElementById('tools-full');
+      if (ov) ov.classList.remove('open');
+      toolsFullFor = null;
+      const back = toolsFullReturn; toolsFullReturn = null;
+      if (back && back.isConnected && typeof back.focus === 'function') { try { back.focus({ preventScroll: true }); } catch {} }
+    }
+
     function escapeHtmlSafe(s) {
       return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -9425,8 +9708,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!el) return;
 
       const thinkWasCollapsed = el.querySelector('.inline-thinking.collapsed') !== null;
-      const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+      // The text the agent writes stays in the reply, in order; every tool call goes into the reply's tool panel.
       let html = '';
 
       for (let si = 0; si < steps.length; si++) {
@@ -9441,55 +9724,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const cls = isIntermediate ? 'step-text step-intermediate' : 'step-text';
           html += `<div class="${cls}">${formatContent(step.text.replace(/^\s*\n/, ''))}</div>`;   // the paragraph break after a tool call is the layout's job
         }
-
-        // Render step tools
-        if (hasTools) {
-          const toolLines = step.tools.map((tc, i) => {
-            const statusIcon = tc.status === 'running'
-              ? '<div class="tool-call-spinner"></div>'
-              : tc.status === 'error'
-                ? '<span class="tool-call-icon" style="color:#f87171">✗</span>'
-                : '<span class="tool-call-icon" style="color:#4ade80">✓</span>';
-
-            const inputHtml = tc.input ? `<span class="tool-call-input">— ${esc(tc.input)}</span>` : '';
-
-            // Live elapsed timer - running tools tick every second; finished tools freeze at final duration
-            let elapsedHtml = '';
-            if (tc.startedAt) {
-              const running = tc.status === 'running';
-              const ms = running ? (Date.now() - tc.startedAt) : (tc.durationMs || 0);
-              elapsedHtml = `<span class="tool-elapsed ${durClass(ms)}"` +
-                ` data-started="${tc.startedAt}"${running ? '' : ' data-frozen="1"'}>${fmtDur(ms)}</span>`;
-            }
-
-            const statusLabel = tc.status === 'done'
-              ? '<span class="tool-call-status done">Done</span>'
-              : tc.status === 'error'
-                ? '<span class="tool-call-status error">Error</span>'
-                : '';
-
-            let resultHtml = '';
-            if (tc.result && tc.status !== 'running') {
-              const resultId = `tool-result-${msgId}-${si}-${i}`;
-              resultHtml = `<span class="tool-call-toggle" onclick="document.getElementById('${resultId}').classList.toggle('visible')">[output]</span>` +
-                `<div class="tool-call-result" id="${resultId}">${esc(tc.result)}</div>`;
-            }
-
-            return `<div class="tool-call-line ${tc.status}">` +
-              `${statusIcon}` +
-              `<div class="tool-call-info">` +
-                `<span class="tool-call-name">${esc(tc.tool)}</span>${inputHtml}${elapsedHtml}${statusLabel}${resultHtml}` +
-              `</div></div>`;
-          }).join('');
-
-          html += `<div class="tool-calls-container">${toolLines}</div>`;
-        }
       }
 
       // Append images (escaped; click handled by the delegated listener)
       html += imageGalleryHtml(images);
 
       setMessageHtml(el, html);
+      paintToolPanel(el, msgId, steps, isStreaming);
       decorateMessage(el, steps.map(st => st.text).filter(t => t && t.trim()).join('\n\n'));
 
       if (thinkWasCollapsed) {

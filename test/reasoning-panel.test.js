@@ -215,7 +215,7 @@ test('phone: the panel sits outside the reply body, follows every holder and sho
   const m = read('mobile.js');
   assert.match(m, /case 'reasoning': reasoningAdd\(rec, g\.text\); break;/);
   assert.match(m, /on\('turn_reasoning', onTurnReasoning\);/);
-  assert.match(m, /el\.insertBefore\(box, holder\.bubble\.body && holder\.bubble\.body\.parentNode === el \? holder\.bubble\.body : el\.firstChild\);/);
+  assert.match(m, /el\.insertBefore\(box, el\.querySelector\(':scope > \.tsn'\) \|\| \(holder\.bubble\.body && holder\.bubble\.body\.parentNode === el \? holder\.bubble\.body : el\.firstChild\)\);/, 'above the tool panel, outside the reply body');
   assert.match(m, /body\.textContent = rsnText\(r\);/);
   assert.match(m, /ra\.rsn = rec\.rsn;/, 'a lost stream\'s reasoning carries over to the re-attach');
   assert.match(m, /if \(rec\.rsn\) paintReasoning\(rec\);/, 'a reopened chat repaints its stream\'s panel');

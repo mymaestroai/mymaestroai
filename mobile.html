@@ -211,6 +211,33 @@
     .rsn-sheet-count { color: var(--text-dim); font-size: 12px; white-space: nowrap; }
     .rsn-sheet-close { margin-left: auto; flex-shrink: 0; min-width: 44px; height: 38px; border-radius: 8px; border: 1px solid var(--border-strong); color: var(--text); font-size: 16px; }
     .rsn-sheet-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; outline: none; padding: 12px 14px calc(16px + var(--sab)); font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+    /* Tool panel (mobile.js paintTools): every tool call and worker of a reply, under its reasoning panel; closed until
+       tapped. The header updates in place and a second line says what runs now; ⤢ for the whole screen. */
+    .tsn { margin: 0 0 8px; border: 1px solid rgba(61,123,255,.3); border-left: 3px solid rgba(61,123,255,.65); border-radius: 8px; background: rgba(61,123,255,.06); }
+    .tsn:not(.live) { border-left-color: rgba(61,123,255,.32); background: rgba(61,123,255,.035); }
+    .tsn-head { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 2px 2px 2px 10px; font-size: 12px; white-space: nowrap; user-select: none; -webkit-user-select: none; cursor: pointer; }
+    .tsn-state { flex-shrink: 0; width: 10px; text-align: center; color: #4ade80; font-size: 11px; }
+    .tsn-state.run { height: 10px; border: 1.5px solid var(--text-tertiary); border-top-color: var(--warning); border-radius: 50%; animation: fspin .9s linear infinite; }
+    .tsn-state.wait { width: 6px; height: 6px; margin: 0 2px; border-radius: 50%; background: #8AB4FF; animation: rsn-pulse 1.4s ease-in-out infinite; }
+    .tsn-label { color: #8AB4FF; font-weight: 700; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+    .tsn-count { color: var(--text-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .tsn-fail { flex-shrink: 0; color: #f87171; border: 1px solid rgba(248,113,113,.45); border-radius: 999px; padding: 0 6px; font-size: 11px; }
+    .tsn-fail[hidden] { display: none; }
+    .tsn-time { flex-shrink: 0; color: var(--text-dim); font: 11.5px ui-monospace, Menlo, monospace; }
+    .tsn.live .tsn-time { color: #fbbf24; }
+    .tsn-full { margin-left: auto; flex-shrink: 0; width: 36px; height: 32px; border-radius: 8px; color: var(--text-dim); font-size: 16px; display: flex; align-items: center; justify-content: center; }
+    .tsn-full:active { background: rgba(61,123,255,.22); }
+    .tsn-chev { flex-shrink: 0; width: 22px; text-align: center; color: var(--text-dim); }
+    .tsn-now { padding: 0 10px 7px 27px; margin-top: -4px; font: 11.5px ui-monospace, Menlo, monospace; color: #8AB4FF; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tsn-now[hidden] { display: none; }
+    .tsn-now b { color: #B5CEFF; }
+    .tsn-body { padding: 0 10px 4px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; font-size: 12px; color: var(--text-dim); }
+    .tsn .frow .fline { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tsn-sep { height: 1px; margin: 3px 0; background: rgba(61,123,255,.2); }
+    .tsn-grip { height: 20px; touch-action: none; display: flex; align-items: center; justify-content: center; border-top: 1px solid rgba(61,123,255,.14); }
+    .tsn-grip::after { content: ''; width: 44px; height: 4px; border-radius: 2px; background: rgba(61,123,255,.45); }
+    .tsn.closed .tsn-body, .tsn.closed .tsn-grip { display: none; }
+    .tsn-sheet .rsn-sheet-title { color: #8AB4FF; }
     .more { align-self: center; min-height: 44px; padding: 0 16px; color: var(--accent-hover); }
     .question { align-self: stretch; background: var(--bg-card); border: 1px solid var(--accent); border-radius: 12px; padding: 10px; }
     .question .qh { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
