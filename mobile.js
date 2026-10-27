@@ -206,7 +206,6 @@ const DIALOG_TEXT = {
 };
 const DIALOG_SKIP_TYPES = ['button', 'submit', 'reset', 'image', 'hidden', 'search'];
 const DIALOG_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), iframe, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
-const DIALOG_SECTION = '[data-dialog-section], fieldset, form, section, .section, .st-section, .gs-box, .sec-section';
 
 /** Is this element a field whose value counts as an edit? */
 function dialogField(el) {
@@ -241,7 +240,7 @@ function dialogEscapeIgnored(e) {
 
 function createDialogGuard({ doc = document, win = window, auto = '', useHistory = false, trackSaves = true, pageDirty = false } = {}) {
   const layers = [];   // innermost last
-  let confirmOpen = null, seq = 0, lastAct = { t: 0, el: null }, escIgnoredAt = 0, popping = false, pendingPush = [], lastOutside = null;
+  let confirmOpen = null, confirmFor = null, confirmFinish = null, seq = 0, lastAct = { t: 0, el: null }, escIgnoredAt = 0, popping = false, pendingPush = [], lastOutside = null;
   const page = pageDirty ? { el: doc.body, page: true, baselines: new Map() } : null;
   const now = () => Date.now();
 
@@ -370,7 +369,7 @@ function createDialogGuard({ doc = document, win = window, auto = '', useHistory
     const back = doc.activeElement;
     const finish = (discard) => {
       if (confirmOpen !== d) return;
-      confirmOpen = null;
+      confirmOpen = null; confirmFor = null; confirmFinish = null;
       try { d.close(); } catch {}
       if (d.remove) d.remove();
       if (discard) { l.baselines.clear(); closeNow(l); }
@@ -386,7 +385,7 @@ function createDialogGuard({ doc = document, win = window, auto = '', useHistory
       if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(false); }   // Enter never discards
       else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
     });
-    confirmOpen = d;
+    confirmOpen = d; confirmFor = l; confirmFinish = finish;
     doc.body.appendChild(d);
     if (d.showModal) d.showModal();
     keep.focus();
@@ -412,7 +411,9 @@ function createDialogGuard({ doc = document, win = window, auto = '', useHistory
       const f = focusables(l.el);
       if (!f.length) { e.preventDefault(); return; }
       const first = f[0], last = f[f.length - 1], a = doc.activeElement;
-      if (!l.el.contains(a)) { e.preventDefault(); first.focus(); }
+      // Focus on something that is not one of the controls (the dialog box itself, a scroll area, or outside):
+      // Tab goes to the first control, Shift+Tab to the last, never out of the dialog.
+      if (!l.el.contains(a) || f.indexOf(a) < 0) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
       else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
     }
@@ -439,46 +440,53 @@ function createDialogGuard({ doc = document, win = window, auto = '', useHistory
       for (const l of q) if (layers.indexOf(l) >= 0) pushHistory(l);
       return;
     }
-    const l = top();
+    const l = confirmOpen ? confirmFor : top();
     if (!l || !l.hist) return;
     const st = e.state || {};
     if (st.dialog === l.id) return;
     e.stopImmediatePropagation();   // the page's own router must not move while a layer is open
     l.hist = false;
+    if (confirmOpen) { confirmFinish(false); return; }   // Back on "Discard changes?" = Keep editing (takes the entry back)
     const r = requestClose(l, 'back');
-    if (r !== 'closed' && r !== 'confirm' && layers.indexOf(l) >= 0) pushHistory(l);
-    else if (r === 'confirm') { /* pushed back again if the user keeps editing (askDiscard) */ }
+    // Still open (the question is up, a save is running, an answer is needed): the sheet keeps its entry, so the next
+    // Back comes here again instead of reaching the page's router.
+    if (r !== 'closed' && layers.indexOf(l) >= 0) pushHistory(l);
   }
 
-  // ── Saves in flight: a POST/PUT/PATCH/DELETE to the hub's /api/ that follows a click or key in a layer belongs to
-  // it; on success that part of the layer becomes the new baseline. ──
+  // ── Saves in flight: a POST/PUT/PATCH/DELETE to the hub's /api/ that follows a click or key in a layer keeps that
+  // layer open while it runs. It settles nothing by itself (a Test button posts too): see savePoint. ──
   function wrapFetch() {
     const orig = win.fetch && win.fetch.bind(win);
     if (!orig || win.fetch.__dialogGuard) return;
     const wrapped = function (input, init) {
       const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
-      let l = null, from = null;
+      let l = null;
       if (method !== 'GET' && method !== 'HEAD' && now() - lastAct.t < 1500) {
         let url = ''; try { url = new URL(typeof input === 'string' ? input : input.url, win.location.href).pathname; } catch {}
-        if (url.startsWith('/api/')) { from = lastAct.el; l = scopeOf(from); }
+        if (url.startsWith('/api/')) l = scopeOf(lastAct.el);
       }
       if (!l) return orig(input, init);
       l.saving = (l.saving || 0) + 1;
-      return orig(input, init).then((res) => {
-        if (res && res.ok) rebase(l, from);
-        return res;
-      }).finally(() => { l.saving--; });
+      return Promise.resolve(orig(input, init)).finally(() => { l.saving--; });
     };
     wrapped.__dialogGuard = true;
     win.fetch = wrapped;
   }
-  // A save started from a field (a select that saves on change) settles that field; one started from a button settles
-  // the part of the dialog the button is in (or the whole dialog).
-  function rebase(l, from) {
-    if (dialogField(from)) { if (l.baselines.has(from)) l.baselines.set(from, dialogFieldValue(from)); return; }
-    const part = (from && from.closest && from.closest(DIALOG_SECTION)) || null;
-    const inside = part && l.el.contains && l.el.contains(part) && part !== l.el ? part : l.el;
-    for (const [el] of l.baselines) if (inside === l.el || (inside.contains && inside.contains(el))) l.baselines.set(el, dialogFieldValue(el));
+  /** savePoint(fields): the fields a save writes (an element, a container of them, or a list), with the values they
+   *  have now, as the save starts. The returned commit(), called once the hub confirmed the save, makes exactly those
+   *  values the fields' baselines: an edit made while the save ran stays changed, and nothing else is touched. */
+  function savePoint(scope) {
+    const list = [];
+    const add = (el) => {
+      if (!el) return;
+      if (dialogField(el)) list.push(el);
+      else if (el.querySelectorAll) for (const f of el.querySelectorAll('input, textarea, select')) if (dialogField(f)) list.push(f);
+    };
+    if (Array.isArray(scope) || (scope && typeof scope.length === 'number' && !scope.tagName)) for (const el of scope) add(el); else add(scope);
+    const snap = list.map(el => [el, dialogFieldValue(el)]);
+    return function commit() {
+      for (const [el, v] of snap) { if (el.isConnected === false) continue; const s = scopeOf(el); if (s) s.baselines.set(el, v); }
+    };
   }
 
   // ── Wiring ──
@@ -543,8 +551,8 @@ function createDialogGuard({ doc = document, win = window, auto = '', useHistory
     closed: (el) => unregister(el),
     requestClose: (elOrChild, how) => requestClose(layerOf(elOrChild), how),
     isDirty: (elOrChild) => dirty(layerOf(elOrChild)) || (!layerOf(elOrChild) && !!page && dialogIsDirty(page.baselines)),
-    markSaved: (elOrChild) => { const l = scopeOf(elOrChild); if (l) rebase(l, elOrChild); },
-    markLoaded: (el) => { const l = scopeOf(el); if (l) l.baselines.delete(el); },   // new content put in by the page, not typed
+    savePoint,
+    markLoaded: (els) => { for (const el of (Array.isArray(els) ? els : [els])) { const l = el && scopeOf(el); if (l) l.baselines.delete(el); } },   // put in by the page, not typed
     layers: () => layers.slice(),
     _confirm: () => confirmOpen,
   };
@@ -2577,13 +2585,7 @@ function openToolsSheet(holder) {
       '<button type="button" class="rsn-sheet-close" aria-label="Close">✕</button></div>' +
       '<div class="rsn-sheet-body" tabindex="0"></div>';
     sh.querySelector('.rsn-sheet-close').addEventListener('click', closeToolsSheet);
-    sh.addEventListener('keydown', (e) => {   // Esc closes it; Tab stays inside (the list, then ✕)
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeToolsSheet(); return; }
-      if (e.key !== 'Tab') return;
-      e.preventDefault();
-      const body = sh.querySelector('.rsn-sheet-body'), close = sh.querySelector('.rsn-sheet-close');
-      (document.activeElement === close ? body : close).focus();
-    });
+    // Esc closes it and Tab stays inside (the list, then ✕): the dialog guard does both, once (lib/ui-dialog.js).
     document.body.appendChild(sh);
   }
   tsnSheetFor = holder;
@@ -4330,6 +4332,8 @@ function wire() {
   $('agents-menu-btn').addEventListener('click', toggleMenu);
   $('menu-about').addEventListener('click', (e) => { e.stopPropagation(); openAboutSheet(); });
   $('about-sheet').addEventListener('click', onAboutClick);
+  // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
+  $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -4970,6 +4974,7 @@ async function changePassword() {
   try {
     await authPost('/api/auth/password', { current, next });
     for (const id of ['sec-pw-current', 'sec-pw-new', 'sec-pw-new2']) $(id).value = '';
+    dialogGuard.markLoaded(['sec-pw-current', 'sec-pw-new', 'sec-pw-new2'].map($));   // done: nothing left to lose
     secMsg('sec-pw-msg', 'Password changed.', true);
   } catch (e) { secMsg('sec-pw-msg', e.message); }
 }

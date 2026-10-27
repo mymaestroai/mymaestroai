@@ -150,7 +150,9 @@ test('phone: the reply text stays in the bubble, the calls go to one panel above
   assert.match(extract(mjs, 'paintToolsSheet'), /if \(!tsnSheetFor\.bubble \|\| !tsnSheetFor\.bubble\.el\.isConnected\) \{ closeToolsSheet\(\); return; \}/, 'the full screen closes when its reply leaves the page');
   assert.match(extract(mjs, 'openChat'), /if \(!same && tsnSheetFor\) closeToolsSheet\(\);/, '...and when another chat opens');
   assert.match(extract(mjs, 'paintTsnHead'), /if \(!tsnTimer\) tsnTimer = setInterval\(tsnTick, 1000\);/, 'the time ticks whenever a call runs');
-  assert.match(extract(mjs, 'openToolsSheet'), /if \(e\.key !== 'Tab'\) return;[\s\S]*\(document\.activeElement === close \? body : close\)\.focus\(\);/, 'the sheet keeps Tab inside');
+  // Esc and Tab are the shared dialog guard's (lib/ui-dialog.js), once: no key handler of the sheet's own.
+  assert.match(extract(mjs, 'openToolsSheet'), /dialogGuard\.open\(sh, \{ close: closeToolsSheet \}\);/, 'the sheet keeps Tab inside (the guard)');
+  assert.ok(!/addEventListener\('keydown'/.test(extract(mjs, 'openToolsSheet')));
   assert.match(extract(mjs, 'closeToolsSheet'), /back\.focus\(\{ preventScroll: true \}\)/, 'and gives focus back');
   assert.ok(!/slice\(0, 3000\)/.test(extract(mjs, 'tsnEntryText')), 'the full screen shows the whole output the page has');
   for (const sel of ['.tsn.closed .tsn-body', '.tsn .frow .fline { display: block; white-space: nowrap;', '.tsn-now[hidden]', '.tsn-sheet .rsn-sheet-title']) assert.ok(mcss.includes(sel), sel);

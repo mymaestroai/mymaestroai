@@ -255,7 +255,7 @@ test('a dialog that needs an answer stays on Escape and the backdrop; a docked p
   assert.strictEqual(dock.isConnected, false);
 });
 
-test('a save in flight: Escape does not close; after a successful save the saved part is the new baseline', async () => {
+test('a save in flight: Escape does not close; only an explicit savePoint commit settles, with the values that were sent', async () => {
   const d = makeDom();
   let release;
   d.win.fetch = () => new Promise(r => { release = r; });
@@ -266,6 +266,7 @@ test('a save in flight: Escape does not close; after a successful save the saved
   const btn = d.el('button', {}, sec);
   g.open(ov);
   d.typeInto(key, 'sk-new');
+  const saved = g.savePoint(key);
   d.dispatch(btn, 'pointerdown');
   const pending = d.win.fetch('/api/settings', { method: 'POST' });
   d.key(key, 'Escape');
@@ -273,14 +274,67 @@ test('a save in flight: Escape does not close; after a successful save the saved
   assert.match(ov.querySelector('.dlg-saving').textContent, /Still saving/);
   release({ ok: true });
   await pending; await flush();
+  saved();
   d.key(key, 'Escape');
-  assert.strictEqual(ov.isConnected, false, 'saved: closes without asking');
-  // A failed save keeps the changes counted.
-  const ov2 = d.el('div', { class: 'st-overlay' }); const f2 = d.el('input', {}, ov2); const b2 = d.el('button', {}, ov2);
-  g.open(ov2); d.typeInto(f2, 'x'); d.dispatch(b2, 'pointerdown');
-  const p2 = d.win.fetch('/api/settings', { method: 'POST' }); release({ ok: false }); await p2; await flush();
-  d.key(f2, 'Escape');
-  assert.ok(g._confirm(), 'failed save: still asks');
+  assert.strictEqual(ov.isConnected, false, 'saved and committed: closes without asking');
+});
+
+test('review: a successful POST that is not a save (Test provider) leaves the typed key unsaved', async () => {
+  const d = makeDom();
+  d.win.fetch = async () => ({ ok: true });   // test-provider answers 200 even for a failed check, and stores nothing
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win });
+  const ov = d.el('div', { class: 'st-overlay' }); const key = d.el('input', { type: 'password' }, ov); const test = d.el('button', {}, ov);
+  g.open(ov);
+  d.typeInto(key, 'sk-typed');
+  d.dispatch(test, 'pointerdown');
+  await d.win.fetch('/api/settings/test-provider', { method: 'POST' }); await flush();
+  d.key(key, 'Escape');
+  assert.ok(g._confirm(), 'still asks: nothing was saved');
+});
+
+test('review: an edit made while a save runs stays unsaved when that save succeeds', async () => {
+  const d = makeDom();
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win });
+  const ov = d.el('div', { class: 'st-overlay' }); const f = d.el('input', {}, ov);
+  g.open(ov);
+  d.typeInto(f, 'first');
+  const saved = g.savePoint(f);           // Save pressed with "first"
+  d.typeInto(f, 'second');                // typed again while the request runs
+  saved();                                // the save of "first" succeeded
+  d.key(f, 'Escape');
+  assert.ok(g._confirm(), '"second" was never saved');
+  d.dispatch(g._confirm().querySelector('.dlg-discard-keep'), 'click');
+  f.value = 'first'; d.dispatch(f, 'input');
+  d.key(f, 'Escape');
+  assert.strictEqual(ov.isConnected, false, 'back to the saved value: unchanged');
+});
+
+test('review: a save settles only the fields it names, never the rest of the dialog', () => {
+  const d = makeDom();
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win });
+  const ov = d.el('div', { class: 'st-overlay' });
+  const a = d.el('input', {}, d.el('div', { class: 'st-section' }, ov));
+  const b = d.el('input', {}, d.el('div', { class: 'st-section' }, ov));
+  g.open(ov);
+  d.typeInto(a, 'saved here'); d.typeInto(b, 'not saved');
+  g.savePoint(a)();
+  d.key(b, 'Escape');
+  assert.ok(g._confirm(), 'the other section is still unsaved');
+  const box = d.el('div', {}, ov); const c1 = d.el('input', {}, box); const c2 = d.el('textarea', {}, box);
+  d.typeInto(c1, 'x'); d.typeInto(c2, 'y');
+  d.dispatch(g._confirm().querySelector('.dlg-discard-keep'), 'click');
+  g.savePoint(box)(); g.savePoint(b)();
+  d.key(b, 'Escape');
+  assert.strictEqual(ov.isConnected, false, 'a container names all of its fields');
+});
+
+test('review: fields the page clears after a finished action (password changed) are not edits', () => {
+  const p = dialogPage();
+  p.typeInto(p.notes, 'old-and-new-passwords');
+  p.notes.value = '';
+  p.g.markLoaded([p.notes, null]);
+  p.key(p.notes, 'Escape');
+  assert.strictEqual(p.ov.isConnected, false);
 });
 
 test('Tab stays inside a modal dialog', async () => {
@@ -291,6 +345,40 @@ test('Tab stays inside a modal dialog', async () => {
   assert.strictEqual(p.doc.activeElement, p.name, 'from the last field to the first');
   p.key(p.name, 'Tab', { shiftKey: true });
   assert.strictEqual(p.doc.activeElement, p.cancel, 'Shift+Tab from the first to the last');
+});
+
+test('review: Tab and Shift+Tab from the dialog box itself (focused, not a control) stay inside', async () => {
+  const p = dialogPage();
+  await flush();
+  assert.strictEqual(p.doc.activeElement, p.box, 'the box took the focus when it opened');
+  p.key(p.box, 'Tab', { shiftKey: true });
+  assert.strictEqual(p.doc.activeElement, p.cancel, 'Shift+Tab from the box: the last control');
+  p.box.focus();
+  p.key(p.box, 'Tab');
+  assert.strictEqual(p.doc.activeElement, p.name, 'Tab from the box: the first control');
+});
+
+test('review: Back while "Discard changes?" is open keeps editing and keeps the sheet\'s history entry', async () => {
+  const d = makeDom();
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win, useHistory: true });
+  let routed = 0;
+  d.win.addEventListener('popstate', () => { routed++; });
+  const sheet = d.el('dialog'); sheet.showModal();
+  const f = d.el('input', {}, sheet);
+  g.open(sheet);
+  d.typeInto(f, 'draft');
+  d.win.history.back(); await flush();            // Back: the question
+  assert.ok(g._confirm());
+  assert.strictEqual(d.hist.i, 1, 'the sheet keeps its entry while the question is up');
+  d.win.history.back(); await flush();            // Back again, on the question
+  assert.strictEqual(g._confirm(), null, 'Back on the question = Keep editing');
+  assert.ok(sheet.open); assert.strictEqual(f.value, 'draft');
+  assert.strictEqual(d.hist.i, 1, 'and the entry is back');
+  d.key(f, 'Escape');                              // the question from Escape
+  d.win.history.back(); await flush();
+  assert.strictEqual(g._confirm(), null); assert.ok(sheet.open, 'Back on a question opened by Escape keeps editing too');
+  assert.strictEqual(d.hist.i, 1);
+  assert.strictEqual(routed, 0, 'the page router never moved');
 });
 
 test('phone Back: an open sheet owns a history entry; Back closes an unchanged sheet, asks for a changed one and keeps the entry', async () => {
@@ -355,9 +443,36 @@ test('wiring: phone sheets, the Back gesture, agent settings and tiger team', ()
   const as = read('agent-settings.html');
   assert.match(as, /<script src="\/ui-dialog\.js"><\/script>/);
   assert.match(as, /const pageGuard = createDialogGuard\(\{ pageDirty: true \}\);/);
-  assert.match(read('tiger-team.html'), /dialogGuard\.open\(panel, \{ close: toggleSavedPanel \}\)/);
+  const tt = read('tiger-team.html');
+  assert.match(tt, /dialogGuard\.open\(panel, \{ close: closeSavedPanel \}\)/);
+  assert.match(tt, /function closeSavedPanel\(\) \{[\s\S]*?dialogGuard\.closed\(panel\);/);
+  assert.ok(!/getElementById\('saved-panel'\)\.style\.display = 'none'/.test(tt), 'review: every hide path goes through closeSavedPanel');
   const sf = require('../lib/static-files');
   assert.strictEqual(sf.resolve('/ui-dialog.js'), fs.realpathSync(path.join(ROOT, 'lib', 'ui-dialog.js')));
   assert.strictEqual(sf.resolve('/lib/ui-dialog.js'), null, 'lib/ itself is still not served');
   assert.match(read('docs/HUB-MAP.md'), /Dialogs/);
+});
+
+test('review fixes wired in the pages', () => {
+  const app = read('app.js'), m = read('mobile.js'), as = read('agent-settings.html');
+  assert.match(app, /const gsClose = `<button class="gs-btn secondary" onclick="dialogRequestClose\(this\)">Close<\/button>`;/, 'footer Close = header ✕');
+  assert.match(app, /dialogGuard\.markLoaded\(\['sec-pw-current', 'sec-pw-new', 'sec-pw-new2'\]\.map\(id => document\.getElementById\(id\)\)\);/, 'desktop: password changed');
+  assert.match(m, /dialogGuard\.markLoaded\(\['sec-pw-current', 'sec-pw-new', 'sec-pw-new2'\]\.map\(\$\)\);/, 'phone: password changed');
+  assert.match(m, /\$\('approval-sheet'\)\.__dialogClose = \(\) => \{ approvalsHidden = true; paintApprovals\(\); \};/, 'approval sheet: dismiss = Later');
+  const tools = m.slice(m.indexOf("sh.id = 'tsn-sheet';"), m.indexOf("tsnSheetFor = holder;"));
+  assert.ok(!/addEventListener\('keydown'/.test(tools), 'Tools sheet: no key handler of its own (the guard handles Esc and Tab once)');
+  const save = app.slice(app.indexOf('    async function saveSettings() {'), app.indexOf('    async function testProvider('));
+  assert.match(save, /const saved = dialogGuard\.savePoint\(/);
+  assert.match(save, /if \(!r\.ok\) throw new Error\(`HTTP \$\{r\.status\}`\);\n\s*saved\(\);/, 'settles only after the hub confirmed it');
+  assert.ok(!/savePoint/.test(app.slice(app.indexOf('    async function testProvider('), app.indexOf('    async function testProvider(') + 1500)), 'Test settles nothing');
+  for (const fn of ['saveWebSearch', 'saveSpendCaps', 'saveSandboxDefaults', 'savePlanWarn', 'saveMemberPolicy', 'saveClassifier']) {
+    const body = app.slice(app.indexOf(`    async function ${fn}(`), app.indexOf('\n    }\n', app.indexOf(`    async function ${fn}(`)));
+    assert.match(body, /const saved = dialogGuard\.savePoint\(/, fn);
+    assert.match(body, /saved\(\);/, fn);
+  }
+  assert.match(as, /const SAVES = \[/);
+  assert.match(as, /\['saveCurrentFile', 'file-status', \(\) => \[document\.getElementById\(`editor-\$\{currentFile\}`\)\]\],/, 'Save File settles only its own file');
+  assert.match(as, /function showStatus\(id, type, msg\) \{\n\s*settleSave\(id, type\);/);
+  const lib = read('lib/ui-dialog.js');
+  assert.ok(!/function rebase\(|res\.ok\) rebase/.test(lib), 'no automatic settling from a response');
 });

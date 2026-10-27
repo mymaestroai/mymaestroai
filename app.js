@@ -296,6 +296,7 @@
       try {
         await authPost('/api/auth/password', { current, next });
         for (const id of ['sec-pw-current', 'sec-pw-new', 'sec-pw-new2']) document.getElementById(id).value = '';
+        dialogGuard.markLoaded(['sec-pw-current', 'sec-pw-new', 'sec-pw-new2'].map(id => document.getElementById(id)));   // done: nothing left to lose
         secMsg('sec-pw-msg', 'Password changed.', true);
       } catch (e) { secMsg('sec-pw-msg', e.message); }
     }
@@ -396,7 +397,7 @@
       return overlay;
     }
 
-    const gsClose = `<button class="gs-btn secondary" onclick="document.getElementById('gs-overlay').remove()">Close</button>`;
+    const gsClose = `<button class="gs-btn secondary" onclick="dialogRequestClose(this)">Close</button>`;   // the same checks as the header ✕
     const esc = (s) => String(s).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 
     // ── Files: upload, download and browse the files agents can read (server: /api/files*) ──
@@ -1902,6 +1903,7 @@
 
     // Auto model classifier (lib/classifier): settings, tallies, and the side-by-side try-it box.
     async function saveClassifier() {
+      const saved = dialogGuard.savePoint(['st-cl-backend', 'st-cl-provider', 'st-cl-model', 'st-cl-think', 'st-cl-floor', 'st-cl-keep', 'st-cl-shadow'].map(id => document.getElementById(id)));
       const v = id => (document.getElementById(id) || {}).value; const chk = id => !!(document.getElementById(id) || {}).checked;
       const state = document.getElementById('st-cl-state');
       try {
@@ -1909,6 +1911,7 @@
           body: JSON.stringify({ backend: v('st-cl-backend'), localProvider: v('st-cl-provider'), localModel: v('st-cl-model'), localThinking: chk('st-cl-think'), confidenceFloor: Number(v('st-cl-floor')), shadow: chk('st-cl-shadow'), keepOnBox: v('st-cl-keep') }) });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || r.status);
+        saved();
         if (state) state.textContent = `Saved. Backend ${d.config.backend}${d.config.shadow ? ' (shadow)' : ''}; local server: ${d.localServer ? `${d.localServer.provider} / ${d.localServer.model}` : 'none reachable'}; Perplexity key: ${d.perplexityKey ? 'yes' : 'no'}.`;
         loadClassifierStats();
       } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
@@ -1932,18 +1935,23 @@
       } catch { el.textContent = 'Could not read the sandbox status.'; }
     }
     async function saveMemberPolicy() {
+      const saved = dialogGuard.savePoint(['st-mp-web', 'st-mp-read_outside', 'st-mp-write_outside', 'st-mp-send'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-mp-state');
       const memberPolicy = {};
       for (const k of ['web', 'read_outside', 'write_outside', 'send']) { const v = (document.getElementById(`st-mp-${k}`) || {}).value; if (v) memberPolicy[k] = v; }
       try {
         const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ memberPolicy }) });
+        if (r.ok) saved();
         if (state) state.textContent = r.ok ? 'Saved. Applies to member agents from their next tool call.' : `Could not save (HTTP ${r.status})`;
       } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
     }
     async function saveSandboxDefaults() {
+      const saved = dialogGuard.savePoint(['st-sb-member', 'st-sb-admin', 'st-tools-default'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-sb-state');
       try {
-        await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sandboxDefaults: { member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }, toolsDefault: (document.getElementById('st-tools-default') || {}).value === 'hub' ? 'hub' : 'client' }) });
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sandboxDefaults: { member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }, toolsDefault: (document.getElementById('st-tools-default') || {}).value === 'hub' ? 'hub' : 'client' }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        saved();
         if (state) state.textContent = 'Saved. Applies to agents set to "hub default" from their next turn.';
         stSum('agents', 'sb', stSandboxText({ member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }));
       } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
@@ -2231,6 +2239,7 @@
       } catch { el.textContent = 'Could not read the web search status.'; }
     }
     async function saveWebSearch() {
+      const saved = dialogGuard.savePoint(['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-wf-jina'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-ws-state');
       const keys = {};
       for (const k of ['brave', 'serper', 'tavily']) { const v = (document.getElementById(`st-ws-key-${k}`) || {}).value || ''; if (v.trim()) keys[k] = v.trim(); }
@@ -2243,7 +2252,8 @@
       try {
         const r = await (await fetch('/api/websearch/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) })).json();
         if (state) state.textContent = r.ok ? 'Saved. Applies to the next search or fetch.' : (r.error || 'Could not save');
-        for (const k of ['brave', 'serper', 'tavily']) { const inp = document.getElementById(`st-ws-key-${k}`); if (inp && inp.value) { inp.placeholder = 'set'; inp.value = ''; } }
+        if (r.ok) saved();
+        for (const k of ['brave', 'serper', 'tavily']) { const inp = document.getElementById(`st-ws-key-${k}`); if (r.ok) dialogGuard.markLoaded(inp); if (inp && inp.value) { inp.placeholder = 'set'; inp.value = ''; } }
         loadWebSearchStatus();
       } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
     }
@@ -3009,12 +3019,14 @@
       } catch (e) { sel.value = prev; alert(`Could not change the model: ${e.message}`); }
     }
     async function savePlanWarn() {
+      const saved = dialogGuard.savePoint(document.getElementById('st-plan-warn'));
       const v = document.getElementById('st-plan-warn').value;
       const at = String(v).split(/[,\s]+/).filter(Boolean).map(Number).filter(n => Number.isFinite(n) && n >= 1 && n <= 100);
       const st = document.getElementById('st-plan-warn-state');
       try {
         const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ planWarn: { at } }) });
         if (!r.ok) throw new Error(r.status);
+        saved();
         if (st) st.textContent = at.length ? 'Saved.' : 'Saved: no warnings.';
         loadPlanBox();
       } catch (e) { if (st) st.textContent = `Could not save: ${e.message}`; }
@@ -3102,6 +3114,7 @@
         if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         if (spendToday) spendToday.credits = d.credits || [];
         paintCreditMeter(); paintSpendSettings(false); fillCreditInputs();
+        dialogGuard.markLoaded(['st-credit-provider', 'st-credit-amount', 'st-credit-day'].map(id => document.getElementById(id)));   // refilled from the hub's answer
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
       } catch (e) {
         if (btn) { btn.className = 'st-test-btn fail'; btn.textContent = 'Failed'; }
@@ -3138,6 +3151,7 @@
       if (hubInp && document.activeElement !== hubInp) hubInp.value = caps.hubDailyUsd ? String(caps.hubDailyUsd) : '';
     }
     async function saveSpendCaps() {
+      const saved = dialogGuard.savePoint(['st-cap-agent', 'st-cap-hub'].map(id => document.getElementById(id)));
       const btn = document.getElementById('st-caps-save');
       const val = (id) => { const v = (document.getElementById(id)?.value || '').trim().replace(/^\$/, ''); return v === '' ? null : Number(v); };
       const perAgentDailyUsd = val('st-cap-agent');
@@ -3147,6 +3161,7 @@
       try {
         const r = await fetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        saved();
         const d = await r.json().catch(() => null);
         if (d && d.caps && spendToday) spendToday.caps = d.caps;
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
@@ -3216,6 +3231,8 @@
     }
 
     async function saveSettings() {
+      // This Save writes the provider keys and URLs and the two defaults; it settles only those (lib/ui-dialog savePoint).
+      const saved = dialogGuard.savePoint([...document.querySelectorAll('#st-overlay [id^="st-key-"], #st-overlay [id^="st-url-"]'), ...['st-maxTokens', 'st-maxContext'].map(id => document.getElementById(id))]);
       const patch = { providers: {} };
 
       for (const p of PROVIDERS) {
@@ -3241,14 +3258,16 @@
       if (maxContext > 0) patch.maxContextMessages = maxContext;
 
       try {
-        await fetch('/api/settings', {
+        const r = await fetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify(patch),
         });
-        const saved = document.getElementById('st-saved');
-        if (saved) { saved.classList.add('show'); setTimeout(() => saved.classList.remove('show'), 2000); }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        saved();
+        const note = document.getElementById('st-saved');
+        if (note) { note.classList.add('show'); setTimeout(() => note.classList.remove('show'), 2000); }
       } catch (e) {
         alert('Save failed: ' + e.message);
       }
@@ -10741,7 +10760,6 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     };
     const DIALOG_SKIP_TYPES = ['button', 'submit', 'reset', 'image', 'hidden', 'search'];
     const DIALOG_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), iframe, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
-    const DIALOG_SECTION = '[data-dialog-section], fieldset, form, section, .section, .st-section, .gs-box, .sec-section';
 
     /** Is this element a field whose value counts as an edit? */
     function dialogField(el) {
@@ -10776,7 +10794,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     function createDialogGuard({ doc = document, win = window, auto = '', useHistory = false, trackSaves = true, pageDirty = false } = {}) {
       const layers = [];   // innermost last
-      let confirmOpen = null, seq = 0, lastAct = { t: 0, el: null }, escIgnoredAt = 0, popping = false, pendingPush = [], lastOutside = null;
+      let confirmOpen = null, confirmFor = null, confirmFinish = null, seq = 0, lastAct = { t: 0, el: null }, escIgnoredAt = 0, popping = false, pendingPush = [], lastOutside = null;
       const page = pageDirty ? { el: doc.body, page: true, baselines: new Map() } : null;
       const now = () => Date.now();
 
@@ -10905,7 +10923,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const back = doc.activeElement;
         const finish = (discard) => {
           if (confirmOpen !== d) return;
-          confirmOpen = null;
+          confirmOpen = null; confirmFor = null; confirmFinish = null;
           try { d.close(); } catch {}
           if (d.remove) d.remove();
           if (discard) { l.baselines.clear(); closeNow(l); }
@@ -10921,7 +10939,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(false); }   // Enter never discards
           else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
         });
-        confirmOpen = d;
+        confirmOpen = d; confirmFor = l; confirmFinish = finish;
         doc.body.appendChild(d);
         if (d.showModal) d.showModal();
         keep.focus();
@@ -10947,7 +10965,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const f = focusables(l.el);
           if (!f.length) { e.preventDefault(); return; }
           const first = f[0], last = f[f.length - 1], a = doc.activeElement;
-          if (!l.el.contains(a)) { e.preventDefault(); first.focus(); }
+          // Focus on something that is not one of the controls (the dialog box itself, a scroll area, or outside):
+          // Tab goes to the first control, Shift+Tab to the last, never out of the dialog.
+          if (!l.el.contains(a) || f.indexOf(a) < 0) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
           else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
           else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
         }
@@ -10974,46 +10994,53 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           for (const l of q) if (layers.indexOf(l) >= 0) pushHistory(l);
           return;
         }
-        const l = top();
+        const l = confirmOpen ? confirmFor : top();
         if (!l || !l.hist) return;
         const st = e.state || {};
         if (st.dialog === l.id) return;
         e.stopImmediatePropagation();   // the page's own router must not move while a layer is open
         l.hist = false;
+        if (confirmOpen) { confirmFinish(false); return; }   // Back on "Discard changes?" = Keep editing (takes the entry back)
         const r = requestClose(l, 'back');
-        if (r !== 'closed' && r !== 'confirm' && layers.indexOf(l) >= 0) pushHistory(l);
-        else if (r === 'confirm') { /* pushed back again if the user keeps editing (askDiscard) */ }
+        // Still open (the question is up, a save is running, an answer is needed): the sheet keeps its entry, so the next
+        // Back comes here again instead of reaching the page's router.
+        if (r !== 'closed' && layers.indexOf(l) >= 0) pushHistory(l);
       }
 
-      // ── Saves in flight: a POST/PUT/PATCH/DELETE to the hub's /api/ that follows a click or key in a layer belongs to
-      // it; on success that part of the layer becomes the new baseline. ──
+      // ── Saves in flight: a POST/PUT/PATCH/DELETE to the hub's /api/ that follows a click or key in a layer keeps that
+      // layer open while it runs. It settles nothing by itself (a Test button posts too): see savePoint. ──
       function wrapFetch() {
         const orig = win.fetch && win.fetch.bind(win);
         if (!orig || win.fetch.__dialogGuard) return;
         const wrapped = function (input, init) {
           const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
-          let l = null, from = null;
+          let l = null;
           if (method !== 'GET' && method !== 'HEAD' && now() - lastAct.t < 1500) {
             let url = ''; try { url = new URL(typeof input === 'string' ? input : input.url, win.location.href).pathname; } catch {}
-            if (url.startsWith('/api/')) { from = lastAct.el; l = scopeOf(from); }
+            if (url.startsWith('/api/')) l = scopeOf(lastAct.el);
           }
           if (!l) return orig(input, init);
           l.saving = (l.saving || 0) + 1;
-          return orig(input, init).then((res) => {
-            if (res && res.ok) rebase(l, from);
-            return res;
-          }).finally(() => { l.saving--; });
+          return Promise.resolve(orig(input, init)).finally(() => { l.saving--; });
         };
         wrapped.__dialogGuard = true;
         win.fetch = wrapped;
       }
-      // A save started from a field (a select that saves on change) settles that field; one started from a button settles
-      // the part of the dialog the button is in (or the whole dialog).
-      function rebase(l, from) {
-        if (dialogField(from)) { if (l.baselines.has(from)) l.baselines.set(from, dialogFieldValue(from)); return; }
-        const part = (from && from.closest && from.closest(DIALOG_SECTION)) || null;
-        const inside = part && l.el.contains && l.el.contains(part) && part !== l.el ? part : l.el;
-        for (const [el] of l.baselines) if (inside === l.el || (inside.contains && inside.contains(el))) l.baselines.set(el, dialogFieldValue(el));
+      /** savePoint(fields): the fields a save writes (an element, a container of them, or a list), with the values they
+       *  have now, as the save starts. The returned commit(), called once the hub confirmed the save, makes exactly those
+       *  values the fields' baselines: an edit made while the save ran stays changed, and nothing else is touched. */
+      function savePoint(scope) {
+        const list = [];
+        const add = (el) => {
+          if (!el) return;
+          if (dialogField(el)) list.push(el);
+          else if (el.querySelectorAll) for (const f of el.querySelectorAll('input, textarea, select')) if (dialogField(f)) list.push(f);
+        };
+        if (Array.isArray(scope) || (scope && typeof scope.length === 'number' && !scope.tagName)) for (const el of scope) add(el); else add(scope);
+        const snap = list.map(el => [el, dialogFieldValue(el)]);
+        return function commit() {
+          for (const [el, v] of snap) { if (el.isConnected === false) continue; const s = scopeOf(el); if (s) s.baselines.set(el, v); }
+        };
       }
 
       // ── Wiring ──
@@ -11078,8 +11105,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         closed: (el) => unregister(el),
         requestClose: (elOrChild, how) => requestClose(layerOf(elOrChild), how),
         isDirty: (elOrChild) => dirty(layerOf(elOrChild)) || (!layerOf(elOrChild) && !!page && dialogIsDirty(page.baselines)),
-        markSaved: (elOrChild) => { const l = scopeOf(elOrChild); if (l) rebase(l, elOrChild); },
-        markLoaded: (el) => { const l = scopeOf(el); if (l) l.baselines.delete(el); },   // new content put in by the page, not typed
+        savePoint,
+        markLoaded: (els) => { for (const el of (Array.isArray(els) ? els : [els])) { const l = el && scopeOf(el); if (l) l.baselines.delete(el); } },   // put in by the page, not typed
         layers: () => layers.slice(),
         _confirm: () => confirmOpen,
       };
