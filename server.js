@@ -444,6 +444,7 @@ async function handleHttpRequest(req, res) {
         out.unfinished = welcome.unfinished();
         const lead = (await getAgents()).find(a => a.name === 'maestro') || (await getAgents())[0] || null;
         out.lead = lead ? { name: lead.name, display: lead.display || lead.name, model: lead.model } : null;
+        out.interview = lead ? welcome.interviewStatus(lead.name) : 'unknown';   // 'complete' | 'in-progress' | 'unknown'
       }
       return jsonResponse(res, 200, out);
     }
@@ -2868,6 +2869,8 @@ setInterval(() => {
 try {
   const seeded = require('./lib/agents').seedDefaultWorkspaces();
   if (seeded.length) console.log(`[workspaces] Created from templates: ${seeded.join(', ')}`);
+  const refreshed = require('./lib/agents').refreshShippedWorkspaceFiles();   // unedited copies of improved playbooks
+  if (refreshed.length) console.log(`[workspaces] Updated to this version (they had not been changed): ${refreshed.join(', ')}`);
 } catch (e) { console.warn('[workspaces] Template seeding failed:', e.message); }
 
 // Shared secret for POST /api/chat/alert (data/alert-secret, mode 0600, created once).

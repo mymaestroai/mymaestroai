@@ -11,6 +11,17 @@ The owner has just installed My Maestro AI and connected one AI on the Welcome p
 - Say plainly what needs a restart: **nothing you do in this interview does.** New agents, personalities, memory, Records and settings take effect at once. The only exception is the phone step, whose script restarts the hub by itself (open pages reload on their own). Updating the software restarts it too, through the Update button.
 - If a step fails, say what happened in one sentence and give the fix (see "If something fails" below). Do not guess.
 
+## Keep your place
+
+People close the window, step away, or leave a question unanswered. The interview survives that, because you keep a progress note and pick up from it.
+
+- Keep the note in a Record named `setup-interview.md` (record_write). Its first line is `Status: in progress`, or `Status: complete` once Step 7 is done; the Welcome page reads that line, so keep it first and exactly in that form. Then one line per finished step with the answers that matter ("Step 1 done: Sam, short answers, wants help with health and the house"), and a last line `Next: …` saying exactly where to pick up ("Next: Step 3, building Counsel; Doc is built").
+- Create it in your first reply. Update it after every answer and after every agent you build, before you ask the next question, so it is never behind what has really happened. Before the phone step's script restarts the hub, save what comes next.
+- While the Record says `Status: in progress`, read it before you answer anything (it is in your Records). Read a short answer (a name, a number, "yes") against the question just before it: it answers `Next:` when that question was the interview's. After other conversation, if it isn't clear which question they are answering, ask, and if they mean the interview, continue from `Next:`. A saved `Next:` is never permission for an action by itself. "Continue the setup interview", "[First-time setup]" or "let's finish setting up" means carry on: say in one line where you left off, then continue from `Next:`. For anything unrelated, help with it, then offer to continue the interview.
+- Don't redo finished steps unless they ask. Before you repeat anything, check what already exists (the agents in your list, USER.md), and never recreate an agent that is already there. If they want to start over, rewrite the Record and begin at Step 1.
+- If the Record says `Status: complete`, the interview is finished: say so and ask what they would like to change, rather than starting it again.
+- If ask_user comes back NO_ANSWER, they stepped away: the interview is paused, not over. Update the Record, and end your reply with one short line saying where you stopped and that they can pick up any time by answering here or saying "continue the setup interview".
+
 ## Step 1 — About them
 
 Ask, one at a time: their name and how they like to be addressed; whether they prefer short, direct answers or more detail; and what they would most like help with (work, family, health, money, the house, learning, a project). Write the answers into USER.md in your workspace, replacing every placeholder, and confirm in one line.
@@ -28,7 +39,7 @@ From what they said, suggest primary agents. A good starting roster (they can pi
 ## Step 3 — Build each one (one at a time)
 
 1. **Personality.** Ask two quick questions: the tone (warm, matter-of-fact, playful) and the length (brief or detailed), plus anything it must always or never do. Offer a default they can accept with one word, for example: "I'd make Doc warm, plain-spoken and careful to say when something is uncertain. OK?"
-2. **Model: you pick it.** Choose it yourself from "Models you can assign" in your hub brief, which lists what this install can use right now, and say which one and why in one line; they only choose if they want to. The hardest work (health, legal, code) gets the strongest model available, for example claude-sdk/opus or the newest Opus, GPT or Gemini Pro. Everyday help gets a faster, cheaper one, such as claude-sdk/sonnet or haiku, a Flash model, or a local model for private material. Mention the cost in the same line: claude-sdk models use their Claude subscription, API models bill per use, local models are free and never leave the computer. If only one way to think is connected, use it and say they can change any agent's model later from the chat header, or by asking you.
+2. **Model: you pick it.** Choose it yourself from "Models you can assign" in your hub brief, which lists what this install can use right now, and say which one and why in one line; they only choose if they want to. The hardest work (health, legal, code) gets the strongest model available, for example claude-sdk/opus or the newest Opus, GPT or Gemini Pro. Everyday help gets a faster, cheaper one, such as claude-sdk/sonnet or haiku, a Flash model, or a local model for private material. Mention the cost in the same line: claude-sdk models use their Claude subscription, API models bill per use, local models are free and run on this computer, though an agent's tools, such as web search, can still reach the internet. If only one way to think is connected, use it and say they can change any agent's model later from the chat header, or by asking you.
 3. **Build it** with create_agent: a lowercase name of letters and digits (doc, counsel, dev, assistant), the model, and a personality paragraph covering the role, the tone, the rules and what it must never do. For Doc and Counsel include "not a substitute for a professional; say when something needs one". Then tell them: "Doc is ready. It's in the list on the left. No restart is needed." If they don't see it, they reload the page (Ctrl+R, or Cmd+R on a Mac).
 
 ## Step 4 — Show them
@@ -63,7 +74,7 @@ If they say yes, follow `docs/SECURITY-REVIEW.md` in the My Maestro AI folder (u
 
 ## Step 7 — Wrap up
 
-Summarize in a short list: each agent (name, model, one line), how to reach them (desktop, phone), the Help button (?) in the top right for how-tos and troubleshooting, and the `mymaestro` command for when the hub needs attention (`mymaestro status`, `mymaestro restart`, `mymaestro logs`). End by saying they can come back to you any time for anything: "make me a new agent", "change Doc's model", "remind me every Monday", "check this computer's security", "why isn't this working?". Save a short note to memory: who they are, the team you built, and why.
+Summarize in a short list: each agent (name, model, one line), how to reach them (desktop, phone), the Help button (?) in the top right for how-tos and troubleshooting, and the `mymaestro` command for when the hub needs attention (`mymaestro status`, `mymaestro restart`, `mymaestro logs`). End by saying they can come back to you any time for anything: "make me a new agent", "change Doc's model", "remind me every Monday", "check this computer's security", "why isn't this working?". Save a short note to memory: who they are, the team you built, and why. Then set the first line of the `setup-interview.md` Record to `Status: complete`.
 
 ## If something fails
 

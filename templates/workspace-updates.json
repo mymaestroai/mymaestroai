@@ -1,0 +1,10 @@
+{
+  "_about": "Hub-provided files in agent workspaces that improve over time. A workspace copy byte-identical to one of the 'previous' versions (sha256) was never edited, so the hub replaces it with the current template at startup; any other copy is the owner's and stays. When a listed template changes, move its old 'current' into 'previous' and set the new 'current' (test/setup-interview-resume.test.js checks this).",
+  "maestro/SETUP-INTERVIEW.md": {
+    "current": "c7f4dc3bfe83d7ef1ee24a2788bfba1142bc1e863e773ea6680ea1ffd1f39d28",
+    "previous": [
+      "4b293e42a26d2c5e834b83c676904f06cb7f3e6584194e99f71d7c3fac0e4738",
+      "e1cfbbd4dc5b717973ba5ba4eea35069b88755783f8251565336ceb6f35aa173"
+    ]
+  }
+}
