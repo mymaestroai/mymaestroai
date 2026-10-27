@@ -66,6 +66,9 @@
   .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: s 1s linear infinite; vertical-align: -2px; margin-right: 8px; }
   @keyframes s { to { transform: rotate(360deg) } }
   ul.next { margin: 8px 0 0 18px; font-size: 14px; } ul.next li { margin: 6px 0; }
+  ul.next a { color: var(--accent-hover); }
+  .resume-box { margin: 16px 0 6px; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(61,123,255,.45); background: rgba(61,123,255,.08); }
+  .resume-box p { margin: 6px 0 12px; font-size: 14px; color: var(--text-dim); }
   .foot { margin-top: 18px; font-size: 12px; color: var(--text-dim); text-align: center; }
   @media (max-width: 480px) { .card { padding: 20px 16px; } .codes { grid-template-columns: 1fr; } }
   .resume { font-size: 12px; color: var(--text-dim); margin: -6px 0 14px; line-height: 1.5; }
@@ -192,9 +195,14 @@
   <section id="s-done">
     <h2>You're all set</h2>
     <p class="sub">My Maestro AI is running at <b id="origin"></b>. Bookmark it.</p>
+    <div class="resume-box" id="done-interview" hidden>
+      <b id="done-interview-title"></b>
+      <p id="done-interview-text"></p>
+      <button class="primary" type="button" id="done-interview-go">Continue with <span class="lead-name">Maestro</span></button>
+    </div>
     <h3>When you're ready</h3>
     <ul class="next">
-      <li>Use it from your phone: <b>Settings → Setup checklist → Phone access</b>.</li>
+      <li>Use it from your phone: ask <span class="lead-name">Maestro</span> to set it up with you, or see <a href="/help#phone">Help → The phone app</a>.</li>
       <li>Add more AI providers: <b>Settings → LLM providers</b>.</li>
       <li>Invite family members: <b>Users</b>, in the account menu.</li>
       <li>Check on it from a terminal: <code>mymaestro status</code>.</li>
@@ -238,7 +246,26 @@
     });
     const first = document.querySelector(`#${id} input:not([type=checkbox]), #${id} select`);
     if (first) setTimeout(() => first.focus(), 30);
+    if (id === 's-done') paintDone();
   }
+  // "You're all set" means the Welcome page is done, not the interview: that lives in the lead agent's chat, which keeps
+  // its place in a Record (state.interview: 'complete' | 'in-progress' | 'unknown'). Point back to it until it's complete.
+  function paintDone() {
+    const lead = state && state.lead;
+    if (!lead) return;
+    const who = lead.display || lead.name;
+    document.querySelectorAll('.lead-name').forEach(s => { s.textContent = who; });
+    const st = state.interview;
+    $('done-interview').hidden = st === 'complete';
+    $('done-interview-title').textContent = st === 'in-progress' ? "Your setup interview isn't finished" : "Didn't finish the setup interview?";
+    $('done-interview-text').textContent = st === 'in-progress'
+      ? `It continues in ${who}'s chat, right where you left off: answer the last question there, or say "continue the setup interview".`
+      : `Open ${who}'s chat and say "continue the setup interview". It picks up where you stopped, or starts it if you never began.`;
+  }
+  $('done-interview-go').addEventListener('click', () => {
+    const lead = (state && state.lead) || { name: 'maestro' };
+    location.href = '/?agent=' + encodeURIComponent(lead.name);
+  });
   /** A message box: plain words first, the raw detail folded away. */
   function say(id, text, kind = 'err', detail = '') {
     const el = $(id);
