@@ -453,7 +453,9 @@
   <!-- Vendored, pinned (see NOTICE): marked 18.1.1 (MIT), DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0). No CDN. -->
   <script src="/vendor/marked.umd.js"></script>
   <script src="/vendor/purify.min.js"></script>
+  <script src="/ui-dialog.js"></script>
   <script>
+    window.dialogGuard = typeof createDialogGuard === 'function' ? createDialogGuard({ trackSaves: false }) : null;
     // Every agent- or server-supplied string that goes into markup passes through this.
     function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
     // ── Parse URL params ──
@@ -1722,10 +1724,12 @@
       if (savedPanelOpen) {
         panel.style.display = 'none';
         savedPanelOpen = false;
+        if (window.dialogGuard) dialogGuard.closed(panel);
         return;
       }
       panel.style.display = 'block';
       savedPanelOpen = true;
+      if (window.dialogGuard) dialogGuard.open(panel, { close: toggleSavedPanel });   // Esc and the backdrop close it (lib/ui-dialog.js)
       const list = document.getElementById('saved-list');
       list.innerHTML = 'Loading...';
       try {

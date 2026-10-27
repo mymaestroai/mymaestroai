@@ -39,11 +39,11 @@ test('phone copy fallback goes inside the open (modal) dialog', () => {
 
 test('desktop About: Tab stays inside, Esc always closes, focus goes back to the opener, stale openings stop', () => {
   const f = extract(app, 'openAboutDialog');
-  assert.match(f, /if \(e\.key === 'Escape'\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); close\(\); return; \}/);
-  assert.match(f, /document\.addEventListener\('keydown', onKey, true\);/, 'held on the page, wherever focus is');
-  assert.match(f, /document\.removeEventListener\('keydown', onKey, true\);\s*overlay\.remove\(\);/, 'and let go on close');
-  assert.match(f, /t\.closest\('\[class\*="overlay"\], dialog, \[role="dialog"\], \[aria-modal="true"\]'\)\) return;/, 'any other box or panel keeps its keys');
-  assert.match(f, /if \(e\.key !== 'Tab'\) return;[\s\S]*f\[i < 0 \? 0 : \(i \+ \(e\.shiftKey \? -1 : 1\) \+ f\.length\) % f\.length\]\.focus\(\);/);
+  // Esc, Tab kept inside and the backdrop are the shared dialog guard's now (lib/ui-dialog.js, test/ui-dialog.test.js);
+  // the guard closes About through close(), which keeps the focus fallback below.
+  assert.match(f, /overlay\.__dialogClose = close;/);
+  assert.match(f, /overlay\.querySelector\('#about-close'\)\.onclick = \(\) => dialogRequestClose\(overlay\);/);
+  assert.ok(!/addEventListener\('keydown'/.test(f), 'no key handler of its own');
   assert.match(f, /opener\.offsetParent !== null \? opener : document\.getElementById\('more-btn'\)/, 'focus back to the opener, or ⋯ when its menu closed');
   assert.match(f, /if \(!overlay\.isConnected\) return;/);
   assert.ok(!/document\.getElementById\('about-(body|update|copy)'\)/.test(f), 'lookups are scoped to this overlay');

@@ -346,7 +346,11 @@
 </div>
 <div id="file-status" class="status"></div>
 
+<script src="/ui-dialog.js"></script>
 <script>
+  // Unsaved edits on this page (a field changed and not saved yet): closing or reloading the window asks first
+  // (lib/ui-dialog.js; a successful save settles what it saved).
+  const pageGuard = createDialogGuard({ pageDirty: true });
   const params = new URLSearchParams(window.location.search);
   const agentName = params.get('agent');
   document.getElementById('agent-title').textContent = `${agentName} — Settings`;
@@ -1349,6 +1353,7 @@
     recordsState.current = r.name;
     document.getElementById('records-editing-name').textContent = data.name || r.name;
     document.getElementById('records-content').value = data.content || '';
+    pageGuard.markLoaded(document.getElementById('records-content'));   // another record loaded: not an edit
     document.getElementById('records-editor').style.display = '';
     renderRecords();
     document.getElementById('records-content').focus();
