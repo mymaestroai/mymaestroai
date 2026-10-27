@@ -140,7 +140,7 @@ test('after a hub restart both pages reload themselves: hello carries the boot i
   assert.ok(writes.some(w => w.includes('"boot":"boot-test-1"')), writes.join('|').slice(0, 300));
   const app = read('app.js'), m = read('mobile.js');
   assert.ok(app.includes("ev.boot !== window.__hubBoot") && app.includes("Object.values(chats).some(c => c && c.controller)") && app.includes('location.reload()'), 'desktop reloads when idle');
-  assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; }"), 'phone reloads when idle and not typing');
+  assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("const busy = () => streams.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();") && m.includes("const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'phone reloads when idle and not typing');
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
 });
 
@@ -206,6 +206,6 @@ test('the app does not reload itself while the message box is in use (focused or
   assert.ok(js.includes("function typingNow() { const i = $('msg-input'); return !!i && (document.activeElement === i || !!i.value.trim()); }"));
   const reloads = js.split('location.reload()').length - 1;
   assert.strictEqual(reloads, 3, 'three reload sites: hub back after Restart, hub restarted, new app version');
-  assert.ok(js.includes("if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800);"), 'after a hub restart');
-  assert.ok(js.includes("if (streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } toast('Updating to the new version…');"), 'after a new app version');
+  assert.ok(js.includes("const busy = () => streams.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();\n        const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'after a hub restart');
+  assert.ok(js.includes("const busy = () => streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();\n      const go = () => { if (busy()) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'after a new app version');
 });

@@ -2241,8 +2241,8 @@
     async function saveWebSearch() {
       const saved = dialogGuard.savePoint(['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-wf-jina'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-ws-state');
-      const keys = {};
-      for (const k of ['brave', 'serper', 'tavily']) { const v = (document.getElementById(`st-ws-key-${k}`) || {}).value || ''; if (v.trim()) keys[k] = v.trim(); }
+      const keys = {}, sent = {};   // sent: each key field as it was when Save was pressed
+      for (const k of ['brave', 'serper', 'tavily']) { const v = (document.getElementById(`st-ws-key-${k}`) || {}).value || ''; if (v.trim()) { keys[k] = v.trim(); sent[k] = v; } }
       const body = {
         order: (document.getElementById('st-ws-order').value || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
         keys,
@@ -2252,8 +2252,12 @@
       try {
         const r = await (await fetch('/api/websearch/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) })).json();
         if (state) state.textContent = r.ok ? 'Saved. Applies to the next search or fetch.' : (r.error || 'Could not save');
-        if (r.ok) saved();
-        for (const k of ['brave', 'serper', 'tavily']) { const inp = document.getElementById(`st-ws-key-${k}`); if (r.ok) dialogGuard.markLoaded(inp); if (inp && inp.value) { inp.placeholder = 'set'; inp.value = ''; } }
+        if (r.ok) {
+          saved();
+          // A saved key is not shown again: its field empties and says "set". A field changed while the save ran keeps
+          // the newer key (not saved yet); after a failed save every typed key stays, to try again.
+          for (const [k, v] of Object.entries(sent)) { const inp = document.getElementById(`st-ws-key-${k}`); if (inp && inp.value === v) { inp.placeholder = 'set'; inp.value = ''; dialogGuard.markLoaded(inp); } }
+        }
         loadWebSearchStatus();
       } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
     }
@@ -5919,13 +5923,15 @@
         const ev = parse(e); if (!ev) return;
         if (Number(ev.lastId) > hubLastSeq) hubLastSeq = Number(ev.lastId);
         // A different boot id means the hub restarted since this page loaded: the page code may be stale.
-        // Reload as soon as no reply is streaming in this window (re-attached chats catch up again after the reload).
+        // Reload as soon as no reply is streaming in this window (re-attached chats catch up again after the reload)
+        // and no open dialog holds unsaved changes (the reload would lose them).
         if (ev.boot) {
           if (!window.__hubBoot) window.__hubBoot = ev.boot;
           else if (ev.boot !== window.__hubBoot && !window.__hubReloading) {
             window.__hubReloading = true;
             hubToast('The hub restarted. Reloading this page to the new version…');
-            const go = () => { if (Object.values(chats).some(c => c && c.controller)) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800); };
+            const busy = () => Object.values(chats).some(c => c && c.controller) || dialogGuard.hasChanges();
+            const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };   // checked again just before
             go();
           }
         }
@@ -10791,10 +10797,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const t = e.target;
       return !!(t && t.getAttribute && t.getAttribute('aria-expanded') === 'true');
     }
+    /** A <dialog> opened with showModal(); one opened with show() sits beside the page, which stays usable. */
+    function dialogIsModal(el) {
+      try { return el.matches(':modal'); } catch { return true; }   // no :modal support: treat it as covering the page
+    }
 
     function createDialogGuard({ doc = document, win = window, auto = '', useHistory = false, trackSaves = true, pageDirty = false } = {}) {
       const layers = [];   // innermost last
-      let confirmOpen = null, confirmFor = null, confirmFinish = null, seq = 0, lastAct = { t: 0, el: null }, escIgnoredAt = 0, popping = false, pendingPush = [], lastOutside = null;
+      let confirmOpen = null, confirmFinish = null, seq = 0, lastAct = { t: 0, el: null }, escIgnoredAt = 0, popping = false, histId = 0, histSeq = 0, lastOutside = null;
       const page = pageDirty ? { el: doc.body, page: true, baselines: new Map() } : null;
       const now = () => Date.now();
 
@@ -10804,6 +10814,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return null;
       }
       const top = () => layers[layers.length - 1] || null;
+      // Layers that cover the page: all but a <dialog> opened with show() (the phone's approvals panel), which leaves the
+      // page and its tabs usable, so Back stays the page's while only such a panel is open.
+      const covering = () => layers.filter(l => !(l.isDialog && l.el.open && !dialogIsModal(l.el)));
       const scopeOf = (el) => layerOf(el) || (page && el && page.el.contains && page.el.contains(el) ? page : null);
 
       // Baselines: the first time a field is focused, pressed or typed in. A radio notes its whole group (keyboard arrows
@@ -10845,7 +10858,6 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           close: opts.close || null,
           // What opened it: the focused element, unless the dialog already took the focus; then the last one outside.
           opener: (() => { const a = doc.activeElement; return a && a !== doc.body && !(el.contains && el.contains(a)) ? a : lastOutside; })(),
-          hist: false,
         };
         layers.push(l);
         if (isDialog && el.addEventListener && !el.__dialogCancel) {
@@ -10865,7 +10877,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (box.setAttribute && !box.hasAttribute('tabindex')) box.setAttribute('tabindex', '-1');
           try { box.focus({ preventScroll: true }); } catch {}
         });
-        if (useHistory) pushHistory(l);
+        syncHistory();
         return l;
       }
 
@@ -10873,7 +10885,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const i = layers.findIndex(l => l.el === el);
         if (i < 0) return;
         const [l] = layers.splice(i, 1);
-        if (useHistory && l.hist) popHistory(l);
+        syncHistory();
         const a = doc.activeElement;
         if (l.opener && l.opener.isConnected !== false && (!a || a === doc.body || a.isConnected === false || (l.el.contains && l.el.contains(a)))) {
           try { l.opener.focus({ preventScroll: true }); } catch {}
@@ -10923,12 +10935,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const back = doc.activeElement;
         const finish = (discard) => {
           if (confirmOpen !== d) return;
-          confirmOpen = null; confirmFor = null; confirmFinish = null;
+          confirmOpen = null; confirmFinish = null;
           try { d.close(); } catch {}
           if (d.remove) d.remove();
           if (discard) { l.baselines.clear(); closeNow(l); }
           else {
-            if (useHistory && l.hist === false && layers.indexOf(l) >= 0) pushHistory(l);
+            syncHistory();   // Back took the entry while the question was up: it comes back
             try { (back && back.isConnected !== false ? back : l.el).focus({ preventScroll: true }); } catch {}
           }
         };
@@ -10939,7 +10951,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(false); }   // Enter never discards
           else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
         });
-        confirmOpen = d; confirmFor = l; confirmFinish = finish;
+        confirmOpen = d; confirmFinish = finish;
         doc.body.appendChild(d);
         if (d.showModal) d.showModal();
         keep.focus();
@@ -10973,42 +10985,44 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
       }
 
-      // ── The phone's Back gesture: each open layer owns one history entry; Back asks the layer to close, and a layer
-      // that stays open (changes, a save running) takes its entry back. Closing any other way removes the entry. ──
-      function pushHistory(l) {
-        if (popping) { pendingPush.push(l); return; }
-        try { win.history.pushState({ ...(win.history.state || {}), dialog: l.id }, ''); l.hist = true; } catch {}
-      }
-      function popHistory(l) {
-        l.hist = false;
-        const st = win.history.state;
-        if (!st || st.dialog !== l.id) return;
-        popping = true;
-        try { win.history.back(); } catch { popping = false; }
+      // ── The phone's Back gesture: while any layer covers the page, the guard keeps ONE history entry on top of the
+      // page's own. Back takes that entry: the innermost covering layer is asked to close, and the entry comes back while
+      // one is still open (a layer under it, the question, a save running, an answer needed), so the next Back comes here
+      // again. Closing the last one any other way removes the entry, so the next Back reaches the page's router; a layer
+      // that closes under another one leaves no entry behind. ──
+      function syncHistory() {
+        if (!useHistory || popping) return;   // our own back() is on its way: its popstate syncs again
+        const open = covering().length;
+        if (open && !histId) {
+          const id = ++histSeq;
+          try { win.history.pushState({ ...(win.history.state || {}), dialog: id }, ''); histId = id; } catch {}
+        } else if (!open && histId) {
+          const id = histId;
+          histId = 0;
+          const st = win.history.state;
+          if (!st || st.dialog !== id) return;   // the page moved history on since: its entries are left alone
+          popping = true;
+          try { win.history.back(); } catch { popping = false; }
+        }
       }
       function onPopstate(e) {
-        if (popping) {   // our own back() after a layer closed
+        if (popping) {   // our own back() after the last layer closed
           popping = false;
           e.stopImmediatePropagation();
-          const q = pendingPush.splice(0);
-          for (const l of q) if (layers.indexOf(l) >= 0) pushHistory(l);
+          syncHistory();   // a layer that opened meanwhile gets its entry now
           return;
         }
-        const l = confirmOpen ? confirmFor : top();
-        if (!l || !l.hist) return;
-        const st = e.state || {};
-        if (st.dialog === l.id) return;
+        if (!histId || (e.state || {}).dialog === histId) return;
         e.stopImmediatePropagation();   // the page's own router must not move while a layer is open
-        l.hist = false;
-        if (confirmOpen) { confirmFinish(false); return; }   // Back on "Discard changes?" = Keep editing (takes the entry back)
-        const r = requestClose(l, 'back');
-        // Still open (the question is up, a save is running, an answer is needed): the sheet keeps its entry, so the next
-        // Back comes here again instead of reaching the page's router.
-        if (r !== 'closed' && layers.indexOf(l) >= 0) pushHistory(l);
+        histId = 0;
+        if (confirmOpen) confirmFinish(false);   // Back on "Discard changes?" = Keep editing
+        else requestClose(covering().pop(), 'back');
+        syncHistory();
       }
 
       // ── Saves in flight: a POST/PUT/PATCH/DELETE to the hub's /api/ that follows a click or key in a layer keeps that
-      // layer open while it runs. It settles nothing by itself (a Test button posts too): see savePoint. ──
+      // layer open until the hub answers (the response headers; the page reads the answer and commits right after). It
+      // settles nothing by itself (a Test button posts too): see savePoint. ──
       function wrapFetch() {
         const orig = win.fetch && win.fetch.bind(win);
         if (!orig || win.fetch.__dialogGuard) return;
@@ -11064,8 +11078,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         requestClose(l, 'backdrop');
       }, true);
       if (useHistory && win.addEventListener) win.addEventListener('popstate', onPopstate);
+      // Unsaved changes anywhere: an open layer, or the editing page itself. The pages' own reloads wait while this is true.
+      const hasChanges = () => layers.some(dirty) || (!!page && dialogIsDirty(page.baselines));
       if (win.addEventListener) win.addEventListener('beforeunload', (e) => {
-        if (layers.some(dirty) || (page && dialogIsDirty(page.baselines))) { e.preventDefault(); e.returnValue = ''; return ''; }
+        if (hasChanges()) { e.preventDefault(); e.returnValue = ''; return ''; }
       });
       if (trackSaves) wrapFetch();
       if (typeof MutationObserver !== 'undefined' && doc.body) {
@@ -11105,6 +11121,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         closed: (el) => unregister(el),
         requestClose: (elOrChild, how) => requestClose(layerOf(elOrChild), how),
         isDirty: (elOrChild) => dirty(layerOf(elOrChild)) || (!layerOf(elOrChild) && !!page && dialogIsDirty(page.baselines)),
+        hasChanges,
         savePoint,
         markLoaded: (els) => { for (const el of (Array.isArray(els) ? els : [els])) { const l = el && scopeOf(el); if (l) l.baselines.delete(el); } },   // put in by the page, not typed
         layers: () => layers.slice(),

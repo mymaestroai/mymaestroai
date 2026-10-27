@@ -375,20 +375,40 @@
     ['saveRecord', 'records-status', byId('records-content')],
     ['saveCompaction', 'compaction-status', byId('compaction-mode', 'compaction-at', 'compaction-window')],
   ];
-  const pendingSaves = {};   // status id -> { commit, reload, fields }
+  // One save per section at a time until the hub answers it, so requests never overlap: the hub keeps the newest values
+  // and a status message always answers the save that is running (its first verdict settles it). A select or checkbox that saves on change,
+  // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
+  // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
+  // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveToolsMode']);
+  const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];
     if (typeof orig !== 'function') continue;
-    window[fn] = function (...args) {
+    const run = (self, args) => {
       const list = fields().filter(Boolean);
-      pendingSaves[statusId] = { commit: pageGuard.savePoint(list), reload: how === 'reload', fields: list };
-      return orig.apply(this, args);
+      const p = pendingSaves[statusId] = { commit: pageGuard.savePoint(list), reload: how === 'reload', fields: list, settled: false, again: null };
+      const end = () => {
+        if (pendingSaves[statusId] !== p) return;
+        delete pendingSaves[statusId];
+        if (p.again) run(p.again.self, p.again.args);   // pressed again meanwhile: once more, with the current values
+      };
+      let out;
+      try { out = orig.apply(self, args); } catch (e) { end(); throw e; }
+      Promise.resolve(out).then(end, end);
+      return out;
+    };
+    window[fn] = function (...args) {
+      const p = pendingSaves[statusId];
+      if (!p || p.settled) return run(this, args);   // the hub answered the last one: nothing left to overtake
+      if (SAVES_ON_CHANGE.has(fn)) p.again = { self: this, args };   // runs when the save in flight ends
+      else showStatus(statusId, 'info', 'Still saving. Press Save again when it is done.');
     };
   }
   function settleSave(statusId, type) {
     const p = pendingSaves[statusId];
-    if (!p || type === 'info') return;
-    delete pendingSaves[statusId];
+    if (!p || p.settled || type === 'info') return;
+    p.settled = true;
     if (type !== 'success') return;   // a failed save leaves its fields unsaved
     if (p.reload) pageGuard.markLoaded(p.fields.flatMap(f => (f.matches && f.matches('input, textarea, select')) ? [f] : [...f.querySelectorAll('input, textarea, select')]));
     else p.commit();

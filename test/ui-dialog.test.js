@@ -62,7 +62,7 @@ function makeDom() {
     appendChild(c) { if (c.parent) c.remove(); c.parent = this; this.children.push(c); return c; }
     remove() { if (!this.parent) return; this.parent.children = this.parent.children.filter(x => x !== this); this.parent = null; }
     contains(n) { while (n) { if (n === this) return true; n = n.parent; } return false; }
-    matches(sel) { return splitSel(sel).some(s => matchesSimple(this, s)); }
+    matches(sel) { return splitSel(sel).some(s => (s === ':modal' ? !!this.modal : matchesSimple(this, s))); }
     closest(sel) { let n = this; while (n && n.tagName) { if (n.matches(sel)) return n; n = n.parent; } return null; }
     querySelectorAll(sel) { const out = []; const walk = (n) => { for (const c of n.children) { if (c.matches(sel)) out.push(c); walk(c); } }; walk(this); return out; }
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
@@ -70,8 +70,9 @@ function makeDom() {
     getBoundingClientRect() { return { left: 100, right: 300, top: 100, bottom: 300 }; }
     addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
     focus() { doc.activeElement = this; dispatch(this, 'focusin', {}); }
-    showModal() { this.open = true; }
-    close() { this.open = false; }
+    showModal() { this.open = true; this.modal = true; }
+    show() { this.open = true; this.modal = false; }
+    close() { this.open = false; this.modal = false; }
     set textContent(v) { this._text = String(v); this.children = []; }
     get textContent() { return this._text || ''; }
     set innerHTML(html) {
@@ -475,4 +476,233 @@ test('review fixes wired in the pages', () => {
   assert.match(as, /function showStatus\(id, type, msg\) \{\n\s*settleSave\(id, type\);/);
   const lib = read('lib/ui-dialog.js');
   assert.ok(!/function rebase\(|res\.ok\) rebase/.test(lib), 'no automatic settling from a response');
+});
+
+// ── Review round 2: one history entry for all open sheets, the pages' own reloads, and saves that overlap ──
+
+test('review 2: a sheet that closes under another one leaves no history entry behind; the next Back is the page\'s', async () => {
+  const d = makeDom();
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win, useHistory: true });
+  let routed = 0;
+  d.win.addEventListener('popstate', () => { routed++; });   // the page's own router
+  d.win.history.pushState({ screen: 'chat' });               // the page's route
+  const a = d.el('dialog'); a.showModal(); g.open(a);         // About
+  const b = d.el('dialog'); b.showModal(); g.open(b);         // a second sheet over it
+  assert.strictEqual(d.hist.i, 2, 'one entry while sheets are open');
+  a.close(); g.closed(a);                                     // the sheet underneath closes by itself
+  assert.strictEqual(d.hist.i, 2, 'the sheet still open keeps the entry');
+  assert.strictEqual(g.requestClose(b, 'close'), 'closed');
+  await flush();
+  assert.strictEqual(d.hist.i, 1, 'no entry left behind');
+  assert.deepStrictEqual(d.win.history.state, { screen: 'chat' });
+  assert.strictEqual(routed, 0, 'the guard\'s own back() never reached the router');
+  d.win.history.back(); await flush();
+  assert.strictEqual(routed, 1, 'one Back leaves the chat');
+});
+
+test('review 2: Back closes the innermost sheet first; the entry comes back while a sheet is still open', async () => {
+  const d = makeDom();
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win, useHistory: true });
+  let routed = 0;
+  d.win.addEventListener('popstate', () => { routed++; });
+  d.win.history.pushState({ screen: 'chat' });
+  const a = d.el('dialog'); a.showModal(); g.open(a);
+  const b = d.el('dialog'); b.showModal(); g.open(b);
+  d.win.history.back(); await flush();
+  assert.strictEqual(b.open, false); assert.strictEqual(a.open, true);
+  assert.strictEqual(d.hist.i, 2, 'the entry is back for the sheet underneath');
+  d.win.history.back(); await flush();
+  assert.strictEqual(a.open, false); assert.strictEqual(d.hist.i, 1);
+  assert.strictEqual(routed, 0);
+  d.win.history.back(); await flush();
+  assert.strictEqual(routed, 1);
+});
+
+test('review 2: a sheet that opens while the guard\'s own back() is on its way still gets its entry', async () => {
+  const d = makeDom();
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win, useHistory: true });
+  let routed = 0;
+  d.win.addEventListener('popstate', () => { routed++; });
+  d.win.history.pushState({ screen: 'chat' });
+  const a = d.el('dialog'); a.showModal(); g.open(a);
+  g.requestClose(a, 'close');                                 // back() queued, its popstate not yet here
+  const b = d.el('dialog'); b.showModal(); g.open(b);
+  await flush();
+  assert.strictEqual(d.hist.i, 2, 'the new sheet has its entry');
+  d.win.history.back(); await flush();
+  assert.strictEqual(b.open, false); assert.strictEqual(routed, 0, 'Back closed the sheet, the chat stayed');
+});
+
+test('review 2: the pages\' own reloads (hub restarted, new version) wait while a dialog holds unsaved changes', () => {
+  const p = dialogPage();
+  assert.strictEqual(p.g.hasChanges(), false);
+  p.typeInto(p.name, 'changed');
+  assert.strictEqual(p.g.hasChanges(), true);
+  const d = makeDom();
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win, pageDirty: true });
+  d.typeInto(d.el('textarea'), 'personality');
+  assert.strictEqual(g.hasChanges(), true, 'an editing page counts too');
+  const app = read('app.js'), m = read('mobile.js');
+  // each loop waits while busy, and checks once more just before reloading (an edit may start in those 800 ms)
+  const busyGo = /\{ if \(busy\(\)\) \{ setTimeout\(go, 2000\); return; \}(?: toast\('Updating to the new version…'\);)? setTimeout\(\(\) => \{ if \(busy\(\)\) go\(\); else location\.reload\(\); \}, 800\); \}/g;
+  assert.match(app, /const busy = \(\) => Object\.values\(chats\)\.some\(c => c && c\.controller\) \|\| dialogGuard\.hasChanges\(\);/, 'desktop: hub restarted');
+  assert.strictEqual((app.match(busyGo) || []).length, 1);
+  assert.match(m, /const busy = \(\) => streams\.size \|\| \(typingNow\(\) && Date\.now\(\) - since < 600000\) \|\| dialogGuard\.hasChanges\(\);/, 'phone: hub restarted');
+  assert.match(m, /const busy = \(\) => streams\.size \|\| reattaches\.size \|\| \(typingNow\(\) && Date\.now\(\) - since < 600000\) \|\| dialogGuard\.hasChanges\(\);/, 'phone: new version');
+  assert.strictEqual((m.match(busyGo) || []).length, 2);
+});
+
+test('review 2: web search keys: only a key saved as typed is cleared; a newer one and a failed save keep what was typed', async () => {
+  const app = read('app.js');
+  const a = app.indexOf('    async function saveWebSearch() {'), b = app.indexOf('    async function tryWebSearch(');
+  const src = app.slice(a, b);
+  const run = async (answer, during) => {
+    const els = {};
+    for (const id of ['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-ws-state']) els[id] = { id, value: '', placeholder: '', textContent: '' };
+    els['st-wf-jina'] = { id: 'st-wf-jina', checked: false };
+    els['st-ws-key-brave'].value = 'brave-1'; els['st-ws-key-tavily'].value = 'tavily-1';
+    const log = [];
+    const doc = { getElementById: (id) => els[id] || null };
+    const guard = { savePoint: () => () => log.push('commit'), markLoaded: (el) => log.push('loaded ' + el.id) };
+    const fetch = async () => { if (during) during(els); return { json: async () => answer }; };
+    const fn = new Function('document', 'fetch', 'dialogGuard', 'loadWebSearchStatus', src + '\nreturn saveWebSearch;')(doc, fetch, guard, () => {});
+    await fn();
+    return { els, log };
+  };
+  let r = await run({ ok: true });
+  assert.strictEqual(r.els['st-ws-key-brave'].value, ''); assert.strictEqual(r.els['st-ws-key-brave'].placeholder, 'set');
+  assert.deepStrictEqual(r.log, ['commit', 'loaded st-ws-key-brave', 'loaded st-ws-key-tavily']);
+  r = await run({ ok: true }, (els) => { els['st-ws-key-brave'].value = 'brave-2'; });   // typed again while it saved
+  assert.strictEqual(r.els['st-ws-key-brave'].value, 'brave-2', 'the newer key stays');
+  assert.strictEqual(r.els['st-ws-key-brave'].placeholder, '');
+  assert.ok(!r.log.includes('loaded st-ws-key-brave'), 'and stays unsaved');
+  assert.strictEqual(r.els['st-ws-key-tavily'].value, '', 'the key saved as typed is cleared');
+  r = await run({ ok: false, error: 'nope' });
+  assert.strictEqual(r.els['st-ws-key-brave'].value, 'brave-1', 'a failed save keeps the typed key');
+  assert.strictEqual(r.els['st-ws-key-brave'].placeholder, '', 'and does not claim it is set');
+  assert.deepStrictEqual(r.log, []);
+  assert.strictEqual(r.els['st-ws-state'].textContent, 'nope');
+});
+
+test('review 2: a panel beside the page (a <dialog> opened with show(), the phone\'s approvals) leaves Back to the page', async () => {
+  const d = makeDom();
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win, useHistory: true });
+  let routed = 0;
+  d.win.addEventListener('popstate', () => { routed++; });
+  d.win.history.pushState({ screen: 'chat' });
+  const panel = d.el('dialog'); panel.show(); g.open(panel);
+  assert.strictEqual(d.hist.i, 1, 'no history entry for the panel');
+  d.win.history.back(); await flush();
+  assert.strictEqual(routed, 1, 'Back is the page\'s'); assert.ok(panel.open, 'the panel stays');
+  d.win.history.pushState({ screen: 'chat' });
+  const sheet = d.el('dialog'); sheet.showModal(); g.open(sheet);   // a sheet over the page and the panel
+  assert.strictEqual(d.hist.i, 2);
+  d.win.history.back(); await flush();
+  assert.strictEqual(sheet.open, false, 'Back closes the sheet'); assert.ok(panel.open, 'not the panel under it');
+  assert.strictEqual(routed, 1); assert.strictEqual(d.hist.i, 1, 'no entry left behind');
+  d.key(d.doc.body, 'Escape');
+  assert.strictEqual(panel.open, false, 'Escape still dismisses the panel');
+  assert.strictEqual(ui.dialogIsModal({ matches() { throw new SyntaxError(':modal'); } }), true, 'no :modal support: covering');
+});
+
+test('review 2: agent settings: one save per section at a time; a change during a save goes next, a Save button press is refused', async () => {
+  const as = read('agent-settings.html');
+  const a = as.indexOf('  const SAVES_ON_CHANGE = new Set(['), b = as.indexOf('\n  }\n', as.indexOf('  function settleSave(')) + 4;
+  assert.ok(a > 0 && b > a);
+  const src = as.slice(a, b);
+  const onChange = [...new Set([...as.matchAll(/onchange="(save[A-Za-z]+)\(\)"/g)].map(m => m[1]))].sort();
+  assert.deepStrictEqual([...new Function('window', 'SAVES', 'pageGuard', 'showStatus', src + '\nreturn SAVES_ON_CHANGE;')({}, [], null, null)].sort(), onChange, 'the list matches the page\'s onchange saves');
+  const make = (fn) => {
+    const log = [], waiting = [], sent = [], shown = [];
+    let running = 0, most = 0, settle = null;
+    const field = { value: 'v0' };
+    const pageGuard = { savePoint: () => { const snap = field.value; return () => log.push('commit ' + snap); }, markLoaded: () => log.push('loaded') };
+    const win = { [fn]: () => { sent.push(field.value); most = Math.max(most, ++running); return new Promise((ok, no) => waiting.push((fail) => { running--; if (fail) no(new Error('network')); else ok(); })); } };
+    const showStatus = (id, type, msg) => { shown.push(type + ': ' + msg); if (settle) settle(id, type); };
+    const api = new Function('window', 'SAVES', 'pageGuard', 'showStatus', src + '\nreturn { settleSave };')(win, [[fn, 's-status', () => [field]]], pageGuard, showStatus);
+    settle = api.settleSave;
+    return { log, field, sent, shown, most: () => most, press: () => win[fn](), status: (t) => showStatus('s-status', t, t), answer: async (fail) => { waiting.shift()(fail); await flush(); } };
+  };
+  let t = make('saveSandbox');                       // alone: its first verdict settles it, once
+  t.field.value = 'one'; t.press();
+  t.status('success'); t.status('error');
+  await t.answer();
+  assert.deepStrictEqual(t.log, ['commit one'], 'the first verdict is the save\'s');
+  t = make('saveSandbox');                           // a failure, then a later success message: still a failure
+  t.field.value = 'one'; t.press();
+  t.status('error'); t.status('success');
+  await t.answer();
+  assert.deepStrictEqual(t.log, []);
+  t = make('saveSandbox');                           // changed again while it runs: saved after it, with the newest value
+  t.field.value = 'one'; t.press();
+  t.field.value = 'two'; t.press();
+  t.field.value = 'three'; t.press();
+  assert.deepStrictEqual(t.sent, ['one'], 'nothing overlaps');
+  t.status('success'); await t.answer();
+  assert.deepStrictEqual(t.sent, ['one', 'three'], 'one more save, with the newest value');
+  t.status('success'); await t.answer();
+  assert.deepStrictEqual(t.log, ['commit one', 'commit three']);
+  assert.strictEqual(t.most(), 1);
+  t = make('saveSandbox');                           // the first saved, the one after it failed: only "one" counts as saved
+  t.field.value = 'one'; t.press();
+  t.field.value = 'two'; t.press();
+  t.status('success'); await t.answer();
+  t.status('error'); await t.answer();
+  assert.deepStrictEqual(t.log, ['commit one']);
+  t = make('saveSandbox');                           // a save that fails without a message settles nothing; the next one works
+  t.field.value = 'one'; t.press();
+  await t.answer(true);
+  t.field.value = 'two'; t.press();
+  t.status('success'); await t.answer();
+  assert.deepStrictEqual(t.log, ['commit two']);
+  t = make('saveBlurb');                             // a Save button pressed during its save: refused, later edits stay unsaved
+  t.field.value = 'A'; t.press();
+  t.field.value = 'B'; t.press();
+  assert.deepStrictEqual(t.sent, ['A']);
+  assert.ok(t.shown.includes('info: Still saving. Press Save again when it is done.'), t.shown.join('|'));
+  t.field.value = 'C';                               // typed, Save not pressed
+  t.status('success'); await t.answer();
+  assert.deepStrictEqual(t.sent, ['A'], 'nothing else was sent');
+  assert.deepStrictEqual(t.log, ['commit A'], 'C was never saved, so it stays a change');
+  t.press(); t.status('success'); await t.answer();
+  assert.deepStrictEqual(t.sent, ['A', 'C']); assert.deepStrictEqual(t.log, ['commit A', 'commit C']);
+  assert.strictEqual(t.most(), 1);
+  t = make('saveBlurb');                             // the hub answered, the page still finishing its own work: a press starts at once
+  t.field.value = 'A'; t.press();
+  t.status('success');
+  t.field.value = 'B'; t.press();
+  assert.deepStrictEqual(t.sent, ['A', 'B']);
+  assert.ok(!t.shown.some(m => m.startsWith('info:')), 'no "Still saving" over a save that already answered');
+  await t.answer();                                  // A's own work ends: it must not end B's slot
+  t.field.value = 'B2'; t.press();
+  assert.deepStrictEqual(t.sent, ['A', 'B'], 'B is still running: refused');
+  t.status('success'); await t.answer();
+  assert.deepStrictEqual(t.log, ['commit A', 'commit B']);
+});
+
+test('review 2: agent settings: a wrapped save never writes its status after it reported success (a press may start the next save then)', () => {
+  const as = read('agent-settings.html');
+  const fnBody = (name) => { const m = as.match(new RegExp(`\\n  (?:async )?function ${name}\\(`)); if (!m) return null; const a = m.index; return as.slice(a, as.indexOf('\n  }\n', a)); };
+  const HELPERS = ['showStatus', 'recordsStatus', 'compactionStatus'];
+  const statusCall = /\b(?:showStatus|recordsStatus|compactionStatus)\(/;
+  const saves = [...as.matchAll(/\['(save[A-Za-z]+)', '[\w-]+-status',/g)].map(m => m[1]);
+  assert.strictEqual(saves.length, 18);
+  for (const fn of saves) {
+    let body = fnBody(fn);
+    const own = fn === 'savePolicy' ? ['patchPolicy'] : [];   // savePolicy reports through patchPolicy
+    for (const h of own) body += fnBody(h);
+    // 1. Status lines are written only by the save itself: no page function it calls (awaited or not) writes one.
+    for (const m of body.matchAll(/\b([a-zA-Z]\w*)\(/g)) {
+      if (HELPERS.includes(m[1]) || own.includes(m[1]) || m[1] === fn) continue;
+      const callee = fnBody(m[1]);
+      if (callee) assert.ok(!statusCall.test(callee), `${fn} calls ${m[1]}, which writes a status line`);
+    }
+    // 2. In the save itself, nothing awaited after the success message is followed by another status.
+    const i = body.search(/\b(?:showStatus\('[\w-]+', 'success'|recordsStatus\('success'|compactionStatus\('success')/);
+    assert.ok(i > 0, fn + ': reports success');
+    //    That includes else and catch branches: a rejected await after success would report through its catch.
+    const rest = body.slice(i).replace(/^[^;]*;/, '');
+    assert.ok(!/\bawait\b[\s\S]*\b(?:showStatus|recordsStatus|compactionStatus)\(/.test(rest), fn + ': a status after an await that follows success');
+    assert.ok(!/\.then\(/.test(body.slice(i)), fn + ': no callbacks after success');
+  }
 });

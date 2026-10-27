@@ -37,7 +37,7 @@ test('the box functions exist and talk to the websearch routes; key fields are c
   assert.match(app, /fetch\('\/api\/websearch\/fetch-test', \{ method: 'POST'/);
   assert.match(app, /fetch\('\/api\/websearch\/searxng\/start', \{ method: 'POST'/);
   assert.match(app, /fetch\('\/api\/websearch\/searxng\/stop', \{ method: 'POST'/);
-  assert.match(app, /if \(inp && inp\.value\) \{ inp\.placeholder = 'set'; inp\.value = ''; \}/);
+  assert.match(app, /if \(inp && inp\.value === v\) \{ inp\.placeholder = 'set'; inp\.value = ''; dialogGuard\.markLoaded\(inp\); \}/);   // only a key saved as typed
 });
 
 test('server routes: status, config (merge, keys unchanged when blank), test, fetch-test, searxng start as a job and stop', () => {
