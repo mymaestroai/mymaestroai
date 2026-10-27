@@ -444,6 +444,7 @@ async function handleHttpRequest(req, res) {
         out.unfinished = welcome.unfinished();
         const lead = (await getAgents()).find(a => a.name === 'maestro') || (await getAgents())[0] || null;
         out.lead = lead ? { name: lead.name, display: lead.display || lead.name, model: lead.model } : null;
+        out.interview = lead ? welcome.interviewStatus(lead.name) : 'unknown';   // 'complete' | 'in-progress' | 'unknown'
       }
       return jsonResponse(res, 200, out);
     }
@@ -2138,6 +2139,13 @@ async function handleHttpRequest(req, res) {
       }
     }
 
+    // ── Version (lib/hub-map versionInfo): the sidebar's version label and the About box. Any signed-in user (lib/access
+    // SESSION_EXACT); not public, so a visitor cannot read which version (and so which known fixes) a hub has. ──
+    if (pathname === '/api/version' && req.method === 'GET') {
+      try { return jsonResponse(res, 200, require('./lib/hub-map').getHubMap().versionInfo()); }
+      catch (e) { console.warn('[version] could not read the version:', e.message); return jsonResponse(res, 500, { error: 'Could not read the version' }); }   // no paths in the answer
+    }
+
     // ── Update check (lib/update-check.js): the daily look at GitHub behind the "Update available" card. Admin
     // routes (lib/access classes every /api path not listed elsewhere as admin-only). ──
     if (pathname === '/api/update-check' && req.method === 'GET') {
@@ -2861,6 +2869,8 @@ setInterval(() => {
 try {
   const seeded = require('./lib/agents').seedDefaultWorkspaces();
   if (seeded.length) console.log(`[workspaces] Created from templates: ${seeded.join(', ')}`);
+  const refreshed = require('./lib/agents').refreshShippedWorkspaceFiles();   // unedited copies of improved playbooks
+  if (refreshed.length) console.log(`[workspaces] Updated to this version (they had not been changed): ${refreshed.join(', ')}`);
 } catch (e) { console.warn('[workspaces] Template seeding failed:', e.message); }
 
 // Shared secret for POST /api/chat/alert (data/alert-secret, mode 0600, created once).
@@ -2871,6 +2881,13 @@ try { fs.chmodSync(path.join(__dirname, 'data'), 0o700); } catch {}
 try { require('./lib/push').getPush().start(require('./lib/hub-events').events); } catch (e) { console.error('[push] not started:', e.message); }
 
 server.listen(PORT, HOST, () => {
+  // Maestro is the lead agent. New installs are seeded with the mark; an older install that marks no lead (and so
+  // counted every admin-side primary agent as one) gets maestro marked once (lib/agents ensureMaestroLead). It runs
+  // here, once this process owns the port, so a second copy started on the same data never gets this far; it is
+  // synchronous, so no request is handled before it finishes.
+  try {
+    if (require('./lib/agents').ensureMaestroLead().changed) console.log('[agents] marked maestro as the lead agent (no agent was marked)');
+  } catch (e) { console.warn('[agents] could not mark the lead agent:', e.message); }
   console.log(`\n  My Maestro AI v${require('./package.json').version} (multi-provider)`);
   console.log(`  Server:   http://${URL_HOST}:${PORT}  (${BIND.exposed ? 'NETWORK-EXPOSED' : 'localhost only'})`);
   if (BIND.warning) console.warn(`  WARNING:  ${BIND.warning}`);

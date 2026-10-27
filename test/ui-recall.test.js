@@ -20,7 +20,7 @@ test('desktop: a Recall button in every chat toolbar opens a docked Recall panel
   assert.match(app, /<button onclick="saveChat\('\$\{chatId\}'\)">💾 Save<\/button>\s*\n\s*<button onclick="openRecallPanel\('\$\{chatId\}'\)" id="recall-btn-\$\{chatId\}"[^>]*>🔎 Recall<\/button>/, 'button after Save, per chat');
   assert.ok(app.includes('function openRecallPanel(chatId)'), 'opener');
   assert.ok(app.includes("const agent = chat && !chat.isGroup && chat.agent ? String(chat.agent) : '';"), 'agent = that chat\'s agent (solo chats)');
-  assert.ok(app.includes('gsModal(`<div id="recall-panel">') && app.includes("const dock = { dock: true, title: `🔎 Recall · ${esc(chat.display || capName(agent))}` };"), 'docked like the Files panel');
+  assert.ok(app.includes('gsModal(`<div id="recall-panel" data-no-dirty>') && app.includes("const dock = { dock: true, title: `🔎 Recall · ${esc(chat.display || capName(agent))}` };"), 'docked like the Files panel');
   for (const id of ['recall-q', 'recall-from', 'recall-to', 'recall-archive', 'recall-status', 'recall-list']) {
     assert.ok(app.includes(`id="${id}"`), `panel part ${id}`);
   }
@@ -58,7 +58,7 @@ test('desktop: [bracketed] matches render as <mark> after escaping; Show context
 
 test('mobile: a chat-only Recall menu item opens a Recall sheet; tap a hit for its context', () => {
   assert.ok(mhtml.includes('<button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>'), 'menu item, chat only');
-  assert.ok(mhtml.includes('<dialog id="recall-sheet"></dialog>'), 'sheet element');
+  assert.ok(mhtml.includes('<dialog id="recall-sheet" data-no-dirty></dialog>'), 'sheet element');
   assert.ok(mhtml.includes('#recall-sheet {') && mhtml.includes('#recall-sheet mark') && mhtml.includes('#recall-sheet .rc-row.hit'), 'sheet, mark and hit row styled');
   assert.ok(mjs.includes("$('menu-recall').addEventListener('click', openRecallSheet);"), 'wired');
   assert.ok(mjs.includes('function openRecallSheet()'));
@@ -99,5 +99,5 @@ test('agent settings: a Records section after Tool policy lists, edits, creates 
 });
 
 test('service worker cache bumped to v18', () => {
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v57';"));
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v59';"));
 });

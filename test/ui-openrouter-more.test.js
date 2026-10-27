@@ -73,7 +73,7 @@ test('phone: the picker\'s OpenRouter group ends with the search entry, and choo
   assert.match(mjs, /\+ \(label\.startsWith\('OpenRouter'\) \? `<option value="\$\{OR_MORE\}">🔎 More OpenRouter models…<\/option>` : ''\) \+ '<\/optgroup>'/);
   assert.match(mjs, /const model = sel\.value;\n  if \(model === OR_MORE\) \{ sel\.value = a \? a\.model : ''; if \(a\) openOrSheet\(name\); return; \}\n  if \(!a \|\| !model \|\| model === a\.model\) return;/,
     'the entry is never posted as a model');
-  assert.match(mhtml, /<dialog id="or-sheet"><\/dialog>/);
+  assert.match(mhtml, /<dialog id="or-sheet" data-no-dirty><\/dialog>/);   // search and filter only (lib/ui-dialog.js)
   assert.match(mhtml, /#or-sheet input\[type="search"\] \{[^}]*font-size: 16px;/, '16px, so iOS does not zoom into the search box');
   assert.match(mhtml, /#or-sheet \.ors-row \{[^}]*min-height: 48px;/, 'rows are finger-sized');
 });
@@ -100,7 +100,7 @@ test('desktop: the picker\'s OpenRouter group ends with the search entry, and ch
   const open = extract(app, 'openOrPicker');
   assert.match(open, /fetch\('\/api\/openrouter', \{ credentials: 'include' \}\)/);
   assert.match(open, /if \(e\.target === ov\) closeOrPicker\(\);/, 'a click outside closes it');
-  assert.match(open, /if \(e\.key === 'Escape'\) closeOrPicker\(\);/);
+  assert.match(open, /ov\.dataset\.noDirty = '1';/, 'search and filter only: Esc (the shared dialog guard) closes it without asking');
   const choose = extract(app, 'chooseOrModel');
   const add = choose.indexOf("fetch('/api/openrouter', { method: 'POST'"); const sw = choose.indexOf('await changeChatModel(chatId, model, { tested: true })');
   assert.ok(add > 0 && sw > add, 'the list is saved before the agent switches');
@@ -160,5 +160,5 @@ test('the catalogue and the list are admin-only routes', () => {
 });
 
 test('the phone app version moved on, so phones load the new code', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v57'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
 });

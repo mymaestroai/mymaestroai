@@ -18,8 +18,8 @@ test('desktop: a Files header button before the scheduler opens a docked Files p
   assert.ok(html.includes('id="files-btn"'), 'files-btn in the header');
   assert.ok(html.indexOf('id="files-btn"') < html.indexOf('id="schedule-btn"'), 'placed before #schedule-btn');
   assert.match(html, /id="files-btn" class="header-btn"[^>]*onclick="openFilesPanel\(\)"/);
-  assert.ok(app.includes('<div id="files-panel">'), 'the panel wrapper');
-  assert.ok(app.includes("const dock = { dock: true, title: '📁 Files' };") && app.includes('gsModal(`<div id="files-panel">'), 'docked like the other panels');
+  assert.ok(app.includes('<div id="files-panel" data-no-dirty>'), 'the panel wrapper');
+  assert.ok(app.includes("const dock = { dock: true, title: '📁 Files' };") && app.includes('gsModal(`<div id="files-panel" data-no-dirty>'), 'docked like the other panels');
   for (const id of ['files-root', 'files-crumbs', 'files-list', 'files-drop', 'files-upload-input', 'files-status', 'files-progress']) {
     assert.ok(app.includes(`id="${id}"`), `panel part ${id}`);
   }
@@ -83,7 +83,7 @@ test('desktop: member view does not hide the Files button', () => {
 test('mobile: a Files menu item for everyone opens a Files sheet with the same actions', () => {
   assert.ok(mhtml.includes('<button id="menu-files">'), 'menu item present and not hidden');
   assert.ok(!/id="menu-files"[^>]*hidden/.test(mhtml));
-  assert.ok(mhtml.includes('<dialog id="files-sheet"></dialog>'));
+  assert.ok(mhtml.includes('<dialog id="files-sheet" data-no-dirty></dialog>'));
   assert.ok(mhtml.includes('<input type="file" id="files-upload-input" multiple hidden>'));
   assert.ok(mjs.includes("$('menu-files').addEventListener('click', openFilesSheet);"));
   assert.ok(mjs.includes("if (!sheet.open) sheet.showModal();"), 'sheet opened like the Security sheet');
@@ -110,5 +110,5 @@ test('mobile: paperclip accepts any file; non-images upload to the open agent\'s
   assert.ok(mhtml.includes('id="camera-input" accept="image/*"'), 'camera unchanged');
   assert.ok(mjs.includes("if (f.type.startsWith('image/')) addImageFile(f); else uploadFileForChat(f);"));
   assert.ok(mjs.includes("uploadFileToHub(file, '', false, agent)") && mjs.includes("const agent = current || ''; // this chat's agent folder"), 'chat uploads land in the open agent\'s folder');
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v57';"), 'service worker cache bumped');
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v59';"), 'service worker cache bumped');
 });

@@ -6,6 +6,20 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.8.0] - 2026-10-27
+
+Five changes since 5.7.3: a setup interview you can pick up where you left off, dialogs that ask before discarding your unsaved edits, your version and an About box, Maestro marked as the lead agent unless you've already chosen one, and your agent's tool activity in one expandable panel. Press Update in your Maestro to get them; on 5.7.0 or later it also tells you when an update is ready.
+
+- **A setup interview you leave can be picked up again.** Closing the window or stepping away no longer ends Maestro's setup interview. Maestro keeps its place in a note (its Record `setup-interview.md`) and carries on from there when you answer its last question or say "continue the setup interview"; an unanswered question pauses the interview instead of ending it. The Welcome page's "You're all set" screen points back to the interview until it is finished, and its phone line now points to steps that exist (ask Maestro, or Help → The phone app) instead of a Settings entry that was never there. Installs whose copy of the interview guide was never edited get the new one at the next start.
+
+- **Dialogs ask before discarding your unsaved edits.** Escape now closes any dialog, panel, sheet or image viewer, innermost first: an open list or picker inside it, then an image opened from it, then the dialog. A dialog where you changed something asks **Discard changes?** first, with **Keep editing** as the default; Escape or Enter on that question keeps editing. The same rule applies to Close, Cancel, ✕, a click outside the dialog and, on the phone, the Back gesture, which now closes the open sheet instead of leaving the screen. Typing something and deleting it again doesn't count as a change, and search and filter boxes never do. A dialog that is still saving stays open and says so. Tab stays inside an open dialog, and closing it returns the focus to where you were. Closing or reloading the tab with unsaved changes in a dialog, or in an agent's settings window, makes the browser warn first, and when your Maestro restarts or updates, an open page reloads itself only once no dialog holds unsaved changes. An agent's question and the "resume interrupted work?" choice still need an answer, so Escape leaves them open.
+
+- **See which version you're running, and an About box.** A small line under "My Maestro AI" at the top left now shows the version and channel: `v5.8.0 · stable`, or on the experimental channel `v5.8.0-dev` followed by the short commit it runs, in purple; any other branch shows its name in blue. An amber dot next to it means a restart is pending: the code on disk is newer than the running hub. Click the line, or choose **About My Maestro AI** at the top of the ⋯ menu, for the version, channel and branch, commit and its date, when the hub started, the Node.js version and, for admins, whether an update is ready (with the same Update action as the update card), plus **Copy details**, a plain-text block to paste into a bug report. On the phone the version line and About are the first item of the ⋮ menu. The page reads it from `GET /api/version`, open to any signed-in user and never to visitors.
+
+- **Maestro is marked as the lead agent, unless you've already chosen one.** New installs now mark Maestro as the lead agent (👑 Lead agent in its settings). Before, nothing was marked, and an install with no mark counts every primary agent you own as a lead, so agents you created later, such as a health organizer, also got the lead's extra rights, like managing other agents' schedules. The first time your Maestro starts after this update, if no agent is marked and Maestro is yours (not a member's) and already counts as a lead, Maestro is marked, and agents that were leads only because nothing was marked lose that. Tick 👑 Lead agent on any agent that should keep it. The check runs once and respects later changes: to choose a different lead, tick that agent before unticking Maestro, because with no agent ticked the old rule applies again and every primary agent you own counts as a lead.
+
+- **See your agent's tool activity in one expandable panel.** A reply's tool calls now sit in one Tools panel under its Reasoning panel, closed until you open it, instead of a line per call between the reply's text, so a reply that runs many tools no longer keeps growing. The panel's header updates in place: how many calls are done, a red count of any that failed, and what is running now and for how long; when the reply is done, the number of calls and the time they took. Open it for one short line per call, and click or tap a call to see what went in and what came out; ⤢ shows every call with its output at full size, and the grip under the panel sets its height. The text the agent writes between calls stays in the reply. On the desktop and the phone.
+
 ## [5.7.3] - 2026-10-25
 
 Two security fixes since 5.7.2. Boxed agents' file tools now check where links lead before following them, and a way for chat messages to run script is closed. Press Update in your Maestro to get them; on 5.7.0 or later it also tells you when an update is ready.
@@ -1065,7 +1079,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.7.3...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.8.0...dev
+[5.8.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.8.0
 [5.7.3]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.3
 [5.7.2]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.2
 [5.7.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.1

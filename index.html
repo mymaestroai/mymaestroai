@@ -132,6 +132,28 @@
     }
     .sidebar-header-text h1 { font-size: 0.85rem; margin-bottom: 2px; font-weight: 600; letter-spacing: -0.01em; }
     .sidebar-header-text p { color: var(--text-tertiary); font-size: 0.65rem; letter-spacing: 0.02em; }
+    /* Version label under the title (app.js paintVersionLabel) and the About box (openAboutDialog) */
+    .hub-version { display: flex; align-items: center; gap: 5px; margin: 0 0 2px; padding: 0; background: none; border: 0; color: var(--text-tertiary); font: inherit; font-size: 0.65rem; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; cursor: pointer; text-align: left; }
+    .hub-version[hidden] { display: none; }
+    .hub-version:hover .hv-text, .hub-version:focus-visible .hv-text { text-decoration: underline; }
+    .hub-version:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+    .hub-version.experimental { color: var(--purple); }
+    .hub-version.other { color: var(--blue); }
+    .hv-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--warning); flex: none; }
+    .about-modal { max-width: 460px; }
+    .about-grid { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; font-size: 0.85rem; align-items: baseline; }
+    .about-k { color: var(--text-dim); }
+    .about-v { color: var(--text); word-break: break-word; }
+    .about-v code { font-size: 0.8rem; }
+    .about-chip { display: inline-flex; margin: 0 0 0 6px; padding: 1px 7px; border: 1px solid currentColor; border-radius: 8px; font-size: 0.68rem; cursor: default; }
+    .about-chip.stable { color: var(--success); }
+    .about-warn { display: inline-flex; align-items: center; gap: 6px; color: var(--warning); }
+    .about-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 18px; }
+    .about-modal .sec-btn { padding: 6px 14px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 0.8rem; }
+    .about-modal .sec-btn:hover { border-color: var(--accent); }
+    .about-modal .sec-btn:disabled { opacity: 0.5; cursor: default; }
+    .about-v .sec-btn { margin-left: 6px; padding: 3px 10px; }
+    .about-modal .about-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     
     /* Tabs */
     .tabs { display: flex; border-bottom: 1px solid var(--border); }
@@ -1334,6 +1356,88 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.84rem; line-height: 1.6;
       color: var(--text); white-space: pre-wrap; word-break: break-word;
     }
+    /* ── Tool panel: every tool call of a reply, under its reasoning panel (app.js paintToolPanel). The header opens and
+       closes it and says what runs now; the grip sets the height, ⤢ shows every call with its output. ── */
+    .tool-stream {
+      margin: 0 26px 12px 0;
+      border: 1px solid rgba(61,123,255,0.25); border-left: 3px solid rgba(61,123,255,0.6);
+      border-radius: 8px; background: rgba(61,123,255,0.05);
+    }
+    .tool-stream:not(.live) { border-left-color: rgba(61,123,255,0.3); background: rgba(61,123,255,0.03); }
+    .tool-stream .ts-head {
+      display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer; border-radius: 8px;
+      font-size: 0.72rem; letter-spacing: 0.04em; user-select: none; white-space: nowrap; overflow: hidden;
+    }
+    .tool-stream .ts-head:hover { background: rgba(61,123,255,0.07); }
+    .tool-stream .ts-head:focus-visible, .ts-row:focus-visible { outline: 1px solid rgba(61,123,255,0.6); outline-offset: -1px; }
+    .ts-state { flex-shrink: 0; width: 10px; text-align: center; color: #4ade80; }
+    .ts-state.wait::before {
+      content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #7aa7ff;
+      animation: la-pulse 1.4s ease-in-out infinite;
+    }
+    .ts-state.run::before, .ts-spin {
+      content: ''; display: inline-block; width: 10px; height: 10px; box-sizing: border-box; vertical-align: middle;
+      border: 2px solid rgba(100,100,120,0.3); border-top-color: var(--accent); border-radius: 50%;
+      animation: tool-spin 0.7s linear infinite;
+    }
+    .tool-stream .ts-label { color: #7aa7ff; font-weight: 700; text-transform: uppercase; }
+    .tool-stream .ts-count { color: var(--text-dim); opacity: 0.85; }
+    .tool-stream .ts-fail {
+      flex-shrink: 0; color: #f87171; border: 1px solid rgba(248,113,113,0.45); border-radius: 999px;
+      padding: 0 7px; font-size: 0.66rem; letter-spacing: 0;
+    }
+    .tool-stream .ts-fail[hidden] { display: none; }
+    .tool-stream .ts-now {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); opacity: 0.9;
+      font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.7rem; letter-spacing: 0;
+    }
+    .tool-stream .ts-now b { color: #7aa7ff; font-weight: 600; }
+    .tool-stream .ts-more { color: var(--text-dim); }
+    .tool-stream .ts-time { flex-shrink: 0; color: var(--text-dim); font-family: 'SF Mono', 'Fira Code', monospace; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+    .ts-time .tool-elapsed, .ts-row .tool-elapsed { font-size: inherit; }
+    .tool-stream .ts-full {
+      margin-left: auto; flex-shrink: 0; background: none; border: none; color: var(--text-dim);
+      font-size: 0.85rem; line-height: 1; padding: 0 5px; cursor: pointer;
+    }
+    .tool-stream .ts-full:hover { color: var(--text); }
+    .tool-stream .ts-toggle { flex-shrink: 0; color: var(--text-dim); opacity: 0.7; min-width: 2.4em; text-align: right; }
+    .tool-stream .ts-body { padding: 2px 6px 6px; overflow-y: auto; }
+    .tool-stream .ts-grip { height: 10px; cursor: ns-resize; touch-action: none; border-top: 1px solid rgba(61,123,255,0.14); }
+    .tool-stream .ts-grip::after {
+      content: ''; display: block; width: 38px; height: 3px; margin: 3px auto 0;
+      border-radius: 2px; background: rgba(61,123,255,0.35);
+    }
+    .tool-stream .ts-grip:hover::after { background: rgba(61,123,255,0.7); }
+    .tool-stream.collapsed .ts-body, .tool-stream.collapsed .ts-grip { display: none; }
+    .ts-row {
+      display: grid; grid-template-columns: 16px auto minmax(0, 1fr) auto 12px; gap: 8px; align-items: center;
+      padding: 3px 6px; border-radius: 5px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.72rem; color: var(--text-dim);
+    }
+    .tool-stream .ts-row { cursor: pointer; }
+    .tool-stream .ts-row:hover { background: rgba(61,123,255,0.07); }
+    .ts-row .ts-ic { color: #4ade80; text-align: center; }
+    .ts-row .ts-name { color: #7aa7ff; font-weight: 600; min-width: 70px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ts-row .ts-in { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
+    .ts-row .ts-d { font-variant-numeric: tabular-nums; }
+    .ts-row .ts-d .tool-elapsed[data-frozen] { color: var(--text-dim); }
+    .ts-row .ts-chev { opacity: 0.5; }
+    .ts-row.error { color: #fca5a5; }
+    .ts-row.error .ts-ic, .ts-row.error .ts-name { color: #f87171; }
+    .ts-row.stopped .ts-ic { color: var(--text-dim); }
+    .ts-sep { height: 1px; margin: 3px 6px; background: rgba(61,123,255,0.12); }
+    .ts-detail {
+      margin: 2px 6px 6px 30px; padding: 6px 10px; border-left: 2px solid rgba(61,123,255,0.35); border-radius: 4px;
+      background: rgba(100,100,120,0.08); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.68rem;
+      color: var(--text-dim); white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto;
+    }
+    .ts-row.error + .ts-detail { border-left-color: rgba(248,113,113,0.45); }
+    .tools-full .rsn-full-box { border-color: rgba(61,123,255,0.35); }
+    .tools-full .rsn-full-title { color: #7aa7ff; }
+    .tools-full .rsn-full-close:hover { border-color: rgba(61,123,255,0.6); }
+    .tools-full .ts-full-body { white-space: normal; font-size: 0.8rem; }
+    .tools-full .ts-row { grid-template-columns: 16px auto minmax(0, 1fr) auto; font-size: 0.78rem; }
+    .tools-full .ts-row .ts-in { white-space: normal; word-break: break-word; }
+    .tools-full .ts-detail { max-height: none; font-size: 0.74rem; }
     /* pulsing dot so it is obvious the stream is alive even when idle-looking */
     .la-pulse {
       width: 7px; height: 7px; border-radius: 50%;
@@ -2120,6 +2224,7 @@
     <div class="sidebar-header">
       <div class="sidebar-header-text">
         <h1>🟦 My Maestro AI</h1>
+        <button type="button" id="hub-version" class="hub-version" hidden onclick="openAboutDialog()"></button>
         <p>Multi-agent chat · Multi-provider LLM</p>
         <span id="agents-working" onclick="toggleBusyFilter()" title="Click to show only the agents that are working"></span><span id="spend-today" onclick="openSettingsAt('st-spend-section')" title="API-equivalent spend today; click for caps"></span><span id="credit-meter" onclick="openSettingsAt('st-spend-section')"></span><span id="update-chip" onclick="showUpdateCard()" title="An update is ready"></span><span id="plan-warn" onclick="openPlanSettings()"></span>
       </div>
@@ -2289,6 +2394,7 @@
         <div class="more-wrap" id="more-wrap">
           <button id="more-btn" class="header-btn" aria-label="More" title="More options" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" onclick="toggleMoreMenu()">⋯<span class="more-badge" id="more-badge">Advanced</span></button>
           <div id="more-menu" class="more-menu" role="menu" aria-label="More options">
+            <button id="about-btn" class="more-item" role="menuitem" title="Version, channel, commit and update status of this hub" onclick="closeMoreMenu(); openAboutDialog()">ℹ️ About My Maestro AI</button>
             <button id="comms-btn" class="more-item" role="menuitem" title="Messaging channels (Telegram etc)" onclick="closeMoreMenu(); openCommsPanel()">💬 Messaging</button>
             <button id="wallet-btn" class="more-item" role="menuitem" title="Trading wallets (on-chain)" onclick="closeMoreMenu(); openWalletPanel()">👛 Wallets</button>
             <button id="dream-btn" class="more-item" role="menuitem" title="Agent Dreaming — consolidate learnings" onclick="closeMoreMenu(); startDream()">💤 Dream (consolidate learnings)</button>

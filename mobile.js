@@ -152,6 +152,430 @@ function imageSrcKind(src, origin) {
 }
 // ── safe-text helpers (end) ──
 
+// Shared verbatim with lib/ui-version-label.js and app.js (test/ui-version-label.test.js keeps the three in step).
+// ── version-label helpers (begin) ──
+function versionLabel(v) {
+  if (!v || !v.version) return null;
+  const sha = v.commit ? String(v.commit).slice(0, 12) : '';
+  if (v.channel === 'stable') return { text: `v${v.version} · stable`, kind: 'stable', title: `My Maestro AI ${v.version}, stable channel` };
+  if (v.channel === 'experimental') return { text: `v${v.version}-dev${sha ? ` · ${sha}` : ''}`, kind: 'experimental', title: `My Maestro AI ${v.version}, experimental channel (branch ${v.branch || 'dev'})${sha ? `, commit ${sha}` : ''}` };
+  const where = v.branch || 'no branch';
+  return { text: `v${v.version} · ${where}${sha ? ` · ${sha}` : ''}`, kind: 'other', title: `My Maestro AI ${v.version}, branch ${where}${sha ? `, commit ${sha}` : ''}` };
+}
+function updateStatusText(s) {
+  if (!s || typeof s !== 'object') return null;
+  if (s.enabled === false) return 'Check off';
+  if (s.available) {
+    if (s.latestVersion && s.latestVersion !== s.currentVersion) return `${s.latestVersion} available`;
+    const n = Number(s.behind) || 0;
+    return n > 0 ? `${n} new change${n === 1 ? '' : 's'} available` : 'Update available';
+  }
+  if (s.error) return `Check failed: ${s.error}`;
+  if (s.checking) return 'Checking…';
+  return s.checkedAt ? 'Up to date' : 'Not checked yet';
+}
+function versionDetailsText(v, u, ua) {
+  v = v || {};
+  const when = (t) => { const d = new Date(t); return t && !isNaN(d) ? `${d.toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'unknown'; };
+  const channel = v.channel ? `${v.channel}${v.branch ? ` (branch ${v.branch})` : ''}` : (v.branch ? `branch ${v.branch}` : 'unknown');
+  const lines = [
+    `My Maestro AI ${v.version || 'unknown'}`,
+    `Channel: ${channel}`,
+    `Commit: ${v.commit || 'unknown'}${v.commitDate ? ` (${v.commitDate})` : ''}`,
+    `Hub started: ${when(v.startedAt)}`,
+    `Node.js: ${v.node || 'unknown'}`,
+    `Restart pending: ${v.restartPending == null ? 'unknown' : v.restartPending ? 'yes (code on disk is newer than the running hub)' : 'no'}`,
+  ];
+  const up = updateStatusText(u);
+  if (up) lines.push(`Update: ${up}`);
+  if (ua) lines.push(`Browser: ${ua}`);
+  return lines.join('\n');
+}
+// ── version-label helpers (end) ──
+
+// Shared verbatim with lib/ui-dialog.js and app.js (test/ui-dialog.test.js keeps the three in step).
+// ── dialog helpers (begin) ──
+const DIALOG_TEXT = {
+  discardTitle: 'Discard changes?',
+  discardBody: "You changed something here that isn't saved. If you close it now, those changes are lost.",
+  discard: 'Discard',
+  keepEditing: 'Keep editing',
+  close: 'Close',
+  closeAria: 'Close dialog',
+  saving: 'Still saving. Wait until it is done, then close.',
+};
+const DIALOG_SKIP_TYPES = ['button', 'submit', 'reset', 'image', 'hidden', 'search'];
+const DIALOG_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), iframe, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+
+/** Is this element a field whose value counts as an edit? */
+function dialogField(el) {
+  if (!el || !el.tagName) return false;
+  const tag = String(el.tagName).toUpperCase();
+  if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') return false;
+  if (tag === 'INPUT' && DIALOG_SKIP_TYPES.includes(String(el.type || 'text').toLowerCase())) return false;
+  if (el.closest && el.closest('[data-no-dirty]')) return false;
+  return true;
+}
+/** The value a field shows, as one comparable string. */
+function dialogFieldValue(el) {
+  const type = String(el.type || '').toLowerCase();
+  if (type === 'checkbox' || type === 'radio') return el.checked ? '1' : '0';
+  if (el.multiple && el.options) return Array.from(el.options).filter(o => o.selected).map(o => o.value).join('\u0001');
+  return String(el.value == null ? '' : el.value);
+}
+/** Changed: a field still on the page differs from its baseline. */
+function dialogIsDirty(baselines) {
+  for (const [el, v] of baselines) if (el.isConnected !== false && dialogFieldValue(el) !== v) return true;
+  return false;
+}
+/** An Escape the dialog layer must leave alone: text being composed, already handled by an inner widget, or meant for
+ *  an open dropdown / combobox / date picker (aria-expanded). */
+function dialogEscapeIgnored(e) {
+  if (!e) return true;
+  if (e.isComposing || e.keyCode === 229) return true;
+  if (e.defaultPrevented) return true;
+  const t = e.target;
+  return !!(t && t.getAttribute && t.getAttribute('aria-expanded') === 'true');
+}
+/** A <dialog> opened with showModal(); one opened with show() sits beside the page, which stays usable. */
+function dialogIsModal(el) {
+  try { return el.matches(':modal'); } catch { return true; }   // no :modal support: treat it as covering the page
+}
+
+function createDialogGuard({ doc = document, win = window, auto = '', useHistory = false, trackSaves = true, pageDirty = false } = {}) {
+  const layers = [];   // innermost last
+  let confirmOpen = null, confirmFinish = null, seq = 0, lastAct = { t: 0, el: null }, escIgnoredAt = 0, popping = false, histId = 0, histSeq = 0, lastOutside = null;
+  const page = pageDirty ? { el: doc.body, page: true, baselines: new Map() } : null;
+  const now = () => Date.now();
+
+  function layerOf(el) {
+    if (!el) return null;
+    for (let i = layers.length - 1; i >= 0; i--) if (layers[i].el === el || (layers[i].el.contains && layers[i].el.contains(el))) return layers[i];
+    return null;
+  }
+  const top = () => layers[layers.length - 1] || null;
+  // Layers that cover the page: all but a <dialog> opened with show() (the phone's approvals panel), which leaves the
+  // page and its tabs usable, so Back stays the page's while only such a panel is open.
+  const covering = () => layers.filter(l => !(l.isDialog && l.el.open && !dialogIsModal(l.el)));
+  const scopeOf = (el) => layerOf(el) || (page && el && page.el.contains && page.el.contains(el) ? page : null);
+
+  // Baselines: the first time a field is focused, pressed or typed in. A radio notes its whole group (keyboard arrows
+  // move the choice without focusing the old one); a label notes the field it controls.
+  function note(target) {
+    let el = target;
+    if (el && el.tagName && String(el.tagName).toUpperCase() === 'LABEL' && el.control) el = el.control;
+    if (!dialogField(el)) return;
+    const s = scopeOf(el);
+    if (!s) return;
+    const group = String(el.type || '').toLowerCase() === 'radio' && el.name && s.el.querySelectorAll
+      ? Array.from(s.el.querySelectorAll('input[type="radio"]')).filter(r => r.name === el.name) : [el];
+    for (const f of group) if (!s.baselines.has(f)) s.baselines.set(f, dialogFieldValue(f));
+  }
+  // A change on a field never noted (changed by a path the listeners above missed): its old value is unknown, so it
+  // counts as changed rather than as unchanged.
+  function noteChange(e) {
+    const el = e.target;
+    if (!dialogField(el)) return;
+    const s = scopeOf(el);
+    if (s && !s.baselines.has(el)) s.baselines.set(el, '\u0000unknown');
+  }
+  function dirty(l) { return !!l && !l.persistent && dialogIsDirty(l.baselines); }
+
+  function focusables(el) {
+    if (!el.querySelectorAll) return [];
+    return Array.from(el.querySelectorAll(DIALOG_FOCUSABLE)).filter(n => !n.hidden && !(n.closest && n.closest('[hidden]')) && (!n.getClientRects || n.getClientRects().length > 0));
+  }
+
+  function register(el, opts = {}) {
+    if (!el) return null;
+    const had = layers.find(l => l.el === el);
+    if (had) return had;
+    const isDialog = String(el.tagName || '').toUpperCase() === 'DIALOG';
+    const l = {
+      id: ++seq, el, isDialog, baselines: new Map(), saving: 0,
+      modal: opts.modal !== undefined ? !!opts.modal : !(el.classList && el.classList.contains('gs-dock')),
+      persistent: !!(el.dataset && el.dataset.dialogPersistent),
+      close: opts.close || null,
+      // What opened it: the focused element, unless the dialog already took the focus; then the last one outside.
+      opener: (() => { const a = doc.activeElement; return a && a !== doc.body && !(el.contains && el.contains(a)) ? a : lastOutside; })(),
+    };
+    layers.push(l);
+    if (isDialog && el.addEventListener && !el.__dialogCancel) {
+      el.__dialogCancel = (e) => {
+        e.preventDefault();   // the guard decides, never the browser
+        if (now() - escIgnoredAt < 200) return;
+        const lay = layers.find(x => x.el === el);
+        if (lay) requestClose(lay, 'cancel');
+      };
+      el.addEventListener('cancel', el.__dialogCancel);
+    }
+    if (l.modal && !isDialog) Promise.resolve().then(() => {
+      if (!l.el.isConnected || layers.indexOf(l) < 0) return;
+      const a = doc.activeElement;
+      if (a && l.el.contains(a)) return;
+      const box = (l.el.firstElementChild && l.el.firstElementChild.focus) ? l.el.firstElementChild : l.el;
+      if (box.setAttribute && !box.hasAttribute('tabindex')) box.setAttribute('tabindex', '-1');
+      try { box.focus({ preventScroll: true }); } catch {}
+    });
+    syncHistory();
+    return l;
+  }
+
+  function unregister(el) {
+    const i = layers.findIndex(l => l.el === el);
+    if (i < 0) return;
+    const [l] = layers.splice(i, 1);
+    syncHistory();
+    const a = doc.activeElement;
+    if (l.opener && l.opener.isConnected !== false && (!a || a === doc.body || a.isConnected === false || (l.el.contains && l.el.contains(a)))) {
+      try { l.opener.focus({ preventScroll: true }); } catch {}
+    }
+  }
+
+  function closeNow(l) {
+    if (l.el.__dialogClose) l.el.__dialogClose();
+    else if (l.close) l.close();
+    else if (l.isDialog) { if (l.el.open) l.el.close(); }
+    else if (l.el.remove) l.el.remove();
+    unregister(l.el);
+  }
+
+  function flashSaving(l) {
+    const host = l.el.querySelector && (l.el.querySelector('dialog, .question-modal, .gs-modal, .st-modal') || l.el);
+    if (!host || !host.appendChild) return;
+    let n = host.querySelector('.dlg-saving');
+    if (!n) { n = doc.createElement('div'); n.className = 'dlg-saving'; n.setAttribute('role', 'status'); host.appendChild(n); }
+    n.textContent = DIALOG_TEXT.saving;
+    clearTimeout(n.__t); n.__t = setTimeout(() => n.remove && n.remove(), 2500);
+  }
+
+  /** The one way out. how: 'escape' | 'close' | 'backdrop' | 'back' | 'cancel'. Returns what happened. */
+  function requestClose(l, how = 'close') {
+    if (!l) return 'none';
+    if (confirmOpen) return 'confirm';
+    if (l.persistent && how !== 'close') return 'kept';
+    if (l.saving > 0) { flashSaving(l); return 'busy'; }
+    if (dirty(l)) { askDiscard(l); return 'confirm'; }
+    closeNow(l);
+    return 'closed';
+  }
+
+  function askDiscard(l) {
+    const d = doc.createElement('dialog');
+    d.className = 'dlg-discard';
+    d.setAttribute('role', 'alertdialog');
+    d.setAttribute('aria-labelledby', 'dlg-discard-title');
+    d.setAttribute('aria-describedby', 'dlg-discard-body');
+    d.innerHTML = '<h3 id="dlg-discard-title"></h3><p id="dlg-discard-body"></p><div class="dlg-discard-btns"><button type="button" class="dlg-discard-go"></button><button type="button" class="dlg-discard-keep"></button></div>';
+    d.querySelector('#dlg-discard-title').textContent = DIALOG_TEXT.discardTitle;
+    d.querySelector('#dlg-discard-body').textContent = DIALOG_TEXT.discardBody;
+    const go = d.querySelector('.dlg-discard-go'), keep = d.querySelector('.dlg-discard-keep');
+    go.textContent = DIALOG_TEXT.discard;
+    keep.textContent = DIALOG_TEXT.keepEditing;
+    const back = doc.activeElement;
+    const finish = (discard) => {
+      if (confirmOpen !== d) return;
+      confirmOpen = null; confirmFinish = null;
+      try { d.close(); } catch {}
+      if (d.remove) d.remove();
+      if (discard) { l.baselines.clear(); closeNow(l); }
+      else {
+        syncHistory();   // Back took the entry while the question was up: it comes back
+        try { (back && back.isConnected !== false ? back : l.el).focus({ preventScroll: true }); } catch {}
+      }
+    };
+    go.addEventListener('click', () => finish(true));
+    keep.addEventListener('click', () => finish(false));
+    d.addEventListener('cancel', (e) => { e.preventDefault(); finish(false); });   // Escape on the question = keep editing
+    d.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(false); }   // Enter never discards
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+    });
+    confirmOpen = d; confirmFinish = finish;
+    doc.body.appendChild(d);
+    if (d.showModal) d.showModal();
+    keep.focus();
+    return d;
+  }
+
+  // ── Keys: Escape for the innermost layer, Tab kept inside a modal one ──
+  function onKeydown(e) {
+    if (e.key === 'Escape' || e.key === 'Esc') {
+      if (confirmOpen) return;   // the question handles its own keys
+      if (dialogEscapeIgnored(e)) { escIgnoredAt = now(); return; }
+      const l = top();
+      if (!l) return;
+      if (!l.modal && !(l.el.contains && l.el.contains(e.target))) return;   // a docked panel answers only from inside
+      e.preventDefault();
+      requestClose(l, 'escape');
+      return;
+    }
+    if (e.key === 'Tab') {
+      if (confirmOpen) return;
+      const l = top();
+      if (!l || !l.modal || l.isDialog) return;   // native modal dialogs keep the focus themselves
+      const f = focusables(l.el);
+      if (!f.length) { e.preventDefault(); return; }
+      const first = f[0], last = f[f.length - 1], a = doc.activeElement;
+      // Focus on something that is not one of the controls (the dialog box itself, a scroll area, or outside):
+      // Tab goes to the first control, Shift+Tab to the last, never out of the dialog.
+      if (!l.el.contains(a) || f.indexOf(a) < 0) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+      else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+    }
+  }
+
+  // ── The phone's Back gesture: while any layer covers the page, the guard keeps ONE history entry on top of the
+  // page's own. Back takes that entry: the innermost covering layer is asked to close, and the entry comes back while
+  // one is still open (a layer under it, the question, a save running, an answer needed), so the next Back comes here
+  // again. Closing the last one any other way removes the entry, so the next Back reaches the page's router; a layer
+  // that closes under another one leaves no entry behind. ──
+  function syncHistory() {
+    if (!useHistory || popping) return;   // our own back() is on its way: its popstate syncs again
+    const open = covering().length;
+    if (open && !histId) {
+      const id = ++histSeq;
+      try { win.history.pushState({ ...(win.history.state || {}), dialog: id }, ''); histId = id; } catch {}
+    } else if (!open && histId) {
+      const id = histId;
+      histId = 0;
+      const st = win.history.state;
+      if (!st || st.dialog !== id) return;   // the page moved history on since: its entries are left alone
+      popping = true;
+      try { win.history.back(); } catch { popping = false; }
+    }
+  }
+  function onPopstate(e) {
+    if (popping) {   // our own back() after the last layer closed
+      popping = false;
+      e.stopImmediatePropagation();
+      syncHistory();   // a layer that opened meanwhile gets its entry now
+      return;
+    }
+    if (!histId || (e.state || {}).dialog === histId) return;
+    e.stopImmediatePropagation();   // the page's own router must not move while a layer is open
+    histId = 0;
+    if (confirmOpen) confirmFinish(false);   // Back on "Discard changes?" = Keep editing
+    else requestClose(covering().pop(), 'back');
+    syncHistory();
+  }
+
+  // ── Saves in flight: a POST/PUT/PATCH/DELETE to the hub's /api/ that follows a click or key in a layer keeps that
+  // layer open until the hub answers (the response headers; the page reads the answer and commits right after). It
+  // settles nothing by itself (a Test button posts too): see savePoint. ──
+  function wrapFetch() {
+    const orig = win.fetch && win.fetch.bind(win);
+    if (!orig || win.fetch.__dialogGuard) return;
+    const wrapped = function (input, init) {
+      const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+      let l = null;
+      if (method !== 'GET' && method !== 'HEAD' && now() - lastAct.t < 1500) {
+        let url = ''; try { url = new URL(typeof input === 'string' ? input : input.url, win.location.href).pathname; } catch {}
+        if (url.startsWith('/api/')) l = scopeOf(lastAct.el);
+      }
+      if (!l) return orig(input, init);
+      l.saving = (l.saving || 0) + 1;
+      return Promise.resolve(orig(input, init)).finally(() => { l.saving--; });
+    };
+    wrapped.__dialogGuard = true;
+    win.fetch = wrapped;
+  }
+  /** savePoint(fields): the fields a save writes (an element, a container of them, or a list), with the values they
+   *  have now, as the save starts. The returned commit(), called once the hub confirmed the save, makes exactly those
+   *  values the fields' baselines: an edit made while the save ran stays changed, and nothing else is touched. */
+  function savePoint(scope) {
+    const list = [];
+    const add = (el) => {
+      if (!el) return;
+      if (dialogField(el)) list.push(el);
+      else if (el.querySelectorAll) for (const f of el.querySelectorAll('input, textarea, select')) if (dialogField(f)) list.push(f);
+    };
+    if (Array.isArray(scope) || (scope && typeof scope.length === 'number' && !scope.tagName)) for (const el of scope) add(el); else add(scope);
+    const snap = list.map(el => [el, dialogFieldValue(el)]);
+    return function commit() {
+      for (const [el, v] of snap) { if (el.isConnected === false) continue; const s = scopeOf(el); if (s) s.baselines.set(el, v); }
+    };
+  }
+
+  // ── Wiring ──
+  const act = (e) => { lastAct = { t: now(), el: e.target }; note(e.target); };
+  doc.addEventListener('keydown', onKeydown);
+  doc.addEventListener('focusin', (e) => { if (!layerOf(e.target) && e.target !== confirmOpen) lastOutside = e.target; note(e.target); }, true);
+  doc.addEventListener('pointerdown', act, true);
+  doc.addEventListener('keydown', act, true);
+  doc.addEventListener('change', (e) => { noteChange(e); lastAct = { t: now(), el: e.target }; }, true);
+  doc.addEventListener('input', noteChange, true);
+  // A click on an overlay's own backdrop (not on its box) is a way out too.
+  doc.addEventListener('click', (e) => {
+    const l = top();
+    if (!l || !l.modal || e.target !== l.el || confirmOpen) return;
+    if (l.isDialog) {
+      const r = l.el.getBoundingClientRect && l.el.getBoundingClientRect();
+      if (!r || (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom)) return;
+    }
+    if (l.el.dataset && l.el.dataset.dialogNoBackdrop) return;
+    e.stopImmediatePropagation();
+    requestClose(l, 'backdrop');
+  }, true);
+  if (useHistory && win.addEventListener) win.addEventListener('popstate', onPopstate);
+  // Unsaved changes anywhere: an open layer, or the editing page itself. The pages' own reloads wait while this is true.
+  const hasChanges = () => layers.some(dirty) || (!!page && dialogIsDirty(page.baselines));
+  if (win.addEventListener) win.addEventListener('beforeunload', (e) => {
+    if (hasChanges()) { e.preventDefault(); e.returnValue = ''; return ''; }
+  });
+  if (trackSaves) wrapFetch();
+  if (typeof MutationObserver !== 'undefined' && doc.body) {
+    const consider = (n) => {
+      if (!n || n.nodeType !== 1) return;
+      if (auto && n.matches && n.matches(auto)) register(n);
+      if (String(n.tagName).toUpperCase() === 'DIALOG' && n.open && n !== confirmOpen) register(n);
+    };
+    new MutationObserver((recs) => {
+      for (const r of recs) {
+        if (r.type === 'attributes') {
+          const n = r.target;
+          if (n === confirmOpen || String(n.tagName).toUpperCase() !== 'DIALOG') continue;
+          if (n.open) register(n); else unregister(n);
+          continue;
+        }
+        for (const n of r.removedNodes) if (n.nodeType === 1) for (const l of layers.slice()) if (l.el === n || (n.contains && n.contains(l.el))) unregister(l.el);
+        for (const n of r.addedNodes) consider(n);
+      }
+    }).observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
+    if (auto && doc.querySelectorAll) for (const n of doc.querySelectorAll(auto)) register(n);
+  }
+  if (!doc.getElementById('dlg-style') && doc.head) {
+    const s = doc.createElement('style');
+    s.id = 'dlg-style';
+    s.textContent = '.dlg-discard{margin:auto;max-width:min(92vw,380px);padding:20px;border:1px solid var(--border-strong,#333846);border-radius:12px;background:var(--bg-card,#14171F);color:var(--text,#F3F4F6);font:inherit}'
+      + '.dlg-discard::backdrop{background:rgba(0,0,0,.55)}.dlg-discard h3{margin:0 0 8px;font-size:1.05rem}.dlg-discard p{margin:0 0 16px;color:var(--text-dim,#9CA3AF);line-height:1.4}'
+      + '.dlg-discard-btns{display:flex;gap:8px;justify-content:flex-end}.dlg-discard-btns button{min-height:36px;padding:0 16px;border-radius:8px;border:1px solid var(--border-strong,#333846);background:var(--bg-input,#040507);color:var(--text,#F3F4F6);font:inherit;cursor:pointer}'
+      + '.dlg-discard-btns .dlg-discard-go{color:var(--error,#FF4C4C)}.dlg-discard-btns .dlg-discard-keep{background:var(--accent,#3D7BFF);border-color:var(--accent,#3D7BFF);color:#fff}'
+      + '.dlg-discard-btns button:focus-visible{outline:2px solid var(--accent-hover,#5A93FF);outline-offset:2px}'
+      + '.dlg-saving{margin-top:10px;font-size:.8rem;color:var(--warning,#F5A623)}';
+    doc.head.appendChild(s);
+  }
+
+  return {
+    open: (el, opts) => register(el, opts),
+    closed: (el) => unregister(el),
+    requestClose: (elOrChild, how) => requestClose(layerOf(elOrChild), how),
+    isDirty: (elOrChild) => dirty(layerOf(elOrChild)) || (!layerOf(elOrChild) && !!page && dialogIsDirty(page.baselines)),
+    hasChanges,
+    savePoint,
+    markLoaded: (els) => { for (const el of (Array.isArray(els) ? els : [els])) { const l = el && scopeOf(el); if (l) l.baselines.delete(el); } },   // put in by the page, not typed
+    layers: () => layers.slice(),
+    _confirm: () => confirmOpen,
+  };
+}
+// ── dialog helpers (end) ──
+
+// One way out of every sheet on the phone: Esc, Close / Cancel, a tap on the backdrop and the Back gesture (each open
+// sheet owns a history entry) all ask the sheet first (lib/ui-dialog.js). The <dialog> sheets are found when they open;
+// the reasoning and tool sheets register themselves.
+const dialogGuard = createDialogGuard({ useHistory: true });
+function dialogRequestClose(el, how) { return dialogGuard.requestClose(el, how || 'close'); }
+
 // A markdown image: same-origin, data: and blob: sources are shown inline; any other host becomes a link
 // with the alt text and the host, never fetched (an off-site image is a zero-click beacon). Unsafe: blocked.
 function imageHtml(src, alt) {
@@ -1390,7 +1814,10 @@ function legacyCopy(text) {
   ta.setAttribute('readonly', '');
   ta.style.position = 'fixed';
   ta.style.opacity = '0';
-  document.body.appendChild(ta);
+  // Inside the open dialog, if any: while a dialog is modal, everything outside it is inert and cannot be selected.
+  let host = null;
+  try { host = document.querySelector('dialog:modal'); } catch { /* a browser without :modal */ }
+  (host || document.querySelector('dialog[open]') || document.body).appendChild(ta);
   ta.select();
   let ok = false;
   try { ok = document.execCommand('copy'); } catch { ok = false; }
@@ -1501,7 +1928,7 @@ function paintReasoning(holder) {
       '<div class="rsn-grip" aria-hidden="true"></div>';
     box.querySelector('.rsn-body').style.height = `${rsnHeightPref()}px`;
     box.classList.add('closed');   // closed until the reader opens it
-    el.insertBefore(box, holder.bubble.body && holder.bubble.body.parentNode === el ? holder.bubble.body : el.firstChild);
+    el.insertBefore(box, el.querySelector(':scope > .tsn') || (holder.bubble.body && holder.bubble.body.parentNode === el ? holder.bubble.body : el.firstChild));
   }
   rsnHolders.set(box, holder);
   box.classList.toggle('live', r.live);
@@ -1552,6 +1979,7 @@ function openReasoningSheet(holder) {
   sh.querySelector('.rsn-sheet-title').textContent = who ? `Reasoning · ${who}` : 'Reasoning';
   sh.querySelector('.rsn-sheet-body').dataset.v = '';
   sh.classList.add('open');
+  dialogGuard.open(sh, { close: closeReasoningSheet });   // Back and Esc close it first
   paintReasoningSheet();
   const body = sh.querySelector('.rsn-sheet-body');
   body.scrollTop = body.scrollHeight;
@@ -1574,6 +2002,7 @@ function paintReasoningSheet() {
 function closeReasoningSheet() {
   const sh = $('rsn-sheet');
   if (sh) sh.classList.remove('open');
+  if (sh) dialogGuard.closed(sh);
   rsnSheetFor = null;
 }
 
@@ -1603,6 +2032,7 @@ function onReasoningGrip(e) {
 
 function onMessagesClick(e) {
   if (onReasoningClick(e)) return;
+  if (onToolsClick(e)) return;
   const b = e.target.closest('.copy');
   if (!b) { onFeedClick(e); return; }
   e.stopPropagation();
@@ -1658,9 +2088,9 @@ function paintSaved(bubble, m) {
   feed.ended = true;
   for (const a of m.activity) {
     if (!a || !a.id) continue;
-    if (a.kind === 'tool') feed.items.set(a.id, { kind: 'tool', id: a.id, tool: a.tool || 'tool', status: 'done', summary: a.summary || '', output: a.output || '', open: false, el: null, at: a.at });
+    if (a.kind === 'tool') feed.items.set(a.id, { kind: 'tool', id: a.id, tool: a.tool || 'tool', status: 'done', summary: a.summary || '', output: a.output || '', open: false, el: null, at: a.at, t0: Date.parse(a.ts) || null, t1: Date.parse(a.doneTs) || null });
     else if (a.kind === 'worker') {
-      const w = { kind: 'worker', id: a.id, workerId: String(a.workerId || a.id), status: a.status === 'failed' ? 'failed' : 'completed', description: a.description || '', model: a.model || '', agent: a.agent || null, error: a.error || null, text: '', tools: [], last: null, open: false, el: null, at: a.at };
+      const w = { kind: 'worker', id: a.id, workerId: String(a.workerId || a.id), status: a.status === 'failed' ? 'failed' : 'completed', description: a.description || '', model: a.model || '', agent: a.agent || null, error: a.error || null, text: '', tools: [], last: null, open: false, el: null, at: a.at, t0: Date.parse(a.ts) || null, t1: Date.parse(a.doneTs) || null };
       feed.items.set(a.id, w); feed.byWorker.set(w.workerId, w);
     }
   }
@@ -1700,6 +2130,7 @@ function bubbleLive(rec) {
 async function openChat(name) {
   const a = agentByName(name);
   const same = current === name;
+  if (!same && tsnSheetFor) closeToolsSheet();   // the full screen of another chat's calls
   current = name;
   localStorage.setItem('hub-mobile-last', name);
   if (!same && $('files-sheet')?.open) filesRefresh(); // the Files sheet follows the open agent
@@ -1866,32 +2297,25 @@ function paintReply(holder, text, changed = null) {
   const full = holder.replyText || '';
   const blocks = replyBlocks(holder, full);
   const sig = blocks.map(b => (b.type === 'text' ? `t${b.from}` : `g${b.items.map(i => i.id).join(',')}`)).join('|');
-  const intact = holder._blocks && holder._sig === sig && holder._blocks.every(b => b.el && b.el.parentNode === body);
-  const feed = holder.feed ? holderFeed(holder) : null;
+  const intact = holder._blocks && holder._sig === sig && holder._blocks.every(b => b.type !== 'text' || (b.el && b.el.parentNode === body));
   if (!intact) {
     resetLayout(holder);
     for (const n of [...body.children]) if (n.classList.contains('seg') || n.classList.contains('feed')) n.remove();
     clearPlaceholder(body);
     const before = [...body.children].find(n => n.tagName === 'IMG') || null;   // attached images stay last
     for (const b of blocks) {
+      if (b.type !== 'text') continue;   // the calls go into the tool panel (paintTools)
       b.el = document.createElement('div');
-      if (b.type === 'text') b.el.className = 'seg';
-      else {
-        b.el.className = 'feed fgroup';
-        b.list = document.createElement('div'); b.list.className = 'feed-list'; b.el.appendChild(b.list);
-        if (feed) feedEls.set(b.el, feed);
-        for (const it of b.items) { it.el = null; paintFeedRow(feed, it, b.list); }
-      }
+      b.el.className = 'seg';
       body.insertBefore(b.el, before);
     }
     holder._blocks = blocks; holder._sig = sig;
   } else {
     // Same structure: keep the elements; the last text block grows with the stream.
-    blocks.forEach((b, i) => { const old = holder._blocks[i]; b.el = old.el; b.list = old.list; b.raw = old.raw; });
+    blocks.forEach((b, i) => { const old = holder._blocks[i]; b.el = old.el; b.raw = old.raw; });
     holder._blocks = blocks;
-    if (changed) paintFeedRow(feed, changed);
-    else for (const b of blocks) if (b.type === 'group') for (const it of b.items) paintFeedRow(feed, it, b.list);
   }
+  paintTools(holder, blocks, changed);
   for (const b of holder._blocks) {
     if (b.type !== 'text') continue;
     const piece = full.slice(b.from, b.to);
@@ -1930,20 +2354,22 @@ function feedUpsert(holder, item) {
     it = w;
   } else if (item.kind === 'tool') {
     it = feed.items.get(item.id);
-    if (!it) { it = { kind: 'tool', id: item.id, tool: 'tool', status: 'running', summary: '', output: '', open: false, el: null, at: placeOf(holder, feed, item) }; feed.items.set(item.id, it); }
+    if (!it) { it = { kind: 'tool', id: item.id, tool: 'tool', status: 'running', summary: '', output: '', open: false, el: null, at: placeOf(holder, feed, item), t0: Date.parse(item.ts) || Date.now(), t1: null }; feed.items.set(item.id, it); }
     if (item.tool) it.tool = String(item.tool);
     it.status = item.status === 'done' ? 'done' : 'running';
+    if (it.status === 'done' && !it.t1) it.t1 = Date.parse(item.doneTs) || Date.now();
     if (item.summary) it.summary = String(item.summary);
     if (item.output != null) it.output = typeof item.output === 'string' ? item.output : JSON.stringify(item.output);
   } else if (item.kind === 'worker') {
     const wid = String(item.workerId || item.id);
     it = feed.byWorker.get(wid);
     if (!it) {
-      it = { kind: 'worker', id: item.id, workerId: wid, status: 'running', description: '', model: '', agent: null, error: null, text: '', tools: [], last: null, open: false, el: null, at: placeOf(holder, feed, item) };
+      it = { kind: 'worker', id: item.id, workerId: wid, status: 'running', description: '', model: '', agent: null, error: null, text: '', tools: [], last: null, open: false, el: null, at: placeOf(holder, feed, item), t0: Date.parse(item.ts) || Date.now(), t1: null };
       feed.items.set(item.id, it);
       feed.byWorker.set(wid, it);
     }
     it.status = item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'running';
+    if (it.status !== 'running' && !it.t1) it.t1 = Date.parse(item.doneTs) || Date.now();
     if (item.description) it.description = String(item.description);
     if (item.model) it.model = String(item.model);
     if (item.agent) it.agent = String(item.agent);
@@ -1993,6 +2419,231 @@ function feedStatus(feed) {
 // every row when `it` is omitted (a bubble that was just built or rebuilt).
 function paintFeed(holder, it) {
   paintReply(holder, undefined, it || null);
+}
+
+// ── Tool panel: every tool call and worker of a reply in one panel under its reasoning panel ──────────────────────
+// Closed until tapped, so a reply that runs many tools no longer grows a row per call. The header updates in place:
+// the calls done, a red count of the failed ones, the time; while the reply works, a second line says what runs now.
+// Opened, one line per call (a tap shows its output); ⤢ shows every call with its output on the whole screen, and the
+// grip sets the height. The text the agent writes between calls stays in the reply (paintReply).
+const TSN_HEIGHT_KEY = 'hub-mobile-tools-height';
+const tsnHeightPref = () => { const h = Number(localStorage.getItem(TSN_HEIGHT_KEY)); return Number.isFinite(h) && h >= 60 ? h : 300; };
+const tsnHolders = new WeakMap();   // panel element -> holder
+let tsnTimer = 0;
+let tsnSheetFor = null;
+let tsnSheetReturn = null;
+
+function tsnDur(ms) {
+  if (ms < 1000) return ms < 100 ? '<0.1s' : `${(ms / 1000).toFixed(1)}s`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+function tsnFailed(it) {
+  return it.kind === 'worker' ? it.status === 'failed' : it.status === 'done' && /^(Error|⚠|✗)/.test(it.output || '');
+}
+// The time the calls took: the union of their intervals (calls side by side count once). Null unless every call has a
+// start and an end (a call cut off when the reply ended, or a reply saved by an older version, shows no total).
+function tsnSpan(items) {
+  if (!items.length || items.some(x => !x.t0 || !x.t1 || x.t1 < x.t0)) return null;
+  const iv = items.map(x => [x.t0, x.t1]).sort((a, b) => a[0] - b[0]);
+  let total = 0; let [s, e] = iv[0];
+  for (const [a, b] of iv.slice(1)) { if (a > e) { total += e - s; s = a; e = b; } else if (b > e) e = b; }
+  return total + (e - s);
+}
+function tsnModel(feed) {
+  const items = [...feed.items.values()];
+  const live = !feed.ended;
+  const running = live ? items.filter(x => x.status === 'running') : [];
+  return { items, live, running, done: items.filter(x => x.status !== 'running').length, failed: items.filter(tsnFailed).length, spanMs: tsnSpan(items) };
+}
+// The header's words: calls done (or running) while the reply works, the number of calls once it is over.
+function tsnSummary(m) {
+  const n = m.items.length;
+  if (!m.live) return `${n} call${n === 1 ? '' : 's'}`;
+  return m.done ? `${m.done} done` : `${m.running.length || n} running`;
+}
+function paintTsnHead(box, m) {
+  const q = (s) => box.querySelector(s);
+  const open = !box.classList.contains('closed');
+  q('.tsn-head').setAttribute('aria-expanded', String(open));
+  q('.tsn-chev').textContent = open ? '▾' : '▸';
+  const k = m.running.length ? 'run' : m.live ? 'wait' : 'done';
+  const st = q('.tsn-state');
+  if (st.dataset.k !== k) { st.dataset.k = k; st.className = `tsn-state ${k}`; st.textContent = k === 'done' ? '✓' : ''; }
+  q('.tsn-count').textContent = tsnSummary(m);
+  const f = q('.tsn-fail');
+  f.textContent = m.failed ? `${m.failed} failed` : '';
+  f.hidden = !m.failed;
+  const now = q('.tsn-now'), t = q('.tsn-time');
+  const cur = m.running[m.running.length - 1];
+  if (cur) {
+    const name = document.createElement('b');
+    let what;
+    if (cur.kind === 'tool') { name.textContent = cur.tool; what = cur.summary ? ` · ${clipText(cur.summary, 120)}` : ''; }
+    else {
+      name.textContent = `👷 ${workerName(cur)}`;
+      const lt = cur.tools[cur.tools.length - 1];
+      what = cur.last === 'tool' && lt ? ` · ${lt.tool}${lt.summary ? ` ${clipText(lt.summary, 80)}` : ''}` : ' · working…';
+    }
+    now.replaceChildren('now: ', name, `${what}${m.running.length > 1 ? `  +${m.running.length - 1}` : ''}`);
+    now.hidden = false;
+    if (cur.t0) {
+      t.dataset.started = String(cur.t0); t.textContent = tsnDur(Date.now() - cur.t0);
+      if (!tsnTimer) tsnTimer = setInterval(tsnTick, 1000);
+    } else { delete t.dataset.started; t.textContent = ''; }
+  } else {
+    now.hidden = true; now.textContent = '';
+    delete t.dataset.started;
+    t.textContent = !m.live && m.spanMs != null ? tsnDur(m.spanMs) : '';
+  }
+}
+function paintTools(holder, blocks, changed) {
+  const feed = holder.feed;
+  const el = holder.bubble.el;
+  let box = el.querySelector(':scope > .tsn');
+  if (!feed || !feed.items.size) { if (box) box.remove(); return; }
+  holderFeed(holder);
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'tsn closed';   // closed until the reader opens it
+    box.innerHTML =
+      '<div class="tsn-head" role="button" tabindex="0">' +
+        '<span class="tsn-state"></span><span class="tsn-label">Tools</span><span class="tsn-count"></span>' +
+        '<span class="tsn-fail" hidden></span><span class="tsn-time"></span>' +
+        '<button type="button" class="tsn-full" aria-label="Show every tool call full screen">⤢</button><span class="tsn-chev"></span>' +
+      '</div>' +
+      '<div class="tsn-now" hidden></div>' +
+      '<div class="tsn-body"></div>' +
+      '<div class="tsn-grip" aria-hidden="true"></div>';
+    box.querySelector('.tsn-body').style.maxHeight = `${tsnHeightPref()}px`;
+    const rsn = el.querySelector(':scope > .rsn');
+    el.insertBefore(box, rsn ? rsn.nextSibling : (holder.bubble.body && holder.bubble.body.parentNode === el ? holder.bubble.body : el.firstChild));
+  }
+  tsnHolders.set(box, holder);
+  feedEls.set(box, feed);   // a tap on a row opens that call's output (onFeedClick)
+  const m = tsnModel(feed);
+  box.classList.toggle('live', m.live);
+  paintTsnHead(box, m);
+  // The rows: rebuilt when a call starts (a thin line between the groups of calls), else updated in place.
+  const list = box.querySelector('.tsn-body');
+  const groups = blocks.filter(b => b.type === 'group');
+  const gsig = groups.map(g => g.items.map(i => i.id).join(',')).join('|');
+  if (list.dataset.sig !== gsig) {
+    const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+    const top = list.scrollTop;
+    list.textContent = '';
+    groups.forEach((g, gi) => {
+      if (gi) { const s = document.createElement('div'); s.className = 'tsn-sep'; list.appendChild(s); }
+      for (const it of g.items) { it.el = null; paintFeedRow(feed, it, list); }
+    });
+    list.dataset.sig = gsig;
+    list.scrollTop = atEnd && m.live ? list.scrollHeight : top;
+  } else if (changed) paintFeedRow(feed, changed);
+  else for (const it of feed.items.values()) paintFeedRow(feed, it, list);
+  if (m.live && !tsnTimer) tsnTimer = setInterval(tsnTick, 1000);
+  if (tsnSheetFor === holder) paintToolsSheet();
+}
+// The time of the call running now ticks while a reply works; the timer stops when nothing runs.
+function tsnTick() {
+  const els = document.querySelectorAll('.tsn.live .tsn-time[data-started]');
+  if (!els.length) { clearInterval(tsnTimer); tsnTimer = 0; return; }
+  const now = Date.now();
+  for (const t of els) { const s = Number(t.dataset.started); if (s) t.textContent = tsnDur(now - s); }
+}
+function toggleTools(box) {
+  box.classList.toggle('closed');
+  const h = tsnHolders.get(box);
+  if (h && h.feed) paintTsnHead(box, tsnModel(h.feed));
+  if (!box.classList.contains('closed') && box.classList.contains('live')) { const b = box.querySelector('.tsn-body'); b.scrollTop = b.scrollHeight; }
+}
+// Taps on a tool panel (from the chat's click handler): ⤢, the header or the "now" line. A tap on a row is the feed's.
+function onToolsClick(e) {
+  const box = e.target.closest('.tsn');
+  if (!box) return false;
+  if (e.target.closest('.tsn-full')) { e.stopPropagation(); openToolsSheet(tsnHolders.get(box)); return true; }
+  if (e.target.closest('.tsn-head, .tsn-now')) { e.stopPropagation(); toggleTools(box); return true; }
+  return false;
+}
+// The grip: drag for any height (60 px to most of the screen); the size is kept for the next panels.
+function onToolsGrip(e) {
+  const grip = e.target.closest && e.target.closest('.tsn .tsn-grip');
+  if (!grip) return;
+  e.preventDefault();
+  const body = grip.closest('.tsn').querySelector('.tsn-body');
+  const y0 = e.clientY, h0 = body.getBoundingClientRect().height;
+  const move = (ev) => { body.style.maxHeight = `${Math.round(Math.max(60, Math.min(window.innerHeight * 0.8, h0 + ev.clientY - y0)))}px`; };
+  const up = () => {
+    grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+    localStorage.setItem(TSN_HEIGHT_KEY, String(parseInt(body.style.maxHeight, 10) || tsnHeightPref()));
+  };
+  try { grip.setPointerCapture(e.pointerId); } catch {}
+  grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+}
+// ⤢: every call with its output on the whole screen, live while the reply works.
+function openToolsSheet(holder) {
+  if (!holder || !holder.feed) return;
+  let sh = $('tsn-sheet');
+  if (!sh) {
+    sh = document.createElement('div');
+    sh.id = 'tsn-sheet';
+    sh.className = 'rsn-sheet tsn-sheet';
+    sh.setAttribute('role', 'dialog');
+    sh.setAttribute('aria-modal', 'true');
+    sh.setAttribute('aria-label', 'Tool calls');
+    sh.innerHTML =
+      '<div class="rsn-sheet-head"><span class="rsn-sheet-title"></span><span class="rsn-sheet-count"></span>' +
+      '<button type="button" class="rsn-sheet-close" aria-label="Close">✕</button></div>' +
+      '<div class="rsn-sheet-body" tabindex="0"></div>';
+    sh.querySelector('.rsn-sheet-close').addEventListener('click', closeToolsSheet);
+    // Esc closes it and Tab stays inside (the list, then ✕): the dialog guard does both, once (lib/ui-dialog.js).
+    document.body.appendChild(sh);
+  }
+  tsnSheetFor = holder;
+  tsnSheetReturn = document.activeElement;
+  const who = holder.agent ? displayName(holder.agent) : '';
+  sh.querySelector('.rsn-sheet-title').textContent = who ? `Tools · ${who}` : 'Tools';
+  sh.querySelector('.rsn-sheet-body')._text = null;
+  sh.classList.add('open');
+  dialogGuard.open(sh, { close: closeToolsSheet });   // Back and Esc close it first
+  paintToolsSheet();
+  const body = sh.querySelector('.rsn-sheet-body');
+  body.scrollTop = body.scrollHeight;
+  body.focus({ preventScroll: true });
+}
+function tsnEntryText(it) {
+  if (it.kind === 'tool') {
+    const mark = it.status === 'running' ? '⚙' : tsnFailed(it) ? '✗' : '✓';
+    return `${mark} ${it.tool}${it.summary ? ` · ${it.summary}` : ''}\n${it.status === 'running' ? 'Running…' : (it.output ? String(it.output) : '(no output)')}`;
+  }
+  const mark = it.status === 'completed' ? '✓' : it.status === 'failed' ? '✗' : '👷';
+  const tools = it.tools.map(t => `  ⚙ ${t.tool}${t.summary ? ` · ${clipText(t.summary, 160)}` : ''}`).join('\n');
+  return `${mark} ${workerName(it)}${it.model ? ` · ${shortModel(it.model)}` : ''}${it.error ? `\n⚠ ${it.error}` : ''}${tools ? `\n${tools}` : ''}${it.text ? `\n${it.text}` : ''}`;
+}
+function paintToolsSheet() {
+  const sh = $('tsn-sheet');
+  const feed = tsnSheetFor && tsnSheetFor.feed;
+  if (!sh || !feed) return;
+  if (!tsnSheetFor.bubble || !tsnSheetFor.bubble.el.isConnected) { closeToolsSheet(); return; }
+  const m = tsnModel(feed);
+  sh.classList.toggle('live', m.live);
+  sh.querySelector('.rsn-sheet-count').textContent = `${tsnSummary(m)}${m.failed ? ` · ${m.failed} failed` : ''}${!m.live && m.spanMs != null ? ` · ${tsnDur(m.spanMs)}` : ''}`;
+  const text = m.items.map(tsnEntryText).join('\n\n');
+  const body = sh.querySelector('.rsn-sheet-body');
+  if (body._text !== text) {
+    const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+    body.textContent = text;
+    body._text = text;
+    if (atEnd) body.scrollTop = body.scrollHeight;
+  }
+}
+function closeToolsSheet() {
+  const sh = $('tsn-sheet');
+  if (sh) sh.classList.remove('open');
+  if (sh) dialogGuard.closed(sh);
+  tsnSheetFor = null;
+  const back = tsnSheetReturn; tsnSheetReturn = null;
+  if (back && back.isConnected && typeof back.focus === 'function') { try { back.focus({ preventScroll: true }); } catch {} }
 }
 
 function paintFeedRow(feed, it, list = null) {
@@ -2050,7 +2701,7 @@ function feedEnd(holder) {
 // Tap on the folded summary toggles the list; tap on a row toggles its detail.
 function onFeedClick(e) {
   if (e.target.closest('a')) return;
-  const root = e.target.closest('.feed');
+  const root = e.target.closest('.feed, .tsn');
   const feed = root && feedEls.get(root);
   if (!feed) return;
   if (e.target.closest('.feed-head')) {
@@ -2977,7 +3628,7 @@ async function openUpdateSheet() {
     const note = !c.available ? (c.error || 'not on GitHub')
       : c.current ? (s.behind > 0 ? `${s.behind} new commit${s.behind === 1 ? '' : 's'}` : 'up to date')
       : `${c.adds ? `adds ${c.adds} commit${c.adds === 1 ? '' : 's'}` : 'adds nothing'}${c.drops ? `, leaves ${c.drops} behind` : ''}`;
-    return `<label class="upd-ch"><input type="radio" name="upd-channel" value="${esc(c.id)}" ${c.current ? 'checked' : ''} ${c.available ? '' : 'disabled'}> <b>${esc(c.label)}</b> (${esc(c.branch)})${c.current ? ' — current' : ''}<br><small>${esc(c.blurb)}; ${esc(note)}</small></label>`;
+    return `<label class="upd-ch"><input type="radio" data-no-dirty name="upd-channel" value="${esc(c.id)}" ${c.current ? 'checked' : ''} ${c.available ? '' : 'disabled'}> <b>${esc(c.label)}</b> (${esc(c.branch)})${c.current ? ' — current' : ''}<br><small>${esc(c.blurb)}; ${esc(note)}</small></label>`;
   }).join('');
   const blockers = s.blockers && s.blockers.length ? `<p class="upd-err">Update blocked: ${esc(s.blockers.join('; '))}</p>` : '';
   const incoming = s.commits && s.commits.length ? `<details><summary>${s.commits.length} incoming commit${s.commits.length === 1 ? '' : 's'}</summary>${s.commits.map(c => `<div>${esc(c)}</div>`).join('')}</details>` : '';
@@ -3089,6 +3740,52 @@ function onUpdateChoice(e) {
   else if (b.dataset.uc === 'details') { const d = $('update-sheet'); d.dataset.uc = ''; openUpdateSheet(); }
 }
 
+// ── Version label and About (GET /api/version, lib/hub-map versionInfo): the ⋮ menu's first item carries the label
+// (experimental and other branches in their own colour, a dot while a restart is pending) and opens the About sheet. ──
+let hubVersion = null;
+async function paintVersionLabel() {
+  try { const r = await api('/api/version'); if (r.ok) hubVersion = await r.json(); } catch { /* keep the last one */ }
+  const el = $('menu-version'), l = versionLabel(hubVersion);
+  if (!el) return hubVersion;
+  el.className = l ? `menu-version ${l.kind}` : 'menu-version';
+  el.innerHTML = l ? `${esc(l.text)}${hubVersion.restartPending ? ' <span class="hv-dot" title="Restart pending: code on disk is newer than the running hub"></span>' : ''}` : '';
+  return hubVersion;
+}
+async function openAboutSheet() {
+  $('menu').classList.remove('open');
+  const d = $('about-sheet');
+  const opening = {};   // this opening: one still loading from an earlier opening must not fill it
+  d._opening = opening;
+  d.innerHTML = '<h3>About My Maestro AI</h3><p>Loading…</p><div class="btns"><button data-ab="close">Close</button></div>';
+  if (!d.open) d.showModal();
+  const [v, u] = await Promise.all([paintVersionLabel(), isAdmin() ? refreshUpdateCheck() : Promise.resolve(null)]);
+  if (!d.open || d._opening !== opening) return;
+  if (!v) { d.innerHTML = '<h3>About My Maestro AI</h3><p>Could not read the version from the hub.</p><div class="btns"><button data-ab="close">Close</button></div>'; return; }
+  const l = versionLabel(v) || { kind: 'other' };
+  const started = v.startedAt ? new Date(v.startedAt) : null;
+  const up = updateStatusText(u);
+  const row = (k, val) => `<dt>${k}</dt><dd>${val}</dd>`;
+  d.innerHTML = `<h3>About My Maestro AI</h3><dl class="about-grid">
+    ${row('Version', `${esc(v.version || 'unknown')} <span class="menu-version ${l.kind} about-chip">${esc(v.channel || v.branch || 'no branch')}</span>`)}
+    ${row('Branch', esc(v.branch || '—'))}
+    ${row('Commit', `<code>${esc(v.commit || '—')}</code>${v.commitDate ? ` · ${esc(v.commitDate)}` : ''}`)}
+    ${row('Started', started && !isNaN(started) ? esc(started.toLocaleString()) : '—')}
+    ${v.restartPending ? row('Restart', '<span class="about-warn"><span class="hv-dot"></span> pending: code on disk is newer than the running hub</span>') : ''}
+    ${row('Node.js', esc(v.node || '—'))}
+    ${up ? row('Updates', esc(up)) : ''}
+  </dl><div class="btns">${u && u.available ? '<button data-ab="update">Update…</button>' : ''}<button data-ab="copy">Copy details</button><button class="go accent" data-ab="close">Close</button></div>`;
+  d._about = { v, u };
+}
+function onAboutClick(e) {
+  const d = $('about-sheet');
+  const b = e.target.closest('[data-ab]');
+  if (!b) return;
+  const { v, u } = d._about || {};
+  if (b.dataset.ab === 'copy') copyText(versionDetailsText(v, u, navigator.userAgent));
+  else if (b.dataset.ab === 'update') { d.close(); openUpdatePrompt(); }
+  else d.close();
+}
+
 // ── Restart the hub (same POST /api/restart the desktop button uses; the
 // service manager brings the hub back, so the page only has to wait) ─────────
 function confirmRestart() {
@@ -3153,14 +3850,16 @@ function connectEvents() {
   on('hello', (ev) => {
     if (!ev) return;
     if (Number(ev.lastId) > esLastSeq) esLastSeq = Number(ev.lastId);
-    // The hub restarted since this page loaded (different boot id): reload once nothing is streaming here.
+    // The hub restarted since this page loaded (different boot id): reload once nothing is streaming here and no
+    // open sheet holds unsaved changes (phones don't warn before a reload, so they would be lost).
     if (ev.boot) {
       if (!window.__hubBoot) window.__hubBoot = ev.boot;
       else if (ev.boot !== window.__hubBoot && !window.__hubReloading) {
         window.__hubReloading = true;
         toast('The hub restarted. Reloading to the new version…');
         const since = Date.now();
-        const go = () => { if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800); };
+        const busy = () => streams.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();
+        const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };   // checked again just before
         go();
       }
     }
@@ -3644,6 +4343,10 @@ function wire() {
 
   $('chat-menu-btn').addEventListener('click', toggleMenu);
   $('agents-menu-btn').addEventListener('click', toggleMenu);
+  $('menu-about').addEventListener('click', (e) => { e.stopPropagation(); openAboutSheet(); });
+  $('about-sheet').addEventListener('click', onAboutClick);
+  // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
+  $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -3659,12 +4362,20 @@ function wire() {
   $('menu-notify-test')?.addEventListener('click', testPush);
   $('messages').addEventListener('click', onMessagesClick);
   $('messages').addEventListener('pointerdown', onReasoningGrip);
+  $('messages').addEventListener('pointerdown', onToolsGrip);
   $('messages').addEventListener('keydown', (e) => {   // Enter or Space on a reasoning panel's header opens or closes it
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const head = e.target.closest && e.target.closest('.rsn-head');
     if (!head || e.target.closest('.rsn-full')) return;
     e.preventDefault();
     toggleReasoning(head.closest('.rsn'));
+  });
+  $('messages').addEventListener('keydown', (e) => {   // the same for a tool panel's header
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const head = e.target.closest && e.target.closest('.tsn-head');
+    if (!head || e.target.closest('.tsn-full')) return;
+    e.preventDefault();
+    toggleTools(head.closest('.tsn'));
   });
   $('push-banner-on').addEventListener('click', enablePush);
   $('push-banner-later').addEventListener('click', () => { saveJson(PUSH_PREF, 'later'); paintPush(); });
@@ -3768,6 +4479,7 @@ function toggleMenu(e) {
   menu.classList.toggle('no-chat', !$('screen-chat').classList.contains('active'));
   menu.classList.toggle('open');
   if (menu.classList.contains('open')) paintMenuCredit();
+  if (menu.classList.contains('open')) paintVersionLabel();
 }
 
 // Monthly API credit (set on the desktop, Settings → Spend): this period's spend through the hub against it.
@@ -3841,7 +4553,7 @@ function openSecuritySheet() {
     <div class="sec-actions" style="margin-top:10px"><button id="sec-close">Close</button></div>`;
   $('sec-pw-go').addEventListener('click', changePassword);
   $('sec-revoke').addEventListener('click', signOutEverywhere);
-  $('sec-close').addEventListener('click', () => sheet.close());
+  $('sec-close').addEventListener('click', () => dialogRequestClose(sheet));
   paintTwoFactor();
   if (!sheet.open) sheet.showModal();
 }
@@ -4275,6 +4987,7 @@ async function changePassword() {
   try {
     await authPost('/api/auth/password', { current, next });
     for (const id of ['sec-pw-current', 'sec-pw-new', 'sec-pw-new2']) $(id).value = '';
+    dialogGuard.markLoaded(['sec-pw-current', 'sec-pw-new', 'sec-pw-new2'].map($));   // done: nothing left to lose
     secMsg('sec-pw-msg', 'Password changed.', true);
   } catch (e) { secMsg('sec-pw-msg', e.message); }
 }
@@ -4289,14 +5002,16 @@ async function init() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', { scope: '/mobile', updateViaCache: 'none' }).catch(() => {});
   // A new build's service worker takes control (skipWaiting + clients.claim) while this page
   // still runs the old JavaScript; the installed app would keep the stale code until someone
-  // reloaded it by hand. Reload once as soon as no reply is streaming on this device.
+  // reloaded it by hand. Reload once as soon as no reply is streaming on this device and no open sheet holds unsaved
+  // changes.
   if ('serviceWorker' in navigator) {
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (reloading || !navigator.serviceWorker.controller) return;
       reloading = true;
       const since = Date.now();
-      const go = () => { if (streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => location.reload(), 800); };
+      const busy = () => streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();
+      const go = () => { if (busy()) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };   // checked again just before
       go();
     });
   }
@@ -4316,6 +5031,7 @@ async function init() {
   const fromUpdatePush = new URLSearchParams(location.search).get('update') === '1';
   if (fromUpdatePush) { const u = new URL(location.href); u.searchParams.delete('update'); window.history.replaceState(window.history.state, '', u.pathname + u.search + u.hash); }
   refreshUpdateCheck().then(() => { if (fromUpdatePush) openUpdatePrompt(); });
+  paintVersionLabel();
   setInterval(refreshUpdateCheck, 30 * 60 * 1000);
 }
 

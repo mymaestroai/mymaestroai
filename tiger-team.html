@@ -453,7 +453,9 @@
   <!-- Vendored, pinned (see NOTICE): marked 18.1.1 (MIT), DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0). No CDN. -->
   <script src="/vendor/marked.umd.js"></script>
   <script src="/vendor/purify.min.js"></script>
+  <script src="/ui-dialog.js"></script>
   <script>
+    window.dialogGuard = typeof createDialogGuard === 'function' ? createDialogGuard({ trackSaves: false }) : null;
     // Every agent- or server-supplied string that goes into markup passes through this.
     function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
     // ── Parse URL params ──
@@ -1717,15 +1719,20 @@
 
     // ── Load Saved Panel ──
     let savedPanelOpen = false;
+    // Every way the saved-sessions panel goes away (✕, Esc, the backdrop, choosing a session) also tells the dialog
+    // guard, so a hidden panel never stays the top layer.
+    function closeSavedPanel() {
+      const panel = document.getElementById('saved-panel');
+      panel.style.display = 'none';
+      savedPanelOpen = false;
+      if (window.dialogGuard) dialogGuard.closed(panel);
+    }
     async function toggleSavedPanel() {
       const panel = document.getElementById('saved-panel');
-      if (savedPanelOpen) {
-        panel.style.display = 'none';
-        savedPanelOpen = false;
-        return;
-      }
+      if (savedPanelOpen) { closeSavedPanel(); return; }
       panel.style.display = 'block';
       savedPanelOpen = true;
+      if (window.dialogGuard) dialogGuard.open(panel, { close: closeSavedPanel });   // Esc and the backdrop close it (lib/ui-dialog.js)
       const list = document.getElementById('saved-list');
       list.innerHTML = 'Loading...';
       try {
@@ -1796,8 +1803,7 @@
     /** A saved session from the list: redrawn from its own events when it has them, else its saved transcript. */
     async function openSaved(id) {
       if (isRunning) { window.open('/tiger-team?load=' + encodeURIComponent(id), '_blank'); return; }   // this page follows a running team
-      document.getElementById('saved-panel').style.display = 'none';
-      savedPanelOpen = false;
+      closeSavedPanel();
       if (await loadTeam(id)) return;
       await loadSaved(id);
     }
@@ -1809,8 +1815,7 @@
         if (!resp.ok) { alert(data.error || 'Load failed'); return; }
         
         // Restore UI state
-        document.getElementById('saved-panel').style.display = 'none';
-        savedPanelOpen = false;
+        closeSavedPanel();
         
         // Set header
         objectiveText = data.objective;
