@@ -40,9 +40,11 @@ test('docked mode: no dimmed backdrop, clicks pass through to the chat, sticky C
   assert.match(html, /\.gs-dock-head \{[^}]*position: sticky/);
   assert.match(app, /class="gs-dock-close"[^>]*>✕ Close</);
   assert.match(app, /gs-dock-grip/, 'resizable by dragging the left edge');
-  assert.match(app, /e\.key === 'Escape'\) overlay\.remove\(\)/);
+  // Esc (from inside a docked panel), Close and the backdrop of a plain modal go through the shared dialog guard.
+  assert.match(app, /<button class="gs-dock-close" onclick="dialogRequestClose\(this\)" title="Close \(Esc\)">✕ Close<\/button>/);
   const plain = app.slice(app.indexOf('function gsModal('), app.indexOf('const gsClose'));
-  assert.match(plain, /if \(!dock\) \{[\s\S]*?e\.target === overlay\) overlay\.remove\(\)/, 'plain modals still close on backdrop click');
+  assert.match(plain, /if \(!dock\) \{[\s\S]*?document\.body\.appendChild\(overlay\);   \/\/ Esc, the backdrop and Close: dialogGuard/, 'plain modals still close on backdrop click');
+  assert.match(app, /const dialogGuard = createDialogGuard\(\{ auto: '[^']*\.gs-overlay/);
 });
 
 test('recovery: reveal, import and backup are owner panel actions and routes, never tools', () => {

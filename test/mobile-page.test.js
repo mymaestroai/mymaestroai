@@ -62,7 +62,7 @@ test('mobile composer interjects into a running turn; Stop moves to the header; 
   assert.match(js, /stopBtn\.hidden = !working && !own/, 'header Stop also covers a stream this phone started');
   assert.ok(js.includes('function stopOwnTurn') && js.includes('function sendInterjection'));
   assert.ok(html.includes('#send-btn.interject') && html.includes('.note.interject'));
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v58'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
   assert.ok(js.includes("addEventListener('controllerchange'"), 'a new build reloads the installed app once it takes control');
 });
 
@@ -94,7 +94,7 @@ test('mobile push: the phone re-registers when the hub no longer knows its subsc
 test('service worker: a forced (test) push shows its banner even when the app is open in front', () => {
   const sw = read('sw.js');
   assert.ok(sw.includes("if (!data.force && list.some(c => c.focused && c.visibilityState === 'visible')) return;"));
-  assert.match(sw, /const VERSION = 'hub-mobile-v58'/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v59'/);
 });
 
 test('ask_user dialogs: a click only highlights the choice and a Submit button sends it (desktop and phone)', () => {
@@ -104,7 +104,7 @@ test('ask_user dialogs: a click only highlights the choice and a Submit button s
   assert.ok(m.includes("else { b.classList.add('selected'); selected[i] = opt.label; }") && m.includes('<button class="qsubmit" disabled>Submit</button>'), 'phone selects then submits');
   assert.ok(app.includes('if (was) delete selected[qi];') && m.includes('if (was) delete selected[i];'), 'a second click on the highlighted option clears it');
   assert.ok(ih.includes('.question-option.selected {') && mh.includes('.question button.opt.selected {'), 'selected styles on both pages');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v58'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
 });
 
 test('a pending ask_user question is re-shown from the hub event stream and on turn catch-up, on both pages (dedup by request id)', () => {
@@ -127,7 +127,7 @@ test('a pending ask_user question is re-shown from the hub event stream and on t
   assert.ok(m.includes("const pq = pendingQuestionsByAgent.get(rec.agent);") && !m.includes("const pq = pendingQuestionsByAgent.get(name);"), 'own-stream path looks up its own agent');
   assert.ok(m.includes("on('ask_user_done'") && m.includes("if (shownQuestions.has(request_id)) {"), 'phone closes and dedups');
   assert.ok(m.includes("if (old && !old.isConnected) { chatEl().appendChild(old); scrollChat(); }"), 'an unanswered question survives the chat being closed and reopened');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v58'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
 });
 
 test('after a hub restart both pages reload themselves: hello carries the boot id, a changed id triggers a reload once nothing streams', () => {
@@ -140,8 +140,8 @@ test('after a hub restart both pages reload themselves: hello carries the boot i
   assert.ok(writes.some(w => w.includes('"boot":"boot-test-1"')), writes.join('|').slice(0, 300));
   const app = read('app.js'), m = read('mobile.js');
   assert.ok(app.includes("ev.boot !== window.__hubBoot") && app.includes("Object.values(chats).some(c => c && c.controller)") && app.includes('location.reload()'), 'desktop reloads when idle');
-  assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; }"), 'phone reloads when idle and not typing');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v58'/);
+  assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("const busy = () => streams.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();") && m.includes("const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'phone reloads when idle and not typing');
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
 });
 
 test('a pasted image with no words is a valid chat message (no HTTP 400)', () => {
@@ -206,6 +206,6 @@ test('the app does not reload itself while the message box is in use (focused or
   assert.ok(js.includes("function typingNow() { const i = $('msg-input'); return !!i && (document.activeElement === i || !!i.value.trim()); }"));
   const reloads = js.split('location.reload()').length - 1;
   assert.strictEqual(reloads, 3, 'three reload sites: hub back after Restart, hub restarted, new app version');
-  assert.ok(js.includes("if (streams.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } setTimeout(() => location.reload(), 800);"), 'after a hub restart');
-  assert.ok(js.includes("if (streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000)) { setTimeout(go, 2000); return; } toast('Updating to the new version…');"), 'after a new app version');
+  assert.ok(js.includes("const busy = () => streams.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();\n        const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'after a hub restart');
+  assert.ok(js.includes("const busy = () => streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();\n      const go = () => { if (busy()) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'after a new app version');
 });

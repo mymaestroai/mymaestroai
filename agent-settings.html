@@ -346,7 +346,73 @@
 </div>
 <div id="file-status" class="status"></div>
 
+<script src="/ui-dialog.js"></script>
 <script>
+  // Unsaved edits on this page (a field changed and not saved yet): closing or reloading the window asks first
+  // (lib/ui-dialog.js; a successful save settles what it saved).
+  const pageGuard = createDialogGuard({ pageDirty: true });
+  // What each Save writes. Its fields' values are taken when the save starts; the page's own success status for that
+  // save makes exactly those values the new starting point (an edit made while it ran stays unsaved; other sections
+  // and the Test button are not touched). 'reload': the save reloads those fields from the hub, so they start afresh.
+  const byId = (...ids) => () => ids.map(id => document.getElementById(id));
+  const SAVES = [
+    ['saveIcon', 'icon-status', byId('agent-icon')],
+    ['saveOwner', 'owner-status', byId('agent-owner')],
+    ['saveShared', 'shared-status', byId('agent-shared')],
+    ['savePolicy', 'policy-status', byId('policy-rows', 'policy-folders', 'policy-roots'), 'reload'],
+    ['saveBlurb', 'blurb-status', byId('agent-blurb')],
+    ['saveLead', 'lead-status', byId('agent-lead')],
+    ['saveCategory', 'category-status', byId('agent-category')],
+    ['saveLimits', 'limits-status', byId('context-budget', 'max-context-messages', 'max-output-tokens')],
+    ['saveSandbox', 'sandbox-status', byId('sandbox-mode')],
+    ['saveEffort', 'effort-status', byId('effort-mode')],
+    ['saveToolsMode', 'tools-status', byId('tools-mode')],
+    ['saveAutoModel', 'auto-model-status', byId('auto-model', 'auto-model-allowed')],
+    ['saveAllowedModels', 'allowed-models-status', byId('auto-model-checkboxes')],
+    ['saveDisplayName', 'display-status', byId('display-name')],
+    ['saveModel', 'model-status', byId('model-select')],
+    ['saveCurrentFile', 'file-status', () => [document.getElementById(`editor-${currentFile}`)]],
+    ['saveRecord', 'records-status', byId('records-content')],
+    ['saveCompaction', 'compaction-status', byId('compaction-mode', 'compaction-at', 'compaction-window')],
+  ];
+  // One save per section at a time until the hub answers it, so requests never overlap: the hub keeps the newest values
+  // and a status message always answers the save that is running (its first verdict settles it). A select or checkbox that saves on change,
+  // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
+  // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
+  // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveToolsMode']);
+  const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
+  for (const [fn, statusId, fields, how] of SAVES) {
+    const orig = window[fn];
+    if (typeof orig !== 'function') continue;
+    const run = (self, args) => {
+      const list = fields().filter(Boolean);
+      const p = pendingSaves[statusId] = { commit: pageGuard.savePoint(list), reload: how === 'reload', fields: list, settled: false, again: null };
+      const end = () => {
+        if (pendingSaves[statusId] !== p) return;
+        delete pendingSaves[statusId];
+        if (p.again) run(p.again.self, p.again.args);   // pressed again meanwhile: once more, with the current values
+      };
+      let out;
+      try { out = orig.apply(self, args); } catch (e) { end(); throw e; }
+      Promise.resolve(out).then(end, end);
+      return out;
+    };
+    window[fn] = function (...args) {
+      const p = pendingSaves[statusId];
+      if (!p || p.settled) return run(this, args);   // the hub answered the last one: nothing left to overtake
+      if (SAVES_ON_CHANGE.has(fn)) p.again = { self: this, args };   // runs when the save in flight ends
+      else showStatus(statusId, 'info', 'Still saving. Press Save again when it is done.');
+    };
+  }
+  function settleSave(statusId, type) {
+    const p = pendingSaves[statusId];
+    if (!p || p.settled || type === 'info') return;
+    p.settled = true;
+    if (type !== 'success') return;   // a failed save leaves its fields unsaved
+    if (p.reload) pageGuard.markLoaded(p.fields.flatMap(f => (f.matches && f.matches('input, textarea, select')) ? [f] : [...f.querySelectorAll('input, textarea, select')]));
+    else p.commit();
+  }
   const params = new URLSearchParams(window.location.search);
   const agentName = params.get('agent');
   document.getElementById('agent-title').textContent = `${agentName} — Settings`;
@@ -1269,6 +1335,7 @@
 
   // ── Helpers ─────────────────────────────────────────────────────────
   function showStatus(id, type, msg) {
+    settleSave(id, type);
     const el = document.getElementById(id);
     el.className = `status ${type}`;
     el.textContent = msg;
@@ -1349,6 +1416,7 @@
     recordsState.current = r.name;
     document.getElementById('records-editing-name').textContent = data.name || r.name;
     document.getElementById('records-content').value = data.content || '';
+    pageGuard.markLoaded(document.getElementById('records-content'));   // another record loaded: not an edit
     document.getElementById('records-editor').style.display = '';
     renderRecords();
     document.getElementById('records-content').focus();
