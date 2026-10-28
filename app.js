@@ -7659,9 +7659,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // from a turn catch-up, so request ids are remembered and the overlay is kept to close it when answered elsewhere.
     const shownQuestions = new Set();
     const questionOverlays = {};
+    // Each question's "❓" lines in the chat: they leave a few seconds after it is answered or closed, so a
+    // long reply with questions does not pile them up under itself.
+    const questionNotices = new Map();
+    function retireQuestionNotices(requestId) {
+      for (const n of questionNotices.get(requestId) || []) retireSoon(n);
+      questionNotices.delete(requestId);
+    }
     function closeQuestion(requestId) {
       const o = questionOverlays[requestId];
       if (o) { o.remove(); delete questionOverlays[requestId]; }
+      retireQuestionNotices(requestId);
     }
     function showQuestionModal(data, chatId) {
       return new Promise((resolve) => {
@@ -7670,7 +7678,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (shownQuestions.has(request_id)) return resolve();
         shownQuestions.add(request_id);
         const esc = escapeHtmlSafe;
-        if (chatId) for (const q of questions) appendSystemNotice(chatId, '❓ ' + q.question);
+        if (chatId) questionNotices.set(request_id, questions.map(q => appendSystemNotice(chatId, '❓ ' + q.question)).filter(Boolean));
 
         const overlay = document.createElement('div');
         overlay.className = 'question-overlay';
@@ -7711,7 +7719,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ request_id, answers })
-          }).catch(err => console.error('Failed to submit question answer:', err));
+          }).then(r => { if (r.ok) retireQuestionNotices(request_id); })   // the hub has the answer: its line can go
+            .catch(err => console.error('Failed to submit question answer:', err));
           overlay.remove();
           delete questionOverlays[request_id];
           resolve();
@@ -8588,6 +8597,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         footer.innerHTML = '<span style="font-weight:600">CONTEXT EXHAUSTED</span>';
       }
     }
+
+    // Shared verbatim with lib/ui-retire.js and mobile.js (test/ui-retire.test.js keeps the three in step).
+    // ── retire helpers (begin) ──
+    const RETIRE_AFTER_MS = 4000;
+    const RETIRE_FOLD_MS = 600;
+    function retireSoon(el, ms = RETIRE_AFTER_MS) {
+      if (!el || !el.dataset || el.dataset.retiring) return false;
+      el.dataset.retiring = '1';
+      setTimeout(() => {
+        if (!el.isConnected) { delete el.dataset.retiring; return; }   // gone meanwhile: if it comes back, it can be retired again
+        el.style.maxHeight = el.offsetHeight + 'px';   // fold from its own height, not from "none"
+        void el.offsetHeight;
+        el.classList.add('retiring');
+        setTimeout(() => el.remove(), RETIRE_FOLD_MS);
+      }, ms);
+      return true;
+    }
+    // ── retire helpers (end) ──
 
     function appendSystemNotice(chatId, text, variant) {
       const container = document.getElementById(`messages-${chatId}`);
@@ -10168,11 +10195,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // Update the working notice
         const label = chat.agentLabel || 'Agent';
         const doneIcon = chat.isTigerTeam ? '🐯 ✅' : '✅';
+        // It leaves a few seconds later: finished workers piled up under a long reply (a failed or stopped one stays)
         if (run.noticeEl) {
           run.noticeEl.textContent = `${doneIcon} ${label} is Complete`;
           run.noticeEl.className = 'system-notice notice-complete';
+          retireSoon(run.noticeEl);
         } else {
-          appendSystemNotice(chatId, `${doneIcon} ${label} is Complete`, 'complete');
+          retireSoon(appendSystemNotice(chatId, `${doneIcon} ${label} is Complete`, 'complete'));
         }
         return true;
       }

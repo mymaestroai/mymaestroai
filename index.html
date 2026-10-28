@@ -747,6 +747,19 @@
       border: 1px solid rgba(244, 67, 54, 0.35);
       color: #f44336;
     }
+    /* A line that has done its job folds away, then leaves (lib/ui-retire.js retireSoon) */
+    .retiring {
+      opacity: 0;
+      max-height: 0 !important;
+      margin-top: 0 !important;
+      margin-bottom: 0 !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+      border-width: 0 !important;
+      overflow: hidden;
+      transition: opacity 0.3s ease, max-height 0.5s ease, margin 0.5s ease, padding 0.5s ease, border-width 0.5s ease;
+    }
+    @media (prefers-reduced-motion: reduce) { .retiring { transition: none; } }
     .system-notice.notice-tiger-team {
       background: rgba(255, 152, 0, 0.12);
       border: 1px solid rgba(255, 152, 0, 0.4);
