@@ -33,6 +33,10 @@
       --purple: #a855f7;
       --blue: #3b82f6;
       --radius: 4px;
+      /* The chat column fills the window. To cap it later (a "limit to 1200px" setting), set this one variable: the
+         messages and the composer both follow it, so they always line up. */
+      --chat-max-width: none;
+      --chat-pad-x: clamp(12px, 2vw, 32px);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -666,15 +670,16 @@
     .empty-state svg { width: 80px; height: 80px; margin-bottom: 20px; opacity: 0.3; }
     
     .messages {
-      flex: 1; overflow-y: auto; padding: 20px 32px; min-height: 0;
+      flex: 1; overflow-y: auto; padding: 20px var(--chat-pad-x); min-height: 0; min-width: 0;
+      overflow-x: hidden;   /* wide content scrolls inside its own message, never the chat sideways */
       -webkit-overflow-scrolling: touch;
       overscroll-behavior-y: contain;
-      max-width: 1200px;
+      max-width: var(--chat-max-width);
       margin: 0 auto;
       width: 100%;
     }
     .message {
-      max-width: 100%; margin-bottom: 20px;
+      max-width: 100%; min-width: 0; margin-bottom: 20px; overflow-wrap: anywhere;
       padding: 0; border-radius: 0; line-height: 1.6;
     }
     .message.user {
@@ -833,6 +838,12 @@
     }
     .message img.generated-image:hover { transform: scale(1.01); }
     /* Financial data grid tables */
+    /* A table wider than the message scrolls inside this wrapper (app.js formatContent), so it can never widen the page. */
+    .message .table-scroll { max-width: 100%; overflow-x: auto; margin: 12px 0; }
+    .message .table-scroll > table { margin: 0; }
+    .message th, .message td { overflow-wrap: normal; }   /* cells keep whole words; the table scrolls instead */
+    .message pre { max-width: 100%; }
+    .message img, .message video, .message svg { max-width: 100%; }
     .message table {
       width: 100%;
       border-collapse: collapse;
@@ -891,9 +902,9 @@
     
     /* Input area */
     .input-area {
-      padding: 16px 32px; border-top: 1px solid var(--border);
+      padding: 16px var(--chat-pad-x); border-top: 1px solid var(--border);
       display: flex; gap: 10px; flex-wrap: wrap;
-      max-width: 1200px; margin: 0 auto; width: 100%;
+      max-width: var(--chat-max-width); margin: 0 auto; width: 100%;   /* the same column as .messages */
       /* Without this, flex defaults to align-items: stretch and the Send /
          attach buttons inflate to the full row height — a tall, skinny
          paperclip next to a text box that looks too short by comparison. */
@@ -2190,7 +2201,7 @@
       .status-bar { padding: 4px 10px; font-size: 0.75rem; }
       .thinking-panel { max-height: 80px; }
       .chat-container .messages { padding: 10px; min-height: 0; flex: 1; }
-      .message { max-width: 95%; }
+      .message { max-width: 100%; }
       .input-area { padding: 8px; gap: 4px; flex-shrink: 0; flex-wrap: nowrap; }
       .input-wrapper { min-width: 0; flex: 1; }
       .input-area textarea { min-height: 40px; max-height: 80px; padding: 8px 10px; font-size: 0.9rem; }

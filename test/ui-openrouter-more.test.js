@@ -160,5 +160,5 @@ test('the catalogue and the list are admin-only routes', () => {
 });
 
 test('the phone app version moved on, so phones load the new code', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v60'/);
 });

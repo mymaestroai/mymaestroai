@@ -132,6 +132,6 @@ test('phone: About (with the label) is the first item of the ⋮ menu and opens 
   assert.ok(menu.includes('id="menu-version"'));
   assert.ok(html.includes('<dialog id="about-sheet"'));
   const js = read('mobile.js');
-  assert.ok(read('sw.js').includes("const VERSION = 'hub-mobile-v59';"), 'service worker cache bumped so phones load the new menu');
+  assert.ok(read('sw.js').includes("const VERSION = 'hub-mobile-v60';"), 'service worker cache bumped so phones load the new menu');
   for (const s of ["$('menu-about').addEventListener('click'", "$('about-sheet').addEventListener('click', onAboutClick)", "api('/api/version')", 'versionDetailsText(v, u, navigator.userAgent)']) assert.ok(js.includes(s), s);
 });

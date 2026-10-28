@@ -147,7 +147,7 @@ test('vendored libraries exist with plausible sizes and license headers', () => 
 });
 
 test('service worker: v21, vendor scripts cached on first use (network-first), not pre-cached at install', () => {
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v59';"));
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v60';"));
   assert.match(sw, /const VENDOR = \['\/vendor\/purify\.min\.js', '\/vendor\/mermaid\.min\.js', '\/vendor\/chart\.umd\.min\.js'\]/);
   assert.match(sw, /const RUNTIME = \[\.\.\.SHELL, '\/mobile', \.\.\.VENDOR\]/);
   assert.match(sw, /const SHELL = \['\/mobile\.html', '\/mobile\.js'\];/, 'install list unchanged');
