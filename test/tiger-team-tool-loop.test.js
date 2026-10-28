@@ -46,6 +46,7 @@ function harness(respond, toolHandlers = {}) {
     executeToolCallsBatched: require('../lib/tool-concurrency').executeToolCallsBatched, isReadOnlyTool: () => false,
     queryCache: { get: () => null, put() {} }, recordToolError() {}, getInlineErrorGuidance: () => '', getToolGuidance: () => '',
     temporalWorkers: { isVirtual: () => false }, jobs: { policyText: () => '' }, scheduledTasks: { policyText: () => '' },
+    timeZoneLib: { zoneForAgent: () => 'UTC', policyText: () => '' },   // lib/timezone: the person's zone and the TIME section
     checkpointTeam: () => saves.push(structuredClone(state)), ttRecovery: recovery,
     ttArtifacts: require('../lib/tiger-team-artifacts'), ttLive: require('../lib/tiger-team-live'),
     accumulateToolCallDelta: require('../lib/tool-call-deltas').accumulateToolCallDelta,

@@ -54,6 +54,38 @@
       if (!window.__ucTimer) window.__ucTimer = setInterval(() => paintUpdateCard().catch(() => {}), 30 * 60 * 1000);
       return window.hubMe;
     }
+    // The time zone this person's agents use follows the device they are using (lib/timezone). The page reports its
+    // zone on the first tap or key after it opens or comes back into view, then at most every 10 minutes while in use,
+    // so a page that reloads by itself where nobody is looking (after a restart) doesn't move it. The hub ignores the
+    // reports while a zone is pinned in the Security dialog.
+    const TZ_REPORT_EVERY_MS = 10 * 60 * 1000;
+    let tzReportedAt = 0;
+    let tzChoice = 0;   // counts choices in the Security dialog: an older report's late answer must not undo one
+    function deviceTimeZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } }
+    function reportTimeZone() {
+      const tz = deviceTimeZone();
+      const me = window.hubMe;
+      if (!tz || !me || !me.user || document.visibilityState !== 'visible') return;
+      if (Date.now() - tzReportedAt < TZ_REPORT_EVERY_MS) return;
+      tzReportedAt = Date.now();
+      const choice = tzChoice;
+      fetch('/api/me/timezone', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tz, auto: true }) })
+        .then(r => { if (r.status >= 500) throw new Error(`HTTP ${r.status}`); return r.ok ? r.json() : null; })   // a hub error: try again at the next tap
+        .then(d => { if (d && d.user && window.hubMe && choice === tzChoice) { window.hubMe.user = { ...window.hubMe.user, ...d.user }; window.hubMe.timeZone = d.timeZone; } })
+        .catch(() => { tzReportedAt = 0; });
+    }
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tzReportedAt = 0; });
+    // A chat request carries the device's zone only when it carries a message the person just sent from this page (the
+    // send functions set tzSentAt; one request per send, within a minute), never the page's own follow-ups: a group
+    // discussion's next speaker, the synthesis, an orchestration's later calls, a retry.
+    let tzSentAt = 0;
+    function zoneHeader() {
+      const tz = deviceTimeZone();
+      if (!tz || !tzSentAt || Date.now() - tzSentAt > 60 * 1000) return {};
+      tzSentAt = 0;
+      return { 'X-Hub-Time-Zone': tz };
+    }
+    for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, reportTimeZone, { capture: true, passive: true });
     // An install updated from before multi-user has provider keys but no admin account, so the setup wizard never
     // asked for one: the hub runs with no login and every multi-user feature off. Say so, once per page, with the link.
     function paintNoAccountsNotice() {
@@ -195,6 +227,12 @@
             <div class="sec-msg" id="sec-pw-msg"></div>
           </div>
           <div class="sec-section">
+            <div class="sec-title">Time zone</div>
+            <div class="sec-hint" id="sec-tz-hint"></div>
+            <select id="sec-tz" onchange="chooseTimeZone(this)" aria-label="Time zone your agents use"></select>
+            <div class="sec-msg" id="sec-tz-msg"></div>
+          </div>
+          <div class="sec-section">
             <div class="sec-title">Sessions</div>
             <div class="sec-hint" id="sec-sessions">Loading…</div>
             <div class="sec-actions"><button class="sec-btn danger" onclick="signOutEverywhere()">Sign out everywhere</button></div>
@@ -203,7 +241,46 @@
         </div>`;
       document.body.appendChild(overlay);
       paintTwoFactor();
+      paintTimeZone();
       loadSessionsInfo();
+    }
+    // Which zone the agents use for "now" and every time they show: the device's (it follows you), or one pinned here.
+    function paintTimeZone() {
+      const sel = document.getElementById('sec-tz'), hint = document.getElementById('sec-tz-hint');
+      const me = window.hubMe;
+      if (!sel || !hint || !me || !me.user) return;
+      const device = deviceTimeZone();
+      const pinned = !!me.user.timeZonePinned;
+      const zone = me.timeZone || me.user.timeZone || device || 'UTC';
+      let zones = [];
+      try { zones = Intl.supportedValuesOf('timeZone'); } catch { zones = []; }
+      if (!zones.includes(zone)) zones.unshift(zone);
+      let now = '';
+      try { now = new Date().toLocaleTimeString([], { timeZone: zone, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }); } catch { now = ''; }
+      sel.innerHTML = `<option value="">Follow this device${device ? ` (${hubEsc(device.replace(/_/g, ' '))})` : ''}</option>`
+        + zones.map(z => `<option value="${hubEsc(z)}">${hubEsc(z.replace(/_/g, ' '))}</option>`).join('');
+      sel.value = pinned ? zone : '';
+      sel.disabled = false;
+      hint.textContent = `Your agents use ${zone.replace(/_/g, ' ')}${now ? ` (now ${now})` : ''}${pinned ? ', pinned wherever you are.' : ', following the device you use.'}`;
+      try { dialogGuard.markLoaded(sel); } catch { /* no guard on this page */ }
+    }
+    async function chooseTimeZone(sel) {
+      const tz = sel.value;
+      tzChoice++;
+      sel.disabled = true;   // one choice at a time: a second one waits until this is saved
+      const body = tz ? { tz, pinned: true } : { tz: deviceTimeZone() || null, pinned: false };
+      try {
+        const r = await fetch('/api/me/timezone', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        window.hubMe.user = { ...window.hubMe.user, ...d.user };
+        window.hubMe.timeZone = d.timeZone;
+        paintTimeZone();
+        secMsg('sec-tz-msg', 'Saved.', true);
+      } catch (e) {
+        paintTimeZone();
+        secMsg('sec-tz-msg', `Not saved: ${e.message}`);
+      }
     }
     function paintTwoFactor(stage) {
       const box = document.getElementById('sec-2fa');
@@ -7045,6 +7122,7 @@
 
     // Solo chat - multi-provider LLM routing (with retry logic)
     async function sendSoloMessage(chatId, retryCount = 0) {
+      if (!retryCount) tzSentAt = Date.now();   // the person's own send: its request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
       const content = input.value.trim();
@@ -7120,7 +7198,7 @@
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controller.signal,
           body: JSON.stringify({
             agent: chat.agent,
@@ -7238,6 +7316,7 @@
     
     // Group chat - free flowing
     async function sendGroupMessage(chatId) {
+      tzSentAt = Date.now();   // the person's own send: the first speaker's request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
       const content = input.value.trim();
@@ -7489,7 +7568,7 @@
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controllers[chat.summarizer.name].signal,
           body: JSON.stringify({ agent: chat.summarizer.name, message: synthPrompt, sessionId: 'new' })
         });
@@ -7574,7 +7653,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controllers[agent.name].signal,
           body: JSON.stringify({ agent: agent.name, message: prompt, sessionId: 'new' })
         });
@@ -11642,6 +11721,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     
     async function sendOrchTask(chatId, initialTask = null) {
+      tzSentAt = Date.now();   // the person's own send: the first request carries this device's zone (zoneHeader)
       console.log('sendOrchTask called with chatId:', chatId, 'initialTask:', initialTask);
       const chat = chats[chatId];
       if (!chat) {
@@ -11907,7 +11987,7 @@ Report what you found, did, or discovered.`;
 
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           credentials: 'include',
           body: JSON.stringify(fetchBody)
         });

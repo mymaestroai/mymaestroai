@@ -3021,6 +3021,7 @@ async function sendMessage(fallback) {
   // While the agent is busy (a turn this phone is streaming or one started elsewhere) the
   // composer interjects into that turn; Stop is in the header.
   if (!fallback && (isBusy(agent) || ownTurnFor(agent))) { await sendInterjection(agent); return; }
+  if (!fallback) tzSentAt = Date.now();   // the person's own send: its request carries the phone's zone (zoneHeader)
   const input = $('msg-input');
   const text = fallback ? fallback.text : input.value.trim();
   const images = fallback ? [] : pendingImages.slice();
@@ -3054,7 +3055,7 @@ async function sendMessage(fallback) {
   try {
     const r = await api('/api/chat/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...zoneHeader() },
       signal: controller.signal,
       body: JSON.stringify({ agent, message: text, images, confirm_tools: false }),
     });
@@ -4501,6 +4502,35 @@ async function loadMe() {
   } catch {}
   return hubMe;
 }
+
+// The time zone this person's agents use follows the device they are using (lib/timezone). The app reports the
+// phone's zone on the first tap or key after it opens or comes back into view, then at most every 10 minutes while in
+// use, so an app that reloads by itself doesn't move it. The hub ignores the reports while a zone is pinned (desktop:
+// Security).
+const TZ_REPORT_EVERY_MS = 10 * 60 * 1000;
+let tzReportedAt = 0;
+function deviceTimeZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } }
+function reportTimeZone() {
+  const tz = deviceTimeZone();
+  if (!tz || !hubMe || !hubMe.user || document.visibilityState !== 'visible') return;
+  if (Date.now() - tzReportedAt < TZ_REPORT_EVERY_MS) return;
+  tzReportedAt = Date.now();
+  api('/api/me/timezone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tz, auto: true }) })
+    .then(r => { if (r.status >= 500) throw new Error(`HTTP ${r.status}`); return r.ok ? r.json() : null; })   // a hub error: try again at the next tap
+    .then(d => { if (d && d.user && hubMe) { hubMe.user = { ...hubMe.user, ...d.user }; hubMe.timeZone = d.timeZone; } })
+    .catch(() => { tzReportedAt = 0; });
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tzReportedAt = 0; });
+// A chat request carries the phone's zone only when it carries a message the person just sent (sendMessage sets
+// tzSentAt; one request per send, within a minute), never a re-send the app makes by itself.
+let tzSentAt = 0;
+function zoneHeader() {
+  const tz = deviceTimeZone();
+  if (!tz || !tzSentAt || Date.now() - tzSentAt > 60 * 1000) return {};
+  tzSentAt = 0;
+  return { 'X-Hub-Time-Zone': tz };
+}
+for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, reportTimeZone, { capture: true, passive: true });
 
 function applyMultiUser() {
   const sel = $('owner-view');

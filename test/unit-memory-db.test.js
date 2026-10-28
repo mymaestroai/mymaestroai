@@ -12,8 +12,10 @@ const MOD = require.resolve('../lib/memory-db');
 const dirs = [];
 const opened = [];
 const savedEnv = process.env.HUB_MEMORY_DB;
-const today = () => new Date().toISOString().slice(0, 10);
-const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+// Session notes are filed under the local day of the person the agent works for (lib/timezone)
+const tzLib = require('../lib/timezone');
+const today = () => tzLib.localDate(tzLib.zoneForAgent('a'));
+const daysAgo = (n) => tzLib.addDays(today(), -n);
 
 function load(seed) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-memdb-'));
@@ -51,16 +53,18 @@ test('long-term memory: write replaces, append adds a newline, sections are list
   assert.strictEqual(m.readLongTermMemory('b'), '(no long-term memory)');
 });
 
-test('session notes: default category and date, ordering by time, empty-day message, specific date', () => {
+test('session notes: default category and date, the order written, empty-day message, specific date', () => {
   const { m, db } = load();
   assert.strictEqual(m.readSessionNotes('a'), `(no session notes for ${today()})`);
   assert.strictEqual(m.writeSessionNote('a', 'hello'), 'Session note saved.');
   m.writeSessionNote('a', 'custom', 'Tool');
   const out = m.readSessionNotes('a');
-  assert.match(out, /^## \d\d:\d\d — Chat\nhello\n\n## \d\d:\d\d — Tool\ncustom$/);
-  db().prepare('INSERT INTO session_notes (agent,date,time,category,content) VALUES (?,?,?,?,?)').run('a', '2026-01-05', '18:00', 'late', 'L');
+  assert.match(out, /^## \d\d:\d\d \S+ — Chat\nhello\n\n## \d\d:\d\d \S+ — Tool\ncustom$/, 'each time with its zone\'s short name');
   db().prepare('INSERT INTO session_notes (agent,date,time,category,content) VALUES (?,?,?,?,?)').run('a', '2026-01-05', '08:00', 'early', 'E');
-  assert.strictEqual(m.readSessionNotes('a', '2026-01-05'), '## 08:00 — early\nE\n\n## 18:00 — late\nL');
+  db().prepare('INSERT INTO session_notes (agent,date,time,category,content) VALUES (?,?,?,?,?)').run('a', '2026-01-05', '18:00 EST', 'late', 'L');
+  db().prepare('INSERT INTO session_notes (agent,date,time,category,content) VALUES (?,?,?,?,?)').run('a', '2026-01-05', '16:30 PST', 'west', 'W');
+  // In the order written: the last note was written after its person flew west, so its clock reads earlier.
+  assert.strictEqual(m.readSessionNotes('a', '2026-01-05'), '## 08:00 — early\nE\n\n## 18:00 EST — late\nL\n\n## 16:30 PST — west\nW');
   assert.strictEqual(m.readSessionNotes('b', '2026-01-05'), '(no session notes for 2026-01-05)');
 });
 

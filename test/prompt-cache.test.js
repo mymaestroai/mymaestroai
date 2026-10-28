@@ -88,7 +88,7 @@ test('ledger: the cached part of the input is priced at cache rates', () => {
 test('gateway system prompt no longer contains the per-message hits; the loop passes the agent name', () => {
   const chat = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(chat, /hitsOut: hubContextOut \}\);/);
-  assert.match(chat, /annotateForContext\(trimmed, \{ hubContext: hubContextOut\.text \|\| '' \}\)/);
+  assert.match(chat, /annotateForContext\(trimmed, \{ hubContext: hubContextOut\.text \|\| '', timeZone: timeZoneLib\.zoneForAgent\(agentName\) \}\)/);
   assert.match(chat, /noRetries: !!recoveryCall, agent: agentName, effort: turnEffort \}/);
   const agents = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agents.js'), 'utf8');
   assert.match(agents, /if \(opts\.hitsOut && typeof opts\.hitsOut === 'object'\) opts\.hitsOut\.text = hitsText; else sections\.push\(hitsText\);/);
