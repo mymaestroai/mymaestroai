@@ -3410,9 +3410,32 @@ async function readStream(response, rec) {
 const shownQuestions = new Set();
 const questionBoxes = new Map();   // request_id -> box
 const pendingQuestionsByAgent = new Map();   // agent -> { request_id, questions } waiting for its chat to open
+// Shared verbatim with lib/ui-retire.js and app.js (test/ui-retire.test.js keeps the three in step).
+// ── retire helpers (begin) ──
+const RETIRE_AFTER_MS = 4000;
+const RETIRE_FOLD_MS = 600;
+function retireSoon(el, ms = RETIRE_AFTER_MS) {
+  if (!el || !el.dataset || el.dataset.retiring) return false;
+  el.dataset.retiring = '1';
+  setTimeout(() => {
+    if (!el.isConnected) { delete el.dataset.retiring; return; }   // gone meanwhile: if it comes back, it can be retired again
+    el.style.maxHeight = el.offsetHeight + 'px';   // fold from its own height, not from "none"
+    void el.offsetHeight;
+    el.classList.add('retiring');
+    setTimeout(() => el.remove(), RETIRE_FOLD_MS);
+  }, ms);
+  return true;
+}
+// ── retire helpers (end) ──
+
+// An answered or closed question box says how it ended, then leaves a few seconds later (lib/ui-retire.js).
 function closeQuestion(requestId, how) {
   const box = questionBoxes.get(requestId);
-  if (box) { box.innerHTML = `<div class="done">${how === 'no_answer' ? 'No answer in time; the agent carried on' : how === 'skipped' ? 'Skipped' : 'Answered elsewhere'}</div>`; questionBoxes.delete(requestId); }
+  if (!box) return;
+  // The hub's outcome, unless it confirms the answer this box already shows ("Answered: …", sent from here)
+  if (how !== 'answered' || !box.querySelector('.done')) box.innerHTML = `<div class="done">${how === 'no_answer' ? 'No answer in time; the agent carried on' : how === 'skipped' ? 'Skipped' : 'Answered elsewhere'}</div>`;
+  questionBoxes.delete(requestId);
+  retireSoon(box);
 }
 function showQuestion(data, onAnswered) {
   const { request_id, questions } = data;
@@ -3433,9 +3456,9 @@ function showQuestion(data, onAnswered) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ request_id, answers }),
-    }).catch(err => toast(`Could not send answer: ${err.message}`));
-    box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;
-    questionBoxes.delete(request_id);
+    }).then(r => { if (r.ok) { questionBoxes.delete(request_id); retireSoon(box); } })   // the hub has the answer: the box can go
+      .catch(err => toast(`Could not send answer: ${err.message}`));
+    box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
   };
   // A tap only selects (highlighted); nothing is sent until Submit, so a mis-tap cannot answer the agent.
   const selected = {};

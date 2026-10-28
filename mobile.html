@@ -241,6 +241,19 @@
     .more { align-self: center; min-height: 44px; padding: 0 16px; color: var(--accent-hover); }
     .question { align-self: stretch; background: var(--bg-card); border: 1px solid var(--accent); border-radius: 12px; padding: 10px; }
     .question .qh { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+    /* A line that has done its job folds away, then leaves (lib/ui-retire.js retireSoon) */
+    .retiring {
+      opacity: 0;
+      max-height: 0 !important;
+      margin-top: 0 !important;
+      margin-bottom: 0 !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+      border-width: 0 !important;
+      overflow: hidden;
+      transition: opacity 0.3s ease, max-height 0.5s ease, margin 0.5s ease, padding 0.5s ease, border-width 0.5s ease;
+    }
+    @media (prefers-reduced-motion: reduce) { .retiring { transition: none; } }
     .question .qt { margin-bottom: 8px; }
     .question button.opt { display: block; width: 100%; text-align: left; min-height: 44px; padding: 8px 12px; margin-top: 6px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-dark); }
     .question button.opt:active { background: var(--border); }
