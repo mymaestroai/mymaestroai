@@ -554,7 +554,7 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, out);
     }
     // This person's time zone (lib/timezone): the page in use reports its own ({tz, auto: true}; the zone follows the
-    // device unless pinned); the Security dialog pins one ({tz, pinned: true}) or follows the device again ({tz, pinned: false}).
+    // device unless pinned); the Profile pins one ({tz, pinned: true}) or follows the device again ({tz, pinned: false}).
     if (pathname === '/api/me/timezone' && req.method === 'POST') {
       if (!req.hubUser) return jsonResponse(res, 401, { error: 'Sign in first' });
       let body = {};

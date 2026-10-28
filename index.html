@@ -191,7 +191,7 @@
     .security-modal .sec-section { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
     .security-modal .sec-title { font-size: 0.85rem; font-weight: 600; color: var(--text); }
     .security-modal .sec-hint { font-size: 0.75rem; color: var(--text-dim); }
-    .security-modal input { width: 100%; padding: 7px 10px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 5px; font-size: 0.85rem; outline: none; }
+    .security-modal input, .security-modal select { width: 100%; padding: 7px 10px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 5px; font-size: 0.85rem; outline: none; }
     .security-modal .sec-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
     .security-modal .sec-btn { padding: 6px 14px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 0.8rem; }
     .security-modal .sec-btn:hover { border-color: var(--accent); }
@@ -2386,6 +2386,7 @@
     <div id="user-chip-wrap" style="display:none">
       <div id="account-menu" role="menu" aria-label="Account">
         <div id="account-2fa-note" style="display:none">Two-factor is required for admins: <a onclick="openSecurityDialog()">set it up</a></div>
+        <button class="account-item" role="menuitem" onclick="openProfileDialog()">Profile</button>
         <button class="account-item" role="menuitem" onclick="openSecurityDialog()">Security</button>
         <a class="account-item" role="menuitem" id="account-users" href="/users" style="display:none">Users</a>
         <a class="account-item" role="menuitem" id="account-modules" href="/modules" style="display:none">Modules</a>

@@ -4396,6 +4396,7 @@ function wire() {
   $('about-sheet').addEventListener('click', onAboutClick);
   // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
+  $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -4493,7 +4494,7 @@ function wire() {
   }, 5000);
 }
 
-// ── Multi-user: owner switcher, account menu, Security sheet ────────────────
+// ── Multi-user: owner switcher, account menu, Profile and Security sheets ──────
 
 async function loadMe() {
   try {
@@ -4509,15 +4510,18 @@ async function loadMe() {
 // Security).
 const TZ_REPORT_EVERY_MS = 10 * 60 * 1000;
 let tzReportedAt = 0;
+let tzChoice = 0;   // counts choices in the Profile sheet: an older report's late answer must not undo one
+let tzSaving = false;   // a choice is being saved: the list stays disabled, also in a Profile closed and opened again
 function deviceTimeZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } }
 function reportTimeZone() {
   const tz = deviceTimeZone();
   if (!tz || !hubMe || !hubMe.user || document.visibilityState !== 'visible') return;
   if (Date.now() - tzReportedAt < TZ_REPORT_EVERY_MS) return;
   tzReportedAt = Date.now();
+  const choice = tzChoice;
   api('/api/me/timezone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tz, auto: true }) })
     .then(r => { if (r.status >= 500) throw new Error(`HTTP ${r.status}`); return r.ok ? r.json() : null; })   // a hub error: try again at the next tap
-    .then(d => { if (d && d.user && hubMe) { hubMe.user = { ...hubMe.user, ...d.user }; hubMe.timeZone = d.timeZone; } })
+    .then(d => { if (d && d.user && hubMe && choice === tzChoice) { hubMe.user = { ...hubMe.user, ...d.user }; hubMe.timeZone = d.timeZone; } })
     .catch(() => { tzReportedAt = 0; });
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tzReportedAt = 0; });
@@ -4546,6 +4550,7 @@ function applyMultiUser() {
   if (hubMe && !hubMe.isAdmin) { $('menu-restart').hidden = true; $('menu-update').hidden = true; }
   if (hubMe) {
     $('menu-users').hidden = !hubMe.isAdmin;
+    if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
@@ -4608,6 +4613,71 @@ function secMsg(id, text, ok) {
   if (!el) return;
   el.textContent = text || '';
   el.classList.toggle('ok', !!ok);
+}
+
+// Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
+// use. Security keeps password, two-factor and sessions.
+function openProfileSheet() {
+  $('menu').classList.remove('open');
+  if (!hubMe || !hubMe.user) return;
+  const sheet = $('profile-sheet');
+  sheet.innerHTML = `
+    <h3>Profile</h3>
+    <div class="sec-section">
+      <div class="sec-title" id="prof-name"></div>
+      <div class="sec-hint" id="prof-login"></div>
+    </div>
+    <div class="sec-section">
+      <div class="sec-title">Time zone</div>
+      <div class="sec-hint" id="prof-tz-hint"></div>
+      <select id="prof-tz" aria-label="Time zone your agents use"></select>
+      <div class="sec-msg" id="prof-tz-msg"></div>
+    </div>
+    <div class="sec-actions" style="margin-top:10px"><button id="prof-close">Close</button></div>`;
+  $('prof-name').textContent = hubMe.user.name || hubMe.user.login;
+  $('prof-login').textContent = `Signed in as ${hubMe.user.login} · ${hubMe.user.role === 'admin' ? 'admin' : 'member'}`;
+  $('prof-tz').addEventListener('change', (e) => chooseTimeZone(e.target));
+  $('prof-close').addEventListener('click', () => dialogRequestClose(sheet));
+  paintTimeZone();
+  if (!sheet.open) sheet.showModal();
+}
+// Which zone the agents use for "now" and every time they show: the phone's (it follows you), or one pinned here.
+function paintTimeZone() {
+  const sel = $('prof-tz'), hint = $('prof-tz-hint');
+  if (!sel || !hint || !hubMe || !hubMe.user) return;
+  const device = deviceTimeZone();
+  const pinned = !!hubMe.user.timeZonePinned;
+  const zone = hubMe.timeZone || hubMe.user.timeZone || device || 'UTC';
+  let zones = [];
+  try { zones = Intl.supportedValuesOf('timeZone'); } catch { zones = []; }
+  if (!zones.includes(zone)) zones.unshift(zone);
+  let now = '';
+  try { now = new Date().toLocaleTimeString([], { timeZone: zone, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }); } catch { now = ''; }
+  sel.innerHTML = `<option value="">Follow this phone${device ? ` (${esc(device.replace(/_/g, ' '))})` : ''}</option>`
+    + zones.map(z => `<option value="${esc(z)}">${esc(z.replace(/_/g, ' '))}</option>`).join('');
+  sel.value = pinned ? zone : '';
+  sel.disabled = tzSaving;
+  hint.textContent = `Your agents use ${zone.replace(/_/g, ' ')}${now ? ` (now ${now})` : ''}${pinned ? ', pinned wherever you are.' : ', following the device you use.'}`;
+  try { dialogGuard.markLoaded(sel); } catch { /* no guard */ }
+}
+async function chooseTimeZone(sel) {
+  if (tzSaving) { paintTimeZone(); return; }   // one choice at a time: a second one waits until this is saved
+  const tz = sel.value;
+  tzChoice++;
+  tzSaving = true;
+  sel.disabled = true;
+  const body = tz ? { tz, pinned: true } : { tz: deviceTimeZone() || null, pinned: false };
+  let error = '';
+  try {
+    const r = await api('/api/me/timezone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    hubMe.user = { ...hubMe.user, ...d.user };
+    hubMe.timeZone = d.timeZone;
+  } catch (e) { error = e.message || 'failed'; }
+  tzSaving = false;
+  paintTimeZone();
+  secMsg('prof-tz-msg', error ? `Not saved: ${error}` : 'Saved.', !error);
 }
 
 function openSecuritySheet() {

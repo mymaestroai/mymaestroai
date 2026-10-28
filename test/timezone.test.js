@@ -145,7 +145,7 @@ test('a person\'s zone: reports from their device follow them; a pinned zone sta
   const src = read('lib/auth.js');
   const fn = src.slice(src.indexOf('function setTimeZone('), src.indexOf('function deleteUser('));
   assert.ok(!/if \(auto\)[\s\S]*?audit\(/.test(fn.slice(fn.indexOf('if (auto)'), fn.indexOf('if (pinned && !tz)'))), 'a device report is not audited');
-  assert.match(fn, /if \(changed\) \{ save\(\); audit\(id, 'user\.timezone'/, 'a choice in the Security dialog is');
+  assert.match(fn, /if \(changed\) \{ save\(\); audit\(id, 'user\.timezone'/, 'a choice in the Profile is');
 });
 
 test('what agents read: recall results, history stamps and the current request are local, zone named', () => {
@@ -385,22 +385,79 @@ for (const file of ['app.js', 'mobile.js']) {
   });
 }
 
-test('desktop: a report answered after a choice in the Security dialog does not undo the choice on the page', async () => {
-  const { env, me, page } = pageReporter('app.js');
+for (const file of ['app.js', 'mobile.js']) test(`${file}: a report answered after a choice in the Profile does not undo the choice on the page`, async () => {
+  const { env, me, page } = pageReporter(file);
   const flush = () => new Promise((r) => setImmediate(r));
   page.report();
   page.choose();   // chooseTimeZone: tzChoice++ before its own request
   me.user = { ...me.user, timeZone: 'Europe/Berlin', timeZonePinned: true }; me.timeZone = 'Europe/Berlin';
   env.answer(); await flush(); await flush();
   assert.deepStrictEqual([me.timeZone, me.user.timeZonePinned], ['Europe/Berlin', true]);
-  assert.ok(extract(read('app.js'), 'chooseTimeZone').includes('tzChoice++;'));
-  assert.ok(extract(read('app.js'), 'chooseTimeZone').includes('sel.disabled = true;') && extract(read('app.js'), 'paintTimeZone').includes('sel.disabled = false;'), 'one choice at a time');
+  assert.ok(extract(read(file), 'chooseTimeZone').includes('tzChoice++;'));
+  assert.ok(extract(read(file), 'chooseTimeZone').includes('if (tzSaving) { paintTimeZone(); return; }') && extract(read(file), 'paintTimeZone').includes('sel.disabled = tzSaving;'), 'one choice at a time');
 });
 
-test('the Security dialog pins a zone or follows the device again; the hub has the route', () => {
-  const app = read('app.js'), server = read('server.js');
-  assert.ok(app.includes('<select id="sec-tz" onchange="chooseTimeZone(this)"'), 'Security dialog: the time zone');
-  assert.ok(app.includes("const body = tz ? { tz, pinned: true } : { tz: deviceTimeZone() || null, pinned: false };"));
+for (const file of ['app.js', 'mobile.js']) test(`${file}: the Profile's time zone choice pins a zone, or follows the device again`, async () => {
+  const src = read(file);
+  const els = { 'prof-tz': { value: '', disabled: false, innerHTML: '' }, 'prof-tz-hint': { textContent: '' } };
+  const msgs = [], sent = [];
+  const me = { user: { id: 'u1', timeZone: 'America/New_York', timeZonePinned: false }, timeZone: 'America/New_York' };
+  const post = async (url, opts) => { const body = JSON.parse(opts.body); sent.push({ url, body }); const pinned = !!body.pinned; return { ok: true, status: 200, json: async () => ({ ok: true, user: { ...me.user, timeZone: body.tz, timeZonePinned: pinned }, timeZone: body.tz }) }; };
+  const make = new Function('window', 'hubMe', 'document', '$', 'fetch', 'api', 'Intl', 'secMsg', 'dialogGuard', 'hubEsc', 'esc', `
+    let tzChoice = 0, tzSaving = false;
+    ${extract(src, 'deviceTimeZone')}
+    ${extract(src, 'paintTimeZone')}
+    ${extract(src, 'chooseTimeZone')}
+    return { paint: paintTimeZone, choose: chooseTimeZone, choices: () => tzChoice };`);
+  const intl = { DateTimeFormat: (...a) => (a.length ? new Intl.DateTimeFormat(...a) : { resolvedOptions: () => ({ timeZone: 'America/Los_Angeles' }) }), supportedValuesOf: () => ['America/Los_Angeles', 'America/New_York', 'Europe/Berlin'] };
+  const t = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const page = make({ hubMe: me }, me, { getElementById: (id) => els[id] || null }, (id) => els[id] || null, post, post, intl,
+    (id, text, ok) => msgs.push([id, text, !!ok]), { markLoaded: () => {} }, t, t);
+  page.paint();
+  assert.match(els['prof-tz'].innerHTML, /^<option value="">Follow this (device|phone) \(America\/Los Angeles\)<\/option>/, 'first: follow this device, naming its zone');
+  assert.strictEqual(els['prof-tz'].value, '', 'following the device');
+  assert.match(els['prof-tz-hint'].textContent, /^Your agents use America\/New York .*following the device you use\.$/);
+  els['prof-tz'].value = 'Europe/Berlin';
+  await page.choose(els['prof-tz']);
+  assert.deepStrictEqual(sent.at(-1), { url: '/api/me/timezone', body: { tz: 'Europe/Berlin', pinned: true } }, 'a zone chosen: pinned');
+  assert.deepStrictEqual([me.user.timeZonePinned, me.timeZone, els['prof-tz'].value, els['prof-tz'].disabled], [true, 'Europe/Berlin', 'Europe/Berlin', false]);
+  assert.match(els['prof-tz-hint'].textContent, /pinned wherever you are\.$/);
+  assert.deepStrictEqual(msgs.at(-1), ['prof-tz-msg', 'Saved.', true]);
+  els['prof-tz'].value = '';
+  await page.choose(els['prof-tz']);
+  assert.deepStrictEqual(sent.at(-1).body, { tz: 'America/Los_Angeles', pinned: false }, '"Follow this device": back to the device\'s zone');
+  assert.strictEqual(page.choices(), 2, 'each choice counted (a late device report cannot undo it)');
+  // A choice still saving when the Profile is closed and opened again: the new list stays disabled, and nothing else is sent.
+  const slow = page.choose(Object.assign(els['prof-tz'], { value: 'Asia/Tokyo' }));
+  const firstPost = sent.length;
+  els['prof-tz'] = { value: '', disabled: false, innerHTML: '' };   // the reopened Profile's list
+  page.paint();
+  assert.strictEqual(els['prof-tz'].disabled, true, 'reopened while saving: disabled');
+  els['prof-tz'].value = 'Europe/Berlin';
+  await page.choose(els['prof-tz']);
+  assert.strictEqual(sent.length, firstPost, 'no second choice goes out while one is saving');
+  await slow;
+  assert.strictEqual(els['prof-tz'].disabled, false, 'enabled again once saved');
+  assert.strictEqual(sent.at(-1).body.tz, 'Asia/Tokyo');
+});
+
+test('the Profile shows who you are and holds the time zone; Security no longer does; names stay an admin\'s to change', () => {
+  const app = read('app.js'), mob = read('mobile.js'), index = read('index.html'), mhtml = read('mobile.html');
+  const menu = index.slice(index.indexOf('<div id="account-menu"'), index.indexOf('</div>', index.indexOf('onclick="signOut()"')));
+  assert.ok(menu.indexOf('onclick="openProfileDialog()">Profile</button>') > 0 && menu.indexOf('openProfileDialog()') < menu.indexOf('openSecurityDialog()">Security'), 'desktop account menu: Profile, then Security');
+  assert.ok(mhtml.indexOf('<button id="menu-profile">') > 0 && mhtml.indexOf('<button id="menu-profile">') < mhtml.indexOf('<button id="menu-security">') && mhtml.includes('<dialog id="profile-sheet"></dialog>'), 'phone menu: Profile, then Security');
+  const dProfile = extract(app, 'openProfileDialog'), mProfile = extract(mob, 'openProfileSheet');
+  for (const [where, fn] of [['desktop', dProfile], ['phone', mProfile]]) {
+    assert.ok(fn.includes('<select id="prof-tz"') && fn.includes('id="prof-tz-hint"') && fn.includes('id="prof-tz-msg"'), `${where}: the time zone is in the Profile`);
+    assert.ok(fn.includes('id="prof-name"') && fn.includes('id="prof-login"'), `${where}: your name and sign-in are shown`);
+    assert.doesNotMatch(fn, /<input|contenteditable/, `${where}: the name can't be changed there`);
+    assert.match(fn, /\('prof-name'\)\.textContent = /, `${where}: the name goes in as text, never as markup`);
+  }
+  assert.ok(dProfile.includes('onchange="chooseTimeZone(this)"') && mProfile.includes("$('prof-tz').addEventListener('change', (e) => chooseTimeZone(e.target));"));
+  for (const [where, fn] of [['desktop', extract(app, 'openSecurityDialog')], ['phone', extract(mob, 'openSecuritySheet')]]) assert.doesNotMatch(fn, /tz|Time zone/, `${where}: Security keeps password, two-factor and sessions`);
+  assert.ok(index.includes('.security-modal input, .security-modal select {') && mhtml.includes('#profile-sheet select {'), 'the select matches the dark dialogs');
+  const server = read('server.js');
+  assert.doesNotMatch(server, /\/api\/me\/profile/, 'no route to rename yourself');
   assert.ok(server.includes("if (pathname === '/api/me/timezone' && req.method === 'POST') {"));
   assert.ok(server.includes("hubAuth.setTimeZone(req.hubUser.id, tz, { auto: body.auto === true, pinned: body.pinned === true })"));
   const chatRoute = server.slice(server.indexOf("if (pathname === '/api/chat/stream' && req.method === 'POST') {"), server.indexOf("return handleChatStream(body, res);"));
