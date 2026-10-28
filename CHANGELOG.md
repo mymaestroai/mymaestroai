@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Install My Maestro AI as an app on your computer, with its own icon.** Chrome and Edge ("Install page as app") and Safari on a Mac (File → Add to Dock) now make an app called My Maestro AI with the Maestro icon, which opens the desktop layout in its own window. Before, only the phone page described itself as an app, so an app made from the desktop page got a small or plain icon. If an app you made earlier still shows the old icon, remove it and make it again. The phone app is unchanged.
+
 ## [5.8.0] - 2026-10-27
 
 Five changes since 5.7.3: a setup interview you can pick up where you left off, dialogs that ask before discarding your unsaved edits, your version and an About box, Maestro marked as the lead agent unless you've already chosen one, and your agent's tool activity in one expandable panel. Press Update in your Maestro to get them; on 5.7.0 or later it also tells you when an update is ready.
