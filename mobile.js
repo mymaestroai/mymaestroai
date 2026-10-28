@@ -3202,6 +3202,32 @@ function reattachCheckAll() {
   for (const ra of reattaches.values()) reattachCheck(ra);
 }
 
+// Shared verbatim with lib/ui-turn-reply.js and app.js (test/ui-turn-reply.test.js keeps the three in step).
+// ── turn-reply helpers (begin) ──
+function turnReplyFrom(history, start, minTs) {
+  let reply = null, content = '';
+  for (let i = Math.max(0, start); i < history.length; i++) {
+    const m = history[i];
+    if (!m) continue;
+    if (m.role === 'user' && !m.ask) break;                                  // the next turn
+    if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
+    if (minTs && m.ts && Date.parse(m.ts) < minTs) continue;
+    if (!reply) { reply = m; content = m.content; continue; }                 // the reply's first piece
+    if (m.base > 0 && m.base === content.length) { reply = m; content += m.content; continue; }   // the next piece
+    break;                                                                    // another reply: not this turn's
+  }
+  return reply ? { ...reply, content } : null;
+}
+function turnReplySince(history, sinceTs) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (!m || (m.role === 'user' && !m.ask) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
+    if (m.role === 'assistant' && !m.ask && typeof m.content === 'string' && !(m.base > 0)) return turnReplyFrom(history, i, sinceTs);
+  }
+  return null;
+}
+// ── turn-reply helpers (end) ──
+
 async function reattachCheck(ra) {
   if (!ra || ra.checking || reattaches.get(ra.agent) !== ra) return;
   ra.checking = true;
@@ -3211,14 +3237,13 @@ async function reattachCheck(ra) {
     const hist = (await r.json()).history || [];
     if (reattaches.get(ra.agent) !== ra) return;
     const ui = ra.text ? ownEntryIndex(hist, ra.text, ra.sentAt || ra.startedAt, r.headers.get('Date')) : -1;
+    // The whole reply: in pieces when the agent asked a question meanwhile (lib/ui-turn-reply.js).
     let reply = null;
     if (ui >= 0) {
-      const uts = hist[ui].ts ? new Date(hist[ui].ts).getTime() : 0;
-      reply = hist.slice(ui + 1).find(m => m.role === 'assistant' && (!m.ts || !uts || new Date(m.ts).getTime() >= uts));
+      reply = turnReplyFrom(hist, ui + 1, hist[ui].ts ? new Date(hist[ui].ts).getTime() : 0);
     } else if (!ra.text && ra.since) {
-      // No user entry to anchor on: the newest assistant entry written since the turn began.
-      const sinceTs = new Date(ra.since).getTime() - 2000;
-      for (let i = hist.length - 1; i >= 0; i--) { const m = hist[i]; if (m.role === 'assistant' && m.ts && new Date(m.ts).getTime() >= sinceTs) { reply = m; break; } }
+      // No user entry to anchor on: the newest reply written since the turn began.
+      reply = turnReplySince(hist, new Date(ra.since).getTime() - 2000);
     }
     const s = live[ra.agent];
     const stillBusy = statusKnown ? !!(s && s.busy) : null;

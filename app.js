@@ -6899,6 +6899,32 @@
 
     // Reload the tail of the agent's history and finish the bubble once a reply newer than our
     // own user entry is there.  Otherwise keep waiting while the agent is busy.
+    // Shared verbatim with lib/ui-turn-reply.js and mobile.js (test/ui-turn-reply.test.js keeps the three in step).
+    // ── turn-reply helpers (begin) ──
+    function turnReplyFrom(history, start, minTs) {
+      let reply = null, content = '';
+      for (let i = Math.max(0, start); i < history.length; i++) {
+        const m = history[i];
+        if (!m) continue;
+        if (m.role === 'user' && !m.ask) break;                                  // the next turn
+        if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
+        if (minTs && m.ts && Date.parse(m.ts) < minTs) continue;
+        if (!reply) { reply = m; content = m.content; continue; }                 // the reply's first piece
+        if (m.base > 0 && m.base === content.length) { reply = m; content += m.content; continue; }   // the next piece
+        break;                                                                    // another reply: not this turn's
+      }
+      return reply ? { ...reply, content } : null;
+    }
+    function turnReplySince(history, sinceTs) {
+      for (let i = history.length - 1; i >= 0; i--) {
+        const m = history[i];
+        if (!m || (m.role === 'user' && !m.ask) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
+        if (m.role === 'assistant' && !m.ask && typeof m.content === 'string' && !(m.base > 0)) return turnReplyFrom(history, i, sinceTs);
+      }
+      return null;
+    }
+    // ── turn-reply helpers (end) ──
+
     async function reattachCheck(chatId) {
       const chat = chats[chatId];
       const ra = chat?.reattach;
@@ -6910,17 +6936,12 @@
         const history = (await r.json()).history || [];
         const ui = ra.content ? ownEntryIndex(history, ra.content, ra.sentAt || ra.startedAt, r.headers.get('Date')) : -1;
         const userTs = ui >= 0 ? Date.parse(history[ui].ts) : NaN;
-        let reply = ui >= 0
-          ? history.slice(ui + 1).find(m => m.role === 'assistant' && (isNaN(userTs) || !m.ts || Date.parse(m.ts) >= userTs))
-          : null;
+        // The whole reply: in pieces when the agent asked a question meanwhile (lib/ui-turn-reply.js).
+        let reply = ui >= 0 ? turnReplyFrom(history, ui + 1, userTs) : null;
         if (!reply && ui < 0 && ra.since) {
-          // No user entry to anchor on (the turn began before this page loaded): take the newest
-          // assistant entry written since the hub says the turn started.
-          const sinceTs = Date.parse(ra.since) - 2000;
-          for (let i = history.length - 1; i >= 0; i--) {
-            const m = history[i];
-            if (m.role === 'assistant' && m.ts && Date.parse(m.ts) >= sinceTs) { reply = m; break; }
-          }
+          // No user entry to anchor on (the turn began before this page loaded): the newest reply
+          // written since the hub says the turn started.
+          reply = turnReplySince(history, Date.parse(ra.since) - 2000);
         }
         if (!chats[chatId]?.reattach) return;
 
@@ -7737,6 +7758,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       });
     }
 
+    // A question asked during a reply: show the card, but keep reading the reply. The hub holds the
+    // stream open while the agent waits, with a heartbeat every 15 s, so the stall checks below stay
+    // quiet and the rest of the reply arrives after the answer. Awaiting the card here stopped the
+    // reading: after 90 s the stall check cut the reply off, and the rest only showed after a reload.
+    function askFromStream(data, chatId) {
+      showQuestionModal(data, chatId).catch(() => {});
+    }
+
     // Streaming helpers
     async function streamResponse(response, msgId, isSynthesis = false, round = null, chatId = null, agentName = null) {
       const reader = response.body.getReader();
@@ -7765,7 +7794,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             if (oc) {
               console.log('[FRONTEND-SSE] gateway event:', oc.type, oc);
               if (oc.type === 'ask_user_question') {
-                await showQuestionModal(oc, chatId);
+                askFromStream(oc, chatId);
                 continue;
               }
               if (oc.type === 'auto_model') {
@@ -7889,7 +7918,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             }
             // Legacy direct-type events (backwards compat)
             if (parsed.type === 'ask_user_question') {
-              await showQuestionModal(parsed, chatId);
+              askFromStream(parsed, chatId);
               continue;
             }
             const delta = parsed.choices?.[0]?.delta?.content;
@@ -7940,6 +7969,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // is likely dead (server aborted, network broke, browser was suspended).
       // The server sends heartbeats every 15s, so 90s = 6 missed heartbeats.
       // When triggered, throws a retryable error so sendSoloMessage auto-retries.
+      // Heartbeats keep coming while a question card waits for an answer (askFromStream).
       const CLIENT_STALL_MS = 90000;
       let lastDataTime = Date.now();
       let stallTriggered = false;
@@ -7968,6 +7998,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const { done, value } = readResult;
         if (done) {
           if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
+          // The stall check cancels the reader, and a cancelled reader reports "done": that reply was
+          // cut off, not finished. Same retryable error as above, so sendSoloMessage re-attaches.
+          if (stallTriggered) throw new Error('stall detected - stream died');
           break;
         }
         lastDataTime = Date.now(); // reset watchdog on any data
@@ -7997,7 +8030,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
             // Handle AskUserQuestion from Claude SDK
             if (parsed.type === 'ask_user_question') {
-              await showQuestionModal(parsed, chatId);
+              askFromStream(parsed, chatId);
               continue;
             }
 
@@ -8006,7 +8039,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             if (oc2) {
               console.log('[FRONTEND-SSE-SOLO] gateway event:', oc2.type, JSON.stringify(oc2).slice(0, 200));
               if (oc2.type === 'ask_user_question') {
-                await showQuestionModal(oc2, chatId);
+                askFromStream(oc2, chatId);
                 continue;
               }
               // Session ID tracking
@@ -8286,14 +8319,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             const parsed = JSON.parse(data);
             if (parsed.type === 'meta') continue;
             if (parsed.type === 'ask_user_question') {
-              await showQuestionModal(parsed, chatId);
+              askFromStream(parsed, chatId);
               continue;
             }
             // Gateway events: tool activity wrapped in valid OpenAI format
             const oc3 = parsed.gateway || null;
             if (oc3) {
               if (oc3.type === 'ask_user_question') {
-                await showQuestionModal(oc3, chatId);
+                askFromStream(oc3, chatId);
                 continue;
               }
               // Eyes expression events
@@ -8379,6 +8412,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
       }
       
+      // The stall check ended the read: a group chat has no re-attach, so say the reply may be cut off
+      // rather than pass it on as complete.
+      if (stallTriggered) {
+        const note = '\n\n⚠ The connection went quiet for 90 seconds, so this reply may be cut off.';
+        fullResponse += note;
+        displayContent += note;
+        updateGroupMessage(msgId, displayContent, agentName, colorIndex);
+      }
+
       // Clear thinking panel and live activity when done
       updateThinkingPanel(chatId, '', agentName, false);
       clearLiveActivity(msgId);

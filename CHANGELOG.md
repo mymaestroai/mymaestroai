@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The rest of an agent's reply now shows after you answer its question, even minutes later.** On the desktop, when an agent asked you something and you answered more than about 90 seconds later, the agent carried on, but the page showed nothing more of that reply until you reloaded it. The page stopped reading the reply while the question was open, and its check for a dead connection then gave up on it. It now keeps reading while a question waits, and a question answered on another device no longer holds the page up either. A reply that really does go silent for 90 seconds now reconnects in a chat with one agent, as after a lost connection, instead of being shown as finished; in a group chat it now says it may be cut off. And a page that reconnects to a reply in which the agent asked a question, on the desktop or the phone, now shows the whole reply instead of the question.
+
 ## [5.8.1] - 2026-10-28
 
 One change since 5.8.0: install My Maestro AI as an app on your computer, with the Maestro icon. Press Update in your Maestro to get it; on 5.7.0 or later it also tells you when an update is ready.
