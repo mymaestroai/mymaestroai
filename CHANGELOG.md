@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.8.1] - 2026-10-28
+
+One change since 5.8.0: install My Maestro AI as an app on your computer, with the Maestro icon. Press Update in your Maestro to get it; on 5.7.0 or later it also tells you when an update is ready.
+
 - **Install My Maestro AI as an app on your computer, with its own icon.** Chrome and Edge ("Install page as app") and Safari on a Mac (File → Add to Dock) now make an app called My Maestro AI with the Maestro icon, which opens the desktop layout in its own window. Before, only the phone page described itself as an app, so an app made from the desktop page got a small or plain icon. If an app you made earlier still shows the old icon, remove it and make it again. The phone app is unchanged.
 
 ## [5.8.0] - 2026-10-27
@@ -1081,7 +1085,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.8.0...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.8.1...dev
+[5.8.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.8.1
 [5.8.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.8.0
 [5.7.3]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.3
 [5.7.2]: https://github.com/mymaestroai/mymaestroai/tree/v5.7.2
