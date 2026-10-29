@@ -5195,7 +5195,8 @@
           if (history.length > 0) {
             // Add a visual separator so user knows this is restored history
             appendSystemNotice(chatId, `📜 Restored ${history.length} messages from previous session`);
-            for (const msg of history) {
+            const times = msgTimeLines(history);   // the date and time under each message
+            for (const [i, msg] of history.entries()) {
               // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place,
               // with its tool calls, once the chat follows it (reattachIfIdle), so it is not shown twice.
               if (msg.inProgress) { chats[chatId].inProgress = { text: msg.content || '', ts: msg.ts || null }; continue; }
@@ -5204,6 +5205,7 @@
               const hid = appendMessage(chatId, msg.role, msg.content);
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
+              setMessageTime(document.getElementById(hid), times[i]);
             }
             // Scroll to bottom after loading history
             const panel = document.getElementById(`messages-${chatId}`);
@@ -5590,11 +5592,11 @@
       const last = chat.messages[chat.messages.length - 1];
       if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {   // history may already hold the notice
         chat.messages.push({ role: 'user', content: ev.message });
-        appendMessage(chat.id, 'user', ev.message);
+        setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
       }
       appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
       const msgId = appendMessage(chat.id, 'assistant', '…');
-      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '' };
+      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt) };
       setStatus(chat.id, 'thinking', hubOriginLabel(ev.origin));
       if (!opened) markTabUnread(chat.id);
       if (Array.isArray(ev.activity)) {   // a replayed turn_start carries what the turn has done so far
@@ -5944,6 +5946,7 @@
       const el = document.getElementById(t.msgId);
       clearLiveActivity(t.msgId);
       if (el) { t.text = reply; paintTurn(t.chatId, t, reply, false); }
+      setMessageTime(document.getElementById(t.msgId), msgTimeLine(Date.parse(ev.endedAt) || Date.now(), t.startedAt));
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
       for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
       const last = chat.messages[chat.messages.length - 1];
@@ -6960,6 +6963,7 @@
       const existingIdx = chat.messages.findIndex(m => m.role === 'assistant' && m.partial);
       if (existingIdx >= 0) chat.messages.splice(existingIdx, 1);
       if (ok) chat.messages.push({ role: 'assistant', content: text });
+      if (ok) setMessageTime(document.getElementById(ra.msgId), msgTimeLine(Date.now(), ra.sentAt || Date.parse(ra.since)));
       setStatus(chatId, ok ? 'idle' : 'error', ok ? null : 'Reply lost');
       setAgentStatus(chat.agent, '');
       delete chat.lastMsgId;
@@ -7115,7 +7119,7 @@
       input.style.height = 'auto';
 
       // Show the interjection in the chat as a user message with a distinct style
-      appendMessage(chatId, 'user', `⚡ [Interjection] ${content}`);
+      setMessageTime(document.getElementById(appendMessage(chatId, 'user', `⚡ [Interjection] ${content}`)), msgTimeLabel(Date.now()));
 
       // Show a transient "sent" notice that will be updated when the agent picks it up
       const noticeEl = appendSystemNotice(chatId, '⚡ Interjection sent - waiting for agent to pick it up...');
@@ -7191,6 +7195,8 @@
         chat.messages.push({ role: 'user', content, images: pendingImages.length > 0 ? [...pendingImages] : undefined });
         appendMessageWithImages(chatId, 'user', content, pendingImages);
         userMsgEl = document.getElementById(`messages-${chatId}`)?.lastElementChild || null;
+        chat.sentAtMs = Date.now();   // the reply's "how long it took" counts from here
+        setMessageTime(userMsgEl, msgTimeLabel(chat.sentAtMs));
       }
 
       // Clear pending images
@@ -7262,6 +7268,7 @@
         }
 
         const { text: fullResponse, images: responseImages, toolActivity, partial, steps: responseSteps } = await streamResponseSolo(response, msgId, chatId, chat.agent);
+        if (!partial) setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), chat.sentAtMs));
 
         // Success! Save response and clean up
         if (responseImages.length > 0) {
@@ -7378,6 +7385,7 @@
         input.style.height = 'auto';
         chat.messages.push({ role: 'user', content, images: pendingImages.length > 0 ? [...pendingImages] : undefined });
         appendMessageWithImages(chatId, 'user', content, pendingImages);
+        setMessageTime(document.getElementById(`messages-${chatId}`)?.lastElementChild, msgTimeLabel(Date.now()));
         clearPendingImages(chatId);
       }
       
@@ -7586,6 +7594,7 @@
       
       const synthPrompt = buildSynthesisPrompt(chat);
       const msgId = appendSynthesisMessage(chatId, '⏳ Synthesizing...', chat.currentRound);
+      const askedAt = Date.now();   // the reply's "how long it took" counts from here
       
       chat.controllers[chat.summarizer.name] = new AbortController();
       
@@ -7598,7 +7607,7 @@
           body: JSON.stringify({ agent: chat.summarizer.name, message: synthPrompt, sessionId: 'new' })
         });
 
-        const fullResponse = await streamResponse(response, msgId, true, chat.currentRound, chatId, chat.summarizer.name);
+        const fullResponse = await streamResponse(response, msgId, true, chat.currentRound, chatId, chat.summarizer.name, askedAt);
 
         chat.syntheses.push({ round: chat.currentRound, content: fullResponse });
         chat.messages.push({ role: 'assistant', agent: chat.summarizer.name, content: fullResponse, type: 'synthesis', round: chat.currentRound });
@@ -7673,6 +7682,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       console.log(`[${agent.name}] Sending to gateway: ${prompt.substring(0, 150)}...`);
       
       const msgId = appendGroupMessage(chatId, 'assistant', '⏳ Thinking...', agent.name, colorIndex);
+      const askedAt = Date.now();   // the reply's "how long it took" counts from here
       
       try {
         const response = await fetch('/api/chat/stream', {
@@ -7683,7 +7693,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           body: JSON.stringify({ agent: agent.name, message: prompt, sessionId: 'new' })
         });
 
-        const fullResponse = await streamResponseGroup(response, msgId, agent.name, colorIndex, chatId);
+        const fullResponse = await streamResponseGroup(response, msgId, agent.name, colorIndex, chatId, askedAt);
 
         console.log(`[${agent.name}] Got ${fullResponse.length} chars`);
         chat.messages.push({ role: 'assistant', content: fullResponse, agent: agent.name });
@@ -7880,7 +7890,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
 
     // Streaming helpers
-    async function streamResponse(response, msgId, isSynthesis = false, round = null, chatId = null, agentName = null) {
+    async function streamResponse(response, msgId, isSynthesis = false, round = null, chatId = null, agentName = null, startedMs = Date.now()) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullResponse = '';
@@ -8060,6 +8070,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Clear thinking panel when done
       if (chatId) updateThinkingPanel(chatId, '', agentName, false);
       finalizeTokenUsage(msgId);
+      setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), startedMs));
 
       return fullResponse;
     }
@@ -8374,7 +8385,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return { text: fullResponse, images, toolActivity, partial, steps };
     }
 
-    async function streamResponseGroup(response, msgId, agentName, colorIndex, chatId) {
+    async function streamResponseGroup(response, msgId, agentName, colorIndex, chatId, startedMs = Date.now()) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullResponse = '';
@@ -8538,6 +8549,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       updateThinkingPanel(chatId, '', agentName, false);
       clearLiveActivity(msgId);
       finalizeTokenUsage(msgId);
+      setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), startedMs));
 
       console.log(`[${agentName}] Stream complete, response length: ${fullResponse.length}`);
       console.log(`[${agentName}] Raw response:`, fullResponse.substring(0, 200));
@@ -8554,9 +8566,65 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
     }
     
+    // The date and time under each message: when it was sent, when a reply was finished and how long it took.
+    // Shared verbatim with lib/ui-msg-time.js and mobile.js (test/ui-msg-time.test.js keeps the three in step).
+    // ── message-time helpers (begin) ──
+    const msgTimeFormats = new Map();   // one formatter per language, zone and year style: one per message was slow
+    function msgTimeZone() {
+      try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; }
+    }
+    function msgTimeLabel(t, now = Date.now(), locale = [], zone = msgTimeZone()) {
+      const ms = typeof t === 'number' ? t : Date.parse(t);
+      if (!Number.isFinite(ms)) return '';
+      const d = new Date(ms);
+      const fmt = (key, make) => { let f = msgTimeFormats.get(key); if (!f) { f = make(); msgTimeFormats.set(key, f); } return f; };
+      try {
+        const yf = fmt(`year|${zone}`, () => new Intl.DateTimeFormat('en-US', { year: 'numeric', ...(zone ? { timeZone: zone } : {}) }));
+        const year = yf.format(d) !== yf.format(new Date(now));   // judged in the same zone the time is shown in
+        return fmt(`${locale}|${zone}|${year}`, () => new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(year ? { year: 'numeric' } : {}), ...(zone ? { timeZone: zone } : {}) })).format(d);
+      } catch { return d.toLocaleString(); }   // an unknown language or zone
+    }
+    function msgTookLabel(ms) {
+      if (!Number.isFinite(ms) || ms < 0) return '';
+      const s = Math.round(ms / 1000);
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+      return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+    }
+    function msgTimeLine(end, start, now = Date.now(), locale = [], zone = msgTimeZone()) {
+      const when = msgTimeLabel(end, now, locale, zone);
+      const e = typeof end === 'number' ? end : Date.parse(end);
+      const s = typeof start === 'number' ? start : Date.parse(start);
+      const took = when && Number.isFinite(s) ? msgTookLabel(e - s) : '';
+      return took ? `${when} · ${took}` : when;
+    }
+    function msgTimeLines(history, now = Date.now(), locale = [], zone = msgTimeZone()) {
+      const lines = [];
+      let start = NaN, last = -1, joined = 0;   // the turn's message time; its reply's newest piece, and the length so far
+      for (let i = 0; i < history.length; i++) {
+        const m = history[i] || {};
+        const t = m.inProgress ? NaN : Date.parse(m.ts);   // the running turn's reply so far: not finished, no line
+        lines.push(Number.isFinite(t) ? msgTimeLabel(t, now, locale, zone) : '');
+        if (m.role === 'user' && !m.ask) { start = t; last = -1; continue; }   // the next turn
+        if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
+        if (last >= 0 && m.base > 0 && m.base === joined) {
+          lines[last] = msgTimeLabel(Date.parse(history[last].ts), now, locale, zone);   // an earlier piece: its time only
+        } else if (last >= 0 || m.base > 0) {
+          start = NaN; last = -1;   // not this turn's reply
+          continue;
+        } else joined = 0;
+        last = i; joined += m.content.length;
+        if (Number.isFinite(t)) lines[i] = msgTimeLine(t, start, now, locale, zone);
+      }
+      return lines;
+    }
+    // ── message-time helpers (end) ──
+
     // Message rendering
     // Copy button on every message bubble: copies the original text/markdown, not the rendered HTML.
     const rawMessageText = new WeakMap();
+    const messageTime = new WeakMap();   // the line under a message (setMessageTime)
     function decorateMessage(el, content) {
       if (!el) return;
       if (typeof content === 'string') rawMessageText.set(el, content);
@@ -8565,6 +8633,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         b.className = 'msg-copy'; b.type = 'button'; b.title = 'Copy message'; b.textContent = '⧉';
         el.appendChild(b);
       }
+      paintMessageTime(el);
+    }
+    // The line under a message (msgTimeLabel / msgTimeLine), in the gap below it. Kept per element, so a repaint of
+    // the message (streaming, tool steps) puts it back with the copy button; '' removes it.
+    function setMessageTime(el, text) {
+      if (!el) return;
+      if (text) messageTime.set(el, text); else messageTime.delete(el);
+      paintMessageTime(el);
+    }
+    function paintMessageTime(el) {
+      let line = el.querySelector(':scope > .msg-time');
+      const text = messageTime.get(el);
+      if (!text) { if (line) line.remove(); return; }
+      if (!line) { line = document.createElement('div'); line.className = 'msg-time'; el.appendChild(line); }
+      line.textContent = text;
     }
     async function copyMessageText(el) {
       const text = rawMessageText.get(el) ?? el.innerText;
