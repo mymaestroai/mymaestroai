@@ -296,6 +296,11 @@
     .agent-btn.in-group { border-color: var(--purple); background: rgba(168, 85, 247, 0.08); }
     /* copy button on message bubbles */
     .message { position: relative; }
+    /* The date and time under a message (sent; or finished · how long it took), in the gap below it: no extra height */
+    .message > .msg-time {
+      position: absolute; top: calc(100% + 3px); right: 6px; font-size: 11px; line-height: 14px; color: var(--text-dim);
+      opacity: 0.8; white-space: nowrap; font-variant-numeric: tabular-nums; pointer-events: none;
+    }
     .message > .msg-copy {
       position: absolute; top: 4px; right: 6px; border: 1px solid var(--border); background: var(--bg-card);
       color: var(--text-dim); border-radius: 6px; font-size: 0.8rem; line-height: 1; padding: 3px 6px; cursor: pointer;

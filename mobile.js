@@ -1769,6 +1769,72 @@ function setRaw(el, text) {
   rawText.set(el, String(text ?? ''));
 }
 
+// The date and time under each message: when it was sent, when a reply was finished and how long it took.
+// Shared verbatim with lib/ui-msg-time.js and app.js (test/ui-msg-time.test.js keeps the three in step).
+// ── message-time helpers (begin) ──
+const msgTimeFormats = new Map();   // one formatter per language, zone and year style: one per message was slow
+function msgTimeZone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; }
+}
+function msgTimeLabel(t, now = Date.now(), locale = [], zone = msgTimeZone()) {
+  const ms = typeof t === 'number' ? t : Date.parse(t);
+  if (!Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  const fmt = (key, make) => { let f = msgTimeFormats.get(key); if (!f) { f = make(); msgTimeFormats.set(key, f); } return f; };
+  try {
+    const yf = fmt(`year|${zone}`, () => new Intl.DateTimeFormat('en-US', { year: 'numeric', ...(zone ? { timeZone: zone } : {}) }));
+    const year = yf.format(d) !== yf.format(new Date(now));   // judged in the same zone the time is shown in
+    return fmt(`${locale}|${zone}|${year}`, () => new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(year ? { year: 'numeric' } : {}), ...(zone ? { timeZone: zone } : {}) })).format(d);
+  } catch { return d.toLocaleString(); }   // an unknown language or zone
+}
+function msgTookLabel(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}
+function msgTimeLine(end, start, now = Date.now(), locale = [], zone = msgTimeZone()) {
+  const when = msgTimeLabel(end, now, locale, zone);
+  const e = typeof end === 'number' ? end : Date.parse(end);
+  const s = typeof start === 'number' ? start : Date.parse(start);
+  const took = when && Number.isFinite(s) ? msgTookLabel(e - s) : '';
+  return took ? `${when} · ${took}` : when;
+}
+function msgTimeLines(history, now = Date.now(), locale = [], zone = msgTimeZone()) {
+  const lines = [];
+  let start = NaN, last = -1, joined = 0;   // the turn's message time; its reply's newest piece, and the length so far
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i] || {};
+    const t = m.inProgress ? NaN : Date.parse(m.ts);   // the running turn's reply so far: not finished, no line
+    lines.push(Number.isFinite(t) ? msgTimeLabel(t, now, locale, zone) : '');
+    if (m.role === 'user' && !m.ask) { start = t; last = -1; continue; }   // the next turn
+    if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
+    if (last >= 0 && m.base > 0 && m.base === joined) {
+      lines[last] = msgTimeLabel(Date.parse(history[last].ts), now, locale, zone);   // an earlier piece: its time only
+    } else if (last >= 0 || m.base > 0) {
+      start = NaN; last = -1;   // not this turn's reply
+      continue;
+    } else joined = 0;
+    last = i; joined += m.content.length;
+    if (Number.isFinite(t)) lines[i] = msgTimeLine(t, start, now, locale, zone);
+  }
+  return lines;
+}
+// ── message-time helpers (end) ──
+
+// The line under a bubble (msgTimeLabel / msgTimeLine): below its right edge for the person, its left edge for the
+// agent. It sits outside the reply body, which repaints; '' removes it.
+function setBubbleTime(el, text) {
+  if (!el) return;
+  let line = el.querySelector(':scope > .msg-time');
+  if (!text) { if (line) line.remove(); el.classList.remove('has-time'); return; }
+  if (!line) { line = document.createElement('div'); line.className = 'msg-time'; el.appendChild(line); }
+  line.textContent = text;
+  el.classList.add('has-time');
+}
+
 function addUserBubble(text, images) {
   const d = document.createElement('div');
   d.className = 'msg user';
@@ -2072,15 +2138,16 @@ function copyWholeChat() {
   copyText(md);
 }
 
-function renderEntry(m) {
+function renderEntry(m, time = '') {
   if (m.role === 'user') {
     if (m.origin?.kind) addNote(`⚡ ${originLabel(m.origin)} — ${timeLabel(m.ts)}`);
-    addUserBubble(m.content, null);
+    setBubbleTime(addUserBubble(m.content, null), time);
   } else if (m.role === 'assistant') {
     const saved = Array.isArray(m.activity) && m.activity.length;
     const b = addAssistantBubble(saved ? undefined : m.content);
     if (saved) paintSaved(b, m);
     if (typeof m.reasoning === 'string' && m.reasoning) reasoningSet({ agent: current, bubble: b }, m.reasoning, { total: Number(m.reasoningChars) });
+    setBubbleTime(b.el, time);
   }
 }
 
@@ -2112,7 +2179,8 @@ function renderHistory() {
     b.addEventListener('click', loadEarlier);
     box.appendChild(b);
   }
-  for (const m of chatHistory.slice(start)) renderEntry(m);
+  const times = msgTimeLines(chatHistory);   // the date and time under each message
+  for (let i = start; i < chatHistory.length; i++) renderEntry(chatHistory[i], times[i]);
   if (!chatHistory.length) addNote('No messages yet');
 }
 
@@ -2196,7 +2264,7 @@ async function openChat(name) {
 
 function attachStreamBubble(rec) {
   const last = chatHistory[chatHistory.length - 1];
-  if (!(last && last.role === 'user' && last.content === rec.text)) rec.userEl = addUserBubble(rec.text, rec.images);
+  if (!(last && last.role === 'user' && last.content === rec.text)) { rec.userEl = addUserBubble(rec.text, rec.images); setBubbleTime(rec.userEl, msgTimeLabel(rec.startedAt)); }
   const b = addAssistantBubble();
   rec.bubble = b;
   rec._blocks = null; rec._sig = null;
@@ -2780,6 +2848,7 @@ async function catchUpReattach(ra) {
     if (!(last && last.role === 'user' && last.content === turn.message)) {
       const note = addNote(`⚡ ${turn.origin?.kind === 'user' ? 'sent from another device' : originLabel(turn.origin)} — ${timeLabel(turn.startedAt)}`);
       const u = addUserBubble(turn.message, null);
+      setBubbleTime(u, msgTimeLabel(turn.startedAt));
       ra.bubble.el.before(note, u);
     }
   }
@@ -2907,6 +2976,7 @@ async function sendInterjection(agent) {
   saveDraft(agent, '');
   stick = true;
   const userEl = addUserBubble(text, null);
+  setBubbleTime(userEl, msgTimeLabel(Date.now()));
   const noteEl = addNote('⤵ delivering mid-turn…');
   noteEl.classList.add('interject');
   scrollChat(true);
@@ -3043,6 +3113,7 @@ async function sendMessage(fallback) {
     addNote(`⏳ ${displayName(agent)} is still working on the previous message (${s.activity || 'working'}${e ? `, ${e}` : ''}). Your message will queue or be refused until it finishes.`);
   }
   const userEl = fallback ? fallback.userEl : addUserBubble(text, images);
+  if (!fallback) setBubbleTime(userEl, msgTimeLabel(Date.now()));
   const bubble = addAssistantBubble();
   bubble.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>';
   scrollChat(true);
@@ -3079,6 +3150,7 @@ async function sendMessage(fallback) {
       throw new Error(`HTTP ${r.status}`);
     } else {
       await readStream(r, rec);
+      if (bubbleLive(rec) && !reattaches.has(agent)) setBubbleTime(rec.bubble.el, msgTimeLine(Date.now(), rec.startedAt));
       if (!rec.gotAny && bubbleLive(rec)) rec.bubble.body.innerHTML = '<span style="opacity:.6">[No response]</span>';
       if (current === agent) rereadHistory(agent);   // the finished exchange, as the hub saved it
     }
@@ -3170,6 +3242,7 @@ function finishReattach(ra, reply, ok = true) {
     setReplyText(ra, reply);
     feedEnd(ra);
     ra.bubble.el.classList.toggle('error', !ok);
+    if (ok) setBubbleTime(ra.bubble.el, msgTimeLine(Date.now(), ra.sentAt || Date.parse(ra.since)));
     if (ok) rereadHistory(ra.agent);   // the finished exchange, as the hub saved it
   } else if (!chatOpenFor(ra.agent)) {
     markUnread(ra.agent);
@@ -4066,7 +4139,7 @@ function onTurnStart(ev) {
     const last = chatHistory[chatHistory.length - 1];
     if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {
       addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
-      addUserBubble(ev.message, null);
+      setBubbleTime(addUserBubble(ev.message, null), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
     }
     const b = addAssistantBubble('…');
     hubTurns[ev.turnId] = { agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null };
@@ -4157,6 +4230,7 @@ function onTurnEnd(ev) {
   if (t && chatOpenFor(t.agent) && t.el.isConnected) {
     setReplyText(t, reply);
     feedEnd(t);
+    setBubbleTime(t.el, msgTimeLine(Date.parse(ev.endedAt) || Date.now(), Date.parse(t.startedAt)));
     rereadHistory(t.agent);   // the finished exchange (its message came from elsewhere), as the hub saved it
     scrollChat();
   } else if (ra) {
@@ -4164,7 +4238,7 @@ function onTurnEnd(ev) {
     else if (ev.ok === false) finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}${reply}`, false);
     else reattachCheck(ra);
   } else if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !ownTurn) {
-    addAssistantBubble(reply);
+    setBubbleTime(addAssistantBubble(reply).el, msgTimeLabel(Date.parse(ev.endedAt) || Date.now()));
     rereadHistory(ev.agent);
     scrollChat();
   } else if (!chatOpenFor(ev.agent) && !ownStream) {

@@ -145,6 +145,11 @@
     .msg { position: relative; min-width: 0; max-width: 92%; padding: 9px 30px 9px 12px; border-radius: 14px; line-height: 1.45; word-wrap: break-word; overflow-wrap: anywhere; }
     .msg .copy { position: absolute; top: 2px; right: 2px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 15px; line-height: 1; color: inherit; opacity: .45; background: none; }
     .msg .copy:active { opacity: 1; background: rgba(127,127,127,.25); }
+    /* The date and time under a bubble (sent; or finished · how long it took): its right edge for you, its left edge for the agent */
+    .msg.has-time { margin-bottom: 16px; }
+    .msg > .msg-time { position: absolute; top: 100%; margin-top: 3px; font-size: 10.5px; line-height: 13px; color: var(--text-tertiary); white-space: nowrap; font-variant-numeric: tabular-nums; pointer-events: none; }
+    .msg.user > .msg-time { right: 4px; }
+    .msg.assistant > .msg-time { left: 4px; }
     .msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
     .msg.assistant { align-self: flex-start; background: var(--bg-card); border: 1px solid var(--border); border-bottom-left-radius: 4px; max-width: 100%; }
     .msg.assistant pre { background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 6px 0; overflow-x: auto; font-size: 13px; }
