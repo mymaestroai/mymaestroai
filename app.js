@@ -11484,7 +11484,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
           .replace(/\*([^*]+)\*/g, '<em>$1</em>')
           .replace(/`([^`]+)`/g, '<code>$1</code>');
-        let tableHtml = '<table><thead><tr>';
+        let tableHtml = '<div class="table-scroll"><table><thead><tr>';   // scrolls inside the message when wider (index.html)
         header.forEach(h => tableHtml += `<th>${fmtCell(h)}</th>`);
         tableHtml += '</tr></thead><tbody>';
         rows.forEach(row => {
@@ -11492,7 +11492,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           row.forEach(cell => tableHtml += `<td>${fmtCell(cell)}</td>`);
           tableHtml += '</tr>';
         });
-        tableHtml += '</tbody></table>';
+        tableHtml += '</tbody></table></div>';
         tableTokens.push(tableHtml);
         return p1 + mk('T', idx);
       });

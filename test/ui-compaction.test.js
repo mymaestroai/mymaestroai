@@ -122,5 +122,5 @@ test('mobile: the same notices in the open chat, and a chat-only Compress now me
 });
 
 test('service worker cache bumped to v18', () => {
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v59';"));
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v60';"));
 });
