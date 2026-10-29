@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **On the phone, Activity moved into the ⋮ menu.** The Activity button in the bottom bar was rarely needed and easy to tap by accident. It now sits in the ⋮ menu, with its count of new events beside it, and the bottom bar keeps Agents and Chat.
+
 - **The chat fills the window, and nothing pushes it sideways.** On the desktop, the messages and the message box were held to 1200 px in the middle of the window, so a wide screen showed broad empty margins; they now use the full width at every size, with a margin that grows with the window (12 px on a phone to 32 px on a wide screen). One setting, `--chat-max-width`, holds the width, so a "limit the width" option later is one value. Wide tables, long code lines, long links and long unbroken words now scroll or wrap inside their own message, and the chat scrolls only up and down: before, a wide reply let the desktop page at phone width slide left and right while you scrolled (the chat was 1046 px wide on a 390 px screen). The phone page's chat is locked the same way.
 
 - **On a phone, the desktop page's header no longer overlaps itself.** The ☰ now has a row of its own in the open agent list, with "My Maestro AI" and the version line below it instead of under it. In a chat, the top row holds the ☰ and the Files, Schedule, Settings, Help and ⋯ buttons, and the open agents sit on their own row below, which scrolls sideways when many are open; every header button is at least 36 px.

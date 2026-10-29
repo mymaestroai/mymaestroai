@@ -1667,9 +1667,11 @@ function updateDots() {
   const c = $('chat-unread');
   c.textContent = total > 99 ? '99+' : String(total);
   c.classList.toggle('on', total > 0);
-  const a = $('act-unread');
-  a.textContent = actUnseen > 99 ? '99+' : String(actUnseen);
-  a.classList.toggle('on', actUnseen > 0 && screen !== 'activity');
+  const a = $('act-unread');   // the count next to Activity in the ⋮ menu
+  if (a) {
+    a.textContent = actUnseen > 99 ? '99+' : String(actUnseen);
+    a.classList.toggle('on', actUnseen > 0 && screen !== 'activity');
+  }
   // Actions waiting for approval (any agent): amber count on the Agents tab.
   const ap = $('agents-approvals');
   if (ap) { ap.textContent = String(approvals.size); ap.classList.toggle('on', approvals.size > 0); }
@@ -1681,7 +1683,7 @@ function show(name) {
   screen = name;
   for (const s of ['agents', 'chat', 'activity']) {
     $(`screen-${s}`).classList.toggle('active', s === name);
-    $(`tab-${s}`).classList.toggle('active', s === name);
+    $(`tab-${s}`)?.classList.toggle('active', s === name);   // Activity has no tab: it opens from the ⋮ menu
   }
   $('menu').classList.remove('open');
   if (name === 'agents') renderAgents();
@@ -4374,7 +4376,8 @@ async function paintPush() {
 function wire() {
   $('tab-agents').addEventListener('click', () => { navigate('agents'); if (approvals.size && approvalsHidden) { approvalsHidden = false; paintApprovals(); } });
   $('tab-chat').addEventListener('click', () => navigate('chat'));
-  $('tab-activity').addEventListener('click', () => navigate('activity'));
+  $('menu-activity')?.addEventListener('click', (e) => { e.preventDefault(); navigate('activity'); });   // a #activity link: one history entry
+  $('tab-activity')?.addEventListener('click', () => navigate('activity'));   // a page cached before the move still has the tab
   $('chat-back').addEventListener('click', goBackFromChat);
   $('agents-refresh').addEventListener('click', loadAgents);
   $('activity-refresh').addEventListener('click', loadActivityExtras);
