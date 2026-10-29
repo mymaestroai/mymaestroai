@@ -383,6 +383,10 @@
   #menu #menu-about { flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; padding-top: 6px; padding-bottom: 6px; }
   .menu-version { font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; gap: 5px; }
   .menu-version:empty { display: none; }
+  /* Activity lives in the menu (it was a bottom tab, easy to hit by accident): its count of new events sits on the right. */
+  #menu #menu-activity { justify-content: space-between; gap: 10px; }
+  #menu .menu-count { min-width: 18px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; display: none; align-items: center; justify-content: center; }
+  #menu .menu-count.on { display: inline-flex; }
   .menu-version.experimental { color: var(--purple); }
   .menu-version.other { color: var(--blue); }
   .hv-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
@@ -559,8 +563,11 @@
   <nav id="tabbar">
     <button id="tab-agents" class="active"><span class="ico">&#x1F465;</span>Agents<span class="tabdot warn" id="agents-approvals" title="Actions waiting for your approval"></span></button>
     <button id="tab-chat"><span class="ico">&#x1F4AC;</span>Chat<span class="tabdot" id="chat-unread"></span></button>
-    <button id="tab-activity"><span class="ico">&#x26A1;</span>Activity<span class="tabdot" id="act-unread"></span></button>
   </nav>
+  <!-- Activity moved into the ⋮ menu. This invisible stand-in keeps a mobile.js from before the move working if the
+       phone pairs this page with a cached older script (it looks the tab up by id); the menu item is a plain #activity
+       link, which that script also follows (it routes every history step through routeFromHash). -->
+  <button id="tab-activity" hidden aria-hidden="true" tabindex="-1"></button>
 
   <div id="menu">
     <div id="menu-credit" hidden></div>
@@ -573,6 +580,7 @@
     <button id="menu-compact" class="chat-only">&#x2699; Compress now</button>
     <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>
     <div id="menu-2fa-note" hidden>Two-factor is required for admins: set it up under Security</div>
+    <a id="menu-activity" href="#activity"><span>&#x26A1; Activity</span><span class="menu-count" id="act-unread"></span></a>
     <button id="menu-files">&#x1F4C1; Files</button>
     <button id="menu-profile">&#x1F464; Profile</button>
     <button id="menu-security">&#x1F512; Security</button>

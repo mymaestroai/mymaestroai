@@ -7,11 +7,20 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
 
-test('mobile.html links the manifest and has the three tabs', () => {
+test('mobile.html links the manifest and has the two tabs; Activity is in the ⋮ menu', () => {
   const html = read('mobile.html');
   assert.match(html, /<link rel="manifest" href="\/manifest\.json">/);
-  for (const id of ['tab-agents', 'tab-chat', 'tab-activity']) assert.ok(html.includes(`id="${id}"`), id);
+  const bar = html.slice(html.indexOf('<nav id="tabbar">'), html.indexOf('</nav>', html.indexOf('<nav id="tabbar">')));
+  assert.deepStrictEqual([...bar.matchAll(/<button id="(tab-[a-z]+)"/g)].map(m => m[1]), ['tab-agents', 'tab-chat'], 'Agents and Chat only: Activity was easy to tap by accident');
+  const menu = html.slice(html.indexOf('<div id="menu">'), html.indexOf('</div>', html.indexOf('id="menu-restart"')));
+  assert.ok(menu.includes('<a id="menu-activity" href="#activity"><span>&#x26A1; Activity</span><span class="menu-count" id="act-unread"></span></a>'), 'Activity, with its count of new events: a plain #activity link, which a script from before the move follows too');
+  assert.ok(menu.indexOf('id="menu-activity"') < menu.indexOf('id="menu-files"'));
+  assert.ok(html.includes('</nav>\n  <!-- Activity moved into the ⋮ menu.') && html.includes('<button id="tab-activity" hidden aria-hidden="true" tabindex="-1"></button>'), 'an invisible stand-in for scripts from before the move, outside the bar');
   assert.ok(html.includes('src="mobile.js"'));
+  const js = read('mobile.js');
+  assert.ok(js.includes("$('menu-activity')?.addEventListener('click', (e) => { e.preventDefault(); navigate('activity'); });"), 'the current script handles the tap itself: one history entry');
+  assert.ok(js.includes("window.addEventListener('popstate', (e) => applyRoute(e.state || routeFromHash()));") && js.includes("const h = location.hash || '';"), 'every history step is routed from the hash (how an older script reaches the link)');
+  assert.ok(js.includes("$(`tab-${s}`)?.classList.toggle('active', s === name);"), 'switching screens copes with Activity having no tab');
 });
 
 test('server.js maps /mobile to mobile.html and serves .webmanifest', () => {
