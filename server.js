@@ -550,7 +550,19 @@ async function handleHttpRequest(req, res) {
       // accounts: false = no admin account exists yet (an updated older install): no login, multi-user features off.
       const out = { user: u, isAdmin, accounts: hubAuth.hasUsers() };
       if (isAdmin) { const oe = access.ownerEntries(await getAgents(), hubAuth.listUsers()); out.owners = oe.owners; out.infraCount = oe.infraCount; }
+      out.timeZone = u ? require('./lib/timezone').zoneForUser(u.id) : require('./lib/timezone').hubZone();   // what this person's agents use
       return jsonResponse(res, 200, out);
+    }
+    // This person's time zone (lib/timezone): the page in use reports its own ({tz, auto: true}; the zone follows the
+    // device unless pinned); the Profile pins one ({tz, pinned: true}) or follows the device again ({tz, pinned: false}).
+    if (pathname === '/api/me/timezone' && req.method === 'POST') {
+      if (!req.hubUser) return jsonResponse(res, 401, { error: 'Sign in first' });
+      let body = {};
+      try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
+      const tz = typeof body.tz === 'string' && body.tz.trim() ? body.tz.trim() : null;
+      const r = hubAuth.setTimeZone(req.hubUser.id, tz, { auto: body.auto === true, pinned: body.pinned === true });
+      if (!r.ok) return jsonResponse(res, 400, { error: r.error });
+      return jsonResponse(res, 200, { ok: true, changed: r.changed, user: r.user, timeZone: require('./lib/timezone').zoneForUser(req.hubUser.id) });
     }
     // ── Users (admin) ──
     if (pathname === '/api/users' && req.method === 'GET') {
@@ -1168,6 +1180,10 @@ async function handleHttpRequest(req, res) {
 
     // ── Chat Routes ─────────────────────────────────────────────────
     if (pathname === '/api/chat/stream' && req.method === 'POST') {
+      // The page sends its device's zone with each message (lib/timezone): saved before the turn reads it, so the first
+      // message after travelling is already in the new local time. Ignored while the person has pinned a zone.
+      const deviceZone = req.headers['x-hub-time-zone'];
+      if (req.hubUser && typeof deviceZone === 'string' && deviceZone) { try { hubAuth.setTimeZone(req.hubUser.id, deviceZone.trim(), { auto: true }); } catch {} }
       const body = stripHubOnlyChatFields(JSON.parse(await readBody(req)), req);
       return handleChatStream(body, res);
     }

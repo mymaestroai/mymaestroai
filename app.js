@@ -54,6 +54,39 @@
       if (!window.__ucTimer) window.__ucTimer = setInterval(() => paintUpdateCard().catch(() => {}), 30 * 60 * 1000);
       return window.hubMe;
     }
+    // The time zone this person's agents use follows the device they are using (lib/timezone). The page reports its
+    // zone on the first tap or key after it opens or comes back into view, then at most every 10 minutes while in use,
+    // so a page that reloads by itself where nobody is looking (after a restart) doesn't move it. The hub ignores the
+    // reports while a zone is pinned in the Profile.
+    const TZ_REPORT_EVERY_MS = 10 * 60 * 1000;
+    let tzReportedAt = 0;
+    let tzChoice = 0;   // counts choices in the Profile: an older report's late answer must not undo one
+    let tzSaving = false;   // a choice is being saved: the list stays disabled, also in a Profile closed and opened again
+    function deviceTimeZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } }
+    function reportTimeZone() {
+      const tz = deviceTimeZone();
+      const me = window.hubMe;
+      if (!tz || !me || !me.user || document.visibilityState !== 'visible') return;
+      if (Date.now() - tzReportedAt < TZ_REPORT_EVERY_MS) return;
+      tzReportedAt = Date.now();
+      const choice = tzChoice;
+      fetch('/api/me/timezone', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tz, auto: true }) })
+        .then(r => { if (r.status >= 500) throw new Error(`HTTP ${r.status}`); return r.ok ? r.json() : null; })   // a hub error: try again at the next tap
+        .then(d => { if (d && d.user && window.hubMe && choice === tzChoice) { window.hubMe.user = { ...window.hubMe.user, ...d.user }; window.hubMe.timeZone = d.timeZone; } })
+        .catch(() => { tzReportedAt = 0; });
+    }
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tzReportedAt = 0; });
+    // A chat request carries the device's zone only when it carries a message the person just sent from this page (the
+    // send functions set tzSentAt; one request per send, within a minute), never the page's own follow-ups: a group
+    // discussion's next speaker, the synthesis, an orchestration's later calls, a retry.
+    let tzSentAt = 0;
+    function zoneHeader() {
+      const tz = deviceTimeZone();
+      if (!tz || !tzSentAt || Date.now() - tzSentAt > 60 * 1000) return {};
+      tzSentAt = 0;
+      return { 'X-Hub-Time-Zone': tz };
+    }
+    for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, reportTimeZone, { capture: true, passive: true });
     // An install updated from before multi-user has provider keys but no admin account, so the setup wizard never
     // asked for one: the hub runs with no login and every multi-user feature off. Say so, once per page, with the link.
     function paintNoAccountsNotice() {
@@ -204,6 +237,75 @@
       document.body.appendChild(overlay);
       paintTwoFactor();
       loadSessionsInfo();
+    }
+    // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
+    // use. Security keeps password, two-factor and sessions.
+    function openProfileDialog() {
+      toggleAccountMenu(false);
+      document.getElementById('profile-overlay')?.remove();
+      const me = window.hubMe;
+      if (!me || !me.user) return;
+      const overlay = document.createElement('div');
+      overlay.className = 'question-overlay';
+      overlay.id = 'profile-overlay';
+      overlay.innerHTML = `
+        <div class="question-modal security-modal profile-modal">
+          <h3>Profile</h3>
+          <div class="sec-section">
+            <div class="sec-title" id="prof-name"></div>
+            <div class="sec-hint" id="prof-login"></div>
+          </div>
+          <div class="sec-section">
+            <div class="sec-title">Time zone</div>
+            <div class="sec-hint" id="prof-tz-hint"></div>
+            <select id="prof-tz" onchange="chooseTimeZone(this)" aria-label="Time zone your agents use"></select>
+            <div class="sec-msg" id="prof-tz-msg"></div>
+          </div>
+          <div class="sec-actions"><button class="sec-btn" onclick="dialogRequestClose(this)">Close</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      document.getElementById('prof-name').textContent = me.user.name || me.user.login;
+      document.getElementById('prof-login').textContent = `Signed in as ${me.user.login} · ${me.user.role === 'admin' ? 'admin' : 'member'}`;
+      paintTimeZone();
+    }
+    // Which zone the agents use for "now" and every time they show: the device's (it follows you), or one pinned here.
+    function paintTimeZone() {
+      const sel = document.getElementById('prof-tz'), hint = document.getElementById('prof-tz-hint');
+      const me = window.hubMe;
+      if (!sel || !hint || !me || !me.user) return;
+      const device = deviceTimeZone();
+      const pinned = !!me.user.timeZonePinned;
+      const zone = me.timeZone || me.user.timeZone || device || 'UTC';
+      let zones = [];
+      try { zones = Intl.supportedValuesOf('timeZone'); } catch { zones = []; }
+      if (!zones.includes(zone)) zones.unshift(zone);
+      let now = '';
+      try { now = new Date().toLocaleTimeString([], { timeZone: zone, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }); } catch { now = ''; }
+      sel.innerHTML = `<option value="">Follow this device${device ? ` (${hubEsc(device.replace(/_/g, ' '))})` : ''}</option>`
+        + zones.map(z => `<option value="${hubEsc(z)}">${hubEsc(z.replace(/_/g, ' '))}</option>`).join('');
+      sel.value = pinned ? zone : '';
+      sel.disabled = tzSaving;
+      hint.textContent = `Your agents use ${zone.replace(/_/g, ' ')}${now ? ` (now ${now})` : ''}${pinned ? ', pinned wherever you are.' : ', following the device you use.'}`;
+      try { dialogGuard.markLoaded(sel); } catch { /* no guard on this page */ }
+    }
+    async function chooseTimeZone(sel) {
+      if (tzSaving) { paintTimeZone(); return; }   // one choice at a time: a second one waits until this is saved
+      const tz = sel.value;
+      tzChoice++;
+      tzSaving = true;
+      sel.disabled = true;
+      const body = tz ? { tz, pinned: true } : { tz: deviceTimeZone() || null, pinned: false };
+      let error = '';
+      try {
+        const r = await fetch('/api/me/timezone', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        window.hubMe.user = { ...window.hubMe.user, ...d.user };
+        window.hubMe.timeZone = d.timeZone;
+      } catch (e) { error = e.message || 'failed'; }
+      tzSaving = false;
+      paintTimeZone();
+      secMsg('prof-tz-msg', error ? `Not saved: ${error}` : 'Saved.', !error);
     }
     function paintTwoFactor(stage) {
       const box = document.getElementById('sec-2fa');
@@ -7045,6 +7147,7 @@
 
     // Solo chat - multi-provider LLM routing (with retry logic)
     async function sendSoloMessage(chatId, retryCount = 0) {
+      if (!retryCount) tzSentAt = Date.now();   // the person's own send: its request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
       const content = input.value.trim();
@@ -7120,7 +7223,7 @@
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controller.signal,
           body: JSON.stringify({
             agent: chat.agent,
@@ -7238,6 +7341,7 @@
     
     // Group chat - free flowing
     async function sendGroupMessage(chatId) {
+      tzSentAt = Date.now();   // the person's own send: the first speaker's request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
       const content = input.value.trim();
@@ -7489,7 +7593,7 @@
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controllers[chat.summarizer.name].signal,
           body: JSON.stringify({ agent: chat.summarizer.name, message: synthPrompt, sessionId: 'new' })
         });
@@ -7574,7 +7678,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controllers[agent.name].signal,
           body: JSON.stringify({ agent: agent.name, message: prompt, sessionId: 'new' })
         });
@@ -11642,6 +11746,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     
     async function sendOrchTask(chatId, initialTask = null) {
+      tzSentAt = Date.now();   // the person's own send: the first request carries this device's zone (zoneHeader)
       console.log('sendOrchTask called with chatId:', chatId, 'initialTask:', initialTask);
       const chat = chats[chatId];
       if (!chat) {
@@ -11907,7 +12012,7 @@ Report what you found, did, or discovered.`;
 
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           credentials: 'include',
           body: JSON.stringify(fetchBody)
         });

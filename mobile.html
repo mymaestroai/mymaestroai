@@ -392,18 +392,19 @@
   #about-sheet .about-chip { margin-left: 6px; padding: 0 7px; border: 1px solid currentColor; border-radius: 8px; }
   #about-sheet .about-chip.stable { color: var(--success); }
   #about-sheet .about-warn { color: var(--warning); display: inline-flex; align-items: center; gap: 4px; }
-  #security-sheet { width: min(94vw, 420px); max-height: 88vh; overflow-y: auto; }
-  #security-sheet h3 { margin-bottom: 8px; }
-  #security-sheet .sec-section { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
-  #security-sheet .sec-title { font-weight: 600; }
-  #security-sheet .sec-hint { font-size: 13px; color: var(--text-dim); }
-  #security-sheet input { width: 100%; min-height: 44px; padding: 0 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; font-size: 16px; }
-  #security-sheet .sec-actions { display: flex; gap: 8px; justify-content: flex-end; }
-  #security-sheet .sec-actions button { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); }
-  #security-sheet .sec-actions button.go { background: var(--accent); color: #fff; }
-  #security-sheet .sec-actions button.danger { color: var(--error); }
-  #security-sheet .sec-msg { min-height: 1em; font-size: 13px; color: var(--error); }
-  #security-sheet .sec-msg.ok { color: var(--success); }
+  #security-sheet, #profile-sheet { width: min(94vw, 420px); max-height: 88vh; overflow-y: auto; }
+  #security-sheet h3, #profile-sheet h3 { margin-bottom: 8px; }
+  #security-sheet .sec-section, #profile-sheet .sec-section { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+  #security-sheet .sec-title, #profile-sheet .sec-title { font-weight: 600; }
+  #security-sheet .sec-hint, #profile-sheet .sec-hint { font-size: 13px; color: var(--text-dim); }
+  #security-sheet input, #profile-sheet input { width: 100%; min-height: 44px; padding: 0 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; font-size: 16px; }
+  #profile-sheet select { width: 100%; min-height: 44px; padding: 0 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; font-size: 16px; }
+  #security-sheet .sec-actions, #profile-sheet .sec-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #security-sheet .sec-actions button, #profile-sheet .sec-actions button { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); }
+  #security-sheet .sec-actions button.go, #profile-sheet .sec-actions button.go { background: var(--accent); color: #fff; }
+  #security-sheet .sec-actions button.danger, #profile-sheet .sec-actions button.danger { color: var(--error); }
+  #security-sheet .sec-msg, #profile-sheet .sec-msg { min-height: 1em; font-size: 13px; color: var(--error); }
+  #security-sheet .sec-msg.ok, #profile-sheet .sec-msg.ok { color: var(--success); }
   #security-sheet .sec-qr { align-self: center; background: #fff; padding: 4px; border-radius: 8px; line-height: 0; }
   #security-sheet .sec-secret { word-break: break-all; padding: 8px 10px; background: var(--bg-input); border-radius: 8px; font-size: 13px; user-select: all; }
   #security-sheet .sec-codes { margin: 0; padding: 10px; background: var(--bg-input); border-radius: 8px; font-size: 14px; columns: 2; user-select: all; }
@@ -571,6 +572,7 @@
     <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>
     <div id="menu-2fa-note" hidden>Two-factor is required for admins: set it up under Security</div>
     <button id="menu-files">&#x1F4C1; Files</button>
+    <button id="menu-profile">&#x1F464; Profile</button>
     <button id="menu-security">&#x1F512; Security</button>
     <a id="menu-help" href="/help">&#x2753; Help</a>
     <a id="menu-users" href="/users" hidden>&#x1F465; Users</a>
@@ -585,6 +587,7 @@
   <dialog id="confirm"><p id="confirm-text"></p><div class="btns"><button id="confirm-no">Cancel</button><button id="confirm-yes" class="go">Clear</button></div></dialog>
   <dialog id="pacing-confirm"><p id="pacing-text"></p><div class="btns"><button id="pacing-no">Cancel</button><button id="pacing-yes" class="go accent">Resume</button></div></dialog>
   <dialog id="approval-sheet"></dialog>
+  <dialog id="profile-sheet"></dialog>
   <dialog id="security-sheet"></dialog>
   <dialog id="files-sheet" data-no-dirty></dialog>
   <dialog id="recall-sheet" data-no-dirty></dialog>
