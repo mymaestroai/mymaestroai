@@ -450,14 +450,6 @@
       if (!r.ok) throw Object.assign(new Error(d.error || `HTTP ${r.status}`), { code: d.code, status: r.status, body: d });
       return d;
     }
-    // Six random words from the EFF list (the server picks them): fills both password boxes and shows them to write down.
-    async function bkSuggest(first, second, note) {
-      try {
-        const { passphrase } = await bkApi('/api/backups/suggest-passphrase', {});
-        for (const id of [first, second]) { const el = document.getElementById(id); if (el) { el.value = passphrase; el.type = 'text'; } }
-        const n = document.getElementById(note); if (n) n.textContent = `Suggested: "${passphrase}". Write it down or keep it in a password manager before you go on.`;
-      } catch (e) { alert(e.message); }
-    }
     async function loadBackups() {
       const el = document.getElementById('bk-body'); if (!el) return;
       try { bkState = await bkApi('/api/backups', undefined, 'GET'); }
@@ -470,8 +462,8 @@
       if (!s.key.configured) {
         el.innerHTML = `<div class="bk-strip bk-warn"><span class="bk-strip-text">Backups are off. Choose a backup password to turn them on.</span></div>
           <div class="st-row"><label>Backup password</label><input type="password" id="bk-pw1" autocomplete="new-password" placeholder="at least 12 characters"></div>
-          <div class="st-row"><label>Again</label><input type="password" id="bk-pw2" autocomplete="new-password"><button class="st-test-btn" onclick="bkSuggest('bk-pw1', 'bk-pw2', 'bk-msg')">Suggest one</button></div>
-          <div class="st-hint">A few random words work well. It is never stored. Next you get a recovery key, which opens every backup if the password is ever forgotten.</div>
+          <div class="st-row"><label>Again</label><input type="password" id="bk-pw2" autocomplete="new-password"></div>
+          <div class="st-hint">A few random words work well. It isn't stored anywhere: if you forget it, your backups can't be opened.</div>
           <div class="st-row"><label>Account password</label><input type="password" id="bk-acct" autocomplete="current-password" placeholder="your sign-in password">${window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled ? '<input type="text" id="bk-code" inputmode="numeric" autocomplete="one-time-code" placeholder="two-factor code" style="flex:0 0 130px">' : ''}</div>
           <div class="st-row"><label></label><button class="st-test-btn bk-primary" onclick="setupBackups(this)">Turn on backups</button><span id="bk-msg" class="bk-msg"></span></div>`;
         stSum('backups', 'last', 'Backups off');
@@ -509,7 +501,7 @@
       if (s.iCloud && !(s.folders || []).some(f => f.dir === s.iCloud)) html += `<div class="bk-place"><span class="bk-off">○</span><b>iCloud Drive</b><span class="bk-dim">${esc(s.iCloud)}</span><button class="st-test-btn" onclick="addBackupFolder(true, this)">Use it</button></div>`;
       html += `<div class="bk-place"><span class="bk-off">+</span><b>Another folder</b><input type="text" id="bk-folder" placeholder="full path: a cloud-synced folder, an external disk, a NAS" aria-label="Another backup folder"><button class="st-test-btn" onclick="addBackupFolder(false, this)">Add</button></div>`;
       html += `<div class="st-hint">To keep copies off this computer, add a folder your cloud app keeps in sync (iCloud Drive, Google Drive, Dropbox or OneDrive): every backup is copied there and the app uploads it. Or download a backup (⬇) and save it anywhere.</div>`;
-      html += `<div class="bk-place">🔒 <span class="bk-held-what">Encrypted with your backup password. The recovery key you saved also opens every backup.</span><button class="st-test-btn" onclick="bkPasswordDialog('change')">Change password</button><button class="st-test-btn" onclick="bkShowKeyDialog()">Show recovery key</button><button class="st-test-btn" onclick="bkPasswordDialog('leaked')">It may have leaked…</button></div>`;
+      html += `<div class="bk-place">🔒 <span class="bk-held-what">Encrypted with your backup password. If you forget it, your backups can't be opened, unless you keep the spare key (Show recovery key).</span><button class="st-test-btn" onclick="bkPasswordDialog('change')">Change password</button><button class="st-test-btn" onclick="bkShowKeyDialog()">Show recovery key</button><button class="st-test-btn" onclick="bkPasswordDialog('leaked')">It may have leaked…</button></div>`;
       html += `<div class="bk-sub">Recent backups</div>`;
       const list = s.backups || [];
       if (!list.length) html += `<div class="bk-note">None yet.</div>`;
@@ -568,8 +560,7 @@
       if (a !== b) { msg.textContent = 'The two passwords differ.'; return; }
       btn.disabled = true; msg.textContent = 'Making your backup key…';
       try {
-        const r = await bkApi('/api/backups/setup', { newBackupPassword: a, password: (document.getElementById('bk-acct') || {}).value || '', code: (document.getElementById('bk-code') || {}).value || '' });
-        showRecoveryKey(r.recoveryKey);
+        await bkApi('/api/backups/setup', { newBackupPassword: a, password: (document.getElementById('bk-acct') || {}).value || '', code: (document.getElementById('bk-code') || {}).value || '' });
         loadBackups();
       } catch (e) { msg.textContent = e.message; btn.disabled = false; }
     }
@@ -590,7 +581,6 @@
         <a href="#" class="bk-link" id="bk-pw-switch">${preferRecovery ? 'Use the current password instead' : 'Use the recovery key instead'}</a>
         <label class="bk-label">New backup password</label><input type="password" id="bk-pw-new1" autocomplete="new-password" placeholder="at least 12 characters">
         <label class="bk-label">Again</label><input type="password" id="bk-pw-new2" autocomplete="new-password">
-        <a href="#" class="bk-link" onclick="bkSuggest('bk-pw-new1', 'bk-pw-new2', 'bk-pw-msg'); return false">Suggest a passphrase</a>
         ${bkAccountRow('bk-pw')}
         <div class="bk-msg" id="bk-pw-msg"></div>
         <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn${leaked ? ' bk-danger' : ''}" id="bk-pw-go">${leaked ? 'Make a new key' : 'Change password'}</button></div></div>`);
@@ -616,17 +606,15 @@
     // Step two of a new key: save the new recovery key, then re-encrypt or delete the backups that use the old key.
     function bkRotateKey(r, secrets) {
       const body = document.getElementById('bk-pw-body'); if (!body) return;
-      body.innerHTML = `<h3>🔑 Your new recovery key</h3><p class="bk-p">The new key is saved. Before anything else changes, save this recovery key. It replaces the old one, which stops opening your backups once they are re-encrypted.</p>
+      body.innerHTML = `<h3>✓ The new key is saved</h3><p class="bk-p">New backups use the new key and your new backup password. The backups you already have still use the old key until they are re-encrypted below. Optional: a spare key that opens the new-key backups if you ever forget the password.</p>
         <div class="bk-key" id="bk-rot-key"></div>
-        <label class="bk-check"><input type="checkbox" id="bk-rot-saved"> I saved the new recovery key somewhere safe</label>
         ${r.waiting ? `<div class="bk-sub">Then the ${r.waiting} backup${r.waiting === 1 ? '' : 's'} that use${r.waiting === 1 ? 's' : ''} the old key</div>
         <label class="bk-check"><input type="radio" name="bk-rot-act" value="reencrypt" checked> Re-encrypt with the new key</label>
         <label class="bk-check"><input type="radio" name="bk-rot-act" value="delete"> Delete them</label>` : ''}
         <div class="bk-msg" id="bk-rot-msg"></div>
-        <div class="bk-actions"><button class="st-btn" id="bk-rot-go" disabled>Continue</button></div>`;
+        <div class="bk-actions"><button class="st-btn" id="bk-rot-go">Continue</button></div>`;
       body.querySelector('#bk-rot-key').textContent = r.recoveryKey;
       const go = body.querySelector('#bk-rot-go');
-      body.querySelector('#bk-rot-saved').onchange = (e) => { go.disabled = !e.target.checked; };
       go.onclick = () => bkFinishRotation(secrets, body, go, body.querySelector('#bk-rot-msg'));
     }
     async function bkFinishRotation(secrets, body, go, msg) {
@@ -698,16 +686,6 @@
       o.innerHTML = `<div class="question-modal bk-modal ${cls}" role="dialog" aria-modal="true">${inner}</div>`;
       document.body.appendChild(o);
       return o;
-    }
-    function showRecoveryKey(key) {
-      const o = bkOverlay('bk-key-overlay', `<h3>🔑 Your recovery key</h3>
-        <p class="bk-p">It opens every backup, even if the backup password is forgotten, and even without My Maestro (with the free <code>age</code> tool). This is the only time it is shown.</p>
-        <div class="bk-key" id="bk-key-text"></div>
-        <div class="bk-actions" style="justify-content:flex-start;border:0;margin:0;padding:0"><button class="st-test-btn" onclick="navigator.clipboard.writeText(document.getElementById('bk-key-text').textContent).then(() => { this.textContent = 'Copied'; }, () => { this.textContent = 'Select it and copy'; })">Copy</button></div>
-        <p class="bk-p">Print it or keep it in a password manager, away from this computer. If both the password and this key are lost, nobody can open the backups.</p>
-        <label class="bk-check"><input type="checkbox" id="bk-key-saved" onchange="document.getElementById('bk-key-done').disabled = !this.checked"> I saved the recovery key somewhere safe</label>
-        <div class="bk-actions"><button class="st-btn" id="bk-key-done" disabled onclick="dialogRequestClose(this)">Done</button></div>`);
-      o.querySelector('#bk-key-text').textContent = key;
     }
     async function backUpNow(btn, now = false) {
       btn.disabled = true;
