@@ -1933,7 +1933,55 @@
       transition: opacity 0.3s;
     }
     .st-saved.show { opacity: 1; }
-    /* Settings groups (app.js groupSettings): the sections folded into six groups, closed until opened */
+    /* Settings → Backups and the restore dialog (app.js loadBackups, openRestoreDialog) */
+    .bk-body { font-size: 0.8rem; color: var(--text-secondary); }
+    .bk-strip { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin: 6px 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); }
+    .bk-strip.bk-ok { border-color: rgba(52, 199, 123, 0.45); background: rgba(52, 199, 123, 0.08); }
+    .bk-strip.bk-warn { border-color: rgba(245, 166, 35, 0.5); background: rgba(245, 166, 35, 0.08); }
+    .bk-strip.bk-bad { border-color: rgba(231, 76, 60, 0.55); background: rgba(231, 76, 60, 0.1); }
+    .bk-strip-text { flex: 1; line-height: 1.4; }
+    .bk-strip.bk-ok b { color: var(--success); }
+    .st-test-btn.bk-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .st-test-btn:disabled { opacity: 0.55; cursor: default; }
+    .bk-sub { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin: 14px 0 6px; font-weight: 600; }
+    .bk-note { font-size: 0.75rem; color: var(--text-dim); margin: 2px 0 8px; line-height: 1.4; }
+    .bk-place, .bk-held { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .bk-place b { color: var(--text); font-weight: 500; }
+    .bk-place input[type="text"] { flex: 1; min-width: 180px; padding: 5px 8px; font-size: 0.78rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+    .bk-held-what { flex: 1; min-width: 200px; }
+    .bk-dim { color: var(--text-dim); font-size: 0.74rem; overflow-wrap: anywhere; }
+    .bk-place .bk-dim { flex: 1; }
+    .bk-on { color: var(--success); width: 14px; text-align: center; }
+    .bk-off { color: var(--text-dim); width: 14px; text-align: center; }
+    .bk-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; margin-bottom: 6px; }
+    .bk-table th { text-align: left; font-weight: 500; color: var(--text-dim); padding: 4px 6px; border-bottom: 1px solid var(--border); }
+    .bk-table td { padding: 6px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
+    .bk-table td.bk-acts { text-align: right; white-space: nowrap; }
+    .bk-table td.bk-acts .st-test-btn { margin-left: 4px; }
+    .bk-tag { display: inline-block; font-size: 0.65rem; padding: 1px 6px; border-radius: 9px; border: 1px solid var(--border); color: var(--text-dim); margin-left: 4px; }
+    .bk-tag.bk-tag-warn { border-color: rgba(245, 166, 35, 0.6); color: #f5a623; }
+    .bk-msg { font-size: 0.76rem; color: var(--text-dim); min-height: 1em; margin: 6px 0; }
+    .bk-modal { max-width: 560px; }
+    .bk-modal .bk-p { font-size: 0.84rem; color: var(--text-secondary); margin: 0 0 10px; line-height: 1.45; }
+    .bk-modal .bk-label { display: block; font-size: 0.75rem; color: var(--text-dim); margin: 12px 0 4px; }
+    .bk-modal input[type="password"], .bk-modal input[type="text"], .bk-modal input[type="time"], .bk-modal input[type="number"] { width: 100%; box-sizing: border-box; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.86rem; }
+    .bk-modal input[type="time"], .bk-modal input[type="number"] { width: 140px; color-scheme: dark; }
+    .bk-modal input[type="number"] + .bk-p, .bk-modal input[type="time"] + .bk-p { margin-top: 12px; }
+    .bk-modal .bk-two { display: flex; gap: 8px; }
+    .bk-modal .bk-two input:nth-child(2) { flex: 0 0 130px; }
+    .bk-modal .bk-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .bk-modal .bk-key { font-family: ui-monospace, monospace; font-size: 0.8rem; padding: 10px; border: 1px dashed var(--accent); border-radius: 6px; color: var(--text); overflow-wrap: anywhere; user-select: all; margin: 4px 0 8px; }
+    .bk-modal .bk-check { display: flex; gap: 8px; align-items: center; font-size: 0.82rem; color: var(--text); margin-top: 8px; }
+    .bk-modal .bk-link { font-size: 0.76rem; color: var(--accent); display: inline-block; margin-top: 8px; }
+    .bk-modal.bk-restore { border-color: rgba(231, 76, 60, 0.5); }
+    .bk-modal .bk-danger-title { color: #ff9b8f; }
+    .bk-modal .bk-lost-title { font-size: 0.76rem; color: #ff9b8f; margin: 6px 0 4px; }
+    .bk-modal .bk-lost { margin: 0 0 10px 18px; font-size: 0.84rem; color: var(--text); line-height: 1.6; }
+    .bk-modal .bk-info { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.45; padding: 8px 10px; margin: 6px 0; border: 1px solid rgba(57, 135, 229, 0.35); background: rgba(57, 135, 229, 0.08); border-radius: 6px; }
+    .st-btn.bk-danger { background: #b03a2e; }
+    .st-btn.bk-danger:hover { background: #c94a3c; }
+    .st-btn:disabled { opacity: 0.5; cursor: default; }
+    /* Settings groups (app.js groupSettings): the sections folded into seven groups, closed until opened */
     .st-search { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
     .st-search input {
       flex: 1; padding: 7px 10px; font-size: 0.82rem; background: var(--bg-input);
