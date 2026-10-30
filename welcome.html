@@ -74,6 +74,12 @@
   .resume { font-size: 12px; color: var(--text-dim); margin: -6px 0 14px; line-height: 1.5; }
   .resume b { color: var(--text); font-weight: 600; }
   .skip { margin-top: 14px; text-align: center; }
+  .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+  .choice { text-align: left; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft); color: var(--text); cursor: pointer; }
+  .choice:hover { border-color: var(--accent); } .choice .t { display: block; font-weight: 600; font-size: 15px; } .choice .d { display: block; color: var(--text-dim); font-size: 13px; margin-top: 4px; }
+  @media (max-width: 480px) { .choices { grid-template-columns: 1fr; } }
+  input[type="file"] { width: 100%; padding: 10px; border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--bg-input); color: var(--text-dim); font-size: 14px; }
+  ul.notes { margin: 10px 0 0 18px; font-size: 13px; color: var(--text-dim); } ul.notes li { margin: 5px 0; }
 </style>
 </head>
 <body>
@@ -92,6 +98,51 @@
     <input type="text" id="code-in" autocomplete="off" spellcheck="false">
     <button class="primary" id="code-go">Continue</button>
     <div class="msg" id="code-msg"></div>
+  </section>
+
+  <!-- A new setup, or a backup brought back (lib/backup; only while no account exists) -->
+  <section id="s-start">
+    <h2>Welcome to My Maestro AI</h2>
+    <p class="sub">Start fresh, or bring back a setup you backed up.</p>
+    <div class="choices">
+      <button class="choice" id="start-new"><span class="t">Set up a new My Maestro</span><span class="d">Create your account, connect an AI and meet Maestro.</span></button>
+      <button class="choice" id="start-restore"><span class="t">Restore from a backup</span><span class="d">Everything comes back: accounts, agents, chats, files and keys.</span></button>
+    </div>
+  </section>
+  <section id="s-restore">
+    <h2>Restore from a backup</h2>
+    <p class="sub">Choose the backup file (my-maestro-ai-….age) from this computer, an external disk, or a cloud folder (iCloud Drive, Google Drive, Dropbox: download it to this computer first if it isn't synced here).</p>
+    <label for="r-file">Backup file</label>
+    <input type="file" id="r-file" accept=".age">
+    <div class="msg" id="r-file-msg"></div>
+    <div id="r-open" hidden>
+      <div id="r-pwbox"><label for="r-pw">Backup password</label><input type="password" id="r-pw" autocomplete="off"></div>
+      <div id="r-keybox" hidden><label for="r-key">Recovery key</label><input type="text" id="r-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
+      <p class="hint"><a href="#" class="link" id="r-switch">Use the recovery key instead</a></p>
+      <button class="primary" id="r-go">Open and check</button>
+    </div>
+    <div class="msg" id="r-msg"></div>
+    <p class="hint" style="margin-top:14px">Only restore a backup you made yourself: a backup brings its accounts, keys and agents with it. After the restore you sign in with the password and two-factor code from the backup.</p>
+    <div class="row"><button class="secondary" id="r-back">Back</button></div>
+  </section>
+  <section id="s-restore-confirm">
+    <h2 id="rc-title">Restore this backup?</h2>
+    <div class="msg" id="rc-checked"></div>
+    <ul class="notes" id="rc-notes"></ul>
+    <label for="rc-login">Sign in with an admin account from the backup</label>
+    <input type="email" id="rc-login" autocomplete="username" placeholder="email">
+    <input type="password" id="rc-pass" autocomplete="current-password" placeholder="password" style="margin-top:8px">
+    <input type="text" id="rc-code" inputmode="numeric" autocomplete="one-time-code" placeholder="two-factor code, if it was on" style="margin-top:8px">
+    <label for="rc-word">Type RESTORE to confirm</label>
+    <input type="text" id="rc-word" autocomplete="off" spellcheck="false">
+    <button class="primary" id="rc-go" disabled>Restore and restart</button>
+    <div class="msg" id="rc-msg"></div>
+    <div class="row"><button class="secondary" id="rc-cancel">Back</button></div>
+  </section>
+  <section id="s-restoring">
+    <h2><span class="spin"></span>Restoring your backup…</h2>
+    <p class="sub">My Maestro AI puts your backup in place and starts again. This page moves on to the sign-in by itself.</p>
+    <div class="msg" id="rs-msg"></div>
   </section>
 
   <!-- Step 1a: account -->
@@ -230,7 +281,7 @@
   let chosenModel = '';
 
   async function api(method, url, body) {
-    const init = { method, credentials: 'include', headers: {} };
+    const init = { method, credentials: 'include', headers: url.startsWith('/api/welcome/restore/') ? { 'X-Setup-Token': setupCode } : {} };
     if (body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
     let r; try { r = await fetch(url, init); } catch (e) { return { status: 0, body: { error: 'Could not reach My Maestro AI. Is it still running?' } }; }
     let j = {}; try { j = await r.json(); } catch { /* not JSON */ }
@@ -301,7 +352,7 @@
     const res = await api('GET', '/api/welcome/state' + (setupCode ? `?token=${encodeURIComponent(setupCode)}` : ''));
     if (res.status !== 200) { $('loading').textContent = errText(res, 'Could not reach My Maestro AI. Reload this page.'); return; }
     state = res.body;
-    if (!state.accounts) return show(state.codeOk ? 's-account' : 's-code', state.codeOk ? 1 : 0);
+    if (!state.accounts) return show(state.codeOk ? 's-start' : 's-code', 0);
     if (!state.signedIn) { location.replace('/login?next=' + encodeURIComponent('/welcome')); return; }
     if (!state.isAdmin) return show('s-member', 0);
     if (!state.totp) return startTotp();
@@ -316,8 +367,85 @@
     if (!c) return say('code-msg', 'Paste the setup code, or the whole setup link.');
     setupCode = c;
     const res = await api('GET', `/api/welcome/state?token=${encodeURIComponent(c)}`);
-    if (res.body && res.body.codeOk) { history.replaceState(null, '', `/welcome?token=${encodeURIComponent(c)}`); show('s-account', 1); }
+    if (res.body && res.body.codeOk) { history.replaceState(null, '', `/welcome?token=${encodeURIComponent(c)}`); show('s-start', 0); }
     else say('code-msg', 'That setup code is not right. Run "mymaestro setup-link" on the computer running My Maestro AI and use the link it shows.');
+  });
+
+  // ── Start fresh, or restore a backup (/api/welcome/restore/*: the setup code, and only while no account exists) ──
+  $('start-new').addEventListener('click', () => show('s-account', 1));
+  $('start-restore').addEventListener('click', () => show('s-restore', 0));
+  $('r-back').addEventListener('click', () => show('s-start', 0));
+  const size = (n) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
+  let restoreUpload = null, restorePrep = null;
+  $('r-file').addEventListener('change', async () => {
+    const f = $('r-file').files[0]; if (!f) return;
+    restoreUpload = null; $('r-open').hidden = true; clear('r-msg');
+    busy('r-file-msg', `Uploading ${f.name} (${size(f.size)})…`);
+    // in pieces of 8 MiB, the setup code in a header on each
+    const PIECE = 8 * 1024 * 1024;
+    let j = null, id = null, offset = 0;
+    try {
+      do {
+        const end = Math.min(f.size, offset + PIECE);
+        const q = new URLSearchParams({ offset: String(offset), done: end >= f.size ? '1' : '0', ...(id ? { id } : {}) });
+        const r = await fetch(`/api/welcome/restore/upload?${q}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/octet-stream', 'X-Setup-Token': setupCode }, body: f.slice(offset, end) });
+        j = await r.json().catch(() => ({}));
+        if (!r.ok) return say('r-file-msg', j.error === 'setup_code' ? 'The setup code is no longer right. Run "mymaestro setup-link" on that computer and open the link it shows.' : (j.error || 'That file could not be read as a backup.'));
+        id = j.uploadId; offset = end;
+        if (offset < f.size) busy('r-file-msg', `Uploading ${f.name}: ${Math.floor(offset * 100 / f.size)}%…`);
+      } while (offset < f.size);
+    } catch { return say('r-file-msg', 'Could not reach My Maestro AI. Is it still running?'); }
+    restoreUpload = j;
+    const l = j.labels || {};
+    say('r-file-msg', `✓ ${f.name} · ${size(j.size)}${l.created ? ` · made ${new Date(l.created).toLocaleString()}` : ''}${l.version ? ` by My Maestro AI ${l.version}` : ''}${l.agents != null ? ` · ${l.agents} agent${l.agents === 1 ? '' : 's'}` : ''} · 🔒 encrypted`, 'ok');
+    $('r-open').hidden = false; setTimeout(() => $('r-pw').focus(), 30);
+  });
+  $('r-switch').addEventListener('click', (e) => {
+    e.preventDefault();
+    const toKey = $('r-keybox').hidden; $('r-keybox').hidden = !toKey; $('r-pwbox').hidden = toKey;
+    $('r-switch').textContent = toKey ? 'Use the backup password instead' : 'Use the recovery key instead';
+  });
+  $('r-go').addEventListener('click', async () => {
+    if (!restoreUpload) return;
+    const useKey = !$('r-keybox').hidden, secret = useKey ? $('r-key').value.trim() : $('r-pw').value;
+    if (!secret) return say('r-msg', useKey ? 'Paste the recovery key.' : 'Type the backup password.');
+    $('r-go').disabled = true; busy('r-msg', 'Opening and checking every file… a large backup takes a few minutes.');
+    const res = await api('POST', '/api/welcome/restore/prepare', { setupToken: setupCode, uploadId: restoreUpload.uploadId, ...(useKey ? { recoveryKey: secret } : { backupPassword: secret }) });
+    $('r-go').disabled = false;
+    if (res.status !== 200) return say('r-msg', errText(res, 'The backup could not be opened.'));
+    clear('r-msg'); restorePrep = res.body; paintRestoreConfirm();
+  });
+  function paintRestoreConfirm() {
+    const b = restorePrep.backup || {}, c = b.counts || {}, rep = restorePrep.report || {};
+    $('rc-title').textContent = `Restore the backup from ${b.created ? new Date(b.created).toLocaleString() : 'that file'}?`;
+    say('rc-checked', `✓ Opened and checked: all ${c.files ?? '?'} files match · My Maestro AI ${b.version || '?'}${c.agents != null ? ` · ${c.agents} agent${c.agents === 1 ? '' : 's'}` : ''}${c.accounts != null ? ` · ${c.accounts} account${c.accounts === 1 ? '' : 's'}` : ''}`, 'ok');
+    const notes = [];
+    if (rep.pathsRewritten) notes.push(`Folder paths in ${rep.pathsRewritten} settings files were changed to this computer's.`);
+    if (rep.linksDropped && rep.linksDropped.length) notes.push(`${rep.linksDropped.length} links pointed outside the backup and are left out.`);
+    if (rep.usedRecoveryKey) notes.push('You used the recovery key, so automatic backups wait until you choose a new backup password (Settings → Backups).');
+    if (b.working && b.working.length) notes.push(`When the backup was made, ${b.working.join(', ')} ${b.working.length === 1 ? 'was' : 'were'} working: their last steps may be missing.`);
+    notes.push('After the restart, agents wait until you press Resume in Settings → Backups, and tasks that were due wait for Run or Skip.');
+    $('rc-notes').textContent = '';
+    for (const n of notes) { const li = document.createElement('li'); li.textContent = n; $('rc-notes').appendChild(li); }
+    $('rc-word').value = ''; $('rc-go').disabled = true; clear('rc-msg');
+    show('s-restore-confirm', 0);
+  }
+  $('rc-word').addEventListener('input', () => { $('rc-go').disabled = $('rc-word').value.trim() !== 'RESTORE'; });
+  $('rc-cancel').addEventListener('click', () => { restorePrep = null; show('s-restore', 0); });
+  $('rc-go').addEventListener('click', async () => {
+    $('rc-go').disabled = true; busy('rc-msg', 'Checking the sign-in…');
+    const res = await api('POST', '/api/welcome/restore/confirm', { setupToken: setupCode, id: restorePrep.id, confirm: $('rc-word').value.trim(), login: $('rc-login').value.trim(), password: $('rc-pass').value, code: $('rc-code').value.trim() });
+    if (res.status !== 200) { $('rc-go').disabled = false; return say('rc-msg', errText(res, 'The restore did not start.')); }
+    show('s-restoring', 0);
+    // The restored setup has accounts: once the hub answers with accounts, it is running.
+    const t0 = Date.now();
+    const poll = async () => {
+      const s = await api('GET', '/api/welcome/state');
+      if (s.status === 200 && s.body && s.body.accounts) { location.replace('/login'); return; }
+      if (Date.now() - t0 > 5 * 60 * 1000) { say('rs-msg', 'My Maestro AI has not come back after five minutes. On that computer, open a terminal and type: mymaestro status (then mymaestro logs).', 'warn'); return; }
+      setTimeout(poll, 2000);
+    };
+    setTimeout(poll, 4000);
   });
 
   // ── Step 1a: the account ──

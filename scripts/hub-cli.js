@@ -10,7 +10,9 @@
  *   mymaestro setup-link             the first-run Welcome link (until the first account exists)
  *   mymaestro update [--channel stable|experimental]   newest version of the channel, then restart (the Update button)
  *   mymaestro doctor                 security and setup checks (scripts/security-check.js)
- *   mymaestro backup [--to <dir>]    data, settings, agents and their memory (and the shared folders kept inside the install), in one archive
+ *   mymaestro backup [--to <dir>]    an encrypted backup of everything that makes this install yours (--setup: choose the backup password)
+ *   mymaestro backups                list the backups on this computer and in your backup folders
+ *   mymaestro restore <file|latest>  put a backup back: its password, what changes, then RESTORE (--recovery-key; --undo: the setup before)
  *   mymaestro reset-2fa <email>      turn off two-factor for an account (lost phone); it is set up again at next sign-in
  *   mymaestro service install|remove start by itself at boot (Linux) or login (Mac)
  *   mymaestro move-home [--yes]      move shared folders (share/, users/...) out of your home folder into the install; --yes does it
@@ -32,6 +34,42 @@ const svc = () => require(path.join(DIR, 'lib', 'service-manager')).createServic
 const out = (s = '') => process.stdout.write(s + '\n');
 const fail = (s, code = 1) => { process.stderr.write(s + '\n'); process.exit(code); };
 
+// A password prompt that doesn't echo what is typed.
+function askHidden(q) {
+  return new Promise((resolve) => {
+    const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    rl._writeToOutput = (str) => { if (str.includes(q)) process.stdout.write(q); };
+    rl.question(q, (a) => { rl.close(); process.stdout.write('\n'); resolve(a); });
+  });
+}
+
+function ask(q) {
+  return new Promise((resolve) => { const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout }); rl.question(q, (a) => { rl.close(); resolve(a); }); });
+}
+// What a prepared restore changes, in plain lines (the same facts as the warning in Settings → Backups).
+function restoreWarning(r) {
+  const b = r.backup || {}, rep = r.report || {}, s = r.summary;
+  const when = b.created ? new Date(b.created).toLocaleString() : 'an unknown date';
+  const lines = [`The backup is from ${when}: My Maestro AI ${b.version || '?'}, ${b.counts ? b.counts.files : '?'} files${b.label ? ` (${b.label})` : ''}.`];
+  if (b.working && b.working.length) lines.push(`Agents were working when it was made: ${b.working.join(', ')}. Their last steps may be missing.`);
+  if (s) {
+    if (s.messages) lines.push(`${s.messages} chat messages written since then are lost (${s.chatAgents.join(', ')}).`);
+    if (s.agentsAdded.length) lines.push(`Agents created since then go away: ${s.agentsAdded.join(', ')}.`);
+    if (s.agentsBack.length) lines.push(`Agents deleted since then come back: ${s.agentsBack.join(', ')}.`);
+    if (s.newerFiles) lines.push(`${s.newerFiles}${s.newerFilesCapped ? '+' : ''} files in workspaces and shared folders changed since then; they go back to the backup's copies.`);
+    if (s.jobs) lines.push(`${s.jobs} background jobs ran since then; their records go away.`);
+  }
+  if (rep.accounts && rep.accounts.disabled && rep.accounts.disabled.length) lines.push(`Accounts only in the backup come back turned off: ${rep.accounts.disabled.join(', ')}.`);
+  if (rep.accounts && rep.accounts.kept && rep.accounts.kept.length) lines.push('Accounts keep today\'s passwords, two-factor and sign-ins, and API tokens you revoked stay revoked. Provider keys, connected accounts and other settings go back to the backup\'s.');
+  if (r.summary && rep.keyStatus === 'replaced') lines.push('This backup was made with a backup key this install has replaced (perhaps because its password leaked). Restore it only if you made it yourself.');
+  if (r.summary && rep.keyStatus === 'other') lines.push('This backup was made with a different backup key than this install\'s (another computer, or a setup from before). Restore it only if you made it yourself.');
+  if (rep.linksDropped && rep.linksDropped.length) lines.push(`${rep.linksDropped.length} links pointed outside the backup and are left out.`);
+  if (rep.skipped && rep.skipped.length) lines.push(`${rep.skipped.length} files were left out of this backup when it was made (changing, unreadable, or leading outside their folder).`);
+  if (rep.unsettled && rep.unsettled.length) lines.push(`${rep.unsettled.length} files were changing while the backup was made; they may be a little older.`);
+  lines.push('After the restore, agents and schedules wait until you press Resume (Settings → Backups); tasks that came due wait for Run or Skip.');
+  lines.push('Today\'s setup is kept for 7 days: mymaestro restore --undo puts it back.');
+  return lines;
+}
 function envPort() {
   try {
     const m = fs.readFileSync(path.join(DIR, '.env'), 'utf8').match(/^\s*PORT\s*=\s*(\d+)/m);
@@ -149,34 +187,91 @@ const commands = {
     const c = await require(path.join(DIR, 'lib', 'welcome')).createWelcome({ dataDir: path.join(DIR, 'data') }).checkClaude({ timeoutMs: 90000 });
     out(c.ok ? 'Claude sign-in: working.' : `Claude sign-in: ${c.error}${c.state === 'signed-out' ? '\n  Fix: run "claude" in a terminal, sign in, then type /exit.' : ''}`);
   },
-  backup() {
-    const destDir = path.resolve(arg('to', path.join(os.homedir(), 'MyMaestroAI-backups')));
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mymaestro-backup-'));
-    const stage = path.join(tmp, `my-maestro-ai-${stamp}`);
-    fs.mkdirSync(stage, { recursive: true, mode: 0o700 });
-    const Database = require(path.join(DIR, 'node_modules', 'better-sqlite3'));
-    const skip = (rel) => /^data\/(local-models\/(llama\.cpp|bin|models)|modules\/[^/]+\/pkg|jobs\/[^/]+\/out\.log)/.test(rel) || /-(wal|shm)$/.test(rel) || rel.endsWith('.sock');
-    const pending = [];
-    function copyTree(rel) {
-      const src = path.join(DIR, rel); let st; try { st = fs.lstatSync(src); } catch { return; }
-      if (skip(rel)) return;
-      if (st.isSymbolicLink()) return;
-      if (st.isDirectory()) { fs.mkdirSync(path.join(stage, rel), { recursive: true }); for (const f of fs.readdirSync(src)) copyTree(path.join(rel, f)); return; }
-      if (/\.db$/.test(rel)) { pending.push(rel); return; }
-      fs.copyFileSync(src, path.join(stage, rel));
+  // Backups (lib/backup): encrypted with the backup key from Settings → Backups; --setup chooses the backup password here.
+  async backup() {
+    const keys = require(path.join(DIR, 'lib', 'backup', 'keys'));
+    const placesMod = require(path.join(DIR, 'lib', 'backup', 'places'));
+    const { HUB_HOME } = require(path.join(DIR, 'lib', 'hub-home'));
+    if (flag('--setup')) {
+      if (await up()) fail('Stop My Maestro first (mymaestro stop), or choose the backup password in Settings → Backups while it runs.');
+      const before = keys.status();
+      if (before.configured && !flag('--replace')) fail('Backups are already set up. Change the password in Settings → Backups. If both the password and the recovery key are lost: mymaestro backup --setup --replace');
+      out('Choose a backup password: at least 12 characters; a few random words work well. It is never stored.');
+      const pw = await askHidden('Backup password: ');
+      try { keys.checkPassword(pw); } catch (e) { fail(e.message); }
+      if (await askHidden('Again: ') !== pw) fail('The two passwords differ; nothing was changed.');
+      const r = await keys.setup(pw);
+      if (before.configured) {   // the old key's backups can't be opened by the new key: list it as retiring
+        const st = require(path.join(DIR, 'lib', 'settings')); const b = st.get().backup || {};
+        st.updateSettings({ backup: { ...b, retiring: (b.retiring || []).filter(x => x && x.keyId !== before.keyId).concat([{ keyId: before.keyId, since: new Date().toISOString(), lost: true }]) } });
+      }
+      out('\nYour recovery key opens every backup, even without My Maestro (with the free "age" tool). It is shown only now:\n');
+      out(`  ${r.recoveryKey}\n`);
+      out('Print it or keep it in a password manager. If you lose both the password and the recovery key, nobody can open the backups.');
+      return;
     }
-    for (const rel of ['data', 'workspaces', '.env', 'hub-home']) copyTree(rel);   // hub-home: the shared folders of newer installs (lib/hub-home)
-    return (async () => {
-      for (const rel of pending) { const db = new Database(path.join(DIR, rel), { readonly: true, fileMustExist: true }); await db.backup(path.join(stage, rel)); db.close(); }
-      fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
-      const file = path.join(destDir, `my-maestro-ai-${stamp}.tar.gz`);
-      execFileSync('tar', ['-czf', file, '-C', tmp, path.basename(stage)]);
-      fs.chmodSync(file, 0o600);
-      fs.rmSync(tmp, { recursive: true, force: true });
-      out(`Backup written: ${file} (${(fs.statSync(file).size / 1048576).toFixed(1)} MB)`);
-      out('To restore: mymaestro stop; unpack it over the program folder; mymaestro start.');
-    })();
+    if (!keys.status().configured) fail('Backups aren\'t set up yet. Choose a backup password in Settings → Backups, or run:  mymaestro backup --setup');
+    const conf = (require(path.join(DIR, 'lib', 'settings')).get().backup) || {};
+    const targets = [placesMod.localPlace(HUB_HOME), ...(conf.folders || []).filter(f => f && f.dir && f.enabled !== false).map(f => placesMod.folderPlace(f.dir))];
+    if (arg('to')) targets.push(placesMod.folderPlace(arg('to')));
+    const { v, commit, channel } = version();
+    out((await up()) ? 'Backing up while the hub runs (files that change meanwhile are named in the backup)…' : 'Backing up…');
+    const r = await require(path.join(DIR, 'lib', 'backup', 'create')).createBackup({ root: DIR, hubHome: HUB_HOME, reason: 'cli', hub: { version: v, commit, channel }, places: targets });
+    for (const p of r.places) out(p.error ? `  not saved in ${p.dir}: ${p.error}` : `  ${p.file}`);
+    out(`Backup written: ${(r.size / 1048576).toFixed(1)} MB, ${r.manifest.counts.files} files, ${r.manifest.label}.`);
+  },
+  async backups() {
+    const placesMod = require(path.join(DIR, 'lib', 'backup', 'places'));
+    const { HUB_HOME } = require(path.join(DIR, 'lib', 'hub-home'));
+    const conf = (require(path.join(DIR, 'lib', 'settings')).get().backup) || {};
+    const list = await placesMod.list(DIR, [placesMod.localPlace(HUB_HOME), ...(conf.folders || []).filter(f => f && f.dir).map(f => placesMod.folderPlace(f.dir))]);
+    if (!list.length) { out('No backups found. Make one: mymaestro backup'); return; }
+    for (const b of list) out(`${b.created ? new Date(b.created).toLocaleString() : '?'}  ${b.size != null ? (b.size / 1048576).toFixed(1) + ' MB' : '?'}  ${b.version || '?'}  ${b.places.map(p => p.file).join(', ')}`);
+  },
+  // Restore while the hub is stopped: open and check, show what changes, then the swap happens when it starts again.
+  async restore() {
+    const restoreMod = require(path.join(DIR, 'lib', 'backup', 'restore'));
+    const applyMod = require(path.join(DIR, 'lib', 'backup', 'apply'));
+    const placesMod = require(path.join(DIR, 'lib', 'backup', 'places'));
+    const { HUB_HOME } = require(path.join(DIR, 'lib', 'hub-home'));
+    if (await up()) fail('Stop My Maestro first (mymaestro stop), then run this again. Or restore from Settings → Backups while it runs.');
+    if (flag('--undo')) {
+      const last = applyMod.lastRestore({ root: DIR });
+      if (!last || !last.canUndo) fail('There is no restore to undo here (the setup from before a restore is kept for 7 days).');
+      out(`This puts back the setup from before the restore of ${new Date(last.createdAt || last.healthyAt).toLocaleString()}. What was done since the restore goes away.`);
+      if (!flag('--yes') && (await ask('Type UNDO to put it back: ')).trim() !== 'UNDO') fail('Nothing was changed.');
+      applyMod.confirmUndo({ root: DIR });
+      out('Confirmed: the setup from before comes back when My Maestro starts.');
+    } else {
+      const target = argv[1] && !argv[1].startsWith('--') ? argv[1] : null;
+      if (!target) fail('Usage: mymaestro restore <backup file | latest> [--recovery-key] [--yes]\n       mymaestro restore --undo');
+      let file = target;
+      if (target === 'latest') {
+        const conf = (require(path.join(DIR, 'lib', 'settings')).get().backup) || {};
+        const list = await placesMod.list(DIR, [placesMod.localPlace(HUB_HOME), ...(conf.folders || []).filter(f => f && f.dir).map(f => placesMod.folderPlace(f.dir))]);
+        if (!list.length) fail('No backups found on this computer or in your backup folders.');
+        file = list[0].places[0].file;
+      }
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) fail(`No such backup file: ${file}`);
+      const useKey = flag('--recovery-key');
+      const secret = await askHidden(useKey ? 'Recovery key (AGE-SECRET-KEY-1…): ' : 'Backup password: ');
+      let users = []; try { users = auth().listUsers(); } catch { /* none yet */ }
+      out(`Opening and checking ${file} …`);
+      let r;
+      try { r = await restoreMod.prepare({ file, ...(useKey ? { recoveryKey: secret.trim() } : { password: secret }), root: DIR, hubHome: HUB_HOME, mode: users.length ? 'existing' : 'fresh', hubVersion: version().v }); }
+      catch (e) { fail(e.message); }
+      out('\nThe backup is good. Restoring it replaces this install:');
+      for (const l of restoreWarning(r)) out(`  - ${l}`);
+      const forget = () => { const d = restoreMod.restoreDirs(DIR); fs.rmSync(d.staged, { recursive: true, force: true }); fs.rmSync(d.prepared, { force: true }); };
+      if (!flag('--yes') && (await ask('\nType RESTORE to replace this install with the backup: ')).trim() !== 'RESTORE') { forget(); fail('Nothing was changed.'); }
+      applyMod.confirm({ root: DIR, hubHome: HUB_HOME, id: r.id });
+      out('Confirmed: the backup replaces this install when My Maestro starts.');
+    }
+    process.stdin.destroy();   // no more questions: with a piped stdin the prompts would otherwise keep the process open
+    if (flag('--no-start')) { out('Start it when you are ready: mymaestro start'); return; }
+    const s = svc().start(); if (!s.ok) fail(`Could not start it: ${s.error}. Start it with: mymaestro start`);
+    out('Starting…');
+    out((await waitUp(90)) ? `Running at ${URL_BASE}. Agents wait until you press Resume in Settings → Backups.` : 'It did not answer within 90 seconds. See: mymaestro logs');
   },
   'reset-2fa'() {
     const login = argv[1]; if (!login) fail('Usage: mymaestro reset-2fa <email>');
@@ -238,7 +333,7 @@ const commands = {
     out(`To delete everything, back up first (mymaestro backup), then run:  rm -rf "${DIR}"`);
   },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 18).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 20).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
 (async () => {

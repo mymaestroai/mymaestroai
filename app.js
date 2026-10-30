@@ -48,6 +48,7 @@
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
+      paintRecoveryBanner().catch(() => {});
       paintUpdateCard().catch(() => {});
       paintVersionLabel().catch(() => {});
       if (!window.__hvTimer) window.__hvTimer = setInterval(() => paintVersionLabel().catch(() => {}), 5 * 60 * 1000);
@@ -415,6 +416,517 @@
       if (!confirm('Sign out on every device, including this browser?')) return;
       try { await authPost('/api/auth/sessions/revoke'); } catch (e) { /* session may already be gone */ }
       location.href = '/login';
+    }
+
+    // ── Backups (Settings → 💾 Backups; lib/backup through /api/backups) ──
+    // One encrypted file holds everything that makes this install its owner's. Restoring takes two steps: open and
+    // check (the backup password or the recovery key), then a warning built from what was checked, the account password
+    // and two-factor code again, and RESTORE typed. The swap happens at a restart; agents then wait for Resume.
+    let bkState = null, bkPoll = null;
+    const BK_KINDS = { schedule: 'scheduled task', delivery: 'scheduled task (waiting to be delivered)', task: 'queued task', consult: 'queued consultation' };
+    function bkWhen(iso) {
+      if (!iso) return 'an unknown time';
+      const d = new Date(iso); if (isNaN(d)) return 'an unknown time';
+      const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+      const diff = Math.round((day(new Date()) - day(d)) / 86400000);
+      if (diff === 0) return `today, ${t}`;
+      if (diff === 1) return `yesterday, ${t}`;
+      if (diff === -1) return `tomorrow, ${t}`;
+      return d.toLocaleString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}), hour: 'numeric', minute: '2-digit' });
+    }
+    // The nightly time (HH:MM in the hub's zone), in this device's clock style; the zone is named when it isn't this device's
+    function bkAt(at, tz) {
+      const m = /^(\d{2}):(\d{2})$/.exec(at || ''); if (!m) return at || '';
+      const t = new Date(Date.UTC(2000, 0, 1, +m[1], +m[2])).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
+      let mine = ''; try { mine = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
+      return tz && tz !== mine ? `${t} (${tz.replace(/_/g, ' ')} time)` : t;
+    }
+    const bkSize = (n) => n == null ? '?' : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
+    const bkPlaceName = (p) => p.kind === 'local' ? 'This computer' : ((bkState && bkState.folders || []).find(f => f.dir === p.dir) || {}).label || p.dir;
+    async function bkApi(url, body, method = 'POST') {
+      const r = await fetch(url, { method, credentials: 'include', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error(d.error || `HTTP ${r.status}`), { code: d.code, status: r.status, body: d });
+      return d;
+    }
+    // Six random words from the EFF list (the server picks them): fills both password boxes and shows them to write down.
+    async function bkSuggest(first, second, note) {
+      try {
+        const { passphrase } = await bkApi('/api/backups/suggest-passphrase', {});
+        for (const id of [first, second]) { const el = document.getElementById(id); if (el) { el.value = passphrase; el.type = 'text'; } }
+        const n = document.getElementById(note); if (n) n.textContent = `Suggested: "${passphrase}". Write it down or keep it in a password manager before you go on.`;
+      } catch (e) { alert(e.message); }
+    }
+    async function loadBackups() {
+      const el = document.getElementById('bk-body'); if (!el) return;
+      try { bkState = await bkApi('/api/backups', undefined, 'GET'); }
+      catch (e) { el.textContent = 'Could not read the backups: ' + e.message; stSum('backups', 'last', 'Backups: unreadable', true); return; }
+      paintBackups();
+      paintRecoveryBanner(bkState).catch(() => {});
+    }
+    function paintBackups() {
+      const el = document.getElementById('bk-body'); const s = bkState; if (!el || !s) return;
+      if (!s.key.configured) {
+        el.innerHTML = `<div class="bk-strip bk-warn"><span class="bk-strip-text">Backups are off. Choose a backup password to turn them on.</span></div>
+          <div class="st-row"><label>Backup password</label><input type="password" id="bk-pw1" autocomplete="new-password" placeholder="at least 12 characters"></div>
+          <div class="st-row"><label>Again</label><input type="password" id="bk-pw2" autocomplete="new-password"><button class="st-test-btn" onclick="bkSuggest('bk-pw1', 'bk-pw2', 'bk-msg')">Suggest one</button></div>
+          <div class="st-hint">A few random words work well. It is never stored. Next you get a recovery key, which opens every backup if the password is ever forgotten.</div>
+          <div class="st-row"><label>Account password</label><input type="password" id="bk-acct" autocomplete="current-password" placeholder="your sign-in password">${window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled ? '<input type="text" id="bk-code" inputmode="numeric" autocomplete="one-time-code" placeholder="two-factor code" style="flex:0 0 130px">' : ''}</div>
+          <div class="st-row"><label></label><button class="st-test-btn bk-primary" onclick="setupBackups(this)">Turn on backups</button><span id="bk-msg" class="bk-msg"></span></div>`;
+        stSum('backups', 'last', 'Backups off');
+        return;
+      }
+      let html = '';
+      const rec = s.recovery;
+      if (rec && !rec.resumedAt) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text"><b>Paused after a restore</b> (the backup of ${esc(bkWhen(rec.restoredFrom))}). Agents and schedules start no new work until you press Resume.</span><button class="st-test-btn bk-primary" onclick="bkResume(this)">Resume</button></div>`;
+      const held = (rec && rec.held) || [];
+      if (held.length) {
+        html += `<div class="bk-sub">Waiting for you: Run or Skip</div><div class="bk-note">These were due or queued when the backup was made, so they may already have happened (an email sent, a payment made). Skip unless you know they didn't.</div>`;
+        html += held.map((h, i) => `<div class="bk-held"><span class="bk-held-what">${h.agent ? `<b>${esc(h.agent)}</b> · ` : ''}${esc(BK_KINDS[h.kind] || h.kind)}${h.label ? `: ${esc(h.label)}` : ''}${h.due ? ` <span class="bk-dim">(due ${esc(bkWhen(h.due))})</span>` : ''}</span><button class="st-test-btn" onclick="bkDecide(${i}, 'skip', this)">Skip</button><button class="st-test-btn" onclick="bkDecide(${i}, 'run', this)">Run</button></div>`).join('');
+      }
+      if (s.prepared) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">A backup you opened (from ${esc(bkWhen(s.prepared.backup && s.prepared.backup.created))}) is checked and ready to restore.</span><button class="st-test-btn" onclick="bkContinuePrepared()">Continue…</button><button class="st-test-btn" onclick="bkForgetPrepared(this)">Forget it</button></div>`;
+      const retiringIds = new Set((s.retiring || []).map(r => r.keyId));
+      const oldCopies = (s.backups || []).reduce((n, b) => n + b.places.filter(p => retiringIds.has(p.keyId)).length, 0);
+      if (retiringIds.size) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">${oldCopies ? `${oldCopies} backup cop${oldCopies === 1 ? 'y still uses' : 'ies still use'} the old backup key.` : 'The old backup key is not retired yet: a backup folder could not be checked.'} Finish replacing it.</span><button class="st-test-btn" onclick="bkFinishDialog()">Finish…</button></div>`;
+      if (s.needsPassword) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">This setup was restored with the recovery key. Choose a new backup password before the next backup.</span><button class="st-test-btn" onclick="bkPasswordDialog('change', true)">Choose a password</button></div>`;
+      const last = s.last || (s.backups || [])[0] || null, run = s.running;
+      const lastText = run ? `Backing up… <span class="bk-dim">(${esc(run.step || 'starting')})</span>`
+        : s.lastError ? `The last backup failed: ${esc(s.lastError.message)}`
+        : last ? `✓ <b>Last backup: ${esc(bkWhen(last.created))}</b> · ${esc(bkSize(last.size))}${last.skipped ? ` · <span class="bk-dim">${esc(String(last.skipped))} file${last.skipped === 1 ? '' : 's'} left out (changing or unreadable)</span>` : ''}` : 'No backup yet.';
+      html += `<div class="bk-strip ${s.lastError && !run ? 'bk-bad' : last || run ? 'bk-ok' : 'bk-warn'}"><span class="bk-strip-text">${lastText}</span><button class="st-test-btn bk-primary" id="bk-now" onclick="backUpNow(this)"${run ? ' disabled' : ''}>Back up now</button></div>`;
+      const sc = s.schedule || {}, ni = s.nightly || {};
+      html += `<div class="bk-sub">When</div>`;
+      const nextText = ni.paused ? 'paused until you press Resume' : ni.waitingSince ? 'waiting for working agents (up to 30 minutes)' : ni.due ? 'next: in a moment' : ni.nextRun ? `next: ${esc(bkWhen(ni.nextRun))}` : '';
+      html += `<div class="bk-place">${sc.enabled ? '<span class="bk-on">✓</span>' : '<span class="bk-off">○</span>'}<span class="bk-held-what">${sc.enabled ? `<b>Every night at ${esc(bkAt(sc.at, ni.tz))}</b>, keeping the last ${esc(String(sc.keepNightly))} nightly backup${sc.keepNightly === 1 ? '' : 's'}${sc.keepWeekly ? ` and one from each of the last ${esc(String(sc.keepWeekly))} week${sc.keepWeekly === 1 ? '' : 's'}` : ''}${nextText ? ` · <span class="bk-dim">${nextText}</span>` : ''}` : '<b>Nightly backups are off.</b> <span class="bk-dim">Backups are made only when you press Back up now.</span>'}</span><button class="st-test-btn" onclick="bkScheduleDialog()">Change…</button></div>`;
+      if (ni.lastError) html += `<div class="bk-strip bk-bad"><span class="bk-strip-text">The nightly backup of ${esc(bkWhen(ni.lastError.at))} failed: ${esc(ni.lastError.message)}</span></div>`;
+      if (ni.keepSkipped) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">Older nightly backups aren't being removed: ${esc(ni.keepSkipped.why)}.</span></div>`;
+      if ((ni.copyErrors || []).length) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">The last nightly backup couldn't be copied to ${ni.copyErrors.map(c => esc(c.dir)).join(', ')}. It is on this computer; the next backup copies again.</span></div>`;
+      html += `<div class="bk-sub">Where</div>`;
+      const local = (s.places || []).find(p => p.kind === 'local');
+      html += `<div class="bk-place"><span class="bk-on">✓</span><b>This computer</b><span class="bk-dim">${esc(local ? local.dir : 'the backups folder')}</span></div>`;
+      (s.folders || []).forEach((f, i) => { html += `<div class="bk-place"><span class="bk-on">✓</span><b>${esc(f.label || 'Folder')}</b><span class="bk-dim">${esc(f.dir)}</span><button class="st-test-btn" onclick="removeBackupFolder(${i}, this)">Remove</button></div>`; });
+      if (s.iCloud && !(s.folders || []).some(f => f.dir === s.iCloud)) html += `<div class="bk-place"><span class="bk-off">○</span><b>iCloud Drive</b><span class="bk-dim">${esc(s.iCloud)}</span><button class="st-test-btn" onclick="addBackupFolder(true, this)">Use it</button></div>`;
+      html += `<div class="bk-place"><span class="bk-off">+</span><b>Another folder</b><input type="text" id="bk-folder" placeholder="full path: a cloud-synced folder, an external disk, a NAS" aria-label="Another backup folder"><button class="st-test-btn" onclick="addBackupFolder(false, this)">Add</button></div>`;
+      html += `<div class="st-hint">To keep copies off this computer, add a folder your cloud app keeps in sync (iCloud Drive, Google Drive, Dropbox or OneDrive): every backup is copied there and the app uploads it. Or download a backup (⬇) and save it anywhere.</div>`;
+      html += `<div class="bk-place">🔒 <span class="bk-held-what">Encrypted with your backup password. The recovery key you saved also opens every backup.</span><button class="st-test-btn" onclick="bkPasswordDialog('change')">Change password</button><button class="st-test-btn" onclick="bkShowKeyDialog()">Show recovery key</button><button class="st-test-btn" onclick="bkPasswordDialog('leaked')">It may have leaked…</button></div>`;
+      html += `<div class="bk-sub">Recent backups</div>`;
+      const list = s.backups || [];
+      if (!list.length) html += `<div class="bk-note">None yet.</div>`;
+      else html += `<table class="bk-table"><thead><tr><th>Made</th><th>Kept on</th><th>Size</th><th>Version</th><th></th></tr></thead><tbody>${list.slice(0, 30).map((b, i) => `<tr>
+        <td>${esc(bkWhen(b.created))}${b.reason && b.reason !== 'nightly' ? ` <span class="bk-tag">${b.reason === 'cli' ? 'terminal' : 'by hand'}</span>` : ''}${b.keyId && s.key.keyId && b.keyId !== s.key.keyId ? ' <span class="bk-tag bk-tag-warn">older key</span>' : ''}</td>
+        <td>${esc(b.places.map(bkPlaceName).join(' · '))}</td><td>${esc(bkSize(b.size))}</td><td>${esc([b.version, b.channel].filter(Boolean).join(' '))}</td>
+        <td class="bk-acts"><button class="st-test-btn" onclick="bkRestore(${i})">Restore…</button><button class="st-test-btn" onclick="bkDownload(${i}, this)" title="Download the encrypted file">⬇</button></td></tr>`).join('')}</tbody></table>`;
+      html += `<div class="bk-place"><button class="st-test-btn" onclick="document.getElementById('bk-file').click()">Restore from a file…</button><input type="file" id="bk-file" accept=".age" hidden onchange="restoreFromFile(this)"><span class="bk-dim" id="bk-upload-msg"></span></div>`;
+      const lr = s.lastRestore;
+      if (lr) {
+        const rep = lr.report || {}, acc = rep.accounts || {};
+        const bits = [];
+        if (acc.kept && acc.kept.length) bits.push('today\'s passwords and two-factor sign-ins were kept');
+        if (acc.disabled && acc.disabled.length) bits.push(`accounts only in the backup came back turned off (${acc.disabled.map(esc).join(', ')})`);
+        if (rep.linksDropped && rep.linksDropped.length) bits.push(`${rep.linksDropped.length} links that pointed outside were left out`);
+        html += `<div class="bk-sub">Last restore</div><div class="bk-note">${lr.kind === 'undo' ? 'Undone' : 'Restored'} ${esc(bkWhen(lr.appliedAt || lr.healthyAt))}${lr.backup && lr.backup.created ? `, from the backup of ${esc(bkWhen(lr.backup.created))}` : ''}${bits.length ? `: ${bits.join('; ')}` : ''}.</div>`;
+        if (lr.canUndo) html += `<div class="bk-place"><button class="st-test-btn" onclick="bkUndo(this)">Undo this restore…</button><span class="bk-dim">possible until ${esc(bkWhen(lr.undoUntil))}; anything done since the restore is lost</span></div>`;
+      }
+      el.innerHTML = html;
+      stSum('backups', 'last', run ? 'Backing up…' : s.lastError || ni.lastError ? 'Last backup failed' : last ? `Last backup ${bkWhen(last.created)}` : 'No backup yet', !!((s.lastError || ni.lastError) && !run) || !!(rec && !rec.resumedAt));
+      if (run && !bkPoll) bkPoll = setInterval(() => { if (!document.getElementById('bk-body')) { clearInterval(bkPoll); bkPoll = null; return; } loadBackups(); }, 2000);
+      if (!run && bkPoll) { clearInterval(bkPoll); bkPoll = null; }
+    }
+    // Nightly backups: on or off, the time (in the hub's zone), how many to keep. Keeping fewer lets older nightly
+    // backups go at the next night, so it asks for the account password again (like the other backup settings).
+    function bkScheduleDialog() {
+      const sc = (bkState && bkState.schedule) || {}, tz = bkState && bkState.nightly && bkState.nightly.tz;
+      let mine = ''; try { mine = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
+      const o = bkOverlay('bk-sch-overlay', `<div id="bk-sch-body"><h3>Nightly backups</h3>
+        <label class="bk-check"><input type="checkbox" id="bk-sch-on"${sc.enabled !== false ? ' checked' : ''}> Make a backup every night</label>
+        <label class="bk-label" for="bk-sch-at">At${tz && tz !== mine ? ` (${esc(tz.replace(/_/g, ' '))} time)` : ''}</label><input type="time" id="bk-sch-at" value="${esc(sc.at || '03:30')}" required>
+        <label class="bk-label" for="bk-sch-kn">Keep the newest nightly backups</label><input type="number" id="bk-sch-kn" min="1" max="60" step="1" value="${esc(String(sc.keepNightly || 7))}">
+        <label class="bk-label" for="bk-sch-kw">And one backup from each of the last … weeks</label><input type="number" id="bk-sch-kw" min="0" max="52" step="1" value="${esc(String(sc.keepWeekly ?? 4))}">
+        <p class="bk-p">After each night's backup, older nightly backups are deleted, on this computer and in your backup folders (only the copies My Maestro put there). Backups made with Back up now are never deleted by this. If agents are working at that time, the backup waits up to 30 minutes for them, then goes ahead. A computer that was off or asleep makes the backup when it is next on, the same day.</p>
+        ${bkAccountRow('bk-sch')}
+        <div class="bk-msg" id="bk-sch-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-sch-go">Save</button></div></div>`);
+      o.querySelector('#bk-sch-go').onclick = bkScheduleGo;
+      o.querySelector('#bk-sch-on').focus();
+    }
+    async function bkScheduleGo() {
+      const v = (id) => document.getElementById(id);
+      const msg = v('bk-sch-msg'), go = v('bk-sch-go');
+      const kn = Number(v('bk-sch-kn').value), kw = Number(v('bk-sch-kw').value), at = v('bk-sch-at').value;
+      if (!/^\d{2}:\d{2}$/.test(at)) { msg.textContent = 'Choose a time like 03:30.'; return; }
+      go.disabled = true; msg.textContent = 'Saving…';
+      try {
+        const r = await bkApi('/api/backups/schedule', { schedule: { enabled: v('bk-sch-on').checked, at, keepNightly: kn, keepWeekly: kw }, password: (v('bk-sch-acct') || {}).value || '', code: (v('bk-sch-code') || {}).value || '' });
+        const next = r.nightly && r.nightly.nextRun;
+        v('bk-sch-body').innerHTML = `<h3>✓ Saved</h3><p class="bk-p">${r.schedule.enabled ? `A backup is made every night at ${esc(bkAt(r.schedule.at, r.nightly && r.nightly.tz))}${next ? `; the next one ${esc(bkWhen(next))}` : ''}.` : 'Nightly backups are off. Backups are made only when you press Back up now.'}</p><div class="bk-actions"><button class="st-btn" onclick="dialogRequestClose(this)">Done</button></div>`;
+        loadBackups();
+      } catch (e) { msg.textContent = e.message; go.disabled = false; }
+    }
+    async function setupBackups(btn) {
+      const a = document.getElementById('bk-pw1').value, b = document.getElementById('bk-pw2').value, msg = document.getElementById('bk-msg');
+      if (a !== b) { msg.textContent = 'The two passwords differ.'; return; }
+      btn.disabled = true; msg.textContent = 'Making your backup key…';
+      try {
+        const r = await bkApi('/api/backups/setup', { newBackupPassword: a, password: (document.getElementById('bk-acct') || {}).value || '', code: (document.getElementById('bk-code') || {}).value || '' });
+        showRecoveryKey(r.recoveryKey);
+        loadBackups();
+      } catch (e) { msg.textContent = e.message; btn.disabled = false; }
+    }
+    // The backup password and key (keys.js): change the password (same key), "it may have leaked" (a new key, then our
+    // backups re-encrypted or deleted), see the recovery key again. Each asks for the account password again.
+    const bkProblems = (r) => [...(r.failed || []).map(f => `<div class="bk-info">Not changed: ${esc(f.file)} (${esc(f.error)})</div>`), ...(r.unreachable || []).map(d => `<div class="bk-info">Couldn't reach ${esc(d)}: backups there still use the old lock.</div>`)].join('');
+    const bkAccountRow = (id) => { const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled); return `<label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label><div class="bk-two"><input type="password" id="${id}-acct" autocomplete="current-password" placeholder="account password">${totp ? `<input type="text" id="${id}-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">` : ''}</div>`; };
+    function bkSecretSwitch(o, prefix, labels) {
+      const sw = o.querySelector(`#${prefix}-switch`);
+      sw.onclick = (e) => { e.preventDefault(); const k = o.querySelector(`#${prefix}-keybox`), p = o.querySelector(`#${prefix}-oldbox`); const toKey = k.hidden; k.hidden = !toKey; p.hidden = toKey; sw.textContent = toKey ? labels[1] : labels[0]; (toKey ? k : p).querySelector('input').focus(); };
+    }
+    function bkPasswordDialog(mode, preferRecovery = false) {
+      const leaked = mode === 'leaked';
+      const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>${leaked ? 'My backup password may have leaked' : 'Change the backup password'}</h3>
+        <p class="bk-p">${leaked ? 'This makes a new backup key, with a new password and a new recovery key. Then every backup on this computer and in your backup folders is re-encrypted with the new key, or deleted if you choose. Copies you keep anywhere else still open with the old password and the old recovery key: delete them.' : 'The backup key stays the same, so your recovery key keeps working. Backups on this computer and in your backup folders get the new password. Copies you keep anywhere else still open with the old one, and whoever has the old password and an old copy can unlock the key from it: if the password may have leaked, use “It may have leaked…” instead.'}</p>
+        <div id="bk-pw-oldbox"${preferRecovery ? ' hidden' : ''}><label class="bk-label">Current backup password</label><input type="password" id="bk-pw-old" autocomplete="off"></div>
+        <div id="bk-pw-keybox"${preferRecovery ? '' : ' hidden'}><label class="bk-label">Recovery key</label><input type="text" id="bk-pw-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
+        <a href="#" class="bk-link" id="bk-pw-switch">${preferRecovery ? 'Use the current password instead' : 'Use the recovery key instead'}</a>
+        <label class="bk-label">New backup password</label><input type="password" id="bk-pw-new1" autocomplete="new-password" placeholder="at least 12 characters">
+        <label class="bk-label">Again</label><input type="password" id="bk-pw-new2" autocomplete="new-password">
+        <a href="#" class="bk-link" onclick="bkSuggest('bk-pw-new1', 'bk-pw-new2', 'bk-pw-msg'); return false">Suggest a passphrase</a>
+        ${bkAccountRow('bk-pw')}
+        <div class="bk-msg" id="bk-pw-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn${leaked ? ' bk-danger' : ''}" id="bk-pw-go">${leaked ? 'Make a new key' : 'Change password'}</button></div></div>`);
+      bkSecretSwitch(o, 'bk-pw', ['Use the recovery key instead', 'Use the current password instead']);
+      o.querySelector('#bk-pw-go').onclick = () => bkPasswordGo(leaked);
+      o.querySelector(preferRecovery ? '#bk-pw-key' : '#bk-pw-old').focus();
+    }
+    async function bkPasswordGo(leaked) {
+      const v = (id) => (document.getElementById(id) || {}).value || '';
+      const msg = document.getElementById('bk-pw-msg'), go = document.getElementById('bk-pw-go');
+      if (v('bk-pw-new1') !== v('bk-pw-new2')) { msg.textContent = 'The two new passwords differ.'; return; }
+      const useKey = !document.getElementById('bk-pw-keybox').hidden;
+      const old = useKey ? { recoveryKey: v('bk-pw-key').trim() } : { backupPassword: v('bk-pw-old') };
+      go.disabled = true; msg.textContent = leaked ? 'Making the new key…' : 'Changing the password and updating your backups…';
+      try {
+        const r = await bkApi(leaked ? '/api/backups/rotate' : '/api/backups/password', { ...old, newBackupPassword: v('bk-pw-new1'), password: v('bk-pw-acct'), code: v('bk-pw-code') });
+        const body = document.getElementById('bk-pw-body');
+        if (!leaked) body.innerHTML = `<h3>✓ Backup password changed</h3><p class="bk-p">${r.rewritten} backup${r.rewritten === 1 ? '' : 's'} now open${r.rewritten === 1 ? 's' : ''} with the new password. Your recovery key is unchanged.</p>${bkProblems(r)}<div class="bk-actions"><button class="st-btn" onclick="dialogRequestClose(this)">Done</button></div>`;
+        else bkRotateKey(r, { old: useKey ? { oldRecoveryKey: old.recoveryKey } : { oldBackupPassword: old.backupPassword }, newBackupPassword: v('bk-pw-new1'), auth: { ticket: r.ticket } });
+      } catch (e) { msg.textContent = e.message; go.disabled = false; }
+      loadBackups();
+    }
+    // Step two of a new key: save the new recovery key, then re-encrypt or delete the backups that use the old key.
+    function bkRotateKey(r, secrets) {
+      const body = document.getElementById('bk-pw-body'); if (!body) return;
+      body.innerHTML = `<h3>🔑 Your new recovery key</h3><p class="bk-p">The new key is saved. Before anything else changes, save this recovery key. It replaces the old one, which stops opening your backups once they are re-encrypted.</p>
+        <div class="bk-key" id="bk-rot-key"></div>
+        <label class="bk-check"><input type="checkbox" id="bk-rot-saved"> I saved the new recovery key somewhere safe</label>
+        ${r.waiting ? `<div class="bk-sub">Then the ${r.waiting} backup${r.waiting === 1 ? '' : 's'} that use${r.waiting === 1 ? 's' : ''} the old key</div>
+        <label class="bk-check"><input type="radio" name="bk-rot-act" value="reencrypt" checked> Re-encrypt with the new key</label>
+        <label class="bk-check"><input type="radio" name="bk-rot-act" value="delete"> Delete them</label>` : ''}
+        <div class="bk-msg" id="bk-rot-msg"></div>
+        <div class="bk-actions"><button class="st-btn" id="bk-rot-go" disabled>Continue</button></div>`;
+      body.querySelector('#bk-rot-key').textContent = r.recoveryKey;
+      const go = body.querySelector('#bk-rot-go');
+      body.querySelector('#bk-rot-saved').onchange = (e) => { go.disabled = !e.target.checked; };
+      go.onclick = () => bkFinishRotation(secrets, body, go, body.querySelector('#bk-rot-msg'));
+    }
+    async function bkFinishRotation(secrets, body, go, msg) {
+      const action = (body.querySelector('input[name="bk-rot-act"]:checked') || {}).value || 'reencrypt';
+      if (action === 'delete' && !confirm('Delete every backup that uses the old key, on this computer and in your backup folders?')) return;
+      go.disabled = true; msg.textContent = action === 'delete' ? 'Deleting…' : 'Re-encrypting… each new copy is checked before the old file goes.';
+      try {
+        const a = secrets.auth || {};
+        const r = await bkApi('/api/backups/rotate/finish', { ...secrets.old, newBackupPassword: secrets.newBackupPassword, action, ...(a.ticket ? { ticket: a.ticket } : { password: a.password, code: a.code }) });
+        body.innerHTML = `<h3>${r.retired.length ? '✓ The old backup key is retired' : 'Not finished yet'}</h3><p class="bk-p">${r.reencrypted ? `${r.reencrypted} re-encrypted. ` : ''}${r.deleted ? `${r.deleted} deleted. ` : ''}${r.retired.length ? 'Copies kept anywhere else still open with the old password and the old recovery key: delete them.' : 'Some backups could not be reached or changed. Finish from Settings → Backups when they are back.'}</p>${bkProblems(r)}
+          <div class="bk-info">If someone may actually have opened a backup, it held everything: also reset account passwords and two-factor (Security), replace provider keys (Settings → AI models), sign in to Claude and ChatGPT again, and reconnect data connectors.</div>
+          <div class="bk-actions"><button class="st-btn" onclick="dialogRequestClose(this)">Done</button></div>`;
+      } catch (e) {
+        if (e.body && e.body.stepUp && secrets.auth && secrets.auth.ticket && !body.querySelector('#bk-rot-acct')) {
+          msg.insertAdjacentHTML('beforebegin', bkAccountRow('bk-rot'));
+          secrets.auth = { get password() { return (body.querySelector('#bk-rot-acct') || {}).value || ''; }, get code() { return (body.querySelector('#bk-rot-code') || {}).value || ''; } };
+          msg.textContent = 'More than 10 minutes have passed: enter your account password again, then Continue.';
+        } else msg.textContent = e.message;
+        go.disabled = false;
+      }
+      loadBackups();
+    }
+    // Finish a new key later (a folder was away, or the page was closed): the old and the new backup secrets again.
+    function bkFinishDialog() {
+      const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>Finish replacing the old backup key</h3>
+        <p class="bk-p">Backups that still use the old key are re-encrypted with the new one, or deleted. This needs the old backup password (or the old recovery key) and the new backup password.</p>
+        <div id="bk-fin-oldbox"><label class="bk-label">Old backup password</label><input type="password" id="bk-fin-old" autocomplete="off"></div>
+        <div id="bk-fin-keybox" hidden><label class="bk-label">Old recovery key</label><input type="text" id="bk-fin-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
+        <a href="#" class="bk-link" id="bk-fin-switch">Use the old recovery key instead</a>
+        <label class="bk-label">New backup password</label><input type="password" id="bk-fin-new" autocomplete="off">
+        <label class="bk-check"><input type="radio" name="bk-rot-act" value="reencrypt" checked> Re-encrypt with the new key</label>
+        <label class="bk-check"><input type="radio" name="bk-rot-act" value="delete"> Delete them</label>
+        ${bkAccountRow('bk-fin')}
+        <div class="bk-msg" id="bk-fin-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-fin-go">Continue</button></div></div>`);
+      bkSecretSwitch(o, 'bk-fin', ['Use the old recovery key instead', 'Use the old password instead']);
+      o.querySelector('#bk-fin-go').onclick = () => {
+        const useKey = !o.querySelector('#bk-fin-keybox').hidden;
+        bkFinishRotation({ old: useKey ? { oldRecoveryKey: o.querySelector('#bk-fin-key').value.trim() } : { oldBackupPassword: o.querySelector('#bk-fin-old').value }, newBackupPassword: o.querySelector('#bk-fin-new').value, auth: { password: (o.querySelector('#bk-fin-acct') || {}).value || '', code: (o.querySelector('#bk-fin-code') || {}).value || '' } },
+          o.querySelector('#bk-pw-body'), o.querySelector('#bk-fin-go'), o.querySelector('#bk-fin-msg'));
+      };
+      o.querySelector('#bk-fin-old').focus();
+    }
+    // See the recovery key again (lost the printout, or the page closed before it was saved): the backup password opens it.
+    function bkShowKeyDialog() {
+      const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>Show the recovery key</h3>
+        <p class="bk-p">The recovery key is not stored as such: the backup password unlocks it. Anyone who sees it can open every backup.</p>
+        <label class="bk-label">Backup password</label><input type="password" id="bk-sk-pw" autocomplete="off">
+        ${bkAccountRow('bk-sk')}
+        <div class="bk-msg" id="bk-sk-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-sk-go">Show it</button></div></div>`);
+      o.querySelector('#bk-sk-go').onclick = async () => {
+        const v = (id) => (document.getElementById(id) || {}).value || '', msg = o.querySelector('#bk-sk-msg'), go = o.querySelector('#bk-sk-go');
+        go.disabled = true; msg.textContent = 'Unlocking…';
+        try {
+          const r = await bkApi('/api/backups/recovery-key', { backupPassword: v('bk-sk-pw'), password: v('bk-sk-acct'), code: v('bk-sk-code') });
+          const body = o.querySelector('#bk-pw-body');
+          body.innerHTML = `<h3>🔑 Your recovery key</h3><div class="bk-key" id="bk-sk-key"></div><p class="bk-p">Keep it away from this computer: a printout or a password manager.</p><div class="bk-actions"><button class="st-btn" onclick="dialogRequestClose(this)">Done</button></div>`;
+          body.querySelector('#bk-sk-key').textContent = r.recoveryKey;
+        } catch (e) { msg.textContent = e.message; go.disabled = false; }
+      };
+      o.querySelector('#bk-sk-pw').focus();
+    }
+    // An overlay of our own above Settings. data-dialog-persistent: Escape and clicks beside it don't close it.
+    function bkOverlay(id, inner, cls = '') {
+      document.getElementById(id)?.remove();
+      const o = document.createElement('div');
+      o.className = 'question-overlay'; o.id = id; o.dataset.dialogPersistent = '1';
+      o.innerHTML = `<div class="question-modal bk-modal ${cls}" role="dialog" aria-modal="true">${inner}</div>`;
+      document.body.appendChild(o);
+      return o;
+    }
+    function showRecoveryKey(key) {
+      const o = bkOverlay('bk-key-overlay', `<h3>🔑 Your recovery key</h3>
+        <p class="bk-p">It opens every backup, even if the backup password is forgotten, and even without My Maestro (with the free <code>age</code> tool). This is the only time it is shown.</p>
+        <div class="bk-key" id="bk-key-text"></div>
+        <div class="bk-actions" style="justify-content:flex-start;border:0;margin:0;padding:0"><button class="st-test-btn" onclick="navigator.clipboard.writeText(document.getElementById('bk-key-text').textContent).then(() => { this.textContent = 'Copied'; }, () => { this.textContent = 'Select it and copy'; })">Copy</button></div>
+        <p class="bk-p">Print it or keep it in a password manager, away from this computer. If both the password and this key are lost, nobody can open the backups.</p>
+        <label class="bk-check"><input type="checkbox" id="bk-key-saved" onchange="document.getElementById('bk-key-done').disabled = !this.checked"> I saved the recovery key somewhere safe</label>
+        <div class="bk-actions"><button class="st-btn" id="bk-key-done" disabled onclick="dialogRequestClose(this)">Done</button></div>`);
+      o.querySelector('#bk-key-text').textContent = key;
+    }
+    async function backUpNow(btn, now = false) {
+      btn.disabled = true;
+      const poll = setInterval(loadBackups, 2000);
+      setTimeout(loadBackups, 300);
+      try {
+        const r = await bkApi('/api/backups/run', { now });
+        clearInterval(poll);
+        if (r.waiting) {
+          btn.disabled = false;
+          if (confirm(`Agents are working right now: ${r.working.join(', ')}.\n\nA backup made now may catch their files halfway (the backup names them). Back up anyway?`)) return backUpNow(btn, true);
+          return;
+        }
+      } catch (e) { clearInterval(poll); alert('The backup did not finish: ' + e.message); }
+      loadBackups();
+    }
+    async function addBackupFolder(iCloud, btn) {
+      const dir = iCloud ? bkState.iCloud : document.getElementById('bk-folder').value.trim();
+      if (!dir) return;
+      const who = await bkStepUp('Add a backup folder', `Every backup will also be copied to ${dir}. Anyone who can read that folder gets the encrypted files. Confirm it is you.`);
+      if (!who) return;
+      btn.disabled = true;
+      try { await bkApi('/api/backups/folders', { folders: [...(bkState.folders || []), { dir, label: iCloud ? 'iCloud Drive' : undefined }], ...(iCloud ? { create: true } : {}), ...who }); loadBackups(); }
+      catch (e) { alert(e.message); btn.disabled = false; }
+    }
+    async function removeBackupFolder(i, btn) {
+      const f = bkState.folders[i];
+      const who = await bkStepUp('Stop using a backup folder', `Backups will no longer be copied to ${f.dir}. The backups already there stay where they are.`);
+      if (!who) return;
+      btn.disabled = true;
+      try { await bkApi('/api/backups/folders', { folders: bkState.folders.filter((_, j) => j !== i), ...who }); loadBackups(); }
+      catch (e) { alert(e.message); btn.disabled = false; }
+    }
+    async function bkResume(btn) {
+      if (btn) btn.disabled = true;
+      try { await bkApi('/api/backups/recovery/resume', {}); } catch (e) { alert(e.message); }
+      if (document.getElementById('bk-body')) loadBackups(); else paintRecoveryBanner().catch(() => {});
+    }
+    async function bkDecide(i, action, btn) {
+      const h = bkState.recovery.held[i];
+      if (action === 'run' && !confirm(`Run this now?\n\n${h.agent ? h.agent + ': ' : ''}${h.label || BK_KINDS[h.kind] || h.kind}\n\nIt may already have happened before the backup was restored.`)) return;
+      btn.disabled = true;
+      try { await bkApi('/api/backups/recovery/decide', { id: h.id, action }); } catch (e) { alert(e.message); }
+      loadBackups();
+    }
+    // Step-up: the account password and two-factor code, asked again before anything that replaces or exports everything.
+    function bkStepUp(title, why) {
+      return new Promise((resolve) => {
+        const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled);
+        const o = bkOverlay('bk-stepup-overlay', `<h3>${esc(title)}</h3><p class="bk-p">${esc(why)}</p>
+          <label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label>
+          <div class="bk-two"><input type="password" id="bk-su-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
+          <div class="bk-actions"><button class="st-btn secondary" id="bk-su-cancel">Cancel</button><button class="st-btn" id="bk-su-ok">Continue</button></div>`);
+        const done = (v) => { o.remove(); resolve(v); };
+        o.querySelector('#bk-su-cancel').onclick = () => done(null);
+        o.querySelector('#bk-su-ok').onclick = () => done({ password: o.querySelector('#bk-su-pw').value, code: (o.querySelector('#bk-su-code') || {}).value || '' });
+        o.querySelector('#bk-su-pw').focus();
+      });
+    }
+    async function bkDownload(i, btn) {
+      const b = bkState.backups[i];
+      const who = await bkStepUp('Download a backup', 'The file is encrypted, but it holds everything in this My Maestro. Confirm it is you.');
+      if (!who) return;
+      try {
+        const r = await bkApi('/api/backups/download-link', { name: b.name, ...who });
+        const a = document.createElement('a'); a.href = r.url; a.download = b.name; document.body.appendChild(a); a.click(); a.remove();
+      } catch (e) { alert(e.message); }
+    }
+    async function bkUndo(btn) {
+      const who = await bkStepUp('Undo the restore', 'This puts back the setup from before the restore and restarts My Maestro. Anything done since the restore is lost.');
+      if (!who) return;
+      const before = await bkBootId();
+      try { await bkApi('/api/backups/undo', who); } catch (e) { alert(e.message); return; }
+      bkRestarting('Putting the previous setup back…', before);
+    }
+    function bkRestore(i) { const b = bkState.backups[i]; openRestoreDialog({ name: b.name, created: b.created, version: b.version, keyOld: !!(b.keyId && bkState.key.keyId && b.keyId !== bkState.key.keyId) }); }
+    async function restoreFromFile(input) {
+      const f = input.files && input.files[0]; input.value = '';
+      if (!f) return;
+      const msg = document.getElementById('bk-upload-msg');
+      msg.textContent = `Uploading ${f.name} (${bkSize(f.size)})…`;
+      try {
+        const d = await bkUpload('/api/backups/upload', f, {}, (done) => { msg.textContent = `Uploading ${f.name}: ${Math.floor(done * 100 / Math.max(1, f.size))}%…`; });
+        msg.textContent = '';
+        openRestoreDialog({ uploadId: d.uploadId, fileName: f.name, created: d.labels && d.labels.created, version: d.labels && d.labels.version });
+      } catch (e) { msg.textContent = 'Not uploaded: ' + e.message; }
+    }
+    // A file sent in pieces of 8 MiB, so no single request runs long; the last piece has the header checked.
+    async function bkUpload(url, file, headers, progress) {
+      const PIECE = 8 * 1024 * 1024;
+      let id = null, offset = 0, d = null;
+      do {
+        const end = Math.min(file.size, offset + PIECE), last = end >= file.size;
+        const q = new URLSearchParams({ offset: String(offset), done: last ? '1' : '0', ...(id ? { id } : {}) });
+        const r = await fetch(`${url}?${q}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/octet-stream', ...headers }, body: file.slice(offset, end) });
+        d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        id = d.uploadId; offset = end;
+        if (progress) progress(offset);
+      } while (offset < file.size);
+      return d;
+    }
+    async function bkForgetPrepared(btn) { btn.disabled = true; try { await bkApi('/api/backups/restore/cancel', {}); } catch (e) { alert(e.message); } loadBackups(); }
+    function bkContinuePrepared() { const p = bkState.prepared; if (p) { openRestoreDialog({ created: p.backup && p.backup.created }); bkRestoreWarning(p); } }
+    // Step one: the backup's password (or the recovery key), then the hub opens and checks every file.
+    function openRestoreDialog(src) {
+      const o = bkOverlay('bk-restore-overlay', `<div id="bk-r-body"><h3>Restore a backup</h3>
+        <p class="bk-p">Backup: <b>${esc(src.fileName || src.name || 'the file you chose')}</b>${src.created ? ` · made ${esc(bkWhen(src.created))}` : ''}${src.version ? ` · My Maestro AI ${esc(src.version)}` : ''}</p>
+        ${src.keyOld ? '<p class="bk-note">This backup was made with an older backup key: use the password or recovery key from that time.</p>' : ''}
+        <p class="bk-p">First it is opened and every file checked. Nothing changes until you confirm on the next screen.</p>
+        <div id="bk-r-pwbox"><label class="bk-label">The backup password</label><input type="password" id="bk-r-pw" autocomplete="off"></div>
+        <div id="bk-r-keybox" hidden><label class="bk-label">The recovery key</label><input type="text" id="bk-r-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
+        <a href="#" class="bk-link" id="bk-r-switch" onclick="bkSwitchSecret(); return false">Use the recovery key instead</a>
+        <div class="bk-msg" id="bk-r-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-r-open">Open and check</button></div></div>`, 'bk-restore');
+      o.querySelector('#bk-r-open').onclick = () => bkPrepare(src);
+      o.querySelector('#bk-r-pw').focus();
+    }
+    function bkSwitchSecret() {
+      const key = document.getElementById('bk-r-keybox'), pw = document.getElementById('bk-r-pwbox'), sw = document.getElementById('bk-r-switch');
+      const toKey = key.hidden; key.hidden = !toKey; pw.hidden = toKey;
+      sw.textContent = toKey ? 'Use the backup password instead' : 'Use the recovery key instead';
+    }
+    async function bkPrepare(src) {
+      const useKey = !document.getElementById('bk-r-keybox').hidden;
+      const secret = (document.getElementById(useKey ? 'bk-r-key' : 'bk-r-pw').value || '');
+      const msg = document.getElementById('bk-r-msg'), btn = document.getElementById('bk-r-open');
+      if (!secret.trim()) { msg.textContent = useKey ? 'Paste the recovery key.' : 'Type the backup password.'; return; }
+      btn.disabled = true; msg.textContent = 'Opening and checking every file… a large backup takes a few minutes.';
+      try {
+        const r = await bkApi('/api/backups/restore/prepare', { name: src.name, uploadId: src.uploadId, ...(useKey ? { recoveryKey: secret.trim() } : { backupPassword: secret }) });
+        bkRestoreWarning(r);
+      } catch (e) { msg.textContent = e.message; btn.disabled = false; }
+    }
+    // Step two: the warning, from the facts the check produced (lib/backup/restore.js prepare).
+    function bkRestoreWarning(r) {
+      const body = document.getElementById('bk-r-body'); if (!body) return;
+      const b = r.backup || {}, s = r.summary, rep = r.report || {};
+      const counts = b.counts || {};
+      const lost = [];
+      if (s) {
+        if (s.messages) lost.push(`${s.messages} chat message${s.messages === 1 ? '' : 's'}${s.chatAgents.length ? ` with ${s.chatAgents.map(esc).join(', ')}` : ''}`);
+        if (s.agentsAdded.length) lost.push(`${s.agentsAdded.length === 1 ? '1 agent' : `${s.agentsAdded.length} agents`} made since then: ${s.agentsAdded.map(esc).join(', ')}`);
+        if (s.newerFiles) lost.push(`changes to ${s.newerFiles}${s.newerFilesCapped ? '+' : ''} file${s.newerFiles === 1 ? '' : 's'} in workspaces and Files folders`);
+        if (s.jobs) lost.push(`${s.jobs} background job record${s.jobs === 1 ? '' : 's'}`);
+      }
+      const notes = [];
+      const working = r.workingNow || [];
+      notes.push(`${working.length ? `Working now: <b>${working.map(esc).join(', ')}</b>. Restoring stops ${working.length === 1 ? 'it' : 'them'}. ` : ''}After the restart, agents wait for you to press <b>Resume</b>, and anything that was due waits for Run or Skip, so nothing already done is done twice.`);
+      if (s && s.agentsBack && s.agentsBack.length) notes.push(`Agents you deleted since then come back: ${s.agentsBack.map(esc).join(', ')}.`);
+      if (rep.accounts && rep.accounts.kept && rep.accounts.kept.length) notes.push('Accounts keep today\'s passwords, two-factor and sign-ins, and API tokens you revoked stay revoked. Provider keys, connected accounts and other settings go back to the backup\'s.' + (rep.accounts.disabled && rep.accounts.disabled.length ? ` Accounts only in the backup come back turned off: ${rep.accounts.disabled.map(esc).join(', ')}.` : ''));
+      if (r.mode !== 'fresh' && rep.keyStatus === 'replaced') notes.push('<b>This backup was made with a backup key this install has replaced</b> (perhaps because its password leaked). Restore it only if you made it yourself.');
+      if (r.mode !== 'fresh' && rep.keyStatus === 'other') notes.push('<b>This backup was made with a different backup key</b> than this install\'s (another computer, or a setup from before). Restore it only if you made it yourself.');
+      if (rep.linksDropped && rep.linksDropped.length) notes.push(`${rep.linksDropped.length} link${rep.linksDropped.length === 1 ? '' : 's'} in the backup pointed outside My Maestro and ${rep.linksDropped.length === 1 ? 'is' : 'are'} left out.`);
+      if (b.working && b.working.length) notes.push(`When the backup was made, ${b.working.map(esc).join(', ')} ${b.working.length === 1 ? 'was' : 'were'} working: their last steps may be missing.`);
+      if (rep.skipped && rep.skipped.length) notes.push(`${rep.skipped.length} file${rep.skipped.length === 1 ? ' was' : 's were'} left out of this backup when it was made (changing, unreadable, or leading outside its folder): ${rep.skipped.slice(0, 3).map(x => esc(x.path)).join(', ')}${rep.skipped.length > 3 ? '…' : ''}.`);
+      notes.push('Your current setup is kept, so you can <b>undo this restore for 7 days</b> (anything done after the restore is lost if you undo).');
+      const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled);
+      body.innerHTML = `<h3 class="bk-danger-title">⚠ Replace everything with the backup from ${esc(bkWhen(b.created))}?</h3>
+        <div class="bk-strip bk-ok"><span class="bk-strip-text">✓ Opened and checked: all ${esc(String(counts.files ?? '?'))} files match · My Maestro AI ${esc(b.version || '?')}${counts.agents != null ? ` · ${esc(String(counts.agents))} agent${counts.agents === 1 ? '' : 's'}` : ''}</span></div>
+        <p class="bk-p">This replaces My Maestro AI on this computer with that backup: <b>agents and their memories, chats, files, settings and keys</b>.</p>
+        ${lost.length ? `<div class="bk-lost-title">Lost if you continue (everything since ${esc(bkWhen(b.created))}):</div><ul class="bk-lost">${lost.map(x => `<li>${x}</li>`).join('')}</ul>` : ''}
+        ${notes.map(n => `<div class="bk-info">${n}</div>`).join('')}
+        <label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label>
+        <div class="bk-two"><input type="password" id="bk-c-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-c-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
+        <label class="bk-label">Type RESTORE to confirm</label><input type="text" id="bk-c-word" autocomplete="off" spellcheck="false">
+        <div class="bk-msg" id="bk-c-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="bkCancelRestore(this)">Cancel</button><button class="st-btn bk-danger" id="bk-c-go" disabled>Restore and restart</button></div>`;
+      const word = body.querySelector('#bk-c-word'), go = body.querySelector('#bk-c-go');
+      word.addEventListener('input', () => { go.disabled = word.value.trim() !== 'RESTORE'; });
+      go.onclick = () => bkConfirmRestore(r.id);
+      body.querySelector('#bk-c-pw').focus();
+    }
+    async function bkCancelRestore(btn) {
+      btn.disabled = true;
+      try { await bkApi('/api/backups/restore/cancel', {}); } catch { /* it is forgotten at the next one anyway */ }
+      dialogRequestClose(btn);
+      if (document.getElementById('bk-body')) loadBackups();
+    }
+    async function bkConfirmRestore(id) {
+      const msg = document.getElementById('bk-c-msg'), go = document.getElementById('bk-c-go');
+      go.disabled = true; msg.textContent = 'Confirming…';
+      const before = await bkBootId();
+      try {
+        await bkApi('/api/backups/restore/confirm', { id, confirm: document.getElementById('bk-c-word').value.trim(), password: document.getElementById('bk-c-pw').value, code: (document.getElementById('bk-c-code') || {}).value || '' });
+      } catch (e) { msg.textContent = e.message; go.disabled = false; return; }
+      bkRestarting('Restoring the backup… My Maestro restarts and comes back in a minute or two.', before);
+    }
+    async function bkBootId() { try { return (await (await fetch('/api/health', { credentials: 'include' })).json()).bootId || null; } catch { return null; } }
+    // The swap happens while My Maestro starts again: wait for a new process (a new boot id), then reload.
+    function bkRestarting(text, before) {
+      document.querySelectorAll('.question-overlay, .st-overlay').forEach(n => n.remove());
+      const o = bkOverlay('bk-restarting-overlay', `<h3>${esc(text)}</h3><p class="bk-p" id="bk-rs-msg">Waiting for My Maestro to start again…</p>`);
+      let n = 0;
+      const tick = async () => {
+        n++;
+        try {
+          const r = await fetch('/api/health', { credentials: 'include', cache: 'no-store' });
+          if (r.status === 401) { location.href = '/login'; return; }   // a new process that doesn't know this sign-in
+          const h = await r.json();
+          if (h && h.bootId && h.bootId !== before) { location.reload(); return; }
+        } catch { /* going down or not up yet */ }
+        if (n > 150) { const m = o.querySelector('#bk-rs-msg'); if (m) m.textContent = 'It has not come back after five minutes. From a terminal: mymaestro status, then mymaestro logs.'; return; }
+        setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 3000);
+    }
+    // While a restored setup waits for Resume, every admin page says so at the top.
+    async function paintRecoveryBanner(state) {
+      const me = window.hubMe;
+      let bar = document.getElementById('hub-recovery-notice');
+      if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
+      let rec = state ? state.recovery : undefined;
+      if (rec === undefined) { try { rec = (await bkApi('/api/backups/recovery', undefined, 'GET')).recovery; } catch { return; } }
+      if (!rec || rec.resumedAt) { if (bar) { bar.remove(); layoutBanners(); } return; }
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-recovery-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:#6b4a0e;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
+      const held = (rec.held || []).length;
+      bar.innerHTML = `Restored from the backup of ${esc(bkWhen(rec.restoredFrom))}. Agents are paused until you press Resume${held ? `; ${held} item${held === 1 ? '' : 's'} wait${held === 1 ? 's' : ''} for Run or Skip` : ''}. <a href="#" onclick="openSettingsAt('st-backups-section'); return false" style="color:#fff;text-decoration:underline">Open Backups</a> <button onclick="bkResume(this)" style="margin-left:8px;padding:2px 10px;border-radius:4px;border:1px solid #fff;background:transparent;color:#fff;cursor:pointer">Resume</button>`;
+      layoutBanners();
     }
 
     // ── Restart Hub Button ──
@@ -1587,6 +2099,7 @@
     // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
     const ST_GROUPS = [
       { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-updates-section'] },
+      { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
@@ -1665,6 +2178,7 @@
       const keys = PROVIDERS.filter(p => p.hasKey && pv[p.id] && pv[p.id].hasKey).length;   // server URLs always have a default, so they say nothing
       stSum('status', 'setup', 'Setup: checking…');
       stSum('status', 'security', 'Security: checking…');
+      stSum('backups', 'last', 'Backups: checking…');
       stSum('models', 'prov', keys ? `${keys} provider key${keys === 1 ? '' : 's'}` : 'no provider keys');
       for (const k of ['or', 'plan', 'local']) stSum('models', k, '');
       const sbd = (data && data.sandboxDefaults) || {};
@@ -1756,6 +2270,12 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="checkUpdatesNow(this)">Check now</button></div>
       </div>`;
       setTimeout(loadUpdateCheck, 0);
+      // Backups (lib/backup): one encrypted file with everything; restore with a warning first (app.js loadBackups).
+      html += `<div class="st-section" id="st-backups-section"><h4>Backups</h4>
+        <div class="st-hint" style="margin-left:0">Everything that makes this My Maestro yours, in one encrypted file: agents and their memories, chats, Files folders, settings, keys and AI sign-ins. Restoring it brings the whole setup back, here or on another computer. From a terminal: <code>mymaestro backup</code>, <code>mymaestro restore</code>.</div>
+        <div id="bk-body" class="bk-body">Checking…</div>
+      </div>`;
+      setTimeout(loadBackups, 0);
       // Modules (lib/modules): optional capabilities with guided setup live on their own page.
       html += `<div class="st-section" id="st-modules-section"><h4>Modules</h4>
         <div class="st-hint">Optional capabilities for agents (crypto exchanges, wallets, mail, search...), each with a step-by-step setup, encrypted keys and per-agent access. <a href="/modules" style="color:var(--accent)">Open the Modules page →</a></div>
@@ -2118,7 +2638,7 @@
     // checklist, security. Each one sits below the ones above it, so none covers another (or its X).
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
+      for (const id of ['hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -4201,6 +4721,7 @@
       renderUserChip();
       document.addEventListener('click', (e) => { if (!e.target.closest('#user-chip-wrap')) toggleAccountMenu(false); });
       if (new URLSearchParams(location.search).get('security') === '1') openSecurityDialog();
+      if (new URLSearchParams(location.search).get('backups') === '1') openSettingsAt('st-backups-section');   // a backup warning's notification
       await Promise.all([loadAgents()]);
       // "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup interview this way).
       { const want = new URLSearchParams(location.search).get('agent'); const a = want && AGENTS.find(x => x.name === want); if (a) startSoloChat(a.name, a.model); }

@@ -13,6 +13,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// A restore (or its undo) waiting for this start is carried out first: before .env is read and before anything opens a
+// database (lib/backup/apply). If it can neither be finished nor rolled back, stop here rather than start on a
+// half-swapped install; the next start tries again, and the set-aside copies are kept.
+let restoredAtBoot = { state: 'none' };
+try { restoredAtBoot = require('./lib/backup/apply').applyAtBoot({ root: __dirname, log: (m) => console.log(m) }); }
+catch (e) { console.error(`[restore] the restore could not be finished or rolled back, so My Maestro AI stops here to keep your data safe: ${e.message}`); process.exit(1); }
+
 // Load .env BEFORE any other requires — skill-manager reads env at import time
 try {
   const envFile = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
@@ -21,6 +28,20 @@ try {
     if (match) process.env[match[1]] = match[2].trim();
   }
 } catch {}
+
+// Agents' boxes a backup paused and couldn't let go (the process stopped mid-copy): let them go now, after .env (it may say
+// how to reach Docker). Their record sits in .restore/, which a restore never moves; it stays until each box is let go.
+try {
+  const pausedFile = path.join(__dirname, '.restore', 'backup-paused.json');
+  if (fs.existsSync(pausedFile) && !require('./lib/backup/create').letGoRecorded(pausedFile)) console.error(`[backup] agent boxes a backup paused are still paused, or their record (${pausedFile}) can't be read; tried again at the next start`);
+} catch (e) { console.error('[backup] could not let paused agent boxes go:', e.message); }
+
+// A restored setup starts paused: agents start no new work and what was due or queued in the backup is held for Run or
+// Skip (lib/backup/recovery). It runs until it has completed for this restore; if it can't, stop rather than run unpaused.
+if (restoredAtBoot.state === 'applied') {
+  try { require('./lib/backup/recovery').enterOnce(__dirname, restoredAtBoot.journal); }
+  catch (e) { console.error(`[restore] could not pause agents after the restore, so My Maestro AI stops here: ${e.message}`); process.exit(1); }
+}
 
 const {
   getAgents, getAgentFiles, saveAgentFile, createAgent, cloneAgent,
@@ -169,6 +190,24 @@ const PORT = parseInt(process.env.PORT || '8888', 10);
 // Security check (lib/security-check): the hub reviews its own security configuration (Settings → Security check,
 // GET /api/security-check, nightly). Wired with how this process actually listens.
 function securityCheck() { return require('./lib/security-check').getSecurityCheck({ exposed: () => !!BIND.exposed, port: PORT, host: HOST }); }
+// Backups (lib/backup/service): one instance for the routes; download links last two minutes and work once.
+let backupSvc = null;
+const backupDownloads = new Map();
+const rotationTickets = new Map();   // "it may have leaked", step two within 10 minutes of step one, by the same admin
+function backupService() {
+  if (backupSvc) return backupSvc;
+  backupSvc = require('./lib/backup/service').createBackupService({
+    root: __dirname, hubHome: require('./lib/hub-home').HUB_HOME,
+    hubInfo: () => { try { return require('./lib/hub-map').getHubMap().versionInfo(); } catch { return {}; } },
+    busyAgents: () => { try { return require('./lib/hub-events').events.activeAgents(); } catch { return []; } },
+    restart: (reason) => require('./lib/restart').requestRestart({ projectDir: __dirname, reason, by: 'owner' }),
+    scheduled: () => require('./lib/scheduled-tasks').getScheduledTasks(),
+    consult: () => require('./lib/consult-queue').getConsultQueue(),
+    hasAccounts: () => hubAuth.hasUsers(),
+    log: (m) => console.log(m),
+  });
+  return backupSvc;
+}
 const MAX_BODY_SIZE = 50 * 1024 * 1024; // 50MB to accommodate large screenshot pastes
 // Local models (lib/local-models): the hub's llama-swap proxy for every local engine.
 const localModels = () => require('./lib/local-models').getLocalModels();
@@ -1993,7 +2032,8 @@ async function handleHttpRequest(req, res) {
 
     // ── Settings API ───────────────────────────────────────────────
     if (pathname === '/api/settings' && req.method === 'GET') {
-      return jsonResponse(res, 200, hubSettings.getForUI());
+      const s = { ...hubSettings.getForUI() }; delete s.backup;   // backups have their own routes (and the key never leaves)
+      return jsonResponse(res, 200, s);
     }
 
     if (pathname === '/api/settings' && req.method === 'POST') {
@@ -2001,8 +2041,10 @@ async function handleHttpRequest(req, res) {
       req.on('data', c => body += c);
       req.on('end', () => {
         try {
-          const patch = JSON.parse(body);
+          const patch = JSON.parse(body, (k, v) => (k === '__proto__' || k === 'constructor' || k === 'prototype') ? undefined : v);   // never a key that reaches a prototype
           // The wallet-agent list is not a UI setting: widening it hands signing tools to another agent. Owner edits data/settings.json by hand.
+          // Backups (key, folders) change only through /api/backups/*, which asks for the password and two-factor code again.
+          if (patch && typeof patch === 'object' && 'backup' in patch) { console.warn('[settings] ignored backup in /api/settings patch (use Settings → Backups)'); delete patch.backup; }
           if (patch && typeof patch === 'object' && 'walletAgents' in patch) { console.warn('[settings] ignored walletAgents in /api/settings patch (edit data/settings.json directly)'); delete patch.walletAgents; }
           // The owner's receiving address decides where wallet value may go: not a UI setting either (review F10). HUB_WALLET_OWNER in .env, or data/settings.json by hand.
           if (patch && typeof patch === 'object' && 'walletOwner' in patch) { console.warn('[settings] ignored walletOwner in /api/settings patch (set HUB_WALLET_OWNER or edit data/settings.json directly)'); delete patch.walletOwner; }
@@ -2167,6 +2209,123 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/update-check' && req.method === 'GET') {
       try { return jsonResponse(res, 200, await require('./lib/update-check').getUpdateCheck().status(req.hubUser)); }
       catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+    }
+
+    // ── Backups (lib/backup): admin only. Restoring, undoing and downloading ask for the password and two-factor code
+    // again (stepUp). The Welcome-page restore further below is for a fresh install with no account yet. ──
+    if (pathname === '/api/backups' || pathname.startsWith('/api/backups/')) {
+      if (!access.isAdmin(req.hubUser) || req.hubPendingTotp) return jsonResponse(res, 403, { error: 'admin_only' });
+      const svc = backupService();
+      const body = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
+      const stepUp = (b) => {
+        const u = req.hubUser;
+        const r = hubAuth.login(u.login, String(b.password || ''), { ip: req.socket && req.socket.remoteAddress });
+        if (!r.ok) return r.locked ? r.error : 'That password is not right.';
+        if (r.needsTotp) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return 'That two-factor code is not right.'; }
+        return null;
+      };
+      try {
+        if (pathname === '/api/backups' && req.method === 'GET') { const st = svc.status(); const sch = require('./lib/backup/schedule').current(); return jsonResponse(res, 200, { ...st, nightly: sch ? sch.info(st) : null, backups: await svc.list() }); }
+        // Nightly backups: turning them off or keeping fewer would let older backups go, so the step-up first
+        if (pathname === '/api/backups/schedule' && req.method === 'POST') {
+          const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
+          const v = svc.setSchedule(b.schedule);
+          const sch = require('./lib/backup/schedule').current(); if (sch) sch.rescheduled();
+          return jsonResponse(res, 200, { schedule: v, nightly: sch ? sch.info() : null });
+        }
+        // Choosing the backup key and where copies go decides who can read everything: the step-up first, every time
+        if (pathname === '/api/backups/setup' && req.method === 'POST') {
+          const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
+          return jsonResponse(res, 200, await svc.setup(b.newBackupPassword || b.newPassword, { replace: b.replace === true }));
+        }
+        if (pathname === '/api/backups/suggest-passphrase' && req.method === 'POST') {   // a password: never cached
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          return res.end(JSON.stringify({ passphrase: require('./lib/backup/words').suggestPassphrase(6) }));
+        }
+        if (pathname === '/api/backups/recovery' && req.method === 'GET') { const st = svc.status(); return jsonResponse(res, 200, { recovery: st.recovery, lastRestore: st.lastRestore }); }
+        if (pathname === '/api/backups/folders' && req.method === 'POST') {
+          const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
+          return jsonResponse(res, 200, { folders: svc.setFolders(b.folders, { create: !!b.create }) });
+        }
+        if (pathname === '/api/backups/run' && req.method === 'POST') { const b = await body(); return jsonResponse(res, 200, await svc.backupNow({ now: !!b.now, reason: 'manual' })); }
+        if (pathname === '/api/backups/upload' && req.method === 'POST') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, await svc.acceptUpload(req, { expected: Number(req.headers['content-length']) || 0, uploadId: q.get('id') || null, offset: Number(q.get('offset') || 0), done: q.get('done') !== '0' })); }
+        if (pathname === '/api/backups/restore/prepare' && req.method === 'POST') { const b = await body(); return jsonResponse(res, 200, await svc.prepareRestore({ name: b.name, uploadId: b.uploadId, password: b.backupPassword, recoveryKey: b.recoveryKey, mode: 'existing' })); }
+        if (pathname === '/api/backups/restore/confirm' && req.method === 'POST') {
+          const b = await body();
+          if (b.confirm !== 'RESTORE') return jsonResponse(res, 400, { error: 'Type RESTORE to confirm.' });
+          const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
+          return jsonResponse(res, 200, { ...(await svc.confirmRestore({ id: b.id })), restarting: true });
+        }
+        if (pathname === '/api/backups/restore/cancel' && req.method === 'POST') return jsonResponse(res, 200, { ok: await svc.cancelRestore() });
+        if (pathname === '/api/backups/undo' && req.method === 'POST') { const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no }); return jsonResponse(res, 200, { ...(await svc.undo()), restarting: true }); }
+        // The backup password and key: the account password and two-factor code again, then the backup secrets
+        if (pathname === '/api/backups/password' && req.method === 'POST') {
+          const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
+          return jsonResponse(res, 200, await svc.changePassword({ password: b.backupPassword, recoveryKey: b.recoveryKey, newPassword: b.newBackupPassword }));
+        }
+        if (pathname === '/api/backups/rotate' && req.method === 'POST') {
+          const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
+          const r = await svc.startRotation({ password: b.backupPassword, recoveryKey: b.recoveryKey, newPassword: b.newBackupPassword });
+          const ticket = require('crypto').randomBytes(18).toString('hex');
+          rotationTickets.set(ticket, { user: req.hubUser.id, until: Date.now() + 10 * 60 * 1000 });
+          return jsonResponse(res, 200, { ...r, ticket });
+        }
+        if (pathname === '/api/backups/recovery-key' && req.method === 'POST') {
+          const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
+          return jsonResponse(res, 200, await svc.recoveryKey({ password: b.backupPassword }));
+        }
+        if (pathname === '/api/backups/rotate/finish' && req.method === 'POST') {
+          const b = await body();
+          // the ticket from step one (same admin, 10 minutes) stands in for the step-up; it is used up only by a finish that worked
+          const t = b.ticket ? rotationTickets.get(String(b.ticket)) : null;
+          const ticketOk = !!(t && t.user === req.hubUser.id && t.until > Date.now());
+          if (!ticketOk) { const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no, stepUp: true }); }
+          const out = await svc.finishRotation({ oldPassword: b.oldBackupPassword, oldRecoveryKey: b.oldRecoveryKey, newPassword: b.newBackupPassword, action: b.action });
+          if (ticketOk) rotationTickets.delete(String(b.ticket));
+          return jsonResponse(res, 200, out);
+        }
+        if (pathname === '/api/backups/recovery/resume' && req.method === 'POST') return jsonResponse(res, 200, { resumed: svc.resume() });
+        if (pathname === '/api/backups/recovery/decide' && req.method === 'POST') { const b = await body(); return jsonResponse(res, 200, svc.decide(b.id, b.action)); }
+        if (pathname === '/api/backups/download-link' && req.method === 'POST') {
+          const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
+          const file = svc.filePath(b.name);
+          const token = require('crypto').randomBytes(18).toString('hex');
+          backupDownloads.set(token, { file, name: b.name, user: req.hubUser.id, until: Date.now() + 120000 });
+          return jsonResponse(res, 200, { url: `/api/backups/file/${token}` });
+        }
+        const dl = /^\/api\/backups\/file\/([0-9a-f]{36})$/.exec(pathname);
+        if (dl && req.method === 'GET') {
+          const t = backupDownloads.get(dl[1]); backupDownloads.delete(dl[1]);
+          if (!t || t.until < Date.now() || t.user !== req.hubUser.id) return jsonResponse(res, 404, { error: 'That download link has expired.' });
+          let st; try { st = fs.lstatSync(t.file); } catch { st = null; }
+          if (!st || !st.isFile()) return jsonResponse(res, 404, { error: 'That backup is gone.' });
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': st.size, 'Content-Disposition': `attachment; filename="${t.name}"`, 'Cache-Control': 'no-store' });
+          return require('stream').pipeline(fs.createReadStream(t.file), res, () => {});
+        }
+        return jsonResponse(res, 404, { error: 'not found' });
+      } catch (e) { return jsonResponse(res, e.code === 'EBUSY' ? 409 : 400, { error: e.message, code: e.code || null }); }
+    }
+    // The Welcome-page restore: only while no account exists, and only with the installer's one-time setup code.
+    if (pathname.startsWith('/api/welcome/restore/') && req.method === 'POST') {
+      const welcome = require('./lib/welcome').createWelcome({ dataDir: path.join(__dirname, 'data') });
+      if (hubAuth.hasUsers()) return jsonResponse(res, 403, { error: 'This My Maestro is already set up. Restore from Settings → Backups instead.' });
+      // the setup code comes in a header and is checked before any body is read
+      if (!welcome.checkSetupToken(String(req.headers['x-setup-token'] || ''))) return jsonResponse(res, 403, { error: 'setup_code' });
+      const svc = backupService();
+      try {
+        if (pathname === '/api/welcome/restore/upload') {
+          const q = new URL(req.url, 'http://x').searchParams;
+          return jsonResponse(res, 200, await svc.acceptUpload(req, { expected: Number(req.headers['content-length']) || 0, uploadId: q.get('id') || null, offset: Number(q.get('offset') || 0), done: q.get('done') !== '0' }));
+        }
+        let b = {}; try { b = JSON.parse((await readBody(req)) || '{}'); } catch {}
+        if (pathname === '/api/welcome/restore/prepare') return jsonResponse(res, 200, await svc.prepareRestore({ uploadId: b.uploadId, password: b.backupPassword, recoveryKey: b.recoveryKey, mode: 'fresh' }));
+        if (pathname === '/api/welcome/restore/confirm') {
+          if (b.confirm !== 'RESTORE') return jsonResponse(res, 400, { error: 'Type RESTORE to confirm.' });
+          const who = svc.checkStagedAdmin({ login: b.login, password: b.password, code: b.code });
+          return jsonResponse(res, 200, { ...(await svc.confirmRestore({ id: b.id })), restarting: true, signInAs: who.login });
+        }
+        return jsonResponse(res, 404, { error: 'not found' });
+      } catch (e) { return jsonResponse(res, 400, { error: e.message, code: e.code || null }); }
     }
     if (pathname === '/api/update-check/now' && req.method === 'POST') {
       try { const uc = require('./lib/update-check').getUpdateCheck(); await uc.check({ reason: 'manual' }); return jsonResponse(res, 200, await uc.status(req.hubUser)); }
@@ -2897,6 +3056,16 @@ try { fs.chmodSync(path.join(__dirname, 'data'), 0o700); } catch {}
 try { require('./lib/push').getPush().start(require('./lib/hub-events').events); } catch (e) { console.error('[push] not started:', e.message); }
 
 server.listen(PORT, HOST, () => {
+  // A restored setup that has run for 30 s counts as healthy: its 7-day undo clock starts (lib/backup/apply).
+  setTimeout(() => { try { if (require('./lib/backup/apply').markHealthy({ root: __dirname })) console.log('[restore] the restored setup started fine; it can be undone for 7 days'); } catch (e) { console.error('[restore]', e.message); } }, 30000).unref();
+  // once a day: set-aside copies past their 7 days, a checked restore nobody confirmed, old uploads (not only at a start)
+  setInterval(() => { backupService().pruneDaily().catch((e) => console.error('[restore] cleanup:', e.message)); }, 24 * 3600 * 1000).unref();
+  // Nightly backups at the set time in the owner's zone, the keep rules after each, and a warning to the admins' phones
+  // when one fails or none was made for 3 days (lib/backup/schedule). Nothing runs until backups are set up.
+  try {
+    require('./lib/backup/schedule').createScheduler({ service: backupService(), root: __dirname, zone: () => require('./lib/timezone').hubZone(),
+      notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high' }), log: (m) => console.log(m) }).start();
+  } catch (e) { console.error('[backup] nightly backups not started:', e.message); }
   // Maestro is the lead agent. New installs are seeded with the mark; an older install that marks no lead (and so
   // counted every admin-side primary agent as one) gets maestro marked once (lib/agents ensureMaestroLead). It runs
   // here, once this process owns the port, so a second copy started on the same data never gets this far; it is
