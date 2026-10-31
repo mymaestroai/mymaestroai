@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createServiceManager, renderSystemdUnit, renderLaunchdPlist } = require('../lib/service-manager');
+const { createServiceManager, renderSystemdUnit, renderLaunchdPlist, startEnv } = require('../lib/service-manager');
 
 function sandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'svcmgr-'));
@@ -116,4 +116,54 @@ test('the mymaestro command: help and version run, and every command named in th
   const src = fs.readFileSync(cli, 'utf8');
   for (const c of ['status', 'start', 'stop', 'restart', 'logs', 'open', "'setup-link'", 'update', 'doctor', 'backup', "'reset-2fa'", 'service', 'uninstall', 'version']) assert.match(src, new RegExp(`^  (async )?${c.replace(/'/g, "'")}\\(\\)`, 'm'), c);
   assert.match(src, /if \(flag\('--plain'\)\) \{ if \(link\) out\(link\); return; \}/, 'the installer reads just the link');
+});
+
+test('mymaestro start (and the installer, which uses it) passes an allow-listed environment: no provider keys, tokens, HUB_* or CLAUDE_CODE_* from the caller', () => {
+  const { home, dir } = sandbox();
+  let spawned = null;
+  const caller = { PATH: '/usr/bin:/bin', HOME: home, USER: 'eric', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TMPDIR: '/tmp/', TZ: 'America/New_York', HTTPS_PROXY: 'http://proxy:3128',
+    OPENAI_API_KEY: 'sk-real', GEMINI_API_KEY: 'g-real', FOO_API_KEY: 'x', ANTHROPIC_API_KEY: 'a', GITHUB_TOKEN: 'ghp', HUB_AGENT_PERMISSION_MODE: 'bypassPermissions', HUB_WORKER_DEFAULT_SCOPE: 'full',
+    HUB_HOME: '/live/hub-home', PORT: '8888', CLAUDE_CODE_OAUTH_TOKEN: 't', CLAUDECODE: '1', XPC_SERVICE_NAME: 'com.agent-hub', INVOCATION_ID: 'i', NODE_OPTIONS: '--require /x.js', SSH_AUTH_SOCK: '/s' };
+  const m = createServiceManager({ dir, home, platform: 'darwin', uid: 501, exec: recorder().exec, env: caller, spawn: (cmd, args, o) => { spawned = { cmd, args, o }; return { pid: 4321, unref() {} }; } });
+  const r = m.start({ node: '/n/bin/node' });
+  assert.strictEqual(r.ok, true); assert.strictEqual(r.pid, 4321);
+  assert.deepStrictEqual(spawned.o.env, { PATH: '/usr/bin:/bin', HOME: home, USER: 'eric', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TMPDIR: '/tmp/', TZ: 'America/New_York', HTTPS_PROXY: 'http://proxy:3128' });
+  for (const k of Object.keys(startEnv(process.env))) assert.ok(!/KEY|TOKEN|SECRET|PASSWORD|^HUB_|^CLAUDE/.test(k), k);
+});
+
+test('the service files carry their own short environment, not the caller\'s', () => {
+  const plist = renderLaunchdPlist({ dir: '/opt/hub', node: '/n/bin/node', home: '/home/u' });
+  const unit = renderSystemdUnit({ dir: '/opt/hub', node: '/n/bin/node', home: '/home/u' });
+  const keys = [...plist.matchAll(/<key>([A-Z_]+)<\/key><string>/g)].map(m => m[1]);
+  assert.deepStrictEqual(keys, ['PATH', 'HOME', 'NODE_ENV']);
+  assert.deepStrictEqual([...unit.matchAll(/^Environment=([A-Z_]+)=/gm)].map(m => m[1]), ['PATH', 'HOME', 'NODE_ENV']);
+});
+
+test('a second hub on this computer gets its own service name instead of replacing the first one\'s; a reinstall keeps its name', () => {
+  const { home, dir } = sandbox();
+  const other = path.join(path.dirname(dir), 'other-hub');
+  const agents = path.join(home, 'Library/LaunchAgents'); fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'ai.mymaestro.hub.plist'), renderLaunchdPlist({ dir: other, node: '/n/bin/node', home }));
+  const r = recorder();
+  const m = createServiceManager({ dir, home, platform: 'darwin', uid: 501, exec: r.exec });
+  const res = m.install({ node: '/n/bin/node' });
+  assert.match(res.label, /^ai\.mymaestro\.hub\.[0-9a-f]{8}$/);
+  assert.ok(!r.calls.includes('launchctl bootout gui/501/ai.mymaestro.hub'), 'the other hub\'s agent is left alone');
+  assert.ok(fs.readFileSync(path.join(agents, 'ai.mymaestro.hub.plist'), 'utf8').includes(other), 'and its plist is not overwritten');
+  assert.strictEqual(m.install({ node: '/n/bin/node' }).label, res.label, 'install.json keeps the name');
+  // the hub that owns the default name keeps it
+  assert.strictEqual(createServiceManager({ dir: other, home, platform: 'darwin', uid: 501, exec: recorder().exec }).serviceName('launchd'), 'ai.mymaestro.hub');
+  // Linux: same rule for the unit
+  const units = path.join(home, '.config/systemd/user'); fs.mkdirSync(units, { recursive: true });
+  fs.writeFileSync(path.join(units, 'mymaestroai.service'), renderSystemdUnit({ dir: other, node: '/n/bin/node', home }));
+  const { dir: dir2 } = sandbox();
+  assert.match(createServiceManager({ dir: dir2, home, platform: 'linux', exec: recorder().exec }).serviceName('systemd'), /^mymaestroai-[0-9a-f]{8}\.service$/);
+});
+
+test('the hub set up before the installer (legacy com.agent-hub: node server.js run in its WorkingDirectory) is found as this folder\'s, and only by its own folder', () => {
+  const { home, dir } = sandbox();
+  const agents = path.join(home, 'Library/LaunchAgents'); fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'com.agent-hub.plist'), `<?xml version="1.0"?>\n<plist version="1.0">\n<dict>\n\t<key>Label</key>\n\t<string>com.agent-hub</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/n/bin/node</string>\n\t\t<string>server.js</string>\n\t</array>\n\t<key>WorkingDirectory</key>\n\t<string>${dir}</string>\n</dict>\n</plist>\n`);
+  assert.deepStrictEqual(createServiceManager({ dir, home, platform: 'darwin', exec: recorder().exec }).detect(), { kind: 'launchd', label: 'com.agent-hub' });
+  assert.deepStrictEqual(createServiceManager({ dir: dir + '-test', home, platform: 'darwin', exec: recorder().exec }).detect(), { kind: 'none' }, 'a folder whose path starts the same is not it');
 });

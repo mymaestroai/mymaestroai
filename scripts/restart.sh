@@ -20,16 +20,6 @@ fi
 
 echo "[restart] Hub port: $HUB_PORT"
 
-# ── Installed as a launchd service (setup.sh)? Let launchd restart it ──
-# Killing the server ourselves would race KeepAlive's respawn against the
-# nohup copy below.
-if [ "$(uname)" = "Darwin" ] && launchctl print "gui/$(id -u)/com.agent-hub" >/dev/null 2>&1; then
-  echo "[restart] Restarting launchd service com.agent-hub..."
-  launchctl kickstart -k "gui/$(id -u)/com.agent-hub"
-  echo "✅ Service restarted"
-  exit 0
-fi
-
 # ── Find process listening on the hub port ──
 find_listener() {
   if command -v lsof >/dev/null 2>&1; then
@@ -40,6 +30,42 @@ find_listener() {
     fuser "$HUB_PORT/tcp" 2>/dev/null | tr -d '[:space:]' || true
   fi
 }
+
+# ── Only ever this folder's hub ──
+# Whatever listens on the port must be running from this folder; another hub (another install, the default port when
+# .env has none) is never stopped or restarted from here.
+listener_cwd() {
+  if [ -e "/proc/$1/cwd" ]; then readlink "/proc/$1/cwd" 2>/dev/null
+  elif command -v lsof >/dev/null 2>&1; then lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+  fi
+}
+PROJECT_DIR_REAL="$(cd "$PROJECT_DIR" && pwd -P)"
+_lp=$(find_listener | head -1)
+if [ -n "$_lp" ]; then
+  _lcwd=$(listener_cwd "$_lp")
+  if [ "$_lcwd" != "$PROJECT_DIR_REAL" ] && [ "$_lcwd" != "$PROJECT_DIR" ]; then
+    echo "❌ Port $HUB_PORT is served by PID $_lp running from ${_lcwd:-an unknown folder}, not $PROJECT_DIR. Not touching it." >&2
+    exit 1
+  fi
+fi
+
+# ── Run by launchd (macOS)? Let launchd restart it, but only the job whose process IS this hub ──
+# The listener (checked above to be this folder's) must be the very process launchd reports for the job. A label alone
+# proves nothing: another hub on this Mac may use it (the legacy com.agent-hub). Killing the server ourselves would
+# race KeepAlive's respawn against the nohup copy below.
+if [ "$(uname)" = "Darwin" ] && [ -n "$_lp" ]; then
+  for _plist in "$HOME"/Library/LaunchAgents/*.plist; do
+    [ -f "$_plist" ] || continue
+    _label=$(basename "$_plist" .plist)
+    _jpid=$(launchctl print "gui/$(id -u)/$_label" 2>/dev/null | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)[[:space:]]*$/\1/p' | head -1)
+    if [ "$_jpid" = "$_lp" ]; then
+      echo "[restart] Restarting launchd service $_label (PID $_lp)..."
+      launchctl kickstart -k "gui/$(id -u)/$_label"
+      echo "✅ Service restarted"
+      exit 0
+    fi
+  done
+fi
 
 # ── Running under systemd (Linux)? Let systemd restart it ──
 # The listener belongs to a unit: ask systemd to restart that unit (user or system scope). Killing it ourselves and
@@ -123,7 +149,13 @@ echo "  Node:      $(node --version)"
 echo "  Port:      $HUB_PORT"
 echo "  Log:       $LOG"
 
-nohup node server.js >> "$LOG" 2>&1 &
+# An allow-listed environment (lib/service-manager START_ENV_KEEP): the profiles above are read for PATH (nvm, Homebrew),
+# but their provider keys, tokens and HUB_* settings don't reach the hub, which reads its own .env and settings.
+_keep=()
+for _v in PATH HOME USER LOGNAME SHELL LANG LANGUAGE TZ TMPDIR TMP TEMP HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS $(env | sed -n 's/^\(LC_[A-Za-z_]*\)=.*/\1/p'); do
+  [ -n "${!_v+x}" ] && _keep+=("$_v=${!_v}")
+done
+nohup env -i "${_keep[@]}" node server.js >> "$LOG" 2>&1 &
 NEW_PID=$!
 echo "$NEW_PID" > "$PIDFILE"
 

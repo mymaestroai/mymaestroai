@@ -17,7 +17,8 @@ test('underSystemd: any of the systemd-provided variables', () => {
 
 test('systemd mode: no script, a delayed SIGUSR2 to itself, exit code 75 advertised', () => {
   let scheduled = null; let signalled = null; const logs = [];
-  const r = R.requestRestart({ projectDir: '/nowhere', reason: 'test', by: 'owner', env: { INVOCATION_ID: 'x' }, setTimeoutImpl: (fn, ms) => { scheduled = { fn, ms }; return { unref() {} }; }, killImpl: (pid, sig) => { signalled = { pid, sig }; }, log: (s) => logs.push(s) });
+  const r = R.requestRestart({ projectDir: '/nowhere', reason: 'test', by: 'owner', env: { INVOCATION_ID: 'x' }, platform: 'linux', folder: { kind: 'systemd', unit: 'mymaestroai.service' },
+    fsImpl: { ...fs, readFileSync: (f, e) => (String(f).startsWith('/proc/') ? '' : fs.readFileSync(f, e)) }, execImpl: (cmd, args) => (args.includes('MainPID') ? `${process.pid}\n` : ''), setTimeoutImpl: (fn, ms) => { scheduled = { fn, ms }; return { unref() {} }; }, killImpl: (pid, sig) => { signalled = { pid, sig }; }, log: (s) => logs.push(s) });
   assert.strictEqual(r.mode, 'systemd'); assert.match(r.note, /code 75/);
   assert.strictEqual(scheduled.ms, R.SYSTEMD_DELAY_MS);
   scheduled.fn();
@@ -45,15 +46,70 @@ test('relaunch mode (no supervisor): scripts/relaunch.js spawned detached with t
   assert.strictEqual(spawned[spawned.indexOf('--port') + 1], '7777');
 });
 
-test('launchd mode (macOS service): the label from XPC_SERVICE_NAME or launchctl print; kickstart -k after the delay', () => {
-  assert.strictEqual(R.launchdLabel({ platform: 'linux', env: { XPC_SERVICE_NAME: 'com.agent-hub' } }), null);
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: 'com.agent-hub' }, execImpl: () => { throw new Error('no'); } }), 'com.agent-hub');
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: '0' }, execImpl: () => '' }), 'com.agent-hub', 'launchctl print found the job');
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, execImpl: () => { throw new Error('no such job'); } }), null);
+// launchctl print / systemctl show stand-ins: jobs maps label -> pid (null = loaded, not running); a missing label throws.
+const launchctl = (jobs, calls = []) => (cmd, args) => {
+  calls.push([cmd, ...args]);
+  if (cmd === 'launchctl' && args[0] === 'print') {
+    const label = args[1].split('/').pop();
+    if (!(label in jobs)) throw new Error('Could not find service');
+    return `${label} = {\n\tactive count = 1\n\tstate = ${jobs[label] ? 'running' : 'not running'}\n${jobs[label] ? `\tpid = ${jobs[label]}\n` : ''}\tendpoints = {\n\t\tpid = 999999\n\t}\n}\n`;
+  }
+  return '';
+};
+const none = { kind: 'none' };
+
+test('launchd identity: a label counts only when launchd says its job IS this process (legacy com.agent-hub, installer label, this folder\'s own)', () => {
+  // the live hub here: legacy label, its own pid
+  assert.deepStrictEqual(R.supervisor({ platform: 'darwin', pid: 3475, env: { XPC_SERVICE_NAME: 'com.agent-hub' }, execImpl: launchctl({ 'com.agent-hub': 3475 }), folder: none }), { kind: 'launchd', label: 'com.agent-hub' });
+  // an installer-made hub (ai.mymaestro.hub, recorded in data/install.json)
+  assert.deepStrictEqual(R.supervisor({ platform: 'darwin', pid: 700, env: { XPC_SERVICE_NAME: 'ai.mymaestro.hub' }, execImpl: launchctl({ 'ai.mymaestro.hub': 700 }), folder: { kind: 'launchd', label: 'ai.mymaestro.hub' } }), { kind: 'launchd', label: 'ai.mymaestro.hub' });
+  // a per-install label found only through this folder's service
+  assert.deepStrictEqual(R.supervisor({ platform: 'darwin', pid: 701, env: {}, execImpl: launchctl({ 'ai.mymaestro.hub.1a2b3c4d': 701, 'com.agent-hub': 3475 }), folder: { kind: 'launchd', label: 'ai.mymaestro.hub.1a2b3c4d' } }), { kind: 'launchd', label: 'ai.mymaestro.hub.1a2b3c4d' });
+  assert.strictEqual(R.launchdLabel({ platform: 'linux', env: { XPC_SERVICE_NAME: 'com.agent-hub' }, folder: none }), null);
+});
+
+test('two hubs on one Mac: a hub started from the live hub\'s shell (inherited XPC_SERVICE_NAME=com.agent-hub) is NOT that service, and its Restart never kickstarts it', () => {
+  const calls = [];
+  const exec = launchctl({ 'com.agent-hub': 3475 }, calls);
+  assert.deepStrictEqual(R.supervisor({ platform: 'darwin', pid: 9001, env: { XPC_SERVICE_NAME: 'com.agent-hub' }, execImpl: exec, folder: none }), { kind: 'none' });
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', pid: 9001, env: { XPC_SERVICE_NAME: 'com.agent-hub' }, execImpl: exec, folder: none }), null);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-two-'));
+  fs.mkdirSync(path.join(dir, 'scripts')); fs.writeFileSync(path.join(dir, 'scripts', 'relaunch.js'), '// stub\n');
+  let scheduled = null; let spawned = null;
+  const r = R.requestRestart({ projectDir: dir, port: 8892, env: { XPC_SERVICE_NAME: 'com.agent-hub' }, platform: 'darwin', pid: 9001, folder: none, execImpl: exec,
+    spawnImpl: (c, a) => { spawned = a; return { unref() {} }; }, setTimeoutImpl: (fn, ms) => { scheduled = { fn, ms }; return { unref() {} }; }, killImpl: () => {}, log: () => {} });
+  assert.strictEqual(r.mode, 'relaunch', 'it relaunches itself');
+  scheduled.fn();
+  assert.ok(!calls.some(c => c[1] === 'kickstart'), 'no launchctl kickstart of anything');
+  assert.strictEqual(spawned[spawned.indexOf('--pid') + 1], '9001');
+});
+
+test('launchd mode: kickstart -k of the verified label only, after the delay', () => {
   const calls = []; let scheduled = null;
-  const r = R.requestRestart({ projectDir: '/nowhere', env: { XPC_SERVICE_NAME: 'com.agent-hub' }, platform: 'darwin', execImpl: (c, a) => { calls.push([c, ...a]); }, setTimeoutImpl: (fn, ms) => { scheduled = { fn, ms }; return { unref() {} }; }, log: () => {} });
+  const r = R.requestRestart({ projectDir: '/nowhere', env: { XPC_SERVICE_NAME: 'com.agent-hub' }, platform: 'darwin', pid: 3475, uid: 501, folder: none, execImpl: launchctl({ 'com.agent-hub': 3475, 'ai.mymaestro.hub': 700 }, calls), setTimeoutImpl: (fn, ms) => { scheduled = { fn, ms }; return { unref() {} }; }, log: () => {} });
   assert.strictEqual(r.mode, 'launchd'); scheduled.fn();
-  assert.strictEqual(calls[0][0], 'launchctl'); assert.strictEqual(calls[0][1], 'kickstart'); assert.strictEqual(calls[0][2], '-k'); assert.match(calls[0][3], /^gui\/\d+\/com\.agent-hub$/);
+  assert.deepStrictEqual(calls.filter(c => c[1] === 'kickstart'), [['launchctl', 'kickstart', '-k', 'gui/501/com.agent-hub']]);
+});
+
+test('unknown identity refuses: this folder\'s service runs another process, so nothing is restarted or kickstarted', () => {
+  const calls = []; let scheduled = false; let spawned = false;
+  const r = R.requestRestart({ projectDir: '/nowhere', env: {}, platform: 'darwin', pid: 9002, folder: { kind: 'launchd', label: 'ai.mymaestro.hub' }, execImpl: launchctl({ 'ai.mymaestro.hub': 700 }, calls),
+    spawnImpl: () => { spawned = true; return { unref() {} }; }, setTimeoutImpl: () => { scheduled = true; return { unref() {} }; }, killImpl: () => { throw new Error('must not signal'); }, log: () => {} });
+  assert.strictEqual(r.mode, 'refused'); assert.match(r.error, /ai\.mymaestro\.hub is running another process \(pid 700\)/);
+  assert.strictEqual(scheduled, false); assert.strictEqual(spawned, false);
+  assert.ok(!calls.some(c => c[1] === 'kickstart'));
+});
+
+test('systemd identity: the unit from /proc/<pid>/cgroup counts only when its MainPID is this process; inherited variables alone refuse', () => {
+  const fsAt = (cg) => ({ ...fs, readFileSync: (f, e) => (String(f).startsWith('/proc/') ? cg : fs.readFileSync(f, e)) });
+  const show = (pids) => (cmd, args) => { if (cmd === 'systemctl' && args.includes('MainPID')) { const u = args[args.length - 1]; if (args[0] === '--user' && u in pids) return `${pids[u]}\n`; throw new Error('no'); } return ''; };
+  const cg = '0::/user.slice/user-1000.slice/user@1000.service/app.slice/mymaestroai.service\n';
+  assert.deepStrictEqual(R.supervisor({ platform: 'linux', pid: 50, env: { INVOCATION_ID: 'x' }, fsImpl: fsAt(cg), execImpl: show({ 'mymaestroai.service': 50 }), folder: none }), { kind: 'systemd', unit: 'mymaestroai.service' });
+  // a hub started from inside another hub's unit (same cgroup, inherited INVOCATION_ID): not that unit's main process
+  assert.deepStrictEqual(R.supervisor({ platform: 'linux', pid: 51, env: { INVOCATION_ID: 'x' }, fsImpl: fsAt(cg), execImpl: show({ 'mymaestroai.service': 50 }), folder: none }), { kind: 'none' });
+  // systemd's variables but nothing can confirm: refuse rather than guess
+  const u = R.supervisor({ platform: 'linux', pid: 52, env: { INVOCATION_ID: 'x' }, fsImpl: fsAt(''), execImpl: show({}), folder: none });
+  assert.strictEqual(u.kind, 'unknown'); assert.match(u.reason, /no unit could be confirmed/);
 });
 
 test('restartLogTail returns the last lines of the restart and server logs that exist', () => {
@@ -87,6 +143,10 @@ test('wiring: server handles SIGUSR2 with exit 75 and the button uses lib/restar
   const rs = read('scripts/restart.sh');
   assert.match(rs, /Running under systemd/); assert.match(rs, /systemctl \$_scope restart "\$_unit"/); assert.match(rs, /kill -USR2 "\$_lp"/);
   assert.ok(rs.indexOf('find_listener() {') < rs.indexOf('Running under systemd'), 'the branch comes after find_listener is defined');
+  assert.ok(!/com\.agent-hub"/.test(rs), 'no fixed launchd label');
+  assert.match(rs, /Not touching it/); assert.match(rs, /if \[ "\$_jpid" = "\$_lp" \]; then/, 'kickstarts only the job whose pid is the listener');
+  assert.ok(rs.indexOf('Only ever this folder') < rs.indexOf('Kill whatever is listening'), 'the folder check comes before any kill');
+  assert.match(rs, /nohup env -i "\$\{_keep\[@\]\}" node server\.js/, 'the hub starts with an allow-listed environment');
   const ss = read('scripts/safe-restart.sh');
   assert.match(ss, /data\/restart\.log/); assert.match(ss, /agent-hub-restart\.log/); assert.match(ss, /restart\.sh FAILED/);
   assert.ok(!/^\s*set -e/m.test(ss), 'a failed redirect no longer kills the script silently');

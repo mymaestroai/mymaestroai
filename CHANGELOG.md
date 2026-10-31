@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Security: Restart and Update restart only this hub.** The hub used to decide it ran as the launchd service `com.agent-hub` from that label alone, so on a Mac with two hubs, Restart or Update in one could restart the other; installer-made hubs (`ai.mymaestro.hub`) were not recognised at all. A label now counts only when launchd (or systemd's MainPID) says its job is this very process; when this folder's own service runs another process, Restart is refused with the reason instead. `scripts/restart.sh` likewise touches only a server running from its own folder. A second install on the same computer gets its own service name (`ai.mymaestro.hub.<id>`, `mymaestroai-<id>.service`) instead of replacing the first one's. (`lib/restart.js`, `lib/service-manager.js`, `scripts/restart.sh`)
+
+- **Security: a hub no longer picks up the keys and settings of the shell that starts it.** `mymaestro start`, the installer (which starts through it) and `scripts/restart.sh` pass an allow-listed environment (paths, user, language and time zone, temp folder, proxies and certificates). Provider keys exported in `~/.zshrc`, tokens, `HUB_*` settings such as `HUB_AGENT_PERMISSION_MODE`, `CLAUDE_CODE_*` and `NODE_OPTIONS` stay out: a hub's settings come from its own `.env` and Settings. A hub started from an agent's shell no longer runs with the live hub's provider keys and permission mode.
+
 - **gog's Google sign-ins are now guarded in the folder gog really uses.** My Maestro AI was guarding `~/.config/gog`, a folder gog doesn't use. Its real folder is `~/.config/gogcli` (`$XDG_CONFIG_HOME/gogcli` when that's set, `~/Library/Application Support/gogcli` on a Mac). It's now treated like your other secrets, for agents reading it and for agents changing it, and the security check lists it with your personal credentials.
 
 - **The notices at the top no longer cover the ⚙️ Settings button.** On a new install, the setup and security notices sat on top of the header, so Settings couldn't be reached. The page now moves down below them, and back up when they go.
