@@ -60,6 +60,27 @@ test('the setup interview offers a security check; the review only looks, and th
   assert.match(read('docs/HUB-MAP.md'), /18\. \*\*Security review of the install and its computer\.\*\* Follow `docs\/SECURITY-REVIEW\.md`/);
 });
 
+test('Welcome: a ChatGPT subscription is a first-class choice, with one command, a real check, and its models for Maestro', () => {
+  assert.ok(welcome.includes('id="o-chatgpt"'));
+  assert.match(welcome, /<span class="t">A ChatGPT subscription<\/span>/);
+  assert.match(welcome, /<code>mymaestro connect chatgpt<\/code><button class="secondary" data-copy="mymaestro connect chatgpt">Copy<\/button>/);
+  assert.ok(welcome.indexOf('id="o-claude"') < welcome.indexOf('id="o-chatgpt"') && welcome.indexOf('id="o-chatgpt"') < welcome.indexOf('id="o-key"'), 'between Claude and the API keys');
+  assert.match(welcome, /api\('POST', '\/api\/welcome\/chatgpt-check', \{\}\)/);
+  assert.match(welcome, /chatgptOk = true; say\('chatgpt-msg', [^;]*\); fillModels\(res\.body\.models, res\.body\.suggested\); aiReady\(res\.body\.suggested\)/, 'the Meet step offers its models, the suggested one first');
+  assert.match(welcome, /\} else if \(p\.chatgpt\) \{\s*\n\s*\$\('o-chatgpt'\)\.classList\.add\('open'\);\s*\n\s*chatgptCheck\(/, 'Codex already here: the card opens and checks; Claude Code keeps priority');
+  assert.match(welcome, /cardOpen\('o-claude'\) \? claudeCheck : cardOpen\('o-chatgpt'\) \? chatgptCheck : null/, 'coming back from the sign-in checks by itself, on either card');
+  const access = require('../lib/access');
+  for (const [p, m] of [['/api/welcome/chatgpt-check', 'POST'], ['/api/welcome/chatgpt-status', 'GET']]) assert.strictEqual(access.classifyRoute(p, m).kind, 'admin', p);
+});
+
+test('Settings: the ChatGPT subscription has its own row, with the same command and a real check', () => {
+  assert.match(app, /<label>ChatGPT subscription<\/label>/);
+  assert.match(app, /run <code>mymaestro connect chatgpt<\/code> in a terminal on this computer, then press Check/);
+  assert.match(app, /setTimeout\(loadChatGPTRow, 0\)/);
+  assert.match(app, /fetch\('\/api\/welcome\/chatgpt-status', \{ credentials: 'include' \}\)/);
+  assert.match(app, /fetch\('\/api\/welcome\/chatgpt-check', \{ method: 'POST'/);
+});
+
 test('Help: the ? button opens it beside the chat; phone menu and sign-in page link to it; it is public', () => {
   assert.match(read('index.html'), /<button id="help-btn" class="header-btn" [^>]*onclick="openHelpPanel\(\)">\?<\/button>/);
   assert.match(app, /function openHelpPanel\(\) \{\s*\n\s*gsModal\(`<iframe src="\/help\?embed=1"/);

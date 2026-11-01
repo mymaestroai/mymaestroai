@@ -99,3 +99,14 @@ test('wiring: admin route, Settings checklist, admin banner, Users page note, ch
   assert.match(sdk, /if \(sandboxWithheld\) sendSSE\(res, makeChunk\(sandboxWithheldNotice\(\), sdkModel\)\);/);
   assert.match(sdk, /if \(sseRes\) sendSSE\(sseRes, makeChunk\(sandboxWithheldNotice\(\), 'gateway'\)\);/, 'gateway agents are told too');
 });
+
+test('agents on ChatGPT with Codex signed out: critical, with the command that fixes it; signed in or no such agents: quiet', async () => {
+  const base = { hasUsers: () => true, setupNeeded: () => false, hasSdkCredentials: () => true, sandboxStatus: async () => ({ docker: true, imageReady: true }), fetchStatus: async () => ({ renderer: true, pdftotext: true }), searchChain: () => ['perplexity'], supervisor: () => 'systemd', exposed: () => false };
+  const agents = async () => [{ name: 'maestro', model: 'codex-cli/gpt-x' }];
+  const out = await createReadiness({ ...base, agents, hasCodexSignIn: async () => false }).check();
+  assert.strictEqual(byId(out, 'chatgpt-signin').level, 'critical');
+  assert.match(byId(out, 'chatgpt-signin').title, /1 agent\(s\) use ChatGPT through Codex/);
+  assert.match(JSON.stringify(byId(out, 'chatgpt-signin')), /mymaestro connect chatgpt/);
+  assert.strictEqual(byId(await createReadiness({ ...base, agents, hasCodexSignIn: async () => true }).check(), 'chatgpt-signin'), undefined);
+  assert.strictEqual(byId(await createReadiness({ ...base, agents: async () => [{ name: 'a', model: 'claude-sdk/x' }], hasCodexSignIn: () => false }).check(), 'chatgpt-signin'), undefined);
+});

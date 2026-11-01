@@ -59,6 +59,10 @@ test('gate: SDK hook denies with a PreToolUse permissionDecision; Codex approval
   assert.deepStrictEqual(await g.codexServerRequest({ agentName: 'haiku', cwd: '/tmp' }, 'item/fileChange/requestApproval', { changes: [{ path: '/tmp/ok.txt' }] }), { decision: 'accept' });
   assert.deepStrictEqual(await g.codexServerRequest({ agentName: 'haiku', cwd: '/tmp' }, 'item/fileChange/requestApproval', { changes: [{ path: '/etc/hosts' }] }), { decision: 'decline' });
   assert.strictEqual(await g.codexServerRequest({ agentName: 'haiku', cwd: '/tmp' }, 'something/else', {}), null);
+  // Codex's question before a hub tool: the bridge runs the policy on the call itself. Only the hub's own server.
+  assert.deepStrictEqual(await g.codexServerRequest({ agentName: 'haiku', cwd: '/tmp' }, 'mcpServer/elicitation/request', { serverName: 'agent-hub', mode: 'form', message: 'Allow?' }), { action: 'accept', content: {}, _meta: null });
+  assert.strictEqual(await g.codexServerRequest({ agentName: 'haiku', cwd: '/tmp' }, 'mcpServer/elicitation/request', { serverName: 'someone-else', mode: 'form' }), null);
+  assert.strictEqual(await g.codexServerRequest({ agentName: 'haiku', cwd: '/tmp' }, 'mcpServer/elicitation/request', {}), null);
 });
 
 test('Codex app-server answers approval requests through onServerRequest and refuses the rest', async () => {
