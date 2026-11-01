@@ -2290,6 +2290,12 @@
           <div class="st-hint">Default: ${esc(pdata.defaultUrl || '')}</div>`;
         }
       }
+      html += `<div class="st-row"><label>ChatGPT subscription</label>
+          <span class="st-hint" id="st-chatgpt-state" style="margin:0;flex:1">Checking…</span>
+          <button class="st-test-btn" id="st-chatgpt-check">Check</button>
+        </div>
+        <div class="st-hint">Uses your paid ChatGPT plan through OpenAI's Codex. To connect it, run <code>mymaestro connect chatgpt</code> in a terminal on this computer, then press Check.</div>`;
+      setTimeout(loadChatGPTRow, 0);
       html += `</div>`;
 
       // OpenRouter (lib/openrouter): which of its models the pickers offer, and the privacy switch.
@@ -3875,6 +3881,26 @@
       } catch (e) {
         alert('Save failed: ' + e.message);
       }
+    }
+
+    // A ChatGPT subscription runs through the Codex client: no key here, only where its sign-in stands (lib/welcome).
+    async function loadChatGPTRow() {
+      const state = document.getElementById('st-chatgpt-state'), btn = document.getElementById('st-chatgpt-check');
+      if (!state || !btn) return;
+      btn.onclick = async () => {
+        btn.disabled = true; state.textContent = 'Asking ChatGPT a one-word question…';
+        try {
+          const r = await fetch('/api/welcome/chatgpt-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: '{}' });
+          const d = await r.json();
+          state.textContent = d.ok ? `Connected: ${d.models.length} models` : (d.error || `HTTP ${r.status}`);
+        } catch { state.textContent = 'Could not reach My Maestro AI.'; }
+        btn.disabled = false;
+      };
+      try {
+        const r = await fetch('/api/welcome/chatgpt-status', { credentials: 'include' });
+        const d = await r.json();
+        state.textContent = d.signedIn ? 'Connected' : d.installed ? 'Codex is here but not signed in to ChatGPT' : 'Not connected';
+      } catch { state.textContent = 'Could not read its status.'; }
     }
 
     async function testProvider(provider) {

@@ -34,7 +34,7 @@ again (until the first account exists).
 Works even when the hub is stopped:
 
 ```
-mymaestro status | start | stop | restart | logs [-f] [-n N] | open | setup-link
+mymaestro status | start | stop | restart | logs [-f] [-n N] | open | setup-link | connect chatgpt
 mymaestro update [--channel stable|experimental]   same as the Update button
 mymaestro doctor                                   security check plus a real Claude sign-in test
 mymaestro backup [--to DIR]                        data, settings and agents in one archive
@@ -108,7 +108,7 @@ Skills are configured in `lib/skills/skill-manager.js`. Each needs:
 ## Subscription or API Credits
 
 The model id says who pays. `claude-sdk/…` runs through the Claude Code client on this machine's Claude sign-in
-(Max or Pro) and `codex-cli/…` on the ChatGPT subscription: no per-token bill. `anthropic/…`, `openai/…`,
+(Max or Pro) and `codex-cli/…` on the ChatGPT subscription (`mymaestro connect chatgpt`): no per-token bill. `anthropic/…`, `openai/…`,
 `google/…`, `perplexity/…` and `openrouter/<vendor>/…` run through the hub on that provider's API key and are billed
 per token to your credits (OpenRouter reports each call's cost; the daily spend shows it). Local providers are free. Pickers label every group, the agent list badges API-key agents with "API $",
 and the Claude client never sees the Anthropic API key, so adding one (to use `anthropic/` models) cannot move

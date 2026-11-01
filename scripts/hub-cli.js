@@ -8,6 +8,7 @@
  *   mymaestro logs [-f] [-n 100]     the server log (follow with -f)
  *   mymaestro open                   open it in the browser, or print the address
  *   mymaestro setup-link             the first-run Welcome link (until the first account exists)
+ *   mymaestro connect chatgpt        use your ChatGPT subscription: installs Codex and signs it in (--device-auth: sign in with a code)
  *   mymaestro update [--channel stable|experimental]   newest version of the channel, then restart (the Update button)
  *   mymaestro doctor                 security and setup checks (scripts/security-check.js)
  *   mymaestro backup [--to <dir>]    an encrypted backup of everything that makes this install yours (--setup: choose the backup password)
@@ -162,6 +163,35 @@ const commands = {
     const link = setupLink();
     if (flag('--plain')) { if (link) out(link); return; }   // for the installer: just the link, or nothing once an account exists
     out(link ? `Open this link to finish setting up ${PRODUCT}:\n\n  ${link}\n\nIt works until the first account is created.` : `Setup is done: an account exists. Sign in at ${URL_BASE}/login`);
+  },
+  // Installs Codex with this install's own Node, where the hub looks for it (lib/codex-cli resolveBinary), then runs
+  // Codex's own sign-in in this terminal. The hub never sees the sign-in.
+  async connect() {
+    if (argv[1] !== 'chatgpt') fail('Usage: mymaestro connect chatgpt [--device-auth]');
+    const codex = require(path.join(DIR, 'lib', 'codex-cli'));
+    const env = codex.withNode(process.env);
+    let bin = codex.resolveBinary(env);
+    if (!bin) {
+      out('Installing Codex, the OpenAI program that connects to your ChatGPT subscription…');
+      const dir = path.dirname(process.execPath);
+      const npm = fs.existsSync(path.join(dir, 'npm')) ? path.join(dir, 'npm') : 'npm';
+      const r = spawnSync(npm, ['install', '-g', '--prefix', path.join(os.homedir(), '.npm-global'), '@openai/codex', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { stdio: 'inherit', env });
+      bin = r.status === 0 ? codex.resolveBinary(env) : null;
+      if (!bin) fail('Codex did not install. Check the internet connection and run this again.');
+    }
+    const before = await codex.loginStatus({ bin, env });
+    if (before.loggedIn && before.mode === 'chatgpt') {
+      out('Codex is already signed in to ChatGPT.');
+    } else {
+      // No desktop here (an SSH session, a server): the browser sign-in has nothing to open, so sign in with a code.
+      const noDesktop = !!process.env.SSH_CONNECTION || (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);
+      const code = flag('--device-auth') || noDesktop;
+      out(code ? 'Signing in: Codex shows a link and a code. Open the link in a browser on any device.\nIf it says that isn\'t allowed, turn on device code sign-in under Security in your ChatGPT settings, then run this again.\n' : 'Signing in: Codex opens ChatGPT in your browser.\n');
+      spawnSync(bin, code ? ['login', '--device-auth'] : ['login'], { stdio: 'inherit', env });
+      const after = await codex.loginStatus({ bin, env });
+      if (!(after.loggedIn && after.mode === 'chatgpt')) fail('\nThe sign-in did not finish. Run this again when you are ready.');
+    }
+    out(`\nDone. Back in ${PRODUCT}, press Check on the setup page, or in Settings under AI models.`);
   },
   async update() {
     const gs = require(path.join(DIR, 'lib', 'git-sync'));
@@ -333,7 +363,7 @@ const commands = {
     out(`To delete everything, back up first (mymaestro backup), then run:  rm -rf "${DIR}"`);
   },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 20).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 21).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
 (async () => {

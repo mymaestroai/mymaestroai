@@ -106,7 +106,7 @@ try {
 } catch (e) { console.warn('[settings] could not move API keys out of .env:', e.message); }
 function isSetupNeeded() {
   // First-run setup (the Welcome page, lib/welcome) is needed until the hub has an admin account and at least one way
-  // for agents to think: an API key, a Claude sign-in or a local model. An .env file alone no longer counts.
+  // for agents to think: an API key, a Claude or ChatGPT sign-in or a local model. An .env file alone no longer counts.
   if (!hubAuth.hasUsers()) return true;
   return !require('./lib/welcome').getWelcome().hasProvider();
 }
@@ -499,6 +499,12 @@ async function handleHttpRequest(req, res) {
     }
     if (pathname === '/api/welcome/claude-check' && req.method === 'POST') {
       return jsonResponse(res, 200, await require('./lib/welcome').getWelcome().checkClaude());
+    }
+    if (pathname === '/api/welcome/chatgpt-check' && req.method === 'POST') {
+      return jsonResponse(res, 200, await require('./lib/welcome').getWelcome().checkChatGPT());
+    }
+    if (pathname === '/api/welcome/chatgpt-status' && req.method === 'GET') {
+      return jsonResponse(res, 200, await require('./lib/welcome').getWelcome().chatgptStatus());
     }
     if (pathname === '/api/welcome/local' && req.method === 'GET') {
       return jsonResponse(res, 200, { ok: true, engines: await require('./lib/welcome').getWelcome().findLocal() });

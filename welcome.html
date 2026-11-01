@@ -201,6 +201,19 @@
           <div class="msg" id="claude-msg"></div>
         </div>
       </div>
+      <div class="option" id="o-chatgpt">
+        <button class="head" type="button"><span><span class="t">A ChatGPT subscription</span><span class="d">Uses your paid ChatGPT plan through OpenAI's Codex. No per-message charges.</span></span></button>
+        <div class="body">
+          <ol class="how">
+            <li>Open a <b>new</b> terminal window on this computer and run:
+              <div class="cmd"><code>mymaestro connect chatgpt</code><button class="secondary" data-copy="mymaestro connect chatgpt">Copy</button></div></li>
+            <li>It installs Codex, then asks you to sign in to ChatGPT in your browser.</li>
+            <li>Press Check. My Maestro AI asks ChatGPT a one-word question to confirm it works.</li>
+          </ol>
+          <button class="secondary" id="chatgpt-check">Check</button>
+          <div class="msg" id="chatgpt-msg"></div>
+        </div>
+      </div>
       <div class="option" id="o-key">
         <button class="head" type="button"><span><span class="t">An API key</span><span class="d">Anthropic, OpenAI or Google. Pay as you go, billed by the provider.</span></span></button>
         <div class="body">
@@ -506,6 +519,9 @@
       // asking the owner to press Check. Signed out, the answer says what to do; coming back re-checks by itself.
       $('o-claude').classList.add('open');
       claudeCheck('Claude Code is on this computer: checking that it is signed in…');
+    } else if (p.chatgpt) {
+      $('o-chatgpt').classList.add('open');
+      chatgptCheck('Codex is on this computer: checking that it is signed in…');
     }
   }
 
@@ -527,15 +543,27 @@
     else say('claude-msg', adviceText(res, 'Claude did not answer.'), res.body && res.body.state === 'limit' ? 'warn' : 'err', res.body && res.body.detail);
   }
   $('claude-check').addEventListener('click', () => claudeCheck());
-  // Signing in to Claude happens in a terminal and the browser: when the owner comes back to this page with the
-  // Claude card open, check by itself.
-  const claudeCardOpen = () => $('s-ai').classList.contains('on') && $('o-claude').classList.contains('open');
+  let chatgptOk = false, chatgptBusy = false;
+  async function chatgptCheck(note) {
+    if (chatgptBusy || chatgptOk) return;
+    chatgptBusy = true; $('chatgpt-check').disabled = true;
+    busy('chatgpt-msg', note || 'Asking ChatGPT a one-word question… this can take up to a minute the first time.');
+    const res = await api('POST', '/api/welcome/chatgpt-check', {});
+    chatgptBusy = false; $('chatgpt-check').disabled = false;
+    if (res.body && res.body.ok) { chatgptOk = true; say('chatgpt-msg', '✓ ChatGPT is connected through your subscription.', 'ok'); fillModels(res.body.models, res.body.suggested); aiReady(res.body.suggested); }
+    else say('chatgpt-msg', adviceText(res, 'ChatGPT did not answer.'), res.body && res.body.state === 'limit' ? 'warn' : 'err', res.body && res.body.detail);
+  }
+  $('chatgpt-check').addEventListener('click', () => chatgptCheck());
+  // Signing in happens in a terminal and the browser: when the owner comes back to this page with that card open, check by itself.
+  const cardOpen = (id) => $('s-ai').classList.contains('on') && $(id).classList.contains('open');
+  const checkForOpenCard = () => cardOpen('o-claude') ? claudeCheck : cardOpen('o-chatgpt') ? chatgptCheck : null;
+  const cameBack = () => { const check = checkForOpenCard(); if (leftForSignIn && check) { leftForSignIn = false; check(); } };
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') { if (claudeCardOpen()) leftForSignIn = true; return; }
-    if (leftForSignIn && claudeCardOpen()) { leftForSignIn = false; claudeCheck(); }
+    if (document.visibilityState === 'hidden') { if (checkForOpenCard()) leftForSignIn = true; return; }
+    cameBack();
   });
-  window.addEventListener('blur', () => { if (claudeCardOpen()) leftForSignIn = true; });
-  window.addEventListener('focus', () => { if (leftForSignIn && claudeCardOpen()) { leftForSignIn = false; claudeCheck(); } });
+  window.addEventListener('blur', () => { if (checkForOpenCard()) leftForSignIn = true; });
+  window.addEventListener('focus', cameBack);
   const KEY_URLS = { anthropic: ['https://console.anthropic.com/settings/keys', 'console.anthropic.com'], openai: ['https://platform.openai.com/api-keys', 'platform.openai.com'], google: ['https://aistudio.google.com/apikey', 'aistudio.google.com'], openrouter: ['https://openrouter.ai/keys', 'openrouter.ai/keys'] };
   $('k-provider').addEventListener('change', () => { const [u, t] = KEY_URLS[$('k-provider').value]; $('k-where').href = u; $('k-where').textContent = t; });
   $('k-go').addEventListener('click', async () => {
