@@ -224,6 +224,26 @@ test('allowances expire; denial text names the class and what to do', () => {
   assert.match(tp.denialText(dec, { by: 'timeout' }), /^\[NOT APPROVED\]/);
 });
 
+test("gog's real sign-in folder is a secret to read and to write, on Linux and on a Mac, and in a shell command too", () => {
+  const home = os.homedir();
+  const o = { roots: [path.join(tp.HUB_HOME, 'medical')], agentName: 'gp' };
+  for (const dir of ['.config/gogcli', 'Library/Application Support/gogcli']) {
+    const f = path.join(home, dir, 'credentials.json');
+    assert.strictEqual(tp.isSensitiveRead(f), true, f);
+    assert.strictEqual(tp.classifyReadPath(f, o), 'admin', f);
+    assert.strictEqual(tp.classifyPath(f, o), 'admin', f);
+  }
+  assert.strictEqual(tp.classifyCommand('cat ~/.config/gogcli/credentials.json', { ...o, cwd: home }).cls, 'admin');
+  assert.strictEqual(tp.classifyCommand('echo x > ~/.config/gogcli/credentials.json', { ...o, cwd: home }).cls, 'admin');
+  assert.strictEqual(tp.classifyPath(path.join(home, '.config', 'gh', 'hosts.yml'), o), 'write_outside', 'another program\'s config folder is unchanged');
+});
+
+test('gogConfigDirs follows the rules Go uses for the config folder', () => {
+  assert.deepStrictEqual(tp.gogConfigDirs('/home/x', {}), ['/home/x/.config/gogcli', '/home/x/Library/Application Support/gogcli']);
+  assert.ok(tp.gogConfigDirs('/home/x', { XDG_CONFIG_HOME: '/cfg' }).includes('/cfg/gogcli'), 'an absolute XDG_CONFIG_HOME counts');
+  assert.deepStrictEqual(tp.gogConfigDirs('/home/x', { XDG_CONFIG_HOME: 'relative/cfg' }), tp.gogConfigDirs('/home/x', {}), 'Go ignores a relative one');
+});
+
 test('key files by name are secrets for everyone: a bot\'s agent-key, private keys, pem/secret files, ssh ids; ordinary files are not', () => {
   const ws = path.join(HUB, 'workspaces', 'trader', 'bots', 'hl-exec');
   for (const f of ['agent-key', 'private.key', 'signing-key.txt', 'api_key', 'server.pem', 'token.secret', 'id_ed25519', 'id_rsa.pub'.replace('.pub', '')]) assert.strictEqual(tp.isSensitiveRead(path.join(ws, f)), true, f);

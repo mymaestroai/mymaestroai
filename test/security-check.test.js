@@ -93,6 +93,15 @@ test('a badly set-up, network-exposed install: every big hole is critical, each 
   for (const i of r.items) { assert.ok(i.title && i.group in sc.GROUPS, i.id); if (i.level !== 'ok') assert.ok(i.detail, `${i.id} has a detail`); }
 });
 
+test("gog's real sign-in folder is listed with the personal credentials, wherever the system keeps it", async () => {
+  for (const [dir, env] of [['/home/x/.config/gogcli', {}], ['/home/x/Library/Application Support/gogcli', {}], ['/cfg/gogcli', { XDG_CONFIG_HOME: '/cfg' }]]) {
+    const r = await sc.createSecurityCheck({ ...BAD, env: { ...BAD.env, ...env }, stat: modeStat({ [dir]: D | 0o700 }), readdir: () => [] }).check();
+    assert.match(byId(r, 'home-secrets').detail, /Google sign-in \(gog\)/, dir);
+  }
+  const none = await sc.createSecurityCheck({ ...BAD, stat: modeStat({ '/home/x/.config/gog': D | 0o700 }), readdir: () => [] }).check();
+  assert.strictEqual(byId(none, 'home-secrets'), undefined, 'a folder gog does not use is not reported');
+});
+
 test('a clean install reports nothing critical and no warnings', async () => {
   const r = await sc.createSecurityCheck({
     ...BAD, env: {}, host: '127.0.0.1', exposed: () => false,
