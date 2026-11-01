@@ -45,6 +45,7 @@
       background: var(--bg-dark);
       color: var(--text);
       height: 100vh; height: 100dvh;
+      padding-top: var(--banner-h, 0px);   /* the notices fixed at the top (app.js layoutBanners) push the page down */
       display: flex;
       overflow: hidden;
       touch-action: pan-y;
@@ -2197,7 +2198,7 @@
 
     /* ── Mobile Responsive ── */
     .sidebar-toggle {
-      display: none; position: fixed; top: 10px; left: 10px; z-index: 1001;
+      display: none; position: fixed; top: calc(10px + var(--banner-h, 0px)); left: 10px; z-index: 1001;
       background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
       color: var(--text); font-size: 1.1rem; width: 34px; height: 34px;
       cursor: pointer; align-items: center; justify-content: center;
@@ -2212,13 +2213,13 @@
       .sidebar-resize-handle { display: none; }
       .sidebar-collapse-btn { display: none; }
       .sidebar {
-        position: fixed; left: -340px; top: 0; bottom: 0; z-index: 1000;
+        position: fixed; left: -340px; top: var(--banner-h, 0px); bottom: 0; z-index: 1000;
         transition: left 0.25s ease; width: 300px;
       }
       .sidebar.open { left: 0; }
       .sidebar-overlay.open { display: block; }
       body { height: 100vh; height: 100dvh; }
-      .main { width: 100%; min-width: 0; height: 100vh; height: 100dvh; max-height: 100vh; max-height: 100dvh; }
+      .main { width: 100%; min-width: 0; height: calc(100vh - var(--banner-h, 0px)); height: calc(100dvh - var(--banner-h, 0px)); max-height: calc(100vh - var(--banner-h, 0px)); max-height: calc(100dvh - var(--banner-h, 0px)); }
       .main-header {
         padding: 10px 10px 0 56px;
         display: flex; flex-direction: column;

@@ -396,14 +396,20 @@ test('banner: Run now repaints it, and it sits below the setup banner', () => {
   assert.match(app.slice(i, app.indexOf('\n    }\n', i)), /paintSecurityBanner\(\)\.catch\(\(\) => \{\}\);/);
   const j = app.indexOf('function layoutBanners() {');
   const fn = new Function('document', app.slice(j, app.indexOf('\n    }\n', j) + 6) + '\nreturn layoutBanners;');
-  const page = (nodes) => ({ getElementById: (id) => nodes[id] || null });
+  const pushed = {};
+  const page = (nodes) => ({ getElementById: (id) => nodes[id] || null, documentElement: { style: { setProperty: (k, v) => { pushed[k] = v; } } } });
   const sec = { style: {}, offsetHeight: 34 }, checklist = { style: {}, offsetHeight: 37 }, noProvider = { style: {}, offsetHeight: 30 };
   fn(page({ 'hub-security-notice': sec, 'hub-readiness-notice': checklist }))();
   assert.deepStrictEqual([checklist.style.top, sec.style.top], ['0px', '37px'], 'below the setup checklist');
   fn(page({ 'hub-security-notice': sec, 'hub-readiness-notice': checklist, 'hub-setup-notice': noProvider }))();
   assert.deepStrictEqual([noProvider.style.top, checklist.style.top, sec.style.top], ['0px', '30px', '67px'], 'all three stack; none covers another');
+  assert.strictEqual(pushed['--banner-h'], '101px', 'the page moves down by the whole stack, so the header stays clickable');
   fn(page({ 'hub-security-notice': sec }))();
   assert.strictEqual(sec.style.top, '0px');
+  fn(page({}))();
+  assert.strictEqual(pushed['--banner-h'], '0px', 'no notices: the page goes back up');
+  const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
+  for (const rule of [/padding-top: var\(--banner-h, 0px\)/, /\.sidebar-toggle \{\s*\n\s*display: none; position: fixed; top: calc\(10px \+ var\(--banner-h, 0px\)\)/, /position: fixed; left: -340px; top: var\(--banner-h, 0px\)/, /height: calc\(100dvh - var\(--banner-h, 0px\)\)/]) assert.match(html, rule);
   // the no-provider notice lays the stack out when it appears and when it goes
   const k = app.indexOf('async function paintSetupNotice(');
   const setupFn = app.slice(k, app.indexOf('\n    }\n', k));

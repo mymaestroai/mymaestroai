@@ -94,13 +94,14 @@
       const me = window.hubMe;
       let bar = document.getElementById('hub-no-accounts-notice');
       const none = (me && me.accounts === false) || (!me && window.hubNoAccounts === true);
-      if (!none) { if (bar) bar.remove(); return; }
+      if (!none) { if (bar) { bar.remove(); layoutBanners(); } return; }
       if (bar) return;
       bar = document.createElement('div');
       bar.id = 'hub-no-accounts-notice';
       bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:#7a3b12;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box';
       bar.innerHTML = 'This hub has no login yet: anyone who can reach it has full control, and multi-user features (members, sharing, the account menu, member sandboxes) stay off until an admin account exists. <a href="/welcome" style="color:#fff;text-decoration:underline">Create the admin account</a> (you will need the setup link: run mymaestro setup-link).';
       document.body.prepend(bar);
+      layoutBanners();
     }
     // No AI provider configured yet (fresh install after the first admin signed up): a one-line notice with the link
     // to the setup wizard. The wizard no longer takes over "/" once accounts exist, so the 2FA enrolment can finish.
@@ -115,7 +116,7 @@
       bar = document.createElement('div');
       bar.id = 'hub-setup-notice';
       bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:#1f4e79;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:#fff;text-decoration:underline">Open the Welcome page</a> to connect a Claude subscription, an API key or a local model.';
+      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:#fff;text-decoration:underline">Open the Welcome page</a> to connect a Claude or ChatGPT subscription, an API key or a local model.';
       document.body.prepend(bar);
       layoutBanners();
     }
@@ -2619,15 +2620,17 @@
       layoutBanners();
     }
     // The notices fixed at the top stack in this order, whichever painted first: no AI provider yet, the setup
-    // checklist, security. Each one sits below the ones above it, so none covers another (or its X).
+    // checklist, security. Each one sits below the ones above it, so none covers another (or its X), and the page moves
+    // down by their height (--banner-h), so they never cover the header and its Settings button.
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
+      for (const id of ['hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
         top += n.offsetHeight || 0;
       }
+      document.documentElement.style.setProperty('--banner-h', `${top}px`);
     }
     // A notice's height can change after it is drawn (the web font arrives, the window narrows and its text wraps).
     window.addEventListener('resize', () => layoutBanners());
