@@ -43,6 +43,7 @@ PROJECT_DIR_REAL="$(cd "$PROJECT_DIR" && pwd -P)"
 _lp=$(find_listener | head -1)
 if [ -n "$_lp" ]; then
   _lcwd=$(listener_cwd "$_lp")
+  [ -n "$_lcwd" ] && [ -d "$_lcwd" ] && _lcwd="$(cd "$_lcwd" && pwd -P)"   # real paths on both sides: a symlinked install folder is still this one
   if [ "$_lcwd" != "$PROJECT_DIR_REAL" ] && [ "$_lcwd" != "$PROJECT_DIR" ]; then
     echo "❌ Port $HUB_PORT is served by PID $_lp running from ${_lcwd:-an unknown folder}, not $PROJECT_DIR. Not touching it." >&2
     exit 1
@@ -155,6 +156,8 @@ _keep=()
 for _v in PATH HOME USER LOGNAME SHELL LANG LANGUAGE TZ TMPDIR TMP TEMP HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS $(env | sed -n 's/^\(LC_[A-Za-z_]*\)=.*/\1/p'); do
   [ -n "${!_v+x}" ] && _keep+=("$_v=${!_v}")
 done
+# What the shell set that the hub won't receive now (a provider key, PORT, HUB_HOME): named, never shown.
+node -e 'for (const n of require(process.argv[1]).envNotices({ dir: process.argv[2] })) console.log(`[restart] Note: ${n}`)' "$PROJECT_DIR/lib/service-manager.js" "$PROJECT_DIR" 2>/dev/null || true
 nohup env -i "${_keep[@]}" node server.js >> "$LOG" 2>&1 &
 NEW_PID=$!
 echo "$NEW_PID" > "$PIDFILE"

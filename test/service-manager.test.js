@@ -167,3 +167,68 @@ test('the hub set up before the installer (legacy com.agent-hub: node server.js 
   assert.deepStrictEqual(createServiceManager({ dir, home, platform: 'darwin', exec: recorder().exec }).detect(), { kind: 'launchd', label: 'com.agent-hub' });
   assert.deepStrictEqual(createServiceManager({ dir: dir + '-test', home, platform: 'darwin', exec: recorder().exec }).detect(), { kind: 'none' }, 'a folder whose path starts the same is not it');
 });
+
+test('envNotices: a provider key, PORT or HUB_HOME only the shell had is named (never its value); silent when the hub\'s Settings or .env has it', () => {
+  const { envNotices } = require('../lib/service-manager');
+  const { dir } = sandbox();
+  const shell = { PATH: '/usr/bin', HOME: '/h', OPENAI_API_KEY: 'sk-secret-value-1', GEMINI_API_KEY: 'g-secret-value-2', BRAVE_SEARCH_API_KEY: 'b-secret-3', PORT: '9999', HUB_HOME: '/shared/x', HUB_AGENT_PERMISSION_MODE: 'bypassPermissions' };
+  let n = envNotices({ env: shell, dir });
+  const text = n.join('\n');
+  assert.match(text, /Your OpenAI key \(OPENAI_API_KEY\) is only set in this shell\. My Maestro AI no longer passes your shell's settings to the hub, so it won't see it: add the key in Settings → LLM Providers\./);
+  assert.match(text, /Your Gemini key \(GEMINI_API_KEY\)/); assert.match(text, /Your Brave Search key \(BRAVE_SEARCH_API_KEY\).*Settings → Web search/);
+  assert.match(text, /Your shell sets PORT\..*put PORT=<port> in .*\.env/); assert.match(text, /Your shell sets HUB_HOME\./);
+  for (const v of ['sk-secret-value-1', 'g-secret-value-2', 'b-secret-3', '9999', '/shared/x']) assert.ok(!text.includes(v), `never prints a value (${v})`);
+  assert.ok(!/HUB_AGENT_PERMISSION_MODE|PATH|HOME\)/.test(text), 'only keys, PORT and HUB_HOME are worth a notice');
+  // the hub has them itself: Settings for keys, .env for anything
+  fs.writeFileSync(path.join(dir, 'data', 'settings.json'), JSON.stringify({ providers: { openai: { apiKey: 'saved' } }, webSearch: { keys: { brave: 'saved' } } }));
+  fs.writeFileSync(path.join(dir, '.env'), '# comment\nPORT=8890\nGEMINI_API_KEY=in-env-file\nHUB_HOME=\n');
+  n = envNotices({ env: shell, dir });
+  assert.deepStrictEqual(n.map(l => l.match(/\(([A-Z_]+)\)|sets ([A-Z_]+)/).slice(1).find(Boolean)), ['HUB_HOME'], 'an empty HUB_HOME= line in .env provides nothing');
+  assert.deepStrictEqual(envNotices({ env: { PATH: '/usr/bin' }, dir }), [], 'nothing from the shell: nothing to say');
+});
+
+test('mymaestro start returns the notices and the CLI prints them; restart.sh prints them before its own start', () => {
+  const { home, dir } = sandbox();
+  const m = createServiceManager({ dir, home, platform: 'darwin', uid: 501, exec: recorder().exec, env: { PATH: '/usr/bin', OPENAI_API_KEY: 'sk-x' }, spawn: () => ({ pid: 1, unref() {} }) });
+  const r = m.start({ node: '/n/bin/node' });
+  assert.strictEqual(r.notices.length, 1); assert.match(r.notices[0], /OPENAI_API_KEY/); assert.ok(!r.notices[0].includes('sk-x'));
+  const cli = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'hub-cli.js'), 'utf8');
+  assert.match(cli, /async start\(\) \{\n\s+const r = svc\(\)\.start\(\);[^\n]*\n\s+for \(const n of r\.notices \|\| \[\]\) out\(`Note: \$\{n\}`\);/);
+  const rs = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'restart.sh'), 'utf8');
+  assert.ok(rs.indexOf('envNotices') > 0 && rs.indexOf('envNotices') < rs.indexOf('nohup env -i'), 'notices before the clean start');
+});
+
+test('a service file is matched to its folder through symlinks, either way round', () => {
+  const { runsFolder } = require('../lib/service-manager');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'svc-link-')));
+  const real = path.join(root, 'real'); fs.mkdirSync(real); const link = path.join(root, 'link'); fs.symlinkSync(real, link);
+  assert.strictEqual(runsFolder(renderLaunchdPlist({ dir: link, node: '/n' }), real), true, 'plist names the link, the hub sees the real folder');
+  assert.strictEqual(runsFolder(renderLaunchdPlist({ dir: real, node: '/n' }), link), true);
+  assert.strictEqual(runsFolder(renderSystemdUnit({ dir: link, node: '/n' }), real), true);
+  assert.strictEqual(runsFolder(renderLaunchdPlist({ dir: real, node: '/n' }), path.join(root, 'other')), false);
+});
+
+test('restart.sh run through a symlinked install folder restarts that hub instead of refusing it', { timeout: 60000 }, async (t) => {
+  const { execFileSync, spawnSync } = require('child_process');
+  const haveLsof = spawnSync('sh', ['-c', 'command -v lsof'], { encoding: 'utf8' }).stdout.trim();
+  if (!haveLsof && !fs.existsSync('/proc/self/cwd')) return t.skip('neither lsof nor /proc to find the listener');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rs-link-')));
+  const real = path.join(root, 'hub'); const link = path.join(root, 'hub-link');
+  fs.mkdirSync(path.join(real, 'scripts'), { recursive: true }); fs.mkdirSync(path.join(real, 'lib')); fs.mkdirSync(path.join(root, 'home'));
+  fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'restart.sh'), path.join(real, 'scripts', 'restart.sh'));
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  fs.writeFileSync(path.join(real, '.env'), `PORT=${port}\n`);
+  // a stand-in hub: answers on the .env port, from its own folder
+  fs.writeFileSync(path.join(real, 'server.js'), "const p=require('fs').readFileSync(__dirname+'/.env','utf8').match(/PORT=(\\d+)/)[1]; require('http').createServer((q,r)=>r.end('ok')).listen(+p,'127.0.0.1');\n");
+  fs.symlinkSync(real, link);
+  const first = require('child_process').spawn(process.execPath, ['server.js'], { cwd: real, detached: true, stdio: 'ignore' }); first.unref();
+  const pids = [first.pid];
+  t.after(() => { for (const p of pids) { try { process.kill(p, 'SIGKILL'); } catch {} } });
+  for (let i = 0; i < 50; i++) { try { execFileSync('curl', ['-s', '-m', '1', `http://127.0.0.1:${port}/`]); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
+  const env = { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: path.join(root, 'home') };
+  const r = spawnSync('bash', [path.join(link, 'scripts', 'restart.sh')], { env, encoding: 'utf8', timeout: 45000 });
+  const pidNow = Number(fs.readFileSync(path.join(real, '.server.pid'), 'utf8').trim() || 0); if (pidNow) pids.push(pidNow);
+  assert.ok(!/Not touching it/.test(r.stdout + r.stderr), r.stdout + r.stderr);
+  assert.match(r.stdout, /Server started/, r.stdout + r.stderr);
+  assert.notStrictEqual(pidNow, first.pid);
+});
