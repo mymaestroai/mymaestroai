@@ -272,6 +272,29 @@ test('@agent prefix to a not-allowed agent is refused, not routed', async (t) =>
   assert.strictEqual(rows.at(-1).note, 'agent-not-allowed');
 });
 
+test('a sender pinned to an agent always reaches it, and "@agent" does not switch', async (t) => {
+  const seen = [];
+  const wakeAgent = async (agent, message, onReply) => { seen.push({ agent, message }); onReply('ok'); };
+  const { svc, calls } = await mkRoutedSvc(t, { wakeAgent });
+  svc.addSender({ id: '200', name: 'guest', role: 'guest', agent: 'cos' });
+  await svc._handleTelegramUpdate(mkUpdate({ chatId: 200, senderId: 200, username: 'guest', text: 'hello' }));
+  await svc._handleTelegramUpdate(mkUpdate({ chatId: 200, senderId: 200, username: 'guest', text: '@maestro hi' }));
+  assert.deepStrictEqual(seen.map(s => s.agent), ['cos', 'cos']);
+  assert.match(seen[1].message, /@maestro hi$/);
+  await svc._handleTelegramUpdate(mkUpdate({ chatId: 200, senderId: 200, username: 'guest', text: '/start' }));
+  assert.strictEqual(calls.sendMessage.at(-1).text, 'Your messages go to cos.');
+});
+
+test('addSender refuses to pin a sender to an agent outside the allowed list, and null unpins', async (t) => {
+  const { svc } = await mkRoutedSvc(t);
+  assert.throws(() => svc.addSender({ id: '200', name: 'guest', role: 'guest', agent: 'ghost' }), /not reachable over Telegram/);
+  svc.addSender({ id: '200', name: 'guest', role: 'guest', agent: 'cos' });
+  svc.addSender({ id: '200', name: 'guest', role: 'guest' });
+  assert.strictEqual(svc.config.channels.telegram.senders.find(s => s.id === '200').agent, 'cos');
+  svc.addSender({ id: '200', name: 'guest', role: 'guest', agent: null });
+  assert.strictEqual(svc.config.channels.telegram.senders.find(s => s.id === '200').agent, undefined);
+});
+
 test('_routeMessage sends a typing indicator before delivering the reply', async (t) => {
   const wakeAgent = async (agent, message, onReply) => onReply('done');
   const { svc, calls } = await mkRoutedSvc(t, { wakeAgent });

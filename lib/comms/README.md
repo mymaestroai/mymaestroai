@@ -64,7 +64,8 @@ data/comms/            runtime data (gitignored): config.json, telegram.json (06
    (do not reveal the bot is alive). Paused channel: audited `drop` note `paused`, no reply.
 3. Rate limit per sender (sliding window); over limit: audited `drop` note `rate-limit`,
    reply once per window "Rate limit reached, try again later."
-4. Routing: if the text starts with `@<agent> ` and `<agent>` is in `agents`, strip the
+4. Routing: a sender with `agent` set (pinned) always goes to that agent and `@` prefixes are
+   not parsed. Otherwise, if the text starts with `@<agent> ` and `<agent>` is in `agents`, strip the
    prefix and route there; otherwise `defaultAgent`. Agent not in `agents` -> reply
    "Agent X is not reachable over Telegram." and audit `drop` note `agent-not-allowed`.
    `/start` and `/help` reply with a one-line usage note (agents list) and are not routed.
