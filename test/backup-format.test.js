@@ -46,7 +46,8 @@ test('keys: bech32 round trips, and an identity from age-keygen gives the same p
   assert.deepStrictEqual(fmt.decodeRecipient(fmt.encodeRecipient(kp.pub)), kp.pub);
   assert.deepStrictEqual(fmt.decodeIdentity(fmt.encodeIdentity(kp.priv)), kp.priv);
   assert.deepStrictEqual(fmt.publicFromPrivate(kp.priv), kp.pub);
-  assert.throws(() => fmt.decodeIdentity(fmt.encodeIdentity(kp.priv).slice(0, -1) + 'Q'), /not a recovery key|not valid/);
+  const id = fmt.encodeIdentity(kp.priv);
+  assert.throws(() => fmt.decodeIdentity(id.slice(0, -1) + (id.endsWith('Q') ? 'P' : 'Q')), /not a recovery key|not valid/);   // a key can already end in Q, 1 in 32
   if (hasAge) {
     const r = spawnSync('age-keygen', [], { encoding: 'utf8' });
     const pub = /public key: (age1\S+)/.exec(r.stdout + r.stderr)[1];

@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **gog's Google sign-ins are now guarded in the folder gog really uses.** My Maestro AI was guarding `~/.config/gog`, a folder gog doesn't use. Its real folder is `~/.config/gogcli` (`$XDG_CONFIG_HOME/gogcli` when that's set, `~/Library/Application Support/gogcli` on a Mac). It's now treated like your other secrets, for agents reading it and for agents changing it, and the security check lists it with your personal credentials.
+
+- **The notices at the top no longer cover the ⚙️ Settings button.** On a new install, the setup and security notices sat on top of the header, so Settings couldn't be reached. The page now moves down below them, and back up when they go.
+
 - **The security check no longer says the hub's user can become root when sudo is passwordless only as another, unprivileged user.** Any `NOPASSWD` line in `sudo -l` used to count, so a rule like `(maestrotest) NOPASSWD: ALL` raised "The hub's user can become root" and "agents … can become root". Now only passwordless rules that can run as root count, read the way sudo reads them: the last matching run-as entry wins (`(!root, ALL)` allows root), and a group root belongs to, another account with uid 0 (looked up on the system), a netgroup or anything that can't be checked counts as root, and so does `exempt_group` membership, which skips the password. A rule limited to certain commands names them. Passwordless access only to other accounts is shown as information, because whether those accounts can become root isn't checked. (`lib/security-check.js`)
 
 - **Connect a ChatGPT subscription during setup.** The "Connect your first AI" step now offers your paid ChatGPT plan alongside Claude, and Settings → LLM Providers has the same option for later. Run `mymaestro connect chatgpt` in a terminal: it installs OpenAI's Codex and signs you in, then Check proves it with a one-word question and the ChatGPT models appear in the pickers. If it's the only AI you connect, Maestro runs on it.
