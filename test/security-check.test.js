@@ -410,3 +410,104 @@ test('banner: Run now repaints it, and it sits below the setup banner', () => {
   assert.match(setupFn, /if \(bar\) \{ bar\.remove\(\); layoutBanners\(\); \} return;/);
   assert.match(setupFn, /document\.body\.prepend\(bar\);\s*layoutBanners\(\);/);
 });
+
+// `sudo -n -l` as macOS and Linux print it. Only a passwordless rule that runs as root (ALL, root, #0) is a way to root.
+const MAC_SUDO = `User epfleckl may run the following commands on Puffy-7:
+    (ALL) ALL
+    (maestrotest) NOPASSWD: ALL
+`;
+const LINUX_SUDO = (rules, defaults = 'env_reset, mail_badpass, secure_path=/usr/local/sbin\\:/usr/local/bin\\:/usr/sbin\\:/usr/bin') => `Matching Defaults entries for hub on box:
+    ${defaults}
+
+User hub may run the following commands on box:
+${rules.map(r => `    ${r}`).join('\n')}
+`;
+
+test('parseSudoList: passwordless only as an unprivileged user is not a way to root; passwordless as ALL/root is, naming the commands', () => {
+  assert.deepStrictEqual(sc.parseSudoList(MAC_SUDO), { nopasswd: false, rootCommands: [], otherUsers: ['maestrotest'] }, 'this Mac: root needs a password');
+  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL) NOPASSWD: ALL'])), { nopasswd: true, rootCommands: ['ALL'], otherUsers: [] });
+  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL : ALL) NOPASSWD: ALL'])).rootCommands, ['ALL']);
+  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(root) NOPASSWD: /usr/bin/tailscale'])), { nopasswd: true, rootCommands: ['/usr/bin/tailscale'], otherUsers: [] });
+  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(root, backup) NOPASSWD: /bin/systemctl restart hub'])).rootCommands, ['/bin/systemctl restart hub']);
+  assert.strictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL : ALL) ALL'])).nopasswd, false, '(ALL) without NOPASSWD asks for a password');
+  assert.strictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL, !root) NOPASSWD: ALL'])).nopasswd, false, 'everyone except root');
+  // tags carry on to later commands until changed; a list wrapped onto the next line belongs to the rule above
+  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(root) NOPASSWD: /usr/bin/a, PASSWD: /usr/bin/b, /usr/bin/c, NOPASSWD: /usr/bin/d,', '    /usr/bin/e'])).rootCommands, ['/usr/bin/a', '/usr/bin/d', '/usr/bin/e']);
+  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(root) NOPASSWD: /usr/bin/systemctl restart', '    mymaestroai-production-worker.service'])).rootCommands, ['/usr/bin/systemctl restart mymaestroai-production-worker.service']);
+  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(root) SETENV: NOPASSWD: /usr/bin/x'])).rootCommands, ['/usr/bin/x']);
+  // several run-as specs on separate lines
+  const many = sc.parseSudoList(LINUX_SUDO(['(ALL) ALL', '(postgres) NOPASSWD: /usr/bin/psql', '(maestrotest) NOPASSWD: ALL']));
+  assert.deepStrictEqual(many, { nopasswd: false, rootCommands: [], otherUsers: ['postgres', 'maestrotest'] });
+  // Defaults !authenticate: no rule asks for a password, unless it says PASSWD
+  assert.strictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL : ALL) ALL'], 'env_reset, !authenticate')).nopasswd, true);
+  assert.strictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL : ALL) PASSWD: ALL'], 'env_reset, !authenticate')).nopasswd, false);
+  assert.strictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL : ALL) ALL'], 'env_reset, authenticate')).nopasswd, false);
+  assert.deepStrictEqual(sc.parseSudoList(''), { nopasswd: false, rootCommands: [], otherUsers: [] });
+});
+
+test('parseSudoList reads run-as lists the way sudo does (cases checked against real sudo 1.9.15): the last match wins, groups and uid-0 names count, unknowns count as root', () => {
+  const p = (rule, o) => sc.parseSudoList(LINUX_SUDO([rule]), o);
+  assert.strictEqual(p('(!root, ALL) NOPASSWD: ALL').nopasswd, true, 'sudo lets the last entry win: root allowed');
+  assert.strictEqual(p('(ALL, !root) NOPASSWD: ALL').nopasswd, false, 'root excluded last');
+  assert.deepStrictEqual(p('(ALL, !root) NOPASSWD: ALL').otherUsers, ['any account but root']);
+  assert.strictEqual(p('(!#0, ALL) NOPASSWD: ALL').nopasswd, true);
+  const groups = new Set(['root', 'wheel', '#0']);
+  assert.strictEqual(p('(%root) NOPASSWD: ALL', { rootGroups: groups }).nopasswd, true, 'a group root belongs to');
+  assert.strictEqual(p('(%#0) NOPASSWD: ALL', { rootGroups: groups }).nopasswd, true);
+  assert.deepStrictEqual(p('(%staff) NOPASSWD: ALL', { rootGroups: groups }), { nopasswd: false, rootCommands: [], otherUsers: ['%staff'] });
+  assert.strictEqual(p('(%staff) NOPASSWD: ALL').nopasswd, true, "root's groups unknown: counts as root");
+  assert.strictEqual(p('(+admins) NOPASSWD: ALL', { rootGroups: groups }).nopasswd, true, 'netgroup: counts as root');
+  const uidOf = (n) => ({ toor: 0, deploy: 1001, maestrotest: 502 })[n] ?? null;
+  assert.strictEqual(p('(toor) NOPASSWD: ALL', { uidOf }).nopasswd, true, 'another name for uid 0');
+  assert.deepStrictEqual(p('(deploy) NOPASSWD: ALL', { uidOf }), { nopasswd: false, rootCommands: [], otherUsers: ['deploy'] });
+  assert.strictEqual(p('(ghost) NOPASSWD: ALL', { uidOf }).nopasswd, true, "a name that doesn't resolve counts as root");
+  assert.strictEqual(p('(!toor, deploy) NOPASSWD: ALL', { uidOf }).nopasswd, false);
+  assert.deepStrictEqual(sc.parseSudoList(MAC_SUDO, { uidOf, rootGroups: groups }).otherUsers, ['maestrotest'], 'the original case still resolves to an ordinary account');
+  assert.deepStrictEqual(sc.sudoRunasNames(LINUX_SUDO(['(ALL) ALL', '(!toor, deploy, %wheel, +ng, #5) NOPASSWD: ALL', '(root) NOPASSWD: /x'])), ['toor', 'deploy']);
+  // round 2, each checked against real sudo 1.9.15: every uid-0 account on its own, and an entry that doesn't match decides nothing
+  assert.strictEqual(p('(root, !toor) NOPASSWD: ALL', { uidOf }).nopasswd, true, 'names match by name: excluding toor leaves root');
+  assert.strictEqual(p('(toor, !root) NOPASSWD: ALL', { uidOf }).nopasswd, true, 'and excluding root leaves toor, which is uid 0');
+  // round 3: uid-0 accounts nobody names, and other accounts' groups
+  assert.strictEqual(p('(ALL, !root) NOPASSWD: ALL', { uidOf, uidZeroNames: ['root', 'toor'] }).nopasswd, true, 'a uid-0 toor on the system is still allowed');
+  assert.strictEqual(p('(ALL, !root) NOPASSWD: ALL', { uidOf, uidZeroNames: ['root'] }).nopasswd, false, 'only root is uid 0: excluded');
+  assert.strictEqual(p('(ALL, !root) NOPASSWD: ALL', { uidOf }).nopasswd, true, "the system's uid-0 list unknown: assume another one");
+  assert.strictEqual(p('(ALL, !#0) NOPASSWD: ALL', { uidOf }).nopasswd, false, 'excluding by uid 0 excludes them all');
+  assert.strictEqual(p('(toor, %!root) NOPASSWD: ALL', { uidOf, rootGroups: groups, uidZeroNames: ['root', 'toor'] }).nopasswd, true, "toor's groups are unknown: the exclusion is ignored for it");
+  assert.strictEqual(p('(ALL, !root) NOPASSWD: ALL', { uidOf, uidZeroNames: ['root'], uidZeroComplete: false }).nopasswd, true, 'directory accounts may be missing from the list: assume one more');
+  const exemptOut = (rule) => LINUX_SUDO([rule], 'env_reset, exempt_group=staff');
+  assert.strictEqual(sc.parseSudoList(exemptOut('(ALL : ALL) ALL'), { userGroups: new Set(['staff']) }).nopasswd, true, 'exempt_group members never type a password');
+  assert.strictEqual(sc.parseSudoList(exemptOut('(ALL : ALL) PASSWD: ALL'), { userGroups: new Set(['staff']) }).nopasswd, true, 'not even for PASSWD: commands');
+  assert.strictEqual(sc.parseSudoList(exemptOut('(ALL : ALL) ALL'), { userGroups: new Set(['users']) }).nopasswd, false, 'not a member');
+  assert.strictEqual(sc.parseSudoList(exemptOut('(ALL : ALL) ALL')).nopasswd, true, 'membership unknown: counted');
+  assert.strictEqual(p('(ALL, !ghost) NOPASSWD: ALL', { uidOf }).nopasswd, true, 'excluding an unknown name leaves root');
+  assert.strictEqual(p('(ALL, !+nobody) NOPASSWD: ALL').nopasswd, true, 'an unknown exclusion never removes access');
+  assert.strictEqual(p('(ALL, !%staff) NOPASSWD: ALL').nopasswd, true, "root's groups unknown: the exclusion is ignored");
+  assert.strictEqual(p('(ALL, %staff) NOPASSWD: ALL', { rootGroups: groups }).nopasswd, true, 'a last entry that does not match decides nothing');
+  assert.strictEqual(p('(ALL, %!staff) NOPASSWD: ALL', { rootGroups: groups }).nopasswd, true, 'sudo prints an excluded group as %!group');
+  assert.strictEqual(p('(ALL, %!root) NOPASSWD: ALL', { rootGroups: groups }).nopasswd, false, "excluding root's group excludes root");
+  assert.strictEqual(p('(#00) NOPASSWD: ALL').nopasswd, true);
+  assert.strictEqual(p('(#1001) NOPASSWD: ALL').nopasswd, false);
+  assert.strictEqual(p('(root) TIMEOUT=300 NOPASSWD: ALL').nopasswd, true, 'options come before the tags');
+  assert.deepStrictEqual(p('(ALL) CWD=/tmp NOPASSWD: ALL').rootCommands, ['ALL']);
+  assert.strictEqual(p('(root) TIMEOUT=300 PASSWD: ALL').nopasswd, false);
+  const specific = 'env_reset, !authenticate\n\nRunas and Command-specific defaults for hub:\n    Defaults!/usr/bin/ls authenticate';
+  assert.strictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL : ALL) ALL'], specific)).nopasswd, true, 'a command-specific authenticate does not undo the general !authenticate');
+  assert.strictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL : ALL) ALL'], 'env_reset\n\nRunas and Command-specific defaults for hub:\n    Defaults>root !authenticate')).nopasswd, true, 'a specific !authenticate may cover a root rule: counted');
+});
+
+test('root-account and root-reach: no warning when sudo is passwordless only as another user; a warning naming the commands for a root rule', async () => {
+  const run = (sudoText) => sc.createSecurityCheck({ ...BAD, sudoStatus: async () => sc.parseSudoList(sudoText), dockerGroup: async () => ({ inGroup: false, rootless: false }) }).check();
+  const mac = await run(MAC_SUDO);
+  assert.strictEqual(byId(mac, 'root-account').level, 'info', JSON.stringify(byId(mac, 'root-account')));
+  assert.match(byId(mac, 'root-account').detail, /not to act as maestrotest.*not checked/);
+  assert.strictEqual(byId(mac, 'root-reach'), undefined);
+  const all = await run(LINUX_SUDO(['(ALL) NOPASSWD: ALL']));
+  assert.strictEqual(byId(all, 'root-account').level, 'warn'); assert.match(byId(all, 'root-account').detail, /sudo needs no password/);
+  assert.strictEqual(byId(all, 'root-reach').level, 'warn');
+  const clean = await run(LINUX_SUDO(['(ALL : ALL) ALL']));
+  assert.strictEqual(byId(clean, 'root-account').level, 'ok', 'a password for everything: no claim to check');
+  const tail = await run(LINUX_SUDO(['(root) NOPASSWD: /usr/bin/tailscale']));
+  assert.strictEqual(byId(tail, 'root-account').level, 'warn');
+  assert.match(byId(tail, 'root-account').detail, /sudo runs \/usr\/bin\/tailscale as root without a password/);
+  assert.match(byId(tail, 'root-reach').detail, /sudo runs \/usr\/bin\/tailscale as root without a password/);
+});
