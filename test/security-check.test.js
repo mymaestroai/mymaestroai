@@ -432,7 +432,8 @@ test('parseSudoList: passwordless only as an unprivileged user is not a way to r
   assert.strictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL : ALL) ALL'])).nopasswd, false, '(ALL) without NOPASSWD asks for a password');
   assert.strictEqual(sc.parseSudoList(LINUX_SUDO(['(ALL, !root) NOPASSWD: ALL'])).nopasswd, false, 'everyone except root');
   // tags carry on to later commands until changed; a list wrapped onto the next line belongs to the rule above
-  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(root) NOPASSWD: /usr/bin/a, PASSWD: /usr/bin/b, /usr/bin/c, NOPASSWD: /usr/bin/d', '    /usr/bin/e'])).rootCommands, ['/usr/bin/a', '/usr/bin/d', '/usr/bin/e']);
+  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(root) NOPASSWD: /usr/bin/a, PASSWD: /usr/bin/b, /usr/bin/c, NOPASSWD: /usr/bin/d,', '    /usr/bin/e'])).rootCommands, ['/usr/bin/a', '/usr/bin/d', '/usr/bin/e']);
+  assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(root) NOPASSWD: /usr/bin/systemctl restart', '    mymaestroai-production-worker.service'])).rootCommands, ['/usr/bin/systemctl restart mymaestroai-production-worker.service']);
   assert.deepStrictEqual(sc.parseSudoList(LINUX_SUDO(['(root) SETENV: NOPASSWD: /usr/bin/x'])).rootCommands, ['/usr/bin/x']);
   // several run-as specs on separate lines
   const many = sc.parseSudoList(LINUX_SUDO(['(ALL) ALL', '(postgres) NOPASSWD: /usr/bin/psql', '(maestrotest) NOPASSWD: ALL']));
