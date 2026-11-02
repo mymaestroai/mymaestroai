@@ -185,6 +185,9 @@ test('envNotices: a provider key, PORT or HUB_HOME only the shell had is named (
   n = envNotices({ env: shell, dir });
   assert.deepStrictEqual(n.map(l => l.match(/\(([A-Z_]+)\)|sets ([A-Z_]+)/).slice(1).find(Boolean)), ['HUB_HOME'], 'an empty HUB_HOME= line in .env provides nothing');
   assert.deepStrictEqual(envNotices({ env: { PATH: '/usr/bin' }, dir }), [], 'nothing from the shell: nothing to say');
+  const sm = require('../lib/service-manager'); const st = require('../lib/settings');
+  assert.deepStrictEqual(sm.ENV_KEY_MAP, st.ENV_KEY_MAP, 'the copy of the provider key names matches lib/settings.js');
+  assert.deepStrictEqual(sm.SEARCH_ENV_KEY_MAP, st.SEARCH_ENV_KEY_MAP, 'and the web-search ones');
 });
 
 test('mymaestro start returns the notices and the CLI prints them; restart.sh prints them before its own start', () => {
