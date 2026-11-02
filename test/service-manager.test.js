@@ -4,6 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { createServiceManager, renderSystemdUnit, renderLaunchdPlist, startEnv } = require('../lib/service-manager');
@@ -219,7 +220,14 @@ test('restart.sh run through a symlinked install folder restarts that hub instea
   const real = path.join(root, 'hub'); const link = path.join(root, 'hub-link');
   fs.mkdirSync(path.join(real, 'scripts'), { recursive: true }); fs.mkdirSync(path.join(real, 'lib')); fs.mkdirSync(path.join(root, 'home'));
   fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'restart.sh'), path.join(real, 'scripts', 'restart.sh'));
-  const port = 20000 + Math.floor(Math.random() * 20000);
+  const port = await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close((error) => error ? reject(error) : resolve(port));
+    });
+  });
   fs.writeFileSync(path.join(real, '.env'), `PORT=${port}\n`);
   // a stand-in hub: answers on the .env port, from its own folder
   fs.writeFileSync(path.join(real, 'server.js'), "const p=require('fs').readFileSync(__dirname+'/.env','utf8').match(/PORT=(\\d+)/)[1]; require('http').createServer((q,r)=>r.end('ok')).listen(+p,'127.0.0.1');\n");
