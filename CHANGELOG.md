@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **A backup no longer fails just because Docker isn't running.** On a computer where Docker is installed but stopped (Docker Desktop not open), the backup stopped with "The agents' boxes could not be checked … Is Docker running?", even with no agent boxes at all. When the local Docker isn't running, no box can be running, so the backup now goes ahead with nothing to pause. Other Docker problems still stop it, and now say what to do: permission denied on Docker's socket, a remote Docker host that doesn't answer, or Docker not answering in time. (`lib/backup/create.js`)
+
+- **gog's Google sign-ins are now guarded in the folder gog really uses.** My Maestro AI was guarding `~/.config/gog`, a folder gog doesn't use. Its real folder is `~/.config/gogcli` (`$XDG_CONFIG_HOME/gogcli` when that's set, `~/Library/Application Support/gogcli` on a Mac). It's now treated like your other secrets, for agents reading it and for agents changing it, and the security check lists it with your personal credentials.
+
 ## [5.10.0] - 2026-11-11
 
 What's new since 5.9.1: data connectors for your Ring cameras, Oura Ring and Google Drive (a copy of every backup there), Remote computers for a computer you set aside for your agents, the wallet unlocked with Face ID or a fingerprint, Maestro building new agents with you, consultations and scheduled tasks folded into cards in the chat, a Workers list, a memory check for every agent, an updated Claude client that can run Fable 5.2, an easier question card, and fixes for the phone keyboard, agent sandboxes and Claude extra usage.

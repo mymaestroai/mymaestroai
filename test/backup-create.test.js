@@ -286,3 +286,65 @@ test('a new backup never takes the name of one this computer still records (kept
   assert.match(b.name, /-2\.age$/);
   assert.deepStrictEqual(places.index(inst.root).map(x => x.name).sort(), [a.name, b.name].sort(), 'both records kept');
 });
+
+test('Docker installed but not running: the backup goes ahead with nothing to pause; permission or other Docker errors still stop it, saying what to do', async () => {
+  const { holdBoxes, dockerFailure } = require('../lib/backup/create');
+  const stateFile = path.join(TMP, 'r-docker-down', 'paused.json');
+  const DESKTOP_DOWN = 'failed to connect to the docker API at unix:///Users/eric/.docker/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /Users/eric/.docker/run/docker.sock: connect: no such file or directory\n';
+  const LINUX_DOWN = 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n';
+  const REFUSED = 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock: connect: connection refused\n';
+  const DENIED = 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.47/containers/json": dial unix /var/run/docker.sock: connect: permission denied\n';
+  const REMOTE = 'Cannot connect to the Docker daemon at tcp://10.0.0.5:2376. Is the docker daemon running?\n';
+  const failing = (stderr, calls = []) => (cmd, args) => { calls.push(args.join(' ')); return args[0] === 'ps' ? { status: 1, stdout: '', stderr } : { status: 0 }; };
+  const logs = [];
+  const gate = async () => () => {};
+
+  assert.strictEqual(dockerFailure({ status: 1, stderr: DESKTOP_DOWN }), 'down');
+  assert.strictEqual(dockerFailure({ status: 1, stderr: LINUX_DOWN }), 'down');
+  assert.strictEqual(dockerFailure({ status: 1, stderr: REFUSED }), 'down');
+  assert.strictEqual(dockerFailure({ status: 1, stderr: DENIED }), 'denied');
+  assert.strictEqual(dockerFailure({ status: 1, stderr: REMOTE }), 'other', 'a remote Docker that doesn\'t answer is not proof that no box runs');
+  assert.strictEqual(dockerFailure({ error: Object.assign(new Error('spawnSync docker ETIMEDOUT'), { code: 'ETIMEDOUT' }) }), 'timeout');
+
+  // daemon down (Docker Desktop and Linux wording): goes ahead, even without the gate (a terminal backup), nothing paused
+  for (const stderr of [DESKTOP_DOWN, LINUX_DOWN]) {
+    const calls = [];
+    const release = await holdBoxes('darwin', failing(stderr, calls), { stateFile, procOk: false, log: (m) => logs.push(m) });
+    await release();
+    assert.deepStrictEqual(calls, ['ps -q -a --filter name=^hub-agent-'], 'one look, no pause or unpause');
+    assert.ok(!fs.existsSync(stateFile), 'no record written');
+  }
+  assert.match(logs[0], /Docker isn't running, so no agent boxes were running; nothing to pause/);
+
+  // permission denied, a remote Docker, a timeout: still refused, with what to do
+  await assert.rejects(holdBoxes('darwin', failing(DENIED), { gate, stateFile, procOk: false }), (e) => e.code === 'EBOXES' && /permission denied on its socket/.test(e.message) && /docker group/.test(e.message));
+  await assert.rejects(holdBoxes('darwin', failing(REMOTE), { gate, stateFile, procOk: false }), (e) => e.code === 'EBOXES' && /Docker said: Cannot connect to the Docker daemon at tcp:\/\/10\.0\.0\.5:2376/.test(e.message) && /`docker ps` works in a terminal/.test(e.message));
+  const slow = () => ({ error: Object.assign(new Error('spawnSync docker ETIMEDOUT'), { code: 'ETIMEDOUT' }) });
+  await assert.rejects(holdBoxes('darwin', slow, { gate, stateFile, procOk: false }), (e) => e.code === 'EBOXES' && /didn't answer within 15 seconds/.test(e.message));
+
+  // an earlier backup's record of paused boxes, Docker now down: goes ahead, the record is left byte for byte
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  const rec = JSON.stringify({ ids: ['abc123def456'], at: '2026-11-04T08:30:00.000Z' });
+  fs.writeFileSync(stateFile, rec);
+  const recCalls = []; const recLogs = [];
+  await (await holdBoxes('darwin', failing(DESKTOP_DOWN, recCalls), { gate, stateFile, procOk: false, log: (m) => recLogs.push(m) }))();
+  assert.deepStrictEqual(recCalls, ['ps -q -a --filter name=^hub-agent-'], 'no unpause or inspect while Docker is down');
+  assert.strictEqual(fs.readFileSync(stateFile, 'utf8'), rec, 'the record is kept for when Docker starts');
+  assert.match(recLogs[0], /record of boxes an earlier backup paused is kept/);
+  // Docker back but the record still can't be settled: refused as before
+  const stuck = (cmd, args) => { if (args[0] === 'ps') return { status: 0, stdout: '' }; if (args[0] === 'inspect') return { status: 0, stdout: 'true\n' }; return { status: 0 }; };
+  await assert.rejects(holdBoxes('darwin', stuck, { gate, stateFile, procOk: false }), (e) => e.code === 'EBOXES' && /earlier backup left agents' boxes paused/.test(e.message));
+  fs.rmSync(stateFile, { force: true });
+
+  // no Docker at all: unchanged
+  const enoent = () => ({ error: Object.assign(new Error('spawnSync docker ENOENT'), { code: 'ENOENT' }) });
+  await (await holdBoxes('darwin', enoent, { stateFile, procOk: false }))();
+
+  // Docker running with a running box: still paused, then let go
+  const calls = [];
+  const up = (cmd, args) => { calls.push(args.join(' ')); if (args[0] === 'ps') return { status: 0, stdout: 'abc123\n' }; return { status: 0 }; };
+  const release = await holdBoxes('darwin', up, { gate, stateFile, procOk: false });
+  assert.ok(calls.includes('pause abc123'));
+  await release();
+  assert.ok(calls.includes('unpause abc123'));
+});
