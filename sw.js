@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = 'hub-mobile-v60';
+const VERSION = 'hub-mobile-v61';
 // Pre-cached at install (must all exist). '/mobile' is only cached once it answers 200 (it needs the server route).
 const SHELL = ['/mobile.html', '/mobile.js'];
 // Visual-block libraries (svg sanitizer, mermaid, Chart.js): lazy-loaded by the page on first use and
@@ -61,14 +61,36 @@ self.addEventListener('push', (event) => {
   }));
 });
 
+// A tap opens the agent it is about. The phone's worker (scope /mobile) reuses the phone page as before. The desktop's
+// worker (scope /) brings the open hub tab forward and asks it to open the agent (the page listens for 'open-target'),
+// rather than opening a second tab on /mobile; with no hub tab open it opens the desktop page at /?agent=<name>.
+function desktopTarget(href) {
+  const u = new URL(href);
+  if (!u.pathname.startsWith('/mobile')) return u.pathname + u.search + u.hash;   // /users and other pages: as given
+  const m = /^#chat=(.+)$/.exec(u.hash);
+  return m ? `/?agent=${encodeURIComponent(decodeURIComponent(m[1]))}` : '/';
+}
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const url = new URL(event.notification.data?.url || '/mobile', self.location.origin).href;
+  const desktop = new URL(self.registration.scope).pathname === '/';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-      const same = list.find(c => c.url === url) || list.find(c => new URL(c.url).pathname.startsWith('/mobile'));
+      const exact = list.find(c => c.url === url);
+      if (exact) return exact.focus();
+      const pathOf = (c) => new URL(c.url).pathname;
+      if (desktop) {
+        const target = desktopTarget(url);
+        // list is in most-recently-focused order: the hub's main page first, then any other hub page
+        const main = list.find(c => /^\/(index\.html)?$/.test(pathOf(c)));
+        if (main) return main.focus().then(c => { (c || main).postMessage({ type: 'open-target', url: target }); return c; });
+        const other = list.find(c => !pathOf(c).startsWith('/mobile')) || list[0];
+        if (other && 'navigate' in other) return other.navigate(new URL(target, self.location.origin).href).then(c => c && c.focus());
+        return self.clients.openWindow(target);
+      }
+      const same = list.find(c => pathOf(c).startsWith('/mobile'));
       if (same) {
-        if (same.url !== url && 'navigate' in same) return same.navigate(url).then(c => c && c.focus());
+        if ('navigate' in same) return same.navigate(url).then(c => c && c.focus());
         return same.focus();
       }
       return self.clients.openWindow(url);

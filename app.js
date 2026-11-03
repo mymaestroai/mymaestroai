@@ -4732,6 +4732,19 @@
       await Promise.all([loadAgents()]);
       // "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup interview this way).
       { const want = new URLSearchParams(location.search).get('agent'); const a = want && AGENTS.find(x => x.name === want); if (a) startSoloChat(a.name, a.model); }
+      // A notification tapped while this tab is open (sw.js): the worker brings the tab forward and says where to go.
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (e) => {
+          const d = e.data || {};
+          if (d.type !== 'open-target' || typeof d.url !== 'string') return;
+          const u = new URL(d.url, location.origin);
+          if (u.origin !== location.origin) return;
+          const want = u.pathname === '/' || u.pathname === '/index.html' ? u.searchParams.get('agent') : null;
+          if (want) { const a = AGENTS.find(x => x.name === want); if (a) startSoloChat(a.name, a.model); return; }
+          if (u.pathname !== '/' && u.pathname !== '/index.html') location.href = u.pathname + u.search + u.hash;   // e.g. /users
+        });
+        navigator.serviceWorker.startMessages();
+      }
       setupTabs();
       setupConfigListeners();
       startHubHealthMonitor();
