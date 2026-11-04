@@ -4747,21 +4747,30 @@
     }
     function createOpenTargets({ origin, run, store = null, keepMs = 10000 }) {
       // One queue for this tab, kept in `store` until each target has run: a go before ready() waits there, and a reload
-      // (or the sign-in page) in between, or while an earlier target is still running, doesn't lose it.
-      const waiting = store ? store.load() : [];
+      // (or the sign-in page) in between, or while an earlier target is still running, doesn't lose it. Entries carry an id
+      // and a page adds or removes only its own in what the store holds now, so an older copy of the page (one the browser
+      // kept for Back) can't overwrite a newer one's. A target still running when the page reloads runs again after it,
+      // so targets must stay safe to run twice (each one opens something).
+      const waiting = store ? store.load().filter(e => e && e.id && e.t) : [];
       let isReady = false;
       let chain = Promise.resolve();
-      const persist = () => { if (store) { if (waiting.length) store.save(waiting); else store.clear(); } };
-      const runInTurn = (t, queued) => {
+      const add = (e) => { if (store) { const cur = store.load(); if (!cur.some(x => x && x.id === e.id)) cur.push(e); store.save(cur); } };
+      const drop = (e) => { if (store) { const cur = store.load().filter(x => x && x.id !== e.id); if (cur.length) store.save(cur); else store.clear(); } };
+      const runInTurn = (t, entry) => {
         chain = chain.then(() => run(t)).catch(() => { /* one failed target must not stop the next */ }).then(() => {
-          if (!queued) return;
-          const i = waiting.indexOf(t);
+          if (!entry) return;
+          const i = waiting.indexOf(entry);
           if (i >= 0) waiting.splice(i, 1);
-          persist();
+          drop(entry);
         });
         return chain;
       };
-      const take = (t) => { waiting.push(t); persist(); if (isReady) runInTurn(t, true); };
+      let seq = 0;
+      const take = (t) => {
+        const e = { id: `${Date.now().toString(36)}-${(++seq).toString(36)}-${Math.random().toString(36).slice(2, 8)}`, t };
+        waiting.push(e); add(e);
+        if (isReady) runInTurn(t, e);
+      };
       return {
         onMessage(e) {
           const d = e && e.data;
@@ -4783,8 +4792,8 @@
         ready(own) {
           if (isReady) return chain;
           isReady = true;
-          if (own) runInTurn(own, false);
-          for (const t of waiting.slice()) runInTurn(t, true);
+          if (own) runInTurn(own, null);
+          for (const e of waiting.slice()) runInTurn(e.t, e);
           return chain;
         },
       };

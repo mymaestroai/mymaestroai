@@ -94,7 +94,7 @@ test('a go while the page loads waits for ready(), survives a reload in this tab
   const first = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent || 'backups'), store });
   const a = offer('/?agent=forge'); first.onMessage(a.e); a.go();
   assert.deepStrictEqual(ran, [], 'not before the agent list is in');
-  assert.strictEqual(JSON.parse(storage.m.get('hub-open-targets')).targets[0].agent, 'forge', 'kept in this tab');
+  assert.strictEqual(JSON.parse(storage.m.get('hub-open-targets')).targets[0].t.agent, 'forge', 'kept in this tab');
   // the page reloads (or the sign-in page comes in between) before it was ready: a new page in the same tab
   clock += 60 * 1000;
   const second = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent || 'backups'), store });
@@ -151,7 +151,9 @@ test('app.js listens before its start-up awaits anything, keeps taps in sessionS
   assert.match(run, /if \(!a\) a = await showOwnerViewOf\(t\.agent\);/);
   const users = read('users.html');
   assert.match(users, /window\.addEventListener\('focus', refreshRequestsSoon\);\n  document\.addEventListener\('visibilitychange', refreshRequestsSoon\);/, 'a Users tab brought forward (or focused in another window) shows the requests waiting now');
-  assert.match(users, /if \(editing\) return;/, 'but never while a request row is being filled in');
+  const load = users.slice(users.indexOf('async function loadRequests() {'));
+  assert.match(load, /if \(at !== tr\) tb\.insertBefore\(tr, at\);/, 'rows already shown are kept, not redrawn: what is typed in them survives');
+  assert.ok(!/tb\.innerHTML = pending\.map/.test(load), 'the waiting rows are never rebuilt wholesale');
 });
 
 test('every go is kept until its target has run: a second tap during a reload, or a reload mid-run, loses nothing', async () => {
@@ -170,7 +172,7 @@ test('every go is kept until its target has run: a second tap during a reload, o
   const c = offer('/?agent=c'); p3.onMessage(c.e); c.go();
   p3.ready({ agent: 'slow', backups: false, update: false, security: false });
   await tick();
-  assert.deepStrictEqual(JSON.parse(storage.m.get('hub-open-targets')).targets.map(t => t.agent), ['c'], 'c is kept while slow runs');
+  assert.deepStrictEqual(JSON.parse(storage.m.get('hub-open-targets')).targets.map(e => e.t.agent), ['c'], 'c is kept while slow runs');
   const p4 = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent), store });   // the reload
   await p4.ready(null);
   assert.deepStrictEqual(ran, ['a', 'b', 'c']);
@@ -186,4 +188,16 @@ test('an offer lasts ten seconds by default: a slow focus on the worker side sti
   t.mock.timers.tick(9000);
   o.go();
   return new Promise(r => setImmediate(r)).then(() => assert.deepStrictEqual(ran, ['forge']));
+});
+
+test('an older copy of the page (kept for Back) removes only its own entry: a newer page\'s taps stay stored', async () => {
+  const storage = memoryStorage(); const store = createTargetStore(storage, () => 1000);
+  const ran = [];
+  let release; const old = createOpenTargets({ origin: ORIGIN, run: (x) => (x.agent === 'a' ? new Promise(r => { release = r; }) : ran.push(x.agent)), store });
+  const a = offer('/?agent=a'); old.onMessage(a.e); a.go();
+  old.ready(null); await tick();                       // the old page runs a, which is still running
+  const fresh = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent), store });   // a newer page in the tab
+  const b = offer('/?agent=b'); fresh.onMessage(b.e); b.go();
+  release(); await tick(); await tick(); await tick();  // the old page's a settles and drops a, only a
+  assert.deepStrictEqual(JSON.parse(storage.m.get('hub-open-targets')).targets.map(e => e.t.agent), ['b'], 'b is still kept');
 });

@@ -401,19 +401,11 @@
     return names || c.head || 'agent';
   }
   // Brought forward by a tapped "asks for a new agent" notification (sw.js focuses an open Users tab, which may already
-  // be visible in another window): show what is waiting now. Not while a waiting request's row is being filled in
-  // (its name, template or note): redrawing the table would throw that away.
+  // be visible in another window): show what is waiting now. loadRequests leaves the rows already shown as they are,
+  // so a note or name being typed survives.
   let requestsRefresh = null;
   function refreshRequestsSoon() {
     if (document.visibilityState !== 'visible') return;
-    const tb = $('requests-rows');
-    const editing = !!tb && [...tb.querySelectorAll('input, select, textarea')].some(el => {
-      if (el === document.activeElement) return true;
-      if (el.tagName !== 'SELECT') return el.value !== el.defaultValue;
-      const def = [...el.options].findIndex(o => o.defaultSelected);
-      return el.selectedIndex !== (def < 0 ? 0 : def);
-    });
-    if (editing) return;
     clearTimeout(requestsRefresh);
     requestsRefresh = setTimeout(() => loadRequests(), 0);
   }
@@ -429,8 +421,7 @@
     const pending = all.filter(r => r.status === 'pending');
     const decided = all.filter(r => r.status !== 'pending')
       .sort((a, b) => String(b.resolvedAt || b.createdAt || '').localeCompare(String(a.resolvedAt || a.createdAt || ''))).slice(0, 20);
-    if (!pending.length) tb.innerHTML = '<tr><td colspan="6" class="empty">No requests waiting.</td></tr>';
-    else tb.innerHTML = pending.map(r => {
+    const rowHtml = (r) => {
       const team = r.kind === 'team';
       const tpl = r.template === 'legal' ? 'legal' : 'medical';
       const picker = team
@@ -445,7 +436,22 @@
         <td class="act"><div class="row">${picker}<button class="primary" data-act="approve">Approve</button><button class="danger" data-act="decline">Decline</button></div>
           <div class="row" style="margin-top:6px;"><input type="text" class="note" placeholder="note to the requester, optional" autocomplete="off"></div></td>
       </tr>`;
-    }).join('');
+    };
+    // Rows already shown stay exactly as they are (what is typed in them, and focus, survive any refresh); requests no
+    // longer waiting leave, new ones come in at their place in the order.
+    const shown = new Map([...tb.querySelectorAll('tr[data-id]')].map(tr => [tr.dataset.id, tr]));
+    const want = new Set(pending.map(r => String(r.id)));
+    for (const [id, tr] of shown) if (!want.has(id)) tr.remove();
+    for (const tr of [...tb.querySelectorAll('tr:not([data-id])')]) tr.remove();   // "No requests waiting."
+    let prev = null;
+    for (const r of pending) {
+      let tr = shown.get(String(r.id));
+      if (!tr || !tr.isConnected) { const t = document.createElement('tbody'); t.innerHTML = rowHtml(r); tr = t.firstElementChild; }
+      const at = prev ? prev.nextElementSibling : tb.firstElementChild;
+      if (at !== tr) tb.insertBefore(tr, at);
+      prev = tr;
+    }
+    if (!pending.length) tb.innerHTML = '<tr><td colspan="6" class="empty">No requests waiting.</td></tr>';
     $('requests-recent-count').textContent = decided.length ? `(${decided.length})` : '';
     if (!decided.length) rb.innerHTML = '<tr><td colspan="5" class="empty">No decisions yet.</td></tr>';
     else rb.innerHTML = decided.map(r => {
