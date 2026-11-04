@@ -44,7 +44,7 @@ test('phone page: the chat scroller is vertical only; bubbles and their contents
   assert.match(rule(mhtml, '    #messages'), /min-width: 0;/);
   assert.match(rule(mhtml, '    .msg'), /min-width: 0;/);
   assert.match(mhtml, /\.msg\.assistant pre, \.msg\.assistant table, \.msg\.assistant \.visual \{ max-width: 100%; \}/);
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v60';/, 'service worker cache bumped');
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v61';/, 'service worker cache bumped');
 });
 
 test('phone (desktop page, ≤768px): the ☰ has its own row; icons on row 1, open agents on row 2 scrolling inside it', () => {

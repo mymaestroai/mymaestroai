@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Clicking a notification in a desktop browser opens it in the hub tab you already have.** It used to open a second tab on the phone page (`/mobile`). Now the open hub tab comes forward and shows what the notification is about: that agent's chat, Backups for a backup warning, the update card for an update. A click while the page is still loading isn't lost, and a notice for the Users page brings that page forward. With no hub tab open, or one still running an older version of the page, the desktop page opens in a new tab instead. The phone app's notifications work as before. (`sw.js`, `app.js`, `lib/ui-open-target.js`)
+
 - **gog's Google sign-ins are now guarded in the folder gog really uses.** My Maestro AI was guarding `~/.config/gog`, a folder gog doesn't use. Its real folder is `~/.config/gogcli` (`$XDG_CONFIG_HOME/gogcli` when that's set, `~/Library/Application Support/gogcli` on a Mac). It's now treated like your other secrets, for agents reading it and for agents changing it, and the security check lists it with your personal credentials.
 
 - **The notices at the top no longer cover the ⚙️ Settings button.** On a new install, the setup and security notices sat on top of the header, so Settings couldn't be reached. The page now moves down below them, and back up when they go.

@@ -4721,17 +4721,133 @@
       }
     }
     
+    // A notification tapped while this tab is open (sw.js): the worker offers the target, brings the tab forward and
+    // says go. Listening starts here, before the first await of the page's start-up, so a tap while the page loads is
+    // kept (also across a reload or the sign-in page) and runs once the agent list is in. Shared verbatim with
+    // lib/ui-open-target.js (test/ui-open-target.test.js).
+    // ── open-target helpers (begin) ──
+    const OPEN_TARGET_MAIN = /^\/(index\.html)?$/;
+    const OPEN_TARGET_KEY = 'hub-open-targets';
+    function parseOpenTarget(data, origin) {
+      if (!data || data.type !== 'open-target' || typeof data.url !== 'string') return null;
+      let u;
+      try { u = new URL(data.url, origin); } catch { return null; }
+      if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
+      const q = u.searchParams;
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1' };
+    }
+    function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
+      return {
+        load() {
+          try { const v = JSON.parse(storage.getItem(OPEN_TARGET_KEY) || 'null'); return v && Array.isArray(v.targets) && now() - v.at < ttlMs ? v.targets : []; } catch { return []; }
+        },
+        save(list) { try { storage.setItem(OPEN_TARGET_KEY, JSON.stringify({ at: now(), targets: list })); } catch { /* storage full or off */ } },
+        clear() { try { storage.removeItem(OPEN_TARGET_KEY); } catch { /* off */ } },
+      };
+    }
+    function createOpenTargets({ origin, run, store = null, keepMs = 10000 }) {
+      // One queue for this tab, kept in `store` until each target has run: a go before ready() waits there, and a reload
+      // (or the sign-in page) in between, or while an earlier target is still running, doesn't lose it. Entries carry an id
+      // and a page adds or removes only its own in what the store holds now, so an older copy of the page (one the browser
+      // kept for Back) can't overwrite a newer one's. A target still running when the page reloads runs again after it,
+      // so targets must stay safe to run twice (each one opens something).
+      const waiting = store ? store.load().filter(e => e && e.id && e.t) : [];
+      let isReady = false;
+      let chain = Promise.resolve();
+      const add = (e) => { if (store) { const cur = store.load(); if (!cur.some(x => x && x.id === e.id)) cur.push(e); store.save(cur); } };
+      const drop = (e) => { if (store) { const cur = store.load().filter(x => x && x.id !== e.id); if (cur.length) store.save(cur); else store.clear(); } };
+      const runInTurn = (t, entry) => {
+        chain = chain.then(() => run(t)).catch(() => { /* one failed target must not stop the next */ }).then(() => {
+          if (!entry) return;
+          const i = waiting.indexOf(entry);
+          if (i >= 0) waiting.splice(i, 1);
+          drop(entry);
+        });
+        return chain;
+      };
+      let seq = 0;
+      const take = (t) => {
+        const e = { id: `${Date.now().toString(36)}-${(++seq).toString(36)}-${Math.random().toString(36).slice(2, 8)}`, t };
+        waiting.push(e); add(e);
+        if (isReady) runInTurn(t, e);
+      };
+      return {
+        onMessage(e) {
+          const d = e && e.data;
+          if (!d || d.type !== 'open-target') return;
+          const port = e.ports && e.ports[0];
+          if (!port) return;
+          const t = parseOpenTarget(d, origin);
+          if (!t) { try { port.postMessage({ ok: false }); } catch { /* the worker stopped waiting */ } return; }
+          let live = true;
+          const end = () => { live = false; port.onmessage = null; try { port.close(); } catch { /* closed */ } };
+          const timer = setTimeout(end, keepMs);   // an offer the worker gave to another tab, or gave up on
+          port.onmessage = (m) => {
+            if (!live || !m || !m.data || m.data.go !== true) return;
+            clearTimeout(timer); end();
+            take(t);
+          };
+          try { port.postMessage({ ok: true }); } catch { clearTimeout(timer); end(); }
+        },
+        ready(own) {
+          if (isReady) return chain;
+          isReady = true;
+          if (own) runInTurn(own, null);
+          for (const e of waiting.slice()) runInTurn(e.t, e);
+          return chain;
+        },
+      };
+    }
+    // ── open-target helpers (end) ──
+    const openTargets = createOpenTargets({ origin: location.origin, run: (t) => runPageTarget(t), store: createTargetStore(sessionStorage) });
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', (e) => openTargets.onMessage(e));
+      navigator.serviceWorker.startMessages();
+    }
+    // What the page's address or a tapped notification asks for: an agent's chat, the backups settings, the update
+    // card, the security dialog.
+    async function runPageTarget(t) {
+      if (!t) return;
+      if (t.security) openSecurityDialog();
+      if (t.backups) openSettingsAt('st-backups-section');
+      if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
+      if (!t.agent) return;
+      let a = AGENTS.find(x => x.name === t.agent);
+      if (!a) a = await showOwnerViewOf(t.agent);
+      if (a) startSoloChat(a.name, a.model);
+    }
+    // An agent the sidebar's owner view leaves out (an admin looking at another person's agents): switch the view to
+    // its owner, as the owner menu would, so its chat opens like any other.
+    async function showOwnerViewOf(name) {
+      const me = window.hubMe;
+      if (!me || !me.isAdmin) return null;
+      let a = null;
+      try { const r = await fetch('/api/agents', { credentials: 'include' }); if (r.ok) a = ((await r.json()).agents || []).find(x => x.name === name) || null; } catch { return null; }
+      if (!a) return null;
+      localStorage.setItem(OWNER_VIEW_KEY, !a.owner || a.owner === me.user.id ? 'mine' : a.owner);
+      renderOwnerSwitcher();
+      await loadAgents();
+      return AGENTS.find(x => x.name === name) || null;
+    }
+
     document.addEventListener('DOMContentLoaded', async () => {
       await loadMe();
       applyMemberView();
       renderOwnerSwitcher();
       renderUserChip();
       document.addEventListener('click', (e) => { if (!e.target.closest('#user-chip-wrap')) toggleAccountMenu(false); });
-      if (new URLSearchParams(location.search).get('security') === '1') openSecurityDialog();
-      if (new URLSearchParams(location.search).get('backups') === '1') openSettingsAt('st-backups-section');   // a backup warning's notification
       await Promise.all([loadAgents()]);
-      // "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup interview this way).
-      { const want = new URLSearchParams(location.search).get('agent'); const a = want && AGENTS.find(x => x.name === want); if (a) startSoloChat(a.name, a.model); }
+      // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
+      // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
+      // (a backup warning), ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
+      // while the page was loading.
+      const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
+      if (own && (own.update || own.backups || own.security)) {   // one-shot actions: a reload must not repeat them
+        const u = new URL(location.href);
+        for (const k of ['update', 'backups', 'security']) u.searchParams.delete(k);
+        history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+      }
+      openTargets.ready(own);
       setupTabs();
       setupConfigListeners();
       startHubHealthMonitor();
