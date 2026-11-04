@@ -4745,16 +4745,23 @@
         clear() { try { storage.removeItem(OPEN_TARGET_KEY); } catch { /* off */ } },
       };
     }
-    function createOpenTargets({ origin, run, store = null, keepMs = 3000 }) {
-      const waiting = [];
+    function createOpenTargets({ origin, run, store = null, keepMs = 10000 }) {
+      // One queue for this tab, kept in `store` until each target has run: a go before ready() waits there, and a reload
+      // (or the sign-in page) in between, or while an earlier target is still running, doesn't lose it.
+      const waiting = store ? store.load() : [];
       let isReady = false;
       let chain = Promise.resolve();
-      const runInTurn = (t) => { chain = chain.then(() => run(t)).catch(() => { /* one failed target must not stop the next */ }); return chain; };
-      const take = (t) => {
-        if (isReady) { runInTurn(t); return; }
-        waiting.push(t);
-        if (store) store.save(waiting);
+      const persist = () => { if (store) { if (waiting.length) store.save(waiting); else store.clear(); } };
+      const runInTurn = (t, queued) => {
+        chain = chain.then(() => run(t)).catch(() => { /* one failed target must not stop the next */ }).then(() => {
+          if (!queued) return;
+          const i = waiting.indexOf(t);
+          if (i >= 0) waiting.splice(i, 1);
+          persist();
+        });
+        return chain;
       };
+      const take = (t) => { waiting.push(t); persist(); if (isReady) runInTurn(t, true); };
       return {
         onMessage(e) {
           const d = e && e.data;
@@ -4774,14 +4781,10 @@
           try { port.postMessage({ ok: true }); } catch { clearTimeout(timer); end(); }
         },
         ready(own) {
-          if (isReady) return;
+          if (isReady) return chain;
           isReady = true;
-          let pending = store ? store.load() : [];
-          if (!pending.length) pending = waiting.slice();   // the store was off or full: what this page kept itself
-          if (store) store.clear();
-          waiting.splice(0);
-          if (own) runInTurn(own);
-          for (const t of pending) runInTurn(t);
+          if (own) runInTurn(own, false);
+          for (const t of waiting.slice()) runInTurn(t, true);
           return chain;
         },
       };

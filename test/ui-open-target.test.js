@@ -149,5 +149,41 @@ test('app.js listens before its start-up awaits anything, keeps taps in sessionS
   assert.match(run, /if \(t\.backups\) openSettingsAt\('st-backups-section'\);/);
   assert.match(run, /if \(t\.update\) paintUpdateCard\(\)\.then\(\(\) => showUpdateCard\(\)\)/);
   assert.match(run, /if \(!a\) a = await showOwnerViewOf\(t\.agent\);/);
-  assert.match(read('users.html'), /visibilitychange', \(\) => \{ if \(document\.visibilityState === 'visible'\) loadRequests\(\); \}\);/, 'a Users tab brought forward shows the requests waiting now');
+  const users = read('users.html');
+  assert.match(users, /window\.addEventListener\('focus', refreshRequestsSoon\);\n  document\.addEventListener\('visibilitychange', refreshRequestsSoon\);/, 'a Users tab brought forward (or focused in another window) shows the requests waiting now');
+  assert.match(users, /if \(editing\) return;/, 'but never while a request row is being filled in');
+});
+
+test('every go is kept until its target has run: a second tap during a reload, or a reload mid-run, loses nothing', async () => {
+  const storage = memoryStorage(); const store = createTargetStore(storage, () => 1000);
+  const ran = [];
+  // tap A while the page loads; the page reloads; tap B before the new page is ready: both run, A first
+  const p1 = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent), store });
+  const a = offer('/?agent=a'); p1.onMessage(a.e); a.go();
+  const p2 = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent), store });
+  const b = offer('/?agent=b'); p2.onMessage(b.e); b.go();
+  await p2.ready(null);
+  assert.deepStrictEqual(ran, ['a', 'b']);
+  assert.ok(!storage.m.has('hub-open-targets'), 'gone once run');
+  // a target is still running (an owner-view fetch) when the page reloads: the ones behind it are still kept
+  let hang; const p3 = createOpenTargets({ origin: ORIGIN, run: (x) => (x.agent === 'slow' ? new Promise(r => { hang = r; }) : ran.push(x.agent)), store });
+  const c = offer('/?agent=c'); p3.onMessage(c.e); c.go();
+  p3.ready({ agent: 'slow', backups: false, update: false, security: false });
+  await tick();
+  assert.deepStrictEqual(JSON.parse(storage.m.get('hub-open-targets')).targets.map(t => t.agent), ['c'], 'c is kept while slow runs');
+  const p4 = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent), store });   // the reload
+  await p4.ready(null);
+  assert.deepStrictEqual(ran, ['a', 'b', 'c']);
+  hang();
+});
+
+test('an offer lasts ten seconds by default: a slow focus on the worker side still gets its go through', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const ran = [];
+  const ot = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent) });
+  ot.ready(null);
+  const o = offer('/?agent=forge'); ot.onMessage(o.e);
+  t.mock.timers.tick(9000);
+  o.go();
+  return new Promise(r => setImmediate(r)).then(() => assert.deepStrictEqual(ran, ['forge']));
 });

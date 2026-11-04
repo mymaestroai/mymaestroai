@@ -400,9 +400,25 @@
     if (c.kind === 'team') return `team${c.head ? `, head ${c.head}` : ''}${names ? `: ${names}` : ''}`;
     return names || c.head || 'agent';
   }
-  // Brought forward by a tapped "asks for a new agent" notification (sw.js focuses an open Users tab): show what is
-  // waiting now. Only the request tables are redrawn; the forms keep what is typed in them.
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadRequests(); });
+  // Brought forward by a tapped "asks for a new agent" notification (sw.js focuses an open Users tab, which may already
+  // be visible in another window): show what is waiting now. Not while a waiting request's row is being filled in
+  // (its name, template or note): redrawing the table would throw that away.
+  let requestsRefresh = null;
+  function refreshRequestsSoon() {
+    if (document.visibilityState !== 'visible') return;
+    const tb = $('requests-rows');
+    const editing = !!tb && [...tb.querySelectorAll('input, select, textarea')].some(el => {
+      if (el === document.activeElement) return true;
+      if (el.tagName !== 'SELECT') return el.value !== el.defaultValue;
+      const def = [...el.options].findIndex(o => o.defaultSelected);
+      return el.selectedIndex !== (def < 0 ? 0 : def);
+    });
+    if (editing) return;
+    clearTimeout(requestsRefresh);
+    requestsRefresh = setTimeout(() => loadRequests(), 0);
+  }
+  window.addEventListener('focus', refreshRequestsSoon);
+  document.addEventListener('visibilitychange', refreshRequestsSoon);
   async function loadRequests() {
     const tb = $('requests-rows'), rb = $('requests-recent-rows');
     setMsg('requests-msg', '');
