@@ -4721,30 +4721,84 @@
       }
     }
     
+    // A notification tapped while this tab is open (sw.js): the worker brings the tab forward and hands over where to
+    // go. Listening starts here, before the first await of the page's start-up, so a tap while the page loads is kept
+    // and runs once the agent list is in. Shared verbatim with lib/ui-open-target.js (test/ui-open-target.test.js).
+    // ── open-target helpers (begin) ──
+    const OPEN_TARGET_MAIN = /^\/(index\.html)?$/;
+    function parseOpenTarget(data, origin) {
+      if (!data || data.type !== 'open-target' || typeof data.url !== 'string') return null;
+      let u;
+      try { u = new URL(data.url, origin); } catch { return null; }
+      if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
+      const q = u.searchParams;
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1' };
+    }
+    function createOpenTargets({ origin, now = () => Date.now(), run }) {
+      const waiting = [];
+      let isReady = false;
+      const answer = (e, ok) => { try { if (e.ports && e.ports[0]) e.ports[0].postMessage({ ok }); } catch { /* the worker stopped waiting */ } };
+      return {
+        onMessage(e) {
+          const d = e && e.data;
+          if (!d || d.type !== 'open-target') return;
+          const t = parseOpenTarget(d, origin);
+          // Past `until` the worker is about to open a new tab itself: taking the target too would show it twice.
+          if (!t || typeof d.until !== 'number' || now() > d.until) { answer(e, false); return; }
+          answer(e, true);
+          if (isReady) run(t); else waiting.push(t);
+        },
+        ready() {
+          isReady = true;
+          while (waiting.length) run(waiting.shift());
+        },
+      };
+    }
+    // ── open-target helpers (end) ──
+    const openTargets = createOpenTargets({ origin: location.origin, run: (t) => runPageTarget(t) });
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', (e) => openTargets.onMessage(e));
+      navigator.serviceWorker.startMessages();
+    }
+    // What the page's address or a tapped notification asks for: an agent's chat, the backups settings, the update
+    // card, the security dialog.
+    async function runPageTarget(t) {
+      if (!t) return;
+      if (t.security) openSecurityDialog();
+      if (t.backups) openSettingsAt('st-backups-section');
+      if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
+      if (!t.agent) return;
+      let a = AGENTS.find(x => x.name === t.agent);
+      if (!a) a = await showOwnerViewOf(t.agent);
+      if (a) startSoloChat(a.name, a.model);
+    }
+    // An agent the sidebar's owner view leaves out (an admin looking at another person's agents): switch the view to
+    // its owner, as the owner menu would, so its chat opens like any other.
+    async function showOwnerViewOf(name) {
+      const me = window.hubMe;
+      if (!me || !me.isAdmin) return null;
+      let a = null;
+      try { const r = await fetch('/api/agents', { credentials: 'include' }); if (r.ok) a = ((await r.json()).agents || []).find(x => x.name === name) || null; } catch { return null; }
+      if (!a) return null;
+      localStorage.setItem(OWNER_VIEW_KEY, !a.owner || a.owner === me.user.id ? 'mine' : a.owner);
+      renderOwnerSwitcher();
+      await loadAgents();
+      return AGENTS.find(x => x.name === name) || null;
+    }
+
     document.addEventListener('DOMContentLoaded', async () => {
       await loadMe();
       applyMemberView();
       renderOwnerSwitcher();
       renderUserChip();
       document.addEventListener('click', (e) => { if (!e.target.closest('#user-chip-wrap')) toggleAccountMenu(false); });
-      if (new URLSearchParams(location.search).get('security') === '1') openSecurityDialog();
-      if (new URLSearchParams(location.search).get('backups') === '1') openSettingsAt('st-backups-section');   // a backup warning's notification
       await Promise.all([loadAgents()]);
-      // "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup interview this way).
-      { const want = new URLSearchParams(location.search).get('agent'); const a = want && AGENTS.find(x => x.name === want); if (a) startSoloChat(a.name, a.model); }
-      // A notification tapped while this tab is open (sw.js): the worker brings the tab forward and says where to go.
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.addEventListener('message', (e) => {
-          const d = e.data || {};
-          if (d.type !== 'open-target' || typeof d.url !== 'string') return;
-          const u = new URL(d.url, location.origin);
-          if (u.origin !== location.origin) return;
-          const want = u.pathname === '/' || u.pathname === '/index.html' ? u.searchParams.get('agent') : null;
-          if (want) { const a = AGENTS.find(x => x.name === want); if (a) startSoloChat(a.name, a.model); return; }
-          if (u.pathname !== '/' && u.pathname !== '/index.html') location.href = u.pathname + u.search + u.hash;   // e.g. /users
-        });
-        navigator.serviceWorker.startMessages();
-      }
+      // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
+      // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
+      // (a backup warning), ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
+      // while the page was loading.
+      runPageTarget(parseOpenTarget({ type: 'open-target', url: location.href }, location.origin));
+      openTargets.ready();
       setupTabs();
       setupConfigListeners();
       startHubHealthMonitor();

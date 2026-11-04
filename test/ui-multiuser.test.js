@@ -52,7 +52,8 @@ test('user chip and account menu: Security, Users (admin), Sign out, admin 2FA n
   assert.match(html, /Two-factor is required for admins: /);
   assert.match(app, /fetch\('\/api\/auth\/logout', \{ method: 'POST'/);
   assert.match(app, /location\.href = '\/login'/);
-  assert.match(app, /get\('security'\) === '1'\) openSecurityDialog\(\)/);
+  assert.match(app, /security: q\.get\('security'\) === '1'/);   // the page's address or a tapped notification (lib/ui-open-target.js)
+  assert.match(app, /if \(t\.security\) openSecurityDialog\(\);/);
 });
 
 test('Security dialog covers 2FA enrol / disable, password change and sign out everywhere', () => {

@@ -461,6 +461,7 @@ test('wiring: the route asks again for the password, the server starts the ticke
   assert.match(read('lib/readiness.js'), /backupItems: \(\) => \{ const s = require\('\.\/backup\/schedule'\)\.current\(\)/);
   const app = read('app.js');
   assert.match(app, /function bkScheduleDialog\(\)/);
-  assert.match(app, /get\('backups'\) === '1'\) openSettingsAt\('st-backups-section'\)/);
+  assert.match(app, /backups: q\.get\('backups'\) === '1'/);   // the page's address or a tapped notification (lib/ui-open-target.js)
+  assert.match(app, /if \(t\.backups\) openSettingsAt\('st-backups-section'\);/);
   assert.match(read('lib/backup/collect.js'), /\/\^backup-schedule\\\.json\$\//);
 });

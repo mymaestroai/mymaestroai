@@ -32,7 +32,10 @@ test('Welcome text is never built from markup: replies and errors go in as text'
 test('the hand-over: the first message starts the setup interview, then the app opens on Maestro\'s chat', () => {
   assert.match(welcome, /message: '\[First-time setup\] Hello! I just installed My Maestro AI and connected my first AI\. Please start the setup interview\.'/);
   assert.match(welcome, /location\.href = '\/\?agent=' \+ encodeURIComponent\(lead\.name\)/);
-  assert.match(app, /const want = new URLSearchParams\(location\.search\)\.get\('agent'\); const a = want && AGENTS\.find\(x => x\.name === want\); if \(a\) startSoloChat\(a\.name, a\.model\);/);
+  // "/?agent=<name>" opens that chat once the agent list is in (lib/ui-open-target.js parses the page's address)
+  assert.match(app, /agent: q\.get\('agent'\) \|\| ''/);
+  assert.match(app, /runPageTarget\(parseOpenTarget\(\{ type: 'open-target', url: location\.href \}, location\.origin\)\);/);
+  assert.match(app, /let a = AGENTS\.find\(x => x\.name === t\.agent\);\n      if \(!a\) a = await showOwnerViewOf\(t\.agent\);\n      if \(a\) startSoloChat\(a\.name, a\.model\);/);
   const soul = read('templates/workspaces/maestro/SOUL.md');
   assert.match(soul, /When a message starts with \*\*\[First-time setup\]\*\*[\s\S]*read `SETUP-INTERVIEW\.md`/);
   const iv = read('templates/workspaces/maestro/SETUP-INTERVIEW.md');
