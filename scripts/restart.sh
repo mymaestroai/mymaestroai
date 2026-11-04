@@ -66,7 +66,7 @@ is_this_hub() {
   # binary first, only options between, the script last (it may contain spaces); its working directory from lsof
   args=$(ps -o args= -p "$p" 2>/dev/null) || return 1
   local opts='( -[^ ]+)*'
-  printf '%s\n' "$args" | grep -qE '^[^ ]*node[0-9]*( -[^ ]+)* +(-[epci][^ ]*|--(eval|print|check|interactive)(=[^ ]*)?)( |$)' && return 1
+  printf '%s\n' "$args" | grep -qE '^([^ ]*/)?(node|nodejs|node[0-9]+)( -[^ ]+)* +(-[epci][^ ]*|--(eval|print|check|interactive)(=[^ ]*)?)( |$)' && return 1
   for f in "$PROJECT_DIR_REAL/server.js" "$PROJECT_DIR/server.js"; do
     case "$args" in *" $f") [ "$(printf '%s' "${args% "$f"}" | sed -E "s/^([^ ]*\/)?(node|nodejs|node[0-9]+)$opts\$//")" = "" ] && return 0 ;; esac
   done
@@ -137,9 +137,10 @@ started_by_manager() {
 HELPER_NODE=$(command -v node 2>/dev/null || ls -1dt "$HOME"/.mymaestroai/node/bin/node "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | head -1)
 # owner_of: stdin is a unit file or plist; prints whose hub it runs: ours, other or unknown (lib/service-manager; start
 # scripts it names are read too)
+# (owner_of direct: "other" also when its ExecStartPost could leave something else running, else "fine")
 owner_of() {
   [ -n "$HELPER_NODE" ] || { cat > /dev/null; echo unknown; return; }
-  "$HELPER_NODE" -e 'let t = ""; process.stdin.on("data", (d) => { t += d; }).on("end", () => { try { const sm = require(process.argv[1]); console.log(t ? sm.serviceOwnership(t, process.argv[2], { readScript: (f) => sm.readStartScript(f) }) : "unknown"); } catch { console.log("unknown"); } });' "$PROJECT_DIR/lib/service-manager.js" "$PROJECT_DIR_REAL" 2>/dev/null || echo unknown
+  "$HELPER_NODE" -e 'let t = ""; process.stdin.on("data", (d) => { t += d; }).on("end", () => { try { const sm = require(process.argv[1]); const o = { readScript: (f) => sm.readStartScript(f) }; const own = t ? sm.serviceOwnership(t, process.argv[2], o) : "unknown"; console.log(process.argv[3] === "direct" ? (own === "other" || (t && sm.postStartUnsure(t, process.argv[2], o)) ? "other" : "fine") : own); } catch { console.log("unknown"); } });' "$PROJECT_DIR/lib/service-manager.js" "$PROJECT_DIR_REAL" "${1:-}" 2>/dev/null || echo unknown
 }
 # a unit's files as systemd loads them, from disk (for when systemd can't be asked)
 unit_files() { [ -n "$HELPER_NODE" ] || return 0; "$HELPER_NODE" -e 'try { process.stdout.write(require(process.argv[1]).serviceFileText(process.argv[2], process.argv[3])); } catch {}' "$PROJECT_DIR/lib/service-manager.js" "$1" "$2" 2>/dev/null || true; }
@@ -149,15 +150,19 @@ refuse_wrapped() {
   else echo "❌ PID $_lp runs under $1 through a shell or script, and the service's file doesn't show that it runs only this hub: restarting it here could stop something else. Restart it with: $2" >&2; fi
   exit 1
 }
-# A node process whose script is some folder's server.js (a hub); an agent client (Claude, Codex)
+# A My Maestro hub: node running a server.js whose folder also has lib/restart.js and scripts/relaunch.js; an agent
+# client (Claude, Codex)
 is_hub_server() {
-  local a n=0
+  local a n=0 d f
   [ -r "/proc/$1/cmdline" ] || return 1
+  d=$(listener_cwd "$1")
   while IFS= read -r -d '' a; do
     n=$((n+1))
     if [ "$n" = 1 ]; then case "$(basename "$a")" in node|nodejs|node[0-9]*) continue ;; *) return 1 ;; esac; fi
     case "$a" in -*) continue ;; esac
-    [ "$(basename "$a")" = "server.js" ]; return
+    [ "$(basename "$a")" = "server.js" ] || return 1
+    case "$a" in /*) f="$a" ;; *) [ -n "$d" ] || return 1; f="$d/$a" ;; esac
+    f=$(dirname "$f"); [ -f "$f/lib/restart.js" ] && [ -f "$f/scripts/relaunch.js" ]; return
   done < "/proc/$1/cmdline"
   return 1
 }
@@ -213,7 +218,7 @@ if command -v systemctl >/dev/null 2>&1 && [ -n "$_lp" ] && [ -r "/proc/$_lp/cgr
     fi
     _how=1; if [ -n "$_main" ]; then service_runs "$_lp" "$_main" && _how=0 || _how=$?; fi
     # the unit's own process, but its file may start another hub too (ExecStartPost): restarting would stop it
-    if [ "$_how" = 0 ] && [ "$(systemctl $_scope cat "$_unit" 2>/dev/null | owner_of)" = "other" ]; then refuse_wrapped "systemd unit $_unit" "systemctl $_scope restart $_unit" other; fi
+    if [ "$_how" = 0 ] && [ "$(systemctl $_scope cat "$_unit" 2>/dev/null | owner_of direct)" = "other" ]; then refuse_wrapped "systemd unit $_unit" "systemctl $_scope restart $_unit" other; fi
     # through a wrapper, only a unit whose own file shows it runs this hub alone (one wrapper may start two hubs):
     # restarting it otherwise could stop another hub, and restarting the server by hand would race the unit's respawn
     if [ "$_how" = 2 ] && [ "$(systemctl $_scope cat "$_unit" 2>/dev/null | owner_of)" != "ours" ]; then refuse_wrapped "systemd unit $_unit" "systemctl $_scope restart $_unit"; fi

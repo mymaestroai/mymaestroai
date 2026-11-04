@@ -499,6 +499,8 @@ test('restart.sh on a Mac (no /proc): only `node [options] <this folder\'s serve
   assert.strictEqual(check('node tools/preview.js server.js', hub), 'no', 'another script, server.js only an argument');
   assert.strictEqual(check(`node -e "/* ${hub}/server.js */" ${hub}/server.js`), 'no', 'node -e');
   assert.strictEqual(check(`python3 ${hub}/server.js`), 'no', 'not node');
+  assert.strictEqual(check(`/usr/local/bin/nodejs --eval=setInterval(()=>{},1000) ${hub}/server.js`), 'no', 'nodejs --eval=');
+  assert.strictEqual(check(`node -pe 1 ${hub}/server.js`), 'no', 'attached -p');
   assert.strictEqual(check('node server.js', other), 'no', 'relative, from another folder');
 });
 
@@ -531,4 +533,16 @@ test('round 5: redirections, every eval form, sourced files, npm start\'s own sc
   assert.strictEqual(own(`[Service]\nExecStart=/usr/bin/node ${dir}/server.js\nExecStartPost=/bin/sh -c 'node ${B}/server.js &'\n`), 'other', 'ExecStartPost starts another hub');
   assert.strictEqual(own(`[Service]\nExecStart=@/usr/bin/node ${dir}/server.js ${B}/server.js\n`), 'other', 'with @ the hub run is the third word');
   assert.strictEqual(own(`[Service]\nExecStartPre=/usr/bin/node /opt/migrate.js\nExecStart=/usr/bin/node ${dir}/server.js\n`), 'ours', 'ExecStartPre has ended before the hub runs');
+});
+
+test('round 6: a sourced file\'s cd carries on; npm runs prestart before start', () => {
+  const { serviceOwnership, readStartScript } = require('../lib/service-manager');
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'svc-r6-')));
+  const own = (txt) => serviceOwnership(txt, dir, { real: (p) => p, home: '/home/u', readScript: (f) => readStartScript(f) });
+  fs.writeFileSync(path.join(dir, 'change-dir.sh'), 'cd /srv/hub-b\n');
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${dir}\nExecStart=/bin/bash -c '. ${dir}/change-dir.sh; node server.js & node ${dir}/server.js & wait'\n`), 'other', 'the sourced cd moved the shell to another hub');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { prestart: 'node /srv/hub-b/server.js &', start: 'node server.js' } }));
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${dir}\nExecStart=/usr/bin/npm start\n`), 'other', 'prestart starts another hub');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { prestart: 'node scripts/check.js', start: 'node server.js' } }));
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${dir}\nExecStart=/usr/bin/npm start\n`), 'other', 'a prestart node script is another entry point too');
 });

@@ -219,7 +219,7 @@ test('a service that runs node through a shell or npm (nvm, npm start) counts: i
 
 test('a hub started from an agent\'s shell inside another hub\'s unit relaunches itself: the unit\'s process is the other hub', () => {
   const cg = userCg('agent-hub-v5.service');
-  const procs = { ...userManager, 10: { ppid: 5, comm: 'node', argv: ['/usr/bin/node', 'server.js'], cgroup: cg }, 30: { ppid: 10, comm: 'claude', cgroup: cg },
+  const procs = { ...userManager, 10: { ppid: 5, comm: 'node', argv: ['/usr/bin/node', `${HUB}/server.js`], cgroup: cg }, 30: { ppid: 10, comm: 'claude', cgroup: cg },
     40: { ppid: 30, comm: 'bash', cgroup: cg }, 51: { ppid: 40, comm: 'node', argv: ['node', 'server.js'], cgroup: cg } };
   const calls = [];
   const opts = { platform: 'linux', pid: 51, env: { INVOCATION_ID: 'inherited' }, fsImpl: procFs(procs), execImpl: systemctl({ 'user:agent-hub-v5.service': 10 }, ['user', 'system'], calls), folder: none };
@@ -325,7 +325,7 @@ test('round 5: a server something inside its unit supervises (pm2, forever) is r
   const viaShell = { ...pm2, 70: { ppid: 65, comm: 'node', argv: ['node', '/srv/hub/server.js'], cgroup: cg }, 65: { ppid: 60, comm: 'bash', argv: ['bash', '-c', 'node server.js'], cgroup: cg } };
   assert.strictEqual(sup(viaShell, 60).kind, 'unknown', 'pm2 above a shell');
   // an agent's shell inside another hub's unit: the hand-started case, which relaunches itself
-  const agent = { ...userManager, 10: { ppid: 5, comm: 'node', argv: ['/usr/bin/node', 'server.js'], cgroup: cg }, 30: { ppid: 10, comm: 'claude.exe', argv: ['/x/claude.exe'], cgroup: cg },
+  const agent = { ...userManager, 10: { ppid: 5, comm: 'node', argv: ['/usr/bin/node', `${HUB}/server.js`], cgroup: cg }, 30: { ppid: 10, comm: 'claude.exe', argv: ['/x/claude.exe'], cgroup: cg },
     40: { ppid: 30, comm: 'bash', argv: ['/bin/bash', '-c', 'node server.js'], cgroup: cg }, 70: { ppid: 40, comm: 'node', argv: ['node', 'server.js'], cgroup: cg } };
   assert.deepStrictEqual(sup(agent, 10), { kind: 'none' }, 'Claude\'s shell');
   const hubShell = { ...agent, 40: { ppid: 10, comm: 'bash', argv: ['/bin/bash', '-c', 'node server.js'], cgroup: cg } };
@@ -341,4 +341,18 @@ test('round 5: through a wrapper, the Restart button asks systemd to restart the
   const src = read('lib/restart.js');
   assert.match(src, /if \(sup\.kind === 'systemd' && sup\.via === 'wrapper'\) \{[^]*'restart', '--no-block', sup\.unit\]/);
   assert.ok(exited || calls.length >= 0);
+});
+
+test('round 6: a direct unit whose ExecStartPost can\'t be read is refused; a harmless one is fine; "server.js" alone is not a hub', () => {
+  const procs = { ...userManager, 70: { ppid: 5, comm: 'node', argv: ['node', '/srv/hub/server.js'], cgroup: userCg('mymaestroai.service') } };
+  const sup = (unit) => R.supervisor({ platform: 'linux', pid: 70, projectDir: '/srv/hub', env: {}, fsImpl: procFs(procs), execImpl: systemctl({ 'user:mymaestroai.service': 70 }, undefined, [], unit), folder: none });
+  const v = sup('[Service]\nExecStart=/usr/bin/node /srv/hub/server.js\nExecStartPost=/usr/bin/python3 /srv/start-b.py\n');
+  assert.strictEqual(v.kind, 'unknown', 'an ExecStartPost that could start anything'); assert.match(v.reason, /also starts something else/);
+  assert.deepStrictEqual(sup('[Service]\nExecStart=/usr/bin/node /srv/hub/server.js\nExecStartPost=/bin/sleep 2\n'), { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' });
+  assert.deepStrictEqual(sup('[Service]\nExecStart=/usr/bin/node --unhandled-rejections strict /srv/hub/server.js\n'), { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' }, 'a direct unit whose ExecStart reads as "can\'t tell" is still its own process');
+  // a supervisor whose script is called server.js but isn't a hub (no lib/restart.js, scripts/relaunch.js beside it)
+  const cg = userCg('hub.service');
+  const fake = { ...userManager, 60: { ppid: 5, comm: 'node', argv: ['node', '/opt/supervisor/server.js'], cgroup: cg }, 70: { ppid: 60, comm: 'node', argv: ['node', '/srv/hub/server.js'], cgroup: cg } };
+  const w = R.supervisor({ platform: 'linux', pid: 70, projectDir: '/srv/hub', env: {}, fsImpl: procFs(fake), execImpl: systemctl({ 'user:hub.service': 60 }), folder: none });
+  assert.strictEqual(w.kind, 'unknown'); assert.match(w.reason, /run by pid 60 \(node\) inside hub\.service/);
 });
