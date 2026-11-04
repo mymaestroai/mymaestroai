@@ -154,6 +154,7 @@ test('app.js listens before its start-up awaits anything, keeps taps in sessionS
   const load = users.slice(users.indexOf('async function loadRequests() {'));
   assert.match(load, /if \(at !== tr\) tb\.insertBefore\(tr, at\);/, 'rows already shown are kept, not redrawn: what is typed in them survives');
   assert.ok(!/tb\.innerHTML = pending\.map/.test(load), 'the waiting rows are never rebuilt wholesale');
+  assert.match(users, /const load = \+\+requestsLoads;[^]*if \(load !== requestsLoads\) return;/, 'only the newest refresh draws');
 });
 
 test('every go is kept until its target has run: a second tap during a reload, or a reload mid-run, loses nothing', async () => {

@@ -411,12 +411,15 @@
   }
   window.addEventListener('focus', refreshRequestsSoon);
   document.addEventListener('visibilitychange', refreshRequestsSoon);
+  let requestsLoads = 0;   // only the newest refresh draws: an older answer arriving late can't undo a newer one
   async function loadRequests() {
+    const load = ++requestsLoads;
     const tb = $('requests-rows'), rb = $('requests-recent-rows');
     setMsg('requests-msg', '');
     let data;
     try { data = await api('/api/agent-requests'); }
-    catch (e) { setMsg('requests-msg', e.message, 'error'); return; }
+    catch (e) { if (load === requestsLoads) setMsg('requests-msg', e.message, 'error'); return; }
+    if (load !== requestsLoads) return;
     const all = (data.requests || []).slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
     const pending = all.filter(r => r.status === 'pending');
     const decided = all.filter(r => r.status !== 'pending')
@@ -447,6 +450,7 @@
     for (const r of pending) {
       let tr = shown.get(String(r.id));
       if (!tr || !tr.isConnected) { const t = document.createElement('tbody'); t.innerHTML = rowHtml(r); tr = t.firstElementChild; }
+      else { const c = tr.cells; c[0].textContent = ago(r.createdAt); c[0].title = when(r.createdAt); c[1].innerHTML = whoFor(r); }   // read-only cells stay current; the fields are left alone
       const at = prev ? prev.nextElementSibling : tb.firstElementChild;
       if (at !== tr) tb.insertBefore(tr, at);
       prev = tr;
