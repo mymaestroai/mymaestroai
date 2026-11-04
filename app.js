@@ -4721,11 +4721,13 @@
       }
     }
     
-    // A notification tapped while this tab is open (sw.js): the worker brings the tab forward and hands over where to
-    // go. Listening starts here, before the first await of the page's start-up, so a tap while the page loads is kept
-    // and runs once the agent list is in. Shared verbatim with lib/ui-open-target.js (test/ui-open-target.test.js).
+    // A notification tapped while this tab is open (sw.js): the worker offers the target, brings the tab forward and
+    // says go. Listening starts here, before the first await of the page's start-up, so a tap while the page loads is
+    // kept (also across a reload or the sign-in page) and runs once the agent list is in. Shared verbatim with
+    // lib/ui-open-target.js (test/ui-open-target.test.js).
     // ── open-target helpers (begin) ──
     const OPEN_TARGET_MAIN = /^\/(index\.html)?$/;
+    const OPEN_TARGET_KEY = 'hub-open-targets';
     function parseOpenTarget(data, origin) {
       if (!data || data.type !== 'open-target' || typeof data.url !== 'string') return null;
       let u;
@@ -4734,28 +4736,58 @@
       const q = u.searchParams;
       return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1' };
     }
-    function createOpenTargets({ origin, now = () => Date.now(), run }) {
+    function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
+      return {
+        load() {
+          try { const v = JSON.parse(storage.getItem(OPEN_TARGET_KEY) || 'null'); return v && Array.isArray(v.targets) && now() - v.at < ttlMs ? v.targets : []; } catch { return []; }
+        },
+        save(list) { try { storage.setItem(OPEN_TARGET_KEY, JSON.stringify({ at: now(), targets: list })); } catch { /* storage full or off */ } },
+        clear() { try { storage.removeItem(OPEN_TARGET_KEY); } catch { /* off */ } },
+      };
+    }
+    function createOpenTargets({ origin, run, store = null, keepMs = 3000 }) {
       const waiting = [];
       let isReady = false;
-      const answer = (e, ok) => { try { if (e.ports && e.ports[0]) e.ports[0].postMessage({ ok }); } catch { /* the worker stopped waiting */ } };
+      let chain = Promise.resolve();
+      const runInTurn = (t) => { chain = chain.then(() => run(t)).catch(() => { /* one failed target must not stop the next */ }); return chain; };
+      const take = (t) => {
+        if (isReady) { runInTurn(t); return; }
+        waiting.push(t);
+        if (store) store.save(waiting);
+      };
       return {
         onMessage(e) {
           const d = e && e.data;
           if (!d || d.type !== 'open-target') return;
+          const port = e.ports && e.ports[0];
+          if (!port) return;
           const t = parseOpenTarget(d, origin);
-          // Past `until` the worker is about to open a new tab itself: taking the target too would show it twice.
-          if (!t || typeof d.until !== 'number' || now() > d.until) { answer(e, false); return; }
-          answer(e, true);
-          if (isReady) run(t); else waiting.push(t);
+          if (!t) { try { port.postMessage({ ok: false }); } catch { /* the worker stopped waiting */ } return; }
+          let live = true;
+          const end = () => { live = false; port.onmessage = null; try { port.close(); } catch { /* closed */ } };
+          const timer = setTimeout(end, keepMs);   // an offer the worker gave to another tab, or gave up on
+          port.onmessage = (m) => {
+            if (!live || !m || !m.data || m.data.go !== true) return;
+            clearTimeout(timer); end();
+            take(t);
+          };
+          try { port.postMessage({ ok: true }); } catch { clearTimeout(timer); end(); }
         },
-        ready() {
+        ready(own) {
+          if (isReady) return;
           isReady = true;
-          while (waiting.length) run(waiting.shift());
+          let pending = store ? store.load() : [];
+          if (!pending.length) pending = waiting.slice();   // the store was off or full: what this page kept itself
+          if (store) store.clear();
+          waiting.splice(0);
+          if (own) runInTurn(own);
+          for (const t of pending) runInTurn(t);
+          return chain;
         },
       };
     }
     // ── open-target helpers (end) ──
-    const openTargets = createOpenTargets({ origin: location.origin, run: (t) => runPageTarget(t) });
+    const openTargets = createOpenTargets({ origin: location.origin, run: (t) => runPageTarget(t), store: createTargetStore(sessionStorage) });
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('message', (e) => openTargets.onMessage(e));
       navigator.serviceWorker.startMessages();
@@ -4797,8 +4829,13 @@
       // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
       // (a backup warning), ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
       // while the page was loading.
-      runPageTarget(parseOpenTarget({ type: 'open-target', url: location.href }, location.origin));
-      openTargets.ready();
+      const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
+      if (own && (own.update || own.backups || own.security)) {   // one-shot actions: a reload must not repeat them
+        const u = new URL(location.href);
+        for (const k of ['update', 'backups', 'security']) u.searchParams.delete(k);
+        history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+      }
+      openTargets.ready(own);
       setupTabs();
       setupConfigListeners();
       startHubHealthMonitor();

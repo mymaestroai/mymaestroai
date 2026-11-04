@@ -400,6 +400,9 @@
     if (c.kind === 'team') return `team${c.head ? `, head ${c.head}` : ''}${names ? `: ${names}` : ''}`;
     return names || c.head || 'agent';
   }
+  // Brought forward by a tapped "asks for a new agent" notification (sw.js focuses an open Users tab): show what is
+  // waiting now. Only the request tables are redrawn; the forms keep what is typed in them.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadRequests(); });
   async function loadRequests() {
     const tb = $('requests-rows'), rb = $('requests-recent-rows');
     setMsg('requests-msg', '');

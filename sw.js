@@ -62,13 +62,15 @@ self.addEventListener('push', (event) => {
 });
 
 // A tap opens what the notification is about. The phone's worker (scope /mobile) reuses the phone page as before.
-// The desktop's worker (scope /) never uses a phone page: a target on the hub's main page (/?agent=<name>, /?backups=1,
-// /?update=1) goes to the open hub tab, which confirms on the message's port that it took it (app.js,
-// lib/ui-open-target.js); a target on another page (/users) brings that page forward. What no tab takes (no tab open,
-// an older page without the listener, a tab that closed meanwhile) opens in a new tab. Firefox lets a worker open a
-// tab only within about a second of the tap, so the wait for the confirmation is short.
-const HANDOFF_MS = 600;
-const HANDOFF_MARGIN_MS = 150;   // the page takes a target only until this long before the worker stops waiting
+// The desktop's worker (scope /) never uses a phone page. A target on the hub's main page (/?agent=<name>,
+// /?backups=1, /?update=1) is offered to every open hub tab at once; a page that can take it says yes on the offer's
+// port (app.js, lib/ui-open-target.js). The worker then spends the tap's one window action: it brings forward the
+// yes-tab used last and tells it to go, and only then does that page act. A target on another page (/users) brings
+// that page forward. When no tab says yes in time (no tab, an older page, one still loading or closed), the one action
+// is a new tab instead. One action per tap because Chrome lets a tap focus or open a window once; the answers that
+// count come within OFFER_MS of the tap because Firefox allows a new window only for about a second after it
+// (dom.webnotifications.disable_open_click_delay) and Safari for two.
+const OFFER_MS = 700;
 const MAIN_PAGE = /^\/(index\.html)?$/;
 function desktopTarget(href) {
   const u = new URL(href);
@@ -81,41 +83,61 @@ function desktopTarget(href) {
   }
   return u.searchParams.get('update') === '1' ? '/?update=1' : '/';   // the update notice: the desktop's update card
 }
-// Hands a target to an open hub tab; true only when the page confirms it took it.
-function handOff(client, target) {
+// Offers a target to hub tabs (most recently used first); resolves with the first of them, in that order, that said
+// yes, as { client, port }, or null when none did by the deadline. A tab used more recently that hasn't answered yet
+// is waited for until the deadline.
+function offer(tabs, target, deadline) {
   return new Promise((resolve) => {
-    let ch;
-    try { ch = new MessageChannel(); } catch { resolve(false); return; }
-    let timer = null;
-    const done = (ok) => { clearTimeout(timer); ch.port1.onmessage = null; try { ch.port1.close(); } catch { /* closed */ } resolve(ok); };
-    timer = setTimeout(() => done(false), HANDOFF_MS);
-    ch.port1.onmessage = (e) => done(!!(e.data && e.data.ok === true));
-    try { client.postMessage({ type: 'open-target', url: target, until: Date.now() + HANDOFF_MS - HANDOFF_MARGIN_MS }, [ch.port2]); }
-    catch { done(false); }
+    if (!tabs.length) { resolve(null); return; }
+    const state = tabs.map(() => 'waiting');
+    const ports = [];
+    let settled = false; let timer = null;
+    const settle = (timeUp) => {
+      if (settled) return;
+      const first = state.findIndex(st => st !== 'no');
+      let pick;
+      if (first < 0) pick = -1;                             // every tab said no, or couldn't be asked
+      else if (state[first] === 'yes') pick = first;
+      else if (timeUp) pick = state.indexOf('yes');
+      else return;                                           // still waiting on a tab used more recently
+      settled = true; clearTimeout(timer);
+      ports.forEach((p, i) => { if (p && i !== pick) { p.onmessage = null; try { p.close(); } catch { /* closed */ } } });
+      resolve(pick >= 0 ? { client: tabs[pick], port: ports[pick] } : null);
+    };
+    tabs.forEach((client, i) => {
+      let ch;
+      try { ch = new MessageChannel(); } catch { state[i] = 'no'; return; }
+      ports[i] = ch.port1;
+      ch.port1.onmessage = (e) => { if (state[i] === 'waiting') { state[i] = e.data && e.data.ok === true ? 'yes' : 'no'; settle(false); } };
+      try { client.postMessage({ type: 'open-target', url: target }, [ch.port2]); } catch { state[i] = 'no'; }
+    });
+    timer = setTimeout(() => settle(true), Math.max(0, deadline - Date.now()));
+    settle(false);
   });
 }
-async function openOnDesktop(url) {
+async function openOnDesktop(url, tappedAt) {
   const pathOf = (c) => new URL(c.url).pathname;
   const tabs = (await self.clients.matchAll({ type: 'window', includeUncontrolled: true })).filter(c => !pathOf(c).startsWith('/mobile'));
   const target = desktopTarget(url);
   const page = new URL(target, self.location.origin).pathname;
-  const focus = (c) => Promise.resolve().then(() => c.focus()).then(() => true, () => false);
-  if (MAIN_PAGE.test(page)) {
-    // the list is in most-recently-focused order: the hub tab used last gets it
-    for (const c of tabs.filter(c => MAIN_PAGE.test(pathOf(c)))) {
-      if (!(await focus(c))) continue;   // it closed meanwhile: the next one
-      if (await handOff(c, target)) return;
-      break;                             // an older page, or too late: a new tab instead
-    }
-  } else {
-    for (const c of tabs.filter(c => pathOf(c) === page)) if (await focus(c)) return;
+  if (!MAIN_PAGE.test(page)) {
+    const same = tabs.find(c => pathOf(c) === page);
+    if (same) { try { await same.focus(); return; } catch { /* it closed meanwhile: a new tab (Chrome may refuse a second action) */ } }
+    await self.clients.openWindow(target);
+    return;
   }
-  await self.clients.openWindow(target);
+  const yes = await offer(tabs.filter(c => MAIN_PAGE.test(pathOf(c))), target, tappedAt + OFFER_MS);
+  if (!yes) { await self.clients.openWindow(target); return; }
+  const go = () => { try { yes.port.postMessage({ go: true }); } catch { /* the tab is gone */ } setTimeout(() => { try { yes.port.close(); } catch { /* closed */ } }, 1000); };
+  try { await yes.client.focus(); }
+  catch { yes.port.onmessage = null; try { yes.port.close(); } catch { /* closed */ } await self.clients.openWindow(target); return; }   // it closed meanwhile
+  go();
 }
 self.addEventListener('notificationclick', (event) => {
+  const tappedAt = Date.now();
   event.notification.close();
   const url = new URL(event.notification.data?.url || '/mobile', self.location.origin).href;
-  if (new URL(self.registration.scope).pathname === '/') { event.waitUntil(openOnDesktop(url)); return; }
+  if (new URL(self.registration.scope).pathname === '/') { event.waitUntil(openOnDesktop(url, tappedAt)); return; }
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
       const same = list.find(c => c.url === url) || list.find(c => new URL(c.url).pathname.startsWith('/mobile'));
