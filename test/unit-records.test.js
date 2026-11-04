@@ -15,6 +15,7 @@ function load() {
   fs.mkdirSync(path.join(hub, 'lib'), { recursive: true });
   fs.copyFileSync(path.join(REAL, 'lib', 'records.js'), path.join(hub, 'lib', 'records.js'));
   fs.copyFileSync(path.join(REAL, 'lib', 'path-confine.js'), path.join(hub, 'lib', 'path-confine.js'));
+  fs.copyFileSync(path.join(REAL, 'lib', 'timezone.js'), path.join(hub, 'lib', 'timezone.js'));   // dates in the person's local time
   fs.writeFileSync(path.join(hub, 'lib', 'settings.js'), 'module.exports = { getSetting: (k, d) => (k === "recordsMaxBytes" ? (global.__recCap || 0) : d) };');
   return { rec: require(path.join(hub, 'lib', 'records.js')), hub, root };
 }

@@ -1667,9 +1667,11 @@ function updateDots() {
   const c = $('chat-unread');
   c.textContent = total > 99 ? '99+' : String(total);
   c.classList.toggle('on', total > 0);
-  const a = $('act-unread');
-  a.textContent = actUnseen > 99 ? '99+' : String(actUnseen);
-  a.classList.toggle('on', actUnseen > 0 && screen !== 'activity');
+  const a = $('act-unread');   // the count next to Activity in the ⋮ menu
+  if (a) {
+    a.textContent = actUnseen > 99 ? '99+' : String(actUnseen);
+    a.classList.toggle('on', actUnseen > 0 && screen !== 'activity');
+  }
   // Actions waiting for approval (any agent): amber count on the Agents tab.
   const ap = $('agents-approvals');
   if (ap) { ap.textContent = String(approvals.size); ap.classList.toggle('on', approvals.size > 0); }
@@ -1681,7 +1683,7 @@ function show(name) {
   screen = name;
   for (const s of ['agents', 'chat', 'activity']) {
     $(`screen-${s}`).classList.toggle('active', s === name);
-    $(`tab-${s}`).classList.toggle('active', s === name);
+    $(`tab-${s}`)?.classList.toggle('active', s === name);   // Activity has no tab: it opens from the ⋮ menu
   }
   $('menu').classList.remove('open');
   if (name === 'agents') renderAgents();
@@ -1765,6 +1767,72 @@ function addCopyButton(el) {
 
 function setRaw(el, text) {
   rawText.set(el, String(text ?? ''));
+}
+
+// The date and time under each message: when it was sent, when a reply was finished and how long it took.
+// Shared verbatim with lib/ui-msg-time.js and app.js (test/ui-msg-time.test.js keeps the three in step).
+// ── message-time helpers (begin) ──
+const msgTimeFormats = new Map();   // one formatter per language, zone and year style: one per message was slow
+function msgTimeZone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; }
+}
+function msgTimeLabel(t, now = Date.now(), locale = [], zone = msgTimeZone()) {
+  const ms = typeof t === 'number' ? t : Date.parse(t);
+  if (!Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  const fmt = (key, make) => { let f = msgTimeFormats.get(key); if (!f) { f = make(); msgTimeFormats.set(key, f); } return f; };
+  try {
+    const yf = fmt(`year|${zone}`, () => new Intl.DateTimeFormat('en-US', { year: 'numeric', ...(zone ? { timeZone: zone } : {}) }));
+    const year = yf.format(d) !== yf.format(new Date(now));   // judged in the same zone the time is shown in
+    return fmt(`${locale}|${zone}|${year}`, () => new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(year ? { year: 'numeric' } : {}), ...(zone ? { timeZone: zone } : {}) })).format(d);
+  } catch { return d.toLocaleString(); }   // an unknown language or zone
+}
+function msgTookLabel(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}
+function msgTimeLine(end, start, now = Date.now(), locale = [], zone = msgTimeZone()) {
+  const when = msgTimeLabel(end, now, locale, zone);
+  const e = typeof end === 'number' ? end : Date.parse(end);
+  const s = typeof start === 'number' ? start : Date.parse(start);
+  const took = when && Number.isFinite(s) ? msgTookLabel(e - s) : '';
+  return took ? `${when} · ${took}` : when;
+}
+function msgTimeLines(history, now = Date.now(), locale = [], zone = msgTimeZone()) {
+  const lines = [];
+  let start = NaN, last = -1, joined = 0;   // the turn's message time; its reply's newest piece, and the length so far
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i] || {};
+    const t = m.inProgress ? NaN : Date.parse(m.ts);   // the running turn's reply so far: not finished, no line
+    lines.push(Number.isFinite(t) ? msgTimeLabel(t, now, locale, zone) : '');
+    if (m.role === 'user' && !m.ask) { start = t; last = -1; continue; }   // the next turn
+    if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
+    if (last >= 0 && m.base > 0 && m.base === joined) {
+      lines[last] = msgTimeLabel(Date.parse(history[last].ts), now, locale, zone);   // an earlier piece: its time only
+    } else if (last >= 0 || m.base > 0) {
+      start = NaN; last = -1;   // not this turn's reply
+      continue;
+    } else joined = 0;
+    last = i; joined += m.content.length;
+    if (Number.isFinite(t)) lines[i] = msgTimeLine(t, start, now, locale, zone);
+  }
+  return lines;
+}
+// ── message-time helpers (end) ──
+
+// The line under a bubble (msgTimeLabel / msgTimeLine): below its right edge for the person, its left edge for the
+// agent. It sits outside the reply body, which repaints; '' removes it.
+function setBubbleTime(el, text) {
+  if (!el) return;
+  let line = el.querySelector(':scope > .msg-time');
+  if (!text) { if (line) line.remove(); el.classList.remove('has-time'); return; }
+  if (!line) { line = document.createElement('div'); line.className = 'msg-time'; el.appendChild(line); }
+  line.textContent = text;
+  el.classList.add('has-time');
 }
 
 function addUserBubble(text, images) {
@@ -2070,15 +2138,16 @@ function copyWholeChat() {
   copyText(md);
 }
 
-function renderEntry(m) {
+function renderEntry(m, time = '') {
   if (m.role === 'user') {
     if (m.origin?.kind) addNote(`⚡ ${originLabel(m.origin)} — ${timeLabel(m.ts)}`);
-    addUserBubble(m.content, null);
+    setBubbleTime(addUserBubble(m.content, null), time);
   } else if (m.role === 'assistant') {
     const saved = Array.isArray(m.activity) && m.activity.length;
     const b = addAssistantBubble(saved ? undefined : m.content);
     if (saved) paintSaved(b, m);
     if (typeof m.reasoning === 'string' && m.reasoning) reasoningSet({ agent: current, bubble: b }, m.reasoning, { total: Number(m.reasoningChars) });
+    setBubbleTime(b.el, time);
   }
 }
 
@@ -2110,7 +2179,8 @@ function renderHistory() {
     b.addEventListener('click', loadEarlier);
     box.appendChild(b);
   }
-  for (const m of chatHistory.slice(start)) renderEntry(m);
+  const times = msgTimeLines(chatHistory);   // the date and time under each message
+  for (let i = start; i < chatHistory.length; i++) renderEntry(chatHistory[i], times[i]);
   if (!chatHistory.length) addNote('No messages yet');
 }
 
@@ -2194,7 +2264,7 @@ async function openChat(name) {
 
 function attachStreamBubble(rec) {
   const last = chatHistory[chatHistory.length - 1];
-  if (!(last && last.role === 'user' && last.content === rec.text)) rec.userEl = addUserBubble(rec.text, rec.images);
+  if (!(last && last.role === 'user' && last.content === rec.text)) { rec.userEl = addUserBubble(rec.text, rec.images); setBubbleTime(rec.userEl, msgTimeLabel(rec.startedAt)); }
   const b = addAssistantBubble();
   rec.bubble = b;
   rec._blocks = null; rec._sig = null;
@@ -2778,6 +2848,7 @@ async function catchUpReattach(ra) {
     if (!(last && last.role === 'user' && last.content === turn.message)) {
       const note = addNote(`⚡ ${turn.origin?.kind === 'user' ? 'sent from another device' : originLabel(turn.origin)} — ${timeLabel(turn.startedAt)}`);
       const u = addUserBubble(turn.message, null);
+      setBubbleTime(u, msgTimeLabel(turn.startedAt));
       ra.bubble.el.before(note, u);
     }
   }
@@ -2905,6 +2976,7 @@ async function sendInterjection(agent) {
   saveDraft(agent, '');
   stick = true;
   const userEl = addUserBubble(text, null);
+  setBubbleTime(userEl, msgTimeLabel(Date.now()));
   const noteEl = addNote('⤵ delivering mid-turn…');
   noteEl.classList.add('interject');
   scrollChat(true);
@@ -3021,6 +3093,7 @@ async function sendMessage(fallback) {
   // While the agent is busy (a turn this phone is streaming or one started elsewhere) the
   // composer interjects into that turn; Stop is in the header.
   if (!fallback && (isBusy(agent) || ownTurnFor(agent))) { await sendInterjection(agent); return; }
+  if (!fallback) tzSentAt = Date.now();   // the person's own send: its request carries the phone's zone (zoneHeader)
   const input = $('msg-input');
   const text = fallback ? fallback.text : input.value.trim();
   const images = fallback ? [] : pendingImages.slice();
@@ -3040,6 +3113,7 @@ async function sendMessage(fallback) {
     addNote(`⏳ ${displayName(agent)} is still working on the previous message (${s.activity || 'working'}${e ? `, ${e}` : ''}). Your message will queue or be refused until it finishes.`);
   }
   const userEl = fallback ? fallback.userEl : addUserBubble(text, images);
+  if (!fallback) setBubbleTime(userEl, msgTimeLabel(Date.now()));
   const bubble = addAssistantBubble();
   bubble.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>';
   scrollChat(true);
@@ -3054,7 +3128,7 @@ async function sendMessage(fallback) {
   try {
     const r = await api('/api/chat/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...zoneHeader() },
       signal: controller.signal,
       body: JSON.stringify({ agent, message: text, images, confirm_tools: false }),
     });
@@ -3076,6 +3150,7 @@ async function sendMessage(fallback) {
       throw new Error(`HTTP ${r.status}`);
     } else {
       await readStream(r, rec);
+      if (bubbleLive(rec) && !reattaches.has(agent)) setBubbleTime(rec.bubble.el, msgTimeLine(Date.now(), rec.startedAt));
       if (!rec.gotAny && bubbleLive(rec)) rec.bubble.body.innerHTML = '<span style="opacity:.6">[No response]</span>';
       if (current === agent) rereadHistory(agent);   // the finished exchange, as the hub saved it
     }
@@ -3167,6 +3242,7 @@ function finishReattach(ra, reply, ok = true) {
     setReplyText(ra, reply);
     feedEnd(ra);
     ra.bubble.el.classList.toggle('error', !ok);
+    if (ok) setBubbleTime(ra.bubble.el, msgTimeLine(Date.now(), ra.sentAt || Date.parse(ra.since)));
     if (ok) rereadHistory(ra.agent);   // the finished exchange, as the hub saved it
   } else if (!chatOpenFor(ra.agent)) {
     markUnread(ra.agent);
@@ -3202,6 +3278,32 @@ function reattachCheckAll() {
   for (const ra of reattaches.values()) reattachCheck(ra);
 }
 
+// Shared verbatim with lib/ui-turn-reply.js and app.js (test/ui-turn-reply.test.js keeps the three in step).
+// ── turn-reply helpers (begin) ──
+function turnReplyFrom(history, start, minTs) {
+  let reply = null, content = '';
+  for (let i = Math.max(0, start); i < history.length; i++) {
+    const m = history[i];
+    if (!m) continue;
+    if (m.role === 'user' && !m.ask) break;                                  // the next turn
+    if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
+    if (minTs && m.ts && Date.parse(m.ts) < minTs) continue;
+    if (!reply) { reply = m; content = m.content; continue; }                 // the reply's first piece
+    if (m.base > 0 && m.base === content.length) { reply = m; content += m.content; continue; }   // the next piece
+    break;                                                                    // another reply: not this turn's
+  }
+  return reply ? { ...reply, content } : null;
+}
+function turnReplySince(history, sinceTs) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (!m || (m.role === 'user' && !m.ask) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
+    if (m.role === 'assistant' && !m.ask && typeof m.content === 'string' && !(m.base > 0)) return turnReplyFrom(history, i, sinceTs);
+  }
+  return null;
+}
+// ── turn-reply helpers (end) ──
+
 async function reattachCheck(ra) {
   if (!ra || ra.checking || reattaches.get(ra.agent) !== ra) return;
   ra.checking = true;
@@ -3211,14 +3313,13 @@ async function reattachCheck(ra) {
     const hist = (await r.json()).history || [];
     if (reattaches.get(ra.agent) !== ra) return;
     const ui = ra.text ? ownEntryIndex(hist, ra.text, ra.sentAt || ra.startedAt, r.headers.get('Date')) : -1;
+    // The whole reply: in pieces when the agent asked a question meanwhile (lib/ui-turn-reply.js).
     let reply = null;
     if (ui >= 0) {
-      const uts = hist[ui].ts ? new Date(hist[ui].ts).getTime() : 0;
-      reply = hist.slice(ui + 1).find(m => m.role === 'assistant' && (!m.ts || !uts || new Date(m.ts).getTime() >= uts));
+      reply = turnReplyFrom(hist, ui + 1, hist[ui].ts ? new Date(hist[ui].ts).getTime() : 0);
     } else if (!ra.text && ra.since) {
-      // No user entry to anchor on: the newest assistant entry written since the turn began.
-      const sinceTs = new Date(ra.since).getTime() - 2000;
-      for (let i = hist.length - 1; i >= 0; i--) { const m = hist[i]; if (m.role === 'assistant' && m.ts && new Date(m.ts).getTime() >= sinceTs) { reply = m; break; } }
+      // No user entry to anchor on: the newest reply written since the turn began.
+      reply = turnReplySince(hist, new Date(ra.since).getTime() - 2000);
     }
     const s = live[ra.agent];
     const stillBusy = statusKnown ? !!(s && s.busy) : null;
@@ -3385,9 +3486,32 @@ async function readStream(response, rec) {
 const shownQuestions = new Set();
 const questionBoxes = new Map();   // request_id -> box
 const pendingQuestionsByAgent = new Map();   // agent -> { request_id, questions } waiting for its chat to open
+// Shared verbatim with lib/ui-retire.js and app.js (test/ui-retire.test.js keeps the three in step).
+// ── retire helpers (begin) ──
+const RETIRE_AFTER_MS = 4000;
+const RETIRE_FOLD_MS = 600;
+function retireSoon(el, ms = RETIRE_AFTER_MS) {
+  if (!el || !el.dataset || el.dataset.retiring) return false;
+  el.dataset.retiring = '1';
+  setTimeout(() => {
+    if (!el.isConnected) { delete el.dataset.retiring; return; }   // gone meanwhile: if it comes back, it can be retired again
+    el.style.maxHeight = el.offsetHeight + 'px';   // fold from its own height, not from "none"
+    void el.offsetHeight;
+    el.classList.add('retiring');
+    setTimeout(() => el.remove(), RETIRE_FOLD_MS);
+  }, ms);
+  return true;
+}
+// ── retire helpers (end) ──
+
+// An answered or closed question box says how it ended, then leaves a few seconds later (lib/ui-retire.js).
 function closeQuestion(requestId, how) {
   const box = questionBoxes.get(requestId);
-  if (box) { box.innerHTML = `<div class="done">${how === 'no_answer' ? 'No answer in time; the agent carried on' : how === 'skipped' ? 'Skipped' : 'Answered elsewhere'}</div>`; questionBoxes.delete(requestId); }
+  if (!box) return;
+  // The hub's outcome, unless it confirms the answer this box already shows ("Answered: …", sent from here)
+  if (how !== 'answered' || !box.querySelector('.done')) box.innerHTML = `<div class="done">${how === 'no_answer' ? 'No answer in time; the agent carried on' : how === 'skipped' ? 'Skipped' : 'Answered elsewhere'}</div>`;
+  questionBoxes.delete(requestId);
+  retireSoon(box);
 }
 function showQuestion(data, onAnswered) {
   const { request_id, questions } = data;
@@ -3408,9 +3532,9 @@ function showQuestion(data, onAnswered) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ request_id, answers }),
-    }).catch(err => toast(`Could not send answer: ${err.message}`));
-    box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;
-    questionBoxes.delete(request_id);
+    }).then(r => { if (r.ok) { questionBoxes.delete(request_id); retireSoon(box); } })   // the hub has the answer: the box can go
+      .catch(err => toast(`Could not send answer: ${err.message}`));
+    box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
   };
   // A tap only selects (highlighted); nothing is sent until Submit, so a mis-tap cannot answer the agent.
   const selected = {};
@@ -4015,7 +4139,7 @@ function onTurnStart(ev) {
     const last = chatHistory[chatHistory.length - 1];
     if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {
       addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
-      addUserBubble(ev.message, null);
+      setBubbleTime(addUserBubble(ev.message, null), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
     }
     const b = addAssistantBubble('…');
     hubTurns[ev.turnId] = { agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null };
@@ -4106,6 +4230,7 @@ function onTurnEnd(ev) {
   if (t && chatOpenFor(t.agent) && t.el.isConnected) {
     setReplyText(t, reply);
     feedEnd(t);
+    setBubbleTime(t.el, msgTimeLine(Date.parse(ev.endedAt) || Date.now(), Date.parse(t.startedAt)));
     rereadHistory(t.agent);   // the finished exchange (its message came from elsewhere), as the hub saved it
     scrollChat();
   } else if (ra) {
@@ -4113,7 +4238,7 @@ function onTurnEnd(ev) {
     else if (ev.ok === false) finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}${reply}`, false);
     else reattachCheck(ra);
   } else if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !ownTurn) {
-    addAssistantBubble(reply);
+    setBubbleTime(addAssistantBubble(reply).el, msgTimeLabel(Date.parse(ev.endedAt) || Date.now()));
     rereadHistory(ev.agent);
     scrollChat();
   } else if (!chatOpenFor(ev.agent) && !ownStream) {
@@ -4325,7 +4450,8 @@ async function paintPush() {
 function wire() {
   $('tab-agents').addEventListener('click', () => { navigate('agents'); if (approvals.size && approvalsHidden) { approvalsHidden = false; paintApprovals(); } });
   $('tab-chat').addEventListener('click', () => navigate('chat'));
-  $('tab-activity').addEventListener('click', () => navigate('activity'));
+  $('menu-activity')?.addEventListener('click', (e) => { e.preventDefault(); navigate('activity'); });   // a #activity link: one history entry
+  $('tab-activity')?.addEventListener('click', () => navigate('activity'));   // a page cached before the move still has the tab
   $('chat-back').addEventListener('click', goBackFromChat);
   $('agents-refresh').addEventListener('click', loadAgents);
   $('activity-refresh').addEventListener('click', loadActivityExtras);
@@ -4347,6 +4473,7 @@ function wire() {
   $('about-sheet').addEventListener('click', onAboutClick);
   // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
+  $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -4444,7 +4571,7 @@ function wire() {
   }, 5000);
 }
 
-// ── Multi-user: owner switcher, account menu, Security sheet ────────────────
+// ── Multi-user: owner switcher, account menu, Profile and Security sheets ──────
 
 async function loadMe() {
   try {
@@ -4453,6 +4580,38 @@ async function loadMe() {
   } catch {}
   return hubMe;
 }
+
+// The time zone this person's agents use follows the device they are using (lib/timezone). The app reports the
+// phone's zone on the first tap or key after it opens or comes back into view, then at most every 10 minutes while in
+// use, so an app that reloads by itself doesn't move it. The hub ignores the reports while a zone is pinned (desktop:
+// Security).
+const TZ_REPORT_EVERY_MS = 10 * 60 * 1000;
+let tzReportedAt = 0;
+let tzChoice = 0;   // counts choices in the Profile sheet: an older report's late answer must not undo one
+let tzSaving = false;   // a choice is being saved: the list stays disabled, also in a Profile closed and opened again
+function deviceTimeZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } }
+function reportTimeZone() {
+  const tz = deviceTimeZone();
+  if (!tz || !hubMe || !hubMe.user || document.visibilityState !== 'visible') return;
+  if (Date.now() - tzReportedAt < TZ_REPORT_EVERY_MS) return;
+  tzReportedAt = Date.now();
+  const choice = tzChoice;
+  api('/api/me/timezone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tz, auto: true }) })
+    .then(r => { if (r.status >= 500) throw new Error(`HTTP ${r.status}`); return r.ok ? r.json() : null; })   // a hub error: try again at the next tap
+    .then(d => { if (d && d.user && hubMe && choice === tzChoice) { hubMe.user = { ...hubMe.user, ...d.user }; hubMe.timeZone = d.timeZone; } })
+    .catch(() => { tzReportedAt = 0; });
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tzReportedAt = 0; });
+// A chat request carries the phone's zone only when it carries a message the person just sent (sendMessage sets
+// tzSentAt; one request per send, within a minute), never a re-send the app makes by itself.
+let tzSentAt = 0;
+function zoneHeader() {
+  const tz = deviceTimeZone();
+  if (!tz || !tzSentAt || Date.now() - tzSentAt > 60 * 1000) return {};
+  tzSentAt = 0;
+  return { 'X-Hub-Time-Zone': tz };
+}
+for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, reportTimeZone, { capture: true, passive: true });
 
 function applyMultiUser() {
   const sel = $('owner-view');
@@ -4468,6 +4627,7 @@ function applyMultiUser() {
   if (hubMe && !hubMe.isAdmin) { $('menu-restart').hidden = true; $('menu-update').hidden = true; }
   if (hubMe) {
     $('menu-users').hidden = !hubMe.isAdmin;
+    if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
@@ -4530,6 +4690,71 @@ function secMsg(id, text, ok) {
   if (!el) return;
   el.textContent = text || '';
   el.classList.toggle('ok', !!ok);
+}
+
+// Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
+// use. Security keeps password, two-factor and sessions.
+function openProfileSheet() {
+  $('menu').classList.remove('open');
+  if (!hubMe || !hubMe.user) return;
+  const sheet = $('profile-sheet');
+  sheet.innerHTML = `
+    <h3>Profile</h3>
+    <div class="sec-section">
+      <div class="sec-title" id="prof-name"></div>
+      <div class="sec-hint" id="prof-login"></div>
+    </div>
+    <div class="sec-section">
+      <div class="sec-title">Time zone</div>
+      <div class="sec-hint" id="prof-tz-hint"></div>
+      <select id="prof-tz" aria-label="Time zone your agents use"></select>
+      <div class="sec-msg" id="prof-tz-msg"></div>
+    </div>
+    <div class="sec-actions" style="margin-top:10px"><button id="prof-close">Close</button></div>`;
+  $('prof-name').textContent = hubMe.user.name || hubMe.user.login;
+  $('prof-login').textContent = `Signed in as ${hubMe.user.login} · ${hubMe.user.role === 'admin' ? 'admin' : 'member'}`;
+  $('prof-tz').addEventListener('change', (e) => chooseTimeZone(e.target));
+  $('prof-close').addEventListener('click', () => dialogRequestClose(sheet));
+  paintTimeZone();
+  if (!sheet.open) sheet.showModal();
+}
+// Which zone the agents use for "now" and every time they show: the phone's (it follows you), or one pinned here.
+function paintTimeZone() {
+  const sel = $('prof-tz'), hint = $('prof-tz-hint');
+  if (!sel || !hint || !hubMe || !hubMe.user) return;
+  const device = deviceTimeZone();
+  const pinned = !!hubMe.user.timeZonePinned;
+  const zone = hubMe.timeZone || hubMe.user.timeZone || device || 'UTC';
+  let zones = [];
+  try { zones = Intl.supportedValuesOf('timeZone'); } catch { zones = []; }
+  if (!zones.includes(zone)) zones.unshift(zone);
+  let now = '';
+  try { now = new Date().toLocaleTimeString([], { timeZone: zone, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }); } catch { now = ''; }
+  sel.innerHTML = `<option value="">Follow this phone${device ? ` (${esc(device.replace(/_/g, ' '))})` : ''}</option>`
+    + zones.map(z => `<option value="${esc(z)}">${esc(z.replace(/_/g, ' '))}</option>`).join('');
+  sel.value = pinned ? zone : '';
+  sel.disabled = tzSaving;
+  hint.textContent = `Your agents use ${zone.replace(/_/g, ' ')}${now ? ` (now ${now})` : ''}${pinned ? ', pinned wherever you are.' : ', following the device you use.'}`;
+  try { dialogGuard.markLoaded(sel); } catch { /* no guard */ }
+}
+async function chooseTimeZone(sel) {
+  if (tzSaving) { paintTimeZone(); return; }   // one choice at a time: a second one waits until this is saved
+  const tz = sel.value;
+  tzChoice++;
+  tzSaving = true;
+  sel.disabled = true;
+  const body = tz ? { tz, pinned: true } : { tz: deviceTimeZone() || null, pinned: false };
+  let error = '';
+  try {
+    const r = await api('/api/me/timezone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    hubMe.user = { ...hubMe.user, ...d.user };
+    hubMe.timeZone = d.timeZone;
+  } catch (e) { error = e.message || 'failed'; }
+  tzSaving = false;
+  paintTimeZone();
+  secMsg('prof-tz-msg', error ? `Not saved: ${error}` : 'Saved.', !error);
 }
 
 function openSecuritySheet() {

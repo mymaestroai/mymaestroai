@@ -285,9 +285,9 @@ describe('run_job: hub wiring', () => {
     assert.match(src, /jobs\.TOOL_SPECS\.map\(spec => sdk\.tool\(spec\.name, spec\.description, jobs\.zodShape\(spec, z\)/, 'SDK MCP tools');
     assert.match(src, /temporalWorkers\.isVirtual\(agentName\) \? \[\] : jobs\.TOOL_SPECS/);
     assert.match(src, /'write_shared_memory', 'run_job', 'job_status', 'job_cancel', 'list_jobs'(, 'schedule_task', 'list_scheduled_tasks', 'cancel_scheduled_task')?\]/);
-    assert.match(src, /const jobsPolicyText = temporalWorkers\.isVirtual\(agentName\) \? '' : jobs\.policyText\(\)( \+ scheduledTasks\.policyText\(\))?;/);
+    assert.match(src, /const jobsPolicyText = \(temporalWorkers\.isVirtual\(agentName\) \? '' : jobs\.policyText\(\)( \+ scheduledTasks\.policyText\(\))?\) \+ timeZoneLib\.policyText\(\);/);
     assert.match(src, /append: agentContext \+ workerPolicyText \+ jobsPolicyText \+/);
-    assert.match(src, /if \(!temporalWorkers\.isVirtual\(agentName\)\) systemPrompt \+= jobs\.policyText\(\)( \+ scheduledTasks\.policyText\(\))?;/);
+    assert.match(src, /if \(!temporalWorkers\.isVirtual\(agentName\)\) systemPrompt \+= jobs\.policyText\(\)( \+ scheduledTasks\.policyText\(\))?;\n\s*systemPrompt \+= timeZoneLib\.policyText\(\);/);
   });
   it('the wake-up is a real saved turn for the notified agent, and the runner starts with the server', () => {
     assert.match(src, /handleChatStream\(\{ agent: agentName, message, origin(, [a-z_]+: [^}]+)? \}, sink\)/);

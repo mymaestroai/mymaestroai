@@ -88,6 +88,7 @@ scripts/local/
 
 # Side folder the in-app updater installs packages into before swapping them in (lib/git-sync.js)
 /.update-staging/
+/.restore/
 /.update.lock
 
 # The hub home of new installs (share/, users/, medical/, legal/): see lib/hub-home.js

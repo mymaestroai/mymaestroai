@@ -148,3 +148,31 @@ test('mounts: share/common is mounted for admin-side agents when it exists, neve
   const sdk = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.ok(sdk.includes('boxFor: async (owner) => {') && sdk.includes('return { name, mounts: sb.mountsFor(agent) };'), 'jobs run inside the box');
 });
+
+test('a box a backup left paused is let go when its agent needs it; one paused by someone else is not; a test can never reach the real Docker', async () => {
+  const { createSandbox, holdLaunches } = require('../lib/sandbox');
+  const calls = [];
+  const FULL = 'abc123def456' + '0'.repeat(52);
+  const docker = async (args) => { calls.push(args.join(' ')); if (args[0] === 'inspect') return { stdout: args[2] === '{{.Id}}' ? `${FULL}\n` : 'paused\n', stderr: '' }; return { stdout: '', stderr: '' }; };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-heal-'));
+  const pauseRecord = path.join(dir, 'backup-paused.json');
+  const sb = createSandbox({ docker, wrapperDir: dir, log: () => {}, pauseRecord });
+  // not recorded by a backup (an operator froze it): left paused, and the agent can't start
+  await assert.rejects(sb.ensure({ name: 'healme' }), (e) => e.code === 'EPAUSED');
+  assert.ok(!calls.some(c => c.startsWith('unpause')), 'not let go');
+  fs.writeFileSync(pauseRecord, JSON.stringify({ ids: ['abc123def456'] }));
+  assert.strictEqual(await sb.ensure({ name: 'healme' }), 'hub-agent-healme');
+  assert.ok(calls.includes('unpause hub-agent-healme'), 'a box the backup recorded: let go');
+  // while a backup holds launches, nothing is let go (the start waits for the hold instead)
+  calls.length = 0;
+  const letGo = await holdLaunches({ timeoutMs: 60000 });
+  let done = false; const p = sb.ensure({ name: 'healme' }).then(() => { done = true; });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(done, false);
+  assert.deepStrictEqual(calls, []);
+  letGo(); await p;
+  // without a stand-in, the real Docker is refused inside the test runner
+  const real = createSandbox({ wrapperDir: fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-real-')), log: () => {} });
+  await assert.rejects(real.ensure({ name: 'anything' }), /A test tried to use the real Docker/, 'never a real call');
+});
+

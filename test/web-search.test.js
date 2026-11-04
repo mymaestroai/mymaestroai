@@ -129,7 +129,7 @@ test('when everything fails the result is empty and the rendering says why; a ca
   assert.match(none.render(await none.search('x')), /no search backend is configured/);
 });
 
-test('an explicitly named backend is used alone; unknown or unconfigured names are refused without a network call', async () => {
+test('a named backend goes first; an unknown or unconfigured name is noted and the chain answers', async () => {
   const { ws, calls } = rig({ webSearch: { keys: { brave: 'b' } }, providerKeys: { perplexity: 'p' } });
   const r = await ws.search('q', { backend: 'perplexity' });
   assert.strictEqual(r.backend, 'perplexity');
@@ -138,9 +138,41 @@ test('an explicitly named backend is used alone; unknown or unconfigured names a
   assert.strictEqual(calls[0].init.headers.Authorization, 'Bearer p');
   const bad = await ws.search('q', { backend: 'bing' });
   assert.deepStrictEqual(bad.tried, [{ backend: 'bing', error: 'unknown backend' }]);
+  assert.strictEqual(bad.backend, 'brave', 'the chain answers');
   const off = await ws.search('q', { backend: 'tavily' });
   assert.deepStrictEqual(off.tried, [{ backend: 'tavily', error: 'not configured on this hub' }]);
-  assert.strictEqual(calls.length, 1, 'no further requests');
+  assert.strictEqual(off.backend, 'brave');
+  assert.match(ws.render(off), /via brave; tried first: tavily \(not configured on this hub\)/);
+  assert.deepStrictEqual(calls.map(c => c.host), ['api.perplexity.ai', 'api.search.brave.com', 'api.search.brave.com']);
+});
+
+test('a worker that names Brave on an install without it still gets results', async () => {
+  const { ws } = rig({ providerKeys: { perplexity: 'p' } });
+  const r = await ws.search('q', { backend: 'brave' });
+  assert.strictEqual(r.backend, 'perplexity');
+  assert.strictEqual(r.results.length, 1);
+  assert.doesNotMatch(ws.render(r), /no search results found/);
+});
+
+test('a named backend that fails or finds nothing falls through, and is not tried twice', async () => {
+  const fails = rig({ webSearch: { keys: { brave: 'b' } }, providerKeys: { perplexity: 'p' }, answers: { 'api.perplexity.ai': () => ({ __status: 500 }) } });
+  const r = await fails.ws.search('q', { backend: 'perplexity' });
+  assert.strictEqual(r.backend, 'brave');
+  assert.match(r.tried[0].error, /HTTP 500/);
+  assert.deepStrictEqual(fails.calls.map(c => c.host), ['api.perplexity.ai', 'api.search.brave.com']);
+  const empty = rig({ webSearch: { keys: { brave: 'b' } }, providerKeys: { perplexity: 'p' }, answers: { 'api.search.brave.com': () => ({ web: { results: [] } }) } });
+  const e = await empty.ws.search('q', { backend: 'brave' });
+  assert.strictEqual(e.backend, 'perplexity');
+  assert.deepStrictEqual(e.tried.map(t => t.error), ['no results']);
+  assert.deepStrictEqual(empty.calls.map(c => c.host), ['api.search.brave.com', 'api.perplexity.ai']);
+});
+
+test('when nothing can answer, the reply says what was tried, the unusable name included', async () => {
+  const { ws, calls } = rig({ webSearch: { disabled: ['duckduckgo'] } });
+  const r = await ws.search('q', { backend: 'brave' });
+  assert.strictEqual(r.results.length, 0);
+  assert.match(ws.render(r), /\(no search results found — brave: not configured on this hub\)/);
+  assert.strictEqual(calls.length, 0);
 });
 
 test('max_results and freshness are passed on and capped', async () => {

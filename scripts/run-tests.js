@@ -24,6 +24,8 @@ function find(dir) {
 
 const files = find('test');
 if (!files.length) { console.error('run-tests: no test files found under test/'); process.exit(1); }
-const r = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: ROOT, stdio: 'inherit' });
+// No test reaches this computer's real Docker (its agent boxes): DOCKER_HOST points nowhere unless a run opts in.
+const env = { ...process.env, DOCKER_HOST: process.env.MM_TEST_REAL_DOCKER === '1' ? (process.env.DOCKER_HOST || '') : 'unix:///nonexistent/docker-for-tests.sock' };
+const r = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: ROOT, stdio: 'inherit', env });
 if (r.error) { console.error(`run-tests: ${r.error.message}`); process.exit(1); }
 process.exit(r.status === null ? 1 : r.status);

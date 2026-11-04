@@ -7,11 +7,20 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
 
-test('mobile.html links the manifest and has the three tabs', () => {
+test('mobile.html links the manifest and has the two tabs; Activity is in the ⋮ menu', () => {
   const html = read('mobile.html');
   assert.match(html, /<link rel="manifest" href="\/manifest\.json">/);
-  for (const id of ['tab-agents', 'tab-chat', 'tab-activity']) assert.ok(html.includes(`id="${id}"`), id);
+  const bar = html.slice(html.indexOf('<nav id="tabbar">'), html.indexOf('</nav>', html.indexOf('<nav id="tabbar">')));
+  assert.deepStrictEqual([...bar.matchAll(/<button id="(tab-[a-z]+)"/g)].map(m => m[1]), ['tab-agents', 'tab-chat'], 'Agents and Chat only: Activity was easy to tap by accident');
+  const menu = html.slice(html.indexOf('<div id="menu">'), html.indexOf('</div>', html.indexOf('id="menu-restart"')));
+  assert.ok(menu.includes('<a id="menu-activity" href="#activity"><span>&#x26A1; Activity</span><span class="menu-count" id="act-unread"></span></a>'), 'Activity, with its count of new events: a plain #activity link, which a script from before the move follows too');
+  assert.ok(menu.indexOf('id="menu-activity"') < menu.indexOf('id="menu-files"'));
+  assert.ok(html.includes('</nav>\n  <!-- Activity moved into the ⋮ menu.') && html.includes('<button id="tab-activity" hidden aria-hidden="true" tabindex="-1"></button>'), 'an invisible stand-in for scripts from before the move, outside the bar');
   assert.ok(html.includes('src="mobile.js"'));
+  const js = read('mobile.js');
+  assert.ok(js.includes("$('menu-activity')?.addEventListener('click', (e) => { e.preventDefault(); navigate('activity'); });"), 'the current script handles the tap itself: one history entry');
+  assert.ok(js.includes("window.addEventListener('popstate', (e) => applyRoute(e.state || routeFromHash()));") && js.includes("const h = location.hash || '';"), 'every history step is routed from the hash (how an older script reaches the link)');
+  assert.ok(js.includes("$(`tab-${s}`)?.classList.toggle('active', s === name);"), 'switching screens copes with Activity having no tab');
 });
 
 test('server.js maps /mobile to mobile.html and serves .webmanifest', () => {
@@ -62,7 +71,7 @@ test('mobile composer interjects into a running turn; Stop moves to the header; 
   assert.match(js, /stopBtn\.hidden = !working && !own/, 'header Stop also covers a stream this phone started');
   assert.ok(js.includes('function stopOwnTurn') && js.includes('function sendInterjection'));
   assert.ok(html.includes('#send-btn.interject') && html.includes('.note.interject'));
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v61'/);
   assert.ok(js.includes("addEventListener('controllerchange'"), 'a new build reloads the installed app once it takes control');
 });
 
@@ -94,7 +103,7 @@ test('mobile push: the phone re-registers when the hub no longer knows its subsc
 test('service worker: a forced (test) push shows its banner even when the app is open in front', () => {
   const sw = read('sw.js');
   assert.ok(sw.includes("if (!data.force && list.some(c => c.focused && c.visibilityState === 'visible')) return;"));
-  assert.match(sw, /const VERSION = 'hub-mobile-v59'/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v61'/);
 });
 
 test('ask_user dialogs: a click only highlights the choice and a Submit button sends it (desktop and phone)', () => {
@@ -104,7 +113,7 @@ test('ask_user dialogs: a click only highlights the choice and a Submit button s
   assert.ok(m.includes("else { b.classList.add('selected'); selected[i] = opt.label; }") && m.includes('<button class="qsubmit" disabled>Submit</button>'), 'phone selects then submits');
   assert.ok(app.includes('if (was) delete selected[qi];') && m.includes('if (was) delete selected[i];'), 'a second click on the highlighted option clears it');
   assert.ok(ih.includes('.question-option.selected {') && mh.includes('.question button.opt.selected {'), 'selected styles on both pages');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v61'/);
 });
 
 test('a pending ask_user question is re-shown from the hub event stream and on turn catch-up, on both pages (dedup by request id)', () => {
@@ -127,7 +136,7 @@ test('a pending ask_user question is re-shown from the hub event stream and on t
   assert.ok(m.includes("const pq = pendingQuestionsByAgent.get(rec.agent);") && !m.includes("const pq = pendingQuestionsByAgent.get(name);"), 'own-stream path looks up its own agent');
   assert.ok(m.includes("on('ask_user_done'") && m.includes("if (shownQuestions.has(request_id)) {"), 'phone closes and dedups');
   assert.ok(m.includes("if (old && !old.isConnected) { chatEl().appendChild(old); scrollChat(); }"), 'an unanswered question survives the chat being closed and reopened');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v61'/);
 });
 
 test('after a hub restart both pages reload themselves: hello carries the boot id, a changed id triggers a reload once nothing streams', () => {
@@ -141,7 +150,7 @@ test('after a hub restart both pages reload themselves: hello carries the boot i
   const app = read('app.js'), m = read('mobile.js');
   assert.ok(app.includes("ev.boot !== window.__hubBoot") && app.includes("Object.values(chats).some(c => c && c.controller)") && app.includes('location.reload()'), 'desktop reloads when idle');
   assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("const busy = () => streams.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();") && m.includes("const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'phone reloads when idle and not typing');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v59'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v61'/);
 });
 
 test('a pasted image with no words is a valid chat message (no HTTP 400)', () => {

@@ -251,3 +251,55 @@ test('gateway refuses codex-cli models but still answers supportsImages', () => 
   assert.strictEqual(gw.resolveProvider('codex-cli/gpt-5.5').provider, 'codex-cli');
   assert.throws(() => gw.transportFor('codex-cli/gpt-5.5'), /only through the Codex CLI/);
 });
+
+// ── connecting a ChatGPT subscription ────────────
+
+test('withNode puts the running Node on PATH once, for the `codex` Node script', () => {
+  const dir = path.dirname(process.execPath);
+  assert.strictEqual(codex.withNode({ PATH: '/some/bin' }).PATH, `${dir}${path.delimiter}/some/bin`);
+  const has = { PATH: `/some/bin${path.delimiter}${dir}` };
+  assert.strictEqual(codex.withNode(has), has, 'already there: unchanged');
+  assert.strictEqual(codex.withNode({}).PATH, dir);
+});
+
+// A stand-in `codex` program: run for real, with the prompt on stdin, the way the check runs it.
+function fakeCodexBin(script) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-bin-'));
+  const bin = path.join(dir, 'codex');
+  fs.writeFileSync(bin, `#!/bin/sh\necho "$@" > "${dir}/args"\ncat > "${dir}/stdin"\n${script}\n`, { mode: 0o755 });
+  return { bin, dir };
+}
+const line = (o) => `echo '${JSON.stringify(o)}'`;
+
+test('askOneWord: a real child, the prompt on stdin, read-only, and the reply from its events', async () => {
+  const { bin, dir } = fakeCodexBin([line({ type: 'thread.started', thread_id: 't' }), line({ type: 'item.completed', item: { type: 'error', message: 'a warning' } }), line({ type: 'item.completed', item: { type: 'agent_message', text: 'OK' } }), line({ type: 'turn.completed', usage: {} })].join('\n'));
+  const r = await codex.askOneWord({ bin, env: { PATH: process.env.PATH }, model: 'gpt-x', timeoutMs: 5000 });
+  assert.deepStrictEqual(r, { ok: true, text: 'OK' }, 'a soft warning is not a failure');
+  const args = fs.readFileSync(path.join(dir, 'args'), 'utf8');
+  assert.match(args, /^exec --json --skip-git-repo-check -m gpt-x /);
+  assert.match(args, /sandbox_mode="read-only"/);
+  assert.doesNotMatch(args, /dangerously|mcp_servers/, 'no tools, no full access');
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'stdin'), 'utf8'), 'Reply with exactly: OK');
+});
+
+test('askOneWord: the turn\'s error, then stderr, then the exit code; no program; a hang is killed with its children', async () => {
+  const failed = fakeCodexBin(line({ type: 'turn.failed', error: { message: 'usage limit reached' } }));
+  assert.deepStrictEqual(await codex.askOneWord({ bin: failed.bin, env: { PATH: process.env.PATH }, model: 'm', timeoutMs: 5000 }), { ok: false, error: 'usage limit reached' });
+  const noisy = fakeCodexBin('echo boom >&2; exit 3');
+  assert.deepStrictEqual(await codex.askOneWord({ bin: noisy.bin, env: { PATH: process.env.PATH }, model: 'm', timeoutMs: 5000 }), { ok: false, error: 'boom' });
+  const quiet = fakeCodexBin('exit 7');
+  assert.deepStrictEqual(await codex.askOneWord({ bin: quiet.bin, env: { PATH: process.env.PATH }, model: 'm', timeoutMs: 5000 }), { ok: false, error: 'codex exited with code 7' });
+  assert.strictEqual((await codex.askOneWord({ bin: null, model: 'm' })).ok, false);
+  const missing = await codex.askOneWord({ bin: '/nonexistent/codex', env: { PATH: process.env.PATH }, model: 'm', timeoutMs: 5000 });
+  assert.strictEqual(missing.ok, false);
+  assert.match(missing.error, /ENOENT/);
+
+  const hang = fakeCodexBin('(sleep 30 & echo $! > "$(dirname "$0")/child"; wait)');
+  const t0 = Date.now();
+  const r = await codex.askOneWord({ bin: hang.bin, env: { PATH: process.env.PATH }, model: 'm', timeoutMs: 400 });
+  assert.deepStrictEqual(r, { ok: false, timedOut: true, error: 'timed out' });
+  assert.ok(Date.now() - t0 < 5000);
+  const child = Number(fs.readFileSync(path.join(path.dirname(hang.bin), 'child'), 'utf8'));
+  await new Promise(res => setTimeout(res, 100));
+  assert.throws(() => process.kill(child, 0), /ESRCH/, 'its helper process is gone too');
+});

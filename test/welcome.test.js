@@ -169,7 +169,7 @@ test('resume: "/" sends an admin with unfinished setup back to /welcome; the pag
   assert.ok(page.includes('<p class="resume" id="resume" hidden>Bookmark this page. If it gets closed or replaced, open <b class="origin">'), 'how to get back, on every setup step');
   assert.ok(page.includes("Claude's sign-in opens in your browser and may take over this page."), 'the warning in the Claude card');
   assert.ok(page.includes("window.addEventListener('pageshow', (e) => { if (e.persisted) route(); });"), 'Back after the sign-in: the hub decides the step');
-  assert.match(page, /if \(leftForSignIn && claudeCardOpen\(\)\) \{ leftForSignIn = false; claudeCheck\(\); \}/, 'checks Claude by itself on return');
+  assert.match(page, /const check = checkForOpenCard\(\); if \(leftForSignIn && check\) \{ leftForSignIn = false; check\(\); \}/, 'checks by itself on return');
   assert.ok(page.includes("await finishSetup('done');   // the interview has started"), 'finished at the first answer');
   assert.ok((page.match(/data-skip/g) || []).length >= 3, 'skip on the AI and Meet steps (and its handler)');
   assert.ok(page.includes("if (state.unfinished === false) return show('s-done', 0);"), 'a finished setup shows "You\'re all set"');
@@ -205,4 +205,84 @@ test('the Welcome page checks Claude by itself when Claude Code is found (no Che
   assert.ok(!page.includes('Press Check to confirm it is signed in'), 'the old "press Check" note is gone');
   assert.ok(page.includes("say('claude-msg', adviceText(res, 'Claude did not answer.')") && page.includes("say('key-msg', adviceText(res, 'The key did not work.')"), 'a failed check shows the advice, the raw text under Details');
   assert.match(page, /function adviceText\(res, fallback\) \{ return \(res\.body && \(res\.body\.error \|\| res\.body\.detail\)\) \|\| fallback; \}/);
+});
+
+// ── A ChatGPT subscription, through the Codex client ──
+function fakeCodex(over = {}) {
+  const calls = [];
+  return {
+    calls,
+    resolveBinary: () => '/fake/codex',
+    loginStatus: async () => ({ installed: true, loggedIn: true, mode: 'chatgpt', detail: 'Logged in using ChatGPT' }),
+    discoverModels: async () => [{ id: 'gpt-top' }, { id: 'gpt-next' }],
+    askOneWord: async (o) => { calls.push(o); return { ok: true, text: 'OK' }; },
+    ...over,
+  };
+}
+const chatgptWelcome = (codex, extra = {}) => {
+  const s = fakeSettings();
+  const w = createWelcome({ dataDir: tmp(), env: {}, settings: s, claudeAuth: noClaude, codex, runDiscovery: extra.runDiscovery || (() => {}) });
+  return { w, s };
+};
+
+test('ChatGPT check: proved by a real one-word request, offers the models, picks the first, remembers it and refreshes the pickers', async () => {
+  let discovered = 0;
+  const codex = fakeCodex();
+  const { w, s } = chatgptWelcome(codex, { runDiscovery: () => { discovered++; } });
+  assert.strictEqual(w.hasProvider(), false, 'nothing connected yet');
+  const r = await w.checkChatGPT({ timeoutMs: 5000 });
+  assert.deepStrictEqual(r, { ok: true, state: 'ready', provider: 'chatgpt', label: 'ChatGPT', models: ['codex-cli/gpt-top', 'codex-cli/gpt-next'], suggested: 'codex-cli/gpt-top' });
+  assert.strictEqual(codex.calls[0].model, 'gpt-top');
+  assert.strictEqual(codex.calls[0].timeoutMs, 5000);
+  assert.strictEqual(discovered, 1);
+  assert.strictEqual(s._s.welcome.provider, 'chatgpt');
+  assert.ok(w.progress().chatgptOkAt);
+  assert.strictEqual(w.chatgptReady(), true);
+  assert.strictEqual(w.hasProvider(), true, 'ChatGPT alone is a way to think: setup is not needed again');
+});
+
+test('ChatGPT check: each way it can fail says what to do, and none counts as connected', async () => {
+  const cases = [
+    [{ loginStatus: async () => ({ installed: false, loggedIn: false }) }, 'missing', /not on this computer/],
+    [{ loginStatus: async () => ({ installed: true, loggedIn: false, detail: 'Not logged in' }) }, 'signed-out', /not signed in/],
+    [{ loginStatus: async () => ({ installed: true, loggedIn: true, mode: 'apikey', detail: 'Logged in using an API key' }) }, 'api-key', /API key, not your ChatGPT/],
+    [{ discoverModels: async () => [] }, 'no-models', /lists no models/],
+    [{ askOneWord: async () => ({ ok: false, timedOut: true, error: 'timed out' }) }, 'timeout', /too long/],
+    [{ askOneWord: async () => ({ ok: false, error: 'You have hit your usage limit' }) }, 'limit', /usage limit is reached/],
+    [{ askOneWord: async () => ({ ok: false, error: '401 Unauthorized: refresh token expired' }) }, 'signed-out', /stopped working/],
+    [{ askOneWord: async () => ({ ok: false, error: 'stream disconnected before completion' }) }, 'network', /internet connection/],
+    [{ askOneWord: async () => ({ ok: false, error: 'something odd' }) }, 'error', /answered with an error/],
+    [{ discoverModels: async () => { throw new Error('spawn codex ENOENT'); } }, 'missing', /could not start/],
+  ];
+  for (const [over, state, says] of cases) {
+    const { w, s } = chatgptWelcome(fakeCodex(over));
+    const r = await w.checkChatGPT();
+    assert.strictEqual(r.ok, false, state);
+    assert.strictEqual(r.state, state);
+    assert.match(r.error, says);
+    assert.strictEqual(w.chatgptReady(), false, state);
+    assert.strictEqual(s._s.welcome, undefined, state);
+  }
+});
+
+test('ChatGPT status for Settings spends nothing; only a passed check counts as ready; the summary says Codex is on this computer', async () => {
+  const asked = fakeCodex();
+  const { w } = chatgptWelcome(asked);
+  assert.deepStrictEqual(await w.chatgptStatus(), { ok: true, installed: true, signedIn: true, mode: 'chatgpt' });
+  assert.strictEqual(asked.calls.length, 0, 'no request to ChatGPT');
+  const { w: keyed } = chatgptWelcome(fakeCodex({ loginStatus: async () => ({ installed: true, loggedIn: true, mode: 'apikey' }) }));
+  assert.strictEqual((await keyed.chatgptStatus()).signedIn, false, 'an API key is not the subscription');
+  const { w: broken } = chatgptWelcome(fakeCodex({ loginStatus: async () => { throw new Error('nope'); } }));
+  assert.strictEqual((await broken.chatgptStatus()).ok, false);
+
+  const here = createWelcome({ dataDir: tmp(), env: { HOME: '/home/x' }, settings: fakeSettings(), claudeAuth: noClaude, codex: fakeCodex() });
+  assert.deepStrictEqual([here.chatgptReady(), here.hasProvider(), here.providerSummary().chatgpt, here.providerSummary().chatgptReady], [false, false, true, false], 'Codex signed in but never checked: the card opens, setup still asks');
+  const dir = tmp();
+  const passed = createWelcome({ dataDir: dir, env: { HOME: '/home/x' }, settings: fakeSettings(), claudeAuth: noClaude, codex: fakeCodex(), runDiscovery: () => {} });
+  assert.strictEqual((await passed.checkChatGPT()).ok, true);
+  assert.deepStrictEqual([passed.chatgptReady(), passed.hasProvider()], [true, true]);
+  const removed = createWelcome({ dataDir: dir, env: { HOME: '/home/x' }, settings: fakeSettings(), claudeAuth: noClaude, codex: fakeCodex({ resolveBinary: () => null }) });
+  assert.deepStrictEqual([removed.chatgptReady(), removed.hasProvider()], [false, false], 'Codex removed since: no longer a way to think');
+  const absent = createWelcome({ dataDir: tmp(), env: { HOME: '/home/x' }, settings: fakeSettings(), claudeAuth: noClaude, codex: fakeCodex({ resolveBinary: () => null }) });
+  assert.deepStrictEqual([absent.providerSummary().chatgpt, absent.providerSummary().chatgptReady], [false, false]);
 });

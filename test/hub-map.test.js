@@ -23,6 +23,7 @@ function deps(over = {}) {
     supervisor: () => 'systemd user service',
     nodeSecurity: () => null,   // the real check would follow the Node.js running the tests
     readiness: () => ({ check: async () => ({ critical: 1, warnings: 1, items: [{ id: 'docker', level: 'ok' }, { id: 'sandbox-image', level: 'ok' }, { id: 'accounts', level: 'critical' }, { id: 'poppler', level: 'warn' }, { id: 'search', level: 'info' }] }) }),
+    zone: () => 'UTC',   // the brief's times are in the hub's zone; fixed here
     ...over,
   };
 }

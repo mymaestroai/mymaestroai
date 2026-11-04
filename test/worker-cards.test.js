@@ -29,7 +29,7 @@ const ok = { success: true, stopped: 'running', turns: 1 };
 // A stand-in page: each chat's messages area is an ordered list of elements; tabs exist once rendered.
 function page() {
   const els = new Map(); const order = {}; let seq = 0;
-  const env = { chats: {}, tabs: [], panels: [], statuses: [], rendered: {}, posts: [], flashes: [], timers: new Set(), stopReply: ok, callerStops: [] };
+  const env = { chats: {}, tabs: [], panels: [], statuses: [], rendered: {}, posts: [], flashes: [], timers: new Set(), stopReply: ok, callerStops: [], retired: [] };
   const el = (chatId, props) => {
     const e = { id: `m${++seq}`, chatId, ...props,
       after(other) { const list = order[chatId]; list.splice(list.indexOf(other.id), 1); list.splice(list.indexOf(e.id) + 1, 0, other.id); },
@@ -54,12 +54,13 @@ function page() {
     // what a chat's messages area shows, in order: [role, text]
     shown: (chatId) => (order[chatId] || []).map(id => els.get(id)).map(e => [e.role, e.role === 'notice' ? e.textContent : (env.rendered[e.id]?.content ?? e.content)]),
     closeTab: (id) => els.delete(`tab-${id}`),
+    retireSoon: (e) => { if (!e) return false; env.retired.push(e.textContent); return true; },   // lib/ui-retire.js: leaves a few seconds later
   });
   env.chats.c1 = { id: 'c1', agent: 'maestro', display: 'Maestro' };
   env.chats.c2 = { id: 'c2', agent: 'counsel', display: 'Counsel' };
   const body = `const { chats, document, appendMessage, appendSystemNotice, setStatus, updateMessageWithTools, renderWorkerChatTab,
       renderWorkerChatPanel, updateWorkerTabTimer, flashTab, setInterval, clearInterval, fetch, switchToChat, closeChat, updateMessage,
-      cancelRequest, cancelGroupRequest } = env;
+      cancelRequest, cancelGroupRequest, retireSoon } = env;
     const workerTabMap = new Map(); const workerParentMap = new Map(); const workerCardByKey = new Map(); const closedWorkerRuns = new Set();
     ${NAMES.map(n => extract(app, n)).join('\n')}
     return { ${NAMES.join(', ')}, workerTabMap, workerParentMap, workerCardByKey, closedWorkerRuns };`;
@@ -403,4 +404,25 @@ test('a reloaded page shows a call stopped earlier as Stopped, from the hub\'s t
   assert.deepStrictEqual(env.shown('c1').map(s => s[1]), ['⏹ Agent helper Stopped']);
   assert.deepStrictEqual(env.statuses.at(-1), ['worker-r9', 'error', 'Stopped']);
   assert.strictEqual(env.shown('worker-r9').filter(s => s[0] === 'system').length, 0, 'no "Worker failed" line');
+});
+
+test('a finished call\'s line in the caller\'s chat leaves a few seconds later; a failed or stopped one stays', async () => {
+  const { env, api } = page();
+  api.handleWorkerEvent('c1', consult('r1', 'counsel', 'one'));
+  api.handleWorkerEvent('c1', consult('r2', 'doc', 'two'));
+  api.handleWorkerEvent('c1', consult('r3', 'fable', 'three'));
+  api.handleWorkerEvent('c1', { type: 'worker_completed', worker_id: 'r1' });
+  api.handleWorkerEvent('c1', { type: 'worker_failed', worker_id: 'r2', error: 'boom' });
+  api.handleWorkerEvent('c1', { type: 'worker_failed', worker_id: 'r3', cancelled: true });
+  api.handleWorkerEvent('c1', { type: 'worker_completed', worker_id: 'r1' });   // a repeat changes nothing
+  assert.deepStrictEqual(env.retired, ['✅ Agent counsel is Complete']);
+  const notices = env.shown('c1').filter(([role]) => role === 'notice').map(([, text]) => text);
+  assert.deepStrictEqual(notices, ['✅ Agent counsel is Complete', '❌ Agent doc Failed', '⏹ Agent fable Stopped']);
+  // Stopped here, but the hub's turn view says it finished after all: the real outcome shows, and a finished line leaves
+  const second = page();
+  second.api.handleWorkerEvent('c1', consult('r4', 'helper', 'p'));
+  await second.api.cancelWorkerCard('worker-r4');
+  assert.deepStrictEqual(second.env.retired, [], 'stopped: stays');
+  second.api.turnWorkerUpsert('c1', { workers: new Set() }, { id: 'r4', agent: 'helper', description: 'Worker: Agent helper', prompt: 'p', status: 'completed', text: 'FINAL' });
+  assert.deepStrictEqual(second.env.retired, ['✅ Agent helper is Complete']);
 });

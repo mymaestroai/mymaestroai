@@ -32,7 +32,10 @@ test('Welcome text is never built from markup: replies and errors go in as text'
 test('the hand-over: the first message starts the setup interview, then the app opens on Maestro\'s chat', () => {
   assert.match(welcome, /message: '\[First-time setup\] Hello! I just installed My Maestro AI and connected my first AI\. Please start the setup interview\.'/);
   assert.match(welcome, /location\.href = '\/\?agent=' \+ encodeURIComponent\(lead\.name\)/);
-  assert.match(app, /const want = new URLSearchParams\(location\.search\)\.get\('agent'\); const a = want && AGENTS\.find\(x => x\.name === want\); if \(a\) startSoloChat\(a\.name, a\.model\);/);
+  // "/?agent=<name>" opens that chat once the agent list is in (lib/ui-open-target.js parses the page's address)
+  assert.match(app, /agent: q\.get\('agent'\) \|\| ''/);
+  assert.match(app, /const own = parseOpenTarget\(\{ type: 'open-target', url: location\.href \}, location\.origin\);[^]*?openTargets\.ready\(own\);/);
+  assert.match(app, /let a = AGENTS\.find\(x => x\.name === t\.agent\);\n      if \(!a\) a = await showOwnerViewOf\(t\.agent\);\n      if \(a\) startSoloChat\(a\.name, a\.model\);/);
   const soul = read('templates/workspaces/maestro/SOUL.md');
   assert.match(soul, /When a message starts with \*\*\[First-time setup\]\*\*[\s\S]*read `SETUP-INTERVIEW\.md`/);
   const iv = read('templates/workspaces/maestro/SETUP-INTERVIEW.md');
@@ -58,6 +61,27 @@ test('the setup interview offers a security check; the review only looks, and th
   assert.ok(help.includes('id="security"') && help.includes('<a href="#security">Security</a>'));
   assert.match(help, /Ask <b>Maestro<\/b>: <i>"Check this computer's security\."<\/i>/);
   assert.match(read('docs/HUB-MAP.md'), /18\. \*\*Security review of the install and its computer\.\*\* Follow `docs\/SECURITY-REVIEW\.md`/);
+});
+
+test('Welcome: a ChatGPT subscription is a first-class choice, with one command, a real check, and its models for Maestro', () => {
+  assert.ok(welcome.includes('id="o-chatgpt"'));
+  assert.match(welcome, /<span class="t">A ChatGPT subscription<\/span>/);
+  assert.match(welcome, /<code>mymaestro connect chatgpt<\/code><button class="secondary" data-copy="mymaestro connect chatgpt">Copy<\/button>/);
+  assert.ok(welcome.indexOf('id="o-claude"') < welcome.indexOf('id="o-chatgpt"') && welcome.indexOf('id="o-chatgpt"') < welcome.indexOf('id="o-key"'), 'between Claude and the API keys');
+  assert.match(welcome, /api\('POST', '\/api\/welcome\/chatgpt-check', \{\}\)/);
+  assert.match(welcome, /chatgptOk = true; say\('chatgpt-msg', [^;]*\); fillModels\(res\.body\.models, res\.body\.suggested\); aiReady\(res\.body\.suggested\)/, 'the Meet step offers its models, the suggested one first');
+  assert.match(welcome, /\} else if \(p\.chatgpt\) \{\s*\n\s*\$\('o-chatgpt'\)\.classList\.add\('open'\);\s*\n\s*chatgptCheck\(/, 'Codex already here: the card opens and checks; Claude Code keeps priority');
+  assert.match(welcome, /cardOpen\('o-claude'\) \? claudeCheck : cardOpen\('o-chatgpt'\) \? chatgptCheck : null/, 'coming back from the sign-in checks by itself, on either card');
+  const access = require('../lib/access');
+  for (const [p, m] of [['/api/welcome/chatgpt-check', 'POST'], ['/api/welcome/chatgpt-status', 'GET']]) assert.strictEqual(access.classifyRoute(p, m).kind, 'admin', p);
+});
+
+test('Settings: the ChatGPT subscription has its own row, with the same command and a real check', () => {
+  assert.match(app, /<label>ChatGPT subscription<\/label>/);
+  assert.match(app, /run <code>mymaestro connect chatgpt<\/code> in a terminal on this computer, then press Check/);
+  assert.match(app, /setTimeout\(loadChatGPTRow, 0\)/);
+  assert.match(app, /fetch\('\/api\/welcome\/chatgpt-status', \{ credentials: 'include' \}\)/);
+  assert.match(app, /fetch\('\/api\/welcome\/chatgpt-check', \{ method: 'POST'/);
 });
 
 test('Help: the ? button opens it beside the chat; phone menu and sign-in page link to it; it is public', () => {

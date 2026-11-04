@@ -67,7 +67,7 @@ test('publicUser never leaks hashes, secrets or recovery codes', () => {
   const forbidden = ['passwordHash', 'totpPending', 'totp', 'recovery'];
   for (const u2 of [auth.publicUser(raw), ...auth.listUsers()]) {
     for (const k of forbidden) assert.ok(!(k in u2), `${k} must not be exposed`);
-    assert.deepStrictEqual(Object.keys(u2).sort(), ['createdAt', 'disabled', 'grants', 'id', 'lastLoginAt', 'login', 'name', 'role', 'totpEnabled']);
+    assert.deepStrictEqual(Object.keys(u2).sort(), ['createdAt', 'disabled', 'grants', 'id', 'lastLoginAt', 'login', 'name', 'role', 'timeZone', 'timeZonePinned', 'totpEnabled']);
   }
 });
 

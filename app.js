@@ -48,25 +48,60 @@
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
+      paintRecoveryBanner().catch(() => {});
       paintUpdateCard().catch(() => {});
       paintVersionLabel().catch(() => {});
       if (!window.__hvTimer) window.__hvTimer = setInterval(() => paintVersionLabel().catch(() => {}), 5 * 60 * 1000);
       if (!window.__ucTimer) window.__ucTimer = setInterval(() => paintUpdateCard().catch(() => {}), 30 * 60 * 1000);
       return window.hubMe;
     }
+    // The time zone this person's agents use follows the device they are using (lib/timezone). The page reports its
+    // zone on the first tap or key after it opens or comes back into view, then at most every 10 minutes while in use,
+    // so a page that reloads by itself where nobody is looking (after a restart) doesn't move it. The hub ignores the
+    // reports while a zone is pinned in the Profile.
+    const TZ_REPORT_EVERY_MS = 10 * 60 * 1000;
+    let tzReportedAt = 0;
+    let tzChoice = 0;   // counts choices in the Profile: an older report's late answer must not undo one
+    let tzSaving = false;   // a choice is being saved: the list stays disabled, also in a Profile closed and opened again
+    function deviceTimeZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } }
+    function reportTimeZone() {
+      const tz = deviceTimeZone();
+      const me = window.hubMe;
+      if (!tz || !me || !me.user || document.visibilityState !== 'visible') return;
+      if (Date.now() - tzReportedAt < TZ_REPORT_EVERY_MS) return;
+      tzReportedAt = Date.now();
+      const choice = tzChoice;
+      fetch('/api/me/timezone', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tz, auto: true }) })
+        .then(r => { if (r.status >= 500) throw new Error(`HTTP ${r.status}`); return r.ok ? r.json() : null; })   // a hub error: try again at the next tap
+        .then(d => { if (d && d.user && window.hubMe && choice === tzChoice) { window.hubMe.user = { ...window.hubMe.user, ...d.user }; window.hubMe.timeZone = d.timeZone; } })
+        .catch(() => { tzReportedAt = 0; });
+    }
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tzReportedAt = 0; });
+    // A chat request carries the device's zone only when it carries a message the person just sent from this page (the
+    // send functions set tzSentAt; one request per send, within a minute), never the page's own follow-ups: a group
+    // discussion's next speaker, the synthesis, an orchestration's later calls, a retry.
+    let tzSentAt = 0;
+    function zoneHeader() {
+      const tz = deviceTimeZone();
+      if (!tz || !tzSentAt || Date.now() - tzSentAt > 60 * 1000) return {};
+      tzSentAt = 0;
+      return { 'X-Hub-Time-Zone': tz };
+    }
+    for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, reportTimeZone, { capture: true, passive: true });
     // An install updated from before multi-user has provider keys but no admin account, so the setup wizard never
     // asked for one: the hub runs with no login and every multi-user feature off. Say so, once per page, with the link.
     function paintNoAccountsNotice() {
       const me = window.hubMe;
       let bar = document.getElementById('hub-no-accounts-notice');
       const none = (me && me.accounts === false) || (!me && window.hubNoAccounts === true);
-      if (!none) { if (bar) bar.remove(); return; }
+      if (!none) { if (bar) { bar.remove(); layoutBanners(); } return; }
       if (bar) return;
       bar = document.createElement('div');
       bar.id = 'hub-no-accounts-notice';
       bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:#7a3b12;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box';
       bar.innerHTML = 'This hub has no login yet: anyone who can reach it has full control, and multi-user features (members, sharing, the account menu, member sandboxes) stay off until an admin account exists. <a href="/welcome" style="color:#fff;text-decoration:underline">Create the admin account</a> (you will need the setup link: run mymaestro setup-link).';
       document.body.prepend(bar);
+      layoutBanners();
     }
     // No AI provider configured yet (fresh install after the first admin signed up): a one-line notice with the link
     // to the setup wizard. The wizard no longer takes over "/" once accounts exist, so the 2FA enrolment can finish.
@@ -81,7 +116,7 @@
       bar = document.createElement('div');
       bar.id = 'hub-setup-notice';
       bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:#1f4e79;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:#fff;text-decoration:underline">Open the Welcome page</a> to connect a Claude subscription, an API key or a local model.';
+      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:#fff;text-decoration:underline">Open the Welcome page</a> to connect a Claude or ChatGPT subscription, an API key or a local model.';
       document.body.prepend(bar);
       layoutBanners();
     }
@@ -205,6 +240,75 @@
       paintTwoFactor();
       loadSessionsInfo();
     }
+    // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
+    // use. Security keeps password, two-factor and sessions.
+    function openProfileDialog() {
+      toggleAccountMenu(false);
+      document.getElementById('profile-overlay')?.remove();
+      const me = window.hubMe;
+      if (!me || !me.user) return;
+      const overlay = document.createElement('div');
+      overlay.className = 'question-overlay';
+      overlay.id = 'profile-overlay';
+      overlay.innerHTML = `
+        <div class="question-modal security-modal profile-modal">
+          <h3>Profile</h3>
+          <div class="sec-section">
+            <div class="sec-title" id="prof-name"></div>
+            <div class="sec-hint" id="prof-login"></div>
+          </div>
+          <div class="sec-section">
+            <div class="sec-title">Time zone</div>
+            <div class="sec-hint" id="prof-tz-hint"></div>
+            <select id="prof-tz" onchange="chooseTimeZone(this)" aria-label="Time zone your agents use"></select>
+            <div class="sec-msg" id="prof-tz-msg"></div>
+          </div>
+          <div class="sec-actions"><button class="sec-btn" onclick="dialogRequestClose(this)">Close</button></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      document.getElementById('prof-name').textContent = me.user.name || me.user.login;
+      document.getElementById('prof-login').textContent = `Signed in as ${me.user.login} · ${me.user.role === 'admin' ? 'admin' : 'member'}`;
+      paintTimeZone();
+    }
+    // Which zone the agents use for "now" and every time they show: the device's (it follows you), or one pinned here.
+    function paintTimeZone() {
+      const sel = document.getElementById('prof-tz'), hint = document.getElementById('prof-tz-hint');
+      const me = window.hubMe;
+      if (!sel || !hint || !me || !me.user) return;
+      const device = deviceTimeZone();
+      const pinned = !!me.user.timeZonePinned;
+      const zone = me.timeZone || me.user.timeZone || device || 'UTC';
+      let zones = [];
+      try { zones = Intl.supportedValuesOf('timeZone'); } catch { zones = []; }
+      if (!zones.includes(zone)) zones.unshift(zone);
+      let now = '';
+      try { now = new Date().toLocaleTimeString([], { timeZone: zone, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }); } catch { now = ''; }
+      sel.innerHTML = `<option value="">Follow this device${device ? ` (${hubEsc(device.replace(/_/g, ' '))})` : ''}</option>`
+        + zones.map(z => `<option value="${hubEsc(z)}">${hubEsc(z.replace(/_/g, ' '))}</option>`).join('');
+      sel.value = pinned ? zone : '';
+      sel.disabled = tzSaving;
+      hint.textContent = `Your agents use ${zone.replace(/_/g, ' ')}${now ? ` (now ${now})` : ''}${pinned ? ', pinned wherever you are.' : ', following the device you use.'}`;
+      try { dialogGuard.markLoaded(sel); } catch { /* no guard on this page */ }
+    }
+    async function chooseTimeZone(sel) {
+      if (tzSaving) { paintTimeZone(); return; }   // one choice at a time: a second one waits until this is saved
+      const tz = sel.value;
+      tzChoice++;
+      tzSaving = true;
+      sel.disabled = true;
+      const body = tz ? { tz, pinned: true } : { tz: deviceTimeZone() || null, pinned: false };
+      let error = '';
+      try {
+        const r = await fetch('/api/me/timezone', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        window.hubMe.user = { ...window.hubMe.user, ...d.user };
+        window.hubMe.timeZone = d.timeZone;
+      } catch (e) { error = e.message || 'failed'; }
+      tzSaving = false;
+      paintTimeZone();
+      secMsg('prof-tz-msg', error ? `Not saved: ${error}` : 'Saved.', !error);
+    }
     function paintTwoFactor(stage) {
       const box = document.getElementById('sec-2fa');
       const me = window.hubMe;
@@ -313,6 +417,495 @@
       if (!confirm('Sign out on every device, including this browser?')) return;
       try { await authPost('/api/auth/sessions/revoke'); } catch (e) { /* session may already be gone */ }
       location.href = '/login';
+    }
+
+    // ── Backups (Settings → 💾 Backups; lib/backup through /api/backups) ──
+    // One encrypted file holds everything that makes this install its owner's. Restoring takes two steps: open and
+    // check (the backup password or the recovery key), then a warning built from what was checked, the account password
+    // and two-factor code again, and RESTORE typed. The swap happens at a restart; agents then wait for Resume.
+    let bkState = null, bkPoll = null;
+    const BK_KINDS = { schedule: 'scheduled task', delivery: 'scheduled task (waiting to be delivered)', task: 'queued task', consult: 'queued consultation' };
+    function bkWhen(iso) {
+      if (!iso) return 'an unknown time';
+      const d = new Date(iso); if (isNaN(d)) return 'an unknown time';
+      const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+      const diff = Math.round((day(new Date()) - day(d)) / 86400000);
+      if (diff === 0) return `today, ${t}`;
+      if (diff === 1) return `yesterday, ${t}`;
+      if (diff === -1) return `tomorrow, ${t}`;
+      return d.toLocaleString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}), hour: 'numeric', minute: '2-digit' });
+    }
+    // The nightly time (HH:MM in the hub's zone), in this device's clock style; the zone is named when it isn't this device's
+    function bkAt(at, tz) {
+      const m = /^(\d{2}):(\d{2})$/.exec(at || ''); if (!m) return at || '';
+      const t = new Date(Date.UTC(2000, 0, 1, +m[1], +m[2])).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
+      let mine = ''; try { mine = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
+      return tz && tz !== mine ? `${t} (${tz.replace(/_/g, ' ')} time)` : t;
+    }
+    const bkSize = (n) => n == null ? '?' : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
+    const bkPlaceName = (p) => p.kind === 'local' ? 'This computer' : ((bkState && bkState.folders || []).find(f => f.dir === p.dir) || {}).label || p.dir;
+    async function bkApi(url, body, method = 'POST') {
+      const r = await fetch(url, { method, credentials: 'include', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error(d.error || `HTTP ${r.status}`), { code: d.code, status: r.status, body: d });
+      return d;
+    }
+    async function loadBackups() {
+      const el = document.getElementById('bk-body'); if (!el) return;
+      try { bkState = await bkApi('/api/backups', undefined, 'GET'); }
+      catch (e) { el.textContent = 'Could not read the backups: ' + e.message; stSum('backups', 'last', 'Backups: unreadable', true); return; }
+      paintBackups();
+      paintRecoveryBanner(bkState).catch(() => {});
+    }
+    function paintBackups() {
+      const el = document.getElementById('bk-body'); const s = bkState; if (!el || !s) return;
+      if (!s.key.configured) {
+        el.innerHTML = `<div class="bk-strip bk-warn"><span class="bk-strip-text">Backups are off. Choose a backup password to turn them on.</span></div>
+          <div class="st-row"><label>Backup password</label><input type="password" id="bk-pw1" autocomplete="new-password" placeholder="at least 12 characters"></div>
+          <div class="st-row"><label>Again</label><input type="password" id="bk-pw2" autocomplete="new-password"></div>
+          <div class="st-hint">A few random words work well. It isn't stored anywhere: if you forget it, your backups can't be opened.</div>
+          <div class="st-row"><label>Account password</label><input type="password" id="bk-acct" autocomplete="current-password" placeholder="your sign-in password">${window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled ? '<input type="text" id="bk-code" inputmode="numeric" autocomplete="one-time-code" placeholder="two-factor code" style="flex:0 0 130px">' : ''}</div>
+          <div class="st-row"><label></label><button class="st-test-btn bk-primary" onclick="setupBackups(this)">Turn on backups</button><span id="bk-msg" class="bk-msg"></span></div>`;
+        stSum('backups', 'last', 'Backups off');
+        return;
+      }
+      let html = '';
+      const rec = s.recovery;
+      if (rec && !rec.resumedAt) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text"><b>Paused after a restore</b> (the backup of ${esc(bkWhen(rec.restoredFrom))}). Agents and schedules start no new work until you press Resume.</span><button class="st-test-btn bk-primary" onclick="bkResume(this)">Resume</button></div>`;
+      const held = (rec && rec.held) || [];
+      if (held.length) {
+        html += `<div class="bk-sub">Waiting for you: Run or Skip</div><div class="bk-note">These were due or queued when the backup was made, so they may already have happened (an email sent, a payment made). Skip unless you know they didn't.</div>`;
+        html += held.map((h, i) => `<div class="bk-held"><span class="bk-held-what">${h.agent ? `<b>${esc(h.agent)}</b> · ` : ''}${esc(BK_KINDS[h.kind] || h.kind)}${h.label ? `: ${esc(h.label)}` : ''}${h.due ? ` <span class="bk-dim">(due ${esc(bkWhen(h.due))})</span>` : ''}</span><button class="st-test-btn" onclick="bkDecide(${i}, 'skip', this)">Skip</button><button class="st-test-btn" onclick="bkDecide(${i}, 'run', this)">Run</button></div>`).join('');
+      }
+      if (s.prepared) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">A backup you opened (from ${esc(bkWhen(s.prepared.backup && s.prepared.backup.created))}) is checked and ready to restore.</span><button class="st-test-btn" onclick="bkContinuePrepared()">Continue…</button><button class="st-test-btn" onclick="bkForgetPrepared(this)">Forget it</button></div>`;
+      const retiringIds = new Set((s.retiring || []).map(r => r.keyId));
+      const oldCopies = (s.backups || []).reduce((n, b) => n + b.places.filter(p => retiringIds.has(p.keyId)).length, 0);
+      if (retiringIds.size) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">${oldCopies ? `${oldCopies} backup cop${oldCopies === 1 ? 'y still uses' : 'ies still use'} the old backup key.` : 'The old backup key is not retired yet: a backup folder could not be checked.'} Finish replacing it.</span><button class="st-test-btn" onclick="bkFinishDialog()">Finish…</button></div>`;
+      if (s.needsPassword) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">This setup was restored with the recovery key. Choose a new backup password before the next backup.</span><button class="st-test-btn" onclick="bkPasswordDialog('change', true)">Choose a password</button></div>`;
+      const last = s.last || (s.backups || [])[0] || null, run = s.running;
+      const lastText = run ? `Backing up… <span class="bk-dim">(${esc(run.step || 'starting')})</span>`
+        : s.lastError ? `The last backup failed: ${esc(s.lastError.message)}`
+        : last ? `✓ <b>Last backup: ${esc(bkWhen(last.created))}</b> · ${esc(bkSize(last.size))}${last.skipped ? ` · <span class="bk-dim">${esc(String(last.skipped))} file${last.skipped === 1 ? '' : 's'} left out (changing or unreadable)</span>` : ''}` : 'No backup yet.';
+      html += `<div class="bk-strip ${s.lastError && !run ? 'bk-bad' : last || run ? 'bk-ok' : 'bk-warn'}"><span class="bk-strip-text">${lastText}</span><button class="st-test-btn bk-primary" id="bk-now" onclick="backUpNow(this)"${run ? ' disabled' : ''}>Back up now</button></div>`;
+      const sc = s.schedule || {}, ni = s.nightly || {};
+      html += `<div class="bk-sub">When</div>`;
+      const nextText = ni.paused ? 'paused until you press Resume' : ni.waitingSince ? 'waiting for working agents (up to 30 minutes)' : ni.due ? 'next: in a moment' : ni.nextRun ? `next: ${esc(bkWhen(ni.nextRun))}` : '';
+      html += `<div class="bk-place">${sc.enabled ? '<span class="bk-on">✓</span>' : '<span class="bk-off">○</span>'}<span class="bk-held-what">${sc.enabled ? `<b>Every night at ${esc(bkAt(sc.at, ni.tz))}</b>, keeping the last ${esc(String(sc.keepNightly))} nightly backup${sc.keepNightly === 1 ? '' : 's'}${sc.keepWeekly ? ` and one from each of the last ${esc(String(sc.keepWeekly))} week${sc.keepWeekly === 1 ? '' : 's'}` : ''}${nextText ? ` · <span class="bk-dim">${nextText}</span>` : ''}` : '<b>Nightly backups are off.</b> <span class="bk-dim">Backups are made only when you press Back up now.</span>'}</span><button class="st-test-btn" onclick="bkScheduleDialog()">Change…</button></div>`;
+      if (ni.lastError) html += `<div class="bk-strip bk-bad"><span class="bk-strip-text">The nightly backup of ${esc(bkWhen(ni.lastError.at))} failed: ${esc(ni.lastError.message)}</span></div>`;
+      if (ni.keepSkipped) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">Older nightly backups aren't being removed: ${esc(ni.keepSkipped.why)}.</span></div>`;
+      if ((ni.copyErrors || []).length) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">The last nightly backup couldn't be copied to ${ni.copyErrors.map(c => esc(c.dir)).join(', ')}. It is on this computer; the next backup copies again.</span></div>`;
+      html += `<div class="bk-sub">Where</div>`;
+      const local = (s.places || []).find(p => p.kind === 'local');
+      html += `<div class="bk-place"><span class="bk-on">✓</span><b>This computer</b><span class="bk-dim">${esc(local ? local.dir : 'the backups folder')}</span></div>`;
+      (s.folders || []).forEach((f, i) => { html += `<div class="bk-place"><span class="bk-on">✓</span><b>${esc(f.label || 'Folder')}</b><span class="bk-dim">${esc(f.dir)}</span><button class="st-test-btn" onclick="removeBackupFolder(${i}, this)">Remove</button></div>`; });
+      if (s.iCloud && !(s.folders || []).some(f => f.dir === s.iCloud)) html += `<div class="bk-place"><span class="bk-off">○</span><b>iCloud Drive</b><span class="bk-dim">${esc(s.iCloud)}</span><button class="st-test-btn" onclick="addBackupFolder(true, this)">Use it</button></div>`;
+      html += `<div class="bk-place"><span class="bk-off">+</span><b>Another folder</b><input type="text" id="bk-folder" placeholder="full path: a cloud-synced folder, an external disk, a NAS" aria-label="Another backup folder"><button class="st-test-btn" onclick="addBackupFolder(false, this)">Add</button></div>`;
+      html += `<div class="st-hint">To keep copies off this computer, add a folder your cloud app keeps in sync (iCloud Drive, Google Drive, Dropbox or OneDrive): every backup is copied there and the app uploads it. Or download a backup (⬇) and save it anywhere.</div>`;
+      html += `<div class="bk-place">🔒 <span class="bk-held-what">Encrypted with your backup password. If you forget it, your backups can't be opened, unless you keep the spare key (Show recovery key).</span><button class="st-test-btn" onclick="bkPasswordDialog('change')">Change password</button><button class="st-test-btn" onclick="bkShowKeyDialog()">Show recovery key</button><button class="st-test-btn" onclick="bkPasswordDialog('leaked')">It may have leaked…</button></div>`;
+      html += `<div class="bk-sub">Recent backups</div>`;
+      const list = s.backups || [];
+      if (!list.length) html += `<div class="bk-note">None yet.</div>`;
+      else html += `<table class="bk-table"><thead><tr><th>Made</th><th>Kept on</th><th>Size</th><th>Version</th><th></th></tr></thead><tbody>${list.slice(0, 30).map((b, i) => `<tr>
+        <td>${esc(bkWhen(b.created))}${b.reason && b.reason !== 'nightly' ? ` <span class="bk-tag">${b.reason === 'cli' ? 'terminal' : 'by hand'}</span>` : ''}${b.keyId && s.key.keyId && b.keyId !== s.key.keyId ? ' <span class="bk-tag bk-tag-warn">older key</span>' : ''}</td>
+        <td>${esc(b.places.map(bkPlaceName).join(' · '))}</td><td>${esc(bkSize(b.size))}</td><td>${esc([b.version, b.channel].filter(Boolean).join(' '))}</td>
+        <td class="bk-acts"><button class="st-test-btn" onclick="bkRestore(${i})">Restore…</button><button class="st-test-btn" onclick="bkDownload(${i}, this)" title="Download the encrypted file">⬇</button></td></tr>`).join('')}</tbody></table>`;
+      html += `<div class="bk-place"><button class="st-test-btn" onclick="document.getElementById('bk-file').click()">Restore from a file…</button><input type="file" id="bk-file" accept=".age" hidden onchange="restoreFromFile(this)"><span class="bk-dim" id="bk-upload-msg"></span></div>`;
+      const lr = s.lastRestore;
+      if (lr) {
+        const rep = lr.report || {}, acc = rep.accounts || {};
+        const bits = [];
+        if (acc.kept && acc.kept.length) bits.push('today\'s passwords and two-factor sign-ins were kept');
+        if (acc.disabled && acc.disabled.length) bits.push(`accounts only in the backup came back turned off (${acc.disabled.map(esc).join(', ')})`);
+        if (rep.linksDropped && rep.linksDropped.length) bits.push(`${rep.linksDropped.length} links that pointed outside were left out`);
+        html += `<div class="bk-sub">Last restore</div><div class="bk-note">${lr.kind === 'undo' ? 'Undone' : 'Restored'} ${esc(bkWhen(lr.appliedAt || lr.healthyAt))}${lr.backup && lr.backup.created ? `, from the backup of ${esc(bkWhen(lr.backup.created))}` : ''}${bits.length ? `: ${bits.join('; ')}` : ''}.</div>`;
+        if (lr.canUndo) html += `<div class="bk-place"><button class="st-test-btn" onclick="bkUndo(this)">Undo this restore…</button><span class="bk-dim">possible until ${esc(bkWhen(lr.undoUntil))}; anything done since the restore is lost</span></div>`;
+      }
+      el.innerHTML = html;
+      stSum('backups', 'last', run ? 'Backing up…' : s.lastError || ni.lastError ? 'Last backup failed' : last ? `Last backup ${bkWhen(last.created)}` : 'No backup yet', !!((s.lastError || ni.lastError) && !run) || !!(rec && !rec.resumedAt));
+      if (run && !bkPoll) bkPoll = setInterval(() => { if (!document.getElementById('bk-body')) { clearInterval(bkPoll); bkPoll = null; return; } loadBackups(); }, 2000);
+      if (!run && bkPoll) { clearInterval(bkPoll); bkPoll = null; }
+    }
+    // Nightly backups: on or off, the time (in the hub's zone), how many to keep. Keeping fewer lets older nightly
+    // backups go at the next night, so it asks for the account password again (like the other backup settings).
+    function bkScheduleDialog() {
+      const sc = (bkState && bkState.schedule) || {}, tz = bkState && bkState.nightly && bkState.nightly.tz;
+      let mine = ''; try { mine = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
+      const o = bkOverlay('bk-sch-overlay', `<div id="bk-sch-body"><h3>Nightly backups</h3>
+        <label class="bk-check"><input type="checkbox" id="bk-sch-on"${sc.enabled !== false ? ' checked' : ''}> Make a backup every night</label>
+        <label class="bk-label" for="bk-sch-at">At${tz && tz !== mine ? ` (${esc(tz.replace(/_/g, ' '))} time)` : ''}</label><input type="time" id="bk-sch-at" value="${esc(sc.at || '03:30')}" required>
+        <label class="bk-label" for="bk-sch-kn">Keep the newest nightly backups</label><input type="number" id="bk-sch-kn" min="1" max="60" step="1" value="${esc(String(sc.keepNightly || 7))}">
+        <label class="bk-label" for="bk-sch-kw">And one backup from each of the last … weeks</label><input type="number" id="bk-sch-kw" min="0" max="52" step="1" value="${esc(String(sc.keepWeekly ?? 4))}">
+        <p class="bk-p">After each night's backup, older nightly backups are deleted, on this computer and in your backup folders (only the copies My Maestro put there). Backups made with Back up now are never deleted by this. If agents are working at that time, the backup waits up to 30 minutes for them, then goes ahead. A computer that was off or asleep makes the backup when it is next on, the same day.</p>
+        ${bkAccountRow('bk-sch')}
+        <div class="bk-msg" id="bk-sch-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-sch-go">Save</button></div></div>`);
+      o.querySelector('#bk-sch-go').onclick = bkScheduleGo;
+      o.querySelector('#bk-sch-on').focus();
+    }
+    async function bkScheduleGo() {
+      const v = (id) => document.getElementById(id);
+      const msg = v('bk-sch-msg'), go = v('bk-sch-go');
+      const kn = Number(v('bk-sch-kn').value), kw = Number(v('bk-sch-kw').value), at = v('bk-sch-at').value;
+      if (!/^\d{2}:\d{2}$/.test(at)) { msg.textContent = 'Choose a time like 03:30.'; return; }
+      go.disabled = true; msg.textContent = 'Saving…';
+      try {
+        const r = await bkApi('/api/backups/schedule', { schedule: { enabled: v('bk-sch-on').checked, at, keepNightly: kn, keepWeekly: kw }, password: (v('bk-sch-acct') || {}).value || '', code: (v('bk-sch-code') || {}).value || '' });
+        const next = r.nightly && r.nightly.nextRun;
+        v('bk-sch-body').innerHTML = `<h3>✓ Saved</h3><p class="bk-p">${r.schedule.enabled ? `A backup is made every night at ${esc(bkAt(r.schedule.at, r.nightly && r.nightly.tz))}${next ? `; the next one ${esc(bkWhen(next))}` : ''}.` : 'Nightly backups are off. Backups are made only when you press Back up now.'}</p><div class="bk-actions"><button class="st-btn" onclick="dialogRequestClose(this)">Done</button></div>`;
+        loadBackups();
+      } catch (e) { msg.textContent = e.message; go.disabled = false; }
+    }
+    async function setupBackups(btn) {
+      const a = document.getElementById('bk-pw1').value, b = document.getElementById('bk-pw2').value, msg = document.getElementById('bk-msg');
+      if (a !== b) { msg.textContent = 'The two passwords differ.'; return; }
+      btn.disabled = true; msg.textContent = 'Making your backup key…';
+      try {
+        await bkApi('/api/backups/setup', { newBackupPassword: a, password: (document.getElementById('bk-acct') || {}).value || '', code: (document.getElementById('bk-code') || {}).value || '' });
+        loadBackups();
+      } catch (e) { msg.textContent = e.message; btn.disabled = false; }
+    }
+    // The backup password and key (keys.js): change the password (same key), "it may have leaked" (a new key, then our
+    // backups re-encrypted or deleted), see the recovery key again. Each asks for the account password again.
+    const bkProblems = (r) => [...(r.failed || []).map(f => `<div class="bk-info">Not changed: ${esc(f.file)} (${esc(f.error)})</div>`), ...(r.unreachable || []).map(d => `<div class="bk-info">Couldn't reach ${esc(d)}: backups there still use the old lock.</div>`)].join('');
+    const bkAccountRow = (id) => { const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled); return `<label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label><div class="bk-two"><input type="password" id="${id}-acct" autocomplete="current-password" placeholder="account password">${totp ? `<input type="text" id="${id}-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">` : ''}</div>`; };
+    function bkSecretSwitch(o, prefix, labels) {
+      const sw = o.querySelector(`#${prefix}-switch`);
+      sw.onclick = (e) => { e.preventDefault(); const k = o.querySelector(`#${prefix}-keybox`), p = o.querySelector(`#${prefix}-oldbox`); const toKey = k.hidden; k.hidden = !toKey; p.hidden = toKey; sw.textContent = toKey ? labels[1] : labels[0]; (toKey ? k : p).querySelector('input').focus(); };
+    }
+    function bkPasswordDialog(mode, preferRecovery = false) {
+      const leaked = mode === 'leaked';
+      const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>${leaked ? 'My backup password may have leaked' : 'Change the backup password'}</h3>
+        <p class="bk-p">${leaked ? 'This makes a new backup key, with a new password and a new recovery key. Then every backup on this computer and in your backup folders is re-encrypted with the new key, or deleted if you choose. Copies you keep anywhere else still open with the old password and the old recovery key: delete them.' : 'The backup key stays the same, so your recovery key keeps working. Backups on this computer and in your backup folders get the new password. Copies you keep anywhere else still open with the old one, and whoever has the old password and an old copy can unlock the key from it: if the password may have leaked, use “It may have leaked…” instead.'}</p>
+        <div id="bk-pw-oldbox"${preferRecovery ? ' hidden' : ''}><label class="bk-label">Current backup password</label><input type="password" id="bk-pw-old" autocomplete="off"></div>
+        <div id="bk-pw-keybox"${preferRecovery ? '' : ' hidden'}><label class="bk-label">Recovery key</label><input type="text" id="bk-pw-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
+        <a href="#" class="bk-link" id="bk-pw-switch">${preferRecovery ? 'Use the current password instead' : 'Use the recovery key instead'}</a>
+        <label class="bk-label">New backup password</label><input type="password" id="bk-pw-new1" autocomplete="new-password" placeholder="at least 12 characters">
+        <label class="bk-label">Again</label><input type="password" id="bk-pw-new2" autocomplete="new-password">
+        ${bkAccountRow('bk-pw')}
+        <div class="bk-msg" id="bk-pw-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn${leaked ? ' bk-danger' : ''}" id="bk-pw-go">${leaked ? 'Make a new key' : 'Change password'}</button></div></div>`);
+      bkSecretSwitch(o, 'bk-pw', ['Use the recovery key instead', 'Use the current password instead']);
+      o.querySelector('#bk-pw-go').onclick = () => bkPasswordGo(leaked);
+      o.querySelector(preferRecovery ? '#bk-pw-key' : '#bk-pw-old').focus();
+    }
+    async function bkPasswordGo(leaked) {
+      const v = (id) => (document.getElementById(id) || {}).value || '';
+      const msg = document.getElementById('bk-pw-msg'), go = document.getElementById('bk-pw-go');
+      if (v('bk-pw-new1') !== v('bk-pw-new2')) { msg.textContent = 'The two new passwords differ.'; return; }
+      const useKey = !document.getElementById('bk-pw-keybox').hidden;
+      const old = useKey ? { recoveryKey: v('bk-pw-key').trim() } : { backupPassword: v('bk-pw-old') };
+      go.disabled = true; msg.textContent = leaked ? 'Making the new key…' : 'Changing the password and updating your backups…';
+      try {
+        const r = await bkApi(leaked ? '/api/backups/rotate' : '/api/backups/password', { ...old, newBackupPassword: v('bk-pw-new1'), password: v('bk-pw-acct'), code: v('bk-pw-code') });
+        const body = document.getElementById('bk-pw-body');
+        if (!leaked) body.innerHTML = `<h3>✓ Backup password changed</h3><p class="bk-p">${r.rewritten} backup${r.rewritten === 1 ? '' : 's'} now open${r.rewritten === 1 ? 's' : ''} with the new password. Your recovery key is unchanged.</p>${bkProblems(r)}<div class="bk-actions"><button class="st-btn" onclick="dialogRequestClose(this)">Done</button></div>`;
+        else bkRotateKey(r, { old: useKey ? { oldRecoveryKey: old.recoveryKey } : { oldBackupPassword: old.backupPassword }, newBackupPassword: v('bk-pw-new1'), auth: { ticket: r.ticket } });
+      } catch (e) { msg.textContent = e.message; go.disabled = false; }
+      loadBackups();
+    }
+    // Step two of a new key: save the new recovery key, then re-encrypt or delete the backups that use the old key.
+    function bkRotateKey(r, secrets) {
+      const body = document.getElementById('bk-pw-body'); if (!body) return;
+      body.innerHTML = `<h3>✓ The new key is saved</h3><p class="bk-p">New backups use the new key and your new backup password. The backups you already have still use the old key until they are re-encrypted below. Optional: a spare key that opens the new-key backups if you ever forget the password.</p>
+        <div class="bk-key" id="bk-rot-key"></div>
+        ${r.waiting ? `<div class="bk-sub">Then the ${r.waiting} backup${r.waiting === 1 ? '' : 's'} that use${r.waiting === 1 ? 's' : ''} the old key</div>
+        <label class="bk-check"><input type="radio" name="bk-rot-act" value="reencrypt" checked> Re-encrypt with the new key</label>
+        <label class="bk-check"><input type="radio" name="bk-rot-act" value="delete"> Delete them</label>` : ''}
+        <div class="bk-msg" id="bk-rot-msg"></div>
+        <div class="bk-actions"><button class="st-btn" id="bk-rot-go">Continue</button></div>`;
+      body.querySelector('#bk-rot-key').textContent = r.recoveryKey;
+      const go = body.querySelector('#bk-rot-go');
+      go.onclick = () => bkFinishRotation(secrets, body, go, body.querySelector('#bk-rot-msg'));
+    }
+    async function bkFinishRotation(secrets, body, go, msg) {
+      const action = (body.querySelector('input[name="bk-rot-act"]:checked') || {}).value || 'reencrypt';
+      if (action === 'delete' && !confirm('Delete every backup that uses the old key, on this computer and in your backup folders?')) return;
+      go.disabled = true; msg.textContent = action === 'delete' ? 'Deleting…' : 'Re-encrypting… each new copy is checked before the old file goes.';
+      try {
+        const a = secrets.auth || {};
+        const r = await bkApi('/api/backups/rotate/finish', { ...secrets.old, newBackupPassword: secrets.newBackupPassword, action, ...(a.ticket ? { ticket: a.ticket } : { password: a.password, code: a.code }) });
+        body.innerHTML = `<h3>${r.retired.length ? '✓ The old backup key is retired' : 'Not finished yet'}</h3><p class="bk-p">${r.reencrypted ? `${r.reencrypted} re-encrypted. ` : ''}${r.deleted ? `${r.deleted} deleted. ` : ''}${r.retired.length ? 'Copies kept anywhere else still open with the old password and the old recovery key: delete them.' : 'Some backups could not be reached or changed. Finish from Settings → Backups when they are back.'}</p>${bkProblems(r)}
+          <div class="bk-info">If someone may actually have opened a backup, it held everything: also reset account passwords and two-factor (Security), replace provider keys (Settings → AI models), sign in to Claude and ChatGPT again, and reconnect data connectors.</div>
+          <div class="bk-actions"><button class="st-btn" onclick="dialogRequestClose(this)">Done</button></div>`;
+      } catch (e) {
+        if (e.body && e.body.stepUp && secrets.auth && secrets.auth.ticket && !body.querySelector('#bk-rot-acct')) {
+          msg.insertAdjacentHTML('beforebegin', bkAccountRow('bk-rot'));
+          secrets.auth = { get password() { return (body.querySelector('#bk-rot-acct') || {}).value || ''; }, get code() { return (body.querySelector('#bk-rot-code') || {}).value || ''; } };
+          msg.textContent = 'More than 10 minutes have passed: enter your account password again, then Continue.';
+        } else msg.textContent = e.message;
+        go.disabled = false;
+      }
+      loadBackups();
+    }
+    // Finish a new key later (a folder was away, or the page was closed): the old and the new backup secrets again.
+    function bkFinishDialog() {
+      const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>Finish replacing the old backup key</h3>
+        <p class="bk-p">Backups that still use the old key are re-encrypted with the new one, or deleted. This needs the old backup password (or the old recovery key) and the new backup password.</p>
+        <div id="bk-fin-oldbox"><label class="bk-label">Old backup password</label><input type="password" id="bk-fin-old" autocomplete="off"></div>
+        <div id="bk-fin-keybox" hidden><label class="bk-label">Old recovery key</label><input type="text" id="bk-fin-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
+        <a href="#" class="bk-link" id="bk-fin-switch">Use the old recovery key instead</a>
+        <label class="bk-label">New backup password</label><input type="password" id="bk-fin-new" autocomplete="off">
+        <label class="bk-check"><input type="radio" name="bk-rot-act" value="reencrypt" checked> Re-encrypt with the new key</label>
+        <label class="bk-check"><input type="radio" name="bk-rot-act" value="delete"> Delete them</label>
+        ${bkAccountRow('bk-fin')}
+        <div class="bk-msg" id="bk-fin-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-fin-go">Continue</button></div></div>`);
+      bkSecretSwitch(o, 'bk-fin', ['Use the old recovery key instead', 'Use the old password instead']);
+      o.querySelector('#bk-fin-go').onclick = () => {
+        const useKey = !o.querySelector('#bk-fin-keybox').hidden;
+        bkFinishRotation({ old: useKey ? { oldRecoveryKey: o.querySelector('#bk-fin-key').value.trim() } : { oldBackupPassword: o.querySelector('#bk-fin-old').value }, newBackupPassword: o.querySelector('#bk-fin-new').value, auth: { password: (o.querySelector('#bk-fin-acct') || {}).value || '', code: (o.querySelector('#bk-fin-code') || {}).value || '' } },
+          o.querySelector('#bk-pw-body'), o.querySelector('#bk-fin-go'), o.querySelector('#bk-fin-msg'));
+      };
+      o.querySelector('#bk-fin-old').focus();
+    }
+    // See the recovery key again (lost the printout, or the page closed before it was saved): the backup password opens it.
+    function bkShowKeyDialog() {
+      const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>Show the recovery key</h3>
+        <p class="bk-p">The recovery key is not stored as such: the backup password unlocks it. Anyone who sees it can open every backup.</p>
+        <label class="bk-label">Backup password</label><input type="password" id="bk-sk-pw" autocomplete="off">
+        ${bkAccountRow('bk-sk')}
+        <div class="bk-msg" id="bk-sk-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-sk-go">Show it</button></div></div>`);
+      o.querySelector('#bk-sk-go').onclick = async () => {
+        const v = (id) => (document.getElementById(id) || {}).value || '', msg = o.querySelector('#bk-sk-msg'), go = o.querySelector('#bk-sk-go');
+        go.disabled = true; msg.textContent = 'Unlocking…';
+        try {
+          const r = await bkApi('/api/backups/recovery-key', { backupPassword: v('bk-sk-pw'), password: v('bk-sk-acct'), code: v('bk-sk-code') });
+          const body = o.querySelector('#bk-pw-body');
+          body.innerHTML = `<h3>🔑 Your recovery key</h3><div class="bk-key" id="bk-sk-key"></div><p class="bk-p">Keep it away from this computer: a printout or a password manager.</p><div class="bk-actions"><button class="st-btn" onclick="dialogRequestClose(this)">Done</button></div>`;
+          body.querySelector('#bk-sk-key').textContent = r.recoveryKey;
+        } catch (e) { msg.textContent = e.message; go.disabled = false; }
+      };
+      o.querySelector('#bk-sk-pw').focus();
+    }
+    // An overlay of our own above Settings. data-dialog-persistent: Escape and clicks beside it don't close it.
+    function bkOverlay(id, inner, cls = '') {
+      document.getElementById(id)?.remove();
+      const o = document.createElement('div');
+      o.className = 'question-overlay'; o.id = id; o.dataset.dialogPersistent = '1';
+      o.innerHTML = `<div class="question-modal bk-modal ${cls}" role="dialog" aria-modal="true">${inner}</div>`;
+      document.body.appendChild(o);
+      return o;
+    }
+    async function backUpNow(btn, now = false) {
+      btn.disabled = true;
+      const poll = setInterval(loadBackups, 2000);
+      setTimeout(loadBackups, 300);
+      try {
+        const r = await bkApi('/api/backups/run', { now });
+        clearInterval(poll);
+        if (r.waiting) {
+          btn.disabled = false;
+          if (confirm(`Agents are working right now: ${r.working.join(', ')}.\n\nA backup made now may catch their files halfway (the backup names them). Back up anyway?`)) return backUpNow(btn, true);
+          return;
+        }
+      } catch (e) { clearInterval(poll); alert('The backup did not finish: ' + e.message); }
+      loadBackups();
+    }
+    async function addBackupFolder(iCloud, btn) {
+      const dir = iCloud ? bkState.iCloud : document.getElementById('bk-folder').value.trim();
+      if (!dir) return;
+      const who = await bkStepUp('Add a backup folder', `Every backup will also be copied to ${dir}. Anyone who can read that folder gets the encrypted files. Confirm it is you.`);
+      if (!who) return;
+      btn.disabled = true;
+      try { await bkApi('/api/backups/folders', { folders: [...(bkState.folders || []), { dir, label: iCloud ? 'iCloud Drive' : undefined }], ...(iCloud ? { create: true } : {}), ...who }); loadBackups(); }
+      catch (e) { alert(e.message); btn.disabled = false; }
+    }
+    async function removeBackupFolder(i, btn) {
+      const f = bkState.folders[i];
+      const who = await bkStepUp('Stop using a backup folder', `Backups will no longer be copied to ${f.dir}. The backups already there stay where they are.`);
+      if (!who) return;
+      btn.disabled = true;
+      try { await bkApi('/api/backups/folders', { folders: bkState.folders.filter((_, j) => j !== i), ...who }); loadBackups(); }
+      catch (e) { alert(e.message); btn.disabled = false; }
+    }
+    async function bkResume(btn) {
+      if (btn) btn.disabled = true;
+      try { await bkApi('/api/backups/recovery/resume', {}); } catch (e) { alert(e.message); }
+      if (document.getElementById('bk-body')) loadBackups(); else paintRecoveryBanner().catch(() => {});
+    }
+    async function bkDecide(i, action, btn) {
+      const h = bkState.recovery.held[i];
+      if (action === 'run' && !confirm(`Run this now?\n\n${h.agent ? h.agent + ': ' : ''}${h.label || BK_KINDS[h.kind] || h.kind}\n\nIt may already have happened before the backup was restored.`)) return;
+      btn.disabled = true;
+      try { await bkApi('/api/backups/recovery/decide', { id: h.id, action }); } catch (e) { alert(e.message); }
+      loadBackups();
+    }
+    // Step-up: the account password and two-factor code, asked again before anything that replaces or exports everything.
+    function bkStepUp(title, why) {
+      return new Promise((resolve) => {
+        const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled);
+        const o = bkOverlay('bk-stepup-overlay', `<h3>${esc(title)}</h3><p class="bk-p">${esc(why)}</p>
+          <label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label>
+          <div class="bk-two"><input type="password" id="bk-su-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
+          <div class="bk-actions"><button class="st-btn secondary" id="bk-su-cancel">Cancel</button><button class="st-btn" id="bk-su-ok">Continue</button></div>`);
+        const done = (v) => { o.remove(); resolve(v); };
+        o.querySelector('#bk-su-cancel').onclick = () => done(null);
+        o.querySelector('#bk-su-ok').onclick = () => done({ password: o.querySelector('#bk-su-pw').value, code: (o.querySelector('#bk-su-code') || {}).value || '' });
+        o.querySelector('#bk-su-pw').focus();
+      });
+    }
+    async function bkDownload(i, btn) {
+      const b = bkState.backups[i];
+      const who = await bkStepUp('Download a backup', 'The file is encrypted, but it holds everything in this My Maestro. Confirm it is you.');
+      if (!who) return;
+      try {
+        const r = await bkApi('/api/backups/download-link', { name: b.name, ...who });
+        const a = document.createElement('a'); a.href = r.url; a.download = b.name; document.body.appendChild(a); a.click(); a.remove();
+      } catch (e) { alert(e.message); }
+    }
+    async function bkUndo(btn) {
+      const who = await bkStepUp('Undo the restore', 'This puts back the setup from before the restore and restarts My Maestro. Anything done since the restore is lost.');
+      if (!who) return;
+      const before = await bkBootId();
+      try { await bkApi('/api/backups/undo', who); } catch (e) { alert(e.message); return; }
+      bkRestarting('Putting the previous setup back…', before);
+    }
+    function bkRestore(i) { const b = bkState.backups[i]; openRestoreDialog({ name: b.name, created: b.created, version: b.version, keyOld: !!(b.keyId && bkState.key.keyId && b.keyId !== bkState.key.keyId) }); }
+    async function restoreFromFile(input) {
+      const f = input.files && input.files[0]; input.value = '';
+      if (!f) return;
+      const msg = document.getElementById('bk-upload-msg');
+      msg.textContent = `Uploading ${f.name} (${bkSize(f.size)})…`;
+      try {
+        const d = await bkUpload('/api/backups/upload', f, {}, (done) => { msg.textContent = `Uploading ${f.name}: ${Math.floor(done * 100 / Math.max(1, f.size))}%…`; });
+        msg.textContent = '';
+        openRestoreDialog({ uploadId: d.uploadId, fileName: f.name, created: d.labels && d.labels.created, version: d.labels && d.labels.version });
+      } catch (e) { msg.textContent = 'Not uploaded: ' + e.message; }
+    }
+    // A file sent in pieces of 8 MiB, so no single request runs long; the last piece has the header checked.
+    async function bkUpload(url, file, headers, progress) {
+      const PIECE = 8 * 1024 * 1024;
+      let id = null, offset = 0, d = null;
+      do {
+        const end = Math.min(file.size, offset + PIECE), last = end >= file.size;
+        const q = new URLSearchParams({ offset: String(offset), done: last ? '1' : '0', ...(id ? { id } : {}) });
+        const r = await fetch(`${url}?${q}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/octet-stream', ...headers }, body: file.slice(offset, end) });
+        d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        id = d.uploadId; offset = end;
+        if (progress) progress(offset);
+      } while (offset < file.size);
+      return d;
+    }
+    async function bkForgetPrepared(btn) { btn.disabled = true; try { await bkApi('/api/backups/restore/cancel', {}); } catch (e) { alert(e.message); } loadBackups(); }
+    function bkContinuePrepared() { const p = bkState.prepared; if (p) { openRestoreDialog({ created: p.backup && p.backup.created }); bkRestoreWarning(p); } }
+    // Step one: the backup's password (or the recovery key), then the hub opens and checks every file.
+    function openRestoreDialog(src) {
+      const o = bkOverlay('bk-restore-overlay', `<div id="bk-r-body"><h3>Restore a backup</h3>
+        <p class="bk-p">Backup: <b>${esc(src.fileName || src.name || 'the file you chose')}</b>${src.created ? ` · made ${esc(bkWhen(src.created))}` : ''}${src.version ? ` · My Maestro AI ${esc(src.version)}` : ''}</p>
+        ${src.keyOld ? '<p class="bk-note">This backup was made with an older backup key: use the password or recovery key from that time.</p>' : ''}
+        <p class="bk-p">First it is opened and every file checked. Nothing changes until you confirm on the next screen.</p>
+        <div id="bk-r-pwbox"><label class="bk-label">The backup password</label><input type="password" id="bk-r-pw" autocomplete="off"></div>
+        <div id="bk-r-keybox" hidden><label class="bk-label">The recovery key</label><input type="text" id="bk-r-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
+        <a href="#" class="bk-link" id="bk-r-switch" onclick="bkSwitchSecret(); return false">Use the recovery key instead</a>
+        <div class="bk-msg" id="bk-r-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-r-open">Open and check</button></div></div>`, 'bk-restore');
+      o.querySelector('#bk-r-open').onclick = () => bkPrepare(src);
+      o.querySelector('#bk-r-pw').focus();
+    }
+    function bkSwitchSecret() {
+      const key = document.getElementById('bk-r-keybox'), pw = document.getElementById('bk-r-pwbox'), sw = document.getElementById('bk-r-switch');
+      const toKey = key.hidden; key.hidden = !toKey; pw.hidden = toKey;
+      sw.textContent = toKey ? 'Use the backup password instead' : 'Use the recovery key instead';
+    }
+    async function bkPrepare(src) {
+      const useKey = !document.getElementById('bk-r-keybox').hidden;
+      const secret = (document.getElementById(useKey ? 'bk-r-key' : 'bk-r-pw').value || '');
+      const msg = document.getElementById('bk-r-msg'), btn = document.getElementById('bk-r-open');
+      if (!secret.trim()) { msg.textContent = useKey ? 'Paste the recovery key.' : 'Type the backup password.'; return; }
+      btn.disabled = true; msg.textContent = 'Opening and checking every file… a large backup takes a few minutes.';
+      try {
+        const r = await bkApi('/api/backups/restore/prepare', { name: src.name, uploadId: src.uploadId, ...(useKey ? { recoveryKey: secret.trim() } : { backupPassword: secret }) });
+        bkRestoreWarning(r);
+      } catch (e) { msg.textContent = e.message; btn.disabled = false; }
+    }
+    // Step two: the warning, from the facts the check produced (lib/backup/restore.js prepare).
+    function bkRestoreWarning(r) {
+      const body = document.getElementById('bk-r-body'); if (!body) return;
+      const b = r.backup || {}, s = r.summary, rep = r.report || {};
+      const counts = b.counts || {};
+      const lost = [];
+      if (s) {
+        if (s.messages) lost.push(`${s.messages} chat message${s.messages === 1 ? '' : 's'}${s.chatAgents.length ? ` with ${s.chatAgents.map(esc).join(', ')}` : ''}`);
+        if (s.agentsAdded.length) lost.push(`${s.agentsAdded.length === 1 ? '1 agent' : `${s.agentsAdded.length} agents`} made since then: ${s.agentsAdded.map(esc).join(', ')}`);
+        if (s.newerFiles) lost.push(`changes to ${s.newerFiles}${s.newerFilesCapped ? '+' : ''} file${s.newerFiles === 1 ? '' : 's'} in workspaces and Files folders`);
+        if (s.jobs) lost.push(`${s.jobs} background job record${s.jobs === 1 ? '' : 's'}`);
+      }
+      const notes = [];
+      const working = r.workingNow || [];
+      notes.push(`${working.length ? `Working now: <b>${working.map(esc).join(', ')}</b>. Restoring stops ${working.length === 1 ? 'it' : 'them'}. ` : ''}After the restart, agents wait for you to press <b>Resume</b>, and anything that was due waits for Run or Skip, so nothing already done is done twice.`);
+      if (s && s.agentsBack && s.agentsBack.length) notes.push(`Agents you deleted since then come back: ${s.agentsBack.map(esc).join(', ')}.`);
+      if (rep.accounts && rep.accounts.kept && rep.accounts.kept.length) notes.push('Accounts keep today\'s passwords, two-factor and sign-ins, and API tokens you revoked stay revoked. Provider keys, connected accounts and other settings go back to the backup\'s.' + (rep.accounts.disabled && rep.accounts.disabled.length ? ` Accounts only in the backup come back turned off: ${rep.accounts.disabled.map(esc).join(', ')}.` : ''));
+      if (r.mode !== 'fresh' && rep.keyStatus === 'replaced') notes.push('<b>This backup was made with a backup key this install has replaced</b> (perhaps because its password leaked). Restore it only if you made it yourself.');
+      if (r.mode !== 'fresh' && rep.keyStatus === 'other') notes.push('<b>This backup was made with a different backup key</b> than this install\'s (another computer, or a setup from before). Restore it only if you made it yourself.');
+      if (rep.linksDropped && rep.linksDropped.length) notes.push(`${rep.linksDropped.length} link${rep.linksDropped.length === 1 ? '' : 's'} in the backup pointed outside My Maestro and ${rep.linksDropped.length === 1 ? 'is' : 'are'} left out.`);
+      if (b.working && b.working.length) notes.push(`When the backup was made, ${b.working.map(esc).join(', ')} ${b.working.length === 1 ? 'was' : 'were'} working: their last steps may be missing.`);
+      if (rep.skipped && rep.skipped.length) notes.push(`${rep.skipped.length} file${rep.skipped.length === 1 ? ' was' : 's were'} left out of this backup when it was made (changing, unreadable, or leading outside its folder): ${rep.skipped.slice(0, 3).map(x => esc(x.path)).join(', ')}${rep.skipped.length > 3 ? '…' : ''}.`);
+      notes.push('Your current setup is kept, so you can <b>undo this restore for 7 days</b> (anything done after the restore is lost if you undo).');
+      const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled);
+      body.innerHTML = `<h3 class="bk-danger-title">⚠ Replace everything with the backup from ${esc(bkWhen(b.created))}?</h3>
+        <div class="bk-strip bk-ok"><span class="bk-strip-text">✓ Opened and checked: all ${esc(String(counts.files ?? '?'))} files match · My Maestro AI ${esc(b.version || '?')}${counts.agents != null ? ` · ${esc(String(counts.agents))} agent${counts.agents === 1 ? '' : 's'}` : ''}</span></div>
+        <p class="bk-p">This replaces My Maestro AI on this computer with that backup: <b>agents and their memories, chats, files, settings and keys</b>.</p>
+        ${lost.length ? `<div class="bk-lost-title">Lost if you continue (everything since ${esc(bkWhen(b.created))}):</div><ul class="bk-lost">${lost.map(x => `<li>${x}</li>`).join('')}</ul>` : ''}
+        ${notes.map(n => `<div class="bk-info">${n}</div>`).join('')}
+        <label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label>
+        <div class="bk-two"><input type="password" id="bk-c-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-c-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
+        <label class="bk-label">Type RESTORE to confirm</label><input type="text" id="bk-c-word" autocomplete="off" spellcheck="false">
+        <div class="bk-msg" id="bk-c-msg"></div>
+        <div class="bk-actions"><button class="st-btn secondary" onclick="bkCancelRestore(this)">Cancel</button><button class="st-btn bk-danger" id="bk-c-go" disabled>Restore and restart</button></div>`;
+      const word = body.querySelector('#bk-c-word'), go = body.querySelector('#bk-c-go');
+      word.addEventListener('input', () => { go.disabled = word.value.trim() !== 'RESTORE'; });
+      go.onclick = () => bkConfirmRestore(r.id);
+      body.querySelector('#bk-c-pw').focus();
+    }
+    async function bkCancelRestore(btn) {
+      btn.disabled = true;
+      try { await bkApi('/api/backups/restore/cancel', {}); } catch { /* it is forgotten at the next one anyway */ }
+      dialogRequestClose(btn);
+      if (document.getElementById('bk-body')) loadBackups();
+    }
+    async function bkConfirmRestore(id) {
+      const msg = document.getElementById('bk-c-msg'), go = document.getElementById('bk-c-go');
+      go.disabled = true; msg.textContent = 'Confirming…';
+      const before = await bkBootId();
+      try {
+        await bkApi('/api/backups/restore/confirm', { id, confirm: document.getElementById('bk-c-word').value.trim(), password: document.getElementById('bk-c-pw').value, code: (document.getElementById('bk-c-code') || {}).value || '' });
+      } catch (e) { msg.textContent = e.message; go.disabled = false; return; }
+      bkRestarting('Restoring the backup… My Maestro restarts and comes back in a minute or two.', before);
+    }
+    async function bkBootId() { try { return (await (await fetch('/api/health', { credentials: 'include' })).json()).bootId || null; } catch { return null; } }
+    // The swap happens while My Maestro starts again: wait for a new process (a new boot id), then reload.
+    function bkRestarting(text, before) {
+      document.querySelectorAll('.question-overlay, .st-overlay').forEach(n => n.remove());
+      const o = bkOverlay('bk-restarting-overlay', `<h3>${esc(text)}</h3><p class="bk-p" id="bk-rs-msg">Waiting for My Maestro to start again…</p>`);
+      let n = 0;
+      const tick = async () => {
+        n++;
+        try {
+          const r = await fetch('/api/health', { credentials: 'include', cache: 'no-store' });
+          if (r.status === 401) { location.href = '/login'; return; }   // a new process that doesn't know this sign-in
+          const h = await r.json();
+          if (h && h.bootId && h.bootId !== before) { location.reload(); return; }
+        } catch { /* going down or not up yet */ }
+        if (n > 150) { const m = o.querySelector('#bk-rs-msg'); if (m) m.textContent = 'It has not come back after five minutes. From a terminal: mymaestro status, then mymaestro logs.'; return; }
+        setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 3000);
+    }
+    // While a restored setup waits for Resume, every admin page says so at the top.
+    async function paintRecoveryBanner(state) {
+      const me = window.hubMe;
+      let bar = document.getElementById('hub-recovery-notice');
+      if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
+      let rec = state ? state.recovery : undefined;
+      if (rec === undefined) { try { rec = (await bkApi('/api/backups/recovery', undefined, 'GET')).recovery; } catch { return; } }
+      if (!rec || rec.resumedAt) { if (bar) { bar.remove(); layoutBanners(); } return; }
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-recovery-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:#6b4a0e;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
+      const held = (rec.held || []).length;
+      bar.innerHTML = `Restored from the backup of ${esc(bkWhen(rec.restoredFrom))}. Agents are paused until you press Resume${held ? `; ${held} item${held === 1 ? '' : 's'} wait${held === 1 ? 's' : ''} for Run or Skip` : ''}. <a href="#" onclick="openSettingsAt('st-backups-section'); return false" style="color:#fff;text-decoration:underline">Open Backups</a> <button onclick="bkResume(this)" style="margin-left:8px;padding:2px 10px;border-radius:4px;border:1px solid #fff;background:transparent;color:#fff;cursor:pointer">Resume</button>`;
+      layoutBanners();
     }
 
     // ── Restart Hub Button ──
@@ -1485,6 +2078,7 @@
     // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
     const ST_GROUPS = [
       { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-updates-section'] },
+      { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
@@ -1563,6 +2157,7 @@
       const keys = PROVIDERS.filter(p => p.hasKey && pv[p.id] && pv[p.id].hasKey).length;   // server URLs always have a default, so they say nothing
       stSum('status', 'setup', 'Setup: checking…');
       stSum('status', 'security', 'Security: checking…');
+      stSum('backups', 'last', 'Backups: checking…');
       stSum('models', 'prov', keys ? `${keys} provider key${keys === 1 ? '' : 's'}` : 'no provider keys');
       for (const k of ['or', 'plan', 'local']) stSum('models', k, '');
       const sbd = (data && data.sandboxDefaults) || {};
@@ -1654,6 +2249,12 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="checkUpdatesNow(this)">Check now</button></div>
       </div>`;
       setTimeout(loadUpdateCheck, 0);
+      // Backups (lib/backup): one encrypted file with everything; restore with a warning first (app.js loadBackups).
+      html += `<div class="st-section" id="st-backups-section"><h4>Backups</h4>
+        <div class="st-hint" style="margin-left:0">Everything that makes this My Maestro yours, in one encrypted file: agents and their memories, chats, Files folders, settings, keys and AI sign-ins. Restoring it brings the whole setup back, here or on another computer. From a terminal: <code>mymaestro backup</code>, <code>mymaestro restore</code>.</div>
+        <div id="bk-body" class="bk-body">Checking…</div>
+      </div>`;
+      setTimeout(loadBackups, 0);
       // Modules (lib/modules): optional capabilities with guided setup live on their own page.
       html += `<div class="st-section" id="st-modules-section"><h4>Modules</h4>
         <div class="st-hint">Optional capabilities for agents (crypto exchanges, wallets, mail, search...), each with a step-by-step setup, encrypted keys and per-agent access. <a href="/modules" style="color:var(--accent)">Open the Modules page →</a></div>
@@ -1690,6 +2291,12 @@
           <div class="st-hint">Default: ${esc(pdata.defaultUrl || '')}</div>`;
         }
       }
+      html += `<div class="st-row"><label>ChatGPT subscription</label>
+          <span class="st-hint" id="st-chatgpt-state" style="margin:0;flex:1">Checking…</span>
+          <button class="st-test-btn" id="st-chatgpt-check">Check</button>
+        </div>
+        <div class="st-hint">Uses your paid ChatGPT plan through OpenAI's Codex. To connect it, run <code>mymaestro connect chatgpt</code> in a terminal on this computer, then press Check.</div>`;
+      setTimeout(loadChatGPTRow, 0);
       html += `</div>`;
 
       // OpenRouter (lib/openrouter): which of its models the pickers offer, and the privacy switch.
@@ -2013,15 +2620,17 @@
       layoutBanners();
     }
     // The notices fixed at the top stack in this order, whichever painted first: no AI provider yet, the setup
-    // checklist, security. Each one sits below the ones above it, so none covers another (or its X).
+    // checklist, security. Each one sits below the ones above it, so none covers another (or its X), and the page moves
+    // down by their height (--banner-h), so they never cover the header and its Settings button.
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
+      for (const id of ['hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
         top += n.offsetHeight || 0;
       }
+      document.documentElement.style.setProperty('--banner-h', `${top}px`);
     }
     // A notice's height can change after it is drawn (the web font arrives, the window narrows and its text wraps).
     window.addEventListener('resize', () => layoutBanners());
@@ -3277,6 +3886,26 @@
       }
     }
 
+    // A ChatGPT subscription runs through the Codex client: no key here, only where its sign-in stands (lib/welcome).
+    async function loadChatGPTRow() {
+      const state = document.getElementById('st-chatgpt-state'), btn = document.getElementById('st-chatgpt-check');
+      if (!state || !btn) return;
+      btn.onclick = async () => {
+        btn.disabled = true; state.textContent = 'Asking ChatGPT a one-word question…';
+        try {
+          const r = await fetch('/api/welcome/chatgpt-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: '{}' });
+          const d = await r.json();
+          state.textContent = d.ok ? `Connected: ${d.models.length} models` : (d.error || `HTTP ${r.status}`);
+        } catch { state.textContent = 'Could not reach My Maestro AI.'; }
+        btn.disabled = false;
+      };
+      try {
+        const r = await fetch('/api/welcome/chatgpt-status', { credentials: 'include' });
+        const d = await r.json();
+        state.textContent = d.signedIn ? 'Connected' : d.installed ? 'Codex is here but not signed in to ChatGPT' : 'Not connected';
+      } catch { state.textContent = 'Could not read its status.'; }
+    }
+
     async function testProvider(provider) {
       const btn = event.target;
       btn.textContent = '...';
@@ -4092,16 +4721,133 @@
       }
     }
     
+    // A notification tapped while this tab is open (sw.js): the worker offers the target, brings the tab forward and
+    // says go. Listening starts here, before the first await of the page's start-up, so a tap while the page loads is
+    // kept (also across a reload or the sign-in page) and runs once the agent list is in. Shared verbatim with
+    // lib/ui-open-target.js (test/ui-open-target.test.js).
+    // ── open-target helpers (begin) ──
+    const OPEN_TARGET_MAIN = /^\/(index\.html)?$/;
+    const OPEN_TARGET_KEY = 'hub-open-targets';
+    function parseOpenTarget(data, origin) {
+      if (!data || data.type !== 'open-target' || typeof data.url !== 'string') return null;
+      let u;
+      try { u = new URL(data.url, origin); } catch { return null; }
+      if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
+      const q = u.searchParams;
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1' };
+    }
+    function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
+      return {
+        load() {
+          try { const v = JSON.parse(storage.getItem(OPEN_TARGET_KEY) || 'null'); return v && Array.isArray(v.targets) && now() - v.at < ttlMs ? v.targets : []; } catch { return []; }
+        },
+        save(list) { try { storage.setItem(OPEN_TARGET_KEY, JSON.stringify({ at: now(), targets: list })); } catch { /* storage full or off */ } },
+        clear() { try { storage.removeItem(OPEN_TARGET_KEY); } catch { /* off */ } },
+      };
+    }
+    function createOpenTargets({ origin, run, store = null, keepMs = 10000 }) {
+      // One queue for this tab, kept in `store` until each target has run: a go before ready() waits there, and a reload
+      // (or the sign-in page) in between, or while an earlier target is still running, doesn't lose it. Entries carry an id
+      // and a page adds or removes only its own in what the store holds now, so an older copy of the page (one the browser
+      // kept for Back) can't overwrite a newer one's. A target still running when the page reloads runs again after it,
+      // so targets must stay safe to run twice (each one opens something).
+      const waiting = store ? store.load().filter(e => e && e.id && e.t) : [];
+      let isReady = false;
+      let chain = Promise.resolve();
+      const add = (e) => { if (store) { const cur = store.load(); if (!cur.some(x => x && x.id === e.id)) cur.push(e); store.save(cur); } };
+      const drop = (e) => { if (store) { const cur = store.load().filter(x => x && x.id !== e.id); if (cur.length) store.save(cur); else store.clear(); } };
+      const runInTurn = (t, entry) => {
+        chain = chain.then(() => run(t)).catch(() => { /* one failed target must not stop the next */ }).then(() => {
+          if (!entry) return;
+          const i = waiting.indexOf(entry);
+          if (i >= 0) waiting.splice(i, 1);
+          drop(entry);
+        });
+        return chain;
+      };
+      let seq = 0;
+      const take = (t) => {
+        const e = { id: `${Date.now().toString(36)}-${(++seq).toString(36)}-${Math.random().toString(36).slice(2, 8)}`, t };
+        waiting.push(e); add(e);
+        if (isReady) runInTurn(t, e);
+      };
+      return {
+        onMessage(e) {
+          const d = e && e.data;
+          if (!d || d.type !== 'open-target') return;
+          const port = e.ports && e.ports[0];
+          if (!port) return;
+          const t = parseOpenTarget(d, origin);
+          if (!t) { try { port.postMessage({ ok: false }); } catch { /* the worker stopped waiting */ } return; }
+          let live = true;
+          const end = () => { live = false; port.onmessage = null; try { port.close(); } catch { /* closed */ } };
+          const timer = setTimeout(end, keepMs);   // an offer the worker gave to another tab, or gave up on
+          port.onmessage = (m) => {
+            if (!live || !m || !m.data || m.data.go !== true) return;
+            clearTimeout(timer); end();
+            take(t);
+          };
+          try { port.postMessage({ ok: true }); } catch { clearTimeout(timer); end(); }
+        },
+        ready(own) {
+          if (isReady) return chain;
+          isReady = true;
+          if (own) runInTurn(own, null);
+          for (const e of waiting.slice()) runInTurn(e.t, e);
+          return chain;
+        },
+      };
+    }
+    // ── open-target helpers (end) ──
+    const openTargets = createOpenTargets({ origin: location.origin, run: (t) => runPageTarget(t), store: createTargetStore(sessionStorage) });
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', (e) => openTargets.onMessage(e));
+      navigator.serviceWorker.startMessages();
+    }
+    // What the page's address or a tapped notification asks for: an agent's chat, the backups settings, the update
+    // card, the security dialog.
+    async function runPageTarget(t) {
+      if (!t) return;
+      if (t.security) openSecurityDialog();
+      if (t.backups) openSettingsAt('st-backups-section');
+      if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
+      if (!t.agent) return;
+      let a = AGENTS.find(x => x.name === t.agent);
+      if (!a) a = await showOwnerViewOf(t.agent);
+      if (a) startSoloChat(a.name, a.model);
+    }
+    // An agent the sidebar's owner view leaves out (an admin looking at another person's agents): switch the view to
+    // its owner, as the owner menu would, so its chat opens like any other.
+    async function showOwnerViewOf(name) {
+      const me = window.hubMe;
+      if (!me || !me.isAdmin) return null;
+      let a = null;
+      try { const r = await fetch('/api/agents', { credentials: 'include' }); if (r.ok) a = ((await r.json()).agents || []).find(x => x.name === name) || null; } catch { return null; }
+      if (!a) return null;
+      localStorage.setItem(OWNER_VIEW_KEY, !a.owner || a.owner === me.user.id ? 'mine' : a.owner);
+      renderOwnerSwitcher();
+      await loadAgents();
+      return AGENTS.find(x => x.name === name) || null;
+    }
+
     document.addEventListener('DOMContentLoaded', async () => {
       await loadMe();
       applyMemberView();
       renderOwnerSwitcher();
       renderUserChip();
       document.addEventListener('click', (e) => { if (!e.target.closest('#user-chip-wrap')) toggleAccountMenu(false); });
-      if (new URLSearchParams(location.search).get('security') === '1') openSecurityDialog();
       await Promise.all([loadAgents()]);
-      // "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup interview this way).
-      { const want = new URLSearchParams(location.search).get('agent'); const a = want && AGENTS.find(x => x.name === want); if (a) startSoloChat(a.name, a.model); }
+      // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
+      // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
+      // (a backup warning), ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
+      // while the page was loading.
+      const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
+      if (own && (own.update || own.backups || own.security)) {   // one-shot actions: a reload must not repeat them
+        const u = new URL(location.href);
+        for (const k of ['update', 'backups', 'security']) u.searchParams.delete(k);
+        history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+      }
+      openTargets.ready(own);
       setupTabs();
       setupConfigListeners();
       startHubHealthMonitor();
@@ -5093,7 +5839,8 @@
           if (history.length > 0) {
             // Add a visual separator so user knows this is restored history
             appendSystemNotice(chatId, `📜 Restored ${history.length} messages from previous session`);
-            for (const msg of history) {
+            const times = msgTimeLines(history);   // the date and time under each message
+            for (const [i, msg] of history.entries()) {
               // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place,
               // with its tool calls, once the chat follows it (reattachIfIdle), so it is not shown twice.
               if (msg.inProgress) { chats[chatId].inProgress = { text: msg.content || '', ts: msg.ts || null }; continue; }
@@ -5102,6 +5849,7 @@
               const hid = appendMessage(chatId, msg.role, msg.content);
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
+              setMessageTime(document.getElementById(hid), times[i]);
             }
             // Scroll to bottom after loading history
             const panel = document.getElementById(`messages-${chatId}`);
@@ -5488,11 +6236,11 @@
       const last = chat.messages[chat.messages.length - 1];
       if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {   // history may already hold the notice
         chat.messages.push({ role: 'user', content: ev.message });
-        appendMessage(chat.id, 'user', ev.message);
+        setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
       }
       appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
       const msgId = appendMessage(chat.id, 'assistant', '…');
-      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '' };
+      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt) };
       setStatus(chat.id, 'thinking', hubOriginLabel(ev.origin));
       if (!opened) markTabUnread(chat.id);
       if (Array.isArray(ev.activity)) {   // a replayed turn_start carries what the turn has done so far
@@ -5842,6 +6590,7 @@
       const el = document.getElementById(t.msgId);
       clearLiveActivity(t.msgId);
       if (el) { t.text = reply; paintTurn(t.chatId, t, reply, false); }
+      setMessageTime(document.getElementById(t.msgId), msgTimeLine(Date.parse(ev.endedAt) || Date.now(), t.startedAt));
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
       for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
       const last = chat.messages[chat.messages.length - 1];
@@ -6858,6 +7607,7 @@
       const existingIdx = chat.messages.findIndex(m => m.role === 'assistant' && m.partial);
       if (existingIdx >= 0) chat.messages.splice(existingIdx, 1);
       if (ok) chat.messages.push({ role: 'assistant', content: text });
+      if (ok) setMessageTime(document.getElementById(ra.msgId), msgTimeLine(Date.now(), ra.sentAt || Date.parse(ra.since)));
       setStatus(chatId, ok ? 'idle' : 'error', ok ? null : 'Reply lost');
       setAgentStatus(chat.agent, '');
       delete chat.lastMsgId;
@@ -6899,6 +7649,32 @@
 
     // Reload the tail of the agent's history and finish the bubble once a reply newer than our
     // own user entry is there.  Otherwise keep waiting while the agent is busy.
+    // Shared verbatim with lib/ui-turn-reply.js and mobile.js (test/ui-turn-reply.test.js keeps the three in step).
+    // ── turn-reply helpers (begin) ──
+    function turnReplyFrom(history, start, minTs) {
+      let reply = null, content = '';
+      for (let i = Math.max(0, start); i < history.length; i++) {
+        const m = history[i];
+        if (!m) continue;
+        if (m.role === 'user' && !m.ask) break;                                  // the next turn
+        if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
+        if (minTs && m.ts && Date.parse(m.ts) < minTs) continue;
+        if (!reply) { reply = m; content = m.content; continue; }                 // the reply's first piece
+        if (m.base > 0 && m.base === content.length) { reply = m; content += m.content; continue; }   // the next piece
+        break;                                                                    // another reply: not this turn's
+      }
+      return reply ? { ...reply, content } : null;
+    }
+    function turnReplySince(history, sinceTs) {
+      for (let i = history.length - 1; i >= 0; i--) {
+        const m = history[i];
+        if (!m || (m.role === 'user' && !m.ask) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
+        if (m.role === 'assistant' && !m.ask && typeof m.content === 'string' && !(m.base > 0)) return turnReplyFrom(history, i, sinceTs);
+      }
+      return null;
+    }
+    // ── turn-reply helpers (end) ──
+
     async function reattachCheck(chatId) {
       const chat = chats[chatId];
       const ra = chat?.reattach;
@@ -6910,17 +7686,12 @@
         const history = (await r.json()).history || [];
         const ui = ra.content ? ownEntryIndex(history, ra.content, ra.sentAt || ra.startedAt, r.headers.get('Date')) : -1;
         const userTs = ui >= 0 ? Date.parse(history[ui].ts) : NaN;
-        let reply = ui >= 0
-          ? history.slice(ui + 1).find(m => m.role === 'assistant' && (isNaN(userTs) || !m.ts || Date.parse(m.ts) >= userTs))
-          : null;
+        // The whole reply: in pieces when the agent asked a question meanwhile (lib/ui-turn-reply.js).
+        let reply = ui >= 0 ? turnReplyFrom(history, ui + 1, userTs) : null;
         if (!reply && ui < 0 && ra.since) {
-          // No user entry to anchor on (the turn began before this page loaded): take the newest
-          // assistant entry written since the hub says the turn started.
-          const sinceTs = Date.parse(ra.since) - 2000;
-          for (let i = history.length - 1; i >= 0; i--) {
-            const m = history[i];
-            if (m.role === 'assistant' && m.ts && Date.parse(m.ts) >= sinceTs) { reply = m; break; }
-          }
+          // No user entry to anchor on (the turn began before this page loaded): the newest reply
+          // written since the hub says the turn started.
+          reply = turnReplySince(history, Date.parse(ra.since) - 2000);
         }
         if (!chats[chatId]?.reattach) return;
 
@@ -6992,7 +7763,7 @@
       input.style.height = 'auto';
 
       // Show the interjection in the chat as a user message with a distinct style
-      appendMessage(chatId, 'user', `⚡ [Interjection] ${content}`);
+      setMessageTime(document.getElementById(appendMessage(chatId, 'user', `⚡ [Interjection] ${content}`)), msgTimeLabel(Date.now()));
 
       // Show a transient "sent" notice that will be updated when the agent picks it up
       const noticeEl = appendSystemNotice(chatId, '⚡ Interjection sent - waiting for agent to pick it up...');
@@ -7024,6 +7795,7 @@
 
     // Solo chat - multi-provider LLM routing (with retry logic)
     async function sendSoloMessage(chatId, retryCount = 0) {
+      if (!retryCount) tzSentAt = Date.now();   // the person's own send: its request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
       const content = input.value.trim();
@@ -7067,6 +7839,8 @@
         chat.messages.push({ role: 'user', content, images: pendingImages.length > 0 ? [...pendingImages] : undefined });
         appendMessageWithImages(chatId, 'user', content, pendingImages);
         userMsgEl = document.getElementById(`messages-${chatId}`)?.lastElementChild || null;
+        chat.sentAtMs = Date.now();   // the reply's "how long it took" counts from here
+        setMessageTime(userMsgEl, msgTimeLabel(chat.sentAtMs));
       }
 
       // Clear pending images
@@ -7099,7 +7873,7 @@
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controller.signal,
           body: JSON.stringify({
             agent: chat.agent,
@@ -7138,6 +7912,7 @@
         }
 
         const { text: fullResponse, images: responseImages, toolActivity, partial, steps: responseSteps } = await streamResponseSolo(response, msgId, chatId, chat.agent);
+        if (!partial) setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), chat.sentAtMs));
 
         // Success! Save response and clean up
         if (responseImages.length > 0) {
@@ -7217,6 +7992,7 @@
     
     // Group chat - free flowing
     async function sendGroupMessage(chatId) {
+      tzSentAt = Date.now();   // the person's own send: the first speaker's request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
       const content = input.value.trim();
@@ -7253,6 +8029,7 @@
         input.style.height = 'auto';
         chat.messages.push({ role: 'user', content, images: pendingImages.length > 0 ? [...pendingImages] : undefined });
         appendMessageWithImages(chatId, 'user', content, pendingImages);
+        setMessageTime(document.getElementById(`messages-${chatId}`)?.lastElementChild, msgTimeLabel(Date.now()));
         clearPendingImages(chatId);
       }
       
@@ -7461,6 +8238,7 @@
       
       const synthPrompt = buildSynthesisPrompt(chat);
       const msgId = appendSynthesisMessage(chatId, '⏳ Synthesizing...', chat.currentRound);
+      const askedAt = Date.now();   // the reply's "how long it took" counts from here
       
       chat.controllers[chat.summarizer.name] = new AbortController();
       
@@ -7468,12 +8246,12 @@
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controllers[chat.summarizer.name].signal,
           body: JSON.stringify({ agent: chat.summarizer.name, message: synthPrompt, sessionId: 'new' })
         });
 
-        const fullResponse = await streamResponse(response, msgId, true, chat.currentRound, chatId, chat.summarizer.name);
+        const fullResponse = await streamResponse(response, msgId, true, chat.currentRound, chatId, chat.summarizer.name, askedAt);
 
         chat.syntheses.push({ round: chat.currentRound, content: fullResponse });
         chat.messages.push({ role: 'assistant', agent: chat.summarizer.name, content: fullResponse, type: 'synthesis', round: chat.currentRound });
@@ -7548,17 +8326,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       console.log(`[${agent.name}] Sending to gateway: ${prompt.substring(0, 150)}...`);
       
       const msgId = appendGroupMessage(chatId, 'assistant', '⏳ Thinking...', agent.name, colorIndex);
+      const askedAt = Date.now();   // the reply's "how long it took" counts from here
       
       try {
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controllers[agent.name].signal,
           body: JSON.stringify({ agent: agent.name, message: prompt, sessionId: 'new' })
         });
 
-        const fullResponse = await streamResponseGroup(response, msgId, agent.name, colorIndex, chatId);
+        const fullResponse = await streamResponseGroup(response, msgId, agent.name, colorIndex, chatId, askedAt);
 
         console.log(`[${agent.name}] Got ${fullResponse.length} chars`);
         chat.messages.push({ role: 'assistant', content: fullResponse, agent: agent.name });
@@ -7638,9 +8417,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // from a turn catch-up, so request ids are remembered and the overlay is kept to close it when answered elsewhere.
     const shownQuestions = new Set();
     const questionOverlays = {};
+    // Each question's "❓" lines in the chat: they leave a few seconds after it is answered or closed, so a
+    // long reply with questions does not pile them up under itself.
+    const questionNotices = new Map();
+    function retireQuestionNotices(requestId) {
+      for (const n of questionNotices.get(requestId) || []) retireSoon(n);
+      questionNotices.delete(requestId);
+    }
     function closeQuestion(requestId) {
       const o = questionOverlays[requestId];
       if (o) { o.remove(); delete questionOverlays[requestId]; }
+      retireQuestionNotices(requestId);
     }
     function showQuestionModal(data, chatId) {
       return new Promise((resolve) => {
@@ -7649,7 +8436,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (shownQuestions.has(request_id)) return resolve();
         shownQuestions.add(request_id);
         const esc = escapeHtmlSafe;
-        if (chatId) for (const q of questions) appendSystemNotice(chatId, '❓ ' + q.question);
+        if (chatId) questionNotices.set(request_id, questions.map(q => appendSystemNotice(chatId, '❓ ' + q.question)).filter(Boolean));
 
         const overlay = document.createElement('div');
         overlay.className = 'question-overlay';
@@ -7690,7 +8477,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ request_id, answers })
-          }).catch(err => console.error('Failed to submit question answer:', err));
+          }).then(r => { if (r.ok) retireQuestionNotices(request_id); })   // the hub has the answer: its line can go
+            .catch(err => console.error('Failed to submit question answer:', err));
           overlay.remove();
           delete questionOverlays[request_id];
           resolve();
@@ -7737,8 +8525,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       });
     }
 
+    // A question asked during a reply: show the card, but keep reading the reply. The hub holds the
+    // stream open while the agent waits, with a heartbeat every 15 s, so the stall checks below stay
+    // quiet and the rest of the reply arrives after the answer. Awaiting the card here stopped the
+    // reading: after 90 s the stall check cut the reply off, and the rest only showed after a reload.
+    function askFromStream(data, chatId) {
+      showQuestionModal(data, chatId).catch(() => {});
+    }
+
     // Streaming helpers
-    async function streamResponse(response, msgId, isSynthesis = false, round = null, chatId = null, agentName = null) {
+    async function streamResponse(response, msgId, isSynthesis = false, round = null, chatId = null, agentName = null, startedMs = Date.now()) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullResponse = '';
@@ -7765,7 +8561,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             if (oc) {
               console.log('[FRONTEND-SSE] gateway event:', oc.type, oc);
               if (oc.type === 'ask_user_question') {
-                await showQuestionModal(oc, chatId);
+                askFromStream(oc, chatId);
                 continue;
               }
               if (oc.type === 'auto_model') {
@@ -7889,7 +8685,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             }
             // Legacy direct-type events (backwards compat)
             if (parsed.type === 'ask_user_question') {
-              await showQuestionModal(parsed, chatId);
+              askFromStream(parsed, chatId);
               continue;
             }
             const delta = parsed.choices?.[0]?.delta?.content;
@@ -7918,6 +8714,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Clear thinking panel when done
       if (chatId) updateThinkingPanel(chatId, '', agentName, false);
       finalizeTokenUsage(msgId);
+      setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), startedMs));
 
       return fullResponse;
     }
@@ -7940,6 +8737,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // is likely dead (server aborted, network broke, browser was suspended).
       // The server sends heartbeats every 15s, so 90s = 6 missed heartbeats.
       // When triggered, throws a retryable error so sendSoloMessage auto-retries.
+      // Heartbeats keep coming while a question card waits for an answer (askFromStream).
       const CLIENT_STALL_MS = 90000;
       let lastDataTime = Date.now();
       let stallTriggered = false;
@@ -7968,6 +8766,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const { done, value } = readResult;
         if (done) {
           if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
+          // The stall check cancels the reader, and a cancelled reader reports "done": that reply was
+          // cut off, not finished. Same retryable error as above, so sendSoloMessage re-attaches.
+          if (stallTriggered) throw new Error('stall detected - stream died');
           break;
         }
         lastDataTime = Date.now(); // reset watchdog on any data
@@ -7997,7 +8798,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
             // Handle AskUserQuestion from Claude SDK
             if (parsed.type === 'ask_user_question') {
-              await showQuestionModal(parsed, chatId);
+              askFromStream(parsed, chatId);
               continue;
             }
 
@@ -8006,7 +8807,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             if (oc2) {
               console.log('[FRONTEND-SSE-SOLO] gateway event:', oc2.type, JSON.stringify(oc2).slice(0, 200));
               if (oc2.type === 'ask_user_question') {
-                await showQuestionModal(oc2, chatId);
+                askFromStream(oc2, chatId);
                 continue;
               }
               // Session ID tracking
@@ -8228,7 +9029,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return { text: fullResponse, images, toolActivity, partial, steps };
     }
 
-    async function streamResponseGroup(response, msgId, agentName, colorIndex, chatId) {
+    async function streamResponseGroup(response, msgId, agentName, colorIndex, chatId, startedMs = Date.now()) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullResponse = '';
@@ -8286,14 +9087,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             const parsed = JSON.parse(data);
             if (parsed.type === 'meta') continue;
             if (parsed.type === 'ask_user_question') {
-              await showQuestionModal(parsed, chatId);
+              askFromStream(parsed, chatId);
               continue;
             }
             // Gateway events: tool activity wrapped in valid OpenAI format
             const oc3 = parsed.gateway || null;
             if (oc3) {
               if (oc3.type === 'ask_user_question') {
-                await showQuestionModal(oc3, chatId);
+                askFromStream(oc3, chatId);
                 continue;
               }
               // Eyes expression events
@@ -8379,10 +9180,20 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
       }
       
+      // The stall check ended the read: a group chat has no re-attach, so say the reply may be cut off
+      // rather than pass it on as complete.
+      if (stallTriggered) {
+        const note = '\n\n⚠ The connection went quiet for 90 seconds, so this reply may be cut off.';
+        fullResponse += note;
+        displayContent += note;
+        updateGroupMessage(msgId, displayContent, agentName, colorIndex);
+      }
+
       // Clear thinking panel and live activity when done
       updateThinkingPanel(chatId, '', agentName, false);
       clearLiveActivity(msgId);
       finalizeTokenUsage(msgId);
+      setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), startedMs));
 
       console.log(`[${agentName}] Stream complete, response length: ${fullResponse.length}`);
       console.log(`[${agentName}] Raw response:`, fullResponse.substring(0, 200));
@@ -8399,9 +9210,65 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
     }
     
+    // The date and time under each message: when it was sent, when a reply was finished and how long it took.
+    // Shared verbatim with lib/ui-msg-time.js and mobile.js (test/ui-msg-time.test.js keeps the three in step).
+    // ── message-time helpers (begin) ──
+    const msgTimeFormats = new Map();   // one formatter per language, zone and year style: one per message was slow
+    function msgTimeZone() {
+      try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; }
+    }
+    function msgTimeLabel(t, now = Date.now(), locale = [], zone = msgTimeZone()) {
+      const ms = typeof t === 'number' ? t : Date.parse(t);
+      if (!Number.isFinite(ms)) return '';
+      const d = new Date(ms);
+      const fmt = (key, make) => { let f = msgTimeFormats.get(key); if (!f) { f = make(); msgTimeFormats.set(key, f); } return f; };
+      try {
+        const yf = fmt(`year|${zone}`, () => new Intl.DateTimeFormat('en-US', { year: 'numeric', ...(zone ? { timeZone: zone } : {}) }));
+        const year = yf.format(d) !== yf.format(new Date(now));   // judged in the same zone the time is shown in
+        return fmt(`${locale}|${zone}|${year}`, () => new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(year ? { year: 'numeric' } : {}), ...(zone ? { timeZone: zone } : {}) })).format(d);
+      } catch { return d.toLocaleString(); }   // an unknown language or zone
+    }
+    function msgTookLabel(ms) {
+      if (!Number.isFinite(ms) || ms < 0) return '';
+      const s = Math.round(ms / 1000);
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+      return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+    }
+    function msgTimeLine(end, start, now = Date.now(), locale = [], zone = msgTimeZone()) {
+      const when = msgTimeLabel(end, now, locale, zone);
+      const e = typeof end === 'number' ? end : Date.parse(end);
+      const s = typeof start === 'number' ? start : Date.parse(start);
+      const took = when && Number.isFinite(s) ? msgTookLabel(e - s) : '';
+      return took ? `${when} · ${took}` : when;
+    }
+    function msgTimeLines(history, now = Date.now(), locale = [], zone = msgTimeZone()) {
+      const lines = [];
+      let start = NaN, last = -1, joined = 0;   // the turn's message time; its reply's newest piece, and the length so far
+      for (let i = 0; i < history.length; i++) {
+        const m = history[i] || {};
+        const t = m.inProgress ? NaN : Date.parse(m.ts);   // the running turn's reply so far: not finished, no line
+        lines.push(Number.isFinite(t) ? msgTimeLabel(t, now, locale, zone) : '');
+        if (m.role === 'user' && !m.ask) { start = t; last = -1; continue; }   // the next turn
+        if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
+        if (last >= 0 && m.base > 0 && m.base === joined) {
+          lines[last] = msgTimeLabel(Date.parse(history[last].ts), now, locale, zone);   // an earlier piece: its time only
+        } else if (last >= 0 || m.base > 0) {
+          start = NaN; last = -1;   // not this turn's reply
+          continue;
+        } else joined = 0;
+        last = i; joined += m.content.length;
+        if (Number.isFinite(t)) lines[i] = msgTimeLine(t, start, now, locale, zone);
+      }
+      return lines;
+    }
+    // ── message-time helpers (end) ──
+
     // Message rendering
     // Copy button on every message bubble: copies the original text/markdown, not the rendered HTML.
     const rawMessageText = new WeakMap();
+    const messageTime = new WeakMap();   // the line under a message (setMessageTime)
     function decorateMessage(el, content) {
       if (!el) return;
       if (typeof content === 'string') rawMessageText.set(el, content);
@@ -8410,6 +9277,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         b.className = 'msg-copy'; b.type = 'button'; b.title = 'Copy message'; b.textContent = '⧉';
         el.appendChild(b);
       }
+      paintMessageTime(el);
+    }
+    // The line under a message (msgTimeLabel / msgTimeLine), in the gap below it. Kept per element, so a repaint of
+    // the message (streaming, tool steps) puts it back with the copy button; '' removes it.
+    function setMessageTime(el, text) {
+      if (!el) return;
+      if (text) messageTime.set(el, text); else messageTime.delete(el);
+      paintMessageTime(el);
+    }
+    function paintMessageTime(el) {
+      let line = el.querySelector(':scope > .msg-time');
+      const text = messageTime.get(el);
+      if (!text) { if (line) line.remove(); return; }
+      if (!line) { line = document.createElement('div'); line.className = 'msg-time'; el.appendChild(line); }
+      line.textContent = text;
     }
     async function copyMessageText(el) {
       const text = rawMessageText.get(el) ?? el.innerText;
@@ -8546,6 +9428,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         footer.innerHTML = '<span style="font-weight:600">CONTEXT EXHAUSTED</span>';
       }
     }
+
+    // Shared verbatim with lib/ui-retire.js and mobile.js (test/ui-retire.test.js keeps the three in step).
+    // ── retire helpers (begin) ──
+    const RETIRE_AFTER_MS = 4000;
+    const RETIRE_FOLD_MS = 600;
+    function retireSoon(el, ms = RETIRE_AFTER_MS) {
+      if (!el || !el.dataset || el.dataset.retiring) return false;
+      el.dataset.retiring = '1';
+      setTimeout(() => {
+        if (!el.isConnected) { delete el.dataset.retiring; return; }   // gone meanwhile: if it comes back, it can be retired again
+        el.style.maxHeight = el.offsetHeight + 'px';   // fold from its own height, not from "none"
+        void el.offsetHeight;
+        el.classList.add('retiring');
+        setTimeout(() => el.remove(), RETIRE_FOLD_MS);
+      }, ms);
+      return true;
+    }
+    // ── retire helpers (end) ──
 
     function appendSystemNotice(chatId, text, variant) {
       const container = document.getElementById(`messages-${chatId}`);
@@ -10126,11 +11026,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // Update the working notice
         const label = chat.agentLabel || 'Agent';
         const doneIcon = chat.isTigerTeam ? '🐯 ✅' : '✅';
+        // It leaves a few seconds later: finished workers piled up under a long reply (a failed or stopped one stays)
         if (run.noticeEl) {
           run.noticeEl.textContent = `${doneIcon} ${label} is Complete`;
           run.noticeEl.className = 'system-notice notice-complete';
+          retireSoon(run.noticeEl);
         } else {
-          appendSystemNotice(chatId, `${doneIcon} ${label} is Complete`, 'complete');
+          retireSoon(appendSystemNotice(chatId, `${doneIcon} ${label} is Complete`, 'complete'));
         }
         return true;
       }
@@ -11309,7 +12211,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
           .replace(/\*([^*]+)\*/g, '<em>$1</em>')
           .replace(/`([^`]+)`/g, '<code>$1</code>');
-        let tableHtml = '<table><thead><tr>';
+        let tableHtml = '<div class="table-scroll"><table><thead><tr>';   // scrolls inside the message when wider (index.html)
         header.forEach(h => tableHtml += `<th>${fmtCell(h)}</th>`);
         tableHtml += '</tr></thead><tbody>';
         rows.forEach(row => {
@@ -11317,7 +12219,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           row.forEach(cell => tableHtml += `<td>${fmtCell(cell)}</td>`);
           tableHtml += '</tr>';
         });
-        tableHtml += '</tbody></table>';
+        tableHtml += '</tbody></table></div>';
         tableTokens.push(tableHtml);
         return p1 + mk('T', idx);
       });
@@ -11571,6 +12473,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     
     async function sendOrchTask(chatId, initialTask = null) {
+      tzSentAt = Date.now();   // the person's own send: the first request carries this device's zone (zoneHeader)
       console.log('sendOrchTask called with chatId:', chatId, 'initialTask:', initialTask);
       const chat = chats[chatId];
       if (!chat) {
@@ -11836,7 +12739,7 @@ Report what you found, did, or discovered.`;
 
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           credentials: 'include',
           body: JSON.stringify(fetchBody)
         });
