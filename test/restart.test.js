@@ -333,14 +333,27 @@ test('round 5: a server something inside its unit supervises (pm2, forever) is r
 });
 
 test('round 5: through a wrapper, the Restart button asks systemd to restart the unit (a start script may swallow exit 75)', () => {
-  const calls = []; let exited = false;
-  const exec = (cmd, args) => { calls.push([cmd, ...args]); return ''; };
-  const r = R.requestRestart({ projectDir: '/nowhere', platform: 'linux', pid: 70, env: {}, folder: none, execImpl: exec, setTimeoutImpl: () => { exited = true; return { unref() {} }; }, log: () => {},
-    fsImpl: fs, spawnImpl: () => { throw new Error('no relaunch'); } , ...{} });
-  assert.ok(r.mode === 'relaunch' || r.mode === 'refused' || r.mode === 'systemd');   // supervisor() decides from this machine; the wrapper path is pinned below
-  const src = read('lib/restart.js');
-  assert.match(src, /if \(sup\.kind === 'systemd' && sup\.via === 'wrapper'\) \{[^]*'restart', '--no-block', sup\.unit\]/);
-  assert.ok(exited || calls.length >= 0);
+  const cg = userCg('mymaestroai.service');
+  const procs = { ...userManager, 70: { ppid: 60, comm: 'node', argv: ['node', 'server.js'], cgroup: cg }, 60: { ppid: 5, comm: 'bash', argv: ['/bin/bash', '-lc', 'node server.js'] } };
+  const run = (restartFails) => {
+    const calls = []; let signalled = false;
+    const exec = (cmd, args) => {
+      calls.push([cmd, ...args].join(' '));
+      if (args.includes('restart')) { if (restartFails) throw new Error('refused'); return ''; }
+      if (args.includes('cat')) return ownUnit();
+      return args[0] === '--user' ? 'MainPID=60\n' : 'MainPID=0\n';
+    };
+    const r = R.requestRestart({ projectDir: HUB, platform: 'linux', pid: 70, env: {}, folder: none, fsImpl: procFs(procs), execImpl: exec,
+      setTimeoutImpl: (fn) => { fn(); return { unref() {} }; }, killImpl: () => { signalled = true; }, log: () => {} });
+    return { r, calls, signalled };
+  };
+  const ok = run(false);
+  assert.strictEqual(ok.r.mode, 'systemd');
+  assert.ok(ok.calls.includes('systemctl --user restart --no-block mymaestroai.service'), ok.calls.join('\n'));
+  assert.strictEqual(ok.signalled, false, 'systemd restarts the unit; the hub doesn\'t exit 75 itself');
+  const fallback = run(true);
+  assert.strictEqual(fallback.r.mode, 'systemd');
+  assert.strictEqual(fallback.signalled, true, 'systemctl refused: exit 75 instead');
 });
 
 test('round 6: a direct unit whose ExecStartPost can\'t be read is refused; a harmless one is fine; "server.js" alone is not a hub', () => {
