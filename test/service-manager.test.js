@@ -9,6 +9,7 @@ const os = require('os');
 const path = require('path');
 const { createServiceManager, renderSystemdUnit, renderLaunchdPlist, startEnv } = require('../lib/service-manager');
 
+const AGENT = "process.title = 'claude'; require('child_process').spawn('bash', ['-c', process.argv[1]], { stdio: 'ignore' }).on('exit', () => process.exit(0)); setInterval(() => {}, 1e6);";
 function sandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'svcmgr-'));
   const home = path.join(root, 'home'), dir = path.join(root, 'app');
@@ -234,8 +235,8 @@ test('restart.sh run through a symlinked install folder restarts that hub instea
   // a stand-in hub: answers on the .env port, from its own folder
   fs.writeFileSync(path.join(real, 'server.js'), "const p=require('fs').readFileSync(__dirname+'/.env','utf8').match(/PORT=(\\d+)/)[1]; require('http').createServer((q,r)=>r.end('ok')).listen(+p,'127.0.0.1');\n");
   fs.symlinkSync(real, link);
-  // started by hand through a shell, as a person or an agent does (its parent is that shell)
-  const first = require('child_process').spawn('bash', ['-c', `'${process.execPath}' server.js; exit $?`], { cwd: real, detached: true, stdio: 'ignore' }); first.unref();
+  // started by hand through an agent's shell (Claude runs the shell), as on a real hub
+  const first = require('child_process').spawn(process.execPath, ['-e', AGENT, `'${process.execPath}' server.js; exit $?`], { cwd: real, detached: true, stdio: 'ignore' }); first.unref();
   const pids = [first.pid];
   t.after(() => { try { process.kill(-first.pid, 'SIGKILL'); } catch {} });
   t.after(() => { for (const p of pids) { try { process.kill(p, 'SIGKILL'); } catch {} } });
@@ -308,11 +309,11 @@ test('restart.sh inside a systemd unit restarts the unit only when the server is
   const killAll = async () => { for (const p of pids.splice(0)) { try { process.kill(p, 'SIGKILL'); } catch {} } await new Promise(res => setTimeout(res, 300)); };
   t.after(killAll);
   const up = async () => { for (let i = 0; i < 50; i++) { try { execFileSync('curl', ['-s', '-m', '1', `http://127.0.0.1:${port}/`]); return; } catch { await new Promise(r => setTimeout(r, 100)); } } };
-  // a hub started by hand inside this unit, through a shell (as a person or an agent does), in this test's cgroup;
-  // direct: node itself is this test's child (the unit's own process, or a server some supervisor runs)
+  // a hub started by hand inside this unit through an agent's shell (Claude runs the shell), in this test's cgroup;
+  // direct: node itself is this test's child (the unit's own process, or a server this test process supervises)
   const startStandIn = async (direct = false) => {
     const c = direct ? require('child_process').spawn(process.execPath, ['server.js'], { cwd: hub, detached: true, stdio: 'ignore' })
-      : require('child_process').spawn('bash', ['-c', `'${process.execPath}' server.js; exit $?`], { cwd: hub, detached: true, stdio: 'ignore' });
+      : require('child_process').spawn(process.execPath, ['-e', AGENT, `'${process.execPath}' server.js; exit $?`], { cwd: hub, detached: true, stdio: 'ignore' });
     c.unref(); pids.push(c.pid); await up();
     const l = execFileSync('bash', ['-c', `ss -tlnpH 'sport = :${port}' | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2`], { encoding: 'utf8' }).trim();
     if (l) pids.push(Number(l));
@@ -365,7 +366,9 @@ test('restart.sh inside a systemd unit restarts the unit only when the server is
 test('whose hub a service runs: the script node is given, through shells, env, npm start; quoted paths, continuations, %h', () => {
   const { serviceOwnership } = require('../lib/service-manager');
   const A = '/srv/hub-a'; const B = '/srv/hub-b';
-  const own = (txt, d = A) => serviceOwnership(txt, d, { real: (p) => p, home: '/home/u' });
+  // npm start reads the folder's package.json "start" (here: node server.js)
+  const pkg = (f) => { if (/^\/srv\/hub-[ab]\/package\.json$/.test(f)) return '{"scripts":{"start":"node server.js"}}'; throw new Error('ENOENT'); };
+  const own = (txt, d = A) => serviceOwnership(txt, d, { real: (p) => p, home: '/home/u', readScript: pkg });
   assert.strictEqual(own(`[Service]\nWorkingDirectory=${A}\nExecStart=/bin/sh -c 'echo server.js; exec node ${B}/main.js'\n`), 'other', 'a server.js node never runs does not count');
   assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'node ${A}/server.js & node ${B}/server.js & wait'\n`), 'other', 'two hubs under one wrapper');
   assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'cd ${A} && node server.js & cd ${B} && node server.js & wait'\n`), 'other', 'the same, through cd');
@@ -436,7 +439,8 @@ test('restart.sh stops only this folder\'s node server.js: not another program i
 test('whose hub a service runs, conservatively: anything it can\'t read makes it "can\'t tell", never "ours"', () => {
   const { serviceOwnership, readStartScript } = require('../lib/service-manager');
   const A = '/srv/hub-a'; const B = '/srv/hub-b';
-  const own = (txt, d = A, extra = {}) => serviceOwnership(txt, d, { real: (p) => p, home: '/home/u', ...extra });
+  const pkg = (f) => { if (/^\/srv\/hub-[ab]\/package\.json$/.test(f)) return '{"scripts":{"start":"node server.js"}}'; return readStartScript(f); };
+  const own = (txt, d = A, extra = {}) => serviceOwnership(txt, d, { real: (p) => p, home: '/home/u', readScript: pkg, ...extra });
   assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'node -e "require(\\"${B}/server.js\\")" & node ${A}/server.js'\n`), 'unknown', 'node -e hides what it runs');
   assert.strictEqual(own(`[Service]\nWorkingDirectory=${A}\nExecStart=/bin/sh -c 'cd ../hub-b && exec node server.js'\n`), 'other', 'a relative cd from a known folder is followed');
   assert.strictEqual(own(`[Service]\nExecStart=/bin/sh -c 'cd "$HUB" && exec node server.js'\n`), 'unknown', 'a cd to a variable is lost');
@@ -458,7 +462,7 @@ test('whose hub a service runs, conservatively: anything it can\'t read makes it
   assert.strictEqual(own(`[Service]\nExecStart=${dir}/start.sh\n`, dir, read), 'ours', 'a start script that runs this folder\'s server.js');
   assert.strictEqual(own(`[Service]\nExecStart=${dir}/two.sh\n`, dir, read), 'other', 'a start script that runs two hubs');
   assert.strictEqual(own(`[Service]\nExecStart=${dir}/tool.py\n`, dir, read), 'unknown', 'not a shell script');
-  assert.strictEqual(own(`[Service]\nExecStart=${dir}/start.sh\n`, dir), 'unknown', 'not read without a reader');
+  assert.strictEqual(own(`[Service]\nExecStart=${dir}/start.sh\n`, dir, { readScript: null }), 'unknown', 'not read without a reader');
   assert.strictEqual(own(`[Service]\nExecStart=/bin/bash ${dir}/start.sh\n`, dir, read), 'ours', 'bash start.sh');
 });
 
@@ -496,4 +500,35 @@ test('restart.sh on a Mac (no /proc): only `node [options] <this folder\'s serve
   assert.strictEqual(check(`node -e "/* ${hub}/server.js */" ${hub}/server.js`), 'no', 'node -e');
   assert.strictEqual(check(`python3 ${hub}/server.js`), 'no', 'not node');
   assert.strictEqual(check('node server.js', other), 'no', 'relative, from another folder');
+});
+
+test('round 5: redirections, every eval form, sourced files, npm start\'s own script, ExecStartPost, @, cd --', () => {
+  const { serviceOwnership, readStartScript } = require('../lib/service-manager');
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'svc-r5-')));
+  const B = '/srv/hub-b';
+  const own = (txt) => serviceOwnership(txt, dir, { real: (p) => p, home: '/home/u', readScript: (f) => readStartScript(f) });
+  fs.writeFileSync(path.join(dir, 'start.sh'), '#!/bin/bash\ncd -- "$(dirname "$0")"\nexec node server.js >> server.log 2>&1\n');
+  assert.strictEqual(own(`[Service]\nExecStart=${dir}/start.sh\n`), 'ours', '>> file 2>&1 and cd -- are understood');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'node ${dir}/server.js &> /tmp/hub.log'\n`), 'ours');
+  for (const ev of ['--eval=require("/srv/hub-b/server.js")', '-e', '--print=1', '-p']) {
+    assert.strictEqual(own(`[Service]\nExecStart=/bin/sh -c 'node ${ev} ${ev === '-e' || ev === '-p' ? '"require(1)" ' : ''}${dir}/server.js'\n`), 'unknown', ev);
+  }
+  assert.strictEqual(own(`[Service]\nExecStart=/usr/bin/node --unhandled-rejections strict ${dir}/server.js\n`), 'unknown', 'an option value taken for the script is not "another hub"');
+  // a sourced file is read; nvm.sh and profiles are a shell's own setup
+  fs.writeFileSync(path.join(dir, 'start-b.sh'), `node ${B}/server.js &\n`);
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'source ${dir}/start-b.sh; node ${dir}/server.js & wait'\n`), 'other', 'a sourced file that starts another hub');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -lc 'source ~/.nvm/nvm.sh && . ~/.profile && exec node ${dir}/server.js'\n`), 'ours');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'source /srv/missing.sh; exec node ${dir}/server.js'\n`), 'unknown', 'a sourced file that can\'t be read');
+  // npm start runs package.json's start script; with none, node server.js
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { start: `node server.js & node ${B}/server.js` } }));
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${dir}\nExecStart=/usr/bin/npm start\n`), 'other', 'a start script that runs two hubs');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { start: 'node server.js' } }));
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${dir}\nExecStart=/usr/bin/npm start\n`), 'ours');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x' }));
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${dir}\nExecStart=/usr/bin/npm start\n`), 'ours', 'no start script: npm runs node server.js');
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${dir}\nExecStart=/usr/bin/npm start --workspace web\n`), 'unknown', 'a workspace is a name, not a folder');
+  // what stays running: ExecStartPost too; @ makes the second word argv[0] only
+  assert.strictEqual(own(`[Service]\nExecStart=/usr/bin/node ${dir}/server.js\nExecStartPost=/bin/sh -c 'node ${B}/server.js &'\n`), 'other', 'ExecStartPost starts another hub');
+  assert.strictEqual(own(`[Service]\nExecStart=@/usr/bin/node ${dir}/server.js ${B}/server.js\n`), 'other', 'with @ the hub run is the third word');
+  assert.strictEqual(own(`[Service]\nExecStartPre=/usr/bin/node /opt/migrate.js\nExecStart=/usr/bin/node ${dir}/server.js\n`), 'ours', 'ExecStartPre has ended before the hub runs');
 });

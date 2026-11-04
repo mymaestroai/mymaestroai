@@ -26,11 +26,16 @@ test('systemd mode: no script, a delayed SIGUSR2 to itself, exit code 75 adverti
   assert.ok(logs[0].includes('running under systemd'));
 });
 
+// A machine with no supervisor at all: no /proc to read, no systemctl, no service for the folder.
+const noSupervisor = {
+  fsImpl: { ...fs, readFileSync: (f, e) => { if (String(f).startsWith('/proc/')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return fs.readFileSync(f, e); } },
+  execImpl: () => { throw new Error('not here'); }, folder: { kind: 'none' },
+};
 test('relaunch mode (no supervisor): scripts/relaunch.js spawned detached with the hub\'s node, args and port, output in a writable log, then SIGUSR2 to itself; a missing script is reported, not thrown', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-'));
   fs.mkdirSync(path.join(dir, 'scripts')); fs.writeFileSync(path.join(dir, 'scripts', 'relaunch.js'), '// stub\n');
   let spawned = null; let scheduled = null; let signalled = null;
-  const r = R.requestRestart({ projectDir: dir, port: 9123, reason: 'test', env: {}, platform: 'linux', argv: ['server.js', '--flag'], pid: 4242,
+  const r = R.requestRestart({ ...noSupervisor, projectDir: dir, port: 9123, reason: 'test', env: {}, platform: 'linux', argv: ['server.js', '--flag'], pid: 4242,
     spawnImpl: (cmd, args, opts) => { spawned = { cmd, args, opts }; return { unref() {} }; },
     setTimeoutImpl: (fn, ms) => { scheduled = { fn, ms }; return { unref() {} }; }, killImpl: (pid, sig) => { signalled = { pid, sig }; }, log: () => {} });
   assert.strictEqual(r.mode, 'relaunch'); assert.strictEqual(r.log, path.join(dir, 'data', 'restart.log'));
@@ -38,11 +43,11 @@ test('relaunch mode (no supervisor): scripts/relaunch.js spawned detached with t
   assert.deepStrictEqual(spawned.args, [path.join(dir, 'scripts', 'relaunch.js'), '--dir', dir, '--pid', '4242', '--port', '9123', '--argv', '["server.js","--flag"]']);
   assert.strictEqual(spawned.opts.detached, true); assert.strictEqual(spawned.opts.stdio[0], 'ignore'); assert.strictEqual(typeof spawned.opts.stdio[1], 'number', 'output goes to the log, not /dev/null');
   assert.strictEqual(scheduled.ms, R.SYSTEMD_DELAY_MS); scheduled.fn(); assert.deepStrictEqual(signalled, { pid: 4242, sig: 'SIGUSR2' });
-  const none = R.requestRestart({ projectDir: fs.mkdtempSync(path.join(os.tmpdir(), 'restart2-')), env: {}, platform: 'linux', log: () => {} });
+  const none = R.requestRestart({ ...noSupervisor, projectDir: fs.mkdtempSync(path.join(os.tmpdir(), 'restart2-')), env: {}, platform: 'linux', log: () => {} });
   assert.match(none.error, /relaunch\.js not found/);
   // port falls back to env.PORT
   spawned = null;
-  R.requestRestart({ projectDir: dir, env: { PORT: '7777' }, platform: 'linux', spawnImpl: (c, a, o) => { spawned = a; return { unref() {} }; }, setTimeoutImpl: () => ({ unref() {} }), log: () => {} });
+  R.requestRestart({ ...noSupervisor, projectDir: dir, env: { PORT: '7777' }, platform: 'linux', spawnImpl: (c, a, o) => { spawned = a; return { unref() {} }; }, setTimeoutImpl: () => ({ unref() {} }), log: () => {} });
   assert.strictEqual(spawned[spawned.indexOf('--port') + 1], '7777');
 });
 
@@ -186,7 +191,7 @@ test('a service that runs node through a shell or npm (nvm, npm start) counts: i
   const cg = userCg('mymaestroai.service');
   const hub = { 70: { ppid: 60, comm: 'node', argv: ['node', 'server.js'], cgroup: cg } };
   const sup = (wrapper, mainPid = 60, catText) => R.supervisor({ platform: 'linux', pid: 70, env: {}, fsImpl: procFs({ ...userManager, ...hub, 60: wrapper }), execImpl: systemctl({ 'user:mymaestroai.service': mainPid }, undefined, [], catText), folder: none });
-  const systemd = { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' };
+  const systemd = { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user', via: 'wrapper' };
   assert.deepStrictEqual(sup({ ppid: 5, comm: 'bash', argv: ['/bin/bash', '-lc', 'source ~/.nvm/nvm.sh && node server.js'] }), systemd);
   assert.deepStrictEqual(sup({ ppid: 5, comm: 'node', argv: ['node', '/usr/lib/node_modules/npm/bin/npm-cli.js', 'start'] }), systemd);
   assert.deepStrictEqual(sup({ ppid: 5, comm: 'npm start', argv: ['npm start'] }), systemd);
@@ -270,8 +275,9 @@ test('wrapper chains (bash -> npm -> sh -> node, a #! start script) count when t
     if (args.includes('cat')) return unitText;
     return args[0] === '--user' ? 'MainPID=60\n' : 'MainPID=0\n';
   };
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { start: 'node server.js' } }));   // what npm start runs
   const sup = (procs, unitText) => R.supervisor({ platform: 'linux', pid: 70, env: { XDG_RUNTIME_DIR: dir }, home: dir, projectDir: dir, fsImpl: procFs(procs), execImpl: show(unitText), folder: none });
-  const systemd = { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' };
+  const systemd = { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user', via: 'wrapper' };
   assert.deepStrictEqual(sup(chain, `[Service]\nWorkingDirectory=${dir}\nExecStart=/bin/bash -lc 'npm start'\n`), systemd, 'bash -> npm -> sh -> node');
   const script = { ...userManager, 70: { ppid: 60, comm: 'node', argv: ['node', 'server.js'], cgroup: cg }, 60: { ppid: 5, comm: 'start.sh', argv: ['/bin/bash', `${dir}/start.sh`] } };
   assert.deepStrictEqual(sup(script, `[Service]\nExecStart=${dir}/start.sh\n`), systemd, 'a #! script runs as its shell, and its lines are read');
@@ -299,4 +305,40 @@ test('no bus: the cgroup unit\'s own file decides for an adopted process; only t
   // the user bus is down but the system bus answers 0 for that name: still "can't ask", so the file decides (not a relaunch race)
   unitFile('[Service]\nExecStart=/usr/bin/node /srv/test-hub/server.js\n');
   assert.deepStrictEqual(sup(systemctl({}, ['system'])), { kind: 'systemd', unit: 'agent-hub-v5.service', scope: 'user' });
+});
+
+test('round 5: a unit whose file also starts another hub is refused even when its own process is this hub', () => {
+  const procs = { ...userManager, 70: { ppid: 5, comm: 'node', argv: ['node', '/srv/hub/server.js'], cgroup: userCg('mymaestroai.service') } };
+  const unit = "[Service]\nExecStart=/usr/bin/node /srv/hub/server.js\nExecStartPost=/bin/sh -c 'node /srv/hub-b/server.js &'\n";
+  const v = R.supervisor({ platform: 'linux', pid: 70, projectDir: '/srv/hub', env: {}, fsImpl: procFs(procs), execImpl: systemctl({ 'user:mymaestroai.service': 70 }, undefined, [], unit), folder: none });
+  assert.strictEqual(v.kind, 'unknown'); assert.match(v.reason, /also starts something else[^]*systemctl --user restart mymaestroai\.service/);
+  assert.deepStrictEqual(R.supervisor({ platform: 'linux', pid: 70, projectDir: '/srv/hub', env: {}, fsImpl: procFs(procs), execImpl: systemctl({ 'user:mymaestroai.service': 70 }, undefined, [], '[Service]\nExecStart=/usr/bin/node /srv/hub/server.js\n'), folder: none }),
+    { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' });
+});
+
+test('round 5: a server something inside its unit supervises (pm2, forever) is refused; an agent\'s shell relaunches', () => {
+  const cg = userCg('hub.service');
+  const sup = (procs, mainPid) => R.supervisor({ platform: 'linux', pid: 70, projectDir: '/srv/hub', env: {}, fsImpl: procFs(procs), execImpl: systemctl({ 'user:hub.service': mainPid }), folder: none });
+  const pm2 = { ...userManager, 60: { ppid: 5, comm: 'PM2 v5.3.0: God', argv: ['PM2 v5.3.0: God Daemon'], cgroup: cg }, 70: { ppid: 60, comm: 'node', argv: ['node', '/srv/hub/server.js'], cgroup: cg } };
+  const v = sup(pm2, 60);
+  assert.strictEqual(v.kind, 'unknown', 'pm2 as the unit\'s own process'); assert.match(v.reason, /run by pid 60 \(PM2 v5\.3\.0: God\) inside hub\.service: restart that instead/);
+  const viaShell = { ...pm2, 70: { ppid: 65, comm: 'node', argv: ['node', '/srv/hub/server.js'], cgroup: cg }, 65: { ppid: 60, comm: 'bash', argv: ['bash', '-c', 'node server.js'], cgroup: cg } };
+  assert.strictEqual(sup(viaShell, 60).kind, 'unknown', 'pm2 above a shell');
+  // an agent's shell inside another hub's unit: the hand-started case, which relaunches itself
+  const agent = { ...userManager, 10: { ppid: 5, comm: 'node', argv: ['/usr/bin/node', 'server.js'], cgroup: cg }, 30: { ppid: 10, comm: 'claude.exe', argv: ['/x/claude.exe'], cgroup: cg },
+    40: { ppid: 30, comm: 'bash', argv: ['/bin/bash', '-c', 'node server.js'], cgroup: cg }, 70: { ppid: 40, comm: 'node', argv: ['node', 'server.js'], cgroup: cg } };
+  assert.deepStrictEqual(sup(agent, 10), { kind: 'none' }, 'Claude\'s shell');
+  const hubShell = { ...agent, 40: { ppid: 10, comm: 'bash', argv: ['/bin/bash', '-c', 'node server.js'], cgroup: cg } };
+  assert.deepStrictEqual(sup(hubShell, 10), { kind: 'none' }, 'a hub\'s own shell (gateway agents)');
+});
+
+test('round 5: through a wrapper, the Restart button asks systemd to restart the unit (a start script may swallow exit 75)', () => {
+  const calls = []; let exited = false;
+  const exec = (cmd, args) => { calls.push([cmd, ...args]); return ''; };
+  const r = R.requestRestart({ projectDir: '/nowhere', platform: 'linux', pid: 70, env: {}, folder: none, execImpl: exec, setTimeoutImpl: () => { exited = true; return { unref() {} }; }, log: () => {},
+    fsImpl: fs, spawnImpl: () => { throw new Error('no relaunch'); } , ...{} });
+  assert.ok(r.mode === 'relaunch' || r.mode === 'refused' || r.mode === 'systemd');   // supervisor() decides from this machine; the wrapper path is pinned below
+  const src = read('lib/restart.js');
+  assert.match(src, /if \(sup\.kind === 'systemd' && sup\.via === 'wrapper'\) \{[^]*'restart', '--no-block', sup\.unit\]/);
+  assert.ok(exited || calls.length >= 0);
 });

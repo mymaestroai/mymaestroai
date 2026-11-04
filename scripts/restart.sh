@@ -52,7 +52,7 @@ is_this_hub() {
       if [ "$n" = 1 ]; then case "$(basename "$a")" in node|nodejs|node[0-9]*) continue ;; *) return 1 ;; esac; fi
       if [ -n "$skip" ]; then skip=""; continue; fi
       case "$a" in
-        -e|--eval|-p|--print) return 1 ;;
+        -e*|-p*|-c|-i|--eval|--eval=*|--print|--print=*|--check|--interactive) return 1 ;;   # code from the command line
         -r|--require|--import|--loader|--experimental-loader|--title|--env-file|-C|--conditions|--input-type) skip=1; continue ;;
         -*) continue ;;
       esac
@@ -66,7 +66,7 @@ is_this_hub() {
   # binary first, only options between, the script last (it may contain spaces); its working directory from lsof
   args=$(ps -o args= -p "$p" 2>/dev/null) || return 1
   local opts='( -[^ ]+)*'
-  printf '%s\n' "$args" | grep -qE '^[^ ]*node[0-9]*( -[^ ]+)* +-(e|p|-eval|-print)( |$)' && return 1
+  printf '%s\n' "$args" | grep -qE '^[^ ]*node[0-9]*( -[^ ]+)* +(-[epci][^ ]*|--(eval|print|check|interactive)(=[^ ]*)?)( |$)' && return 1
   for f in "$PROJECT_DIR_REAL/server.js" "$PROJECT_DIR/server.js"; do
     case "$args" in *" $f") [ "$(printf '%s' "${args% "$f"}" | sed -E "s/^([^ ]*\/)?(node|nodejs|node[0-9]+)$opts\$//")" = "" ] && return 0 ;; esac
   done
@@ -134,7 +134,7 @@ started_by_manager() {
 }
 # node for the checks below, found now: the profiles and nvm are only read for the start further down. Without it every
 # service file reads as "can't tell", which refuses rather than guesses.
-HELPER_NODE=$(command -v node 2>/dev/null || ls -1d "$HOME"/.nvm/versions/node/*/bin/node "$HOME"/.mymaestroai/node/bin/node 2>/dev/null | tail -1)
+HELPER_NODE=$(command -v node 2>/dev/null || ls -1dt "$HOME"/.mymaestroai/node/bin/node "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | head -1)
 # owner_of: stdin is a unit file or plist; prints whose hub it runs: ours, other or unknown (lib/service-manager; start
 # scripts it names are read too)
 owner_of() {
@@ -143,10 +143,36 @@ owner_of() {
 }
 # a unit's files as systemd loads them, from disk (for when systemd can't be asked)
 unit_files() { [ -n "$HELPER_NODE" ] || return 0; "$HELPER_NODE" -e 'try { process.stdout.write(require(process.argv[1]).serviceFileText(process.argv[2], process.argv[3])); } catch {}' "$PROJECT_DIR/lib/service-manager.js" "$1" "$2" 2>/dev/null || true; }
-# refuse <service> <command>: the hub runs under a service whose file doesn't show it runs only this hub
+# refuse <service> <command> [other]: the hub runs under a service whose file doesn't show it runs only this hub
 refuse_wrapped() {
-  echo "❌ PID $_lp runs under $1 through a shell or script, and the service's file doesn't show that it runs only this hub: restarting it here could stop something else. Restart it with: $2" >&2
+  if [ -n "${3:-}" ]; then echo "❌ PID $_lp runs under $1, whose file also starts something else: restarting it here would stop that too. Restart it with: $2" >&2
+  else echo "❌ PID $_lp runs under $1 through a shell or script, and the service's file doesn't show that it runs only this hub: restarting it here could stop something else. Restart it with: $2" >&2; fi
   exit 1
+}
+# A node process whose script is some folder's server.js (a hub); an agent client (Claude, Codex)
+is_hub_server() {
+  local a n=0
+  [ -r "/proc/$1/cmdline" ] || return 1
+  while IFS= read -r -d '' a; do
+    n=$((n+1))
+    if [ "$n" = 1 ]; then case "$(basename "$a")" in node|nodejs|node[0-9]*) continue ;; *) return 1 ;; esac; fi
+    case "$a" in -*) continue ;; esac
+    [ "$(basename "$a")" = "server.js" ]; return
+  done < "/proc/$1/cmdline"
+  return 1
+}
+is_agent_runner() { case "$(comm_of "$1")" in claude*|codex*) return 0 ;; esac; tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -qE '@anthropic-ai/claude-code|@openai/codex'; }
+# supervisor_of <server pid> <unit>: what inside the unit runs the server and would start it again (pm2, forever, a
+# script that waits), through any shells in between; nothing for an agent's shell (Claude, Codex, a hub)
+supervisor_of() {
+  local cur="$1" pp hops=0
+  while [ "$hops" -lt 6 ]; do
+    pp=$(ppid_of "$cur"); [ -n "$pp" ] || return 0
+    is_manager "$pp" && return 0
+    if is_wrapper "$pp"; then cur="$pp"; hops=$((hops+1)); continue; fi
+    if [ -r "/proc/$pp/cgroup" ] && grep -qF "/$2" "/proc/$pp/cgroup" && ! is_hub_server "$pp" && ! is_agent_runner "$pp"; then echo "$pp"; fi
+    return 0
+  done
 }
 
 # ── Run by launchd (macOS)? Let launchd restart it, but only the job whose process IS this hub ──
@@ -186,6 +212,8 @@ if command -v systemctl >/dev/null 2>&1 && [ -n "$_lp" ] && [ -r "/proc/$_lp/cgr
       _main=$(systemctl $_scope show -p MainPID "$_unit" 2>/dev/null | sed -n 's/^MainPID=\([0-9][0-9]*\)$/\1/p')
     fi
     _how=1; if [ -n "$_main" ]; then service_runs "$_lp" "$_main" && _how=0 || _how=$?; fi
+    # the unit's own process, but its file may start another hub too (ExecStartPost): restarting would stop it
+    if [ "$_how" = 0 ] && [ "$(systemctl $_scope cat "$_unit" 2>/dev/null | owner_of)" = "other" ]; then refuse_wrapped "systemd unit $_unit" "systemctl $_scope restart $_unit" other; fi
     # through a wrapper, only a unit whose own file shows it runs this hub alone (one wrapper may start two hubs):
     # restarting it otherwise could stop another hub, and restarting the server by hand would race the unit's respawn
     if [ "$_how" = 2 ] && [ "$(systemctl $_scope cat "$_unit" 2>/dev/null | owner_of)" != "ours" ]; then refuse_wrapped "systemd unit $_unit" "systemctl $_scope restart $_unit"; fi
@@ -221,11 +249,11 @@ if command -v systemctl >/dev/null 2>&1 && [ -n "$_lp" ] && [ -r "/proc/$_lp/cgr
         exit 1
       fi
     fi
-    # The server's own parent supervises it inside the unit (pm2, forever, a script that waits): killing the server here
-    # would have that parent start another one beside the copy started below.
-    _pp=$(ppid_of "$_lp")
-    if [ -n "$_pp" ] && [ "$_pp" != "$_main" ] && ! is_manager "$_pp" && ! is_wrapper "$_pp" && [ -r "/proc/$_pp/cgroup" ] && grep -qF "/$_unit" "/proc/$_pp/cgroup"; then
-      echo "❌ PID $_lp is run by PID $_pp ($(comm_of "$_pp")) inside $_unit: restart that instead." >&2
+    # Something inside the unit runs the server and would start it again (pm2, forever; directly or through a shell):
+    # killing it here would race that supervisor. An agent's shell (Claude, Codex, a hub) is the hand-started case.
+    _sp=$(supervisor_of "$_lp" "$_unit")
+    if [ -n "$_sp" ]; then
+      echo "❌ PID $_lp is run by PID $_sp ($(comm_of "$_sp")) inside $_unit: restart that instead." >&2
       exit 1
     fi
     echo "[restart] PID $_lp is inside $_unit but is not that unit's own process (started by hand from inside it): restarting the server by itself"
