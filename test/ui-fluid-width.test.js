@@ -31,7 +31,8 @@ test('desktop: wide content stays inside its message', () => {
   assert.match(app, /tableHtml \+= '<\/tbody><\/table><\/div>';/);
   assert.match(html, /\.message pre \{ max-width: 100%; \}/);
   assert.match(html, /\.message img, \.message video, \.message svg \{ max-width: 100%; \}/);
-  assert.match(html, /\.message th, \.message td \{ overflow-wrap: normal; \}/, 'cells keep whole words; the table scrolls');
+  assert.match(html, /\.message th, \.message td \{ overflow-wrap: normal; \}/, 'cells wrap and keep whole words');
+  assert.match(html, /\.message :is\(th, td\) :is\(a, code\) \{ overflow-wrap: anywhere; \}/, 'a long link or path in a cell breaks instead of making the table scroll');
 });
 
 test('desktop phone width: messages use the full width', () => {
@@ -45,6 +46,15 @@ test('phone page: the chat scroller is vertical only; bubbles and their contents
   assert.match(rule(mhtml, '    .msg'), /min-width: 0;/);
   assert.match(mhtml, /\.msg\.assistant pre, \.msg\.assistant table, \.msg\.assistant \.visual \{ max-width: 100%; \}/);
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v61';/, 'service worker cache bumped');
+});
+
+test('phone page: table cells wrap to the screen and keep whole words; code and links in a cell may break', () => {
+  const cells = rule(mhtml, '    .msg.assistant th, .msg.assistant td');
+  assert.doesNotMatch(cells, /white-space:\s*nowrap/, 'cells no longer stay on one line (a wide table ran off the screen)');
+  assert.match(cells, /text-align: left; vertical-align: top;/, 'wrapped rows read from the top left');
+  assert.match(mhtml, /\.msg\.assistant th, \.msg\.assistant td \{ overflow-wrap: normal; \}/, 'whole words');
+  assert.match(mhtml, /\.msg\.assistant :is\(th, td\) :is\(a, code\) \{ overflow-wrap: anywhere; \}/, 'a long link or path breaks');
+  assert.match(mhtml, /\.msg\.assistant table \{ border-collapse: collapse; display: block; overflow-x: auto;/, 'a table too wide even then scrolls inside its bubble');
 });
 
 test('phone (desktop page, ≤768px): the ☰ has its own row; icons on row 1, open agents on row 2 scrolling inside it', () => {
