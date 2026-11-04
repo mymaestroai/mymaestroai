@@ -128,8 +128,10 @@ test('mymaestro start (and the installer, which uses it) passes an allow-listed 
   const m = createServiceManager({ dir, home, platform: 'darwin', uid: 501, exec: recorder().exec, env: caller, spawn: (cmd, args, o) => { spawned = { cmd, args, o }; return { pid: 4321, unref() {} }; } });
   const r = m.start({ node: '/n/bin/node' });
   assert.strictEqual(r.ok, true); assert.strictEqual(r.pid, 4321);
-  assert.deepStrictEqual(spawned.o.env, { PATH: '/usr/bin:/bin', HOME: home, USER: 'eric', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TMPDIR: '/tmp/', TZ: 'America/New_York', HTTPS_PROXY: 'http://proxy:3128' });
-  for (const k of Object.keys(startEnv(process.env))) assert.ok(!/KEY|TOKEN|SECRET|PASSWORD|^HUB_|^CLAUDE/.test(k), k);
+  // kept: the user's SSH agent (git over SSH for Update) and where the Claude and Codex sign-ins live: paths, not secrets
+  assert.deepStrictEqual(spawned.o.env, { PATH: '/usr/bin:/bin', HOME: home, USER: 'eric', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TMPDIR: '/tmp/', TZ: 'America/New_York', HTTPS_PROXY: 'http://proxy:3128', SSH_AUTH_SOCK: '/s' });
+  assert.deepStrictEqual(startEnv({ CLAUDE_CONFIG_DIR: '/c', CODEX_HOME: '/x', CLAUDE_CODE_OAUTH_TOKEN: 't', CLAUDECODE: '1' }), { CLAUDE_CONFIG_DIR: '/c', CODEX_HOME: '/x' });
+  for (const k of Object.keys(startEnv(process.env))) assert.ok(!/KEY|TOKEN|SECRET|PASSWORD|^HUB_/.test(k) && (!/^CLAUDE/.test(k) || k === 'CLAUDE_CONFIG_DIR'), k);
 });
 
 test('the service files carry their own short environment, not the caller\'s', () => {
@@ -242,4 +244,103 @@ test('restart.sh run through a symlinked install folder restarts that hub instea
   assert.ok(!/Not touching it/.test(r.stdout + r.stderr), r.stdout + r.stderr);
   assert.match(r.stdout, /Server started/, r.stdout + r.stderr);
   assert.notStrictEqual(pidNow, first.pid);
+});
+
+test('a service file is this folder\'s only when every server.js it runs is this folder\'s: a working directory alone proves nothing', () => {
+  const { runsFolder } = require('../lib/service-manager');
+  const a = '/srv/hub-a'; const b = '/srv/hub-b';
+  // the working directory says A, the command runs B's server: B's service, not A's
+  const unitAB = `[Service]\nWorkingDirectory=${a}\nExecStart=/usr/bin/node ${b}/server.js\n`;
+  assert.strictEqual(runsFolder(unitAB, a), false); assert.strictEqual(runsFolder(unitAB, b), true);
+  const plistAB = `<?xml version="1.0"?>\n<plist version="1.0"><dict><key>ProgramArguments</key><array><string>/n/node</string><string>${b}/server.js</string></array><key>WorkingDirectory</key><string>${a}</string></dict></plist>\n`;
+  assert.strictEqual(runsFolder(plistAB, a), false); assert.strictEqual(runsFolder(plistAB, b), true);
+  // the usual wrappers: nvm through bash, a relative server.js in the working directory, the path inside quotes
+  assert.strictEqual(runsFolder(`[Service]\nWorkingDirectory=${a}\nExecStart=/bin/bash -lc 'source ~/.nvm/nvm.sh && node server.js'\n`, a), true);
+  assert.strictEqual(runsFolder(`[Service]\nExecStart=/bin/bash -lc "exec node ${a}/server.js"\n`, a), true);
+  assert.strictEqual(runsFolder(`[Service]\nWorkingDirectory=-${a}\nExecStart=/usr/bin/env node server.js --port 8888\n`, a), true);
+  // can't tell, or not a hub: not this folder's
+  assert.strictEqual(runsFolder(`[Service]\nExecStart=/usr/bin/node server.js\n`, a), false, 'a relative server.js with no working directory');
+  assert.strictEqual(runsFolder(`[Service]\nWorkingDirectory=${a}\nExecStart=/usr/bin/node other-server.js\n`, a), false);
+  assert.strictEqual(runsFolder(`[Service]\nWorkingDirectory=${a}\nExecStart=/usr/bin/node ${a}/server.js\nExecStart=/usr/bin/node ${b}/server.js\n`, a), false, 'a file that also runs another hub');
+  assert.strictEqual(runsFolder(`[Service]\nWorkingDirectory=${a}\nExecStart=/usr/bin/node ${a}/server.js.bak\n`, a), false);
+});
+
+test('a reinstall keeps the service already running this folder under any name, rather than adding a second one', () => {
+  const { home, dir } = sandbox();
+  const units = path.join(home, '.config/systemd/user'); fs.mkdirSync(units, { recursive: true });
+  fs.writeFileSync(path.join(units, 'agent-hub-v5.service'), `[Service]\nWorkingDirectory=${dir}\nExecStart=/usr/bin/node server.js\n`);
+  const r = recorder();
+  const m = createServiceManager({ dir, home, platform: 'linux', exec: r.exec });
+  assert.strictEqual(m.serviceName('systemd'), 'agent-hub-v5.service');
+  const res = m.install({ node: '/n/bin/node' });
+  assert.strictEqual(res.unit, 'agent-hub-v5.service');
+  assert.ok(!fs.existsSync(path.join(units, 'mymaestroai.service')), 'no second unit for the same hub');
+  assert.ok(r.calls.includes('systemctl --user restart agent-hub-v5.service'));
+  // macOS: the legacy com.agent-hub agent of this folder, with no data/install.json
+  const { home: h2, dir: d2 } = sandbox();
+  const agents = path.join(h2, 'Library/LaunchAgents'); fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'com.agent-hub.plist'), `<?xml version="1.0"?>\n<plist version="1.0"><dict><key>Label</key><string>com.agent-hub</string><key>ProgramArguments</key><array><string>/n/bin/node</string><string>server.js</string></array><key>WorkingDirectory</key><string>${d2}</string></dict></plist>\n`);
+  const r2 = recorder();
+  const res2 = createServiceManager({ dir: d2, home: h2, platform: 'darwin', uid: 501, exec: r2.exec }).install({ node: '/n/bin/node' });
+  assert.strictEqual(res2.label, 'com.agent-hub');
+  assert.ok(!fs.existsSync(path.join(agents, 'ai.mymaestro.hub.plist')), 'no second agent for the same hub');
+});
+
+test('restart.sh inside a systemd unit restarts the unit only when the server is that unit\'s own process; otherwise the server by itself', { timeout: 120000 }, async (t) => {
+  const { execFileSync, spawnSync } = require('child_process');
+  let cg = ''; try { cg = fs.readFileSync('/proc/self/cgroup', 'utf8'); } catch { /* no /proc */ }
+  const unit = (cg.match(/[\w@.:-]+\.service/g) || []).filter(u => !/^user@\d+\.service$/.test(u)).pop();
+  if (!unit) return t.skip('not running inside a systemd unit');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rs-unit-')));
+  // a stand-in systemctl first on PATH: answers MainPID from a file (no file: no bus), records every call; the real one is never run
+  const bin = path.join(root, 'bin'); fs.mkdirSync(bin); fs.mkdirSync(path.join(root, 'home'));
+  const calls = path.join(root, 'systemctl.log'); const main = path.join(root, 'main');
+  fs.writeFileSync(path.join(bin, 'systemctl'), `#!/bin/sh\necho "$*" >> '${calls}'\ncase "$*" in *show*) [ -f '${main}' ] || exit 1; echo "MainPID=$(cat '${main}')" ;; esac\nexit 0\n`, { mode: 0o755 });
+  const hub = path.join(root, 'hub');
+  fs.mkdirSync(path.join(hub, 'scripts'), { recursive: true }); fs.mkdirSync(path.join(hub, 'lib'));
+  fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'restart.sh'), path.join(hub, 'scripts', 'restart.sh'));
+  const port = await new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close((e) => e ? reject(e) : resolve(port)); }); });
+  fs.writeFileSync(path.join(hub, '.env'), `PORT=${port}\n`);
+  fs.writeFileSync(path.join(hub, 'server.js'), "const p=require('fs').readFileSync(__dirname+'/.env','utf8').match(/PORT=(\\d+)/)[1]; require('http').createServer((q,r)=>r.end('ok')).listen(+p,'127.0.0.1');\n");
+  const pids = [];
+  const killAll = async () => { for (const p of pids.splice(0)) { try { process.kill(p, 'SIGKILL'); } catch {} } await new Promise(res => setTimeout(res, 300)); };
+  t.after(killAll);
+  const up = async () => { for (let i = 0; i < 50; i++) { try { execFileSync('curl', ['-s', '-m', '1', `http://127.0.0.1:${port}/`]); return; } catch { await new Promise(r => setTimeout(r, 100)); } } };
+  // a hub started by hand inside this unit: a child of this test, in its cgroup
+  const startStandIn = async () => { const c = require('child_process').spawn(process.execPath, ['server.js'], { cwd: hub, detached: true, stdio: 'ignore' }); c.unref(); pids.push(c.pid); await up(); return c.pid; };
+  const restartSh = (mainPid) => {
+    fs.writeFileSync(calls, '');
+    if (mainPid === null) { try { fs.unlinkSync(main); } catch { /* none */ } } else fs.writeFileSync(main, `${mainPid}\n`);
+    const r = spawnSync('bash', [path.join(hub, 'scripts', 'restart.sh')], { env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: path.join(root, 'home') }, encoding: 'utf8', timeout: 45000 });
+    let now = 0; try { now = Number(fs.readFileSync(path.join(hub, '.server.pid'), 'utf8').trim()); } catch { /* none */ }
+    if (now) pids.push(now);
+    return { out: r.stdout + r.stderr, calls: fs.readFileSync(calls, 'utf8'), now };
+  };
+  const restartedUnit = (c) => / restart /.test(` ${c} `);
+  // the unit's process is another one (the hub whose agent started this one): the unit is left alone
+  await startStandIn();
+  let r = restartSh(1);
+  assert.ok(!restartedUnit(r.calls), `the unit is never restarted: ${r.calls}`);
+  assert.match(r.out, /not that unit's own process/, r.out);
+  assert.match(r.out, /Server started/, r.out);
+  // the restarted server, left behind when restart.sh exited, has been adopted: with no bus to ask, the unit is still
+  // never restarted (only that one server may be asked to exit)
+  const adopted = r.now;
+  r = restartSh(null);
+  assert.ok(!restartedUnit(r.calls), `no bus: never a unit restart on a guess: ${r.calls}`);
+  await killAll();
+  try { process.kill(adopted, 0); pids.push(adopted); } catch { /* gone */ }
+  await killAll();
+  // no bus, and the server's parent is this test, not systemd: the server restarts by itself
+  await startStandIn();
+  r = restartSh(null);
+  assert.ok(!restartedUnit(r.calls), r.calls);
+  assert.match(r.out, /Server started/, r.out);
+  await killAll();
+  // the server is the unit's own process: systemd restarts the unit, nothing is killed here
+  const standIn = await startStandIn();
+  r = restartSh(standIn);
+  assert.match(r.calls, new RegExp(`restart ${unit.replace(/[.]/g, '\\.')}`), r.calls);
+  assert.match(r.out, /Service restarted by systemd/, r.out);
+  assert.doesNotThrow(() => process.kill(standIn, 0), 'the server itself was not killed here');
 });
