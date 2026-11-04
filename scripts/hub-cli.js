@@ -132,6 +132,7 @@ const commands = {
   },
   async start() {
     const r = svc().start(); if (!r.ok) fail(`Could not start: ${r.error}`);
+    for (const n of r.notices || []) out(`Note: ${n}`);   // what the shell set that the hub no longer receives (lib/service-manager envNotices)
     out(r.already ? 'Already running.' : 'Starting…');
     out((await waitUp(60)) ? `Running at ${URL_BASE}` : 'It did not answer within a minute. See: mymaestro logs');
   },
@@ -300,6 +301,7 @@ const commands = {
     process.stdin.destroy();   // no more questions: with a piped stdin the prompts would otherwise keep the process open
     if (flag('--no-start')) { out('Start it when you are ready: mymaestro start'); return; }
     const s = svc().start(); if (!s.ok) fail(`Could not start it: ${s.error}. Start it with: mymaestro start`);
+    for (const n of s.notices || []) out(`Note: ${n}`);
     out('Starting…');
     out((await waitUp(90)) ? `Running at ${URL_BASE}. Agents wait until you press Resume in Settings → Backups.` : 'It did not answer within 90 seconds. See: mymaestro logs');
   },
@@ -350,6 +352,7 @@ const commands = {
     if (wasRunning && !r.partial) {
       out('Starting the hub...');
       const s = svc().start(); if (!s.ok) fail(`Could not start it: ${s.error}`);
+      for (const n of s.notices || []) out(`Note: ${n}`);
       out((await waitUp(60)) ? `Running at ${URL_BASE}` : 'It did not answer within a minute. See: mymaestro logs');
     } else if (wasRunning) out('The hub stays stopped until the folders above are back in place; then: mymaestro start');
     if (!r.ok) process.exitCode = 1;
