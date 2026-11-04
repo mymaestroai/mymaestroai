@@ -27,14 +27,14 @@ find_listener() {
   elif command -v ss >/dev/null 2>&1; then
     ss -tlnp "sport = :$HUB_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true
   elif command -v fuser >/dev/null 2>&1; then
-    fuser "$HUB_PORT/tcp" 2>/dev/null | tr -d '[:space:]' || true
+    fuser "$HUB_PORT/tcp" 2>/dev/null | tr -s '[:space:]' '\n' | sed '/^$/d' || true
   fi
 }
 
 # ── Only ever this folder's hub ──
-# Whatever listens on the port must be this folder's server: running from this folder, or naming this folder's
-# server.js on its command line (node /path/to/hub/server.js started from elsewhere). Another hub (another install,
-# the default port when .env has none) is never stopped or restarted from here.
+# Whatever listens on the port must be this folder's server: a node process whose script is this folder's server.js
+# (resolved against its working directory). The working directory alone doesn't count (a shell or a build in the
+# folder isn't the hub). Another hub (another install, the default port when .env has none) is never touched.
 listener_cwd() {
   if [ -e "/proc/$1/cwd" ]; then readlink "/proc/$1/cwd" 2>/dev/null
   elif command -v lsof >/dev/null 2>&1; then lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
@@ -43,20 +43,30 @@ listener_cwd() {
 real_dir() { [ -n "$1" ] && [ -d "$1" ] && (cd "$1" && pwd -P); }   # real paths on both sides: a symlinked install folder is still this one
 PROJECT_DIR_REAL="$(cd "$PROJECT_DIR" && pwd -P)"
 is_this_hub() {
-  local p="$1" d a f
+  local p="$1" d a f n=0 skip="" args
   [ -n "$p" ] || return 1
   d=$(listener_cwd "$p")
-  [ -n "$d" ] && [ "$(real_dir "$d")" = "$PROJECT_DIR_REAL" ] && return 0
   if [ -r "/proc/$p/cmdline" ]; then
     while IFS= read -r -d '' a; do
-      case "$a" in server.js|*/server.js) ;; *) continue ;; esac
-      case "$a" in /*) f="$a" ;; *) [ -n "$d" ] || continue; f="$d/$a" ;; esac
-      [ -f "$f" ] && [ "$(real_dir "$(dirname "$f")")" = "$PROJECT_DIR_REAL" ] && return 0
+      n=$((n+1))
+      if [ "$n" = 1 ]; then case "$(basename "$a")" in node|nodejs|node[0-9]*) continue ;; *) return 1 ;; esac; fi
+      if [ -n "$skip" ]; then skip=""; continue; fi
+      case "$a" in
+        -e|--eval|-p|--print) return 1 ;;
+        -r|--require|--import|--loader|--experimental-loader|--title|--env-file|-C|--conditions|--input-type) skip=1; continue ;;
+        -*) continue ;;
+      esac
+      case "$a" in /*) f="$a" ;; *) [ -n "$d" ] || return 1; f="$d/$a" ;; esac
+      [ "$(basename "$f")" = "server.js" ] && [ -f "$f" ] && [ "$(real_dir "$(dirname "$f")")" = "$PROJECT_DIR_REAL" ]
+      return
     done < "/proc/$p/cmdline"
     return 1
   fi
-  a=$(ps -o args= -p "$p" 2>/dev/null) || return 1
-  case " $a " in *" $PROJECT_DIR_REAL/server.js "*|*" $PROJECT_DIR/server.js "*) return 0 ;; esac
+  # no /proc (macOS): node's command line from ps, its working directory from lsof
+  args=$(ps -o args= -p "$p" 2>/dev/null) || return 1
+  case "$args" in node\ *|*/node\ *|nodejs\ *|*/nodejs\ *) ;; *) return 1 ;; esac
+  case " $args " in *" $PROJECT_DIR_REAL/server.js "*|*" $PROJECT_DIR/server.js "*) return 0 ;; esac
+  if [ -n "$d" ] && [ "$(real_dir "$d")" = "$PROJECT_DIR_REAL" ]; then case " $args " in *" server.js "*) return 0 ;; esac; fi
   return 1
 }
 _lp=$(find_listener | head -1)
@@ -73,31 +83,55 @@ fi
 ppid_of() { if [ -r "/proc/$1/status" ]; then sed -n 's/^PPid:[[:space:]]*//p' "/proc/$1/status"; else ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; fi; }
 comm_of() { if [ -r "/proc/$1/comm" ]; then cat "/proc/$1/comm"; else basename "$(ps -o comm= -p "$1" 2>/dev/null)" 2>/dev/null; fi; }
 is_manager() { [ "$1" = "1" ] || [ "$(comm_of "$1")" = "systemd" ]; }
+# a shell, npm or npx: how a service runs node through nvm (bash -lc '… node server.js'), a start script (a #! script
+# runs as its interpreter: argv[0] is the shell, comm the script's name) or npm start
 is_wrapper() {
-  case "$(comm_of "$1")" in
-    sh|bash|dash|zsh|ksh|npm|npm\ *) return 0 ;;
-    node) if [ -r "/proc/$1/cmdline" ]; then tr '\0' '\n' < "/proc/$1/cmdline" | sed -n 2p; else ps -o args= -p "$1" 2>/dev/null | awk '{print $2}'; fi | grep -qE '(^|/)(npm|npm-cli\.js)$' ;;
-    *) return 1 ;;
-  esac
+  local pid="$1" c a0 a1 args
+  c=$(comm_of "$pid")
+  if [ -r "/proc/$pid/cmdline" ]; then
+    a0=$(tr '\0' '\n' < "/proc/$pid/cmdline" | sed -n 1p); a1=$(tr '\0' '\n' < "/proc/$pid/cmdline" | sed -n 2p)
+  else
+    args=$(ps -o args= -p "$pid" 2>/dev/null); a0=${args%% *}; a1=$(printf '%s\n' "$args" | awk '{print $2}')
+  fi
+  a0=$(basename "${a0:-x}")
+  case "$c" in sh|bash|dash|zsh|ksh|npm|npm\ *) return 0 ;; esac
+  case "$a0" in sh|bash|dash|zsh|ksh|npm|npx) return 0 ;; esac
+  case "$c/$a0" in node/*|*/node) printf '%s\n' "$a1" | grep -qE '(^|/)(npm|npm-cli\.js|npx|npx-cli\.js)$' && return 0 ;; esac
+  return 1
 }
-# service_runs <server pid> <pid the service manager reports>: that pid is the server, or a shell / npm the manager started
+# service_runs <server pid> <pid the service manager reports>: 0 when that pid is the server, 2 when it is a chain of
+# shells / npm the manager started that ends at the server, 1 otherwise
 service_runs() {
-  local pp
+  local cur="$1" pp hops=0
   [ "$2" = "$1" ] && return 0
   { [ -n "$2" ] && [ "$2" != "0" ]; } || return 1
-  pp=$(ppid_of "$1")
-  [ "$2" = "$pp" ] && is_wrapper "$pp" && is_manager "$(ppid_of "$pp")"
+  while [ "$hops" -lt 4 ]; do
+    pp=$(ppid_of "$cur"); [ -n "$pp" ] || return 1
+    is_wrapper "$pp" || return 1
+    if [ "$pp" = "$2" ]; then is_manager "$(ppid_of "$pp")" && return 2; return 1; fi
+    cur="$pp"; hops=$((hops+1))
+  done
+  return 1
 }
-# started_by_manager <server pid>: the service manager started it, directly or through a shell / npm. Only for when the
+# started_by_manager <server pid>: the service manager started it, directly or through wrappers. Only for when the
 # manager can't be asked: a server left behind by a shell that exited is adopted by the manager and looks the same, so
-# this never restarts a unit, it only asks this one server to exit.
+# the unit's own file decides too, and this never restarts a unit: it only asks this one server to exit.
 started_by_manager() {
-  local pp
-  pp=$(ppid_of "$1")
-  [ -n "$pp" ] || return 1
-  is_manager "$pp" && return 0
-  is_wrapper "$pp" && is_manager "$(ppid_of "$pp")"
+  local cur="$1" pp hops=0
+  while [ "$hops" -lt 5 ]; do
+    pp=$(ppid_of "$cur"); [ -n "$pp" ] || return 1
+    is_manager "$pp" && return 0
+    is_wrapper "$pp" || return 1
+    cur="$pp"; hops=$((hops+1))
+  done
+  return 1
 }
+# owner_of: stdin is a unit file or plist; prints whose hub it runs: ours, other or unknown (lib/service-manager)
+owner_of() {
+  node -e 'let t = ""; process.stdin.on("data", (d) => { t += d; }).on("end", () => { try { console.log(t ? require(process.argv[1]).serviceOwnership(t, process.argv[2]) : "unknown"); } catch { console.log("unknown"); } });' "$PROJECT_DIR/lib/service-manager.js" "$PROJECT_DIR_REAL" 2>/dev/null || echo unknown
+}
+# a unit's files as systemd loads them, from disk (for when systemd can't be asked)
+unit_files() { node -e 'try { process.stdout.write(require(process.argv[1]).serviceFileText(process.argv[2], process.argv[3])); } catch {}' "$PROJECT_DIR/lib/service-manager.js" "$1" "$2" 2>/dev/null || true; }
 
 # ── Run by launchd (macOS)? Let launchd restart it, but only the job whose process IS this hub ──
 # The listener (checked above to be this folder's) must be the very process launchd reports for the job. A label alone
@@ -108,7 +142,10 @@ if [ "$(uname)" = "Darwin" ] && [ -n "$_lp" ]; then
     [ -f "$_plist" ] || continue
     _label=$(basename "$_plist" .plist)
     _jpid=$(launchctl print "gui/$(id -u)/$_label" 2>/dev/null | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)[[:space:]]*$/\1/p' | head -1)
-    if [ -n "$_jpid" ] && service_runs "$_lp" "$_jpid"; then
+    _how=1; if [ -n "$_jpid" ]; then service_runs "$_lp" "$_jpid" && _how=0 || _how=$?; fi
+    # through a wrapper, only a job whose plist doesn't run another hub (one wrapper may start two hubs)
+    if [ "$_how" = 2 ] && [ "$(owner_of < "$_plist")" = "other" ]; then _how=1; fi
+    if [ "$_how" = 0 ] || [ "$_how" = 2 ]; then
       echo "[restart] Restarting launchd service $_label (PID $_lp)..."
       launchctl kickstart -k "gui/$(id -u)/$_label"
       echo "✅ Service restarted"
@@ -126,8 +163,16 @@ if command -v systemctl >/dev/null 2>&1 && [ -n "$_lp" ] && [ -r "/proc/$_lp/cgr
   _unit=$(grep -oE '[A-Za-z0-9@._:-]+\.service' "/proc/$_lp/cgroup" | grep -vE '^user@[0-9]+\.service$' | tail -1)
   if [ -n "$_unit" ]; then
     _scope=""; grep -q "/user@" "/proc/$_lp/cgroup" 2>/dev/null && _scope="--user"
-    _main=$(systemctl $_scope show -p MainPID "$_unit" 2>/dev/null | sed -n 's/^MainPID=\([0-9][0-9]*\)$/\1/p')
-    if [ -n "$_main" ] && service_runs "$_lp" "$_main"; then
+    _cguid=$(sed -n 's|.*/user@\([0-9][0-9]*\)\.service/.*|\1|p' "/proc/$_lp/cgroup" | head -1)
+    _main=""
+    # another user's manager can't be asked from here: `systemctl --user` would ask this user's own
+    if [ -z "$_cguid" ] || [ "$_cguid" = "$(id -u)" ]; then
+      _main=$(systemctl $_scope show -p MainPID "$_unit" 2>/dev/null | sed -n 's/^MainPID=\([0-9][0-9]*\)$/\1/p')
+    fi
+    _how=1; if [ -n "$_main" ]; then service_runs "$_lp" "$_main" && _how=0 || _how=$?; fi
+    # through a wrapper, only a unit whose own file doesn't run another hub (one wrapper may start two hubs)
+    if [ "$_how" = 2 ] && [ "$(systemctl $_scope cat "$_unit" 2>/dev/null | owner_of)" = "other" ]; then _how=1; fi
+    if [ "$_how" = 0 ] || [ "$_how" = 2 ]; then
       echo "[restart] systemd unit $_unit (PID $_lp): asking systemd to restart it..."
       if systemctl $_scope restart "$_unit" 2>/dev/null; then
         echo "✅ Service restarted by systemd"
@@ -141,7 +186,7 @@ if command -v systemctl >/dev/null 2>&1 && [ -n "$_lp" ] && [ -r "/proc/$_lp/cgr
       echo "❌ Could not signal PID $_lp"
       exit 1
     fi
-    if [ -z "$_main" ] && started_by_manager "$_lp"; then
+    if [ -z "$_main" ] && started_by_manager "$_lp" && [ "$(unit_files "$_unit" "$([ -n "$_scope" ] && echo user || echo system)" | owner_of)" != "other" ]; then
       echo "[restart] systemd can't be asked about $_unit, and it started PID $_lp: asking the server to exit for a restart (SIGUSR2 -> exit 75)..."
       if kill -USR2 "$_lp" 2>/dev/null; then
         echo "✅ Restart requested; systemd brings the server back if it is $_unit's own process (it couldn't be asked to confirm)"
@@ -154,6 +199,17 @@ if command -v systemctl >/dev/null 2>&1 && [ -n "$_lp" ] && [ -r "/proc/$_lp/cgr
   fi
 fi
 
+# ── Never another user's server ──
+# Run as another user than the server's (sudo restart.sh), stopping it here and starting a copy as this user would leave
+# a hub running under the wrong account: restart it as the user it runs as.
+if [ -n "$_lp" ]; then
+  _luid=$(stat -c %u "/proc/$_lp" 2>/dev/null || ps -o uid= -p "$_lp" 2>/dev/null | tr -d ' ')
+  if [ -n "$_luid" ] && [ "$_luid" != "$(id -u)" ]; then
+    echo "❌ PID $_lp runs as another user (uid $_luid). Run this script as that user." >&2
+    exit 1
+  fi
+fi
+
 # ── Stop the running server ──
 
 # Try PID file first
@@ -162,12 +218,12 @@ if [ -f "$PIDFILE" ]; then
   # only this folder's server: a stale file may name a pid that now belongs to something else
   if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null && is_this_hub "$OLD_PID"; then
     echo "[restart] Stopping server (PID $OLD_PID)..."
-    kill "$OLD_PID" 2>/dev/null
+    kill "$OLD_PID" 2>/dev/null || true
     for i in 1 2 3 4 5; do
       kill -0 "$OLD_PID" 2>/dev/null || break
       sleep 1
     done
-    kill -0 "$OLD_PID" 2>/dev/null && kill -9 "$OLD_PID" 2>/dev/null
+    kill -0 "$OLD_PID" 2>/dev/null && is_this_hub "$OLD_PID" && kill -9 "$OLD_PID" 2>/dev/null || true
   fi
   rm -f "$PIDFILE"
 fi

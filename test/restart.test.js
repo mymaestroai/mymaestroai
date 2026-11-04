@@ -144,7 +144,7 @@ test('wiring: server handles SIGUSR2 with exit 75 and the button uses lib/restar
   assert.match(rs, /Running under systemd/); assert.match(rs, /systemctl \$_scope restart "\$_unit"/); assert.match(rs, /kill -USR2 "\$_lp"/);
   assert.ok(rs.indexOf('find_listener() {') < rs.indexOf('Running under systemd'), 'the branch comes after find_listener is defined');
   assert.ok(!/com\.agent-hub"/.test(rs), 'no fixed launchd label');
-  assert.match(rs, /Not touching it/); assert.match(rs, /if \[ -n "\$_jpid" \] && service_runs "\$_lp" "\$_jpid"; then/, 'kickstarts only the job whose process is the listener (or its wrapper)');
+  assert.match(rs, /Not touching it/); assert.match(rs, /_how=1; if \[ -n "\$_jpid" \]; then service_runs "\$_lp" "\$_jpid" && _how=0 \|\| _how=\$\?; fi/, 'kickstarts only the job whose process is the listener (or its wrapper)');
   assert.ok(rs.indexOf('Only ever this folder') < rs.indexOf('Kill what still listens'), 'the folder check comes before any kill');
   assert.match(rs, /nohup env -i "\$\{_keep\[@\]\}" node server\.js/, 'the hub starts with an allow-listed environment');
   const ss = read('scripts/safe-restart.sh');
@@ -242,4 +242,44 @@ test('a user unit with the same name as the system unit running this hub: both s
   const mine = { 100: { ppid: 5, comm: 'node', cgroup: userCg('mymaestroai.service') }, ...userManager };
   assert.deepStrictEqual(R.supervisor({ platform: 'linux', pid: 100, env: {}, fsImpl: procFs(mine), execImpl: systemctl(mainPids), folder: none }),
     { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' });
+});
+
+test('wrapper chains (bash -> npm -> sh -> node, a #! start script) count; a wrapper whose unit also runs another hub does not', () => {
+  const cg = userCg('mymaestroai.service');
+  const chain = { ...userManager, 70: { ppid: 63, comm: 'node', argv: ['node', 'server.js'], cgroup: cg }, 63: { ppid: 62, comm: 'sh', argv: ['sh', '-c', 'node server.js'] },
+    62: { ppid: 60, comm: 'npm start', argv: ['npm start'] }, 60: { ppid: 5, comm: 'bash', argv: ['/bin/bash', '-lc', 'npm start'] } };
+  const show = (unitText) => (cmd, args) => {
+    if (cmd !== 'systemctl') throw new Error('unexpected');
+    if (args.includes('cat')) { if (unitText === null) throw new Error('no bus'); return unitText; }
+    return args[0] === '--user' ? 'MainPID=60\n' : 'MainPID=0\n';
+  };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-chain-'));
+  const sup = (procs, unitText = '') => R.supervisor({ platform: 'linux', pid: 70, env: { XDG_RUNTIME_DIR: home }, home, projectDir: '/srv/hub-a', fsImpl: procFs(procs), execImpl: show(unitText), folder: none });
+  const systemd = { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' };
+  assert.deepStrictEqual(sup(chain), systemd, 'bash -> npm -> sh -> node');
+  const script = { ...userManager, 70: { ppid: 60, comm: 'node', argv: ['node', 'server.js'], cgroup: cg }, 60: { ppid: 5, comm: 'start.sh', argv: ['/bin/bash', '/home/u/hub/start.sh'] } };
+  assert.deepStrictEqual(sup(script), systemd, 'a #! script runs as its shell');
+  const twoHubs = "[Service]\nExecStart=/bin/bash -c 'node /srv/hub-a/server.js & node /srv/hub-b/server.js & wait'\n";
+  assert.deepStrictEqual(sup(script, twoHubs), { kind: 'none' }, 'one wrapper running two hubs: restarting it would take the other hub down');
+  assert.deepStrictEqual(sup(script, "[Service]\nExecStart=/bin/bash -c 'node /srv/hub-a/server.js'\n"), systemd);
+  // a chain broken by something that is not a wrapper (the live hub, claude): not ours
+  const broken = { ...chain, 62: { ppid: 60, comm: 'claude', argv: ['claude'] } };
+  assert.deepStrictEqual(sup(broken), { kind: 'none' });
+});
+
+test('no bus: the cgroup unit\'s own file decides for an adopted process; only the cgroup\'s own scope counts as asked', () => {
+  const cg = userCg('agent-hub-v5.service');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-nobus-'));
+  const runtime = path.join(dir, 'run'); fs.mkdirSync(path.join(runtime, 'systemd/transient'), { recursive: true });
+  const unitFile = (txt) => fs.writeFileSync(path.join(runtime, 'systemd/transient/agent-hub-v5.service'), txt);
+  // a hand-started hub adopted by the user manager (its shell exited), no bus to ask
+  const procs = { ...userManager, 51: { ppid: 5, comm: 'node', argv: ['node', 'server.js'], cgroup: cg } };
+  const sup = (execImpl) => R.supervisor({ platform: 'linux', pid: 51, projectDir: '/srv/test-hub', home: dir, env: { XDG_RUNTIME_DIR: runtime }, fsImpl: procFs(procs), execImpl, folder: none });
+  unitFile('[Service]\nWorkingDirectory=/srv/live-hub\nExecStart=/usr/bin/node /srv/live-hub/server.js\n');
+  assert.deepStrictEqual(sup(systemctl({}, [])), { kind: 'none' }, 'the unit runs another hub: this one relaunches itself');
+  unitFile('[Service]\nExecStart=/usr/bin/node /srv/test-hub/server.js\n');
+  assert.deepStrictEqual(sup(systemctl({}, [])), { kind: 'systemd', unit: 'agent-hub-v5.service', scope: 'user' }, 'its own unit: systemd brings it back');
+  // the user bus is down but the system bus answers 0 for that name: still "can't ask", so the file decides (not a relaunch race)
+  unitFile('[Service]\nExecStart=/usr/bin/node /srv/test-hub/server.js\n');
+  assert.deepStrictEqual(sup(systemctl({}, ['system'])), { kind: 'systemd', unit: 'agent-hub-v5.service', scope: 'user' });
 });

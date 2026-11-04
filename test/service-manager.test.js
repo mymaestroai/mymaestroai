@@ -208,10 +208,10 @@ test('a service file is matched to its folder through symlinks, either way round
   const { runsFolder } = require('../lib/service-manager');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'svc-link-')));
   const real = path.join(root, 'real'); fs.mkdirSync(real); const link = path.join(root, 'link'); fs.symlinkSync(real, link);
-  assert.strictEqual(runsFolder(renderLaunchdPlist({ dir: link, node: '/n' }), real), true, 'plist names the link, the hub sees the real folder');
-  assert.strictEqual(runsFolder(renderLaunchdPlist({ dir: real, node: '/n' }), link), true);
-  assert.strictEqual(runsFolder(renderSystemdUnit({ dir: link, node: '/n' }), real), true);
-  assert.strictEqual(runsFolder(renderLaunchdPlist({ dir: real, node: '/n' }), path.join(root, 'other')), false);
+  assert.strictEqual(runsFolder(renderLaunchdPlist({ dir: link, node: '/n/bin/node' }), real), true, 'plist names the link, the hub sees the real folder');
+  assert.strictEqual(runsFolder(renderLaunchdPlist({ dir: real, node: '/n/bin/node' }), link), true);
+  assert.strictEqual(runsFolder(renderSystemdUnit({ dir: link, node: '/n/bin/node' }), real), true);
+  assert.strictEqual(runsFolder(renderLaunchdPlist({ dir: real, node: '/n/bin/node' }), path.join(root, 'other')), false);
 });
 
 test('restart.sh run through a symlinked install folder restarts that hub instead of refusing it', { timeout: 60000 }, async (t) => {
@@ -343,4 +343,75 @@ test('restart.sh inside a systemd unit restarts the unit only when the server is
   assert.match(r.calls, new RegExp(`restart ${unit.replace(/[.]/g, '\\.')}`), r.calls);
   assert.match(r.out, /Service restarted by systemd/, r.out);
   assert.doesNotThrow(() => process.kill(standIn, 0), 'the server itself was not killed here');
+});
+
+test('whose hub a service runs: the script node is given, through shells, env, npm start; quoted paths, continuations, %h', () => {
+  const { serviceOwnership } = require('../lib/service-manager');
+  const A = '/srv/hub-a'; const B = '/srv/hub-b';
+  const own = (txt, d = A) => serviceOwnership(txt, d, { real: (p) => p, home: '/home/u' });
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${A}\nExecStart=/bin/sh -c 'echo server.js; exec node ${B}/main.js'\n`), 'other', 'a server.js node never runs does not count');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'node ${A}/server.js & node ${B}/server.js & wait'\n`), 'other', 'two hubs under one wrapper');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'cd ${A} && node server.js & cd ${B} && node server.js & wait'\n`), 'other', 'the same, through cd');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -lc 'cd ${A} && npm start'\n`), 'ours', 'cd then npm start');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -lc 'cd ${A} && exec node server.js'\n`), 'ours', 'cd then node, no working directory');
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${A}\nExecStart=/usr/bin/npm start\n`), 'ours');
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${A}\nExecStart=/usr/bin/node /usr/lib/node_modules/npm/bin/npm-cli.js run start\n`), 'ours');
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=%h/hub\nExecStart=/usr/bin/node \\\n  %h/hub/server.js\n`, '/home/u/hub'), 'ours', 'a continued line and %h');
+  assert.strictEqual(own(`[Service]\nExecStart=/usr/bin/node "/home/me/My Hub/server.js"\n`, '/home/me/My Hub'), 'ours', 'a quoted path with a space');
+  assert.strictEqual(own(`[Service]\nExecStart=/usr/bin/node --max-old-space-size=4096 -r ./x.js ${A}/server.js\n`), 'ours', 'node options first');
+  assert.strictEqual(own(`[Service]\nExecStart=/usr/bin/env -i PATH=/usr/bin node ${A}/server.js\n`), 'ours');
+  assert.strictEqual(own(`[Service]\nExecStart=/usr/bin/node ${B}/server.js\nExecStart=\nExecStart=/usr/bin/node ${A}/server.js\n`), 'ours', 'an empty ExecStart= clears what came before');
+  assert.strictEqual(own(`[Service]\nExecStart=/home/u/hub/start.sh\n`), 'unknown', 'a start script names no entry point');
+  assert.strictEqual(own(`[Service]\nExecStart=/usr/bin/node -e "require('x')"\n`), 'unknown');
+  assert.strictEqual(own(`[Service]\nExecStart=/usr/bin/node server.js\n`), 'unknown', 'relative, with no working directory');
+  // macOS: a folder with a space; each ProgramArguments string is one argument
+  const plist = (dir) => `<?xml version="1.0"?>\n<plist version="1.0"><dict><key>ProgramArguments</key><array><string>/n/bin/node</string><string>${dir}/server.js</string></array><key>WorkingDirectory</key><string>${dir}</string></dict></plist>\n`;
+  assert.strictEqual(own(plist('/Users/me/My Hub'), '/Users/me/My Hub'), 'ours');
+  assert.strictEqual(createServiceManager({ dir: '/Users/me/My Hub', home: '/Users/me', platform: 'darwin', exec: recorder().exec }) && require('../lib/service-manager').runsFolder(plist('/Users/me/My Hub'), '/Users/me/My Hub'), true);
+});
+
+test('a unit file read from disk, drop-ins included, for when systemd cannot be asked', () => {
+  const { serviceFileText } = require('../lib/service-manager');
+  const { home } = sandbox();
+  const run = path.join(home, 'run'); const units = path.join(home, '.config/systemd/user');
+  fs.mkdirSync(path.join(units, 'hub.service.d'), { recursive: true }); fs.mkdirSync(path.join(run, 'systemd/transient'), { recursive: true });
+  fs.writeFileSync(path.join(units, 'hub.service'), '[Service]\nExecStart=/usr/bin/node /a/server.js\n');
+  fs.writeFileSync(path.join(units, 'hub.service.d', 'override.conf'), '[Service]\nExecStart=\nExecStart=/usr/bin/node /b/server.js\n');
+  fs.writeFileSync(path.join(run, 'systemd/transient/t1.service'), '[Service]\nExecStart=/usr/bin/node /t/server.js\n');
+  const txt = serviceFileText('hub.service', 'user', { home, runtimeDir: run });
+  assert.match(txt, /\/a\/server\.js[^]*ExecStart=\n[^]*\/b\/server\.js/);
+  assert.strictEqual(require('../lib/service-manager').serviceOwnership(txt, '/b', { real: (p) => p }), 'ours', 'the drop-in wins');
+  assert.match(serviceFileText('t1.service', 'user', { home, runtimeDir: run }), /\/t\/server\.js/, 'transient units too');
+  assert.strictEqual(serviceFileText('../../etc/passwd', 'user', { home, runtimeDir: run }), '', 'only unit names');
+});
+
+test('restart.sh stops only this folder\'s node server.js: not another program in the folder on the port, not a stale pid file\'s process', { timeout: 60000 }, async (t) => {
+  const { execFileSync, spawnSync, spawn } = require('child_process');
+  if (!fs.existsSync('/proc/self/cmdline')) return t.skip('needs /proc');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rs-ident-')));
+  const hub = path.join(root, 'hub'); fs.mkdirSync(path.join(hub, 'scripts'), { recursive: true }); fs.mkdirSync(path.join(hub, 'lib')); fs.mkdirSync(path.join(root, 'home'));
+  fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'restart.sh'), path.join(hub, 'scripts', 'restart.sh'));
+  const port = await new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close((e) => e ? reject(e) : resolve(port)); }); });
+  fs.writeFileSync(path.join(hub, '.env'), `PORT=${port}\n`);
+  const serve = "const p=require('fs').readFileSync(__dirname+'/.env','utf8').match(/PORT=(\\d+)/)[1]; require('http').createServer((q,r)=>r.end('ok')).listen(+p,'127.0.0.1');\n";
+  fs.writeFileSync(path.join(hub, 'server.js'), serve); fs.writeFileSync(path.join(hub, 'other.js'), serve);
+  const pids = [];
+  t.after(() => { for (const p of pids) { try { process.kill(p, 'SIGKILL'); } catch {} } });
+  const up = async () => { for (let i = 0; i < 50; i++) { try { execFileSync('curl', ['-s', '-m', '1', `http://127.0.0.1:${port}/`]); return; } catch { await new Promise(r => setTimeout(r, 100)); } } };
+  // a stand-in systemctl that refuses everything, so a unit is never asked about
+  const bin = path.join(root, 'bin'); fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const restartSh = () => spawnSync('bash', [path.join(hub, 'scripts', 'restart.sh')], { env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: path.join(root, 'home') }, encoding: 'utf8', timeout: 45000 });
+  // another program run from the hub folder holds the port: not this hub, so nothing is touched
+  const other = spawn(process.execPath, ['other.js'], { cwd: hub, detached: true, stdio: 'ignore' }); other.unref(); pids.push(other.pid); await up();
+  let r = restartSh();
+  assert.match(r.stdout + r.stderr, /Not touching it/, r.stdout + r.stderr);
+  assert.doesNotThrow(() => process.kill(other.pid, 0), 'still running');
+  process.kill(other.pid, 'SIGKILL'); await new Promise(res => setTimeout(res, 300));
+  // a stale pid file now names a program in the hub folder that isn't the hub: it is left alone, the hub starts
+  const sleeper = spawn('sleep', ['120'], { cwd: hub, detached: true, stdio: 'ignore' }); sleeper.unref(); pids.push(sleeper.pid);
+  fs.writeFileSync(path.join(hub, '.server.pid'), `${sleeper.pid}\n`);
+  r = restartSh();
+  try { pids.push(Number(fs.readFileSync(path.join(hub, '.server.pid'), 'utf8').trim())); } catch { /* none */ }
+  assert.match(r.stdout, /Server started/, r.stdout + r.stderr);
+  assert.doesNotThrow(() => process.kill(sleeper.pid, 0), 'the stale pid file\'s process was not killed');
 });
