@@ -234,8 +234,10 @@ test('restart.sh run through a symlinked install folder restarts that hub instea
   // a stand-in hub: answers on the .env port, from its own folder
   fs.writeFileSync(path.join(real, 'server.js'), "const p=require('fs').readFileSync(__dirname+'/.env','utf8').match(/PORT=(\\d+)/)[1]; require('http').createServer((q,r)=>r.end('ok')).listen(+p,'127.0.0.1');\n");
   fs.symlinkSync(real, link);
-  const first = require('child_process').spawn(process.execPath, ['server.js'], { cwd: real, detached: true, stdio: 'ignore' }); first.unref();
+  // started by hand through a shell, as a person or an agent does (its parent is that shell)
+  const first = require('child_process').spawn('bash', ['-c', `'${process.execPath}' server.js; exit $?`], { cwd: real, detached: true, stdio: 'ignore' }); first.unref();
   const pids = [first.pid];
+  t.after(() => { try { process.kill(-first.pid, 'SIGKILL'); } catch {} });
   t.after(() => { for (const p of pids) { try { process.kill(p, 'SIGKILL'); } catch {} } });
   for (let i = 0; i < 50; i++) { try { execFileSync('curl', ['-s', '-m', '1', `http://127.0.0.1:${port}/`]); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
   const env = { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: path.join(root, 'home') };
@@ -243,7 +245,7 @@ test('restart.sh run through a symlinked install folder restarts that hub instea
   const pidNow = Number(fs.readFileSync(path.join(real, '.server.pid'), 'utf8').trim() || 0); if (pidNow) pids.push(pidNow);
   assert.ok(!/Not touching it/.test(r.stdout + r.stderr), r.stdout + r.stderr);
   assert.match(r.stdout, /Server started/, r.stdout + r.stderr);
-  assert.notStrictEqual(pidNow, first.pid);
+  assert.ok(pidNow > 0, 'a new server was started');
 });
 
 test('a service file is this folder\'s only when every server.js it runs is this folder\'s: a working directory alone proves nothing', () => {
@@ -306,8 +308,16 @@ test('restart.sh inside a systemd unit restarts the unit only when the server is
   const killAll = async () => { for (const p of pids.splice(0)) { try { process.kill(p, 'SIGKILL'); } catch {} } await new Promise(res => setTimeout(res, 300)); };
   t.after(killAll);
   const up = async () => { for (let i = 0; i < 50; i++) { try { execFileSync('curl', ['-s', '-m', '1', `http://127.0.0.1:${port}/`]); return; } catch { await new Promise(r => setTimeout(r, 100)); } } };
-  // a hub started by hand inside this unit: a child of this test, in its cgroup
-  const startStandIn = async () => { const c = require('child_process').spawn(process.execPath, ['server.js'], { cwd: hub, detached: true, stdio: 'ignore' }); c.unref(); pids.push(c.pid); await up(); return c.pid; };
+  // a hub started by hand inside this unit, through a shell (as a person or an agent does), in this test's cgroup;
+  // direct: node itself is this test's child (the unit's own process, or a server some supervisor runs)
+  const startStandIn = async (direct = false) => {
+    const c = direct ? require('child_process').spawn(process.execPath, ['server.js'], { cwd: hub, detached: true, stdio: 'ignore' })
+      : require('child_process').spawn('bash', ['-c', `'${process.execPath}' server.js; exit $?`], { cwd: hub, detached: true, stdio: 'ignore' });
+    c.unref(); pids.push(c.pid); await up();
+    const l = execFileSync('bash', ['-c', `ss -tlnpH 'sport = :${port}' | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2`], { encoding: 'utf8' }).trim();
+    if (l) pids.push(Number(l));
+    return Number(l) || c.pid;
+  };
   const restartSh = (mainPid) => {
     fs.writeFileSync(calls, '');
     if (mainPid === null) { try { fs.unlinkSync(main); } catch { /* none */ } } else fs.writeFileSync(main, `${mainPid}\n`);
@@ -337,8 +347,15 @@ test('restart.sh inside a systemd unit restarts the unit only when the server is
   assert.ok(!restartedUnit(r.calls), r.calls);
   assert.match(r.out, /Server started/, r.out);
   await killAll();
+  // run by a supervisor inside the unit that is neither a shell nor systemd (pm2, forever): refused, nothing killed
+  const supervised = await startStandIn(true);
+  r = restartSh(1);
+  assert.ok(!restartedUnit(r.calls), r.calls);
+  assert.match(r.out, /is run by PID \d+ \(.*\) inside .*: restart that instead/, r.out);
+  assert.doesNotThrow(() => process.kill(supervised, 0), 'not killed');
+  await killAll();
   // the server is the unit's own process: systemd restarts the unit, nothing is killed here
-  const standIn = await startStandIn();
+  const standIn = await startStandIn(true);
   r = restartSh(standIn);
   assert.match(r.calls, new RegExp(`restart ${unit.replace(/[.]/g, '\\.')}`), r.calls);
   assert.match(r.out, /Service restarted by systemd/, r.out);
@@ -414,4 +431,69 @@ test('restart.sh stops only this folder\'s node server.js: not another program i
   try { pids.push(Number(fs.readFileSync(path.join(hub, '.server.pid'), 'utf8').trim())); } catch { /* none */ }
   assert.match(r.stdout, /Server started/, r.stdout + r.stderr);
   assert.doesNotThrow(() => process.kill(sleeper.pid, 0), 'the stale pid file\'s process was not killed');
+});
+
+test('whose hub a service runs, conservatively: anything it can\'t read makes it "can\'t tell", never "ours"', () => {
+  const { serviceOwnership, readStartScript } = require('../lib/service-manager');
+  const A = '/srv/hub-a'; const B = '/srv/hub-b';
+  const own = (txt, d = A, extra = {}) => serviceOwnership(txt, d, { real: (p) => p, home: '/home/u', ...extra });
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'node -e "require(\\"${B}/server.js\\")" & node ${A}/server.js'\n`), 'unknown', 'node -e hides what it runs');
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${A}\nExecStart=/bin/sh -c 'cd ../hub-b && exec node server.js'\n`), 'other', 'a relative cd from a known folder is followed');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/sh -c 'cd "$HUB" && exec node server.js'\n`), 'unknown', 'a cd to a variable is lost');
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${A}\nExecStart=/bin/bash -c 'node server.js & cd $B && node server.js & wait'\n`), 'unknown');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -lc 'exec node $HOME/hub/server.js'\n`, '/home/u/hub'), 'ours', '$HOME is the home folder');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -lc 'exec node \${HUB_DIR}/server.js'\n`), 'unknown', 'another variable: can\'t tell');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -lc 'cd /srv/%i && exec node server.js'\n`), 'unknown', 'a specifier other than %h: can\'t tell');
+  assert.strictEqual(own(`[Service]\nWorkingDirectory=${A}\nExecStart=/bin/bash -c 'node server.js & npm start --prefix ${B} & wait'\n`), 'other', 'npm --prefix');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'node ${A}/server.js & setsid nice -n 5 node ${B}/server.js & wait'\n`), 'other', 'setsid / nice are seen through');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'python3 /srv/x/run.py & node ${A}/server.js'\n`), 'unknown', 'an unknown program');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -c 'sudo -u other node ${A}/server.js'\n`), 'unknown', 'sudo: another user');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash -lc 'source ~/.nvm/nvm.sh && export NODE_ENV=production && exec node ${A}/server.js'\n`), 'ours', 'the usual nvm wrapper');
+  // a start script is read: its own folder from $(dirname "$0"), node server.js there
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'svc-script-')));
+  fs.writeFileSync(path.join(dir, 'start.sh'), '#!/bin/bash\n# start the hub\ncd "$(dirname "$0")"\nsource ~/.nvm/nvm.sh\nexec node server.js\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'two.sh'), `#!/bin/sh\nnode ${dir}/server.js &\nnode ${B}/server.js &\nwait\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'tool.py'), '#!/usr/bin/env python3\nprint(1)\n', { mode: 0o755 });
+  const read = { readScript: (f) => readStartScript(f) };
+  assert.strictEqual(own(`[Service]\nExecStart=${dir}/start.sh\n`, dir, read), 'ours', 'a start script that runs this folder\'s server.js');
+  assert.strictEqual(own(`[Service]\nExecStart=${dir}/two.sh\n`, dir, read), 'other', 'a start script that runs two hubs');
+  assert.strictEqual(own(`[Service]\nExecStart=${dir}/tool.py\n`, dir, read), 'unknown', 'not a shell script');
+  assert.strictEqual(own(`[Service]\nExecStart=${dir}/start.sh\n`, dir), 'unknown', 'not read without a reader');
+  assert.strictEqual(own(`[Service]\nExecStart=/bin/bash ${dir}/start.sh\n`, dir, read), 'ours', 'bash start.sh');
+});
+
+test('drop-ins apply in file-name order across directories; a name in a higher directory hides the same name below', () => {
+  const { serviceFileText, serviceOwnership } = require('../lib/service-manager');
+  const { home } = sandbox();
+  const run = path.join(home, 'run');
+  const etcLike = path.join(home, '.config/systemd/user'); const runLike = path.join(run, 'systemd/user');
+  for (const d of [etcLike, runLike]) fs.mkdirSync(path.join(d, 'hub.service.d'), { recursive: true });
+  fs.writeFileSync(path.join(etcLike, 'hub.service'), '[Service]\nExecStart=/usr/bin/node /x/server.js\n');
+  fs.writeFileSync(path.join(runLike, 'hub.service.d', '10-other.conf'), '[Service]\nExecStart=\nExecStart=/usr/bin/node /b/server.js\n');
+  fs.writeFileSync(path.join(etcLike, 'hub.service.d', '90-ours.conf'), '[Service]\nExecStart=\nExecStart=/usr/bin/node /a/server.js\n');
+  const txt = serviceFileText('hub.service', 'user', { home, runtimeDir: run });
+  assert.strictEqual(serviceOwnership(txt, '/a', { real: (p) => p }), 'ours', '90-ours.conf comes after 10-other.conf wherever each lives');
+  fs.writeFileSync(path.join(etcLike, 'hub.service.d', '10-other.conf'), '[Service]\nExecStart=\nExecStart=/usr/bin/node /a/server.js\n');
+  fs.unlinkSync(path.join(etcLike, 'hub.service.d', '90-ours.conf'));
+  assert.strictEqual(serviceOwnership(serviceFileText('hub.service', 'user', { home, runtimeDir: run }), '/a', { real: (p) => p }), 'ours', 'the higher directory\'s 10-other.conf hides the lower one');
+  assert.match(serviceFileText('srv-hub\\x2da.service', 'user', { home, runtimeDir: run }), /^$/, 'an escaped name is accepted (and absent here)');
+});
+
+test('restart.sh on a Mac (no /proc): only `node [options] <this folder\'s server.js>` is this hub', () => {
+  const { spawnSync } = require('child_process');
+  const rs = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'restart.sh'), 'utf8');
+  const fns = rs.slice(rs.indexOf('listener_cwd() {'), rs.indexOf('_lp=$(find_listener | head -1)'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rs-mac-')));
+  const hub = path.join(root, 'My Hub'); fs.mkdirSync(hub); const other = path.join(root, 'other'); fs.mkdirSync(other);
+  // a pid with no /proc entry takes the ps branch; ps and the working directory are stand-ins
+  const check = (args, cwd) => spawnSync('bash', ['-c', `PROJECT_DIR="$1"; ${fns}\nps() { printf '%s\\n' "$FAKE_ARGS"; }\nlistener_cwd() { printf '%s' "$FAKE_CWD"; }\nis_this_hub 999999999 && echo yes || echo no`, 'x', hub],
+    { env: { PATH: '/usr/bin:/bin', FAKE_ARGS: args, FAKE_CWD: cwd || '' }, encoding: 'utf8' }).stdout.trim();
+  assert.strictEqual(check(`/opt/homebrew/bin/node ${hub}/server.js`), 'yes');
+  assert.strictEqual(check(`/n/bin/node --max-old-space-size=4096 ${hub}/server.js`), 'yes');
+  assert.strictEqual(check('node server.js', hub), 'yes', 'relative, run from the folder');
+  assert.strictEqual(check(`node ${other}/server.js ${hub}/server.js`), 'no', 'another hub given this one as an argument');
+  assert.strictEqual(check('node tools/preview.js server.js', hub), 'no', 'another script, server.js only an argument');
+  assert.strictEqual(check(`node -e "/* ${hub}/server.js */" ${hub}/server.js`), 'no', 'node -e');
+  assert.strictEqual(check(`python3 ${hub}/server.js`), 'no', 'not node');
+  assert.strictEqual(check('node server.js', other), 'no', 'relative, from another folder');
 });

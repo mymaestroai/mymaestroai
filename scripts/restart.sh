@@ -62,11 +62,17 @@ is_this_hub() {
     done < "/proc/$p/cmdline"
     return 1
   fi
-  # no /proc (macOS): node's command line from ps, its working directory from lsof
+  # no /proc (macOS): node's whole command line from ps must be `node [options] <this folder's server.js>`: the node
+  # binary first, only options between, the script last (it may contain spaces); its working directory from lsof
   args=$(ps -o args= -p "$p" 2>/dev/null) || return 1
-  case "$args" in node\ *|*/node\ *|nodejs\ *|*/nodejs\ *) ;; *) return 1 ;; esac
-  case " $args " in *" $PROJECT_DIR_REAL/server.js "*|*" $PROJECT_DIR/server.js "*) return 0 ;; esac
-  if [ -n "$d" ] && [ "$(real_dir "$d")" = "$PROJECT_DIR_REAL" ]; then case " $args " in *" server.js "*) return 0 ;; esac; fi
+  local opts='( -[^ ]+)*'
+  printf '%s\n' "$args" | grep -qE '^[^ ]*node[0-9]*( -[^ ]+)* +-(e|p|-eval|-print)( |$)' && return 1
+  for f in "$PROJECT_DIR_REAL/server.js" "$PROJECT_DIR/server.js"; do
+    case "$args" in *" $f") [ "$(printf '%s' "${args% "$f"}" | sed -E "s/^([^ ]*\/)?(node|nodejs|node[0-9]+)$opts\$//")" = "" ] && return 0 ;; esac
+  done
+  if [ -n "$d" ] && [ "$(real_dir "$d")" = "$PROJECT_DIR_REAL" ]; then
+    case "$args" in *" server.js"|*" ./server.js") [ "$(printf '%s' "${args% *}" | sed -E "s/^([^ ]*\/)?(node|nodejs|node[0-9]+)$opts\$//")" = "" ] && return 0 ;; esac
+  fi
   return 1
 }
 _lp=$(find_listener | head -1)
@@ -126,12 +132,22 @@ started_by_manager() {
   done
   return 1
 }
-# owner_of: stdin is a unit file or plist; prints whose hub it runs: ours, other or unknown (lib/service-manager)
+# node for the checks below, found now: the profiles and nvm are only read for the start further down. Without it every
+# service file reads as "can't tell", which refuses rather than guesses.
+HELPER_NODE=$(command -v node 2>/dev/null || ls -1d "$HOME"/.nvm/versions/node/*/bin/node "$HOME"/.mymaestroai/node/bin/node 2>/dev/null | tail -1)
+# owner_of: stdin is a unit file or plist; prints whose hub it runs: ours, other or unknown (lib/service-manager; start
+# scripts it names are read too)
 owner_of() {
-  node -e 'let t = ""; process.stdin.on("data", (d) => { t += d; }).on("end", () => { try { console.log(t ? require(process.argv[1]).serviceOwnership(t, process.argv[2]) : "unknown"); } catch { console.log("unknown"); } });' "$PROJECT_DIR/lib/service-manager.js" "$PROJECT_DIR_REAL" 2>/dev/null || echo unknown
+  [ -n "$HELPER_NODE" ] || { cat > /dev/null; echo unknown; return; }
+  "$HELPER_NODE" -e 'let t = ""; process.stdin.on("data", (d) => { t += d; }).on("end", () => { try { const sm = require(process.argv[1]); console.log(t ? sm.serviceOwnership(t, process.argv[2], { readScript: (f) => sm.readStartScript(f) }) : "unknown"); } catch { console.log("unknown"); } });' "$PROJECT_DIR/lib/service-manager.js" "$PROJECT_DIR_REAL" 2>/dev/null || echo unknown
 }
 # a unit's files as systemd loads them, from disk (for when systemd can't be asked)
-unit_files() { node -e 'try { process.stdout.write(require(process.argv[1]).serviceFileText(process.argv[2], process.argv[3])); } catch {}' "$PROJECT_DIR/lib/service-manager.js" "$1" "$2" 2>/dev/null || true; }
+unit_files() { [ -n "$HELPER_NODE" ] || return 0; "$HELPER_NODE" -e 'try { process.stdout.write(require(process.argv[1]).serviceFileText(process.argv[2], process.argv[3])); } catch {}' "$PROJECT_DIR/lib/service-manager.js" "$1" "$2" 2>/dev/null || true; }
+# refuse <service> <command>: the hub runs under a service whose file doesn't show it runs only this hub
+refuse_wrapped() {
+  echo "❌ PID $_lp runs under $1 through a shell or script, and the service's file doesn't show that it runs only this hub: restarting it here could stop something else. Restart it with: $2" >&2
+  exit 1
+}
 
 # ── Run by launchd (macOS)? Let launchd restart it, but only the job whose process IS this hub ──
 # The listener (checked above to be this folder's) must be the very process launchd reports for the job. A label alone
@@ -143,8 +159,8 @@ if [ "$(uname)" = "Darwin" ] && [ -n "$_lp" ]; then
     _label=$(basename "$_plist" .plist)
     _jpid=$(launchctl print "gui/$(id -u)/$_label" 2>/dev/null | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)[[:space:]]*$/\1/p' | head -1)
     _how=1; if [ -n "$_jpid" ]; then service_runs "$_lp" "$_jpid" && _how=0 || _how=$?; fi
-    # through a wrapper, only a job whose plist doesn't run another hub (one wrapper may start two hubs)
-    if [ "$_how" = 2 ] && [ "$(owner_of < "$_plist")" = "other" ]; then _how=1; fi
+    # through a wrapper, only a job whose plist shows it runs this hub alone (one wrapper may start two hubs)
+    if [ "$_how" = 2 ] && [ "$(owner_of < "$_plist")" != "ours" ]; then refuse_wrapped "launchd job $_label" "launchctl kickstart -k gui/$(id -u)/$_label"; fi
     if [ "$_how" = 0 ] || [ "$_how" = 2 ]; then
       echo "[restart] Restarting launchd service $_label (PID $_lp)..."
       launchctl kickstart -k "gui/$(id -u)/$_label"
@@ -160,7 +176,7 @@ fi
 # When systemctl is not permitted (a system unit, run as the service user), signal the server to exit for a restart
 # instead: SIGUSR2 -> graceful shutdown -> exit 75, which Restart=always and Restart=on-failure both bring back.
 if command -v systemctl >/dev/null 2>&1 && [ -n "$_lp" ] && [ -r "/proc/$_lp/cgroup" ]; then
-  _unit=$(grep -oE '[A-Za-z0-9@._:-]+\.service' "/proc/$_lp/cgroup" | grep -vE '^user@[0-9]+\.service$' | tail -1)
+  _unit=$(grep -oE '([A-Za-z0-9@._:-]|\\x[0-9a-fA-F]{2})+\.service' "/proc/$_lp/cgroup" | grep -vE '^user@[0-9]+\.service$' | tail -1)
   if [ -n "$_unit" ]; then
     _scope=""; grep -q "/user@" "/proc/$_lp/cgroup" 2>/dev/null && _scope="--user"
     _cguid=$(sed -n 's|.*/user@\([0-9][0-9]*\)\.service/.*|\1|p' "/proc/$_lp/cgroup" | head -1)
@@ -170,8 +186,9 @@ if command -v systemctl >/dev/null 2>&1 && [ -n "$_lp" ] && [ -r "/proc/$_lp/cgr
       _main=$(systemctl $_scope show -p MainPID "$_unit" 2>/dev/null | sed -n 's/^MainPID=\([0-9][0-9]*\)$/\1/p')
     fi
     _how=1; if [ -n "$_main" ]; then service_runs "$_lp" "$_main" && _how=0 || _how=$?; fi
-    # through a wrapper, only a unit whose own file doesn't run another hub (one wrapper may start two hubs)
-    if [ "$_how" = 2 ] && [ "$(systemctl $_scope cat "$_unit" 2>/dev/null | owner_of)" = "other" ]; then _how=1; fi
+    # through a wrapper, only a unit whose own file shows it runs this hub alone (one wrapper may start two hubs):
+    # restarting it otherwise could stop another hub, and restarting the server by hand would race the unit's respawn
+    if [ "$_how" = 2 ] && [ "$(systemctl $_scope cat "$_unit" 2>/dev/null | owner_of)" != "ours" ]; then refuse_wrapped "systemd unit $_unit" "systemctl $_scope restart $_unit"; fi
     if [ "$_how" = 0 ] || [ "$_how" = 2 ]; then
       echo "[restart] systemd unit $_unit (PID $_lp): asking systemd to restart it..."
       if systemctl $_scope restart "$_unit" 2>/dev/null; then
@@ -186,13 +203,29 @@ if command -v systemctl >/dev/null 2>&1 && [ -n "$_lp" ] && [ -r "/proc/$_lp/cgr
       echo "❌ Could not signal PID $_lp"
       exit 1
     fi
-    if [ -z "$_main" ] && started_by_manager "$_lp" && [ "$(unit_files "$_unit" "$([ -n "$_scope" ] && echo user || echo system)" | owner_of)" != "other" ]; then
-      echo "[restart] systemd can't be asked about $_unit, and it started PID $_lp: asking the server to exit for a restart (SIGUSR2 -> exit 75)..."
-      if kill -USR2 "$_lp" 2>/dev/null; then
-        echo "✅ Restart requested; systemd brings the server back if it is $_unit's own process (it couldn't be asked to confirm)"
-        exit 0
+    if [ -z "$_main" ] && started_by_manager "$_lp"; then
+      # systemd can't be asked, and it (or a wrapper it started) started the server; a hub left behind by a shell that
+      # exited is adopted by the manager and looks the same, so the unit's own file on disk decides
+      _owner=$(unit_files "$_unit" "$([ -n "$_scope" ] && echo user || echo system)" | owner_of)
+      if [ "$_owner" = "ours" ]; then
+        echo "[restart] systemd can't be asked about $_unit; it started PID $_lp and its file runs this hub: asking the server to exit for a restart (SIGUSR2 -> exit 75)..."
+        if kill -USR2 "$_lp" 2>/dev/null; then
+          echo "✅ Restart requested; systemd brings the service back"
+          exit 0
+        fi
+        echo "❌ Could not signal PID $_lp"
+        exit 1
       fi
-      echo "❌ Could not signal PID $_lp"
+      if [ "$_owner" != "other" ]; then
+        echo "❌ systemd can't be asked about $_unit, and its file doesn't show whether it runs this hub. Restart it with: systemctl $_scope restart $_unit" >&2
+        exit 1
+      fi
+    fi
+    # The server's own parent supervises it inside the unit (pm2, forever, a script that waits): killing the server here
+    # would have that parent start another one beside the copy started below.
+    _pp=$(ppid_of "$_lp")
+    if [ -n "$_pp" ] && [ "$_pp" != "$_main" ] && ! is_manager "$_pp" && ! is_wrapper "$_pp" && [ -r "/proc/$_pp/cgroup" ] && grep -qF "/$_unit" "/proc/$_pp/cgroup"; then
+      echo "❌ PID $_lp is run by PID $_pp ($(comm_of "$_pp")) inside $_unit: restart that instead." >&2
       exit 1
     fi
     echo "[restart] PID $_lp is inside $_unit but is not that unit's own process (started by hand from inside it): restarting the server by itself"

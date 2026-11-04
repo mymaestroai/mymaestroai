@@ -166,12 +166,15 @@ function procFs(procs, hide = []) {
   } };
 }
 // systemctl show -p MainPID per scope: { 'user:x.service': 50, 'system:x.service': 60 }; a scope not in `reach` has no bus.
-function systemctl(mainPids, reach = ['user', 'system'], calls = []) {
+const HUB = path.join(__dirname, '..');   // supervisor()'s default projectDir
+const ownUnit = (dir = HUB) => `[Service]\nExecStart=/bin/bash -lc 'source ~/.nvm/nvm.sh && exec node ${dir}/server.js'\n`;
+function systemctl(mainPids, reach = ['user', 'system'], calls = [], catText = ownUnit()) {
   return (cmd, args) => {
     calls.push([cmd, ...args]);
     if (cmd !== 'systemctl') throw new Error(`unexpected ${cmd}`);
     const scope = args[0] === '--user' ? 'user' : 'system';
     if (!reach.includes(scope)) throw new Error('Failed to connect to bus');
+    if (args.includes('cat')) return catText;
     return `${mainPids[`${scope}:${args[args.length - 1]}`] || 0}\n`;
   };
 }
@@ -179,27 +182,33 @@ const userCg = (unit) => `0::/user.slice/user-1000.slice/user@1000.service/app.s
 const sysCg = (unit) => `0::/system.slice/${unit}\n`;
 const userManager = { 5: { ppid: 1, comm: 'systemd', argv: ['/usr/lib/systemd/systemd', '--user'] } };
 
-test('a service that runs node through a shell or npm (nvm, npm start) counts: its process is our parent and the manager started it', () => {
+test('a service that runs node through a shell or npm (nvm, npm start) counts: its process is our parent, the manager started it, its file runs this hub', () => {
   const cg = userCg('mymaestroai.service');
   const hub = { 70: { ppid: 60, comm: 'node', argv: ['node', 'server.js'], cgroup: cg } };
-  const sup = (wrapper, mainPid = 60) => R.supervisor({ platform: 'linux', pid: 70, env: {}, fsImpl: procFs({ ...userManager, ...hub, 60: wrapper }), execImpl: systemctl({ 'user:mymaestroai.service': mainPid }), folder: none });
+  const sup = (wrapper, mainPid = 60, catText) => R.supervisor({ platform: 'linux', pid: 70, env: {}, fsImpl: procFs({ ...userManager, ...hub, 60: wrapper }), execImpl: systemctl({ 'user:mymaestroai.service': mainPid }, undefined, [], catText), folder: none });
   const systemd = { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' };
   assert.deepStrictEqual(sup({ ppid: 5, comm: 'bash', argv: ['/bin/bash', '-lc', 'source ~/.nvm/nvm.sh && node server.js'] }), systemd);
   assert.deepStrictEqual(sup({ ppid: 5, comm: 'node', argv: ['node', '/usr/lib/node_modules/npm/bin/npm-cli.js', 'start'] }), systemd);
   assert.deepStrictEqual(sup({ ppid: 5, comm: 'npm start', argv: ['npm start'] }), systemd);
+  // the unit's file doesn't show it runs only this hub: refused with the way to restart it, never a guess
+  const opaque = sup({ ppid: 5, comm: 'bash' }, 60, "[Service]\nExecStart=/home/u/start-hubs.sh\n");
+  assert.strictEqual(opaque.kind, 'unknown'); assert.match(opaque.reason, /doesn't show that it runs only this hub[^]*systemctl --user restart mymaestroai\.service/);
   // not a wrapper, or a wrapper the manager didn't start (a shell inside another process), or not our parent: not ours
   assert.deepStrictEqual(sup({ ppid: 5, comm: 'python3', argv: ['python3', 'x.py'] }), { kind: 'none' });
   assert.deepStrictEqual(R.supervisor({ platform: 'linux', pid: 70, env: {}, fsImpl: procFs({ ...userManager, ...hub, 60: { ppid: 40, comm: 'bash' }, 40: { ppid: 5, comm: 'node' } }), execImpl: systemctl({ 'user:mymaestroai.service': 60 }), folder: none }), { kind: 'none' });
   assert.deepStrictEqual(sup({ ppid: 5, comm: 'bash' }, 61), { kind: 'none' });
-  // macOS: launchd reports the wrapper; it counts when its parent is launchd (pid 1)
+  // macOS: launchd reports the wrapper; it counts when its parent is launchd (pid 1) and its plist runs this hub
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-mac-'));
+  fs.mkdirSync(path.join(home, 'Library/LaunchAgents'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'Library/LaunchAgents/ai.mymaestro.hub.plist'), `<?xml version="1.0"?>\n<plist version="1.0"><dict><key>ProgramArguments</key><array><string>/bin/bash</string><string>-lc</string><string>exec /n/bin/node ${HUB}/server.js</string></array></dict></plist>\n`);
   const ps = (tree, jobs) => (cmd, args) => {
     if (cmd === 'launchctl' && args[0] === 'print') { const l = args[1].split('/').pop(); if (l in jobs) return `\tpid = ${jobs[l]}\n`; throw new Error('not loaded'); }
     if (cmd === 'ps') { const p = tree[args[args.length - 1]]; if (!p) throw new Error('no such process'); return args[1] === 'args=' ? `${p.args}\n` : `${p.ppid} ${p.comm}\n`; }
     return '';
   };
   const mac = { 70: { ppid: 60, comm: '/n/bin/node', args: '/n/bin/node server.js' }, 60: { ppid: 1, comm: '/bin/bash', args: '/bin/bash -lc node server.js' } };
-  assert.deepStrictEqual(R.supervisor({ platform: 'darwin', pid: 70, uid: 501, env: {}, execImpl: ps(mac, { 'ai.mymaestro.hub': 60 }), folder: { kind: 'launchd', label: 'ai.mymaestro.hub' } }), { kind: 'launchd', label: 'ai.mymaestro.hub' });
-  const other = R.supervisor({ platform: 'darwin', pid: 70, uid: 501, env: {}, execImpl: ps({ ...mac, 60: { ...mac[60], ppid: 400 }, 400: { ppid: 1, comm: '/sbin/launchd-helper', args: 'x' } }, { 'ai.mymaestro.hub': 60 }), folder: { kind: 'launchd', label: 'ai.mymaestro.hub' } });
+  assert.deepStrictEqual(R.supervisor({ platform: 'darwin', pid: 70, uid: 501, home, env: {}, execImpl: ps(mac, { 'ai.mymaestro.hub': 60 }), folder: { kind: 'launchd', label: 'ai.mymaestro.hub' } }), { kind: 'launchd', label: 'ai.mymaestro.hub' });
+  const other = R.supervisor({ platform: 'darwin', pid: 70, uid: 501, home, env: {}, execImpl: ps({ ...mac, 60: { ...mac[60], ppid: 400 }, 400: { ppid: 1, comm: '/sbin/launchd-helper', args: 'x' } }, { 'ai.mymaestro.hub': 60 }), folder: { kind: 'launchd', label: 'ai.mymaestro.hub' } });
   assert.strictEqual(other.kind, 'unknown', 'a shell the manager did not start is not a wrapper of ours');
 });
 
@@ -221,16 +230,22 @@ test('a hub started from an agent\'s shell inside another hub\'s unit relaunches
   assert.ok(!calls.some(c => c.includes('restart')), 'systemd is never asked to restart anything');
 });
 
-test('no bus to ask systemd: the unit in the cgroup counts only when systemd itself started this process', () => {
-  const cg = sysCg('mymaestroai.service');
+test('no bus to ask systemd: the unit in the cgroup counts only when systemd itself started this process and its file runs this hub', () => {
+  const cg = userCg('mymaestroai.service');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-nobus2-'));
+  const runtime = path.join(home, 'run'); fs.mkdirSync(path.join(runtime, 'systemd/transient'), { recursive: true });
+  fs.writeFileSync(path.join(runtime, 'systemd/transient/mymaestroai.service'), '[Service]\nWorkingDirectory=/srv/hub\nExecStart=/usr/bin/node server.js\n');
   const noBus = systemctl({}, []);
-  const sup = (procs, hide) => R.supervisor({ platform: 'linux', pid: 70, env: { INVOCATION_ID: 'x' }, fsImpl: procFs(procs, hide), execImpl: noBus, folder: none });
-  const systemd = { kind: 'systemd', unit: 'mymaestroai.service', scope: 'system' };
-  assert.deepStrictEqual(sup({ 70: { ppid: 1, comm: 'node', cgroup: cg } }), systemd);
-  assert.deepStrictEqual(sup({ 70: { ppid: 60, comm: 'node', cgroup: cg }, 60: { ppid: 1, comm: 'bash' } }), systemd, 'through a wrapper');
-  assert.deepStrictEqual(sup({ 70: { ppid: 40, comm: 'node', cgroup: cg }, 40: { ppid: 30, comm: 'bash' }, 30: { ppid: 1, comm: 'claude' } }), { kind: 'none' }, 'an agent\'s shell: relaunch');
-  const u = sup({ 70: { ppid: 1, comm: 'node', cgroup: cg } }, ['70/status']);
+  const sup = (procs, hide) => R.supervisor({ platform: 'linux', pid: 70, projectDir: '/srv/hub', home, env: { INVOCATION_ID: 'x', XDG_RUNTIME_DIR: runtime }, fsImpl: procFs(procs, hide), execImpl: noBus, folder: none });
+  const systemd = { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' };
+  assert.deepStrictEqual(sup({ ...userManager, 70: { ppid: 5, comm: 'node', cgroup: cg } }), systemd);
+  assert.deepStrictEqual(sup({ ...userManager, 70: { ppid: 60, comm: 'node', cgroup: cg }, 60: { ppid: 5, comm: 'bash' } }), systemd, 'through a wrapper');
+  assert.deepStrictEqual(sup({ ...userManager, 70: { ppid: 40, comm: 'node', cgroup: cg }, 40: { ppid: 30, comm: 'bash' }, 30: { ppid: 5, comm: 'claude' } }), { kind: 'none' }, 'an agent\'s shell: relaunch');
+  const u = sup({ ...userManager, 70: { ppid: 5, comm: 'node', cgroup: cg } }, ['70/status']);
   assert.strictEqual(u.kind, 'unknown', 'this process can\'t be looked at: refused, not guessed'); assert.match(u.reason, /can't be asked/);
+  fs.writeFileSync(path.join(runtime, 'systemd/transient/mymaestroai.service'), '[Service]\nExecStart=/srv/hub/start.sh\n');   // a script that isn't there to read
+  const v = sup({ ...userManager, 70: { ppid: 5, comm: 'node', cgroup: cg } });
+  assert.strictEqual(v.kind, 'unknown', 'its file doesn\'t show it runs this hub: refused, not signalled'); assert.match(v.reason, /systemctl --user restart mymaestroai\.service/);
 });
 
 test('a user unit with the same name as the system unit running this hub: both scopes are asked', () => {
@@ -244,27 +259,29 @@ test('a user unit with the same name as the system unit running this hub: both s
     { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' });
 });
 
-test('wrapper chains (bash -> npm -> sh -> node, a #! start script) count; a wrapper whose unit also runs another hub does not', () => {
+test('wrapper chains (bash -> npm -> sh -> node, a #! start script) count when the unit runs this hub; a wrapper whose unit also runs another hub is refused', () => {
   const cg = userCg('mymaestroai.service');
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'restart-chain-')));
+  fs.writeFileSync(path.join(dir, 'start.sh'), '#!/bin/bash\ncd "$(dirname "$0")"\nexec node server.js\n', { mode: 0o755 });
   const chain = { ...userManager, 70: { ppid: 63, comm: 'node', argv: ['node', 'server.js'], cgroup: cg }, 63: { ppid: 62, comm: 'sh', argv: ['sh', '-c', 'node server.js'] },
     62: { ppid: 60, comm: 'npm start', argv: ['npm start'] }, 60: { ppid: 5, comm: 'bash', argv: ['/bin/bash', '-lc', 'npm start'] } };
   const show = (unitText) => (cmd, args) => {
     if (cmd !== 'systemctl') throw new Error('unexpected');
-    if (args.includes('cat')) { if (unitText === null) throw new Error('no bus'); return unitText; }
+    if (args.includes('cat')) return unitText;
     return args[0] === '--user' ? 'MainPID=60\n' : 'MainPID=0\n';
   };
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-chain-'));
-  const sup = (procs, unitText = '') => R.supervisor({ platform: 'linux', pid: 70, env: { XDG_RUNTIME_DIR: home }, home, projectDir: '/srv/hub-a', fsImpl: procFs(procs), execImpl: show(unitText), folder: none });
+  const sup = (procs, unitText) => R.supervisor({ platform: 'linux', pid: 70, env: { XDG_RUNTIME_DIR: dir }, home: dir, projectDir: dir, fsImpl: procFs(procs), execImpl: show(unitText), folder: none });
   const systemd = { kind: 'systemd', unit: 'mymaestroai.service', scope: 'user' };
-  assert.deepStrictEqual(sup(chain), systemd, 'bash -> npm -> sh -> node');
-  const script = { ...userManager, 70: { ppid: 60, comm: 'node', argv: ['node', 'server.js'], cgroup: cg }, 60: { ppid: 5, comm: 'start.sh', argv: ['/bin/bash', '/home/u/hub/start.sh'] } };
-  assert.deepStrictEqual(sup(script), systemd, 'a #! script runs as its shell');
-  const twoHubs = "[Service]\nExecStart=/bin/bash -c 'node /srv/hub-a/server.js & node /srv/hub-b/server.js & wait'\n";
-  assert.deepStrictEqual(sup(script, twoHubs), { kind: 'none' }, 'one wrapper running two hubs: restarting it would take the other hub down');
-  assert.deepStrictEqual(sup(script, "[Service]\nExecStart=/bin/bash -c 'node /srv/hub-a/server.js'\n"), systemd);
+  assert.deepStrictEqual(sup(chain, `[Service]\nWorkingDirectory=${dir}\nExecStart=/bin/bash -lc 'npm start'\n`), systemd, 'bash -> npm -> sh -> node');
+  const script = { ...userManager, 70: { ppid: 60, comm: 'node', argv: ['node', 'server.js'], cgroup: cg }, 60: { ppid: 5, comm: 'start.sh', argv: ['/bin/bash', `${dir}/start.sh`] } };
+  assert.deepStrictEqual(sup(script, `[Service]\nExecStart=${dir}/start.sh\n`), systemd, 'a #! script runs as its shell, and its lines are read');
+  const two = sup(script, `[Service]\nExecStart=/bin/bash -c 'node ${dir}/server.js & node /srv/hub-b/server.js & wait'\n`);
+  assert.strictEqual(two.kind, 'unknown', 'one wrapper running two hubs: restarting it would take the other hub down, so refused');
+  const opaque = sup(script, `[Service]\nExecStart=/srv/elsewhere/run.sh\n`);
+  assert.strictEqual(opaque.kind, 'unknown', 'a script that can\'t be read: refused');
   // a chain broken by something that is not a wrapper (the live hub, claude): not ours
   const broken = { ...chain, 62: { ppid: 60, comm: 'claude', argv: ['claude'] } };
-  assert.deepStrictEqual(sup(broken), { kind: 'none' });
+  assert.deepStrictEqual(sup(broken, ''), { kind: 'none' });
 });
 
 test('no bus: the cgroup unit\'s own file decides for an adopted process; only the cgroup\'s own scope counts as asked', () => {
