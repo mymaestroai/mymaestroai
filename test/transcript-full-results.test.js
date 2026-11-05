@@ -20,7 +20,7 @@ const sse = (ev) => `data: ${JSON.stringify({ gateway: ev })}\n\n`;
 function fakeRes() { const written = []; return { written, write(chunk) { written.push(chunk); return true; } }; }
 const rows = (tr, agent) => tr.search(agent, '', { kinds: ['tool_result'], limit: 100 }).reverse();
 // the stored text itself (search and context return shortened copies)
-const fullText = (tr, id) => { const Database = require('better-sqlite3'); const db = new Database(tr.file, { readonly: true }); try { const r = db.prepare('SELECT text FROM entries WHERE id = ?').get(id); return r ? r.text : null; } finally { db.close(); } };
+const fullText = (tr, row) => { const Database = require('better-sqlite3'); const db = new Database(tr.fileFor(row.agent), { readonly: true }); try { const r = db.prepare('SELECT text FROM entries WHERE id = ?').get(row.id); return r ? r.text : null; } finally { db.close(); } };
 
 test('the archive keeps the whole output a turn hands over; the page still gets the short copy', () => {
   const tr = createTranscript({ file: path.join(tmp, 'a.db') });
@@ -35,8 +35,8 @@ test('the archive keeps the whole output a turn hands over; the page still gets 
   assert.ok(res.written[0].includes(short) && !res.written[0].includes(whole), 'the page got the short copy');
   const got = rows(tr, 'zz_full');
   assert.strictEqual(got.length, 2);
-  assert.strictEqual(fullText(tr, got[0].id), whole, 'the archive kept the whole output');
-  assert.strictEqual(fullText(tr, got[1].id), 'no whole output handed over', 'without a whole output the event is kept as before');
+  assert.strictEqual(fullText(tr, got[0]), whole, 'the archive kept the whole output');
+  assert.strictEqual(fullText(tr, got[1]), 'no whole output handed over', 'without a whole output the event is kept as before');
   assert.strictEqual(res.archiveToolOutput, undefined, 'the hand-over ends with the turn');
   tr.close();
 });
@@ -50,7 +50,7 @@ test('an output beyond 64 KB keeps its beginning and end; a detached turn (page 
   res.observeClosed({ gateway: { type: 'tool_result', tool_call_id: 'c1', output: huge.slice(0, 2000) } });
   t.finish(true);
   const [row] = rows(tr, 'zz_full2');
-  const text = fullText(tr, row.id);
+  const text = fullText(tr, row);
   assert.ok(text.startsWith('BEGIN ') && text.endsWith(' END'), 'beginning and end kept');
   assert.ok(text.length < 70000 && text.includes('chars omitted'), 'clipped to the archive limit');
   tr.close();
@@ -115,7 +115,7 @@ test('images are named, never archived as their data; failures and interruptions
   assert.doesNotThrow(() => res.archiveToolOutput('e2', loop));
   t.finish(true);
   const Database = require('better-sqlite3');
-  const db = new Database(tr.file, { readonly: true });
+  const db = new Database(tr.fileFor('zz_full3'), { readonly: true });
   const meta = JSON.parse(db.prepare("SELECT meta FROM entries WHERE agent = 'zz_full3' AND kind = 'tool_result'").get().meta);
   db.close();
   assert.deepStrictEqual(meta, { tool_call_id: 'e1', is_error: true });

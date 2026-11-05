@@ -16,8 +16,8 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 const sse = (ev) => `data: ${JSON.stringify({ gateway: ev })}\n\n`;
 function fakeRes() { return { write() { return true; } }; }
-function workerRows(file, agent, wid) {
-  const db = new Database(file, { readonly: true });
+function workerRows(tr, agent, wid) {
+  const db = new Database(tr.fileFor(agent), { readonly: true });
   try {
     return db.prepare("SELECT kind, tool, text, meta FROM entries WHERE agent = ? AND json_extract(meta, '$.worker_id') = ? ORDER BY id").all(agent, wid)
       .map(r => ({ ...r, meta: JSON.parse(r.meta) }));
@@ -37,7 +37,7 @@ test('a worker run is kept: instructions, steps, answer and how it ended, with i
   clock += 42000;
   res.write(sse({ type: 'worker_completed', worker_id: 'tw-1' }));
   t.finish(true);
-  const rows = workerRows(tr.file, 'zz_caller', 'tw-1');
+  const rows = workerRows(tr, 'zz_caller', 'tw-1');
   assert.deepStrictEqual(rows.map(r => [r.kind, r.meta.worker_event || null]), [['system', 'started'], ['tool_use', null], ['tool_result', null], ['tool_result', 'answer'], ['system', 'finished']]);
   assert.match(rows[0].text, /Fable review[\s\S]*Review the packet at share\/x\.md/, 'the instructions, in full');
   assert.deepStrictEqual([rows[0].meta.model, rows[0].meta.agent_type], ['claude-fable-5-1', 'temporal']);
@@ -59,9 +59,9 @@ test('two workers running the same step each keep it; failures, stops and runs c
   res.write(sse({ type: 'worker_failed', worker_id: 'tw-b', error: 'Gemini 402: out of credit' }));
   res.write(sse({ type: 'worker_failed', worker_id: 'tw-c', cancelled: true, error: 'Stopped' }));
   t.finish(true);   // tw-d never finished
-  const steps = (wid) => workerRows(tr.file, 'zz_caller2', wid).filter(r => r.kind !== 'system').length;
+  const steps = (wid) => workerRows(tr, 'zz_caller2', wid).filter(r => r.kind !== 'system').length;
   assert.deepStrictEqual(['tw-a', 'tw-b', 'tw-c', 'tw-d'].map(steps), [2, 2, 2, 2], 'every worker kept its own identical step');
-  const outcome = (wid) => workerRows(tr.file, 'zz_caller2', wid).find(r => r.meta.worker_event === 'finished');
+  const outcome = (wid) => workerRows(tr, 'zz_caller2', wid).find(r => r.meta.worker_event === 'finished');
   assert.strictEqual(outcome('tw-a').meta.outcome, 'done');
   assert.strictEqual(outcome('tw-b').meta.outcome, 'failed');
   assert.match(outcome('tw-b').text, /out of credit/);
@@ -86,7 +86,7 @@ test('Claude sub-agents answer through the caller\'s tool result: one answer row
   }
   t.finish(true);
   for (const wid of ['sdk-w1', 'sdk-w2']) {
-    const answers = workerRows(tr.file, 'zz_caller3', wid).filter(r => r.meta.worker_event === 'answer');
+    const answers = workerRows(tr, 'zz_caller3', wid).filter(r => r.meta.worker_event === 'answer');
     assert.deepStrictEqual(answers.map(a => a.text), ['PASS'], `${wid}: exactly one answer, the final result`);
   }
   tr.close();
@@ -104,7 +104,7 @@ test('identical steps inside one sub-agent each keep their row, and a run that f
   res.write(sse({ type: 'worker_text_delta', worker_id: 'sdk-s', text: 'The migration succeeded so far' }));
   res.write(sse({ type: 'worker_failed', worker_id: 'sdk-s', error: 'turn ended' }));
   t.finish(true);
-  const rows = workerRows(tr.file, 'zz_caller5', 'sdk-s');
+  const rows = workerRows(tr, 'zz_caller5', 'sdk-s');
   assert.strictEqual(rows.filter(r => r.kind === 'tool_use').length, 3);
   assert.strictEqual(rows.filter(r => r.kind === 'tool_result' && r.meta.worker_event !== 'answer').length, 3);
   const answer = rows.find(r => r.meta.worker_event === 'answer');
@@ -141,7 +141,7 @@ test('parallel steps inside a sub-agent: identical results without ids both surv
   res.write(sse({ type: 'worker_tool_result', worker_id: 'sdk-p', output: 'D done', tool_call_id: 'tu_d' }));
   res.write(sse({ type: 'worker_tool_result', worker_id: 'sdk-p', output: 'C done', tool_call_id: 'tu_c' }));
   t.finish(true);
-  const results = workerRows(tr.file, 'zz_caller6', 'sdk-p').filter(r => r.kind === 'tool_result' && r.meta.worker_event !== 'answer');
+  const results = workerRows(tr, 'zz_caller6', 'sdk-p').filter(r => r.kind === 'tool_result' && r.meta.worker_event !== 'answer');
   assert.deepStrictEqual(results.map(r => [r.text, r.meta.tool_call_id]), [['ok', null], ['ok', null], ['D done', 'tu_d'], ['C done', 'tu_c']]);
   tr.close();
 });

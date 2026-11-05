@@ -63,7 +63,7 @@ README.md CHANGELOG.md LICENSE NOTICE docs/
 | `.auth-key` | the key that encrypts TOTP secrets and connector secrets | yes |
 | `auth.db` | sessions, trusted devices, login attempts, audit log, API tokens (SQLite, WAL) | hashes only |
 | `memory.db` | long-term memory sections per agent, session notes, shared memory pool, distillation log | no |
-| `transcript.db` | the transcript archive: every turn of every agent incl. tool results, full-text searchable (recall) | contains everything agents saw |
+| `transcripts/<agent>.db` | the transcript archive, one file per agent: every turn incl. tool results and workers' runs, full-text searchable (recall). An older install's combined `transcript.db` is split into these once at start and kept as `transcript.db.pre-split` (left out of backups); while it is still there (a split that could not run) everything stays in it | contains everything agents saw |
 | `ledger.db` | spend ledger, one row per turn (tokens, cost, cache reads) | no |
 | `conversations/<agent>.jsonl` | chat history shown in the UI, one JSON line per message; an assistant entry may carry `activity` (its turn's tool calls and workers, `at` = offset in the saved text; the pages show them in the reply's Tools panel, closed until opened) | no |
 | `agent-sessions.json`, `sdk-sessions.json`, `codex-sessions.json` | map agent → client session id (Claude / Codex routes) | no |
