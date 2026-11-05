@@ -1698,6 +1698,13 @@ async function handleHttpRequest(req, res) {
       const r = new URL(req.url, 'http://x').searchParams.get('stored') === '1' ? (mh.stored() || { agents: [], checkedAt: null }) : await mh.latest();
       return jsonResponse(res, 200, { ok: true, ...r });
     }
+    if (pathname === '/api/memory-health/action' && req.method === 'POST') {
+      // One action an admin pressed in Settings → Status → Memory (lib/memory-health act): checked against what it
+      // applies to now; the deletes need the typed word. Admin-only (an unlisted /api route).
+      const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
+      const r = await require('./lib/memory-health').getMemoryHealth().act({ action: String(b.action || ''), agent: b.agent || null, folder: b.folder || null, file: b.file || null, confirm: b.confirm == null ? null : String(b.confirm) });
+      return jsonResponse(res, r.ok ? 200 : 400, r);
+    }
     if (pathname === '/api/memory-health/run' && req.method === 'POST') {
       const r = await require('./lib/memory-health').getMemoryHealth().run();
       return jsonResponse(res, 200, { ok: true, ...r, cached: false });

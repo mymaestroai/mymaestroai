@@ -257,3 +257,38 @@ test('searchTimes: each agent\'s real searches are timed (the newest 50, of the 
   assert.strictEqual(tr2.searchTimes('doc').failed, 0, 'older than a week: no longer counted');
   tr2.close();
 });
+
+test('tidyStep: the search index is merged a bounded step at a time until a step merges nothing; searches still find everything', () => {
+  const { file, dir } = place();
+  const tr = createTranscript({ file, dir, log: quiet });
+  tr.record({ agent: 'doc', kind: 'user', text: 'first visit' });
+  // small index pages and no automatic merging, so the index is many segments and each step can do only part of it
+  const Database = require('better-sqlite3');
+  tr.close();
+  const db = new Database(tr.fileFor('doc'));
+  db.exec("INSERT INTO entries_fts(entries_fts, rank) VALUES('pgsz', 64); INSERT INTO entries_fts(entries_fts, rank) VALUES('automerge', 0); INSERT INTO entries_fts(entries_fts, rank) VALUES('crisismerge', 2000);");
+  db.close();
+  for (let i = 0; i < 400; i++) tr.record({ agent: 'doc', kind: 'user', text: `visit ${i} infusion schedule note w${i}x` });
+  let steps = 0, r;
+  do { r = tr.tidyStep('doc', { pages: 16, first: steps === 0 }); steps++; } while (!r.done && steps < 5000);
+  assert.strictEqual(r.done, true);
+  assert.ok(steps > 3, `a big index takes several steps (took ${steps}); a step that wrote pages is not the end`);
+  const again = tr.tidyStep('doc', { pages: 16, first: true });
+  assert.strictEqual(again.done, true, 'once done, even a fresh first step finds nothing left to merge');
+  assert.strictEqual(tr.search('doc', 'infusion', { limit: 100 }).length, 100);
+  assert.strictEqual(tr.tidyStep('nobody'), null, 'no archive: nothing to tidy, no file made');
+  assert.strictEqual(fs.existsSync(tr.fileFor('nobody')), false);
+  tr.close();
+});
+
+test('tidyStep: before the split every agent shares the combined file, which one agent\'s tidy leaves alone', () => {
+  const { file, dir } = place();
+  const Database = require('better-sqlite3');
+  const tr0 = createTranscript({ file, dir, log: quiet });
+  tr0.close();
+  const db = new Database(file); db.exec('CREATE TABLE IF NOT EXISTS placeholder (x)'); db.close();   // the combined file exists: combined mode
+  const tr = createTranscript({ file, dir, log: quiet });
+  tr.record({ agent: 'doc', kind: 'user', text: 'kept in the combined file' });
+  assert.deepStrictEqual(tr.tidyStep('doc', { first: true }), { combined: true });
+  tr.close();
+});

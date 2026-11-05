@@ -151,5 +151,5 @@ test('ownerEntries counts agents per owner for the admin switcher', () => {
 });
 
 test('the memory check is for admins only: its stored result and a new check', () => {
-  for (const p of ['/api/memory-health', '/api/memory-health/run']) assert.deepStrictEqual(X.classifyRoute(p), { kind: 'admin' }, p);
+  for (const p of ['/api/memory-health', '/api/memory-health/run', '/api/memory-health/action']) assert.deepStrictEqual(X.classifyRoute(p), { kind: 'admin' }, p);
 });

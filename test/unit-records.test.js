@@ -236,3 +236,111 @@ test('unloadable: Records the prompt never loads and never mentions (a dead link
     { name: long, kind: 'name', why: 'its name has characters or a length the hub can\'t open' }]);
   assert.deepStrictEqual(rec.unloadable('nobody'), []);
 });
+
+test('snapshot: every Record as it reads now, in one private file beside records/ (through links, as loading does); the newest 3 kept; nothing written when one cannot be read', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec, hub } = load();
+  rec.write('gp', 'working-brief.md', 'the brief');
+  rec.write('gp', 'facts.md', '# Facts\nBlood type O+');
+  const linked = path.join(hub, 'workspaces', 'gp', 'docs', 'garden.md');
+  fs.mkdirSync(path.dirname(linked), { recursive: true }); fs.writeFileSync(linked, '# Garden');
+  fs.symlinkSync(linked, path.join(rec.folderFor('gp'), 'garden.md'));
+  const ws = path.join(hub, 'workspaces', 'gp');
+  let t = Date.parse('2026-11-05T21:00:00Z');
+  const s1 = rec.snapshot('gp', { now: () => t });
+  assert.strictEqual(s1.name, '.records-before-condense-20261105T210000Z.json');
+  assert.strictEqual(path.dirname(s1.file), ws, 'beside records/, never inside it');
+  assert.strictEqual(fs.statSync(s1.file).mode & 0o777, 0o600);
+  const body = JSON.parse(fs.readFileSync(s1.file, 'utf8'));
+  assert.deepStrictEqual(body.files.map(f => [f.name, f.text]), [['working-brief.md', 'the brief'], ['facts.md', '# Facts\nBlood type O+'], ['garden.md', '# Garden']]);
+  assert.strictEqual(rec.list('gp').length, 3, 'the copy is not a Record');
+  const s2 = rec.snapshot('gp', { now: () => t });
+  assert.strictEqual(s2.name, '.records-before-condense-20261105T210000Z-2.json', 'the same second: a new name, never over the first');
+  // a link put where the next copy would go is not followed
+  const target = path.join(hub, 'elsewhere.txt'); fs.writeFileSync(target, 'untouched');
+  t += 60000;
+  fs.symlinkSync(target, path.join(ws, '.records-before-condense-20261105T210100Z.json'));
+  const s3 = rec.snapshot('gp', { now: () => t });
+  assert.strictEqual(s3.name, '.records-before-condense-20261105T210100Z-2.json');
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), 'untouched');
+  t += 60000; rec.snapshot('gp', { now: () => t });
+  t += 60000; const s5 = rec.snapshot('gp', { now: () => t });
+  const kept = fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort();
+  assert.deepStrictEqual(kept, ['.records-before-condense-20261105T210100Z-2.json', '.records-before-condense-20261105T210200Z.json', s5.name], 'the newest 3 (the planted link went too: it was the oldest name)');
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), 'untouched', 'removing a link never touches what it points to');
+  // one Record that can't be read: an error, and no new copy
+  fs.chmodSync(path.join(rec.folderFor('gp'), 'facts.md'), 0o000);
+  try {
+    t += 60000;
+    assert.throws(() => rec.snapshot('gp', { now: () => t }), /facts\.md/);
+    assert.strictEqual(fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).length, 3);
+  } finally { fs.chmodSync(path.join(rec.folderFor('gp'), 'facts.md'), 0o644); }
+  assert.deepStrictEqual(rec.snapshot('nobody'), { file: null, name: null, files: 0 }, 'no Records: no copy');
+});
+
+test('snapshot: a write that takes only part of the copy goes on until all of it is written; a full disk leaves no new file and every earlier copy; pruning keeps the newest whole copies and clears junk', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec, hub } = load();
+  rec.write('gp', 'facts.md', '# Facts\n' + 'x'.repeat(5000));
+  const ws = path.join(hub, 'workspaces', 'gp');
+  let t = Date.parse('2026-11-05T21:00:00Z');
+  const copies = () => fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort();
+  const realWrite = fs.writeSync;
+  let calls = 0;
+  fs.writeSync = (fd, buf, off, len, ...rest) => { calls++; return realWrite(fd, buf, off, Math.min(len, 1000), ...rest); };   // at most 1,000 bytes a call
+  let s1; try { s1 = rec.snapshot('gp', { now: () => t, prune: false }); } finally { fs.writeSync = realWrite; }
+  assert.ok(calls > 3, 'several writes');
+  assert.strictEqual(JSON.parse(fs.readFileSync(s1.file, 'utf8')).files[0].text.length, 5008, 'the whole copy');
+  for (let i = 0; i < 2; i++) { t += 60000; rec.snapshot('gp', { now: () => t, prune: false }); }
+  const three = copies();
+  calls = 0;
+  fs.writeSync = (fd, buf, off, len, ...rest) => { if (++calls === 2) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }); return realWrite(fd, buf, off, Math.min(len, 1000), ...rest); };
+  t += 60000;
+  try { assert.throws(() => rec.snapshot('gp', { now: () => t }), /ENOSPC/); } finally { fs.writeSync = realWrite; }
+  assert.deepStrictEqual(copies(), three, 'no new file, and the earlier copies stay');
+  // prune: off by request; then the newest three whole copies stay, junk (a cut-short copy, a link) goes
+  t += 60000; const s4 = rec.snapshot('gp', { now: () => t, prune: false });
+  assert.strictEqual(copies().length, 4);
+  fs.writeFileSync(path.join(ws, '.records-before-condense-20261105T220000Z.json'), '{"files": [');   // cut short
+  fs.symlinkSync('/etc/hostname', path.join(ws, '.records-before-condense-20261105T220100Z.json'));
+  assert.strictEqual(rec.pruneSnapshots('gp'), 3, 'the oldest whole copy and the two junk entries');
+  assert.deepStrictEqual(copies(), [...three.slice(1), s4.name]);
+  assert.strictEqual(rec.discardSnapshot('gp', s4.name), true);
+  assert.strictEqual(rec.discardSnapshot('gp', '../records/facts.md'), false, 'only a copy\'s own name');
+  assert.ok(fs.existsSync(path.join(rec.folderFor('gp'), 'facts.md')));
+});
+
+test('pruneSnapshots: a copy it cannot read is not junk (pruning stops, deleting nothing); the copy just made is kept even when the clock went back', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec, hub } = load();
+  rec.write('gp', 'facts.md', '# Facts');
+  const ws = path.join(hub, 'workspaces', 'gp');
+  const copies = () => fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort();
+  let t = Date.parse('2026-11-05T22:00:00Z');
+  const made = [];
+  for (let i = 0; i < 4; i++) { made.push(rec.snapshot('gp', { now: () => t, prune: false }).name); t += 60000; }
+  fs.symlinkSync('/etc/hostname', path.join(ws, '.records-before-condense-20261105T230000Z.json'));   // junk, which would go
+  fs.chmodSync(path.join(ws, made[0]), 0o000);
+  try {
+    assert.throws(() => rec.pruneSnapshots('gp'), /EACCES/);
+    assert.strictEqual(copies().length, 5, 'nothing deleted, not even the junk');
+  } finally { fs.chmodSync(path.join(ws, made[0]), 0o600); }
+  assert.strictEqual(rec.pruneSnapshots('gp'), 2, 'readable again: the oldest whole copy and the link go');
+  assert.deepStrictEqual(copies(), made.slice(1));
+  // the clock went back an hour: the new copy sorts oldest, and is still the one kept
+  t = Date.parse('2026-11-05T21:00:00Z');
+  const back = rec.snapshot('gp', { now: () => t, prune: false }).name;
+  rec.pruneSnapshots('gp', { protect: back });
+  assert.deepStrictEqual(copies(), [back, made[2], made[3]].sort(), 'the copy just made, and the two newest others');
+});
+
+test('pruneSnapshots: a copy removed meanwhile (another prune) is skipped, not an error', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec, hub } = load();
+  rec.write('gp', 'facts.md', '# Facts');
+  const ws = path.join(hub, 'workspaces', 'gp');
+  let t = Date.parse('2026-11-05T22:00:00Z');
+  const made = [];
+  for (let i = 0; i < 5; i++) { made.push(rec.snapshot('gp', { now: () => t, prune: false }).name); t += 60000; }
+  const realLstat = fs.lstatSync;
+  fs.lstatSync = (p, ...rest) => { if (String(p).endsWith(made[1])) { fs.unlinkSync(p); } return realLstat(p, ...rest); };
+  let removed; try { removed = rec.pruneSnapshots('gp'); } finally { fs.lstatSync = realLstat; }
+  assert.strictEqual(removed, 1, 'the one older copy still there');
+  assert.deepStrictEqual(fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort(), made.slice(2));
+});

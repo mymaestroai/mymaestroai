@@ -21,17 +21,40 @@ function make(world = {}, { now = () => NOW } = {}) {
   const file = path.join(tmp, `mh-${++n}.json`);
   const mh = createMemoryHealth({
     file, now, log: () => {}, zone: () => 'UTC',
-    listAgents: async () => (world.agents || []).map(a => ({ name: a, display: a[0].toUpperCase() + a.slice(1) })),
+    listAgents: async () => { if (world.listFail && world.listFail()) throw new Error('could not list the agents'); return (world.agents || []).map(a => ({ name: a, display: a[0].toUpperCase() + a.slice(1) })); },
     recordsUsage: (a) => { const u = (world.records || {})[a.name]; if (u instanceof Error) throw u; return u || null; },
     history: (name) => { const h = (world.history || {})[name]; if (h instanceof Error) throw h; return { readings: ((world.readings || {})[name]) || [], runs: ((world.runs || {})[name]) || [] }; },
-    compactionMode: (name) => { const m = (world.modes || {})[name]; if (m instanceof Error) throw m; return m || 'on'; },
+    compactionSettings: (name) => { const m = (world.modes || {})[name]; if (m instanceof Error) throw m; return { mode: m || 'on', at: ((world.at || {})[name]) || 0.75 }; },
     archiveHealth: (name) => { const h = (world.archives || {})[name]; if (h instanceof Error) throw h; return h === undefined ? { entries: 0 } : h; },
     searchTimes: (name) => ((world.searches || {})[name]) || { count: 0, maxMs: 0, slow: 0, verySlow: 0 },
     chatFile: async (name) => { const c = (world.chats || {})[name]; if (c instanceof Error) throw c; return c || null; },
     bundles: async () => world.bundles || [],
     preSplit: () => world.preSplit || [],
     notify: async (p) => { notices.push(p); return world.send || { sent: 1, failed: 0 }; },
-    pause: async () => { pauses++; },
+    pause: async () => { pauses++; if (world.pauseGate) await world.pauseGate; },
+    agentBusy: (name) => (world.busy || []).includes(name),
+    snapshotRecords: async (a) => { if (world.snapFail) throw world.snapFail; (world.snaps = world.snaps || []).push(a.name); return { file: '/ws/x', name: '.records-before-condense-20261105T120000Z.json', files: 3 }; },
+    discardSnapshot: async (a, snap) => { (world.discarded = world.discarded || []).push(snap && snap.name); },
+    pruneSnapshots: async (a) => { (world.pruned = world.pruned || []).push(a.name); },
+    startTurn: async (name, message) => { if (world.refuse) throw world.refuse; (world.turns = world.turns || []).push({ name, message }); return { done: Promise.resolve('condensed') }; },
+    setCompaction: async (name, c) => {
+      (world.saved = world.saved || []).push({ name, ...c });
+      if ('mode' in c) world.modes = { ...(world.modes || {}), [name]: c.mode };
+      if ('at' in c) world.at = { ...(world.at || {}), [name]: c.at };
+      return { success: true };
+    },
+    tidyStep: (name, o) => {
+      (world.firsts = world.firsts || []).push(!!(o && o.first));
+      world.tidies = (world.tidies || 0) + 1;
+      const fixed = (world.tidyResult || {})[name];
+      if (fixed !== undefined) return fixed;
+      if (!(world.archives || {})[name]) return null;
+      return { done: world.tidies >= (world.tidyDoneAt || 3) };
+    },
+    // the pause between tidy steps is a tick; the 20-second answer timer fires only when a test says so
+    sleep: (ms) => (ms >= 1000 ? (world.answerNow ? Promise.resolve() : new Promise(() => {})) : new Promise(r => setImmediate(r))),
+    removeBundle: async (folder, o) => { (world.removed = world.removed || []).push(folder); (world.expected = world.expected || []).push(o && o.expectName); world.bundles = (world.bundles || []).filter(b => b.folder !== folder); },
+    removePreSplit: async (file) => { (world.removed = world.removed || []).push(file); world.preSplit = []; },
   });
   return { mh, notices, pauses: () => pauses, file };
 }
@@ -77,7 +100,8 @@ test('context: for information (where its recent turns ended); amber only when t
       switched: [...readings([90, 90]), ...readings([20], 1000000)], nomode: readings([10, 50, 93]) },
     modes: { dry: 'dry', off: 'off', on: 'on', climbing: 'dry', nomode: new Error('agents file unreadable') }, history: { broken: new Error('state file unreadable') } });
   assert.strictEqual(item(await mh.checkAgent({ name: 'few' }), 'context'), undefined, 'three readings needed');
-  assert.deepStrictEqual(item(await mh.checkAgent({ name: 'long' }), 'context'), { key: 'context', status: 'green', title: 'Context', detail: 'Its last 4 turns ended between 20% and 88% of its 200K-token window.' });
+  assert.deepStrictEqual(item(await mh.checkAgent({ name: 'long' }), 'context'), { key: 'context', status: 'green', title: 'Context', detail: 'Its last 4 turns ended between 20% and 88% of its 200K-token window.',
+    actions: [{ id: 'compress-earlier', label: 'Compress earlier (at 60% instead of 75%)' }] }, 'turns that reach 80% with compression on: compressing earlier is offered, not urged');
   assert.strictEqual(item(await mh.checkAgent({ name: 'climbing' }), 'context').status, 'green', 'a long session that climbs is not a finding');
   const dry = item(await mh.checkAgent({ name: 'dry' }), 'context');
   assert.deepStrictEqual([dry.status, dry.title, dry.detail], ['amber', 'Context nearly full', 'Its last turn ended at 93% of its 200K-token window, and compression is only a dry run for it.']);
@@ -136,7 +160,8 @@ test('a check: the worst first, counts, stored privately; one phone notice for a
   const r = await mh.run();
   assert.deepStrictEqual(r.agents.map(a => [a.agent, a.status]), [['doc', 'red'], ['maestro', 'amber'], ['tester', 'amber'], ['watchman', 'green']]);
   assert.deepStrictEqual(r.counts, { red: 1, amber: 2, green: 1 });
-  assert.deepStrictEqual(r.extras, { bundles: { count: 1, bytes: 3 * 1048576, complete: true, items: world.bundles }, preSplit: world.preSplit });
+  assert.deepStrictEqual(r.extras, { bundles: { count: 1, bytes: 3 * 1048576, complete: true, items: [{ ...world.bundles[0], action: { id: 'delete-bundle', folder: 'rifle-20261102T214939Z', confirm: 'rifle' } }] },
+    preSplit: [{ ...world.preSplit[0], action: { id: 'delete-pre-split', file: 'transcript.db.pre-split', confirm: 'delete' } }] });
   assert.ok(pauses() >= 4, 'it pauses between agents so the hub keeps answering');
   assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).notified, ['doc']);
@@ -226,4 +251,185 @@ test('folder sizes: counted without holding up the hub, within a budget shared b
 test('sizes and windows read plainly', () => {
   assert.deepStrictEqual([sizeLabel(900), sizeLabel(256 * 1024), sizeLabel(3.1 * 1048576), sizeLabel(1.2 * 1073741824)], ['1 KB', '256 KB', '3.1 MB', '1.2 GB']);
   assert.deepStrictEqual([tokensLabel(200000), tokensLabel(1000000), tokensLabel(131072)], ['200K', '1M', '131K']);
+});
+
+test('each finding offers only the action that answers it', async () => {
+  const { mh } = make({
+    records: { full: { used: 200 * 1024, cap: 256 * 1024, pct: 78, files: 3, notLoaded: [] }, guess: { used: 30 * 1024, cap: 35 * 1024, pct: 86, files: 2, notLoaded: [{ name: 'n.md', bytes: 60 * 1024 }], estimated: true } },
+    readings: { dry: readings([10, 50, 93]), low: readings([10, 20, 30]), early: readings([50, 85, 70]) },
+    modes: { dry: 'dry', early: 'on' }, at: { early: 0.6 },
+    archives: { slow: { entries: 30000, fileBytes: 1, recent: 0 }, shared: { entries: 30000, fileBytes: null, recent: 0 } },
+    searches: { slow: { count: 12, maxMs: 900, slow: 4, verySlow: 0 }, shared: { count: 12, maxMs: 900, slow: 4, verySlow: 0 } } });
+  const ids = async (name, key) => (item(await mh.checkAgent({ name }), key).actions || []).map(x => x.id);
+  assert.deepStrictEqual(await ids('full', 'records'), ['condense']);
+  assert.deepStrictEqual(await ids('guess', 'records'), [], 'an estimated cap offers nothing to do to the agent');
+  assert.deepStrictEqual(await ids('dry', 'context'), ['compression-on']);
+  assert.deepStrictEqual(await ids('low', 'context'), [], 'turns that stay low: nothing offered');
+  assert.deepStrictEqual(await ids('early', 'context'), [], 'already at 60%');
+  assert.deepStrictEqual(await ids('slow', 'archive'), ['tidy-index']);
+  assert.deepStrictEqual(await ids('shared', 'archive'), [], 'no own file yet (every agent still in the combined one): nothing to tidy on its own');
+});
+
+test('actions: each is checked against what it applies to now, and the deletes need the typed word', async () => {
+  const world = { agents: ['doc', 'watchman', 'maestro', 'quiet'],
+    records: { doc: { used: 250 * 1024, cap: 256 * 1024, pct: 98, files: 3, notLoaded: [{ name: 'patient-a.md', bytes: 132 * 1024 }] }, maestro: { used: 200 * 1024, cap: 256 * 1024, pct: 78, files: 3, notLoaded: [] } },
+    modes: { watchman: 'dry' }, at: { watchman: 0.9, maestro: 0.9 }, busy: ['maestro'], archives: { watchman: { entries: 5000, fileBytes: 1, recent: 0 } },
+    bundles: [{ folder: 'rifle-20261102T214939Z', name: 'rifle', bytes: 10, complete: true, partial: false }, { folder: 'old-x.partial', name: 'old', bytes: 1, complete: true, partial: true }],
+    preSplit: [{ file: 'transcript.db.pre-split', bytes: 99 }] };
+  const { mh } = make(world);
+  await mh.run();
+  const doc = await mh.act({ action: 'condense', agent: 'doc' });
+  assert.deepStrictEqual([doc.ok, doc.message], [true, 'Asked Doc to condense its Records. It is working on it now, and the next check shows the result. A copy of them as they were is in its workspace (.records-before-condense-20261105T120000Z.json).']);
+  assert.deepStrictEqual([world.turns.length, world.snaps, world.pruned], [1, ['doc'], ['doc']], 'a copy first, then the turn, and only then are older copies pruned');
+  assert.match(world.turns[0].message, /^\[From the hub, at an admin's request\] Your Records use 250 KB of their 256 KB cap \(98%\), and patient-a\.md doesn't fit, so it isn't loaded\. Condense them now\. First read every Record in full: the ones in front of you, and with your Read tool any that aren't loaded \(record_list shows their folder\)\. If one can't be read, change nothing and say which\./);
+  assert.match(world.turns[0].message, /don't merge files: an emptied file stays behind and saves no space\. A copy of your Records as they are now is in your workspace \(\.records-before-condense-20261105T120000Z\.json\)\./);
+  assert.deepStrictEqual(await mh.act({ action: 'condense', agent: 'maestro' }), { ok: false, error: 'Maestro is working right now (a reply or a background job). Try again when it\'s done.' });
+  assert.deepStrictEqual(await mh.act({ action: 'condense', agent: 'quiet' }), { ok: false, error: 'Quiet has no Records to condense.' });
+  assert.deepStrictEqual(await mh.act({ action: 'condense', agent: 'nobody' }), { ok: false, error: 'There is no agent by that name.' });
+  const on = await mh.act({ action: 'compression-on', agent: 'watchman' });
+  assert.deepStrictEqual([on.ok, on.message, world.saved[0], !!on.result], [true, 'Compression is on for Watchman: it compresses when its context reaches 90% of its window.', { name: 'watchman', mode: 'on' }, true], 'only the mode: the threshold keeps following its own setting or the hub default');
+  assert.deepStrictEqual(await mh.act({ action: 'compression-on', agent: 'watchman' }), { ok: false, error: 'Compression is already on for Watchman.' });
+  const earlier = await mh.act({ action: 'compress-earlier', agent: 'watchman' });
+  assert.deepStrictEqual([earlier.ok, world.saved[1]], [true, { name: 'watchman', at: 0.6 }], 'only the threshold');
+  assert.deepStrictEqual(await mh.act({ action: 'compress-earlier', agent: 'watchman' }), { ok: false, error: 'Watchman already compresses at 60%.' });
+  const tidy = await mh.act({ action: 'tidy-index', agent: 'watchman' });
+  assert.deepStrictEqual([tidy.ok, tidy.message, world.tidies, world.firsts], [true, 'Tidied Watchman\'s search index (3 steps).', 3, [true, false, false]], 'SQLite\'s rule: a negative page count on the first step only');
+  assert.deepStrictEqual(await mh.act({ action: 'tidy-index', agent: 'quiet' }), { ok: false, error: 'Quiet has no archive yet.' });
+  assert.deepStrictEqual(await mh.act({ action: 'delete-bundle', folder: 'rifle-20261102T214939Z', confirm: 'Rifle' }), { ok: false, error: 'Type rifle to delete it for good.' });
+  assert.deepStrictEqual(await mh.act({ action: 'delete-bundle', folder: 'old-x.partial', confirm: 'old' }).then(r => r.ok), false, 'one still being put away is not offered');
+  assert.deepStrictEqual(await mh.act({ action: 'delete-bundle', folder: '../../etc', confirm: 'x' }).then(r => r.ok), false);
+  const del = await mh.act({ action: 'delete-bundle', folder: 'rifle-20261102T214939Z', confirm: 'rifle' });
+  assert.deepStrictEqual([del.ok, del.message, world.removed, world.expected, del.result.extras.bundles.items.map(b => b.folder)], [true, 'Deleted rifle\'s folder for good.', ['rifle-20261102T214939Z'], ['rifle'], ['old-x.partial']], 'the name typed goes with the removal, which checks it against the folder again');
+  assert.deepStrictEqual(await mh.act({ action: 'delete-pre-split', file: 'transcript.db.pre-split', confirm: 'yes' }), { ok: false, error: 'Type delete to remove it for good.' });
+  const ps = await mh.act({ action: 'delete-pre-split', file: 'transcript.db.pre-split', confirm: 'delete' });
+  assert.deepStrictEqual([ps.ok, ps.message, ps.result.extras.preSplit], [true, 'Deleted transcript.db.pre-split for good.', []]);
+  assert.deepStrictEqual(await mh.act({ action: 'drop-everything' }), { ok: false, error: 'Unknown action.' });
+});
+
+test('condense: nothing is asked when the hub refuses the turn or the copy of the Records can\'t be made, and the reason is said', async () => {
+  const world = { agents: ['doc'], records: { doc: { used: 250 * 1024, cap: 256 * 1024, pct: 98, files: 3, notLoaded: [] } } };
+  const { mh } = make(world);
+  world.refuse = Object.assign(new Error('Agent is busy; use interject or wait for the current turn.'), { status: 409 });
+  assert.deepStrictEqual(await mh.act({ action: 'condense', agent: 'doc' }), { ok: false, error: 'Doc started working on something else just now. Try again when it\'s done.' });
+  world.refuse = Object.assign(new Error('hub halted'), { status: 503 });
+  assert.deepStrictEqual(await mh.act({ action: 'condense', agent: 'doc' }), { ok: false, error: 'The hub didn\'t start Doc\'s turn: hub halted.' });
+  assert.deepStrictEqual([world.snaps.length, world.discarded, world.pruned], [2, ['.records-before-condense-20261105T120000Z.json', '.records-before-condense-20261105T120000Z.json'], undefined], 'each refused press removes the copy it made, and prunes nothing');
+  world.refuse = null;
+  world.snapFail = new Error('facts.md can\'t be read');
+  assert.deepStrictEqual(await mh.act({ action: 'condense', agent: 'doc' }), { ok: false, error: 'Couldn\'t keep a copy of Doc\'s Records first (facts.md can\'t be read), so nothing was asked.' });
+  assert.strictEqual(world.turns, undefined, 'no turn was started');
+});
+
+test('an action answers with a check that started after it: one already running read the old state; each check carries a higher number', async () => {
+  const world = { agents: ['watchman'], readings: { watchman: readings([20, 60, 93]) }, modes: { watchman: 'dry' }, at: { watchman: 0.75 } };
+  const { mh } = make(world);
+  const first = await mh.run();
+  assert.strictEqual(item(first.agents[0], 'context').status, 'amber');
+  let release; world.pauseGate = new Promise(r => { release = r; });
+  const stale = mh.run();   // reads Watchman's setting (still a dry run), then waits
+  await new Promise(r => setImmediate(r));
+  const acting = mh.act({ action: 'compression-on', agent: 'watchman' });
+  await new Promise(r => setImmediate(r)); await new Promise(r => setImmediate(r));
+  world.pauseGate = null; release();
+  const [r, old] = await Promise.all([acting, stale]);
+  assert.strictEqual(item(old.agents[0], 'context').status, 'amber', 'the check that was running saw the old setting');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(item(r.result.agents[0], 'context').status, 'green', 'the answer shows compression on');
+  assert.ok(first.gen >= 1 && old.gen > first.gen && r.result.gen > old.gen, `rising numbers: ${first.gen}, ${old.gen}, ${r.result.gen}`);
+  assert.strictEqual(mh.stored().gen, r.result.gen, 'the stored check is the newest');
+});
+
+test('tidy: one at a time per agent; refused in words before the split and when the archive can\'t be opened; a long one is answered at once and finishes in the background, its outcome on the check after it', async () => {
+  const world = { agents: ['watchman', 'shared', 'broken'], archives: { watchman: { entries: 5000, fileBytes: 1, recent: 0 } },
+    tidyResult: { shared: { combined: true }, broken: false } };
+  const { mh } = make(world);
+  assert.deepStrictEqual(await mh.act({ action: 'tidy-index', agent: 'shared' }), { ok: false, error: 'Every agent\'s archive is still in the one shared file of an earlier version, so Shared\'s search index can\'t be tidied on its own. Your Maestro splits that file at its next start.' });
+  assert.deepStrictEqual(await mh.act({ action: 'tidy-index', agent: 'broken' }), { ok: false, error: 'Couldn\'t open Broken\'s archive, so its search index can\'t be tidied.' });
+  world.tidyDoneAt = Infinity; world.answerNow = true;
+  const r = await mh.act({ action: 'tidy-index', agent: 'watchman' });
+  assert.deepStrictEqual([r.ok, r.message, !!(r.pending && r.pending.tidy)], [true, 'Tidying Watchman\'s search index. It goes on in the background (at most 10 minutes), and this list updates when it\'s done.', true]);
+  assert.deepStrictEqual(await mh.act({ action: 'tidy-index', agent: 'watchman' }), { ok: false, error: 'Watchman\'s search index is being tidied already.' });
+  world.tidyDoneAt = world.tidies + 2;   // two more steps
+  const mine = () => ((mh.stored() || {}).tidies || []).find(x => x.id === r.pending.tidy);
+  for (let i = 0; i < 50 && !mine(); i++) await new Promise(res => setImmediate(res));
+  const note = mine();
+  assert.deepStrictEqual([note.ok, note.done, note.message], [true, true, `Tidied Watchman's search index (${note.steps} steps).`]);
+  assert.ok(note.steps >= 3);
+  world.answerNow = false; world.tidyDoneAt = world.tidies + 1;
+  const again = await mh.act({ action: 'tidy-index', agent: 'watchman' });
+  assert.deepStrictEqual([again.ok, again.message], [true, 'Tidied Watchman\'s search index (1 step).'], 'after it ended, it can be pressed again');
+});
+
+// The real Records copies (lib/records snapshot / discardSnapshot / pruneSnapshots) in a stand-in hub folder.
+function realRecords() {
+  const REAL = path.resolve(__dirname, '..');
+  const hub = fs.mkdtempSync(path.join(tmp, 'hub-'));
+  fs.mkdirSync(path.join(hub, 'lib'));
+  for (const f of ['records.js', 'path-confine.js', 'timezone.js']) fs.copyFileSync(path.join(REAL, 'lib', f), path.join(hub, 'lib', f));
+  fs.writeFileSync(path.join(hub, 'lib', 'settings.js'), 'module.exports = { getSetting: (k, d) => d };');
+  return { rec: require(path.join(hub, 'lib', 'records.js')), ws: (a) => path.join(hub, 'workspaces', a) };
+}
+
+test('condense with the real Records copies: a refused press leaves every earlier copy; an admitted one keeps the newest three, its own among them', async () => {
+  const { rec, ws } = realRecords();
+  rec.write('doc', 'facts.md', '# Facts\nBlood type O+');
+  let t = Date.parse('2026-11-05T21:00:00Z');
+  for (let i = 0; i < 3; i++) { rec.snapshot('doc', { now: () => t }); t += 60000; }
+  const copies = () => fs.readdirSync(ws('doc')).filter(n => n.startsWith('.records-before-condense-')).sort();
+  const before = copies();
+  assert.strictEqual(before.length, 3);
+  const world = { agents: ['doc'], records: { doc: { used: 250 * 1024, cap: 256 * 1024, pct: 98, files: 1, notLoaded: [] } } };
+  const real = createMemoryHealth({ file: path.join(tmp, `mh-real-${++n}.json`), now: () => t, log: () => {},
+    listAgents: async () => [{ name: 'doc', display: 'Doc' }], recordsUsage: async () => world.records.doc,
+    snapshotRecords: async (a) => rec.snapshot(a.name, { now: () => t, prune: false }),
+    discardSnapshot: async (a, snap) => { rec.discardSnapshot(a.name, snap.name); },
+    pruneSnapshots: async (a) => rec.pruneSnapshots(a.name),
+    startTurn: async () => { if (world.refuse) throw world.refuse; return { done: Promise.resolve('') }; } });
+  for (let i = 0; i < 3; i++) {
+    world.refuse = Object.assign(new Error('hub halted'), { status: 503 });
+    t += 60000;
+    assert.strictEqual((await real.act({ action: 'condense', agent: 'doc' })).ok, false);
+  }
+  assert.deepStrictEqual(copies(), before, 'refused presses leave the earlier copies exactly as they were');
+  world.refuse = null; t += 60000;
+  const ok = await real.act({ action: 'condense', agent: 'doc' });
+  assert.strictEqual(ok.ok, true);
+  const after = copies();
+  assert.deepStrictEqual(after, [...before.slice(1), after[2]], 'the oldest went, and the newest is this press\'s copy');
+  assert.match(ok.message, new RegExp(after[2].replace(/\./g, '\\.')));
+});
+
+test('two tidies at once: each press gets its own outcome, and every outcome is on the check after it', async () => {
+  const world = { agents: ['alpha', 'beta'], archives: { alpha: { entries: 10, fileBytes: 1, recent: 0 }, beta: { entries: 10, fileBytes: 1, recent: 0 } } };
+  const steps = { alpha: 0, beta: 0 };
+  world.tidyResult = {};
+  const { mh } = make(world);
+  // alpha: its second step fails; beta: done at its second step
+  Object.defineProperty(world.tidyResult, 'alpha', { get: () => { if (++steps.alpha === 2) throw new Error('disk I/O error'); return { done: false }; } });
+  Object.defineProperty(world.tidyResult, 'beta', { get: () => ({ done: ++steps.beta >= 2 }) });
+  const tick = () => new Promise(r => setImmediate(r));
+  let release; world.pauseGate = new Promise(r => { release = r; });
+  const pa = mh.act({ action: 'tidy-index', agent: 'alpha' });
+  for (let i = 0; i < 10; i++) await tick();   // alpha has failed; the check after it waits
+  const pb = mh.act({ action: 'tidy-index', agent: 'beta' });
+  for (let i = 0; i < 10; i++) await tick();   // beta is done; its check waits behind alpha's
+  world.pauseGate = null; release();
+  const [ra, rb] = await Promise.all([pa, pb]);
+  assert.deepStrictEqual(ra, { ok: false, error: 'Couldn\'t finish tidying Alpha\'s search index: disk I/O error.' });
+  assert.deepStrictEqual([rb.ok, rb.message], [true, 'Tidied Beta\'s search index (2 steps).']);
+  const notes = mh.stored().tidies.map(x => [x.agent, x.ok]);
+  assert.deepStrictEqual(notes, [['alpha', false], ['beta', true]]);
+  assert.ok(mh.stored().epoch && mh.stored().epoch === rb.result.epoch, 'one epoch per process');
+  const other = (await make({ agents: [] }).mh.run()).epoch;
+  assert.ok(other && other !== rb.result.epoch, 'another instance (a restart): another epoch');
+});
+
+test('a tidy\'s outcome is there to follow even when the check after it fails', async () => {
+  const world = { agents: ['watchman'], archives: { watchman: { entries: 10, fileBytes: 1, recent: 0 } }, tidyDoneAt: 2 };
+  const { mh } = make(world);
+  await mh.run();
+  let calls = 0; world.listFail = () => ++calls > 1;   // the press itself lists the agents; the check after the tidy can't
+  const r = await mh.act({ action: 'tidy-index', agent: 'watchman' });
+  assert.deepStrictEqual([r.ok, r.message, r.result], [true, 'Tidied Watchman\'s search index (2 steps).', null]);
+  assert.deepStrictEqual(mh.stored().tidies.map(x => [x.agent, x.ok, x.message]), [['watchman', true, 'Tidied Watchman\'s search index (2 steps).']]);
 });

@@ -2246,6 +2246,7 @@
       html += `<div class="st-section" id="st-memory-section"><h4>Memory</h4>
         <div class="st-hint">Each agent's memory: its Records against their cap, how full its context gets, compression, its conversation archive and its chat. The check runs every night and on demand, and says what would help. It changes nothing by itself.</div>
         <div id="st-mh-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-mh-msg" class="st-hint mh-msg" role="status" style="margin-left:0"></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadMemoryHealth(true)">Check now</button><span id="st-mh-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadMemoryHealth, 0);
@@ -2668,7 +2669,11 @@
     // Memory (lib/memory-health): agents needing attention first, each with what was found; the fine ones folded away.
     const MH_LABEL = { red: 'needs attention', amber: 'could use a look', green: 'fine' };
     function mhSize(n) { n = Number(n) || 0; return n < 1048576 ? `${Math.round(n / 1024)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(1)} GB`; }
-    let mhLoad = 0;
+    let mhLoad = 0, mhGen = 0, mhEpoch = null, mhStateText = '', mhFollow = null, mhTicking = false;
+    const mhOldEpochs = new Set();   // epochs a newer one replaced: a late answer from one of them is old
+    const mhFollowing = new Map();   // tidy id -> follow until (ms)
+    // Inside an attribute a quote must be escaped too (esc covers text).
+    const mhAttr = (s) => esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     async function loadMemoryHealth(runNow = false) {
       const el = document.getElementById('st-mh-list'); if (!el) return;
       const state = document.getElementById('st-mh-state');
@@ -2679,25 +2684,110 @@
         const d = await (await fetch(runNow ? '/api/memory-health/run' : '/api/memory-health', init)).json();
         if (mine !== mhLoad) return;   // a newer check answered first
         if (!d.ok) throw new Error(d.error || 'failed');
-        const agents = Array.isArray(d.agents) ? d.agents : [];
-        const dot = (s) => `<span class="mh-dot mh-${esc(s)}" title="${esc(MH_LABEL[s] || s)}"></span>`;
-        const row = (a, all) => {
-          const items = (a.items || []).filter(i => all || i.status !== 'green');
-          return `<div class="mh-row"><div class="mh-head">${dot(a.status)}<b>${esc(a.display || a.agent)}</b></div>${items.map(i => `<div class="mh-item"><span class="mh-t mh-t-${esc(i.status)}">${esc(i.title)}</span> ${esc(i.detail || '')}</div>`).join('') || '<div class="mh-item">Nothing to measure yet.</div>'}</div>`;
-        };
-        const flagged = agents.filter(a => a.status !== 'green'), fine = agents.filter(a => a.status === 'green');
-        const ex = d.extras || {}, b = ex.bundles || {}, ps = Array.isArray(ex.preSplit) ? ex.preSplit : [];
-        const extras = [b.count ? `Deleted agents' folders: ${b.count}, ${b.complete === false ? 'at least ' : ''}${mhSize(b.bytes)}, kept until an admin deletes them.` : '', ...ps.map(p => `The combined archive kept after the split (${p.file}): ${mhSize(p.bytes)}.`)].filter(Boolean);
-        el.innerHTML = (flagged.length ? flagged.map(a => row(a, false)).join('') : '<div class="mh-item">Every agent is fine.</div>')
-          + (fine.length ? `<details class="mh-fine"><summary>${fine.length} agent${fine.length === 1 ? '' : 's'} fine</summary>${fine.map(a => row(a, true)).join('')}</details>` : '')
-          + (extras.length ? `<div class="mh-extras">${extras.map(x => `<div>${esc(x)}</div>`).join('')}</div>` : '');
-        const c = d.counts || {};
-        if (state) state.textContent = `${c.red ? `${c.red} need${c.red === 1 ? 's' : ''} attention` : 'none need attention'}${c.amber ? `, ${c.amber} could use a look` : ''}; ${d.cached ? 'last checked' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.`;
-        stSum('status', 'memory', c.red ? `Memory: ${c.red} need${c.red === 1 ? 's' : ''} attention` : c.amber ? `Memory: ${c.amber} to look at` : 'Memory: all fine', !!c.red);
+        mhRender(d);
       } catch (e) {
         if (mine !== mhLoad) return;
         el.textContent = 'Could not check memory: ' + e.message; if (state) state.textContent = ''; stSum('status', 'memory', 'Memory: could not check');
       }
+    }
+    function mhRender(d) {
+      const el = document.getElementById('st-mh-list'); if (!el) return;
+      // Answers can arrive out of order (a check, an action's re-check): never paint an older check over a newer one.
+      // Another epoch (the hub restarted, or its stored result was replaced) starts the comparison afresh.
+      const state = document.getElementById('st-mh-state');
+      const g = Number(d && d.gen) || 0;
+      const stale = () => { if (state && mhStateText) state.textContent = mhStateText; return false; };
+      if (d && d.epoch && mhOldEpochs.has(d.epoch)) return stale();
+      if (d && d.epoch && d.epoch !== mhEpoch) { if (mhEpoch) mhOldEpochs.add(mhEpoch); mhEpoch = d.epoch; mhGen = 0; }
+      if (g < mhGen) return stale();
+      mhGen = g;
+      const agents = Array.isArray(d.agents) ? d.agents : [];
+      const dot = (s) => `<span class="mh-dot mh-${mhAttr(s)}" title="${mhAttr(MH_LABEL[s] || s)}"></span>`;
+      // Each finding's buttons (lib/memory-health actions): optional; nothing depends on pressing one.
+      const acts = (a, i) => (Array.isArray(i.actions) && i.actions.length ? `<div class="mh-acts">${i.actions.map(x => `<button type="button" class="st-test-btn" data-act="${mhAttr(x.id)}" data-agent="${mhAttr(a.agent)}">${esc(x.label)}</button>`).join('')}</div>` : '');
+      const row = (a, all) => {
+        const items = (a.items || []).filter(i => all || i.status !== 'green');
+        return `<div class="mh-row"><div class="mh-head">${dot(a.status)}<b>${esc(a.display || a.agent)}</b></div>${items.map(i => `<div class="mh-item"><span class="mh-t mh-t-${esc(i.status)}">${esc(i.title)}</span> ${esc(i.detail || '')}${acts(a, i)}</div>`).join('') || '<div class="mh-item">Nothing to measure yet.</div>'}</div>`;
+      };
+      const flagged = agents.filter(a => a.status !== 'green'), fine = agents.filter(a => a.status === 'green');
+      const ex = d.extras || {}, b = ex.bundles || {}, ps = Array.isArray(ex.preSplit) ? ex.preSplit : [];
+      const del = (x) => (x.action ? ` <button type="button" class="st-test-btn" data-act="${mhAttr(x.action.id)}" data-folder="${mhAttr(x.action.folder || '')}" data-file="${mhAttr(x.action.file || '')}" data-confirm="${mhAttr(x.action.confirm)}">Delete permanently…</button>` : '');
+      const extras = (b.count ? [`<div>Deleted agents' folders: ${b.count}, ${b.complete === false ? 'at least ' : ''}${esc(mhSize(b.bytes))}, kept until an admin deletes them.</div>`,
+        ...(b.items || []).map(x => `<div class="mh-x">${esc(x.name || x.folder)}: ${esc(mhSize(x.bytes))}${x.partial ? ' (still being put away)' : ''}${del(x)}</div>`)] : [])
+        .concat(ps.map(p => `<div class="mh-x">The combined archive kept after the split (${esc(p.file)}): ${esc(mhSize(p.bytes))}${del(p)}</div>`));
+      el.innerHTML = (flagged.length ? flagged.map(a => row(a, false)).join('') : '<div class="mh-item">Every agent is fine.</div>')
+        + (fine.length ? `<details class="mh-fine"><summary>${fine.length} agent${fine.length === 1 ? '' : 's'} fine</summary>${fine.map(a => row(a, true)).join('')}</details>` : '')
+        + (extras.length ? `<div class="mh-extras">${extras.join('')}</div>` : '');
+      el.onclick = mhClick;
+      const c = d.counts || {};
+      mhStateText = `${c.red ? `${c.red} need${c.red === 1 ? 's' : ''} attention` : 'none need attention'}${c.amber ? `, ${c.amber} could use a look` : ''}; ${d.cached ? 'last checked' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.`;
+      if (state) state.textContent = mhStateText;
+      stSum('status', 'memory', c.red ? `Memory: ${c.red} need${c.red === 1 ? 's' : ''} attention` : c.amber ? `Memory: ${c.amber} to look at` : 'Memory: all fine', !!c.red);
+    }
+    // A press on one of the Memory section's buttons. Deleting for good asks for the typed word first (the agent's
+    // name, or "delete"), as Restore asks for RESTORE; the hub checks the same word.
+    function mhClick(e) {
+      const b = e.target.closest('button[data-act]');
+      if (!b || b.disabled) return;
+      const act = b.dataset.act;
+      if (act === 'delete-bundle' || act === 'delete-pre-split') {
+        const open = b.parentElement.querySelector('.mh-confirm');
+        if (open) { open.remove(); return; }
+        const box = document.createElement('div');
+        box.className = 'mh-confirm';
+        box.innerHTML = `<label>Type <b>${esc(b.dataset.confirm)}</b> to delete it for good</label><input type="text" autocomplete="off" spellcheck="false"><button type="button" class="st-btn bk-danger" disabled>Delete</button>`;
+        b.parentElement.appendChild(box);
+        const input = box.querySelector('input'), go = box.querySelector('button');
+        input.addEventListener('input', () => { go.disabled = input.value.trim() !== b.dataset.confirm; });
+        input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !go.disabled) go.click(); });
+        go.addEventListener('click', () => mhAct({ action: act, folder: b.dataset.folder || null, file: b.dataset.file || null, confirm: input.value.trim() }, go));
+        input.focus();
+        return;
+      }
+      mhAct({ action: act, agent: b.dataset.agent || null }, b);
+    }
+    async function mhAct(body, btn) {
+      const msg = document.getElementById('st-mh-msg');
+      const label = btn ? btn.textContent : '';
+      if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+      if (msg) { msg.textContent = ''; msg.classList.remove('mh-msg-bad'); }
+      try {
+        const r = await (await fetch('/api/memory-health/action', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+        if (!r.ok) throw new Error(r.error || 'failed');
+        if (r.result) { ++mhLoad; mhRender({ ...r.result, cached: false }); }
+        if (btn && btn.isConnected) btn.textContent = r.pending ? 'Working…' : 'Done';
+        if (msg) msg.textContent = r.message;
+        if (r.pending && r.pending.tidy) mhFollowTidy(r.pending.tidy);
+      } catch (e) {
+        if (msg) { msg.textContent = e.message; msg.classList.add('mh-msg-bad'); }
+        if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = label; }
+      }
+    }
+    // A tidy that outlasts the press finishes in the background; the checks after it carry its outcome under its own id
+    // (tidies). Each press is followed until its outcome shows, for up to 12 minutes.
+    function mhFollowTidy(id) {
+      mhFollowing.set(id, Date.now() + 12 * 60 * 1000);
+      const tick = async () => {
+        mhFollow = null;
+        for (const [k, until] of mhFollowing) if (Date.now() > until) mhFollowing.delete(k);
+        if (!document.getElementById('st-mh-list')) { mhFollowing.clear(); return; }   // Settings closed: the list shows the stored result next time
+        if (!mhFollowing.size) return;
+        mhTicking = true;
+        try {
+          const ctl = new AbortController(), cut = setTimeout(() => ctl.abort(), 15000);   // a request that never answers can't stall the loop
+          let d; try { d = await (await fetch('/api/memory-health?stored=1', { credentials: 'include', signal: ctl.signal })).json(); } finally { clearTimeout(cut); }
+          const doneNow = d && d.ok ? (d.tidies || []).filter(t => mhFollowing.has(t.id)) : [];
+          if (doneNow.length) {
+            for (const t of doneNow) mhFollowing.delete(t.id);
+            ++mhLoad; mhRender({ ...d, cached: false });
+            const msg = document.getElementById('st-mh-msg');
+            const last = doneNow[doneNow.length - 1];
+            if (msg) { msg.textContent = doneNow.map(t => t.message).join(' '); msg.classList.toggle('mh-msg-bad', !last.ok); }
+          }
+        } catch {} finally { mhTicking = false; }
+        if (mhFollowing.size && !mhFollow) mhFollow = setTimeout(tick, 5000);
+      };
+      if (!mhFollow && !mhTicking) mhFollow = setTimeout(tick, 5000);   // one loop at a time; a tick under way schedules the next
     }
     function securityActionHtml(a) {
       if (!a) return '';

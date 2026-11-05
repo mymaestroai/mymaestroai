@@ -64,3 +64,65 @@ test('moveOut: an agent\'s own archive file leaves whole (its write-ahead log fo
   tr.close();
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+test('removeBundle: a finished bundle goes for good (links inside removed, never followed); one still being put away, or anything else, is refused', async () => {
+  const { createAgentArchive } = require('../lib/agent-archive');
+  const d = tmp();
+  const archive = createAgentArchive({ dataDir: d, log: () => {} });
+  const dir = path.join(d, 'archived-agents');
+  fs.mkdirSync(path.join(dir, 'rifle-20261102T214939Z', 'workspace'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rifle-20261102T214939Z', 'manifest.json'), JSON.stringify({ name: 'rifle' }));
+  const outside = path.join(d, 'keep.txt'); fs.writeFileSync(outside, 'not the bundle\'s');
+  fs.symlinkSync(outside, path.join(dir, 'rifle-20261102T214939Z', 'workspace', 'link'));
+  fs.mkdirSync(path.join(dir, 'old-20261101T000000Z.partial'));
+  fs.writeFileSync(path.join(dir, 'old-20261101T000000Z.partial', 'manifest.json'), JSON.stringify({ name: 'old' }));
+  await assert.rejects(archive.removeBundle('old-20261101T000000Z.partial'), /still being put away/);
+  await assert.rejects(archive.removeBundle('../keep.txt'), /no such folder/);
+  await assert.rejects(archive.removeBundle('nothing'), /no such folder/);
+  assert.deepStrictEqual(await archive.removeBundle('rifle-20261102T214939Z'), { folder: 'rifle-20261102T214939Z', name: 'rifle' });
+  assert.strictEqual(fs.existsSync(path.join(dir, 'rifle-20261102T214939Z')), false);
+  assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'not the bundle\'s', 'what a link pointed to is untouched');
+  assert.deepStrictEqual(archive.bundles().map(b => b.folder), ['old-20261101T000000Z.partial']);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('removeBundle: the folder must still hold the agent whose name was typed; a delete that stopped part-way is finished at the next start; only folders are bundles', async () => {
+  const { createAgentArchive } = require('../lib/agent-archive');
+  const d = tmp();
+  const archive = createAgentArchive({ dataDir: d, log: () => {} });
+  const dir = path.join(d, 'archived-agents');
+  fs.mkdirSync(path.join(dir, 'rifle-20261102T214939Z'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rifle-20261102T214939Z', 'manifest.json'), JSON.stringify({ name: 'rifle' }));
+  fs.writeFileSync(path.join(dir, 'notes.txt'), 'a file someone put here');
+  fs.symlinkSync(d, path.join(dir, 'linked'));
+  assert.deepStrictEqual(archive.bundles().map(b => b.folder), ['rifle-20261102T214939Z'], 'a file or a link is not a bundle');
+  await assert.rejects(archive.removeBundle('rifle-20261102T214939Z', { expectName: 'scope' }), /now holds rifle, not scope/);
+  assert.ok(fs.existsSync(path.join(dir, 'rifle-20261102T214939Z')), 'kept when the name does not match');
+  // a removal that stops part-way: what is left is hidden, never listed again, and finished at the next start
+  const realRm = fs.promises.rm;
+  fs.promises.rm = async () => { throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); };
+  try { await assert.rejects(archive.removeBundle('rifle-20261102T214939Z', { expectName: 'rifle' }), /EIO/); } finally { fs.promises.rm = realRm; }
+  assert.strictEqual(fs.readdirSync(dir).filter(n => n.startsWith('.deleting-')).length, 1, 'renamed before the removal');
+  assert.deepStrictEqual(archive.bundles().map(b => b.folder), [], 'never listed again');
+  await archive.finishPending();
+  assert.deepStrictEqual(fs.readdirSync(dir).filter(n => n.startsWith('.deleting-')), [], 'finished at the next start');
+  assert.ok(fs.existsSync(path.join(dir, 'notes.txt')) && fs.existsSync(path.join(dir, 'linked')), 'nothing else touched');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('removeBundle: a sweep of unfinished deletes that runs meanwhile leaves this removal alone, so it never reports a false failure', async () => {
+  const { createAgentArchive } = require('../lib/agent-archive');
+  const d = tmp();
+  const archive = createAgentArchive({ dataDir: d, log: () => {} });
+  const dir = path.join(d, 'archived-agents');
+  fs.mkdirSync(path.join(dir, 'rifle-20261102T214939Z', 'workspace'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rifle-20261102T214939Z', 'manifest.json'), JSON.stringify({ name: 'rifle' }));
+  const realRm = fs.promises.rm;
+  let swept = false;
+  fs.promises.rm = async (p, o) => { if (!swept) { swept = true; await archive.finishPending(); } return realRm(p, o); };
+  try { assert.deepStrictEqual(await archive.removeBundle('rifle-20261102T214939Z', { expectName: 'rifle' }), { folder: 'rifle-20261102T214939Z', name: 'rifle' }); }
+  finally { fs.promises.rm = realRm; }
+  assert.strictEqual(swept, true);
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'gone, nothing left behind');
+  fs.rmSync(d, { recursive: true, force: true });
+});
