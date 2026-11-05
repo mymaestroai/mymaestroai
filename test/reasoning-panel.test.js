@@ -231,7 +231,7 @@ test('phone: the panel sits outside the reply body, follows every holder and sho
   assert.match(m, /if \(seq !== histReadSeq \|\| gen !== histGen \|\| current !== agent \|\| streams\.has\(agent\) \|\| reattaches\.has\(agent\)\) return;/, 'the newest read wins, and only while the chat is still where it was');
   assert.doesNotMatch(m, /chatHistory\.push\(/);
   assert.match(m, /if \(attempt < 3\) setTimeout\(\(\) => \{ if \(seq === histReadSeq && gen === histGen\) rereadHistory\(agent, attempt \+ 1\); \}, 1000 \* 2 \*\* attempt\);/, 'a read the hub did not answer is tried again');
-  assert.match(m, /if \(!lost\) \{ feedEnd\(rec\); reasoningEnd\(rec\); \}/);
+  assert.match(m, /if \(!lost\) \{ feedEnd\(rec(, [^)]*)?\); reasoningEnd\(rec\); \}/);
   assert.match(m, /reattaches\.delete\(ra\.agent\);\s*reasoningEnd\(ra\);/);
   assert.match(m, /if \(t\) reasoningEnd\(t\);/);
   assert.match(m, /if \(onReasoningClick\(e\)\) return;/);

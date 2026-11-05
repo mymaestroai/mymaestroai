@@ -18,10 +18,11 @@ function extract(src, name) {
   for (; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}' && --depth === 0) break; }
   return src.slice(at, i + 1);
 }
-const NAMES = ['workerCardState', 'workerCardEndedAt', 'workerListOf', 'workerButtonLabel', 'fmtWorkerClock'];
-const L = new Function(`const WORKER_DONE_MS = 2 * 60 * 1000, WORKER_FAILED_MS = 10 * 60 * 1000, WORKER_FAILED_MAX = 3;
+const NAMES = ['workerCardState', 'workerCardEndedAt', 'workerListOf'];
+const shared = require('../lib/ui-worker-list');   // the list rules both pages share (their copies match it: test/ui-worker-list.test.js)
+const L = { ...new Function('shared', `const { workerListPick } = shared;
   ${NAMES.map(n => extract(app, n)).join('\n')}
-  return { ${NAMES.join(', ')} };`)();
+  return { ${NAMES.join(', ')} };`)(shared), workerButtonLabel: shared.workerButtonLabel, fmtWorkerClock: shared.fmtWorkerClock };
 
 const NOW = 1_800_000_000_000;
 const card = (status, endedAgoMs, extra = {}) => ({ isWorker: true, startedAt: NOW - 600000, runs: { r: { status, startedAt: NOW - 600000, ...(status === 'running' ? {} : { endedAt: NOW - endedAgoMs }) } }, ...extra });

@@ -213,6 +213,61 @@
     .rsn-grip::after { content: ''; width: 44px; height: 4px; border-radius: 2px; background: rgba(167,139,250,.45); }
     .rsn.closed .rsn-body, .rsn.closed .rsn-grip { display: none; }
     .rsn-sheet { position: fixed; inset: 0; z-index: 25; display: none; flex-direction: column; background: var(--bg-dark); padding: var(--sat) var(--sar) 0 var(--sal); }
+    /* Workers (mobile.js wkRefresh / wkShow): a chip in the row under the chat's name while workers are listed, and one
+       full-screen sheet for the list, a worker, the history and an old run. */
+    .wk-chip { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px 9px; font-size: 12px; color: var(--text-dim); background: transparent; }
+    .wk-chip .wb-dot { width: 7px; height: 7px; border-radius: 50%; display: none; }
+    .wk-chip.busy { border-color: rgba(61,123,255,.65); color: var(--text); }
+    .wk-chip.busy .wb-dot { display: inline-block; background: #3987e5; box-shadow: 0 0 0 3px rgba(57,135,229,.25); }
+    .wk-chip.alert { border-color: #d4588b; color: #ffd0de; background: rgba(212,88,139,.15); }
+    .wk-chip.alert .wb-dot { display: inline-block; background: #d4588b; box-shadow: none; }
+    .wk-sheet .rsn-sheet-title { color: var(--text); }
+    .wk-back { flex-shrink: 0; min-width: 40px; height: 38px; border-radius: 8px; border: 1px solid var(--border-strong); color: var(--text); font-size: 20px; line-height: 1; }
+    .wk-back[hidden] { display: none; }
+    .wk-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; outline: none; padding: 6px 12px calc(16px + var(--sab)); color: var(--text); font-size: 14px; }
+    .wk-row { display: grid; grid-template-columns: 16px minmax(0,1fr) auto auto; column-gap: 10px; row-gap: 2px; align-items: center; padding: 11px 4px; border-bottom: 1px solid var(--border); }
+    .wk-row .wk-mark { grid-row: 1 / span 2; }
+    .wk-row .wk-meta { grid-column: 2 / span 2; }
+    .wk-row .wk-stop { grid-column: 4; grid-row: 1 / span 2; }
+    .wk-mark { width: 12px; height: 12px; display: inline-flex; align-items: center; justify-content: center; color: #199e70; font-size: 13px; }
+    .wk-running .wk-mark, .wk-o-running .wk-mark { border-radius: 50%; background: #3987e5; box-shadow: 0 0 0 3px rgba(57,135,229,.25); width: 9px; height: 9px; }
+    .wk-failed .wk-mark, .wk-o-failed .wk-mark, .wk-o-unfinished .wk-mark { color: #d4588b; }
+    .wk-o-stopped .wk-mark, .wk-stopped .wk-mark, .wk-ended .wk-mark { color: var(--text-dim); }
+    .wk-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .wk-unseen .wk-name { color: #ffd0de; }
+    .wk-when { color: var(--text-dim); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .wk-meta { color: var(--text-dim); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wk-stop { width: 36px; height: 32px; border-radius: 8px; border: 1px solid rgba(212,88,139,.6); color: #d4588b; background: transparent; font-size: 11px; }
+    .wk-empty { color: var(--text-dim); padding: 14px 4px; }
+    .wk-history { display: block; width: 100%; text-align: left; color: #3987e5; padding: 14px 4px; font-size: 14px; background: none; border: none; }
+    .wk-sub { color: var(--text-dim); font-size: 12px; margin: 6px 0 10px; }
+    .wk-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 12px 0 4px; }
+    .wk-text { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+    .wk-error, .wk-text.wk-error { color: #ffb4c8; margin: 8px 0; white-space: pre-wrap; }
+    .wk-tool { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #9ec5ff; word-break: break-word; padding: 2px 0; }
+    .wk-out { margin: 2px 0 6px 14px; color: var(--text-dim); font-size: 12px; }
+    .wk-out pre { white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; font-size: 12px; margin: 4px 0 0; }
+    .wk-end { margin: 14px 0 4px; padding: 10px; border-radius: 8px; border: 1px solid rgba(25,158,112,.4); color: #8fe0bd; }
+    .wk-end.bad { border-color: rgba(212,88,139,.45); color: #ffb4c8; }
+    .wk-btn { min-height: 38px; padding: 0 14px; border-radius: 8px; border: 1px solid #3987e5; background: #3987e5; color: #fff; font-size: 14px; margin: 6px 6px 0 0; }
+    .wk-btn.secondary { background: transparent; color: var(--text); border-color: var(--border-strong); }
+    .wk-q { width: 100%; box-sizing: border-box; min-height: 40px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg-card); color: var(--text); font-size: 16px; margin: 6px 0 8px; }
+    .wk-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+    .wk-chip-f, .wk-caller { min-height: 32px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 0 11px; font-size: 13px; color: var(--text-dim); background: transparent; }
+    .wk-chip-f.on { border-color: #3987e5; color: var(--text); background: rgba(57,135,229,.18); }
+    .wk-caller { -webkit-appearance: none; appearance: none; background: var(--bg-card); color: var(--text); max-width: 100%; }
+    .wk-day { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); padding: 12px 2px 4px; }
+    .wk-hitem { padding: 10px 4px; border-bottom: 1px solid var(--border); }
+    .wk-hitem.open { background: rgba(57,135,229,.07); border-left: 2px solid #3987e5; padding-left: 8px; }
+    .wk-htop { display: flex; gap: 8px; align-items: baseline; }
+    .wk-htop .wk-name { flex: 1; }
+    .wk-hitem .wk-meta { margin: 3px 0 0 20px; }
+    .wk-detail { margin: 8px 0 2px 20px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: rgba(0,0,0,.2); }
+    .wk-detail .wk-label:first-child { margin-top: 0; }
+    .wk-detail .wk-text { max-height: 220px; overflow: auto; font-size: 13px; }
+    .wk-actions { display: flex; flex-wrap: wrap; margin-top: 4px; }
+    .wk-more { display: block; margin: 12px auto; }
+    .wk-status { color: var(--text-dim); font-size: 13px; padding: 8px 2px; }
     .rsn-sheet.open { display: flex; }
     .rsn-sheet-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--border); }
     .rsn-sheet-title { color: #a78bfa; font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -546,7 +601,7 @@
     </div>
     <!-- Effort, plan usage and context size get their own thin row: under the name, the model (or what the agent is
          doing right now) keeps the whole line, also while the Stop button takes room in the header. -->
-    <div id="chat-meta"><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span></div>
+    <div id="chat-meta"><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="composer">
@@ -587,6 +642,7 @@
     <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
     <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
+    <button id="menu-workers">&#x1F477; Worker history</button>
     <button id="menu-compact" class="chat-only">&#x2699; Compress now</button>
     <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>
     <div id="menu-2fa-note" hidden>Two-factor is required for admins: set it up under Security</div>

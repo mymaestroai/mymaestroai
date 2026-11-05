@@ -2316,8 +2316,12 @@ function toolSummary(input) {
   try { return clipText(JSON.stringify(input), 160); } catch { return ''; }
 }
 
+// A named agent by its name; a temporary worker or a Claude sub-agent by its label (its kind, "temporal" or
+// "sdk-agent", says nothing to a person).
 function workerName(it) {
-  return it.agent && agentByName(it.agent) ? displayName(it.agent) : (it.agent || it.description || 'worker');
+  if (it.agent && agentByName(it.agent)) return displayName(it.agent);
+  const label = String(it.description || '').replace(/^Worker:\s*/, '');
+  return label || it.agent || 'worker';
 }
 
 // Removes the placeholder ('⏳ Thinking…', '…') or anything else that is neither the feed, the
@@ -2438,8 +2442,13 @@ function feedUpsert(holder, item) {
       feed.items.set(item.id, it);
       feed.byWorker.set(wid, it);
     }
+    const guessed = !!(it.inferred || it.unknown);
     it.status = item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'running';
-    if (it.status !== 'running' && !it.t1) it.t1 = Date.parse(item.doneTs) || Date.now();
+    if (item.cancelled != null) it.cancelled = item.cancelled === true;   // stopped (by a person, or with its caller): not a failure
+    it.unknown = false; it.inferred = false;   // the hub said how it is: no longer a guess
+    if (it.status === 'running') it.t1 = null;
+    else if (!it.t1 || guessed) it.t1 = Date.parse(item.doneTs) || it.t1 || Date.now();
+    if (guessed && wkSeen.has(wid)) wkSeen.get(wid).endSeen = null;
     if (item.description) it.description = String(item.description);
     if (item.model) it.model = String(item.model);
     if (item.agent) it.agent = String(item.agent);
@@ -2448,6 +2457,7 @@ function feedUpsert(holder, item) {
     return null;
   }
   paintFeed(holder, it);
+  if (it.kind === 'worker') { it.rev = (it.rev || 0) + 1; wkTrack(holder, it); }
   return it;
 }
 
@@ -2459,7 +2469,9 @@ function feedWorkerText(holder, workerId, text, append) {
   w.text = append ? w.text + text : text;
   if (w.text.length > 16000) w.text = w.text.slice(-16000);
   w.last = 'text';
+  w.rev = (w.rev || 0) + 1;
   paintFeed(holder, w);
+  if (wkView && wkView.mode === 'worker' && wkView.id === String(w.workerId)) wkPaintWorker();
 }
 
 function feedSummary(feed) {
@@ -2482,7 +2494,7 @@ function feedStatus(feed) {
     const t = x.last === 'tool' ? x.tools[x.tools.length - 1] : null;
     return `worker ${who} ${t ? `running ${t.tool}` : 'working…'}`;
   }
-  return `worker ${who} ${x.status === 'failed' ? 'failed' : 'finished'}`;
+  return `worker ${who} ${x.status === 'failed' ? (x.cancelled ? 'stopped' : 'failed') : x.unknown ? 'ended' : 'finished'}`;
 }
 
 // Mounts the feed at the top of the holder's bubble (once per bubble) and paints one row, or
@@ -2686,7 +2698,7 @@ function tsnEntryText(it) {
     const mark = it.status === 'running' ? '⚙' : tsnFailed(it) ? '✗' : '✓';
     return `${mark} ${it.tool}${it.summary ? ` · ${it.summary}` : ''}\n${it.status === 'running' ? 'Running…' : (it.output ? String(it.output) : '(no output)')}`;
   }
-  const mark = it.status === 'completed' ? '✓' : it.status === 'failed' ? '✗' : '👷';
+  const mark = it.status === 'completed' ? (it.unknown ? '–' : '✓') : it.status === 'failed' ? (it.cancelled ? '■' : '✗') : '👷';
   const tools = it.tools.map(t => `  ⚙ ${t.tool}${t.summary ? ` · ${clipText(t.summary, 160)}` : ''}`).join('\n');
   return `${mark} ${workerName(it)}${it.model ? ` · ${shortModel(it.model)}` : ''}${it.error ? `\n⚠ ${it.error}` : ''}${tools ? `\n${tools}` : ''}${it.text ? `\n${it.text}` : ''}`;
 }
@@ -2741,7 +2753,7 @@ function paintFeedRow(feed, it, list = null) {
     det.textContent = it.open ? [it.summary, it.output ? String(it.output).slice(0, 3000) : ''].filter(Boolean).join('\n\n') : '';
     return;
   }
-  const mark = it.status === 'completed' ? '✓' : it.status === 'failed' ? '✗' : '👷';
+  const mark = it.status === 'completed' ? (it.unknown ? '–' : '✓') : it.status === 'failed' ? (it.cancelled ? '■' : '✗') : '👷';
   line.textContent = `${mark} ${workerName(it)}${it.model ? ` · ${shortModel(it.model)}` : ''}`;
   const lastTool = it.tools[it.tools.length - 1];
   sub.textContent = it.error ? `⚠ ${clipText(it.error, 120)}`
@@ -2757,15 +2769,22 @@ function paintFeedRow(feed, it, list = null) {
 }
 
 // The turn is over: rows stop spinning; each group stays between the text before and after it.
-function feedEnd(holder) {
+// how: 'sure' when the turn is known to be over (the hub said so, or its stream ended with its final marker); 'maybe'
+// when only this page's side ended (a person's Stop, a stream cut off without its final marker, giving up waiting):
+// its workers then keep running here until the hub's record says how they ended.
+function feedEnd(holder, how = 'sure') {
   const feed = holder && holder.feed;
   if (!feed) return;
   feed.ended = true;
   for (const x of feed.items.values()) {
     if (x.kind === 'tool' && x.status === 'running') x.status = 'done';
-    if (x.kind === 'worker' && x.status === 'running') x.status = 'completed';
+    if (x.kind === 'worker' && x.status === 'running') {   // over with its reply; how it ended is asked of the hub
+      if (how === 'sure') { x.status = 'completed'; x.unknown = true; x.inferred = true; x.inferredAt = Date.now(); x.t1 = x.t1 || Date.now(); x.rev = (x.rev || 0) + 1; }
+      wkInferEnd(wkSeen.get(String(x.workerId)), 1500, how === 'sure' ? 'sure' : 'maybe');
+    }
   }
   paintFeed(holder);
+  wkRefreshSoon();
 }
 
 // Tap on the folded summary toggles the list; tap on a row toggles its detail.
@@ -2784,6 +2803,508 @@ function onFeedClick(e) {
   if (!it) return;
   it.open = !it.open;
   paintFeedRow(feed, it);
+}
+
+// ── Workers: a chip under the chat's name, a full-screen list, each worker full screen, and the history ──────────
+// The same list as the desktop's Workers button: running workers, finished ones for 2 minutes, failed ones until
+// opened or 10 minutes (the newest 3). The chip shows while the list has workers; the history is also in the menu.
+// Shared verbatim with lib/ui-worker-list.js and app.js (test/ui-worker-list.test.js keeps the three in step).
+// ── worker list helpers (begin) ──
+const WORKER_DONE_MS = 2 * 60 * 1000, WORKER_FAILED_MS = 10 * 60 * 1000, WORKER_FAILED_MAX = 3;
+function workerListPick(entries, now, activeId) {
+  const items = [], gone = [], failed = [];
+  for (const e of entries || []) {
+    if (!e) continue;
+    const item = { ...e, endedAt: e.state === 'running' ? null : (e.endedAt || now) };
+    if (e.state === 'running') items.push(item);
+    else if (e.state === 'failed') failed.push(item);
+    else if (e.id === activeId || now - item.endedAt < WORKER_DONE_MS) items.push(item);
+    else gone.push(e.id);
+  }
+  failed.sort((a, b) => b.endedAt - a.endedAt);
+  let kept = 0;
+  for (const item of failed) {
+    const waiting = !item.failSeen && now - item.endedAt < WORKER_FAILED_MS && kept < WORKER_FAILED_MAX;
+    if (waiting) kept++;
+    if (waiting || item.id === activeId) items.push(item); else gone.push(item.id);
+  }
+  items.sort((a, b) => ((b.state === 'running') - (a.state === 'running')) || ((b.endedAt || now) - (a.endedAt || now)) || ((b.startedAt || 0) - (a.startedAt || 0)));
+  const counts = { running: 0, done: 0, failed: 0 };
+  for (const i of items) counts[i.state === 'running' ? 'running' : i.state === 'failed' ? 'failed' : 'done']++;
+  return { items, gone, counts, alert: items.some(i => i.state === 'failed' && !i.failSeen) };
+}
+function workerButtonLabel(counts) {
+  if (!counts.running && !counts.done && !counts.failed) return 'Workers';
+  return `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}`;
+}
+function fmtWorkerClock(ms) {
+  const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+// ── worker list helpers (end) ──
+
+// The workers this page saw start or run (live replies and catch-ups; saved replies are history, not listed):
+// workerId -> { id, it (its feed row), agent (whose chat it works in), failSeen, endSeen, lastStatus }.
+const wkSeen = new Map();
+let wkView = null;   // the sheet on screen: { mode: 'list' | 'worker' | 'history' | 'run', id?, run?, w?, back? }
+let wkTimer = null;
+function wkTrack(holder, it) {
+  if (!it || it.kind !== 'worker') return;
+  const id = String(it.workerId);
+  let e = wkSeen.get(id);
+  if (!e) { e = { id, it, agent: (holder && holder.agent) || current, failSeen: false, endSeen: null, lastStatus: null }; wkSeen.set(id, e); }
+  e.it = it;
+  if (holder) { e.holder = holder; if (holder.turnId) e.turnId = holder.turnId; }
+  if (it.status === 'failed' && e.lastStatus !== 'failed') e.failSeen = !!(wkView && wkView.mode === 'worker' && wkView.id === id);   // watched as it failed: seen
+  e.lastStatus = it.status;
+  wkRefreshSoon();
+}
+const wkState = (it) => (it.status === 'running' ? 'running' : it.status === 'failed' ? (it.cancelled ? 'stopped' : 'failed') : it.unknown ? 'ended' : 'done');
+function wkPick() {
+  const now = Date.now();
+  const entries = [...wkSeen.values()].map(e => {
+    const state = wkState(e.it);
+    if (state === 'running') e.endSeen = null; else if (!e.endSeen) e.endSeen = e.it.t1 || now;
+    return { id: e.id, e, state, startedAt: e.it.t0 || 0, endedAt: state === 'running' ? null : e.endSeen, failSeen: e.failSeen };
+  });
+  return workerListPick(entries, now, wkView && wkView.mode === 'worker' ? wkView.id : null);
+}
+function wkRefreshSoon() { if (!wkTimer) wkTimer = setTimeout(() => { wkTimer = null; wkRefresh(); }, 60); }
+// The end of one of a caller's turns: its workers this page still shows running are asked about. Only a worker of that
+// very turn may read "ended" without a recorded outcome; one of another or an unknown turn ends only on a recorded
+// outcome; one whose reply this page is still streaming is left to that stream's own end.
+function wkSettleAgent(agent, turnId) {
+  for (const e of wkSeen.values()) {
+    if (e.agent !== agent || e.it.status !== 'running') continue;
+    if (streams.get(agent) === e.holder) continue;
+    if (e.checking) e.again = true;   // a check already out may be answered from before this end: ask once more after it
+    wkInferEnd(e, 1500, turnId && e.turnId === turnId ? 'sure' : 'maybe');
+  }
+}
+// An end the page did not see is checked against the caller's worker history, which records how every worker of a
+// turn ended. how: 'sure' (its reply or its own turn ended), 'gone' (the hub says it runs nothing under that id) or
+// 'maybe' (its caller sat idle, or another turn of its caller ended); the strongest reason since the last answer counts.
+// - a recorded outcome: that outcome and its real end time;
+// - recorded as still running: running (provisional ends undone), unless the hub said it is not running;
+// - no record of it (the route's own 404): "ended", outcome unknown, when 'sure' or 'gone'; otherwise unchanged;
+// - no usable answer (offline, a server error, anything else): unchanged, asked again a minute later.
+const WK_HOW = { maybe: 0, sure: 1, gone: 2 };
+function wkInferEnd(e, delay = 0, how = 'maybe') {
+  if (!e) return;
+  if (!e.how || WK_HOW[how] > WK_HOW[e.how]) e.how = how;
+  if (e.checking) return;
+  e.checking = true; e.again = false;
+  setTimeout(async () => {
+    let w = null, answer = 'none';
+    try {
+      const res = await api(`/api/agents/${encodeURIComponent(e.agent)}/workers/${encodeURIComponent(e.id)}`, { signal: AbortSignal.timeout(10000) });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d && d.worker) { w = d.worker; answer = 'worker'; }
+      else if (res.status === 404 && d && /no such worker/i.test(String(d.error || ''))) answer = 'missing';
+    } catch {}
+    e.checking = false;
+    const it = e.it, now = Date.now();
+    if (!it.inferred && it.status !== 'running') { e.how = null; return; }   // its real end arrived meanwhile
+    if (answer === 'none') { e.recheckAt = now + 60000; return; }
+    const why = e.how || 'maybe';
+    e.how = null;
+    const ended = (o) => {
+      it.status = o && o !== 'done' ? 'failed' : 'completed';
+      it.cancelled = o === 'stopped';
+      it.unknown = !o;
+      it.inferred = false;
+      if (w && w.error && !it.error) it.error = String(w.error);
+      if (o === 'unfinished' && !it.error) it.error = "Did not finish: its caller's reply ended first";
+      const at = w && w.startedAt && w.durationMs != null ? Date.parse(w.startedAt) + w.durationMs : null;
+      it.t1 = at || it.t1 || now;
+      e.endSeen = null;   // the list's clock runs from the real end
+      if (it.status === 'failed' && wkView && wkView.mode === 'worker' && wkView.id === e.id) e.failSeen = true;   // watched as it was learned
+      e.lastStatus = it.status;
+    };
+    if (answer === 'worker' && w.outcome) ended(w.outcome);
+    else if (answer === 'worker' && why !== 'gone') {   // still running by its record
+      if (it.inferred) { it.status = 'running'; it.t1 = null; it.unknown = false; it.inferred = false; }
+      e.recheckAt = now + 60000;
+      if (e.again) { e.again = false; wkInferEnd(e, 1500, why); }
+    } else if (why !== 'maybe') ended(null);
+    else {   // no record, and nothing says its turn is over: unchanged
+      e.recheckAt = now + 60000;
+      if (e.again) { e.again = false; wkInferEnd(e, 1500, why); }
+      return;
+    }
+    it.rev = (it.rev || 0) + 1;
+    if (e.holder) paintFeed(e.holder, it);
+    wkRefreshSoon();
+  }, delay);
+}
+function wkRefresh() {
+  const now = Date.now();
+  for (const e of wkSeen.values()) {
+    if (e.it.inferred) { if (now >= (e.recheckAt || 0)) wkInferEnd(e, 0, 'sure'); continue; }   // an end still being checked
+    if (!statusKnown || e.it.status !== 'running' || isBusy(e.agent)) { e.idleSince = 0; continue; }
+    if (!e.idleSince) e.idleSince = now;   // its caller sat idle 12 s: the page may have slept through its end
+    else if (now - e.idleSince >= 12000 && now >= (e.recheckAt || 0)) wkInferEnd(e, 0, 'maybe');
+  }
+  const { items, gone, counts, alert } = wkPick();
+  for (const id of gone) {
+    const g = wkSeen.get(id);
+    if (g && g.it.inferred && now - (g.it.inferredAt || now) < 10 * 60000) continue;   // kept, unlisted, while its end is checked
+    wkSeen.delete(id);
+  }
+  const btn = $('chat-workers-btn');
+  if (btn) {
+    btn.hidden = !items.length;
+    btn.querySelector('.wb-label').textContent = workerButtonLabel(counts);
+    btn.classList.toggle('busy', counts.running > 0);
+    btn.classList.toggle('alert', alert);
+  }
+  if (wkView && wkView.mode === 'list') wkPaintList(items);
+  else if (wkView && wkView.mode === 'worker') wkPaintWorker();
+}
+setInterval(wkRefresh, 5000);
+
+const wkName = (it) => workerName(it);
+const wkKind = (agent) => (agent === 'temporal' || !agent || agent === 'worker' ? 'temporary' : agent === 'sdk-agent' ? 'sub-agent' : (agentByName(agent) ? displayName(agent) : agent));
+const wkEl = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; if (text != null) el.textContent = text; return el; };
+
+function wkSheet() {
+  let sh = $('wk-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'wk-sheet';
+  sh.className = 'rsn-sheet wk-sheet';
+  sh.dataset.noDirty = '';   // its search box and picker hold nothing to lose
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Workers');
+  sh.innerHTML = '<div class="rsn-sheet-head"><button type="button" class="wk-back" aria-label="Back">&#x2039;</button><span class="rsn-sheet-title"></span><span class="rsn-sheet-count"></span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="wk-body" tabindex="-1"></div>';
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', wkClose);
+  sh.querySelector('.wk-back').addEventListener('click', () => wkShow((wkView && wkView.back) || { mode: 'list' }));
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); wkClose(); } });
+  document.body.appendChild(sh);
+  return sh;
+}
+function openWorkerSheet(mode = 'list') {
+  $('menu').classList.remove('open');
+  const sh = wkSheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: wkClose }); }   // Back and Esc close it first
+  wkShow({ mode });
+}
+function wkClose() {
+  const sh = $('wk-sheet');
+  if (sh) { sh.classList.remove('open'); dialogGuard.closed(sh); }
+  wkView = null;
+  wkHist.openSeq++;
+  wkRefreshSoon();
+}
+function wkShow(view) {
+  wkView = view;
+  wkHist.openSeq++;   // a pending "Open full run" never takes the screen from what the person went to
+  const sh = wkSheet();
+  sh.querySelector('.wk-back').hidden = view.mode === 'list';
+  sh.querySelector('.rsn-sheet-title').textContent = { list: 'Workers', worker: 'Worker', history: 'Worker history', run: 'Worker · history' }[view.mode];
+  sh.querySelector('.rsn-sheet-count').textContent = '';
+  const body = sh.querySelector('.wk-body');
+  body.textContent = '';
+  delete body.dataset.key;   // a worker shown before is painted again, not skipped as unchanged
+  body.scrollTop = 0;
+  if (view.mode === 'list') wkRefresh();
+  else if (view.mode === 'worker') { const e = wkSeen.get(view.id); if (e && e.it.status === 'failed') e.failSeen = true; wkPaintWorker(); wkRefreshSoon(); }
+  else if (view.mode === 'history') wkHistoryShow();
+  else if (view.mode === 'run') wkPaintRun(view.run, view.w);
+}
+
+// The list: one row per worker; a tap opens it full screen; running ones (not a Claude sub-agent, which stops with its
+// caller's reply) have Stop.
+function wkPaintList(items) {
+  const body = $('wk-sheet') && $('wk-sheet').querySelector('.wk-body');
+  if (!body) return;
+  const now = Date.now();
+  const scroll = body.scrollTop, act = document.activeElement;
+  const focused = act && act !== body && body.contains(act) ? { id: act.closest('.wk-row') ? act.closest('.wk-row').dataset.wid : null, stop: act.classList.contains('wk-stop'), all: act.classList.contains('wk-history') } : null;
+  body.textContent = '';
+  if (!items.length) body.appendChild(wkEl('div', 'wk-empty', 'Nothing working right now.'));
+  for (const { id, e, state, endedAt } of items) {
+    const it = e.it;
+    const row = wkEl('div', `wk-row wk-${state}` + (state === 'failed' && !e.failSeen ? ' wk-unseen' : ''));
+    row.dataset.wid = id;
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    const mark = wkEl('span', 'wk-mark', state === 'running' ? '' : state === 'failed' ? '✕' : state === 'stopped' ? '■' : state === 'ended' ? '–' : '✓');
+    const name = wkEl('span', 'wk-name', wkName(it));
+    const when = wkEl('span', 'wk-when', state === 'running' ? fmtWorkerClock(now - (it.t0 || now)) : `${state} ${fmtWorkerClock(now - endedAt)} ago`);
+    const meta = wkEl('span', 'wk-meta', [it.model ? shortModel(it.model) : '', wkKind(it.agent), e.agent && e.agent !== current ? `for ${displayName(e.agent)}` : ''].filter(Boolean).join(' · '));
+    row.append(mark, name, when, meta);
+    if (state === 'running' && it.agent !== 'sdk-agent') {
+      const stop = wkEl('button', 'wk-stop', '■');
+      stop.type = 'button';
+      stop.setAttribute('aria-label', 'Stop this worker');
+      stop.addEventListener('click', (ev) => { ev.stopPropagation(); wkStop(e); });
+      row.appendChild(stop);
+    }
+    row.addEventListener('click', () => wkShow({ mode: 'worker', id, back: { mode: 'list' } }));
+    row.addEventListener('keydown', (ev) => { if (ev.target === row && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); row.click(); } });
+    body.appendChild(row);
+  }
+  const all = wkEl('button', 'wk-history', 'All worker history →');
+  all.type = 'button';
+  all.addEventListener('click', () => wkShow({ mode: 'history', back: { mode: 'list' } }));
+  body.appendChild(all);
+  body.scrollTop = scroll;
+  if (focused) {   // the 5-second repaint keeps the keyboard where it was
+    const row = focused.id ? [...body.querySelectorAll('.wk-row')].find(r => r.dataset.wid === focused.id) : null;
+    const to = focused.all ? all : (focused.stop && row && row.querySelector('.wk-stop')) || row || all;
+    try { to.focus({ preventScroll: true }); } catch {}
+  }
+}
+async function wkStop(e) {
+  try {
+    const res = await api('/api/cancel-worker', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worker_id: e.id, agent: e.agent || undefined }) });
+    const r = await res.json().catch(() => null);
+    if (!r || !r.success) {
+      // the hub runs nothing under that id any more: it ended where this page did not see it
+      if (res.status === 404 && r && /not running/i.test(String(r.error || ''))) wkInferEnd(e, 0, 'gone');
+      else toast((r && (r.error || r.message)) || 'Could not stop that worker');
+    }
+  } catch { toast('Could not reach the hub'); }
+}
+
+// One worker full screen, live: how it is doing, its tool calls, its words so far.
+function wkPaintWorker() {
+  const sh = $('wk-sheet');
+  const e = wkView && wkSeen.get(wkView.id);
+  if (!sh || !e) return;
+  const it = e.it, state = wkState(it), now = Date.now();
+  sh.querySelector('.rsn-sheet-title').textContent = wkName(it);
+  sh.querySelector('.rsn-sheet-count').textContent = [it.model ? shortModel(it.model) : '', state === 'running' ? fmtWorkerClock(now - (it.t0 || now)) : state].filter(Boolean).join(' · ');
+  const body = sh.querySelector('.wk-body');
+  const key = `${e.id}|${it.rev || 0}|${state}`;   // every change to the worker bumps its revision
+  if (body.dataset.key === key) return;
+  const fresh = !String(body.dataset.key || '').startsWith(`${e.id}|`);   // just opened: start at the top
+  body.dataset.key = key;
+  const scroll = body.scrollTop, atEnd = !fresh && body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  const onStop = !!(document.activeElement && body.contains(document.activeElement) && document.activeElement.classList.contains('wk-stop-one'));
+  body.textContent = '';
+  const head = wkEl('div', 'wk-sub', [wkKind(it.agent), `for ${displayName(e.agent || current || '')}`].filter(Boolean).join(' · '));
+  body.appendChild(head);
+  if (it.error) body.appendChild(wkEl('div', 'wk-error', it.error));
+  if (state === 'running' && it.agent !== 'sdk-agent') {
+    const stop = wkEl('button', 'wk-btn wk-stop-one', 'Stop this worker');
+    stop.type = 'button';
+    stop.addEventListener('click', () => wkStop(e));
+    body.appendChild(stop);
+    if (onStop) { try { stop.focus({ preventScroll: true }); } catch {} }
+  } else if (onStop) { try { body.focus({ preventScroll: true }); } catch {} }   // it ended under the keyboard: stay in the sheet
+  if (it.tools.length) {
+    body.appendChild(wkEl('div', 'wk-label', `${it.tools.length} tool call${it.tools.length === 1 ? '' : 's'}`));
+    for (const t of it.tools) body.appendChild(wkEl('div', 'wk-tool', `⚙ ${t.tool}${t.summary ? ` · ${clipText(t.summary, 200)}` : ''}`));
+  }
+  if (it.text) {
+    body.appendChild(wkEl('div', 'wk-label', state === 'running' ? 'So far' : 'Answer'));
+    const text = wkEl('div', 'wk-text');
+    text.innerHTML = formatContent(it.text);
+    body.appendChild(text);
+    renderVisualBlocks(text);
+  } else if (state === 'running') body.appendChild(wkEl('div', 'wk-empty', 'Working…'));
+  body.scrollTop = fresh ? 0 : atEnd ? body.scrollHeight : scroll;   // following the end keeps following it; reading higher up stays put
+}
+
+// ── Worker history: the part-7 API (GET /api/agents/<a>/workers, /api/workers, /api/agents/<a>/workers/<id>) ──
+// gen: a new search, filter or caller (only then are answers for the old view dropped); listReq: the newest list
+// request; openSeq: the newest "Open full run"; runReq: the newest fetch of each run.
+const wkHist = { caller: null, q: '', filter: 'all', items: [], next: null, loading: false, open: new Set(), runs: new Map(), error: '', gen: 0, listReq: 0, openSeq: 0, runReq: new Map() };
+async function wkJson(url) {
+  const res = await api(url);
+  let data = {}; try { data = await res.json(); } catch {}
+  if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+function wkHistoryShow() {
+  const body = $('wk-sheet').querySelector('.wk-body');
+  if (!wkHist.caller || (wkHist.caller !== '*' && !agentByName(wkHist.caller))) wkHist.caller = current || (isAdmin() ? '*' : ((agents[0] || {}).name || '*'));
+  const q = wkEl('input', 'wk-q');
+  q.type = 'search'; q.placeholder = 'Search briefs and results…'; q.autocomplete = 'off'; q.enterKeyHint = 'search'; q.value = wkHist.q;
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); wkHist.q = q.value.trim(); q.blur(); wkLoad(true); } });
+  const chips = wkEl('div', 'wk-filters');
+  for (const [v, label] of [['all', 'All'], ['named', 'Named agents'], ['temporary', 'Temporary'], ['failed', 'Failed']]) {
+    const c = wkEl('button', 'wk-chip-f' + (wkHist.filter === v ? ' on' : ''), label);
+    c.type = 'button';
+    c.addEventListener('click', () => { wkHist.filter = v; chips.querySelectorAll('.wk-chip-f').forEach(x => x.classList.toggle('on', x === c)); wkLoad(true); });
+    chips.appendChild(c);
+  }
+  const pick = wkEl('select', 'wk-caller');
+  pick.setAttribute('aria-label', 'Whose workers');
+  const opts = (isAdmin() ? [['*', 'Called by: all agents']] : []).concat(agents.map(a => [a.name, `Called by: ${a.display || a.name}`]));
+  for (const [v, label] of opts) { const o = wkEl('option', null, label); o.value = v; pick.appendChild(o); }
+  pick.value = opts.some(o => o[0] === wkHist.caller) ? wkHist.caller : (opts[0] || [''])[0];
+  wkHist.caller = pick.value;
+  pick.addEventListener('change', () => { wkHist.caller = pick.value; wkLoad(true); });
+  chips.appendChild(pick);
+  body.append(q, chips, wkEl('div', 'wk-hlist'), wkEl('div', 'wk-status'));
+  body.querySelector('.wk-hlist').id = 'wk-hlist';
+  body.querySelector('.wk-status').id = 'wk-hstatus';
+  if (wkView.keep && (wkHist.items.length || wkHist.loading)) { wkHistoryRender(); body.scrollTop = wkView.scroll || 0; }   // Back from an old run: the list as it was
+  else wkLoad(true);   // any other opening loads it afresh
+}
+async function wkLoad(reset) {
+  if (!reset && (wkHist.loading || !wkHist.next)) return;
+  if (reset) { wkHist.gen++; wkHist.items = []; wkHist.next = null; wkHist.open.clear(); wkHist.runs.clear(); }
+  const gen = wkHist.gen, req = ++wkHist.listReq;
+  wkHist.loading = true; wkHist.error = '';
+  wkHistoryRender();
+  const params = new URLSearchParams({ filter: wkHist.filter, limit: '50' });
+  if (wkHist.q) params.set('q', wkHist.q);
+  if (!reset) params.set('before', wkHist.next);
+  const base = wkHist.caller === '*' ? '/api/workers' : `/api/agents/${encodeURIComponent(wkHist.caller)}/workers`;
+  let data = null, error = '';
+  try { data = await wkJson(`${base}?${params.toString()}`); } catch (e) { error = e.message; }
+  if (gen !== wkHist.gen || req !== wkHist.listReq) return;   // superseded
+  if (data) { wkHist.items = wkHist.items.concat(Array.isArray(data.workers) ? data.workers : []); wkHist.next = data.next || null; }
+  wkHist.error = error;
+  wkHist.loading = false;
+  wkHistoryRender();
+  // a page that came back short with more behind it (the hub stopped looking part-way): ask for the rest
+  if (data && wkHist.next && (data.workers || []).length < 10 && wkView && wkView.mode === 'history') wkLoad(false);
+}
+function wkDay(iso) {
+  const d = new Date(iso), today = new Date();
+  const key = (x) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+  const y = new Date(today); y.setDate(today.getDate() - 1);
+  if (key(d) === key(today)) return 'Today';
+  if (key(d) === key(y)) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) });
+}
+const wkMarkOf = (o) => (o === 'done' ? '✓' : o === 'stopped' ? '■' : o === 'failed' || o === 'unfinished' ? '✕' : '●');
+function wkHistoryRender() {
+  const list = $('wk-hlist'), status = $('wk-hstatus');
+  if (!list || !wkView || wkView.mode !== 'history') return;
+  // a repaint (a page or a run arriving) keeps the keyboard on the same item, or the same button in its detail
+  const act = document.activeElement, actItem = act && list.contains(act) ? act.closest('.wk-hitem') : null;
+  const keep = actItem ? { key: actItem.dataset.key, head: act.classList.contains('wk-htop'), act: act.dataset.act || null } : (act && act.classList && act.classList.contains('wk-more') && list.contains(act) ? { more: true } : null);
+  list.textContent = '';
+  let day = null;
+  for (const w of wkHist.items) {
+    const label = wkDay(w.startedAt);
+    if (label !== day) { day = label; list.appendChild(wkEl('div', 'wk-day', label)); }
+    const key = `${w.caller}|${w.workerId}`;
+    const item = wkEl('div', `wk-hitem wk-o-${w.outcome || 'running'}` + (wkHist.open.has(key) ? ' open' : ''));
+    item.dataset.key = key;
+    const top = wkEl('div', 'wk-htop');
+    top.append(wkEl('span', 'wk-mark', wkMarkOf(w.outcome)), wkEl('span', 'wk-name', String(w.description || 'Worker').replace(/^Worker:\s*/, '')),
+      wkEl('span', 'wk-when', new Date(w.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + (w.durationMs != null ? ` · ${fmtWorkerClock(w.durationMs)}` : w.outcome ? '' : ' · running')));
+    const sub = wkEl('div', 'wk-meta', [w.model ? shortModel(w.model) : '', w.kind === 'agent' ? wkKind(w.agentType) : w.kind, `called by ${displayName(w.caller)}`].filter(Boolean).join(' · ')
+      + (w.answer ? ` · “${w.answer.replace(/\s+/g, ' ').slice(0, 90)}”` : w.error ? ` · ${w.error}` : ''));
+    item.append(top, sub);
+    if (wkHist.open.has(key)) item.appendChild(wkDetail(w, key));
+    top.setAttribute('role', 'button');
+    top.tabIndex = 0;
+    top.setAttribute('aria-expanded', String(wkHist.open.has(key)));
+    item.addEventListener('click', (ev) => {
+      if (ev.target.closest('.wk-detail')) return;
+      if (wkHist.open.has(key)) wkHist.open.delete(key); else { wkHist.open.add(key); wkFetchRun(w); }
+      wkHistoryRender();
+    });
+    top.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); top.click(); } });
+    list.appendChild(item);
+  }
+  if (wkHist.next && !wkHist.loading) {
+    const more = wkEl('button', 'wk-btn wk-more', 'Show 50 more');
+    more.type = 'button';
+    more.addEventListener('click', () => wkLoad(false));
+    list.appendChild(more);
+  }
+  if (keep) {
+    const item = keep.key ? [...list.querySelectorAll('.wk-hitem')].find(x => x.dataset.key === keep.key) : null;
+    let to = null;
+    if (item && keep.head) to = item.querySelector('.wk-htop');
+    else if (item) to = (keep.act && [...item.querySelectorAll('button')].find(b => b.dataset.act === keep.act)) || item.querySelector('.wk-htop');
+    else if (keep.more) to = list.querySelector('.wk-more') || [...list.querySelectorAll('.wk-htop')].pop() || null;   // while the next page loads: the last item
+    if (to) { try { to.focus({ preventScroll: true }); } catch {} }
+  }
+  status.textContent = wkHist.loading ? 'Loading…' : wkHist.error ? `Could not load the history: ${wkHist.error}` : !wkHist.items.length ? (wkHist.q || wkHist.filter !== 'all' ? 'No workers match.' : 'No workers yet.') : '';
+}
+function wkDetail(w, key) {
+  const box = wkEl('div', 'wk-detail');
+  const run = wkHist.runs.get(key);
+  const cur = (run && run.worker) || w;   // one snapshot: the fetched run once it is here
+  const section = (title, text, cls) => { if (!text) return; box.append(wkEl('div', 'wk-label', title), wkEl('div', 'wk-text' + (cls ? ` ${cls}` : ''), text)); };
+  section('Brief', cur.prompt || cur.description);
+  section(cur.partial ? 'Result (partial: it did not finish)' : 'Result', cur.answer || (cur.outcome ? '(no answer)' : '(still running)'));
+  if (cur.error) section('Error', cur.error, 'wk-error');
+  if (run && run.rows) {
+    const uses = run.rows.filter(r => r.kind === 'tool_use');
+    const by = {};
+    for (const u of uses) by[u.tool] = (by[u.tool] || 0) + 1;
+    section('Work', uses.length ? `${uses.length} tool call${uses.length === 1 ? '' : 's'}: ${Object.entries(by).map(([t, n]) => `${t} ${n}`).join(', ')}` : 'No tool calls');
+  } else section('Work', run && run.error ? `Could not load its steps: ${run.error}` : 'Loading…');
+  const actions = wkEl('div', 'wk-actions');
+  const open = wkEl('button', 'wk-btn', 'Open full run');
+  open.type = 'button';
+  open.dataset.act = 'open';
+  open.addEventListener('click', () => wkOpenRun(w));
+  const copy = wkEl('button', 'wk-btn secondary', 'Copy result');
+  copy.type = 'button';
+  copy.dataset.act = 'copy';
+  copy.disabled = !cur.answer;
+  copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(cur.answer || ''); copy.textContent = 'Copied'; } catch { copy.textContent = 'Could not copy'; } });
+  actions.append(open, copy);
+  box.appendChild(actions);
+  return box;
+}
+// A run is kept for reuse only once it is over and its answer is in (a sub-agent's answer can come after its end).
+async function wkFetchRun(w, { fresh = false } = {}) {
+  const key = `${w.caller}|${w.workerId}`;
+  const had = wkHist.runs.get(key);
+  const settled = had && !had.error && had.worker && had.worker.outcome && (had.worker.answer || Date.now() - (had.at || 0) < 15000);
+  if (settled && !fresh) return had;
+  const gen = wkHist.gen;
+  const req = (wkHist.runReq.get(key) || 0) + 1;
+  wkHist.runReq.set(key, req);
+  let got;
+  try { got = { ...(await wkJson(`/api/agents/${encodeURIComponent(w.caller)}/workers/${encodeURIComponent(w.workerId)}`)), at: Date.now() }; }
+  catch (e) { got = { error: e.message, at: Date.now() }; }
+  if (gen !== wkHist.gen) return null;
+  if (wkHist.runReq.get(key) === req) { wkHist.runs.set(key, got); wkHistoryRender(); }
+  return got;
+}
+async function wkOpenRun(w) {
+  const mine = ++wkHist.openSeq;
+  const run = await wkFetchRun(w, { fresh: true });
+  if (mine !== wkHist.openSeq || !run || !run.rows) return;   // a later open, or the person went elsewhere
+  const scroll = $('wk-sheet') ? $('wk-sheet').querySelector('.wk-body').scrollTop : 0;
+  wkShow({ mode: 'run', run, w: { ...w, ...(run.worker || {}) }, back: { mode: 'history', keep: true, scroll, back: wkView && wkView.back } });
+}
+// An old worker full screen, as it ran: its brief, each step, its answer and how it ended.
+function wkPaintRun(run, w) {
+  const sh = $('wk-sheet');
+  if (!sh || !run) return;
+  sh.querySelector('.rsn-sheet-title').textContent = String(w.description || 'Worker').replace(/^Worker:\s*/, '');
+  sh.querySelector('.rsn-sheet-count').textContent = [w.model ? shortModel(w.model) : '', w.durationMs != null ? fmtWorkerClock(w.durationMs) : ''].filter(Boolean).join(' · ');
+  const body = sh.querySelector('.wk-body');
+  body.textContent = '';
+  body.appendChild(wkEl('div', 'wk-sub', `called by ${displayName(w.caller)} · ${new Date(w.startedAt).toLocaleString()}`));
+  body.append(wkEl('div', 'wk-label', 'Brief'), wkEl('div', 'wk-text', w.prompt || w.description || '(no brief)'));
+  const steps = run.rows.filter(r => r.kind === 'tool_use' || (r.kind === 'tool_result' && r.tool !== 'worker_answer'));
+  if (steps.length) {
+    body.appendChild(wkEl('div', 'wk-label', 'Steps'));
+    for (const r of steps) {
+      if (r.kind === 'tool_use') {
+        const tool = String(r.tool || 'tool'), text = String(r.text || '');
+        body.appendChild(wkEl('div', 'wk-tool', `⚙ ${tool}${text.startsWith(tool) ? ` ${text.slice(tool.length).trim()}` : ` ${text}`}`.slice(0, 600)));
+      } else {
+        const out = wkEl('details', 'wk-out');
+        out.append(wkEl('summary', null, 'output'), wkEl('pre', null, String(r.text || '').slice(0, 20000)));
+        body.appendChild(out);
+      }
+    }
+  }
+  body.appendChild(wkEl('div', 'wk-label', w.partial ? 'Answer (partial: it did not finish)' : 'Answer'));
+  const ans = wkEl('div', 'wk-text');
+  if (w.answer) { ans.innerHTML = formatContent(w.answer); renderVisualBlocks(ans); } else ans.textContent = w.outcome ? '(no answer)' : '(still running)';
+  body.appendChild(ans);
+  const end = w.outcome === 'done' ? `✅ Finished${w.durationMs != null ? ` in ${fmtWorkerClock(w.durationMs)}` : ''}` : w.outcome === 'stopped' ? '⏹ Stopped' : w.outcome === 'failed' ? `❌ Failed${w.error ? `: ${w.error}` : ''}` : w.outcome === 'unfinished' ? '❌ Did not finish (its caller’s reply ended first)' : '⏳ Still running when this was saved';
+  body.appendChild(wkEl('div', 'wk-end' + (w.outcome === 'done' ? '' : ' bad'), end));
 }
 
 // ── Catch-up: the hub's view of a running turn (GET /api/agents/<name>/turn) ────────────────────
@@ -2811,7 +3332,7 @@ function applyTurnFeed(holder, turn) {
   for (const item of turn.activity || []) feedUpsert(holder, item);
   for (const w of turn.workers || []) {
     if (!w || !w.id) continue;
-    const it = feedUpsert(holder, { kind: 'worker', id: `w:${w.id}`, workerId: w.id, status: w.status, description: w.description, model: w.model, agent: w.agent, error: w.error });
+    const it = feedUpsert(holder, { kind: 'worker', id: `w:${w.id}`, workerId: w.id, status: w.status, description: w.description, model: w.model, agent: w.agent, error: w.error, ts: w.startedAt, doneTs: w.endedAt, ...(w.cancelled ? { cancelled: true } : {}) });
     if (!it) continue;
     for (const t of w.tools || []) feedUpsert(holder, { kind: 'worker_tool', id: t.id, workerId: w.id, tool: t.tool, summary: t.summary });
     if (typeof w.text === 'string' && w.text) { it.text = w.text; if (!(w.status === 'running' && it.tools.length)) it.last = 'text'; }
@@ -3174,7 +3695,7 @@ async function sendMessage(fallback) {
       toast(`${displayName(agent)}: ${e.message || 'request failed'}`);
     }
   } finally {
-    if (!lost) { feedEnd(rec); reasoningEnd(rec); }   // fold the activity feed under the finished reply; the reasoning is done
+    if (!lost) { feedEnd(rec, rec.done ? 'sure' : 'maybe'); reasoningEnd(rec); }   // fold the activity feed under the finished reply; the reasoning is done
     if (streams.get(agent) === rec) streams.delete(agent);
     recentOwn.set(agent, Date.now());
     // Finished while another chat was open: the reply is in history; flag the agent.
@@ -3233,14 +3754,14 @@ function paintReattach(ra, line) {
   scrollChat();
 }
 
-function finishReattach(ra, reply, ok = true) {
+function finishReattach(ra, reply, ok = true, how = 'sure') {
   if (!ra || reattaches.get(ra.agent) !== ra) return;
   reattaches.delete(ra.agent);
   reasoningEnd(ra);
   if (bubbleLive(ra)) {
     ra.line?.remove();
     setReplyText(ra, reply);
-    feedEnd(ra);
+    feedEnd(ra, how);
     ra.bubble.el.classList.toggle('error', !ok);
     if (ok) setBubbleTime(ra.bubble.el, msgTimeLine(Date.now(), ra.sentAt || Date.parse(ra.since)));
     if (ok) rereadHistory(ra.agent);   // the finished exchange, as the hub saved it
@@ -3271,7 +3792,7 @@ function stopReattach(ra) {
   if (!ra) return;
   stopTurn(ra.agent);
   const partial = ra.partial || '';
-  finishReattach(ra, partial ? `${partial}\n\n(stopped)` : '(stopped)', true);
+  finishReattach(ra, partial ? `${partial}\n\n(stopped)` : '(stopped)', true, 'maybe');
 }
 
 function reattachCheckAll() {
@@ -3347,7 +3868,7 @@ async function reattachCheck(ra) {
       return;
     }
     if (waited > REATTACH_GIVE_UP_MS) {
-      finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ Gave up waiting after 30 minutes. Pull to refresh to see the reply if it arrived.`, false);
+      finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ Gave up waiting after 30 minutes. Pull to refresh to see the reply if it arrived.`, false, 'maybe');
       return;
     }
     paintReattach(ra, reattachLine(ra));
@@ -3437,7 +3958,7 @@ async function readStream(response, rec) {
       case 'worker_tool_result': break;   // a worker's tool lines carry no status; its next line or text takes over
       case 'worker_completed':
       case 'worker_failed':
-        feedUpsert(rec, { kind: 'worker', id: `w:${g.worker_id}`, workerId: g.worker_id, status: g.type === 'worker_completed' ? 'completed' : 'failed', error: g.error });
+        feedUpsert(rec, { kind: 'worker', id: `w:${g.worker_id}`, workerId: g.worker_id, status: g.type === 'worker_completed' ? 'completed' : 'failed', error: g.error, cancelled: g.cancelled === true });
         break;
       case 'reasoning': reasoningAdd(rec, g.text); break;   // the panel above the reply (painted only while the chat is open)
       case 'session_interrupted': if (visible()) addNote('⚠ Session interrupted'); break;
@@ -3455,7 +3976,7 @@ async function readStream(response, rec) {
     for (const line of parts) {
       if (!line.startsWith('data: ')) continue;
       const data = line.slice(6);
-      if (data === '[DONE]') continue;
+      if (data === '[DONE]') { rec.done = true; continue; }   // the hub's own end of the reply (not a cut connection)
       let parsed;
       try { parsed = JSON.parse(data); } catch { continue; }
       if (parsed.type === 'meta') {
@@ -4169,7 +4690,7 @@ function onTurnStart(ev) {
       setBubbleTime(addUserBubble(ev.message, null), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
     }
     const b = addAssistantBubble('…');
-    hubTurns[ev.turnId] = { agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null };
+    hubTurns[ev.turnId] = { turnId: ev.turnId, agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null };
     scrollChat();
   }
   paintStatus();
@@ -4244,6 +4765,7 @@ function onTurnProgress(ev) {
 
 function onTurnEnd(ev) {
   setLive(ev.agent, { busy: false });
+  if (ev.agent) wkSettleAgent(ev.agent, ev.turnId || null);
   if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }
   if (ev.agent && ev.agent === current) setTimeout(() => refreshCtx(ev.agent), 3500);   // the hub records the size 2.5 s after the turn
   const reply = ev.reply || (ev.ok ? '(no reply)' : `⚠ turn failed: ${ev.error || 'unknown error'}`);
@@ -4504,6 +5026,8 @@ function wire() {
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
+  $('menu-workers').addEventListener('click', () => openWorkerSheet('history'));
+  $('chat-workers-btn').addEventListener('click', () => openWorkerSheet('list'));
   $('menu-compact').addEventListener('click', compressNow);
   $('files-upload-input').addEventListener('change', (e) => { filesUpload(e.target.files); e.target.value = ''; });
   $('menu-signout').addEventListener('click', signOut);
