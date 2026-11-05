@@ -552,7 +552,7 @@ async function handleHttpRequest(req, res) {
       const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
       const r = hubAuth.acceptInvite(b.token, { password: b.password, name: b.name });
       if (!r.ok) return jsonResponse(res, 400, r);
-      if (r.user.role === 'member') require('./lib/teams').createDefaultAssistant(r.user).catch(e => console.error('[users] default assistant:', e.message));
+      if (r.user.role === 'member') require('./lib/teams').createDefaultAssistant(r.user).then(a => { if (!a || !a.ok) console.error('[users] default assistant not made:', a && a.error); }, e => console.error('[users] default assistant:', e.message));
       finishSignIn(r.user, { totpOk: true });
       return jsonResponse(res, 200, { ok: true, user: hubAuth.publicUser(r.user), needsTotpEnrol: r.user.role === 'admin' });
     }
@@ -624,7 +624,7 @@ async function handleHttpRequest(req, res) {
         return jsonResponse(res, 200, { ok: true, login: r.login, expiresAt: r.expiresAt, link: `${base}/invite?token=${r.token}` });
       }
       const r = hubAuth.createUser({ login: b.login, name: b.name, role: b.role, password: b.password });
-      if (r.ok && r.user.role === 'member') require('./lib/teams').createDefaultAssistant(hubAuth.getUser(r.user.id)).catch(e => console.error('[users] default assistant:', e.message));
+      if (r.ok && r.user.role === 'member') require('./lib/teams').createDefaultAssistant(hubAuth.getUser(r.user.id)).then(a => { if (!a || !a.ok) console.error('[users] default assistant not made:', a && a.error); }, e => console.error('[users] default assistant:', e.message));
       return jsonResponse(res, r.ok ? 200 : 400, r);
     }
     if (pathname === '/api/users/invite' && req.method === 'DELETE') {
@@ -3120,6 +3120,9 @@ server.listen(PORT, HOST, () => {
   // Scheduled tasks: queue anything that came due while the hub was down (fires once, marked late), start polling.
   try { const st = getScheduledTasks().start(); st.prune(30); console.log(`[sched-tasks] started (${st.list(scheduledTasksLib.OWNER).filter(t => t.status === 'active').length} active, ${st.pending.length} due now)`); }
   catch (e) { console.error('[sched-tasks] failed to start:', e.message); }
+  // A deleted agent whose things were not all moved into its bundle (a stop part-way, Docker not answering) is finished
+  // now (lib/agent-archive); after the scheduler, so the tasks that would wake it can leave the list too.
+  require('./lib/agents').finishArchivingAgents().catch((e) => console.error('[agents] unfinished removals:', e.message));
 
   // Messaging channels (Telegram etc): opt out with HUB_COMMS_DISABLED=1.
   if (process.env.HUB_COMMS_DISABLED !== '1') {

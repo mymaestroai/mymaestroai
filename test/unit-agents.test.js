@@ -34,10 +34,14 @@ function load({ agents, example, llm } = {}) {
   require.cache[gw.id] = gw;
   const quiet = (fn) => async (...a) => { const e = console.error; console.error = () => {}; try { return await fn(...a); } finally { console.error = e; } };
   const ag = require(path.join(hub, 'lib', 'agents.js'));
+  // A removal's box step would reach Docker: a stand-in that has no boxes (tests that need one set their own).
+  const boxes = [], removed = [];
+  ag.__archive.configure({ sandbox: () => ({ retire: async (agent) => { boxes.push(agent.name); return { result: 'no Docker here' }; }, remove: async (agent) => { removed.push({ ...agent }); } }), isBoxed: () => false, log: () => {} });
   ag.createAgent = quiet(ag.createAgent); ag.loadAgentContext = quiet(ag.loadAgentContext);
   const readJson = () => JSON.parse(fs.readFileSync(path.join(hub, 'data', 'agents.json'), 'utf8'));
   const auth = () => require(path.join(hub, 'lib', 'auth.js')).getAuth();
-  return { ag, hub, root, calls, readJson, auth, ws: (n) => path.join(hub, 'workspaces', n) };
+  const bundles = () => { try { return fs.readdirSync(path.join(hub, 'data', 'archived-agents')).sort(); } catch { return []; } };
+  return { ag, hub, root, calls, readJson, auth, boxes, removed, bundles, ws: (n) => path.join(hub, 'workspaces', n) };
 }
 test.after(() => {
   for (const [k, v] of [['HUB_MEMORY_DB', saved.mem], ['HUB_AUTH_DIR', saved.auth]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -266,8 +270,11 @@ test('delete / clone / rename: main is protected, workspaces follow, name collis
   assert.ok(fs.existsSync(path.join(a.ws('moved'), 'IDENTITY.md')) && !fs.existsSync(a.ws('src')));
   assert.strictEqual(a.readJson().find(x => x.name === 'moved').owner, 'u_1');
   for (const [o, n] of [['main', 'x'], ['moved', 'moved'], ['moved', 'BAD'], ['ghost', 'fine'], ['moved', 'main']]) assert.strictEqual((await a.ag.renameAgent(o, n)).success, false, `${o}->${n}`);
-  assert.deepStrictEqual(await a.ag.deleteAgent('copy-1'), { success: true });
+  const del = await a.ag.deleteAgent('copy-1');
+  assert.strictEqual(del.success, true); assert.ok(!del.unfinished, JSON.stringify(del));
+  assert.match(del.keptIn, /^data\/archived-agents\/copy-1-\d{8}T\d{6}Z$/);
   assert.ok(!a.readJson().some(x => x.name === 'copy-1'));
+  assert.ok(!fs.existsSync(a.ws('copy-1')) && fs.existsSync(path.join(a.hub, del.keptIn, 'workspace', 'IDENTITY.md')), 'its folder went into the bundle');
 });
 
 test('getAvailableModels filters non-chat models; seedDefaultWorkspaces never overwrites a customised file', async () => {
@@ -465,11 +472,11 @@ test('createAgent: on the lead’s path the default display name counts too, and
   assert.ok(!fs.readdirSync(path.join(a.hub, 'workspaces')).some(n => n.startsWith('.')), 'the loser left no staging folder');
 });
 
-test('createAgent never takes over what an earlier agent of the same name left behind: its folder, chat history or Claude session', async () => {
+test('createAgent never takes over what an earlier agent of the same name left: it is kept in a bundle first, and the new agent starts clean', async () => {
   const a = load({ agents: [] });
   const outside = path.join(a.root, 'outside.txt');
   fs.writeFileSync(outside, 'keep me\n');
-  // A folder left behind (deleting an agent only takes it off the list), here with a planted link where SOUL.md goes.
+  // A folder left behind by a delete from before bundles, here with a planted link where SOUL.md goes.
   fs.mkdirSync(a.ws('ghost'), { recursive: true });
   fs.symlinkSync(outside, path.join(a.ws('ghost'), 'SOUL.md'));
   fs.mkdirSync(path.join(a.ws('olds'), 'records'), { recursive: true });
@@ -478,32 +485,58 @@ test('createAgent never takes over what an earlier agent of the same name left b
   fs.symlinkSync(elsewhere, a.ws('lnk'));                                           // the folder itself a link
   fs.mkdirSync(path.join(a.hub, 'data', 'conversations'), { recursive: true });
   fs.writeFileSync(path.join(a.hub, 'data', 'conversations', 'hist.jsonl'), '{"role":"user","content":"old"}\n');
-  fs.writeFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), JSON.stringify({ sess: { sessionId: 'abc' } }));
+  fs.writeFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), JSON.stringify({ sess: { sessionId: 'abc' }, keep: { sessionId: 'k' } }));
   fs.writeFileSync(path.join(a.hub, 'data', 'codex-sessions.json'), JSON.stringify({ codexs: { threadId: 't1' } }));
-  require(path.join(a.hub, 'lib', 'memory-db.js')).writeLongTermMemory('memo', 'the earlier agent’s notes');
+  const mem = require(path.join(a.hub, 'lib', 'memory-db.js'));
+  mem.writeLongTermMemory('memo', 'the earlier agent’s notes');
   fs.mkdirSync(path.join(a.hub, 'data', 'sessions', 'notes'), { recursive: true });
-  require(path.join(a.hub, 'lib', 'transcript.js')).getTranscript().record({ agent: 'trans', kind: 'user', text: 'something the earlier agent was told' });
-  fs.mkdirSync(a.ws('both'));
-  fs.writeFileSync(path.join(a.ws('both'), 'SOUL.md'), 'old\n');
-  fs.writeFileSync(path.join(a.hub, 'data', 'conversations', 'both.jsonl'), '{}\n');
-  const expect = { ghost: /its folder is still here/, olds: /its folder is still here/, lnk: /its folder is still here/, hist: /its chat history is still here/,
-    sess: /its Claude session is still here/, codexs: /its Codex session is still here/, memo: /its memory is still here/, notes: /its notes folder is still here/,
-    trans: /its transcript archive is still here/, both: /its folder and chat history are still here/ };
-  for (const [name, re] of Object.entries(expect)) {
-    for (const extra of [{ files: { 'SOUL.md': 'pwned' }, records: [{ name: 'a.md', content: 'x' }] }, null]) {
-      const r = await a.ag.createAgent(name, undefined, '', null, null, null, extra);
-      assert.strictEqual(r.success, false, name);
-      assert.match(r.error, new RegExp(`^The name "${name}" belonged to an earlier agent, and ${re.source}\\. Pick another name\\.$`), r.error);
-    }
+  const tr = require(path.join(a.hub, 'lib', 'transcript.js')).getTranscript();
+  tr.record({ agent: 'trans', kind: 'user', text: 'something the earlier agent was told' });
+  fs.mkdirSync(path.join(a.hub, 'data', 'context-refresh'), { recursive: true });
+  fs.writeFileSync(path.join(a.hub, 'data', 'context-refresh', 'ctx.json'), '{"seen":1}');
+  fs.mkdirSync(path.join(a.root, 'share', 'filer')); fs.writeFileSync(path.join(a.root, 'share', 'filer', 'report.pdf'), 'old report');
+  fs.mkdirSync(path.join(a.root, 'share', 'common')); fs.writeFileSync(path.join(a.root, 'share', 'common', 'everyone.md'), 'shared');
+  fs.writeFileSync(path.join(a.hub, 'data', 'context-refresh', 'common.json'), '{}');   // an agent named "common" never takes the shared folder
+  const expect = { ghost: 'workspace', olds: 'workspace', lnk: 'workspace', hist: 'chat.jsonl', sess: 'sessions.json', codexs: 'sessions.json',
+    memo: 'memory.json', notes: 'notes', trans: 'archive.db', ctx: 'context-refresh.json', filer: 'files', common: 'context-refresh.json' };
+  for (const [name, kept] of Object.entries(expect)) {
+    const r = await a.ag.createAgent(name, undefined, '', null, null, null, { files: { 'SOUL.md': 'new\n' } });
+    assert.strictEqual(r.success, true, `${name}: ${r.error}`);
+    assert.match(r.earlierAgentKept, new RegExp(`^data/archived-agents/${name}-\\d{8}T\\d{6}Z$`), name);
+    const b = path.join(a.hub, r.earlierAgentKept);
+    assert.ok(fs.existsSync(path.join(b, kept)), `${name}: ${kept} is in its bundle`);
+    const m = JSON.parse(fs.readFileSync(path.join(b, 'manifest.json'), 'utf8'));
+    assert.deepStrictEqual([m.name, m.reason, m.entry, !!m.finishedAt], [name, 'left by an earlier agent of that name', null, true]);
+    assert.strictEqual(fs.readFileSync(path.join(a.ws(name), 'SOUL.md'), 'utf8'), 'new\n', `${name} starts with its own files`);
   }
+  assert.deepStrictEqual(a.boxes, Object.keys(expect), 'each earlier agent’s box was looked for');
+  // nothing was followed through a link; the shared folder and the files outside the hub are as they were
   assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'keep me\n');
-  assert.deepStrictEqual(fs.readdirSync(elsewhere), [], 'nothing written through the linked folder');
-  assert.deepStrictEqual(fs.readdirSync(path.join(a.ws('olds'), 'records')), ['secrets.md']);
-  assert.ok(!a.readJson().some(x => Object.keys(expect).includes(x.name)), 'no list entries');
-  // An empty folder of that name holds nothing to inherit: it is simply replaced.
+  assert.deepStrictEqual(fs.readdirSync(elsewhere), []);
+  assert.ok(fs.lstatSync(path.join(a.hub, 'data', 'archived-agents', a.bundles().find(n => n.startsWith('lnk-')), 'workspace')).isSymbolicLink(), 'the link itself was put aside');
+  assert.ok(fs.lstatSync(a.ws('lnk')).isDirectory() && !fs.lstatSync(a.ws('lnk')).isSymbolicLink());
+  assert.deepStrictEqual(fs.readdirSync(path.join(a.root, 'share', 'common')), ['everyone.md']);
+  assert.ok(!fs.existsSync(path.join(a.root, 'share', 'filer')), 'the earlier agent’s Files folder went with it');
+  // the new agents have none of it
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), 'utf8')), { keep: { sessionId: 'k' } }, 'only that session left the map');
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(a.hub, 'data', 'codex-sessions.json'), 'utf8')), {});
+  assert.strictEqual(mem.getMemoryStats('memo').longTermSections, 0);
+  assert.strictEqual(tr.stats('trans').entries, 0);
+  assert.ok(!fs.existsSync(path.join(a.hub, 'data', 'conversations', 'hist.jsonl')));
+  // what was kept can still be read and searched
+  const kept = (n, f) => path.join(a.hub, 'data', 'archived-agents', a.bundles().find(x => x.startsWith(`${n}-`)), f);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(kept('sess', 'sessions.json'), 'utf8')), { 'Claude session': { sessionId: 'abc' } });
+  assert.strictEqual(JSON.parse(fs.readFileSync(kept('memo', 'memory.json'), 'utf8')).long_term_memory[0].content, 'the earlier agent’s notes');
+  const Database = require(path.join(a.hub, 'node_modules', 'better-sqlite3'));
+  const db = new Database(kept('trans', 'archive.db'), { readonly: true });
+  try { assert.strictEqual(db.prepare("SELECT COUNT(*) n FROM entries_fts WHERE entries_fts MATCH 'told'").get().n, 1); } finally { db.close(); }
+  assert.strictEqual(fs.readFileSync(kept('olds', path.join('workspace', 'records', 'secrets.md')), 'utf8'), 'the earlier agent’s facts\n');
+  // An empty folder of that name holds nothing to inherit: it is simply replaced, and nothing is put aside.
+  const before = a.bundles().length;
   fs.mkdirSync(a.ws('fresh'));
-  assert.strictEqual((await a.ag.createAgent('fresh', undefined, '', null, null, null, { files: { 'SOUL.md': 'new\n' } })).success, true);
-  assert.strictEqual(fs.readFileSync(path.join(a.ws('fresh'), 'SOUL.md'), 'utf8'), 'new\n');
+  const r = await a.ag.createAgent('fresh', undefined, '', null, null, null, { files: { 'SOUL.md': 'new\n' } });
+  assert.deepStrictEqual([r.success, r.earlierAgentKept], [true, undefined]);
+  assert.strictEqual(a.bundles().length, before);
   assert.ok(!fs.readdirSync(path.join(a.hub, 'workspaces')).some(n => n.startsWith('.')), 'no staging folder left behind');
 });
 
@@ -515,10 +548,10 @@ test('createAgent: when what an earlier agent left can’t be checked, the name 
   try {
     mem.getMemoryStats = () => { throw new Error('SQLITE_BUSY: database is locked'); };
     const r1 = await a.ag.createAgent('locked', undefined, '', null, null, null, { files: { 'SOUL.md': 'x' } });
-    assert.strictEqual(r1.error, 'Could not check what an earlier agent named "locked" may have left (SQLITE_BUSY: database is locked). Nothing was created; try again in a moment.');
+    assert.strictEqual(r1.error, 'Could not check or put away what an earlier agent named "locked" may have left (SQLITE_BUSY: database is locked). Nothing was created; try again in a moment.');
     mem.getMemoryStats = real.stats;
     tr.stats = () => null;   // the archive could not be opened
-    assert.match((await a.ag.createAgent('locked', undefined, '', null, null, null, null)).error, /^Could not check .*the transcript archive could not be opened/);
+    assert.match((await a.ag.createAgent('locked', undefined, '', null, null, null, null)).error, /^Could not check .*the conversation archive could not be opened/);
     tr.stats = real.tstats;
     fs.writeFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), '{"half-writ');
     assert.match((await a.ag.createAgent('locked', undefined, '', null, null, null, null)).error, /^Could not check .*agent-sessions\.json can't be read/);
@@ -561,7 +594,7 @@ test('createAgent: the folder appears whole or not at all; a failed write or a l
     const realRm = fs.rmSync;
     fs.rmSync = (p, ...rest) => { if (String(p).endsWith(`${path.sep}stuck`)) { const e = new Error('EBUSY: resource busy'); e.code = 'EBUSY'; throw e; } return realRm(p, ...rest); };
     try {
-      assert.match((await a.ag.createAgent('stuck', undefined, '', null, null, null, { files: { 'SOUL.md': 'x' } })).error, /^could not save the agent list \(ENOSPC[^)]*\); its folder workspaces\/stuck could not be taken back out \(EBUSY: resource busy\): delete it by hand before using the name again$/);
+      assert.match((await a.ag.createAgent('stuck', undefined, '', null, null, null, { files: { 'SOUL.md': 'x' } })).error, /^could not save the agent list \(ENOSPC[^)]*\); its folder workspaces\/stuck could not be taken back out \(EBUSY: resource busy\); the next agent given that name finds it put aside with an earlier agent's things$/);
     } finally { fs.rmSync = realRm; }
   } finally { fs.renameSync = realRename; }
   assert.ok(!fs.existsSync(a.ws('unsaved')), 'its folder was taken back out');
@@ -584,4 +617,383 @@ test('createAgent with a personality: only the four known files the model return
   assert.strictEqual((await a.ag.createAgent('gen2', 'gpt-5', 'a poet')).success, true);
   assert.deepStrictEqual(fs.readdirSync(a.ws('gen2')).sort(), Object.keys(FOUR).sort());
   assert.ok(!fs.existsSync(path.join(a.hub, 'workspaces', 'escape.md')), 'nothing outside the workspace');
+});
+
+// The hub's chat engine, as deleteAgent sees it: who is at work, the scheduled tasks, and what it remembers by name.
+function chatStandIn(a, { busy = new Set(), tasks = [] } = {}) {
+  const forgot = [];
+  const st = { list: tasks,
+    tasksOf: (n) => st.list.filter(t => t.agent === n).map(t => JSON.parse(JSON.stringify(t))),
+    action: (id, who, act) => { assert.deepStrictEqual([who, act], ['owner', 'delete']); st.list = st.list.filter(t => t.id !== id); } };
+  const m = new Module(path.join(a.hub, 'lib', 'sdk-chat.js'));
+  m.filename = m.id; m.loaded = true;
+  m.exports = { isAgentActive: (n) => busy.has(n), getScheduledTasks: () => st, forgetAgent: (n) => forgot.push(n) };
+  require.cache[m.id] = m;
+  return { st, forgot };
+}
+
+test('deleteAgent keeps everything the agent left in one bundle; its name is free at once and a new agent of that name starts clean', async () => {
+  const a = load({ agents: [{ name: 'maestro' }, { name: 'scout', display: 'Scout', model: 'claude-sdk/x' }] });
+  const chat = chatStandIn(a, { tasks: [{ id: 't1', agent: 'scout', label: 'daily' }, { id: 't2', agent: 'maestro', label: 'other' }, { id: 't3', agent: 'scout', label: 'once' }] });
+  const d = (...p) => path.join(a.hub, 'data', ...p);
+  fs.mkdirSync(path.join(a.ws('scout'), 'records'), { recursive: true });
+  fs.writeFileSync(path.join(a.ws('scout'), 'SOUL.md'), 'scout soul\n');
+  fs.writeFileSync(path.join(a.ws('scout'), 'records', 'facts.md'), 'facts\n');
+  fs.mkdirSync(d('conversations'), { recursive: true });
+  fs.writeFileSync(d('conversations', 'scout.jsonl'), '{"role":"user","content":"hi"}\n');
+  fs.writeFileSync(d('conversations', 'maestro.jsonl'), '{"role":"user","content":"stay"}\n');
+  fs.writeFileSync(d('agent-sessions.json'), JSON.stringify({ scout: { sessionId: 's1' }, maestro: { sessionId: 'm1' } }));
+  fs.chmodSync(d('agent-sessions.json'), 0o640);
+  fs.writeFileSync(d('codex-sessions.json'), JSON.stringify({ scout: { threadId: 'c1' } }));
+  const mem = require(path.join(a.hub, 'lib', 'memory-db.js'));
+  mem.writeLongTermMemory('scout', 'long term'); mem.writeSessionNote('scout', 'a note'); mem.saveDistillation('scout', '2026-11-01', 'sum');
+  mem.writeLongTermMemory('maestro', 'mine');
+  fs.mkdirSync(d('sessions', 'scout'), { recursive: true }); fs.writeFileSync(d('sessions', 'scout', 'n.md'), 'n');
+  fs.mkdirSync(d('context-refresh'), { recursive: true }); fs.writeFileSync(d('context-refresh', 'scout.json'), '{}');
+  const tr = require(path.join(a.hub, 'lib', 'transcript.js')).getTranscript();
+  tr.record({ agent: 'scout', kind: 'user', text: 'scout was told this' });
+  tr.record({ agent: 'maestro', kind: 'user', text: 'maestro keeps this' });
+  fs.mkdirSync(path.join(a.root, 'share', 'scout')); fs.writeFileSync(path.join(a.root, 'share', 'scout', 'out.pdf'), 'pdf');
+
+  const had = mem.getMemoryStats('scout');
+  const r = await a.ag.deleteAgent('scout');
+  assert.strictEqual(r.success, true); assert.strictEqual(r.unfinished, undefined, JSON.stringify(r));
+  assert.match(r.keptIn, /^data\/archived-agents\/scout-\d{8}T\d{6}Z$/);
+  const b = path.join(a.hub, r.keptIn);
+  assert.deepStrictEqual(fs.readdirSync(b).sort(), ['archive.db', 'chat.jsonl', 'context-refresh.json', 'files', 'manifest.json', 'memory.json', 'notes', 'scheduled-tasks.json', 'sessions.json', 'workspace']);
+  const m = JSON.parse(fs.readFileSync(path.join(b, 'manifest.json'), 'utf8'));
+  assert.deepStrictEqual([m.name, m.reason, m.entry.display, !!m.finishedAt], ['scout', 'deleted', 'Scout', true]);
+  assert.ok(Object.values(m.steps).every(s => s.done), JSON.stringify(m.steps));
+  assert.ok(!a.readJson().some(x => x.name === 'scout'));
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(b, 'scheduled-tasks.json'), 'utf8')).map(t => t.id), ['t1', 't3']);
+  assert.deepStrictEqual(chat.st.list.map(t => t.id), ['t2'], 'another agent’s task stays');
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(b, 'sessions.json'), 'utf8')), { 'Claude session': { sessionId: 's1' }, 'Codex session': { threadId: 'c1' } });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(d('agent-sessions.json'), 'utf8')), { maestro: { sessionId: 'm1' } });
+  assert.strictEqual(fs.statSync(d('agent-sessions.json')).mode & 0o777, 0o640, 'the map keeps its permissions');
+  const memo = JSON.parse(fs.readFileSync(path.join(b, 'memory.json'), 'utf8'));
+  assert.deepStrictEqual([memo.long_term_memory.length, memo.session_notes.length, memo.distillation_log.length], [had.longTermSections, had.sessionNotes, had.distilledDays]);
+  assert.ok(had.longTermSections && had.sessionNotes && had.distilledDays);
+  const ms = mem.getMemoryStats('scout');
+  assert.deepStrictEqual([ms.longTermSections, ms.sessionNotes, ms.distilledDays, mem.getMemoryStats('maestro').longTermSections], [0, 0, 0, 1]);
+  assert.deepStrictEqual([tr.stats('scout').entries, tr.stats('maestro').entries], [0, 1]);
+  assert.strictEqual(fs.readFileSync(path.join(b, 'workspace', 'records', 'facts.md'), 'utf8'), 'facts\n');
+  assert.strictEqual(fs.readFileSync(path.join(b, 'files', 'out.pdf'), 'utf8'), 'pdf');
+  assert.ok(fs.existsSync(d('conversations', 'maestro.jsonl')));
+  assert.deepStrictEqual(chat.forgot, ['scout']);
+  assert.deepStrictEqual(a.boxes, ['scout']);
+  // the name is free: a new scout starts clean, with nothing more put aside
+  const again = await a.ag.createAgent('scout', undefined, '', null, null, null, { files: { 'SOUL.md': 'new scout\n' } });
+  assert.deepStrictEqual([again.success, again.earlierAgentKept], [true, undefined]);
+  assert.strictEqual(fs.readFileSync(path.join(a.ws('scout'), 'SOUL.md'), 'utf8'), 'new scout\n');
+  assert.ok(!fs.existsSync(path.join(a.ws('scout'), 'records')));
+  assert.strictEqual(a.bundles().length, 1);
+});
+
+test('deleteAgent: an agent at work is not deleted', async () => {
+  const a = load({ agents: [{ name: 'busy', display: 'Busy Bee' }] });
+  chatStandIn(a, { busy: new Set(['busy']) });
+  fs.mkdirSync(a.ws('busy'), { recursive: true }); fs.writeFileSync(path.join(a.ws('busy'), 'SOUL.md'), 's');
+  assert.deepStrictEqual(await a.ag.deleteAgent('busy'), { success: false, error: 'Busy Bee is working right now (a reply or a background job). Stop it or wait until it finishes, then delete it.' });
+  assert.deepStrictEqual(a.readJson().map(x => x.name), ['busy']);
+  assert.deepStrictEqual(a.bundles(), []);
+  assert.ok(fs.existsSync(path.join(a.ws('busy'), 'SOUL.md')));
+});
+
+test('deleteAgent: what can’t be moved now is finished later; a box left for later doesn’t hold the name, anything else does', async () => {
+  const a = load({ agents: [{ name: 'boxy' }, { name: 'held' }] });
+  let docker = 'down', memoryFails = true;
+  const retired = [];
+  const mem = require(path.join(a.hub, 'lib', 'memory-db.js'));
+  a.ag.__archive.configure({ log: () => {}, isBoxed: () => true,
+    sandbox: () => ({ retire: async (agent) => { if (docker === 'down') throw new Error('Docker is not answering (Cannot connect to the Docker daemon)'); retired.push(agent.box || agent.name); return { result: 'removed' }; } }),
+    memory: () => ({ exportAgentMemory: (n) => { if (memoryFails) throw new Error('SQLITE_BUSY: database is locked'); return mem.exportAgentMemory(n); }, deleteAgentMemoryRows: mem.deleteAgentMemoryRows }) });
+  fs.mkdirSync(a.ws('boxy'), { recursive: true }); fs.writeFileSync(path.join(a.ws('boxy'), 'SOUL.md'), 's');
+  const r = await a.ag.deleteAgent('boxy');
+  assert.strictEqual(r.success, true);
+  assert.deepStrictEqual(r.unfinished, ['sandbox box: Docker is not answering (Cannot connect to the Docker daemon)', 'memory: SQLITE_BUSY: database is locked']);
+  assert.match(r.keptIn, /^data\/archived-agents\/boxy-\d{8}T\d{6}Z\.partial$/);
+  assert.ok(fs.existsSync(path.join(a.hub, r.keptIn, 'workspace', 'SOUL.md')), 'the other steps were done');
+  // memory still to move: the name stays taken, and a create tries again (still failing) without a second bundle
+  const blocked = await a.ag.createAgent('boxy', undefined, '', null, null, null, null);
+  assert.match(blocked.error, /^Could not check or put away what an earlier agent named "boxy" may have left \(its unfinished removal could not be moved yet/);
+  assert.strictEqual(a.bundles().length, 1);
+  // only the box left: the name is free (the new agent has a box of its own), and the earlier box is finished later
+  memoryFails = false;
+  const ok = await a.ag.createAgent('boxy', undefined, '', null, null, null, null);
+  assert.deepStrictEqual([ok.success, ok.earlierAgentKept], [true, r.keptIn]);
+  const newBox = a.readJson().find(x => x.name === 'boxy').box;
+  assert.match(newBox, /^[0-9a-f]{12}$/);
+  assert.ok(a.bundles()[0].endsWith('.partial'), 'the earlier box is still to remove');
+  docker = 'up';
+  const done = await a.ag.finishArchivingAgents();
+  assert.deepStrictEqual(done.map(x => x.finished), [true], 'for a name in use again only the box step runs, which was all that was left');
+  assert.deepStrictEqual(retired, ['boxy'], 'the earlier agent’s own box (no id), not the new one’s');
+  assert.deepStrictEqual(a.bundles(), [r.keptIn.replace(/^data\/archived-agents\//, '').replace(/\.partial$/, '')]);
+  const m = JSON.parse(fs.readFileSync(path.join(a.hub, 'data', 'archived-agents', a.bundles()[0], 'manifest.json'), 'utf8'));
+  assert.ok(Object.values(m.steps).every(s => s.done) && m.finishedAt);
+  // A delete that stopped before the agent left the list (the hub stopped between the two): nothing had moved, the
+  // agent is still listed with the same box, so the bundle is undone and the agent's box is never touched.
+  fs.mkdirSync(a.ws('held'), { recursive: true }); fs.writeFileSync(path.join(a.ws('held'), 'SOUL.md'), 'the agent called held');
+  const stale = a.ag.getAgentArchive().begin({ name: 'held', entry: { name: 'held' } });
+  await a.ag.finishArchivingAgents();
+  assert.strictEqual(fs.readFileSync(path.join(a.ws('held'), 'SOUL.md'), 'utf8'), 'the agent called held');
+  assert.ok(!fs.existsSync(stale), 'the undone bundle is gone');
+  assert.deepStrictEqual(retired, ['boxy'], 'the box of the agent listed was not retired');
+  // Steps already done and the same agent listed again (a restore put it back): left as it is, its box untouched.
+  const restored = a.ag.getAgentArchive().begin({ name: 'held', entry: { name: 'held' } });
+  const mf = path.join(restored, 'manifest.json');
+  fs.writeFileSync(mf, JSON.stringify({ ...JSON.parse(fs.readFileSync(mf, 'utf8')), steps: { workspace: { done: true, result: 'moved' } } }));
+  await a.ag.finishArchivingAgents();
+  assert.ok(fs.existsSync(restored));
+  assert.deepStrictEqual(retired, ['boxy']);
+});
+
+test('the finisher never retires the box of the agent listed under that name; a new agent’s box is never an earlier one', async () => {
+  const a = load({ agents: [{ name: 'twin', box: 'cccccccccccc' }] });
+  const retired = [];
+  a.ag.__archive.configure({ log: () => {}, isBoxed: () => true, sandbox: () => ({ retire: async (agent) => { retired.push(agent.box || agent.name); return { result: 'removed' }; } }) });
+  const arch = a.ag.getAgentArchive();
+  // an earlier twin, deleted while Docker wasn't answering: its own box (no id) still to remove
+  const early = arch.begin({ name: 'twin', entry: { name: 'twin' } });
+  const mf = path.join(early, 'manifest.json');
+  const STEPS = ['box', 'workspace', 'files', 'chat', 'notes', 'contextRefresh', 'tasks', 'sessions', 'memory', 'archive'];
+  fs.writeFileSync(mf, JSON.stringify({ ...JSON.parse(fs.readFileSync(mf, 'utf8')), steps: Object.fromEntries(STEPS.filter(x => x !== 'box').map(x => [x, { done: true }])) }));
+  // and one whose entry had the listed twin's own box (a copy of the same agent): never retired
+  const same = arch.begin({ name: 'twin', entry: { name: 'twin', box: 'cccccccccccc' } });
+  fs.writeFileSync(path.join(same, 'manifest.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(same, 'manifest.json'), 'utf8')), steps: { workspace: { done: true } } }));
+  await a.ag.finishArchivingAgents();
+  assert.deepStrictEqual(retired, ['twin'], 'only the earlier agent box (hub-agent-twin), not hub-agent-twin-cccccccccccc');
+  assert.ok(!fs.existsSync(early) && fs.existsSync(same));
+  // inside the run too: a box-only run handed the listed agent never retires its box
+  const again = arch.begin({ name: 'twin', entry: { name: 'twin', box: 'cccccccccccc' } });
+  const r = await arch.run(again, { only: ['box'], live: { name: 'twin', box: 'cccccccccccc' } });
+  assert.match(r.unfinished.find(u => u.step === 'box').error, /^the agent now called twin uses this box$/);
+  assert.deepStrictEqual(retired, ['twin']);
+  const { containerNameFor } = require(path.join(a.hub, 'lib', 'sandbox.js'));
+  const { homeVolumeFor } = require(path.join(a.hub, 'lib', 'sandbox.js'));
+  assert.deepStrictEqual([containerNameFor({ name: 'twin' }), containerNameFor({ name: 'twin', box: 'cccccccccccc' }), containerNameFor({ name: 'other', box: 'cccccccccccc' })],
+    ['hub-agent-twin', 'hub-agent-twin-cccccccccccc', 'hub-agent-other-cccccccccccc'], 'a renamed agent gets a box for its new folders');
+  assert.deepStrictEqual([homeVolumeFor({ name: 'twin' }), homeVolumeFor({ name: 'twin', box: 'cccccccccccc' }), homeVolumeFor({ name: 'other', box: 'cccccccccccc' })],
+    ['hub-agent-twin-home', 'hub-agent-cccccccccccc-home', 'hub-agent-cccccccccccc-home'], 'and keeps its home folder');
+});
+
+test('deleteAgent: a delete cut short after its bundle was made is finished at the next start; never on a guess about who exists', async () => {
+  const a = load({ agents: [{ name: 'cut' }] });
+  fs.mkdirSync(a.ws('cut'), { recursive: true }); fs.writeFileSync(path.join(a.ws('cut'), 'SOUL.md'), 's');
+  const b = a.ag.getAgentArchive().begin({ name: 'cut', entry: { name: 'cut' } });
+  fs.writeFileSync(path.join(a.hub, 'data', 'agents.json'), '[]');   // the list was saved; then the hub stopped
+  const [r] = await a.ag.finishArchivingAgents();
+  assert.strictEqual(r.finished, true);
+  assert.ok(!fs.existsSync(b) && fs.existsSync(path.join(r.dir, 'workspace', 'SOUL.md')) && !fs.existsSync(a.ws('cut')));
+  const b2 = a.ag.getAgentArchive().begin({ name: 'later', entry: null });
+  fs.writeFileSync(path.join(a.hub, 'data', 'agents.json'), '{"half');
+  const e = console.error; console.error = () => {};
+  try { assert.deepStrictEqual(await a.ag.finishArchivingAgents(), []); } finally { console.error = e; }
+  assert.deepStrictEqual(fs.readdirSync(b2), ['manifest.json'], 'an unreadable agent list moves nothing');
+});
+
+test('deleteAgent: with the combined archive of earlier versions, the agent’s rows move to its bundle and the others stay', async () => {
+  const a = load({ agents: [{ name: 'gone' }, { name: 'stay' }] });
+  fs.writeFileSync(path.join(a.hub, 'data', 'transcript.db'), '');   // the combined file, before the split
+  const tr = require(path.join(a.hub, 'lib', 'transcript.js')).getTranscript();
+  tr.record({ agent: 'gone', kind: 'user', text: 'gone was told' });
+  tr.record({ agent: 'gone', kind: 'assistant', text: 'gone said' });
+  tr.record({ agent: 'stay', kind: 'user', text: 'stay was told' });
+  const r = await a.ag.deleteAgent('gone');
+  assert.strictEqual(r.unfinished, undefined, JSON.stringify(r));
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(a.hub, r.keptIn, 'manifest.json'), 'utf8')).steps.archive.result, 'moved 2 rows');
+  assert.deepStrictEqual([tr.stats('gone').entries, tr.stats('stay').entries], [0, 1]);
+  assert.ok(fs.existsSync(path.join(a.hub, 'data', 'transcript.db')), 'still the one combined file');
+  const Database = require(path.join(a.hub, 'node_modules', 'better-sqlite3'));
+  const db = new Database(path.join(a.hub, r.keptIn, 'archive.db'), { readonly: true });
+  try { assert.deepStrictEqual(db.prepare('SELECT text FROM entries ORDER BY id').all().map(x => x.text), ['gone was told', 'gone said']); } finally { db.close(); }
+});
+
+test('a name an admin granted something to stays taken after its agent is deleted, and the message says what to remove', async () => {
+  const a = load({ agents: [{ name: 'priv' }, { name: 'free' }] });
+  const d = (...p) => path.join(a.hub, 'data', ...p);
+  for (const n of ['priv', 'free']) { const r = await a.ag.deleteAgent(n); assert.strictEqual(r.success, true, r.error); }
+  fs.writeFileSync(d('settings.json'), JSON.stringify({ walletAgents: ['priv'] }));
+  require(path.join(a.hub, 'lib', 'root-grants.js')).getRootGrants().grant('priv', { minutes: 15, by: 'owner' });
+  fs.writeFileSync(d('connectors.json'), JSON.stringify({ version: 1, groups: {}, connectors: [{ id: 'mail', kind: 'mcp', agents: ['priv'], protect: 'none', enabled: true, secrets: {}, tools: {} }, { id: 'web', kind: 'mcp', agents: null, protect: 'none', enabled: true, secrets: {}, tools: {} }] }));
+  const tok = a.auth().createToken({ name: 'priv-bot', scopes: ['chat'], agents: ['priv'] });
+  a.auth().createToken({ name: 'everyone', scopes: ['status'] });
+  const r = await a.ag.createAgent('priv', undefined, '', null, null, null, null);
+  assert.strictEqual(r.success, false);
+  assert.strictEqual(r.error, 'Could not check or put away what an earlier agent named "priv" may have left (the name "priv" still has wallet access (walletAgents in data/settings.json), a root grant (until it ends), access to the connector mail and the API token priv-bot, which a new agent of that name would get too: remove them first, or choose another name). Nothing was created; try again in a moment.');
+  assert.strictEqual((await a.ag.cloneAgent('free', 'priv')).success, false, 'clone is held the same way');
+  assert.strictEqual((await a.ag.createAgent('free', undefined, '', null, null, null, null)).success, true, 'a token or connector for every agent is not a grant by name');
+  require(path.join(a.hub, 'lib', 'root-grants.js')).getRootGrants().revoke('priv');
+  fs.writeFileSync(d('settings.json'), '{}');
+  fs.writeFileSync(d('connectors.json'), JSON.stringify({ version: 1, groups: {}, connectors: [] }));
+  a.auth().revokeToken(tok.id || tok.token?.id || a.auth().listTokens().find(t => t.name === 'priv-bot').id);
+  for (const k of Object.keys(require.cache)) if (k.startsWith(path.join(a.hub, 'lib', 'connectors')) || k.startsWith(path.join(a.hub, 'lib', 'settings'))) delete require.cache[k];
+  assert.strictEqual((await a.ag.createAgent('priv', undefined, '', null, null, null, null)).success, true);
+});
+
+test('new and cloned agents get a box of their own; a clone waiting on an earlier agent’s things loses no change made meanwhile', async () => {
+  const a = load({ agents: [{ name: 'src', model: 'mm', box: 'aaaaaaaaaaaa' }] });
+  const made = await a.ag.createAgent('fresh', undefined, '', null, null, null, null);
+  assert.strictEqual(made.success, true);
+  fs.mkdirSync(a.ws('copy'), { recursive: true }); fs.writeFileSync(path.join(a.ws('copy'), 'SOUL.md'), 'an earlier copy');   // left by an earlier agent
+  let waiting, release;
+  const inSweep = new Promise(r => { waiting = r; });
+  const gate = new Promise(r => { release = r; });
+  a.ag.__archive.configure({ log: () => {}, isBoxed: () => false, sandbox: () => ({ retire: async (agent) => { if (agent.name === 'copy') { waiting(); await gate; } return { result: 'none' }; } }) });
+  const cloning = a.ag.cloneAgent('src', 'copy');
+  await inSweep;   // the clone waits on its sweep of copy; meanwhile someone deletes fresh and creates other
+  assert.strictEqual((await a.ag.deleteAgent('fresh')).success, true);
+  assert.strictEqual((await a.ag.createAgent('other', undefined, '', null, null, null, null)).success, true);
+  release();
+  const c = await cloning;
+  assert.strictEqual(c.success, true, c.error);
+  assert.match(c.earlierAgentKept, /^data\/archived-agents\/copy-/);
+  const list = a.readJson();
+  assert.deepStrictEqual(list.map(x => x.name).sort(), ['copy', 'other', 'src'], 'the delete and the create made meanwhile both stand');
+  const boxes = list.map(x => x.box);
+  assert.ok(boxes.every(b => /^[0-9a-f]{12}$/.test(b)) && new Set(boxes).size === 3, 'every box is its own; the clone never shares its source’s');
+});
+
+test('renaming into a name an earlier agent left things under puts them aside first; an agent at work is not renamed', async () => {
+  const a = load({ agents: [{ name: 'helper' }, { name: 'busy' }] });
+  chatStandIn(a, { busy: new Set(['busy']) });
+  fs.mkdirSync(path.join(a.hub, 'data', 'conversations'), { recursive: true });
+  fs.writeFileSync(path.join(a.hub, 'data', 'conversations', 'scout.jsonl'), '{"role":"user","content":"the earlier scout"}\n');
+  fs.writeFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), JSON.stringify({ scout: { sessionId: 'old' } }));
+  assert.deepStrictEqual(await a.ag.renameAgent('helper', 'scout'), { success: true, newName: 'scout' });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), 'utf8')), {}, 'the earlier scout’s session is not resumed');
+  assert.ok(!fs.existsSync(path.join(a.hub, 'data', 'conversations', 'scout.jsonl')));
+  assert.strictEqual(a.bundles().filter(n => n.startsWith('scout-')).length, 1);
+  assert.match((await a.ag.renameAgent('busy', 'idle')).error, /^busy is working right now \(a reply or a background job\)\. Stop it or wait until it finishes, then rename it\.$/);
+  const scout = a.readJson().find(x => x.name === 'scout');
+  assert.match(scout.box, /^[0-9a-f]{12}$/, 'an agent from before box ids gets one when renamed');
+  assert.deepStrictEqual(a.removed.map(x => [x.name, x.box]), [['helper', undefined]], 'its old box (named after the old name) is removed');
+});
+
+test('renaming waits for nothing it shouldn’t: an agent that starts working while an earlier agent’s things are put away is not renamed', async () => {
+  const a = load({ agents: [{ name: 'quick', box: 'dddddddddddd' }] });
+  const busy = new Set();
+  chatStandIn(a, { busy });
+  fs.mkdirSync(path.join(a.hub, 'data', 'conversations'), { recursive: true });
+  fs.writeFileSync(path.join(a.hub, 'data', 'conversations', 'slow.jsonl'), '{}\n');   // an earlier slow left a chat
+  a.ag.__archive.configure({ log: () => {}, isBoxed: () => false, sandbox: () => ({ retire: async () => { busy.add('quick'); return { result: 'none' }; }, remove: async () => {} }) });
+  assert.match((await a.ag.renameAgent('quick', 'slow')).error, /^quick is working right now \(a reply or a background job\)\. Stop it or wait until it finishes, then rename it\.$/);
+  assert.deepStrictEqual(a.readJson().map(x => x.name), ['quick']);
+});
+
+test('member teams and assistants go through the same door: an earlier agent’s things are put aside, each gets its own box, and an unreadable list is never written over', async () => {
+  const a = load({ agents: [{ name: 'maestro' }] });
+  const teams = require(path.join(a.hub, 'lib', 'teams.js'));
+  const ann = { id: 'u_ann', login: 'ann@example.com', name: 'Ann' };
+  fs.mkdirSync(path.join(a.hub, 'data', 'conversations'), { recursive: true });
+  fs.writeFileSync(path.join(a.hub, 'data', 'conversations', 'ann_assistant.jsonl'), '{"role":"user","content":"an earlier ann_assistant"}\n');
+  fs.writeFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), JSON.stringify({ ann_assistant: { sessionId: 'old' } }));
+  const r = await teams.createDefaultAssistant(ann, { model: 'claude-sdk/x' });
+  assert.deepStrictEqual(r, { ok: true, name: 'ann_assistant' });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), 'utf8')), {}, 'the earlier session is not resumed');
+  assert.ok(a.bundles().some(n => n.startsWith('ann_assistant-')));
+  const rec = a.readJson().find(x => x.name === 'ann_assistant');
+  assert.match(rec.box, /^[0-9a-f]{12}$/);
+  // copies of a template keep nothing of its box
+  a.ag.addAgentEntries([{ name: 'copy1', box: rec.box }, { name: 'copy2', box: rec.box }]);
+  const boxes = a.readJson().filter(x => x.name.startsWith('copy')).map(x => x.box);
+  assert.ok(boxes.every(b => b !== rec.box) && boxes[0] !== boxes[1]);
+  // a list that can't be read: nothing is created, and the file is left for a person to look at
+  fs.writeFileSync(path.join(a.hub, 'data', 'agents.json'), '[{"name": "maestro"}, {"half');
+  const bob = { id: 'u_bob', login: 'bob@example.com', name: 'Bob' };
+  const e = console.error; console.error = () => {};
+  let r2; try { r2 = await teams.createDefaultAssistant(bob, { model: 'claude-sdk/x' }); } finally { console.error = e; }
+  assert.strictEqual(r2.ok, false);
+  assert.match(r2.error, /the agent list can't be read/);
+  assert.strictEqual(fs.readFileSync(path.join(a.hub, 'data', 'agents.json'), 'utf8'), '[{"name": "maestro"}, {"half');
+});
+
+test('a bundle is never seen half-made, and the combined archive’s copy staged by a split that stopped goes with the agent', async () => {
+  const a = load({ agents: [{ name: 'gone' }] });
+  const arch = a.ag.getAgentArchive();
+  fs.mkdirSync(path.join(a.hub, 'data', 'archived-agents', '.gone-20261105T000000Z.partial.123.new'), { recursive: true });   // a begin cut short
+  assert.deepStrictEqual(arch.pendingFor('gone'), []);
+  assert.strictEqual((await arch.finishPending()).length, 0);
+  // the combined file is in use, and a split that stopped had already copied gone's rows into its own file
+  fs.writeFileSync(path.join(a.hub, 'data', 'transcript.db'), '');
+  const T = require(path.join(a.hub, 'lib', 'transcript.js'));
+  const tr = T.getTranscript();
+  tr.record({ agent: 'gone', kind: 'user', text: 'gone was told' });
+  const staged = T.createTranscript({ file: path.join(a.root, 'none.db'), dir: path.join(a.hub, 'data', 'transcripts'), log: () => {} });
+  staged.record({ agent: 'gone', kind: 'user', text: 'gone was told' }); staged.close();
+  const r = await a.ag.deleteAgent('gone');
+  assert.strictEqual(r.unfinished, undefined, JSON.stringify(r));
+  assert.ok(fs.existsSync(path.join(a.hub, r.keptIn, 'archive.db')) && fs.existsSync(path.join(a.hub, r.keptIn, 'archive-staged.db')));
+  assert.ok(!fs.existsSync(tr.fileFor('gone')), 'no staged copy left for a later split to hand to a new agent of that name');
+  assert.deepStrictEqual(await a.ag.createAgent('gone', undefined, '', null, null, null, null).then(x => [x.success, x.earlierAgentKept]), [true, undefined]);
+});
+
+test('two requests for one name at once: the second waits, never sweeps away what the first just made, and finds the name taken', async () => {
+  const a = load({ agents: [] });
+  fs.mkdirSync(path.join(a.hub, 'data', 'conversations'), { recursive: true });
+  fs.writeFileSync(path.join(a.hub, 'data', 'conversations', 'scout.jsonl'), '{"role":"user","content":"an earlier scout"}\n');
+  let release;
+  const gate = new Promise(r => { release = r; });
+  a.ag.__archive.configure({ log: () => {}, isBoxed: () => false, sandbox: () => ({ retire: async () => { await gate; return { result: 'none' }; }, remove: async () => {} }) });
+  const first = a.ag.createAgent('scout', undefined, '', null, null, null, { files: { 'SOUL.md': 'the first scout\n' } });
+  const second = a.ag.createAgent('scout', undefined, '', null, null, null, { files: { 'SOUL.md': 'the second scout\n' } });
+  await new Promise(r => setTimeout(r, 30));
+  release();
+  const [r1, r2] = await Promise.all([first, second]);
+  assert.strictEqual(r1.success, true, r1.error);
+  assert.strictEqual(r2.success, false);
+  assert.match(r2.error, /exists|already exists/);
+  assert.strictEqual(fs.readFileSync(path.join(a.ws('scout'), 'SOUL.md'), 'utf8'), 'the first scout\n', 'the first scout keeps its folder');
+  assert.strictEqual(a.bundles().filter(n => n.startsWith('scout-')).length, 1, 'one bundle: the earlier scout\'s');
+});
+
+test('two members whose assistants would share a name: the second waits and writes nothing into the first one\'s folder', async () => {
+  const a = load({ agents: [{ name: 'maestro' }] });
+  const teams = require(path.join(a.hub, 'lib', 'teams.js'));
+  fs.mkdirSync(path.join(a.hub, 'data', 'conversations'), { recursive: true });
+  fs.writeFileSync(path.join(a.hub, 'data', 'conversations', 'ann_assistant.jsonl'), '{}\n');   // makes the first one wait in the sweep
+  let release;
+  const gate = new Promise(r => { release = r; });
+  a.ag.__archive.configure({ log: () => {}, isBoxed: () => false, sandbox: () => ({ retire: async () => { await gate; return { result: 'none' }; }, remove: async () => {} }) });
+  const one = teams.createDefaultAssistant({ id: 'u_1', login: 'ann@one.example', name: 'Ann One' }, { model: 'claude-sdk/x' });
+  const two = teams.createDefaultAssistant({ id: 'u_2', login: 'ann@two.example', name: 'Ann Two' }, { model: 'claude-sdk/x' });
+  await new Promise(r => setTimeout(r, 30));
+  release();
+  const [r1, r2] = await Promise.all([one, two]);
+  assert.deepStrictEqual(r1, { ok: true, name: 'ann_assistant' });
+  assert.deepStrictEqual(r2, { ok: false, error: 'an agent named ann_assistant belongs to someone else; this member needs an assistant under another name' }, 'never another member\'s assistant passed off as this one\'s');
+  const user = fs.readFileSync(path.join(a.ws('ann_assistant'), 'USER.md'), 'utf8');
+  assert.ok(user.includes('Ann One') && !user.includes('Ann Two'), 'the first member\'s assistant knows only its own person');
+  assert.strictEqual(a.readJson().filter(x => x.name === 'ann_assistant').length, 1);
+});
+
+test('deleteAgent: a background job still running in the agent counts as at work; two agents sharing a box id keep their home folder', async () => {
+  const a = load({ agents: [{ name: 'jobby' }, { name: 'one', box: 'abababababab' }, { name: 'two', box: 'abababababab' }] });
+  const chat = chatStandIn(a);
+  const jobs = new Map([['j1', { owner: 'jobby', status: 'running' }], ['j2', { owner: 'one', status: 'finished' }]]);
+  require.cache[path.join(a.hub, 'lib', 'sdk-chat.js')].exports.getJobRunner = () => ({ jobs });
+  assert.match((await a.ag.deleteAgent('jobby')).error, /^jobby is working right now \(a reply or a background job\)/);
+  jobs.get('j1').status = 'cancelling';   // stopping, but its process is still alive
+  assert.match((await a.ag.deleteAgent('jobby')).error, /^jobby is working right now/);
+  const retires = [];
+  a.ag.__archive.configure({ log: () => {}, isBoxed: () => true, sandbox: () => ({ retire: async (agent, into, o) => { retires.push([agent.name, agent.box, !!o.keepHome]); return { result: 'removed' }; }, remove: async () => {} }) });
+  const r = await a.ag.deleteAgent('one');
+  assert.strictEqual(r.success, true, r.error);
+  assert.deepStrictEqual(retires, [['one', 'abababababab', true]], 'two still uses that home folder: it stays');
+  assert.ok(chat);
+});
+
+test('withNames: a request that already holds a name and asks for it again is refused instead of waiting on itself; errors release the name', async () => {
+  const a = load({ agents: [] });
+  await assert.rejects(a.ag.withNames(['x'], () => a.ag.withNames(['y', 'x'], async () => 1)), /^Error: a change of agent names is already under way in this request \(y, x asked for again\)$/);
+  await assert.rejects(a.ag.withNames(['x'], () => a.ag.withNames(['z'], async () => 1)), /already under way in this request/, 'more names later could wait on a request waiting for this one: refused too');
+  await assert.rejects(a.ag.withNames(['x'], async () => { throw new Error('boom'); }), /boom/);
+  assert.strictEqual(await a.ag.withNames(['x'], async () => 'released after a throw'), 'released after a throw');
+  // work a locked section starts and leaves running may take names once the section is over
+  let later;
+  await a.ag.withNames(['x'], async () => { later = new Promise(r => setTimeout(r, 10)).then(() => a.ag.withNames(['x'], async () => 'later')); });
+  assert.strictEqual(await later, 'later');
+  const order = [];
+  await Promise.all([a.ag.withNames(['p', 'q'], async () => { order.push('pq'); await new Promise(r => setTimeout(r, 20)); }), a.ag.withNames(['q', 'p'], async () => { order.push('qp'); })]);
+  assert.deepStrictEqual(order, ['pq', 'qp'], 'callers with the same names in any order wait their turn, without a deadlock');
 });

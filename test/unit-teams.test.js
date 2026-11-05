@@ -23,7 +23,11 @@ fs.existsSync = (p) => real.existsSync(remap(p));
 const fsImpl = {};
 for (const k of ['mkdirSync', 'chmodSync', 'readdirSync', 'readFileSync', 'writeFileSync']) fsImpl[k] = (p, ...r) => fs[k](remap(p), ...r);
 const sdkLog = {};
-for (const [mod, exports] of [['../lib/sdk-chat', { loadConversationLog: (n) => sdkLog[n] || [], appendConversationLog: (n, role, t) => { (sdkLog[n] = sdkLog[n] || []).push({ role, t }); } }], ['../lib/agents', { getAgents: () => [] }]]) {
+// lib/agents stands in for the list: names to clear and entries to add land in this test's agents.json (a box id each).
+const cleared = [];
+const agentsStandIn = { getAgents: () => [], withNames: (names, fn) => fn(), clearEarlierAgent: async (n) => { cleared.push(n); return null; },
+  addAgentEntries: (entries) => { const f = path.join(remap(path.join(HUB_ROOT, 'data')), 'agents.json'); const list = JSON.parse(real.readFileSync(f, 'utf8')); list.push(...entries.map((e, i) => ({ ...e, box: `b${list.length + i}` }))); real.writeFileSync(f, JSON.stringify(list)); return entries.map(e => e.name); } };
+for (const [mod, exports] of [['../lib/sdk-chat', { loadConversationLog: (n) => sdkLog[n] || [], appendConversationLog: (n, role, t) => { (sdkLog[n] = sdkLog[n] || []).push({ role, t }); } }], ['../lib/agents', agentsStandIn]]) {
   const id = require.resolve(mod);
   require.cache[id] = { id, filename: id, loaded: true, exports };
 }
@@ -133,7 +137,9 @@ test('createTeamForUser: copies .md files with names and folders rewritten, writ
   const all = readAgents();
   const doc = all.find(a => a.name === 'annlee_gp'); const labs = all.find(a => a.name === 'annlee_labs');
   assert.strictEqual(all.length, 20 + 10, 'template agents kept, ten added');
-  assert.deepStrictEqual(doc, { name: 'annlee_gp', model: 'claude-sdk/x', category: 'primary', owner: 'u_ann1', display: 'GP' }, 'lead/sharedWith/policy dropped, owner set');
+  assert.deepStrictEqual(doc, { name: 'annlee_gp', model: 'claude-sdk/x', category: 'primary', owner: 'u_ann1', display: 'GP', box: doc.box }, 'lead/sharedWith/policy dropped, owner set');
+  assert.ok(doc.box && doc.box !== labs.box, 'each member added through lib/agents, with a box of its own');
+  assert.ok(cleared.includes('annlee_gp') && cleared.includes('annlee_wellness'), 'each name is cleared first');
   assert.strictEqual(labs.display, 'labs', 'display defaults to the template name');
   assert.ok(all.find(a => a.name === 'gp').lead === true, 'template record untouched');
   const again = await T.createTeamForUser({ user: ann, template: 'medical', fsImpl });
@@ -148,7 +154,8 @@ test('createDefaultAssistant: one personal agent, existed:true on the second cal
   const r = await T.createDefaultAssistant(ann, { model: 'claude-sdk/test-model', fsImpl });
   assert.deepStrictEqual(r, { ok: true, name: 'annlee_assistant' });
   const rec = readAgents().find(a => a.name === 'annlee_assistant');
-  assert.deepStrictEqual(rec, { name: 'annlee_assistant', model: 'claude-sdk/test-model', display: 'Assistant', icon: '🙂', type: 'normal', category: 'primary', owner: 'u_ann1', blurb: "Ann Lee's personal assistant" });
+  assert.deepStrictEqual(rec, { name: 'annlee_assistant', model: 'claude-sdk/test-model', display: 'Assistant', icon: '🙂', type: 'normal', category: 'primary', owner: 'u_ann1', blurb: "Ann Lee's personal assistant", box: rec.box });
+  assert.ok(rec.box && cleared.includes('annlee_assistant'));
   assert.strictEqual(rd(WS, 'annlee_assistant', 'SOUL.md'), T.assistantSoul(ann));
   assert.ok(rd(WS, 'annlee_assistant', 'IDENTITY.md').includes("## Role\nAnn Lee's personal assistant on My Maestro AI."));
   assert.ok(rd(WS, 'annlee_assistant', 'USER.md').includes('you are its head'));
