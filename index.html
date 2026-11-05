@@ -1764,6 +1764,11 @@
     #question-submit:disabled { opacity: 0.45; cursor: not-allowed; }
     .question-option strong { font-size: 0.9rem; }
     .question-option span { font-size: 0.8rem; color: var(--text-dim); }
+    /* ask_user with choose_model: every model the hub can use, one drop-down under the buttons */
+    .question-model-pick { display: block; margin-top: 10px; }
+    .question-model-pick span { display: block; font-size: 0.8rem; color: var(--text-dim); margin-bottom: 4px; }
+    .question-model-pick select { width: 100%; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 0.85rem; }
+    .question-model-pick select:focus { outline: none; border-color: var(--accent); }
     .question-divider {
       text-align: center;
       color: var(--text-dim);

@@ -3539,6 +3539,7 @@ function showQuestion(data, onAnswered) {
   // A tap only selects (highlighted); nothing is sent until Submit, so a mis-tap cannot answer the agent.
   const selected = {};
   const groups = {};
+  const picks = {};
   questions.forEach((q, i) => {
     if (q.header) { const h = document.createElement('div'); h.className = 'qh'; h.textContent = q.header; box.appendChild(h); }
     const t = document.createElement('div');
@@ -3555,10 +3556,35 @@ function showQuestion(data, onAnswered) {
         groups[i].forEach(x => x.classList.remove('selected'));
         if (was) delete selected[i];                            // tapping the highlighted option again clears it
         else { b.classList.add('selected'); selected[i] = opt.label; }
+        if (picks[i]) picks[i].value = '';
         refresh();
       });
       groups[i].push(b);
       box.appendChild(b);
+    }
+    // ask_user with choose_model: every model the hub can use, as a drop-down; picking there clears the buttons, and a
+    // button clears it. The answer is the model id.
+    if (Array.isArray(q.models) && q.models.length) {
+      const wrap = document.createElement('label');
+      wrap.className = 'qmodel';
+      const cap = document.createElement('span');
+      cap.textContent = 'Or pick any model this hub can use';
+      const sel = document.createElement('select');
+      sel.appendChild(new Option('Choose a model…', ''));
+      const og = new Map();
+      for (const m of q.models) {
+        if (!m || !m.id) continue;
+        if (!og.has(m.group)) { const g = document.createElement('optgroup'); g.label = String(m.group || 'Other'); og.set(m.group, g); sel.appendChild(g); }
+        og.get(m.group).appendChild(new Option(String(m.label || m.id), String(m.id)));
+      }
+      sel.addEventListener('change', () => {
+        groups[i].forEach(x => x.classList.remove('selected'));
+        if (sel.value) selected[i] = sel.value; else delete selected[i];
+        refresh();
+      });
+      picks[i] = sel;
+      wrap.appendChild(cap); wrap.appendChild(sel);
+      box.appendChild(wrap);
     }
   });
   const custom = document.createElement('div');
@@ -3582,7 +3608,8 @@ function showQuestion(data, onAnswered) {
     if (v) { questions.forEach((q, i) => { answers[String(i)] = v; }); submit(answers, v); return; }
     if (!questions.every((q, i) => selected[i] !== undefined)) return;
     questions.forEach((q, i) => { answers[String(i)] = selected[i]; });
-    submit(answers, questions.map((q, i) => selected[i]).join(' / '));
+    // A pick from the model list is sent as its id and shown as it reads in the list.
+    submit(answers, questions.map((q, i) => (picks[i] && picks[i].value ? picks[i].options[picks[i].selectedIndex].text : selected[i])).join(' / '));
   };
   submitBtn.addEventListener('click', send);
   input.addEventListener('input', refresh);

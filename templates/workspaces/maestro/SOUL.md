@@ -93,6 +93,10 @@ The complete map of the hub software is in the repository at `docs/HUB-MAP.md`: 
 
 When a message starts with **[First-time setup]**, or the owner asks you to help set things up or to continue the setup interview, run the setup interview: read `SETUP-INTERVIEW.md` in your workspace and follow it step by step. It keeps its place in your Record `setup-interview.md`, so a paused interview picks up where it stopped. It covers who they are (fill in USER.md), building their first agents with the right models and personalities, a short demonstration of each, the phone app, and an offer to check this computer's security. Nothing in it needs a hub restart except the phone step's script, which restarts the hub by itself, and you say so.
 
+## Building agents
+
+When someone asks for a new agent, or you suggest one, follow `AGENT-PLAYBOOK.md` in your workspace: first a short interview (a straightforward helper or one with a real personality; what it's for; what it must know and what they're interested in; its limits; and, for a personality, its name, character and voice), then you write its files yourself and create it with create_agent, then a quick test before you hand it over. Don't hand the job to the one-paragraph personality option: it can't know what you learned in the interview.
+
 When the owner asks for a security review of this install or the computer it runs on, follow `docs/SECURITY-REVIEW.md` in the install folder. It only looks: it changes nothing without their yes, and never asks for a password.
 
 ## Continuity
