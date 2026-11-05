@@ -5931,11 +5931,12 @@
       } catch (e) { if (sel) sel.value = before; alert(`Could not change the effort: ${e.message}`); }
     }
 
-    function startSoloChat(agentName, model) {
-      closeSidebarOnMobile();
-      // One window per agent: a second open just brings the existing one forward.
+    // background: open the window as an unread tab without taking the screen (hub-started turns).
+    function startSoloChat(agentName, model, { background = false } = {}) {
+      if (!background) closeSidebarOnMobile();
+      // One window per agent: a second open just brings the existing one forward (or leaves it, in the background).
       const existing = findSoloChat(agentName);
-      if (existing) { switchToChat(existing.id); return existing.id; }
+      if (existing) { if (!background) switchToChat(existing.id); return existing.id; }
       const chatId = `chat-${++chatCounter}`;
       
       // Find agent to get SOUL data
@@ -5958,8 +5959,10 @@
       };
       renderSoloChatTab(chatId);
       renderSoloChatPanel(chatId);
-      switchToChat(chatId);
-      document.getElementById('empty-state').style.display = 'none';
+      if (!background) {
+        switchToChat(chatId);
+        document.getElementById('empty-state').style.display = 'none';
+      } else markTabUnread(chatId);
       compactionRefresh(chatId);   // context % and compression mode under the toolbar (cheap GET)
       paintPlanBadges();           // plan usage next to the model (Claude subscription agents)
 
@@ -6316,7 +6319,9 @@
     // ── Hub event stream: turns the hub starts on its own ─────────────────
     // Consultations, job notices, job reports and scheduled tasks run without a
     // browser behind them.  /api/events broadcasts them; here they land in the
-    // agent's window (opened automatically for job/schedule turns) and stream live.
+    // agent's window and stream live.  A job or scheduled turn opens the agent's window in the
+    // background (a tab marked unread); only the person's own actions (a send, a click, a
+    // notification they tap) change what is on screen.
     // Newer hubs also publish the user's own turns (origin.kind === 'user'); those are
     // only drawn when this window is not already streaming them itself.
     const hubTurns = {};   // turnId -> { chatId, msgId }
@@ -6350,7 +6355,6 @@
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
       setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin) });
       let chat = findSoloChat(ev.agent);
-      let opened = false;
       if (ev.origin?.kind === 'user') {
         // Our own send is already streaming in this window (or re-attaching to it).
         if (!chat || chat.controller || chat.reattach || chat.status === 'thinking') return;
@@ -6358,9 +6362,8 @@
       if (!chat) {
         if (!HUB_AUTO_OPEN.has(ev.origin?.kind)) return;   // plain consultations only show in an already open window
         const agentData = AGENTS.find(a => a.name === ev.agent);
-        const chatId = startSoloChat(ev.agent, agentData?.model || 'claude-sdk/default');
+        const chatId = startSoloChat(ev.agent, agentData?.model || 'claude-sdk/default', { background: true });
         chat = chats[chatId];
-        opened = true;
       }
       if (!chat) return;
       try { await chat.historyLoaded; } catch {}
@@ -6374,7 +6377,7 @@
       const msgId = appendMessage(chat.id, 'assistant', '…');
       hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt) };
       setStatus(chat.id, 'thinking', hubOriginLabel(ev.origin));
-      if (!opened) markTabUnread(chat.id);
+      markTabUnread(chat.id);   // skips the window on screen
       if (Array.isArray(ev.activity)) {   // a replayed turn_start carries what the turn has done so far
         const t = turnTrack(hubTurns[ev.turnId]);
         for (const item of ev.activity) turnActivityApply(chat.id, t, item);
@@ -6729,9 +6732,8 @@
       if (!(last && last.role === 'assistant' && last.content === reply)) chat.messages.push({ role: 'assistant', content: reply });
       setStatus(t.chatId, ev.ok ? 'idle' : 'error', ev.ok ? null : 'Hub turn failed');
       autoScroll(document.getElementById(`messages-${t.chatId}`));
-      // A job report answers something this window asked for: bring it forward.
-      if (ev.origin?.kind === 'job_report') switchToChat(t.chatId);
-      else markTabUnread(t.chatId);
+      // Hub turns, job reports included, never take the screen: the tab is marked unread instead.
+      markTabUnread(t.chatId);
       refreshJobsBadge?.();
     }
 
@@ -7182,11 +7184,14 @@
       if (empty && chats[chatId]) empty.style.display = 'none';
       const opened = chats[chatId];
       if (opened && opened.isWorker && workerCardState(opened) === 'failed') opened.failSeen = true;
+      // A tab that changed while it wasn't on screen (opened or added to by a hub turn) opens at its newest message.
+      const wasUnread = !!document.getElementById(`tab-${chatId}`)?.classList.contains('unread');
       document.querySelectorAll('.chat-tab').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.chat-container').forEach(p => p.classList.remove('active'));
       document.getElementById(`tab-${chatId}`)?.classList.add('active');
       document.getElementById(`tab-${chatId}`)?.classList.remove('unread');
       document.getElementById(`panel-${chatId}`)?.classList.add('active');
+      if (wasUnread) { const m = document.getElementById(`messages-${chatId}`); if (m) m.scrollTop = m.scrollHeight; }
       activeChat = chatId;
       window.__activeChatId = chatId;
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
