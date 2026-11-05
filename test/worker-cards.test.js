@@ -55,12 +55,15 @@ function page() {
     shown: (chatId) => (order[chatId] || []).map(id => els.get(id)).map(e => [e.role, e.role === 'notice' ? e.textContent : (env.rendered[e.id]?.content ?? e.content)]),
     closeTab: (id) => els.delete(`tab-${id}`),
     retireSoon: (e) => { if (!e) return false; env.retired.push(e.textContent); return true; },   // lib/ui-retire.js: leaves a few seconds later
+    scheduleWorkerListRefresh: () => { env.listRefreshes = (env.listRefreshes || 0) + 1; },   // the worker button and its list
+    flashWorkersButton: () => {},
+    activeChat: null,   // the chat on screen (a failure watched as it happens counts as seen)
   });
   env.chats.c1 = { id: 'c1', agent: 'maestro', display: 'Maestro' };
   env.chats.c2 = { id: 'c2', agent: 'counsel', display: 'Counsel' };
   const body = `const { chats, document, appendMessage, appendSystemNotice, setStatus, updateMessageWithTools, renderWorkerChatTab,
       renderWorkerChatPanel, updateWorkerTabTimer, flashTab, setInterval, clearInterval, fetch, switchToChat, closeChat, updateMessage,
-      cancelRequest, cancelGroupRequest, retireSoon } = env;
+      cancelRequest, cancelGroupRequest, retireSoon, scheduleWorkerListRefresh, flashWorkersButton, activeChat } = env;
     const workerTabMap = new Map(); const workerParentMap = new Map(); const workerCardByKey = new Map(); const closedWorkerRuns = new Set();
     ${NAMES.map(n => extract(app, n)).join('\n')}
     return { ${NAMES.join(', ')}, workerTabMap, workerParentMap, workerCardByKey, closedWorkerRuns };`;

@@ -312,15 +312,17 @@ test('a new backup password keeps the key; "it may have leaked" makes a new key,
   await assert.rejects(svc.finishRotation({ action: 'shred' }), /re-encrypt or delete/);
 });
 
-test('suggested passphrases: six words from the 7,776-word EFF list, picked at random, accepted as a backup password', () => {
-  const { WORDS, suggestPassphrase } = require('../lib/backup/words');
-  assert.strictEqual(WORDS.length, 7776);
-  assert.strictEqual(new Set(WORDS).size, 7776);
-  assert.ok(WORDS.every(w => /^[a-z-]+$/.test(w)));
-  const seen = new Set();
-  for (let i = 0; i < 50; i++) { const p = suggestPassphrase(); const parts = p.split(' '); assert.strictEqual(parts.length, 6); assert.ok(parts.every(w => WORDS.includes(w))); require('../lib/backup/keys').checkPassword(p); seen.add(p); }
-  assert.strictEqual(seen.size, 50, 'no repeats in 50 draws');
-  assert.ok(Math.log2(7776) * 6 > 77, 'about 77 bits');
+test('the setup route answers only the key id (never the recovery key); the old passphrase suggester is gone', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const start = src.indexOf("if (pathname === '/api/backups/setup'");
+  assert.ok(start >= 0, 'the setup route exists');
+  const next = src.indexOf("if (pathname ===", start + 10);
+  const block = src.slice(start, next > 0 ? next : undefined);
+  assert.ok(!block.includes('recoveryKey'), 'the setup route does not mention the recovery key');
+  assert.ok(!/jsonResponse\(res, 200, await svc\.setup/.test(block), 'the raw setup result is not sent');
+  assert.match(block, /\{ keyId: \w+\.keyId \}/, 'only { keyId } goes out');
+  assert.ok(!src.includes('suggest-passphrase'), 'no suggest-passphrase route');
+  assert.ok(!fs.existsSync(path.join(__dirname, '..', 'lib', 'backup', 'words.js')), 'lib/backup/words.js is gone');
 });
 
 test('the routes: admin only, the password asked again for restore, undo and downloads; the Welcome restore only before any account', () => {

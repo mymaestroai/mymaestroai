@@ -304,3 +304,23 @@ test('hub-started turns keep their origin in the conversation log; the reloaded 
   assert.match(app, /if \(msg\.role === 'user' && msg\.origin\?\.kind\) appendSystemNotice\(chatId, `⚡ \$\{hubOriginLabel\(msg\.origin\)\} — \$\{hubTurnTime\(msg\.ts\)\}`\);/);
   assert.match(app, /appendSystemNotice\(chat\.id, `⚡ \$\{hubOriginLabel\(ev\.origin\)\} — \$\{hubTurnTime\(\)\}`\);/);
 });
+
+test('retarget: a renamed agent\'s tasks, and its runs waiting to be delivered, wake it under the new name; saved for the next start', async () => {
+  const { inst, dataDir } = mk();
+  const a = await inst.create({ requester: 'trader', when: 'in 1 hour', prompt: 'check the funding rate' });
+  const b = await inst.create({ requester: 'maestro', when: 'in 2 hours', prompt: 'mine' });
+  inst.pending.push({ taskId: a.id, agent: 'trader', dueAt: new Date().toISOString(), queuedAt: new Date().toISOString(), reason: null, attempts: 0, notBefore: 0 });
+  assert.strictEqual(inst.retarget('trader', 'scout'), 2, 'its task and its waiting run');
+  assert.deepStrictEqual([inst.tasksOf('scout').map(t => t.id), inst.tasksOf('trader').length, inst.tasksOf('maestro').map(t => t.id)], [[a.id], 0, [b.id]]);
+  assert.strictEqual(inst.pending.find(p => p.taskId === a.id).agent, 'scout');
+  const again = mk({ dataDir }).inst;
+  assert.deepStrictEqual(again.tasksOf('scout').map(t => t.id), [a.id], 'saved');
+  assert.strictEqual(inst.retarget('nobody', 'x'), 0);
+});
+
+test('retarget: a run waiting to be delivered counts (and is saved) even when its task is gone', async () => {
+  const { inst } = mk();
+  inst.pending.push({ taskId: 'gone', agent: 'trader', dueAt: new Date().toISOString(), queuedAt: new Date().toISOString(), reason: null, attempts: 0, notBefore: 0 });
+  assert.strictEqual(inst.retarget('trader', 'scout'), 1);
+  assert.strictEqual(inst.pending[0].agent, 'scout');
+});

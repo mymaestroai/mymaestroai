@@ -506,6 +506,75 @@
       margin-top: 6px;
     }
     .worker-tabs-bar.has-tabs { display: flex; align-items: center; }
+    /* Workers: one button and its list replace the strip of cards (the cards stay in the page for their panels). */
+    .worker-tabs-bar, .worker-tabs-bar.has-tabs { display: none; }
+    .workers-wrap { position: relative; }
+    .workers-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .workers-btn .wb-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); display: none; }
+    .workers-btn.busy { border-color: rgba(59,130,246,0.6); color: var(--text-primary); }
+    .workers-btn.busy .wb-dot { display: inline-block; background: #3987e5; box-shadow: 0 0 0 3px rgba(57,135,229,0.25); }
+    .workers-btn.alert { border-color: #d4588b; color: #ffd0de; background: rgba(212,88,139,0.15); }
+    .workers-btn.alert .wb-dot { display: inline-block; background: #d4588b; box-shadow: none; }
+    .workers-btn .wb-caret { font-size: 0.7em; opacity: 0.7; }
+    .workers-btn.flash { box-shadow: 0 0 0 3px rgba(57,135,229,0.45); }
+    .workers-menu { position: absolute; right: 0; top: calc(100% + 6px); width: min(480px, 92vw); max-height: 60vh; overflow: auto; z-index: 1200;
+      background: var(--bg-card, #15161a); border: 1px solid rgba(255,255,255,0.14); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.5); padding: 4px 0; }
+    .workers-menu[hidden] { display: none; }
+    .mh-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
+    .mh-head { display: flex; align-items: center; gap: 8px; color: var(--text); }
+    .mh-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+    .mh-red { background: #d4588b; } .mh-amber { background: #c9a227; } .mh-green { background: #199e70; }
+    .mh-item { margin: 2px 0 0 17px; }
+    .mh-t { font-weight: 600; color: var(--text); }
+    .mh-t-red { color: #d4588b; } .mh-t-amber { color: #c9a227; }
+    .mh-fine { margin-top: 6px; } .mh-fine > summary { cursor: pointer; color: var(--text-dim); }
+    .mh-extras { margin-top: 8px; color: var(--text-dim); }
+    .mh-x { margin: 3px 0 0 12px; }
+    .mh-acts { margin-top: 5px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .mh-confirm { margin-top: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--text); }
+    .mh-confirm input { width: 12em; }
+    .mh-msg { color: var(--text); font-weight: 600; } .mh-msg:empty { display: none; } .mh-msg-bad { color: #d4588b; }
+    .wm-row { display: grid; grid-template-columns: 16px minmax(0,1fr) auto auto auto; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.85rem; }
+    .wm-row:hover, .wm-row:focus { background: rgba(255,255,255,0.05); outline: none; }
+    .wm-mark { width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; color: #199e70; }
+    .wm-running .wm-mark { border-radius: 50%; background: #3987e5; box-shadow: 0 0 0 3px rgba(57,135,229,0.25); }
+    .wm-failed .wm-mark { color: #d4588b; }
+    .wm-stopped .wm-mark { color: var(--text-dim); }
+    .wm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+    .wm-done .wm-name, .wm-stopped .wm-name { color: var(--text-secondary); }
+    .wm-unseen .wm-name { color: #ffd0de; font-weight: 600; }
+    .wm-meta { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+    .wm-when { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .wm-stop { border: 1px solid rgba(212,88,139,0.6); color: #d4588b; background: transparent; border-radius: 5px; width: 26px; height: 22px; cursor: pointer; font-size: 0.65rem; }
+    .wm-stop:hover { background: rgba(212,88,139,0.15); }
+    .wm-empty { padding: 12px; color: var(--text-dim); font-size: 0.85rem; }
+    .wm-history { display: block; width: 100%; text-align: left; background: none; border: none; color: #3987e5; padding: 10px 12px; cursor: pointer; font-size: 0.85rem; }
+    .wm-history:hover { text-decoration: underline; }
+    #worker-history { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+    .wh-q { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04); color: var(--text-primary); }
+    .wh-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .wh-chip, .wh-caller { border: 1px solid rgba(255,255,255,0.18); background: transparent; color: var(--text-secondary); border-radius: 999px; padding: 3px 10px; font-size: 0.78rem; cursor: pointer; }
+    .wh-chip.on { border-color: #3987e5; color: var(--text-primary); background: rgba(57,135,229,0.15); }
+    .wh-caller { background: var(--bg-card, #15161a); -webkit-appearance: none; appearance: none; color: var(--text-secondary); }
+    .wh-list { display: flex; flex-direction: column; }
+    .wh-day { font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); padding: 10px 2px 4px; }
+    .wh-item { border-bottom: 1px solid rgba(255,255,255,0.06); padding: 8px 4px; }
+    .wh-item.open { background: rgba(57,135,229,0.06); border-left: 2px solid #3987e5; padding-left: 8px; }
+    .wh-top { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+    .wh-mark { color: #199e70; width: 12px; }
+    .wh-failed .wh-mark, .wh-unfinished .wh-mark { color: #d4588b; }
+    .wh-stopped .wh-mark, .wh-running .wh-mark { color: var(--text-dim); }
+    .wh-name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wh-when { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .wh-sub { color: var(--text-dim); font-size: 0.78rem; margin: 2px 0 0 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .wh-detail { margin: 8px 0 4px 20px; padding: 10px; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; background: rgba(0,0,0,0.2); }
+    .wh-label { font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); margin-top: 6px; }
+    .wh-label:first-child { margin-top: 0; }
+    .wh-text { white-space: pre-wrap; word-break: break-word; font-size: 0.84rem; max-height: 220px; overflow: auto; }
+    .wh-text.wh-error { color: #ffb4c8; }
+    .wh-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .wh-more { align-self: center; margin: 10px 0; }
+    .wh-status { color: var(--text-dim); font-size: 0.82rem; }
     .worker-tabs-bar .worker-bar-label {
       font-size: 0.7rem; color: var(--text-dim); margin-right: 6px;
       text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;
@@ -2489,6 +2558,10 @@
       <div class="main-header-top">
       <div class="active-chats" id="chat-tabs"></div>
       <div class="header-controls">
+        <div class="workers-wrap" id="workers-wrap">
+          <button id="workers-btn" class="header-btn workers-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="workers-menu" title="Workers: what is working now, and the history of past workers" onclick="toggleWorkersMenu()"><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span> <span class="wb-caret" aria-hidden="true">▾</span></button>
+          <div class="workers-menu" id="workers-menu" role="menu" hidden></div>
+        </div>
         <button id="files-btn" class="header-btn" title="Files: upload, download and browse the files your agents can read" onclick="openFilesPanel()">📁 Files</button>
         <button id="schedule-btn" class="header-btn" title="Task scheduler: scheduled tasks and background jobs for all agents" onclick="openSchedulePanel()">📅</button>
         <button id="settings-btn" class="header-btn" title="Settings" onclick="openSettings()">⚙️</button>

@@ -49,7 +49,7 @@ const {
 } = require('./lib/agents');
 const {
   handleChatStream, handleChat, handleAskResponse, handleInterjection, handleAlert, ensureAlertSecret, resolveToolConfirm, stopAgentTurn, haltHub, resumeHub, getAgentStatuses, getJobRunner, getScheduledTasks, getPacing, getApprovals, getLedger, getAllowances, getEffectivePolicy, getAgentRequests, getCompaction,
-  cancelWorker, getActiveWorkers, loadConversationLog, clearConversationLog,
+  cancelWorker, loadConversationLog, clearConversationLog,
   clearConversation, flushActiveResponses, runTigerTeam, runRoundtable,
   continueTigerTeam, resumeTigerTeam, getTigerTeamState, reconstituteTigerTeam, stopTigerTeam, listTigerTeams,
   activeTigerTeams, isAgentActive, wakeAgent,
@@ -158,6 +158,7 @@ function gracefulShutdown(signal, code = 0) {
   try { shutdownSkills(); } catch {}
   try { require('./lib/connectors').getConnectors().shutdown(); } catch {}
   try { stopTaskQueue(); } catch {}
+  try { getCompaction().flush(); } catch {}   // context readings waiting to be written (lib/memory-health reads them)
   process.exit(code);
 }
 
@@ -552,7 +553,7 @@ async function handleHttpRequest(req, res) {
       const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
       const r = hubAuth.acceptInvite(b.token, { password: b.password, name: b.name });
       if (!r.ok) return jsonResponse(res, 400, r);
-      if (r.user.role === 'member') require('./lib/teams').createDefaultAssistant(r.user).catch(e => console.error('[users] default assistant:', e.message));
+      if (r.user.role === 'member') require('./lib/teams').createDefaultAssistant(r.user).then(a => { if (!a || !a.ok) console.error('[users] default assistant not made:', a && a.error); }, e => console.error('[users] default assistant:', e.message));
       finishSignIn(r.user, { totpOk: true });
       return jsonResponse(res, 200, { ok: true, user: hubAuth.publicUser(r.user), needsTotpEnrol: r.user.role === 'admin' });
     }
@@ -624,7 +625,7 @@ async function handleHttpRequest(req, res) {
         return jsonResponse(res, 200, { ok: true, login: r.login, expiresAt: r.expiresAt, link: `${base}/invite?token=${r.token}` });
       }
       const r = hubAuth.createUser({ login: b.login, name: b.name, role: b.role, password: b.password });
-      if (r.ok && r.user.role === 'member') require('./lib/teams').createDefaultAssistant(hubAuth.getUser(r.user.id)).catch(e => console.error('[users] default assistant:', e.message));
+      if (r.ok && r.user.role === 'member') require('./lib/teams').createDefaultAssistant(hubAuth.getUser(r.user.id)).then(a => { if (!a || !a.ok) console.error('[users] default assistant not made:', a && a.error); }, e => console.error('[users] default assistant:', e.message));
       return jsonResponse(res, r.ok ? 200 : 400, r);
     }
     if (pathname === '/api/users/invite' && req.method === 'DELETE') {
@@ -644,6 +645,31 @@ async function handleHttpRequest(req, res) {
         return jsonResponse(res, 200, { ok: true, agent: agentName, hits: tr.search(agentName, q.get('q') || '', { from: q.get('from') || null, to: q.get('to') || null, kinds, limit: Number(q.get('limit')) || 30 }), stats: tr.stats(agentName) });
       }
       return jsonResponse(res, 200, { ok: true, agent: agentName, rows: tr.context(Number(q.get('id')), { before: Number(q.get('before')) || 6, after: Number(q.get('after')) || 6, agents: [agentName] }) });
+    }
+    // Worker history (lib/transcript workers / workerRun): the workers an agent called, read back from its archive.
+    // One agent's (/api/agents/<name>/workers[/<id>]: the access check is the route's) or every agent this person
+    // may open (/api/workers), newest first, 50 at a time.
+    {
+      const wm = pathname.match(/^\/api\/agents\/([^/]+)\/workers(?:\/([^/]+))?$/);
+      if ((wm || pathname === '/api/workers') && req.method === 'GET') {
+        const q = new URL(req.url, 'http://x').searchParams;
+        const tr = require('./lib/transcript').getTranscript();
+        const opts = { before: q.get('before') || null, q: q.get('q') || '', filter: q.get('filter') || 'all', limit: Number(q.get('limit')) || 50 };
+        if (wm && wm[2]) {
+          const run = tr.workerRun(decodeURIComponent(wm[1]), decodeURIComponent(wm[2]));
+          return run ? jsonResponse(res, 200, { ok: true, ...run }) : jsonResponse(res, 404, { error: 'no such worker in that agent\'s history' });
+        }
+        let names;
+        if (wm) names = [decodeURIComponent(wm[1])];
+        else {
+          const who = req.hubUser || { id: 'service', role: 'admin' };
+          const all = await getAgents();
+          names = all.filter(a => access.isAdmin(who) || access.canAccessAgent(who, a.name, { agents: all })).map(a => a.name);
+        }
+        const lists = names.map(n => tr.workers(n, opts)).filter(Boolean);
+        const { workers: page, next } = require('./lib/transcript').mergeWorkerPages(lists, opts.limit);
+        return jsonResponse(res, 200, { ok: true, workers: page, next });
+      }
     }
     // The turn so far: what a busy agent has done and said in its running turn (tool calls, workers,
     // partial reply), so a page that opens or wakes mid-turn can catch up, then follow /api/events.
@@ -1664,6 +1690,25 @@ async function handleHttpRequest(req, res) {
       const r = await securityCheck().latest({ maxAgeMs: 60 * 60 * 1000 });
       return jsonResponse(res, 200, { ok: true, ...r });
     }
+    // ── Memory health (lib/memory-health): admin-only. GET answers with the last result while it is under 26 hours old
+    // (else checks now); run checks now. Nightly from the schedule at start.
+    if (pathname === '/api/memory-health' && req.method === 'GET') {
+      const mh = require('./lib/memory-health').getMemoryHealth();
+      // ?stored=1 (the phone menu): the last result only, never a new check
+      const r = new URL(req.url, 'http://x').searchParams.get('stored') === '1' ? (mh.stored() || { agents: [], checkedAt: null }) : await mh.latest();
+      return jsonResponse(res, 200, { ok: true, ...r });
+    }
+    if (pathname === '/api/memory-health/action' && req.method === 'POST') {
+      // One action an admin pressed in Settings → Status → Memory (lib/memory-health act): checked against what it
+      // applies to now; the deletes need the typed word. Admin-only (an unlisted /api route).
+      const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
+      const r = await require('./lib/memory-health').getMemoryHealth().act({ action: String(b.action || ''), agent: b.agent || null, folder: b.folder || null, file: b.file || null, confirm: b.confirm == null ? null : String(b.confirm) });
+      return jsonResponse(res, r.ok ? 200 : 400, r);
+    }
+    if (pathname === '/api/memory-health/run' && req.method === 'POST') {
+      const r = await require('./lib/memory-health').getMemoryHealth().run();
+      return jsonResponse(res, 200, { ok: true, ...r, cached: false });
+    }
     if (pathname === '/api/security-check/run' && req.method === 'POST') {
       const r = await securityCheck().run();
       return jsonResponse(res, 200, { ok: true, ...r, cached: false });
@@ -1810,10 +1855,7 @@ async function handleHttpRequest(req, res) {
     }
 
     // ── Worker Routes ───────────────────────────────────────────────
-    if (pathname === '/api/workers' && req.method === 'GET') {
-      return jsonResponse(res, 200, { workers: getActiveWorkers() });
-    }
-
+    // (GET /api/workers is the worker history across agents, handled above with /api/agents/<name>/workers.)
     if (pathname === '/api/cancel-worker' && req.method === 'POST') {
       // ⏹ Stop on a worker card. The page names the worker and the agent it belongs to (the caller); a member may stop
       // only calls of their own agents (the agent check above, then cancelWorker's).
@@ -2242,11 +2284,8 @@ async function handleHttpRequest(req, res) {
         // Choosing the backup key and where copies go decides who can read everything: the step-up first, every time
         if (pathname === '/api/backups/setup' && req.method === 'POST') {
           const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
-          return jsonResponse(res, 200, await svc.setup(b.newBackupPassword || b.newPassword, { replace: b.replace === true }));
-        }
-        if (pathname === '/api/backups/suggest-passphrase' && req.method === 'POST') {   // a password: never cached
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-          return res.end(JSON.stringify({ passphrase: require('./lib/backup/words').suggestPassphrase(6) }));
+          const made = await svc.setup(b.newBackupPassword || b.newPassword, { replace: b.replace === true });
+          return jsonResponse(res, 200, { keyId: made.keyId });   // the recovery key stays out of the answer: Settings shows it on request
         }
         if (pathname === '/api/backups/recovery' && req.method === 'GET') { const st = svc.status(); return jsonResponse(res, 200, { recovery: st.recovery, lastRestore: st.lastRestore }); }
         if (pathname === '/api/backups/folders' && req.method === 'POST') {
@@ -3062,6 +3101,10 @@ try { fs.chmodSync(path.join(__dirname, 'data'), 0o700); } catch {}
 try { require('./lib/push').getPush().start(require('./lib/hub-events').events); } catch (e) { console.error('[push] not started:', e.message); }
 
 server.listen(PORT, HOST, () => {
+  // The conversation archive of earlier versions (one file for every agent) is split into one file per agent, once.
+  // Only now: this process holds the port, so no older hub on it is still writing; and first, before any turn can
+  // write (lib/transcript splitCombined; the old file is kept as transcript.db.pre-split).
+  try { require('./lib/transcript').getTranscript().migrate(); } catch (e) { console.error('[transcript] split not run:', e.message); }
   // A restored setup that has run for 30 s counts as healthy: its 7-day undo clock starts (lib/backup/apply).
   setTimeout(() => { try { if (require('./lib/backup/apply').markHealthy({ root: __dirname })) console.log('[restore] the restored setup started fine; it can be undone for 7 days'); } catch (e) { console.error('[restore]', e.message); } }, 30000).unref();
   // once a day: set-aside copies past their 7 days, a checked restore nobody confirmed, old uploads (not only at a start)
@@ -3105,6 +3148,11 @@ server.listen(PORT, HOST, () => {
     });
   } catch (e) { console.warn(`[security] ${e.message}`); }
 
+  // Memory health: a look at every agent's memory each night (Settings → Status → Memory); HUB_MEMORY_HEALTH=off turns
+  // the nightly check off (Check now still works).
+  try { if (process.env.HUB_MEMORY_HEALTH !== 'off') require('./lib/memory-health').getMemoryHealth().schedule(); }
+  catch (e) { console.warn(`[memory-health] ${e.message}`); }
+
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).
   try { require('./lib/update-check').getUpdateCheck().start(); } catch (e) { console.warn(`[update-check] ${e.message}`); }
@@ -3116,6 +3164,9 @@ server.listen(PORT, HOST, () => {
   // Scheduled tasks: queue anything that came due while the hub was down (fires once, marked late), start polling.
   try { const st = getScheduledTasks().start(); st.prune(30); console.log(`[sched-tasks] started (${st.list(scheduledTasksLib.OWNER).filter(t => t.status === 'active').length} active, ${st.pending.length} due now)`); }
   catch (e) { console.error('[sched-tasks] failed to start:', e.message); }
+  // A deleted agent whose things were not all moved into its bundle (a stop part-way, Docker not answering) is finished
+  // now (lib/agent-archive); after the scheduler, so the tasks that would wake it can leave the list too.
+  require('./lib/agents').finishArchivingAgents().catch((e) => console.error('[agents] unfinished removals:', e.message));
 
   // Messaging channels (Telegram etc): opt out with HUB_COMMS_DISABLED=1.
   if (process.env.HUB_COMMS_DISABLED !== '1') {

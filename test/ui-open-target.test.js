@@ -32,10 +32,11 @@ test('the open-target helpers are byte-identical in lib/ui-open-target.js and ap
 });
 
 test('parseOpenTarget: the main page only, this origin only', () => {
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?agent=forge' }, ORIGIN), { agent: 'forge', backups: false, update: false, security: false });
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/index.html?backups=1' }, ORIGIN), { agent: '', backups: true, update: false, security: false });
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?update=1' }, ORIGIN), { agent: '', backups: false, update: true, security: false });
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: `${ORIGIN}/?agent=my%20agent&security=1` }, ORIGIN), { agent: 'my agent', backups: false, update: false, security: true });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?agent=forge' }, ORIGIN), { agent: 'forge', backups: false, update: false, security: false, memory: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/index.html?backups=1' }, ORIGIN), { agent: '', backups: true, update: false, security: false, memory: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?update=1' }, ORIGIN), { agent: '', backups: false, update: true, security: false, memory: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?memory=1' }, ORIGIN), { agent: '', backups: false, update: false, security: false, memory: true });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: `${ORIGIN}/?agent=my%20agent&security=1` }, ORIGIN), { agent: 'my agent', backups: false, update: false, security: true, memory: false });
   for (const url of ['/users', '/mobile#chat=forge', 'https://example.com/?agent=forge', '//example.com/?agent=forge', '/\\example.com/?agent=x']) {
     assert.strictEqual(parseOpenTarget({ type: 'open-target', url }, ORIGIN), null, url);
   }
@@ -98,7 +99,7 @@ test('a go while the page loads waits for ready(), survives a reload in this tab
   // the page reloads (or the sign-in page comes in between) before it was ready: a new page in the same tab
   clock += 60 * 1000;
   const second = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent || 'backups'), store });
-  await second.ready({ agent: '', backups: true, update: false, security: false });
+  await second.ready({ agent: '', backups: true, update: false, security: false, memory: false });
   assert.deepStrictEqual(ran, ['backups', 'forge'], 'the address first, then the tap it kept');
   assert.ok(!storage.m.has('hub-open-targets'), 'run once');
   // too old (the sign-in took longer than the store keeps it): dropped
@@ -143,10 +144,11 @@ test('app.js listens before its start-up awaits anything, keeps taps in sessionS
   const agents = startup.indexOf('await Promise.all([loadAgents()]);');
   const drain = startup.indexOf('openTargets.ready(own);');
   assert.ok(agents > 0 && drain > agents, 'the page address and the waiting taps run after the agent list is in');
-  assert.match(startup, /for \(const k of \['update', 'backups', 'security'\]\) u\.searchParams\.delete\(k\);/, 'one-shot actions leave the address');
+  assert.match(startup, /for \(const k of \['update', 'backups', 'security', 'memory'\]\) u\.searchParams\.delete\(k\);/, 'one-shot actions leave the address');
   assert.ok(!/location\.href = u\.pathname/.test(app), 'a message can never send the hub tab to another page');
   const run = app.slice(app.indexOf('async function runPageTarget(t) {'), app.indexOf('async function showOwnerViewOf(name) {'));
   assert.match(run, /if \(t\.backups\) openSettingsAt\('st-backups-section'\);/);
+  assert.match(run, /if \(t\.memory\) openSettingsAt\('st-memory-section'\);/);
   assert.match(run, /if \(t\.update\) paintUpdateCard\(\)\.then\(\(\) => showUpdateCard\(\)\)/);
   assert.match(run, /if \(!a\) a = await showOwnerViewOf\(t\.agent\);/);
   const users = read('users.html');
@@ -171,7 +173,7 @@ test('every go is kept until its target has run: a second tap during a reload, o
   // a target is still running (an owner-view fetch) when the page reloads: the ones behind it are still kept
   let hang; const p3 = createOpenTargets({ origin: ORIGIN, run: (x) => (x.agent === 'slow' ? new Promise(r => { hang = r; }) : ran.push(x.agent)), store });
   const c = offer('/?agent=c'); p3.onMessage(c.e); c.go();
-  p3.ready({ agent: 'slow', backups: false, update: false, security: false });
+  p3.ready({ agent: 'slow', backups: false, update: false, security: false, memory: false });
   await tick();
   assert.deepStrictEqual(JSON.parse(storage.m.get('hub-open-targets')).targets.map(e => e.t.agent), ['c'], 'c is kept while slow runs');
   const p4 = createOpenTargets({ origin: ORIGIN, run: (x) => ran.push(x.agent), store });   // the reload

@@ -110,3 +110,15 @@ test('agents on ChatGPT with Codex signed out: critical, with the command that f
   assert.strictEqual(byId(await createReadiness({ ...base, agents, hasCodexSignIn: async () => true }).check(), 'chatgpt-signin'), undefined);
   assert.strictEqual(byId(await createReadiness({ ...base, agents: async () => [{ name: 'a', model: 'claude-sdk/x' }], hasCodexSignIn: () => false }).check(), 'chatgpt-signin'), undefined);
 });
+
+test('the memory check\'s line joins the checklist with its link to Settings → Status → Memory', async () => {
+  const r = await createReadiness({
+    platform: 'linux', hasUsers: () => true, listUsers: () => [{ role: 'admin', totpEnabled: true, login: 'a' }], setupNeeded: () => false, hasSdkCredentials: () => true,
+    sandboxStatus: async () => ({ docker: true, imageReady: true }), fetchStatus: async () => ({ renderer: true, pdftotext: true }),
+    searchChain: () => ['brave'], supervisor: () => 'systemd',
+    memoryItems: () => [{ id: 'memory', level: 'warn', title: '1 agent needs attention for memory', detail: 'Doc: some records aren\'t loading.', fix: 'Settings → Status → Memory says what each one needs.', action: { label: 'Open Memory', href: '/?memory=1' } }],
+  }).check();
+  assert.deepStrictEqual([byId(r, 'memory').level, byId(r, 'memory').action.href, r.warnings], ['warn', '/?memory=1', 1]);
+  const broken = await createReadiness({ memoryItems: () => { throw new Error('no file'); }, hasUsers: () => true, sandboxStatus: async () => ({ docker: true, imageReady: true }) }).check();
+  assert.strictEqual(byId(broken, 'memory'), undefined, 'a check that fails adds nothing and stops nothing');
+});

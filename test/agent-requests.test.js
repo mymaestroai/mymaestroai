@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { createAgentRequests } = require('../lib/agent-requests');
 const teams = require('../lib/teams');
+const { isValidAgentName } = require('../lib/agents');
 
 function make(extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'areq-'));
@@ -32,6 +33,65 @@ test('request -> event; approve an agent request creates it under the owner with
   assert.strictEqual(ar.get(r.request.id).status, 'approved');
   assert.match(logs[0][2], /approved the request for a agent "Tutor".*sam_tutor.*Note from the administrator: enjoy/);
   assert.strictEqual((await ar.resolve(r.request.id, { action: 'approve' })).ok, false, 'cannot resolve twice');
+});
+
+// A createAgent stand-in that enforces the hub's real name rule (the default stub accepts anything).
+function strict(taken = []) {
+  const calls = [];
+  const createAgent = async (name, model, personality, skills, category, owner) => {
+    if (!isValidAgentName(name)) return { success: false, error: 'Invalid name (lowercase letters, numbers and _, starts with a letter)' };
+    if (taken.includes(name)) return { success: false, error: 'Agent already exists' };
+    calls.push({ name, owner });
+    return { success: true, name };
+  };
+  return { calls, createAgent };
+}
+async function approveWith(extra, req) {
+  const { ar } = make(extra);
+  const r = ar.create({ byAgent: 'x_assistant', kind: 'agent', name: 'Helper', description: 'help', ...req });
+  return ar.resolve(r.request.id, { action: 'approve', by: 'u_admin' });
+}
+
+test('approved agent names pass the real name rule: member with a login', async () => {
+  const s = strict();
+  const a = await approveWith({ createAgent: s.createAgent }, { ownerId: 'u_k' });
+  assert.ok(a.ok, a.error);
+  assert.strictEqual(s.calls[0].name, 'sam_helper');
+  assert.ok(isValidAgentName(s.calls[0].name));
+  assert.deepStrictEqual(a.created, { kind: 'agent', agents: ['sam_helper'] });
+});
+
+test('approved agent names pass the real name rule: no login, messy ownerId', async () => {
+  const s = strict();
+  const a = await approveWith({ createAgent: s.createAgent }, { ownerId: 'U-7F3a' });
+  assert.ok(a.ok, a.error);
+  assert.strictEqual(s.calls[0].name, 'u7f3a_helper');
+  const s2 = strict();
+  const b = await approveWith({ createAgent: s2.createAgent }, { ownerId: '9lives' });
+  assert.ok(b.ok, b.error);
+  assert.strictEqual(s2.calls[0].name, 'm9lives_helper');
+  assert.ok(isValidAgentName(s2.calls[0].name));
+});
+
+test('a taken name gets a number appended; other failures are returned as they are', async () => {
+  const s = strict(['sam_helper']);
+  const a = await approveWith({ createAgent: s.createAgent }, { ownerId: 'u_k' });
+  assert.ok(a.ok, a.error);
+  assert.strictEqual(s.calls[0].name, 'sam_helper2');
+  const bad = await approveWith({ createAgent: async () => ({ success: false, error: 'disk full' }) }, { ownerId: 'u_k' });
+  assert.deepStrictEqual([bad.ok, bad.error], [false, 'disk full']);
+});
+
+test('an admin request keeps the bare name with no prefix', async () => {
+  const s = strict();
+  const a = await approveWith({ createAgent: s.createAgent }, { ownerId: null });
+  assert.ok(a.ok, a.error);
+  assert.strictEqual(s.calls[0].name, 'helper');
+});
+
+test('isValidAgentName: underscores allowed, other shapes and reserved names refused', () => {
+  for (const n of ['owner_helper', 'a1']) assert.strictEqual(isValidAgentName(n), true, n);
+  for (const n of ['', 'Owner', '1abc', 'a-b', 'a b', 'constructor', '__proto__', null, undefined, 5]) assert.strictEqual(isValidAgentName(n), false, String(n));
 });
 
 test('team requests pick a template from the wording; decline sends a note; pending cap', async () => {
