@@ -158,6 +158,7 @@ function gracefulShutdown(signal, code = 0) {
   try { shutdownSkills(); } catch {}
   try { require('./lib/connectors').getConnectors().shutdown(); } catch {}
   try { stopTaskQueue(); } catch {}
+  try { getCompaction().flush(); } catch {}   // context readings waiting to be written (lib/memory-health reads them)
   process.exit(code);
 }
 
@@ -1689,6 +1690,18 @@ async function handleHttpRequest(req, res) {
       const r = await securityCheck().latest({ maxAgeMs: 60 * 60 * 1000 });
       return jsonResponse(res, 200, { ok: true, ...r });
     }
+    // ── Memory health (lib/memory-health): admin-only. GET answers with the last result while it is under 26 hours old
+    // (else checks now); run checks now. Nightly from the schedule at start.
+    if (pathname === '/api/memory-health' && req.method === 'GET') {
+      const mh = require('./lib/memory-health').getMemoryHealth();
+      // ?stored=1 (the phone menu): the last result only, never a new check
+      const r = new URL(req.url, 'http://x').searchParams.get('stored') === '1' ? (mh.stored() || { agents: [], checkedAt: null }) : await mh.latest();
+      return jsonResponse(res, 200, { ok: true, ...r });
+    }
+    if (pathname === '/api/memory-health/run' && req.method === 'POST') {
+      const r = await require('./lib/memory-health').getMemoryHealth().run();
+      return jsonResponse(res, 200, { ok: true, ...r, cached: false });
+    }
     if (pathname === '/api/security-check/run' && req.method === 'POST') {
       const r = await securityCheck().run();
       return jsonResponse(res, 200, { ok: true, ...r, cached: false });
@@ -3133,6 +3146,11 @@ server.listen(PORT, HOST, () => {
       onResult: (r) => { try { require('./lib/hub-events').events.publish('security_check', { critical: r.critical, warnings: r.warnings, checkedAt: r.checkedAt }); } catch {} },
     });
   } catch (e) { console.warn(`[security] ${e.message}`); }
+
+  // Memory health: a look at every agent's memory each night (Settings → Status → Memory); HUB_MEMORY_HEALTH=off turns
+  // the nightly check off (Check now still works).
+  try { if (process.env.HUB_MEMORY_HEALTH !== 'off') require('./lib/memory-health').getMemoryHealth().schedule(); }
+  catch (e) { console.warn(`[memory-health] ${e.message}`); }
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).

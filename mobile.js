@@ -5027,6 +5027,7 @@ function wire() {
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
   $('menu-workers').addEventListener('click', () => openWorkerSheet('history'));
+  $('menu-memory')?.addEventListener('click', openMemorySheet);   // a phone page cached from before this line has no menu entry
   $('chat-workers-btn').addEventListener('click', () => openWorkerSheet('list'));
   $('menu-compact').addEventListener('click', compressNow);
   $('files-upload-input').addEventListener('change', (e) => { filesUpload(e.target.files); e.target.value = ''; });
@@ -5176,6 +5177,7 @@ function applyMultiUser() {
     sel.addEventListener('change', () => { localStorage.setItem(OWNER_VIEW_KEY, sel.value); loadAgents(); if ($('files-sheet').open) openFilesSheet(''); });
   }
   if (hubMe && !hubMe.isAdmin) { $('menu-restart').hidden = true; $('menu-update').hidden = true; }
+  refreshMemoryHealth();
   if (hubMe) {
     $('menu-users').hidden = !hubMe.isAdmin;
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
@@ -5191,6 +5193,79 @@ function toggleMenu(e) {
   menu.classList.toggle('open');
   if (menu.classList.contains('open')) paintMenuCredit();
   if (menu.classList.contains('open')) paintVersionLabel();
+  if (menu.classList.contains('open')) refreshMemoryHealth();
+}
+
+// Memory (lib/memory-health): admins see the agents the last check flagged; the menu line shows only when there are
+// some. Read-only here: Settings → Status → Memory on a computer has the details.
+let mhLast = null;
+async function refreshMemoryHealth() {
+  const item = $('menu-memory');
+  if (!item) return;
+  if (!(hubMe && hubMe.isAdmin)) { item.hidden = true; return; }
+  try {
+    const r = await api('/api/memory-health?stored=1');
+    if (!r.ok) return;
+    const d = await r.json();
+    mhLast = d;
+    const n = (Array.isArray(d.agents) ? d.agents : []).filter(a => a.status !== 'green').length;
+    item.hidden = !n;
+    const c = $('menu-memory-count');
+    c.textContent = n ? String(n) : '';
+    c.classList.toggle('on', !!n);
+  } catch {}
+  paintMemorySheet();
+}
+function memorySheet() {
+  let sh = $('mh-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'mh-sheet';
+  sh.className = 'rsn-sheet mh-sheet';
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Memory');
+  sh.dataset.noDirty = '';
+  sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Memory</span><span class="rsn-sheet-count"></span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body" tabindex="-1"></div>';
+  const close = () => { sh.classList.remove('open'); dialogGuard.closed(sh); };
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+  sh.closeSheet = close;
+  document.body.appendChild(sh);
+  return sh;
+}
+function openMemorySheet() {
+  $('menu').classList.remove('open');
+  const sh = memorySheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: sh.closeSheet }); }
+  paintMemorySheet();
+  refreshMemoryHealth();
+}
+function paintMemorySheet() {
+  const sh = $('mh-sheet');
+  if (!sh || !sh.classList.contains('open')) return;
+  const d = mhLast || {};
+  const flagged = (Array.isArray(d.agents) ? d.agents : []).filter(a => a.status !== 'green');
+  sh.querySelector('.rsn-sheet-count').textContent = d.checkedAt ? `checked ${new Date(d.checkedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : '';
+  const body = sh.querySelector('.mh-body');
+  const scroll = body.scrollTop;
+  body.textContent = '';
+  for (const a of flagged) {
+    const row = wkEl('div', 'mh-row');
+    const head = wkEl('div', 'mh-head');
+    head.append(wkEl('span', `mh-dot mh-${a.status === 'red' ? 'red' : 'amber'}`), wkEl('b', null, a.display || a.agent));
+    row.appendChild(head);
+    for (const i of (a.items || []).filter(x => x.status !== 'green')) {
+      const it = wkEl('div', 'mh-item');
+      it.append(wkEl('span', `mh-t mh-t-${i.status === 'red' ? 'red' : 'amber'}`, i.title), document.createTextNode(` ${i.detail || ''}`));
+      row.appendChild(it);
+    }
+    body.appendChild(row);
+  }
+  if (!flagged.length) body.appendChild(wkEl('div', 'mh-item', d.checkedAt ? 'Every agent is fine.' : 'Not checked yet.'));
+  body.appendChild(wkEl('div', 'mh-foot', 'The details are under Settings → Status → Memory on a computer.'));
+  body.scrollTop = scroll;
 }
 
 // Monthly API credit (set on the desktop, Settings → Spend): this period's spend through the hub against it.

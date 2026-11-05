@@ -224,6 +224,14 @@
     .wk-sheet .rsn-sheet-title { color: var(--text); }
     .wk-back { flex-shrink: 0; min-width: 40px; height: 38px; border-radius: 8px; border: 1px solid var(--border-strong); color: var(--text); font-size: 20px; line-height: 1; }
     .wk-back[hidden] { display: none; }
+    .mh-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; outline: none; padding: 6px 14px calc(16px + var(--sab)); color: var(--text); font-size: 14px; }
+    .mh-row { padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .mh-head { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+    .mh-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: 0 0 10px; }
+    .mh-red { background: #d4588b; } .mh-amber { background: #c9a227; } .mh-green { background: #199e70; }
+    .mh-item { margin: 4px 0 0 18px; color: var(--text-dim); line-height: 1.4; }
+    .mh-t { font-weight: 600; } .mh-t-red { color: #d4588b; } .mh-t-amber { color: #c9a227; }
+    .mh-foot { margin-top: 14px; color: var(--text-dim); font-size: 13px; }
     .wk-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; outline: none; padding: 6px 12px calc(16px + var(--sab)); color: var(--text); font-size: 14px; }
     .wk-row { display: grid; grid-template-columns: 16px minmax(0,1fr) auto auto; column-gap: 10px; row-gap: 2px; align-items: center; padding: 11px 4px; border-bottom: 1px solid var(--border); }
     .wk-row .wk-mark { grid-row: 1 / span 2; }
@@ -449,7 +457,7 @@
   .menu-version { font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; gap: 5px; }
   .menu-version:empty { display: none; }
   /* Activity lives in the menu (it was a bottom tab, easy to hit by accident): its count of new events sits on the right. */
-  #menu #menu-activity { justify-content: space-between; gap: 10px; }
+  #menu #menu-activity, #menu #menu-memory { justify-content: space-between; gap: 10px; }
   #menu .menu-count { min-width: 18px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; display: none; align-items: center; justify-content: center; }
   #menu .menu-count.on { display: inline-flex; }
   .menu-version.experimental { color: var(--purple); }
@@ -643,6 +651,7 @@
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
     <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
     <button id="menu-workers">&#x1F477; Worker history</button>
+    <button id="menu-memory" hidden><span>&#x1F9E0; Memory</span><span class="menu-count" id="menu-memory-count"></span></button>
     <button id="menu-compact" class="chat-only">&#x2699; Compress now</button>
     <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>
     <div id="menu-2fa-note" hidden>Two-factor is required for admins: set it up under Security</div>

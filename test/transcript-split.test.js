@@ -214,3 +214,46 @@ test('the archive folder follows the archive file\'s name, and a reserved or ver
   assert.notStrictEqual(safeName(long1), safeName(long2), 'two long names never share a file');
   assert.ok(safeName('é'.repeat(200)).length < 140);
 });
+
+test('health: entries, size of the agent\'s own file, rows added since a date, from the index; null when the archive can\'t be read', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { file, dir } = place();
+  let t = Date.parse('2026-10-01T00:00:00Z');
+  const tr = createTranscript({ file, dir, log: quiet, now: () => (t += 3600 * 1000) });
+  for (let i = 0; i < 5; i++) tr.record({ agent: 'foreman', kind: 'user', text: `delivery ${i} ${'x'.repeat(100)}` });
+  const since = t + 1000;   // after the fifth row, before the next
+  for (let i = 0; i < 3; i++) tr.record({ agent: 'foreman', kind: 'assistant', text: `reply ${i}` });
+  const h = tr.health('foreman', { since });
+  assert.deepStrictEqual([h.entries, h.recent], [8, 3]);
+  assert.ok(h.fileBytes >= fs.statSync(tr.fileFor('foreman')).size && h.fileBytes > 0, 'its own file (and write-ahead log)');
+  assert.ok(h.first < h.last);
+  assert.deepStrictEqual(tr.health('nobody', { since }), { agent: 'nobody', entries: 0, first: null, last: null, fileBytes: 0, recent: 0 });
+  assert.strictEqual(fs.existsSync(tr.fileFor('nobody')), false, 'no file made');
+  tr.close();
+  fs.chmodSync(tr.fileFor('foreman'), 0o000);
+  const err = console.error; console.error = () => {};
+  try { assert.strictEqual(createTranscript({ file, dir, log: quiet }).health('foreman', { since }), null); }
+  finally { console.error = err; fs.chmodSync(tr.fileFor('foreman'), 0o600); }
+});
+
+test('searchTimes: each agent\'s real searches are timed (the newest 50, of the last 7 days), none before its first search', () => {
+  const { file, dir } = place();
+  let t = Date.parse('2026-11-01T00:00:00Z');
+  const tr = createTranscript({ file, dir, log: quiet, now: () => t });
+  for (let i = 0; i < 60; i++) tr.record({ agent: 'doc', kind: 'user', text: `infusion note ${i}` });
+  assert.deepStrictEqual(tr.searchTimes('doc'), { count: 0, maxMs: 0, slow: 0, verySlow: 0, failed: 0, lastAt: null });
+  for (let i = 0; i < 55; i++) tr.search('doc', 'infusion');
+  const st = tr.searchTimes('doc');
+  assert.deepStrictEqual([st.count, st.lastAt], [50, t]);
+  assert.ok(st.maxMs > 0 && st.slow <= st.count && st.verySlow <= st.slow);
+  assert.strictEqual(tr.searchTimes('watchman').count, 0, 'per agent');
+  // a search that fails is not timed, but counted as failed
+  new Database(tr.fileFor('doc')).exec('DROP TABLE entries_fts; CREATE TABLE entries_fts (text TEXT)');   // an index that can't be searched
+  tr.close();
+  const tr2 = createTranscript({ file, dir, log: quiet, now: () => t });
+  const err = console.error; console.error = () => {};
+  try { assert.deepStrictEqual(tr2.search('doc', 'infusion'), []); } finally { console.error = err; }
+  assert.deepStrictEqual([tr2.searchTimes('doc').failed, tr2.searchTimes('doc').count], [1, 0]);
+  t += 8 * 86400000;
+  assert.strictEqual(tr2.searchTimes('doc').failed, 0, 'older than a week: no longer counted');
+  tr2.close();
+});

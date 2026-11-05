@@ -520,6 +520,15 @@
     .workers-menu { position: absolute; right: 0; top: calc(100% + 6px); width: min(480px, 92vw); max-height: 60vh; overflow: auto; z-index: 1200;
       background: var(--bg-card, #15161a); border: 1px solid rgba(255,255,255,0.14); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.5); padding: 4px 0; }
     .workers-menu[hidden] { display: none; }
+    .mh-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
+    .mh-head { display: flex; align-items: center; gap: 8px; color: var(--text); }
+    .mh-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+    .mh-red { background: #d4588b; } .mh-amber { background: #c9a227; } .mh-green { background: #199e70; }
+    .mh-item { margin: 2px 0 0 17px; }
+    .mh-t { font-weight: 600; color: var(--text); }
+    .mh-t-red { color: #d4588b; } .mh-t-amber { color: #c9a227; }
+    .mh-fine { margin-top: 6px; } .mh-fine > summary { cursor: pointer; color: var(--text-dim); }
+    .mh-extras { margin-top: 8px; color: var(--text-dim); }
     .wm-row { display: grid; grid-template-columns: 16px minmax(0,1fr) auto auto auto; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.85rem; }
     .wm-row:hover, .wm-row:focus { background: rgba(255,255,255,0.05); outline: none; }
     .wm-mark { width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; color: #199e70; }

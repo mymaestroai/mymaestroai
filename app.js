@@ -2077,7 +2077,7 @@
     // groups, closed until opened. Sections are matched by id; one this list doesn't know lands in the last group,
     // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-updates-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-updates-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
@@ -2242,6 +2242,13 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadSecurityCheck(true)">Run now</button><span id="st-sec-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadSecurityCheck, 0);
+      // Memory (lib/memory-health): how each agent's memory is doing, nightly and on demand.
+      html += `<div class="st-section" id="st-memory-section"><h4>Memory</h4>
+        <div class="st-hint">Each agent's memory: its Records against their cap, how full its context gets, compression, its conversation archive and its chat. The check runs every night and on demand, and says what would help. It changes nothing by itself.</div>
+        <div id="st-mh-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadMemoryHealth(true)">Check now</button><span id="st-mh-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+      setTimeout(loadMemoryHealth, 0);
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
         <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
@@ -2657,6 +2664,40 @@
         if (d.critical) stOpenGroup('status');
         paintSecurityBanner().catch(() => {});   // a Run now that resolves or finds something updates the banner at once
       } catch (e) { el.textContent = 'Could not run the security check: ' + e.message; if (state) state.textContent = ''; stSum('status', 'security', 'Security: could not check'); }
+    }
+    // Memory (lib/memory-health): agents needing attention first, each with what was found; the fine ones folded away.
+    const MH_LABEL = { red: 'needs attention', amber: 'could use a look', green: 'fine' };
+    function mhSize(n) { n = Number(n) || 0; return n < 1048576 ? `${Math.round(n / 1024)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(1)} GB`; }
+    let mhLoad = 0;
+    async function loadMemoryHealth(runNow = false) {
+      const el = document.getElementById('st-mh-list'); if (!el) return;
+      const state = document.getElementById('st-mh-state');
+      const mine = ++mhLoad;
+      if (state && runNow) state.textContent = 'Checking every agent…';
+      try {
+        const init = runNow ? { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' } : { credentials: 'include' };
+        const d = await (await fetch(runNow ? '/api/memory-health/run' : '/api/memory-health', init)).json();
+        if (mine !== mhLoad) return;   // a newer check answered first
+        if (!d.ok) throw new Error(d.error || 'failed');
+        const agents = Array.isArray(d.agents) ? d.agents : [];
+        const dot = (s) => `<span class="mh-dot mh-${esc(s)}" title="${esc(MH_LABEL[s] || s)}"></span>`;
+        const row = (a, all) => {
+          const items = (a.items || []).filter(i => all || i.status !== 'green');
+          return `<div class="mh-row"><div class="mh-head">${dot(a.status)}<b>${esc(a.display || a.agent)}</b></div>${items.map(i => `<div class="mh-item"><span class="mh-t mh-t-${esc(i.status)}">${esc(i.title)}</span> ${esc(i.detail || '')}</div>`).join('') || '<div class="mh-item">Nothing to measure yet.</div>'}</div>`;
+        };
+        const flagged = agents.filter(a => a.status !== 'green'), fine = agents.filter(a => a.status === 'green');
+        const ex = d.extras || {}, b = ex.bundles || {}, ps = Array.isArray(ex.preSplit) ? ex.preSplit : [];
+        const extras = [b.count ? `Deleted agents' folders: ${b.count}, ${b.complete === false ? 'at least ' : ''}${mhSize(b.bytes)}, kept until an admin deletes them.` : '', ...ps.map(p => `The combined archive kept after the split (${p.file}): ${mhSize(p.bytes)}.`)].filter(Boolean);
+        el.innerHTML = (flagged.length ? flagged.map(a => row(a, false)).join('') : '<div class="mh-item">Every agent is fine.</div>')
+          + (fine.length ? `<details class="mh-fine"><summary>${fine.length} agent${fine.length === 1 ? '' : 's'} fine</summary>${fine.map(a => row(a, true)).join('')}</details>` : '')
+          + (extras.length ? `<div class="mh-extras">${extras.map(x => `<div>${esc(x)}</div>`).join('')}</div>` : '');
+        const c = d.counts || {};
+        if (state) state.textContent = `${c.red ? `${c.red} need${c.red === 1 ? 's' : ''} attention` : 'none need attention'}${c.amber ? `, ${c.amber} could use a look` : ''}; ${d.cached ? 'last checked' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.`;
+        stSum('status', 'memory', c.red ? `Memory: ${c.red} need${c.red === 1 ? 's' : ''} attention` : c.amber ? `Memory: ${c.amber} to look at` : 'Memory: all fine', !!c.red);
+      } catch (e) {
+        if (mine !== mhLoad) return;
+        el.textContent = 'Could not check memory: ' + e.message; if (state) state.textContent = ''; stSum('status', 'memory', 'Memory: could not check');
+      }
     }
     function securityActionHtml(a) {
       if (!a) return '';
@@ -4734,7 +4775,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -4810,6 +4851,7 @@
       if (!t) return;
       if (t.security) openSecurityDialog();
       if (t.backups) openSettingsAt('st-backups-section');
+      if (t.memory) openSettingsAt('st-memory-section');
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
       if (!t.agent) return;
       let a = AGENTS.find(x => x.name === t.agent);
@@ -4839,12 +4881,12 @@
       await Promise.all([loadAgents()]);
       // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
       // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
-      // (a backup warning), ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
+      // (a backup warning), ?memory=1 the memory check, ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       openTargets.ready(own);

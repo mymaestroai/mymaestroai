@@ -132,3 +132,35 @@ test('safety: no brief written during the run -> the session is NOT reset, the e
     assert.strictEqual(c.get('a').lastOk, false);
   } finally { delete global.__noBrief; }
 });
+
+test('history: the last 20 context readings and compression runs (with how each ended) are kept, and survive a restart', async () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const { HISTORY } = require('../lib/compaction');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'compaction-h-')); const file = path.join(dir, 'c.json');
+  let t = 5_000_000;
+  const mk = (post) => createCompaction({ file, persist: true, now: () => t, log: () => {}, post, resetSession: async () => {}, getAgent: () => ({ name: 'a', compaction: { mode: 'dry', at: 0.95 } }) });
+  const a = mk(async () => 'ok');
+  for (let i = 1; i <= 25; i++) { t += 1000; a.noteUsage('a', i * 1000, 100000, 's1'); }
+  a.noteUsage('a', 0, 100000, 's1');   // no reading: nothing measured
+  const h = a.history('a');
+  assert.strictEqual(HISTORY, 20);
+  assert.deepStrictEqual([h.readings.length, h.readings[0].tokens, h.readings[19].tokens, h.readings[19].limit], [20, 6000, 25000, 100000]);
+  t += MIN_GAP_MS;
+  await a.run('a', 'owner');
+  const b = mk(async () => { throw new Error('the model was busy'); });
+  t += MIN_GAP_MS;
+  await b.run('a', 'owner');
+  const runs = b.history('a').runs;
+  assert.deepStrictEqual(runs.map(r => [r.ok, r.mode, r.reason, r.error || null]), [[true, 'dry', 'owner', null], [false, 'dry', 'owner', 'the model was busy']]);
+  const c = mk(async () => 'ok');
+  assert.strictEqual(c.history('a').runs.length, 2, 'runs kept across a restart');
+  assert.strictEqual(c.history('a').readings.length, 20, 'readings kept across a restart');
+  assert.deepStrictEqual(make().c.history('nobody'), { readings: [], runs: [] });
+  // readings alone (no run) reach the file on flush, as at the hub's shutdown
+  c.noteUsage('a', 77000, 100000, 's2');
+  c.flush();
+  const d = mk(async () => 'ok');
+  assert.strictEqual(d.history('a').readings.slice(-1)[0].tokens, 77000);
+  d.flush();   // nothing waiting: no write, no error
+  fs.rmSync(dir, { recursive: true, force: true });
+});
