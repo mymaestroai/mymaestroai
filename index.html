@@ -847,7 +847,8 @@
     /* A table wider than the message scrolls inside this wrapper (app.js formatContent), so it can never widen the page. */
     .message .table-scroll { max-width: 100%; overflow-x: auto; margin: 12px 0; }
     .message .table-scroll > table { margin: 0; }
-    .message th, .message td { overflow-wrap: normal; }   /* cells keep whole words; the table scrolls instead */
+    .message th, .message td { overflow-wrap: normal; }   /* cells wrap and keep whole words; only a table too wide even then scrolls */
+    .message :is(th, td) :is(a, code) { overflow-wrap: anywhere; }   /* a long link or path breaks instead of making the table scroll */
     .message pre { max-width: 100%; }
     .message img, .message video, .message svg { max-width: 100%; }
     .message table {

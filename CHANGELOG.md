@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Tables in replies now wrap to fit your phone's screen.** On the phone page, a table's text stayed on one line, so a wide table ran off the right edge and had to be scrolled sideways to read. Its cells now wrap to the width of the screen, keeping whole words, on any phone, tablet or foldable. On the phone and the desktop page, a long file path or other code in a table cell now breaks onto the next line too. Only a table that still can't fit, such as one with many columns, scrolls sideways inside its own message. (`mobile.html`, `index.html`)
+
 ## [5.9.0] - 2026-11-04
 
 What's new since 5.8.1: encrypted backups with a copy every night and a warning before any restore, a ChatGPT subscription as your first AI during setup, agents working in your local time, the time of every message in the chat, and notification clicks that open the tab you already have, plus security fixes and many smaller fixes. Press Update in your Maestro to get it; on 5.7.0 or later it also tells you when an update is ready.
