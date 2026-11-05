@@ -12,6 +12,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 - **Other agents' conversation history is now guarded like their chat files.** The searchable archive of every agent's conversations (`data/transcript.db`) was missing from the files an agent may read only as an admin action, so an agent running directly on the computer could open it with a shell command and read other agents' chats, tool results included. It is now on that list with the chat files and the memory database, and so are the per-agent archive files and deleted agents' bundles. Agents still search their own history with `recall`. (`lib/tool-policy.js`)
 
+- **A long chat no longer holds up other agents while a reply is saved.** While an agent replies, its progress is saved about every 5 seconds, to limit what an interruption loses. Each save read and rewrote the agent's whole chat file, and every agent's turn waited while it did: about 13 ms with a busy chat and up to 50 ms with long replies, every 5 seconds per replying agent. A save now replaces only the reply's own line, in well under a millisecond, and opening a chat reads only the messages it shows. A save that fails, for example on a full disk, is logged instead of stopping the hub, and a reply's next progress save tries again. (`lib/sdk-chat.js`)
+
 ## [5.9.0] - 2026-11-04
 
 What's new since 5.8.1: encrypted backups with a copy every night and a warning before any restore, a ChatGPT subscription as your first AI during setup, agents working in your local time, the time of every message in the chat, and notification clicks that open the tab you already have, plus security fixes and many smaller fixes. Press Update in your Maestro to get it; on 5.7.0 or later it also tells you when an update is ready.
