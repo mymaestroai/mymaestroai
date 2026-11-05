@@ -122,7 +122,9 @@ test('lead agents: flagged leads win, else category primary, else the legacy "ma
 
 test('createAgent: validation, duplicates, default files, owner recorded, no model call without a personality', async () => {
   const a = load({ agents: [{ name: 'maestro' }] });
-  for (const bad of ['', 'Bad', '1abc', 'a-b', 'a_b', null]) assert.strictEqual((await a.ag.createAgent(bad)).success, false, String(bad));
+  for (const bad of ['', 'Bad', '1abc', 'a-b', 'a b', null]) assert.strictEqual((await a.ag.createAgent(bad)).success, false, String(bad));
+  // an underscore is allowed: a member's agents are named <login>_<name> (lib/agent-requests)
+  assert.strictEqual((await a.ag.createAgent('owner_helper', 'claude-sdk/x', '', null, 'specialist')).success, true);
   assert.deepStrictEqual(await a.ag.createAgent('maestro'), { success: false, error: 'Agent already exists' });
   assert.deepStrictEqual(await a.ag.createAgent('kid1', undefined, '', '', 'worker', 'u_7'), { success: true, name: 'kid1' });
   const rec = a.readJson().find(x => x.name === 'kid1');
@@ -620,14 +622,15 @@ test('createAgent with a personality: only the four known files the model return
 });
 
 // The hub's chat engine, as deleteAgent sees it: who is at work, the scheduled tasks, and what it remembers by name.
-function chatStandIn(a, { busy = new Set(), tasks = [] } = {}) {
+function chatStandIn(a, { busy = new Set(), tasks = [], compaction = null } = {}) {
   const forgot = [];
   const st = { list: tasks,
     tasksOf: (n) => st.list.filter(t => t.agent === n).map(t => JSON.parse(JSON.stringify(t))),
-    action: (id, who, act) => { assert.deepStrictEqual([who, act], ['owner', 'delete']); st.list = st.list.filter(t => t.id !== id); } };
+    action: (id, who, act) => { assert.deepStrictEqual([who, act], ['owner', 'delete']); st.list = st.list.filter(t => t.id !== id); },
+    retarget: (from, to) => { let n = 0; for (const t of st.list) if (t.agent === from) { t.agent = to; n++; } return n; } };
   const m = new Module(path.join(a.hub, 'lib', 'sdk-chat.js'));
   m.filename = m.id; m.loaded = true;
-  m.exports = { isAgentActive: (n) => busy.has(n), getScheduledTasks: () => st, forgetAgent: (n) => forgot.push(n) };
+  m.exports = { isAgentActive: (n) => busy.has(n), getScheduledTasks: () => st, forgetAgent: (n) => forgot.push(n), ...(compaction ? { getCompaction: () => compaction } : {}) };
   require.cache[m.id] = m;
   return { st, forgot };
 }
@@ -996,4 +999,83 @@ test('withNames: a request that already holds a name and asks for it again is re
   const order = [];
   await Promise.all([a.ag.withNames(['p', 'q'], async () => { order.push('pq'); await new Promise(r => setTimeout(r, 20)); }), a.ag.withNames(['q', 'p'], async () => { order.push('qp'); })]);
   assert.deepStrictEqual(order, ['pq', 'qp'], 'callers with the same names in any order wait their turn, without a deadlock');
+});
+
+test('renaming an agent takes everything it keeps under its name along (it carries on, and the old name is free); a step that fails puts everything back', async () => {
+  const a = load({ agents: [{ name: 'maestro' }, { name: 'scout', display: 'Scout', model: 'claude-sdk/x' }] });
+  const comp = { names: new Set(['scout']), fail: null, rename(from, to) { if (this.fail) throw this.fail; if (!this.names.has(from)) return false; this.names.delete(from); this.names.add(to); return true; } };
+  const chat = chatStandIn(a, { tasks: [{ id: 't1', agent: 'scout', label: 'daily' }, { id: 't2', agent: 'maestro', label: 'other' }], compaction: comp });
+  const d = (...p) => path.join(a.hub, 'data', ...p);
+  fs.mkdirSync(path.join(a.ws('scout'), 'records'), { recursive: true });
+  fs.writeFileSync(path.join(a.ws('scout'), 'records', 'facts.md'), 'facts\n');
+  fs.mkdirSync(d('conversations'), { recursive: true });
+  fs.writeFileSync(d('conversations', 'scout.jsonl'), '{"role":"user","content":"hi"}\n');
+  fs.writeFileSync(d('conversations', 'maestro.jsonl'), '{"role":"user","content":"stay"}\n');
+  fs.writeFileSync(d('agent-sessions.json'), JSON.stringify({ scout: { sessionId: 's1' }, maestro: { sessionId: 'm1' } }));
+  fs.chmodSync(d('agent-sessions.json'), 0o640);
+  fs.writeFileSync(d('codex-sessions.json'), JSON.stringify({ scout: { threadId: 'c1' } }));
+  const mem = require(path.join(a.hub, 'lib', 'memory-db.js'));
+  mem.writeLongTermMemory('scout', 'long term'); mem.writeSessionNote('scout', 'a note'); mem.saveDistillation('scout', '2026-11-01', 'sum');
+  mem.writeLongTermMemory('maestro', 'mine');
+  fs.mkdirSync(d('sessions', 'scout'), { recursive: true }); fs.writeFileSync(d('sessions', 'scout', 'n.md'), 'n');
+  fs.mkdirSync(d('context-refresh'), { recursive: true }); fs.writeFileSync(d('context-refresh', 'scout.json'), '{}');
+  const tr = require(path.join(a.hub, 'lib', 'transcript.js')).getTranscript();
+  tr.record({ agent: 'scout', kind: 'user', text: 'scout was told this' });
+  tr.record({ agent: 'maestro', kind: 'user', text: 'maestro keeps this' });
+  fs.mkdirSync(path.join(a.root, 'share', 'scout')); fs.writeFileSync(path.join(a.root, 'share', 'scout', 'out.pdf'), 'pdf');
+  const had = mem.getMemoryStats('scout');
+  const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
+
+  assert.deepStrictEqual(await a.ag.renameAgent('scout', 'ranger'), { success: true, newName: 'ranger' });
+  assert.strictEqual(fs.readFileSync(path.join(a.ws('ranger'), 'records', 'facts.md'), 'utf8'), 'facts\n');
+  assert.ok(fs.existsSync(d('conversations', 'ranger.jsonl')) && !fs.existsSync(d('conversations', 'scout.jsonl')) && fs.existsSync(d('conversations', 'maestro.jsonl')));
+  assert.deepStrictEqual(json(d('agent-sessions.json')), { ranger: { sessionId: 's1' }, maestro: { sessionId: 'm1' } }, 'its Claude session resumes under the new name');
+  assert.strictEqual(fs.statSync(d('agent-sessions.json')).mode & 0o777, 0o640);
+  assert.deepStrictEqual(json(d('codex-sessions.json')), { ranger: { threadId: 'c1' } });
+  assert.deepStrictEqual(mem.getMemoryStats('ranger'), had, 'its memory rows');
+  assert.deepStrictEqual(mem.getMemoryStats('scout'), mem.getMemoryStats('nobody'), 'none left under the old name');
+  assert.ok(fs.existsSync(d('sessions', 'ranger', 'n.md')) && fs.existsSync(d('context-refresh', 'ranger.json')));
+  assert.ok(fs.existsSync(path.join(a.root, 'share', 'ranger', 'out.pdf')) && !fs.existsSync(path.join(a.root, 'share', 'scout')));
+  assert.strictEqual(tr.search('ranger', 'told').length, 1, 'its archive is found under the new name');
+  assert.strictEqual(tr.stats('scout').entries, 0);
+  assert.strictEqual(tr.search('maestro', 'keeps').length, 1, 'another agent\'s archive untouched');
+  assert.deepStrictEqual(chat.st.list.map(t => [t.id, t.agent]), [['t1', 'ranger'], ['t2', 'maestro']], 'its scheduled tasks wake it under the new name');
+  assert.deepStrictEqual([...comp.names], ['ranger'], 'its compression history');
+  assert.deepStrictEqual(chat.forgot, ['scout', 'ranger'], 'nothing kept in memory under either name');
+  assert.deepStrictEqual(a.readJson().map(x => [x.name, x.display || null]), [['maestro', null], ['ranger', 'Scout']]);
+  const fresh = await a.ag.createAgent('scout', 'claude-sdk/x', 'a new scout', null, 'specialist');
+  assert.strictEqual(fresh.success, true, fresh.error);
+  assert.strictEqual(fresh.earlierAgentKept, undefined, 'the old name is free: nothing was left under it');
+
+  // a step near the end fails: everything that moved goes back, and the agent keeps its name
+  comp.fail = new Error('disk full');
+  const r = await a.ag.renameAgent('ranger', 'trail');
+  assert.strictEqual(r.success, false);
+  assert.strictEqual(r.error, 'Scout was not renamed (disk full).');
+  assert.ok(fs.existsSync(path.join(a.ws('ranger'), 'records', 'facts.md')) && !fs.existsSync(a.ws('trail')));
+  assert.ok(fs.existsSync(d('conversations', 'ranger.jsonl')) && !fs.existsSync(d('conversations', 'trail.jsonl')));
+  assert.deepStrictEqual(json(d('agent-sessions.json')), { ranger: { sessionId: 's1' }, maestro: { sessionId: 'm1' } });
+  assert.deepStrictEqual(mem.getMemoryStats('ranger'), had);
+  assert.strictEqual(tr.search('ranger', 'told').length, 1);
+  assert.deepStrictEqual(chat.st.list.map(t => [t.id, t.agent]), [['t1', 'ranger'], ['t2', 'maestro']]);
+  assert.ok(a.readJson().some(x => x.name === 'ranger') && !a.readJson().some(x => x.name === 'trail'));
+});
+
+test('an agent the admin granted something by name (wallet access, a root grant, connectors, API tokens) is renamed only once that is removed', async () => {
+  const a = load({ agents: [{ name: 'maestro' }, { name: 'degen', display: 'Degen' }] });
+  chatStandIn(a);
+  fs.writeFileSync(path.join(a.hub, 'data', 'settings.json'), JSON.stringify({ walletAgents: ['degen'] }));
+  const r = await a.ag.renameAgent('degen', 'trader');
+  assert.deepStrictEqual(r, { success: false, error: 'Degen has wallet access (walletAgents in data/settings.json) under its name. Remove it, rename it, then grant it again to trader.' });
+  assert.ok(a.readJson().some(x => x.name === 'degen'));
+});
+
+test('renaming onto an empty folder of the new name works (nothing of anyone\'s is there); a folder with something in it is never replaced', async () => {
+  const a = load({ agents: [{ name: 'maestro' }, { name: 'scout' }, { name: 'other' }] });
+  chatStandIn(a);
+  fs.mkdirSync(path.join(a.ws('scout'), 'records'), { recursive: true }); fs.writeFileSync(path.join(a.ws('scout'), 'records', 'f.md'), 'f');
+  fs.mkdirSync(a.ws('ranger'), { recursive: true });   // empty
+  fs.mkdirSync(path.join(a.hub, 'data', 'sessions', 'scout'), { recursive: true }); fs.writeFileSync(path.join(a.hub, 'data', 'sessions', 'scout', 'n.md'), 'n');
+  assert.deepStrictEqual(await a.ag.renameAgent('scout', 'ranger'), { success: true, newName: 'ranger' });
+  assert.ok(fs.existsSync(path.join(a.ws('ranger'), 'records', 'f.md')) && fs.existsSync(path.join(a.hub, 'data', 'sessions', 'ranger', 'n.md')));
 });

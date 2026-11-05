@@ -292,3 +292,49 @@ test('tidyStep: before the split every agent shares the combined file, which one
   assert.deepStrictEqual(tr.tidyStep('doc', { first: true }), { combined: true });
   tr.close();
 });
+
+test('rename: a renamed agent\'s archive is found under its new name (its own file, or its rows in the combined file); never onto another archive', () => {
+  const { file, dir } = place();
+  const tr = createTranscript({ file, dir, log: quiet });
+  tr.record({ agent: 'scout', kind: 'user', text: 'told to scout' });
+  tr.record({ agent: 'other', kind: 'user', text: 'other words' });
+  assert.deepStrictEqual(tr.rename('scout', 'ranger'), { rows: 1 });
+  assert.deepStrictEqual([tr.search('ranger', 'told').length, tr.stats('scout').entries, fs.existsSync(tr.fileFor('scout'))], [1, 0, false]);
+  assert.throws(() => tr.rename('ranger', 'other'), /already there/);
+  assert.strictEqual(tr.search('ranger', 'told').length, 1, 'refused: nothing moved');
+  tr.close();
+  // the combined file of earlier versions: the rows there are renamed in place
+  const p2 = place();
+  const Database = require('better-sqlite3');
+  const t0 = createTranscript({ file: p2.file, dir: p2.dir, log: quiet }); t0.close();
+  const db = new Database(p2.file); db.exec('CREATE TABLE IF NOT EXISTS placeholder (x)'); db.close();
+  const tc = createTranscript({ file: p2.file, dir: p2.dir, log: quiet });
+  tc.record({ agent: 'scout', kind: 'user', text: 'combined words' });
+  tc.record({ agent: 'other', kind: 'user', text: 'combined other' });
+  assert.deepStrictEqual(tc.rename('scout', 'ranger'), { rows: 1 });
+  assert.deepStrictEqual([tc.search('ranger', 'combined').length, tc.search('scout', 'combined').length], [1, 0]);
+  assert.throws(() => tc.rename('ranger', 'other'), /already has rows for other/);
+  tc.close();
+});
+
+test('rename: when a later step fails, the steps already done are put back (its own file and its rows), so the archive is as it was', () => {
+  const p2 = place();
+  const Database = require('better-sqlite3');
+  const t0 = createTranscript({ file: p2.file, dir: p2.dir, log: quiet }); t0.close();
+  const db = new Database(p2.file); db.exec('CREATE TABLE IF NOT EXISTS placeholder (x)'); db.close();
+  const tc = createTranscript({ file: p2.file, dir: p2.dir, log: quiet });
+  tc.record({ agent: 'scout', kind: 'user', text: 'in the combined file' });
+  tc.close();
+  // a split that stopped part-way left scout's own file too
+  fs.mkdirSync(p2.dir, { recursive: true });
+  const tr = createTranscript({ file: p2.file, dir: p2.dir, log: quiet });
+  const staged = new Database(tr.fileFor('scout')); staged.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, ts TEXT, day TEXT, agent TEXT, owner TEXT, turn_id TEXT, origin TEXT, kind TEXT, tool TEXT, text TEXT, meta TEXT, hash TEXT); INSERT INTO entries (agent, text) VALUES ('scout', 'staged copy');"); staged.close();
+  // the combined file refuses the change: the step after the file moved fails
+  const c = new Database(p2.file); c.exec("CREATE TRIGGER stop_rename BEFORE UPDATE ON entries BEGIN SELECT RAISE(ABORT, 'blocked here'); END;"); c.close();
+  assert.throws(() => tr.rename('scout', 'ranger'), /blocked here/);
+  assert.ok(fs.existsSync(tr.fileFor('scout')) && !fs.existsSync(tr.fileFor('ranger')), 'its own file is back under its name');
+  const back = new Database(tr.fileFor('scout'), { readonly: true });
+  try { assert.deepStrictEqual(back.prepare('SELECT agent FROM entries').all().map(r => r.agent), ['scout'], 'and its rows'); } finally { back.close(); }
+  assert.strictEqual(tr.search('scout', 'combined').length, 1);
+  tr.close();
+});

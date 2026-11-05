@@ -164,3 +164,43 @@ test('history: the last 20 context readings and compression runs (with how each 
   d.flush();   // nothing waiting: no write, no error
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('rename: a renamed agent keeps its compression state and history, saved', async () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'compaction-')); const file = path.join(dir, 'c.json');
+  const mk = () => createCompaction({ file, persist: true, log: () => {}, post: async () => 'ok', resetSession: async () => {}, getAgent: () => ({ name: 'a', compaction: { mode: 'on', at: 0.5 } }) });
+  const a = mk();
+  await a.noteUsage('a', 400, 1000, 's1');
+  const before = a.history('a');
+  assert.strictEqual(a.rename('a', 'b'), true);
+  assert.deepStrictEqual([a.history('b'), a.history('a').readings.length], [before, 0]);
+  a.flush();
+  assert.deepStrictEqual(mk().history('b'), before, 'saved');
+  assert.strictEqual(a.rename('nobody', 'x'), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('rename: when its state can\'t be written, the rename fails and nothing changes', { skip: process.getuid && process.getuid() === 0 }, async () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'compaction-')); const file = path.join(dir, 'c.json');
+  const c = createCompaction({ file, persist: true, log: () => {}, post: async () => 'ok', resetSession: async () => {}, getAgent: () => ({ name: 'a', compaction: { mode: 'on', at: 0.5 } }) });
+  await c.noteUsage('a', 400, 1000, 's1');
+  c.flush();
+  const before = c.history('a');
+  fs.chmodSync(dir, 0o500);
+  try { assert.throws(() => c.rename('a', 'b'), /EACCES/); } finally { fs.chmodSync(dir, 0o700); }
+  assert.deepStrictEqual([c.history('a'), c.history('b').readings.length], [before, 0], 'still under the old name');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('state writes keep the file\'s permissions and leave no temporary file behind', { skip: process.getuid && process.getuid() === 0 }, async () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'compaction-')); const file = path.join(dir, 'c.json');
+  const c = createCompaction({ file, persist: true, log: () => {}, post: async () => 'ok', resetSession: async () => {}, getAgent: () => ({ name: 'a', compaction: { mode: 'on', at: 0.5 } }) });
+  await c.noteUsage('a', 400, 1000, 's1'); c.flush();
+  fs.chmodSync(file, 0o600);
+  await c.noteUsage('a', 500, 1000, 's1'); c.flush();
+  assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
+  assert.deepStrictEqual(fs.readdirSync(dir), ['c.json']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

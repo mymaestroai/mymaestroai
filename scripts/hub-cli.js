@@ -235,7 +235,7 @@ const commands = {
         const st = require(path.join(DIR, 'lib', 'settings')); const b = st.get().backup || {};
         st.updateSettings({ backup: { ...b, retiring: (b.retiring || []).filter(x => x && x.keyId !== before.keyId).concat([{ keyId: before.keyId, since: new Date().toISOString(), lost: true }]) } });
       }
-      out('\nYour recovery key opens every backup, even without My Maestro (with the free "age" tool). It is shown only now:\n');
+      out('\nYour recovery key opens every backup, even without My Maestro (with the free "age" tool). You can show it again any time in Settings → Backups → Show recovery key (it asks for the backup password):\n');
       out(`  ${r.recoveryKey}\n`);
       out('Print it or keep it in a password manager. If you lose both the password and the recovery key, nobody can open the backups.');
       return;

@@ -2287,11 +2287,8 @@ async function handleHttpRequest(req, res) {
         // Choosing the backup key and where copies go decides who can read everything: the step-up first, every time
         if (pathname === '/api/backups/setup' && req.method === 'POST') {
           const b = await body(); const no = stepUp(b); if (no) return jsonResponse(res, 403, { error: no });
-          return jsonResponse(res, 200, await svc.setup(b.newBackupPassword || b.newPassword, { replace: b.replace === true }));
-        }
-        if (pathname === '/api/backups/suggest-passphrase' && req.method === 'POST') {   // a password: never cached
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-          return res.end(JSON.stringify({ passphrase: require('./lib/backup/words').suggestPassphrase(6) }));
+          const made = await svc.setup(b.newBackupPassword || b.newPassword, { replace: b.replace === true });
+          return jsonResponse(res, 200, { keyId: made.keyId });   // the recovery key stays out of the answer: Settings shows it on request
         }
         if (pathname === '/api/backups/recovery' && req.method === 'GET') { const st = svc.status(); return jsonResponse(res, 200, { recovery: st.recovery, lastRestore: st.lastRestore }); }
         if (pathname === '/api/backups/folders' && req.method === 'POST') {
