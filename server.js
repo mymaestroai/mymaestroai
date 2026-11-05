@@ -49,7 +49,7 @@ const {
 } = require('./lib/agents');
 const {
   handleChatStream, handleChat, handleAskResponse, handleInterjection, handleAlert, ensureAlertSecret, resolveToolConfirm, stopAgentTurn, haltHub, resumeHub, getAgentStatuses, getJobRunner, getScheduledTasks, getPacing, getApprovals, getLedger, getAllowances, getEffectivePolicy, getAgentRequests, getCompaction,
-  cancelWorker, getActiveWorkers, loadConversationLog, clearConversationLog,
+  cancelWorker, loadConversationLog, clearConversationLog,
   clearConversation, flushActiveResponses, runTigerTeam, runRoundtable,
   continueTigerTeam, resumeTigerTeam, getTigerTeamState, reconstituteTigerTeam, stopTigerTeam, listTigerTeams,
   activeTigerTeams, isAgentActive, wakeAgent,
@@ -1855,10 +1855,7 @@ async function handleHttpRequest(req, res) {
     }
 
     // ── Worker Routes ───────────────────────────────────────────────
-    if (pathname === '/api/workers' && req.method === 'GET') {
-      return jsonResponse(res, 200, { workers: getActiveWorkers() });
-    }
-
+    // (GET /api/workers is the worker history across agents, handled above with /api/agents/<name>/workers.)
     if (pathname === '/api/cancel-worker' && req.method === 'POST') {
       // ⏹ Stop on a worker card. The page names the worker and the agent it belongs to (the caller); a member may stop
       // only calls of their own agents (the agent check above, then cancelWorker's).
