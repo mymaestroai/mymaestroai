@@ -8461,6 +8461,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             html += '</button>';
           }
           html += '</div>';
+          // ask_user with choose_model: every model the hub can use, as a drop-down (filled below, as text, not markup).
+          if (Array.isArray(q.models) && q.models.length) html += `<label class="question-model-pick" data-qi="${i}"><span>Or pick any model this hub can use</span></label>`;
         }
 
         html += '<div class="question-divider">or type a custom answer</div>';
@@ -8487,6 +8489,27 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // A click only selects (one option per question, highlighted); nothing is sent until Submit.
         // That stops a mis-click from answering the agent. A typed answer overrides the selections.
         const selected = {};
+        // The model drop-down is one more way to answer the same question: picking there clears the buttons, and a
+        // button clears the drop-down. The answer is the model id.
+        const modelPicks = {};
+        overlay.querySelectorAll('.question-model-pick').forEach(holder => {
+          const qi = holder.dataset.qi;
+          const sel = document.createElement('select');
+          sel.appendChild(new Option('Choose a model…', ''));
+          const groups = new Map();
+          for (const m of questions[qi].models) {
+            if (!m || !m.id) continue;
+            if (!groups.has(m.group)) { const og = document.createElement('optgroup'); og.label = String(m.group || 'Other'); groups.set(m.group, og); sel.appendChild(og); }
+            groups.get(m.group).appendChild(new Option(String(m.label || m.id), String(m.id)));
+          }
+          sel.addEventListener('change', () => {
+            overlay.querySelectorAll(`.question-option[data-qi="${qi}"]`).forEach(b => b.classList.remove('selected'));
+            if (sel.value) selected[qi] = sel.value; else delete selected[qi];
+            refresh();
+          });
+          modelPicks[qi] = sel;
+          holder.appendChild(sel);
+        });
         const customInput = overlay.querySelector('#question-custom-input');
         const submitBtn = overlay.querySelector('#question-submit');
         const hint = overlay.querySelector('#question-hint');
@@ -8503,6 +8526,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             overlay.querySelectorAll(`.question-option[data-qi="${qi}"]`).forEach(b => b.classList.remove('selected'));
             if (was) delete selected[qi];                       // clicking the highlighted option again clears it
             else { btn.classList.add('selected'); selected[qi] = btn.dataset.label; }
+            if (modelPicks[qi]) modelPicks[qi].value = '';
             refresh();
           });
         });

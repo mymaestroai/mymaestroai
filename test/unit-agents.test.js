@@ -367,3 +367,221 @@ test('ensureMaestroLead: when the marker cannot be written it warns, and the che
   assert.deepStrictEqual(a.ag.ensureMaestroLead(), { changed: false }, 'next start: checked again, now recorded');
   assert.ok(fs.existsSync(path.join(data, 'lead-check.json')));
 });
+
+test('createAgent with the files the lead wrote (AGENT-PLAYBOOK.md): saved as given, Records too, no model call; list entry gets display, icon and blurb', async () => {
+  const a = load({ agents: [], llm: reply(FOUR) });
+  const soul = '# SOUL.md — Sage\n\nYou are Sage, a patient garden coach.\n';
+  const res = await a.ag.createAgent('sage', 'claude-sdk/sonnet', 'ignored when files are given', null, 'primary', null, {
+    display: '  Garden Coach ', icon: '🌱', blurb: 'Vegetable garden planning, planting and pests',
+    files: { 'SOUL.md': soul, 'IDENTITY.md': '# IDENTITY.md\n\n## Name\nGarden Coach', 'USER.md': '# USER.md — Sam\n', 'TOOLS.md': '' },
+    records: [{ name: 'garden.md', content: '# Garden\n\n## Beds\n(ask)' }, { name: 'frost-dates.md', content: 'Last frost: (ask)\n' }],
+  });
+  assert.deepStrictEqual(res, { success: true, name: 'sage' });
+  assert.deepStrictEqual(a.calls, [], 'no model drafted anything');
+  const rd = (f) => fs.readFileSync(path.join(a.ws('sage'), f), 'utf8');
+  assert.strictEqual(rd('SOUL.md'), soul, 'byte for byte');
+  assert.strictEqual(rd('IDENTITY.md'), '# IDENTITY.md\n\n## Name\nGarden Coach', 'nothing added, not even a final newline');
+  assert.strictEqual(rd('USER.md'), '# USER.md — Sam\n');
+  assert.ok(!fs.existsSync(path.join(a.ws('sage'), 'TOOLS.md')), 'an empty file is simply not written');
+  assert.strictEqual(rd('records/garden.md'), '# Garden\n\n## Beds\n(ask)');
+  assert.strictEqual(rd('records/frost-dates.md'), 'Last frost: (ask)\n');
+  const rec = a.readJson().find(x => x.name === 'sage');
+  assert.deepStrictEqual([rec.display, rec.icon, rec.blurb, rec.category, rec.model], ['Garden Coach', '🌱', 'Vegetable garden planning, planting and pests', 'primary', 'claude-sdk/sonnet']);
+  // Only some files given: the core ones it left out get the basic text, under its display name.
+  const b = await a.ag.createAgent('lean', undefined, '', null, null, null, { display: 'Lean One', files: { 'USER.md': '# U' } });
+  assert.strictEqual(b.success, true);
+  assert.strictEqual(fs.readFileSync(path.join(a.ws('lean'), 'SOUL.md'), 'utf8'), 'You are Lean One. A helpful AI assistant.\n');
+  assert.match(fs.readFileSync(path.join(a.ws('lean'), 'IDENTITY.md'), 'utf8'), /## Name\nLean One\n/);
+  assert.ok(!('blurb' in a.readJson().find(x => x.name === 'lean')), 'no blurb key unless one was given');
+  // A family emoji (joined with zero-width joiners) is one icon; a typographic apostrophe is fine in a name.
+  assert.strictEqual((await a.ag.createAgent('fam', undefined, '', null, null, null, { display: 'Sam’s Helper', icon: '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}' })).success, true);
+  assert.deepStrictEqual(fs.readdirSync(path.join(a.hub, 'workspaces')).sort(), ['fam', 'lean', 'sage'], 'no staging folder is left behind');
+});
+
+test('createAgent: a bad display name, icon, blurb, file or Record is refused in plain words, and nothing is created', async () => {
+  const a = load({ agents: [] });
+  const big = 'x'.repeat(64 * 1024 + 1);
+  const bad = {
+    'display with <': { display: '<b>Bad</b>' }, 'display too long': { display: 'x'.repeat(41) }, 'display control char': { display: 'a\nb' },
+    'display with a quote': { display: 'Bob "x" onmouseover' }, 'display with a straight apostrophe': { display: "Sam's" },
+    'display with an ampersand': { display: 'Tom & Jerry' }, 'display run backwards': { display: 'Ma\u202eortsea' },
+    'display with a zero-width space': { display: 'Mae\u200bstro' }, 'display with a soft hyphen': { display: 'Mae\u00adstro' },
+    'display with a tag character': { display: 'Maestro\u{E0041}' }, 'display with a Hangul filler': { display: 'Mae\u3164stro' }, 'blurb with <': { blurb: 'a <b>bold</b> claim' },
+    'blurb too long': { blurb: 'x'.repeat(121) }, 'blurb with a new line': { blurb: 'one\ntwo' }, 'icon with a backtick': { icon: '`' },
+    'icon with a space': { icon: '🌱 🌻' }, 'two icons': { icon: '🌱🌻' }, 'icon too long': { icon: 'x'.repeat(17) }, 'icon run backwards': { icon: '\u202e🌱' },
+    'unknown file': { files: { 'evil.md': 'x' } }, 'file path': { files: { '../SOUL.md': 'x' } }, 'file too big': { files: { 'SOUL.md': big } },
+    'file not text': { files: { 'SOUL.md': 42 } }, 'files as a list': { files: ['SOUL.md'] },
+    'record path': { records: [{ name: '../x.md', content: 'x' }] }, 'record capitals': { records: [{ name: 'X.md', content: 'x' }] },
+    'record not .md': { records: [{ name: 'a.txt', content: 'x' }] }, 'record twice': { records: [{ name: 'a.md', content: 'x' }, { name: 'a.md', content: 'y' }] },
+    'record no text': { records: [{ name: 'a.md' }] }, 'nine records': { records: Array.from({ length: 9 }, (_, i) => ({ name: `r${i}.md`, content: 'x' })) },
+    'record too big': { records: [{ name: 'a.md', content: big }] },
+    'records too big in all': { records: Array.from({ length: 4 }, (_, i) => ({ name: `r${i}.md`, content: 'x'.repeat(60 * 1024) })) },
+    'records not a list': { records: { name: 'a.md', content: 'x' } },
+  };
+  for (const [label, extra] of Object.entries(bad)) {
+    const r = await a.ag.createAgent('nope', undefined, '', null, null, null, extra);
+    assert.strictEqual(r.success, false, label);
+    assert.match(r.error, /^(display name|icon|blurb|files|SOUL\.md|records)/, `${label}: ${r.error}`);
+  }
+  assert.ok(!fs.existsSync(a.ws('nope')), 'no workspace was made');
+  assert.ok(!a.readJson().some(x => x.name === 'nope'), 'no list entry');
+  assert.deepStrictEqual(fs.existsSync(path.join(a.hub, 'workspaces')) ? fs.readdirSync(path.join(a.hub, 'workspaces')) : [], [], 'nothing staged either');
+});
+
+test('createAgent: a display name that reads like another agent in the same list is refused; another person’s list is separate', async () => {
+  const a = load({ agents: [{ name: 'maestro', display: 'Maestro' }, { name: 'coach', display: 'Garden Coach' }, { name: 'kidbot', display: 'Homework Pal', owner: 'u_kid' }] });
+  for (const d of ['Maestro', 'maestro', 'ＭＡＥＳＴＲＯ', 'garden coach', 'Coach']) {
+    const r = await a.ag.createAgent('twin', undefined, '', null, null, null, { display: d });
+    assert.strictEqual(r.success, false, d);
+    assert.match(r.error, /^display name: another agent is already shown as "(Maestro|Garden Coach|coach)"/, d);
+  }
+  assert.strictEqual((await a.ag.createAgent('helper', undefined, '', null, null, 'u_kid', { display: 'Garden Coach' })).success, true, 'a member’s own list may reuse it');
+  assert.strictEqual((await a.ag.createAgent('pal', undefined, '', null, null, null, { display: 'Homework Pal' })).success, true, 'and the admin side may reuse a member’s');
+  assert.strictEqual((await a.ag.createAgent('pal2', undefined, '', null, null, 'u_kid', { display: 'homework pal' })).success, false, 'but not inside that member’s list');
+  const vs = await a.ag.createAgent('vs', undefined, '', null, null, null, { display: 'Maestro\ufe0f' });
+  assert.match(vs.error, /^display name: another agent is already shown as "Maestro"/, 'a variation selector does not make it a different name');
+  // A vowel sign is part of a name: Ram and Ramu in Devanagari are two names. A Scotland flag in a blurb is fine.
+  assert.strictEqual((await a.ag.createAgent('ram', undefined, '', null, null, null, { display: '\u0930\u093e\u092e' })).success, true);
+  assert.strictEqual((await a.ag.createAgent('ramu', undefined, '', null, null, null, { display: '\u0930\u093e\u092e\u0942', blurb: 'Highland walks \u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}' })).success, true);
+  // A stray tag letter (invisible outside a flag) doesn't make a different name, even in a name saved before these rules.
+  const b = load({ agents: [{ name: 'maestro', display: 'Maestro\u{E0041}' }] });
+  assert.match((await b.ag.createAgent('twin', undefined, '', null, null, null, { display: 'Maestro' })).error, /^display name: another agent is already shown as/);
+  // Text that looks like a marker is just text (private-use characters are not stripped, nothing is substituted).
+  const c = load({ agents: [{ name: 'pua', display: 'A\ue0007\ue001' }] });
+  assert.strictEqual((await c.ag.createAgent('aundef', undefined, '', null, null, null, { display: 'Aundefined' })).success, true);
+  // Two flags made of tag letters are two names.
+  assert.strictEqual((await a.ag.createAgent('scot', undefined, '', null, null, null, { display: 'Team \u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}' })).success, true);
+  assert.strictEqual((await a.ag.createAgent('wales', undefined, '', null, null, null, { display: 'Team \u{1F3F4}\u{E0067}\u{E0062}\u{E0077}\u{E006C}\u{E0073}\u{E007F}' })).success, true);
+});
+
+test('createAgent: on the lead’s path the default display name counts too, and two creates at once can’t both take one display name', async () => {
+  const a = load({ agents: [{ name: 'garden', display: 'Sage' }], llm: reply(FOUR) });
+  assert.match((await a.ag.createAgent('sage', undefined, '', null, null, null, { files: { 'SOUL.md': 'x' } })).error, /^display name: another agent is already shown as "Sage"/);
+  assert.strictEqual((await a.ag.createAgent('sage', undefined, '', null, null, null, null)).success, true, 'the Agents page is the person’s own choice');
+  const both = await Promise.all(['one', 'two'].map(n => a.ag.createAgent(n, 'openai/gpt-5', 'a twin', null, null, null, { display: 'Twin' })));
+  assert.deepStrictEqual(both.map(r => r.success).sort(), [false, true]);
+  assert.match(both.find(r => !r.success).error, /^display name: another agent is already shown as "Twin"/);
+  assert.strictEqual(a.readJson().filter(x => x.display === 'Twin').length, 1);
+  assert.ok(!fs.readdirSync(path.join(a.hub, 'workspaces')).some(n => n.startsWith('.')), 'the loser left no staging folder');
+});
+
+test('createAgent never takes over what an earlier agent of the same name left behind: its folder, chat history or Claude session', async () => {
+  const a = load({ agents: [] });
+  const outside = path.join(a.root, 'outside.txt');
+  fs.writeFileSync(outside, 'keep me\n');
+  // A folder left behind (deleting an agent only takes it off the list), here with a planted link where SOUL.md goes.
+  fs.mkdirSync(a.ws('ghost'), { recursive: true });
+  fs.symlinkSync(outside, path.join(a.ws('ghost'), 'SOUL.md'));
+  fs.mkdirSync(path.join(a.ws('olds'), 'records'), { recursive: true });
+  fs.writeFileSync(path.join(a.ws('olds'), 'records', 'secrets.md'), 'the earlier agent’s facts\n');
+  const elsewhere = path.join(a.root, 'elsewhere'); fs.mkdirSync(elsewhere);
+  fs.symlinkSync(elsewhere, a.ws('lnk'));                                           // the folder itself a link
+  fs.mkdirSync(path.join(a.hub, 'data', 'conversations'), { recursive: true });
+  fs.writeFileSync(path.join(a.hub, 'data', 'conversations', 'hist.jsonl'), '{"role":"user","content":"old"}\n');
+  fs.writeFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), JSON.stringify({ sess: { sessionId: 'abc' } }));
+  fs.writeFileSync(path.join(a.hub, 'data', 'codex-sessions.json'), JSON.stringify({ codexs: { threadId: 't1' } }));
+  require(path.join(a.hub, 'lib', 'memory-db.js')).writeLongTermMemory('memo', 'the earlier agent’s notes');
+  fs.mkdirSync(path.join(a.hub, 'data', 'sessions', 'notes'), { recursive: true });
+  require(path.join(a.hub, 'lib', 'transcript.js')).getTranscript().record({ agent: 'trans', kind: 'user', text: 'something the earlier agent was told' });
+  fs.mkdirSync(a.ws('both'));
+  fs.writeFileSync(path.join(a.ws('both'), 'SOUL.md'), 'old\n');
+  fs.writeFileSync(path.join(a.hub, 'data', 'conversations', 'both.jsonl'), '{}\n');
+  const expect = { ghost: /its folder is still here/, olds: /its folder is still here/, lnk: /its folder is still here/, hist: /its chat history is still here/,
+    sess: /its Claude session is still here/, codexs: /its Codex session is still here/, memo: /its memory is still here/, notes: /its notes folder is still here/,
+    trans: /its transcript archive is still here/, both: /its folder and chat history are still here/ };
+  for (const [name, re] of Object.entries(expect)) {
+    for (const extra of [{ files: { 'SOUL.md': 'pwned' }, records: [{ name: 'a.md', content: 'x' }] }, null]) {
+      const r = await a.ag.createAgent(name, undefined, '', null, null, null, extra);
+      assert.strictEqual(r.success, false, name);
+      assert.match(r.error, new RegExp(`^The name "${name}" belonged to an earlier agent, and ${re.source}\\. Pick another name\\.$`), r.error);
+    }
+  }
+  assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'keep me\n');
+  assert.deepStrictEqual(fs.readdirSync(elsewhere), [], 'nothing written through the linked folder');
+  assert.deepStrictEqual(fs.readdirSync(path.join(a.ws('olds'), 'records')), ['secrets.md']);
+  assert.ok(!a.readJson().some(x => Object.keys(expect).includes(x.name)), 'no list entries');
+  // An empty folder of that name holds nothing to inherit: it is simply replaced.
+  fs.mkdirSync(a.ws('fresh'));
+  assert.strictEqual((await a.ag.createAgent('fresh', undefined, '', null, null, null, { files: { 'SOUL.md': 'new\n' } })).success, true);
+  assert.strictEqual(fs.readFileSync(path.join(a.ws('fresh'), 'SOUL.md'), 'utf8'), 'new\n');
+  assert.ok(!fs.readdirSync(path.join(a.hub, 'workspaces')).some(n => n.startsWith('.')), 'no staging folder left behind');
+});
+
+test('createAgent: when what an earlier agent left can’t be checked, the name is not taken as free', async () => {
+  const a = load({ agents: [] });
+  const mem = require(path.join(a.hub, 'lib', 'memory-db.js'));
+  const tr = require(path.join(a.hub, 'lib', 'transcript.js')).getTranscript();
+  const real = { stats: mem.getMemoryStats, tstats: tr.stats };
+  try {
+    mem.getMemoryStats = () => { throw new Error('SQLITE_BUSY: database is locked'); };
+    const r1 = await a.ag.createAgent('locked', undefined, '', null, null, null, { files: { 'SOUL.md': 'x' } });
+    assert.strictEqual(r1.error, 'Could not check what an earlier agent named "locked" may have left (SQLITE_BUSY: database is locked). Nothing was created; try again in a moment.');
+    mem.getMemoryStats = real.stats;
+    tr.stats = () => null;   // the archive could not be opened
+    assert.match((await a.ag.createAgent('locked', undefined, '', null, null, null, null)).error, /^Could not check .*the transcript archive could not be opened/);
+    tr.stats = real.tstats;
+    fs.writeFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), '{"half-writ');
+    assert.match((await a.ag.createAgent('locked', undefined, '', null, null, null, null)).error, /^Could not check .*agent-sessions\.json can't be read/);
+    fs.writeFileSync(path.join(a.hub, 'data', 'agent-sessions.json'), '{}');
+    // A folder that can't be looked into is not an empty one (chat history of an earlier agent may sit there).
+    const conv = path.join(a.hub, 'data', 'conversations');
+    fs.mkdirSync(conv, { recursive: true }); fs.chmodSync(conv, 0o000);
+    try {
+      if (process.getuid && process.getuid() !== 0) assert.match((await a.ag.createAgent('locked', undefined, '', null, null, null, null)).error, /^Could not check .*EACCES/);
+    } finally { fs.chmodSync(conv, 0o755); }
+  } finally { mem.getMemoryStats = real.stats; tr.stats = real.tstats; }
+  assert.ok(!fs.existsSync(a.ws('locked')) && !a.readJson().length, 'nothing was created');
+  assert.strictEqual((await a.ag.createAgent('locked', undefined, '', null, null, null, null)).success, true, 'once the stores answer, the name is free');
+});
+
+test('createAgent: the folder appears whole or not at all; a failed write or a lost race leaves nothing behind', async () => {
+  const a = load({ agents: [] });
+  const ws = path.join(a.hub, 'workspaces');
+  const realRename = fs.renameSync, realWrite = fs.writeFileSync;
+  try {
+    // Another create claimed the name while this one was writing.
+    fs.renameSync = (from, to) => { if (String(to).endsWith(`${path.sep}raced`)) { const e = new Error('ENOTEMPTY: directory not empty'); e.code = 'ENOTEMPTY'; throw e; } return realRename(from, to); };
+    assert.deepStrictEqual(await a.ag.createAgent('raced', undefined, '', null, null, null, { files: { 'SOUL.md': 'x' } }), { success: false, error: 'Agent already exists' });
+    fs.renameSync = realRename;
+    // The disk fills up on the second file.
+    let n = 0;
+    fs.writeFileSync = (file, ...rest) => { if (String(file).includes(`${path.sep}.new-full-`) && ++n === 2) { const e = new Error('ENOSPC: no space left on device'); e.code = 'ENOSPC'; throw e; } return realWrite(file, ...rest); };
+    const r = await a.ag.createAgent('full', undefined, '', null, null, null, { files: { 'SOUL.md': 'x', 'USER.md': 'y' } });
+    assert.strictEqual(r.success, false);
+    assert.match(r.error, /^could not write the agent's files \(ENOSPC/);
+  } finally { fs.renameSync = realRename; fs.writeFileSync = realWrite; }
+  assert.deepStrictEqual(fs.readdirSync(ws), [], 'no half-made folder, no staging folder');
+  assert.deepStrictEqual(a.readJson(), [], 'no list entries');
+  assert.strictEqual((await a.ag.createAgent('full', undefined, '', null, null, null, { files: { 'SOUL.md': 'x' } })).success, true, 'the name is still free afterwards');
+  // The agent list can't be saved: the folder is taken back out, and the name stays free.
+  try {
+    fs.renameSync = (from, to) => { if (String(to).endsWith('agents.json')) { const e = new Error('ENOSPC: no space left on device'); e.code = 'ENOSPC'; throw e; } return realRename(from, to); };
+    assert.deepStrictEqual(await a.ag.createAgent('unsaved', undefined, '', null, null, null, { files: { 'SOUL.md': 'x' } }), { success: false, error: 'could not save the agent list (ENOSPC: no space left on device); nothing was created' });
+    // And when the folder can't be taken back out either, it says so instead of "nothing was created".
+    const realRm = fs.rmSync;
+    fs.rmSync = (p, ...rest) => { if (String(p).endsWith(`${path.sep}stuck`)) { const e = new Error('EBUSY: resource busy'); e.code = 'EBUSY'; throw e; } return realRm(p, ...rest); };
+    try {
+      assert.match((await a.ag.createAgent('stuck', undefined, '', null, null, null, { files: { 'SOUL.md': 'x' } })).error, /^could not save the agent list \(ENOSPC[^)]*\); its folder workspaces\/stuck could not be taken back out \(EBUSY: resource busy\): delete it by hand before using the name again$/);
+    } finally { fs.rmSync = realRm; }
+  } finally { fs.renameSync = realRename; }
+  assert.ok(!fs.existsSync(a.ws('unsaved')), 'its folder was taken back out');
+  assert.strictEqual((await a.ag.createAgent('unsaved', undefined, '', null, null, null, null)).success, true);
+});
+
+test('availableModelsNow: the last list fetched, at once, refreshed in the background; with none yet, the full list', async () => {
+  const a = load({ agents: [] });
+  const gw = require.cache[path.join(a.hub, 'lib', 'gateway-client.js')].exports;
+  assert.deepStrictEqual(await a.ag.availableModelsNow(), ['claude-sdk/x', 'gpt-5'], 'no list yet: the full wait (and only chat models)');
+  assert.deepStrictEqual(a.calls, ['listModels']);
+  gw.cachedModels = () => ['openai/gpt-y', 'whisper-1'];
+  assert.deepStrictEqual(await a.ag.availableModelsNow(), ['openai/gpt-y'], 'the last list, at once');
+  await new Promise(r => setImmediate(r));
+  assert.deepStrictEqual(a.calls, ['listModels', 'listModels'], 'and a refresh started for next time');
+});
+
+test('createAgent with a personality: only the four known files the model returns are written; a made-up path never is', async () => {
+  const a = load({ agents: [], llm: reply({ ...FOUR, '../escape.md': 'x', 'notes.md': 'y' }) });
+  assert.strictEqual((await a.ag.createAgent('gen2', 'gpt-5', 'a poet')).success, true);
+  assert.deepStrictEqual(fs.readdirSync(a.ws('gen2')).sort(), Object.keys(FOUR).sort());
+  assert.ok(!fs.existsSync(path.join(a.hub, 'workspaces', 'escape.md')), 'nothing outside the workspace');
+});

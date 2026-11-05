@@ -35,6 +35,7 @@ test('brief: lead agent gets the facts and the map pointer; others and the off s
   assert.ok(text.startsWith('\n\n---\n\n## THIS HUB'), 'its own section, so a change re-sends only this block');
   for (const s of ['My Maestro AI 9.9.9, commit abc1234 2026-01-01', 'process started 2026-01-01 12:00 UTC', 'systemd user service', `install ${ROOT}`, `hub home ${path.resolve(ROOT, '..')}`,
     'Port 8888, localhost only', 'Accounts: 1 admin, 2 members', 'Agents: 4 (primary 1, worker 2, thing 1)', 'Providers with keys: openai, google', 'Claude client signed in: yes',
+    `- New agents: when someone asks for one, or you suggest one, follow ${path.join('workspaces', 'maestro', 'AGENT-PLAYBOOK.md')}: a short interview, then you write its files and create it with create_agent`,
     'never print secrets', `The map, ${MAP_REL}: 1 What the hub is`, '14 Setup recipes', 'Read the section that applies']) assert.ok(text.includes(s), s);
   assert.ok(text.includes('Setup checklist: not checked yet'), 'first turn: the checklist runs in the background');
   await hm.refreshChecklist();
@@ -101,7 +102,22 @@ test('brief: the models the lead agent can assign, newest first, without preview
   assert.match(line, /google\/gemini-4-argon, google\/gemini-3\.8-flash/);
   assert.match(line, /local\/qwen3\.8-27b/);
   for (const bad of ['gpt-4-0613', '2026-03-05', 'tts-1', 'computer-use']) assert.ok(!line.includes(bad), bad);
-  assert.match(line, /claude-sdk\/ uses the owner's Claude subscription; the others bill per use, except local ones, which are free\./);
+  assert.match(line, /^- Models you can assign \(create_agent's model, or the chat header; listed by provider, not ranked\): /);
+  // What each costs comes from lib/billing: the ChatGPT models are a subscription too, not a bill per use.
+  assert.match(line, /claude-sdk\/ \(Claude sign-in\): a subscription the owner already pays for, no bill per use; openai\/, google\/: billed per use to an API key; local\/: free to run, on this computer\.$/);
+  const withCodex = createHubMap(deps({ models: () => [...ids, 'codex-cli/gpt-6-astra'] })).init({ port: 9000 });
+  const l2 = (await withCodex.briefFor('maestro')).split('\n').find(l => l.startsWith('- Models you can assign'));
+  assert.match(l2, /claude-sdk\/ \(Claude sign-in\) and codex-cli\/ \(ChatGPT\): a subscription the owner already pays for, no bill per use; openai\/, google\/: billed per use/);
+  // A local provider pointed at another machine is free, but not on this computer.
+  const settingsMod = require('../lib/settings'); const realUrl = settingsMod.getProviderUrl;
+  const urls = { ollama: 'http://192.168.1.20:11434/v1', lmstudio: 'not a url at all', omlx: 'http://127.0.0.2:8000/v1', ninfer: 'http://[::1]:18101/v1' };
+  settingsMod.getProviderUrl = (p) => (p in urls ? urls[p] : realUrl(p));
+  try {
+    const brief = async (extra) => (await createHubMap(deps({ models: () => [...ids, ...extra] })).init({ port: 9000 }).briefFor('maestro')).split('\n').find(l => l.startsWith('- Models you can assign'));
+    assert.match(await brief(['ollama/llama-x']), /local\/, ollama\/ \(on 192\.168\.1\.20\): free to run, on this computer unless another machine is named\.$/);
+    assert.match(await brief(['lmstudio/m']), /lmstudio\/ \(machine not known\)/, 'an address that cannot be read is not called this computer');
+    assert.match(await brief(['omlx/m', 'ninfer/m']), /local\/, omlx\/, ninfer\/: free to run, on this computer\.$/, 'other loopback forms are this computer');
+  } finally { settingsMod.getProviderUrl = realUrl; }
   const none = createHubMap(deps({ models: () => [] })).init({ port: 9000 });
   assert.ok(!(await none.briefFor('maestro')).includes('Models you can assign'), 'no line when nothing is known');
 });
