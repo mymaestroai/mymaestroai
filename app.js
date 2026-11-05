@@ -7045,6 +7045,11 @@
     }
 
     function switchToChat(chatId) {
+      try { workerHistory.openSeq++; } catch { /* not set up yet while the page script loads */ }   // a pending "Open full run" no longer takes the screen
+      const empty = document.getElementById('empty-state');
+      if (empty && chats[chatId]) empty.style.display = 'none';
+      const opened = chats[chatId];
+      if (opened && opened.isWorker && workerCardState(opened) === 'failed') opened.failSeen = true;
       document.querySelectorAll('.chat-tab').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.chat-container').forEach(p => p.classList.remove('active'));
       document.getElementById(`tab-${chatId}`)?.classList.add('active');
@@ -7055,6 +7060,7 @@
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
       if (document.getElementById('recall-panel') && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent && String(chats[chatId].agent) !== recallState.agent) openRecallPanel(chatId); // so does Recall
       document.getElementById(`input-${chatId}`)?.focus();
+      if (typeof scheduleWorkerListRefresh === 'function') scheduleWorkerListRefresh();
       // Context footer disabled — live token-usage bar provides this info now
     }
     
@@ -7079,10 +7085,14 @@
       rsnSweep();
       updateWorkerBarVisibility();
 
-      const remaining = Object.keys(chats);
-      if (remaining.length > 0) {
+      const remaining = Object.keys(chats).filter(id => !chats[id].isWorker);
+      if (activeChat !== chatId && chats[activeChat]) {
+        // a tab that was not on screen: what is on screen stays
+      } else if (remaining.length > 0) {
         switchToChat(remaining[remaining.length - 1]);
       } else {
+        try { workerHistory.openSeq++; } catch { /* not set up yet */ }   // a pending "Open full run" no longer takes the screen
+        document.querySelectorAll('.chat-container.active, .chat-tab.active').forEach(el => el.classList.remove('active'));
         activeChat = null;
         window.__activeChatId = null;
         document.getElementById('empty-state').style.display = 'flex';
@@ -10915,6 +10925,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // saying it works.
     function markWorkerRunCancelled(chat, run) {
       run.status = 'cancelled';
+      run.endedAt = Date.now();
       if (run.noticeEl) {
         run.noticeEl.textContent = `⏹ ${chat.agentLabel || 'Agent'} Stopped`;
         run.noticeEl.className = 'system-notice notice-failed';
@@ -10957,6 +10968,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!chat.timerInterval) chat.timerInterval = setInterval(() => updateWorkerTabTimer(workerChatId), 1000);
       updateWorkerTabTimer(workerChatId);
       flashTab(workerChatId);
+      flashWorkersButton();
+    }
+    function flashWorkersButton() {
+      const btn = typeof document !== 'undefined' && document.getElementById ? document.getElementById('workers-btn') : null;
+      if (!btn || !btn.classList) return;
+      btn.classList.add('flash');
+      setTimeout(() => btn.classList.remove('flash'), 2000);
     }
 
     function handleWorkerEvent(chatId, oc) {
@@ -10967,6 +10985,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const open = key ? workerCardByKey.get(key) : null;
         if (open && chats[open] && document.getElementById(`tab-${open}`)) {
           startWorkerRun(open, chatId, oc);   // this agent's card is open: it re-activates
+          scheduleWorkerListRefresh();
           return true;
         }
         const workerChatId = `worker-${workerId}`;
@@ -11000,6 +11019,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         renderWorkerChatTab(workerChatId);
         renderWorkerChatPanel(workerChatId);
         startWorkerRun(workerChatId, chatId, oc);
+        scheduleWorkerListRefresh();
         return true;
       }
 
@@ -11045,7 +11065,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const { workerChatId, chat, run } = w;
         if (run.status === 'completed' || run.status === 'failed') return true;   // already ended (a repeat)
         run.status = 'completed';
+        run.endedAt = Date.now();
         settleWorkerCard(workerChatId, 'idle', 'Completed');
+        scheduleWorkerListRefresh();
 
         // Update the working notice
         const label = chat.agentLabel || 'Agent';
@@ -11088,10 +11110,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (oc.cancelled) {   // stopped by the owner, on its card or with its caller
           if (run.status !== 'cancelled') markWorkerRunCancelled(chat, run);
           settleWorkerCard(workerChatId, 'error', 'Stopped');
+          scheduleWorkerListRefresh();
           return true;
         }
         const failLabel = 'Failed';
         run.status = 'failed';
+        run.endedAt = Date.now();
+        chat.failSeen = activeChat === workerChatId;   // watched as it failed: seen
+        scheduleWorkerListRefresh();
         if (oc.error) {
           // Under this run's reply: a later call to the agent may already show below it
           const errEl = document.getElementById(appendMessage(workerChatId, 'system', `Worker ${failLabel.toLowerCase()}: ${oc.error}`));
@@ -11228,6 +11254,358 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       if (chat.cardKey && workerCardByKey.get(chat.cardKey) === workerChatId) workerCardByKey.delete(chat.cardKey);
       workerParentMap.delete(workerChatId);
+    }
+
+    // ==================== WORKER LIST (one button) ====================
+    // The cards no longer fill a strip under the header: one button says what is working ("3 working · 2 done"), and
+    // its list opens each worker full size in its card's own panel. A finished worker stays listed 2 minutes; a failed
+    // one until it is opened or for 10 minutes, at most 3; then it lives in the worker history (the caller's archive),
+    // no longer on this page. A worker on screen is never taken away.
+    const WORKER_DONE_MS = 2 * 60 * 1000, WORKER_FAILED_MS = 10 * 60 * 1000, WORKER_FAILED_MAX = 3;
+
+    // running | done | stopped | failed: running while any of the card's calls runs, else how its newest call ended.
+    function workerCardState(chat) {
+      const runs = Object.values((chat && chat.runs) || {});
+      if (!runs.length || runs.some(r => r.status === 'running')) return 'running';
+      const last = runs.slice().sort((a, b) => b.startedAt - a.startedAt)[0];
+      return last.status === 'failed' ? 'failed' : last.status === 'cancelled' ? 'stopped' : 'done';
+    }
+    function workerCardEndedAt(chat) {
+      return Math.max(0, ...Object.values((chat && chat.runs) || {}).map(r => r.endedAt || 0)) || null;
+    }
+
+    // What the list shows (running first, then the newest ended), what leaves the page, and the button's numbers.
+    function workerListOf(all, now, active) {
+      const items = [], gone = [], failed = [];
+      for (const [id, chat] of Object.entries(all || {})) {
+        if (!chat || !chat.isWorker || chat.isHistory) continue;
+        const state = workerCardState(chat);
+        const endedAt = state === 'running' ? null : (workerCardEndedAt(chat) || now);
+        const item = { id, chat, state, endedAt };
+        if (state === 'running') items.push(item);
+        else if (state === 'failed') failed.push(item);
+        else if (id === active || now - endedAt < WORKER_DONE_MS) items.push(item);
+        else gone.push(id);
+      }
+      // failed: until opened or 10 minutes, the newest 3 of those; the one on screen always stays
+      failed.sort((a, b) => b.endedAt - a.endedAt);
+      let kept = 0;
+      for (const item of failed) {
+        const waiting = !item.chat.failSeen && now - item.endedAt < WORKER_FAILED_MS && kept < WORKER_FAILED_MAX;
+        if (waiting) kept++;
+        if (waiting || item.id === active) items.push(item); else gone.push(item.id);
+      }
+      items.sort((a, b) => ((b.state === 'running') - (a.state === 'running')) || ((b.endedAt || now) - (a.endedAt || now)) || ((b.chat.startedAt || 0) - (a.chat.startedAt || 0)));
+      const counts = { running: 0, done: 0, failed: 0 };
+      for (const i of items) counts[i.state === 'running' ? 'running' : i.state === 'failed' ? 'failed' : 'done']++;
+      const alert = items.some(i => i.state === 'failed' && !i.chat.failSeen);
+      return { items, gone, counts, alert };
+    }
+    function workerButtonLabel(counts) {
+      if (!counts.running && !counts.done && !counts.failed) return 'Workers';
+      return `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}`;
+    }
+    // m:ss, or h:mm:ss past an hour
+    function fmtWorkerClock(ms) {
+      const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+      return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+    }
+    function workerKindLabel(agent) {
+      if (agent === 'temporal' || !agent || agent === 'worker') return 'temporary';
+      if (agent === 'sdk-agent') return 'sub-agent';
+      const rec = (typeof AGENTS !== 'undefined' ? AGENTS : []).find(a => a.name === agent);
+      return rec ? (rec.display || rec.name) : agent;
+    }
+    const workerModelLabel = (m) => String(m || '').split('/').pop().replace(/^claude-/, '');
+
+    // A card that left the list: off the page (its calls never come back from a replay; the history has them).
+    function retireWorkerCard(workerChatId) {
+      const chat = chats[workerChatId];
+      if (!chat) return;
+      forgetWorkerCard(workerChatId, true);
+      document.getElementById(`tab-${workerChatId}`)?.remove();
+      document.getElementById(`panel-${workerChatId}`)?.remove();
+      delete chats[workerChatId];
+    }
+
+    let workerListTimer = null;
+    function scheduleWorkerListRefresh() {
+      if (workerListTimer) return;
+      workerListTimer = setTimeout(() => { workerListTimer = null; refreshWorkerList(); }, 60);
+    }
+    function refreshWorkerList() {
+      const btn = document.getElementById('workers-btn');
+      const { items, gone, counts, alert } = workerListOf(chats, Date.now(), activeChat);
+      for (const id of gone) retireWorkerCard(id);
+      // history views opened from the history panel go once something else is on screen
+      for (const [id, chat] of Object.entries(chats)) if (chat && chat.isHistory && id !== activeChat) retireWorkerCard(id);
+      if (!btn) return;
+      btn.querySelector('.wb-label').textContent = workerButtonLabel(counts);
+      btn.classList.toggle('busy', counts.running > 0);
+      btn.classList.toggle('alert', alert);
+      btn.title = alert ? 'A worker failed: open the list to see it' : 'Workers: what is working now, and the history of past workers';
+      if (!document.getElementById('workers-menu').hidden) renderWorkersMenu(items);
+    }
+    setInterval(refreshWorkerList, 5000);
+
+    function toggleWorkersMenu(force) {
+      const menu = document.getElementById('workers-menu');
+      const btn = document.getElementById('workers-btn');
+      const open = typeof force === 'boolean' ? force : menu.hidden;
+      menu.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+      if (open) renderWorkersMenu(workerListOf(chats, Date.now(), activeChat).items);
+    }
+    document.addEventListener('click', (e) => {
+      const wrap = document.getElementById('workers-wrap');
+      if (wrap && !wrap.contains(e.target) && !document.getElementById('workers-menu').hidden) toggleWorkersMenu(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('workers-menu') && !document.getElementById('workers-menu').hidden) toggleWorkersMenu(false);
+    });
+
+    // The list: one row per worker (text from models goes in as text), each opening the worker full size.
+    function renderWorkersMenu(items) {
+      const menu = document.getElementById('workers-menu');
+      if (!menu) return;
+      const now = Date.now();
+      const focused = menu.contains(document.activeElement) ? { id: document.activeElement.closest('.wm-row')?.dataset.wid || null, stop: document.activeElement.classList.contains('wm-stop'), history: document.activeElement.classList.contains('wm-history') } : null;
+      menu.textContent = '';
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'wm-empty';
+        empty.textContent = 'Nothing working right now.';
+        menu.appendChild(empty);
+      }
+      for (const { id, chat, state, endedAt } of items) {
+        const row = document.createElement('div');
+        row.className = `wm-row wm-${state}` + (state === 'failed' && !chat.failSeen ? ' wm-unseen' : '');
+        row.setAttribute('role', 'menuitem');
+        row.tabIndex = 0;
+        row.dataset.wid = id;
+        const mark = document.createElement('span');
+        mark.className = 'wm-mark';
+        mark.textContent = state === 'running' ? '' : state === 'done' ? '✓' : state === 'stopped' ? '⏹' : '✕';
+        const name = document.createElement('span');
+        name.className = 'wm-name';
+        name.textContent = chat.agentLabel || chat.display || 'Worker';
+        const meta = document.createElement('span');
+        meta.className = 'wm-meta';
+        meta.textContent = [workerModelLabel(chat.model), workerKindLabel(chat.agent)].filter(Boolean).join(' · ');
+        const when = document.createElement('span');
+        when.className = 'wm-when';
+        when.textContent = state === 'running' ? fmtWorkerClock(now - (chat.startedAt || now)) : `${state === 'failed' ? 'failed' : state === 'stopped' ? 'stopped' : 'done'} ${fmtWorkerClock(now - endedAt)} ago`;
+        row.append(mark, name, meta, when);
+        if (state === 'running') {
+          const stop = document.createElement('button');
+          stop.className = 'wm-stop';
+          stop.title = 'Stop this worker';
+          stop.textContent = '■';
+          stop.addEventListener('click', (e) => { e.stopPropagation(); cancelWorkerCard(id); });
+          row.appendChild(stop);
+        }
+        const go = () => { toggleWorkersMenu(false); switchToChat(id); };
+        row.addEventListener('click', go);
+        row.addEventListener('keydown', (e) => { if (e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); go(); } });
+        menu.appendChild(row);
+      }
+      const all = document.createElement('button');
+      all.className = 'wm-history';
+      all.textContent = 'All worker history →';
+      all.addEventListener('click', () => { toggleWorkersMenu(false); openWorkerHistory(); });
+      menu.appendChild(all);
+      if (focused) {
+        const row = focused.id ? menu.querySelector(`.wm-row[data-wid="${CSS.escape(focused.id)}"]`) : null;
+        const back = focused.history ? all : (focused.stop && row && row.querySelector('.wm-stop')) || row || document.getElementById('workers-btn');
+        if (back) back.focus();
+      }
+    }
+
+    // ── Worker history: every worker the agents called, from their archives (GET /api/agents/<a>/workers, /api/workers) ──
+    // gen: bumped by a new search, filter or caller (only then are answers for the old view dropped); listReq: the
+    // newest list request; openSeq: the newest "Open full run" (an older one never takes the screen).
+    const workerHistory = { caller: null, q: '', filter: 'all', items: [], next: null, loading: false, open: new Set(), runs: new Map(), error: '', gen: 0, listReq: 0, openSeq: 0, runReq: new Map() };
+    function openWorkerHistory() {
+      const me = window.hubMe || {};
+      const front = chats[activeChat];
+      const frontAgent = front ? (front.isWorker ? (chats[front.parentChatId] || {}).agent : front.agent) : null;
+      if (!workerHistory.caller) workerHistory.caller = frontAgent && !(front && front.isGroup) ? String(frontAgent) : (me.isAdmin ? '*' : ((AGENTS[0] || {}).name || '*'));
+      const callers = (typeof AGENTS !== 'undefined' ? AGENTS : []).map(a => a.name);
+      gsModal(`<div id="worker-history" data-no-dirty>
+        <input type="search" id="wh-q" class="wh-q" placeholder="Search briefs and results… (Enter)" autocomplete="off">
+        <div class="wh-filters" id="wh-filters"></div>
+        <div class="wh-list" id="wh-list"></div>
+        <div class="wh-status" id="wh-status"></div>
+      </div>`, { dock: true, title: '🕘 Worker history' });
+      const q = document.getElementById('wh-q');
+      q.value = workerHistory.q;
+      q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); workerHistory.q = q.value.trim(); whLoad(true); } });
+      const filters = document.getElementById('wh-filters');
+      for (const [v, label] of [['all', 'All'], ['named', 'Named agents'], ['temporary', 'Temporary'], ['failed', 'Failed']]) {
+        const chip = document.createElement('button');
+        chip.className = 'wh-chip' + (workerHistory.filter === v ? ' on' : '');
+        chip.textContent = label;
+        chip.addEventListener('click', () => { workerHistory.filter = v; filters.querySelectorAll('.wh-chip').forEach(c => c.classList.toggle('on', c === chip)); whLoad(true); });
+        filters.appendChild(chip);
+      }
+      const pick = document.createElement('select');
+      pick.className = 'wh-caller';
+      pick.title = 'Whose workers';
+      const opts = (me.isAdmin ? [['*', 'Called by: all agents']] : []).concat(callers.map(n => [n, `Called by: ${workerKindLabel(n)}`]));
+      for (const [v, label] of opts) { const o = document.createElement('option'); o.value = v; o.textContent = label; pick.appendChild(o); }
+      pick.value = opts.some(o => o[0] === workerHistory.caller) ? workerHistory.caller : (opts[0] || [''])[0];
+      workerHistory.caller = pick.value;
+      pick.addEventListener('change', () => { workerHistory.caller = pick.value; whLoad(true); });
+      filters.appendChild(pick);
+      whLoad(true);
+    }
+    // A new search, filter or caller replaces whatever was loading; only the newest request's answer is shown.
+    async function whLoad(reset) {
+      if (!reset && (workerHistory.loading || !workerHistory.next)) return;
+      if (reset) { workerHistory.gen++; workerHistory.items = []; workerHistory.next = null; workerHistory.open.clear(); workerHistory.runs.clear(); }
+      const gen = workerHistory.gen, req = ++workerHistory.listReq;
+      workerHistory.loading = true; workerHistory.error = '';
+      whRender();
+      const params = new URLSearchParams({ filter: workerHistory.filter, limit: '50' });
+      if (workerHistory.q) params.set('q', workerHistory.q);
+      if (!reset) params.set('before', workerHistory.next);
+      const base = workerHistory.caller === '*' ? '/api/workers' : `/api/agents/${encodeURIComponent(workerHistory.caller)}/workers`;
+      let data = null, error = '';
+      try { data = await filesApi(`${base}?${params.toString()}`); } catch (e) { error = e.message; }
+      if (gen !== workerHistory.gen || req !== workerHistory.listReq) return;   // superseded
+      if (data) {
+        workerHistory.items = workerHistory.items.concat(Array.isArray(data.workers) ? data.workers : []);
+        workerHistory.next = data.next || null;
+      }
+      workerHistory.error = error;
+      workerHistory.loading = false;
+      whRender();
+      // a page that came back short with more behind it (the server stopped looking part-way): ask for the rest
+      if (data && workerHistory.next && (data.workers || []).length < 10 && document.getElementById('wh-list')) whLoad(false);
+    }
+    function whDayLabel(iso) {
+      const d = new Date(iso), today = new Date();
+      const key = (x) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+      const y = new Date(today); y.setDate(today.getDate() - 1);
+      if (key(d) === key(today)) return 'Today';
+      if (key(d) === key(y)) return 'Yesterday';
+      return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) });
+    }
+    const whMark = (o) => (o === 'done' ? '✓' : o === 'stopped' ? '⏹' : o === 'failed' || o === 'unfinished' ? '✕' : '●');
+    function whRender() {
+      const list = document.getElementById('wh-list'), status = document.getElementById('wh-status');
+      if (!list) return;
+      list.textContent = '';
+      let day = null;
+      for (const w of workerHistory.items) {
+        const label = whDayLabel(w.startedAt);
+        if (label !== day) { day = label; const h = document.createElement('div'); h.className = 'wh-day'; h.textContent = label; list.appendChild(h); }
+        const key = `${w.caller}|${w.workerId}`;
+        const row = document.createElement('div');
+        row.className = `wh-item wh-${w.outcome || 'running'}` + (workerHistory.open.has(key) ? ' open' : '');
+        const top = document.createElement('div'); top.className = 'wh-top';
+        const mark = document.createElement('span'); mark.className = 'wh-mark'; mark.textContent = whMark(w.outcome);
+        const name = document.createElement('span'); name.className = 'wh-name'; name.textContent = String(w.description || 'Worker').replace(/^Worker:\s*/, '');
+        const when = document.createElement('span'); when.className = 'wh-when';
+        when.textContent = new Date(w.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + (w.durationMs != null ? ` · ${fmtWorkerClock(w.durationMs)}` : w.outcome ? '' : ' · running');
+        top.append(mark, name, when);
+        const sub = document.createElement('div'); sub.className = 'wh-sub';
+        const bits = [workerModelLabel(w.model), w.kind === 'agent' ? workerKindLabel(w.agentType) : w.kind, `called by ${workerKindLabel(w.caller)}`].filter(Boolean);
+        sub.textContent = bits.join(' · ') + (w.answer ? ` · “${w.answer.replace(/\s+/g, ' ').slice(0, 120)}”` : w.error ? ` · ${w.error}` : '');
+        row.append(top, sub);
+        if (workerHistory.open.has(key)) row.appendChild(whDetail(w, key));
+        top.addEventListener('click', () => { if (workerHistory.open.has(key)) workerHistory.open.delete(key); else { workerHistory.open.add(key); whFetchRun(w); } whRender(); });
+        sub.addEventListener('click', () => top.click());
+        list.appendChild(row);
+      }
+      if (workerHistory.next && !workerHistory.loading) {
+        const more = document.createElement('button'); more.className = 'gs-btn secondary wh-more'; more.textContent = 'Show 50 more';
+        more.addEventListener('click', () => whLoad(false));
+        list.appendChild(more);
+      }
+      status.textContent = workerHistory.loading ? 'Loading…' : workerHistory.error ? `Could not load the history: ${workerHistory.error}` : !workerHistory.items.length ? (workerHistory.q || workerHistory.filter !== 'all' ? 'No workers match.' : 'No workers yet.') : '';
+    }
+    // The expanded entry: its brief, its result, its work (from the full run) and the two actions.
+    function whDetail(w, key) {
+      const box = document.createElement('div'); box.className = 'wh-detail';
+      const section = (title, text, cls) => {
+        if (!text) return;
+        const t = document.createElement('div'); t.className = 'wh-label'; t.textContent = title;
+        const b = document.createElement('div'); b.className = 'wh-text' + (cls ? ` ${cls}` : ''); b.textContent = text;
+        box.append(t, b);
+      };
+      const run = workerHistory.runs.get(key);
+      const cur = (run && run.worker) || w;   // one snapshot: the fetched run once it is here
+      const answer = cur.answer;
+      section('Brief', cur.prompt || cur.description);
+      section(cur.partial ? 'Result (partial: it did not finish)' : 'Result', answer || (cur.outcome ? '(no answer)' : '(still running)'));
+      if (cur.error) section('Error', cur.error, 'wh-error');
+      if (run && run.rows) {
+        const uses = run.rows.filter(r => r.kind === 'tool_use');
+        const by = {};
+        for (const u of uses) by[u.tool] = (by[u.tool] || 0) + 1;
+        section('Work', uses.length ? `${uses.length} tool call${uses.length === 1 ? '' : 's'}: ${Object.entries(by).map(([t, n]) => `${t} ${n}`).join(', ')}` : 'No tool calls');
+      } else section('Work', run && run.error ? `Could not load its steps: ${run.error}` : 'Loading…');
+      const actions = document.createElement('div'); actions.className = 'wh-actions';
+      const openBtn = document.createElement('button'); openBtn.className = 'gs-btn'; openBtn.textContent = 'Open full run';
+      openBtn.addEventListener('click', () => whOpenRun(w));
+      const copyBtn = document.createElement('button'); copyBtn.className = 'gs-btn secondary'; copyBtn.textContent = 'Copy result';
+      copyBtn.disabled = !answer;
+      copyBtn.addEventListener('click', async () => { try { await navigator.clipboard.writeText(answer || ''); copyBtn.textContent = 'Copied'; } catch { copyBtn.textContent = 'Could not copy'; } });
+      actions.append(openBtn, copyBtn);
+      box.appendChild(actions);
+      return box;
+    }
+    // A run is kept for reuse only once it is over and its answer is in (a sub-agent's answer can come after its end);
+    // anything else is fetched again when it is opened.
+    async function whFetchRun(w, { fresh = false } = {}) {
+      const key = `${w.caller}|${w.workerId}`;
+      const had = workerHistory.runs.get(key);
+      const settled = had && !had.error && had.worker && had.worker.outcome && (had.worker.answer || Date.now() - (had.at || 0) < 15000);
+      if (settled && !fresh) return had;
+      const gen = workerHistory.gen;
+      const req = (workerHistory.runReq.get(key) || 0) + 1;
+      workerHistory.runReq.set(key, req);
+      let got;
+      try { got = { ...(await filesApi(`/api/agents/${encodeURIComponent(w.caller)}/workers/${encodeURIComponent(w.workerId)}`)), at: Date.now() }; }
+      catch (e) { got = { error: e.message, at: Date.now() }; }
+      if (gen !== workerHistory.gen) return null;   // the view changed meanwhile (more pages don't change it)
+      if (workerHistory.runReq.get(key) === req) { workerHistory.runs.set(key, got); whRender(); }   // a newer fetch of this worker wins
+      return got;
+    }
+    // An old worker full size, as it ran: a read-only card built from its archived rows (it goes when you leave it).
+    let whSeq = 0;
+    async function whOpenRun(w) {
+      const mine = ++workerHistory.openSeq;
+      const run = await whFetchRun(w, { fresh: true });
+      if (mine !== workerHistory.openSeq || !run || !run.rows) return;   // a later open, or the person went elsewhere
+      if (run.worker) w = { ...w, ...run.worker };   // the full brief and the run's own end, not the list's short copy
+      const id = `whist-${++whSeq}`;
+      const caller = Object.values(chats).find(c => c && !c.isWorker && !c.isGroup && c.agent === w.caller);
+      chats[id] = { id, agent: w.agentType || 'worker', display: String(w.description || 'Worker').replace(/^Worker:\s*/, ''), model: w.model || '', messages: [], status: 'idle', isWorker: true, isHistory: true,
+        workerId: w.workerId, parentChatId: caller ? caller.id : activeChat, externalSource: caller ? null : workerKindLabel(w.caller), runs: {}, agentLabel: String(w.description || 'Worker'), timerInterval: null };
+      renderWorkerChatPanel(id);
+      document.getElementById(`cancel-${id}`)?.remove();
+      const from = document.getElementById(`worker-from-${id}`);
+      if (from) from.textContent = `From the worker history: called by ${workerKindLabel(w.caller)} on ${new Date(w.startedAt).toLocaleString()}`;
+      appendMessage(id, 'user', w.prompt || w.description || '(no brief)');
+      const tools = [];
+      for (const r of run.rows) {
+        if (r.kind === 'tool_use') {
+          const tool = String(r.tool || 'tool'), text = String(r.text || '');
+          tools.push({ type: 'call', tool, input: text.startsWith(tool) ? text.slice(tool.length).trim() : text });
+        }
+        else if (r.kind === 'tool_result' && r.tool !== 'worker_answer') tools.push({ type: 'result', output: r.text || '' });
+      }
+      const answer = run.worker && run.worker.answer;
+      const msgId = appendMessage(id, 'assistant', '...');
+      updateMessageWithTools(msgId, answer || (w.outcome ? '' : '(still running)'), tools);
+      const end = w.outcome === 'done' ? `✅ Finished${w.durationMs != null ? ` in ${fmtWorkerClock(w.durationMs)}` : ''}` : w.outcome === 'stopped' ? '⏹ Stopped' : w.outcome === 'failed' ? `❌ Failed${w.error ? `: ${w.error}` : ''}` : w.outcome === 'unfinished' ? '❌ Did not finish (its caller\'s reply ended first)' : '⏳ Still running when this was saved';
+      appendSystemNotice(id, end, w.outcome === 'done' ? 'complete' : 'failed');
+      setStatus(id, 'idle', w.outcome ? 'From history' : 'Running');
+      const took = document.getElementById(`worker-elapsed-${id}`);
+      if (took) took.textContent = w.durationMs != null ? fmtWorkerClock(w.durationMs) : '';
+      switchToChat(id);
     }
 
     // A coordinator chat closing: the cards it called last close with it, unless another open chat called

@@ -645,6 +645,31 @@ async function handleHttpRequest(req, res) {
       }
       return jsonResponse(res, 200, { ok: true, agent: agentName, rows: tr.context(Number(q.get('id')), { before: Number(q.get('before')) || 6, after: Number(q.get('after')) || 6, agents: [agentName] }) });
     }
+    // Worker history (lib/transcript workers / workerRun): the workers an agent called, read back from its archive.
+    // One agent's (/api/agents/<name>/workers[/<id>]: the access check is the route's) or every agent this person
+    // may open (/api/workers), newest first, 50 at a time.
+    {
+      const wm = pathname.match(/^\/api\/agents\/([^/]+)\/workers(?:\/([^/]+))?$/);
+      if ((wm || pathname === '/api/workers') && req.method === 'GET') {
+        const q = new URL(req.url, 'http://x').searchParams;
+        const tr = require('./lib/transcript').getTranscript();
+        const opts = { before: q.get('before') || null, q: q.get('q') || '', filter: q.get('filter') || 'all', limit: Number(q.get('limit')) || 50 };
+        if (wm && wm[2]) {
+          const run = tr.workerRun(decodeURIComponent(wm[1]), decodeURIComponent(wm[2]));
+          return run ? jsonResponse(res, 200, { ok: true, ...run }) : jsonResponse(res, 404, { error: 'no such worker in that agent\'s history' });
+        }
+        let names;
+        if (wm) names = [decodeURIComponent(wm[1])];
+        else {
+          const who = req.hubUser || { id: 'service', role: 'admin' };
+          const all = await getAgents();
+          names = all.filter(a => access.isAdmin(who) || access.canAccessAgent(who, a.name, { agents: all })).map(a => a.name);
+        }
+        const lists = names.map(n => tr.workers(n, opts)).filter(Boolean);
+        const { workers: page, next } = require('./lib/transcript').mergeWorkerPages(lists, opts.limit);
+        return jsonResponse(res, 200, { ok: true, workers: page, next });
+      }
+    }
     // The turn so far: what a busy agent has done and said in its running turn (tool calls, workers,
     // partial reply), so a page that opens or wakes mid-turn can catch up, then follow /api/events.
     {
