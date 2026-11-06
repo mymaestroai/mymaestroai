@@ -1278,7 +1278,7 @@ async function handleHttpRequest(req, res) {
 
     if (pathname === '/api/ask_response' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      const result = handleAskResponse(body);
+      const result = handleAskResponse(body, { isAdmin: access.isAdmin(req.hubUser) });
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 

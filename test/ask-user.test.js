@@ -261,3 +261,27 @@ test('an answer that names a different agent than the one that asked is refused 
   assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: ev.request_id, agent: AGENT, answers: { 0: 'Green' } }), { success: true });
   assert.strictEqual(await p, 'Green');
 });
+
+test('an adminOnly question is answered only by an admin; other questions are unchanged', async () => {
+  const res = fakeRes();
+  const p = runAskUser(AGENT, res, { question: 'Allow it?', options: ['Allow', "Don't allow"], adminOnly: true });
+  await tick();
+  const id = questionEvents(res)[0].request_id;
+  const refused = { success: false, error: 'No pending question' };
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: id, answers: { 0: 'Allow' } }), refused, 'no flag');
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: id, answers: { 0: 'Allow' } }, { isAdmin: false }), refused);
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: id, answers: { 0: 'Allow' } }, { isAdmin: 'yes' }), refused, 'only true counts');
+  assert.ok(pendingQuestions.has(id), 'still waiting');
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: id, answers: { 0: 'Allow' } }, { isAdmin: true }), { success: true });
+  assert.strictEqual(await p, 'Allow');
+  const res2 = fakeRes();
+  const p2 = runAskUser(AGENT, res2, { question: 'Plain?', options: ['A'] });
+  await tick();
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: questionEvents(res2)[0].request_id, answers: { 0: 'A' } }, { isAdmin: false }), { success: true });
+  assert.strictEqual(await p2, 'A');
+});
+
+test('the data connector access question is asked adminOnly', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  assert.match(src, /header: 'Data connector access', adminOnly: true \}/);
+});

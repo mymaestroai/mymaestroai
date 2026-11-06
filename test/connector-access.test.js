@@ -200,7 +200,7 @@ test('the handlers re-check the offer and ask the owner through ask_user', () =>
   assert.match(body, /if \(!connectorAccessOffered\(agentName, consultationDepth\)\) return CONNECTOR_ACCESS_NOT_OFFERED;/);
   assert.match(sdk, /const CONNECTOR_ACCESS_NOT_OFFERED = 'This can only be done in a turn the owner started\.';/);
   assert.match(body, /const confirm = async \(question, yesLabel\) =>/);
-  assert.match(body, /runAskUser\(agentName, sseRes, \{ question, options: \[yesLabel, other\], header: 'Data connector access' \}, \{ consultationDepth, signal \}\)/);
+  assert.match(body, /runAskUser\(agentName, sseRes, \{ question, options: \[yesLabel, other\], header: 'Data connector access', adminOnly: true \}, \{ consultationDepth, signal \}\)/);
   assert.match(body, /yesLabel === 'Allow' \? "Don't allow" : 'Keep access'/);
   assert.match(body, /answer === yesLabel/);
   assert.match(body, /const stillAllowed = \(\) => connectorAccessOffered\(agentName, consultationDepth\) && !\(signal && signal\.aborted\);/);
@@ -277,3 +277,29 @@ function rig2() {
   });
   return { ...r, access, agentList, leads, virtual };
 }
+
+test('a replaced agent (new box id, same name) or a connector that gained a stamp is refused; unchanged goes through', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-access-b-'));
+  const mk = (list, rowsArr) => createConnectorAccess({
+    connectors: { list: () => ({ connectors: rowsArr }), setGrants: (id, names) => { rowsArr[0].agents = names; } },
+    modules: {}, agents: () => list, leadNames: [], push: { notify: () => Promise.resolve() }, auditFile: path.join(dir, 'a.jsonl'),
+    isMemberOwned: () => false, isVirtual: () => false,
+  });
+  const MSG = 'The agent or connector changed while you were answering, so nothing changed.';
+  const row = () => [{ id: 'notes', label: 'Notes', tools: { r: { cls: 'read' } }, agents: [], createdAt: 't1' }];
+  let list = [{ name: 'scout', box: 'box-1' }];
+  let r = row();
+  const a = mk(list, r);
+  await assert.rejects(a.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { list.splice(0, 1, { name: 'scout', box: 'box-2' }); return true; } }), { message: MSG });
+  assert.deepEqual(r[0].agents, []);
+  list = [{ name: 'scout', box: 'box-1' }]; r = row();
+  const b = mk(list, r);
+  await assert.rejects(b.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { delete list[0].box; return true; } }), { message: MSG }, 'missing on one side');
+  list = [{ name: 'scout', box: 'box-1' }]; r = row();
+  const c = mk(list, r);
+  await assert.rejects(c.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { r[0].createdAt = 't2'; return true; } }), { message: MSG });
+  list = [{ name: 'scout', box: 'box-1' }]; r = row();
+  const d = mk(list, r);
+  assert.deepEqual(await d.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: YES }), { ok: true, agents: ['scout'] });
+  fs.rmSync(dir, { recursive: true, force: true });
+});

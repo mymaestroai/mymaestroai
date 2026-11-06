@@ -358,10 +358,16 @@ async function signinStart(btn) {
     token.pollTimer = setTimeout(poll, everyMs);
   });
 }
-function signinCancel() {
+async function signinCancel() {
   const id = current && current.id;
-  stopSignin(); signinPaint(signinIdleHtml());
-  if (id) api('POST', `/api/modules/${id}/signin/cancel`, {}).catch(() => {});   // best effort: the hub forgets the pending sign-in
+  stopSignin();
+  if (id) {
+    // Start again stays out of reach until the hub has forgotten the pending sign-in; a failed cancel leaves polling stopped.
+    signinPaint('<p class="dim">Cancelling…</p>');
+    try { await api('POST', `/api/modules/${id}/signin/cancel`, {}); } catch { if (current && current.id === id) signinFail('Could not cancel. Try again.'); return; }
+    if (!current || current.id !== id) return;
+  }
+  signinPaint(signinIdleHtml());
 }
 async function signinCopy(btn) {
   const code = (document.getElementById('signin-code') || {}).textContent || '';

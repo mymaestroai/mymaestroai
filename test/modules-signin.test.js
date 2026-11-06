@@ -193,3 +193,16 @@ test('a poll in flight when a newer start replaced it saves nothing', async (t) 
   await assert.rejects(old, { status: 409 });
   assert.ok(!savedSecrets(g.cx).includes('FAKE_REFRESH_TOKEN'));
 });
+
+test('a new start forgets the old pending sign-in before waiting on the provider, so an old poll saves nothing', async (t) => {
+  const g = await gatedRig(t);
+  const s = g.mods.signinStart('fakesignin'); g.starts[0](); await s;
+  g.clock.t += 5000;
+  const old = g.mods.signinPoll('fakesignin'); await g.tick();
+  const s2 = g.mods.signinStart('fakesignin');   // the provider has not answered the new start yet
+  g.polls[0]();
+  await assert.rejects(old, { status: 409 });
+  assert.ok(!savedSecrets(g.cx).includes('FAKE_REFRESH_TOKEN'));
+  await assert.rejects(g.mods.signinPoll('fakesignin'), { status: 409, message: 'Start the sign-in again.' }, 'the old pending is already gone');
+  g.starts[1](); await s2;
+});

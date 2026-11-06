@@ -18,7 +18,7 @@ function rig({ start = '2026-03-10T12:00:00Z' } = {}) {
   };
   const modules = {
     list: () => world.list,
-    detail: (id) => ({ manifest: { health: { check: 'ping' } }, id }),
+    detail: (id) => ({ manifest: { health: { check: 'ping' } }, id, enabled: world.list.find(x => x.id === id).enabled !== false }),
     async check(id, name) {
       world.ran.push([id, name]);
       const r = world.result[id];
@@ -154,4 +154,18 @@ test('a module list that cannot be read leaves the recorded results alone', asyn
   const h2 = createModulesHealth({ modules: { list: () => { throw new Error('unreadable'); } }, push: { notify: async () => ({ sent: 1, failed: 0 }) }, clock: () => r.clock.t, file: r.file, hubZone: () => 'UTC', log: () => {} });
   await h2.run();
   assert.strictEqual(h2.state().results.mail.ok, true);
+});
+
+test('a module that is switched off is not checked even when its status is attention; no result, no notice', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  const mail = r.world.list.find(x => x.id === 'mail');
+  mail.state = 'attention'; mail.enabled = false;
+  r.world.result.mail = { ok: false, summary: 'down' };
+  await r.h.run();
+  assert.deepStrictEqual(r.world.ran, []);
+  assert.deepStrictEqual(r.world.notices, []);
+  assert.deepStrictEqual(r.h.state().results, {});
+  mail.enabled = true;   // switched on again: looked at
+  await r.h.run();
+  assert.deepStrictEqual(r.world.ran, [['mail', 'ping']]);
 });

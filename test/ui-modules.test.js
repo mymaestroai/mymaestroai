@@ -57,8 +57,9 @@ test('signin polling: 5-second floor, stops with the panel, a hidden page, Cance
   assert.match(page, /document\.addEventListener\('visibilitychange'/);
   assert.match(page, /function closePanel\(\) \{ stopSignin\(\);/);
   assert.match(page, /function render\(\) \{\s*stopSignin\(\);/, 'leaving the step stops polling');
-  assert.match(page, /function signinCancel\(\) \{\s*const id = current && current\.id;\s*stopSignin\(\);/);
-  assert.match(page, /api\('POST', `\/api\/modules\/\$\{id\}\/signin\/cancel`, \{\}\)\.catch\(\(\) => \{\}\)/, 'Cancel tells the hub, errors ignored');
+  assert.match(page, /async function signinCancel\(\) \{\s*const id = current && current\.id;\s*stopSignin\(\);/);
+  assert.match(page, /try \{ await api\('POST', `\/api\/modules\/\$\{id\}\/signin\/cancel`, \{\}\); \} catch \{ if \(current && current\.id === id\) signinFail\('Could not cancel\. Try again\.'\); return; \}/, 'Cancel waits for the hub; a failure says so and stays stopped');
+  assert.ok(page.indexOf('await api(\'POST\', `/api/modules/${id}/signin/cancel`') < page.indexOf('signinPaint(signinIdleHtml());', page.indexOf('async function signinCancel')), 'Start again only comes back after the cancel finished');
   assert.match(page, /p\.status === 'ok'\) \{ stopSignin\(\); await openModule\(m\.id, stepId\)/, 'ok reloads the module');
   assert.match(page, /p\.status === 'denied' \|\| p\.status === 'expired'\) \{ signinFail\(p\.message/);
   assert.match(page, /catch \(e\) \{ if \(signin === token\) signinFail\(e\.message\)/, 'an error is shown with Start again');
@@ -119,4 +120,8 @@ test('the hub links to it: account menu for admins, a Settings box, the phone â‹
   assert.match(app, /onclick="location\.href='\/modules'">Open Data connectors<\/button>/);
   assert.match(mobileHtml, /<a id="menu-connectors" href="\/modules" hidden>&#x1F50C; Data connectors<\/a>/);
   assert.match(mobileJs, /\$\('menu-connectors'\)\.hidden = !hubMe\.isAdmin;/);
+});
+
+test('POST /api/ask_response tells handleAskResponse whether the caller is an admin', () => {
+  assert.match(server, /handleAskResponse\(body, \{ isAdmin: access\.isAdmin\(req\.hubUser\) \}\)/);
 });
