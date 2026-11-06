@@ -114,7 +114,7 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
   const writeJ = (name, obj) => writeJsonPrivate(file(name), obj);
   // Security state (account, unsaved token, link code, event state): absent is fine, unreadable is not. Anything but a
   // missing file stops the operation that needs it (code 'ESTATE') instead of looking like an empty state.
-  const estate = (name, why) => { log(`${name} cannot be read (${why}); the operation needing it is refused`); return Object.assign(new Error(`${name} cannot be read`), { code: 'ESTATE' }); };
+  const estate = (name, why) => { logEvery(`estate:${name}`, 60000, `${name} cannot be read (${why}); the operation needing it is refused`); return Object.assign(new Error(`${name} cannot be read`), { code: 'ESTATE' }); };
   function readState(name, dflt, objectOnly = false) {
     let text;
     try { text = fs.readFileSync(file(name), 'utf8'); } catch (e) { if (e.code === 'ENOENT') return dflt; throw estate(name, e.code || 'read error'); }

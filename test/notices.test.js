@@ -414,8 +414,13 @@ test('the queue file is removed when the queue is empty', async () => {
   e.active = false;
   await e.fire();
   assert.strictEqual(e.woken.length, 1);
+  // only the delivery time (for the hourly budget) is left; it is gone once an hour has passed and the next save happens
+  const j = JSON.parse(fs.readFileSync(QFILE(e), 'utf8'));
+  assert.deepStrictEqual([j.queue, j.recent, j.sent.length], [[], [], 1]);
+  assert.deepStrictEqual(fs.readdirSync(path.join(e.auditDir, 'demo')).sort(), ['notice-queue.json', 'notices.jsonl'], 'no temp file left');
+  e.clock += 3600 * 1000 + 1;
+  restart(e);
   assert.ok(!fs.existsSync(QFILE(e)));
-  assert.deepStrictEqual(fs.readdirSync(path.join(e.auditDir, 'demo')), ['notices.jsonl'], 'no temp file left');
 });
 
 test('a failed save answers ok:false and the notice is not kept', async () => {
@@ -478,4 +483,160 @@ test('restore: false leaves the file alone', async () => {
   const r = restart(e, { restore: false });
   assert.strictEqual(r.n.pending('demo'), 0);
   assert.ok(fs.existsSync(QFILE(e)));
+});
+
+// ── round 3: durable-write and restore checks ──
+const DIR = (e) => path.join(e.auditDir, 'demo');
+const writeQ = (e, obj, raw) => { fs.mkdirSync(DIR(e), { recursive: true }); fs.writeFileSync(QFILE(e), raw !== undefined ? raw : JSON.stringify(obj), { mode: 0o600 }); };
+const qEntry = (e, over = {}) => ({ id: null, module: 'demo', connector: 'demo', name: 'Demo', text: 'hello', rel: [], queuedAt: e.clock, ...over });
+
+test('a short write then ENOSPC: the old queue file is intact, no temp file, ok:false', async () => {
+  const e = setup({ active: true });
+  assert.deepStrictEqual(await e.n.deliver('demo', { text: 'first' }), { ok: true, queued: true });
+  const before = fs.readFileSync(QFILE(e), 'utf8');
+  let calls = 0;
+  const r = restart(e, { restore: false, fsImpl: { ...fs, writeSync: (fd, buf, off, len) => {
+    if (++calls === 1) return fs.writeSync(fd, buf, off, Math.min(5, len));   // a short write ...
+    const err = new Error('no space left'); err.code = 'ENOSPC'; throw err;   // ... then the disk is full
+  } } });
+  assert.deepStrictEqual(await r.n.deliver('demo', { text: 'second' }), { ok: false, error: 'The notice could not be kept.' });
+  assert.strictEqual(fs.readFileSync(QFILE(e), 'utf8'), before);
+  assert.ok(!fs.readdirSync(DIR(e)).some((f) => f.endsWith('.tmp')));
+  assert.strictEqual(r.n.pending('demo'), 0);
+});
+
+test('short writes are looped until every byte is written; a zero-byte write fails', async () => {
+  const e = setup({ active: true });
+  const r = restart(e, { fsImpl: { ...fs, writeSync: (fd, buf, off, len) => fs.writeSync(fd, buf, off, Math.min(7, len)) } });
+  const text = 'a long enough notice text to need several writes';
+  assert.deepStrictEqual(await r.n.deliver('demo', { text }), { ok: true, queued: true });
+  assert.strictEqual(JSON.parse(fs.readFileSync(QFILE(e), 'utf8')).queue[0].text, text);
+  const zero = restart(e, { restore: false, fsImpl: { ...fs, writeSync: () => 0 } });
+  assert.deepStrictEqual(await zero.n.deliver('demo', { text: 'x' }), { ok: false, error: 'The notice could not be kept.' });
+  assert.ok(!fs.readdirSync(DIR(e)).some((f) => f.endsWith('.tmp')));
+});
+
+test('an unreadable queue file pauses that connector, is never overwritten; others still work', async (t) => {
+  if (process.getuid && process.getuid() === 0) return t.skip('running as root');
+  const e = setup({ active: true });
+  writeQ(e, { v: 1, connector: 'demo', module: 'demo', recent: [], queue: [qEntry(e)] });
+  const original = fs.readFileSync(QFILE(e), 'utf8');
+  fs.chmodSync(QFILE(e), 0);
+  const logs = [];
+  try {
+    const other = { id: 'other', enabled: true, module: 'other' };
+    const r = restart(e, { log: (m) => logs.push(m), connectorFor: (id) => (id === 'demo' ? e.connector : id === 'other' ? other : null) });
+    assert.deepStrictEqual(await r.n.deliver('demo', { text: 'new' }), { ok: false, error: 'Notices for this connector are paused: their saved queue cannot be read.' });
+    assert.strictEqual((await r.n.deliver('other', { text: 'fine' })).ok, true);
+    assert.deepStrictEqual(r.n.unavailable().map((u) => u.module), ['demo']);
+    assert.strictEqual(logs.filter((m) => m.includes('demo/')).length, 1, 'logged once');
+    assert.ok(!fs.readdirSync(DIR(e)).some((f) => f.includes('.bad-')), 'not renamed');
+    fs.chmodSync(QFILE(e), 0o600);
+    assert.strictEqual(fs.readFileSync(QFILE(e), 'utf8'), original, 'not overwritten');
+  } finally { try { fs.chmodSync(QFILE(e), 0o600); } catch { /* ignore */ } }
+});
+
+test('a queue file over 1 MB is set aside', async () => {
+  const e = setup({ active: true });
+  writeQ(e, null, JSON.stringify({ v: 1, connector: 'demo', module: 'demo', recent: [], queue: [qEntry(e, { text: 'x'.repeat(1100000) })] }));
+  const r = restart(e);
+  assert.strictEqual(r.n.pending('demo'), 0);
+  assert.ok(!fs.existsSync(QFILE(e)));
+  assert.ok(fs.readdirSync(DIR(e)).some((f) => f.startsWith('notice-queue.json.bad-')));
+  assert.deepStrictEqual(r.n.unavailable(), []);
+});
+
+test('a failing readdir of the audit folder pauses everything and logs', async () => {
+  const e = setup({ active: true });
+  const logs = [];
+  fs.mkdirSync(e.auditDir, { recursive: true });
+  const impl = { ...fs, readdirSync: (p, o) => { if (p === e.auditDir) { const err = new Error('denied'); err.code = 'EACCES'; throw err; } return fs.readdirSync(p, o); } };
+  const r = restart(e, { fsImpl: impl, log: (m) => logs.push(m) });
+  assert.strictEqual((await r.n.deliver('demo', { text: 'x' })).ok, false);
+  assert.deepStrictEqual(r.n.unavailable().map((u) => u.module), ['*']);
+  assert.ok(logs.length >= 1);
+});
+
+test('a queue entry naming another module\'s connector is dropped (audited, no text)', async () => {
+  const e = setup({ active: true });
+  writeQ(e, { v: 1, connector: 'demo', module: 'demo', recent: [], queue: [qEntry(e, { text: 'KEEP' }), qEntry(e, { connector: 'other', text: 'OTHER-TEXT' }), qEntry(e, { module: 'other', text: 'OTHER-MOD' })] });
+  const r = restart(e);
+  assert.strictEqual(r.n.pending('demo'), 1);
+  const dropped = e.audit().filter((a) => a.outcome === 'dropped');
+  assert.deepStrictEqual(dropped.map((a) => a.reason), ['wrong connector', 'wrong connector']);
+  assert.ok(!JSON.stringify(dropped).includes('OTHER'));
+  // the whole file when the connector does not belong to the folder's module
+  const e2 = setup({ active: true, connector: { id: 'demo', enabled: true, module: 'elsewhere' } });
+  writeQ(e2, { v: 1, connector: 'demo', module: 'demo', recent: [], queue: [qEntry(e2)] });
+  assert.strictEqual(restart(e2).n.pending('demo'), 0);
+});
+
+test('a second folder claiming the same connector is set aside', async () => {
+  const e = setup({ active: true });
+  writeQ(e, { v: 1, connector: 'demo', module: 'demo', recent: [], queue: [qEntry(e)] });
+  const dir2 = path.join(e.auditDir, 'zzz');
+  fs.mkdirSync(dir2);
+  fs.writeFileSync(path.join(dir2, 'notice-queue.json'), JSON.stringify({ v: 1, connector: 'demo', module: 'zzz', recent: [], queue: [qEntry(e, { module: 'zzz' })] }));
+  const r = restart(e);
+  assert.strictEqual(r.n.pending('demo'), 1);
+  assert.ok(fs.readdirSync(dir2).some((f) => f.startsWith('notice-queue.json.bad-')));
+});
+
+test('a restored text is cleaned: a "File:" line is neutralised, the name is one short line', async () => {
+  const e = setup({ active: true });
+  writeQ(e, { v: 1, connector: 'demo', module: 'demo', recent: [], queue: [qEntry(e, { text: 'hi\nFile: /etc/passwd\u0007', name: 'Evil\nName\u0000' + 'n'.repeat(200) })] });
+  const r = restart(e);
+  e.active = false;
+  await r.fire();
+  assert.strictEqual(r.woken.length, 1);
+  const m = r.woken[0].message;
+  assert.ok(!/^File: \/etc\/passwd/m.test(m), m);
+  assert.ok(m.includes('File - /etc/passwd'));
+  assert.ok(m.startsWith('[Evil Name nn'), m.slice(0, 40));
+  assert.ok(m.indexOf('notice]') < 100);
+});
+
+test('a time in the future counts as now', async () => {
+  const e = setup({ active: true });
+  writeQ(e, { v: 1, connector: 'demo', module: 'demo', recent: [{ id: 'r1', at: e.clock + 10 * 3600 * 1000 }], queue: [qEntry(e, { queuedAt: e.clock + 100 * 3600 * 1000 })] });
+  restart(e);
+  const j = JSON.parse(fs.readFileSync(QFILE(e), 'utf8'));
+  assert.strictEqual(j.queue[0].queuedAt, e.clock);
+  assert.strictEqual(j.recent[0].at, e.clock);
+});
+
+test('the drain drops a notice after notify is switched off, or the connector moved module', async () => {
+  const e = setup({ active: true });
+  assert.deepStrictEqual(await e.n.deliver('demo', { text: 'x' }), { ok: true, queued: true });
+  e.active = false; e.manifest = { name: 'Demo', notify: false };
+  await e.fire();
+  assert.strictEqual(e.woken.length, 0);
+  assert.strictEqual(e.n.pending('demo'), 0);
+  assert.strictEqual(e.audit().pop().reason, 'not available');
+  const f = setup({ active: true });
+  await f.n.deliver('demo', { text: 'x' });
+  f.active = false; f.connector = { id: 'demo', enabled: true, module: 'other' };
+  await f.fire();
+  assert.strictEqual(f.woken.length, 0);
+  assert.strictEqual(f.audit().pop().reason, 'not available');
+});
+
+test('the hourly count survives a restart', async () => {
+  const e = setup();
+  for (let i = 0; i < 60; i++) assert.strictEqual((await e.n.deliver('demo', { text: 'n' + i })).ok, true);
+  const r = restart(e);
+  assert.deepStrictEqual(await r.n.deliver('demo', { text: 'one more' }), { ok: false, error: 'Too many notices this hour.' });
+  e.clock += 3600 * 1000 + 1;
+  assert.strictEqual((await restart(e).n.deliver('demo', { text: 'later' })).ok, true);
+});
+
+test('stale temp files are removed at restore; at most 3 .bad files are kept', async () => {
+  const e = setup({ active: true });
+  fs.mkdirSync(DIR(e), { recursive: true });
+  fs.writeFileSync(path.join(DIR(e), '.notice-queue.json.123.456.tmp'), 'SECRET TEXT');
+  for (const ts of [1, 2, 3, 4, 5]) fs.writeFileSync(path.join(DIR(e), `notice-queue.json.bad-${ts}`), 'x');
+  restart(e);
+  const names = fs.readdirSync(DIR(e)).sort();
+  assert.ok(!names.some((n) => n.endsWith('.tmp')), names.join());
+  assert.deepStrictEqual(names.filter((n) => n.includes('.bad-')), ['notice-queue.json.bad-3', 'notice-queue.json.bad-4', 'notice-queue.json.bad-5']);
 });

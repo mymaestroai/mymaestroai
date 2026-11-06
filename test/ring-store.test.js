@@ -564,6 +564,18 @@ test('unreadable state files give ESTATE; absent ones are empty', (t) => {
   assert.ok(e.logs.every((l) => !/garbled|nope/.test(l)), 'contents are not logged');
 });
 
+test('the unreadable-state log is throttled to once a minute per file', (t) => {
+  const e = env(t);
+  fs.mkdirSync(e.dataHome, { recursive: true });
+  fs.writeFileSync(path.join(e.dataHome, 'account.json'), '{garbled');
+  const count = () => e.logs.filter((l) => l.startsWith('account.json cannot be read')).length;
+  for (let i = 0; i < 5; i++) assert.throws(() => e.store.account(), (err) => err.code === 'ESTATE');
+  assert.equal(count(), 1);
+  e.clock.t += 61000;
+  assert.throws(() => e.store.account(), (err) => err.code === 'ESTATE');
+  assert.equal(count(), 2);
+});
+
 test('link code: a try that cannot be saved closes the arm in memory; tries are counted in memory too', (t) => {
   const e = env(t);
   const a = e.store.linkArm.arm({ minutes: 30 });
