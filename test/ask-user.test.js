@@ -250,3 +250,14 @@ test('consult_agent, spawn_workers and the read/list tools are marked concurrenc
   const walletLine = src.split('\n').find(l => l.includes('walletTools.toolSpecs().map(spec => sdk.tool('));
   assert.ok(walletLine && !walletLine.includes('readOnlyHint'), 'wallet tools must never be marked concurrency-safe');
 });
+
+test('an answer that names a different agent than the one that asked is refused and leaves the question open', async () => {
+  const res = fakeRes();
+  const p = runAskUser(AGENT, res, { question: 'Which color?', options: ['Green', 'Blue'] });
+  await tick();
+  const [ev] = questionEvents(res);
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: ev.request_id, agent: 'someone_else', answers: { 0: 'Blue' } }), { success: false, error: 'No pending question' });
+  assert.ok(pendingQuestions.has(ev.request_id), 'still waiting for the right answer');
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: ev.request_id, agent: AGENT, answers: { 0: 'Green' } }), { success: true });
+  assert.strictEqual(await p, 'Green');
+});

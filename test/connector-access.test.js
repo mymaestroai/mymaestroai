@@ -44,7 +44,7 @@ test('grant and revoke a hand-made connector', async () => {
   const { access, calls } = rig();
   assert.deepEqual(await access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: YES }), { ok: true, agents: ['helper', 'scout'] });
   assert.deepEqual(calls.grants, [['notes', ['helper', 'scout']]]);
-  assert.deepEqual(await access.revoke({ connector: 'notes', agent: 'helper', by: 'owner' }), { ok: true, agents: ['scout'] });
+  assert.deepEqual(await access.revoke({ connector: 'notes', agent: 'helper', by: 'owner', confirm: YES }), { ok: true, agents: ['scout'] });
   assert.equal(calls.setAgents.length, 0);
 });
 
@@ -52,7 +52,7 @@ test('grant and revoke a module connector go through modules.setAgents', async (
   const { access, calls } = rig();
   assert.deepEqual(await access.grant({ connector: 'mail', agent: 'helper', by: 'owner', confirm: YES }), { ok: true, agents: ['helper'] });
   assert.deepEqual(calls.setAgents[0], ['mailmod', ['helper'], { by: 'owner' }]);
-  assert.deepEqual(await access.revoke({ connector: 'mail', agent: 'helper', by: 'owner' }), { ok: true, agents: [] });
+  assert.deepEqual(await access.revoke({ connector: 'mail', agent: 'helper', by: 'owner', confirm: YES }), { ok: true, agents: [] });
   assert.equal(calls.grants.length, 0);
 });
 
@@ -65,7 +65,7 @@ test('refusals change nothing', async () => {
   await bad({ connector: 'notes', agent: 'owner' }, /lead agent/);
   await bad({ connector: 'nope', agent: 'helper' }, /No data connector/);
   await assert.rejects(() => access.grant({ connector: 'bank', agent: 'helper', by: 'owner', confirm: YES }), new RegExp(OWNER_ONLY('Bank').replace(/[.,]/g, '\\$&')));
-  await assert.rejects(() => access.revoke({ connector: 'chart', agent: 'helper', by: 'owner' }), /Only the owner can change access to Chart, in Settings, Data connectors\./);
+  await assert.rejects(() => access.revoke({ connector: 'chart', agent: 'helper', by: 'owner', confirm: YES }), /Only the owner can change access to Chart, in Settings, Data connectors\./);
   assert.equal(calls.grants.length + calls.setAgents.length + calls.push.length, 0);
   assert.equal(fs.existsSync(auditFile), false);
 });
@@ -73,7 +73,7 @@ test('refusals change nothing', async () => {
 test('audit lines (mode 0600) and one admin notice per change', async () => {
   const { access, calls, auditFile } = rig();
   await access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: YES });
-  await access.revoke({ connector: 'notes', agent: 'scout', by: 'owner' });
+  await access.revoke({ connector: 'notes', agent: 'scout', by: 'owner', confirm: YES });
   const lines = fs.readFileSync(auditFile, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(lines.length, 4, 'requested + done for each change');
   assert.deepEqual(lines[0], { at: '2026-11-06T12:00:00.000Z', by: 'owner', action: 'grant', connector: 'notes', agent: 'scout', agentsBefore: ['helper'], agentsAfter: ['helper', 'scout'], state: 'requested' });
@@ -136,7 +136,7 @@ test('grant without confirm is refused; confirm false refuses; confirm true proc
   let asked = null;
   const r = await access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async (q) => { asked = q; return true; } });
   assert.deepEqual(r.agents, ['helper', 'scout']);
-  assert.equal(asked, 'Give scout access to Notes?');
+  assert.equal(asked, 'owner wants to give scout access to Notes. Allow?');
   assert.match(await runTool(access, { action: 'grant', connector: 'notes', agent: 'helper' }, 'owner'), /didn't confirm, so nothing changed/);
 });
 
@@ -199,6 +199,81 @@ test('the handlers re-check the offer and ask the owner through ask_user', () =>
   const body = sdk.slice(i, i + 1200);
   assert.match(body, /if \(!connectorAccessOffered\(agentName, consultationDepth\)\) return CONNECTOR_ACCESS_NOT_OFFERED;/);
   assert.match(sdk, /const CONNECTOR_ACCESS_NOT_OFFERED = 'This can only be done in a turn the owner started\.';/);
-  assert.match(body, /runAskUser\(agentName, sseRes, \{ question, options: \['Allow', "Don't allow"\], header: 'Data connector access' \}, \{ consultationDepth, signal \}\)/);
-  assert.match(body, /answer === 'Allow'/);
+  assert.match(body, /const confirm = async \(question, yesLabel\) =>/);
+  assert.match(body, /runAskUser\(agentName, sseRes, \{ question, options: \[yesLabel, other\], header: 'Data connector access' \}, \{ consultationDepth, signal \}\)/);
+  assert.match(body, /yesLabel === 'Allow' \? "Don't allow" : 'Keep access'/);
+  assert.match(body, /answer === yesLabel/);
+  assert.match(body, /const stillAllowed = \(\) => connectorAccessOffered\(agentName, consultationDepth\) && !\(signal && signal\.aborted\);/);
+  assert.match(body, /runTool\(connectorAccessLib\.getConnectorAccess\(\), args, agentName, confirm, stillAllowed\)/);
 });
+
+test('revoke is confirmed too: its own question and yes label; no confirm, a no, or a thrown answer changes nothing', async () => {
+  const { access, calls, rows } = rig();
+  await assert.rejects(() => access.revoke({ connector: 'notes', agent: 'helper', by: 'owner' }), /didn't confirm/);
+  await assert.rejects(() => access.revoke({ connector: 'notes', agent: 'helper', by: 'owner', confirm: async () => false }), /didn't confirm/);
+  await assert.rejects(() => access.revoke({ connector: 'notes', agent: 'helper', by: 'owner', confirm: async () => 'Remove access' }), /didn't confirm/, 'only true counts');
+  assert.equal(calls.grants.length, 0);
+  const seen = [];
+  const r = await access.revoke({ connector: 'notes', agent: 'helper', by: 'owner', confirm: async (q, y) => { seen.push([q, y]); return true; } });
+  assert.deepEqual(r, { ok: true, agents: [] });
+  assert.deepEqual(seen, [["owner wants to remove helper's access to Notes. Remove it?", 'Remove access']]);
+  const g = [];
+  await access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async (q, y) => { g.push([q, y]); return true; } });
+  assert.deepEqual(g, [['owner wants to give scout access to Notes. Allow?', 'Allow']]);
+  assert.deepEqual(rows[0].agents, ['scout']);
+});
+
+test('after the answer everything is checked again, and the new list is built from the current one', async () => {
+  const r = rig();
+  // while the owner thinks, another change adds "extra" to the list
+  await r.access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { r.rows[0].agents = ['helper', 'extra']; return true; } });
+  assert.deepEqual(r.calls.grants, [['notes', ['helper', 'extra', 'scout']]], 'the list read before the question is not written back');
+  // the change already happened by itself: ok, nothing written, nothing logged
+  const r2 = rig();
+  const before = r2.calls.grants.length;
+  const out = await r2.access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { r2.rows[0].agents = ['helper', 'scout']; return true; } });
+  assert.deepEqual(out, { ok: true, agents: ['helper', 'scout'] });
+  assert.equal(r2.calls.grants.length, before); assert.equal(fs.existsSync(r2.auditFile), false); assert.equal(r2.calls.push.length, 0);
+  const r3 = rig();
+  const out3 = await r3.access.revoke({ connector: 'notes', agent: 'helper', by: 'owner', confirm: async () => { r3.rows[0].agents = []; return true; } });
+  assert.deepEqual(out3, { ok: true, agents: [] }); assert.equal(r3.calls.grants.length, 0);
+});
+
+test('each rule is repeated after the answer: connector turned money or sensitive, agent gone, member-owned, temporary, a lead', async () => {
+  const cases = [
+    ['connector became sensitive', (r) => { r.rows[0].sensitive = true; }, /Only the owner can change access to Notes/],
+    ['connector got a money tool', (r) => { r.rows[0].tools = { pay: { cls: 'money' } }; }, /Only the owner/],
+    ['connector removed', (r) => { r.rows.splice(0, 1); }, /No data connector/],
+    ['agent removed', (r) => { r.agentList.splice(r.agentList.findIndex(a => a.name === 'scout'), 1); }, /No agent named "scout"/],
+    ['agent handed to a member', (r) => { r.agentList.find(a => a.name === 'scout').owner = 'member1'; }, /belongs to a member/],
+    ['agent became temporary', (r) => { r.virtual.add('scout'); }, /temporary worker/],
+    ['agent became a lead', (r) => { r.leads.push('scout'); }, /lead agent/],
+  ];
+  for (const [label, mutate, re] of cases) {
+    const r = rig2();
+    await assert.rejects(() => r.access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { mutate(r); return true; } }), re, label);
+    assert.equal(r.calls.grants.length, 0, label); assert.equal(fs.existsSync(r.auditFile), false, label);
+  }
+});
+
+test('stillAllowed is asked after the answer: false ends it with the turn-ended message, nothing changes', async () => {
+  const r = rig();
+  let order = [];
+  await assert.rejects(() => r.access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { order.push('confirm'); return true; }, stillAllowed: () => { order.push('still'); return false; } }), { message: 'The turn ended before the owner answered, so nothing changed.' });
+  assert.deepEqual(order, ['confirm', 'still']);
+  assert.equal(r.calls.grants.length, 0);
+  assert.equal(await runTool(r.access, { action: 'revoke', connector: 'notes', agent: 'helper' }, 'owner', YES, () => false), 'The turn ended before the owner answered, so nothing changed.');
+  assert.match(await runTool(r.access, { action: 'revoke', connector: 'notes', agent: 'helper' }, 'owner', YES, () => true), /^Done\./);
+});
+
+// A rig whose agent list, lead list and temporary set can change during the question.
+function rig2() {
+  const r = rig();
+  const agentList = [{ name: 'owner' }, { name: 'helper' }, { name: 'scout' }];
+  const leads = ['owner']; const virtual = new Set();
+  const access = createConnectorAccess({
+    connectors: r.connectors, modules: { setAgents() {} }, agents: () => agentList, leadNames: () => leads, push: { notify: () => Promise.resolve() },
+    auditFile: r.auditFile, isMemberOwned: (a) => a.owner === 'member1', isVirtual: (n) => virtual.has(n),
+  });
+  return { ...r, access, agentList, leads, virtual };
+}

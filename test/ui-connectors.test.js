@@ -78,9 +78,12 @@ test('the form: id read-only when editing, kind toggles mcp vs skill rows, agent
   assert.match(app, /mcp\.style\.display = kind === 'mcp' \? '' : 'none'/);
   assert.match(app, /skill\.style\.display = kind === 'skill' \? '' : 'none'/);
   assert.ok(!app.includes('id="st-cx-f-all"') && !/> all agents</.test(app), 'no "all agents" option');
-  assert.match(app, /const leadNames = allAgents\.filter\(a => a\.lead === true\)/);
+  assert.match(app, /const hubLeads = new Set\(Array\.isArray\(cxState\.data && cxState\.data\.leads\) \? cxState\.data\.leads : \[\]\);/, 'the lead list comes from the hub');
+  assert.match(app, /const hasMoneyTool = toolRows\.some\(t => t\.cls === 'money'\);/);
+  assert.match(app, /const leadNames = hasMoneyTool \? \[\] : allNames\.filter\(n => hubLeads\.has\(n\)\);/, 'a connector with a money tool lists leads as ordinary choices');
+  assert.ok(!app.includes('a.lead === true'), 'the agent flag is no longer used for the picker');
   assert.match(app, /<input type="checkbox" checked disabled> \$\{hubEsc\(n\)\} \(lead\): always/, 'leads are checked and locked');
-  assert.match(app, /const agentNames = allAgents\.filter\(a => a\.lead !== true\)/, 'other agents get checkboxes');
+  assert.match(app, /const agentNames = allNames\.filter\(n => !leadNames\.includes\(n\)\);/, 'other agents (and the leads of a money connector) get checkboxes');
   assert.match(app, /data-cx-agent="\$\{hubEsc\(n\)\}"/);
   assert.match(app, /'no one besides the leads'\) : 'no one besides the leads'/, 'agents null reads as the leads only');
   assert.match(app, /body\.agents = Array\.from\(document\.querySelectorAll\('#st-cx-f-agents input\[data-cx-agent\]'\)\)\.filter\(i => i\.checked\)\.map\(i => i\.dataset\.cxAgent\);/, 'saved value: the checked non-lead agents, [] when none');

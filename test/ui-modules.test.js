@@ -57,24 +57,29 @@ test('signin polling: 5-second floor, stops with the panel, a hidden page, Cance
   assert.match(page, /document\.addEventListener\('visibilitychange'/);
   assert.match(page, /function closePanel\(\) \{ stopSignin\(\);/);
   assert.match(page, /function render\(\) \{\s*stopSignin\(\);/, 'leaving the step stops polling');
-  assert.match(page, /function signinCancel\(\) \{ stopSignin\(\);/);
+  assert.match(page, /function signinCancel\(\) \{\s*const id = current && current\.id;\s*stopSignin\(\);/);
+  assert.match(page, /api\('POST', `\/api\/modules\/\$\{id\}\/signin\/cancel`, \{\}\)\.catch\(\(\) => \{\}\)/, 'Cancel tells the hub, errors ignored');
   assert.match(page, /p\.status === 'ok'\) \{ stopSignin\(\); await openModule\(m\.id, stepId\)/, 'ok reloads the module');
   assert.match(page, /p\.status === 'denied' \|\| p\.status === 'expired'\) \{ signinFail\(p\.message/);
   assert.match(page, /catch \(e\) \{ if \(signin === token\) signinFail\(e\.message\)/, 'an error is shown with Start again');
   assert.match(page, /note \? 'Start again'/);
 });
 
-test('Ask Maestro: on every step and on a module that needs attention; help, then /api/chat, then /?agent=', () => {
+test('Ask Maestro: on every step and on a module that needs attention; help, then /api/chat/stream, then /?agent=', () => {
   assert.match(page, /<div class="actions">\$\{askButton\(s\.id\)\}<\/div><div class="msg" id="step-msg">/, 'every step');
   assert.match(page, /const ask = needsAttention\(m\) \? askButton\(null\) : '';/);
   const fn = page.slice(page.indexOf('async function askMaestro('), page.indexOf('async function busy('));
-  const help = fn.indexOf('/help?'), chat = fn.indexOf("'/api/chat'"), go = fn.indexOf("location.href = '/?agent=' + encodeURIComponent(h.agent)");
+  const help = fn.indexOf('/help?'), chat = fn.indexOf("'/api/chat/stream'"), go = fn.indexOf("location.href = '/?agent=' + encodeURIComponent(h.agent)");
   assert.ok(help > 0 && chat > help && go > chat, 'help, then chat, then the agent page');
   assert.match(fn, /q\.set\('step', stepId\)/);
   assert.match(fn, /q\.set\('error', shown\)/, 'the error shown on the step goes along');
   assert.match(fn, /credentials: 'same-origin'/);
   assert.match(fn, /JSON\.stringify\(\{ agent: h\.agent, message: h\.message \}\)/);
-  assert.ok(!fn.includes('getReader'), 'the reply stream is not waited for');
+  assert.ok(!fn.includes('getReader') && !fn.includes('.body'), 'the reply stream is not waited for');
+  assert.ok(!/fetch\('\/api\/chat'/.test(fn), 'the stream route, not the plain one');
+  assert.ok(fn.indexOf('r.status === 409') > chat && fn.indexOf('r.status === 409') < go, '409 is handled before leaving');
+  assert.match(fn, /if \(r\.status === 409\) throw new Error\('Maestro is busy right now\. Try again in a moment\.'\);/);
+  assert.match(fn, /if \(!r\.ok\) \{ let j = \{\}; try \{ j = await r\.json\(\); \} catch \{\} throw new Error\(j\.error \|\| `HTTP \$\{r\.status\}`\); \}\s*location\.href/, 'other errors show inline; success goes at once');
   assert.match(fn, /catch \(e\) \{ setMsg\('err', e\.message\); \}/, 'errors show inline');
 });
 
@@ -82,6 +87,20 @@ test('leads are listed as "(lead): always" with a checked, disabled box, on the 
   assert.match(page, /<input type="checkbox" checked disabled> \$\{esc\(n\)\} \(lead\): always/);
   assert.ok((page.match(/leadRows\(m\)/g) || []).length >= 3, 'defined once, used by the grant step and the overview');
   assert.match(page, /inner = leadRows\(m\) \+/);
+});
+
+test('money connectors (leadsAlways false): leads are ordinary checkboxes with their eligibility, not "always"', () => {
+  assert.match(page, /const leadsLocked = \(m\) => m\.leadsAlways !== false;/);
+  assert.match(page, /function leadRows\(m\) \{\s*if \(!leadsLocked\(m\)\) return '';/, 'no locked lead rows');
+  assert.match(page, /m\.candidates\.filter\(c => !leadsLocked\(m\) \|\| !\(m\.leads \|\| \[\]\)\.includes\(c\.name\)\)/, 'leads stay in the candidate list');
+  assert.match(page, /m\.agents\.filter\(n => !leadsLocked\(m\) \|\| !\(m\.leads \|\| \[\]\)\.includes\(n\)\)/, 'the overview lists granted leads as ordinary agents');
+  assert.match(page, /\$\{c\.eligible \? '' : 'disabled'\}/, 'eligibility shown');
+});
+
+test('server: sign-in cancel route; the connectors list carries the owner and admin leads', () => {
+  assert.match(server, /signin\\\/\(start\|poll\|cancel\)\$\//);
+  assert.match(server, /m\[2\] === 'cancel' \? mods\.signinCancel\(m\[1\]\)/);
+  assert.match(server, /pathname === '\/api\/connectors' && req\.method === 'GET'\) return jsonResponse\(res, 200, \{ ok: true, \.\.\.cx\.list\(\), leads: .*require\('\.\/lib\/agents'\)\.ownerLeadNames\(\)/);
 });
 
 test('phone: viewport meta, stacked layout, 40 px tap targets', () => {

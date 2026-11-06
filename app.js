@@ -3303,8 +3303,6 @@
       const skills = Object.entries(cxState.skills || {}).map(([sid, s]) => [sid, `${(s && s.label) || sid} (${sid})`]);
       const groups = ((cxState.data && cxState.data.groups) || []).map(g => [g.id, `${g.label || g.id} (${g.id})`]);
       const allAgents = (Array.isArray(AGENTS) ? AGENTS : []).filter(a => a && (a.name || a.id));
-      const leadNames = allAgents.filter(a => a.lead === true).map(a => a.name || a.id);
-      const agentNames = allAgents.filter(a => a.lead !== true).map(a => a.name || a.id);
       const granted = new Set(Array.isArray(c.agents) ? c.agents : []);
       const argsText = Array.isArray(c.args) ? c.args.join(' ') : (c.args || '');
       const secretNames = Array.isArray(c.secretNames) ? c.secretNames : [];
@@ -3312,6 +3310,13 @@
       const savedTools = c.tools && typeof c.tools === 'object' ? c.tools : {};
       const toolRows = toolsKnown ? toolsKnown.map(t => ({ name: t.name, detected: t.cls || 'read', cls: (savedTools[t.name] && savedTools[t.name].cls) || t.cls || 'read', description: t.description || '' }))
         : Object.entries(savedTools).map(([name, t]) => ({ name, detected: '', cls: (t && t.cls) || 'read', description: '' }));
+      // The lead list comes from the hub (owner and admin leads only). A connector with a money tool is not "always" for
+      // leads: its tools reach wallet agents only, so leads are ordinary choices there.
+      const hubLeads = new Set(Array.isArray(cxState.data && cxState.data.leads) ? cxState.data.leads : []);
+      const hasMoneyTool = toolRows.some(t => t.cls === 'money');
+      const allNames = allAgents.map(a => a.name || a.id);
+      const leadNames = hasMoneyTool ? [] : allNames.filter(n => hubLeads.has(n));
+      const agentNames = allNames.filter(n => !leadNames.includes(n));
       const toolsHtml = toolRows.length
         ? `<table class="cx-table"><thead><tr><th>tool</th><th>detected</th><th>class</th></tr></thead><tbody>${toolRows.map(t => `<tr><td><code>${hubEsc(t.name)}</code>${t.description ? `<div class="cx-sub">${hubEsc(t.description)}</div>` : ''}</td><td>${hubEsc(t.detected || '-')}</td><td>${sel('', CX_CLASSES.map(x => [x, x]), t.cls, `data-cx-tool="${hubEsc(t.name)}"`)}</td></tr>`).join('')}</tbody></table>`
         : `<div class="cx-sub">${editing ? 'No tools known yet: press Test to discover them.' : 'Save first, then Test to discover the tools and set their classes.'}</div>`;

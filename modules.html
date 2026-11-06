@@ -249,7 +249,7 @@ function stepHtml(s) {
     inner = (m.manifest.settings || []).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { values: readSettings(${esc(JSON.stringify(s.fields || []))}) }, this)">Save</button></div>`;
   } else if (s.type === 'grant') {
-    inner = leadRows(m) + (m.candidates.length ? m.candidates.filter(c => !(m.leads || []).includes(c.name)).map(c => `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${m.agents.includes(c.name) ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`).join('') : '<p class="dim">No agents.</p>') +
+    inner = leadRows(m) + (m.candidates.length ? m.candidates.filter(c => !leadsLocked(m) || !(m.leads || []).includes(c.name)).map(c => `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${m.agents.includes(c.name) ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`).join('') : '<p class="dim">No agents.</p>') +
       (m.risk === 'money' && !m.candidates.some(c => c.eligible) ? '<div class="msg warn show">No agent is a wallet agent yet. The hub owner adds one by name to "walletAgents" in data/settings.json (deliberately not a button).</div>' : '') +
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { agents: [...document.querySelectorAll('input.grant:checked')].map(i => i.value) }, this)">Save</button></div>`;
   } else if (s.type === 'signin') {
@@ -263,7 +263,10 @@ function stepHtml(s) {
 }
 
 // The lead agents can always use every connector: shown ticked and locked, ahead of the agents you choose.
+// Not for a money connector (leadsAlways false): its tools reach wallet agents only, so leads are ordinary checkboxes.
+const leadsLocked = (m) => m.leadsAlways !== false;
 function leadRows(m) {
+  if (!leadsLocked(m)) return '';
   return (m.leads || []).map(n => `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)} (lead): always</label>`).join('');
 }
 function askButton(stepId) {
@@ -275,12 +278,12 @@ function overviewHtml() {
   const ask = needsAttention(m) ? askButton(null) : '';
   if (!m.finishedAt) return `<div class="body">${md(m.summary)}</div>${catalogLine(m.catalog)}<div class="actions"><button class="primary" onclick="selectStep('${esc((m.steps.find(s => !s.done) || m.steps[0]).id)}')">${m.state === 'available' ? 'Start the setup' : 'Continue the setup'}</button>${ask}</div><div class="msg" id="step-msg"></div>`;
   const lc = m.lastCheck;
-  const others = m.agents.filter(n => !(m.leads || []).includes(n));
+  const others = m.agents.filter(n => !leadsLocked(m) || !(m.leads || []).includes(n));
   return `<div class="ready-box">
     <div class="body">${md(m.summary)}</div>
     ${catalogLine(m.catalog)}
     <div><b>Agents:</b></div>
-    <div>${leadRows(m)}${others.map(n => `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)}</label>`).join('')}${(m.leads || []).length || others.length ? '' : '<span class="dim">none</span>'}</div>
+    <div>${leadRows(m)}${others.map(n => `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)}</label>`).join('')}${(leadsLocked(m) && (m.leads || []).length) || others.length ? '' : '<span class="dim">none</span>'}</div>
     <div><b>Status:</b> ${esc(STATE_LABEL[m.state] || m.state)}${m.note ? ` <span class="dim">(${esc(m.note)})</span>` : ''}</div>
     ${checkLine(lc)}
     <div class="actions">
@@ -355,7 +358,11 @@ async function signinStart(btn) {
     token.pollTimer = setTimeout(poll, everyMs);
   });
 }
-function signinCancel() { stopSignin(); signinPaint(signinIdleHtml()); }
+function signinCancel() {
+  const id = current && current.id;
+  stopSignin(); signinPaint(signinIdleHtml());
+  if (id) api('POST', `/api/modules/${id}/signin/cancel`, {}).catch(() => {});   // best effort: the hub forgets the pending sign-in
+}
 async function signinCopy(btn) {
   const code = (document.getElementById('signin-code') || {}).textContent || '';
   try { await navigator.clipboard.writeText(code); btn.textContent = 'Copied'; } catch { btn.textContent = 'Select the code and copy it'; }
@@ -371,9 +378,10 @@ async function askMaestro(stepId, btn) {
       if (stepId) q.set('step', stepId);
       if (shown) q.set('error', shown);
       const h = await api('GET', `/api/modules/${current.id}/help?${q}`);
-      const r = await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: h.agent, message: h.message }) });
+      const r = await fetch('/api/chat/stream', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: h.agent, message: h.message }) });
+      if (r.status === 409) throw new Error('Maestro is busy right now. Try again in a moment.');
       if (!r.ok) { let j = {}; try { j = await r.json(); } catch {} throw new Error(j.error || `HTTP ${r.status}`); }
-      location.href = '/?agent=' + encodeURIComponent(h.agent);   // the reply stream is not waited for: the chat shows it
+      location.href = '/?agent=' + encodeURIComponent(h.agent);   // as soon as the headers arrive; the body is not read, the chat shows the reply
     } catch (e) { setMsg('err', e.message); }
   });
 }

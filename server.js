@@ -1793,8 +1793,8 @@ async function handleHttpRequest(req, res) {
         let m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})$/);
         if (m && req.method === 'GET') return jsonResponse(res, 200, { ok: true, module: mods.detail(m[1]) });
         if (m && req.method === 'DELETE') return jsonResponse(res, 200, mods.remove(m[1]));
-        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/signin\/(start|poll)$/);
-        if (m && req.method === 'POST') return jsonResponse(res, 200, m[2] === 'start' ? await mods.signinStart(m[1]) : await mods.signinPoll(m[1]));
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/signin\/(start|poll|cancel)$/);
+        if (m && req.method === 'POST') return jsonResponse(res, 200, m[2] === 'start' ? await mods.signinStart(m[1]) : m[2] === 'cancel' ? mods.signinCancel(m[1]) : await mods.signinPoll(m[1]));
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
         if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(step|check|settings|enable|disable|audit)$/);
@@ -1817,7 +1817,7 @@ async function handleHttpRequest(req, res) {
       const cx = require('./lib/connectors').getConnectors();
       const reply = (fn) => { try { const r = fn(); return r && typeof r.then === 'function' ? r.then(v => jsonResponse(res, 200, { ok: true, ...(v && typeof v === 'object' && !Array.isArray(v) ? v : { result: v }) })).catch(e => jsonResponse(res, 400, { error: e.message })) : jsonResponse(res, 200, { ok: true, ...(r && typeof r === 'object' ? r : {}) }); } catch (e) { return jsonResponse(res, 400, { error: e.message }); } };
       const bodyJson = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
-      if (pathname === '/api/connectors' && req.method === 'GET') return jsonResponse(res, 200, { ok: true, ...cx.list() });
+      if (pathname === '/api/connectors' && req.method === 'GET') return jsonResponse(res, 200, { ok: true, ...cx.list(), leads: (() => { try { return require('./lib/agents').ownerLeadNames(); } catch { return []; } })() });
       if (pathname === '/api/connectors' && req.method === 'POST') { const b = await bodyJson(); const { passphrase, newPassphrase, ...spec } = b; return reply(() => ({ connector: cx.upsert(spec, { passphrase, newPassphrase }) })); }
       if (pathname === '/api/connectors/lock-all' && req.method === 'POST') return reply(() => { cx.lockAll(); return {}; });
       let m = pathname.match(/^\/api\/connectors\/([^/]+)$/);

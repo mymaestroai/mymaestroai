@@ -100,3 +100,58 @@ test('a thrown check counts as failing, with its message', async (t) => {
   assert.strictEqual(r.world.notices[0].p.body, 'The server did not start.');
   assert.strictEqual(r.h.state().results.mail.ok, false);
 });
+
+test('an attention module is checked whoever recorded the failure (no earlier result needed)', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  r.world.list.find(x => x.id === 'mail').state = 'attention';   // e.g. the setup page's own check failed
+  r.world.result.mail = { ok: true, summary: 'fine' };
+  await r.h.run();
+  assert.deepStrictEqual(r.world.ran, [['mail', 'ping']]);
+  assert.strictEqual(r.h.state().results.mail.ok, true);
+  // a module that is still being set up or broken is not checked
+  r.world.list.push({ id: 'half', name: 'Half', state: 'setup', health: true }, { id: 'bad', name: 'Bad', state: 'broken', health: true });
+  r.world.ran.length = 0;
+  await r.h.run();
+  assert.deepStrictEqual(r.world.ran.map(x => x[0]), ['mail']);
+});
+
+test('results and notice markers of modules no longer checked are dropped, so the check is not due for them', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  r.world.result.mail = { ok: false, summary: 'down' };
+  r.world.pushReply = { sent: 0, failed: 1 };   // not delivered: the marker is missing and the check is due
+  await r.h.run();
+  assert.strictEqual(r.h.isDue(), true);
+  // the module is switched off (or removed, or broken): its failed result must not keep the check due
+  for (const state of ['off', 'broken', null]) {
+    const rr = rig(); t.after(rr.cleanup);
+    rr.world.result.mail = { ok: false, summary: 'down' };
+    rr.world.pushReply = { sent: 0, failed: 1 };
+    await rr.h.run();
+    assert.strictEqual(rr.h.isDue(), true);
+    if (state === null) rr.world.list = rr.world.list.filter(x => x.id !== 'mail'); else rr.world.list.find(x => x.id === 'mail').state = state;
+    await rr.h.run();
+    const s = rr.h.state();
+    assert.deepStrictEqual(s.results, {}, `${state}: result dropped`);
+    assert.deepStrictEqual(s.notified, [], `${state}: marker dropped`);
+    assert.strictEqual(rr.h.isDue(), false, `${state}: not due any more`);
+  }
+  // a delivered notice's marker goes too, and a module that comes back is treated as new
+  const r3 = rig(); t.after(r3.cleanup);
+  r3.world.result.mail = { ok: false, summary: 'down' };
+  await r3.h.run();
+  assert.deepStrictEqual(r3.h.state().notified, ['mail']);
+  r3.world.list.find(x => x.id === 'mail').state = 'off';
+  await r3.h.run();
+  assert.deepStrictEqual(r3.h.state().notified, []);
+  r3.world.list.find(x => x.id === 'mail').state = 'ready';
+  await r3.h.run();
+  assert.strictEqual(r3.world.notices.length, 2, 'a new failure after coming back notifies again');
+});
+
+test('a module list that cannot be read leaves the recorded results alone', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.h.run();
+  const h2 = createModulesHealth({ modules: { list: () => { throw new Error('unreadable'); } }, push: { notify: async () => ({ sent: 1, failed: 0 }) }, clock: () => r.clock.t, file: r.file, hubZone: () => 'UTC', log: () => {} });
+  await h2.run();
+  assert.strictEqual(h2.state().results.mail.ok, true);
+});

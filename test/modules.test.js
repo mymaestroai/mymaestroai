@@ -298,3 +298,51 @@ test('setAgents: refuses member agents, temporary workers and non-wallet agents 
     assert.strictEqual(l.catalog, null); assert.strictEqual(l.health, false); assert.strictEqual(l.hasGuide, false);
   } finally { cx.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('money module: an eligible wallet lead stays in the list and is an ordinary candidate; other modules drop leads; leadsAlways says which', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-ml-'));
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: McpStdioClient, log: () => {}, unlockTtlMs: 0 });
+  const mods = createModules({
+    root: FIX_ROOT, dataDir: path.join(dir, 'modules'), stateFile: path.join(dir, 'modules.json'), connectorsFile: path.join(dir, 'connectors.json'), connectors: cx,
+    isWalletAgent: (n) => n === 'sam' || n === 'chief', isMemberOwned: (a) => a.owner === 'u_member',
+    listAgents: () => [{ name: 'chief', lead: true }, { name: 'owner', lead: true }, { name: 'sam' }, { name: 'helper' }],
+    log: () => {},
+  });
+  try {
+    await mods.runStep('fakebank', 'install', {});
+    await mods.runStep('fakesignin', 'install', {});
+    const agentsOf = (id) => cx.list().connectors.find(c => c.id === id).agents;
+    assert.deepStrictEqual(mods.setAgents('fakebank', ['chief', 'owner', 'sam']), ['chief', 'sam'], 'the wallet lead is kept; the lead that is not a wallet agent is dropped as before');
+    assert.deepStrictEqual(agentsOf('fakebank'), ['chief', 'sam']);
+    assert.deepStrictEqual(mods.setAgents('fakesignin', ['chief', 'helper']), ['helper'], 'a non-money module drops leads');
+    const bank = mods.detail('fakebank'), mail = mods.detail('fakesignin');
+    assert.strictEqual(bank.leadsAlways, false); assert.strictEqual(mail.leadsAlways, true);
+    assert.deepStrictEqual(bank.candidates.find(c => c.name === 'chief'), { name: 'chief', display: 'chief', eligible: true, why: null });
+    assert.strictEqual(bank.candidates.find(c => c.name === 'owner').eligible, false, 'a lead that is not a wallet agent shows why');
+    assert.deepStrictEqual(bank.leads, ['chief', 'owner']);
+  } finally { cx.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('money is decided by risk or by any tool class, in the source', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'modules', 'index.js'), 'utf8');
+  assert.match(src, /const isMoney = \(m\) => !!\(m\.manifest && \(m\.manifest\.risk === 'money' \|\| Object\.values\(m\.manifest\.tools \|\| \{\}\)\.includes\('money'\)\)\);/);
+  assert.match(src, /leadsAlways: !isMoney\(m\)/);
+});
+
+test('step ids in setup.json: lowercase, digits and dashes, at most 32, starting with a letter', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(FIX_ROOT, 'fakebank', 'module.json'), 'utf8'));
+  const v = manifestLib.validateManifest(base, 'fakebank');
+  const probs = (id) => manifestLib.validateSetup({ steps: [{ id, type: 'explain', title: 'A' }, { id: 'done', type: 'finish', title: 'Done' }] }, v, {}).join(' | ');
+  assert.strictEqual(probs('ok-step-2'), '');
+  assert.strictEqual(probs('a'), '', 'a single letter is fine');
+  for (const bad of ['Upper', '1abc', 'has space', "x'y", 'a_b', '-a', 'a'.repeat(33), '../x']) assert.match(probs(bad), /step id .*lowercase letters, digits and dashes/, bad);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-sid-'));
+  try {
+    const copy = path.join(dir, 'fakebank'); fs.cpSync(path.join(FIX_ROOT, 'fakebank'), copy, { recursive: true });
+    const setup = JSON.parse(fs.readFileSync(path.join(copy, 'setup.json'), 'utf8'));
+    setup.steps[0].id = 'Bad Id';
+    fs.writeFileSync(path.join(copy, 'setup.json'), JSON.stringify(setup));
+    const loaded = manifestLib.loadModule(copy);
+    assert.match(loaded.problems.join(' | '), /step id "Bad Id"/, 'the module becomes broken like for any other problem');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
