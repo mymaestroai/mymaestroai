@@ -303,3 +303,66 @@ test('refused audit lines: at most one per reason per minute', async () => {
   await e.n.deliver('demo', { text: 'x' });
   assert.strictEqual(e.audit().filter((a) => a.outcome === 'refused').length, 2);
 });
+
+// A notices instance whose lookups can be made to throw after deliver() has passed its own checks.
+function lookups(e, over = {}) {
+  let cf = 0, na = 0;
+  e.n = createNotices({
+    connectorFor: (id) => { cf++; if (over.connectorFor && over.connectorFor(cf)) throw new Error('lookup'); return e.connector; },
+    manifestOf: () => e.manifest,
+    noticeAgentOf: () => { na++; if (over.noticeAgentOf && over.noticeAgentOf(na)) throw new Error('lookup'); return e.agent; },
+    mediaDirFor: () => e.media, isAgentActive: () => false,
+    wake: over.wake || (async (agent, message, cb, meta) => { e.woken.push({ agent, message, cb, meta }); }),
+    auditDir: e.auditDir, now: () => e.clock,
+    setTimer: (fn, ms) => { const t = { fn, ms, cleared: false, unref() {} }; e.timers.push(t); return t; }, clearTimer: (t) => { t.cleared = true; },
+  });
+  return e;
+}
+
+test('a connectorFor that throws in the drain drops the notice as not available; deliver() is not left pending', async () => {
+  const e = lookups(setup(), { connectorFor: (n) => n >= 2 });   // call 1 is deliver's own check
+  const r = await Promise.race([e.n.deliver('demo', { text: 'hi' }), new Promise((res) => setTimeout(() => res('PENDING'), 1000).unref())]);
+  assert.deepStrictEqual(r, { ok: false, error: 'Not available.' });
+  assert.strictEqual(e.n.pending('demo'), 0);
+  assert.strictEqual(e.woken.length, 0);
+  const last = e.audit().pop();
+  assert.strictEqual(last.outcome, 'dropped'); assert.strictEqual(last.reason, 'not available');
+  assert.ok(!JSON.stringify(last).includes('hi"'));
+});
+
+test('a noticeAgentOf that throws once keeps the notice queued and delivers it at the next retry', async () => {
+  const e = lookups(setup(), { noticeAgentOf: (n) => n === 2 });   // call 1 is deliver's own check; call 2 is the drain's
+  const p = e.n.deliver('demo', { text: 'keep me' });
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  assert.strictEqual(e.n.pending('demo'), 1, 'still queued');
+  assert.strictEqual(e.woken.length, 0);
+  assert.strictEqual(e.timers.filter((t) => !t.cleared).length, 1, 'a retry is armed');
+  assert.deepStrictEqual(e.audit().filter((a) => a.outcome === 'dropped'), [], 'not dropped');
+  await e.fire();
+  const r = await p;
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(e.n.pending('demo'), 0);
+  assert.strictEqual(e.woken.length, 1);
+  assert.match(e.woken[0].message, /keep me/);
+  assert.deepStrictEqual(e.audit().map((a) => a.outcome), ['queued', 'delivered'], 'answered as queued at once, delivered at the retry');
+});
+
+test('a wake() that never settles: after WAKE_WAIT_MS the drain moves on, outcome "unconfirmed", no text in the audit line', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });   // the 30 s safety timer runs on the real clock (global setTimeout)
+  const e = lookups(setup(), { wake: () => new Promise(() => {}) });
+  let settled = null;
+  const p = e.n.deliver('demo', { text: 'TOP-SECRET-WORDS' }).then((r) => { settled = r; return r; });
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  assert.strictEqual(settled, null, 'waiting for the turn to be accepted');
+  t.mock.timers.tick(29999);
+  for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r));
+  assert.strictEqual(settled, null, 'not before 30 s');
+  t.mock.timers.tick(1);
+  assert.deepStrictEqual(await p, { ok: true, queued: false });
+  assert.strictEqual(e.n.pending('demo'), 0, 'the drain moved on');
+  assert.strictEqual(e.timers.filter((x) => !x.cleared).length, 0, 'no retry: it is not sent again');
+  const raw = fs.readFileSync(path.join(e.auditDir, 'demo', 'notices.jsonl'), 'utf8');
+  assert.ok(!raw.includes('TOP-SECRET'));
+  assert.deepStrictEqual(e.audit().map((a) => a.outcome), ['unconfirmed']);
+  assert.strictEqual(e.audit()[0].agent, 'Ava');
+});

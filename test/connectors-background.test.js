@@ -330,3 +330,104 @@ test('McpStdioClient.request() on a closed client throws without spawning', asyn
   await c.connect(); await c.disconnect();
   await assert.rejects(() => c.request('echo/back', {}), /MCP process is not running/);
 });
+
+// ── a replacement start that waits for the old process (the exit gate), cancelled or not ──
+// Counts live fake processes: connect() starts one, a finished disconnect() ends it. `slow` holds every disconnect on a gate.
+function track(r, slow = null) {
+  const s = { live: 0, max: 0 };
+  r.FakeClient.prototype.connect = async function () { s.live++; s.max = Math.max(s.max, s.live); };
+  r.FakeClient.prototype.disconnect = async function () {
+    if (this.gone) return;
+    this.gone = true; this.disconnected = true;
+    if (slow) await slow.p;
+    s.live--;
+  };
+  return s;
+}
+const until = async (r, fn) => { for (let i = 0; i < 50 && !fn(); i++) await r.tick(); };
+const bgOf = (r) => r.cx.list().connectors.find(c => c.id === 'bg');
+
+test('slow old process + settings saved + disabled during the wait: the replacement is never started', async () => {
+  const slow = gate();
+  const r = rig();
+  const s = track(r, slow);
+  up(r.cx, r.mod({ background: true }));
+  await flush(r);
+  assert.equal(r.all.length, 1); assert.equal(s.live, 1);
+  up(r.cx, r.mod({ background: true, label: 'Renamed' }));   // settings saved: stops the old process, starts a replacement
+  await flush(r);
+  assert.equal(r.all.length, 1, 'the replacement waits on the gate');
+  assert.equal(r.all[0].disconnected, true);
+  const joined = r.cx.request('bg', 'm', {}, { timeoutMs: 5000 });   // joins the replacement start that is waiting
+  const rejected = assert.rejects(joined, { code: 'ECANCELLED' });
+  await flush(r);
+  up(r.cx, r.mod({ background: true, enabled: false }));   // disabled during the wait
+  slow.go();
+  await rejected;
+  await flush(r);
+  assert.equal(r.all.length, 1, 'no new client was created');
+  assert.equal(s.live, 0, 'the old process exited and nothing else runs');
+  assert.equal(bgOf(r).running, false);
+  assert.equal(r.pending().length, 0, 'no restart scheduled');
+  assert.equal(bgOf(r).lastError, null);
+  r.cx.shutdown();
+});
+
+test('slow old process + settings saved: the replacement starts only after the old one exited (never two at once)', async () => {
+  const slow = gate();
+  const r = rig();
+  const s = track(r, slow);
+  up(r.cx, r.mod({ background: true }));
+  await flush(r);
+  up(r.cx, r.mod({ background: true, label: 'Renamed' }));
+  await flush(r);
+  assert.equal(r.all.length, 1, 'the replacement has not started');
+  assert.equal(s.live, 1, 'the old process is still alive');
+  slow.go();
+  await until(r, () => r.all.length === 2 && bgOf(r).running);
+  assert.equal(r.all.length, 2);
+  assert.equal(bgOf(r).running, true);
+  assert.equal(s.live, 1, 'only the new process is alive');
+  assert.equal(s.max, 1, 'never two processes at once');
+  assert.equal(r.pending().length, 0);
+  r.cx.shutdown();
+});
+
+test('request() whose start outlasts timeoutMs rejects "timed out" and the request is never sent when the start finishes', async () => {
+  const g = gate();
+  const r = rig();
+  r.FakeClient.prototype.listTools = async function () { await g.p; return [{ name: 'one' }]; };
+  up(r.cx, r.mod());
+  await assert.rejects(() => r.cx.request('bg', 'm', { a: 1 }, { timeoutMs: 40 }), /timed out/);
+  g.go();
+  await until(r, () => bgOf(r).running);
+  assert.equal(bgOf(r).running, true, 'the process stays registered');
+  assert.equal(r.all.length, 1);
+  assert.equal(r.all[0].sent.length, 0, 'the late request was not sent to the module');
+  assert.equal(r.all[0].disconnected, false);
+  r.cx.shutdown();
+});
+
+test('settings saved during a start begun by request(): it is cancelled and the background module starts again by itself', async () => {
+  const g = gate();
+  const r = rig();
+  const s = track(r);
+  r.FakeClient.prototype.listTools = async function () { await g.p; return [{ name: 'one' }]; };
+  up(r.cx, r.mod({ background: false }));   // not started on its own
+  await flush(r);
+  assert.equal(r.all.length, 0);
+  const asked = r.cx.request('bg', 'm', {}, { timeoutMs: 5000 });
+  const rejected = assert.rejects(asked, { code: 'ECANCELLED' });
+  await flush(r);
+  assert.equal(r.all.length, 1, 'the request began a start');
+  up(r.cx, r.mod({ background: true }));   // settings saved while it is in flight
+  g.go();
+  await rejected;
+  await until(r, () => r.all.length === 2 && bgOf(r).running);
+  assert.equal(r.all[0].disconnected, true, 'the cancelled client was disconnected');
+  assert.equal(r.all.length, 2, 'afterCancel started it again');
+  assert.equal(bgOf(r).running, true);
+  assert.equal(r.all[0].sent.length + r.all[1].sent.length, 0, 'the cancelled request was never sent');
+  assert.equal(s.max, 1, 'never two processes at once');
+  r.cx.shutdown();
+});
