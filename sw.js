@@ -81,6 +81,7 @@ function desktopTarget(href) {
     try { name = decodeURIComponent(name); } catch { /* not encoded as expected: pass it on as sent */ }
     return `/?agent=${encodeURIComponent(name)}`;
   }
+  if (u.searchParams.get('wallet') === 'unlock') return '/?wallet=unlock';   // the wallet-locked notice: the desktop's Wallet panel
   return u.searchParams.get('update') === '1' ? '/?update=1' : '/';   // the update notice: the desktop's update card
 }
 // Offers a target to hub tabs (most recently used first); resolves with the first of them, in that order, that said

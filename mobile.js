@@ -1824,6 +1824,107 @@ function msgTimeLines(history, now = Date.now(), locale = [], zone = msgTimeZone
 }
 // ── message-time helpers (end) ──
 
+// Face ID / fingerprint unlock of the wallet (WebAuthn PRF). Shared verbatim with lib/ui-passkey.js and app.js
+// (test/ui-passkey.test.js keeps the three in step). The Wallet sheet below uses it.
+// ── passkey helpers (begin) ──
+function pkB64u(buf) {
+  const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function pkBytes(s) {
+  const t = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(t + '='.repeat((4 - (t.length % 4)) % 4));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function pkUsable(loc = location, w = window) {
+  if (!w.PublicKeyCredential || !navigator.credentials) return { ok: false, code: 'no_api', text: "This browser can't use passkeys." };
+  const host = loc.hostname || '';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) {
+    return { ok: false, code: 'bad_address', text: `Passkeys can't be used at the address ${host}. Open My Maestro at localhost or at its tailnet address instead.` };
+  }
+  if (loc.protocol === 'http:' && host !== 'localhost') {
+    return { ok: false, code: 'bad_address', text: `Face ID / fingerprint needs a secure (https) address, or localhost. This page is at ${host}.` };
+  }
+  return { ok: true, code: '', text: '' };
+}
+function pkErrorText(e) {
+  const name = e && e.name;
+  if (name === 'NotAllowedError') return 'Cancelled, or the device did not confirm it was you.';
+  if (name === 'InvalidStateError') return 'This device is already set up.';
+  if (name === 'SecurityError') return "This address can't use passkeys.";
+  if (name === 'AbortError') return 'Cancelled.';
+  return (e && e.message) || 'Something went wrong.';
+}
+async function pkUnlock(api) {
+  const o = await api('passkey/options', { purpose: 'unlock' });
+  const one = o.allowCredentials.length === 1;
+  const byCred = {};
+  for (const c of o.allowCredentials) byCred[c.id] = { first: pkBytes(o.prfSalts[c.id]) };
+  const publicKey = {
+    challenge: pkBytes(o.challenge), rpId: o.rpId, timeout: o.timeout, userVerification: 'required',
+    allowCredentials: o.allowCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
+    extensions: { prf: { evalByCredential: byCred, ...(one ? { eval: { first: pkBytes(o.prfSalts[o.allowCredentials[0].id]) } } : {}) } },
+  };
+  const cred = await navigator.credentials.get({ publicKey });
+  const prf = cred.getClientExtensionResults().prf?.results?.first;
+  if (!prf) throw new Error("This device didn't give the unlock secret. Use the passphrase instead.");
+  return api('passkey/unlock', {
+    challenge: o.challenge, id: cred.id,
+    clientDataJSON: pkB64u(cred.response.clientDataJSON), authenticatorData: pkB64u(cred.response.authenticatorData),
+    signature: pkB64u(cred.response.signature), prf: pkB64u(prf),
+  });
+}
+async function pkAdd(api, { passphrase, label }, confirmStep) {
+  const o = await api('passkey/options', { purpose: 'register', passphrase });
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: pkBytes(o.challenge), rp: o.rp, user: { ...o.user, id: pkBytes(o.user.id) }, pubKeyCredParams: o.pubKeyCredParams,
+    timeout: o.timeout, attestation: 'none', authenticatorSelection: o.authenticatorSelection,
+    excludeCredentials: o.excludeCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
+    extensions: { prf: { eval: { first: pkBytes(o.prfSalt) } } },
+  } });
+  const ext = cred.getClientExtensionResults().prf;
+  if (ext && ext.enabled === false) throw new Error("This device's passkeys can't unlock the wallet. Keep using the passphrase here.");
+  const pub = cred.response.getPublicKey ? cred.response.getPublicKey() : null;
+  if (!pub) throw new Error("This device's passkey type isn't supported here.");
+  let prf = ext?.results?.first, confirm;
+  if (!prf) {
+    await confirmStep();
+    const c = await api('passkey/options', { purpose: 'confirm', registerChallenge: o.challenge });
+    const g = await navigator.credentials.get({ publicKey: {
+      challenge: pkBytes(c.challenge), rpId: c.rpId, timeout: c.timeout, userVerification: 'required',
+      allowCredentials: [{ type: 'public-key', id: cred.rawId }],
+      extensions: { prf: { eval: { first: pkBytes(c.prfSalt) } } },
+    } });
+    prf = g.getClientExtensionResults().prf?.results?.first;
+    if (!prf) throw new Error("This device didn't give the unlock secret, so it can't unlock the wallet.");
+    confirm = { challenge: c.challenge, clientDataJSON: pkB64u(g.response.clientDataJSON), authenticatorData: pkB64u(g.response.authenticatorData), signature: pkB64u(g.response.signature) };
+  }
+  return api('passkey/register', {
+    passphrase, label, challenge: o.challenge,
+    credential: {
+      id: cred.id, clientDataJSON: pkB64u(cred.response.clientDataJSON), authenticatorData: pkB64u(cred.response.getAuthenticatorData()),
+      publicKey: pkB64u(pub), publicKeyAlgorithm: cred.response.getPublicKeyAlgorithm(),
+    },
+    prf: pkB64u(prf), ...(confirm ? { confirm } : {}),
+  });
+}
+function pkDeviceLabel(nav = navigator) {
+  const ua = String((nav && nav.userAgent) || '');
+  const plat = String((nav && nav.userAgentData && nav.userAgentData.platform) || '');
+  if (/iPhone|iPod/i.test(ua)) return 'iPhone';
+  if (/iPad/i.test(ua) || (/Macintosh/i.test(ua) && nav.maxTouchPoints > 1)) return 'iPad';
+  if (/^Android$/i.test(plat) || /Android/i.test(ua)) return 'Android phone';
+  if (/^macOS$/i.test(plat) || /Macintosh|Mac OS X/i.test(ua)) return 'Mac';
+  if (/^Windows$/i.test(plat) || /Windows/i.test(ua)) return 'Windows PC';
+  if (/^(Linux|Chrome OS|Chromium OS)$/i.test(plat) || /Linux|X11|CrOS/i.test(ua)) return 'Linux computer';
+  return 'This device';
+}
+// ── passkey helpers (end) ──
+
 // The line under a bubble (msgTimeLabel / msgTimeLine): below its right edge for the person, its left edge for the
 // agent. It sits outside the reply body, which repaints; '' removes it.
 function setBubbleTime(el, text) {
@@ -4458,6 +4559,156 @@ function onAboutClick(e) {
   else d.close();
 }
 
+// ── Wallet (⋮ menu, admins only): a full-screen sheet over GET /api/wallet/status. Locked or unlocked, unlock with
+// Face ID / fingerprint (pkUnlock) or the passphrase, set up or remove this phone's passkey (pkAdd), and the after-restart
+// notice switch. Like the desktop's Wallet panel; a /mobile?wallet=unlock link (the notice's tap) opens it. ──
+let walletStatus = null;   // the last GET /api/wallet/status
+let walletMsg = null;      // { text, ok }: the result line inside the sheet
+let walletBusy = false;
+async function walletApi(path, body) {
+  const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include' }
+    : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Request failed');
+  return j;
+}
+function walletSheet() {
+  let sh = $('wallet-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'wallet-sheet';
+  sh.className = 'rsn-sheet mh-sheet wallet-sheet';
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Wallet');
+  sh.dataset.noDirty = '';   // its fields are emptied before every request: nothing to lose
+  sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Wallet</span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body wl-body" tabindex="-1"></div>';
+  const close = () => { sh.classList.remove('open'); dialogGuard.closed(sh); };
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+  sh.addEventListener('click', (e) => { const b = e.target.closest('[data-wl]'); if (b && !walletBusy) walletAct(b.dataset.wl, b.dataset.id, b.dataset.label); });
+  sh.addEventListener('change', (e) => { if (e.target.id === 'wl-notice') walletLockedNotice(e.target); });
+  sh.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || walletBusy) return;
+    if (e.target.id === 'wl-pass') { e.preventDefault(); walletAct('unlock'); }
+    else if (e.target.id === 'wl-pk-pass') { e.preventDefault(); walletAct('pkadd'); }
+  });
+  sh.closeSheet = close;
+  document.body.appendChild(sh);
+  return sh;
+}
+function openWalletSheet() {
+  $('menu').classList.remove('open');
+  if (!isAdmin()) return;
+  const sh = walletSheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: sh.closeSheet }); }
+  walletMsg = null;
+  walletLoad();
+}
+async function walletLoad(msg) {
+  if (msg !== undefined) walletMsg = msg;
+  try { walletStatus = await walletApi('status'); }
+  catch (e) { walletStatus = null; walletMsg = { text: pkErrorText(e), ok: false }; }
+  walletPaint();
+}
+function walletPaint() {
+  const sh = $('wallet-sheet');
+  if (!sh || !sh.classList.contains('open')) return;
+  const body = sh.querySelector('.wl-body');
+  const s = walletStatus, ks = s && s.keystore;
+  const msg = walletMsg ? `<div class="sec-msg wl-msg${walletMsg.ok ? ' ok' : ''}" role="status">${esc(walletMsg.text)}</div>` : '';
+  if (!ks) { body.innerHTML = `<p class="wl-status">Loading…</p>${msg}`; return; }
+  if (!ks.exists) { body.innerHTML = `<p class="wl-status">No wallet is set up on this hub.</p>${msg}`; return; }
+  const n = Array.isArray(s.wallets) ? s.wallets.length : 0;
+  const pkOk = pkUsable(), pkList = Array.isArray(ks.passkeys) ? ks.passkeys : [];
+  const pkHere = pkOk.ok && pkList.some(p => p.rpId === location.hostname);
+  const unlockBox = ks.unlocked ? '' : `<div class="sec-section">
+      ${pkHere ? '<button type="button" class="wl-big" data-wl="pkunlock">Unlock with Face ID / fingerprint</button>' : ''}
+      <input id="wl-pass" type="password" autocomplete="off" placeholder="Wallet passphrase" aria-label="Wallet passphrase">
+      <div class="sec-actions"><button type="button" data-wl="unlock">Unlock with passphrase</button></div>
+    </div>`;
+  const rows = pkList.map(p => `<div class="wl-pk"><div class="wl-pk-info"><strong>${esc(p.label)}</strong>
+        <span class="sec-hint">${esc(p.rpId)} · added ${esc(new Date(p.createdAt).toLocaleDateString())}</span></div>
+        <button type="button" class="wl-rm" data-wl="pkremove" data-id="${esc(p.id)}" data-label="${esc(p.label)}">Remove</button></div>`).join('')
+    || '<div class="sec-hint">None set up yet.</div>';
+  const addForm = pkOk.ok ? `<input id="wl-pk-label" value="${esc(pkDeviceLabel())}" maxlength="40" placeholder="Name for this phone" aria-label="Name for this phone">
+      <input id="wl-pk-pass" type="password" autocomplete="off" placeholder="Wallet passphrase (needed once; never stored)" aria-label="Wallet passphrase">
+      <div id="wl-confirm-row"></div>
+      <div class="sec-actions"><button type="button" class="go" data-wl="pkadd">Add this phone</button></div>`
+    : `<div class="sec-hint">${esc(pkOk.text)}</div>`;
+  body.innerHTML = `<p class="wl-status">${ks.unlocked ? '&#x1F513; Unlocked' : '&#x1F512; Locked'} · ${n} wallet${n === 1 ? '' : 's'}</p>${msg}${unlockBox}
+    <div class="sec-section"><div class="sec-title">Face ID / fingerprint</div>
+      <div class="sec-hint">Unlock with this phone's Face ID, fingerprint or screen lock instead of the passphrase. Set it up once with the passphrase.</div>
+      ${rows}${addForm}
+    </div>
+    <label class="wl-notice"><input type="checkbox" id="wl-notice" ${s.lockedNotice ? 'checked' : ''}> Tell this phone when the wallet is locked after a restart</label>`;
+}
+function walletSetBusy(on) {
+  walletBusy = on;
+  const sh = $('wallet-sheet');
+  if (sh) sh.querySelectorAll('.wl-body button, .wl-body input').forEach(el => { el.disabled = on; });
+}
+function walletShowMsg(text, ok) {
+  walletMsg = { text, ok: !!ok };
+  const sh = $('wallet-sheet');
+  let el = sh && sh.querySelector('.wl-msg');
+  if (!el && sh) {
+    el = wkEl('div', 'sec-msg wl-msg');
+    el.setAttribute('role', 'status');
+    const first = sh.querySelector('.wl-body .wl-status');
+    if (first) first.after(el); else sh.querySelector('.wl-body').prepend(el);
+  }
+  if (el) { el.textContent = text; el.classList.toggle('ok', !!ok); }
+}
+async function walletAct(action, id, label) {
+  const sh = $('wallet-sheet');
+  const val = (i) => { const el = sh && sh.querySelector('#' + i); return el ? el.value : ''; };
+  try {
+    if (action === 'pkremove') {
+      if (!confirm(`Remove ${label}? That device will no longer unlock the wallet.`)) return;
+      walletSetBusy(true); await walletApi('passkey/remove', { id });
+      walletSetBusy(false); return walletLoad({ text: 'Removed.', ok: true });
+    }
+    if (action === 'pkunlock') {
+      walletSetBusy(true); await pkUnlock(walletApi);
+      walletSetBusy(false); return walletLoad({ text: 'Unlocked until the hub restarts.', ok: true });
+    }
+    if (action === 'unlock' || action === 'pkadd') {
+      const passEl = sh && sh.querySelector(action === 'unlock' ? '#wl-pass' : '#wl-pk-pass');
+      const passphrase = passEl ? passEl.value : '';
+      const name = (val('wl-pk-label') || '').trim() || pkDeviceLabel();
+      if (!passphrase) { walletShowMsg('Type the wallet passphrase first.', false); if (passEl) passEl.focus(); return; }
+      passEl.value = '';   // the passphrase lives only in this request
+      walletSetBusy(true);
+      if (action === 'unlock') {
+        await walletApi('unlock', { passphrase });
+        walletSetBusy(false); return walletLoad({ text: 'Unlocked until the hub restarts.', ok: true });
+      }
+      const confirmStep = () => new Promise((resolve) => {
+        const row = sh.querySelector('#wl-confirm-row'); if (!row) return resolve();
+        row.innerHTML = '<div class="sec-hint">One more tap: confirm with this phone.</div><button type="button" class="wl-big" id="wl-confirm-btn">Confirm with Face ID / fingerprint</button>';
+        $('wl-confirm-btn').onclick = () => { row.innerHTML = ''; resolve(); };
+      });
+      await pkAdd(walletApi, { passphrase, label: name }, confirmStep);
+      walletSetBusy(false); return walletLoad({ text: `Added. ${name} can now unlock the wallet.`, ok: true });
+    }
+  } catch (e) {
+    walletSetBusy(false);
+    const row = sh && sh.querySelector('#wl-confirm-row'); if (row) row.innerHTML = '';
+    walletShowMsg(pkErrorText(e), false);
+  }
+}
+// The after-restart notice "Your wallet is locked": on or off; the box goes back when the hub refuses.
+async function walletLockedNotice(box) {
+  const on = !!box.checked;
+  try {
+    const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ walletLockedNotice: on }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Could not save that.');
+    if (walletStatus) walletStatus.lockedNotice = on;
+  } catch (e) { box.checked = !on; walletShowMsg(pkErrorText(e), false); }
+}
+
 // ── Restart the hub (same POST /api/restart the desktop button uses; the
 // service manager brings the hub back, so the page only has to wait) ─────────
 function confirmRestart() {
@@ -5027,6 +5278,7 @@ function wire() {
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
   $('menu-workers').addEventListener('click', () => openWorkerSheet('history'));
+  $('menu-wallet')?.addEventListener('click', openWalletSheet);   // ?.: a phone page cached from before has no menu entry
   $('menu-memory')?.addEventListener('click', openMemorySheet);   // a phone page cached from before this line has no menu entry
   $('chat-workers-btn').addEventListener('click', () => openWorkerSheet('list'));
   $('menu-compact').addEventListener('click', compressNow);
@@ -5181,6 +5433,7 @@ function applyMultiUser() {
   if (hubMe) {
     $('menu-users').hidden = !hubMe.isAdmin;
     if ($('menu-connectors')) $('menu-connectors').hidden = !hubMe.isAdmin;   // admins only; a page cached from before has no such item
+    if ($('menu-wallet')) $('menu-wallet').hidden = !hubMe.isAdmin;   // admins only
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
@@ -5900,6 +6153,13 @@ async function init() {
   const fromUpdatePush = new URLSearchParams(location.search).get('update') === '1';
   if (fromUpdatePush) { const u = new URL(location.href); u.searchParams.delete('update'); window.history.replaceState(window.history.state, '', u.pathname + u.search + u.hash); }
   refreshUpdateCheck().then(() => { if (fromUpdatePush) openUpdatePrompt(); });
+  // The "wallet is locked" notice's tap (/mobile?wallet=unlock) opens the Wallet sheet once and is then dropped from the
+  // address. The passkey prompt needs a tap of its own, so only the sheet opens here.
+  if (new URLSearchParams(location.search).get('wallet') === 'unlock') {
+    const u = new URL(location.href); u.searchParams.delete('wallet');
+    window.history.replaceState(window.history.state, '', u.pathname + u.search + u.hash);
+    openWalletSheet();
+  }
   paintVersionLabel();
   setInterval(refreshUpdateCheck, 30 * 60 * 1000);
 }

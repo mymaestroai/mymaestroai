@@ -232,6 +232,24 @@
     .mh-item { margin: 4px 0 0 18px; color: var(--text-dim); line-height: 1.4; }
     .mh-t { font-weight: 600; } .mh-t-red { color: #d4588b; } .mh-t-amber { color: #c9a227; }
     .mh-foot { margin-top: 14px; color: var(--text-dim); font-size: 13px; }
+    /* Wallet sheet (mobile.js openWalletSheet): reuses the Memory sheet's frame */
+    .wl-status { margin: 8px 0; font-size: 16px; font-weight: 600; }
+    .wl-body .sec-section { padding: 12px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+    .wl-body .sec-title { font-weight: 600; }
+    .wl-body .sec-hint { font-size: 13px; color: var(--text-dim); }
+    .wl-body .sec-msg { min-height: 1em; margin: 6px 0; font-size: 14px; color: var(--error); }
+    .wl-body .sec-msg.ok { color: var(--success); }
+    .wl-body input[type="password"], .wl-body input:not([type]) { min-height: 44px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 16px; }
+    .wl-body .sec-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .wl-body .sec-actions button { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); }
+    .wl-body .sec-actions button.go { background: var(--accent); color: #fff; }
+    .wl-body .wl-big { min-height: 52px; padding: 0 16px; border-radius: 10px; background: var(--accent); color: #fff; font-size: 16px; font-weight: 600; }
+    .wl-body button:disabled, .wl-body input:disabled { opacity: .55; }
+    .wl-pk { display: flex; align-items: center; gap: 8px; }
+    .wl-pk-info { flex: 1; min-width: 0; display: flex; flex-direction: column; word-break: break-word; }
+    .wl-rm { min-height: 40px; padding: 0 12px; border-radius: 8px; background: transparent; border: 1px solid var(--border-strong); color: var(--error); }
+    .wl-notice { display: flex; align-items: flex-start; gap: 8px; padding: 14px 0; font-size: 14px; }
+    .wl-notice input { margin-top: 3px; }
     .wk-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; outline: none; padding: 6px 12px calc(16px + var(--sab)); color: var(--text); font-size: 14px; }
     .wk-row { display: grid; grid-template-columns: 16px minmax(0,1fr) auto auto; column-gap: 10px; row-gap: 2px; align-items: center; padding: 11px 4px; border-bottom: 1px solid var(--border); }
     .wk-row .wk-mark { grid-row: 1 / span 2; }
@@ -651,6 +669,7 @@
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
     <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
     <button id="menu-workers">&#x1F477; Worker history</button>
+    <button id="menu-wallet" hidden>&#x1F45B; Wallet</button>
     <button id="menu-memory" hidden><span>&#x1F9E0; Memory</span><span class="menu-count" id="menu-memory-count"></span></button>
     <button id="menu-compact" class="chat-only">&#x2699; Compress now</button>
     <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>
