@@ -126,7 +126,7 @@ async function backupWith(name, mod, { extra = [], places: more } = {}) {
 test('a backup is put to a module and checked: recorded when it matches, an error recorded (local copy kept) when it does not or the put fails', async () => {
   const ok = fakeModule();
   const a = await backupWith('mod-ok', ok);
-  assert.deepStrictEqual(a.r.places[1], { kind: 'module', id: 'drive', label: 'Google Drive', name: a.r.name, size: a.r.size, fileId: 'fid-1' });
+  assert.deepStrictEqual(a.r.places[1], { kind: 'module', id: 'drive', label: 'Google Drive', name: a.r.name, size: a.r.size, fileId: 'fid-1', keyId: places.index(a.inst.root)[0].keyId });
   assert.match(places.index(a.inst.root)[0].md5, /^[0-9a-f]{32}$/, 'the record keeps the md5 beside the sha256');
   assert.strictEqual(ok.putCalls[0].file, a.r.places[0].file, 'the module reads the local file');
   assert.strictEqual(md5Of(a.r.places[0].file), crypto.createHash('md5').update(ok.store.get(a.r.name).bytes).digest('hex'));
@@ -360,4 +360,87 @@ test('a backup records the local and folder places before a module upload, and a
   const plain = await backupWith('mod-nomd5', null, { places: [] });
   assert.ok(!('md5' in places.index(plain.inst.root)[0]), 'no md5 without a module target');
   mod.put = put;
+});
+
+test('a module copy keeps its own key id through a re-encrypt rotation: a second finish does not retire the old key while Drive holds the copy', async () => {
+  const { inst, mod, svc, r } = await withBackup('mod-own-key');
+  const k1 = places.index(inst.root)[0].keyId;
+  assert.strictEqual(places.index(inst.root)[0].places[1].keyId, k1, 'the module entry records the key it was made with');
+  const rot = await svc.startRotation({ password: 'first long passphrase', newPassword: 'second long passphrase', logN: 15 });
+  assert.strictEqual(rot.waiting, 2, 'local and Drive, both on K1');
+  const f1 = await svc.finishRotation({ oldPassword: 'first long passphrase', newPassword: 'second long passphrase' });
+  assert.strictEqual(f1.reencrypted, 1);
+  assert.deepStrictEqual(f1.retired, []);
+  const rec = places.index(inst.root)[0];
+  assert.notStrictEqual(rec.keyId, k1, 'the record moved to the new key');
+  assert.strictEqual(rec.places[1].keyId, k1, 'the Drive entry stayed on K1');
+  const listed = (await svc.list())[0];
+  assert.deepStrictEqual(listed.places.map(p => [p.kind, p.keyId]), [['local', rec.keyId], ['module', k1]]);
+  assert.strictEqual(svc.status().retiring.length, 1);
+  const f2 = await svc.finishRotation({ oldPassword: 'first long passphrase', newPassword: 'second long passphrase' });
+  assert.deepStrictEqual(f2.retired, [], 'a second finish must not retire K1 while Drive holds a K1 copy');
+  assert.strictEqual(f2.notes.length, 1);
+  assert.strictEqual(svc.status().retiring.length, 1);
+  assert.strictEqual(mod.store.size, 1);
+  // the copy goes (keep rules): then K1 retires
+  mod.store.delete(r.backup.name);
+  const f3 = await svc.finishRotation({ oldPassword: 'first long passphrase', newPassword: 'second long passphrase' });
+  assert.deepStrictEqual(f3.retired, [k1]);
+  assert.strictEqual(svc.status().retiring.length, 0);
+});
+
+test('after the re-encrypt pass, a delete-mode finish removes the Drive copy by id and then retires the old key', async () => {
+  const { mod, svc } = await withBackup('mod-own-key-del');
+  await svc.startRotation({ password: 'first long passphrase', newPassword: 'second long passphrase', logN: 15 });
+  await svc.finishRotation({ oldPassword: 'first long passphrase', newPassword: 'second long passphrase' });
+  const f = await svc.finishRotation({ newPassword: 'second long passphrase', action: 'delete' });
+  assert.strictEqual(f.deleted, 1);
+  assert.strictEqual(mod.store.size, 0);
+  assert.strictEqual(f.retired.length, 1);
+});
+
+test('a module copy of an old record (no key on it) uses the record key only if never re-encrypted; otherwise its key is unknown and blocks retiring', async () => {
+  const { inst, svc } = await withBackup('mod-legacy');
+  const rec = places.index(inst.root)[0];
+  const strip = (extra) => places.recordInIndex(inst.root, { ...rec, ...extra, places: rec.places.map(q => { const { keyId, ...rest } = q; return q.kind === 'module' ? rest : q; }) });
+  strip({});
+  assert.strictEqual((await svc.list())[0].places[1].keyId, rec.keyId, 'never reindexed: the record key');
+  strip({ reindexed: true });
+  const p = (await svc.list())[0].places[1];
+  assert.strictEqual(p.keyId, null);
+  assert.strictEqual(p.keyUnknown, true);
+  await svc.startRotation({ password: 'first long passphrase', newPassword: 'second long passphrase', logN: 15 });
+  const f = await svc.finishRotation({ oldPassword: 'first long passphrase', newPassword: 'second long passphrase', action: 'delete' });
+  assert.deepStrictEqual(f.retired, [], 'an unknown key on a copy blocks retirement');
+  assert.ok(f.notes.some(n => /unknown key/.test(n)), JSON.stringify(f.notes));
+});
+
+test('rotation does not retire while a module failed to list in the same pass, or a record has a copy in a module that is switched off', async () => {
+  const a = await withBackup('mod-inv-fail');
+  await a.svc.startRotation({ password: 'first long passphrase', newPassword: 'second long passphrase', logN: 15 });
+  a.mod.failList = true;
+  const f = await a.svc.finishRotation({ oldPassword: 'first long passphrase', newPassword: 'second long passphrase', action: 'delete' });
+  assert.deepStrictEqual(f.retired, []);
+  assert.ok(f.notes.some(n => /could not be listed/.test(n)), JSON.stringify(f.notes));
+  const c = await a.svc.changePassword({ password: 'second long passphrase', newPassword: 'third long passphrase', logN: 15 });
+  assert.ok(c.notes.some(n => /could not be listed/.test(n)));
+
+  // places.list reports the failure and keeps its return shape
+  const fails = [];
+  const listed = await places.list(a.inst.root, [{ kind: 'module', id: 'drive', label: 'Google Drive' }], a.mod, (p, e) => fails.push([p.id, e.message]));
+  assert.deepStrictEqual(listed, []);
+  assert.deepStrictEqual(fails, [['drive', 'offline']]);
+
+  // the module is switched off: the record still says a copy is there on the old key
+  const inst = makeInstall(TMP, 'mod-inv-off');
+  const mod = fakeModule();
+  let on = true;
+  const svc = createBackupService({ ...inst, platform: 'linux', settings: memSettings(), hubInfo: () => ({}), modulePlaces: { ...mod, places: () => (on ? mod.places() : []) }, wrongMax: 100 });
+  await svc.setup('first long passphrase', { logN: 15 });
+  await svc.backupNow({ now: true });
+  await svc.startRotation({ password: 'first long passphrase', newPassword: 'second long passphrase', logN: 15 });
+  on = false;
+  const g = await svc.finishRotation({ oldPassword: 'first long passphrase', newPassword: 'second long passphrase', action: 'delete' });
+  assert.deepStrictEqual(g.retired, []);
+  assert.ok(g.notes.some(n => /switched off or removed/.test(n)), JSON.stringify(g.notes));
 });

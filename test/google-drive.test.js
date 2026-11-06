@@ -224,19 +224,19 @@ test('put: an md5 mismatch deletes the upload and throws', async () => {
   fs.rmSync(dir, { recursive: true });
 });
 
-test('put: a file with the same name is replaced after the new one is verified', async () => {
+test('put: never deletes another file with the same name (two installs sharing an id could delete each other)', async () => {
   const g = fakeGoogle();
   const { d } = driveFor(g);
   const dir = tmp();
   const file = path.join(dir, 'b.bin');
   fs.writeFileSync(file, 'first-copy');
-  await d.put(file, 'same.mmbak', INSTALL);
-  const oldId = backups(g)[0].id;
+  const first = await d.put(file, 'same.mmbak', INSTALL);
   fs.writeFileSync(file, 'second-copy!');
-  await d.put(file, 'same.mmbak', INSTALL);
-  assert.equal(backups(g).length, 1);
-  assert.notEqual(backups(g)[0].id, oldId);
-  assert.equal(backups(g)[0].data.toString(), 'second-copy!');
+  const second = await d.put(file, 'same.mmbak', INSTALL);
+  assert.notEqual(second.id, first.id);
+  assert.equal(backups(g).length, 2, 'both uploads are kept');
+  assert.ok(backups(g).some(f => f.id === first.id && f.data.toString() === 'first-copy'));
+  assert.ok(backups(g).some(f => f.id === second.id && f.data.toString() === 'second-copy!'));
   fs.rmSync(dir, { recursive: true });
 });
 
@@ -289,7 +289,7 @@ test('list pages through the install folder and returns ids; remove deletes only
   await assert.rejects(d.list('nothex'), /16 hex/);
 });
 
-test('put: replacing a same-named file touches only this install\'s folder, only other ids, and only after the new upload is verified', async () => {
+test('put: deletes nothing but its own bad upload, and a corrupt upload leaves existing same-named files alone', async () => {
   const g = fakeGoogle();
   const { d } = driveFor(g);
   const mine = await d.folder(INSTALL);
@@ -299,10 +299,9 @@ test('put: replacing a same-named file touches only this install\'s folder, only
   const dir = tmp(); const file = path.join(dir, 'b.bin'); fs.writeFileSync(file, 'new-one');
   const r = await d.put(file, 'same', INSTALL);
   assert.ok(g.files.includes(alien), 'another install\'s file is untouched');
-  assert.ok(!g.files.includes(old));
-  assert.deepEqual(backups(g).filter((f) => f.parent === mine).map((f) => f.id), [r.id]);
-  const dels = g.calls.filter((c) => c.method === 'DELETE').map((c) => c.url.split('/').pop());
-  assert.deepEqual(dels, [old.id], 'only the old id was deleted, never the new one');
+  assert.ok(g.files.includes(old), 'the older same-named file is untouched');
+  assert.deepEqual(backups(g).filter((f) => f.parent === mine).map((f) => f.id).sort(), [old.id, r.id].sort());
+  assert.deepEqual(g.calls.filter((c) => c.method === 'DELETE'), [], 'a good upload deletes nothing');
   // a corrupt upload leaves the existing copy alone
   const g2 = fakeGoogle({ corrupt: true });
   const { d: d2 } = driveFor(g2);

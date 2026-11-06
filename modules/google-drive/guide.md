@@ -1,8 +1,8 @@
 # Google Drive backups: setup guide
 
 This module keeps a copy of every nightly backup in the Google Drive of the account that signs in. The copies are
-already encrypted when they leave this computer. It uses Google's per-file permission: My Maestro can see and change
-only the files it creates, its backup folder and the backups in it, nothing else in your Drive.
+already encrypted when they leave this computer. My Maestro works only in its own backup folder. Google's per-file
+permission covers only the files the app creates there, or files you choose to share with it.
 
 ## What each step does
 

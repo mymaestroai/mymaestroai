@@ -169,7 +169,6 @@ function createDrive({ clientId, clientSecret, refreshToken, fetch = globalThis.
   }
 
   const inFolder = (id) => `'${id}' in parents and trashed=false`;
-  const byName = (id, name) => `${inFolder(id)} and name='${q(name)}'`;
 
   async function del(id) {
     const r = await send(`${API}/files/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -194,7 +193,7 @@ function createDrive({ clientId, clientSecret, refreshToken, fetch = globalThis.
     return f;
   }
 
-  // Resumable upload of a local file; returns { name, size, md5 } once Drive's own size and checksum match.
+  // Resumable upload of a local file; returns { name, size, md5, id } once Drive's own size and checksum match.
   async function put(file, name, install) {
     if (typeof name !== 'string' || !name.trim()) throw fail('A name is needed for the backup copy.');
     const st = await fs.promises.stat(file);
@@ -289,8 +288,6 @@ function createDrive({ clientId, clientSecret, refreshToken, fetch = globalThis.
       throw fail('Google Drive stored a different copy than the one sent, so the upload was removed. Try again.');
     }
 
-    // The new copy is safe: drop older files with the same name.
-    for (const old of await listAll(byName(parent, name), 'id')) if (old.id !== fileId) await del(old.id);
     return { name, size, md5, id: fileId };
   }
 

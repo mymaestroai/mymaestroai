@@ -440,6 +440,9 @@ test('hub capability: a hub tool without the flag is refused; with it it works; 
   // a guess at the field does not help: an agent-style call carrying a made-up __hub is refused too
   assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: 'guess' }), /only for the hub's own calls/);
   assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: '' }, { hub: false }), /only for the hub's own calls/);
+  // as long as the real secret (64) but not hex: refused, and never an exception
+  assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: 'é'.repeat(64) }), /only for the hub's own calls/);
+  assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: 'é'.repeat(32) + 'a'.repeat(32) }), /only for the hub's own calls/);
   const ok = JSON.parse(await r.cx.callTool('fakebackup', 'backup_list', { install: '0123456789abcdef', __hub: 'ignored' }, { hub: true }));
   assert.deepStrictEqual(ok.argKeys, ['install'], 'the module server saw the arguments without __hub');
   assert.strictEqual(ok.hubEnv, false, 'the module server does not get the secret in its environment');
