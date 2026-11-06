@@ -234,3 +234,67 @@ test('the guard falls back to the safe default when a stored setting is invalid,
   r.mods.setEnabled('fakebank', false);
   assert.match(await order({ pair: 'BTC-USD', usd: 1 }), /Fake Bank is switched off in this hub/, 'a handler captured before the switch-off is refused at call time');
 });
+
+test('catalog, health and oauth fields: accepted when right, refused with a plain reason when not', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(FIX_ROOT, 'fakesignin', 'module.json'), 'utf8'));
+  const probs = (m) => manifestLib.validateManifest(m, 'fakesignin').problems.join(' | ');
+  assert.strictEqual(probs(base), '');
+  const { catalog, health, oauth, ...bare } = base;
+  assert.strictEqual(probs(bare), '', 'all the new fields are optional');
+  assert.match(probs({ ...base, catalog: { verified: '2026-02-30' } }), /real date/);
+  assert.match(probs({ ...base, catalog: { verified: 'yesterday' } }), /real date/);
+  assert.match(probs({ ...base, catalog: { verified: '2999-01-01' } }), /in the future/);
+  assert.match(probs({ ...base, catalog: { api: 'x'.repeat(41) } }), /at most 40 characters/);
+  assert.match(probs({ ...base, catalog: { official: 'yes' } }), /true or false/);
+  assert.match(probs({ ...base, health: {} }), /health must be/);
+  assert.match(probs({ ...base, oauth: { ...oauth, deviceUrl: 'http://auth.example.com/device' } }), /deviceUrl must be an https/);
+  assert.match(probs({ ...base, oauth: { ...oauth, tokenUrl: 'ftp://x' } }), /tokenUrl must be an https/);
+  assert.match(probs({ ...base, oauth: { ...oauth, scopes: [] } }), /scopes/);
+  assert.match(probs({ ...base, oauth: { ...oauth, clientSecretSecret: 'NOT_DECLARED' } }), /not declared in secrets/);
+  const v = manifestLib.validateManifest(bare, 'fakesignin');
+  assert.match(manifestLib.validateSetup({ steps: [{ id: 's', type: 'signin', title: 'S' }, { id: 'f', type: 'finish', title: 'F' }] }, v, {}).join(' | '), /needs an oauth block/);
+});
+
+test('a health check that index.js does not export breaks the module; hasGuide is detected from guide.md', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-h-'));
+  try {
+    const copy = path.join(dir, 'fakesignin');
+    fs.cpSync(path.join(FIX_ROOT, 'fakesignin'), copy, { recursive: true });
+    assert.strictEqual(manifestLib.loadModule(copy).hasGuide, true);
+    fs.unlinkSync(path.join(copy, 'guide.md'));
+    assert.strictEqual(manifestLib.loadModule(copy).hasGuide, false);
+    const j = JSON.parse(fs.readFileSync(path.join(copy, 'module.json'), 'utf8')); j.health.check = 'nope';
+    fs.writeFileSync(path.join(copy, 'module.json'), JSON.stringify(j));
+    assert.match(manifestLib.loadModule(copy).problems.join(' | '), /health.check "nope" is not exported/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('setAgents: refuses member agents, temporary workers and non-wallet agents on a money module; drops leads; stores through the module path', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-sa-'));
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: McpStdioClient, log: () => {}, unlockTtlMs: 0 });
+  const mods = createModules({
+    root: FIX_ROOT, dataDir: path.join(dir, 'modules'), stateFile: path.join(dir, 'modules.json'), connectorsFile: path.join(dir, 'connectors.json'), connectors: cx,
+    isWalletAgent: (n) => n === 'sam', isMemberOwned: (a) => a.owner === 'u_member', isVirtual: (n) => n === 'temp1',
+    listAgents: () => [{ name: 'owner', lead: true }, { name: 'sam' }, { name: 'helper' }, { name: 'kidbot', owner: 'u_member' }, { name: 'temp1' }],
+    log: () => {},
+  });
+  try {
+    await mods.runStep('fakebank', 'install', {});
+    await mods.runStep('fakesignin', 'install', {});
+    const agentsOf = (id) => cx.list().connectors.find(c => c.id === id).agents;
+    assert.throws(() => mods.setAgents('fakebank', ['kidbot']), /unknown, or owned by a member/);
+    assert.throws(() => mods.setAgents('fakebank', ['temp1']), /temporary worker/);
+    assert.throws(() => mods.setAgents('fakebank', ['helper']), /not a wallet agent/);
+    assert.throws(() => mods.setAgents('fakebank', ['ghost']), /not an agent/);
+    assert.deepStrictEqual(agentsOf('fakebank'), [], 'a refused list stores nothing');
+    assert.deepStrictEqual(mods.setAgents('fakebank', ['owner', 'sam', 'sam'], { by: 'owner' }), ['sam'], 'the lead is dropped silently');
+    assert.deepStrictEqual(agentsOf('fakebank'), ['sam']);
+    assert.deepStrictEqual(mods.setAgents('fakesignin', ['helper', 'sam']), ['helper', 'sam'], 'a non-money module takes any admin-side agent');
+    const d = mods.detail('fakesignin');
+    assert.deepStrictEqual(d.leads, ['owner']);
+    assert.deepStrictEqual(d.catalog, { verified: '2026-01-15', api: 'Fake Mail API v1', official: false });
+    assert.strictEqual(d.health, true); assert.strictEqual(d.hasGuide, true); assert.strictEqual(d.lastCheck, null);
+    const l = mods.list().find(x => x.id === 'fakebank');
+    assert.strictEqual(l.catalog, null); assert.strictEqual(l.health, false); assert.strictEqual(l.hasGuide, false);
+  } finally { cx.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

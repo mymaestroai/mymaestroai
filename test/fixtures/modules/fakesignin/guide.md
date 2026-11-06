@@ -1,0 +1,1 @@
+# Fake Mail setup guide

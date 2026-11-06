@@ -8,6 +8,7 @@ modules/<id>/
   module.json   what it is, its risk, what it needs, secrets, settings, tool server, tool classes
   setup.json    the guided setup, step by step
   index.js      optional: checks for "check" steps, guard() for per-call limits
+  guide.md      optional: a longer setup guide (detected from the file; nothing to declare)
 ```
 
 The core (`lib/modules/`) runs the setup, stores state in `data/modules.json`, installs the tool server into
@@ -28,6 +29,12 @@ as for any connector. A module's connector can only be changed by the module (th
 | `settings` | `[{ "key", "type": "boolean" \| "number" \| "string" \| "list" \| "choice", "label", "help", "default", "min", "max", "pattern", "options", "multiple" }]`. Every setting needs a default, and the default must be the safe choice: an invalid stored value falls back to it. |
 | `tools` | Tool name → `read` \| `write` \| `send` \| `money` \| `off`. **Unlisted tools are hidden**, so a new package version cannot add a tool nobody classified. |
 | `docs` | `{ "homepage", "revoke" }`; `revoke` says how to cut access at the provider. |
+| `catalog` | Optional, for the catalog on the page: `{ "verified": "YYYY-MM-DD", "api": "up to 40 characters", "official": true \| false }`. `verified` must be a real date, not in the future. Invalid values make the module "broken". |
+| `health` | Optional: `{ "check": "<name of a check exported by index.js>" }`. Switched-on modules with a health check are checked every night (see Health check below). |
+| `oauth` | Needed by a `signin` step: `{ "flow": "device", "deviceUrl", "tokenUrl", "scopes": [...], "clientIdSecret", "clientSecretSecret", "refreshTokenSecret" }`. Both URLs must be `https`; the three secret names must be declared in `secrets`. |
+
+The API and the lists show `catalog` (or null), `health` (true when a check is declared), `hasGuide` (true when the
+folder has `guide.md`) and `lastCheck`.
 
 Tool classes map to the hub's tool policy: `read` → reading outside, `write` → writing outside, `send` → sending,
 `money` → money (allowed only for agents named in `settings.walletAgents`; the module's `guard()` sets the limits).
@@ -45,8 +52,38 @@ Tool classes map to the hub's tool policy: `read` → reading outside, `write` �
 | `secrets` | Password fields, or a key-file upload | `fields` (secret names), `keyFile: { "label", "fields": { "SECRET": ["json", "keys", "to", "try"] } }` |
 | `check` | Runs `checks[check]` from index.js through the guard and shows the result | `check` |
 | `settings` | A form for some settings | `fields` (setting keys) |
-| `grant` | Pick agents. Money modules: wallet agents only; member agents never | |
+| `grant` | Pick agents (see Who can use a module). Money modules: wallet agents only; member agents never | |
+| `signin` | "Sign in" with a short code shown to the person (OAuth device flow). Needs the `oauth` block in module.json and the client ID and secret saved first (an earlier `secrets` step). Done when the sign-in succeeds | |
 | `finish` | Switches the module on when every non-optional step is done | |
+
+### Sign-in (`signin` step)
+
+Admin-only routes: `POST /api/modules/<id>/signin/start` replies `{ userCode, verificationUrl, intervalSec, expiresAt }`
+(never the device code, which stays in the hub's memory; one pending sign-in per module); `POST .../signin/poll`
+replies `{ status: 'pending' }`, `{ status: 'ok' }` (the refresh token is saved into `refreshTokenSecret` and the step
+is marked done), `{ status: 'denied' | 'expired', message }`, or 409 "Start the sign-in again." Tokens and codes are
+never logged or sent to the page. The provider is not asked before the polling interval has passed.
+
+## Who can use a module
+
+The flagged lead agent (`lead: true` in data/agents.json) can always use every module; other agents only when listed
+in the module's connector. A lead that is not listed gets no money tools. `setAgents(id, names, { by })` on the
+modules instance (used by the `grant` step) stores the list through the module path. It refuses unknown agents,
+member-owned agents, temporary workers and, for a money module, agents that are not wallet agents; leads are dropped
+from the list silently.
+
+## Health check
+
+With `health.check` declared, `lib/modules/health.js` runs that check every night (the hub's night window; also at
+any hour once the last look is 48 hours old) for each module that is finished and switched on, one at a time. A
+thrown error counts as a failed check. When a module goes from passing (or never checked) to failing, admins get one
+phone notice ("<name> needs attention", opening `/modules#<id>`); a notice that reached no device is retried on the
+next hourly tick, and the marker is cleared when the check passes again. A module that failed stays on the list
+until it passes. State: `data/modules-health.json`.
+
+Ask Maestro: `GET /api/modules/<id>/help?step=<step id>&error=<text>` (admin) answers `{ agent, message }`: the first
+lead agent and a ready-made help request (it names the step and the error shown, and `modules/<id>/guide.md` when the
+folder has one). The page sends it to that agent. No lead: 409.
 
 ## index.js
 

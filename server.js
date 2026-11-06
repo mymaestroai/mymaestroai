@@ -1783,7 +1783,7 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/modules' || pathname.startsWith('/api/modules/')) {
       const mods = require('./lib/modules').getModules();
       const bodyJson = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
-      const fail = (e) => jsonResponse(res, 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}) });
+      const fail = (e) => jsonResponse(res, e.status === 409 ? 409 : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}) });
       // Changes come from a person on the page, never from the hub's internal service identity (agents' calls back into the hub).
       if (req.method !== 'GET' && req.hubService) return jsonResponse(res, 403, { error: 'Module changes need a signed-in admin.' });
       try {
@@ -1791,6 +1791,10 @@ async function handleHttpRequest(req, res) {
         let m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})$/);
         if (m && req.method === 'GET') return jsonResponse(res, 200, { ok: true, module: mods.detail(m[1]) });
         if (m && req.method === 'DELETE') return jsonResponse(res, 200, mods.remove(m[1]));
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/signin\/(start|poll)$/);
+        if (m && req.method === 'POST') return jsonResponse(res, 200, m[2] === 'start' ? await mods.signinStart(m[1]) : await mods.signinPoll(m[1]));
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
+        if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(step|check|settings|enable|disable|audit)$/);
         if (m) {
           const id = m[1], act = m[2];
@@ -3155,6 +3159,9 @@ server.listen(PORT, HOST, () => {
   // the nightly check off (Check now still works).
   try { if (process.env.HUB_MEMORY_HEALTH !== 'off') require('./lib/memory-health').getMemoryHealth().schedule(); }
   catch (e) { console.warn(`[memory-health] ${e.message}`); }
+  // Data connector health: a nightly check of every switched-on module that declares one (lib/modules/health).
+  try { require('./lib/modules/health').getModulesHealth().start(); }
+  catch (e) { console.warn(`[modules-health] ${e.message}`); }
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).
