@@ -319,15 +319,67 @@ function lookups(e, over = {}) {
   return e;
 }
 
-test('a connectorFor that throws in the drain drops the notice as not available; deliver() is not left pending', async () => {
-  const e = lookups(setup(), { connectorFor: (n) => n >= 2 });   // call 1 is deliver's own check
+test('a connectorFor that throws once in the drain defers the notice (not dropped); deliver() is not left pending; delivered at the next retry', async () => {
+  const e = lookups(setup(), { connectorFor: (n) => n === 2 });   // call 1 is deliver's own check
   const r = await Promise.race([e.n.deliver('demo', { text: 'hi' }), new Promise((res) => setTimeout(() => res('PENDING'), 1000).unref())]);
-  assert.deepStrictEqual(r, { ok: false, error: 'Not available.' });
-  assert.strictEqual(e.n.pending('demo'), 0);
+  assert.deepStrictEqual(r, { ok: true, queued: true });
+  assert.strictEqual(e.n.pending('demo'), 1);
   assert.strictEqual(e.woken.length, 0);
-  const last = e.audit().pop();
-  assert.strictEqual(last.outcome, 'dropped'); assert.strictEqual(last.reason, 'not available');
-  assert.ok(!JSON.stringify(last).includes('hi"'));
+  assert.ok(!e.audit().some((a) => a.outcome === 'dropped'));
+  await e.fire();
+  assert.strictEqual(e.woken.length, 1);
+  assert.strictEqual(e.n.pending('demo'), 0);
+});
+
+test('a folder fsync failing after the rename is not a failed save: ok (queued), the item stays in memory and on disk', async () => {
+  const e = setup({ active: true });
+  const logs = [];
+  const r = restart(e, { restore: false, log: (m) => logs.push(m), fsImpl: { ...fs, fsyncSync: (fd) => { if (fs.fstatSync(fd).isDirectory()) { const x = new Error('boom'); x.code = 'EIO'; throw x; } return fs.fsyncSync(fd); } } });
+  assert.deepStrictEqual(await r.n.deliver('demo', { text: 'KEPT' }), { ok: true, queued: true });
+  assert.strictEqual(r.n.pending('demo'), 1);
+  assert.ok(fs.readFileSync(QFILE(e), 'utf8').includes('KEPT'));
+  assert.ok(logs.some((m) => m.includes('folder sync failed')));
+});
+
+test('a throwing connectorFor at restore keeps the file byte-for-byte and pauses the module', async () => {
+  const e = setup({ active: true });
+  writeQ(e, { v: 1, connector: 'demo', module: 'demo', recent: [], queue: [qEntry(e)] });
+  const original = fs.readFileSync(QFILE(e), 'utf8');
+  const r = restart(e, { connectorFor: () => { throw new Error('down'); } });
+  assert.deepStrictEqual(r.n.unavailable(), [{ module: 'demo', reason: 'connector lookup failed' }]);
+  assert.strictEqual(fs.readFileSync(QFILE(e), 'utf8'), original);
+  assert.ok(!fs.readdirSync(DIR(e)).some((f) => f.includes('.bad-')));
+});
+
+test('a null connector at restore pauses the module and keeps the file', async () => {
+  const e = setup({ active: true });
+  writeQ(e, { v: 1, connector: 'demo', module: 'demo', recent: [], queue: [qEntry(e)] });
+  const original = fs.readFileSync(QFILE(e), 'utf8');
+  const r = restart(e, { connectorFor: () => null });
+  assert.deepStrictEqual(r.n.unavailable().map((u) => u.module), ['demo']);
+  assert.strictEqual(fs.readFileSync(QFILE(e), 'utf8'), original);
+  assert.ok(!fs.readdirSync(DIR(e)).some((f) => f.includes('.bad-')));
+});
+
+test('a stray folder sorting before the real module is set aside; the real queue is restored and delivered', async () => {
+  const e = setup({ active: false });
+  writeQ(e, { v: 1, connector: 'demo', module: 'demo', recent: [], queue: [qEntry(e, { text: 'REAL' })] });
+  const dir = path.join(e.auditDir, 'aaa');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'notice-queue.json'), JSON.stringify({ v: 1, connector: 'demo', module: 'aaa', recent: [{ id: 'x1', at: e.clock }], queue: [qEntry(e, { module: 'aaa', text: 'STRAY' })] }));
+  const r = restart(e);
+  assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('notice-queue.json.bad-')));
+  assert.strictEqual(r.n.pending('demo'), 1);
+  await r.fire();
+  assert.strictEqual(r.woken.length, 1);
+  assert.ok(r.woken[0].message.includes('REAL') && !r.woken[0].message.includes('STRAY'));
+  assert.deepStrictEqual(r.n.unavailable(), []);
+});
+
+test('a file name of 300 characters is dropped from files', async () => {
+  const e = setup({ active: true });
+  assert.strictEqual((await e.n.deliver('demo', { text: 'x', files: ['a'.repeat(300) + '.png', 'b'.repeat(200)] })).ok, true);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(QFILE(e), 'utf8')).queue[0].rel, ['b'.repeat(200)]);
 });
 
 test('a noticeAgentOf that throws once keeps the notice queued and delivers it at the next retry', async () => {
