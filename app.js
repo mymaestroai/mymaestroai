@@ -444,7 +444,7 @@
       return tz && tz !== mine ? `${t} (${tz.replace(/_/g, ' ')} time)` : t;
     }
     const bkSize = (n) => n == null ? '?' : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
-    const bkPlaceName = (p) => p.kind === 'local' ? 'This computer' : ((bkState && bkState.folders || []).find(f => f.dir === p.dir) || {}).label || p.dir;
+    const bkPlaceName = (p) => p.kind === 'local' ? 'This computer' : p.kind === 'module' ? (p.label || p.id) : ((bkState && bkState.folders || []).find(f => f.dir === p.dir) || {}).label || p.dir;
     async function bkApi(url, body, method = 'POST') {
       const r = await fetch(url, { method, credentials: 'include', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
       const d = await r.json().catch(() => ({}));
@@ -494,12 +494,13 @@
       html += `<div class="bk-place">${sc.enabled ? '<span class="bk-on">✓</span>' : '<span class="bk-off">○</span>'}<span class="bk-held-what">${sc.enabled ? `<b>Every night at ${esc(bkAt(sc.at, ni.tz))}</b>, keeping the last ${esc(String(sc.keepNightly))} nightly backup${sc.keepNightly === 1 ? '' : 's'}${sc.keepWeekly ? ` and one from each of the last ${esc(String(sc.keepWeekly))} week${sc.keepWeekly === 1 ? '' : 's'}` : ''}${nextText ? ` · <span class="bk-dim">${nextText}</span>` : ''}` : '<b>Nightly backups are off.</b> <span class="bk-dim">Backups are made only when you press Back up now.</span>'}</span><button class="st-test-btn" onclick="bkScheduleDialog()">Change…</button></div>`;
       if (ni.lastError) html += `<div class="bk-strip bk-bad"><span class="bk-strip-text">The nightly backup of ${esc(bkWhen(ni.lastError.at))} failed: ${esc(ni.lastError.message)}</span></div>`;
       if (ni.keepSkipped) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">Older nightly backups aren't being removed: ${esc(ni.keepSkipped.why)}.</span></div>`;
-      if ((ni.copyErrors || []).length) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">The last nightly backup couldn't be copied to ${ni.copyErrors.map(c => esc(c.dir)).join(', ')}. It is on this computer; the next backup copies again.</span></div>`;
+      if ((ni.copyErrors || []).length) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">The last nightly backup couldn't be copied to ${ni.copyErrors.map(c => esc(c.label || c.dir)).join(', ')}. It is on this computer; the next backup copies again.</span></div>`;
       html += `<div class="bk-sub">Where</div>`;
       const local = (s.places || []).find(p => p.kind === 'local');
       html += `<div class="bk-place"><span class="bk-on">✓</span><b>This computer</b><span class="bk-dim">${esc(local ? local.dir : 'the backups folder')}</span></div>`;
       (s.folders || []).forEach((f, i) => { html += `<div class="bk-place"><span class="bk-on">✓</span><b>${esc(f.label || 'Folder')}</b><span class="bk-dim">${esc(f.dir)}</span><button class="st-test-btn" onclick="removeBackupFolder(${i}, this)">Remove</button></div>`; });
       if (s.iCloud && !(s.folders || []).some(f => f.dir === s.iCloud)) html += `<div class="bk-place"><span class="bk-off">○</span><b>iCloud Drive</b><span class="bk-dim">${esc(s.iCloud)}</span><button class="st-test-btn" onclick="addBackupFolder(true, this)">Use it</button></div>`;
+      (s.places || []).filter(p => p.kind === 'module').forEach(p => { html += `<div class="bk-place"><span class="bk-on">✓</span><b>${esc(bkPlaceName(p))}</b><span class="bk-dim">(managed in Data connectors)</span></div>`; });
       html += `<div class="bk-place"><span class="bk-off">+</span><b>Another folder</b><input type="text" id="bk-folder" placeholder="full path: a cloud-synced folder, an external disk, a NAS" aria-label="Another backup folder"><button class="st-test-btn" onclick="addBackupFolder(false, this)">Add</button></div>`;
       html += `<div class="st-hint">To keep copies off this computer, add a folder your cloud app keeps in sync (iCloud Drive, Google Drive, Dropbox or OneDrive): every backup is copied there and the app uploads it. Or download a backup (⬇) and save it anywhere.</div>`;
       html += `<div class="bk-place">🔒 <span class="bk-held-what">Encrypted with your backup password. If you forget it, your backups can't be opened, unless you keep the spare key (Show recovery key).</span><button class="st-test-btn" onclick="bkPasswordDialog('change')">Change password</button><button class="st-test-btn" onclick="bkShowKeyDialog()">Show recovery key</button><button class="st-test-btn" onclick="bkPasswordDialog('leaked')">It may have leaked…</button></div>`;
