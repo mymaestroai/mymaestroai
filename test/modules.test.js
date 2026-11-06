@@ -62,7 +62,7 @@ test('manifest validation catches the unsafe and the incomplete', () => {
 
 test('guided setup end to end: steps in order, key into the vault, check through the guard, grant, switch on', async (t) => {
   const r = rig(); t.after(r.cleanup);
-  assert.strictEqual(r.mods.list()[0].state, 'available');
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').state, 'available');
   await assert.rejects(r.mods.runStep('fakebank', 'outside', { confirmed: false }), /Tick "Done it"/);
   await assert.rejects(r.mods.runStep('fakebank', 'key', { values: { FAKEBANK_TOKEN: 'x' } }), /Install step first/);
   await assert.rejects(r.mods.runStep('fakebank', 'done', {}), /Not finished yet/);
@@ -130,18 +130,18 @@ test('the guard: hidden tools stay hidden, limits apply per call with live setti
 test('switch off, status, checklist items and remove', async (t) => {
   const r = rig(); t.after(r.cleanup);
   await r.mods.runStep('fakebank', 'install', {});
-  assert.strictEqual(r.mods.list()[0].state, 'setup');
-  assert.match(r.mods.readinessItems()[0].title, /Fake Bank: setup not finished/);
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').state, 'setup');
+  assert.match(r.mods.readinessItems().find(x => x.id === 'module-fakebank').title, /Fake Bank: setup not finished/);
   await assert.rejects(Promise.resolve().then(() => r.mods.setEnabled('fakebank', true)), /Finish the setup first/);
   await setupAll(r.mods);
   assert.deepStrictEqual(r.mods.readinessItems(), []);
   await r.cx.callTool('fakebank', 'place_order', { pair: 'BTC-USD', usd: 1 });   // something for the activity log
   r.mods.setEnabled('fakebank', false);
-  assert.strictEqual(r.mods.list()[0].state, 'off');
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').state, 'off');
   assert.deepStrictEqual(await r.cx.toolSpecsFor('trader'), []);
   r.mods.remove('fakebank');
   assert.ok(!r.cx.list().connectors.some(c => c.id === 'fakebank'));
-  assert.strictEqual(r.mods.list()[0].state, 'available');
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').state, 'available');
   assert.ok(fs.existsSync(path.join(r.dir, 'modules', 'fakebank', 'audit.jsonl')), 'the activity log is kept');
 });
 
@@ -345,4 +345,88 @@ test('step ids in setup.json: lowercase, digits and dashes, at most 32, starting
     const loaded = manifestLib.loadModule(copy);
     assert.match(loaded.problems.join(' | '), /step id "Bad Id"/, 'the module becomes broken like for any other problem');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── backup modules and the hub tool class (fixtures/modules/fakebackup) ──
+async function setupBackup(mods) {
+  await mods.runStep('fakebackup', 'install', {});
+  return mods.runStep('fakebackup', 'done', {});
+}
+
+test('backup: true needs the four hub tools; a wrong class or a missing tool is a plain reason', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(FIX_ROOT, 'fakebackup', 'module.json'), 'utf8'));
+  const probs = (m) => manifestLib.validateManifest(m, 'fakebackup').problems.join(' | ');
+  assert.strictEqual(probs(base), '');
+  assert.ok(manifestLib.TOOL_CLASSES.includes('hub'));
+  const { backup_get, ...noGet } = base.tools;
+  assert.match(probs({ ...base, tools: noGet }), /must declare the tool backup_get/);
+  assert.match(probs({ ...base, tools: { ...base.tools, backup_put: 'write' } }), /backup_put: a backup tool must have class "hub"/);
+  assert.match(probs({ ...base, backup: 'yes' }), /backup must be true or false/);
+  assert.strictEqual(probs({ ...base, backup: false, tools: { peek: 'read' } }), '', 'without backup: true the tools are free');
+});
+
+test('hub tools: hidden from agents and tools/list, reachable by the hub through the guard, audited as non-read', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  const fin = await setupBackup(r.mods);
+  assert.strictEqual(fin.module.backup, true);
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebackup').backup, true);
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').backup, false);
+  const conn = r.cx.list().connectors.find(c => c.id === 'fakebackup');
+  assert.deepStrictEqual(Object.keys(conn.tools || {}).sort(), ['peek', 'usage'], 'the connector keeps only agent-visible tools');
+  assert.deepStrictEqual((await r.cx.toolSpecsFor('trader')).map(s => s.tool), [], 'not granted yet');
+  r.mods.setAgents('fakebackup', ['trader']);
+  assert.deepStrictEqual((await r.cx.toolSpecsFor('trader')).map(s => s.tool).sort(), ['peek', 'usage'], 'an agent sees only the read tools');
+  const seen = await r.cx.test('fakebackup');
+  assert.deepStrictEqual(seen.tools.map(x => x.name).sort(), ['peek', 'usage'], "the guard's tools/list leaves hub tools out");
+
+  const src = path.join(r.dir, 'in.bin'); const out = path.join(r.dir, 'out.bin');
+  fs.writeFileSync(src, 'hello backup');
+  const put = JSON.parse(await r.cx.callTool('fakebackup', 'backup_put', { file: src, name: 'a.zip' }));
+  assert.deepStrictEqual(put, { name: 'a.zip', size: 12, md5: require('crypto').createHash('md5').update('hello backup').digest('hex') });
+  const list = JSON.parse(await r.cx.callTool('fakebackup', 'backup_list', {}));
+  assert.deepStrictEqual(list.files.map(f => [f.name, f.size]), [['a.zip', 12]]);
+  assert.ok(!Number.isNaN(Date.parse(list.files[0].created)));
+  assert.deepStrictEqual(JSON.parse(await r.cx.callTool('fakebackup', 'backup_get', { name: 'a.zip', out })), { size: 12, md5: put.md5 });
+  assert.strictEqual(fs.readFileSync(out, 'utf8'), 'hello backup');
+  assert.match(await r.cx.callTool('fakebackup', 'backup_delete', { name: 'nope.zip' }), /No such backup/);
+  assert.deepStrictEqual(JSON.parse(await r.cx.callTool('fakebackup', 'backup_delete', { name: 'a.zip' })), { deleted: 'a.zip' });
+  assert.match(await r.cx.callTool('fakebackup', 'not_listed', {}), /is not enabled in this hub/, 'an unlisted tool is still refused');
+
+  const audit = r.mods.auditTail('fakebackup');
+  for (const tool of ['backup_put', 'backup_list', 'backup_get', 'backup_delete']) {
+    assert.ok(audit.some(e => e.tool === tool && e.cls === 'hub' && e.decision === 'allowed'), `${tool} allowed and audited`);
+    assert.ok(audit.some(e => e.tool === tool && e.decision === 'done'), `${tool} result audited`);
+  }
+  assert.ok(!audit.some(e => e.tool === 'peek'), 'read calls are not audited');
+});
+
+test('backupModules(): only finished, switched-on backup modules; attention from a failed check still counts', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  assert.deepStrictEqual(r.mods.backupModules(), [], 'not installed');
+  await r.mods.runStep('fakebackup', 'install', {});
+  assert.deepStrictEqual(r.mods.backupModules(), [], 'setup not finished');
+  await r.mods.runStep('fakebackup', 'done', {});
+  assert.deepStrictEqual(r.mods.backupModules(), [{ id: 'fakebackup', label: 'Fake Vault' }]);
+  r.mods.setEnabled('fakebackup', false);
+  assert.deepStrictEqual(r.mods.backupModules(), [], 'switched off');
+  r.mods.setEnabled('fakebackup', true);
+  const s = JSON.parse(fs.readFileSync(path.join(r.dir, 'modules.json'), 'utf8'));
+  s.modules.fakebackup.lastCheck = { ok: false, summary: 'down' };
+  fs.writeFileSync(path.join(r.dir, 'modules.json'), JSON.stringify(s));
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebackup').state, 'attention');
+  assert.deepStrictEqual(r.mods.backupModules(), [{ id: 'fakebackup', label: 'Fake Vault' }]);
+  await setupAll(r.mods);
+  assert.ok(!r.mods.backupModules().some(x => x.id === 'fakebank'), 'a module without backup: true is never listed');
+  fs.writeFileSync(path.join(r.dir, 'modules.json'), '{broken');
+  assert.deepStrictEqual(r.mods.backupModules(), [], 'unreadable state gives an empty list');
+});
+
+test('callTool timeoutMs: a slow upload works with a long wait and fails with a short one', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await setupBackup(r.mods);
+  const src = path.join(r.dir, 'in.bin'); fs.writeFileSync(src, 'x');
+  const put = (delayMs, opts) => r.cx.callTool('fakebackup', 'backup_put', { file: src, name: `t${delayMs}.zip`, delayMs }, opts);
+  await assert.rejects(put(1500, { timeoutMs: 300 }), /timed out after 300ms/);
+  assert.match(await put(600, { timeoutMs: 10000 }), /"name":"t600.zip"/);
+  assert.match(await put(0), /"size":1/, 'no option: the default wait');
 });

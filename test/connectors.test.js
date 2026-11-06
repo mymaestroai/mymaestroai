@@ -252,6 +252,27 @@ test('lead-only: the context text names a locked connector with how to unlock it
   assert.ok(cx.contextTextFor('owner').includes('fake__*'));
 });
 
+test('callTool: timeoutMs reaches the MCP client for that call only; without it the client default applies', async (t) => {
+  const calls = [];
+  class SpyClient {
+    constructor(cmd, args, opts) { this.opts = opts; }
+    async connect() {} async disconnect() {}
+    async listTools() { return [{ name: 'slow', inputSchema: { type: 'object', properties: {} } }]; }
+    async callTool(name, args, options) { calls.push({ name, options, clientTimeout: this.opts.timeout }); return { content: [{ type: 'text', text: 'ok' }] }; }
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-'));
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: SpyClient, log: () => {}, unlockTtlMs: 0, baseEnv: { PATH: process.env.PATH } });
+  t.after(() => { cx.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); });
+  cx.upsert({ id: 'spy', label: 'Spy', kind: 'mcp', command: 'x', enabled: true });
+  assert.strictEqual(await cx.callTool('spy', 'slow', {}), 'ok');
+  assert.strictEqual(calls[0].options, undefined, 'no timeoutMs: the client default is untouched');
+  assert.strictEqual(calls[0].clientTimeout, 60000);
+  await cx.callTool('spy', 'slow', {}, { timeoutMs: 3 * 3600 * 1000 });
+  assert.deepStrictEqual(calls[1].options, { timeout: 10800000 }, 'three hours, well past the 60 s default');
+  await cx.callTool('spy', 'slow', {}, {});
+  assert.strictEqual(calls[2].options, undefined);
+});
+
 test('migration: a stored agents: null becomes [] once, is listed for the checklist, and clears after grants are set', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-mig-'));
   const file = path.join(dir, 'connectors.json');

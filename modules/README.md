@@ -27,10 +27,11 @@ as for any connector. A module's connector can only be changed by the module (th
 | `server` | `{ "type": "mcp-stdio", "npm": { "package", "version", "bin" }, "args", "env", "dataEnv" }` or `{ "type": "mcp-stdio", "script": "server.js" }` (a file inside the folder). `version` must be exact: updates are deliberate. `dataEnv` names an environment variable that receives the module's private data folder (also its `HOME`). |
 | `secrets` | `[{ "name": "UPPER_CASE", "label", "help", "multiline", "optional" }]`; passed to the server as environment variables. |
 | `settings` | `[{ "key", "type": "boolean" \| "number" \| "string" \| "list" \| "choice", "label", "help", "default", "min", "max", "pattern", "options", "multiple" }]`. Every setting needs a default, and the default must be the safe choice: an invalid stored value falls back to it. |
-| `tools` | Tool name → `read` \| `write` \| `send` \| `money` \| `off`. **Unlisted tools are hidden**, so a new package version cannot add a tool nobody classified. |
+| `tools` | Tool name → `read` \| `write` \| `send` \| `money` \| `off` \| `hub`. **Unlisted tools are hidden**, so a new package version cannot add a tool nobody classified. |
 | `docs` | `{ "homepage", "revoke" }`; `revoke` says how to cut access at the provider. |
 | `catalog` | Optional, for the catalog on the page: `{ "verified": "YYYY-MM-DD", "api": "up to 40 characters", "official": true \| false }`. `verified` must be a real date, not in the future. Invalid values make the module "broken". |
 | `health` | Optional: `{ "check": "<name of a check exported by index.js>" }`. Switched-on modules with a health check are checked every night (see Health check below). |
+| `backup` | Optional boolean. `true` makes the module a place the hub can keep backups (see Backup modules). |
 | `oauth` | Needed by a `signin` step: `{ "flow": "device", "deviceUrl", "tokenUrl", "scopes": [...], "clientIdSecret", "clientSecretSecret", "refreshTokenSecret" }`. Both URLs must be `https`; the three secret names must be declared in `secrets`. |
 
 The API and the lists show `catalog` (or null), `health` (true when a check is declared), `hasGuide` (true when the
@@ -38,6 +39,27 @@ folder has `guide.md`) and `lastCheck`.
 
 Tool classes map to the hub's tool policy: `read` → reading outside, `write` → writing outside, `send` → sending,
 `money` → money (allowed only for agents named in `settings.walletAgents`; the module's `guard()` sets the limits).
+
+The `hub` class is for tools the hub itself calls (through `connectors.callTool`, so still through the guard, which
+runs `guard()` and writes the call to the activity log as a non-read call). Agents never see a `hub` tool: it is left
+out of `tools/list` and of every agent's tools.
+
+## Backup modules
+
+`"backup": true` marks a module that can store the hub's backup files. It must declare these four tools, each with
+class `hub` (otherwise the module is broken). Results are text holding JSON; a failure comes back with `isError` and a
+plain message.
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `backup_put` | `{ file, name }` (`file` is a path on the hub's disk) | `{ name, size, md5 }` |
+| `backup_list` | `{}` | `{ files: [{ name, size, created }] }` |
+| `backup_delete` | `{ name }` | `{ deleted }` |
+| `backup_get` | `{ name, out }` (`out` is a path to write) | `{ size, md5 }` |
+
+`getModules().backupModules()` lists `[{ id, label }]` for backup modules that are finished and switched on (ready, or
+needing attention after a failed check but still on). `connectors.callTool(id, tool, args, { timeoutMs })` takes a
+per-call wait for slow calls such as an upload; without it the 60 s default applies.
 
 ## setup.json
 
