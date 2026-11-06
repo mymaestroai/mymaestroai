@@ -178,7 +178,7 @@
       const localItem = document.getElementById('account-local-models');
       if (localItem) localItem.style.display = me.isAdmin ? '' : 'none';
       const note = document.getElementById('account-2fa-note');
-      if (note) note.style.display = (me.isAdmin && !me.user.totpEnabled) ? '' : 'none';
+      if (note) note.style.display = (me.isAdmin && !me.user.totpEnabled && me.admin2faRequired !== false) ? '' : 'none';
     }
     function toggleAccountMenu(force) {
       const menu = document.getElementById('account-menu');
@@ -314,10 +314,14 @@
       const me = window.hubMe;
       if (!box || !me) return;
       if (me.user.totpEnabled) {
+        const adminLocked = me.isAdmin && me.admin2faRequired !== false;
+        const adminFree = me.isAdmin && !adminLocked;
         box.innerHTML = `
           <div class="sec-title">Two-factor authentication <span class="sec-badge on">on</span></div>
+          ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, 🔐 Security.</div>` : `
           <input type="password" id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
-          <div class="sec-actions"><button class="sec-btn danger" onclick="disableTwoFactor()">Disable 2FA</button></div>
+          ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
+          <div class="sec-actions"><button class="sec-btn danger" onclick="disableTwoFactor()">${adminFree ? 'Remove two-factor' : 'Disable 2FA'}</button></div>`}
           <div class="sec-msg" id="sec-2fa-msg"></div>`;
       } else {
         box.innerHTML = `
@@ -384,9 +388,19 @@
     async function disableTwoFactor() {
       const password = document.getElementById('sec-2fa-password').value;
       if (!password) return secMsg('sec-2fa-msg', 'Enter your password to turn 2FA off.');
+      const body = { password };
+      const codeEl = document.getElementById('sec-2fa-disable-code');
+      if (codeEl) {
+        body.code = (codeEl.value || '').trim();
+        if (!body.code) return secMsg('sec-2fa-msg', 'Enter a current code or a recovery code.');
+      }
       try {
-        await authPost('/api/auth/totp/disable', { password });
+        await authPost('/api/auth/totp/disable', body);
         window.hubMe.user.totpEnabled = false;
+        try {
+          const r = await fetch('/api/me', { credentials: 'include' });
+          if (r.ok) window.hubMe = await r.json();
+        } catch (e) { /* keep what we have */ }
         renderUserChip();
         paintTwoFactor();
       } catch (e) { secMsg('sec-2fa-msg', e.message); }
@@ -2079,6 +2093,7 @@
     // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
     const ST_GROUPS = [
       { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-updates-section'] },
+      { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
@@ -2121,6 +2136,95 @@
       const open = {};
       for (const g of document.querySelectorAll('#st-groups details.st-group')) if (g.open && !g.dataset.autoOpen) open[g.dataset.group] = true;
       try { localStorage.setItem('hub-settings-open', JSON.stringify(open)); } catch {}
+    }
+
+    // Settings, Security: the "Require two-factor sign-in for admins" switch. Checking it posts at once; unchecking opens
+    // a confirm panel that asks for the admin's password (and a code when they have two-factor) before anything is sent.
+    let stA2faBusy = false;
+    function stAdmin2faText(required) {
+      return required
+        ? 'Every admin signs in with a password and a code from their authenticator app, and no admin can remove two-factor from their account.'
+        : 'An admin may remove two-factor from their account and then signs in with a password alone.';
+    }
+    function stAdmin2faBusy(busy) {
+      stA2faBusy = busy;
+      for (const el of document.querySelectorAll('#st-a2fa-on, #st-a2fa-confirm button')) el.disabled = busy;
+    }
+    function stAdmin2faMsg(text, ok) {
+      const el = document.getElementById('st-a2fa-msg');
+      if (!el) return;
+      el.textContent = text || '';
+      el.style.color = ok ? 'var(--green, #4caf50)' : 'var(--accent)';
+    }
+    async function stAdmin2faPaint() {
+      try {
+        const r = await fetch('/api/me', { credentials: 'include' });
+        if (r.ok) window.hubMe = await r.json();
+      } catch (e) { /* keep what we have */ }
+      const box = document.getElementById('st-a2fa-on');
+      if (!box) return;
+      const required = !(window.hubMe && window.hubMe.admin2faRequired === false);
+      box.checked = required;
+      document.getElementById('st-a2fa-text').textContent = stAdmin2faText(required);
+      stSum('security', 'a2fa', required ? 'Two-factor required for admins' : 'Two-factor optional for admins');
+    }
+    function stAdmin2faToggle(box) {
+      if (stA2faBusy) { box.checked = !box.checked; return; }
+      if (!box.checked) {
+        box.checked = true;   // stays on until the password check passes
+        stAdmin2faAsk();
+        return;
+      }
+      stAdmin2faSend({ required: true }, true);
+    }
+    function stAdmin2faAsk() {
+      const me = window.hubMe;
+      const panel = document.getElementById('st-a2fa-confirm');
+      if (!panel) return;
+      stAdmin2faMsg('');
+      panel.innerHTML = `<div class="st-hint">Turn off the two-factor requirement for admins? Anyone who learns an admin's password could then sign in as that admin.</div>
+        <div class="st-row"><label style="flex-basis:150px">Your password</label><input type="password" id="st-a2fa-pw" autocomplete="current-password"></div>
+        ${me && me.user && me.user.totpEnabled ? '<div class="st-row"><label style="flex-basis:150px">Code</label><input type="text" id="st-a2fa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code"></div>' : ''}
+        <div class="st-row"><label style="flex-basis:150px"></label>
+          <button class="st-test-btn" style="color:#fff;background:#b71c1c" onclick="stAdmin2faOff()">Turn it off</button>
+          <button class="st-test-btn" onclick="stAdmin2faCancel()">Cancel</button></div>`;
+      document.getElementById('st-a2fa-pw').focus();
+    }
+    function stAdmin2faCancel() {
+      const panel = document.getElementById('st-a2fa-confirm');
+      if (panel) panel.innerHTML = '';
+      stAdmin2faMsg('');
+    }
+    function stAdmin2faOff() {
+      if (stA2faBusy) return;
+      const password = document.getElementById('st-a2fa-pw').value;
+      const codeEl = document.getElementById('st-a2fa-code');
+      const body = { required: false, password };
+      if (codeEl) body.code = (codeEl.value || '').trim();
+      stAdmin2faSend(body, false);
+    }
+    async function stAdmin2faSend(body, turningOn) {
+      stAdmin2faBusy(true);
+      let error = '';
+      try {
+        const r = await fetch('/api/security/admin-2fa', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.error) error = d.error || `HTTP ${r.status}`;
+        else if (window.hubMe) window.hubMe.admin2faRequired = d.required !== false;
+      } catch (e) { error = e.message || 'failed'; }
+      for (const id of ['st-a2fa-pw', 'st-a2fa-code']) { const el = document.getElementById(id); if (el) el.value = ''; }
+      stAdmin2faBusy(false);
+      if (error) {
+        stAdmin2faMsg(error);
+        if (turningOn) { const box = document.getElementById('st-a2fa-on'); if (box) box.checked = false; }
+        return;
+      }
+      stAdmin2faCancel();
+      const required = !(window.hubMe && window.hubMe.admin2faRequired === false);
+      document.getElementById('st-a2fa-on').checked = required;
+      document.getElementById('st-a2fa-text').textContent = stAdmin2faText(required);
+      stSum('security', 'a2fa', required ? 'Two-factor required for admins' : 'Two-factor optional for admins');
+      stAdmin2faMsg(required ? '' : 'Two-factor is now optional for admins. Your own two-factor stays on until you remove it in your account menu, Security.', true);
     }
 
     function groupSettings(data) {
@@ -2264,6 +2368,20 @@
         <div id="bk-body" class="bk-body">Checking…</div>
       </div>`;
       setTimeout(loadBackups, 0);
+      // Two-factor rule for admins (server.js /api/security/admin-2fa): one switch, turned off only with a password and a code.
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-security-section"><h4>Two-factor sign-in</h4>
+        <div class="st-row">
+          <label style="flex-basis:150px">Require two-factor sign-in for admins</label>
+          <input type="checkbox" id="st-a2fa-on" onchange="stAdmin2faToggle(this)">
+        </div>
+        <div class="st-hint" id="st-a2fa-text"></div>
+        <div class="st-hint" style="color:var(--text-dim)">Opening My Maestro directly to your network still needs an admin with two-factor. Members choose for themselves.</div>
+        <div id="st-a2fa-confirm"></div>
+        <div class="st-hint" id="st-a2fa-msg" role="status"></div>
+      </div>`;
+        setTimeout(stAdmin2faPaint, 0);
+      }
       // Data connectors (lib/modules): outside services with a guided setup live on their own page.
       html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
         <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>

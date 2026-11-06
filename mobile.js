@@ -5182,7 +5182,7 @@ function applyMultiUser() {
     $('menu-users').hidden = !hubMe.isAdmin;
     if ($('menu-connectors')) $('menu-connectors').hidden = !hubMe.isAdmin;   // admins only; a page cached from before has no such item
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
-    $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled);
+    $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
 }
@@ -5761,12 +5761,16 @@ function paintTwoFactor() {
   const box = $('sec-2fa');
   if (!box || !hubMe) return;
   if (hubMe.user.totpEnabled) {
+    const adminLocked = hubMe.isAdmin && hubMe.admin2faRequired !== false;
+    const adminFree = hubMe.isAdmin && !adminLocked;
     box.innerHTML = `
       <div class="sec-title">Two-factor authentication: on</div>
+      ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, Security on a computer.</div>` : `
       <input type="password" id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
-      <div class="sec-actions"><button id="sec-2fa-disable" class="danger">Disable 2FA</button></div>
+      ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
+      <div class="sec-actions"><button id="sec-2fa-disable" class="danger">${adminFree ? 'Remove two-factor' : 'Disable 2FA'}</button></div>`}
       <div class="sec-msg" id="sec-2fa-msg"></div>`;
-    $('sec-2fa-disable').addEventListener('click', disableTwoFactor);
+    if (!adminLocked) $('sec-2fa-disable').addEventListener('click', disableTwoFactor);
   } else {
     box.innerHTML = `
       <div class="sec-title">Two-factor authentication: off</div>
@@ -5811,7 +5815,7 @@ async function confirmTwoFactor() {
 }
 
 function applyMultiUserNote() {
-  if (hubMe) $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled);
+  if (hubMe) $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
 }
 
 async function copyRecoveryCodes() {
@@ -5823,9 +5827,16 @@ async function copyRecoveryCodes() {
 async function disableTwoFactor() {
   const password = $('sec-2fa-password').value;
   if (!password) return secMsg('sec-2fa-msg', 'Enter your password to turn 2FA off.');
+  const body = { password };
+  const codeEl = $('sec-2fa-disable-code');
+  if (codeEl) {
+    body.code = (codeEl.value || '').trim();
+    if (!body.code) return secMsg('sec-2fa-msg', 'Enter a current code or a recovery code.');
+  }
   try {
-    await authPost('/api/auth/totp/disable', { password });
+    await authPost('/api/auth/totp/disable', body);
     hubMe.user.totpEnabled = false;
+    await loadMe();
     applyMultiUserNote();
     paintTwoFactor();
   } catch (e) { secMsg('sec-2fa-msg', e.message); }

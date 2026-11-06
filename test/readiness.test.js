@@ -122,3 +122,26 @@ test('the memory check\'s line joins the checklist with its link to Settings →
   const broken = await createReadiness({ memoryItems: () => { throw new Error('no file'); }, hasUsers: () => true, sandboxStatus: async () => ({ docker: true, imageReady: true }) }).check();
   assert.strictEqual(byId(broken, 'memory'), undefined, 'a check that fails adds nothing and stops nothing');
 });
+
+
+test('admin two-factor optional: the totp warning becomes an info item; required output is unchanged', async () => {
+  const mk = (admins, setting) => createReadiness({
+    platform: 'linux', hasUsers: () => true, listUsers: () => admins, getSetting: (k) => (k === 'requireAdmin2fa' ? setting : undefined),
+  }).check();
+  const off = { login: 'owner', role: 'admin', totpEnabled: false };
+  const on = { login: 'sam', role: 'admin', totpEnabled: true };
+  const opt = await mk([off, on], false);
+  assert.strictEqual(byId(opt, 'totp'), undefined);
+  assert.strictEqual(byId(opt, 'admin-2fa-optional').level, 'info');
+  assert.strictEqual(byId(opt, 'admin-2fa-optional').title, 'Two-factor sign-in is optional for admins');
+  assert.strictEqual(byId(opt, 'admin-2fa-optional').fix, 'Settings, Security');
+  const allOn = await mk([on], false);
+  assert.strictEqual(byId(allOn, 'admin-2fa-optional'), undefined);
+  assert.strictEqual(byId(allOn, 'accounts').level, 'ok');
+  for (const v of [undefined, true, 'false', null]) {
+    const r = await mk([off], v);
+    assert.strictEqual(byId(r, 'totp').level, 'warn');
+    assert.strictEqual(byId(r, 'totp').title, '1 admin account(s) without two-factor');
+    assert.strictEqual(byId(r, 'admin-2fa-optional'), undefined);
+  }
+});

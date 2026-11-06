@@ -114,6 +114,10 @@ function isSetupNeeded() {
 // ── Persistent Settings ──────────────────────────────────────────────────
 const hubSettings = require('./lib/settings');
 const hubAuth = require('./lib/auth').getAuth();          // accounts, sessions, TOTP, invites (lib/auth)
+const admin2fa = require('./lib/admin-2fa').createAdmin2fa({   // "Require two-factor sign-in for admins" (lib/admin-2fa)
+  getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, auth: hubAuth,
+  notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true }), log: (m) => console.log(m),
+});
 const access = require('./lib/access');                   // route classes + agent ownership/sharing (lib/access)
 const temporalWorkersLib = require('./lib/temporal-workers');
 
@@ -556,7 +560,7 @@ async function handleHttpRequest(req, res) {
       if (!r.ok) return jsonResponse(res, 400, r);
       if (r.user.role === 'member') require('./lib/teams').createDefaultAssistant(r.user).then(a => { if (!a || !a.ok) console.error('[users] default assistant not made:', a && a.error); }, e => console.error('[users] default assistant:', e.message));
       finishSignIn(r.user, { totpOk: true });
-      return jsonResponse(res, 200, { ok: true, user: hubAuth.publicUser(r.user), needsTotpEnrol: r.user.role === 'admin' });
+      return jsonResponse(res, 200, { ok: true, user: hubAuth.publicUser(r.user), needsTotpEnrol: r.user.role === 'admin' && admin2fa.required() });
     }
     // Self-service (any signed-in user)
     if (pathname === '/api/auth/totp/begin' && req.method === 'POST') {
@@ -572,7 +576,11 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/auth/totp/disable' && req.method === 'POST') {
       const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
       const u = hubAuth.getUser(req.hubUser.id);
-      if (!u || !hubAuth.login(u.login, b.password).ok) return jsonResponse(res, 401, { error: 'password check failed' });
+      if (!u) return jsonResponse(res, 401, { error: 'password check failed' });
+      const adminAccount = access.isAdmin(req.hubUser);
+      if (adminAccount && admin2fa.required()) return jsonResponse(res, 403, { error: require('./lib/admin-2fa').REQUIRED_MESSAGE, code: 'admin_2fa_required' });
+      if (!hubAuth.login(u.login, b.password).ok) return jsonResponse(res, 401, { error: 'password check failed' });
+      if (adminAccount && u.totp && u.totp.enabled) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return jsonResponse(res, 403, { error: 'That two-factor code is not right.' }); }
       return jsonResponse(res, 200, hubAuth.totpDisable(u.id));
     }
     if (pathname === '/api/auth/password' && req.method === 'POST') {
@@ -596,6 +604,7 @@ async function handleHttpRequest(req, res) {
       const isAdmin = access.isAdmin(req.hubUser);
       // accounts: false = no admin account exists yet (an updated older install): no login, multi-user features off.
       const out = { user: u, isAdmin, accounts: hubAuth.hasUsers() };
+      if (req.hubUser) out.admin2faRequired = admin2fa.required();
       if (isAdmin) { const oe = access.ownerEntries(await getAgents(), hubAuth.listUsers()); out.owners = oe.owners; out.infraCount = oe.infraCount; }
       out.timeZone = u ? require('./lib/timezone').zoneForUser(u.id) : require('./lib/timezone').hubZone();   // what this person's agents use
       return jsonResponse(res, 200, out);
@@ -846,6 +855,7 @@ async function handleHttpRequest(req, res) {
     }
     if (/^\/api\/users\/([^/]+)\/totp\/reset$/.test(pathname) && req.method === 'POST') {
       const id = pathname.split('/')[3];
+      if (String(id) === String(req.hubUser.id)) return jsonResponse(res, 400, { error: 'To change your own two-factor sign-in, use Security in your account menu.' });
       return jsonResponse(res, 200, hubAuth.totpDisable(id, { by: req.hubUser.id }));
     }
     if (/^\/api\/users\/([^/]+)\/team$/.test(pathname) && req.method === 'POST') {
@@ -2110,6 +2120,14 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, s);
     }
 
+    // "Require two-factor sign-in for admins": a signed-in admin's own browser session only (no token, no service, no half-signed-in session).
+    if (pathname === '/api/security/admin-2fa' && req.method === 'POST') {
+      if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'admin_only' });
+      const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
+      const r = admin2fa.setRequired({ actorId: req.hubUser.id, isAdmin: true, want: b.required, password: b.password, code: b.code, ip: req.socket && req.socket.remoteAddress });
+      return r.ok ? jsonResponse(res, 200, { ok: true, required: r.required, changed: r.changed }) : jsonResponse(res, r.status, { error: r.error });
+    }
+
     if (pathname === '/api/settings' && req.method === 'POST') {
       let body = '';
       req.on('data', c => body += c);
@@ -2122,6 +2140,8 @@ async function handleHttpRequest(req, res) {
           if (patch && typeof patch === 'object' && 'walletAgents' in patch) { console.warn('[settings] ignored walletAgents in /api/settings patch (edit data/settings.json directly)'); delete patch.walletAgents; }
           // The owner's receiving address decides where wallet value may go: not a UI setting either (review F10). HUB_WALLET_OWNER in .env, or data/settings.json by hand.
           if (patch && typeof patch === 'object' && 'walletOwner' in patch) { console.warn('[settings] ignored walletOwner in /api/settings patch (set HUB_WALLET_OWNER or edit data/settings.json directly)'); delete patch.walletOwner; }
+          // The admin two-factor rule changes only through /api/security/admin-2fa, which asks for the password (and code) again.
+          if (patch && typeof patch === 'object' && 'requireAdmin2fa' in patch) { console.warn('[settings] ignored requireAdmin2fa in /api/settings patch (use Settings → Security)'); delete patch.requireAdmin2fa; }
           // Hub default for every member agent: grantable classes and valid decisions only (lib/tool-policy).
           if (patch && patch.memberPolicy !== undefined) patch.memberPolicy = require('./lib/tool-policy').sanitizeGrants({ policy: patch.memberPolicy }).policy || {};
           // Per-class approval cards: known class names only (lib/policy-gate APPROVAL_CLASSES).
