@@ -157,7 +157,7 @@ test('index: saving settings stops a running connector and restarts a background
     await r.mods.runStep('guarddemo', 'install', {});
     r.calls.length = 0;
     r.mods.saveSettings('guarddemo', { n: 5 });
-    assert.deepStrictEqual(r.calls, ['stop:guarddemo'], 'disabled: only stopped');
+    assert.deepStrictEqual(r.calls, ['stop:guarddemo', 'startBackground'], 'disabled: stopped; startBackground() starts only background modules that are on (connectors tests)');
     r.conns.get('guarddemo').enabled = true;
     r.calls.length = 0;
     await r.mods.runStep('guarddemo', 'set', { values: { n: 6 } });
@@ -169,7 +169,7 @@ test('index: saving settings stops a running connector and restarts a background
     r2.conns.get('guarddemo').enabled = true;
     r2.calls.length = 0;
     r2.mods.saveSettings('guarddemo', { n: 7 });
-    assert.deepStrictEqual(r2.calls, ['stop:guarddemo'], 'not a background module: no start');
+    assert.deepStrictEqual(r2.calls, ['stop:guarddemo', 'startBackground'], 'not a background module: startBackground() leaves it alone (connectors tests)');
   } finally { r2.cleanup(); }
 });
 
