@@ -398,3 +398,13 @@ test('setup.json and guide.md say the nightly check asks Oura for one small read
   assert.match(fs.readFileSync(path.join(MOD, 'setup.json'), 'utf8'), /nightly connection check asks Oura for one small reading without keeping it/);
   assert.match(fs.readFileSync(path.join(MOD, 'guide.md'), 'utf8'), /nightly connection check[^]*one small reading[^]*does not keep it/);
 });
+
+test('health check: a reply carrying the unsaved sign-in warning fails the check', async () => {
+  const { checks } = require('../modules/oura/index.js');
+  const warning = 'My Maestro could not save the new Oura sign-in, so it will stop working after a restart. Check Data connectors.';
+  const r = await checks.oura({ callTool: async () => JSON.stringify({ days: [], warning }), parse: (t) => JSON.parse(t) });
+  assert.equal(r.ok, false);
+  assert.equal(r.summary, warning);
+  const ok = await checks.oura({ callTool: async () => JSON.stringify({ days: [] }), parse: (t) => JSON.parse(t) });
+  assert.deepEqual(ok, { ok: true, summary: 'Connected to Oura.' });
+});

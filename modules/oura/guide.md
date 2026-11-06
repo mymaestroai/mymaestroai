@@ -2,8 +2,8 @@
 
 This module lets your agents read your Oura Ring data when you ask: sleep, readiness, activity, heart rate, blood
 oxygen and workouts. It is read-only: nothing in your Oura account can be changed. Your health data stays on Oura's
-side until an agent reads it; it then goes to that agent's AI model as part of the conversation, and only when that
-agent reads it. Only your lead agent can read it unless you tick other agents in the "Who can read it" step.
+side until an agent asks for it; what an agent reads then goes to that agent's AI model as part of the conversation.
+The nightly connection check also asks Oura for one small reading and keeps none of it. Only your lead agent can read it unless you tick other agents in the "Who can read it" step.
 
 ## What each step does
 
