@@ -1,0 +1,12 @@
+{
+  "id": "hookdemo", "name": "Hook Demo", "category": "Test", "summary": "A test module that receives web calls and sends notices.", "risk": "read",
+  "catalog": { "verified": "2026-11-06", "api": "Hook Demo", "official": false },
+  "server": { "type": "mcp-stdio", "script": "server.js", "background": true },
+  "receiver": { "paths": ["events", "link"], "headers": ["x-signature"] },
+  "notify": true,
+  "media": true,
+  "secrets": [
+    { "name": "HOOKDEMO_KEY", "label": "Signing key" }
+  ],
+  "tools": { "status": "read" }
+}

@@ -300,7 +300,43 @@ const server = http.createServer((req, res) => {
     } catch { /* socket gone */ }
   });
 });
+// Public receivers (/hooks/<id>/<sub>): lib/modules/receivers checks every request itself, so they are answered before the tailnet gate.
+let _receivers = null;
+function receivers() {
+  if (!_receivers) {
+    const cxOf = () => require('./lib/connectors').getConnectors();
+    _receivers = require('./lib/modules/receivers').createReceivers({
+      manifestOf: (id) => require('./lib/modules').getModules().manifestOf(id),
+      connectorFor: (id) => cxOf().list().connectors.find(c => c.id === id) || null,
+      request: (...a) => cxOf().request(...a),
+      getSetting: hubSettings.getSetting,
+      log: (m) => console.log(m),
+    });
+  }
+  return _receivers;
+}
+// Notices from data connectors to their notice agent (lib/modules/notices); registered with the connectors at start-up.
+let _notices = null;
+function notices() {
+  if (!_notices) {
+    const mods = require('./lib/modules').getModules();
+    _notices = require('./lib/modules/notices').createNotices({
+      connectorFor: (id) => require('./lib/connectors').getConnectors().list().connectors.find(c => c.id === id) || null,
+      manifestOf: (id) => mods.manifestOf(id),
+      noticeAgentOf: (id) => mods.noticeAgentOf(id),
+      mediaDirFor: (id) => mods.mediaDirFor(id),
+      isAgentActive, interject: handleInterjection, wake: wakeAgent,
+      auditDir: path.join(__dirname, 'data', 'modules'),
+      log: (m) => console.log(m),
+    });
+  }
+  return _notices;
+}
+try { require('./lib/connectors').getConnectors().setNotifyHandler((id, params) => notices().deliver(id, params)); }
+catch (e) { console.error('[modules] notify handler:', e.message); }
 async function handleHttpRequest(req, res) {
+  const hookHit = receivers().match(String(req.url || '').split('?')[0]);
+  if (hookHit) return receivers().handle(req, res, hookHit);
   // Tailnet identity gate (HUB_TAILNET_USERS): only listed Tailscale logins may use the hub via Serve.
   if (!isTailnetUserAllowed(req, PORT)) {
     res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -1822,6 +1858,11 @@ async function handleHttpRequest(req, res) {
           return jsonResponse(res, 200, await mods.signinStart(m[1], { origin, userId: req.hubUser ? req.hubUser.id : null }));
         }
         if (m && req.method === 'POST') return jsonResponse(res, 200, m[2] === 'cancel' ? mods.signinCancel(m[1]) : await mods.signinPoll(m[1]));
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/notice-agent$/);
+        if (m && req.method === 'POST') {
+          const r = mods.setNoticeAgent(m[1], String((await bodyJson()).agent || ''), { by: req.hubUser.id });
+          return r && r.ok ? jsonResponse(res, 200, { ok: true, noticeAgent: r.noticeAgent }) : jsonResponse(res, 400, { error: (r && r.error) || 'Could not set the agent.' });
+        }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
         if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(step|check|settings|enable|disable|audit)$/);
@@ -2142,6 +2183,8 @@ async function handleHttpRequest(req, res) {
           if (patch && typeof patch === 'object' && 'walletOwner' in patch) { console.warn('[settings] ignored walletOwner in /api/settings patch (set HUB_WALLET_OWNER or edit data/settings.json directly)'); delete patch.walletOwner; }
           // The admin two-factor rule changes only through /api/security/admin-2fa, which asks for the password (and code) again.
           if (patch && typeof patch === 'object' && 'requireAdmin2fa' in patch) { console.warn('[settings] ignored requireAdmin2fa in /api/settings patch (use Settings → Security)'); delete patch.requireAdmin2fa; }
+          // receiverAliases makes paths public (lib/modules/receivers): set only by hand in data/settings.json.
+          if (patch && typeof patch === 'object' && 'receiverAliases' in patch) { console.warn('[settings] ignored receiverAliases in /api/settings patch (edit data/settings.json directly)'); delete patch.receiverAliases; }
           // Hub default for every member agent: grantable classes and valid decisions only (lib/tool-policy).
           if (patch && patch.memberPolicy !== undefined) patch.memberPolicy = require('./lib/tool-policy').sanitizeGrants({ policy: patch.memberPolicy }).policy || {};
           // Per-class approval cards: known class names only (lib/policy-gate APPROVAL_CLASSES).
@@ -3217,6 +3260,9 @@ server.listen(PORT, HOST, () => {
   // Data connector health: a nightly check of every switched-on module that declares one (lib/modules/health).
   try { require('./lib/modules/health').getModulesHealth().start(); }
   catch (e) { console.warn(`[modules-health] ${e.message}`); }
+  // Background modules (those that receive webhooks or poll) start a few seconds later.
+  // The module list is loaded first: its one-time sync rewrites each module's connector, which would restart a running one.
+  setTimeout(() => { try { require('./lib/modules').getModules(); require('./lib/connectors').getConnectors().startBackground(); } catch (e) { console.error('[modules] background start:', e.message); } }, 3000).unref();
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).
