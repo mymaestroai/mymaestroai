@@ -4695,12 +4695,17 @@ function walletPaint() {
       <div id="wl-confirm-row"></div>
       <div class="sec-actions"><button type="button" class="go" data-wl="pkadd">Add this phone</button></div>`
     : `<div class="sec-hint">${esc(pkOk.text)}</div>`;
+  const keep = {};   // what the person is typing survives a status repaint (closing the sheet and every run empty these fields themselves)
+  for (const id of ['wl-pass', 'wl-pk-pass', 'wl-pk-label']) { const el = sh.querySelector('#' + id); if (el && el.value) keep[id] = el.value; }
+  const focused = document.activeElement && sh.contains(document.activeElement) ? document.activeElement.id : '';
   body.innerHTML = `<p class="wl-status">${ks.unlocked ? '&#x1F513; Unlocked' : '&#x1F512; Locked'} · ${n} wallet${n === 1 ? '' : 's'}</p>${msg}${unlockBox}
     <div class="sec-section"><div class="sec-title">Face ID / fingerprint</div>
       <div class="sec-hint">Unlock the wallet with Face ID, a fingerprint or the screen lock instead of typing the passphrase. Add each device once with the passphrase. Your device's password manager may copy the passkey to your other devices; each one still asks for your face, fingerprint or screen lock.</div>
       ${rows}${addForm}
     </div>
     <label class="wl-notice"><input type="checkbox" id="wl-notice" ${s.lockedNotice ? 'checked' : ''}> Send admins a phone notice when the wallet is locked after a restart</label>`;
+  for (const [id, v] of Object.entries(keep)) { const el = sh.querySelector('#' + id); if (el) el.value = v; }
+  if (focused) { const el = sh.querySelector('#' + focused); if (el && typeof el.focus === 'function') el.focus(); }
 }
 function walletSetBusy(on) {
   walletBusy = on;

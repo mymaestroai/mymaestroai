@@ -703,3 +703,12 @@ test('a wallet passphrase refused with 401 does not send the desktop to the sign
   const pk = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'wallet', 'passkey.js'), 'utf8');
   assert.ok(!/, 401\)/.test(pk), 'passkey checks never answer 401');
 });
+
+test('a lost sign-in on a wallet route still goes to the sign-in page; a phone repaint keeps what the person is typing', () => {
+  const fs = require('fs'), path = require('path');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  assert.ok(/res\.clone\(\)\.json\(\)[\s\S]{0,200}'unauthorized'[\s\S]{0,60}'totp_required'/.test(app), 'wallet 401s with a session error still redirect');
+  const mob = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
+  const paint = mob.slice(mob.indexOf('function walletPaint() {'), mob.indexOf('function walletSetBusy('));
+  assert.ok(/\['wl-pass', 'wl-pk-pass', 'wl-pk-label'\]/.test(paint) && /el\.value = v/.test(paint), 'typed values are carried over a repaint');
+});

@@ -9,7 +9,12 @@
         if (res.status === 401 && !redirecting) {
           try {
             const u = new URL(typeof input === 'string' ? input : input.url, location.href);
-            if (u.origin === location.origin && u.pathname.startsWith('/api/') && !keepsOwn401(u.pathname)) {
+            let keep = keepsOwn401(u.pathname);
+            if (keep && u.pathname.startsWith('/api/wallet/')) {   // a lost sign-in still goes to the sign-in page
+              const j = await res.clone().json().catch(() => ({}));
+              keep = !(j && (j.error === 'unauthorized' || j.error === 'totp_required'));
+            }
+            if (u.origin === location.origin && u.pathname.startsWith('/api/') && !keep) {
               redirecting = true;
               location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
             }
