@@ -1,0 +1,12 @@
+{
+  "id": "fakecode", "name": "Fake Fitness", "category": "Test", "summary": "A test module with a redirect sign-in.", "risk": "read",
+  "server": { "type": "mcp-stdio", "script": "server.js" },
+  "secrets": [
+    { "name": "FAKE_CLIENT_ID", "label": "Client ID" },
+    { "name": "FAKE_CLIENT_SECRET", "label": "Client secret" },
+    { "name": "FAKE_REFRESH_TOKEN", "label": "Sign-in" }
+  ],
+  "oauth": { "flow": "code", "authorizeUrl": "https://auth.example.com/authorize", "tokenUrl": "https://auth.example.com/token", "scopes": ["daily", "email"], "rotatesRefreshToken": true,
+    "clientIdSecret": "FAKE_CLIENT_ID", "clientSecretSecret": "FAKE_CLIENT_SECRET", "refreshTokenSecret": "FAKE_REFRESH_TOKEN" },
+  "tools": { "list_days": "read" }
+}

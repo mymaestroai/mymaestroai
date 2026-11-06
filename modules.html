@@ -88,6 +88,7 @@
   .card .check.bad { color: var(--warning); }
   .signin-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 28px; letter-spacing: 3px; padding: 12px 16px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); display: inline-block; user-select: all; word-break: break-all; }
   .signin-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  .redirect-uri { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); display: inline-block; user-select: all; word-break: break-all; }
   a.open-link { color: var(--accent); word-break: break-all; }
   /* Phone (390 px wide): one column everywhere, tap targets of at least 40 px. */
   @media (max-width: 760px) {
@@ -122,12 +123,23 @@ const STATE_LABEL = { available: 'Not set up', setup: 'Setup in progress', ready
 let current = null;      // module detail
 let selected = null;     // step id on screen
 
+// {{redirectUri}} in a step body: the address the service sends the browser back to, in a copyable box (escaped).
+function redirectUriBox() {
+  if (!current || !current.redirectUriPath) return '';
+  const uri = location.origin + current.redirectUriPath;
+  return `<code class="redirect-uri" id="redirect-uri">${esc(uri)}</code> <button onclick="copyRedirectUri(this)">Copy</button>`;
+}
+async function copyRedirectUri(btn) {
+  const t = (document.getElementById('redirect-uri') || {}).textContent || '';
+  try { await navigator.clipboard.writeText(t); btn.textContent = 'Copied'; } catch { btn.textContent = 'Select the address and copy it'; }
+}
+
 // Small, safe text formatting for step bodies: paragraphs, **bold**, "- " and "1. " lists.
 function md(text) {
   const blocks = String(text || '').split(/\n\s*\n/);
   return blocks.map(b => {
     const lines = b.split('\n');
-    const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\{\{redirectUri\}\}/g, redirectUriBox());
     if (lines.every(l => /^\s*-\s+/.test(l))) return '<ul>' + lines.map(l => `<li>${inline(l.replace(/^\s*-\s+/, ''))}</li>`).join('') + '</ul>';
     if (lines.every(l => /^\s*\d+\.\s+/.test(l))) return '<ol>' + lines.map(l => `<li>${inline(l.replace(/^\s*\d+\.\s+/, ''))}</li>`).join('') + '</ol>';
     const head = lines.filter(l => !/^\s*-\s+/.test(l)); const items = lines.filter(l => /^\s*-\s+/.test(l));
@@ -328,8 +340,13 @@ async function signinStart(btn) {
   const m = current, stepId = selected;
   await busy(btn, async () => {
     let r;
-    try { r = await api('POST', `/api/modules/${m.id}/signin/start`, {}); } catch (e) { signinFail(e.message); return; }
-    if (current !== m || selected !== stepId) return;   // the person moved on while it started
+    try { r = await api('POST', `/api/modules/${m.id}/signin/start`, { origin: location.origin }); } catch (e) { signinFail(e.message); return; }
+    if (current !== m || selected !== stepId) return;   // the person moved on while it started: a late reply must not act, nor navigate away
+    if (m.oauthFlow === 'code') {   // the service asks the person to approve, then sends this browser back to the hub's callback page
+      if (typeof r.authorizeUrl !== 'string' || !r.authorizeUrl.startsWith('https://')) { signinFail('The service did not give a safe sign-in address.'); return; }
+      location.href = r.authorizeUrl;
+      return;
+    }
     const token = signin = { moduleId: m.id, stepId, pollTimer: null, tick: null, expiresAt: typeof r.expiresAt === 'number' ? r.expiresAt : Date.parse(r.expiresAt) };
     const url = typeof r.verificationUrl === 'string' && r.verificationUrl.startsWith('https://') ? r.verificationUrl : '';
     signinPaint(`<div class="signin-row"><span class="signin-code" id="signin-code">${esc(r.userCode)}</span><button onclick="signinCopy(this)">Copy</button></div>
@@ -434,7 +451,34 @@ async function removeModule(btn) {
   await busy(btn, async () => { try { await api('DELETE', `/api/modules/${current.id}`); closePanel(); loadList(); } catch (e) { setMsg('err', e.message); } });
 }
 
-loadList().then(() => { const id = location.hash.slice(1); if (id) openModule(id).catch(() => {}); }).catch(e => { document.getElementById('list').innerHTML = `<div class="msg err show">${esc(e.message)}</div>`; });
+// Back from the service's sign-in (/oauth/callback/<id> redirects here): show how it went, then drop the query from the address bar.
+const SIGNIN_ERRORS = {
+  state: 'This sign-in is no longer valid. Start it again from here.',
+  user: 'This sign-in was started by someone else. Start it again.',
+  expired: 'The sign-in took too long. Start it again.',
+  declined: 'The sign-in was declined.',
+  exchange: 'The service did not accept the sign-in. Check the client ID, secret and redirect address, then try again.',
+  other: 'The sign-in did not finish. Try again.',
+};
+function showSigninResult() {
+  const q = new URLSearchParams(location.search);
+  const result = q.get('signin');
+  if (!result) return null;
+  const code = String(q.get('code') || '');
+  history.replaceState(null, '', location.pathname + location.hash);
+  return result === 'ok' ? { kind: 'ok', text: 'Signed in.' } : result === 'error' ? { kind: 'err', text: Object.prototype.hasOwnProperty.call(SIGNIN_ERRORS, code) ? SIGNIN_ERRORS[code] : SIGNIN_ERRORS.other } : null;
+}
+const signinResult = showSigninResult();
+loadList().then(async () => {
+  const id = location.hash.slice(1);
+  if (!id) return;
+  try {
+    const { module } = await api('GET', `/api/modules/${id}`);
+    const step = module.steps.find(x => x.type === 'signin');
+    await openModule(id, signinResult && step ? step.id : undefined);
+    if (signinResult) setMsg(signinResult.kind, signinResult.text);
+  } catch { /* the list is still shown */ }
+}).catch(e => { document.getElementById('list').innerHTML = `<div class="msg err show">${esc(e.message)}</div>`; });
 </script>
 </body>
 </html>

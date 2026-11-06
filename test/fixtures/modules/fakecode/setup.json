@@ -1,0 +1,6 @@
+{ "steps": [
+  { "id": "install", "type": "install", "title": "Install" },
+  { "id": "keys", "type": "secrets", "title": "Client keys", "body": "Register this address: {{redirectUri}}", "fields": ["FAKE_CLIENT_ID", "FAKE_CLIENT_SECRET"] },
+  { "id": "signin", "type": "signin", "title": "Sign in" },
+  { "id": "done", "type": "finish", "title": "Finish" }
+] }
