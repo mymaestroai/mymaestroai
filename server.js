@@ -315,6 +315,9 @@ function receivers() {
   }
   return _receivers;
 }
+// Passkey (Face ID / fingerprint) unlock of the wallet keystore (lib/wallet/passkey-routes).
+let _pkRoutes = null;
+const passkeyRoutes = () => _pkRoutes || (_pkRoutes = require('./lib/wallet/passkey-routes').createPasskeyRoutes({ svc: require('./lib/wallet/service').getWalletService(), getSetting: (k) => hubSettings.getSetting(k) }));
 // Notices from data connectors to their notice agent (lib/modules/notices); registered with the connectors at start-up.
 let _notices = null;
 function notices() {
@@ -1366,8 +1369,16 @@ async function handleHttpRequest(req, res) {
       const svc = require('./lib/wallet/service').getWalletService();
       const ks = svc.keystore;
       try {
+        if (pathname.startsWith('/api/wallet/passkey/')) {
+          let body = {};
+          if (req.method === 'POST') {
+            try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return jsonResponse(res, 400, { error: 'Bad JSON.' }); }
+          }
+          const out = await passkeyRoutes().handle({ pathname, method: req.method, body, origin: req.headers.origin, host: req.headers.host, user: req.hubUser, ownerBrowser: req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser) });
+          return jsonResponse(res, out.status, out.json);
+        }
         if (pathname === '/api/wallet/status' && req.method === 'GET') {
-          return jsonResponse(res, 200, { ...svc.status(), walletAgents: require('./lib/wallet/tools').walletAgents() });
+          return jsonResponse(res, 200, passkeyRoutes().status());
         }
         // Scoped executor: registered actions for scripts, under owner caps (lib/wallet/executor.js).
         const wx = require('./lib/wallet/executor');
@@ -2196,6 +2207,7 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.planFallback !== undefined) patch.planFallback = require('./lib/plan-usage').cleanPolicy(patch.planFallback, hubSettings.getSetting('planFallback'));
           // The reasoning panel (lib/sdk-chat showReasoning): on unless turned off.
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
+          if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
           // A new key or URL changes which models exist — rediscover now
@@ -3264,6 +3276,11 @@ server.listen(PORT, HOST, () => {
   // The module list is loaded first: its one-time sync rewrites each module's connector, which would restart a running one.
   // The notices start before the modules so that notices kept from before a restart are delivered without waiting for a new one.
   setTimeout(() => { try { require('./lib/modules').getModules(); } catch (e) { console.error('[modules] background start:', e.message); } try { notices(); } catch (e) { console.error('[notices] start:', e.message); } try { require('./lib/connectors').getConnectors().startBackground(); } catch (e) { console.error('[modules] background start:', e.message); } }, 3000).unref();
+
+  // The keystore is locked after every restart: a minute later the admins' phones get "Your wallet is locked" (Settings turns it off).
+  try {
+    setTimeout(() => { require('./lib/wallet/locked-notice').walletLockedNotice({ getSetting: (k) => hubSettings.getSetting(k), keystore: require('./lib/wallet/service').getWalletService().keystore, notifyEach: (p, o) => require('./lib/push').getPush().notifyEach(p, o) }).catch(() => {}); }, require('./lib/wallet/locked-notice').LOCKED_NOTICE_DELAY_MS).unref();
+  } catch (e) { console.warn(`[wallet] locked notice not scheduled: ${e.message}`); }
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).
