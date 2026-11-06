@@ -4582,15 +4582,17 @@ let walletBusy = false;
 // walletGen counts status loads and runs: a load only paints while it is still the latest and no run is going.
 let pkRun = null;
 let walletGen = 0;
+const PK_ENROLL_MS = 110000;   // an add gives up after this long; the server's challenge lives 120 seconds
 function pkRunStart(confirmRow, fields) {
   if (pkRun) return null;
-  const run = { ctrl: new AbortController(), cancelled: false, rejectConfirm: null, confirmRow, fields: fields || [] };
+  const run = { ctrl: new AbortController(), cancelled: false, rejectConfirm: null, confirmRow, fields: fields || [], timer: null };
   pkRun = run;
   walletSetBusy(true);
   walletGen++;
   return run;
 }
 function pkRunCleanup(run) {
+  if (run.timer) { clearTimeout(run.timer); run.timer = null; }
   walletSetBusy(false);
   if (run.confirmRow && run.confirmRow.isConnected) run.confirmRow.innerHTML = '';
   for (const f of run.fields) f.value = '';
@@ -4614,6 +4616,12 @@ async function walletApi(path, body, signal) {
   if (!r.ok) throw new Error(j.error || 'Request failed');
   return j;
 }
+// Closing the sheet: cancel any run, drop in-flight loads, and empty every password input in it (run or no run).
+function walletClose(sh) {
+  pkCancel(); walletGen++;
+  sh.querySelectorAll('input[type="password"]').forEach((i) => { i.value = ''; });
+  sh.classList.remove('open'); dialogGuard.closed(sh);
+}
 function walletSheet() {
   let sh = $('wallet-sheet');
   if (sh) return sh;
@@ -4626,7 +4634,7 @@ function walletSheet() {
   sh.dataset.noDirty = '';   // its fields are emptied before every request: nothing to lose
   sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Wallet</span>' +
     '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body wl-body" tabindex="-1"></div>';
-  const close = () => { pkCancel(); walletGen++; sh.classList.remove('open'); dialogGuard.closed(sh); };
+  const close = () => walletClose(sh);
   sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
   sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
   sh.addEventListener('click', (e) => { const b = e.target.closest('[data-wl]'); if (b && !walletBusy) walletAct(b.dataset.wl, b.dataset.id); });
@@ -4645,7 +4653,8 @@ function openWalletSheet() {
   if (!isAdmin()) return;
   const sh = walletSheet();
   if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: sh.closeSheet }); }
-  walletMsg = null;
+  walletMsg = null; walletStatus = null;   // never show the last open's status while this load runs
+  walletPaint();
   walletLoad();
 }
 async function walletLoad(msg) {
@@ -4722,10 +4731,25 @@ async function walletAct(action, id) {
   const passEl = sh && (action === 'unlock' ? sh.querySelector('#wl-pass') : action === 'pkadd' ? sh.querySelector('#wl-pk-pass') : null);
   const run = pkRunStart(sh && sh.querySelector('#wl-confirm-row'), passEl ? [passEl] : []);
   if (!run) return;
+  if (action === 'pkadd') {
+    run.timer = setTimeout(() => {
+      run.timer = null;
+      if (pkRun !== run) return;
+      pkCancel();
+      const text = 'Setup timed out. Start again.';
+      walletShowMsg(text, false); walletLoad({ text, ok: false });
+    }, PK_ENROLL_MS);
+  }
   let passphrase = '', name = '';
   if (passEl) {
     passphrase = passEl.value; passEl.value = '';   // the passphrase lives only in this request
-    if (!passphrase) { pkRunEnd(run); walletShowMsg('Type the wallet passphrase first.', false); passEl.focus(); return; }
+    if (!passphrase) {
+      pkRunEnd(run);
+      const text = 'Type the wallet passphrase first.';
+      walletShowMsg(text, false); passEl.focus();
+      walletLoad({ text, ok: false });   // the run stopped any load in flight: start one again, keeping the message
+      return;
+    }
   }
   try {
     let done;
@@ -4744,11 +4768,15 @@ async function walletAct(action, id) {
       await pkAdd((p, b) => walletApi(p, b, run.ctrl.signal), { passphrase, label: name }, confirmStep, run.ctrl.signal);
       done = `Added. ${name} can now unlock the wallet.`;
     }
+    passphrase = '';   // the request that needed it has settled
     if (!pkRunEnd(run)) return;   // cancelled: its canceller already cleaned up
     await walletLoad({ text: done, ok: true });
   } catch (e) {
+    passphrase = '';
     if (!pkRunEnd(run)) return;
-    walletShowMsg(pkErrorText(e), false);
+    const text = pkErrorText(e);
+    walletShowMsg(text, false);
+    walletLoad({ text, ok: false });   // the run stopped any load in flight: start one again, keeping the message
   }
 }
 // The after-restart notice "Your wallet is locked": on or off; the box goes back when the hub refuses.

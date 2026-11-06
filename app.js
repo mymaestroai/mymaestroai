@@ -1540,11 +1540,14 @@
     // Whoever cancels a run (a redraw or closing the panel) also cleans it up at once; the cancelled run's own code
     // then finds pkRunEnd(run) false and does nothing more. walletPkList is the passkey list the panel last drew,
     // so Remove can name the passkey without carrying its label in an attribute.
-    let pkRun = null, walletPkList = [];
+    // walletPanelGen counts panel loads and runs: a load only draws while it is still the latest.
+    let pkRun = null, walletPkList = [], walletPanelGen = 0;
+    const PK_ENROLL_MS = 110000;   // the server's challenge lives 120 seconds
     function pkRunStart(confirmRow, fields) {
       if (pkRun) return null;
-      const run = { ctrl: new AbortController(), cancelled: false, rejectConfirm: null, confirmRow, fields: fields || [], watch: null };
+      const run = { ctrl: new AbortController(), cancelled: false, rejectConfirm: null, confirmRow, fields: fields || [], watch: null, timer: null };
       pkRun = run;
+      walletPanelGen++;
       document.querySelectorAll('#pk-box button, #pk-unlock-btn').forEach(b => { b.disabled = true; });
       // The panel leaving the page ends the run.
       const overlay = document.getElementById('gs-overlay');
@@ -1556,6 +1559,7 @@
     }
     function pkRunCleanup(run) {
       if (run.watch) { run.watch.disconnect(); run.watch = null; }
+      if (run.timer) { clearTimeout(run.timer); run.timer = null; }
       document.querySelectorAll('#pk-box button, #pk-unlock-btn').forEach(b => { b.disabled = false; });
       if (run.confirmRow && run.confirmRow.isConnected) run.confirmRow.innerHTML = '';
       for (const f of run.fields) f.value = '';
@@ -1823,9 +1827,15 @@
     }
     setInterval(refreshScheduleBadge, 15000); setTimeout(refreshScheduleBadge, 1500);
 
-    async function openWalletPanel(flash, extra = {}) {
+    // opts.refresh: a redraw after a run; it never reopens a Wallet panel the person closed meanwhile.
+    async function openWalletPanel(flash, extra = {}, opts = {}) {
+      const gen = ++walletPanelGen;
+      const panelGone = () => { const ov = document.getElementById('gs-overlay'); return !(ov && ov.isConnected && ov.querySelector('#pk-box')); };
       const dock = { dock: true, title: '👛 Trading wallets' }; const head = ''; const field = 'width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:transparent;color:inherit;font:inherit;margin:6px 0';
-      let s; try { s = await walletApi('status'); } catch (e) { pkCancel(); return gsModal(`${head}<div class="gs-blocker">${esc(e.message)}</div><div class="gs-actions">${gsClose}</div>`, dock); }
+      let s, err = null; try { s = await walletApi('status'); } catch (e) { err = e; }
+      if (gen !== walletPanelGen) return;   // a newer load or a run started meanwhile
+      if (opts.refresh && panelGone()) return;
+      if (err) { pkCancel(); return gsModal(`${head}<div class="gs-blocker">${esc(err.message)}</div><div class="gs-actions">${gsClose}</div>`, dock); }
       walletPkList = (s.keystore && s.keystore.passkeys) || [];
       const note = (flash ? `<div class="gs-ok">${esc(flash)}</div>` : '') + (extra.token
         ? `<div class="gs-ok"><strong>New executor token, shown once.</strong> Only its hash is stored; if you lose it, generate another.<br>
@@ -1883,6 +1893,7 @@
         ${unlockBox}${passkeyBox}${revealOut}<div class="gs-box"><h4>Wallets on Base</h4>${rows}</div>${recoveryBox}
         <p class="gs-sub">Fund a wallet by sending ETH on <strong>Base</strong> to its address. Whatever it holds is the most the agent can lose. Never import a seed phrase; these are fresh standalone keys.</p>`;
       let x = null; try { x = await walletApi('executor'); } catch { /* older server */ }
+      if (gen !== walletPanelGen) return;
       if (x) {
         const opts = s.wallets.map(w => `<option value="${esc(w.name)}" ${x.wallet === w.name ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
         const actWallet = a => s.wallets.map(w => `<option value="${esc(w.name)}" ${a.wallet === w.name ? 'selected' : ''}>${esc(w.name)}${w.tier === 'open' ? ' (OPEN)' : ''}</option>`).join('');
@@ -1903,6 +1914,7 @@
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('xtoken')">New token</button><button class="gs-btn" onclick="walletAct('xsave')">Save executor settings</button></div></div>`;
       }
       let h = null; try { h = await walletApi('hl'); } catch { /* older server */ }
+      if (gen !== walletPanelGen) return;
       if (h) {
         const wopts = s.wallets.filter(w => !/^hl-agent-/.test(w.name)).map(w => `<option value="${esc(w.name)}" ${h.wallet === w.name ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
         const tools = Object.entries(h.tools).map(([k, t]) => `<label style="margin-right:10px;white-space:nowrap"><input type="checkbox" id="h-act-${k}" ${t.enabled ? 'checked' : ''}> ${esc(k)}</label><label style="margin-right:14px;white-space:nowrap"><input type="checkbox" id="h-dry-${k}" ${t.dryRun ? 'checked' : ''}> dry run</label>`).join('');
@@ -1924,6 +1936,8 @@
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('hagent')">Set up Hyperliquid agent key</button><button class="gs-btn secondary" onclick="walletAct('hextagent')">Authorize external agent</button><button class="gs-btn" onclick="walletAct('hsave')">Save Hyperliquid settings</button></div></div>`;
       }
       let fw = null; try { fw = await walletApi('allowlist'); } catch { /* older server */ }
+      if (gen !== walletPanelGen) return;
+      if (opts.refresh && panelGone()) return;
       if (fw && fw.roles) {
         walletFw = fw;
         const chainName = { 1: 'Ethereum', 8453: 'Base', 42161: 'Arbitrum', 10: 'Optimism' };
@@ -1998,6 +2012,9 @@
       const passEl = action === 'unlock' ? document.getElementById('w-pass') : action === 'pkadd' ? document.getElementById('pk-pass') : null;
       const run = pkRunStart(document.getElementById('pk-confirm-row'), passEl ? [passEl] : []);
       if (!run) return;
+      if (action === 'pkadd') {
+        run.timer = setTimeout(() => { run.timer = null; if (pkRun === run) { pkCancel(); alert('Setup timed out. Start again.'); } }, PK_ENROLL_MS);
+      }
       let passphrase = '', name = '';
       if (passEl) {
         passphrase = passEl.value; passEl.value = '';   // the passphrase lives only in this request
@@ -2025,9 +2042,11 @@
           await pkAdd((p, b) => walletApi(p, b, run.ctrl.signal), { passphrase, label: name }, confirmStep, run.ctrl.signal);
           done = `Added. ${name} can now unlock the wallet.`;
         }
+        passphrase = '';   // the request that needed it has settled
         if (!pkRunEnd(run)) return;   // cancelled: its canceller already cleaned up
-        await openWalletPanel(done);
+        await openWalletPanel(done, {}, { refresh: true });
       } catch (e) {
+        passphrase = '';
         if (!pkRunEnd(run)) return;
         alert(pkErrorText(e));
       }
@@ -2041,6 +2060,7 @@
       } catch (e) { box.checked = !on; alert(e.message); }
     }
     async function walletAct(action, arg, arg2) {
+      if (pkRun) return;   // a Face ID / fingerprint or passphrase run is going: every other action waits
       const v = id => (document.getElementById(id) || {}).value || '';
       // Read the executor passphrase field and clear it immediately: it lives only in this request.
       const takePass = () => { const el = document.getElementById('x-pass'); const p = el ? el.value : ''; if (el) el.value = ''; if (!p) alert('Enter the keystore passphrase in the Executor box first.'); return p; };

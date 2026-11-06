@@ -189,6 +189,10 @@ describe('wallet keystore: passkeys (Face ID / fingerprint unlock)', () => {
     ks.removePasskey(id(6)); assert.strictEqual(ks.passkeys().length, 1);              // nor remove
     for (let n = 10; n < 19; n++) ks.addPasskey(slot({ id: id(n) }));                  // malformed entries don't count toward ten
     assert.strictEqual(ks.passkeys().length, 10);
+    assert.throws(() => ks.addPasskey(slot({ id: id(5) })), /already set up/);         // a broken entry holds its id ...
+    assert.strictEqual(ks.removePasskey(id(5)).id, id(5));                             // ... and can be removed
+    ks.removePasskey(id(18)); ks.addPasskey(slot({ id: id(5), label: 'soft\u00adhyphen tag\u{e0041}' }));
+    assert.strictEqual(ks.passkeys().find(p => p.id === id(5)).label, 'soft hyphen tag');
   });
   it('unlocking an already unlocked keystore with a passkey changes nothing', async () => {
     const ks = mk(); ks.init(PASS); const w = ks.createWallet('bot'); const s = slot(); ks.addPasskey(s);
