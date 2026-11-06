@@ -110,19 +110,20 @@ test('refuses: methods', async () => {
   assert.strictEqual(env.calls.length, 0);
 });
 
-test('refuses: cross-site and foreign origin', async () => {
+test('refuses a foreign Origin; a sandboxed (null) or cross-site form post passes', async () => {
   const env = makeEnv();
   let { res } = await run(env, { headers: { origin: 'https://evil.example' } });
   assert.strictEqual(res.status, 403);
+  // Sec-Fetch-Site is not used: a sandboxed page's form post is cross-site by definition, and receivers carry no cookies.
   ({ res } = await run(env, { headers: { 'sec-fetch-site': 'cross-site' } }));
-  assert.strictEqual(res.status, 403);
-  ({ res } = await run(env, { headers: { origin: 'https://hub.example.com', 'sec-fetch-site': 'cross-site' } }));
-  assert.strictEqual(res.status, 403);
+  assert.strictEqual(res.status, 200);
+  ({ res } = await run(env, { headers: { origin: 'null', 'sec-fetch-site': 'cross-site' } }));
+  assert.strictEqual(res.status, 200);
   ({ res } = await run(env, { headers: { origin: 'https://hub.example.com', 'sec-fetch-site': 'same-origin' } }));
   assert.strictEqual(res.status, 200);
   ({ res } = await run(env, { headers: { origin: 'http://HUB.example.com'.replace('HUB', 'hub') } }));
   assert.strictEqual(res.status, 200);
-  assert.strictEqual(env.calls.length, 2);
+  assert.strictEqual(env.calls.length, 4);
 });
 
 test('rate limit: 429 at the 121st, per ip, and the window slides', async () => {
@@ -384,7 +385,7 @@ test('the 21st concurrent request gets 503 with Retry-After 5, and slots are fre
     request: () => new Promise((resolve) => waiters.push(() => resolve({ status: 200, body: 'ok' }))) });
   const pending = [];
   for (let i = 0; i < 20; i++) {
-    const req = fakeReq({ method: 'GET' }); const res = fakeRes();
+    const req = fakeReq({ method: 'GET', peer: `10.3.0.${i + 1}` }); const res = fakeRes();
     pending.push(env.r.handle(req, res, { id: 'demo', sub: 'events' })); req.send();
   }
   await new Promise((r) => setImmediate(r));
@@ -403,4 +404,20 @@ test('EBACKOFF from request(): 503 with Retry-After 10', async () => {
   const e = new Error('backing off'); e.code = 'EBACKOFF';
   const { res } = await run(makeEnv({ fail: e }), {});
   assert.strictEqual(res.status, 503); assert.strictEqual(hdr(res, 'retry-after'), '10');
+});
+
+test("one sender holds at most 4 of a module's in-flight places", async () => {
+  const env = makeEnv();
+  const waiters = [];
+  env.r = createReceivers({ manifestOf: () => env.manifest, connectorFor: () => env.connector, getSetting: () => ({}), now: () => env.clock,
+    request: () => new Promise((resolve) => waiters.push(() => resolve({ status: 200, body: 'ok' }))) });
+  const pending = [];
+  for (let i = 0; i < 4; i++) { const req = fakeReq({ method: 'GET', peer: '10.4.0.1' }); pending.push(env.r.handle(req, fakeRes(), { id: 'demo', sub: 'events' })); req.send(); }
+  await new Promise((r) => setImmediate(r));
+  const res = fakeRes(); await env.r.handle(fakeReq({ method: 'GET', peer: '10.4.0.1' }), res, { id: 'demo', sub: 'events' });
+  assert.strictEqual(res.status, 503);
+  const other = fakeReq({ method: 'GET', peer: '10.4.0.2' }); const res2 = fakeRes(); const p2 = env.r.handle(other, res2, { id: 'demo', sub: 'events' }); other.send();
+  await new Promise((r) => setImmediate(r));
+  waiters.forEach((w) => w()); await Promise.all([...pending, p2]);
+  assert.strictEqual(res2.status, 200);
 });
