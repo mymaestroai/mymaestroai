@@ -1419,9 +1419,9 @@
     }
 
     // ── Trading wallets (owner panel). Agents never see this; they only get wallet_* tools. ──
-    async function walletApi(path, body) {
-      const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include' }
-        : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    async function walletApi(path, body, signal) {
+      const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include', signal }
+        : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
       const j = await r.json(); if (!r.ok) throw new Error(j.error || 'Request failed'); return j;
     }
     // Face ID / fingerprint unlock of the keystore (WebAuthn PRF). Shared verbatim with lib/ui-passkey.js and mobile.js
@@ -1459,8 +1459,12 @@
       if (name === 'AbortError') return 'Cancelled.';
       return (e && e.message) || 'Something went wrong.';
     }
+    function pkStop(signal) {
+      if (signal && signal.aborted) throw new DOMException('Cancelled.', 'AbortError');
+    }
     async function pkUnlock(api, signal) {
       const o = await api('passkey/options', { purpose: 'unlock' });
+      pkStop(signal);
       const one = o.allowCredentials.length === 1;
       const byCred = {};
       for (const c of o.allowCredentials) byCred[c.id] = { first: pkBytes(o.prfSalts[c.id]) };
@@ -1470,6 +1474,7 @@
         extensions: { prf: { evalByCredential: byCred, ...(one ? { eval: { first: pkBytes(o.prfSalts[o.allowCredentials[0].id]) } } : {}) } },
       };
       const cred = await navigator.credentials.get({ publicKey, signal });
+      pkStop(signal);
       const prf = cred.getClientExtensionResults().prf?.results?.first;
       if (!prf) throw new Error("This device didn't give the unlock secret. Use the passphrase instead.");
       return api('passkey/unlock', {
@@ -1481,20 +1486,24 @@
     async function pkAdd(api, { passphrase, label }, confirmStep, signal) {
       const stray = ' A passkey named "My Maestro wallet" may have been saved on this device; you can delete it in its password manager.';
       const o = await api('passkey/options', { purpose: 'register', passphrase });
+      pkStop(signal);
       const cred = await navigator.credentials.create({ publicKey: {
         challenge: pkBytes(o.challenge), rp: o.rp, user: { ...o.user, id: pkBytes(o.user.id) }, pubKeyCredParams: o.pubKeyCredParams,
         timeout: o.timeout, attestation: 'none', authenticatorSelection: o.authenticatorSelection,
         excludeCredentials: o.excludeCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
         extensions: { prf: { eval: { first: pkBytes(o.prfSalt) } } },
       }, signal });
+      pkStop(signal);
       const ext = cred.getClientExtensionResults().prf;
       if (ext && ext.enabled === false) throw new Error("This device's passkeys can't unlock the wallet. Keep using the passphrase here." + stray);
       const pub = cred.response.getPublicKey ? cred.response.getPublicKey() : null;
       if (!pub) throw new Error("This device's passkey type isn't supported here.");
       let prf = ext?.results?.first, confirm;
       if (!prf) {
+        pkStop(signal);
         await confirmStep();
         const c = await api('passkey/options', { purpose: 'confirm', registerChallenge: o.challenge });
+        pkStop(signal);
         const g = await navigator.credentials.get({ publicKey: {
           challenge: pkBytes(c.challenge), rpId: c.rpId, timeout: c.timeout, userVerification: 'required',
           allowCredentials: [{ type: 'public-key', id: cred.rawId }],
@@ -1504,6 +1513,7 @@
         if (!prf) throw new Error("This device didn't give the unlock secret, so it can't unlock the wallet." + stray);
         confirm = { challenge: c.challenge, clientDataJSON: pkB64u(g.response.clientDataJSON), authenticatorData: pkB64u(g.response.authenticatorData), signature: pkB64u(g.response.signature) };
       }
+      pkStop(signal);
       return api('passkey/register', {
         passphrase, label, challenge: o.challenge,
         credential: {
@@ -1525,15 +1535,42 @@
       return 'This device';
     }
     // ── passkey helpers (end) ──
-    // The running Face ID / fingerprint add or unlock: { ctrl, rejectConfirm }. Redrawing or closing the Wallet panel
-    // cancels it (the browser prompt closes, a pending "Confirm" tap is rejected). walletPkList is the passkey list the
-    // panel last drew, so Remove can name the passkey without carrying its label in an attribute.
-    let pkCurrent = null, walletPkList = [];
+    // One wallet run at a time (a Face ID / fingerprint add or unlock, a passphrase unlock, a remove):
+    // { ctrl, cancelled, rejectConfirm, confirmRow, fields } (the run's own confirm row and passphrase inputs).
+    // Whoever cancels a run (a redraw or closing the panel) also cleans it up at once; the cancelled run's own code
+    // then finds pkRunEnd(run) false and does nothing more. walletPkList is the passkey list the panel last drew,
+    // so Remove can name the passkey without carrying its label in an attribute.
+    let pkRun = null, walletPkList = [];
+    function pkRunStart(confirmRow, fields) {
+      if (pkRun) return null;
+      const run = { ctrl: new AbortController(), cancelled: false, rejectConfirm: null, confirmRow, fields: fields || [], watch: null };
+      pkRun = run;
+      document.querySelectorAll('#pk-box button, #pk-unlock-btn').forEach(b => { b.disabled = true; });
+      // The panel leaving the page ends the run.
+      const overlay = document.getElementById('gs-overlay');
+      if (overlay && window.MutationObserver) {
+        run.watch = new MutationObserver(() => { if (!overlay.isConnected) pkCancel(); });
+        run.watch.observe(document.body, { childList: true });
+      }
+      return run;
+    }
+    function pkRunCleanup(run) {
+      if (run.watch) { run.watch.disconnect(); run.watch = null; }
+      document.querySelectorAll('#pk-box button, #pk-unlock-btn').forEach(b => { b.disabled = false; });
+      if (run.confirmRow && run.confirmRow.isConnected) run.confirmRow.innerHTML = '';
+      for (const f of run.fields) f.value = '';
+    }
     function pkCancel() {
-      const run = pkCurrent; pkCurrent = null;
-      if (!run) return;
+      if (!pkRun) return;
+      const run = pkRun; pkRun = null; run.cancelled = true;
       try { run.ctrl.abort(); } catch { /* already finished */ }
-      if (run.rejectConfirm) run.rejectConfirm(new DOMException('Cancelled.', 'AbortError'));
+      if (run.rejectConfirm) { const rej = run.rejectConfirm; run.rejectConfirm = null; rej(new DOMException('Cancelled.', 'AbortError')); }
+      pkRunCleanup(run);
+    }
+    function pkRunEnd(run) {
+      if (pkRun !== run) return false;
+      pkRun = null; pkRunCleanup(run);
+      return true;
     }
     // esc() leaves quotes alone; every value inside an attribute goes through this one.
     const escAttr = (s) => String(s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1788,8 +1825,7 @@
 
     async function openWalletPanel(flash, extra = {}) {
       const dock = { dock: true, title: '👛 Trading wallets' }; const head = ''; const field = 'width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:transparent;color:inherit;font:inherit;margin:6px 0';
-      pkCancel();   // a redraw ends any Face ID / fingerprint prompt still open
-      let s; try { s = await walletApi('status'); } catch (e) { return gsModal(`${head}<div class="gs-blocker">${esc(e.message)}</div><div class="gs-actions">${gsClose}</div>`, dock); }
+      let s; try { s = await walletApi('status'); } catch (e) { pkCancel(); return gsModal(`${head}<div class="gs-blocker">${esc(e.message)}</div><div class="gs-actions">${gsClose}</div>`, dock); }
       walletPkList = (s.keystore && s.keystore.passkeys) || [];
       const note = (flash ? `<div class="gs-ok">${esc(flash)}</div>` : '') + (extra.token
         ? `<div class="gs-ok"><strong>New executor token, shown once.</strong> Only its hash is stored; if you lose it, generate another.<br>
@@ -1797,6 +1833,7 @@
             <button class="gs-btn secondary" onclick="navigator.clipboard.writeText(document.getElementById('x-token-out').textContent).then(()=>{this.textContent='Copied'})">Copy</button></div>` : '');
       const alerts = (s.alerts || []).map(a => `<div class="gs-blocker"><strong>Security alert:</strong> ${esc(a.message)} (−${esc(a.droppedEth)} ETH)</div>`).join('');
       if (!s.keystore.exists) {
+        pkCancel();
         return gsModal(`${head}${note}<p class="gs-sub">Create an encrypted keystore. The passphrase is the only thing protecting the keys on disk, and it cannot be recovered: if you lose it, move funds out first or the wallets are gone.</p>
           <input id="w-pass" type="password" placeholder="Passphrase (12+ characters)" style="${field}"><input id="w-pass2" type="password" placeholder="Repeat passphrase" style="${field}">
           <div class="gs-actions">${gsClose}<button class="gs-btn" onclick="walletAct('init')">Create keystore</button></div>`, dock);
@@ -1937,6 +1974,7 @@
           <button class="gs-btn secondary" onclick="walletAct('pause', ${!s.paused})">${s.paused ? 'Resume trading' : 'Pause all trading'}</button>
           <button class="gs-btn" onclick="walletAct('create')">Create wallet</button></div>`;
       }
+      pkCancel();   // a redraw ends a Face ID / fingerprint run still open on the panel being replaced
       gsModal(html, dock);
       walletFwHint();
     }
@@ -1952,49 +1990,46 @@
     // The Face ID / fingerprint buttons of the Wallet panel. Buttons stay disabled while a request runs; the passphrase
     // field is emptied before the request and stays empty after it.
     async function walletPasskeyAct(action, id) {
-      const btns = [...document.querySelectorAll('#pk-box button, #pk-unlock-btn')];
-      const busy = (on) => btns.forEach(b => { b.disabled = on; });
-      const box = document.getElementById('pk-box');
-      let run = null, watch = null;
+      if (pkRun) return;   // one run at a time: this click or Enter is ignored
+      if (action === 'pkremove') {
+        const known = walletPkList.find(p => p.id === id), label = known ? known.label : 'this passkey';
+        if (!confirm(`Remove "${label}"? It will stop unlocking this wallet. Copies of the wallet file made before now still accept it, protected by that passkey's own Face ID, fingerprint or screen lock.`)) return;
+      }
+      const passEl = action === 'unlock' ? document.getElementById('w-pass') : action === 'pkadd' ? document.getElementById('pk-pass') : null;
+      const run = pkRunStart(document.getElementById('pk-confirm-row'), passEl ? [passEl] : []);
+      if (!run) return;
+      let passphrase = '', name = '';
+      if (passEl) {
+        passphrase = passEl.value; passEl.value = '';   // the passphrase lives only in this request
+        if (!passphrase) {
+          pkRunEnd(run);
+          passEl.scrollIntoView({ block: 'center' }); passEl.focus();
+          return alert(action === 'unlock' ? 'Type the keystore passphrase in the "Unlock the keystore" box at the top of the panel.' : 'Type the keystore passphrase in the "Face ID / fingerprint" box first.');
+        }
+      }
       try {
-        if (action === 'pkremove') {
-          const known = walletPkList.find(p => p.id === id), label = known ? known.label : 'this passkey';
-          if (!confirm(`Remove "${label}"? It will stop unlocking this wallet. Copies of the wallet file made before now still accept it, protected by that passkey's own Face ID, fingerprint or screen lock.`)) return;
-          busy(true); await walletApi('passkey/remove', { id }); return openWalletPanel('Removed.');
+        let done;
+        if (action === 'pkremove') { await walletApi('passkey/remove', { id }, run.ctrl.signal); done = 'Removed.'; }
+        else if (action === 'pkunlock') { await pkUnlock((p, b) => walletApi(p, b, run.ctrl.signal), run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+        else if (action === 'unlock') { await walletApi('unlock', { passphrase }, run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+        else {
+          const labelEl = document.getElementById('pk-label');
+          name = ((labelEl && labelEl.value) || '').trim() || pkDeviceLabel();
+          const confirmStep = () => new Promise((resolve, reject) => {
+            if (run.cancelled || run.ctrl.signal.aborted) return reject(new DOMException('Cancelled.', 'AbortError'));
+            const row = run.confirmRow; if (!row) return resolve();
+            run.rejectConfirm = reject;
+            row.innerHTML = '<div class="gs-sub">One more tap: confirm with this device.</div><div class="gs-actions"><button class="gs-btn" id="pk-confirm-btn">Confirm with Face ID / fingerprint</button></div>';
+            row.querySelector('#pk-confirm-btn').onclick = () => { run.rejectConfirm = null; row.innerHTML = ''; resolve(); };
+          });
+          await pkAdd((p, b) => walletApi(p, b, run.ctrl.signal), { passphrase, label: name }, confirmStep, run.ctrl.signal);
+          done = `Added. ${name} can now unlock the wallet.`;
         }
-        let passphrase = '', name = '';
-        if (action === 'pkadd') {
-          const passEl = document.getElementById('pk-pass'), labelEl = document.getElementById('pk-label');
-          passphrase = passEl ? passEl.value : ''; name = ((labelEl && labelEl.value) || '').trim() || pkDeviceLabel();
-          if (passEl) passEl.value = '';
-          if (!passphrase) { if (passEl) { passEl.scrollIntoView({ block: 'center' }); passEl.focus(); } return alert('Type the keystore passphrase in the "Face ID / fingerprint" box first.'); }
-        }
-        pkCancel();
-        run = pkCurrent = { ctrl: new AbortController(), rejectConfirm: null };
-        // Closing the panel (the overlay leaving the page) ends the prompt too.
-        const overlay = document.getElementById('gs-overlay');
-        if (overlay) { watch = new MutationObserver(() => { if (!overlay.isConnected && pkCurrent === run) pkCancel(); }); watch.observe(document.body, { childList: true }); }
-        busy(true);
-        if (action === 'pkunlock') { await pkUnlock(walletApi, run.ctrl.signal); return openWalletPanel('Unlocked until the hub restarts.'); }
-        const confirmStep = () => new Promise((resolve, reject) => {
-          const row = document.getElementById('pk-confirm-row'); if (!row) return resolve();
-          run.rejectConfirm = reject;
-          row.innerHTML = '<div class="gs-sub">One more tap: confirm with this device.</div><div class="gs-actions"><button class="gs-btn" id="pk-confirm-btn">Confirm with Face ID / fingerprint</button></div>';
-          document.getElementById('pk-confirm-btn').onclick = () => { row.innerHTML = ''; run.rejectConfirm = null; resolve(); };
-        });
-        await pkAdd(walletApi, { passphrase, label: name }, confirmStep, run.ctrl.signal);
-        return openWalletPanel(`Added. ${name} can now unlock the wallet.`);
+        if (!pkRunEnd(run)) return;   // cancelled: its canceller already cleaned up
+        await openWalletPanel(done);
       } catch (e) {
-        // A run that was cancelled by a redraw or a close stays silent; a newer panel is not painted over.
-        if (!run || pkCurrent === run) alert(pkErrorText(e));
-      } finally {
-        if (watch) watch.disconnect();
-        if (pkCurrent === run) pkCurrent = null;
-        if (box && box.isConnected) {
-          busy(false);
-          const row = document.getElementById('pk-confirm-row'); if (row) row.innerHTML = '';
-          const passEl = document.getElementById('pk-pass'); if (passEl) passEl.value = '';
-        }
+        if (!pkRunEnd(run)) return;
+        alert(pkErrorText(e));
       }
     }
     // The phone notice "Your wallet is locked" after a restart: on or off.
@@ -2012,8 +2047,9 @@
       try {
         if (action === 'init') { if (v('w-pass') !== v('w-pass2')) return alert('The two passphrases do not match.'); await walletApi('init', { passphrase: v('w-pass') }); return openWalletPanel('Keystore created and unlocked.'); }
         if (action === 'unlock') {
+          if (pkRun) return;   // one run at a time
           const p = v('w-pass'); if (!p) { const el = document.getElementById('w-pass'); if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); } return alert('Type the keystore passphrase in the "Unlock the keystore" box at the top of the panel.'); }
-          await walletApi('unlock', { passphrase: p }); return openWalletPanel('Unlocked until the hub restarts.');
+          return walletPasskeyAct('unlock');
         }
         if (action === 'pkunlock' || action === 'pkadd' || action === 'pkremove') return walletPasskeyAct(action, arg, arg2);
         if (action === 'lock') { await walletApi('lock', {}); return openWalletPanel('Locked.'); }

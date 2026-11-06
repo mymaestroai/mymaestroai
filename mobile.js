@@ -1859,8 +1859,12 @@ function pkErrorText(e) {
   if (name === 'AbortError') return 'Cancelled.';
   return (e && e.message) || 'Something went wrong.';
 }
+function pkStop(signal) {
+  if (signal && signal.aborted) throw new DOMException('Cancelled.', 'AbortError');
+}
 async function pkUnlock(api, signal) {
   const o = await api('passkey/options', { purpose: 'unlock' });
+  pkStop(signal);
   const one = o.allowCredentials.length === 1;
   const byCred = {};
   for (const c of o.allowCredentials) byCred[c.id] = { first: pkBytes(o.prfSalts[c.id]) };
@@ -1870,6 +1874,7 @@ async function pkUnlock(api, signal) {
     extensions: { prf: { evalByCredential: byCred, ...(one ? { eval: { first: pkBytes(o.prfSalts[o.allowCredentials[0].id]) } } : {}) } },
   };
   const cred = await navigator.credentials.get({ publicKey, signal });
+  pkStop(signal);
   const prf = cred.getClientExtensionResults().prf?.results?.first;
   if (!prf) throw new Error("This device didn't give the unlock secret. Use the passphrase instead.");
   return api('passkey/unlock', {
@@ -1881,20 +1886,24 @@ async function pkUnlock(api, signal) {
 async function pkAdd(api, { passphrase, label }, confirmStep, signal) {
   const stray = ' A passkey named "My Maestro wallet" may have been saved on this device; you can delete it in its password manager.';
   const o = await api('passkey/options', { purpose: 'register', passphrase });
+  pkStop(signal);
   const cred = await navigator.credentials.create({ publicKey: {
     challenge: pkBytes(o.challenge), rp: o.rp, user: { ...o.user, id: pkBytes(o.user.id) }, pubKeyCredParams: o.pubKeyCredParams,
     timeout: o.timeout, attestation: 'none', authenticatorSelection: o.authenticatorSelection,
     excludeCredentials: o.excludeCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
     extensions: { prf: { eval: { first: pkBytes(o.prfSalt) } } },
   }, signal });
+  pkStop(signal);
   const ext = cred.getClientExtensionResults().prf;
   if (ext && ext.enabled === false) throw new Error("This device's passkeys can't unlock the wallet. Keep using the passphrase here." + stray);
   const pub = cred.response.getPublicKey ? cred.response.getPublicKey() : null;
   if (!pub) throw new Error("This device's passkey type isn't supported here.");
   let prf = ext?.results?.first, confirm;
   if (!prf) {
+    pkStop(signal);
     await confirmStep();
     const c = await api('passkey/options', { purpose: 'confirm', registerChallenge: o.challenge });
+    pkStop(signal);
     const g = await navigator.credentials.get({ publicKey: {
       challenge: pkBytes(c.challenge), rpId: c.rpId, timeout: c.timeout, userVerification: 'required',
       allowCredentials: [{ type: 'public-key', id: cred.rawId }],
@@ -1904,6 +1913,7 @@ async function pkAdd(api, { passphrase, label }, confirmStep, signal) {
     if (!prf) throw new Error("This device didn't give the unlock secret, so it can't unlock the wallet." + stray);
     confirm = { challenge: c.challenge, clientDataJSON: pkB64u(g.response.clientDataJSON), authenticatorData: pkB64u(g.response.authenticatorData), signature: pkB64u(g.response.signature) };
   }
+  pkStop(signal);
   return api('passkey/register', {
     passphrase, label, challenge: o.challenge,
     credential: {
@@ -4566,18 +4576,40 @@ function onAboutClick(e) {
 let walletStatus = null;   // the last GET /api/wallet/status
 let walletMsg = null;      // { text, ok }: the result line inside the sheet
 let walletBusy = false;
-// The running wallet request: { ctrl, rejectConfirm }. Closing the sheet or repainting its body while a Face ID prompt or
-// the "Confirm" button is up cancels it (the prompt closes, the pending tap is rejected).
-let pkCurrent = null;
-function pkCancel() {
-  const run = pkCurrent; pkCurrent = null;
-  if (!run) return;
-  try { run.ctrl.abort(); } catch { /* already finished */ }
-  if (run.rejectConfirm) run.rejectConfirm(new DOMException('Cancelled.', 'AbortError'));
+// One wallet run at a time (a Face ID / fingerprint add or unlock, a passphrase unlock, a remove):
+// { ctrl, cancelled, rejectConfirm, confirmRow, fields } (the run's own confirm row and passphrase inputs). Closing the
+// sheet cancels it and cleans up at once; the cancelled run's own code then finds pkRunEnd(run) false and does nothing.
+// walletGen counts status loads and runs: a load only paints while it is still the latest and no run is going.
+let pkRun = null;
+let walletGen = 0;
+function pkRunStart(confirmRow, fields) {
+  if (pkRun) return null;
+  const run = { ctrl: new AbortController(), cancelled: false, rejectConfirm: null, confirmRow, fields: fields || [] };
+  pkRun = run;
+  walletSetBusy(true);
+  walletGen++;
+  return run;
 }
-async function walletApi(path, body) {
-  const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include' }
-    : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+function pkRunCleanup(run) {
+  walletSetBusy(false);
+  if (run.confirmRow && run.confirmRow.isConnected) run.confirmRow.innerHTML = '';
+  for (const f of run.fields) f.value = '';
+}
+function pkCancel() {
+  if (!pkRun) return;
+  const run = pkRun; pkRun = null; run.cancelled = true;
+  try { run.ctrl.abort(); } catch { /* already finished */ }
+  if (run.rejectConfirm) { const rej = run.rejectConfirm; run.rejectConfirm = null; rej(new DOMException('Cancelled.', 'AbortError')); }
+  pkRunCleanup(run);
+}
+function pkRunEnd(run) {
+  if (pkRun !== run) return false;
+  pkRun = null; pkRunCleanup(run);
+  return true;
+}
+async function walletApi(path, body, signal) {
+  const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include', signal }
+    : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || 'Request failed');
   return j;
@@ -4594,7 +4626,7 @@ function walletSheet() {
   sh.dataset.noDirty = '';   // its fields are emptied before every request: nothing to lose
   sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Wallet</span>' +
     '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body wl-body" tabindex="-1"></div>';
-  const close = () => { pkCancel(); sh.classList.remove('open'); dialogGuard.closed(sh); };
+  const close = () => { pkCancel(); walletGen++; sh.classList.remove('open'); dialogGuard.closed(sh); };
   sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
   sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
   sh.addEventListener('click', (e) => { const b = e.target.closest('[data-wl]'); if (b && !walletBusy) walletAct(b.dataset.wl, b.dataset.id); });
@@ -4618,15 +4650,21 @@ function openWalletSheet() {
 }
 async function walletLoad(msg) {
   if (msg !== undefined) walletMsg = msg;
-  try { walletStatus = await walletApi('status'); }
-  catch (e) { walletStatus = null; walletMsg = { text: pkErrorText(e), ok: false }; }
+  const gen = ++walletGen;
+  let status = null, failed = null;
+  try { status = await walletApi('status'); }
+  catch (e) { failed = { text: pkErrorText(e), ok: false }; }
+  // A newer load, a run, or closing the sheet since this started: paint nothing.
+  const sh = $('wallet-sheet');
+  if (gen !== walletGen || !sh || !sh.classList.contains('open') || pkRun) return;
+  walletStatus = status;
+  if (failed) walletMsg = failed;
   walletPaint();
 }
 function walletPaint() {
   const sh = $('wallet-sheet');
   if (!sh || !sh.classList.contains('open')) return;
   const body = sh.querySelector('.wl-body');
-  pkCancel();   // a repaint ends a Face ID prompt or a "Confirm" button still showing
   const s = walletStatus, ks = s && s.keystore;
   const msg = walletMsg ? `<div class="sec-msg wl-msg${walletMsg.ok ? ' ok' : ''}" role="status">${esc(walletMsg.text)}</div>` : '';
   if (!ks) { body.innerHTML = `<p class="wl-status">Loading…</p>${msg}`; return; }
@@ -4675,56 +4713,42 @@ function walletShowMsg(text, ok) {
 async function walletAct(action, id) {
   const sh = $('wallet-sheet');
   const val = (i) => { const el = sh && sh.querySelector('#' + i); return el ? el.value : ''; };
-  let run = null;
+  if (pkRun) return;   // one run at a time: this tap or Enter is ignored
+  if (action === 'pkremove') {
+    const known = ((walletStatus && walletStatus.keystore && walletStatus.keystore.passkeys) || []).find(p => p.id === id);
+    const label = known ? known.label : 'this passkey';
+    if (!confirm(`Remove "${label}"? It will stop unlocking this wallet. Copies of the wallet file made before now still accept it, protected by that passkey's own Face ID, fingerprint or screen lock.`)) return;
+  }
+  const passEl = sh && (action === 'unlock' ? sh.querySelector('#wl-pass') : action === 'pkadd' ? sh.querySelector('#wl-pk-pass') : null);
+  const run = pkRunStart(sh && sh.querySelector('#wl-confirm-row'), passEl ? [passEl] : []);
+  if (!run) return;
+  let passphrase = '', name = '';
+  if (passEl) {
+    passphrase = passEl.value; passEl.value = '';   // the passphrase lives only in this request
+    if (!passphrase) { pkRunEnd(run); walletShowMsg('Type the wallet passphrase first.', false); passEl.focus(); return; }
+  }
   try {
-    if (action === 'pkremove') {
-      const known = ((walletStatus && walletStatus.keystore && walletStatus.keystore.passkeys) || []).find(p => p.id === id);
-      const label = known ? known.label : 'this passkey';
-      if (!confirm(`Remove "${label}"? It will stop unlocking this wallet. Copies of the wallet file made before now still accept it, protected by that passkey's own Face ID, fingerprint or screen lock.`)) return;
-    }
-    let passphrase = '', name = '';
-    if (action === 'unlock' || action === 'pkadd') {
-      const passEl = sh && sh.querySelector(action === 'unlock' ? '#wl-pass' : '#wl-pk-pass');
-      passphrase = passEl ? passEl.value : '';
+    let done;
+    if (action === 'pkremove') { await walletApi('passkey/remove', { id }, run.ctrl.signal); done = 'Removed.'; }
+    else if (action === 'pkunlock') { await pkUnlock((p, b) => walletApi(p, b, run.ctrl.signal), run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+    else if (action === 'unlock') { await walletApi('unlock', { passphrase }, run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+    else {
       name = (val('wl-pk-label') || '').trim() || pkDeviceLabel();
-      if (!passphrase) { walletShowMsg('Type the wallet passphrase first.', false); if (passEl) passEl.focus(); return; }
-      passEl.value = '';   // the passphrase lives only in this request
-    }
-    pkCancel();
-    run = pkCurrent = { ctrl: new AbortController(), rejectConfirm: null };
-    walletSetBusy(true);
-    if (action === 'pkremove') {
-      await walletApi('passkey/remove', { id });
-      return walletLoad({ text: 'Removed.', ok: true });
-    }
-    if (action === 'pkunlock') {
-      await pkUnlock(walletApi, run.ctrl.signal);
-      return walletLoad({ text: 'Unlocked until the hub restarts.', ok: true });
-    }
-    if (action === 'unlock') {
-      await walletApi('unlock', { passphrase });
-      return walletLoad({ text: 'Unlocked until the hub restarts.', ok: true });
-    }
-    if (action === 'pkadd') {
       const confirmStep = () => new Promise((resolve, reject) => {
-        const row = sh.querySelector('#wl-confirm-row'); if (!row) return resolve();
+        if (run.cancelled || run.ctrl.signal.aborted) return reject(new DOMException('Cancelled.', 'AbortError'));
+        const row = run.confirmRow; if (!row) return resolve();
         run.rejectConfirm = reject;
         row.innerHTML = '<div class="sec-hint">One more tap: confirm with this phone.</div><button type="button" class="wl-big" id="wl-confirm-btn">Confirm with Face ID / fingerprint</button>';
-        $('wl-confirm-btn').onclick = () => { row.innerHTML = ''; run.rejectConfirm = null; resolve(); };
+        row.querySelector('#wl-confirm-btn').onclick = () => { run.rejectConfirm = null; row.innerHTML = ''; resolve(); };
       });
-      await pkAdd(walletApi, { passphrase, label: name }, confirmStep, run.ctrl.signal);
-      return walletLoad({ text: `Added. ${name} can now unlock the wallet.`, ok: true });
+      await pkAdd((p, b) => walletApi(p, b, run.ctrl.signal), { passphrase, label: name }, confirmStep, run.ctrl.signal);
+      done = `Added. ${name} can now unlock the wallet.`;
     }
+    if (!pkRunEnd(run)) return;   // cancelled: its canceller already cleaned up
+    await walletLoad({ text: done, ok: true });
   } catch (e) {
-    // A run cancelled by the sheet closing or repainting stays silent.
-    if (!run || pkCurrent === run) walletShowMsg(pkErrorText(e), false);
-  } finally {
-    if (run && (pkCurrent === run || !pkCurrent)) {
-      if (pkCurrent === run) pkCurrent = null;
-      walletSetBusy(false);
-      const row = sh && sh.querySelector('#wl-confirm-row'); if (row) row.innerHTML = '';
-      ['#wl-pass', '#wl-pk-pass'].forEach(q => { const el = sh && sh.querySelector(q); if (el) el.value = ''; });
-    }
+    if (!pkRunEnd(run)) return;
+    walletShowMsg(pkErrorText(e), false);
   }
 }
 // The after-restart notice "Your wallet is locked": on or off; the box goes back when the hub refuses.

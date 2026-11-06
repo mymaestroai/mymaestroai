@@ -288,20 +288,35 @@ test('the desktop Wallet panel: unlock button, passkey box, deep link', () => {
   const act = block(app, 'async function walletPasskeyAct(', '\n    async function walletAct(');
   assert.ok(act.includes(REMOVE_CONFIRM_JS), 'the new remove confirm');
   assert.match(act, /walletPkList\.find\(p => p\.id === id\)/, 'the label is looked up by id');
-  assert.match(act, /walletApi\('passkey\/remove', \{ id \}\); return openWalletPanel\('Removed\.'\)/);
-  assert.match(act, /await pkUnlock\(walletApi, run\.ctrl\.signal\); return openWalletPanel\('Unlocked until the hub restarts\.'\)/);
-  assert.match(act, /await pkAdd\(walletApi, \{ passphrase, label: name \}, confirmStep, run\.ctrl\.signal\);/);
-  assert.match(act, /run = pkCurrent = \{ ctrl: new AbortController\(\), rejectConfirm: null \}/);
-  assert.match(act, /finally \{[\s\S]*busy\(false\)[\s\S]*pk-confirm-row[\s\S]*pk-pass/, 'busy, confirm row and passphrase field are reset in a finally');
-  assert.match(act, /pkCurrent === run/, 'a cancelled run does not paint over a newer one');
-  assert.match(block(panel, 'pkCancel();', 'let s;'), /^pkCancel\(\);/, 'a redraw cancels the running prompt');
-  assert.match(act, /openWalletPanel\(`Added\. \$\{name\} can now unlock the wallet\.`\)/);
+  assert.match(act, /await walletApi\('passkey\/remove', \{ id \}, run\.ctrl\.signal\); done = 'Removed\.'/);
+  assert.match(act, /await pkUnlock\(\(p, b\) => walletApi\(p, b, run\.ctrl\.signal\), run\.ctrl\.signal\); done = 'Unlocked until the hub restarts\.'/);
+  assert.match(act, /await pkAdd\(\(p, b\) => walletApi\(p, b, run\.ctrl\.signal\), \{ passphrase, label: name \}, confirmStep, run\.ctrl\.signal\);/);
+  assert.match(act, /await walletApi\('unlock', \{ passphrase \}, run\.ctrl\.signal\)/, 'the passphrase unlock is a run too');
+  assert.match(act, /const run = pkRunStart\(/);
+  assert.match(act, /if \(!run\) return;/);
+  assert.match(act, /if \(!pkRunEnd\(run\)\) return;[^\n]*\n\s*await openWalletPanel\(done\);/, 'repaint only after the run has ended');
+  assert.match(act, /catch \(e\) \{\s*if \(!pkRunEnd\(run\)\) return;\s*alert\(pkErrorText\(e\)\);/);
+  assert.ok(!/finally/.test(act) && !/pkCurrent/.test(app), 'no finally, no round-2 pkCurrent');
+  assert.ok(act.indexOf('confirm(') < act.indexOf('pkRunStart('), 'the Remove confirm() comes before the run starts');
+  assert.match(act, /if \(run\.cancelled \|\| run\.ctrl\.signal\.aborted\) return reject\(new DOMException\('Cancelled\.', 'AbortError'\)\)/);
+  assert.match(act, /run\.rejectConfirm = reject;/);
+  assert.match(panel, /pkCancel\(\);\s*\/\/[^\n]*\n\s*gsModal\(html, dock\);/, 'a redraw cancels the running prompt right before it replaces the panel');
+  assert.match(act, /done = `Added\. \$\{name\} can now unlock the wallet\.`/);
   assert.ok(act.indexOf("passEl.value = ''") > 0 && act.indexOf("passEl.value = ''") < act.indexOf('await pkAdd('), 'the passphrase field is emptied before the request');
   assert.match(act, /Confirm with Face ID \/ fingerprint/);
   assert.match(act, /alert\(pkErrorText\(e\)\)/);
-  assert.match(act, /btns\.forEach\(b => \{ b\.disabled = on; \}\)/, 'buttons disabled while a request runs');
+  assert.match(app, /async function walletApi\(path, body, signal\) \{[\s\S]*?signal \}[\s\S]*?signal \}\);/, 'walletApi hands the signal to fetch');
+  const runs = block(app, 'let pkRun = null', '// esc() leaves quotes alone');
+  assert.match(runs, /document\.querySelectorAll\('#pk-box button, #pk-unlock-btn'\)\.forEach\(b => \{ b\.disabled = true; \}\)/, 'buttons disabled while a run goes');
+  assert.match(runs, /new MutationObserver\(\(\) => \{ if \(!overlay\.isConnected\) pkCancel\(\); \}\)/, 'the panel leaving the page cancels');
+  assert.match(runs, /function pkRunStart\(confirmRow, fields\) \{\s*if \(pkRun\) return null;/);
+  assert.match(runs, /function pkRunEnd\(run\) \{\s*if \(pkRun !== run\) return false;/);
+  assert.ok(!/pkCancel/.test(block(app, 'async function walletAct(', 'if (action === \'lock\')')), 'walletAct itself does not cancel');
+  assert.match(app, /if \(action === 'pkunlock' \|\| action === 'pkadd' \|\| action === 'pkremove'\) return walletPasskeyAct\(action, arg, arg2\);/, 'every trigger goes through the one action function');
+  assert.match(app, /return walletPasskeyAct\('unlock'\);/, 'and so does the passphrase unlock');
+  assert.match(panel, /id="w-pass"[^\n]*walletAct\('unlock'\)/, 'Enter in the unlock field goes through walletAct');
+  assert.match(box, /id="pk-pass"[^\n]*walletAct\('pkadd'\)/, 'Enter in the add field goes through walletAct');
   assert.match(block(app, 'async function walletLockedNotice(', '\n    async function walletAct('), /JSON\.stringify\(\{ walletLockedNotice: on \}\)/);
-  assert.match(app, /if \(action === 'pkunlock' \|\| action === 'pkadd' \|\| action === 'pkremove'\) return walletPasskeyAct\(action, arg, arg2\);/);
 });
 
 test('the phone Wallet sheet: admin-only menu item, passkey buttons, deep link', () => {
@@ -336,21 +351,34 @@ test('the phone Wallet sheet: admin-only menu item, passkey buttons, deep link',
   const act = block(mob, 'async function walletAct(', '// The after-restart notice');
   assert.ok(act.includes(REMOVE_CONFIRM_JS), 'the new remove confirm');
   assert.match(act, /\.passkeys\) \|\| \[\]\)\.find\(p => p\.id === id\)/, 'the label is looked up by id');
-  assert.match(act, /walletApi\('passkey\/remove', \{ id \}\)/);
-  assert.match(act, /await pkUnlock\(walletApi, run\.ctrl\.signal\)/);
-  assert.match(act, /await pkAdd\(walletApi, \{ passphrase, label: name \}, confirmStep, run\.ctrl\.signal\);/);
-  assert.match(act, /finally \{[\s\S]*walletSetBusy\(false\)[\s\S]*wl-confirm-row[\s\S]*#wl-pass/, 'busy, confirm row and passphrase fields are reset in a finally');
-  assert.match(act, /pkCurrent === run/, 'a cancelled run does not paint over a newer one');
-  assert.match(block(mob, 'function walletSheet(', 'function openWalletSheet('), /const close = \(\) => \{ pkCancel\(\);/, 'closing the sheet cancels');
-  assert.match(block(mob, 'function walletPaint(', 'const s = walletStatus'), /pkCancel\(\)/, 'a repaint cancels');
-  assert.match(act, /await walletApi\('unlock', \{ passphrase \}\)/);
+  assert.match(act, /walletApi\('passkey\/remove', \{ id \}, run\.ctrl\.signal\)/);
+  assert.match(act, /await pkUnlock\(\(p, b\) => walletApi\(p, b, run\.ctrl\.signal\), run\.ctrl\.signal\)/);
+  assert.match(act, /await pkAdd\(\(p, b\) => walletApi\(p, b, run\.ctrl\.signal\), \{ passphrase, label: name \}, confirmStep, run\.ctrl\.signal\);/);
+  assert.match(act, /const run = pkRunStart\(/);
+  assert.match(act, /if \(!run\) return;/);
+  assert.match(act, /if \(!pkRunEnd\(run\)\) return;[^\n]*\n\s*await walletLoad\(\{ text: done, ok: true \}\);/, 'repaint only after the run has ended');
+  assert.match(act, /catch \(e\) \{\s*if \(!pkRunEnd\(run\)\) return;\s*walletShowMsg\(pkErrorText\(e\), false\);/);
+  assert.ok(!/finally/.test(act) && !/pkCurrent/.test(mob), 'no finally, no round-2 pkCurrent');
+  assert.ok(act.indexOf('confirm(') < act.indexOf('pkRunStart('), 'the Remove confirm() comes before the run starts');
+  assert.match(act, /if \(run\.cancelled \|\| run\.ctrl\.signal\.aborted\) return reject\(new DOMException\('Cancelled\.', 'AbortError'\)\)/);
+  assert.match(block(mob, 'function walletSheet(', 'function openWalletSheet('), /const close = \(\) => \{ pkCancel\(\); walletGen\+\+;/, 'closing the sheet cancels and bumps the generation');
+  assert.ok(!/pkCancel/.test(paint), 'a repaint cancels nothing');
+  const load = block(mob, 'async function walletLoad(', 'function walletPaint(');
+  assert.match(load, /const gen = \+\+walletGen;/);
+  assert.match(load, /gen !== walletGen \|\| !sh \|\| !sh\.classList\.contains\('open'\) \|\| pkRun/, 'a stale load paints nothing');
+  assert.match(mob, /async function walletApi\(path, body, signal\) \{[\s\S]*?signal \}[\s\S]*?signal \}\);/, 'walletApi hands the signal to fetch');
+  assert.match(block(mob, 'function pkRunStart(', 'function pkRunCleanup('), /walletSetBusy\(true\);\s*walletGen\+\+;/);
+  assert.match(mob, /function pkRunEnd\(run\) \{\s*if \(pkRun !== run\) return false;/);
+  assert.match(sheet, /e\.target\.id === 'wl-pass'\) \{ e\.preventDefault\(\); walletAct\('unlock'\)/, 'Enter goes through walletAct');
+  assert.match(sheet, /e\.target\.id === 'wl-pk-pass'\) \{ e\.preventDefault\(\); walletAct\('pkadd'\)/);
+  assert.match(act, /await walletApi\('unlock', \{ passphrase \}, run\.ctrl\.signal\)/);
   assert.ok(act.indexOf("passEl.value = ''") > 0 && act.indexOf("passEl.value = ''") < act.indexOf("await walletApi('unlock'"), 'the passphrase field is emptied before the request');
   assert.ok(act.indexOf("passEl.value = ''") < act.indexOf('await pkAdd('), 'and before the passkey request');
   assert.match(act, /Confirm with Face ID \/ fingerprint/);
   assert.match(act, /walletShowMsg\(pkErrorText\(e\), false\)/);
   assert.ok(!/alert\(/.test(act), 'results are a line in the sheet, not alert()');
   assert.match(block(mob, 'function walletSetBusy(', 'function walletShowMsg('), /el\.disabled = on/, 'buttons disabled while a request runs');
-  assert.match(mob, /async function walletApi\(path, body\) \{[\s\S]*?throw new Error\(j\.error \|\| 'Request failed'\)/);
+  assert.match(mob, /async function walletApi\(path, body, signal\) \{[\s\S]*?throw new Error\(j\.error \|\| 'Request failed'\)/);
   const notice = block(mob, 'async function walletLockedNotice(', '// ── Restart the hub');
   assert.match(notice, /JSON\.stringify\(\{ walletLockedNotice: on \}\)/);
   assert.match(notice, /box\.checked = !on/);
@@ -424,4 +452,131 @@ test('a passkey label with quotes and tags never reaches an attribute raw (deskt
   assert.ok(!/data-label/.test(mobRow) && /data-id="\$\{esc\(p\.id\)\}"/.test(mobRow));
   const mobEsc = block(mob, 'function esc(s) {', '\n}\n');
   assert.ok(mobEsc.includes('&quot;') && mobEsc.includes('&#39;'), 'the phone esc() escapes quotes');
+});
+
+// ── Round 3: one run at a time; a cancelled run leaves no trace ──
+const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('pkAdd aborted while the register-options request is pending: AbortError, no create(), no further api call', async () => {
+  const ctrl = new AbortController(), pending = deferred();
+  let createCount = 0;
+  const nav = { credentials: { create: async () => { createCount++; return created({ enabled: true }); }, get: async () => { throw new Error('get'); } } };
+  const calls = [];
+  const api = async (p) => { calls.push(p); return pending.promise; };
+  const run = withNavigator(nav, () => pkAdd(api, { passphrase: 'pw', label: 'x' }, async () => {}, ctrl.signal));
+  await tick(); ctrl.abort(); pending.resolve(registerOptions());
+  await assert.rejects(run, { name: 'AbortError' });
+  assert.strictEqual(createCount, 0); assert.deepStrictEqual(calls, ['passkey/options']);
+});
+
+test('pkAdd aborted after the confirm tap while the confirm-options request is pending: no get(), no register', async () => {
+  const ctrl = new AbortController(), pending = deferred();
+  const log = [];
+  const nav = { credentials: { create: async () => created({ enabled: true }), get: async () => { log.push('get'); return assertion(u8(1).buffer); } } };
+  const api = async (p, b) => { log.push(p + ':' + (b.purpose || '')); return b.purpose === 'register' ? registerOptions() : pending.promise; };
+  const run = withNavigator(nav, () => pkAdd(api, { passphrase: 'pw', label: 'x' }, async () => { log.push('confirmed'); }, ctrl.signal));
+  await tick();
+  assert.deepStrictEqual(log, ['passkey/options:register', 'confirmed', 'passkey/options:confirm']);
+  ctrl.abort(); pending.resolve({ challenge: b64(6), rpId: 'x', timeout: 1, prfSalt: SALT2 });
+  await assert.rejects(run, { name: 'AbortError' });
+  assert.deepStrictEqual(log, ['passkey/options:register', 'confirmed', 'passkey/options:confirm'], 'no get, no register POST');
+});
+
+test('pkUnlock aborted while its options request is pending: no get(), no unlock POST', async () => {
+  const ctrl = new AbortController(), pending = deferred();
+  const log = [];
+  const nav = { credentials: { get: async () => { log.push('get'); return assertion(u8(1).buffer); } } };
+  const api = async (p) => { log.push(p); return pending.promise; };
+  const run = withNavigator(nav, () => pkUnlock(api, ctrl.signal));
+  await tick(); ctrl.abort(); pending.resolve(unlockOptions([ID1]));
+  await assert.rejects(run, { name: 'AbortError' });
+  assert.deepStrictEqual(log, ['passkey/options']);
+});
+
+// A DOM-free simulation of the phone's walletAct ordering: the page's own run code and walletAct are cut out of
+// mobile.js and run with stand-ins for the sheet, walletApi, pkAdd and pkUnlock.
+function phoneSim() {
+  const mob = read('mobile.js');
+  const runCode = block(mob, 'let pkRun = null;', 'async function walletApi(');
+  const actCode = block(mob, 'async function walletAct(', '// The after-restart notice');
+  const el = (value = '') => ({ value, innerHTML: '', isConnected: true, focus() {} });
+  const btn = {};
+  const confirmRow = { innerHTML: '', isConnected: true, querySelector: () => btn };
+  const fields = { '#wl-pass': el(), '#wl-pk-pass': el(), '#wl-pk-label': el('Phone'), '#wl-confirm-row': confirmRow };
+  const sh = { querySelector: (q) => fields[q] || null };
+  const env = { busy: false, loads: [], msgs: [], add: null, unlock: null, apiCalls: [], sh, DOMException, AbortController, api: async () => ({}) };
+  const factory = new Function('S', `
+    const $ = () => S.sh, confirm = () => true;
+    const walletStatus = { keystore: { passkeys: [] } };
+    const pkErrorText = (e) => e.message || e.name, pkDeviceLabel = () => 'Phone';
+    const walletSetBusy = (on) => { S.busy = on; };
+    const walletShowMsg = (t, ok) => { S.msgs.push([t, ok]); };
+    const walletLoad = async (m) => { S.loads.push(m); };
+    const walletApi = (p, b, signal) => { S.apiCalls.push([p, b, signal]); return S.api(p, b, signal); };
+    const pkAdd = (...a) => S.add(...a), pkUnlock = (...a) => S.unlock(...a);
+    ${runCode}
+    ${actCode}
+    return { walletAct, pkCancel, state: () => ({ run: pkRun, gen: walletGen }) };
+  `);
+  return { env, page: factory(env), fields, confirmRow };
+}
+
+test('phone walletAct: start an add, reach the confirm, close: busy is off at once and a passphrase unlock can start', async () => {
+  const { env, page, fields, confirmRow } = phoneSim();
+  env.add = async (api, o, confirmStep) => { await confirmStep(); await new Promise(() => {}); };
+  fields['#wl-pk-pass'].value = 'secret';
+  const addRun = page.walletAct('pkadd');
+  await tick();
+  assert.strictEqual(env.busy, true); assert.ok(confirmRow.innerHTML.includes('Confirm with Face ID'), 'confirm row drawn');
+  assert.strictEqual(fields['#wl-pk-pass'].value, '', 'passphrase emptied before the request');
+  const first = page.state().gen;
+  page.pkCancel();   // closing the sheet
+  assert.strictEqual(env.busy, false, 'busy off at once'); assert.strictEqual(confirmRow.innerHTML, ''); assert.strictEqual(page.state().run, null);
+  const second = deferred(); env.api = () => second.promise;
+  fields['#wl-pass'].value = 'pw';
+  const unlockRun = page.walletAct('unlock');
+  await tick();
+  assert.strictEqual(env.busy, true, 'the passphrase unlock started');
+  assert.deepStrictEqual(env.apiCalls.map(c => c[0]), ['unlock']);
+  assert.ok(page.state().gen > first, 'starting a run bumps the generation');
+  second.resolve({}); await unlockRun; await addRun;
+  assert.deepStrictEqual(env.loads, [{ text: 'Unlocked until the hub restarts.', ok: true }]);
+  assert.deepStrictEqual(env.msgs, [], 'the cancelled add said nothing');
+  assert.strictEqual(env.busy, false);
+});
+
+test("phone walletAct: A cancelled, B started, then A settles: B's confirm row and busy state are untouched", async () => {
+  for (const settle of ['resolve', 'reject']) {
+    const { env, page, fields, confirmRow } = phoneSim();
+    const aPending = deferred();
+    env.unlock = () => aPending.promise;
+    const A = page.walletAct('pkunlock');
+    await tick();
+    assert.strictEqual(env.busy, true);
+    page.pkCancel();
+    env.add = async (api, o, confirmStep) => { await confirmStep(); await new Promise(() => {}); };
+    fields['#wl-pk-pass'].value = 'secret';
+    page.walletAct('pkadd');
+    await tick();
+    assert.ok(confirmRow.innerHTML.includes('Confirm with Face ID')); assert.strictEqual(env.busy, true);
+    const rowBefore = confirmRow.innerHTML;
+    aPending[settle](settle === 'resolve' ? {} : new Error('late failure'));
+    await A; await tick();
+    assert.strictEqual(confirmRow.innerHTML, rowBefore, `B's confirm row stays (${settle})`);
+    assert.strictEqual(env.busy, true, `B stays busy (${settle})`);
+    assert.deepStrictEqual(env.loads, []); assert.deepStrictEqual(env.msgs, []);
+    assert.ok(page.state().run, 'B is still the run');
+  }
+});
+
+test('phone walletAct: a second tap while a run is going is ignored', async () => {
+  const { env, page, fields } = phoneSim();
+  const pending = deferred(); env.api = () => pending.promise;
+  fields['#wl-pass'].value = 'pw';
+  const first = page.walletAct('unlock'); await tick();
+  fields['#wl-pass'].value = 'other';
+  await page.walletAct('unlock');
+  assert.strictEqual(env.apiCalls.length, 1); assert.strictEqual(fields['#wl-pass'].value, 'other', 'the ignored tap touched nothing');
+  pending.resolve({}); await first;
 });

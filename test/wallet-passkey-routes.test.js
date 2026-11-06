@@ -288,9 +288,9 @@ test('admins are told when a passkey is added or removed; a failing notify never
   assert.strictEqual(env.notices.length, 1);
   assert.deepStrictEqual(env.notices[0], {
     title: 'Wallet passkey added',
-    body: `"My phone" can now unlock the wallet (${RP}). If this wasn't you, remove it in the Wallet panel and change your password.`,
+    body: `"My phone" can now unlock the wallet (${RP}). If this wasn't you, remove it now in the Wallet: whoever added it knows your wallet passphrase.`,
     url: '/mobile?wallet=unlock',
-    tag: 'wallet-passkey',
+    tag: 'wallet-passkey-added',
   });
   const removed = await env.call('remove', { id: pk.b64u(a.credId) });
   assert.strictEqual(removed.status, 200);
@@ -299,7 +299,7 @@ test('admins are told when a passkey is added or removed; a failing notify never
     title: 'Wallet passkey removed',
     body: '"My phone" can no longer unlock the wallet.',
     url: '/mobile?wallet=unlock',
-    tag: 'wallet-passkey',
+    tag: 'wallet-passkey-removed',
   });
   const text = JSON.stringify(env.notices);
   assert.ok(!text.includes(PASS));

@@ -184,6 +184,11 @@ describe('wallet keystore: passkeys (Face ID / fingerprint unlock)', () => {
     assert.strictEqual(list.length, 1); assert.ok(!/[<>"']/.test(list[0].label));
     assert.strictEqual(ks.passkey('bad" id'), null); assert.strictEqual(ks.passkey(id(5)), null);
     assert.throws(() => ks.unlockWithPasskey(id(5), s.prfOutput), /not set up/);
+    ks.addPasskey(slot({ id: id(6), label: 'zero\u200bwidth\u202ebidi\u0085' }));                       // a null entry no longer breaks add
+    assert.strictEqual(ks.passkeys().find(p => p.id === id(6)).label, 'zero width bidi');
+    ks.removePasskey(id(6)); assert.strictEqual(ks.passkeys().length, 1);              // nor remove
+    for (let n = 10; n < 19; n++) ks.addPasskey(slot({ id: id(n) }));                  // malformed entries don't count toward ten
+    assert.strictEqual(ks.passkeys().length, 10);
   });
   it('unlocking an already unlocked keystore with a passkey changes nothing', async () => {
     const ks = mk(); ks.init(PASS); const w = ks.createWallet('bot'); const s = slot(); ks.addPasskey(s);

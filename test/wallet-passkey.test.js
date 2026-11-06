@@ -107,7 +107,7 @@ test('rpFromOrigin accepts good addresses', () => {
 });
 
 test('rpFromOrigin refuses bad addresses', () => {
-  for (const bad of ['http://localhost:9999', 'https://localhost', 'https://dev.localhost', 'https://127.0.0.1', 'http://127.0.0.1:9999', 'https://192.168.0.10', 'http://[::1]:9999', 'http://hub.example.com', 'not a url', undefined, 'ftp://hub.example.ts.net']) {
+  for (const bad of ['http://localhost:9999', 'https://localhost', 'https://dev.localhost', 'https://localhost.', 'https://hub.example.ts.net.', 'https://127.0.0.1', 'http://127.0.0.1:9999', 'https://192.168.0.10', 'http://[::1]:9999', 'http://hub.example.com', 'not a url', undefined, 'ftp://hub.example.ts.net']) {
     throwsCode(() => pk.rpFromOrigin(bad), 'bad_address');
   }
   assert.throws(() => pk.rpFromOrigin('https://192.168.0.10'), /192\.168\.0\.10/);
