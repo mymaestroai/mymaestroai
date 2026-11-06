@@ -41,7 +41,7 @@ function setup(over = {}) {
   };
   const store = {
     DATA: dir,
-    state: () => env.state,
+    state: () => { if (env.estate) throw Object.assign(new Error('state.json cannot be read'), { code: 'ESTATE' }); return env.state; },
     saveState: () => { if (env.failSave) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); env.saves.push(JSON.parse(JSON.stringify(env.state))); },
     keyEncoding: () => env.keyEnc,
     linkedAccount: () => env.linked,
@@ -66,7 +66,7 @@ function setup(over = {}) {
   };
   const ctx = {
     env: {}, settings: () => env.settings, store, api, cameras, media, faces,
-    notify: async (text, files) => { env.notices.push({ text, files }); if (env.noticeThrows) throw new Error('hub gone'); return typeof env.noticeAnswer === 'function' ? env.noticeAnswer(text, files) : env.noticeAnswer; },
+    notify: async (text, files, id) => { env.notices.push({ text, files, id }); if (env.noticeThrows) throw new Error('hub gone'); return typeof env.noticeAnswer === 'function' ? env.noticeAnswer(text, files) : env.noticeAnswer; },
     log: (...a) => env.logs.push(a.join(' ')), now: () => env.clock,
   };
   const ev = createEvents(ctx);
@@ -537,4 +537,69 @@ test('state: lastNotice and suppressed entries older than 24 h are pruned on sav
   await ev.queueNotice('x', [], null);
   assert.deepStrictEqual(Object.keys(env.state.lastNotice), ['fresh']);
   assert.deepStrictEqual(Object.keys(env.state.suppressed), ['fresh']);
+});
+
+test('replay ids: a young id is never evicted for the cap; the 50,001st young id gets 503, an old one makes room', async () => {
+  const { env, ev } = setup();
+  for (let i = 0; i < 50000; i++) env.state.seen[`r${i}`] = env.clock - 49 * HOUR + i;   // older than 48 h 10 min, younger than 72 h
+  const r = await ev.handle(req(event({}, env)));
+  assert.strictEqual(r.status, 503);
+  assert.strictEqual(Object.keys(env.state.seen).length, 50000, 'nothing was evicted');
+  assert.ok('r0' in env.state.seen && env.state.inbox.length === 0);
+  assert.ok(env.logs.some((l) => /replay list is full/.test(l)));
+  env.state.seen.r0 = env.clock - 73 * HOUR;   // past the keep time: pruned, so there is room again
+  assert.strictEqual((await ev.handle(req(event({}, env)))).status, 200);
+  assert.ok(!('r0' in env.state.seen));
+  assert.strictEqual(Object.keys(env.state.seen).length, 50000);
+  await ev.idle();
+});
+
+test('unreadable state: handle answers 503 (never throws), logs once a minute; status and the retry timer do not throw', async (t) => {
+  const { env, ev } = setup({ estate: true });
+  assert.strictEqual((await ev.handle(req(event({}, env)))).status, 503);
+  assert.strictEqual((await ev.handle(req(event({}, env)))).status, 503);
+  assert.strictEqual(env.logs.filter((l) => /state file cannot be read/.test(l)).length, 1, 'one line a minute');
+  env.clock += 61000;
+  await ev.handle(req(event({}, env)));
+  assert.strictEqual(env.logs.filter((l) => /state file cannot be read/.test(l)).length, 2);
+  assert.doesNotThrow(() => ev.status());
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  try {
+    ev.start();
+    assert.doesNotThrow(() => t.mock.timers.tick(15000));
+    assert.ok(env.logs.some((l) => /outbox check failed/.test(l)));
+  } finally { ev.stop(); t.mock.timers.reset(); }
+});
+
+test('unreadable state before the signature check (credentials / linked account lookup) also gives 503', async () => {
+  const { env, ev, ctx } = setup();
+  ctx.api.keyCandidates = () => { throw Object.assign(new Error('x'), { code: 'ESTATE' }); };
+  assert.strictEqual((await ev.handle(req(event({}, env)))).status, 503);
+  ctx.api.keyCandidates = () => keyCandidates({ ...env.creds });
+  ctx.store.linkedAccount = () => { throw Object.assign(new Error('x'), { code: 'ESTATE' }); };
+  assert.strictEqual((await ev.handle(req(event({}, env)))).status, 503);
+});
+
+test('a signed event without a timestamp is ignored with 200 and has its own once-a-minute log line', async () => {
+  const { env, ev } = setup();
+  const e = event({ type: 'button_press' }, env);
+  delete e.data.attributes.timestamp;
+  for (let i = 0; i < 2; i++) { const r = await ev.handle(req({ ...e, meta: { ...e.meta, request_id: `n${i}` } })); assert.strictEqual(r.status, 200); }
+  assert.strictEqual(env.state.inbox.length, 0);
+  assert.deepStrictEqual(env.logs.filter((l) => /without a timestamp/.test(l)), ['signed event without a timestamp ignored (type button_press)']);
+  assert.ok(!env.logs.some((l) => /older than 48 h/.test(l)), 'not the stale-event line');
+});
+
+test('every notice sent to the hub carries the outbox entry id', async () => {
+  const { env, ev } = setup();
+  await ev.queueNotice('first', []);
+  await ev.queueNotice('second', []);
+  assert.strictEqual(env.notices.length, 2);
+  for (const n of env.notices) assert.match(n.id, /^[0-9a-f-]{36}$/);
+  assert.notStrictEqual(env.notices[0].id, env.notices[1].id);
+  env.noticeAnswer = { ok: false, error: 'Too many notices this hour.' };
+  await ev.queueNotice('third', []);
+  const waiting = env.state.outbox[0].id;
+  await ev.flushOutbox();
+  assert.strictEqual(env.notices[env.notices.length - 1].id, waiting, 'a retry keeps the same id');
 });

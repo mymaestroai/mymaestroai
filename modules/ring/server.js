@@ -7,6 +7,7 @@
 // The pieces live in lib/: store (private state + the media folder), api (Ring's servers and the sign-in), cameras (which camera
 // is meant), media (pictures and clips), faces (the local recognizer), events (webhook events and notices), link (linking).
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const childProcess = require('node:child_process');
 const { createStore } = require('./lib/store');
@@ -109,7 +110,7 @@ function createRing({ env = process.env, write = (line) => process.stdout.write(
   const settings = () => settingsNow;
   const hub = createHubLink({ write });
   const hubRequest = (method, params, timeoutMs) => hub.request(method, params, timeoutMs);
-  const notify = (text, files) => hubRequest('hub/notify', { text, files }, NOTIFY_TIMEOUT_MS);
+  const notify = (text, files, id) => hubRequest('hub/notify', { text, files, id: id || crypto.randomUUID() }, NOTIFY_TIMEOUT_MS);   // the id lets the hub drop a notice it already took
   const limits = { ...REQ_PER_HOUR };
   if (testing && Number(env.RING_TEST_REQ_LIMIT) > 0) for (const k of Object.keys(limits)) limits[k] = Number(env.RING_TEST_REQ_LIMIT);
 
@@ -243,9 +244,12 @@ function createRing({ env = process.env, write = (line) => process.stdout.write(
     return tools.value;
   }
   async function toolHealth() {
+    let unreadable = [];
+    try { unreadable = store.unreadableFiles(); } catch { /* the probe itself failed: treat as readable */ }
     const r = api.needsRelink();
     const out = {
       ok: r.linked && !r.needs_relink, linked: r.linked, needs_relink: r.needs_relink, relink_reason: r.reason,
+      unreadable_state: unreadable.length > 0, unreadable_files: unreadable,
       unsaved_token: api.unsavedToken(), unsaved_write_failed: typeof api.unsavedWriteFailed === 'function' ? api.unsavedWriteFailed() : false, secrets_present: !!api.credentials(), ring_reachable: null,
       devices: cameras.list().length, ...events.status(), faces: await faces.ping().catch(() => ({ configured: false })), tools: toolsPresent(),
     };
@@ -279,24 +283,29 @@ function createRing({ env = process.env, write = (line) => process.stdout.write(
   }
 
   // ── upkeep: renew the sign-in, prune, run waiting events, send waiting notices, refresh the camera list ──
+  const quietAt = new Map();
+  const logOnceAMinute = (key, ...a) => { const t = Date.now(); if (t - (quietAt.get(key) || 0) > 60000) { quietAt.set(key, t); log(...a); } };
   let upkeeping = false;
   async function upkeep() {
     if (upkeeping) return;
     upkeeping = true;
     try {
-      const step = async (what, fn) => { try { await fn(); } catch (e) { log(`upkeep: ${what} failed:`, clean(e && (e.code || e.message), 80)); } };
+      const step = async (what, fn) => { try { await fn(); } catch (e) { logOnceAMinute(`upkeep:${what}`, `upkeep: ${what} failed:`, clean(e && (e.code || e.message), 80)); } };
       await step('hand over the renewed sign-in', () => api.persistRenewal());
       await step('token refresh', () => api.refreshAccount(false));
-      const keep = store.recent.keep();
-      await step('picture pruning', () => media.pruneStills(keep));
-      await step('clip pruning', () => media.pruneClips(keep));
+      let keep = null;
+      await step('read the recent pictures', () => { keep = store.recent.keep(); });
+      if (keep) {   // without the list nothing is pruned
+        await step('picture pruning', () => media.pruneStills(keep));
+        await step('clip pruning', () => media.pruneClips(keep));
+      }
       await step('face record pruning', () => faces.pruneFaceRecords(media.stillDays()));
       await step('work folder cleanup', () => media.pruneWork());
       await step('expired link tokens', () => store.dropExpiredPending());
       await step('inbox', () => events.processInbox());
       await step('notices', () => events.flushOutbox());
       const fetched = Date.parse(cameras.fetchedAt() || '');
-      if (store.claimedAccount() && !(Date.now() - fetched < DEVICES_MAX_AGE_MS)) await step('camera list', () => api.refreshDevicesOnce());
+      await step('camera list', () => { if (store.claimedAccount() && !(Date.now() - fetched < DEVICES_MAX_AGE_MS)) return api.refreshDevicesOnce(); });
     } finally { upkeeping = false; }
   }
   // The hub registers its request handler after it has listed the tools, so a request to it (the hand-over of a renewed sign-in)
@@ -314,7 +323,7 @@ function createRing({ env = process.env, write = (line) => process.stdout.write(
     timers.push(t2);
   }
   let stopping = false;
-  // Stops the timers and the helper programs (SIGTERM, SIGKILL after 2 s); waits for them at most 3 s.
+  // Stops the timers and the helper programs (SIGTERM, SIGKILL after 1 s); waits for them at most 3 s.
   async function stop() {
     stopping = true;
     for (const t of timers) { clearTimeout(t); clearInterval(t); }

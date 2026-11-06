@@ -366,3 +366,116 @@ test('a wake() that never settles: after WAKE_WAIT_MS the drain moves on, outcom
   assert.deepStrictEqual(e.audit().map((a) => a.outcome), ['unconfirmed']);
   assert.strictEqual(e.audit()[0].agent, 'Ava');
 });
+
+// ── durable queue ──
+const QFILE = (e) => path.join(e.auditDir, 'demo', 'notice-queue.json');
+// A new createNotices over the same folders: a simulated hub restart.
+function restart(e, over = {}) {
+  const r = { woken: [], timers: [] };
+  r.n = createNotices({
+    connectorFor: (id) => (id === 'demo' ? e.connector : null), manifestOf: () => e.manifest, noticeAgentOf: () => e.agent,
+    mediaDirFor: () => e.media, isAgentActive: () => e.active,
+    wake: async (agent, message) => { r.woken.push({ agent, message }); },
+    auditDir: e.auditDir, now: () => e.clock,
+    setTimer: (fn) => { const t = { fn, cleared: false, unref() {} }; r.timers.push(t); return t; },
+    clearTimer: (t) => { t.cleared = true; },
+    log: () => {}, ...over,
+  });
+  r.fire = async () => { const t = r.timers.filter((x) => !x.cleared).pop(); t.cleared = true; await t.fn(); await new Promise((x) => setImmediate(x)); };
+  return r;
+}
+
+test('a queued notice is on disk (0600, with the text) and survives a restart; the restored drain delivers it once', async () => {
+  const e = setup({ active: true });
+  assert.deepStrictEqual(await e.n.deliver('demo', { text: 'KEEP-ME', files: ['a.png'], id: 'n1' }), { ok: true, queued: true });
+  const j = JSON.parse(fs.readFileSync(QFILE(e), 'utf8'));
+  assert.strictEqual(j.queue.length, 1);
+  assert.strictEqual(j.queue[0].text, 'KEEP-ME');
+  assert.deepStrictEqual(j.queue[0].rel, ['a.png']);
+  assert.strictEqual(fs.statSync(QFILE(e)).mode & 0o777, 0o600);
+  assert.ok(!fs.readFileSync(path.join(e.auditDir, 'demo', 'notices.jsonl'), 'utf8').includes('KEEP-ME'));
+  const r = restart(e);
+  assert.strictEqual(r.n.pending('demo'), 1);
+  assert.strictEqual(r.timers.length, 1, 'a drain is armed');
+  e.active = false;
+  await r.fire();
+  assert.strictEqual(r.woken.length, 1);
+  assert.ok(r.woken[0].message.includes('KEEP-ME'));
+  assert.strictEqual(r.n.pending('demo'), 0);
+  await r.n.deliver('demo', { text: 'next' });
+  assert.strictEqual(r.woken.length, 2, 'no second copy of the first');
+  assert.ok(!r.woken[1].message.includes('KEEP-ME'));
+});
+
+test('the queue file is removed when the queue is empty', async () => {
+  const e = setup({ active: true });
+  await e.n.deliver('demo', { text: 'x' });
+  assert.ok(fs.existsSync(QFILE(e)));
+  e.active = false;
+  await e.fire();
+  assert.strictEqual(e.woken.length, 1);
+  assert.ok(!fs.existsSync(QFILE(e)));
+  assert.deepStrictEqual(fs.readdirSync(path.join(e.auditDir, 'demo')), ['notices.jsonl'], 'no temp file left');
+});
+
+test('a failed save answers ok:false and the notice is not kept', async () => {
+  const e = setup({ active: true });
+  fs.mkdirSync(e.auditDir, { recursive: true });
+  fs.writeFileSync(path.join(e.auditDir, 'demo'), 'not a folder');   // the module folder cannot be made
+  assert.deepStrictEqual(await e.n.deliver('demo', { text: 'x' }), { ok: false, error: 'The notice could not be kept.' });
+  assert.strictEqual(e.n.pending('demo'), 0);
+  assert.strictEqual(e.woken.length, 0);
+});
+
+test('a garbled queue file is set aside and the hub keeps working', async () => {
+  const e = setup();
+  fs.mkdirSync(path.join(e.auditDir, 'demo'), { recursive: true });
+  fs.writeFileSync(QFILE(e), '{not json');
+  const logs = [];
+  const r = restart(e, { log: (m) => logs.push(m) });
+  assert.ok(!fs.existsSync(QFILE(e)));
+  assert.ok(fs.readdirSync(path.join(e.auditDir, 'demo')).some((f) => f.startsWith('notice-queue.json.bad-')));
+  assert.strictEqual(logs.length, 1);
+  assert.deepStrictEqual(await r.n.deliver('demo', { text: 'fine' }), { ok: true, queued: false });
+  assert.strictEqual(r.woken.length, 1);
+});
+
+test('duplicate ids: queued, recently delivered, and after a restart', async () => {
+  const e = setup({ active: true });
+  assert.deepStrictEqual(await e.n.deliver('demo', { text: 'a', id: 'x:1' }), { ok: true, queued: true });
+  assert.deepStrictEqual(await e.n.deliver('demo', { text: 'a', id: 'x:1' }), { ok: true, duplicate: true });
+  assert.strictEqual(e.n.pending('demo'), 1);
+  e.active = false;
+  await e.fire();
+  assert.strictEqual(e.woken.length, 1);
+  assert.deepStrictEqual(await e.n.deliver('demo', { text: 'a', id: 'x:1' }), { ok: true, duplicate: true });
+  const r = restart(e);
+  assert.deepStrictEqual(await r.n.deliver('demo', { text: 'a', id: 'x:1' }), { ok: true, duplicate: true });
+  assert.strictEqual(r.woken.length, 0);
+  assert.deepStrictEqual(await r.n.deliver('demo', { text: 'b', id: 'x:2' }), { ok: true, queued: false });
+  e.clock += 25 * 3600 * 1000;
+  assert.deepStrictEqual(await r.n.deliver('demo', { text: 'a', id: 'x:1' }), { ok: true, queued: false }, 'forgotten after 24 h');
+  assert.strictEqual((await e.n.deliver('demo', { text: 'a', id: 'bad id!' })).ok, false);
+  assert.strictEqual((await e.n.deliver('demo', { text: 'a', id: 'y'.repeat(81) })).ok, false);
+});
+
+test('entries older than 6 h are dropped at restore (audited, no text)', async () => {
+  const e = setup({ active: true });
+  await e.n.deliver('demo', { text: 'OLD-TEXT' });
+  e.clock += 6 * 3600 * 1000 + 1;
+  const r = restart(e);
+  assert.strictEqual(r.n.pending('demo'), 0);
+  assert.ok(!fs.existsSync(QFILE(e)));
+  const a = e.audit().pop();
+  assert.strictEqual(a.outcome, 'dropped');
+  assert.strictEqual(a.reason, 'too old');
+  assert.ok(!JSON.stringify(a).includes('OLD-TEXT'));
+});
+
+test('restore: false leaves the file alone', async () => {
+  const e = setup({ active: true });
+  await e.n.deliver('demo', { text: 'x' });
+  const r = restart(e, { restore: false });
+  assert.strictEqual(r.n.pending('demo'), 0);
+  assert.ok(fs.existsSync(QFILE(e)));
+});

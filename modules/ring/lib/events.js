@@ -37,11 +37,11 @@ const crypto = require('node:crypto');
 
 const MAX_EVENT_BODY = 1024 * 1024;
 const COALESCE_MS = 120000;
-const SEEN_KEEP_MS = 72 * 3600000;   // longer than the 48 h a signed event is accepted for
 const EVENT_MAX_AGE_MS = 48 * 3600000;
 const EVENT_MAX_AHEAD_MS = 10 * 60000;
+const SEEN_KEEP_MS = 72 * 3600000;   // longer than the 48 h 10 min a signed event is accepted for: an id never goes while its event could still be replayed
 const NOTICE_STATE_KEEP_MS = 24 * 3600000;
-const SEEN_MAX = 10000;
+const SEEN_MAX = 50000;   // when this many young ids are held, new events are answered 503 (never evict)
 const INBOX_MAX = 500;
 const INBOX_KEEP_MS = 6 * 3600000;
 const NOTICE_KEEP_MS = 6 * 3600000;
@@ -145,6 +145,12 @@ function createEvents(ctx) {
   }
 
   async function handle(request) {
+    try { return await handleInner(request); } catch (e) {
+      if (e && e.code === 'ESTATE') { logEvery('estate', 60000, 'event refused (503): a module state file cannot be read; fix it and Ring will retry'); return reply(503, 'Not ready\n'); }
+      throw e;
+    }
+  }
+  async function handleInner(request) {
     const req = request || {};
     if (String(req.method || '').toUpperCase() !== 'POST') return reply(404, 'Not found\n');
     let raw;
@@ -169,10 +175,13 @@ function createEvents(ctx) {
     const a = ev.data.attributes && typeof ev.data.attributes === 'object' ? ev.data.attributes : {};
     const t0 = now();
     const stamp = Number(a.timestamp) > 0 ? (Number(a.timestamp) < 1e11 ? Number(a.timestamp) * 1000 : Number(a.timestamp)) : 0;   // ms; seconds tolerated
-    if (!stamp || t0 - stamp > EVENT_MAX_AGE_MS || stamp - t0 > EVENT_MAX_AHEAD_MS) { logEvery('stale', 60000, 'event(s) ignored: signed, but older than 48 h or from the future (a replay?)'); return ok200(); }
+    if (!stamp) { logEvery('nostamp', 60000, `signed event without a timestamp ignored (type ${clean(ev.data.type, 40)})`); return ok200(); }
+    if (t0 - stamp > EVENT_MAX_AGE_MS || stamp - t0 > EVENT_MAX_AHEAD_MS) { logEvery('stale', 60000, 'event(s) ignored: signed, but older than 48 h or from the future (a replay?)'); return ok200(); }
     const rid = ev.meta && typeof ev.meta.request_id === 'string' && clean(ev.meta.request_id, 200) ? clean(ev.meta.request_id, 200) : null;
     const dedupId = rid || `body:${crypto.createHash('sha256').update(raw).digest('hex')}`;
     if (st.seen[dedupId]) { log('duplicate event ignored', shortId(dedupId)); return ok200(); }
+    pruneSeen(st);
+    if (Object.keys(st.seen).length >= SEEN_MAX) { logEvery('seenfull', 60000, 'event(s) refused (503): the replay list is full of recent ids; Ring will retry'); return reply(503, 'Busy\n'); }
     if (st.inbox.length >= INBOX_MAX) { logEvery('inboxfull', 60000, 'event inbox full: asking Ring to retry'); return reply(503, 'Busy\n'); }
     const entry = {
       id: rid || crypto.randomUUID(), at: t0, account: claimed,
@@ -188,13 +197,12 @@ function createEvents(ctx) {
     return ok200();
   }
 
-  // seen ids older than 72 h and beyond 10,000 go; recent notice files older than 7 h go; lastNotice and suppressed entries older than 24 h go.
+  // Only seen ids older than 72 h go (never a young one to respect a size cap);  recent notice files older than 7 h go; lastNotice and suppressed entries older than 24 h go.
+  function pruneSeen(st) { const t = now(); for (const [k, at] of Object.entries(st.seen)) if (t - at > SEEN_KEEP_MS) delete st.seen[k]; }
   function saveState() {
     const st = getState();
     const t = now();
-    for (const [k, at] of Object.entries(st.seen)) if (t - at > SEEN_KEEP_MS) delete st.seen[k];
-    const ids = Object.keys(st.seen);
-    if (ids.length > SEEN_MAX) ids.sort((x, y) => st.seen[x] - st.seen[y]).slice(0, ids.length - SEEN_MAX).forEach((k) => delete st.seen[k]);
+    pruneSeen(st);
     st.recent = st.recent.filter((r) => r && t - r.at <= RECENT_KEEP_MS);
     for (const [k, at] of Object.entries(st.lastNotice)) if (!(t - at <= NOTICE_STATE_KEEP_MS)) { delete st.lastNotice[k]; delete st.suppressed[k]; }
     for (const k of Object.keys(st.suppressed)) if (!(k in st.lastNotice)) delete st.suppressed[k];
@@ -223,7 +231,7 @@ function createEvents(ctx) {
           if (!n.id) n.id = crypto.randomUUID();
           if (now() - n.at > NOTICE_KEEP_MS) { log('dropped a notice the hub never took (6 h)'); remove(); saveState(); continue; }
           let r;
-          try { r = await ctx.notify(n.text, n.files); } catch (e) { r = { ok: false, error: 'No answer from the hub.', transient: true }; }
+          try { r = await ctx.notify(n.text, n.files, n.id); } catch (e) { r = { ok: false, error: 'No answer from the hub.', transient: true }; }
           if (r && r.ok) { remove(); saveState(); continue; }
           const err = r && r.error ? String(r.error) : '';
           if (!DROP_ERRORS.includes(err)) {
@@ -310,12 +318,12 @@ function createEvents(ctx) {
   function start() {
     stop();
     const t1 = setTimeout(() => { try { processInbox(); } catch (e) { log('inbox pass failed:', e.message); } flushOutbox(); }, 500);
-    const t2 = setInterval(() => { if (getState().outbox.length) flushOutbox(); }, OUTBOX_RETRY_MS);
+    const t2 = setInterval(() => { try { if (getState().outbox.length) flushOutbox(); } catch (e) { logEvery('tick', 60000, 'outbox check failed:', e.code || e.message); } }, OUTBOX_RETRY_MS);
     for (const t of [t1, t2]) if (t && t.unref) t.unref();
     timers = [t1, t2];
   }
   function stop() { for (const t of timers) { clearTimeout(t); clearInterval(t); } timers = []; }
-  const status = () => { const st = getState(); return { inbox: st.inbox.length, outbox: st.outbox.length }; };
+  const status = () => { try { const st = getState(); return { inbox: st.inbox.length, outbox: st.outbox.length }; } catch (e) { logEvery('status', 60000, 'event counts unavailable:', e.code || e.message); return { inbox: null, outbox: null }; } };
 
   return { handle, processInbox, processEntry, queueNotice, flushOutbox, idle, status, start, stop };
 }

@@ -111,16 +111,27 @@ test('inbox: entries older than 6 h are dropped; removal is saved', (t) => {
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(e.dataHome, 'state.json'), 'utf8')).inbox, []);
 });
 
-test('seen ids: dropped after 72 h and capped at 10,000', (t) => {
+test('seen ids: dropped after 72 h; young ids are never evicted, the 50,001st is refused', (t) => {
   const e = env(t);
   e.store.acceptEvent('a', { id: 'a', at: e.clock.t });
   e.clock.t += 73 * H;
   e.store.acceptEvent('b', { id: 'b', at: e.clock.t });
   assert.deepEqual(Object.keys(e.store.state().seen), ['b']);
   const st = e.store.state();
-  for (let i = 0; i < 10050; i++) st.seen[`x${i}`] = e.clock.t + i;
+  for (let i = 0; i < 49999; i++) st.seen[`x${i}`] = e.clock.t - 49 * H + i;   // 49 h old: older than 48 h 10 min, younger than 72 h
   e.store.saveState();
-  assert.equal(Object.keys(e.store.state().seen).length, 10000);
+  assert.equal(Object.keys(e.store.state().seen).length, 50000, 'saving never evicts a young id');
+  assert.equal(e.store.acceptEvent('c', { id: 'c', at: e.clock.t }), 'full');
+  assert.ok(!('c' in e.store.state().seen) && 'x0' in e.store.state().seen);
+  assert.equal(e.store.acceptEvent('b', { id: 'b', at: e.clock.t }), 'duplicate');
+});
+
+test('unreadableFiles names the state files that exist but cannot be read', (t) => {
+  const e = env(t);
+  assert.deepEqual(e.store.unreadableFiles(), []);
+  fs.mkdirSync(e.dataHome, { recursive: true });
+  fs.writeFileSync(path.join(e.dataHome, 'state.json'), '{garbled');
+  assert.deepEqual(e.store.unreadableFiles(), ['state.json']);
 });
 
 test('coalescing: last notice time and suppressed count are kept and cleared', (t) => {

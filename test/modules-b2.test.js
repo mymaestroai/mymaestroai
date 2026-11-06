@@ -125,7 +125,7 @@ function rig(manifestExtra = {}, { steps, indexJs } = {}) {
   const connectors = {
     list: () => ({ connectors: [...conns.values()].map(c => ({ ...c, secretNames: [] })) }),
     upsert: (spec) => { const c = { agents: [], ...(conns.get(spec.id) || {}), ...spec }; conns.set(spec.id, c); return c; },
-    stop: (id) => calls.push(`stop:${id}`), startBackground: () => { calls.push('startBackground'); return []; },
+    stop: (id) => calls.push(`stop:${id}`), startBackground: (ids) => { calls.push(ids ? `startBackground:${ids.join(',')}` : 'startBackground'); return []; },
     remove: (id) => conns.delete(id), readSecrets: () => ({}),
   };
   const mods = createModules({
@@ -157,11 +157,11 @@ test('index: saving settings stops a running connector and restarts a background
     await r.mods.runStep('guarddemo', 'install', {});
     r.calls.length = 0;
     r.mods.saveSettings('guarddemo', { n: 5 });
-    assert.deepStrictEqual(r.calls, ['stop:guarddemo', 'startBackground'], 'disabled: stopped; startBackground() starts only background modules that are on (connectors tests)');
+    assert.deepStrictEqual(r.calls, ['stop:guarddemo', 'startBackground:guarddemo'], 'disabled: stopped; startBackground([id]) starts only that module, and only if it is a background module that is on (connectors tests)');
     r.conns.get('guarddemo').enabled = true;
     r.calls.length = 0;
     await r.mods.runStep('guarddemo', 'set', { values: { n: 6 } });
-    assert.deepStrictEqual(r.calls, ['stop:guarddemo', 'startBackground']);
+    assert.deepStrictEqual(r.calls, ['stop:guarddemo', 'startBackground:guarddemo']);
   } finally { r.cleanup(); }
   const r2 = rig();
   try {
@@ -169,7 +169,7 @@ test('index: saving settings stops a running connector and restarts a background
     r2.conns.get('guarddemo').enabled = true;
     r2.calls.length = 0;
     r2.mods.saveSettings('guarddemo', { n: 7 });
-    assert.deepStrictEqual(r2.calls, ['stop:guarddemo', 'startBackground'], 'not a background module: startBackground() leaves it alone (connectors tests)');
+    assert.deepStrictEqual(r2.calls, ['stop:guarddemo', 'startBackground:guarddemo'],'not a background module: startBackground() leaves it alone (connectors tests)');
   } finally { r2.cleanup(); }
 });
 

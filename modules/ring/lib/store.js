@@ -45,7 +45,7 @@ const crypto = require('node:crypto');
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const SEEN_KEEP_MS = 72 * 3600 * 1000;
-const SEEN_MAX = 10000;
+const SEEN_MAX = 50000;   // young ids are never evicted for this cap: a new event is refused ('full') instead
 const PENDING_TOKEN_KEEP_MS = 3600 * 1000;
 const NOTICE_KEEP_MS = 6 * 3600 * 1000;
 const RECENT_KEEP_MS = 7 * 3600 * 1000;
@@ -145,10 +145,18 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
     const st = state();
     const t = now();
     for (const [k, v] of Object.entries(st.seen)) if (t - v > SEEN_KEEP_MS) delete st.seen[k];
-    const ids = Object.keys(st.seen);
-    if (ids.length > SEEN_MAX) ids.sort((a, b) => st.seen[a] - st.seen[b]).slice(0, ids.length - SEEN_MAX).forEach((k) => delete st.seen[k]);
     st.recent = st.recent.filter((r) => t - r.at <= RECENT_KEEP_MS);
     writeJ('state.json', st);
+  }
+  // Names of the module's state files that exist but cannot be read (for the health tool). Quiet: no log line.
+  function unreadableFiles() {
+    const bad = [];
+    for (const name of ['state.json', 'account.json', 'unsaved.json', 'link-arm.json']) {
+      let text;
+      try { text = fs.readFileSync(file(name), 'utf8'); } catch (e) { if (e.code !== 'ENOENT') bad.push(name); continue; }
+      try { const v = JSON.parse(text); if (!v || typeof v !== 'object' || Array.isArray(v)) bad.push(name); } catch { bad.push(name); }
+    }
+    return bad;
   }
   const keyEncoding = () => { const e = state().keyEnc; return ['utf8', 'base64', 'hex'].includes(e) ? e : 'utf8'; };
   function setKeyEncoding(enc) {
@@ -161,6 +169,11 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
     const st = state();
     if (requestId && hasOwn(st.seen, requestId)) return 'duplicate';
     if (st.inbox.length >= INBOX_MAX) return 'full';
+    if (requestId) {
+      const t = now();
+      for (const [k, v] of Object.entries(st.seen)) if (t - v > SEEN_KEEP_MS) delete st.seen[k];
+      if (Object.keys(st.seen).length >= SEEN_MAX) return 'full';
+    }
     st.inbox.push(entry);
     if (requestId) st.seen[requestId] = now();
     try { saveState(); } catch (e) { st.inbox.pop(); if (requestId) delete st.seen[requestId]; throw e; }
@@ -430,7 +443,7 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
   return {
     dataHome, mediaDir,
     readJson: readJ, writeJson: writeJ, readText, writeText,
-    state, saveState, keyEncoding, setKeyEncoding, acceptEvent, inboxList, inboxRemove, coalescing, outbox, recent,
+    state, saveState, unreadableFiles, keyEncoding, setKeyEncoding, acceptEvent, inboxList, inboxRemove, coalescing, outbox, recent,
     account, saveAccount, claimedAccount, linkedAccount, setNeedsRelink, clearRelink,
     savePending, pending, takePending, dropExpiredPending, devices, unsaved, linkArm,
     workDir, workFile, freeBytes,

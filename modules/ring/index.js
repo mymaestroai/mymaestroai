@@ -26,6 +26,10 @@ module.exports = {
         const text = await ctx.callTool('health', {});
         const h = ctx.parse(text);
         if (!h || typeof h !== 'object') return { ok: false, summary: String(text || 'Ring sent a reply that could not be read.').slice(0, 300) };
+        if (h.unreadable_state) {   // before any 'not connected' answer: re-linking cannot help while a state file is unreadable
+          const names = Array.isArray(h.unreadable_files) ? h.unreadable_files.filter((n) => typeof n === 'string').slice(0, 4).join(', ') : '';
+          return { ok: false, summary: `A Ring module state file${names ? ` (${names})` : ''} cannot be read. Connecting the Ring account again will not help until that file is fixed or removed.` };
+        }
         if (!h.secrets_present) return { ok: false, summary: 'The Client ID, Client secret or signing key is missing. Save them again in the setup.' };
         if (!h.linked) return { ok: false, summary: 'No Ring account is connected yet. Use the connect step in the setup.' };
         if (h.needs_relink) return { ok: false, summary: 'The Ring connection was lost. Open the setup and connect your Ring account again.' };

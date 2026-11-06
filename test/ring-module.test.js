@@ -49,6 +49,11 @@ test('the checks: urls from the saved public address, health summary without cam
   const w = await health({ ...good, unsaved_token: true });
   assert.strictEqual(w.ok, true);
   assert.strictEqual(w.warnings.length, 1);
+  const bad = await health({ ...good, linked: false, secrets_present: false, unreadable_state: true, unreadable_files: ['account.json'] });
+  assert.strictEqual(bad.ok, false);
+  assert.match(bad.summary, /state file \(account\.json\) cannot be read/);
+  assert.match(bad.summary, /again will not help/);
+  assert.ok(!/No Ring account is connected yet/.test(bad.summary));
   const l = await checks.link({ settings: { time_zone: 'UTC' }, callTool: async (name, args) => { assert.strictEqual(name, 'arm_link'); return JSON.stringify({ code: 'ABCD-2345', expires_at: new Date(Date.now() + 1800000).toISOString(), minutes: args.minutes }); }, parse });
   assert.strictEqual(l.ok, true);
   assert.strictEqual(l.once, true, 'the hub keeps the lines out of its stores');
@@ -275,6 +280,7 @@ test('server.js end to end: tools, signed events with a notice, the link flow', 
     for (let i = 0; i < 100 && !H.notices.length; i++) await sleep(50);
     assert.strictEqual(H.notices.length, 1);
     const n = H.notices[0];
+    assert.match(n.id, /^[0-9a-f-]{36}$/, 'the notice carries the outbox entry id');
     assert.match(n.text, /^\[RING EVENT\] Motion \(person\) · Front Door \(…123456\) · House A · /);
     assert.strictEqual(n.files.length, 1);
     assert.match(n.files[0], /^events\/\d{4}-\d{2}-\d{2}\/\d{4}-front-door\.jpg$/);
@@ -325,6 +331,7 @@ test('server.js end to end: tools, signed events with a notice, the link flow', 
     assert.strictEqual(b.secrets_present, true);
     assert.strictEqual(b.ring_reachable, true);
     assert.strictEqual(b.unsaved_token, false);
+    assert.strictEqual(b.unreadable_state, false);
     assert.ok(!JSON.stringify(b).includes('Front Door'), 'no camera data in health');
     assert.strictEqual(typeof b.tools.ffmpeg, 'boolean');
   });

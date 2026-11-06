@@ -3262,7 +3262,8 @@ server.listen(PORT, HOST, () => {
   catch (e) { console.warn(`[modules-health] ${e.message}`); }
   // Background modules (those that receive webhooks or poll) start a few seconds later.
   // The module list is loaded first: its one-time sync rewrites each module's connector, which would restart a running one.
-  setTimeout(() => { try { require('./lib/modules').getModules(); require('./lib/connectors').getConnectors().startBackground(); } catch (e) { console.error('[modules] background start:', e.message); } }, 3000).unref();
+  // The notices start before the modules so that notices kept from before a restart are delivered without waiting for a new one.
+  setTimeout(() => { try { require('./lib/modules').getModules(); notices(); require('./lib/connectors').getConnectors().startBackground(); } catch (e) { console.error('[modules] background start:', e.message); } }, 3000).unref();
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).

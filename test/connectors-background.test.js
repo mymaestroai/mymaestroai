@@ -216,6 +216,18 @@ test('startBackground(): only background + enabled + unlocked module connectors 
   assert.deepEqual(r.cx.startBackground(), [], 'already running');
 });
 
+test('startBackground([ids]): only the listed connectors are considered', async (t) => {
+  const r = rig(); t.after(() => r.cx.shutdown());
+  up(r.cx, r.mod({ id: 'xx', background: true }));
+  up(r.cx, r.mod({ id: 'yy', background: true }));
+  await flush(r);
+  r.cx.stop('xx'); r.cx.stop('yy');
+  assert.deepEqual(r.cx.startBackground(['xx']), ['xx']);
+  await flush(r);
+  assert.deepEqual(r.cx.startBackground(['nope']), []);
+  assert.deepEqual(r.cx.startBackground(['yy']), ['yy']);
+});
+
 test('CONNECTOR_MEDIA_DIR reaches the child env only when mediaDir is set, and the folder is made', async (t) => {
   const r = rig(); t.after(() => r.cx.shutdown());
   const media = path.join(r.dir, 'media', 'deep');

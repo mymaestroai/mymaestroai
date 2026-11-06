@@ -589,7 +589,7 @@ test('rtsp-pull.py is the helper the wiring points at', () => {
   assert.match(fs.readFileSync(media.PULL_SCRIPT, 'utf8'), /first line of stdin/);
 });
 
-test('children get a minimal environment, and stopChildren ends the live ones (SIGTERM, then SIGKILL after 2 s)', async () => {
+test('children get a minimal environment, and stopChildren ends the live ones (SIGTERM, then SIGKILL after 1 s)', async () => {
   const E = setup();
   const saved = process.env.RING_SECRET_PROBE;
   process.env.RING_SECRET_PROBE = 'hunter2';
@@ -619,7 +619,7 @@ test('children get a minimal environment, and stopChildren ends the live ones (S
   } finally { if (saved === undefined) delete process.env.RING_SECRET_PROBE; else process.env.RING_SECRET_PROBE = saved; cleanup(E); }
 });
 
-test('stopChildren: a child that ignores SIGTERM gets SIGKILL after 2 s', async (t) => {
+test('stopChildren: a child that ignores SIGTERM gets SIGKILL after 1 s', async (t) => {
   const E = setup();
   try {
     const kills = [];
@@ -632,10 +632,11 @@ test('stopChildren: a child that ignores SIGTERM gets SIGKILL after 2 s', async 
     m.frameSheet(path.join(E.tmp, 'in.mp4'), 10);
     const p = m.stopChildren();
     assert.deepStrictEqual(kills, ['SIGTERM']);
-    t.mock.timers.tick(1999);
+    t.mock.timers.tick(999);
     assert.deepStrictEqual(kills, ['SIGTERM']);
     t.mock.timers.tick(1);
     await p;
     assert.deepStrictEqual(kills, ['SIGTERM', 'SIGKILL']);
+    await assert.rejects(() => m.frameSheet(path.join(E.tmp, 'in.mp4'), 10), /shutting down/, 'once closing, nothing new is started');
   } finally { t.mock.timers.reset(); cleanup(E); }
 });
