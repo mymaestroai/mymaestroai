@@ -1,0 +1,26 @@
+{
+  "id": "google-drive", "name": "Google Drive", "icon": "📁", "category": "Files",
+  "summary": "Keeps a copy of every nightly backup in your Google Drive, in a folder only My Maestro can see.",
+  "risk": "write",
+  "catalog": { "verified": "2026-11-06", "api": "Drive API v3", "official": false },
+  "health": { "check": "drive" },
+  "backup": true,
+  "server": { "type": "mcp-stdio", "script": "server.js" },
+  "secrets": [
+    { "name": "CLIENT_ID", "label": "Client ID" },
+    { "name": "CLIENT_SECRET", "label": "Client secret" },
+    { "name": "REFRESH_TOKEN", "label": "Google sign-in", "optional": true }
+  ],
+  "oauth": {
+    "flow": "device",
+    "deviceUrl": "https://oauth2.googleapis.com/device/code",
+    "tokenUrl": "https://oauth2.googleapis.com/token",
+    "scopes": ["https://www.googleapis.com/auth/drive.file"],
+    "clientIdSecret": "CLIENT_ID", "clientSecretSecret": "CLIENT_SECRET", "refreshTokenSecret": "REFRESH_TOKEN"
+  },
+  "tools": { "backup_put": "hub", "backup_list": "hub", "backup_delete": "hub", "backup_get": "hub" },
+  "docs": {
+    "homepage": "https://developers.google.com/workspace/drive/api",
+    "revoke": "Remove the app at https://myaccount.google.com/permissions, or delete its OAuth client in Google Cloud."
+  }
+}
