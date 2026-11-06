@@ -227,11 +227,11 @@ test('wrong passphrase counts; ten failures block options and register only; all
   const { a } = await registerPasskey(env);
   env.ks.lock();
   const first = await env.call('options', { purpose: 'register', passphrase: 'nope' });
-  assert.strictEqual(first.status, 401);
+  assert.strictEqual(first.status, 403);
   assert.strictEqual(first.json.error, 'Wrong passphrase.');
   for (let i = 1; i < 10; i++) {
     const r = await env.call('options', { purpose: 'register', passphrase: 'nope' });
-    assert.strictEqual(r.status, 401);
+    assert.strictEqual(r.status, 403);
   }
   const blocked = await env.call('options', { purpose: 'register', passphrase: PASS });
   assert.strictEqual(blocked.status, 429);
@@ -261,7 +261,7 @@ test('ten failed unlocks block unlock only, not registration', async () => {
   for (let i = 0; i < 10; i++) {
     const o = await env.call('options', { purpose: 'unlock' });
     const r = await env.call('unlock', { ...assertionFor(a, o.json.challenge), id, prf: pk.b64u(crypto.randomBytes(32)) });
-    assert.strictEqual(r.status, 401);
+    assert.strictEqual(r.status, 403);
   }
   const o = await env.call('options', { purpose: 'unlock' });
   const blocked = await env.call('unlock', { ...assertionFor(a, o.json.challenge), id, prf: pk.b64u(a.prf) });
@@ -325,7 +325,7 @@ test('register with a wrong passphrase at the final step is refused and counted'
     passphrase: 'wrong one', label: 'x', challenge: opts.json.challenge,
     credential: credentialFor(a, opts.json.challenge), prf: pk.b64u(a.prf),
   });
-  assert.strictEqual(res.status, 401);
+  assert.strictEqual(res.status, 403);
   assert.strictEqual(res.json.code, 'wrong_passphrase');
   assert.strictEqual(env.ks.passkeys().length, 0);
   const refusal = env.audits.find((x) => x[1] === 'PASSKEY_ADDED' && x[3].ok === false);
@@ -347,7 +347,7 @@ test('unlock with a passkey', async () => {
 
   // wrong prf
   const wrongPrf = await env.call('unlock', { ...assertionFor(a, opts.json.challenge), id, prf: pk.b64u(crypto.randomBytes(32)) });
-  assert.strictEqual(wrongPrf.status, 401);
+  assert.strictEqual(wrongPrf.status, 403);
   assert.strictEqual(wrongPrf.json.code, 'no_unlock');
   assert.strictEqual(env.ks.isUnlocked(), false);
 
@@ -355,7 +355,7 @@ test('unlock with a passkey', async () => {
   const opts2 = await env.call('options', { purpose: 'unlock' });
   const other = makeAuthenticator();
   const badSig = await env.call('unlock', { ...assertionFor(other, opts2.json.challenge), id, prf: pk.b64u(a.prf) });
-  assert.strictEqual(badSig.status, 401);
+  assert.strictEqual(badSig.status, 403);
   assert.strictEqual(badSig.json.code, 'bad_signature');
   assert.strictEqual(env.ks.isUnlocked(), false);
 
@@ -395,7 +395,7 @@ test('unlock with a passkey', async () => {
   for (let i = 0; i < 10; i++) {
     const o = await env.call('options', { purpose: 'unlock' });
     const r = await env.call('unlock', { ...assertionFor(a, o.json.challenge), id, prf: pk.b64u(crypto.randomBytes(32)) });
-    assert.ok(r.status === 401 || r.status === 429);
+    assert.ok(r.status === 403 || r.status === 429);
   }
   const o = await env.call('options', { purpose: 'unlock' });
   assert.strictEqual((await env.call('unlock', { ...assertionFor(a, o.json.challenge), id, prf: pk.b64u(a.prf) })).status, 429);

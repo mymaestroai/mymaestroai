@@ -694,3 +694,12 @@ test('the desktop Wallet panel: stale loads draw nothing, a refresh never reopen
   assert.match(act, /run\.timer = setTimeout\(\(\) => \{[^\n]*pkCancel\(\); alert\('Setup timed out\. Start again\.'\);[^\n]*PK_ENROLL_MS\);/);
   assert.match(block(app, 'function pkRunCleanup(', 'function pkCancel('), /clearTimeout\(run\.timer\)/);
 });
+
+test('a wallet passphrase refused with 401 does not send the desktop to the sign-in page; passkey checks answer 403', () => {
+  const app = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  assert.ok(app.includes("|| p.startsWith('/api/wallet/');"), 'keepsOwn401 keeps wallet 401s on the page');
+  const routes = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'wallet', 'passkey-routes.js'), 'utf8');
+  assert.ok(!/fail\(401/.test(routes), 'passkey routes never answer 401');
+  const pk = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'wallet', 'passkey.js'), 'utf8');
+  assert.ok(!/, 401\)/.test(pk), 'passkey checks never answer 401');
+});

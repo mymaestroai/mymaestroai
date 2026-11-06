@@ -235,7 +235,7 @@ test('verifyRegistration refusals', () => {
   for (const [name, over, code] of cases) {
     assert.throws(() => pk.verifyRegistration(regInput(a, over)), (e) => e.code === code, name);
   }
-  assert.throws(() => pk.verifyRegistration(regInput(a, { uv: false })), (e) => e.status === 401);
+  assert.throws(() => pk.verifyRegistration(regInput(a, { uv: false })), (e) => e.status === 403);
   const rsa1024 = makeAuthenticator('rsa1024');
   throwsCode(() => pk.verifyRegistration(regInput(rsa1024, { alg: -257 })), 'bad_key');
   const bad = regInput(a);
@@ -274,7 +274,7 @@ test('verifyAssertion refusals', () => {
   throwsCode(() => pk.verifyAssertion({ ...good, publicKey: other.spki }), 'bad_signature');
 
   // correctly signed but no UV
-  assert.throws(() => pk.verifyAssertion(assertInput(a, { uv: false })), (e) => e.code === 'no_uv' && e.status === 401);
+  assert.throws(() => pk.verifyAssertion(assertInput(a, { uv: false })), (e) => e.code === 'no_uv' && e.status === 403);
   throwsCode(() => pk.verifyAssertion(assertInput(a, { up: false })), 'no_uv');
 
   // mismatches

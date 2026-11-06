@@ -2,7 +2,7 @@
     // The password-check endpoints answer 401 for a wrong password, so they keep their own error handling.
     (function installSessionGuard() {
       const nativeFetch = window.fetch.bind(window);
-      const keepsOwn401 = (p) => p === '/api/auth/totp/disable' || p === '/api/auth/password' || p === '/api/auth/login';
+      const keepsOwn401 = (p) => p === '/api/auth/totp/disable' || p === '/api/auth/password' || p === '/api/auth/login' || p.startsWith('/api/wallet/');   // wallet owner checks answer 401 for a wrong keystore passphrase
       let redirecting = false;
       window.fetch = async function (input, init) {
         const res = await nativeFetch(input, init);
