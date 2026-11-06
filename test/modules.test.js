@@ -255,6 +255,29 @@ test('catalog, health and oauth fields: accepted when right, refused with a plai
   assert.match(manifestLib.validateSetup({ steps: [{ id: 's', type: 'signin', title: 'S' }, { id: 'f', type: 'finish', title: 'F' }] }, v, {}).join(' | '), /needs an oauth block/);
 });
 
+test('oauth flow "code": needs https authorizeUrl and tokenUrl, scopes, the secrets; pkce and rotatesRefreshToken are booleans', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(FIX_ROOT, 'fakecode', 'module.json'), 'utf8'));
+  const probs = (m) => manifestLib.validateManifest(m, 'fakecode').problems.join(' | ');
+  assert.strictEqual(probs(base), '');
+  const o = base.oauth;
+  assert.strictEqual(probs({ ...base, oauth: { ...o, pkce: false, rotatesRefreshToken: false } }), '');
+  assert.strictEqual(probs({ ...base, oauth: { ...o, pkce: true } }), '');
+  assert.match(probs({ ...base, oauth: { ...o, authorizeUrl: 'http://auth.example.com/authorize' } }), /authorizeUrl must be an https/);
+  const { authorizeUrl, ...noAuth } = o;
+  assert.match(probs({ ...base, oauth: noAuth }), /authorizeUrl must be an https/);
+  assert.match(probs({ ...base, oauth: { ...o, tokenUrl: 'ftp://x' } }), /tokenUrl must be an https/);
+  assert.match(probs({ ...base, oauth: { ...o, scopes: [] } }), /scopes/);
+  assert.match(probs({ ...base, oauth: { ...o, refreshTokenSecret: 'NOT_DECLARED' } }), /not declared in secrets/);
+  assert.match(probs({ ...base, oauth: { ...o, pkce: 'yes' } }), /oauth\.pkce must be true or false/);
+  assert.match(probs({ ...base, oauth: { ...o, rotatesRefreshToken: 1 } }), /rotatesRefreshToken must be true or false/);
+  assert.match(probs({ ...base, oauth: { ...o, flow: 'implicit' } }), /"device" or "code"/);
+  // the device flow still wants its deviceUrl, not an authorizeUrl
+  assert.match(probs({ ...base, oauth: { ...o, flow: 'device' } }), /deviceUrl must be an https/);
+  // the fixture module loads clean
+  const loaded = manifestLib.discover(FIX_ROOT).find(m => m.id === 'fakecode');
+  assert.deepStrictEqual(loaded.problems, []);
+});
+
 test('a health check that index.js does not export breaks the module; hasGuide is detected from guide.md', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-h-'));
   try {

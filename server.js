@@ -1794,7 +1794,17 @@ async function handleHttpRequest(req, res) {
         if (m && req.method === 'GET') return jsonResponse(res, 200, { ok: true, module: mods.detail(m[1]) });
         if (m && req.method === 'DELETE') return jsonResponse(res, 200, mods.remove(m[1]));
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/signin\/(start|poll|cancel)$/);
-        if (m && req.method === 'POST') return jsonResponse(res, 200, m[2] === 'start' ? await mods.signinStart(m[1]) : m[2] === 'cancel' ? mods.signinCancel(m[1]) : await mods.signinPoll(m[1]));
+        if (m && m[2] === 'start' && req.method === 'POST') {
+          // The address the provider sends the browser back to is built from this request, and only when the hub already accepts the Host.
+          let codeFlow = false; try { codeFlow = mods.detail(m[1]).oauthFlow === 'code'; } catch { /* unknown module: signinStart says so */ }
+          if (!codeFlow) return jsonResponse(res, 200, await mods.signinStart(m[1]));
+          const host = String(req.headers.host || '');
+          if (!require('./lib/origin-guard').knownHost(host)) return jsonResponse(res, 400, { error: "Open this page at your Maestro's usual address." });
+          const fwd = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+          const proto = fwd === 'https' || fwd === 'http' ? fwd : (req.socket && req.socket.encrypted ? 'https' : 'http');
+          return jsonResponse(res, 200, await mods.signinStart(m[1], { origin: `${proto}://${host}`, userId: req.hubUser ? req.hubUser.id : null }));
+        }
+        if (m && req.method === 'POST') return jsonResponse(res, 200, m[2] === 'cancel' ? mods.signinCancel(m[1]) : await mods.signinPoll(m[1]));
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
         if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(step|check|settings|enable|disable|audit)$/);
@@ -3029,6 +3039,21 @@ async function handleHttpRequest(req, res) {
       filePath = path.join(__dirname, 'login.html');
     } else if (pathname === '/users') {
       filePath = path.join(__dirname, 'users.html');
+    } else if (/^\/oauth\/callback\/[a-z][a-z0-9-]{1,31}$/.test(pathname)) {
+      // A data connector's sign-in comes back here (lib/modules signinCallback). A signed-in admin only, never the hub service or a token.
+      const id = pathname.split('/')[3];
+      const q = new URL(req.url, 'http://x').searchParams;
+      const back = (ok, msg) => {
+        const loc = ok ? `/modules?signin=ok#${id}` : `/modules?signin=error&msg=${encodeURIComponent(String(msg || 'The sign-in did not finish.').slice(0, 200))}#${id}`;
+        res.writeHead(302, { Location: loc, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); return res.end();
+      };
+      if (req.hubService || req.hubToken || !req.hubUser || req.hubPendingTotp) { res.writeHead(302, { Location: `/login?next=${encodeURIComponent('/modules')}` }); return res.end(); }
+      if (!access.isAdmin(req.hubUser)) { res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Only an admin can finish this sign-in.'); }
+      try {
+        const str = (k) => { const v = q.get(k); return v === null ? undefined : v; };
+        await require('./lib/modules').getModules().signinCallback(id, { code: str('code'), state: str('state'), error: str('error') }, { userId: req.hubUser.id });
+        return back(true);
+      } catch (e) { return back(false, e && e.message); }
     } else if (pathname === '/modules') {
       filePath = path.join(__dirname, 'modules.html');
     } else if (pathname === '/local-models') {

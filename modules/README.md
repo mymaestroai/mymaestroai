@@ -32,7 +32,7 @@ as for any connector. A module's connector can only be changed by the module (th
 | `catalog` | Optional, for the catalog on the page: `{ "verified": "YYYY-MM-DD", "api": "up to 40 characters", "official": true \| false }`. `verified` must be a real date, not in the future. Invalid values make the module "broken". |
 | `health` | Optional: `{ "check": "<name of a check exported by index.js>" }`. Switched-on modules with a health check are checked every night (see Health check below). |
 | `backup` | Optional boolean. `true` makes the module a place the hub can keep backups (see Backup modules). |
-| `oauth` | Needed by a `signin` step: `{ "flow": "device", "deviceUrl", "tokenUrl", "scopes": [...], "clientIdSecret", "clientSecretSecret", "refreshTokenSecret" }`. Both URLs must be `https`; the three secret names must be declared in `secrets`. |
+| `oauth` | Needed by a `signin` step. `flow: "device"`: `{ "flow": "device", "deviceUrl", "tokenUrl", "scopes": [...], "clientIdSecret", "clientSecretSecret", "refreshTokenSecret" }`. `flow: "code"` (the service sends the browser back to the hub): `{ "flow": "code", "authorizeUrl", "tokenUrl", "scopes", the three secret names, "pkce"?: true, "rotatesRefreshToken"?: false }`. Every URL must be `https`; the three secret names must be declared in `secrets`; `scopes` is a non-empty list. |
 
 The API and the lists show `catalog` (or null), `health` (true when a check is declared), `hasGuide` (true when the
 folder has `guide.md`) and `lastCheck`.
@@ -86,7 +86,7 @@ per-call wait for slow calls such as an upload; without it the 60 s default appl
 | `check` | Runs `checks[check]` from index.js through the guard and shows the result | `check` |
 | `settings` | A form for some settings | `fields` (setting keys) |
 | `grant` | Pick agents (see Who can use a module). Money modules: wallet agents only; member agents never | |
-| `signin` | "Sign in" with a short code shown to the person (OAuth device flow). Needs the `oauth` block in module.json and the client ID and secret saved first (an earlier `secrets` step). Done when the sign-in succeeds | |
+| `signin` | "Sign in" with a short code shown to the person (OAuth device flow), or with a button that sends the person to the service and back (flow `code`). Needs the `oauth` block in module.json and the client ID and secret saved first (an earlier `secrets` step). Done when the sign-in succeeds | |
 | `finish` | Switches the module on when every non-optional step is done | |
 
 ### Sign-in (`signin` step)
@@ -96,6 +96,34 @@ Admin-only routes: `POST /api/modules/<id>/signin/start` replies `{ userCode, ve
 replies `{ status: 'pending' }`, `{ status: 'ok' }` (the refresh token is saved into `refreshTokenSecret` and the step
 is marked done), `{ status: 'denied' | 'expired', message }`, or 409 "Start the sign-in again." Tokens and codes are
 never logged or sent to the page. The provider is not asked before the polling interval has passed.
+
+#### Flow `code` (redirect sign-in)
+
+For services without a device code. `oauth.flow: "code"` needs `authorizeUrl`, `tokenUrl`, `scopes` and the three
+secret names. Optional: `pkce` (default `true`: a fresh code verifier per sign-in, challenge method S256) and
+`rotatesRefreshToken` (default `false`).
+
+- `POST /api/modules/<id>/signin/start` replies `{ authorizeUrl, redirectUri }`. The `redirectUri` is
+  `<origin>/oauth/callback/<id>`, built from the request (`x-forwarded-proto`, else the socket; and the `Host` header,
+  which must be one the hub already accepts, otherwise 400 "Open this page at your Maestro's usual address."). The
+  person registers that exact address with the service. The page then goes to `authorizeUrl` in the same tab.
+- The callback page `GET /oauth/callback/<id>` is for a signed-in admin only (no session: the sign-in page; not an
+  admin: 403; never the hub service or an API token). It sits outside `/api/`, so the cross-site guard does not block
+  the service's redirect, and the session cookie (SameSite=Lax) comes along with that top-level GET. It hands the
+  `code`, `state` and `error` to the module code and redirects to `/modules?signin=ok#<id>` or
+  `/modules?signin=error&msg=<plain message, at most 200 characters>#<id>`.
+- One pending sign-in per module, in memory: `state` (32 random bytes, hex), the PKCE verifier, the redirect URI, the
+  user who started it, and a 10 minute expiry. The callback needs the state to match (constant time), the same
+  signed-in user and no expiry; the pending sign-in is removed before the code is exchanged (single use). A provider
+  error such as `access_denied` clears it with a plain message. On success the refresh token is saved into
+  `refreshTokenSecret` and the `signin` step is marked done.
+- `{{redirectUri}}` in a step's `body` is replaced on the page by `<page origin>/oauth/callback/<id>` in a copyable
+  box (escaped), so a setup step can tell the person which address to register with the service.
+- **Rotated refresh tokens** (`rotatesRefreshToken: true`): the module's tool server may send the JSON-RPC
+  notification `{ "jsonrpc": "2.0", "method": "notifications/hub/refresh_token", "params": { "value": "<token>" } }` on
+  stdout each time the service rotates the token. The hub saves `value` (a string of 10 to 4096 characters) into
+  `refreshTokenSecret` and only there, encrypted, without restarting the connector, and never logs it. Any other
+  notification is ignored; so is any notification from a connector that is not a module with this setting.
 
 ## Who can use a module
 
