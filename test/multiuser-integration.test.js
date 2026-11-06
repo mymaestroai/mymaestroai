@@ -109,7 +109,7 @@ test('server: 2026-10-16 review fixes are wired (static allow-list, hub-only bod
   assert.ok(server.includes("require('./lib/static-files').resolve(pathname)"));
   assert.ok(!server.includes("const safePath = path.normalize(pathname)"), 'the old normalize-and-join fallback is gone');
   assert.strictEqual((server.match(/stripHubOnlyChatFields\(JSON\.parse\(await readBody\(req\)\), req\)/g) || []).length, 2, 'both chat routes strip hub-only fields');
-  assert.ok(server.includes("const HUB_ONLY_CHAT_FIELDS = ['image_files', 'consulted_by', 'origin'];"));
+  assert.ok(server.includes("const HUB_ONLY_CHAT_FIELDS = ['image_files', 'consulted_by', 'origin', 'owner_turn'];"));
   assert.ok(server.includes("const allowed = require('./lib/settings').getSetting('memberModels');"));
   assert.ok(server.includes("!(access.isAdmin(req.hubUser) && !req.hubPendingTotp)"));
   assert.ok(server.includes("if (req.hubToken && req.hubToken.agents && !req.hubToken.agents.includes(agentName)) return jsonResponse(res, 403, { error: 'token_scope'"));

@@ -62,7 +62,7 @@ test('manifest validation catches the unsafe and the incomplete', () => {
 
 test('guided setup end to end: steps in order, key into the vault, check through the guard, grant, switch on', async (t) => {
   const r = rig(); t.after(r.cleanup);
-  assert.strictEqual(r.mods.list()[0].state, 'available');
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').state, 'available');
   await assert.rejects(r.mods.runStep('fakebank', 'outside', { confirmed: false }), /Tick "Done it"/);
   await assert.rejects(r.mods.runStep('fakebank', 'key', { values: { FAKEBANK_TOKEN: 'x' } }), /Install step first/);
   await assert.rejects(r.mods.runStep('fakebank', 'done', {}), /Not finished yet/);
@@ -130,18 +130,18 @@ test('the guard: hidden tools stay hidden, limits apply per call with live setti
 test('switch off, status, checklist items and remove', async (t) => {
   const r = rig(); t.after(r.cleanup);
   await r.mods.runStep('fakebank', 'install', {});
-  assert.strictEqual(r.mods.list()[0].state, 'setup');
-  assert.match(r.mods.readinessItems()[0].title, /Fake Bank: setup not finished/);
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').state, 'setup');
+  assert.match(r.mods.readinessItems().find(x => x.id === 'module-fakebank').title, /Fake Bank: setup not finished/);
   await assert.rejects(Promise.resolve().then(() => r.mods.setEnabled('fakebank', true)), /Finish the setup first/);
   await setupAll(r.mods);
   assert.deepStrictEqual(r.mods.readinessItems(), []);
   await r.cx.callTool('fakebank', 'place_order', { pair: 'BTC-USD', usd: 1 });   // something for the activity log
   r.mods.setEnabled('fakebank', false);
-  assert.strictEqual(r.mods.list()[0].state, 'off');
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').state, 'off');
   assert.deepStrictEqual(await r.cx.toolSpecsFor('trader'), []);
   r.mods.remove('fakebank');
   assert.ok(!r.cx.list().connectors.some(c => c.id === 'fakebank'));
-  assert.strictEqual(r.mods.list()[0].state, 'available');
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').state, 'available');
   assert.ok(fs.existsSync(path.join(r.dir, 'modules', 'fakebank', 'audit.jsonl')), 'the activity log is kept');
 });
 
@@ -233,4 +233,253 @@ test('the guard falls back to the safe default when a stored setting is invalid,
   assert.match(await order({ pair: 'BTC-USD', usd: 5 }), /placed/);
   r.mods.setEnabled('fakebank', false);
   assert.match(await order({ pair: 'BTC-USD', usd: 1 }), /Fake Bank is switched off in this hub/, 'a handler captured before the switch-off is refused at call time');
+});
+
+test('catalog, health and oauth fields: accepted when right, refused with a plain reason when not', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(FIX_ROOT, 'fakesignin', 'module.json'), 'utf8'));
+  const probs = (m) => manifestLib.validateManifest(m, 'fakesignin').problems.join(' | ');
+  assert.strictEqual(probs(base), '');
+  const { catalog, health, oauth, ...bare } = base;
+  assert.strictEqual(probs(bare), '', 'all the new fields are optional');
+  assert.match(probs({ ...base, catalog: { verified: '2026-02-30' } }), /real date/);
+  assert.match(probs({ ...base, catalog: { verified: 'yesterday' } }), /real date/);
+  assert.match(probs({ ...base, catalog: { verified: '2999-01-01' } }), /in the future/);
+  assert.match(probs({ ...base, catalog: { api: 'x'.repeat(41) } }), /at most 40 characters/);
+  assert.match(probs({ ...base, catalog: { official: 'yes' } }), /true or false/);
+  assert.match(probs({ ...base, health: {} }), /health must be/);
+  assert.match(probs({ ...base, oauth: { ...oauth, deviceUrl: 'http://auth.example.com/device' } }), /deviceUrl must be an https/);
+  assert.match(probs({ ...base, oauth: { ...oauth, tokenUrl: 'ftp://x' } }), /tokenUrl must be an https/);
+  assert.match(probs({ ...base, oauth: { ...oauth, scopes: [] } }), /scopes/);
+  assert.match(probs({ ...base, oauth: { ...oauth, clientSecretSecret: 'NOT_DECLARED' } }), /not declared in secrets/);
+  const v = manifestLib.validateManifest(bare, 'fakesignin');
+  assert.match(manifestLib.validateSetup({ steps: [{ id: 's', type: 'signin', title: 'S' }, { id: 'f', type: 'finish', title: 'F' }] }, v, {}).join(' | '), /needs an oauth block/);
+});
+
+test('a health check that index.js does not export breaks the module; hasGuide is detected from guide.md', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-h-'));
+  try {
+    const copy = path.join(dir, 'fakesignin');
+    fs.cpSync(path.join(FIX_ROOT, 'fakesignin'), copy, { recursive: true });
+    assert.strictEqual(manifestLib.loadModule(copy).hasGuide, true);
+    fs.unlinkSync(path.join(copy, 'guide.md'));
+    assert.strictEqual(manifestLib.loadModule(copy).hasGuide, false);
+    const j = JSON.parse(fs.readFileSync(path.join(copy, 'module.json'), 'utf8')); j.health.check = 'nope';
+    fs.writeFileSync(path.join(copy, 'module.json'), JSON.stringify(j));
+    assert.match(manifestLib.loadModule(copy).problems.join(' | '), /health.check "nope" is not exported/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('setAgents: refuses member agents, temporary workers and non-wallet agents on a money module; drops leads; stores through the module path', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-sa-'));
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: McpStdioClient, log: () => {}, unlockTtlMs: 0 });
+  const mods = createModules({
+    root: FIX_ROOT, dataDir: path.join(dir, 'modules'), stateFile: path.join(dir, 'modules.json'), connectorsFile: path.join(dir, 'connectors.json'), connectors: cx,
+    isWalletAgent: (n) => n === 'sam', isMemberOwned: (a) => a.owner === 'u_member', isVirtual: (n) => n === 'temp1',
+    listAgents: () => [{ name: 'owner', lead: true }, { name: 'sam' }, { name: 'helper' }, { name: 'kidbot', owner: 'u_member' }, { name: 'temp1' }],
+    log: () => {},
+  });
+  try {
+    await mods.runStep('fakebank', 'install', {});
+    await mods.runStep('fakesignin', 'install', {});
+    const agentsOf = (id) => cx.list().connectors.find(c => c.id === id).agents;
+    assert.throws(() => mods.setAgents('fakebank', ['kidbot']), /unknown, or owned by a member/);
+    assert.throws(() => mods.setAgents('fakebank', ['temp1']), /temporary worker/);
+    assert.throws(() => mods.setAgents('fakebank', ['helper']), /not a wallet agent/);
+    assert.throws(() => mods.setAgents('fakebank', ['ghost']), /not an agent/);
+    assert.deepStrictEqual(agentsOf('fakebank'), [], 'a refused list stores nothing');
+    assert.deepStrictEqual(mods.setAgents('fakebank', ['owner', 'sam', 'sam'], { by: 'owner' }), ['sam'], 'the lead is dropped silently');
+    assert.deepStrictEqual(agentsOf('fakebank'), ['sam']);
+    assert.deepStrictEqual(mods.setAgents('fakesignin', ['helper', 'sam']), ['helper', 'sam'], 'a non-money module takes any admin-side agent');
+    const d = mods.detail('fakesignin');
+    assert.deepStrictEqual(d.leads, ['owner']);
+    assert.deepStrictEqual(d.catalog, { verified: '2026-01-15', api: 'Fake Mail API v1', official: false });
+    assert.strictEqual(d.health, true); assert.strictEqual(d.hasGuide, true); assert.strictEqual(d.lastCheck, null);
+    const l = mods.list().find(x => x.id === 'fakebank');
+    assert.strictEqual(l.catalog, null); assert.strictEqual(l.health, false); assert.strictEqual(l.hasGuide, false);
+  } finally { cx.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('money module: an eligible wallet lead stays in the list and is an ordinary candidate; other modules drop leads; leadsAlways says which', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-ml-'));
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: McpStdioClient, log: () => {}, unlockTtlMs: 0 });
+  const mods = createModules({
+    root: FIX_ROOT, dataDir: path.join(dir, 'modules'), stateFile: path.join(dir, 'modules.json'), connectorsFile: path.join(dir, 'connectors.json'), connectors: cx,
+    isWalletAgent: (n) => n === 'sam' || n === 'chief', isMemberOwned: (a) => a.owner === 'u_member',
+    listAgents: () => [{ name: 'chief', lead: true }, { name: 'owner', lead: true }, { name: 'sam' }, { name: 'helper' }],
+    log: () => {},
+  });
+  try {
+    await mods.runStep('fakebank', 'install', {});
+    await mods.runStep('fakesignin', 'install', {});
+    const agentsOf = (id) => cx.list().connectors.find(c => c.id === id).agents;
+    assert.deepStrictEqual(mods.setAgents('fakebank', ['chief', 'owner', 'sam']), ['chief', 'sam'], 'the wallet lead is kept; the lead that is not a wallet agent is dropped as before');
+    assert.deepStrictEqual(agentsOf('fakebank'), ['chief', 'sam']);
+    assert.deepStrictEqual(mods.setAgents('fakesignin', ['chief', 'helper']), ['helper'], 'a non-money module drops leads');
+    const bank = mods.detail('fakebank'), mail = mods.detail('fakesignin');
+    assert.strictEqual(bank.leadsAlways, false); assert.strictEqual(mail.leadsAlways, true);
+    assert.deepStrictEqual(bank.candidates.find(c => c.name === 'chief'), { name: 'chief', display: 'chief', eligible: true, why: null });
+    assert.strictEqual(bank.candidates.find(c => c.name === 'owner').eligible, false, 'a lead that is not a wallet agent shows why');
+    assert.deepStrictEqual(bank.leads, ['chief', 'owner']);
+  } finally { cx.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('money is decided by risk or by any tool class, in the source', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'modules', 'index.js'), 'utf8');
+  assert.match(src, /const isMoney = \(m\) => !!\(m\.manifest && \(m\.manifest\.risk === 'money' \|\| Object\.values\(m\.manifest\.tools \|\| \{\}\)\.includes\('money'\)\)\);/);
+  assert.match(src, /leadsAlways: !isMoney\(m\)/);
+});
+
+test('step ids in setup.json: lowercase, digits and dashes, at most 32, starting with a letter', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(FIX_ROOT, 'fakebank', 'module.json'), 'utf8'));
+  const v = manifestLib.validateManifest(base, 'fakebank');
+  const probs = (id) => manifestLib.validateSetup({ steps: [{ id, type: 'explain', title: 'A' }, { id: 'done', type: 'finish', title: 'Done' }] }, v, {}).join(' | ');
+  assert.strictEqual(probs('ok-step-2'), '');
+  assert.strictEqual(probs('a'), '', 'a single letter is fine');
+  for (const bad of ['Upper', '1abc', 'has space', "x'y", 'a_b', '-a', 'a'.repeat(33), '../x']) assert.match(probs(bad), /step id .*lowercase letters, digits and dashes/, bad);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-sid-'));
+  try {
+    const copy = path.join(dir, 'fakebank'); fs.cpSync(path.join(FIX_ROOT, 'fakebank'), copy, { recursive: true });
+    const setup = JSON.parse(fs.readFileSync(path.join(copy, 'setup.json'), 'utf8'));
+    setup.steps[0].id = 'Bad Id';
+    fs.writeFileSync(path.join(copy, 'setup.json'), JSON.stringify(setup));
+    const loaded = manifestLib.loadModule(copy);
+    assert.match(loaded.problems.join(' | '), /step id "Bad Id"/, 'the module becomes broken like for any other problem');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── backup modules and the hub tool class (fixtures/modules/fakebackup) ──
+async function setupBackup(mods) {
+  await mods.runStep('fakebackup', 'install', {});
+  return mods.runStep('fakebackup', 'done', {});
+}
+
+test('backup: true needs the four hub tools; a wrong class or a missing tool is a plain reason', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(FIX_ROOT, 'fakebackup', 'module.json'), 'utf8'));
+  const probs = (m) => manifestLib.validateManifest(m, 'fakebackup').problems.join(' | ');
+  assert.strictEqual(probs(base), '');
+  assert.ok(manifestLib.TOOL_CLASSES.includes('hub'));
+  const { backup_get, ...noGet } = base.tools;
+  assert.match(probs({ ...base, tools: noGet }), /must declare the tool backup_get/);
+  assert.match(probs({ ...base, tools: { ...base.tools, backup_put: 'write' } }), /backup_put: a backup tool must have class "hub"/);
+  assert.match(probs({ ...base, backup: 'yes' }), /backup must be true or false/);
+  assert.strictEqual(probs({ ...base, backup: false, tools: { peek: 'read' } }), '', 'without backup: true the tools are free');
+});
+
+const HUB = { hub: true };
+test('hub tools: hidden from agents and tools/list, reachable by the hub through the guard, audited as non-read', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  const fin = await setupBackup(r.mods);
+  assert.strictEqual(fin.module.backup, true);
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebackup').backup, true);
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebank').backup, false);
+  const conn = r.cx.list().connectors.find(c => c.id === 'fakebackup');
+  assert.deepStrictEqual(Object.keys(conn.tools || {}).sort(), ['peek', 'usage'], 'the connector keeps only agent-visible tools');
+  assert.deepStrictEqual((await r.cx.toolSpecsFor('trader')).map(s => s.tool), [], 'not granted yet');
+  r.mods.setAgents('fakebackup', ['trader']);
+  assert.deepStrictEqual((await r.cx.toolSpecsFor('trader')).map(s => s.tool).sort(), ['peek', 'usage'], 'an agent sees only the read tools');
+  const seen = await r.cx.test('fakebackup');
+  assert.deepStrictEqual(seen.tools.map(x => x.name).sort(), ['peek', 'usage'], "the guard's tools/list leaves hub tools out");
+
+  const src = path.join(r.dir, 'in.bin'); const out = path.join(r.dir, 'out.bin');
+  fs.writeFileSync(src, 'hello backup');
+  const put = JSON.parse(await r.cx.callTool('fakebackup', 'backup_put', { file: src, name: 'a.zip' }, HUB));
+  assert.deepStrictEqual(put, { name: 'a.zip', size: 12, md5: require('crypto').createHash('md5').update('hello backup').digest('hex') });
+  const list = JSON.parse(await r.cx.callTool('fakebackup', 'backup_list', {}, HUB));
+  assert.deepStrictEqual(list.files.map(f => [f.name, f.size]), [['a.zip', 12]]);
+  assert.ok(!Number.isNaN(Date.parse(list.files[0].created)));
+  assert.deepStrictEqual(JSON.parse(await r.cx.callTool('fakebackup', 'backup_get', { name: 'a.zip', out }, HUB)), { size: 12, md5: put.md5 });
+  assert.strictEqual(fs.readFileSync(out, 'utf8'), 'hello backup');
+  assert.match(await r.cx.callTool('fakebackup', 'backup_delete', { name: 'nope.zip' }, HUB), /No such backup/);
+  assert.deepStrictEqual(JSON.parse(await r.cx.callTool('fakebackup', 'backup_delete', { name: 'a.zip' }, HUB)), { deleted: 'a.zip' });
+  assert.match(await r.cx.callTool('fakebackup', 'not_listed', {}, HUB), /is not enabled in this hub/, 'an unlisted tool is still refused');
+
+  const audit = r.mods.auditTail('fakebackup');
+  for (const tool of ['backup_put', 'backup_list', 'backup_get', 'backup_delete']) {
+    assert.ok(audit.some(e => e.tool === tool && e.cls === 'hub' && e.decision === 'allowed'), `${tool} allowed and audited`);
+    assert.ok(audit.some(e => e.tool === tool && e.decision === 'done'), `${tool} result audited`);
+  }
+  assert.ok(!audit.some(e => e.tool === 'peek'), 'read calls are not audited');
+});
+
+test('backupModules(): only finished, switched-on backup modules; attention from a failed check still counts', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  assert.deepStrictEqual(r.mods.backupModules(), [], 'not installed');
+  await r.mods.runStep('fakebackup', 'install', {});
+  assert.deepStrictEqual(r.mods.backupModules(), [], 'setup not finished');
+  await r.mods.runStep('fakebackup', 'done', {});
+  assert.deepStrictEqual(r.mods.backupModules(), [{ id: 'fakebackup', label: 'Fake Vault' }]);
+  r.mods.setEnabled('fakebackup', false);
+  assert.deepStrictEqual(r.mods.backupModules(), [], 'switched off');
+  r.mods.setEnabled('fakebackup', true);
+  const s = JSON.parse(fs.readFileSync(path.join(r.dir, 'modules.json'), 'utf8'));
+  s.modules.fakebackup.lastCheck = { ok: false, summary: 'down' };
+  fs.writeFileSync(path.join(r.dir, 'modules.json'), JSON.stringify(s));
+  assert.strictEqual(r.mods.list().find(x => x.id === 'fakebackup').state, 'attention');
+  assert.deepStrictEqual(r.mods.backupModules(), [{ id: 'fakebackup', label: 'Fake Vault' }]);
+  await setupAll(r.mods);
+  assert.ok(!r.mods.backupModules().some(x => x.id === 'fakebank'), 'a module without backup: true is never listed');
+  fs.writeFileSync(path.join(r.dir, 'modules.json'), '{broken');
+  assert.deepStrictEqual(r.mods.backupModules(), [], 'unreadable state gives an empty list');
+});
+
+test('callTool timeoutMs: a slow upload works with a long wait and fails with a short one', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await setupBackup(r.mods);
+  const src = path.join(r.dir, 'in.bin'); fs.writeFileSync(src, 'x');
+  const put = (delayMs, opts) => r.cx.callTool('fakebackup', 'backup_put', { file: src, name: `t${delayMs}.zip`, delayMs }, { hub: true, ...opts });
+  await assert.rejects(put(1500, { timeoutMs: 300 }), /timed out after 300ms/);
+  assert.match(await put(600, { timeoutMs: 10000 }), /"name":"t600.zip"/);
+  assert.match(await put(0), /"size":1/, 'no option: the default wait');
+});
+
+test('hub capability: a hub tool without the flag is refused; with it it works; the server never sees __hub; the audit never holds the secret', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await setupBackup(r.mods);
+  const refused = await r.cx.callTool('fakebackup', 'backup_list', {});
+  assert.match(refused, /only for the hub's own calls/);
+  // a guess at the field does not help: an agent-style call carrying a made-up __hub is refused too
+  assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: 'guess' }), /only for the hub's own calls/);
+  assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: '' }, { hub: false }), /only for the hub's own calls/);
+  // as long as the real secret (64) but not hex: refused, and never an exception
+  assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: 'é'.repeat(64) }), /only for the hub's own calls/);
+  assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: 'é'.repeat(32) + 'a'.repeat(32) }), /only for the hub's own calls/);
+  const ok = JSON.parse(await r.cx.callTool('fakebackup', 'backup_list', { install: '0123456789abcdef', __hub: 'ignored' }, { hub: true }));
+  assert.deepStrictEqual(ok.argKeys, ['install'], 'the module server saw the arguments without __hub');
+  assert.strictEqual(ok.hubEnv, false, 'the module server does not get the secret in its environment');
+  // a read tool called with a stray __hub is stripped as well
+  const peek = JSON.parse(await r.cx.callTool('fakebackup', 'peek', { __hub: 'x' }));
+  assert.ok(peek.files >= 0);
+  const raw = fs.readFileSync(path.join(r.dir, 'modules', 'fakebackup', 'audit.jsonl'), 'utf8');
+  assert.ok(raw.includes('"decision":"refused"') && raw.includes('"decision":"done"'));
+  assert.ok(!raw.includes('__hub'), 'the audit never mentions the field');
+});
+
+test('minTools: a module with no agent-visible tools answers a hub call without the 7.5 s wait', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  // a copy of the fixture whose tools are all hub tools
+  const root = path.join(r.dir, 'hubonly-root'); const dir = path.join(root, 'fakebackup');
+  fs.cpSync(path.join(FIX_ROOT, 'fakebackup'), dir, { recursive: true });
+  const m = JSON.parse(fs.readFileSync(path.join(dir, 'module.json'), 'utf8'));
+  m.tools = { backup_put: 'hub', backup_list: 'hub', backup_delete: 'hub', backup_get: 'hub' };
+  fs.writeFileSync(path.join(dir, 'module.json'), JSON.stringify(m));
+  const dataDir = path.join(r.dir, 'm2');
+  const mods = createModules({ root, dataDir, stateFile: path.join(r.dir, 'm2.json'), connectorsFile: path.join(r.dir, 'connectors.json'), connectors: r.cx,
+    isWalletAgent: () => false, isMemberOwned: () => false, listAgents: () => [], publish: () => {}, log: () => {} });
+  await mods.runStep('fakebackup', 'install', {});
+  await mods.runStep('fakebackup', 'done', {});
+  const t0 = Date.now();
+  const out = JSON.parse(await r.cx.callTool('fakebackup', 'backup_list', { install: '0123456789abcdef' }, { hub: true }));
+  assert.ok(Array.isArray(out.files));
+  assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`);
+});
+
+test('setup steps: a tick box needs its text (confirm: true is refused)', () => {
+  const { validateSetup } = require('../lib/modules/manifest');
+  const steps = (confirm) => ({ steps: [{ id: 'about', type: 'explain', title: 'About', body: 'x', confirm }, { id: 'done', type: 'finish', title: 'Done', body: 'x' }] });
+  const ok = validateSetup(steps('I understand.'), { secretNames: new Set(), settingKeys: new Set() });
+  const bad = validateSetup(steps(true), { secretNames: new Set(), settingKeys: new Set() });
+  const okList = Array.isArray(ok) ? ok : (ok && ok.problems) || [];
+  const badList = Array.isArray(bad) ? bad : (bad && bad.problems) || [];
+  assert.ok(!okList.some(p => /confirm/.test(p)), 'a text label is accepted');
+  assert.ok(badList.some(p => /confirm must be the text of the tick box/.test(p)), 'a boolean label is refused');
 });

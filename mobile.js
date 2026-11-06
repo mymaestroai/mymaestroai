@@ -5180,6 +5180,7 @@ function applyMultiUser() {
   refreshMemoryHealth();
   if (hubMe) {
     $('menu-users').hidden = !hubMe.isAdmin;
+    if ($('menu-connectors')) $('menu-connectors').hidden = !hubMe.isAdmin;   // admins only; a page cached from before has no such item
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;

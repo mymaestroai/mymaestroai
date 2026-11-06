@@ -276,7 +276,7 @@ let serverReady = false;
 // Chat body fields the hub sets for its own loopback turns (consults, workers, bridges). A browser or a token may not
 // set them: image_files reads any image on the host, consulted_by/origin forge provenance, override skips the kill
 // switch, ephemeral hides a turn from the transcript (review F08/F35).
-const HUB_ONLY_CHAT_FIELDS = ['image_files', 'consulted_by', 'origin'];
+const HUB_ONLY_CHAT_FIELDS = ['image_files', 'consulted_by', 'origin', 'owner_turn'];
 const ADMIN_ONLY_CHAT_FIELDS = ['override', 'ephemeral', 'tiger_team', 'consultation_depth'];
 function stripHubOnlyChatFields(body, req) {
   if (!body || typeof body !== 'object' || req.hubService) return body;
@@ -345,6 +345,7 @@ async function handleHttpRequest(req, res) {
   req.hubToken = ident && ident.kind === 'token' ? ident.token : null;   // a program's API token (lib/auth tokens, lib/access tokenAllows)
   req.hubUser = ident && (ident.kind === 'user' || ident.kind === 'legacy') ? ident.user : null;
   req.hubPendingTotp = !!(ident && ident.kind === 'user' && ident.pendingTotp);
+  req.hubIdentKind = ident ? ident.kind : null;
   if (ident && ident.kind === 'bad-token' && route.kind !== 'public') return jsonResponse(res, 401, { error: 'unauthorized', detail: ident.reason });
   if (route.kind === 'api') {
     // OpenAI-compatible endpoints (/v1/*): an API token with the openai-api scope, a signed-in admin, or the hub itself.
@@ -1256,11 +1257,15 @@ async function handleHttpRequest(req, res) {
       const deviceZone = req.headers['x-hub-time-zone'];
       if (req.hubUser && typeof deviceZone === 'string' && deviceZone) { try { hubAuth.setTimeZone(req.hubUser.id, deviceZone.trim(), { auto: true }); } catch {} }
       const body = stripHubOnlyChatFields(JSON.parse(await readBody(req)), req);
+      // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
+      if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       return handleChatStream(body, res);
     }
 
     if (pathname === '/api/chat' && req.method === 'POST') {
       const body = stripHubOnlyChatFields(JSON.parse(await readBody(req)), req);
+      // The owner's own message: a signed-in admin's browser session (never an API token, the hub itself or legacy credentials).
+      if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       return handleChat(body, res);
     }
 
@@ -1273,7 +1278,7 @@ async function handleHttpRequest(req, res) {
 
     if (pathname === '/api/ask_response' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      const result = handleAskResponse(body);
+      const result = handleAskResponse(body, { isAdmin: access.isAdmin(req.hubUser) });
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
@@ -1780,7 +1785,7 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/modules' || pathname.startsWith('/api/modules/')) {
       const mods = require('./lib/modules').getModules();
       const bodyJson = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
-      const fail = (e) => jsonResponse(res, 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}) });
+      const fail = (e) => jsonResponse(res, e.status === 409 ? 409 : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}) });
       // Changes come from a person on the page, never from the hub's internal service identity (agents' calls back into the hub).
       if (req.method !== 'GET' && req.hubService) return jsonResponse(res, 403, { error: 'Module changes need a signed-in admin.' });
       try {
@@ -1788,6 +1793,10 @@ async function handleHttpRequest(req, res) {
         let m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})$/);
         if (m && req.method === 'GET') return jsonResponse(res, 200, { ok: true, module: mods.detail(m[1]) });
         if (m && req.method === 'DELETE') return jsonResponse(res, 200, mods.remove(m[1]));
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/signin\/(start|poll|cancel)$/);
+        if (m && req.method === 'POST') return jsonResponse(res, 200, m[2] === 'start' ? await mods.signinStart(m[1]) : m[2] === 'cancel' ? mods.signinCancel(m[1]) : await mods.signinPoll(m[1]));
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
+        if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(step|check|settings|enable|disable|audit)$/);
         if (m) {
           const id = m[1], act = m[2];
@@ -1808,7 +1817,7 @@ async function handleHttpRequest(req, res) {
       const cx = require('./lib/connectors').getConnectors();
       const reply = (fn) => { try { const r = fn(); return r && typeof r.then === 'function' ? r.then(v => jsonResponse(res, 200, { ok: true, ...(v && typeof v === 'object' && !Array.isArray(v) ? v : { result: v }) })).catch(e => jsonResponse(res, 400, { error: e.message })) : jsonResponse(res, 200, { ok: true, ...(r && typeof r === 'object' ? r : {}) }); } catch (e) { return jsonResponse(res, 400, { error: e.message }); } };
       const bodyJson = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
-      if (pathname === '/api/connectors' && req.method === 'GET') return jsonResponse(res, 200, { ok: true, ...cx.list() });
+      if (pathname === '/api/connectors' && req.method === 'GET') return jsonResponse(res, 200, { ok: true, ...cx.list(), leads: (() => { try { return require('./lib/agents').ownerLeadNames(); } catch { return []; } })() });
       if (pathname === '/api/connectors' && req.method === 'POST') { const b = await bodyJson(); const { passphrase, newPassphrase, ...spec } = b; return reply(() => ({ connector: cx.upsert(spec, { passphrase, newPassphrase }) })); }
       if (pathname === '/api/connectors/lock-all' && req.method === 'POST') return reply(() => { cx.lockAll(); return {}; });
       let m = pathname.match(/^\/api\/connectors\/([^/]+)$/);
@@ -3152,6 +3161,9 @@ server.listen(PORT, HOST, () => {
   // the nightly check off (Check now still works).
   try { if (process.env.HUB_MEMORY_HEALTH !== 'off') require('./lib/memory-health').getMemoryHealth().schedule(); }
   catch (e) { console.warn(`[memory-health] ${e.message}`); }
+  // Data connector health: a nightly check of every switched-on module that declares one (lib/modules/health).
+  try { require('./lib/modules/health').getModulesHealth().start(); }
+  catch (e) { console.warn(`[modules-health] ${e.message}`); }
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).

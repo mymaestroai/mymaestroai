@@ -1,0 +1,6 @@
+{
+  "id": "fakebackup", "name": "Fake Vault", "category": "Test", "summary": "A test backup module that keeps files in a folder.", "risk": "write",
+  "backup": true,
+  "server": { "type": "mcp-stdio", "script": "server.js", "dataEnv": "FAKEBACKUP_HOME" },
+  "tools": { "peek": "read", "usage": "read","backup_put": "hub", "backup_list": "hub", "backup_delete": "hub", "backup_get": "hub" }
+}

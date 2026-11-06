@@ -444,7 +444,7 @@
       return tz && tz !== mine ? `${t} (${tz.replace(/_/g, ' ')} time)` : t;
     }
     const bkSize = (n) => n == null ? '?' : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
-    const bkPlaceName = (p) => p.kind === 'local' ? 'This computer' : ((bkState && bkState.folders || []).find(f => f.dir === p.dir) || {}).label || p.dir;
+    const bkPlaceName = (p) => p.kind === 'local' ? 'This computer' : p.kind === 'module' ? (p.label || p.id) : ((bkState && bkState.folders || []).find(f => f.dir === p.dir) || {}).label || p.dir;
     async function bkApi(url, body, method = 'POST') {
       const r = await fetch(url, { method, credentials: 'include', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
       const d = await r.json().catch(() => ({}));
@@ -494,12 +494,13 @@
       html += `<div class="bk-place">${sc.enabled ? '<span class="bk-on">✓</span>' : '<span class="bk-off">○</span>'}<span class="bk-held-what">${sc.enabled ? `<b>Every night at ${esc(bkAt(sc.at, ni.tz))}</b>, keeping the last ${esc(String(sc.keepNightly))} nightly backup${sc.keepNightly === 1 ? '' : 's'}${sc.keepWeekly ? ` and one from each of the last ${esc(String(sc.keepWeekly))} week${sc.keepWeekly === 1 ? '' : 's'}` : ''}${nextText ? ` · <span class="bk-dim">${nextText}</span>` : ''}` : '<b>Nightly backups are off.</b> <span class="bk-dim">Backups are made only when you press Back up now.</span>'}</span><button class="st-test-btn" onclick="bkScheduleDialog()">Change…</button></div>`;
       if (ni.lastError) html += `<div class="bk-strip bk-bad"><span class="bk-strip-text">The nightly backup of ${esc(bkWhen(ni.lastError.at))} failed: ${esc(ni.lastError.message)}</span></div>`;
       if (ni.keepSkipped) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">Older nightly backups aren't being removed: ${esc(ni.keepSkipped.why)}.</span></div>`;
-      if ((ni.copyErrors || []).length) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">The last nightly backup couldn't be copied to ${ni.copyErrors.map(c => esc(c.dir)).join(', ')}. It is on this computer; the next backup copies again.</span></div>`;
+      if ((ni.copyErrors || []).length) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">The last nightly backup couldn't be copied to ${ni.copyErrors.map(c => esc(c.label || c.dir)).join(', ')}. It is on this computer; the next backup copies again.</span></div>`;
       html += `<div class="bk-sub">Where</div>`;
       const local = (s.places || []).find(p => p.kind === 'local');
       html += `<div class="bk-place"><span class="bk-on">✓</span><b>This computer</b><span class="bk-dim">${esc(local ? local.dir : 'the backups folder')}</span></div>`;
       (s.folders || []).forEach((f, i) => { html += `<div class="bk-place"><span class="bk-on">✓</span><b>${esc(f.label || 'Folder')}</b><span class="bk-dim">${esc(f.dir)}</span><button class="st-test-btn" onclick="removeBackupFolder(${i}, this)">Remove</button></div>`; });
       if (s.iCloud && !(s.folders || []).some(f => f.dir === s.iCloud)) html += `<div class="bk-place"><span class="bk-off">○</span><b>iCloud Drive</b><span class="bk-dim">${esc(s.iCloud)}</span><button class="st-test-btn" onclick="addBackupFolder(true, this)">Use it</button></div>`;
+      (s.places || []).filter(p => p.kind === 'module').forEach(p => { html += `<div class="bk-place"><span class="bk-on">✓</span><b>${esc(bkPlaceName(p))}</b><span class="bk-dim">(managed in Data connectors)</span></div>`; });
       html += `<div class="bk-place"><span class="bk-off">+</span><b>Another folder</b><input type="text" id="bk-folder" placeholder="full path: a cloud-synced folder, an external disk, a NAS" aria-label="Another backup folder"><button class="st-test-btn" onclick="addBackupFolder(false, this)">Add</button></div>`;
       html += `<div class="st-hint">To keep copies off this computer, add a folder your cloud app keeps in sync (iCloud Drive, Google Drive, Dropbox or OneDrive): every backup is copied there and the app uploads it. Or download a backup (⬇) and save it anywhere.</div>`;
       html += `<div class="bk-place">🔒 <span class="bk-held-what">Encrypted with your backup password. If you forget it, your backups can't be opened, unless you keep the spare key (Show recovery key).</span><button class="st-test-btn" onclick="bkPasswordDialog('change')">Change password</button><button class="st-test-btn" onclick="bkShowKeyDialog()">Show recovery key</button><button class="st-test-btn" onclick="bkPasswordDialog('leaked')">It may have leaked…</button></div>`;
@@ -2263,9 +2264,9 @@
         <div id="bk-body" class="bk-body">Checking…</div>
       </div>`;
       setTimeout(loadBackups, 0);
-      // Modules (lib/modules): optional capabilities with guided setup live on their own page.
-      html += `<div class="st-section" id="st-modules-section"><h4>Modules</h4>
-        <div class="st-hint">Optional capabilities for agents (crypto exchanges, wallets, mail, search...), each with a step-by-step setup, encrypted keys and per-agent access. <a href="/modules" style="color:var(--accent)">Open the Modules page →</a></div>
+      // Data connectors (lib/modules): outside services with a guided setup live on their own page.
+      html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
+        <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>
       </div>`;
       setTimeout(loadReadiness, 0);
 
@@ -2463,8 +2464,8 @@
       </div>`;
         setTimeout(loadWebSearchStatus, 0);
       }
-      html += `<div class="st-section" id="st-cx-section"><h4>Data connectors</h4>
-        <div class="st-hint" style="margin-left:0">Outside services plugged in as data: a patient portal, any MCP server the hub starts, or one of the built-in skills wrapped as a connector. Each connector is open to all agents or only to the ones you name. A connector can always be on, or locked behind its own passphrase, or behind its group's passphrase (one unlock opens every connector in the group, say all of "medical"). Unlocks expire after an idle timeout (hub setting connectorsUnlockMinutes, default 240 minutes) and on restart. Sensitive connectors need the owner's policy nod for reads.</div>
+      html += `<div class="st-section" id="st-cx-section"><h4>Custom connectors (advanced)</h4>
+        <div class="st-hint" style="margin-left:0">Outside services plugged in as data: a patient portal, any MCP server the hub starts, or one of the built-in skills wrapped as a connector. Each connector is open to the lead agents always and to the other agents you name. A connector can always be on, or locked behind its own passphrase, or behind its group's passphrase (one unlock opens every connector in the group, say all of "medical"). Unlocks expire after an idle timeout (hub setting connectorsUnlockMinutes, default 240 minutes) and on restart. Sensitive connectors need the owner's policy nod for reads.</div>
         <div id="st-cx-status" style="font-size:0.78rem;color:var(--text-dim);min-height:1.1em;margin-bottom:6px"></div>
         <div id="st-cx-groups"></div>
         <div id="st-cx-list"></div>
@@ -3152,7 +3153,7 @@
           c.toolCount != null ? cxBadge(`${c.toolCount} tool${c.toolCount === 1 ? '' : 's'}`) : '',
           c.sensitive ? cxBadge('sensitive', 'var(--purple)') : '',
         ].join(' ');
-        const agents = Array.isArray(c.agents) ? (c.agents.length ? c.agents.map(hubEsc).join(', ') : 'no agents') : 'all agents';
+        const agents = Array.isArray(c.agents) ? (c.agents.length ? c.agents.map(hubEsc).join(', ') : 'no one besides the leads') : 'no one besides the leads';
         const protect = c.protect === 'own' ? 'own passphrase' : c.protect === 'group' ? `group ${hubEsc(c.group || '?')}` : 'no passphrase';
         const what = c.kind === 'skill' ? `skill ${hubEsc(c.skillId || '?')}` : `mcp ${hubEsc(c.command || '')}${Array.isArray(c.args) && c.args.length ? ' ' + hubEsc(c.args.join(' ')) : (typeof c.args === 'string' && c.args ? ' ' + hubEsc(c.args) : '')}`;
         const errObj = c.lastError && typeof c.lastError === 'object' ? c.lastError : null;
@@ -3302,8 +3303,7 @@
       const sel = (id, opts, cur, extra) => `<select id="${id}" style="padding:4px" ${extra || ''}>${opts.map(([v, l]) => `<option value="${hubEsc(v)}" ${cur === v ? 'selected' : ''}>${hubEsc(l)}</option>`).join('')}</select>`;
       const skills = Object.entries(cxState.skills || {}).map(([sid, s]) => [sid, `${(s && s.label) || sid} (${sid})`]);
       const groups = ((cxState.data && cxState.data.groups) || []).map(g => [g.id, `${g.label || g.id} (${g.id})`]);
-      const agentNames = (Array.isArray(AGENTS) ? AGENTS : []).map(a => a && (a.name || a.id)).filter(Boolean);
-      const grantAll = !Array.isArray(c.agents);
+      const allAgents = (Array.isArray(AGENTS) ? AGENTS : []).filter(a => a && (a.name || a.id));
       const granted = new Set(Array.isArray(c.agents) ? c.agents : []);
       const argsText = Array.isArray(c.args) ? c.args.join(' ') : (c.args || '');
       const secretNames = Array.isArray(c.secretNames) ? c.secretNames : [];
@@ -3311,6 +3311,13 @@
       const savedTools = c.tools && typeof c.tools === 'object' ? c.tools : {};
       const toolRows = toolsKnown ? toolsKnown.map(t => ({ name: t.name, detected: t.cls || 'read', cls: (savedTools[t.name] && savedTools[t.name].cls) || t.cls || 'read', description: t.description || '' }))
         : Object.entries(savedTools).map(([name, t]) => ({ name, detected: '', cls: (t && t.cls) || 'read', description: '' }));
+      // The lead list comes from the hub (owner and admin leads only). A connector with a money tool is not "always" for
+      // leads: its tools reach wallet agents only, so leads are ordinary choices there.
+      const hubLeads = new Set(Array.isArray(cxState.data && cxState.data.leads) ? cxState.data.leads : []);
+      const hasMoneyTool = toolRows.some(t => t.cls === 'money');
+      const allNames = allAgents.map(a => a.name || a.id);
+      const leadNames = hasMoneyTool ? [] : allNames.filter(n => hubLeads.has(n));
+      const agentNames = allNames.filter(n => !leadNames.includes(n));
       const toolsHtml = toolRows.length
         ? `<table class="cx-table"><thead><tr><th>tool</th><th>detected</th><th>class</th></tr></thead><tbody>${toolRows.map(t => `<tr><td><code>${hubEsc(t.name)}</code>${t.description ? `<div class="cx-sub">${hubEsc(t.description)}</div>` : ''}</td><td>${hubEsc(t.detected || '-')}</td><td>${sel('', CX_CLASSES.map(x => [x, x]), t.cls, `data-cx-tool="${hubEsc(t.name)}"`)}</td></tr>`).join('')}</tbody></table>`
         : `<div class="cx-sub">${editing ? 'No tools known yet: press Test to discover them.' : 'Save first, then Test to discover the tools and set their classes.'}</div>`;
@@ -3327,8 +3334,8 @@
         <div id="st-cx-f-skill">
           <div class="st-row">${L('Skill')}${skills.length ? sel('st-cx-f-skillId', skills, c.skillId || skills[0][0]) : `<input type="text" id="st-cx-f-skillId" value="${hubEsc(c.skillId || '')}" placeholder="skill id">`}</div>
         </div>
-        <div class="st-row">${L('Agents')}<label style="flex:0 0 auto;text-align:left"><input type="checkbox" id="st-cx-f-all" ${grantAll ? 'checked' : ''} onchange="cxFormAgentsChange()"> all agents</label></div>
-        <div id="st-cx-f-agents" class="cx-checks" style="${grantAll ? 'display:none' : ''}">${agentNames.length ? agentNames.map(n => `<label><input type="checkbox" data-cx-agent="${hubEsc(n)}" ${granted.has(n) ? 'checked' : ''}> ${hubEsc(n)}</label>`).join('') : '<span class="cx-sub">no agents loaded</span>'}</div>
+        <div class="st-row">${L('Agents')}<span class="cx-sub">The lead agents can always use it; tick the others that may.</span></div>
+        <div id="st-cx-f-agents" class="cx-checks">${leadNames.map(n => `<label><input type="checkbox" checked disabled> ${hubEsc(n)} (lead): always</label>`).join('')}${agentNames.length ? agentNames.map(n => `<label><input type="checkbox" data-cx-agent="${hubEsc(n)}" ${granted.has(n) ? 'checked' : ''}> ${hubEsc(n)}</label>`).join('') : (leadNames.length ? '' : '<span class="cx-sub">no agents loaded</span>')}</div>
         <div class="st-row">${L('Protect')}${sel('st-cx-f-protect', [['none', 'none: always on'], ['own', 'own passphrase'], ['group', 'group passphrase']], c.protect || 'none', 'onchange="cxFormProtectChange()"')}<span id="st-cx-f-group-wrap">${groups.length ? sel('st-cx-f-group', groups, c.group || groups[0][0], 'onchange="cxFormProtectChange()"') : '<span class="cx-sub">no groups yet</span>'}</span></div>
         <div class="st-row" id="st-cx-f-curpass-row">${L('Current passphrase')}<input type="password" id="st-cx-f-curpass" autocomplete="off" style="max-width:220px"><span class="cx-sub">needed to change how a protected connector is locked</span></div>
         <div id="st-cx-f-newpass-rows">
@@ -3421,7 +3428,7 @@
         body.skillId = v('st-cx-f-skillId').trim();
         if (!body.skillId) return fail('Pick a skill.');
       }
-      body.agents = chk('st-cx-f-all') ? null : Array.from(document.querySelectorAll('#st-cx-f-agents input[data-cx-agent]')).filter(i => i.checked).map(i => i.dataset.cxAgent);
+      body.agents = Array.from(document.querySelectorAll('#st-cx-f-agents input[data-cx-agent]')).filter(i => i.checked).map(i => i.dataset.cxAgent);
       if (protect === 'group') {
         body.group = v('st-cx-f-group');
         if (!body.group) return fail('Group protection needs a group: create one first.');
@@ -4865,7 +4872,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', connectors: q.get('connectors') === '1' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -4942,6 +4949,7 @@
       if (t.security) openSecurityDialog();
       if (t.backups) openSettingsAt('st-backups-section');
       if (t.memory) openSettingsAt('st-memory-section');
+      if (t.connectors) openSettingsAt('st-modules-section');
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
       if (!t.agent) return;
       let a = AGENTS.find(x => x.name === t.agent);
@@ -4974,9 +4982,9 @@
       // (a backup warning), ?memory=1 the memory check, ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.connectors)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'connectors']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       openTargets.ready(own);

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>My Maestro AI — Modules</title>
+<title>My Maestro AI — Data connectors</title>
 <style>
   :root {
     --bg-dark: #090B0F; --bg-card: #14171F; --bg-input: #040507; --border: #222632; --border-strong: #333846;
@@ -83,17 +83,36 @@
   .agent-row.no { color: var(--text-tertiary); }
   .saved { color: var(--success); font-size: 12px; }
   .ready-box { display: flex; flex-direction: column; gap: 10px; }
+  .card .meta { color: var(--text-tertiary); font-size: 12px; line-height: 1.4; }
+  .card .check { font-size: 12px; color: var(--success); }
+  .card .check.bad { color: var(--warning); }
+  .signin-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 28px; letter-spacing: 3px; padding: 12px 16px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); display: inline-block; user-select: all; word-break: break-all; }
+  .signin-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  a.open-link { color: var(--accent); word-break: break-all; }
+  /* Phone (390 px wide): one column everywhere, tap targets of at least 40 px. */
+  @media (max-width: 760px) {
+    main { padding: 12px; }
+    .grid { grid-template-columns: 1fr; }
+    .layout { grid-template-columns: 1fr; }
+    .top { padding: 10px 12px; }
+    .top a { display: inline-flex; align-items: center; min-height: 40px; }
+    button, input[type="text"], input[type="password"], input[type="number"], select { min-height: 40px; font-size: 16px; }
+    ol.steps li { min-height: 40px; }
+    label.chk, .agent-row { min-height: 40px; align-items: center; }
+    .links a { display: inline-flex; align-items: center; min-height: 40px; }
+    .signin-code { font-size: 22px; letter-spacing: 2px; }
+  }
 </style>
 </head>
 <body>
 <div class="top">
   <a href="/">← Back</a>
-  <h1>Modules</h1>
+  <h1>Data connectors</h1>
   <span class="spacer"></span>
   <a href="/users">Users</a>
 </div>
 <main>
-  <p class="intro">Optional capabilities for your agents. Each module walks you through its setup, keeps its keys encrypted in this hub, and only reaches the agents you choose. Money modules can only go to wallet agents, and the hub enforces their limits on every call.</p>
+  <p class="intro">Connect outside services such as Google Drive and Oura, with a guided setup. Each connector keeps its keys encrypted in this hub. The lead agent can always use every connector; other agents only when you tick them. Money connectors can only go to wallet agents, and the hub enforces their limits on every call.</p>
   <div id="list"></div>
   <section class="panel" id="panel"></section>
 </main>
@@ -123,6 +142,26 @@ async function api(method, url, body) {
   return j;
 }
 
+// 'YYYY-MM-DD' -> "Nov 6, 2026" (read as a calendar date, not shifted by the time zone).
+function fmtDay(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''));
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(s);
+  return isNaN(d) ? String(s || '') : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+function fmtStamp(s) {
+  const d = new Date(s);
+  return isNaN(d) ? String(s || '') : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+function catalogLine(c) {
+  if (!c) return '';
+  return `<div class="meta">Last verified working ${esc(fmtDay(c.verified))} · ${esc(c.api)} · ${c.official ? 'Official' : 'Community-made'}</div>`;
+}
+function checkLine(lc) {
+  if (!lc) return '';
+  return lc.ok ? `<div class="check">Checked ${esc(fmtStamp(lc.at))}: working</div>` : `<div class="check bad">Needs attention: ${esc(lc.summary)}</div>`;
+}
+const needsAttention = (m) => m.state === 'attention' || m.state === 'broken' || !!(m.lastCheck && !m.lastCheck.ok);
+
 async function loadList() {
   const { modules } = await api('GET', '/api/modules');
   const cats = {};
@@ -133,7 +172,9 @@ async function loadList() {
         ${m.risk === 'money' ? '<span class="pill money">money</span>' : ''}<span class="pill ${esc(m.state)}">${esc(STATE_LABEL[m.state] || m.state)}</span></div>
       <div class="sum">${esc(m.summary)}</div>
       ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
-    </div>`).join('')}</div>`).join('') || '<p class="dim">No modules are installed in this hub.</p>';
+      ${catalogLine(m.catalog)}
+      ${checkLine(m.lastCheck)}
+    </div>`).join('')}</div>`).join('') || '<p class="dim">No data connectors are installed in this hub.</p>';
 }
 
 async function openModule(id, stepId) {
@@ -147,6 +188,7 @@ async function openModule(id, stepId) {
 }
 
 function render() {
+  stopSignin();
   const m = current; const p = document.getElementById('panel');
   p.classList.add('open');
   const steps = m.steps.map((s, i) => `<li class="${s.done ? 'done' : ''} ${s.id === selected ? 'cur' : ''}" onclick="selectStep('${esc(s.id)}')"><span class="mark">${s.done ? '✓' : i + 1}</span>${esc(s.title)}</li>`).join('');
@@ -161,7 +203,7 @@ function render() {
     </div>`;
 }
 function selectStep(id) { selected = id; render(); }
-function closePanel() { document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
+function closePanel() { stopSignin(); document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
 
 function setMsg(kind, text) { const el = document.getElementById('step-msg'); if (!el) return; el.className = `msg show ${kind}`; el.textContent = text; }
 
@@ -207,29 +249,47 @@ function stepHtml(s) {
     inner = (m.manifest.settings || []).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { values: readSettings(${esc(JSON.stringify(s.fields || []))}) }, this)">Save</button></div>`;
   } else if (s.type === 'grant') {
-    inner = (m.candidates.length ? m.candidates.map(c => `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${m.agents.includes(c.name) ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`).join('') : '<p class="dim">No agents.</p>') +
+    inner = leadRows(m) + (m.candidates.length ? m.candidates.filter(c => !leadsLocked(m) || !(m.leads || []).includes(c.name)).map(c => `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${m.agents.includes(c.name) ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`).join('') : '<p class="dim">No agents.</p>') +
       (m.risk === 'money' && !m.candidates.some(c => c.eligible) ? '<div class="msg warn show">No agent is a wallet agent yet. The hub owner adds one by name to "walletAgents" in data/settings.json (deliberately not a button).</div>' : '') +
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { agents: [...document.querySelectorAll('input.grant:checked')].map(i => i.value) }, this)">Save</button></div>`;
+  } else if (s.type === 'signin') {
+    inner = `<div id="signin-area">${signinIdleHtml()}</div>`;
   } else if (s.type === 'finish') {
     const open = m.steps.filter(x => x.type !== 'finish' && !x.optional && !x.done);
     inner = open.length ? `<div class="msg warn show">Still to do: ${esc(open.map(x => x.title).join('; '))}</div>` :
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', {}, this)">${m.finishedAt ? 'Done' : 'Switch it on'}</button></div>`;
   }
-  return `<div class="step"><h3>${esc(s.title)}</h3><div class="body">${md(s.body)}</div><div class="links">${links}</div>${inner}<div class="msg" id="step-msg"></div></div>`;
+  return `<div class="step"><h3>${esc(s.title)}</h3><div class="body">${md(s.body)}</div><div class="links">${links}</div>${inner}<div class="actions">${askButton(s.id)}</div><div class="msg" id="step-msg"></div></div>`;
+}
+
+// The lead agents can always use every connector: shown ticked and locked, ahead of the agents you choose.
+// Not for a money connector (leadsAlways false): its tools reach wallet agents only, so leads are ordinary checkboxes.
+const leadsLocked = (m) => m.leadsAlways !== false;
+function leadRows(m) {
+  if (!leadsLocked(m)) return '';
+  return (m.leads || []).map(n => `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)} (lead): always</label>`).join('');
+}
+function askButton(stepId) {
+  return `<button onclick="askMaestro(${stepId ? `'${esc(stepId)}'` : 'null'}, this)">Ask Maestro</button>`;
 }
 
 function overviewHtml() {
   const m = current;
-  if (!m.finishedAt) return `<div class="body">${md(m.summary)}</div><div class="actions"><button class="primary" onclick="selectStep('${esc((m.steps.find(s => !s.done) || m.steps[0]).id)}')">${m.state === 'available' ? 'Start the setup' : 'Continue the setup'}</button></div>`;
+  const ask = needsAttention(m) ? askButton(null) : '';
+  if (!m.finishedAt) return `<div class="body">${md(m.summary)}</div>${catalogLine(m.catalog)}<div class="actions"><button class="primary" onclick="selectStep('${esc((m.steps.find(s => !s.done) || m.steps[0]).id)}')">${m.state === 'available' ? 'Start the setup' : 'Continue the setup'}</button>${ask}</div><div class="msg" id="step-msg"></div>`;
   const lc = m.lastCheck;
+  const others = m.agents.filter(n => !leadsLocked(m) || !(m.leads || []).includes(n));
   return `<div class="ready-box">
     <div class="body">${md(m.summary)}</div>
-    <div><b>Agents:</b> ${m.agents.length ? esc(m.agents.join(', ')) : '<span class="dim">none</span>'} · <b>Status:</b> ${esc(STATE_LABEL[m.state] || m.state)}${m.note ? ` <span class="dim">(${esc(m.note)})</span>` : ''}</div>
-    ${lc ? `<div class="dim">Last check ${esc(lc.at)}: ${esc(lc.summary)}</div>` : ''}
+    ${catalogLine(m.catalog)}
+    <div><b>Agents:</b></div>
+    <div>${leadRows(m)}${others.map(n => `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)}</label>`).join('')}${(leadsLocked(m) && (m.leads || []).length) || others.length ? '' : '<span class="dim">none</span>'}</div>
+    <div><b>Status:</b> ${esc(STATE_LABEL[m.state] || m.state)}${m.note ? ` <span class="dim">(${esc(m.note)})</span>` : ''}</div>
+    ${checkLine(lc)}
     <div class="actions">
       ${m.enabled ? `<button onclick="toggle(false, this)">Switch off</button>` : `<button class="primary" onclick="toggle(true, this)">Switch on</button>`}
       <button onclick="recheck(this)">Check now</button>
-      <button onclick="showAudit(this)">Activity log</button>
+      <button onclick="showAudit(this)">Activity log</button>${ask}
       <button class="danger" onclick="removeModule(this)">Remove</button>
     </div>
     <h3 style="font-size:14px;margin-top:8px">Limits and settings</h3>
@@ -237,6 +297,99 @@ function overviewHtml() {
     <div class="actions"><button class="primary" onclick="saveAll(this)">Save settings</button></div>
     ${m.manifest.docs && m.manifest.docs.revoke ? `<p class="dim" style="margin-top:10px">${esc(m.manifest.docs.revoke)}</p>` : ''}
     <div class="msg" id="step-msg"></div><div id="audit"></div></div>`;
+}
+
+// ── Sign in with the service (device code): start, show the code, poll while the step is open ──
+const SIGNIN_MIN_POLL_SEC = 5;
+const SIGNIN_HIDDEN_LIMIT_MS = 10 * 60 * 1000;
+let signin = null;           // { moduleId, stepId, pollTimer, tick, expiresAt } while a sign-in is waiting
+let hiddenSince = null;      // when the page was last hidden (null while it is visible)
+document.addEventListener('visibilitychange', () => { hiddenSince = document.hidden ? Date.now() : null; });
+
+function signinIdleHtml(note) {
+  return `${note ? `<p class="dim">${esc(note)}</p>` : ''}<div class="actions"><button class="primary" onclick="signinStart(this)">${note ? 'Start again' : `Sign in with ${esc(current.name)}`}</button></div>`;
+}
+function stopSignin() {
+  if (!signin) return;
+  clearTimeout(signin.pollTimer); clearInterval(signin.tick);
+  signin = null;
+}
+function signinPaint(html) { const el = document.getElementById('signin-area'); if (el) el.innerHTML = html; }
+function signinFail(text) {
+  stopSignin();
+  signinPaint(signinIdleHtml(text));
+  setMsg('err', text);
+}
+function signinOnScreen(token) {
+  return signin === token && current && selected === token.stepId && document.getElementById('panel').classList.contains('open') && document.getElementById('signin-area');
+}
+async function signinStart(btn) {
+  stopSignin();
+  const m = current, stepId = selected;
+  await busy(btn, async () => {
+    let r;
+    try { r = await api('POST', `/api/modules/${m.id}/signin/start`, {}); } catch (e) { signinFail(e.message); return; }
+    if (current !== m || selected !== stepId) return;   // the person moved on while it started
+    const token = signin = { moduleId: m.id, stepId, pollTimer: null, tick: null, expiresAt: typeof r.expiresAt === 'number' ? r.expiresAt : Date.parse(r.expiresAt) };
+    const url = typeof r.verificationUrl === 'string' && r.verificationUrl.startsWith('https://') ? r.verificationUrl : '';
+    signinPaint(`<div class="signin-row"><span class="signin-code" id="signin-code">${esc(r.userCode)}</span><button onclick="signinCopy(this)">Copy</button></div>
+      ${url ? `<div class="signin-row"><a class="open-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open ${esc(url)}</a></div>` : ''}
+      <p>Approve the request there, then come back. This page notices by itself.</p>
+      <p class="dim" id="signin-count"></p>
+      <div class="actions"><button onclick="signinCancel()">Cancel</button></div>`);
+    const paintCount = () => {
+      const el = document.getElementById('signin-count');
+      if (!el || !isFinite(token.expiresAt)) return;
+      const s = Math.max(0, Math.round((token.expiresAt - Date.now()) / 1000));
+      el.textContent = `Code expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    };
+    paintCount(); token.tick = setInterval(paintCount, 1000);
+    const everyMs = Math.max(Number(r.intervalSec) || 0, SIGNIN_MIN_POLL_SEC) * 1000;
+    const poll = async () => {
+      if (!signinOnScreen(token)) { if (signin === token) stopSignin(); return; }
+      if (hiddenSince !== null && Date.now() - hiddenSince > SIGNIN_HIDDEN_LIMIT_MS) { signinFail('Stopped waiting because this page was in the background for a while.'); return; }
+      let p;
+      try { p = await api('POST', `/api/modules/${m.id}/signin/poll`, {}); } catch (e) { if (signin === token) signinFail(e.message); return; }
+      if (signin !== token) return;
+      if (p.status === 'ok') { stopSignin(); await openModule(m.id, stepId); return; }
+      if (p.status === 'denied' || p.status === 'expired') { signinFail(p.message || (p.status === 'denied' ? 'The request was denied.' : 'The code expired.')); return; }
+      token.pollTimer = setTimeout(poll, everyMs);
+    };
+    token.pollTimer = setTimeout(poll, everyMs);
+  });
+}
+async function signinCancel() {
+  const id = current && current.id;
+  stopSignin();
+  if (id) {
+    // Start again stays out of reach until the hub has forgotten the pending sign-in; a failed cancel leaves polling stopped.
+    signinPaint('<p class="dim">Cancelling…</p>');
+    try { await api('POST', `/api/modules/${id}/signin/cancel`, {}); } catch { if (current && current.id === id) signinFail('Could not cancel. Try again.'); return; }
+    if (!current || current.id !== id) return;
+  }
+  signinPaint(signinIdleHtml());
+}
+async function signinCopy(btn) {
+  const code = (document.getElementById('signin-code') || {}).textContent || '';
+  try { await navigator.clipboard.writeText(code); btn.textContent = 'Copied'; } catch { btn.textContent = 'Select the code and copy it'; }
+}
+
+// ── Ask Maestro: get a ready-made question for the lead agent, send it as a chat message, and go to that chat ──
+async function askMaestro(stepId, btn) {
+  const msgEl = document.getElementById('step-msg');
+  const shown = msgEl && msgEl.classList.contains('err') ? msgEl.textContent : '';
+  await busy(btn, async () => {
+    try {
+      const q = new URLSearchParams();
+      if (stepId) q.set('step', stepId);
+      if (shown) q.set('error', shown);
+      const h = await api('GET', `/api/modules/${current.id}/help?${q}`);
+      const r = await fetch('/api/chat/stream', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: h.agent, message: h.message }) });
+      if (r.status === 409) throw new Error('Maestro is busy right now. Try again in a moment.');
+      if (!r.ok) { let j = {}; try { j = await r.json(); } catch {} throw new Error(j.error || `HTTP ${r.status}`); }
+      location.href = '/?agent=' + encodeURIComponent(h.agent);   // as soon as the headers arrive; the body is not read, the chat shows the reply
+    } catch (e) { setMsg('err', e.message); }
+  });
 }
 
 async function busy(btn, fn) { if (btn) btn.disabled = true; try { await fn(); } finally { if (btn) btn.disabled = false; } }
