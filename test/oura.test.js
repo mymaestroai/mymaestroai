@@ -305,31 +305,96 @@ test('an Oura error reaches the caller as a tool error with the plain message', 
   assert.match(r.result.content[0].text, /5,000 requests in 5 minutes/);
 });
 
-test('rotation notification goes to stdout in the exact shape', async () => {
-  assert.equal(server.rotationNotice('rt-new'), '{"jsonrpc":"2.0","method":"notifications/hub/refresh_token","params":{"value":"rt-new"}}\n');
-  const written = [];
-  const orig = process.stdout.write;
-  process.stdout.write = (s) => { written.push(String(s)); return true; };
-  try {
-    const g = fakeOura();
-    const r = await server.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'oura_readiness', arguments: {} } },
-      createOura({ clientId: 'a', clientSecret: 'b', refreshToken: 'rt-0', fetch: g.fetch, now: () => NOW, onRotate: server.onRotate }), () => NOW);
-    assert.ok(!r.result.isError);
-  } finally {
-    process.stdout.write = orig;
-  }
-  assert.equal(written.length, 1);
-  assert.deepEqual(JSON.parse(written[0]), { jsonrpc: '2.0', method: 'notifications/hub/refresh_token', params: { value: 'rt-1' } });
-  assert.ok(written[0].endsWith('\n'));
-  assert.equal(JSON.parse(written[0]).id, undefined);
+test('rotation: the hub link sends a request with an id and resolves only on { ok: true }', async () => {
+  const sent = [];
+  const link = server.createHubLink({ write: (l) => sent.push(l), timeoutMs: 50 });
+  const p = link.request('rt-new');
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].endsWith('\n'));
+  assert.deepEqual(JSON.parse(sent[0]), { jsonrpc: '2.0', id: 'hub-rot-1', method: 'hub/refresh_token', params: { value: 'rt-new' } });
+  assert.equal(link.onMessage({ jsonrpc: '2.0', id: 'other', result: { ok: true } }), false);
+  assert.equal(link.onMessage({ jsonrpc: '2.0', id: 'hub-rot-1', method: 'x', result: { ok: true } }), false, 'a request is not a response');
+  assert.equal(link.onMessage({ jsonrpc: '2.0', id: 'hub-rot-1', result: { ok: true } }), true);
+  await p;
+  const p2 = link.request('rt-2');
+  link.onMessage({ jsonrpc: '2.0', id: 'hub-rot-2', error: { code: -32000, message: 'no' } });
+  await assert.rejects(p2);
+  await assert.rejects(link.request('rt-3'), /did not answer/);   // 10 s in the server, 50 ms here
 });
 
-test('health check: latest readiness, none yet, and errors', async () => {
+test('rotation: saved -> no warning; not confirmed -> the new token stays in use, one retry on the next call, warning in the result', async () => {
+  const g = fakeOura({ data: { daily_readiness: [] } });
+  let ok = true; const saves = [];
+  const onRotate = async (v) => { saves.push(v); if (!ok) throw new Error('no answer'); };
+  let r = await callTool(g, 'oura_readiness', {}, { onRotate });
+  assert.equal(textOf(r).warning, undefined);
+  assert.deepEqual(saves, ['rt-1']);
+
+  // not confirmed: use one client across calls
+  const g2 = fakeOura({ data: { daily_readiness: [] } });
+  saves.length = 0; ok = false;
+  const oura = client(g2, { onRotate, now: (() => { let t = NOW; return () => t; })() });
+  r = await server.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'oura_readiness', arguments: {} } }, oura, () => NOW);
+  assert.ok(!r.result.isError);
+  assert.equal(textOf(r).warning, 'My Maestro could not save the new Oura sign-in, so it will stop working after a restart. Check Data connectors.');
+  assert.deepEqual(saves, ['rt-1']);
+  assert.deepEqual(g2.refreshSeen, ['rt-0']);
+  // next call: one retry of the save with the new token, still failing -> still warns; no refresh with the spent token
+  r = await server.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'oura_readiness', arguments: {} } }, oura, () => NOW);
+  assert.deepEqual(saves, ['rt-1', 'rt-1']);
+  assert.ok(textOf(r).warning);
+  r = await server.handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'oura_readiness', arguments: {} } }, oura, () => NOW);
+  assert.deepEqual(saves, ['rt-1', 'rt-1'], 'only one retry');
+  assert.deepEqual(g2.refreshSeen, ['rt-0'], 'the cached token is still good; nothing was refreshed with the spent token');
+
+  // the retry succeeds -> the warning goes away
+  const g3 = fakeOura({ data: { daily_readiness: [] } });
+  ok = false; saves.length = 0;
+  const o3 = client(g3, { onRotate });
+  r = await server.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'oura_readiness', arguments: {} } }, o3, () => NOW);
+  assert.ok(textOf(r).warning);
+  ok = true;
+  r = await server.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'oura_readiness', arguments: {} } }, o3, () => NOW);
+  assert.equal(textOf(r).warning, undefined);
+});
+
+test('rotation: a later refresh uses the new token even when the save was not confirmed', async () => {
+  let t = NOW;
+  const g = fakeOura({ data: { daily_readiness: [] } });
+  const oura = createOura({ clientId: 'a', clientSecret: 'b', refreshToken: 'rt-0', fetch: g.fetch, now: () => t, onRotate: async () => { throw new Error('x'); } });
+  await oura.token();
+  t += 2 * 86400 * 1000;
+  await oura.token();
+  assert.deepEqual(g.refreshSeen, ['rt-0', 'rt-1']);
+});
+
+test('paging stops at 10 pages with truncated: true and the number of records returned', async () => {
+  const pages = Array.from({ length: 12 }, (_, i) => [{ day: `2026-10-${String(i + 1).padStart(2, '0')}`, score: i }]);
+  const g = fakeOura({ pages: { daily_readiness: pages } });
+  const out = textOf(await callTool(g, 'oura_readiness', {}));
+  assert.equal(out.truncated, true);
+  assert.equal(out.records, 10);
+  assert.equal(out.days.length, 10);
+  assert.equal(apiCalls(g).length, 10);
+  // exactly 10 pages is not truncated
+  const g2 = fakeOura({ pages: { daily_readiness: pages.slice(0, 10) } });
+  const out2 = textOf(await callTool(g2, 'oura_readiness', {}));
+  assert.equal(out2.truncated, undefined);
+  assert.equal(out2.days.length, 10);
+});
+
+test('health check says only that it connected: no scores or dates', async () => {
   const mk = (text, throws) => ({ callTool: async () => { if (throws) throw new Error(throws); return text; }, parse: (t) => { try { return JSON.parse(t); } catch { return null; } } });
   const run = (ctx) => mod.checks.oura(ctx);
-  assert.deepEqual(await run(mk(JSON.stringify({ days: [{ date: '2026-11-04', score: 70 }, { date: '2026-11-05', score: 81 }] }))), { ok: true, summary: 'Connected; latest readiness 81 on 2026-11-05.' });
-  assert.deepEqual(await run(mk(JSON.stringify({ days: [] }))), { ok: true, summary: 'Connected; no readiness yet.' });
+  assert.deepEqual(await run(mk(JSON.stringify({ days: [{ date: '2026-11-04', score: 70 }, { date: '2026-11-05', score: 81 }] }))), { ok: true, summary: 'Connected to Oura.' });
+  assert.deepEqual(await run(mk(JSON.stringify({ days: [] }))), { ok: true, summary: 'Connected to Oura.' });
   assert.deepEqual(await run(mk('', 'The Oura sign-in has expired or was removed. Sign in again in Data connectors.')), { ok: false, summary: 'The Oura sign-in has expired or was removed. Sign in again in Data connectors.' });
   const bad = await run(mk('Oura answered 500.'));
   assert.equal(bad.ok, false);
+});
+
+test('setup.json and guide.md say the nightly check asks Oura for one small reading without keeping it', () => {
+  const fs = require('fs');
+  assert.match(fs.readFileSync(path.join(MOD, 'setup.json'), 'utf8'), /nightly connection check asks Oura for one small reading without keeping it/);
+  assert.match(fs.readFileSync(path.join(MOD, 'guide.md'), 'utf8'), /nightly connection check[^]*one small reading[^]*does not keep it/);
 });

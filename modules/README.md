@@ -106,12 +106,14 @@ secret names. Optional: `pkce` (default `true`: a fresh code verifier per sign-i
 - `POST /api/modules/<id>/signin/start` replies `{ authorizeUrl, redirectUri }`. The `redirectUri` is
   `<origin>/oauth/callback/<id>`, built from the request (`x-forwarded-proto`, else the socket; and the `Host` header,
   which must be one the hub already accepts, otherwise 400 "Open this page at your Maestro's usual address."). The
+  page also sends `{ origin: location.origin }`; it is used only when its host equals the request's `Host` and its
+  protocol is http or https (otherwise 400), so the address the page shows is the one sent to the service. The
   person registers that exact address with the service. The page then goes to `authorizeUrl` in the same tab.
 - The callback page `GET /oauth/callback/<id>` is for a signed-in admin only (no session: the sign-in page; not an
   admin: 403; never the hub service or an API token). It sits outside `/api/`, so the cross-site guard does not block
   the service's redirect, and the session cookie (SameSite=Lax) comes along with that top-level GET. It hands the
   `code`, `state` and `error` to the module code and redirects to `/modules?signin=ok#<id>` or
-  `/modules?signin=error&msg=<plain message, at most 200 characters>#<id>`.
+  `/modules?signin=error&code=<state|user|expired|declined|exchange|other>#<id>`; the page maps each code to a fixed sentence.
 - One pending sign-in per module, in memory: `state` (32 random bytes, hex), the PKCE verifier, the redirect URI, the
   user who started it, and a 10 minute expiry. The callback needs the state to match (constant time), the same
   signed-in user and no expiry; the pending sign-in is removed before the code is exchanged (single use). A provider
@@ -119,11 +121,15 @@ secret names. Optional: `pkce` (default `true`: a fresh code verifier per sign-i
   `refreshTokenSecret` and the `signin` step is marked done.
 - `{{redirectUri}}` in a step's `body` is replaced on the page by `<page origin>/oauth/callback/<id>` in a copyable
   box (escaped), so a setup step can tell the person which address to register with the service.
-- **Rotated refresh tokens** (`rotatesRefreshToken: true`): the module's tool server may send the JSON-RPC
-  notification `{ "jsonrpc": "2.0", "method": "notifications/hub/refresh_token", "params": { "value": "<token>" } }` on
-  stdout each time the service rotates the token. The hub saves `value` (a string of 10 to 4096 characters) into
-  `refreshTokenSecret` and only there, encrypted, without restarting the connector, and never logs it. Any other
-  notification is ignored; so is any notification from a connector that is not a module with this setting.
+- **Rotated refresh tokens** (`rotatesRefreshToken: true`): when the service rotates the token, the module's tool server
+  sends the hub a JSON-RPC request `{ "jsonrpc": "2.0", "id": "hub-rot-<n>", "method": "hub/refresh_token", "params": { "value": "<token>" } }`
+  on stdout and waits (10 s) for the answer. The guard passes requests with `hub-` ids up and the hub's responses back.
+  The hub accepts it only from the connector's current process, for a value of 10 to 4096 characters without control
+  characters; it saves `value` into `refreshTokenSecret` and only there, encrypted, without restarting the connector, never
+  logs it, and answers `{ "ok": true }`. On any failure it answers with an error and shows "Could not save the new
+  sign-in" on the connector. Any other request from a module server gets a method-not-found error. A server that is not
+  confirmed keeps using the new token in memory (the old one is spent), retries the save once on its next call and
+  warns in its tool results.
 
 ## Who can use a module
 

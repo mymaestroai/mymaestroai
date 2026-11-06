@@ -9,8 +9,7 @@ module.exports = {
         const text = await ctx.callTool('oura_readiness', { start_date: day(Date.now() - 86400000), end_date: day(Date.now()) });
         const out = ctx.parse(text);
         if (!out || !Array.isArray(out.days)) return { ok: false, summary: String(text || 'Oura sent a reply that could not be read.').slice(0, 300) };
-        const last = out.days.filter((d) => d && d.score !== null && d.score !== undefined).pop();
-        return { ok: true, summary: last ? `Connected; latest readiness ${last.score} on ${last.date}.` : 'Connected; no readiness yet.' };
+        return { ok: true, summary: 'Connected to Oura.' };   // no scores or dates: health data is not kept in check results
       } catch (e) {
         return { ok: false, summary: String((e && e.message) || e) };
       }

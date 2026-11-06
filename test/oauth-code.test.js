@@ -118,3 +118,17 @@ test('no message ever carries a token, code, verifier or secret', async () => {
     }
   }
 });
+
+test('a token reply counts only with a 2xx status: a non-2xx body with token fields is an error', async () => {
+  const body = { access_token: 'AT', refresh_token: REFRESH, expires_in: 100 };
+  for (const status of [400, 401, 403, 500, 302, 199]) {
+    await rejectsCode(oc.exchange(exArgs(stub(body, { status }))), 'EOAUTH');
+    await rejectsCode(oc.refresh(reArgs(stub(body, { status }))), 'EOAUTH');
+  }
+  const ok = await oc.exchange(exArgs(stub(body, { status: 201 })));
+  assert.strictEqual(ok.accessToken, 'AT');
+  assert.strictEqual((await oc.refresh(reArgs(stub(body, { status: 200 })))).refreshToken, REFRESH);
+  // a service error code still wins over the status, so invalid_grant stays "revoked"
+  await rejectsCode(oc.refresh(reArgs(stub({ error: 'invalid_grant' }, { status: 400 }))), 'EREVOKED');
+  await assert.rejects(oc.exchange(exArgs(stub(body, { status: 500 }))), (e) => { for (const s of ['AT', REFRESH, SECRET]) assert.ok(!String(e.message).includes(s)); return true; });
+});

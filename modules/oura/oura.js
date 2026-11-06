@@ -1,7 +1,7 @@
 'use strict';
 // A small Oura API v2 client. Fetch and clock are injectable so tests need no network. Messages thrown here never
 // contain tokens or the client secret. Oura refresh tokens are single use: every refresh returns a new one, which is
-// used from then on and handed to onRotate so the hub can save it.
+// used from then on and handed to onRotate, which returns a promise that settles when the hub has confirmed the save.
 
 const API = 'https://api.ouraring.com';
 const TOKEN_URL = 'https://api.ouraring.com/oauth/token';
@@ -11,6 +11,7 @@ const MAX_TOKEN_BODY = 64 * 1024;
 const MAX_PAGES = 10;
 const TIMEOUT_MS = 15000;
 const EXPIRED = 'The Oura sign-in has expired or was removed. Sign in again in Data connectors.';
+const SAVE_WARNING = 'My Maestro could not save the new Oura sign-in, so it will stop working after a restart. Check Data connectors.';
 const TOO_LARGE = 'Oura sent a reply that was too large.';
 
 function fail(message) { return new Error(message); }
@@ -75,6 +76,8 @@ function createOura({ clientId, clientSecret, refreshToken, fetch = globalThis.f
   let cached = null;      // { token, expiresAt }
   let pending = null;
   let refreshTok = refreshToken;
+  let unsaved = false;    // the newest refresh token has not been confirmed saved by the hub
+  let retried = false;    // the one retry of that save has been used
   const base = checkUrl(baseUrl, allowInsecureLocal);
   const tokenTarget = checkUrl(tokenUrl, allowInsecureLocal).toString();
 
@@ -97,10 +100,18 @@ function createOura({ clientId, clientSecret, refreshToken, fetch = globalThis.f
     const secs = Number.isFinite(json.expires_in) && json.expires_in > 0 ? json.expires_in : 86400;
     cached = { token: json.access_token, expiresAt: now() + secs * 1000 };
     if (typeof json.refresh_token === 'string' && json.refresh_token) {
-      refreshTok = json.refresh_token;
-      if (typeof onRotate === 'function') onRotate(json.refresh_token);
+      refreshTok = json.refresh_token;   // the only valid one now, whether or not the hub saves it
+      if (typeof onRotate === 'function') {
+        unsaved = true; retried = false;
+        await save();
+      }
     }
     return cached.token;
+  }
+
+  // Ask the hub to save the current refresh token and wait for its answer. Never throws, never logs the token.
+  async function save() {
+    try { await onRotate(refreshTok); unsaved = false; } catch { /* not confirmed: unsaved stays true */ }
   }
 
   async function token() {
@@ -126,7 +137,9 @@ function createOura({ clientId, clientSecret, refreshToken, fetch = globalThis.f
   }
 
   // GET base + path with query params; follows next_token for up to MAX_PAGES pages. Returns the combined data list.
-  async function get(path, params = {}) {
+  // info, when given, gets truncated: true if more pages were left when the page limit was reached.
+  async function get(path, params = {}, info = null) {
+    if (unsaved && !retried && typeof onRotate === 'function') { retried = true; await save(); }   // one retry on the next call
     if (typeof path !== 'string' || !/^\/v2\/[A-Za-z0-9_/]+$/.test(path)) throw fail('That Oura path is not allowed.');
     const data = [];
     let next = null;
@@ -138,11 +151,12 @@ function createOura({ clientId, clientSecret, refreshToken, fetch = globalThis.f
       if (Array.isArray(body.data)) data.push(...body.data);
       next = typeof body.next_token === 'string' && body.next_token ? body.next_token : null;
       if (!next) break;
+      if (i === MAX_PAGES - 1 && info) info.truncated = true;
     }
     return data;
   }
 
-  return { token, get };
+  return { token, get, warning: () => (unsaved ? SAVE_WARNING : null) };
 }
 
-module.exports = { createOura, USER_AGENT, EXPIRED, MAX_PAGES };
+module.exports = { createOura, USER_AGENT, EXPIRED, MAX_PAGES, SAVE_WARNING };

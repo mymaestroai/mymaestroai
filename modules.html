@@ -340,13 +340,13 @@ async function signinStart(btn) {
   const m = current, stepId = selected;
   await busy(btn, async () => {
     let r;
-    try { r = await api('POST', `/api/modules/${m.id}/signin/start`, {}); } catch (e) { signinFail(e.message); return; }
+    try { r = await api('POST', `/api/modules/${m.id}/signin/start`, { origin: location.origin }); } catch (e) { signinFail(e.message); return; }
+    if (current !== m || selected !== stepId) return;   // the person moved on while it started: a late reply must not act, nor navigate away
     if (m.oauthFlow === 'code') {   // the service asks the person to approve, then sends this browser back to the hub's callback page
       if (typeof r.authorizeUrl !== 'string' || !r.authorizeUrl.startsWith('https://')) { signinFail('The service did not give a safe sign-in address.'); return; }
       location.href = r.authorizeUrl;
       return;
     }
-    if (current !== m || selected !== stepId) return;   // the person moved on while it started
     const token = signin = { moduleId: m.id, stepId, pollTimer: null, tick: null, expiresAt: typeof r.expiresAt === 'number' ? r.expiresAt : Date.parse(r.expiresAt) };
     const url = typeof r.verificationUrl === 'string' && r.verificationUrl.startsWith('https://') ? r.verificationUrl : '';
     signinPaint(`<div class="signin-row"><span class="signin-code" id="signin-code">${esc(r.userCode)}</span><button onclick="signinCopy(this)">Copy</button></div>
@@ -452,13 +452,21 @@ async function removeModule(btn) {
 }
 
 // Back from the service's sign-in (/oauth/callback/<id> redirects here): show how it went, then drop the query from the address bar.
+const SIGNIN_ERRORS = {
+  state: 'This sign-in is no longer valid. Start it again from here.',
+  user: 'This sign-in was started by someone else. Start it again.',
+  expired: 'The sign-in took too long. Start it again.',
+  declined: 'The sign-in was declined.',
+  exchange: 'The service did not accept the sign-in. Check the client ID, secret and redirect address, then try again.',
+  other: 'The sign-in did not finish. Try again.',
+};
 function showSigninResult() {
   const q = new URLSearchParams(location.search);
   const result = q.get('signin');
   if (!result) return null;
-  const msg = String(q.get('msg') || '').slice(0, 200);
+  const code = String(q.get('code') || '');
   history.replaceState(null, '', location.pathname + location.hash);
-  return result === 'ok' ? { kind: 'ok', text: 'Signed in.' } : result === 'error' ? { kind: 'err', text: msg || 'The sign-in did not finish.' } : null;
+  return result === 'ok' ? { kind: 'ok', text: 'Signed in.' } : result === 'error' ? { kind: 'err', text: Object.prototype.hasOwnProperty.call(SIGNIN_ERRORS, code) ? SIGNIN_ERRORS[code] : SIGNIN_ERRORS.other } : null;
 }
 const signinResult = showSigninResult();
 loadList().then(async () => {

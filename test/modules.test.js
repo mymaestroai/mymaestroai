@@ -506,3 +506,75 @@ test('setup steps: a tick box needs its text (confirm: true is refused)', () => 
   assert.ok(!okList.some(p => /confirm/.test(p)), 'a text label is accepted');
   assert.ok(badList.some(p => /confirm must be the text of the tick box/.test(p)), 'a boolean label is refused');
 });
+
+// A module whose server sends the hub requests: written to a temp folder by the test itself.
+const FAKEREQ_SERVER = `'use strict';
+let buf = '', callId = null; const got = {};
+const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (d) => {
+  buf += d; let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+    if (!line) continue;
+    const m = JSON.parse(line);
+    if (m.method === 'initialize') out({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'fakereq', version: '1' } } });
+    else if (m.method === 'tools/list') out({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'ping', inputSchema: { type: 'object', properties: {} } }] } });
+    else if (m.method === 'tools/call') {
+      callId = m.id;
+      out({ jsonrpc: '2.0', id: 'hub-rot-1', method: 'hub/refresh_token', params: { value: 'abcdefghijklmnop' } });
+      out({ jsonrpc: '2.0', id: 'srv-9', method: 'hub/refresh_token', params: { value: 'abcdefghijklmnop' } });
+    } else if (m.method === undefined && m.id != null) {
+      got[m.id] = m.result || m.error;
+      if (got['hub-rot-1'] && got['srv-9']) out({ jsonrpc: '2.0', id: callId, result: { content: [{ type: 'text', text: JSON.stringify(got) }] } });
+    }
+  }
+});
+`;
+
+test("the guard passes a module server's hub request up and the hub's response back, and refuses a request id it does not own", async () => {
+  const { spawn } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-req-'));
+  const root = path.join(dir, 'root'); fs.mkdirSync(path.join(root, 'fakereq'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'fakereq', 'module.json'), JSON.stringify({ id: 'fakereq', name: 'Fake Req', category: 'Test', summary: 'A test module whose server sends requests to the hub.', risk: 'read', server: { type: 'mcp-stdio', script: 'server.js' }, secrets: [{ name: 'FAKEREQ_TOKEN', label: 'Token', optional: true }], tools: { ping: 'read' } }));
+  fs.writeFileSync(path.join(root, 'fakereq', 'setup.json'), JSON.stringify({ steps: [{ id: 'intro', type: 'explain', title: 'About', body: 'Test.' }, { id: 'install', type: 'install', title: 'Install' }, { id: 'done', type: 'finish', title: 'Finish' }] }));
+  fs.writeFileSync(path.join(root, 'fakereq', 'server.js'), FAKEREQ_SERVER);
+  const g = spawn(process.execPath, [path.join(__dirname, '..', 'lib', 'modules', 'mcp-guard.js'), 'fakereq', '--root', root, '--data', path.join(dir, 'modules'), '--state', path.join(dir, 'modules.json'), '--connectors', path.join(dir, 'connectors.json')], { stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: process.env.PATH } });
+  try {
+    const out = []; let buf = '';
+    g.stdout.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { out.push(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); } });
+    const send = (m) => g.stdin.write(JSON.stringify(m) + '\n');
+    const until = async (fn) => { for (let i = 0; i < 100; i++) { if (fn()) return; await new Promise(res => setTimeout(res, 50)); } };
+    send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 't', version: '0' } } });
+    send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'ping', arguments: {} } });
+    await until(() => out.some(m => m.id === 'hub-rot-1'));
+    assert.deepStrictEqual(out.find(m => m.id === 'hub-rot-1'), { jsonrpc: '2.0', id: 'hub-rot-1', method: 'hub/refresh_token', params: { value: 'abcdefghijklmnop' } }, 'forwarded to the hub unchanged');
+    assert.ok(!out.some(m => m.id === 'srv-9'), 'a request id the guard does not own is not forwarded');
+    send({ jsonrpc: '2.0', id: 'other-1', result: { ok: true } });   // a response (no method) with an id that is not the hub's: dropped
+    send({ jsonrpc: '2.0', id: 'hub-rot-1', result: { ok: true } });
+    await until(() => out.some(m => m.id === 2));
+    const done = out.find(m => m.id === 2);
+    assert.ok(done, "the server got the hub's response and finished the call");
+    const got = JSON.parse(done.result.content[0].text);
+    assert.deepStrictEqual(got['hub-rot-1'], { ok: true });
+    assert.strictEqual(got['srv-9'].code, -32601);
+    assert.ok(!('other-1' in got));
+  } finally { g.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('mcp-stdio: a server request is emitted as "request", a notification as "notification"; respond and respondError write JSON-RPC responses', () => {
+  const c = new McpStdioClient('x', [], {});
+  const writes = [];
+  c.process = { killed: false, stdin: { write: (s) => writes.push(JSON.parse(s)) } };
+  const got = [];
+  c.on('request', (m) => got.push(['request', m.id, m.method]));
+  c.on('notification', (m) => got.push(['notification', m.id, m.method]));
+  c._handleMessage({ jsonrpc: '2.0', id: 'hub-rot-1', method: 'hub/refresh_token', params: { value: 'v' } });
+  c._handleMessage({ jsonrpc: '2.0', method: 'notifications/x' });
+  assert.deepStrictEqual(got, [['request', 'hub-rot-1', 'hub/refresh_token'], ['notification', undefined, 'notifications/x']]);
+  c.respond('hub-rot-1', { ok: true });
+  c.respondError('hub-rot-2', -32601, 'Method not found.');
+  assert.deepStrictEqual(writes, [{ jsonrpc: '2.0', id: 'hub-rot-1', result: { ok: true } }, { jsonrpc: '2.0', id: 'hub-rot-2', error: { code: -32601, message: 'Method not found.' } }]);
+  c.process = null;
+  c.respond('hub-rot-3', {});   // a gone process: no throw
+});

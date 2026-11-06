@@ -1,6 +1,7 @@
 'use strict';
 // MCP stdio server (newline-delimited JSON-RPC) that lets agents read Oura Ring data. Read-only.
-// A rotated refresh token is announced to the hub with a JSON-RPC notification on stdout; it is never logged.
+// A rotated refresh token is sent to the hub as a JSON-RPC request (hub/refresh_token) on stdout and the hub's answer is
+// awaited; it is never logged.
 
 const { createOura } = require('./oura');
 
@@ -74,8 +75,8 @@ function thin(points, max = MAX_HR_POINTS) {
   return out;
 }
 
-async function sleep(oura, range) {
-  const [daily, periods] = await Promise.all([oura.get(`${P}daily_sleep`, range), oura.get(`${P}sleep`, range)]);
+async function sleep(oura, range, info) {
+  const [daily, periods] = await Promise.all([oura.get(`${P}daily_sleep`, range, info), oura.get(`${P}sleep`, range, info)]);
   const score = new Map(daily.map((d) => [d.day, d.score]));
   const seen = new Set();
   const rows = periods.map((s) => {
@@ -93,24 +94,24 @@ async function sleep(oura, range) {
 
 const readers = {
   oura_sleep: sleep,
-  async oura_readiness(oura, range) {
-    const data = await oura.get(`${P}daily_readiness`, range);
+  async oura_readiness(oura, range, info) {
+    const data = await oura.get(`${P}daily_readiness`, range, info);
     return { range, days: data.map((d) => ({ date: d.day, score: val(d.score), temperature_deviation: val(d.temperature_deviation), contributors: val(d.contributors) })).sort(byDate) };
   },
-  async oura_activity(oura, range) {
-    const data = await oura.get(`${P}daily_activity`, range);
+  async oura_activity(oura, range, info) {
+    const data = await oura.get(`${P}daily_activity`, range, info);
     return { range, days: data.map((d) => ({ date: d.day, score: val(d.score), steps: val(d.steps), active_calories: val(d.active_calories), total_calories: val(d.total_calories), inactivity_alerts: val(d.inactivity_alerts) })).sort(byDate) };
   },
-  async oura_spo2(oura, range) {
-    const data = await oura.get(`${P}daily_spo2`, range);
+  async oura_spo2(oura, range, info) {
+    const data = await oura.get(`${P}daily_spo2`, range, info);
     return { range, days: data.map((d) => ({ date: d.day, average_percentage: d.spo2_percentage && d.spo2_percentage.average !== undefined ? d.spo2_percentage.average : null })).sort(byDate) };
   },
-  async oura_workouts(oura, range) {
-    const data = await oura.get(`${P}workout`, range);
+  async oura_workouts(oura, range, info) {
+    const data = await oura.get(`${P}workout`, range, info);
     return { range, workouts: data.map((w) => ({ date: w.day, activity: val(w.activity), start: val(w.start_datetime), end: val(w.end_datetime), calories: val(w.calories), distance: val(w.distance), intensity: val(w.intensity) })).sort(byDate) };
   },
-  async oura_heart_rate(oura, range) {
-    const data = await oura.get(`${P}heartrate`, range);
+  async oura_heart_rate(oura, range, info) {
+    const data = await oura.get(`${P}heartrate`, range, info);
     const all = data.filter((d) => d && d.timestamp).sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
     const points = thin(all).map((d) => ({ timestamp: d.timestamp, bpm: val(d.bpm), source: val(d.source) }));
     return { range, total_readings: all.length, points };
@@ -120,7 +121,16 @@ const readers = {
 async function callTool(oura, name, args, now) {
   args = args && typeof args === 'object' ? args : {};
   const range = name === 'oura_heart_rate' ? timeRange(args, now) : dayRange(args, now);
-  return readers[name](oura, range);
+  const info = {};
+  const out = await readers[name](oura, range, info);
+  if (info.truncated) {
+    out.truncated = true;   // the 10-page limit was reached: more records exist than are shown
+    const list = out.nights || out.days || out.workouts || out.points || [];
+    out.records = name === 'oura_heart_rate' ? out.total_readings : list.length;
+  }
+  const warning = typeof oura.warning === 'function' ? oura.warning() : null;
+  if (warning) out.warning = warning;
+  return out;
 }
 
 // One JSON-RPC message in -> the reply object, or null for notifications.
@@ -149,12 +159,35 @@ async function handle(msg, oura, now = Date.now) {
   }
 }
 
-// The hub saves the new refresh token from this notification. Never log it.
-const rotationNotice = (value) => JSON.stringify({ jsonrpc: '2.0', method: 'notifications/hub/refresh_token', params: { value } }) + '\n';
-const onRotate = (value) => { process.stdout.write(rotationNotice(value)); };
+// The hub saves the new refresh token when it answers this request with { ok: true }. Never log the token.
+function createHubLink({ write, timeoutMs = 10000 } = {}) {
+  const waiting = new Map();
+  let seq = 0;
+  return {
+    request(value) {
+      const id = `hub-rot-${++seq}`;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { waiting.delete(id); reject(new Error('The hub did not answer.')); }, timeoutMs);
+        waiting.set(id, { resolve, reject, timer });
+        try { write(JSON.stringify({ jsonrpc: '2.0', id, method: 'hub/refresh_token', params: { value } }) + '\n'); }
+        catch (e) { clearTimeout(timer); waiting.delete(id); reject(e); }
+      });
+    },
+    // A message from the hub that is a response (an id, no method). Returns true if it was one of ours.
+    onMessage(msg) {
+      if (!msg || typeof msg !== 'object' || msg.method !== undefined || typeof msg.id !== 'string') return false;
+      const w = waiting.get(msg.id);
+      if (!w) return false;
+      waiting.delete(msg.id); clearTimeout(w.timer);
+      if (!msg.error && msg.result && msg.result.ok === true) w.resolve(); else w.reject(new Error('The hub could not save it.'));
+      return true;
+    },
+  };
+}
 
 function main() {
-  const oura = createOura({ clientId: process.env.CLIENT_ID, clientSecret: process.env.CLIENT_SECRET, refreshToken: process.env.REFRESH_TOKEN, onRotate });
+  const link = createHubLink({ write: (line) => process.stdout.write(line) });
+  const oura = createOura({ clientId: process.env.CLIENT_ID, clientSecret: process.env.CLIENT_SECRET, refreshToken: process.env.REFRESH_TOKEN, onRotate: (v) => link.request(v) });
   let buf = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (d) => {
@@ -166,6 +199,7 @@ function main() {
       if (!line) continue;
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }
+      if (link.onMessage(msg)) continue;
       handle(msg, oura).then((r) => { if (r) process.stdout.write(JSON.stringify(r) + '\n'); });
     }
   });
@@ -173,4 +207,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { handle, TOOLS, thin, rotationNotice, onRotate };
+module.exports = { handle, TOOLS, thin, createHubLink };

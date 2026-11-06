@@ -18,7 +18,7 @@ agent reads it. Only your lead agent can read it unless you tick other agents in
 - **Sign in:** sends you to Oura's page; approve the permissions (daily, heart rate, workout, SpO2) and you come back
   here. Oura gives a new lasting sign-in each time it is used; My Maestro saves the new one automatically.
 - **Who can read it:** pick which other agents may read your Oura data.
-- **Finish:** switches the module on. A nightly check confirms the sign-in still works.
+- **Finish:** switches the module on. A nightly connection check confirms the sign-in still works: it asks Oura for one small reading and does not keep it.
 
 ## Common errors and fixes
 

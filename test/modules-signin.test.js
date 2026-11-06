@@ -364,21 +364,43 @@ test('the connector of a rotating module records which secret its server may rew
 
 // ── Source checks: the routes and the page ──
 const readSrc = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-test('server.js: start passes the origin and user; the callback page is admin-only and redirects with a capped message', () => {
+test('server.js: start passes the origin and user; the callback page is admin-only and redirects with a fixed code', () => {
   const s = readSrc('server.js');
-  assert.match(s, /signinStart\(m\[1\], \{ origin: `\$\{proto\}:\/\/\$\{host\}`, userId: req\.hubUser \? req\.hubUser\.id : null \}\)/);
+  assert.match(s, /signinStart\(m\[1\], \{ origin, userId: req\.hubUser \? req\.hubUser\.id : null \}\)/);
   assert.match(s, /knownHost\(host\)/);
   assert.ok(s.includes("Open this page at your Maestro's usual address."));
   assert.ok(s.includes("x-forwarded-proto") && s.includes('req.socket.encrypted'));
   const i = s.indexOf('/oauth\\/callback\\/');
   assert.ok(i > 0, 'page route present');
-  const block = s.slice(i, i + 2200);
+  const block = s.slice(i, i + 2400);
   assert.match(block, /req\.hubService \|\| req\.hubToken \|\| !req\.hubUser/);
   assert.match(block, /access\.isAdmin\(req\.hubUser\)/);
   assert.match(block, /403/);
   assert.match(block, /signinCallback\(id, \{ code: str\('code'\), state: str\('state'\), error: str\('error'\) \}, \{ userId: req\.hubUser\.id \}\)/);
   assert.match(block, /\/modules\?signin=ok#\$\{id\}/);
-  assert.match(block, /signin=error&msg=\$\{encodeURIComponent\(String\(msg \|\| [^)]*\)\.slice\(0, 200\)\)\}#\$\{id\}/);
+  assert.match(block, /signin=error&code=\$\{CODES\.includes\(code\) \? code : 'other'\}#\$\{id\}/);
+  assert.match(block, /\['state', 'user', 'expired', 'declined', 'exchange', 'other'\]/);
+  assert.ok(!/msg=/.test(block), 'no free text in the redirect');
+  assert.match(block, /back\(false, e && e\.signinCode\)/);
+});
+test('server.js: the start route uses the page\'s origin only when its host equals the Host header and it is http(s)', () => {
+  const s = readSrc('server.js');
+  const i = s.indexOf("m[2] === 'start'");
+  const block = s.slice(i, i + 2400);
+  assert.match(block, /\(await bodyJson\(\)\)\.origin/);
+  assert.match(block, /u\.protocol !== 'http:' && u\.protocol !== 'https:'/);
+  assert.match(block, /u\.host\.toLowerCase\(\) !== host\.toLowerCase\(\)/);
+  assert.match(block, /return jsonResponse\(res, 400, \{ error: "Open this page at your Maestro's usual address\." \}\)/);
+  assert.match(block, /origin = u\.origin/);
+  // the knownHost check on the Host header comes before the body's origin is looked at
+  assert.ok(block.indexOf('knownHost(host)') < block.indexOf('bodyJson()'));
+  // the same decision, run on the source's own rule
+  const accept = (sent, host) => { let u = null; try { u = new URL(String(sent)); } catch {} return !!u && (u.protocol === 'http:' || u.protocol === 'https:') && u.host.toLowerCase() === host.toLowerCase(); };
+  assert.ok(accept('https://hub.example.test', 'hub.example.test'));
+  assert.ok(accept('http://localhost:3000', 'localhost:3000'));
+  assert.ok(!accept('https://evil.example', 'hub.example.test'), 'a mismatched host is refused');
+  assert.ok(!accept('https://hub.example.test:8443', 'hub.example.test'), 'a different port is a different host');
+  assert.ok(!accept('javascript:alert(1)', 'hub.example.test'));
 });
 test('access: /oauth/callback/<id> is an admin page and is outside the /api origin guard', () => {
   const access = require('../lib/access');
@@ -398,4 +420,59 @@ test('modules.html: code-flow button goes to an https authorize URL in the same 
   assert.match(h, /\\\{\\\{redirectUri\\\}\\\}/);
   assert.match(h, /esc\(uri\)/);
   assert.match(h, /location\.origin \+ current\.redirectUriPath/);
+});
+test('modules.html: the start request sends location.origin; the stale check comes before either flow branch; callback codes map to fixed sentences', () => {
+  const h = readSrc('modules.html');
+  assert.match(h, /signin\/start`, \{ origin: location\.origin \}\)/);
+  const i = h.indexOf('async function signinStart');
+  const fn = h.slice(i, h.indexOf('async function signinCancel'));
+  const stale = fn.indexOf('if (current !== m || selected !== stepId) return;');
+  assert.ok(stale > 0 && stale < fn.indexOf("m.oauthFlow === 'code'"), 'checked before the code-flow branch');
+  assert.ok(stale < fn.indexOf('location.href = r.authorizeUrl'), 'a late reply never navigates');
+  assert.ok(stale < fn.indexOf('const token = signin ='), 'checked before the device branch');
+  assert.strictEqual(fn.split('if (current !== m || selected !== stepId) return;').length, 2, 'once');
+  const m = /const SIGNIN_ERRORS = (\{[^}]*\});/.exec(h);
+  assert.ok(m, 'the table is present');
+  const table = Function(`return ${m[1]}`)();
+  assert.deepStrictEqual(Object.keys(table).sort(), ['declined', 'exchange', 'expired', 'other', 'state', 'user']);
+  assert.match(h, /hasOwnProperty\.call\(SIGNIN_ERRORS, code\) \? SIGNIN_ERRORS\[code\] : SIGNIN_ERRORS\.other/);
+  assert.ok(!/q\.get\('msg'\)/.test(h), 'free text from the address is never shown');
+});
+
+
+test('signinStart: a failed start (bad origin or no user) leaves the pending sign-in and the generation alone', async (t) => {
+  const r = crig(); t.after(r.cleanup);
+  await ready(r);
+  const first = await r.mods.signinStart('fakecode', { origin: ORIGIN, userId: 'u1' });
+  await assert.rejects(r.mods.signinStart('fakecode', { origin: 'not a url', userId: 'u1' }), /usual address/);
+  await assert.rejects(r.mods.signinStart('fakecode', { origin: 'ftp://hub.example.test', userId: 'u1' }), /usual address/);
+  await assert.rejects(r.mods.signinStart('fakecode', { origin: ORIGIN }), /Sign in to the hub/);
+  assert.strictEqual(await r.mods.signinCallback('fakecode', { code: 'C', state: stateOfUrl(first.authorizeUrl) }, { userId: 'u1' }).then(x => x.ok), true, 'the first sign-in still works');
+  assert.strictEqual(refreshSaved(r), REFRESH_TOKEN_IN);
+});
+
+test('signinCallback errors carry a fixed code: state, user, expired, declined, exchange, other', async (t) => {
+  const code = (p) => p.then(() => null, (e) => e.signinCode);
+  const r = crig(); t.after(r.cleanup);
+  await ready(r);
+  assert.strictEqual(await code(r.mods.signinCallback('fakecode', { code: 'C', state: 'x' }, { userId: 'u1' })), 'state', 'nothing pending');
+  let st = stateOfUrl((await r.mods.signinStart('fakecode', { origin: ORIGIN, userId: 'u1' })).authorizeUrl);
+  assert.strictEqual(await code(r.mods.signinCallback('fakecode', { code: 'C', state: 'wrong' }, { userId: 'u1' })), 'state');
+  assert.strictEqual(await code(r.mods.signinCallback('fakecode', { code: 'C', state: st }, { userId: 'u2' })), 'user');
+  st = stateOfUrl((await r.mods.signinStart('fakecode', { origin: ORIGIN, userId: 'u1' })).authorizeUrl);
+  r.clock.t += 11 * 60 * 1000;
+  assert.strictEqual(await code(r.mods.signinCallback('fakecode', { code: 'C', state: st }, { userId: 'u1' })), 'expired');
+  st = stateOfUrl((await r.mods.signinStart('fakecode', { origin: ORIGIN, userId: 'u1' })).authorizeUrl);
+  assert.strictEqual(await code(r.mods.signinCallback('fakecode', { error: 'access_denied', state: st }, { userId: 'u1' })), 'declined');
+  st = stateOfUrl((await r.mods.signinStart('fakecode', { origin: ORIGIN, userId: 'u1' })).authorizeUrl);
+  assert.strictEqual(await code(r.mods.signinCallback('fakecode', { error: 'server_error', state: st }, { userId: 'u1' })), 'other');
+  st = stateOfUrl((await r.mods.signinStart('fakecode', { origin: ORIGIN, userId: 'u1' })).authorizeUrl);
+  assert.strictEqual(await code(r.mods.signinCallback('fakecode', { state: st }, { userId: 'u1' })), 'other', 'no code');
+});
+
+test('signinCallback: a failed exchange is code "exchange"', async (t) => {
+  const r = crig({ exchange: async () => { throw new Error('refused'); } }); t.after(r.cleanup);
+  await ready(r);
+  const st = stateOfUrl((await r.mods.signinStart('fakecode', { origin: ORIGIN, userId: 'u1' })).authorizeUrl);
+  await assert.rejects(r.mods.signinCallback('fakecode', { code: 'C', state: st }, { userId: 'u1' }), (e) => e.signinCode === 'exchange');
 });

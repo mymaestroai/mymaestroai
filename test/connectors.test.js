@@ -319,32 +319,36 @@ test('McpStdioClient minTools: a server that lists one tool is ready at once whe
   assert.ok(Date.now() - t0 < 1000);
 });
 
-// ── Rotated secrets: a module server's notifications/hub/refresh_token ──
+// ── Rotated secrets: a module server's hub/refresh_token request, answered by the hub ──
 function rotRig(t, { ttl = 0 } = {}) {
+  const events = [];
   const { EventEmitter } = require('events');
   const made = [];
   class RotClient extends EventEmitter {
-    constructor() { super(); this.disconnected = false; made.push(this); }
+    constructor() { super(); this.disconnected = false; this.replies = []; made.push(this); }
+    respond(id, result) { this.replies.push({ id, result }); }
+    respondError(id, code, message) { this.replies.push({ id, error: { code, message } }); }
     async connect() {} async disconnect() { this.disconnected = true; }
     async listTools() { return [{ name: 't', inputSchema: { type: 'object', properties: {} } }]; }
     async callTool() { return { content: [{ type: 'text', text: 'ok' }] }; }
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-rot-'));
   const logs = [];
-  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: RotClient, log: (...a) => logs.push(a.join(' ')), unlockTtlMs: ttl, baseEnv: { PATH: process.env.PATH } });
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: RotClient, log: (...a) => logs.push(a.join(' ')), unlockTtlMs: ttl, publish: (ev, d) => events.push([ev, d]), baseEnv: { PATH: process.env.PATH } });
   t.after(() => { cx.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); });
-  return { cx, made, logs, dir };
+  return { cx, made, logs, dir, events };
 }
 const ROT_NEW = 'ROTATED-REFRESH-TOKEN-distinctive-777';
-const note = (value, method = 'notifications/hub/refresh_token') => ({ jsonrpc: '2.0', method, params: { value } });
+const note = (value, method = 'hub/refresh_token', id = 'hub-rot-1') => ({ jsonrpc: '2.0', id, method, params: { value } });
 const modConn = (extra = {}) => ({ id: 'rot', label: 'Rot', kind: 'mcp', command: 'x', module: 'rot', enabled: true, rotatingSecret: 'TOK', secrets: { TOK: 'old-token-value-1', OTHER: 'other-value-123' }, ...extra });
 
-test('rotated secret: a module connector saves the notification value encrypted, without restarting, and never logs it', async (t) => {
+test('rotated secret: a module connector saves the requested value encrypted, answers ok, without restarting, and never logs it', async (t) => {
   const { cx, made, logs, dir } = rotRig(t);
   cx.upsert(modConn(), { byModule: true });
   await cx.callTool('rot', 't', {});
   assert.equal(made.length, 1);
-  made[0].emit('notification', note(ROT_NEW));
+  made[0].emit('request', note(ROT_NEW));
+  assert.deepEqual(made[0].replies, [{ id: 'hub-rot-1', result: { ok: true } }]);
   assert.equal(cx.readSecrets('rot', ['TOK', 'OTHER'], { byModule: true }).TOK, ROT_NEW);
   assert.equal(cx.readSecrets('rot', ['OTHER'], { byModule: true }).OTHER, 'other-value-123', 'the other secret is untouched');
   assert.ok(!fs.readFileSync(path.join(dir, 'connectors.json'), 'utf8').includes(ROT_NEW), 'stored encrypted');
@@ -353,29 +357,65 @@ test('rotated secret: a module connector saves the notification value encrypted,
   assert.equal(cx.list().connectors.find(c => c.id === 'rot').running, true);
   assert.ok(logs.some(l => /rotated TOK/.test(l)));
   assert.ok(!logs.some(l => l.includes(ROT_NEW)), 'the value is never logged');
-  // a later call still works on the same client
   assert.equal(await cx.callTool('rot', 't', {}), 'ok');
   assert.equal(made.length, 1);
+  // a notification is no longer a way to save
+  made[0].emit('notification', { jsonrpc: '2.0', method: 'notifications/hub/refresh_token', params: { value: ROT_NEW + '-n' } });
+  assert.equal(cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK, ROT_NEW);
 });
 
-test('rotated secret: other methods, bad values and other names are ignored; the name comes from the record, not the message', async (t) => {
-  const { cx, made, logs } = rotRig(t);
+test('rotated secret: a failed save answers with an error, records lastError and publishes connectors_changed', async (t) => {
+  const { cx, made, logs, events } = rotRig(t);
   cx.upsert(modConn(), { byModule: true });
   await cx.callTool('rot', 't', {});
-  const tok = () => cx.readSecrets('rot', ['TOK', 'OTHER'], { byModule: true });
-  made[0].emit('notification', note(ROT_NEW, 'notifications/tools/list_changed'));
-  made[0].emit('notification', note(ROT_NEW, 'notifications/hub/other'));
-  for (const bad of ['short', 'x'.repeat(4097), 12345678901, null, { a: 1 }, undefined]) made[0].emit('notification', note(bad));
-  made[0].emit('notification', { jsonrpc: '2.0', method: 'notifications/hub/refresh_token' });
-  made[0].emit('notification', { jsonrpc: '2.0', method: 'notifications/hub/refresh_token', params: { name: 'OTHER', secret: 'OTHER', value: ROT_NEW + '-b' } });
-  assert.equal(tok().TOK, ROT_NEW + '-b', 'only the declared secret changed');
-  assert.equal(tok().OTHER, 'other-value-123');
-  const big = 'y'.repeat(4096); made[0].emit('notification', note(big));
-  assert.equal(tok().TOK, big, '4096 characters is the longest accepted');
-  const ten = '1234567890'; made[0].emit('notification', note(ten));
-  assert.equal(tok().TOK, ten, '10 characters is the shortest accepted');
-  assert.ok(!logs.some(l => l.includes(ROT_NEW) || l.includes(big)));
+  events.length = 0;
+  const tok = () => cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK;
+  let n = 0;
+  for (const bad of ['short', 'x'.repeat(4097), 12345678901, null, { a: 1 }, undefined, 'has a\nnewline in it 123', 'nul\u0000byte-in-token']) {
+    made[0].emit('request', note(bad, 'hub/refresh_token', `hub-rot-${++n}`));
+  }
+  made[0].emit('request', { jsonrpc: '2.0', id: 'hub-rot-x', method: 'hub/refresh_token' });
+  assert.equal(made[0].replies.length, 9);
+  assert.ok(made[0].replies.every(r => r.error && r.error.code === -32000 && !r.result));
+  assert.equal(tok(), 'old-token-value-1', 'nothing was saved');
+  const c = cx.list().connectors.find(x => x.id === 'rot');
+  assert.match(c.lastError, /^Could not save the new sign-in: .*\. It keeps working until the next restart; sign in again in Data connectors\.$/);
+  assert.ok(logs.every(l => !l.includes('newline in it')));
+  assert.ok(events.some(([ev, d]) => ev === 'connectors_changed' && d.id === 'rot'));
+  const ok = 'y'.repeat(4096); made[0].emit('request', note(ok, 'hub/refresh_token', 'hub-rot-a'));
+  assert.equal(tok(), ok, '4096 characters is the longest accepted');
+  const ten = '1234567890'; made[0].emit('request', note(ten, 'hub/refresh_token', 'hub-rot-b'));
+  assert.equal(tok(), ten, '10 characters is the shortest accepted');
+  assert.deepEqual(made[0].replies.slice(-2).map(r => r.result), [{ ok: true }, { ok: true }]);
   assert.throws(() => cx.writeBackSecret('rot', 'short'), /not usable/);
+  assert.throws(() => cx.writeBackSecret('rot', 'abcdefghij\u0007klm'), /not usable/);
+});
+
+test('rotated secret: an old client (after a restart or a new sign-in) is refused and writes nothing', async (t) => {
+  const { cx, made } = rotRig(t);
+  cx.upsert(modConn(), { byModule: true });
+  await cx.callTool('rot', 't', {});
+  cx.upsert({ id: 'rot', label: 'Rot 2' }, { byModule: true });   // an update stops the client; the next call starts a new one
+  await cx.callTool('rot', 't', {});
+  assert.equal(made.length, 2);
+  made[0].emit('request', note(ROT_NEW));
+  assert.equal(made[0].replies.length, 1);
+  assert.ok(made[0].replies[0].error, 'refused');
+  assert.equal(cx.list().connectors.find(x => x.id === 'rot').lastError, null, 'a stale process does not mark the live connector');
+  assert.equal(cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK, 'old-token-value-1');
+  made[1].emit('request', note(ROT_NEW));
+  assert.deepEqual(made[1].replies, [{ id: 'hub-rot-1', result: { ok: true } }]);
+  assert.equal(cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK, ROT_NEW);
+});
+
+test('rotated secret: any other request from a module server gets method not found', async (t) => {
+  const { cx, made } = rotRig(t);
+  cx.upsert(modConn(), { byModule: true });
+  await cx.callTool('rot', 't', {});
+  made[0].emit('request', note(ROT_NEW, 'hub/other'));
+  made[0].emit('request', note(ROT_NEW, 'tools/call', 7));
+  assert.deepEqual(made[0].replies.map(r => r.error && r.error.code), [-32601, -32601]);
+  assert.equal(cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK, 'old-token-value-1');
 });
 
 test('rotated secret: a connector that is not a module ignores it, and rotatingSecret cannot be set on one', async (t) => {
@@ -384,7 +424,7 @@ test('rotated secret: a connector that is not a module ignores it, and rotatingS
   const cipher = () => JSON.stringify(JSON.parse(fs.readFileSync(path.join(dir, 'connectors.json'), 'utf8')).connectors.find(c => c.id === 'plain').secrets.TOK);
   const before = cipher();
   await cx.callTool('plain', 't', {});
-  made[0].emit('notification', note(ROT_NEW));
+  made[0].emit('request', note(ROT_NEW));
   assert.equal(cipher(), before, 'the stored secret did not change');
   assert.throws(() => cx.writeBackSecret('plain', ROT_NEW), /does not take a rotated secret/);
   assert.throws(() => cx.writeBackSecret('missing', ROT_NEW), /does not take a rotated secret/);

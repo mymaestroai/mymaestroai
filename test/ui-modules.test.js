@@ -38,7 +38,7 @@ test('cards show the catalog line and the last check, escaped', () => {
 
 test('signin step: button, code in a monospace box with Copy, https-only link, wording, countdown, never the device code', () => {
   assert.match(page, /Sign in with \$\{esc\(current\.name\)\}/);
-  assert.match(page, /\/signin\/start`, \{\}\)/);
+  assert.match(page, /\/signin\/start`, \{ origin: location\.origin \}\)/);
   assert.match(page, /\.signin-code \{ font-family: ui-monospace/);
   assert.match(page, /<span class="signin-code" id="signin-code">\$\{esc\(r\.userCode\)\}<\/span><button onclick="signinCopy\(this\)">Copy<\/button>/);
   assert.match(page, /r\.verificationUrl\.startsWith\('https:\/\/'\)/, 'only https links are offered');
