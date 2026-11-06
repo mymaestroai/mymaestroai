@@ -36,8 +36,8 @@ test('the switch is read from /api/me and the summary follows it', () => {
   assert.match(paint, /fetch\('\/api\/me'/);
   assert.match(paint, /admin2faRequired === false/);
   assert.ok(app.includes("'Two-factor required for admins'") && app.includes("'Two-factor optional for admins'"));
-  assert.ok(app.includes('no admin can remove two-factor from their account.'));
-  assert.ok(app.includes('An admin may remove two-factor from their account and then signs in with a password alone.'));
+  assert.ok(app.includes("Admins who have two-factor can\\'t remove it from their own account. An admin without it is asked to set it up."));
+  assert.ok(app.includes('An admin may remove two-factor from their own account and then signs in with a password alone.'));
 });
 
 test('unchecking opens the confirm panel instead of posting', () => {
@@ -45,7 +45,7 @@ test('unchecking opens the confirm panel instead of posting', () => {
   assert.match(toggle, /box\.checked = true;[^\n]*\n\s*stAdmin2faAsk\(\)/);
   assert.doesNotMatch(toggle.slice(0, toggle.indexOf('stAdmin2faSend({ required: true }')), /stAdmin2faSend/);
   const ask = body(app, 'function stAdmin2faAsk()');
-  assert.ok(ask.includes("Turn off the two-factor requirement for admins? Anyone who learns an admin's password could then sign in as that admin."));
+  assert.ok(ask.includes("Allow admins to remove their own two-factor? An admin who removes it signs in with a password alone, so anyone who learns that password could sign in as that admin."));
   assert.match(ask, /type="password" id="st-a2fa-pw" autocomplete="current-password"/);
   assert.match(ask, /me\.user\.totpEnabled \? '<div class="st-row"><label[^']*<input type="text" id="st-a2fa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">/);
   assert.match(ask, /background:#b71c1c[^>]*onclick="stAdmin2faOff\(\)">Turn it off</);
@@ -103,4 +103,17 @@ test('mobile.js has the same rules', () => {
 test('Users page disables the own-row Reset 2FA', () => {
   assert.match(users, /data-act="totp" \$\{self \? 'disabled title="Use Security in your account menu"'/);
   assert.match(users, /setMsg\(msgId, e\.message, 'error'\)/);
+});
+
+test('the account forms clear the password and code before the request, one removal at a time; the reminder follows the switch', () => {
+  for (const f of ['app.js', 'mobile.js']) {
+    const src = fs.readFileSync(path.join(root, f), 'utf8');
+    const fn = src.slice(src.indexOf('async function disableTwoFactor()'), src.indexOf('async function disableTwoFactor()') + 1400);
+    const clear = fn.indexOf("pwEl.value = ''; if (codeEl) codeEl.value = '';");
+    assert.ok(clear > 0 && clear < fn.indexOf("authPost('/api/auth/totp/disable'"), f + ': fields cleared before the request');
+    assert.ok(fn.includes('if (secDisableBusy) return;') && fn.includes('finally { secDisableBusy = false; }'), f + ': one at a time');
+  }
+  const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const send = app.slice(app.indexOf('async function stAdmin2faSend('), app.indexOf('function groupSettings('));
+  assert.ok(send.includes('renderUserChip();'), 'the account menu reminder is repainted after the switch changes');
 });

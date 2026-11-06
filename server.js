@@ -577,7 +577,7 @@ async function handleHttpRequest(req, res) {
       const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
       const u = hubAuth.getUser(req.hubUser.id);
       if (!u) return jsonResponse(res, 401, { error: 'password check failed' });
-      const adminAccount = access.isAdmin(req.hubUser);
+      const adminAccount = access.isAdmin(u);   // the account as stored now, read after the body arrived
       if (adminAccount && admin2fa.required()) return jsonResponse(res, 403, { error: require('./lib/admin-2fa').REQUIRED_MESSAGE, code: 'admin_2fa_required' });
       if (!hubAuth.login(u.login, b.password).ok) return jsonResponse(res, 401, { error: 'password check failed' });
       if (adminAccount && u.totp && u.totp.enabled) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return jsonResponse(res, 403, { error: 'That two-factor code is not right.' }); }

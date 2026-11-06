@@ -125,6 +125,7 @@ test('server: totp/disable refuses admins while required, before the password; a
   assert.ok(req2 > 0 && login > req2 && check > login);
   assert.ok(route.includes("code: 'admin_2fa_required'"));
   assert.ok(route.includes('adminAccount && u.totp && u.totp.enabled'));
+  assert.ok(route.includes('const adminAccount = access.isAdmin(u);'), 'the role comes from the account read after the body arrived');
 });
 
 test('server: the users totp reset route refuses the caller\'s own id; /api/me and invite accept report the rule', () => {

@@ -385,15 +385,20 @@
         ta.remove();
       }
     }
+    let secDisableBusy = false;   // one removal at a time
     async function disableTwoFactor() {
-      const password = document.getElementById('sec-2fa-password').value;
+      if (secDisableBusy) return;
+      const pwEl = document.getElementById('sec-2fa-password');
+      const codeEl = document.getElementById('sec-2fa-disable-code');
+      const password = pwEl.value;
       if (!password) return secMsg('sec-2fa-msg', 'Enter your password to turn 2FA off.');
       const body = { password };
-      const codeEl = document.getElementById('sec-2fa-disable-code');
       if (codeEl) {
         body.code = (codeEl.value || '').trim();
         if (!body.code) return secMsg('sec-2fa-msg', 'Enter a current code or a recovery code.');
       }
+      pwEl.value = ''; if (codeEl) codeEl.value = '';   // the password goes in this one request and stays nowhere else
+      secDisableBusy = true;
       try {
         await authPost('/api/auth/totp/disable', body);
         window.hubMe.user.totpEnabled = false;
@@ -404,6 +409,7 @@
         renderUserChip();
         paintTwoFactor();
       } catch (e) { secMsg('sec-2fa-msg', e.message); }
+      finally { secDisableBusy = false; }
     }
     async function changePassword() {
       const current = document.getElementById('sec-pw-current').value;
@@ -2143,8 +2149,8 @@
     let stA2faBusy = false;
     function stAdmin2faText(required) {
       return required
-        ? 'Every admin signs in with a password and a code from their authenticator app, and no admin can remove two-factor from their account.'
-        : 'An admin may remove two-factor from their account and then signs in with a password alone.';
+        ? 'Admins who have two-factor can\'t remove it from their own account. An admin without it is asked to set it up.'
+        : 'An admin may remove two-factor from their own account and then signs in with a password alone.';
     }
     function stAdmin2faBusy(busy) {
       stA2faBusy = busy;
@@ -2182,7 +2188,7 @@
       const panel = document.getElementById('st-a2fa-confirm');
       if (!panel) return;
       stAdmin2faMsg('');
-      panel.innerHTML = `<div class="st-hint">Turn off the two-factor requirement for admins? Anyone who learns an admin's password could then sign in as that admin.</div>
+      panel.innerHTML = `<div class="st-hint">Allow admins to remove their own two-factor? An admin who removes it signs in with a password alone, so anyone who learns that password could sign in as that admin.</div>
         <div class="st-row"><label style="flex-basis:150px">Your password</label><input type="password" id="st-a2fa-pw" autocomplete="current-password"></div>
         ${me && me.user && me.user.totpEnabled ? '<div class="st-row"><label style="flex-basis:150px">Code</label><input type="text" id="st-a2fa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code"></div>' : ''}
         <div class="st-row"><label style="flex-basis:150px"></label>
@@ -2221,10 +2227,12 @@
       }
       stAdmin2faCancel();
       const required = !(window.hubMe && window.hubMe.admin2faRequired === false);
-      document.getElementById('st-a2fa-on').checked = required;
-      document.getElementById('st-a2fa-text').textContent = stAdmin2faText(required);
+      const box = document.getElementById('st-a2fa-on'); if (box) box.checked = required;   // Settings may have closed meanwhile
+      const txt = document.getElementById('st-a2fa-text'); if (txt) txt.textContent = stAdmin2faText(required);
       stSum('security', 'a2fa', required ? 'Two-factor required for admins' : 'Two-factor optional for admins');
-      stAdmin2faMsg(required ? '' : 'Two-factor is now optional for admins. Your own two-factor stays on until you remove it in your account menu, Security.', true);
+      const mine = window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled;
+      stAdmin2faMsg(required ? '' : (mine ? 'Two-factor is now optional for admins. Your own two-factor stays on until you remove it in your account menu, Security.' : 'Two-factor is now optional for admins.'), true);
+      renderUserChip();   // the account menu's two-factor reminder follows the switch
     }
 
     function groupSettings(data) {

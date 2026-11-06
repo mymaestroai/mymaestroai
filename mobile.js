@@ -5824,15 +5824,20 @@ async function copyRecoveryCodes() {
   catch { toast('Copy failed: select the codes and copy by hand'); }
 }
 
+let secDisableBusy = false;   // one removal at a time
 async function disableTwoFactor() {
-  const password = $('sec-2fa-password').value;
+  if (secDisableBusy) return;
+  const pwEl = $('sec-2fa-password');
+  const codeEl = $('sec-2fa-disable-code');
+  const password = pwEl.value;
   if (!password) return secMsg('sec-2fa-msg', 'Enter your password to turn 2FA off.');
   const body = { password };
-  const codeEl = $('sec-2fa-disable-code');
   if (codeEl) {
     body.code = (codeEl.value || '').trim();
     if (!body.code) return secMsg('sec-2fa-msg', 'Enter a current code or a recovery code.');
   }
+  pwEl.value = ''; if (codeEl) codeEl.value = '';   // the password goes in this one request and stays nowhere else
+  secDisableBusy = true;
   try {
     await authPost('/api/auth/totp/disable', body);
     hubMe.user.totpEnabled = false;
@@ -5840,6 +5845,7 @@ async function disableTwoFactor() {
     applyMultiUserNote();
     paintTwoFactor();
   } catch (e) { secMsg('sec-2fa-msg', e.message); }
+  finally { secDisableBusy = false; }
 }
 
 async function changePassword() {

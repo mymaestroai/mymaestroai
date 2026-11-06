@@ -218,9 +218,10 @@ test('round 2: final journal states are filed at the next start; a folder the ba
   assert.throws(() => apply.confirmUndo({ root: c.root }), (e) => e.code === 'ENOUNDO');
   // today's backup key settings win at the swap (a key replaced after the restore was checked doesn't come back)
   const d = await ready('keys-today');
-  const sf = path.join(d.root, 'data', 'settings.json'); const set = JSON.parse(read(sf)); set.backup = { key: { publicKey: 'today', keyId: 'feedfacefeedface' }, retired: [{ keyId: 'old' }] }; fs.writeFileSync(sf, JSON.stringify(set));
+  const sf = path.join(d.root, 'data', 'settings.json'); const set = JSON.parse(read(sf)); set.backup = { key: { publicKey: 'today', keyId: 'feedfacefeedface' }, retired: [{ keyId: 'old' }] }; set.requireAdmin2fa = false; fs.writeFileSync(sf, JSON.stringify(set));
   apply.applyAtBoot({ root: d.root });
   assert.deepStrictEqual(JSON.parse(read(sf)).backup, set.backup);
+  assert.strictEqual(JSON.parse(read(sf)).requireAdmin2fa, false, 'today\'s admin two-factor switch wins at the swap');
   assert.ok(!fs.existsSync(path.join(d.root, '.restore', 'prepared.json')), 'a checked backup is confirmed only once');
 });
 
