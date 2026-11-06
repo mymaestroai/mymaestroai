@@ -2263,9 +2263,9 @@
         <div id="bk-body" class="bk-body">Checking…</div>
       </div>`;
       setTimeout(loadBackups, 0);
-      // Modules (lib/modules): optional capabilities with guided setup live on their own page.
-      html += `<div class="st-section" id="st-modules-section"><h4>Modules</h4>
-        <div class="st-hint">Optional capabilities for agents (crypto exchanges, wallets, mail, search...), each with a step-by-step setup, encrypted keys and per-agent access. <a href="/modules" style="color:var(--accent)">Open the Modules page →</a></div>
+      // Data connectors (lib/modules): outside services with a guided setup live on their own page.
+      html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
+        <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>
       </div>`;
       setTimeout(loadReadiness, 0);
 
@@ -2463,8 +2463,8 @@
       </div>`;
         setTimeout(loadWebSearchStatus, 0);
       }
-      html += `<div class="st-section" id="st-cx-section"><h4>Data connectors</h4>
-        <div class="st-hint" style="margin-left:0">Outside services plugged in as data: a patient portal, any MCP server the hub starts, or one of the built-in skills wrapped as a connector. Each connector is open to all agents or only to the ones you name. A connector can always be on, or locked behind its own passphrase, or behind its group's passphrase (one unlock opens every connector in the group, say all of "medical"). Unlocks expire after an idle timeout (hub setting connectorsUnlockMinutes, default 240 minutes) and on restart. Sensitive connectors need the owner's policy nod for reads.</div>
+      html += `<div class="st-section" id="st-cx-section"><h4>Custom connectors (advanced)</h4>
+        <div class="st-hint" style="margin-left:0">Outside services plugged in as data: a patient portal, any MCP server the hub starts, or one of the built-in skills wrapped as a connector. Each connector is open to the lead agents always and to the other agents you name. A connector can always be on, or locked behind its own passphrase, or behind its group's passphrase (one unlock opens every connector in the group, say all of "medical"). Unlocks expire after an idle timeout (hub setting connectorsUnlockMinutes, default 240 minutes) and on restart. Sensitive connectors need the owner's policy nod for reads.</div>
         <div id="st-cx-status" style="font-size:0.78rem;color:var(--text-dim);min-height:1.1em;margin-bottom:6px"></div>
         <div id="st-cx-groups"></div>
         <div id="st-cx-list"></div>
@@ -3152,7 +3152,7 @@
           c.toolCount != null ? cxBadge(`${c.toolCount} tool${c.toolCount === 1 ? '' : 's'}`) : '',
           c.sensitive ? cxBadge('sensitive', 'var(--purple)') : '',
         ].join(' ');
-        const agents = Array.isArray(c.agents) ? (c.agents.length ? c.agents.map(hubEsc).join(', ') : 'no agents') : 'all agents';
+        const agents = Array.isArray(c.agents) ? (c.agents.length ? c.agents.map(hubEsc).join(', ') : 'no one besides the leads') : 'no one besides the leads';
         const protect = c.protect === 'own' ? 'own passphrase' : c.protect === 'group' ? `group ${hubEsc(c.group || '?')}` : 'no passphrase';
         const what = c.kind === 'skill' ? `skill ${hubEsc(c.skillId || '?')}` : `mcp ${hubEsc(c.command || '')}${Array.isArray(c.args) && c.args.length ? ' ' + hubEsc(c.args.join(' ')) : (typeof c.args === 'string' && c.args ? ' ' + hubEsc(c.args) : '')}`;
         const errObj = c.lastError && typeof c.lastError === 'object' ? c.lastError : null;
@@ -3302,8 +3302,9 @@
       const sel = (id, opts, cur, extra) => `<select id="${id}" style="padding:4px" ${extra || ''}>${opts.map(([v, l]) => `<option value="${hubEsc(v)}" ${cur === v ? 'selected' : ''}>${hubEsc(l)}</option>`).join('')}</select>`;
       const skills = Object.entries(cxState.skills || {}).map(([sid, s]) => [sid, `${(s && s.label) || sid} (${sid})`]);
       const groups = ((cxState.data && cxState.data.groups) || []).map(g => [g.id, `${g.label || g.id} (${g.id})`]);
-      const agentNames = (Array.isArray(AGENTS) ? AGENTS : []).map(a => a && (a.name || a.id)).filter(Boolean);
-      const grantAll = !Array.isArray(c.agents);
+      const allAgents = (Array.isArray(AGENTS) ? AGENTS : []).filter(a => a && (a.name || a.id));
+      const leadNames = allAgents.filter(a => a.lead === true).map(a => a.name || a.id);
+      const agentNames = allAgents.filter(a => a.lead !== true).map(a => a.name || a.id);
       const granted = new Set(Array.isArray(c.agents) ? c.agents : []);
       const argsText = Array.isArray(c.args) ? c.args.join(' ') : (c.args || '');
       const secretNames = Array.isArray(c.secretNames) ? c.secretNames : [];
@@ -3327,8 +3328,8 @@
         <div id="st-cx-f-skill">
           <div class="st-row">${L('Skill')}${skills.length ? sel('st-cx-f-skillId', skills, c.skillId || skills[0][0]) : `<input type="text" id="st-cx-f-skillId" value="${hubEsc(c.skillId || '')}" placeholder="skill id">`}</div>
         </div>
-        <div class="st-row">${L('Agents')}<label style="flex:0 0 auto;text-align:left"><input type="checkbox" id="st-cx-f-all" ${grantAll ? 'checked' : ''} onchange="cxFormAgentsChange()"> all agents</label></div>
-        <div id="st-cx-f-agents" class="cx-checks" style="${grantAll ? 'display:none' : ''}">${agentNames.length ? agentNames.map(n => `<label><input type="checkbox" data-cx-agent="${hubEsc(n)}" ${granted.has(n) ? 'checked' : ''}> ${hubEsc(n)}</label>`).join('') : '<span class="cx-sub">no agents loaded</span>'}</div>
+        <div class="st-row">${L('Agents')}<span class="cx-sub">The lead agents can always use it; tick the others that may.</span></div>
+        <div id="st-cx-f-agents" class="cx-checks">${leadNames.map(n => `<label><input type="checkbox" checked disabled> ${hubEsc(n)} (lead): always</label>`).join('')}${agentNames.length ? agentNames.map(n => `<label><input type="checkbox" data-cx-agent="${hubEsc(n)}" ${granted.has(n) ? 'checked' : ''}> ${hubEsc(n)}</label>`).join('') : (leadNames.length ? '' : '<span class="cx-sub">no agents loaded</span>')}</div>
         <div class="st-row">${L('Protect')}${sel('st-cx-f-protect', [['none', 'none: always on'], ['own', 'own passphrase'], ['group', 'group passphrase']], c.protect || 'none', 'onchange="cxFormProtectChange()"')}<span id="st-cx-f-group-wrap">${groups.length ? sel('st-cx-f-group', groups, c.group || groups[0][0], 'onchange="cxFormProtectChange()"') : '<span class="cx-sub">no groups yet</span>'}</span></div>
         <div class="st-row" id="st-cx-f-curpass-row">${L('Current passphrase')}<input type="password" id="st-cx-f-curpass" autocomplete="off" style="max-width:220px"><span class="cx-sub">needed to change how a protected connector is locked</span></div>
         <div id="st-cx-f-newpass-rows">
@@ -3421,7 +3422,7 @@
         body.skillId = v('st-cx-f-skillId').trim();
         if (!body.skillId) return fail('Pick a skill.');
       }
-      body.agents = chk('st-cx-f-all') ? null : Array.from(document.querySelectorAll('#st-cx-f-agents input[data-cx-agent]')).filter(i => i.checked).map(i => i.dataset.cxAgent);
+      body.agents = Array.from(document.querySelectorAll('#st-cx-f-agents input[data-cx-agent]')).filter(i => i.checked).map(i => i.dataset.cxAgent);
       if (protect === 'group') {
         body.group = v('st-cx-f-group');
         if (!body.group) return fail('Group protection needs a group: create one first.');
@@ -4865,7 +4866,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', connectors: q.get('connectors') === '1' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -4942,6 +4943,7 @@
       if (t.security) openSecurityDialog();
       if (t.backups) openSettingsAt('st-backups-section');
       if (t.memory) openSettingsAt('st-memory-section');
+      if (t.connectors) openSettingsAt('st-modules-section');
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
       if (!t.agent) return;
       let a = AGENTS.find(x => x.name === t.agent);
@@ -4974,9 +4976,9 @@
       // (a backup warning), ?memory=1 the memory check, ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.connectors)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'connectors']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       openTargets.ready(own);

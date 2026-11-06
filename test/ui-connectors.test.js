@@ -10,13 +10,13 @@ const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const app = read('app.js');
 const index = read('index.html');
 
-test('Settings has a Data connectors section with a plain-language hint', () => {
-  assert.match(app, /<div class="st-section" id="st-cx-section"><h4>Data connectors<\/h4>/);
+test('Settings has a Custom connectors (advanced) section with a plain-language hint', () => {
+  assert.match(app, /<div class="st-section" id="st-cx-section"><h4>Custom connectors \(advanced\)<\/h4>/);
   const at = app.indexOf('id="st-cx-section"');
   const hint = app.slice(at, at + 1500);
   assert.match(hint, /passphrase/);
   assert.match(hint, /connectorsUnlockMinutes, default 240/);
-  assert.match(hint, /all agents or only to the ones you name/);
+  assert.match(hint, /open to the lead agents always and to the other agents you name/);
   assert.match(app, /setTimeout\(loadConnectors, 0\);/, 'box loads after the modal opens');
   assert.match(app, /onclick="cxLockAll\(\)">Lock everything<\/button>/);
 });
@@ -47,7 +47,7 @@ test('talks to the connectors API exactly, with credentials', () => {
   assert.match(app, /cxApi\('\/api\/agents'\)/, 'agents picker fallback');
   // Save body carries the documented fields.
   const save = app.slice(app.indexOf('async function cxSave()'), app.indexOf('function onConnectorsChanged'));
-  for (const k of ['body.command', 'body.args = cxParseArgs', 'body.skillId', 'body.agents = chk(\'st-cx-f-all\') ? null', 'body.group', 'body.passphrase = curpass', 'body.newPassphrase = np', 'body.secrets = secrets', 'body.tools[s.dataset.cxTool] = { cls:']) {
+  for (const k of ['body.command', 'body.args = cxParseArgs', 'body.skillId', 'body.agents = Array.from(','body.group', 'body.passphrase = curpass', 'body.newPassphrase = np', 'body.secrets = secrets', 'body.tools[s.dataset.cxTool] = { cls:']) {
     assert.ok(save.includes(k), `cxSave sets ${k}`);
   }
   assert.match(save, /sensitive: chk\('st-cx-f-sensitive'\)/);
@@ -77,8 +77,13 @@ test('the form: id read-only when editing, kind toggles mcp vs skill rows, agent
   assert.match(app, /<option value="mcp"|\[\['mcp', 'mcp: a stdio MCP server the hub starts'\], \['skill', 'skill: a built-in skill'\]\]/);
   assert.match(app, /mcp\.style\.display = kind === 'mcp' \? '' : 'none'/);
   assert.match(app, /skill\.style\.display = kind === 'skill' \? '' : 'none'/);
-  assert.match(app, /id="st-cx-f-all" \$\{grantAll \? 'checked' : ''\}/);
+  assert.ok(!app.includes('id="st-cx-f-all"') && !/> all agents</.test(app), 'no "all agents" option');
+  assert.match(app, /const leadNames = allAgents\.filter\(a => a\.lead === true\)/);
+  assert.match(app, /<input type="checkbox" checked disabled> \$\{hubEsc\(n\)\} \(lead\): always/, 'leads are checked and locked');
+  assert.match(app, /const agentNames = allAgents\.filter\(a => a\.lead !== true\)/, 'other agents get checkboxes');
   assert.match(app, /data-cx-agent="\$\{hubEsc\(n\)\}"/);
+  assert.match(app, /'no one besides the leads'\) : 'no one besides the leads'/, 'agents null reads as the leads only');
+  assert.match(app, /body\.agents = Array\.from\(document\.querySelectorAll\('#st-cx-f-agents input\[data-cx-agent\]'\)\)\.filter\(i => i\.checked\)\.map\(i => i\.dataset\.cxAgent\);/, 'saved value: the checked non-lead agents, [] when none');
   assert.match(app, /\[\['none', 'none: always on'\], \['own', 'own passphrase'\], \['group', 'group passphrase'\]\]/);
   assert.match(app, /np\.style\.display = protect === 'own' \? '' : 'none'/);
   assert.match(app, /cur\.style\.display = changing \? '' : 'none'/);
