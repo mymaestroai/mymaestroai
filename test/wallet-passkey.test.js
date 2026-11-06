@@ -103,15 +103,16 @@ test('b64u and fromB64u round trip and refusals', () => {
 
 test('rpFromOrigin accepts good addresses', () => {
   assert.deepStrictEqual(pk.rpFromOrigin('https://hub.example.ts.net'), { rpId: RP, origin: ORIGIN });
-  assert.deepStrictEqual(pk.rpFromOrigin('http://localhost:9999'), { rpId: 'localhost', origin: 'http://localhost:9999' });
   assert.strictEqual(pk.rpFromOrigin('https://HUB.Example.ts.net/path').rpId, RP);
 });
 
 test('rpFromOrigin refuses bad addresses', () => {
-  for (const bad of ['http://127.0.0.1:9999', 'https://192.168.0.10', 'http://[::1]:9999', 'http://hub.example.com', 'not a url', undefined, 'ftp://hub.example.ts.net']) {
+  for (const bad of ['http://localhost:9999', 'https://localhost', 'https://dev.localhost', 'https://127.0.0.1', 'http://127.0.0.1:9999', 'https://192.168.0.10', 'http://[::1]:9999', 'http://hub.example.com', 'not a url', undefined, 'ftp://hub.example.ts.net']) {
     throwsCode(() => pk.rpFromOrigin(bad), 'bad_address');
   }
   assert.throws(() => pk.rpFromOrigin('https://192.168.0.10'), /192\.168\.0\.10/);
+  assert.throws(() => pk.rpFromOrigin('https://localhost'), /secure tailnet address \(https\), not on localhost\./);
+  assert.throws(() => pk.rpFromOrigin('http://hub.example.ts.net'), /need My Maestro's secure \(https\) address\./);
   assert.strictEqual(pk.passkeyError('x', 'm').status, 400);
 });
 

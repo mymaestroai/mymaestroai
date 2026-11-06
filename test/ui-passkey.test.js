@@ -74,15 +74,19 @@ test('pkUsable: no API, an address number, a plain http name, https and localhos
     assert.deepStrictEqual(r, { ok: true, code: '', text: '' });
     r = pkUsable(at('http:', '127.0.0.1'), win);
     assert.strictEqual(r.ok, false); assert.strictEqual(r.code, 'bad_address');
-    assert.ok(r.text.includes('127.0.0.1') && r.text.includes('localhost') && r.text.includes('tailnet'), r.text);
+    assert.ok(r.text.includes('127.0.0.1') && r.text.includes('tailnet') && r.text.includes('(https)'), r.text);
     r = pkUsable(at('https:', '192.168.0.10'), win);
     assert.strictEqual(r.code, 'bad_address', 'a number is refused even over https');
     r = pkUsable(at('http:', '[::1]'), win);
     assert.strictEqual(r.code, 'bad_address'); assert.ok(r.text.includes('[::1]'));
     r = pkUsable(at('http:', 'hub.example.ts.net'), win);
-    assert.strictEqual(r.code, 'bad_address'); assert.ok(r.text.includes('secure (https) address, or localhost'), r.text);
-    assert.strictEqual(pkUsable(at('http:', 'localhost'), win).ok, true);
-    assert.strictEqual(pkUsable(at('https:', 'localhost'), win).ok, true);
+    assert.strictEqual(r.code, 'bad_address'); assert.strictEqual(r.text, "Face ID and fingerprint need My Maestro's secure (https) address.");
+    r = pkUsable(at('http:', 'localhost'), win);
+    assert.strictEqual(r.ok, false, 'localhost is not usable any more'); assert.strictEqual(r.code, 'bad_address');
+    assert.strictEqual(r.text, "Face ID and fingerprint work on My Maestro's secure tailnet address (https), not on localhost.");
+    assert.strictEqual(pkUsable(at('https:', 'localhost'), win).ok, false, 'not even over https');
+    assert.strictEqual(pkUsable(at('https:', 'hub.localhost'), win).ok, false, '*.localhost too');
+    assert.strictEqual(pkUsable(at('https:', 'hub.example.ts.net'), win).ok, true);
   }).then(() => withNavigator({}, () => {
     assert.strictEqual(pkUsable({ protocol: 'https:', hostname: 'hub.example.ts.net' }, win).code, 'no_api', 'no navigator.credentials');
   }));
@@ -115,6 +119,9 @@ test('pkDeviceLabel: a short name from the platform or the user agent', () => {
   assert.strictEqual(pkDeviceLabel({}), 'This device');
 });
 
+const WORDING = "Unlock the wallet with Face ID, a fingerprint or the screen lock instead of typing the passphrase. Add each device once with the passphrase. Your device's password manager may copy the passkey to your other devices; each one still asks for your face, fingerprint or screen lock.";
+const REMOVE_CONFIRM_JS = `Remove "\${label}"? It will stop unlocking this wallet. Copies of the wallet file made before now still accept it, protected by that passkey's own Face ID, fingerprint or screen lock.`;
+const STRAY =' A passkey named "My Maestro wallet" may have been saved on this device; you can delete it in its password manager.';
 const ID1 = b64(1, 2, 3), ID2 = b64(4, 5, 6), SALT1 = b64(10, 11), SALT2 = b64(12, 13);
 const unlockOptions = (ids) => ({
   challenge: b64(9, 9, 9), rpId: 'hub.example.ts.net', timeout: 120000, userVerification: 'required',
@@ -227,7 +234,7 @@ test('pkAdd: no PRF result even after the confirm tap is refused, and nothing is
     'passkey/register': {},
   });
   await assert.rejects(withNavigator(nav, () => pkAdd(api, { passphrase: 'pw', label: 'x' }, async () => {})),
-    { message: "This device didn't give the unlock secret, so it can't unlock the wallet." });
+    { message: "This device didn't give the unlock secret, so it can't unlock the wallet." + STRAY });
   assert.ok(!api.calls.some(c => c[0] === 'passkey/register'));
 });
 
@@ -235,7 +242,7 @@ test('pkAdd: prf.enabled === false is refused before any register call', async (
   const nav = { credentials: { create: async () => created({ enabled: false }) } };
   const api = fakeApi({ 'passkey/options': registerOptions(), 'passkey/register': {} });
   await assert.rejects(withNavigator(nav, () => pkAdd(api, { passphrase: 'pw', label: 'x' }, async () => {})),
-    { message: "This device's passkeys can't unlock the wallet. Keep using the passphrase here." });
+    { message: "This device's passkeys can't unlock the wallet. Keep using the passphrase here." + STRAY });
   assert.deepStrictEqual(api.calls.map(c => c[0]), ['passkey/options']);
 });
 
@@ -266,20 +273,28 @@ test('the desktop Wallet panel: unlock button, passkey box, deep link', () => {
   // the box: right after the Unlock box; labels and addresses escaped; remove by id; the add form or the reason
   assert.match(panel, /\$\{unlockBox\}\$\{passkeyBox\}\$\{revealOut\}/);
   const box = block(panel, 'const pkRows', 'let html =');
-  assert.match(box, /Unlock the wallet with this device's Face ID, fingerprint or screen lock instead of typing the passphrase\. Each device and each address \(this computer, the tailnet address\) is set up once with the passphrase\./);
+  assert.ok(box.includes(WORDING), 'the new sentence under the heading');
   assert.match(box, /<strong>\$\{esc\(p\.label\)\}<\/strong>/);
   assert.match(box, /\$\{esc\(p\.rpId\)\}/);
-  assert.match(box, /data-pk-id="\$\{esc\(p\.id\)\}" data-pk-label="\$\{esc\(p\.label\)\}"/);
-  assert.match(box, /id="pk-label" value="\$\{esc\(pkDeviceLabel\(\)\)\}"/);
+  // esc() leaves quotes alone: everything inside an attribute uses the attribute-safe helper; no label in an attribute
+  assert.match(box, /data-pk-id="\$\{escAttr\(p\.id\)\}" onclick="walletAct\('pkremove', this\.dataset\.pkId\)"/);
+  assert.ok(!/data-pk-label/.test(box), 'the label is not carried in an attribute');
+  assert.match(box, /id="pk-label" value="\$\{escAttr\(pkDeviceLabel\(\)\)\}"/);
+  assert.ok(!/(?:data-[a-z-]+|value|title|placeholder)="\$\{esc\(/.test(box), 'no esc() inside an attribute in the passkey box');
   assert.match(box, /id="pk-pass" type="password" autocomplete="off"/);
   assert.match(box, /\$\{esc\(pkOk\.text\)\}/, 'the reason instead of the form');
-  assert.match(box, /<input type="checkbox" id="pk-notice" \$\{s\.lockedNotice \? 'checked' : ''\} onchange="walletLockedNotice\(this\)"> Tell my phone when the wallet is locked after a restart/);
+  assert.match(box, /<input type="checkbox" id="pk-notice" \$\{s\.lockedNotice \? 'checked' : ''\} onchange="walletLockedNotice\(this\)"> Send admins a phone notice when the wallet is locked after a restart/);
   // the actions
   const act = block(app, 'async function walletPasskeyAct(', '\n    async function walletAct(');
-  assert.match(act, /confirm\(`Remove \$\{label\}\? That device will no longer unlock the wallet\.`\)/);
+  assert.ok(act.includes(REMOVE_CONFIRM_JS), 'the new remove confirm');
+  assert.match(act, /walletPkList\.find\(p => p\.id === id\)/, 'the label is looked up by id');
   assert.match(act, /walletApi\('passkey\/remove', \{ id \}\); return openWalletPanel\('Removed\.'\)/);
-  assert.match(act, /await pkUnlock\(walletApi\); return openWalletPanel\('Unlocked until the hub restarts\.'\)/);
-  assert.match(act, /await pkAdd\(walletApi, \{ passphrase, label: name \}, confirmStep\);/);
+  assert.match(act, /await pkUnlock\(walletApi, run\.ctrl\.signal\); return openWalletPanel\('Unlocked until the hub restarts\.'\)/);
+  assert.match(act, /await pkAdd\(walletApi, \{ passphrase, label: name \}, confirmStep, run\.ctrl\.signal\);/);
+  assert.match(act, /run = pkCurrent = \{ ctrl: new AbortController\(\), rejectConfirm: null \}/);
+  assert.match(act, /finally \{[\s\S]*busy\(false\)[\s\S]*pk-confirm-row[\s\S]*pk-pass/, 'busy, confirm row and passphrase field are reset in a finally');
+  assert.match(act, /pkCurrent === run/, 'a cancelled run does not paint over a newer one');
+  assert.match(block(panel, 'pkCancel();', 'let s;'), /^pkCancel\(\);/, 'a redraw cancels the running prompt');
   assert.match(act, /openWalletPanel\(`Added\. \$\{name\} can now unlock the wallet\.`\)/);
   assert.ok(act.indexOf("passEl.value = ''") > 0 && act.indexOf("passEl.value = ''") < act.indexOf('await pkAdd('), 'the passphrase field is emptied before the request');
   assert.match(act, /Confirm with Face ID \/ fingerprint/);
@@ -310,18 +325,24 @@ test('the phone Wallet sheet: admin-only menu item, passkey buttons, deep link',
   assert.match(paint, /Unlock with passphrase/);
   assert.match(paint, /<strong>\$\{esc\(p\.label\)\}<\/strong>/);
   assert.match(paint, /\$\{esc\(p\.rpId\)\}/);
-  assert.match(paint, /data-id="\$\{esc\(p\.id\)\}" data-label="\$\{esc\(p\.label\)\}"/);
+  assert.match(paint, /data-id="\$\{esc\(p\.id\)\}">Remove/);
+  assert.ok(!/data-label/.test(paint) && !/dataset\.label/.test(mob.slice(mob.indexOf('function walletSheet('))), 'the label is looked up by id, not carried in an attribute');
   assert.match(paint, /id="wl-pk-label" value="\$\{esc\(pkDeviceLabel\(\)\)\}"/);
   assert.match(paint, /id="wl-pk-pass" type="password" autocomplete="off"/);
   assert.match(paint, /\$\{esc\(pkOk\.text\)\}/, 'the reason instead of the form');
-  assert.match(paint, /<input type="checkbox" id="wl-notice" \$\{s\.lockedNotice \? 'checked' : ''\}> Tell this phone when the wallet is locked after a restart/);
-  assert.match(paint, /Unlock with this phone's Face ID, fingerprint or screen lock instead of the passphrase\. Set it up once with the passphrase\./);
+  assert.match(paint, /<input type="checkbox" id="wl-notice" \$\{s\.lockedNotice \? 'checked' : ''\}> Send admins a phone notice when the wallet is locked after a restart/);
+  assert.ok(paint.includes(WORDING), 'the new sentence under the heading');
   // the actions
   const act = block(mob, 'async function walletAct(', '// The after-restart notice');
-  assert.match(act, /confirm\(`Remove \$\{label\}\? That device will no longer unlock the wallet\.`\)/);
+  assert.ok(act.includes(REMOVE_CONFIRM_JS), 'the new remove confirm');
+  assert.match(act, /\.passkeys\) \|\| \[\]\)\.find\(p => p\.id === id\)/, 'the label is looked up by id');
   assert.match(act, /walletApi\('passkey\/remove', \{ id \}\)/);
-  assert.match(act, /await pkUnlock\(walletApi\)/);
-  assert.match(act, /await pkAdd\(walletApi, \{ passphrase, label: name \}, confirmStep\);/);
+  assert.match(act, /await pkUnlock\(walletApi, run\.ctrl\.signal\)/);
+  assert.match(act, /await pkAdd\(walletApi, \{ passphrase, label: name \}, confirmStep, run\.ctrl\.signal\);/);
+  assert.match(act, /finally \{[\s\S]*walletSetBusy\(false\)[\s\S]*wl-confirm-row[\s\S]*#wl-pass/, 'busy, confirm row and passphrase fields are reset in a finally');
+  assert.match(act, /pkCurrent === run/, 'a cancelled run does not paint over a newer one');
+  assert.match(block(mob, 'function walletSheet(', 'function openWalletSheet('), /const close = \(\) => \{ pkCancel\(\);/, 'closing the sheet cancels');
+  assert.match(block(mob, 'function walletPaint(', 'const s = walletStatus'), /pkCancel\(\)/, 'a repaint cancels');
   assert.match(act, /await walletApi\('unlock', \{ passphrase \}\)/);
   assert.ok(act.indexOf("passEl.value = ''") > 0 && act.indexOf("passEl.value = ''") < act.indexOf("await walletApi('unlock'"), 'the passphrase field is emptied before the request');
   assert.ok(act.indexOf("passEl.value = ''") < act.indexOf('await pkAdd('), 'and before the passkey request');
@@ -341,4 +362,66 @@ test('the phone Wallet sheet: admin-only menu item, passkey buttons, deep link',
 
 test('the service worker maps the phone notice /mobile?wallet=unlock to the desktop /?wallet=unlock', () => {
   assert.match(read('sw.js'), /if \(u\.searchParams\.get\('wallet'\) === 'unlock'\) return '\/\?wallet=unlock';/);
+});
+
+test('pkUnlock and pkAdd hand the AbortSignal to every WebAuthn call', async () => {
+  const ctrl = new AbortController();
+  const seen = [];
+  const nav = { credentials: {
+    get: async (o) => { seen.push(['get', o.signal]); return assertion(u8(7).buffer); },
+    create: async (o) => { seen.push(['create', o.signal]); return created({ enabled: true, results: { first: u8(40).buffer } }); },
+  } };
+  const api = fakeApi({
+    'passkey/options': (b) => (b.purpose === 'unlock' ? unlockOptions([ID1]) : registerOptions()),
+    'passkey/unlock': {}, 'passkey/register': {},
+  });
+  await withNavigator(nav, () => pkUnlock(api, ctrl.signal));
+  await withNavigator(nav, () => pkAdd(api, { passphrase: 'pw', label: 'x' }, async () => {}, ctrl.signal));
+  assert.deepStrictEqual(seen.map(s => s[0]), ['get', 'create']);
+  assert.ok(seen.every(s => s[1] === ctrl.signal), 'the same signal everywhere');
+  // the confirm-step get carries it too
+  seen.length = 0;
+  const nav2 = { credentials: {
+    get: async (o) => { seen.push(['get', o.signal]); return assertion(u8(7).buffer); },
+    create: async (o) => { seen.push(['create', o.signal]); return created({ enabled: true }); },
+  } };
+  const api2 = fakeApi({
+    'passkey/options': (b) => (b.purpose === 'register' ? registerOptions() : { challenge: b64(6), rpId: 'x', timeout: 1, prfSalt: SALT2 }),
+    'passkey/register': {},
+  });
+  await withNavigator(nav2, () => pkAdd(api2, { passphrase: 'pw', label: 'x' }, async () => {}, ctrl.signal));
+  assert.deepStrictEqual(seen.map(s => s[0]), ['create', 'get']);
+  assert.ok(seen.every(s => s[1] === ctrl.signal));
+  seen.length = 0;
+  await withNavigator(nav, () => pkUnlock(api));
+  assert.strictEqual(seen[0][1], undefined, 'no signal is fine');
+});
+
+test('pkAdd: a confirm step that rejects ends the add and sends nothing more', async () => {
+  const nav = { credentials: { create: async () => created({ enabled: true }), get: async () => { throw new Error('asked again'); } } };
+  const api = fakeApi({ 'passkey/options': registerOptions(), 'passkey/register': {} });
+  const cancel = new DOMException('Cancelled.', 'AbortError');
+  await assert.rejects(withNavigator(nav, () => pkAdd(api, { passphrase: 'pw', label: 'x' }, () => Promise.reject(cancel))), (e) => e === cancel);
+  assert.deepStrictEqual(api.calls.map(c => c[0]), ['passkey/options'], 'no confirm options, no register');
+});
+
+test('a passkey label with quotes and tags never reaches an attribute raw (desktop and phone)', () => {
+  const evil = `a" b='c <i>`;
+  const list = [{ id: 'id"1', label: evil, rpId: 'hub.example.ts.net', createdAt: 1 }];
+  // desktop: the page's escAttr and its row template, evaluated with a stand-in esc()
+  const app = read('app.js');
+  const escAttrSrc = block(app, 'const escAttr = ', '\n').trim();
+  const rowSrc = block(app, 'pkList.map(p => `', ".join('')");
+  const esc = (s) => String(s).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  const dHtml = new Function('esc', 'pkList', `${escAttrSrc}\nreturn ${rowSrc}.join('');`)(esc, list);
+  const attrs = [...dHtml.matchAll(/="([^"]*)"/g)].map(m => m[1]).join('|');
+  assert.ok(!attrs.includes(evil) && !attrs.includes("'c") && !/[<>]/.test(attrs), attrs);
+  assert.ok(!dHtml.includes('data-pk-label'), 'no label attribute at all');
+  assert.ok(dHtml.includes('data-pk-id="id&quot;1"'), dHtml);
+  // phone: the label is looked up by id and its esc() escapes quotes
+  const mob = read('mobile.js');
+  const mobRow = block(mob, 'const rows = pkList.map(p => `', 'Remove</button>');
+  assert.ok(!/data-label/.test(mobRow) && /data-id="\$\{esc\(p\.id\)\}"/.test(mobRow));
+  const mobEsc = block(mob, 'function esc(s) {', '\n}\n');
+  assert.ok(mobEsc.includes('&quot;') && mobEsc.includes('&#39;'), 'the phone esc() escapes quotes');
 });

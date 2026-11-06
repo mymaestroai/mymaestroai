@@ -88,13 +88,16 @@ function setup() {
   const settings = {};
   const challenges = pk.createChallenges({ now });
   const warns = [];
+  const notices = [];
+  const hooks = { notify: (p) => { notices.push(p); } };
   const routes = createPasskeyRoutes({
     svc, getSetting: (k) => settings[k], challenges, now, log: { warn: (m) => warns.push(m), log() {}, error() {} }, walletAgents: () => ['trader'],
+    notify: (p) => hooks.notify(p),
   });
   const call = (route, body, over = {}) => routes.handle({
     pathname: '/api/wallet/passkey/' + route, method: 'POST', body, origin: ORIGIN, host: RP, user: OWNER, ownerBrowser: true, ...over,
   });
-  return { dir, ks, audits, clock, svc, settings, routes, call, warns, challenges };
+  return { dir, ks, audits, clock, svc, settings, routes, call, warns, challenges, notices, hooks };
 }
 
 function withKeystore(env) {
@@ -126,6 +129,11 @@ test('refusals: method, owner browser, address, keystore, other paths', async ()
   const bad = await env.call('options', {}, { origin: 'http://127.0.0.1:9999', host: '127.0.0.1:9999' });
   assert.strictEqual(bad.status, 400);
   assert.strictEqual(bad.json.code, 'bad_address');
+  for (const o of ['http://localhost:9999', 'https://localhost', 'https://dev.localhost', 'http://hub.example.ts.net']) {
+    const r = await env.call('options', {}, { origin: o, host: new URL(o).host });
+    assert.strictEqual(r.status, 400, o);
+    assert.strictEqual(r.json.code, 'bad_address', o);
+  }
   const noOrigin = await env.call('options', {}, { origin: undefined });
   assert.strictEqual(noOrigin.json.code, 'bad_address');
   const other = await env.call('options', {}, { host: 'other.example.ts.net' });
@@ -144,6 +152,9 @@ test('register with PRF at create: added, listed in status, audited without secr
   const { a, res, opts } = await registerPasskey(env);
   assert.strictEqual(opts.json.rp.id, RP);
   assert.strictEqual(opts.json.user.name, 'owner@example.com');
+  assert.strictEqual(pk.fromB64u(opts.json.user.id).length, 16);
+  const opts2 = await env.call('options', { purpose: 'register', passphrase: PASS });
+  assert.notStrictEqual(opts2.json.user.id, opts.json.user.id);
   assert.deepStrictEqual(opts.json.pubKeyCredParams.map((p) => p.alg), [-7, -8, -257]);
   assert.strictEqual(opts.json.authenticatorSelection.userVerification, 'required');
   assert.deepStrictEqual(opts.json.excludeCredentials, []);
@@ -211,7 +222,7 @@ test('register with a confirm assertion; a confirm tied to another challenge is 
   assert.strictEqual(miss.json.code, 'expired');
 });
 
-test('wrong passphrase counts; ten failures block options, register and unlock; allowed again after 15 minutes', async () => {
+test('wrong passphrase counts; ten failures block options and register only; allowed again after 15 minutes', async () => {
   const env = withKeystore(setup());
   const { a } = await registerPasskey(env);
   env.ks.lock();
@@ -226,14 +237,84 @@ test('wrong passphrase counts; ten failures block options, register and unlock; 
   assert.strictEqual(blocked.status, 429);
   assert.strictEqual(blocked.json.code, 'too_many');
   assert.strictEqual((await env.call('register', {})).status, 429);
-  assert.strictEqual((await env.call('unlock', {})).status, 429);
-  // other purposes and other users are not blocked
-  assert.strictEqual((await env.call('options', { purpose: 'unlock' })).status, 200);
+  // unlock has its own counter: passphrase failures do not block it
+  assert.notStrictEqual((await env.call('unlock', {})).status, 429);
+  const uo = await env.call('options', { purpose: 'unlock' });
+  assert.strictEqual(uo.status, 200);
+  const id = pk.b64u(a.credId);
+  const viaPasskey = await env.call('unlock', { ...assertionFor(a, uo.json.challenge), id, prf: pk.b64u(a.prf) });
+  assert.strictEqual(viaPasskey.status, 200, JSON.stringify(viaPasskey.json));
+  // other users are not blocked
+  env.ks.lock();
   assert.strictEqual((await env.call('options', { purpose: 'register', passphrase: PASS }, { user: SAM })).status, 200);
   env.clock.t += 15 * 60 * 1000 + 1;
   const ok = await env.call('options', { purpose: 'register', passphrase: PASS });
   assert.strictEqual(ok.status, 200);
   assert.ok(a);
+});
+
+test('ten failed unlocks block unlock only, not registration', async () => {
+  const env = withKeystore(setup());
+  const { a } = await registerPasskey(env);
+  env.ks.lock();
+  const id = pk.b64u(a.credId);
+  for (let i = 0; i < 10; i++) {
+    const o = await env.call('options', { purpose: 'unlock' });
+    const r = await env.call('unlock', { ...assertionFor(a, o.json.challenge), id, prf: pk.b64u(crypto.randomBytes(32)) });
+    assert.strictEqual(r.status, 401);
+  }
+  const o = await env.call('options', { purpose: 'unlock' });
+  const blocked = await env.call('unlock', { ...assertionFor(a, o.json.challenge), id, prf: pk.b64u(a.prf) });
+  assert.strictEqual(blocked.status, 429);
+  assert.strictEqual(blocked.json.code, 'too_many');
+  const b = makeAuthenticator();
+  const opts = await env.call('options', { purpose: 'register', passphrase: PASS });
+  assert.strictEqual(opts.status, 200);
+  const res = await env.call('register', {
+    passphrase: PASS, label: 'Second', challenge: opts.json.challenge,
+    credential: credentialFor(b, opts.json.challenge), prf: pk.b64u(b.prf),
+  });
+  assert.strictEqual(res.status, 200, JSON.stringify(res.json));
+  env.clock.t += 15 * 60 * 1000 + 1;
+  const o2 = await env.call('options', { purpose: 'unlock' });
+  const good = await env.call('unlock', { ...assertionFor(a, o2.json.challenge), id, prf: pk.b64u(a.prf) });
+  assert.strictEqual(good.status, 200);
+});
+
+test('admins are told when a passkey is added or removed; a failing notify never changes the reply', async () => {
+  const env = withKeystore(setup());
+  const { a, res } = await registerPasskey(env);
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(env.notices.length, 1);
+  assert.deepStrictEqual(env.notices[0], {
+    title: 'Wallet passkey added',
+    body: `"My phone" can now unlock the wallet (${RP}). If this wasn't you, remove it in the Wallet panel and change your password.`,
+    url: '/mobile?wallet=unlock',
+    tag: 'wallet-passkey',
+  });
+  const removed = await env.call('remove', { id: pk.b64u(a.credId) });
+  assert.strictEqual(removed.status, 200);
+  assert.strictEqual(env.notices.length, 2);
+  assert.deepStrictEqual(env.notices[1], {
+    title: 'Wallet passkey removed',
+    body: '"My phone" can no longer unlock the wallet.',
+    url: '/mobile?wallet=unlock',
+    tag: 'wallet-passkey',
+  });
+  const text = JSON.stringify(env.notices);
+  assert.ok(!text.includes(PASS));
+  assert.ok(!text.includes(pk.b64u(a.prf)));
+
+  env.hooks.notify = () => { throw new Error('push down'); };
+  const b = await registerPasskey(env);
+  assert.strictEqual(b.res.status, 200);
+  env.hooks.notify = () => Promise.reject(new Error('push down'));
+  const c = await registerPasskey(env);
+  assert.strictEqual(c.res.status, 200);
+  const rm = await env.call('remove', { id: pk.b64u(c.a.credId) });
+  assert.strictEqual(rm.status, 200);
+  await new Promise((r) => setImmediate(r));
+  assert.ok(env.warns.some((w) => w.includes('passkey notice failed')));
 });
 
 test('register with a wrong passphrase at the final step is refused and counted', async () => {
@@ -388,4 +469,5 @@ test('server.js wires the passkey routes, status, setting and start-up notice', 
   assert.match(src, /require\('\.\/lib\/wallet\/locked-notice'\)\.walletLockedNotice\(/);
   assert.match(src, /LOCKED_NOTICE_DELAY_MS\)\.unref\(\)/);
   assert.match(src, /createPasskeyRoutes\(\{ svc: require\('\.\/lib\/wallet\/service'\)\.getWalletService\(\)/);
+  assert.match(src, /notify: \(p\) => require\('\.\/lib\/push'\)\.getPush\(\)\.notifyEach\(p, \{ adminsOnly: true, urgency: 'high' \}\)/);
 });

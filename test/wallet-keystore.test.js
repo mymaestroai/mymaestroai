@@ -156,6 +156,8 @@ describe('wallet keystore: passkeys (Face ID / fingerprint unlock)', () => {
     assert.throws(() => ks.addPasskey(s), /already set up/);
     assert.throws(() => ks.addPasskey(slot({ id: id(2), rpId: '127.0.0.1' })), /web address name/);
     assert.throws(() => ks.addPasskey(slot({ id: id(2), rpId: 'Bad Host' })), /web address name/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), rpId: 'localhost' })), /not localhost/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), rpId: 'dev.localhost' })), /not localhost/);
     assert.throws(() => ks.addPasskey(slot({ id: id(2), alg: -35 })), /signature type/);
     assert.throws(() => ks.addPasskey(slot({ id: id(2), salt: 'abc' })), /salt/);
     assert.throws(() => ks.addPasskey(slot({ id: id(2), publicKey: 'short' })), /public key/);
@@ -170,6 +172,18 @@ describe('wallet keystore: passkeys (Face ID / fingerprint unlock)', () => {
     assert.strictEqual(gone.id, s.id); assert.strictEqual(ks.passkeys().length, 9);
     assert.throws(() => ks.unlockWithPasskey(s.id, s.prfOutput), /not set up/);
     assert.throws(() => ks.removePasskey(s.id), /No such passkey/);
+  });
+  it('labels are cleaned for any page, and malformed entries in the file are skipped', () => {
+    const ks = mk(); ks.init(PASS); const s = slot({ label: 'x" onmouseover=\'go()\' <b>`' }); ks.addPasskey(s);
+    assert.strictEqual(ks.passkeys()[0].label, 'x onmouseover= go() b');
+    const doc = JSON.parse(fs.readFileSync(ks.file, 'utf8'));
+    doc.passkeys[0].label = '"><img src=x onerror=alert(1)>';
+    doc.passkeys.push({ ...doc.passkeys[0], id: 'bad" id' }, { ...doc.passkeys[0], id: id(5), rpId: 'Bad Host' }, null);
+    fs.writeFileSync(ks.file, JSON.stringify(doc));
+    const list = ks.passkeys();
+    assert.strictEqual(list.length, 1); assert.ok(!/[<>"']/.test(list[0].label));
+    assert.strictEqual(ks.passkey('bad" id'), null); assert.strictEqual(ks.passkey(id(5)), null);
+    assert.throws(() => ks.unlockWithPasskey(id(5), s.prfOutput), /not set up/);
   });
   it('unlocking an already unlocked keystore with a passkey changes nothing', async () => {
     const ks = mk(); ks.init(PASS); const w = ks.createWallet('bot'); const s = slot(); ks.addPasskey(s);

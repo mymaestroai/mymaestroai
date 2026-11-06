@@ -317,7 +317,7 @@ function receivers() {
 }
 // Passkey (Face ID / fingerprint) unlock of the wallet keystore (lib/wallet/passkey-routes).
 let _pkRoutes = null;
-const passkeyRoutes = () => _pkRoutes || (_pkRoutes = require('./lib/wallet/passkey-routes').createPasskeyRoutes({ svc: require('./lib/wallet/service').getWalletService(), getSetting: (k) => hubSettings.getSetting(k) }));
+const passkeyRoutes = () => _pkRoutes || (_pkRoutes = require('./lib/wallet/passkey-routes').createPasskeyRoutes({ svc: require('./lib/wallet/service').getWalletService(), getSetting: (k) => hubSettings.getSetting(k), notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high' }) }));
 // Notices from data connectors to their notice agent (lib/modules/notices); registered with the connectors at start-up.
 let _notices = null;
 function notices() {

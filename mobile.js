@@ -1843,11 +1843,11 @@ function pkBytes(s) {
 function pkUsable(loc = location, w = window) {
   if (!w.PublicKeyCredential || !navigator.credentials) return { ok: false, code: 'no_api', text: "This browser can't use passkeys." };
   const host = loc.hostname || '';
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) {
-    return { ok: false, code: 'bad_address', text: `Passkeys can't be used at the address ${host}. Open My Maestro at localhost or at its tailnet address instead.` };
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':') || host === 'localhost' || host.endsWith('.localhost')) {
+    return { ok: false, code: 'bad_address', text: `Face ID and fingerprint work on My Maestro's secure tailnet address (https), not on ${host}.` };
   }
-  if (loc.protocol === 'http:' && host !== 'localhost') {
-    return { ok: false, code: 'bad_address', text: `Face ID / fingerprint needs a secure (https) address, or localhost. This page is at ${host}.` };
+  if (loc.protocol !== 'https:') {
+    return { ok: false, code: 'bad_address', text: "Face ID and fingerprint need My Maestro's secure (https) address." };
   }
   return { ok: true, code: '', text: '' };
 }
@@ -1859,7 +1859,7 @@ function pkErrorText(e) {
   if (name === 'AbortError') return 'Cancelled.';
   return (e && e.message) || 'Something went wrong.';
 }
-async function pkUnlock(api) {
+async function pkUnlock(api, signal) {
   const o = await api('passkey/options', { purpose: 'unlock' });
   const one = o.allowCredentials.length === 1;
   const byCred = {};
@@ -1869,7 +1869,7 @@ async function pkUnlock(api) {
     allowCredentials: o.allowCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
     extensions: { prf: { evalByCredential: byCred, ...(one ? { eval: { first: pkBytes(o.prfSalts[o.allowCredentials[0].id]) } } : {}) } },
   };
-  const cred = await navigator.credentials.get({ publicKey });
+  const cred = await navigator.credentials.get({ publicKey, signal });
   const prf = cred.getClientExtensionResults().prf?.results?.first;
   if (!prf) throw new Error("This device didn't give the unlock secret. Use the passphrase instead.");
   return api('passkey/unlock', {
@@ -1878,16 +1878,17 @@ async function pkUnlock(api) {
     signature: pkB64u(cred.response.signature), prf: pkB64u(prf),
   });
 }
-async function pkAdd(api, { passphrase, label }, confirmStep) {
+async function pkAdd(api, { passphrase, label }, confirmStep, signal) {
+  const stray = ' A passkey named "My Maestro wallet" may have been saved on this device; you can delete it in its password manager.';
   const o = await api('passkey/options', { purpose: 'register', passphrase });
   const cred = await navigator.credentials.create({ publicKey: {
     challenge: pkBytes(o.challenge), rp: o.rp, user: { ...o.user, id: pkBytes(o.user.id) }, pubKeyCredParams: o.pubKeyCredParams,
     timeout: o.timeout, attestation: 'none', authenticatorSelection: o.authenticatorSelection,
     excludeCredentials: o.excludeCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
     extensions: { prf: { eval: { first: pkBytes(o.prfSalt) } } },
-  } });
+  }, signal });
   const ext = cred.getClientExtensionResults().prf;
-  if (ext && ext.enabled === false) throw new Error("This device's passkeys can't unlock the wallet. Keep using the passphrase here.");
+  if (ext && ext.enabled === false) throw new Error("This device's passkeys can't unlock the wallet. Keep using the passphrase here." + stray);
   const pub = cred.response.getPublicKey ? cred.response.getPublicKey() : null;
   if (!pub) throw new Error("This device's passkey type isn't supported here.");
   let prf = ext?.results?.first, confirm;
@@ -1898,9 +1899,9 @@ async function pkAdd(api, { passphrase, label }, confirmStep) {
       challenge: pkBytes(c.challenge), rpId: c.rpId, timeout: c.timeout, userVerification: 'required',
       allowCredentials: [{ type: 'public-key', id: cred.rawId }],
       extensions: { prf: { eval: { first: pkBytes(c.prfSalt) } } },
-    } });
+    }, signal });
     prf = g.getClientExtensionResults().prf?.results?.first;
-    if (!prf) throw new Error("This device didn't give the unlock secret, so it can't unlock the wallet.");
+    if (!prf) throw new Error("This device didn't give the unlock secret, so it can't unlock the wallet." + stray);
     confirm = { challenge: c.challenge, clientDataJSON: pkB64u(g.response.clientDataJSON), authenticatorData: pkB64u(g.response.authenticatorData), signature: pkB64u(g.response.signature) };
   }
   return api('passkey/register', {
@@ -4565,6 +4566,15 @@ function onAboutClick(e) {
 let walletStatus = null;   // the last GET /api/wallet/status
 let walletMsg = null;      // { text, ok }: the result line inside the sheet
 let walletBusy = false;
+// The running wallet request: { ctrl, rejectConfirm }. Closing the sheet or repainting its body while a Face ID prompt or
+// the "Confirm" button is up cancels it (the prompt closes, the pending tap is rejected).
+let pkCurrent = null;
+function pkCancel() {
+  const run = pkCurrent; pkCurrent = null;
+  if (!run) return;
+  try { run.ctrl.abort(); } catch { /* already finished */ }
+  if (run.rejectConfirm) run.rejectConfirm(new DOMException('Cancelled.', 'AbortError'));
+}
 async function walletApi(path, body) {
   const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include' }
     : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -4584,10 +4594,10 @@ function walletSheet() {
   sh.dataset.noDirty = '';   // its fields are emptied before every request: nothing to lose
   sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Wallet</span>' +
     '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body wl-body" tabindex="-1"></div>';
-  const close = () => { sh.classList.remove('open'); dialogGuard.closed(sh); };
+  const close = () => { pkCancel(); sh.classList.remove('open'); dialogGuard.closed(sh); };
   sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
   sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
-  sh.addEventListener('click', (e) => { const b = e.target.closest('[data-wl]'); if (b && !walletBusy) walletAct(b.dataset.wl, b.dataset.id, b.dataset.label); });
+  sh.addEventListener('click', (e) => { const b = e.target.closest('[data-wl]'); if (b && !walletBusy) walletAct(b.dataset.wl, b.dataset.id); });
   sh.addEventListener('change', (e) => { if (e.target.id === 'wl-notice') walletLockedNotice(e.target); });
   sh.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || walletBusy) return;
@@ -4616,6 +4626,7 @@ function walletPaint() {
   const sh = $('wallet-sheet');
   if (!sh || !sh.classList.contains('open')) return;
   const body = sh.querySelector('.wl-body');
+  pkCancel();   // a repaint ends a Face ID prompt or a "Confirm" button still showing
   const s = walletStatus, ks = s && s.keystore;
   const msg = walletMsg ? `<div class="sec-msg wl-msg${walletMsg.ok ? ' ok' : ''}" role="status">${esc(walletMsg.text)}</div>` : '';
   if (!ks) { body.innerHTML = `<p class="wl-status">Loading…</p>${msg}`; return; }
@@ -4630,7 +4641,7 @@ function walletPaint() {
     </div>`;
   const rows = pkList.map(p => `<div class="wl-pk"><div class="wl-pk-info"><strong>${esc(p.label)}</strong>
         <span class="sec-hint">${esc(p.rpId)} · added ${esc(new Date(p.createdAt).toLocaleDateString())}</span></div>
-        <button type="button" class="wl-rm" data-wl="pkremove" data-id="${esc(p.id)}" data-label="${esc(p.label)}">Remove</button></div>`).join('')
+        <button type="button" class="wl-rm" data-wl="pkremove" data-id="${esc(p.id)}">Remove</button></div>`).join('')
     || '<div class="sec-hint">None set up yet.</div>';
   const addForm = pkOk.ok ? `<input id="wl-pk-label" value="${esc(pkDeviceLabel())}" maxlength="40" placeholder="Name for this phone" aria-label="Name for this phone">
       <input id="wl-pk-pass" type="password" autocomplete="off" placeholder="Wallet passphrase (needed once; never stored)" aria-label="Wallet passphrase">
@@ -4639,10 +4650,10 @@ function walletPaint() {
     : `<div class="sec-hint">${esc(pkOk.text)}</div>`;
   body.innerHTML = `<p class="wl-status">${ks.unlocked ? '&#x1F513; Unlocked' : '&#x1F512; Locked'} · ${n} wallet${n === 1 ? '' : 's'}</p>${msg}${unlockBox}
     <div class="sec-section"><div class="sec-title">Face ID / fingerprint</div>
-      <div class="sec-hint">Unlock with this phone's Face ID, fingerprint or screen lock instead of the passphrase. Set it up once with the passphrase.</div>
+      <div class="sec-hint">Unlock the wallet with Face ID, a fingerprint or the screen lock instead of typing the passphrase. Add each device once with the passphrase. Your device's password manager may copy the passkey to your other devices; each one still asks for your face, fingerprint or screen lock.</div>
       ${rows}${addForm}
     </div>
-    <label class="wl-notice"><input type="checkbox" id="wl-notice" ${s.lockedNotice ? 'checked' : ''}> Tell this phone when the wallet is locked after a restart</label>`;
+    <label class="wl-notice"><input type="checkbox" id="wl-notice" ${s.lockedNotice ? 'checked' : ''}> Send admins a phone notice when the wallet is locked after a restart</label>`;
 }
 function walletSetBusy(on) {
   walletBusy = on;
@@ -4661,42 +4672,59 @@ function walletShowMsg(text, ok) {
   }
   if (el) { el.textContent = text; el.classList.toggle('ok', !!ok); }
 }
-async function walletAct(action, id, label) {
+async function walletAct(action, id) {
   const sh = $('wallet-sheet');
   const val = (i) => { const el = sh && sh.querySelector('#' + i); return el ? el.value : ''; };
+  let run = null;
   try {
     if (action === 'pkremove') {
-      if (!confirm(`Remove ${label}? That device will no longer unlock the wallet.`)) return;
-      walletSetBusy(true); await walletApi('passkey/remove', { id });
-      walletSetBusy(false); return walletLoad({ text: 'Removed.', ok: true });
+      const known = ((walletStatus && walletStatus.keystore && walletStatus.keystore.passkeys) || []).find(p => p.id === id);
+      const label = known ? known.label : 'this passkey';
+      if (!confirm(`Remove "${label}"? It will stop unlocking this wallet. Copies of the wallet file made before now still accept it, protected by that passkey's own Face ID, fingerprint or screen lock.`)) return;
     }
-    if (action === 'pkunlock') {
-      walletSetBusy(true); await pkUnlock(walletApi);
-      walletSetBusy(false); return walletLoad({ text: 'Unlocked until the hub restarts.', ok: true });
-    }
+    let passphrase = '', name = '';
     if (action === 'unlock' || action === 'pkadd') {
       const passEl = sh && sh.querySelector(action === 'unlock' ? '#wl-pass' : '#wl-pk-pass');
-      const passphrase = passEl ? passEl.value : '';
-      const name = (val('wl-pk-label') || '').trim() || pkDeviceLabel();
+      passphrase = passEl ? passEl.value : '';
+      name = (val('wl-pk-label') || '').trim() || pkDeviceLabel();
       if (!passphrase) { walletShowMsg('Type the wallet passphrase first.', false); if (passEl) passEl.focus(); return; }
       passEl.value = '';   // the passphrase lives only in this request
-      walletSetBusy(true);
-      if (action === 'unlock') {
-        await walletApi('unlock', { passphrase });
-        walletSetBusy(false); return walletLoad({ text: 'Unlocked until the hub restarts.', ok: true });
-      }
-      const confirmStep = () => new Promise((resolve) => {
+    }
+    pkCancel();
+    run = pkCurrent = { ctrl: new AbortController(), rejectConfirm: null };
+    walletSetBusy(true);
+    if (action === 'pkremove') {
+      await walletApi('passkey/remove', { id });
+      return walletLoad({ text: 'Removed.', ok: true });
+    }
+    if (action === 'pkunlock') {
+      await pkUnlock(walletApi, run.ctrl.signal);
+      return walletLoad({ text: 'Unlocked until the hub restarts.', ok: true });
+    }
+    if (action === 'unlock') {
+      await walletApi('unlock', { passphrase });
+      return walletLoad({ text: 'Unlocked until the hub restarts.', ok: true });
+    }
+    if (action === 'pkadd') {
+      const confirmStep = () => new Promise((resolve, reject) => {
         const row = sh.querySelector('#wl-confirm-row'); if (!row) return resolve();
+        run.rejectConfirm = reject;
         row.innerHTML = '<div class="sec-hint">One more tap: confirm with this phone.</div><button type="button" class="wl-big" id="wl-confirm-btn">Confirm with Face ID / fingerprint</button>';
-        $('wl-confirm-btn').onclick = () => { row.innerHTML = ''; resolve(); };
+        $('wl-confirm-btn').onclick = () => { row.innerHTML = ''; run.rejectConfirm = null; resolve(); };
       });
-      await pkAdd(walletApi, { passphrase, label: name }, confirmStep);
-      walletSetBusy(false); return walletLoad({ text: `Added. ${name} can now unlock the wallet.`, ok: true });
+      await pkAdd(walletApi, { passphrase, label: name }, confirmStep, run.ctrl.signal);
+      return walletLoad({ text: `Added. ${name} can now unlock the wallet.`, ok: true });
     }
   } catch (e) {
-    walletSetBusy(false);
-    const row = sh && sh.querySelector('#wl-confirm-row'); if (row) row.innerHTML = '';
-    walletShowMsg(pkErrorText(e), false);
+    // A run cancelled by the sheet closing or repainting stays silent.
+    if (!run || pkCurrent === run) walletShowMsg(pkErrorText(e), false);
+  } finally {
+    if (run && (pkCurrent === run || !pkCurrent)) {
+      if (pkCurrent === run) pkCurrent = null;
+      walletSetBusy(false);
+      const row = sh && sh.querySelector('#wl-confirm-row'); if (row) row.innerHTML = '';
+      ['#wl-pass', '#wl-pk-pass'].forEach(q => { const el = sh && sh.querySelector(q); if (el) el.value = ''; });
+    }
   }
 }
 // The after-restart notice "Your wallet is locked": on or off; the box goes back when the hub refuses.
