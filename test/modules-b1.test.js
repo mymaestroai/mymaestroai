@@ -195,6 +195,37 @@ test('mediaDirFor: no agent gives null; names are sanitised like a plain agent F
   } finally { agentsLib.ownerLeadNames = orig; r.cleanup(); }
 });
 
+test('notice agent: a granted agent that no longer exists, or is member-owned, is not a notice agent', async () => {
+  const agentsLib = require('../lib/agents');
+  const orig = agentsLib.ownerLeadNames;
+  agentsLib.ownerLeadNames = () => ['boss'];
+  const agents = [{ name: 'boss' }, { name: 'helper' }, { name: 'kidbot', owner: 'u_member' }];
+  const r = rig({ agents });
+  try {
+    await r.mods.runStep('guarddemo', 'install', {});
+    r.mods.setAgents('guarddemo', ['helper'], { by: 'test' });
+    assert.strictEqual(r.mods.setNoticeAgent('guarddemo', 'helper').ok, true);
+    agents.splice(1, 1);   // helper deleted, still granted in the connector
+    assert.strictEqual(r.mods.noticeAgentOf('guarddemo'), 'boss');
+    assert.strictEqual(r.mods.setNoticeAgent('guarddemo', 'helper').ok, false);
+    r.conns.get('guarddemo').agents = ['kidbot'];   // granted but member-owned
+    assert.strictEqual(r.mods.setNoticeAgent('guarddemo', 'kidbot').ok, false);
+    agentsLib.ownerLeadNames = () => ['kidbot'];
+    assert.strictEqual(r.mods.noticeAgentOf('guarddemo'), 'kidbot', 'leads come from ownerLeadNames: only the stored name is vetted here');
+  } finally { agentsLib.ownerLeadNames = orig; r.cleanup(); }
+});
+
+test('mediaDirFor: an agent with a team folder grant uses that folder', async () => {
+  const agentsLib = require('../lib/agents');
+  const orig = agentsLib.ownerLeadNames;
+  agentsLib.ownerLeadNames = () => ['Doc'];
+  const r = rig({ agents: [{ name: 'Doc', policy: { roots: [path.join(HUB_HOME, 'medical')] } }] });
+  try {
+    await r.mods.runStep('guarddemo', 'install', {});
+    assert.strictEqual(r.mods.mediaDirFor('guarddemo'), path.join(HUB_HOME, 'medical', 'guarddemo'));
+  } finally { agentsLib.ownerLeadNames = orig; r.cleanup(); }
+});
+
 // ── the setup page ──
 test('modules.html: the grant step has the notice select and posts to the notice-agent route', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'modules.html'), 'utf8');
@@ -203,4 +234,5 @@ test('modules.html: the grant step has the notice select and posts to the notice
   assert.match(html, /m\.notify/);
   assert.match(html, /api\('POST', `\/api\/modules\/\$\{current\.id\}\/notice-agent`, \{ agent \}\)/);
   assert.match(html, /catch \(e\) \{ setMsg\('err', e\.message\); \}/);
+  assert.match(html, /current\.noticeAgent = r\.noticeAgent \|\| agent;\s*render\(\);/);
 });

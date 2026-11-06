@@ -449,6 +449,7 @@ async function saveGrant(stepId, btn) {
   try {
     const r = await api('POST', `/api/modules/${current.id}/notice-agent`, { agent });
     current.noticeAgent = r.noticeAgent || agent;
+    render();   // repaint so the select shows the saved notice agent
   } catch (e) { setMsg('err', e.message); }
 }
 async function saveSecrets(stepId, btn) {

@@ -1,6 +1,7 @@
 { "steps": [
   { "id": "about", "type": "explain", "title": "What this does", "confirm": "I understand.",
     "body": "A test module: it receives signed web calls and tells your agent about them." },
+  { "id": "install", "type": "install", "title": "Install", "body": "Sets up the tool server." },
   { "id": "keys", "type": "secrets", "title": "Signing key", "fields": ["HOOKDEMO_KEY"] },
   { "id": "agents", "type": "grant", "title": "Agents" },
   { "id": "done", "type": "finish", "title": "Finish" }

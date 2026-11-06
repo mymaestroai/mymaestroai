@@ -240,6 +240,7 @@ test('mediaDir that cannot be made: lastError and the server is not started', as
 test('McpStdioClient.request(): round trip, JSON-RPC error, timeout; "exit" fires with the exit code', async (t) => {
   const c = new McpStdioClient(process.execPath, [ECHO], { minTools: 1, timeout: 5000 });
   t.after(() => c.disconnect());
+  await c.connect();
   const res = await c.request('echo/back', { a: [1, 2] });
   assert.deepEqual(res, { params: { a: [1, 2] } });
   await assert.rejects(() => c.request('nope'), /MCP error -32601: unknown method/);
@@ -252,5 +253,80 @@ test('McpStdioClient.request(): round trip, JSON-RPC error, timeout; "exit" fire
 test('McpStdioClient: a request that is never answered times out with the given timeout', async (t) => {
   const c = new McpStdioClient(process.execPath, ['-e', "process.stdin.on('data', d => { for (const l of String(d).split('\\n')) { try { const m = JSON.parse(l); if (m.method === 'initialize') console.log(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: {} })); } catch {} } })"], { timeout: 5000 });
   t.after(() => c.disconnect());
+  await c.connect();
   await assert.rejects(() => c.request('silent', {}, { timeout: 80 }), /timed out after 80ms: silent/);
+});
+
+// ── lifecycle: stop during start, dying process, backoff, deadline, media folder ──
+const gate = () => { let go; const p = new Promise((r) => { go = r; }); return { p, go }; };
+
+test('disable during a slow start: the new client is disconnected, not registered, and no restart is scheduled', async () => {
+  const g = gate();
+  const r = rig();
+  r.FakeClient.prototype.listTools = async function () { await g.p; return [{ name: 'one' }]; };
+  up(r.cx, r.mod({ background: true }));
+  await flush(r);
+  assert.equal(r.all.length, 1);
+  up(r.cx, r.mod({ background: true, enabled: false }));
+  g.go(); await flush(r);
+  assert.equal(r.all[0].disconnected, true);
+  assert.equal(r.cx.list().connectors.find(c => c.id === 'bg').running, false);
+  assert.equal(r.pending().length, 0, 'no restart');
+  assert.equal(r.cx.list().connectors.find(c => c.id === 'bg').lastError, null);
+});
+
+test('stop then an immediate start waits for the old process to exit', async () => {
+  const r = rig(); const g = gate();
+  const order = [];
+  r.FakeClient.prototype.disconnect = async function () { order.push('old-disconnect-begin'); await g.p; order.push('old-exited'); this.disconnected = true; };
+  const origConnect = r.FakeClient.prototype.connect;
+  r.FakeClient.prototype.connect = async function () { order.push('connect'); return origConnect.call(this); };
+  up(r.cx, r.mod());
+  await r.cx.request('bg', 'm');
+  r.cx.stop('bg');
+  const p = r.cx.request('bg', 'm');
+  await flush(r);
+  assert.deepEqual(order, ['connect', 'old-disconnect-begin'], 'the new process has not been started yet');
+  g.go();
+  await p;
+  assert.deepEqual(order, ['connect', 'old-disconnect-begin', 'old-exited', 'connect']);
+});
+
+test('request() during a pending restart is refused with EBACKOFF and spawns nothing', async () => {
+  const r = rig();
+  up(r.cx, r.mod({ background: true }));
+  await flush(r);
+  r.all[0].emit('exit', { code: 1 });
+  assert.equal(r.pending().length, 1);
+  await assert.rejects(() => r.cx.request('bg', 'm'), { code: 'EBACKOFF', message: 'It is restarting; try again shortly.' });
+  assert.equal(r.all.length, 1);
+});
+
+test('request() whose start is slower than timeoutMs rejects with "timed out"', async () => {
+  const g = gate();
+  const r = rig();
+  r.FakeClient.prototype.listTools = async function () { await g.p; return [{ name: 'one' }]; };
+  up(r.cx, r.mod());
+  await assert.rejects(() => r.cx.request('bg', 'm', {}, { timeoutMs: 40 }), /timed out/);
+  g.go(); await flush(r);
+  assert.equal(r.cx.list().connectors.find(c => c.id === 'bg').running, true, 'the start was not cancelled');
+  r.cx.shutdown();
+});
+
+test('a media folder that is a symbolic link is not used', async () => {
+  const r = rig();
+  const real = path.join(r.dir, 'real'); fs.mkdirSync(real);
+  const link = path.join(r.dir, 'media'); fs.symlinkSync(real, link);
+  up(r.cx, r.mod({ mediaDir: link }));
+  await assert.rejects(() => r.cx.request('bg', 'm'));
+  assert.equal(r.all.length, 0, 'no client was created');
+  assert.equal(r.cx.list().connectors.find(c => c.id === 'bg').lastError, 'Its folder is not a plain folder.');
+});
+
+test('McpStdioClient.request() on a closed client throws without spawning', async () => {
+  const c = new McpStdioClient(process.execPath, [ECHO], { minTools: 1, timeout: 5000 });
+  await assert.rejects(() => c.request('echo/back', {}), /MCP process is not running/);
+  assert.equal(c.process, null, 'no process was spawned');
+  await c.connect(); await c.disconnect();
+  await assert.rejects(() => c.request('echo/back', {}), /MCP process is not running/);
 });

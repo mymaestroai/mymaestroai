@@ -160,7 +160,7 @@ test('an HTML page from the module without its own policy gets a strict one', as
   const { res } = await run(env, { method: 'GET', url: '/hooks/demo/link' });
   assert.match(String(res.headers['content-security-policy']), /default-src 'none'/);
   const env2 = makeEnv({ reply: { status: 200, headers: { 'content-type': 'text/html', 'content-security-policy': "default-src 'self'" }, body: 'x' } });
-  assert.strictEqual((await run(env2, { method: 'GET', url: '/hooks/demo/link' })).res.headers['content-security-policy'], "default-src 'self'");
+  assert.deepStrictEqual((await run(env2, { method: 'GET', url: '/hooks/demo/link' })).res.headers['content-security-policy'], ["default-src 'self'", 'sandbox allow-forms']);
 });
 
 test('body over the cap: 413 and the socket is destroyed', async () => {
@@ -249,7 +249,7 @@ test('answers: header filtering', async () => {
   assert.strictEqual(hdr(res, 'content-type'), 'text/plain; charset=utf-8'.replace('; charset=utf-8', '') === 'text/plain' ? hdr(res, 'content-type') : undefined);
   assert.ok(!/[\r\n]/.test(String(hdr(res, 'content-type') || '')));
   assert.strictEqual(hdr(res, 'cache-control'), 'max-age=5');
-  assert.strictEqual(hdr(res, 'content-security-policy'), "default-src 'none'");
+  assert.deepStrictEqual(hdr(res, 'content-security-policy'), ["default-src 'none'", 'sandbox allow-forms']);
   assert.strictEqual(hdr(res, 'retry-after'), '5');
   for (const [loc, keep] of [['/next', true], ['https://ok.example/x', true], ['http://ok.example', false], ['//x', false], ['javascript:1', false]]) {
     env.reply = { status: 302, headers: { Location: loc } };
@@ -301,4 +301,106 @@ test('log: one line, no bodies, queries or headers', async () => {
   await run(env, { url: '/hooks/demo/events?secret=1', body: 'private', headers: { 'x-signature': 'sig' } });
   assert.strictEqual(env.logs.length, 1);
   assert.match(env.logs[0], /^\[hooks\] demo POST events -> 200 \d+ms$/);
+});
+
+const SANDBOX = 'sandbox allow-forms';
+const cspLines = (res) => [].concat(hdr(res, 'content-security-policy'));
+
+test('isolation: every reply carries the hub sandbox line as its own line', async () => {
+  let env = makeEnv({ reply: { status: 200, headers: { 'content-type': 'text/html' }, body: '<p>x</p>' } });
+  let { res } = await run(env, { method: 'GET', url: '/hooks/demo/link' });
+  const lines = cspLines(res);
+  assert.strictEqual(lines.length, 2); assert.match(lines[0], /default-src 'none'/); assert.strictEqual(lines[1], SANDBOX);
+  env = makeEnv({ reply: { status: 200, headers: { 'content-type': 'text/html', 'content-security-policy': 'default-src * \'unsafe-inline\'' }, body: 'x' } });
+  ({ res } = await run(env, { method: 'GET' }));
+  assert.deepStrictEqual(cspLines(res), ["default-src * 'unsafe-inline'", SANDBOX]);
+  env = makeEnv({ reply: { status: 200, headers: { 'content-type': 'image/svg+xml' }, body: '<svg/>' } });
+  ({ res } = await run(env, { method: 'GET' }));
+  assert.deepStrictEqual(cspLines(res), [SANDBOX]);
+  ({ res } = await run(makeEnv(), { url: '/hooks/demo/nope' }, { id: 'demo', sub: 'nope' }));
+  assert.strictEqual(res.status, 404);
+  assert.deepStrictEqual(cspLines(res), [SANDBOX]);
+});
+
+test('origin: the string null (sandboxed form post) is accepted', async () => {
+  const { res } = await run(makeEnv(), { headers: { origin: 'null' }, body: 'a=1' });
+  assert.strictEqual(res.status, 200);
+  const bad = await run(makeEnv(), { headers: { origin: 'https://evil.example' }, body: 'a=1' });
+  assert.strictEqual(bad.res.status, 403);
+});
+
+test('reply header with a non-ASCII character is dropped and the reply finishes', async () => {
+  const env = makeEnv({ reply: { status: 200, body: 'x', headers: { 'cache-control': 'max-age=5\u00e9', 'retry-after': '7' } } });
+  const { res } = await run(env, {});
+  assert.strictEqual(res.status, 200); assert.strictEqual(res.ended, true);
+  assert.strictEqual(hdr(res, 'cache-control'), 'no-store');
+  assert.strictEqual(hdr(res, 'retry-after'), '7');
+});
+
+test('writeHead throwing still ends with 502', async () => {
+  const env = makeEnv();
+  const res = fakeRes();
+  const real = res.writeHead; let n = 0;
+  res.writeHead = function (s, h) { if (n++ === 0) throw new Error('bad header'); return real.call(this, s, h); };
+  const req = fakeReq({ method: 'GET' });
+  const p = env.r.handle(req, res, { id: 'demo', sub: 'events' });
+  req.send(); await p;
+  assert.strictEqual(res.status, 502); assert.strictEqual(res.ended, true);
+  assert.ok(env.logs[0].includes('-> 502'));
+});
+
+test('body deadline: 408 and the socket is destroyed', async () => {
+  const env = makeEnv();
+  env.r = createReceivers({ manifestOf: () => env.manifest, connectorFor: () => env.connector, request: async () => env.reply, getSetting: () => ({}), bodyTimeoutMs: 20 });
+  const req = fakeReq({}); const res = fakeRes();
+  await env.r.handle(req, res, { id: 'demo', sub: 'events' });   // never sends data or end
+  assert.strictEqual(res.status, 408);
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(req.socket.destroyed, true);
+});
+
+test('an aborted body is not forwarded', async () => {
+  const env = makeEnv();
+  const req = fakeReq({}); const res = fakeRes();
+  const p = env.r.handle(req, res, { id: 'demo', sub: 'events' });
+  req.emit('data', Buffer.from('par')); req.emit('close');
+  await p;
+  assert.strictEqual(env.calls.length, 0);
+  assert.strictEqual(res.ended, true); assert.strictEqual(res.status, null);
+});
+
+test('Content-Length that differs from the bytes read: 400', async () => {
+  const env = makeEnv();
+  const { res } = await run(env, { body: 'abc', headers: { 'content-length': '10' } });
+  assert.strictEqual(res.status, 400);
+  assert.strictEqual(env.calls.length, 0);
+  assert.strictEqual((await run(env, { body: 'abc', headers: { 'content-length': '3' } })).res.status, 200);
+});
+
+test('the 21st concurrent request gets 503 with Retry-After 5, and slots are freed', async () => {
+  const env = makeEnv();
+  const waiters = [];
+  env.r = createReceivers({ manifestOf: () => env.manifest, connectorFor: () => env.connector, getSetting: () => ({}), now: () => env.clock,
+    request: () => new Promise((resolve) => waiters.push(() => resolve({ status: 200, body: 'ok' }))) });
+  const pending = [];
+  for (let i = 0; i < 20; i++) {
+    const req = fakeReq({ method: 'GET' }); const res = fakeRes();
+    pending.push(env.r.handle(req, res, { id: 'demo', sub: 'events' })); req.send();
+  }
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(waiters.length, 20);
+  const req = fakeReq({ method: 'GET' }); const res = fakeRes();
+  await env.r.handle(req, res, { id: 'demo', sub: 'events' });
+  assert.strictEqual(res.status, 503); assert.strictEqual(hdr(res, 'retry-after'), '5');
+  waiters.forEach((w) => w()); await Promise.all(pending);
+  const again = fakeReq({ method: 'GET' }); const res2 = fakeRes();
+  const p = env.r.handle(again, res2, { id: 'demo', sub: 'events' });
+  await new Promise((r) => setImmediate(r)); waiters[20](); await p;
+  assert.strictEqual(res2.status, 200);
+});
+
+test('EBACKOFF from request(): 503 with Retry-After 10', async () => {
+  const e = new Error('backing off'); e.code = 'EBACKOFF';
+  const { res } = await run(makeEnv({ fail: e }), {});
+  assert.strictEqual(res.status, 503); assert.strictEqual(hdr(res, 'retry-after'), '10');
 });
