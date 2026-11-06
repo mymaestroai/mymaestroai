@@ -469,3 +469,14 @@ test('minTools: a module with no agent-visible tools answers a hub call without 
   assert.ok(Array.isArray(out.files));
   assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`);
 });
+
+test('setup steps: a tick box needs its text (confirm: true is refused)', () => {
+  const { validateSetup } = require('../lib/modules/manifest');
+  const steps = (confirm) => ({ steps: [{ id: 'about', type: 'explain', title: 'About', body: 'x', confirm }, { id: 'done', type: 'finish', title: 'Done', body: 'x' }] });
+  const ok = validateSetup(steps('I understand.'), { secretNames: new Set(), settingKeys: new Set() });
+  const bad = validateSetup(steps(true), { secretNames: new Set(), settingKeys: new Set() });
+  const okList = Array.isArray(ok) ? ok : (ok && ok.problems) || [];
+  const badList = Array.isArray(bad) ? bad : (bad && bad.problems) || [];
+  assert.ok(!okList.some(p => /confirm/.test(p)), 'a text label is accepted');
+  assert.ok(badList.some(p => /confirm must be the text of the tick box/.test(p)), 'a boolean label is refused');
+});

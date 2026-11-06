@@ -1,6 +1,6 @@
 {
   "id": "google-drive", "name": "Google Drive", "icon": "📁", "category": "Files",
-  "summary": "Keeps a copy of every nightly backup in your Google Drive, in a folder only My Maestro can see.",
+  "summary": "Keeps a copy of every nightly backup in its own folder in your Google Drive.",
   "risk": "write",
   "catalog": { "verified": "2026-11-06", "api": "Drive API v3", "official": false },
   "health": { "check": "drive" },
