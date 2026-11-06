@@ -1257,6 +1257,8 @@ async function handleHttpRequest(req, res) {
       const deviceZone = req.headers['x-hub-time-zone'];
       if (req.hubUser && typeof deviceZone === 'string' && deviceZone) { try { hubAuth.setTimeZone(req.hubUser.id, deviceZone.trim(), { auto: true }); } catch {} }
       const body = stripHubOnlyChatFields(JSON.parse(await readBody(req)), req);
+      // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
+      if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       return handleChatStream(body, res);
     }
 

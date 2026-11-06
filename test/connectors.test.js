@@ -185,7 +185,7 @@ test('wiring: both dispatch paths expose connector tools and the context block; 
   assert.ok(sdk.includes("connectorsLib.getConnectors().toolSpecsFor(agentName, { consultationDepth, virtual: temporalWorkers.isVirtual(agentName) })"), 'tool specs per agent and depth');
   assert.ok(sdk.includes('...connectorSdkTools,'), 'SDK path');
   assert.ok(sdk.includes("getSkillTools({ exclude })"), 'wrapped skills excluded from the ungated path');
-  assert.equal((sdk.match(/\+ connectorsTextFor\(agentName\)/g) || []).length, 3, 'context block on the gateway path and both SDK prompt builders');
+  assert.equal((sdk.match(/\+ connectorsTextFor\(agentName, (consultationDepth|options\.consultationDepth \|\| 0)\)/g) || []).length, 3, 'context block on the gateway path and both SDK prompt builders');
   const srv = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   for (const r of ["pathname === '/api/connectors' && req.method === 'POST'", "'/api/connectors/lock-all'", "(unlock|lock|test|grants)", "'/api/connector-groups' && req.method === 'POST'"]) assert.ok(srv.includes(r), r);
   assert.ok(srv.includes("require('./lib/connectors').getConnectors().shutdown()"), 'children stopped on shutdown');

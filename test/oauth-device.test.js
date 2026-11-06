@@ -137,3 +137,29 @@ test('secrets never appear in error messages', async () => {
     });
   }
 });
+
+test('fetch is told never to follow a redirect; a redirect failure is EREDIRECT', async () => {
+  let seen = null;
+  await od.poll({ tokenUrl: 'https://x.example/t', clientId: 'c', clientSecret: 's', deviceCode: 'd', fetch: async (u, o) => { seen = o; return { status: 200, text: async () => JSON.stringify({ error: 'authorization_pending' }) }; } });
+  assert.equal(seen.redirect, 'error');
+  await assert.rejects(() => od.poll({ tokenUrl: 'https://x.example/t', clientId: 'c', clientSecret: 's', deviceCode: 'd', fetch: async () => { throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') }); } }),
+    (e) => e.code === 'EREDIRECT' && e.message === 'The sign-in service tried to redirect the request, so it was stopped.');
+});
+
+test('a streamed oversize body is cut off', async () => {
+  let cancelled = false, reads = 0;
+  const body = { getReader: () => ({
+    read: async () => { reads++; return { done: false, value: new Uint8Array(20 * 1024) }; },
+    cancel: async () => { cancelled = true; },
+  }) };
+  await assert.rejects(() => od.poll({ tokenUrl: 'https://x.example/t', clientId: 'c', clientSecret: 's', deviceCode: 'd', fetch: async () => ({ status: 200, body }) }),
+    (e) => e.code === 'EBADRESPONSE' && /too large/.test(e.message));
+  assert.equal(cancelled, true);
+  assert.ok(reads <= 4, 'stopped reading soon after the limit');
+});
+
+test('an unknown error code is not echoed; known ones are', async () => {
+  const mk = (error) => ({ tokenUrl: 'https://x.example/t', clientId: 'c', clientSecret: 's', deviceCode: 'd', fetch: async () => ({ status: 400, text: async () => JSON.stringify({ error }) }) });
+  await assert.rejects(() => od.poll(mk('please_visit_evil.example')), (e) => e.code === 'EOAUTH' && e.message === 'The sign-in was refused by the service.');
+  await assert.rejects(() => od.poll(mk('invalid_scope')), (e) => /invalid_scope/.test(e.message));
+});
