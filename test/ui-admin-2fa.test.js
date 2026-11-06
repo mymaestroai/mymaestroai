@@ -117,3 +117,7 @@ test('the account forms clear the password and code before the request, one remo
   const send = app.slice(app.indexOf('async function stAdmin2faSend('), app.indexOf('function groupSettings('));
   assert.ok(send.includes('renderUserChip();'), 'the account menu reminder is repainted after the switch changes');
 });
+
+test('the Security section saves itself, so closing Settings never asks to discard it', () => {
+  assert.ok(app.includes('<div class="st-section" id="st-security-section" data-no-dirty>'));
+});

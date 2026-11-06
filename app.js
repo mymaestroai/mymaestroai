@@ -2377,8 +2377,9 @@
       </div>`;
       setTimeout(loadBackups, 0);
       // Two-factor rule for admins (server.js /api/security/admin-2fa): one switch, turned off only with a password and a code.
+      // It saves itself (the fields are cleared after every answer), so closing Settings never asks to discard it (data-no-dirty).
       if (isHubAdmin()) {
-        html += `<div class="st-section" id="st-security-section"><h4>Two-factor sign-in</h4>
+        html += `<div class="st-section" id="st-security-section" data-no-dirty><h4>Two-factor sign-in</h4>
         <div class="st-row">
           <label style="flex-basis:150px">Require two-factor sign-in for admins</label>
           <input type="checkbox" id="st-a2fa-on" onchange="stAdmin2faToggle(this)">
