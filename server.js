@@ -276,7 +276,7 @@ let serverReady = false;
 // Chat body fields the hub sets for its own loopback turns (consults, workers, bridges). A browser or a token may not
 // set them: image_files reads any image on the host, consulted_by/origin forge provenance, override skips the kill
 // switch, ephemeral hides a turn from the transcript (review F08/F35).
-const HUB_ONLY_CHAT_FIELDS = ['image_files', 'consulted_by', 'origin'];
+const HUB_ONLY_CHAT_FIELDS = ['image_files', 'consulted_by', 'origin', 'owner_turn'];
 const ADMIN_ONLY_CHAT_FIELDS = ['override', 'ephemeral', 'tiger_team', 'consultation_depth'];
 function stripHubOnlyChatFields(body, req) {
   if (!body || typeof body !== 'object' || req.hubService) return body;
@@ -345,6 +345,7 @@ async function handleHttpRequest(req, res) {
   req.hubToken = ident && ident.kind === 'token' ? ident.token : null;   // a program's API token (lib/auth tokens, lib/access tokenAllows)
   req.hubUser = ident && (ident.kind === 'user' || ident.kind === 'legacy') ? ident.user : null;
   req.hubPendingTotp = !!(ident && ident.kind === 'user' && ident.pendingTotp);
+  req.hubIdentKind = ident ? ident.kind : null;
   if (ident && ident.kind === 'bad-token' && route.kind !== 'public') return jsonResponse(res, 401, { error: 'unauthorized', detail: ident.reason });
   if (route.kind === 'api') {
     // OpenAI-compatible endpoints (/v1/*): an API token with the openai-api scope, a signed-in admin, or the hub itself.
@@ -1261,6 +1262,8 @@ async function handleHttpRequest(req, res) {
 
     if (pathname === '/api/chat' && req.method === 'POST') {
       const body = stripHubOnlyChatFields(JSON.parse(await readBody(req)), req);
+      // The owner's own message: a signed-in admin's browser session (never an API token, the hub itself or legacy credentials).
+      if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       return handleChat(body, res);
     }
 

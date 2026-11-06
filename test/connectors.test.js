@@ -20,6 +20,7 @@ function rig(o = {}) {
     unlockTtlMs: o.ttl == null ? 0 : o.ttl, setTimer: (fn, ms) => { const t = { fn, ms }; timers.push(t); return t; }, clearTimer: (t) => { t.cleared = true; },
     baseEnv: { PATH: process.env.PATH, HOME: '/tmp/h', ANTHROPIC_API_KEY: 'sk-ant-LEAK', OPENAI_API_KEY: 'sk-LEAK', HUB_TOKEN: 'LEAK' },
     skills: o.skills || null,
+    leadNames: () => o.leads || ['owner', 'anyone', 'x'],
   });
   const mcp = (extra = {}) => ({ id: 'fake', label: 'Fake service', kind: 'mcp', command: process.execPath, args: [FAKE], enabled: true, ...extra });
   return { cx, dir, logs, events, timers, mcp };
@@ -60,7 +61,7 @@ test('passphrases: own and group scopes lock the tools and the secrets; wrong pa
   assert.equal((await envOf(cx, 'x')).token, 'tok-roundtrip');
   cx.lock('fake');
   assert.deepEqual(await cx.toolSpecsFor('x'), []);
-  assert.match(cx.contextTextFor('x'), /LOCKED by the owner's passphrase/);
+  assert.match(cx.contextTextFor('x'), /LOCKED by the owner's passphrase; ask the owner to unlock it/, 'a locked connector is named with how to unlock it, but offers no tools');
   assert.throws(() => cx.unlock('fake', 'wrong passphrase'), /Wrong passphrase/);
   assert.throws(() => cx.upsert({ id: 'fake', protect: 'none' }), /Wrong passphrase|No lock/);
   assert.throws(() => cx.upsert({ id: 'fake', secrets: { FAKE_TOKEN: 'x' } }), /Unlock/);
@@ -158,7 +159,7 @@ test('validation: ids, kinds, protect values, secret names, agents list parsing'
   assert.throws(() => cx.upsert({ id: 'ok', kind: 'mcp', protect: 'own' }, { newPassphrase: 'short' }), /at least 8/);
   const c = cx.upsert({ id: 'ok', kind: 'mcp', command: 'x', agents: 'gp, labs ,gp' });
   assert.deepEqual(c.agents, ['gp', 'labs']);
-  assert.deepEqual(cx.setGrants('ok', null).agents, null);
+  assert.deepEqual(cx.setGrants('ok', null).agents, [], 'null no longer means every agent: lead only');
   assert.deepEqual(cx.remove('ok'), { ok: true });
   assert.throws(() => cx.remove('ok'), /No connector/);
 });
@@ -181,11 +182,102 @@ test('zodShapeFromJsonSchema: MCP input schemas become sdk.tool shapes (required
 
 test('wiring: both dispatch paths expose connector tools and the context block; routes and shutdown exist', () => {
   const sdk = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
-  assert.ok(sdk.includes("connectorsLib.getConnectors().toolSpecsFor(agentName, { consultationDepth })"), 'tool specs per agent and depth');
+  assert.ok(sdk.includes("connectorsLib.getConnectors().toolSpecsFor(agentName, { consultationDepth, virtual: temporalWorkers.isVirtual(agentName) })"), 'tool specs per agent and depth');
   assert.ok(sdk.includes('...connectorSdkTools,'), 'SDK path');
   assert.ok(sdk.includes("getSkillTools({ exclude })"), 'wrapped skills excluded from the ungated path');
   assert.equal((sdk.match(/\+ connectorsTextFor\(agentName\)/g) || []).length, 3, 'context block on the gateway path and both SDK prompt builders');
   const srv = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   for (const r of ["pathname === '/api/connectors' && req.method === 'POST'", "'/api/connectors/lock-all'", "(unlock|lock|test|grants)", "'/api/connector-groups' && req.method === 'POST'"]) assert.ok(srv.includes(r), r);
   assert.ok(srv.includes("require('./lib/connectors').getConnectors().shutdown()"), 'children stopped on shutdown');
+});
+
+// ── lead-only default ──
+const grab = (cx, agent, o) => cx.toolSpecsFor(agent, o).then(a => a.map(t => t.tool).sort());
+
+test('lead-only: the lead gets tools without being listed; an unlisted non-lead gets none; a listed agent gets them', async (t) => {
+  const { cx, mcp } = rig(); t.after(() => cx.shutdown());
+  const c = cx.upsert(mcp({}));
+  assert.deepEqual(c.agents, [], 'a new record with agents omitted is lead only');
+  assert.deepEqual(await grab(cx, 'owner'), ['env', 'get_record', 'send_message']);
+  assert.deepEqual(await grab(cx, 'sam'), []);
+  assert.equal(cx.contextTextFor('sam'), '');
+  cx.setGrants('fake', ['sam']);
+  assert.deepEqual(await grab(cx, 'sam'), ['env', 'get_record', 'send_message']);
+  assert.ok(cx.contextTextFor('sam').includes('Fake service'));
+});
+
+test('lead-only: no flagged lead means nobody gets default access', async (t) => {
+  const { cx, mcp } = rig({ leads: [] }); t.after(() => cx.shutdown());
+  cx.upsert(mcp({}));
+  assert.deepEqual(await grab(cx, 'owner'), []);
+  const broken = createConnectors({ file: path.join(rig().dir, 'c.json'), keyFile: path.join(rig().dir, 'k'), leadNames: () => { throw new Error('x'); }, log: () => {} });
+  broken.upsert({ id: 'fake', kind: 'mcp', command: 'x', enabled: true });
+  assert.deepEqual(broken.availableFor('owner'), []);
+});
+
+test('lead-only: the lead without an explicit listing gets no money tools; a listed agent still does', async (t) => {
+  const { cx, mcp } = rig(); t.after(() => cx.shutdown());
+  cx.upsert(mcp({ tools: { get_record: { cls: 'read' }, send_message: { cls: 'money' } } }));
+  assert.deepEqual(await grab(cx, 'owner'), ['env', 'get_record']);
+  cx.setGrants('fake', ['sam']);
+  assert.deepEqual(await grab(cx, 'sam'), ['env', 'get_record', 'send_message']);
+  assert.deepEqual(await grab(cx, 'owner'), ['env', 'get_record'], 'still not listed');
+  cx.setGrants('fake', ['owner']);
+  assert.deepEqual(await grab(cx, 'owner'), ['env', 'get_record', 'send_message'], 'listed lead keeps money tools');
+});
+
+test('lead-only: virtual agents and consultation depth get no tools and no text', async (t) => {
+  const { cx, mcp } = rig(); t.after(() => cx.shutdown());
+  cx.upsert(mcp({ agents: ['sam'] }));
+  assert.deepEqual(await grab(cx, 'owner', { virtual: true }), []);
+  assert.deepEqual(await grab(cx, 'sam', { virtual: true }), []);
+  assert.equal(cx.contextTextFor('owner', { virtual: true }), '');
+  assert.equal(cx.contextTextFor('sam', { virtual: true }), '');
+  assert.deepEqual(await grab(cx, 'owner', { consultationDepth: 1 }), []);
+  assert.equal(cx.contextTextFor('owner', { consultationDepth: 1 }), '');
+  assert.notEqual(cx.contextTextFor('owner'), '');
+});
+
+test('lead-only: the context text names a locked connector with how to unlock it, and says nothing at depth > 0, to a worker or to an unlisted agent', async (t) => {
+  const { cx, mcp } = rig(); t.after(() => cx.shutdown());
+  cx.upsert(mcp({}));
+  cx.upsert({ id: 'fake', protect: 'own' }, { newPassphrase: PASS });
+  cx.lock('fake');
+  assert.deepEqual(await grab(cx, 'owner'), []);
+  assert.match(cx.contextTextFor('owner'), /LOCKED/);
+  assert.equal(cx.contextTextFor('owner', { consultationDepth: 1 }), '');
+  assert.equal(cx.contextTextFor('owner', { virtual: true }), '');
+  assert.equal(cx.contextTextFor('sam'), '');
+  cx.unlock('fake', PASS);
+  assert.ok(cx.contextTextFor('owner').includes('fake__*'));
+});
+
+test('migration: a stored agents: null becomes [] once, is listed for the checklist, and clears after grants are set', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-mig-'));
+  const file = path.join(dir, 'connectors.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, groups: {}, connectors: [
+    { id: 'old-open', label: 'Old open', kind: 'mcp', protect: 'none', agents: null, enabled: true, secrets: {}, tools: {} },
+    { id: 'old-two', label: 'Old two', kind: 'mcp', protect: 'none', agents: null, enabled: true, secrets: {}, tools: {} },
+    { id: 'listed', label: 'Listed', kind: 'mcp', protect: 'none', agents: ['sam'], enabled: true, secrets: {}, tools: {} },
+  ] }));
+  const mk = () => createConnectors({ file, keyFile: path.join(dir, '.auth-key'), log: () => {}, leadNames: () => ['owner'], now: () => 1_700_000_000_000 });
+  const cx = mk();
+  assert.deepEqual(cx.list().connectors.map(c => c.agents), [[], [], ['sam']]);
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(stored.openToAllMigrated, ['old-open', 'old-two']);
+  assert.equal(stored.migratedAt, new Date(1_700_000_000_000).toISOString());
+  assert.deepEqual(stored.connectors.map(c => c.agents), [[], [], ['sam']]);
+  const items = cx.readinessItems();
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, 'connectors-open-to-all'); assert.equal(items[0].level, 'info');
+  assert.equal(items[0].title, 'Some data connectors are now lead-only');
+  assert.equal(items[0].detail, 'Old open, Old two used to be available to every agent. Now only your lead agent can use them.');
+  assert.deepEqual(items[0].action, { label: 'Open data connectors', href: '/?connectors=1' });
+  // a second load does not migrate again or move the list
+  assert.deepEqual(mk().readinessItems().length, 1);
+  cx.setGrants('old-open', ['sam']);
+  assert.match(cx.readinessItems()[0].detail, /^Old two used/);
+  cx.upsert({ id: 'old-two', agents: [] });
+  assert.deepEqual(cx.readinessItems(), []);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).openToAllMigrated, []);
 });
