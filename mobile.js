@@ -4666,6 +4666,7 @@ async function walletLoad(msg) {
   // A newer load, a run, or closing the sheet since this started: paint nothing.
   const sh = $('wallet-sheet');
   if (gen !== walletGen || !sh || !sh.classList.contains('open') || pkRun) return;
+  if (failed && walletStatus) { walletShowMsg(failed.text, false); return; }   // keep the form (and what is typed in it) when a refresh fails
   walletStatus = status;
   if (failed) walletMsg = failed;
   walletPaint();
