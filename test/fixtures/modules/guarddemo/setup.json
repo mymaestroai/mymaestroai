@@ -1,0 +1,4 @@
+{ "steps": [
+  { "id": "install", "type": "install", "title": "Install" },
+  { "id": "done", "type": "finish", "title": "Finish" }
+] }

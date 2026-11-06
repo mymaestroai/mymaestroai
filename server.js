@@ -114,6 +114,10 @@ function isSetupNeeded() {
 // ── Persistent Settings ──────────────────────────────────────────────────
 const hubSettings = require('./lib/settings');
 const hubAuth = require('./lib/auth').getAuth();          // accounts, sessions, TOTP, invites (lib/auth)
+const admin2fa = require('./lib/admin-2fa').createAdmin2fa({   // "Require two-factor sign-in for admins" (lib/admin-2fa)
+  getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, auth: hubAuth,
+  notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true }), log: (m) => console.log(m),
+});
 const access = require('./lib/access');                   // route classes + agent ownership/sharing (lib/access)
 const temporalWorkersLib = require('./lib/temporal-workers');
 
@@ -296,7 +300,43 @@ const server = http.createServer((req, res) => {
     } catch { /* socket gone */ }
   });
 });
+// Public receivers (/hooks/<id>/<sub>): lib/modules/receivers checks every request itself, so they are answered before the tailnet gate.
+let _receivers = null;
+function receivers() {
+  if (!_receivers) {
+    const cxOf = () => require('./lib/connectors').getConnectors();
+    _receivers = require('./lib/modules/receivers').createReceivers({
+      manifestOf: (id) => require('./lib/modules').getModules().manifestOf(id),
+      connectorFor: (id) => cxOf().list().connectors.find(c => c.id === id) || null,
+      request: (...a) => cxOf().request(...a),
+      getSetting: hubSettings.getSetting,
+      log: (m) => console.log(m),
+    });
+  }
+  return _receivers;
+}
+// Notices from data connectors to their notice agent (lib/modules/notices); registered with the connectors at start-up.
+let _notices = null;
+function notices() {
+  if (!_notices) {
+    const mods = require('./lib/modules').getModules();
+    _notices = require('./lib/modules/notices').createNotices({
+      connectorFor: (id) => require('./lib/connectors').getConnectors().list().connectors.find(c => c.id === id) || null,
+      manifestOf: (id) => mods.manifestOf(id),
+      noticeAgentOf: (id) => mods.noticeAgentOf(id),
+      mediaDirFor: (id) => mods.mediaDirFor(id),
+      isAgentActive, interject: handleInterjection, wake: wakeAgent,
+      auditDir: path.join(__dirname, 'data', 'modules'),
+      log: (m) => console.log(m),
+    });
+  }
+  return _notices;
+}
+try { require('./lib/connectors').getConnectors().setNotifyHandler((id, params) => notices().deliver(id, params)); }
+catch (e) { console.error('[modules] notify handler:', e.message); }
 async function handleHttpRequest(req, res) {
+  const hookHit = receivers().match(String(req.url || '').split('?')[0]);
+  if (hookHit) return receivers().handle(req, res, hookHit);
   // Tailnet identity gate (HUB_TAILNET_USERS): only listed Tailscale logins may use the hub via Serve.
   if (!isTailnetUserAllowed(req, PORT)) {
     res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -556,7 +596,7 @@ async function handleHttpRequest(req, res) {
       if (!r.ok) return jsonResponse(res, 400, r);
       if (r.user.role === 'member') require('./lib/teams').createDefaultAssistant(r.user).then(a => { if (!a || !a.ok) console.error('[users] default assistant not made:', a && a.error); }, e => console.error('[users] default assistant:', e.message));
       finishSignIn(r.user, { totpOk: true });
-      return jsonResponse(res, 200, { ok: true, user: hubAuth.publicUser(r.user), needsTotpEnrol: r.user.role === 'admin' });
+      return jsonResponse(res, 200, { ok: true, user: hubAuth.publicUser(r.user), needsTotpEnrol: r.user.role === 'admin' && admin2fa.required() });
     }
     // Self-service (any signed-in user)
     if (pathname === '/api/auth/totp/begin' && req.method === 'POST') {
@@ -572,7 +612,11 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/auth/totp/disable' && req.method === 'POST') {
       const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
       const u = hubAuth.getUser(req.hubUser.id);
-      if (!u || !hubAuth.login(u.login, b.password).ok) return jsonResponse(res, 401, { error: 'password check failed' });
+      if (!u) return jsonResponse(res, 401, { error: 'password check failed' });
+      const adminAccount = access.isAdmin(u);   // the account as stored now, read after the body arrived
+      if (adminAccount && admin2fa.required()) return jsonResponse(res, 403, { error: require('./lib/admin-2fa').REQUIRED_MESSAGE, code: 'admin_2fa_required' });
+      if (!hubAuth.login(u.login, b.password).ok) return jsonResponse(res, 401, { error: 'password check failed' });
+      if (adminAccount && u.totp && u.totp.enabled) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return jsonResponse(res, 403, { error: 'That two-factor code is not right.' }); }
       return jsonResponse(res, 200, hubAuth.totpDisable(u.id));
     }
     if (pathname === '/api/auth/password' && req.method === 'POST') {
@@ -596,6 +640,7 @@ async function handleHttpRequest(req, res) {
       const isAdmin = access.isAdmin(req.hubUser);
       // accounts: false = no admin account exists yet (an updated older install): no login, multi-user features off.
       const out = { user: u, isAdmin, accounts: hubAuth.hasUsers() };
+      if (req.hubUser) out.admin2faRequired = admin2fa.required();
       if (isAdmin) { const oe = access.ownerEntries(await getAgents(), hubAuth.listUsers()); out.owners = oe.owners; out.infraCount = oe.infraCount; }
       out.timeZone = u ? require('./lib/timezone').zoneForUser(u.id) : require('./lib/timezone').hubZone();   // what this person's agents use
       return jsonResponse(res, 200, out);
@@ -846,6 +891,7 @@ async function handleHttpRequest(req, res) {
     }
     if (/^\/api\/users\/([^/]+)\/totp\/reset$/.test(pathname) && req.method === 'POST') {
       const id = pathname.split('/')[3];
+      if (String(id) === String(req.hubUser.id)) return jsonResponse(res, 400, { error: 'To change your own two-factor sign-in, use Security in your account menu.' });
       return jsonResponse(res, 200, hubAuth.totpDisable(id, { by: req.hubUser.id }));
     }
     if (/^\/api\/users\/([^/]+)\/team$/.test(pathname) && req.method === 'POST') {
@@ -1812,6 +1858,11 @@ async function handleHttpRequest(req, res) {
           return jsonResponse(res, 200, await mods.signinStart(m[1], { origin, userId: req.hubUser ? req.hubUser.id : null }));
         }
         if (m && req.method === 'POST') return jsonResponse(res, 200, m[2] === 'cancel' ? mods.signinCancel(m[1]) : await mods.signinPoll(m[1]));
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/notice-agent$/);
+        if (m && req.method === 'POST') {
+          const r = mods.setNoticeAgent(m[1], String((await bodyJson()).agent || ''), { by: req.hubUser.id });
+          return r && r.ok ? jsonResponse(res, 200, { ok: true, noticeAgent: r.noticeAgent }) : jsonResponse(res, 400, { error: (r && r.error) || 'Could not set the agent.' });
+        }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
         if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(step|check|settings|enable|disable|audit)$/);
@@ -2110,6 +2161,14 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, s);
     }
 
+    // "Require two-factor sign-in for admins": a signed-in admin's own browser session only (no token, no service, no half-signed-in session).
+    if (pathname === '/api/security/admin-2fa' && req.method === 'POST') {
+      if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'admin_only' });
+      const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
+      const r = admin2fa.setRequired({ actorId: req.hubUser.id, isAdmin: true, want: b.required, password: b.password, code: b.code, ip: req.socket && req.socket.remoteAddress });
+      return r.ok ? jsonResponse(res, 200, { ok: true, required: r.required, changed: r.changed }) : jsonResponse(res, r.status, { error: r.error });
+    }
+
     if (pathname === '/api/settings' && req.method === 'POST') {
       let body = '';
       req.on('data', c => body += c);
@@ -2122,6 +2181,10 @@ async function handleHttpRequest(req, res) {
           if (patch && typeof patch === 'object' && 'walletAgents' in patch) { console.warn('[settings] ignored walletAgents in /api/settings patch (edit data/settings.json directly)'); delete patch.walletAgents; }
           // The owner's receiving address decides where wallet value may go: not a UI setting either (review F10). HUB_WALLET_OWNER in .env, or data/settings.json by hand.
           if (patch && typeof patch === 'object' && 'walletOwner' in patch) { console.warn('[settings] ignored walletOwner in /api/settings patch (set HUB_WALLET_OWNER or edit data/settings.json directly)'); delete patch.walletOwner; }
+          // The admin two-factor rule changes only through /api/security/admin-2fa, which asks for the password (and code) again.
+          if (patch && typeof patch === 'object' && 'requireAdmin2fa' in patch) { console.warn('[settings] ignored requireAdmin2fa in /api/settings patch (use Settings → Security)'); delete patch.requireAdmin2fa; }
+          // receiverAliases makes paths public (lib/modules/receivers): set only by hand in data/settings.json.
+          if (patch && typeof patch === 'object' && 'receiverAliases' in patch) { console.warn('[settings] ignored receiverAliases in /api/settings patch (edit data/settings.json directly)'); delete patch.receiverAliases; }
           // Hub default for every member agent: grantable classes and valid decisions only (lib/tool-policy).
           if (patch && patch.memberPolicy !== undefined) patch.memberPolicy = require('./lib/tool-policy').sanitizeGrants({ policy: patch.memberPolicy }).policy || {};
           // Per-class approval cards: known class names only (lib/policy-gate APPROVAL_CLASSES).
@@ -3197,6 +3260,10 @@ server.listen(PORT, HOST, () => {
   // Data connector health: a nightly check of every switched-on module that declares one (lib/modules/health).
   try { require('./lib/modules/health').getModulesHealth().start(); }
   catch (e) { console.warn(`[modules-health] ${e.message}`); }
+  // Background modules (those that receive webhooks or poll) start a few seconds later.
+  // The module list is loaded first: its one-time sync rewrites each module's connector, which would restart a running one.
+  // The notices start before the modules so that notices kept from before a restart are delivered without waiting for a new one.
+  setTimeout(() => { try { require('./lib/modules').getModules(); } catch (e) { console.error('[modules] background start:', e.message); } try { notices(); } catch (e) { console.error('[notices] start:', e.message); } try { require('./lib/connectors').getConnectors().startBackground(); } catch (e) { console.error('[modules] background start:', e.message); } }, 3000).unref();
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).

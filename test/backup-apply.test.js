@@ -218,9 +218,10 @@ test('round 2: final journal states are filed at the next start; a folder the ba
   assert.throws(() => apply.confirmUndo({ root: c.root }), (e) => e.code === 'ENOUNDO');
   // today's backup key settings win at the swap (a key replaced after the restore was checked doesn't come back)
   const d = await ready('keys-today');
-  const sf = path.join(d.root, 'data', 'settings.json'); const set = JSON.parse(read(sf)); set.backup = { key: { publicKey: 'today', keyId: 'feedfacefeedface' }, retired: [{ keyId: 'old' }] }; fs.writeFileSync(sf, JSON.stringify(set));
+  const sf = path.join(d.root, 'data', 'settings.json'); const set = JSON.parse(read(sf)); set.backup = { key: { publicKey: 'today', keyId: 'feedfacefeedface' }, retired: [{ keyId: 'old' }] }; set.requireAdmin2fa = false; fs.writeFileSync(sf, JSON.stringify(set));
   apply.applyAtBoot({ root: d.root });
   assert.deepStrictEqual(JSON.parse(read(sf)).backup, set.backup);
+  assert.strictEqual(JSON.parse(read(sf)).requireAdmin2fa, false, 'today\'s admin two-factor switch wins at the swap');
   assert.ok(!fs.existsSync(path.join(d.root, '.restore', 'prepared.json')), 'a checked backup is confirmed only once');
 });
 
@@ -315,4 +316,24 @@ test('after the undo window, set-aside copies are removed at the next start', as
   assert.ok(!fs.existsSync(aside), 'removed after 7 days');
   assert.strictEqual(apply.lastRestore({ root: inst.root, now: () => Date.now() + 8 * 86400000 }).canUndo, false);
   assert.throws(() => apply.confirm({ ...inst, id: 'nope' }), (e) => e.code === 'ESTALE');
+});
+
+test('a backup taken with the admin two-factor switch off never turns it off here: today\'s switch wins, absent or set on after the check', async () => {
+  for (const [name, laterOn] of [['a2fa-absent', false], ['a2fa-on-later', true]]) {
+    const inst = makeInstall(TMP, name);
+    const sf = path.join(inst.root, 'data', 'settings.json');
+    const today = fs.existsSync(sf) ? JSON.parse(read(sf)) : {};
+    delete today.requireAdmin2fa;
+    fs.writeFileSync(sf, JSON.stringify({ ...today, requireAdmin2fa: false }));   // the backup is taken with the switch off
+    const settings = memSettings(); await keys.setup(PW, { settings, logN: 15 });
+    const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
+    fs.writeFileSync(sf, JSON.stringify(today));   // today the switch is on (no key)
+    const p = await restore.prepare({ file: r.places[0].file, password: PW, ...inst, platform: 'linux', mode: 'existing' });
+    apply.confirm({ ...inst, platform: 'linux', id: p.id });
+    if (laterOn) fs.writeFileSync(sf, JSON.stringify({ ...JSON.parse(read(sf)), requireAdmin2fa: true }));   // set on after the check, before the swap
+    apply.applyAtBoot({ root: inst.root });
+    const after = JSON.parse(read(sf));
+    if (laterOn) assert.strictEqual(after.requireAdmin2fa, true, name);
+    else assert.ok(!('requireAdmin2fa' in after), name + ': the backup\'s off did not come back');
+  }
 });

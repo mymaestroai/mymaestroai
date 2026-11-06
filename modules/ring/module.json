@@ -1,0 +1,40 @@
+{
+  "id": "ring", "name": "Ring cameras", "icon": "📹", "category": "Home",
+  "summary": "Tells your notice agent when a Ring camera sees motion or a doorbell is pressed, with a still picture, and lets your agents look at your cameras when you ask: the latest picture, a live picture, a short clip, a recorded clip and the recent event history. Read-only.",
+  "risk": "read",
+  "catalog": { "verified": "2026-11-06", "api": "Ring Partner API", "official": false },
+  "health": { "check": "ring" },
+  "server": { "type": "mcp-stdio", "script": "server.js", "background": true, "callTimeoutSec": 300 },
+  "receiver": { "paths": ["events", "token", "link", "done"], "headers": ["x-signature"], "maxBody": 1048576, "timeoutSec": 25 },
+  "notify": true,
+  "media": true,
+  "secrets": [
+    { "name": "CLIENT_ID", "label": "Client ID" },
+    { "name": "CLIENT_SECRET", "label": "Client secret" },
+    { "name": "HMAC_KEY", "label": "Webhook signing key" },
+    { "name": "REFRESH_TOKEN", "label": "Ring sign-in", "optional": true }
+  ],
+  "rotatingSecret": "REFRESH_TOKEN",
+  "settings": [
+    { "key": "account_email", "type": "string", "label": "Ring account email", "default": "", "help": "The email address of the Ring account that owns the cameras. It is sent to Ring once, when the account is linked." },
+    { "key": "public_url", "type": "string", "label": "Public address of this Maestro", "default": "", "help": "The https address Ring can reach from the internet, for example https://maestro.example.com (no path). Used to show the four addresses to enter in Ring's developer console." },
+    { "key": "time_zone", "type": "string", "label": "Time zone", "default": "UTC", "help": "Used for the times in notices and for the day folders of pictures, for example Europe/London. An unknown zone falls back to UTC." },
+    { "key": "houses", "type": "string", "label": "Houses", "default": "", "help": "Optional. Groups cameras by a word in their name, for example: House A: front, back; House B: garage. Shown in notices." },
+    { "key": "still_days", "type": "number", "label": "Keep pictures for (days)", "default": 30, "min": 1, "max": 365 },
+    { "key": "still_quota_mb", "type": "number", "label": "Pictures size limit (MB)", "default": 2048, "min": 64, "max": 102400, "help": "The oldest pictures are removed first when the folder grows past this." },
+    { "key": "clip_days", "type": "number", "label": "Keep clips for (days)", "default": 30, "min": 1, "max": 365 },
+    { "key": "clip_quota_mb", "type": "number", "label": "Clips size limit (MB)", "default": 4096, "min": 64, "max": 409600, "help": "The oldest clips are removed first when the folder grows past this." },
+    { "key": "faces", "type": "boolean", "label": "Recognize faces", "default": false, "help": "Needs a face recognizer running on this computer. Pictures are only ever sent to the address below, and only if it is this computer." },
+    { "key": "faces_url", "type": "string", "label": "Face recognizer address", "default": "http://127.0.0.1:9795", "help": "Only http://127.0.0.1 or http://localhost is accepted." },
+    { "key": "faces_seen", "type": "boolean", "label": "Notice unknown faces seen before", "default": true, "help": "Only with face recognition on: tells you when an unknown face has been seen on earlier visits." },
+    { "key": "faces_quota_mb", "type": "number", "label": "Face records size limit (MB)", "default": 1024, "min": 16, "max": 102400 }
+  ],
+  "tools": {
+    "status": "read", "still": "read", "clip": "read", "history": "read", "faces": "read",
+    "arm_link": "hub", "health": "hub"
+  },
+  "docs": {
+    "homepage": "https://developer.ring.com/",
+    "revoke": "Remove the connection in the Ring app (the list of connected apps), or delete the private app in Ring's developer console."
+  }
+}

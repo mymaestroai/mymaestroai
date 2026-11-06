@@ -1,0 +1,20 @@
+{ "steps": [
+  { "id": "about", "type": "explain", "title": "What this does", "confirm": "I understand what it can see and do.",
+    "body": "Connects your Ring cameras. When a camera sees motion or a doorbell is pressed, your notice agent is told and gets a still picture. Your agents can also ask for the latest picture, a live picture, a short live clip, a recorded clip, or the recent event history.\n\n**Read-only:** nothing here can change your Ring account, unlock anything or turn a camera off.\n\nPictures and clips are saved in the notice agent's Files folder, so that agent can look at them; they are removed after the number of days you choose. Ring sends the events to this Maestro over the internet, so this Maestro needs an https address that Ring can reach.\n\nRing does not offer a sign-in page for this kind of connection. Instead you create a private app in Ring's developer console, then start the connection from the Ring app. Plan on about 20 minutes." },
+  { "id": "register", "type": "outside", "title": "Create your private app in Ring", "confirm": "I created the app and have its Client ID, Client secret and signing key.",
+    "body": "Do these on Ring's developer site:\n\n1. Sign in and create a new private app.\n2. Give it the scopes for **Cameras** and **Doorbells**.\n3. Enter four addresses, each made of your public address followed by a path (a later step shows them ready to copy once you have saved your public address):\n   - the link page: `<your public address>/hooks/ring/link`\n   - the token address: `<your public address>/hooks/ring/token`\n   - the events address: `<your public address>/hooks/ring/events`\n   - the finished page: `<your public address>/hooks/ring/done`\n4. Save, then copy the Client ID, the Client secret and the key Ring uses to sign events.\n\nYour public address is the https address Ring can reach from the internet, for example `https://maestro.example.com`. It must be the address people use to reach this Maestro from outside.",
+    "links": [ { "label": "Ring developer console", "url": "https://developer.ring.com/" } ] },
+  { "id": "install", "type": "install", "title": "Install",
+    "body": "Live pictures and clips need two programs on this computer: ffmpeg at /usr/bin/ffmpeg, and Python 3 with the GStreamer bindings. To check the second, run: python3 -c 'import gi; gi.require_version(\"Gst\", \"1.0\")' (no error means it is there). On Debian or Ubuntu: sudo apt install ffmpeg python3-gi gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav. Everything else (event pictures, recorded clips, history) works without them." },
+  { "id": "keys", "type": "secrets", "title": "Client ID, secret and signing key", "fields": ["CLIENT_ID", "CLIENT_SECRET", "HMAC_KEY"],
+    "body": "Paste the three values from Ring's developer console." },
+  { "id": "prefs", "type": "settings", "title": "Your settings", "fields": ["account_email", "public_url", "time_zone", "houses", "faces", "faces_url"],
+    "body": "Enter the email address of your Ring account, your public https address, and your time zone (for example Europe/London). The houses box is optional: it lets notices say which house a camera is in. Leave face recognition off unless you run a face recognizer on this computer." },
+  { "id": "urls", "type": "check", "check": "urls", "title": "Addresses for Ring",
+    "body": "These are the four addresses to enter in Ring's developer console. If you already entered them, check that they match." },
+  { "id": "link", "type": "check", "check": "link", "title": "Connect your Ring account",
+    "body": "This opens the connection for a short time and shows a one-time code. Then start the connection from the Ring app; the page that opens asks for the code." },
+  { "id": "agents", "type": "grant", "title": "Who can look at the cameras",
+    "body": "The notice agent always gets the camera notices and pictures. Choose which other agents may ask to see the cameras." },
+  { "id": "done", "type": "finish", "title": "Finish" }
+] }

@@ -307,7 +307,7 @@ const commands = {
     const login = argv[1]; if (!login) fail('Usage: mymaestro reset-2fa <email>');
     const a = auth(); const u = a.findByLogin(login); if (!u) fail(`No account "${login}".`);
     const r = a.totpDisable(u.id, { by: 'cli' }); if (!r.ok) fail(r.error);
-    out(`Two-factor is off for ${u.login}. Sign in with the password, then set up two-factor again (Settings → Security).`);
+    out(`Two-factor is off for ${u.login}. Sign in with the password, then set up two-factor again (account menu → Security).`);
   },
   service() {
     const sub = argv[1];

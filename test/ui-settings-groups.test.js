@@ -25,13 +25,13 @@ function groupsFromSource(app) {
   return groups;
 }
 
-test('seven groups, and every section openSettings draws belongs to exactly one of them', () => {
+test('eight groups, and every section openSettings draws belongs to exactly one of them', () => {
   const app = read('app.js');
   const groups = groupsFromSource(app);
-  assert.deepStrictEqual(groups.map(g => g.title), ['🩺 Status', '💾 Backups', '🧠 AI models', '🤖 Agents', '🔔 Notifications', '🧰 Tools and data', '💰 Money and safety']);
+  assert.deepStrictEqual(groups.map(g => g.title), ['🩺 Status', '🔐 Security', '💾 Backups', '🧠 AI models', '🤖 Agents', '🔔 Notifications', '🧰 Tools and data', '💰 Money and safety']);
   const src = settingsSource(app);
   const drawn = [...src.matchAll(/class="st-section" id="(st-[a-z0-9-]+-section)"/g)].map(m => m[1]);
-  assert.strictEqual(drawn.length, 20, 'all 20 sections carry an id');
+  assert.strictEqual(drawn.length, 21, 'all 21 sections carry an id');
   assert.doesNotMatch(src, /class="st-section">/, 'no section without an id');
   const grouped = groups.flatMap(g => g.sections);
   assert.strictEqual(new Set(grouped).size, grouped.length, 'no section in two groups');
@@ -40,6 +40,7 @@ test('seven groups, and every section openSettings draws belongs to exactly one 
   assert.deepStrictEqual(byId.status, ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-updates-section']);
   assert.deepStrictEqual(byId.money, ['st-spend-section', 'st-emergency-section']);
   assert.deepStrictEqual(byId.backups, ['st-backups-section']);
+  assert.deepStrictEqual(byId.security, ['st-security-section']);
   assert.ok(byId.models.includes('st-plan-section') && byId.models.includes('st-or-section') && byId.models.includes('st-prov-section'));
   assert.ok(byId.agents.includes('st-sb-section') && byId.agents.includes('st-approvals-section'));
   assert.ok(byId.tools.includes('st-ws-section') && byId.tools.includes('st-cx-section'));

@@ -263,7 +263,8 @@ function stepHtml(s) {
   } else if (s.type === 'grant') {
     inner = leadRows(m) + (m.candidates.length ? m.candidates.filter(c => !leadsLocked(m) || !(m.leads || []).includes(c.name)).map(c => `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${m.agents.includes(c.name) ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`).join('') : '<p class="dim">No agents.</p>') +
       (m.risk === 'money' && !m.candidates.some(c => c.eligible) ? '<div class="msg warn show">No agent is a wallet agent yet. The hub owner adds one by name to "walletAgents" in data/settings.json (deliberately not a button).</div>' : '') +
-      `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { agents: [...document.querySelectorAll('input.grant:checked')].map(i => i.value) }, this)">Save</button></div>`;
+      (m.notify ? `<div class="agent-row"><label for="notice-agent">Send its notices to:</label> <select id="notice-agent">${noticeOptions(m, m.agents, m.noticeAgent)}</select></div>` : '') +
+      `<div class="actions"><button class="primary" onclick="saveGrant('${esc(s.id)}', this)">Save</button></div>`;
   } else if (s.type === 'signin') {
     inner = `<div id="signin-area">${signinIdleHtml()}</div>`;
   } else if (s.type === 'finish') {
@@ -411,6 +412,7 @@ async function askMaestro(stepId, btn) {
 
 async function busy(btn, fn) { if (btn) btn.disabled = true; try { await fn(); } finally { if (btn) btn.disabled = false; } }
 async function doStep(stepId, input, btn) {
+  let done = false;
   await busy(btn, async () => {
     try {
       const r = await api('POST', `/api/modules/${current.id}/step`, { step: stepId, input });
@@ -419,11 +421,38 @@ async function doStep(stepId, input, btn) {
       const next = current.steps.slice(idx + 1).find(s => !s.done) || current.steps.find(s => !s.done);
       selected = current.finishedAt && stepId === current.steps[current.steps.length - 1].id ? null : (next ? next.id : null);
       render(); loadList();
+      const oc = r.result && r.result.check;
+      if (oc && oc.once && oc.lines && oc.lines.length) setMsg('ok', oc.summary + '\n' + oc.lines.join('\n'));   // one-time lines are only in this answer
+      done = true;
     } catch (e) {
       setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message + (e.data && e.data.check && e.data.check.lines && e.data.check.lines.length ? '\n' + e.data.check.lines.join('\n') : ''));
       if (e.data && e.data.needsAck) document.getElementById('ack-area').innerHTML = `<label class="chk"><input type="checkbox" id="ack"> <span>I understand; continue with this key</span></label>`;
     }
   });
+  return done;
+}
+// The notice agent can be a lead or an agent ticked in the list.
+function noticeOptions(m, ticked, chosen) {
+  const names = [...new Set([...(m.leads || []), ...ticked])];
+  return names.map(n => `<option value="${esc(n)}" ${n === chosen ? 'selected' : ''}>${esc(n)}</option>`).join('');
+}
+function refreshNoticeSelect() {
+  const sel = document.getElementById('notice-agent'); if (!sel || !current) return;
+  const ticked = [...document.querySelectorAll('input.grant:checked')].map(i => i.value);
+  sel.innerHTML = noticeOptions(current, ticked, sel.value || current.noticeAgent);
+}
+document.addEventListener('change', (e) => { if (e.target && e.target.classList && e.target.classList.contains('grant')) refreshNoticeSelect(); });
+async function saveGrant(stepId, btn) {
+  const agents = [...document.querySelectorAll('input.grant:checked')].map(i => i.value);
+  const sel = document.getElementById('notice-agent');
+  const agent = sel ? sel.value : null;
+  const ok = await doStep(stepId, { agents }, btn);
+  if (!ok || !agent) return;
+  try {
+    const r = await api('POST', `/api/modules/${current.id}/notice-agent`, { agent });
+    current.noticeAgent = r.noticeAgent || agent;
+    render();   // repaint so the select shows the saved notice agent
+  } catch (e) { setMsg('err', e.message); }
 }
 async function saveSecrets(stepId, btn) {
   const s = current.steps.find(x => x.id === stepId);
