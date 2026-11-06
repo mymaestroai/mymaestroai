@@ -421,6 +421,8 @@ async function doStep(stepId, input, btn) {
       const next = current.steps.slice(idx + 1).find(s => !s.done) || current.steps.find(s => !s.done);
       selected = current.finishedAt && stepId === current.steps[current.steps.length - 1].id ? null : (next ? next.id : null);
       render(); loadList();
+      const oc = r.result && r.result.check;
+      if (oc && oc.once && oc.lines && oc.lines.length) setMsg('ok', oc.summary + '\n' + oc.lines.join('\n'));   // one-time lines are only in this answer
       done = true;
     } catch (e) {
       setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message + (e.data && e.data.check && e.data.check.lines && e.data.check.lines.length ? '\n' + e.data.check.lines.join('\n') : ''));

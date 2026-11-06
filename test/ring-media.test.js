@@ -588,3 +588,54 @@ test('rtsp-pull.py is the helper the wiring points at', () => {
   assert.ok(fs.existsSync(media.PULL_SCRIPT));
   assert.match(fs.readFileSync(media.PULL_SCRIPT, 'utf8'), /first line of stdin/);
 });
+
+test('children get a minimal environment, and stopChildren ends the live ones (SIGTERM, then SIGKILL after 2 s)', async () => {
+  const E = setup();
+  const saved = process.env.RING_SECRET_PROBE;
+  process.env.RING_SECRET_PROBE = 'hunter2';
+  try {
+    E.api.accessTokenFor = async () => 'tok';
+    const sp = fakeSpawn({ ffmpeg: 'ok' });
+    E.spawn = sp;
+    const m = E.make();
+    await m.runLive('dev', 'still', 0);
+    const sheetSrc = path.join(E.tmp, 'in.mp4');
+    fs.writeFileSync(sheetSrc, 'x');
+    await m.frameSheet(sheetSrc, 10);
+    assert.ok(sp.calls.length >= 3);
+    for (const c of sp.calls) assert.deepStrictEqual(c.opts.env, { PATH: '/usr/bin:/bin', HOME: E.data, LANG: 'C.UTF-8', TZ: 'UTC' }, c.cmd);
+
+    // a hanging run: SIGTERM ends both at once
+    const hang = fakeSpawn({ ffmpeg: 'hang', srcExit: 3 });
+    E.spawn = hang;
+    const run = m.runLive('dev', 'clip', 5);
+    for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
+    assert.strictEqual(hang.calls.length, 2);
+    await m.stopChildren();
+    assert.deepStrictEqual(hang.calls.map((c) => c.child.killed), [['SIGTERM'], ['SIGTERM']]);
+    await run;
+    await m.stopChildren();   // nothing alive: returns at once
+    assert.deepStrictEqual(hang.calls.map((c) => c.child.killed), [['SIGTERM'], ['SIGTERM']]);
+  } finally { if (saved === undefined) delete process.env.RING_SECRET_PROBE; else process.env.RING_SECRET_PROBE = saved; cleanup(E); }
+});
+
+test('stopChildren: a child that ignores SIGTERM gets SIGKILL after 2 s', async (t) => {
+  const E = setup();
+  try {
+    const kills = [];
+    const child = new EventEmitter();
+    child.kill = (sig) => { kills.push(sig); if (sig === 'SIGKILL') child.emit('close', null); return true; };
+    child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new Writable({ write(c, e, cb) { cb(); } });
+    E.spawn = () => child;
+    const m = E.make();
+    t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+    m.frameSheet(path.join(E.tmp, 'in.mp4'), 10);
+    const p = m.stopChildren();
+    assert.deepStrictEqual(kills, ['SIGTERM']);
+    t.mock.timers.tick(1999);
+    assert.deepStrictEqual(kills, ['SIGTERM']);
+    t.mock.timers.tick(1);
+    await p;
+    assert.deepStrictEqual(kills, ['SIGTERM', 'SIGKILL']);
+  } finally { t.mock.timers.reset(); cleanup(E); }
+});

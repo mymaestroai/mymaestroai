@@ -91,6 +91,7 @@ test('acceptEvent: duplicates ignored; inbox capped at 500 (then "full"); every 
 
 test('acceptEvent: a failed save rolls the event back and throws', (t) => {
   const e = env(t);
+  e.store.state();   // loaded while the file is absent
   fs.mkdirSync(path.join(e.dataHome, 'state.json'), { recursive: true });   // a folder where the file belongs: the save fails
   assert.throws(() => e.store.acceptEvent('r1', { id: 'r1', at: e.clock.t }));
   assert.equal(e.store.state().inbox.length, 0);
@@ -517,4 +518,70 @@ test('rateOk: sliding window; least recently used keys fall out beyond 5000', ()
   for (let i = 0; i < BUCKET_MAX + 100; i++) b.rateOk(`k${i}`, 1, 60000);
   assert.equal(b.bucketCount(), BUCKET_MAX);
   assert.equal(BUCKET_MAX, 5000);
+});
+
+// ── review fixes ────────────────────────────────────────────────────────────────────────────────────────────
+
+test('a media root that is a symlink (or has a trailing slash after one) is refused at open', (t) => {
+  const e = env(t);
+  const real = path.join(e.tmp, 'real');
+  fs.mkdirSync(real);
+  const link = path.join(e.tmp, 'link');
+  fs.symlinkSync(real, link);
+  for (const dir of [link, link + '/']) {
+    const s = createStore({ dataHome: e.dataHome, mediaDir: dir, now: () => e.clock.t, log: () => {} });
+    assert.throws(() => s.openFolder([], false), (err) => err.code === 'not a plain folder', dir);
+    assert.deepEqual(s.mediaList(['x']), []);
+  }
+  const ok = e.store.openFolder([], false);
+  fs.closeSync(ok);
+});
+
+test('unreadable state files give ESTATE; absent ones are empty', (t) => {
+  const e = env(t);
+  assert.equal(e.store.account(), null);
+  assert.equal(e.store.unsaved.get(), null);
+  assert.equal(e.store.linkArm.get(), null);
+  fs.mkdirSync(e.dataHome, { recursive: true });
+  for (const [name, call] of [['account.json', () => e.store.account()], ['unsaved.json', () => e.store.unsaved.get()], ['link-arm.json', () => e.store.linkArm.get()]]) {
+    fs.writeFileSync(path.join(e.dataHome, name), '{garbled');
+    assert.throws(call, (err) => err.code === 'ESTATE', name);
+    fs.rmSync(path.join(e.dataHome, name));
+  }
+  fs.writeFileSync(path.join(e.dataHome, 'state.json'), 'nope');
+  assert.throws(() => e.store.acceptEvent('r1', { id: 'r1', at: e.clock.t }), (err) => err.code === 'ESTATE');
+  assert.ok(e.logs.every((l) => !/garbled|nope/.test(l)), 'contents are not logged');
+});
+
+test('link code: a try that cannot be saved closes the arm in memory; tries are counted in memory too', (t) => {
+  const e = env(t);
+  const a = e.store.linkArm.arm({ minutes: 30 });
+  assert.equal(e.store.linkArm.wrong().closed, false);
+  // the disk now refuses writes: put a folder where the arm file's temp/rename target is
+  fs.rmSync(path.join(e.dataHome, 'link-arm.json'));
+  fs.writeFileSync(path.join(e.dataHome, 'link-arm.json'), JSON.stringify({ id: a.id, salt: 's', codeHash: 'h', expiresAt: e.clock.t + 1e6, tries: 0 }));
+  assert.equal(e.store.linkArm.get().tries, 1, 'memory remembers the earlier try although the file says 0');
+  fs.chmodSync(e.dataHome, 0o500);
+  try {
+    const w = e.store.linkArm.wrong();
+    if (process.getuid && process.getuid() === 0) return;   // root can write anyway
+    assert.equal(w.closed, true);
+  } finally { fs.chmodSync(e.dataHome, 0o700); }
+  assert.equal(e.store.linkArm.get(), null, 'closed in memory, though the file is still there');
+  assert.ok(fs.existsSync(path.join(e.dataHome, 'link-arm.json')));
+  const b = e.store.linkArm.arm({ minutes: 30 });
+  assert.ok(e.store.linkArm.get() && e.store.linkArm.get().id === b.id, 'a new arm opens again');
+});
+
+test("'__proto__' and 'constructor' are ordinary request ids", (t) => {
+  const e = env(t);
+  for (const id of ['__proto__', 'constructor', 'toString']) {
+    assert.equal(e.store.acceptEvent(id, { id, at: e.clock.t }), 'ok', id);
+    assert.equal(e.store.acceptEvent(id, { id, at: e.clock.t }), 'duplicate', id);
+  }
+  assert.equal(Object.getPrototypeOf(e.store.state().seen), null);
+  const again = createStore({ dataHome: e.dataHome, mediaDir: e.mediaDir, now: () => e.clock.t, log: () => {} });
+  assert.equal(Object.getPrototypeOf(again.state().seen), null, 'restored without a prototype');
+  assert.equal(again.acceptEvent('__proto__', { id: '__proto__', at: e.clock.t }), 'duplicate');
+  assert.equal(again.acceptEvent('fresh', { id: 'fresh', at: e.clock.t }), 'ok');
 });

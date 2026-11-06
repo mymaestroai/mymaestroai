@@ -41,6 +41,8 @@
 
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const dns = require('node:dns');
+const net = require('node:net');
 
 const USER_AGENT = 'MyMaestroAI-Ring/1.0';   // the one place the User-Agent is set
 const API_BASE = 'https://api.amazonvision.com';
@@ -87,15 +89,28 @@ async function readLimited(res, max) {   // the body up to max bytes: by the ann
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const isImage = (b) => !!b && b.length > 8 && ((b[0] === 0xff && b[1] === 0xd8) || b.subarray(0, 8).equals(PNG_MAGIC));
 function privateHost(host) {
+  const bracketed = /^\[.*\]$/.test(String(host));
   const h = String(host).replace(/^\[|\]$/g, '').toLowerCase();
   if (!h || h === 'localhost' || /\.(localhost|local|internal|lan|home\.arpa)$/.test(h)) return true;
+  if (!bracketed && !h.includes(':') && (!h.includes('.') || h.endsWith('.'))) return true;   // 'nas', 'localhost.': single-label or rooted names
   const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (v4) {
     const [a, b] = [Number(v4[1]), Number(v4[2])];
     return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
   }
-  if (h.includes(':')) return h === '::' || h === '::1' || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || h.startsWith('::ffff:') || h.startsWith('64:ff9b:');
+  if (h.includes(':')) return !/^[23][0-9a-f]{3}:/.test(h) || /^2001:(0|db8):|^2002:/.test(h);   // only global unicast (2000::/3) passes; documentation, 6to4 and everything else is refused
   return /^\d+$/.test(h) || /^0x/i.test(h);   // integer or hex forms of an IPv4 address
+}
+// Every address a name resolves to must be public. NOTE: the connection itself is not pinned to the addresses checked
+// here (a name could answer differently at connect time); pinning the connection to the checked address is a follow-up.
+const privateAddress = (addr) => privateHost(addr) || addr === '0.0.0.0' || /^::ffff:/i.test(addr);
+async function resolvesPublic(host, lookup) {
+  const h = String(host).replace(/^\[|\]$/g, '');
+  if (net.isIP(h)) return !privateAddress(h);
+  try {
+    const list = await lookup(h, { all: true });
+    return Array.isArray(list) && list.length > 0 && list.every((x) => x && typeof x.address === 'string' && !privateAddress(x.address));
+  } catch { return false; }
 }
 // A pre-signed address must be public https (plain-http loopback only when the tests allow it).
 function mediaAddress(loc, base = API_BASE, allowHttpLoopback = false) {
@@ -126,6 +141,7 @@ function createApi(ctx) {
   const log = ctx.log || (() => {});
   const now = ctx.now || Date.now;
   const doFetch = ctx.fetch || fetch;
+  const lookup = ctx.lookup || dns.promises.lookup;   // injectable so tests need no network
   const testing = env.RING_TEST === '1';   // the endpoints can only be redirected, and plain-http media allowed, in tests
   const API = (testing && env.RING_API_BASE) || API_BASE;
   const OAUTH = (testing && env.RING_OAUTH_URL) || OAUTH_URL;
@@ -201,14 +217,21 @@ function createApi(ctx) {
   let relinkHook = null;
   function load() {
     if (cur) return cur;
-    const u = store.unsaved.get();
+    const u = store.unsaved.get();   // unreadable state throws ESTATE here: never a silent fall back to REFRESH_TOKEN
     const a = store.account();
-    cur = { refresh: u || env.REFRESH_TOKEN || null, access: a && a.access ? a.access : null, unsaved: !!u, writing: null };
+    cur = { refresh: u || env.REFRESH_TOKEN || null, access: a && a.access ? a.access : null, unsaved: !!u, writing: null, acct: a, writeFailed: false };
     return cur;
+  }
+  // The account record; if account.json turns unreadable later, what was last read stays in use (renewal carries on).
+  function acct() {
+    try { const a = store.account(); if (cur) cur.acct = a; return a; } catch (e) { if (e.code === 'ESTATE' && cur) return cur.acct; throw e; }
   }
   function persistRenewal() {
     load();
     if (!cur.unsaved) return Promise.resolve(true);
+    if (cur.writeFailed) {   // the renewed token could not be written privately: try again at every upkeep
+      try { store.unsaved.set(cur.refresh); cur.writeFailed = false; } catch (e) { logEvery('unsavedwrite', 60000, 'could not write the unsaved sign-in file yet:', e.code || e.message); }
+    }
     if (cur.writing) return cur.writing;
     const token = cur.refresh;
     cur.writing = (async () => {
@@ -217,6 +240,7 @@ function createApi(ctx) {
         if (!r || r.ok !== true) { logEvery('unsaved', 60000, 'the hub did not confirm saving the renewed Ring sign-in yet; it stays in use and is retried'); return false; }
         if (cur.refresh === token) {
           cur.unsaved = false;
+          cur.writeFailed = false;
           try { store.unsaved.clear(); } catch (e) { log('could not remove the unsaved sign-in file:', e.code || e.message); }
         }
         return true;
@@ -228,7 +252,7 @@ function createApi(ctx) {
     return cur.writing;
   }
   async function start() {
-    load();
+    try { load(); } catch (e) { if (e.code === 'ESTATE') return; throw e; }
     if (cur.unsaved) await persistRenewal();
   }
   // Ring has retired the old refresh token: remember the new one on disk first, then give it to the hub.
@@ -237,7 +261,8 @@ function createApi(ctx) {
     cur.refresh = pair.refresh_token;
     cur.access = accessOf(pair);
     cur.unsaved = true;
-    try { store.unsaved.set(pair.refresh_token); } catch (e) { log('could not write the unsaved sign-in file:', e.code || e.message); }
+    cur.writeFailed = false;
+    try { store.unsaved.set(pair.refresh_token); } catch (e) { cur.writeFailed = true; log('could not write the unsaved sign-in file:', e.code || e.message); }
     try { if (accountRec) store.saveAccount({ ...accountRec, access: cur.access }); } catch (e) { log('could not save the renewed access token:', e.code || e.message); }
     return persistRenewal();
   }
@@ -253,9 +278,9 @@ function createApi(ctx) {
   // A refresh result is applied only if the refresh token it started from is still the current one: a relink in between wins.
   function refreshAccount(force) {
     return withLock('acct', async () => {
-      load();
-      if (cur.unsaved && !(await persistRenewal())) return true;   // keep using the unsaved sign-in; never spend a retired token
-      const a = store.account();
+      try { load(); } catch (e) { if (e.code === 'ESTATE') return false; throw e; }
+      if (cur.unsaved) await persistRenewal();   // an unconfirmed hand-over does not stop renewing: the newest (unsaved) token is the one spent
+      const a = acct();
       if (!a || a.needs_relink || !cur.refresh) return false;
       const acc = cur.access || a.access;
       const t0 = now();
@@ -281,12 +306,12 @@ function createApi(ctx) {
   async function accessTokenFor() {
     load();
     if (cur.unsaved) await persistRenewal();
-    let a = store.account();
+    let a = acct();
     if (!a) throw new Error('no linked Ring account');
     if (a.needs_relink) throw new Error('the Ring connection needs relinking');
     const acc = cur.access || a.access;
     if (!acc || acc.expires_at - now() < FORCE_WHEN_LEFT_MS) await refreshAccount(true);
-    a = store.account();
+    a = acct();
     if (!a || a.needs_relink) throw new Error('the Ring connection needs relinking');
     const fresh = cur.access || a.access;
     if (!fresh || !fresh.access_token) throw new Error('the Ring connection needs relinking');
@@ -332,6 +357,13 @@ function createApi(ctx) {
     return { online, reported_at: reported };
   }
 
+  // A media address, checked by name and, before every fetch (each redirect hop), by what the name resolves to.
+  async function publicMediaAddress(loc) {
+    const u = mediaAddress(loc, API, ALLOW_HTTP_MEDIA);
+    if (!u || u.protocol === 'http:') return u;   // plain http only ever passes for the test loopback
+    return (await resolvesPublic(u.hostname, lookup)) ? u : null;
+  }
+
   // ── images ────────────────────────────────────────────────────────────────────────────────────────────────
   // Ring's image download is two steps: POST → 303 with a short-lived pre-signed address → GET that address (no bearer
   // token: it must not leave Ring's API; no further redirects). Right after an event the image may not exist yet.
@@ -343,7 +375,7 @@ function createApi(ctx) {
     if (REDIRECTS.includes(r.status)) {
       const loc = r.headers.get('location');
       await r.arrayBuffer().catch(() => {});
-      const u = mediaAddress(loc, API, ALLOW_HTTP_MEDIA);
+      const u = await publicMediaAddress(loc);
       if (!u) return { why: 'Ring gave a download address that is not a public https address' };
       let g;
       try { g = await doFetch(u, { redirect: 'manual', signal: AbortSignal.timeout(20000) }); } catch (e) { return { why: `the download failed (${clean(e.message, 60)})` }; }
@@ -370,7 +402,7 @@ function createApi(ctx) {
       const loc = r.headers.get('location');
       await r.arrayBuffer().catch(() => {});
       if (hop >= CLIP_HOPS) return { error: 'Ring redirected too many times' };
-      const u = mediaAddress(loc, API, ALLOW_HTTP_MEDIA);
+      const u = await publicMediaAddress(loc);
       if (!u) return { error: 'Ring gave a download address that is not a public https address' };
       try { r = await doFetch(u, { redirect: 'manual', signal: AbortSignal.timeout(180000) }); } catch (e) { return { error: `the download failed (${clean(e.message, 60)})` }; }
     }
@@ -424,14 +456,16 @@ function createApi(ctx) {
     return out;
   }
 
+  const STATE_WARNING = 'Ring\'s saved sign-in cannot be read; renewal and linking are paused until it is fixed';
   const SAVE_WARNING = 'Ring renewed the sign-in but the hub has not confirmed saving it yet; it is kept privately and retried';
   return {
     API, start, credentials, keyCandidates: keyCands, rememberKeyEncoding, hardwareId, ringFetch, oauthToken, exchangeCode, userMe, bearerCall,
     adoptPair, accessTokenFor, refreshAccount, persistRenewal, api, refreshDevices, refreshDevicesOnce, deviceStatus,
     imageDownload, clipDownload, eventHistory, withLock,
-    warning: () => { load(); return cur.unsaved ? SAVE_WARNING : null; },
-    unsavedToken: () => { load(); return cur.unsaved; },
-    needsRelink() { const a = store.account(); return { linked: !!a, needs_relink: !!(a && a.needs_relink), reason: a && a.relink_reason ? a.relink_reason : null }; },
+    warning: () => { try { load(); } catch { return STATE_WARNING; } return cur.unsaved ? (cur.writeFailed ? SAVE_WARNING + '; the private copy could not be written either' : SAVE_WARNING) : null; },
+    unsavedToken: () => { try { load(); } catch { return false; } return cur.unsaved; },
+    unsavedWriteFailed: () => !!(cur && cur.unsaved && cur.writeFailed),   // health result: unsaved_write_failed
+    needsRelink() { let a; try { a = acct(); } catch { a = cur ? cur.acct : null; } return { linked: !!a, needs_relink: !!(a && a.needs_relink), reason: a && a.relink_reason ? a.relink_reason : null }; },
     onNeedsRelink(fn) { relinkHook = typeof fn === 'function' ? fn : null; },
   };
 }

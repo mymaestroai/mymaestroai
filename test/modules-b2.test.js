@@ -114,11 +114,12 @@ test('guard: the result of a hub-class tool never reaches audit.jsonl', async ()
 });
 
 // ── index.js: settings restart the connector; callTimeoutMs / rotatingSecret reach the upsert ──
-function rig(manifestExtra = {}) {
+function rig(manifestExtra = {}, { steps, indexJs } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-b2-'));
   const root = path.join(dir, 'root'); fs.mkdirSync(path.join(root, 'guarddemo'), { recursive: true });
   fs.writeFileSync(path.join(root, 'guarddemo', 'module.json'), JSON.stringify({ ...base(), settings: [{ key: 'n', type: 'number', label: 'N', default: 3 }], ...manifestExtra }));
-  fs.writeFileSync(path.join(root, 'guarddemo', 'setup.json'), JSON.stringify({ steps: [{ id: 'install', type: 'install', title: 'Install' }, { id: 'set', type: 'settings', title: 'Settings' }, { id: 'done', type: 'finish', title: 'Finish' }] }));
+  fs.writeFileSync(path.join(root, 'guarddemo', 'setup.json'), JSON.stringify({ steps: steps || [{ id: 'install', type: 'install', title: 'Install' }, { id: 'set', type: 'settings', title: 'Settings' }, { id: 'done', type: 'finish', title: 'Finish' }] }));
+  if (indexJs) fs.writeFileSync(path.join(root, 'guarddemo', 'index.js'), indexJs);
   fs.copyFileSync(path.join(FIX, 'server.js'), path.join(root, 'guarddemo', 'server.js'));
   const conns = new Map(); const calls = [];
   const connectors = {
@@ -215,4 +216,28 @@ test('receivers: the request deadline is receiver.timeoutSec seconds, 10 by defa
     await p;
     assert.deepStrictEqual(seen, [{ timeoutMs: want }]);
   }
+});
+
+test('index: a once:true check keeps its lines out of data/modules.json and the module detail; a normal check keeps them', async () => {
+  const r = rig({}, {
+    steps: [{ id: 'install', type: 'install', title: 'Install' }, { id: 'link', type: 'check', check: 'link', title: 'Link' }, { id: 'plain', type: 'check', check: 'plain', title: 'Plain' }, { id: 'done', type: 'finish', title: 'Finish' }],
+    indexJs: "module.exports = { checks: { async link() { return { ok: true, summary: 'armed', lines: ['One-time code: TEST-CODE'], once: true }; }, async plain() { return { ok: true, summary: 'fine', lines: ['visible line'] }; } } };",
+  });
+  try {
+    await r.mods.runStep('guarddemo', 'install', {});
+    const ans = await r.mods.runStep('guarddemo', 'link', {});
+    assert.ok(ans.result.check.lines.includes('One-time code: TEST-CODE'), 'the step answer carries the line');
+    const saved = fs.readFileSync(path.join(r.dir, 'modules.json'), 'utf8');
+    assert.ok(!saved.includes('TEST-CODE'), 'not on disk');
+    assert.ok(!JSON.stringify(ans.module).includes('TEST-CODE'), 'not in the answer\'s module detail');
+    assert.ok(!JSON.stringify(r.mods.detail('guarddemo')).includes('TEST-CODE'), 'not in the module detail');
+    const lc = r.mods.detail('guarddemo').lastCheck;
+    assert.strictEqual(lc.ok, true); assert.strictEqual(lc.summary, 'armed'); assert.ok(lc.at);
+    const again = await r.mods.check('guarddemo', 'link');
+    assert.ok(again.lines.includes('One-time code: TEST-CODE'), 'the check route answer carries it too');
+    assert.ok(!fs.readFileSync(path.join(r.dir, 'modules.json'), 'utf8').includes('TEST-CODE'));
+    await r.mods.runStep('guarddemo', 'plain', {});
+    assert.deepStrictEqual(r.mods.detail('guarddemo').lastCheck.lines, ['visible line']);
+    assert.ok(fs.readFileSync(path.join(r.dir, 'modules.json'), 'utf8').includes('visible line'));
+  } finally { r.cleanup(); }
 });

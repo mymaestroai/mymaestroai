@@ -30,6 +30,7 @@ module.exports = {
         if (!h.linked) return { ok: false, summary: 'No Ring account is connected yet. Use the connect step in the setup.' };
         if (h.needs_relink) return { ok: false, summary: 'The Ring connection was lost. Open the setup and connect your Ring account again.' };
         const warnings = [];
+        if (h.unsaved_write_failed) warnings.push('Ring renewed the sign-in, and it could not be written to this computer\'s disk either. Free some disk space; until it is saved, a restart would mean connecting again.');
         if (h.unsaved_token) warnings.push('Ring renewed the sign-in but it has not been saved yet. It works for now and is retried; if this stays, the connection may need to be made again after a restart.');
         if (h.ring_reachable === false) return { ok: false, summary: 'Ring could not be reached just now.', warnings };
         return { ok: true, summary: 'Connected to Ring.', warnings };   // no camera names, pictures or event details: they are not kept in check results
@@ -48,6 +49,7 @@ module.exports = {
         const zone = zoneOf(ctx.settings);
         return {
           ok: true,
+          once: true,   // the hub stores this result's lines nowhere and returns them only in this step's answer (the code stays out of the summary)
           summary: 'The connection is open. Start it from the Ring app now.',
           lines: [
             `One-time code: ${a.code}`,

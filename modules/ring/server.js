@@ -246,7 +246,7 @@ function createRing({ env = process.env, write = (line) => process.stdout.write(
     const r = api.needsRelink();
     const out = {
       ok: r.linked && !r.needs_relink, linked: r.linked, needs_relink: r.needs_relink, relink_reason: r.reason,
-      unsaved_token: api.unsavedToken(), secrets_present: !!api.credentials(), ring_reachable: null,
+      unsaved_token: api.unsavedToken(), unsaved_write_failed: typeof api.unsavedWriteFailed === 'function' ? api.unsavedWriteFailed() : false, secrets_present: !!api.credentials(), ring_reachable: null,
       devices: cameras.list().length, ...events.status(), faces: await faces.ping().catch(() => ({ configured: false })), tools: toolsPresent(),
     };
     if (r.linked && !r.needs_relink && out.secrets_present) {
@@ -299,17 +299,31 @@ function createRing({ env = process.env, write = (line) => process.stdout.write(
       if (store.claimedAccount() && !(Date.now() - fetched < DEVICES_MAX_AGE_MS)) await step('camera list', () => api.refreshDevicesOnce());
     } finally { upkeeping = false; }
   }
+  // The hub registers its request handler after it has listed the tools, so a request to it (the hand-over of a renewed sign-in)
+  // is sent only once the first tools/list has been answered.
+  let hubReady = false, markReady;
+  const hubReadyP = new Promise((r) => { markReady = () => { hubReady = true; r(); }; });
   let timers = [];
   async function start() {
-    await api.start().catch((e) => log('start: could not retry the sign-in hand-over:', clean(e && e.message, 80)));
     events.start();
     const every = testing && Number(env.RING_TEST_UPKEEP_MS) > 0 ? Number(env.RING_TEST_UPKEEP_MS) : UPKEEP_MS;
-    const t1 = setTimeout(() => upkeep().catch(() => {}), FIRST_UPKEEP_MS);
-    const t2 = setInterval(() => upkeep().catch(() => {}), every);
-    for (const t of [t1, t2]) if (t.unref) t.unref();
-    timers = [t1, t2];
+    hubReadyP.then(() => api.start()).catch((e) => log('start: could not retry the sign-in hand-over:', clean(e && e.message, 80)))
+      .then(() => { if (!stopping) timers.push(setTimeout(() => upkeep().catch(() => {}), FIRST_UPKEEP_MS)); });
+    const t2 = setInterval(() => { if (hubReady) upkeep().catch(() => {}); }, every);
+    if (t2.unref) t2.unref();
+    timers.push(t2);
   }
-  function stop() { for (const t of timers) { clearTimeout(t); clearInterval(t); } timers = []; events.stop(); }
+  let stopping = false;
+  // Stops the timers and the helper programs (SIGTERM, SIGKILL after 2 s); waits for them at most 3 s.
+  async function stop() {
+    stopping = true;
+    for (const t of timers) { clearTimeout(t); clearInterval(t); }
+    timers = [];
+    events.stop();
+    let t;
+    await Promise.race([Promise.resolve().then(() => media.stopChildren()).catch(() => {}), new Promise((r) => { t = setTimeout(r, 3000); })]);
+    clearTimeout(t);
+  }
 
   // ── JSON-RPC ──
   async function handle(msg) {
@@ -322,7 +336,7 @@ function createRing({ env = process.env, write = (line) => process.stdout.write(
       case 'initialize':
         return reply({ protocolVersion: (params && params.protocolVersion) || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'ring', version: '1.0.0' } });
       case 'ping': return reply({});
-      case 'tools/list': return reply({ tools: TOOLS });
+      case 'tools/list': setImmediate(markReady); return reply({ tools: TOOLS });   // marked once the answer has been written
       case 'tools/call': {
         const name = params && params.name;
         if (!TOOLS.some((t) => t.name === name)) return error(-32602, 'Unknown tool.');
@@ -355,7 +369,7 @@ function main() {
   const ring = createRing();
   let buf = '';
   let stopped = false;
-  const shutdown = () => { if (stopped) return; stopped = true; ring.stop(); process.exit(0); };
+  const shutdown = () => { if (stopped) return; stopped = true; ring.stop().catch(() => {}).then(() => process.exit(0)); };
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (d) => {
     buf += d;

@@ -22,6 +22,7 @@ from the internet over https, so your Maestro needs a public address (for exampl
   with the GStreamer bindings. Test the second with `python3 -c 'import gi; gi.require_version("Gst", "1.0")'`: no
   error means it is there. On Debian or Ubuntu: `sudo apt install ffmpeg python3-gi gstreamer1.0-plugins-good
   gstreamer1.0-plugins-bad gstreamer1.0-libav`. Event pictures, recorded clips and history work without them.
+  The module needs Linux (it uses /proc/self/fd to write files safely); on other systems it does not run.
 - **Client ID, secret and signing key:** paste the three values from Ring.
 - **Your settings:** the email of your Ring account, your public https address, your time zone, optional house
   groups and the face recognition switch (see below).

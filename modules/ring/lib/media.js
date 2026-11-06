@@ -21,6 +21,7 @@
 //   pruneMedia(parts, nameRe, days, quota, keep) -> number removed   (keep = Set of paths below the media folder, e.g. store.recent.keep())
 //   pruneStills(keep) -> number removed, pruneClips(keep) -> number removed, pruneWork() -> number removed
 //   stillDays() -> days stills are kept (face records follow it)
+//   stopChildren() -> Promise   SIGTERM every live helper process, SIGKILL after 2 s
 //   localParts(ts), localDay(ts), localTime(ts), parseWhen(v), zone(), freeBytes(dir), workFile(ext)
 //
 // module.exports = { createMedia, plus pure helpers: slug, clean, shortId, isImage, realFields, parseWhen(v, zone),
@@ -106,7 +107,7 @@ function writeAll(fd, buf) {
 function createMedia(ctx) {
   const env = ctx.env || process.env;
   const store = ctx.store, api = ctx.api;
-  const spawn = ctx.spawn || childProcess.spawn;
+  const rawSpawn = ctx.spawn || childProcess.spawn;
   const now = ctx.now || Date.now;
   const log = ctx.log || (() => {});
   const testMode = env.RING_TEST === '1';   // test-only stand-ins are ignored otherwise
@@ -114,6 +115,30 @@ function createMedia(ctx) {
   const ffmpeg = testMode && env.RING_TEST_FFMPEG ? env.RING_TEST_FFMPEG : FFMPEG;
   const liveFile = testMode ? env.RING_TEST_LIVE_FILE || '' : '';
   const workDir = store.workDir;
+  // Every child gets a minimal environment, so no secret of this process reaches it. Live children are remembered for stopChildren().
+  const childEnv = () => ({ PATH: '/usr/bin:/bin', HOME: store.dataHome || env.CONNECTOR_DATA_HOME || '/tmp', LANG: 'C.UTF-8', TZ: 'UTC' });
+  const children = new Set();
+  function spawn(cmd, args, opts) {
+    const child = rawSpawn(cmd, args, { ...(opts || {}), env: childEnv() });
+    if (child && typeof child.on === 'function') {
+      children.add(child);
+      const gone = () => children.delete(child);
+      child.on('close', gone);
+      child.on('error', gone);
+    }
+    return child;
+  }
+  // SIGTERM to every live child, SIGKILL for those still there after 2 s. Resolves when they are gone or the SIGKILL went out.
+  function stopChildren() {
+    const list = [...children];
+    if (!list.length) return Promise.resolve();
+    for (const c of list) { try { c.kill('SIGTERM'); } catch {} }
+    return new Promise((resolve) => {
+      let poll = null;
+      const t = setTimeout(() => { clearInterval(poll); for (const c of list) { if (children.has(c)) { try { c.kill('SIGKILL'); } catch {} } } resolve(); }, 2000);
+      poll = setInterval(() => { if (!list.some((c) => children.has(c))) { clearTimeout(t); clearInterval(poll); resolve(); } }, 50);
+    });
+  }
   const settings = () => { const s = typeof ctx.settings === 'function' ? ctx.settings() : ctx.settings; return s && typeof s === 'object' ? s : {}; };
   const zone = () => validZone(settings().time_zone);
   const quiet = new Map();
@@ -348,7 +373,7 @@ function createMedia(ctx) {
     fetchStill, latestStill, liveStill, saveStill, liveClip, recordedClip, makeClip, runLive, frameSheet, placeFile, spaceForLive,
     pruneMedia, pruneStills, pruneClips, pruneWork, stillDays,
     localParts: lp, localDay: (ts) => localDay(ts, zone()), localTime: (ts) => localTime(ts, zone()), parseWhen: (v) => parseWhen(v, zone()),
-    zone, freeBytes, workFile,
+    zone, freeBytes, workFile, stopChildren,
   };
 }
 

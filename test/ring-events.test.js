@@ -389,7 +389,7 @@ test('outbox: a hub that refuses with a limit keeps the notice, which is retried
   }
 });
 
-test('outbox: other refusals drop the notice at once', async () => {
+test('outbox: only "The notice is empty." drops a notice; any other refusal is retried', async () => {
   const { env, ev } = setup();
   env.noticeAnswer = { ok: false, error: 'The notice is empty.' };
   await ev.handle(req(event({}, env)));
@@ -400,6 +400,10 @@ test('outbox: other refusals drop the notice at once', async () => {
   env.clock += COALESCE_MS * 2;
   await ev.handle(req(event({}, env)));
   await ev.idle();
+  assert.strictEqual(env.state.outbox.length, 1, 'an unknown refusal is kept for another try');
+  assert.strictEqual(env.state.outbox[0].tries, 1);
+  env.noticeAnswer = { ok: true };
+  await ev.flushOutbox();
   assert.strictEqual(env.state.outbox.length, 0);
 });
 
@@ -419,11 +423,12 @@ test('outbox: kept 6 hours, then dropped; at most 50 wait; order is kept', async
 
   for (let i = 0; i < OUTBOX_MAX + 5; i++) await ev.queueNotice(`n${i}`, [], null);
   assert.strictEqual(env.state.outbox.length, OUTBOX_MAX);
-  assert.strictEqual(env.state.outbox[0].text, 'n5');
+  assert.strictEqual(env.state.outbox[0].text, 'n0', 'a full outbox refuses the newest and keeps the head');
+  assert.ok(env.logs.some((l) => /refused the newest/.test(l)));
   env.noticeAnswer = { ok: true };
   env.notices.length = 0;
   await ev.flushOutbox();
-  assert.deepStrictEqual(env.notices.map((n) => n.text).slice(0, 3), ['n5', 'n6', 'n7']);
+  assert.deepStrictEqual(env.notices.map((n) => n.text).slice(0, 3), ['n0', 'n1', 'n2']);
   assert.strictEqual(env.state.outbox.length, 0);
 });
 
@@ -470,4 +475,66 @@ test('status counts the inbox and the outbox', async () => {
   env.noticeAnswer = { ok: false, error: 'No agent to tell.' };
   await ev.queueNotice('x', [], null);
   assert.deepStrictEqual(ev.status(), { inbox: 0, outbox: 1 });
+});
+
+test('replay: an old (49 h) signed event and a far-future one are ignored with 200', async () => {
+  const { env, ev } = setup();
+  for (const ts of [env.clock - 49 * HOUR, env.clock + 11 * 60000, env.clock + 5 * 24 * HOUR]) {
+    const r = await ev.handle(req(event({ ts }, env)));
+    assert.strictEqual(r.status, 200);
+  }
+  await ev.idle();
+  assert.strictEqual(env.state.inbox.length, 0);
+  assert.strictEqual(env.notices.length, 0);
+  assert.strictEqual(Object.keys(env.state.seen).length, 0);
+  assert.strictEqual(env.logs.filter((l) => /older than 48 h/.test(l)).length, 1, 'logged once a minute');
+  const ok = await ev.handle(req(event({ ts: env.clock - 47 * HOUR }, env)));
+  assert.strictEqual(ok.status, 200);
+  await ev.idle();
+  assert.strictEqual(env.notices.length, 1, 'inside the window it is acted on');
+});
+
+test('replay: a replayed body without request_id is a duplicate', async () => {
+  const { env, ev } = setup();
+  const e = event({}, env);
+  delete e.meta.request_id;
+  assert.strictEqual((await ev.handle(req(e))).status, 200);
+  await ev.idle();
+  assert.strictEqual(env.notices.length, 1);
+  assert.ok(Object.keys(env.state.seen).some((k) => /^body:[0-9a-f]{64}$/.test(k)));
+  env.clock += COALESCE_MS * 2;
+  assert.strictEqual((await ev.handle(req(e))).status, 200);
+  await ev.idle();
+  assert.strictEqual(env.notices.length, 1, 'the same body is not acted on twice');
+  assert.ok(env.logs.some((l) => /duplicate event ignored/.test(l)));
+});
+
+test('outbox: the in-flight head is never dropped and the acknowledged entry is removed by id', async () => {
+  const { env, ev } = setup();
+  let release;
+  env.noticeAnswer = () => new Promise((r) => { release = r; });
+  const p = ev.queueNotice('head', [], null);
+  await new Promise((r) => setImmediate(r));
+  const head = env.state.outbox[0];
+  assert.ok(head.id, 'entries carry an immutable id');
+  for (let i = 0; i < OUTBOX_MAX + 3; i++) ev.queueNotice(`n${i}`, [], null);   // joins the delivery that is waiting on the hub
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(env.state.outbox.length, OUTBOX_MAX);
+  assert.strictEqual(env.state.outbox[0], head, 'the head in flight stays');
+  // something else rearranges the outbox while the hub is answering
+  env.state.outbox.unshift({ id: 'other', text: 'other', files: [], at: env.clock, tries: 0 });
+  env.noticeAnswer = { ok: false, error: 'Too many notices this hour.' };   // later notices wait
+  release({ ok: true });
+  await p;
+  assert.ok(!env.state.outbox.some((n) => n.id === head.id), 'the acknowledged entry is gone');
+  assert.strictEqual(env.state.outbox[0].id, 'other', 'an unrelated entry is not removed in its place');
+});
+
+test('state: lastNotice and suppressed entries older than 24 h are pruned on save', async () => {
+  const { env, ev } = setup();
+  env.state.lastNotice = { old: env.clock - 25 * HOUR, fresh: env.clock - HOUR };
+  env.state.suppressed = { old: 3, fresh: 2 };
+  await ev.queueNotice('x', [], null);
+  assert.deepStrictEqual(Object.keys(env.state.lastNotice), ['fresh']);
+  assert.deepStrictEqual(Object.keys(env.state.suppressed), ['fresh']);
 });

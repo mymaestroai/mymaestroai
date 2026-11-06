@@ -51,7 +51,9 @@ test('the checks: urls from the saved public address, health summary without cam
   assert.strictEqual(w.warnings.length, 1);
   const l = await checks.link({ settings: { time_zone: 'UTC' }, callTool: async (name, args) => { assert.strictEqual(name, 'arm_link'); return JSON.stringify({ code: 'ABCD-2345', expires_at: new Date(Date.now() + 1800000).toISOString(), minutes: args.minutes }); }, parse });
   assert.strictEqual(l.ok, true);
+  assert.strictEqual(l.once, true, 'the hub keeps the lines out of its stores');
   assert.ok(l.lines[0].includes('ABCD-2345'));
+  assert.ok(!l.summary.includes('ABCD-2345'), 'the code stays out of the summary');
 });
 
 // ── every call one lib file makes on another lands on a function that exists ──

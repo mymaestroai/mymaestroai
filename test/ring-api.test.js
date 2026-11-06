@@ -360,20 +360,20 @@ test('hub does not confirm: the unsaved file stays, the new token stays in use, 
   assert.equal(api.unsavedToken(), true);
   const tokenCalls = () => e.R.calls.filter((c) => c.path === '/oauth/token').length;
   assert.equal(tokenCalls(), 1);
-  // time passes, the access token runs low: no new refresh while the hub has not confirmed (the old one is retired, the new is not saved)
+  // time passes, the access token runs low: renewal goes on from the unsaved token, and the hub is handed the newest
   e.clock.t += 4 * 3600 * 1000;
   assert.equal(await api.refreshAccount(false), true);
-  assert.equal(tokenCalls(), 1, 'no refresh while unsaved');
-  assert.ok(e.hub.calls.length >= 2, 'the hand-over was retried');
+  assert.equal(tokenCalls(), 2, 'renewed from the unsaved token');
+  const newest = e.store.unsaved.get();
+  assert.notEqual(newest, newTok);
+  assert.equal(e.hub.calls[e.hub.calls.length - 1].params.value, newest, 'the newest token is handed to the hub');
   // the hub recovers
   e.hub.mode = 'ok';
   assert.equal(await api.persistRenewal(), true);
   assert.equal(e.store.unsaved.get(), null);
   assert.equal(api.warning(), null);
-  await api.refreshAccount(false);
-  assert.equal(tokenCalls(), 2);
   const spent = e.R.calls.filter((c) => c.path === '/oauth/token').map((c) => new URLSearchParams(c.body).get('refresh_token'));
-  assert.deepEqual(spent, ['r0', newTok]);
+  assert.deepEqual(spent, ['r0', newTok], 'only live tokens were ever spent');
 });
 
 test('a hub error is the same as not confirmed, and the token is never logged', async (t) => {
@@ -692,4 +692,87 @@ test('eventHistory: stops at 200 events and at 10 pages; a first-page failure is
   assert.equal((await api.eventHistory('dev-few', 0, ['ding'])).length, 10);
   assert.equal(e.R.histCalls, 10);
   await assert.rejects(api.eventHistory('dev-hfail', 0, ['ding']), /Ring answered 500/);
+});
+
+// ── review fixes: media addresses by name and by resolution, renewal with an unsaved token, unreadable state ───
+
+test('privateHost: single-label names, rooted names and non-global IPv6 are refused', () => {
+  for (const h of ['nas', 'localhost.', 'example.com.', 'fc00::1', 'fd12:3456::1', '[fd00::1]', '2001:db8::1', 'ff02::1']) assert.ok(privateHost(h), h);
+  for (const h of ['[2606:4700::1111]', '2a00:1450:4001::1']) assert.ok(!privateHost(h), h);
+});
+
+test('imageDownload: names that are single-label, rooted, IPv6 ULA, or that resolve to a private address are never fetched', async (t) => {
+  const e = await setup(t);
+  e.link();
+  const fetched = [];
+  let loc = '';
+  const fake = async (url, o) => {
+    if (o && o.method === 'POST') return new Response(null, { status: 303, headers: { location: loc } });
+    fetched.push(String(url));
+    return new Response(JPEG, { status: 200 });
+  };
+  const looked = [];
+  const lookup = async (h, o) => { looked.push([h, o]); return h === 'mixed.example.com' ? [{ address: '8.8.8.8', family: 4 }, { address: '10.0.0.5', family: 4 }] : h === 'cdn.example.com' ? [{ address: '8.8.8.8', family: 4 }] : [{ address: '10.0.0.5', family: 4 }]; };
+  const env = { RING_TEST: '1', RING_API_BASE: 'https://ring.example.com', CLIENT_ID: 'cid', CLIENT_SECRET: 'csec', HMAC_KEY: 'k', REFRESH_TOKEN: 'r0' };
+  const api = createApi({ env, settings: {}, store: e.store, log: () => {}, now: () => e.clock.t, fetch: fake, lookup, hubRequest: async () => ({ ok: true }) });
+  for (const l of ['https://nas/x.jpg', 'https://localhost./x.jpg', 'https://[fd00::1]/x.jpg', 'https://internal-cdn.example.com/x.jpg', 'https://mixed.example.com/x.jpg']) {
+    loc = l;
+    const d = await api.imageDownload('dev', {});
+    assert.ok(!d.buf, l);
+    assert.match(d.why, /not a public https address/, l);
+  }
+  assert.deepEqual(fetched, [], 'nothing was fetched');
+  assert.ok(looked.some(([h, o]) => h === 'internal-cdn.example.com' && o.all === true), 'resolved with all:true');
+  loc = 'https://cdn.example.com/x.jpg';
+  const ok = await api.imageDownload('dev', {});
+  assert.ok(ok.buf, 'a name that resolves only to public addresses passes');
+  assert.deepEqual(fetched, ['https://cdn.example.com/x.jpg']);
+});
+
+test('renewal while a renewed token is unsaved goes on from the unsaved token; a failed unsaved write is retried and reported', async (t) => {
+  const e = await setup(t);
+  e.link(10 * 60 * 1000);
+  const api = e.mk();
+  e.hub.mode = 'notok';
+  await api.refreshAccount(false);
+  const t1 = e.store.unsaved.get();
+  e.clock.t += 4 * 3600 * 1000;
+  // the private write fails from now on
+  const realSet = e.store.unsaved.set;
+  e.store.unsaved.set = () => { throw Object.assign(new Error('disk'), { code: 'EIO' }); };
+  assert.equal(await api.refreshAccount(false), true);
+  const spent = e.R.calls.filter((c) => c.path === '/oauth/token').map((c) => new URLSearchParams(c.body).get('refresh_token'));
+  assert.deepEqual(spent, ['r0', t1], 'the second renewal spent the unsaved token');
+  assert.equal(api.unsavedWriteFailed(), true);
+  assert.match(api.warning(), /could not be written/);
+  assert.equal(e.hub.calls[e.hub.calls.length - 1].params.value, e.R.n ? `r${e.R.n}` : '', 'the hub got the newest token');
+  e.store.unsaved.set = realSet;
+  await api.persistRenewal();   // the next upkeep writes it
+  assert.equal(api.unsavedWriteFailed(), false);
+  assert.equal(e.store.unsaved.get(), `r${e.R.n}`);
+});
+
+test('unreadable account.json or unsaved.json: ESTATE, and REFRESH_TOKEN is never used instead', async (t) => {
+  for (const name of ['account.json', 'unsaved.json']) {
+    const e = await setup(t);
+    e.link();
+    fs.mkdirSync(e.dataHome, { recursive: true });
+    fs.writeFileSync(path.join(e.dataHome, name), '{garbled');
+    const api = e.mk();
+    await api.start();
+    assert.equal(await api.refreshAccount(true), false, name);
+    await assert.rejects(api.accessTokenFor(), (err) => err.code === 'ESTATE', name);
+    assert.equal(e.R.calls.filter((c) => c.path === '/oauth/token').length, 0, `${name}: no token spent`);
+    assert.ok(api.warning(), name);
+  }
+});
+
+test('account.json turning unreadable after start: renewal keeps using what is in memory', async (t) => {
+  const e = await setup(t);
+  e.link(10 * 60 * 1000);
+  const api = e.mk();
+  await api.start();
+  fs.writeFileSync(path.join(e.dataHome, 'account.json'), '{garbled');
+  assert.equal(await api.refreshAccount(false), true);
+  assert.equal(e.R.calls.filter((c) => c.path === '/oauth/token').length, 1);
 });

@@ -43,6 +43,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const SEEN_KEEP_MS = 72 * 3600 * 1000;
 const SEEN_MAX = 10000;
 const PENDING_TOKEN_KEEP_MS = 3600 * 1000;
@@ -111,6 +112,17 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
   const file = (name) => path.join(dataHome, name);
   const readJ = (name, d) => readJson(file(name), d);
   const writeJ = (name, obj) => writeJsonPrivate(file(name), obj);
+  // Security state (account, unsaved token, link code, event state): absent is fine, unreadable is not. Anything but a
+  // missing file stops the operation that needs it (code 'ESTATE') instead of looking like an empty state.
+  const estate = (name, why) => { log(`${name} cannot be read (${why}); the operation needing it is refused`); return Object.assign(new Error(`${name} cannot be read`), { code: 'ESTATE' }); };
+  function readState(name, dflt, objectOnly = false) {
+    let text;
+    try { text = fs.readFileSync(file(name), 'utf8'); } catch (e) { if (e.code === 'ENOENT') return dflt; throw estate(name, e.code || 'read error'); }
+    let v;
+    try { v = JSON.parse(text); } catch { throw estate(name, 'not valid JSON'); }
+    if (objectOnly && (!v || typeof v !== 'object' || Array.isArray(v))) throw estate(name, 'not an object');
+    return v;
+  }
   const readText = (name) => { try { return fs.readFileSync(file(name), 'utf8'); } catch { return null; } };
   const writeText = (name, text) => writePrivate(file(name), text);
   const buckets = createBuckets(now);
@@ -121,9 +133,10 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
   let STATE = null;
   function state() {
     if (!STATE) {
-      const s = readJ('state.json', {});
-      STATE = s && typeof s === 'object' && !Array.isArray(s) ? s : {};
+      const s = readState('state.json', {}, true);
+      STATE = s;
       for (const k of ['seen', 'lastNotice', 'suppressed']) if (!STATE[k] || typeof STATE[k] !== 'object' || Array.isArray(STATE[k])) STATE[k] = {};
+      STATE.seen = Object.assign(Object.create(null), STATE.seen);   // request ids are keys: '__proto__' must be an ordinary id
       for (const k of ['inbox', 'outbox', 'recent']) if (!Array.isArray(STATE[k])) STATE[k] = [];
     }
     return STATE;
@@ -146,7 +159,7 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
   }
   function acceptEvent(requestId, entry) {
     const st = state();
-    if (requestId && st.seen[requestId]) return 'duplicate';
+    if (requestId && hasOwn(st.seen, requestId)) return 'duplicate';
     if (st.inbox.length >= INBOX_MAX) return 'full';
     st.inbox.push(entry);
     if (requestId) st.seen[requestId] = now();
@@ -188,7 +201,7 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
   };
 
   // ── account, pending links, devices, unsaved token ───────────────────────────────────────────────────────────
-  const accountFile = () => { const j = readJ('account.json', {}); const o = j && typeof j === 'object' && !Array.isArray(j) ? j : {}; if (!o.pending || typeof o.pending !== 'object') o.pending = {}; return o; };
+  const accountFile = () => { const o = readState('account.json', {}, true); if (!o.pending || typeof o.pending !== 'object') o.pending = {}; return o; };
   const account = () => { const a = accountFile().account; return a && typeof a === 'object' && a.account_id ? a : null; };
   function saveAccount(rec) { const f = accountFile(); f.account = rec; writeJ('account.json', f); }
   const claimedAccount = () => { const a = account(); return a && !a.needs_relink ? a.account_id : null; };   // linked and signed in
@@ -211,15 +224,26 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
   }
   const devices = { get: () => readJ('devices.json', {}), save: (obj) => writeJ('devices.json', obj) };
   const unsaved = {
-    get() { const u = readJ('unsaved.json', null); return u && typeof u.refresh_token === 'string' && u.refresh_token ? u.refresh_token : null; },
+    get() { const u = readState('unsaved.json', null, true); return u && typeof u.refresh_token === 'string' && u.refresh_token ? u.refresh_token : null; },
     set(token) { writeJ('unsaved.json', { refresh_token: token, at: now() }); },
     clear() { try { fs.unlinkSync(file('unsaved.json')); } catch (e) { if (e.code !== 'ENOENT') throw e; } },
   };
 
   // ── the one-time link code ───────────────────────────────────────────────────────────────────────────────────
   const armFile = () => file('link-arm.json');
+  // Tries are also counted in memory per arm id, and an arm whose try or consumption could not be saved is closed in memory:
+  // a failing disk never leaves a code open for more guesses.
+  const memTries = new Map();
+  const closedArms = new Set();
+  const closeInMemory = (id, why) => { if (id) closedArms.add(id); log(`link code closed in memory (${why})`); };
+  const unlinkArm = () => { try { fs.unlinkSync(armFile()); return true; } catch (e) { return e.code === 'ENOENT'; } };
   const linkArm = {
-    get() { const a = readJson(armFile(), null); return a && a.expiresAt > now() && (a.tries || 0) < LINK_MAX_TRIES ? a : null; },
+    get() {
+      const a = readState('link-arm.json', null, true);
+      if (!a || closedArms.has(a.id)) return null;
+      const tries = Math.max(a.tries || 0, memTries.get(a.id) || 0);
+      return a.expiresAt > now() && tries < LINK_MAX_TRIES ? { ...a, tries } : null;
+    },
     arm({ minutes, replace } = {}) {
       const mins = Math.min(Math.max(Number(minutes) || 30, 5), 120);
       let code = '';
@@ -235,13 +259,19 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
       const arm = linkArm.get();
       if (!arm) return { tries: 0, closed: true };
       arm.tries = (arm.tries || 0) + 1;
-      if (arm.tries >= LINK_MAX_TRIES) { try { fs.unlinkSync(armFile()); } catch { /* gone */ } log('link page closed after too many wrong codes'); return { tries: arm.tries, closed: true }; }
-      writeJsonPrivate(armFile(), arm);
+      memTries.set(arm.id, arm.tries);
+      if (arm.tries >= LINK_MAX_TRIES) {
+        closedArms.add(arm.id);
+        if (!unlinkArm()) log('link code could not be removed from disk; it stays closed in memory');
+        log('link page closed after too many wrong codes');
+        return { tries: arm.tries, closed: true };
+      }
+      try { writeJsonPrivate(armFile(), arm); } catch (e) { closeInMemory(arm.id, `a wrong try could not be saved: ${e.code || 'write error'}`); return { tries: arm.tries, closed: true }; }
       return { tries: arm.tries, closed: false };
     },
     clear(id) {   // only the code that was used, never one armed meanwhile
-      const a = readJson(armFile(), null);
-      if (a && (id === undefined || a.id === id)) { try { fs.unlinkSync(armFile()); } catch { /* gone */ } }
+      const a = readState('link-arm.json', null, true);
+      if (a && (id === undefined || a.id === id)) { closedArms.add(a.id); if (!unlinkArm()) log('link code could not be removed from disk; it stays closed in memory'); }
     },
   };
 
@@ -266,9 +296,17 @@ function createStore({ dataHome, mediaDir, now = Date.now, log = () => {}, freeB
   // The root is the folder the hub checked at start; it is checked to still be a plain folder on every run.
   function openRoot() {
     if (!mediaDir) throw Object.assign(new Error('no media folder'), { code: 'no media folder' });
-    const st = fs.lstatSync(mediaDir);
-    if (!st.isDirectory()) throw Object.assign(new Error('the Files folder is not a plain folder'), { code: 'not a plain folder' });
-    return fs.openSync(mediaDir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
+    const notPlain = () => Object.assign(new Error('the Files folder is not a plain folder'), { code: 'not a plain folder' });
+    const dir = path.resolve(mediaDir);   // no trailing slash: that would make the kernel follow a final link
+    const before = fs.lstatSync(dir);
+    if (before.isSymbolicLink() || !before.isDirectory()) throw notPlain();
+    let fd;
+    try { fd = fs.openSync(dir, O_DIR); } catch (e) { if (e.code === 'ELOOP' || e.code === 'ENOTDIR') throw notPlain(); throw e; }
+    try {
+      const st = fs.fstatSync(fd);   // what was really opened must be what was looked at
+      if (!st.isDirectory() || st.dev !== before.dev || st.ino !== before.ino) throw notPlain();
+    } catch (e) { fs.closeSync(fd); throw e; }
+    return fd;
   }
   // Opens mediaDir/parts, or <open folder from>/parts, one plain folder at a time (made if missing when create is set).
   function openFolder(parts, create, from) {

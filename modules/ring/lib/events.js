@@ -37,7 +37,10 @@ const crypto = require('node:crypto');
 
 const MAX_EVENT_BODY = 1024 * 1024;
 const COALESCE_MS = 120000;
-const SEEN_KEEP_MS = 72 * 3600000;
+const SEEN_KEEP_MS = 72 * 3600000;   // longer than the 48 h a signed event is accepted for
+const EVENT_MAX_AGE_MS = 48 * 3600000;
+const EVENT_MAX_AHEAD_MS = 10 * 60000;
+const NOTICE_STATE_KEEP_MS = 24 * 3600000;
 const SEEN_MAX = 10000;
 const INBOX_MAX = 500;
 const INBOX_KEEP_MS = 6 * 3600000;
@@ -46,7 +49,8 @@ const RECENT_KEEP_MS = 7 * 3600000;
 const OUTBOX_MAX = 50;
 const OUTBOX_RETRY_MS = 15000;
 const NOTICE_MAX_CHARS = 4000;
-const RETRY_ERRORS = ['Too many notices this hour.', 'Too many notices waiting.', 'No agent to tell.'];
+const RETRY_ERRORS = ['Too many notices this hour.', 'Too many notices waiting.', 'No agent to tell.'];   // the hub's answers that always mean "later"
+const DROP_ERRORS = ['The notice is empty.'];   // every other {ok:false} answer is retried too (until the 6 h limit)
 
 const clean = (s, max = 80) => { let t = ''; try { t = String(s == null ? '' : s); } catch { /* {"toString": null} can't be turned into text */ } return t.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max); };
 const shortId = (s) => (s ? `…${String(s).slice(-6)}` : '-');
@@ -162,26 +166,29 @@ function createEvents(ctx) {
     if (!claimed) { logEvery('nolink', 600000, 'event(s) ignored: no Ring account is linked yet'); return ok200(); }
     if (from && from !== claimed) { logEvery('otheracct', 600000, `event(s) ignored: for Ring account ${shortId(from)}, not the linked ${shortId(claimed)}`); return ok200(); }
     const st = getState();
-    const rid = ev.meta && typeof ev.meta.request_id === 'string' ? clean(ev.meta.request_id, 200) : null;
-    if (rid && st.seen[rid]) { log('duplicate event ignored', shortId(rid)); return ok200(); }
-    if (st.inbox.length >= INBOX_MAX) { logEvery('inboxfull', 60000, 'event inbox full: asking Ring to retry'); return reply(503, 'Busy\n'); }
     const a = ev.data.attributes && typeof ev.data.attributes === 'object' ? ev.data.attributes : {};
     const t0 = now();
+    const stamp = Number(a.timestamp) > 0 ? (Number(a.timestamp) < 1e11 ? Number(a.timestamp) * 1000 : Number(a.timestamp)) : 0;   // ms; seconds tolerated
+    if (!stamp || t0 - stamp > EVENT_MAX_AGE_MS || stamp - t0 > EVENT_MAX_AHEAD_MS) { logEvery('stale', 60000, 'event(s) ignored: signed, but older than 48 h or from the future (a replay?)'); return ok200(); }
+    const rid = ev.meta && typeof ev.meta.request_id === 'string' && clean(ev.meta.request_id, 200) ? clean(ev.meta.request_id, 200) : null;
+    const dedupId = rid || `body:${crypto.createHash('sha256').update(raw).digest('hex')}`;
+    if (st.seen[dedupId]) { log('duplicate event ignored', shortId(dedupId)); return ok200(); }
+    if (st.inbox.length >= INBOX_MAX) { logEvery('inboxfull', 60000, 'event inbox full: asking Ring to retry'); return reply(503, 'Busy\n'); }
     const entry = {
       id: rid || crypto.randomUUID(), at: t0, account: claimed,
       type: clean(ev.data.type, 40), device: typeof a.source === 'string' ? clean(a.source, 200) : null,
-      ts: Number(a.timestamp) > 0 ? Math.min(Number(a.timestamp) < 1e11 ? Number(a.timestamp) * 1000 : Number(a.timestamp), t0) : t0,   // ms; seconds tolerated
+      ts: Math.min(stamp, t0),
       sub: a.sub_type ? clean(a.sub_type, 30) : null,
       comp: Array.isArray(a.component_ids) && a.component_ids.length ? clean(a.component_ids[0], 20) : null,
     };
-    if (rid) st.seen[rid] = t0;
+    st.seen[dedupId] = t0;
     st.inbox.push(entry);
-    try { saveState(); } catch (e) { st.inbox.pop(); if (rid) delete st.seen[rid]; log('could not keep an event:', e.code || e.message); return reply(503, 'Busy\n'); }   // on disk before the 200
+    try { saveState(); } catch (e) { st.inbox.pop(); delete st.seen[dedupId]; log('could not keep an event:', e.code || e.message); return reply(503, 'Busy\n'); }   // on disk before the 200
     track(new Promise((r) => setImmediate(r)).then(() => processEntry(entry)).catch((e) => log('event handling failed:', e.message)));   // after the answer
     return ok200();
   }
 
-  // seen ids older than 72 h and beyond 10,000 go; recent notice files older than 7 h go.
+  // seen ids older than 72 h and beyond 10,000 go; recent notice files older than 7 h go; lastNotice and suppressed entries older than 24 h go.
   function saveState() {
     const st = getState();
     const t = now();
@@ -189,6 +196,8 @@ function createEvents(ctx) {
     const ids = Object.keys(st.seen);
     if (ids.length > SEEN_MAX) ids.sort((x, y) => st.seen[x] - st.seen[y]).slice(0, ids.length - SEEN_MAX).forEach((k) => delete st.seen[k]);
     st.recent = st.recent.filter((r) => r && t - r.at <= RECENT_KEEP_MS);
+    for (const [k, at] of Object.entries(st.lastNotice)) if (!(t - at <= NOTICE_STATE_KEEP_MS)) { delete st.lastNotice[k]; delete st.suppressed[k]; }
+    for (const k of Object.keys(st.suppressed)) if (!(k in st.lastNotice)) delete st.suppressed[k];
     store.saveState();
   }
 
@@ -197,8 +206,8 @@ function createEvents(ctx) {
   async function queueNotice(text, files, alsoSave) {
     const st = getState();
     const list = Array.isArray(files) ? files.slice(0, 6) : [];
-    st.outbox.push({ text, files: list, at: now(), tries: 0 });
-    while (st.outbox.length > OUTBOX_MAX) { st.outbox.shift(); log(`outbox full: dropped the oldest notice (limit ${OUTBOX_MAX})`); }
+    if (st.outbox.length >= OUTBOX_MAX) { log(`outbox full: refused the newest notice (limit ${OUTBOX_MAX})`); return flushOutbox(); }   // never evict the head: it may be in flight
+    st.outbox.push({ id: crypto.randomUUID(), text, files: list, at: now(), tries: 0 });
     for (const f of list) st.recent.push({ file: f, at: now() });   // the pictures of a waiting notice must survive pruning
     if (alsoSave) alsoSave();
     try { saveState(); } catch (e) { log('could not save the outbox:', e.code || e.message); }
@@ -208,22 +217,23 @@ function createEvents(ctx) {
     if (delivering) return delivering;
     delivering = (async () => {
       try {
-        const st = getState();
-        while (st.outbox.length) {
-          const n = st.outbox[0];
-          if (now() - n.at > NOTICE_KEEP_MS) { log('dropped a notice the hub never took (6 h)'); st.outbox.shift(); saveState(); continue; }
+        while (getState().outbox.length) {
+          const n = getState().outbox[0];
+          const remove = () => { const box = getState().outbox; const i = box.findIndex((x) => x === n || (n.id && x.id === n.id)); if (i >= 0) box.splice(i, 1); };   // by id, after any await
+          if (!n.id) n.id = crypto.randomUUID();
+          if (now() - n.at > NOTICE_KEEP_MS) { log('dropped a notice the hub never took (6 h)'); remove(); saveState(); continue; }
           let r;
           try { r = await ctx.notify(n.text, n.files); } catch (e) { r = { ok: false, error: 'No answer from the hub.', transient: true }; }
-          if (r && r.ok) { st.outbox.shift(); saveState(); continue; }
+          if (r && r.ok) { remove(); saveState(); continue; }
           const err = r && r.error ? String(r.error) : '';
-          if (RETRY_ERRORS.includes(err) || (r && r.transient)) {
+          if (!DROP_ERRORS.includes(err)) {
             n.tries = (n.tries || 0) + 1;
             saveState();
             log('notice not taken by the hub yet:', clean(err, 60), `(try ${n.tries})`);
             break;
           }
           log('notice dropped:', clean(err || 'refused', 60));
-          st.outbox.shift();
+          remove();
           saveState();
         }
       } catch (e) { log('notice delivery failed:', e.code || e.message); }
@@ -312,5 +322,5 @@ function createEvents(ctx) {
 
 module.exports = {
   createEvents, signatureOk, labelFor, noticeText, parseHouses, houseFor, clean, shortId, safeEqualStr,
-  MAX_EVENT_BODY, COALESCE_MS, INBOX_MAX, INBOX_KEEP_MS, NOTICE_KEEP_MS, OUTBOX_MAX, OUTBOX_RETRY_MS, SEEN_KEEP_MS, RETRY_ERRORS,
+  MAX_EVENT_BODY, COALESCE_MS, INBOX_MAX, INBOX_KEEP_MS, NOTICE_KEEP_MS, OUTBOX_MAX, OUTBOX_RETRY_MS, SEEN_KEEP_MS, RETRY_ERRORS, EVENT_MAX_AGE_MS, EVENT_MAX_AHEAD_MS, NOTICE_STATE_KEEP_MS,
 };
