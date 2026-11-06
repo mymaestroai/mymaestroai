@@ -365,6 +365,7 @@ test('backup: true needs the four hub tools; a wrong class or a missing tool is 
   assert.strictEqual(probs({ ...base, backup: false, tools: { peek: 'read' } }), '', 'without backup: true the tools are free');
 });
 
+const HUB = { hub: true };
 test('hub tools: hidden from agents and tools/list, reachable by the hub through the guard, audited as non-read', async (t) => {
   const r = rig(); t.after(r.cleanup);
   const fin = await setupBackup(r.mods);
@@ -381,16 +382,16 @@ test('hub tools: hidden from agents and tools/list, reachable by the hub through
 
   const src = path.join(r.dir, 'in.bin'); const out = path.join(r.dir, 'out.bin');
   fs.writeFileSync(src, 'hello backup');
-  const put = JSON.parse(await r.cx.callTool('fakebackup', 'backup_put', { file: src, name: 'a.zip' }));
+  const put = JSON.parse(await r.cx.callTool('fakebackup', 'backup_put', { file: src, name: 'a.zip' }, HUB));
   assert.deepStrictEqual(put, { name: 'a.zip', size: 12, md5: require('crypto').createHash('md5').update('hello backup').digest('hex') });
-  const list = JSON.parse(await r.cx.callTool('fakebackup', 'backup_list', {}));
+  const list = JSON.parse(await r.cx.callTool('fakebackup', 'backup_list', {}, HUB));
   assert.deepStrictEqual(list.files.map(f => [f.name, f.size]), [['a.zip', 12]]);
   assert.ok(!Number.isNaN(Date.parse(list.files[0].created)));
-  assert.deepStrictEqual(JSON.parse(await r.cx.callTool('fakebackup', 'backup_get', { name: 'a.zip', out })), { size: 12, md5: put.md5 });
+  assert.deepStrictEqual(JSON.parse(await r.cx.callTool('fakebackup', 'backup_get', { name: 'a.zip', out }, HUB)), { size: 12, md5: put.md5 });
   assert.strictEqual(fs.readFileSync(out, 'utf8'), 'hello backup');
-  assert.match(await r.cx.callTool('fakebackup', 'backup_delete', { name: 'nope.zip' }), /No such backup/);
-  assert.deepStrictEqual(JSON.parse(await r.cx.callTool('fakebackup', 'backup_delete', { name: 'a.zip' })), { deleted: 'a.zip' });
-  assert.match(await r.cx.callTool('fakebackup', 'not_listed', {}), /is not enabled in this hub/, 'an unlisted tool is still refused');
+  assert.match(await r.cx.callTool('fakebackup', 'backup_delete', { name: 'nope.zip' }, HUB), /No such backup/);
+  assert.deepStrictEqual(JSON.parse(await r.cx.callTool('fakebackup', 'backup_delete', { name: 'a.zip' }, HUB)), { deleted: 'a.zip' });
+  assert.match(await r.cx.callTool('fakebackup', 'not_listed', {}, HUB), /is not enabled in this hub/, 'an unlisted tool is still refused');
 
   const audit = r.mods.auditTail('fakebackup');
   for (const tool of ['backup_put', 'backup_list', 'backup_get', 'backup_delete']) {
@@ -425,8 +426,46 @@ test('callTool timeoutMs: a slow upload works with a long wait and fails with a 
   const r = rig(); t.after(r.cleanup);
   await setupBackup(r.mods);
   const src = path.join(r.dir, 'in.bin'); fs.writeFileSync(src, 'x');
-  const put = (delayMs, opts) => r.cx.callTool('fakebackup', 'backup_put', { file: src, name: `t${delayMs}.zip`, delayMs }, opts);
+  const put = (delayMs, opts) => r.cx.callTool('fakebackup', 'backup_put', { file: src, name: `t${delayMs}.zip`, delayMs }, { hub: true, ...opts });
   await assert.rejects(put(1500, { timeoutMs: 300 }), /timed out after 300ms/);
   assert.match(await put(600, { timeoutMs: 10000 }), /"name":"t600.zip"/);
   assert.match(await put(0), /"size":1/, 'no option: the default wait');
+});
+
+test('hub capability: a hub tool without the flag is refused; with it it works; the server never sees __hub; the audit never holds the secret', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await setupBackup(r.mods);
+  const refused = await r.cx.callTool('fakebackup', 'backup_list', {});
+  assert.match(refused, /only for the hub's own calls/);
+  // a guess at the field does not help: an agent-style call carrying a made-up __hub is refused too
+  assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: 'guess' }), /only for the hub's own calls/);
+  assert.match(await r.cx.callTool('fakebackup', 'backup_list', { __hub: '' }, { hub: false }), /only for the hub's own calls/);
+  const ok = JSON.parse(await r.cx.callTool('fakebackup', 'backup_list', { install: '0123456789abcdef', __hub: 'ignored' }, { hub: true }));
+  assert.deepStrictEqual(ok.argKeys, ['install'], 'the module server saw the arguments without __hub');
+  assert.strictEqual(ok.hubEnv, false, 'the module server does not get the secret in its environment');
+  // a read tool called with a stray __hub is stripped as well
+  const peek = JSON.parse(await r.cx.callTool('fakebackup', 'peek', { __hub: 'x' }));
+  assert.ok(peek.files >= 0);
+  const raw = fs.readFileSync(path.join(r.dir, 'modules', 'fakebackup', 'audit.jsonl'), 'utf8');
+  assert.ok(raw.includes('"decision":"refused"') && raw.includes('"decision":"done"'));
+  assert.ok(!raw.includes('__hub'), 'the audit never mentions the field');
+});
+
+test('minTools: a module with no agent-visible tools answers a hub call without the 7.5 s wait', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  // a copy of the fixture whose tools are all hub tools
+  const root = path.join(r.dir, 'hubonly-root'); const dir = path.join(root, 'fakebackup');
+  fs.cpSync(path.join(FIX_ROOT, 'fakebackup'), dir, { recursive: true });
+  const m = JSON.parse(fs.readFileSync(path.join(dir, 'module.json'), 'utf8'));
+  m.tools = { backup_put: 'hub', backup_list: 'hub', backup_delete: 'hub', backup_get: 'hub' };
+  fs.writeFileSync(path.join(dir, 'module.json'), JSON.stringify(m));
+  const dataDir = path.join(r.dir, 'm2');
+  const mods = createModules({ root, dataDir, stateFile: path.join(r.dir, 'm2.json'), connectorsFile: path.join(r.dir, 'connectors.json'), connectors: r.cx,
+    isWalletAgent: () => false, isMemberOwned: () => false, listAgents: () => [], publish: () => {}, log: () => {} });
+  await mods.runStep('fakebackup', 'install', {});
+  await mods.runStep('fakebackup', 'done', {});
+  const t0 = Date.now();
+  const out = JSON.parse(await r.cx.callTool('fakebackup', 'backup_list', { install: '0123456789abcdef' }, { hub: true }));
+  assert.ok(Array.isArray(out.files));
+  assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`);
 });

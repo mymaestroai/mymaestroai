@@ -302,3 +302,19 @@ test('migration: a stored agents: null becomes [] once, is listed for the checkl
   assert.deepEqual(cx.readinessItems(), []);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).openToAllMigrated, []);
 });
+
+test('McpStdioClient minTools: a server that lists one tool is ready at once when minTools is 1, and keeps the old wait by default', async () => {
+  const c = new McpStdioClient(process.execPath, [FAKE], { env: { PATH: process.env.PATH } });
+  assert.equal(c.minTools, 2, 'default keeps today\'s behaviour');
+  assert.equal(new McpStdioClient('x', [], { minTools: 0 }).minTools, 0);
+  assert.equal(new McpStdioClient('x', [], { minTools: -3 }).minTools, 2);
+  let sends = 0;
+  const lone = new McpStdioClient('x', [], { minTools: 1 });
+  lone.connect = async () => {};
+  lone._send = async () => { sends++; return { tools: [{ name: 'only' }] }; };
+  const t0 = Date.now();
+  assert.equal((await lone.listTools()).length, 1);
+  await lone.callTool('only', {}).catch(() => {});
+  assert.equal(sends, 3, 'one list, one readiness check, one call: no retries');
+  assert.ok(Date.now() - t0 < 1000);
+});

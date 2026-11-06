@@ -3,15 +3,16 @@
 
 const { createDrive } = require('./drive');
 
+const install = { type: 'string', description: '16 hex characters naming this hub install.' };
 const TOOLS = [
-  { name: 'backup_put', description: 'Upload a backup file to the My Maestro AI Backups folder.',
-    inputSchema: { type: 'object', properties: { file: { type: 'string' }, name: { type: 'string' } }, required: ['file', 'name'] } },
-  { name: 'backup_list', description: 'List the backup copies in Google Drive.',
-    inputSchema: { type: 'object', properties: {} } },
-  { name: 'backup_delete', description: 'Permanently delete the backup copies with this name.',
-    inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
-  { name: 'backup_get', description: 'Download a backup copy to a local file.',
-    inputSchema: { type: 'object', properties: { name: { type: 'string' }, out: { type: 'string' } }, required: ['name', 'out'] } },
+  { name: 'backup_put', description: 'Upload a backup file to this install\'s My Maestro AI Backups folder.',
+    inputSchema: { type: 'object', properties: { file: { type: 'string' }, name: { type: 'string' }, install }, required: ['file', 'name', 'install'] } },
+  { name: 'backup_list', description: 'List this install\'s backup copies in Google Drive.',
+    inputSchema: { type: 'object', properties: { install }, required: ['install'] } },
+  { name: 'backup_delete', description: 'Permanently delete one backup copy, by its Drive id and name.',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, id: { type: 'string' }, install }, required: ['name', 'id', 'install'] } },
+  { name: 'backup_get', description: 'Download one backup copy, by its Drive id and name, to a local file.',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, id: { type: 'string' }, install, out: { type: 'string' } }, required: ['name', 'id', 'install', 'out'] } },
 ];
 
 const need = (args, key) => {
@@ -19,13 +20,24 @@ const need = (args, key) => {
   return args[key];
 };
 
+const needInstall = (args) => {
+  const v = need(args, 'install');
+  if (!/^[0-9a-f]{16}$/.test(v)) throw new Error('"install" must be 16 hex characters.');
+  return v;
+};
+const needId = (args) => {
+  const v = need(args, 'id');
+  if (v.length > 200 || !/^[A-Za-z0-9_-]+$/.test(v)) throw new Error('"id" is not a valid Drive file id.');
+  return v;
+};
+
 async function callTool(drive, name, args) {
   args = args && typeof args === 'object' ? args : {};
   switch (name) {
-    case 'backup_put': return drive.put(need(args, 'file'), need(args, 'name'));
-    case 'backup_list': return { files: (await drive.list()).map((f) => ({ name: f.name, size: f.size, created: f.createdTime })) };
-    case 'backup_delete': return { deleted: (await drive.remove(need(args, 'name'))) > 0 };
-    case 'backup_get': return drive.get(need(args, 'name'), need(args, 'out'));
+    case 'backup_put': return drive.put(need(args, 'file'), need(args, 'name'), needInstall(args));
+    case 'backup_list': return { files: (await drive.list(needInstall(args))).map((f) => ({ name: f.name, size: f.size, created: f.createdTime, id: f.id })) };
+    case 'backup_delete': return { deleted: (await drive.remove(need(args, 'name'), needId(args), needInstall(args))) > 0 };
+    case 'backup_get': return drive.get(need(args, 'name'), needId(args), need(args, 'out'), needInstall(args));
     default: throw new Error(`Unknown tool: ${String(name).slice(0, 60)}`);
   }
 }

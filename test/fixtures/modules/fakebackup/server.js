@@ -28,7 +28,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         let data; try { data = fs.readFileSync(a.file); } catch { return bad(m.id, 'Cannot read the file to upload.'); }
         return setTimeout(() => { fs.writeFileSync(path.join(store, a.name), data); ok(m.id, { name: a.name, size: data.length, md5: md5(data) }); }, Number(a.delayMs) || 0);
       }
-      if (name === 'backup_list') return ok(m.id, { files: fs.readdirSync(store).sort().map(n => { const s = fs.statSync(path.join(store, n)); return { name: n, size: s.size, created: s.birthtime.toISOString() }; }) });
+      if (name === 'backup_list') return ok(m.id, { files: fs.readdirSync(store).sort().map(n => { const s = fs.statSync(path.join(store, n)); return { name: n, size: s.size, created: s.birthtime.toISOString() }; }), argKeys: Object.keys(a), hubEnv: process.env.MYMAESTRO_HUB_SECRET !== undefined });
       if (name === 'backup_delete') {
         if (!safe(a.name) || !fs.existsSync(path.join(store, a.name))) return bad(m.id, 'No such backup.');
         fs.unlinkSync(path.join(store, a.name)); return ok(m.id, { deleted: a.name });

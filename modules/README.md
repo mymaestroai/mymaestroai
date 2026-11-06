@@ -44,6 +44,17 @@ The `hub` class is for tools the hub itself calls (through `connectors.callTool`
 runs `guard()` and writes the call to the activity log as a non-read call). Agents never see a `hub` tool: it is left
 out of `tools/list` and of every agent's tools.
 
+**Hub-call capability.** The hub makes one random secret per process. It reaches the guard only through its
+environment (never in arguments, never logged; the module's own server does not get it) and comes back only when the
+hub calls `connectors.callTool(id, tool, args, { hub: true })`, which adds an `__hub` argument. The guard refuses a
+`hub` tool unless `__hub` matches, and removes `__hub` from every call before it reaches the module's server or the
+audit. Agents' calls never carry it, so an agent cannot reach a `hub` tool even by name.
+
+**`minTools`.** The MCP client waits for a server to list more than one tool (a bridge may start with a placeholder).
+For a module connector the hub passes `minTools` = the number of agent-visible tools in the manifest (classes other
+than `off` and `hub`), so a module that shows agents nothing, such as a backup-only one, answers at once instead of
+waiting about 7.5 s per call.
+
 ## Backup modules
 
 `"backup": true` marks a module that can store the hub's backup files. It must declare these four tools, each with
@@ -52,13 +63,13 @@ plain message.
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `backup_put` | `{ file, name }` (`file` is a path on the hub's disk) | `{ name, size, md5 }` |
-| `backup_list` | `{}` | `{ files: [{ name, size, created }] }` |
-| `backup_delete` | `{ name }` | `{ deleted }` |
-| `backup_get` | `{ name, out }` (`out` is a path to write) | `{ size, md5 }` |
+| `backup_put` | `{ file, name, install }` (`file` is a path on the hub's disk; `install` is the hub's 16-hex install id) | `{ name, size, md5, id }` |
+| `backup_list` | `{ install }` | `{ files: [{ name, size, created, id }] }` |
+| `backup_delete` | `{ name, id, install }` | `{ deleted }` |
+| `backup_get` | `{ name, id, install, out }` (`out` is a path to write) | `{ size, md5 }` |
 
 `getModules().backupModules()` lists `[{ id, label }]` for backup modules that are finished and switched on (ready, or
-needing attention after a failed check but still on). `connectors.callTool(id, tool, args, { timeoutMs })` takes a
+needing attention after a failed check but still on). `connectors.callTool(id, tool, args, { timeoutMs, hub: true })` (`hub: true` is required for `hub` tools) takes a
 per-call wait for slow calls such as an upload; without it the 60 s default applies.
 
 ## setup.json
