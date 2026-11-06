@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Connect your Oura Ring.** A new Oura Ring data connector lets your agents read your sleep, readiness, activity, heart rate, blood oxygen and workouts when you ask, read-only. Only your lead agent can read it unless you tick others during setup. You register your own Oura app once (the setup shows the exact address to paste in), then sign in on Oura's page and come straight back. Services like Oura that sign in this way, and that hand out a new sign-in key on every refresh, now stay connected.
+
 - **Keep a copy of every backup in your Google Drive.** A new Google Drive data connector copies each nightly backup into a folder in your Drive called My Maestro AI Backups. It can see only the files it puts there, nothing else in your Drive, and backups are encrypted before they leave your computer. Each copy counts only when Google's own fingerprint of it matches, the same keep rules as on your computer apply, and a backup kept only in Drive can be restored from Settings, Backups. Setting it up takes about 15 minutes once: the guided setup walks you through registering your own Google app, then you sign in by approving a short code.
 
 - **A failed copy to a backup folder no longer leaves a half-made file behind.** When copying a backup into another folder failed partway, the unfinished file stayed in that folder, a new one every night. It's now removed.
