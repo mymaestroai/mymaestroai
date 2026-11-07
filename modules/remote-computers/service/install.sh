@@ -118,7 +118,6 @@ on_exit() {
   if ((rc != 0 && ROLLBACK && !COMMITTED)); then
     if ! rollback; then
       KEEP_TMP=1
-      printf '%s\n' "$N" >"$TMPD/service-name"   # so uninstall.sh removes only this service's kept copies
       printf 'install.sh: the previous state could not be put back completely. The saved copies are kept in %s%s;\n' "$TMPD" "${OLD_PROG:+ and $OLD_PROG}" >&2
       printf 'install.sh: recovery is incomplete. Keep those copies (root-only; they hold the request with the password hashes)\n' >&2
       printf 'install.sh: and put the previous program, unit and config back from them before running the install again.\n' >&2
@@ -174,7 +173,8 @@ save_previous_config() {
   local rc=0
   # (No ${...} in a script given to systemd-run: systemd expands those forms itself, before bash sees them.)
   as_service "$BASH_BIN" --noprofile --norc -c '
-    f=$1 d=$4
+    f=$1 d=$4 top=$5
+    [ -d "$top" ] && [ -x "$top" ] || exit 5
     if [ -e "$d" ] || [ -L "$d" ]; then
       { [ -d "$d" ] && [ ! -L "$d" ] && [ -x "$d" ] && [ -r "$d" ]; } || exit 5
     else
@@ -183,7 +183,7 @@ save_previous_config() {
     if [ ! -e "$f" ] && [ ! -L "$f" ]; then exit 3; fi
     if [ -L "$f" ] || [ ! -f "$f" ]; then exit 4; fi
     exec "$3" if="$f" bs="$2" count=1 iflag=nofollow,nonblock,fullblock status=none' \
-    _ "/var/lib/$N/meshcentral-data/config.json" $((MAX_CONFIG_BYTES + 1)) "$DD_BIN" "/var/lib/$N/meshcentral-data" </dev/null >"$TMPD/config.prev" || rc=$?
+    _ "/var/lib/$N/meshcentral-data/config.json" $((MAX_CONFIG_BYTES + 1)) "$DD_BIN" "/var/lib/$N/meshcentral-data" "/var/lib/$N" </dev/null >"$TMPD/config.prev" || rc=$?
   ((rc == 0)) || return $rc
   [[ -s $TMPD/config.prev ]] || return 4
   (($(stat -c '%s' -- "$TMPD/config.prev") <= MAX_CONFIG_BYTES)) || return 6
@@ -529,6 +529,8 @@ full_install() {
   # One install or removal of this service at a time (a terminal and Ask Maestro at once).
   exec 9>"/run/lock/mymaestro-$N.lock" || die "Cannot take the lock /run/lock/mymaestro-$N.lock."
   flock -n 9 || die "Another install or removal of $N is running. Wait for it to finish."
+  # The temporary folder carries the service's name from the start, so uninstall.sh can remove it even after a hard kill.
+  printf '%s\n' "$N" >"$TMPD/service-name" || die "Cannot write in $TMPD."
 
   local unit=/etc/systemd/system/$N.service prog=/opt/$N state=/var/lib/$N
   [[ -L $prog ]] && die "$prog is a symbolic link."
@@ -598,7 +600,7 @@ full_install() {
       3) ;;
       4) info "What is in place of the MeshCentral config is not a config file (a link, not a plain file, or empty); it is replaced without a copy." ;;
       6) fail "The current MeshCentral config is larger than $MAX_CONFIG_BYTES bytes, so it cannot be saved; nothing was replaced. Move it aside by hand to go on." ;;
-      *) fail "Could not save the current MeshCentral config (as $N, in its sandbox), so nothing was replaced. If an owner was changed, run: sudo chown -R $N:$N $state" ;;
+      *) fail "Could not save the current MeshCentral config (as $N, in its sandbox), so nothing was replaced. If an owner was changed, run: sudo chown -R $N:$N $state (a link in place of $state/meshcentral-data must be removed by hand)" ;;
     esac
   fi
 
@@ -652,7 +654,7 @@ full_install() {
   [[ $agent_port =~ ^[0-9]{4,5}$ ]] || fail "The hub's MeshCentral config names no agent port."
 
   # Swap it in; the previous program is kept until the new service answers. Checked first, noted only once it moved, and
-  # with signals held so the move and the note of where the program went cannot be split.
+  # with interrupting signals ignored for that moment, so the move and the note of where the program went cannot be split.
   if [[ -e $prog ]]; then
     local candidate=/opt/.$N.old.$$
     [[ ! -e $candidate && ! -L $candidate ]] || fail "$candidate already exists (left by an earlier failed install); move it away first."
@@ -712,11 +714,12 @@ full_install() {
   fi
   # ...and the process listening on its agent port must be one of the service's own.
   local owners own_ok=0 p cg
-  cg=$(systemctl show -p ControlGroup --value "$N.service")
+  cg=$(systemctl show -p ControlGroup --value "$N.service" 2>/dev/null || true)
   owners=$(ss -Hltnp "sport = :$agent_port" 2>/dev/null | grep -Eo 'pid=[0-9]+' | cut -d= -f2 || true)
   for p in $owners; do
-    # the unit's own control group, on cgroup v2 ("0::") or the systemd hierarchy of v1/hybrid
-    if [[ -n $cg ]] && grep -Eq "^(0::|[0-9]+:name=systemd:)${cg}\$" "/proc/$p/cgroup" 2>/dev/null; then own_ok=1; else own_ok=0; break; fi
+    # the unit's own control group, compared as text: cgroup v2 ("0::path") or the systemd hierarchy of v1/hybrid
+    if [[ -n $cg ]] && awk -F: -v want="$cg" '(($1 == "0" && $2 == "") || $2 == "name=systemd") && $3 == want { found = 1 } END { exit !found }' \
+      "/proc/$p/cgroup" 2>/dev/null; then own_ok=1; else own_ok=0; break; fi
   done
   if ((!own_ok)); then
     journalctl -u "$N.service" -n 40 --no-pager || true

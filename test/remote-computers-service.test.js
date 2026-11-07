@@ -304,5 +304,14 @@ test('no script handed to systemd-run uses ${...}: systemd expands those forms i
   const text = fs.readFileSync(INSTALL, 'utf8');
   const scripts = [...text.matchAll(/(?:as_service|run_in_sandbox)\b[^\n]*?-c '([^']*)'/g)].map((m) => m[1]);
   assert.ok(scripts.length >= 4, `found ${scripts.length} sandboxed scripts`);
-  for (const s of scripts) assert.ok(!s.includes('${'), `a sandboxed script uses \${...}: ${s.slice(0, 80)}`);
+  for (const s of scripts) {
+    assert.ok(!s.includes('${'), `a sandboxed script uses \${...}: ${s.slice(0, 80)}`);
+    assert.ok(!s.includes('$$'), `a sandboxed script uses $$: ${s.slice(0, 80)}`);
+    assert.ok(!s.includes('%'), `a sandboxed script uses a % specifier: ${s.slice(0, 80)}`);
+    assert.ok(!/^\s*\$[A-Za-z_]\w*\s*$/.test(s), `a sandboxed script is one whole-word $NAME, which systemd would replace: ${s}`);
+  }
+  // The other words given to systemd-run inside the sandbox helpers (the Node probe) hold no $ or % at all.
+  const nodeProbe = /"\$NEW_DIR\/node" -e \\\n\s*"([^"]*)"/.exec(text);
+  assert.ok(nodeProbe, 'the Node datagram probe was found');
+  assert.ok(!/[$%]/.test(nodeProbe[1]), 'the Node probe holds no $ or %');
 });
