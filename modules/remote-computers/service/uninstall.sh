@@ -44,6 +44,9 @@ while (($#)); do
 done
 [[ $N =~ $NAME_RE ]] || die "The name must look like mymaestro-remote or mymaestro-remote-abc."
 ((EUID == 0)) || die "This must run as root. Run: sudo $0 --name $N"
+# One install or removal of this service at a time.
+exec 9>"/run/lock/mymaestro-$N.lock" || die "Cannot take the lock /run/lock/mymaestro-$N.lock."
+flock -n 9 || die "An install or removal of $N is running. Wait for it to finish."
 
 unit=/etc/systemd/system/$N.service
 prog=/opt/$N
@@ -84,6 +87,13 @@ elif [[ -d $prog ]]; then
   rm -rf --one-file-system -- "$prog"
   removed+=("$prog")
 fi
+# Copies a failed or cut-off install left aside (/opt/.NAME.new.PID, /opt/.NAME.old.PID).
+for d in /opt/."$N".new.* /opt/."$N".old.*; do
+  if [[ -d $d && ! -L $d ]]; then
+    rm -rf --one-file-system -- "$d"
+    removed+=("$d")
+  fi
+done
 
 if ((KEEP)); then
   [[ ! -e $state ]] || note "Kept $state (--keep-data)."
