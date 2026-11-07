@@ -268,7 +268,10 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     };
     // The paths as given are checked (a "." or ".." part is refused before anything is normalised), because the root script refuses them too.
     const abs = (p) => (path.isAbsolute(p) ? p : path.resolve(p));
+    // app = the hub's install folder (the module sits in <app>/modules/<id>); the service is kept from seeing it at all.
+    // (A missing or quoted module folder is named as such by installCommand below.)
     const values = { home: abs(home), runtime: abs(runtimeDir), node: process.execPath };
+    if (moduleDir && !String(moduleDir).includes("'")) values.app = path.resolve(moduleDir, '..', '..');
     const bad = Object.entries(values).filter(([, v]) => !SAFE_PATH_RE.test(v) || v.split('/').some((c) => c === '.' || c === '..')).map(([k]) => k);
     if (bad.length) throw new Error(`The service cannot be set up: the ${bad.join(', ')} path has characters other than letters, digits and . _ - /, or has a . or .. part.`);
     const allowed = settings.agent_allowed === undefined || settings.agent_allowed === null || String(settings.agent_allowed).trim() === '' ? DEFAULT_ALLOWED : String(settings.agent_allowed);
@@ -282,7 +285,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     }
     writeFileAtomic(paths.serviceConfig, cfgText);
     const lines = [
-      'MMR_VERSION=1', `MMR_NAME=${serviceName}`, `MMR_HUB_HOME=${values.home}`, `MMR_RUNTIME_DIR=${values.runtime}`, `MMR_NODE=${values.node}`,
+      'MMR_VERSION=1', `MMR_NAME=${serviceName}`, `MMR_HUB_HOME=${values.home}`, `MMR_APP_DIR=${values.app}`, `MMR_RUNTIME_DIR=${values.runtime}`, `MMR_NODE=${values.node}`,
       `MMR_MESH_VERSION=${VERSION}`, `MMR_CONTROL_PORT=${cfg.settings.port}`, `MMR_AGENT_ALLOWED=${allowed}`,
       `MMR_ADMIN_USER=${a.admin.user}`, `MMR_ADMIN_HASH=${hashPassword(a.admin.pass).arg}`,
       `MMR_AGENT_USER=${a.agent.user}`, `MMR_AGENT_HASH=${hashPassword(a.agent.pass).arg}`,

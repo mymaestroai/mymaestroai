@@ -109,7 +109,8 @@ Every agent starts at Look. You raise an agent's level in the settings.
 On Linux with systemd, MeshCentral runs as its own system service instead of inside My Maestro. You install it once.
 The setup shows a command that starts with `sudo bash` and runs `install.sh`; run it in a terminal on this
 computer (it asks for an administrator password). If Maestro has administrator rights on this computer, press Ask
-Maestro and it runs the command for you.
+Maestro and it runs the command for you. The command runs a script from My Maestro's own folder with administrator
+rights, so it trusts My Maestro's files as they are at that moment, as installing My Maestro did.
 
 What the command does:
 

@@ -7,9 +7,14 @@
 #   install.sh [--replace] REQUEST   full install (must run as root, for example with sudo)
 #   install.sh --help
 #
-# REQUEST is the file HOME_DIR/service/request.env that the hub wrote. This script runs as root, so it never runs
-# any program or code that comes from the hub's folders as root: the node binary and the MeshCentral files are
-# COPIED into /opt/NAME (root-owned), and everything MeshCentral does runs as the service user (runuser).
+# REQUEST is the file HOME_DIR/service/request.env that the hub wrote. Running this script with sudo trusts My Maestro's
+# own files as they are at that moment, as installing My Maestro did. Within that, it never runs anything from the hub's
+# folders as root and never lets the hub's folders steer what root reads or writes:
+# - files in the hub's folders are read and written with the hub's own account (setpriv), so a link swapped in there
+#   can only reach what that account could reach anyway;
+# - the node binary and the MeshCentral files are COPIED into /opt/NAME (root-owned, private until checked);
+# - everything MeshCentral does, including making its accounts, runs as the service user inside the same sandbox
+#   as the service (systemd-run), never outside it.
 # Every value in the request is checked with a strict pattern first; anything unexpected is refused with exit 1.
 set -euo pipefail
 umask 077
@@ -38,6 +43,41 @@ REQUEST is the file service/request.env that the hub wrote in its folder.
 EOF
 }
 
+# Temporary files (private to whoever runs this) and what to undo when a full install fails half way.
+TMPD=$(mktemp -d)
+NEW_DIR=
+STOPPED=0
+on_exit() {
+  local rc=$?
+  [[ -n $NEW_DIR && -d $NEW_DIR && ! -L $NEW_DIR ]] && rm -rf --one-file-system -- "$NEW_DIR"
+  [[ -n $TMPD && -d $TMPD && ! -L $TMPD ]] && rm -rf --one-file-system -- "$TMPD"
+  # A reinstall that failed after stopping the running service starts it again, so a failed settings change is not an outage.
+  if ((rc != 0 && STOPPED)); then
+    if systemctl start "$N.service" >/dev/null 2>&1; then
+      printf 'install.sh: started %s.service again.\n' "$N" >&2
+    fi
+  fi
+  return 0
+}
+trap on_exit EXIT
+
+# ---------------------------------------------------------------------------------------------------------------
+# Reading and writing in the hub's folders: always with the hub's own account when running as root
+# ---------------------------------------------------------------------------------------------------------------
+HUB_UID=
+HUB_GID=
+as_hub() {   # command args...
+  timeout 60 setpriv --reuid="$HUB_UID" --regid="$HUB_GID" --clear-groups --no-new-privs -- env -i PATH=/usr/bin:/bin "$@"
+}
+read_hub_file() {   # path -> stdout
+  if ((EUID == 0)); then as_hub cat -- "$1"; else timeout 60 cat -- "$1"; fi
+}
+# Writes SRC (a root-private file) as NAME into the hub's service folder with the hub's own account.
+hand_back() {   # src name
+  as_hub bash --noprofile --norc -c 'set -eu; umask 022; cd -P -- "$1"; rm -f -- "$2"; set -C; cat >"$2"' _ "$SERVICE_DIR" "$2" <"$1" \
+    || fail "Could not write $2 into $SERVICE_DIR with the hub's account."
+}
+
 # ---------------------------------------------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------------------------------------------
@@ -46,7 +86,7 @@ NAME_RE='^mymaestro-remote(-[a-z0-9]{1,16})?$'
 USER_RE='^[a-z][a-z0-9_-]{0,31}$'
 # MeshCentral's hash: base64 of 128 random bytes (172 characters, one "=") "," base64 of a 128-byte key (172 characters, one "=").
 HASH_RE='^[A-Za-z0-9+/]{171}=,[A-Za-z0-9+/]{171}=$'
-KEYS="MMR_VERSION MMR_NAME MMR_HUB_HOME MMR_RUNTIME_DIR MMR_NODE MMR_MESH_VERSION MMR_CONTROL_PORT MMR_AGENT_ALLOWED MMR_ADMIN_USER MMR_ADMIN_HASH MMR_AGENT_USER MMR_AGENT_HASH"
+KEYS="MMR_VERSION MMR_NAME MMR_HUB_HOME MMR_APP_DIR MMR_RUNTIME_DIR MMR_NODE MMR_MESH_VERSION MMR_CONTROL_PORT MMR_AGENT_ALLOWED MMR_ADMIN_USER MMR_ADMIN_HASH MMR_AGENT_USER MMR_AGENT_HASH"
 
 check_path_value() {   # label value
   local label=$1 v=$2
@@ -56,7 +96,7 @@ check_path_value() {   # label value
   esac
 }
 
-# Turns the comma separated list into a space separated one in ALLOW; every entry is an IPv4 address (optional /0-32).
+# Turns the comma separated list into a space separated one in ALLOW; every entry is an IPv4 address (optional /8-32).
 parse_allowed() {
   local raw=$1 part entry i o n=0
   local -a parts
@@ -84,6 +124,15 @@ parse_allowed() {
   ((n >= 1 && n <= 16)) || die "MMR_AGENT_ALLOWED must hold between 1 and 16 entries (it has $n)."
 }
 
+# A folder of the hub's that the service must not see (InaccessiblePaths): it may not be, or hold, anything the service needs.
+check_hidden_root() {   # label realpath
+  local label=$1 r=$2 p
+  [[ $r =~ $PATH_RE ]] || die "$label resolves to a path with unusual characters."
+  for p in "/opt/$N" "/var/lib/$N" /var/lib /usr /etc /lib /lib64 /bin /sbin /dev /proc /sys /run /tmp /var/tmp; do
+    if [[ $p == "$r" || $p == "$r"/* ]]; then die "$label may not be $r: the service needs what is inside it."; fi
+  done
+}
+
 validate_request() {
   local req=$1
   [[ -n $req ]] || die "No request file was given."
@@ -98,7 +147,12 @@ validate_request() {
   HUB_UID=$uid
   HUB_GID=$gid
   REQ_REAL=$(realpath -e -- "$req") || die "Cannot resolve the request file."
-  [[ $(tr -d '\0' <"$req" | wc -c) -eq $size ]] || die "The request file holds a zero byte."
+  # Everything below reads this private copy, taken with the hub's own account.
+  local copy=$TMPD/request.env
+  read_hub_file "$req" | head -c $((MAX_REQUEST_BYTES + 1)) >"$copy" || die "Cannot read the request file."
+  size=$(stat -c '%s' -- "$copy")
+  ((size <= MAX_REQUEST_BYTES)) || die "The request file is larger than $MAX_REQUEST_BYTES bytes."
+  [[ $(tr -d '\0' <"$copy" | wc -c) -eq $size ]] || die "The request file holds a zero byte."
 
   local -A V=()
   local line key val k
@@ -108,21 +162,22 @@ validate_request() {
     key=${line%%=*}
     val=${line#*=}
     case $key in
-      MMR_VERSION | MMR_NAME | MMR_HUB_HOME | MMR_RUNTIME_DIR | MMR_NODE | MMR_MESH_VERSION | MMR_CONTROL_PORT | MMR_AGENT_ALLOWED | MMR_ADMIN_USER | MMR_ADMIN_HASH | MMR_AGENT_USER | MMR_AGENT_HASH) ;;
+      MMR_VERSION | MMR_NAME | MMR_HUB_HOME | MMR_APP_DIR | MMR_RUNTIME_DIR | MMR_NODE | MMR_MESH_VERSION | MMR_CONTROL_PORT | MMR_AGENT_ALLOWED | MMR_ADMIN_USER | MMR_ADMIN_HASH | MMR_AGENT_USER | MMR_AGENT_HASH) ;;
       *) die "The request file has an unknown key." ;;
     esac
     [[ -z ${V[$key]+x} ]] || die "The request file has the key $key twice."
     [[ -n $val ]] || die "The request file has an empty value for $key."
     V[$key]=$val
-  done <"$req"
+  done <"$copy"
   for k in $KEYS; do
     [[ -n ${V[$k]+x} ]] || die "The request file is missing the key $k."
   done
 
-  [[ ${V[MMR_VERSION]} == 1 ]] || die "MMR_VERSION must be 1 (this script does not know version '${V[MMR_VERSION]}')."
+  [[ ${V[MMR_VERSION]} == 1 ]] || die "MMR_VERSION must be 1 (this script knows only that version)."
   [[ ${V[MMR_NAME]} =~ $NAME_RE ]] || die "MMR_NAME must look like mymaestro-remote or mymaestro-remote-abc (letters a-z and digits, up to 16 after the dash)."
   N=${V[MMR_NAME]}
   check_path_value MMR_HUB_HOME "${V[MMR_HUB_HOME]}"
+  check_path_value MMR_APP_DIR "${V[MMR_APP_DIR]}"
   check_path_value MMR_RUNTIME_DIR "${V[MMR_RUNTIME_DIR]}"
   check_path_value MMR_NODE "${V[MMR_NODE]}"
   HUB_HOME=${V[MMR_HUB_HOME]}
@@ -161,8 +216,16 @@ validate_request() {
   [[ $uid == "$HUB_UID" ]] || die "$cfg is not owned by the same account as the request file."
   ((size <= MAX_CONFIG_BYTES)) || die "$cfg is larger than $MAX_CONFIG_BYTES bytes."
 
-  # Root copies the runtime and Node into /opt, readable by everyone. Both must belong to the hub's account (Node may
-  # also be a system program anyone may run), so a changed request cannot make root copy a private file into view.
+  # The hub's own folders that the service must not see at all (beyond ProtectHome=yes, for installs outside /home).
+  HUB_REAL=$(realpath -e -- "$HUB_HOME") || die "MMR_HUB_HOME '$HUB_HOME' does not exist."
+  APP_REAL=$(realpath -e -- "${V[MMR_APP_DIR]}") || die "MMR_APP_DIR '${V[MMR_APP_DIR]}' does not exist."
+  [[ -d $APP_REAL ]] || die "MMR_APP_DIR is not a directory."
+  [[ $(stat -c '%u' -- "$APP_REAL") == "$HUB_UID" ]] || die "MMR_APP_DIR must belong to the same account as the request file."
+  check_hidden_root MMR_HUB_HOME "$HUB_REAL"
+  check_hidden_root MMR_APP_DIR "$APP_REAL"
+
+  # Root copies the runtime and Node into /opt. Both must belong to the hub's account (Node may also be a system
+  # program anyone may run); the copies themselves are read with the hub's account (see full_install).
   RUNTIME_REAL=$(realpath -e -- "$RUNTIME_DIR") || die "MMR_RUNTIME_DIR '$RUNTIME_DIR' does not exist."
   [[ -d $RUNTIME_REAL ]] || die "MMR_RUNTIME_DIR is not a directory."
   [[ $(stat -c '%u' -- "$RUNTIME_REAL") == "$HUB_UID" ]] || die "MMR_RUNTIME_DIR must belong to the same account as the request file."
@@ -180,15 +243,54 @@ validate_request() {
       || die "MMR_NODE must belong to the same account as the request file, or be a system program anyone may run."
   fi
   SERVICE_DIR=$sdir
+  build_sandbox
 }
 
 # ---------------------------------------------------------------------------------------------------------------
-# The unit file
+# The sandbox: one list, used by the service unit and by every command that runs MeshCentral during the install
 # ---------------------------------------------------------------------------------------------------------------
+build_sandbox() {
+  SANDBOX=(
+    "UMask=0077"
+    "StateDirectory=$N"
+    "StateDirectoryMode=0700"
+    "NoNewPrivileges=yes"
+    "ProtectSystem=strict"
+    "ProtectHome=yes"
+    "InaccessiblePaths=-$APP_REAL -$HUB_REAL"
+    "PrivateTmp=yes"
+    "PrivateDevices=yes"
+    "ProtectKernelTunables=yes"
+    "ProtectKernelModules=yes"
+    "ProtectKernelLogs=yes"
+    "ProtectControlGroups=yes"
+    "ProtectClock=yes"
+    "ProtectHostname=yes"
+    "ProtectProc=invisible"
+    "RestrictNamespaces=yes"
+    "RestrictRealtime=yes"
+    "RestrictSUIDSGID=yes"
+    "LockPersonality=yes"
+    "RemoveIPC=yes"
+    "CapabilityBoundingSet="
+    "AmbientCapabilities="
+    "SystemCallArchitectures=native"
+    "SystemCallFilter=@system-service"
+    "SystemCallFilter=~@privileged"
+    "SystemCallErrorNumber=EPERM"
+    "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK"
+    "IPAddressDeny=any"
+    "IPAddressAllow=localhost $ALLOW"
+    "MemoryMax=2G"
+    "TasksMax=512"
+  )
+}
+
 unit_text() {
   cat <<EOF
 # Written by My Maestro (Remote computers). Remove with uninstall.sh.
 # My Maestro hub home: $HUB_HOME
+# My Maestro hub account: $HUB_UID:$HUB_GID
 [Unit]
 Description=My Maestro remote computers (MeshCentral)
 After=network-online.target tailscaled.service
@@ -206,37 +308,9 @@ ExecStart=/opt/$N/node /opt/$N/runtime/node_modules/meshcentral/meshcentral.js -
 Restart=always
 RestartSec=10
 TimeoutStopSec=20
-UMask=0077
-StateDirectory=$N
-StateDirectoryMode=0700
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-PrivateDevices=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectKernelLogs=yes
-ProtectControlGroups=yes
-ProtectClock=yes
-ProtectHostname=yes
-ProtectProc=invisible
-RestrictNamespaces=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-LockPersonality=yes
-RemoveIPC=yes
-CapabilityBoundingSet=
-AmbientCapabilities=
-SystemCallArchitectures=native
-SystemCallFilter=@system-service
-SystemCallFilter=~@privileged
-SystemCallErrorNumber=EPERM
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-IPAddressDeny=any
-IPAddressAllow=localhost $ALLOW
-MemoryMax=2G
-TasksMax=512
+EOF
+  printf '%s\n' "${SANDBOX[@]}"
+  cat <<'EOF'
 
 [Install]
 WantedBy=multi-user.target
@@ -258,23 +332,22 @@ EOF
 # ---------------------------------------------------------------------------------------------------------------
 # Full install helpers
 # ---------------------------------------------------------------------------------------------------------------
-TMPD=
-NEW_DIR=
-OLD_DIR=
-cleanup() {
-  [[ -n $TMPD && -d $TMPD ]] && rm -rf --one-file-system -- "$TMPD"
-  [[ -n $NEW_DIR && -d $NEW_DIR && ! -L $NEW_DIR ]] && rm -rf --one-file-system -- "$NEW_DIR"
-  return 0
+# One command as the service user, inside a transient unit with the service's sandbox and no network at all, without the
+# caller's terminal. Output (both streams) on stdout; returns the command's exit status. Leftover processes die with the unit.
+run_sandboxed() {
+  local -a props=()
+  local p
+  for p in "${SANDBOX[@]}"; do props+=(-p "$p"); done
+  timeout 180 systemd-run --quiet --wait --pipe --collect --service-type=exec \
+    --unit="$N-setup-$$-$RANDOM" --uid="$N" --gid="$N" \
+    -p WorkingDirectory="/opt/$N/runtime" -p Environment=NODE_ENV=production -p Environment=HOME="/var/lib/$N" \
+    -p RuntimeMaxSec=150 -p PrivateNetwork=yes "${props[@]}" \
+    -- "$@" </dev/null 2>&1
 }
 
-# One MeshCentral command line as the service user, in the program's own copy, limited to 120 s. Output (both streams) on stdout.
 run_mesh() {
-  (
-    cd "/opt/$N/runtime" || exit 1
-    timeout 120 runuser -u "$N" -- env -i PATH=/usr/bin:/bin HOME="/var/lib/$N" NODE_ENV=production \
-      "/opt/$N/node" "/opt/$N/runtime/node_modules/meshcentral/meshcentral.js" \
-      --datapath "/var/lib/$N/meshcentral-data" --npmpath "/opt/$N/node /opt/$N/no-npm.js" "$@"
-  ) 2>&1
+  run_sandboxed "/opt/$N/node" "/opt/$N/runtime/node_modules/meshcentral/meshcentral.js" \
+    --datapath "/var/lib/$N/meshcentral-data" --npmpath "/opt/$N/node /opt/$N/no-npm.js" "$@"
 }
 
 MESH_OUT=
@@ -308,8 +381,8 @@ make_account() {   # user hash label
   ((MESH_OK)) || mesh_fail "create the $label account" "$hash"
 }
 
-# Copies a file from a folder somebody else controls into DEST as a plain file. cp -P copies a symbolic link as a link, so a file that was swapped for a
-# link or a pipe after it was checked is seen here and refused, never followed.
+# Copies a file from the service's own folder into DEST as a plain file. cp -P copies a symbolic link as a link, so a
+# file that was swapped for a link or a pipe is seen here and refused, never followed.
 safe_copy() {   # src dest maxbytes
   local src=$1 dest=$2 max=$3
   cp -P --no-preserve=all -- "$src" "$dest" || fail "Could not copy $src."
@@ -323,6 +396,8 @@ full_install() {
   local replace=$1
   ((EUID == 0)) || die "The full install must run as root. Run: sudo $0 $REQUEST"
   [[ -d /run/systemd/system ]] || die "This computer does not run systemd, which the service mode needs."
+  command -v setpriv >/dev/null 2>&1 || die "setpriv (from util-linux) is needed and was not found."
+  command -v systemd-run >/dev/null 2>&1 || die "systemd-run is needed and was not found."
 
   local unit=/etc/systemd/system/$N.service prog=/opt/$N state=/var/lib/$N
   [[ -L $prog ]] && die "$prog is a symbolic link."
@@ -362,23 +437,24 @@ full_install() {
   if systemctl is-active --quiet "$N.service" 2>/dev/null; then
     info "Stopping $N.service ..."
     systemctl stop "$N.service"
+    STOPPED=1
   fi
 
-  trap cleanup EXIT
-  TMPD=$(mktemp -d)
-
-  # ---- the program: root-owned copies, nothing runs from the hub's folders ----
+  # ---- the program: a root-owned copy, private until it has been checked ----
   NEW_DIR=/opt/.$N.new.$$
   [[ ! -e $NEW_DIR && ! -L $NEW_DIR ]] || die "$NEW_DIR already exists."
-  install -d -m 0755 -o root -g root "$NEW_DIR"
-  install -m 0755 -o root -g root "$NODE_REAL" "$NEW_DIR/node"
-  mkdir "$NEW_DIR/runtime"
-  cp -R -P -- "$RUNTIME_REAL/." "$NEW_DIR/runtime/"
+  install -d -m 0700 -o root -g root "$NEW_DIR"
+  read_hub_file "$NODE_REAL" >"$NEW_DIR/node" || fail "Could not read $NODE_BIN with the hub's account."
+  [[ -s $NEW_DIR/node ]] || fail "$NODE_BIN is empty."
+  mkdir -m 0700 "$NEW_DIR/runtime"
+  # Enter the runtime folder first and check the folder entered, then copy what is inside it: no path is looked up again.
+  ( cd -P -- "$RUNTIME_REAL" && [[ $(stat -c '%u' -- .) == "$HUB_UID" ]] && exec cp -R -P --one-file-system -- . "$NEW_DIR/runtime/" ) \
+    || fail "Could not copy the runtime from $RUNTIME_DIR."
   no_npm_text >"$NEW_DIR/no-npm.js"
   chown -R -h root:root "$NEW_DIR"
-  chmod -R u+rwX,go+rX,go-w,a-s "$NEW_DIR"
   local mc=$NEW_DIR/runtime/node_modules/meshcentral
   [[ -f $mc/meshcentral.js && ! -L $mc/meshcentral.js ]] || fail "The copy has no meshcentral.js."
+  [[ -f $mc/package.json && ! -L $mc/package.json ]] || fail "The copy has no MeshCentral package.json."
   grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"${MESH_VERSION//./\\.}\"" "$mc/package.json" || fail "The copy is not MeshCentral $MESH_VERSION."
   # A link inside the copy must stay inside the copy.
   local link target
@@ -386,29 +462,40 @@ full_install() {
     target=$(realpath -m -- "$link")
     [[ $target == "$NEW_DIR/runtime/"* ]] || fail "The runtime holds a link that points out of itself: ${link#"$NEW_DIR"/}."
   done < <(find "$NEW_DIR/runtime" -type l -print0)
+  # Only now is it opened up.
+  chmod -R u+rwX,go+rX,go-w,a-s "$NEW_DIR"
+  chmod 0755 "$NEW_DIR/node"
 
   # Swap it in.
+  local old_dir=
   if [[ -e $prog ]]; then
-    OLD_DIR=/opt/.$N.old.$$
-    mv -- "$prog" "$OLD_DIR"
+    old_dir=/opt/.$N.old.$$
+    mv -- "$prog" "$old_dir"
   fi
   if ! mv -- "$NEW_DIR" "$prog"; then
-    [[ -z $OLD_DIR ]] || mv -- "$OLD_DIR" "$prog"
+    [[ -z $old_dir ]] || mv -- "$old_dir" "$prog"
     fail "Could not put the program in place."
   fi
   NEW_DIR=
-  [[ -z $OLD_DIR ]] || rm -rf --one-file-system -- "$OLD_DIR"
+  [[ -z $old_dir ]] || rm -rf --one-file-system -- "$old_dir"
 
-  # ---- the state ----
+  # ---- the state (the service user has no process running now) ----
   local d
   for d in "$state" "$state/meshcentral-data" "$state/meshcentral-files"; do
     [[ -L $d ]] && fail "$d is a symbolic link."
     install -d -m 0700 -o "$N" -g "$N" "$d"
   done
-  safe_copy "$SERVICE_DIR/config.json" "$TMPD/config.json" "$MAX_CONFIG_BYTES"
+  chown -R -h "$N:$N" "$state"   # files kept from an earlier install belong to this account again
+  read_hub_file "$SERVICE_DIR/config.json" | head -c $((MAX_CONFIG_BYTES + 1)) >"$TMPD/config.json" \
+    || fail "Could not read $SERVICE_DIR/config.json with the hub's account."
+  (($(stat -c '%s' -- "$TMPD/config.json") <= MAX_CONFIG_BYTES)) || fail "config.json is larger than $MAX_CONFIG_BYTES bytes."
   install -m 0600 -o "$N" -g "$N" "$TMPD/config.json" "$state/meshcentral-data/config.json"
 
-  # ---- the accounts, with MeshCentral stopped (the same steps as the connector's own first start) ----
+  # ---- Node and the accounts, inside the service's own sandbox (MeshCentral stopped) ----
+  local nv
+  nv=$(run_sandboxed "/opt/$N/node" --version) \
+    || fail "The copied Node does not run as $N inside the sandbox: $(printf '%s' "$nv" | tr -cd '\40-\176' | tail -c 300)"
+  [[ $nv =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || fail "The copied Node did not report a version."
   info "Making the MeshCentral accounts ..."
   make_account "$ADMIN_USER" "$ADMIN_HASH" admin
   mesh_step --adminaccount "$ADMIN_USER"
@@ -420,6 +507,7 @@ full_install() {
   install -m 0644 -o root -g root "$TMPD/unit" "$unit"
   systemctl daemon-reload
   systemctl enable --now "$N.service"
+  STOPPED=0
 
   # ---- wait until it answers ----
   info "Waiting for MeshCentral to start (up to 90 seconds) ..."
@@ -436,24 +524,21 @@ full_install() {
     fail "$N.service did not become ready within 90 seconds. The log is above."
   fi
 
-  # ---- hand the public certificate and the result back to the hub ----
+  # ---- hand the public certificate and the result back to the hub, with the hub's own account ----
   safe_copy "$state/meshcentral-data/root-cert-public.crt" "$TMPD/root-cert-public.crt" 65536
   grep -q -- '-----BEGIN CERTIFICATE-----' "$TMPD/root-cert-public.crt" || fail "The root certificate is not a certificate."
   printf '{"name":"%s","meshVersion":"%s","controlPort":%s,"installedAt":"%s"}\n' \
     "$N" "$MESH_VERSION" "$PORT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$TMPD/installed.json"
-  # Work from inside the hub's folder (cd -P) so a swapped folder cannot redirect the writes.
-  cd -P -- "$SERVICE_DIR" || fail "Cannot enter $SERVICE_DIR."
-  [[ $(stat -c '%u' -- .) == "$HUB_UID" ]] || fail "$SERVICE_DIR is no longer owned by the hub's account."
-  install -m 0644 -o "$HUB_UID" -g "$HUB_GID" "$TMPD/root-cert-public.crt" ./root-cert-public.crt
-  install -m 0644 -o "$HUB_UID" -g "$HUB_GID" "$TMPD/installed.json" ./installed.json
-  rm -f -- ./request.env
+  hand_back "$TMPD/root-cert-public.crt" root-cert-public.crt
+  hand_back "$TMPD/installed.json" installed.json
+  as_hub rm -f -- "$SERVICE_DIR/request.env" || fail "Could not remove $SERVICE_DIR/request.env with the hub's account."
 
   cat <<EOF
 
 Done. The service $N is running.
 - It runs under its own account, $N, not under the hub's account.
 - Its data in $state can be read only by that account.
-- To remove it: sudo $(dirname -- "$(realpath -e -- "$0")")/uninstall.sh --name $N
+- To remove it: sudo bash $(dirname -- "$(realpath -e -- "$0")")/uninstall.sh --name $N
 EOF
 }
 

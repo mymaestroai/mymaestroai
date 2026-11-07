@@ -50,8 +50,9 @@ prog=/opt/$N
 state=/var/lib/$N
 removed=()
 
-# The hub folder the unit was made for, if the unit names one in the expected form.
+# The hub folder and the hub account the unit was made for, if the unit names them in the expected form.
 hub_home=
+hub_ids=
 if [[ -f $unit && ! -L $unit ]]; then
   hub_home=$(sed -n 's/^# My Maestro hub home: //p' -- "$unit" | head -n 1 || true)
   if [[ $hub_home =~ $PATH_RE ]]; then
@@ -61,6 +62,8 @@ if [[ -f $unit && ! -L $unit ]]; then
   else
     hub_home=
   fi
+  hub_ids=$(sed -n 's/^# My Maestro hub account: //p' -- "$unit" | head -n 1 || true)
+  [[ $hub_ids =~ ^[1-9][0-9]*:[0-9]+$ ]] || hub_ids=
 fi
 
 if [[ -e $unit || -L $unit ]]; then
@@ -95,8 +98,11 @@ else
   done
 fi
 
-# The service account, only if it is the system account install.sh made.
-if pw=$(getent passwd "$N"); then
+# The service account, only if it is the system account install.sh made. With --keep-data it stays, so the kept files never
+# belong to a number another account could be given later.
+if ((KEEP)); then
+  if getent passwd "$N" >/dev/null 2>&1; then note "Kept the account $N, which owns the kept data."; fi
+elif pw=$(getent passwd "$N"); then
   puid=$(printf '%s' "$pw" | cut -d: -f3)
   phome=$(printf '%s' "$pw" | cut -d: -f6)
   if [[ $puid =~ ^[0-9]+$ ]] && ((puid < 1000)) && [[ $phome == "$state" ]]; then
@@ -106,23 +112,22 @@ if pw=$(getent passwd "$N"); then
     note "Left the account $N alone: it is not the service account made by install.sh."
   fi
 fi
-if getent group "$N" >/dev/null 2>&1; then
+if ((!KEEP)) && getent group "$N" >/dev/null 2>&1; then
   if ! getent passwd "$N" >/dev/null 2>&1; then
     groupdel "$N" >/dev/null 2>&1 || note "Note: groupdel could not remove the group $N."
     removed+=("group $N")
   fi
 fi
 
-# The two files install.sh gave back to the hub; nothing else in its folder is touched.
-if [[ -n $hub_home ]]; then
+# The two files install.sh gave back to the hub, removed with the hub account the unit names (never as root), so a swapped
+# folder there can only lead to files that account could remove anyway. Nothing else in its folder is touched.
+if [[ -n $hub_home && -n $hub_ids ]]; then
   sdir=$hub_home/service
-  if [[ -d $sdir && ! -L $sdir ]] && cd -P -- "$sdir" 2>/dev/null && [[ $(stat -c '%u' -- .) != 0 ]]; then
-    for f in root-cert-public.crt installed.json; do
-      if [[ -e ./$f || -L ./$f ]]; then
-        rm -f -- "./$f"
-        removed+=("$sdir/$f")
-      fi
-    done
+  if timeout 60 setpriv --reuid="${hub_ids%%:*}" --regid="${hub_ids##*:}" --clear-groups --no-new-privs -- env -i PATH=/usr/bin:/bin \
+    bash --noprofile --norc -c 'cd -P -- "$1" 2>/dev/null || exit 0; rm -f -- root-cert-public.crt installed.json' _ "$sdir"; then
+    removed+=("$sdir/root-cert-public.crt and installed.json (if they were there)")
+  else
+    note "Note: could not remove the hand-back files in $sdir with the hub's account."
   fi
 fi
 

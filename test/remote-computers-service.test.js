@@ -28,6 +28,8 @@ function layout(overrides = {}, opts = {}) {
   const sdir = path.join(home, 'service');
   const rt = path.join(root, 'runtime');
   const mc = path.join(rt, 'node_modules', 'meshcentral');
+  const app = path.join(root, 'app');
+  fs.mkdirSync(app);
   fs.mkdirSync(sdir, { recursive: true });
   fs.chmodSync(sdir, 0o700);
   fs.mkdirSync(mc, { recursive: true });
@@ -41,6 +43,7 @@ function layout(overrides = {}, opts = {}) {
     MMR_VERSION: '1',
     MMR_NAME: 'mymaestro-remote',
     MMR_HUB_HOME: home,
+    MMR_APP_DIR: app,
     MMR_RUNTIME_DIR: rt,
     MMR_NODE: node,
     MMR_MESH_VERSION: '1.3.1',
@@ -56,7 +59,7 @@ function layout(overrides = {}, opts = {}) {
   const text = Object.entries(values).filter(([, v]) => v !== null).map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
   fs.writeFileSync(req, opts.rawRequest !== undefined ? opts.rawRequest(text) : text);
   fs.chmodSync(req, 0o600);
-  return { root, home, sdir, rt, mc, node, req, values };
+  return { root, home, sdir, rt, mc, node, req, values, app };
 }
 
 function run(script, args) {
@@ -110,6 +113,8 @@ test('--print-unit has every hardening line once, the hub-home comment and the a
   for (const l of [
     '# Written by My Maestro (Remote computers). Remove with uninstall.sh.',
     `# My Maestro hub home: ${L.home}`,
+    `# My Maestro hub account: ${process.getuid()}:${fs.statSync(L.req).gid}`,
+    `InaccessiblePaths=-${fs.realpathSync(L.app)} -${fs.realpathSync(L.home)}`,
     '[Unit]', '[Service]', '[Install]',
     'Description=My Maestro remote computers (MeshCentral)',
     'After=network-online.target tailscaled.service',

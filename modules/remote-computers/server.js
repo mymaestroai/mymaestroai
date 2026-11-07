@@ -210,12 +210,15 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   // A start that failed before any process was made is retried by the supervisor; when it works, the rest of the start sequence follows.
   // hub mode: MeshCentral runs under My Maestro's own account; service mode: as its own systemd service (installed once by the owner).
   const systemd = typeof deps.serviceSupported === 'function' ? !!deps.serviceSupported() : deps.serviceSupported !== undefined ? !!deps.serviceSupported : (supported && fs.existsSync('/run/systemd/system'));
-  const mode = settings.run_as === 'service' ? 'service' : settings.run_as === 'hub' ? 'hub' : (supported && systemd ? 'service' : 'hub');
+  // A setup that already ran in hub mode keeps it under 'auto': its computers know that MeshCentral's certificates, and a new service has new ones.
+  const legacyHub = !!home && fs.existsSync(path.join(home, 'meshcentral-data', 'root-cert-public.crt'));
+  const mode = settings.run_as === 'service' ? 'service' : settings.run_as === 'hub' ? 'hub' : (supported && systemd && !legacyHub ? 'service' : 'hub');
   const serviceName = SERVICE_NAME_RE.test(String(settings.service_name)) ? settings.service_name : DEFAULT_SERVICE_NAME;
   const mesh = runtimeOk && home ?createMeshServer({ runtimeDir, home, settings, log, mode, serviceName, moduleDir: __dirname, onRetryReady: () => { if (!stopped && state.phase !== 'ready') startSequence().catch(() => {}); }, ...(deps.mesh || {}) }) : null;
   const WebSocket = () => deps.WebSocket || require(path.join(runtimeDir, 'node_modules', 'ws'));
   const state = { phase: !supported ? 'unsupported' : runtimeOk ? 'idle' : 'reinstall', waiting: !supported ? LINUX_ONLY : runtimeOk ? null : REINSTALL, group: null, lastError: null, warnings: [], service: null };
-  const HUB_MODE_WARNING = 'MeshCentral runs under My Maestro\'s own account. On Linux, set "Run as" to service to give it its own locked-down account.';
+  const HUB_MODE_WARNING = 'MeshCentral runs under My Maestro\'s own account. On Linux, set "Run as" to service to give it its own locked-down account.'
+    + (legacyHub && settings.run_as !== 'hub' ? ' This setup started in hub mode, so after the switch its computers need their agent installed again.' : '');
 
   let startP = null, agentClient = null;
   let gen = 0, stopped = false;   // gen goes up at every stop; a start sequence of an older generation stops at its next step

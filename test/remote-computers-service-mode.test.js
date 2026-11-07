@@ -83,7 +83,7 @@ const markInstalled = (ms) => {
   fs.rmSync(ms.paths.request, { force: true });
 };
 
-const KEYS = ['MMR_VERSION', 'MMR_NAME', 'MMR_HUB_HOME', 'MMR_RUNTIME_DIR', 'MMR_NODE', 'MMR_MESH_VERSION', 'MMR_CONTROL_PORT', 'MMR_AGENT_ALLOWED',
+const KEYS = ['MMR_VERSION', 'MMR_NAME', 'MMR_HUB_HOME', 'MMR_APP_DIR', 'MMR_RUNTIME_DIR', 'MMR_NODE', 'MMR_MESH_VERSION', 'MMR_CONTROL_PORT', 'MMR_AGENT_ALLOWED',
   'MMR_ADMIN_USER', 'MMR_ADMIN_HASH', 'MMR_AGENT_USER', 'MMR_AGENT_HASH'];
 const parseRequest = (file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]);
 
@@ -149,9 +149,9 @@ test('bootstrap in service mode writes the request and the config, runs nothing 
   const pairs = parseRequest(s.ms.paths.request);
   assert.deepStrictEqual(pairs.map((p) => p[0]), KEYS);
   const v = Object.fromEntries(pairs);
-  assert.deepStrictEqual([v.MMR_VERSION, v.MMR_NAME, v.MMR_HUB_HOME, v.MMR_RUNTIME_DIR, v.MMR_NODE, v.MMR_MESH_VERSION, v.MMR_CONTROL_PORT, v.MMR_AGENT_ALLOWED],
-    ['1', 'mymaestro-remote', s.home, s.runtimeDir, process.execPath, '1.3.1', '9971', '198.51.100.0/24, 100.64.0.0/10']);
-  assert.strictEqual(fs.readFileSync(s.ms.paths.request, 'utf8').split('\n').length, 13, 'twelve lines and a final newline');
+  assert.deepStrictEqual([v.MMR_VERSION, v.MMR_NAME, v.MMR_HUB_HOME, v.MMR_APP_DIR, v.MMR_RUNTIME_DIR, v.MMR_NODE, v.MMR_MESH_VERSION, v.MMR_CONTROL_PORT, v.MMR_AGENT_ALLOWED],
+    ['1', 'mymaestro-remote', s.home, path.resolve(MODULE_DIR, '..', '..'), s.runtimeDir, process.execPath, '1.3.1', '9971', '198.51.100.0/24, 100.64.0.0/10']);
+  assert.strictEqual(fs.readFileSync(s.ms.paths.request, 'utf8').split('\n').length, 14, 'thirteen lines and a final newline');
   assert.ok(!/["']/.test(fs.readFileSync(s.ms.paths.request, 'utf8')), 'no quotes');
   assert.strictEqual(modeOf(s.ms.paths.request), 0o600);
 
@@ -498,4 +498,23 @@ test('after the install: no new request with the same settings, and a settings c
   assert.deepStrictEqual([c.ready, c.reason, c.command], [false, 'needs-update', b.command]);
   assert.match(c.message, /^The settings changed after MeshCentral was installed as the system service mymaestro-remote\. Run the install again/);
   assert.deepStrictEqual(t.fb.calls, [], 'nothing was run or spawned');
+});
+
+test('auto keeps a setup that already ran in hub mode in hub mode, and says what a switch costs', () => {
+  const mk = (withHubData, runAs) => {
+    const home = tmp();
+    if (withHubData) {
+      fs.mkdirSync(path.join(home, 'meshcentral-data'), { recursive: true });
+      fs.writeFileSync(path.join(home, 'meshcentral-data', 'root-cert-public.crt'), 'cert');
+    }
+    return createRemote({
+      env: { MODULE_SETTINGS: JSON.stringify({ ...SETTINGS, run_as: runAs }), CONNECTOR_DATA_HOME: home, MODULE_RUNTIME_DIR: fakeRuntime() },
+      write: () => {}, log: () => {},
+      deps: { platform: 'linux', serviceSupported: true, mesh: { probe: async () => false, spawn: forbidden().spawn, execFile: forbidden().execFile } },
+    });
+  };
+  assert.strictEqual(mk(false, 'auto').mode, 'service', 'a fresh setup on systemd');
+  assert.strictEqual(mk(true, 'auto').mode, 'hub', 'hub-mode data present: stays in hub mode');
+  assert.strictEqual(mk(true, 'service').mode, 'service', 'an explicit choice wins');
+  assert.strictEqual(mk(true, 'hub').mode, 'hub');
 });
