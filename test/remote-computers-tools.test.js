@@ -90,7 +90,7 @@ test('gate: the owner is asked once per session with the agreed wording, then a 
   assert.deepStrictEqual(toasts, [{ id: 'pc1', title: 'My Maestro', msg: 'sam is using this computer for the next 30 minutes.' }]);
   await gate.require('sam', 'act', PC);
   assert.strictEqual(asked.length, 1, 'the session covers the next one');
-  assert.deepStrictEqual(gate.sessions(), [{ agent: 'sam', computer: { id: 'pc1', name: 'demo-pc' }, level: 'act', expiresAt: clock.now() + 30 * 60000 }]);
+  assert.deepStrictEqual(gate.sessions(), [{ agent: 'sam', computer: { id: 'pc1', name: 'demo-pc' }, level: 'act', expiresAt: clock.now() + 30 * 60000 }]);   // scopes are internal
   // Another computer is another session.
   await gate.require('sam', 'act', { id: 'pc2', name: 'laptop' });
   assert.strictEqual(asked.length, 2);
@@ -158,19 +158,45 @@ test('gate: a no is EDENIED and the owner is not asked again for 2 minutes; a ti
   await gate.require('pat', 'act', PC);
 });
 
-test('gate: drive covers act, act does not cover drive (it asks again with the drive wording)', async () => {
-  const { gate, asked } = newGate();
-  await gate.require('pat', 'act', PC);
+test('gate: approval scopes by account: act-system covers a user run, drive covers a user run only, a user run covers neither', async () => {
+  const { gate, raw, asked } = newGate();
+  // act as the system covers a run as the user; the reverse asks again, with the system wording.
+  await gate.require('pat', 'act', PC, { call: 'c', as: 'system' });
+  await gate.require('pat', 'act', PC, { call: 'c', as: 'user' });
   assert.strictEqual(asked.length, 1);
   assert.match(asked[0].detail, /may run commands as the system account \(full control\) on demo-pc \(pc1\)\./);
+  assert.strictEqual(raw.stillValid('pat', 'pc1', 'act', 'user'), true);
+  assert.strictEqual(raw.stillValid('pat', 'pc1', 'act'), true);
+  assert.strictEqual(raw.stillValid('pat', 'pc1', 'drive'), false);
   await gate.require('pat', 'drive', PC);
   assert.strictEqual(asked.length, 2);
   assert.match(asked[1].detail, /may use the mouse and keyboard on demo-pc \(pc1\)\./);
-  await gate.require('pat', 'act', PC);
+  // The drive approval is added to the session: the system approval stays.
+  await gate.require('pat', 'act', PC, { call: 'c', as: 'system' });
   await gate.require('pat', 'drive', PC);
-  assert.strictEqual(asked.length, 2, 'the drive session covers both');
+  assert.strictEqual(asked.length, 2);
   assert.strictEqual(gate.sessions().length, 1);
   assert.strictEqual(gate.sessions()[0].level, 'drive');
+  // A user run alone: no system run (asks again with the system wording), no drive.
+  const u = newGate();
+  await u.gate.require('sam', 'act', PC, { call: 'c', as: 'user' });
+  assert.match(u.asked[0].detail, /may run commands as the signed-in user on/);
+  await u.gate.require('sam', 'act', PC, { call: 'c', as: 'user' });
+  assert.strictEqual(u.asked.length, 1);
+  assert.strictEqual(u.raw.stillValid('sam', 'pc1', 'act', 'user'), true);
+  assert.strictEqual(u.raw.stillValid('sam', 'pc1', 'act', 'system'), false);
+  await u.gate.require('sam', 'act', PC, { call: 'c', as: 'system' });
+  assert.strictEqual(u.asked.length, 2);
+  assert.match(u.asked[1].detail, /may run commands as the system account \(full control\)/);
+  // A drive approval covers a run as the user, never a run as the system.
+  const dr = newGate();
+  await dr.gate.require('pat', 'drive', PC);
+  await dr.gate.require('pat', 'act', PC, { call: 'c', as: 'user' });
+  assert.strictEqual(dr.asked.length, 1);
+  assert.strictEqual(dr.raw.stillValid('pat', 'pc1', 'act', 'system'), false);
+  await dr.gate.require('pat', 'act', PC, { call: 'c', as: 'system' });
+  assert.strictEqual(dr.asked.length, 2);
+  assert.match(dr.asked[1].detail, /as the system account/);
   // A drive question in flight is shared with an act request; an act question in flight is waited out by a drive request.
   const d = deferred();
   let n = 0;
@@ -750,6 +776,77 @@ test('tools: run is an act tool; PowerShell travels encoded, cmd as typed; as pi
   const edge = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x'.repeat(7000), shell: 'cmd' });
   assert.strictEqual(edge.output, 'ok');
   assert.deepStrictEqual(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.type, 1, 'cmd stays on type 1');
+});
+
+// A Linux and a macOS computer next to the Windows one (the OS comes from osdesc, or from the agent id when that is empty).
+const OTHER_NODES = {
+  'mesh//g1': [
+    ...NODES['mesh//g1'].slice(0, 1),
+    { _id: `node//${ID_B}`, name: 'penguin', osdesc: 'Ubuntu 24.04.1 LTS', conn: 1, agct: 1783000000000, agent: { id: 6, ver: 12 } },
+    { _id: `node//${ID_C}`, name: 'apple', osdesc: 'macOS 14.5', conn: 1, agct: 1783000000000, agent: { id: 29, ver: 12 } },
+    { _id: `node//${ID_D}`, name: 'bare', osdesc: '', conn: 1, agct: 1783000000000, agent: { id: 6, ver: 12 } },
+  ],
+};
+
+test('tools: on Linux and macOS run uses runcommands type 3 with the text and a new line; sh is the default; powershell and cmd are refused there, sh on Windows', async () => {
+  const t = setup({ handlers: { nodes: async () => ({ action: 'nodes', nodes: OTHER_NODES }) } });
+  t.handlers.runcommands = async () => ({ result: 'root\n' });
+  for (const name of ['penguin', 'apple', 'bare']) {
+    const r = await t.call('run', { ...AGENT, computer: name, command: 'whoami' });
+    assert.strictEqual(r.output, 'root', name);
+    const c = t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0];
+    assert.deepStrictEqual({ type: c.fields.type, cmds: c.fields.cmds, as: c.fields.runAsUser }, { type: 3, cmds: 'whoami\n', as: 0 }, name);
+  }
+  await t.call('run', { ...AGENT, computer: 'penguin', command: 'id -u', shell: 'sh', as: 'user' });
+  const u = t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0];
+  assert.deepStrictEqual({ type: u.fields.type, cmds: u.fields.cmds, as: u.fields.runAsUser }, { type: 3, cmds: 'id -u\n', as: 2 });
+  assert.deepStrictEqual(t.gateOpts.filter(Boolean).slice(-1)[0], { call: 'call-1', as: 'user' });
+  const sent = t.calls.length;
+  for (const shell of ['powershell', 'cmd']) {
+    const r = await t.call('run', { ...AGENT, computer: 'penguin', command: 'x', shell });
+    assert.match(r.error, /penguin is not a Windows computer: use sh/, shell);
+  }
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', shell: 'sh' })).error, /demo-pc is a Windows computer: use powershell/);
+  assert.ok(!t.calls.slice(sent).some((x) => x.action === 'runcommands'), 'nothing was sent');
+  // Windows keeps its types.
+  await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'dir', shell: 'cmd' });
+  assert.strictEqual(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.type, 1);
+  await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'dir' });
+  assert.strictEqual(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.type, 2);
+  assert.ok(TOOLS.find((x) => x.name === 'run').inputSchema.properties.shell.enum.includes('sh'));
+});
+
+test('tools: screenshot, click, type, key and scroll say they are Windows only on a Linux or macOS computer, and send nothing', async () => {
+  const t = setup({ handlers: { nodes: async () => ({ action: 'nodes', nodes: OTHER_NODES }) } });
+  t.handlers.runcommands = async () => { throw new Error('must not run'); };
+  const NOPE = 'Screenshots and mouse/keyboard work on Windows computers for now.';
+  for (const computer of ['penguin', 'apple']) {
+    for (const [name, args] of [['screenshot', {}], ['click', { shot: 'abcd1234', x: 1, y: 1 }], ['type', { text: 'a' }], ['key', { keys: 'a' }], ['scroll', { amount: 1 }], ['scroll', { amount: 1, x: 1, y: 1, shot: 'abcd1234' }]]) {
+      assert.strictEqual((await t.call(name, { ...AGENT, computer, ...args })).error, NOPE, `${computer} ${name}`);
+    }
+  }
+  assert.ok(!t.calls.some((c) => c.action === 'runcommands'));
+  assert.ok(!t.gateCalls.some((g) => g.need === 'act' || g.need === 'drive'), 'the owner is not asked for what cannot be done');
+  t.handlers.getsysinfo = async () => ({ hardware: {} });
+  assert.ok(!(await t.call('info', { ...AGENT, computer: 'penguin' })).error, 'info still works');
+});
+
+test('tools: with the real gate a run as the system asks again after a run as the user was approved; drive does not cover the system', async () => {
+  const t = setup({ realGate: true });
+  t.handlers.runcommands = async () => ({ result: 'done' });
+  const asksOf = () => t.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve');
+  const answer = async (p) => { await flush(); const a = asksOf().slice(-1)[0]; t.remote.onLine(JSON.stringify({ jsonrpc: '2.0', id: a.id, result: { decision: 'allow' } })); return p; };
+  const first = await answer(t.call('run', { ...AGENT, computer: 'demo-pc', command: 'whoami', as: 'user' }));
+  assert.strictEqual(first.output, 'done');
+  assert.match(asksOf()[0].params.detail, /may run commands as the signed-in user on/);
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'again', as: 'user' })).output, 'done');
+  assert.strictEqual(asksOf().length, 1);
+  const sys = await answer(t.call('run', { ...AGENT, computer: 'demo-pc', command: 'whoami' }));
+  assert.strictEqual(sys.output, 'done');
+  assert.strictEqual(asksOf().length, 2);
+  assert.match(asksOf()[1].params.detail, /may run commands as the system account \(full control\)/);
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', as: 'user' })).output, 'done');
+  assert.strictEqual(asksOf().length, 2, 'the system approval covers a user run');
 });
 
 test('tools: a login that timed out is not a command that got no answer; a command that did stays busy; the screen hold stays 60 s', async () => {

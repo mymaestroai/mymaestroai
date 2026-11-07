@@ -35,6 +35,8 @@ function hashPassword(password, salt = crypto.randomBytes(PASS_LEN).toString('ba
 
 const DNS_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const IPV4_RE = /^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$/;
+const DEFAULT_ALLOWED = '100.64.0.0/10';
+const ALLOWED_RE = /^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}(\/(3[0-2]|[12]?[0-9]))?$/;   // an IPv4 address or a CIDR range
 
 const clean = (s, max = 300) => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, ' ').slice(0, max);
 
@@ -109,6 +111,10 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
       if (!Number.isInteger(p) || p < 1024 || p > 65535) throw new Error(`The ${label} port must be a whole number from 1024 to 65535.`);
     }
     if (port === agentPort) throw new Error('The control port and the computer port must be different.');
+    const rawAllowed = s.agent_allowed === undefined || s.agent_allowed === null || String(s.agent_allowed).trim() === '' ? DEFAULT_ALLOWED : String(s.agent_allowed);
+    const parts = rawAllowed.split(',').map((x) => x.trim());
+    if (parts.length > 32 || !parts.every((x) => ALLOWED_RE.test(x))) throw new Error('The allowed addresses are not valid. Use IPv4 addresses or ranges such as 100.64.0.0/10, separated by commas.');
+    const allowed = parts.join(',');
     return {
       settings: {
         cert: name,
@@ -123,7 +129,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
         newAccounts: false,
         lockAgentDownload: true,
         userAllowedIp: '127.0.0.1',
-        agentAllowedIp: '100.64.0.0/10',
+        agentAllowedIp: allowed,
         cookieIpCheck: 'strict',
         agentDownloads: { enabled: true, fetchReleases: false },
         autoBackup: false,

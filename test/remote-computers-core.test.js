@@ -116,14 +116,18 @@ test('the manifest, setup and check load through the hub loader', () => {
   });
   assert.deepStrictEqual(TOOLS.map((t) => t.name).sort(), Object.keys(mf.tools).sort());
   const byKey = Object.fromEntries(mf.settings.map((s) => [s.key, s]));
-  assert.deepStrictEqual(Object.keys(byKey), ['address_name', 'listen_ip', 'control_port', 'agent_port', 'levels', 'session_minutes']);
+  assert.deepStrictEqual(Object.keys(byKey), ['address_name', 'listen_ip', 'control_port', 'agent_port', 'agent_allowed', 'levels', 'session_minutes']);
+  assert.strictEqual(byKey.agent_allowed.default, '100.64.0.0/10');
   assert.strictEqual(byKey.control_port.default, 9971);
   assert.strictEqual(byKey.agent_port.default, 9972);
   assert.deepStrictEqual(byKey.levels.default, ['maestro:look']);
   assert.strictEqual(byKey.session_minutes.default, 30);
   assert.deepStrictEqual([byKey.control_port.min, byKey.control_port.max, byKey.agent_port.min, byKey.agent_port.max, byKey.session_minutes.min, byKey.session_minutes.max], [1024, 65535, 1024, 65535, 5, 120]);
   for (const s of mf.settings) assert.ok(s.label && s.help, `${s.key} has a label and help`);
-  assert.deepStrictEqual(safeSettings(mf, {}), { address_name: '', listen_ip: '', control_port: 9971, agent_port: 9972, levels: ['maestro:look'], session_minutes: 30 });
+  assert.deepStrictEqual(safeSettings(mf, {}), { address_name: '', listen_ip: '', control_port: 9971, agent_port: 9972, agent_allowed: '100.64.0.0/10', levels: ['maestro:look'], session_minutes: 30 });
+  const allowed = (v) => new RegExp(byKey.agent_allowed.pattern).test(v);
+  for (const ok of ['100.64.0.0/10', '10.0.0.1', '100.64.0.0/10, 192.168.0.5', '1.2.3.4/32,5.6.7.8/0']) assert.ok(allowed(ok), ok);
+  for (const bad of ['', 'hub', '100.64.0.256', '100.64.0.0/33', '100.64.0.0/', '1.2.3.4,', '1.2.3.4;5.6.7.8', '::1']) assert.ok(!allowed(bad), bad);
 });
 
 test('the settings rules of the manifest are enforced by the hub', () => {
@@ -161,6 +165,16 @@ test('configFor builds the MeshCentral settings from the module settings', () =>
   assert.deepStrictEqual(c.domains, { '': { title: 'My Maestro computers', newAccounts: false, passwordRequirements: { logintokens: false } } });   // MeshCentral reads domain.passwordrequirements.logintokens === false (meshuser.js:5363,5402) after lower-casing the keys
   for (const k of ['plugins', 'allowLoginToken', 'ignoreAgentHashCheck', 'aliasPort', 'agentAliasPort', 'tlsOffload']) assert.ok(!(k in c.settings), `${k} is not set`);
   assert.strictEqual(ms.configFor({ ...SETTINGS, address_name: 'Hub.Example.TS.net' }).settings.cert, 'hub.example.ts.net');
+});
+
+test('configFor uses agent_allowed for agentAllowedIp (default 100.64.0.0/10), trimmed, and refuses a bad list', () => {
+  const { ms } = newServer();
+  const allowed = (v) => ms.configFor({ ...SETTINGS, agent_allowed: v }).settings.agentAllowedIp;
+  assert.strictEqual(ms.configFor({ ...SETTINGS }).settings.agentAllowedIp, '100.64.0.0/10');
+  assert.strictEqual(allowed(''), '100.64.0.0/10');
+  assert.strictEqual(allowed('192.168.0.0/24'), '192.168.0.0/24');
+  assert.strictEqual(allowed(' 100.64.0.0/10 , 10.1.2.3 '), '100.64.0.0/10,10.1.2.3');
+  for (const bad of ['hub', '100.64.0.256', '1.2.3.4/33', '1.2.3.4,,5.6.7.8', '1.2.3.4;5.6.7.8', '1.2.3.4/']) assert.throws(() => allowed(bad), /allowed addresses are not valid/, bad);
 });
 
 test('configFor refuses a missing or invalid name, address or port', () => {
