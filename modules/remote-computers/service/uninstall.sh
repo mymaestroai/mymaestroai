@@ -87,10 +87,18 @@ elif [[ -d $prog ]]; then
   rm -rf --one-file-system -- "$prog"
   removed+=("$prog")
 fi
-# Copies a failed or cut-off install left aside (/opt/.NAME.new.PID, /opt/.NAME.old.PID), and the root-only folders a failed
-# rollback kept (/tmp/mymaestro-remote-install.*; they hold a request with password hashes).
-for d in /opt/."$N".new.* /opt/."$N".old.* /tmp/mymaestro-remote-install.*; do
+# Copies a failed or cut-off install of this service left aside (/opt/.NAME.new.PID, /opt/.NAME.old.PID).
+for d in /opt/."$N".new.* /opt/."$N".old.*; do
   if [[ -d $d && ! -L $d && $(stat -c '%u' -- "$d") == 0 ]]; then
+    rm -rf --one-file-system -- "$d"
+    removed+=("$d")
+  fi
+done
+# The root-only folders a failed rollback of this service kept (/var/tmp/mymaestro-remote-install.*, marked with the
+# service's name; they hold a request with password hashes). Other services' folders are left alone.
+for d in /var/tmp/mymaestro-remote-install.*; do
+  if [[ -d $d && ! -L $d && $(stat -c '%u' -- "$d") == 0 && -f $d/service-name && ! -L $d/service-name ]] \
+    && [[ $(head -c 64 -- "$d/service-name") == "$N" ]]; then
     rm -rf --one-file-system -- "$d"
     removed+=("$d")
   fi

@@ -299,3 +299,10 @@ test('--print-unit never re-exposes the real root: no ProtectSystem (it binds / 
   assert.doesNotMatch(r.out, /^DynamicUser=/m, 'DynamicUser implies ProtectSystem=strict');
   assert.match(r.out, /^TemporaryFileSystem=\/:ro$/m);
 });
+
+test('no script handed to systemd-run uses ${...}: systemd expands those forms itself before bash sees them', () => {
+  const text = fs.readFileSync(INSTALL, 'utf8');
+  const scripts = [...text.matchAll(/(?:as_service|run_in_sandbox)\b[^\n]*?-c '([^']*)'/g)].map((m) => m[1]);
+  assert.ok(scripts.length >= 4, `found ${scripts.length} sandboxed scripts`);
+  for (const s of scripts) assert.ok(!s.includes('${'), `a sandboxed script uses \${...}: ${s.slice(0, 80)}`);
+});
