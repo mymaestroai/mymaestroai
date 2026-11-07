@@ -31,8 +31,10 @@ Every agent starts at Look. You raise an agent's level in the settings.
   such as a password, stays in that log.
 - **Act and Drive are not walled off from each other.** A command can open programs, so an agent that can Act can
   reach much of what Drive does. Give Drive only to agents you would also give Act.
-- **Screenshots are private.** An agent receives each screenshot in its reply, not as a file in the Files folder. The
-  connector keeps a private copy (the newest 200 per computer) in its own protected folder for troubleshooting.
+- **Screenshots are private.** An agent receives each screenshot in its reply. They are not written to My Maestro's
+  shared folders (such as the Files folder), but the AI session's own record may keep the picture, like any tool
+  result. The connector keeps a private copy (the newest 200 per computer) in its own protected folder for
+  troubleshooting.
 - **Clicks use the screenshot's shot id.** click (and scroll at a place) must name the shot id of the screenshot the
   agent looked at. It works for 10 minutes, only for that agent and computer, and is refused if the screen size has
   changed since.

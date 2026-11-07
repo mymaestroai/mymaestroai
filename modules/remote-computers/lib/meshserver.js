@@ -114,6 +114,8 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     const rawAllowed = s.agent_allowed === undefined || s.agent_allowed === null || String(s.agent_allowed).trim() === '' ? DEFAULT_ALLOWED : String(s.agent_allowed);
     const parts = rawAllowed.split(',').map((x) => x.trim());
     if (parts.length > 32 || !parts.every((x) => ALLOWED_RE.test(x))) throw new Error('The allowed addresses are not valid. Use IPv4 addresses or ranges such as 100.64.0.0/10, separated by commas.');
+    // Not "everything": 0.0.0.0 and a range wider than a /8 would let almost any address connect.
+    if (parts.some((x) => x === '0.0.0.0' || x.startsWith('0.0.0.0/') || (x.includes('/') && Number(x.split('/')[1]) < 8))) throw new Error('The allowed addresses are too wide. Use a range of /8 or narrower, such as 100.64.0.0/10, and not 0.0.0.0.');
     const allowed = parts.join(',');
     return {
       settings: {

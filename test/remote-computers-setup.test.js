@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { loadModule } = require('../lib/modules/manifest');
-const { createTokens, createInstaller, sessionCookies, ALPHABET, TOKEN_LENGTH, TOKEN_TTL_MS, MAX_TOKENS, CACHE_FILE, CACHE_TTL_MS, RATE_LIMIT, GONE, UNAVAILABLE } = require('../modules/remote-computers/lib/installer');
+const { createTokens, createInstaller, sessionCookies, ALPHABET, TOKEN_LENGTH, TOKEN_TTL_MS, MAX_TOKENS, CACHE_FILE, CONFIG_FILE, CACHE_TTL_MS, RATE_LIMIT, GONE, UNAVAILABLE } = require('../modules/remote-computers/lib/installer');
 const { createRemote, TOOLS } = require('../modules/remote-computers/server');
 const { checks } = require('../modules/remote-computers/index');
 
@@ -116,8 +116,9 @@ function newInstaller(over = {}) {
     home, now: c.now, log: (...a) => logs.push(a.join(' ')),
     fetchInstaller: async () => { const r = await fetchInstaller(); if (!over.fetchInstaller) return r; fetches++; return r; },
     address: () => 'hub.example.ts.net',
+    ...(over.configKey ? { configKey: over.configKey } : {}),
   });
-  const get = (token) => inst.receive({ method: 'GET', path: 'installer', query: { t: token } });
+  const get =(token) => inst.receive({ method: 'GET', path: 'installer', query: { t: token } });
   return { inst, c, home, logs, get, fetches: () => fetches };
 }
 
@@ -196,9 +197,10 @@ test('receiver: two links used at once fetch once', async () => {
   assert.strictEqual(x.fetches(), 1);
 });
 
-test('receiver: a failed download is a plain 502 that leaks nothing, and the link is spent', async () => {
+test('receiver: a failed download is a plain 502 that leaks nothing, and the link is not spent', async () => {
   const secret = 'hunter2-the-admin-password';
-  const x = newInstaller({ fetchInstaller: async () => { throw new Error(`login for admin failed with ${secret} at 127.0.0.1:9971`); } });
+  let fail = true;
+  const x = newInstaller({ fetchInstaller: async () => { if (fail) throw new Error(`login for admin failed with ${secret} at 127.0.0.1:9971`); return EXE; } });
   const token = x.inst.link().url.split('?t=').pop();
   const r = await x.get(token);
   assert.strictEqual(r.status, 502);
@@ -206,7 +208,66 @@ test('receiver: a failed download is a plain 502 that leaks nothing, and the lin
   assert.match(r.body, /^The installer is not available right now\.\n?$/);
   assert.doesNotMatch(JSON.stringify(r), /hunter2|127\.0\.0\.1|9971/);
   assert.ok(x.logs.some((l) => /installer download failed/.test(l)), 'the detail goes to the log');
-  assert.strictEqual((await x.get(token)).status, 404, 'spent');
+  fail = false;
+  assert.strictEqual((await x.get(token)).status, 200, 'the same link works once the server can answer');
+  assert.strictEqual((await x.get(token)).status, 404, 'and now it is spent');
+  // A link given back keeps its old expiry.
+  const y = newInstaller({ fetchInstaller: async () => { throw new Error('down'); } });
+  const t2 = y.inst.link().url.split('?t=').pop();
+  assert.strictEqual((await y.get(t2)).status, 502);
+  y.c.advance(TOKEN_TTL_MS + 1);
+  assert.strictEqual((await y.get(t2)).status, 404, 'a restored link still expires on time');
+});
+
+test('installer cache: reused only for the same configuration (name, port, group, certificate)', async () => {
+  let key = 'a';
+  const x = newInstaller({ configKey: () => key });
+  const tok = () => x.inst.link().url.split('?t=').pop();
+  assert.strictEqual((await x.get(tok())).status, 200);
+  assert.strictEqual(x.fetches(), 1);
+  const meta = JSON.parse(fs.readFileSync(path.join(x.home, CONFIG_FILE), 'utf8'));
+  assert.match(meta.config, /^[0-9a-f]{64}$/, 'a sha256 beside the cached file');
+  assert.ok(!JSON.stringify(meta).includes('a"'), 'not the plain key');
+  assert.strictEqual((await x.get(tok())).status, 200);
+  assert.strictEqual(x.fetches(), 1, 'same configuration: from the cache');
+  key = 'b';
+  assert.strictEqual((await x.get(tok())).status, 200);
+  assert.strictEqual(x.fetches(), 2, 'another configuration: fetched again');
+  assert.notStrictEqual(JSON.parse(fs.readFileSync(path.join(x.home, CONFIG_FILE), 'utf8')).config, meta.config);
+  assert.strictEqual((await x.get(tok())).status, 200);
+  assert.strictEqual(x.fetches(), 2, 'and cached for the new one');
+  // A cached file without a record (an older version) is not trusted.
+  fs.unlinkSync(path.join(x.home, CONFIG_FILE));
+  assert.strictEqual((await x.get(tok())).status, 200);
+  assert.strictEqual(x.fetches(), 3);
+});
+
+test('receiver: bad, expired or spent tokens are limited to 10 a minute; good ones only count toward a loose 60', async () => {
+  const x = newInstaller();
+  // Fifty good downloads in a minute are fine (each needs its own link).
+  for (let i = 0; i < 50; i++) assert.strictEqual((await x.get(x.inst.link().url.split('?t=').pop())).status, 200, `good request ${i}`);
+  // Nine bad ones are answered, the tenth is too, and the 11th is refused: even a good link.
+  for (let i = 0; i < 10; i++) assert.strictEqual((await x.get('zzzzzzzz')).status, 404, `bad ${i}`);
+  assert.strictEqual((await x.get(x.inst.link().url.split('?t=').pop())).status, 429);
+  x.c.advance(60000);
+  // Loose cap: 60 requests in a minute of any kind.
+  const y = newInstaller();
+  for (let i = 0; i < 60; i++) assert.strictEqual((await y.get(y.inst.link().url.split('?t=').pop())).status, 200, `good ${i}`);
+  assert.strictEqual((await y.get(y.inst.link().url.split('?t=').pop())).status, 429, 'the 61st request in a minute');
+  y.c.advance(60000);
+  assert.strictEqual((await y.get(y.inst.link().url.split('?t=').pop())).status, 200);
+  // A wrong method is not a bad token.
+  const z = newInstaller();
+  for (let i = 0; i < 15; i++) assert.strictEqual((await z.inst.receive({ method: 'POST', path: 'installer', query: { t: 'zzzzzzzz' } })).status, 405);
+  assert.strictEqual((await z.get(z.inst.link().url.split('?t=').pop())).status, 200);
+  // tokens: take/restore
+  const t = createTokens({});
+  const k = t.make();
+  const exp = t.take(k.token);
+  assert.strictEqual(exp, k.expiresAt);
+  assert.strictEqual(t.take(k.token), null);
+  assert.strictEqual(t.restore(k.token, exp), true);
+  assert.strictEqual(t.consume(k.token), true);
 });
 
 test('receiver: something that is not a program file is refused, and is not cached', async () => {
@@ -216,7 +277,7 @@ test('receiver: something that is not a program file is refused, and is not cach
   assert.ok(!fs.existsSync(path.join(x.home, CACHE_FILE)));
 });
 
-test('receiver: at most 10 requests a minute in total, wrong tokens included', async () => {
+test('receiver: after 10 wrong tokens in a minute nothing is answered, not even a good link', async () => {
   const x = newInstaller();
   assert.strictEqual(RATE_LIMIT, 10);
   for (let i = 0; i < 10; i++) assert.strictEqual((await x.get('zzzzzzzz')).status, 404);

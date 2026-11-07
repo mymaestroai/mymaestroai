@@ -177,6 +177,14 @@ test('configFor uses agent_allowed for agentAllowedIp (default 100.64.0.0/10), t
   for (const bad of ['hub', '100.64.0.256', '1.2.3.4/33', '1.2.3.4,,5.6.7.8', '1.2.3.4;5.6.7.8', '1.2.3.4/']) assert.throws(() => allowed(bad), /allowed addresses are not valid/, bad);
 });
 
+test('configFor refuses agent_allowed ranges wider than /8 and 0.0.0.0', () => {
+  const { ms } = newServer();
+  const allowed = (v) => ms.configFor({ ...SETTINGS, agent_allowed: v }).settings.agentAllowedIp;
+  for (const wide of ['0.0.0.0', '0.0.0.0/0', '0.0.0.0/8', '10.0.0.0/0', '10.0.0.0/7', '128.0.0.0/1', '100.64.0.0/10,10.0.0.0/4', '192.168.0.0/24, 0.0.0.0']) assert.throws(() => allowed(wide), /too wide/, wide);
+  assert.strictEqual(allowed('10.0.0.0/8'), '10.0.0.0/8');
+  assert.strictEqual(allowed('1.2.3.4/32,100.64.0.0/10'), '1.2.3.4/32,100.64.0.0/10');
+});
+
 test('configFor refuses a missing or invalid name, address or port', () => {
   const { ms } = newServer();
   const bad = (over, re) => assert.throws(() => ms.configFor({ ...SETTINGS, ...over }), re);
@@ -771,6 +779,30 @@ test('the client logs in with the x-meshauth header, pinned TLS and a 16 MB limi
   await r;
   assert.strictEqual(ready, true);
   assert.strictEqual(FakeWebSocket.instances.length, 1);
+});
+
+test('beforeSend runs after the reconnect, right before sock.send; a throw sends nothing (sent: false) and a number shortens the wait', async () => {
+  const c = newClient({ timeoutMs: 30000 });
+  const order = [];
+  let alive = true;
+  const p = c.request('runcommands', { cmds: 'x' }, { beforeSend: () => { order.push('check'); if (!alive) throw Object.assign(new Error('The approval has ended.'), { marker: 1 }); return 8000; } });
+  const ws = lastSocket();
+  ws.on('sent', () => order.push('send'));
+  await flush();
+  assert.deepStrictEqual(order, [], 'the connection is not ready yet: not checked yet, nothing sent');
+  alive = false;   // the session expires while the connection is being made
+  ws.deliver({ action: 'userinfo', userinfo: {} });
+  await assert.rejects(p, (e) => { assert.strictEqual(e.marker, 1); assert.strictEqual(e.sent, false); return true; });
+  assert.deepStrictEqual(order, ['check']);
+  assert.strictEqual(ws.sent.length, 0, 'nothing went out');
+  // Alive again: the check runs once, directly before the send.
+  alive = true; order.length = 0;
+  const p2 = c.request('runcommands', { cmds: 'y' }, { timeoutMs: 20000, beforeSend: () => { order.push('check'); return 8000; } });
+  const sent = await nextSent(ws);
+  assert.deepStrictEqual(order, ['check', 'send']);
+  assert.strictEqual(sent.cmds, 'y');
+  ws.deliver({ action: 'msg', type: 'runcommands', responseid: sent.responseid, result: 'done' });
+  assert.strictEqual((await p2).result, 'done');
 });
 
 test('ready rejects on a refused login, a closed socket and silence, never mentioning the password', async () => {

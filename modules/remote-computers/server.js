@@ -26,7 +26,9 @@ const MAX_OUTPUT_BYTES = 64 * 1024;
 const SHOT_TIMEOUT_MS = 30000, INPUT_TIMEOUT_MS = 20000;
 const BUSY_AFTER_RUN_TIMEOUT_MS = 10 * 60000, BUSY_AFTER_SCREEN_TIMEOUT_MS = 60000;
 const CALL_DEADLINE_MS = 290000;                      // one absolute deadline per agent call, inside the 300 s the hub allows
-const SEND_MARGIN_MS = 5000;                          // time that must be left, beyond the command's own timeout, before a command is sent
+const FRESH_CONNECT_MS = 10000;                       // the signed-in users of a computer that connected less than this ago are not known yet
+const MIN_WAIT_MS = 5000;                            // a command is not sent when less than this is left to wait for it
+const SEND_MARGIN_MS = 5000;                        // time that must be left, beyond the command's own timeout, before a command is sent
 const SHOT_TTL_MS = 10 * 60000, SHOTS_PER_AGENT = 20;
 const SHOT_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const NEW_SHOT = 'Take a new screenshot and use its shot id.';
@@ -67,6 +69,7 @@ const iso = (t) => {
   if (typeof t === 'string' && !Number.isNaN(Date.parse(t))) return new Date(t).toISOString();
   return undefined;
 };
+const msOf = (t) => { const n = num(t); return n !== null && n > 0 ? (n < 1e11 ? n * 1000 : n) : undefined; };   // a time as milliseconds (the server sends seconds or milliseconds)
 const brief = (v, depth = 0) => {   // a short text for an antivirus / firewall / defender value of unknown shape
   if (v === null || v === undefined) return undefined;
   if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return clean(v, 80);
@@ -341,7 +344,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
         out.push({
           id, nodeid: n._id, name: clean(n.name || n.rname || n.host || id, 80), os: clean(n.osdesc, 100), online,
           ip: typeof n.ip === 'string' ? clean(n.ip, 60) : undefined, host: typeof n.host === 'string' ? clean(n.host, 100) : undefined,
-          lastSeen: iso(online ? n.agct : n.lastconnect), agentVersion: n.agent && n.agent.ver !== undefined ? clean(n.agent.ver, 30) : undefined,
+          lastSeen: iso(online ? n.agct : n.lastconnect), connectedAt: online ? msOf(n.agct) : undefined, agentVersion: n.agent && n.agent.ver !== undefined ? clean(n.agent.ver, 30) : undefined,
           agentId: n.agent && Number.isInteger(n.agent.id) ? n.agent.id : undefined,
           users: Array.isArray(n.users) ? n.users.filter((u) => typeof u === 'string') : undefined,   // who is signed in, as the agent last reported; absent when it never said
         });
@@ -382,8 +385,11 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       throw e;
     }
   }
-  async function runOn(pc, cmds, type, runAsUser, timeoutMs) {
-    const r = await meshClient().request('runcommands', { nodeids: [pc.nodeid], type, cmds, runAsUser }, { timeoutMs });
+  // check: a synchronous function that throws to stop the send and returns the wait that is left. It runs now, and the client runs it again
+  // after the connection is ready and right before sock.send (a reconnect can take a while).
+  async function runOn(pc, cmds, type, runAsUser, timeoutMs, check) {
+    const wait = check ? Math.min(timeoutMs, check()) : timeoutMs;
+    const r = await meshClient().request('runcommands', { nodeids: [pc.nodeid], type, cmds, runAsUser }, { timeoutMs: wait, ...(check ? { beforeSend: () => Math.min(timeoutMs, check()) } : {}) });
     // The server's own refusals look like {action:'runcommands', result:'Invalid nodeid'}: they are errors, never output.
     if (r && r.action === 'runcommands' && typeof r.result === 'string' && RUNCOMMANDS_ERRORS.has(r.result.trim())) throw Object.assign(new MeshError(r.result.trim(), 'EMESH'), { sent: true });
     return typeof (r && r.result) === 'string' ? r.result : '';
@@ -399,8 +405,10 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const mustBeOnline = (pc) => { if (!pc.online) throw new ToolError(`${pc.name} is offline. It has to be switched on and connected to the tailnet.`); };
   // The agent drops a user-session command silently when nobody is signed in, so when the list of signed-in users is known (and the computer is online,
   // so the list is current) and empty, refuse at once: nothing is sent, the owner is not asked and the computer is not held busy.
+  // Just after the computer connected its list of users is not reported yet (it reads empty): then it counts as unknown and nothing is refused.
   const needSignedIn = (pc) => {
     if (!pc.online || !Array.isArray(pc.users) || pc.users.length) return;
+    if (pc.connectedAt !== undefined && now() - pc.connectedAt < FRESH_CONNECT_MS) return;
     throw new ToolError(`No one is signed in on ${pc.name}. Screen tools and 'as user' commands need a signed-in ${isWindows(pc) ? 'Windows ' : ''}desktop: run as system instead, or sign in on the PC (set it to sign in automatically).`);
   };
 
@@ -430,15 +438,25 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   function beforeSend(who, pc, need, as) {
     if (typeof gate.stillValid !== 'function' || !gate.stillValid(who, pc.id, need, as)) throw new ToolError(`The approval for ${pc.name} has ended, so nothing was sent. Call the tool again to ask the owner.`);
   }
+  // The last check before a command goes out, for every tool: the approval (when the tool needs one) and the call's own deadline. Returns the wait that is
+  // left, which is never longer than the command's own wait; under MIN_WAIT_MS nothing is sent.
+  function sendCheck({ who, pc, need, as, deadline, tool, timeoutMs }) {
+    return () => {
+      if (need) beforeSend(who, pc, need, as);
+      const left = deadline - now() - SEND_MARGIN_MS;
+      if (left < MIN_WAIT_MS) throw new ToolError(`Call ${tool} again; this call is out of time.`);
+      return Math.min(timeoutMs, left);
+    };
+  }
   // A screen script (picture or input) runs as the signed-in user, as one PowerShell line (runcommands type 2).
   async function onScreen(pc, script, timeoutMs, check) {
     const cmds = win.encodePs(script);
-    try { return await exclusive(pc, BUSY_AFTER_SCREEN_TIMEOUT_MS, () => { if (check) check(); return runOn(pc, cmds, 2, 2, timeoutMs); }); } catch (e) {
+    try { return await exclusive(pc, BUSY_AFTER_SCREEN_TIMEOUT_MS, () => runOn(pc, cmds, 2, 2, timeoutMs, check)); } catch (e) {
       throw sendFail(pc, e, { kind: 'screen' });
     }
   }
-  async function drive(pc, script, who) {
-    const out = await onScreen(pc, script, INPUT_TIMEOUT_MS, () => beforeSend(who, pc, 'drive'));
+  async function drive(pc, script, who, deadline, tool) {
+    const out = await onScreen(pc, script, INPUT_TIMEOUT_MS, sendCheck({ who, pc, need: 'drive', deadline, tool, timeoutMs: INPUT_TIMEOUT_MS }));
     if (!win.sawOk(out)) {
       if (out.includes(win.SCREEN_CHANGED)) throw new ToolError(win.SCREEN_CHANGED);
       throw new ToolError(`${pc.name} did not confirm the input. It may be locked, showing a secure screen, or no one is signed in.`);
@@ -462,7 +480,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     return summarize(pc, sys);
   }
 
-  async function toolScreenshot(a, who) {
+  async function toolScreenshot(a, who, call, deadline) {
     let maxWidth = 1600;
     if (a.maxWidth !== undefined) { maxWidth = a.maxWidth; if (!Number.isInteger(maxWidth) || maxWidth < 320 || maxWidth > 1920) throw new ToolError('maxWidth must be a whole number from 320 to 1920.'); }
     const pc = await resolve(a.computer);
@@ -470,7 +488,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     needSignedIn(pc);
     await gate.require(who, 'look', pc);
     mustBeOnline(pc);
-    const out = await onScreen(pc, win.screenshotScript({ maxWidth }), SHOT_TIMEOUT_MS);
+    const out = await onScreen(pc, win.screenshotScript({ maxWidth }), SHOT_TIMEOUT_MS, sendCheck({ who, pc, deadline: deadline === undefined ? now() + CALL_DEADLINE_MS : deadline, tool: 'screenshot', timeoutMs: SHOT_TIMEOUT_MS }));
     let shot;
     try { shot = win.parseScreenshot(out); } catch (e) { throw new ToolError(e instanceof win.WindowsError ? e.message : 'The computer did not return a picture.'); }
     try { shots.save(pc.id, shot.jpeg); } catch (e) {   // the private copy is for troubleshooting: the agent gets its picture without it
@@ -507,7 +525,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     log(`run on ${pc.name} for ${who} (${shell}, as ${as}, ${command.length} characters)`);
     const t0 = now();
     let out;
-    try { out = await exclusive(pc, as === 'user' ? BUSY_AFTER_SCREEN_TIMEOUT_MS : BUSY_AFTER_RUN_TIMEOUT_MS, () => { beforeSend(who, pc, 'act', as); return runOn(pc, cmds, shell === 'sh' ? 3 : shell === 'cmd' ? 1 : 2, as === 'user' ? 2 : 0, timeoutSec * 1000); }); } catch (e) {
+    try { out = await exclusive(pc, as === 'user' ? BUSY_AFTER_SCREEN_TIMEOUT_MS : BUSY_AFTER_RUN_TIMEOUT_MS, () => runOn(pc, cmds, shell === 'sh' ? 3 : shell === 'cmd' ? 1 : 2, as === 'user' ? 2 : 0, timeoutSec * 1000, sendCheck({ who, pc, need: 'act', as, deadline, tool: 'run', timeoutMs: timeoutSec * 1000 }))); } catch (e) {
       throw sendFail(pc, e, { kind: as === 'user' ? 'user' : 'run', timeoutSec });
     }
     return { output: capOutput(tidyOutput(out, cmds)), took_ms: now() - t0 };
@@ -538,7 +556,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const script = scriptOrError(() => win.clickScript({ x: p.x, y: p.y, screenWidth: s.screenWidth, screenHeight: s.screenHeight, button: a.button === undefined ? 'left' : a.button, double: a.double === undefined ? false : a.double }));
     await authorize(who, 'drive', pc, call, deadline, 'click', INPUT_TIMEOUT_MS);
     log(`click on ${pc.name} for ${who}`);
-    return drive(pc, script, who);
+    return drive(pc, script, who, deadline, 'click');
   }
   async function toolType(a, who, call, deadline) {
     const pc = await resolve(a.computer);
@@ -548,7 +566,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const script = scriptOrError(() => win.typeScript({ text: a.text }));
     await authorize(who, 'drive', pc, call, deadline, 'type', INPUT_TIMEOUT_MS);
     log(`type on ${pc.name} for ${who} (${a.text.length} characters)`);
-    return drive(pc, script, who);
+    return drive(pc, script, who, deadline, 'type');
   }
   async function toolKey(a, who, call, deadline) {
     const pc = await resolve(a.computer);
@@ -558,7 +576,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const script = scriptOrError(() => win.keyScript({ keys: a.keys }));
     await authorize(who, 'drive', pc, call, deadline, 'key', INPUT_TIMEOUT_MS);
     log(`key on ${pc.name} for ${who}`);
-    return drive(pc, script, who);
+    return drive(pc, script, who, deadline, 'key');
   }
   async function toolScroll(a, who, call, deadline) {
     const pc = await resolve(a.computer);
@@ -574,12 +592,17 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const script = scriptOrError(() => win.scrollScript({ ...where, amount: a.amount }));
     await authorize(who, 'drive', pc, call, deadline, 'scroll', INPUT_TIMEOUT_MS);
     log(`scroll on ${pc.name} for ${who}`);
-    return drive(pc, script, who);
+    return drive(pc, script, who, deadline, 'scroll');
   }
 
   // ── the one-time installer link and the page behind it ──
   const installer = deps.installer || createInstaller({
     home, now, log,
+    // The cached helper is only good for the setup it was fetched for: the tailnet name, the computer port, the device group and the server's certificate.
+    configKey: () => {
+      const cert = mesh && fs.existsSync(mesh.paths.rootCert) ? crypto.createHash('sha256').update(fs.readFileSync(mesh.paths.rootCert)).digest('hex') : '';
+      return JSON.stringify([String(settings.address_name || '').trim().toLowerCase(), Number(settings.agent_port === undefined ? 9972 : settings.agent_port), groupId() || '', cert]);
+    },
     address: () => {
       if (!settings.address_name) throw new ToolError('Save this computer\'s tailnet name in the settings first.');
       return settings.address_name;

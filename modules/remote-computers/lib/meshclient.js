@@ -159,7 +159,17 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
     if (action === 'getsysinfo' && req.tag === undefined) req.tag = crypto.randomUUID();
     if (action === 'runcommands' && req.reply === undefined) req.reply = true;
     const kind = (opts && opts.kind) || action;
-    const ms = (opts && opts.timeoutMs) || timeoutMs;
+    let ms = (opts && opts.timeoutMs) || timeoutMs;
+    // The caller's last check, run here: after the connection is ready and with nothing awaited before sock.send. It throws to stop the send (nothing
+    // was sent: err.sent is false) and may return a smaller wait in ms (the time the call has left).
+    if (opts && typeof opts.beforeSend === 'function') {
+      try {
+        const left = opts.beforeSend();
+        if (typeof left === 'number' && Number.isFinite(left) && left > 0) ms = Math.min(ms, left);
+      } catch (e) {
+        throw e && typeof e === 'object' ? Object.assign(e, { sent: false }) : Object.assign(new MeshError('The request was not sent.', 'ECANCEL'), { sent: false });
+      }
+    }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(responseid);

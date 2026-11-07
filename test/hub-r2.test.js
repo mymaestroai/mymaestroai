@@ -216,6 +216,28 @@ test('R2 images: at most 2 per result, 5 MB each, png/jpeg/webp only; the rest a
   } finally { r.done(); }
 });
 
+test('R2 images: object-prototype names are not image types, and an image whose size cannot be read is dropped', async () => {
+  const ok = crcless(10, 10);
+  const noSize = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0x4a, 0x46, 0xff, 0xd9, 0, 0, 0, 0, 0, 0]);   // a JPEG with no start-of-frame marker
+  const zeroPng = crcless(0, 5), zeroPng2 = crcless(5, 0);
+  const oddWebp = Buffer.alloc(40); oddWebp.write('RIFF', 0, 'latin1'); oddWebp.write('WEBP', 8, 'latin1'); oddWebp.write('ABCD', 12, 'latin1');   // a chunk type this parser does not know
+  const r = rig({}, { content: [
+    part(ok, 'constructor'), part(ok, '__proto__'), part(ok, 'toString'), part(ok, 'hasOwnProperty'),
+    part(noSize, 'image/jpeg'), part(zeroPng, 'image/png'), part(zeroPng2, 'image/png'), part(oddWebp, 'image/webp'),
+    part(ok, 'IMAGE/PNG'),
+  ] });
+  try {
+    r.up();
+    const out = await (await r.spec()).run({});
+    assert.deepStrictEqual(out.text.split('\n'), [
+      ...Array(4).fill('[image dropped: only jpeg, png and webp are shown]'),
+      ...Array(4).fill('[image dropped: its size could not be read]'),
+      '[image: 10x10 png, 1 KB]',
+    ]);
+    assert.deepStrictEqual(out.images.map(i => i.mime), ['image/png']);
+  } finally { r.done(); }
+});
+
 test('R2 images: nothing is written to disk and no log line holds image data', async () => {
   const png = crcless(8, 8, 4096);
   const logs = [];

@@ -1353,3 +1353,146 @@ test('tools: immediately before sending an act or drive command the session is c
   g.remote.onLine(JSON.stringify({ jsonrpc: '2.0', id: g.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve')[1].id, result: { decision: 'deny' } }));
   assert.match((await again).error, /said no/);
 });
+
+// ── r3 ──────────────────────────────────────────────────────────────────────────────────────────────
+test('gate: every scope has its own expiry; a later approval of another scope does not stretch it', async () => {
+  const { gate, raw, clock, asked } = newGate();
+  const MIN = 60000, t0 = clock.now();
+  await gate.require('pat', 'act', PC, { call: 'c1', as: 'system' });   // t0: act-system until t0+30
+  assert.strictEqual(asked.length, 1);
+  clock.advance(29 * MIN);
+  await gate.require('pat', 'drive', PC, { call: 'c2' });             // t0+29: drive until t0+59
+  assert.strictEqual(asked.length, 2);
+  clock.advance(2 * MIN);                                             // t0+31
+  assert.strictEqual(raw.stillValid('pat', 'pc1', 'act', 'system'), false, 'the system approval ended at t0+30');
+  assert.strictEqual(raw.stillValid('pat', 'pc1', 'drive'), true);
+  assert.strictEqual(raw.stillValid('pat', 'pc1', 'act', 'user'), true, 'drive covers a user run');
+  await gate.require('pat', 'drive', PC, { call: 'c3' });
+  await gate.require('pat', 'act', PC, { call: 'c3', as: 'user' });
+  assert.strictEqual(asked.length, 2, 'drive and user runs are still covered');
+  await gate.require('pat', 'act', PC, { call: 'c4', as: 'system' });   // a system run asks again
+  assert.strictEqual(asked.length, 3);
+  assert.strictEqual(asked[2].call, 'c4');
+  // the new system approval does not push drive's end (t0+59) out, and drive's does not push the system one
+  clock.advance(28 * MIN + 1);                                        // t0+59 and a moment
+  assert.strictEqual(raw.stillValid('pat', 'pc1', 'drive'), false, 'drive ended at t0+59');
+  assert.strictEqual(raw.stillValid('pat', 'pc1', 'act', 'system'), true, 'the system run approved at t0+31 lasts to t0+61');
+  const list = raw.sessions();
+  assert.strictEqual(list.length, 1);
+  assert.strictEqual(list[0].level, 'act');
+  assert.strictEqual(list[0].expiresAt, t0 + 61 * MIN, 'listed with the latest end');
+  clock.advance(3 * MIN);
+  assert.deepStrictEqual(raw.sessions(), []);
+});
+
+// A stand-in for a reconnecting client: its runcommands handler is what runs between "connected" and sock.send, so it calls the check the client is given.
+function reconnecting(t, delayMs) {
+  const state = { sent: 0, checkError: null };
+  t.handlers.runcommands = async (f, opts) => {
+    t.time.t += delayMs;   // the connection took this long
+    try { opts.beforeSend(); } catch (e) { state.checkError = e; throw Object.assign(e, { sent: false }); }
+    state.sent++;
+    return { result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' };
+  };
+  return state;
+}
+
+test('tools: the check given to the client runs after the connection is ready; a session that ended meanwhile sends nothing', async () => {
+  const t = setup({ realGate: true });
+  const quick = reconnecting(t, 0);
+  await approvedAfter(t, 0, 'run', { command: 'x' });
+  assert.strictEqual(quick.sent, 1);
+  const slow = reconnecting(t, 31 * 60000);   // connecting outlasts the 30 minute approval
+  const r = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' });
+  assert.strictEqual(r.error, 'The approval for demo-pc has ended, so nothing was sent. Call the tool again to ask the owner.');
+  assert.strictEqual(slow.sent, 0);
+  assert.ok(slow.checkError instanceof Error);
+  // The computer was not left busy: after a new approval the next run goes out.
+  const fast = reconnecting(t, 0);
+  const again = t.call('run', { ...AGENT, computer: 'demo-pc', command: 'y' });
+  await flush();
+  const ask = t.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve').slice(-1)[0];
+  t.remote.onLine(JSON.stringify({ jsonrpc: '2.0', id: ask.id, result: { decision: 'allow' } }));
+  assert.ok(!(await again).error);
+  assert.strictEqual(fast.sent, 1);
+});
+
+test('tools: every command waits at most what the call has left; under 5 s left it is not sent', async () => {
+  const lastRun = (t) => t.calls.filter((c) => c.action === 'runcommands').slice(-1)[0];
+  const t = setup({ realGate: true });
+  t.handlers.runcommands = async () => ({ result: 'ran' });
+  await approvedAfter(t, 0, 'run', { command: 'x' });
+  assert.strictEqual(lastRun(t).opts.timeoutMs, 60000);
+  // A live session (no new approval): the 300 s wait is cut to the 290 s deadline minus the 5 s margin.
+  t.time.t += 1000;
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 300 })).output, 'ran');
+  assert.strictEqual(lastRun(t).opts.timeoutMs, 285000);
+  // Time spent finding the computer counts: 100 s gone, so at most 185 s.
+  t.handlers.nodes = async () => { t.time.t += 100000; return { action: 'nodes', nodes: NODES }; };
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 300 })).output, 'ran');
+  assert.strictEqual(lastRun(t).opts.timeoutMs, 185000);
+  // A short wait is left as it is.
+  await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 30 });
+  assert.strictEqual(lastRun(t).opts.timeoutMs, 30000);
+  // 4 s left after the margin: nothing is sent and the computer is free for the next call.
+  const sent = t.calls.filter((c) => c.action === 'runcommands').length;
+  t.handlers.nodes = async () => { t.time.t += 286000; return { action: 'nodes', nodes: NODES }; };
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 5 })).error, 'Call run again; this call is out of time.');
+  assert.strictEqual(t.calls.filter((c) => c.action === 'runcommands').length, sent, 'nothing was sent');
+  // exactly 5 s of wait left is still sent
+  t.handlers.nodes = async () => { t.time.t += 280000; return { action: 'nodes', nodes: NODES }; };
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 60 })).output, 'ran');
+  assert.strictEqual(lastRun(t).opts.timeoutMs, 5000);
+  delete t.handlers.nodes;
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'ran', 'not left busy');
+
+  // Screenshot (a look tool) and the drive tools have the same deadline.
+  const d = setup({ realGate: true });
+  d.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  const shot = await shotOf(d, 'pat');
+  await approvedAfter(d, 0, 'key', { keys: 'a' }, 'pat');
+  assert.strictEqual(lastRun(d).opts.timeoutMs, 20000);
+  d.handlers.nodes = async () => { d.time.t += 286000; return { action: 'nodes', nodes: NODES }; };
+  const sentD = d.calls.filter((c) => c.action === 'runcommands').length;
+  for (const [name, args] of [['screenshot', {}], ['click', { shot, x: 5, y: 5 }], ['type', { text: 'a' }], ['key', { keys: 'a' }], ['scroll', { amount: 1 }]]) {
+    assert.strictEqual((await d.call(name, { __agent: 'pat', __call: 'call-1', computer: 'demo-pc', ...args })).error, `Call ${name} again; this call is out of time.`, name);
+  }
+  assert.strictEqual(d.calls.filter((c) => c.action === 'runcommands').length, sentD, 'none of them was sent');
+  d.handlers.nodes = async () => { d.time.t += 270000; return { action: 'nodes', nodes: NODES }; };
+  assert.deepStrictEqual(await d.call('key', { __agent: 'pat', __call: 'call-1', computer: 'demo-pc', keys: 'a' }), { ok: true });
+  assert.strictEqual(lastRun(d).opts.timeoutMs, 15000, 'the 20 s wait is cut to the 15 s that are left');
+
+  // After connecting the time is looked at again.
+  const c = setup({ realGate: true });
+  const slow = reconnecting(c, 287000);
+  await approvedAfter(c, 0, 'run', { command: 'x' });   // the approval itself is quick
+  assert.strictEqual(slow.sent, 0);
+  const r = await c.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' });
+  assert.strictEqual(r.error, 'Call run again; this call is out of time.');
+  assert.strictEqual(slow.sent, 0);
+  const mid = setup({ realGate: true });
+  const cut = reconnecting(mid, 100000);
+  await approvedAfter(mid, 0, 'run', { command: 'x', timeoutSec: 60 });
+  assert.strictEqual(cut.sent, 1, 'still enough time: sent');
+});
+
+test('tools: a computer that connected less than 10 s ago has unknown users; later an empty list refuses', async () => {
+  const t = setup();
+  t.handlers.runcommands = async () => ({ result: 'ran' });
+  const nodesWith = (agct) => () => ({ action: 'nodes', nodes: { 'mesh//g1': [{ _id: `node//${ID_A}`, name: 'demo-pc', osdesc: 'Windows 11 Pro', conn: 1, agct, agent: { id: 4, ver: 12 }, users: [] }] } });
+  const asUser = () => t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', as: 'user' });
+  t.handlers.nodes = nodesWith(t.time.t - 9999);
+  assert.strictEqual((await asUser()).output, 'ran', '9.999 s: unknown, so not refused');
+  t.handlers.nodes = nodesWith(Math.floor((t.time.t - 3000) / 1000));   // the server may report seconds
+  assert.strictEqual((await asUser()).output, 'ran', 'seconds are understood');
+  t.handlers.nodes = nodesWith(t.time.t - 10000);
+  assert.match((await asUser()).error, /^No one is signed in on demo-pc/, '10 s: the empty list counts');
+  t.handlers.nodes = nodesWith(undefined);
+  assert.match((await asUser()).error, /^No one is signed in/, 'no connect time: the list counts');
+  // The screen tools use the same rule.
+  t.handlers.runcommands = async () => ({ result: shotReply() });
+  t.handlers.nodes = nodesWith(t.time.t - 1000);
+  assert.ok((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot, 'a screenshot is tried right after the connect');
+  t.handlers.nodes = nodesWith(t.time.t - 60000);
+  assert.match((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /^No one is signed in/);
+});
