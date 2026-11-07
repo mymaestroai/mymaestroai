@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The phone's ⋮ menu scrolls when it is taller than the screen.** On a short screen (a folding phone, a phone held sideways) the bottom of the menu, with Users, Sign out, Update hub and Restart hub, ran off the screen and could not be reached; the menu now stops at the bottom edge and scrolls inside itself.
+
 - **Connect your Ring cameras.** A new Ring cameras data connector receives your cameras' motion and doorbell events, saves a picture of each and tells the agent you choose. That agent can also ask for the latest or a live picture, a short clip and the event history. You create a private app in Ring's developer console (the setup shows the four addresses to give it) and link your Ring account with a one-time code. Ring has to reach your Maestro from the internet, through Tailscale Funnel or a tunnel such as Cloudflare's; only the connector's own addresses are reachable that way. Pictures go into that agent's Files folder, and face recognition is optional and stays on this computer.
 
 - **Choose whether admins must use two-factor sign-in.** Settings → 🔐 Security has a new switch, "Require two-factor sign-in for admins", on by default. While it's on, no admin can remove two-factor from their own account. Turning it off asks for your password and a current code; an admin may then remove two-factor and sign in with a password alone. Every change is recorded and sent to admins' phones, and the security check notes it while it's off. Opening My Maestro directly to your network still needs an admin with two-factor. Your own two-factor is changed only from Security in your account menu, no longer from your own row on the Users page.
