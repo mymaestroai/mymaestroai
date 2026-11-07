@@ -274,12 +274,12 @@ test('answers: HEAD has no body; base64 body decoded', async () => {
 test('bodyBase64: exact bytes with the given type, disposition and length; security headers kept', async () => {
   const bytes = Buffer.from([0, 255, 1, 254, 80, 75, 3, 4, 10, 13]);
   const env = makeEnv({ reply: { status: 200, bodyBase64: bytes.toString('base64'), headers: {
-    'Content-Type': 'Application/Vnd.Ms-Excel+x', 'Content-Disposition': 'attachment; filename="report_1-a.xlsx"', 'Cache-Control': 'no-store', 'Set-Cookie': 'a=b',
+    'Content-Type': 'Application/Octet-Stream', 'Content-Disposition': 'attachment; filename="report_1-a.xlsx"', 'Cache-Control': 'no-store', 'Set-Cookie': 'a=b',
   } } });
   const { res } = await run(env, { method: 'GET' });
   assert.strictEqual(res.status, 200);
   assert.ok(Buffer.isBuffer(res.body)); assert.ok(res.body.equals(bytes));
-  assert.strictEqual(hdr(res, 'content-type'), 'Application/Vnd.Ms-Excel+x');
+  assert.strictEqual(hdr(res, 'content-type'), 'application/octet-stream');
   assert.strictEqual(hdr(res, 'content-disposition'), 'attachment; filename="report_1-a.xlsx"');
   assert.strictEqual(hdr(res, 'content-length'), String(bytes.length));
   assert.strictEqual(hdr(res, 'cache-control'), 'no-store');
@@ -302,12 +302,40 @@ test('bodyBase64: bad type is replaced, bad disposition is dropped, other cache-
     env.reply = { status: 200, bodyBase64: bytes.toString('base64'), headers: { 'content-type': 'text/html; charset=utf-8', 'content-disposition': cd, 'cache-control': 'max-age=99' } };
     const { res } = await run(env, { method: 'GET' });
     assert.strictEqual(res.status, 200, cd);
-    assert.strictEqual(hdr(res, 'content-disposition'), undefined, cd);
+    assert.strictEqual(hdr(res, 'content-disposition'), 'attachment; filename="download.bin"', cd);   // a bad name becomes the plain download name
     assert.strictEqual(hdr(res, 'content-type'), 'application/octet-stream');
     assert.strictEqual(hdr(res, 'cache-control'), 'no-store');
   }
   env.reply = { status: 200, bodyBase64: bytes.toString('base64'), headers: { 'content-disposition': `attachment; filename="${'a'.repeat(100)}"` } };
   assert.ok(hdr((await run(env, { method: 'GET' })).res, 'content-disposition'));
+});
+
+test('bodyBase64: only png, jpeg, webp and octet-stream keep their type; octet-stream is always an attachment; a module CSP is ignored', async () => {
+  const bytes = Buffer.from('abc');
+  const env = makeEnv();
+  const go = async (headers) => { env.reply = { status: 200, bodyBase64: bytes.toString('base64'), headers }; return (await run(env, { method: 'GET' })).res; };
+  for (const t of ['image/png', 'image/jpeg', 'image/webp']) {
+    const res = await go({ 'content-type': t, 'content-security-policy': "default-src 'self'" });
+    assert.strictEqual(hdr(res, 'content-type'), t);
+    assert.strictEqual(hdr(res, 'content-disposition'), undefined, 'an image may show inline');
+    assert.deepStrictEqual(cspLines(res), [SANDBOX], `the module's policy is ignored for ${t}`);
+  }
+  for (const t of ['text/html', 'text/html; charset=utf-8', 'image/svg+xml', 'application/pdf', 'application/javascript', 'text/plain', 'application/xhtml+xml', 'Application/Vnd.Ms-Excel+x', 'image/gif']) {
+    const res = await go({ 'content-type': t, 'content-security-policy': 'default-src *' });
+    assert.strictEqual(hdr(res, 'content-type'), 'application/octet-stream', t);
+    assert.strictEqual(hdr(res, 'content-disposition'), 'attachment; filename="download.bin"', t);
+    assert.deepStrictEqual(cspLines(res), [SANDBOX], t);
+  }
+  // no type at all
+  let res = await go({});
+  assert.strictEqual(hdr(res, 'content-type'), 'application/octet-stream');
+  assert.strictEqual(hdr(res, 'content-disposition'), 'attachment; filename="download.bin"');
+  // the module's valid file name is kept; an invalid one is replaced
+  res = await go({ 'content-type': 'text/html', 'content-disposition': 'attachment; filename="report.csv"' });
+  assert.strictEqual(hdr(res, 'content-disposition'), 'attachment; filename="report.csv"');
+  res = await go({ 'content-type': 'application/octet-stream', 'content-disposition': 'inline' });
+  assert.strictEqual(hdr(res, 'content-disposition'), 'attachment; filename="download.bin"');
+  assert.strictEqual(hdr(res, 'x-content-type-options'), 'nosniff');
 });
 
 test('bodyBase64: over 16 MB is refused with 502 and logged; exactly 16 MB passes', async () => {

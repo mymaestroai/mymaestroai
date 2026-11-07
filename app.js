@@ -4876,11 +4876,12 @@
         <div class="approval-meta"><span class="approval-countdown">${esc(approvalCountdown(ev.expiresAt))}</span><span class="approval-note"></span></div>
         <div class="approval-actions">
           <button class="deny" type="button">Deny</button>
-          <button class="allow-1h" type="button" title="Also allow this kind of action for this agent for the next hour (for sending: this recipient or host only)">Approve this kind for 1 hour</button>
+          ${ev.cls === 'module' ? '' : '<button class="allow-1h" type="button" title="Also allow this kind of action for this agent for the next hour (for sending: this recipient or host only)">Approve this kind for 1 hour</button>'}
           <button class="approve" type="button">Approve</button>
         </div>`;
       card.querySelector('.approve').onclick = () => answerApproval(ev.id, 'allow', null);
-      card.querySelector('.allow-1h').onclick = () => answerApproval(ev.id, 'allow', '1h');
+      const always = card.querySelector('.allow-1h');   // a module's question is asked once: no "remember" choice
+      if (always) always.onclick = () => answerApproval(ev.id, 'allow', '1h');
       card.querySelector('.deny').onclick = () => answerApproval(ev.id, 'deny', null);
       const stack = approvalStack();
       stack.insertBefore(card, stack.firstChild);   // newest on top

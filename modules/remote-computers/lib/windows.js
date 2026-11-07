@@ -1,10 +1,12 @@
 'use strict';
-// PowerShell for Windows computers, as pure functions. Every script travels as ONE command line:
-//   powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <base64 of the UTF-16LE script>
-// so there are no multi-line quirks. Caller text never goes into a script as text: it is either base64 that the script decodes
-// (type) or an integer / a fixed word from a list that this file checks first (everything else).
+// PowerShell for Windows computers, as pure functions. Every script travels as ONE line, sent with runcommands type 2: the agent starts
+// powershell.exe -noprofile -nologo -command - and writes "<cmds>\r\nexit\r\n" to its stdin (agents/meshcore.js:1974-2038, the type 2 branch at :2005-2018),
+// so the line is
+//   iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('<base64 of the UTF-16LE script>')))
+// There is no cmd.exe in the way (cmd takes about 8191 characters per line) and no multi-line quirks. Caller text never goes into a script as text:
+// it is either base64 that the script decodes (type, run) or an integer / a fixed word from a list that this file checks first (everything else).
 
-const MAX_LINE = 30000;
+const MAX_LINE = 60000;
 const MAX_TYPE_CHARS = 2000;
 const OK_LINE = 'MMOK';
 
@@ -14,7 +16,7 @@ class WindowsError extends Error {
 
 function encodePs(script) {
   if (typeof script !== 'string' || !script) throw new WindowsError('A script is needed.');
-  const line = `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+  const line = `iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(script, 'utf16le').toString('base64')}')))`;
   if (line.length > MAX_LINE) throw new WindowsError('That is too long to send in one command.', 'ETOOLONG');
   return line;
 }
@@ -86,7 +88,7 @@ function screenshotScript({ maxWidth = 1600, quality = 70 } = {}) {
 function parseScreenshot(output) {
   const s = String(output == null ? '' : output);
   const bad = () => new WindowsError(`The computer did not return a picture: ${s.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 300)}`, 'EBADSHOT');
-  const m = /(?:^|\n)MMSHOT (\d{1,5}) (\d{1,5}) (\d{1,5}) (\d{1,5}) /.exec(s);
+  const m = /(?:^|\n)(?:PS [^\n>]*> ?)?MMSHOT (\d{1,5}) (\d{1,5}) (\d{1,5}) (\d{1,5}) /.exec(s);   // PowerShell may print its prompt in front of the first line
   if (!m) throw bad();
   // The picture is the rest of the line. A terminal may have broken that line or added colour codes, so when the end mark MMEND is there
   // the text up to it is used, with line breaks and escape codes removed.
@@ -181,7 +183,8 @@ function scrollScript({ x, y, amount } = {}) {
   );
 }
 
-// The cmd shell the agent starts echoes its banner, our line and its prompt around the output, so MMOK is looked for as a line of its own.
-const sawOk = (output) => /(?:^|\n)MMOK\r?(?:\n|$)/.test(String(output == null ? '' : output));
+// The shell the agent starts may echo a banner, our line and its prompt around the output, so MMOK is looked for as a line of its own
+// (PowerShell reading stdin may put its "PS C:\...> " prompt in front of it).
+const sawOk = (output) => /(?:^|\n)(?:PS [^\n>]*> ?)?MMOK\r?(?:\n|$)/.test(String(output == null ? '' : output));
 
 module.exports = { encodePs, screenshotScript, parseScreenshot, clickScript, typeScript, keyScript, scrollScript, parseKeys, sawOk, WindowsError, MAX_LINE, MAX_TYPE_CHARS, OK_LINE, KEYS };

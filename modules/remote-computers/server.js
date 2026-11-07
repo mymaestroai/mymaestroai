@@ -4,7 +4,7 @@
 // and never hold a password, the accounts file or a command's output.
 const fs = require('node:fs');
 const path = require('node:path');
-const { createMeshServer, VERSION } = require('./lib/meshserver');
+const { createMeshServer, redact, VERSION } = require('./lib/meshserver');
 const { createMeshClient } = require('./lib/meshclient');
 const { ensureGroup } = require('./lib/setupgroup');
 const { createGate, GateError } = require('./lib/gate');
@@ -12,7 +12,9 @@ const win = require('./lib/windows');
 const { createShotStore } = require('./lib/shots');
 
 const HUB_TIMEOUT_MS = 10000;
-const APPROVE_HUB_TIMEOUT_MS = 10 * 60000 + 30000;   // the owner has 10 minutes to answer
+const APPROVE_MINUTES = 4;                            // the owner has 4 minutes to answer; a module call is cut off at 300 s
+const APPROVE_HUB_TIMEOUT_MS = APPROVE_MINUTES * 60000 + 20000;
+const MAX_CMD_CHARS = 7000;                           // cmd.exe takes about 8191 characters in a line
 const NOT_YET = 'This tool arrives in the next part of the build.';
 const REINSTALL = 'Reinstall needed: open Data connectors and run Install again';
 const WAITING = 'Waiting for setup';
@@ -39,7 +41,7 @@ const TOOLS = [
   { name: 'installer_link', description: 'A one-time link to download the helper for a computer. Used by the setup only.', inputSchema: obj() },
 ];
 
-const clean = (s, max = 200) => { let t = ''; try { t = String(s == null ? '' : s); } catch { /* {"toString": null} can't be turned into text */ } return t.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max); };
+const clean = (s, max = 200) => { let t = ''; try { t = redact(String(s == null ? '' : s)); } catch { /* {"toString": null} can't be turned into text */ } return t.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max); };
 class ToolError extends Error {}   // a plain answer for the agent, not a crash
 
 // ── turning what MeshCentral reports into short facts (every field is optional: unknown ones are skipped) ──
@@ -122,11 +124,12 @@ function summarize(pc, sys, net) {
   return info;
 }
 
-// The agent starts a cmd shell that echoes its banner, our command line and its prompts around the output: take those out.
+// The agent starts a cmd shell (or PowerShell reading its commands from stdin) that may echo its banner, our command line and its prompts around the output: take those out.
 function tidyOutput(output, cmds) {
   let t = String(output == null ? '' : output);
   if (cmds && cmds.trim()) t = t.split(cmds.trim()).join('');
   t = t.replace(/^\s*Microsoft Windows \[Version[^\n]*\n(?:\(c\)[^\n]*\n)?/, '').replace(/^[A-Za-z]:\\[^\n>]*>[ \t]*(?=\r?\n|$)/gm, '').replace(/[A-Za-z]:\\[^\n>]*>exit\s*$/, '');
+  t = t.replace(/^PS [A-Za-z]:\\[^\n>]*>[ \t]*(?=\r?\n|$)/gm, '').replace(/PS [A-Za-z]:\\[^\n>]*>[ \t]*exit\s*$/, '');
   return t.replace(/^(?:[ \t]*\r?\n)+/, '').replace(/\s+$/, '');
 }
 function capOutput(text, max = MAX_OUTPUT_BYTES) {
@@ -180,11 +183,14 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const meshcentralJs = runtimeDir ? path.join(runtimeDir, 'node_modules', 'meshcentral', 'meshcentral.js') : '';
   const runtimeOk = !!runtimeDir && fs.existsSync(meshcentralJs);
 
-  const mesh = runtimeOk && home ? createMeshServer({ runtimeDir, home, settings, log, ...(deps.mesh || {}) }) : null;
+  // A start that failed before any process was made is retried by the supervisor; when it works, the rest of the start sequence follows.
+  const mesh = runtimeOk && home ? createMeshServer({ runtimeDir, home, settings, log, onRetryReady: () => { if (!stopped && state.phase !== 'ready') startSequence().catch(() => {}); }, ...(deps.mesh || {}) }) : null;
   const WebSocket = () => deps.WebSocket || require(path.join(runtimeDir, 'node_modules', 'ws'));
   const state = { phase: runtimeOk ? 'idle' : 'reinstall', waiting: runtimeOk ? null : REINSTALL, group: null, lastError: null, warnings: [] };
 
   let startP = null, agentClient = null;
+  let gen = 0, stopped = false;   // gen goes up at every stop; a start sequence of an older generation stops at its next step
+  class Cancelled extends Error {}
 
   function clientFor(account) {
     const cfg = mesh.configFor(settings);
@@ -199,23 +205,30 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   // The whole start: config, first accounts, process, device group. Safe to call again: it joins a start in progress.
   function startSequence() {
     if (!runtimeOk || !mesh) { state.phase = 'reinstall'; state.waiting = REINSTALL; return Promise.resolve(); }
+    if (stopped) return Promise.resolve();
     if (startP) return startP;
+    const my = gen;
+    const live = () => { if (gen !== my || stopped) throw new Cancelled('Stopped.'); };   // after every awaited step
     startP = (async () => {
+      let admin = null;
       try {
+        live();
         try { mesh.configFor(settings); } catch (e) {
           if (/^Waiting for setup/.test(e.message)) { state.phase = 'waiting'; state.waiting = WAITING; state.lastError = null; return; }
           throw e;   // an invalid value: a plain message in lastError
         }
         state.waiting = null; state.phase = 'starting';
-        await mesh.bootstrap();
-        await mesh.start();
-        const admin = clientFor(mesh.accounts().admin);
-        try { await admin.ready(); state.group = await ensureGroup(admin, mesh.state); } finally { admin.close(); }
+        await mesh.bootstrap(); live();
+        await mesh.start(); live();
+        admin = clientFor(mesh.accounts().admin);
+        await admin.ready(); live();
+        state.group = await ensureGroup(admin, mesh.state); live();
         state.phase = 'ready'; state.lastError = null;
       } catch (e) {
+        if (e instanceof Cancelled || gen !== my || stopped || (e && e.code === 'ECANCEL')) { state.phase = 'stopped'; return; }
         state.phase = 'error'; state.lastError = clean(e && (e.message || e.code), 400);
         log('start failed:', state.lastError);
-      }
+      } finally { if (admin) admin.close(); }
     })();
     const done = () => { startP = null; };
     startP.then(done, done);
@@ -226,14 +239,16 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const st = mesh ? mesh.status() : { running: false, restarts: 0, lastError: null };
     const out = {
       ok: false, running: st.running, version: VERSION, group: state.group || (mesh ? mesh.state.read().meshid || null : null),
-      computers: null, warnings: [...state.warnings], lastError: state.lastError || st.lastError || null,
+      computers: null, online: null, warnings: [...state.warnings], lastError: state.lastError || st.lastError || null,
     };
     if (state.waiting) { out.waiting = state.waiting; return out; }
     if (st.restarts) out.warnings.push(`The server restarted ${st.restarts} time${st.restarts === 1 ? '' : 's'} after stopping unexpectedly.`);
     if (st.running && state.phase === 'ready') {
       try {
         const r = await agent().request('nodes', {}, { timeoutMs: 15000 });
-        out.computers = Object.values((r && r.nodes) || {}).reduce((n, list) => n + (Array.isArray(list) ? list.length : 0), 0);
+        const all = Object.values((r && r.nodes) || {}).flatMap((list) => (Array.isArray(list) ? list : []));
+        out.computers = all.length;   // registered in the group, online or not
+        out.online = all.filter((n) => n && (Number(n.conn) & 1) === 1).length;
         out.ok = !!out.group;
       } catch (e) {
         out.warnings.push(`The computer list could not be read (${clean(e && (e.code || e.message), 80)}).`);
@@ -257,8 +272,8 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
 
   const gate = deps.gate || createGate({
     levels: settings.levels, sessionMinutes: settings.session_minutes, now, log,
-    approve: async ({ agent: who, title, detail, minutes }) => {
-      const r = await hub.request('hub/approve', { agent: who, title, detail, minutes }, APPROVE_HUB_TIMEOUT_MS);
+    approve: async ({ call, title, detail, minutes }) => {   // the hub knows the agent from the call id it issued, so no agent is sent
+      const r = await hub.request('hub/approve', { call, title, detail, minutes }, APPROVE_HUB_TIMEOUT_MS);
       if (r && (r.decision === 'allow' || r.decision === 'deny' || r.decision === 'timeout')) return r.decision;
       throw new Error((r && r.error) || 'no answer');
     },
@@ -324,7 +339,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       busy.delete(pc.id);
       return v;
     } catch (e) {
-      if (e && e.code === 'ETIMEDOUT') busy.set(pc.id, now() + lockMs); else busy.delete(pc.id);   // after a timeout the command may still be running
+      if (e && e.code === 'ETIMEDOUT' && !e.login) busy.set(pc.id, now() + lockMs); else busy.delete(pc.id);   // after a timeout the command may still be running (a login that timed out sent nothing)
       throw e;
     }
   }
@@ -335,11 +350,13 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const noReply = (pc) => new ToolError(`No reply from ${pc.name}. The screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock), or the computer is busy with another command.`);
   const mustBeOnline = (pc) => { if (!pc.online) throw new ToolError(`${pc.name} is offline. It has to be switched on and connected to the tailnet.`); };
 
-  // A screen script (picture or input) runs as the signed-in user, through the cmd line.
+  // The server did not log us in in time: nothing was sent to the computer, which is a different thing from a command that got no answer.
+  const noLogin = (pc) => new ToolError(`The Remote computers server did not answer in time, so nothing was sent to ${pc.name}. Try again in a moment.`);
+  // A screen script (picture or input) runs as the signed-in user, as one PowerShell line (runcommands type 2).
   async function onScreen(pc, script, timeoutMs) {
     const cmds = win.encodePs(script);
-    try { return await exclusive(pc, BUSY_AFTER_SCREEN_TIMEOUT_MS, () => runOn(pc, cmds, 1, 2, timeoutMs)); } catch (e) {
-      if (e && e.code === 'ETIMEDOUT') throw noReply(pc);
+    try { return await exclusive(pc, BUSY_AFTER_SCREEN_TIMEOUT_MS, () => runOn(pc, cmds, 2, 2, timeoutMs)); } catch (e) {
+      if (e && e.code === 'ETIMEDOUT') throw e.login ? noLogin(pc) : noReply(pc);
       throw meshFail(e, pc);
     }
   }
@@ -385,7 +402,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     return { path: saved.path, width: shot.width, height: shot.height, screen: { width: shot.screenWidth, height: shot.screenHeight }, takenAt: saved.takenAt };
   }
 
-  async function toolRun(a, who) {
+  async function toolRun(a, who, call) {
     const command = a.command;
     if (typeof command !== 'string' || !command.trim() || command.length > 8000) throw new ToolError('command: give 1 to 8000 characters.');
     const shell = a.shell === undefined ? 'powershell' : a.shell;
@@ -396,13 +413,15 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (!Number.isInteger(timeoutSec) || timeoutSec < 5 || timeoutSec > 300) throw new ToolError('timeoutSec must be a whole number from 5 to 300.');
     const pc = await resolve(a.computer);
     mustBeOnline(pc);
+    if (shell === 'cmd' && command.length > MAX_CMD_CHARS) throw new ToolError(`That command is too long for cmd (${MAX_CMD_CHARS} characters at most; it has ${command.length}). Use PowerShell, or split it up.`);
     let cmds;
     try { cmds = shell === 'cmd' ? `${command}\r\n` : win.encodePs(PS_PREFIX + command); } catch (e) { throw new ToolError(e instanceof win.WindowsError ? e.message : 'That command could not be sent.'); }
-    await gate.require(who, 'act', pc);
+    await gate.require(who, 'act', pc, { call });
     log(`run on ${pc.name} for ${who} (${shell}, as ${as}, ${command.length} characters)`);
     const t0 = now();
     let out;
-    try { out = await exclusive(pc, BUSY_AFTER_RUN_TIMEOUT_MS, () => runOn(pc, cmds, 1, as === 'user' ? 2 : 0, timeoutSec * 1000)); } catch (e) {
+    try { out = await exclusive(pc, BUSY_AFTER_RUN_TIMEOUT_MS, () => runOn(pc, cmds, shell === 'cmd' ? 1 : 2, as === 'user' ? 2 : 0, timeoutSec * 1000)); } catch (e) {
+      if (e && e.code === 'ETIMEDOUT' && e.login) throw noLogin(pc);
       if (e && e.code === 'ETIMEDOUT') throw new ToolError(`No reply from ${pc.name} within ${timeoutSec} seconds. The command may still be running on it, so wait a few minutes before the next one.`);
       throw meshFail(e, pc);
     }
@@ -418,37 +437,37 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   }
   const scriptOrError = (fn) => { try { return fn(); } catch (e) { if (e instanceof win.WindowsError) throw new ToolError(e.message); throw e; } };
 
-  async function toolClick(a, who) {
+  async function toolClick(a, who, call) {
     const pc = await resolve(a.computer);
     mustBeOnline(pc);
     const p = toScreen(pc, a.x, a.y);
     const script = scriptOrError(() => win.clickScript({ x: p.x, y: p.y, button: a.button === undefined ? 'left' : a.button, double: a.double === undefined ? false : a.double }));
-    await gate.require(who, 'drive', pc);
+    await gate.require(who, 'drive', pc, { call });
     log(`click on ${pc.name} for ${who}`);
     return drive(pc, script);
   }
-  async function toolType(a, who) {
+  async function toolType(a, who, call) {
     const pc = await resolve(a.computer);
     mustBeOnline(pc);
     const script = scriptOrError(() => win.typeScript({ text: a.text }));
-    await gate.require(who, 'drive', pc);
+    await gate.require(who, 'drive', pc, { call });
     log(`type on ${pc.name} for ${who} (${a.text.length} characters)`);
     return drive(pc, script);
   }
-  async function toolKey(a, who) {
+  async function toolKey(a, who, call) {
     const pc = await resolve(a.computer);
     mustBeOnline(pc);
     const script = scriptOrError(() => win.keyScript({ keys: a.keys }));
-    await gate.require(who, 'drive', pc);
+    await gate.require(who, 'drive', pc, { call });
     log(`key on ${pc.name} for ${who}`);
     return drive(pc, script);
   }
-  async function toolScroll(a, who) {
+  async function toolScroll(a, who, call) {
     const pc = await resolve(a.computer);
     mustBeOnline(pc);
     const where = a.x === undefined && a.y === undefined ? {} : (() => { if (a.x === undefined || a.y === undefined) throw new ToolError('Give both x and y, or neither.'); return toScreen(pc, a.x, a.y); })();
     const script = scriptOrError(() => win.scrollScript({ ...where, amount: a.amount }));
-    await gate.require(who, 'drive', pc);
+    await gate.require(who, 'drive', pc, { call });
     log(`scroll on ${pc.name} for ${who}`);
     return drive(pc, script);
   }
@@ -457,10 +476,11 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const HANDLERS = { health: toolHealth, start: toolStart };
   async function agentTool(name, a) {
     const who = typeof a.__agent === 'string' ? a.__agent.trim() : '';
-    const { __agent: _who, ...args } = a;
+    const call = typeof a.__call === 'string' ? a.__call.trim().slice(0, 200) : '';   // the hub's id for this tool call; the owner's question is tied to it
+    const { __agent: _who, __call: _call, ...args } = a;
     try {
       await gate.require(who, 'look');   // who is calling: without it nothing is allowed
-      return await AGENT_HANDLERS[name](args, who);
+      return await AGENT_HANDLERS[name](args, who, call);
     } catch (e) {
       if (e instanceof GateError) throw new ToolError(e.message);
       throw e;
@@ -473,14 +493,18 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     return Promise.resolve().then(() => HANDLERS[name](a));
   }
 
-  let stopping = false;
   async function start() {
     if (!runtimeOk) { log('the runtime is missing'); return; }
     startSequence().catch((e) => log('start failed:', clean(e && e.message, 120)));
   }
+  // Stops the sequence first (the generation number), then the server and the account commands, then waits for the sequence to settle,
+  // and stops the server once more in case a start was just about to spawn it.
   async function stop() {
-    stopping = true;
+    stopped = true; gen += 1;
     if (agentClient) { try { agentClient.close(); } catch { /* closed */ } }
+    const seq = startP;
+    if (mesh) await mesh.stop().catch(() => {});
+    if (seq) await seq.catch(() => {});
     if (mesh) await mesh.stop().catch(() => {});
   }
 
@@ -517,7 +541,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     handle(msg).then((r) => { if (r) write(JSON.stringify(r) + '\n'); }).catch((e) => log('message failed:', clean(e && e.message, 80)));
   }
 
-  return { handle, onLine, start, stop, callTool, mesh, hub, state, isStopping: () => stopping };
+  return { handle, onLine, start, stop, callTool, mesh, hub, state, isStopping: () => stopped };
 }
 
 function main() {
@@ -544,4 +568,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { createRemote, createHubLink, TOOLS, loadSettings, summarize, tidyOutput, capOutput, NOT_YET, REINSTALL, WAITING };
+module.exports = { createRemote, createHubLink, TOOLS, loadSettings, summarize, tidyOutput, capOutput, NOT_YET, REINSTALL, WAITING, APPROVE_HUB_TIMEOUT_MS };

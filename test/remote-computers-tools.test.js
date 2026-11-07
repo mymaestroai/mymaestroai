@@ -10,14 +10,15 @@ const { createGate, GateError } = require('../modules/remote-computers/lib/gate'
 const win = require('../modules/remote-computers/lib/windows');
 const { createShotStore, folderOf } = require('../modules/remote-computers/lib/shots');
 const { MeshError } = require('../modules/remote-computers/lib/meshclient');
-const { createRemote, TOOLS } = require('../modules/remote-computers/server');
+const { createRemote, TOOLS, APPROVE_HUB_TIMEOUT_MS } = require('../modules/remote-computers/server');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'rc-tools-'));
 const flush = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r)); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const decodeLine = (line) => {
-  const m = /^powershell\.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(line);
-  assert.ok(m, 'a single powershell.exe -EncodedCommand line');
+  const m = /^iex \(\[Text\.Encoding\]::Unicode\.GetString\(\[Convert\]::FromBase64String\('([A-Za-z0-9+/=]+)'\)\)\)$/.exec(line);
+  assert.ok(m, 'a single iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(...))) line');
+  assert.ok(line.length <= 60000 && !/[\r\n]/.test(line));
   return Buffer.from(m[1], 'base64').toString('utf16le');
 };
 const rejects = async (p, code, re) => {
@@ -35,13 +36,15 @@ function newGate(over = {}) {
   let t = 5000000;
   const clock = { now: () => t, advance: (ms) => { t += ms; } };
   const asked = [], toasts = [], logs = [];
-  const gate = createGate({
+  const real = createGate({
     levels: ['sam:act', 'pat:drive', 'lee:look'], sessionMinutes: 30, now: clock.now, log: (...a) => logs.push(a.join(' ')),
     approve: async (q) => { asked.push(q); return 'allow'; },
     toast: async (id, title, msg) => { toasts.push({ id, title, msg }); },
     ...over,
   });
-  return { gate, clock, asked, toasts, logs };
+  // Unless a test says otherwise, a call carries the hub's call id.
+  const gate = { ...real, require: (agent, need, computer, opts) => real.require(agent, need, computer, opts === undefined ? { call: 'call-1' } : opts) };
+  return { gate, raw: real, clock, asked, toasts, logs };
 }
 const PC = { id: 'pc1', name: 'demo-pc' };
 
@@ -80,9 +83,10 @@ test('gate: the owner is asked once per session with the agreed wording, then a 
   const { gate, asked, toasts, clock } = newGate();
   await gate.require('sam', 'act', { id: 'pc1', name: 'demo-pc' });
   assert.deepStrictEqual(asked, [{
-    agent: 'sam', title: 'sam wants to use demo-pc', minutes: 10,
+    call: 'call-1', title: 'sam wants to use demo-pc', minutes: 4,
     detail: 'For 30 minutes sam may run commands on demo-pc. Every action is logged. Say no if you did not expect this.',
   }]);
+  assert.ok(!('agent' in asked[0]), 'the hub knows the agent from the call id');
   assert.deepStrictEqual(toasts, [{ id: 'pc1', title: 'My Maestro', msg: 'sam is using this computer for the next 30 minutes.' }]);
   await gate.require('sam', 'act', PC);
   assert.strictEqual(asked.length, 1, 'the session covers the next one');
@@ -93,6 +97,22 @@ test('gate: the owner is asked once per session with the agreed wording, then a 
   // A long title is capped at 80.
   await gate.require('pat', 'act', { id: 'pc3', name: 'n'.repeat(200) });
   assert.ok(asked[2].title.length <= 80);
+});
+
+test('gate: the question carries the call id it was asked for, and without one the owner is not asked (EIDENT)', async () => {
+  const { gate, asked } = newGate();
+  await gate.require('sam', 'act', PC, { call: 'c-77' });
+  assert.strictEqual(asked[0].call, 'c-77');
+  assert.strictEqual(asked[0].minutes, 4);
+  const fresh = newGate();
+  for (const opts of [{}, { call: '' }, { call: '   ' }, { call: 5 }, null]) await rejects(fresh.raw.require('sam', 'act', PC, opts), 'EIDENT', /did not say which call/);
+  await rejects(fresh.raw.require('sam', 'act', PC), 'EIDENT');
+  assert.strictEqual(fresh.asked.length, 0);
+  await fresh.raw.require('sam', 'look', PC);   // look needs no call
+  // A live session needs no call either.
+  await fresh.raw.require('sam', 'act', PC, { call: 'c-1' });
+  await fresh.raw.require('sam', 'act', PC);
+  assert.strictEqual(fresh.asked.length, 1);
 });
 
 test('gate: concurrent requires for one agent and computer share ONE question', async () => {
@@ -196,18 +216,37 @@ test('gate: a toast that fails is logged and never stops the work; a question th
 });
 
 // ── windows.js ───────────────────────────────────────────────────────────────────────────────────
-test('windows: encodePs makes one powershell line that decodes to the script, and refuses a line over 30000 characters', () => {
+test('windows: encodePs makes ONE iex line (runcommands type 2) that decodes to the script, and refuses a line over 60000 characters', () => {
   const script = 'Write-Output "h\u00e9llo \u2603"';
   const line = win.encodePs(script);
-  assert.ok(line.startsWith('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand '));
+  assert.ok(line.startsWith('iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(\''));
+  assert.ok(line.endsWith('\')))'));
   assert.doesNotMatch(line, /[\r\n]/);
+  assert.doesNotMatch(line, /powershell\.exe|EncodedCommand/, 'no second process and no command-line option');
   assert.strictEqual(decodeLine(line), script);
-  assert.ok(line.length <= 30000);
-  const e = assert.throws(() => win.encodePs('x'.repeat(30000)), (err) => err.code === 'ETOOLONG');
+  assert.strictEqual(win.MAX_LINE, 60000);
+  // 60000 characters of line: the base64 of the UTF-16LE script is 8/3 characters per script character, plus the 70 of the wrapper.
+  const fits = 'x'.repeat(22400), tooLong = 'x'.repeat(22500);
+  assert.ok(win.encodePs(fits).length <= 60000);
+  const e = assert.throws(() => win.encodePs(tooLong), (err) => err.code === 'ETOOLONG');
   assert.strictEqual(e, undefined);
   assert.throws(() => win.encodePs(''), win.WindowsError);
-  // The longest allowed command still fits.
   assert.doesNotThrow(() => win.encodePs('a'.repeat(9000)));
+});
+
+test('windows: the longest text the type tool takes (2000 characters) and the longest run command (8000) fit on the line, with room to spare (measured)', () => {
+  const typed = win.encodePs(win.typeScript({ text: 'a'.repeat(2000) }));
+  const typedNl = win.encodePs(win.typeScript({ text: 'line\n'.repeat(400) }));
+  const typedWide = win.encodePs(win.typeScript({ text: '\u2603'.repeat(2000) }));
+  const run = win.encodePs('$ProgressPreference = \'SilentlyContinue\'\n[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n' + '\u2603'.repeat(8000));
+  for (const [name, line] of Object.entries({ typed, typedNl, typedWide, run })) {
+    assert.ok(line.length < 60000, `${name}: ${line.length}`);
+    assert.doesNotMatch(line, /[\r\n]/);
+  }
+  assert.ok(typed.length < 30000, `type of 2000 characters is ${typed.length} characters on the line`);
+  assert.ok(run.length < 30000, `run of 8000 characters is ${run.length} characters on the line`);
+  // The old cmd.exe route would have broken the 8191-character limit with the same type text.
+  assert.ok(typed.length > 8191);
 });
 
 test('windows: every script ends with MMOK and is built from a short fixed text', () => {
@@ -219,6 +258,9 @@ test('windows: every script ends with MMOK and is built from a short fixed text'
   }
   assert.ok(win.sawOk('Microsoft Windows\r\nC:\\>x\r\nMMOK\r\nC:\\>exit\r\n'));
   assert.ok(win.sawOk('MMOK'));
+  assert.ok(win.sawOk('PS C:\\Windows\\system32> MMOK\r\nPS C:\\Windows\\system32> exit\r\n'), 'PowerShell\'s own prompt in front of the line');
+  assert.ok(win.sawOk('PS C:\\>MMOK\n'));
+  assert.ok(!win.sawOk('PS C:\\> echo MMOK'));
   assert.ok(!win.sawOk('C:\\>echo MMOK'));
   assert.ok(!win.sawOk('error'));
 });
@@ -248,6 +290,8 @@ test('windows: parseScreenshot reads a good line (even around a cmd banner or a 
   const e1 = assert.throws(() => win.parseScreenshot(noise), (err) => err instanceof win.WindowsError);
   assert.strictEqual(e1, undefined);
   try { win.parseScreenshot(noise); } catch (e) { assert.ok(e.message.includes('x'.repeat(300))); assert.ok(!e.message.includes('x'.repeat(301))); }
+  const ps = win.parseScreenshot(`PS C:\\Windows\\system32> MMSHOT 640 360 1920 1080 ${b64} MMEND\r\nPS C:\\Windows\\system32> exit\r\n`);
+  assert.ok(ps.jpeg.equals(jpeg) && ps.width === 640, 'PowerShell\'s prompt in front of the MMSHOT line');
   assert.throws(() => win.parseScreenshot('MMSHOT 1 2 3 4 !!!!'), win.WindowsError);
   assert.throws(() => win.parseScreenshot(`MMSHOT 1 2 3 4 ${Buffer.from('not a jpeg at all').toString('base64')}`), win.WindowsError);
   assert.throws(() => win.parseScreenshot(''), win.WindowsError);
@@ -352,9 +396,9 @@ function setup(over = {}) {
       throw new MeshError('Unexpected action in the test.', 'EMESH');
     },
   };
-  const gateCalls = [];
+  const gateCalls = [], gateOpts = [];
   const fakeGate = over.realGate ? null : {
-    require: async (agent, need, pc) => { gateCalls.push({ agent, need, pc: pc && { id: pc.id, name: pc.name } }); if (over.gateRefuses && need !== 'look') throw new GateError(over.gateRefuses, 'ELEVEL'); },
+    require: async (agent, need, pc, opts) => { gateCalls.push({ agent, need, pc: pc && { id: pc.id, name: pc.name } }); gateOpts.push(opts); if (over.gateRefuses && need !== 'look') throw new GateError(over.gateRefuses, 'ELEVEL'); },
   };
   const remote = createRemote({
     env: { MODULE_SETTINGS: JSON.stringify({ levels: ['sam:act', 'pat:drive'], session_minutes: 30, ...(over.settings || {}) }), CONNECTOR_MEDIA_DIR: mediaDir },
@@ -367,9 +411,9 @@ function setup(over = {}) {
     const text = r.content[0].text;
     return r.isError ? { error: text } : JSON.parse(text);
   };
-  return { remote, client, calls, lines, logs, gateCalls, handlers, time, mediaDir, call };
+  return { remote, client, calls, lines, logs, gateCalls, gateOpts, handlers, time, mediaDir, call };
 }
-const AGENT = { __agent: 'sam' };
+const AGENT = { __agent: 'sam', __call: 'call-1' };   // what the hub adds to an agent's call
 
 test('tools: tools/list describes every tool for an agent, with the level it needs', () => {
   const by = Object.fromEntries(TOOLS.map((t) => [t.name, t]));
@@ -451,6 +495,16 @@ test('tools: info gives a compact summary (at most 4 KB, unknown fields skipped)
   assert.strictEqual(r.defender, undefined);
   const text = JSON.stringify(r);
   assert.ok(!/secret|must not appear/.test(text));
+  // Only the known facts come out, whatever else the server reports (unknown fields at any depth are left out).
+  const KNOWN = ['name', 'id', 'online', 'os', 'cpu', 'memoryGB', 'disks', 'antivirus', 'firewall', 'defender', 'pendingReboot', 'ipv4', 'agentVersion', 'lastConnect'];
+  assert.ok(Object.keys(r).every((k) => KNOWN.includes(k)), Object.keys(r).join(','));
+  t.handlers.getsysinfo = async () => ({
+    hardware: { windows: { osinfo: { Caption: 'Windows 11', ProductKey: 'AAAAA-BBBBB', SerialNumber: 'SN-123' }, cpu: [{ Name: 'CPU', Secret: 'cpu-secret' }], extraThing: { token: 'tok-1' } }, bios: { serial: 'BIOS-SN' }, users: ['alice'] },
+    node: { name: 'x', token: 'tok-2', pr: false }, somethingNew: 'new-field-value', rights: 1,
+  });
+  const lean = await t.call('info', { ...AGENT, computer: 'demo-pc' });
+  assert.ok(Object.keys(lean).every((k) => KNOWN.includes(k)), Object.keys(lean).join(','));
+  assert.ok(!/AAAAA|SN-123|cpu-secret|tok-1|tok-2|BIOS-SN|alice|new-field-value/.test(JSON.stringify(lean)));
   // A huge report is cut to 4 KB.
   t.handlers.getsysinfo = async () => ({ hardware: { windows: { volumes: Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`V${i}:`, { size: 1e12, sizeremaining: 5e11 }])), av: 'a'.repeat(5000) } } });
   const big = await t.call('info', { ...AGENT, computer: 'demo-pc' });
@@ -472,7 +526,7 @@ test('tools: screenshot runs the script as the signed-in user, saves the JPEG in
   t.handlers.runcommands = async () => ({ action: 'msg', type: 'runcommands', result: shotReply() });
   const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc', maxWidth: 1280 });
   const run = t.calls.find((c) => c.action === 'runcommands');
-  assert.deepStrictEqual({ ids: run.fields.nodeids, type: run.fields.type, as: run.fields.runAsUser, ms: run.opts.timeoutMs }, { ids: [`node//${ID_A}`], type: 1, as: 2, ms: 30000 });
+  assert.deepStrictEqual({ ids: run.fields.nodeids, type: run.fields.type, as: run.fields.runAsUser, ms: run.opts.timeoutMs }, { ids: [`node//${ID_A}`], type: 2, as: 2, ms: 30000 });
   assert.match(decodeLine(run.fields.cmds), /\$nw -gt 1280/);
   assert.deepStrictEqual(t.gateCalls.map((g) => g.need), ['look', 'look']);
   const comp = folderOf(ID_A);
@@ -555,14 +609,20 @@ test('tools: run is an act tool; PowerShell travels encoded, cmd as typed; as pi
   const r = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'Get-Date -Format "o"; "it\'s $x"' });
   assert.deepStrictEqual(t.gateCalls.slice(-1)[0], { agent: 'sam', need: 'act', pc: { id: ID_A, name: 'demo-pc' } });
   const c = t.calls.find((x) => x.action === 'runcommands');
-  assert.deepStrictEqual({ type: c.fields.type, as: c.fields.runAsUser, ms: c.opts.timeoutMs }, { type: 1, as: 0, ms: 60000 });
+  assert.deepStrictEqual({ type: c.fields.type, as: c.fields.runAsUser, ms: c.opts.timeoutMs }, { type: 2, as: 0, ms: 60000 });
   const script = decodeLine(c.fields.cmds);
   assert.ok(script.endsWith('Get-Date -Format "o"; "it\'s $x"'));
+  assert.ok(!c.fields.cmds.includes('Get-Date'), 'the caller\'s text travels only as base64');
   assert.strictEqual(r.output, 'hello');
   assert.strictEqual(typeof r.took_ms, 'number');
+  assert.deepStrictEqual(t.gateOpts.filter(Boolean).slice(-1)[0], { call: 'call-1' }, 'the hub\'s call id goes to the gate');
+  // PowerShell reading its commands from stdin may print prompts around the output.
+  t.handlers.runcommands = async (f) => ({ result: `PS C:\\Windows\\system32> \r\n${f.cmds}\r\nhello\r\nPS C:\\Windows\\system32> exit\r\n` });
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'echo hello' })).output, 'hello');
+  t.handlers.runcommands = async () => ({ result: 'Microsoft Windows [Version 10.0.22631]\r\n(c) Microsoft Corporation. All rights reserved.\r\n\r\nC:\\Windows\\system32>\r\nhello\r\nC:\\Windows\\system32>exit\r\n' });
   // cmd, as the user, with a longer wait.
   await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'dir C:\\', shell: 'cmd', as: 'user', timeoutSec: 120 });
-  const c2 = t.calls.filter((x) => x.action === 'runcommands')[1];
+  const c2 = t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0];
   assert.deepStrictEqual({ cmds: c2.fields.cmds, type: c2.fields.type, as: c2.fields.runAsUser, ms: c2.opts.timeoutMs }, { cmds: 'dir C:\\\r\n', type: 1, as: 2, ms: 120000 });
   // Output over 64 KB is cut.
   t.handlers.runcommands = async () => ({ result: 'a'.repeat(70000) });
@@ -578,6 +638,44 @@ test('tools: run is an act tool; PowerShell travels encoded, cmd as typed; as pi
   // The longest command still fits on the line.
   t.handlers.runcommands = async () => ({ result: 'ok' });
   assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'y'.repeat(8000) })).output, 'ok');
+  // cmd.exe takes about 8191 characters in a line: over 7000 is refused with a plain message, before the owner is asked or anything is sent.
+  const sent = t.calls.length, asks = t.gateCalls.length;
+  const longCmd = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x'.repeat(7001), shell: 'cmd' });
+  assert.match(longCmd.error, /too long for cmd \(7000 characters at most; it has 7001\)\. Use PowerShell/);
+  assert.ok(!t.calls.slice(sent).some((x) => x.action === 'runcommands'));
+  assert.ok(!t.gateCalls.slice(asks).some((g) => g.need === 'act'));
+  const edge = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x'.repeat(7000), shell: 'cmd' });
+  assert.strictEqual(edge.output, 'ok');
+  assert.deepStrictEqual(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.type, 1, 'cmd stays on type 1');
+});
+
+test('tools: a login that timed out is not a command that got no answer; a command that did stays busy; the screen hold stays 60 s', async () => {
+  const t = setup();
+  const loginTimeout = () => Object.assign(new MeshError('The server did not log in within 20 seconds.', 'ETIMEDOUT'), { login: true });
+  t.handlers.runcommands = async () => { throw loginTimeout(); };
+  const r = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' });
+  assert.strictEqual(r.error, 'The Remote computers server did not answer in time, so nothing was sent to demo-pc. Try again in a moment.');
+  assert.doesNotMatch(r.error, /may still be running/);
+  t.handlers.runcommands = async () => ({ result: 'fine' });
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'fine', 'not left busy: nothing was sent');
+  // A screenshot or input whose login timed out says the same, and does not hold the computer.
+  t.handlers.runcommands = async () => { throw loginTimeout(); };
+  assert.match((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /nothing was sent to demo-pc/);
+  t.handlers.runcommands = async () => ({ result: shotReply() });
+  assert.ok((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).path);
+  // A command that got no answer: the run message, and a hold of 10 minutes.
+  t.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 5 s.', 'ETIMEDOUT'); };
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 5 })).error, /^No reply from demo-pc within 5 seconds\. The command may still be running/);
+  // A screenshot that got no answer: the screen message, and a hold of 60 seconds (not 10 minutes).
+  const u = setup();
+  u.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 30 s.', 'ETIMEDOUT'); };
+  assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /^No reply from demo-pc\. The screen tools need someone signed in/);
+  u.handlers.runcommands = async () => ({ result: shotReply() });
+  assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /busy, try again in a moment/);
+  u.time.t += 59000;
+  assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /busy/);
+  u.time.t += 2000;
+  assert.ok((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).path, 'free again after 60 s');
 });
 
 test('tools: one command per computer at a time; a timeout keeps it busy for 10 minutes', async () => {
@@ -632,7 +730,7 @@ test('tools: click needs a screenshot first, checks the place is inside it, and 
   const ok = await t.call('click', { ...AGENT, computer: 'demo-pc', x: 800, y: 450, double: true });
   assert.deepStrictEqual(ok, { ok: true });
   const c = t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0];
-  assert.deepStrictEqual({ type: c.fields.type, as: c.fields.runAsUser, ms: c.opts.timeoutMs }, { type: 1, as: 2, ms: 20000 });
+  assert.deepStrictEqual({ type: c.fields.type, as: c.fields.runAsUser, ms: c.opts.timeoutMs }, { type: 2, as: 2, ms: 20000 });
   const script = decodeLine(c.fields.cmds);
   assert.match(script, /\$mmx = 960; \$mmy = 540/);
   assert.strictEqual(script.match(/Mouse\(2, 0\)/g).length, 2);
@@ -693,8 +791,10 @@ test('tools: every act and drive tool asks the gate for the right level with the
   for (const who of ['sam', 'pat-the-agent']) {
     for (const [name, args, level] of plan) {
       t.gateCalls.length = 0;
-      const r = await t.call(name, { ...args, __agent: who });
+      t.gateOpts.length = 0;
+      const r = await t.call(name, { ...args, __agent: who, __call: `call-${who}` });
       assert.ok(!r.error, `${name}: ${r.error}`);
+      if (level !== 'look') assert.deepStrictEqual(t.gateOpts.slice(-1)[0], { call: `call-${who}` }, `${name}: the call id reaches the gate`);
       assert.ok(t.gateCalls.every((g) => g.agent === who), name);
       const top = t.gateCalls.slice(-1)[0];
       assert.strictEqual(top.need, level, name);
@@ -705,7 +805,7 @@ test('tools: every act and drive tool asks the gate for the right level with the
   const refused = setup({ gateRefuses: 'sam may only look.' });
   refused.handlers.runcommands = async () => { throw new Error('must not run'); };
   for (const [name, args] of plan.slice(3)) {
-    const r = await refused.call(name, { ...args, __agent: 'sam' });
+    const r = await refused.call(name, { ...args, __agent: 'sam', __call: 'call-1' });
     if (name === 'click' || name === 'scroll') continue;   // these stop earlier, at "take a screenshot first"
     assert.strictEqual(r.error, 'sam may only look.', name);
   }
@@ -723,9 +823,10 @@ test('tools: with the real gate, the first act asks the owner through the hub, t
   const asks = t.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve');
   assert.strictEqual(asks.length, 1);
   assert.deepStrictEqual(asks[0].params, {
-    agent: 'sam', title: 'sam wants to use demo-pc', minutes: 10,
+    call: 'call-1', title: 'sam wants to use demo-pc', minutes: 4,
     detail: 'For 30 minutes sam may run commands on demo-pc. Every action is logged. Say no if you did not expect this.',
   });
+  assert.ok(!('agent' in asks[0].params), 'no agent field: the hub reads it from the call');
   assert.ok(!t.calls.some((c) => c.action === 'runcommands'), 'nothing runs before the owner answers');
   // A second request while the question is open shares it.
   const other = t.call('run', { ...AGENT, computer: 'demo-pc', command: 'hostname' });
@@ -744,13 +845,23 @@ test('tools: with the real gate, the first act asks the owner through the hub, t
   const drive = await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'a' });
   assert.match(drive.error, /Data connectors -> Remote computers -> Settings/);
   // A no from the owner, and the cool-down.
-  const no = t.call('run', { __agent: 'pat', computer: ID_C, command: 'x' });
+  const no = t.call('run', { __agent: 'pat', __call: 'call-2', computer: ID_C, command: 'x' });
   await flush();
   const ask2 = t.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve')[1];
   t.remote.onLine(JSON.stringify({ jsonrpc: '2.0', id: ask2.id, result: { decision: 'deny' } }));
+  assert.strictEqual(ask2.params.call, 'call-2', 'each question carries its own call');
   assert.match((await no).error, /said no/);
-  assert.match((await t.call('run', { __agent: 'pat', computer: ID_C, command: 'x' })).error, /a moment ago/);
+  assert.match((await t.call('run', { __agent: 'pat', __call: 'call-3', computer: ID_C, command: 'x' })).error, /a moment ago/);
   assert.strictEqual(t.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve').length, 2);
+  // A call the hub did not number cannot be approved: the owner is not asked at all.
+  const t3 = setup({ realGate: true });
+  t3.handlers.runcommands = async () => { throw new Error('must not run'); };
+  assert.match((await t3.call('run', { __agent: 'sam', computer: 'demo-pc', command: 'x' })).error, /did not say which call/);
+  assert.match((await t3.call('run', { __agent: 'sam', __call: 7, computer: 'demo-pc', command: 'x' })).error, /did not say which call/);
+  assert.strictEqual(t3.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve').length, 0);
+  assert.ok(!t3.calls.some((c) => c.action === 'runcommands'));
+  // The approval wait: the hub is asked to wait 4 minutes, and the module waits a little longer for the answer, well inside a 300 s call.
+  assert.ok(APPROVE_HUB_TIMEOUT_MS > 4 * 60000 && APPROVE_HUB_TIMEOUT_MS < 300000, String(APPROVE_HUB_TIMEOUT_MS));
   // A hub that answers with an error is "could not ask", not a yes.
   const t2 = setup({ realGate: true });
   const p2 = t2.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' });

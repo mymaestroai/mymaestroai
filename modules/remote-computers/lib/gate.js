@@ -4,7 +4,7 @@
 
 const RANK = { look: 0, act: 1, drive: 2 };
 const DENY_COOLDOWN_MS = 2 * 60000;
-const APPROVE_MINUTES = 10;
+const APPROVE_MINUTES = 4;   // the owner's time to answer; a module call is cut off at 300 s
 
 class GateError extends Error {
   constructor(message, code) { super(message); this.name = 'GateError'; this.code = code; }
@@ -14,7 +14,8 @@ const text = (s, max) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u007
 
 /**
  * createGate({ levels, sessionMinutes, approve, toast, now, log })
- *   levels: ["agent:level", ...] from the settings; approve({ agent, title, detail, minutes }) -> 'allow' | 'deny' | 'timeout';
+ *   levels: ["agent:level", ...] from the settings; approve({ call, title, detail, minutes }) -> 'allow' | 'deny' | 'timeout'
+ *   (call: the hub's id of the tool call that needs the yes; the hub knows the agent from it, so no agent is sent);
  *   toast(computerId, title, message) -> void (a failure is logged, never fatal).
  */
 function createGate({ levels = [], sessionMinutes = 30, approve, toast = async () => {}, now = Date.now, log = () => {} } = {}) {
@@ -32,13 +33,13 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
   const levelOf = (agent) => table.get(agent) || 'look';
   const live = (s) => s && s.expiresAt > now();
 
-  function ask(agent, need, computer) {
+  function ask(agent, need, computer, call) {
     const name = text(computer.name, 60) || 'this computer';
     const who = text(agent, 40);
     const what = need === 'drive' ? 'run commands and use the mouse and keyboard' : 'run commands';
     const title = `${who} wants to use ${name}`.slice(0, 80);
     const detail = `For ${sessionMinutes} minutes ${who} may ${what} on ${name}. Every action is logged. Say no if you did not expect this.`;
-    return Promise.resolve().then(() => approve({ agent, title, detail, minutes: APPROVE_MINUTES })).then((d) => {
+    return Promise.resolve().then(() => approve({ call, title, detail, minutes: APPROVE_MINUTES })).then((d) => {
       if (d === 'allow' || d === 'deny' || d === 'timeout') return d;
       throw new GateError('The owner could not be asked right now. Try again in a moment.', 'EAPPROVE');
     }, (e) => {
@@ -48,8 +49,10 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
     });
   }
 
-  async function require(agent, need, computer) {
+  // opts.call: the hub's id of this tool call, needed whenever the owner has to be asked.
+  async function require(agent, need, computer, opts) {
     const who = typeof agent === 'string' ? agent.trim() : '';
+    const call = opts && typeof opts.call === 'string' ? opts.call.trim() : '';
     if (!who) throw new GateError('The hub did not say which agent is calling, so nothing is allowed.', 'EIDENT');
     if (!(need in RANK)) throw new Error('unknown level');
     if (need === 'look') return;
@@ -73,10 +76,11 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
         await p.promise.catch(() => {});
         continue;
       }
+      if (!call) throw new GateError('The hub did not say which call this is, so the owner cannot be asked and nothing is allowed.', 'EIDENT');
       const entry = { level: need, promise: null };
       entry.promise = (async () => {
         try {
-          const d = await ask(who, need, computer);
+          const d = await ask(who, need, computer, call);
           if (d === 'deny') { denied.set(key, now() + DENY_COOLDOWN_MS); throw new GateError('The owner said no.', 'EDENIED'); }
           if (d === 'timeout') throw new GateError('The owner did not answer in time.', 'ETIMEOUT');
           sessions.set(key, { agent: who, computer: { id: computer.id, name: text(computer.name, 80) }, level: need, expiresAt: now() + sessionMinutes * 60000 });

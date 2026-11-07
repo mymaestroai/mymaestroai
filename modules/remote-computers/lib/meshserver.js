@@ -14,14 +14,36 @@ const STABLE_MS = 10 * 60 * 1000;
 const READY_MS = 90000;
 const POLL_MS = 500;
 const KILL_AFTER_MS = 10000;
+const BOOT_KILL_AFTER_MS = 5000;
+const ORPHAN_TERM_MS = 10000;
 const LOG_ROTATE_BYTES = 10 * 1024 * 1024;
 const BOOTSTRAP_TIMEOUT_MS = 120000;
 const NPM_GUARD = path.join(__dirname, 'no-npm.js');
+
+// MeshCentral's own password hash (pass.js, MeshCentral 1.3.1), which is what a normal login compares against (webserver.js:923-925) and what
+// `--createaccount <user> --hashpass <salt>,<hash>` / `--resetaccount <user> --hashpass <salt>,<hash>` store untouched (meshcentral.js:1049-1055, 1079-1085):
+//   pass.js:14   len = 128                      (the derived key is 128 bytes)
+//   pass.js:17   iterations = 12000
+//   pass.js:39-41  salt = crypto.randomBytes(128).toString('base64')   (the salt is the base64 TEXT, not the raw bytes: pbkdf2 gets the string, i.e. its UTF-8 bytes)
+//   pass.js:43   hash = crypto.pbkdf2(password, salt, 12000, 128, 'sha384').toString('base64')
+// `--hashpass` is "<salt>,<hash>" (meshcentral.js:1051-1054); base64 never holds a comma, so the split is safe.
+const PASS_ITERATIONS = 12000, PASS_LEN = 128, PASS_DIGEST = 'sha384';
+function hashPassword(password, salt = crypto.randomBytes(PASS_LEN).toString('base64')) {
+  const hash = crypto.pbkdf2Sync(String(password), salt, PASS_ITERATIONS, PASS_LEN, PASS_DIGEST).toString('base64');
+  return { salt, hash, arg: `${salt},${hash}` };
+}
 
 const DNS_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const IPV4_RE = /^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$/;
 
 const clean = (s, max = 300) => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, ' ').slice(0, max);
+
+// Takes the secrets out of a text: the ones given, and anything that follows --pass / --hashpass (a command line quoted in an error message).
+function redact(text, secrets = []) {
+  let t = String(text == null ? '' : text);
+  for (const sec of secrets) if (sec) t = t.split(sec).join('[secret]');
+  return t.replace(/(--(?:hash)?pass(?:word)?(?:=|\s+))\S+/gi, '$1[secret]');
+}
 
 // Writes a private file atomically: a temp file in the same folder, then a rename.
 function writeFileAtomic(file, text) {
@@ -37,6 +59,8 @@ function readJsonFile(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e && e.code === 'ENOENT') return null; throw e; }
 }
 
+const coded = (message, code) => Object.assign(new Error(message), { code });
+
 // Does the control port answer a TLS handshake? (Loopback only; the certificate is not judged here, only that a server is listening.)
 function tlsProbe(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
@@ -49,16 +73,17 @@ function tlsProbe(port, host = '127.0.0.1') {
 }
 
 function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spawn, execFile = childProcess.execFile, now = Date.now, log = () => {},
-  probe = tlsProbe, timers = { setTimeout, clearTimeout }, npmGuard = NPM_GUARD } = {}) {
+  probe = tlsProbe, timers = { setTimeout, clearTimeout }, npmGuard = NPM_GUARD, procRoot = '/proc', killPid = process.kill.bind(process), onRetryReady = null } = {}) {
   if (!runtimeDir || !home) throw new Error('createMeshServer needs runtimeDir and home');
   const paths = {
     home,
     dataPath: path.join(home, 'meshcentral-data'),
     filesPath: path.join(home, 'meshcentral-files'),
     accountsFile: path.join(home, 'accounts.json'),
-    pendingFile: path.join(home, 'accounts.pending.json'),
+    pendingFile: path.join(home, 'accounts.pending.json'),   // an older version kept plaintext passwords here; it is only ever deleted now
     stateFile: path.join(home, 'state.json'),
     logFile: path.join(home, 'meshcentral.log'),
+    pidFile: path.join(home, 'meshcentral.pid'),
     mainJs: path.join(runtimeDir, 'node_modules', 'meshcentral', 'meshcentral.js'),
   };
   paths.configFile = path.join(paths.dataPath, 'config.json');
@@ -66,11 +91,12 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   const baseEnv = () => ({ PATH: process.env.PATH, HOME: home });
 
   // ── config ──
-  // Every key below was read in MeshCentral 1.3.1 (config.json keys are lower-cased on load, meshcentral.js:4241; settings become args, meshcentral.js:187):
+  // Every key below was read in MeshCentral 1.3.1 (config.json keys are lower-cased on load, meshcentral.js:4241 and common.js:147-157, at every depth; settings become args, meshcentral.js:187):
   //   cert (meshcentral.js:238), port/portBind (webserver.js:8386), agentPort/agentPortBind (webserver.js:8389; the .msh then carries agentPort, webserver.js:6388-6411,
   //   so no alias is set), redirPort 0 and mpsPort 0 (meshcentral.js:1686-1689: only null is replaced by a default), wanOnly (meshcentral.js:1910), exactPorts (webserver.js:9576),
   //   lockAgentDownload (webserver.js:6297,6381), userAllowedIp/agentAllowedIp (meshcentral.js:958-969), cookieIpCheck (meshcentral.js:985-987),
-  //   agentDownloads {enabled, fetchReleases} (agentbuilds.js:395,229-230), autoBackup false (meshcentral.js:2211), filesPath (meshcentral.js:123), domain newAccounts (webserver.js:1784).
+  //   agentDownloads {enabled, fetchReleases} (agentbuilds.js:395,229-230), autoBackup false (meshcentral.js:2211), filesPath (meshcentral.js:123), domain newAccounts (webserver.js:1784),
+  //   domain passwordRequirements.logintokens false (meshuser.js:5363 and 5402: "Login tokens are not supported on this server"; read as domain.passwordrequirements after the lower-casing).
   function configFor(s = settings) {
     const name = String((s && s.address_name) || '').trim().toLowerCase();
     if (!name) throw new Error('Waiting for setup: the tailnet name of this computer is not set.');
@@ -103,7 +129,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
         autoBackup: false,
         filesPath: paths.filesPath,
       },
-      domains: { '': { title: 'My Maestro computers', newAccounts: false } },
+      domains: { '': { title: 'My Maestro computers', newAccounts: false, passwordRequirements: { logintokens: false } } },
     };
   }
 
@@ -127,54 +153,103 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   }
   const baseArgs = () => [paths.mainJs, '--datapath', paths.dataPath, ...npmGuardArgs()];
 
-  // ── first-start accounts ──
+  // ── life cycle ──
+  // `epoch` goes up at every stop(); a bootstrap or a start that began before it ends with ECANCEL at its next step instead of going on.
+  let epoch = 0;
+  const cancelled = () => coded('Stopped.', 'ECANCEL');
+  const sleep = (ms) => new Promise((r) => timers.setTimeout(r, ms));
   let child = null;       // the running MeshCentral process, if any
   const isRunning = () => !!child;
-
-  const runExec = (args) => new Promise((resolve) => {
-    execFile(process.execPath, args, { cwd: runtimeDir, env: baseEnv(), timeout: BOOTSTRAP_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-      resolve({ err, out: `${stdout || ''}${stderr ? `\n${stderr}` : ''}` });
-    });
+  let stopping = false, starting = null, restartTimer = null, stableTimer = null, exitWaiters = [];
+  // A pause that stop() and a process exit cut short.
+  const nap = (ms) => new Promise((resolve) => {
+    const h = timers.setTimeout(resolve, ms);
+    exitWaiters.push(() => { timers.clearTimeout(h); resolve(); });
   });
-  const tailLines = (text, secrets, n = 4) => {
-    let t = String(text || '');
-    for (const sec of secrets) if (sec) t = t.split(sec).join('[secret]');
-    return t.split(/\r?\n/).map((l) => clean(l, 200).trim()).filter(Boolean).slice(-n).join(' | ');
-  };
 
-  // Creates the accounts once, while the server is stopped (MeshCentral writes straight to its database and exits: meshcentral.js:1038-1112).
-  // Passwords are made first and kept in accounts.pending.json (0600) until both accounts exist, so a failure half way can be retried.
+  // ── first-start accounts ──
+  const bootProcs = new Set();   // { proc, done } for every account command that is running
+  const runExec = (args) => {
+    const entry = { proc: null, done: null };
+    entry.done = new Promise((resolve) => {
+      let settled = false;
+      const finish = (err, stdout, stderr) => { if (settled) return; settled = true; bootProcs.delete(entry); resolve({ err, out: `${stdout || ''}${stderr ? `\n${stderr}` : ''}` }); };
+      try {
+        entry.proc = execFile(process.execPath, args, { cwd: runtimeDir, env: baseEnv(), timeout: BOOTSTRAP_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, finish) || null;
+      } catch (e) { finish(e, '', ''); }
+    });
+    bootProcs.add(entry);
+    return entry.done;
+  };
+  const tailLines = (text, secrets, n = 4) => redact(text, secrets).split(/\r?\n/).map((l) => clean(l, 200).trim()).filter(Boolean).slice(-n).join(' | ');
+
+  // SIGTERM to every account command, SIGKILL after 5 s, and wait until they are gone.
+  async function stopBootProcs() {
+    const list = [...bootProcs];
+    if (!list.length) return;
+    for (const b of list) { try { if (b.proc && b.proc.kill) b.proc.kill('SIGTERM'); } catch { /* gone */ } }
+    const all = Promise.all(list.map((b) => b.done));
+    let killer;
+    const late = new Promise((r) => { killer = timers.setTimeout(() => { for (const b of list) { try { if (b.proc && b.proc.kill) b.proc.kill('SIGKILL'); } catch { /* gone */ } } r('kill'); }, BOOT_KILL_AFTER_MS); });
+    const first = await Promise.race([all.then(() => 'done'), late]);
+    timers.clearTimeout(killer);
+    if (first === 'kill') await Promise.race([all, sleep(2000)]);
+  }
+
+  // accounts.json: missing (ENOENT) is the one case that means "not made yet". Any other trouble stops the start with a clear message.
+  function readAccountsStrict() {
+    let a;
+    try { a = readJsonFile(paths.accountsFile); } catch (e) {
+      throw new Error(`The server accounts file could not be read (${clean((e && (e.code || e.name)) || 'error', 40)}). Nothing was changed. Check the file in the connector's data folder, or move it away to make new accounts.`);
+    }
+    if (a === null) return null;
+    const ok = (x) => x && typeof x === 'object' && typeof x.user === 'string' && x.user && typeof x.pass === 'string' && x.pass;
+    if (!a || typeof a !== 'object' || !ok(a.admin) || !ok(a.agent)) {
+      throw new Error('The server accounts file is not in the form this connector wrote. Nothing was changed. Check the file in the connector\'s data folder, or move it away to make new accounts.');
+    }
+    return a;
+  }
+
+  // Creates the accounts while the server is stopped (MeshCentral writes straight to its database and exits: meshcentral.js:1038-1112).
+  // Every attempt makes fresh passwords. No password is ever on a command line: the accounts are made with --hashpass <salt>,<hash> (see hashPassword).
+  // An account that exists already (an earlier attempt) is reset with --resetaccount --hashpass (meshcentral.js:1069-1099: it accepts --hashpass, at :1079-1085,
+  // and also unlocks the account and removes its 2FA) so that the new password is the one that works. accounts.json is written last, only when every step worked.
   async function bootstrap() {
-    if (fs.existsSync(paths.accountsFile)) return { created: false };
+    const my = epoch;
+    const alive = () => { if (epoch !== my) throw cancelled(); };
+    if (readAccountsStrict()) return { created: false };
     if (isRunning()) throw new Error('The server is running; the first accounts can only be made while it is stopped.');
     writeConfig();
-    let pend = null;
-    try { pend = readJsonFile(paths.pendingFile); } catch { pend = null; }
-    const resumed = !!(pend && typeof pend.adminPass === 'string' && typeof pend.agentPass === 'string');
-    if (!resumed) {
-      pend = { adminPass: crypto.randomBytes(24).toString('base64url'), agentPass: crypto.randomBytes(24).toString('base64url'), createdAt: new Date(now()).toISOString() };
-      writeFileAtomic(paths.pendingFile, JSON.stringify(pend));
-    }
-    const secrets = [pend.adminPass, pend.agentPass];
-    const steps = [
-      ['create the admin account', ['--createaccount', 'admin', '--pass', pend.adminPass], true],
-      ['make admin an administrator', ['--adminaccount', 'admin'], false],
-      ['create the agent account', ['--createaccount', 'maestro', '--pass', pend.agentPass], true],
-    ];
-    for (const [what, extra, canExist] of steps) {
+    try { fs.unlinkSync(paths.pendingFile); } catch { /* none, as it should be */ }
+    const accountPass = { admin: crypto.randomBytes(24).toString('base64url'), maestro: crypto.randomBytes(24).toString('base64url') };
+    const secrets = [accountPass.admin, accountPass.maestro];
+    const step = async (what, extra, hashed) => {
+      alive();
       log(`bootstrap: ${what}`);
+      const sec = hashed ? [...secrets, hashed.salt, hashed.hash, hashed.arg] : secrets;
       const { err, out } = await runExec([...baseArgs(), ...extra]);
-      const exists = resumed && canExist && /already exists/i.test(out);   // an earlier try made it with this same password
-      if (!exists && !(/\bDone\./.test(out) && !(err && err.killed))) {
-        throw new Error(`Could not ${what}: ${tailLines(out, secrets) || clean(err && err.message, 120) || 'no output'}`);
+      alive();
+      return { err, out, sec, ok: /\bDone\./.test(out) && !(err && err.killed), what };
+    };
+    const fail = (r) => new Error(`Could not ${r.what}: ${tailLines(r.out, r.sec) || clean(redact(r.err && r.err.message, r.sec), 120) || 'no output'}`);
+    const account = async (user, pass) => {
+      const h = hashPassword(pass);
+      let r = await step(`create the ${user === 'admin' ? 'admin' : 'agent'} account`, ['--createaccount', user, '--hashpass', h.arg], h);
+      if (!r.ok && /already exists/i.test(r.out)) {
+        r = await step(`reset the ${user === 'admin' ? 'admin' : 'agent'} account's password`, ['--resetaccount', user, '--hashpass', h.arg], h);
       }
-    }
+      if (!r.ok) throw fail(r);
+    };
+    await account('admin', accountPass.admin);
+    const adm = await step('make admin an administrator', ['--adminaccount', 'admin'], null);
+    if (!adm.ok) throw fail(adm);
+    await account('maestro', accountPass.maestro);
+    alive();
     writeFileAtomic(paths.accountsFile, JSON.stringify({
-      admin: { user: 'admin', pass: pend.adminPass },
-      agent: { user: 'maestro', pass: pend.agentPass },
+      admin: { user: 'admin', pass: accountPass.admin },
+      agent: { user: 'maestro', pass: accountPass.maestro },
       createdAt: new Date(now()).toISOString(),
     }, null, 2) + '\n');
-    try { fs.unlinkSync(paths.pendingFile); } catch { /* already gone */ }
     return { created: true };
   }
 
@@ -190,13 +265,32 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     write(obj) { fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 }); writeFileAtomic(paths.stateFile, JSON.stringify(obj, null, 2) + '\n'); },
   };
 
-  // ── process ──
-  const st = { startedAt: null, restarts: 0, lastError: null, delayIdx: 0 };
-  let stopping = false, starting = null, restartTimer = null, stableTimer = null, exitWaiters = [];
-  const sleep = (ms) => new Promise((r) => timers.setTimeout(r, ms));
-
-  function rotateLog() {
-    try { if (fs.statSync(paths.logFile).size > LOG_ROTATE_BYTES) fs.renameSync(paths.logFile, `${paths.logFile}.1`); } catch { /* no log yet */ }
+  // ── the log ──
+  // The child's output goes through this writer: meshcentral.log, moved to meshcentral.log.1 whenever it passes 10 MB (two files at most).
+  function openLogWriter() {
+    fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
+    let fd = null, size = 0;
+    const open = () => { fd = fs.openSync(paths.logFile, 'a', 0o600); size = fs.fstatSync(fd).size; };
+    const rotate = () => {
+      try { if (fd !== null) fs.closeSync(fd); } catch { /* closed */ }
+      fd = null;
+      try { fs.renameSync(paths.logFile, `${paths.logFile}.1`); } catch { /* no log yet */ }
+      open();
+    };
+    open();
+    if (size > LOG_ROTATE_BYTES) rotate();
+    return {
+      write(chunk) {
+        if (fd === null) return;
+        try {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+          for (let off = 0; off < buf.length;) off += fs.writeSync(fd, buf, off, buf.length - off);
+          size += buf.length;
+          if (size > LOG_ROTATE_BYTES) rotate();
+        } catch { /* a full disk loses log lines; it must not stop the server */ }
+      },
+      close() { if (fd !== null) { try { fs.closeSync(fd); } catch { /* closed */ } fd = null; } },
+    };
   }
   function logTail(n = 12) {
     try {
@@ -209,38 +303,77 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     } catch { return ''; }
   }
 
+  // ── a process an earlier run left behind ──
+  // meshcentral.pid holds the pid of the process we started. Only a process whose command line has OUR meshcentral.js and OUR --datapath is ever signalled.
+  const procArgs = (pid) => { try { return fs.readFileSync(path.join(procRoot, String(pid), 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { return null; } };
+  const isOurs = (args) => !!args && args.includes(paths.mainJs) && args.some((a, i) => a === '--datapath' && args[i + 1] === paths.dataPath);
+  const removePid = (pid) => {
+    try { if (pid === undefined || fs.readFileSync(paths.pidFile, 'utf8').trim() === String(pid)) fs.unlinkSync(paths.pidFile); } catch { /* none */ }
+  };
+  async function reapOrphan(my) {
+    let raw;
+    try { raw = fs.readFileSync(paths.pidFile, 'utf8').trim(); } catch { return; }
+    const pid = /^\d{1,9}$/.test(raw) ? Number(raw) : 0;
+    const signal = (sig) => {
+      if (!isOurs(procArgs(pid))) return;   // looked at again before every signal: the number may belong to someone else by now
+      try { killPid(pid, sig); } catch (e) { if (!e || e.code !== 'ESRCH') throw e; }
+    };
+    if (pid > 1 && pid !== process.pid && !(child && child.pid === pid) && isOurs(procArgs(pid))) {
+      log('an old MeshCentral process is still running; stopping it');
+      signal('SIGTERM');
+      const t0 = now();
+      let killed = false;
+      while (isOurs(procArgs(pid))) {
+        if (epoch !== my) throw cancelled();
+        const waited = now() - t0;
+        if (!killed && waited >= ORPHAN_TERM_MS) { signal('SIGKILL'); killed = true; }
+        if (killed && waited >= ORPHAN_TERM_MS + 5000) throw new Error('An old MeshCentral process would not stop.');
+        await nap(200);
+      }
+    }
+    removePid();
+  }
+
+  // ── process ──
+  const st = { startedAt: null, restarts: 0, lastError: null, delayIdx: 0 };
+
   function onExit(proc, code, signal) {
     if (child !== proc) return;
     child = null;
+    removePid(proc.pid);
     if (stableTimer) { timers.clearTimeout(stableTimer); stableTimer = null; }
     for (const w of exitWaiters.splice(0)) w();
     if (stopping) return;
     st.lastError = clean(`MeshCentral stopped (${signal || `exit code ${code}`}). ${logTail(3)}`, 400);
+    st.restarts += 1;
+    scheduleRetry('MeshCentral stopped unexpectedly');
+  }
+
+  // The back-off 5 s, 30 s, 2 min, 10 min: after a crash, and after a start that failed before any process was made.
+  function scheduleRetry(why) {
+    if (restartTimer || stopping) return;
     const delay = RESTART_DELAYS_MS[Math.min(st.delayIdx, RESTART_DELAYS_MS.length - 1)];
     st.delayIdx += 1;
-    st.restarts += 1;
-    log(`MeshCentral stopped unexpectedly; restarting in ${Math.round(delay / 1000)} s`);
+    log(`${why}; trying again in ${Math.round(delay / 1000)} s`);
     restartTimer = timers.setTimeout(() => {
       restartTimer = null;
-      start().catch((e) => log('restart failed:', clean(e && e.message, 120)));
+      start().then(() => { if (typeof onRetryReady === 'function') { try { onRetryReady(); } catch { /* not ours to fail */ } } }, (e) => log('restart failed:', clean(e && e.message, 120)));
     }, delay);
     if (restartTimer && restartTimer.unref) restartTimer.unref();
   }
 
-  async function waitReady(proc) {
+  async function waitReady(proc, my) {
     const port = Number(configFor().settings.port);
     const t0 = now();
     for (;;) {
       if (child !== proc) throw new Error(`MeshCentral stopped while starting. ${logTail()}`.trim());
+      if (epoch !== my) throw cancelled();
       if (fs.existsSync(paths.rootCert) && await probe(port, '127.0.0.1').catch(() => false)) return;
       if (now() - t0 >= READY_MS) {
         try { proc.kill('SIGKILL'); } catch { /* gone */ }
         throw new Error(`MeshCentral did not become ready within ${READY_MS / 1000} s. ${logTail()}`.trim());
       }
-      await new Promise((resolve) => {   // wakes early when the process exits
-        const h = timers.setTimeout(resolve, POLL_MS);
-        exitWaiters.push(() => { timers.clearTimeout(h); resolve(); });
-      });
+      await nap(POLL_MS);
     }
   }
 
@@ -250,45 +383,68 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     if (child) return Promise.resolve({ pid: child.pid, already: true });
     stopping = false;
     if (restartTimer) { timers.clearTimeout(restartTimer); restartTimer = null; }
+    const my = epoch;
     starting = (async () => {
-      if (!fs.existsSync(paths.mainJs)) throw new Error('MeshCentral is not installed (Reinstall needed).');
-      writeConfig();
-      fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
-      rotateLog();
-      const fd = fs.openSync(paths.logFile, 'a', 0o600);
-      let proc;
+      let spawned = false;
       try {
-        proc = spawn(process.execPath, baseArgs(), { cwd: runtimeDir, env: { ...baseEnv(), NODE_ENV: 'production' }, stdio: ['ignore', fd, fd] });
-      } finally { fs.closeSync(fd); }
-      child = proc;
-      st.startedAt = now();
-      proc.on('exit', (code, signal) => onExit(proc, code, signal));
-      proc.on('error', (e) => { st.lastError = clean(e && e.message, 200); onExit(proc, null, 'error'); });
-      await waitReady(proc);
-      st.lastError = null;
-      stableTimer = timers.setTimeout(() => { stableTimer = null; st.delayIdx = 0; }, STABLE_MS);
-      if (stableTimer && stableTimer.unref) stableTimer.unref();
-      return { pid: proc.pid, already: false };
+        if (!fs.existsSync(paths.mainJs)) throw coded('MeshCentral is not installed (Reinstall needed).', 'ENOTINSTALLED');
+        writeConfig();
+        fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
+        await reapOrphan(my);
+        if (epoch !== my) throw cancelled();
+        const logw = openLogWriter();
+        let proc;
+        try {
+          proc = spawn(process.execPath, baseArgs(), { cwd: runtimeDir, env: { ...baseEnv(), NODE_ENV: 'production' }, stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (e) { logw.close(); throw e; }
+        spawned = true;
+        child = proc;
+        st.startedAt = now();
+        if (proc.stdout && proc.stderr) {
+          for (const s of [proc.stdout, proc.stderr]) { s.on('data', logw.write); s.on('error', () => {}); }
+          proc.once('close', logw.close);
+        } else proc.once('exit', logw.close);
+        try { writeFileAtomic(paths.pidFile, `${proc.pid}\n`); } catch (e) { log('could not write the pid file:', clean(e && (e.code || e.message), 80)); }
+        proc.on('exit', (code, signal) => onExit(proc, code, signal));
+        proc.on('error', (e) => { st.lastError = clean(e && e.message, 200); onExit(proc, null, 'error'); });
+        await waitReady(proc, my);
+        st.lastError = null;
+        stableTimer = timers.setTimeout(() => { stableTimer = null; st.delayIdx = 0; }, STABLE_MS);
+        if (stableTimer && stableTimer.unref) stableTimer.unref();
+        return { pid: proc.pid, already: false };
+      } catch (e) {
+        if (!spawned && epoch === my && !stopping && e && e.code !== 'ENOTINSTALLED' && e.code !== 'ECANCEL') {
+          st.lastError = clean(`MeshCentral could not be started (${e.message}).`, 400);
+          scheduleRetry('MeshCentral could not be started');
+        }
+        throw e;
+      }
     })();
     const done = () => { starting = null; };
     starting.then(done, done);
     return starting;
   }
 
-  // SIGTERM, then SIGKILL after 10 s. Cancels any pending restart.
+  // Stops everything: account commands (SIGTERM, SIGKILL after 5 s), the server (SIGTERM, SIGKILL after 10 s), pending restarts and a start in progress.
   async function stop() {
+    epoch += 1;
     stopping = true;
     if (restartTimer) { timers.clearTimeout(restartTimer); restartTimer = null; }
     if (stableTimer) { timers.clearTimeout(stableTimer); stableTimer = null; }
+    for (const w of exitWaiters.splice(0)) w();
+    const boot = stopBootProcs();
     const proc = child;
-    if (!proc) return;
-    const gone = new Promise((r) => exitWaiters.push(r));
-    try { proc.kill('SIGTERM'); } catch { /* gone */ }
-    let killer;
-    const killed = new Promise((r) => { killer = timers.setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* gone */ } r(); }, KILL_AFTER_MS); });
-    await Promise.race([gone, killed]);
-    timers.clearTimeout(killer);
-    if (child === proc) await Promise.race([gone, sleep(1000)]);
+    if (proc) {
+      const gone = new Promise((r) => exitWaiters.push(r));
+      try { proc.kill('SIGTERM'); } catch { /* gone */ }
+      let killer;
+      const killed = new Promise((r) => { killer = timers.setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* gone */ } r(); }, KILL_AFTER_MS); });
+      await Promise.race([gone, killed]);
+      timers.clearTimeout(killer);
+      if (child === proc) await Promise.race([gone, sleep(1000)]);
+    }
+    await boot;
+    if (starting) await starting.catch(() => {});
   }
 
   function status() {
@@ -304,4 +460,4 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   return { paths, configFor, writeConfig, npmGuardArgs, bootstrap, accounts, state, start, stop, status, isRunning, logTail };
 }
 
-module.exports = { createMeshServer, writeFileAtomic, tlsProbe, VERSION, GROUP_NAME, RESTART_DELAYS_MS, NPM_GUARD, DNS_RE, IPV4_RE };
+module.exports = { createMeshServer, writeFileAtomic, tlsProbe, hashPassword, redact, VERSION, GROUP_NAME, RESTART_DELAYS_MS, NPM_GUARD, DNS_RE, IPV4_RE, LOG_ROTATE_BYTES };

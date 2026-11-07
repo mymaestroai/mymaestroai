@@ -14,8 +14,9 @@ module.exports = {
         if (h.waiting) return { ok: false, summary: String(h.waiting).slice(0, 300), warnings };
         if (!h.running) return { ok: false, summary: h.lastError ? `The server is not running (${String(h.lastError).slice(0, 200)}).` : 'The server is not running.', warnings };
         if (!h.group) return { ok: false, summary: 'The server runs, but its device group is not ready yet.', warnings };
-        const n = Number(h.computers) || 0;
-        return { ok: true, summary: n ? `The server is running. ${n} computer${n === 1 ? '' : 's'} connected.` : 'The server is running. No computer has been added yet.', warnings };
+        if (h.ok !== true) return { ok: false, summary: String(h.lastError || warnings[0] || 'The control connection is not ready.').slice(0, 300), warnings };
+        const n = Number(h.computers) || 0, on = Number(h.online) || 0;
+        return { ok: true, summary: n ? `The server is running. ${n} computer${n === 1 ? '' : 's'} registered, ${on} online.` : 'The server is running. No computer has been added yet.', warnings };
       } catch (e) {
         return { ok: false, summary: oneLine(e) };
       }

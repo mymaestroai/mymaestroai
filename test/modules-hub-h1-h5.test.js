@@ -20,6 +20,18 @@ const HUB_SECRET = 'cd'.repeat(32);
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const rm = (d) => fs.rmSync(d, { recursive: true, force: true });
 const LOCK = { name: 'x', lockfileVersion: 3, requires: true, packages: { '': { name: 'x', version: '1.0.0', dependencies: { a: '1.0.0' } }, 'node_modules/a': { version: '1.0.0', resolved: 'https://registry.example.com/a/-/a-1.0.0.tgz', integrity: 'sha512-AAAA' } } };
+/** A fake `npm ci`: makes node_modules/<dep>/package.json at the locked version for each top-level dependency of the lockfile in cwd. */
+function fakeCi(before) {
+  return async (args, cwd, opts) => {
+    if (before) before(args, cwd, opts);
+    const lock = JSON.parse(fs.readFileSync(path.join(cwd, 'package-lock.json'), 'utf8'));
+    for (const n of Object.keys(lock.packages[''].dependencies || {})) {
+      const d = path.join(cwd, 'node_modules', n); fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: n, version: lock.packages[`node_modules/${n}`].version }));
+    }
+    return 'added 1 package';
+  };
+}
 const BASE = { id: 'demo', name: 'Demo', category: 'Test', summary: 'A test module.', risk: 'read', server: { type: 'mcp-stdio', script: 'server.js' }, tools: { peek: 'read', echo: 'write' } };
 const SETUP = { steps: [{ id: 'install', type: 'install', title: 'Install' }, { id: 'done', type: 'finish', title: 'Finish' }] };
 const SERVER = `
@@ -35,7 +47,7 @@ process.stdin.on('data', (d) => {
     if (m.method === 'initialize') out({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'x', version: '1' } } });
     else if (m.method === 'tools/list') out({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'peek', inputSchema: { type: 'object', properties: {} } }, { name: 'echo', inputSchema: { type: 'object', properties: {} } }] } });
     else if (m.method === 'tools/call') {
-      if (m.params.arguments && m.params.arguments.ask) out({ jsonrpc: '2.0', id: 'hub-9', method: 'hub/approve', params: { agent: 'sam', title: 'ok?' } });
+      if (m.params.arguments && m.params.arguments.ask) out({ jsonrpc: '2.0', id: 'hub-9', method: 'hub/approve', params: { call: m.params.arguments.__call, title: 'ok?' } });
       out({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: JSON.stringify({ args: m.params.arguments, runtime: process.env.MODULE_RUNTIME_DIR || null }) }] } });
     } else if (m.id && m.id.startsWith && m.id.startsWith('hub-')) process.stderr.write('HUBANSWER ' + JSON.stringify(m) + '\\n');
   }
@@ -60,7 +72,7 @@ function makeRoot(extra = {}, { lock = LOCK, withRuntimeFiles = true } = {}) {
 
 async function withGuard(extra, fn, { preInstall = false, env = {} } = {}) {
   const r = makeRoot(extra);
-  if (preInstall) await installer.installRuntime({ dataDir: r.data, id: 'demo', moduleDir: r.md, runtime: { lockfile: 'runtime' }, runNpm: async () => 'ok' });
+  if (preInstall) await installer.installRuntime({ dataDir: r.data, id: 'demo', moduleDir: r.md, runtime: { lockfile: 'runtime' }, runNpm: fakeCi() });
   const g = spawn(process.execPath, [GUARD, 'demo', '--root', r.root, '--data', r.data, '--state', path.join(r.dir, 'modules.json'), '--connectors', path.join(r.dir, 'connectors.json')],
     { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH, MYMAESTRO_HUB_SECRET: HUB_SECRET, MODULE_RUNTIME_DIR: '/forged', ...env } });
   const out = []; const err = []; let buf = '';
@@ -90,6 +102,14 @@ function rig(o = {}) {
   const up = (extra = {}) => cx.upsert({ id: 'rc', label: 'Remote computers', kind: 'mcp', command: process.execPath, args: ['x'], module: 'rc', enabled: true, ...extra }, { byModule: true });
   const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
   return { cx, dir, all, up, tick, done: () => { cx.shutdown(); rm(dir); } };
+}
+
+/** An agent's tool call on connector `id` (already finished): the __call id the hub put in its arguments. */
+async function callAs(r, agent, id = 'rc') {
+  const s = (await r.cx.toolSpecsFor(agent)).find(x => x.connector === id);
+  await s.handler({});
+  const cl = r.all.find(c => c.calls.some(k => k.args.__call && c.calls[c.calls.length - 1] === k) && c.opts.env.CONNECTOR_ID === id);
+  return { id: cl.calls[cl.calls.length - 1].args.__call, client: cl };
 }
 
 // ---- H1: caller identity ----
@@ -166,6 +186,30 @@ test('H1 guard: opted-in module sees __agent, others never; the audit names the 
   });
 });
 
+test('R1 guard: __call is kept like __agent for an opted-in module (approvals), dropped for others, never audited, never from a hub call', async () => {
+  const ID = '11111111-2222-4333-8444-555555555555';
+  await withGuard({ approvals: true }, async ({ call, dir, until }) => {
+    const e = await call(2, 'echo', { __call: ID, k: 1 });
+    assert.deepStrictEqual(e.args, { k: 1, __call: ID });
+    const p = await call(3, 'peek', { __call: ID });
+    assert.strictEqual(p.args.__call, ID);
+    assert.ok(!('__call' in (await call(4, 'echo', { __call: 42 })).args), 'only a string counts');
+    assert.ok(!('__call' in (await call(5, 'echo', { __call: 'not an id' })).args), 'only an id shaped like the hub makes');
+    await until(() => fs.existsSync(path.join(dir, 'modules', 'demo', 'audit.jsonl')) && /"decision":"done"/.test(fs.readFileSync(path.join(dir, 'modules', 'demo', 'audit.jsonl'), 'utf8')));
+    // (this test server echoes its arguments as the reply, so the reply text of a "done" line is not looked at)
+    const lines = fs.readFileSync(path.join(dir, 'modules', 'demo', 'audit.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    const allowed = lines.filter(l => l.decision === 'allowed');
+    assert.ok(allowed.length >= 1);
+    assert.ok(allowed.every(l => !('__call' in l.args) && !JSON.stringify(l).includes(ID)), 'the call id is never written to the audit log');
+  });
+  await withGuard({}, async ({ call }) => {
+    assert.deepStrictEqual((await call(2, 'echo', { __call: ID, k: 1 })).args, { k: 1 }, 'a module that did not opt in never sees it');
+  });
+  await withGuard({ approvals: true }, async ({ call }) => {
+    assert.ok(!('__call' in (await call(2, 'echo', { __call: ID, __hub: HUB_SECRET })).args), 'a hub call carries none');
+  });
+});
+
 // ---- H2: hub/approve ----
 test('H2 manifest: approvals is a boolean only', () => {
   const p = (v) => manifestLib.validateManifest({ ...BASE, approvals: v }, 'demo').problems.join('|');
@@ -188,19 +232,151 @@ test('H2 guard: hub/approve passes up only when the manifest has approvals', asy
 test('H2 connectors: allow, deny and timeout travel back; the request names the module and the agent', async () => {
   const asked = []; const answers = [{ decision: 'allow', by: 'owner' }, { decision: 'deny', by: 'owner' }, { decision: 'deny', by: 'timeout' }, { decision: 'deny', by: 'cancelled' }];
   const fake = { request: (spec) => { asked.push(spec); return { id: `ap${asked.length}`, promise: Promise.resolve(answers[asked.length - 1]) }; } };
-  const r = rig({ getApprovals: () => fake });
+  const clock = { t: 1000000 };
+  const r = rig({ getApprovals: () => fake, now: () => clock.t });
   try {
-    r.up({ approvals: true });
-    await r.cx.callTool('rc', 'one', {});
-    const cl = r.all[0];
-    for (let i = 1; i <= 4; i++) { cl.emit('request', { id: i, method: 'hub/approve', params: { agent: 'sam', title: 'Open the door', detail: 'Because.', minutes: i === 1 ? 5 : undefined } }); await r.tick(); }
+    r.up({ approvals: true, agents: ['sam'] });
+    const cl = (await callAs(r, 'sam')).client;
+    for (let i = 1; i <= 4; i++) { const call = (await callAs(r, 'sam')).id; cl.emit('request', { id: i, method: 'hub/approve', params: { call, title: 'Open the door', detail: 'Because.', minutes: i === 1 ? 5 : undefined } }); await r.tick(); clock.t += 16000; }
     assert.deepStrictEqual(cl.responses.map(x => x.result.decision), ['allow', 'deny', 'timeout', 'deny']);
     assert.deepStrictEqual(cl.responses.map(x => x.id), [1, 2, 3, 4]);
     const s = asked[0];
     assert.deepStrictEqual([s.agent, s.tool, s.cls, s.summary, s.origin, s.timeoutMs], ['sam', 'rc', 'module', 'Open the door', 'module:rc', 300000]);
     assert.deepStrictEqual(s.detail, { module: 'Remote computers', text: 'Because.' }, 'the card shows the module display name');
     assert.deepStrictEqual(s.input, { title: 'Open the door' });
-    assert.strictEqual(asked[1].timeoutMs, 600000, 'default 10 minutes');
+    assert.strictEqual(asked[1].timeoutMs, 240000, 'default 4 minutes');
+  } finally { r.done(); }
+});
+
+test('R1 connectors: __call is added next to __agent for an opted-in module, never forged, dropped for others', async () => {
+  const r = rig();
+  try {
+    r.up({ approvals: true, callerIdentity: true });
+    r.cx.upsert({ id: 'rc2', label: 'Other', kind: 'mcp', command: process.execPath, args: ['x'], module: 'rc2', enabled: true, agents: ['sam'], callerIdentity: true }, { byModule: true });
+    const spec = async (agent, id) => (await r.cx.toolSpecsFor(agent)).find(s => s.connector === id);
+    await (await spec('owner', 'rc')).handler({ x: 1, __call: 'forged', __agent: 'forged' });
+    const a = r.all[0].calls[0].args;
+    assert.match(a.__call, /^[0-9a-f-]{36}$/);
+    assert.strictEqual(a.__agent, 'owner');
+    assert.strictEqual(a.x, 1);
+    await (await spec('owner', 'rc')).handler({});
+    assert.notStrictEqual(r.all[0].calls[1].args.__call, a.__call, 'a new id for every call');
+    await (await spec('sam', 'rc2')).handler({ __call: 'forged', y: 2 });
+    const rc2 = r.all.find(c => c.calls.some(k => k.args.y === 2));
+    assert.deepStrictEqual(rc2.calls[0].args, { y: 2, __agent: 'sam' }, 'a module that did not opt in gets no __call, and a forged one is dropped');
+    await r.cx.callTool('rc', 'one', { __call: 'forged' }, { hub: true });
+    assert.ok(!('__call' in r.all[0].calls[2].args), 'a hub call carries none');
+    await r.cx.callTool('rc', 'one', { __call: 'forged' });
+    assert.ok(!('__call' in r.all[0].calls[3].args), 'a call outside an agent turn carries none');
+  } finally { r.done(); }
+});
+
+test('R1 connectors: the agent on the card is the hub record of the call; unknown, other-connector and expired ids are refused', async () => {
+  const asked = [];
+  const fake = { request: (spec) => { asked.push(spec); return { id: 'x', promise: Promise.resolve({ decision: 'allow', by: 'owner' }) }; } };
+  const clock = { t: 5000000 };
+  const r = rig({ getApprovals: () => fake, now: () => clock.t });
+  try {
+    r.up({ approvals: true, agents: ['sam'] });
+    r.cx.upsert({ id: 'rc2', label: 'Other', kind: 'mcp', command: process.execPath, args: ['x'], module: 'rc2', enabled: true, agents: ['sam'], approvals: true }, { byModule: true });
+    const one = await callAs(r, 'sam', 'rc');
+    const two = await callAs(r, 'sam', 'rc2');
+    const ask = async (cl, params) => { const id = cl.responses.length + cl.errors.length + 1; cl.emit('request', { id, method: 'hub/approve', params }); await r.tick(); clock.t += 16000; return cl.errors.find(e => e.id === id) || cl.responses.find(x => x.id === id); };
+    // a name the module sends is ignored: the hub's record of the caller wins
+    const ok = await ask(one.client, { call: one.id, agent: 'owner', title: 'Open it' });
+    assert.deepStrictEqual(ok.result, { decision: 'allow' });
+    assert.strictEqual(asked[0].agent, 'sam');
+    // no call id, a made-up one, another connector's: refused, nothing reaches the owner
+    for (const call of [undefined, 'nope', '00000000-0000-4000-8000-000000000000', two.id]) {
+      const e = await ask(one.client, { call, title: 'Open it' });
+      assert.strictEqual(e.code, -32602, String(call));
+      assert.match(e.message, call === undefined ? /needs call/ : /not tied to a live tool call/);
+    }
+    assert.strictEqual(asked.length, 1);
+    // an old agent-only form is refused too
+    assert.strictEqual((await ask(one.client, { agent: 'sam', title: 'Open it' })).code, -32602);
+    // the id lives 5 seconds after its call returned
+    const fresh = await callAs(r, 'sam', 'rc');
+    clock.t += 4000;
+    assert.deepStrictEqual((await ask(fresh.client, { call: fresh.id, title: 'again' })).result, { decision: 'allow' });
+    const old = await callAs(r, 'sam', 'rc');
+    clock.t += 6000;
+    const gone = await ask(old.client, { call: old.id, title: 'late' });
+    assert.strictEqual(gone.code, -32602);
+    assert.match(gone.message, /not tied to a live tool call/);
+    assert.strictEqual(asked.length, 2);
+  } finally { r.done(); }
+});
+
+test('R1 connectors: an agent that lost access cannot ask; a running call keeps its id until it returns plus 5 s', async () => {
+  const asked = [];
+  const fake = { request: (spec) => { asked.push(spec); return { id: 'x', promise: Promise.resolve({ decision: 'allow', by: 'owner' }) }; } };
+  const clock = { t: 9000000 };
+  const r = rig({ getApprovals: () => fake, now: () => clock.t });
+  try {
+    r.up({ approvals: true, agents: ['sam'] });
+    let release;
+    const { id: call, client: cl } = await callAs(r, 'sam');
+    // a call still running: hold the next one open
+    cl.callTool = async function (name, args) { this.calls.push({ name, args }); await new Promise(res => { release = res; }); return { content: [{ type: 'text', text: 'ok' }] }; };
+    const slow = (await r.cx.toolSpecsFor('sam')).find(s => s.connector === 'rc').handler({});
+    await r.tick();
+    const live = cl.calls[cl.calls.length - 1].args.__call;
+    clock.t += 100000;   // inside the callTimeout + 60 s ceiling
+    cl.emit('request', { id: 1, method: 'hub/approve', params: { call: live, title: 'during' } }); await r.tick();
+    assert.deepStrictEqual(cl.responses[0].result, { decision: 'allow' }, 'a long call keeps its id while it runs');
+    release(); await slow;
+    clock.t += 16000;
+    cl.emit('request', { id: 2, method: 'hub/approve', params: { call: live, title: 'after' } }); await r.tick();
+    assert.strictEqual(cl.errors[0].code, -32602, 'more than 5 s after the call returned');
+    assert.strictEqual(asked.length, 1);
+  } finally { r.done(); }
+});
+
+test('R1 connectors: a lead that stopped being lead (no grant) is refused at approve time', async () => {
+  const asked = [];
+  const fake = { request: (spec) => { asked.push(spec); return { id: 'x', promise: Promise.resolve({ decision: 'allow', by: 'owner' }) }; } };
+  const leads = ['owner'];
+  const r = rig({ getApprovals: () => fake, leadNames: () => leads });
+  try {
+    r.up({ approvals: true, agents: [] });
+    const { id: call, client: cl } = await callAs(r, 'owner');
+    leads.length = 0;   // the connector is still running, the agent is no longer granted
+    cl.emit('request', { id: 1, method: 'hub/approve', params: { call, title: 'revoked' } }); await r.tick();
+    assert.strictEqual(cl.errors[0].code, -32000);
+    assert.match(cl.errors[0].message, /no longer has access/);
+    assert.strictEqual(asked.length, 0);
+    leads.push('owner');
+    cl.emit('request', { id: 2, method: 'hub/approve', params: { call, title: 'back' } }); await r.tick();
+    assert.deepStrictEqual(cl.responses[0].result, { decision: 'allow' });
+  } finally { r.done(); }
+});
+
+test('R1 connectors: at most 1 request per 15 s and 20 per hour per connector', async () => {
+  const fake = { request: () => ({ id: 'x', promise: Promise.resolve({ decision: 'allow', by: 'owner' }) }) };
+  const clock = { t: 20000000 };
+  const r = rig({ getApprovals: () => fake, now: () => clock.t });
+  try {
+    r.up({ approvals: true, agents: ['sam'] });
+    const cl = (await callAs(r, 'sam')).client;
+    const ask = async () => { const call = (await callAs(r, 'sam')).id; const id = cl.responses.length + cl.errors.length + 1; cl.emit('request', { id, method: 'hub/approve', params: { call, title: 't' } }); await r.tick(); return cl.errors.find(e => e.id === id) || cl.responses.find(x => x.id === id); };
+    assert.ok((await ask()).result);
+    clock.t += 14000;
+    const quick = await ask();
+    assert.strictEqual(quick.code, -32000);
+    assert.strictEqual(quick.message, 'Too many approvals asked; try again later');
+    // 20 an hour: the 20th goes through at 16 s intervals (all inside the hour), the 21st is refused
+    let n = 1;
+    for (; n < 20; n++) { clock.t += 16000; const a = await ask(); assert.ok(a.result, `ask ${n + 1}`); }
+    // keep the call alive: a new one for the clock now
+    clock.t += 16000;
+    const again = await callAs(r, 'sam');
+    cl.emit('request', { id: 100, method: 'hub/approve', params: { call: again.id, title: 't' } }); await r.tick();
+    assert.strictEqual(cl.errors.find(e => e.id === 100).message, 'Too many approvals asked; try again later');
+    clock.t += 60 * 60 * 1000;
+    const later = await callAs(r, 'sam');
+    cl.emit('request', { id: 101, method: 'hub/approve', params: { call: later.id, title: 't' } }); await r.tick();
+    assert.ok(cl.responses.find(x => x.id === 101), 'room again an hour later');
   } finally { r.done(); }
 });
 
@@ -209,30 +385,29 @@ test('H2 connectors: refused without the flag, when disabled, and for bad parame
   const fake = { request: (spec) => { asked.push(spec); return { id: 'x', promise: Promise.resolve({ decision: 'allow', by: 'owner' }) }; } };
   const r = rig({ getApprovals: () => fake });
   try {
-    r.up({ approvals: true });
-    await r.cx.callTool('rc', 'one', {});
-    const cl = r.all[0];
+    r.up({ approvals: true, agents: ['sam'] });
+    const { id: call, client: cl } = await callAs(r, 'sam');
     const ask = async (id, params) => { cl.emit('request', { id, method: 'hub/approve', params }); await r.tick(); };
-    for (const [i, p] of [[1, {}], [2, { agent: 'sam' }], [3, { agent: 'sam', title: '   ' }], [4, { agent: 7, title: 't' }], [5, { agent: 'sam', title: 't', minutes: 0 }], [6, { agent: 'sam', title: 't', minutes: 61 }],
-      [7, { agent: 'sam', title: 't', minutes: 1.5 }], [8, { agent: 'sam', title: 't', minutes: '5' }], [9, { agent: 'sam', title: 't', detail: 5 }], [10, null], [11, 'text']]) {
+    for (const [i, p] of [[1, {}], [2, { call }], [3, { call, title: '   ' }], [4, { call: 7, title: 't' }], [5, { call, title: 't', minutes: 0 }], [6, { call, title: 't', minutes: 6 }],
+      [7, { call, title: 't', minutes: 1.5 }], [8, { call, title: 't', minutes: '5' }], [9, { call, title: 't', detail: 5 }], [10, null], [11, 'text'], [12, { call, title: 't', minutes: 60 }]]) {
       await ask(i, p);
       const e = cl.errors.find(x => x.id === i);
       assert.ok(e && e.code === -32602, `bad params ${i}`);
     }
     assert.strictEqual(asked.length, 0, 'nothing reached the owner');
-    await ask(20, { agent: 'sam', title: `Line\u0000one\u001b[31m\n${'t'.repeat(200)}`, detail: `a\u0000b${'d'.repeat(900)}` });
+    await ask(20, { call, title: `Line\u0000one\u001b[31m\n${'t'.repeat(200)}`, detail: `a\u0000b${'d'.repeat(900)}` });
     assert.strictEqual(asked.length, 1);
     assert.ok(asked[0].summary.length <= 80 && !/[\u0000-\u001f]/.test(asked[0].summary), 'title is one clean line of at most 80');
     assert.ok(asked[0].detail.text.length <= 600 && !asked[0].detail.text.includes('\u0000'));
     // a module without the flag
     r.up({ id: 'rc3', module: 'rc3', approvals: false });
     await r.cx.callTool('rc3', 'one', {});
-    r.all[1].emit('request', { id: 1, method: 'hub/approve', params: { agent: 'sam', title: 't' } }); await r.tick();
+    r.all[1].emit('request', { id: 1, method: 'hub/approve', params: { call, title: 't' } }); await r.tick();
     assert.strictEqual(r.all[1].errors[0].code, -32601);
     // a switched-off connector (started by setup) is refused
     r.up({ id: 'rc4', module: 'rc4', approvals: true, enabled: false });
     await r.cx.callTool('rc4', 'one', {});
-    r.all[2].emit('request', { id: 1, method: 'hub/approve', params: { agent: 'sam', title: 't' } }); await r.tick();
+    r.all[2].emit('request', { id: 1, method: 'hub/approve', params: { call, title: 't' } }); await r.tick();
     assert.strictEqual(r.all[2].errors[0].code, -32000);
     assert.match(r.all[2].errors[0].message, /switched off/);
     assert.strictEqual(asked.length, 1);
@@ -242,31 +417,78 @@ test('H2 connectors: refused without the flag, when disabled, and for bad parame
 test('H2 connectors: at most 3 open requests per module', async () => {
   const pend = [];
   const fake = { request: () => ({ id: 'x', promise: new Promise(res => pend.push(res)) }) };
-  const r = rig({ getApprovals: () => fake });
+  const clock = { t: 30000000 };
+  const r = rig({ getApprovals: () => fake, now: () => clock.t });
   try {
-    r.up({ approvals: true });
-    await r.cx.callTool('rc', 'one', {});
-    const cl = r.all[0];
-    for (let i = 1; i <= 4; i++) cl.emit('request', { id: i, method: 'hub/approve', params: { agent: 'sam', title: 't' } });
-    await r.tick();
+    r.up({ approvals: true, agents: ['sam'] });
+    const cl = (await callAs(r, 'sam')).client;
+    const ask = async (id) => { const call = (await callAs(r, 'sam')).id; cl.emit('request', { id, method: 'hub/approve', params: { call, title: 't' } }); await r.tick(); clock.t += 16000; };
+    for (let i = 1; i <= 4; i++) await ask(i);
     assert.strictEqual(pend.length, 3);
     assert.strictEqual(cl.errors.length, 1);
+    assert.match(cl.errors[0].message, /waiting for the owner/);
     pend.forEach(res => res({ decision: 'allow' })); await r.tick();
-    cl.emit('request', { id: 5, method: 'hub/approve', params: { agent: 'sam', title: 't' } }); await r.tick();
+    await ask(5);
     assert.strictEqual(pend.length, 4, 'room again once they are answered');
   } finally { r.done(); }
+});
+
+test('R1 connectors: open approvals are denied when the module exits, stops, is switched off or locked', async () => {
+  for (const how of ['exit', 'stop', 'disable', 'lock']) {
+    const events = [];
+    const ap = createApprovals({ onEvent: (e) => events.push(e), log: () => {} });
+    const r = rig({ getApprovals: () => ap });
+    try {
+      if (how === 'lock') r.cx.upsert({ id: 'rc', label: 'Remote computers', kind: 'mcp', command: process.execPath, args: ['x'], module: 'rc', enabled: true, approvals: true, agents: ['sam'], protect: 'own' }, { byModule: true, newPassphrase: 'longenough1' });
+      else r.up({ approvals: true, agents: ['sam'] });
+      const { id: call, client: cl } = await callAs(r, 'sam');
+      cl.emit('request', { id: 1, method: 'hub/approve', params: { call, title: 'Open' } }); await r.tick();
+      assert.strictEqual(ap.list().length, 1, how);
+      if (how === 'exit') cl.emit('exit', { code: 1 });
+      else if (how === 'stop') r.cx.stop('rc');
+      else if (how === 'disable') r.cx.upsert({ id: 'rc', enabled: false }, { byModule: true });
+      else r.cx.lock('rc');
+      await r.tick();
+      assert.strictEqual(ap.list().length, 0, `no orphan card after ${how}`);
+      assert.ok(events.some(e => e.type === 'approval_resolved' && e.decision === 'deny'), how);
+    } finally { r.done(); }
+  }
+});
+
+test('R1 approvals: a module request ignores "remember" and cancelOrigin denies by origin only', async () => {
+  const allowances = { added: [], add(k, ms) { this.added.push([k, ms]); } };
+  const ap = createApprovals({ allowances, log: () => {} });
+  const a = ap.request({ agent: 'sam', tool: 'rc', input: {}, cls: 'module', summary: 's', allowKey: 'sam|module', origin: 'module:rc' });
+  const out = ap.resolve(a.id, 'allow', { remember: '1h' });
+  assert.strictEqual(out.remember, null);
+  assert.deepStrictEqual(allowances.added, []);
+  const b = ap.request({ agent: 'sam', tool: 'rc', input: { n: 1 }, cls: 'module', summary: 's', origin: 'module:rc' });
+  const c = ap.request({ agent: 'sam', tool: 'x', input: {}, cls: 'send', summary: 's', origin: 'module:other' });
+  const d = ap.request({ agent: 'sam', tool: 'y', input: {}, cls: 'send', summary: 's' });
+  assert.strictEqual(ap.cancelOrigin('module:rc'), 1);
+  assert.deepStrictEqual(await b.promise, { decision: 'deny', by: 'cancelled', remember: null });
+  assert.strictEqual(ap.list().length, 2);
+  ap.resolve(c.id, 'deny'); ap.resolve(d.id, 'deny');
+});
+
+test('R1 cards: module requests do not offer "remember" on the desktop or the phone', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const mob = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
+  assert.match(app, /ev\.cls === 'module' \? '' : '<button class="allow-1h"/);
+  assert.match(mob, /ev\.cls === 'module' \? '' : '<button class="ok1h"/);
 });
 
 test('H2 approvals: a module request uses its own wait, shows on the hub event stream without approvalsEnabled, and times out', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const events = [];
   const ap = createApprovals({ onEvent: (e) => events.push(e), log: () => {} });
-  const r = rig({ getApprovals: () => ap });
+  const clock = { t: 40000000 };
+  const r = rig({ getApprovals: () => ap, now: () => clock.t });
   try {
-    r.up({ approvals: true });
-    await r.cx.callTool('rc', 'one', {});
-    const cl = r.all[0];
-    cl.emit('request', { id: 1, method: 'hub/approve', params: { agent: 'sam', title: 'Wake the laptop', minutes: 2 } });
+    r.up({ approvals: true, agents: ['sam'] });
+    const first = await callAs(r, 'sam');
+    const cl = first.client;
+    cl.emit('request', { id: 1, method: 'hub/approve', params: { call: first.id, title: 'Wake the laptop', minutes: 2 } });
     await r.tick();
     const ev = events.find(e => e.type === 'approval_request');
     assert.ok(ev, 'approval_request is published: desktop and phone cards and push all listen to it');
@@ -278,7 +500,8 @@ test('H2 approvals: a module request uses its own wait, shows on the hub event s
     assert.deepStrictEqual(cl.responses[0].result, { decision: 'timeout' });
     assert.strictEqual(ap.list().length, 0);
     // and an owner answer
-    cl.emit('request', { id: 2, method: 'hub/approve', params: { agent: 'sam', title: 'Again' } });
+    clock.t += 16000;
+    cl.emit('request', { id: 2, method: 'hub/approve', params: { call: (await callAs(r, 'sam')).id, title: 'Again' } });
     await r.tick();
     assert.ok(ap.resolve(ap.list()[0].id, 'allow').ok);
     await r.tick();
@@ -409,7 +632,7 @@ test('H4 installer: copies the two files, runs npm ci with the safe flags and th
   const r = makeRoot({ runtime: { lockfile: 'runtime', timeoutSec: 120 } });
   try {
     const calls = [];
-    const runNpm = async (args, cwd, opts) => { calls.push({ args, cwd, opts, files: fs.readdirSync(cwd).sort() }); return 'added 1 package'; };
+    const runNpm = fakeCi((args, cwd, opts) => { calls.push({ args, cwd, opts, files: fs.readdirSync(cwd).sort() }); });
     const rt = { lockfile: 'runtime', timeoutSec: 120 };
     assert.strictEqual(installer.runtimeInstalled(r.data, 'demo', { moduleDir: r.md, runtime: rt }), false);
     const res = await installer.installRuntime({ dataDir: r.data, id: 'demo', moduleDir: r.md, runtime: rt, runNpm });
@@ -454,7 +677,7 @@ test('H4 installer: a failed npm ci leaves nothing that looks installed; a bad l
 
 test('H4 modules: the Install step installs the runtime; status asks for a reinstall when the folder is gone', async () => {
   const calls = [];
-  const r = modulesRig({ runtime: { lockfile: 'runtime' } }, { runNpm: async (args, cwd) => { calls.push({ args, cwd }); return 'ok'; } });
+  const r = modulesRig({ runtime: { lockfile: 'runtime' } }, { runNpm: fakeCi((args, cwd) => { calls.push({ args, cwd }); }) });
   try {
     const step = await r.mods.runStep('demo', 'install', {});
     assert.strictEqual(step.result.runtime, true);
@@ -507,6 +730,74 @@ test('H4/H5 connectors: a module whose runtime install is missing is not started
     assert.strictEqual(r.cx.list().connectors[0].lastError, null);
     assert.throws(() => r.cx.upsert({ id: 'rc', runtimeDir: '/x' }), /belongs to the/);
   } finally { r.done(); }
+});
+
+test('R1 installer: a damaged runtime is not "installed"; Install removes it and runs npm ci again', async () => {
+  const r = makeRoot({});
+  try {
+    const rt = { lockfile: 'runtime' };
+    const dir = path.join(r.data, 'demo', 'runtime');
+    let runs = 0;
+    const runNpm = fakeCi(() => { runs++; });
+    const ok = () => installer.runtimeInstalled(r.data, 'demo', { moduleDir: r.md, runtime: rt });
+    await installer.installRuntime({ dataDir: r.data, id: 'demo', moduleDir: r.md, runtime: rt, runNpm });
+    assert.strictEqual(ok(), true);
+    const damages = [
+      ['node_modules is gone', () => fs.rmSync(path.join(dir, 'node_modules'), { recursive: true })],
+      ['a dependency folder is gone', () => fs.rmSync(path.join(dir, 'node_modules', 'a'), { recursive: true })],
+      ['a dependency has no package.json', () => fs.rmSync(path.join(dir, 'node_modules', 'a', 'package.json'))],
+      ['a dependency is at another version', () => fs.writeFileSync(path.join(dir, 'node_modules', 'a', 'package.json'), JSON.stringify({ name: 'a', version: '9.9.9' }))],
+      ['node_modules is a file', () => { fs.rmSync(path.join(dir, 'node_modules'), { recursive: true }); fs.writeFileSync(path.join(dir, 'node_modules'), 'x'); }],
+    ];
+    for (const [what, damage] of damages) {
+      damage();
+      assert.strictEqual(ok(), false, what);
+      const before = runs;
+      const res = await installer.installRuntime({ dataDir: r.data, id: 'demo', moduleDir: r.md, runtime: rt, runNpm });
+      assert.doesNotMatch(res.log, /already installed/, what);
+      assert.strictEqual(runs, before + 1, `npm ci ran again: ${what}`);
+      assert.strictEqual(ok(), true, `repaired: ${what}`);
+    }
+  } finally { rm(r.dir); }
+});
+
+test('R1 installer: a lockfile whose dependency names climb out of node_modules never counts as installed', async () => {
+  const lock = JSON.parse(JSON.stringify(LOCK)); lock.packages[''].dependencies = { '../escape': '1.0.0' }; lock.packages['node_modules/../escape'] = { version: '1.0.0' };
+  const r = makeRoot({}, { lock });
+  try {
+    const dir = path.join(r.data, 'demo', 'runtime');
+    fs.mkdirSync(path.join(dir, 'node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify(lock));
+    fs.mkdirSync(path.join(dir, 'escape'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'escape', 'package.json'), JSON.stringify({ version: '1.0.0' }));
+    fs.writeFileSync(path.join(dir, installer.RUNTIME_MARK), JSON.stringify({ lockSha256: require('crypto').createHash('sha256').update(fs.readFileSync(path.join(dir, 'package-lock.json'))).digest('hex') }));
+    assert.strictEqual(installer.runtimeInstalled(r.data, 'demo'), false);
+  } finally { rm(r.dir); }
+});
+
+test('R1 installer and modules: a second Install while one runs is refused', async () => {
+  const r = makeRoot({});
+  try {
+    const rt = { lockfile: 'runtime' };
+    let release; let started;
+    const gate = new Promise(res => { started = res; });
+    const first = installer.installRuntime({ dataDir: r.data, id: 'demo', moduleDir: r.md, runtime: rt, runNpm: async (a, cwd) => { started(); await new Promise(res => { release = res; }); return fakeCi()(a, cwd); } });
+    await gate;
+    await assert.rejects(installer.installRuntime({ dataDir: r.data, id: 'demo', moduleDir: r.md, runtime: rt, runNpm: fakeCi() }), /Install is already running/);
+    release(); await first;
+    // and it can run again afterwards
+    assert.match((await installer.installRuntime({ dataDir: r.data, id: 'demo', moduleDir: r.md, runtime: rt, runNpm: fakeCi() })).log, /already installed/);
+  } finally { rm(r.dir); }
+  let release2; let started2;
+  const gate2 = new Promise(res => { started2 = res; });
+  const m = modulesRig({ runtime: { lockfile: 'runtime' } }, { runNpm: async (a, cwd) => { started2(); await new Promise(res => { release2 = res; }); return fakeCi()(a, cwd); } });
+  try {
+    const first = m.mods.runStep('demo', 'install', {});
+    await gate2;
+    await assert.rejects(m.mods.runStep('demo', 'install', {}), /Install is already running/);
+    release2(); await first;
+    await m.mods.runStep('demo', 'install', {});   // the lock was released
+  } finally { m.cleanup(); }
 });
 
 // ---- H5: backups ----

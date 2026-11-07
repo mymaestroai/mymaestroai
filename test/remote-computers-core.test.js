@@ -9,7 +9,8 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { spawn: realSpawn, spawnSync } = require('node:child_process');
 const { loadModule, safeSettings, coerceSettings } = require('../lib/modules/manifest');
-const { createMeshServer, RESTART_DELAYS_MS } = require('../modules/remote-computers/lib/meshserver');
+const { createMeshServer, hashPassword, redact, RESTART_DELAYS_MS, LOG_ROTATE_BYTES } = require('../modules/remote-computers/lib/meshserver');
+const checks = require('../modules/remote-computers/index').checks;
 const { createMeshClient, matchReply, b64, MAX_PAYLOAD, MAX_STRING } = require('../modules/remote-computers/lib/meshclient');
 const { ensureGroup, AGENT_RIGHTS } = require('../modules/remote-computers/lib/setupgroup');
 const { createRemote, TOOLS, NOT_YET, REINSTALL, WAITING } = require('../modules/remote-computers/server');
@@ -58,11 +59,15 @@ function makeClock() {
 }
 
 // A stand-in child process.
-function fakeSpawn({ autoExitOnTerm = true } = {}) {
+function fakeSpawn({ autoExitOnTerm = true, failFirst = 0 } = {}) {
   const calls = [];
+  let attempts = 0;
   const spawn = (file, args, opts) => {
+    if (++attempts <= failFirst) throw new Error('spawn EAGAIN');
     const p = new EventEmitter();
     p.pid = 4000 + calls.length;
+    p.stdout = new EventEmitter();
+    p.stderr = new EventEmitter();
     p.signals = [];
     p.kill = (sig) => {
       p.signals.push(sig);
@@ -85,6 +90,7 @@ function newServer(over = {}) {
   const ms = createMeshServer({
     runtimeDir, home, settings: over.settings || SETTINGS, spawn, now: clock.now, timers: clock.timers,
     execFile: over.execFile, probe: over.probe || (async (port) => { probes.push(port); return true; }), log: (...a) => logs.push(a.join(' ')),
+    ...(over.procRoot ? { procRoot: over.procRoot } : {}), ...(over.killPid ? { killPid: over.killPid } : {}), ...(over.onRetryReady ? { onRetryReady: over.onRetryReady } : {}),
   });
   return { ms, runtimeDir, home, clock, spawn, logs, probes };
 }
@@ -152,7 +158,7 @@ test('configFor builds the MeshCentral settings from the module settings', () =>
     userAllowedIp: '127.0.0.1', agentAllowedIp: '100.64.0.0/10', cookieIpCheck: 'strict',
     agentDownloads: { enabled: true, fetchReleases: false }, autoBackup: false, filesPath: path.join(home, 'meshcentral-files'),
   });
-  assert.deepStrictEqual(c.domains, { '': { title: 'My Maestro computers', newAccounts: false } });
+  assert.deepStrictEqual(c.domains, { '': { title: 'My Maestro computers', newAccounts: false, passwordRequirements: { logintokens: false } } });   // MeshCentral reads domain.passwordrequirements.logintokens === false (meshuser.js:5363,5402) after lower-casing the keys
   for (const k of ['plugins', 'allowLoginToken', 'ignoreAgentHashCheck', 'aliasPort', 'agentAliasPort', 'tlsOffload']) assert.ok(!(k in c.settings), `${k} is not set`);
   assert.strictEqual(ms.configFor({ ...SETTINGS, address_name: 'Hub.Example.TS.net' }).settings.cert, 'hub.example.ts.net');
 });
@@ -202,14 +208,63 @@ test('--npmpath is a command that fails loudly instead of installing', () => {
 });
 
 // ── bootstrap ──
+// A stand-in for execFile: answers on the next tick with `out` (a text or a function of the args and the call number); the returned child records the signals it gets.
 function fakeExec(out = 'Done.\n', fail = null) {
   const calls = [];
-  const execFile = (file, args, opts, cb) => { calls.push({ file, args, opts }); const o = typeof out === 'function' ? out(args, calls.length) : out; setImmediate(() => cb(fail, o, '')); };
+  const execFile = (file, args, opts, cb) => {
+    const proc = new EventEmitter();
+    proc.signals = [];
+    proc.kill = (sig) => { proc.signals.push(sig); return true; };
+    calls.push({ file, args, opts, proc });
+    const o = typeof out === 'function' ? out(args, calls.length) : out;
+    const f = typeof fail === 'function' ? fail(args, calls.length) : fail;
+    setImmediate(() => cb(f, o, ''));
+    return proc;
+  };
   execFile.calls = calls;
   return execFile;
 }
+// An execFile whose commands never end until they are killed (SIGTERM, or only SIGKILL when stubborn); then the callback gets a killed error.
+function hangingExec({ stubborn = false } = {}) {
+  const calls = [];
+  const execFile = (file, args, opts, cb) => {
+    const proc = new EventEmitter();
+    proc.signals = [];
+    proc.kill = (sig) => {
+      proc.signals.push(sig);
+      if (sig === 'SIGKILL' || (sig === 'SIGTERM' && !stubborn)) setImmediate(() => cb(Object.assign(new Error('Command failed'), { killed: true, signal: sig }), '', ''));
+      return true;
+    };
+    calls.push({ file, args, opts, proc });
+    return proc;
+  };
+  execFile.calls = calls;
+  return execFile;
+}
+const hashArgOf = (args) => args[args.indexOf('--hashpass') + 1];
+// The password whose MeshCentral hash is "<salt>,<hash>" (proof that what went on the command line is the hash of what was saved).
+const hashesTo = (arg, pass) => { const [salt, hash] = arg.split(','); return hashPassword(pass, salt).hash === hash; };
 
-test('bootstrap makes the admin and the agent account while stopped, and keeps the passwords private', async () => {
+test('hashPassword is MeshCentral\'s own hash: PBKDF2-SHA384, 12000 rounds, 128 bytes, base64, the salt used as its base64 text', () => {
+  // pass.js:14-17,39-43 of MeshCentral 1.3.1 (and --hashpass "<salt>,<hash>", meshcentral.js:1049-1055). The vector below is
+  // crypto.pbkdf2Sync('correct horse battery staple', salt, 12000, 128, 'sha384') as that function calls it, with the salt string as given.
+  const salt = 'c2FsdC1mb3ItdGhlLXRlc3QtdmVjdG9y';
+  const expected = 'oFJkVzQPJm9cF6Lk/Fp9Yv/sl2KsC14wgGbB+1DcH1hSdYogwmWz9Yrz9OmCdPwtRY5ChVuKxvvNdbNf8Wv3D6izcXrttW4pWhINGQhh7rOwNgafIX8ZiNpjdk5dBQ4CnvaK8xdy5faMfZ4/VDQlzAhq4vULD8CYNLbtms2+sAY=';
+  const h = hashPassword('correct horse battery staple', salt);
+  assert.strictEqual(h.hash, expected);
+  assert.strictEqual(h.salt, salt);
+  assert.strictEqual(h.arg, `${salt},${expected}`);
+  assert.strictEqual(Buffer.from(expected, 'base64').length, 128);
+  // A fresh salt is 128 random bytes as base64 (172 characters); neither part has a comma, so "<salt>,<hash>" splits in two.
+  const f = hashPassword('x');
+  assert.strictEqual(Buffer.from(f.salt, 'base64').length, 128);
+  assert.strictEqual(f.salt.length, 172);
+  assert.strictEqual(f.arg.split(',').length, 2);
+  assert.notStrictEqual(hashPassword('x').salt, f.salt);
+  assert.strictEqual(redact('node m.js --pass abc --hashpass s,h x', ['abc']), 'node m.js --pass [secret] --hashpass [secret] x');
+});
+
+test('bootstrap makes the admin and the agent account while stopped, with a hashed password and never a password on a command line', async () => {
   const execFile = fakeExec();
   const s = newServer({ execFile });
   const r = await s.ms.bootstrap();
@@ -225,18 +280,24 @@ test('bootstrap makes the admin and the agent account while stopped, and keeps t
   assert.ok(Number.isFinite(Date.parse(acc.createdAt)));
   const g = s.ms.npmGuardArgs();
   const mainJs = path.join(s.runtimeDir, 'node_modules', 'meshcentral', 'meshcentral.js');
-  assert.deepStrictEqual(argsOf(0), [mainJs, '--datapath', s.ms.paths.dataPath, ...g, '--createaccount', 'admin', '--pass', acc.admin.pass]);
-  assert.deepStrictEqual(argsOf(1), [mainJs, '--datapath', s.ms.paths.dataPath, ...g, '--adminaccount', 'admin']);
-  assert.deepStrictEqual(argsOf(2), [mainJs, '--datapath', s.ms.paths.dataPath, ...g, '--createaccount', 'maestro', '--pass', acc.agent.pass]);
+  const head = [mainJs, '--datapath', s.ms.paths.dataPath, ...g];
+  assert.deepStrictEqual(argsOf(0), [...head, '--createaccount', 'admin', '--hashpass', hashArgOf(argsOf(0))]);
+  assert.deepStrictEqual(argsOf(1), [...head, '--adminaccount', 'admin']);
+  assert.deepStrictEqual(argsOf(2), [...head, '--createaccount', 'maestro', '--hashpass', hashArgOf(argsOf(2))]);
+  assert.ok(hashesTo(hashArgOf(argsOf(0)), acc.admin.pass), 'the admin hash is the hash of the saved admin password');
+  assert.ok(hashesTo(hashArgOf(argsOf(2)), acc.agent.pass), 'the agent hash is the hash of the saved agent password');
   for (const c of execFile.calls) {
     assert.strictEqual(c.file, process.execPath);
     assert.strictEqual(c.opts.cwd, s.runtimeDir);
     assert.strictEqual(c.opts.timeout, 120000);
     assert.deepStrictEqual(Object.keys(c.opts.env).sort(), ['HOME', 'PATH']);
     assert.strictEqual(c.opts.env.HOME, s.home);
+    assert.ok(!c.args.includes('--pass'), 'no --pass');
+    assert.ok(!c.args.some((a) => a.includes(acc.admin.pass) || a.includes(acc.agent.pass)), 'no password in any argument');
   }
   assert.strictEqual(mode(s.ms.paths.accountsFile), 0o600);
-  assert.ok(!fs.existsSync(s.ms.paths.pendingFile));
+  assert.ok(!fs.existsSync(s.ms.paths.pendingFile), 'no pending file');
+  assert.deepStrictEqual(fs.readdirSync(s.home).filter((n) => n.endsWith('.tmp')), []);
   assert.ok(fs.existsSync(s.ms.paths.configFile), 'the config is written before the accounts are made');
   for (const line of s.logs) assert.ok(!line.includes(acc.admin.pass) && !line.includes(acc.agent.pass), 'no password in a log line');
   // A second call changes nothing.
@@ -244,32 +305,74 @@ test('bootstrap makes the admin and the agent account while stopped, and keeps t
   assert.strictEqual(execFile.calls.length, 3);
 });
 
-test('bootstrap fails without leaking the password when a step does not print Done., and a retry finishes', async () => {
-  let leak = '';
-  const first = fakeExec((args, n) => {
-    if (n === 1) { leak = args[args.indexOf('--pass') + 1]; return 'Done.\n'; }
-    if (n === 2) return 'Done. This command will only work if MeshCentral is stopped.\n';
-    return `Unexpected failure while creating the account\nbad option --pass ${args[args.indexOf('--pass') + 1]}\n`;
-  });
+test('bootstrap does not trust a pending file: it is deleted, and every attempt makes fresh passwords', async () => {
+  const s = newServer({ execFile: fakeExec() });
+  fs.mkdirSync(s.home, { recursive: true });
+  fs.writeFileSync(s.ms.paths.pendingFile, JSON.stringify({ adminPass: 'old-admin-pass', agentPass: 'old-agent-pass' }));
+  await s.ms.bootstrap();
+  const acc = JSON.parse(fs.readFileSync(s.ms.paths.accountsFile, 'utf8'));
+  assert.notStrictEqual(acc.admin.pass, 'old-admin-pass');
+  assert.notStrictEqual(acc.agent.pass, 'old-agent-pass');
+  assert.ok(!fs.existsSync(s.ms.paths.pendingFile));
+});
+
+test('bootstrap fails without leaking a password, salt, hash or command line (stdout, stderr or err.message); a retry converges with a reset', async () => {
+  let first1 = '', failedArgs = null;
+  const first = fakeExec(
+    (args, n) => {
+      if (n === 1) { first1 = hashArgOf(args); return 'Done.\n'; }
+      if (n === 2) return 'Done. This command will only work if MeshCentral is stopped.\n';
+      failedArgs = args;
+      return `Unexpected failure while creating the account\nbad option --hashpass ${hashArgOf(args)}\n`;
+    },
+    (args, n) => (n === 3 ? Object.assign(new Error(`Command failed: ${process.execPath} ${args.join(' ')}\nbad ${hashArgOf(args)}`), { code: 1 }) : null),
+  );
   const s = newServer({ execFile: first });
   await assert.rejects(() => s.ms.bootstrap(), (e) => {
     assert.match(e.message, /Could not create the agent account/);
-    assert.ok(!e.message.includes(leak), 'admin password not in the error');
-    assert.ok(!/--pass [A-Za-z0-9_-]{32}/.test(e.message), 'agent password not in the error');
+    const [salt, hash] = hashArgOf(failedArgs).split(',');
+    for (const secret of [first1, first1.split(',')[0], first1.split(',')[1], hashArgOf(failedArgs), salt, hash]) assert.ok(!e.message.includes(secret), 'no salt or hash in the error');
     assert.match(e.message, /\[secret\]/);
     return true;
   });
-  assert.ok(!fs.existsSync(s.ms.paths.accountsFile));
-  const pend = JSON.parse(fs.readFileSync(s.ms.paths.pendingFile, 'utf8'));
-  assert.strictEqual(pend.adminPass, leak);
-  assert.strictEqual(mode(s.ms.paths.pendingFile), 0o600);
-  // Retry with the same passwords: the admin account exists already, the agent account is made.
-  const second = fakeExec((args) => (args.includes('admin') && args.includes('--createaccount') ? 'User already exists.\n' : 'Done.\n'));
+  assert.ok(!fs.existsSync(s.ms.paths.accountsFile), 'accounts.json is written only after every step worked');
+  assert.ok(!fs.existsSync(s.ms.paths.pendingFile), 'no pending file is kept');
+  // An error with nothing on stdout: err.message (which holds the command line) is redacted too.
+  const quiet = fakeExec('', (args) => Object.assign(new Error(`Command failed: node ${args.join(' ')}`), { code: 1 }));
+  const q = newServer({ execFile: quiet });
+  await assert.rejects(() => q.ms.bootstrap(), (e) => {
+    assert.match(e.message, /Could not create the admin account/);
+    assert.ok(!e.message.includes(hashArgOf(quiet.calls[0].args)) && !e.message.includes(hashArgOf(quiet.calls[0].args).split(',')[0]));
+    return true;
+  });
+  // Retry: the admin account exists (an earlier attempt made it with another password): it is reset to the NEW password, then the rest goes on.
+  const second = fakeExec((args) => (args.includes('--createaccount') && args.includes('admin') ? 'User already exists.\n' : 'Done.\n'));
   const ms2 = createMeshServer({ runtimeDir: s.runtimeDir, home: s.home, settings: SETTINGS, execFile: second, probe: async () => true });
   assert.deepStrictEqual(await ms2.bootstrap(), { created: true });
-  assert.strictEqual(second.calls[0].args[second.calls[0].args.indexOf('--pass') + 1], leak);
-  assert.strictEqual(JSON.parse(fs.readFileSync(ms2.paths.accountsFile, 'utf8')).admin.pass, leak);
-  assert.ok(!fs.existsSync(ms2.paths.pendingFile));
+  const acc = JSON.parse(fs.readFileSync(ms2.paths.accountsFile, 'utf8'));
+  const verbs = second.calls.map((c) => c.args.find((a) => /^--(createaccount|resetaccount|adminaccount)$/.test(a)));
+  assert.deepStrictEqual(verbs, ['--createaccount', '--resetaccount', '--adminaccount', '--createaccount']);
+  const reset = second.calls[1].args;
+  assert.deepStrictEqual(reset.slice(-4), ['--resetaccount', 'admin', '--hashpass', hashArgOf(reset)]);
+  assert.ok(hashesTo(hashArgOf(reset), acc.admin.pass), 'the reset sets the password that is saved');
+  assert.notStrictEqual(hashArgOf(reset), first1, 'a fresh password and salt for the new attempt');
+  assert.ok(hashesTo(hashArgOf(second.calls[3].args), acc.agent.pass));
+  for (const c of second.calls) assert.ok(!c.args.includes('--pass'));
+  // An account that exists but cannot be reset is an error, not a silent success.
+  const stuck = fakeExec('User already exists.\n');
+  await assert.rejects(() => newServer({ execFile: stuck }).ms.bootstrap(), /Could not reset the admin account's password: User already exists/);
+});
+
+test('bootstrap stops with a clear error when accounts.json cannot be read; only a missing file means "not made yet"', async () => {
+  for (const make of [(f) => fs.writeFileSync(f, '{not json'), (f) => fs.mkdirSync(f), (f) => fs.writeFileSync(f, '{"admin":{"user":"admin"},"agent":null}'), (f) => fs.writeFileSync(f, '')]) {
+    const execFile = fakeExec();
+    const s = newServer({ execFile });
+    fs.mkdirSync(s.home, { recursive: true });
+    make(s.ms.paths.accountsFile);
+    await assert.rejects(() => s.ms.bootstrap(), /accounts file (could not be read|is not in the form).*Nothing was changed/);
+    assert.strictEqual(execFile.calls.length, 0, 'no account command was run');
+    assert.ok(fs.existsSync(s.ms.paths.accountsFile), 'the file was left alone');
+  }
 });
 
 test('bootstrap refuses while the server is running, and needs a valid configuration', async () => {
@@ -314,10 +417,10 @@ test('start spawns MeshCentral and is ready once the port answers and the root c
   assert.deepStrictEqual(c.args, [mainJs, '--datapath', s.ms.paths.dataPath, ...s.ms.npmGuardArgs()]);
   assert.strictEqual(c.opts.cwd, s.runtimeDir);
   assert.deepStrictEqual(c.opts.env, { PATH: process.env.PATH, HOME: s.home, NODE_ENV: 'production' });
-  assert.strictEqual(c.opts.stdio[0], 'ignore');
-  assert.strictEqual(typeof c.opts.stdio[1], 'number');
-  assert.strictEqual(c.opts.stdio[1], c.opts.stdio[2]);
+  assert.deepStrictEqual(c.opts.stdio, ['ignore', 'pipe', 'pipe'], 'the output goes through the module\'s bounded log writer');
   assert.strictEqual(mode(s.ms.paths.logFile), 0o600);
+  assert.strictEqual(fs.readFileSync(s.ms.paths.pidFile, 'utf8'), `${c.proc.pid}\n`, 'the pid file names the process');
+  assert.strictEqual(mode(s.ms.paths.pidFile), 0o600);
   const st = s.ms.status();
   assert.strictEqual(st.running, true);
   assert.strictEqual(st.pid, c.proc.pid);
@@ -328,6 +431,7 @@ test('start spawns MeshCentral and is ready once the port answers and the root c
   assert.strictEqual((await s.ms.start()).already, true);
   assert.strictEqual(s.spawn.calls.length, 1);
   await s.ms.stop();
+  assert.ok(!fs.existsSync(s.ms.paths.pidFile), 'a clean stop removes the pid file');
 });
 
 test('start probes the loopback control port', async () => {
@@ -447,6 +551,167 @@ test('stop sends SIGTERM, then SIGKILL after 10 s, and cancels restarts', async 
   assert.strictEqual(crashed.spawn.calls.length, 1, 'no restart after stop');
 });
 
+// ── stop during bootstrap, orphans, the log writer, start retries ──
+test('stop during bootstrap: the account commands get SIGTERM, then SIGKILL after 5 s, stop waits for them, and nothing goes on', async () => {
+  const polite = hangingExec();
+  const s = newServer({ execFile: polite });
+  const b = s.ms.bootstrap();
+  b.catch(() => {});
+  await s.clock.advance(0);
+  assert.strictEqual(polite.calls.length, 1);
+  await s.ms.stop();
+  assert.deepStrictEqual(polite.calls[0].proc.signals, ['SIGTERM']);
+  await assert.rejects(b, (e) => e.code === 'ECANCEL');
+  assert.strictEqual(polite.calls.length, 1, 'no later step ran');
+  assert.ok(!fs.existsSync(s.ms.paths.accountsFile));
+
+  const stubborn = hangingExec({ stubborn: true });
+  const t = newServer({ execFile: stubborn });
+  const b2 = t.ms.bootstrap();
+  b2.catch(() => {});
+  await t.clock.advance(0);
+  let stopped = false;
+  const stopP = t.ms.stop().then(() => { stopped = true; });
+  await t.clock.advance(4999);
+  assert.deepStrictEqual(stubborn.calls[0].proc.signals, ['SIGTERM']);
+  assert.strictEqual(stopped, false, 'stop waits for the command');
+  await t.clock.advance(1);
+  await stopP;
+  assert.deepStrictEqual(stubborn.calls[0].proc.signals, ['SIGTERM', 'SIGKILL']);
+  await assert.rejects(b2, (e) => e.code === 'ECANCEL');
+  assert.strictEqual(stubborn.calls.length, 1);
+});
+
+test('stop before a start spawns anything cancels it: nothing is spawned', async () => {
+  const s = newServer();
+  touchCert(s.ms);
+  fs.mkdirSync(s.home, { recursive: true });
+  const p = s.ms.start();
+  p.catch(() => {});
+  await s.ms.stop();
+  await assert.rejects(p, (e) => e.code === 'ECANCEL' || /stopped while starting/.test(e.message));
+  await s.clock.advance(60000);
+  assert.strictEqual(s.spawn.calls.length, 0);
+  assert.ok(!fs.existsSync(s.ms.paths.pidFile));
+});
+
+// A fake /proc: <root>/<pid>/cmdline holds NUL-separated arguments.
+function fakeProc(s, pid, args) {
+  const root = tmp();
+  const dir = path.join(root, String(pid));
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'cmdline'), `${args.join('\0')}\0`);
+  return { root, dir };
+}
+const ourArgs = (s) => [process.execPath, s.ms.paths.mainJs, '--datapath', s.ms.paths.dataPath, '--npmpath', 'x'];
+
+test('an orphan from an earlier run is stopped before the new start: SIGTERM, SIGKILL after 10 s, and only when its command line is ours', async () => {
+  const base = newServer({});   // gives the home and runtime folder that the fake processes below belong to
+  // 1. a polite orphan: gone after SIGTERM
+  const sig = [];
+  const fp = fakeProc(base, 777, ourArgs(base));
+  const polite = newServer({ home: base.home, runtimeDir: base.runtimeDir, procRoot: fp.root, killPid: (pid, signal) => { sig.push([pid, signal]); fs.rmSync(fp.dir, { recursive: true, force: true }); } });
+  touchCert(polite.ms);
+  fs.writeFileSync(polite.ms.paths.pidFile, '777\n');
+  const p = polite.ms.start();
+  await polite.clock.advance(0);
+  await p;
+  assert.deepStrictEqual(sig, [[777, 'SIGTERM']]);
+  assert.strictEqual(fs.readFileSync(polite.ms.paths.pidFile, 'utf8'), `${polite.spawn.calls[0].proc.pid}\n`, 'the pid file now names the new process');
+  await polite.ms.stop();
+
+  // 2. a stubborn one: SIGKILL after 10 s
+  const sig2 = [];
+  const dirs = fakeProc(base, 778, ourArgs(base));
+  const stub = newServer({ home: base.home, runtimeDir: base.runtimeDir, procRoot: dirs.root, killPid: (pid, signal) => { sig2.push([pid, signal]); if (signal === 'SIGKILL') fs.rmSync(dirs.dir, { recursive: true, force: true }); } });
+  touchCert(stub.ms);
+  fs.writeFileSync(stub.ms.paths.pidFile, '778\n');
+  const p2 = stub.ms.start();
+  await stub.clock.advance(9000);
+  assert.deepStrictEqual(sig2, [[778, 'SIGTERM']]);
+  assert.strictEqual(stub.spawn.calls.length, 0, 'nothing is spawned while the old one lives');
+  await stub.clock.advance(1500);
+  await p2;
+  assert.deepStrictEqual(sig2, [[778, 'SIGTERM'], [778, 'SIGKILL']]);
+  assert.strictEqual(stub.spawn.calls.length, 1);
+  await stub.ms.stop();
+});
+
+test('an orphan check never signals anything that is not ours: another program, our script with another datapath, a dead pid, junk in the pid file', async () => {
+  const base = newServer({});
+  const cases = [
+    ['another program', [ '/usr/bin/vim', 'notes.txt' ], '901\n'],
+    ['our script, another datapath', [process.execPath, base.ms.paths.mainJs, '--datapath', '/somewhere/else'], '902\n'],
+    ['the datapath but not our script', [process.execPath, '/tmp/other.js', '--datapath', base.ms.paths.dataPath], '903\n'],
+    ['a pid with no process', null, '904\n'],
+    ['junk', null, 'not-a-number\n'],
+    ['pid 1', [ '/sbin/init' ], '1\n'],
+  ];
+  for (const [name, args, pidText] of cases) {
+    const sig = [];
+    const s = newServer({ home: base.home, runtimeDir: base.runtimeDir, procRoot: args ? fakeProc(base, Number(pidText) || 1, args).root : tmp(), killPid: (pid, signal) => { sig.push([pid, signal]); } });
+    touchCert(s.ms);
+    fs.writeFileSync(s.ms.paths.pidFile, pidText);
+    const p = s.ms.start();
+    await s.clock.advance(0);
+    await p;
+    assert.deepStrictEqual(sig, [], `${name}: nothing was signalled`);
+    assert.strictEqual(fs.readFileSync(s.ms.paths.pidFile, 'utf8'), `${s.spawn.calls[0].proc.pid}\n`, name);
+    await s.ms.stop();
+  }
+});
+
+test('the child\'s output goes through a bounded writer: meshcentral.log rotates to .1 past 10 MB, two files at most, private', async () => {
+  const s = newServer();
+  touchCert(s.ms);
+  const p = s.ms.start();
+  await s.clock.advance(0);
+  await p;
+  const proc = s.spawn.calls[0].proc;
+  proc.stdout.emit('data', Buffer.from('hello from stdout\n'));
+  proc.stderr.emit('data', Buffer.from('hello from stderr\n'));
+  assert.match(fs.readFileSync(s.ms.paths.logFile, 'utf8'), /hello from stdout\nhello from stderr\n/);
+  assert.strictEqual(mode(s.ms.paths.logFile), 0o600);
+  const mb = Buffer.alloc(1024 * 1024, 'x');
+  for (let i = 0; i < 25; i++) proc.stdout.emit('data', mb);   // 25 MB in all
+  const files = fs.readdirSync(s.home).filter((n) => n.startsWith('meshcentral.log')).sort();
+  assert.deepStrictEqual(files, ['meshcentral.log', 'meshcentral.log.1']);
+  assert.ok(fs.statSync(s.ms.paths.logFile).size <= LOG_ROTATE_BYTES + 1024 * 1024);
+  assert.ok(fs.statSync(`${s.ms.paths.logFile}.1`).size > LOG_ROTATE_BYTES, 'the rotated file passed the limit');
+  assert.strictEqual(mode(`${s.ms.paths.logFile}.1`), 0o600);
+  await s.ms.stop();
+  proc.stdout.emit('data', Buffer.from('late line\n'));   // after the stop nothing breaks
+  proc.emit('close', 0);
+});
+
+test('a start that fails before a process is made is retried with the crash back-off, and the owner of the supervisor is told when it works', async () => {
+  let ready = 0;
+  const s = newServer({ spawn: fakeSpawn({ failFirst: 2 }), onRetryReady: () => { ready += 1; } });
+  touchCert(s.ms);
+  const first = s.ms.start();
+  first.catch(() => {});
+  await assert.rejects(first, /spawn EAGAIN/);
+  assert.match(s.ms.status().lastError, /could not be started \(spawn EAGAIN\)/);
+  assert.strictEqual(s.ms.status().restarts, 0, 'not counted as a crash');
+  await s.clock.advance(4999);
+  assert.strictEqual(s.spawn.calls.length, 0);
+  await s.clock.advance(1);   // the second try: fails again, next wait is 30 s
+  assert.strictEqual(s.spawn.calls.length, 0);
+  assert.strictEqual(ready, 0);
+  await s.clock.advance(29999);
+  assert.strictEqual(s.spawn.calls.length, 0);
+  await s.clock.advance(1);
+  assert.strictEqual(s.spawn.calls.length, 1, 'the third try spawns');
+  assert.strictEqual(ready, 1);
+  assert.strictEqual(s.ms.status().running, true);
+  await s.ms.stop();
+  // "not installed" and a stop are not retried.
+  const none = newServer({ runtimeDir: tmp() });
+  await assert.rejects(() => none.ms.start(), /Reinstall needed/);
+  await none.clock.advance(60000);
+  assert.strictEqual(none.spawn.calls.length, 0);
+});
+
 // ── the client ──
 class FakeWebSocket extends EventEmitter {
   constructor(url, opts) { super(); this.url = url; this.opts = opts; this.sent = []; this.closed = false; FakeWebSocket.instances.push(this); }
@@ -511,7 +776,72 @@ test('ready rejects on a refused login, a closed socket and silence, never menti
   await assert.rejects(pc, /DEPTH_ZERO_SELF_SIGNED_CERT/);
 
   const d = newClient({ readyMs: 40 });
-  await assert.rejects(d.ready(), (e) => e.code === 'ETIMEDOUT');
+  await assert.rejects(d.ready(), (e) => e.code === 'ETIMEDOUT' && e.login === true, 'a login that timed out is marked: nothing was sent');
+});
+
+test('a command that gets no answer is ETIMEDOUT without the login mark', async () => {
+  const { c } = await loggedIn();
+  await assert.rejects(c.request('nodes', {}, { timeoutMs: 20 }), (e) => e.code === 'ETIMEDOUT' && e.login === undefined);
+  c.close();
+});
+
+// A socket that can ping.
+class PingSocket extends FakeWebSocket {
+  ping() { this.pings = (this.pings || 0) + 1; if (PingSocket.pong) setImmediate(() => this.emit('pong')); }
+}
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('keepalive: a ping every interval; a socket that never answers is dropped and its requests fail', async () => {
+  PingSocket.pong = true;
+  const alive = await loggedIn({ WebSocket: PingSocket, pingMs: 30, pongMs: 40 });
+  await sleepMs(200);
+  assert.ok(alive.ws.pings >= 3, `pings sent (${alive.ws.pings})`);
+  assert.strictEqual(alive.ws.closed, false, 'answered pings keep it open');
+  alive.c.close();
+
+  PingSocket.pong = false;
+  const dead = await loggedIn({ WebSocket: PingSocket, pingMs: 30, pongMs: 40 });
+  const pending = dead.c.request('nodes', {}, { timeoutMs: 5000 });
+  pending.catch(() => {});
+  await assert.rejects(pending, (e) => e.code === 'ECLOSED');
+  assert.strictEqual(dead.ws.closed, true, 'terminated');
+  assert.strictEqual(dead.ws.pings, 1, 'not pinged again once dropped');
+  // The next request logs in again on a new socket.
+  PingSocket.pong = true;
+  const next = dead.c.request('nodes');
+  await flush();
+  const ws2 = lastSocket();
+  assert.notStrictEqual(ws2, dead.ws);
+  ws2.deliver({ action: 'userinfo', userinfo: {} });
+  const s = await nextSent(ws2);
+  ws2.deliver({ action: 'nodes', responseid: s.responseid, nodes: {} });
+  await next;
+  dead.c.close();
+  PingSocket.pong = false;
+});
+
+test('a getnetworkinfo that times out retires its socket: other requests fail, late frames are ignored, the next request uses a new socket', async () => {
+  const { c, ws } = await loggedIn();
+  const slow = c.request('getnetworkinfo', { nodeid: 'node//a' }, { timeoutMs: 40 });
+  const other = c.request('nodes', {}, { timeoutMs: 5000 });
+  slow.catch(() => {}); other.catch(() => {});
+  await nextSent(ws);
+  await nextSent(ws);
+  await assert.rejects(slow, (e) => e.code === 'ETIMEDOUT');
+  await assert.rejects(other, (e) => e.code === 'ECLOSED');
+  assert.strictEqual(ws.closed, true, 'the socket was terminated');
+  const fresh = c.request('getnetworkinfo', { nodeid: 'node//a' });
+  await flush();
+  assert.strictEqual(FakeWebSocket.instances.length, 2);
+  const ws2 = lastSocket();
+  ws2.deliver({ action: 'userinfo', userinfo: {} });
+  await nextSent(ws2);
+  // The late answer to the first request arrives on the old socket: it must not become the answer to the new one.
+  ws.deliver({ action: 'getnetworkinfo', nodeid: 'node//a', netif2: { late: true } });
+  await flush();
+  ws2.deliver({ action: 'getnetworkinfo', nodeid: 'node//a', netif2: { fresh: true } });
+  assert.deepStrictEqual((await fresh).netif2, { fresh: true });
+  c.close();
 });
 
 test('matchReply follows the control-message rules for every kind of request', () => {
@@ -850,9 +1180,11 @@ test('the server starts MeshCentral, makes the group and reports health (stand-i
   assert.strictEqual(h.ok, true, JSON.stringify(h));
   assert.strictEqual(h.running, true);
   assert.strictEqual(h.group, 'mesh//g1');
-  assert.strictEqual(h.computers, 2);
+  assert.strictEqual(h.computers, 2, 'registered computers');
+  assert.strictEqual(h.online, 0, 'none of the stand-in nodes has conn set');
   assert.strictEqual(h.version, '1.3.1');
   assert.deepStrictEqual(execFile.calls.length, 3);
+  assert.ok(execFile.calls.every((c) => !c.args.includes('--pass')));
   assert.strictEqual(spawn.calls.length, 1);
   assert.deepStrictEqual(sockets.map((s) => s.user), ['admin', 'maestro'], 'the admin sets the group up, the limited account reads the list');
   assert.strictEqual(sockets[0].opts.ca.toString(), 'ROOT-CA');
@@ -872,6 +1204,67 @@ test('the server starts MeshCentral, makes the group and reports health (stand-i
   assert.ok(!everything.includes(acc.admin.pass) && !everything.includes(acc.agent.pass) && !everything.includes('accounts.json'));
   await remote.stop();
   assert.deepStrictEqual(spawn.calls[0].proc.signals, ['SIGTERM']);
+});
+
+const remoteWith = (mesh, extra = {}) => createRemote({
+  env: { MODULE_SETTINGS: JSON.stringify(SETTINGS), CONNECTOR_DATA_HOME: tmp(), MODULE_RUNTIME_DIR: fakeRuntime() },
+  write: () => {}, log: () => {}, deps: { mesh, ...extra },
+});
+
+test('stop during bootstrap: the start sequence never goes on to start MeshCentral, and stop waits for it to settle', async () => {
+  const execFile = hangingExec();
+  const spawn = fakeSpawn();
+  const remote = remoteWith({ execFile, spawn, probe: async () => true });
+  await remote.start();
+  await flush();
+  assert.strictEqual(execFile.calls.length, 1, 'bootstrap is running its first command');
+  await remote.stop();
+  assert.deepStrictEqual(execFile.calls[0].proc.signals, ['SIGTERM']);
+  assert.strictEqual(spawn.calls.length, 0, 'mesh.start() was never reached');
+  assert.strictEqual(execFile.calls.length, 1);
+  assert.strictEqual(remote.state.phase, 'stopped');
+  assert.strictEqual(remote.state.lastError, null, 'a stop is not an error');
+  assert.strictEqual(remote.isStopping(), true);
+  // After a stop the sequence does not start again.
+  await remote.callTool('start');
+  assert.strictEqual(spawn.calls.length, 0);
+});
+
+test('stop while MeshCentral is starting: the process is stopped, no group is made, and stop returns', async () => {
+  const spawn = fakeSpawn();
+  let probes = 0;
+  const sockets = [];
+  class Mesh extends FakeWebSocket { constructor(url, o) { super(url, o); sockets.push(this); } }
+  const remote = remoteWith({ execFile: fakeExec(), spawn, probe: async () => { probes += 1; return false; } }, { WebSocket: Mesh });
+  fs.mkdirSync(remote.mesh.paths.dataPath, { recursive: true });
+  fs.writeFileSync(remote.mesh.paths.rootCert, 'ROOT-CA');
+  await remote.start();
+  for (let i = 0; i < 20 && !spawn.calls.length; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(spawn.calls.length, 1);
+  await remote.stop();
+  assert.ok(spawn.calls[0].proc.signals.includes('SIGTERM'));
+  assert.strictEqual(sockets.length, 0, 'no control connection was opened');
+  assert.notStrictEqual(remote.state.phase, 'ready');
+  assert.strictEqual(remote.mesh.status().running, false);
+});
+
+// ── the server check (index.js) ──
+test('the server check is ok only when the control connection works (health.ok === true), and counts registered computers', async () => {
+  const run = (h) => checks.server({ callTool: async () => JSON.stringify(h), parse: (t) => JSON.parse(t), settings: {} });
+  const base = { running: true, group: 'mesh//g1', warnings: [] };
+  const a = await run({ ...base, ok: false, lastError: 'login refused', computers: null });
+  assert.strictEqual(a.ok, false);
+  assert.strictEqual(a.summary, 'login refused');
+  const b = await run({ ...base, ok: false, warnings: ['The computer list could not be read (ETIMEDOUT).', 'second'] });
+  assert.deepStrictEqual([b.ok, b.summary], [false, 'The computer list could not be read (ETIMEDOUT).']);
+  const c = await run({ ...base, ok: false });
+  assert.deepStrictEqual([c.ok, c.summary], [false, 'The control connection is not ready.']);
+  const d = await run({ ...base, ok: true, computers: 3, online: 1 });
+  assert.deepStrictEqual([d.ok, d.summary], [true, 'The server is running. 3 computers registered, 1 online.']);
+  assert.strictEqual((await run({ ...base, ok: true, computers: 1, online: 0 })).summary, 'The server is running. 1 computer registered, 0 online.');
+  assert.strictEqual((await run({ ...base, ok: true, computers: 0, online: 0 })).summary, 'The server is running. No computer has been added yet.');
+  assert.strictEqual((await run({ running: false, group: null, ok: false })).ok, false);
+  assert.strictEqual((await run({ running: true, group: null, ok: false })).ok, false);
 });
 
 test('a failed start is reported in health and can be retried', async () => {
