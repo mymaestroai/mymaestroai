@@ -280,7 +280,7 @@ build_sandbox() {
     "SystemCallErrorNumber=EPERM"
     "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK"
     "IPAddressDeny=any"
-    "IPAddressAllow=localhost $ALLOW"
+    "IPAddressAllow=127.0.0.0/8 ::1/128 $ALLOW"
     "MemoryMax=2G"
     "TasksMax=512"
   )

@@ -6,6 +6,7 @@ const path = require('node:path');
 const tls = require('node:tls');
 const crypto = require('node:crypto');
 const childProcess = require('node:child_process');
+const { ensureAgentFiles } = require('./agentfiles');
 
 const VERSION = '1.3.1';
 const GROUP_NAME = 'My Maestro computers';
@@ -80,7 +81,7 @@ function tlsProbe(port, host = '127.0.0.1') {
 
 function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spawn, execFile = childProcess.execFile, now = Date.now, log = () => {},
   probe = tlsProbe, timers = { setTimeout, clearTimeout }, npmGuard = NPM_GUARD, procRoot = '/proc', killPid = process.kill.bind(process), onRetryReady = null,
-  mode = 'hub', serviceName = DEFAULT_SERVICE_NAME, moduleDir = '' } = {}) {
+  mode = 'hub', serviceName = DEFAULT_SERVICE_NAME, moduleDir = '', ensureAgents = ensureAgentFiles } = {}) {
   if (!runtimeDir || !home) throw new Error('createMeshServer needs runtimeDir and home');
   const service = mode === 'service';
   if (service && !SERVICE_NAME_RE.test(String(serviceName))) throw new Error('The service name is not valid. Use mymaestro-remote, or mymaestro-remote- and up to 16 letters or digits.');
@@ -149,7 +150,8 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
         userAllowedIp: '127.0.0.1',
         agentAllowedIp: allowed,
         cookieIpCheck: 'strict',
-        agentDownloads: { enabled: true, fetchReleases: false },
+        // The service has no internet: MeshCentral takes the agent programs from its own agents folder only (filled by ensureAgentFiles before the install).
+        agentDownloads: forService ? { enabled: false, fetchReleases: false } : { enabled: true, fetchReleases: false },
         autoBackup: false,
         filesPath: forService ? `/var/lib/${serviceName}/meshcentral-files` : paths.filesPath,
       },
@@ -250,7 +252,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     return `sudo bash '${path.join(moduleDir, 'service', 'install.sh')}' '${paths.request}'`;
   }
   const restartCommand = () => `sudo systemctl restart ${serviceName}`;
-  function bootstrapService() {
+  async function bootstrapService() {
     const cfg = configFor(settings, { service: true });
     const cfgText = JSON.stringify(cfg, null, 2) + '\n';
     const existing = readAccountsStrict();
@@ -277,6 +279,8 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     const allowed = settings.agent_allowed === undefined || settings.agent_allowed === null || String(settings.agent_allowed).trim() === '' ? DEFAULT_ALLOWED : String(settings.agent_allowed);
     if (/[\r\n]/.test(allowed)) throw new Error('The allowed addresses are not valid.');
     const command = installCommand();
+    // The service has no internet, so the agent programs are put into the runtime now; the root script copies the runtime into the service.
+    try { await ensureAgents({ runtimeDir, log }); } catch (e) { throw new Error(`Could not download the MeshCentral agent files: ${clean(e && e.message, 300)}`); }
     fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
     fs.mkdirSync(paths.serviceDir, { recursive: true, mode: 0o700 });
     if (created) {

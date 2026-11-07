@@ -65,15 +65,18 @@ function newSvc(over = {}) {
   const state = { up: over.up !== undefined ? over.up : true, probes: 0 };
   const signals = [];
   const retried = [];
+  const agentCalls = [];
+  const ensureAgents = over.ensureAgents || (async (a) => { agentCalls.push(a); });
   const ms = createMeshServer({
     runtimeDir, home, settings: over.settings || SETTINGS, mode: over.mode || 'service', serviceName: over.serviceName, moduleDir: over.moduleDir === undefined ? MODULE_DIR : over.moduleDir,
+    ensureAgents,
     spawn: fb.spawn, execFile: fb.execFile, now: clock.now, timers: clock.timers, log: () => {},
     probe: async () => { state.probes += 1; return state.up; },
     killPid: (pid, sig) => { signals.push([pid, sig]); over.onKill && over.onKill(pid, sig); },
     onRetryReady: () => retried.push(clock.now()),
     ...(over.procRoot ? { procRoot: over.procRoot } : {}),
   });
-  return { ms, runtimeDir, home, clock, fb, state, signals, retried };
+  return { ms, runtimeDir, home, clock, fb, state, signals, retried, agentCalls };
 }
 // What install.sh leaves behind: installed.json and the certificate in the service folder, and the request file deleted.
 const markInstalled = (ms) => {
@@ -127,7 +130,9 @@ test('service mode paths and config: the files path is the service data folder, 
   const hubCfg = h.ms.configFor(SETTINGS);
   assert.strictEqual(svcCfg.settings.filesPath, '/var/lib/mymaestro-remote/meshcentral-files');
   assert.strictEqual(hubCfg.settings.filesPath, path.join(s.home, 'meshcentral-files'));
-  assert.deepStrictEqual({ ...svcCfg.settings, filesPath: 0 }, { ...hubCfg.settings, filesPath: 0 });
+  assert.deepStrictEqual({ ...svcCfg.settings, filesPath: 0, agentDownloads: 0 }, { ...hubCfg.settings, filesPath: 0, agentDownloads: 0 });
+  assert.deepStrictEqual(svcCfg.settings.agentDownloads, { enabled: false, fetchReleases: false });
+  assert.deepStrictEqual(hubCfg.settings.agentDownloads, { enabled: true, fetchReleases: false });
   assert.deepStrictEqual(svcCfg.domains, hubCfg.domains);
   assert.deepStrictEqual(s.ms.configFor(SETTINGS), svcCfg, 'in service mode the default is the service config');
   assert.strictEqual(newSvc({ serviceName: 'mymaestro-remote-b2' }).ms.configFor(SETTINGS).settings.filesPath, '/var/lib/mymaestro-remote-b2/meshcentral-files');
@@ -172,6 +177,48 @@ test('bootstrap in service mode writes the request and the config, runs nothing 
   assert.strictEqual(cfg.settings.agentAllowedIp, '198.51.100.0/24,100.64.0.0/10');
   assert.strictEqual(modeOf(s.ms.paths.serviceConfig), 0o600);
   assert.deepStrictEqual(fs.readdirSync(s.ms.paths.serviceDir).filter((f) => f.endsWith('.tmp')), [], 'no temp files left');
+});
+
+test('bootstrap in service mode gets the agent files first: the request does not exist while ensureAgents runs', async () => {
+  const seen = [];
+  let s;
+  const ensureAgents = async (a) => {
+    seen.push({ a, request: fs.existsSync(s.ms.paths.request), config: fs.existsSync(s.ms.paths.serviceConfig) });
+  };
+  s = newSvc({ ensureAgents });
+  const r = await s.ms.bootstrap();
+  assert.strictEqual(r.needsService, true);
+  assert.strictEqual(seen.length, 1);
+  assert.strictEqual(seen[0].a.runtimeDir, s.runtimeDir);
+  assert.strictEqual(typeof seen[0].a.log, 'function');
+  assert.strictEqual(seen[0].request, false, 'no request yet');
+  assert.strictEqual(seen[0].config, false, 'no config yet');
+  assert.ok(fs.existsSync(s.ms.paths.request));
+});
+
+test('an installed service with unchanged settings never downloads the agent files', async () => {
+  const s = newSvc({ up: true });
+  await s.ms.bootstrap();
+  assert.strictEqual(s.agentCalls.length, 1);
+  markInstalled(s.ms);
+  const again = await s.ms.bootstrap();
+  assert.deepStrictEqual(again, { created: false, needsService: false });
+  assert.strictEqual((await s.ms.checkService()).ready, true);
+  assert.strictEqual(s.agentCalls.length, 1, 'ensureAgents was not called again');
+});
+
+test('a failing ensureAgents makes bootstrap reject and writes no request', async () => {
+  const s = newSvc({ ensureAgents: async () => { throw new Error('x.exe: the download was refused (HTTP 404)'); } });
+  await assert.rejects(() => s.ms.bootstrap(), (e) => e.message === 'Could not download the MeshCentral agent files: x.exe: the download was refused (HTTP 404)');
+  assert.ok(!fs.existsSync(s.ms.paths.request), 'no request');
+  assert.ok(!fs.existsSync(s.ms.paths.serviceConfig), 'no config');
+  assert.deepStrictEqual(s.fb.calls, []);
+});
+
+test('hub mode never fetches the agent files', async () => {
+  const s = newSvc({ mode: 'hub', ensureAgents: async () => { throw new Error('must not be called'); } });
+  assert.deepStrictEqual(s.ms.configFor(SETTINGS).settings.agentDownloads, { enabled: true, fetchReleases: false });
+  assert.deepStrictEqual(newSvc().ms.configFor(SETTINGS).settings.agentDownloads, { enabled: false, fetchReleases: false });
 });
 
 test('a second bootstrap keeps the accounts and writes the request again', async () => {
@@ -360,7 +407,7 @@ function toolRemote(over = {}) {
     write: () => {}, log: (...a) => logs.push(a.join(' ')),
     deps: {
       platform: 'linux', WebSocket: over.WebSocket,
-      mesh: { probe: async () => probe.up, spawn: forbidden().spawn, execFile: forbidden().execFile, ...(over.mesh || {}) },
+      mesh: { ensureAgents: async () => {}, probe: async () => probe.up, spawn: forbidden().spawn, execFile: forbidden().execFile, ...(over.mesh || {}) },
     },
   });
   return { remote, home, probe, logs };
@@ -510,7 +557,7 @@ test('auto keeps a setup that already ran in hub mode in hub mode, and says what
     return createRemote({
       env: { MODULE_SETTINGS: JSON.stringify({ ...SETTINGS, run_as: runAs }), CONNECTOR_DATA_HOME: home, MODULE_RUNTIME_DIR: fakeRuntime() },
       write: () => {}, log: () => {},
-      deps: { platform: 'linux', serviceSupported: true, mesh: { probe: async () => false, spawn: forbidden().spawn, execFile: forbidden().execFile } },
+      deps: { platform: 'linux', serviceSupported: true, mesh: { ensureAgents: async () => {}, probe: async () => false, spawn: forbidden().spawn, execFile: forbidden().execFile } },
     });
   };
   assert.strictEqual(mk(false, 'auto').mode, 'service', 'a fresh setup on systemd');
