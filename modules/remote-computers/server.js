@@ -219,8 +219,8 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const state = { phase: !supported ? 'unsupported' : runtimeOk ? 'idle' : 'reinstall', waiting: !supported ? LINUX_ONLY : runtimeOk ? null : REINSTALL, group: null, lastError: null, warnings: [], service: null };
   const HUB_MODE_WARNING = 'MeshCentral runs under My Maestro\'s own account. On Linux, set "Run as" to service to give it its own locked-down account.'
     + (legacyHub && settings.run_as !== 'hub' ? ' This setup started in hub mode, so after the switch its computers need their agent installed again.' : '');
-  // The service can only send to the allowed agent addresses; a range holding Tailscale's DNS (100.100.100.100) would let it send DNS queries out.
-  const MAGIC_DNS_WARNING = 'The allowed addresses include Tailscale\'s DNS address 100.100.100.100. Once your computer is connected, set "Addresses the computers may connect from" to its own 100.x address, then run the install command again.';
+  // A range that holds 100.100.100.100 (Tailscale's own address) is wider than one computer: most likely the whole tailnet (the default).
+  const MAGIC_DNS_WARNING = 'The allowed addresses cover more than your computer: they include 100.100.100.100, so most likely your whole tailnet. Once your computer is connected, set "Addresses the computers may connect from" to its own 100.x address, then run the install command again, so no other device can connect to MeshCentral.';
   const coversMagicDns = (list) => String(list === undefined || list === null || String(list).trim() === '' ? '100.64.0.0/10' : list).split(',').some((entry) => {
     const m = /^\s*(\d+)\.(\d+)\.(\d+)\.(\d+)(?:\/(\d+))?\s*$/.exec(entry);
     if (!m) return false;

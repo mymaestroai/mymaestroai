@@ -119,10 +119,11 @@ What the command does:
 - It keeps MeshCentral's data and keys in `/var/lib/mymaestro-remote`, where only that account can read them.
 - It starts a locked-down service. The service sees only the system's programs, its own program and its own data:
   no home folders, no other disks, none of My Maestro's folders. It accepts connections from My Maestro and from the
-  allowed agent addresses, and cannot open any connection itself.
+  allowed agent addresses, and cannot open a connection or send anything except replies on the connections it accepted.
 - Once your computer is connected, set "Addresses the computers may connect from" to that computer's own 100.x
-  address and run the install command again. The default (the whole Tailscale range) also holds Tailscale's own DNS
-  address, and the setup warns until the range is narrowed.
+  address and run the install command again, so no other device on your tailnet can connect to MeshCentral. The
+  setup warns until the range is narrowed.
+- Running the command with sudo trusts the script as it stands in My Maestro's folder at that moment, each time.
 
 Good to know:
 

@@ -53,29 +53,50 @@ OLD_PROG=      # the previous /opt/NAME, moved aside until the new one answers
 PREV_UNIT=0    # the previous unit file is saved in $TMPD/unit.prev
 PREV_CFG=0     # the previous MeshCentral config is saved in $TMPD/config.prev
 UNIT_WRITTEN=0
+FIRST_INSTALL=0  # neither a unit nor a program existed before this install
+KEEP_TMP=0
+# Puts the previous state back. Runs without errexit, so one failed step (or a closed terminal) never skips the rest;
+# returns 1 when something could not be put back, and the saved copies are then kept.
 rollback() {
+  set +e
+  local bad=0
   printf 'install.sh: the install did not finish; putting the previous state back ...\n' >&2
-  systemctl stop "$N.service" >/dev/null 2>&1 || true
+  systemctl stop "$N.service" >/dev/null 2>&1
   if [[ -n $OLD_PROG && -d $OLD_PROG && ! -L $OLD_PROG ]]; then
-    if [[ -d /opt/$N && ! -L /opt/$N ]]; then rm -rf --one-file-system -- "/opt/$N" || true; fi
-    mv -- "$OLD_PROG" "/opt/$N" || true
+    if [[ -d /opt/$N && ! -L /opt/$N ]]; then rm -rf --one-file-system -- "/opt/$N" || bad=1; fi
+    if mv -- "$OLD_PROG" "/opt/$N"; then OLD_PROG=; else bad=1; fi
+  elif ((FIRST_INSTALL)) && [[ -d /opt/$N && ! -L /opt/$N ]]; then
+    rm -rf --one-file-system -- "/opt/$N" || bad=1
   fi
-  if ((PREV_CFG)); then install -m 0600 -o "$N" -g "$N" "$TMPD/config.prev" "/var/lib/$N/meshcentral-data/config.json" || true; fi
+  if ((PREV_CFG)); then write_service_file "$TMPD/config.prev" config.json || bad=1; fi
   if ((PREV_UNIT)); then
-    install -m 0644 -o root -g root "$TMPD/unit.prev" "/etc/systemd/system/$N.service" || true
+    install -m 0644 -o root -g root "$TMPD/unit.prev" "/etc/systemd/system/$N.service" || bad=1
   elif ((UNIT_WRITTEN)); then
-    systemctl disable "$N.service" >/dev/null 2>&1 || true   # a first install that failed leaves no service starting over and over
+    # a first install that failed leaves no service behind that starts over and over
+    systemctl disable "$N.service" >/dev/null 2>&1
+    rm -f -- "/etc/systemd/system/$N.service" || bad=1
   fi
-  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl daemon-reload >/dev/null 2>&1 || bad=1
   if ((WAS_RUNNING)); then
-    if systemctl start "$N.service" >/dev/null 2>&1; then printf 'install.sh: the previous %s.service runs again.\n' "$N" >&2; fi
+    if systemctl start "$N.service" >/dev/null 2>&1; then
+      printf 'install.sh: the previous %s.service runs again.\n' "$N" >&2
+    else
+      bad=1
+    fi
   fi
+  return $bad
 }
 on_exit() {
   local rc=$?
-  if ((rc != 0 && ROLLBACK && !COMMITTED)); then rollback; fi
-  if [[ -n $NEW_DIR && -d $NEW_DIR && ! -L $NEW_DIR ]]; then rm -rf --one-file-system -- "$NEW_DIR" || true; fi
-  if [[ -n $TMPD && -d $TMPD && ! -L $TMPD ]]; then rm -rf --one-file-system -- "$TMPD" || true; fi
+  set +e
+  if ((rc != 0 && ROLLBACK && !COMMITTED)); then
+    if ! rollback; then
+      KEEP_TMP=1
+      printf 'install.sh: the previous state could not be put back completely; the saved copies are kept in %s%s.\n' "$TMPD" "${OLD_PROG:+ and $OLD_PROG}" >&2
+    fi
+  fi
+  if [[ -n $NEW_DIR && -d $NEW_DIR && ! -L $NEW_DIR ]]; then rm -rf --one-file-system -- "$NEW_DIR"; fi
+  if ((!KEEP_TMP)) && [[ -n $TMPD && -d $TMPD && ! -L $TMPD ]]; then rm -rf --one-file-system -- "$TMPD"; fi
   return 0
 }
 trap on_exit EXIT
@@ -96,11 +117,18 @@ hand_back() {   # src name
   as_hub bash --noprofile --norc -c 'set -eu; umask 022; cd -P -- "$1"; rm -f -- "$2"; set -C; cat >"$2"' _ "$SERVICE_DIR" "$2" <"$1" \
     || fail "Could not write $2 into $SERVICE_DIR with the hub's account."
 }
-# Reads at most MAX bytes of a file in the service's own folder with the service's account, without following a link and
-# without waiting on a pipe, so a service that went wrong can neither point root elsewhere nor hold it up.
+# Inside the service's own folder (/var/lib/NAME) root never reads or writes by path: the service's account does, so a
+# link or a pipe the service planted there can only ever lead to what that account could reach anyway.
+as_service() {   # command args...
+  timeout 30 setpriv --reuid="$N_UID" --regid="$N_GID" --clear-groups --no-new-privs -- env -i PATH=/usr/bin:/bin "$@"
+}
+# Reads at most MAX bytes, without following a final link and without waiting on a pipe.
 read_service_file() {   # path max -> stdout
-  timeout 15 setpriv --reuid="$N_UID" --regid="$N_GID" --clear-groups --no-new-privs -- env -i PATH=/usr/bin:/bin \
-    dd if="$1" bs="$2" count=1 iflag=nofollow,nonblock status=none
+  as_service dd if="$1" bs="$2" count=1 iflag=nofollow,nonblock,fullblock status=none
+}
+# Writes SRC (a root-private file) as NAME into /var/lib/NAME/meshcentral-data.
+write_service_file() {   # src name
+  as_service bash --noprofile --norc -c 'set -eu; umask 077; cd -P -- "$1"; rm -f -- "$2"; set -C; cat >"$2"' _ "/var/lib/$N/meshcentral-data" "$2" <"$1"
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -278,8 +306,9 @@ validate_request() {
 # The file system is an allow list: an empty read-only root with only the system's programs and libraries, a few files from
 # /etc that Node reads, the program in /opt/NAME (read-only) and the data in /var/lib/NAME. Nothing else on this computer
 # (home folders, data disks, backups, My Maestro's folders wherever they are) exists for the service. It can accept connections
-# but never open one (connect is refused), and the addresses it may talk with are 127.0.0.1 (where the hub connects from; not
-# the rest of 127/8, where the local DNS resolvers listen) and the allowed agent addresses.
+# but never open one or send anything that is not a reply on an accepted connection (connect, sendto, sendmsg, sendmmsg and
+# io_uring are refused; stream writes still work), and the addresses it may talk with are 127.0.0.1 (where the hub connects
+# from; not the rest of 127/8, where the local DNS resolvers listen) and the allowed agent addresses.
 build_sandbox() {
   SANDBOX=(
     "UMask=0077"
@@ -290,7 +319,7 @@ build_sandbox() {
     "MountAPIVFS=yes"
     "NoNewPrivileges=yes"
     "ProtectHome=yes"
-    "InaccessiblePaths=-$APP_REAL -$HUB_REAL"
+    "InaccessiblePaths=-$APP_REAL -$HUB_REAL -/usr/local"
     "PrivateTmp=yes"
     "PrivateDevices=yes"
     "ProtectKernelTunables=yes"
@@ -310,7 +339,7 @@ build_sandbox() {
     "SystemCallArchitectures=native"
     "SystemCallFilter=@system-service"
     "SystemCallFilter=~@privileged"
-    "SystemCallFilter=~connect"
+    "SystemCallFilter=~connect sendto sendmsg sendmmsg io_uring_setup io_uring_enter io_uring_register"
     "SystemCallErrorNumber=EPERM"
     "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK"
     "IPAddressDeny=any"
@@ -470,20 +499,26 @@ full_install() {
 
   N_UID=$(id -u -- "$N")
   N_GID=$(id -g -- "$N")
+  [[ -e $unit || -L $unit || -e $prog ]] || FIRST_INSTALL=1
 
-  # Stop the service if it runs or is between restarts, and save what a failed install must put back.
+  # Save what a failed install must put back (refusing to go on when it cannot be saved), then stop the service if it
+  # runs or is between restarts. From here on a failure puts the previous state back.
+  if [[ -e $unit || -L $unit ]]; then
+    [[ -f $unit && ! -L $unit ]] || die "$unit is not a regular file."
+    cp -P --no-preserve=all -- "$unit" "$TMPD/unit.prev" || die "Could not save the current $unit."
+    PREV_UNIT=1
+  fi
+  ROLLBACK=1
   case $(svc_state) in
     "" | inactive | failed) ;;
     *) WAS_RUNNING=1; info "Stopping $N.service ..."; systemctl stop "$N.service" ;;
   esac
-  if [[ -f $unit && ! -L $unit ]]; then
-    if cp -P --no-preserve=all -- "$unit" "$TMPD/unit.prev"; then PREV_UNIT=1; fi
+  if [[ -d $state && ! -L $state ]] && as_service test -e "$state/meshcentral-data/config.json"; then
+    read_service_file "$state/meshcentral-data/config.json" $((MAX_CONFIG_BYTES + 1)) >"$TMPD/config.prev" \
+      || fail "Could not save the current MeshCentral config."
+    (($(stat -c '%s' -- "$TMPD/config.prev") <= MAX_CONFIG_BYTES)) || fail "The current MeshCentral config is too large to save."
+    PREV_CFG=1
   fi
-  if [[ -f $state/meshcentral-data/config.json ]]; then
-    if read_service_file "$state/meshcentral-data/config.json" $((MAX_CONFIG_BYTES + 1)) >"$TMPD/config.prev" \
-      && (($(stat -c '%s' -- "$TMPD/config.prev") <= MAX_CONFIG_BYTES)); then PREV_CFG=1; fi
-  fi
-  ROLLBACK=1
 
   # ---- the program: a root-owned copy, private until it has been checked ----
   NEW_DIR=/opt/.$N.new.$$
@@ -526,17 +561,19 @@ full_install() {
   mv -- "$NEW_DIR" "$prog" || fail "Could not put the program in place."
   NEW_DIR=
 
-  # ---- the state (the service user has no process running now) ----
-  local d
-  for d in "$state" "$state/meshcentral-data" "$state/meshcentral-files"; do
-    [[ -L $d ]] && fail "$d is a symbolic link."
-    install -d -m 0700 -o "$N" -g "$N" "$d"
-  done
-  chown -R -h "$N:$N" "$state"   # files kept from an earlier install belong to this account again
+  # ---- the state: root makes /var/lib/NAME itself (its parent is root's); what is inside, the service's account makes ----
+  [[ -L $state ]] && fail "$state is a symbolic link."
+  install -d -m 0700 -o "$N" -g "$N" "$state"
+  chown -R -h "$N:$N" "$state"   # files kept from an earlier install belong to this account again (-h and no -L: links are never followed)
+  as_service bash --noprofile --norc -c 'set -eu; umask 077; cd -P -- "$1"
+    for d in meshcentral-data meshcentral-files; do
+      if [ -L "$d" ]; then echo "$1/$d is a symbolic link" >&2; exit 1; fi
+      mkdir -p -- "$d"; chmod 0700 -- "$d"
+    done' _ "$state" || fail "Could not prepare $state with the service's account."
   read_hub_file "$SERVICE_DIR/config.json" | head -c $((MAX_CONFIG_BYTES + 1)) >"$TMPD/config.json" \
     || fail "Could not read $SERVICE_DIR/config.json with the hub's account."
   (($(stat -c '%s' -- "$TMPD/config.json") <= MAX_CONFIG_BYTES)) || fail "config.json is larger than $MAX_CONFIG_BYTES bytes."
-  install -m 0600 -o "$N" -g "$N" "$TMPD/config.json" "$state/meshcentral-data/config.json"
+  write_service_file "$TMPD/config.json" config.json || fail "Could not write the MeshCentral config with the service's account."
 
   # ---- the accounts, inside the service's own sandbox (MeshCentral stopped) ----
   info "Making the MeshCentral accounts ..."
@@ -566,8 +603,18 @@ full_install() {
     journalctl -u "$N.service" -n 40 --no-pager || true
     fail "$N.service did not become ready within 90 seconds. The log is above."
   fi
+  # MeshCentral exits at once when it cannot open its agent port, after the control port answered: it must stay up.
+  local pid0 nr0
+  pid0=$(systemctl show -p MainPID --value "$N.service")
+  nr0=$(systemctl show -p NRestarts --value "$N.service")
+  sleep 5
+  if [[ $(svc_state) != active || $(systemctl show -p MainPID --value "$N.service") != "$pid0" \
+    || $(systemctl show -p NRestarts --value "$N.service") != "$nr0" ]]; then
+    journalctl -u "$N.service" -n 40 --no-pager || true
+    fail "$N.service did not stay up. The log is above."
+  fi
 
-  # The new service answers: keep it, and drop the previous program.
+  # The new service answers and stays up: keep it, and drop the previous program.
   COMMITTED=1
   if [[ -n $OLD_PROG && -d $OLD_PROG && ! -L $OLD_PROG ]]; then rm -rf --one-file-system -- "$OLD_PROG"; fi
   OLD_PROG=
