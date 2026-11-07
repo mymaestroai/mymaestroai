@@ -663,7 +663,7 @@ test('tools: a screenshot that gets no reply says what the screen tools need', a
   const t = setup();
   t.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 30 s.', 'ETIMEDOUT'); };
   const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
-  assert.strictEqual(r.error, 'No reply from demo-pc. The screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock), or the computer is busy with another command. The command may still be running on it and must not be repeated blindly. Check its effect first, for example with a screenshot or a read-only command.');
+  assert.strictEqual(r.error, 'No reply from demo-pc. No one may be signed in on it (then nothing ran): the screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock). The computer may also be busy with another command. The command may still be running on it and must not be repeated blindly. Check its effect first, for example with a screenshot or a read-only command.');
 });
 
 test('tools: the private pictures kept per computer are the newest 200; a link in the way is refused (the agent still gets its picture)', async () => {
@@ -869,7 +869,7 @@ test('tools: a login that timed out is not a command that got no answer; a comma
   // A screenshot that got no answer: the screen message, and a hold of 60 seconds (not 10 minutes).
   const u = setup();
   u.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 30 s.', 'ETIMEDOUT'); };
-  assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /^No reply from demo-pc\. The screen tools need someone signed in/);
+  assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /^No reply from demo-pc\. No one may be signed in on it \(then nothing ran\): the screen tools need someone signed in/);
   u.handlers.runcommands = async () => ({ result: shotReply() });
   assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /busy, try again in a moment/);
   u.time.t += 59000;
@@ -1114,7 +1114,58 @@ test('tools: type, key and scroll are drive tools that wait for MMOK', async () 
   assert.match((await t.call('type', { ...AGENT, computer: 'demo-pc', text: 'x'.repeat(2001) })).error, /at most 2000/);
   // No reply.
   t.handlers.runcommands = async () => { throw new MeshError('timed out', 'ETIMEDOUT'); };
-  assert.match((await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'enter' })).error, /^No reply from demo-pc\. The screen tools need someone signed in/);
+  assert.match((await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'enter' })).error, /^No reply from demo-pc\. No one may be signed in on it \(then nothing ran\): the screen tools need someone signed in/);
+});
+
+// ── nobody signed in ──
+const withUsers = (users, over = {}) => ({ 'mesh//g1': [{ ...NODES['mesh//g1'][0], ...(users === undefined ? {} : { users }), ...over }, ...NODES['mesh//g1'].slice(1)] });
+const NOBODY = /^No one is signed in on demo-pc\. Screen tools and 'as user' commands need a signed-in Windows desktop: run as system instead, or sign in on the PC \(set it to sign in automatically\)\.$/;
+
+test('tools: an empty users list refuses a run as user and every screen tool at once: nothing sent, owner not asked, not busy', async () => {
+  const t = setup({ handlers: { nodes: async () => ({ action: 'nodes', nodes: withUsers([]) }) } });
+  t.handlers.runcommands = async () => ({ result: 'fine' });
+  const calls = [['run', { command: 'whoami', as: 'user' }], ['screenshot', {}], ['click', { shot: 'abcd1234', x: 1, y: 1 }], ['type', { text: 'a' }], ['key', { keys: 'a' }], ['scroll', { amount: 1 }]];
+  for (const [name, args] of calls) {
+    const r = await t.call(name, { ...AGENT, computer: 'demo-pc', ...args });
+    assert.match(r.error, NOBODY, name);
+  }
+  assert.strictEqual(t.calls.filter((c) => c.action === 'runcommands').length, 0, 'nothing was sent');
+  assert.strictEqual(t.gateCalls.filter((g) => g.pc).length, 0, 'the owner was not asked (the only gate calls are the per-call identity check)');
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'whoami' })).output, 'fine', 'a system run still works and the computer is not busy');
+});
+
+test('tools: someone signed in, or a users list never reported, does not stop a run as user; Linux wording has no Windows', async () => {
+  for (const users of [['DEMO\\sam'], undefined]) {
+    const t = setup({ handlers: { nodes: async () => ({ action: 'nodes', nodes: withUsers(users) }) } });
+    t.handlers.runcommands = async () => ({ result: 'ok' });
+    assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'whoami', as: 'user' })).output, 'ok');
+  }
+  const l = setup({ handlers: { nodes: async () => ({ action: 'nodes', nodes: withUsers([], { osdesc: 'Ubuntu 24.04', agent: { id: 6 } }) }) } });
+  const r = await l.call('run', { ...AGENT, computer: 'demo-pc', command: 'id', as: 'user' });
+  assert.strictEqual(r.error, "No one is signed in on demo-pc. Screen tools and 'as user' commands need a signed-in desktop: run as system instead, or sign in on the PC (set it to sign in automatically).");
+});
+
+test('tools: a run as user that gets no reply says no one may be signed in and holds the computer 60 seconds; a system run keeps 10 minutes', async () => {
+  const t = setup();
+  t.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 5 s.', 'ETIMEDOUT'); };
+  const r = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', as: 'user', timeoutSec: 5 });
+  assert.match(r.error, /^No reply from demo-pc within 5 seconds\. No one may be signed in on it, and then nothing ran: /);
+  assert.match(r.error, /run as system instead/);
+  t.handlers.runcommands = async () => ({ result: 'back' });
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).error, /busy, try again in a moment/);
+  t.time.t += 59000;
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).error, /busy/);
+  t.time.t += 2000;
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'back', 'free after 60 s');
+  // A system run: today's wording and the 10-minute hold.
+  t.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 5 s.', 'ETIMEDOUT'); };
+  const s = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 5 });
+  assert.match(s.error, /^No reply from demo-pc within 5 seconds\. The command may still be running/);
+  t.handlers.runcommands = async () => ({ result: 'back' });
+  t.time.t += 9 * 60000;
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).error, /busy/);
+  t.time.t += 2 * 60000;
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'back');
 });
 
 test('tools: every act and drive tool asks the gate for the right level with the agent the hub named', async () => {

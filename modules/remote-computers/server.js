@@ -343,6 +343,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
           ip: typeof n.ip === 'string' ? clean(n.ip, 60) : undefined, host: typeof n.host === 'string' ? clean(n.host, 100) : undefined,
           lastSeen: iso(online ? n.agct : n.lastconnect), agentVersion: n.agent && n.agent.ver !== undefined ? clean(n.agent.ver, 30) : undefined,
           agentId: n.agent && Number.isInteger(n.agent.id) ? n.agent.id : undefined,
+          users: Array.isArray(n.users) ? n.users.filter((u) => typeof u === 'string') : undefined,   // who is signed in, as the agent last reported; absent when it never said
         });
       }
     }
@@ -396,6 +397,12 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   };
   const windowsOnly = (pc) => { if (!isWindows(pc)) throw new ToolError(WINDOWS_ONLY); };
   const mustBeOnline = (pc) => { if (!pc.online) throw new ToolError(`${pc.name} is offline. It has to be switched on and connected to the tailnet.`); };
+  // The agent drops a user-session command silently when nobody is signed in, so when the list of signed-in users is known (and the computer is online,
+  // so the list is current) and empty, refuse at once: nothing is sent, the owner is not asked and the computer is not held busy.
+  const needSignedIn = (pc) => {
+    if (!pc.online || !Array.isArray(pc.users) || pc.users.length) return;
+    throw new ToolError(`No one is signed in on ${pc.name}. Screen tools and 'as user' commands need a signed-in ${isWindows(pc) ? 'Windows ' : ''}desktop: run as system instead, or sign in on the PC (set it to sign in automatically).`);
+  };
 
   // The server did not log us in in time: nothing was sent to the computer, which is a different thing from a command that got no answer.
   const noLogin = (pc) => new ToolError(`The Remote computers server did not answer in time, so nothing was sent to ${pc.name}. Try again in a moment.`);
@@ -407,7 +414,9 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (unknownOutcome(e)) {
       if (e.code === 'ECLOSED') return new ToolError(`The connection to the server was lost after the command was sent to ${pc.name}. ${STILL_RUNNING}`);
       if (kind === 'run') return new ToolError(`No reply from ${pc.name} within ${timeoutSec} seconds. ${STILL_RUNNING}`);
-      return new ToolError(`No reply from ${pc.name}. The screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock), or the computer is busy with another command. ${STILL_RUNNING}`);
+      // A user-session command (as user, screen, input) is dropped silently when nobody is signed in: then nothing ran.
+      if (kind === 'user') return new ToolError(`No reply from ${pc.name} within ${timeoutSec} seconds. No one may be signed in on it, and then nothing ran: 'as user' commands need a signed-in desktop (run as system instead, or sign in on the PC and set it to sign in automatically). If someone is signed in, the command may still be running on it and must not be repeated blindly. ${CHECK_FIRST}`);
+      return new ToolError(`No reply from ${pc.name}. No one may be signed in on it (then nothing ran): the screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock). The computer may also be busy with another command. ${STILL_RUNNING}`);
     }
     return meshFail(e, pc);
   }
@@ -458,6 +467,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (a.maxWidth !== undefined) { maxWidth = a.maxWidth; if (!Number.isInteger(maxWidth) || maxWidth < 320 || maxWidth > 1920) throw new ToolError('maxWidth must be a whole number from 320 to 1920.'); }
     const pc = await resolve(a.computer);
     windowsOnly(pc);
+    needSignedIn(pc);
     await gate.require(who, 'look', pc);
     mustBeOnline(pc);
     const out = await onScreen(pc, win.screenshotScript({ maxWidth }), SHOT_TIMEOUT_MS);
@@ -485,6 +495,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (!Number.isInteger(timeoutSec) || timeoutSec < 5 || timeoutSec > 300) throw new ToolError('timeoutSec must be a whole number from 5 to 300.');
     const pc = await resolve(a.computer);
     mustBeOnline(pc);
+    if (as === 'user') needSignedIn(pc);
     const windows = isWindows(pc);
     const shell = a.shell === undefined ? (windows ? 'powershell' : 'sh') : a.shell;
     if (windows && shell === 'sh') throw new ToolError(`${pc.name} is a Windows computer: use powershell (the default) or cmd, not sh.`);
@@ -496,8 +507,8 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     log(`run on ${pc.name} for ${who} (${shell}, as ${as}, ${command.length} characters)`);
     const t0 = now();
     let out;
-    try { out = await exclusive(pc, BUSY_AFTER_RUN_TIMEOUT_MS, () => { beforeSend(who, pc, 'act', as); return runOn(pc, cmds, shell === 'sh' ? 3 : shell === 'cmd' ? 1 : 2, as === 'user' ? 2 : 0, timeoutSec * 1000); }); } catch (e) {
-      throw sendFail(pc, e, { kind: 'run', timeoutSec });
+    try { out = await exclusive(pc, as === 'user' ? BUSY_AFTER_SCREEN_TIMEOUT_MS : BUSY_AFTER_RUN_TIMEOUT_MS, () => { beforeSend(who, pc, 'act', as); return runOn(pc, cmds, shell === 'sh' ? 3 : shell === 'cmd' ? 1 : 2, as === 'user' ? 2 : 0, timeoutSec * 1000); }); } catch (e) {
+      throw sendFail(pc, e, { kind: as === 'user' ? 'user' : 'run', timeoutSec });
     }
     return { output: capOutput(tidyOutput(out, cmds)), took_ms: now() - t0 };
   }
@@ -521,6 +532,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const pc = await resolve(a.computer);
     windowsOnly(pc);
     mustBeOnline(pc);
+    needSignedIn(pc);
     const s = useShot(who, pc, a.shot);
     const p = toScreen(s, a.x, a.y);
     const script = scriptOrError(() => win.clickScript({ x: p.x, y: p.y, screenWidth: s.screenWidth, screenHeight: s.screenHeight, button: a.button === undefined ? 'left' : a.button, double: a.double === undefined ? false : a.double }));
@@ -532,6 +544,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const pc = await resolve(a.computer);
     windowsOnly(pc);
     mustBeOnline(pc);
+    needSignedIn(pc);
     const script = scriptOrError(() => win.typeScript({ text: a.text }));
     await authorize(who, 'drive', pc, call, deadline, 'type', INPUT_TIMEOUT_MS);
     log(`type on ${pc.name} for ${who} (${a.text.length} characters)`);
@@ -541,6 +554,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const pc = await resolve(a.computer);
     windowsOnly(pc);
     mustBeOnline(pc);
+    needSignedIn(pc);
     const script = scriptOrError(() => win.keyScript({ keys: a.keys }));
     await authorize(who, 'drive', pc, call, deadline, 'key', INPUT_TIMEOUT_MS);
     log(`key on ${pc.name} for ${who}`);
@@ -550,6 +564,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const pc = await resolve(a.computer);
     windowsOnly(pc);
     mustBeOnline(pc);
+    needSignedIn(pc);
     let where = {};
     if (a.x !== undefined || a.y !== undefined) {
       if (a.x === undefined || a.y === undefined) throw new ToolError('Give both x and y, or neither.');
