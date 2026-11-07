@@ -4264,9 +4264,10 @@ const approvals = new Map();   // id -> card data, in arrival order
 let approvalsTimer = null;
 let approvalsHidden = false;
 const APPROVAL_CLASS_LABELS = { write_outside: 'write outside its folders', send: 'send off this machine', admin: 'change hub data / another agent', destroy: 'destructive action', money: 'move money' };
-const APPROVAL_DETAIL_LABELS = { command: 'Command', path: 'Path', paths: 'Paths', to: 'To', channel: 'Channel', text: 'Text', reason: 'Why flagged', tool: 'Tool', input: 'Arguments', name: 'Name', model: 'Model' };
+const APPROVAL_DETAIL_LABELS = { command: 'Command', path: 'Path', paths: 'Paths', to: 'To', channel: 'Channel', text: 'Text', reason: 'Why flagged', tool: 'Tool', input: 'Arguments', name: 'Name', model: 'Model', module: 'Module' };
 
 function approvalWants(ev) {
+  if (ev.cls === 'module') return `${displayName(ev.agent)} needs your OK${ev.detail && ev.detail.module ? ` (${ev.detail.module})` : ''}`;   // asked by a module (hub/approve)
   const label = APPROVAL_CLASS_LABELS[ev.cls] || String(ev.cls || 'do something that needs approval');
   return `${displayName(ev.agent)} wants to ${ev.cls === 'destroy' ? 'take a ' : ''}${label}`;
 }
@@ -4357,7 +4358,7 @@ function renderApprovalSheet(sheet, ev, more) {
     `<div class="ameta"><span class="acountdown">${esc(approvalCountdown(ev.expiresAt))}</span><span class="anote"></span></div>` +
     '<div class="abtns">' +
     '<button class="ok" data-decision="allow">Approve</button>' +
-    '<button class="ok1h" data-decision="allow" data-remember="1h">Approve this kind for 1 hour</button>' +
+    (ev.cls === 'module' ? '' : '<button class="ok1h" data-decision="allow" data-remember="1h">Approve this kind for 1 hour</button>') +   // a module's question is asked once: no "remember" choice
     '<button class="deny" data-decision="deny">Deny</button>' +
     '<button class="later">Later</button>' +
     '</div>';

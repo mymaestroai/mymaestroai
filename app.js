@@ -4812,7 +4812,7 @@
     // the agent's turn keeps streaming underneath while the owner decides. Answers go to
     // POST /api/approvals/<id>; a 404 means someone else (or the timeout) answered first.
     const APPROVAL_CLASS_LABELS = { write_outside: 'write outside its folders', send: 'send off this machine', admin: 'change hub data / another agent', destroy: 'destructive action', money: 'move money' };
-    const APPROVAL_DETAIL_LABELS = { command: 'Command', path: 'Path', paths: 'Paths', to: 'To', channel: 'Channel', text: 'Text', reason: 'Why flagged', tool: 'Tool', input: 'Arguments', name: 'Name', model: 'Model' };
+    const APPROVAL_DETAIL_LABELS = { command: 'Command', path: 'Path', paths: 'Paths', to: 'To', channel: 'Channel', text: 'Text', reason: 'Why flagged', tool: 'Tool', input: 'Arguments', name: 'Name', model: 'Model', module: 'Module' };
     const approvals = new Map();   // id -> { data, card }
     let approvalsTimer = null;
 
@@ -4820,6 +4820,7 @@
       return AGENTS.find(a => a.name === name)?.display || capName(String(name || 'An agent'));
     }
     function approvalWants(ev) {
+      if (ev.cls === 'module') return `${agentDisplayName(ev.agent)} needs your OK${ev.detail && ev.detail.module ? ` (${ev.detail.module})` : ''}`;   // asked by a module (hub/approve)
       const label = APPROVAL_CLASS_LABELS[ev.cls] || String(ev.cls || 'do something that needs approval');
       return `${agentDisplayName(ev.agent)} wants to ${ev.cls === 'destroy' ? 'take a ' : ''}${label}`;
     }
@@ -4875,11 +4876,12 @@
         <div class="approval-meta"><span class="approval-countdown">${esc(approvalCountdown(ev.expiresAt))}</span><span class="approval-note"></span></div>
         <div class="approval-actions">
           <button class="deny" type="button">Deny</button>
-          <button class="allow-1h" type="button" title="Also allow this kind of action for this agent for the next hour (for sending: this recipient or host only)">Approve this kind for 1 hour</button>
+          ${ev.cls === 'module' ? '' : '<button class="allow-1h" type="button" title="Also allow this kind of action for this agent for the next hour (for sending: this recipient or host only)">Approve this kind for 1 hour</button>'}
           <button class="approve" type="button">Approve</button>
         </div>`;
       card.querySelector('.approve').onclick = () => answerApproval(ev.id, 'allow', null);
-      card.querySelector('.allow-1h').onclick = () => answerApproval(ev.id, 'allow', '1h');
+      const always = card.querySelector('.allow-1h');   // a module's question is asked once: no "remember" choice
+      if (always) always.onclick = () => answerApproval(ev.id, 'allow', '1h');
       card.querySelector('.deny').onclick = () => answerApproval(ev.id, 'deny', null);
       const stack = approvalStack();
       stack.insertBefore(card, stack.firstChild);   // newest on top
