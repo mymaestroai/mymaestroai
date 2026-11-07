@@ -46,17 +46,36 @@ EOF
 # Temporary files (private to whoever runs this) and what to undo when a full install fails half way.
 TMPD=$(mktemp -d)
 NEW_DIR=
-STOPPED=0
+ROLLBACK=0     # set once the previous state is saved: from then on a failure puts it back
+COMMITTED=0    # set once the new service answers: from then on nothing is put back
+WAS_RUNNING=0  # the service ran (or was restarting) before this install stopped it
+OLD_PROG=      # the previous /opt/NAME, moved aside until the new one answers
+PREV_UNIT=0    # the previous unit file is saved in $TMPD/unit.prev
+PREV_CFG=0     # the previous MeshCentral config is saved in $TMPD/config.prev
+UNIT_WRITTEN=0
+rollback() {
+  printf 'install.sh: the install did not finish; putting the previous state back ...\n' >&2
+  systemctl stop "$N.service" >/dev/null 2>&1 || true
+  if [[ -n $OLD_PROG && -d $OLD_PROG && ! -L $OLD_PROG ]]; then
+    if [[ -d /opt/$N && ! -L /opt/$N ]]; then rm -rf --one-file-system -- "/opt/$N" || true; fi
+    mv -- "$OLD_PROG" "/opt/$N" || true
+  fi
+  if ((PREV_CFG)); then install -m 0600 -o "$N" -g "$N" "$TMPD/config.prev" "/var/lib/$N/meshcentral-data/config.json" || true; fi
+  if ((PREV_UNIT)); then
+    install -m 0644 -o root -g root "$TMPD/unit.prev" "/etc/systemd/system/$N.service" || true
+  elif ((UNIT_WRITTEN)); then
+    systemctl disable "$N.service" >/dev/null 2>&1 || true   # a first install that failed leaves no service starting over and over
+  fi
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if ((WAS_RUNNING)); then
+    if systemctl start "$N.service" >/dev/null 2>&1; then printf 'install.sh: the previous %s.service runs again.\n' "$N" >&2; fi
+  fi
+}
 on_exit() {
   local rc=$?
-  [[ -n $NEW_DIR && -d $NEW_DIR && ! -L $NEW_DIR ]] && rm -rf --one-file-system -- "$NEW_DIR"
-  [[ -n $TMPD && -d $TMPD && ! -L $TMPD ]] && rm -rf --one-file-system -- "$TMPD"
-  # A reinstall that failed after stopping the running service starts it again, so a failed settings change is not an outage.
-  if ((rc != 0 && STOPPED)); then
-    if systemctl start "$N.service" >/dev/null 2>&1; then
-      printf 'install.sh: started %s.service again.\n' "$N" >&2
-    fi
-  fi
+  if ((rc != 0 && ROLLBACK && !COMMITTED)); then rollback; fi
+  if [[ -n $NEW_DIR && -d $NEW_DIR && ! -L $NEW_DIR ]]; then rm -rf --one-file-system -- "$NEW_DIR" || true; fi
+  if [[ -n $TMPD && -d $TMPD && ! -L $TMPD ]]; then rm -rf --one-file-system -- "$TMPD" || true; fi
   return 0
 }
 trap on_exit EXIT
@@ -76,6 +95,12 @@ read_hub_file() {   # path -> stdout
 hand_back() {   # src name
   as_hub bash --noprofile --norc -c 'set -eu; umask 022; cd -P -- "$1"; rm -f -- "$2"; set -C; cat >"$2"' _ "$SERVICE_DIR" "$2" <"$1" \
     || fail "Could not write $2 into $SERVICE_DIR with the hub's account."
+}
+# Reads at most MAX bytes of a file in the service's own folder with the service's account, without following a link and
+# without waiting on a pipe, so a service that went wrong can neither point root elsewhere nor hold it up.
+read_service_file() {   # path max -> stdout
+  timeout 15 setpriv --reuid="$N_UID" --regid="$N_GID" --clear-groups --no-new-privs -- env -i PATH=/usr/bin:/bin \
+    dd if="$1" bs="$2" count=1 iflag=nofollow,nonblock status=none
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -232,7 +257,8 @@ validate_request() {
   local mc=$RUNTIME_REAL/node_modules/meshcentral
   [[ -f $mc/meshcentral.js ]] || die "$mc/meshcentral.js does not exist."
   [[ -f $mc/package.json ]] || die "$mc/package.json does not exist."
-  grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"${MESH_VERSION//./\\.}\"" "$mc/package.json" \
+  read_hub_file "$mc/package.json" | head -c 1048576 >"$TMPD/package.json" || die "Cannot read $mc/package.json."
+  grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"${MESH_VERSION//./\\.}\"" "$TMPD/package.json" \
     || die "The MeshCentral in $RUNTIME_DIR is not version $MESH_VERSION."
   NODE_REAL=$(realpath -e -- "$NODE_BIN") || die "MMR_NODE '$NODE_BIN' does not exist."
   [[ -f $NODE_REAL && -x $NODE_REAL ]] || die "MMR_NODE must be a regular executable file."
@@ -249,13 +275,19 @@ validate_request() {
 # ---------------------------------------------------------------------------------------------------------------
 # The sandbox: one list, used by the service unit and by every command that runs MeshCentral during the install
 # ---------------------------------------------------------------------------------------------------------------
+# The file system is an allow list: an empty read-only root with only the system's programs and libraries, a few files from
+# /etc that Node reads, the program in /opt/NAME (read-only) and the data in /var/lib/NAME. Nothing else on this computer
+# (home folders, data disks, backups, My Maestro's folders wherever they are) exists for the service. It can accept connections
+# but never open one (connect is refused), and the addresses it may talk with are loopback and the allowed agent addresses.
 build_sandbox() {
   SANDBOX=(
     "UMask=0077"
     "StateDirectory=$N"
     "StateDirectoryMode=0700"
+    "TemporaryFileSystem=/:ro"
+    "BindReadOnlyPaths=/usr -/lib -/lib64 -/bin -/sbin -/etc/ld.so.cache -/etc/localtime -/etc/passwd -/etc/group -/etc/nsswitch.conf -/opt/$N"
+    "MountAPIVFS=yes"
     "NoNewPrivileges=yes"
-    "ProtectSystem=strict"
     "ProtectHome=yes"
     "InaccessiblePaths=-$APP_REAL -$HUB_REAL"
     "PrivateTmp=yes"
@@ -277,6 +309,7 @@ build_sandbox() {
     "SystemCallArchitectures=native"
     "SystemCallFilter=@system-service"
     "SystemCallFilter=~@privileged"
+    "SystemCallFilter=~connect"
     "SystemCallErrorNumber=EPERM"
     "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK"
     "IPAddressDeny=any"
@@ -334,16 +367,20 @@ EOF
 # ---------------------------------------------------------------------------------------------------------------
 # One command as the service user, inside a transient unit with the service's sandbox and no network at all, without the
 # caller's terminal. Output (both streams) on stdout; returns the command's exit status. Leftover processes die with the unit.
-run_sandboxed() {
+run_in_sandbox() {   # workdir extra-property-or-empty command args...
+  local wd=$1 extra=$2
+  shift 2
   local -a props=()
   local p
   for p in "${SANDBOX[@]}"; do props+=(-p "$p"); done
+  [[ -z $extra ]] || props+=(-p "$extra")
   timeout 180 systemd-run --quiet --wait --pipe --collect --service-type=exec \
     --unit="$N-setup-$$-$RANDOM" --uid="$N" --gid="$N" \
-    -p WorkingDirectory="/opt/$N/runtime" -p Environment=NODE_ENV=production -p Environment=HOME="/var/lib/$N" \
+    -p WorkingDirectory="$wd" -p Environment=NODE_ENV=production -p Environment=HOME="/var/lib/$N" \
     -p RuntimeMaxSec=150 -p PrivateNetwork=yes "${props[@]}" \
     -- "$@" </dev/null 2>&1
 }
+run_sandboxed() { run_in_sandbox "/opt/$N/runtime" "" "$@"; }
 
 run_mesh() {
   run_sandboxed "/opt/$N/node" "/opt/$N/runtime/node_modules/meshcentral/meshcentral.js" \
@@ -352,12 +389,12 @@ run_mesh() {
 
 MESH_OUT=
 MESH_OK=0
-# Runs one command and sets MESH_OUT / MESH_OK. Like the connector: it worked when MeshCentral printed "Done." and was not killed by the time limit.
+# Runs one command and sets MESH_OUT / MESH_OK: it worked when it exited 0 and MeshCentral printed "Done.".
 mesh_step() {
   local rc=0
   MESH_OUT=$(run_mesh "$@") || rc=$?
   MESH_OK=0
-  if printf '%s\n' "$MESH_OUT" | grep -Eq '(^|[^A-Za-z0-9_])Done\.' && ((rc != 124 && rc != 137)); then MESH_OK=1; fi
+  if ((rc == 0)) && printf '%s\n' "$MESH_OUT" | grep -Eq '(^|[^A-Za-z0-9_])Done\.'; then MESH_OK=1; fi
   return 0
 }
 
@@ -381,16 +418,7 @@ make_account() {   # user hash label
   ((MESH_OK)) || mesh_fail "create the $label account" "$hash"
 }
 
-# Copies a file from the service's own folder into DEST as a plain file. cp -P copies a symbolic link as a link, so a
-# file that was swapped for a link or a pipe is seen here and refused, never followed.
-safe_copy() {   # src dest maxbytes
-  local src=$1 dest=$2 max=$3
-  cp -P --no-preserve=all -- "$src" "$dest" || fail "Could not copy $src."
-  if [[ -L $dest || ! -f $dest ]] || (($(stat -c '%s' -- "$dest") > max)); then
-    rm -f -- "$dest"
-    fail "$src changed while it was being copied; nothing was installed from it."
-  fi
-}
+svc_state() { systemctl show -p ActiveState --value "$N.service" 2>/dev/null || true; }
 
 full_install() {
   local replace=$1
@@ -398,6 +426,9 @@ full_install() {
   [[ -d /run/systemd/system ]] || die "This computer does not run systemd, which the service mode needs."
   command -v setpriv >/dev/null 2>&1 || die "setpriv (from util-linux) is needed and was not found."
   command -v systemd-run >/dev/null 2>&1 || die "systemd-run is needed and was not found."
+  local sv
+  sv=$(systemctl --version 2>/dev/null | head -n 1 | awk '{print $2}')
+  [[ $sv =~ ^[0-9]+$ ]] && ((sv >= 247)) || die "The service needs systemd 247 or newer (this computer has ${sv:-an unknown version})."
 
   local unit=/etc/systemd/system/$N.service prog=/opt/$N state=/var/lib/$N
   [[ -L $prog ]] && die "$prog is a symbolic link."
@@ -412,8 +443,10 @@ full_install() {
     fi
   fi
 
-  # Something else on the control port.
-  if ! systemctl is-active --quiet "$N.service" 2>/dev/null; then
+  # Something else on the control port (looked at only when no copy of this service runs or is between restarts).
+  local st0
+  st0=$(svc_state)
+  if [[ -z $st0 || $st0 == inactive || $st0 == failed ]]; then
     if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -Eq "^(127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\*|\\[::\\]|\\[::ffff:127\\.0\\.0\\.1\\]):$PORT\$"; then
       die "Something already listens on 127.0.0.1:$PORT. Choose another control port."
     fi
@@ -434,11 +467,22 @@ full_install() {
       --comment 'My Maestro remote computers' "$N"
   fi
 
-  if systemctl is-active --quiet "$N.service" 2>/dev/null; then
-    info "Stopping $N.service ..."
-    systemctl stop "$N.service"
-    STOPPED=1
+  N_UID=$(id -u -- "$N")
+  N_GID=$(id -g -- "$N")
+
+  # Stop the service if it runs or is between restarts, and save what a failed install must put back.
+  case $(svc_state) in
+    "" | inactive | failed) ;;
+    *) WAS_RUNNING=1; info "Stopping $N.service ..."; systemctl stop "$N.service" ;;
+  esac
+  if [[ -f $unit && ! -L $unit ]]; then
+    if cp -P --no-preserve=all -- "$unit" "$TMPD/unit.prev"; then PREV_UNIT=1; fi
   fi
+  if [[ -f $state/meshcentral-data/config.json ]]; then
+    if read_service_file "$state/meshcentral-data/config.json" $((MAX_CONFIG_BYTES + 1)) >"$TMPD/config.prev" \
+      && (($(stat -c '%s' -- "$TMPD/config.prev") <= MAX_CONFIG_BYTES)); then PREV_CFG=1; fi
+  fi
+  ROLLBACK=1
 
   # ---- the program: a root-owned copy, private until it has been checked ----
   NEW_DIR=/opt/.$N.new.$$
@@ -456,6 +500,8 @@ full_install() {
   [[ -f $mc/meshcentral.js && ! -L $mc/meshcentral.js ]] || fail "The copy has no meshcentral.js."
   [[ -f $mc/package.json && ! -L $mc/package.json ]] || fail "The copy has no MeshCentral package.json."
   grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"${MESH_VERSION//./\\.}\"" "$mc/package.json" || fail "The copy is not MeshCentral $MESH_VERSION."
+  [[ -f $mc/agents/agent-defaults.json && -f $mc/agents/MeshService64.exe ]] \
+    || fail "The runtime has no MeshCentral agent files. Open the Remote computers setup again so My Maestro fetches them, then run this again."
   # A link inside the copy must stay inside the copy.
   local link target
   while IFS= read -r -d '' link; do
@@ -465,19 +511,19 @@ full_install() {
   # Only now is it opened up.
   chmod -R u+rwX,go+rX,go-w,a-s "$NEW_DIR"
   chmod 0755 "$NEW_DIR/node"
+  # Node must run as the service user inside the sandbox before anything of the previous install is replaced.
+  local nv
+  nv=$(run_in_sandbox / "BindReadOnlyPaths=$NEW_DIR" "$NEW_DIR/node" --version) \
+    || fail "The copied Node does not run as $N inside the sandbox: $(printf '%s' "$nv" | tr -cd '\40-\176' | tail -c 300)"
+  [[ $nv =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || fail "The copied Node did not report a version."
 
-  # Swap it in.
-  local old_dir=
+  # Swap it in; the previous program is kept until the new service answers.
   if [[ -e $prog ]]; then
-    old_dir=/opt/.$N.old.$$
-    mv -- "$prog" "$old_dir"
+    OLD_PROG=/opt/.$N.old.$$
+    mv -- "$prog" "$OLD_PROG"
   fi
-  if ! mv -- "$NEW_DIR" "$prog"; then
-    [[ -z $old_dir ]] || mv -- "$old_dir" "$prog"
-    fail "Could not put the program in place."
-  fi
+  mv -- "$NEW_DIR" "$prog" || fail "Could not put the program in place."
   NEW_DIR=
-  [[ -z $old_dir ]] || rm -rf --one-file-system -- "$old_dir"
 
   # ---- the state (the service user has no process running now) ----
   local d
@@ -491,11 +537,7 @@ full_install() {
   (($(stat -c '%s' -- "$TMPD/config.json") <= MAX_CONFIG_BYTES)) || fail "config.json is larger than $MAX_CONFIG_BYTES bytes."
   install -m 0600 -o "$N" -g "$N" "$TMPD/config.json" "$state/meshcentral-data/config.json"
 
-  # ---- Node and the accounts, inside the service's own sandbox (MeshCentral stopped) ----
-  local nv
-  nv=$(run_sandboxed "/opt/$N/node" --version) \
-    || fail "The copied Node does not run as $N inside the sandbox: $(printf '%s' "$nv" | tr -cd '\40-\176' | tail -c 300)"
-  [[ $nv =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || fail "The copied Node did not report a version."
+  # ---- the accounts, inside the service's own sandbox (MeshCentral stopped) ----
   info "Making the MeshCentral accounts ..."
   make_account "$ADMIN_USER" "$ADMIN_HASH" admin
   mesh_step --adminaccount "$ADMIN_USER"
@@ -505,9 +547,9 @@ full_install() {
   # ---- the unit ----
   unit_text >"$TMPD/unit"
   install -m 0644 -o root -g root "$TMPD/unit" "$unit"
+  UNIT_WRITTEN=1
   systemctl daemon-reload
   systemctl enable --now "$N.service"
-  STOPPED=0
 
   # ---- wait until it answers ----
   info "Waiting for MeshCentral to start (up to 90 seconds) ..."
@@ -524,8 +566,15 @@ full_install() {
     fail "$N.service did not become ready within 90 seconds. The log is above."
   fi
 
+  # The new service answers: keep it, and drop the previous program.
+  COMMITTED=1
+  if [[ -n $OLD_PROG && -d $OLD_PROG && ! -L $OLD_PROG ]]; then rm -rf --one-file-system -- "$OLD_PROG"; fi
+  OLD_PROG=
+
   # ---- hand the public certificate and the result back to the hub, with the hub's own account ----
-  safe_copy "$state/meshcentral-data/root-cert-public.crt" "$TMPD/root-cert-public.crt" 65536
+  read_service_file "$state/meshcentral-data/root-cert-public.crt" 65537 >"$TMPD/root-cert-public.crt" \
+    || fail "Could not read the root certificate with the service's account."
+  (($(stat -c '%s' -- "$TMPD/root-cert-public.crt") <= 65536)) || fail "The root certificate is too large."
   grep -q -- '-----BEGIN CERTIFICATE-----' "$TMPD/root-cert-public.crt" || fail "The root certificate is not a certificate."
   printf '{"name":"%s","meshVersion":"%s","controlPort":%s,"installedAt":"%s"}\n' \
     "$N" "$MESH_VERSION" "$PORT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$TMPD/installed.json"

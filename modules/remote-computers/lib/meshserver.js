@@ -299,9 +299,19 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     writeFileAtomic(paths.request, lines.join('\n') + '\n');
     return { created, needsService: true, command };
   }
+  // One at a time: a health check and the start sequence asking together share one run (and one download of the agent files).
+  let serviceBoot = null;
+  function bootstrapServiceOnce() {
+    if (serviceBoot) return serviceBoot;
+    const p = bootstrapService();
+    serviceBoot = p;
+    const clear = () => { if (serviceBoot === p) serviceBoot = null; };
+    p.then(clear, clear);
+    return p;
+  }
 
   async function bootstrap() {
-    if (service) return bootstrapService();
+    if (service) return bootstrapServiceOnce();
     const my = epoch;
     const alive = () => { if (epoch !== my) throw cancelled(); };
     if (readAccountsStrict()) return { created: false };

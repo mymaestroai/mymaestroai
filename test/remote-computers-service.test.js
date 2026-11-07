@@ -126,11 +126,14 @@ test('--print-unit has every hardening line once, the hub-home comment and the a
     `ExecStart=/opt/${N}/node /opt/${N}/runtime/node_modules/meshcentral/meshcentral.js --datapath /var/lib/${N}/meshcentral-data --npmpath "/opt/${N}/node /opt/${N}/no-npm.js"`,
     'Restart=always', 'RestartSec=10', 'TimeoutStopSec=20', 'UMask=0077',
     `StateDirectory=${N}`, 'StateDirectoryMode=0700',
-    'NoNewPrivileges=yes', 'ProtectSystem=strict', 'ProtectHome=yes', 'PrivateTmp=yes', 'PrivateDevices=yes',
+    'TemporaryFileSystem=/:ro',
+    `BindReadOnlyPaths=/usr -/lib -/lib64 -/bin -/sbin -/etc/ld.so.cache -/etc/localtime -/etc/passwd -/etc/group -/etc/nsswitch.conf -/opt/${N}`,
+    'MountAPIVFS=yes',
+    'NoNewPrivileges=yes', 'ProtectHome=yes', 'PrivateTmp=yes', 'PrivateDevices=yes',
     'ProtectKernelTunables=yes', 'ProtectKernelModules=yes', 'ProtectKernelLogs=yes', 'ProtectControlGroups=yes',
     'ProtectClock=yes', 'ProtectHostname=yes', 'ProtectProc=invisible', 'RestrictNamespaces=yes', 'RestrictRealtime=yes',
     'RestrictSUIDSGID=yes', 'LockPersonality=yes', 'RemoveIPC=yes', 'CapabilityBoundingSet=', 'AmbientCapabilities=',
-    'SystemCallArchitectures=native', 'SystemCallFilter=@system-service', 'SystemCallFilter=~@privileged',
+    'SystemCallArchitectures=native', 'SystemCallFilter=@system-service', 'SystemCallFilter=~@privileged', 'SystemCallFilter=~connect',
     'SystemCallErrorNumber=EPERM', 'RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK',
     'IPAddressDeny=any', 'IPAddressAllow=127.0.0.0/8 ::1/128 100.64.0.0/10 192.0.2.7 198.51.100.0/24',
     'MemoryMax=2G', 'TasksMax=512', 'WantedBy=multi-user.target',
@@ -285,4 +288,13 @@ test('refuses a config.json that is too big or a symlink', { skip: skipRoot }, (
 test('refuses a request file that is too big', { skip: skipRoot }, () => {
   const L = layout({}, { rawRequest: (t) => `${t}# ${'x'.repeat(9000)}\n` });
   refuses(null, L.req, /larger than 8192/);
+});
+
+test('--print-unit never re-exposes the real root: no ProtectSystem (it binds / back over the empty root)', { skip: skipRoot }, () => {
+  const L = layout();
+  const r = unitOf(L.req);
+  assert.equal(r.code, 0, r.all);
+  assert.doesNotMatch(r.out, /^ProtectSystem=/m);
+  assert.doesNotMatch(r.out, /^DynamicUser=/m, 'DynamicUser implies ProtectSystem=strict');
+  assert.match(r.out, /^TemporaryFileSystem=\/:ro$/m);
 });

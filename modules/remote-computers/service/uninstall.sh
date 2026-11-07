@@ -124,8 +124,8 @@ fi
 if [[ -n $hub_home && -n $hub_ids ]]; then
   sdir=$hub_home/service
   if timeout 60 setpriv --reuid="${hub_ids%%:*}" --regid="${hub_ids##*:}" --clear-groups --no-new-privs -- env -i PATH=/usr/bin:/bin \
-    bash --noprofile --norc -c 'cd -P -- "$1" 2>/dev/null || exit 0; rm -f -- root-cert-public.crt installed.json' _ "$sdir"; then
-    removed+=("$sdir/root-cert-public.crt and installed.json (if they were there)")
+    bash --noprofile --norc -c 'cd -P -- "$1" 2>/dev/null || exit 0; rm -f -- root-cert-public.crt installed.json request.env' _ "$sdir"; then
+    removed+=("$sdir/root-cert-public.crt, installed.json and request.env (if they were there)")
   else
     note "Note: could not remove the hand-back files in $sdir with the hub's account."
   fi

@@ -16,7 +16,11 @@ const SHA384_RE = /^[a-f0-9]{96}$/;
 const USER_AGENT = 'MyMaestro-RemoteComputers';
 
 const clean = (s, max = 200) => String(s == null ? '' : s).replace(/[^\x20-\x7e]+/g, ' ').slice(0, max);
+const MANIFEST = 'agent-defaults.json';
+const TEMP_RE = /^\.[0-9a-f]{16}\.tmp$/;
 const nameOk = (n) => typeof n === 'string' && NAME_RE.test(n) && n !== '.' && n !== '..';
+// The code of a failed fetch: undici puts it on the cause ("TypeError: fetch failed", cause.code ECONNRESET).
+const codeOf = (e) => clean((e && ((e.cause && (e.cause.code || e.cause.name)) || e.code || e.name)) || 'error', 60);
 
 // Reads and checks the manifest; returns a flat list of { filename, url, size, sha384 }.
 function readManifest(file) {
@@ -37,7 +41,7 @@ function readManifest(file) {
     if (!Array.isArray(r.files) || r.files.length < 1) throw bad('files');
     for (const f of r.files) {
       if (!f || typeof f !== 'object') throw bad('file');
-      if (!nameOk(f.filename)) throw bad('filename');
+      if (!nameOk(f.filename) || f.filename === MANIFEST) throw bad('filename');
       if (!nameOk(f.asset)) throw bad('asset');
       if (!Number.isInteger(f.size) || f.size < 1 || f.size > MAX_FILE_BYTES) throw bad('size');
       if (typeof f.sha384 !== 'string' || !SHA384_RE.test(f.sha384)) throw bad('sha384');
@@ -71,7 +75,7 @@ async function download(entry, dir, fetchFn, timeoutMs) {
     try {
       res = await fetchFn(entry.url, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs), headers: { 'User-Agent': USER_AGENT } });
     } catch (e) {
-      throw fail(`the download failed (${clean((e && (e.code || e.name)) || 'error', 60)})`);
+      throw fail(`the download failed (${codeOf(e)})`);
     }
     if (!res || !res.ok || !res.body) throw fail(`the download was refused (HTTP ${clean(res && res.status, 10) || '?'})`);
     fd = fs.openSync(tmp, 'wx', 0o600);
@@ -83,11 +87,15 @@ async function download(entry, dir, fetchFn, timeoutMs) {
         got += buf.length;
         if (got > entry.size) { try { if (res.body.cancel) await res.body.cancel(); } catch { /* closed */ } throw fail('the download was longer than expected'); }
         hash.update(buf);
-        for (let off = 0; off < buf.length;) off += fs.writeSync(fd, buf, off, buf.length - off);
+        for (let off = 0; off < buf.length;) {
+          const n = fs.writeSync(fd, buf, off, buf.length - off);
+          if (!(n > 0)) throw fail('writing the file made no progress');
+          off += n;
+        }
       }
     } catch (e) {
       if (e && typeof e.message === 'string' && e.message.startsWith(`${entry.filename}: `)) throw e;
-      throw fail(`the download was interrupted (${clean((e && (e.code || e.name)) || 'error', 60)})`);
+      throw fail(`the download was interrupted (${codeOf(e)})`);
     }
     fs.closeSync(fd); fd = null;
     if (got !== entry.size) throw fail('the download was shorter than expected');
@@ -105,7 +113,12 @@ async function download(entry, dir, fetchFn, timeoutMs) {
 async function ensureAgentFiles({ runtimeDir, fetch = globalThis.fetch, log = () => {}, concurrency = 3, timeoutMs = 120000 } = {}) {
   if (!runtimeDir) throw new Error('ensureAgentFiles needs runtimeDir');
   const dir = path.join(runtimeDir, 'node_modules', 'meshcentral', 'agents');
-  const list = readManifest(path.join(dir, 'agent-defaults.json'));
+  const list = readManifest(path.join(dir, MANIFEST));
+  // Temp files of a download that was cut off (the hub stopped half way) are not kept, so they never reach the service's copy.
+  for (const name of fs.readdirSync(dir)) {
+    if (!TEMP_RE.test(name)) continue;
+    try { if (fs.lstatSync(path.join(dir, name)).isFile()) fs.unlinkSync(path.join(dir, name)); } catch { /* gone */ }
+  }
   const total = list.length;
   const todo = [];
   let present = 0;
