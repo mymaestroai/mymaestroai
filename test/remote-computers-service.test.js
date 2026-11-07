@@ -135,7 +135,7 @@ test('--print-unit has every hardening line once, the hub-home comment and the a
     'RestrictSUIDSGID=yes', 'LockPersonality=yes', 'RemoveIPC=yes', 'CapabilityBoundingSet=', 'AmbientCapabilities=',
     'SystemCallArchitectures=native', 'SystemCallFilter=@system-service', 'SystemCallFilter=~@privileged', 'SystemCallFilter=~connect',
     'SystemCallErrorNumber=EPERM', 'RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK',
-    'IPAddressDeny=any', 'IPAddressAllow=127.0.0.0/8 ::1/128 100.64.0.0/10 192.0.2.7 198.51.100.0/24',
+    'IPAddressDeny=any', 'IPAddressAllow=127.0.0.1/32 ::1/128 100.64.0.0/10 192.0.2.7 198.51.100.0/24',
     'MemoryMax=2G', 'TasksMax=512', 'WantedBy=multi-user.target',
   ]) once(l);
   assert.ok(!/mymaestro-remote(?!-test)/.test(r.out.replace(/mymaestro-remote-test/g, '')), 'the default name must not leak in');
@@ -147,7 +147,7 @@ test('--print-unit with the default name and the default Tailscale range', { ski
   const r = unitOf(L.req);
   assert.equal(r.code, 0, r.all);
   assert.match(r.out, /^User=mymaestro-remote$/m);
-  assert.match(r.out, /^IPAddressAllow=127\.0\.0\.0\/8 ::1\/128 100\.64\.0\.0\/10$/m);
+  assert.match(r.out, /^IPAddressAllow=127\.0\.0\.1\/32 ::1\/128 100\.64\.0\.0\/10$/m);
 });
 
 test('full install as non-root refuses and says it must run as root', { skip: skipRoot }, () => {

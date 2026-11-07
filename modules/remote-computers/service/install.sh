@@ -278,7 +278,8 @@ validate_request() {
 # The file system is an allow list: an empty read-only root with only the system's programs and libraries, a few files from
 # /etc that Node reads, the program in /opt/NAME (read-only) and the data in /var/lib/NAME. Nothing else on this computer
 # (home folders, data disks, backups, My Maestro's folders wherever they are) exists for the service. It can accept connections
-# but never open one (connect is refused), and the addresses it may talk with are loopback and the allowed agent addresses.
+# but never open one (connect is refused), and the addresses it may talk with are 127.0.0.1 (where the hub connects from; not
+# the rest of 127/8, where the local DNS resolvers listen) and the allowed agent addresses.
 build_sandbox() {
   SANDBOX=(
     "UMask=0077"
@@ -313,7 +314,7 @@ build_sandbox() {
     "SystemCallErrorNumber=EPERM"
     "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK"
     "IPAddressDeny=any"
-    "IPAddressAllow=127.0.0.0/8 ::1/128 $ALLOW"
+    "IPAddressAllow=127.0.0.1/32 ::1/128 $ALLOW"
     "MemoryMax=2G"
     "TasksMax=512"
   )

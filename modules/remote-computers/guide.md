@@ -117,8 +117,12 @@ What the command does:
 - It creates a system account named `mymaestro-remote`.
 - It copies the program to `/opt/mymaestro-remote`.
 - It keeps MeshCentral's data and keys in `/var/lib/mymaestro-remote`, where only that account can read them.
-- It starts a locked-down service. The service cannot read anyone's home folder, and it can only talk to this
-  computer and the allowed agent addresses.
+- It starts a locked-down service. The service sees only the system's programs, its own program and its own data:
+  no home folders, no other disks, none of My Maestro's folders. It accepts connections from My Maestro and from the
+  allowed agent addresses, and cannot open any connection itself.
+- Once your computer is connected, set "Addresses the computers may connect from" to that computer's own 100.x
+  address and run the install command again. The default (the whole Tailscale range) also holds Tailscale's own DNS
+  address, and the setup warns until the range is narrowed.
 
 Good to know:
 

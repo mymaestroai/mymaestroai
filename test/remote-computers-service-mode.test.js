@@ -568,3 +568,21 @@ test('auto keeps a setup that already ran in hub mode in hub mode, and says what
   assert.strictEqual(mk(true, 'service').mode, 'service', 'an explicit choice wins');
   assert.strictEqual(mk(true, 'hub').mode, 'hub');
 });
+
+test('service mode warns while the allowed addresses hold Tailscale\'s DNS address, and stops once they name the computer', async () => {
+  const healthWith = async (allowed) => {
+    const home = tmp();
+    const r = createRemote({
+      env: { MODULE_SETTINGS: JSON.stringify({ ...SETTINGS, run_as: 'service', agent_allowed: allowed }), CONNECTOR_DATA_HOME: home, MODULE_RUNTIME_DIR: fakeRuntime() },
+      write: () => {}, log: () => {},
+      deps: { platform: 'linux', serviceSupported: true, mesh: { probe: async () => false, spawn: forbidden().spawn, execFile: forbidden().execFile, ensureAgents: async () => ({}) } },
+    });
+    const h = await r.callTool('health');
+    await r.stop();
+    return h.warnings.some((w) => /100\.100\.100\.100/.test(w));
+  };
+  assert.strictEqual(await healthWith('100.64.0.0/10'), true, 'the default range');
+  assert.strictEqual(await healthWith('192.0.2.0/24, 100.96.0.0/12'), true, 'a range that holds it');
+  assert.strictEqual(await healthWith('100.101.2.3/32'), false, 'one computer');
+  assert.strictEqual(await healthWith('100.101.2.3, 192.0.2.7'), false);
+});

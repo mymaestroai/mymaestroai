@@ -219,6 +219,17 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const state = { phase: !supported ? 'unsupported' : runtimeOk ? 'idle' : 'reinstall', waiting: !supported ? LINUX_ONLY : runtimeOk ? null : REINSTALL, group: null, lastError: null, warnings: [], service: null };
   const HUB_MODE_WARNING = 'MeshCentral runs under My Maestro\'s own account. On Linux, set "Run as" to service to give it its own locked-down account.'
     + (legacyHub && settings.run_as !== 'hub' ? ' This setup started in hub mode, so after the switch its computers need their agent installed again.' : '');
+  // The service can only send to the allowed agent addresses; a range holding Tailscale's DNS (100.100.100.100) would let it send DNS queries out.
+  const MAGIC_DNS_WARNING = 'The allowed addresses include Tailscale\'s DNS address 100.100.100.100. Once your computer is connected, set "Addresses the computers may connect from" to its own 100.x address, then run the install command again.';
+  const coversMagicDns = (list) => String(list === undefined || list === null || String(list).trim() === '' ? '100.64.0.0/10' : list).split(',').some((entry) => {
+    const m = /^\s*(\d+)\.(\d+)\.(\d+)\.(\d+)(?:\/(\d+))?\s*$/.exec(entry);
+    if (!m) return false;
+    const ip = ((+m[1] << 24) >>> 0) + (+m[2] << 16) + (+m[3] << 8) + +m[4];
+    const bits = m[5] === undefined ? 32 : +m[5];
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    const dns = ((100 << 24) >>> 0) + (100 << 16) + (100 << 8) + 100;
+    return ((ip & mask) >>> 0) === ((dns & mask) >>> 0);
+  });
 
   let startP = null, agentClient = null;
   let gen = 0, stopped = false;   // gen goes up at every stop; a start sequence of an older generation stops at its next step
@@ -286,6 +297,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (!supported) { out.waiting = LINUX_ONLY; out.lastError = null; return out; }
     if (state.waiting) { out.waiting = state.waiting; return out; }
     if (mode === 'hub') out.warnings.push(HUB_MODE_WARNING);
+    if (mode === 'service' && coversMagicDns(settings.agent_allowed)) out.warnings.push(MAGIC_DNS_WARNING);
     if (mode === 'service' && serviceNow) {
       if (!serviceNow.ready) {
         if (state.phase === 'ready') { state.phase = 'service-wait'; if (agentClient) { try { agentClient.close(); } catch { /* closed */ } agentClient = null; } }
