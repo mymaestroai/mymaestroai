@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { loadModule } = require('../lib/modules/manifest');
-const { createTokens, createInstaller, sessionCookies, ALPHABET, TOKEN_LENGTH, TOKEN_TTL_MS, MAX_TOKENS, CACHE_FILE, CONFIG_FILE, CACHE_TTL_MS, RATE_LIMIT, GONE, UNAVAILABLE } = require('../modules/remote-computers/lib/installer');
+const { createTokens, createInstaller, sessionCookies, ALPHABET, TOKEN_LENGTH, TOKEN_TTL_MS, MAX_TOKENS, CACHE_FILE, CONFIG_FILE, CACHE_TTL_MS, RATE_LIMIT, GONE, UNAVAILABLE, RECEIVE_FETCH_MS } = require('../modules/remote-computers/lib/installer');
 const { createRemote, TOOLS } = require('../modules/remote-computers/server');
 const { checks } = require('../modules/remote-computers/index');
 
@@ -114,8 +114,9 @@ function newInstaller(over = {}) {
   const fetchInstaller = over.fetchInstaller || (async () => { fetches++; return EXE; });
   const inst = createInstaller({
     home, now: c.now, log: (...a) => logs.push(a.join(' ')),
-    fetchInstaller: async () => { const r = await fetchInstaller(); if (!over.fetchInstaller) return r; fetches++; return r; },
+    fetchInstaller: async (a) => { const r = await fetchInstaller(a); if (!over.fetchInstaller) return r; fetches++; return r; },
     address: () => 'hub.example.ts.net',
+    ...(over.receiveMs ? { receiveMs: over.receiveMs } : {}), ...(over.prepareMs ? { prepareMs: over.prepareMs } : {}),
     ...(over.configKey ? { configKey: over.configKey } : {}),
   });
   const get =(token) => inst.receive({ method: 'GET', path: 'installer', query: { t: token } });
@@ -277,15 +278,89 @@ test('receiver: something that is not a program file is refused, and is not cach
   assert.ok(!fs.existsSync(path.join(x.home, CACHE_FILE)));
 });
 
-test('receiver: after 10 wrong tokens in a minute nothing is answered, not even a good link', async () => {
+test('receiver: after 10 wrong tokens in a minute more wrong ones are refused, but a valid link still works', async () => {
   const x = newInstaller();
   assert.strictEqual(RATE_LIMIT, 10);
+  const good = x.inst.link().url.split('?t=').pop();
   for (let i = 0; i < 10; i++) assert.strictEqual((await x.get('zzzzzzzz')).status, 404);
-  const r = await x.get(x.inst.link().url.split('?t=').pop());
-  assert.strictEqual(r.status, 429);
-  assert.strictEqual(x.fetches(), 0);
+  assert.strictEqual((await x.get('zzzzzzzz')).status, 429, 'the 11th wrong token');
+  assert.strictEqual((await x.get(good)).status, 200, 'the valid link is not blocked by the bad-token cap');
+  assert.strictEqual((await x.get(good)).status, 429, 'but once spent it counts as a bad token');
   x.c.advance(60000);
   assert.strictEqual((await x.get('zzzzzzzz')).status, 404, 'a minute later it is open again');
+});
+
+test('tokens: has() looks without spending', () => {
+  const t = createTokens({});
+  const k = t.make();
+  assert.strictEqual(t.has(k.token), true);
+  assert.strictEqual(t.has(k.token), true, 'still there');
+  assert.strictEqual(t.has('nope'), false);
+  assert.strictEqual(t.has(undefined), false);
+  assert.strictEqual(t.consume(k.token), true);
+  assert.strictEqual(t.has(k.token), false);
+});
+
+test('prepare: the installer is fetched when the link is made, and the receiver then serves the cache without fetching', async () => {
+  const x = newInstaller();
+  await x.inst.prepare();
+  assert.strictEqual(x.fetches(), 1);
+  assert.ok(fs.existsSync(path.join(x.home, CACHE_FILE)));
+  const r = await x.get(x.inst.link().url.split('?t=').pop());
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(x.fetches(), 1, 'served from the cache');
+  await x.inst.prepare();
+  assert.strictEqual(x.fetches(), 1, 'a valid cache is not fetched again');
+});
+
+test('prepare: a cache built for another configuration is fetched again', async () => {
+  let key = 'a';
+  const x = newInstaller({ configKey: () => key });
+  await x.inst.prepare();
+  await x.inst.prepare();
+  assert.strictEqual(x.fetches(), 1);
+  key = 'b';
+  await x.inst.prepare();
+  assert.strictEqual(x.fetches(), 2);
+  fs.unlinkSync(path.join(x.home, CONFIG_FILE));   // no record: not trusted
+  await x.inst.prepare();
+  assert.strictEqual(x.fetches(), 3);
+});
+
+test('prepare: a failed fetch says why in plain words, with no secrets', async () => {
+  const secret = 'hunter2-the-admin-password';
+  const a = newInstaller({ fetchInstaller: async () => { throw new Error(`login for admin failed with ${secret} at 127.0.0.1:9971`); } });
+  await assert.rejects(a.inst.prepare(), (e) => { assert.match(e.message, /^The installer could not be prepared: [^]+/); assert.doesNotMatch(e.message, /hunter2|127\.0\.0\.1|9971|admin/); return true; });
+  const b = newInstaller({ fetchInstaller: async () => { throw Object.assign(new Error(`connect ECONNREFUSED 127.0.0.1:9971`), { code: 'ECONNREFUSED' }); } });
+  await assert.rejects(b.inst.prepare(), (e) => { assert.strictEqual(e.message, 'The installer could not be prepared: connection error ECONNREFUSED'); return true; });
+  const c = newInstaller({ fetchInstaller: async () => Buffer.from('<html>sign in</html>') });
+  await assert.rejects(c.inst.prepare(), /^Error: The installer could not be prepared: The server did not send a program file\.$/);
+  assert.ok(!fs.existsSync(path.join(c.home, CACHE_FILE)));
+});
+
+test('receiver: if the cache vanished after the link was made it fetches, with a hard deadline that aborts the requests and gives the link back', async () => {
+  let signal = null, hang = true;
+  const x = newInstaller({ receiveMs: 50, fetchInstaller: (a) => { signal = a && a.signal; return hang ? new Promise(() => {}) : Promise.resolve(EXE); } });
+  const token = x.inst.link().url.split('?t=').pop();
+  const t0 = Date.now();
+  const r = await x.get(token);
+  assert.strictEqual(r.status, 502);
+  assert.strictEqual(r.body, UNAVAILABLE);
+  assert.ok(Date.now() - t0 < 2000, 'gave up at the deadline');
+  assert.ok(signal && signal.aborted, 'the fetch was aborted');
+  assert.ok(x.logs.some((l) => /installer download failed/.test(l)));
+  hang = false;
+  assert.strictEqual((await x.get(token)).status, 200, 'the token was restored');
+  assert.strictEqual(RECEIVE_FETCH_MS, 20000);
+});
+
+test('receiver: a fetch that finishes after its deadline stores nothing', async () => {
+  let release;
+  const x = newInstaller({ receiveMs: 30, fetchInstaller: () => new Promise((res) => { release = () => res(EXE); }) });
+  assert.strictEqual((await x.get(x.inst.link().url.split('?t=').pop())).status, 502);
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!fs.existsSync(path.join(x.home, CACHE_FILE)), 'a late answer is not cached');
 });
 
 // ── through the server: the tool, the hub/receive request and the checks' tools ─────────────────
@@ -293,15 +368,16 @@ function newRemote(over = {}) {
   const home = tmp();
   const c = clock();
   const lines = [];
+  const fetched = { n: 0 };
   const remote = createRemote({
     env: { MODULE_SETTINGS: JSON.stringify({ address_name: 'hub.example.ts.net', ...(over.settings || {}) }), CONNECTOR_DATA_HOME: home },
     write: (l) => lines.push(l), log: () => {},
-    deps: { now: c.now, installerFetcher: async () => EXE, agentClient: { request: async () => ({ nodes: over.nodes || {} }) }, group: 'mesh//g1' },
+    deps: { now: c.now, installerFetcher: over.installerFetcher || (async () => { fetched.n++; return EXE; }), agentClient: { request: async () => ({ nodes: over.nodes || {} }) }, group: 'mesh//g1' },
   });
   let n = 0;
   const rpc = async (method, params) => (await remote.handle({ jsonrpc: '2.0', id: ++n, method, params })).result;
   const tool = async (name, args = {}) => { const r = await rpc('tools/call', { name, arguments: args }); return r.isError ? { error: r.content[0].text } : JSON.parse(r.content[0].text); };
-  return { remote, rpc, tool, home, c };
+  return { remote, rpc, tool, home, c, fetched };
 }
 
 test('server: installer_link and hub/receive work together', async () => {
@@ -317,6 +393,37 @@ test('server: installer_link and hub/receive work together', async () => {
   assert.deepStrictEqual(Buffer.from(r.bodyBase64, 'base64'), EXE);
   const again = await s.rpc('hub/receive', { method: 'GET', path: 'installer', query: { t: token } });
   assert.strictEqual(again.status, 404);
+});
+
+test('server: installer_link prepares the installer first, and the receiver does not fetch', async () => {
+  const s = newRemote();
+  const link = await s.tool('installer_link');
+  assert.strictEqual(s.fetched.n, 1, 'fetched when the link was made');
+  const r = await s.rpc('hub/receive', { method: 'GET', path: 'installer', query: { t: link.url.split('?t=').pop() } });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(s.fetched.n, 1, 'and not again by the receiver');
+  await s.tool('installer_link');
+  assert.strictEqual(s.fetched.n, 1, 'a second link uses the cache');
+});
+
+test('server: installer_link that cannot prepare the installer issues no token and says why', async () => {
+  let fail = true;
+  const s = newRemote({ installerFetcher: async () => { if (fail) throw new Error('admin password hunter2 refused at 127.0.0.1'); return EXE; } });
+  const r = await s.tool('installer_link');
+  assert.match(r.error, /^The installer could not be prepared: .+/);
+  assert.doesNotMatch(r.error, /hunter2|127\.0\.0\.1|admin/);
+  fail = false;
+  const ok = await s.tool('installer_link');
+  assert.match(ok.url, /\?t=[a-z2-9]{8}$/);
+  // The earlier failure issued nothing: a guess at a token is the only way to have one, and the one real token is the new one.
+  const bad = await s.rpc('hub/receive', { method: 'GET', path: 'installer', query: { t: 'abcd2345' } });
+  assert.strictEqual(bad.status, 404);
+});
+
+test('check installer: a preparation failure is shown as the plain reason', async () => {
+  const r = await checks.installer(ctxOf({ installer_link: 'The installer could not be prepared: The server answered 500 for the installer.' }));
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.summary, 'The installer could not be prepared: The server answered 500 for the installer.');
 });
 
 test('server: installer_link needs the tailnet name', async () => {

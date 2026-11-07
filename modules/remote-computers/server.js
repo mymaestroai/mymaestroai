@@ -11,7 +11,7 @@ const { ensureGroup } = require('./lib/setupgroup');
 const { createGate, GateError } = require('./lib/gate');
 const win = require('./lib/windows');
 const { createShotStore } = require('./lib/shots');
-const { createInstaller, defaultFetcher } = require('./lib/installer');
+const { createInstaller, defaultFetcher, PlainError } = require('./lib/installer');
 
 const HUB_TIMEOUT_MS = 10000;
 const APPROVE_MINUTES = 4;                            // the owner has 4 minutes to answer; a module call is cut off at 300 s
@@ -421,10 +421,13 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (e && e.code === 'ETIMEDOUT' && e.login) return noLogin(pc);
     if (unknownOutcome(e)) {
       if (e.code === 'ECLOSED') return new ToolError(`The connection to the server was lost after the command was sent to ${pc.name}. ${STILL_RUNNING}`);
-      if (kind === 'run') return new ToolError(`No reply from ${pc.name} within ${timeoutSec} seconds. ${STILL_RUNNING}`);
+      // The wait that really applied (the client sets err.waitMs after the call's deadline clamp); the planned one when the client does not say.
+      const secs = Number.isFinite(e.waitMs) && e.waitMs > 0 ? Math.max(1, Math.round(e.waitMs / 1000)) : timeoutSec;
+      const within = secs ? ` within ${secs} seconds` : '';
+      if (kind === 'run') return new ToolError(`No reply from ${pc.name}${within}. ${STILL_RUNNING}`);
       // A user-session command (as user, screen, input) is dropped silently when nobody is signed in: then nothing ran.
-      if (kind === 'user') return new ToolError(`No reply from ${pc.name} within ${timeoutSec} seconds. No one may be signed in on it, and then nothing ran: 'as user' commands need a signed-in desktop (run as system instead, or sign in on the PC and set it to sign in automatically). If someone is signed in, the command may still be running on it and must not be repeated blindly. ${CHECK_FIRST}`);
-      return new ToolError(`No reply from ${pc.name}. No one may be signed in on it (then nothing ran): the screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock). The computer may also be busy with another command. ${STILL_RUNNING}`);
+      if (kind === 'user') return new ToolError(`No reply from ${pc.name}${within}. No one may be signed in on it, and then nothing ran: 'as user' commands need a signed-in desktop (run as system instead, or sign in on the PC and set it to sign in automatically). If someone is signed in, the command may still be running on it and must not be repeated blindly. ${CHECK_FIRST}`);
+      return new ToolError(`No reply from ${pc.name}${within}. No one may be signed in on it (then nothing ran): the screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock). The computer may also be busy with another command. ${STILL_RUNNING}`);
     }
     return meshFail(e, pc);
   }
@@ -452,7 +455,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   async function onScreen(pc, script, timeoutMs, check) {
     const cmds = win.encodePs(script);
     try { return await exclusive(pc, BUSY_AFTER_SCREEN_TIMEOUT_MS, () => runOn(pc, cmds, 2, 2, timeoutMs, check)); } catch (e) {
-      throw sendFail(pc, e, { kind: 'screen' });
+      throw sendFail(pc, e, { kind: 'screen', timeoutSec: Math.round(timeoutMs / 1000) });
     }
   }
   async function drive(pc, script, who, deadline, tool) {
@@ -607,14 +610,21 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       if (!settings.address_name) throw new ToolError('Save this computer\'s tailnet name in the settings first.');
       return settings.address_name;
     },
-    fetchInstaller: deps.installerFetcher || (async () => {
-      if (!mesh || state.phase !== 'ready') throw new Error('The server is not ready.');
+    fetchInstaller: deps.installerFetcher || (async ({ signal } = {}) => {
+      if (!mesh || state.phase !== 'ready') throw new PlainError('The server is not ready.');
       const cfg = mesh.configFor(settings);
       const admin = mesh.accounts().admin;
-      return defaultFetcher({ port: cfg.settings.port, servername: cfg.settings.cert, ca: fs.readFileSync(mesh.paths.rootCert), user: admin.user, pass: admin.pass, meshid: groupId() });
+      return defaultFetcher({ port: cfg.settings.port, servername: cfg.settings.cert, ca: fs.readFileSync(mesh.paths.rootCert), user: admin.user, pass: admin.pass, meshid: groupId(), signal });
     }),
   });
-  const toolInstallerLink = async () => installer.link();
+  // The helper is fetched and cached before any link is made, so the page behind the link serves a file that is already there.
+  const toolInstallerLink = async () => {
+    if (!settings.address_name) throw new ToolError('Save this computer\'s tailnet name in the settings first.');
+    if (typeof installer.prepare === 'function') {
+      try { await installer.prepare(); } catch (e) { throw new ToolError(e && e.plain ? e.message : 'The installer could not be prepared: the server did not give it'); }
+    }
+    return installer.link();
+  };
   const toolComputersStatus = async () => (await listComputers()).map((pc) => ({ name: pc.name, os: pc.os, online: pc.online }));   // for the setup check: no agent is involved, so no gate
   async function receive(params) {
     try { return await installer.receive(params); } catch (e) {

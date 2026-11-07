@@ -173,7 +173,7 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(responseid);
-        reject(Object.assign(new MeshError(`${action} timed out after ${Math.round(ms / 1000)} s.`, 'ETIMEDOUT'), { sent: true }));
+        reject(Object.assign(new MeshError(`${action} timed out after ${Math.round(ms / 1000)} s.`, 'ETIMEDOUT'), { sent: true, waitMs: ms }));   // waitMs: the wait that really applied (after the caller's deadline clamp)
       }, ms);
       const entry = { req, action: kind, sock, sent: false, resolve, reject, timer };
       pending.set(responseid, entry);

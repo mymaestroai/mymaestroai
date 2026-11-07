@@ -663,7 +663,7 @@ test('tools: a screenshot that gets no reply says what the screen tools need', a
   const t = setup();
   t.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 30 s.', 'ETIMEDOUT'); };
   const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
-  assert.strictEqual(r.error, 'No reply from demo-pc. No one may be signed in on it (then nothing ran): the screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock). The computer may also be busy with another command. The command may still be running on it and must not be repeated blindly. Check its effect first, for example with a screenshot or a read-only command.');
+  assert.strictEqual(r.error, 'No reply from demo-pc within 30 seconds. No one may be signed in on it (then nothing ran): the screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock). The computer may also be busy with another command. The command may still be running on it and must not be repeated blindly. Check its effect first, for example with a screenshot or a read-only command.');
 });
 
 test('tools: the private pictures kept per computer are the newest 200; a link in the way is refused (the agent still gets its picture)', async () => {
@@ -869,7 +869,7 @@ test('tools: a login that timed out is not a command that got no answer; a comma
   // A screenshot that got no answer: the screen message, and a hold of 60 seconds (not 10 minutes).
   const u = setup();
   u.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 30 s.', 'ETIMEDOUT'); };
-  assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /^No reply from demo-pc\. No one may be signed in on it \(then nothing ran\): the screen tools need someone signed in/);
+  assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /^No reply from demo-pc within 30 seconds\. No one may be signed in on it \(then nothing ran\): the screen tools need someone signed in/);
   u.handlers.runcommands = async () => ({ result: shotReply() });
   assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /busy, try again in a moment/);
   u.time.t += 59000;
@@ -963,7 +963,7 @@ test('tools: screenshot and input follow the same rule: before sending frees the
     // After sending: held for 60 s.
     t.handlers.runcommands = failing('ETIMEDOUT', true);
     const after = await t.call(name, args);
-    assert.match(after.error, /^No reply from demo-pc\. /, name);
+    assert.match(after.error, new RegExp(`^No reply from demo-pc within ${name === 'screenshot' ? 30 : 20} seconds\\. `), name);
     assert.match(after.error, /The command may still be running on it and must not be repeated blindly\./);
     assert.match(after.error, CHECK_FIRST);
     t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
@@ -1114,7 +1114,23 @@ test('tools: type, key and scroll are drive tools that wait for MMOK', async () 
   assert.match((await t.call('type', { ...AGENT, computer: 'demo-pc', text: 'x'.repeat(2001) })).error, /at most 2000/);
   // No reply.
   t.handlers.runcommands = async () => { throw new MeshError('timed out', 'ETIMEDOUT'); };
-  assert.match((await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'enter' })).error, /^No reply from demo-pc\. No one may be signed in on it \(then nothing ran\): the screen tools need someone signed in/);
+  assert.match((await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'enter' })).error, /^No reply from demo-pc within 20 seconds\. No one may be signed in on it \(then nothing ran\): the screen tools need someone signed in/);
+});
+
+test('tools: a timeout says the wait that really applied (err.waitMs, after the deadline clamp), not the planned one', async () => {
+  const slow = (waitMs) => async () => { throw Object.assign(new MeshError('runcommands timed out', 'ETIMEDOUT'), { sent: true, waitMs }); };
+  const t = setup();
+  t.handlers.runcommands = slow(12000);
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 60 })).error, /^No reply from demo-pc within 12 seconds\. The command may still be running/);
+  const u = setup();
+  u.handlers.runcommands = slow(9400);
+  assert.match((await u.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 60, as: 'user' })).error, /^No reply from demo-pc within 9 seconds\. No one may be signed in/);
+  const s = setup();
+  s.handlers.runcommands = slow(7000);
+  assert.match((await s.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /^No reply from demo-pc within 7 seconds\. No one may be signed in/);
+  const k = setup();
+  k.handlers.runcommands = slow(5000);
+  assert.match((await k.call('key', { ...AGENT, computer: 'demo-pc', keys: 'enter' })).error, /^No reply from demo-pc within 5 seconds\. No one may be signed in/);
 });
 
 // ── nobody signed in ──

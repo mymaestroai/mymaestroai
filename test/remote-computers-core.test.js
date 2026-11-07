@@ -805,6 +805,17 @@ test('beforeSend runs after the reconnect, right before sock.send; a throw sends
   assert.strictEqual((await p2).result, 'done');
 });
 
+test('a request that times out carries the wait that applied (err.waitMs), after the beforeSend clamp', async () => {
+  const c = newClient({ timeoutMs: 30000 });
+  const p = c.request('runcommands', { cmds: 'x' }, { timeoutMs: 60, beforeSend: () => 25 });
+  lastSocket().deliver({ action: 'userinfo', userinfo: {} });
+  await assert.rejects(p, (e) => { assert.strictEqual(e.code, 'ETIMEDOUT'); assert.strictEqual(e.sent, true); assert.strictEqual(e.waitMs, 25); return true; });
+  const d = newClient({ timeoutMs: 30000 });
+  const q = d.request('runcommands', { cmds: 'x' }, { timeoutMs: 40 });
+  lastSocket().deliver({ action: 'userinfo', userinfo: {} });
+  await assert.rejects(q, (e) => e.waitMs === 40);
+});
+
 test('ready rejects on a refused login, a closed socket and silence, never mentioning the password', async () => {
   const a = newClient();
   const pa = a.ready();
