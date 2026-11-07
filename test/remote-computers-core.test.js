@@ -802,12 +802,19 @@ test('server.js reports "Waiting for setup" and starts nothing when the name or 
     assert.strictEqual(h.group, null);
     assert.strictEqual((JSON.parse((await rpc.tool('start')).content[0].text)).waiting, WAITING);
     assert.deepStrictEqual(fs.readdirSync(home), [], 'no config, accounts or log were made');
-    // The tools that arrive later answer plainly.
-    for (const name of ['computers', 'info', 'screenshot', 'run', 'click', 'type', 'key', 'scroll', 'installer_link']) {
-      const r = await rpc.tool(name, { computer: 'x' });
-      assert.strictEqual(r.isError, true, name);
-      assert.strictEqual(r.content[0].text, NOT_YET);
+    // The agent tools refuse a caller the hub did not name, and say plainly that the server is not ready; the one that arrives later says so.
+    const full = { computer: 'x', command: 'dir', x: 1, y: 1, text: 'a', keys: 'a', amount: 1 };
+    for (const name of ['computers', 'info', 'screenshot', 'run', 'click', 'type', 'key', 'scroll']) {
+      const anon = await rpc.tool(name, full);
+      assert.strictEqual(anon.isError, true, name);
+      assert.match(anon.content[0].text, /did not say which agent/, name);
+      const named = await rpc.tool(name, { ...full, __agent: 'sam' });
+      assert.strictEqual(named.isError, true, name);
+      assert.match(named.content[0].text, /not ready yet: Waiting for setup/, name);
     }
+    const later = await rpc.tool('installer_link', {});
+    assert.strictEqual(later.isError, true);
+    assert.strictEqual(later.content[0].text, NOT_YET);
     const unknown = await rpc.call('tools/call', { name: 'nope', arguments: {} });
     assert.strictEqual(unknown.error.code, -32602);
   } finally { await rpc.close(); }
