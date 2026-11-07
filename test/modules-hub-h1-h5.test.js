@@ -28,6 +28,7 @@ function fakeCi(before) {
     for (const n of Object.keys(lock.packages[''].dependencies || {})) {
       const d = path.join(cwd, 'node_modules', n); fs.mkdirSync(d, { recursive: true });
       fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: n, version: lock.packages[`node_modules/${n}`].version }));
+      fs.writeFileSync(path.join(d, 'index.js'), 'module.exports = {};');   // a package's entry file: a runtime without it counts as damaged
     }
     return 'added 1 package';
   };
@@ -747,6 +748,7 @@ test('R1 installer: a damaged runtime is not "installed"; Install removes it and
       ['a dependency folder is gone', () => fs.rmSync(path.join(dir, 'node_modules', 'a'), { recursive: true })],
       ['a dependency has no package.json', () => fs.rmSync(path.join(dir, 'node_modules', 'a', 'package.json'))],
       ['a dependency is at another version', () => fs.writeFileSync(path.join(dir, 'node_modules', 'a', 'package.json'), JSON.stringify({ name: 'a', version: '9.9.9' }))],
+      ['a dependency has no entry file', () => fs.rmSync(path.join(dir, 'node_modules', 'a', 'index.js'))],
       ['node_modules is a file', () => { fs.rmSync(path.join(dir, 'node_modules'), { recursive: true }); fs.writeFileSync(path.join(dir, 'node_modules'), 'x'); }],
     ];
     for (const [what, damage] of damages) {

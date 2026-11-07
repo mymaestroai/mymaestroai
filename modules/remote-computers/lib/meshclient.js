@@ -8,7 +8,6 @@ const READY_MS = 20000;
 const PING_MS = 20000, PONG_MS = 10000;   // keepalive: a ping every 20 s, the socket is dropped when no pong comes within 10 s
 
 const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
-const shortNode = (id) => String(id || '').split('/').pop();   // the server may answer with node/<domain>/<id> for an id sent short
 const oneLine = (s, n = 200) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, n);
 
 class MeshError extends Error {
@@ -37,9 +36,6 @@ function matchReply(action, req, frame) {
     case 'getsysinfo':   // no responseid in the answer; the tag is echoed
       if (frame.action !== 'getsysinfo' || frame.tag !== req.tag) return null;
       return frame.noinfo || typeof frame.result === 'string' ? { ok: false, error: text(frame.result, 'No information.'), reply: frame } : { ok: true, reply: frame };
-    case 'getnetworkinfo':   // no responseid and no tag: action + nodeid, so one at a time per node
-      if (frame.action !== 'getnetworkinfo' || !frame.nodeid || shortNode(frame.nodeid) !== shortNode(req.nodeid)) return null;
-      return frame.noinfo || typeof frame.result === 'string' ? { ok: false, error: text(frame.result, 'No information.'), reply: frame } : { ok: true, reply: frame };
     case 'addmeshuser':   // result is a message list, not 'ok': success is success > 0
       if (frame.action !== 'addmeshuser' || frame.responseid !== rid) return null;
       return Number(frame.success) > 0 ? { ok: true, reply: frame } : { ok: false, error: text(frame.result, 'The user was not added.'), reply: frame };
@@ -58,15 +54,18 @@ function matchReply(action, req, frame) {
 function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutMs = 30000, readyMs = READY_MS, pingMs = PING_MS, pongMs = PONG_MS, log = () => {} } = {}) {
   if (!url || !user || !pass || typeof WebSocket !== 'function') throw new Error('createMeshClient needs url, user, pass and WebSocket');
   let ws = null, readyP = null;
-  const pending = new Map();   // id -> { req, action, sock, resolve, reject, timer }
-  const chains = new Map();    // 'getnetworkinfo:<node>' -> promise: one at a time per node
+  const pending = new Map();   // id -> { req, action, sock, sent, resolve, reject, timer }
   const retired = new WeakSet();   // sockets that are given up: nothing they say is believed any more
 
-  // Fails the requests that were sent on one socket (or all of them).
+  // Fails the requests that were sent on one socket (or all of them). Each gets its own error, marked sent: true because the request already went out.
   function failSock(sock, err) {
-    for (const [id, p] of pending) { if (sock && p.sock !== sock) continue; clearTimeout(p.timer); pending.delete(id); p.reject(err); }
+    for (const [id, p] of pending) {
+      if (sock && p.sock !== sock) continue;
+      clearTimeout(p.timer); pending.delete(id);
+      p.reject(Object.assign(new MeshError(err.message, err.code), { sent: p.sent === true }));
+    }
   }
-  // A socket that can no longer be trusted to match replies to requests (or that went silent): closed hard, its other requests failed, its late frames ignored.
+  // A socket that went silent: closed hard, its requests failed, its late frames ignored.
   function retire(sock, err) {
     retired.add(sock);
     if (ws === sock) { ws = null; readyP = null; }
@@ -81,8 +80,8 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
       pending.delete(id); clearTimeout(p.timer);
       if (m.ok) {
         const big = typeof frame.result === 'string' && frame.result.length > MAX_STRING;
-        if (big) p.reject(new MeshError('The reply is too large.', 'ETOOBIG')); else p.resolve(m.reply);
-      } else p.reject(new MeshError(m.error, 'EMESH'));
+        if (big) p.reject(Object.assign(new MeshError('The reply is too large.', 'ETOOBIG'), { sent: true })); else p.resolve(m.reply);
+      } else p.reject(Object.assign(new MeshError(m.error, 'EMESH'), { sent: true }));
       return;
     }
   }
@@ -150,10 +149,11 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
 
   const ready = () => connect();
 
+  // err.sent tells the caller whether the request had already gone out when it failed: false (before sock.send, nothing reached the server) or true (after it).
   async function send(action, fields, opts) {
-    await connect();
+    try { await connect(); } catch (e) { if (e && typeof e === 'object') e.sent = false; throw e; }
     const sock = ws;
-    if (!sock) throw new MeshError('The connection to the server closed.', 'ECLOSED');
+    if (!sock) throw Object.assign(new MeshError('The connection to the server closed.', 'ECLOSED'), { sent: false });
     const responseid = crypto.randomUUID();
     const req = { ...fields, action, responseid };
     if (action === 'getsysinfo' && req.tag === undefined) req.tag = crypto.randomUUID();
@@ -163,27 +163,18 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(responseid);
-        reject(new MeshError(`${action} timed out after ${Math.round(ms / 1000)} s.`, 'ETIMEDOUT'));
-        // A reply that has nothing to tell requests apart (getnetworkinfo) could arrive late and be taken for the next request's: give this socket up.
-        if (kind === 'getnetworkinfo') retire(sock, new MeshError('The connection to the server was reset.', 'ECLOSED'));
+        reject(Object.assign(new MeshError(`${action} timed out after ${Math.round(ms / 1000)} s.`, 'ETIMEDOUT'), { sent: true }));
       }, ms);
-      pending.set(responseid, { req, action: kind, sock, resolve, reject, timer });
-      try { sock.send(JSON.stringify(req)); } catch (e) { clearTimeout(timer); pending.delete(responseid); reject(new MeshError(`Could not send (${oneLine(e && e.message, 80)}).`, 'ECLOSED')); }
+      const entry = { req, action: kind, sock, sent: false, resolve, reject, timer };
+      pending.set(responseid, entry);
+      try { sock.send(JSON.stringify(req)); entry.sent = true; } catch (e) { clearTimeout(timer); pending.delete(responseid); reject(Object.assign(new MeshError(`Could not send (${oneLine(e && e.message, 80)}).`, 'ECLOSED'), { sent: false })); }
     });
   }
 
-  // request(action, fields, { timeoutMs, kind }) -> the reply frame; rejects with MeshError (code ETIMEDOUT / ECLOSED / EAUTH / EMESH / ETOOBIG).
+  // request(action, fields, { timeoutMs, kind }) -> the reply frame; rejects with MeshError (code ETIMEDOUT / ECLOSED / EAUTH / EMESH / ETOOBIG)
+  // and err.sent (true when the request had already been sent).
   function request(action, fields = {}, opts = {}) {
     if (typeof action !== 'string' || !action) return Promise.reject(new MeshError('An action is needed.', 'EBADARG'));
-    const kind = opts.kind || action;
-    if (kind === 'getnetworkinfo') {   // the answer has nothing to tell two requests for one node apart
-      const key = `getnetworkinfo:${shortNode(fields.nodeid)}`;
-      const run = (chains.get(key) || Promise.resolve()).catch(() => {}).then(() => send(action, fields, opts));
-      const tail = run.catch(() => {});
-      chains.set(key, tail);
-      tail.then(() => { if (chains.get(key) === tail) chains.delete(key); });
-      return run;
-    }
     return send(action, fields, opts);
   }
 

@@ -26,6 +26,18 @@ Every agent starts at Look. You raise an agent's level in the settings.
 - **A dedicated PC.** Use a computer with nothing personal on it: no private files, no signed-in accounts you care
   about. An agent you allow can fully control it.
 - **Everything is logged.** The hub records every command and every use of the mouse and keyboard.
+- **MeshCentral keeps a log too.** MeshCentral keeps every command an agent runs, and every text typed with the type
+  tool (as base64), in its own event log inside the connector's protected folder. Anything you or an agent types there,
+  such as a password, stays in that log.
+- **Act and Drive are not walled off from each other.** A command can open programs, so an agent that can Act can
+  reach much of what Drive does. Give Drive only to agents you would also give Act.
+- **Screenshots are private.** An agent receives each screenshot in its reply, not as a file in the Files folder. The
+  connector keeps a private copy (the newest 200 per computer) in its own protected folder for troubleshooting.
+- **Clicks use the screenshot's shot id.** click (and scroll at a place) must name the shot id of the screenshot the
+  agent looked at. It works for 10 minutes, only for that agent and computer, and is refused if the screen size has
+  changed since.
+- **Linux only for now.** This connector needs My Maestro on Linux. On any other system the health check says so and
+  nothing starts.
 
 ## What each step does
 
@@ -57,9 +69,9 @@ Every agent starts at Look. You raise an agent's level in the settings.
 
 - **computers** (Look): lists the computers, whether each is online and when it was last seen.
 - **info** (Look): facts about one computer.
-- **screenshot** (Look): a picture of the main screen, saved in the Files folder.
+- **screenshot** (Look): a picture of the main screen, returned to the agent with a shot id.
 - **run** (Act): runs a command and returns its output.
-- **click** (Drive): clicks the mouse at a place in the last screenshot.
+- **click** (Drive): clicks the mouse at a place in a screenshot, named by its shot id.
 - **type** (Drive): types text.
 - **key** (Drive): presses a key or a combination.
 - **scroll** (Drive): turns the mouse wheel.
@@ -76,6 +88,13 @@ Every agent starts at Look. You raise an agent's level in the settings.
 - **Windows Defender or SmartScreen warns about the installer:** that is expected, because the helper is a
   remote-access tool. Choose "More info", then "Run anyway", on the dedicated PC only.
 - **"busy, try again":** a command is still running on that PC. One command runs at a time. Wait a few minutes.
+- **"may still be running":** the connection dropped, or the PC did not answer, after the command was sent. The agent
+  is told to check what happened (a screenshot, or a read-only command) before it tries again.
+- **"Take a new screenshot and use its shot id":** the shot id is unknown, older than 10 minutes, or belongs to
+  another agent or computer.
+- **"The screen changed since that screenshot":** the screen size is different now. Take a new screenshot.
+- **"Approved for N minutes. Call ... again":** your yes came late in the call, so nothing was sent. The agent calls
+  the tool again and it runs at once.
 - **The owner said no:** you declined the question on your phone. The agent is not asked again for a couple of
   minutes. Ask the agent to try again when you are ready.
 - **"This link has expired":** installer links work once and for 15 minutes. Run Get the installer again.

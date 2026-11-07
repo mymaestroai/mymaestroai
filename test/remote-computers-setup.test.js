@@ -117,20 +117,20 @@ function newInstaller(over = {}) {
     fetchInstaller: async () => { const r = await fetchInstaller(); if (!over.fetchInstaller) return r; fetches++; return r; },
     address: () => 'hub.example.ts.net',
   });
-  const get = (token) => inst.receive({ method: 'GET', path: `installer/${token}` });
+  const get = (token) => inst.receive({ method: 'GET', path: 'installer', query: { t: token } });
   return { inst, c, home, logs, get, fetches: () => fetches };
 }
 
 test('installer link: the address and the expiry', () => {
   const { inst, c } = newInstaller();
   const l = inst.link();
-  assert.match(l.url, /^https:\/\/hub\.example\.ts\.net\/hooks\/remote-computers\/installer\/[abcdefghjkmnpqrstuvwxyz2-9]{8}$/);
+  assert.match(l.url, /^https:\/\/hub\.example\.ts\.net\/hooks\/remote-computers\/installer\?t=[abcdefghjkmnpqrstuvwxyz2-9]{8}$/);
   assert.strictEqual(l.expiresAt, new Date(c.t + 15 * 60000).toISOString());
 });
 
 test('receiver: bad, unknown, spent and expired tokens get the same 404 text', async () => {
   const x = newInstaller();
-  const good = x.inst.link().url.split('/').pop();
+  const good = x.inst.link().url.split('?t=').pop();
   for (const bad of ['zzzzzzzz', 'short', 'UPPER123', '..%2f..', '']) {
     const r = await x.get(bad);
     assert.strictEqual(r.status, 404, bad);
@@ -143,14 +143,14 @@ test('receiver: bad, unknown, spent and expired tokens get the same 404 text', a
   assert.strictEqual((await x.get(good)).status, 200);
   assert.strictEqual((await x.get(good)).status, 404, 'spent');
   const y = newInstaller();
-  const late = y.inst.link().url.split('/').pop();
+  const late = y.inst.link().url.split('?t=').pop();
   y.c.advance(TOKEN_TTL_MS + 1);
   assert.strictEqual((await y.get(late)).status, 404, 'expired');
 });
 
 test('receiver: a good token gives the installer as a download', async () => {
   const x = newInstaller();
-  const token = x.inst.link().url.split('/').pop();
+  const token = x.inst.link().url.split('?t=').pop();
   const r = await x.get(token);
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.headers['content-type'], 'application/octet-stream');
@@ -165,21 +165,21 @@ test('receiver: a good token gives the installer as a download', async () => {
 
 test('receiver: a post or a head request is refused and spends nothing', async () => {
   const x = newInstaller();
-  const token = x.inst.link().url.split('/').pop();
-  assert.strictEqual((await x.inst.receive({ method: 'POST', path: `installer/${token}` })).status, 405);
-  assert.strictEqual((await x.inst.receive({ method: 'HEAD', path: `installer/${token}` })).status, 405);
+  const token = x.inst.link().url.split('?t=').pop();
+  assert.strictEqual((await x.inst.receive({ method: 'POST', path: 'installer', query: { t: token } })).status, 405);
+  assert.strictEqual((await x.inst.receive({ method: 'HEAD', path: 'installer', query: { t: token } })).status, 405);
   assert.strictEqual((await x.get(token)).status, 200);
 });
 
 test('receiver: the download is reused for 24 hours, then fetched again', async () => {
   const x = newInstaller();
-  for (let i = 0; i < 3; i++) assert.strictEqual((await x.get(x.inst.link().url.split('/').pop())).status, 200);
+  for (let i = 0; i < 3; i++) assert.strictEqual((await x.get(x.inst.link().url.split('?t=').pop())).status, 200);
   assert.strictEqual(x.fetches(), 1);
   x.c.advance(CACHE_TTL_MS - 60000);
-  assert.strictEqual((await x.get(x.inst.link().url.split('/').pop())).status, 200);
+  assert.strictEqual((await x.get(x.inst.link().url.split('?t=').pop())).status, 200);
   assert.strictEqual(x.fetches(), 1, 'still fresh');
   x.c.advance(120000);
-  assert.strictEqual((await x.get(x.inst.link().url.split('/').pop())).status, 200);
+  assert.strictEqual((await x.get(x.inst.link().url.split('?t=').pop())).status, 200);
   assert.strictEqual(x.fetches(), 2, 'older than a day');
 });
 
@@ -187,7 +187,7 @@ test('receiver: two links used at once fetch once', async () => {
   let release;
   const gate = new Promise((r) => { release = r; });
   const x = newInstaller({ fetchInstaller: async () => { await gate; return EXE; } });
-  const a = x.inst.link().url.split('/').pop(), b = x.inst.link().url.split('/').pop();
+  const a = x.inst.link().url.split('?t=').pop(), b = x.inst.link().url.split('?t=').pop();
   const both = Promise.all([x.get(a), x.get(b)]);
   await new Promise((r) => setImmediate(r));
   release();
@@ -199,7 +199,7 @@ test('receiver: two links used at once fetch once', async () => {
 test('receiver: a failed download is a plain 502 that leaks nothing, and the link is spent', async () => {
   const secret = 'hunter2-the-admin-password';
   const x = newInstaller({ fetchInstaller: async () => { throw new Error(`login for admin failed with ${secret} at 127.0.0.1:9971`); } });
-  const token = x.inst.link().url.split('/').pop();
+  const token = x.inst.link().url.split('?t=').pop();
   const r = await x.get(token);
   assert.strictEqual(r.status, 502);
   assert.strictEqual(r.body, UNAVAILABLE);
@@ -211,7 +211,7 @@ test('receiver: a failed download is a plain 502 that leaks nothing, and the lin
 
 test('receiver: something that is not a program file is refused, and is not cached', async () => {
   const x = newInstaller({ fetchInstaller: async () => Buffer.from('<html>please sign in</html>') });
-  const r = await x.get(x.inst.link().url.split('/').pop());
+  const r = await x.get(x.inst.link().url.split('?t=').pop());
   assert.strictEqual(r.status, 502);
   assert.ok(!fs.existsSync(path.join(x.home, CACHE_FILE)));
 });
@@ -220,7 +220,7 @@ test('receiver: at most 10 requests a minute in total, wrong tokens included', a
   const x = newInstaller();
   assert.strictEqual(RATE_LIMIT, 10);
   for (let i = 0; i < 10; i++) assert.strictEqual((await x.get('zzzzzzzz')).status, 404);
-  const r = await x.get(x.inst.link().url.split('/').pop());
+  const r = await x.get(x.inst.link().url.split('?t=').pop());
   assert.strictEqual(r.status, 429);
   assert.strictEqual(x.fetches(), 0);
   x.c.advance(60000);
@@ -246,15 +246,15 @@ function newRemote(over = {}) {
 test('server: installer_link and hub/receive work together', async () => {
   const s = newRemote();
   const link = await s.tool('installer_link');
-  assert.match(link.url, /^https:\/\/hub\.example\.ts\.net\/hooks\/remote-computers\/installer\/[a-z2-9]{8}$/);
+  assert.match(link.url, /^https:\/\/hub\.example\.ts\.net\/hooks\/remote-computers\/installer\?t=[a-z2-9]{8}$/);
   assert.ok(Date.parse(link.expiresAt) > s.c.t);
-  const token = link.url.split('/').pop();
-  const r = await s.rpc('hub/receive', { method: 'GET', path: `installer/${token}`, query: '', headers: {}, body: '', ip: '100.64.0.10' });
+  const token = link.url.split('?t=').pop();
+  const r = await s.rpc('hub/receive', { method: 'GET', path: 'installer', query: { t: token }, headers: {}, body: '', ip: '100.64.0.10' });
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.headers['content-type'], 'application/octet-stream');
   assert.strictEqual(r.headers['content-disposition'], 'attachment; filename="MyMaestro-RemoteAgent.exe"');
   assert.deepStrictEqual(Buffer.from(r.bodyBase64, 'base64'), EXE);
-  const again = await s.rpc('hub/receive', { method: 'GET', path: `installer/${token}` });
+  const again = await s.rpc('hub/receive', { method: 'GET', path: 'installer', query: { t: token } });
   assert.strictEqual(again.status, 404);
 });
 
@@ -282,11 +282,11 @@ const ctxOf = (tools) => ({
 });
 
 test('check installer: shows the address and the Windows advice, once, and keeps the address out of the summary', async () => {
-  const url = 'https://hub.example.ts.net/hooks/remote-computers/installer/abcd2345';
+  const url = 'https://hub.example.ts.net/hooks/remote-computers/installer?t=abcd2345';
   const r = await checks.installer(ctxOf({ installer_link: JSON.stringify({ url, expiresAt: '2026-11-07T14:20:00.000Z' }) }));
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.once, true);
-  assert.strictEqual(r.lines[0], `On the PC, open this address in a browser within 15 minutes: ${url}`);
+  assert.strictEqual(r.lines[0], `On the PC, open this address in a browser within 15 minutes (the whole address, including the part after the ? mark): ${url}`);
   assert.ok(r.lines.includes('It downloads MyMaestro-RemoteAgent.exe. Run it and choose Install. Windows Defender or SmartScreen may warn that it is a remote-access tool; that is expected for this kind of software.'));
   assert.ok(!r.summary.includes(url) && !r.summary.includes('abcd2345'));
 });
@@ -327,4 +327,31 @@ test('check computer: fails with the plain text when none has connected or none 
 test('check server: unchanged, still reads the health tool', async () => {
   const r = await checks.server(ctxOf({ health: JSON.stringify({ ok: true, running: true, group: 'mesh//g1', computers: 1, online: 1, warnings: [] }) }));
   assert.deepStrictEqual([r.ok, r.summary], [true, 'The server is running. 1 computer registered, 1 online.']);
+});
+
+test('check server: on a system other than Linux it says so and does not call the server', async () => {
+  let called = false;
+  const ctx = { ...ctxOf({ health: () => { called = true; return '{}'; } }), platform: 'win32' };
+  const r = await checks.server(ctx);
+  assert.deepStrictEqual([r.ok, r.summary], [false, 'Remote computers needs My Maestro on Linux for now.']);
+  assert.strictEqual(called, false);
+});
+
+test('receiver: the token is read from the query string (?t=); a second path segment, a missing or a wrong query is the same 404', async () => {
+  const x = newInstaller();
+  const url = x.inst.link().url;
+  assert.match(url, /\/hooks\/remote-computers\/installer\?t=[a-z0-9]{8}$/);
+  const token = url.split('?t=').pop();
+  assert.strictEqual((await x.inst.receive({ method: 'GET', path: `installer/${token}` })).status, 404, 'the old second path segment is not a link');
+  assert.strictEqual((await x.inst.receive({ method: 'GET', path: 'installer' })).status, 404);
+  assert.strictEqual((await x.inst.receive({ method: 'GET', path: 'installer', query: {} })).status, 404);
+  assert.strictEqual((await x.inst.receive({ method: 'GET', path: 'installer', query: { t: ['a', 'b'] } })).status, 404);
+  assert.strictEqual((await x.inst.receive({ method: 'GET', path: 'other', query: { t: token } })).status, 404);
+  const ok = await x.inst.receive({ method: 'GET', path: 'installer', query: { t: token } });
+  assert.strictEqual(ok.status, 200, 'the token was not spent by the failed tries');
+  assert.strictEqual((await x.inst.receive({ method: 'GET', path: 'installer', query: { t: token } })).status, 404, 'and works once');
+  // A query given as text is read too.
+  const y = newInstaller();
+  const t2 = y.inst.link().url.split('?t=').pop();
+  assert.strictEqual((await y.inst.receive({ method: 'GET', path: 'installer', query: `t=${t2}` })).status, 200);
 });

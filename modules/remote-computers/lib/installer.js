@@ -150,15 +150,17 @@ function createInstaller({ home, now = Date.now, log = () => {}, fetchInstaller,
     link() {
       const name = address();
       const { token, expiresAt } = tokens.make();
-      return { url: `https://${name}/hooks/remote-computers/installer/${token}`, expiresAt: new Date(expiresAt).toISOString() };
+      return { url: `https://${name}/hooks/remote-computers/installer?t=${token}`, expiresAt: new Date(expiresAt).toISOString() };
     },
-    // params: the hub's hub/receive request ({ method, path: 'installer/<token>', ... })
+    // params: the hub's hub/receive request ({ method, path: 'installer', query: { t: '<token>' }, ... }); the hub routes only /hooks/<id>/<path>
     async receive(params) {
       const p = String((params && params.path) || '');
-      const m = /^installer\/([a-z0-9]{1,40})$/.exec(p);
+      const q = params && params.query;
+      const t = q && typeof q === 'object' ? q.t : typeof q === 'string' ? new URLSearchParams(q).get('t') : undefined;
+      const m = p === 'installer' && typeof t === 'string' ? /^[a-z0-9]{1,40}$/.exec(t) : null;
       if (limited()) return text(429, 'Too many requests\n', { 'retry-after': '60' });
       if (String((params && params.method) || 'GET').toUpperCase() !== 'GET') return text(405, 'Method not allowed\n', { allow: 'GET' });
-      if (!m || !tokens.consume(m[1])) return text(404, GONE);
+      if (!m || !tokens.consume(m[0])) return text(404, GONE);
       try {
         const buf = await installer();
         return {

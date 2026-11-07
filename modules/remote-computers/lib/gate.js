@@ -33,12 +33,16 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
   const levelOf = (agent) => table.get(agent) || 'look';
   const live = (s) => s && s.expiresAt > now();
 
-  function ask(agent, need, computer, call) {
-    const name = text(computer.name, 60) || 'this computer';
+  // What the owner is told the agent will be able to do.
+  function can(need, as) {
+    if (need === 'drive') return 'use the mouse and keyboard';
+    return as === 'user' ? 'run commands as the signed-in user' : 'run commands as the system account (full control)';
+  }
+  function ask(agent, need, computer, call, as) {
+    const name = `${text(computer.name, 60) || 'this computer'} (${text(computer.id, 6)})`;
     const who = text(agent, 40);
-    const what = need === 'drive' ? 'run commands and use the mouse and keyboard' : 'run commands';
     const title = `${who} wants to use ${name}`.slice(0, 80);
-    const detail = `For ${sessionMinutes} minutes ${who} may ${what} on ${name}. Every action is logged. Say no if you did not expect this.`;
+    const detail = `For ${sessionMinutes} minutes ${who} may ${can(need, as)} on ${name}. Every action is logged. Say no if you did not expect this.`;
     return Promise.resolve().then(() => approve({ call, title, detail, minutes: APPROVE_MINUTES })).then((d) => {
       if (d === 'allow' || d === 'deny' || d === 'timeout') return d;
       throw new GateError('The owner could not be asked right now. Try again in a moment.', 'EAPPROVE');
@@ -49,10 +53,11 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
     });
   }
 
-  // opts.call: the hub's id of this tool call, needed whenever the owner has to be asked.
+  // opts.call: the hub's id of this tool call, needed whenever the owner has to be asked. opts.as: 'system' (default) or 'user', for the act wording.
   async function require(agent, need, computer, opts) {
     const who = typeof agent === 'string' ? agent.trim() : '';
     const call = opts && typeof opts.call === 'string' ? opts.call.trim() : '';
+    const as = opts && opts.as === 'user' ? 'user' : 'system';
     if (!who) throw new GateError('The hub did not say which agent is calling, so nothing is allowed.', 'EIDENT');
     if (!(need in RANK)) throw new Error('unknown level');
     if (need === 'look') return;
@@ -80,7 +85,7 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
       const entry = { level: need, promise: null };
       entry.promise = (async () => {
         try {
-          const d = await ask(who, need, computer, call);
+          const d = await ask(who, need, computer, call, as);
           if (d === 'deny') { denied.set(key, now() + DENY_COOLDOWN_MS); throw new GateError('The owner said no.', 'EDENIED'); }
           if (d === 'timeout') throw new GateError('The owner did not answer in time.', 'ETIMEOUT');
           sessions.set(key, { agent: who, computer: { id: computer.id, name: text(computer.name, 80) }, level: need, expiresAt: now() + sessionMinutes * 60000 });
@@ -104,8 +109,17 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
     return out;
   }
   function end(agent, computerId) { return sessions.delete(`${agent}|${computerId}`); }
+  // True while the agent's approved session for this computer is live and covers the level; the last check before a command is sent.
+  function stillValid(agent, computerId, need) {
+    const who = typeof agent === 'string' ? agent.trim() : '';
+    if (!who || !(need in RANK)) return false;
+    if (need === 'look') return true;
+    const s = sessions.get(`${who}|${computerId}`);
+    if (!live(s)) { if (s) sessions.delete(`${who}|${computerId}`); return false; }
+    return RANK[s.level] >= RANK[need] && RANK[levelOf(who)] >= RANK[need];
+  }
 
-  return { require, levelOf, sessions: list, end };
+  return { require, levelOf, sessions: list, end, stillValid };
 }
 
 module.exports = { createGate, GateError, RANK, DENY_COOLDOWN_MS };

@@ -106,7 +106,7 @@ test('the manifest, setup and check load through the hub loader', () => {
   assert.deepStrictEqual(mf.server, { type: 'mcp-stdio', script: 'server.js', background: true, callTimeoutSec: 300, callerIdentity: true });
   assert.deepStrictEqual(mf.runtime, { lockfile: 'runtime', timeoutSec: 900 });
   assert.strictEqual(mf.approvals, true);
-  assert.strictEqual(mf.media, 'common');
+  assert.ok(!('media' in mf), 'screenshots are not shared in a common folder: agents get them inline');
   assert.deepStrictEqual(mf.health, { check: 'server' });
   assert.strictEqual(typeof m.code.checks.server, 'function');
   assert.strictEqual(m.hasGuide, true);
@@ -820,28 +820,56 @@ test('keepalive: a ping every interval; a socket that never answers is dropped a
   PingSocket.pong = false;
 });
 
-test('a getnetworkinfo that times out retires its socket: other requests fail, late frames are ignored, the next request uses a new socket', async () => {
+test('a request that times out does not give up its socket (no uncorrelated requests remain), and the error says it was sent', async () => {
   const { c, ws } = await loggedIn();
-  const slow = c.request('getnetworkinfo', { nodeid: 'node//a' }, { timeoutMs: 40 });
+  const slow = c.request('nodes', {}, { timeoutMs: 30 });
   const other = c.request('nodes', {}, { timeoutMs: 5000 });
   slow.catch(() => {}); other.catch(() => {});
-  await nextSent(ws);
-  await nextSent(ws);
-  await assert.rejects(slow, (e) => e.code === 'ETIMEDOUT');
-  await assert.rejects(other, (e) => e.code === 'ECLOSED');
-  assert.strictEqual(ws.closed, true, 'the socket was terminated');
-  const fresh = c.request('getnetworkinfo', { nodeid: 'node//a' });
-  await flush();
-  assert.strictEqual(FakeWebSocket.instances.length, 2);
-  const ws2 = lastSocket();
-  ws2.deliver({ action: 'userinfo', userinfo: {} });
-  await nextSent(ws2);
-  // The late answer to the first request arrives on the old socket: it must not become the answer to the new one.
-  ws.deliver({ action: 'getnetworkinfo', nodeid: 'node//a', netif2: { late: true } });
-  await flush();
-  ws2.deliver({ action: 'getnetworkinfo', nodeid: 'node//a', netif2: { fresh: true } });
-  assert.deepStrictEqual((await fresh).netif2, { fresh: true });
+  const s1 = await nextSent(ws);
+  const s2 = await nextSent(ws);
+  await assert.rejects(slow, (e) => e.code === 'ETIMEDOUT' && e.sent === true);
+  assert.strictEqual(ws.closed, false, 'the socket stays');
+  ws.deliver({ action: 'nodes', responseid: s1.responseid, nodes: { late: [] } });   // the late answer is ignored
+  ws.deliver({ action: 'nodes', responseid: s2.responseid, nodes: { fine: [] } });
+  assert.deepStrictEqual((await other).nodes, { fine: [] });
+  assert.strictEqual(FakeWebSocket.instances.length, 1);
   c.close();
+});
+
+test('err.sent: false when the failure came before the request was sent, true after it (timeout, lost connection, server refusal)', async () => {
+  // Before: the login failed or timed out; the send itself threw.
+  const a = newClient({ readyMs: 30 });
+  await assert.rejects(a.request('nodes', {}), (e) => e.code === 'ETIMEDOUT' && e.login === true && e.sent === false);
+  const b = newClient();
+  const pb = b.request('nodes', {});
+  lastSocket().deliver({ action: 'close', cause: 'noauth', msg: 'x' });
+  await assert.rejects(pb, (e) => e.code === 'EAUTH' && e.sent === false);
+  const { c, ws } = await loggedIn();
+  ws.send = () => { throw new Error('socket is gone'); };
+  await assert.rejects(c.request('runcommands', { nodeids: ['n'], cmds: 'x' }), (e) => e.code === 'ECLOSED' && e.sent === false && /Could not send/.test(e.message));
+  c.close();
+  // After: the connection closes while the request waits, the server refuses it, the reply is too big.
+  const d = await loggedIn();
+  const lost = d.c.request('runcommands', { nodeids: ['n'], cmds: 'x' });
+  const sd = await nextSent(d.ws);
+  d.ws.close();
+  await assert.rejects(lost, (e) => e.code === 'ECLOSED' && e.sent === true);
+  const e2 = await loggedIn();
+  const refused = e2.c.request('runcommands', { nodeids: ['n'], cmds: 'x' });
+  const se = await nextSent(e2.ws);
+  e2.ws.deliver({ action: 'runcommands', responseid: se.responseid, result: 'Agent not connected' });
+  await assert.rejects(refused, (e) => e.code === 'EMESH' && e.sent === true);
+  assert.ok(sd);
+  e2.c.close();
+  // Each failed request gets its own error object.
+  const f = await loggedIn();
+  const r1 = f.c.request('nodes', {}), r2 = f.c.request('nodes', {});
+  r1.catch(() => {}); r2.catch(() => {});
+  await nextSent(f.ws); await nextSent(f.ws);
+  f.c.close();
+  const [x1, x2] = await Promise.all([r1.catch((e) => e), r2.catch((e) => e)]);
+  assert.notStrictEqual(x1, x2);
+  assert.ok(x1.sent === true && x2.sent === true);
 });
 
 test('matchReply follows the control-message rules for every kind of request', () => {
@@ -871,11 +899,8 @@ test('matchReply follows the control-message rules for every kind of request', (
   assert.ok(ok(matchReply('getsysinfo', gs, { action: 'getsysinfo', nodeid: 'node//a', tag: 't4', hardware: {} })));
   assert.strictEqual(matchReply('getsysinfo', gs, { action: 'getsysinfo', nodeid: 'node//a', tag: 'other' }), null);
   assert.ok(err(matchReply('getsysinfo', gs, { action: 'getsysinfo', nodeid: 'node//a', tag: 't4', noinfo: true, result: 'Invalid device id' }), /Invalid device id/));
-  // getnetworkinfo: action + nodeid (full id in the answer, short id in the request)
-  const gn = { responseid: 'r5', nodeid: 'abc' };
-  assert.ok(ok(matchReply('getnetworkinfo', gn, { action: 'getnetworkinfo', nodeid: 'node/dom/abc', netif2: {} })));
-  assert.strictEqual(matchReply('getnetworkinfo', gn, { action: 'getnetworkinfo', nodeid: 'node/dom/xyz', netif2: {} }), null);
-  assert.ok(err(matchReply('getnetworkinfo', gn, { action: 'getnetworkinfo', nodeid: 'node/dom/abc', noinfo: true, result: 'Invalid device id' }), /Invalid device id/));
+  // getnetworkinfo is not used any more: it has no special rule (an answer without a responseid is not ours).
+  assert.strictEqual(matchReply('getnetworkinfo', { responseid: 'r5', nodeid: 'abc' }, { action: 'getnetworkinfo', nodeid: 'node/dom/abc', netif2: {} }), null);
   // addmeshuser: success > 0
   const am = { responseid: 'r6' };
   assert.ok(ok(matchReply('addmeshuser', am, { action: 'addmeshuser', responseid: 'r6', result: 'Added user maestro', success: 1, failed: 0 })));
@@ -917,7 +942,7 @@ test('request sends a unique responseid, matches its reply and ignores other fra
   c.close();
 });
 
-test('runcommands asks for the output, getsysinfo carries a tag, getnetworkinfo goes one at a time per node', async () => {
+test('runcommands asks for the output and getsysinfo carries a tag', async () => {
   const { c, ws } = await loggedIn();
   const run = c.request('runcommands', { nodeids: ['node//a'], type: 2, cmds: 'Get-Date', runAsUser: 2 });
   const sr = await nextSent(ws);
@@ -936,23 +961,6 @@ test('runcommands asks for the output, getsysinfo carries a tag, getnetworkinfo 
   ws.deliver({ action: 'getsysinfo', nodeid: 'node//a', tag: ss.tag, hardware: { windows: {} }, node: {}, rights: 1 });
   assert.deepStrictEqual((await si).hardware, { windows: {} });
 
-  const n1 = c.request('getnetworkinfo', { nodeid: 'node//a' });
-  const n2 = c.request('getnetworkinfo', { nodeid: 'node//a' });
-  const other = c.request('getnetworkinfo', { nodeid: 'node//b' });
-  const s1 = await nextSent(ws);
-  const sOther = await nextSent(ws);
-  assert.strictEqual(sOther.nodeid, 'node//b', 'another node is not held back');
-  await flush();
-  assert.strictEqual(ws.sent.filter((f) => f.action === 'getnetworkinfo' && f.nodeid === 'node//a').length, 1, 'the second request for the same node waits');
-  ws.deliver({ action: 'getnetworkinfo', nodeid: 'node//a', netif2: { one: 1 } });
-  const s2 = await nextSent(ws);
-  assert.strictEqual(s2.nodeid, 'node//a');
-  ws.deliver({ action: 'getnetworkinfo', nodeid: 'node//a', netif2: { two: 2 } });
-  ws.deliver({ action: 'getnetworkinfo', nodeid: 'node//b', netif2: { b: 1 } });
-  assert.deepStrictEqual((await n1).netif2, { one: 1 });
-  assert.deepStrictEqual((await n2).netif2, { two: 2 });
-  assert.deepStrictEqual((await other).netif2, { b: 1 });
-  assert.ok(s1);
   c.close();
 });
 
@@ -1279,5 +1287,41 @@ test('a failed start is reported in health and can be retried', async () => {
   assert.match(h.lastError, /Could not create the admin account/);
   assert.strictEqual(h.running, false);
   assert.strictEqual(h.computers, null);
+  await remote.stop();
+});
+
+test('on a system other than Linux, health and the server check say it needs Linux for now, the agent tools refuse, and nothing starts', async () => {
+  const LINUX_ONLY = 'Remote computers needs My Maestro on Linux for now.';
+  for (const platform of ['win32', 'darwin']) {
+    const runtimeDir = fakeRuntime(), home = tmp();
+    const exec = fakeExec('Done.\n'), spawn = fakeSpawn();
+    const remote = createRemote({
+      env: { MODULE_SETTINGS: JSON.stringify(SETTINGS), CONNECTOR_DATA_HOME: home, MODULE_RUNTIME_DIR: runtimeDir },
+      write: () => {}, log: () => {},
+      deps: { platform, mesh: { execFile: exec, spawn, probe: async () => true } },
+    });
+    await remote.start();
+    const started = await remote.callTool('start');
+    for (const h of [started, await remote.callTool('health')]) {
+      assert.strictEqual(h.ok, false, platform);
+      assert.strictEqual(h.waiting, LINUX_ONLY, platform);
+      assert.strictEqual(h.running, false);
+    }
+    assert.strictEqual(spawn.calls.length, 0, 'no server process');
+    assert.strictEqual(exec.calls.length, 0, 'no setup command');
+    assert.strictEqual(remote.state.phase, 'unsupported');
+    await assert.rejects(remote.callTool('computers', { __agent: 'maestro' }), (e) => e.message === LINUX_ONLY);
+    // The server check shows the same words, whatever the tool said.
+    const check = await checks.server({ platform, settings: {}, parse: JSON.parse, callTool: async () => JSON.stringify(started) });
+    assert.deepStrictEqual([check.ok, check.summary], [false, LINUX_ONLY]);
+    await remote.stop();
+  }
+  // On Linux (the test machine) the platform is not an obstacle.
+  const runtimeDir = fakeRuntime(), home = tmp();
+  const remote = createRemote({
+    env: { MODULE_SETTINGS: JSON.stringify(SETTINGS), CONNECTOR_DATA_HOME: home, MODULE_RUNTIME_DIR: runtimeDir },
+    write: () => {}, log: () => {}, deps: { platform: 'linux', mesh: { execFile: fakeExec('Something else\n'), spawn: fakeSpawn(), probe: async () => true } },
+  });
+  assert.notStrictEqual((await remote.callTool('start')).waiting, LINUX_ONLY);
   await remote.stop();
 });

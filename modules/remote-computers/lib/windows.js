@@ -50,9 +50,12 @@ public class MMIn {
 `;
 const here = (cs) => `Add-Type -TypeDefinition @'\n${cs.trim()}\n'@`;
 
-const screenCheck = (xy) => `Add-Type -AssemblyName System.Windows.Forms
+const SCREEN_CHANGED = 'The screen changed since that screenshot; take a new one.';
+// The live primary screen must be the size it was when the screenshot was taken (the click position was worked out from that size).
+const screenCheck = (sw, sh) => `Add-Type -AssemblyName System.Windows.Forms
 $mmb = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-${xy ? 'if ($mmx -lt 0 -or $mmy -lt 0 -or $mmx -ge $mmb.Width -or $mmy -ge $mmb.Height) { throw "That place is outside the screen." }' : ''}`;
+if ($mmb.Width -ne ${sw} -or $mmb.Height -ne ${sh}) { throw "${SCREEN_CHANGED}" }
+if ($mmx -lt 0 -or $mmy -lt 0 -or $mmx -ge $mmb.Width -or $mmy -ge $mmb.Height) { throw "That place is outside the screen." }`;
 
 const head = ['$ErrorActionPreference = \'Stop\'', '$ProgressPreference = \'SilentlyContinue\''];
 const tail = ['Write-Output \'' + OK_LINE + '\''];
@@ -103,14 +106,15 @@ function parseScreenshot(output) {
 
 const BUTTONS = { left: [0x0002, 0x0004], right: [0x0008, 0x0010], middle: [0x0020, 0x0040] };
 
-function clickScript({ x, y, button = 'left', double = false } = {}) {
+function clickScript({ x, y, screenWidth, screenHeight, button = 'left', double = false } = {}) {
   int(x, 'x', 0, 32767); int(y, 'y', 0, 32767);
+  int(screenWidth, 'screenWidth', 1, 32767); int(screenHeight, 'screenHeight', 1, 32767);
   if (typeof button !== 'string' || !Object.prototype.hasOwnProperty.call(BUTTONS, button)) throw new WindowsError('button must be left, right or middle.');
   if (typeof double !== 'boolean') throw new WindowsError('double must be true or false.');
   const [down, up] = BUTTONS[button];
   const press = `[MMIn]::Mouse(${down}, 0); [MMIn]::Pause(30); [MMIn]::Mouse(${up}, 0)`;
   return script(
-    here(INPUT_CS), `$mmx = ${x}; $mmy = ${y}`, '[void][MMIn]::SetProcessDPIAware()', screenCheck(true),
+    here(INPUT_CS), `$mmx = ${x}; $mmy = ${y}`, '[void][MMIn]::SetProcessDPIAware()', screenCheck(screenWidth, screenHeight),
     '[void][MMIn]::SetCursorPos($mmx, $mmy)', '[MMIn]::Pause(40)',
     press, ...(double ? ['[MMIn]::Pause(60)', press] : []),
   );
@@ -171,14 +175,14 @@ function keyScript({ keys } = {}) {
   return script(here(INPUT_CS), ...down, '[MMIn]::Pause(30)', ...up);
 }
 
-function scrollScript({ x, y, amount } = {}) {
+function scrollScript({ x, y, screenWidth, screenHeight, amount } = {}) {
   int(amount, 'amount', -20, 20);
   if (amount === 0) throw new WindowsError('amount must not be 0.');
   const move = x !== undefined || y !== undefined;
-  if (move) { int(x, 'x', 0, 32767); int(y, 'y', 0, 32767); }
+  if (move) { int(x, 'x', 0, 32767); int(y, 'y', 0, 32767); int(screenWidth, 'screenWidth', 1, 32767); int(screenHeight, 'screenHeight', 1, 32767); }
   return script(
     here(INPUT_CS), '[void][MMIn]::SetProcessDPIAware()',
-    ...(move ? [`$mmx = ${x}; $mmy = ${y}`, screenCheck(true), '[void][MMIn]::SetCursorPos($mmx, $mmy)', '[MMIn]::Pause(40)'] : []),
+    ...(move ? [`$mmx = ${x}; $mmy = ${y}`, screenCheck(screenWidth, screenHeight), '[void][MMIn]::SetCursorPos($mmx, $mmy)', '[MMIn]::Pause(40)'] : []),
     `[MMIn]::Mouse(0x0800, ${amount * 120})`,
   );
 }
@@ -187,4 +191,4 @@ function scrollScript({ x, y, amount } = {}) {
 // (PowerShell reading stdin may put its "PS C:\...> " prompt in front of it).
 const sawOk = (output) => /(?:^|\n)(?:PS [^\n>]*> ?)?MMOK\r?(?:\n|$)/.test(String(output == null ? '' : output));
 
-module.exports = { encodePs, screenshotScript, parseScreenshot, clickScript, typeScript, keyScript, scrollScript, parseKeys, sawOk, WindowsError, MAX_LINE, MAX_TYPE_CHARS, OK_LINE, KEYS };
+module.exports = { encodePs, screenshotScript, parseScreenshot, clickScript, typeScript, keyScript, scrollScript, parseKeys, sawOk, WindowsError, SCREEN_CHANGED, MAX_LINE, MAX_TYPE_CHARS, OK_LINE, KEYS };

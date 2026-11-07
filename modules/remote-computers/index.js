@@ -1,11 +1,13 @@
 'use strict';
 
 const oneLine = (e) => String((e && e.message) || e).slice(0, 300);
+const LINUX_ONLY = 'Remote computers needs My Maestro on Linux for now.';
 
 module.exports = {
   checks: {
     // ctx: { callTool(name, args) -> text, settings, parse(text) -> object|null }
     async server(ctx) {
+      if ((ctx && ctx.platform || process.platform) !== 'linux') return { ok: false, summary: LINUX_ONLY };
       try {
         const text = await ctx.callTool('health', {});
         const h = ctx.parse(text);
@@ -33,7 +35,7 @@ module.exports = {
           once: true,
           summary: 'The installer link is ready. It works once.',
           lines: [
-            `On the PC, open this address in a browser within 15 minutes: ${a.url}`,
+            `On the PC, open this address in a browser within 15 minutes (the whole address, including the part after the ? mark): ${a.url}`,
             'It downloads MyMaestro-RemoteAgent.exe. Run it and choose Install. Windows Defender or SmartScreen may warn that it is a remote-access tool; that is expected for this kind of software.',
             'If the link runs out, run this step again for a new one.',
           ],

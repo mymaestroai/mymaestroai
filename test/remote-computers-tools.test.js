@@ -83,8 +83,8 @@ test('gate: the owner is asked once per session with the agreed wording, then a 
   const { gate, asked, toasts, clock } = newGate();
   await gate.require('sam', 'act', { id: 'pc1', name: 'demo-pc' });
   assert.deepStrictEqual(asked, [{
-    call: 'call-1', title: 'sam wants to use demo-pc', minutes: 4,
-    detail: 'For 30 minutes sam may run commands on demo-pc. Every action is logged. Say no if you did not expect this.',
+    call: 'call-1', title: 'sam wants to use demo-pc (pc1)', minutes: 4,
+    detail: 'For 30 minutes sam may run commands as the system account (full control) on demo-pc (pc1). Every action is logged. Say no if you did not expect this.',
   }]);
   assert.ok(!('agent' in asked[0]), 'the hub knows the agent from the call id');
   assert.deepStrictEqual(toasts, [{ id: 'pc1', title: 'My Maestro', msg: 'sam is using this computer for the next 30 minutes.' }]);
@@ -162,10 +162,10 @@ test('gate: drive covers act, act does not cover drive (it asks again with the d
   const { gate, asked } = newGate();
   await gate.require('pat', 'act', PC);
   assert.strictEqual(asked.length, 1);
-  assert.match(asked[0].detail, /may run commands on demo-pc\./);
+  assert.match(asked[0].detail, /may run commands as the system account \(full control\) on demo-pc \(pc1\)\./);
   await gate.require('pat', 'drive', PC);
   assert.strictEqual(asked.length, 2);
-  assert.match(asked[1].detail, /may run commands and use the mouse and keyboard on demo-pc\./);
+  assert.match(asked[1].detail, /may use the mouse and keyboard on demo-pc \(pc1\)\./);
   await gate.require('pat', 'act', PC);
   await gate.require('pat', 'drive', PC);
   assert.strictEqual(asked.length, 2, 'the drive session covers both');
@@ -183,6 +183,38 @@ test('gate: drive covers act, act does not cover drive (it asks again with the d
   d.resolve('allow');
   await Promise.all([a, b]);
   assert.strictEqual(n, 2);
+});
+
+test('gate: the approval card says what the agent can do (system, signed-in user, mouse and keyboard) and shows the computer as name (first 6 of its id)', async () => {
+  const { gate, asked } = newGate();
+  const long = { id: 'Abcdefghijkl0123456789', name: 'office-pc' };
+  await gate.require('sam', 'act', long, { call: 'c1', as: 'system' });
+  await gate.require('sam', 'act', { ...long, id: 'Zzzzzz1234' }, { call: 'c2', as: 'user' });
+  await gate.require('pat', 'drive', { ...long, id: 'Yyyyyy5678' }, { call: 'c3' });
+  await gate.require('sam', 'act', { ...long, id: 'Xxxxxx9999' }, { call: 'c4' });   // as defaults to the system account, the wider one
+  assert.deepStrictEqual(asked.map((q) => q.title), ['sam wants to use office-pc (Abcdef)', 'sam wants to use office-pc (Zzzzzz)', 'pat wants to use office-pc (Yyyyyy)', 'sam wants to use office-pc (Xxxxxx)']);
+  assert.match(asked[0].detail, /^For 30 minutes sam may run commands as the system account \(full control\) on office-pc \(Abcdef\)\. Every action/);
+  assert.match(asked[1].detail, /^For 30 minutes sam may run commands as the signed-in user on office-pc \(Zzzzzz\)\./);
+  assert.match(asked[2].detail, /^For 30 minutes pat may use the mouse and keyboard on office-pc \(Yyyyyy\)\./);
+  assert.match(asked[3].detail, /as the system account \(full control\)/);
+  assert.ok(asked.every((q) => q.title.length <= 80));
+});
+
+test('gate: stillValid is true only while the agent\'s approved session for that computer is live and covers the level', async () => {
+  const { gate, raw, clock } = newGate();
+  assert.strictEqual(raw.stillValid('sam', 'pc1', 'look'), true);
+  assert.strictEqual(raw.stillValid('sam', 'pc1', 'act'), false, 'no session yet');
+  await gate.require('sam', 'act', PC);
+  assert.strictEqual(raw.stillValid('sam', 'pc1', 'act'), true);
+  assert.strictEqual(raw.stillValid('sam', 'pc1', 'drive'), false, 'act does not cover drive');
+  assert.strictEqual(raw.stillValid('sam', 'pc2', 'act'), false, 'another computer');
+  assert.strictEqual(raw.stillValid('pat', 'pc1', 'act'), false, 'another agent');
+  assert.strictEqual(raw.stillValid('', 'pc1', 'act'), false);
+  clock.advance(30 * 60000 + 1);
+  assert.strictEqual(raw.stillValid('sam', 'pc1', 'act'), false, 'expired');
+  await gate.require('sam', 'act', PC);
+  raw.end('sam', 'pc1');
+  assert.strictEqual(raw.stillValid('sam', 'pc1', 'act'), false, 'ended');
 });
 
 test('gate: a session ends after its minutes (injected clock), and end() ends it at once', async () => {
@@ -250,7 +282,7 @@ test('windows: the longest text the type tool takes (2000 characters) and the lo
 });
 
 test('windows: every script ends with MMOK and is built from a short fixed text', () => {
-  const scripts = [win.clickScript({ x: 10, y: 20 }), win.typeScript({ text: 'hi' }), win.keyScript({ keys: 'ctrl+c' }), win.scrollScript({ amount: 3 })];
+  const scripts = [win.clickScript({ x: 10, y: 20, screenWidth: 1920, screenHeight: 1080 }), win.typeScript({ text: 'hi' }), win.keyScript({ keys: 'ctrl+c' }), win.scrollScript({ amount: 3 })];
   for (const s of scripts) {
     assert.match(s, /\nWrite-Output 'MMOK'$/);
     assert.ok(win.encodePs(s).length < 30000);
@@ -347,23 +379,33 @@ test('windows: keys come from an allow-list; presses go modifiers first and rele
 });
 
 test('windows: click and scroll only take whole numbers and fixed words', () => {
-  const c = win.clickScript({ x: 960, y: 540 });
+  const S = { screenWidth: 1920, screenHeight: 1080 };
+  const c = win.clickScript({ x: 960, y: 540, ...S });
   assert.match(c, /\$mmx = 960; \$mmy = 540/);
   assert.match(c, /SetCursorPos/);
   assert.match(c, /Mouse\(2, 0\); \[MMIn\]::Pause\(30\); \[MMIn\]::Mouse\(4, 0\)/);
-  const r = win.clickScript({ x: 1, y: 2, button: 'right' });
+  // The live primary screen has to be the size of the screenshot, or the script throws before it moves the mouse.
+  assert.match(c, /if \(\$mmb\.Width -ne 1920 -or \$mmb\.Height -ne 1080\) \{ throw "The screen changed since that screenshot; take a new one\." \}/);
+  assert.ok(c.indexOf('The screen changed') < c.indexOf('SetCursorPos($mmx'), 'checked before the mouse moves');
+  assert.strictEqual(win.SCREEN_CHANGED, 'The screen changed since that screenshot; take a new one.');
+  const r = win.clickScript({ x: 1, y: 2, button: 'right', ...S });
   assert.match(r, /Mouse\(8, 0\)/);
   assert.match(r, /Mouse\(16, 0\)/);
-  assert.match(win.clickScript({ x: 1, y: 2, button: 'middle' }), /Mouse\(32, 0\)/);
-  assert.strictEqual(win.clickScript({ x: 1, y: 2, double: true }).match(/Mouse\(2, 0\)/g).length, 2);
-  assert.strictEqual(win.clickScript({ x: 1, y: 2 }).match(/Mouse\(2, 0\)/g).length, 1);
+  assert.match(win.clickScript({ x: 1, y: 2, button: 'middle', ...S }), /Mouse\(32, 0\)/);
+  assert.strictEqual(win.clickScript({ x: 1, y: 2, double: true, ...S }).match(/Mouse\(2, 0\)/g).length, 2);
+  assert.strictEqual(win.clickScript({ x: 1, y: 2, ...S }).match(/Mouse\(2, 0\)/g).length, 1);
   for (const bad of [{ x: 1.5, y: 1 }, { x: '1', y: 1 }, { x: -1, y: 1 }, { x: 1, y: 99999 }, { x: 1, y: 1, button: 'left; calc' }, { x: 1, y: 1, button: 'x' }, { x: 1, y: 1, double: 'yes' }, { x: NaN, y: 1 }, { y: 1 }, {}]) {
-    assert.throws(() => win.clickScript(bad), win.WindowsError, JSON.stringify(bad));
+    assert.throws(() => win.clickScript({ ...S, ...bad }), win.WindowsError, JSON.stringify(bad));
+  }
+  for (const bad of [{}, { screenWidth: 1920 }, { screenHeight: 1080 }, { screenWidth: '1920', screenHeight: 1080 }, { screenWidth: 0, screenHeight: 1080 }, { screenWidth: 1920, screenHeight: 1080.5 }]) {
+    assert.throws(() => win.clickScript({ x: 1, y: 1, ...bad }), win.WindowsError, `click without the screen size: ${JSON.stringify(bad)}`);
   }
   assert.match(win.scrollScript({ amount: 3 }), /Mouse\(0x0800, 360\)/);
   assert.match(win.scrollScript({ amount: -20 }), /Mouse\(0x0800, -2400\)/);
-  assert.match(win.scrollScript({ x: 5, y: 6, amount: 1 }), /\$mmx = 5; \$mmy = 6[\s\S]*SetCursorPos/);
+  assert.match(win.scrollScript({ x: 5, y: 6, amount: 1, ...S }), /\$mmx = 5; \$mmy = 6[\s\S]*throw "The screen changed since that screenshot[\s\S]*SetCursorPos/);
   assert.doesNotMatch(win.scrollScript({ amount: 1 }), /SetCursorPos\(\$/);
+  assert.doesNotMatch(win.scrollScript({ amount: 1 }), /The screen changed/, 'no position, no screen check');
+  assert.throws(() => win.scrollScript({ x: 5, y: 6, amount: 1 }), win.WindowsError, 'a position needs the screen size');
   for (const bad of [{ amount: 21 }, { amount: -21 }, { amount: 0 }, { amount: 1.5 }, { amount: '2' }, { amount: 1, x: 5 }, { amount: 1, x: 'a', y: 1 }, {}]) {
     assert.throws(() => win.scrollScript(bad), win.WindowsError, JSON.stringify(bad));
   }
@@ -373,7 +415,7 @@ test('windows: click and scroll only take whole numbers and fixed words', () => 
 const ID_A = 'Abcdefghijkl0123456789', ID_B = 'Bcdefghijklm9876543210', ID_C = 'Cdefghijklmn1111111111', ID_D = 'Cdefghijklmn2222222222';
 const NODES = {
   'mesh//g1': [
-    { _id: `node//${ID_A}`, name: 'demo-pc', rname: 'DEMO-PC', osdesc: 'Windows 11 Pro', conn: 1, agct: 1783000000000, agent: { id: 4, ver: 12 } },
+    { _id: `node//${ID_A}`, name: 'demo-pc', rname: 'DEMO-PC', osdesc: 'Windows 11 Pro', conn: 1, agct: 1783000000000, agent: { id: 4, ver: 12 }, ip: '::ffff:192.168.0.20', host: '100.64.0.7' },
     { _id: `node//${ID_B}`, name: 'Laptop', osdesc: 'Windows 10', conn: 0, lastconnect: 1782000000000, agent: { id: 4, ver: 11 } },
     { _id: `node//${ID_C}`, name: 'dup', osdesc: 'Windows 10', conn: 1, agct: 1783000000000 },
     { _id: `node//${ID_D}`, name: 'Dup', osdesc: 'Windows 10', conn: 1, agct: 1783000000000 },
@@ -383,7 +425,7 @@ const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('
 const shotReply = (w = 1600, h = 900, sw = 1920, sh = 1080) => `Microsoft Windows [Version 10.0.22631]\r\n(c) Microsoft Corporation.\r\n\r\nC:\\Windows\\system32>powershell.exe -NoProfile ...\r\nMMSHOT ${w} ${h} ${sw} ${sh} ${JPEG.toString('base64')} MMEND\r\n\r\nC:\\Windows\\system32>exit\r\n`;
 
 function setup(over = {}) {
-  const mediaDir = 'mediaDir' in over ? over.mediaDir : tmp();
+  const mediaDir = 'mediaDir' in over ? over.mediaDir : tmp();   // the connector's data folder; the private pictures go in <it>/screens
   const time = { t: new Date(2026, 10, 7, 9, 5, 3).getTime() };
   const calls = [], lines = [], logs = [];
   const handlers = { ...(over.handlers || {}) };
@@ -396,23 +438,27 @@ function setup(over = {}) {
       throw new MeshError('Unexpected action in the test.', 'EMESH');
     },
   };
-  const gateCalls = [], gateOpts = [];
+  const gateCalls = [], gateOpts = [], stillValidCalls = [];
   const fakeGate = over.realGate ? null : {
     require: async (agent, need, pc, opts) => { gateCalls.push({ agent, need, pc: pc && { id: pc.id, name: pc.name } }); gateOpts.push(opts); if (over.gateRefuses && need !== 'look') throw new GateError(over.gateRefuses, 'ELEVEL'); },
+    stillValid: (agent, id, need) => { stillValidCalls.push({ agent, id, need }); return over.stillValid ? over.stillValid(agent, id, need) : true; },
   };
   const remote = createRemote({
-    env: { MODULE_SETTINGS: JSON.stringify({ levels: ['sam:act', 'pat:drive'], session_minutes: 30, ...(over.settings || {}) }), CONNECTOR_MEDIA_DIR: mediaDir },
+    env: { MODULE_SETTINGS: JSON.stringify({ levels: ['sam:act', 'pat:drive'], session_minutes: 30, ...(over.settings || {}) }), CONNECTOR_DATA_HOME: mediaDir },
     write: (line) => lines.push(line), log: (...a) => logs.push(a.join(' ')),
-    deps: { agentClient: client, group: 'mesh//g1', now: () => time.t, ...(fakeGate ? { gate: fakeGate } : {}) },
+    deps: { agentClient: client, group: 'mesh//g1', now: () => time.t, ...(over.deps || {}), ...(fakeGate ? { gate: fakeGate } : {}) },
   });
   let n = 0;
+  const raw = async (name, args) => (await remote.handle({ jsonrpc: '2.0', id: ++n, method: 'tools/call', params: { name, arguments: args } })).result;
   const call = async (name, args) => {
-    const r = (await remote.handle({ jsonrpc: '2.0', id: ++n, method: 'tools/call', params: { name, arguments: args } })).result;
+    const r = await raw(name, args);
     const text = r.content[0].text;
     return r.isError ? { error: text } : JSON.parse(text);
   };
-  return { remote, client, calls, lines, logs, gateCalls, gateOpts, handlers, time, mediaDir, call };
+  return { remote, client, calls, lines, logs, gateCalls, gateOpts, stillValidCalls, handlers, time, mediaDir, call, raw };
 }
+// A screenshot, and the shot id it gives (for click and scroll).
+const shotOf = async (t, who = 'sam', computer = 'demo-pc') => (await t.call('screenshot', { __agent: who, __call: 'call-1', computer })).shot;
 const AGENT = { __agent: 'sam', __call: 'call-1' };   // what the hub adds to an agent's call
 
 test('tools: tools/list describes every tool for an agent, with the level it needs', () => {
@@ -424,8 +470,14 @@ test('tools: tools/list describes every tool for an agent, with the level it nee
   }
   assert.deepStrictEqual(by.run.inputSchema.required, ['computer', 'command']);
   assert.deepStrictEqual(Object.keys(by.run.inputSchema.properties).sort(), ['as', 'command', 'computer', 'shell', 'timeoutSec']);
-  assert.deepStrictEqual(Object.keys(by.scroll.inputSchema.properties).sort(), ['amount', 'computer', 'x', 'y']);
+  assert.deepStrictEqual(Object.keys(by.scroll.inputSchema.properties).sort(), ['amount', 'computer', 'shot', 'x', 'y']);
   assert.strictEqual(by.screenshot.inputSchema.properties.maxWidth.maximum, 1920);
+  // click needs the shot id of the screenshot it points into; scroll needs it only with a position.
+  assert.deepStrictEqual(by.click.inputSchema.required, ['computer', 'shot', 'x', 'y']);
+  assert.deepStrictEqual(by.scroll.inputSchema.required, ['computer', 'amount']);
+  for (const n of ['click', 'scroll']) { assert.strictEqual(by[n].inputSchema.properties.shot.type, 'string'); assert.match(by[n].description, /shot id/); }
+  assert.match(by.screenshot.description, /shot id/);
+  assert.doesNotMatch(by.screenshot.description, /Files folder|file path/, 'the picture is returned inline, not saved for the agent');
 });
 
 test('tools: computers maps the group list; a call with no agent from the hub is refused', async () => {
@@ -445,7 +497,6 @@ test('tools: a computer is found by id, a short prefix or name (any case); an un
   const t = setup();
   const ok = [ID_A, ID_A.slice(0, 12), 'demo-pc', 'DEMO-PC', '  Demo-Pc '];
   t.handlers.getsysinfo = async () => ({ action: 'getsysinfo', hardware: {} });
-  t.handlers.getnetworkinfo = async () => ({ action: 'getnetworkinfo', netif2: {} });
   for (const q of ok) {
     const r = await t.call('info', { ...AGENT, computer: q });
     assert.strictEqual(r.name, 'demo-pc', q);
@@ -479,9 +530,12 @@ test('tools: info gives a compact summary (at most 4 KB, unknown fields skipped)
       },
     },
     node: { conn: 1 },
+    netif2: { Ethernet: [{ address: '192.168.0.20', family: 'IPv4' }, { address: 'fe80::1', family: 'IPv6' }], Loopback: [{ address: '127.0.0.1', family: 'IPv4' }], VPN: [{ address: '10.0.0.5', family: 'IPv4' }] },
   });
-  t.handlers.getnetworkinfo = async () => ({ action: 'getnetworkinfo', netif2: { Ethernet: [{ address: '192.168.0.20', family: 'IPv4' }, { address: 'fe80::1', family: 'IPv6' }], Loopback: [{ address: '127.0.0.1', family: 'IPv4' }], VPN: [{ address: '100.64.0.7', family: 'IPv4' }] } });
   const r = await t.call('info', { ...AGENT, computer: 'demo-pc' });
+  // getnetworkinfo is never asked: the addresses come from the group list (ip, host) and getsysinfo.
+  assert.ok(!t.calls.some((c) => c.action === 'getnetworkinfo'));
+  assert.deepStrictEqual(t.calls.filter((c) => /^get/.test(c.action)).map((c) => c.action), ['getsysinfo']);
   assert.strictEqual(r.os, 'Windows 11 Pro, version 10.0.22631, 64-bit');
   assert.strictEqual(r.cpu, 'Intel(R) Core(TM) i7');
   assert.strictEqual(r.memoryGB, 32);
@@ -489,14 +543,14 @@ test('tools: info gives a compact summary (at most 4 KB, unknown fields skipped)
   assert.strictEqual(r.antivirus, 'Windows Defender, enabled: true, updated: true');
   assert.strictEqual(r.firewall, 'enabled: true');
   assert.strictEqual(r.pendingReboot, false);
-  assert.deepStrictEqual(r.ipv4, ['192.168.0.20', '100.64.0.7']);
+  assert.deepStrictEqual(r.ipv4, ['192.168.0.20', '100.64.0.7', '10.0.0.5']);
   assert.strictEqual(r.agentVersion, '12');
   assert.strictEqual(r.lastConnect, new Date(1783000000000).toISOString());
   assert.strictEqual(r.defender, undefined);
   const text = JSON.stringify(r);
   assert.ok(!/secret|must not appear/.test(text));
   // Only the known facts come out, whatever else the server reports (unknown fields at any depth are left out).
-  const KNOWN = ['name', 'id', 'online', 'os', 'cpu', 'memoryGB', 'disks', 'antivirus', 'firewall', 'defender', 'pendingReboot', 'ipv4', 'agentVersion', 'lastConnect'];
+  const KNOWN = ['name', 'id', 'online', 'status', 'os', 'cpu', 'memoryGB', 'disks', 'antivirus', 'firewall', 'defender', 'pendingReboot', 'ipv4', 'agentVersion', 'lastConnect'];
   assert.ok(Object.keys(r).every((k) => KNOWN.includes(k)), Object.keys(r).join(','));
   t.handlers.getsysinfo = async () => ({
     hardware: { windows: { osinfo: { Caption: 'Windows 11', ProductKey: 'AAAAA-BBBBB', SerialNumber: 'SN-123' }, cpu: [{ Name: 'CPU', Secret: 'cpu-secret' }], extraThing: { token: 'tok-1' } }, bios: { serial: 'BIOS-SN' }, users: ['alice'] },
@@ -513,31 +567,64 @@ test('tools: info gives a compact summary (at most 4 KB, unknown fields skipped)
   t.handlers.getsysinfo = async () => { throw new MeshError('Invalid device id', 'EMESH'); };
   const none = await t.call('info', { ...AGENT, computer: 'demo-pc' });
   assert.match(none.error, /No information about demo-pc yet/);
-  // The network answer is optional.
+  // With nothing from getsysinfo, the group list's own addresses still show.
   t.handlers.getsysinfo = async () => ({ hardware: {} });
-  t.handlers.getnetworkinfo = async () => { throw new MeshError('x', 'EMESH'); };
   const part = await t.call('info', { ...AGENT, computer: 'demo-pc' });
   assert.strictEqual(part.name, 'demo-pc');
-  assert.strictEqual(part.ipv4, undefined);
+  assert.deepStrictEqual(part.ipv4, ['192.168.0.20', '100.64.0.7']);
+  assert.strictEqual(part.status, undefined);
 });
 
-test('tools: screenshot runs the script as the signed-in user, saves the JPEG in the Files folder and remembers the scale', async () => {
+test('tools: info on an offline computer does not ask it (no getsysinfo) and says since when it is offline', async () => {
+  const t = setup();
+  t.handlers.getsysinfo = async () => { throw new Error('must not be asked'); };
+  const r = await t.call('info', { ...AGENT, computer: 'Laptop' });
+  assert.strictEqual(r.name, 'Laptop');
+  assert.strictEqual(r.online, false);
+  assert.strictEqual(r.status, `offline since ${new Date(1782000000000).toISOString()}`);
+  assert.strictEqual(r.lastConnect, new Date(1782000000000).toISOString());
+  assert.ok(!t.calls.some((c) => /^get/.test(c.action)));
+  assert.ok(Object.keys(r).every((k) => ['name', 'id', 'online', 'status', 'os', 'agentVersion', 'lastConnect'].includes(k)), Object.keys(r).join(','));
+});
+
+test('tools: screenshot runs the script as the signed-in user, returns the JPEG inline with a shot id, and keeps a private copy', async () => {
   const t = setup();
   t.handlers.runcommands = async () => ({ action: 'msg', type: 'runcommands', result: shotReply() });
-  const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc', maxWidth: 1280 });
+  const raw = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc', maxWidth: 1280 });
+  // MCP content: the facts as text, then the picture as an image. No file path is given to the agent.
+  assert.strictEqual(raw.isError, undefined);
+  assert.strictEqual(raw.content.length, 2);
+  assert.strictEqual(raw.content[0].type, 'text');
+  assert.deepStrictEqual(raw.content[1], { type: 'image', data: JPEG.toString('base64'), mimeType: 'image/jpeg' });
+  const r = JSON.parse(raw.content[0].text);
+  assert.deepStrictEqual(Object.keys(r).sort(), ['computer', 'height', 'screen', 'shot', 'takenAt', 'width']);
+  assert.match(r.shot, /^[a-z0-9]{8}$/);
+  assert.strictEqual(r.computer, 'demo-pc');
+  assert.ok(!raw.content[0].text.includes(t.mediaDir) && !/\.jpg|screens/.test(raw.content[0].text), 'no path to the private copy');
   const run = t.calls.find((c) => c.action === 'runcommands');
   assert.deepStrictEqual({ ids: run.fields.nodeids, type: run.fields.type, as: run.fields.runAsUser, ms: run.opts.timeoutMs }, { ids: [`node//${ID_A}`], type: 2, as: 2, ms: 30000 });
   assert.match(decodeLine(run.fields.cmds), /\$nw -gt 1280/);
   assert.deepStrictEqual(t.gateCalls.map((g) => g.need), ['look', 'look']);
+  // The private copy: <data folder>/screens/<short id>/<yyyy-mm-dd>/<hhmmss>-<4 hex>.jpg, folders 0700, file 0600.
   const comp = folderOf(ID_A);
   assert.strictEqual(comp, ID_A.slice(0, 12));
-  assert.match(r.path, new RegExp(`^${t.mediaDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/${comp}/2026-11-07/090503-[0-9a-f]{4}\\.jpg$`));
-  assert.ok(fs.readFileSync(r.path).equals(JPEG));
-  assert.strictEqual(fs.statSync(r.path).mode & 0o777, 0o644);
+  const screens = path.join(t.mediaDir, 'screens');
+  const dayDir = path.join(screens, comp, '2026-11-07');
+  const files = fs.readdirSync(dayDir);
+  assert.strictEqual(files.length, 1);
+  assert.match(files[0], /^090503-[0-9a-f]{4}\.jpg$/);
+  assert.ok(fs.readFileSync(path.join(dayDir, files[0])).equals(JPEG));
+  assert.strictEqual(fs.statSync(path.join(dayDir, files[0])).mode & 0o777, 0o600);
+  for (const d of [screens, path.join(screens, comp), dayDir]) assert.strictEqual(fs.statSync(d).mode & 0o777, 0o700, d);
   assert.deepStrictEqual({ w: r.width, h: r.height, screen: r.screen, at: r.takenAt }, { w: 1600, h: 900, screen: { width: 1920, height: 1080 }, at: new Date(t.time.t).toISOString() });
-  // A second picture is a second file.
+  // The module log has the agent, the computer and the size, never the picture.
+  const logged = t.logs.filter((l) => /screenshot of/.test(l));
+  assert.deepStrictEqual(logged, [`screenshot of demo-pc for sam (1600x900, ${JPEG.length} bytes)`]);
+  assert.ok(!t.logs.join('\n').includes(JPEG.toString('base64')));
+  // A second picture is a second file and a second shot id.
   const r2 = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
-  assert.notStrictEqual(r2.path, r.path);
+  assert.notStrictEqual(r2.shot, r.shot);
+  assert.strictEqual(fs.readdirSync(dayDir).length, 2);
   assert.match(decodeLine(t.calls.filter((c) => c.action === 'runcommands')[1].fields.cmds), /\$nw -gt 1600/);
   // Refusals.
   assert.match((await t.call('screenshot', { ...AGENT, computer: 'Laptop' })).error, /Laptop is offline/);
@@ -550,57 +637,71 @@ test('tools: a screenshot that gets no reply says what the screen tools need', a
   const t = setup();
   t.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 30 s.', 'ETIMEDOUT'); };
   const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
-  assert.strictEqual(r.error, 'No reply from demo-pc. The screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock), or the computer is busy with another command.');
+  assert.strictEqual(r.error, 'No reply from demo-pc. The screen tools need someone signed in to Windows on it (set it to sign in automatically and not lock), or the computer is busy with another command. The command may still be running on it and must not be repeated blindly. Check its effect first, for example with a screenshot or a read-only command.');
 });
 
-test('tools: the pictures kept per computer are the newest 500; a link in the way is refused', async () => {
+test('tools: the private pictures kept per computer are the newest 200; a link in the way is refused (the agent still gets its picture)', async () => {
   const mediaDir = tmp();
   const t = setup({ mediaDir });
-  const comp = path.join(mediaDir, folderOf(ID_A));
+  const comp = path.join(mediaDir, 'screens', folderOf(ID_A));
   const day = path.join(comp, '2026-01-01');
   fs.mkdirSync(day, { recursive: true });
-  for (let i = 0; i < 505; i++) fs.writeFileSync(path.join(day, `${String(i).padStart(6, '0')}-0000.jpg`), 'x');
+  for (let i = 0; i < 205; i++) fs.writeFileSync(path.join(day, `${String(i).padStart(6, '0')}-0000.jpg`), 'x');
   fs.writeFileSync(path.join(day, 'notes.txt'), 'not a picture');
   t.handlers.runcommands = async () => ({ result: shotReply() });
   const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
+  assert.match(r.shot, /^[a-z0-9]{8}$/);
   const all = (d) => fs.readdirSync(d, { withFileTypes: true });
   const pics = all(comp).filter((e) => e.isDirectory()).flatMap((e) => all(path.join(comp, e.name)).filter((f) => /\.jpg$/.test(f.name)).map((f) => `${e.name}/${f.name}`));
-  assert.strictEqual(pics.length, 500);
-  assert.ok(pics.includes(`2026-11-07/${path.basename(r.path)}`), 'the new one is kept');
+  assert.strictEqual(pics.length, 200);
+  assert.ok(pics.some((p) => p.startsWith('2026-11-07/')), 'the new one is kept');
   assert.ok(!fs.existsSync(path.join(day, '000000-0000.jpg')), 'the oldest are gone');
-  assert.ok(!fs.existsSync(path.join(day, '000005-0000.jpg')), 'the 6 oldest of 506 are gone');
-  assert.ok(fs.existsSync(path.join(day, '000504-0000.jpg')));
+  assert.ok(!fs.existsSync(path.join(day, '000005-0000.jpg')), 'the 6 oldest of 206 are gone');
+  assert.ok(fs.existsSync(path.join(day, '000204-0000.jpg')));
   assert.ok(fs.existsSync(path.join(day, 'notes.txt')), 'files that are not pictures are left alone');
   // Folders: a symlink where the day folder goes is refused, and nothing is written through it.
   const elsewhere = tmp();
   const media2 = tmp();
-  fs.mkdirSync(path.join(media2, folderOf(ID_A)));
-  fs.symlinkSync(elsewhere, path.join(media2, folderOf(ID_A), '2026-11-07'));
+  fs.mkdirSync(path.join(media2, 'screens', folderOf(ID_A)), { recursive: true });
+  fs.symlinkSync(elsewhere, path.join(media2, 'screens', folderOf(ID_A), '2026-11-07'));
   const t2 = setup({ mediaDir: media2 });
   t2.handlers.runcommands = async () => ({ result: shotReply() });
-  assert.match((await t2.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /not a plain folder/);
+  assert.ok((await t2.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot, 'the picture is still returned');
+  assert.ok(t2.logs.some((l) => /could not keep a private copy.*ENOTPLAIN/.test(l)));
   assert.deepStrictEqual(fs.readdirSync(elsewhere), []);
-  // A link for the computer's folder, and for the Files folder itself.
+  // A link for the computer's folder, for the screens folder, and for the data folder itself.
   const media3 = tmp();
-  fs.symlinkSync(elsewhere, path.join(media3, folderOf(ID_A)));
+  fs.mkdirSync(path.join(media3, 'screens'));
+  fs.symlinkSync(elsewhere, path.join(media3, 'screens', folderOf(ID_A)));
   const t3 = setup({ mediaDir: media3 });
   t3.handlers.runcommands = async () => ({ result: shotReply() });
-  assert.match((await t3.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /not a plain folder/);
-  const linkRoot = path.join(tmp(), 'files');
+  assert.ok((await t3.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot);
+  assert.ok(t3.logs.some((l) => /ENOTPLAIN/.test(l)));
+  const media3b = tmp();
+  fs.symlinkSync(elsewhere, path.join(media3b, 'screens'));
+  const t3b = setup({ mediaDir: media3b });
+  t3b.handlers.runcommands = async () => ({ result: shotReply() });
+  assert.ok((await t3b.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot);
+  assert.ok(t3b.logs.some((l) => /ENOTPLAIN/.test(l)));
+  const linkRoot = path.join(tmp(), 'data');
   fs.symlinkSync(elsewhere, linkRoot);
   const t4 = setup({ mediaDir: linkRoot });
   t4.handlers.runcommands = async () => ({ result: shotReply() });
-  assert.match((await t4.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /not a plain folder/);
+  assert.ok((await t4.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot);
+  assert.ok(t4.logs.some((l) => /ENOTPLAIN/.test(l)));
   assert.deepStrictEqual(fs.readdirSync(elsewhere), []);
-  // No Files folder at all.
+  // No data folder at all: no private copy, and still a picture.
   const t5 = setup({ mediaDir: '' });
   t5.handlers.runcommands = async () => ({ result: shotReply() });
-  assert.match((await t5.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /no Files folder/);
+  assert.ok((await t5.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot);
+  assert.ok(t5.logs.some((l) => /ENOHOME/.test(l)));
   // The store on its own: a smaller keep.
   const media6 = tmp();
-  const store = createShotStore({ mediaDir: media6, keep: 2, now: () => new Date(2026, 0, 2, 3, 4, 5).getTime() });
+  const store = createShotStore({ home: media6, keep: 2, now: () => new Date(2026, 0, 2, 3, 4, 5).getTime() });
   for (let i = 0; i < 4; i++) store.save('pc-x', JPEG);
-  assert.strictEqual(fs.readdirSync(path.join(media6, 'pc-x', '2026-01-02')).length, 2);
+  assert.strictEqual(fs.readdirSync(path.join(media6, 'screens', 'pc-x', '2026-01-02')).length, 2);
+  assert.strictEqual(createShotStore({}).constructor, Object);
+  assert.throws(() => createShotStore({ home: '' }).save('pc-x', JPEG), (e) => e.code === 'ENOHOME');
 });
 
 test('tools: run is an act tool; PowerShell travels encoded, cmd as typed; as picks the session; output is capped at 64 KB', async () => {
@@ -615,7 +716,9 @@ test('tools: run is an act tool; PowerShell travels encoded, cmd as typed; as pi
   assert.ok(!c.fields.cmds.includes('Get-Date'), 'the caller\'s text travels only as base64');
   assert.strictEqual(r.output, 'hello');
   assert.strictEqual(typeof r.took_ms, 'number');
-  assert.deepStrictEqual(t.gateOpts.filter(Boolean).slice(-1)[0], { call: 'call-1' }, 'the hub\'s call id goes to the gate');
+  assert.deepStrictEqual(t.gateOpts.filter(Boolean).slice(-1)[0], { call: 'call-1', as: 'system' }, 'the hub\'s call id and the account go to the gate');
+  await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'whoami', as: 'user' });
+  assert.deepStrictEqual(t.gateOpts.filter(Boolean).slice(-1)[0], { call: 'call-1', as: 'user' });
   // PowerShell reading its commands from stdin may print prompts around the output.
   t.handlers.runcommands = async (f) => ({ result: `PS C:\\Windows\\system32> \r\n${f.cmds}\r\nhello\r\nPS C:\\Windows\\system32> exit\r\n` });
   assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'echo hello' })).output, 'hello');
@@ -662,7 +765,7 @@ test('tools: a login that timed out is not a command that got no answer; a comma
   t.handlers.runcommands = async () => { throw loginTimeout(); };
   assert.match((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /nothing was sent to demo-pc/);
   t.handlers.runcommands = async () => ({ result: shotReply() });
-  assert.ok((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).path);
+  assert.ok((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot);
   // A command that got no answer: the run message, and a hold of 10 minutes.
   t.handlers.runcommands = async () => { throw new MeshError('runcommands timed out after 5 s.', 'ETIMEDOUT'); };
   assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 5 })).error, /^No reply from demo-pc within 5 seconds\. The command may still be running/);
@@ -675,7 +778,7 @@ test('tools: a login that timed out is not a command that got no answer; a comma
   u.time.t += 59000;
   assert.match((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /busy/);
   u.time.t += 2000;
-  assert.ok((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).path, 'free again after 60 s');
+  assert.ok((await u.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot, 'free again after 60 s');
 });
 
 test('tools: one command per computer at a time; a timeout keeps it busy for 10 minutes', async () => {
@@ -708,6 +811,97 @@ test('tools: one command per computer at a time; a timeout keeps it busy for 10 
   assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'again');
 });
 
+const CHECK_FIRST = /must not be repeated blindly\. Check its effect first, for example with a screenshot or a read-only command\.$/;
+const failing = (code, sent) => async () => { throw Object.assign(new MeshError(`runcommands failed (${code})`, code), sent === undefined ? {} : { sent }); };
+
+test('tools: run that failed BEFORE sending frees the computer and may say try again; AFTER sending it stays busy 10 minutes and says it may still be running', async () => {
+  // Before sending: the server never got it (could not send, login failed). Nothing ran, so the computer is free at once.
+  const t = setup();
+  for (const [code, sent] of [['ECLOSED', false], ['EAUTH', false], ['ETIMEDOUT', false]]) {
+    t.handlers.runcommands = failing(code, sent);
+    const r = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' });
+    assert.strictEqual(r.error, 'The Remote computers server did not answer. Try again in a moment.', code);
+    assert.doesNotMatch(r.error, /may still be running/);
+    t.handlers.runcommands = async () => ({ result: 'free' });
+    assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'free', `${code}: not busy after a failure before sending`);
+  }
+  // After sending, a lost connection.
+  t.handlers.runcommands = failing('ECLOSED', true);
+  const lost = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' });
+  assert.match(lost.error, /^The connection to the server was lost after the command was sent to demo-pc\. The command may still be running on it and must not be repeated blindly\./);
+  assert.match(lost.error, CHECK_FIRST);
+  t.handlers.runcommands = async () => ({ result: 'again' });
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).error, /busy, try again in a moment/);
+  t.time.t += 9 * 60000;
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).error, /busy/);
+  t.time.t += 61000;
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'again', 'free after 10 minutes');
+  // After sending, no answer in time.
+  t.handlers.runcommands = failing('ETIMEDOUT', true);
+  const late = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 7 });
+  assert.match(late.error, /^No reply from demo-pc within 7 seconds\. The command may still be running on it and must not be repeated blindly\./);
+  assert.match(late.error, CHECK_FIRST);
+  t.handlers.runcommands = async () => ({ result: 'again' });
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).error, /busy/);
+  // The server's own refusal after it was sent is a definite answer, not an unknown outcome: the computer is free.
+  const u = setup();
+  u.handlers.runcommands = failing('EMESH', true);
+  assert.strictEqual((await u.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).error, 'demo-pc: runcommands failed (EMESH)');
+  u.handlers.runcommands = async () => ({ result: 'ok' });
+  assert.strictEqual((await u.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'ok');
+});
+
+test('tools: screenshot and input follow the same rule: before sending frees the computer, after sending holds it 60 seconds and says it may still be running', async () => {
+  const t = setup();
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  const shot = await shotOf(t);
+  for (const name of ['screenshot', 'click', 'type', 'key', 'scroll']) {
+    const args = { ...AGENT, computer: 'demo-pc', ...({ screenshot: {}, click: { shot, x: 5, y: 5 }, type: { text: 'a' }, key: { keys: 'a' }, scroll: { amount: 1 } })[name] };
+    // Before sending: free at once.
+    t.handlers.runcommands = failing('ECLOSED', false);
+    const before = await t.call(name, args);
+    assert.strictEqual(before.error, 'The Remote computers server did not answer. Try again in a moment.', name);
+    t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+    assert.ok(!(await t.call(name, args)).error, `${name}: not busy after a failure before sending`);
+    // After sending: held for 60 s.
+    t.handlers.runcommands = failing('ETIMEDOUT', true);
+    const after = await t.call(name, args);
+    assert.match(after.error, /^No reply from demo-pc\. /, name);
+    assert.match(after.error, /The command may still be running on it and must not be repeated blindly\./);
+    assert.match(after.error, CHECK_FIRST);
+    t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+    assert.match((await t.call(name, args)).error, /busy, try again in a moment/, name);
+    t.time.t += 59000;
+    assert.match((await t.call(name, args)).error, /busy/, name);
+    t.time.t += 2000;
+    assert.ok(!(await t.call(name, args)).error, `${name}: free after 60 s`);
+    // A connection lost after sending says so too.
+    t.handlers.runcommands = failing('ECLOSED', true);
+    assert.match((await t.call(name, args)).error, /^The connection to the server was lost after the command was sent to demo-pc\. The command may still be running/, name);
+    t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+    t.time.t += 61000;
+  }
+});
+
+test('tools: runcommands error-shape replies (Invalid nodeid, Access denied, ...) are errors, never output', async () => {
+  const t = setup();
+  for (const r of ['Invalid nodeid', 'Invalid domain', 'Access denied', 'Agent not connected', 'Invalid command type']) {
+    t.handlers.runcommands = async () => ({ action: 'runcommands', responseid: 'x', result: r });
+    const run = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' });
+    assert.strictEqual(run.error, `demo-pc: ${r}`, r);
+    assert.ok(!('output' in run));
+    t.handlers.runcommands = async () => ({ action: 'runcommands', result: r });
+    assert.strictEqual((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, `demo-pc: ${r}`, `${r} on the screen tools`);
+    assert.strictEqual((await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'a' })).error, `demo-pc: ${r}`);
+  }
+  // Not freed wrongly: an error is a definite answer, so the computer is not left busy.
+  t.handlers.runcommands = async () => ({ result: 'fine' });
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'fine');
+  // The same words as the output of a command (a message, not the error shape) are just output.
+  t.handlers.runcommands = async () => ({ action: 'msg', type: 'runcommands', result: 'Access denied' });
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'Access denied');
+});
+
 test('tools: errors say what happened without the server\'s own words, a password or a path', async () => {
   const t = setup();
   t.handlers.runcommands = async () => { throw new MeshError('wss://127.0.0.1:9971 refused x-meshauth bWFlc3Rybw==,c2VjcmV0 ECONNREFUSED', 'ECONNREFUSED'); };
@@ -719,37 +913,84 @@ test('tools: errors say what happened without the server\'s own words, a passwor
   assert.ok(!t.logs.join('\n').includes('hunter2'));
 });
 
-test('tools: click needs a screenshot first, checks the place is inside it, and scales to screen pixels', async () => {
+test('tools: click needs the shot id of a screenshot, checks the place is inside it, and scales to screen pixels', async () => {
   const t = setup();
   t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply(1600, 900, 1920, 1080) : 'C:\\>x\r\nMMOK\r\nC:\\>exit\r\n' });
-  const before = await t.call('click', { ...AGENT, computer: 'demo-pc', x: 10, y: 10 });
-  assert.match(before.error, /Take a screenshot first/);
+  const before = await t.call('click', { ...AGENT, computer: 'demo-pc', shot: 'abcd1234', x: 10, y: 10 });
+  assert.strictEqual(before.error, 'Take a new screenshot and use its shot id.');
   assert.strictEqual(t.calls.filter((c) => c.action === 'runcommands').length, 0);
   assert.ok(!t.gateCalls.some((g) => g.need === 'drive'), 'the owner is not asked for a click that cannot go anywhere');
-  await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
-  const ok = await t.call('click', { ...AGENT, computer: 'demo-pc', x: 800, y: 450, double: true });
+  assert.strictEqual((await t.call('click', { ...AGENT, computer: 'demo-pc', x: 10, y: 10 })).error, 'Take a new screenshot and use its shot id.', 'no shot at all');
+  const shot = await shotOf(t);
+  const ok = await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 800, y: 450, double: true });
   assert.deepStrictEqual(ok, { ok: true });
   const c = t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0];
   assert.deepStrictEqual({ type: c.fields.type, as: c.fields.runAsUser, ms: c.opts.timeoutMs }, { type: 2, as: 2, ms: 20000 });
   const script = decodeLine(c.fields.cmds);
   assert.match(script, /\$mmx = 960; \$mmy = 540/);
   assert.strictEqual(script.match(/Mouse\(2, 0\)/g).length, 2);
-  await t.call('click', { ...AGENT, computer: 'demo-pc', x: 1599, y: 899, button: 'right' });
+  // The script gets the screenshot's screen size and refuses when the live screen is another size.
+  assert.match(script, /if \(\$mmb\.Width -ne 1920 -or \$mmb\.Height -ne 1080\) \{ throw "The screen changed since that screenshot; take a new one\." \}/);
+  await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 1599, y: 899, button: 'right' });
   assert.match(decodeLine(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds), /\$mmx = 1919; \$mmy = 1079/);
   const nCalls = t.calls.length;
-  for (const [x, y] of [[1600, 10], [10, 900], [-1, 5], [1.5, 5], ['5', 5]]) assert.match((await t.call('click', { ...AGENT, computer: 'demo-pc', x, y })).error, /inside the last screenshot/, `${x},${y}`);
-  assert.match((await t.call('click', { ...AGENT, computer: 'demo-pc', x: 1, y: 1, button: 'back' })).error, /button/);
+  for (const [x, y] of [[1600, 10], [10, 900], [-1, 5], [1.5, 5], ['5', 5]]) assert.match((await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x, y })).error, /inside that screenshot/, `${x},${y}`);
+  assert.match((await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 1, y: 1, button: 'back' })).error, /button/);
   assert.ok(!t.calls.slice(nCalls).some((c2) => c2.action === 'runcommands'));
+  // The computer says the screen changed: that is the answer (not "did not confirm").
+  t.handlers.runcommands = async () => ({ result: 'Exception: The screen changed since that screenshot; take a new one.\r\nPS C:\\>' });
+  assert.strictEqual((await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 5, y: 5 })).error, 'The screen changed since that screenshot; take a new one.');
   // The input has to be confirmed.
   t.handlers.runcommands = async () => ({ result: 'The computer says no' });
-  const unconfirmed = await t.call('click', { ...AGENT, computer: 'demo-pc', x: 5, y: 5 });
+  const unconfirmed = await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 5, y: 5 });
   assert.match(unconfirmed.error, /did not confirm the input/);
   assert.doesNotMatch(unconfirmed.error, /says no/);
-  // A different picture size gives a different scale (a 4K screen shown at 1600 wide).
+  // A different picture size gives a different scale (a 4K screen shown at 1600 wide), and each shot keeps its own.
   t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply(1600, 900, 3840, 2160) : 'MMOK\r\n' });
-  await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
-  await t.call('click', { ...AGENT, computer: 'demo-pc', x: 100, y: 100 });
-  assert.match(decodeLine(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds), /\$mmx = 240; \$mmy = 240/);
+  const shot4k = await shotOf(t);
+  await t.call('click', { ...AGENT, computer: 'demo-pc', shot: shot4k, x: 100, y: 100 });
+  const last = decodeLine(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds);
+  assert.match(last, /\$mmx = 240; \$mmy = 240/);
+  assert.match(last, /\$mmb\.Width -ne 3840 -or \$mmb\.Height -ne 2160/);
+  await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 100, y: 100 });
+  assert.match(decodeLine(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds), /\$mmx = 120; \$mmy = 120[\s\S]*Width -ne 1920/);
+});
+
+test('tools: a shot id is refused when unknown, expired (10 minutes), another agent\'s or another computer\'s; an agent keeps its last 20', async () => {
+  const t = setup({ settings: { levels: ['sam:drive', 'pat:drive'] } });
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  const NEW = 'Take a new screenshot and use its shot id.';
+  const click = (who, over) => t.call('click', { __agent: who, __call: `c-${who}`, computer: 'demo-pc', x: 5, y: 5, ...over });
+  const shot = await shotOf(t, 'sam');
+  assert.match(shot, /^[a-z0-9]{8}$/);
+  assert.deepStrictEqual(await click('sam', { shot }), { ok: true });
+  const sent = t.calls.filter((c) => c.action === 'runcommands').length;
+  // Another agent cannot use it, however it is written.
+  assert.strictEqual((await click('pat', { shot })).error, NEW);
+  assert.strictEqual((await click('pat', { shot: shot.toUpperCase() })).error, NEW);
+  // Another computer: the shot belongs to demo-pc.
+  assert.strictEqual((await t.call('click', { __agent: 'sam', __call: 'c', computer: ID_C, shot, x: 5, y: 5 })).error, NEW);
+  // Not made up, not the wrong type.
+  for (const bad of ['zzzzzzzz', '', 'short', 12345678, null, { toString: () => shot }, [shot]]) assert.strictEqual((await click('sam', { shot: bad })).error, NEW, JSON.stringify(bad));
+  assert.strictEqual(t.calls.filter((c) => c.action === 'runcommands').length, sent, 'nothing was sent for any of these');
+  assert.ok(!t.gateCalls.slice(-8).some((g) => g.need === 'drive' && g.agent === 'pat'), 'the owner is not asked');
+  // Scroll at a place needs one too; scroll without a place does not.
+  assert.strictEqual((await t.call('scroll', { __agent: 'sam', __call: 'c', computer: 'demo-pc', x: 5, y: 5, amount: 1 })).error, NEW);
+  assert.strictEqual((await t.call('scroll', { __agent: 'pat', __call: 'c', computer: 'demo-pc', shot, x: 5, y: 5, amount: 1 })).error, NEW);
+  assert.deepStrictEqual(await t.call('scroll', { __agent: 'sam', __call: 'c', computer: 'demo-pc', shot, x: 5, y: 5, amount: 1 }), { ok: true });
+  assert.deepStrictEqual(await t.call('scroll', { __agent: 'sam', __call: 'c', computer: 'demo-pc', amount: 1 }), { ok: true });
+  // Expiry: 10 minutes.
+  t.time.t += 10 * 60000 - 1;
+  assert.deepStrictEqual(await click('sam', { shot }), { ok: true });
+  t.time.t += 1;
+  assert.strictEqual((await click('sam', { shot })).error, NEW);
+  // The last 20 per agent: the 21st screenshot pushes the first out.
+  const ids = [];
+  for (let i = 0; i < 21; i++) ids.push(await shotOf(t, 'pat'));
+  assert.strictEqual(new Set(ids).size, 21);
+  assert.strictEqual((await click('pat', { shot: ids[0] })).error, NEW);
+  assert.deepStrictEqual(await click('pat', { shot: ids[1] }), { ok: true });
+  assert.deepStrictEqual(await click('pat', { shot: ids[20] }), { ok: true });
 });
 
 test('tools: type, key and scroll are drive tools that wait for MMOK', async () => {
@@ -765,11 +1006,12 @@ test('tools: type, key and scroll are drive tools that wait for MMOK', async () 
   assert.deepStrictEqual(await t.call('scroll', { ...AGENT, computer: 'demo-pc', amount: -5 }), { ok: true });
   assert.match(last(), /Mouse\(0x0800, -600\)/);
   assert.doesNotMatch(last(), /SetCursorPos\(\$/);
-  assert.match((await t.call('scroll', { ...AGENT, computer: 'demo-pc', x: 10, y: 10, amount: 2 })).error, /Take a screenshot first/);
-  await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
-  assert.deepStrictEqual(await t.call('scroll', { ...AGENT, computer: 'demo-pc', x: 800, y: 450, amount: 2 }), { ok: true });
+  assert.match((await t.call('scroll', { ...AGENT, computer: 'demo-pc', x: 10, y: 10, amount: 2 })).error, /Take a new screenshot and use its shot id/);
+  const shot = await shotOf(t);
+  assert.deepStrictEqual(await t.call('scroll', { ...AGENT, computer: 'demo-pc', shot, x: 800, y: 450, amount: 2 }), { ok: true });
   assert.match(last(), /\$mmx = 960; \$mmy = 540/);
-  assert.match((await t.call('scroll', { ...AGENT, computer: 'demo-pc', x: 800, amount: 2 })).error, /both x and y/);
+  assert.match(last(), /\$mmb\.Width -ne 1920 -or \$mmb\.Height -ne 1080/);
+  assert.match((await t.call('scroll', { ...AGENT, computer: 'demo-pc', shot, x: 800, amount: 2 })).error, /both x and y/);
   assert.match((await t.call('scroll', { ...AGENT, computer: 'demo-pc', amount: 99 })).error, /amount/);
   assert.match((await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'ctrl+alt+powershell' })).error, /not a key I can press/);
   assert.match((await t.call('type', { ...AGENT, computer: 'demo-pc', text: 'x'.repeat(2001) })).error, /at most 2000/);
@@ -782,19 +1024,19 @@ test('tools: every act and drive tool asks the gate for the right level with the
   const t = setup();
   t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
   t.handlers.getsysinfo = async () => ({ hardware: {} });
-  t.handlers.getnetworkinfo = async () => ({ netif2: {} });
   const plan = [
     ['computers', {}, 'look'], ['info', { computer: 'demo-pc' }, 'look'], ['screenshot', { computer: 'demo-pc' }, 'look'],
     ['run', { computer: 'demo-pc', command: 'dir' }, 'act'], ['click', { computer: 'demo-pc', x: 1, y: 1 }, 'drive'],
     ['type', { computer: 'demo-pc', text: 'a' }, 'drive'], ['key', { computer: 'demo-pc', keys: 'a' }, 'drive'], ['scroll', { computer: 'demo-pc', amount: 1 }, 'drive'],
   ];
   for (const who of ['sam', 'pat-the-agent']) {
-    for (const [name, args, level] of plan) {
+    for (const [name, args0, level] of plan) {
+      const args = name === 'click' ? { ...args0, shot: await shotOf(t, who) } : args0;
       t.gateCalls.length = 0;
       t.gateOpts.length = 0;
       const r = await t.call(name, { ...args, __agent: who, __call: `call-${who}` });
       assert.ok(!r.error, `${name}: ${r.error}`);
-      if (level !== 'look') assert.deepStrictEqual(t.gateOpts.slice(-1)[0], { call: `call-${who}` }, `${name}: the call id reaches the gate`);
+      if (level !== 'look') assert.deepStrictEqual(t.gateOpts.slice(-1)[0], name === 'run' ? { call: `call-${who}`, as: 'system' } : { call: `call-${who}` }, `${name}: the call id reaches the gate`);
       assert.ok(t.gateCalls.every((g) => g.agent === who), name);
       const top = t.gateCalls.slice(-1)[0];
       assert.strictEqual(top.need, level, name);
@@ -804,12 +1046,13 @@ test('tools: every act and drive tool asks the gate for the right level with the
   // The gate's refusal is the answer, in its own words, and nothing is sent to the computer.
   const refused = setup({ gateRefuses: 'sam may only look.' });
   refused.handlers.runcommands = async () => { throw new Error('must not run'); };
+  refused.handlers.runcommands = async (f) => { if (/MMSHOT/.test(decodeLine(f.cmds))) return { result: shotReply() }; throw new Error('must not run'); };
+  const refusedShot = await shotOf(refused, 'sam');
   for (const [name, args] of plan.slice(3)) {
-    const r = await refused.call(name, { ...args, __agent: 'sam', __call: 'call-1' });
-    if (name === 'click' || name === 'scroll') continue;   // these stop earlier, at "take a screenshot first"
+    const r = await refused.call(name, { ...args, ...(name === 'click' ? { shot: refusedShot } : {}), __agent: 'sam', __call: 'call-1' });
     assert.strictEqual(r.error, 'sam may only look.', name);
   }
-  assert.ok(!refused.calls.some((c) => c.action === 'runcommands'));
+  assert.strictEqual(refused.calls.filter((c) => c.action === 'runcommands').length, 1, 'only the screenshot was sent');
   // The hub's word for who is calling is a string; anything else is no identity.
   const gated = setup({ realGate: true });
   for (const bad of [undefined, '', '  ', 7, { name: 'sam' }]) assert.match((await gated.call('run', { computer: 'demo-pc', command: 'x', __agent: bad })).error, /did not say which agent/);
@@ -823,8 +1066,8 @@ test('tools: with the real gate, the first act asks the owner through the hub, t
   const asks = t.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve');
   assert.strictEqual(asks.length, 1);
   assert.deepStrictEqual(asks[0].params, {
-    call: 'call-1', title: 'sam wants to use demo-pc', minutes: 4,
-    detail: 'For 30 minutes sam may run commands on demo-pc. Every action is logged. Say no if you did not expect this.',
+    call: 'call-1', title: 'sam wants to use demo-pc (Abcdef)', minutes: 4,
+    detail: 'For 30 minutes sam may run commands as the system account (full control) on demo-pc (Abcdef). Every action is logged. Say no if you did not expect this.',
   });
   assert.ok(!('agent' in asks[0].params), 'no agent field: the hub reads it from the call');
   assert.ok(!t.calls.some((c) => c.action === 'runcommands'), 'nothing runs before the owner answers');
@@ -869,4 +1112,96 @@ test('tools: with the real gate, the first act asks the owner through the hub, t
   const ask3 = JSON.parse(t2.lines.find((l) => /hub\/approve/.test(l)));
   t2.remote.onLine(JSON.stringify({ jsonrpc: '2.0', id: ask3.id, error: { code: -32000, message: 'Approvals are not set up.' } }));
   assert.match((await p2).error, /could not be asked/);
+});
+
+// An approval that arrives `late` ms into the call (the clock is the test's), for an agent with the real gate.
+async function approvedAfter(t, late, name, args, who = 'sam') {
+  const p = t.call(name, { __agent: who, __call: `call-${name}`, computer: 'demo-pc', ...args });
+  await flush();
+  const ask = t.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve').slice(-1)[0];
+  t.time.t += late;
+  t.remote.onLine(JSON.stringify({ jsonrpc: '2.0', id: ask.id, result: { decision: 'allow' } }));
+  return p;
+}
+
+test('tools: one deadline per call (start + 290 s): an approval that leaves less than the timeout + 5 s sends nothing and says to call again', async () => {
+  // run with a 60 s wait needs 65 s: an approval at 225 s still runs, one at 226 s does not.
+  const ok = setup({ realGate: true });
+  ok.handlers.runcommands = async () => ({ result: 'ran' });
+  assert.strictEqual((await approvedAfter(ok, 225000, 'run', { command: 'x', timeoutSec: 60 })).output, 'ran');
+  const late = setup({ realGate: true });
+  late.handlers.runcommands = async () => ({ result: 'ran' });
+  const r = await approvedAfter(late, 226000, 'run', { command: 'x', timeoutSec: 60 });
+  assert.strictEqual(r.error, 'Approved for 30 minutes. Call run again to run it now.');
+  assert.ok(!late.calls.some((c) => c.action === 'runcommands'), 'nothing was sent');
+  // The owner said yes, so calling again needs no new question and runs at once (a new call has a new deadline).
+  assert.strictEqual((await late.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 60 })).output, 'ran');
+  assert.strictEqual(late.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve').length, 1);
+  // The default wait is 60 s; a 300 s wait needs 305 s, which no approval can leave.
+  const long = setup({ realGate: true });
+  long.handlers.runcommands = async () => ({ result: 'ran' });
+  assert.match((await approvedAfter(long, 1, 'run', { command: 'x', timeoutSec: 300 })).error, /^Approved for 30 minutes\. Call run again to run it now\.$/);
+  // The session length in the message is the setting.
+  const s5 = setup({ realGate: true, settings: { session_minutes: 45 } });
+  s5.handlers.runcommands = async () => ({ result: 'ran' });
+  assert.match((await approvedAfter(s5, 280000, 'run', { command: 'x' })).error, /^Approved for 45 minutes\./);
+  // The drive tools wait 20 s: they need 25 s. After an approval at 266 s only 24 s are left.
+  for (const [name, args] of [['key', { keys: 'a' }], ['type', { text: 'a' }], ['scroll', { amount: 1 }]]) {
+    const d = setup({ realGate: true });
+    d.handlers.runcommands = async () => ({ result: 'MMOK\r\n' });
+    assert.deepStrictEqual(await approvedAfter(d, 265000, name, args, 'pat'), { ok: true }, `${name}: 25 s left still runs`);
+    const e = setup({ realGate: true });
+    e.handlers.runcommands = async () => ({ result: 'MMOK\r\n' });
+    assert.strictEqual((await approvedAfter(e, 266000, name, args, 'pat')).error, `Approved for 30 minutes. Call ${name} again to run it now.`, name);
+    assert.ok(!e.calls.some((c) => c.action === 'runcommands'));
+  }
+  // Click too (with a shot id).
+  const c = setup({ realGate: true });
+  c.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  const shot = await shotOf(c, 'pat');
+  assert.strictEqual((await approvedAfter(c, 270000, 'click', { shot, x: 5, y: 5 }, 'pat')).error, 'Approved for 30 minutes. Call click again to run it now.');
+  assert.strictEqual(c.calls.filter((x) => x.action === 'runcommands').length, 1, 'only the screenshot was sent');
+  // A live session is not an approval: a call that finds one is not refused for the time spent before it.
+  const live = setup({ realGate: true });
+  live.handlers.runcommands = async () => ({ result: 'ran' });
+  await approvedAfter(live, 0, 'run', { command: 'x' });
+  live.time.t += 1000;
+  assert.strictEqual((await live.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 300 })).output, 'ran');
+});
+
+test('tools: immediately before sending an act or drive command the session is checked again; an ended one sends nothing and frees the computer', async () => {
+  let valid = true;
+  const t = setup({ stillValid: () => valid });
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  const shot = await shotOf(t);
+  const checks0 = t.stillValidCalls.length;
+  assert.ok(!(await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).error);
+  assert.deepStrictEqual(t.stillValidCalls.slice(checks0).slice(-1)[0], { agent: 'sam', id: ID_A, need: 'act' }, 'asked for the act level, for this agent and computer');
+  valid = false;
+  const sent = t.calls.filter((c) => c.action === 'runcommands').length;
+  const plan = [['run', { command: 'x' }, 'act'], ['click', { shot, x: 1, y: 1 }, 'drive'], ['type', { text: 'a' }, 'drive'], ['key', { keys: 'a' }, 'drive'], ['scroll', { amount: 1 }, 'drive']];
+  for (const [name, args, need] of plan) {
+    const r = await t.call(name, { ...AGENT, computer: 'demo-pc', ...args });
+    assert.strictEqual(r.error, 'The approval for demo-pc has ended, so nothing was sent. Call the tool again to ask the owner.', name);
+    assert.deepStrictEqual(t.stillValidCalls.slice(-1)[0], { agent: 'sam', id: ID_A, need }, name);
+  }
+  assert.strictEqual(t.calls.filter((c) => c.action === 'runcommands').length, sent, 'nothing was sent');
+  valid = true;
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).output, 'MMOK', 'the computer was not left busy');
+  // Screenshots are look level and need no session.
+  valid = false;
+  assert.ok((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot);
+  // With the real gate: a session that ended is not trusted (end() is the owner's or the hub's way to cut an agent off).
+  const g = setup({ realGate: true });
+  g.handlers.runcommands = async () => ({ result: 'ran' });
+  assert.strictEqual((await approvedAfter(g, 0, 'run', { command: 'x' })).output, 'ran');
+  const sentG = g.calls.filter((c) => c.action === 'runcommands').length;
+  g.time.t += 31 * 60000;
+  g.handlers.runcommands = async () => ({ result: 'ran' });
+  const again = g.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' });
+  await flush();
+  assert.strictEqual(g.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve').length, 2, 'an expired session asks the owner again');
+  assert.strictEqual(g.calls.filter((c) => c.action === 'runcommands').length, sentG, 'and nothing runs before the answer');
+  g.remote.onLine(JSON.stringify({ jsonrpc: '2.0', id: g.lines.map((l) => JSON.parse(l)).filter((m) => m.method === 'hub/approve')[1].id, result: { decision: 'deny' } }));
+  assert.match((await again).error, /said no/);
 });

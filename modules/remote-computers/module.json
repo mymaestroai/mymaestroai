@@ -8,7 +8,6 @@
   "runtime": { "lockfile": "runtime", "timeoutSec": 900 },
   "receiver": { "paths": ["installer"], "maxBody": 1024, "timeoutSec": 30 },
   "approvals": true,
-  "media": "common",
   "settings": [
     { "key": "address_name", "type": "string", "label": "This computer's tailnet name", "default": "", "pattern": "^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$", "help": "This computer's tailnet name, for example hub.example.ts.net. The remote computers connect to this name, so it must be the one Tailscale shows for this computer." },
     { "key": "listen_ip", "type": "string", "label": "This computer's tailnet address", "default": "", "pattern": "^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$", "help": "This computer's tailnet address (100.x.y.z). Remote computers reach the server only on this address." },
