@@ -1,0 +1,6 @@
+{
+  "name": "mymaestro-remote-computers-runtime",
+  "private": true,
+  "description": "MeshCentral, pinned, installed by the Remote computers data connector",
+  "dependencies": { "meshcentral": "1.3.1" }
+}

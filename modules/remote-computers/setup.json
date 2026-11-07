@@ -1,0 +1,11 @@
+{ "steps": [
+  { "id": "about", "type": "explain", "title": "What this does", "confirm": "I understand that this lets agents see and, with my approval, control other computers.",
+    "body": "Runs a small MeshCentral server inside this connector. Computers you install its helper on can then be seen by your agents (pictures and facts) and, when you approve a session on your phone, controlled (commands, mouse and keyboard).\n\nThe server is reachable only over your private Tailscale network. Each agent starts at **Look**; raising an agent to **Act** or **Drive** is your choice, and every session needs your approval." },
+  { "id": "install", "type": "install", "title": "Install",
+    "body": "The connector installs a pinned copy of MeshCentral from its own lock file. Nothing is installed on any other computer in this step." },
+  { "id": "prefs", "type": "settings", "title": "Your settings", "fields": ["address_name", "listen_ip", "control_port", "agent_port", "levels", "session_minutes"],
+    "body": "Enter this computer's tailnet name and tailnet address (both are shown in the Tailscale app), then choose which agents may use remote computers and at which level." },
+  { "id": "server", "type": "check", "check": "server", "title": "Check the server",
+    "body": "Checks that the server is running and that its device group exists." },
+  { "id": "done", "type": "finish", "title": "Finish" }
+] }
