@@ -271,6 +271,70 @@ test('answers: HEAD has no body; base64 body decoded', async () => {
   assert.strictEqual(res.body.toString(), 'bin');
 });
 
+test('bodyBase64: exact bytes with the given type, disposition and length; security headers kept', async () => {
+  const bytes = Buffer.from([0, 255, 1, 254, 80, 75, 3, 4, 10, 13]);
+  const env = makeEnv({ reply: { status: 200, bodyBase64: bytes.toString('base64'), headers: {
+    'Content-Type': 'Application/Vnd.Ms-Excel+x', 'Content-Disposition': 'attachment; filename="report_1-a.xlsx"', 'Cache-Control': 'no-store', 'Set-Cookie': 'a=b',
+  } } });
+  const { res } = await run(env, { method: 'GET' });
+  assert.strictEqual(res.status, 200);
+  assert.ok(Buffer.isBuffer(res.body)); assert.ok(res.body.equals(bytes));
+  assert.strictEqual(hdr(res, 'content-type'), 'Application/Vnd.Ms-Excel+x');
+  assert.strictEqual(hdr(res, 'content-disposition'), 'attachment; filename="report_1-a.xlsx"');
+  assert.strictEqual(hdr(res, 'content-length'), String(bytes.length));
+  assert.strictEqual(hdr(res, 'cache-control'), 'no-store');
+  assert.strictEqual(hdr(res, 'x-content-type-options'), 'nosniff');
+  assert.strictEqual(hdr(res, 'x-frame-options'), 'DENY');
+  assert.strictEqual(hdr(res, 'referrer-policy'), 'no-referrer');
+  assert.deepStrictEqual(cspLines(res), [SANDBOX]);
+  assert.strictEqual(hdr(res, 'set-cookie'), undefined);
+  // HEAD: same headers, no body
+  const head = await run(env, { method: 'HEAD' });
+  assert.strictEqual(head.res.body, undefined);
+  assert.strictEqual(hdr(head.res, 'content-length'), String(bytes.length));
+  assert.strictEqual(hdr(head.res, 'content-disposition'), 'attachment; filename="report_1-a.xlsx"');
+});
+
+test('bodyBase64: bad type is replaced, bad disposition is dropped, other cache-control is no-store', async () => {
+  const bytes = Buffer.from('abc');
+  const env = makeEnv();
+  for (const cd of ['inline; filename="a.txt"', 'attachment', 'attachment; filename="a b.txt"', 'attachment; filename="../a"', 'attachment; filename="a.txt"; x=1', 'attachment; filename=""', `attachment; filename="${'a'.repeat(101)}"`, 'attachment; filename="a.txt"\r\nX: 1']) {
+    env.reply = { status: 200, bodyBase64: bytes.toString('base64'), headers: { 'content-type': 'text/html; charset=utf-8', 'content-disposition': cd, 'cache-control': 'max-age=99' } };
+    const { res } = await run(env, { method: 'GET' });
+    assert.strictEqual(res.status, 200, cd);
+    assert.strictEqual(hdr(res, 'content-disposition'), undefined, cd);
+    assert.strictEqual(hdr(res, 'content-type'), 'application/octet-stream');
+    assert.strictEqual(hdr(res, 'cache-control'), 'no-store');
+  }
+  env.reply = { status: 200, bodyBase64: bytes.toString('base64'), headers: { 'content-disposition': `attachment; filename="${'a'.repeat(100)}"` } };
+  assert.ok(hdr((await run(env, { method: 'GET' })).res, 'content-disposition'));
+});
+
+test('bodyBase64: over 16 MB is refused with 502 and logged; exactly 16 MB passes', async () => {
+  const env = makeEnv({ reply: { status: 200, bodyBase64: Buffer.alloc(16 * 1024 * 1024 + 1).toString('base64') } });
+  let { res } = await run(env, { method: 'GET' });
+  assert.strictEqual(res.status, 502); assert.match(String(res.body), /too large/);
+  assert.ok(env.logs.some((l) => /refused: binary reply too large/.test(l)));
+  env.reply = { status: 200, bodyBase64: Buffer.alloc(16 * 1024 * 1024).toString('base64') };
+  ({ res } = await run(env, { method: 'GET' }));
+  assert.strictEqual(res.status, 200); assert.strictEqual(res.body.length, 16 * 1024 * 1024);
+});
+
+test('bodyBase64: together with body, or not valid base64, is refused with 502', async () => {
+  const env = makeEnv();
+  for (const reply of [
+    { status: 200, body: 'x', bodyBase64: 'eA==' }, { status: 200, body: '', bodyBase64: '' }, { status: 200, bodyEncoding: 'base64', bodyBase64: 'eA==' },
+    { status: 200, bodyBase64: 5 }, { status: 200, bodyBase64: 'e!==' }, { status: 200, bodyBase64: 'eA=' },
+  ]) {
+    env.reply = reply;
+    const { res } = await run(env, { method: 'GET' });
+    assert.strictEqual(res.status, 502, JSON.stringify(reply));
+  }
+  assert.ok(env.logs.some((l) => /refused: reply has both body and bodyBase64/.test(l)));
+  env.reply = { status: 200, bodyBase64: '' };
+  assert.strictEqual((await run(env, { method: 'GET' })).res.status, 200);
+});
+
 test('answers: invalid results are 502', async () => {
   const env = makeEnv();
   const bad = [null, 'ok', {}, { status: 199 }, { status: 600 }, { status: 200.5 }, { status: '200' }, { status: 200, headers: [] }, { status: 200, headers: 'x' },
