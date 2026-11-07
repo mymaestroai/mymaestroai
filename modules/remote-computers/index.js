@@ -21,5 +21,47 @@ module.exports = {
         return { ok: false, summary: oneLine(e) };
       }
     },
+
+    // A one-time download address for the helper. The address is the secret, so it is shown once and never saved.
+    async installer(ctx) {
+      try {
+        const text = await ctx.callTool('installer_link', {});
+        const a = ctx.parse(text);
+        if (!a || typeof a.url !== 'string' || !/^https:\/\//.test(a.url)) return { ok: false, summary: String(text || 'The link could not be made.').slice(0, 300) };
+        return {
+          ok: true,
+          once: true,
+          summary: 'The installer link is ready. It works once.',
+          lines: [
+            `On the PC, open this address in a browser within 15 minutes: ${a.url}`,
+            'It downloads MyMaestro-RemoteAgent.exe. Run it and choose Install. Windows Defender or SmartScreen may warn that it is a remote-access tool; that is expected for this kind of software.',
+            'If the link runs out, run this step again for a new one.',
+          ],
+        };
+      } catch (e) {
+        return { ok: false, summary: oneLine(e) };
+      }
+    },
+
+    // Passes when at least one registered computer is online.
+    async computer(ctx) {
+      const none = 'No computer has connected yet. Run the installer on the PC, then check again.';
+      try {
+        const text = await ctx.callTool('computers_status', {});
+        const list = ctx.parse(text);
+        if (!Array.isArray(list)) return { ok: false, summary: String(text || none).slice(0, 300) };
+        const pcs = list.filter((c) => c && typeof c === 'object' && typeof c.name === 'string');
+        const on = pcs.filter((c) => c.online === true);
+        if (!on.length) {
+          return { ok: false, summary: pcs.length ? `${pcs.length === 1 ? pcs[0].name.slice(0, 80) : `${pcs.length} computers`} registered, but none is online. Check that the PC is on and Tailscale is running, then check again.` : none };
+        }
+        const first = on[0];
+        const os = typeof first.os === 'string' && first.os.trim() ? ` (${first.os.trim().slice(0, 60)})` : '';
+        const extra = on.length > 1 ? ` (and ${on.length - 1} more online)` : '';
+        return { ok: true, summary: `${first.name.slice(0, 80)} is connected${os}${extra}` };
+      } catch (e) {
+        return { ok: false, summary: oneLine(e) };
+      }
+    },
   },
 };

@@ -112,7 +112,7 @@ test('the manifest, setup and check load through the hub loader', () => {
   assert.strictEqual(m.hasGuide, true);
   assert.deepStrictEqual(mf.tools, {
     computers: 'read', info: 'read', screenshot: 'read', run: 'write', click: 'write', type: 'write', key: 'write', scroll: 'write',
-    health: 'hub', start: 'hub', installer_link: 'hub',
+    health: 'hub', start: 'hub', installer_link: 'hub', computers_status: 'hub',
   });
   assert.deepStrictEqual(TOOLS.map((t) => t.name).sort(), Object.keys(mf.tools).sort());
   const byKey = Object.fromEntries(mf.settings.map((s) => [s.key, s]));
@@ -1144,7 +1144,7 @@ test('server.js reports "Waiting for setup" and starts nothing when the name or 
     }
     const later = await rpc.tool('installer_link', {});
     assert.strictEqual(later.isError, true);
-    assert.strictEqual(later.content[0].text, NOT_YET);
+    assert.match(later.content[0].text, /tailnet name/);   // it is real now (it needs the tailnet name from the settings)
     const unknown = await rpc.call('tools/call', { name: 'nope', arguments: {} });
     assert.strictEqual(unknown.error.code, -32602);
   } finally { await rpc.close(); }

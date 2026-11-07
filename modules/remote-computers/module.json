@@ -6,6 +6,7 @@
   "health": { "check": "server" },
   "server": { "type": "mcp-stdio", "script": "server.js", "background": true, "callTimeoutSec": 300, "callerIdentity": true },
   "runtime": { "lockfile": "runtime", "timeoutSec": 900 },
+  "receiver": { "paths": ["installer"], "maxBody": 1024, "timeoutSec": 30 },
   "approvals": true,
   "media": "common",
   "settings": [
@@ -19,7 +20,7 @@
   "tools": {
     "computers": "read", "info": "read", "screenshot": "read",
     "run": "write", "click": "write", "type": "write", "key": "write", "scroll": "write",
-    "health": "hub", "start": "hub", "installer_link": "hub"
+    "health": "hub", "start": "hub", "installer_link": "hub", "computers_status": "hub"
   },
   "docs": { "guide": "guide.md" }
 }

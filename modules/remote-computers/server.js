@@ -10,6 +10,7 @@ const { ensureGroup } = require('./lib/setupgroup');
 const { createGate, GateError } = require('./lib/gate');
 const win = require('./lib/windows');
 const { createShotStore } = require('./lib/shots');
+const { createInstaller, defaultFetcher } = require('./lib/installer');
 
 const HUB_TIMEOUT_MS = 10000;
 const APPROVE_MINUTES = 4;                            // the owner has 4 minutes to answer; a module call is cut off at 300 s
@@ -39,6 +40,7 @@ const TOOLS = [
   { name: 'health', description: 'Whether the server runs and its device group exists. Used by the nightly check.', inputSchema: obj() },
   { name: 'start', description: 'Starts the server (and makes it ready) if it is not running. Used by the setup only.', inputSchema: obj() },
   { name: 'installer_link', description: 'A one-time link to download the helper for a computer. Used by the setup only.', inputSchema: obj() },
+  { name: 'computers_status', description: 'The names, systems and online state of the computers that are set up. Used by the setup only.', inputSchema: obj() },
 ];
 
 const clean = (s, max = 200) => { let t = ''; try { t = redact(String(s == null ? '' : s)); } catch { /* {"toString": null} can't be turned into text */ } return t.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max); };
@@ -472,8 +474,31 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     return drive(pc, script);
   }
 
+  // ── the one-time installer link and the page behind it ──
+  const installer = deps.installer || createInstaller({
+    home, now, log,
+    address: () => {
+      if (!settings.address_name) throw new ToolError('Save this computer\'s tailnet name in the settings first.');
+      return settings.address_name;
+    },
+    fetchInstaller: deps.installerFetcher || (async () => {
+      if (!mesh || state.phase !== 'ready') throw new Error('The server is not ready.');
+      const cfg = mesh.configFor(settings);
+      const admin = mesh.accounts().admin;
+      return defaultFetcher({ port: cfg.settings.port, servername: cfg.settings.cert, ca: fs.readFileSync(mesh.paths.rootCert), user: admin.user, pass: admin.pass, meshid: groupId() });
+    }),
+  });
+  const toolInstallerLink = async () => installer.link();
+  const toolComputersStatus = async () => (await listComputers()).map((pc) => ({ name: pc.name, os: pc.os, online: pc.online }));   // for the setup check: no agent is involved, so no gate
+  async function receive(params) {
+    try { return await installer.receive(params); } catch (e) {
+      log('receiver failed:', clean(e && (e.code || e.message), 80));
+      return { status: 502, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: 'The installer is not available right now.\n' };
+    }
+  }
+
   const AGENT_HANDLERS = { computers: toolComputers, info: toolInfo, screenshot: toolScreenshot, run: toolRun, click: toolClick, type: toolType, key: toolKey, scroll: toolScroll };
-  const HANDLERS = { health: toolHealth, start: toolStart };
+  const HANDLERS = { health: toolHealth, start: toolStart, installer_link: toolInstallerLink, computers_status: toolComputersStatus };
   async function agentTool(name, a) {
     const who = typeof a.__agent === 'string' ? a.__agent.trim() : '';
     const call = typeof a.__call === 'string' ? a.__call.trim().slice(0, 200) : '';   // the hub's id for this tool call; the owner's question is tied to it
@@ -531,6 +556,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
           return reply({ isError: true, content: [{ type: 'text', text: e instanceof ToolError ? e.message : clean((e && (e.message || e.code)) || 'Something went wrong.', 200) }] });
         }
       }
+      case 'hub/receive': return reply(await receive(params));
       default: return error(-32601, 'Method not found.');
     }
   }
@@ -541,7 +567,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     handle(msg).then((r) => { if (r) write(JSON.stringify(r) + '\n'); }).catch((e) => log('message failed:', clean(e && e.message, 80)));
   }
 
-  return { handle, onLine, start, stop, callTool, mesh, hub, state, isStopping: () => stopped };
+  return { handle, onLine, start, stop, callTool, receive, mesh, hub, state, isStopping: () => stopped };
 }
 
 function main() {
