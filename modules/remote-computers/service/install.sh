@@ -12,6 +12,7 @@
 # folders as root and never lets the hub's folders steer what root reads or writes:
 # - files in the hub's folders are read and written with the hub's own account (setpriv), so a link swapped in there
 #   can only reach what that account could reach anyway;
+# - files in the service's own folder are read and written with the service's account, inside the service's sandbox;
 # - the node binary and the MeshCentral files are COPIED into /opt/NAME (root-owned, private until checked);
 # - everything MeshCentral does, including making its accounts, runs as the service user inside the same sandbox
 #   as the service (systemd-run), never outside it.
@@ -21,6 +22,8 @@ umask 077
 export LC_ALL=C
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
+BASH_BIN=$(command -v bash)   # /usr/bin/bash or /bin/bash, both visible in the sandbox
+DD_BIN=$(command -v dd)
 
 MESH_VERSION=1.3.1
 MAX_REQUEST_BYTES=8192
@@ -44,7 +47,7 @@ EOF
 }
 
 # Temporary files (private to whoever runs this) and what to undo when a full install fails half way.
-TMPD=$(mktemp -d)
+TMPD=$(mktemp -d /tmp/mymaestro-remote-install.XXXXXXXX)
 NEW_DIR=
 ROLLBACK=0     # set once the previous state is saved: from then on a failure puts it back
 COMMITTED=0    # set once the new service answers: from then on nothing is put back
@@ -74,11 +77,13 @@ rollback() {
   printf 'install.sh: the install did not finish; putting the previous state back ...\n' >&2
   st=$(svc_state)
   if [[ -n $st && $st != inactive && $st != failed ]]; then
-    systemctl stop "$N.service" >/dev/null 2>&1 || return 1
+    systemctl stop "$N.service" >/dev/null 2>&1 || { printf 'install.sh: could not stop %s.service.\n' "$N" >&2; return 1; }
   fi
   if [[ -n $OLD_PROG && -d $OLD_PROG && ! -L $OLD_PROG ]]; then
-    if [[ -e /opt/$N || -L /opt/$N ]]; then rm -rf --one-file-system -- "/opt/$N" || return 1; fi
-    mv -T -- "$OLD_PROG" "/opt/$N" || return 1
+    if [[ -e /opt/$N || -L /opt/$N ]]; then
+      rm -rf --one-file-system -- "/opt/$N" || { printf 'install.sh: could not remove the new /opt/%s.\n' "$N" >&2; return 1; }
+    fi
+    mv -T -- "$OLD_PROG" "/opt/$N" || { printf 'install.sh: could not move %s back to /opt/%s.\n' "$OLD_PROG" "$N" >&2; return 1; }
     OLD_PROG=
   elif ((FIRST_INSTALL)) && [[ -d /opt/$N && ! -L /opt/$N ]]; then
     rm -rf --one-file-system -- "/opt/$N" || bad=1
@@ -93,7 +98,10 @@ rollback() {
   fi
   systemctl daemon-reload >/dev/null 2>&1 || bad=1
   if ((WAS_RUNNING)); then
-    if ((bad)); then return 1; fi   # not started on a half-restored state
+    if ((bad)); then   # not started on a half-restored state
+      printf 'install.sh: the previous %s.service is not started again, because not everything above could be put back.\n' "$N" >&2
+      return 1
+    fi
     if systemctl start "$N.service" >/dev/null 2>&1 && stays_up; then
       printf 'install.sh: the previous %s.service runs again.\n' "$N" >&2
     else
@@ -111,7 +119,8 @@ on_exit() {
     if ! rollback; then
       KEEP_TMP=1
       printf 'install.sh: the previous state could not be put back completely. The saved copies are kept in %s%s;\n' "$TMPD" "${OLD_PROG:+ and $OLD_PROG}" >&2
-      printf 'install.sh: run the same command again once the cause above is fixed.\n' >&2
+      printf 'install.sh: recovery is incomplete. Keep those copies (root-only; they hold the request with the password hashes)\n' >&2
+      printf 'install.sh: and put the previous program, unit and config back from them before running the install again.\n' >&2
     fi
   fi
   if [[ -n $NEW_DIR && -d $NEW_DIR && ! -L $NEW_DIR ]]; then rm -rf --one-file-system -- "$NEW_DIR"; fi
@@ -146,15 +155,30 @@ as_service() {   # command args...
   for p in "${SANDBOX[@]}"; do props+=(-p "$p"); done
   timeout 120 systemd-run --quiet --wait --pipe --collect --service-type=exec \
     --unit="$N-files-$$-$RANDOM" --uid="$N" --gid="$N" \
-    -p WorkingDirectory=/ -p RuntimeMaxSec=100 -p PrivateNetwork=yes "${props[@]}" -- "$@"
+    -p WorkingDirectory=/ -p Environment=LC_ALL=C -p RuntimeMaxSec=100 -p PrivateNetwork=yes "${props[@]}" -- "$@"
 }
 # Reads at most MAX bytes, without following a final link and without waiting on a pipe.
 read_service_file() {   # path max -> stdout
-  as_service /usr/bin/dd if="$1" bs="$2" count=1 iflag=nofollow,nonblock,fullblock status=none </dev/null
+  as_service "$DD_BIN" if="$1" bs="$2" count=1 iflag=nofollow,nonblock,fullblock status=none </dev/null
 }
 # Writes SRC (a root-private file) as NAME into /var/lib/NAME/meshcentral-data.
 write_service_file() {   # src name
-  as_service /usr/bin/bash --noprofile --norc -c 'set -eu; umask 077; cd -P -- "$1"; rm -f -- "$2"; set -C; cat >"$2"' _ "/var/lib/$N/meshcentral-data" "$2" <"$1"
+  as_service "$BASH_BIN" --noprofile --norc -c 'set -eu; umask 077; cd -P -- "$1"; rm -f -- "$2"; set -C; cat >"$2"' _ "/var/lib/$N/meshcentral-data" "$2" <"$1"
+}
+# Saves the current MeshCentral config into $TMPD/config.prev. Returns 0 when saved, 3 when there is none, 4 when what is
+# there is not a usable config (a link, not a plain file, empty or too large: MeshCentral could not have run with it), and
+# anything else when it could not be looked at or read; then nothing may be replaced.
+save_previous_config() {
+  local rc=0
+  as_service "$BASH_BIN" --noprofile --norc -c '
+    f=$1
+    if [ ! -e "$f" ] && [ ! -L "$f" ]; then exit 3; fi
+    if [ -L "$f" ] || [ ! -f "$f" ]; then exit 4; fi
+    exec "$3" if="$f" bs="$2" count=1 iflag=nofollow,nonblock,fullblock status=none' \
+    _ "/var/lib/$N/meshcentral-data/config.json" $((MAX_CONFIG_BYTES + 1)) "$DD_BIN" </dev/null >"$TMPD/config.prev" || rc=$?
+  ((rc == 0)) || return $rc
+  [[ -s $TMPD/config.prev ]] && (($(stat -c '%s' -- "$TMPD/config.prev") <= MAX_CONFIG_BYTES)) || return 4
+  return 0
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -432,7 +456,7 @@ run_in_sandbox() {   # workdir extra-property-or-empty command args...
   [[ -z $extra ]] || props+=(-p "$extra")
   timeout 180 systemd-run --quiet --wait --pipe --collect --service-type=exec \
     --unit="$N-setup-$$-$RANDOM" --uid="$N" --gid="$N" \
-    -p WorkingDirectory="$wd" -p Environment=NODE_ENV=production -p Environment=HOME="/var/lib/$N" \
+    -p WorkingDirectory="$wd" -p Environment=NODE_ENV=production -p Environment=HOME="/var/lib/$N" -p Environment=LC_ALL=C \
     -p RuntimeMaxSec=150 -p PrivateNetwork=yes "${props[@]}" \
     -- "$@" </dev/null 2>&1
 }
@@ -482,6 +506,7 @@ full_install() {
   [[ -d /run/systemd/system ]] || die "This computer does not run systemd, which the service mode needs."
   command -v setpriv >/dev/null 2>&1 || die "setpriv (from util-linux) is needed and was not found."
   command -v systemd-run >/dev/null 2>&1 || die "systemd-run is needed and was not found."
+  command -v flock >/dev/null 2>&1 || die "flock (from util-linux) is needed and was not found."
   local sv
   sv=$(systemctl --version 2>/dev/null | head -n 1 | awk '{print $2}')
   [[ $sv =~ ^[0-9]+$ ]] && ((sv >= 247)) || die "The service needs systemd 247 or newer (this computer has ${sv:-an unknown version})."
@@ -506,7 +531,9 @@ full_install() {
   local st0
   st0=$(svc_state)
   if [[ -z $st0 || $st0 == inactive || $st0 == failed ]]; then
-    if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -Eq "^(127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\*|\\[::\\]|\\[::ffff:127\\.0\\.0\\.1\\]):$PORT\$"; then
+    local lst
+    lst=$(ss -Hltn 2>/dev/null | awk '{print $4}' || true)
+    if grep -Eq "^(127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\*|\\[::\\]|\\[::ffff:127\\.0\\.0\\.1\\]):$PORT\$" <<<"$lst"; then
       die "Something already listens on 127.0.0.1:$PORT. Choose another control port."
     fi
   fi
@@ -526,8 +553,6 @@ full_install() {
       --comment 'My Maestro remote computers' "$N"
   fi
 
-  N_UID=$(id -u -- "$N")
-  N_GID=$(id -g -- "$N")
   [[ -e $unit || -L $unit || -e $prog ]] || FIRST_INSTALL=1
 
   # Save what a failed install must put back (refusing to go on when it cannot be saved), then stop the service if it
@@ -537,23 +562,30 @@ full_install() {
     cp -P --no-preserve=all -- "$unit" "$TMPD/unit.prev" || die "Could not save the current $unit."
     PREV_UNIT=1
   fi
-  # A closed output pipe now makes a write fail (and the install roll back) instead of killing the script on the spot.
+  # A closed output pipe now makes a write fail (and the install roll back) instead of killing the script on the spot, and
+  # every interrupting signal ends it through the EXIT trap, which rolls back.
   trap '' PIPE
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 131' QUIT
+  trap 'exit 143' TERM
   ROLLBACK=1
   case $(svc_state) in
     "" | inactive | failed) ;;
     *) WAS_RUNNING=1; info "Stopping $N.service ..."; systemctl stop "$N.service" ;;
   esac
-  # The current MeshCentral config, kept for a failed install to put back. One that cannot be read as a plain file is not kept
-  # (the hub's config replaces it either way), so an odd file there never blocks an install.
-  if [[ -d $state && ! -L $state ]] \
-    && as_service /usr/bin/bash -c '[ -f "$1" ] && [ ! -L "$1" ]' _ "$state/meshcentral-data/config.json" </dev/null; then
-    if read_service_file "$state/meshcentral-data/config.json" $((MAX_CONFIG_BYTES + 1)) >"$TMPD/config.prev" \
-      && [[ -s $TMPD/config.prev ]] && (($(stat -c '%s' -- "$TMPD/config.prev") <= MAX_CONFIG_BYTES)); then
-      PREV_CFG=1
-    else
-      info "The current MeshCentral config could not be read as a plain file, so it is replaced without a copy."
-    fi
+  # The current MeshCentral config, kept for a failed install to put back. A real config that cannot be saved stops the
+  # install before anything is replaced; one that is not a usable config at all (MeshCentral could not have run with it)
+  # is replaced without a copy.
+  if [[ -d $state && ! -L $state ]]; then
+    local src=0
+    save_previous_config || src=$?
+    case $src in
+      0) PREV_CFG=1 ;;
+      3) ;;
+      4) info "What is in place of the MeshCentral config is not a usable config (a link, not a plain file, empty or too large); it is replaced without a copy." ;;
+      *) fail "Could not save the current MeshCentral config (as $N, in its sandbox), so nothing was replaced. If its owner was changed, run: sudo chown $N:$N $state/meshcentral-data/config.json" ;;
+    esac
   fi
 
   # ---- the program: a root-owned copy, private until it has been checked ----
@@ -589,14 +621,19 @@ full_install() {
     || fail "The copied Node does not run as $N inside the sandbox: $(printf '%s' "$nv" | tr -cd '\40-\176' | tail -c 300)"
   [[ $nv =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || fail "The copied Node did not report a version."
   # The sandbox must really refuse opening connections on this computer (an old libseccomp could skip names quietly).
+  # Both a connection and a datagram (Node's own UDP send uses sendmsg) must be refused.
   local probe
-  probe=$(run_in_sandbox / "" /usr/bin/bash -c 'exec 3<>/dev/tcp/127.0.0.1/9' || true)
+  probe=$(run_in_sandbox / "" "$BASH_BIN" -c 'exec 3<>/dev/tcp/127.0.0.1/9' || true)
   [[ $probe == *"not permitted"* ]] || fail "The sandbox on this computer does not refuse network connections, so the service is not installed."
+  probe=$(run_in_sandbox / "BindReadOnlyPaths=$NEW_DIR" "$NEW_DIR/node" -e \
+    "const s=require('dgram').createSocket('udp4');s.send('x',9,'127.0.0.1',(e)=>{process.stdout.write(e?String(e.code):'SENT');process.exit(0)})" || true)
+  [[ $probe == EPERM ]] || fail "The sandbox on this computer does not refuse sending datagrams (got '${probe:0:40}'), so the service is not installed."
 
   # Swap it in; the previous program is kept until the new service answers.
   if [[ -e $prog ]]; then
     OLD_PROG=/opt/.$N.old.$$
-    mv -- "$prog" "$OLD_PROG"
+    [[ ! -e $OLD_PROG && ! -L $OLD_PROG ]] || fail "$OLD_PROG already exists (left by an earlier failed install); remove it first."
+    mv -T -- "$prog" "$OLD_PROG"
   fi
   mv -- "$NEW_DIR" "$prog" || fail "Could not put the program in place."
   NEW_DIR=
@@ -605,7 +642,7 @@ full_install() {
   [[ -L $state ]] && fail "$state is a symbolic link."
   install -d -m 0700 -o "$N" -g "$N" "$state"
   chown -R -h "$N:$N" "$state"   # files kept from an earlier install belong to this account again (-h and no -L: links are never followed)
-  as_service /usr/bin/bash --noprofile --norc -c 'set -eu; umask 077; cd -P -- "$1"
+  as_service "$BASH_BIN" --noprofile --norc -c 'set -eu; umask 077; cd -P -- "$1"
     for d in meshcentral-data meshcentral-files; do
       if [ -L "$d" ]; then echo "$1/$d is a symbolic link" >&2; exit 1; fi
       mkdir -p -- "$d"; chmod 0700 -- "$d"
@@ -653,11 +690,16 @@ full_install() {
     journalctl -u "$N.service" -n 40 --no-pager || true
     fail "$N.service did not stay up. The log is above."
   fi
-  local listening
-  listening=$(ss -Hltn 2>/dev/null | awk '{print $4}' || true)
-  if [[ -n $agent_port && $'\n'$listening$'\n' != *":$agent_port"$'\n'* ]]; then
+  # ...and the process listening on its agent port must be one of the service's own.
+  [[ $agent_port =~ ^[0-9]{4,5}$ ]] || fail "The MeshCentral config names no agent port."
+  local owners own_ok=0 p
+  owners=$(ss -Hltnp "sport = :$agent_port" 2>/dev/null | grep -Eo 'pid=[0-9]+' | cut -d= -f2 || true)
+  for p in $owners; do
+    if grep -qx "$p" "/sys/fs/cgroup/system.slice/$N.service/cgroup.procs" 2>/dev/null; then own_ok=1; else own_ok=0; break; fi
+  done
+  if ((!own_ok)); then
     journalctl -u "$N.service" -n 40 --no-pager || true
-    fail "$N.service runs but does not listen on its agent port $agent_port. The log is above."
+    fail "$N.service runs but its agent port $agent_port is not open by the service. The log is above."
   fi
 
   # The new service answers and stays up: keep it, and drop the previous program.

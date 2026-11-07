@@ -87,9 +87,10 @@ elif [[ -d $prog ]]; then
   rm -rf --one-file-system -- "$prog"
   removed+=("$prog")
 fi
-# Copies a failed or cut-off install left aside (/opt/.NAME.new.PID, /opt/.NAME.old.PID).
-for d in /opt/."$N".new.* /opt/."$N".old.*; do
-  if [[ -d $d && ! -L $d ]]; then
+# Copies a failed or cut-off install left aside (/opt/.NAME.new.PID, /opt/.NAME.old.PID), and the root-only folders a failed
+# rollback kept (/tmp/mymaestro-remote-install.*; they hold a request with password hashes).
+for d in /opt/."$N".new.* /opt/."$N".old.* /tmp/mymaestro-remote-install.*; do
+  if [[ -d $d && ! -L $d && $(stat -c '%u' -- "$d") == 0 ]]; then
     rm -rf --one-file-system -- "$d"
     removed+=("$d")
   fi
