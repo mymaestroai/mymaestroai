@@ -152,6 +152,8 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
         cookieIpCheck: 'strict',
         // The service has no internet: MeshCentral takes the agent programs from its own agents folder only (filled by ensureAgentFiles before the install).
         agentDownloads: forService ? { enabled: false, fetchReleases: false } : { enabled: true, fetchReleases: false },
+        // ...and it signs the Windows agents without asking a timestamp server on the internet (meshcentral.js:3327-3329), which would fail.
+        ...(forService ? { agentTimeStampServer: false } : {}),
         autoBackup: false,
         filesPath: forService ? `/var/lib/${serviceName}/meshcentral-files` : paths.filesPath,
       },

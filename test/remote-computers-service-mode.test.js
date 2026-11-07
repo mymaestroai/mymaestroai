@@ -130,9 +130,12 @@ test('service mode paths and config: the files path is the service data folder, 
   const hubCfg = h.ms.configFor(SETTINGS);
   assert.strictEqual(svcCfg.settings.filesPath, '/var/lib/mymaestro-remote/meshcentral-files');
   assert.strictEqual(hubCfg.settings.filesPath, path.join(s.home, 'meshcentral-files'));
-  assert.deepStrictEqual({ ...svcCfg.settings, filesPath: 0, agentDownloads: 0 }, { ...hubCfg.settings, filesPath: 0, agentDownloads: 0 });
+  const { agentTimeStampServer, ...svcRest } = svcCfg.settings;
+  assert.deepStrictEqual({ ...svcRest, filesPath: 0, agentDownloads: 0 }, { ...hubCfg.settings, filesPath: 0, agentDownloads: 0 });
   assert.deepStrictEqual(svcCfg.settings.agentDownloads, { enabled: false, fetchReleases: false });
   assert.deepStrictEqual(hubCfg.settings.agentDownloads, { enabled: true, fetchReleases: false });
+  assert.strictEqual(agentTimeStampServer, false, 'the service signs Windows agents without an internet timestamp server');
+  assert.ok(!('agentTimeStampServer' in hubCfg.settings), 'hub mode keeps MeshCentral\'s default timestamp server');
   assert.deepStrictEqual(svcCfg.domains, hubCfg.domains);
   assert.deepStrictEqual(s.ms.configFor(SETTINGS), svcCfg, 'in service mode the default is the service config');
   assert.strictEqual(newSvc({ serviceName: 'mymaestro-remote-b2' }).ms.configFor(SETTINGS).settings.filesPath, '/var/lib/mymaestro-remote-b2/meshcentral-files');
