@@ -17,7 +17,7 @@ const { createRemote, TOOLS, NOT_YET, REINSTALL, WAITING } = require('../modules
 
 const DIR = path.join(__dirname, '..', 'modules', 'remote-computers');
 const SERVER = path.join(DIR, 'server.js');
-const SETTINGS = { address_name: 'hub.example.ts.net', listen_ip: '100.64.0.10', control_port: 9971, agent_port: 9972, levels: ['maestro:look'], session_minutes: 30 };
+const SETTINGS = { run_as: 'hub', address_name: 'hub.example.ts.net', listen_ip: '100.64.0.10', control_port: 9971, agent_port: 9972, levels: ['maestro:look'], session_minutes: 30 };
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'rc-core-'));
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise((r) => setImmediate(r)); };
 const mode = (f) => fs.statSync(f).mode & 0o777;
@@ -116,7 +116,9 @@ test('the manifest, setup and check load through the hub loader', () => {
   });
   assert.deepStrictEqual(TOOLS.map((t) => t.name).sort(), Object.keys(mf.tools).sort());
   const byKey = Object.fromEntries(mf.settings.map((s) => [s.key, s]));
-  assert.deepStrictEqual(Object.keys(byKey), ['address_name', 'listen_ip', 'control_port', 'agent_port', 'agent_allowed', 'levels', 'session_minutes']);
+  assert.deepStrictEqual(Object.keys(byKey), ['address_name', 'listen_ip', 'control_port', 'agent_port', 'agent_allowed', 'levels', 'session_minutes', 'run_as', 'service_name']);
+  assert.strictEqual(byKey.run_as.default, 'auto');
+  assert.strictEqual(byKey.service_name.default, 'mymaestro-remote');
   assert.strictEqual(byKey.agent_allowed.default, '100.64.0.0/10');
   assert.strictEqual(byKey.control_port.default, 9971);
   assert.strictEqual(byKey.agent_port.default, 9972);
@@ -124,7 +126,7 @@ test('the manifest, setup and check load through the hub loader', () => {
   assert.strictEqual(byKey.session_minutes.default, 30);
   assert.deepStrictEqual([byKey.control_port.min, byKey.control_port.max, byKey.agent_port.min, byKey.agent_port.max, byKey.session_minutes.min, byKey.session_minutes.max], [1024, 65535, 1024, 65535, 5, 120]);
   for (const s of mf.settings) assert.ok(s.label && s.help, `${s.key} has a label and help`);
-  assert.deepStrictEqual(safeSettings(mf, {}), { address_name: '', listen_ip: '', control_port: 9971, agent_port: 9972, agent_allowed: '100.64.0.0/10', levels: ['maestro:look'], session_minutes: 30 });
+  assert.deepStrictEqual(safeSettings(mf, {}), { address_name: '', listen_ip: '', control_port: 9971, agent_port: 9972, agent_allowed: '100.64.0.0/10', levels: ['maestro:look'], session_minutes: 30, run_as: 'auto', service_name: 'mymaestro-remote' });
   const allowed = (v) => new RegExp(byKey.agent_allowed.pattern).test(v);
   for (const ok of ['100.64.0.0/10', '10.0.0.1', '100.64.0.0/10, 192.168.0.5', '1.2.3.4/32,5.6.7.8/0']) assert.ok(allowed(ok), ok);
   for (const bad of ['', 'hub', '100.64.0.256', '100.64.0.0/33', '100.64.0.0/', '1.2.3.4,', '1.2.3.4;5.6.7.8', '::1']) assert.ok(!allowed(bad), bad);

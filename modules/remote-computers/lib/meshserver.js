@@ -18,6 +18,10 @@ const BOOT_KILL_AFTER_MS = 5000;
 const ORPHAN_TERM_MS = 10000;
 const LOG_ROTATE_BYTES = 10 * 1024 * 1024;
 const BOOTSTRAP_TIMEOUT_MS = 120000;
+const REPROBE_MS = 30000;
+const DEFAULT_SERVICE_NAME = 'mymaestro-remote';
+const SERVICE_NAME_RE = /^mymaestro-remote(-[a-z0-9]{1,16})?$/;
+const SAFE_PATH_RE = /^\/[A-Za-z0-9._/-]+$/;   // what the root script (install.sh) accepts for a path
 const NPM_GUARD = path.join(__dirname, 'no-npm.js');
 
 // MeshCentral's own password hash (pass.js, MeshCentral 1.3.1), which is what a normal login compares against (webserver.js:923-925) and what
@@ -75,8 +79,11 @@ function tlsProbe(port, host = '127.0.0.1') {
 }
 
 function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spawn, execFile = childProcess.execFile, now = Date.now, log = () => {},
-  probe = tlsProbe, timers = { setTimeout, clearTimeout }, npmGuard = NPM_GUARD, procRoot = '/proc', killPid = process.kill.bind(process), onRetryReady = null } = {}) {
+  probe = tlsProbe, timers = { setTimeout, clearTimeout }, npmGuard = NPM_GUARD, procRoot = '/proc', killPid = process.kill.bind(process), onRetryReady = null,
+  mode = 'hub', serviceName = DEFAULT_SERVICE_NAME, moduleDir = '' } = {}) {
   if (!runtimeDir || !home) throw new Error('createMeshServer needs runtimeDir and home');
+  const service = mode === 'service';
+  if (service && !SERVICE_NAME_RE.test(String(serviceName))) throw new Error('The service name is not valid. Use mymaestro-remote, or mymaestro-remote- and up to 16 letters or digits.');
   const paths = {
     home,
     dataPath: path.join(home, 'meshcentral-data'),
@@ -90,6 +97,14 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   };
   paths.configFile = path.join(paths.dataPath, 'config.json');
   paths.rootCert = path.join(paths.dataPath, 'root-cert-public.crt');
+  if (service) {
+    // In service mode MeshCentral runs as its own system service; the hub only keeps a request for the root script and reads what the service shares back.
+    paths.serviceDir = path.join(home, 'service');
+    paths.rootCert = path.join(paths.serviceDir, 'root-cert-public.crt');
+    paths.request = path.join(paths.serviceDir, 'request.env');
+    paths.serviceConfig = path.join(paths.serviceDir, 'config.json');
+    paths.installed = path.join(paths.serviceDir, 'installed.json');
+  }
   const baseEnv = () => ({ PATH: process.env.PATH, HOME: home });
 
   // ── config ──
@@ -99,7 +114,8 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   //   lockAgentDownload (webserver.js:6297,6381), userAllowedIp/agentAllowedIp (meshcentral.js:958-969), cookieIpCheck (meshcentral.js:985-987),
   //   agentDownloads {enabled, fetchReleases} (agentbuilds.js:395,229-230), autoBackup false (meshcentral.js:2211), filesPath (meshcentral.js:123), domain newAccounts (webserver.js:1784),
   //   domain passwordRequirements.logintokens false (meshuser.js:5363 and 5402: "Login tokens are not supported on this server"; read as domain.passwordrequirements after the lower-casing).
-  function configFor(s = settings) {
+  function configFor(s = settings, opts = {}) {
+    const forService = opts && opts.service !== undefined ? !!opts.service : service;
     const name = String((s && s.address_name) || '').trim().toLowerCase();
     if (!name) throw new Error('Waiting for setup: the tailnet name of this computer is not set.');
     if (!DNS_RE.test(name)) throw new Error('The tailnet name is not valid. Use a name such as hub.example.ts.net.');
@@ -135,7 +151,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
         cookieIpCheck: 'strict',
         agentDownloads: { enabled: true, fetchReleases: false },
         autoBackup: false,
-        filesPath: paths.filesPath,
+        filesPath: forService ? `/var/lib/${serviceName}/meshcentral-files` : paths.filesPath,
       },
       domains: { '': { title: 'My Maestro computers', newAccounts: false, passwordRequirements: { logintokens: false } } },
     };
@@ -167,7 +183,8 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   const cancelled = () => coded('Stopped.', 'ECANCEL');
   const sleep = (ms) => new Promise((r) => timers.setTimeout(r, ms));
   let child = null;       // the running MeshCentral process, if any
-  const isRunning = () => !!child;
+  const svc = { ready: false, reason: null, message: null, command: null, timer: null };   // service mode: the last probe of the system service
+  const isRunning = () => (service ? svc.ready : !!child);
   let stopping = false, starting = null, restartTimer = null, stableTimer = null, exitWaiters = [];
   // A pause that stop() and a process exit cut short.
   const nap = (ms) => new Promise((resolve) => {
@@ -222,7 +239,60 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   // Every attempt makes fresh passwords. No password is ever on a command line: the accounts are made with --hashpass <salt>,<hash> (see hashPassword).
   // An account that exists already (an earlier attempt) is reset with --resetaccount --hashpass (meshcentral.js:1069-1099: it accepts --hashpass, at :1079-1085,
   // and also unlocks the account and removes its 2FA) so that the new password is the one that works. accounts.json is written last, only when every step worked.
+  //
+  // Service mode: the credentials are made here exactly as in hub mode (same accounts.json), but nothing is run. The config and a request file
+  // (KEY=VALUE lines with the password HASHES only) are written for the root script, which makes the accounts inside the service's own data folder.
+  function installCommand() {
+    for (const [what, v] of [['module folder', moduleDir], ['request file', paths.request]]) {
+      if (!v) throw new Error(`The ${what} is not known, so the install command cannot be made.`);
+      if (String(v).includes("'")) throw new Error(`The ${what} has a single quote in its name, so the install command cannot be made.`);
+    }
+    return `sudo bash '${path.join(moduleDir, 'service', 'install.sh')}' '${paths.request}'`;
+  }
+  const restartCommand = () => `sudo systemctl restart ${serviceName}`;
+  function bootstrapService() {
+    const cfg = configFor(settings, { service: true });
+    const cfgText = JSON.stringify(cfg, null, 2) + '\n';
+    const existing = readAccountsStrict();
+    // Installed with these very settings: nothing to hand to the root script (no request file with hashes lying around).
+    if (existing && fs.existsSync(paths.installed)) {
+      let same = false;
+      try { same = fs.readFileSync(paths.serviceConfig, 'utf8') === cfgText; } catch { same = false; }
+      if (same) return { created: false, needsService: false };
+    }
+    const created = !existing;
+    const a = existing || {
+      admin: { user: 'admin', pass: crypto.randomBytes(24).toString('base64url') },
+      agent: { user: 'maestro', pass: crypto.randomBytes(24).toString('base64url') },
+      createdAt: new Date(now()).toISOString(),
+    };
+    // The paths as given are checked (a "." or ".." part is refused before anything is normalised), because the root script refuses them too.
+    const abs = (p) => (path.isAbsolute(p) ? p : path.resolve(p));
+    const values = { home: abs(home), runtime: abs(runtimeDir), node: process.execPath };
+    const bad = Object.entries(values).filter(([, v]) => !SAFE_PATH_RE.test(v) || v.split('/').some((c) => c === '.' || c === '..')).map(([k]) => k);
+    if (bad.length) throw new Error(`The service cannot be set up: the ${bad.join(', ')} path has characters other than letters, digits and . _ - /, or has a . or .. part.`);
+    const allowed = settings.agent_allowed === undefined || settings.agent_allowed === null || String(settings.agent_allowed).trim() === '' ? DEFAULT_ALLOWED : String(settings.agent_allowed);
+    if (/[\r\n]/.test(allowed)) throw new Error('The allowed addresses are not valid.');
+    const command = installCommand();
+    fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(paths.serviceDir, { recursive: true, mode: 0o700 });
+    if (created) {
+      try { fs.unlinkSync(paths.pendingFile); } catch { /* none, as it should be */ }
+      writeFileAtomic(paths.accountsFile, JSON.stringify(a, null, 2) + '\n');
+    }
+    writeFileAtomic(paths.serviceConfig, cfgText);
+    const lines = [
+      'MMR_VERSION=1', `MMR_NAME=${serviceName}`, `MMR_HUB_HOME=${values.home}`, `MMR_RUNTIME_DIR=${values.runtime}`, `MMR_NODE=${values.node}`,
+      `MMR_MESH_VERSION=${VERSION}`, `MMR_CONTROL_PORT=${cfg.settings.port}`, `MMR_AGENT_ALLOWED=${allowed}`,
+      `MMR_ADMIN_USER=${a.admin.user}`, `MMR_ADMIN_HASH=${hashPassword(a.admin.pass).arg}`,
+      `MMR_AGENT_USER=${a.agent.user}`, `MMR_AGENT_HASH=${hashPassword(a.agent.pass).arg}`,
+    ];
+    writeFileAtomic(paths.request, lines.join('\n') + '\n');
+    return { created, needsService: true, command };
+  }
+
   async function bootstrap() {
+    if (service) return bootstrapService();
     const my = epoch;
     const alive = () => { if (epoch !== my) throw cancelled(); };
     if (readAccountsStrict()) return { created: false };
@@ -301,6 +371,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     };
   }
   function logTail(n = 12) {
+    if (service) return `MeshCentral runs as the system service ${serviceName}; its log: journalctl -u ${serviceName}`;
     try {
       const fd = fs.openSync(paths.logFile, 'r');
       try {
@@ -385,8 +456,66 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     }
   }
 
+  // -- service mode: the system service is not ours to start or stop; the module only looks whether it answers --
+  const NOT_INSTALLED_MESSAGE = (command) => `MeshCentral needs to be installed as its own service once. Run this in a terminal on this computer (it asks for an administrator password), or press Ask Maestro: ${command}`;
+  const NOT_RUNNING_MESSAGE = (command) => `MeshCentral is installed as the system service ${serviceName} but it does not answer. Restart it in a terminal on this computer (it asks for an administrator password), or press Ask Maestro: ${command}`;
+  const NEEDS_UPDATE_MESSAGE = (command) => `The settings changed after MeshCentral was installed as the system service ${serviceName}. Run the install again in a terminal on this computer (it asks for an administrator password), or press Ask Maestro: ${command}`;
+
+  // Looks at the service now: installed.json and the root certificate must exist and the control port must answer. Never throws for a missing service.
+  async function checkService() {
+    const my = epoch;
+    let result;
+    if (!fs.existsSync(paths.installed)) {
+      if (!fs.existsSync(paths.request)) await bootstrap();
+      const command = installCommand();
+      result = { ready: false, reason: 'not-installed', message: NOT_INSTALLED_MESSAGE(command), command };
+    } else if (fs.existsSync(paths.request)) {   // installed, but bootstrap wrote a new request because the settings changed since
+      const command = installCommand();
+      result = { ready: false, reason: 'needs-update', message: NEEDS_UPDATE_MESSAGE(command), command };
+    } else {
+      const port = Number(configFor().settings.port);
+      const up = fs.existsSync(paths.rootCert) && await probe(port, '127.0.0.1').catch(() => false);
+      const command = restartCommand();
+      result = up ? { ready: true, reason: null, message: null, command: null } : { ready: false, reason: 'not-running', message: NOT_RUNNING_MESSAGE(command), command };
+    }
+    if (epoch !== my) throw cancelled();
+    Object.assign(svc, result);
+    return { mode: 'service', ...result };
+  }
+
+  // Until the service answers, look again every 30 s so that the module connects by itself once the owner has installed it.
+  function armReprobe() {
+    if (svc.timer || stopping) return;
+    svc.timer = timers.setTimeout(async () => {
+      svc.timer = null;
+      let r = null;
+      try { r = await checkService(); } catch (e) { if (!e || e.code !== 'ECANCEL') log('service check failed:', clean(e && e.message, 120)); }
+      if (stopping) return;
+      if (r && r.ready) { if (typeof onRetryReady === 'function') { try { onRetryReady(); } catch { /* not ours to fail */ } } } else armReprobe();
+    }, REPROBE_MS);
+    if (svc.timer && svc.timer.unref) svc.timer.unref();
+  }
+
+  function startService() {
+    if (starting) return starting;
+    stopping = false;
+    const my = epoch;
+    starting = (async () => {
+      fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
+      await reapOrphan(my);   // a process the hub mode of an earlier version left behind
+      if (epoch !== my) throw cancelled();
+      const r = await checkService();
+      if (!r.ready) armReprobe();
+      return r.ready ? { pid: null, already: false, ready: true, mode: 'service' } : r;
+    })();
+    const done = () => { starting = null; };
+    starting.then(done, done);
+    return starting;
+  }
+
   // Starts MeshCentral and resolves when it is ready. One process at a time; a second call while one is running or starting joins it.
   function start() {
+    if (service) return startService();
     if (starting) return starting;
     if (child) return Promise.resolve({ pid: child.pid, already: true });
     stopping = false;
@@ -437,6 +566,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   async function stop() {
     epoch += 1;
     stopping = true;
+    if (svc.timer) { timers.clearTimeout(svc.timer); svc.timer = null; }   // service mode: no signal is ever sent to the service
     if (restartTimer) { timers.clearTimeout(restartTimer); restartTimer = null; }
     if (stableTimer) { timers.clearTimeout(stableTimer); stableTimer = null; }
     for (const w of exitWaiters.splice(0)) w();
@@ -456,6 +586,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   }
 
   function status() {
+    if (service) return { running: svc.ready, pid: null, startedAt: null, restarts: 0, lastError: null, mode: 'service', reason: svc.reason, message: svc.message, command: svc.command };
     return {
       running: !!child,
       pid: child ? child.pid : null,
@@ -465,7 +596,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     };
   }
 
-  return { paths, configFor, writeConfig, npmGuardArgs, bootstrap, accounts, state, start, stop, status, isRunning, logTail };
+  return { paths, mode: service ? 'service' : 'hub', configFor, writeConfig, npmGuardArgs, bootstrap, accounts, state, start, stop, status, isRunning, logTail, checkService };
 }
 
-module.exports = { createMeshServer, writeFileAtomic, tlsProbe, hashPassword, redact, VERSION, GROUP_NAME, RESTART_DELAYS_MS, NPM_GUARD, DNS_RE, IPV4_RE, LOG_ROTATE_BYTES };
+module.exports = { createMeshServer, DEFAULT_SERVICE_NAME, SERVICE_NAME_RE, REPROBE_MS, writeFileAtomic, tlsProbe, hashPassword, redact, VERSION, GROUP_NAME, RESTART_DELAYS_MS, NPM_GUARD, DNS_RE, IPV4_RE, LOG_ROTATE_BYTES };

@@ -5,7 +5,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { createMeshServer, redact, VERSION } = require('./lib/meshserver');
+const { createMeshServer, redact, VERSION, DEFAULT_SERVICE_NAME, SERVICE_NAME_RE } = require('./lib/meshserver');
 const { createMeshClient, MeshError } = require('./lib/meshclient');
 const { ensureGroup } = require('./lib/setupgroup');
 const { createGate, GateError } = require('./lib/gate');
@@ -208,9 +208,14 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const runtimeOk = supported && !!runtimeDir && fs.existsSync(meshcentralJs);
 
   // A start that failed before any process was made is retried by the supervisor; when it works, the rest of the start sequence follows.
-  const mesh = runtimeOk && home ?createMeshServer({ runtimeDir, home, settings, log, onRetryReady: () => { if (!stopped && state.phase !== 'ready') startSequence().catch(() => {}); }, ...(deps.mesh || {}) }) : null;
+  // hub mode: MeshCentral runs under My Maestro's own account; service mode: as its own systemd service (installed once by the owner).
+  const systemd = typeof deps.serviceSupported === 'function' ? !!deps.serviceSupported() : deps.serviceSupported !== undefined ? !!deps.serviceSupported : (supported && fs.existsSync('/run/systemd/system'));
+  const mode = settings.run_as === 'service' ? 'service' : settings.run_as === 'hub' ? 'hub' : (supported && systemd ? 'service' : 'hub');
+  const serviceName = SERVICE_NAME_RE.test(String(settings.service_name)) ? settings.service_name : DEFAULT_SERVICE_NAME;
+  const mesh = runtimeOk && home ?createMeshServer({ runtimeDir, home, settings, log, mode, serviceName, moduleDir: __dirname, onRetryReady: () => { if (!stopped && state.phase !== 'ready') startSequence().catch(() => {}); }, ...(deps.mesh || {}) }) : null;
   const WebSocket = () => deps.WebSocket || require(path.join(runtimeDir, 'node_modules', 'ws'));
-  const state = { phase: !supported ? 'unsupported' : runtimeOk ? 'idle' : 'reinstall', waiting: !supported ? LINUX_ONLY : runtimeOk ? null : REINSTALL, group: null, lastError: null, warnings: [] };
+  const state = { phase: !supported ? 'unsupported' : runtimeOk ? 'idle' : 'reinstall', waiting: !supported ? LINUX_ONLY : runtimeOk ? null : REINSTALL, group: null, lastError: null, warnings: [], service: null };
+  const HUB_MODE_WARNING = 'MeshCentral runs under My Maestro\'s own account. On Linux, set "Run as" to service to give it its own locked-down account.';
 
   let startP = null, agentClient = null;
   let gen = 0, stopped = false;   // gen goes up at every stop; a start sequence of an older generation stops at its next step
@@ -244,7 +249,12 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
         }
         state.waiting = null; state.phase = 'starting';
         await mesh.bootstrap(); live();
-        await mesh.start(); live();
+        const started = await mesh.start(); live();
+        if (started && started.ready === false) {   // service mode: the service is not installed or not answering yet; the mesh server looks again every 30 s
+          state.phase = 'service-wait'; state.service = { reason: started.reason, message: started.message, command: started.command }; state.lastError = null;
+          return;
+        }
+        state.service = null;
         admin = clientFor(mesh.accounts().admin);
         await admin.ready(); live();
         state.group = await ensureGroup(admin, mesh.state); live();
@@ -261,13 +271,28 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   }
 
   async function toolHealth() {
+    let serviceNow = null;   // service mode: look at the service again on every call
+    if (mode === 'service' && mesh && supported && !state.waiting && !stopped) {
+      try { serviceNow = await mesh.checkService(); } catch (e) { if (e && e.code !== 'ECANCEL' && !/^Waiting for setup/.test(e.message)) state.lastError = clean(e.message || e.code, 400); }
+    }
     const st = mesh ? mesh.status() : { running: false, restarts: 0, lastError: null };
     const out = {
-      ok: false, running: st.running, version: VERSION, group: state.group || (mesh ? mesh.state.read().meshid || null : null),
+      ok: false, mode, running: st.running, version: VERSION, group: state.group || (mesh ? mesh.state.read().meshid || null : null),
       computers: null, online: null, warnings: [...state.warnings], lastError: state.lastError || st.lastError || null,
     };
     if (!supported) { out.waiting = LINUX_ONLY; out.lastError = null; return out; }
     if (state.waiting) { out.waiting = state.waiting; return out; }
+    if (mode === 'hub') out.warnings.push(HUB_MODE_WARNING);
+    if (mode === 'service' && serviceNow) {
+      if (!serviceNow.ready) {
+        if (state.phase === 'ready') { state.phase = 'service-wait'; if (agentClient) { try { agentClient.close(); } catch { /* closed */ } agentClient = null; } }
+        state.service = { reason: serviceNow.reason, message: serviceNow.message, command: serviceNow.command };
+        Object.assign(out, { reason: serviceNow.reason, message: serviceNow.message, command: serviceNow.command });
+        return out;
+      }
+      if (state.phase !== 'ready') { await startSequence(); if (state.phase !== 'ready') { out.lastError = state.lastError || out.lastError; } }
+      out.running = true; out.group = state.group || out.group;
+    }
     if (st.restarts) out.warnings.push(`The server restarted ${st.restarts} time${st.restarts === 1 ? '' : 's'} after stopping unexpectedly.`);
     if (st.running && state.phase === 'ready') {
       try {
@@ -283,7 +308,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     return out;
   }
   async function toolStart() {
-    await startSequence();
+    await startSequence();   // in service mode the health call below looks at the service again and returns the reason, message and command when it is not ready
     return toolHealth();
   }
 
@@ -321,6 +346,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (!supported) throw new ToolError(LINUX_ONLY);
     if (deps.agentClient) return;
     if (state.waiting) throw new ToolError(`The Remote computers server is not ready yet: ${String(state.waiting).replace(/\.$/, '')}.`);
+    if (state.service) throw new ToolError('The Remote computers server is not ready yet: MeshCentral is not running as its own service. The owner has to finish that in the setup.');
     if (state.phase !== 'ready' || !groupId()) throw new ToolError('The Remote computers server is not ready yet. Try again in a minute.');
   }
   // A MeshCentral failure as a plain answer: the server's short refusal text may be shown, nothing else of what it said.
@@ -704,7 +730,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     handle(msg).then((r) => { if (r) write(JSON.stringify(r) + '\n'); }).catch((e) => log('message failed:', clean(e && e.message, 80)));
   }
 
-  return { handle, onLine, start, stop, callTool, receive, mesh, hub, state, isStopping: () => stopped };
+  return { handle, onLine, start, stop, callTool, receive, mesh, hub, state, mode, isStopping: () => stopped };
 }
 
 function main() {

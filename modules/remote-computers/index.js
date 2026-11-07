@@ -14,6 +14,10 @@ module.exports = {
         if (!h || typeof h !== 'object') return { ok: false, summary: String(text || 'The server sent a reply that could not be read.').slice(0, 300) };
         const warnings = Array.isArray(h.warnings) ? h.warnings.filter((w) => typeof w === 'string').slice(0, 5) : [];
         if (h.waiting) return { ok: false, summary: String(h.waiting).slice(0, 300), warnings };
+        if (h.reason && h.message) {   // service mode: the service is not installed, or not answering; the message already holds the command
+          const command = typeof h.command === 'string' ? h.command.slice(0, 500) : '';
+          return { ok: false, summary: String(h.message).slice(0, 800), reason: String(h.reason).slice(0, 40), ...(command ? { command, lines: [command] } : {}), warnings };
+        }
         if (!h.running) return { ok: false, summary: h.lastError ? `The server is not running (${String(h.lastError).slice(0, 200)}).` : 'The server is not running.', warnings };
         if (!h.group) return { ok: false, summary: 'The server runs, but its device group is not ready yet.', warnings };
         if (h.ok !== true) return { ok: false, summary: String(h.lastError || warnings[0] || 'The control connection is not ready.').slice(0, 300), warnings };

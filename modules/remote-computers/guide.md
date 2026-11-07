@@ -64,6 +64,8 @@ Every agent starts at Look. You raise an agent's level in the settings.
   on it.
 - **Control port** (default 9971): used only on this computer by the connector.
 - **Computer port** (default 9972): the port on the tailnet address that the PCs connect to.
+- **Run as** (default auto): `service` runs MeshCentral as its own system service (see "Its own service (Linux)").
+  `hub` runs it under My Maestro's own account. `auto` uses `service` when this computer has systemd.
 - **What each agent may do:** one entry per agent, like `maestro:look`, `maestro:act` or `maestro:drive`.
 - **Approved session length:** how long one yes for Act or Drive lasts (5 to 120 minutes).
 
@@ -101,6 +103,33 @@ Every agent starts at Look. You raise an agent's level in the settings.
   minutes. Ask the agent to try again when you are ready.
 - **"This link has expired":** installer links work once and for 15 minutes. Run Get the installer again.
 - **"The installer is not available right now":** the server is not ready. Run Start the server, then make a new link.
+
+## Its own service (Linux)
+
+On Linux with systemd, MeshCentral runs as its own system service instead of inside My Maestro. You install it once.
+The setup shows a command that starts with `sudo bash` and runs `install.sh`; run it in a terminal on this
+computer (it asks for an administrator password). If Maestro has administrator rights on this computer, press Ask
+Maestro and it runs the command for you.
+
+What the command does:
+
+- It creates a system account named `mymaestro-remote`.
+- It copies the program to `/opt/mymaestro-remote`.
+- It keeps MeshCentral's data and keys in `/var/lib/mymaestro-remote`, where only that account can read them.
+- It starts a locked-down service. The service cannot read anyone's home folder, and it can only talk to this
+  computer and the allowed agent addresses.
+
+Good to know:
+
+- The service keeps running when My Maestro restarts. The connector finds it again by itself, within about 30 seconds
+  of the install finishing; you do not need to restart My Maestro.
+- If you change the settings later, the setup shows the install command again; run it once more so the service
+  picks up the new settings.
+- Its data is not in My Maestro's backups. If you move to a new computer, install the PC's agent again.
+- To remove it, run `sudo bash <module dir>/service/uninstall.sh`, where `<module dir>` is the folder of this
+  connector (the install command shows the full path).
+- `hub` mode runs MeshCentral under My Maestro's own account. Use it only on computers without systemd.
+- Its log is in `journalctl -u mymaestro-remote`.
 
 ## Removing a computer
 
