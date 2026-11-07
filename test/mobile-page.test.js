@@ -218,3 +218,11 @@ test('the app does not reload itself while the message box is in use (focused or
   assert.ok(js.includes("const busy = () => streams.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();\n        const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'after a hub restart');
   assert.ok(js.includes("const busy = () => streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();\n      const go = () => { if (busy()) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'after a new app version');
 });
+
+test('the ⋮ menu never runs past the bottom of the screen: it is capped to the screen and scrolls inside itself', () => {
+  const html = read('mobile.html');
+  const css = html.slice(html.indexOf('#menu { position: fixed;'), html.indexOf('#menu.open'));
+  assert.ok(/max-height: calc\(100dvh - var\(--sat\) - 60px - var\(--sab\)\)/.test(css), 'capped to the visible screen height');
+  assert.ok(/max-height: calc\(100vh - /.test(css), 'with a fallback for browsers without dvh');
+  assert.ok(/overflow-y: auto/.test(css) && /overscroll-behavior: contain/.test(css), 'scrolls inside itself without moving the page');
+});
