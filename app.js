@@ -2,14 +2,19 @@
     // The password-check endpoints answer 401 for a wrong password, so they keep their own error handling.
     (function installSessionGuard() {
       const nativeFetch = window.fetch.bind(window);
-      const keepsOwn401 = (p) => p === '/api/auth/totp/disable' || p === '/api/auth/password' || p === '/api/auth/login';
+      const keepsOwn401 = (p) => p === '/api/auth/totp/disable' || p === '/api/auth/password' || p === '/api/auth/login' || p.startsWith('/api/wallet/');   // wallet owner checks answer 401 for a wrong keystore passphrase
       let redirecting = false;
       window.fetch = async function (input, init) {
         const res = await nativeFetch(input, init);
         if (res.status === 401 && !redirecting) {
           try {
             const u = new URL(typeof input === 'string' ? input : input.url, location.href);
-            if (u.origin === location.origin && u.pathname.startsWith('/api/') && !keepsOwn401(u.pathname)) {
+            let keep = keepsOwn401(u.pathname);
+            if (keep && u.pathname.startsWith('/api/wallet/')) {   // a lost sign-in still goes to the sign-in page
+              const j = await res.clone().json().catch(() => ({}));
+              keep = !(j && (j.error === 'unauthorized' || j.error === 'totp_required'));
+            }
+            if (u.origin === location.origin && u.pathname.startsWith('/api/') && !keep) {
               redirecting = true;
               location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
             }
@@ -1419,11 +1424,165 @@
     }
 
     // ── Trading wallets (owner panel). Agents never see this; they only get wallet_* tools. ──
-    async function walletApi(path, body) {
-      const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include' }
-        : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    async function walletApi(path, body, signal) {
+      const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include', signal }
+        : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
       const j = await r.json(); if (!r.ok) throw new Error(j.error || 'Request failed'); return j;
     }
+    // Face ID / fingerprint unlock of the keystore (WebAuthn PRF). Shared verbatim with lib/ui-passkey.js and mobile.js
+    // (test/ui-passkey.test.js keeps them in step).
+    // ── passkey helpers (begin) ──
+    function pkB64u(buf) {
+      const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+      let s = '';
+      for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+      return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function pkBytes(s) {
+      const t = String(s).replace(/-/g, '+').replace(/_/g, '/');
+      const bin = atob(t + '='.repeat((4 - (t.length % 4)) % 4));
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    function pkUsable(loc = location, w = window) {
+      if (!w.PublicKeyCredential || !navigator.credentials) return { ok: false, code: 'no_api', text: "This browser can't use passkeys." };
+      const host = loc.hostname || '';
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':') || host === 'localhost' || host.endsWith('.localhost')) {
+        return { ok: false, code: 'bad_address', text: `Face ID and fingerprint work on My Maestro's secure tailnet address (https), not on ${host}.` };
+      }
+      if (loc.protocol !== 'https:') {
+        return { ok: false, code: 'bad_address', text: "Face ID and fingerprint need My Maestro's secure (https) address." };
+      }
+      return { ok: true, code: '', text: '' };
+    }
+    function pkErrorText(e) {
+      const name = e && e.name;
+      if (name === 'NotAllowedError') return 'Cancelled, or the device did not confirm it was you.';
+      if (name === 'InvalidStateError') return 'This device is already set up.';
+      if (name === 'SecurityError') return "This address can't use passkeys.";
+      if (name === 'AbortError') return 'Cancelled.';
+      return (e && e.message) || 'Something went wrong.';
+    }
+    function pkStop(signal) {
+      if (signal && signal.aborted) throw new DOMException('Cancelled.', 'AbortError');
+    }
+    async function pkUnlock(api, signal) {
+      const o = await api('passkey/options', { purpose: 'unlock' });
+      pkStop(signal);
+      const one = o.allowCredentials.length === 1;
+      const byCred = {};
+      for (const c of o.allowCredentials) byCred[c.id] = { first: pkBytes(o.prfSalts[c.id]) };
+      const publicKey = {
+        challenge: pkBytes(o.challenge), rpId: o.rpId, timeout: o.timeout, userVerification: 'required',
+        allowCredentials: o.allowCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
+        extensions: { prf: { evalByCredential: byCred, ...(one ? { eval: { first: pkBytes(o.prfSalts[o.allowCredentials[0].id]) } } : {}) } },
+      };
+      const cred = await navigator.credentials.get({ publicKey, signal });
+      pkStop(signal);
+      const prf = cred.getClientExtensionResults().prf?.results?.first;
+      if (!prf) throw new Error("This device didn't give the unlock secret. Use the passphrase instead.");
+      return api('passkey/unlock', {
+        challenge: o.challenge, id: cred.id,
+        clientDataJSON: pkB64u(cred.response.clientDataJSON), authenticatorData: pkB64u(cred.response.authenticatorData),
+        signature: pkB64u(cred.response.signature), prf: pkB64u(prf),
+      });
+    }
+    async function pkAdd(api, { passphrase, label }, confirmStep, signal) {
+      const stray = ' A passkey named "My Maestro wallet" may have been saved on this device; you can delete it in its password manager.';
+      const o = await api('passkey/options', { purpose: 'register', passphrase });
+      pkStop(signal);
+      const cred = await navigator.credentials.create({ publicKey: {
+        challenge: pkBytes(o.challenge), rp: o.rp, user: { ...o.user, id: pkBytes(o.user.id) }, pubKeyCredParams: o.pubKeyCredParams,
+        timeout: o.timeout, attestation: 'none', authenticatorSelection: o.authenticatorSelection,
+        excludeCredentials: o.excludeCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
+        extensions: { prf: { eval: { first: pkBytes(o.prfSalt) } } },
+      }, signal });
+      pkStop(signal);
+      const ext = cred.getClientExtensionResults().prf;
+      if (ext && ext.enabled === false) throw new Error("This device's passkeys can't unlock the wallet. Keep using the passphrase here." + stray);
+      const pub = cred.response.getPublicKey ? cred.response.getPublicKey() : null;
+      if (!pub) throw new Error("This device's passkey type isn't supported here.");
+      let prf = ext?.results?.first, confirm;
+      if (!prf) {
+        pkStop(signal);
+        await confirmStep();
+        const c = await api('passkey/options', { purpose: 'confirm', registerChallenge: o.challenge });
+        pkStop(signal);
+        const g = await navigator.credentials.get({ publicKey: {
+          challenge: pkBytes(c.challenge), rpId: c.rpId, timeout: c.timeout, userVerification: 'required',
+          allowCredentials: [{ type: 'public-key', id: cred.rawId }],
+          extensions: { prf: { eval: { first: pkBytes(c.prfSalt) } } },
+        }, signal });
+        prf = g.getClientExtensionResults().prf?.results?.first;
+        if (!prf) throw new Error("This device didn't give the unlock secret, so it can't unlock the wallet." + stray);
+        confirm = { challenge: c.challenge, clientDataJSON: pkB64u(g.response.clientDataJSON), authenticatorData: pkB64u(g.response.authenticatorData), signature: pkB64u(g.response.signature) };
+      }
+      pkStop(signal);
+      return api('passkey/register', {
+        passphrase, label, challenge: o.challenge,
+        credential: {
+          id: cred.id, clientDataJSON: pkB64u(cred.response.clientDataJSON), authenticatorData: pkB64u(cred.response.getAuthenticatorData()),
+          publicKey: pkB64u(pub), publicKeyAlgorithm: cred.response.getPublicKeyAlgorithm(),
+        },
+        prf: pkB64u(prf), ...(confirm ? { confirm } : {}),
+      });
+    }
+    function pkDeviceLabel(nav = navigator) {
+      const ua = String((nav && nav.userAgent) || '');
+      const plat = String((nav && nav.userAgentData && nav.userAgentData.platform) || '');
+      if (/iPhone|iPod/i.test(ua)) return 'iPhone';
+      if (/iPad/i.test(ua) || (/Macintosh/i.test(ua) && nav.maxTouchPoints > 1)) return 'iPad';
+      if (/^Android$/i.test(plat) || /Android/i.test(ua)) return 'Android phone';
+      if (/^macOS$/i.test(plat) || /Macintosh|Mac OS X/i.test(ua)) return 'Mac';
+      if (/^Windows$/i.test(plat) || /Windows/i.test(ua)) return 'Windows PC';
+      if (/^(Linux|Chrome OS|Chromium OS)$/i.test(plat) || /Linux|X11|CrOS/i.test(ua)) return 'Linux computer';
+      return 'This device';
+    }
+    // ── passkey helpers (end) ──
+    // One wallet run at a time (a Face ID / fingerprint add or unlock, a passphrase unlock, a remove):
+    // { ctrl, cancelled, rejectConfirm, confirmRow, fields } (the run's own confirm row and passphrase inputs).
+    // Whoever cancels a run (a redraw or closing the panel) also cleans it up at once; the cancelled run's own code
+    // then finds pkRunEnd(run) false and does nothing more. walletPkList is the passkey list the panel last drew,
+    // so Remove can name the passkey without carrying its label in an attribute.
+    // walletPanelGen counts panel loads and runs: a load only draws while it is still the latest.
+    let pkRun = null, walletPkList = [], walletPanelGen = 0;
+    const PK_ENROLL_MS = 110000;   // the server's challenge lives 120 seconds
+    function pkRunStart(confirmRow, fields) {
+      if (pkRun) return null;
+      const run = { ctrl: new AbortController(), cancelled: false, rejectConfirm: null, confirmRow, fields: fields || [], watch: null, timer: null };
+      pkRun = run;
+      walletPanelGen++;
+      document.querySelectorAll('#pk-box button, #pk-unlock-btn').forEach(b => { b.disabled = true; });
+      // The panel leaving the page ends the run.
+      const overlay = document.getElementById('gs-overlay');
+      if (overlay && window.MutationObserver) {
+        run.watch = new MutationObserver(() => { if (!overlay.isConnected) pkCancel(); });
+        run.watch.observe(document.body, { childList: true });
+      }
+      return run;
+    }
+    function pkRunCleanup(run) {
+      if (run.watch) { run.watch.disconnect(); run.watch = null; }
+      if (run.timer) { clearTimeout(run.timer); run.timer = null; }
+      document.querySelectorAll('#pk-box button, #pk-unlock-btn').forEach(b => { b.disabled = false; });
+      if (run.confirmRow && run.confirmRow.isConnected) run.confirmRow.innerHTML = '';
+      for (const f of run.fields) f.value = '';
+    }
+    function pkCancel() {
+      if (!pkRun) return;
+      const run = pkRun; pkRun = null; run.cancelled = true;
+      try { run.ctrl.abort(); } catch { /* already finished */ }
+      if (run.rejectConfirm) { const rej = run.rejectConfirm; run.rejectConfirm = null; rej(new DOMException('Cancelled.', 'AbortError')); }
+      pkRunCleanup(run);
+    }
+    function pkRunEnd(run) {
+      if (pkRun !== run) return false;
+      pkRun = null; pkRunCleanup(run);
+      return true;
+    }
+    // esc() leaves quotes alone; every value inside an attribute goes through this one.
+    const escAttr = (s) => String(s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
     // ── Job pool: detached jobs agents run with run_job (survive the turn; owner woken when done) ──
     let jobsPanelLog = null;
     async function jobsApi(q, body) {
@@ -1673,15 +1832,23 @@
     }
     setInterval(refreshScheduleBadge, 15000); setTimeout(refreshScheduleBadge, 1500);
 
-    async function openWalletPanel(flash, extra = {}) {
+    // opts.refresh: a redraw after a run; it never reopens a Wallet panel the person closed meanwhile.
+    async function openWalletPanel(flash, extra = {}, opts = {}) {
+      const gen = ++walletPanelGen;
+      const panelGone = () => { const ov = document.getElementById('gs-overlay'); return !(ov && ov.isConnected && ov.querySelector('#pk-box')); };
       const dock = { dock: true, title: '👛 Trading wallets' }; const head = ''; const field = 'width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:transparent;color:inherit;font:inherit;margin:6px 0';
-      let s; try { s = await walletApi('status'); } catch (e) { return gsModal(`${head}<div class="gs-blocker">${esc(e.message)}</div><div class="gs-actions">${gsClose}</div>`, dock); }
+      let s, err = null; try { s = await walletApi('status'); } catch (e) { err = e; }
+      if (gen !== walletPanelGen) return;   // a newer load or a run started meanwhile
+      if (opts.refresh && panelGone()) return;
+      if (err) { pkCancel(); return gsModal(`${head}<div class="gs-blocker">${esc(err.message)}</div><div class="gs-actions">${gsClose}</div>`, dock); }
+      walletPkList = (s.keystore && s.keystore.passkeys) || [];
       const note = (flash ? `<div class="gs-ok">${esc(flash)}</div>` : '') + (extra.token
         ? `<div class="gs-ok"><strong>New executor token, shown once.</strong> Only its hash is stored; if you lose it, generate another.<br>
             <code id="x-token-out" style="user-select:all;word-break:break-all">${esc(extra.token)}</code>
             <button class="gs-btn secondary" onclick="navigator.clipboard.writeText(document.getElementById('x-token-out').textContent).then(()=>{this.textContent='Copied'})">Copy</button></div>` : '');
       const alerts = (s.alerts || []).map(a => `<div class="gs-blocker"><strong>Security alert:</strong> ${esc(a.message)} (−${esc(a.droppedEth)} ETH)</div>`).join('');
       if (!s.keystore.exists) {
+        pkCancel();
         return gsModal(`${head}${note}<p class="gs-sub">Create an encrypted keystore. The passphrase is the only thing protecting the keys on disk, and it cannot be recovered: if you lose it, move funds out first or the wallets are gone.</p>
           <input id="w-pass" type="password" placeholder="Passphrase (12+ characters)" style="${field}"><input id="w-pass2" type="password" placeholder="Repeat passphrase" style="${field}">
           <div class="gs-actions">${gsClose}<button class="gs-btn" onclick="walletAct('init')">Create keystore</button></div>`, dock);
@@ -1707,14 +1874,31 @@
         <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('backup')">Back up now</button></div></div>`;
       const who = (s.walletAgents || []).join(', ');
       // Locked: the Unlock box comes FIRST, before the Executor and Hyperliquid boxes, which have passphrase fields of their own.
+      const pkOk = pkUsable(), pkList = s.keystore.passkeys || [];
+      const pkHere = pkOk.ok && pkList.some(p => p.rpId === location.hostname);
       const unlockBox = s.keystore.unlocked ? '' : `<div class="gs-box" style="border-color:var(--accent)"><h4>Unlock the keystore</h4>
-        <div class="gs-sub" style="margin-bottom:4px">Locked since the hub last started. Type the keystore passphrase here (this box, not the Executor or Hyperliquid ones) and press Enter or Unlock.</div>
+        <div class="gs-sub" style="margin-bottom:4px">Locked since the hub last started. ${pkHere ? 'Use this device, or type' : 'Type'} the keystore passphrase here (this box, not the Executor or Hyperliquid ones) and press Enter or Unlock.</div>
+        ${pkHere ? `<div class="gs-actions" style="margin:6px 0"><button class="gs-btn" id="pk-unlock-btn" onclick="walletAct('pkunlock')">Unlock with Face ID / fingerprint</button></div>` : ''}
         <input id="w-pass" type="password" autocomplete="new-password" placeholder="Keystore passphrase" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('unlock')}">
         <div class="gs-actions"><button class="gs-btn" onclick="walletAct('unlock')">Unlock</button></div></div>`;
+      const pkRows = pkList.map(p => `<div class="gs-commit"><strong>${esc(p.label)}</strong> <span class="gs-sub" style="margin:0 6px">${esc(p.rpId)} · added ${esc(new Date(p.createdAt).toLocaleDateString())}</span>
+          <button class="gs-btn secondary" style="padding:2px 8px;font-size:0.72rem" data-pk-id="${escAttr(p.id)}" onclick="walletAct('pkremove', this.dataset.pkId)">Remove</button></div>`).join('')
+        || '<div class="gs-sub">None set up yet.</div>';
+      const passkeyBox = `<div class="gs-box" id="pk-box"><h4>Face ID / fingerprint</h4>
+        <div class="gs-sub" style="margin-bottom:6px">Unlock the wallet with Face ID, a fingerprint or the screen lock instead of typing the passphrase. Add each device once with the passphrase. Your device's password manager may copy the passkey to your other devices; each one still asks for your face, fingerprint or screen lock.</div>
+        ${pkRows}
+        ${pkOk.ok ? `<div class="gs-sub" style="margin-top:8px">Add this device</div>
+          <input id="pk-label" value="${escAttr(pkDeviceLabel())}" maxlength="40" placeholder="Name for this device" style="${field}">
+          <input id="pk-pass" type="password" autocomplete="off" placeholder="Keystore passphrase (needed once; never stored)" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('pkadd')}">
+          <div id="pk-confirm-row"></div>
+          <div class="gs-actions"><button class="gs-btn" id="pk-add-btn" onclick="walletAct('pkadd')">Add</button></div>`
+          : `<div class="gs-sub" style="margin-top:8px">${esc(pkOk.text)}</div>`}
+        <label class="gs-sub" style="display:block;margin-top:8px"><input type="checkbox" id="pk-notice" ${s.lockedNotice ? 'checked' : ''} onchange="walletLockedNotice(this)"> Send admins a phone notice when the wallet is locked after a restart</label></div>`;
       let html = `${head}${note}${alerts}<p class="gs-sub">Keystore: <strong>${s.keystore.unlocked ? 'unlocked' : 'locked'}</strong> · Trading: <strong>${s.paused ? 'PAUSED' : 'enabled'}</strong>${(s.pausedWallets || []).length ? ` (paused wallets: ${esc(s.pausedWallets.join(', '))})` : ''} · Agent with access: <strong>${esc(who)}</strong></p>
-        ${unlockBox}${revealOut}<div class="gs-box"><h4>Wallets on Base</h4>${rows}</div>${recoveryBox}
+        ${unlockBox}${passkeyBox}${revealOut}<div class="gs-box"><h4>Wallets on Base</h4>${rows}</div>${recoveryBox}
         <p class="gs-sub">Fund a wallet by sending ETH on <strong>Base</strong> to its address. Whatever it holds is the most the agent can lose. Never import a seed phrase; these are fresh standalone keys.</p>`;
       let x = null; try { x = await walletApi('executor'); } catch { /* older server */ }
+      if (gen !== walletPanelGen) return;
       if (x) {
         const opts = s.wallets.map(w => `<option value="${esc(w.name)}" ${x.wallet === w.name ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
         const actWallet = a => s.wallets.map(w => `<option value="${esc(w.name)}" ${a.wallet === w.name ? 'selected' : ''}>${esc(w.name)}${w.tier === 'open' ? ' (OPEN)' : ''}</option>`).join('');
@@ -1735,6 +1919,7 @@
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('xtoken')">New token</button><button class="gs-btn" onclick="walletAct('xsave')">Save executor settings</button></div></div>`;
       }
       let h = null; try { h = await walletApi('hl'); } catch { /* older server */ }
+      if (gen !== walletPanelGen) return;
       if (h) {
         const wopts = s.wallets.filter(w => !/^hl-agent-/.test(w.name)).map(w => `<option value="${esc(w.name)}" ${h.wallet === w.name ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
         const tools = Object.entries(h.tools).map(([k, t]) => `<label style="margin-right:10px;white-space:nowrap"><input type="checkbox" id="h-act-${k}" ${t.enabled ? 'checked' : ''}> ${esc(k)}</label><label style="margin-right:14px;white-space:nowrap"><input type="checkbox" id="h-dry-${k}" ${t.dryRun ? 'checked' : ''}> dry run</label>`).join('');
@@ -1756,6 +1941,8 @@
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('hagent')">Set up Hyperliquid agent key</button><button class="gs-btn secondary" onclick="walletAct('hextagent')">Authorize external agent</button><button class="gs-btn" onclick="walletAct('hsave')">Save Hyperliquid settings</button></div></div>`;
       }
       let fw = null; try { fw = await walletApi('allowlist'); } catch { /* older server */ }
+      if (gen !== walletPanelGen) return;
+      if (opts.refresh && panelGone()) return;
       if (fw && fw.roles) {
         walletFw = fw;
         const chainName = { 1: 'Ethereum', 8453: 'Base', 42161: 'Arbitrum', 10: 'Optimism' };
@@ -1806,6 +1993,7 @@
           <button class="gs-btn secondary" onclick="walletAct('pause', ${!s.paused})">${s.paused ? 'Resume trading' : 'Pause all trading'}</button>
           <button class="gs-btn" onclick="walletAct('create')">Create wallet</button></div>`;
       }
+      pkCancel();   // a redraw ends a Face ID / fingerprint run still open on the panel being replaced
       gsModal(html, dock);
       walletFwHint();
     }
@@ -1818,16 +2006,77 @@
       if (any && role !== 'executor') { el.innerHTML = `Any function on this address is allowed (the theft checks still apply).`; return; }
       el.innerHTML = `This role allows only: ${list.length ? list.map(x => `<code>${esc(x)}</code>`).join(', ') : '<em>nothing</em>'}.` + (role === 'contract' ? ` Tick "any selector" for other contracts.` : '');
     }
+    // The Face ID / fingerprint buttons of the Wallet panel. Buttons stay disabled while a request runs; the passphrase
+    // field is emptied before the request and stays empty after it.
+    async function walletPasskeyAct(action, id) {
+      if (pkRun) return;   // one run at a time: this click or Enter is ignored
+      if (action === 'pkremove') {
+        const known = walletPkList.find(p => p.id === id), label = known ? known.label : 'this passkey';
+        if (!confirm(`Remove "${label}"? It will stop unlocking this wallet. Copies of the wallet file made before now still accept it, protected by that passkey's own Face ID, fingerprint or screen lock.`)) return;
+      }
+      const passEl = action === 'unlock' ? document.getElementById('w-pass') : action === 'pkadd' ? document.getElementById('pk-pass') : null;
+      const run = pkRunStart(document.getElementById('pk-confirm-row'), passEl ? [passEl] : []);
+      if (!run) return;
+      if (action === 'pkadd') {
+        run.timer = setTimeout(() => { run.timer = null; if (pkRun === run) { pkCancel(); alert('Setup timed out. Start again.'); } }, PK_ENROLL_MS);
+      }
+      let passphrase = '', name = '';
+      if (passEl) {
+        passphrase = passEl.value; passEl.value = '';   // the passphrase lives only in this request
+        if (!passphrase) {
+          pkRunEnd(run);
+          passEl.scrollIntoView({ block: 'center' }); passEl.focus();
+          return alert(action === 'unlock' ? 'Type the keystore passphrase in the "Unlock the keystore" box at the top of the panel.' : 'Type the keystore passphrase in the "Face ID / fingerprint" box first.');
+        }
+      }
+      try {
+        let done;
+        if (action === 'pkremove') { await walletApi('passkey/remove', { id }, run.ctrl.signal); done = 'Removed.'; }
+        else if (action === 'pkunlock') { await pkUnlock((p, b) => walletApi(p, b, run.ctrl.signal), run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+        else if (action === 'unlock') { await walletApi('unlock', { passphrase }, run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+        else {
+          const labelEl = document.getElementById('pk-label');
+          name = ((labelEl && labelEl.value) || '').trim() || pkDeviceLabel();
+          const confirmStep = () => new Promise((resolve, reject) => {
+            if (run.cancelled || run.ctrl.signal.aborted) return reject(new DOMException('Cancelled.', 'AbortError'));
+            const row = run.confirmRow; if (!row) return resolve();
+            run.rejectConfirm = reject;
+            row.innerHTML = '<div class="gs-sub">One more tap: confirm with this device.</div><div class="gs-actions"><button class="gs-btn" id="pk-confirm-btn">Confirm with Face ID / fingerprint</button></div>';
+            row.querySelector('#pk-confirm-btn').onclick = () => { run.rejectConfirm = null; row.innerHTML = ''; resolve(); };
+          });
+          await pkAdd((p, b) => walletApi(p, b, run.ctrl.signal), { passphrase, label: name }, confirmStep, run.ctrl.signal);
+          done = `Added. ${name} can now unlock the wallet.`;
+        }
+        passphrase = '';   // the request that needed it has settled
+        if (!pkRunEnd(run)) return;   // cancelled: its canceller already cleaned up
+        await openWalletPanel(done, {}, { refresh: true });
+      } catch (e) {
+        passphrase = '';
+        if (!pkRunEnd(run)) return;
+        alert(pkErrorText(e));
+      }
+    }
+    // The phone notice "Your wallet is locked" after a restart: on or off.
+    async function walletLockedNotice(box) {
+      const on = !!box.checked;
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ walletLockedNotice: on }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Could not save that.');
+      } catch (e) { box.checked = !on; alert(e.message); }
+    }
     async function walletAct(action, arg, arg2) {
+      if (pkRun) return;   // a Face ID / fingerprint or passphrase run is going: every other action waits
       const v = id => (document.getElementById(id) || {}).value || '';
       // Read the executor passphrase field and clear it immediately: it lives only in this request.
       const takePass = () => { const el = document.getElementById('x-pass'); const p = el ? el.value : ''; if (el) el.value = ''; if (!p) alert('Enter the keystore passphrase in the Executor box first.'); return p; };
       try {
         if (action === 'init') { if (v('w-pass') !== v('w-pass2')) return alert('The two passphrases do not match.'); await walletApi('init', { passphrase: v('w-pass') }); return openWalletPanel('Keystore created and unlocked.'); }
         if (action === 'unlock') {
+          if (pkRun) return;   // one run at a time
           const p = v('w-pass'); if (!p) { const el = document.getElementById('w-pass'); if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); } return alert('Type the keystore passphrase in the "Unlock the keystore" box at the top of the panel.'); }
-          await walletApi('unlock', { passphrase: p }); return openWalletPanel('Unlocked until the hub restarts.');
+          return walletPasskeyAct('unlock');
         }
+        if (action === 'pkunlock' || action === 'pkadd' || action === 'pkremove') return walletPasskeyAct(action, arg, arg2);
         if (action === 'lock') { await walletApi('lock', {}); return openWalletPanel('Locked.'); }
         if (action === 'pause') {
           const wallet = arg2 || null;
@@ -4999,7 +5248,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', connectors: q.get('connectors') === '1' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -5077,6 +5326,7 @@
       if (t.backups) openSettingsAt('st-backups-section');
       if (t.memory) openSettingsAt('st-memory-section');
       if (t.connectors) openSettingsAt('st-modules-section');
+      if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
       if (!t.agent) return;
       let a = AGENTS.find(x => x.name === t.agent);
@@ -5106,12 +5356,12 @@
       await Promise.all([loadAgents()]);
       // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
       // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
-      // (a backup warning), ?memory=1 the memory check, ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
+      // (a backup warning), ?memory=1 the memory check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory || own.connectors)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory', 'connectors']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'connectors', 'wallet']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       openTargets.ready(own);

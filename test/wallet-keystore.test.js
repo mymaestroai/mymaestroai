@@ -106,3 +106,98 @@ describe('keystore: verify()', () => {
     ks.unlock('correct horse battery'); assert.strictEqual(ks.verify('wrong passphrase!'), false); assert.strictEqual(ks.isUnlocked(), true, 'verify never locks');
   });
 });
+
+describe('wallet keystore: passkeys (Face ID / fingerprint unlock)', () => {
+  const crypto = require('crypto');
+  const pub = () => crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  const id = (n = 1) => Buffer.alloc(24, n).toString('base64url');
+  const salt = () => crypto.randomBytes(32).toString('hex');
+  const slot = (over = {}) => ({ passphrase: PASS, id: id(), label: 'Phone', rpId: 'hub.example.ts.net', alg: -7, publicKey: pub(), salt: salt(), prfOutput: crypto.randomBytes(32), ...over });
+
+  it('adds a passkey with the passphrase while locked, then unlocks with its PRF output and never writes on unlock', async () => {
+    const ks = mk(); ks.init(PASS); const w = ks.createWallet('bot'); ks.lock();
+    const s = slot();
+    assert.throws(() => ks.addPasskey({ ...s, passphrase: 'wrong wrong wrong' }), /Wrong passphrase/);
+    const added = ks.addPasskey(s);
+    assert.deepStrictEqual(Object.keys(added).sort(), ['alg', 'createdAt', 'id', 'label', 'rpId']);
+    assert.strictEqual(ks.isUnlocked(), false, 'adding a passkey must not unlock');
+    const raw = fs.readFileSync(ks.file, 'utf8');
+    assert.ok(!raw.includes(s.prfOutput.toString('hex')) && !raw.includes(s.prfOutput.toString('base64url')), 'the PRF output is never stored');
+    const before = fs.statSync(ks.file).mtimeMs, backups = fs.readdirSync(ks.backupDir).length;
+    const again = new Keystore({ file: ks.file, kdf: FAST, backupDir: ks.backupDir });           // a fresh process
+    again.unlockWithPasskey(s.id, s.prfOutput.toString('base64url'));
+    assert.strictEqual(again.isUnlocked(), true);
+    await again.withPrivateKey('bot', (pk, addr) => assert.strictEqual(addr, w.address));
+    assert.strictEqual(fs.statSync(ks.file).mtimeMs, before); assert.strictEqual(fs.readdirSync(ks.backupDir).length, backups);
+  });
+  it('a wrong PRF output, an unknown passkey or a tampered entry stays locked', () => {
+    const ks = mk(); ks.init(PASS); ks.lock(); const s = slot(); ks.addPasskey(s);
+    assert.throws(() => ks.unlockWithPasskey(s.id, crypto.randomBytes(32)), /could not unlock/);
+    assert.throws(() => ks.unlockWithPasskey(s.id, Buffer.alloc(31)), /could not unlock/);
+    assert.throws(() => ks.unlockWithPasskey(id(9), s.prfOutput), /not set up/);
+    const doc = JSON.parse(fs.readFileSync(ks.file, 'utf8'));
+    doc.passkeys[0].wrap.ct = doc.passkeys[0].wrap.ct.replace(/^./, c => (c === '0' ? '1' : '0'));
+    fs.writeFileSync(ks.file, JSON.stringify(doc));
+    assert.throws(() => ks.unlockWithPasskey(s.id, s.prfOutput), /could not unlock/);
+    const doc2 = JSON.parse(fs.readFileSync(ks.file, 'utf8')); doc2.passkeys[0].salt = salt(); fs.writeFileSync(ks.file, JSON.stringify(doc2));
+    assert.throws(() => ks.unlockWithPasskey(s.id, s.prfOutput), /could not unlock/);
+    assert.strictEqual(ks.isUnlocked(), false);
+  });
+  it('lists public fields only; passkey(id) adds what a signature check needs but never the wrapped key', () => {
+    const ks = mk(); ks.init(PASS); const s = slot(); ks.addPasskey(s);
+    const [p] = ks.passkeys();
+    assert.deepStrictEqual(Object.keys(p).sort(), ['alg', 'createdAt', 'id', 'label', 'rpId']);
+    const full = ks.passkey(s.id);
+    assert.strictEqual(full.publicKey, s.publicKey); assert.strictEqual(full.salt, s.salt); assert.ok(!('wrap' in full));
+    assert.strictEqual(ks.passkey(id(7)), null);
+  });
+  it('refuses duplicates, bad input and more than ten; slots survive other writes; removal works while locked', () => {
+    const ks = mk(); ks.init(PASS); const s = slot(); ks.addPasskey(s);
+    assert.throws(() => ks.addPasskey(s), /already set up/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), rpId: '127.0.0.1' })), /web address name/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), rpId: 'Bad Host' })), /web address name/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), rpId: 'localhost' })), /not localhost/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), rpId: 'dev.localhost' })), /not localhost/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), alg: -35 })), /signature type/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), salt: 'abc' })), /salt/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), publicKey: 'short' })), /public key/);
+    assert.throws(() => ks.addPasskey(slot({ id: 'tiny' })), /unusable id/);
+    assert.throws(() => ks.addPasskey(slot({ id: id(2), prfOutput: Buffer.alloc(16) })), /usable secret/);
+    for (let n = 2; n <= 10; n++) ks.addPasskey(slot({ id: id(n), label: 'Device\u0007 ' + n }));
+    assert.strictEqual(ks.passkeys().length, 10); assert.strictEqual(ks.passkeys()[1].label, 'Device 2');
+    assert.throws(() => ks.addPasskey(slot({ id: id(11) })), /At most 10/);
+    ks.createWallet('later');                                                          // another write keeps the slots
+    assert.strictEqual(ks.passkeys().length, 10);
+    ks.lock(); const gone = ks.removePasskey(s.id);
+    assert.strictEqual(gone.id, s.id); assert.strictEqual(ks.passkeys().length, 9);
+    assert.throws(() => ks.unlockWithPasskey(s.id, s.prfOutput), /not set up/);
+    assert.throws(() => ks.removePasskey(s.id), /No such passkey/);
+  });
+  it('labels are cleaned for any page, and malformed entries in the file are skipped', () => {
+    const ks = mk(); ks.init(PASS); const s = slot({ label: 'x" onmouseover=\'go()\' <b>`' }); ks.addPasskey(s);
+    assert.strictEqual(ks.passkeys()[0].label, 'x onmouseover= go() b');
+    const doc = JSON.parse(fs.readFileSync(ks.file, 'utf8'));
+    doc.passkeys[0].label = '"><img src=x onerror=alert(1)>';
+    doc.passkeys.push({ ...doc.passkeys[0], id: 'bad" id' }, { ...doc.passkeys[0], id: id(5), rpId: 'Bad Host' }, null);
+    fs.writeFileSync(ks.file, JSON.stringify(doc));
+    const list = ks.passkeys();
+    assert.strictEqual(list.length, 1); assert.ok(!/[<>"']/.test(list[0].label));
+    assert.strictEqual(ks.passkey('bad" id'), null); assert.strictEqual(ks.passkey(id(5)), null);
+    assert.throws(() => ks.unlockWithPasskey(id(5), s.prfOutput), /not set up/);
+    ks.addPasskey(slot({ id: id(6), label: 'zero\u200bwidth\u202ebidi\u0085' }));                       // a null entry no longer breaks add
+    assert.strictEqual(ks.passkeys().find(p => p.id === id(6)).label, 'zero width bidi');
+    ks.removePasskey(id(6)); assert.strictEqual(ks.passkeys().length, 1);              // nor remove
+    for (let n = 10; n < 19; n++) ks.addPasskey(slot({ id: id(n) }));                  // malformed entries don't count toward ten
+    assert.strictEqual(ks.passkeys().length, 10);
+    assert.throws(() => ks.addPasskey(slot({ id: id(5) })), /already set up/);         // a broken entry holds its id ...
+    assert.strictEqual(ks.removePasskey(id(5)).id, id(5));                             // ... and can be removed
+    ks.removePasskey(id(18)); ks.addPasskey(slot({ id: id(5), label: 'soft\u00adhyphen tag\u{e0041}' }));
+    assert.strictEqual(ks.passkeys().find(p => p.id === id(5)).label, 'soft hyphen tag');
+  });
+  it('unlocking an already unlocked keystore with a passkey changes nothing', async () => {
+    const ks = mk(); ks.init(PASS); const w = ks.createWallet('bot'); const s = slot(); ks.addPasskey(s);
+    ks.unlockWithPasskey(s.id, s.prfOutput);
+    assert.strictEqual(ks.isUnlocked(), true);
+    await ks.withPrivateKey('bot', (pk, addr) => assert.strictEqual(addr, w.address));
+  });
+});
