@@ -13,15 +13,21 @@ Agents get one of three levels:
 - **Act:** run commands as administrator.
 - **Drive:** use the mouse and keyboard.
 
-Every agent starts at Look. You raise an agent's level in the settings.
+Every agent starts at Look. You raise an agent's level when you choose which agents may use it, and later under
+Status and limits (Save permissions).
 
 ## Safety
 
-- **Levels.** An agent can never do more than its level. Agents you do not list get Look.
+- **Levels.** An agent can never do more than its level. Agents you have not given a level get Look. The lead agent
+  also has a level, and you can change it.
 - **Your yes on the phone.** MeshCentral's own "Allow" prompts do not cover commands: its command feature does not
   ask the person at the PC. So My Maestro asks you, on your phone, before an agent's first Act or Drive in each
   session. A session lasts as long as you set (30 minutes unless you change it). If you say no, the agent is not
   allowed to ask again straight away.
+- **Ask me before each session.** For Act and Drive, each agent has this box, ticked by default. If you untick it
+  for an agent, it starts sessions without asking you. My Maestro warns you before it saves that: an agent can be
+  misled by a web page or an email, and with asking off it could then use the computer without you knowing in
+  time. You still get the notice on the PC and everything is still logged. After restoring a backup, every agent asks again; untick the box to turn asking off.
 - **A notice on the PC.** When a session starts, the PC shows a short notice saying which agent is using it.
 - **A dedicated PC.** Use a computer with nothing personal on it: no private files, no signed-in accounts you care
   about. An agent you allow can fully control it.
@@ -54,8 +60,9 @@ Every agent starts at Look. You raise an agent's level in the settings.
   `MyMaestro-RemoteAgent.exe`. Run it and choose Install. Open the link on the PC right away. If you change settings or
   restart My Maestro first, make a new link.
 - **Check the PC is connected:** passes when at least one PC is online.
-- **What agents may do:** the level for each agent and the session length.
-- **Who can use it at all:** which agents may use remote computers. The lead agent is always allowed.
+- **Session length:** how long one yes for Act or Drive lasts.
+- **Who can use it at all:** which agents may use remote computers, the level for each (Look, Act or Drive) and
+  whether you are asked before each Act or Drive session. The lead agent is always allowed.
 
 ## What each setting does
 
@@ -68,8 +75,8 @@ Every agent starts at Look. You raise an agent's level in the settings.
 - **Computer port** (default 9972): the port on the tailnet address that the PCs connect to.
 - **Run as** (default auto): `service` runs MeshCentral as its own system service (see "Its own service (Linux)").
   `hub` runs it under My Maestro's own account. `auto` uses `service` when My Maestro's computer has systemd.
-- **What each agent may do:** one entry per agent, like `maestro:look`, `maestro:act` or `maestro:drive`.
 - **Approved session length:** how long one yes for Act or Drive lasts (5 to 120 minutes).
+- **Each agent's level and Ask me:** set in the agent list, not as a typed setting, and saved with Save.
 
 ## Tools
 
@@ -147,5 +154,5 @@ can be left there or removed from the MeshCentral device group.
 ## Switching it off
 
 Turn the connector off in Data connectors. The server stops, and the PCs can no longer be reached. To end every
-agent's access at once without removing anything, set all agents to `look` and leave the connector on, or turn the
+agent's access at once without removing anything, set all agents to Look and leave the connector on, or turn the
 connector off. To take the helper off a PC, see "Removing a computer".

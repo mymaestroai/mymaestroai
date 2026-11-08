@@ -1,6 +1,6 @@
 { "steps": [
   { "id": "about", "type": "explain", "title": "What this does", "confirm": "I understand that agents I allow can fully control the computers I add.",
-    "body": "This lets your agents work on other computers, over your private Tailscale network. There are three levels:\n\n- **Look:** list the computers, see facts about them, and take screenshots.\n- **Act:** run commands as administrator.\n- **Drive:** use the mouse and keyboard.\n\nThe computer's own remote-control program does not ask the person at the PC before it runs a command. So My Maestro asks **you, on your phone,** before an agent's first Act or Drive in each session. Every agent starts at Look.\n\nWe strongly recommend a **dedicated PC with nothing personal on it.** An agent you allow to Act or Drive can do anything on that computer." },
+    "body": "This lets your agents work on other computers, over your private Tailscale network. There are three levels:\n\n- **Look:** list the computers, see facts about them, and take screenshots.\n- **Act:** run commands as administrator.\n- **Drive:** use the mouse and keyboard.\n\nThe computer's own remote-control program does not ask the person at the PC before it runs a command. So by default My Maestro asks **you, on your phone,** before an agent's first Act or Drive in each session. You can turn that question off for a single agent, but that is riskier. Every agent starts at Look.\n\nWe strongly recommend a **dedicated PC with nothing personal on it.** An agent you allow to Act or Drive can do anything on that computer." },
   { "id": "install", "type": "install", "title": "Install",
     "body": "Installs the remote-control server this connector runs (MeshCentral). It downloads about 210 MB in all (more space on disk once unpacked): about 85 MB of server programs now, and about 125 MB of helper programs for the PCs, which are downloaded the first time the server starts. It is only downloaded once. Nothing is installed on any other computer in this step." },
   { "id": "prefs", "type": "settings", "title": "Your settings", "fields": ["address_name", "listen_ip", "control_port", "agent_port", "run_as"],
@@ -13,9 +13,9 @@
     "body": "Makes a link that works once, for 15 minutes. Open it in a browser on the PC. It downloads the helper program. Open the link on the PC right away. If you change settings or restart My Maestro first, make a new link." },
   { "id": "computer", "type": "check", "check": "computer", "title": "Check the PC is connected",
     "body": "After you run the helper on the PC, check that it shows up here. It can take a minute." },
-  { "id": "levels", "type": "settings", "title": "What agents may do", "fields": ["levels", "session_minutes"],
-    "body": "Write one entry per agent, like `maestro:look`, `maestro:act` or `maestro:drive`. **Look** is pictures and facts. **Act** also runs commands. **Drive** also uses the mouse and keyboard. Agents you do not list get Look. Act and Drive always need your yes on the phone, once per session; the session length is the second setting." },
+  { "id": "levels", "type": "settings", "title": "Session length", "fields": ["session_minutes"],
+    "body": "When you say yes to an agent's Act or Drive on your phone, the yes lasts for this many minutes. Then the agent has to ask again. You choose what each agent may do (Look, Act or Drive) in the next step." },
   { "id": "agents", "type": "grant", "title": "Who can use it at all",
-    "body": "Choose which agents may use remote computers. The lead agent is always allowed. Each allowed agent still gets only the level you chose in the last step." },
+    "body": "Choose which agents may use remote computers, and what each may do. The lead agent is always allowed.\n\n- **Look:** pictures and facts only.\n- **Act:** also runs commands.\n- **Drive:** also uses the mouse and keyboard.\n\nEvery agent starts at Look. For Act and Drive, **Ask me before each session** is ticked: you say yes on your phone once per session. Turn it off only for an agent you fully trust." },
   { "id": "done", "type": "finish", "title": "Finish" }
 ] }

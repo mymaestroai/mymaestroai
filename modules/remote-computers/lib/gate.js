@@ -19,17 +19,23 @@ const text = (s, max) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u007
 
 /**
  * createGate({ levels, sessionMinutes, approve, toast, now, log })
- *   levels: ["agent:level", ...] from the settings; approve({ call, title, detail, minutes }) -> 'allow' | 'deny' | 'timeout'
+ *   levels: ["agent:level", ...] from the settings; noAskAgents: ["agent", ...] from the trusted settings only (never a tool argument): for these agents a session
+ *   at act or drive (within their level) starts without asking the owner, with the same toast and a log line; everything else is as for an asked session; approve({ call, title, detail, minutes }) -> 'allow' | 'deny' | 'timeout'
  *   (call: the hub's id of the tool call that needs the yes; the hub knows the agent from it, so no agent is sent);
  *   toast(computerId, title, message) -> void (a failure is logged, never fatal).
  */
-function createGate({ levels = [], sessionMinutes = 30, approve, toast = async () => {}, now = Date.now, log = () => {} } = {}) {
+function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approve, toast = async () => {}, now = Date.now, log = () => {} } = {}) {
   const table = new Map();   // agent -> level (when an agent is listed twice the lower level counts)
   for (const entry of Array.isArray(levels) ? levels : []) {
     const m = /^([^:\s]{1,64}):(look|act|drive)$/.exec(String(entry).trim());
     if (!m) continue;
     const had = table.get(m[1]);
     if (had === undefined || RANK[m[2]] < RANK[had]) table.set(m[1], m[2]);
+  }
+  const noAsk = new Set();   // agents whose act/drive sessions start without a question; the level check still applies
+  for (const entry of Array.isArray(noAskAgents) ? noAskAgents : []) {
+    const name = typeof entry === 'string' ? entry.trim() : '';
+    if (/^[^:\s]{1,64}$/.test(name)) noAsk.add(name);
   }
   // 'agent|computer id' -> { agent, computer: {id, name}, scopes: Map of act-user / act-system / drive -> the time that scope's own approval ends }
   const sessions = new Map();
@@ -73,7 +79,7 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
     if (!computer || typeof computer.id !== 'string' || !computer.id) throw new Error('a computer is needed');
     const have = levelOf(who);
     if (RANK[have] < RANK[need]) {
-      throw new GateError(`${who} may only ${have === 'look' ? 'look (see pictures and facts)' : 'look and run commands'} on remote computers, and this needs ${need}. The owner can raise it in Data connectors -> Remote computers -> Settings.`, 'ELEVEL');
+      throw new GateError(`${who} may only ${have === 'look' ? 'look (see pictures and facts)' : 'look and run commands'} on remote computers, and this needs ${need}. The owner can raise it in Data connectors -> Remote computers -> Status and limits.`, 'ELEVEL');
     }
     const want = scopeOf(need, as);
     const key = `${who}|${computer.id}`;
@@ -81,7 +87,8 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
       const s = sessions.get(key);
       if (covered(s, want)) return;
       if (s && !live(s)) sessions.delete(key);
-      const cool = denied.get(key);
+      const quiet = noAsk.has(who);   // set by the settings only; an owner's earlier no does not apply to an agent the owner has set not to be asked
+      const cool = quiet ? null : denied.get(key);
       if (cool && cool > now()) throw new GateError('The owner said no a moment ago. Do not ask again for a couple of minutes.', 'EDENIED');
       if (cool) denied.delete(key);
       const p = pending.get(key);
@@ -91,11 +98,12 @@ function createGate({ levels = [], sessionMinutes = 30, approve, toast = async (
         await p.promise.catch(() => {});
         continue;
       }
-      if (!call) throw new GateError('The hub did not say which call this is, so the owner cannot be asked and nothing is allowed.', 'EIDENT');
+      if (!call && !quiet) throw new GateError('The hub did not say which call this is, so the owner cannot be asked and nothing is allowed.', 'EIDENT');
       const entry = { scope: want, promise: null };
       entry.promise = (async () => {
         try {
-          const d = await ask(who, want, computer, call);
+          if (quiet) log(`session started without asking the owner (no-ask agent): ${text(who, 40)}, ${want}, computer ${text(computer.id, 6)}`);
+          const d = quiet ? 'allow' : await ask(who, want, computer, call);
           if (d === 'deny') { denied.set(key, now() + DENY_COOLDOWN_MS); throw new GateError('The owner said no.', 'EDENIED'); }
           if (d === 'timeout') throw new GateError('The owner did not answer in time.', 'ETIMEOUT');
           const prior = sessions.get(key);   // an approval adds its own scope and its own expiry; the other scopes keep theirs

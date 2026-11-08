@@ -1842,7 +1842,7 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/modules' || pathname.startsWith('/api/modules/')) {
       const mods = require('./lib/modules').getModules();
       const bodyJson = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
-      const fail = (e) => jsonResponse(res, e.status === 409 ? 409 : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}) });
+      const fail = (e) => jsonResponse(res, [403, 409, 500].includes(e.status) ? e.status : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}) });
       // Changes come from a person on the page, never from the hub's internal service identity (agents' calls back into the hub).
       if (req.method !== 'GET' && req.hubService) return jsonResponse(res, 403, { error: 'Module changes need a signed-in admin.' });
       try {
@@ -1873,6 +1873,13 @@ async function handleHttpRequest(req, res) {
         if (m && req.method === 'POST') {
           const r = mods.setNoticeAgent(m[1], String((await bodyJson()).agent || ''), { by: req.hubUser.id });
           return r && r.ok ? jsonResponse(res, 200, { ok: true, noticeAgent: r.noticeAgent }) : jsonResponse(res, 400, { error: (r && r.error) || 'Could not set the agent.' });
+        }
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/agent-permissions$/);
+        if (m && req.method === 'POST') {
+          // What agents may do on a module (and whether each session is asked): a signed-in admin's own browser session only. Never the hub service,
+          // an API token, a session still owing its two-factor code, a member or the legacy single password; nothing in the body says who is asking.
+          if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change agent permissions.' });
+          return jsonResponse(res, 200, mods.setAgentPermissions(m[1], await bodyJson(), { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined }));
         }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
         if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
