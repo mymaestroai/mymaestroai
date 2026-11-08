@@ -126,7 +126,7 @@ async function ensureAgentFiles({ runtimeDir, fetch = globalThis.fetch, log = ()
     if (await isGood(path.join(dir, e.filename), e)) present += 1; else todo.push(e);
   }
   if (!todo.length) return { total, present, downloaded: 0, bytes: 0 };
-  if (typeof fetch !== 'function') throw new Error('no way to download the MeshCentral agent files on this computer');
+  if (typeof fetch !== 'function') throw new Error('no way to download the MeshCentral agent files on My Maestro\'s computer');
   const sum = todo.reduce((n, e) => n + e.size, 0);
   log(`Downloading ${todo.length} MeshCentral agent files (${Math.max(1, Math.round(sum / 1048576))} MB) from GitHub ...`);
   let next = 0, failure = null, downloaded = 0, bytes = 0;

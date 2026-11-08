@@ -519,13 +519,13 @@ arm_signals() {
 full_install() {
   local replace=$1
   ((EUID == 0)) || die "The full install must run as root. Run: sudo $0 $REQUEST"
-  [[ -d /run/systemd/system ]] || die "This computer does not run systemd, which the service mode needs."
+  [[ -d /run/systemd/system ]] || die "My Maestro's computer does not run systemd, which the service mode needs."
   command -v setpriv >/dev/null 2>&1 || die "setpriv (from util-linux) is needed and was not found."
   command -v systemd-run >/dev/null 2>&1 || die "systemd-run is needed and was not found."
   command -v flock >/dev/null 2>&1 || die "flock (from util-linux) is needed and was not found."
   local sv
   sv=$(systemctl --version 2>/dev/null | head -n 1 | awk '{print $2}')
-  [[ $sv =~ ^[0-9]+$ ]] && ((sv >= 247)) || die "The service needs systemd 247 or newer (this computer has ${sv:-an unknown version})."
+  [[ $sv =~ ^[0-9]+$ ]] && ((sv >= 247)) || die "The service needs systemd 247 or newer (My Maestro's computer has ${sv:-an unknown version})."
   # One install or removal of this service at a time (a terminal and Ask Maestro at once).
   exec 9>"/run/lock/mymaestro-$N.lock" || die "Cannot take the lock /run/lock/mymaestro-$N.lock."
   flock -n 9 || die "Another install or removal of $N is running. Wait for it to finish."
@@ -640,10 +640,10 @@ full_install() {
   # Both a connection and a datagram (Node's own UDP send uses sendmsg) must be refused.
   local probe
   probe=$(run_in_sandbox / "" "$BASH_BIN" -c 'exec 3<>/dev/tcp/127.0.0.1/9' || true)
-  [[ $probe == *"not permitted"* ]] || fail "The sandbox on this computer does not refuse network connections, so the service is not installed."
+  [[ $probe == *"not permitted"* ]] || fail "The sandbox on My Maestro's computer does not refuse network connections, so the service is not installed."
   probe=$(run_in_sandbox / "BindReadOnlyPaths=$NEW_DIR" "$NEW_DIR/node" -e \
     "const s=require('dgram').createSocket('udp4');s.send('x',9,'127.0.0.1',(e)=>{process.stdout.write(e?String(e.code):'SENT');process.exit(0)})" || true)
-  [[ $probe == EPERM ]] || fail "The sandbox on this computer does not refuse sending datagrams (got '${probe:0:40}'), so the service is not installed."
+  [[ $probe == EPERM ]] || fail "The sandbox on My Maestro's computer does not refuse sending datagrams (got '${probe:0:40}'), so the service is not installed."
 
   # The hub's MeshCentral config, read and checked before anything is replaced.
   read_hub_file "$SERVICE_DIR/config.json" | head -c $((MAX_CONFIG_BYTES + 1)) >"$TMPD/config.json" \

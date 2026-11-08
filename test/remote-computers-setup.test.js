@@ -37,7 +37,7 @@ test('setup: the steps come in the planned order with the right types', () => {
   const by = Object.fromEntries(setup.steps.map((s) => [s.id, s]));
   assert.strictEqual(by.about.confirm, 'I understand that agents I allow can fully control the computers I add.');
   assert.deepStrictEqual(by.prefs.fields, ['address_name', 'listen_ip', 'control_port', 'agent_port', 'run_as']);
-  assert.deepStrictEqual(by.levels.fields, ['levels', 'session_minutes']);
+  assert.deepStrictEqual(by.levels.fields, ['session_minutes']);
   assert.match(by.prefs.body, /tailscale status/);
   assert.match(by.about.body, /phone/);
   assert.strictEqual(by.server.title, 'Start the server');
@@ -460,7 +460,7 @@ test('check installer: shows the address and the Windows advice, once, and keeps
 });
 
 test('check installer: a refusal or an unreadable reply is a plain failure', async () => {
-  const a = await checks.installer(ctxOf({ installer_link: 'Save this computer\'s tailnet name in the settings first.' }));
+  const a = await checks.installer(ctxOf({ installer_link: 'Save the tailnet name of My Maestro\'s computer in the settings first.' }));
   assert.strictEqual(a.ok, false);
   assert.match(a.summary, /tailnet name/);
   const b = await checks.installer(ctxOf({ installer_link: () => { throw new Error('The hub did not answer.'); } }));

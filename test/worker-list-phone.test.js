@@ -9,7 +9,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
-const shared = require('../lib/ui-worker-list');
+const shared = { ...require('../lib/ui-worker-list'), ...require('../lib/ui-busy-workers') };
 
 function extract(name, kind = 'function') {
   let at = kind === 'const' ? src.indexOf(`const ${name} =`) : src.indexOf(`function ${name}(`);
@@ -147,7 +147,7 @@ function sheet() {
   env.cancel = async () => ({ status: 200, json: async () => ({ success: true }) });
   env.api = (url, opts) => (String(url).includes('/workers/') ? env.json(url, opts) : env.cancel(url, opts));
   env.aborts = [];
-  const code = `const { workerListPick, workerButtonLabel, fmtWorkerClock } = shared;
+  const code = `const { workerListPick, workerButtonLabel, fmtWorkerClock, hubWorkerGroups, hubWorkerCount, fmtElapsedShort } = shared;
     const document = env.document, Date = { now: () => env.now, parse: (s) => globalThis.Date.parse(s) };
     const $ = (id) => env.byId[id] || null;
     let current = 'maestro', wkTimer = null, wkView = null, statusKnown = true;
@@ -165,11 +165,11 @@ function sheet() {
     ${extract('wkState', 'const')}
     ${extract('wkKind', 'const')}
     ${extract('wkEl', 'const')}
-    ${['wkTrack', 'wkPick', 'wkRefresh', 'wkShow', 'wkPaintList', 'wkStop', 'wkPaintWorker', 'wkHistoryShow', 'feedWorkerText', 'feedEnd', 'feedUpsert'].map(n => extract(n)).join('\n')}
+    ${['wkTrack', 'wkPick', 'wkHubGroups', 'wkRefresh', 'wkShow', 'wkPaintList', 'wkStop', 'wkPaintWorker', 'wkHistoryShow', 'feedWorkerText', 'feedEnd', 'feedUpsert'].map(n => extract(n)).join('\n')}
     ${src.includes('const WK_HOW =') ? extract('WK_HOW', 'const') : ''}
     ${has('wkSettleAgent') ? extract('wkSettleAgent') : 'const wkSettleAgent = undefined;'}
     ${has('wkInferEnd') ? extract('wkInferEnd') : 'const wkInferEnd = undefined;'}
-    return { wkSeen, wkTrack, wkRefresh, wkShow, wkState, feedWorkerText, feedEnd, feedUpsert, wkStop, wkSettleAgent, hist: wkHist, view: () => wkView };`;
+    return { wkSeen, live, wkTrack, wkRefresh, wkShow, wkState, feedWorkerText, feedEnd, feedUpsert, wkStop, wkSettleAgent, hist: wkHist, view: () => wkView };`;
   const api = new Function('shared', 'env', code)(shared, env);
   api.doc = doc;
   return { env, api, body, doc };
@@ -213,6 +213,24 @@ test('stopped is not failed; a row from another chat says whose it is; the list 
   api.wkRefresh();
   assert.ok(body.contains(doc.activeElement), 'focus is on the repainted list');
   assert.strictEqual(doc.activeElement.dataset.wid, 'b');
+});
+
+test('workers running hub-wide that no card shows are listed under the agent that started them, and counted on the button', () => {
+  const { api, body, env } = sheet();
+  const since = new Date(env.now - 65000).toISOString();
+  api.live['tw-counsel-1-ab12'] = { busy: true, busySince: since, worker: true, parent: 'counsel', label: 'Read the file', model: 'claude-sdk/claude-sonnet-5-5' };
+  api.live['tw-counsel-2-cd34'] = { busy: true, busySince: since, worker: true, parent: 'counsel', label: 'Check the dates', model: 'claude-sdk/claude-sonnet-5-5' };
+  api.live['tw-maestro-3-ef56'] = { busy: false, busySince: null, worker: true, parent: 'maestro', label: 'Done one', model: '' };
+  const own = worker('tw-counsel-2-cd34', 'running', { description: 'Check the dates' });
+  api.wkTrack({ agent: 'counsel' }, own);
+  api.wkShow({ mode: 'list' });
+  const hub = body.querySelectorAll('.wk-hub');
+  assert.strictEqual(hub.length, 1, 'the worker this page shows as its own row is not listed twice; an idle one is not listed');
+  assert.match(hub[0].textContent, /Read the file/);
+  assert.match(hub[0].textContent, /1:05/);
+  assert.match(hub[0].textContent, /temporary/);
+  assert.ok(body.querySelectorAll('.wk-group').some(g => /Started by Counsel/.test(g.textContent)));
+  assert.match(env.byId['chat-workers-btn'].textContent, /^2 working/);
 });
 
 test('a worker whose caller has finished never stays "working", and an end the page only inferred shows how it really ended', async () => {
@@ -364,4 +382,29 @@ test('a check that never answers is cut off by its time limit; a turn end that a
   api.wkSettleAgent('maestro', null);   // the turn's own end arrives while that check is out
   await env.flush();
   assert.strictEqual(api.wkState(late), 'stopped', 'the second end was asked about after the first answer');
+});
+
+test('applySnapshot namedOnly: workers missing from a named-only map stay, and keys the map lacks are not wiped', () => {
+  const body = `const live = {}; let statusKnown = false; let current = null; const hubTurns = {};
+    const paintStatus = () => {}; const reattachIfIdle = () => {};
+    ${extract('busyIsWorker')}
+    ${extract('setLive')}
+    ${extract('applySnapshot')}
+    return { live, applySnapshot };`;
+  const { live, applySnapshot } = new Function(body)();
+  applySnapshot({ lead: { busy: true, consultedBy: 'helper', activity: 'consulted by helper' }, 'tw-lead-1-aa': { busy: true, worker: true, parent: 'lead', label: 'job', model: 'm' } });
+  assert.strictEqual(live.lead.consultedBy, 'helper');
+  applySnapshot({ lead: { busy: true, busySince: null, activity: 'consulted by helper' } }, false, { namedOnly: true });
+  assert.ok(live['tw-lead-1-aa'], 'worker kept');
+  assert.strictEqual(live['tw-lead-1-aa'].parent, 'lead');
+  assert.strictEqual(live.lead.consultedBy, 'helper', 'consultedBy kept');
+  applySnapshot({ lead: { busy: true } });
+  assert.ok(!live['tw-lead-1-aa'], 'a full snapshot still drops it');
+  assert.strictEqual(live.lead.consultedBy, null);
+});
+
+test('phone: loadAgents passes namedOnly; the hub-row lookup stops when something else is open; focus handles hub rows', () => {
+  assert.ok(src.includes('applySnapshot(map, false, { namedOnly: true });'));
+  assert.ok(src.includes('current !== parent || wkView !== null) return;'));
+  assert.ok(src.includes('dataset.hubId === focused.hubId'));
 });

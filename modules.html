@@ -82,6 +82,11 @@
   .agent-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
   .agent-row.no { color: var(--text-tertiary); }
   .saved { color: var(--success); font-size: 12px; }
+  .perm-row { border-bottom: 1px solid var(--border); padding: 4px 0; }
+  .perm-row .agent-row { padding-bottom: 0; }
+  .perm { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 2px 0 6px 26px; }
+  .perm select { width: auto; min-width: 110px; }
+  .perm label.chk { margin: 0; font-size: 13px; }
   .ready-box { display: flex; flex-direction: column; gap: 10px; }
   .card .meta { color: var(--text-tertiary); font-size: 12px; line-height: 1.4; }
   .card .check { font-size: 12px; color: var(--success); }
@@ -200,7 +205,7 @@ async function openModule(id, stepId) {
 }
 
 function render() {
-  stopSignin();
+  stopSignin(); permPending = null;
   const m = current; const p = document.getElementById('panel');
   p.classList.add('open');
   const steps = m.steps.map((s, i) => `<li class="${s.done ? 'done' : ''} ${s.id === selected ? 'cur' : ''}" onclick="selectStep('${esc(s.id)}')"><span class="mark">${s.done ? '✓' : i + 1}</span>${esc(s.title)}</li>`).join('');
@@ -215,7 +220,7 @@ function render() {
     </div>`;
 }
 function selectStep(id) { selected = id; render(); }
-function closePanel() { stopSignin(); document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
+function closePanel() { stopSignin(); permPending = null; document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
 
 function setMsg(kind, text) { const el = document.getElementById('step-msg'); if (!el) return; el.className = `msg show ${kind}`; el.textContent = text; }
 
@@ -228,9 +233,21 @@ function settingField(st, value) {
   if (st.type === 'list') return `<div class="field"><span class="lbl">${esc(st.label)}</span><input type="text" id="${id}" value="${esc((value || []).join(', '))}">${help}</div>`;
   return `<div class="field"><span class="lbl">${esc(st.label)}</span><input type="${st.type === 'number' ? 'number' : 'text'}" id="${id}" value="${esc(value)}" ${st.min !== undefined ? `min="${st.min}"` : ''} ${st.max !== undefined ? `max="${st.max}"` : ''}>${help}</div>`;
 }
+// A manifest that declares per-agent levels keeps the levels list and the "not asked" list out of generic settings:
+// they are edited, with the warning, only through the agent-permissions route.
+function levelsConfig(m) {
+  const lv = m && m.manifest && m.manifest.levels;
+  return lv && Array.isArray(lv.choices) && lv.choices.length ? lv : null;
+}
+function protectedSettingKeys(m) {
+  const lv = levelsConfig(m);
+  if (!lv) return [];
+  return [lv.setting, lv.sessionApproval && lv.sessionApproval.setting].filter(Boolean);
+}
+const visibleSettings = (m) => (m.manifest.settings || []).filter(st => !protectedSettingKeys(m).includes(st.key));
 function readSettings(keys) {
   const out = {};
-  for (const st of current.manifest.settings || []) {
+  for (const st of visibleSettings(current)) {
     if (keys && !keys.includes(st.key)) continue;
     if (st.type === 'boolean') out[st.key] = document.getElementById(`set-${st.key}`).checked;
     else if (st.type === 'choice' && st.multiple) out[st.key] = [...document.querySelectorAll(`input[data-multi="${st.key}"]:checked`)].map(i => i.value);
@@ -258,12 +275,18 @@ function stepHtml(s) {
     inner = (lc ? `<div class="msg show ${lc.ok ? (lc.warnings.length ? 'warn' : 'ok') : 'err'}">${esc(lc.summary)}${lc.lines.length ? '\n' + esc(lc.lines.join('\n')) : ''}${lc.warnings.length ? '\n⚠ ' + esc(lc.warnings.join('\n⚠ ')) : ''}\n<span class="dim">${esc(lc.at)}</span></div>` : '') +
       `<div id="ack-area"></div><div class="actions"><button class="primary" onclick="runCheck('${esc(s.id)}', this)">Run the check</button></div>`;
   } else if (s.type === 'settings') {
-    inner = (m.manifest.settings || []).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +
+    inner = visibleSettings(m).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { values: readSettings(${esc(JSON.stringify(s.fields || []))}) }, this)">Save</button></div>`;
   } else if (s.type === 'grant') {
-    inner = leadRows(m) + (m.candidates.length ? m.candidates.filter(c => !leadsLocked(m) || !(m.leads || []).includes(c.name)).map(c => `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${m.agents.includes(c.name) ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`).join('') : '<p class="dim">No agents.</p>') +
+    const lv = levelsConfig(m);
+    inner = leadRows(m) + (m.candidates.length ? m.candidates.filter(c => !leadsLocked(m) || !(m.leads || []).includes(c.name)).map(c => {
+      const ticked = m.agents.includes(c.name);
+      const label = `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${ticked ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`;
+      return lv ? permRow(m, label, c.name, !(c.eligible && ticked)) : label;
+    }).join('') : '<p class="dim">No agents.</p>') +
       (m.risk === 'money' && !m.candidates.some(c => c.eligible) ? '<div class="msg warn show">No agent is a wallet agent yet. The hub owner adds one by name to "walletAgents" in data/settings.json (deliberately not a button).</div>' : '') +
       (m.notify ? `<div class="agent-row"><label for="notice-agent">Send its notices to:</label> <select id="notice-agent">${noticeOptions(m, m.agents, m.noticeAgent)}</select></div>` : '') +
+      (lv ? '<div id="perm-warning"></div>' : '') +
       `<div class="actions"><button class="primary" onclick="saveGrant('${esc(s.id)}', this)">Save</button></div>`;
   } else if (s.type === 'signin') {
     inner = `<div id="signin-area">${signinIdleHtml()}</div>`;
@@ -280,7 +303,84 @@ function stepHtml(s) {
 const leadsLocked = (m) => m.leadsAlways !== false;
 function leadRows(m) {
   if (!leadsLocked(m)) return '';
-  return (m.leads || []).map(n => `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)} (lead): always</label>`).join('');
+  const lv = levelsConfig(m);
+  return (m.leads || []).map(n => {
+    const label = `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)} (lead): always</label>`;
+    return lv ? permRow(m, label, n, false) : label;
+  }).join('');
+}
+
+// ── Per-agent levels: a level choice for each allowed agent and, for the levels that need a yes on the phone, an "Ask me" box ──
+const capital = (w) => String(w).charAt(0).toUpperCase() + String(w).slice(1);
+const sessionLevels = (lv) => (lv.sessionApproval && Array.isArray(lv.sessionApproval.levels)) ? lv.sessionApproval.levels : [];
+// Reads the saved lists once; the result gives each agent's level and ask box. Duplicate entries resolve to the lowest rank, as the hub does.
+function permissionLookup(m) {
+  const lv = levelsConfig(m); const settings = (m && m.settings) || {};
+  const levels = Object.create(null);
+  for (const e of Array.isArray(settings[lv.setting]) ? settings[lv.setting] : []) {
+    const text = String(e); const i = text.lastIndexOf(':');
+    if (i < 1) continue;
+    const name = text.slice(0, i).trim(), rank = lv.choices.indexOf(text.slice(i + 1).trim());
+    if (rank < 0) continue;
+    if (!(name in levels) || rank < levels[name]) levels[name] = rank;
+  }
+  const sa = lv.sessionApproval;
+  const noAsk = new Set(sa && Array.isArray(settings[sa.setting]) ? settings[sa.setting].map(String) : []);
+  const fallback = lv.choices.includes(lv.default) ? lv.default : lv.choices[0];
+  return (name) => ({ level: name in levels ? lv.choices[levels[name]] : fallback, askEachSession: !noAsk.has(String(name)) });
+}
+function permControlsHtml(m, name, disabled) {
+  const lv = levelsConfig(m); const cur = permissionLookup(m)(name);
+  const needs = sessionLevels(lv).includes(cur.level);
+  return `<span class="perm"><select class="perm-level" data-agent="${esc(name)}" aria-label="What ${esc(name)} may do" ${disabled ? 'disabled' : ''}>${lv.choices.map(c => `<option value="${esc(c)}" ${c === cur.level ? 'selected' : ''}>${esc(capital(c))}</option>`).join('')}</select>` +
+    (lv.sessionApproval ? `<label class="chk perm-ask-wrap" ${needs ? '' : 'style="display:none"'}><input type="checkbox" class="perm-ask" data-agent="${esc(name)}" ${cur.askEachSession ? 'checked' : ''}> <span>Ask me before each session</span></label>` : '') + '</span>';
+}
+function permRow(m, labelHtml, name, disabled) { return `<div class="perm-row">${labelHtml}${permControlsHtml(m, name, disabled)}</div>`; }
+
+const PERM_WARNING = 'An agent can be misled by a web page or an email. With asking off, it could then use your remote computers without you knowing in time.';
+// {name: {level, askEachSession}} for the rows that are on screen and allowed (an unticked agent's choice is not sent).
+function readPermissions() {
+  const lv = levelsConfig(current);
+  const asks = Object.create(null);
+  for (const i of document.querySelectorAll('input.perm-ask')) asks[i.dataset.agent] = i.checked;
+  const out = {};
+  for (const sel of document.querySelectorAll('select.perm-level')) {
+    if (sel.disabled) continue;
+    const name = sel.dataset.agent;
+    out[name] = { level: sel.value, askEachSession: sessionLevels(lv).includes(sel.value) ? asks[name] !== false : true };
+  }
+  return out;
+}
+const permsNeedWarning = (permissions) => Object.values(permissions).some(p => p.askEachSession === false);
+let permPending = null;   // the save that waits for the person to accept the warning
+function showPermWarning(run) {
+  permPending = run;
+  const box = document.getElementById('perm-warning');
+  if (box) box.innerHTML = `<div class="msg warn show">${esc(PERM_WARNING)}<div class="actions"><button class="danger" onclick="permWarnConfirm()">Save with asking off</button><button onclick="permWarnCancel()">Cancel</button></div></div>`;
+}
+function clearPermWarning() { permPending = null; const box = document.getElementById('perm-warning'); if (box) box.innerHTML = ''; }
+function permWarnCancel() { clearPermWarning(); }   // nothing is sent; the ticked and unticked boxes stay as they are
+async function permWarnConfirm() { const run = permPending; clearPermWarning(); if (run) await run(); }
+// Posts the levels (acknowledged only when the warning was accepted). Returns true when the hub saved them.
+async function postPermissions(agents, permissions, acknowledged, btn) {
+  let ok = false;
+  await busy(btn, async () => {
+    try {
+      const body = { agents, permissions };
+      if (acknowledged && permsNeedWarning(permissions)) body.acknowledged = true;
+      current = (await api('POST', `/api/modules/${current.id}/agent-permissions`, body)).module;
+      ok = true;
+    } catch (e) { setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message); }
+  });
+  return ok;
+}
+async function savePermissions(btn, acknowledged) {
+  const permissions = readPermissions();
+  if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(() => savePermissions(btn, true)); return; }
+  const agents = current.agents.filter(n => !leadsLocked(current) || !(current.leads || []).includes(n));
+  if (!(await postPermissions(agents, permissions, acknowledged, btn))) return;
+  render(); loadList();
+  setMsg('ok', 'Saved. The new levels apply to the next call.');
 }
 function askButton(stepId) {
   return `<button onclick="askMaestro(${stepId ? `'${esc(stepId)}'` : 'null'}, this)">Ask Maestro</button>`;
@@ -296,7 +396,8 @@ function overviewHtml() {
     <div class="body">${md(m.summary)}</div>
     ${catalogLine(m.catalog)}
     <div><b>Agents:</b></div>
-    <div>${leadRows(m)}${others.map(n => `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)}</label>`).join('')}${(leadsLocked(m) && (m.leads || []).length) || others.length ? '' : '<span class="dim">none</span>'}</div>
+    <div>${leadRows(m)}${others.map(n => { const label = `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)}</label>`; return levelsConfig(m) ? permRow(m, label, n, false) : label; }).join('')}${(leadsLocked(m) && (m.leads || []).length) || others.length ? '' : '<span class="dim">none</span>'}</div>
+    ${levelsConfig(m) ? `<div id="perm-warning"></div><div class="actions"><button class="primary" onclick="savePermissions(this)">Save permissions</button></div>` : ''}
     <div><b>Status:</b> ${esc(STATE_LABEL[m.state] || m.state)}${m.note ? ` <span class="dim">(${esc(m.note)})</span>` : ''}</div>
     ${checkLine(lc)}
     <div class="actions">
@@ -306,7 +407,7 @@ function overviewHtml() {
       <button class="danger" onclick="removeModule(this)">Remove</button>
     </div>
     <h3 style="font-size:14px;margin-top:8px">Limits and settings</h3>
-    ${(m.manifest.settings || []).map(st => settingField(st, m.settings[st.key])).join('')}
+    ${visibleSettings(m).map(st => settingField(st, m.settings[st.key])).join('')}
     <div class="actions"><button class="primary" onclick="saveAll(this)">Save settings</button></div>
     ${m.manifest.docs && m.manifest.docs.revoke ? `<p class="dim" style="margin-top:10px">${esc(m.manifest.docs.revoke)}</p>` : ''}
     <div class="msg" id="step-msg"></div><div id="audit"></div></div>`;
@@ -441,11 +542,30 @@ function refreshNoticeSelect() {
   const ticked = [...document.querySelectorAll('input.grant:checked')].map(i => i.value);
   sel.innerHTML = noticeOptions(current, ticked, sel.value || current.noticeAgent);
 }
-document.addEventListener('change', (e) => { if (e.target && e.target.classList && e.target.classList.contains('grant')) refreshNoticeSelect(); });
-async function saveGrant(stepId, btn) {
+// Ticking an agent turns its level choice on or off; picking a level shows the "Ask me" box only for levels that need a yes; any edit withdraws a warning that is waiting.
+function onPermChange(el) {
+  const cl = el.classList;
+  const row = el.closest ? el.closest('.perm-row') : null;
+  if (cl.contains('grant')) {
+    refreshNoticeSelect();
+    const sel = row && row.querySelector('select.perm-level'); if (sel) sel.disabled = !el.checked;
+  }
+  if (cl.contains('perm-level') && row && current && levelsConfig(current)) {
+    const wrap = row.querySelector('.perm-ask-wrap');
+    if (wrap) wrap.style.display = sessionLevels(levelsConfig(current)).includes(el.value) ? '' : 'none';
+  }
+  if (cl.contains('grant') || cl.contains('perm-level') || cl.contains('perm-ask')) clearPermWarning();
+}
+document.addEventListener('change', (e) => { if (e.target && e.target.classList) onPermChange(e.target); });
+async function saveGrant(stepId, btn, acknowledged) {
   const agents = [...document.querySelectorAll('input.grant:checked')].map(i => i.value);
   const sel = document.getElementById('notice-agent');
   const agent = sel ? sel.value : null;
+  if (levelsConfig(current)) {
+    const permissions = readPermissions();
+    if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(() => saveGrant(stepId, btn, true)); return; }
+    if (!(await postPermissions(agents, permissions, acknowledged, btn))) return;
+  }
   const ok = await doStep(stepId, { agents }, btn);
   if (!ok || !agent) return;
   try {

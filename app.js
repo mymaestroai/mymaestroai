@@ -2346,12 +2346,64 @@
     // Settings groups: openSettings() draws its sections in one column, then groupSettings() folds them into these
     // groups, closed until opened. Sections are matched by id; one this list doesn't know lands in the last group,
     // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
+    // Workers at once (settings.workersAtOnce): one number per AI service, admins only. Rows come from /api/hub/status pacing.caps.
+    const WAO_LABELS = { 'claude-sdk': 'Claude subscription', 'codex-cli': 'ChatGPT subscription', anthropic: 'Anthropic API', openai: 'OpenAI API', codex: 'OpenAI Codex API', google: 'Google Gemini', perplexity: 'Perplexity', lmstudio: 'LM Studio', ollama: 'Ollama' };
+    let waoStored = {};   // the saved map as the page opened; rows for services not listed keep their value
+    async function loadWorkersAtOnce() {
+      const box = document.getElementById('st-wao-rows');
+      if (!box) return;
+      try {
+        const r = await fetch('/api/hub/status', { credentials: 'include' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const caps = ((await r.json()).pacing || {}).caps || [];
+        box.textContent = '';
+        for (const c of caps) {
+          const row = document.createElement('div');
+          row.className = 'st-row';
+          const label = document.createElement('label');
+          label.textContent = WAO_LABELS[c.provider] || c.provider;
+          const input = document.createElement('input');
+          input.type = 'number'; input.min = '1'; input.max = '32'; input.step = '1';
+          input.className = 'st-wao-input'; input.style.maxWidth = '90px';
+          input.dataset.provider = c.provider; input.dataset.default = String(c.defaultCap);
+          input.value = String(c.cap);
+          const dflt = document.createElement('span');
+          dflt.style.cssText = 'font-size:0.8rem;color:var(--text-dim)';
+          dflt.textContent = `(default ${c.defaultCap})`;
+          row.append(label, input, dflt);
+          box.appendChild(row);
+        }
+        box.dataset.loaded = '1';
+      } catch (e) { box.textContent = `Could not load: ${e.message}`; }
+    }
+    // The saved map for the Save button: stored entries stay, each row sets its value or (equal to its default) removes the key.
+    function workersAtOnceFromPage() {
+      const box = document.getElementById('st-wao-rows');
+      if (!box || box.dataset.loaded !== '1') return undefined;
+      const out = { ...waoStored };
+      const bad = [];
+      for (const input of box.querySelectorAll('.st-wao-input')) {
+        const n = Number(input.value), d = Number(input.dataset.default), k = input.dataset.provider;
+        input.setCustomValidity('');
+        if (input.value.trim() === '' || !Number.isInteger(n) || n < 1 || n > 32) {   // keep what was saved; say so
+          input.setCustomValidity('1 to 32');
+          bad.push(input);
+          continue;
+        }
+        if (n === d) delete out[k]; else out[k] = n;
+      }
+      if (bad.length) {
+        bad[0].reportValidity();
+        alert(`Workers at once: ${bad.map(i => WAO_LABELS[i.dataset.provider] || i.dataset.provider).join(', ')} must be a whole number from 1 to 32; the previous value is kept.`);
+      }
+      return out;
+    }
     const ST_GROUPS = [
       { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-updates-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
-      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
+      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
       { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
@@ -2709,6 +2761,15 @@
         </div>
         <div class="st-hint">Models that reason before they answer (Claude, Codex, DeepSeek, Grok, Qwen…) show it in a panel above the reply: open or close it, drag its bottom edge to any height, ⤢ for the full window. Starts with the next reply.</div>
       </div>`;
+
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-workers-section"><h4>Workers at once</h4>
+        <div id="st-wao-rows" class="st-hint" style="margin-left:0">Loading…</div>
+        <div class="st-hint">How many workers and consults may run at once on this service. If the service pushes back, My Maestro drops to one at a time and climbs back up.</div>
+      </div>`;
+        waoStored = (data.workersAtOnce && typeof data.workersAtOnce === 'object') ? { ...data.workersAtOnce } : {};
+        setTimeout(loadWorkersAtOnce, 0);
+      }
 
       {
         // When a question (or an approval) still waits: settings.notify.questionAfterMinutes (unset 3, null never).
@@ -4383,6 +4444,8 @@
       const maxContext = parseInt(document.getElementById('st-maxContext')?.value);
       if (maxTokens > 0) patch.maxCompletionTokens = maxTokens;
       if (maxContext > 0) patch.maxContextMessages = maxContext;
+      const wao = workersAtOnceFromPage();
+      if (wao !== undefined) patch.workersAtOnce = wao;
 
       try {
         const r = await fetch('/api/settings', {
@@ -5222,7 +5285,7 @@
         if (AGENTS.some(a => 'busy' in a)) {
           const map = {};
           for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
-          applyStatusSnapshot(map);
+          applyStatusSnapshot(map, { namedOnly: true });
         }
         console.log(`Loaded ${AGENTS.length} agents with SOUL data`);
         AGENTS.forEach(a => {
@@ -6414,23 +6477,34 @@
       if (!name) return;
       const cur = agentStatus[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
       const next = { ...cur, ...patch };
-      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; }
+      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
       paintAgentStatus(name);
       paintAgentsWorking();
     }
 
+    // keepMissing (the /api/agents list, which has no worker fields): a key the entry lacks is left as it is. A full feed
+    // is the whole truth: a key it lacks is cleared (an agent no longer consulted loses its consultedBy).
+    function statusPatchOf(s, keepMissing) {
+      const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
+      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
+      return patch;
+    }
+
+    // Second argument (optional) { namedOnly }: leave workers missing from the map alone (the /api/agents list has none).
     function applyStatusSnapshot(map) {
       if (!map || typeof map !== 'object') return;
       statusKnown = true;
-      for (const [name, s] of Object.entries(map)) {
-        setAgentLive(name, { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion });
+      const namedOnly = !!(arguments[1] && arguments[1].namedOnly);
+      for (const [name, s] of Object.entries(map)) setAgentLive(name, statusPatchOf(s, namedOnly));
+      for (const name of Object.keys(agentStatus)) {
+        if (name in map) continue;
+        if (!busyIsWorker(name, agentStatus[name])) setAgentLive(name, { busy: false });
+        else if (!namedOnly) delete agentStatus[name];   // a worker that is gone
       }
-      for (const name of Object.keys(agentStatus)) if (!(name in map)) setAgentLive(name, { busy: false });
       paintAllAgentStatus();
-      // A window opened (or woken from sleep / a blank screen) while one of its agents is mid-turn:
-      // the chat has no stream to that turn, so attach to it and show the reply when it lands.
+      // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
       for (const [name, s] of Object.entries(map)) if (s.busy) reattachIfIdle(name, s.busySince || null);
     }
 
@@ -6684,18 +6758,44 @@
       const el = document.getElementById('agents-working');
       const list = document.getElementById('agent-list');
       if (!el) return;
-      const n = busyAgentNames().length;
-      if (n === 0) busyFilterOn = false;
-      el.classList.toggle('on', n > 0);
+      const split = busySplit(agentStatus, [...localBusy.keys()]);
+      if (split.agents.length === 0) busyFilterOn = false;
+      const any = split.agents.length > 0 || split.workers.length > 0;
+      el.classList.toggle('on', any);
       el.classList.toggle('filtering', busyFilterOn);
-      el.textContent = n === 0 ? '' : `${n} agent${n === 1 ? '' : 's'} working${busyFilterOn ? ' · showing only these ✕' : ''}`;
+      el.textContent = busyChipLabel(split, busyFilterOn);
       list?.classList.toggle('busy-filter', busyFilterOn);
     }
 
     function toggleBusyFilter() {
+      if (busySplit(agentStatus, [...localBusy.keys()]).agents.length === 0) return;
       busyFilterOn = !busyFilterOn;
       paintAgentsWorking();
     }
+
+    // Hub-wide worker freshness: poll the full status feed while the Workers menu is open or a worker / consulted agent is busy.
+    let workerPollBusy = false, workerPollSoon = null;
+    async function pollWorkerStatus() {
+      if (workerPollBusy) return;
+      workerPollBusy = true;
+      try {
+        const r = await fetch('/api/agents/status', { credentials: 'include', signal: AbortSignal.timeout(8000) });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d && d.agents) applyStatusSnapshot(d.agents);
+      } catch {} finally { workerPollBusy = false; }
+    }
+    function scheduleWorkerStatusPoll() {
+      if (workerPollSoon) return;
+      workerPollSoon = setTimeout(() => { workerPollSoon = null; pollWorkerStatus(); }, 800);
+    }
+    function workerPollWanted() {
+      const menu = document.getElementById('workers-menu');
+      const open = !!menu && !menu.hidden;
+      return open || Object.entries(agentStatus).some(([name, s]) => s && s.busy && (busyIsWorker(name, s) || s.consultedBy));
+    }
+    setInterval(() => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); }, 5000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); });
 
     // Elapsed times tick without re-fetching anything.
     setInterval(() => {
@@ -7217,7 +7317,7 @@
       source.addEventListener('provider_recovered', e => { const ev = parse(e); if (ev && ev.provider) clearPacing(ev.provider); });
       source.addEventListener('turn_start', e => { const ev = parse(e); if (ev) onHubTurnStart(ev).catch(err => console.error('[hub-events]', err)); });
       source.addEventListener('turn_delta', e => { const ev = parse(e); if (ev) onHubTurnDelta(ev); });
-      source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) onHubTurnActivity(ev); });
+      source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) { onHubTurnActivity(ev); if (ev.item && ev.item.kind === 'worker') scheduleWorkerStatusPoll(); } });
       source.addEventListener('turn_reasoning', e => { const ev = parse(e); if (ev) onHubTurnReasoning(ev); });
       source.addEventListener('turn_progress', e => { const ev = parse(e); if (ev) onHubTurnProgress(ev); });
       source.addEventListener('turn_worker_delta', e => { const ev = parse(e); if (ev) onHubTurnWorkerDelta(ev); });
@@ -11819,6 +11919,60 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
     }
     // ── worker list helpers (end) ──
+    // ── busy and hub workers helpers (begin) ──
+    function busyIsWorker(name, entry) {
+      return entry && typeof entry.worker === 'boolean' ? entry.worker : /^tw-/.test(name);
+    }
+    function busySplit(statusMap, localBusyNames) {
+      const agents = new Set(), workers = new Set();
+      for (const [name, entry] of Object.entries(statusMap || {})) {
+        if (!entry || !(entry.busy || entry.pendingQuestion)) continue;
+        (busyIsWorker(name, entry) ? workers : agents).add(name);
+      }
+      for (const name of localBusyNames || []) {
+        const entry = (statusMap || {})[name];
+        (busyIsWorker(name, entry) ? workers : agents).add(name);
+      }
+      return { agents: [...agents].sort(), workers: [...workers].sort() };
+    }
+    function busyChipLabel(split, filtering) {
+      const a = split.agents.length, w = split.workers.length;
+      if (!a && !w) return '';
+      const parts = [];
+      if (a) parts.push(`${a} agent${a === 1 ? '' : 's'}`);
+      if (w) parts.push(`${w} worker${w === 1 ? '' : 's'}`);
+      return `${parts.join(' · ')} working${filtering && a ? ' · showing only these ✕' : ''}`;
+    }
+    function fmtElapsedShort(ms) {
+      if (ms == null || !(ms >= 0)) return '';
+      const t = Math.floor(ms / 1000), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+      return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+    }
+    function hubWorkerGroups(statusMap, opts) {
+      const { known = {}, skipIds = [], skipKeys = [], now } = opts || {};
+      const byParent = new Map();
+      const add = (parent, kind, id, label, entry) => {
+        const startedAt = Date.parse(entry.busySince) || null;
+        const item = { id, kind, label, model: entry.model || '', startedAt, elapsedMs: startedAt ? Math.max(0, now - startedAt) : null };
+        if (!byParent.has(parent)) byParent.set(parent, []);
+        byParent.get(parent).push(item);
+      };
+      for (const [name, entry] of Object.entries(statusMap || {})) {
+        if (!entry || !entry.busy || skipIds.includes(name)) continue;
+        if (busyIsWorker(name, entry)) add(entry.parent || null, 'temporary', name, entry.label || 'Worker', entry);
+        else if (entry.consultedBy && !skipKeys.includes(`${entry.consultedBy}>${name}`)) add(entry.consultedBy, 'consulted', name, known[name] || name, entry);
+      }
+      const groups = [...byParent].map(([parent, items]) => {
+        items.sort((x, y) => ((x.startedAt == null) - (y.startedAt == null)) || ((x.startedAt || 0) - (y.startedAt || 0)) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+        return { parent, parentLabel: parent ? (known[parent] || parent) : 'Unknown agent', items };
+      });
+      groups.sort((x, y) => ((x.parent == null) - (y.parent == null)) || x.parentLabel.localeCompare(y.parentLabel));
+      return groups;
+    }
+    function hubWorkerCount(groups) {
+      return (groups || []).reduce((n, g) => n + g.items.length, 0);
+    }
+    // ── busy and hub workers helpers (end) ──
 
     // running | done | stopped | failed: running while any of the card's calls runs, else how its newest call ended.
     function workerCardState(chat) {
@@ -11864,15 +12018,31 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (workerListTimer) return;
       workerListTimer = setTimeout(() => { workerListTimer = null; refreshWorkerList(); }, 60);
     }
+    // Hub-wide running workers (from the status feed) that this page has no card for, grouped by the agent that started them.
+    function hubWorkerGroupsNow(now) {
+      const known = {};
+      for (const a of (typeof AGENTS !== 'undefined' ? AGENTS : [])) known[a.name] = a.display || a.name;
+      const skipIds = [], skipKeys = [];
+      for (const chat of Object.values(chats)) {
+        if (!chat || !chat.isWorker || chat.isHistory || workerCardState(chat) !== 'running') continue;
+        if (chat.workerId) skipIds.push(String(chat.workerId));
+        for (const [rid, run] of Object.entries(chat.runs || {})) if (run && run.status === 'running') skipIds.push(rid);   // a card re-activated for a later run
+        const parentAgent = (chats[chat.parentChatId] || {}).agent;
+        if (parentAgent && chat.agent) skipKeys.push(`${parentAgent}>${chat.agent}`);
+      }
+      return hubWorkerGroups(agentStatus, { known, skipIds, skipKeys, now });
+    }
     function refreshWorkerList() {
       const btn = document.getElementById('workers-btn');
       const { items, gone, counts, alert } = workerListOf(chats, Date.now(), activeChat);
+      const hubGroups = hubWorkerGroupsNow(Date.now());
+      const shown = { ...counts, running: counts.running + hubWorkerCount(hubGroups) };
       for (const id of gone) retireWorkerCard(id);
       // history views opened from the history panel go once something else is on screen
       for (const [id, chat] of Object.entries(chats)) if (chat && chat.isHistory && id !== activeChat) retireWorkerCard(id);
       if (!btn) return;
-      btn.querySelector('.wb-label').textContent = workerButtonLabel(counts);
-      btn.classList.toggle('busy', counts.running > 0);
+      btn.querySelector('.wb-label').textContent = workerButtonLabel(shown);
+      btn.classList.toggle('busy', shown.running > 0);
       btn.classList.toggle('alert', alert);
       btn.title = alert ? 'A worker failed: open the list to see it' : 'Workers: what is working now, and the history of past workers';
       if (!document.getElementById('workers-menu').hidden) renderWorkersMenu(items);
@@ -11885,7 +12055,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const open = typeof force === 'boolean' ? force : menu.hidden;
       menu.hidden = !open;
       btn.setAttribute('aria-expanded', String(open));
-      if (open) renderWorkersMenu(workerListOf(chats, Date.now(), activeChat).items);
+      if (open) {
+        renderWorkersMenu(workerListOf(chats, Date.now(), activeChat).items);
+        pollWorkerStatus().then(() => { if (!menu.hidden) renderWorkersMenu(workerListOf(chats, Date.now(), activeChat).items); });
+      }
     }
     document.addEventListener('click', (e) => {
       const wrap = document.getElementById('workers-wrap');
@@ -11895,14 +12068,44 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (e.key === 'Escape' && document.getElementById('workers-menu') && !document.getElementById('workers-menu').hidden) toggleWorkersMenu(false);
     });
 
+    // A hub-wide row: open the starting agent's chat, then jump to the worker's own card once it shows up (up to 6 s).
+    let hubOpenSeq = 0, hubOpenTimer = null;
+    function openHubWorker(group, item) {
+      if (!group.parent) return;
+      const seq = ++hubOpenSeq;
+      if (hubOpenTimer) { clearInterval(hubOpenTimer); hubOpenTimer = null; }
+      startSoloChat(group.parent, ((AGENTS || []).find(a => a.name === group.parent) || {}).model);
+      const parentChatId = findSoloChat(group.parent)?.id;
+      const find = () => {
+        if (item.kind === 'temporary') {
+          const found = workerRunOf(item.id);
+          return found ? found.workerChatId : null;
+        }
+        for (const [id, chat] of Object.entries(chats)) {
+          if (chat && chat.isWorker && !chat.isHistory && chat.agent === item.id && workerCardState(chat) === 'running' && (chats[chat.parentChatId] || {}).agent === group.parent) return id;
+        }
+        return null;
+      };
+      let tries = 0;
+      const timer = hubOpenTimer = setInterval(() => {
+        const stop = () => { clearInterval(timer); if (hubOpenTimer === timer) hubOpenTimer = null; };
+        // the person went elsewhere (another click, another chat): leave the screen alone
+        if (seq !== hubOpenSeq || !parentChatId || activeChat !== parentChatId) return stop();
+        const id = find();
+        if (id) { stop(); switchToChat(id); }
+        else if (++tries >= 20) stop();
+      }, 300);
+    }
+
     // The list: one row per worker (text from models goes in as text), each opening the worker full size.
     function renderWorkersMenu(items) {
       const menu = document.getElementById('workers-menu');
       if (!menu) return;
       const now = Date.now();
-      const focused = menu.contains(document.activeElement) ? { id: document.activeElement.closest('.wm-row')?.dataset.wid || null, stop: document.activeElement.classList.contains('wm-stop'), history: document.activeElement.classList.contains('wm-history') } : null;
+      const focused = menu.contains(document.activeElement) ? { id: document.activeElement.closest('.wm-row')?.dataset.wid || null, hubid: document.activeElement.closest('.wm-hub')?.dataset.hubid || null, stop: document.activeElement.classList.contains('wm-stop'), history: document.activeElement.classList.contains('wm-history') } : null;
       menu.textContent = '';
-      if (!items.length) {
+      const hubGroups = hubWorkerGroupsNow(now);
+      if (!items.length && !hubGroups.length) {
         const empty = document.createElement('div');
         empty.className = 'wm-empty';
         empty.textContent = 'Nothing working right now.';
@@ -11940,13 +12143,44 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         row.addEventListener('keydown', (e) => { if (e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); go(); } });
         menu.appendChild(row);
       }
+      for (const group of hubGroups) {
+        const head = document.createElement('div');
+        head.className = 'wm-group';
+        head.textContent = `Started by ${group.parentLabel}`;
+        menu.appendChild(head);
+        for (const item of group.items) {
+          const row = document.createElement('div');
+          row.className = 'wm-row wm-running wm-hub';
+          row.setAttribute('role', 'menuitem');
+          row.tabIndex = 0;
+          row.dataset.hubid = item.id;
+          if (!group.parent) row.title = 'The agent that started it is not known';
+          const mark = document.createElement('span');
+          mark.className = 'wm-mark';
+          const name = document.createElement('span');
+          name.className = 'wm-name';
+          name.textContent = item.label;
+          const meta = document.createElement('span');
+          meta.className = 'wm-meta';
+          meta.textContent = [workerModelLabel(item.model), item.kind === 'consulted' ? 'consulted' : 'temporary'].filter(Boolean).join(' · ');
+          const when = document.createElement('span');
+          when.className = 'wm-when';
+          when.textContent = fmtElapsedShort(item.elapsedMs);
+          row.append(mark, name, meta, when);
+          const go = () => { toggleWorkersMenu(false); openHubWorker(group, item); };
+          row.addEventListener('click', go);
+          row.addEventListener('keydown', (e) => { if (e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); go(); } });
+          menu.appendChild(row);
+        }
+      }
       const all = document.createElement('button');
       all.className = 'wm-history';
       all.textContent = 'All worker history →';
       all.addEventListener('click', () => { toggleWorkersMenu(false); openWorkerHistory(); });
       menu.appendChild(all);
       if (focused) {
-        const row = focused.id ? menu.querySelector(`.wm-row[data-wid="${CSS.escape(focused.id)}"]`) : null;
+        const row = focused.hubid ? menu.querySelector(`.wm-hub[data-hubid="${CSS.escape(focused.hubid)}"]`)
+          : focused.id ? menu.querySelector(`.wm-row[data-wid="${CSS.escape(focused.id)}"]`) : null;
         const back = focused.history ? all : (focused.stop && row && row.querySelector('.wm-stop')) || row || document.getElementById('workers-btn');
         if (back) back.focus();
       }
