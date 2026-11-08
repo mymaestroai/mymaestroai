@@ -383,3 +383,28 @@ test('a check that never answers is cut off by its time limit; a turn end that a
   await env.flush();
   assert.strictEqual(api.wkState(late), 'stopped', 'the second end was asked about after the first answer');
 });
+
+test('applySnapshot namedOnly: workers missing from a named-only map stay, and keys the map lacks are not wiped', () => {
+  const body = `const live = {}; let statusKnown = false; let current = null; const hubTurns = {};
+    const paintStatus = () => {}; const reattachIfIdle = () => {};
+    ${extract('busyIsWorker')}
+    ${extract('setLive')}
+    ${extract('applySnapshot')}
+    return { live, applySnapshot };`;
+  const { live, applySnapshot } = new Function(body)();
+  applySnapshot({ lead: { busy: true, consultedBy: 'helper', activity: 'consulted by helper' }, 'tw-lead-1-aa': { busy: true, worker: true, parent: 'lead', label: 'job', model: 'm' } });
+  assert.strictEqual(live.lead.consultedBy, 'helper');
+  applySnapshot({ lead: { busy: true, busySince: null, activity: 'consulted by helper' } }, false, { namedOnly: true });
+  assert.ok(live['tw-lead-1-aa'], 'worker kept');
+  assert.strictEqual(live['tw-lead-1-aa'].parent, 'lead');
+  assert.strictEqual(live.lead.consultedBy, 'helper', 'consultedBy kept');
+  applySnapshot({ lead: { busy: true } });
+  assert.ok(!live['tw-lead-1-aa'], 'a full snapshot still drops it');
+  assert.strictEqual(live.lead.consultedBy, null);
+});
+
+test('phone: loadAgents passes namedOnly; the hub-row lookup stops when something else is open; focus handles hub rows', () => {
+  assert.ok(src.includes('applySnapshot(map, false, { namedOnly: true });'));
+  assert.ok(src.includes('current !== parent || wkView !== null) return;'));
+  assert.ok(src.includes('dataset.hubId === focused.hubId'));
+});

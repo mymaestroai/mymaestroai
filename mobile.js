@@ -1343,7 +1343,7 @@ async function loadAgents() {
     if (agents.some(a => 'busy' in a)) {
       const map = {};
       for (const a of agents) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
-      applySnapshot(map, false);
+      applySnapshot(map, false, { namedOnly: true });
     }
   } catch (e) {
     toast(`Could not load agents: ${e.message}`);
@@ -1372,13 +1372,22 @@ function setLive(name, patch) {
   live[name] = next;
 }
 
-function applySnapshot(map, repaint = true) {
+// opts.namedOnly: the map lists named agents only (/api/agents): workers missing from it stay, and the worker/consult keys it lacks are not touched.
+function applySnapshot(map, repaint = true, opts = {}) {
   if (!map || typeof map !== 'object') return;
   statusKnown = true;
-  for (const [name, s] of Object.entries(map)) setLive(name, { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion, worker: busyIsWorker(name, s), parent: s.parent || null, label: s.label || null, model: s.model || null, consultedBy: s.consultedBy || null });
+  const namedOnly = !!(opts && opts.namedOnly);
+  for (const [name, s] of Object.entries(map)) {
+    const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
+    for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) {
+      if (namedOnly && !(k in s)) continue;
+      patch[k] = k === 'worker' ? busyIsWorker(name, s) : (s[k] || null);
+    }
+    setLive(name, patch);
+  }
   for (const name of Object.keys(live)) {
     if (name in map) continue;
-    if (busyIsWorker(name, live[name])) delete live[name];   // a worker that is gone, not an agent gone idle
+    if (busyIsWorker(name, live[name])) { if (!namedOnly) delete live[name]; }   // a worker that is gone, not an agent gone idle
     else setLive(name, { busy: false });
   }
   if (repaint) paintStatus();
@@ -3224,7 +3233,7 @@ function wkPaintList(items, hubGroups = []) {
   if (!body) return;
   const now = Date.now();
   const scroll = body.scrollTop, act = document.activeElement;
-  const focused = act && act !== body && body.contains(act) ? { id: act.closest('.wk-row') ? act.closest('.wk-row').dataset.wid : null, stop: act.classList.contains('wk-stop'), all: act.classList.contains('wk-history') } : null;
+  const focused = act && act !== body && body.contains(act) ? { id: act.closest('.wk-row') ? act.closest('.wk-row').dataset.wid : null, hubId: act.closest('.wk-hub') ? act.closest('.wk-hub').dataset.hubId : null, stop: act.classList.contains('wk-stop'), all: act.classList.contains('wk-history') } : null;
   body.textContent = '';
   if (!items.length && !hubGroups.length) body.appendChild(wkEl('div', 'wk-empty', 'Nothing working right now.'));
   for (const { id, e, state, endedAt } of items) {
@@ -3270,7 +3279,8 @@ function wkPaintList(items, hubGroups = []) {
   body.appendChild(all);
   body.scrollTop = scroll;
   if (focused) {   // the 5-second repaint keeps the keyboard where it was
-    const row = focused.id ? [...body.querySelectorAll('.wk-row')].find(r => r.dataset.wid === focused.id) : null;
+    const row = focused.hubId ? [...body.querySelectorAll('.wk-hub')].find(r => r.dataset.hubId === focused.hubId)
+      : focused.id ? [...body.querySelectorAll('.wk-row')].find(r => r.dataset.wid === focused.id) : null;
     const to = focused.all ? all : (focused.stop && row && row.querySelector('.wk-stop')) || row || all;
     try { to.focus({ preventScroll: true }); } catch {}
   }
@@ -3286,7 +3296,7 @@ function wkOpenHub(parent, item) {
   const find = () => item.kind === 'temporary' ? wkSeen.get(item.id)
     : [...wkSeen.values()].find(e => e.it.status === 'running' && e.agent === parent && e.it.agent === item.id);
   const look = () => {
-    if (seq !== wkOpenSeq || current !== parent) return;
+    if (seq !== wkOpenSeq || current !== parent || wkView !== null) return;
     const e = find();
     if (e) { openWorkerSheet('list'); wkShow({ mode: 'worker', id: e.id, back: { mode: 'list' } }); return; }
     if (Date.now() - started < 6000) setTimeout(look, 300);

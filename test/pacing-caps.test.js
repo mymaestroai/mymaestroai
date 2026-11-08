@@ -93,6 +93,22 @@ test('setCaps on a paced provider only ever lowers its limit; providers made lat
   assert.strictEqual(p.status().providers.other.cap, 7);
 });
 
+test('setCaps lowering the cap to the paced limit ends the slow-down (after the cooldown) and says so', async () => {
+  const events = [];
+  let t = 1_000_000;
+  const p = createPacing({ caps: { fake: 8 }, now: () => t, cooldownMs: 1000, retryDelaysMs: [], log: () => {}, onEvent: (e) => events.push(e) });
+  await assert.rejects(p.run('fake', async () => { throw new Error('429'); }, { retry: false }));
+  assert.strictEqual(p.status().providers.fake.limit, 1);
+  p.setCaps({ fake: 1 });
+  assert.notStrictEqual(p.status().providers.fake.mode, 'normal', 'still cooling down');
+  t += 5000;
+  p.setCaps({ fake: 1 });
+  const f = p.status().providers.fake;
+  assert.strictEqual(f.mode, 'normal');
+  assert.strictEqual(f.reason, null);
+  assert.ok(events.some(e => e.type === 'provider_recovered' && e.provider === 'fake'));
+});
+
 async function climb(cap) {
   let t = 1_000_000;
   const p = createPacing({ caps: { fake: cap }, now: () => t, sleep: async () => {}, cooldownMs: 0, retryDelaysMs: [], rampSuccesses: 2, log: () => {} });

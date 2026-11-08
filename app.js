@@ -2381,9 +2381,20 @@
       const box = document.getElementById('st-wao-rows');
       if (!box || box.dataset.loaded !== '1') return undefined;
       const out = { ...waoStored };
+      const bad = [];
       for (const input of box.querySelectorAll('.st-wao-input')) {
         const n = Number(input.value), d = Number(input.dataset.default), k = input.dataset.provider;
-        if (!Number.isInteger(n) || n < 1 || n > 32 || n === d) delete out[k]; else out[k] = n;
+        input.setCustomValidity('');
+        if (input.value.trim() === '' || !Number.isInteger(n) || n < 1 || n > 32) {   // keep what was saved; say so
+          input.setCustomValidity('1 to 32');
+          bad.push(input);
+          continue;
+        }
+        if (n === d) delete out[k]; else out[k] = n;
+      }
+      if (bad.length) {
+        bad[0].reportValidity();
+        alert(`Workers at once: ${bad.map(i => WAO_LABELS[i.dataset.provider] || i.dataset.provider).join(', ')} must be a whole number from 1 to 32; not saved.`);
       }
       return out;
     }
@@ -6466,7 +6477,7 @@
       if (!name) return;
       const cur = agentStatus[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
       const next = { ...cur, ...patch };
-      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; }
+      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
       paintAgentStatus(name);
@@ -6474,7 +6485,9 @@
     }
 
     function statusPatchOf(s) {
-      return { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion, worker: s.worker, parent: s.parent, label: s.label, model: s.model, consultedBy: s.consultedBy };
+      const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
+      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) if (k in s) patch[k] = s[k];   // a key the feed lacks is not wiped
+      return patch;
     }
 
     // Second argument (optional) { namedOnly }: leave workers missing from the map alone (the /api/agents list has none).
@@ -6483,10 +6496,13 @@
       statusKnown = true;
       const namedOnly = !!(arguments[1] && arguments[1].namedOnly);
       for (const [name, s] of Object.entries(map)) setAgentLive(name, statusPatchOf(s));
-      for (const name of Object.keys(agentStatus)) if (!(name in map) && !(namedOnly && busyIsWorker(name, agentStatus[name]))) setAgentLive(name, { busy: false });
+      for (const name of Object.keys(agentStatus)) {
+        if (name in map) continue;
+        if (!busyIsWorker(name, agentStatus[name])) setAgentLive(name, { busy: false });
+        else if (!namedOnly) delete agentStatus[name];   // a worker that is gone
+      }
       paintAllAgentStatus();
-      // A window opened (or woken from sleep / a blank screen) while one of its agents is mid-turn:
-      // the chat has no stream to that turn, so attach to it and show the reply when it lands.
+      // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
       for (const [name, s] of Object.entries(map)) if (s.busy) reattachIfIdle(name, s.busySince || null);
     }
 
@@ -6771,11 +6787,13 @@
       if (workerPollSoon) return;
       workerPollSoon = setTimeout(() => { workerPollSoon = null; pollWorkerStatus(); }, 800);
     }
-    setInterval(() => {
+    function workerPollWanted() {
       const menu = document.getElementById('workers-menu');
       const open = !!menu && !menu.hidden;
-      if (open || Object.entries(agentStatus).some(([name, s]) => s && s.busy && (busyIsWorker(name, s) || s.consultedBy))) pollWorkerStatus();
-    }, 5000);
+      return open || Object.entries(agentStatus).some(([name, s]) => s && s.busy && (busyIsWorker(name, s) || s.consultedBy));
+    }
+    setInterval(() => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); }, 5000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); });
 
     // Elapsed times tick without re-fetching anything.
     setInterval(() => {
@@ -12035,7 +12053,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const open = typeof force === 'boolean' ? force : menu.hidden;
       menu.hidden = !open;
       btn.setAttribute('aria-expanded', String(open));
-      if (open) renderWorkersMenu(workerListOf(chats, Date.now(), activeChat).items);
+      if (open) {
+        renderWorkersMenu(workerListOf(chats, Date.now(), activeChat).items);
+        pollWorkerStatus().then(() => { if (!menu.hidden) renderWorkersMenu(workerListOf(chats, Date.now(), activeChat).items); });
+      }
     }
     document.addEventListener('click', (e) => {
       const wrap = document.getElementById('workers-wrap');
@@ -12046,9 +12067,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     });
 
     // A hub-wide row: open the starting agent's chat, then jump to the worker's own card once it shows up (up to 6 s).
+    let hubOpenSeq = 0, hubOpenTimer = null;
     function openHubWorker(group, item) {
       if (!group.parent) return;
+      const seq = ++hubOpenSeq;
+      if (hubOpenTimer) { clearInterval(hubOpenTimer); hubOpenTimer = null; }
       startSoloChat(group.parent, ((AGENTS || []).find(a => a.name === group.parent) || {}).model);
+      const parentChatId = findSoloChat(group.parent)?.id;
       const find = () => {
         if (item.kind === 'temporary') {
           const found = workerRunOf(item.id);
@@ -12060,10 +12085,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return null;
       };
       let tries = 0;
-      const timer = setInterval(() => {
+      const timer = hubOpenTimer = setInterval(() => {
+        const stop = () => { clearInterval(timer); if (hubOpenTimer === timer) hubOpenTimer = null; };
+        // the person went elsewhere (another click, another chat): leave the screen alone
+        if (seq !== hubOpenSeq || !parentChatId || activeChat !== parentChatId) return stop();
         const id = find();
-        if (id) { clearInterval(timer); switchToChat(id); }
-        else if (++tries >= 20) clearInterval(timer);
+        if (id) { stop(); switchToChat(id); }
+        else if (++tries >= 20) stop();
       }, 300);
     }
 
@@ -12072,7 +12100,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const menu = document.getElementById('workers-menu');
       if (!menu) return;
       const now = Date.now();
-      const focused = menu.contains(document.activeElement) ? { id: document.activeElement.closest('.wm-row')?.dataset.wid || null, stop: document.activeElement.classList.contains('wm-stop'), history: document.activeElement.classList.contains('wm-history') } : null;
+      const focused = menu.contains(document.activeElement) ? { id: document.activeElement.closest('.wm-row')?.dataset.wid || null, hubid: document.activeElement.closest('.wm-hub')?.dataset.hubid || null, stop: document.activeElement.classList.contains('wm-stop'), history: document.activeElement.classList.contains('wm-history') } : null;
       menu.textContent = '';
       const hubGroups = hubWorkerGroupsNow(now);
       if (!items.length && !hubGroups.length) {
@@ -12149,7 +12177,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       all.addEventListener('click', () => { toggleWorkersMenu(false); openWorkerHistory(); });
       menu.appendChild(all);
       if (focused) {
-        const row = focused.id ? menu.querySelector(`.wm-row[data-wid="${CSS.escape(focused.id)}"]`) : null;
+        const row = focused.hubid ? menu.querySelector(`.wm-hub[data-hubid="${CSS.escape(focused.hubid)}"]`)
+          : focused.id ? menu.querySelector(`.wm-row[data-wid="${CSS.escape(focused.id)}"]`) : null;
         const back = focused.history ? all : (focused.stop && row && row.querySelector('.wm-stop')) || row || document.getElementById('workers-btn');
         if (back) back.focus();
       }

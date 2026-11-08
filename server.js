@@ -730,7 +730,11 @@ async function handleHttpRequest(req, res) {
         if (req.hubToken && req.hubToken.agents && !req.hubToken.agents.includes(agentName)) return jsonResponse(res, 403, { error: 'token_scope', detail: 'this token is not scoped to that agent' });
         const who = req.hubUser || { id: 'service', role: 'admin' };
         if (!access.isAdmin(who) && !access.canAccessAgent(who, agentName, { agents: await getAgents(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
-        const turn = require('./lib/hub-events').events.turnFor(agentName);
+        let turn = require('./lib/hub-events').events.turnFor(agentName);
+        if (!access.isAdmin(who)) {
+          const ctx = { agents: await getAgents(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) };
+          turn = access.redactTurnForViewer(turn, (n) => access.canAccessAgent(who, n, ctx));
+        }
         return jsonResponse(res, 200, { ok: true, agent: agentName, active: !!(turn && turn.active), turn });
       }
     }
@@ -920,7 +924,7 @@ async function handleHttpRequest(req, res) {
       let agents = getAgentStatuses();
       if (req.hubToken) {
         // A program's token: the agents it is scoped to, or every agent for a status-only token (a dashboard).
-        if (req.hubToken.agents) agents = Object.fromEntries(Object.entries(agents).filter(([name]) => req.hubToken.agents.includes(name)));
+        if (req.hubToken.agents) agents = Object.fromEntries(Object.entries(agents).filter(([name]) => req.hubToken.agents.includes(name)).map(([name, e]) => [name, access.redactCaller(e, (n) => req.hubToken.agents.includes(n))]));
       } else if (!req.hubService && !access.isAdmin(req.hubUser)) {
         const all = await getAgents();
         agents = access.statusForViewer(req.hubUser, agents, { agents: all, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
