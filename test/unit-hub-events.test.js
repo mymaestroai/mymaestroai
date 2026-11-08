@@ -215,6 +215,17 @@ test('publish keeps the caller\'s own id in the payload but the wire id / replay
   assert.deepStrictEqual(replayed, ['id: 2']);
 });
 
+test('status_snapshot: statusView maps the snapshot; without it the visibleAgent filter still applies', () => {
+  const { hub } = make();
+  hub.setStatusProvider(() => ({ lead: { busy: true }, helper: { busy: false } }));
+  const mapped = fakeRes(), filtered = fakeRes();
+  hub.subscribe({ headers: {} }, mapped, { isAdmin: false, visibleAgent: () => false, statusView: (m) => ({ lead: { ...m.lead, seen: true } }), filter: () => true });
+  hub.subscribe({ headers: {} }, filtered, { isAdmin: false, visibleAgent: (n) => n === 'helper', filter: () => true });
+  const snap = (r) => frames(r).find(f => f.event === 'status_snapshot').data.agents;
+  assert.deepStrictEqual(snap(mapped), { lead: { busy: true, seen: true } });
+  assert.deepStrictEqual(snap(filtered), { helper: { busy: false } });
+});
+
 test('the module exports a shared instance that is a working hub', () => {
   assert.strictEqual(typeof shared.publish, 'function');
   assert.strictEqual(shared.clientCount(), 0);

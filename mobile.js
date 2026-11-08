@@ -1367,7 +1367,7 @@ function setLive(name, patch) {
   if (!name) return;
   const cur = live[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
   const next = { ...cur, ...patch };
-  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; }
+  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
   else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
   live[name] = next;
 }
@@ -1375,8 +1375,12 @@ function setLive(name, patch) {
 function applySnapshot(map, repaint = true) {
   if (!map || typeof map !== 'object') return;
   statusKnown = true;
-  for (const [name, s] of Object.entries(map)) setLive(name, { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion });
-  for (const name of Object.keys(live)) if (!(name in map)) setLive(name, { busy: false });
+  for (const [name, s] of Object.entries(map)) setLive(name, { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion, worker: busyIsWorker(name, s), parent: s.parent || null, label: s.label || null, model: s.model || null, consultedBy: s.consultedBy || null });
+  for (const name of Object.keys(live)) {
+    if (name in map) continue;
+    if (busyIsWorker(name, live[name])) delete live[name];   // a worker that is gone, not an agent gone idle
+    else setLive(name, { busy: false });
+  }
   if (repaint) paintStatus();
   // Woke up (or just loaded) while the open chat's agent is mid-turn: follow that turn.
   if (current && map[current] && map[current].busy && !Object.values(hubTurns).some(t => t.agent === current)) reattachIfIdle(current);
@@ -2954,6 +2958,60 @@ function fmtWorkerClock(ms) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
 }
 // ── worker list helpers (end) ──
+// ── busy and hub workers helpers (begin) ──
+function busyIsWorker(name, entry) {
+  return entry && typeof entry.worker === 'boolean' ? entry.worker : /^tw-/.test(name);
+}
+function busySplit(statusMap, localBusyNames) {
+  const agents = new Set(), workers = new Set();
+  for (const [name, entry] of Object.entries(statusMap || {})) {
+    if (!entry || !(entry.busy || entry.pendingQuestion)) continue;
+    (busyIsWorker(name, entry) ? workers : agents).add(name);
+  }
+  for (const name of localBusyNames || []) {
+    const entry = (statusMap || {})[name];
+    (busyIsWorker(name, entry) ? workers : agents).add(name);
+  }
+  return { agents: [...agents].sort(), workers: [...workers].sort() };
+}
+function busyChipLabel(split, filtering) {
+  const a = split.agents.length, w = split.workers.length;
+  if (!a && !w) return '';
+  const parts = [];
+  if (a) parts.push(`${a} agent${a === 1 ? '' : 's'}`);
+  if (w) parts.push(`${w} worker${w === 1 ? '' : 's'}`);
+  return `${parts.join(' · ')} working${filtering && a ? ' · showing only these ✕' : ''}`;
+}
+function fmtElapsedShort(ms) {
+  if (ms == null || !(ms >= 0)) return '';
+  const t = Math.floor(ms / 1000), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+function hubWorkerGroups(statusMap, opts) {
+  const { known = {}, skipIds = [], skipKeys = [], now } = opts || {};
+  const byParent = new Map();
+  const add = (parent, kind, id, label, entry) => {
+    const startedAt = Date.parse(entry.busySince) || null;
+    const item = { id, kind, label, model: entry.model || '', startedAt, elapsedMs: startedAt ? Math.max(0, now - startedAt) : null };
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    byParent.get(parent).push(item);
+  };
+  for (const [name, entry] of Object.entries(statusMap || {})) {
+    if (!entry || !entry.busy || skipIds.includes(name)) continue;
+    if (busyIsWorker(name, entry)) add(entry.parent || null, 'temporary', name, entry.label || 'Worker', entry);
+    else if (entry.consultedBy && !skipKeys.includes(`${entry.consultedBy}>${name}`)) add(entry.consultedBy, 'consulted', name, known[name] || name, entry);
+  }
+  const groups = [...byParent].map(([parent, items]) => {
+    items.sort((x, y) => ((x.startedAt == null) - (y.startedAt == null)) || ((x.startedAt || 0) - (y.startedAt || 0)) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+    return { parent, parentLabel: parent ? (known[parent] || parent) : 'Unknown agent', items };
+  });
+  groups.sort((x, y) => ((x.parent == null) - (y.parent == null)) || x.parentLabel.localeCompare(y.parentLabel));
+  return groups;
+}
+function hubWorkerCount(groups) {
+  return (groups || []).reduce((n, g) => n + g.items.length, 0);
+}
+// ── busy and hub workers helpers (end) ──
 
 // The workers this page saw start or run (live replies and catch-ups; saved replies are history, not listed):
 // workerId -> { id, it (its feed row), agent (whose chat it works in), failSeen, endSeen, lastStatus }.
@@ -3049,6 +3107,37 @@ function wkInferEnd(e, delay = 0, how = 'maybe') {
     wkRefreshSoon();
   }, delay);
 }
+// The workers running hub-wide (from the status feed) that no card of this page already shows, grouped by the agent
+// that started them.
+function wkHubGroups() {
+  const known = {};
+  for (const a of agents) known[a.name] = displayName(a.name);
+  const skipIds = [], skipKeys = [];
+  for (const e of wkSeen.values()) {
+    if (e.it.status !== 'running') continue;
+    skipIds.push(e.id);
+    if (e.it.agent && agentByName(e.it.agent)) skipKeys.push(`${e.agent}>${e.it.agent}`);
+  }
+  return hubWorkerGroups(live, { known, skipIds, skipKeys, now: Date.now() });
+}
+// A light poll of the status feed while the Workers sheet is open or someone is busy with a worker or a consultation.
+let wkHubPolling = false, wkHubSoon = 0;
+async function wkHubPoll() {
+  if (wkHubPolling) return;
+  wkHubPolling = true;
+  try {
+    const r = await api('/api/agents/status', { signal: AbortSignal.timeout(8000) });
+    if (r.ok) { const d = await r.json(); if (d && d.agents) { applySnapshot(d.agents); wkRefreshSoon(); } }
+  } catch {} finally { wkHubPolling = false; }
+}
+function wkHubPollSoon() {
+  if (wkHubSoon) return;
+  wkHubSoon = setTimeout(() => { wkHubSoon = 0; wkHubPoll(); }, 800);
+}
+setInterval(() => {
+  if (document.hidden) return;
+  if ((wkView && wkView.mode === 'list') || Object.entries(live).some(([n, s]) => s && s.busy && (busyIsWorker(n, s) || s.consultedBy))) wkHubPoll();
+}, 5000);
 function wkRefresh() {
   const now = Date.now();
   for (const e of wkSeen.values()) {
@@ -3063,14 +3152,15 @@ function wkRefresh() {
     if (g && g.it.inferred && now - (g.it.inferredAt || now) < 10 * 60000) continue;   // kept, unlisted, while its end is checked
     wkSeen.delete(id);
   }
+  const hubGroups = wkHubGroups(), hubCount = hubWorkerCount(hubGroups);
   const btn = $('chat-workers-btn');
   if (btn) {
-    btn.hidden = !items.length;
-    btn.querySelector('.wb-label').textContent = workerButtonLabel(counts);
-    btn.classList.toggle('busy', counts.running > 0);
+    btn.hidden = !items.length && !hubCount;
+    btn.querySelector('.wb-label').textContent = workerButtonLabel({ ...counts, running: counts.running + hubCount });
+    btn.classList.toggle('busy', counts.running + hubCount > 0);
     btn.classList.toggle('alert', alert);
   }
-  if (wkView && wkView.mode === 'list') wkPaintList(items);
+  if (wkView && wkView.mode === 'list') wkPaintList(items, hubGroups);
   else if (wkView && wkView.mode === 'worker') wkPaintWorker();
 }
 setInterval(wkRefresh, 5000);
@@ -3129,14 +3219,14 @@ function wkShow(view) {
 
 // The list: one row per worker; a tap opens it full screen; running ones (not a Claude sub-agent, which stops with its
 // caller's reply) have Stop.
-function wkPaintList(items) {
+function wkPaintList(items, hubGroups = []) {
   const body = $('wk-sheet') && $('wk-sheet').querySelector('.wk-body');
   if (!body) return;
   const now = Date.now();
   const scroll = body.scrollTop, act = document.activeElement;
   const focused = act && act !== body && body.contains(act) ? { id: act.closest('.wk-row') ? act.closest('.wk-row').dataset.wid : null, stop: act.classList.contains('wk-stop'), all: act.classList.contains('wk-history') } : null;
   body.textContent = '';
-  if (!items.length) body.appendChild(wkEl('div', 'wk-empty', 'Nothing working right now.'));
+  if (!items.length && !hubGroups.length) body.appendChild(wkEl('div', 'wk-empty', 'Nothing working right now.'));
   for (const { id, e, state, endedAt } of items) {
     const it = e.it;
     const row = wkEl('div', `wk-row wk-${state}` + (state === 'failed' && !e.failSeen ? ' wk-unseen' : ''));
@@ -3159,6 +3249,21 @@ function wkPaintList(items) {
     row.addEventListener('keydown', (ev) => { if (ev.target === row && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); row.click(); } });
     body.appendChild(row);
   }
+  for (const g of hubGroups) {
+    body.appendChild(wkEl('div', 'wk-group', `Started by ${g.parentLabel}`));
+    for (const item of g.items) {
+      const row = wkEl('div', 'wk-row wk-running wk-hub');
+      row.dataset.hubId = item.id;
+      row.setAttribute('role', 'button');
+      row.tabIndex = 0;
+      if (!g.parent) row.title = 'The agent that started it is not known';
+      row.append(wkEl('span', 'wk-mark', ''), wkEl('span', 'wk-name', item.label), wkEl('span', 'wk-when', fmtElapsedShort(item.elapsedMs)),
+        wkEl('span', 'wk-meta', (item.model ? shortModel(item.model) + ' · ' : '') + (item.kind === 'consulted' ? 'consulted' : 'temporary')));
+      row.addEventListener('click', () => { if (g.parent) wkOpenHub(g.parent, item); });
+      row.addEventListener('keydown', (ev) => { if (ev.target === row && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); row.click(); } });
+      body.appendChild(row);
+    }
+  }
   const all = wkEl('button', 'wk-history', 'All worker history →');
   all.type = 'button';
   all.addEventListener('click', () => wkShow({ mode: 'history', back: { mode: 'list' } }));
@@ -3169,6 +3274,24 @@ function wkPaintList(items) {
     const to = focused.all ? all : (focused.stop && row && row.querySelector('.wk-stop')) || row || all;
     try { to.focus({ preventScroll: true }); } catch {}
   }
+}
+// A hub-wide row: open the chat of the agent that started it and, once this page follows the turn and sees the worker,
+// open that worker's view; else the chat stays open.
+let wkOpenSeq = 0;
+function wkOpenHub(parent, item) {
+  const seq = ++wkOpenSeq;
+  wkClose();
+  openChat(parent);
+  const started = Date.now();
+  const find = () => item.kind === 'temporary' ? wkSeen.get(item.id)
+    : [...wkSeen.values()].find(e => e.it.status === 'running' && e.agent === parent && e.it.agent === item.id);
+  const look = () => {
+    if (seq !== wkOpenSeq || current !== parent) return;
+    const e = find();
+    if (e) { openWorkerSheet('list'); wkShow({ mode: 'worker', id: e.id, back: { mode: 'list' } }); return; }
+    if (Date.now() - started < 6000) setTimeout(look, 300);
+  };
+  setTimeout(look, 300);
 }
 async function wkStop(e) {
   try {
@@ -5058,6 +5181,7 @@ function turnHolder(ev) {
 
 // turn_activity { turnId, agent, item }: a tool call, a worker, or a worker's tool line (upsert by item.id).
 function onTurnActivity(ev) {
+  if (ev && ev.item && ev.item.kind === 'worker') wkHubPollSoon();   // any agent's worker: the status feed names it
   const h = ev && turnHolder(ev);
   if (!h || !ev.item) return;
   feedUpsert(h, ev.item);
