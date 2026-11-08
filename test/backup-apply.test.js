@@ -337,3 +337,23 @@ test('a backup taken with the admin two-factor switch off never turns it off her
     else assert.ok(!('requireAdmin2fa' in after), name + ': the backup\'s off did not come back');
   }
 });
+
+test('a restored modules.json never brings back "run without asking": today\'s no-ask list stays, or none', async () => {
+  const manifest = { id: 'levdemo', levels: { setting: 'levels', choices: ['look', 'act'], default: 'look', sessionApproval: { setting: 'no_ask_agents', levels: ['act'] } } };
+  const stagedState = () => ({ modules: { levdemo: { steps: {}, settings: { levels: ['sam:act'], no_ask_agents: ['sam'], note: 'from the backup' } } } });
+  const prep = async (name, live) => {
+    const inst = await ready(name);
+    w(path.join(inst.root, 'modules', 'levdemo', 'module.json'), JSON.stringify(manifest));
+    fs.writeFileSync(path.join(inst.root, '.restore', 'new', 'data', 'modules.json'), JSON.stringify(stagedState()));
+    if (live) fs.writeFileSync(path.join(inst.root, 'data', 'modules.json'), JSON.stringify(live)); else fs.rmSync(path.join(inst.root, 'data', 'modules.json'), { force: true });
+    return inst;
+  };
+  const mods = (inst) => JSON.parse(read(path.join(inst.root, 'data', 'modules.json'))).modules.levdemo.settings;
+  const a = await prep('noask-today', { modules: { levdemo: { settings: { no_ask_agents: ['owner'] } } } });
+  apply.applyAtBoot({ root: a.root });
+  assert.deepStrictEqual(mods(a).no_ask_agents, ['owner'], 'today\'s list wins at the swap');
+  assert.strictEqual(mods(a).note, 'from the backup', 'the rest of the module state is the backup\'s');
+  const b = await prep('noask-none', null);
+  apply.applyAtBoot({ root: b.root });
+  assert.deepStrictEqual(mods(b).no_ask_agents, [], 'no list today: none comes back');
+});

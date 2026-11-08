@@ -344,7 +344,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const groupId = () => state.group || (mesh && mesh.state.read().meshid) || deps.group || null;
 
   const gate = deps.gate || createGate({
-    levels: settings.levels, sessionMinutes: settings.session_minutes, now, log,
+    levels: settings.levels, noAskAgents: settings.no_ask_agents, sessionMinutes: settings.session_minutes, now, log,
     approve: async ({ call, title, detail, minutes }) => {   // the hub knows the agent from the call id it issued, so no agent is sent
       const r = await hub.request('hub/approve', { call, title, detail, minutes }, APPROVE_HUB_TIMEOUT_MS);
       if (r && (r.decision === 'allow' || r.decision === 'deny' || r.decision === 'timeout')) return r.decision;

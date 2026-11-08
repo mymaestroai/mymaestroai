@@ -37,7 +37,7 @@ test('setup: the steps come in the planned order with the right types', () => {
   const by = Object.fromEntries(setup.steps.map((s) => [s.id, s]));
   assert.strictEqual(by.about.confirm, 'I understand that agents I allow can fully control the computers I add.');
   assert.deepStrictEqual(by.prefs.fields, ['address_name', 'listen_ip', 'control_port', 'agent_port', 'run_as']);
-  assert.deepStrictEqual(by.levels.fields, ['levels', 'session_minutes']);
+  assert.deepStrictEqual(by.levels.fields, ['session_minutes']);
   assert.match(by.prefs.body, /tailscale status/);
   assert.match(by.about.body, /phone/);
   assert.strictEqual(by.server.title, 'Start the server');
