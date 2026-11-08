@@ -914,7 +914,9 @@ async function handleHttpRequest(req, res) {
       const all = await getAgents();
       const ownerFilter = new URL(req.url, 'http://x').searchParams.get('owner') || null;
       const agents = req.hubService ? all : access.visibleAgents(req.hubUser, all, { ownerFilter: access.isAdmin(req.hubUser) ? ownerFilter : null });
-      const status = getAgentStatuses();
+      let status = getAgentStatuses();
+      // A member never learns the caller of a consultation they may not use (consultedBy, the activity text).
+      if (!req.hubService && !access.isAdmin(req.hubUser)) status = access.statusForViewer(req.hubUser, status, { agents: all, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
       const idle = { busy: false, busySince: null, activity: null, pendingQuestion: false };
       return jsonResponse(res, 200, { agents: agents.map(a => ({ ...a, ...(status[a.name] || idle) })) });
     }

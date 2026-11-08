@@ -2394,7 +2394,7 @@
       }
       if (bad.length) {
         bad[0].reportValidity();
-        alert(`Workers at once: ${bad.map(i => WAO_LABELS[i.dataset.provider] || i.dataset.provider).join(', ')} must be a whole number from 1 to 32; not saved.`);
+        alert(`Workers at once: ${bad.map(i => WAO_LABELS[i.dataset.provider] || i.dataset.provider).join(', ')} must be a whole number from 1 to 32; the previous value is kept.`);
       }
       return out;
     }
@@ -6484,9 +6484,11 @@
       paintAgentsWorking();
     }
 
-    function statusPatchOf(s) {
+    // keepMissing (the /api/agents list, which has no worker fields): a key the entry lacks is left as it is. A full feed
+    // is the whole truth: a key it lacks is cleared (an agent no longer consulted loses its consultedBy).
+    function statusPatchOf(s, keepMissing) {
       const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
-      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) if (k in s) patch[k] = s[k];   // a key the feed lacks is not wiped
+      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
       return patch;
     }
 
@@ -6495,7 +6497,7 @@
       if (!map || typeof map !== 'object') return;
       statusKnown = true;
       const namedOnly = !!(arguments[1] && arguments[1].namedOnly);
-      for (const [name, s] of Object.entries(map)) setAgentLive(name, statusPatchOf(s));
+      for (const [name, s] of Object.entries(map)) setAgentLive(name, statusPatchOf(s, namedOnly));
       for (const name of Object.keys(agentStatus)) {
         if (name in map) continue;
         if (!busyIsWorker(name, agentStatus[name])) setAgentLive(name, { busy: false });

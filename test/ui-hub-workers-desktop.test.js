@@ -44,6 +44,23 @@ test('a named-only refresh never wipes consultedBy or drops workers; a full feed
   assert.ok(agentStatus.lead && agentStatus.lead.busy === false, 'a named agent missing from the feed goes idle');
 });
 
+test('a full feed is the whole truth: an agent consulted, then busy with its own turn, loses consultedBy', () => {
+  const { agentStatus, applyStatusSnapshot } = page();
+  applyStatusSnapshot({ helper: { busy: true, consultedBy: 'lead' } });
+  assert.strictEqual(agentStatus.helper.consultedBy, 'lead');
+  applyStatusSnapshot({ helper: { busy: true } });
+  assert.strictEqual(agentStatus.helper.consultedBy, null, 'a later full snapshot without consultedBy clears it');
+  assert.strictEqual(agentStatus.helper.busy, true);
+});
+
+test('GET /api/agents gives a member the same redacted status as /api/agents/status', () => {
+  const server = require('fs').readFileSync(require('path').join(__dirname, '..', 'server.js'), 'utf8');
+  const at = server.indexOf("pathname === '/api/agents' && req.method === 'GET'");
+  assert.ok(at > 0);
+  const route = server.slice(at, server.indexOf('return jsonResponse', at));
+  assert.match(route, /access\.statusForViewer\(req\.hubUser, status,/);
+});
+
 test('the worker poll rests while hidden, polls once on return, and opening the menu polls and repaints', () => {
   assert.ok(src.includes('setInterval(() => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); }, 5000);'));
   assert.ok(src.includes("document.addEventListener('visibilitychange', () => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); });"));
@@ -84,5 +101,5 @@ test('workersAtOnceFromPage: a blank, non-integer or out-of-range input keeps th
   assert.ok(r.inputs[0].reported);
   assert.deepStrictEqual(r.out2, { openai: 8 }, 'equal to default removes the key; 99 for ollama keeps (nothing saved)');
   assert.strictEqual(r.inputs[2].valid, '1 to 32');
-  assert.strictEqual(r.alerts[0], 'Workers at once: OpenAI API must be a whole number from 1 to 32; not saved.');
+  assert.strictEqual(r.alerts[0], 'Workers at once: OpenAI API must be a whole number from 1 to 32; the previous value is kept.');
 });
