@@ -476,9 +476,9 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   }
 
   // -- service mode: the system service is not ours to start or stop; the module only looks whether it answers --
-  const NOT_INSTALLED_MESSAGE = (command) => `MeshCentral needs to be installed as its own service once. Press Ask Maestro and Maestro runs it for you. If you prefer a terminal, run this on My Maestro's computer (it asks for an administrator password): ${command}`;
-  const NOT_RUNNING_MESSAGE = (command) => `MeshCentral is installed as the system service ${serviceName} but it does not answer. Press Ask Maestro and Maestro restarts it for you. If you prefer a terminal, run this on My Maestro's computer (it asks for an administrator password): ${command}`;
-  const NEEDS_UPDATE_MESSAGE = (command) => `The settings changed after MeshCentral was installed as the system service ${serviceName}. Press Ask Maestro and Maestro runs the install again for you. If you prefer a terminal, run this on My Maestro's computer (it asks for an administrator password): ${command}`;
+  const NOT_INSTALLED_MESSAGE = (command) => `MeshCentral needs to be installed as its own service once. Press Ask Maestro and Maestro runs this for you (it needs administrator rights on My Maestro's computer). Or run it yourself in a terminal on My Maestro's computer (it asks for an administrator password): ${command}`;
+  const NOT_RUNNING_MESSAGE = (command) => `MeshCentral is installed as the system service ${serviceName} but it does not answer. Press Ask Maestro and Maestro restarts it for you (it needs administrator rights on My Maestro's computer). Or restart it yourself in a terminal on My Maestro's computer (it asks for an administrator password): ${command}`;
+  const NEEDS_UPDATE_MESSAGE = (command) => `The settings changed after MeshCentral was installed as the system service ${serviceName}. Press Ask Maestro and Maestro runs the install again for you (it needs administrator rights on My Maestro's computer). Or run it yourself in a terminal on My Maestro's computer (it asks for an administrator password): ${command}`;
 
   // Looks at the service now: installed.json and the root certificate must exist and the control port must answer. Never throws for a missing service.
   async function checkService() {

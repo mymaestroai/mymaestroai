@@ -275,7 +275,7 @@ test('start in service mode: not installed reports the install command, writes t
   assert.strictEqual(r.ready, false);
   assert.strictEqual(r.reason, 'not-installed');
   assert.strictEqual(r.command, `sudo bash '${path.join(MODULE_DIR, 'service', 'install.sh')}' '${s.ms.paths.request}'`);
-  assert.match(r.message, /^MeshCentral needs to be installed as its own service once\. Press Ask Maestro and Maestro runs it for you\. If you prefer a terminal, run this on My Maestro's computer \(it asks for an administrator password\): sudo bash /);
+  assert.match(r.message, /^MeshCentral needs to be installed as its own service once\. Press Ask Maestro and Maestro runs this for you \(it needs administrator rights on My Maestro's computer\)\. Or run it yourself in a terminal on My Maestro's computer \(it asks for an administrator password\): sudo bash /);
   assert.ok(r.message.endsWith(r.command));
   assert.ok(fs.existsSync(s.ms.paths.request), 'request.env was written because it was missing');
   assert.deepStrictEqual(s.fb.calls, []);
@@ -546,7 +546,7 @@ test('after the install: no new request with the same settings, and a settings c
   assert.ok(fs.existsSync(t.ms.paths.request));
   const c = await t.ms.checkService();
   assert.deepStrictEqual([c.ready, c.reason, c.command], [false, 'needs-update', b.command]);
-  assert.match(c.message, /^The settings changed after MeshCentral was installed as the system service mymaestro-remote\. Press Ask Maestro and Maestro runs the install again for you\./);
+  assert.match(c.message, /^The settings changed after MeshCentral was installed as the system service mymaestro-remote\. Press Ask Maestro and Maestro runs the install again for you \(it needs administrator rights on My Maestro's computer\)\./);
   assert.deepStrictEqual(t.fb.calls, [], 'nothing was run or spawned');
 });
 

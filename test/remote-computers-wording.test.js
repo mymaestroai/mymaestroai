@@ -55,8 +55,9 @@ test('the three service messages lead with Ask Maestro and then name My Maestro\
     const line = meshserver.split('\n').find((l) => l.includes(`const ${name} =`));
     assert.ok(line, name);
     assert.ok(line.indexOf('Press Ask Maestro and Maestro') !== -1, `${name} leads with Ask Maestro`);
-    assert.ok(line.indexOf('Press Ask Maestro') < line.indexOf('If you prefer a terminal, run this on My Maestro\'s computer'), name);
+    assert.ok(line.indexOf('(it needs administrator rights on My Maestro\'s computer)') > line.indexOf('Press Ask Maestro'), `${name} says what Ask Maestro needs`);
+    assert.ok(line.indexOf('Press Ask Maestro') < line.indexOf(' yourself in a terminal on My Maestro\'s computer'), name);
     assert.ok(!/this computer/i.test(line), name);
   }
-  assert.ok(meshserver.includes('`MeshCentral needs to be installed as its own service once. Press Ask Maestro and Maestro runs it for you.'));
+  assert.ok(meshserver.includes('`MeshCentral needs to be installed as its own service once. Press Ask Maestro and Maestro runs this for you (it needs administrator rights on My Maestro\'s computer). Or run it yourself in a terminal on My Maestro\'s computer'));
 });
