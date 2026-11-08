@@ -83,14 +83,14 @@ test('status_snapshot carries the paced providers; the status route and reset/fa
   assert.deepStrictEqual(data.pacing, { paced: [{ provider: 'x', limit: 1, cap: 4, reason: 'rate_limit' }] });
 
   const server = read('server.js');
-  assert.ok(server.includes("pacing: getPacing().status()"), '/api/hub/status includes pacing');
+  assert.ok(server.includes("pacing: { ...pacingStatus, caps:") && server.includes('const pacingStatus = getPacing().status()'), '/api/hub/status includes pacing and the configured caps');
   assert.ok(server.includes("pathname === '/api/hub/pacing/reset' && req.method === 'POST'"));
   assert.ok(server.includes("pathname === '/api/hub/pacing/fault' && req.method === 'POST'"));
   assert.ok(sdk.includes('hubEvents.events.setPacingProvider(() => pacing.status())'));
 });
 
 test('pacing events are published on /api/events and a paced provider sends a push notice', () => {
-  assert.ok(sdk.includes("getPacing({ onEvent: (ev) => { try { hubEvents.events.publish(ev.type, ev); } catch {} } })"));
+  assert.ok(sdk.includes("getPacing({ caps: providerPacing.resolveCaps(savedCaps), onEvent: (ev) => { try { hubEvents.events.publish(ev.type, ev); } catch {} } })"));
   const push = read('lib/push.js');
   assert.ok(push.includes("ev.type === 'provider_paced'"));
   assert.ok(push.includes("tag: `pacing-${ev.provider}`"));

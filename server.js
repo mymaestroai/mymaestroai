@@ -730,7 +730,11 @@ async function handleHttpRequest(req, res) {
         if (req.hubToken && req.hubToken.agents && !req.hubToken.agents.includes(agentName)) return jsonResponse(res, 403, { error: 'token_scope', detail: 'this token is not scoped to that agent' });
         const who = req.hubUser || { id: 'service', role: 'admin' };
         if (!access.isAdmin(who) && !access.canAccessAgent(who, agentName, { agents: await getAgents(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
-        const turn = require('./lib/hub-events').events.turnFor(agentName);
+        let turn = require('./lib/hub-events').events.turnFor(agentName);
+        if (!access.isAdmin(who)) {
+          const ctx = { agents: await getAgents(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) };
+          turn = access.redactTurnForViewer(turn, (n) => access.canAccessAgent(who, n, ctx));
+        }
         return jsonResponse(res, 200, { ok: true, agent: agentName, active: !!(turn && turn.active), turn });
       }
     }
@@ -910,7 +914,9 @@ async function handleHttpRequest(req, res) {
       const all = await getAgents();
       const ownerFilter = new URL(req.url, 'http://x').searchParams.get('owner') || null;
       const agents = req.hubService ? all : access.visibleAgents(req.hubUser, all, { ownerFilter: access.isAdmin(req.hubUser) ? ownerFilter : null });
-      const status = getAgentStatuses();
+      let status = getAgentStatuses();
+      // A member never learns the caller of a consultation they may not use (consultedBy, the activity text).
+      if (!req.hubService && !access.isAdmin(req.hubUser)) status = access.statusForViewer(req.hubUser, status, { agents: all, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
       const idle = { busy: false, busySince: null, activity: null, pendingQuestion: false };
       return jsonResponse(res, 200, { agents: agents.map(a => ({ ...a, ...(status[a.name] || idle) })) });
     }
@@ -920,17 +926,21 @@ async function handleHttpRequest(req, res) {
       let agents = getAgentStatuses();
       if (req.hubToken) {
         // A program's token: the agents it is scoped to, or every agent for a status-only token (a dashboard).
-        if (req.hubToken.agents) agents = Object.fromEntries(Object.entries(agents).filter(([name]) => req.hubToken.agents.includes(name)));
+        if (req.hubToken.agents) agents = Object.fromEntries(Object.entries(agents).filter(([name]) => req.hubToken.agents.includes(name)).map(([name, e]) => [name, access.redactCaller(e, (n) => req.hubToken.agents.includes(n))]));
       } else if (!req.hubService && !access.isAdmin(req.hubUser)) {
         const all = await getAgents();
-        agents = Object.fromEntries(Object.entries(agents).filter(([name]) => access.canAccessAgent(req.hubUser, name, { agents: all, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })));
+        agents = access.statusForViewer(req.hubUser, agents, { agents: all, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
       }
       return jsonResponse(res, 200, { halted: h.halted, haltedAt: h.at, haltReason: h.reason, agents });
     }
 
     // Hub-wide kill switch (owner only: Basic auth + same-origin guard apply to every /api route).
     if (pathname === '/api/hub/status' && req.method === 'GET') {
-      return jsonResponse(res, 200, { ...require('./lib/hub-halt').getHubHalt().status(), pacing: getPacing().status() });
+      const pacingStatus = getPacing().status();
+      const capProviders = new Set(['claude-sdk', 'codex-cli', ...Object.keys(pacingStatus.providers || {})]);
+      try { for (const a of await getAgents()) if (a && a.model) capProviders.add(temporalWorkersLib.providerOf(a.model)); } catch {}
+      const capList = [...capProviders].filter(Boolean).sort((a, b) => { const r = (p) => p === 'claude-sdk' ? 0 : p === 'codex-cli' ? 1 : 2; return r(a) - r(b) || a.localeCompare(b); });
+      return jsonResponse(res, 200, { ...require('./lib/hub-halt').getHubHalt().status(), pacing: { ...pacingStatus, caps: require('./lib/provider-pacing').capsView(hubSettings.getSetting('workersAtOnce'), capList) } });
     }
     // Provider pacing: owner override back to full parallel, and a test hook that makes the next N
     // delegations to a provider fail with a synthetic rate limit (proves the fallback on the live hub).
@@ -1946,7 +1956,7 @@ async function handleHttpRequest(req, res) {
       const allAgents = await getAgents();
       const isAdmin = access.isAdmin(req.hubUser);
       const visible = (name) => isAdmin || access.canAccessAgent(req.hubUser, name, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
-      return require('./lib/hub-events').events.subscribe(req, res, { isAdmin, visibleAgent: visible, filter: (ev) => visible(ev.agent) });
+      return require('./lib/hub-events').events.subscribe(req, res, { isAdmin, visibleAgent: visible, statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => visible(ev.agent) });
     }
 
     // ── Worker Routes ───────────────────────────────────────────────
@@ -2215,8 +2225,11 @@ async function handleHttpRequest(req, res) {
           // The reasoning panel (lib/sdk-chat showReasoning): on unless turned off.
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
+          // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
+          if (patch && patch.workersAtOnce !== undefined) patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce);
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
+          if (patch && patch.workersAtOnce !== undefined) getPacing().setCaps(hubSettings.getSetting('workersAtOnce'));
           // A new key or URL changes which models exist — rediscover now
           // rather than waiting for the 6-hour cycle.
           if (providersChanged) {

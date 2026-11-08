@@ -31,7 +31,7 @@ test('server: account, user-management, me, filtered agents/status/events, login
     "'/api/auth/totp/begin'", "'/api/auth/totp/confirm'", "'/api/auth/totp/disable'", "'/api/auth/password'", "'/api/auth/sessions'", "'/api/me'", "'/api/users'", "'/api/users/audit'"]) assert.ok(server.includes(r), r);
   assert.ok(server.includes("/^\\/api\\/users\\/([^/]+)\\/team$/.test(pathname)"));
   assert.ok(server.includes("access.visibleAgents(req.hubUser, all, { ownerFilter: access.isAdmin(req.hubUser) ? ownerFilter : null })"));
-  assert.ok(server.includes("events.subscribe(req, res, { isAdmin, visibleAgent: visible, filter: (ev) => visible(ev.agent) })"));
+  assert.ok(server.includes("events.subscribe(req, res, { isAdmin, visibleAgent: visible, statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => visible(ev.agent) })"));
   assert.ok(server.includes("createAgent(body.name, body.model, body.personality, body.skills, body.category, body.owner || null)"));
   assert.ok(server.includes("pathname === '/login' || pathname === '/invite'"));
   assert.ok(server.includes("pathname === '/setup' || pathname === '/setup-admin'"), 'old setup links are still answered (the Welcome page replaced the page)');

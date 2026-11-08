@@ -31,7 +31,7 @@ test('eight groups, and every section openSettings draws belongs to exactly one 
   assert.deepStrictEqual(groups.map(g => g.title), ['🩺 Status', '🔐 Security', '💾 Backups', '🧠 AI models', '🤖 Agents', '🔔 Notifications', '🧰 Tools and data', '💰 Money and safety']);
   const src = settingsSource(app);
   const drawn = [...src.matchAll(/class="st-section" id="(st-[a-z0-9-]+-section)"/g)].map(m => m[1]);
-  assert.strictEqual(drawn.length, 21, 'all 21 sections carry an id');
+  assert.strictEqual(drawn.length, 22, 'all 22 sections carry an id');
   assert.doesNotMatch(src, /class="st-section">/, 'no section without an id');
   const grouped = groups.flatMap(g => g.sections);
   assert.strictEqual(new Set(grouped).size, grouped.length, 'no section in two groups');

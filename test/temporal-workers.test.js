@@ -109,11 +109,12 @@ describe('temporal workers: tool scope', () => {
 
 describe('temporal workers: running', () => {
   const job = (i, provider, model) => ({ index: i, task: 't', model: model || provider + '/m', provider, toolScope: 'read', label: 'w' + i });
+  const pacer = () => require('../lib/provider-pacing').createPacing({ log: () => {}, retryDelaysMs: [] });
 
   it('runs in parallel, returns in input order, and releases every virtual agent', async () => {
     const seen = [];
     const res = await tw.runWorkers([job(1, 'openai'), job(2, 'google'), job(3, 'claude-sdk')], {
-      parent: 'maestro', limiter: new tw.ProviderLimiter(),
+      parent: 'maestro', limiter: pacer(),
       runOne: async (j, v) => { seen.push(v.id); assert.ok(tw.isVirtual(v.id)); await sleep(j.index === 1 ? 60 : 10); return 'done ' + j.index; },
     });
     assert.deepStrictEqual(res.map(r => r.text), ['done 1', 'done 2', 'done 3']);
@@ -122,9 +123,9 @@ describe('temporal workers: running', () => {
   });
 
   it('one failure does not sink the batch', async () => {
-    const res = await tw.runWorkers([job(1, 'openai'), job(2, 'google')], { parent: 'm', limiter: new tw.ProviderLimiter(),
-      runOne: async (j) => { if (j.index === 1) throw new Error('provider 503'); return 'fine'; } });
-    assert.strictEqual(res[0].ok, false); assert.match(res[0].text, /FAILED: provider 503/);
+    const res = await tw.runWorkers([job(1, 'openai'), job(2, 'google')], { parent: 'm', limiter: pacer(),
+      runOne: async (j) => { if (j.index === 1) throw new Error('provider exploded'); return 'fine'; } });
+    assert.strictEqual(res[0].ok, false); assert.match(res[0].text, /\[FAILED\].*provider exploded/);
     assert.strictEqual(res[1].ok, true);
     assert.strictEqual(tw.listVirtual().filter(v => v.parent === 'm').length, 0, 'failed worker is released too');
   });
@@ -132,7 +133,7 @@ describe('temporal workers: running', () => {
   it('caps concurrency per provider: a local server runs one at a time, hosted ones overlap', async () => {
     let localNow = 0, localPeak = 0, hostedNow = 0, hostedPeak = 0;
     const jobs = [job(1, 'lmstudio'), job(2, 'lmstudio'), job(3, 'lmstudio'), job(4, 'openai'), job(5, 'openai'), job(6, 'openai')];
-    await tw.runWorkers(jobs, { parent: 'm', limiter: new tw.ProviderLimiter(), runOne: async (j) => {
+    await tw.runWorkers(jobs, { parent: 'm', limiter: pacer(), runOne: async (j) => {
       if (j.provider === 'lmstudio') { localPeak = Math.max(localPeak, ++localNow); await sleep(25); localNow--; }
       else { hostedPeak = Math.max(hostedPeak, ++hostedNow); await sleep(25); hostedNow--; }
       return 'ok';
