@@ -460,7 +460,7 @@ test('check installer: shows the address and the Windows advice, once, and keeps
 });
 
 test('check installer: a refusal or an unreadable reply is a plain failure', async () => {
-  const a = await checks.installer(ctxOf({ installer_link: 'Save this computer\'s tailnet name in the settings first.' }));
+  const a = await checks.installer(ctxOf({ installer_link: 'Save the tailnet name of My Maestro\'s computer in the settings first.' }));
   assert.strictEqual(a.ok, false);
   assert.match(a.summary, /tailnet name/);
   const b = await checks.installer(ctxOf({ installer_link: () => { throw new Error('The hub did not answer.'); } }));

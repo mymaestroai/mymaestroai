@@ -443,3 +443,30 @@ test('settings saved during a start begun by request(): it is cancelled and the 
   assert.equal(s.max, 1, 'never two processes at once');
   r.cx.shutdown();
 });
+
+test('request(): setup: true reaches an installed module connector that is not enabled', async (t) => {
+  const r = rig(); t.after(() => r.cx.shutdown());
+  up(r.cx, r.mod({ enabled: false }));
+  const res = await r.cx.request('bg', 'm', {}, { setup: true });
+  assert.deepEqual(res, { echoed: 'm' });
+  assert.equal(r.all.length, 1, 'the server was started');
+});
+
+test('request(): without setup a not-enabled module connector is still refused and nothing starts', async () => {
+  const r = rig();
+  up(r.cx, r.mod({ enabled: false }));
+  await assert.rejects(() => r.cx.request('bg', 'm', {}), { code: 'ENOTAVAILABLE' });
+  await assert.rejects(() => r.cx.request('bg', 'm', {}, { setup: false }), { code: 'ENOTAVAILABLE' });
+  assert.equal(r.all.length, 0);
+});
+
+test('request(): setup: true does not open a locked connector or a non-module connector', async () => {
+  const r = rig();
+  up(r.cx, r.mod({ enabled: false }));
+  r.cx.upsert({ id: 'bg', protect: 'own' }, { byModule: true, newPassphrase: 'correct horse battery' });
+  r.cx.lock('bg');
+  await assert.rejects(() => r.cx.request('bg', 'm', {}, { setup: true }), { code: 'ENOTAVAILABLE' });
+  r.cx.upsert({ id: 'plain', kind: 'mcp', command: process.execPath, args: ['x'], enabled: false });
+  await assert.rejects(() => r.cx.request('plain', 'm', {}, { setup: true }), { code: 'ENOTAVAILABLE' });
+  assert.equal(r.all.length, 0);
+});

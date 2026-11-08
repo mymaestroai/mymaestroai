@@ -38,6 +38,11 @@ test('manifest: each bad value of the new fields is reported', () => {
   for (const bad of [0, 1023, 4194305, 1.5, '2048']) assert.match(probs({ ...b, receiver: { paths: ['hook'], maxBody: bad } }), /receiver\.maxBody/, String(bad));
   assert.strictEqual(probs({ ...b, receiver: { paths: ['hook'], maxBody: 1024 } }), '');
   assert.strictEqual(probs({ ...b, receiver: { paths: ['hook'], maxBody: 4194304 } }), '');
+  assert.strictEqual(probs({ ...b, receiver: { paths: ['hook', 'other'], setupPaths: ['hook'] } }), '');
+  const setup = (sp) => probs({ ...b, receiver: { paths: ['hook', 'other'], setupPaths: sp } });
+  const nine = Array.from({ length: 9 }, (_, i) => `p${i}`);
+  assert.match(probs({ ...b, receiver: { paths: nine.slice(0, 8), setupPaths: nine } }), /receiver\.setupPaths/, 'more than 8');
+  for (const bad of [['nope'], ['hook', 'nope'], 'hook', [], ['hook', 'hook'], [1], [null], {}]) assert.match(setup(bad), /receiver\.setupPaths/, JSON.stringify(bad));
 });
 
 // ── the guard, run as a real child against the guarddemo fixture ──
