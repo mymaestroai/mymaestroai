@@ -567,7 +567,7 @@ test('legacy: a money module without levels still drops an ineligible lead silen
 });
 
 // ── backup restore ──
-test('backup restore never brings back no_ask_agents: today\'s list stays, or none', () => {
+test('backup restore empties no_ask_agents everywhere: neither the backup\'s nor today\'s list survives, levels stay as restored', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-lev-bk-'));
   try {
     fs.mkdirSync(path.join(root, 'levdemo')); fs.writeFileSync(path.join(root, 'levdemo', 'module.json'), JSON.stringify(baseManifest()));
@@ -580,29 +580,49 @@ test('backup restore never brings back no_ask_agents: today\'s list stays, or no
       nosettings: { steps: {} },
       '../evil': { settings: { no_ask_agents: ['sam'] } },
     } });
-    // existing install: today's list wins
+    // the backup's list (and any list on this computer today, which is no longer even read) becomes empty
     const s1 = staged();
-    const live = { modules: { levdemo: { settings: { no_ask_agents: ['owner'] } }, broken: { settings: { no_ask_agents: ['live'] } } } };
-    assert.strictEqual(manifestLib.holdNoAskSettings(s1, live, root), true);
-    assert.deepStrictEqual(s1.modules.levdemo.settings.no_ask_agents, ['owner']);
-    assert.deepStrictEqual(s1.modules.levdemo.settings.levels, ['sam:drive'], 'only the no-ask list is held');
+    assert.strictEqual(manifestLib.holdNoAskSettings(s1, root), true);
+    assert.deepStrictEqual(s1.modules.levdemo.settings.no_ask_agents, [], 'the backup\'s list is emptied');
+    assert.deepStrictEqual(s1.modules.levdemo.settings.levels, ['sam:drive'], 'restored levels stay exactly as restored');
     assert.strictEqual(s1.modules.levdemo.settings.note, 'b');
-    assert.deepStrictEqual(s1.modules.plain.settings.no_ask_agents, ['sam'], 'a module without levels is left alone');
-    assert.deepStrictEqual(s1.modules.broken.settings.no_ask_agents, ['live'], 'unreadable manifest: the default key is held');
+    assert.deepStrictEqual(s1.modules.plain.settings.no_ask_agents, [], 'a readable manifest with no declaration: a stray conventional key is still emptied');
+    assert.strictEqual(s1.modules.plain.settings.note, 'p');
+    assert.deepStrictEqual(s1.modules.broken.settings.no_ask_agents, [], 'unreadable manifest: the default key is emptied');
     assert.deepStrictEqual(s1.modules['../evil'].settings.no_ask_agents, [], 'a bad id never reaches the disk');
-    // no live state at all (fresh install, or an unreadable file): none
-    for (const none of [null, undefined, {}, { modules: {} }, { modules: { levdemo: { settings: { no_ask_agents: 'sam' } } } }]) {
-      const s = staged();
-      manifestLib.holdNoAskSettings(s, none, root);
-      assert.deepStrictEqual(s.modules.levdemo.settings.no_ask_agents, [], JSON.stringify(none));
-      assert.deepStrictEqual(s.modules.nosettings === undefined ? [] : s.modules.nosettings.settings.no_ask_agents, []);
+    assert.deepStrictEqual(s1.modules.nosettings.steps, {});
+    assert.strictEqual(manifestLib.holdNoAskSettings(s1, root), false, 'already empty: nothing to change');
+    // malformed or missing values in the backup can never enable asking off
+    for (const bad of [undefined, null, 'sam', ['sam'], { sam: true }, 7]) {
+      const s = { modules: { levdemo: { settings: bad === undefined ? { levels: ['sam:act'] } : { levels: ['sam:act'], no_ask_agents: bad } } } };
+      manifestLib.holdNoAskSettings(s, root);
+      assert.deepStrictEqual(s.modules.levdemo.settings.no_ask_agents, [], JSON.stringify(bad));
+      assert.deepStrictEqual(s.modules.levdemo.settings.levels, ['sam:act']);
     }
-    assert.strictEqual(manifestLib.holdNoAskSettings(null, live, root), false);
+    // a readable manifest with no declaration and no conventional key: nothing is added
+    const pl = { modules: { plain: { settings: { note: 'p' } } } };
+    assert.strictEqual(manifestLib.holdNoAskSettings(pl, root), false);
+    assert.deepStrictEqual(pl.modules.plain.settings, { note: 'p' });
+    // a custom declared backing key is emptied, and a stray conventional key beside it too
+    const m = baseManifest();
+    m.settings = m.settings.map(x => x.key === 'no_ask_agents' ? { ...x, key: 'quiet_agents' } : x);
+    m.levels = { ...m.levels, sessionApproval: { ...m.levels.sessionApproval, setting: 'quiet_agents' } };
+    assert.deepStrictEqual(manifestLib.validateManifest(m, 'levdemo').problems, []);
+    fs.mkdirSync(path.join(root, 'custom')); fs.writeFileSync(path.join(root, 'custom', 'module.json'), JSON.stringify({ ...m, id: 'custom' }));
+    const cs = { modules: { custom: { settings: { levels: ['sam:act'], quiet_agents: ['sam'], no_ask_agents: ['ann'] } } } };
+    assert.strictEqual(manifestLib.holdNoAskSettings(cs, root), true);
+    assert.deepStrictEqual(cs.modules.custom.settings, { levels: ['sam:act'], quiet_agents: [], no_ask_agents: [] });
+    // a module with no settings object gets one holding only the empty list
+    const ns = { modules: { levdemo: { steps: {} } } };
+    manifestLib.holdNoAskSettings(ns, root);
+    assert.deepStrictEqual(ns.modules.levdemo.settings, { no_ask_agents: [] });
+    for (const bad of [null, undefined, {}, { modules: 'x' }]) assert.strictEqual(manifestLib.holdNoAskSettings(bad, root), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('backup restore code applies the rule (restore prepare and merge-today both call it)', () => {
   const read = (f) => fs.readFileSync(path.join(__dirname, '..', 'lib', 'backup', f), 'utf8');
-  assert.match(read('restore.js'), /holdNoAskSettings\(smods, readJson\(path\.join\(root, 'data', 'modules\.json'\)\)/);
-  assert.match(read('apply.js'), /holdNoAskSettings\(smods, readJson\(path\.join\(liveData, 'modules\.json'\)\)/);
+  assert.match(read('restore.js'), /holdNoAskSettings\(smods, path\.join\(root, 'modules'\)\)/);
+  assert.match(read('apply.js'), /holdNoAskSettings\(smods, path\.join\(j\.env\.root, 'modules'\)\)/);
+  assert.doesNotMatch(read('restore.js') + read('apply.js'), /holdNoAskSettings\([^)]*modules\.json/, 'today\'s modules.json is not read for the no-ask list');
 });

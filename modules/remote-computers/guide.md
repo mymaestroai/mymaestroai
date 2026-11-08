@@ -27,7 +27,7 @@ Status and limits (Save permissions).
 - **Ask me before each session.** For Act and Drive, each agent has this box, ticked by default. If you untick it
   for an agent, it starts sessions without asking you. My Maestro warns you before it saves that: an agent can be
   misled by a web page or an email, and with asking off it could then use the computer without you knowing in
-  time. You still get the notice on the PC and everything is still logged.
+  time. You still get the notice on the PC and everything is still logged. After restoring a backup, every agent asks again; untick the box to turn asking off.
 - **A notice on the PC.** When a session starts, the PC shows a short notice saying which agent is using it.
 - **A dedicated PC.** Use a computer with nothing personal on it: no private files, no signed-in accounts you care
   about. An agent you allow can fully control it.
