@@ -45,7 +45,7 @@ Every agent starts at Look. You raise an agent's level in the settings.
 
 - **What this does:** explains the levels and asks you to confirm that agents you allow can fully control the
   computers you add.
-- **Install:** puts the server in place. About 210 MB in all: about 85 MB of server programs now and about 125 MB of helper programs for the PCs, downloaded the first time the server starts. It is downloaded once.
+- **Install:** puts the server in place. It downloads about 210 MB in all (more space on disk once unpacked): about 85 MB of server programs now and about 125 MB of helper programs for the PCs, downloaded the first time the server starts. It is downloaded once.
 - **Your settings:** the tailnet name and tailnet address of My Maestro's computer (the computer My Maestro runs on, not the PC you want to control), and the two ports.
 - **Start the server:** starts the server and checks that it is running and ready. You do not need to be at My Maestro's computer: if the server needs an administrator command, press Ask Maestro and Maestro runs it for you.
 - **Prepare the PC:** done by you on the PC: Windows 11 with a local account, signing in automatically, never
