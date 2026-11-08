@@ -68,7 +68,7 @@ test('gate: levels, unlisted agents get look, a missing agent is refused (EIDENT
 
 test('gate: a level that is too low is refused with ELEVEL and the owner is not asked', async () => {
   const { gate, asked } = newGate();
-  const e = await rejects(gate.require('stranger', 'act', PC), 'ELEVEL', /Data connectors -> Remote computers -> Settings/);
+  const e = await rejects(gate.require('stranger', 'act', PC), 'ELEVEL', /Data connectors -> Remote computers -> Status and limits/);
   assert.match(e.message, /stranger/);
   assert.match(e.message, /look/);
   await rejects(gate.require('lee', 'drive', PC), 'ELEVEL');
@@ -1250,7 +1250,7 @@ test('tools: with the real gate, the first act asks the owner through the hub, t
   // Sam's level is act: drive is refused without asking.
   t.handlers.runcommands = async () => ({ result: 'MMSHOT 1 1 1 1 x' });
   const drive = await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'a' });
-  assert.match(drive.error, /Data connectors -> Remote computers -> Settings/);
+  assert.match(drive.error, /Data connectors -> Remote computers -> Status and limits/);
   // A no from the owner, and the cool-down.
   const no = t.call('run', { __agent: 'pat', __call: 'call-2', computer: ID_C, command: 'x' });
   await flush();

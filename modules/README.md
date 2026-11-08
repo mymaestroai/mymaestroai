@@ -55,6 +55,14 @@ For a module connector the hub passes `minTools` = the number of agent-visible t
 than `off` and `hub`), so a module that shows agents nothing, such as a backup-only one, answers at once instead of
 waiting about 7.5 s per call.
 
+## Per-agent levels
+
+A module may declare `"levels": { "setting": "levels", "choices": ["look", "act", "drive"], "default": "look", "sessionApproval": { "setting": "no_ask_agents", "levels": ["act", "drive"] } }`. Choices are ordered from lowest to highest. Both named settings must be declared as lists; the first stores `agent:level` entries and the optional session approval list defaults to `[]` (everyone is asked).
+
+The grant step and Status and limits show these controls beside each allowed agent, including locked leads. Do not include either backing key in a settings step. Generic saves reject them. `POST /api/modules/<id>/agent-permissions` accepts `{ agents, permissions: { "sam": { "level": "act", "askEachSession": true } }, acknowledged }` from a signed-in admin browser session. `agents` is the complete grant list; `permissions` covers those agents plus any always-allowed leads. Disabling asking requires the warning acknowledgement, an audit record and an admin phone notice. API tokens, service identities and members cannot use this endpoint.
+
+The module must enforce its levels and session boundaries on every call using the settings and caller identity supplied by the hub. The manifest declares the editor; it does not implement the module's authorization checks.
+
 ## Backup modules
 
 `"backup": true` marks a module that can store the hub's backup files. It must declare these four tools, each with

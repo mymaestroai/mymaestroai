@@ -79,7 +79,7 @@ function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approv
     if (!computer || typeof computer.id !== 'string' || !computer.id) throw new Error('a computer is needed');
     const have = levelOf(who);
     if (RANK[have] < RANK[need]) {
-      throw new GateError(`${who} may only ${have === 'look' ? 'look (see pictures and facts)' : 'look and run commands'} on remote computers, and this needs ${need}. The owner can raise it in Data connectors -> Remote computers -> Settings.`, 'ELEVEL');
+      throw new GateError(`${who} may only ${have === 'look' ? 'look (see pictures and facts)' : 'look and run commands'} on remote computers, and this needs ${need}. The owner can raise it in Data connectors -> Remote computers -> Status and limits.`, 'ELEVEL');
     }
     const want = scopeOf(need, as);
     const key = `${who}|${computer.id}`;

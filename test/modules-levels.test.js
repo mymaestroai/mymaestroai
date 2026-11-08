@@ -332,6 +332,36 @@ test('dedicated save: grants and levels are saved together; a revoked agent lose
   assert.deepStrictEqual(r.state().settings.levels.slice().sort(), ['ann:drive', 'owner:look', 'stranger:drive']);
 });
 
+test('dedicated save: asking turned off is announced once as soon as it is saved, even if publishing the grants then fails', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish(['sam']);
+  const stoppedBefore = r.stopped.length;
+  const realSet = r.conns.set;
+  r.conns.set = () => { throw new Error('grant store down'); };
+  try {
+    assert.throws(() => raw(r, { agents: ['sam', 'ann'], permissions: { owner: perm('look'), sam: perm('act'), ann: perm('act', false) }, acknowledged: true }), /grant store down/);
+  } finally { r.conns.set = realSet; }
+  assert.deepStrictEqual(r.state().settings.no_ask_agents, ['ann'], 'the policy that was saved stays');
+  assert.deepStrictEqual(r.conns.get('levdemo').agents, ['sam'], 'the new grant was not published');
+  assert.strictEqual(r.pushes.length, 1); assert.match(r.pushes[0].body, /ann/); assert.match(r.pushes[0].body, /without asking/);
+  assert.strictEqual(r.stopped.length, stoppedBefore + 1, 'restarted once');
+  const states = r.audit().map(l => l.state);
+  assert.deepStrictEqual(states, ['requested', 'failed']);
+  assert.match(r.audit().pop().error, /grant store down/);
+});
+
+test('dedicated save: when the settings cannot be saved nothing is announced', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish(['sam']);
+  const real = fs.renameSync;
+  fs.renameSync = () => { fs.renameSync = real; throw new Error('disk full'); };
+  try { assert.throws(() => raw(r, { agents: ['sam', 'ann'], permissions: { owner: perm('look'), sam: perm('act'), ann: perm('act', false) }, acknowledged: true }), /disk full/); } finally { fs.renameSync = real; }
+  assert.strictEqual(r.pushes.length, 0);
+  assert.deepStrictEqual(r.audit().map(l => l.state), ['requested', 'failed']);
+  assert.deepStrictEqual(r.state().settings.no_ask_agents || [], []);
+  assert.deepStrictEqual(r.conns.get('levdemo').agents, ['sam']);
+});
+
 test('UI contract: the editor body (agents = chosen unlocked grants, permissions = those plus the locked lead) saves, grants and revokes coherently', async (t) => {
   const r = rig(); t.after(r.cleanup);
   await r.finish([]);
@@ -474,7 +504,7 @@ test('the grant step accepts no embedded permissions, and granting (the connecto
 // Plant a saved setting the way an older grant, a deleted-and-recreated agent or a restore could leave it.
 const plant = (r, key, list) => { const f = path.join(r.dir, 'modules.json'); const j = JSON.parse(fs.readFileSync(f, 'utf8')); j.modules.levdemo.settings = { ...(j.modules.levdemo.settings || {}), [key]: list }; fs.writeFileSync(f, JSON.stringify(j)); };
 
-test('generic grant (connector_access path): a stale no-ask entry never reaches a newly granted agent, so it is asked', async (t) => {
+test('generic grant (connector_access path): a stale level and no-ask entry never reach a newly granted agent, so it is asked at the default level', async (t) => {
   const r = rig(); t.after(r.cleanup);
   await r.finish(['sam']);
   plant(r, 'levels', ['owner:look', 'ann:act']); plant(r, 'no_ask_agents', ['ann', 'sam']);
@@ -486,9 +516,9 @@ test('generic grant (connector_access path): a stale no-ask entry never reaches 
   r.mods.setAgents('levdemo', ['sam', 'ann'], { by: 'owner' });
   const s = r.state().settings;
   assert.deepStrictEqual(s.no_ask_agents, ['sam'], 'the already-granted agent keeps its entry; the new one has none');
-  assert.deepStrictEqual(s.levels, ['owner:look', 'ann:act'], 'levels are left as they were for a plain grant');
+  assert.deepStrictEqual(s.levels, ['owner:look'], 'the new grant loses its stale level too');
   const ann = r.mods.detail('levdemo').permissions.agents.find(a => a.name === 'ann');
-  assert.strictEqual(ann.askEachSession, true); assert.strictEqual(ann.runsWithoutAsking, false);
+  assert.strictEqual(ann.level, 'look'); assert.strictEqual(ann.askEachSession, true); assert.strictEqual(ann.runsWithoutAsking, false);
   assert.ok(!r.mods.detail('levdemo').permissions.runsWithoutAsking.includes('ann'));
 });
 
