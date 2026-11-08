@@ -648,7 +648,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       return JSON.stringify([String(settings.address_name || '').trim().toLowerCase(), Number(settings.agent_port === undefined ? 9972 : settings.agent_port), groupId() || '', cert]);
     },
     address: () => {
-      if (!settings.address_name) throw new ToolError('Save this computer\'s tailnet name in the settings first.');
+      if (!settings.address_name) throw new ToolError('Save the tailnet name of My Maestro\'s computer in the settings first.');
       return settings.address_name;
     },
     fetchInstaller: deps.installerFetcher || (async ({ signal } = {}) => {
@@ -660,7 +660,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   });
   // The helper is fetched and cached before any link is made, so the page behind the link serves a file that is already there.
   const toolInstallerLink = async () => {
-    if (!settings.address_name) throw new ToolError('Save this computer\'s tailnet name in the settings first.');
+    if (!settings.address_name) throw new ToolError('Save the tailnet name of My Maestro\'s computer in the settings first.');
     if (typeof installer.prepare === 'function') {
       try { await installer.prepare(); } catch (e) { throw new ToolError(e && e.plain ? e.message : 'The installer could not be prepared: the server did not give it'); }
     }

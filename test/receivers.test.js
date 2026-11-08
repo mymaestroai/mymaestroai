@@ -513,3 +513,71 @@ test("one sender holds at most 4 of a module's in-flight places", async () => {
   waiters.forEach((w) => w()); await Promise.all([...pending, p2]);
   assert.strictEqual(res2.status, 200);
 });
+
+// ── setupPaths: a module that is installed but not yet enabled answers on the paths it lists for setup ──
+const setupEnv = (over = {}) => makeEnv({
+  manifest: { name: 'Demo', receiver: { paths: ['events', 'link'], setupPaths: ['link'], maxBody: 1024 } },
+  connector: { id: 'demo', module: 'demo', enabled: false },
+  ...over,
+});
+const LINK = { id: 'demo', sub: 'link' };
+
+test('setupPaths: a not-enabled module answers on a setup path only, with setup: true', async () => {
+  const env = setupEnv();
+  let { res } = await run(env, { method: 'GET', url: '/hooks/demo/link' }, LINK);
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(env.calls.length, 1);
+  assert.strictEqual(env.calls[0].opts.setup, true);
+  ({ res } = await run(env, { method: 'GET' }, { id: 'demo', sub: 'events' }));
+  assert.strictEqual(res.status, 404); assert.strictEqual(res.body, 'Not found');
+  assert.strictEqual(env.calls.length, 1, 'a path outside setupPaths never reaches the module');
+});
+
+test('setupPaths: no connector, or a connector that is not this module, answers 404', async () => {
+  let env = setupEnv({ connector: null });
+  let { res } = await run(env, { method: 'GET' }, LINK);
+  assert.strictEqual(res.status, 404); assert.strictEqual(res.body, 'Not found');
+  assert.strictEqual(env.calls.length, 0);
+  env = setupEnv({ connector: { id: 'demo', enabled: false } });
+  ({ res } = await run(env, { method: 'GET' }, LINK));
+  assert.strictEqual(res.status, 404); assert.strictEqual(res.body, 'Not found');
+  env = setupEnv({ connector: { id: 'demo', module: 'other', enabled: false } });
+  ({ res } = await run(env, { method: 'GET' }, LINK));
+  assert.strictEqual(res.status, 404);
+  assert.strictEqual(env.calls.length, 0);
+});
+
+test('setupPaths: an enabled module behaves as before and is not asked in setup mode', async () => {
+  const env = setupEnv({ connector: { id: 'demo', module: 'demo', enabled: true } });
+  let { res } = await run(env, { method: 'GET' }, LINK);
+  assert.strictEqual(res.status, 200);
+  ({ res } = await run(env, { method: 'GET' }, { id: 'demo', sub: 'events' }));
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(env.calls.length, 2);
+  for (const c of env.calls) assert.notStrictEqual(c.opts.setup, true);
+});
+
+test('setupPaths: method, origin, rate limit and body cap still apply', async () => {
+  let env = setupEnv();
+  let { res } = await run(env, { method: 'DELETE' }, LINK);
+  assert.strictEqual(res.status, 405);
+  ({ res } = await run(env, { method: 'GET', headers: { origin: 'https://evil.example' } }, LINK));
+  assert.strictEqual(res.status, 403);
+  ({ res } = await run(env, { method: 'POST', body: 'x'.repeat(2000) }, LINK));
+  assert.strictEqual(res.status, 413);
+  assert.strictEqual(env.calls.length, 0);
+  env = setupEnv();
+  for (let i = 0; i < 120; i++) assert.strictEqual((await run(env, { method: 'GET' }, LINK)).res.status, 200);
+  ({ res } = await run(env, { method: 'GET' }, LINK));
+  assert.strictEqual(res.status, 429);
+});
+
+test('setupPaths: a module that is not running answers 404, a backing-off one 503', async () => {
+  const env = setupEnv();
+  env.fail = Object.assign(new Error('not available'), { code: 'ENOTAVAILABLE' });
+  let { res } = await run(env, { method: 'GET' }, LINK);
+  assert.strictEqual(res.status, 404); assert.strictEqual(res.body, 'Not found');
+  env.fail = Object.assign(new Error('restarting'), { code: 'EBACKOFF' });
+  ({ res } = await run(env, { method: 'GET' }, LINK));
+  assert.strictEqual(res.status, 503);
+});

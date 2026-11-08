@@ -45,27 +45,29 @@ Every agent starts at Look. You raise an agent's level in the settings.
 
 - **What this does:** explains the levels and asks you to confirm that agents you allow can fully control the
   computers you add.
-- **Install:** puts the server in place (about 110 MB, downloaded once).
-- **Your settings:** this computer's tailnet name, its tailnet address and the two ports.
-- **Start the server:** starts the server and checks that it is running and ready.
+- **Install:** puts the server in place. It downloads about 210 MB in all (more space on disk once unpacked): about 85 MB of server programs now and about 125 MB of helper programs for the PCs, downloaded the first time the server starts. It is downloaded once.
+- **Your settings:** the tailnet name and tailnet address of My Maestro's computer (the computer My Maestro runs on, not the PC you want to control), and the two ports.
+- **Start the server:** starts the server and checks that it is running and ready. You do not need to be at My Maestro's computer: if the server needs an administrator command, press Ask Maestro and Maestro runs it for you (it needs administrator rights on My Maestro's computer).
 - **Prepare the PC:** done by you on the PC: Windows 11 with a local account, signing in automatically, never
-  locking or sleeping, Tailscale installed and signed in to the same tailnet, nothing personal on it.
+  locking or sleeping, Tailscale installed and signed in to the same tailnet as My Maestro's computer, nothing personal on it. Do not sign in to My Maestro on that PC: an agent using the PC could use that sign-in.
 - **Get the installer:** makes a link that works once, for 15 minutes. Open it in a browser on the PC. It downloads
-  `MyMaestro-RemoteAgent.exe`. Run it and choose Install.
+  `MyMaestro-RemoteAgent.exe`. Run it and choose Install. Open the link on the PC right away. If you change settings or
+  restart My Maestro first, make a new link.
 - **Check the PC is connected:** passes when at least one PC is online.
 - **What agents may do:** the level for each agent and the session length.
 - **Who can use it at all:** which agents may use remote computers. The lead agent is always allowed.
 
 ## What each setting does
 
-- **This computer's tailnet name:** the name the PCs connect to, for example `hub.example.ts.net`. Find it in the
-  Tailscale app on this computer, or run `tailscale status`.
-- **This computer's tailnet address:** the `100.x.y.z` address, for example `100.64.0.10`. The server listens only
-  on it.
-- **Control port** (default 9971): used only on this computer by the connector.
+- **My Maestro's computer: tailnet name:** the tailnet name of the computer My Maestro runs on. It is NOT the PC you want to control.
+  The PCs connect to this name, for example `hub.example.ts.net`. Find it in the
+  Tailscale app on My Maestro's computer, or run `tailscale status` there.
+- **My Maestro's computer: tailnet address:** the `100.x.y.z` address of the computer My Maestro runs on, for example
+  `100.64.0.10`. It is NOT the PC you want to control. The server listens only on it.
+- **Control port** (default 9971): used only on My Maestro's computer by the connector.
 - **Computer port** (default 9972): the port on the tailnet address that the PCs connect to.
 - **Run as** (default auto): `service` runs MeshCentral as its own system service (see "Its own service (Linux)").
-  `hub` runs it under My Maestro's own account. `auto` uses `service` when this computer has systemd.
+  `hub` runs it under My Maestro's own account. `auto` uses `service` when My Maestro's computer has systemd.
 - **What each agent may do:** one entry per agent, like `maestro:look`, `maestro:act` or `maestro:drive`.
 - **Approved session length:** how long one yes for Act or Drive lasts (5 to 120 minutes).
 
@@ -107,9 +109,9 @@ Every agent starts at Look. You raise an agent's level in the settings.
 ## Its own service (Linux)
 
 On Linux with systemd, MeshCentral runs as its own system service instead of inside My Maestro. You install it once.
-The setup shows a command that starts with `sudo bash` and runs `install.sh`; run it in a terminal on this
-computer (it asks for an administrator password). If Maestro has administrator rights on this computer, press Ask
-Maestro and it runs the command for you. The command runs a script from My Maestro's own folder with administrator
+The setup shows a command that starts with `sudo bash` and runs `install.sh`. Press Ask Maestro and Maestro runs it for
+you (it needs administrator rights on My Maestro's computer); you do not need to be at that computer. Or run it yourself in a terminal on My Maestro's computer (it asks
+for an administrator password). The command runs a script from My Maestro's own folder with administrator
 rights, so it trusts My Maestro's files as they are at that moment, as installing My Maestro did.
 
 What the command does:

@@ -118,10 +118,10 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   function configFor(s = settings, opts = {}) {
     const forService = opts && opts.service !== undefined ? !!opts.service : service;
     const name = String((s && s.address_name) || '').trim().toLowerCase();
-    if (!name) throw new Error('Waiting for setup: the tailnet name of this computer is not set.');
+    if (!name) throw new Error('Waiting for setup: the tailnet name of My Maestro\'s computer is not set.');
     if (!DNS_RE.test(name)) throw new Error('The tailnet name is not valid. Use a name such as hub.example.ts.net.');
     const ip = String((s && s.listen_ip) || '').trim();
-    if (!ip) throw new Error('Waiting for setup: the tailnet address of this computer is not set.');
+    if (!ip) throw new Error('Waiting for setup: the tailnet address of My Maestro\'s computer is not set.');
     if (!IPV4_RE.test(ip) || ip === '0.0.0.0') throw new Error('The tailnet address is not valid. Use the 100.x.y.z address Tailscale shows.');
     const port = Number(s.control_port === undefined ? 9971 : s.control_port), agentPort = Number(s.agent_port === undefined ? 9972 : s.agent_port);
     for (const [label, p] of [['control', port], ['computer', agentPort]]) {
@@ -476,9 +476,9 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   }
 
   // -- service mode: the system service is not ours to start or stop; the module only looks whether it answers --
-  const NOT_INSTALLED_MESSAGE = (command) => `MeshCentral needs to be installed as its own service once. Run this in a terminal on this computer (it asks for an administrator password), or press Ask Maestro: ${command}`;
-  const NOT_RUNNING_MESSAGE = (command) => `MeshCentral is installed as the system service ${serviceName} but it does not answer. Restart it in a terminal on this computer (it asks for an administrator password), or press Ask Maestro: ${command}`;
-  const NEEDS_UPDATE_MESSAGE = (command) => `The settings changed after MeshCentral was installed as the system service ${serviceName}. Run the install again in a terminal on this computer (it asks for an administrator password), or press Ask Maestro: ${command}`;
+  const NOT_INSTALLED_MESSAGE = (command) => `MeshCentral needs to be installed as its own service once. Press Ask Maestro and Maestro runs this for you (it needs administrator rights on My Maestro's computer). Or run it yourself in a terminal on My Maestro's computer (it asks for an administrator password): ${command}`;
+  const NOT_RUNNING_MESSAGE = (command) => `MeshCentral is installed as the system service ${serviceName} but it does not answer. Press Ask Maestro and Maestro restarts it for you (it needs administrator rights on My Maestro's computer). Or restart it yourself in a terminal on My Maestro's computer (it asks for an administrator password): ${command}`;
+  const NEEDS_UPDATE_MESSAGE = (command) => `The settings changed after MeshCentral was installed as the system service ${serviceName}. Press Ask Maestro and Maestro runs the install again for you (it needs administrator rights on My Maestro's computer). Or run it yourself in a terminal on My Maestro's computer (it asks for an administrator password): ${command}`;
 
   // Looks at the service now: installed.json and the root certificate must exist and the control port must answer. Never throws for a missing service.
   async function checkService() {

@@ -443,3 +443,46 @@ test('settings saved during a start begun by request(): it is cancelled and the 
   assert.equal(s.max, 1, 'never two processes at once');
   r.cx.shutdown();
 });
+
+test('request(): setup: true reaches a not-enabled module whose server the setup already started', async (t) => {
+  const r = rig(); t.after(() => r.cx.shutdown());
+  up(r.cx, r.mod({ enabled: false }));
+  await r.cx.test('bg');   // what a setup step does
+  assert.equal(r.all.length, 1);
+  const res = await r.cx.request('bg', 'hub/receive', {}, { setup: true });
+  assert.deepEqual(res, { echoed: 'hub/receive' });
+  assert.equal(r.all.length, 1, 'the running server was reused');
+});
+
+test('request(): setup: true never starts a not-enabled module, and only passes hub/receive', async (t) => {
+  const r = rig(); t.after(() => r.cx.shutdown());
+  up(r.cx, r.mod({ enabled: false }));
+  await assert.rejects(() => r.cx.request('bg', 'hub/receive', {}, { setup: true }), { code: 'ENOTAVAILABLE' });
+  assert.equal(r.all.length, 0, 'a public request started nothing');
+  await r.cx.test('bg');
+  await assert.rejects(() => r.cx.request('bg', 'tools/call', {}, { setup: true }), { code: 'ENOTAVAILABLE' });
+  assert.equal(r.all[0].sent.length, 0, 'no other method was sent');
+  r.cx.stop('bg');   // switched off: the running server goes
+  await flush(r);
+  await assert.rejects(() => r.cx.request('bg', 'hub/receive', {}, { setup: true }), { code: 'ENOTAVAILABLE' });
+  assert.equal(r.all.length, 1, 'nothing started it again');
+});
+
+test('request(): without setup a not-enabled module connector is still refused and nothing starts', async () => {
+  const r = rig();
+  up(r.cx, r.mod({ enabled: false }));
+  await assert.rejects(() => r.cx.request('bg', 'm', {}), { code: 'ENOTAVAILABLE' });
+  await assert.rejects(() => r.cx.request('bg', 'm', {}, { setup: false }), { code: 'ENOTAVAILABLE' });
+  assert.equal(r.all.length, 0);
+});
+
+test('request(): setup: true does not open a locked connector or a non-module connector', async () => {
+  const r = rig();
+  up(r.cx, r.mod({ enabled: false }));
+  r.cx.upsert({ id: 'bg', protect: 'own' }, { byModule: true, newPassphrase: 'correct horse battery' });
+  r.cx.lock('bg');
+  await assert.rejects(() => r.cx.request('bg', 'm', {}, { setup: true }), { code: 'ENOTAVAILABLE' });
+  r.cx.upsert({ id: 'plain', kind: 'mcp', command: process.execPath, args: ['x'], enabled: false });
+  await assert.rejects(() => r.cx.request('plain', 'm', {}, { setup: true }), { code: 'ENOTAVAILABLE' });
+  assert.equal(r.all.length, 0);
+});
