@@ -9,7 +9,7 @@ const vm = require('vm');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'modules.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
-const WARNING = 'An agent can be misled by a web page or an email. With asking off, it could then use this computer without you knowing in time.';
+const WARNING = 'An agent can be misled by a web page or an email. With asking off, it could then use your remote computers without you knowing in time.';
 
 // A fake document: elements are created on demand by id; `controls` is what querySelectorAll sees.
 function load() {

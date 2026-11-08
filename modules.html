@@ -337,7 +337,7 @@ function permControlsHtml(m, name, disabled) {
 }
 function permRow(m, labelHtml, name, disabled) { return `<div class="perm-row">${labelHtml}${permControlsHtml(m, name, disabled)}</div>`; }
 
-const PERM_WARNING = 'An agent can be misled by a web page or an email. With asking off, it could then use this computer without you knowing in time.';
+const PERM_WARNING = 'An agent can be misled by a web page or an email. With asking off, it could then use your remote computers without you knowing in time.';
 // {name: {level, askEachSession}} for the rows that are on screen and allowed (an unticked agent's choice is not sent).
 function readPermissions() {
   const lv = levelsConfig(current);
