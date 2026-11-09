@@ -67,6 +67,11 @@ test('extra usage paying: warning (not refused) on the chip, the badge, the Sett
   assert.ok(mjs.includes("el.className = 'sub' + (cls ? ' ' + cls : '');") && mjs.includes('the weekly Claude plan is used up until') && mjs.includes('extra usage is paying`'), 'phone class and title');
 });
 
+test('the five-hour row and the phone title follow the extra-usage state too', () => {
+  assert.ok(app.includes("rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });"), 'Settings five-hour row carries extraUsage');
+  assert.ok(mjs.includes("Number.isFinite(Date.parse(w.resetsAt || '')) ?") && mjs.includes(": 'the reset'}; extra usage is paying`"), 'phone title says "the reset" when the time is missing');
+});
+
 test('both chat renderers show a whole line in underscores (the hub\'s notices) in italics', () => {
   const rule = ".replace(/(^|\\n)_(?=[^\\s_])([^\\n]*?[^\\s_])_(?=\\n|$)/g, '$1<em>$2</em>');";
   assert.ok(app.includes(rule), 'desktop formatContent');

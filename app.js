@@ -4173,9 +4173,9 @@
       const first = levels.length ? levels[0] : 101; const last = levels.length ? levels[levels.length - 1] : 101;
       const rows = [];
       const five = d.windows && d.windows.five_hour;
-      if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at });
+      if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });
       for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
-      const extraRow = rows.find(w => w.extraUsage);
+      const extraRow = rows.find(w => w.extraUsage && w.weekly);   // the hint speaks of the weekly plan
       usageEl.innerHTML = rows.length ? rows.map(w => {
         const pct = Math.round(Number(w.utilization) || 0);
         const color = w.extraUsage ? '#c9a227' : w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';

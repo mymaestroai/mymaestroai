@@ -1200,7 +1200,7 @@ function paintPlan() {
   el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)}`;
   el.className = 'sub' + (cls ? ' ' + cls : '');
   el.title = extra
-    ? `${w.family ? w.label : 'All models'}: the weekly Claude plan is used up until ${new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}; extra usage is paying`
+    ? `${w.family ? w.label : 'All models'}: the weekly Claude plan is used up until ${Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'}; extra usage is paying`
     : `${w.family ? w.label : 'All models'}: ${pct}% of this week's Claude plan allowance`;
   el.hidden = false;
 }
