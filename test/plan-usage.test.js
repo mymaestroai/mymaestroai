@@ -440,3 +440,15 @@ test('a refusal with no known reset time is not kept by a poll that has none eit
   await pu.refresh();
   assert.strictEqual(pu.snapshot().windows.seven_day.rejected, false);
 });
+
+test('a refused 5-hour window lifts too when extra usage carries requests again, and a poll keeps it lifted', async () => {
+  const reset5 = '2026-10-12T15:00:00Z';
+  const usage = { subscription_type: 'max', rate_limits_available: true, rate_limits: { five_hour: { utilization: 100, resets_at: reset5 }, extra_usage: { is_enabled: true, utilization: 10 } } };
+  const { pu } = rig({ usage });
+  pu.noteEvent({ status: 'rejected', rateLimitType: 'five_hour', resetsAt: Date.parse(reset5) / 1000, overageStatus: 'rejected', overageDisabledReason: 'out_of_credits' }, 'claude-sdk/claude-opus-5-5', 'lead');
+  assert.strictEqual(pu.snapshot().windows.five_hour.rejected, true);
+  pu.noteEvent({ status: 'allowed', rateLimitType: 'overage', overageStatus: 'allowed', isUsingOverage: true }, 'claude-sdk/claude-opus-5-5', 'lead');
+  assert.strictEqual(pu.snapshot().windows.five_hour.rejected, false); assert.strictEqual(pu.snapshot().windows.five_hour.extraUsage, true);
+  await pu.refresh();
+  assert.strictEqual(pu.snapshot().windows.five_hour.rejected, false); assert.strictEqual(pu.snapshot().windows.five_hour.extraUsage, true);
+});
