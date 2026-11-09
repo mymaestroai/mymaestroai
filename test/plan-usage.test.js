@@ -399,3 +399,44 @@ test('refusal text: a date only for a limit that resets', () => {
   assert.doesNotMatch(pushed[0].body, /extra-usage period|comes back/);
   assert.ok(pushed[0].body.includes('Extra usage is turned off for this account. Agents on Opus'));
 });
+
+test('a refusal is lifted when extra usage is carrying requests again, and a later poll keeps it lifted', async () => {
+  const usage = { subscription_type: 'max', rate_limits_available: true, rate_limits: { seven_day: { utilization: 100, resets_at: later }, extra_usage: { is_enabled: true, utilization: 10 } } };
+  const { pu } = rig({ usage });
+  pu.noteEvent({ status: 'rejected', rateLimitType: 'seven_day', resetsAt: Date.parse(later) / 1000, overageStatus: 'rejected', overageDisabledReason: 'out_of_credits' }, 'claude-sdk/claude-opus-5-5', 'lead');
+  assert.strictEqual(pu.snapshot().windows.seven_day.rejected, true);
+  assert.strictEqual(pu.snapshot().models.opus.rejected, true);
+  // credit added: a request succeeds on extra usage (an overage-type event, not the weekly window's own type)
+  pu.noteEvent({ status: 'allowed', rateLimitType: 'overage', overageStatus: 'allowed', isUsingOverage: true }, 'claude-sdk/claude-opus-5-5', 'lead');
+  let s = pu.snapshot();
+  assert.strictEqual(s.windows.seven_day.rejected, false); assert.strictEqual(s.windows.seven_day.extraUsage, true);
+  assert.strictEqual(s.models.opus.rejected, false); assert.strictEqual(s.models.opus.extraUsage, true);
+  await pu.refresh();
+  s = pu.snapshot();
+  assert.strictEqual(s.windows.seven_day.rejected, false, 'the poll does not bring the old refusal back');
+  assert.strictEqual(s.windows.seven_day.extraUsage, true);
+});
+
+test('a dateless once-marker keeps one key all week: no repeat an hour later, nor after a restart', () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'plan-extra-')), 'warned.json');
+  let t = T0 + 29 * 60000;   // xx:29
+  const mk = () => { const pushed = []; const pu = createPlanUsage({ getSetting: () => undefined, now: () => t, publish: () => {}, log: () => {}, stateFile, listAgents: () => [], notify: (p) => pushed.push(p) }); return { pu, pushed }; };
+  const a = mk();
+  const ev = { status: 'allowed_warning', rateLimitType: 'seven_day', overageStatus: 'allowed_warning', isUsingOverage: true };
+  a.pu.noteEvent(ev, OPUS, 'lead');
+  t += 2 * 60000;            // xx:31, across the hour rounding
+  a.pu.noteEvent(ev, OPUS, 'lead');
+  t += 3 * 3600000;
+  const b = mk();
+  b.pu.noteEvent(ev, OPUS, 'lead');
+  assert.strictEqual(a.pushed.length + b.pushed.length, 1);
+});
+
+test('a refusal with no known reset time is not kept by a poll that has none either', async () => {
+  const usage = { subscription_type: 'max', rate_limits_available: true, rate_limits: { seven_day: { utilization: 100 }, extra_usage: { is_enabled: false } } };
+  const { pu } = rig({ usage });
+  pu.noteEvent({ status: 'rejected', rateLimitType: 'seven_day' }, 'claude-sdk/claude-opus-5-5', 'lead');
+  assert.strictEqual(pu.snapshot().windows.seven_day.rejected, true);
+  await pu.refresh();
+  assert.strictEqual(pu.snapshot().windows.seven_day.rejected, false);
+});
