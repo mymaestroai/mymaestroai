@@ -4092,12 +4092,31 @@
       const top = planTopWarning(planLast);
       el.classList.toggle('on', !!top);
       if (!top) { el.textContent = ''; return; }
+      if (top.extraUsage && !top.rejected) {
+        el.textContent = `⚠ ${top.family ? top.label : 'Claude plan'} ${planPctText(top)}`;
+        el.classList.remove('hot');
+        el.title = `${top.family ? top.label : 'Your Claude plan'} is used up for this week until ${planWhen(top.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose your agents' models.`;
+        return;
+      }
       el.textContent = `⚠ ${top.family ? top.label : 'Claude plan'} ${Math.round(top.utilization)}%`;
       el.classList.toggle('hot', top.rejected || Number(top.utilization) >= 100);
       el.title = `${top.family ? top.label : 'Your Claude plan'} has used ${Math.round(top.utilization)}% of this week's allowance (resets ${planWhen(top.resetsAt)}). Click to choose your agents' models.`;
     }
     // Plan usage in each chat header, next to the model, for agents on the Claude subscription (the only ones whose
     // usage the hub can read): the weekly window that governs the agent's model, coloured once it passes a level.
+    // ── plan state helpers (begin) ──
+    function planState(w, levels) {
+      const pct = Math.round(Number(w.utilization) || 0);
+      const extra = !!w.extraUsage && !w.rejected;
+      const passed = (levels || []).filter(l => pct >= l);
+      const cls = w.rejected || (pct >= 100 && !extra) ? 'refused' : extra ? 'warn' : passed.length && passed.length === (levels || []).length ? 'hot' : passed.length ? 'warn' : '';
+      return { pct, extra, cls };
+    }
+    function planPctText(w, levels) {
+      const s = planState(w, levels);
+      return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
+    }
+    // ── plan state helpers (end) ──
     function planFamilyOf(model) {
       const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
       if (!id) return null;
@@ -4121,12 +4140,12 @@
         if (!el) continue;
         const w = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
         if (!w) { el.hidden = true; el.textContent = ''; continue; }
-        const pct = Math.round(Number(w.utilization));
-        const passed = levels.filter(l => pct >= l);
-        el.textContent = `${w.family ? w.label : 'Plan'} ${pct}% this week`;
-        el.className = 'plan-badge' + (w.rejected || pct >= 100 ? ' refused' : passed.length && passed.length === levels.length ? ' hot' : passed.length ? ' warn' : '');
+        const { pct, extra, cls } = planState(w, levels);
+        el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)} this week`;
+        el.className = 'plan-badge' + (cls ? ' ' + cls : '');
         const all = (planLast.weekly || []).find(x => x.family == null);
         const five = planLast.windows && planLast.windows.five_hour;
+        if (extra) { el.title = `${w.family ? w.label : 'Your Claude plan'} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose models (Settings → Claude plan).`; el.hidden = false; continue; }
         el.title = `${w.family ? `${w.label} has` : 'Your Claude plan has'} used ${pct}% of this week's allowance (resets ${planWhen(w.resetsAt)})` +
           (all && w.family ? `; all models ${Math.round(Number(all.utilization))}%` : '') + (five && five.utilization != null ? `; 5-hour window ${Math.round(Number(five.utilization))}%` : '') + '. Click to choose models (Settings → Claude plan).';
         el.hidden = false;
@@ -4155,12 +4174,15 @@
       const rows = [];
       const five = d.windows && d.windows.five_hour;
       if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at });
-      for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, weekly: true });
+      for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
+      const extraRow = rows.find(w => w.extraUsage);
       usageEl.innerHTML = rows.length ? rows.map(w => {
         const pct = Math.round(Number(w.utilization) || 0);
-        const color = w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';
-        return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0"><span style="flex-basis:150px;flex-shrink:0">${esc(w.label)}</span><span style="width:140px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex-shrink:0"><span style="display:block;height:100%;width:${Math.min(pct, 100)}%;background:${color}"></span></span><b style="color:${color};min-width:44px">${pct}%</b><span style="color:var(--text-dim)">${w.rejected ? 'refused until ' : 'resets '}${esc(planWhen(w.resetsAt))}</span></div>`;
+        const color = w.extraUsage ? '#c9a227' : w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';
+        return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0"><span style="flex-basis:150px;flex-shrink:0">${esc(w.label)}</span><span style="width:140px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex-shrink:0"><span style="display:block;height:100%;width:${Math.min(pct, 100)}%;background:${color}"></span></span><b style="color:${color};min-width:44px">${esc(planPctText(w))}</b><span style="color:var(--text-dim)">${w.rejected ? 'refused until ' : 'resets '}${esc(planWhen(w.resetsAt))}</span></div>`;
       }).join('') : (d.error ? `No reading yet: ${esc(String(d.error).slice(25, 200))}` : 'No reading yet (the first one comes a few seconds after the hub starts).');
+      if (extraRow) usageEl.innerHTML += `<div class="st-hint" style="margin-left:0">${esc(`The weekly plan is used up until ${planWhen(extraRow.resetsAt)}; extra usage is paying for Claude replies until then.`)}</div>`;
+      if (d.overage && d.overage.status === 'allowed_warning') usageEl.innerHTML += `<div class="st-hint" style="margin-left:0">${esc(`Extra usage is close to its monthly limit${d.overage.resetsAt ? ` (resets ${new Date(d.overage.resetsAt).toLocaleDateString([], { month: 'short', day: 'numeric' })})` : ''}. Raise it at claude.ai → Settings → Usage; when it is reached, every Claude agent stops.`)}</div>`;
       const warnIn = document.getElementById('st-plan-warn');
       if (warnIn && document.activeElement !== warnIn) warnIn.value = levels.join(', ');
       const auto = !!(d.policy && d.policy.enabled);
@@ -7349,6 +7371,7 @@
       // Plan warnings and refusals (lib/plan-usage) are shown near the top, never as a pop-up over the input: the usage
       // badge next to each Claude agent's model, the sidebar chip, and the Settings box.
       source.addEventListener('plan_limit', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      source.addEventListener('plan_extra_usage', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       // Data connectors: a connector or group changed (saved, locked, unlocked, expired); repaint the Settings box.
       source.addEventListener('connectors_changed', e => { const ev = parse(e); if (ev) onConnectorsChanged(ev); });

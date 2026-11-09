@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Extra usage is no longer reported as the Claude plan refusing.** When the weekly Claude allowance is used up and extra usage is paying for your replies, your Maestro now says so once per agent ("the weekly Claude plan is used up until … ; extra usage is paying"), shows "100% · extra usage" in the warning colour instead of the refused one, and sends no "Claude plan stopped" notice. You get one notice when extra usage nears its monthly limit, and a real refusal now says why (extra usage not turned on, its credit used up, its monthly limit reached) and when it comes back.
+
 - **The Remote computers setup can now be finished in order, and says which computer it means.** The installer link used to answer "not found" until the connector was switched on, which the setup only allows at the end; it now works during setup, still once and for 15 minutes. The setup and guide now say the tailnet name and address are those of your Maestro's computer, not the PC you want to control, that Ask Maestro can run the administrator command (if it has administrator rights there) so you needn't be at that computer, and not to sign in to your Maestro on the PC; the download size is one true number, about 210 MB.
 
 - **Agents ask again after a backup restore.** Your Maestro clears every agent’s no-ask setting when restoring or undoing a backup, while keeping the restored access levels. Untick “Ask me before each session” again to allow an agent to work without asking.

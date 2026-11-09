@@ -170,3 +170,127 @@ test('cleanWarn / cleanPolicy: what the Settings box may store', () => {
     { at: 95, enabled: true, map: { sonnet: 'claude-sdk/claude-haiku-5-5', fable: 'claude-sdk/claude-opus-5-5' } });
   assert.deepStrictEqual(cleanPolicy({ enabled: false }, { at: 80 }), { at: 80, enabled: false }, 'the stored threshold survives a toggle');
 });
+
+// ---- extra usage (pay-as-you-go) after the weekly allowance is used up ----
+const { classifyEvent, refusalReason, dateText, whenText } = require('../lib/plan-usage');
+const CAPTURED = { status: 'rejected', resetsAt: 1794441600, rateLimitType: 'seven_day', overageStatus: 'allowed', overageResetsAt: 1796083200, isUsingOverage: true, overageInUse: true, unifiedWindows: { seven_day: { utilization: 1, resetsAt: 1794441600 } } };
+const CAPTURED_RESET = new Date(1794441600 * 1000).toISOString();
+const CAPTURED_OVERAGE_RESET = new Date(1796083200 * 1000).toISOString();
+const OPUS = 'claude-sdk/claude-opus-5-5';
+
+test('classifyEvent: extra usage paying, refused, and normal events', () => {
+  assert.strictEqual(classifyEvent(CAPTURED), 'extra');
+  assert.strictEqual(classifyEvent({ status: 'rejected', overageStatus: 'rejected', overageDisabledReason: 'out_of_credits', rateLimitType: 'seven_day' }), 'refused');
+  assert.strictEqual(classifyEvent({ status: 'allowed', overageStatus: 'allowed_warning', isUsingOverage: true }), 'extra');
+  assert.strictEqual(classifyEvent({ status: 'allowed', isUsingOverage: true }), 'extra');
+  assert.strictEqual(classifyEvent({ status: 'rejected', rateLimitType: 'seven_day', resetsAt: 1794441600 }), 'refused');
+  assert.strictEqual(classifyEvent({ status: 'allowed_warning', utilization: 0.8 }), 'normal');
+  assert.strictEqual(classifyEvent({ status: 'rejected', rateLimitType: 'overage' }), 'refused');
+  assert.strictEqual(classifyEvent({ status: 'rejected', overageStatus: 'allowed', overageDisabledReason: 'org_level_disabled' }), 'refused');
+  assert.strictEqual(classifyEvent(null), 'normal'); assert.strictEqual(classifyEvent('x'), 'normal');
+});
+
+test('refusalReason: plain words for why extra usage did not take over', () => {
+  for (const d of ['overage_not_provisioned', 'no_limits_configured']) assert.strictEqual(refusalReason({ overageDisabledReason: d }), 'extra usage is not turned on');
+  for (const d of ['out_of_credits', 'seat_tier_zero_credit_limit', 'group_zero_credit_limit', 'member_zero_credit_limit']) assert.strictEqual(refusalReason({ overageDisabledReason: d }), 'the extra-usage credit is used up');
+  assert.strictEqual(refusalReason({ errorCode: 'credits_required' }), 'the extra-usage credit is used up');
+  for (const d of ['org_level_disabled', 'org_level_disabled_until', 'seat_tier_level_disabled', 'member_level_disabled', 'org_service_level_disabled']) assert.strictEqual(refusalReason({ overageDisabledReason: d }), 'extra usage is turned off for this account');
+  assert.strictEqual(refusalReason({ limitScope: 'group_pool' }), "the team's shared extra-usage budget is used up");
+  assert.strictEqual(refusalReason({ overageStatus: 'rejected' }), 'extra usage reached its monthly limit');
+  assert.strictEqual(refusalReason({ rateLimitType: 'overage' }), 'extra usage reached its monthly limit');
+  assert.strictEqual(refusalReason({ status: 'rejected', rateLimitType: 'seven_day' }), '');
+  assert.strictEqual(dateText(CAPTURED_OVERAGE_RESET, 'UTC'), 'Tue, Dec 1');
+  assert.strictEqual(dateText('nope'), 'its reset date');
+});
+
+test('noteEvent: a "rejected" event while extra usage pays is not a refusal', () => {
+  const { pu, published, pushed } = rig();
+  pu.noteEvent(CAPTURED, OPUS, 'lead'); pu.noteEvent(CAPTURED, OPUS, 'lead');
+  assert.strictEqual(published.filter(p => p.t === 'plan_limit').length, 0);
+  assert.strictEqual(pushed.length, 0);
+  const s = pu.snapshot();
+  assert.strictEqual(s.windows.seven_day.utilization, 100); assert.strictEqual(s.windows.seven_day.rejected, false); assert.strictEqual(s.windows.seven_day.extraUsage, true);
+  assert.strictEqual(s.models.opus.extraUsage, true); assert.strictEqual(s.models.opus.rejected, false);
+  assert.ok(s.weekly.length > 0 && s.weekly.every(w => w.extraUsage === true && w.rejected === false));
+  assert.strictEqual(s.weekly.find(w => w.family === 'opus').label, 'Opus', 'before any usage poll the family reads as "Opus", not its key');
+  assert.strictEqual(s.overage.inUse, true);
+  assert.match(pu.describe(), /extra usage/); assert.doesNotMatch(pu.describe(), /refused/);
+  assert.strictEqual(published.filter(p => p.t === 'plan_extra_usage').length, 1, 'once per plan window');
+  const ev = s.events[s.events.length - 1];
+  assert.deepStrictEqual([ev.overageStatus, ev.overageInUse, ev.overageResetsAt], ['allowed', true, CAPTURED_OVERAGE_RESET]);
+});
+
+test('extraUsageLineFor: once per agent and plan window, and it survives a restart', () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'plan-extra-')), 'warned.json');
+  const { pu } = rig({ stateFile });
+  assert.strictEqual(pu.extraUsageLineFor(OPUS, 'lead'), null, 'nothing before extra usage is seen');
+  pu.noteEvent(CAPTURED, OPUS, 'lead');
+  const line = pu.extraUsageLineFor(OPUS, 'lead');
+  assert.strictEqual(line, `_The weekly Claude plan is used up until ${whenText(CAPTURED_RESET)}; extra usage is paying for Claude replies until then._\n\n`);
+  assert.strictEqual(pu.extraUsageLineFor(OPUS, 'lead'), null);
+  assert.ok(pu.extraUsageLineFor(OPUS, 'helper'));
+  assert.strictEqual(pu.extraUsageLineFor('google/gemini-4-argon', 'x'), null);
+  const again = rig({ stateFile });
+  again.pu.noteEvent(CAPTURED, OPUS, 'lead');
+  assert.strictEqual(again.pu.extraUsageLineFor(OPUS, 'lead'), null, 'persisted');
+  assert.ok(again.pu.extraUsageLineFor(OPUS, 'third'));
+});
+
+test('extra usage close to its monthly limit: one push per period', () => {
+  const { pu, pushed } = rig();
+  const ev = { ...CAPTURED, overageStatus: 'allowed_warning' };
+  pu.noteEvent(ev, OPUS, 'lead'); pu.noteEvent(ev, OPUS, 'helper');
+  const warns = pushed.filter(p => p.title === 'Claude extra usage is close to its monthly limit');
+  assert.strictEqual(warns.length, 1);
+  assert.match(warns[0].body, new RegExp(`It resets ${dateText(CAPTURED_OVERAGE_RESET)}\\. Raise the limit at claude\\.ai`));
+  assert.strictEqual(warns[0].tag, 'plan-extra-warning');
+  assert.strictEqual(pushed.filter(p => /stopped/.test(p.title)).length, 0);
+});
+
+test('a refusal with extra usage out of credit says why', () => {
+  const { pu, published, pushed } = rig({ settings: {} });
+  pu.noteEvent({ ...CAPTURED, overageStatus: 'rejected', isUsingOverage: false, overageInUse: false, overageDisabledReason: 'out_of_credits' }, OPUS, 'lead');
+  assert.strictEqual(pu.snapshot().windows.seven_day.rejected, true);
+  assert.ok(published.some(p => p.t === 'plan_limit'));
+  assert.strictEqual(pushed.length, 1);
+  assert.strictEqual(pushed[0].body, `Until ${whenText(CAPTURED_RESET)}. The extra-usage credit is used up; extra usage comes back ${dateText(CAPTURED_OVERAGE_RESET)}. Agents on Opus need another model: choose them in Settings → Claude plan, or in each chat header.`);
+  assert.strictEqual(pu.snapshot().overage.inUse, false);
+  assert.strictEqual(pu.snapshot().overage.disabledReason, 'out_of_credits');
+});
+
+test('an old refusal without overage fields reads exactly as before', () => {
+  const { pu, published, pushed } = rig({ settings: {} });
+  pu.noteEvent({ status: 'rejected', rateLimitType: 'seven_day', resetsAt: 1794441600 }, OPUS, 'lead');
+  assert.strictEqual(pu.snapshot().windows.seven_day.rejected, true); assert.strictEqual(pu.snapshot().models.opus.rejected, true);
+  assert.ok(published.some(p => p.t === 'plan_limit'));
+  assert.strictEqual(pushed[0].title, 'Claude plan stopped Opus');
+  assert.strictEqual(pushed[0].body, `Until ${whenText(CAPTURED_RESET)}. Agents on Opus need another model: choose them in Settings → Claude plan, or in each chat header.`);
+  assert.strictEqual(pu.snapshot().overage, null);
+});
+
+test('refresh: extra-usage flag kept for a window at 100% in the same plan window, set when extra usage has room, dropped below 100', async () => {
+  const win = (u) => ({ seven_day: { utilization: u, resets_at: later } });
+  const a = rig({ usage: { rate_limits_available: true, rate_limits: { seven_day: { utilization: 100, resets_at: CAPTURED_RESET } } } });
+  a.pu.noteEvent(CAPTURED, OPUS, 'lead');
+  await a.pu.refresh();
+  assert.strictEqual(a.pu.snapshot().windows.seven_day.extraUsage, true, 'the prior event flagged the same plan window');
+  const b = rig({ usage: { rate_limits_available: true, rate_limits: { ...win(100), extra_usage: { is_enabled: true, utilization: null } } } });
+  await b.pu.refresh();
+  assert.strictEqual(b.pu.snapshot().windows.seven_day.extraUsage, true);
+  assert.match(b.pu.describe(), /seven_day 100% \(extra usage\)/);
+  const c = rig({ usage: { rate_limits_available: true, rate_limits: { ...win(100), extra_usage: { is_enabled: false } } } });
+  await c.pu.refresh(); assert.strictEqual(c.pu.snapshot().windows.seven_day.extraUsage, undefined);
+  const d = rig({ usage: { rate_limits_available: true, rate_limits: { ...win(100), extra_usage: { is_enabled: true, utilization: 100 } } } });
+  await d.pu.refresh(); assert.strictEqual(d.pu.snapshot().windows.seven_day.extraUsage, undefined);
+  const e = rig({ usage: { rate_limits_available: true, rate_limits: { ...win(60), extra_usage: { is_enabled: true, utilization: 0 } } } });
+  e.pu.noteEvent(CAPTURED, OPUS, 'lead'); await e.pu.refresh();
+  assert.strictEqual(e.pu.snapshot().windows.seven_day.extraUsage, undefined, 'below 100 the flag goes');
+});
+
+test('sdk-chat: the rate_limit_event handler uses classifyEvent and extraUsageLineFor', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  const at = src.indexOf("msg.type === 'rate_limit_event'");
+  assert.ok(at > 0);
+  const block = src.slice(at, at + 3500);
+  assert.match(block, /planUsage\.classifyEvent\(/); assert.match(block, /extraUsageLineFor\(/); assert.match(block, /refusalReason\(/);
+});

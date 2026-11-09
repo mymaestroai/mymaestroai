@@ -1165,6 +1165,19 @@ async function refreshPlanUsage() {
   paintPlan();
   refreshPlanUsage.timer = setTimeout(refreshPlanUsage, next);
 }
+// ── plan state helpers (begin) ──
+function planState(w, levels) {
+  const pct = Math.round(Number(w.utilization) || 0);
+  const extra = !!w.extraUsage && !w.rejected;
+  const passed = (levels || []).filter(l => pct >= l);
+  const cls = w.rejected || (pct >= 100 && !extra) ? 'refused' : extra ? 'warn' : passed.length && passed.length === (levels || []).length ? 'hot' : passed.length ? 'warn' : '';
+  return { pct, extra, cls };
+}
+function planPctText(w, levels) {
+  const s = planState(w, levels);
+  return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
+}
+// ── plan state helpers (end) ──
 function planFamilyOf(model) {
   const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
   if (!id) return null;
@@ -1182,12 +1195,13 @@ function paintPlan() {
   const wins = d && /^claude-sdk\//.test(model) ? (d.weekly || []).filter(w => w.utilization != null && (w.family == null || (fam && w.family === fam))) : [];
   if (!wins.length) { el.hidden = true; el.textContent = ''; return; }
   const w = wins.reduce((x, y) => (Number(y.utilization) > Number(x.utilization) ? y : x));
-  const pct = Math.round(Number(w.utilization));
   const levels = (d.warn && Array.isArray(d.warn.at)) ? d.warn.at : [];
-  const passed = levels.filter(l => pct >= l);
-  el.textContent = `${w.family ? w.label : 'Plan'} ${pct}%`;
-  el.className = 'sub' + (w.rejected || pct >= 100 ? ' refused' : passed.length && passed.length === levels.length ? ' hot' : passed.length ? ' warn' : '');
-  el.title = `${w.family ? w.label : 'All models'}: ${pct}% of this week's Claude plan allowance`;
+  const { pct, extra, cls } = planState(w, levels);
+  el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)}`;
+  el.className = 'sub' + (cls ? ' ' + cls : '');
+  el.title = extra
+    ? `${w.family ? w.label : 'All models'}: the weekly Claude plan is used up until ${new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}; extra usage is paying`
+    : `${w.family ? w.label : 'All models'}: ${pct}% of this week's Claude plan allowance`;
   el.hidden = false;
 }
 
@@ -5045,6 +5059,7 @@ function connectEvents() {
   on('model_fallback', (ev) => toast(`${displayName(ev.agent)}: ${String(ev.from || '').split('/').pop()} at its weekly limit; running on ${String(ev.to || '').split('/').pop()} until ${ev.resetsAt ? new Date(ev.resetsAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'it resets'}`));
   // Plan warnings and refusals (lib/plan-usage): no pop-up over the input; the usage in the chat header updates.
   on('plan_limit', () => refreshPlanUsage());
+  on('plan_extra_usage', () => refreshPlanUsage());
   on('plan_warning', () => refreshPlanUsage());
   // (Re)connected: whatever happened to the open chat's turn meanwhile comes from the hub's turn view.
   source.onopen = () => { esLastEventAt = Date.now(); reattachCheckAll(); catchUpOpenAgent(); };
