@@ -4366,6 +4366,12 @@ function showQuestion(data, onAnswered) {
       .catch(err => toast(`Could not send answer: ${err.message}`));
     box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
   };
+  // The hub's "Skip" choice (ask_user allow_skip) is a Skip button beside Submit that answers at once; with several
+  // questions each keeps its own Skip choice and the button skips them all (as on the desktop page).
+  const isSkip = (o) => o && String(o.label || '').trim().toLowerCase() === 'skip';
+  const canSkip = questions.every(q => (q.options || []).some(isSkip));
+  const shownOptions = (q) => (q.options || []).filter(o => !(isSkip(o) && questions.length === 1));
+  const textOnly = questions.every(q => !shownOptions(q).length && !(Array.isArray(q.models) && q.models.length));
   // A tap only selects (highlighted); nothing is sent until Submit, so a mis-tap cannot answer the agent.
   const selected = {};
   const groups = {};
@@ -4377,7 +4383,7 @@ function showQuestion(data, onAnswered) {
     t.textContent = q.question || '';
     box.appendChild(t);
     groups[i] = [];
-    for (const opt of q.options || []) {
+    for (const opt of shownOptions(q)) {
       const b = document.createElement('button');
       b.className = 'opt';
       b.innerHTML = `<strong>${esc(opt.label)}</strong>${opt.description ? `<small>${esc(opt.description)}</small>` : ''}`;
@@ -4419,19 +4425,21 @@ function showQuestion(data, onAnswered) {
   });
   const custom = document.createElement('div');
   custom.className = 'qcustom';
-  custom.innerHTML = '<input type="text" placeholder="Or type an answer" enterkeyhint="done">';
+  // A text box that grows with the answer (Return is a new line; Submit sends).
+  custom.innerHTML = `<textarea rows="3" placeholder="${textOnly ? 'Type your answer' : 'Or type your own answer'}"></textarea>`;
   const actions = document.createElement('div');
   actions.className = 'qactions';
-  actions.innerHTML = '<span class="qhint"></span><button class="qsubmit" disabled>Submit</button>';
-  const input = custom.querySelector('input');
+  actions.innerHTML = '<span class="qhint"></span><span class="qbuttons">' + (canSkip ? '<button class="qskip" type="button">Skip</button>' : '') + '<button class="qsubmit" disabled>Submit</button></span>';
+  const input = custom.querySelector('textarea');
   const submitBtn = actions.querySelector('.qsubmit');
   const hint = actions.querySelector('.qhint');
   const refresh = () => {
     const typed = input.value.trim();
     const complete = typed || questions.every((q, i) => selected[i] !== undefined);
     submitBtn.disabled = !complete;
-    hint.textContent = typed ? 'Your typed answer will be sent.' : complete ? 'Press Submit to send.' : (questions.length > 1 ? 'Pick an answer for each question.' : 'Pick an answer, then press Submit.');
+    hint.textContent = typed ? 'Your typed answer will be sent.' : complete ? 'Press Submit to send.' : textOnly ? 'Type your answer, then press Submit.' : (questions.length > 1 ? 'Pick an answer for each question.' : 'Pick an answer, then press Submit.');
   };
+  const grow = () => { if (input.scrollHeight > input.clientHeight && input.clientHeight < 240) input.style.height = Math.min(input.scrollHeight + 2, 240) + 'px'; };
   const send = () => {
     const v = input.value.trim();
     const answers = {};
@@ -4442,8 +4450,13 @@ function showQuestion(data, onAnswered) {
     submit(answers, questions.map((q, i) => (picks[i] && picks[i].value ? picks[i].options[picks[i].selectedIndex].text : selected[i])).join(' / '));
   };
   submitBtn.addEventListener('click', send);
-  input.addEventListener('input', refresh);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && input.value.trim()) send(); });
+  const skipBtn = actions.querySelector('.qskip');
+  if (skipBtn) skipBtn.addEventListener('click', () => {
+    const answers = {};
+    questions.forEach((q, i) => { answers[String(i)] = (q.options || []).find(isSkip).label; });
+    submit(answers, 'Skipped');
+  });
+  input.addEventListener('input', () => { grow(); refresh(); });
   box.appendChild(custom);
   box.appendChild(actions);
   refresh();
