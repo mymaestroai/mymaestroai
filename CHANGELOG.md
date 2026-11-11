@@ -6,7 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
-- **Agent sandboxes no longer fill up with finished processes.** Each agent's box now starts with a small init process that cleans up programs the agent left behind (headless Chrome above all), so a box can no longer run out of process slots after days of use. A box made before this is made again the next time it is found stopped, with its workspace, Files folder and home kept as they are; a box that is running is never touched.
+- **Agent sandboxes no longer fill up with finished processes.** Each agent's box now starts with a small init process that cleans up finished programs the agent left behind (headless Chrome above all), so they no longer pile up until the box runs out of process slots. A box made before this is made again the next time it is found stopped, with its workspace, Files folder and home kept as they are; a box that is running is never touched, so to move one over now, ask Maestro to stop it while its agent is idle and the next use makes it again.
 
 - **Extra usage is no longer reported as the Claude plan refusing.** When the weekly Claude allowance is used up and extra usage is paying for your replies, your Maestro now says so once per agent ("the weekly Claude plan is used up until … ; extra usage is paying"), shows "100% · extra usage" in the warning colour instead of the refused one, and sends no "Claude plan stopped" notice. You get one notice when extra usage nears its monthly limit, and a real refusal now says why (extra usage not turned on, its credit used up, its monthly limit reached) and when it comes back.
 

@@ -18,12 +18,22 @@ function rig(o = {}) {
     if (cmd === 'version' && o.noDocker) throw new Error('docker: not found');
     if (cmd === 'inspect') {
       const st = states[args[args.length - 1]]; if (!st) throw new Error('No such container');
-      if (args.includes('{{.HostConfig.Init}}')) return { stdout: o.init === false ? 'false\n' : (o.init === 'absent' ? '<no value>\n' : 'true\n'), stderr: '' };
+      if (args.includes('{{.HostConfig.Init}}')) {
+        if (o.initError) throw new Error('context deadline exceeded');
+        if (o.onInit) await o.onInit(states, args[args.length - 1]);   // a hook run while the Init answer is awaited
+        return { stdout: o.init === false ? 'false\n' : (o.init === 'absent' ? '<no value>\n' : (o.init === 'nil' ? '<nil>\n' : 'true\n')), stderr: '' };
+      }
       if (o.binds && String(args[2]).includes('.Mounts')) return { stdout: o.binds().map(b => `${b}\n`).join(''), stderr: '' };
       return { stdout: st + '\n', stderr: '' };
     }
     if (cmd === 'create') { states[args[args.indexOf('--name') + 1]] = 'created'; return { stdout: 'id\n', stderr: '' }; }
     if (cmd === 'start') { states[args[args.length - 1]] = 'running'; return { stdout: '', stderr: '' }; }
+    if (cmd === 'rm') {   // like Docker: a running or paused box is refused without -f; a removed box is gone
+      const n = args[args.length - 1];
+      if (args.includes('-f')) { delete states[n]; return { stdout: '', stderr: '' }; }
+      if (states[n] === 'running' || states[n] === 'paused') throw new Error('You cannot remove a running container');
+      delete states[n]; return { stdout: '', stderr: '' };
+    }
     if (cmd === 'exec') {
       const i = args.indexOf('stat'); if (i >= 0) { if (o.credStale === false) return { stdout: String(Math.floor(Date.now() / 1000) + 100) + '\n', stderr: '' }; throw new Error('no file'); }
       if (args.includes('bash')) return o.execResult ? o.execResult(args[args.length - 1]) : { stdout: `ran: ${args[args.length - 1]}\n`, stderr: '' };
@@ -103,8 +113,9 @@ test('ensure: a stopped box with the right folders but made without an init proc
     const r = rig({ states: { [name]: 'exited' }, init, log: (m) => logs.push(m), binds: () => r.sb.mountsFor(member) });
     fs.mkdirSync(r.ws(member), { recursive: true });
     assert.strictEqual(await r.sb.ensure(member), name);
-    const rm = r.calls.findIndex(a => a.join(' ') === `rm -f ${name}`), create = r.calls.findIndex(a => a[0] === 'create');
+    const rm = r.calls.findIndex(a => a.join(' ') === `rm ${name}`), create = r.calls.findIndex(a => a[0] === 'create');
     assert.ok(rm >= 0 && create > rm, 'removed, then created');
+    assert.ok(!r.calls.some(a => a[0] === 'rm' && a.includes('-f')), 'never rm -f');
     const args = r.calls[create];
     assert.ok(args.includes('--init'));
     const vols = (a) => a.map((x, i) => (a[i - 1] === '-v' ? x : null)).filter(Boolean);
@@ -122,6 +133,74 @@ test('ensure: a running box made without an init process is never touched', asyn
   assert.strictEqual(await r.sb.ensure(member), name);
   assert.ok(!r.calls.some(a => a.includes('{{.HostConfig.Init}}')), 'init not even looked at');
   assert.ok(!r.calls.some(a => ['rm', 'create', 'start'].includes(a[0])));
+});
+
+const initTest = (o, name = 'hub-agent-boxed') => {
+  const logs = [];
+  const r = rig({ states: { [name]: 'exited' }, log: (m) => logs.push(m), binds: () => r.sb.mountsFor(member), ...o });
+  fs.mkdirSync(r.ws(member), { recursive: true });
+  return { r, logs, name, did: () => r.calls.filter(a => ['rm', 'create', 'start'].includes(a[0])).map(a => a.join(' ').split(' --')[0]) };
+};
+
+test('ensure: two concurrent calls for one agent whose stopped box was made without init share one ensure: one rm, one create, one name', async () => {
+  // Before the change: no per-name serialisation and rm -f, so the second caller (whose Init answer is not held) would also
+  // remove and create the box: two rm and two creates.
+  let release; const gate = new Promise(res => { release = res; });
+  let n = 0;
+  const { r, name } = initTest({ init: false, onInit: async () => { if (n++ === 0) await gate; } });
+  const p1 = r.sb.ensure(member);
+  await new Promise(res => setTimeout(res, 30));
+  const p2 = r.sb.ensure(member);
+  await new Promise(res => setTimeout(res, 30));
+  release();
+  const [a, b] = await Promise.all([p1, p2]);
+  assert.strictEqual(a, name); assert.strictEqual(b, name);
+  assert.strictEqual(r.calls.filter(c => c[0] === 'rm').length, 1);
+  assert.strictEqual(r.calls.filter(c => c[0] === 'create').length, 1);
+  assert.ok(r.calls.find(c => c[0] === 'create').includes('--init'));
+  assert.strictEqual(r.states[name], 'running');
+  // the per-name entry is gone afterwards: a later ensure of the running box just returns it
+  r.calls.length = 0;
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.ok(!r.calls.some(c => ['rm', 'create', 'start'].includes(c[0])));
+});
+
+test('ensure: rm refused because the box is running again (started between the Init answer and the rm): the name is returned, nothing created', async () => {
+  // Before the change rm -f would have removed the running box under its users and created another.
+  const { r, logs, name } = initTest({ init: false, onInit: async (states, n) => { states[n] = 'running'; } });
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.ok(r.calls.some(c => c.join(' ') === `rm ${name}`));
+  assert.ok(!r.calls.some(c => c[0] === 'create'));
+  assert.strictEqual(r.states[name], 'running');
+  assert.ok(logs.some(l => l.includes('is running again; left as it is')), logs.join('|'));
+});
+
+test('ensure: rm refused for a paused box (a backup\'s hold): ensure throws, nothing created, the paused box is not removed', async () => {
+  // Before the change rm -f removed the paused box.
+  const { r, name } = initTest({ init: false, onInit: async (states, n) => { states[n] = 'paused'; } });
+  await assert.rejects(() => r.sb.ensure(member), /cannot remove a running container/);
+  assert.ok(!r.calls.some(c => c[0] === 'create'));
+  assert.strictEqual(r.states[name], 'paused');
+});
+
+test('ensure: when the Init inspect itself errors, a stopped box with the right folders is started, not removed or made again', async () => {
+  const { r, name, did } = initTest({ initError: true });
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.deepStrictEqual(did(), [`start ${name}`]);
+});
+
+test('ensure: Init "<nil>" (Docker 29 for a box made without --init) means made again', async () => {
+  const { r, name, did } = initTest({ init: 'nil' });
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.deepStrictEqual(did(), [`rm ${name}`, 'create', `start ${name}`]);
+});
+
+test('ensure: other folders AND no init: made again with the "other folders" log line, not the init line', async () => {
+  const { r, logs, name, did } = initTest({ init: false, binds: () => ['/somewhere/else'] });
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.deepStrictEqual(did(), [`rm ${name}`, 'create', `start ${name}`]);
+  assert.ok(logs.includes(`${name} was made for other folders; making it again`), logs.join('|'));
+  assert.ok(!logs.some(l => l.includes('without an init process')));
 });
 
 test('wrapper: the SDK launches a script that execs the client inside the box forwarding only the listed variables', () => {
@@ -302,7 +381,11 @@ test('a stopped box made for other folders is made again instead of started (a r
     if (args[0] === 'inspect' && String(args[2]).includes('.Mounts')) { if (!boxes[name]) throw new Error('No such object'); return { stdout: boxes[name].binds.map(b => `${b}\n`).join(''), stderr: '' }; }
     if (args[0] === 'inspect' && args.includes('{{.HostConfig.Init}}')) { if (!boxes[name]) throw new Error('No such object'); return { stdout: `${boxes[name].init}\n`, stderr: '' }; }
     if (args[0] === 'inspect') { if (!boxes[name]) throw new Error('No such object'); return { stdout: `${boxes[name].status}\n`, stderr: '' }; }
-    if (args[0] === 'rm') { delete boxes[args[2]]; return { stdout: '', stderr: '' }; }
+    if (args[0] === 'rm') {
+      const n = args[args.length - 1];
+      if (!args.includes('-f') && boxes[n] && (boxes[n].status === 'running' || boxes[n].status === 'paused')) throw new Error('You cannot remove a running container');
+      delete boxes[n]; return { stdout: '', stderr: '' };
+    }
     if (args[0] === 'create') { const binds = []; for (let i = 0; i < args.length; i++) if (args[i] === '-v' && args[i + 1].startsWith('/')) binds.push(args[i + 1].split(':')[0]); boxes[args[args.indexOf('--name') + 1]] = { status: 'created', binds, init: args.includes('--init') }; return { stdout: 'id\n', stderr: '' }; }
     if (args[0] === 'start') { boxes[name].status = 'running'; return { stdout: '', stderr: '' }; }
     return { stdout: '', stderr: '' };
@@ -314,7 +397,7 @@ test('a stopped box made for other folders is made again instead of started (a r
   boxes['hub-agent-newname-eeeeeeeeeeee'] = { status: 'exited', binds: [path.join(dir, 'workspaces', 'oldname')] };
   assert.strictEqual(await sb.ensure(agent), 'hub-agent-newname-eeeeeeeeeeee');
   assert.deepStrictEqual(boxes['hub-agent-newname-eeeeeeeeeeee'], { status: 'running', binds: [ws(agent)], init: true }, 'made again with the new folders');
-  assert.ok(calls.includes('rm -f hub-agent-newname-eeeeeeeeeeee'));
+  assert.ok(calls.includes('rm hub-agent-newname-eeeeeeeeeeee'));
   // stopped with the right folders: simply started again, nothing made
   boxes['hub-agent-newname-eeeeeeeeeeee'].status = 'exited';
   const before = calls.length;
@@ -325,7 +408,7 @@ test('a stopped box made for other folders is made again instead of started (a r
   const b2 = calls.length;
   await sb.ensure(agent);
   const after = calls.slice(b2).filter(c => /^(rm|create|start) /.test(c)).map(c => c.split(' ').slice(0, 2).join(' '));
-  assert.deepStrictEqual(after, ['rm -f', 'create --name', 'start hub-agent-newname-eeeeeeeeeeee']);
+  assert.deepStrictEqual(after, ['rm hub-agent-newname-eeeeeeeeeeee', 'create --name', 'start hub-agent-newname-eeeeeeeeeeee']);
   assert.deepStrictEqual(boxes['hub-agent-newname-eeeeeeeeeeee'], { status: 'running', binds: [ws(agent)], init: true });
   // a running box is never made again under a turn's feet
   boxes['hub-agent-newname-eeeeeeeeeeee'] = { status: 'running', binds: ['/somewhere/else'] };
