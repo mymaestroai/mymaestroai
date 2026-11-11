@@ -82,7 +82,7 @@ test('a backup holds everything the design lists, and leaves out what a new comp
   const settings = memSettings();
   const { recoveryKey } = await keys.setup('a strong test passphrase', { settings, logN: 15 });
   const folder = path.join(TMP, 'one-folder');
-  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome), places.folderPlace(folder)], hub: { version: '5.8.1', channel: 'experimental' } });
+  const r = await createBackup({ ...inst, _holdBoxes: () => () => {}, platform: 'linux', settings, places: [places.localPlace(inst.hubHome), places.folderPlace(folder)], hub: { version: '5.8.1', channel: 'experimental' } });
   assert.match(r.name, /^my-maestro-ai-\d{4}-\d{2}-\d{2}-\d{4}\.age$/);
   for (const p of r.places) { assert.ok(fs.existsSync(p.file), p.file); assert.strictEqual(fs.statSync(p.file).mode & 0o777, 0o600); }
   assert.deepStrictEqual(fs.readdirSync(path.join(inst.hubHome, 'backups')).filter(n => n.startsWith('.')), [], 'no snapshot or partial file left');
@@ -279,9 +279,9 @@ test('a new backup never takes the name of one this computer still records (kept
   const s = memSettings();
   await keys.setup('lantern orbit mellow cactus', { settings: s, logN: 15 });
   const now = new Date('2026-10-29T19:30:00Z');
-  const a = await createBackup({ ...inst, settings: s, now, hub: { version: '5.8.1' } });
+  const a = await createBackup({ ...inst, _holdBoxes: () => () => {}, settings: s, now, hub: { version: '5.8.1' } });
   fs.rmSync(a.places[0].file);   // gone from this computer, still on record (a copy elsewhere)
-  const b = await createBackup({ ...inst, settings: s, now, hub: { version: '5.8.1' } });
+  const b = await createBackup({ ...inst, _holdBoxes: () => () => {}, settings: s, now, hub: { version: '5.8.1' } });
   assert.notStrictEqual(b.name, a.name);
   assert.match(b.name, /-2\.age$/);
   assert.deepStrictEqual(places.index(inst.root).map(x => x.name).sort(), [a.name, b.name].sort(), 'both records kept');
