@@ -21,13 +21,13 @@ umask 077
 export LC_ALL=C
 
 PRODUCT="My Maestro AI"
-NODE_VERSION="22.23.4"
-# SHA-256 of the official node-v22.23.4 archives (nodejs.org SHASUMS256.txt, release-key signature checked when this
+NODE_VERSION="22.23.5"
+# SHA-256 of the official node-v22.23.5 archives (nodejs.org SHASUMS256.txt, release-key signature checked when this
 # installer was published).
-NODE_SHA_darwin_arm64="c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428"
-NODE_SHA_darwin_x64="efcc2b0db6f94bf53eddb038fe2b370277a042bd29e4f19b8f8e23598795b819"
-NODE_SHA_linux_arm64="f7a1e486dbc8b286847815b477d4fb5e9fb963ed4489c3e1588853d685f589f9"
-NODE_SHA_linux_x64="b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406"
+NODE_SHA_darwin_arm64="e7131995759b61a0170b646010d2ad35a5d37b4cb0d471f3e8317eac6f742f3d"
+NODE_SHA_darwin_x64="c53383238206b9ae4db23c5d8a63645e2e753bec8ab51a49cc81939aa64e9422"
+NODE_SHA_linux_arm64="8bd3dc69eee8f3f226315a80d7d1d4faccf217a4c8fae500168ac2e38f3bdba3"
+NODE_SHA_linux_x64="c54118104acc524633b5abe106bbf44a53126ec8b4e5fa105cb92b5d7de8a1a1"
 # The one place the code's GitHub location is set (owner/name). MM_REPO_SLUG overrides it; --repo takes any git URL.
 REPO_SLUG="${MM_REPO_SLUG:-mymaestroai/mymaestroai}"
 REPO_HTTPS="https://github.com/$REPO_SLUG.git"
