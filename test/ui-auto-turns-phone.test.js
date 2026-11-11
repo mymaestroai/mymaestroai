@@ -56,10 +56,82 @@ test('live automatic turns draw into a closed card; for_owner moves the reply ou
   assert.match(ts, /withRenderTarget\(card\.body, paint\)/);
   assert.match(js, /autoFirstLine\(reply\)/);
   assert.match(js, /on\('for_owner', onForOwner\)/);
-  const fo = js.slice(js.indexOf('function onForOwner('), js.indexOf('function onTurnEnd('));
+  const fo = js.slice(js.indexOf('function moveReplyOut('), js.indexOf('function onTurnEnd('));
   assert.match(fo, /`from \$\{t\.card\.label\}`/);
   assert.match(fo, /wrap\.after\(from\)/);
   assert.match(fo, /from\.after\(t\.el\)/);
+});
+
+test('a for_owner that comes before the live card exists is kept and applied when the card registers', () => {
+  assert.match(js, /const forOwnerPending = \{\}/);
+  const fo = js.slice(js.indexOf('function onForOwner('), js.indexOf('function onTurnEnd('));
+  assert.match(fo, /forOwnerPending\[ev\.turnId\] = \{ reason:[^}]*at: Date\.now\(\) \}/);
+  assert.match(fo, /slice\(0, Math\.max\(0, ids\.length - 50\)\)/, 'capped');
+  assert.match(fo, /moveReplyOut\(t\)/);
+  const ts = js.slice(js.indexOf('function onTurnStart('), js.indexOf('function onTurnDelta('));
+  assert.match(ts, /hubTurns\[ev\.turnId\] = t;\s*[^\n]*\n\s*if \(t\.card && forOwnerPending\[ev\.turnId\]\) \{ delete forOwnerPending\[ev\.turnId\]; moveReplyOut\(t\); \}/);
+});
+
+test('opening a chat during an automatic turn: the live turn adopts the history card of the same prompt', () => {
+  const rh = js.slice(js.indexOf('function renderHistory()'), js.indexOf('function loadEarlier()'));
+  assert.match(rh, /lastHistoryCard = null;/, 'reset at the start of renderHistory');
+  assert.match(js, /lastHistoryCard = lastUser === undefined \? null : \{ wrap: card\.wrap, body: card\.body, line: card\.line, label: it\.label, prompt: chatHistory\[lastUser\]\.content, agent: current \}/);
+  const ts = js.slice(js.indexOf('function onTurnStart('), js.indexOf('function onTurnDelta('));
+  assert.match(ts, /last\.content === ev\.message/, 'only on a duplicate of the history prompt');
+  assert.match(ts, /mem\.prompt === ev\.message && cardIsLast\(mem\.wrap\)/);
+  assert.match(ts, /card = \{ wrap: mem\.wrap, body: mem\.body, line: mem\.line \};\s*card\.line\.textContent = 'working…'/);
+  assert.match(ts, /card: card \? \{ \.\.\.card, label: info\.label \} : null/);
+  const fn = js.slice(js.indexOf('function cardIsLast('), js.indexOf('function renderAutoCard('));
+  assert.match(fn, /box\.lastElementChild === wrap/);
+  assert.match(fn, /box\.lastElementChild === stack/);
+});
+
+test('cardIsLast: a card is reusable only when it ends the chat (or the last stack)', () => {
+  const src = js.slice(js.indexOf('function cardIsLast('), js.indexOf('function renderAutoCard('));
+  const box = { parentNode: null, isConnected: true, lastElementChild: null };
+  const fn = new Function('chatEl', `${src}; return cardIsLast;`)(() => box);
+  const mk = (parent) => ({ parentNode: parent, isConnected: true, lastElementChild: null });
+  const a = mk(box), b = mk(box);
+  box.lastElementChild = b;
+  assert.strictEqual(fn(b), true);
+  assert.strictEqual(fn(a), false);
+  const stack = mk(box), body = mk(stack), c1 = mk(body), c2 = mk(body);
+  body.lastElementChild = c2;
+  box.lastElementChild = stack;
+  assert.strictEqual(fn(c2), true);
+  assert.strictEqual(fn(c1), false);
+  box.lastElementChild = b;
+  assert.strictEqual(fn(c2), false);
+});
+
+test('the moved card shows the prompt line at turn end, not the reply again', () => {
+  assert.match(js, /t\.card\.line\.textContent = t\.card\.moved \? promptCardLine\(ev\.message \|\| t\.prompt, t\.card\.label\) : \(autoFirstLine\(reply\) \|\| t\.card\.label\)/);
+  const src = js.slice(js.indexOf('function promptCardLine('), js.indexOf('function cardIsLast('));
+  const fn = new Function('autoFirstLine', `${src}; return promptCardLine;`)((t) => String(t).split('\n').find(l => l.trim()) || '');
+  assert.strictEqual(fn('Context\nTask:\nCheck the queue\nmore', 'Scheduled task'), 'Check the queue');
+  assert.strictEqual(fn('no marker', 'Scheduled task'), 'Scheduled task');
+  assert.strictEqual(fn(undefined, 'Scheduled task'), 'Scheduled task');
+});
+
+// toggleFoldAuto is run for real with stand-ins for the page's globals.
+function runToggle({ hubTurns, streams = new Set(), reattaches = new Map(), current = 'agent-a' }) {
+  const src = js.slice(js.indexOf('function toggleFoldAuto('), js.indexOf('function makeFoldHeader('));
+  const calls = { render: 0, toast: [] };
+  const store = {};
+  const fn = new Function('$', 'localStorage', 'foldAutoOn', 'paintFoldMenu', 'hubTurns', 'streams', 'reattaches', 'current', 'renderHistory', 'scrollChat', 'toast',
+    `let stick = false; ${src}; return toggleFoldAuto;`)(
+    () => ({ classList: { remove() {} } }), { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } },
+    () => store['hub-fold-auto'] !== 'off', () => {}, hubTurns, streams, reattaches, current, () => { calls.render++; }, () => {}, (m) => calls.toast.push(m));
+  fn();
+  return calls;
+}
+test('toggleFoldAuto does not redraw the chat while the phone follows a live hub turn of the open chat', () => {
+  assert.match(js, /const following = Object\.values\(hubTurns\)\.some\(t => t && t\.agent === current && t\.el && t\.el\.isConnected\);/);
+  assert.deepStrictEqual(runToggle({ hubTurns: { t1: { agent: 'agent-a', el: { isConnected: true } } } }), { render: 0, toast: ['Fold automatic turns: Off'] }, 'toast instead');
+  assert.strictEqual(runToggle({ hubTurns: {} }).render, 1, 'nothing live: redraws');
+  assert.strictEqual(runToggle({ hubTurns: { t1: { agent: 'agent-b', el: { isConnected: true } } } }).render, 1, 'another agent\'s turn does not block it');
+  assert.strictEqual(runToggle({ hubTurns: { t1: { agent: 'agent-a', el: { isConnected: false } } } }).render, 1, 'a detached bubble is nothing to protect');
+  assert.strictEqual(runToggle({ hubTurns: {}, streams: new Set(['agent-a']) }).render, 0, 'a stream still blocks it');
 });
 
 test('the per-device setting: hub-fold-auto key, default on, menu item wired', () => {

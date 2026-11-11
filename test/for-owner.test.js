@@ -90,6 +90,45 @@ test('a turn the owner started: nothing is stored, and no turn running stores no
   comms.finish(true, null);
 });
 
+test('a consultation-origin turn is refused: nothing is stored and no event is published', () => {
+  forOwnerMarks.clear();
+  const seen = [];
+  const off = hubEvents.events.onPublish(ev => { if (ev.type === 'for_owner') seen.push(ev); });
+  const tap = startTurn({ kind: 'consultation', from: 'lead' }, 'fo-turn-consult');
+  assert.match(handleForOwner(AGENT, { reason: 'r' }), /consultation stays folded in the chat, so there is nothing to mark/);
+  assert.strictEqual(forOwnerMarks.has(AGENT), false);
+  assert.strictEqual(seen.length, 0);
+  tap.finish(true, null);
+  if (typeof off === 'function') off();
+});
+
+test('a handler built for turn A refuses while turn B runs (stale handler); one built for B marks B', async () => {
+  forOwnerMarks.clear();
+  const seen = [];
+  const off = hubEvents.events.onPublish(ev => { if (ev.type === 'for_owner') seen.push(ev); });
+  const a = startTurn({ kind: 'schedule', label: 'first' }, 'fo-turn-A');
+  const staleGateway = getWorkspaceTools(AGENT, fakeRes(), 0).find(x => x.name === 'for_owner');
+  const staleMcp = (await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 0 })).tools.find(x => x.name === 'for_owner');
+  a.finish(true, null);
+  const b = startTurn({ kind: 'job_notice' }, 'fo-turn-B');
+  const refused = 'This tool belongs to an earlier turn; nothing was marked.';
+  assert.strictEqual(await staleGateway.handler({ reason: 'r' }), refused);
+  assert.strictEqual((await staleMcp.handler({ reason: 'r' })).content[0].text, refused);
+  assert.strictEqual(forOwnerMarks.has(AGENT), false, 'nothing stored');
+  assert.strictEqual(seen.length, 0, 'no event');
+  const fresh = getWorkspaceTools(AGENT, fakeRes(), 0).find(x => x.name === 'for_owner');
+  assert.match(await fresh.handler({ reason: 'r' }), /^Marked:/);
+  assert.strictEqual(forOwnerMarks.get(AGENT).turnId, 'fo-turn-B');
+  b.finish(true, null);
+  if (typeof off === 'function') off();
+  // Built with no turn running: the old behaviour (the running turn is marked).
+  forOwnerMarks.clear();
+  const idleBuilt = getWorkspaceTools(AGENT, fakeRes(), 0).find(x => x.name === 'for_owner');
+  const c = startTurn({ kind: 'schedule' }, 'fo-turn-C');
+  assert.match(await idleBuilt.handler({ reason: 'r' }), /^Marked:/);
+  c.finish(true, null);
+});
+
 test('appendConversationLog saves for_owner on the marked turn\'s assistant entry (also progress saves) and never on the next turn', () => {
   try { fs.unlinkSync(convFile); } catch {}
   forOwnerMarks.clear();

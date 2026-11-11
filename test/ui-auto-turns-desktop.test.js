@@ -81,12 +81,69 @@ test('live hub turns: autoKindOfOrigin picks the card; the reply bubble draws in
   assert.match(start, /'working…'/);
   assert.match(start, /appendMessage\(chat\.id, 'assistant', '…', card && card\.body\)/);
   assert.match(start, /if \(!card\) appendSystemNotice/);
-  assert.match(block(app, 'function onHubTurnEnd(', 'Context compression'), /t\.card\.setLine\(autoFirstLine\(reply\)\)/);
+  assert.match(block(app, 'function onHubTurnEnd(', 'Context compression'), /t\.card\.setLine\(t\.card\.moved \? foldPromptLine\(ev\.message \|\| t\.prompt\) : autoFirstLine\(reply\)\)/);
+});
+
+test('a for_owner that comes before the live card exists is kept and applied when the card registers', () => {
+  assert.match(app, /const hubForOwnerPending = \{\}/);
+  const h = block(app, 'function onHubForOwner(', 'function onHubTurnEnd(');
+  assert.match(h, /hubForOwnerPending\[ev\.turnId\] = \{ reason:[^}]*at: Date\.now\(\) \}/);
+  assert.match(h, /slice\(0, Math\.max\(0, ids\.length - 50\)\)/, 'capped');
+  const start = block(app, 'async function onHubTurnStart(', 'function onHubTurnDelta(');
+  const reg = start.slice(start.indexOf('hubTurnCards[ev.turnId] = card;'));
+  assert.match(reg, /hubForOwnerPending\[ev\.turnId\]\) \{ delete hubForOwnerPending\[ev\.turnId\]; hubMoveReplyOut\(card\); \}/);
+  assert.ok(start.indexOf('card.msgId = msgId') < start.indexOf('hubMoveReplyOut(card)'), 'msgId is set before the move');
+  const mv = block(app, 'function hubMoveReplyOut(', 'function onHubForOwner(');
+  assert.match(mv, /card\.moved = true/);
+  assert.match(mv, /foldFromLine\(card\.label\)/);
+});
+
+test('opening a chat during an automatic turn: the live turn adopts the history card of the same prompt', () => {
+  const loop = block(app, 'chats[chatId].lastAutoCard = null;', '// Scroll to bottom after loading history');
+  assert.match(loop, /lastAutoCard = k === undefined \? null : \{ card: built, prompt: history\[k\]\.content, label: c\.label \}/);
+  assert.match(loop, /foldRenderHistoryCard\(draw, item, panelEl, remember\)/);
+  assert.match(loop, /foldRenderHistoryStack\(draw, item, panelEl, remember\)/);
+  const start = block(app, 'async function onHubTurnStart(', 'function onHubTurnDelta(');
+  assert.match(start, /mem\.prompt === ev\.message/);
+  assert.match(start, /last\.content === ev\.message/, 'only on a duplicate of the history prompt');
+  assert.match(start, /foldCardIsLast\(panel, mem\.card\)/);
+  assert.match(start, /card = mem\.card;\s*card\.setLine\('working…'\)/);
+  assert.match(start, /card\.label = info\.label; card\.chatId = chat\.id;/);
+  const last = block(app, 'function foldCardIsLast(', 'function foldRenderHistoryStack(');
+  assert.match(last, /panel\.lastElementChild === w/);
+  assert.match(last, /panel\.lastElementChild === stack/);
+});
+
+test('foldCardIsLast: a card is reusable only when it ends the panel (or the last stack)', () => {
+  const src = block(app, 'function foldCardIsLast(', 'function foldRenderHistoryStack(');
+  const fn = new Function(`${src}; return foldCardIsLast;`)();
+  const mk = (parent, kids = []) => ({ parentNode: parent, isConnected: true, lastElementChild: kids[kids.length - 1] || null });
+  const panel = { parentNode: null, isConnected: true, lastElementChild: null };
+  const a = mk(panel), b = mk(panel);
+  panel.lastElementChild = b;
+  assert.strictEqual(fn(panel, { wrap: b }), true);
+  assert.strictEqual(fn(panel, { wrap: a }), false, 'an older card is never reused');
+  const stack = mk(panel), body = mk(stack), c1 = mk(body), c2 = mk(body);
+  body.lastElementChild = c2; stack.body = body; stack.lastElementChild = body;
+  panel.lastElementChild = stack;
+  assert.strictEqual(fn(panel, { wrap: c2 }), true);
+  assert.strictEqual(fn(panel, { wrap: c1 }), false);
+  panel.lastElementChild = b;
+  assert.strictEqual(fn(panel, { wrap: c2 }), false, 'the stack is not last');
+  assert.strictEqual(fn(panel, { wrap: { ...b, isConnected: false } }), false);
+});
+
+test('foldPromptLine: the text after the Task marker, else empty (the card label then shows)', () => {
+  const src = block(app, 'function foldPromptLine(', 'function foldCardIsLast(');
+  const fn = new Function('autoFirstLine', `${src}; return foldPromptLine;`)((t) => String(t).split('\n').find(l => l.trim()) || '');
+  assert.strictEqual(fn('Context line\nTask:\nSummarise the notes\nmore'), 'Summarise the notes');
+  assert.strictEqual(fn('no marker here'), '');
+  assert.strictEqual(fn(undefined), '');
 });
 
 test('for_owner event: subscribed, and the reply moves out of the card with the from line', () => {
   assert.match(app, /addEventListener\('for_owner', e => \{ const ev = parse\(e\); if \(ev\) onHubForOwner\(ev\); \}\)/);
-  const h = block(app, 'function onHubForOwner(', 'function onHubTurnEnd(');
+  const h = block(app, 'function hubMoveReplyOut(', 'function onHubTurnEnd(');
   assert.match(h, /hubTurnCards\[ev\.turnId\]/);
   assert.match(h, /foldFromLine\(card\.label\)/);
   assert.match(h, /card\.wrap\.after\(line\)/);

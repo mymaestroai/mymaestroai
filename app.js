@@ -6474,12 +6474,20 @@
               return hid;
             };
             const panelEl = document.getElementById(`messages-${chatId}`);
+            chats[chatId].lastAutoCard = null;
             if (foldAutoOn()) {
+              // The last card drawn and its last automatic prompt: a turn running as the chat opens (its prompt is
+              // saved, its reply is not) adopts that card instead of building a second one (see onHubTurnStart).
+              const remember = (built, c) => {
+                const ks = c.indexes.filter(k => history[k].role === 'user');
+                const k = ks[ks.length - 1];
+                chats[chatId].lastAutoCard = k === undefined ? null : { card: built, prompt: history[k].content, label: c.label };
+              };
               // Automatic turns (consultations, scheduled tasks, hub notices) fold into closed cards; three or more in a row into a stack.
               for (const item of autoGroupHistory(history)) {
                 if (item.type === 'entry') draw(item.index);
-                else if (item.type === 'card') foldRenderHistoryCard(draw, item, panelEl);
-                else foldRenderHistoryStack(draw, item, panelEl);
+                else if (item.type === 'card') foldRenderHistoryCard(draw, item, panelEl, remember);
+                else foldRenderHistoryStack(draw, item, panelEl, remember);
               }
             } else {
               for (const [i, msg] of history.entries()) {
@@ -7045,8 +7053,9 @@
     // A history card (draw: the history loader's entry painter, see startSoloChat): its entries that are not marked
     // for the owner go into the closed body; the marked replies follow the card as ordinary messages, each under a
     // small "from <label>" line. Every entry reaches chat.messages in order.
-    function foldRenderHistoryCard(draw, c, parent) {
+    function foldRenderHistoryCard(draw, c, parent, remember = null) {
       const built = foldBuildCard(parent, c);
+      if (remember) remember(built, c);
       for (const k of c.indexes) {
         if (c.open.includes(k)) draw(k, { notice: false, show: false });
         else draw(k, { into: built.body, notice: false });
@@ -7057,17 +7066,34 @@
       }
       return built;
     }
-    function foldRenderHistoryStack(draw, s, panel) {
+    // The card's line once its reply left it (for_owner): the prompt's task line, else the label.
+    function foldPromptLine(prompt) {
+      const c = typeof prompt === 'string' ? prompt : '';
+      const i = c.indexOf('\nTask:\n');
+      return i >= 0 ? autoFirstLine(c.slice(i + 7)) : '';
+    }
+    // True when the card is the last thing in the panel (or the last card of a stack that is itself last).
+    function foldCardIsLast(panel, card) {
+      const w = card && card.wrap;
+      if (!panel || !w || !w.isConnected) return false;
+      if (w.parentNode === panel) return panel.lastElementChild === w;
+      const body = w.parentNode;
+      if (!body || body.lastElementChild !== w) return false;
+      const stack = body.parentNode;
+      return !!stack && stack.parentNode === panel && panel.lastElementChild === stack;
+    }
+    function foldRenderHistoryStack(draw, s, panel, remember = null) {
       const wrap = document.createElement('div');
       wrap.className = 'auto-stack';
       const { head, body } = foldHead('auto-stack-head', 'auto-stack-body', wrap);
       head.append(foldPart('span', 'auto-card-label', s.summary), foldPart('span', 'auto-card-chev', '▸'));
       panel.appendChild(wrap);
-      for (const c of s.cards) foldRenderHistoryCard(draw, c, body);
+      for (const c of s.cards) foldRenderHistoryCard(draw, c, body, remember);
     }
 
     const hubTurns = {};   // turnId -> { chatId, msgId }
     const hubTurnCards = {};   // turnId -> { chatId, msgId, wrap, label, setLine }: live cards, kept so a later for_owner can open the reply
+    const hubForOwnerPending = {};   // turnId -> { reason, at }: a for_owner that came before its live card existed
     const HUB_AUTO_OPEN = new Set(['job_notice', 'job_report', 'schedule']);
 
     function hubOriginLabel(origin) {
@@ -7119,7 +7145,16 @@
         const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
         if (info) {
           const panel = document.getElementById(`messages-${chat.id}`);
-          card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…' });
+          // Opened while this turn runs: history already drew a card with its prompt (the reply, still in progress, is
+          // not in history). Adopt that card when it is the last thing on screen rather than build a second one.
+          const mem = chat.lastAutoCard;
+          if (mem && typeof ev.message === 'string' && last && last.role === 'user' && last.content === ev.message && mem.prompt === ev.message && foldCardIsLast(panel, mem.card)) {
+            card = mem.card;
+            card.setLine('working…');
+          } else {
+            card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…' });
+          }
+          chat.lastAutoCard = null;
           card.label = info.label; card.chatId = chat.id;
           autoScroll(panel);
         }
@@ -7130,12 +7165,14 @@
       }
       if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
       const msgId = appendMessage(chat.id, 'assistant', '…', card && card.body);
-      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt), card };
+      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt), card, prompt: ev.message };
       if (card) {
         card.msgId = msgId;
         hubTurnCards[ev.turnId] = card;
         const ids = Object.keys(hubTurnCards);
         for (const id of ids.slice(0, Math.max(0, ids.length - 50))) delete hubTurnCards[id];
+        // A for_owner that arrived while the history loaded: apply it now that the card exists.
+        if (hubForOwnerPending[ev.turnId]) { delete hubForOwnerPending[ev.turnId]; hubMoveReplyOut(card); }
       }
       setStatus(chat.id, 'thinking', hubOriginLabel(ev.origin));
       markTabUnread(chat.id);   // skips the window on screen
@@ -7468,8 +7505,7 @@
 
     // for_owner { agent, reason, turnId, origin }: the agent marked this automatic turn's reply for the owner. Its reply
     // bubble leaves the closed card and sits right after it, under a small "from <label>" line.
-    function onHubForOwner(ev) {
-      const card = ev && hubTurnCards[ev.turnId];
+    function hubMoveReplyOut(card) {
       if (!card || card.moved || !chats[card.chatId]) return;
       const el = document.getElementById(card.msgId);
       if (!el || !card.wrap.isConnected) return;
@@ -7477,6 +7513,16 @@
       const line = foldFromLine(card.label);
       card.wrap.after(line);
       line.after(el);
+    }
+    function onHubForOwner(ev) {
+      if (!ev || !ev.turnId) return;
+      const card = hubTurnCards[ev.turnId];
+      if (card) { hubMoveReplyOut(card); return; }
+      if (hubTurns[ev.turnId]) return;   // followed without a card (folding off): nothing to move
+      // The card is not there yet (onHubTurnStart waits for the history): keep the mark for when it is.
+      hubForOwnerPending[ev.turnId] = { reason: typeof ev.reason === 'string' ? ev.reason : '', at: Date.now() };
+      const ids = Object.keys(hubForOwnerPending);
+      for (const id of ids.slice(0, Math.max(0, ids.length - 50))) delete hubForOwnerPending[id];
     }
 
     function onHubTurnEnd(ev) {
@@ -7499,7 +7545,9 @@
       const el = document.getElementById(t.msgId);
       clearLiveActivity(t.msgId);
       if (el) { t.text = reply; paintTurn(t.chatId, t, reply, false); }
-      if (t.card) t.card.setLine(autoFirstLine(reply));   // the card's one line: the reply's first line (the label when there is none)
+      // The card's one line: the reply's first line (the label when there is none); a reply that moved out of the card
+      // is shown below it, so the line comes from the prompt instead.
+      if (t.card) t.card.setLine(t.card.moved ? foldPromptLine(ev.message || t.prompt) : autoFirstLine(reply));
       setMessageTime(document.getElementById(t.msgId), msgTimeLine(Date.parse(ev.endedAt) || Date.now(), t.startedAt));
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
       for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
