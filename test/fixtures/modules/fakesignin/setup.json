@@ -1,0 +1,7 @@
+{ "steps": [
+  { "id": "install", "type": "install", "title": "Install" },
+  { "id": "keys", "type": "secrets", "title": "Client keys", "fields": ["FAKE_CLIENT_ID", "FAKE_CLIENT_SECRET"] },
+  { "id": "signin", "type": "signin", "title": "Sign in" },
+  { "id": "agents", "type": "grant", "title": "Agents" },
+  { "id": "done", "type": "finish", "title": "Finish" }
+] }

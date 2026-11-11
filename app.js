@@ -2,14 +2,19 @@
     // The password-check endpoints answer 401 for a wrong password, so they keep their own error handling.
     (function installSessionGuard() {
       const nativeFetch = window.fetch.bind(window);
-      const keepsOwn401 = (p) => p === '/api/auth/totp/disable' || p === '/api/auth/password' || p === '/api/auth/login';
+      const keepsOwn401 = (p) => p === '/api/auth/totp/disable' || p === '/api/auth/password' || p === '/api/auth/login' || p.startsWith('/api/wallet/');   // wallet owner checks answer 401 for a wrong keystore passphrase
       let redirecting = false;
       window.fetch = async function (input, init) {
         const res = await nativeFetch(input, init);
         if (res.status === 401 && !redirecting) {
           try {
             const u = new URL(typeof input === 'string' ? input : input.url, location.href);
-            if (u.origin === location.origin && u.pathname.startsWith('/api/') && !keepsOwn401(u.pathname)) {
+            let keep = keepsOwn401(u.pathname);
+            if (keep && u.pathname.startsWith('/api/wallet/')) {   // a lost sign-in still goes to the sign-in page
+              const j = await res.clone().json().catch(() => ({}));
+              keep = !(j && (j.error === 'unauthorized' || j.error === 'totp_required'));
+            }
+            if (u.origin === location.origin && u.pathname.startsWith('/api/') && !keep) {
               redirecting = true;
               location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
             }
@@ -178,7 +183,7 @@
       const localItem = document.getElementById('account-local-models');
       if (localItem) localItem.style.display = me.isAdmin ? '' : 'none';
       const note = document.getElementById('account-2fa-note');
-      if (note) note.style.display = (me.isAdmin && !me.user.totpEnabled) ? '' : 'none';
+      if (note) note.style.display = (me.isAdmin && !me.user.totpEnabled && me.admin2faRequired !== false) ? '' : 'none';
     }
     function toggleAccountMenu(force) {
       const menu = document.getElementById('account-menu');
@@ -314,10 +319,14 @@
       const me = window.hubMe;
       if (!box || !me) return;
       if (me.user.totpEnabled) {
+        const adminLocked = me.isAdmin && me.admin2faRequired !== false;
+        const adminFree = me.isAdmin && !adminLocked;
         box.innerHTML = `
           <div class="sec-title">Two-factor authentication <span class="sec-badge on">on</span></div>
+          ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, 🔐 Security.</div>` : `
           <input type="password" id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
-          <div class="sec-actions"><button class="sec-btn danger" onclick="disableTwoFactor()">Disable 2FA</button></div>
+          ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
+          <div class="sec-actions"><button class="sec-btn danger" onclick="disableTwoFactor()">${adminFree ? 'Remove two-factor' : 'Disable 2FA'}</button></div>`}
           <div class="sec-msg" id="sec-2fa-msg"></div>`;
       } else {
         box.innerHTML = `
@@ -381,15 +390,31 @@
         ta.remove();
       }
     }
+    let secDisableBusy = false;   // one removal at a time
     async function disableTwoFactor() {
-      const password = document.getElementById('sec-2fa-password').value;
+      if (secDisableBusy) return;
+      const pwEl = document.getElementById('sec-2fa-password');
+      const codeEl = document.getElementById('sec-2fa-disable-code');
+      const password = pwEl.value;
       if (!password) return secMsg('sec-2fa-msg', 'Enter your password to turn 2FA off.');
+      const body = { password };
+      if (codeEl) {
+        body.code = (codeEl.value || '').trim();
+        if (!body.code) return secMsg('sec-2fa-msg', 'Enter a current code or a recovery code.');
+      }
+      pwEl.value = ''; if (codeEl) codeEl.value = '';   // the password goes in this one request and stays nowhere else
+      secDisableBusy = true;
       try {
-        await authPost('/api/auth/totp/disable', { password });
+        await authPost('/api/auth/totp/disable', body);
         window.hubMe.user.totpEnabled = false;
+        try {
+          const r = await fetch('/api/me', { credentials: 'include' });
+          if (r.ok) window.hubMe = await r.json();
+        } catch (e) { /* keep what we have */ }
         renderUserChip();
         paintTwoFactor();
       } catch (e) { secMsg('sec-2fa-msg', e.message); }
+      finally { secDisableBusy = false; }
     }
     async function changePassword() {
       const current = document.getElementById('sec-pw-current').value;
@@ -444,7 +469,7 @@
       return tz && tz !== mine ? `${t} (${tz.replace(/_/g, ' ')} time)` : t;
     }
     const bkSize = (n) => n == null ? '?' : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
-    const bkPlaceName = (p) => p.kind === 'local' ? 'This computer' : ((bkState && bkState.folders || []).find(f => f.dir === p.dir) || {}).label || p.dir;
+    const bkPlaceName = (p) => p.kind === 'local' ? 'This computer' : p.kind === 'module' ? (p.label || p.id) : ((bkState && bkState.folders || []).find(f => f.dir === p.dir) || {}).label || p.dir;
     async function bkApi(url, body, method = 'POST') {
       const r = await fetch(url, { method, credentials: 'include', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
       const d = await r.json().catch(() => ({}));
@@ -494,12 +519,13 @@
       html += `<div class="bk-place">${sc.enabled ? '<span class="bk-on">✓</span>' : '<span class="bk-off">○</span>'}<span class="bk-held-what">${sc.enabled ? `<b>Every night at ${esc(bkAt(sc.at, ni.tz))}</b>, keeping the last ${esc(String(sc.keepNightly))} nightly backup${sc.keepNightly === 1 ? '' : 's'}${sc.keepWeekly ? ` and one from each of the last ${esc(String(sc.keepWeekly))} week${sc.keepWeekly === 1 ? '' : 's'}` : ''}${nextText ? ` · <span class="bk-dim">${nextText}</span>` : ''}` : '<b>Nightly backups are off.</b> <span class="bk-dim">Backups are made only when you press Back up now.</span>'}</span><button class="st-test-btn" onclick="bkScheduleDialog()">Change…</button></div>`;
       if (ni.lastError) html += `<div class="bk-strip bk-bad"><span class="bk-strip-text">The nightly backup of ${esc(bkWhen(ni.lastError.at))} failed: ${esc(ni.lastError.message)}</span></div>`;
       if (ni.keepSkipped) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">Older nightly backups aren't being removed: ${esc(ni.keepSkipped.why)}.</span></div>`;
-      if ((ni.copyErrors || []).length) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">The last nightly backup couldn't be copied to ${ni.copyErrors.map(c => esc(c.dir)).join(', ')}. It is on this computer; the next backup copies again.</span></div>`;
+      if ((ni.copyErrors || []).length) html += `<div class="bk-strip bk-warn"><span class="bk-strip-text">The last nightly backup couldn't be copied to ${ni.copyErrors.map(c => esc(c.label || c.dir)).join(', ')}. It is on this computer; the next backup copies again.</span></div>`;
       html += `<div class="bk-sub">Where</div>`;
       const local = (s.places || []).find(p => p.kind === 'local');
       html += `<div class="bk-place"><span class="bk-on">✓</span><b>This computer</b><span class="bk-dim">${esc(local ? local.dir : 'the backups folder')}</span></div>`;
       (s.folders || []).forEach((f, i) => { html += `<div class="bk-place"><span class="bk-on">✓</span><b>${esc(f.label || 'Folder')}</b><span class="bk-dim">${esc(f.dir)}</span><button class="st-test-btn" onclick="removeBackupFolder(${i}, this)">Remove</button></div>`; });
       if (s.iCloud && !(s.folders || []).some(f => f.dir === s.iCloud)) html += `<div class="bk-place"><span class="bk-off">○</span><b>iCloud Drive</b><span class="bk-dim">${esc(s.iCloud)}</span><button class="st-test-btn" onclick="addBackupFolder(true, this)">Use it</button></div>`;
+      (s.places || []).filter(p => p.kind === 'module').forEach(p => { html += `<div class="bk-place"><span class="bk-on">✓</span><b>${esc(bkPlaceName(p))}</b><span class="bk-dim">(managed in Data connectors)</span></div>`; });
       html += `<div class="bk-place"><span class="bk-off">+</span><b>Another folder</b><input type="text" id="bk-folder" placeholder="full path: a cloud-synced folder, an external disk, a NAS" aria-label="Another backup folder"><button class="st-test-btn" onclick="addBackupFolder(false, this)">Add</button></div>`;
       html += `<div class="st-hint">To keep copies off this computer, add a folder your cloud app keeps in sync (iCloud Drive, Google Drive, Dropbox or OneDrive): every backup is copied there and the app uploads it. Or download a backup (⬇) and save it anywhere.</div>`;
       html += `<div class="bk-place">🔒 <span class="bk-held-what">Encrypted with your backup password. If you forget it, your backups can't be opened, unless you keep the spare key (Show recovery key).</span><button class="st-test-btn" onclick="bkPasswordDialog('change')">Change password</button><button class="st-test-btn" onclick="bkShowKeyDialog()">Show recovery key</button><button class="st-test-btn" onclick="bkPasswordDialog('leaked')">It may have leaked…</button></div>`;
@@ -1398,11 +1424,165 @@
     }
 
     // ── Trading wallets (owner panel). Agents never see this; they only get wallet_* tools. ──
-    async function walletApi(path, body) {
-      const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include' }
-        : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    async function walletApi(path, body, signal) {
+      const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include', signal }
+        : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
       const j = await r.json(); if (!r.ok) throw new Error(j.error || 'Request failed'); return j;
     }
+    // Face ID / fingerprint unlock of the keystore (WebAuthn PRF). Shared verbatim with lib/ui-passkey.js and mobile.js
+    // (test/ui-passkey.test.js keeps them in step).
+    // ── passkey helpers (begin) ──
+    function pkB64u(buf) {
+      const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+      let s = '';
+      for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+      return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function pkBytes(s) {
+      const t = String(s).replace(/-/g, '+').replace(/_/g, '/');
+      const bin = atob(t + '='.repeat((4 - (t.length % 4)) % 4));
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    function pkUsable(loc = location, w = window) {
+      if (!w.PublicKeyCredential || !navigator.credentials) return { ok: false, code: 'no_api', text: "This browser can't use passkeys." };
+      const host = loc.hostname || '';
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':') || host === 'localhost' || host.endsWith('.localhost')) {
+        return { ok: false, code: 'bad_address', text: `Face ID and fingerprint work on My Maestro's secure tailnet address (https), not on ${host}.` };
+      }
+      if (loc.protocol !== 'https:') {
+        return { ok: false, code: 'bad_address', text: "Face ID and fingerprint need My Maestro's secure (https) address." };
+      }
+      return { ok: true, code: '', text: '' };
+    }
+    function pkErrorText(e) {
+      const name = e && e.name;
+      if (name === 'NotAllowedError') return 'Cancelled, or the device did not confirm it was you.';
+      if (name === 'InvalidStateError') return 'This device is already set up.';
+      if (name === 'SecurityError') return "This address can't use passkeys.";
+      if (name === 'AbortError') return 'Cancelled.';
+      return (e && e.message) || 'Something went wrong.';
+    }
+    function pkStop(signal) {
+      if (signal && signal.aborted) throw new DOMException('Cancelled.', 'AbortError');
+    }
+    async function pkUnlock(api, signal) {
+      const o = await api('passkey/options', { purpose: 'unlock' });
+      pkStop(signal);
+      const one = o.allowCredentials.length === 1;
+      const byCred = {};
+      for (const c of o.allowCredentials) byCred[c.id] = { first: pkBytes(o.prfSalts[c.id]) };
+      const publicKey = {
+        challenge: pkBytes(o.challenge), rpId: o.rpId, timeout: o.timeout, userVerification: 'required',
+        allowCredentials: o.allowCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
+        extensions: { prf: { evalByCredential: byCred, ...(one ? { eval: { first: pkBytes(o.prfSalts[o.allowCredentials[0].id]) } } : {}) } },
+      };
+      const cred = await navigator.credentials.get({ publicKey, signal });
+      pkStop(signal);
+      const prf = cred.getClientExtensionResults().prf?.results?.first;
+      if (!prf) throw new Error("This device didn't give the unlock secret. Use the passphrase instead.");
+      return api('passkey/unlock', {
+        challenge: o.challenge, id: cred.id,
+        clientDataJSON: pkB64u(cred.response.clientDataJSON), authenticatorData: pkB64u(cred.response.authenticatorData),
+        signature: pkB64u(cred.response.signature), prf: pkB64u(prf),
+      });
+    }
+    async function pkAdd(api, { passphrase, label }, confirmStep, signal) {
+      const stray = ' A passkey named "My Maestro wallet" may have been saved on this device; you can delete it in its password manager.';
+      const o = await api('passkey/options', { purpose: 'register', passphrase });
+      pkStop(signal);
+      const cred = await navigator.credentials.create({ publicKey: {
+        challenge: pkBytes(o.challenge), rp: o.rp, user: { ...o.user, id: pkBytes(o.user.id) }, pubKeyCredParams: o.pubKeyCredParams,
+        timeout: o.timeout, attestation: 'none', authenticatorSelection: o.authenticatorSelection,
+        excludeCredentials: o.excludeCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
+        extensions: { prf: { eval: { first: pkBytes(o.prfSalt) } } },
+      }, signal });
+      pkStop(signal);
+      const ext = cred.getClientExtensionResults().prf;
+      if (ext && ext.enabled === false) throw new Error("This device's passkeys can't unlock the wallet. Keep using the passphrase here." + stray);
+      const pub = cred.response.getPublicKey ? cred.response.getPublicKey() : null;
+      if (!pub) throw new Error("This device's passkey type isn't supported here.");
+      let prf = ext?.results?.first, confirm;
+      if (!prf) {
+        pkStop(signal);
+        await confirmStep();
+        const c = await api('passkey/options', { purpose: 'confirm', registerChallenge: o.challenge });
+        pkStop(signal);
+        const g = await navigator.credentials.get({ publicKey: {
+          challenge: pkBytes(c.challenge), rpId: c.rpId, timeout: c.timeout, userVerification: 'required',
+          allowCredentials: [{ type: 'public-key', id: cred.rawId }],
+          extensions: { prf: { eval: { first: pkBytes(c.prfSalt) } } },
+        }, signal });
+        prf = g.getClientExtensionResults().prf?.results?.first;
+        if (!prf) throw new Error("This device didn't give the unlock secret, so it can't unlock the wallet." + stray);
+        confirm = { challenge: c.challenge, clientDataJSON: pkB64u(g.response.clientDataJSON), authenticatorData: pkB64u(g.response.authenticatorData), signature: pkB64u(g.response.signature) };
+      }
+      pkStop(signal);
+      return api('passkey/register', {
+        passphrase, label, challenge: o.challenge,
+        credential: {
+          id: cred.id, clientDataJSON: pkB64u(cred.response.clientDataJSON), authenticatorData: pkB64u(cred.response.getAuthenticatorData()),
+          publicKey: pkB64u(pub), publicKeyAlgorithm: cred.response.getPublicKeyAlgorithm(),
+        },
+        prf: pkB64u(prf), ...(confirm ? { confirm } : {}),
+      });
+    }
+    function pkDeviceLabel(nav = navigator) {
+      const ua = String((nav && nav.userAgent) || '');
+      const plat = String((nav && nav.userAgentData && nav.userAgentData.platform) || '');
+      if (/iPhone|iPod/i.test(ua)) return 'iPhone';
+      if (/iPad/i.test(ua) || (/Macintosh/i.test(ua) && nav.maxTouchPoints > 1)) return 'iPad';
+      if (/^Android$/i.test(plat) || /Android/i.test(ua)) return 'Android phone';
+      if (/^macOS$/i.test(plat) || /Macintosh|Mac OS X/i.test(ua)) return 'Mac';
+      if (/^Windows$/i.test(plat) || /Windows/i.test(ua)) return 'Windows PC';
+      if (/^(Linux|Chrome OS|Chromium OS)$/i.test(plat) || /Linux|X11|CrOS/i.test(ua)) return 'Linux computer';
+      return 'This device';
+    }
+    // ── passkey helpers (end) ──
+    // One wallet run at a time (a Face ID / fingerprint add or unlock, a passphrase unlock, a remove):
+    // { ctrl, cancelled, rejectConfirm, confirmRow, fields } (the run's own confirm row and passphrase inputs).
+    // Whoever cancels a run (a redraw or closing the panel) also cleans it up at once; the cancelled run's own code
+    // then finds pkRunEnd(run) false and does nothing more. walletPkList is the passkey list the panel last drew,
+    // so Remove can name the passkey without carrying its label in an attribute.
+    // walletPanelGen counts panel loads and runs: a load only draws while it is still the latest.
+    let pkRun = null, walletPkList = [], walletPanelGen = 0;
+    const PK_ENROLL_MS = 110000;   // the server's challenge lives 120 seconds
+    function pkRunStart(confirmRow, fields) {
+      if (pkRun) return null;
+      const run = { ctrl: new AbortController(), cancelled: false, rejectConfirm: null, confirmRow, fields: fields || [], watch: null, timer: null };
+      pkRun = run;
+      walletPanelGen++;
+      document.querySelectorAll('#pk-box button, #pk-unlock-btn').forEach(b => { b.disabled = true; });
+      // The panel leaving the page ends the run.
+      const overlay = document.getElementById('gs-overlay');
+      if (overlay && window.MutationObserver) {
+        run.watch = new MutationObserver(() => { if (!overlay.isConnected) pkCancel(); });
+        run.watch.observe(document.body, { childList: true });
+      }
+      return run;
+    }
+    function pkRunCleanup(run) {
+      if (run.watch) { run.watch.disconnect(); run.watch = null; }
+      if (run.timer) { clearTimeout(run.timer); run.timer = null; }
+      document.querySelectorAll('#pk-box button, #pk-unlock-btn').forEach(b => { b.disabled = false; });
+      if (run.confirmRow && run.confirmRow.isConnected) run.confirmRow.innerHTML = '';
+      for (const f of run.fields) f.value = '';
+    }
+    function pkCancel() {
+      if (!pkRun) return;
+      const run = pkRun; pkRun = null; run.cancelled = true;
+      try { run.ctrl.abort(); } catch { /* already finished */ }
+      if (run.rejectConfirm) { const rej = run.rejectConfirm; run.rejectConfirm = null; rej(new DOMException('Cancelled.', 'AbortError')); }
+      pkRunCleanup(run);
+    }
+    function pkRunEnd(run) {
+      if (pkRun !== run) return false;
+      pkRun = null; pkRunCleanup(run);
+      return true;
+    }
+    // esc() leaves quotes alone; every value inside an attribute goes through this one.
+    const escAttr = (s) => String(s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
     // ── Job pool: detached jobs agents run with run_job (survive the turn; owner woken when done) ──
     let jobsPanelLog = null;
     async function jobsApi(q, body) {
@@ -1652,15 +1832,23 @@
     }
     setInterval(refreshScheduleBadge, 15000); setTimeout(refreshScheduleBadge, 1500);
 
-    async function openWalletPanel(flash, extra = {}) {
+    // opts.refresh: a redraw after a run; it never reopens a Wallet panel the person closed meanwhile.
+    async function openWalletPanel(flash, extra = {}, opts = {}) {
+      const gen = ++walletPanelGen;
+      const panelGone = () => { const ov = document.getElementById('gs-overlay'); return !(ov && ov.isConnected && ov.querySelector('#pk-box')); };
       const dock = { dock: true, title: '👛 Trading wallets' }; const head = ''; const field = 'width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:transparent;color:inherit;font:inherit;margin:6px 0';
-      let s; try { s = await walletApi('status'); } catch (e) { return gsModal(`${head}<div class="gs-blocker">${esc(e.message)}</div><div class="gs-actions">${gsClose}</div>`, dock); }
+      let s, err = null; try { s = await walletApi('status'); } catch (e) { err = e; }
+      if (gen !== walletPanelGen) return;   // a newer load or a run started meanwhile
+      if (opts.refresh && panelGone()) return;
+      if (err) { pkCancel(); return gsModal(`${head}<div class="gs-blocker">${esc(err.message)}</div><div class="gs-actions">${gsClose}</div>`, dock); }
+      walletPkList = (s.keystore && s.keystore.passkeys) || [];
       const note = (flash ? `<div class="gs-ok">${esc(flash)}</div>` : '') + (extra.token
         ? `<div class="gs-ok"><strong>New executor token, shown once.</strong> Only its hash is stored; if you lose it, generate another.<br>
             <code id="x-token-out" style="user-select:all;word-break:break-all">${esc(extra.token)}</code>
             <button class="gs-btn secondary" onclick="navigator.clipboard.writeText(document.getElementById('x-token-out').textContent).then(()=>{this.textContent='Copied'})">Copy</button></div>` : '');
       const alerts = (s.alerts || []).map(a => `<div class="gs-blocker"><strong>Security alert:</strong> ${esc(a.message)} (−${esc(a.droppedEth)} ETH)</div>`).join('');
       if (!s.keystore.exists) {
+        pkCancel();
         return gsModal(`${head}${note}<p class="gs-sub">Create an encrypted keystore. The passphrase is the only thing protecting the keys on disk, and it cannot be recovered: if you lose it, move funds out first or the wallets are gone.</p>
           <input id="w-pass" type="password" placeholder="Passphrase (12+ characters)" style="${field}"><input id="w-pass2" type="password" placeholder="Repeat passphrase" style="${field}">
           <div class="gs-actions">${gsClose}<button class="gs-btn" onclick="walletAct('init')">Create keystore</button></div>`, dock);
@@ -1686,14 +1874,31 @@
         <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('backup')">Back up now</button></div></div>`;
       const who = (s.walletAgents || []).join(', ');
       // Locked: the Unlock box comes FIRST, before the Executor and Hyperliquid boxes, which have passphrase fields of their own.
+      const pkOk = pkUsable(), pkList = s.keystore.passkeys || [];
+      const pkHere = pkOk.ok && pkList.some(p => p.rpId === location.hostname);
       const unlockBox = s.keystore.unlocked ? '' : `<div class="gs-box" style="border-color:var(--accent)"><h4>Unlock the keystore</h4>
-        <div class="gs-sub" style="margin-bottom:4px">Locked since the hub last started. Type the keystore passphrase here (this box, not the Executor or Hyperliquid ones) and press Enter or Unlock.</div>
+        <div class="gs-sub" style="margin-bottom:4px">Locked since the hub last started. ${pkHere ? 'Use this device, or type' : 'Type'} the keystore passphrase here (this box, not the Executor or Hyperliquid ones) and press Enter or Unlock.</div>
+        ${pkHere ? `<div class="gs-actions" style="margin:6px 0"><button class="gs-btn" id="pk-unlock-btn" onclick="walletAct('pkunlock')">Unlock with Face ID / fingerprint</button></div>` : ''}
         <input id="w-pass" type="password" autocomplete="new-password" placeholder="Keystore passphrase" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('unlock')}">
         <div class="gs-actions"><button class="gs-btn" onclick="walletAct('unlock')">Unlock</button></div></div>`;
+      const pkRows = pkList.map(p => `<div class="gs-commit"><strong>${esc(p.label)}</strong> <span class="gs-sub" style="margin:0 6px">${esc(p.rpId)} · added ${esc(new Date(p.createdAt).toLocaleDateString())}</span>
+          <button class="gs-btn secondary" style="padding:2px 8px;font-size:0.72rem" data-pk-id="${escAttr(p.id)}" onclick="walletAct('pkremove', this.dataset.pkId)">Remove</button></div>`).join('')
+        || '<div class="gs-sub">None set up yet.</div>';
+      const passkeyBox = `<div class="gs-box" id="pk-box"><h4>Face ID / fingerprint</h4>
+        <div class="gs-sub" style="margin-bottom:6px">Unlock the wallet with Face ID, a fingerprint or the screen lock instead of typing the passphrase. Add each device once with the passphrase. Your device's password manager may copy the passkey to your other devices; each one still asks for your face, fingerprint or screen lock.</div>
+        ${pkRows}
+        ${pkOk.ok ? `<div class="gs-sub" style="margin-top:8px">Add this device</div>
+          <input id="pk-label" value="${escAttr(pkDeviceLabel())}" maxlength="40" placeholder="Name for this device" style="${field}">
+          <input id="pk-pass" type="password" autocomplete="off" placeholder="Keystore passphrase (needed once; never stored)" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('pkadd')}">
+          <div id="pk-confirm-row"></div>
+          <div class="gs-actions"><button class="gs-btn" id="pk-add-btn" onclick="walletAct('pkadd')">Add</button></div>`
+          : `<div class="gs-sub" style="margin-top:8px">${esc(pkOk.text)}</div>`}
+        <label class="gs-sub" style="display:block;margin-top:8px"><input type="checkbox" id="pk-notice" ${s.lockedNotice ? 'checked' : ''} onchange="walletLockedNotice(this)"> Send admins a phone notice when the wallet is locked after a restart</label></div>`;
       let html = `${head}${note}${alerts}<p class="gs-sub">Keystore: <strong>${s.keystore.unlocked ? 'unlocked' : 'locked'}</strong> · Trading: <strong>${s.paused ? 'PAUSED' : 'enabled'}</strong>${(s.pausedWallets || []).length ? ` (paused wallets: ${esc(s.pausedWallets.join(', '))})` : ''} · Agent with access: <strong>${esc(who)}</strong></p>
-        ${unlockBox}${revealOut}<div class="gs-box"><h4>Wallets on Base</h4>${rows}</div>${recoveryBox}
+        ${unlockBox}${passkeyBox}${revealOut}<div class="gs-box"><h4>Wallets on Base</h4>${rows}</div>${recoveryBox}
         <p class="gs-sub">Fund a wallet by sending ETH on <strong>Base</strong> to its address. Whatever it holds is the most the agent can lose. Never import a seed phrase; these are fresh standalone keys.</p>`;
       let x = null; try { x = await walletApi('executor'); } catch { /* older server */ }
+      if (gen !== walletPanelGen) return;
       if (x) {
         const opts = s.wallets.map(w => `<option value="${esc(w.name)}" ${x.wallet === w.name ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
         const actWallet = a => s.wallets.map(w => `<option value="${esc(w.name)}" ${a.wallet === w.name ? 'selected' : ''}>${esc(w.name)}${w.tier === 'open' ? ' (OPEN)' : ''}</option>`).join('');
@@ -1714,6 +1919,7 @@
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('xtoken')">New token</button><button class="gs-btn" onclick="walletAct('xsave')">Save executor settings</button></div></div>`;
       }
       let h = null; try { h = await walletApi('hl'); } catch { /* older server */ }
+      if (gen !== walletPanelGen) return;
       if (h) {
         const wopts = s.wallets.filter(w => !/^hl-agent-/.test(w.name)).map(w => `<option value="${esc(w.name)}" ${h.wallet === w.name ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
         const tools = Object.entries(h.tools).map(([k, t]) => `<label style="margin-right:10px;white-space:nowrap"><input type="checkbox" id="h-act-${k}" ${t.enabled ? 'checked' : ''}> ${esc(k)}</label><label style="margin-right:14px;white-space:nowrap"><input type="checkbox" id="h-dry-${k}" ${t.dryRun ? 'checked' : ''}> dry run</label>`).join('');
@@ -1735,6 +1941,8 @@
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('hagent')">Set up Hyperliquid agent key</button><button class="gs-btn secondary" onclick="walletAct('hextagent')">Authorize external agent</button><button class="gs-btn" onclick="walletAct('hsave')">Save Hyperliquid settings</button></div></div>`;
       }
       let fw = null; try { fw = await walletApi('allowlist'); } catch { /* older server */ }
+      if (gen !== walletPanelGen) return;
+      if (opts.refresh && panelGone()) return;
       if (fw && fw.roles) {
         walletFw = fw;
         const chainName = { 1: 'Ethereum', 8453: 'Base', 42161: 'Arbitrum', 10: 'Optimism' };
@@ -1785,6 +1993,7 @@
           <button class="gs-btn secondary" onclick="walletAct('pause', ${!s.paused})">${s.paused ? 'Resume trading' : 'Pause all trading'}</button>
           <button class="gs-btn" onclick="walletAct('create')">Create wallet</button></div>`;
       }
+      pkCancel();   // a redraw ends a Face ID / fingerprint run still open on the panel being replaced
       gsModal(html, dock);
       walletFwHint();
     }
@@ -1797,16 +2006,77 @@
       if (any && role !== 'executor') { el.innerHTML = `Any function on this address is allowed (the theft checks still apply).`; return; }
       el.innerHTML = `This role allows only: ${list.length ? list.map(x => `<code>${esc(x)}</code>`).join(', ') : '<em>nothing</em>'}.` + (role === 'contract' ? ` Tick "any selector" for other contracts.` : '');
     }
+    // The Face ID / fingerprint buttons of the Wallet panel. Buttons stay disabled while a request runs; the passphrase
+    // field is emptied before the request and stays empty after it.
+    async function walletPasskeyAct(action, id) {
+      if (pkRun) return;   // one run at a time: this click or Enter is ignored
+      if (action === 'pkremove') {
+        const known = walletPkList.find(p => p.id === id), label = known ? known.label : 'this passkey';
+        if (!confirm(`Remove "${label}"? It will stop unlocking this wallet. Copies of the wallet file made before now still accept it, protected by that passkey's own Face ID, fingerprint or screen lock.`)) return;
+      }
+      const passEl = action === 'unlock' ? document.getElementById('w-pass') : action === 'pkadd' ? document.getElementById('pk-pass') : null;
+      const run = pkRunStart(document.getElementById('pk-confirm-row'), passEl ? [passEl] : []);
+      if (!run) return;
+      if (action === 'pkadd') {
+        run.timer = setTimeout(() => { run.timer = null; if (pkRun === run) { pkCancel(); alert('Setup timed out. Start again.'); } }, PK_ENROLL_MS);
+      }
+      let passphrase = '', name = '';
+      if (passEl) {
+        passphrase = passEl.value; passEl.value = '';   // the passphrase lives only in this request
+        if (!passphrase) {
+          pkRunEnd(run);
+          passEl.scrollIntoView({ block: 'center' }); passEl.focus();
+          return alert(action === 'unlock' ? 'Type the keystore passphrase in the "Unlock the keystore" box at the top of the panel.' : 'Type the keystore passphrase in the "Face ID / fingerprint" box first.');
+        }
+      }
+      try {
+        let done;
+        if (action === 'pkremove') { await walletApi('passkey/remove', { id }, run.ctrl.signal); done = 'Removed.'; }
+        else if (action === 'pkunlock') { await pkUnlock((p, b) => walletApi(p, b, run.ctrl.signal), run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+        else if (action === 'unlock') { await walletApi('unlock', { passphrase }, run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+        else {
+          const labelEl = document.getElementById('pk-label');
+          name = ((labelEl && labelEl.value) || '').trim() || pkDeviceLabel();
+          const confirmStep = () => new Promise((resolve, reject) => {
+            if (run.cancelled || run.ctrl.signal.aborted) return reject(new DOMException('Cancelled.', 'AbortError'));
+            const row = run.confirmRow; if (!row) return resolve();
+            run.rejectConfirm = reject;
+            row.innerHTML = '<div class="gs-sub">One more tap: confirm with this device.</div><div class="gs-actions"><button class="gs-btn" id="pk-confirm-btn">Confirm with Face ID / fingerprint</button></div>';
+            row.querySelector('#pk-confirm-btn').onclick = () => { run.rejectConfirm = null; row.innerHTML = ''; resolve(); };
+          });
+          await pkAdd((p, b) => walletApi(p, b, run.ctrl.signal), { passphrase, label: name }, confirmStep, run.ctrl.signal);
+          done = `Added. ${name} can now unlock the wallet.`;
+        }
+        passphrase = '';   // the request that needed it has settled
+        if (!pkRunEnd(run)) return;   // cancelled: its canceller already cleaned up
+        await openWalletPanel(done, {}, { refresh: true });
+      } catch (e) {
+        passphrase = '';
+        if (!pkRunEnd(run)) return;
+        alert(pkErrorText(e));
+      }
+    }
+    // The phone notice "Your wallet is locked" after a restart: on or off.
+    async function walletLockedNotice(box) {
+      const on = !!box.checked;
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ walletLockedNotice: on }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Could not save that.');
+      } catch (e) { box.checked = !on; alert(e.message); }
+    }
     async function walletAct(action, arg, arg2) {
+      if (pkRun) return;   // a Face ID / fingerprint or passphrase run is going: every other action waits
       const v = id => (document.getElementById(id) || {}).value || '';
       // Read the executor passphrase field and clear it immediately: it lives only in this request.
       const takePass = () => { const el = document.getElementById('x-pass'); const p = el ? el.value : ''; if (el) el.value = ''; if (!p) alert('Enter the keystore passphrase in the Executor box first.'); return p; };
       try {
         if (action === 'init') { if (v('w-pass') !== v('w-pass2')) return alert('The two passphrases do not match.'); await walletApi('init', { passphrase: v('w-pass') }); return openWalletPanel('Keystore created and unlocked.'); }
         if (action === 'unlock') {
+          if (pkRun) return;   // one run at a time
           const p = v('w-pass'); if (!p) { const el = document.getElementById('w-pass'); if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); } return alert('Type the keystore passphrase in the "Unlock the keystore" box at the top of the panel.'); }
-          await walletApi('unlock', { passphrase: p }); return openWalletPanel('Unlocked until the hub restarts.');
+          return walletPasskeyAct('unlock');
         }
+        if (action === 'pkunlock' || action === 'pkadd' || action === 'pkremove') return walletPasskeyAct(action, arg, arg2);
         if (action === 'lock') { await walletApi('lock', {}); return openWalletPanel('Locked.'); }
         if (action === 'pause') {
           const wallet = arg2 || null;
@@ -2076,11 +2346,64 @@
     // Settings groups: openSettings() draws its sections in one column, then groupSettings() folds them into these
     // groups, closed until opened. Sections are matched by id; one this list doesn't know lands in the last group,
     // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
+    // Workers at once (settings.workersAtOnce): one number per AI service, admins only. Rows come from /api/hub/status pacing.caps.
+    const WAO_LABELS = { 'claude-sdk': 'Claude subscription', 'codex-cli': 'ChatGPT subscription', anthropic: 'Anthropic API', openai: 'OpenAI API', codex: 'OpenAI Codex API', google: 'Google Gemini', perplexity: 'Perplexity', lmstudio: 'LM Studio', ollama: 'Ollama' };
+    let waoStored = {};   // the saved map as the page opened; rows for services not listed keep their value
+    async function loadWorkersAtOnce() {
+      const box = document.getElementById('st-wao-rows');
+      if (!box) return;
+      try {
+        const r = await fetch('/api/hub/status', { credentials: 'include' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const caps = ((await r.json()).pacing || {}).caps || [];
+        box.textContent = '';
+        for (const c of caps) {
+          const row = document.createElement('div');
+          row.className = 'st-row';
+          const label = document.createElement('label');
+          label.textContent = WAO_LABELS[c.provider] || c.provider;
+          const input = document.createElement('input');
+          input.type = 'number'; input.min = '1'; input.max = '32'; input.step = '1';
+          input.className = 'st-wao-input'; input.style.maxWidth = '90px';
+          input.dataset.provider = c.provider; input.dataset.default = String(c.defaultCap);
+          input.value = String(c.cap);
+          const dflt = document.createElement('span');
+          dflt.style.cssText = 'font-size:0.8rem;color:var(--text-dim)';
+          dflt.textContent = `(default ${c.defaultCap})`;
+          row.append(label, input, dflt);
+          box.appendChild(row);
+        }
+        box.dataset.loaded = '1';
+      } catch (e) { box.textContent = `Could not load: ${e.message}`; }
+    }
+    // The saved map for the Save button: stored entries stay, each row sets its value or (equal to its default) removes the key.
+    function workersAtOnceFromPage() {
+      const box = document.getElementById('st-wao-rows');
+      if (!box || box.dataset.loaded !== '1') return undefined;
+      const out = { ...waoStored };
+      const bad = [];
+      for (const input of box.querySelectorAll('.st-wao-input')) {
+        const n = Number(input.value), d = Number(input.dataset.default), k = input.dataset.provider;
+        input.setCustomValidity('');
+        if (input.value.trim() === '' || !Number.isInteger(n) || n < 1 || n > 32) {   // keep what was saved; say so
+          input.setCustomValidity('1 to 32');
+          bad.push(input);
+          continue;
+        }
+        if (n === d) delete out[k]; else out[k] = n;
+      }
+      if (bad.length) {
+        bad[0].reportValidity();
+        alert(`Workers at once: ${bad.map(i => WAO_LABELS[i.dataset.provider] || i.dataset.provider).join(', ')} must be a whole number from 1 to 32; the previous value is kept.`);
+      }
+      return out;
+    }
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-updates-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-updates-section'] },
+      { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
-      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
+      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
       { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
@@ -2120,6 +2443,97 @@
       const open = {};
       for (const g of document.querySelectorAll('#st-groups details.st-group')) if (g.open && !g.dataset.autoOpen) open[g.dataset.group] = true;
       try { localStorage.setItem('hub-settings-open', JSON.stringify(open)); } catch {}
+    }
+
+    // Settings, Security: the "Require two-factor sign-in for admins" switch. Checking it posts at once; unchecking opens
+    // a confirm panel that asks for the admin's password (and a code when they have two-factor) before anything is sent.
+    let stA2faBusy = false;
+    function stAdmin2faText(required) {
+      return required
+        ? 'Admins who have two-factor can\'t remove it from their own account. An admin without it is asked to set it up.'
+        : 'An admin may remove two-factor from their own account and then signs in with a password alone.';
+    }
+    function stAdmin2faBusy(busy) {
+      stA2faBusy = busy;
+      for (const el of document.querySelectorAll('#st-a2fa-on, #st-a2fa-confirm button')) el.disabled = busy;
+    }
+    function stAdmin2faMsg(text, ok) {
+      const el = document.getElementById('st-a2fa-msg');
+      if (!el) return;
+      el.textContent = text || '';
+      el.style.color = ok ? 'var(--green, #4caf50)' : 'var(--accent)';
+    }
+    async function stAdmin2faPaint() {
+      try {
+        const r = await fetch('/api/me', { credentials: 'include' });
+        if (r.ok) window.hubMe = await r.json();
+      } catch (e) { /* keep what we have */ }
+      const box = document.getElementById('st-a2fa-on');
+      if (!box) return;
+      const required = !(window.hubMe && window.hubMe.admin2faRequired === false);
+      box.checked = required;
+      document.getElementById('st-a2fa-text').textContent = stAdmin2faText(required);
+      stSum('security', 'a2fa', required ? 'Two-factor required for admins' : 'Two-factor optional for admins');
+    }
+    function stAdmin2faToggle(box) {
+      if (stA2faBusy) { box.checked = !box.checked; return; }
+      if (!box.checked) {
+        box.checked = true;   // stays on until the password check passes
+        stAdmin2faAsk();
+        return;
+      }
+      stAdmin2faSend({ required: true }, true);
+    }
+    function stAdmin2faAsk() {
+      const me = window.hubMe;
+      const panel = document.getElementById('st-a2fa-confirm');
+      if (!panel) return;
+      stAdmin2faMsg('');
+      panel.innerHTML = `<div class="st-hint">Allow admins to remove their own two-factor? An admin who removes it signs in with a password alone, so anyone who learns that password could sign in as that admin.</div>
+        <div class="st-row"><label style="flex-basis:150px">Your password</label><input type="password" id="st-a2fa-pw" autocomplete="current-password"></div>
+        ${me && me.user && me.user.totpEnabled ? '<div class="st-row"><label style="flex-basis:150px">Code</label><input type="text" id="st-a2fa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code"></div>' : ''}
+        <div class="st-row"><label style="flex-basis:150px"></label>
+          <button class="st-test-btn" style="color:#fff;background:#b71c1c" onclick="stAdmin2faOff()">Turn it off</button>
+          <button class="st-test-btn" onclick="stAdmin2faCancel()">Cancel</button></div>`;
+      document.getElementById('st-a2fa-pw').focus();
+    }
+    function stAdmin2faCancel() {
+      const panel = document.getElementById('st-a2fa-confirm');
+      if (panel) panel.innerHTML = '';
+      stAdmin2faMsg('');
+    }
+    function stAdmin2faOff() {
+      if (stA2faBusy) return;
+      const password = document.getElementById('st-a2fa-pw').value;
+      const codeEl = document.getElementById('st-a2fa-code');
+      const body = { required: false, password };
+      if (codeEl) body.code = (codeEl.value || '').trim();
+      stAdmin2faSend(body, false);
+    }
+    async function stAdmin2faSend(body, turningOn) {
+      stAdmin2faBusy(true);
+      let error = '';
+      try {
+        const r = await fetch('/api/security/admin-2fa', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.error) error = d.error || `HTTP ${r.status}`;
+        else if (window.hubMe) window.hubMe.admin2faRequired = d.required !== false;
+      } catch (e) { error = e.message || 'failed'; }
+      for (const id of ['st-a2fa-pw', 'st-a2fa-code']) { const el = document.getElementById(id); if (el) el.value = ''; }
+      stAdmin2faBusy(false);
+      if (error) {
+        stAdmin2faMsg(error);
+        if (turningOn) { const box = document.getElementById('st-a2fa-on'); if (box) box.checked = false; }
+        return;
+      }
+      stAdmin2faCancel();
+      const required = !(window.hubMe && window.hubMe.admin2faRequired === false);
+      const box = document.getElementById('st-a2fa-on'); if (box) box.checked = required;   // Settings may have closed meanwhile
+      const txt = document.getElementById('st-a2fa-text'); if (txt) txt.textContent = stAdmin2faText(required);
+      stSum('security', 'a2fa', required ? 'Two-factor required for admins' : 'Two-factor optional for admins');
+      const mine = window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled;
+      stAdmin2faMsg(required ? '' : (mine ? 'Two-factor is now optional for admins. Your own two-factor stays on until you remove it in your account menu, Security.' : 'Two-factor is now optional for admins.'), true);
+      renderUserChip();   // the account menu's two-factor reminder follows the switch
     }
 
     function groupSettings(data) {
@@ -2242,6 +2656,14 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadSecurityCheck(true)">Run now</button><span id="st-sec-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadSecurityCheck, 0);
+      // Memory (lib/memory-health): how each agent's memory is doing, nightly and on demand.
+      html += `<div class="st-section" id="st-memory-section"><h4>Memory</h4>
+        <div class="st-hint">Each agent's memory: its Records against their cap, how full its context gets, compression, its conversation archive and its chat. The check runs every night and on demand, and says what would help. It changes nothing by itself.</div>
+        <div id="st-mh-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-mh-msg" class="st-hint mh-msg" role="status" style="margin-left:0"></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadMemoryHealth(true)">Check now</button><span id="st-mh-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+      setTimeout(loadMemoryHealth, 0);
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
         <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
@@ -2255,9 +2677,24 @@
         <div id="bk-body" class="bk-body">Checking…</div>
       </div>`;
       setTimeout(loadBackups, 0);
-      // Modules (lib/modules): optional capabilities with guided setup live on their own page.
-      html += `<div class="st-section" id="st-modules-section"><h4>Modules</h4>
-        <div class="st-hint">Optional capabilities for agents (crypto exchanges, wallets, mail, search...), each with a step-by-step setup, encrypted keys and per-agent access. <a href="/modules" style="color:var(--accent)">Open the Modules page →</a></div>
+      // Two-factor rule for admins (server.js /api/security/admin-2fa): one switch, turned off only with a password and a code.
+      // It saves itself (the fields are cleared after every answer), so closing Settings never asks to discard it (data-no-dirty).
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-security-section" data-no-dirty><h4>Two-factor sign-in</h4>
+        <div class="st-row">
+          <label style="flex-basis:150px">Require two-factor sign-in for admins</label>
+          <input type="checkbox" id="st-a2fa-on" onchange="stAdmin2faToggle(this)">
+        </div>
+        <div class="st-hint" id="st-a2fa-text"></div>
+        <div class="st-hint" style="color:var(--text-dim)">Opening My Maestro directly to your network still needs an admin with two-factor. Members choose for themselves.</div>
+        <div id="st-a2fa-confirm"></div>
+        <div class="st-hint" id="st-a2fa-msg" role="status"></div>
+      </div>`;
+        setTimeout(stAdmin2faPaint, 0);
+      }
+      // Data connectors (lib/modules): outside services with a guided setup live on their own page.
+      html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
+        <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>
       </div>`;
       setTimeout(loadReadiness, 0);
 
@@ -2325,6 +2762,15 @@
         <div class="st-hint">Models that reason before they answer (Claude, Codex, DeepSeek, Grok, Qwen…) show it in a panel above the reply: open or close it, drag its bottom edge to any height, ⤢ for the full window. Starts with the next reply.</div>
       </div>`;
 
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-workers-section"><h4>Workers at once</h4>
+        <div id="st-wao-rows" class="st-hint" style="margin-left:0">Loading…</div>
+        <div class="st-hint">How many workers and consults may run at once on this service. If the service pushes back, My Maestro drops to one at a time and climbs back up.</div>
+      </div>`;
+        waoStored = (data.workersAtOnce && typeof data.workersAtOnce === 'object') ? { ...data.workersAtOnce } : {};
+        setTimeout(loadWorkersAtOnce, 0);
+      }
+
       {
         // When a question (or an approval) still waits: settings.notify.questionAfterMinutes (unset 3, null never).
         const qa = data.notify ? data.notify.questionAfterMinutes : undefined;
@@ -2344,6 +2790,13 @@
         <div class="st-hint">A notification when an agent's question (or an approval) is still unanswered after this long. Finished replies notify only when you click 🔔 Notify me next to Cancel while the reply is running.</div>
       </div>`;
       }
+
+      html += `<div class="st-section" id="st-chat-section"><h4>Chat</h4>
+        <div class="st-row">
+          <label style="flex-basis:auto"><input type="checkbox" id="st-fold-auto" ${foldAutoOn() ? 'checked' : ''} onchange="saveFoldAuto(this.checked)"> Fold consultations, scheduled tasks and hub notices into cards</label>
+        </div>
+        <div class="st-hint">This browser only. Turn it off to show every automatic turn in full.</div>
+      </div>`;
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
         <div class="st-row">
@@ -2455,8 +2908,8 @@
       </div>`;
         setTimeout(loadWebSearchStatus, 0);
       }
-      html += `<div class="st-section" id="st-cx-section"><h4>Data connectors</h4>
-        <div class="st-hint" style="margin-left:0">Outside services plugged in as data: a patient portal, any MCP server the hub starts, or one of the built-in skills wrapped as a connector. Each connector is open to all agents or only to the ones you name. A connector can always be on, or locked behind its own passphrase, or behind its group's passphrase (one unlock opens every connector in the group, say all of "medical"). Unlocks expire after an idle timeout (hub setting connectorsUnlockMinutes, default 240 minutes) and on restart. Sensitive connectors need the owner's policy nod for reads.</div>
+      html += `<div class="st-section" id="st-cx-section"><h4>Custom connectors (advanced)</h4>
+        <div class="st-hint" style="margin-left:0">Outside services plugged in as data: a patient portal, any MCP server the hub starts, or one of the built-in skills wrapped as a connector. Each connector is open to the lead agents always and to the other agents you name. A connector can always be on, or locked behind its own passphrase, or behind its group's passphrase (one unlock opens every connector in the group, say all of "medical"). Unlocks expire after an idle timeout (hub setting connectorsUnlockMinutes, default 240 minutes) and on restart. Sensitive connectors need the owner's policy nod for reads.</div>
         <div id="st-cx-status" style="font-size:0.78rem;color:var(--text-dim);min-height:1.1em;margin-bottom:6px"></div>
         <div id="st-cx-groups"></div>
         <div id="st-cx-list"></div>
@@ -2657,6 +3110,129 @@
         if (d.critical) stOpenGroup('status');
         paintSecurityBanner().catch(() => {});   // a Run now that resolves or finds something updates the banner at once
       } catch (e) { el.textContent = 'Could not run the security check: ' + e.message; if (state) state.textContent = ''; stSum('status', 'security', 'Security: could not check'); }
+    }
+    // Memory (lib/memory-health): agents needing attention first, each with what was found; the fine ones folded away.
+    const MH_LABEL = { red: 'needs attention', amber: 'could use a look', green: 'fine' };
+    function mhSize(n) { n = Number(n) || 0; return n < 1048576 ? `${Math.round(n / 1024)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(1)} GB`; }
+    let mhLoad = 0, mhGen = 0, mhEpoch = null, mhStateText = '', mhFollow = null, mhTicking = false;
+    const mhOldEpochs = new Set();   // epochs a newer one replaced: a late answer from one of them is old
+    const mhFollowing = new Map();   // tidy id -> follow until (ms)
+    // Inside an attribute a quote must be escaped too (esc covers text).
+    const mhAttr = (s) => esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    async function loadMemoryHealth(runNow = false) {
+      const el = document.getElementById('st-mh-list'); if (!el) return;
+      const state = document.getElementById('st-mh-state');
+      const mine = ++mhLoad;
+      if (state && runNow) state.textContent = 'Checking every agent…';
+      try {
+        const init = runNow ? { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' } : { credentials: 'include' };
+        const d = await (await fetch(runNow ? '/api/memory-health/run' : '/api/memory-health', init)).json();
+        if (mine !== mhLoad) return;   // a newer check answered first
+        if (!d.ok) throw new Error(d.error || 'failed');
+        mhRender(d);
+      } catch (e) {
+        if (mine !== mhLoad) return;
+        el.textContent = 'Could not check memory: ' + e.message; if (state) state.textContent = ''; stSum('status', 'memory', 'Memory: could not check');
+      }
+    }
+    function mhRender(d) {
+      const el = document.getElementById('st-mh-list'); if (!el) return;
+      // Answers can arrive out of order (a check, an action's re-check): never paint an older check over a newer one.
+      // Another epoch (the hub restarted, or its stored result was replaced) starts the comparison afresh.
+      const state = document.getElementById('st-mh-state');
+      const g = Number(d && d.gen) || 0;
+      const stale = () => { if (state && mhStateText) state.textContent = mhStateText; return false; };
+      if (d && d.epoch && mhOldEpochs.has(d.epoch)) return stale();
+      if (d && d.epoch && d.epoch !== mhEpoch) { if (mhEpoch) mhOldEpochs.add(mhEpoch); mhEpoch = d.epoch; mhGen = 0; }
+      if (g < mhGen) return stale();
+      mhGen = g;
+      const agents = Array.isArray(d.agents) ? d.agents : [];
+      const dot = (s) => `<span class="mh-dot mh-${mhAttr(s)}" title="${mhAttr(MH_LABEL[s] || s)}"></span>`;
+      // Each finding's buttons (lib/memory-health actions): optional; nothing depends on pressing one.
+      const acts = (a, i) => (Array.isArray(i.actions) && i.actions.length ? `<div class="mh-acts">${i.actions.map(x => `<button type="button" class="st-test-btn" data-act="${mhAttr(x.id)}" data-agent="${mhAttr(a.agent)}">${esc(x.label)}</button>`).join('')}</div>` : '');
+      const row = (a, all) => {
+        const items = (a.items || []).filter(i => all || i.status !== 'green');
+        return `<div class="mh-row"><div class="mh-head">${dot(a.status)}<b>${esc(a.display || a.agent)}</b></div>${items.map(i => `<div class="mh-item"><span class="mh-t mh-t-${esc(i.status)}">${esc(i.title)}</span> ${esc(i.detail || '')}${acts(a, i)}</div>`).join('') || '<div class="mh-item">Nothing to measure yet.</div>'}</div>`;
+      };
+      const flagged = agents.filter(a => a.status !== 'green'), fine = agents.filter(a => a.status === 'green');
+      const ex = d.extras || {}, b = ex.bundles || {}, ps = Array.isArray(ex.preSplit) ? ex.preSplit : [];
+      const del = (x) => (x.action ? ` <button type="button" class="st-test-btn" data-act="${mhAttr(x.action.id)}" data-folder="${mhAttr(x.action.folder || '')}" data-file="${mhAttr(x.action.file || '')}" data-confirm="${mhAttr(x.action.confirm)}">Delete permanently…</button>` : '');
+      const extras = (b.count ? [`<div>Deleted agents' folders: ${b.count}, ${b.complete === false ? 'at least ' : ''}${esc(mhSize(b.bytes))}, kept until an admin deletes them.</div>`,
+        ...(b.items || []).map(x => `<div class="mh-x">${esc(x.name || x.folder)}: ${esc(mhSize(x.bytes))}${x.partial ? ' (still being put away)' : ''}${del(x)}</div>`)] : [])
+        .concat(ps.map(p => `<div class="mh-x">The combined archive kept after the split (${esc(p.file)}): ${esc(mhSize(p.bytes))}${del(p)}</div>`));
+      el.innerHTML = (flagged.length ? flagged.map(a => row(a, false)).join('') : '<div class="mh-item">Every agent is fine.</div>')
+        + (fine.length ? `<details class="mh-fine"><summary>${fine.length} agent${fine.length === 1 ? '' : 's'} fine</summary>${fine.map(a => row(a, true)).join('')}</details>` : '')
+        + (extras.length ? `<div class="mh-extras">${extras.join('')}</div>` : '');
+      el.onclick = mhClick;
+      const c = d.counts || {};
+      mhStateText = `${c.red ? `${c.red} need${c.red === 1 ? 's' : ''} attention` : 'none need attention'}${c.amber ? `, ${c.amber} could use a look` : ''}; ${d.cached ? 'last checked' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.`;
+      if (state) state.textContent = mhStateText;
+      stSum('status', 'memory', c.red ? `Memory: ${c.red} need${c.red === 1 ? 's' : ''} attention` : c.amber ? `Memory: ${c.amber} to look at` : 'Memory: all fine', !!c.red);
+    }
+    // A press on one of the Memory section's buttons. Deleting for good asks for the typed word first (the agent's
+    // name, or "delete"), as Restore asks for RESTORE; the hub checks the same word.
+    function mhClick(e) {
+      const b = e.target.closest('button[data-act]');
+      if (!b || b.disabled) return;
+      const act = b.dataset.act;
+      if (act === 'delete-bundle' || act === 'delete-pre-split') {
+        const open = b.parentElement.querySelector('.mh-confirm');
+        if (open) { open.remove(); return; }
+        const box = document.createElement('div');
+        box.className = 'mh-confirm';
+        box.innerHTML = `<label>Type <b>${esc(b.dataset.confirm)}</b> to delete it for good</label><input type="text" autocomplete="off" spellcheck="false"><button type="button" class="st-btn bk-danger" disabled>Delete</button>`;
+        b.parentElement.appendChild(box);
+        const input = box.querySelector('input'), go = box.querySelector('button');
+        input.addEventListener('input', () => { go.disabled = input.value.trim() !== b.dataset.confirm; });
+        input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !go.disabled) go.click(); });
+        go.addEventListener('click', () => mhAct({ action: act, folder: b.dataset.folder || null, file: b.dataset.file || null, confirm: input.value.trim() }, go));
+        input.focus();
+        return;
+      }
+      mhAct({ action: act, agent: b.dataset.agent || null }, b);
+    }
+    async function mhAct(body, btn) {
+      const msg = document.getElementById('st-mh-msg');
+      const label = btn ? btn.textContent : '';
+      if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+      if (msg) { msg.textContent = ''; msg.classList.remove('mh-msg-bad'); }
+      try {
+        const r = await (await fetch('/api/memory-health/action', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+        if (!r.ok) throw new Error(r.error || 'failed');
+        if (r.result) { ++mhLoad; mhRender({ ...r.result, cached: false }); }
+        if (btn && btn.isConnected) btn.textContent = r.pending ? 'Working…' : 'Done';
+        if (msg) msg.textContent = r.message;
+        if (r.pending && r.pending.tidy) mhFollowTidy(r.pending.tidy);
+      } catch (e) {
+        if (msg) { msg.textContent = e.message; msg.classList.add('mh-msg-bad'); }
+        if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = label; }
+      }
+    }
+    // A tidy that outlasts the press finishes in the background; the checks after it carry its outcome under its own id
+    // (tidies). Each press is followed until its outcome shows, for up to 12 minutes.
+    function mhFollowTidy(id) {
+      mhFollowing.set(id, Date.now() + 12 * 60 * 1000);
+      const tick = async () => {
+        mhFollow = null;
+        for (const [k, until] of mhFollowing) if (Date.now() > until) mhFollowing.delete(k);
+        if (!document.getElementById('st-mh-list')) { mhFollowing.clear(); return; }   // Settings closed: the list shows the stored result next time
+        if (!mhFollowing.size) return;
+        mhTicking = true;
+        try {
+          const ctl = new AbortController(), cut = setTimeout(() => ctl.abort(), 15000);   // a request that never answers can't stall the loop
+          let d; try { d = await (await fetch('/api/memory-health?stored=1', { credentials: 'include', signal: ctl.signal })).json(); } finally { clearTimeout(cut); }
+          const doneNow = d && d.ok ? (d.tidies || []).filter(t => mhFollowing.has(t.id)) : [];
+          if (doneNow.length) {
+            for (const t of doneNow) mhFollowing.delete(t.id);
+            ++mhLoad; mhRender({ ...d, cached: false });
+            const msg = document.getElementById('st-mh-msg');
+            const last = doneNow[doneNow.length - 1];
+            if (msg) { msg.textContent = doneNow.map(t => t.message).join(' '); msg.classList.toggle('mh-msg-bad', !last.ok); }
+          }
+        } catch {} finally { mhTicking = false; }
+        if (mhFollowing.size && !mhFollow) mhFollow = setTimeout(tick, 5000);
+      };
+      if (!mhFollow && !mhTicking) mhFollow = setTimeout(tick, 5000);   // one loop at a time; a tick under way schedules the next
     }
     function securityActionHtml(a) {
       if (!a) return '';
@@ -3021,7 +3597,7 @@
           c.toolCount != null ? cxBadge(`${c.toolCount} tool${c.toolCount === 1 ? '' : 's'}`) : '',
           c.sensitive ? cxBadge('sensitive', 'var(--purple)') : '',
         ].join(' ');
-        const agents = Array.isArray(c.agents) ? (c.agents.length ? c.agents.map(hubEsc).join(', ') : 'no agents') : 'all agents';
+        const agents = Array.isArray(c.agents) ? (c.agents.length ? c.agents.map(hubEsc).join(', ') : 'no one besides the leads') : 'no one besides the leads';
         const protect = c.protect === 'own' ? 'own passphrase' : c.protect === 'group' ? `group ${hubEsc(c.group || '?')}` : 'no passphrase';
         const what = c.kind === 'skill' ? `skill ${hubEsc(c.skillId || '?')}` : `mcp ${hubEsc(c.command || '')}${Array.isArray(c.args) && c.args.length ? ' ' + hubEsc(c.args.join(' ')) : (typeof c.args === 'string' && c.args ? ' ' + hubEsc(c.args) : '')}`;
         const errObj = c.lastError && typeof c.lastError === 'object' ? c.lastError : null;
@@ -3171,8 +3747,7 @@
       const sel = (id, opts, cur, extra) => `<select id="${id}" style="padding:4px" ${extra || ''}>${opts.map(([v, l]) => `<option value="${hubEsc(v)}" ${cur === v ? 'selected' : ''}>${hubEsc(l)}</option>`).join('')}</select>`;
       const skills = Object.entries(cxState.skills || {}).map(([sid, s]) => [sid, `${(s && s.label) || sid} (${sid})`]);
       const groups = ((cxState.data && cxState.data.groups) || []).map(g => [g.id, `${g.label || g.id} (${g.id})`]);
-      const agentNames = (Array.isArray(AGENTS) ? AGENTS : []).map(a => a && (a.name || a.id)).filter(Boolean);
-      const grantAll = !Array.isArray(c.agents);
+      const allAgents = (Array.isArray(AGENTS) ? AGENTS : []).filter(a => a && (a.name || a.id));
       const granted = new Set(Array.isArray(c.agents) ? c.agents : []);
       const argsText = Array.isArray(c.args) ? c.args.join(' ') : (c.args || '');
       const secretNames = Array.isArray(c.secretNames) ? c.secretNames : [];
@@ -3180,6 +3755,13 @@
       const savedTools = c.tools && typeof c.tools === 'object' ? c.tools : {};
       const toolRows = toolsKnown ? toolsKnown.map(t => ({ name: t.name, detected: t.cls || 'read', cls: (savedTools[t.name] && savedTools[t.name].cls) || t.cls || 'read', description: t.description || '' }))
         : Object.entries(savedTools).map(([name, t]) => ({ name, detected: '', cls: (t && t.cls) || 'read', description: '' }));
+      // The lead list comes from the hub (owner and admin leads only). A connector with a money tool is not "always" for
+      // leads: its tools reach wallet agents only, so leads are ordinary choices there.
+      const hubLeads = new Set(Array.isArray(cxState.data && cxState.data.leads) ? cxState.data.leads : []);
+      const hasMoneyTool = toolRows.some(t => t.cls === 'money');
+      const allNames = allAgents.map(a => a.name || a.id);
+      const leadNames = hasMoneyTool ? [] : allNames.filter(n => hubLeads.has(n));
+      const agentNames = allNames.filter(n => !leadNames.includes(n));
       const toolsHtml = toolRows.length
         ? `<table class="cx-table"><thead><tr><th>tool</th><th>detected</th><th>class</th></tr></thead><tbody>${toolRows.map(t => `<tr><td><code>${hubEsc(t.name)}</code>${t.description ? `<div class="cx-sub">${hubEsc(t.description)}</div>` : ''}</td><td>${hubEsc(t.detected || '-')}</td><td>${sel('', CX_CLASSES.map(x => [x, x]), t.cls, `data-cx-tool="${hubEsc(t.name)}"`)}</td></tr>`).join('')}</tbody></table>`
         : `<div class="cx-sub">${editing ? 'No tools known yet: press Test to discover them.' : 'Save first, then Test to discover the tools and set their classes.'}</div>`;
@@ -3196,8 +3778,8 @@
         <div id="st-cx-f-skill">
           <div class="st-row">${L('Skill')}${skills.length ? sel('st-cx-f-skillId', skills, c.skillId || skills[0][0]) : `<input type="text" id="st-cx-f-skillId" value="${hubEsc(c.skillId || '')}" placeholder="skill id">`}</div>
         </div>
-        <div class="st-row">${L('Agents')}<label style="flex:0 0 auto;text-align:left"><input type="checkbox" id="st-cx-f-all" ${grantAll ? 'checked' : ''} onchange="cxFormAgentsChange()"> all agents</label></div>
-        <div id="st-cx-f-agents" class="cx-checks" style="${grantAll ? 'display:none' : ''}">${agentNames.length ? agentNames.map(n => `<label><input type="checkbox" data-cx-agent="${hubEsc(n)}" ${granted.has(n) ? 'checked' : ''}> ${hubEsc(n)}</label>`).join('') : '<span class="cx-sub">no agents loaded</span>'}</div>
+        <div class="st-row">${L('Agents')}<span class="cx-sub">The lead agents can always use it; tick the others that may.</span></div>
+        <div id="st-cx-f-agents" class="cx-checks">${leadNames.map(n => `<label><input type="checkbox" checked disabled> ${hubEsc(n)} (lead): always</label>`).join('')}${agentNames.length ? agentNames.map(n => `<label><input type="checkbox" data-cx-agent="${hubEsc(n)}" ${granted.has(n) ? 'checked' : ''}> ${hubEsc(n)}</label>`).join('') : (leadNames.length ? '' : '<span class="cx-sub">no agents loaded</span>')}</div>
         <div class="st-row">${L('Protect')}${sel('st-cx-f-protect', [['none', 'none: always on'], ['own', 'own passphrase'], ['group', 'group passphrase']], c.protect || 'none', 'onchange="cxFormProtectChange()"')}<span id="st-cx-f-group-wrap">${groups.length ? sel('st-cx-f-group', groups, c.group || groups[0][0], 'onchange="cxFormProtectChange()"') : '<span class="cx-sub">no groups yet</span>'}</span></div>
         <div class="st-row" id="st-cx-f-curpass-row">${L('Current passphrase')}<input type="password" id="st-cx-f-curpass" autocomplete="off" style="max-width:220px"><span class="cx-sub">needed to change how a protected connector is locked</span></div>
         <div id="st-cx-f-newpass-rows">
@@ -3290,7 +3872,7 @@
         body.skillId = v('st-cx-f-skillId').trim();
         if (!body.skillId) return fail('Pick a skill.');
       }
-      body.agents = chk('st-cx-f-all') ? null : Array.from(document.querySelectorAll('#st-cx-f-agents input[data-cx-agent]')).filter(i => i.checked).map(i => i.dataset.cxAgent);
+      body.agents = Array.from(document.querySelectorAll('#st-cx-f-agents input[data-cx-agent]')).filter(i => i.checked).map(i => i.dataset.cxAgent);
       if (protect === 'group') {
         body.group = v('st-cx-f-group');
         if (!body.group) return fail('Group protection needs a group: create one first.');
@@ -3517,12 +4099,31 @@
       const top = planTopWarning(planLast);
       el.classList.toggle('on', !!top);
       if (!top) { el.textContent = ''; return; }
+      if (top.extraUsage && !top.rejected) {
+        el.textContent = `⚠ ${top.family ? top.label : 'Claude plan'} ${planPctText(top)}`;
+        el.classList.remove('hot');
+        el.title = `${top.family ? top.label : 'Your Claude plan'} is used up for this week until ${planWhen(top.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose your agents' models.`;
+        return;
+      }
       el.textContent = `⚠ ${top.family ? top.label : 'Claude plan'} ${Math.round(top.utilization)}%`;
       el.classList.toggle('hot', top.rejected || Number(top.utilization) >= 100);
       el.title = `${top.family ? top.label : 'Your Claude plan'} has used ${Math.round(top.utilization)}% of this week's allowance (resets ${planWhen(top.resetsAt)}). Click to choose your agents' models.`;
     }
     // Plan usage in each chat header, next to the model, for agents on the Claude subscription (the only ones whose
     // usage the hub can read): the weekly window that governs the agent's model, coloured once it passes a level.
+    // ── plan state helpers (begin) ──
+    function planState(w, levels) {
+      const pct = Math.round(Number(w.utilization) || 0);
+      const extra = !!w.extraUsage && !w.rejected;
+      const passed = (levels || []).filter(l => pct >= l);
+      const cls = w.rejected || (pct >= 100 && !extra) ? 'refused' : extra ? 'warn' : passed.length && passed.length === (levels || []).length ? 'hot' : passed.length ? 'warn' : '';
+      return { pct, extra, cls };
+    }
+    function planPctText(w, levels) {
+      const s = planState(w, levels);
+      return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
+    }
+    // ── plan state helpers (end) ──
     function planFamilyOf(model) {
       const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
       if (!id) return null;
@@ -3546,12 +4147,12 @@
         if (!el) continue;
         const w = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
         if (!w) { el.hidden = true; el.textContent = ''; continue; }
-        const pct = Math.round(Number(w.utilization));
-        const passed = levels.filter(l => pct >= l);
-        el.textContent = `${w.family ? w.label : 'Plan'} ${pct}% this week`;
-        el.className = 'plan-badge' + (w.rejected || pct >= 100 ? ' refused' : passed.length && passed.length === levels.length ? ' hot' : passed.length ? ' warn' : '');
+        const { pct, extra, cls } = planState(w, levels);
+        el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)} this week`;
+        el.className = 'plan-badge' + (cls ? ' ' + cls : '');
         const all = (planLast.weekly || []).find(x => x.family == null);
         const five = planLast.windows && planLast.windows.five_hour;
+        if (extra) { el.title = `${w.family ? w.label : 'Your Claude plan'} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose models (Settings → Claude plan).`; el.hidden = false; continue; }
         el.title = `${w.family ? `${w.label} has` : 'Your Claude plan has'} used ${pct}% of this week's allowance (resets ${planWhen(w.resetsAt)})` +
           (all && w.family ? `; all models ${Math.round(Number(all.utilization))}%` : '') + (five && five.utilization != null ? `; 5-hour window ${Math.round(Number(five.utilization))}%` : '') + '. Click to choose models (Settings → Claude plan).';
         el.hidden = false;
@@ -3579,13 +4180,16 @@
       const first = levels.length ? levels[0] : 101; const last = levels.length ? levels[levels.length - 1] : 101;
       const rows = [];
       const five = d.windows && d.windows.five_hour;
-      if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at });
-      for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, weekly: true });
+      if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });
+      for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
+      const extraRow = rows.find(w => w.extraUsage && w.weekly);   // the hint speaks of the weekly plan
       usageEl.innerHTML = rows.length ? rows.map(w => {
         const pct = Math.round(Number(w.utilization) || 0);
-        const color = w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';
-        return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0"><span style="flex-basis:150px;flex-shrink:0">${esc(w.label)}</span><span style="width:140px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex-shrink:0"><span style="display:block;height:100%;width:${Math.min(pct, 100)}%;background:${color}"></span></span><b style="color:${color};min-width:44px">${pct}%</b><span style="color:var(--text-dim)">${w.rejected ? 'refused until ' : 'resets '}${esc(planWhen(w.resetsAt))}</span></div>`;
+        const color = w.extraUsage ? '#c9a227' : w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';
+        return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0"><span style="flex-basis:150px;flex-shrink:0">${esc(w.label)}</span><span style="width:140px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex-shrink:0"><span style="display:block;height:100%;width:${Math.min(pct, 100)}%;background:${color}"></span></span><b style="color:${color};min-width:44px">${esc(planPctText(w))}</b><span style="color:var(--text-dim)">${w.rejected ? 'refused until ' : 'resets '}${esc(planWhen(w.resetsAt))}</span></div>`;
       }).join('') : (d.error ? `No reading yet: ${esc(String(d.error).slice(25, 200))}` : 'No reading yet (the first one comes a few seconds after the hub starts).');
+      if (extraRow) usageEl.innerHTML += `<div class="st-hint" style="margin-left:0">${esc(`The weekly plan is used up until ${planWhen(extraRow.resetsAt)}; extra usage is paying for Claude replies until then.`)}</div>`;
+      if (d.overage && d.overage.status === 'allowed_warning') usageEl.innerHTML += `<div class="st-hint" style="margin-left:0">${esc(`Extra usage is close to its monthly limit${d.overage.resetsAt ? ` (resets ${new Date(d.overage.resetsAt).toLocaleDateString([], { month: 'short', day: 'numeric' })})` : ''}. Raise it at claude.ai → Settings → Usage; when it is reached, every Claude agent stops.`)}</div>`;
       const warnIn = document.getElementById('st-plan-warn');
       if (warnIn && document.activeElement !== warnIn) warnIn.value = levels.join(', ');
       const auto = !!(d.policy && d.policy.enabled);
@@ -3869,6 +4473,8 @@
       const maxContext = parseInt(document.getElementById('st-maxContext')?.value);
       if (maxTokens > 0) patch.maxCompletionTokens = maxTokens;
       if (maxContext > 0) patch.maxContextMessages = maxContext;
+      const wao = workersAtOnceFromPage();
+      if (wao !== undefined) patch.workersAtOnce = wao;
 
       try {
         const r = await fetch('/api/settings', {
@@ -4298,7 +4904,7 @@
     // the agent's turn keeps streaming underneath while the owner decides. Answers go to
     // POST /api/approvals/<id>; a 404 means someone else (or the timeout) answered first.
     const APPROVAL_CLASS_LABELS = { write_outside: 'write outside its folders', send: 'send off this machine', admin: 'change hub data / another agent', destroy: 'destructive action', money: 'move money' };
-    const APPROVAL_DETAIL_LABELS = { command: 'Command', path: 'Path', paths: 'Paths', to: 'To', channel: 'Channel', text: 'Text', reason: 'Why flagged', tool: 'Tool', input: 'Arguments', name: 'Name', model: 'Model' };
+    const APPROVAL_DETAIL_LABELS = { command: 'Command', path: 'Path', paths: 'Paths', to: 'To', channel: 'Channel', text: 'Text', reason: 'Why flagged', tool: 'Tool', input: 'Arguments', name: 'Name', model: 'Model', module: 'Module' };
     const approvals = new Map();   // id -> { data, card }
     let approvalsTimer = null;
 
@@ -4306,6 +4912,7 @@
       return AGENTS.find(a => a.name === name)?.display || capName(String(name || 'An agent'));
     }
     function approvalWants(ev) {
+      if (ev.cls === 'module') return `${agentDisplayName(ev.agent)} needs your OK${ev.detail && ev.detail.module ? ` (${ev.detail.module})` : ''}`;   // asked by a module (hub/approve)
       const label = APPROVAL_CLASS_LABELS[ev.cls] || String(ev.cls || 'do something that needs approval');
       return `${agentDisplayName(ev.agent)} wants to ${ev.cls === 'destroy' ? 'take a ' : ''}${label}`;
     }
@@ -4361,11 +4968,12 @@
         <div class="approval-meta"><span class="approval-countdown">${esc(approvalCountdown(ev.expiresAt))}</span><span class="approval-note"></span></div>
         <div class="approval-actions">
           <button class="deny" type="button">Deny</button>
-          <button class="allow-1h" type="button" title="Also allow this kind of action for this agent for the next hour (for sending: this recipient or host only)">Approve this kind for 1 hour</button>
+          ${ev.cls === 'module' ? '' : '<button class="allow-1h" type="button" title="Also allow this kind of action for this agent for the next hour (for sending: this recipient or host only)">Approve this kind for 1 hour</button>'}
           <button class="approve" type="button">Approve</button>
         </div>`;
       card.querySelector('.approve').onclick = () => answerApproval(ev.id, 'allow', null);
-      card.querySelector('.allow-1h').onclick = () => answerApproval(ev.id, 'allow', '1h');
+      const always = card.querySelector('.allow-1h');   // a module's question is asked once: no "remember" choice
+      if (always) always.onclick = () => answerApproval(ev.id, 'allow', '1h');
       card.querySelector('.deny').onclick = () => answerApproval(ev.id, 'deny', null);
       const stack = approvalStack();
       stack.insertBefore(card, stack.firstChild);   // newest on top
@@ -4706,7 +5314,7 @@
         if (AGENTS.some(a => 'busy' in a)) {
           const map = {};
           for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
-          applyStatusSnapshot(map);
+          applyStatusSnapshot(map, { namedOnly: true });
         }
         console.log(`Loaded ${AGENTS.length} agents with SOUL data`);
         AGENTS.forEach(a => {
@@ -4734,7 +5342,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -4810,6 +5418,9 @@
       if (!t) return;
       if (t.security) openSecurityDialog();
       if (t.backups) openSettingsAt('st-backups-section');
+      if (t.memory) openSettingsAt('st-memory-section');
+      if (t.connectors) openSettingsAt('st-modules-section');
+      if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
       if (!t.agent) return;
       let a = AGENTS.find(x => x.name === t.agent);
@@ -4839,12 +5450,12 @@
       await Promise.all([loadAgents()]);
       // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
       // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
-      // (a backup warning), ?update=1 the update card, ?security=1 the security dialog. Then any notification tapped
+      // (a backup warning), ?memory=1 the memory check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'connectors', 'wallet']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       openTargets.ready(own);
@@ -5799,11 +6410,12 @@
       } catch (e) { if (sel) sel.value = before; alert(`Could not change the effort: ${e.message}`); }
     }
 
-    function startSoloChat(agentName, model) {
-      closeSidebarOnMobile();
-      // One window per agent: a second open just brings the existing one forward.
+    // background: open the window as an unread tab without taking the screen (hub-started turns).
+    function startSoloChat(agentName, model, { background = false } = {}) {
+      if (!background) closeSidebarOnMobile();
+      // One window per agent: a second open just brings the existing one forward (or leaves it, in the background).
       const existing = findSoloChat(agentName);
-      if (existing) { switchToChat(existing.id); return existing.id; }
+      if (existing) { if (!background) switchToChat(existing.id); return existing.id; }
       const chatId = `chat-${++chatCounter}`;
       
       // Find agent to get SOUL data
@@ -5826,8 +6438,10 @@
       };
       renderSoloChatTab(chatId);
       renderSoloChatPanel(chatId);
-      switchToChat(chatId);
-      document.getElementById('empty-state').style.display = 'none';
+      if (!background) {
+        switchToChat(chatId);
+        document.getElementById('empty-state').style.display = 'none';
+      } else markTabUnread(chatId);
       compactionRefresh(chatId);   // context % and compression mode under the toolbar (cheap GET)
       paintPlanBadges();           // plan usage next to the model (Claude subscription agents)
 
@@ -5840,16 +6454,45 @@
             // Add a visual separator so user knows this is restored history
             appendSystemNotice(chatId, `📜 Restored ${history.length} messages from previous session`);
             const times = msgTimeLines(history);   // the date and time under each message
-            for (const [i, msg] of history.entries()) {
+            for (const msg of history) {
               // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place,
               // with its tool calls, once the chat follows it (reattachIfIdle), so it is not shown twice.
               if (msg.inProgress) { chats[chatId].inProgress = { text: msg.content || '', ts: msg.ts || null }; continue; }
-              if (msg.role === 'user' && msg.origin?.kind) appendSystemNotice(chatId, `⚡ ${hubOriginLabel(msg.origin)} — ${hubTurnTime(msg.ts)}`);
-              chats[chatId].messages.push({ role: msg.role, content: msg.content });
-              const hid = appendMessage(chatId, msg.role, msg.content);
+            }
+            // One saved entry as the chat draws it: appendMessage + saved tool calls + reasoning + the time line.
+            // into: where the bubble goes (default the panel; a card's body); push: false when chat.messages already has it;
+            // show: false only pushes it (a reply drawn open after its card).
+            const draw = (i, { into = null, notice = true, push = true, show = true } = {}) => {
+              const msg = history[i];
+              if (notice) { if (msg.role === 'user' && msg.origin?.kind) appendSystemNotice(chatId, `⚡ ${hubOriginLabel(msg.origin)} — ${hubTurnTime(msg.ts)}`); }
+              if (push) chats[chatId].messages.push({ role: msg.role, content: msg.content });
+              if (!show) return null;
+              const hid = appendMessage(chatId, msg.role, msg.content, into);
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
+              return hid;
+            };
+            const panelEl = document.getElementById(`messages-${chatId}`);
+            chats[chatId].lastAutoCard = null;
+            if (foldAutoOn()) {
+              // The last card drawn and its last automatic prompt: a turn running as the chat opens (its prompt is
+              // saved, its reply is not) adopts that card instead of building a second one (see onHubTurnStart).
+              const remember = (built, c) => {
+                const ks = c.indexes.filter(k => history[k].role === 'user');
+                const k = ks[ks.length - 1];
+                chats[chatId].lastAutoCard = k === undefined ? null : { card: built, prompt: history[k].content, label: c.label, ts: history[k].ts || null };
+              };
+              // Automatic turns (consultations, scheduled tasks, hub notices) fold into closed cards; three or more in a row into a stack.
+              for (const item of autoGroupHistory(history)) {
+                if (item.type === 'entry') draw(item.index);
+                else if (item.type === 'card') foldRenderHistoryCard(draw, item, panelEl, remember);
+                else foldRenderHistoryStack(draw, item, panelEl, remember);
+              }
+            } else {
+              for (const [i, msg] of history.entries()) {
+                if (!msg.inProgress) draw(i);
+              }
             }
             // Scroll to bottom after loading history
             const panel = document.getElementById(`messages-${chatId}`);
@@ -5892,23 +6535,34 @@
       if (!name) return;
       const cur = agentStatus[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
       const next = { ...cur, ...patch };
-      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; }
+      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
       paintAgentStatus(name);
       paintAgentsWorking();
     }
 
+    // keepMissing (the /api/agents list, which has no worker fields): a key the entry lacks is left as it is. A full feed
+    // is the whole truth: a key it lacks is cleared (an agent no longer consulted loses its consultedBy).
+    function statusPatchOf(s, keepMissing) {
+      const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
+      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
+      return patch;
+    }
+
+    // Second argument (optional) { namedOnly }: leave workers missing from the map alone (the /api/agents list has none).
     function applyStatusSnapshot(map) {
       if (!map || typeof map !== 'object') return;
       statusKnown = true;
-      for (const [name, s] of Object.entries(map)) {
-        setAgentLive(name, { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion });
+      const namedOnly = !!(arguments[1] && arguments[1].namedOnly);
+      for (const [name, s] of Object.entries(map)) setAgentLive(name, statusPatchOf(s, namedOnly));
+      for (const name of Object.keys(agentStatus)) {
+        if (name in map) continue;
+        if (!busyIsWorker(name, agentStatus[name])) setAgentLive(name, { busy: false });
+        else if (!namedOnly) delete agentStatus[name];   // a worker that is gone
       }
-      for (const name of Object.keys(agentStatus)) if (!(name in map)) setAgentLive(name, { busy: false });
       paintAllAgentStatus();
-      // A window opened (or woken from sleep / a blank screen) while one of its agents is mid-turn:
-      // the chat has no stream to that turn, so attach to it and show the reply when it lands.
+      // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
       for (const [name, s] of Object.entries(map)) if (s.busy) reattachIfIdle(name, s.busySince || null);
     }
 
@@ -6162,18 +6816,44 @@
       const el = document.getElementById('agents-working');
       const list = document.getElementById('agent-list');
       if (!el) return;
-      const n = busyAgentNames().length;
-      if (n === 0) busyFilterOn = false;
-      el.classList.toggle('on', n > 0);
+      const split = busySplit(agentStatus, [...localBusy.keys()]);
+      if (split.agents.length === 0) busyFilterOn = false;
+      const any = split.agents.length > 0 || split.workers.length > 0;
+      el.classList.toggle('on', any);
       el.classList.toggle('filtering', busyFilterOn);
-      el.textContent = n === 0 ? '' : `${n} agent${n === 1 ? '' : 's'} working${busyFilterOn ? ' · showing only these ✕' : ''}`;
+      el.textContent = busyChipLabel(split, busyFilterOn);
       list?.classList.toggle('busy-filter', busyFilterOn);
     }
 
     function toggleBusyFilter() {
+      if (busySplit(agentStatus, [...localBusy.keys()]).agents.length === 0) return;
       busyFilterOn = !busyFilterOn;
       paintAgentsWorking();
     }
+
+    // Hub-wide worker freshness: poll the full status feed while the Workers menu is open or a worker / consulted agent is busy.
+    let workerPollBusy = false, workerPollSoon = null;
+    async function pollWorkerStatus() {
+      if (workerPollBusy) return;
+      workerPollBusy = true;
+      try {
+        const r = await fetch('/api/agents/status', { credentials: 'include', signal: AbortSignal.timeout(8000) });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d && d.agents) applyStatusSnapshot(d.agents);
+      } catch {} finally { workerPollBusy = false; }
+    }
+    function scheduleWorkerStatusPoll() {
+      if (workerPollSoon) return;
+      workerPollSoon = setTimeout(() => { workerPollSoon = null; pollWorkerStatus(); }, 800);
+    }
+    function workerPollWanted() {
+      const menu = document.getElementById('workers-menu');
+      const open = !!menu && !menu.hidden;
+      return open || Object.entries(agentStatus).some(([name, s]) => s && s.busy && (busyIsWorker(name, s) || s.consultedBy));
+    }
+    setInterval(() => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); }, 5000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); });
 
     // Elapsed times tick without re-fetching anything.
     setInterval(() => {
@@ -6184,10 +6864,257 @@
     // ── Hub event stream: turns the hub starts on its own ─────────────────
     // Consultations, job notices, job reports and scheduled tasks run without a
     // browser behind them.  /api/events broadcasts them; here they land in the
-    // agent's window (opened automatically for job/schedule turns) and stream live.
+    // agent's window and stream live.  A job or scheduled turn opens the agent's window in the
+    // background (a tab marked unread); only the person's own actions (a send, a click, a
+    // notification they tap) change what is on screen.
     // Newer hubs also publish the user's own turns (origin.kind === 'user'); those are
     // only drawn when this window is not already streaming them itself.
+    // Shared with lib/ui-auto-turns.js; test/ui-auto-turns-desktop.test.js keeps the copies in step.
+    // ── auto-turn helpers (begin) ──
+    const AUTO_STACK_MIN = 3;   // this many closed cards in a row fold into one stack
+    function autoKindOfOrigin(origin) {
+      const k = origin && typeof origin === 'object' ? origin.kind : '';
+      if (!k || typeof k !== 'string') return null;
+      if (k === 'consultation') return 'consultation';
+      if (k === 'schedule') return 'schedule';
+      if (k === 'user' || k === 'comms') return null;
+      return 'notice';
+    }
+    function autoQuoted(s) {
+      const m = /"([^"\n]*)"/.exec(s || '');
+      return m ? m[1] : null;
+    }
+    function autoInfoOf(entry) {
+      if (!entry || entry.role !== 'user' || entry.ask === true) return null;
+      const o = entry.origin;
+      if (o && typeof o === 'object' && o.kind) {
+        const kind = autoKindOfOrigin(o);
+        if (!kind) return null;
+        const from = o.from || o.jobName || null;
+        let label;
+        if (kind === 'consultation') label = `Consultation from ${from || 'another agent'}`;
+        else if (kind === 'schedule') label = `Scheduled task${o.from ? ': ' + o.from : ''}`;
+        else if (o.kind === 'job_notice') label = `Job finished${from ? ': ' + from : ''}`;
+        else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
+        else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
+        else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+        else if (o.kind === 'alert') label = 'Monitor alert';
+        else label = 'Hub turn';
+        return { kind, from, label };
+      }
+      const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
+      let m = /^\[Consultation from agent "([^"\n]*)"/.exec(text);
+      if (m) return { kind: 'consultation', from: m[1], label: `Consultation from ${m[1] || 'another agent'}` };
+      if (entry.tiger_team === true) return { kind: 'consultation', from: null, label: 'Consultation from another agent' };
+      if (text.startsWith('[Scheduled task — started by the hub scheduler')) {
+        const close = text.indexOf(']');
+        const from = close >= 0 ? (/^\s*"([^"\n]*)"/.exec(text.slice(close + 1)) || [])[1] ?? null : null;
+        return { kind: 'schedule', from, label: `Scheduled task${from ? ': ' + from : ''}` };
+      }
+      if (text.startsWith('[Job finished]') || text.startsWith('[Job ended]')) {
+        const finished = text.startsWith('[Job finished]');
+        const jm = /\bJob\s+"([^"\n]*)"/.exec(text);
+        const name = jm ? jm[1] : null;
+        return { kind: 'notice', from: name, label: `${finished ? 'Job finished' : 'Job ended'}${name ? ': ' + name : ''}` };
+      }
+      if (text.startsWith('[Resumed after compression, from the hub]')) return { kind: 'notice', from: null, label: 'Resumed after compression' };
+      if (text.startsWith('[Delivery turn started by the hub')) return { kind: 'notice', from: null, label: 'Consultation replies delivered' };
+      m = /^\[Queued consultation reply from agent "([^"\n]*)"/.exec(text);
+      if (m) return { kind: 'notice', from: m[1], label: 'Consultation replies delivered' };
+      return null;
+    }
+    function autoFirstLine(text, max = 140) {
+      if (typeof text !== 'string') return '';
+      for (const raw of text.split(/\r?\n/)) {
+        let s = raw.trim().replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+)+/, '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+        if (!s || /^[-*_=\s]*$/.test(s)) continue;
+        return s.length > max ? s.slice(0, Math.max(0, max - 1)).trimEnd() + '…' : s;
+      }
+      return '';
+    }
+    function autoCardKind(kind) {
+      return kind === 'consultation' ? 'consult' : kind === 'schedule' ? 'schedule' : 'notice';
+    }
+    function autoSummaryOf(cards) {
+      const n = (cards || []).length;
+      const count = (k) => cards.filter((c) => c.kind === k).length;
+      const parts = [];
+      const c = count('consultation'), s = count('schedule'), h = n - c - s;
+      if (c) parts.push(`${c} ${c === 1 ? 'consultation' : 'consultations'}`);
+      if (s) parts.push(`${s} ${s === 1 ? 'scheduled task' : 'scheduled tasks'}`);
+      if (h) parts.push(`${h} ${h === 1 ? 'hub notice' : 'hub notices'}`);
+      return `${n} automatic ${n === 1 ? 'turn' : 'turns'}: ${parts.join(', ')}`;
+    }
+    function autoCardLine(history, indexes, kindsInfoLabel) {
+      const isAsst = (i) => history[i].role === 'assistant';
+      const asst = indexes.filter(isAsst);
+      const pick = [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
+      if (pick !== undefined) return autoFirstLine(history[pick].content);
+      for (const i of [...indexes].reverse()) {
+        if (isAsst(i)) continue;
+        let c = typeof history[i].content === 'string' ? history[i].content : '';
+        const task = c.indexOf('\nTask:\n');
+        c = task >= 0 ? c.slice(task + 7) : c.trimStart().replace(/^\[[^\]]*\]:?/, '');
+        const line = autoFirstLine(c);
+        if (line) return line;
+      }
+      return kindsInfoLabel || '';
+    }
+    function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {}) {
+      const items = [];
+      const n = Array.isArray(history) ? history.length : 0;
+      let i = Math.max(0, from | 0);
+      while (i < n) {
+        const e = history[i];
+        if (!e || e.inProgress) { i++; continue; }
+        const info = autoInfoOf(e);
+        if (!info) { items.push({ type: 'entry', index: i }); i++; continue; }
+        let last = info, firstTs = e.ts, hasAsst = false;
+        const indexes = [i];
+        let j = i + 1;
+        for (; j < n; j++) {
+          const x = history[j];
+          if (!x) break;
+          if (x.inProgress) continue;
+          if (x.ask === true) break;
+          if (x.role === 'assistant') { hasAsst = true; indexes.push(j); continue; }
+          if (x.role !== 'user' || hasAsst) break;
+          const xi = autoInfoOf(x);
+          if (!xi) break;
+          last = xi; indexes.push(j);
+        }
+        const open = indexes.filter((k) => history[k].role === 'assistant' && history[k].for_owner === true);
+        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+        i = j;
+      }
+      const out = [];
+      let run = [];
+      const flush = () => {
+        if (run.length >= stackMin && run.length > 0) out.push({ type: 'stack', cards: run, summary: autoSummaryOf(run) });
+        else out.push(...run);
+        run = [];
+      };
+      for (const it of items) {
+        if (it.type === 'card' && it.open.length === 0) run.push(it);
+        else { flush(); out.push(it); }
+      }
+      flush();
+      return out;
+    }
+    // ── auto-turn helpers (end) ──
+
+    // Per browser, default on: hub-started turns fold into closed cards (Settings > Agents > Chat).
+    function foldAutoOn() { try { return localStorage.getItem('hub-fold-auto') !== 'off'; } catch { return true; } }
+    function saveFoldAuto(on) {
+      try { localStorage.setItem('hub-fold-auto', on ? 'on' : 'off'); } catch {}
+      hubToast(on ? 'Automatic turns fold into cards in chats opened from now on.' : 'Automatic turns show in full in chats opened from now on.');
+    }
+
+    // One closed card: a header button (label in the kind colour, time, first line, chevron) over a hidden body.
+    // Returns { wrap, head, body, setLine(text) }; the caller puts the entries' messages into body.
+    function foldCardTime(ts) {
+      const d = ts ? new Date(ts) : new Date();
+      return isNaN(d) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+    function foldToggle(head, body, open) {
+      const on = open === undefined ? head.getAttribute('aria-expanded') !== 'true' : !!open;
+      head.setAttribute('aria-expanded', on ? 'true' : 'false');
+      body.hidden = !on;
+      const chev = head.querySelector('.auto-card-chev');
+      if (chev) chev.textContent = on ? '▾' : '▸';
+    }
+    function foldPart(tag, cls, text) {
+      const el = document.createElement(tag);
+      el.className = cls; el.textContent = text;
+      return el;
+    }
+    function foldHead(cls, bodyCls, wrap) {
+      const head = document.createElement('button');
+      head.type = 'button'; head.className = cls; head.setAttribute('aria-expanded', 'false');
+      const body = document.createElement('div');
+      body.className = bodyCls; body.hidden = true;
+      head.addEventListener('click', () => foldToggle(head, body));
+      wrap.appendChild(head); wrap.appendChild(body);
+      return { head, body };
+    }
+    function foldBuildCard(parent, c) {
+      const wrap = document.createElement('div');
+      wrap.className = `auto-card auto-card-${autoCardKind(c.kind)}`;
+      const { head, body } = foldHead('auto-card-head', 'auto-card-body', wrap);
+      const line = foldPart('span', 'auto-card-line', c.firstLine || c.label);
+      head.append(foldPart('span', 'auto-card-label', c.label), foldPart('span', 'auto-card-time', foldCardTime(c.ts)), line, foldPart('span', 'auto-card-chev', '▸'));
+      parent.appendChild(wrap);
+      return { wrap, head, body, setLine: (text) => { line.textContent = text || c.label; } };
+    }
+    function foldFromLine(label) {
+      return foldPart('div', 'auto-from', `from ${label}`);
+    }
+
+    // A history card (draw: the history loader's entry painter, see startSoloChat): its entries that are not marked
+    // for the owner go into the closed body; the marked replies follow the card as ordinary messages, each under a
+    // small "from <label>" line. Every entry reaches chat.messages in order.
+    function foldRenderHistoryCard(draw, c, parent, remember = null) {
+      const built = foldBuildCard(parent, c);
+      if (remember) remember(built, c);
+      for (const k of c.indexes) {
+        if (c.open.includes(k)) draw(k, { notice: false, show: false });
+        else draw(k, { into: built.body, notice: false });
+      }
+      for (const k of c.open) {
+        parent.appendChild(foldFromLine(c.label));
+        draw(k, { notice: false, push: false });
+      }
+      return built;
+    }
+    // The card's line once its reply left it (for_owner): the prompt's task line, else the label.
+    function foldPromptLine(prompt) {
+      const c = typeof prompt === 'string' ? prompt : '';
+      const i = c.indexOf('\nTask:\n');
+      return i >= 0 ? autoFirstLine(c.slice(i + 7)) : '';
+    }
+    // True when the card is the last thing in the panel (or the last card of a stack that is itself last). skip: a
+    // trailing element that does not count (the waiting bubble a re-attach drew after the card).
+    function foldCardIsLast(panel, card, skip = null) {
+      const w = card && card.wrap;
+      if (!panel || !w || !w.isConnected) return false;
+      const lastOf = (el) => {
+        let l = el.lastElementChild;
+        if (skip && l === skip) l = l.previousElementSibling || null;
+        return l;
+      };
+      if (w.parentNode === panel) return lastOf(panel) === w;
+      const body = w.parentNode;
+      if (!body || body.lastElementChild !== w) return false;
+      const stack = body.parentNode;
+      return !!stack && stack.parentNode === panel && lastOf(panel) === stack;
+    }
+    // The hub clips a turn_start message to 12000 characters and ends it with this suffix.
+    const FOLD_CLIP_SUFFIX = '\n…[truncated]';
+    // True when the saved prompt is the one the hub announced (whole, or its clipped start).
+    function foldSamePrompt(saved, sent) {
+      if (typeof saved !== 'string' || typeof sent !== 'string') return false;
+      if (saved === sent) return true;
+      // only the hub's own clipping (exactly 12000 characters and the suffix) counts as a clipped prompt
+      const head = sent.slice(0, -FOLD_CLIP_SUFFIX.length);
+      return sent.endsWith(FOLD_CLIP_SUFFIX) && head.length === 12000 && saved.length > 12000 && saved.startsWith(head);
+    }
+    // A remembered card is adopted only when its prompt was saved within 10 minutes of this turn starting.
+    function foldPromptRecent(ts, startedAt) {
+      const a = Date.parse(ts), b = Date.parse(startedAt);
+      return !isNaN(a) && !isNaN(b) && Math.abs(a - b) <= 10 * 60 * 1000;
+    }
+    function foldRenderHistoryStack(draw, s, panel, remember = null) {
+      const wrap = document.createElement('div');
+      wrap.className = 'auto-stack';
+      const { head, body } = foldHead('auto-stack-head', 'auto-stack-body', wrap);
+      head.append(foldPart('span', 'auto-card-label', s.summary), foldPart('span', 'auto-card-chev', '▸'));
+      panel.appendChild(wrap);
+      for (const c of s.cards) foldRenderHistoryCard(draw, c, body, remember);
+    }
+
     const hubTurns = {};   // turnId -> { chatId, msgId }
+    const hubTurnCards = {};   // turnId -> { chatId, msgId, wrap, label, setLine }: live cards, kept so a later for_owner can open the reply
+    const hubForOwnerPending = {};   // turnId -> { reason, at }: a for_owner that came before its live card existed
     const HUB_AUTO_OPEN = new Set(['job_notice', 'job_report', 'schedule']);
 
     function hubOriginLabel(origin) {
@@ -6218,7 +7145,6 @@
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
       setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin) });
       let chat = findSoloChat(ev.agent);
-      let opened = false;
       if (ev.origin?.kind === 'user') {
         // Our own send is already streaming in this window (or re-attaching to it).
         if (!chat || chat.controller || chat.reattach || chat.status === 'thinking') return;
@@ -6226,23 +7152,67 @@
       if (!chat) {
         if (!HUB_AUTO_OPEN.has(ev.origin?.kind)) return;   // plain consultations only show in an already open window
         const agentData = AGENTS.find(a => a.name === ev.agent);
-        const chatId = startSoloChat(ev.agent, agentData?.model || 'claude-sdk/default');
+        const chatId = startSoloChat(ev.agent, agentData?.model || 'claude-sdk/default', { background: true });
         chat = chats[chatId];
-        opened = true;
       }
       if (!chat) return;
       try { await chat.historyLoaded; } catch {}
       if (!chats[chat.id]) return;   // closed meanwhile
+      // chat.messages never holds an inProgress entry (the history loader skips those), so its last entry is a saved one.
       const last = chat.messages[chat.messages.length - 1];
-      if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {   // history may already hold the notice
-        chat.messages.push({ role: 'user', content: ev.message });
-        setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+      const dup = typeof ev.message === 'string' && !!last && last.role === 'user' && foldSamePrompt(last.content, ev.message);
+      // An automatic turn (consultation, scheduled task, hub notice) draws into a closed card that updates as it runs.
+      let card = null;
+      let retiredReattach = false;   // a re-attach of this turn was followed before turn_start came; its bubble gave way to the card
+      const autoKind = foldAutoOn() ? autoKindOfOrigin(ev.origin) : null;
+      if (autoKind) {
+        const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
+        if (info) {
+          const panel = document.getElementById(`messages-${chat.id}`);
+          // Opened while this turn runs: history already drew a card with its prompt (the reply, still in progress, is
+          // not in history). Adopt that card when it is the last thing on screen rather than build a second one.
+          const mem = chat.lastAutoCard;
+          // A re-attach bubble drawn after that card (the chat followed this turn before turn_start came) does not count.
+          const raSame = chat.reattach && !chat.reattach.content && (!chat.reattach.turnId || chat.reattach.turnId === ev.turnId);
+          const raEl = raSame ? document.getElementById(chat.reattach.msgId) : null;
+          if (mem && dup && foldSamePrompt(mem.prompt, ev.message) && foldPromptRecent(mem.ts, ev.startedAt) && foldCardIsLast(panel, mem.card, raEl)) {
+            card = mem.card;
+            card.setLine('working…');
+          } else {
+            card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…' });
+          }
+          chat.lastAutoCard = null;
+          // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
+          if (raSame) {
+            const ra = chat.reattach;
+            clearLiveActivity(ra.msgId);
+            document.getElementById(ra.msgId)?.remove();
+            delete chat.reattach; delete chat.lastMsgId;
+            setAgentStatus(chat.agent, '');   // the re-attach marked this browser busy for the agent; the hub turn's own status takes over
+            retiredReattach = true;
+          }
+          card.label = info.label; card.chatId = chat.id;
+          autoScroll(panel);
+        }
       }
-      appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
-      const msgId = appendMessage(chat.id, 'assistant', '…');
-      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt) };
+      if (typeof ev.message === 'string' && !dup) {   // history may already hold the notice
+        chat.messages.push({ role: 'user', content: ev.message });
+        setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message, card && card.body)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+      }
+      if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
+      const msgId = appendMessage(chat.id, 'assistant', '…', card && card.body);
+      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt), card, prompt: ev.message };
+      if (card) {
+        card.msgId = msgId;
+        hubTurnCards[ev.turnId] = card;
+        const ids = Object.keys(hubTurnCards);
+        for (const id of ids.slice(0, Math.max(0, ids.length - 50))) delete hubTurnCards[id];
+        // A for_owner that arrived while the history loaded: apply it now that the card exists.
+        if (hubForOwnerPending[ev.turnId]) { delete hubForOwnerPending[ev.turnId]; hubMoveReplyOut(card); }
+      }
+      if (retiredReattach) catchUpTurn(chat.id);   // what the turn already did (tool rows, text), which the retired bubble had shown
       setStatus(chat.id, 'thinking', hubOriginLabel(ev.origin));
-      if (!opened) markTabUnread(chat.id);
+      markTabUnread(chat.id);   // skips the window on screen
       if (Array.isArray(ev.activity)) {   // a replayed turn_start carries what the turn has done so far
         const t = turnTrack(hubTurns[ev.turnId]);
         for (const item of ev.activity) turnActivityApply(chat.id, t, item);
@@ -6570,6 +7540,36 @@
       paintWorkerRun(w.run);
     }
 
+    // for_owner { agent, reason, turnId, origin }: the agent marked this automatic turn's reply for the owner. Its reply
+    // bubble leaves the closed card and sits right after it, under a small "from <label>" line.
+    function hubMoveReplyOut(card) {
+      if (!card || card.moved || !chats[card.chatId]) return;
+      const el = document.getElementById(card.msgId);
+      if (!el || !card.wrap.isConnected) return;
+      // The card may sit inside a stack (hidden body): the reply goes after the outermost block that is in the panel.
+      const panel = document.getElementById(`messages-${card.chatId}`);
+      let anchor = card.wrap;
+      while (anchor.parentNode && anchor.parentNode !== panel) anchor = anchor.parentNode;
+      if (!panel || anchor.parentNode !== panel) return;
+      // replies already moved out after the same block keep their order: this one goes after them
+      while (anchor.nextElementSibling && anchor.nextElementSibling.dataset && anchor.nextElementSibling.dataset.autoMoved === '1') anchor = anchor.nextElementSibling;
+      const line = foldFromLine(card.label);
+      line.dataset.autoMoved = '1'; el.dataset.autoMoved = '1';
+      anchor.after(line);
+      line.after(el);
+      card.moved = true;
+    }
+    function onHubForOwner(ev) {
+      if (!ev || !ev.turnId) return;
+      const card = hubTurnCards[ev.turnId];
+      if (card) { hubMoveReplyOut(card); return; }
+      if (hubTurns[ev.turnId]) return;   // followed without a card (folding off): nothing to move
+      // The card is not there yet (onHubTurnStart waits for the history): keep the mark for when it is.
+      hubForOwnerPending[ev.turnId] = { reason: typeof ev.reason === 'string' ? ev.reason : '', at: Date.now() };
+      const ids = Object.keys(hubForOwnerPending);
+      for (const id of ids.slice(0, Math.max(0, ids.length - 50))) delete hubForOwnerPending[id];
+    }
+
     function onHubTurnEnd(ev) {
       setAgentLive(ev.agent, { busy: false });
       if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
@@ -6590,6 +7590,9 @@
       const el = document.getElementById(t.msgId);
       clearLiveActivity(t.msgId);
       if (el) { t.text = reply; paintTurn(t.chatId, t, reply, false); }
+      // The card's one line: the reply's first line (the label when there is none); a reply that moved out of the card
+      // is shown below it, so the line comes from the prompt instead.
+      if (t.card) t.card.setLine(t.card.moved ? foldPromptLine(ev.message || t.prompt) : autoFirstLine(reply));
       setMessageTime(document.getElementById(t.msgId), msgTimeLine(Date.parse(ev.endedAt) || Date.now(), t.startedAt));
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
       for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
@@ -6597,9 +7600,8 @@
       if (!(last && last.role === 'assistant' && last.content === reply)) chat.messages.push({ role: 'assistant', content: reply });
       setStatus(t.chatId, ev.ok ? 'idle' : 'error', ev.ok ? null : 'Hub turn failed');
       autoScroll(document.getElementById(`messages-${t.chatId}`));
-      // A job report answers something this window asked for: bring it forward.
-      if (ev.origin?.kind === 'job_report') switchToChat(t.chatId);
-      else markTabUnread(t.chatId);
+      // Hub turns, job reports included, never take the screen: the tab is marked unread instead.
+      markTabUnread(t.chatId);
       refreshJobsBadge?.();
     }
 
@@ -6696,11 +7698,12 @@
       source.addEventListener('provider_recovered', e => { const ev = parse(e); if (ev && ev.provider) clearPacing(ev.provider); });
       source.addEventListener('turn_start', e => { const ev = parse(e); if (ev) onHubTurnStart(ev).catch(err => console.error('[hub-events]', err)); });
       source.addEventListener('turn_delta', e => { const ev = parse(e); if (ev) onHubTurnDelta(ev); });
-      source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) onHubTurnActivity(ev); });
+      source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) { onHubTurnActivity(ev); if (ev.item && ev.item.kind === 'worker') scheduleWorkerStatusPoll(); } });
       source.addEventListener('turn_reasoning', e => { const ev = parse(e); if (ev) onHubTurnReasoning(ev); });
       source.addEventListener('turn_progress', e => { const ev = parse(e); if (ev) onHubTurnProgress(ev); });
       source.addEventListener('turn_worker_delta', e => { const ev = parse(e); if (ev) onHubTurnWorkerDelta(ev); });
       source.addEventListener('turn_end', e => { const ev = parse(e); if (ev) { onHubTurnEnd(ev); scheduleSpendRefresh(); } });
+      source.addEventListener('for_owner', e => { const ev = parse(e); if (ev) onHubForOwner(ev); });
       source.addEventListener('turn_notify', e => {
         const ev = parse(e);
         if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;   // someone else's bell
@@ -6728,6 +7731,7 @@
       // Plan warnings and refusals (lib/plan-usage) are shown near the top, never as a pop-up over the input: the usage
       // badge next to each Claude agent's model, the sidebar chip, and the Settings box.
       source.addEventListener('plan_limit', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      source.addEventListener('plan_extra_usage', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       // Data connectors: a connector or group changed (saved, locked, unlocked, expired); repaint the Settings box.
       source.addEventListener('connectors_changed', e => { const ev = parse(e); if (ev) onConnectorsChanged(ev); });
@@ -7045,16 +8049,25 @@
     }
 
     function switchToChat(chatId) {
+      try { workerHistory.openSeq++; } catch { /* not set up yet while the page script loads */ }   // a pending "Open full run" no longer takes the screen
+      const empty = document.getElementById('empty-state');
+      if (empty && chats[chatId]) empty.style.display = 'none';
+      const opened = chats[chatId];
+      if (opened && opened.isWorker && workerCardState(opened) === 'failed') opened.failSeen = true;
+      // A tab that changed while it wasn't on screen (opened or added to by a hub turn) opens at its newest message.
+      const wasUnread = !!document.getElementById(`tab-${chatId}`)?.classList.contains('unread');
       document.querySelectorAll('.chat-tab').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.chat-container').forEach(p => p.classList.remove('active'));
       document.getElementById(`tab-${chatId}`)?.classList.add('active');
       document.getElementById(`tab-${chatId}`)?.classList.remove('unread');
       document.getElementById(`panel-${chatId}`)?.classList.add('active');
+      if (wasUnread) { const m = document.getElementById(`messages-${chatId}`); if (m) m.scrollTop = m.scrollHeight; }
       activeChat = chatId;
       window.__activeChatId = chatId;
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
       if (document.getElementById('recall-panel') && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent && String(chats[chatId].agent) !== recallState.agent) openRecallPanel(chatId); // so does Recall
       document.getElementById(`input-${chatId}`)?.focus();
+      if (typeof scheduleWorkerListRefresh === 'function') scheduleWorkerListRefresh();
       // Context footer disabled — live token-usage bar provides this info now
     }
     
@@ -7079,10 +8092,14 @@
       rsnSweep();
       updateWorkerBarVisibility();
 
-      const remaining = Object.keys(chats);
-      if (remaining.length > 0) {
+      const remaining = Object.keys(chats).filter(id => !chats[id].isWorker);
+      if (activeChat !== chatId && chats[activeChat]) {
+        // a tab that was not on screen: what is on screen stays
+      } else if (remaining.length > 0) {
         switchToChat(remaining[remaining.length - 1]);
       } else {
+        try { workerHistory.openSeq++; } catch { /* not set up yet */ }   // a pending "Open full run" no longer takes the screen
+        document.querySelectorAll('.chat-container.active, .chat-tab.active').forEach(el => el.classList.remove('active'));
         activeChat = null;
         window.__activeChatId = null;
         document.getElementById('empty-state').style.display = 'flex';
@@ -8443,6 +9460,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         overlay.dataset.dialogPersistent = '1';   // the agent waits for an answer: Esc and the backdrop leave it open
         questionOverlays[request_id] = overlay;
 
+        // The hub adds "Skip" to a question's choices (ask_user allow_skip, lib/sdk-chat.js): it is shown as a Skip button
+        // beside Submit that answers at once, not as one more choice to pick and then submit. With several questions in
+        // one card, each keeps its own Skip choice (to skip one of them) and the button skips them all.
+        const isSkip = (o) => o && String(o.label || '').trim().toLowerCase() === 'skip';
+        const canSkip = questions.every(q => (q.options || []).some(isSkip));
+        const shownOptions = (q) => (q.options || []).filter(o => !(isSkip(o) && questions.length === 1));
+        // Nothing to pick (no choices but Skip, no model list): the question is answered in words, the text box leads.
+        const textOnly = questions.every(q => !shownOptions(q).length && !(Array.isArray(q.models) && q.models.length));
+
         let html = '<div class="question-modal">';
         html += '<h3>Agent needs your input</h3>';
 
@@ -8453,7 +9479,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           }
           html += `<p class="question-text">${esc(q.question)}</p>`;
           html += `<div class="question-options">`;
-          for (const opt of (q.options || [])) {
+          for (const opt of shownOptions(q)) {
             const safeLabel = esc(opt.label).replace(/"/g, '&quot;');
             html += `<button class="question-option" data-qi="${i}" data-label="${safeLabel}">`;
             html += `<strong>${esc(opt.label)}</strong>`;
@@ -8461,13 +9487,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             html += '</button>';
           }
           html += '</div>';
+          // ask_user with choose_model: every model the hub can use, as a drop-down (filled below, as text, not markup).
+          if (Array.isArray(q.models) && q.models.length) html += `<label class="question-model-pick" data-qi="${i}"><span>Or pick any model this hub can use</span></label>`;
         }
 
-        html += '<div class="question-divider">or type a custom answer</div>';
+        if (!textOnly) html += '<div class="question-divider">or type a custom answer</div>';
         html += '<div class="question-custom">';
-        html += '<input type="text" placeholder="Type your answer..." id="question-custom-input">';
+        // A text box, not a one-line field: answers can run to a paragraph. It grows with the text (up to about ten
+        // lines, then scrolls) and its corner drags to any size. Return makes a new line; ⌘Return / Ctrl+Enter sends.
+        html += `<textarea rows="3" placeholder="${textOnly ? 'Type your answer…' : 'Type your own answer…'}" id="question-custom-input"></textarea>`;
         html += '</div>';
-        html += '<div class="question-actions"><span class="question-hint" id="question-hint">Pick an answer, then press Submit.</span><button id="question-submit" disabled>Submit</button></div>';
+        html += '<div class="question-actions"><span class="question-hint" id="question-hint">Pick an answer, then press Submit.</span>'
+          + '<span class="question-buttons">' + (canSkip ? '<button id="question-skip" type="button">Skip</button>' : '') + '<button id="question-submit" disabled>Submit</button></span></div>';
         html += '</div>';
         overlay.innerHTML = html;
 
@@ -8487,14 +9518,43 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // A click only selects (one option per question, highlighted); nothing is sent until Submit.
         // That stops a mis-click from answering the agent. A typed answer overrides the selections.
         const selected = {};
+        // The model drop-down is one more way to answer the same question: picking there clears the buttons, and a
+        // button clears the drop-down. The answer is the model id.
+        const modelPicks = {};
+        overlay.querySelectorAll('.question-model-pick').forEach(holder => {
+          const qi = holder.dataset.qi;
+          const sel = document.createElement('select');
+          sel.appendChild(new Option('Choose a model…', ''));
+          const groups = new Map();
+          for (const m of questions[qi].models) {
+            if (!m || !m.id) continue;
+            if (!groups.has(m.group)) { const og = document.createElement('optgroup'); og.label = String(m.group || 'Other'); groups.set(m.group, og); sel.appendChild(og); }
+            groups.get(m.group).appendChild(new Option(String(m.label || m.id), String(m.id)));
+          }
+          sel.addEventListener('change', () => {
+            overlay.querySelectorAll(`.question-option[data-qi="${qi}"]`).forEach(b => b.classList.remove('selected'));
+            if (sel.value) selected[qi] = sel.value; else delete selected[qi];
+            refresh();
+          });
+          modelPicks[qi] = sel;
+          holder.appendChild(sel);
+        });
         const customInput = overlay.querySelector('#question-custom-input');
         const submitBtn = overlay.querySelector('#question-submit');
         const hint = overlay.querySelector('#question-hint');
+        const sendKeys = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? '⌘Return' : 'Ctrl+Enter';
         const refresh = () => {
           const typed = customInput.value.trim();
           const complete = typed || questions.every((q, i) => selected[i] !== undefined);
           submitBtn.disabled = !complete;
-          hint.textContent = typed ? 'Your typed answer will be sent.' : complete ? 'Press Submit to send.' : (questions.length > 1 ? 'Pick an answer for each question, then press Submit.' : 'Pick an answer, then press Submit.');
+          hint.textContent = typed ? `Your typed answer will be sent (${sendKeys}).` : complete ? 'Press Submit to send.'
+            : textOnly ? `Type your answer, then press Submit (${sendKeys}).`
+            : (questions.length > 1 ? 'Pick an answer for each question, then press Submit.' : 'Pick an answer, then press Submit.');
+        };
+        // Grows with what is typed, up to the cap; a size dragged by hand is kept (it never shrinks the box).
+        const grow = () => {
+          const cap = 260;
+          if (customInput.scrollHeight > customInput.clientHeight && customInput.clientHeight < cap) customInput.style.height = Math.min(customInput.scrollHeight + 2, cap) + 'px';
         };
         overlay.querySelectorAll('.question-option').forEach(btn => {
           btn.addEventListener('click', () => {
@@ -8503,6 +9563,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             overlay.querySelectorAll(`.question-option[data-qi="${qi}"]`).forEach(b => b.classList.remove('selected'));
             if (was) delete selected[qi];                       // clicking the highlighted option again clears it
             else { btn.classList.add('selected'); selected[qi] = btn.dataset.label; }
+            if (modelPicks[qi]) modelPicks[qi].value = '';
             refresh();
           });
         });
@@ -8514,9 +9575,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           submitAnswers(answers);
         };
         submitBtn.addEventListener('click', submitAll);
-        customInput.addEventListener('input', refresh);
+        const skipBtn = overlay.querySelector('#question-skip');
+        if (skipBtn) skipBtn.addEventListener('click', () => {   // one click: every question answered "Skip", as the choice did
+          const answers = {};
+          questions.forEach((q, i) => { answers[i.toString()] = (q.options || []).find(isSkip).label; });
+          submitAnswers(answers);
+        });
+        customInput.addEventListener('input', () => { grow(); refresh(); });
         customInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && customInput.value.trim()) submitAll();
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && customInput.value.trim()) { e.preventDefault(); submitAll(); }
         });
         refresh();
 
@@ -9309,7 +10376,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       copyMessageText(b.closest('.message'));
     });
 
-    function appendMessage(chatId, role, content) {
+    // into: an element to draw the bubble in instead of the chat's panel (the body of an automatic-turn card).
+    function appendMessage(chatId, role, content, into) {
       const container = document.getElementById(`messages-${chatId}`);
       // When user sends a message, reset scroll tracking so auto-scroll
       // re-engages for the new response.
@@ -9320,7 +10388,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       div.id = msgId;
       div.innerHTML = formatContent(content);
       decorateMessage(div, content);
-      container.appendChild(div);
+      (into || container).appendChild(div);
       renderVisualBlocks(div);
       autoScroll(container);
       return msgId;
@@ -10891,6 +11959,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // saying it works.
     function markWorkerRunCancelled(chat, run) {
       run.status = 'cancelled';
+      run.endedAt = Date.now();
       if (run.noticeEl) {
         run.noticeEl.textContent = `⏹ ${chat.agentLabel || 'Agent'} Stopped`;
         run.noticeEl.className = 'system-notice notice-failed';
@@ -10933,6 +12002,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!chat.timerInterval) chat.timerInterval = setInterval(() => updateWorkerTabTimer(workerChatId), 1000);
       updateWorkerTabTimer(workerChatId);
       flashTab(workerChatId);
+      flashWorkersButton();
+    }
+    function flashWorkersButton() {
+      const btn = typeof document !== 'undefined' && document.getElementById ? document.getElementById('workers-btn') : null;
+      if (!btn || !btn.classList) return;
+      btn.classList.add('flash');
+      setTimeout(() => btn.classList.remove('flash'), 2000);
     }
 
     function handleWorkerEvent(chatId, oc) {
@@ -10943,6 +12019,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const open = key ? workerCardByKey.get(key) : null;
         if (open && chats[open] && document.getElementById(`tab-${open}`)) {
           startWorkerRun(open, chatId, oc);   // this agent's card is open: it re-activates
+          scheduleWorkerListRefresh();
           return true;
         }
         const workerChatId = `worker-${workerId}`;
@@ -10976,6 +12053,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         renderWorkerChatTab(workerChatId);
         renderWorkerChatPanel(workerChatId);
         startWorkerRun(workerChatId, chatId, oc);
+        scheduleWorkerListRefresh();
         return true;
       }
 
@@ -11021,7 +12099,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const { workerChatId, chat, run } = w;
         if (run.status === 'completed' || run.status === 'failed') return true;   // already ended (a repeat)
         run.status = 'completed';
+        run.endedAt = Date.now();
         settleWorkerCard(workerChatId, 'idle', 'Completed');
+        scheduleWorkerListRefresh();
 
         // Update the working notice
         const label = chat.agentLabel || 'Agent';
@@ -11064,10 +12144,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (oc.cancelled) {   // stopped by the owner, on its card or with its caller
           if (run.status !== 'cancelled') markWorkerRunCancelled(chat, run);
           settleWorkerCard(workerChatId, 'error', 'Stopped');
+          scheduleWorkerListRefresh();
           return true;
         }
         const failLabel = 'Failed';
         run.status = 'failed';
+        run.endedAt = Date.now();
+        chat.failSeen = activeChat === workerChatId;   // watched as it failed: seen
+        scheduleWorkerListRefresh();
         if (oc.error) {
           // Under this run's reply: a later call to the agent may already show below it
           const errEl = document.getElementById(appendMessage(workerChatId, 'system', `Worker ${failLabel.toLowerCase()}: ${oc.error}`));
@@ -11204,6 +12288,499 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       if (chat.cardKey && workerCardByKey.get(chat.cardKey) === workerChatId) workerCardByKey.delete(chat.cardKey);
       workerParentMap.delete(workerChatId);
+    }
+
+    // ==================== WORKER LIST (one button) ====================
+    // The cards no longer fill a strip under the header: one button says what is working ("3 working · 2 done"), and
+    // its list opens each worker full size in its card's own panel. A finished worker stays listed 2 minutes; a failed
+    // one until it is opened or for 10 minutes, at most 3; then it lives in the worker history (the caller's archive),
+    // no longer on this page. A worker on screen is never taken away.
+    // Shared verbatim with lib/ui-worker-list.js and mobile.js (test/ui-worker-list.test.js keeps the three in step).
+    // ── worker list helpers (begin) ──
+    const WORKER_DONE_MS = 2 * 60 * 1000, WORKER_FAILED_MS = 10 * 60 * 1000, WORKER_FAILED_MAX = 3;
+    function workerListPick(entries, now, activeId) {
+      const items = [], gone = [], failed = [];
+      for (const e of entries || []) {
+        if (!e) continue;
+        const item = { ...e, endedAt: e.state === 'running' ? null : (e.endedAt || now) };
+        if (e.state === 'running') items.push(item);
+        else if (e.state === 'failed') failed.push(item);
+        else if (e.id === activeId || now - item.endedAt < WORKER_DONE_MS) items.push(item);
+        else gone.push(e.id);
+      }
+      failed.sort((a, b) => b.endedAt - a.endedAt);
+      let kept = 0;
+      for (const item of failed) {
+        const waiting = !item.failSeen && now - item.endedAt < WORKER_FAILED_MS && kept < WORKER_FAILED_MAX;
+        if (waiting) kept++;
+        if (waiting || item.id === activeId) items.push(item); else gone.push(item.id);
+      }
+      items.sort((a, b) => ((b.state === 'running') - (a.state === 'running')) || ((b.endedAt || now) - (a.endedAt || now)) || ((b.startedAt || 0) - (a.startedAt || 0)));
+      const counts = { running: 0, done: 0, failed: 0 };
+      for (const i of items) counts[i.state === 'running' ? 'running' : i.state === 'failed' ? 'failed' : 'done']++;
+      return { items, gone, counts, alert: items.some(i => i.state === 'failed' && !i.failSeen) };
+    }
+    function workerButtonLabel(counts) {
+      if (!counts.running && !counts.done && !counts.failed) return 'Workers';
+      return `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}`;
+    }
+    function fmtWorkerClock(ms) {
+      const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+      return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+    }
+    // ── worker list helpers (end) ──
+    // ── busy and hub workers helpers (begin) ──
+    function busyIsWorker(name, entry) {
+      return entry && typeof entry.worker === 'boolean' ? entry.worker : /^tw-/.test(name);
+    }
+    function busySplit(statusMap, localBusyNames) {
+      const agents = new Set(), workers = new Set();
+      for (const [name, entry] of Object.entries(statusMap || {})) {
+        if (!entry || !(entry.busy || entry.pendingQuestion)) continue;
+        (busyIsWorker(name, entry) ? workers : agents).add(name);
+      }
+      for (const name of localBusyNames || []) {
+        const entry = (statusMap || {})[name];
+        (busyIsWorker(name, entry) ? workers : agents).add(name);
+      }
+      return { agents: [...agents].sort(), workers: [...workers].sort() };
+    }
+    function busyChipLabel(split, filtering) {
+      const a = split.agents.length, w = split.workers.length;
+      if (!a && !w) return '';
+      const parts = [];
+      if (a) parts.push(`${a} agent${a === 1 ? '' : 's'}`);
+      if (w) parts.push(`${w} worker${w === 1 ? '' : 's'}`);
+      return `${parts.join(' · ')} working${filtering && a ? ' · showing only these ✕' : ''}`;
+    }
+    function fmtElapsedShort(ms) {
+      if (ms == null || !(ms >= 0)) return '';
+      const t = Math.floor(ms / 1000), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+      return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+    }
+    function hubWorkerGroups(statusMap, opts) {
+      const { known = {}, skipIds = [], skipKeys = [], now } = opts || {};
+      const byParent = new Map();
+      const add = (parent, kind, id, label, entry) => {
+        const startedAt = Date.parse(entry.busySince) || null;
+        const item = { id, kind, label, model: entry.model || '', startedAt, elapsedMs: startedAt ? Math.max(0, now - startedAt) : null };
+        if (!byParent.has(parent)) byParent.set(parent, []);
+        byParent.get(parent).push(item);
+      };
+      for (const [name, entry] of Object.entries(statusMap || {})) {
+        if (!entry || !entry.busy || skipIds.includes(name)) continue;
+        if (busyIsWorker(name, entry)) add(entry.parent || null, 'temporary', name, entry.label || 'Worker', entry);
+        else if (entry.consultedBy && !skipKeys.includes(`${entry.consultedBy}>${name}`)) add(entry.consultedBy, 'consulted', name, known[name] || name, entry);
+      }
+      const groups = [...byParent].map(([parent, items]) => {
+        items.sort((x, y) => ((x.startedAt == null) - (y.startedAt == null)) || ((x.startedAt || 0) - (y.startedAt || 0)) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+        return { parent, parentLabel: parent ? (known[parent] || parent) : 'Unknown agent', items };
+      });
+      groups.sort((x, y) => ((x.parent == null) - (y.parent == null)) || x.parentLabel.localeCompare(y.parentLabel));
+      return groups;
+    }
+    function hubWorkerCount(groups) {
+      return (groups || []).reduce((n, g) => n + g.items.length, 0);
+    }
+    // ── busy and hub workers helpers (end) ──
+
+    // running | done | stopped | failed: running while any of the card's calls runs, else how its newest call ended.
+    function workerCardState(chat) {
+      const runs = Object.values((chat && chat.runs) || {});
+      if (!runs.length || runs.some(r => r.status === 'running')) return 'running';
+      const last = runs.slice().sort((a, b) => b.startedAt - a.startedAt)[0];
+      return last.status === 'failed' ? 'failed' : last.status === 'cancelled' ? 'stopped' : 'done';
+    }
+    function workerCardEndedAt(chat) {
+      return Math.max(0, ...Object.values((chat && chat.runs) || {}).map(r => r.endedAt || 0)) || null;
+    }
+
+    // The page's worker cards as the list sees them (history views and ordinary chats are not listed).
+    function workerListOf(all, now, active) {
+      const entries = [];
+      for (const [id, chat] of Object.entries(all || {})) {
+        if (!chat || !chat.isWorker || chat.isHistory) continue;
+        const state = workerCardState(chat);
+        entries.push({ id, chat, state, startedAt: chat.startedAt || 0, endedAt: state === 'running' ? null : workerCardEndedAt(chat), failSeen: !!chat.failSeen });
+      }
+      return workerListPick(entries, now, active);
+    }
+    function workerKindLabel(agent) {
+      if (agent === 'temporal' || !agent || agent === 'worker') return 'temporary';
+      if (agent === 'sdk-agent') return 'sub-agent';
+      const rec = (typeof AGENTS !== 'undefined' ? AGENTS : []).find(a => a.name === agent);
+      return rec ? (rec.display || rec.name) : agent;
+    }
+    const workerModelLabel = (m) => String(m || '').split('/').pop().replace(/^claude-/, '');
+
+    // A card that left the list: off the page (its calls never come back from a replay; the history has them).
+    function retireWorkerCard(workerChatId) {
+      const chat = chats[workerChatId];
+      if (!chat) return;
+      forgetWorkerCard(workerChatId, true);
+      document.getElementById(`tab-${workerChatId}`)?.remove();
+      document.getElementById(`panel-${workerChatId}`)?.remove();
+      delete chats[workerChatId];
+    }
+
+    let workerListTimer = null;
+    function scheduleWorkerListRefresh() {
+      if (workerListTimer) return;
+      workerListTimer = setTimeout(() => { workerListTimer = null; refreshWorkerList(); }, 60);
+    }
+    // Hub-wide running workers (from the status feed) that this page has no card for, grouped by the agent that started them.
+    function hubWorkerGroupsNow(now) {
+      const known = {};
+      for (const a of (typeof AGENTS !== 'undefined' ? AGENTS : [])) known[a.name] = a.display || a.name;
+      const skipIds = [], skipKeys = [];
+      for (const chat of Object.values(chats)) {
+        if (!chat || !chat.isWorker || chat.isHistory || workerCardState(chat) !== 'running') continue;
+        if (chat.workerId) skipIds.push(String(chat.workerId));
+        for (const [rid, run] of Object.entries(chat.runs || {})) if (run && run.status === 'running') skipIds.push(rid);   // a card re-activated for a later run
+        const parentAgent = (chats[chat.parentChatId] || {}).agent;
+        if (parentAgent && chat.agent) skipKeys.push(`${parentAgent}>${chat.agent}`);
+      }
+      return hubWorkerGroups(agentStatus, { known, skipIds, skipKeys, now });
+    }
+    function refreshWorkerList() {
+      const btn = document.getElementById('workers-btn');
+      const { items, gone, counts, alert } = workerListOf(chats, Date.now(), activeChat);
+      const hubGroups = hubWorkerGroupsNow(Date.now());
+      const shown = { ...counts, running: counts.running + hubWorkerCount(hubGroups) };
+      for (const id of gone) retireWorkerCard(id);
+      // history views opened from the history panel go once something else is on screen
+      for (const [id, chat] of Object.entries(chats)) if (chat && chat.isHistory && id !== activeChat) retireWorkerCard(id);
+      if (!btn) return;
+      btn.querySelector('.wb-label').textContent = workerButtonLabel(shown);
+      btn.classList.toggle('busy', shown.running > 0);
+      btn.classList.toggle('alert', alert);
+      btn.title = alert ? 'A worker failed: open the list to see it' : 'Workers: what is working now, and the history of past workers';
+      if (!document.getElementById('workers-menu').hidden) renderWorkersMenu(items);
+    }
+    setInterval(refreshWorkerList, 5000);
+
+    function toggleWorkersMenu(force) {
+      const menu = document.getElementById('workers-menu');
+      const btn = document.getElementById('workers-btn');
+      const open = typeof force === 'boolean' ? force : menu.hidden;
+      menu.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+      if (open) {
+        renderWorkersMenu(workerListOf(chats, Date.now(), activeChat).items);
+        pollWorkerStatus().then(() => { if (!menu.hidden) renderWorkersMenu(workerListOf(chats, Date.now(), activeChat).items); });
+      }
+    }
+    document.addEventListener('click', (e) => {
+      const wrap = document.getElementById('workers-wrap');
+      if (wrap && !wrap.contains(e.target) && !document.getElementById('workers-menu').hidden) toggleWorkersMenu(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('workers-menu') && !document.getElementById('workers-menu').hidden) toggleWorkersMenu(false);
+    });
+
+    // A hub-wide row: open the starting agent's chat, then jump to the worker's own card once it shows up (up to 6 s).
+    let hubOpenSeq = 0, hubOpenTimer = null;
+    function openHubWorker(group, item) {
+      if (!group.parent) return;
+      const seq = ++hubOpenSeq;
+      if (hubOpenTimer) { clearInterval(hubOpenTimer); hubOpenTimer = null; }
+      startSoloChat(group.parent, ((AGENTS || []).find(a => a.name === group.parent) || {}).model);
+      const parentChatId = findSoloChat(group.parent)?.id;
+      const find = () => {
+        if (item.kind === 'temporary') {
+          const found = workerRunOf(item.id);
+          return found ? found.workerChatId : null;
+        }
+        for (const [id, chat] of Object.entries(chats)) {
+          if (chat && chat.isWorker && !chat.isHistory && chat.agent === item.id && workerCardState(chat) === 'running' && (chats[chat.parentChatId] || {}).agent === group.parent) return id;
+        }
+        return null;
+      };
+      let tries = 0;
+      const timer = hubOpenTimer = setInterval(() => {
+        const stop = () => { clearInterval(timer); if (hubOpenTimer === timer) hubOpenTimer = null; };
+        // the person went elsewhere (another click, another chat): leave the screen alone
+        if (seq !== hubOpenSeq || !parentChatId || activeChat !== parentChatId) return stop();
+        const id = find();
+        if (id) { stop(); switchToChat(id); }
+        else if (++tries >= 20) stop();
+      }, 300);
+    }
+
+    // The list: one row per worker (text from models goes in as text), each opening the worker full size.
+    function renderWorkersMenu(items) {
+      const menu = document.getElementById('workers-menu');
+      if (!menu) return;
+      const now = Date.now();
+      const focused = menu.contains(document.activeElement) ? { id: document.activeElement.closest('.wm-row')?.dataset.wid || null, hubid: document.activeElement.closest('.wm-hub')?.dataset.hubid || null, stop: document.activeElement.classList.contains('wm-stop'), history: document.activeElement.classList.contains('wm-history') } : null;
+      menu.textContent = '';
+      const hubGroups = hubWorkerGroupsNow(now);
+      if (!items.length && !hubGroups.length) {
+        const empty = document.createElement('div');
+        empty.className = 'wm-empty';
+        empty.textContent = 'Nothing working right now.';
+        menu.appendChild(empty);
+      }
+      for (const { id, chat, state, endedAt } of items) {
+        const row = document.createElement('div');
+        row.className = `wm-row wm-${state}` + (state === 'failed' && !chat.failSeen ? ' wm-unseen' : '');
+        row.setAttribute('role', 'menuitem');
+        row.tabIndex = 0;
+        row.dataset.wid = id;
+        const mark = document.createElement('span');
+        mark.className = 'wm-mark';
+        mark.textContent = state === 'running' ? '' : state === 'done' ? '✓' : state === 'stopped' ? '⏹' : '✕';
+        const name = document.createElement('span');
+        name.className = 'wm-name';
+        name.textContent = chat.agentLabel || chat.display || 'Worker';
+        const meta = document.createElement('span');
+        meta.className = 'wm-meta';
+        meta.textContent = [workerModelLabel(chat.model), workerKindLabel(chat.agent)].filter(Boolean).join(' · ');
+        const when = document.createElement('span');
+        when.className = 'wm-when';
+        when.textContent = state === 'running' ? fmtWorkerClock(now - (chat.startedAt || now)) : `${state === 'failed' ? 'failed' : state === 'stopped' ? 'stopped' : 'done'} ${fmtWorkerClock(now - endedAt)} ago`;
+        row.append(mark, name, meta, when);
+        if (state === 'running') {
+          const stop = document.createElement('button');
+          stop.className = 'wm-stop';
+          stop.title = 'Stop this worker';
+          stop.textContent = '■';
+          stop.addEventListener('click', (e) => { e.stopPropagation(); cancelWorkerCard(id); });
+          row.appendChild(stop);
+        }
+        const go = () => { toggleWorkersMenu(false); switchToChat(id); };
+        row.addEventListener('click', go);
+        row.addEventListener('keydown', (e) => { if (e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); go(); } });
+        menu.appendChild(row);
+      }
+      for (const group of hubGroups) {
+        const head = document.createElement('div');
+        head.className = 'wm-group';
+        head.textContent = `Started by ${group.parentLabel}`;
+        menu.appendChild(head);
+        for (const item of group.items) {
+          const row = document.createElement('div');
+          row.className = 'wm-row wm-running wm-hub';
+          row.setAttribute('role', 'menuitem');
+          row.tabIndex = 0;
+          row.dataset.hubid = item.id;
+          if (!group.parent) row.title = 'The agent that started it is not known';
+          const mark = document.createElement('span');
+          mark.className = 'wm-mark';
+          const name = document.createElement('span');
+          name.className = 'wm-name';
+          name.textContent = item.label;
+          const meta = document.createElement('span');
+          meta.className = 'wm-meta';
+          meta.textContent = [workerModelLabel(item.model), item.kind === 'consulted' ? 'consulted' : 'temporary'].filter(Boolean).join(' · ');
+          const when = document.createElement('span');
+          when.className = 'wm-when';
+          when.textContent = fmtElapsedShort(item.elapsedMs);
+          row.append(mark, name, meta, when);
+          const go = () => { toggleWorkersMenu(false); openHubWorker(group, item); };
+          row.addEventListener('click', go);
+          row.addEventListener('keydown', (e) => { if (e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); go(); } });
+          menu.appendChild(row);
+        }
+      }
+      const all = document.createElement('button');
+      all.className = 'wm-history';
+      all.textContent = 'All worker history →';
+      all.addEventListener('click', () => { toggleWorkersMenu(false); openWorkerHistory(); });
+      menu.appendChild(all);
+      if (focused) {
+        const row = focused.hubid ? menu.querySelector(`.wm-hub[data-hubid="${CSS.escape(focused.hubid)}"]`)
+          : focused.id ? menu.querySelector(`.wm-row[data-wid="${CSS.escape(focused.id)}"]`) : null;
+        const back = focused.history ? all : (focused.stop && row && row.querySelector('.wm-stop')) || row || document.getElementById('workers-btn');
+        if (back) back.focus();
+      }
+    }
+
+    // ── Worker history: every worker the agents called, from their archives (GET /api/agents/<a>/workers, /api/workers) ──
+    // gen: bumped by a new search, filter or caller (only then are answers for the old view dropped); listReq: the
+    // newest list request; openSeq: the newest "Open full run" (an older one never takes the screen).
+    const workerHistory = { caller: null, q: '', filter: 'all', items: [], next: null, loading: false, open: new Set(), runs: new Map(), error: '', gen: 0, listReq: 0, openSeq: 0, runReq: new Map() };
+    function openWorkerHistory() {
+      const me = window.hubMe || {};
+      const front = chats[activeChat];
+      const frontAgent = front ? (front.isWorker ? (chats[front.parentChatId] || {}).agent : front.agent) : null;
+      if (!workerHistory.caller) workerHistory.caller = frontAgent && !(front && front.isGroup) ? String(frontAgent) : (me.isAdmin ? '*' : ((AGENTS[0] || {}).name || '*'));
+      const callers = (typeof AGENTS !== 'undefined' ? AGENTS : []).map(a => a.name);
+      gsModal(`<div id="worker-history" data-no-dirty>
+        <input type="search" id="wh-q" class="wh-q" placeholder="Search briefs and results… (Enter)" autocomplete="off">
+        <div class="wh-filters" id="wh-filters"></div>
+        <div class="wh-list" id="wh-list"></div>
+        <div class="wh-status" id="wh-status"></div>
+      </div>`, { dock: true, title: '🕘 Worker history' });
+      const q = document.getElementById('wh-q');
+      q.value = workerHistory.q;
+      q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); workerHistory.q = q.value.trim(); whLoad(true); } });
+      const filters = document.getElementById('wh-filters');
+      for (const [v, label] of [['all', 'All'], ['named', 'Named agents'], ['temporary', 'Temporary'], ['failed', 'Failed']]) {
+        const chip = document.createElement('button');
+        chip.className = 'wh-chip' + (workerHistory.filter === v ? ' on' : '');
+        chip.textContent = label;
+        chip.addEventListener('click', () => { workerHistory.filter = v; filters.querySelectorAll('.wh-chip').forEach(c => c.classList.toggle('on', c === chip)); whLoad(true); });
+        filters.appendChild(chip);
+      }
+      const pick = document.createElement('select');
+      pick.className = 'wh-caller';
+      pick.title = 'Whose workers';
+      const opts = (me.isAdmin ? [['*', 'Called by: all agents']] : []).concat(callers.map(n => [n, `Called by: ${workerKindLabel(n)}`]));
+      for (const [v, label] of opts) { const o = document.createElement('option'); o.value = v; o.textContent = label; pick.appendChild(o); }
+      pick.value = opts.some(o => o[0] === workerHistory.caller) ? workerHistory.caller : (opts[0] || [''])[0];
+      workerHistory.caller = pick.value;
+      pick.addEventListener('change', () => { workerHistory.caller = pick.value; whLoad(true); });
+      filters.appendChild(pick);
+      whLoad(true);
+    }
+    // A new search, filter or caller replaces whatever was loading; only the newest request's answer is shown.
+    async function whLoad(reset) {
+      if (!reset && (workerHistory.loading || !workerHistory.next)) return;
+      if (reset) { workerHistory.gen++; workerHistory.items = []; workerHistory.next = null; workerHistory.open.clear(); workerHistory.runs.clear(); }
+      const gen = workerHistory.gen, req = ++workerHistory.listReq;
+      workerHistory.loading = true; workerHistory.error = '';
+      whRender();
+      const params = new URLSearchParams({ filter: workerHistory.filter, limit: '50' });
+      if (workerHistory.q) params.set('q', workerHistory.q);
+      if (!reset) params.set('before', workerHistory.next);
+      const base = workerHistory.caller === '*' ? '/api/workers' : `/api/agents/${encodeURIComponent(workerHistory.caller)}/workers`;
+      let data = null, error = '';
+      try { data = await filesApi(`${base}?${params.toString()}`); } catch (e) { error = e.message; }
+      if (gen !== workerHistory.gen || req !== workerHistory.listReq) return;   // superseded
+      if (data) {
+        workerHistory.items = workerHistory.items.concat(Array.isArray(data.workers) ? data.workers : []);
+        workerHistory.next = data.next || null;
+      }
+      workerHistory.error = error;
+      workerHistory.loading = false;
+      whRender();
+      // a page that came back short with more behind it (the server stopped looking part-way): ask for the rest
+      if (data && workerHistory.next && (data.workers || []).length < 10 && document.getElementById('wh-list')) whLoad(false);
+    }
+    function whDayLabel(iso) {
+      const d = new Date(iso), today = new Date();
+      const key = (x) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+      const y = new Date(today); y.setDate(today.getDate() - 1);
+      if (key(d) === key(today)) return 'Today';
+      if (key(d) === key(y)) return 'Yesterday';
+      return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) });
+    }
+    const whMark = (o) => (o === 'done' ? '✓' : o === 'stopped' ? '⏹' : o === 'failed' || o === 'unfinished' ? '✕' : '●');
+    function whRender() {
+      const list = document.getElementById('wh-list'), status = document.getElementById('wh-status');
+      if (!list) return;
+      list.textContent = '';
+      let day = null;
+      for (const w of workerHistory.items) {
+        const label = whDayLabel(w.startedAt);
+        if (label !== day) { day = label; const h = document.createElement('div'); h.className = 'wh-day'; h.textContent = label; list.appendChild(h); }
+        const key = `${w.caller}|${w.workerId}`;
+        const row = document.createElement('div');
+        row.className = `wh-item wh-${w.outcome || 'running'}` + (workerHistory.open.has(key) ? ' open' : '');
+        const top = document.createElement('div'); top.className = 'wh-top';
+        const mark = document.createElement('span'); mark.className = 'wh-mark'; mark.textContent = whMark(w.outcome);
+        const name = document.createElement('span'); name.className = 'wh-name'; name.textContent = String(w.description || 'Worker').replace(/^Worker:\s*/, '');
+        const when = document.createElement('span'); when.className = 'wh-when';
+        when.textContent = new Date(w.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + (w.durationMs != null ? ` · ${fmtWorkerClock(w.durationMs)}` : w.outcome ? '' : ' · running');
+        top.append(mark, name, when);
+        const sub = document.createElement('div'); sub.className = 'wh-sub';
+        const bits = [workerModelLabel(w.model), w.kind === 'agent' ? workerKindLabel(w.agentType) : w.kind, `called by ${workerKindLabel(w.caller)}`].filter(Boolean);
+        sub.textContent = bits.join(' · ') + (w.answer ? ` · “${w.answer.replace(/\s+/g, ' ').slice(0, 120)}”` : w.error ? ` · ${w.error}` : '');
+        row.append(top, sub);
+        if (workerHistory.open.has(key)) row.appendChild(whDetail(w, key));
+        top.addEventListener('click', () => { if (workerHistory.open.has(key)) workerHistory.open.delete(key); else { workerHistory.open.add(key); whFetchRun(w); } whRender(); });
+        sub.addEventListener('click', () => top.click());
+        list.appendChild(row);
+      }
+      if (workerHistory.next && !workerHistory.loading) {
+        const more = document.createElement('button'); more.className = 'gs-btn secondary wh-more'; more.textContent = 'Show 50 more';
+        more.addEventListener('click', () => whLoad(false));
+        list.appendChild(more);
+      }
+      status.textContent = workerHistory.loading ? 'Loading…' : workerHistory.error ? `Could not load the history: ${workerHistory.error}` : !workerHistory.items.length ? (workerHistory.q || workerHistory.filter !== 'all' ? 'No workers match.' : 'No workers yet.') : '';
+    }
+    // The expanded entry: its brief, its result, its work (from the full run) and the two actions.
+    function whDetail(w, key) {
+      const box = document.createElement('div'); box.className = 'wh-detail';
+      const section = (title, text, cls) => {
+        if (!text) return;
+        const t = document.createElement('div'); t.className = 'wh-label'; t.textContent = title;
+        const b = document.createElement('div'); b.className = 'wh-text' + (cls ? ` ${cls}` : ''); b.textContent = text;
+        box.append(t, b);
+      };
+      const run = workerHistory.runs.get(key);
+      const cur = (run && run.worker) || w;   // one snapshot: the fetched run once it is here
+      const answer = cur.answer;
+      section('Brief', cur.prompt || cur.description);
+      section(cur.partial ? 'Result (partial: it did not finish)' : 'Result', answer || (cur.outcome ? '(no answer)' : '(still running)'));
+      if (cur.error) section('Error', cur.error, 'wh-error');
+      if (run && run.rows) {
+        const uses = run.rows.filter(r => r.kind === 'tool_use');
+        const by = {};
+        for (const u of uses) by[u.tool] = (by[u.tool] || 0) + 1;
+        section('Work', uses.length ? `${uses.length} tool call${uses.length === 1 ? '' : 's'}: ${Object.entries(by).map(([t, n]) => `${t} ${n}`).join(', ')}` : 'No tool calls');
+      } else section('Work', run && run.error ? `Could not load its steps: ${run.error}` : 'Loading…');
+      const actions = document.createElement('div'); actions.className = 'wh-actions';
+      const openBtn = document.createElement('button'); openBtn.className = 'gs-btn'; openBtn.textContent = 'Open full run';
+      openBtn.addEventListener('click', () => whOpenRun(w));
+      const copyBtn = document.createElement('button'); copyBtn.className = 'gs-btn secondary'; copyBtn.textContent = 'Copy result';
+      copyBtn.disabled = !answer;
+      copyBtn.addEventListener('click', async () => { try { await navigator.clipboard.writeText(answer || ''); copyBtn.textContent = 'Copied'; } catch { copyBtn.textContent = 'Could not copy'; } });
+      actions.append(openBtn, copyBtn);
+      box.appendChild(actions);
+      return box;
+    }
+    // A run is kept for reuse only once it is over and its answer is in (a sub-agent's answer can come after its end);
+    // anything else is fetched again when it is opened.
+    async function whFetchRun(w, { fresh = false } = {}) {
+      const key = `${w.caller}|${w.workerId}`;
+      const had = workerHistory.runs.get(key);
+      const settled = had && !had.error && had.worker && had.worker.outcome && (had.worker.answer || Date.now() - (had.at || 0) < 15000);
+      if (settled && !fresh) return had;
+      const gen = workerHistory.gen;
+      const req = (workerHistory.runReq.get(key) || 0) + 1;
+      workerHistory.runReq.set(key, req);
+      let got;
+      try { got = { ...(await filesApi(`/api/agents/${encodeURIComponent(w.caller)}/workers/${encodeURIComponent(w.workerId)}`)), at: Date.now() }; }
+      catch (e) { got = { error: e.message, at: Date.now() }; }
+      if (gen !== workerHistory.gen) return null;   // the view changed meanwhile (more pages don't change it)
+      if (workerHistory.runReq.get(key) === req) { workerHistory.runs.set(key, got); whRender(); }   // a newer fetch of this worker wins
+      return got;
+    }
+    // An old worker full size, as it ran: a read-only card built from its archived rows (it goes when you leave it).
+    let whSeq = 0;
+    async function whOpenRun(w) {
+      const mine = ++workerHistory.openSeq;
+      const run = await whFetchRun(w, { fresh: true });
+      if (mine !== workerHistory.openSeq || !run || !run.rows) return;   // a later open, or the person went elsewhere
+      if (run.worker) w = { ...w, ...run.worker };   // the full brief and the run's own end, not the list's short copy
+      const id = `whist-${++whSeq}`;
+      const caller = Object.values(chats).find(c => c && !c.isWorker && !c.isGroup && c.agent === w.caller);
+      chats[id] = { id, agent: w.agentType || 'worker', display: String(w.description || 'Worker').replace(/^Worker:\s*/, ''), model: w.model || '', messages: [], status: 'idle', isWorker: true, isHistory: true,
+        workerId: w.workerId, parentChatId: caller ? caller.id : activeChat, externalSource: caller ? null : workerKindLabel(w.caller), runs: {}, agentLabel: String(w.description || 'Worker'), timerInterval: null };
+      renderWorkerChatPanel(id);
+      document.getElementById(`cancel-${id}`)?.remove();
+      const from = document.getElementById(`worker-from-${id}`);
+      if (from) from.textContent = `From the worker history: called by ${workerKindLabel(w.caller)} on ${new Date(w.startedAt).toLocaleString()}`;
+      appendMessage(id, 'user', w.prompt || w.description || '(no brief)');
+      const tools = [];
+      for (const r of run.rows) {
+        if (r.kind === 'tool_use') {
+          const tool = String(r.tool || 'tool'), text = String(r.text || '');
+          tools.push({ type: 'call', tool, input: text.startsWith(tool) ? text.slice(tool.length).trim() : text });
+        }
+        else if (r.kind === 'tool_result' && r.tool !== 'worker_answer') tools.push({ type: 'result', output: r.text || '' });
+      }
+      const answer = run.worker && run.worker.answer;
+      const msgId = appendMessage(id, 'assistant', '...');
+      updateMessageWithTools(msgId, answer || (w.outcome ? '' : '(still running)'), tools);
+      const end = w.outcome === 'done' ? `✅ Finished${w.durationMs != null ? ` in ${fmtWorkerClock(w.durationMs)}` : ''}` : w.outcome === 'stopped' ? '⏹ Stopped' : w.outcome === 'failed' ? `❌ Failed${w.error ? `: ${w.error}` : ''}` : w.outcome === 'unfinished' ? '❌ Did not finish (its caller\'s reply ended first)' : '⏳ Still running when this was saved';
+      appendSystemNotice(id, end, w.outcome === 'done' ? 'complete' : 'failed');
+      setStatus(id, 'idle', w.outcome ? 'From history' : 'Running');
+      const took = document.getElementById(`worker-elapsed-${id}`);
+      if (took) took.textContent = w.durationMs != null ? fmtWorkerClock(w.durationMs) : '';
+      switchToChat(id);
     }
 
     // A coordinator chat closing: the cards it called last close with it, unless another open chat called

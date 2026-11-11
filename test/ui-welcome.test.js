@@ -41,7 +41,7 @@ test('the hand-over: the first message starts the setup interview, then the app 
   const iv = read('templates/workspaces/maestro/SETUP-INTERVIEW.md');
   for (const s of ['## Step 1 — About them', '## Step 2 — Their team', '## Step 3 — Build each one', '## Step 4 — Show them', '## Step 5 — The phone', '## Step 6 — A security check of this computer', '## Step 7 — Wrap up', '## If something fails']) assert.ok(iv.includes(s), s);
   assert.match(iv, /\*\*You do the work\.\*\*/);
-  assert.match(iv, /\*\*Model: you pick it\.\*\*/);
+  assert.match(iv, /\*\*Model: they choose, with your help\.\*\* Ask it as the playbook's Step 4 says/);
   assert.match(iv, /nothing you do in this interview does/);
   assert.match(iv, /Do \*\*not\*\* use ask_user in that first reply/, 'the Welcome page cannot show question cards');
 });

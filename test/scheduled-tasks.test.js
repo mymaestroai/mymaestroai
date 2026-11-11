@@ -289,7 +289,7 @@ test('TASKS.md prompts are saved with a "not typed by the owner" header and run 
   const a = src.indexOf('function tasksMdMessage'); const b = src.indexOf('async function executeAgentTask');
   const tasksMdMessage = new Function(src.slice(a, b) + '\nreturn tasksMdMessage;')();
   const m = tasksMdMessage('daily-scout-review', 'Review the scouts.', new Date('2026-09-30T00:15:00Z'), 'America/New_York');   // the hub's zone comes from the caller
-  assert.match(m, /^\[Scheduled task — started by the hub scheduler from TASKS\.md, NOT a message typed by the owner\] "daily-scout-review", run Tue, Sep 29, 2026, 8:15 PM EDT\.\n\nTask:\nReview the scouts\.$/);
+  assert.match(m, /^\[Scheduled task — started by the hub scheduler from TASKS\.md, NOT a message typed by the owner\] "daily-scout-review", run Tue, Sep 29, 2026, 8:15 PM EDT\.\n\nTask:\nReview the scouts\.\n\nIf the person you work for must see your reply, call for_owner; otherwise it stays folded in their chat\.$/);
   assert.match(src, /const message = tasksMdMessage\(taskId, prompt, new Date\(\), require\('\.\/timezone'\)\.hubZone\(\)\);[\s\S]{0,400}message,\n\s*origin: \{ kind: 'schedule', from: taskId \}/);
 });
 
@@ -303,4 +303,24 @@ test('hub-started turns keep their origin in the conversation log; the reloaded 
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert.match(app, /if \(msg\.role === 'user' && msg\.origin\?\.kind\) appendSystemNotice\(chatId, `⚡ \$\{hubOriginLabel\(msg\.origin\)\} — \$\{hubTurnTime\(msg\.ts\)\}`\);/);
   assert.match(app, /appendSystemNotice\(chat\.id, `⚡ \$\{hubOriginLabel\(ev\.origin\)\} — \$\{hubTurnTime\(\)\}`\);/);
+});
+
+test('retarget: a renamed agent\'s tasks, and its runs waiting to be delivered, wake it under the new name; saved for the next start', async () => {
+  const { inst, dataDir } = mk();
+  const a = await inst.create({ requester: 'trader', when: 'in 1 hour', prompt: 'check the funding rate' });
+  const b = await inst.create({ requester: 'maestro', when: 'in 2 hours', prompt: 'mine' });
+  inst.pending.push({ taskId: a.id, agent: 'trader', dueAt: new Date().toISOString(), queuedAt: new Date().toISOString(), reason: null, attempts: 0, notBefore: 0 });
+  assert.strictEqual(inst.retarget('trader', 'scout'), 2, 'its task and its waiting run');
+  assert.deepStrictEqual([inst.tasksOf('scout').map(t => t.id), inst.tasksOf('trader').length, inst.tasksOf('maestro').map(t => t.id)], [[a.id], 0, [b.id]]);
+  assert.strictEqual(inst.pending.find(p => p.taskId === a.id).agent, 'scout');
+  const again = mk({ dataDir }).inst;
+  assert.deepStrictEqual(again.tasksOf('scout').map(t => t.id), [a.id], 'saved');
+  assert.strictEqual(inst.retarget('nobody', 'x'), 0);
+});
+
+test('retarget: a run waiting to be delivered counts (and is saved) even when its task is gone', async () => {
+  const { inst } = mk();
+  inst.pending.push({ taskId: 'gone', agent: 'trader', dueAt: new Date().toISOString(), queuedAt: new Date().toISOString(), reason: null, attempts: 0, notBefore: 0 });
+  assert.strictEqual(inst.retarget('trader', 'scout'), 1);
+  assert.strictEqual(inst.pending[0].agent, 'scout');
 });

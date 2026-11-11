@@ -526,3 +526,45 @@ test('root-account and root-reach: no warning when sudo is passwordless only as 
   assert.match(byId(tail, 'root-account').detail, /sudo runs \/usr\/bin\/tailscale as root without a password/);
   assert.match(byId(tail, 'root-reach').detail, /sudo runs \/usr\/bin\/tailscale as root without a password/);
 });
+
+// ── "Require two-factor sign-in for admins" off (requireAdmin2fa === false) ──
+const adminsCheck = (admins, settings, exposed) => sc.createSecurityCheck({
+  ...BAD, env: {}, exposed: () => exposed, hasUsers: () => true, listUsers: () => admins,
+  getSetting: (k) => settings[k],
+}).check();
+const ADMIN_OFF = { login: 'owner@example.com', role: 'admin', totpEnabled: false };
+const ADMIN_ON = { login: 'sam@example.com', role: 'admin', totpEnabled: true };
+
+test('admin two-factor optional: an admin without it is a warning, critical when exposed; no totp item', async () => {
+  const quiet = await adminsCheck([ADMIN_OFF, ADMIN_ON], { requireAdmin2fa: false }, false);
+  const w = byId(quiet, 'admin-2fa-optional');
+  assert.strictEqual(w.level, 'warn');
+  assert.strictEqual(w.group, 'accounts');
+  assert.strictEqual(w.title, 'Two-factor sign-in is optional for admins');
+  assert.strictEqual(w.detail, '1 admin account(s) can sign in with a password alone.');
+  assert.strictEqual(w.fix, 'Settings, Security: turn on "Require two-factor sign-in for admins".');
+  assert.strictEqual(byId(quiet, 'totp'), undefined);
+  const open = await adminsCheck([ADMIN_OFF], { requireAdmin2fa: false }, true);
+  assert.strictEqual(byId(open, 'admin-2fa-optional').level, 'critical');
+  assert.strictEqual(byId(open, 'totp'), undefined);
+});
+
+test('admin two-factor optional: every admin has it -> info, the accounts ok item stays', async () => {
+  const r = await adminsCheck([ADMIN_ON], { requireAdmin2fa: false }, false);
+  assert.strictEqual(byId(r, 'admin-2fa-optional').level, 'info');
+  assert.strictEqual(byId(r, 'admin-2fa-optional').detail, 'Every admin still has two-factor, but any of them may remove it.');
+  assert.strictEqual(byId(r, 'accounts').level, 'ok');
+  assert.strictEqual(byId(r, 'totp'), undefined);
+});
+
+test('admin two-factor required (default, or anything but false): output is the old totp item', async () => {
+  const base = await adminsCheck([ADMIN_OFF], {}, false);
+  for (const v of [true, 'false', 0, null]) {
+    const r = await adminsCheck([ADMIN_OFF], { requireAdmin2fa: v }, false);
+    assert.deepStrictEqual(r.items, base.items);
+  }
+  assert.strictEqual(byId(base, 'totp').level, 'warn');
+  assert.strictEqual(byId(base, 'totp').title, '1 admin account(s) without two-factor');
+  assert.strictEqual(byId(base, 'admin-2fa-optional'), undefined);
+  assert.strictEqual(byId(await adminsCheck([ADMIN_OFF], {}, true), 'totp').level, 'critical');
+});

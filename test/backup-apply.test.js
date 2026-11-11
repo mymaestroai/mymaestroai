@@ -218,9 +218,10 @@ test('round 2: final journal states are filed at the next start; a folder the ba
   assert.throws(() => apply.confirmUndo({ root: c.root }), (e) => e.code === 'ENOUNDO');
   // today's backup key settings win at the swap (a key replaced after the restore was checked doesn't come back)
   const d = await ready('keys-today');
-  const sf = path.join(d.root, 'data', 'settings.json'); const set = JSON.parse(read(sf)); set.backup = { key: { publicKey: 'today', keyId: 'feedfacefeedface' }, retired: [{ keyId: 'old' }] }; fs.writeFileSync(sf, JSON.stringify(set));
+  const sf = path.join(d.root, 'data', 'settings.json'); const set = JSON.parse(read(sf)); set.backup = { key: { publicKey: 'today', keyId: 'feedfacefeedface' }, retired: [{ keyId: 'old' }] }; set.requireAdmin2fa = false; fs.writeFileSync(sf, JSON.stringify(set));
   apply.applyAtBoot({ root: d.root });
   assert.deepStrictEqual(JSON.parse(read(sf)).backup, set.backup);
+  assert.strictEqual(JSON.parse(read(sf)).requireAdmin2fa, false, 'today\'s admin two-factor switch wins at the swap');
   assert.ok(!fs.existsSync(path.join(d.root, '.restore', 'prepared.json')), 'a checked backup is confirmed only once');
 });
 
@@ -315,4 +316,70 @@ test('after the undo window, set-aside copies are removed at the next start', as
   assert.ok(!fs.existsSync(aside), 'removed after 7 days');
   assert.strictEqual(apply.lastRestore({ root: inst.root, now: () => Date.now() + 8 * 86400000 }).canUndo, false);
   assert.throws(() => apply.confirm({ ...inst, id: 'nope' }), (e) => e.code === 'ESTALE');
+});
+
+test('a backup taken with the admin two-factor switch off never turns it off here: today\'s switch wins, absent or set on after the check', async () => {
+  for (const [name, laterOn] of [['a2fa-absent', false], ['a2fa-on-later', true]]) {
+    const inst = makeInstall(TMP, name);
+    const sf = path.join(inst.root, 'data', 'settings.json');
+    const today = fs.existsSync(sf) ? JSON.parse(read(sf)) : {};
+    delete today.requireAdmin2fa;
+    fs.writeFileSync(sf, JSON.stringify({ ...today, requireAdmin2fa: false }));   // the backup is taken with the switch off
+    const settings = memSettings(); await keys.setup(PW, { settings, logN: 15 });
+    const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
+    fs.writeFileSync(sf, JSON.stringify(today));   // today the switch is on (no key)
+    const p = await restore.prepare({ file: r.places[0].file, password: PW, ...inst, platform: 'linux', mode: 'existing' });
+    apply.confirm({ ...inst, platform: 'linux', id: p.id });
+    if (laterOn) fs.writeFileSync(sf, JSON.stringify({ ...JSON.parse(read(sf)), requireAdmin2fa: true }));   // set on after the check, before the swap
+    apply.applyAtBoot({ root: inst.root });
+    const after = JSON.parse(read(sf));
+    if (laterOn) assert.strictEqual(after.requireAdmin2fa, true, name);
+    else assert.ok(!('requireAdmin2fa' in after), name + ': the backup\'s off did not come back');
+  }
+});
+
+test('a restored modules.json never brings back "run without asking", and today\'s is not kept either: prepare, swap and undo all end with empty no-ask lists', async () => {
+  const man = (id, key) => ({ id, levels: { setting: 'levels', choices: ['look', 'act'], default: 'look', sessionApproval: { setting: key, levels: ['act'] } } });
+  const modFile = (inst) => path.join(inst.root, 'data', 'modules.json');
+  const put = (inst, state) => w(modFile(inst), JSON.stringify(state));
+  const mods = (inst) => JSON.parse(read(modFile(inst))).modules;
+  const inst = makeInstall(TMP, 'noask-int');
+  w(path.join(inst.root, 'modules', 'levdemo', 'module.json'), JSON.stringify(man('levdemo', 'no_ask_agents')));
+  w(path.join(inst.root, 'modules', 'custom', 'module.json'), JSON.stringify(man('custom', 'quiet_agents')));
+  w(path.join(inst.root, 'modules', 'plain', 'module.json'), JSON.stringify({ id: 'plain' }));
+  // the backup holds no-ask agents and its own levels
+  put(inst, { modules: {
+    levdemo: { steps: {}, settings: { levels: ['sam:act', 'ann:act'], no_ask_agents: ['sam', 'ann'], note: 'from the backup' } },
+    custom: { settings: { levels: ['sam:act'], quiet_agents: ['sam'], no_ask_agents: ['stray'] } },
+    plain: { settings: { no_ask_agents: ['sam'] } },
+  } });
+  const settings = memSettings(); await keys.setup(PW, { settings, logN: 15 });
+  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
+  // today: different, lower levels and a different, non-empty no-ask list in every place
+  const today = { modules: {
+    levdemo: { steps: {}, settings: { levels: ['sam:look'], no_ask_agents: ['owner'], note: 'today' } },
+    custom: { settings: { levels: ['sam:look'], quiet_agents: ['owner'], no_ask_agents: ['owner'] } },
+    plain: { settings: { no_ask_agents: ['owner'] } },
+  } };
+  put(inst, today);
+  const p = await restore.prepare({ file: r.places[0].file, password: PW, ...inst, platform: 'linux', mode: 'existing' });
+  assert.deepStrictEqual(JSON.parse(read(modFile(inst))), today, 'preparing changes nothing live: today\'s file still holds its non-empty lists');
+  apply.confirm({ ...inst, platform: 'linux', id: p.id });
+  const stagedMods = JSON.parse(read(path.join(inst.root, '.restore', 'new', 'data', 'modules.json'))).modules;
+  assert.deepStrictEqual(stagedMods.levdemo.settings.no_ask_agents, [], 'prepare emptied the staged list');
+  assert.deepStrictEqual(stagedMods.levdemo.settings.levels, ['sam:act', 'ann:act'], 'and kept the backup\'s levels');
+  assert.strictEqual(apply.applyAtBoot({ root: inst.root }).state, 'applied');
+  let m = mods(inst);
+  assert.deepStrictEqual(m.levdemo.settings, { levels: ['sam:act', 'ann:act'], no_ask_agents: [], note: 'from the backup' }, 'exactly the backup\'s levels, nobody runs without asking');
+  assert.deepStrictEqual(m.custom.settings, { levels: ['sam:act'], quiet_agents: [], no_ask_agents: [] }, 'a custom backing key and a stray conventional key are both empty');
+  assert.deepStrictEqual(m.plain.settings, { no_ask_agents: [] }, 'a module declaring nothing: the stray conventional key is empty too');
+  // undo: today's setup comes back with today's levels, but with nobody running without asking
+  apply.markHealthy({ root: inst.root });
+  put(inst, { modules: { ...mods(inst), levdemo: { steps: {}, settings: { levels: ['sam:act'], no_ask_agents: ['later'], note: 'after restore' } } } });
+  apply.confirmUndo({ root: inst.root });
+  assert.strictEqual(apply.applyAtBoot({ root: inst.root }).kind, 'undo');
+  m = mods(inst);
+  assert.deepStrictEqual(m.levdemo.settings, { levels: ['sam:look'], no_ask_agents: [], note: 'today' }, 'undo: the previous levels, an empty no-ask list');
+  assert.deepStrictEqual(m.custom.settings, { levels: ['sam:look'], quiet_agents: [], no_ask_agents: [] });
+  assert.deepStrictEqual(m.plain.settings, { no_ask_agents: [] });
 });

@@ -61,7 +61,7 @@ test('search: scoped to the agents given, date range, kinds; ranked; context aro
   assert.strictEqual(ftsQuery(''), null);
   assert.strictEqual(ftsQuery('roof rack'), '"roof" "rack"*');
   const hit = tr.search('helper', 'ordered')[0];
-  const ctx = tr.context(hit.id, { before: 1, after: 1 });
+  const ctx = tr.context(hit.id, { before: 1, after: 1, agents: ['helper'] });   // row ids are unique per agent: the agent is named
   assert.deepStrictEqual(ctx.map(r => [r.kind, !!r.hit]), [['user', false], ['assistant', true], ['assistant', false]]);
   assert.deepStrictEqual(tr.context(hit.id, { agents: ['planner'] }), [], 'context respects the allowed agents');
   // no query: newest first

@@ -110,3 +110,38 @@ test('agents on ChatGPT with Codex signed out: critical, with the command that f
   assert.strictEqual(byId(await createReadiness({ ...base, agents, hasCodexSignIn: async () => true }).check(), 'chatgpt-signin'), undefined);
   assert.strictEqual(byId(await createReadiness({ ...base, agents: async () => [{ name: 'a', model: 'claude-sdk/x' }], hasCodexSignIn: () => false }).check(), 'chatgpt-signin'), undefined);
 });
+
+test('the memory check\'s line joins the checklist with its link to Settings → Status → Memory', async () => {
+  const r = await createReadiness({
+    platform: 'linux', hasUsers: () => true, listUsers: () => [{ role: 'admin', totpEnabled: true, login: 'a' }], setupNeeded: () => false, hasSdkCredentials: () => true,
+    sandboxStatus: async () => ({ docker: true, imageReady: true }), fetchStatus: async () => ({ renderer: true, pdftotext: true }),
+    searchChain: () => ['brave'], supervisor: () => 'systemd',
+    memoryItems: () => [{ id: 'memory', level: 'warn', title: '1 agent needs attention for memory', detail: 'Doc: some records aren\'t loading.', fix: 'Settings → Status → Memory says what each one needs.', action: { label: 'Open Memory', href: '/?memory=1' } }],
+  }).check();
+  assert.deepStrictEqual([byId(r, 'memory').level, byId(r, 'memory').action.href, r.warnings], ['warn', '/?memory=1', 1]);
+  const broken = await createReadiness({ memoryItems: () => { throw new Error('no file'); }, hasUsers: () => true, sandboxStatus: async () => ({ docker: true, imageReady: true }) }).check();
+  assert.strictEqual(byId(broken, 'memory'), undefined, 'a check that fails adds nothing and stops nothing');
+});
+
+
+test('admin two-factor optional: the totp warning becomes an info item; required output is unchanged', async () => {
+  const mk = (admins, setting) => createReadiness({
+    platform: 'linux', hasUsers: () => true, listUsers: () => admins, getSetting: (k) => (k === 'requireAdmin2fa' ? setting : undefined),
+  }).check();
+  const off = { login: 'owner', role: 'admin', totpEnabled: false };
+  const on = { login: 'sam', role: 'admin', totpEnabled: true };
+  const opt = await mk([off, on], false);
+  assert.strictEqual(byId(opt, 'totp'), undefined);
+  assert.strictEqual(byId(opt, 'admin-2fa-optional').level, 'info');
+  assert.strictEqual(byId(opt, 'admin-2fa-optional').title, 'Two-factor sign-in is optional for admins');
+  assert.strictEqual(byId(opt, 'admin-2fa-optional').fix, 'Settings, Security');
+  const allOn = await mk([on], false);
+  assert.strictEqual(byId(allOn, 'admin-2fa-optional'), undefined);
+  assert.strictEqual(byId(allOn, 'accounts').level, 'ok');
+  for (const v of [undefined, true, 'false', null]) {
+    const r = await mk([off], v);
+    assert.strictEqual(byId(r, 'totp').level, 'warn');
+    assert.strictEqual(byId(r, 'totp').title, '1 admin account(s) without two-factor');
+    assert.strictEqual(byId(r, 'admin-2fa-optional'), undefined);
+  }
+});

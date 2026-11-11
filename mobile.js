@@ -37,6 +37,8 @@ let unread = loadJson('hub-mobile-unread', {});
 let activity = loadJson('hub-mobile-activity', []);
 let actUnseen = 0;
 const hubTurns = {};           // turnId -> { agent, el, body }
+const forOwnerPending = {};    // turnId -> { reason, at }: a for_owner that came before its live card existed
+let lastHistoryCard = null;    // { wrap, body, line, label, prompt, agent }: the last card renderHistory drew
 let collapsed = loadJson('hub-mobile-collapsed', { experimental: true });
 
 const $ = (id) => document.getElementById(id);
@@ -1165,6 +1167,19 @@ async function refreshPlanUsage() {
   paintPlan();
   refreshPlanUsage.timer = setTimeout(refreshPlanUsage, next);
 }
+// ── plan state helpers (begin) ──
+function planState(w, levels) {
+  const pct = Math.round(Number(w.utilization) || 0);
+  const extra = !!w.extraUsage && !w.rejected;
+  const passed = (levels || []).filter(l => pct >= l);
+  const cls = w.rejected || (pct >= 100 && !extra) ? 'refused' : extra ? 'warn' : passed.length && passed.length === (levels || []).length ? 'hot' : passed.length ? 'warn' : '';
+  return { pct, extra, cls };
+}
+function planPctText(w, levels) {
+  const s = planState(w, levels);
+  return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
+}
+// ── plan state helpers (end) ──
 function planFamilyOf(model) {
   const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
   if (!id) return null;
@@ -1182,12 +1197,13 @@ function paintPlan() {
   const wins = d && /^claude-sdk\//.test(model) ? (d.weekly || []).filter(w => w.utilization != null && (w.family == null || (fam && w.family === fam))) : [];
   if (!wins.length) { el.hidden = true; el.textContent = ''; return; }
   const w = wins.reduce((x, y) => (Number(y.utilization) > Number(x.utilization) ? y : x));
-  const pct = Math.round(Number(w.utilization));
   const levels = (d.warn && Array.isArray(d.warn.at)) ? d.warn.at : [];
-  const passed = levels.filter(l => pct >= l);
-  el.textContent = `${w.family ? w.label : 'Plan'} ${pct}%`;
-  el.className = 'sub' + (w.rejected || pct >= 100 ? ' refused' : passed.length && passed.length === levels.length ? ' hot' : passed.length ? ' warn' : '');
-  el.title = `${w.family ? w.label : 'All models'}: ${pct}% of this week's Claude plan allowance`;
+  const { pct, extra, cls } = planState(w, levels);
+  el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)}`;
+  el.className = 'sub' + (cls ? ' ' + cls : '');
+  el.title = extra
+    ? `${w.family ? w.label : 'All models'}: the weekly Claude plan is used up until ${Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'}; extra usage is paying`
+    : `${w.family ? w.label : 'All models'}: ${pct}% of this week's Claude plan allowance`;
   el.hidden = false;
 }
 
@@ -1343,7 +1359,7 @@ async function loadAgents() {
     if (agents.some(a => 'busy' in a)) {
       const map = {};
       for (const a of agents) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
-      applySnapshot(map, false);
+      applySnapshot(map, false, { namedOnly: true });
     }
   } catch (e) {
     toast(`Could not load agents: ${e.message}`);
@@ -1367,19 +1383,32 @@ function setLive(name, patch) {
   if (!name) return;
   const cur = live[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
   const next = { ...cur, ...patch };
-  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; }
+  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
   else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
   live[name] = next;
 }
 
-function applySnapshot(map, repaint = true) {
+// opts.namedOnly: the map lists named agents only (/api/agents): workers missing from it stay, and the worker/consult keys it lacks are not touched.
+function applySnapshot(map, repaint = true, opts = {}) {
   if (!map || typeof map !== 'object') return;
   statusKnown = true;
-  for (const [name, s] of Object.entries(map)) setLive(name, { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion });
-  for (const name of Object.keys(live)) if (!(name in map)) setLive(name, { busy: false });
+  const namedOnly = !!(opts && opts.namedOnly);
+  for (const [name, s] of Object.entries(map)) {
+    const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
+    for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) {
+      if (namedOnly && !(k in s)) continue;
+      patch[k] = k === 'worker' ? busyIsWorker(name, s) : (s[k] || null);
+    }
+    setLive(name, patch);
+  }
+  for (const name of Object.keys(live)) {
+    if (name in map) continue;
+    if (busyIsWorker(name, live[name])) { if (!namedOnly) delete live[name]; }   // a worker that is gone, not an agent gone idle
+    else setLive(name, { busy: false });
+  }
   if (repaint) paintStatus();
   // Woke up (or just loaded) while the open chat's agent is mid-turn: follow that turn.
-  if (current && map[current] && map[current].busy && !Object.values(hubTurns).some(t => t.agent === current)) reattachIfIdle(current);
+  if (current && map[current] && map[current].busy && !followedHubTurn(current)) reattachIfIdle(current);
 }
 
 async function pollStatus() {
@@ -1740,6 +1769,15 @@ function goBackFromChat() {
 
 function chatEl() { return $('messages'); }
 
+// Where new notes and bubbles are appended: the chat, or the body of a folded automatic-turn card while one is painted.
+let renderTarget = null;
+function bubbleHost() { return renderTarget || chatEl(); }
+function withRenderTarget(el, fn) {
+  const prev = renderTarget;
+  renderTarget = el;
+  try { return fn(); } finally { renderTarget = prev; }
+}
+
 function scrollChat(force) {
   const s = $('chat-scroll');
   if (force || stick) s.scrollTop = s.scrollHeight;
@@ -1749,7 +1787,7 @@ function addNote(text) {
   const d = document.createElement('div');
   d.className = 'note';
   d.textContent = text;
-  chatEl().appendChild(d);
+  bubbleHost().appendChild(d);
   return d;
 }
 
@@ -1768,6 +1806,188 @@ function addCopyButton(el) {
 function setRaw(el, text) {
   rawText.set(el, String(text ?? ''));
 }
+
+// Shared verbatim with lib/ui-keep-keyboard.js (test/ui-keep-keyboard.test.js keeps the two in step): bring the keyboard back when Chrome's spell-check hides it.
+// ── keep-keyboard helpers (begin) ──
+const KEEP_KBD_MS = 1000;       // how long after a tap on the box a keyboard that goes away is brought back
+const KEEP_KBD_EDIT_MS = 400;   // ... and after a key or an edit in it (shorter, so Back pressed more than 400 ms after a key stays a close)
+const KBD_MIN_PX = 100;     // how much taller the visible page must get to count as the keyboard going away (more than the address bar or the suggestion strip)
+function keyboardWentAway(base, now) {
+  if (!base || !now || typeof base !== 'object' || typeof now !== 'object') return false;
+  if (!Number.isFinite(base.w) || !Number.isFinite(base.h) || !Number.isFinite(now.w) || !Number.isFinite(now.h)) return false;
+  return Math.abs(now.w - base.w) <= 2 && now.h - base.h >= KBD_MIN_PX;
+}
+function shouldReopenKeyboard(s, now) {
+  if (!s) return false;
+  const t = (v) => (Number.isFinite(v) ? v : 0);
+  const touchAt = t(s.touchAt);
+  if (touchAt <= 0 || !Number.isFinite(now)) return false;
+  const age = now - touchAt;
+  if (age < 0 || age > (s.touchKind === 'edit' ? KEEP_KBD_EDIT_MS : KEEP_KBD_MS)) return false;
+  if (!s.focused || s.hidden || s.dialogOpen) return false;
+  if (s.touchChat !== s.chat) return false;
+  if (!keyboardWentAway(s.base, s.view)) return false;
+  if (t(s.elsewhereAt) >= touchAt || t(s.sentAt) >= touchAt || t(s.escapeAt) >= touchAt || t(s.hiddenAt) >= touchAt) return false;
+  return t(s.reopenedAt) < touchAt;   // once per tap or edit: a keyboard closed again with Back stays closed
+}
+function createKeepKeyboard({ now = () => Date.now(), viewport, reopen }) {
+  // base is the visible page size at the tap or edit. While the keyboard is open that is the small height, so a later
+  // growth of 100 px or more means it went away. A tap on the box while the keyboard is closed (the box is not focused,
+  // the keyboard is about to open) records a base taken with the keyboard closed: the page then shrinks as the keyboard
+  // opens and grows only back to that base, which is 0 px more, so it is not read as the keyboard going away.
+  const s = { touchAt: 0, touchKind: 'tap', touchChat: null, chat: null, base: null, view: null, focused: false, elsewhereAt: 0, sentAt: 0, escapeAt: 0, hiddenAt: 0, reopenedAt: 0, hidden: false, dialogOpen: false };
+  return {
+    touch(chat, kind = 'tap') { s.touchAt = now(); s.touchKind = kind === 'edit' ? 'edit' : 'tap'; s.touchChat = chat; s.base = viewport(); },
+    elsewhere() { s.elsewhereAt = now(); },
+    sent() { s.sentAt = now(); },
+    escape() { s.escapeAt = now(); },
+    hidden() { s.hiddenAt = now(); },
+    resized(ctx) {
+      s.view = viewport();
+      s.chat = ctx.chat; s.focused = !!ctx.focused; s.hidden = !!ctx.hidden; s.dialogOpen = !!ctx.dialogOpen;
+      const at = now();
+      if (!shouldReopenKeyboard(s, at)) return false;
+      s.reopenedAt = at;
+      reopen();
+      return true;
+    },
+  };
+}
+// ── keep-keyboard helpers (end) ──
+
+// Shared verbatim with lib/ui-auto-turns.js (test/ui-auto-turns-phone.test.js keeps the two in step): turns the hub starts by itself fold into closed cards.
+// ── auto-turn helpers (begin) ──
+const AUTO_STACK_MIN = 3;   // this many closed cards in a row fold into one stack
+function autoKindOfOrigin(origin) {
+  const k = origin && typeof origin === 'object' ? origin.kind : '';
+  if (!k || typeof k !== 'string') return null;
+  if (k === 'consultation') return 'consultation';
+  if (k === 'schedule') return 'schedule';
+  if (k === 'user' || k === 'comms') return null;
+  return 'notice';
+}
+function autoQuoted(s) {
+  const m = /"([^"\n]*)"/.exec(s || '');
+  return m ? m[1] : null;
+}
+function autoInfoOf(entry) {
+  if (!entry || entry.role !== 'user' || entry.ask === true) return null;
+  const o = entry.origin;
+  if (o && typeof o === 'object' && o.kind) {
+    const kind = autoKindOfOrigin(o);
+    if (!kind) return null;
+    const from = o.from || o.jobName || null;
+    let label;
+    if (kind === 'consultation') label = `Consultation from ${from || 'another agent'}`;
+    else if (kind === 'schedule') label = `Scheduled task${o.from ? ': ' + o.from : ''}`;
+    else if (o.kind === 'job_notice') label = `Job finished${from ? ': ' + from : ''}`;
+    else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
+    else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
+    else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+    else if (o.kind === 'alert') label = 'Monitor alert';
+    else label = 'Hub turn';
+    return { kind, from, label };
+  }
+  const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
+  let m = /^\[Consultation from agent "([^"\n]*)"/.exec(text);
+  if (m) return { kind: 'consultation', from: m[1], label: `Consultation from ${m[1] || 'another agent'}` };
+  if (entry.tiger_team === true) return { kind: 'consultation', from: null, label: 'Consultation from another agent' };
+  if (text.startsWith('[Scheduled task — started by the hub scheduler')) {
+    const close = text.indexOf(']');
+    const from = close >= 0 ? (/^\s*"([^"\n]*)"/.exec(text.slice(close + 1)) || [])[1] ?? null : null;
+    return { kind: 'schedule', from, label: `Scheduled task${from ? ': ' + from : ''}` };
+  }
+  if (text.startsWith('[Job finished]') || text.startsWith('[Job ended]')) {
+    const finished = text.startsWith('[Job finished]');
+    const jm = /\bJob\s+"([^"\n]*)"/.exec(text);
+    const name = jm ? jm[1] : null;
+    return { kind: 'notice', from: name, label: `${finished ? 'Job finished' : 'Job ended'}${name ? ': ' + name : ''}` };
+  }
+  if (text.startsWith('[Resumed after compression, from the hub]')) return { kind: 'notice', from: null, label: 'Resumed after compression' };
+  if (text.startsWith('[Delivery turn started by the hub')) return { kind: 'notice', from: null, label: 'Consultation replies delivered' };
+  m = /^\[Queued consultation reply from agent "([^"\n]*)"/.exec(text);
+  if (m) return { kind: 'notice', from: m[1], label: 'Consultation replies delivered' };
+  return null;
+}
+function autoFirstLine(text, max = 140) {
+  if (typeof text !== 'string') return '';
+  for (const raw of text.split(/\r?\n/)) {
+    let s = raw.trim().replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+)+/, '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+    if (!s || /^[-*_=\s]*$/.test(s)) continue;
+    return s.length > max ? s.slice(0, Math.max(0, max - 1)).trimEnd() + '…' : s;
+  }
+  return '';
+}
+function autoCardKind(kind) {
+  return kind === 'consultation' ? 'consult' : kind === 'schedule' ? 'schedule' : 'notice';
+}
+function autoSummaryOf(cards) {
+  const n = (cards || []).length;
+  const count = (k) => cards.filter((c) => c.kind === k).length;
+  const parts = [];
+  const c = count('consultation'), s = count('schedule'), h = n - c - s;
+  if (c) parts.push(`${c} ${c === 1 ? 'consultation' : 'consultations'}`);
+  if (s) parts.push(`${s} ${s === 1 ? 'scheduled task' : 'scheduled tasks'}`);
+  if (h) parts.push(`${h} ${h === 1 ? 'hub notice' : 'hub notices'}`);
+  return `${n} automatic ${n === 1 ? 'turn' : 'turns'}: ${parts.join(', ')}`;
+}
+function autoCardLine(history, indexes, kindsInfoLabel) {
+  const isAsst = (i) => history[i].role === 'assistant';
+  const asst = indexes.filter(isAsst);
+  const pick = [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
+  if (pick !== undefined) return autoFirstLine(history[pick].content);
+  for (const i of [...indexes].reverse()) {
+    if (isAsst(i)) continue;
+    let c = typeof history[i].content === 'string' ? history[i].content : '';
+    const task = c.indexOf('\nTask:\n');
+    c = task >= 0 ? c.slice(task + 7) : c.trimStart().replace(/^\[[^\]]*\]:?/, '');
+    const line = autoFirstLine(c);
+    if (line) return line;
+  }
+  return kindsInfoLabel || '';
+}
+function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {}) {
+  const items = [];
+  const n = Array.isArray(history) ? history.length : 0;
+  let i = Math.max(0, from | 0);
+  while (i < n) {
+    const e = history[i];
+    if (!e || e.inProgress) { i++; continue; }
+    const info = autoInfoOf(e);
+    if (!info) { items.push({ type: 'entry', index: i }); i++; continue; }
+    let last = info, firstTs = e.ts, hasAsst = false;
+    const indexes = [i];
+    let j = i + 1;
+    for (; j < n; j++) {
+      const x = history[j];
+      if (!x) break;
+      if (x.inProgress) continue;
+      if (x.ask === true) break;
+      if (x.role === 'assistant') { hasAsst = true; indexes.push(j); continue; }
+      if (x.role !== 'user' || hasAsst) break;
+      const xi = autoInfoOf(x);
+      if (!xi) break;
+      last = xi; indexes.push(j);
+    }
+    const open = indexes.filter((k) => history[k].role === 'assistant' && history[k].for_owner === true);
+    items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+    i = j;
+  }
+  const out = [];
+  let run = [];
+  const flush = () => {
+    if (run.length >= stackMin && run.length > 0) out.push({ type: 'stack', cards: run, summary: autoSummaryOf(run) });
+    else out.push(...run);
+    run = [];
+  };
+  for (const it of items) {
+    if (it.type === 'card' && it.open.length === 0) run.push(it);
+    else { flush(); out.push(it); }
+  }
+  flush();
+  return out;
+}
+// ── auto-turn helpers (end) ──
 
 // The date and time under each message: when it was sent, when a reply was finished and how long it took.
 // Shared verbatim with lib/ui-msg-time.js and app.js (test/ui-msg-time.test.js keeps the three in step).
@@ -1824,6 +2044,118 @@ function msgTimeLines(history, now = Date.now(), locale = [], zone = msgTimeZone
 }
 // ── message-time helpers (end) ──
 
+// Face ID / fingerprint unlock of the wallet (WebAuthn PRF). Shared verbatim with lib/ui-passkey.js and app.js
+// (test/ui-passkey.test.js keeps the three in step). The Wallet sheet below uses it.
+// ── passkey helpers (begin) ──
+function pkB64u(buf) {
+  const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function pkBytes(s) {
+  const t = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(t + '='.repeat((4 - (t.length % 4)) % 4));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function pkUsable(loc = location, w = window) {
+  if (!w.PublicKeyCredential || !navigator.credentials) return { ok: false, code: 'no_api', text: "This browser can't use passkeys." };
+  const host = loc.hostname || '';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':') || host === 'localhost' || host.endsWith('.localhost')) {
+    return { ok: false, code: 'bad_address', text: `Face ID and fingerprint work on My Maestro's secure tailnet address (https), not on ${host}.` };
+  }
+  if (loc.protocol !== 'https:') {
+    return { ok: false, code: 'bad_address', text: "Face ID and fingerprint need My Maestro's secure (https) address." };
+  }
+  return { ok: true, code: '', text: '' };
+}
+function pkErrorText(e) {
+  const name = e && e.name;
+  if (name === 'NotAllowedError') return 'Cancelled, or the device did not confirm it was you.';
+  if (name === 'InvalidStateError') return 'This device is already set up.';
+  if (name === 'SecurityError') return "This address can't use passkeys.";
+  if (name === 'AbortError') return 'Cancelled.';
+  return (e && e.message) || 'Something went wrong.';
+}
+function pkStop(signal) {
+  if (signal && signal.aborted) throw new DOMException('Cancelled.', 'AbortError');
+}
+async function pkUnlock(api, signal) {
+  const o = await api('passkey/options', { purpose: 'unlock' });
+  pkStop(signal);
+  const one = o.allowCredentials.length === 1;
+  const byCred = {};
+  for (const c of o.allowCredentials) byCred[c.id] = { first: pkBytes(o.prfSalts[c.id]) };
+  const publicKey = {
+    challenge: pkBytes(o.challenge), rpId: o.rpId, timeout: o.timeout, userVerification: 'required',
+    allowCredentials: o.allowCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
+    extensions: { prf: { evalByCredential: byCred, ...(one ? { eval: { first: pkBytes(o.prfSalts[o.allowCredentials[0].id]) } } : {}) } },
+  };
+  const cred = await navigator.credentials.get({ publicKey, signal });
+  pkStop(signal);
+  const prf = cred.getClientExtensionResults().prf?.results?.first;
+  if (!prf) throw new Error("This device didn't give the unlock secret. Use the passphrase instead.");
+  return api('passkey/unlock', {
+    challenge: o.challenge, id: cred.id,
+    clientDataJSON: pkB64u(cred.response.clientDataJSON), authenticatorData: pkB64u(cred.response.authenticatorData),
+    signature: pkB64u(cred.response.signature), prf: pkB64u(prf),
+  });
+}
+async function pkAdd(api, { passphrase, label }, confirmStep, signal) {
+  const stray = ' A passkey named "My Maestro wallet" may have been saved on this device; you can delete it in its password manager.';
+  const o = await api('passkey/options', { purpose: 'register', passphrase });
+  pkStop(signal);
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: pkBytes(o.challenge), rp: o.rp, user: { ...o.user, id: pkBytes(o.user.id) }, pubKeyCredParams: o.pubKeyCredParams,
+    timeout: o.timeout, attestation: 'none', authenticatorSelection: o.authenticatorSelection,
+    excludeCredentials: o.excludeCredentials.map(c => ({ type: 'public-key', id: pkBytes(c.id) })),
+    extensions: { prf: { eval: { first: pkBytes(o.prfSalt) } } },
+  }, signal });
+  pkStop(signal);
+  const ext = cred.getClientExtensionResults().prf;
+  if (ext && ext.enabled === false) throw new Error("This device's passkeys can't unlock the wallet. Keep using the passphrase here." + stray);
+  const pub = cred.response.getPublicKey ? cred.response.getPublicKey() : null;
+  if (!pub) throw new Error("This device's passkey type isn't supported here.");
+  let prf = ext?.results?.first, confirm;
+  if (!prf) {
+    pkStop(signal);
+    await confirmStep();
+    const c = await api('passkey/options', { purpose: 'confirm', registerChallenge: o.challenge });
+    pkStop(signal);
+    const g = await navigator.credentials.get({ publicKey: {
+      challenge: pkBytes(c.challenge), rpId: c.rpId, timeout: c.timeout, userVerification: 'required',
+      allowCredentials: [{ type: 'public-key', id: cred.rawId }],
+      extensions: { prf: { eval: { first: pkBytes(c.prfSalt) } } },
+    }, signal });
+    prf = g.getClientExtensionResults().prf?.results?.first;
+    if (!prf) throw new Error("This device didn't give the unlock secret, so it can't unlock the wallet." + stray);
+    confirm = { challenge: c.challenge, clientDataJSON: pkB64u(g.response.clientDataJSON), authenticatorData: pkB64u(g.response.authenticatorData), signature: pkB64u(g.response.signature) };
+  }
+  pkStop(signal);
+  return api('passkey/register', {
+    passphrase, label, challenge: o.challenge,
+    credential: {
+      id: cred.id, clientDataJSON: pkB64u(cred.response.clientDataJSON), authenticatorData: pkB64u(cred.response.getAuthenticatorData()),
+      publicKey: pkB64u(pub), publicKeyAlgorithm: cred.response.getPublicKeyAlgorithm(),
+    },
+    prf: pkB64u(prf), ...(confirm ? { confirm } : {}),
+  });
+}
+function pkDeviceLabel(nav = navigator) {
+  const ua = String((nav && nav.userAgent) || '');
+  const plat = String((nav && nav.userAgentData && nav.userAgentData.platform) || '');
+  if (/iPhone|iPod/i.test(ua)) return 'iPhone';
+  if (/iPad/i.test(ua) || (/Macintosh/i.test(ua) && nav.maxTouchPoints > 1)) return 'iPad';
+  if (/^Android$/i.test(plat) || /Android/i.test(ua)) return 'Android phone';
+  if (/^macOS$/i.test(plat) || /Macintosh|Mac OS X/i.test(ua)) return 'Mac';
+  if (/^Windows$/i.test(plat) || /Windows/i.test(ua)) return 'Windows PC';
+  if (/^(Linux|Chrome OS|Chromium OS)$/i.test(plat) || /Linux|X11|CrOS/i.test(ua)) return 'Linux computer';
+  return 'This device';
+}
+// ── passkey helpers (end) ──
+
 // The line under a bubble (msgTimeLabel / msgTimeLine): below its right edge for the person, its left edge for the
 // agent. It sits outside the reply body, which repaints; '' removes it.
 function setBubbleTime(el, text) {
@@ -1847,7 +2179,7 @@ function addUserBubble(text, images) {
   if (text) d.appendChild(document.createTextNode(text));
   setRaw(d, text);
   addCopyButton(d);
-  chatEl().appendChild(d);
+  bubbleHost().appendChild(d);
   return d;
 }
 
@@ -1860,7 +2192,7 @@ function addAssistantBubble(content) {
   d.appendChild(body);
   setRaw(d, content === undefined ? '' : content);
   addCopyButton(d);
-  chatEl().appendChild(d);
+  bubbleHost().appendChild(d);
   renderVisualBlocks(body);
   return { el: d, body };
 }
@@ -2180,8 +2512,131 @@ function renderHistory() {
     box.appendChild(b);
   }
   const times = msgTimeLines(chatHistory);   // the date and time under each message
-  for (let i = start; i < chatHistory.length; i++) renderEntry(chatHistory[i], times[i]);
+  lastHistoryCard = null;
+  if (foldAutoOn()) {
+    for (const it of autoGroupHistory(chatHistory, start)) {
+      if (it.type === 'entry') renderEntry(chatHistory[it.index], times[it.index]);
+      else if (it.type === 'card') renderAutoCard(it, times);
+      else if (it.type === 'stack') renderAutoStack(it, times);
+    }
+  } else {
+    for (let i = start; i < chatHistory.length; i++) renderEntry(chatHistory[i], times[i]);
+  }
   if (!chatHistory.length) addNote('No messages yet');
+}
+
+// Turns the hub starts by itself fold into closed cards; the setting is per device ('off' turns it off).
+function foldAutoOn() {
+  try { return localStorage.getItem('hub-fold-auto') !== 'off'; } catch { return true; }
+}
+function paintFoldMenu() {
+  const b = $('menu-fold');
+  if (b) b.textContent = `⇅ Fold automatic turns: ${foldAutoOn() ? 'On' : 'Off'}`;
+}
+function toggleFoldAuto() {
+  $('menu').classList.remove('open');
+  try { localStorage.setItem('hub-fold-auto', foldAutoOn() ? 'off' : 'on'); } catch { /* storage refused */ }
+  paintFoldMenu();
+  // A redraw would detach the live bubble of a hub turn this phone is following, so it waits like a stream does.
+  const following = Object.values(hubTurns).some(t => t && t.agent === current && t.el && t.el.isConnected);
+  if (current && !streams.has(current) && !reattaches.has(current) && !following) { stick = true; renderHistory(); scrollChat(true); }
+  else toast(`Fold automatic turns: ${foldAutoOn() ? 'On' : 'Off'}`);
+}
+
+// A card header: a button (aria-expanded) that opens and closes the body next to it.
+function makeFoldHeader(cls, label, time, line) {
+  const wrap = document.createElement('div');
+  wrap.className = 'auto-wrap';
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = cls;
+  head.setAttribute('aria-expanded', 'false');
+  const l = document.createElement('span'); l.className = 'auto-label'; l.textContent = label;
+  head.appendChild(l);
+  if (time) { const t = document.createElement('span'); t.className = 'auto-time'; t.textContent = time; head.appendChild(t); }
+  const f = document.createElement('span'); f.className = 'auto-line'; f.textContent = line || '';
+  head.appendChild(f);
+  const c = document.createElement('span'); c.className = 'auto-chev'; c.textContent = '▸';
+  head.appendChild(c);
+  const body = document.createElement('div');
+  body.className = 'auto-body';
+  body.hidden = true;
+  head.addEventListener('click', () => {
+    const open = body.hidden;
+    body.hidden = !open;
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    c.textContent = open ? '▾' : '▸';
+  });
+  wrap.append(head, body);
+  return { wrap, head, body, line: f };
+}
+
+function addFromLine(label) {
+  const d = document.createElement('div');
+  d.className = 'auto-from';
+  d.textContent = `from ${label}`;
+  bubbleHost().appendChild(d);
+  return d;
+}
+
+// The card's line once its reply left it (for_owner): the prompt's task line, else the label.
+function promptCardLine(prompt, label) {
+  const c = typeof prompt === 'string' ? prompt : '';
+  const i = c.indexOf('\nTask:\n');
+  return (i >= 0 && autoFirstLine(c.slice(i + 7))) || label;
+}
+
+// True when the card is the last thing in the chat (or the last card of a stack that is itself last). skip: a trailing
+// element that does not count (the waiting bubble a re-attach drew after the card).
+function cardIsLast(wrap, skip = null) {
+  const box = chatEl();
+  if (!box || !wrap || !wrap.isConnected) return false;
+  const lastOf = (el) => {
+    let l = el.lastElementChild;
+    if (skip && l === skip) l = l.previousElementSibling || null;
+    return l;
+  };
+  if (wrap.parentNode === box) return lastOf(box) === wrap;
+  const body = wrap.parentNode;
+  if (!body || body.lastElementChild !== wrap) return false;
+  const stack = body.parentNode;
+  return !!stack && stack.parentNode === box && lastOf(box) === stack;
+}
+// The hub clips a turn_start message to 12000 characters and ends it with this suffix.
+const TURN_CLIP_SUFFIX = '\n…[truncated]';
+// True when the saved prompt is the one the hub announced (whole, or its clipped start).
+function samePrompt(saved, sent) {
+  if (typeof saved !== 'string' || typeof sent !== 'string') return false;
+  if (saved === sent) return true;
+  // only the hub's own clipping (exactly 12000 characters and the suffix) counts as a clipped prompt
+  const head = sent.slice(0, -TURN_CLIP_SUFFIX.length);
+  return sent.endsWith(TURN_CLIP_SUFFIX) && head.length === 12000 && saved.length > 12000 && saved.startsWith(head);
+}
+// A remembered card is adopted only when its prompt was saved within 10 minutes of this turn starting.
+function promptRecent(ts, startedAt) {
+  const a = Date.parse(ts), b = Date.parse(startedAt);
+  return !isNaN(a) && !isNaN(b) && Math.abs(a - b) <= 10 * 60 * 1000;
+}
+
+// One automatic turn as a closed card; the entries the agent marked for the owner follow it, open.
+function renderAutoCard(it, times, host = chatEl()) {
+  const card = makeFoldHeader(`auto-card auto-card-${autoCardKind(it.kind)}`, it.label, timeLabel(it.ts), it.firstLine);
+  host.appendChild(card.wrap);
+  const users = it.indexes.filter(k => chatHistory[k] && chatHistory[k].role === 'user');
+  const lastUser = users[users.length - 1];
+  lastHistoryCard = lastUser === undefined ? null : { wrap: card.wrap, body: card.body, line: card.line, label: it.label, prompt: chatHistory[lastUser].content, ts: chatHistory[lastUser].ts || null, agent: current };
+  const open = new Set(it.open);
+  withRenderTarget(card.body, () => { for (const i of it.indexes) if (!open.has(i)) renderEntry(chatHistory[i], times[i]); });
+  withRenderTarget(host === chatEl() ? null : host, () => {
+    for (const i of it.open) { addFromLine(it.label); renderEntry(chatHistory[i], times[i]); }
+  });
+}
+
+// Three or more cards in a row: one line with a count; tapping it shows the cards, each still closed.
+function renderAutoStack(it, times) {
+  const st = makeFoldHeader('auto-stack', it.summary, '', '');
+  chatEl().appendChild(st.wrap);
+  for (const c of it.cards) renderAutoCard(c, times, st.body);
 }
 
 function loadEarlier() {
@@ -2316,8 +2771,12 @@ function toolSummary(input) {
   try { return clipText(JSON.stringify(input), 160); } catch { return ''; }
 }
 
+// A named agent by its name; a temporary worker or a Claude sub-agent by its label (its kind, "temporal" or
+// "sdk-agent", says nothing to a person).
 function workerName(it) {
-  return it.agent && agentByName(it.agent) ? displayName(it.agent) : (it.agent || it.description || 'worker');
+  if (it.agent && agentByName(it.agent)) return displayName(it.agent);
+  const label = String(it.description || '').replace(/^Worker:\s*/, '');
+  return label || it.agent || 'worker';
 }
 
 // Removes the placeholder ('⏳ Thinking…', '…') or anything else that is neither the feed, the
@@ -2438,8 +2897,13 @@ function feedUpsert(holder, item) {
       feed.items.set(item.id, it);
       feed.byWorker.set(wid, it);
     }
+    const guessed = !!(it.inferred || it.unknown);
     it.status = item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'running';
-    if (it.status !== 'running' && !it.t1) it.t1 = Date.parse(item.doneTs) || Date.now();
+    if (item.cancelled != null) it.cancelled = item.cancelled === true;   // stopped (by a person, or with its caller): not a failure
+    it.unknown = false; it.inferred = false;   // the hub said how it is: no longer a guess
+    if (it.status === 'running') it.t1 = null;
+    else if (!it.t1 || guessed) it.t1 = Date.parse(item.doneTs) || it.t1 || Date.now();
+    if (guessed && wkSeen.has(wid)) wkSeen.get(wid).endSeen = null;
     if (item.description) it.description = String(item.description);
     if (item.model) it.model = String(item.model);
     if (item.agent) it.agent = String(item.agent);
@@ -2448,6 +2912,7 @@ function feedUpsert(holder, item) {
     return null;
   }
   paintFeed(holder, it);
+  if (it.kind === 'worker') { it.rev = (it.rev || 0) + 1; wkTrack(holder, it); }
   return it;
 }
 
@@ -2459,7 +2924,9 @@ function feedWorkerText(holder, workerId, text, append) {
   w.text = append ? w.text + text : text;
   if (w.text.length > 16000) w.text = w.text.slice(-16000);
   w.last = 'text';
+  w.rev = (w.rev || 0) + 1;
   paintFeed(holder, w);
+  if (wkView && wkView.mode === 'worker' && wkView.id === String(w.workerId)) wkPaintWorker();
 }
 
 function feedSummary(feed) {
@@ -2482,7 +2949,7 @@ function feedStatus(feed) {
     const t = x.last === 'tool' ? x.tools[x.tools.length - 1] : null;
     return `worker ${who} ${t ? `running ${t.tool}` : 'working…'}`;
   }
-  return `worker ${who} ${x.status === 'failed' ? 'failed' : 'finished'}`;
+  return `worker ${who} ${x.status === 'failed' ? (x.cancelled ? 'stopped' : 'failed') : x.unknown ? 'ended' : 'finished'}`;
 }
 
 // Mounts the feed at the top of the holder's bubble (once per bubble) and paints one row, or
@@ -2686,7 +3153,7 @@ function tsnEntryText(it) {
     const mark = it.status === 'running' ? '⚙' : tsnFailed(it) ? '✗' : '✓';
     return `${mark} ${it.tool}${it.summary ? ` · ${it.summary}` : ''}\n${it.status === 'running' ? 'Running…' : (it.output ? String(it.output) : '(no output)')}`;
   }
-  const mark = it.status === 'completed' ? '✓' : it.status === 'failed' ? '✗' : '👷';
+  const mark = it.status === 'completed' ? (it.unknown ? '–' : '✓') : it.status === 'failed' ? (it.cancelled ? '■' : '✗') : '👷';
   const tools = it.tools.map(t => `  ⚙ ${t.tool}${t.summary ? ` · ${clipText(t.summary, 160)}` : ''}`).join('\n');
   return `${mark} ${workerName(it)}${it.model ? ` · ${shortModel(it.model)}` : ''}${it.error ? `\n⚠ ${it.error}` : ''}${tools ? `\n${tools}` : ''}${it.text ? `\n${it.text}` : ''}`;
 }
@@ -2741,7 +3208,7 @@ function paintFeedRow(feed, it, list = null) {
     det.textContent = it.open ? [it.summary, it.output ? String(it.output).slice(0, 3000) : ''].filter(Boolean).join('\n\n') : '';
     return;
   }
-  const mark = it.status === 'completed' ? '✓' : it.status === 'failed' ? '✗' : '👷';
+  const mark = it.status === 'completed' ? (it.unknown ? '–' : '✓') : it.status === 'failed' ? (it.cancelled ? '■' : '✗') : '👷';
   line.textContent = `${mark} ${workerName(it)}${it.model ? ` · ${shortModel(it.model)}` : ''}`;
   const lastTool = it.tools[it.tools.length - 1];
   sub.textContent = it.error ? `⚠ ${clipText(it.error, 120)}`
@@ -2757,15 +3224,22 @@ function paintFeedRow(feed, it, list = null) {
 }
 
 // The turn is over: rows stop spinning; each group stays between the text before and after it.
-function feedEnd(holder) {
+// how: 'sure' when the turn is known to be over (the hub said so, or its stream ended with its final marker); 'maybe'
+// when only this page's side ended (a person's Stop, a stream cut off without its final marker, giving up waiting):
+// its workers then keep running here until the hub's record says how they ended.
+function feedEnd(holder, how = 'sure') {
   const feed = holder && holder.feed;
   if (!feed) return;
   feed.ended = true;
   for (const x of feed.items.values()) {
     if (x.kind === 'tool' && x.status === 'running') x.status = 'done';
-    if (x.kind === 'worker' && x.status === 'running') x.status = 'completed';
+    if (x.kind === 'worker' && x.status === 'running') {   // over with its reply; how it ended is asked of the hub
+      if (how === 'sure') { x.status = 'completed'; x.unknown = true; x.inferred = true; x.inferredAt = Date.now(); x.t1 = x.t1 || Date.now(); x.rev = (x.rev || 0) + 1; }
+      wkInferEnd(wkSeen.get(String(x.workerId)), 1500, how === 'sure' ? 'sure' : 'maybe');
+    }
   }
   paintFeed(holder);
+  wkRefreshSoon();
 }
 
 // Tap on the folded summary toggles the list; tap on a row toggles its detail.
@@ -2784,6 +3258,628 @@ function onFeedClick(e) {
   if (!it) return;
   it.open = !it.open;
   paintFeedRow(feed, it);
+}
+
+// ── Workers: a chip under the chat's name, a full-screen list, each worker full screen, and the history ──────────
+// The same list as the desktop's Workers button: running workers, finished ones for 2 minutes, failed ones until
+// opened or 10 minutes (the newest 3). The chip shows while the list has workers; the history is also in the menu.
+// Shared verbatim with lib/ui-worker-list.js and app.js (test/ui-worker-list.test.js keeps the three in step).
+// ── worker list helpers (begin) ──
+const WORKER_DONE_MS = 2 * 60 * 1000, WORKER_FAILED_MS = 10 * 60 * 1000, WORKER_FAILED_MAX = 3;
+function workerListPick(entries, now, activeId) {
+  const items = [], gone = [], failed = [];
+  for (const e of entries || []) {
+    if (!e) continue;
+    const item = { ...e, endedAt: e.state === 'running' ? null : (e.endedAt || now) };
+    if (e.state === 'running') items.push(item);
+    else if (e.state === 'failed') failed.push(item);
+    else if (e.id === activeId || now - item.endedAt < WORKER_DONE_MS) items.push(item);
+    else gone.push(e.id);
+  }
+  failed.sort((a, b) => b.endedAt - a.endedAt);
+  let kept = 0;
+  for (const item of failed) {
+    const waiting = !item.failSeen && now - item.endedAt < WORKER_FAILED_MS && kept < WORKER_FAILED_MAX;
+    if (waiting) kept++;
+    if (waiting || item.id === activeId) items.push(item); else gone.push(item.id);
+  }
+  items.sort((a, b) => ((b.state === 'running') - (a.state === 'running')) || ((b.endedAt || now) - (a.endedAt || now)) || ((b.startedAt || 0) - (a.startedAt || 0)));
+  const counts = { running: 0, done: 0, failed: 0 };
+  for (const i of items) counts[i.state === 'running' ? 'running' : i.state === 'failed' ? 'failed' : 'done']++;
+  return { items, gone, counts, alert: items.some(i => i.state === 'failed' && !i.failSeen) };
+}
+function workerButtonLabel(counts) {
+  if (!counts.running && !counts.done && !counts.failed) return 'Workers';
+  return `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}`;
+}
+function fmtWorkerClock(ms) {
+  const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+// ── worker list helpers (end) ──
+// ── busy and hub workers helpers (begin) ──
+function busyIsWorker(name, entry) {
+  return entry && typeof entry.worker === 'boolean' ? entry.worker : /^tw-/.test(name);
+}
+function busySplit(statusMap, localBusyNames) {
+  const agents = new Set(), workers = new Set();
+  for (const [name, entry] of Object.entries(statusMap || {})) {
+    if (!entry || !(entry.busy || entry.pendingQuestion)) continue;
+    (busyIsWorker(name, entry) ? workers : agents).add(name);
+  }
+  for (const name of localBusyNames || []) {
+    const entry = (statusMap || {})[name];
+    (busyIsWorker(name, entry) ? workers : agents).add(name);
+  }
+  return { agents: [...agents].sort(), workers: [...workers].sort() };
+}
+function busyChipLabel(split, filtering) {
+  const a = split.agents.length, w = split.workers.length;
+  if (!a && !w) return '';
+  const parts = [];
+  if (a) parts.push(`${a} agent${a === 1 ? '' : 's'}`);
+  if (w) parts.push(`${w} worker${w === 1 ? '' : 's'}`);
+  return `${parts.join(' · ')} working${filtering && a ? ' · showing only these ✕' : ''}`;
+}
+function fmtElapsedShort(ms) {
+  if (ms == null || !(ms >= 0)) return '';
+  const t = Math.floor(ms / 1000), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+function hubWorkerGroups(statusMap, opts) {
+  const { known = {}, skipIds = [], skipKeys = [], now } = opts || {};
+  const byParent = new Map();
+  const add = (parent, kind, id, label, entry) => {
+    const startedAt = Date.parse(entry.busySince) || null;
+    const item = { id, kind, label, model: entry.model || '', startedAt, elapsedMs: startedAt ? Math.max(0, now - startedAt) : null };
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    byParent.get(parent).push(item);
+  };
+  for (const [name, entry] of Object.entries(statusMap || {})) {
+    if (!entry || !entry.busy || skipIds.includes(name)) continue;
+    if (busyIsWorker(name, entry)) add(entry.parent || null, 'temporary', name, entry.label || 'Worker', entry);
+    else if (entry.consultedBy && !skipKeys.includes(`${entry.consultedBy}>${name}`)) add(entry.consultedBy, 'consulted', name, known[name] || name, entry);
+  }
+  const groups = [...byParent].map(([parent, items]) => {
+    items.sort((x, y) => ((x.startedAt == null) - (y.startedAt == null)) || ((x.startedAt || 0) - (y.startedAt || 0)) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+    return { parent, parentLabel: parent ? (known[parent] || parent) : 'Unknown agent', items };
+  });
+  groups.sort((x, y) => ((x.parent == null) - (y.parent == null)) || x.parentLabel.localeCompare(y.parentLabel));
+  return groups;
+}
+function hubWorkerCount(groups) {
+  return (groups || []).reduce((n, g) => n + g.items.length, 0);
+}
+// ── busy and hub workers helpers (end) ──
+
+// The workers this page saw start or run (live replies and catch-ups; saved replies are history, not listed):
+// workerId -> { id, it (its feed row), agent (whose chat it works in), failSeen, endSeen, lastStatus }.
+const wkSeen = new Map();
+let wkView = null;   // the sheet on screen: { mode: 'list' | 'worker' | 'history' | 'run', id?, run?, w?, back? }
+let wkTimer = null;
+function wkTrack(holder, it) {
+  if (!it || it.kind !== 'worker') return;
+  const id = String(it.workerId);
+  let e = wkSeen.get(id);
+  if (!e) { e = { id, it, agent: (holder && holder.agent) || current, failSeen: false, endSeen: null, lastStatus: null }; wkSeen.set(id, e); }
+  e.it = it;
+  if (holder) { e.holder = holder; if (holder.turnId) e.turnId = holder.turnId; }
+  if (it.status === 'failed' && e.lastStatus !== 'failed') e.failSeen = !!(wkView && wkView.mode === 'worker' && wkView.id === id);   // watched as it failed: seen
+  e.lastStatus = it.status;
+  wkRefreshSoon();
+}
+const wkState = (it) => (it.status === 'running' ? 'running' : it.status === 'failed' ? (it.cancelled ? 'stopped' : 'failed') : it.unknown ? 'ended' : 'done');
+function wkPick() {
+  const now = Date.now();
+  const entries = [...wkSeen.values()].map(e => {
+    const state = wkState(e.it);
+    if (state === 'running') e.endSeen = null; else if (!e.endSeen) e.endSeen = e.it.t1 || now;
+    return { id: e.id, e, state, startedAt: e.it.t0 || 0, endedAt: state === 'running' ? null : e.endSeen, failSeen: e.failSeen };
+  });
+  return workerListPick(entries, now, wkView && wkView.mode === 'worker' ? wkView.id : null);
+}
+function wkRefreshSoon() { if (!wkTimer) wkTimer = setTimeout(() => { wkTimer = null; wkRefresh(); }, 60); }
+// The end of one of a caller's turns: its workers this page still shows running are asked about. Only a worker of that
+// very turn may read "ended" without a recorded outcome; one of another or an unknown turn ends only on a recorded
+// outcome; one whose reply this page is still streaming is left to that stream's own end.
+function wkSettleAgent(agent, turnId) {
+  for (const e of wkSeen.values()) {
+    if (e.agent !== agent || e.it.status !== 'running') continue;
+    if (streams.get(agent) === e.holder) continue;
+    if (e.checking) e.again = true;   // a check already out may be answered from before this end: ask once more after it
+    wkInferEnd(e, 1500, turnId && e.turnId === turnId ? 'sure' : 'maybe');
+  }
+}
+// An end the page did not see is checked against the caller's worker history, which records how every worker of a
+// turn ended. how: 'sure' (its reply or its own turn ended), 'gone' (the hub says it runs nothing under that id) or
+// 'maybe' (its caller sat idle, or another turn of its caller ended); the strongest reason since the last answer counts.
+// - a recorded outcome: that outcome and its real end time;
+// - recorded as still running: running (provisional ends undone), unless the hub said it is not running;
+// - no record of it (the route's own 404): "ended", outcome unknown, when 'sure' or 'gone'; otherwise unchanged;
+// - no usable answer (offline, a server error, anything else): unchanged, asked again a minute later.
+const WK_HOW = { maybe: 0, sure: 1, gone: 2 };
+function wkInferEnd(e, delay = 0, how = 'maybe') {
+  if (!e) return;
+  if (!e.how || WK_HOW[how] > WK_HOW[e.how]) e.how = how;
+  if (e.checking) return;
+  e.checking = true; e.again = false;
+  setTimeout(async () => {
+    let w = null, answer = 'none';
+    try {
+      const res = await api(`/api/agents/${encodeURIComponent(e.agent)}/workers/${encodeURIComponent(e.id)}`, { signal: AbortSignal.timeout(10000) });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d && d.worker) { w = d.worker; answer = 'worker'; }
+      else if (res.status === 404 && d && /no such worker/i.test(String(d.error || ''))) answer = 'missing';
+    } catch {}
+    e.checking = false;
+    const it = e.it, now = Date.now();
+    if (!it.inferred && it.status !== 'running') { e.how = null; return; }   // its real end arrived meanwhile
+    if (answer === 'none') { e.recheckAt = now + 60000; return; }
+    const why = e.how || 'maybe';
+    e.how = null;
+    const ended = (o) => {
+      it.status = o && o !== 'done' ? 'failed' : 'completed';
+      it.cancelled = o === 'stopped';
+      it.unknown = !o;
+      it.inferred = false;
+      if (w && w.error && !it.error) it.error = String(w.error);
+      if (o === 'unfinished' && !it.error) it.error = "Did not finish: its caller's reply ended first";
+      const at = w && w.startedAt && w.durationMs != null ? Date.parse(w.startedAt) + w.durationMs : null;
+      it.t1 = at || it.t1 || now;
+      e.endSeen = null;   // the list's clock runs from the real end
+      if (it.status === 'failed' && wkView && wkView.mode === 'worker' && wkView.id === e.id) e.failSeen = true;   // watched as it was learned
+      e.lastStatus = it.status;
+    };
+    if (answer === 'worker' && w.outcome) ended(w.outcome);
+    else if (answer === 'worker' && why !== 'gone') {   // still running by its record
+      if (it.inferred) { it.status = 'running'; it.t1 = null; it.unknown = false; it.inferred = false; }
+      e.recheckAt = now + 60000;
+      if (e.again) { e.again = false; wkInferEnd(e, 1500, why); }
+    } else if (why !== 'maybe') ended(null);
+    else {   // no record, and nothing says its turn is over: unchanged
+      e.recheckAt = now + 60000;
+      if (e.again) { e.again = false; wkInferEnd(e, 1500, why); }
+      return;
+    }
+    it.rev = (it.rev || 0) + 1;
+    if (e.holder) paintFeed(e.holder, it);
+    wkRefreshSoon();
+  }, delay);
+}
+// The workers running hub-wide (from the status feed) that no card of this page already shows, grouped by the agent
+// that started them.
+function wkHubGroups() {
+  const known = {};
+  for (const a of agents) known[a.name] = displayName(a.name);
+  const skipIds = [], skipKeys = [];
+  for (const e of wkSeen.values()) {
+    if (e.it.status !== 'running') continue;
+    skipIds.push(e.id);
+    if (e.it.agent && agentByName(e.it.agent)) skipKeys.push(`${e.agent}>${e.it.agent}`);
+  }
+  return hubWorkerGroups(live, { known, skipIds, skipKeys, now: Date.now() });
+}
+// A light poll of the status feed while the Workers sheet is open or someone is busy with a worker or a consultation.
+let wkHubPolling = false, wkHubSoon = 0;
+async function wkHubPoll() {
+  if (wkHubPolling) return;
+  wkHubPolling = true;
+  try {
+    const r = await api('/api/agents/status', { signal: AbortSignal.timeout(8000) });
+    if (r.ok) { const d = await r.json(); if (d && d.agents) { applySnapshot(d.agents); wkRefreshSoon(); } }
+  } catch {} finally { wkHubPolling = false; }
+}
+function wkHubPollSoon() {
+  if (wkHubSoon) return;
+  wkHubSoon = setTimeout(() => { wkHubSoon = 0; wkHubPoll(); }, 800);
+}
+setInterval(() => {
+  if (document.hidden) return;
+  if ((wkView && wkView.mode === 'list') || Object.entries(live).some(([n, s]) => s && s.busy && (busyIsWorker(n, s) || s.consultedBy))) wkHubPoll();
+}, 5000);
+function wkRefresh() {
+  const now = Date.now();
+  for (const e of wkSeen.values()) {
+    if (e.it.inferred) { if (now >= (e.recheckAt || 0)) wkInferEnd(e, 0, 'sure'); continue; }   // an end still being checked
+    if (!statusKnown || e.it.status !== 'running' || isBusy(e.agent)) { e.idleSince = 0; continue; }
+    if (!e.idleSince) e.idleSince = now;   // its caller sat idle 12 s: the page may have slept through its end
+    else if (now - e.idleSince >= 12000 && now >= (e.recheckAt || 0)) wkInferEnd(e, 0, 'maybe');
+  }
+  const { items, gone, counts, alert } = wkPick();
+  for (const id of gone) {
+    const g = wkSeen.get(id);
+    if (g && g.it.inferred && now - (g.it.inferredAt || now) < 10 * 60000) continue;   // kept, unlisted, while its end is checked
+    wkSeen.delete(id);
+  }
+  const hubGroups = wkHubGroups(), hubCount = hubWorkerCount(hubGroups);
+  const btn = $('chat-workers-btn');
+  if (btn) {
+    btn.hidden = !items.length && !hubCount;
+    btn.querySelector('.wb-label').textContent = workerButtonLabel({ ...counts, running: counts.running + hubCount });
+    btn.classList.toggle('busy', counts.running + hubCount > 0);
+    btn.classList.toggle('alert', alert);
+  }
+  if (wkView && wkView.mode === 'list') wkPaintList(items, hubGroups);
+  else if (wkView && wkView.mode === 'worker') wkPaintWorker();
+}
+setInterval(wkRefresh, 5000);
+
+const wkName = (it) => workerName(it);
+const wkKind = (agent) => (agent === 'temporal' || !agent || agent === 'worker' ? 'temporary' : agent === 'sdk-agent' ? 'sub-agent' : (agentByName(agent) ? displayName(agent) : agent));
+const wkEl = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; if (text != null) el.textContent = text; return el; };
+
+function wkSheet() {
+  let sh = $('wk-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'wk-sheet';
+  sh.className = 'rsn-sheet wk-sheet';
+  sh.dataset.noDirty = '';   // its search box and picker hold nothing to lose
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Workers');
+  sh.innerHTML = '<div class="rsn-sheet-head"><button type="button" class="wk-back" aria-label="Back">&#x2039;</button><span class="rsn-sheet-title"></span><span class="rsn-sheet-count"></span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="wk-body" tabindex="-1"></div>';
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', wkClose);
+  sh.querySelector('.wk-back').addEventListener('click', () => wkShow((wkView && wkView.back) || { mode: 'list' }));
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); wkClose(); } });
+  document.body.appendChild(sh);
+  return sh;
+}
+function openWorkerSheet(mode = 'list') {
+  $('menu').classList.remove('open');
+  const sh = wkSheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: wkClose }); }   // Back and Esc close it first
+  wkShow({ mode });
+}
+function wkClose() {
+  const sh = $('wk-sheet');
+  if (sh) { sh.classList.remove('open'); dialogGuard.closed(sh); }
+  wkView = null;
+  wkHist.openSeq++;
+  wkRefreshSoon();
+}
+function wkShow(view) {
+  wkView = view;
+  wkHist.openSeq++;   // a pending "Open full run" never takes the screen from what the person went to
+  const sh = wkSheet();
+  sh.querySelector('.wk-back').hidden = view.mode === 'list';
+  sh.querySelector('.rsn-sheet-title').textContent = { list: 'Workers', worker: 'Worker', history: 'Worker history', run: 'Worker · history' }[view.mode];
+  sh.querySelector('.rsn-sheet-count').textContent = '';
+  const body = sh.querySelector('.wk-body');
+  body.textContent = '';
+  delete body.dataset.key;   // a worker shown before is painted again, not skipped as unchanged
+  body.scrollTop = 0;
+  if (view.mode === 'list') wkRefresh();
+  else if (view.mode === 'worker') { const e = wkSeen.get(view.id); if (e && e.it.status === 'failed') e.failSeen = true; wkPaintWorker(); wkRefreshSoon(); }
+  else if (view.mode === 'history') wkHistoryShow();
+  else if (view.mode === 'run') wkPaintRun(view.run, view.w);
+}
+
+// The list: one row per worker; a tap opens it full screen; running ones (not a Claude sub-agent, which stops with its
+// caller's reply) have Stop.
+function wkPaintList(items, hubGroups = []) {
+  const body = $('wk-sheet') && $('wk-sheet').querySelector('.wk-body');
+  if (!body) return;
+  const now = Date.now();
+  const scroll = body.scrollTop, act = document.activeElement;
+  const focused = act && act !== body && body.contains(act) ? { id: act.closest('.wk-row') ? act.closest('.wk-row').dataset.wid : null, hubId: act.closest('.wk-hub') ? act.closest('.wk-hub').dataset.hubId : null, stop: act.classList.contains('wk-stop'), all: act.classList.contains('wk-history') } : null;
+  body.textContent = '';
+  if (!items.length && !hubGroups.length) body.appendChild(wkEl('div', 'wk-empty', 'Nothing working right now.'));
+  for (const { id, e, state, endedAt } of items) {
+    const it = e.it;
+    const row = wkEl('div', `wk-row wk-${state}` + (state === 'failed' && !e.failSeen ? ' wk-unseen' : ''));
+    row.dataset.wid = id;
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    const mark = wkEl('span', 'wk-mark', state === 'running' ? '' : state === 'failed' ? '✕' : state === 'stopped' ? '■' : state === 'ended' ? '–' : '✓');
+    const name = wkEl('span', 'wk-name', wkName(it));
+    const when = wkEl('span', 'wk-when', state === 'running' ? fmtWorkerClock(now - (it.t0 || now)) : `${state} ${fmtWorkerClock(now - endedAt)} ago`);
+    const meta = wkEl('span', 'wk-meta', [it.model ? shortModel(it.model) : '', wkKind(it.agent), e.agent && e.agent !== current ? `for ${displayName(e.agent)}` : ''].filter(Boolean).join(' · '));
+    row.append(mark, name, when, meta);
+    if (state === 'running' && it.agent !== 'sdk-agent') {
+      const stop = wkEl('button', 'wk-stop', '■');
+      stop.type = 'button';
+      stop.setAttribute('aria-label', 'Stop this worker');
+      stop.addEventListener('click', (ev) => { ev.stopPropagation(); wkStop(e); });
+      row.appendChild(stop);
+    }
+    row.addEventListener('click', () => wkShow({ mode: 'worker', id, back: { mode: 'list' } }));
+    row.addEventListener('keydown', (ev) => { if (ev.target === row && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); row.click(); } });
+    body.appendChild(row);
+  }
+  for (const g of hubGroups) {
+    body.appendChild(wkEl('div', 'wk-group', `Started by ${g.parentLabel}`));
+    for (const item of g.items) {
+      const row = wkEl('div', 'wk-row wk-running wk-hub');
+      row.dataset.hubId = item.id;
+      row.setAttribute('role', 'button');
+      row.tabIndex = 0;
+      if (!g.parent) row.title = 'The agent that started it is not known';
+      row.append(wkEl('span', 'wk-mark', ''), wkEl('span', 'wk-name', item.label), wkEl('span', 'wk-when', fmtElapsedShort(item.elapsedMs)),
+        wkEl('span', 'wk-meta', (item.model ? shortModel(item.model) + ' · ' : '') + (item.kind === 'consulted' ? 'consulted' : 'temporary')));
+      row.addEventListener('click', () => { if (g.parent) wkOpenHub(g.parent, item); });
+      row.addEventListener('keydown', (ev) => { if (ev.target === row && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); row.click(); } });
+      body.appendChild(row);
+    }
+  }
+  const all = wkEl('button', 'wk-history', 'All worker history →');
+  all.type = 'button';
+  all.addEventListener('click', () => wkShow({ mode: 'history', back: { mode: 'list' } }));
+  body.appendChild(all);
+  body.scrollTop = scroll;
+  if (focused) {   // the 5-second repaint keeps the keyboard where it was
+    const row = focused.hubId ? [...body.querySelectorAll('.wk-hub')].find(r => r.dataset.hubId === focused.hubId)
+      : focused.id ? [...body.querySelectorAll('.wk-row')].find(r => r.dataset.wid === focused.id) : null;
+    const to = focused.all ? all : (focused.stop && row && row.querySelector('.wk-stop')) || row || all;
+    try { to.focus({ preventScroll: true }); } catch {}
+  }
+}
+// A hub-wide row: open the chat of the agent that started it and, once this page follows the turn and sees the worker,
+// open that worker's view; else the chat stays open.
+let wkOpenSeq = 0;
+function wkOpenHub(parent, item) {
+  const seq = ++wkOpenSeq;
+  wkClose();
+  openChat(parent);
+  const started = Date.now();
+  const find = () => item.kind === 'temporary' ? wkSeen.get(item.id)
+    : [...wkSeen.values()].find(e => e.it.status === 'running' && e.agent === parent && e.it.agent === item.id);
+  const look = () => {
+    if (seq !== wkOpenSeq || current !== parent || wkView !== null) return;
+    const e = find();
+    if (e) { openWorkerSheet('list'); wkShow({ mode: 'worker', id: e.id, back: { mode: 'list' } }); return; }
+    if (Date.now() - started < 6000) setTimeout(look, 300);
+  };
+  setTimeout(look, 300);
+}
+async function wkStop(e) {
+  try {
+    const res = await api('/api/cancel-worker', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worker_id: e.id, agent: e.agent || undefined }) });
+    const r = await res.json().catch(() => null);
+    if (!r || !r.success) {
+      // the hub runs nothing under that id any more: it ended where this page did not see it
+      if (res.status === 404 && r && /not running/i.test(String(r.error || ''))) wkInferEnd(e, 0, 'gone');
+      else toast((r && (r.error || r.message)) || 'Could not stop that worker');
+    }
+  } catch { toast('Could not reach the hub'); }
+}
+
+// One worker full screen, live: how it is doing, its tool calls, its words so far.
+function wkPaintWorker() {
+  const sh = $('wk-sheet');
+  const e = wkView && wkSeen.get(wkView.id);
+  if (!sh || !e) return;
+  const it = e.it, state = wkState(it), now = Date.now();
+  sh.querySelector('.rsn-sheet-title').textContent = wkName(it);
+  sh.querySelector('.rsn-sheet-count').textContent = [it.model ? shortModel(it.model) : '', state === 'running' ? fmtWorkerClock(now - (it.t0 || now)) : state].filter(Boolean).join(' · ');
+  const body = sh.querySelector('.wk-body');
+  const key = `${e.id}|${it.rev || 0}|${state}`;   // every change to the worker bumps its revision
+  if (body.dataset.key === key) return;
+  const fresh = !String(body.dataset.key || '').startsWith(`${e.id}|`);   // just opened: start at the top
+  body.dataset.key = key;
+  const scroll = body.scrollTop, atEnd = !fresh && body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  const onStop = !!(document.activeElement && body.contains(document.activeElement) && document.activeElement.classList.contains('wk-stop-one'));
+  body.textContent = '';
+  const head = wkEl('div', 'wk-sub', [wkKind(it.agent), `for ${displayName(e.agent || current || '')}`].filter(Boolean).join(' · '));
+  body.appendChild(head);
+  if (it.error) body.appendChild(wkEl('div', 'wk-error', it.error));
+  if (state === 'running' && it.agent !== 'sdk-agent') {
+    const stop = wkEl('button', 'wk-btn wk-stop-one', 'Stop this worker');
+    stop.type = 'button';
+    stop.addEventListener('click', () => wkStop(e));
+    body.appendChild(stop);
+    if (onStop) { try { stop.focus({ preventScroll: true }); } catch {} }
+  } else if (onStop) { try { body.focus({ preventScroll: true }); } catch {} }   // it ended under the keyboard: stay in the sheet
+  if (it.tools.length) {
+    body.appendChild(wkEl('div', 'wk-label', `${it.tools.length} tool call${it.tools.length === 1 ? '' : 's'}`));
+    for (const t of it.tools) body.appendChild(wkEl('div', 'wk-tool', `⚙ ${t.tool}${t.summary ? ` · ${clipText(t.summary, 200)}` : ''}`));
+  }
+  if (it.text) {
+    body.appendChild(wkEl('div', 'wk-label', state === 'running' ? 'So far' : 'Answer'));
+    const text = wkEl('div', 'wk-text');
+    text.innerHTML = formatContent(it.text);
+    body.appendChild(text);
+    renderVisualBlocks(text);
+  } else if (state === 'running') body.appendChild(wkEl('div', 'wk-empty', 'Working…'));
+  body.scrollTop = fresh ? 0 : atEnd ? body.scrollHeight : scroll;   // following the end keeps following it; reading higher up stays put
+}
+
+// ── Worker history: the part-7 API (GET /api/agents/<a>/workers, /api/workers, /api/agents/<a>/workers/<id>) ──
+// gen: a new search, filter or caller (only then are answers for the old view dropped); listReq: the newest list
+// request; openSeq: the newest "Open full run"; runReq: the newest fetch of each run.
+const wkHist = { caller: null, q: '', filter: 'all', items: [], next: null, loading: false, open: new Set(), runs: new Map(), error: '', gen: 0, listReq: 0, openSeq: 0, runReq: new Map() };
+async function wkJson(url) {
+  const res = await api(url);
+  let data = {}; try { data = await res.json(); } catch {}
+  if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+function wkHistoryShow() {
+  const body = $('wk-sheet').querySelector('.wk-body');
+  if (!wkHist.caller || (wkHist.caller !== '*' && !agentByName(wkHist.caller))) wkHist.caller = current || (isAdmin() ? '*' : ((agents[0] || {}).name || '*'));
+  const q = wkEl('input', 'wk-q');
+  q.type = 'search'; q.placeholder = 'Search briefs and results…'; q.autocomplete = 'off'; q.enterKeyHint = 'search'; q.value = wkHist.q;
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); wkHist.q = q.value.trim(); q.blur(); wkLoad(true); } });
+  const chips = wkEl('div', 'wk-filters');
+  for (const [v, label] of [['all', 'All'], ['named', 'Named agents'], ['temporary', 'Temporary'], ['failed', 'Failed']]) {
+    const c = wkEl('button', 'wk-chip-f' + (wkHist.filter === v ? ' on' : ''), label);
+    c.type = 'button';
+    c.addEventListener('click', () => { wkHist.filter = v; chips.querySelectorAll('.wk-chip-f').forEach(x => x.classList.toggle('on', x === c)); wkLoad(true); });
+    chips.appendChild(c);
+  }
+  const pick = wkEl('select', 'wk-caller');
+  pick.setAttribute('aria-label', 'Whose workers');
+  const opts = (isAdmin() ? [['*', 'Called by: all agents']] : []).concat(agents.map(a => [a.name, `Called by: ${a.display || a.name}`]));
+  for (const [v, label] of opts) { const o = wkEl('option', null, label); o.value = v; pick.appendChild(o); }
+  pick.value = opts.some(o => o[0] === wkHist.caller) ? wkHist.caller : (opts[0] || [''])[0];
+  wkHist.caller = pick.value;
+  pick.addEventListener('change', () => { wkHist.caller = pick.value; wkLoad(true); });
+  chips.appendChild(pick);
+  body.append(q, chips, wkEl('div', 'wk-hlist'), wkEl('div', 'wk-status'));
+  body.querySelector('.wk-hlist').id = 'wk-hlist';
+  body.querySelector('.wk-status').id = 'wk-hstatus';
+  if (wkView.keep && (wkHist.items.length || wkHist.loading)) { wkHistoryRender(); body.scrollTop = wkView.scroll || 0; }   // Back from an old run: the list as it was
+  else wkLoad(true);   // any other opening loads it afresh
+}
+async function wkLoad(reset) {
+  if (!reset && (wkHist.loading || !wkHist.next)) return;
+  if (reset) { wkHist.gen++; wkHist.items = []; wkHist.next = null; wkHist.open.clear(); wkHist.runs.clear(); }
+  const gen = wkHist.gen, req = ++wkHist.listReq;
+  wkHist.loading = true; wkHist.error = '';
+  wkHistoryRender();
+  const params = new URLSearchParams({ filter: wkHist.filter, limit: '50' });
+  if (wkHist.q) params.set('q', wkHist.q);
+  if (!reset) params.set('before', wkHist.next);
+  const base = wkHist.caller === '*' ? '/api/workers' : `/api/agents/${encodeURIComponent(wkHist.caller)}/workers`;
+  let data = null, error = '';
+  try { data = await wkJson(`${base}?${params.toString()}`); } catch (e) { error = e.message; }
+  if (gen !== wkHist.gen || req !== wkHist.listReq) return;   // superseded
+  if (data) { wkHist.items = wkHist.items.concat(Array.isArray(data.workers) ? data.workers : []); wkHist.next = data.next || null; }
+  wkHist.error = error;
+  wkHist.loading = false;
+  wkHistoryRender();
+  // a page that came back short with more behind it (the hub stopped looking part-way): ask for the rest
+  if (data && wkHist.next && (data.workers || []).length < 10 && wkView && wkView.mode === 'history') wkLoad(false);
+}
+function wkDay(iso) {
+  const d = new Date(iso), today = new Date();
+  const key = (x) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+  const y = new Date(today); y.setDate(today.getDate() - 1);
+  if (key(d) === key(today)) return 'Today';
+  if (key(d) === key(y)) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) });
+}
+const wkMarkOf = (o) => (o === 'done' ? '✓' : o === 'stopped' ? '■' : o === 'failed' || o === 'unfinished' ? '✕' : '●');
+function wkHistoryRender() {
+  const list = $('wk-hlist'), status = $('wk-hstatus');
+  if (!list || !wkView || wkView.mode !== 'history') return;
+  // a repaint (a page or a run arriving) keeps the keyboard on the same item, or the same button in its detail
+  const act = document.activeElement, actItem = act && list.contains(act) ? act.closest('.wk-hitem') : null;
+  const keep = actItem ? { key: actItem.dataset.key, head: act.classList.contains('wk-htop'), act: act.dataset.act || null } : (act && act.classList && act.classList.contains('wk-more') && list.contains(act) ? { more: true } : null);
+  list.textContent = '';
+  let day = null;
+  for (const w of wkHist.items) {
+    const label = wkDay(w.startedAt);
+    if (label !== day) { day = label; list.appendChild(wkEl('div', 'wk-day', label)); }
+    const key = `${w.caller}|${w.workerId}`;
+    const item = wkEl('div', `wk-hitem wk-o-${w.outcome || 'running'}` + (wkHist.open.has(key) ? ' open' : ''));
+    item.dataset.key = key;
+    const top = wkEl('div', 'wk-htop');
+    top.append(wkEl('span', 'wk-mark', wkMarkOf(w.outcome)), wkEl('span', 'wk-name', String(w.description || 'Worker').replace(/^Worker:\s*/, '')),
+      wkEl('span', 'wk-when', new Date(w.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + (w.durationMs != null ? ` · ${fmtWorkerClock(w.durationMs)}` : w.outcome ? '' : ' · running')));
+    const sub = wkEl('div', 'wk-meta', [w.model ? shortModel(w.model) : '', w.kind === 'agent' ? wkKind(w.agentType) : w.kind, `called by ${displayName(w.caller)}`].filter(Boolean).join(' · ')
+      + (w.answer ? ` · “${w.answer.replace(/\s+/g, ' ').slice(0, 90)}”` : w.error ? ` · ${w.error}` : ''));
+    item.append(top, sub);
+    if (wkHist.open.has(key)) item.appendChild(wkDetail(w, key));
+    top.setAttribute('role', 'button');
+    top.tabIndex = 0;
+    top.setAttribute('aria-expanded', String(wkHist.open.has(key)));
+    item.addEventListener('click', (ev) => {
+      if (ev.target.closest('.wk-detail')) return;
+      if (wkHist.open.has(key)) wkHist.open.delete(key); else { wkHist.open.add(key); wkFetchRun(w); }
+      wkHistoryRender();
+    });
+    top.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); top.click(); } });
+    list.appendChild(item);
+  }
+  if (wkHist.next && !wkHist.loading) {
+    const more = wkEl('button', 'wk-btn wk-more', 'Show 50 more');
+    more.type = 'button';
+    more.addEventListener('click', () => wkLoad(false));
+    list.appendChild(more);
+  }
+  if (keep) {
+    const item = keep.key ? [...list.querySelectorAll('.wk-hitem')].find(x => x.dataset.key === keep.key) : null;
+    let to = null;
+    if (item && keep.head) to = item.querySelector('.wk-htop');
+    else if (item) to = (keep.act && [...item.querySelectorAll('button')].find(b => b.dataset.act === keep.act)) || item.querySelector('.wk-htop');
+    else if (keep.more) to = list.querySelector('.wk-more') || [...list.querySelectorAll('.wk-htop')].pop() || null;   // while the next page loads: the last item
+    if (to) { try { to.focus({ preventScroll: true }); } catch {} }
+  }
+  status.textContent = wkHist.loading ? 'Loading…' : wkHist.error ? `Could not load the history: ${wkHist.error}` : !wkHist.items.length ? (wkHist.q || wkHist.filter !== 'all' ? 'No workers match.' : 'No workers yet.') : '';
+}
+function wkDetail(w, key) {
+  const box = wkEl('div', 'wk-detail');
+  const run = wkHist.runs.get(key);
+  const cur = (run && run.worker) || w;   // one snapshot: the fetched run once it is here
+  const section = (title, text, cls) => { if (!text) return; box.append(wkEl('div', 'wk-label', title), wkEl('div', 'wk-text' + (cls ? ` ${cls}` : ''), text)); };
+  section('Brief', cur.prompt || cur.description);
+  section(cur.partial ? 'Result (partial: it did not finish)' : 'Result', cur.answer || (cur.outcome ? '(no answer)' : '(still running)'));
+  if (cur.error) section('Error', cur.error, 'wk-error');
+  if (run && run.rows) {
+    const uses = run.rows.filter(r => r.kind === 'tool_use');
+    const by = {};
+    for (const u of uses) by[u.tool] = (by[u.tool] || 0) + 1;
+    section('Work', uses.length ? `${uses.length} tool call${uses.length === 1 ? '' : 's'}: ${Object.entries(by).map(([t, n]) => `${t} ${n}`).join(', ')}` : 'No tool calls');
+  } else section('Work', run && run.error ? `Could not load its steps: ${run.error}` : 'Loading…');
+  const actions = wkEl('div', 'wk-actions');
+  const open = wkEl('button', 'wk-btn', 'Open full run');
+  open.type = 'button';
+  open.dataset.act = 'open';
+  open.addEventListener('click', () => wkOpenRun(w));
+  const copy = wkEl('button', 'wk-btn secondary', 'Copy result');
+  copy.type = 'button';
+  copy.dataset.act = 'copy';
+  copy.disabled = !cur.answer;
+  copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(cur.answer || ''); copy.textContent = 'Copied'; } catch { copy.textContent = 'Could not copy'; } });
+  actions.append(open, copy);
+  box.appendChild(actions);
+  return box;
+}
+// A run is kept for reuse only once it is over and its answer is in (a sub-agent's answer can come after its end).
+async function wkFetchRun(w, { fresh = false } = {}) {
+  const key = `${w.caller}|${w.workerId}`;
+  const had = wkHist.runs.get(key);
+  const settled = had && !had.error && had.worker && had.worker.outcome && (had.worker.answer || Date.now() - (had.at || 0) < 15000);
+  if (settled && !fresh) return had;
+  const gen = wkHist.gen;
+  const req = (wkHist.runReq.get(key) || 0) + 1;
+  wkHist.runReq.set(key, req);
+  let got;
+  try { got = { ...(await wkJson(`/api/agents/${encodeURIComponent(w.caller)}/workers/${encodeURIComponent(w.workerId)}`)), at: Date.now() }; }
+  catch (e) { got = { error: e.message, at: Date.now() }; }
+  if (gen !== wkHist.gen) return null;
+  if (wkHist.runReq.get(key) === req) { wkHist.runs.set(key, got); wkHistoryRender(); }
+  return got;
+}
+async function wkOpenRun(w) {
+  const mine = ++wkHist.openSeq;
+  const run = await wkFetchRun(w, { fresh: true });
+  if (mine !== wkHist.openSeq || !run || !run.rows) return;   // a later open, or the person went elsewhere
+  const scroll = $('wk-sheet') ? $('wk-sheet').querySelector('.wk-body').scrollTop : 0;
+  wkShow({ mode: 'run', run, w: { ...w, ...(run.worker || {}) }, back: { mode: 'history', keep: true, scroll, back: wkView && wkView.back } });
+}
+// An old worker full screen, as it ran: its brief, each step, its answer and how it ended.
+function wkPaintRun(run, w) {
+  const sh = $('wk-sheet');
+  if (!sh || !run) return;
+  sh.querySelector('.rsn-sheet-title').textContent = String(w.description || 'Worker').replace(/^Worker:\s*/, '');
+  sh.querySelector('.rsn-sheet-count').textContent = [w.model ? shortModel(w.model) : '', w.durationMs != null ? fmtWorkerClock(w.durationMs) : ''].filter(Boolean).join(' · ');
+  const body = sh.querySelector('.wk-body');
+  body.textContent = '';
+  body.appendChild(wkEl('div', 'wk-sub', `called by ${displayName(w.caller)} · ${new Date(w.startedAt).toLocaleString()}`));
+  body.append(wkEl('div', 'wk-label', 'Brief'), wkEl('div', 'wk-text', w.prompt || w.description || '(no brief)'));
+  const steps = run.rows.filter(r => r.kind === 'tool_use' || (r.kind === 'tool_result' && r.tool !== 'worker_answer'));
+  if (steps.length) {
+    body.appendChild(wkEl('div', 'wk-label', 'Steps'));
+    for (const r of steps) {
+      if (r.kind === 'tool_use') {
+        const tool = String(r.tool || 'tool'), text = String(r.text || '');
+        body.appendChild(wkEl('div', 'wk-tool', `⚙ ${tool}${text.startsWith(tool) ? ` ${text.slice(tool.length).trim()}` : ` ${text}`}`.slice(0, 600)));
+      } else {
+        const out = wkEl('details', 'wk-out');
+        out.append(wkEl('summary', null, 'output'), wkEl('pre', null, String(r.text || '').slice(0, 20000)));
+        body.appendChild(out);
+      }
+    }
+  }
+  body.appendChild(wkEl('div', 'wk-label', w.partial ? 'Answer (partial: it did not finish)' : 'Answer'));
+  const ans = wkEl('div', 'wk-text');
+  if (w.answer) { ans.innerHTML = formatContent(w.answer); renderVisualBlocks(ans); } else ans.textContent = w.outcome ? '(no answer)' : '(still running)';
+  body.appendChild(ans);
+  const end = w.outcome === 'done' ? `✅ Finished${w.durationMs != null ? ` in ${fmtWorkerClock(w.durationMs)}` : ''}` : w.outcome === 'stopped' ? '⏹ Stopped' : w.outcome === 'failed' ? `❌ Failed${w.error ? `: ${w.error}` : ''}` : w.outcome === 'unfinished' ? '❌ Did not finish (its caller’s reply ended first)' : '⏳ Still running when this was saved';
+  body.appendChild(wkEl('div', 'wk-end' + (w.outcome === 'done' ? '' : ' bad'), end));
 }
 
 // ── Catch-up: the hub's view of a running turn (GET /api/agents/<name>/turn) ────────────────────
@@ -2811,7 +3907,7 @@ function applyTurnFeed(holder, turn) {
   for (const item of turn.activity || []) feedUpsert(holder, item);
   for (const w of turn.workers || []) {
     if (!w || !w.id) continue;
-    const it = feedUpsert(holder, { kind: 'worker', id: `w:${w.id}`, workerId: w.id, status: w.status, description: w.description, model: w.model, agent: w.agent, error: w.error });
+    const it = feedUpsert(holder, { kind: 'worker', id: `w:${w.id}`, workerId: w.id, status: w.status, description: w.description, model: w.model, agent: w.agent, error: w.error, ts: w.startedAt, doneTs: w.endedAt, ...(w.cancelled ? { cancelled: true } : {}) });
     if (!it) continue;
     for (const t of w.tools || []) feedUpsert(holder, { kind: 'worker_tool', id: t.id, workerId: w.id, tool: t.tool, summary: t.summary });
     if (typeof w.text === 'string' && w.text) { it.text = w.text; if (!(w.status === 'running' && it.tools.length)) it.last = 'text'; }
@@ -3055,7 +4151,9 @@ function onComposerTap(btn, act) {
 // A tap on Send sends, then the keyboard goes away (2026-10-21: the owner wants the box let go after a
 // send). The box keeps focus until sendMessage has taken its text, which happens before its first await,
 // and only lets go if the text or images really went: a tap with nothing to send keeps the keyboard up.
+let keepKeyboard = null;   // set up with the message box; sent() tells it a send is not a keyboard that went away
 function sendAndClose() {
+  keepKeyboard && keepKeyboard.sent();
   const input = $('msg-input');
   const hadText = !!input.value.trim();
   const hadImages = pendingImages.length > 0;
@@ -3174,7 +4272,7 @@ async function sendMessage(fallback) {
       toast(`${displayName(agent)}: ${e.message || 'request failed'}`);
     }
   } finally {
-    if (!lost) { feedEnd(rec); reasoningEnd(rec); }   // fold the activity feed under the finished reply; the reasoning is done
+    if (!lost) { feedEnd(rec, rec.done ? 'sure' : 'maybe'); reasoningEnd(rec); }   // fold the activity feed under the finished reply; the reasoning is done
     if (streams.get(agent) === rec) streams.delete(agent);
     recentOwn.set(agent, Date.now());
     // Finished while another chat was open: the reply is in history; flag the agent.
@@ -3203,12 +4301,19 @@ function enterReattach(agent, text, bubble, partialHtml, partial, since = null, 
   return ra;
 }
 
+// A hub turn of this agent is followed on screen (onTurnStart drew its bubble and it is still in the chat).
+function followedHubTurn(agent) {
+  return Object.values(hubTurns).some(t => t && t.agent === agent && t.el && t.el.isConnected);
+}
 // The open chat's agent is mid-turn on the server and this phone has no stream to it (page just
 // loaded, woke from sleep, or the turn was started from another device): follow it.
 function reattachIfIdle(agent, partial = '') {
   if (!agent || !chatOpenFor(agent) || streams.has(agent) || reattaches.has(agent)) return;
+  if (followedHubTurn(agent)) return;   // that turn is already drawn live; a re-attach would be a second copy
   const s = live[agent];
   if (!s || !s.busy) return;
+  // a followed hub turn whose bubble a redraw removed (chat left and opened again): the re-attach takes over from it
+  for (const [id, t] of Object.entries(hubTurns)) if (t && t.agent === agent && !(t.el && t.el.isConnected)) delete hubTurns[id];
   enterReattach(agent, null, addAssistantBubble(), '', partial, s.busySince || null);
 }
 
@@ -3233,14 +4338,14 @@ function paintReattach(ra, line) {
   scrollChat();
 }
 
-function finishReattach(ra, reply, ok = true) {
+function finishReattach(ra, reply, ok = true, how = 'sure') {
   if (!ra || reattaches.get(ra.agent) !== ra) return;
   reattaches.delete(ra.agent);
   reasoningEnd(ra);
   if (bubbleLive(ra)) {
     ra.line?.remove();
     setReplyText(ra, reply);
-    feedEnd(ra);
+    feedEnd(ra, how);
     ra.bubble.el.classList.toggle('error', !ok);
     if (ok) setBubbleTime(ra.bubble.el, msgTimeLine(Date.now(), ra.sentAt || Date.parse(ra.since)));
     if (ok) rereadHistory(ra.agent);   // the finished exchange, as the hub saved it
@@ -3271,7 +4376,7 @@ function stopReattach(ra) {
   if (!ra) return;
   stopTurn(ra.agent);
   const partial = ra.partial || '';
-  finishReattach(ra, partial ? `${partial}\n\n(stopped)` : '(stopped)', true);
+  finishReattach(ra, partial ? `${partial}\n\n(stopped)` : '(stopped)', true, 'maybe');
 }
 
 function reattachCheckAll() {
@@ -3347,7 +4452,7 @@ async function reattachCheck(ra) {
       return;
     }
     if (waited > REATTACH_GIVE_UP_MS) {
-      finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ Gave up waiting after 30 minutes. Pull to refresh to see the reply if it arrived.`, false);
+      finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ Gave up waiting after 30 minutes. Pull to refresh to see the reply if it arrived.`, false, 'maybe');
       return;
     }
     paintReattach(ra, reattachLine(ra));
@@ -3437,7 +4542,7 @@ async function readStream(response, rec) {
       case 'worker_tool_result': break;   // a worker's tool lines carry no status; its next line or text takes over
       case 'worker_completed':
       case 'worker_failed':
-        feedUpsert(rec, { kind: 'worker', id: `w:${g.worker_id}`, workerId: g.worker_id, status: g.type === 'worker_completed' ? 'completed' : 'failed', error: g.error });
+        feedUpsert(rec, { kind: 'worker', id: `w:${g.worker_id}`, workerId: g.worker_id, status: g.type === 'worker_completed' ? 'completed' : 'failed', error: g.error, cancelled: g.cancelled === true });
         break;
       case 'reasoning': reasoningAdd(rec, g.text); break;   // the panel above the reply (painted only while the chat is open)
       case 'session_interrupted': if (visible()) addNote('⚠ Session interrupted'); break;
@@ -3455,7 +4560,7 @@ async function readStream(response, rec) {
     for (const line of parts) {
       if (!line.startsWith('data: ')) continue;
       const data = line.slice(6);
-      if (data === '[DONE]') continue;
+      if (data === '[DONE]') { rec.done = true; continue; }   // the hub's own end of the reply (not a cut connection)
       let parsed;
       try { parsed = JSON.parse(data); } catch { continue; }
       if (parsed.type === 'meta') {
@@ -3536,9 +4641,16 @@ function showQuestion(data, onAnswered) {
       .catch(err => toast(`Could not send answer: ${err.message}`));
     box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
   };
+  // The hub's "Skip" choice (ask_user allow_skip) is a Skip button beside Submit that answers at once; with several
+  // questions each keeps its own Skip choice and the button skips them all (as on the desktop page).
+  const isSkip = (o) => o && String(o.label || '').trim().toLowerCase() === 'skip';
+  const canSkip = questions.every(q => (q.options || []).some(isSkip));
+  const shownOptions = (q) => (q.options || []).filter(o => !(isSkip(o) && questions.length === 1));
+  const textOnly = questions.every(q => !shownOptions(q).length && !(Array.isArray(q.models) && q.models.length));
   // A tap only selects (highlighted); nothing is sent until Submit, so a mis-tap cannot answer the agent.
   const selected = {};
   const groups = {};
+  const picks = {};
   questions.forEach((q, i) => {
     if (q.header) { const h = document.createElement('div'); h.className = 'qh'; h.textContent = q.header; box.appendChild(h); }
     const t = document.createElement('div');
@@ -3546,7 +4658,7 @@ function showQuestion(data, onAnswered) {
     t.textContent = q.question || '';
     box.appendChild(t);
     groups[i] = [];
-    for (const opt of q.options || []) {
+    for (const opt of shownOptions(q)) {
       const b = document.createElement('button');
       b.className = 'opt';
       b.innerHTML = `<strong>${esc(opt.label)}</strong>${opt.description ? `<small>${esc(opt.description)}</small>` : ''}`;
@@ -3555,38 +4667,74 @@ function showQuestion(data, onAnswered) {
         groups[i].forEach(x => x.classList.remove('selected'));
         if (was) delete selected[i];                            // tapping the highlighted option again clears it
         else { b.classList.add('selected'); selected[i] = opt.label; }
+        if (picks[i]) picks[i].value = '';
         refresh();
       });
       groups[i].push(b);
       box.appendChild(b);
     }
+    // ask_user with choose_model: every model the hub can use, as a drop-down; picking there clears the buttons, and a
+    // button clears it. The answer is the model id.
+    if (Array.isArray(q.models) && q.models.length) {
+      const wrap = document.createElement('label');
+      wrap.className = 'qmodel';
+      const cap = document.createElement('span');
+      cap.textContent = 'Or pick any model this hub can use';
+      const sel = document.createElement('select');
+      sel.appendChild(new Option('Choose a model…', ''));
+      const og = new Map();
+      for (const m of q.models) {
+        if (!m || !m.id) continue;
+        if (!og.has(m.group)) { const g = document.createElement('optgroup'); g.label = String(m.group || 'Other'); og.set(m.group, g); sel.appendChild(g); }
+        og.get(m.group).appendChild(new Option(String(m.label || m.id), String(m.id)));
+      }
+      sel.addEventListener('change', () => {
+        groups[i].forEach(x => x.classList.remove('selected'));
+        if (sel.value) selected[i] = sel.value; else delete selected[i];
+        refresh();
+      });
+      picks[i] = sel;
+      wrap.appendChild(cap); wrap.appendChild(sel);
+      box.appendChild(wrap);
+    }
   });
   const custom = document.createElement('div');
   custom.className = 'qcustom';
-  custom.innerHTML = '<input type="text" placeholder="Or type an answer" enterkeyhint="done">';
+  // A text box that grows with the answer (Return is a new line; Submit sends).
+  custom.innerHTML = `<textarea rows="3" placeholder="${textOnly ? 'Type your answer' : 'Or type your own answer'}"></textarea>`;
   const actions = document.createElement('div');
   actions.className = 'qactions';
-  actions.innerHTML = '<span class="qhint"></span><button class="qsubmit" disabled>Submit</button>';
-  const input = custom.querySelector('input');
+  actions.innerHTML = '<span class="qhint"></span><span class="qbuttons">' + (canSkip ? '<button class="qskip" type="button">Skip</button>' : '') + '<button class="qsubmit" disabled>Submit</button></span>';
+  const input = custom.querySelector('textarea');
   const submitBtn = actions.querySelector('.qsubmit');
   const hint = actions.querySelector('.qhint');
   const refresh = () => {
     const typed = input.value.trim();
     const complete = typed || questions.every((q, i) => selected[i] !== undefined);
     submitBtn.disabled = !complete;
-    hint.textContent = typed ? 'Your typed answer will be sent.' : complete ? 'Press Submit to send.' : (questions.length > 1 ? 'Pick an answer for each question.' : 'Pick an answer, then press Submit.');
+    hint.textContent = typed ? 'Your typed answer will be sent.' : complete ? 'Press Submit to send.' : textOnly ? 'Type your answer, then press Submit.' : (questions.length > 1 ? 'Pick an answer for each question.' : 'Pick an answer, then press Submit.');
   };
+  const grow = () => { if (input.scrollHeight > input.clientHeight && input.clientHeight < 240) input.style.height = Math.min(input.scrollHeight + 2, 240) + 'px'; };
   const send = () => {
     const v = input.value.trim();
     const answers = {};
     if (v) { questions.forEach((q, i) => { answers[String(i)] = v; }); submit(answers, v); return; }
     if (!questions.every((q, i) => selected[i] !== undefined)) return;
     questions.forEach((q, i) => { answers[String(i)] = selected[i]; });
-    submit(answers, questions.map((q, i) => selected[i]).join(' / '));
+    // A pick from the model list is sent as its id and shown as it reads in the list.
+    submit(answers, questions.map((q, i) => (picks[i] && picks[i].value ? picks[i].options[picks[i].selectedIndex].text : selected[i])).join(' / '));
   };
   submitBtn.addEventListener('click', send);
-  input.addEventListener('input', refresh);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && input.value.trim()) send(); });
+  const skipBtn = actions.querySelector('.qskip');
+  if (skipBtn) skipBtn.addEventListener('click', () => {
+    const answers = {};
+    questions.forEach((q, i) => { answers[String(i)] = (q.options || []).find(isSkip).label; });
+    submit(answers, 'Skipped');
+  });
+  input.addEventListener('input', () => { grow(); refresh(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && input.value.trim()) { e.preventDefault(); send(); }
+  });
   box.appendChild(custom);
   box.appendChild(actions);
   refresh();
@@ -3604,9 +4752,10 @@ const approvals = new Map();   // id -> card data, in arrival order
 let approvalsTimer = null;
 let approvalsHidden = false;
 const APPROVAL_CLASS_LABELS = { write_outside: 'write outside its folders', send: 'send off this machine', admin: 'change hub data / another agent', destroy: 'destructive action', money: 'move money' };
-const APPROVAL_DETAIL_LABELS = { command: 'Command', path: 'Path', paths: 'Paths', to: 'To', channel: 'Channel', text: 'Text', reason: 'Why flagged', tool: 'Tool', input: 'Arguments', name: 'Name', model: 'Model' };
+const APPROVAL_DETAIL_LABELS = { command: 'Command', path: 'Path', paths: 'Paths', to: 'To', channel: 'Channel', text: 'Text', reason: 'Why flagged', tool: 'Tool', input: 'Arguments', name: 'Name', model: 'Model', module: 'Module' };
 
 function approvalWants(ev) {
+  if (ev.cls === 'module') return `${displayName(ev.agent)} needs your OK${ev.detail && ev.detail.module ? ` (${ev.detail.module})` : ''}`;   // asked by a module (hub/approve)
   const label = APPROVAL_CLASS_LABELS[ev.cls] || String(ev.cls || 'do something that needs approval');
   return `${displayName(ev.agent)} wants to ${ev.cls === 'destroy' ? 'take a ' : ''}${label}`;
 }
@@ -3697,7 +4846,7 @@ function renderApprovalSheet(sheet, ev, more) {
     `<div class="ameta"><span class="acountdown">${esc(approvalCountdown(ev.expiresAt))}</span><span class="anote"></span></div>` +
     '<div class="abtns">' +
     '<button class="ok" data-decision="allow">Approve</button>' +
-    '<button class="ok1h" data-decision="allow" data-remember="1h">Approve this kind for 1 hour</button>' +
+    (ev.cls === 'module' ? '' : '<button class="ok1h" data-decision="allow" data-remember="1h">Approve this kind for 1 hour</button>') +   // a module's question is asked once: no "remember" choice
     '<button class="deny" data-decision="deny">Deny</button>' +
     '<button class="later">Later</button>' +
     '</div>';
@@ -3910,6 +5059,231 @@ function onAboutClick(e) {
   else d.close();
 }
 
+// ── Wallet (⋮ menu, admins only): a full-screen sheet over GET /api/wallet/status. Locked or unlocked, unlock with
+// Face ID / fingerprint (pkUnlock) or the passphrase, set up or remove this phone's passkey (pkAdd), and the after-restart
+// notice switch. Like the desktop's Wallet panel; a /mobile?wallet=unlock link (the notice's tap) opens it. ──
+let walletStatus = null;   // the last GET /api/wallet/status
+let walletMsg = null;      // { text, ok }: the result line inside the sheet
+let walletBusy = false;
+// One wallet run at a time (a Face ID / fingerprint add or unlock, a passphrase unlock, a remove):
+// { ctrl, cancelled, rejectConfirm, confirmRow, fields } (the run's own confirm row and passphrase inputs). Closing the
+// sheet cancels it and cleans up at once; the cancelled run's own code then finds pkRunEnd(run) false and does nothing.
+// walletGen counts status loads and runs: a load only paints while it is still the latest and no run is going.
+let pkRun = null;
+let walletGen = 0;
+const PK_ENROLL_MS = 110000;   // an add gives up after this long; the server's challenge lives 120 seconds
+function pkRunStart(confirmRow, fields) {
+  if (pkRun) return null;
+  const run = { ctrl: new AbortController(), cancelled: false, rejectConfirm: null, confirmRow, fields: fields || [], timer: null };
+  pkRun = run;
+  walletSetBusy(true);
+  walletGen++;
+  return run;
+}
+function pkRunCleanup(run) {
+  if (run.timer) { clearTimeout(run.timer); run.timer = null; }
+  walletSetBusy(false);
+  if (run.confirmRow && run.confirmRow.isConnected) run.confirmRow.innerHTML = '';
+  for (const f of run.fields) f.value = '';
+}
+function pkCancel() {
+  if (!pkRun) return;
+  const run = pkRun; pkRun = null; run.cancelled = true;
+  try { run.ctrl.abort(); } catch { /* already finished */ }
+  if (run.rejectConfirm) { const rej = run.rejectConfirm; run.rejectConfirm = null; rej(new DOMException('Cancelled.', 'AbortError')); }
+  pkRunCleanup(run);
+}
+function pkRunEnd(run) {
+  if (pkRun !== run) return false;
+  pkRun = null; pkRunCleanup(run);
+  return true;
+}
+async function walletApi(path, body, signal) {
+  const r = await fetch('/api/wallet/' + path, body === undefined ? { credentials: 'include', signal }
+    : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Request failed');
+  return j;
+}
+// Closing the sheet: cancel any run, drop in-flight loads, and empty every password input in it (run or no run).
+function walletClose(sh) {
+  pkCancel(); walletGen++;
+  sh.querySelectorAll('input[type="password"]').forEach((i) => { i.value = ''; });
+  sh.classList.remove('open'); dialogGuard.closed(sh);
+}
+function walletSheet() {
+  let sh = $('wallet-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'wallet-sheet';
+  sh.className = 'rsn-sheet mh-sheet wallet-sheet';
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Wallet');
+  sh.dataset.noDirty = '';   // its fields are emptied before every request: nothing to lose
+  sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Wallet</span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body wl-body" tabindex="-1"></div>';
+  const close = () => walletClose(sh);
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+  sh.addEventListener('click', (e) => { const b = e.target.closest('[data-wl]'); if (b && !walletBusy) walletAct(b.dataset.wl, b.dataset.id); });
+  sh.addEventListener('change', (e) => { if (e.target.id === 'wl-notice') walletLockedNotice(e.target); });
+  sh.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || walletBusy) return;
+    if (e.target.id === 'wl-pass') { e.preventDefault(); walletAct('unlock'); }
+    else if (e.target.id === 'wl-pk-pass') { e.preventDefault(); walletAct('pkadd'); }
+  });
+  sh.closeSheet = close;
+  document.body.appendChild(sh);
+  return sh;
+}
+function openWalletSheet() {
+  $('menu').classList.remove('open');
+  if (!isAdmin()) return;
+  const sh = walletSheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: sh.closeSheet }); }
+  walletMsg = null; walletStatus = null;   // never show the last open's status while this load runs
+  walletPaint();
+  walletLoad();
+}
+async function walletLoad(msg) {
+  if (msg !== undefined) walletMsg = msg;
+  const gen = ++walletGen;
+  let status = null, failed = null;
+  try { status = await walletApi('status'); }
+  catch (e) { failed = { text: pkErrorText(e), ok: false }; }
+  // A newer load, a run, or closing the sheet since this started: paint nothing.
+  const sh = $('wallet-sheet');
+  if (gen !== walletGen || !sh || !sh.classList.contains('open') || pkRun) return;
+  if (failed && walletStatus) { walletShowMsg(failed.text, false); return; }   // keep the form (and what is typed in it) when a refresh fails
+  walletStatus = status;
+  if (failed) walletMsg = failed;
+  walletPaint();
+}
+function walletPaint() {
+  const sh = $('wallet-sheet');
+  if (!sh || !sh.classList.contains('open')) return;
+  const body = sh.querySelector('.wl-body');
+  const s = walletStatus, ks = s && s.keystore;
+  const msg = walletMsg ? `<div class="sec-msg wl-msg${walletMsg.ok ? ' ok' : ''}" role="status">${esc(walletMsg.text)}</div>` : '';
+  if (!ks) { body.innerHTML = `<p class="wl-status">Loading…</p>${msg}`; return; }
+  if (!ks.exists) { body.innerHTML = `<p class="wl-status">No wallet is set up on this hub.</p>${msg}`; return; }
+  const n = Array.isArray(s.wallets) ? s.wallets.length : 0;
+  const pkOk = pkUsable(), pkList = Array.isArray(ks.passkeys) ? ks.passkeys : [];
+  const pkHere = pkOk.ok && pkList.some(p => p.rpId === location.hostname);
+  const unlockBox = ks.unlocked ? '' : `<div class="sec-section">
+      ${pkHere ? '<button type="button" class="wl-big" data-wl="pkunlock">Unlock with Face ID / fingerprint</button>' : ''}
+      <input id="wl-pass" type="password" autocomplete="off" placeholder="Wallet passphrase" aria-label="Wallet passphrase">
+      <div class="sec-actions"><button type="button" data-wl="unlock">Unlock with passphrase</button></div>
+    </div>`;
+  const rows = pkList.map(p => `<div class="wl-pk"><div class="wl-pk-info"><strong>${esc(p.label)}</strong>
+        <span class="sec-hint">${esc(p.rpId)} · added ${esc(new Date(p.createdAt).toLocaleDateString())}</span></div>
+        <button type="button" class="wl-rm" data-wl="pkremove" data-id="${esc(p.id)}">Remove</button></div>`).join('')
+    || '<div class="sec-hint">None set up yet.</div>';
+  const addForm = pkOk.ok ? `<input id="wl-pk-label" value="${esc(pkDeviceLabel())}" maxlength="40" placeholder="Name for this phone" aria-label="Name for this phone">
+      <input id="wl-pk-pass" type="password" autocomplete="off" placeholder="Wallet passphrase (needed once; never stored)" aria-label="Wallet passphrase">
+      <div id="wl-confirm-row"></div>
+      <div class="sec-actions"><button type="button" class="go" data-wl="pkadd">Add this phone</button></div>`
+    : `<div class="sec-hint">${esc(pkOk.text)}</div>`;
+  const keep = {};   // what the person is typing survives a status repaint (closing the sheet and every run empty these fields themselves)
+  for (const id of ['wl-pass', 'wl-pk-pass', 'wl-pk-label']) { const el = sh.querySelector('#' + id); if (el && el.value) keep[id] = el.value; }
+  const focused = document.activeElement && sh.contains(document.activeElement) ? document.activeElement.id : '';
+  body.innerHTML = `<p class="wl-status">${ks.unlocked ? '&#x1F513; Unlocked' : '&#x1F512; Locked'} · ${n} wallet${n === 1 ? '' : 's'}</p>${msg}${unlockBox}
+    <div class="sec-section"><div class="sec-title">Face ID / fingerprint</div>
+      <div class="sec-hint">Unlock the wallet with Face ID, a fingerprint or the screen lock instead of typing the passphrase. Add each device once with the passphrase. Your device's password manager may copy the passkey to your other devices; each one still asks for your face, fingerprint or screen lock.</div>
+      ${rows}${addForm}
+    </div>
+    <label class="wl-notice"><input type="checkbox" id="wl-notice" ${s.lockedNotice ? 'checked' : ''}> Send admins a phone notice when the wallet is locked after a restart</label>`;
+  for (const [id, v] of Object.entries(keep)) { const el = sh.querySelector('#' + id); if (el) el.value = v; }
+  if (focused) { const el = sh.querySelector('#' + focused); if (el && typeof el.focus === 'function') el.focus(); }
+}
+function walletSetBusy(on) {
+  walletBusy = on;
+  const sh = $('wallet-sheet');
+  if (sh) sh.querySelectorAll('.wl-body button, .wl-body input').forEach(el => { el.disabled = on; });
+}
+function walletShowMsg(text, ok) {
+  walletMsg = { text, ok: !!ok };
+  const sh = $('wallet-sheet');
+  let el = sh && sh.querySelector('.wl-msg');
+  if (!el && sh) {
+    el = wkEl('div', 'sec-msg wl-msg');
+    el.setAttribute('role', 'status');
+    const first = sh.querySelector('.wl-body .wl-status');
+    if (first) first.after(el); else sh.querySelector('.wl-body').prepend(el);
+  }
+  if (el) { el.textContent = text; el.classList.toggle('ok', !!ok); }
+}
+async function walletAct(action, id) {
+  const sh = $('wallet-sheet');
+  const val = (i) => { const el = sh && sh.querySelector('#' + i); return el ? el.value : ''; };
+  if (pkRun) return;   // one run at a time: this tap or Enter is ignored
+  if (action === 'pkremove') {
+    const known = ((walletStatus && walletStatus.keystore && walletStatus.keystore.passkeys) || []).find(p => p.id === id);
+    const label = known ? known.label : 'this passkey';
+    if (!confirm(`Remove "${label}"? It will stop unlocking this wallet. Copies of the wallet file made before now still accept it, protected by that passkey's own Face ID, fingerprint or screen lock.`)) return;
+  }
+  const passEl = sh && (action === 'unlock' ? sh.querySelector('#wl-pass') : action === 'pkadd' ? sh.querySelector('#wl-pk-pass') : null);
+  const run = pkRunStart(sh && sh.querySelector('#wl-confirm-row'), passEl ? [passEl] : []);
+  if (!run) return;
+  if (action === 'pkadd') {
+    run.timer = setTimeout(() => {
+      run.timer = null;
+      if (pkRun !== run) return;
+      pkCancel();
+      const text = 'Setup timed out. Start again.';
+      walletShowMsg(text, false); walletLoad({ text, ok: false });
+    }, PK_ENROLL_MS);
+  }
+  let passphrase = '', name = '';
+  if (passEl) {
+    passphrase = passEl.value; passEl.value = '';   // the passphrase lives only in this request
+    if (!passphrase) {
+      pkRunEnd(run);
+      const text = 'Type the wallet passphrase first.';
+      walletShowMsg(text, false); passEl.focus();
+      walletLoad({ text, ok: false });   // the run stopped any load in flight: start one again, keeping the message
+      return;
+    }
+  }
+  try {
+    let done;
+    if (action === 'pkremove') { await walletApi('passkey/remove', { id }, run.ctrl.signal); done = 'Removed.'; }
+    else if (action === 'pkunlock') { await pkUnlock((p, b) => walletApi(p, b, run.ctrl.signal), run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+    else if (action === 'unlock') { await walletApi('unlock', { passphrase }, run.ctrl.signal); done = 'Unlocked until the hub restarts.'; }
+    else {
+      name = (val('wl-pk-label') || '').trim() || pkDeviceLabel();
+      const confirmStep = () => new Promise((resolve, reject) => {
+        if (run.cancelled || run.ctrl.signal.aborted) return reject(new DOMException('Cancelled.', 'AbortError'));
+        const row = run.confirmRow; if (!row) return resolve();
+        run.rejectConfirm = reject;
+        row.innerHTML = '<div class="sec-hint">One more tap: confirm with this phone.</div><button type="button" class="wl-big" id="wl-confirm-btn">Confirm with Face ID / fingerprint</button>';
+        row.querySelector('#wl-confirm-btn').onclick = () => { run.rejectConfirm = null; row.innerHTML = ''; resolve(); };
+      });
+      await pkAdd((p, b) => walletApi(p, b, run.ctrl.signal), { passphrase, label: name }, confirmStep, run.ctrl.signal);
+      done = `Added. ${name} can now unlock the wallet.`;
+    }
+    passphrase = '';   // the request that needed it has settled
+    if (!pkRunEnd(run)) return;   // cancelled: its canceller already cleaned up
+    await walletLoad({ text: done, ok: true });
+  } catch (e) {
+    passphrase = '';
+    if (!pkRunEnd(run)) return;
+    const text = pkErrorText(e);
+    walletShowMsg(text, false);
+    walletLoad({ text, ok: false });   // the run stopped any load in flight: start one again, keeping the message
+  }
+}
+// The after-restart notice "Your wallet is locked": on or off; the box goes back when the hub refuses.
+async function walletLockedNotice(box) {
+  const on = !!box.checked;
+  try {
+    const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ walletLockedNotice: on }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Could not save that.');
+    if (walletStatus) walletStatus.lockedNotice = on;
+  } catch (e) { box.checked = !on; walletShowMsg(pkErrorText(e), false); }
+}
+
 // ── Restart the hub (same POST /api/restart the desktop button uses; the
 // service manager brings the hub back, so the page only has to wait) ─────────
 function confirmRestart() {
@@ -4002,6 +5376,7 @@ function connectEvents() {
   on('turn_progress', onTurnProgress);
   on('turn_worker_delta', onTurnWorkerDelta);
   on('turn_end', onTurnEnd);
+  on('for_owner', onForOwner);
   on('turn_notify', onTurnNotify);
   on('ask_user', (ev) => {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
@@ -4026,6 +5401,7 @@ function connectEvents() {
   on('model_fallback', (ev) => toast(`${displayName(ev.agent)}: ${String(ev.from || '').split('/').pop()} at its weekly limit; running on ${String(ev.to || '').split('/').pop()} until ${ev.resetsAt ? new Date(ev.resetsAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'it resets'}`));
   // Plan warnings and refusals (lib/plan-usage): no pop-up over the input; the usage in the chat header updates.
   on('plan_limit', () => refreshPlanUsage());
+  on('plan_extra_usage', () => refreshPlanUsage());
   on('plan_warning', () => refreshPlanUsage());
   // (Re)connected: whatever happened to the open chat's turn meanwhile comes from the hub's turn view.
   source.onopen = () => { esLastEventAt = Date.now(); reattachCheckAll(); catchUpOpenAgent(); };
@@ -4136,13 +5512,45 @@ function onTurnStart(ev) {
   setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin) });
   const own = ev.origin?.kind === 'user' && ownTurnFor(ev.agent);
   if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !own) {
-    const last = chatHistory[chatHistory.length - 1];
-    if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {
-      addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
-      setBubbleTime(addUserBubble(ev.message, null), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+    // The last saved entry: renderHistory leaves out a running turn's inProgress entry, so does this.
+    let last;
+    for (let i = chatHistory.length - 1; i >= 0; i--) if (!chatHistory[i].inProgress) { last = chatHistory[i]; break; }
+    const dup = typeof ev.message === 'string' && !!last && last.role === 'user' && samePrompt(last.content, ev.message);
+    // A turn the hub started by itself draws straight into a closed card (tap it to watch the turn live).
+    const info = foldAutoOn() && autoKindOfOrigin(ev.origin) ? autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' }) : null;
+    let card = null;
+    let retired = false;   // a re-attach of this turn gave way to the card
+    if (info) {
+      const mem = lastHistoryCard;
+      // A re-attach bubble drawn after that card (the chat followed this turn before turn_start came) does not count.
+      const ra = reattaches.get(ev.agent);
+      const raEl = ra && !ra.text && ra.bubble && (!ra.turnId || ra.turnId === ev.turnId) ? ra.bubble.el : null;
+      // Opened while this turn runs: renderHistory already drew a card with its prompt (the reply, still in progress,
+      // is not in history). Adopt that card when it is the last thing on screen rather than build a second one.
+      if (dup && mem && mem.agent === ev.agent && samePrompt(mem.prompt, ev.message) && promptRecent(mem.ts, ev.startedAt) && cardIsLast(mem.wrap, raEl)) {
+        card = { wrap: mem.wrap, body: mem.body, line: mem.line };
+        card.line.textContent = 'working…';
+      } else {
+        card = makeFoldHeader(`auto-card auto-card-${autoCardKind(info.kind)}`, info.label, timeLabel(ev.startedAt), 'working…');
+        chatEl().appendChild(card.wrap);
+      }
+      lastHistoryCard = null;
+      // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
+      if (raEl) { reasoningEnd(ra); raEl.remove(); reattaches.delete(ev.agent); paintChatStatus(); retired = true; }
     }
-    const b = addAssistantBubble('…');
-    hubTurns[ev.turnId] = { agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null };
+    const paint = () => {
+      if (typeof ev.message === 'string' && !dup) {
+        if (!card) addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
+        setBubbleTime(addUserBubble(ev.message, null), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+      }
+      return addAssistantBubble('…');
+    };
+    const b = card ? withRenderTarget(card.body, paint) : paint();
+    const t = { turnId: ev.turnId, agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null, prompt: ev.message, card: card ? { ...card, label: info.label } : null };
+    hubTurns[ev.turnId] = t;
+    // A for_owner that arrived before this card existed: apply it now.
+    if (t.card && forOwnerPending[ev.turnId]) { delete forOwnerPending[ev.turnId]; moveReplyOut(t); }
+    if (retired) catchUpOpenAgent();   // what the turn already did (tool rows, text), which the retired bubble had shown
     scrollChat();
   }
   paintStatus();
@@ -4172,6 +5580,7 @@ function turnHolder(ev) {
 
 // turn_activity { turnId, agent, item }: a tool call, a worker, or a worker's tool line (upsert by item.id).
 function onTurnActivity(ev) {
+  if (ev && ev.item && ev.item.kind === 'worker') wkHubPollSoon();   // any agent's worker: the status feed names it
   const h = ev && turnHolder(ev);
   if (!h || !ev.item) return;
   feedUpsert(h, ev.item);
@@ -4215,8 +5624,39 @@ function onTurnProgress(ev) {
   applyTurnProgress(ev.agent, ev, turnHolder(ev));
 }
 
+// for_owner { agent, reason, turnId, origin }: the agent marked this reply for the owner. A live automatic turn's reply
+// bubble moves out of its closed card to right after it, open, under a "from <card label>" line.
+function moveReplyOut(t) {
+  if (!t || !t.card || t.card.moved || !t.el.isConnected || !chatOpenFor(t.agent)) return;
+  // The card may sit inside a stack (hidden body): the reply goes after the outermost block that is in the chat.
+  const panel = chatEl();
+  let anchor = t.card.wrap;
+  while (anchor.parentNode && anchor.parentNode !== panel) anchor = anchor.parentNode;
+  if (!panel || anchor.parentNode !== panel) return;
+  // replies already moved out after the same block keep their order: this one goes after them
+  while (anchor.nextElementSibling && anchor.nextElementSibling.dataset && anchor.nextElementSibling.dataset.autoMoved === '1') anchor = anchor.nextElementSibling;
+  const from = document.createElement('div');
+  from.className = 'auto-from';
+  from.textContent = `from ${t.card.label}`;
+  from.dataset.autoMoved = '1'; t.el.dataset.autoMoved = '1';
+  anchor.after(from);
+  from.after(t.el);
+  t.card.moved = true;
+  scrollChat();
+}
+function onForOwner(ev) {
+  if (!ev || !ev.turnId) return;
+  const t = hubTurns[ev.turnId];
+  if (t) { moveReplyOut(t); return; }
+  // The live card is not there yet (a replayed turn_start, or the turn not drawn yet): keep the mark for when it is.
+  forOwnerPending[ev.turnId] = { reason: typeof ev.reason === 'string' ? ev.reason : '', at: Date.now() };
+  const ids = Object.keys(forOwnerPending);
+  for (const id of ids.slice(0, Math.max(0, ids.length - 50))) delete forOwnerPending[id];
+}
+
 function onTurnEnd(ev) {
   setLive(ev.agent, { busy: false });
+  if (ev.agent) wkSettleAgent(ev.agent, ev.turnId || null);
   if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }
   if (ev.agent && ev.agent === current) setTimeout(() => refreshCtx(ev.agent), 3500);   // the hub records the size 2.5 s after the turn
   const reply = ev.reply || (ev.ok ? '(no reply)' : `⚠ turn failed: ${ev.error || 'unknown error'}`);
@@ -4230,6 +5670,8 @@ function onTurnEnd(ev) {
   if (t && chatOpenFor(t.agent) && t.el.isConnected) {
     setReplyText(t, reply);
     feedEnd(t);
+    // The card's line: the reply's first line; a reply that moved out of the card is shown below it, so the prompt's task line instead.
+    if (t.card) t.card.line.textContent = t.card.moved ? promptCardLine(ev.message || t.prompt, t.card.label) : (autoFirstLine(reply) || t.card.label);
     setBubbleTime(t.el, msgTimeLine(Date.parse(ev.endedAt) || Date.now(), Date.parse(t.startedAt)));
     rereadHistory(t.agent);   // the finished exchange (its message came from elsewhere), as the hub saved it
     scrollChat();
@@ -4477,6 +5919,10 @@ function wire() {
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
+  $('menu-workers').addEventListener('click', () => openWorkerSheet('history'));
+  $('menu-wallet')?.addEventListener('click', openWalletSheet);   // ?.: a phone page cached from before has no menu entry
+  $('menu-memory')?.addEventListener('click', openMemorySheet);   // a phone page cached from before this line has no menu entry
+  $('chat-workers-btn').addEventListener('click', () => openWorkerSheet('list'));
   $('menu-compact').addEventListener('click', compressNow);
   $('files-upload-input').addEventListener('change', (e) => { filesUpload(e.target.files); e.target.value = ''; });
   $('menu-signout').addEventListener('click', signOut);
@@ -4485,6 +5931,8 @@ function wire() {
   document.addEventListener('click', () => $('menu').classList.remove('open'));
   $('menu-clear').addEventListener('click', confirmClear);
   $('menu-copy').addEventListener('click', copyWholeChat);
+  $('menu-fold')?.addEventListener('click', toggleFoldAuto);
+  paintFoldMenu();
   $('menu-notify').addEventListener('click', togglePush);
   $('menu-notify-test')?.addEventListener('click', testPush);
   $('messages').addEventListener('click', onMessagesClick);
@@ -4523,6 +5971,20 @@ function wire() {
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; saveDraft(current, input.value); });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
+  // Chrome's spell-check menu (a tap on an underlined word, Backspace with the menu open) hides the soft keyboard
+  // while the box keeps focus, and Android only reopens it on a new focus. So a keyboard that goes away right after
+  // a tap on the box or an edit in it, with the box still focused, is brought back by blurring and refocusing the box.
+  const vv = window.visualViewport;
+  const viewSize = () => (vv ? { w: vv.width, h: vv.height } : { w: window.innerWidth, h: window.innerHeight });
+  keepKeyboard = createKeepKeyboard({ viewport: viewSize, reopen: () => setTimeout(() => { if (document.hidden || document.activeElement !== input) return; const s = input.selectionStart, e = input.selectionEnd, d = input.selectionDirection; input.blur(); input.focus({ preventScroll: true }); try { input.setSelectionRange(s, e, d || 'none'); } catch { /* no selection */ } }, 0) });
+  input.addEventListener('pointerdown', () => keepKeyboard.touch(current));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') keepKeyboard.escape(); else keepKeyboard.touch(current, 'edit'); });
+  input.addEventListener('beforeinput', () => keepKeyboard.touch(current, 'edit'));
+  input.addEventListener('input', () => keepKeyboard.touch(current, 'edit'));
+  document.addEventListener('pointerdown', (e) => { if (e.target !== input && !(input.contains && input.contains(e.target))) keepKeyboard.elsewhere(); }, { capture: true, passive: true });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) keepKeyboard.hidden(); });
+  const onView = () => keepKeyboard.resized({ chat: current, focused: document.activeElement === input, hidden: document.hidden, dialogOpen: !!document.querySelector('dialog[open], .rsn-sheet.open, [role="dialog"].open') });
+  if (vv) vv.addEventListener('resize', onView); else window.addEventListener('resize', onView);
   // Send, and the 🔔 beside it, act on the touch itself (onComposerTap). Once a send has taken the text,
   // sendAndClose lets go of the box so the keyboard goes away.
   onComposerTap($('send-btn'), sendAndClose);
@@ -4625,10 +6087,13 @@ function applyMultiUser() {
     sel.addEventListener('change', () => { localStorage.setItem(OWNER_VIEW_KEY, sel.value); loadAgents(); if ($('files-sheet').open) openFilesSheet(''); });
   }
   if (hubMe && !hubMe.isAdmin) { $('menu-restart').hidden = true; $('menu-update').hidden = true; }
+  refreshMemoryHealth();
   if (hubMe) {
     $('menu-users').hidden = !hubMe.isAdmin;
+    if ($('menu-connectors')) $('menu-connectors').hidden = !hubMe.isAdmin;   // admins only; a page cached from before has no such item
+    if ($('menu-wallet')) $('menu-wallet').hidden = !hubMe.isAdmin;   // admins only
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
-    $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled);
+    $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
 }
@@ -4640,6 +6105,79 @@ function toggleMenu(e) {
   menu.classList.toggle('open');
   if (menu.classList.contains('open')) paintMenuCredit();
   if (menu.classList.contains('open')) paintVersionLabel();
+  if (menu.classList.contains('open')) refreshMemoryHealth();
+}
+
+// Memory (lib/memory-health): admins see the agents the last check flagged; the menu line shows only when there are
+// some. Read-only here: Settings → Status → Memory on a computer has the details.
+let mhLast = null;
+async function refreshMemoryHealth() {
+  const item = $('menu-memory');
+  if (!item) return;
+  if (!(hubMe && hubMe.isAdmin)) { item.hidden = true; return; }
+  try {
+    const r = await api('/api/memory-health?stored=1');
+    if (!r.ok) return;
+    const d = await r.json();
+    mhLast = d;
+    const n = (Array.isArray(d.agents) ? d.agents : []).filter(a => a.status !== 'green').length;
+    item.hidden = !n;
+    const c = $('menu-memory-count');
+    c.textContent = n ? String(n) : '';
+    c.classList.toggle('on', !!n);
+  } catch {}
+  paintMemorySheet();
+}
+function memorySheet() {
+  let sh = $('mh-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'mh-sheet';
+  sh.className = 'rsn-sheet mh-sheet';
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Memory');
+  sh.dataset.noDirty = '';
+  sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Memory</span><span class="rsn-sheet-count"></span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body" tabindex="-1"></div>';
+  const close = () => { sh.classList.remove('open'); dialogGuard.closed(sh); };
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+  sh.closeSheet = close;
+  document.body.appendChild(sh);
+  return sh;
+}
+function openMemorySheet() {
+  $('menu').classList.remove('open');
+  const sh = memorySheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: sh.closeSheet }); }
+  paintMemorySheet();
+  refreshMemoryHealth();
+}
+function paintMemorySheet() {
+  const sh = $('mh-sheet');
+  if (!sh || !sh.classList.contains('open')) return;
+  const d = mhLast || {};
+  const flagged = (Array.isArray(d.agents) ? d.agents : []).filter(a => a.status !== 'green');
+  sh.querySelector('.rsn-sheet-count').textContent = d.checkedAt ? `checked ${new Date(d.checkedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : '';
+  const body = sh.querySelector('.mh-body');
+  const scroll = body.scrollTop;
+  body.textContent = '';
+  for (const a of flagged) {
+    const row = wkEl('div', 'mh-row');
+    const head = wkEl('div', 'mh-head');
+    head.append(wkEl('span', `mh-dot mh-${a.status === 'red' ? 'red' : 'amber'}`), wkEl('b', null, a.display || a.agent));
+    row.appendChild(head);
+    for (const i of (a.items || []).filter(x => x.status !== 'green')) {
+      const it = wkEl('div', 'mh-item');
+      it.append(wkEl('span', `mh-t mh-t-${i.status === 'red' ? 'red' : 'amber'}`, i.title), document.createTextNode(` ${i.detail || ''}`));
+      row.appendChild(it);
+    }
+    body.appendChild(row);
+  }
+  if (!flagged.length) body.appendChild(wkEl('div', 'mh-item', d.checkedAt ? 'Every agent is fine.' : 'Not checked yet.'));
+  body.appendChild(wkEl('div', 'mh-foot', 'The details are under Settings → Status → Memory on a computer.'));
+  body.scrollTop = scroll;
 }
 
 // Monthly API credit (set on the desktop, Settings → Spend): this period's spend through the hub against it.
@@ -5134,12 +6672,16 @@ function paintTwoFactor() {
   const box = $('sec-2fa');
   if (!box || !hubMe) return;
   if (hubMe.user.totpEnabled) {
+    const adminLocked = hubMe.isAdmin && hubMe.admin2faRequired !== false;
+    const adminFree = hubMe.isAdmin && !adminLocked;
     box.innerHTML = `
       <div class="sec-title">Two-factor authentication: on</div>
+      ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, Security on a computer.</div>` : `
       <input type="password" id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
-      <div class="sec-actions"><button id="sec-2fa-disable" class="danger">Disable 2FA</button></div>
+      ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
+      <div class="sec-actions"><button id="sec-2fa-disable" class="danger">${adminFree ? 'Remove two-factor' : 'Disable 2FA'}</button></div>`}
       <div class="sec-msg" id="sec-2fa-msg"></div>`;
-    $('sec-2fa-disable').addEventListener('click', disableTwoFactor);
+    if (!adminLocked) $('sec-2fa-disable').addEventListener('click', disableTwoFactor);
   } else {
     box.innerHTML = `
       <div class="sec-title">Two-factor authentication: off</div>
@@ -5184,7 +6726,7 @@ async function confirmTwoFactor() {
 }
 
 function applyMultiUserNote() {
-  if (hubMe) $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled);
+  if (hubMe) $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
 }
 
 async function copyRecoveryCodes() {
@@ -5193,15 +6735,28 @@ async function copyRecoveryCodes() {
   catch { toast('Copy failed: select the codes and copy by hand'); }
 }
 
+let secDisableBusy = false;   // one removal at a time
 async function disableTwoFactor() {
-  const password = $('sec-2fa-password').value;
+  if (secDisableBusy) return;
+  const pwEl = $('sec-2fa-password');
+  const codeEl = $('sec-2fa-disable-code');
+  const password = pwEl.value;
   if (!password) return secMsg('sec-2fa-msg', 'Enter your password to turn 2FA off.');
+  const body = { password };
+  if (codeEl) {
+    body.code = (codeEl.value || '').trim();
+    if (!body.code) return secMsg('sec-2fa-msg', 'Enter a current code or a recovery code.');
+  }
+  pwEl.value = ''; if (codeEl) codeEl.value = '';   // the password goes in this one request and stays nowhere else
+  secDisableBusy = true;
   try {
-    await authPost('/api/auth/totp/disable', { password });
+    await authPost('/api/auth/totp/disable', body);
     hubMe.user.totpEnabled = false;
+    await loadMe();
     applyMultiUserNote();
     paintTwoFactor();
   } catch (e) { secMsg('sec-2fa-msg', e.message); }
+  finally { secDisableBusy = false; }
 }
 
 async function changePassword() {
@@ -5256,6 +6811,13 @@ async function init() {
   const fromUpdatePush = new URLSearchParams(location.search).get('update') === '1';
   if (fromUpdatePush) { const u = new URL(location.href); u.searchParams.delete('update'); window.history.replaceState(window.history.state, '', u.pathname + u.search + u.hash); }
   refreshUpdateCheck().then(() => { if (fromUpdatePush) openUpdatePrompt(); });
+  // The "wallet is locked" notice's tap (/mobile?wallet=unlock) opens the Wallet sheet once and is then dropped from the
+  // address. The passkey prompt needs a tap of its own, so only the sheet opens here.
+  if (new URLSearchParams(location.search).get('wallet') === 'unlock') {
+    const u = new URL(location.href); u.searchParams.delete('wallet');
+    window.history.replaceState(window.history.state, '', u.pathname + u.search + u.hash);
+    openWalletSheet();
+  }
   paintVersionLabel();
   setInterval(refreshUpdateCheck, 30 * 60 * 1000);
 }

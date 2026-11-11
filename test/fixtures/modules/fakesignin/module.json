@@ -1,0 +1,14 @@
+{
+  "id": "fakesignin", "name": "Fake Mail", "category": "Test", "summary": "A test module with a device sign-in.", "risk": "read",
+  "catalog": { "verified": "2026-01-15", "api": "Fake Mail API v1", "official": false },
+  "health": { "check": "ping" },
+  "server": { "type": "mcp-stdio", "script": "server.js" },
+  "secrets": [
+    { "name": "FAKE_CLIENT_ID", "label": "Client ID" },
+    { "name": "FAKE_CLIENT_SECRET", "label": "Client secret" },
+    { "name": "FAKE_REFRESH_TOKEN", "label": "Sign-in" }
+  ],
+  "oauth": { "flow": "device", "deviceUrl": "https://auth.example.com/device", "tokenUrl": "https://auth.example.com/token", "scopes": ["mail.read"],
+    "clientIdSecret": "FAKE_CLIENT_ID", "clientSecretSecret": "FAKE_CLIENT_SECRET", "refreshTokenSecret": "FAKE_REFRESH_TOKEN" },
+  "tools": { "list_mail": "read" }
+}

@@ -9,11 +9,12 @@ const path = require('path');
 
 const REAL = path.resolve(__dirname, '..');
 const roots = [];
-function load() {
+function load({ budget = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-records-')); roots.push(root);
   const hub = path.join(root, 'hub');
   fs.mkdirSync(path.join(hub, 'lib'), { recursive: true });
   fs.copyFileSync(path.join(REAL, 'lib', 'records.js'), path.join(hub, 'lib', 'records.js'));
+  if (budget) for (const f of ['context-budget.js', 'context-window.js']) fs.copyFileSync(path.join(REAL, 'lib', f), path.join(hub, 'lib', f));   // the gateway's prompt budget
   fs.copyFileSync(path.join(REAL, 'lib', 'path-confine.js'), path.join(hub, 'lib', 'path-confine.js'));
   fs.copyFileSync(path.join(REAL, 'lib', 'timezone.js'), path.join(hub, 'lib', 'timezone.js'));   // dates in the person's local time
   fs.writeFileSync(path.join(hub, 'lib', 'settings.js'), 'module.exports = { getSetting: (k, d) => (k === "recordsMaxBytes" ? (global.__recCap || 0) : d) };');
@@ -113,4 +114,233 @@ test('filesIndex: recursive, newest first, hidden skipped, capped with a count',
   assert.match(idx, /^\/.*files\n- sub\/new\.pdf \(2 bytes, \d{4}-\d{2}-\d{2}\)\n- old\.txt \(1 bytes, 2026-01-01\)$/);
   assert.match(rec.filesIndex(d, { max: 1 }), /and 1 more$/);
   assert.match(rec.filesIndex(path.join(root, 'nope')), /^\(empty\)/);
+});
+
+test('the working brief loads first, so it is never the file the cap leaves out; usage counts what the next turn loads', () => {
+  const { rec } = load();
+  global.__recCap = 4000;
+  try {
+    rec.write('wb', 'alpha.md', 'a'.repeat(2000));
+    rec.write('wb', 'more.md', 'm'.repeat(1500));
+    rec.write('wb', 'working-brief.md', 'b'.repeat(600));
+    rec.write('wb', 'zeta.md', 'z'.repeat(100));
+    assert.deepStrictEqual(rec.list('wb').map(i => i.name), ['working-brief.md', 'alpha.md', 'more.md', 'zeta.md']);
+    const ctx = rec.contextSection('wb');
+    assert.ok(ctx.indexOf('### working-brief.md') >= 0 && ctx.indexOf('### working-brief.md') < ctx.indexOf('### alpha.md'), 'the brief is in, and first');
+    assert.match(ctx, /Not loaded, over the 4 KB records cap: more\.md \(1500 bytes\)\. Condense your Records/);
+    assert.deepStrictEqual(rec.usage('wb'), { used: 2700, cap: 4000, pct: 68, files: 3, notLoaded: [{ name: 'more.md', bytes: 1500 }] });
+  } finally { global.__recCap = 0; }
+});
+
+test('from 75% of the cap the agent is told to condense its Records: in its context, after record_write and in record_list', () => {
+  const { rec } = load();
+  global.__recCap = 4000;
+  try {
+    assert.doesNotMatch(rec.write('cz', 'a.md', 'a'.repeat(2600)), /Condense/, '65%: nothing said');
+    assert.doesNotMatch(rec.contextSection('cz'), /Condense/);
+    assert.match(rec.describe('cz'), /In all 3 KB of their 4 KB cap \(65%\)\./);
+    const w = rec.write('cz', 'b.md', 'b'.repeat(600));
+    assert.match(w, /Record b\.md written \(600 bytes\)\. It is loaded in full on your next turn\. Your Records use 3 KB of their 4 KB cap \(80%\); a file that would pass the cap is not loaded\. Condense them soon: keep every fact you still need/);
+    assert.match(rec.contextSection('cz'), /\(Your Records use 3 KB of their 4 KB cap \(80%\); past it, files stop loading\. Condense them soon/);
+    assert.match(rec.describe('cz'), /Your Records use 3 KB of their 4 KB cap \(80%\)/);
+  } finally { global.__recCap = 0; }
+});
+
+test('a Record that does not fit is never reported as loading: record_write says so, record_list names it', () => {
+  const { rec } = load();
+  global.__recCap = 4000;
+  try {
+    const w = rec.write('big', 'huge.md', 'h'.repeat(5000));
+    assert.match(w, /^Record huge\.md written \(5000 bytes\), but it doesn't fit in your Records cap, so it will NOT be loaded on your next turn\. Your Records use 0 KB of their 4 KB cap \(0%\); a file that would pass the cap is not loaded\. Not loaded now: huge\.md \(5 KB\)\./);
+    assert.match(rec.describe('big'), /Not loaded now: huge\.md \(5 KB\)\./);
+    assert.match(rec.write('big', 'small.md', 's'.repeat(100)), /^Record small\.md written \(100 bytes\)\. It is loaded in full on your next turn\. Your Records use 0 KB .* Not loaded now: huge\.md/, 'the others still hear about the one left out');
+  } finally { global.__recCap = 0; }
+});
+
+test("the cap Records load under: the client routes use the agent's own; other models the prompt budget's share of their window; the last prompt's cap wins", () => {
+  const { rec } = load({ budget: true });
+  const cb = require(path.join(REAL, 'lib', 'context-budget.js'));
+  assert.strictEqual(rec.loadCap('a', { agentRecord: { name: 'a', model: 'claude-sdk/claude-opus-5-5' } }), 256 * 1024);
+  assert.strictEqual(rec.loadCap('b', { agentRecord: { name: 'b', model: 'codex-cli/gpt-6-astra', recordsMaxBytes: 100000 } }), 100000);
+  const gw = { name: 'c', model: 'someprovider/unknown-model' };   // an unknown model: the default cloud window
+  assert.strictEqual(cb.knownWindow(gw.model), cb.DEFAULT_CLOUD);
+  const planned = cb.plan(cb.DEFAULT_CLOUD, { recordsCapBytes: 256 * 1024 }).recordsBytes;
+  assert.strictEqual(rec.loadCap('c', { agentRecord: gw }), planned);
+  assert.ok(planned < 256 * 1024, `its window gives Records less than the default cap (${planned})`);
+  assert.strictEqual(rec.loadCap('d', { agentRecord: { name: 'd', model: 'openai/gpt-x', contextWindow: 32000 } }), cb.plan(32000).recordsBytes, 'the agent\'s own window setting');
+  rec.write('e', 'notes.md', 'n'.repeat(3000));
+  rec.contextSection('e', { agentRecord: { name: 'e', recordsMaxBytes: 2000 } });   // what its last prompt loaded under
+  assert.deepStrictEqual([rec.usage('e', { agentRecord: { name: 'e' } }).cap, rec.usage('e', { agentRecord: { name: 'e' } }).notLoaded.map(f => f.name)], [2000, ['notes.md']]);
+});
+
+test('usage strict: a records folder that exists but cannot be read is an error, not "no Records"', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec } = load();
+  rec.write('locked', 'a.md', 'x');
+  fs.chmodSync(rec.folderFor('locked'), 0o000);
+  try {
+    assert.throws(() => rec.usage('locked', { strict: true }), /EACCES/);
+    assert.strictEqual(rec.usage('locked').files, 0, 'the lenient path used by replies stays quiet');
+    assert.strictEqual(rec.usage('nobody', { strict: true }).files, 0, 'no folder at all is simply none');
+  } finally { fs.chmodSync(rec.folderFor('locked'), 0o755); }
+});
+
+test('one load plan for the prompt, the replies and the check: a file too big to fit is left out unread; strict names a file it cannot read', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec } = load();
+  global.__recCap = 4000;
+  try {
+    rec.write('lp', 'aa.md', 'a'.repeat(1000));
+    rec.write('lp', 'huge.md', 'h'.repeat(20000));
+    fs.chmodSync(path.join(rec.folderFor('lp'), 'huge.md'), 0o000);   // reading it would fail: it is never read
+    const u = rec.usage('lp', { strict: true });
+    assert.deepStrictEqual([u.used, u.notLoaded], [1000, [{ name: 'huge.md', bytes: 20000 }]]);
+    assert.match(rec.contextSection('lp'), /Not loaded, over the 4 KB records cap: huge\.md \(20000 bytes\)/, 'the prompt leaves out the same file');
+    rec.write('lp', 'small.md', 's'.repeat(100));
+    fs.chmodSync(path.join(rec.folderFor('lp'), 'small.md'), 0o000);
+    assert.throws(() => rec.usage('lp', { strict: true }), /small\.md: EACCES/, 'strict: a Record that exists but cannot be read is named');
+    assert.strictEqual(rec.usage('lp').files, 1, 'the lenient path (the agent\'s own replies) stays quiet');
+    fs.chmodSync(path.join(rec.folderFor('lp'), 'small.md'), 0o644);
+    fs.chmodSync(path.join(rec.folderFor('lp'), 'huge.md'), 0o644);
+  } finally { global.__recCap = 0; }
+});
+
+test('routeCap works the cap out as the gateway does before a turn; a cap remembered from a prompt counts only for the same model', async () => {
+  const { rec } = load({ budget: true });
+  const cb = require(path.join(REAL, 'lib', 'context-budget.js'));
+  assert.deepStrictEqual(await rec.routeCap('a', { agentRecord: { name: 'a', model: 'claude-sdk/claude-opus-5-5' } }), { cap: 256 * 1024, estimated: false });
+  assert.deepStrictEqual(await rec.routeCap('b', { agentRecord: { name: 'b', model: 'someprovider/unknown-model' } }), { cap: cb.plan(cb.DEFAULT_CLOUD).recordsBytes, estimated: false });
+  const local = await rec.routeCap('c', { agentRecord: { name: 'c', model: 'lmstudio/some-model' } });
+  assert.strictEqual(local.estimated, true, 'LM Studio did not answer: the window, and so the cap, is an estimate');
+  assert.deepStrictEqual(await rec.routeCap('d', { agentRecord: { name: 'd', model: 'lmstudio/some-model', contextWindow: 32000 } }), { cap: cb.plan(32000).recordsBytes, estimated: false }, 'the agent\'s own window setting needs no server');
+  rec.contextSection('f', { agentRecord: { name: 'f', model: 'someprovider/x', recordsMaxBytes: 2000 } });
+  assert.strictEqual(rec.loadCap('f', { agentRecord: { name: 'f', model: 'someprovider/x' } }), 2000, 'the last prompt\'s cap, same model');
+  assert.strictEqual(rec.loadCap('f', { agentRecord: { name: 'f', model: 'claude-sdk/claude-opus-5-5' } }), 256 * 1024, 'after a model switch it is worked out again');
+});
+
+test('unloadable: Records the prompt never loads and never mentions (a dead link, a link outside the area, a name it can\'t open) are named for the check', () => {
+  const { rec } = load();
+  rec.write('ul', 'fine.md', 'ok');
+  const dir = rec.folderFor('ul');
+  fs.symlinkSync(path.join(dir, '..', 'gone.md'), path.join(dir, 'dead.md'));
+  fs.symlinkSync('/etc/hostname', path.join(dir, 'outside.md'));
+  const long = `${'x'.repeat(130)}.md`;
+  fs.writeFileSync(path.join(dir, long), 'never opened');
+  fs.symlinkSync(path.join(dir, 'loop-b.md'), path.join(dir, 'loop-a.md'));
+  fs.symlinkSync(path.join(dir, 'loop-a.md'), path.join(dir, 'loop-b.md'));
+  fs.mkdirSync(path.join(dir, `${'d'.repeat(130)}.md`));   // a folder named like a Record was never one
+  assert.deepStrictEqual(rec.list('ul').map(i => i.name), ['fine.md'], 'only fine.md loads');
+  assert.deepStrictEqual(rec.unloadable('ul').sort((a, b) => a.name.localeCompare(b.name)), [
+    { name: 'dead.md', kind: 'link', why: 'a link to a file that no longer exists' },
+    { name: 'loop-a.md', kind: 'link', why: 'a link that goes round in a circle' },
+    { name: 'loop-b.md', kind: 'link', why: 'a link that goes round in a circle' },
+    { name: 'outside.md', kind: 'link', why: 'a link the hub won\'t follow' },
+    { name: long, kind: 'name', why: 'its name has characters or a length the hub can\'t open' }]);
+  assert.deepStrictEqual(rec.unloadable('nobody'), []);
+});
+
+test('snapshot: every Record as it reads now, in one private file beside records/ (through links, as loading does); the newest 3 kept; nothing written when one cannot be read', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec, hub } = load();
+  rec.write('gp', 'working-brief.md', 'the brief');
+  rec.write('gp', 'facts.md', '# Facts\nBlood type O+');
+  const linked = path.join(hub, 'workspaces', 'gp', 'docs', 'garden.md');
+  fs.mkdirSync(path.dirname(linked), { recursive: true }); fs.writeFileSync(linked, '# Garden');
+  fs.symlinkSync(linked, path.join(rec.folderFor('gp'), 'garden.md'));
+  const ws = path.join(hub, 'workspaces', 'gp');
+  let t = Date.parse('2026-11-05T21:00:00Z');
+  const s1 = rec.snapshot('gp', { now: () => t });
+  assert.strictEqual(s1.name, '.records-before-condense-20261105T210000Z.json');
+  assert.strictEqual(path.dirname(s1.file), ws, 'beside records/, never inside it');
+  assert.strictEqual(fs.statSync(s1.file).mode & 0o777, 0o600);
+  const body = JSON.parse(fs.readFileSync(s1.file, 'utf8'));
+  assert.deepStrictEqual(body.files.map(f => [f.name, f.text]), [['working-brief.md', 'the brief'], ['facts.md', '# Facts\nBlood type O+'], ['garden.md', '# Garden']]);
+  assert.strictEqual(rec.list('gp').length, 3, 'the copy is not a Record');
+  const s2 = rec.snapshot('gp', { now: () => t });
+  assert.strictEqual(s2.name, '.records-before-condense-20261105T210000Z-2.json', 'the same second: a new name, never over the first');
+  // a link put where the next copy would go is not followed
+  const target = path.join(hub, 'elsewhere.txt'); fs.writeFileSync(target, 'untouched');
+  t += 60000;
+  fs.symlinkSync(target, path.join(ws, '.records-before-condense-20261105T210100Z.json'));
+  const s3 = rec.snapshot('gp', { now: () => t });
+  assert.strictEqual(s3.name, '.records-before-condense-20261105T210100Z-2.json');
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), 'untouched');
+  t += 60000; rec.snapshot('gp', { now: () => t });
+  t += 60000; const s5 = rec.snapshot('gp', { now: () => t });
+  const kept = fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort();
+  assert.deepStrictEqual(kept, ['.records-before-condense-20261105T210100Z-2.json', '.records-before-condense-20261105T210200Z.json', s5.name], 'the newest 3 (the planted link went too: it was the oldest name)');
+  assert.strictEqual(fs.readFileSync(target, 'utf8'), 'untouched', 'removing a link never touches what it points to');
+  // one Record that can't be read: an error, and no new copy
+  fs.chmodSync(path.join(rec.folderFor('gp'), 'facts.md'), 0o000);
+  try {
+    t += 60000;
+    assert.throws(() => rec.snapshot('gp', { now: () => t }), /facts\.md/);
+    assert.strictEqual(fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).length, 3);
+  } finally { fs.chmodSync(path.join(rec.folderFor('gp'), 'facts.md'), 0o644); }
+  assert.deepStrictEqual(rec.snapshot('nobody'), { file: null, name: null, files: 0 }, 'no Records: no copy');
+});
+
+test('snapshot: a write that takes only part of the copy goes on until all of it is written; a full disk leaves no new file and every earlier copy; pruning keeps the newest whole copies and clears junk', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec, hub } = load();
+  rec.write('gp', 'facts.md', '# Facts\n' + 'x'.repeat(5000));
+  const ws = path.join(hub, 'workspaces', 'gp');
+  let t = Date.parse('2026-11-05T21:00:00Z');
+  const copies = () => fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort();
+  const realWrite = fs.writeSync;
+  let calls = 0;
+  fs.writeSync = (fd, buf, off, len, ...rest) => { calls++; return realWrite(fd, buf, off, Math.min(len, 1000), ...rest); };   // at most 1,000 bytes a call
+  let s1; try { s1 = rec.snapshot('gp', { now: () => t, prune: false }); } finally { fs.writeSync = realWrite; }
+  assert.ok(calls > 3, 'several writes');
+  assert.strictEqual(JSON.parse(fs.readFileSync(s1.file, 'utf8')).files[0].text.length, 5008, 'the whole copy');
+  for (let i = 0; i < 2; i++) { t += 60000; rec.snapshot('gp', { now: () => t, prune: false }); }
+  const three = copies();
+  calls = 0;
+  fs.writeSync = (fd, buf, off, len, ...rest) => { if (++calls === 2) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }); return realWrite(fd, buf, off, Math.min(len, 1000), ...rest); };
+  t += 60000;
+  try { assert.throws(() => rec.snapshot('gp', { now: () => t }), /ENOSPC/); } finally { fs.writeSync = realWrite; }
+  assert.deepStrictEqual(copies(), three, 'no new file, and the earlier copies stay');
+  // prune: off by request; then the newest three whole copies stay, junk (a cut-short copy, a link) goes
+  t += 60000; const s4 = rec.snapshot('gp', { now: () => t, prune: false });
+  assert.strictEqual(copies().length, 4);
+  fs.writeFileSync(path.join(ws, '.records-before-condense-20261105T220000Z.json'), '{"files": [');   // cut short
+  fs.symlinkSync('/etc/hostname', path.join(ws, '.records-before-condense-20261105T220100Z.json'));
+  assert.strictEqual(rec.pruneSnapshots('gp'), 3, 'the oldest whole copy and the two junk entries');
+  assert.deepStrictEqual(copies(), [...three.slice(1), s4.name]);
+  assert.strictEqual(rec.discardSnapshot('gp', s4.name), true);
+  assert.strictEqual(rec.discardSnapshot('gp', '../records/facts.md'), false, 'only a copy\'s own name');
+  assert.ok(fs.existsSync(path.join(rec.folderFor('gp'), 'facts.md')));
+});
+
+test('pruneSnapshots: a copy it cannot read is not junk (pruning stops, deleting nothing); the copy just made is kept even when the clock went back', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec, hub } = load();
+  rec.write('gp', 'facts.md', '# Facts');
+  const ws = path.join(hub, 'workspaces', 'gp');
+  const copies = () => fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort();
+  let t = Date.parse('2026-11-05T22:00:00Z');
+  const made = [];
+  for (let i = 0; i < 4; i++) { made.push(rec.snapshot('gp', { now: () => t, prune: false }).name); t += 60000; }
+  fs.symlinkSync('/etc/hostname', path.join(ws, '.records-before-condense-20261105T230000Z.json'));   // junk, which would go
+  fs.chmodSync(path.join(ws, made[0]), 0o000);
+  try {
+    assert.throws(() => rec.pruneSnapshots('gp'), /EACCES/);
+    assert.strictEqual(copies().length, 5, 'nothing deleted, not even the junk');
+  } finally { fs.chmodSync(path.join(ws, made[0]), 0o600); }
+  assert.strictEqual(rec.pruneSnapshots('gp'), 2, 'readable again: the oldest whole copy and the link go');
+  assert.deepStrictEqual(copies(), made.slice(1));
+  // the clock went back an hour: the new copy sorts oldest, and is still the one kept
+  t = Date.parse('2026-11-05T21:00:00Z');
+  const back = rec.snapshot('gp', { now: () => t, prune: false }).name;
+  rec.pruneSnapshots('gp', { protect: back });
+  assert.deepStrictEqual(copies(), [back, made[2], made[3]].sort(), 'the copy just made, and the two newest others');
+});
+
+test('pruneSnapshots: a copy removed meanwhile (another prune) is skipped, not an error', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const { rec, hub } = load();
+  rec.write('gp', 'facts.md', '# Facts');
+  const ws = path.join(hub, 'workspaces', 'gp');
+  let t = Date.parse('2026-11-05T22:00:00Z');
+  const made = [];
+  for (let i = 0; i < 5; i++) { made.push(rec.snapshot('gp', { now: () => t, prune: false }).name); t += 60000; }
+  const realLstat = fs.lstatSync;
+  fs.lstatSync = (p, ...rest) => { if (String(p).endsWith(made[1])) { fs.unlinkSync(p); } return realLstat(p, ...rest); };
+  let removed; try { removed = rec.pruneSnapshots('gp'); } finally { fs.lstatSync = realLstat; }
+  assert.strictEqual(removed, 1, 'the one older copy still there');
+  assert.deepStrictEqual(fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort(), made.slice(2));
 });

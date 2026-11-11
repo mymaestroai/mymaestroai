@@ -1,0 +1,5 @@
+{
+  "id": "guarddemo", "name": "Guard Demo", "category": "Test", "summary": "A test module for the guard's hub requests.", "risk": "read",
+  "server": { "type": "mcp-stdio", "script": "server.js" },
+  "tools": { "ping": "read" }
+}

@@ -287,7 +287,7 @@
           <button data-act="edit">Edit</button>
           <button data-act="toggle" ${self ? 'disabled title="You cannot disable yourself"' : ''}>${u.disabled ? 'Enable' : 'Disable'}</button>
           <button data-act="password">Set password</button>
-          <button data-act="totp" ${u.totpEnabled ? '' : 'disabled title="2FA is not enabled"'}>Reset 2FA</button>
+          <button data-act="totp" ${self ? 'disabled title="Use Security in your account menu"' : (u.totpEnabled ? '' : 'disabled title="2FA is not enabled"')}>Reset 2FA</button>
           <button data-act="team">Create team</button>
           ${u.role === 'member' ? '<button data-act="grants" title="What this member\'s agents may do beyond their own folders">Agent permissions</button>' : ''}
           <button data-act="delete" class="danger" ${self ? 'disabled title="You cannot delete yourself"' : ''}>Delete</button>

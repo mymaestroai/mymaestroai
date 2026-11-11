@@ -76,6 +76,8 @@ test('desktop worker: backup and update notices keep their action', async () => 
   assert.deepStrictEqual(steps(await worker('/', [])('/?backups=1')), [['open', '/?backups=1']]);
   assert.deepStrictEqual(steps(await worker('/', ['/'])('/mobile?update=1')), [['offer', '/', '/?update=1'], ['focus', '/'], ['go', '/']]);
   assert.deepStrictEqual(steps(await worker('/', [])('/mobile?update=1')), [['open', '/?update=1']]);
+  assert.deepStrictEqual(steps(await worker('/', ['/'])('/mobile?wallet=unlock')), [['offer', '/', '/?wallet=unlock'], ['focus', '/'], ['go', '/']]);
+  assert.deepStrictEqual(steps(await worker('/', [])('/mobile?wallet=unlock')), [['open', '/?wallet=unlock']]);
 });
 
 test('desktop worker: a Users notice goes to the Users page and leaves the hub tab alone', async () => {

@@ -34,7 +34,7 @@ test('ask_user is in the SDK tool list, always loaded, with the right parameters
   const tool = server.tools.find(t => t.name === 'ask_user');
   assert.ok(tool, 'ask_user registered');
   assert.deepStrictEqual(tool.opts, { alwaysLoad: true });
-  assert.deepStrictEqual(Object.keys(tool.shape).sort(), ['allow_skip', 'header', 'options', 'question']);
+  assert.deepStrictEqual(Object.keys(tool.shape).sort(), ['allow_skip', 'choose_model', 'descriptions', 'header', 'options', 'question']);
   assert.ok(!tool.shape.question.isOptional(), 'question is required');
   assert.ok(tool.shape.options.isOptional() && tool.shape.header.isOptional() && tool.shape.allow_skip.isOptional());
   assert.match(tool.description, /ONE question/);
@@ -62,6 +62,91 @@ test('emits an ask_user_question gateway event and returns the typed answer', as
   assert.strictEqual(await p, 'Forest green');
   assert.ok(!pendingQuestions.has(ev.request_id), 'pending entry cleaned up');
   assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: ev.request_id, answers: { 0: 'again' } }), { success: false, error: 'No pending question' });
+});
+
+test('each option can carry a line (descriptions), and choose_model adds a drop-down of every model the hub can use, grouped by maker and how it is paid', async () => {
+  const agentsMod = require('../lib/agents');
+  const healthMod = require('../lib/model-health');
+  const real = { list: agentsMod.availableModelsNow, health: healthMod.getModelHealth };
+  agentsMod.availableModelsNow = async () => ['local/qwen-x', 'openai/gpt-x', 'claude-sdk/claude-sonnet-5-5', 'codex-cli/gpt-6-astra', 'anthropic/claude-opus-5-5', 'google/gemini-y'];
+  healthMod.getModelHealth = () => ({ view: () => ({ 'openai/gpt-x': { state: 'fail' }, 'google/gemini-y': { state: 'warn' } }) });
+  const settle = () => new Promise(r => setTimeout(r, 20));
+  try {
+    const res = fakeRes();
+    const p = runAskUser(AGENT, res, { question: 'Which AI should run it?', options: ['Claude Sonnet 5.5', 'Skip', 'GPT-6 Astra', 'You choose'],
+      descriptions: ['Quick, strong writer; your Claude plan', 'ignored with its option', 'Careful reasoner; your ChatGPT plan'], choose_model: true });
+    await settle();
+    const [ev] = questionEvents(res);
+    const q = ev.questions[0];
+    assert.deepStrictEqual(q.options, [{ label: 'Claude Sonnet 5.5', description: 'Quick, strong writer; your Claude plan' },
+      { label: 'GPT-6 Astra', description: 'Careful reasoner; your ChatGPT plan' }, { label: 'You choose' }, { label: 'Skip', description: 'Leave this for later' }],
+      'each line stays with its own option, even when one before it is dropped');
+    assert.deepStrictEqual(q.models.map(m => [m.group, m.id]), [
+      ['Anthropic · Subscription', 'claude-sdk/claude-sonnet-5-5'], ['Anthropic · API $', 'anthropic/claude-opus-5-5'],
+      ['OpenAI · Subscription', 'codex-cli/gpt-6-astra'], ['OpenAI · API $', 'openai/gpt-x'],
+      ['Google · API $', 'google/gemini-y'], ['Local (free)', 'local/qwen-x']]);
+    assert.match(q.models.find(m => m.id === 'openai/gpt-x').label, /^gpt-x · API · failing lately$/);
+    assert.doesNotMatch(q.models.find(m => m.id === 'google/gemini-y').label, /failing/, 'only a failure is marked');
+    assert.match(readLog().slice(-1)[0].content, /\(or any model from the list\)$/);
+    // A pick in the drop-down comes back as the model id.
+    sdkChat.handleAskResponse({ request_id: ev.request_id, answers: { 0: 'codex-cli/gpt-6-astra' } });
+    assert.strictEqual(await p, 'codex-cli/gpt-6-astra');
+    // The list can't be read: the question still goes out, with its buttons and typing, and no drop-down.
+    agentsMod.availableModelsNow = async () => { throw new Error('discovery down'); };
+    const res2 = fakeRes();
+    const p2 = runAskUser(AGENT, res2, { question: 'Which one?', options: ['A'], choose_model: true });
+    await settle();
+    const ev2 = questionEvents(res2)[0];
+    assert.ok(ev2 && !('models' in ev2.questions[0]));
+    sdkChat.handleAskResponse({ request_id: ev2.request_id, answers: { 0: 'A' } });
+    assert.strictEqual(await p2, 'A');
+    // A long list is never cut short: every model the hub can use is in it, once.
+    const many = Array.from({ length: 450 }, (_, i) => `openrouter/vendor/model-${String(i).padStart(3, '0')}`);
+    agentsMod.availableModelsNow = async () => [...many, many[0]];
+    const res4 = fakeRes();
+    const p4 = runAskUser(AGENT, res4, { question: 'Which of many?', choose_model: true });
+    await settle();
+    const ev4 = questionEvents(res4)[0];
+    assert.deepStrictEqual(ev4.questions[0].models.map(m => m.id).sort(), many.slice().sort());
+    sdkChat.handleAskResponse({ request_id: ev4.request_id, answers: { 0: many[449] } });
+    assert.strictEqual(await p4, many[449]);
+    // A slow list doesn't hold the question: past modelListMs it goes out without the drop-down.
+    agentsMod.availableModelsNow = () => new Promise(() => {});
+    const res5 = fakeRes();
+    const p5 = runAskUser(AGENT, res5, { question: 'Slow list?', options: ['A'], choose_model: true }, { modelListMs: 60 });
+    await new Promise(r => setTimeout(r, 150));
+    const ev5 = questionEvents(res5)[0];
+    assert.ok(ev5 && !('models' in ev5.questions[0]), 'asked without the drop-down');
+    sdkChat.handleAskResponse({ request_id: ev5.request_id, answers: { 0: 'A' } });
+    assert.strictEqual(await p5, 'A');
+    // A Stop while the list is being read: no card, and the turn is not held for the 10-minute timeout.
+    agentsMod.availableModelsNow = () => new Promise(r => setTimeout(() => r(['openai/gpt-x']), 120));
+    const ac = new AbortController();
+    const res6 = fakeRes();
+    const started = Date.now();
+    const p6 = runAskUser(AGENT, res6, { question: 'Stopped?', choose_model: true }, { signal: ac.signal });
+    setTimeout(() => ac.abort(), 30);
+    assert.strictEqual(await p6, 'NO_ANSWER');
+    assert.ok(Date.now() - started < 2000, 'answered at once');
+    assert.strictEqual(questionEvents(res6).length, 0, 'no question went out');
+    // And when the list never comes at all, the Stop still ends the wait at once (not after modelListMs).
+    agentsMod.availableModelsNow = () => new Promise(() => {});
+    const ac2 = new AbortController();
+    const res7 = fakeRes();
+    const t7 = Date.now();
+    const p7 = runAskUser(AGENT, res7, { question: 'Stopped again?', choose_model: true }, { signal: ac2.signal, modelListMs: 60000 });
+    setTimeout(() => ac2.abort(), 20);
+    assert.strictEqual(await p7, 'NO_ANSWER');
+    assert.ok(Date.now() - t7 < 1000, 'the Stop ended the wait');
+    assert.strictEqual(questionEvents(res7).length, 0);
+    // Without choose_model there is never a list.
+    const res3 = fakeRes();
+    const p3 = runAskUser(AGENT, res3, { question: 'Plain?', options: ['Yes'] });
+    await tick();
+    assert.ok(!('models' in questionEvents(res3)[0].questions[0]));
+    sdkChat.handleAskResponse({ request_id: questionEvents(res3)[0].request_id, answers: { 0: 'Yes' } });
+    await p3;
+  } finally { agentsMod.availableModelsNow = real.list; healthMod.getModelHealth = real.health; }
 });
 
 test('Skip is returned as SKIPPED; allow_skip:false omits the option and keeps the literal text', async () => {
@@ -164,4 +249,39 @@ test('consult_agent, spawn_workers and the read/list tools are marked concurrenc
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   const walletLine = src.split('\n').find(l => l.includes('walletTools.toolSpecs().map(spec => sdk.tool('));
   assert.ok(walletLine && !walletLine.includes('readOnlyHint'), 'wallet tools must never be marked concurrency-safe');
+});
+
+test('an answer that names a different agent than the one that asked is refused and leaves the question open', async () => {
+  const res = fakeRes();
+  const p = runAskUser(AGENT, res, { question: 'Which color?', options: ['Green', 'Blue'] });
+  await tick();
+  const [ev] = questionEvents(res);
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: ev.request_id, agent: 'someone_else', answers: { 0: 'Blue' } }), { success: false, error: 'No pending question' });
+  assert.ok(pendingQuestions.has(ev.request_id), 'still waiting for the right answer');
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: ev.request_id, agent: AGENT, answers: { 0: 'Green' } }), { success: true });
+  assert.strictEqual(await p, 'Green');
+});
+
+test('an adminOnly question is answered only by an admin; other questions are unchanged', async () => {
+  const res = fakeRes();
+  const p = runAskUser(AGENT, res, { question: 'Allow it?', options: ['Allow', "Don't allow"], adminOnly: true });
+  await tick();
+  const id = questionEvents(res)[0].request_id;
+  const refused = { success: false, error: 'No pending question' };
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: id, answers: { 0: 'Allow' } }), refused, 'no flag');
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: id, answers: { 0: 'Allow' } }, { isAdmin: false }), refused);
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: id, answers: { 0: 'Allow' } }, { isAdmin: 'yes' }), refused, 'only true counts');
+  assert.ok(pendingQuestions.has(id), 'still waiting');
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: id, answers: { 0: 'Allow' } }, { isAdmin: true }), { success: true });
+  assert.strictEqual(await p, 'Allow');
+  const res2 = fakeRes();
+  const p2 = runAskUser(AGENT, res2, { question: 'Plain?', options: ['A'] });
+  await tick();
+  assert.deepStrictEqual(sdkChat.handleAskResponse({ request_id: questionEvents(res2)[0].request_id, answers: { 0: 'A' } }, { isAdmin: false }), { success: true });
+  assert.strictEqual(await p2, 'A');
+});
+
+test('the data connector access question is asked adminOnly', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  assert.match(src, /header: 'Data connector access', adminOnly: true \}/);
 });

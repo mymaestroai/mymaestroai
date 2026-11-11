@@ -20,6 +20,7 @@ function rig(o = {}) {
     unlockTtlMs: o.ttl == null ? 0 : o.ttl, setTimer: (fn, ms) => { const t = { fn, ms }; timers.push(t); return t; }, clearTimer: (t) => { t.cleared = true; },
     baseEnv: { PATH: process.env.PATH, HOME: '/tmp/h', ANTHROPIC_API_KEY: 'sk-ant-LEAK', OPENAI_API_KEY: 'sk-LEAK', HUB_TOKEN: 'LEAK' },
     skills: o.skills || null,
+    leadNames: () => o.leads || ['owner', 'anyone', 'x'],
   });
   const mcp = (extra = {}) => ({ id: 'fake', label: 'Fake service', kind: 'mcp', command: process.execPath, args: [FAKE], enabled: true, ...extra });
   return { cx, dir, logs, events, timers, mcp };
@@ -60,7 +61,7 @@ test('passphrases: own and group scopes lock the tools and the secrets; wrong pa
   assert.equal((await envOf(cx, 'x')).token, 'tok-roundtrip');
   cx.lock('fake');
   assert.deepEqual(await cx.toolSpecsFor('x'), []);
-  assert.match(cx.contextTextFor('x'), /LOCKED by the owner's passphrase/);
+  assert.match(cx.contextTextFor('x'), /LOCKED by the owner's passphrase; ask the owner to unlock it/, 'a locked connector is named with how to unlock it, but offers no tools');
   assert.throws(() => cx.unlock('fake', 'wrong passphrase'), /Wrong passphrase/);
   assert.throws(() => cx.upsert({ id: 'fake', protect: 'none' }), /Wrong passphrase|No lock/);
   assert.throws(() => cx.upsert({ id: 'fake', secrets: { FAKE_TOKEN: 'x' } }), /Unlock/);
@@ -158,7 +159,7 @@ test('validation: ids, kinds, protect values, secret names, agents list parsing'
   assert.throws(() => cx.upsert({ id: 'ok', kind: 'mcp', protect: 'own' }, { newPassphrase: 'short' }), /at least 8/);
   const c = cx.upsert({ id: 'ok', kind: 'mcp', command: 'x', agents: 'gp, labs ,gp' });
   assert.deepEqual(c.agents, ['gp', 'labs']);
-  assert.deepEqual(cx.setGrants('ok', null).agents, null);
+  assert.deepEqual(cx.setGrants('ok', null).agents, [], 'null no longer means every agent: lead only');
   assert.deepEqual(cx.remove('ok'), { ok: true });
   assert.throws(() => cx.remove('ok'), /No connector/);
 });
@@ -181,11 +182,269 @@ test('zodShapeFromJsonSchema: MCP input schemas become sdk.tool shapes (required
 
 test('wiring: both dispatch paths expose connector tools and the context block; routes and shutdown exist', () => {
   const sdk = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
-  assert.ok(sdk.includes("connectorsLib.getConnectors().toolSpecsFor(agentName, { consultationDepth })"), 'tool specs per agent and depth');
+  assert.ok(sdk.includes("connectorsLib.getConnectors().toolSpecsFor(agentName, { consultationDepth, virtual: temporalWorkers.isVirtual(agentName) })"), 'tool specs per agent and depth');
   assert.ok(sdk.includes('...connectorSdkTools,'), 'SDK path');
   assert.ok(sdk.includes("getSkillTools({ exclude })"), 'wrapped skills excluded from the ungated path');
-  assert.equal((sdk.match(/\+ connectorsTextFor\(agentName\)/g) || []).length, 3, 'context block on the gateway path and both SDK prompt builders');
+  assert.equal((sdk.match(/\+ connectorsTextFor\(agentName, (consultationDepth|options\.consultationDepth \|\| 0)\)/g) || []).length, 3, 'context block on the gateway path and both SDK prompt builders');
   const srv = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   for (const r of ["pathname === '/api/connectors' && req.method === 'POST'", "'/api/connectors/lock-all'", "(unlock|lock|test|grants)", "'/api/connector-groups' && req.method === 'POST'"]) assert.ok(srv.includes(r), r);
   assert.ok(srv.includes("require('./lib/connectors').getConnectors().shutdown()"), 'children stopped on shutdown');
+});
+
+// ── lead-only default ──
+const grab = (cx, agent, o) => cx.toolSpecsFor(agent, o).then(a => a.map(t => t.tool).sort());
+
+test('lead-only: the lead gets tools without being listed; an unlisted non-lead gets none; a listed agent gets them', async (t) => {
+  const { cx, mcp } = rig(); t.after(() => cx.shutdown());
+  const c = cx.upsert(mcp({}));
+  assert.deepEqual(c.agents, [], 'a new record with agents omitted is lead only');
+  assert.deepEqual(await grab(cx, 'owner'), ['env', 'get_record', 'send_message']);
+  assert.deepEqual(await grab(cx, 'sam'), []);
+  assert.equal(cx.contextTextFor('sam'), '');
+  cx.setGrants('fake', ['sam']);
+  assert.deepEqual(await grab(cx, 'sam'), ['env', 'get_record', 'send_message']);
+  assert.ok(cx.contextTextFor('sam').includes('Fake service'));
+});
+
+test('lead-only: no flagged lead means nobody gets default access', async (t) => {
+  const { cx, mcp } = rig({ leads: [] }); t.after(() => cx.shutdown());
+  cx.upsert(mcp({}));
+  assert.deepEqual(await grab(cx, 'owner'), []);
+  const broken = createConnectors({ file: path.join(rig().dir, 'c.json'), keyFile: path.join(rig().dir, 'k'), leadNames: () => { throw new Error('x'); }, log: () => {} });
+  broken.upsert({ id: 'fake', kind: 'mcp', command: 'x', enabled: true });
+  assert.deepEqual(broken.availableFor('owner'), []);
+});
+
+test('lead-only: the lead without an explicit listing gets no money tools; a listed agent still does', async (t) => {
+  const { cx, mcp } = rig(); t.after(() => cx.shutdown());
+  cx.upsert(mcp({ tools: { get_record: { cls: 'read' }, send_message: { cls: 'money' } } }));
+  assert.deepEqual(await grab(cx, 'owner'), ['env', 'get_record']);
+  cx.setGrants('fake', ['sam']);
+  assert.deepEqual(await grab(cx, 'sam'), ['env', 'get_record', 'send_message']);
+  assert.deepEqual(await grab(cx, 'owner'), ['env', 'get_record'], 'still not listed');
+  cx.setGrants('fake', ['owner']);
+  assert.deepEqual(await grab(cx, 'owner'), ['env', 'get_record', 'send_message'], 'listed lead keeps money tools');
+});
+
+test('lead-only: virtual agents and consultation depth get no tools and no text', async (t) => {
+  const { cx, mcp } = rig(); t.after(() => cx.shutdown());
+  cx.upsert(mcp({ agents: ['sam'] }));
+  assert.deepEqual(await grab(cx, 'owner', { virtual: true }), []);
+  assert.deepEqual(await grab(cx, 'sam', { virtual: true }), []);
+  assert.equal(cx.contextTextFor('owner', { virtual: true }), '');
+  assert.equal(cx.contextTextFor('sam', { virtual: true }), '');
+  assert.deepEqual(await grab(cx, 'owner', { consultationDepth: 1 }), []);
+  assert.equal(cx.contextTextFor('owner', { consultationDepth: 1 }), '');
+  assert.notEqual(cx.contextTextFor('owner'), '');
+});
+
+test('lead-only: the context text names a locked connector with how to unlock it, and says nothing at depth > 0, to a worker or to an unlisted agent', async (t) => {
+  const { cx, mcp } = rig(); t.after(() => cx.shutdown());
+  cx.upsert(mcp({}));
+  cx.upsert({ id: 'fake', protect: 'own' }, { newPassphrase: PASS });
+  cx.lock('fake');
+  assert.deepEqual(await grab(cx, 'owner'), []);
+  assert.match(cx.contextTextFor('owner'), /LOCKED/);
+  assert.equal(cx.contextTextFor('owner', { consultationDepth: 1 }), '');
+  assert.equal(cx.contextTextFor('owner', { virtual: true }), '');
+  assert.equal(cx.contextTextFor('sam'), '');
+  cx.unlock('fake', PASS);
+  assert.ok(cx.contextTextFor('owner').includes('fake__*'));
+});
+
+test('callTool: timeoutMs reaches the MCP client for that call only; without it the client default applies', async (t) => {
+  const calls = [];
+  class SpyClient {
+    constructor(cmd, args, opts) { this.opts = opts; }
+    async connect() {} async disconnect() {}
+    async listTools() { return [{ name: 'slow', inputSchema: { type: 'object', properties: {} } }]; }
+    async callTool(name, args, options) { calls.push({ name, options, clientTimeout: this.opts.timeout }); return { content: [{ type: 'text', text: 'ok' }] }; }
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-'));
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: SpyClient, log: () => {}, unlockTtlMs: 0, baseEnv: { PATH: process.env.PATH } });
+  t.after(() => { cx.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); });
+  cx.upsert({ id: 'spy', label: 'Spy', kind: 'mcp', command: 'x', enabled: true });
+  assert.strictEqual(await cx.callTool('spy', 'slow', {}), 'ok');
+  assert.strictEqual(calls[0].options, undefined, 'no timeoutMs: the client default is untouched');
+  assert.strictEqual(calls[0].clientTimeout, 60000);
+  await cx.callTool('spy', 'slow', {}, { timeoutMs: 3 * 3600 * 1000 });
+  assert.deepStrictEqual(calls[1].options, { timeout: 10800000 }, 'three hours, well past the 60 s default');
+  await cx.callTool('spy', 'slow', {}, {});
+  assert.strictEqual(calls[2].options, undefined);
+});
+
+test('migration: a stored agents: null becomes [] once, is listed for the checklist, and clears after grants are set', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-mig-'));
+  const file = path.join(dir, 'connectors.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, groups: {}, connectors: [
+    { id: 'old-open', label: 'Old open', kind: 'mcp', protect: 'none', agents: null, enabled: true, secrets: {}, tools: {} },
+    { id: 'old-two', label: 'Old two', kind: 'mcp', protect: 'none', agents: null, enabled: true, secrets: {}, tools: {} },
+    { id: 'listed', label: 'Listed', kind: 'mcp', protect: 'none', agents: ['sam'], enabled: true, secrets: {}, tools: {} },
+  ] }));
+  const mk = () => createConnectors({ file, keyFile: path.join(dir, '.auth-key'), log: () => {}, leadNames: () => ['owner'], now: () => 1_700_000_000_000 });
+  const cx = mk();
+  assert.deepEqual(cx.list().connectors.map(c => c.agents), [[], [], ['sam']]);
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(stored.openToAllMigrated, ['old-open', 'old-two']);
+  assert.equal(stored.migratedAt, new Date(1_700_000_000_000).toISOString());
+  assert.deepEqual(stored.connectors.map(c => c.agents), [[], [], ['sam']]);
+  const items = cx.readinessItems();
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, 'connectors-open-to-all'); assert.equal(items[0].level, 'info');
+  assert.equal(items[0].title, 'Some data connectors are now lead-only');
+  assert.equal(items[0].detail, 'Old open, Old two used to be available to every agent. Now only your lead agent can use them.');
+  assert.deepEqual(items[0].action, { label: 'Open data connectors', href: '/?connectors=1' });
+  // a second load does not migrate again or move the list
+  assert.deepEqual(mk().readinessItems().length, 1);
+  cx.setGrants('old-open', ['sam']);
+  assert.match(cx.readinessItems()[0].detail, /^Old two used/);
+  cx.upsert({ id: 'old-two', agents: [] });
+  assert.deepEqual(cx.readinessItems(), []);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).openToAllMigrated, []);
+});
+
+test('McpStdioClient minTools: a server that lists one tool is ready at once when minTools is 1, and keeps the old wait by default', async () => {
+  const c = new McpStdioClient(process.execPath, [FAKE], { env: { PATH: process.env.PATH } });
+  assert.equal(c.minTools, 2, 'default keeps today\'s behaviour');
+  assert.equal(new McpStdioClient('x', [], { minTools: 0 }).minTools, 0);
+  assert.equal(new McpStdioClient('x', [], { minTools: -3 }).minTools, 2);
+  let sends = 0;
+  const lone = new McpStdioClient('x', [], { minTools: 1 });
+  lone.connect = async () => {};
+  lone._send = async () => { sends++; return { tools: [{ name: 'only' }] }; };
+  const t0 = Date.now();
+  assert.equal((await lone.listTools()).length, 1);
+  await lone.callTool('only', {}).catch(() => {});
+  assert.equal(sends, 3, 'one list, one readiness check, one call: no retries');
+  assert.ok(Date.now() - t0 < 1000);
+});
+
+// ── Rotated secrets: a module server's hub/refresh_token request, answered by the hub ──
+function rotRig(t, { ttl = 0 } = {}) {
+  const events = [];
+  const { EventEmitter } = require('events');
+  const made = [];
+  class RotClient extends EventEmitter {
+    constructor() { super(); this.disconnected = false; this.replies = []; made.push(this); }
+    respond(id, result) { this.replies.push({ id, result }); }
+    respondError(id, code, message) { this.replies.push({ id, error: { code, message } }); }
+    async connect() {} async disconnect() { this.disconnected = true; }
+    async listTools() { return [{ name: 't', inputSchema: { type: 'object', properties: {} } }]; }
+    async callTool() { return { content: [{ type: 'text', text: 'ok' }] }; }
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-rot-'));
+  const logs = [];
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: RotClient, log: (...a) => logs.push(a.join(' ')), unlockTtlMs: ttl, publish: (ev, d) => events.push([ev, d]), baseEnv: { PATH: process.env.PATH } });
+  t.after(() => { cx.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); });
+  return { cx, made, logs, dir, events };
+}
+const ROT_NEW = 'ROTATED-REFRESH-TOKEN-distinctive-777';
+const note = (value, method = 'hub/refresh_token', id = 'hub-rot-1') => ({ jsonrpc: '2.0', id, method, params: { value } });
+const modConn = (extra = {}) => ({ id: 'rot', label: 'Rot', kind: 'mcp', command: 'x', module: 'rot', enabled: true, rotatingSecret: 'TOK', secrets: { TOK: 'old-token-value-1', OTHER: 'other-value-123' }, ...extra });
+
+test('rotated secret: a module connector saves the requested value encrypted, answers ok, without restarting, and never logs it', async (t) => {
+  const { cx, made, logs, dir } = rotRig(t);
+  cx.upsert(modConn(), { byModule: true });
+  await cx.callTool('rot', 't', {});
+  assert.equal(made.length, 1);
+  made[0].emit('request', note(ROT_NEW));
+  assert.deepEqual(made[0].replies, [{ id: 'hub-rot-1', result: { ok: true } }]);
+  assert.equal(cx.readSecrets('rot', ['TOK', 'OTHER'], { byModule: true }).TOK, ROT_NEW);
+  assert.equal(cx.readSecrets('rot', ['OTHER'], { byModule: true }).OTHER, 'other-value-123', 'the other secret is untouched');
+  assert.ok(!fs.readFileSync(path.join(dir, 'connectors.json'), 'utf8').includes(ROT_NEW), 'stored encrypted');
+  assert.equal(made.length, 1, 'no new client');
+  assert.equal(made[0].disconnected, false, 'not stopped');
+  assert.equal(cx.list().connectors.find(c => c.id === 'rot').running, true);
+  assert.ok(logs.some(l => /rotated TOK/.test(l)));
+  assert.ok(!logs.some(l => l.includes(ROT_NEW)), 'the value is never logged');
+  assert.equal(await cx.callTool('rot', 't', {}), 'ok');
+  assert.equal(made.length, 1);
+  // a notification is no longer a way to save
+  made[0].emit('notification', { jsonrpc: '2.0', method: 'notifications/hub/refresh_token', params: { value: ROT_NEW + '-n' } });
+  assert.equal(cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK, ROT_NEW);
+});
+
+test('rotated secret: a failed save answers with an error, records lastError and publishes connectors_changed', async (t) => {
+  const { cx, made, logs, events } = rotRig(t);
+  cx.upsert(modConn(), { byModule: true });
+  await cx.callTool('rot', 't', {});
+  events.length = 0;
+  const tok = () => cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK;
+  let n = 0;
+  for (const bad of ['short', 'x'.repeat(4097), 12345678901, null, { a: 1 }, undefined, 'has a\nnewline in it 123', 'nul\u0000byte-in-token']) {
+    made[0].emit('request', note(bad, 'hub/refresh_token', `hub-rot-${++n}`));
+  }
+  made[0].emit('request', { jsonrpc: '2.0', id: 'hub-rot-x', method: 'hub/refresh_token' });
+  assert.equal(made[0].replies.length, 9);
+  assert.ok(made[0].replies.every(r => r.error && r.error.code === -32000 && !r.result));
+  assert.equal(tok(), 'old-token-value-1', 'nothing was saved');
+  const c = cx.list().connectors.find(x => x.id === 'rot');
+  assert.match(c.lastError, /^Could not save the new sign-in: .*\. It keeps working until the next restart; sign in again in Data connectors\.$/);
+  assert.ok(logs.every(l => !l.includes('newline in it')));
+  assert.ok(events.some(([ev, d]) => ev === 'connectors_changed' && d.id === 'rot'));
+  const ok = 'y'.repeat(4096); made[0].emit('request', note(ok, 'hub/refresh_token', 'hub-rot-a'));
+  assert.equal(tok(), ok, '4096 characters is the longest accepted');
+  const ten = '1234567890'; made[0].emit('request', note(ten, 'hub/refresh_token', 'hub-rot-b'));
+  assert.equal(tok(), ten, '10 characters is the shortest accepted');
+  assert.deepEqual(made[0].replies.slice(-2).map(r => r.result), [{ ok: true }, { ok: true }]);
+  assert.throws(() => cx.writeBackSecret('rot', 'short'), /not usable/);
+  assert.throws(() => cx.writeBackSecret('rot', 'abcdefghij\u0007klm'), /not usable/);
+});
+
+test('rotated secret: an old client (after a restart or a new sign-in) is refused and writes nothing', async (t) => {
+  const { cx, made } = rotRig(t);
+  cx.upsert(modConn(), { byModule: true });
+  await cx.callTool('rot', 't', {});
+  cx.upsert({ id: 'rot', label: 'Rot 2' }, { byModule: true });   // an update stops the client; the next call starts a new one
+  await cx.callTool('rot', 't', {});
+  assert.equal(made.length, 2);
+  made[0].emit('request', note(ROT_NEW));
+  assert.equal(made[0].replies.length, 1);
+  assert.ok(made[0].replies[0].error, 'refused');
+  assert.equal(cx.list().connectors.find(x => x.id === 'rot').lastError, null, 'a stale process does not mark the live connector');
+  assert.equal(cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK, 'old-token-value-1');
+  made[1].emit('request', note(ROT_NEW));
+  assert.deepEqual(made[1].replies, [{ id: 'hub-rot-1', result: { ok: true } }]);
+  assert.equal(cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK, ROT_NEW);
+});
+
+test('rotated secret: any other request from a module server gets method not found', async (t) => {
+  const { cx, made } = rotRig(t);
+  cx.upsert(modConn(), { byModule: true });
+  await cx.callTool('rot', 't', {});
+  made[0].emit('request', note(ROT_NEW, 'hub/other'));
+  made[0].emit('request', note(ROT_NEW, 'tools/call', 7));
+  assert.deepEqual(made[0].replies.map(r => r.error && r.error.code), [-32601, -32601]);
+  assert.equal(cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK, 'old-token-value-1');
+});
+
+test('rotated secret: a connector that is not a module ignores it, and rotatingSecret cannot be set on one', async (t) => {
+  const { cx, made, dir } = rotRig(t);
+  cx.upsert({ id: 'plain', label: 'Plain', kind: 'mcp', command: 'x', enabled: true, rotatingSecret: 'TOK', secrets: { TOK: 'old-token-value-1' } });
+  const cipher = () => JSON.stringify(JSON.parse(fs.readFileSync(path.join(dir, 'connectors.json'), 'utf8')).connectors.find(c => c.id === 'plain').secrets.TOK);
+  const before = cipher();
+  await cx.callTool('plain', 't', {});
+  made[0].emit('request', note(ROT_NEW));
+  assert.equal(cipher(), before, 'the stored secret did not change');
+  assert.throws(() => cx.writeBackSecret('plain', ROT_NEW), /does not take a rotated secret/);
+  assert.throws(() => cx.writeBackSecret('missing', ROT_NEW), /does not take a rotated secret/);
+  const stored = cx.list().connectors.find(c => c.id === 'plain');
+  assert.deepEqual(stored.secretNames, ['TOK']);
+  // module connectors without a rotatingSecret take nothing either
+  cx.upsert(modConn({ id: 'norot', module: 'norot', rotatingSecret: undefined, secrets: { TOK: 'old-token-value-1' } }), { byModule: true });
+  assert.throws(() => cx.writeBackSecret('norot', ROT_NEW), /does not take a rotated secret/);
+  // an invalid name is not stored
+  cx.upsert(modConn({ id: 'badname', module: 'badname', rotatingSecret: 'lower-case' }), { byModule: true });
+  assert.throws(() => cx.writeBackSecret('badname', ROT_NEW), /does not take a rotated secret/);
+});
+
+test('rotated secret: only the module can change rotatingSecret; a locked connector refuses the write', async (t) => {
+  const { cx } = rotRig(t);
+  cx.upsert(modConn({ protect: 'own' }), { byModule: true, newPassphrase: 'correct horse battery' });
+  assert.throws(() => cx.upsert({ id: 'rot', rotatingSecret: 'OTHER' }), /belongs to the/);
+  cx.lock('rot');
+  assert.throws(() => cx.writeBackSecret('rot', ROT_NEW), /locked/);
+  cx.unlock('rot', 'correct horse battery');
+  assert.equal(cx.writeBackSecret('rot', ROT_NEW), true);
+  assert.equal(cx.readSecrets('rot', ['TOK'], { byModule: true }).TOK, ROT_NEW);
 });

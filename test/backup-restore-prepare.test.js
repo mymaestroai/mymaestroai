@@ -53,7 +53,7 @@ test('over an existing install: today\'s sign-ins, revocations and port stay; ba
   fs.writeFileSync(D('agents.json'), JSON.stringify([{ name: 'doc' }, { name: 'a' }, { name: 'open' }, { name: 'homerepair' }]));
   w(path.join(inst.root, 'workspaces', 'doc', 'new-note.md'), 'written after the backup');
   fs.writeFileSync(path.join(inst.root, '.env'), 'PORT=9977\n');
-  fs.writeFileSync(D('settings.json'), JSON.stringify({ backup: { folders: [{ dir: '/media/disk' }], key: { publicKey: 'today' } } }));
+  fs.writeFileSync(D('settings.json'), JSON.stringify({ backup: { folders: [{ dir: '/media/disk' }], key: { publicKey: 'today' } }, requireAdmin2fa: false }));
 
   const r = await restore.prepare({ file, password: PW, ...inst, platform: 'linux', mode: 'existing', working: ['degen'] });
   assert.strictEqual(r.report.keyStatus, 'other', 'today\'s settings hold a different key in this test');
@@ -78,6 +78,7 @@ test('over an existing install: today\'s sign-ins, revocations and port stay; ba
   assert.match(fs.readFileSync(S('env', '.env'), 'utf8'), /^PORT=9977$/m, 'this install\'s port kept');
   assert.match(fs.readFileSync(S('env', '.env'), 'utf8'), /^OTHER=from-backup$/m);
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(S('data', 'settings.json'), 'utf8')).backup, { folders: [{ dir: '/media/disk' }], key: { publicKey: 'today' } }, 'today\'s backup settings kept');
+  assert.strictEqual(JSON.parse(fs.readFileSync(S('data', 'settings.json'), 'utf8')).requireAdmin2fa, false, 'today\'s admin two-factor switch kept');
   // the link, read from where it will live
   const link = S('workspaces', 'doc', 'records', 'patient-a.md');
   assert.ok(fs.lstatSync(link).isSymbolicLink());

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>My Maestro AI — Modules</title>
+<title>My Maestro AI — Data connectors</title>
 <style>
   :root {
     --bg-dark: #090B0F; --bg-card: #14171F; --bg-input: #040507; --border: #222632; --border-strong: #333846;
@@ -82,18 +82,43 @@
   .agent-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
   .agent-row.no { color: var(--text-tertiary); }
   .saved { color: var(--success); font-size: 12px; }
+  .perm-row { border-bottom: 1px solid var(--border); padding: 4px 0; }
+  .perm-row .agent-row { padding-bottom: 0; }
+  .perm { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 2px 0 6px 26px; }
+  .perm select { width: auto; min-width: 110px; }
+  .perm label.chk { margin: 0; font-size: 13px; }
   .ready-box { display: flex; flex-direction: column; gap: 10px; }
+  .card .meta { color: var(--text-tertiary); font-size: 12px; line-height: 1.4; }
+  .card .check { font-size: 12px; color: var(--success); }
+  .card .check.bad { color: var(--warning); }
+  .signin-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 28px; letter-spacing: 3px; padding: 12px 16px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); display: inline-block; user-select: all; word-break: break-all; }
+  .signin-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  .redirect-uri { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); display: inline-block; user-select: all; word-break: break-all; }
+  a.open-link { color: var(--accent); word-break: break-all; }
+  /* Phone (390 px wide): one column everywhere, tap targets of at least 40 px. */
+  @media (max-width: 760px) {
+    main { padding: 12px; }
+    .grid { grid-template-columns: 1fr; }
+    .layout { grid-template-columns: 1fr; }
+    .top { padding: 10px 12px; }
+    .top a { display: inline-flex; align-items: center; min-height: 40px; }
+    button, input[type="text"], input[type="password"], input[type="number"], select { min-height: 40px; font-size: 16px; }
+    ol.steps li { min-height: 40px; }
+    label.chk, .agent-row { min-height: 40px; align-items: center; }
+    .links a { display: inline-flex; align-items: center; min-height: 40px; }
+    .signin-code { font-size: 22px; letter-spacing: 2px; }
+  }
 </style>
 </head>
 <body>
 <div class="top">
   <a href="/">← Back</a>
-  <h1>Modules</h1>
+  <h1>Data connectors</h1>
   <span class="spacer"></span>
   <a href="/users">Users</a>
 </div>
 <main>
-  <p class="intro">Optional capabilities for your agents. Each module walks you through its setup, keeps its keys encrypted in this hub, and only reaches the agents you choose. Money modules can only go to wallet agents, and the hub enforces their limits on every call.</p>
+  <p class="intro">Connect outside services such as Google Drive and Oura, with a guided setup. Each connector keeps its keys encrypted in this hub. The lead agent can always use every connector; other agents only when you tick them. Money connectors can only go to wallet agents, and the hub enforces their limits on every call.</p>
   <div id="list"></div>
   <section class="panel" id="panel"></section>
 </main>
@@ -103,12 +128,23 @@ const STATE_LABEL = { available: 'Not set up', setup: 'Setup in progress', ready
 let current = null;      // module detail
 let selected = null;     // step id on screen
 
+// {{redirectUri}} in a step body: the address the service sends the browser back to, in a copyable box (escaped).
+function redirectUriBox() {
+  if (!current || !current.redirectUriPath) return '';
+  const uri = location.origin + current.redirectUriPath;
+  return `<code class="redirect-uri" id="redirect-uri">${esc(uri)}</code> <button onclick="copyRedirectUri(this)">Copy</button>`;
+}
+async function copyRedirectUri(btn) {
+  const t = (document.getElementById('redirect-uri') || {}).textContent || '';
+  try { await navigator.clipboard.writeText(t); btn.textContent = 'Copied'; } catch { btn.textContent = 'Select the address and copy it'; }
+}
+
 // Small, safe text formatting for step bodies: paragraphs, **bold**, "- " and "1. " lists.
 function md(text) {
   const blocks = String(text || '').split(/\n\s*\n/);
   return blocks.map(b => {
     const lines = b.split('\n');
-    const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\{\{redirectUri\}\}/g, redirectUriBox());
     if (lines.every(l => /^\s*-\s+/.test(l))) return '<ul>' + lines.map(l => `<li>${inline(l.replace(/^\s*-\s+/, ''))}</li>`).join('') + '</ul>';
     if (lines.every(l => /^\s*\d+\.\s+/.test(l))) return '<ol>' + lines.map(l => `<li>${inline(l.replace(/^\s*\d+\.\s+/, ''))}</li>`).join('') + '</ol>';
     const head = lines.filter(l => !/^\s*-\s+/.test(l)); const items = lines.filter(l => /^\s*-\s+/.test(l));
@@ -123,6 +159,26 @@ async function api(method, url, body) {
   return j;
 }
 
+// 'YYYY-MM-DD' -> "Nov 6, 2026" (read as a calendar date, not shifted by the time zone).
+function fmtDay(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''));
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(s);
+  return isNaN(d) ? String(s || '') : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+function fmtStamp(s) {
+  const d = new Date(s);
+  return isNaN(d) ? String(s || '') : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+function catalogLine(c) {
+  if (!c) return '';
+  return `<div class="meta">Last verified working ${esc(fmtDay(c.verified))} · ${esc(c.api)} · ${c.official ? 'Official' : 'Community-made'}</div>`;
+}
+function checkLine(lc) {
+  if (!lc) return '';
+  return lc.ok ? `<div class="check">Checked ${esc(fmtStamp(lc.at))}: working</div>` : `<div class="check bad">Needs attention: ${esc(lc.summary)}</div>`;
+}
+const needsAttention = (m) => m.state === 'attention' || m.state === 'broken' || !!(m.lastCheck && !m.lastCheck.ok);
+
 async function loadList() {
   const { modules } = await api('GET', '/api/modules');
   const cats = {};
@@ -133,7 +189,9 @@ async function loadList() {
         ${m.risk === 'money' ? '<span class="pill money">money</span>' : ''}<span class="pill ${esc(m.state)}">${esc(STATE_LABEL[m.state] || m.state)}</span></div>
       <div class="sum">${esc(m.summary)}</div>
       ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
-    </div>`).join('')}</div>`).join('') || '<p class="dim">No modules are installed in this hub.</p>';
+      ${catalogLine(m.catalog)}
+      ${checkLine(m.lastCheck)}
+    </div>`).join('')}</div>`).join('') || '<p class="dim">No data connectors are installed in this hub.</p>';
 }
 
 async function openModule(id, stepId) {
@@ -147,6 +205,7 @@ async function openModule(id, stepId) {
 }
 
 function render() {
+  stopSignin(); permPending = null;
   const m = current; const p = document.getElementById('panel');
   p.classList.add('open');
   const steps = m.steps.map((s, i) => `<li class="${s.done ? 'done' : ''} ${s.id === selected ? 'cur' : ''}" onclick="selectStep('${esc(s.id)}')"><span class="mark">${s.done ? '✓' : i + 1}</span>${esc(s.title)}</li>`).join('');
@@ -161,7 +220,7 @@ function render() {
     </div>`;
 }
 function selectStep(id) { selected = id; render(); }
-function closePanel() { document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
+function closePanel() { stopSignin(); permPending = null; document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
 
 function setMsg(kind, text) { const el = document.getElementById('step-msg'); if (!el) return; el.className = `msg show ${kind}`; el.textContent = text; }
 
@@ -174,9 +233,21 @@ function settingField(st, value) {
   if (st.type === 'list') return `<div class="field"><span class="lbl">${esc(st.label)}</span><input type="text" id="${id}" value="${esc((value || []).join(', '))}">${help}</div>`;
   return `<div class="field"><span class="lbl">${esc(st.label)}</span><input type="${st.type === 'number' ? 'number' : 'text'}" id="${id}" value="${esc(value)}" ${st.min !== undefined ? `min="${st.min}"` : ''} ${st.max !== undefined ? `max="${st.max}"` : ''}>${help}</div>`;
 }
+// A manifest that declares per-agent levels keeps the levels list and the "not asked" list out of generic settings:
+// they are edited, with the warning, only through the agent-permissions route.
+function levelsConfig(m) {
+  const lv = m && m.manifest && m.manifest.levels;
+  return lv && Array.isArray(lv.choices) && lv.choices.length ? lv : null;
+}
+function protectedSettingKeys(m) {
+  const lv = levelsConfig(m);
+  if (!lv) return [];
+  return [lv.setting, lv.sessionApproval && lv.sessionApproval.setting].filter(Boolean);
+}
+const visibleSettings = (m) => (m.manifest.settings || []).filter(st => !protectedSettingKeys(m).includes(st.key));
 function readSettings(keys) {
   const out = {};
-  for (const st of current.manifest.settings || []) {
+  for (const st of visibleSettings(current)) {
     if (keys && !keys.includes(st.key)) continue;
     if (st.type === 'boolean') out[st.key] = document.getElementById(`set-${st.key}`).checked;
     else if (st.type === 'choice' && st.multiple) out[st.key] = [...document.querySelectorAll(`input[data-multi="${st.key}"]:checked`)].map(i => i.value);
@@ -204,43 +275,245 @@ function stepHtml(s) {
     inner = (lc ? `<div class="msg show ${lc.ok ? (lc.warnings.length ? 'warn' : 'ok') : 'err'}">${esc(lc.summary)}${lc.lines.length ? '\n' + esc(lc.lines.join('\n')) : ''}${lc.warnings.length ? '\n⚠ ' + esc(lc.warnings.join('\n⚠ ')) : ''}\n<span class="dim">${esc(lc.at)}</span></div>` : '') +
       `<div id="ack-area"></div><div class="actions"><button class="primary" onclick="runCheck('${esc(s.id)}', this)">Run the check</button></div>`;
   } else if (s.type === 'settings') {
-    inner = (m.manifest.settings || []).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +
+    inner = visibleSettings(m).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { values: readSettings(${esc(JSON.stringify(s.fields || []))}) }, this)">Save</button></div>`;
   } else if (s.type === 'grant') {
-    inner = (m.candidates.length ? m.candidates.map(c => `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${m.agents.includes(c.name) ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`).join('') : '<p class="dim">No agents.</p>') +
+    const lv = levelsConfig(m);
+    inner = leadRows(m) + (m.candidates.length ? m.candidates.filter(c => !leadsLocked(m) || !(m.leads || []).includes(c.name)).map(c => {
+      const ticked = m.agents.includes(c.name);
+      const label = `<label class="agent-row ${c.eligible ? '' : 'no'}"><input type="checkbox" class="grant" value="${esc(c.name)}" ${c.eligible ? '' : 'disabled'} ${ticked ? 'checked' : ''}> ${esc(c.display)} <span class="dim mono">${esc(c.name)}</span> ${c.why ? `<span class="dim">: ${esc(c.why)}</span>` : ''}</label>`;
+      return lv ? permRow(m, label, c.name, !(c.eligible && ticked)) : label;
+    }).join('') : '<p class="dim">No agents.</p>') +
       (m.risk === 'money' && !m.candidates.some(c => c.eligible) ? '<div class="msg warn show">No agent is a wallet agent yet. The hub owner adds one by name to "walletAgents" in data/settings.json (deliberately not a button).</div>' : '') +
-      `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { agents: [...document.querySelectorAll('input.grant:checked')].map(i => i.value) }, this)">Save</button></div>`;
+      (m.notify ? `<div class="agent-row"><label for="notice-agent">Send its notices to:</label> <select id="notice-agent">${noticeOptions(m, m.agents, m.noticeAgent)}</select></div>` : '') +
+      (lv ? '<div id="perm-warning"></div>' : '') +
+      `<div class="actions"><button class="primary" onclick="saveGrant('${esc(s.id)}', this)">Save</button></div>`;
+  } else if (s.type === 'signin') {
+    inner = `<div id="signin-area">${signinIdleHtml()}</div>`;
   } else if (s.type === 'finish') {
     const open = m.steps.filter(x => x.type !== 'finish' && !x.optional && !x.done);
     inner = open.length ? `<div class="msg warn show">Still to do: ${esc(open.map(x => x.title).join('; '))}</div>` :
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', {}, this)">${m.finishedAt ? 'Done' : 'Switch it on'}</button></div>`;
   }
-  return `<div class="step"><h3>${esc(s.title)}</h3><div class="body">${md(s.body)}</div><div class="links">${links}</div>${inner}<div class="msg" id="step-msg"></div></div>`;
+  return `<div class="step"><h3>${esc(s.title)}</h3><div class="body">${md(s.body)}</div><div class="links">${links}</div>${inner}<div class="actions">${askButton(s.id)}</div><div class="msg" id="step-msg"></div></div>`;
+}
+
+// The lead agents can always use every connector: shown ticked and locked, ahead of the agents you choose.
+// Not for a money connector (leadsAlways false): its tools reach wallet agents only, so leads are ordinary checkboxes.
+const leadsLocked = (m) => m.leadsAlways !== false;
+function leadRows(m) {
+  if (!leadsLocked(m)) return '';
+  const lv = levelsConfig(m);
+  return (m.leads || []).map(n => {
+    const label = `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)} (lead): always</label>`;
+    return lv ? permRow(m, label, n, false) : label;
+  }).join('');
+}
+
+// ── Per-agent levels: a level choice for each allowed agent and, for the levels that need a yes on the phone, an "Ask me" box ──
+const capital = (w) => String(w).charAt(0).toUpperCase() + String(w).slice(1);
+const sessionLevels = (lv) => (lv.sessionApproval && Array.isArray(lv.sessionApproval.levels)) ? lv.sessionApproval.levels : [];
+// Reads the saved lists once; the result gives each agent's level and ask box. Duplicate entries resolve to the lowest rank, as the hub does.
+function permissionLookup(m) {
+  const lv = levelsConfig(m); const settings = (m && m.settings) || {};
+  const levels = Object.create(null);
+  for (const e of Array.isArray(settings[lv.setting]) ? settings[lv.setting] : []) {
+    const text = String(e); const i = text.lastIndexOf(':');
+    if (i < 1) continue;
+    const name = text.slice(0, i).trim(), rank = lv.choices.indexOf(text.slice(i + 1).trim());
+    if (rank < 0) continue;
+    if (!(name in levels) || rank < levels[name]) levels[name] = rank;
+  }
+  const sa = lv.sessionApproval;
+  const noAsk = new Set(sa && Array.isArray(settings[sa.setting]) ? settings[sa.setting].map(String) : []);
+  const fallback = lv.choices.includes(lv.default) ? lv.default : lv.choices[0];
+  return (name) => ({ level: name in levels ? lv.choices[levels[name]] : fallback, askEachSession: !noAsk.has(String(name)) });
+}
+function permControlsHtml(m, name, disabled) {
+  const lv = levelsConfig(m); const cur = permissionLookup(m)(name);
+  const needs = sessionLevels(lv).includes(cur.level);
+  return `<span class="perm"><select class="perm-level" data-agent="${esc(name)}" aria-label="What ${esc(name)} may do" ${disabled ? 'disabled' : ''}>${lv.choices.map(c => `<option value="${esc(c)}" ${c === cur.level ? 'selected' : ''}>${esc(capital(c))}</option>`).join('')}</select>` +
+    (lv.sessionApproval ? `<label class="chk perm-ask-wrap" ${needs ? '' : 'style="display:none"'}><input type="checkbox" class="perm-ask" data-agent="${esc(name)}" ${cur.askEachSession ? 'checked' : ''}> <span>Ask me before each session</span></label>` : '') + '</span>';
+}
+function permRow(m, labelHtml, name, disabled) { return `<div class="perm-row">${labelHtml}${permControlsHtml(m, name, disabled)}</div>`; }
+
+const PERM_WARNING = 'An agent can be misled by a web page or an email. With asking off, it could then use your remote computers without you knowing in time.';
+// {name: {level, askEachSession}} for the rows that are on screen and allowed (an unticked agent's choice is not sent).
+function readPermissions() {
+  const lv = levelsConfig(current);
+  const asks = Object.create(null);
+  for (const i of document.querySelectorAll('input.perm-ask')) asks[i.dataset.agent] = i.checked;
+  const out = {};
+  for (const sel of document.querySelectorAll('select.perm-level')) {
+    if (sel.disabled) continue;
+    const name = sel.dataset.agent;
+    out[name] = { level: sel.value, askEachSession: sessionLevels(lv).includes(sel.value) ? asks[name] !== false : true };
+  }
+  return out;
+}
+const permsNeedWarning = (permissions) => Object.values(permissions).some(p => p.askEachSession === false);
+let permPending = null;   // the save that waits for the person to accept the warning
+function showPermWarning(run) {
+  permPending = run;
+  const box = document.getElementById('perm-warning');
+  if (box) box.innerHTML = `<div class="msg warn show">${esc(PERM_WARNING)}<div class="actions"><button class="danger" onclick="permWarnConfirm()">Save with asking off</button><button onclick="permWarnCancel()">Cancel</button></div></div>`;
+}
+function clearPermWarning() { permPending = null; const box = document.getElementById('perm-warning'); if (box) box.innerHTML = ''; }
+function permWarnCancel() { clearPermWarning(); }   // nothing is sent; the ticked and unticked boxes stay as they are
+async function permWarnConfirm() { const run = permPending; clearPermWarning(); if (run) await run(); }
+// Posts the levels (acknowledged only when the warning was accepted). Returns true when the hub saved them.
+async function postPermissions(agents, permissions, acknowledged, btn) {
+  let ok = false;
+  await busy(btn, async () => {
+    try {
+      const body = { agents, permissions };
+      if (acknowledged && permsNeedWarning(permissions)) body.acknowledged = true;
+      current = (await api('POST', `/api/modules/${current.id}/agent-permissions`, body)).module;
+      ok = true;
+    } catch (e) { setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message); }
+  });
+  return ok;
+}
+async function savePermissions(btn, acknowledged) {
+  const permissions = readPermissions();
+  if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(() => savePermissions(btn, true)); return; }
+  const agents = current.agents.filter(n => !leadsLocked(current) || !(current.leads || []).includes(n));
+  if (!(await postPermissions(agents, permissions, acknowledged, btn))) return;
+  render(); loadList();
+  setMsg('ok', 'Saved. The new levels apply to the next call.');
+}
+function askButton(stepId) {
+  return `<button onclick="askMaestro(${stepId ? `'${esc(stepId)}'` : 'null'}, this)">Ask Maestro</button>`;
 }
 
 function overviewHtml() {
   const m = current;
-  if (!m.finishedAt) return `<div class="body">${md(m.summary)}</div><div class="actions"><button class="primary" onclick="selectStep('${esc((m.steps.find(s => !s.done) || m.steps[0]).id)}')">${m.state === 'available' ? 'Start the setup' : 'Continue the setup'}</button></div>`;
+  const ask = needsAttention(m) ? askButton(null) : '';
+  if (!m.finishedAt) return `<div class="body">${md(m.summary)}</div>${catalogLine(m.catalog)}<div class="actions"><button class="primary" onclick="selectStep('${esc((m.steps.find(s => !s.done) || m.steps[0]).id)}')">${m.state === 'available' ? 'Start the setup' : 'Continue the setup'}</button>${ask}</div><div class="msg" id="step-msg"></div>`;
   const lc = m.lastCheck;
+  const others = m.agents.filter(n => !leadsLocked(m) || !(m.leads || []).includes(n));
   return `<div class="ready-box">
     <div class="body">${md(m.summary)}</div>
-    <div><b>Agents:</b> ${m.agents.length ? esc(m.agents.join(', ')) : '<span class="dim">none</span>'} · <b>Status:</b> ${esc(STATE_LABEL[m.state] || m.state)}${m.note ? ` <span class="dim">(${esc(m.note)})</span>` : ''}</div>
-    ${lc ? `<div class="dim">Last check ${esc(lc.at)}: ${esc(lc.summary)}</div>` : ''}
+    ${catalogLine(m.catalog)}
+    <div><b>Agents:</b></div>
+    <div>${leadRows(m)}${others.map(n => { const label = `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)}</label>`; return levelsConfig(m) ? permRow(m, label, n, false) : label; }).join('')}${(leadsLocked(m) && (m.leads || []).length) || others.length ? '' : '<span class="dim">none</span>'}</div>
+    ${levelsConfig(m) ? `<div id="perm-warning"></div><div class="actions"><button class="primary" onclick="savePermissions(this)">Save permissions</button></div>` : ''}
+    <div><b>Status:</b> ${esc(STATE_LABEL[m.state] || m.state)}${m.note ? ` <span class="dim">(${esc(m.note)})</span>` : ''}</div>
+    ${checkLine(lc)}
     <div class="actions">
       ${m.enabled ? `<button onclick="toggle(false, this)">Switch off</button>` : `<button class="primary" onclick="toggle(true, this)">Switch on</button>`}
       <button onclick="recheck(this)">Check now</button>
-      <button onclick="showAudit(this)">Activity log</button>
+      <button onclick="showAudit(this)">Activity log</button>${ask}
       <button class="danger" onclick="removeModule(this)">Remove</button>
     </div>
     <h3 style="font-size:14px;margin-top:8px">Limits and settings</h3>
-    ${(m.manifest.settings || []).map(st => settingField(st, m.settings[st.key])).join('')}
+    ${visibleSettings(m).map(st => settingField(st, m.settings[st.key])).join('')}
     <div class="actions"><button class="primary" onclick="saveAll(this)">Save settings</button></div>
     ${m.manifest.docs && m.manifest.docs.revoke ? `<p class="dim" style="margin-top:10px">${esc(m.manifest.docs.revoke)}</p>` : ''}
     <div class="msg" id="step-msg"></div><div id="audit"></div></div>`;
 }
 
+// ── Sign in with the service (device code): start, show the code, poll while the step is open ──
+const SIGNIN_MIN_POLL_SEC = 5;
+const SIGNIN_HIDDEN_LIMIT_MS = 10 * 60 * 1000;
+let signin = null;           // { moduleId, stepId, pollTimer, tick, expiresAt } while a sign-in is waiting
+let hiddenSince = null;      // when the page was last hidden (null while it is visible)
+document.addEventListener('visibilitychange', () => { hiddenSince = document.hidden ? Date.now() : null; });
+
+function signinIdleHtml(note) {
+  return `${note ? `<p class="dim">${esc(note)}</p>` : ''}<div class="actions"><button class="primary" onclick="signinStart(this)">${note ? 'Start again' : `Sign in with ${esc(current.name)}`}</button></div>`;
+}
+function stopSignin() {
+  if (!signin) return;
+  clearTimeout(signin.pollTimer); clearInterval(signin.tick);
+  signin = null;
+}
+function signinPaint(html) { const el = document.getElementById('signin-area'); if (el) el.innerHTML = html; }
+function signinFail(text) {
+  stopSignin();
+  signinPaint(signinIdleHtml(text));
+  setMsg('err', text);
+}
+function signinOnScreen(token) {
+  return signin === token && current && selected === token.stepId && document.getElementById('panel').classList.contains('open') && document.getElementById('signin-area');
+}
+async function signinStart(btn) {
+  stopSignin();
+  const m = current, stepId = selected;
+  await busy(btn, async () => {
+    let r;
+    try { r = await api('POST', `/api/modules/${m.id}/signin/start`, { origin: location.origin }); } catch (e) { signinFail(e.message); return; }
+    if (current !== m || selected !== stepId) return;   // the person moved on while it started: a late reply must not act, nor navigate away
+    if (m.oauthFlow === 'code') {   // the service asks the person to approve, then sends this browser back to the hub's callback page
+      if (typeof r.authorizeUrl !== 'string' || !r.authorizeUrl.startsWith('https://')) { signinFail('The service did not give a safe sign-in address.'); return; }
+      location.href = r.authorizeUrl;
+      return;
+    }
+    const token = signin = { moduleId: m.id, stepId, pollTimer: null, tick: null, expiresAt: typeof r.expiresAt === 'number' ? r.expiresAt : Date.parse(r.expiresAt) };
+    const url = typeof r.verificationUrl === 'string' && r.verificationUrl.startsWith('https://') ? r.verificationUrl : '';
+    signinPaint(`<div class="signin-row"><span class="signin-code" id="signin-code">${esc(r.userCode)}</span><button onclick="signinCopy(this)">Copy</button></div>
+      ${url ? `<div class="signin-row"><a class="open-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open ${esc(url)}</a></div>` : ''}
+      <p>Approve the request there, then come back. This page notices by itself.</p>
+      <p class="dim" id="signin-count"></p>
+      <div class="actions"><button onclick="signinCancel()">Cancel</button></div>`);
+    const paintCount = () => {
+      const el = document.getElementById('signin-count');
+      if (!el || !isFinite(token.expiresAt)) return;
+      const s = Math.max(0, Math.round((token.expiresAt - Date.now()) / 1000));
+      el.textContent = `Code expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    };
+    paintCount(); token.tick = setInterval(paintCount, 1000);
+    const everyMs = Math.max(Number(r.intervalSec) || 0, SIGNIN_MIN_POLL_SEC) * 1000;
+    const poll = async () => {
+      if (!signinOnScreen(token)) { if (signin === token) stopSignin(); return; }
+      if (hiddenSince !== null && Date.now() - hiddenSince > SIGNIN_HIDDEN_LIMIT_MS) { signinFail('Stopped waiting because this page was in the background for a while.'); return; }
+      let p;
+      try { p = await api('POST', `/api/modules/${m.id}/signin/poll`, {}); } catch (e) { if (signin === token) signinFail(e.message); return; }
+      if (signin !== token) return;
+      if (p.status === 'ok') { stopSignin(); await openModule(m.id, stepId); return; }
+      if (p.status === 'denied' || p.status === 'expired') { signinFail(p.message || (p.status === 'denied' ? 'The request was denied.' : 'The code expired.')); return; }
+      token.pollTimer = setTimeout(poll, everyMs);
+    };
+    token.pollTimer = setTimeout(poll, everyMs);
+  });
+}
+async function signinCancel() {
+  const id = current && current.id;
+  stopSignin();
+  if (id) {
+    // Start again stays out of reach until the hub has forgotten the pending sign-in; a failed cancel leaves polling stopped.
+    signinPaint('<p class="dim">Cancelling…</p>');
+    try { await api('POST', `/api/modules/${id}/signin/cancel`, {}); } catch { if (current && current.id === id) signinFail('Could not cancel. Try again.'); return; }
+    if (!current || current.id !== id) return;
+  }
+  signinPaint(signinIdleHtml());
+}
+async function signinCopy(btn) {
+  const code = (document.getElementById('signin-code') || {}).textContent || '';
+  try { await navigator.clipboard.writeText(code); btn.textContent = 'Copied'; } catch { btn.textContent = 'Select the code and copy it'; }
+}
+
+// ── Ask Maestro: get a ready-made question for the lead agent, send it as a chat message, and go to that chat ──
+async function askMaestro(stepId, btn) {
+  const msgEl = document.getElementById('step-msg');
+  const shown = msgEl && msgEl.classList.contains('err') ? msgEl.textContent : '';
+  await busy(btn, async () => {
+    try {
+      const q = new URLSearchParams();
+      if (stepId) q.set('step', stepId);
+      if (shown) q.set('error', shown);
+      const h = await api('GET', `/api/modules/${current.id}/help?${q}`);
+      const r = await fetch('/api/chat/stream', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: h.agent, message: h.message }) });
+      if (r.status === 409) throw new Error('Maestro is busy right now. Try again in a moment.');
+      if (!r.ok) { let j = {}; try { j = await r.json(); } catch {} throw new Error(j.error || `HTTP ${r.status}`); }
+      location.href = '/?agent=' + encodeURIComponent(h.agent);   // as soon as the headers arrive; the body is not read, the chat shows the reply
+    } catch (e) { setMsg('err', e.message); }
+  });
+}
+
 async function busy(btn, fn) { if (btn) btn.disabled = true; try { await fn(); } finally { if (btn) btn.disabled = false; } }
 async function doStep(stepId, input, btn) {
+  let done = false;
   await busy(btn, async () => {
     try {
       const r = await api('POST', `/api/modules/${current.id}/step`, { step: stepId, input });
@@ -249,11 +522,57 @@ async function doStep(stepId, input, btn) {
       const next = current.steps.slice(idx + 1).find(s => !s.done) || current.steps.find(s => !s.done);
       selected = current.finishedAt && stepId === current.steps[current.steps.length - 1].id ? null : (next ? next.id : null);
       render(); loadList();
+      const oc = r.result && r.result.check;
+      if (oc && oc.once && oc.lines && oc.lines.length) setMsg('ok', oc.summary + '\n' + oc.lines.join('\n'));   // one-time lines are only in this answer
+      done = true;
     } catch (e) {
       setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message + (e.data && e.data.check && e.data.check.lines && e.data.check.lines.length ? '\n' + e.data.check.lines.join('\n') : ''));
       if (e.data && e.data.needsAck) document.getElementById('ack-area').innerHTML = `<label class="chk"><input type="checkbox" id="ack"> <span>I understand; continue with this key</span></label>`;
     }
   });
+  return done;
+}
+// The notice agent can be a lead or an agent ticked in the list.
+function noticeOptions(m, ticked, chosen) {
+  const names = [...new Set([...(m.leads || []), ...ticked])];
+  return names.map(n => `<option value="${esc(n)}" ${n === chosen ? 'selected' : ''}>${esc(n)}</option>`).join('');
+}
+function refreshNoticeSelect() {
+  const sel = document.getElementById('notice-agent'); if (!sel || !current) return;
+  const ticked = [...document.querySelectorAll('input.grant:checked')].map(i => i.value);
+  sel.innerHTML = noticeOptions(current, ticked, sel.value || current.noticeAgent);
+}
+// Ticking an agent turns its level choice on or off; picking a level shows the "Ask me" box only for levels that need a yes; any edit withdraws a warning that is waiting.
+function onPermChange(el) {
+  const cl = el.classList;
+  const row = el.closest ? el.closest('.perm-row') : null;
+  if (cl.contains('grant')) {
+    refreshNoticeSelect();
+    const sel = row && row.querySelector('select.perm-level'); if (sel) sel.disabled = !el.checked;
+  }
+  if (cl.contains('perm-level') && row && current && levelsConfig(current)) {
+    const wrap = row.querySelector('.perm-ask-wrap');
+    if (wrap) wrap.style.display = sessionLevels(levelsConfig(current)).includes(el.value) ? '' : 'none';
+  }
+  if (cl.contains('grant') || cl.contains('perm-level') || cl.contains('perm-ask')) clearPermWarning();
+}
+document.addEventListener('change', (e) => { if (e.target && e.target.classList) onPermChange(e.target); });
+async function saveGrant(stepId, btn, acknowledged) {
+  const agents = [...document.querySelectorAll('input.grant:checked')].map(i => i.value);
+  const sel = document.getElementById('notice-agent');
+  const agent = sel ? sel.value : null;
+  if (levelsConfig(current)) {
+    const permissions = readPermissions();
+    if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(() => saveGrant(stepId, btn, true)); return; }
+    if (!(await postPermissions(agents, permissions, acknowledged, btn))) return;
+  }
+  const ok = await doStep(stepId, { agents }, btn);
+  if (!ok || !agent) return;
+  try {
+    const r = await api('POST', `/api/modules/${current.id}/notice-agent`, { agent });
+    current.noticeAgent = r.noticeAgent || agent;
+    render();   // repaint so the select shows the saved notice agent
+  } catch (e) { setMsg('err', e.message); }
 }
 async function saveSecrets(stepId, btn) {
   const s = current.steps.find(x => x.id === stepId);
@@ -281,7 +600,34 @@ async function removeModule(btn) {
   await busy(btn, async () => { try { await api('DELETE', `/api/modules/${current.id}`); closePanel(); loadList(); } catch (e) { setMsg('err', e.message); } });
 }
 
-loadList().then(() => { const id = location.hash.slice(1); if (id) openModule(id).catch(() => {}); }).catch(e => { document.getElementById('list').innerHTML = `<div class="msg err show">${esc(e.message)}</div>`; });
+// Back from the service's sign-in (/oauth/callback/<id> redirects here): show how it went, then drop the query from the address bar.
+const SIGNIN_ERRORS = {
+  state: 'This sign-in is no longer valid. Start it again from here.',
+  user: 'This sign-in was started by someone else. Start it again.',
+  expired: 'The sign-in took too long. Start it again.',
+  declined: 'The sign-in was declined.',
+  exchange: 'The service did not accept the sign-in. Check the client ID, secret and redirect address, then try again.',
+  other: 'The sign-in did not finish. Try again.',
+};
+function showSigninResult() {
+  const q = new URLSearchParams(location.search);
+  const result = q.get('signin');
+  if (!result) return null;
+  const code = String(q.get('code') || '');
+  history.replaceState(null, '', location.pathname + location.hash);
+  return result === 'ok' ? { kind: 'ok', text: 'Signed in.' } : result === 'error' ? { kind: 'err', text: Object.prototype.hasOwnProperty.call(SIGNIN_ERRORS, code) ? SIGNIN_ERRORS[code] : SIGNIN_ERRORS.other } : null;
+}
+const signinResult = showSigninResult();
+loadList().then(async () => {
+  const id = location.hash.slice(1);
+  if (!id) return;
+  try {
+    const { module } = await api('GET', `/api/modules/${id}`);
+    const step = module.steps.find(x => x.type === 'signin');
+    await openModule(id, signinResult && step ? step.id : undefined);
+    if (signinResult) setMsg(signinResult.kind, signinResult.text);
+  } catch { /* the list is still shown */ }
+}).catch(e => { document.getElementById('list').innerHTML = `<div class="msg err show">${esc(e.message)}</div>`; });
 </script>
 </body>
 </html>

@@ -1,0 +1,147 @@
+'use strict';
+// The gate: who may do what on which computer. Look is free; act and drive need the agent's level to allow it AND the owner's yes for a session.
+// The hub already decides which agents may call the connector at all, so an agent not listed here simply gets look.
+
+const RANK = { look: 0, act: 1, drive: 2 };
+// What one approval covers: 'act-user' < 'act-system' < 'drive' in the order they are asked. A system run covers a user run, drive (mouse and keyboard in the
+// user's session) covers a user run too, and nothing else: a user-run or drive approval does NOT cover a system run, so the owner is asked again.
+const COVERS = { 'act-user': ['act-user'], 'act-system': ['act-user', 'act-system'], drive: ['act-user', 'drive'] };
+const scopeOf = (need, as) => (need === 'act' ? (as === 'user' ? 'act-user' : 'act-system') : need === 'drive' ? 'drive' : need in COVERS ? need : null);
+const coveredBy = (scopes, want) => [...scopes].some((s) => COVERS[s].includes(want));
+const DENY_COOLDOWN_MS = 2 * 60000;
+const APPROVE_MINUTES = 4;   // the owner's time to answer; a module call is cut off at 300 s
+
+class GateError extends Error {
+  constructor(message, code) { super(message); this.name = 'GateError'; this.code = code; }
+}
+
+const text = (s, max) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+
+/**
+ * createGate({ levels, sessionMinutes, approve, toast, now, log })
+ *   levels: ["agent:level", ...] from the settings; noAskAgents: ["agent", ...] from the trusted settings only (never a tool argument): for these agents a session
+ *   at act or drive (within their level) starts without asking the owner, with the same toast and a log line; everything else is as for an asked session; approve({ call, title, detail, minutes }) -> 'allow' | 'deny' | 'timeout'
+ *   (call: the hub's id of the tool call that needs the yes; the hub knows the agent from it, so no agent is sent);
+ *   toast(computerId, title, message) -> void (a failure is logged, never fatal).
+ */
+function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approve, toast = async () => {}, now = Date.now, log = () => {} } = {}) {
+  const table = new Map();   // agent -> level (when an agent is listed twice the lower level counts)
+  for (const entry of Array.isArray(levels) ? levels : []) {
+    const m = /^([^:\s]{1,64}):(look|act|drive)$/.exec(String(entry).trim());
+    if (!m) continue;
+    const had = table.get(m[1]);
+    if (had === undefined || RANK[m[2]] < RANK[had]) table.set(m[1], m[2]);
+  }
+  const noAsk = new Set();   // agents whose act/drive sessions start without a question; the level check still applies
+  for (const entry of Array.isArray(noAskAgents) ? noAskAgents : []) {
+    const name = typeof entry === 'string' ? entry.trim() : '';
+    if (/^[^:\s]{1,64}$/.test(name)) noAsk.add(name);
+  }
+  // 'agent|computer id' -> { agent, computer: {id, name}, scopes: Map of act-user / act-system / drive -> the time that scope's own approval ends }
+  const sessions = new Map();
+  const denied = new Map();     // key -> time until which the owner is not asked again
+  const pending = new Map();    // key -> { level, promise }
+
+  const levelOf = (agent) => table.get(agent) || 'look';
+  const liveScopes = (s) => (s ? [...s.scopes].filter(([, until]) => until > now()).map(([scope]) => scope) : []);
+  const live = (s) => liveScopes(s).length > 0;
+  // Covered only by a scope whose own approval has not ended: a later approval of another scope does not stretch this one.
+  const covered = (s, want) => coveredBy(liveScopes(s), want);
+
+  // What the owner is told the agent will be able to do.
+  function can(scope) {
+    if (scope === 'drive') return 'use the mouse and keyboard';
+    return scope === 'act-user' ? 'run commands as the signed-in user' : 'run commands as the system account (full control)';
+  }
+  function ask(agent, scope, computer, call) {
+    const name = `${text(computer.name, 60) || 'this computer'} (${text(computer.id, 6)})`;
+    const who = text(agent, 40);
+    const title = `${who} wants to use ${name}`.slice(0, 80);
+    const detail = `For ${sessionMinutes} minutes ${who} may ${can(scope)} on ${name}. Every action is logged. Say no if you did not expect this.`;
+    return Promise.resolve().then(() => approve({ call, title, detail, minutes: APPROVE_MINUTES })).then((d) => {
+      if (d === 'allow' || d === 'deny' || d === 'timeout') return d;
+      throw new GateError('The owner could not be asked right now. Try again in a moment.', 'EAPPROVE');
+    }, (e) => {
+      if (e instanceof GateError) throw e;
+      log('approval request failed:', text(e && (e.code || e.message), 80));
+      throw new GateError('The owner could not be asked right now. Try again in a moment.', 'EAPPROVE');
+    });
+  }
+
+  // opts.call: the hub's id of this tool call, needed whenever the owner has to be asked. opts.as: 'system' (default) or 'user', for the act wording.
+  async function require(agent, need, computer, opts) {
+    const who = typeof agent === 'string' ? agent.trim() : '';
+    const call = opts && typeof opts.call === 'string' ? opts.call.trim() : '';
+    const as = opts && opts.as === 'user' ? 'user' : 'system';
+    if (!who) throw new GateError('The hub did not say which agent is calling, so nothing is allowed.', 'EIDENT');
+    if (!(need in RANK)) throw new Error('unknown level');
+    if (need === 'look') return;
+    if (!computer || typeof computer.id !== 'string' || !computer.id) throw new Error('a computer is needed');
+    const have = levelOf(who);
+    if (RANK[have] < RANK[need]) {
+      throw new GateError(`${who} may only ${have === 'look' ? 'look (see pictures and facts)' : 'look and run commands'} on remote computers, and this needs ${need}. The owner can raise it in Data connectors -> Remote computers -> Status and limits.`, 'ELEVEL');
+    }
+    const want = scopeOf(need, as);
+    const key = `${who}|${computer.id}`;
+    for (;;) {
+      const s = sessions.get(key);
+      if (covered(s, want)) return;
+      if (s && !live(s)) sessions.delete(key);
+      const quiet = noAsk.has(who);   // set by the settings only; an owner's earlier no does not apply to an agent the owner has set not to be asked
+      const cool = quiet ? null : denied.get(key);
+      if (cool && cool > now()) throw new GateError('The owner said no a moment ago. Do not ask again for a couple of minutes.', 'EDENIED');
+      if (cool) denied.delete(key);
+      const p = pending.get(key);
+      if (p) {
+        // One question at a time per agent and computer. A question that covers this need is shared; a smaller one is waited out, then asked again.
+        if (coveredBy([p.scope], want)) { await p.promise; return; }
+        await p.promise.catch(() => {});
+        continue;
+      }
+      if (!call && !quiet) throw new GateError('The hub did not say which call this is, so the owner cannot be asked and nothing is allowed.', 'EIDENT');
+      const entry = { scope: want, promise: null };
+      entry.promise = (async () => {
+        try {
+          if (quiet) log(`session started without asking the owner (no-ask agent): ${text(who, 40)}, ${want}, computer ${text(computer.id, 6)}`);
+          const d = quiet ? 'allow' : await ask(who, want, computer, call);
+          if (d === 'deny') { denied.set(key, now() + DENY_COOLDOWN_MS); throw new GateError('The owner said no.', 'EDENIED'); }
+          if (d === 'timeout') throw new GateError('The owner did not answer in time.', 'ETIMEOUT');
+          const prior = sessions.get(key);   // an approval adds its own scope and its own expiry; the other scopes keep theirs
+          const scopes = new Map(liveScopes(prior).map((sc) => [sc, prior.scopes.get(sc)]));
+          scopes.set(want, now() + sessionMinutes * 60000);
+          sessions.set(key, { agent: who, computer: { id: computer.id, name: text(computer.name, 80) }, scopes });
+          try {
+            await toast(computer.id, 'My Maestro', `${text(who, 40)} is using this computer for the next ${sessionMinutes} minutes.`);
+          } catch (e) { log('toast failed:', text(e && (e.code || e.message), 80)); }
+        } finally { pending.delete(key); }
+      })();
+      pending.set(key, entry);
+      await entry.promise;
+      return;
+    }
+  }
+
+  function list() {
+    const out = [];
+    for (const [key, s] of sessions) {
+      if (!live(s)) { sessions.delete(key); continue; }
+      const alive = liveScopes(s);
+      out.push({ agent: s.agent, computer: { ...s.computer }, level: alive.includes('drive') ? 'drive' : 'act', expiresAt: Math.max(...alive.map((sc) => s.scopes.get(sc))) });
+    }
+    return out;
+  }
+  function end(agent, computerId) { return sessions.delete(`${agent}|${computerId}`); }
+  // True while the agent's approved session for this computer is live and covers the level; the last check before a command is sent.
+  function stillValid(agent, computerId, need, as) {
+    const who = typeof agent === 'string' ? agent.trim() : '';
+    if (!who || !(need in RANK)) return false;
+    if (need === 'look') return true;
+    const s = sessions.get(`${who}|${computerId}`);
+    if (!live(s)) { if (s) sessions.delete(`${who}|${computerId}`); return false; }
+    return covered(s, scopeOf(need, as === 'user' ? 'user' : 'system')) && RANK[levelOf(who)] >= RANK[need];
+  }
+
+  return { require, levelOf, sessions: list, end, stillValid };
+}
+
+module.exports = { createGate, GateError, RANK, DENY_COOLDOWN_MS };

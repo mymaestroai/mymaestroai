@@ -77,6 +77,25 @@ test('classifyCommand: reads, inside writes, outside writes, sends, destroys', (
   assert.strictEqual(c(`cat "${PAT}/pat.md"`), 'read', 'inside a root');
   assert.strictEqual(c('cat ' + path.join(HUB, '.env')), 'admin', 'secrets are admin even to read');
   assert.strictEqual(c('sqlite3 ' + path.join(HUB, 'data', 'memory.db') + ' .tables'), 'admin', 'other agents\' memory is not readable raw');
+  for (const p of [['transcript.db'], ['transcript.db-wal'], ['transcripts', 'doc.db'], ['archived-agents', 'old-20261105', 'chat.jsonl']]) {
+    const f = path.join(HUB, 'data', ...p);
+    assert.strictEqual(c(`sqlite3 ${f} .dump`), 'admin', `the conversation archive is not readable raw: ${p.join('/')}`);
+    assert.strictEqual(c(`cat ${f}`), 'admin', `nor with cat: ${p.join('/')}`);
+    assert.strictEqual(tp.classifyTool({ tool: 'Read', input: { file_path: f }, agentName: 'gp', policy: tp.policyFor(head), cwd: cwd(head) }).cls, 'admin', `nor with Read: ${p.join('/')}`);
+  }
+  // module homes and connector/module settings are secrets too
+  const modPaths = [['modules', 'remote-computers', 'mesh', 'meshcentral-data', 'agentserver-cert-private.key'], ['modules', 'remote-computers', 'accounts.json'], ['modules'], ['connectors.json'], ['modules.json']];
+  for (const p of modPaths) {
+    const f = path.join(HUB, 'data', ...p);
+    for (const cmd of [`cat ${f}`, `head -c 100 ${f}`, `node -e "require('fs').readFileSync('${f}')"`, `cp ${f} /tmp/x`, `tar czf /tmp/x.tgz ${f}`]) {
+      assert.strictEqual(tp.classifyCommand(cmd, o).cls, 'admin', `${cmd}`);
+    }
+    assert.strictEqual(tp.classifyTool({ tool: 'Read', input: { file_path: f }, agentName: 'gp', policy: tp.policyFor(head), cwd: cwd(head) }).cls, 'admin', `Read ${p.join('/')}`);
+    assert.strictEqual(tp.decide({ agent: worker, tool: 'Read', input: { file_path: f }, cwd: cwd(worker) }).decision, 'deny', `worker ${p.join('/')}`);
+    assert.strictEqual(tp.decide({ agent: worker, tool: 'Bash', input: { command: `cat ${f}` }, cwd: cwd(worker) }).decision, 'deny', `worker cat ${p.join('/')}`);
+    assert.strictEqual(tp.decide({ agent: head, tool: 'Bash', input: { command: `cat ${f}` }, cwd: cwd(head) }).decision, 'ask', `head ${p.join('/')}`);
+    assert.strictEqual(tp.decide({ agent: lead, tool: 'Bash', input: { command: `cat ${f}` }, cwd: cwd(lead) }).decision, 'ask', `the lead keeps access (on approval) ${p.join('/')}`);
+  }
   assert.strictEqual(c('echo hi > notes.txt'), 'write_inside');
   assert.strictEqual(c(`mkdir -p "${PAT}/x" && cp a.pdf "${PAT}/x/"`), 'write_inside');
   assert.strictEqual(c('cp report.md ~/Desktop/report.md'), 'write_outside');

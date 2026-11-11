@@ -149,3 +149,7 @@ test('ownerEntries counts agents per owner for the admin switcher', () => {
   assert.deepStrictEqual(X.ownerEntries(undefined, undefined), { infraCount: 0, owners: [] });
   assert.deepStrictEqual(X.ownerEntries([{ name: 'x', owner: 7 }], [{ id: '7', name: 'Seven', role: 'member' }]).owners[0].count, 1, 'numeric owner matches string id');
 });
+
+test('the memory check is for admins only: its stored result and a new check', () => {
+  for (const p of ['/api/memory-health', '/api/memory-health/run', '/api/memory-health/action']) assert.deepStrictEqual(X.classifyRoute(p), { kind: 'admin' }, p);
+});

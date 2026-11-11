@@ -5,6 +5,8 @@
 // then confirmed (journal, then a restart) or cancelled; held items decided through the modules that own them.
 // And the routes: admin only, the password asked again where it matters, the Welcome restore only before any account.
 const { test, after } = require('node:test');
+const { installTripwire, tripped } = require('./helpers/no-live-modules');
+installTripwire();   // before anything under ../lib/backup is required
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
@@ -22,12 +24,16 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-service-'));
 after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 const PW = 'service test passphrase';
 const HUB = () => ({ version: '5.8.1', channel: 'experimental' });
+const noModulePlaces = () => {
+  const no = async () => { throw new Error('no module places in this test'); };
+  return { places: () => [], put: no, list: async () => [], remove: no, get: no };
+};
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function serviceFor(inst, extra = {}) {
   const restarts = [];
   const settings = extra.settings || memSettings();
-  const svc = createBackupService({ ...inst, platform: 'linux', settings, hubInfo: HUB, restart: (why) => restarts.push(why), ...extra });
+  const svc = createBackupService({ ...inst, platform: 'linux', settings, hubInfo: HUB, restart: (why) => restarts.push(why), modulePlaces: noModulePlaces(), ...extra });
   return { svc, settings, restarts };
 }
 
@@ -312,15 +318,17 @@ test('a new backup password keeps the key; "it may have leaked" makes a new key,
   await assert.rejects(svc.finishRotation({ action: 'shred' }), /re-encrypt or delete/);
 });
 
-test('suggested passphrases: six words from the 7,776-word EFF list, picked at random, accepted as a backup password', () => {
-  const { WORDS, suggestPassphrase } = require('../lib/backup/words');
-  assert.strictEqual(WORDS.length, 7776);
-  assert.strictEqual(new Set(WORDS).size, 7776);
-  assert.ok(WORDS.every(w => /^[a-z-]+$/.test(w)));
-  const seen = new Set();
-  for (let i = 0; i < 50; i++) { const p = suggestPassphrase(); const parts = p.split(' '); assert.strictEqual(parts.length, 6); assert.ok(parts.every(w => WORDS.includes(w))); require('../lib/backup/keys').checkPassword(p); seen.add(p); }
-  assert.strictEqual(seen.size, 50, 'no repeats in 50 draws');
-  assert.ok(Math.log2(7776) * 6 > 77, 'about 77 bits');
+test('the setup route answers only the key id (never the recovery key); the old passphrase suggester is gone', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const start = src.indexOf("if (pathname === '/api/backups/setup'");
+  assert.ok(start >= 0, 'the setup route exists');
+  const next = src.indexOf("if (pathname ===", start + 10);
+  const block = src.slice(start, next > 0 ? next : undefined);
+  assert.ok(!block.includes('recoveryKey'), 'the setup route does not mention the recovery key');
+  assert.ok(!/jsonResponse\(res, 200, await svc\.setup/.test(block), 'the raw setup result is not sent');
+  assert.match(block, /\{ keyId: \w+\.keyId \}/, 'only { keyId } goes out');
+  assert.ok(!src.includes('suggest-passphrase'), 'no suggest-passphrase route');
+  assert.ok(!fs.existsSync(path.join(__dirname, '..', 'lib', 'backup', 'words.js')), 'lib/backup/words.js is gone');
 });
 
 test('the routes: admin only, the password asked again for restore, undo and downloads; the Welcome restore only before any account', () => {
@@ -352,4 +360,8 @@ test('the routes: admin only, the password asked again for restore, undo and dow
   assert.match(wel, /if \(hubAuth\.hasUsers\(\)\) return jsonResponse\(res, 403/);
   assert.match(wel, /if \(hubAuth\.hasUsers\(\)\) return jsonResponse\(res, 403[^\n]*\n[^\n]*\n\s+if \(!welcome\.checkSetupToken\(String\(req\.headers\['x-setup-token'\] \|\| ''\)\)\) return jsonResponse\(res, 403/, 'the setup code, from a header, before any body is read, on every step');
   assert.match(wel, /checkStagedAdmin\(\{ login: b\.login, password: b\.password, code: b\.code \}\)[\s\S]{0,80}confirmRestore/);
+});
+
+test('no backup test reached the real modules or connectors (a live install\'s connectors would start)', () => {
+  assert.deepStrictEqual(tripped(), []);
 });

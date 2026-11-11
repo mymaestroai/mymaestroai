@@ -1,0 +1,15 @@
+{ "steps": [
+  { "id": "about", "type": "explain", "title": "What this does", "confirm": "I understand what it can see and do.",
+    "body": "Lets your agents read your Oura Ring data: sleep, readiness, activity, heart rate, blood oxygen and workouts.\n\n**Read-only:** agents cannot change anything in your Oura account.\n\nThe data is fetched from Oura only when an agent asks for it. A nightly connection check asks Oura for one small reading without keeping it. Only your lead agent can read it, unless you tick other agents in the next steps.\n\nEach person connects their own ring with their own Oura app registration. That takes about 10 minutes." },
+  { "id": "register", "type": "outside", "title": "Register your Oura app", "confirm": "I registered the app and have its Client ID and Client Secret.",
+    "body": "Do these on Oura's site:\n\n1. Sign in with your Oura account.\n2. Create a new application.\n3. Give it a name such as \"My Maestro\" and a website.\n4. Add this exact Redirect URI: {{redirectUri}} (the page fills it in; if you open your Maestro from more than one address, add each one's redirect URI).\n5. Save.\n6. Copy the Client ID and the Client Secret for the next step.",
+    "links": [ { "label": "Oura applications", "url": "https://cloud.ouraring.com/oauth/applications" } ] },
+  { "id": "install", "type": "install", "title": "Install" },
+  { "id": "keys", "type": "secrets", "title": "Client ID and secret", "fields": ["CLIENT_ID", "CLIENT_SECRET"],
+    "body": "Paste the Client ID and the Client Secret from the last step." },
+  { "id": "signin", "type": "signin", "title": "Sign in",
+    "body": "Sign in with Oura: you'll go to Oura's page, approve, and come back here." },
+  { "id": "who", "type": "grant", "title": "Who can read it",
+    "body": "Choose which other agents may read your Oura data." },
+  { "id": "done", "type": "finish", "title": "Finish" }
+] }

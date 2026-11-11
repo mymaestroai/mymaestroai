@@ -1,0 +1,30 @@
+{
+  "id": "oura", "name": "Oura Ring", "icon": "🌙", "category": "Health",
+  "summary": "Lets your agents read your Oura Ring data (sleep, readiness, activity, heart rate, blood oxygen and workouts) when you ask. Read-only.",
+  "risk": "read",
+  "catalog": { "verified": "2026-11-06", "api": "Oura API v2", "official": false },
+  "health": { "check": "oura" },
+  "server": { "type": "mcp-stdio", "script": "server.js" },
+  "secrets": [
+    { "name": "CLIENT_ID", "label": "Client ID" },
+    { "name": "CLIENT_SECRET", "label": "Client secret" },
+    { "name": "REFRESH_TOKEN", "label": "Oura sign-in", "optional": true }
+  ],
+  "oauth": {
+    "flow": "code",
+    "authorizeUrl": "https://cloud.ouraring.com/oauth/authorize",
+    "tokenUrl": "https://api.ouraring.com/oauth/token",
+    "scopes": ["daily", "heartrate", "workout", "spo2"],
+    "pkce": true,
+    "rotatesRefreshToken": true,
+    "clientIdSecret": "CLIENT_ID", "clientSecretSecret": "CLIENT_SECRET", "refreshTokenSecret": "REFRESH_TOKEN"
+  },
+  "tools": {
+    "oura_sleep": "read", "oura_readiness": "read", "oura_activity": "read",
+    "oura_heart_rate": "read", "oura_spo2": "read", "oura_workouts": "read"
+  },
+  "docs": {
+    "homepage": "https://cloud.ouraring.com/docs/",
+    "revoke": "Remove the app under Connected apps in your Oura account, or delete it at https://cloud.ouraring.com/oauth/applications."
+  }
+}

@@ -4,6 +4,8 @@
 // recorded and announced once; a warning when none was made for 3 days; the keep rules (newest nightly + the first of
 // each recent week, counted rather than dated) applied only to nightly backups this computer made, still unchanged.
 const { test, after } = require('node:test');
+const { installTripwire, tripped } = require('./helpers/no-live-modules');
+installTripwire();   // before anything under ../lib/backup is required
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
@@ -13,6 +15,10 @@ const places = require('../lib/backup/places');
 const restore = require('../lib/backup/restore');
 const { createBackupService } = require('../lib/backup/service');
 const { makeInstall, memSettings } = require('./helpers/backup-fixture');
+const noModulePlaces = () => {
+  const no = async () => { throw new Error('no module places in this test'); };
+  return { places: () => [], put: no, list: async () => [], remove: no, get: no };
+};
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-schedule-'));
 after(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -371,7 +377,7 @@ test('the keep rules on a real install: only nightly backups this computer made,
   const disk = path.join(TMP, 'keep-disk'); fs.mkdirSync(disk);
   const usb = path.join(TMP, 'keep-usb');   // a backup folder that is unplugged right now
   const settings = memSettings();
-  const svc = createBackupService({ ...inst, platform: 'linux', settings, hubInfo: () => ({}) });
+  const svc = createBackupService({ ...inst, platform: 'linux', settings, hubInfo: () => ({}), modulePlaces: noModulePlaces() });
   settings.update({ backup: { ...(settings.get().backup || {}), folders: [{ dir: disk }, { dir: usb }] } });
   const local = path.join(inst.hubHome, 'backups'); fs.mkdirSync(local, { recursive: true });
   const put = (dir, name, size) => fs.writeFileSync(path.join(dir, name), Buffer.alloc(size, 1));
@@ -464,4 +470,8 @@ test('wiring: the route asks again for the password, the server starts the ticke
   assert.match(app, /backups: q\.get\('backups'\) === '1'/);   // the page's address or a tapped notification (lib/ui-open-target.js)
   assert.match(app, /if \(t\.backups\) openSettingsAt\('st-backups-section'\);/);
   assert.match(read('lib/backup/collect.js'), /\/\^backup-schedule\\\.json\$\//);
+});
+
+test('no backup test reached the real modules or connectors (a live install\'s connectors would start)', () => {
+  assert.deepStrictEqual(tripped(), []);
 });
