@@ -78,6 +78,12 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 - **The phone gets the same Workers list and history.** In a chat on the phone, a small chip under the agent's name appears while workers are listed, with the same counts and red warning as the desktop button. Tap it for a full-screen list (with Stop for running workers), then tap a worker to see it full screen: its tool calls, its words so far, any error. The worker history is in the ⋮ menu as "Worker history", with search, filters, whose workers to see, and each past run full screen. Temporary workers now show their label instead of "temporal" in a reply's tool panel. A worker someone stopped shows as stopped rather than failed, and when the phone missed how a worker ended (while it was asleep, for example), it asks the worker history instead of calling it done.
 
+## [5.9.1] - 2026-11-11
+
+A security release. For a hub on 5.9.0, this is the only change.
+
+- **Security: Node.js 22.23.5 for new installs, and a warning for older ones.** Node.js issued security fixes on 2026-11-11 (the highest rated HIGH for the 22.x line), touching how incoming HTTP requests are parsed, TLS session resumption and server names, and HTTP/2. New installs now get Node.js 22.23.5 (its checksums taken from nodejs.org's signed list), and the automatic tests run on it. An install made with the one-line installer keeps its own Node.js until the installer runs again: running the same one-line command again updates that install in place to the newest version of its channel, replaces its Node.js and keeps your settings, agents and data (an install that follows experimental adds `bash -s -- --channel experimental`). A hub that runs on the computer's own Node.js gets the fix from the system's updates; restart the hub afterwards. Once a hub has this update, a Node.js older than 22.23.5, 24.22.3 or 26.13.1 turns the security check red, with the exact fix for that install.
+
 ## [5.9.0] - 2026-11-04
 
 What's new since 5.8.1: encrypted backups with a copy every night and a warning before any restore, a ChatGPT subscription as your first AI during setup, agents working in your local time, the time of every message in the chat, and notification clicks that open the tab you already have, plus security fixes and many smaller fixes. Press Update in your Maestro to get it; on 5.7.0 or later it also tells you when an update is ready.
@@ -1199,7 +1205,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.9.0...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.9.1...dev
+[5.9.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.9.1
 [5.9.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.9.0
 [5.8.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.8.1
 [5.8.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.8.0

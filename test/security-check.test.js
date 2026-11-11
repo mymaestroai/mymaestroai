@@ -117,7 +117,7 @@ test('a clean install reports nothing critical and no warnings', async () => {
     sandboxStatus: async () => ({ docker: true, imageReady: true, containers: [] }),
     git: async () => ({ branch: 'main', dirty: [], tracked: [], historySecrets: [], fetchAgeDays: 2 }),
     hubStartedAt: () => new Date('2026-10-17T12:30:00Z'), codeNewestMtime: () => new Date('2026-10-17T12:00:00Z'),
-    nodeVersion: 'v22.23.4', publicAddress: () => null, pushEndpoints: () => ['fcm.googleapis.com'], lockfilePresent: () => true,
+    nodeVersion: 'v22.23.5', publicAddress: () => null, pushEndpoints: () => ['fcm.googleapis.com'], lockfilePresent: () => true,
     backupTimers: async () => ['hub-backup.timer'], otherAccounts: async () => 0, unitInfo: async () => ({ kind: 'systemd-system', unit: 'agent-hub.service', noNewPrivileges: true }),
   }).check();
   assert.strictEqual(r.critical, 0, JSON.stringify(r.items.filter(i => i.level === 'critical').map(i => i.id)));
@@ -203,17 +203,17 @@ test('wiring: routes, nightly schedule, Settings box, banner, docs, npm script',
   assert.ok(JSON.parse(read('package.json')).scripts['security-check'] === 'node scripts/security-check.js');
 });
 
-// ── Node.js security releases (2026-10-21): the October releases, rated HIGH, make an older Node.js critical, and the
+// ── Node.js security releases (2026-11-11): the November releases, rated HIGH, make an older Node.js critical, and the
 // fix names the right command for this install (the installer's own Node.js, or the computer's). ──
 test('Node.js behind a HIGH-rated security release is critical, with the fix that fits the install', async () => {
-  assert.deepStrictEqual(sc.NODE_FLOORS, { 22: '22.23.4', 24: '24.22.1', 26: '26.12.1' });
+  assert.deepStrictEqual(sc.NODE_FLOORS, { 22: '22.23.5', 24: '24.22.3', 26: '26.13.1' });
   assert.strictEqual(sc.NODE_SECURITY_RELEASE.rated, 'HIGH');
   const r = await sc.createSecurityCheck({ ...BAD, nodeVersion: 'v22.23.3' }).check();
   const n = byId(r, 'node');
   assert.strictEqual(n.level, 'critical');
-  assert.match(n.title, /Node\.js v22\.23\.3 is missing security fixes rated HIGH \(fixed in 22\.23\.4\)/);
+  assert.match(n.title, /Node\.js v22\.23\.3 is missing security fixes rated HIGH \(fixed in 22\.23\.5\)/);
   assert.match(n.fix || '', /^To fix it, /);
-  const ok = await sc.createSecurityCheck({ ...BAD, nodeVersion: 'v22.23.4' }).check();
+  const ok = await sc.createSecurityCheck({ ...BAD, nodeVersion: 'v22.23.5' }).check();
   assert.strictEqual(byId(ok, 'node').level, 'ok');
 });
 
@@ -245,13 +245,13 @@ test('nodeSecurity: installer-managed or the computer\'s own Node.js, branch, qu
   assert.strictEqual(sys.managed, false);
   assert.match(sys.how, /sudo apt-get update && sudo apt-get install --only-upgrade nodejs/);
   assert.match(sys.how, /point the hub's service at that new Node\.js/);
-  assert.match(sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/opt/homebrew/bin/node', home: '/Users/u', env: {}, platform: 'darwin', branch: 'main' }).how, /brew upgrade node@22, or brew upgrade node; nvm: nvm install 22\.23\.4/);
+  assert.match(sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/opt/homebrew/bin/node', home: '/Users/u', env: {}, platform: 'darwin', branch: 'main' }).how, /brew upgrade node@22, or brew upgrade node; nvm: nvm install 22\.23\.5/);
   const b = (v) => sc.nodeSecurity({ nodeVersion: v, execPath: '/usr/bin/node', env: {}, branch: 'main' }).behind;
-  assert.strictEqual(b('v22.23.4'), false);
-  assert.strictEqual(b('v22.23.4-rc.1'), true, 'a prerelease of the fix is not the fix');
+  assert.strictEqual(b('v22.23.5'), false);
+  assert.strictEqual(b('v22.23.5-rc.1'), true, 'a prerelease of the fix is not the fix');
   assert.strictEqual(b('v22.24.0-rc.1'), false);
   assert.strictEqual(b('v24.22.0'), true);
-  assert.strictEqual(b('v26.12.1'), false);
+  assert.strictEqual(b('v26.13.1'), false);
 });
 
 test('a Node.js line with no security floor (odd or end-of-life) is a warning, never ok', async () => {
