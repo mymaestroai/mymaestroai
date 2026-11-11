@@ -10,6 +10,7 @@ const { createSandbox } = require('../lib/sandbox');
 
 function rig(o = {}) {
   const calls = [];
+  let rmTried = false;                    // set once a plain rm was refused (o.rmFails)
   const states = o.states || {};          // container name -> status string ('running'|'exited'|null)
   const docker = async (args) => {
     calls.push(args);
@@ -18,6 +19,7 @@ function rig(o = {}) {
     if (cmd === 'version' && o.noDocker) throw new Error('docker: not found');
     if (cmd === 'inspect') {
       const st = states[args[args.length - 1]]; if (!st) throw new Error('No such container');
+      if (rmTried && o.afterRmInspectError && args[2] === '{{.State.Status}}') throw o.afterRmInspectError;   // the follow-up status look after a failed rm
       if (args.includes('{{.HostConfig.Init}}')) {
         if (o.initError) throw new Error('context deadline exceeded');
         if (o.onInit) await o.onInit(states, args[args.length - 1]);   // a hook run while the Init answer is awaited
@@ -26,11 +28,13 @@ function rig(o = {}) {
       if (o.binds && String(args[2]).includes('.Mounts')) return { stdout: o.binds().map(b => `${b}\n`).join(''), stderr: '' };
       return { stdout: st + '\n', stderr: '' };
     }
+    if (cmd === 'create' && o.createFails > 0) { o.createFails--; throw Object.assign(new Error('create failed'), { stderr: 'create failed' }); }
     if (cmd === 'create') { states[args[args.indexOf('--name') + 1]] = 'created'; return { stdout: 'id\n', stderr: '' }; }
     if (cmd === 'start') { states[args[args.length - 1]] = 'running'; return { stdout: '', stderr: '' }; }
     if (cmd === 'rm') {   // like Docker: a running or paused box is refused without -f; a removed box is gone
       const n = args[args.length - 1];
       if (args.includes('-f')) { delete states[n]; return { stdout: '', stderr: '' }; }
+      if (o.rmFails) { rmTried = true; throw Object.assign(new Error('removal refused'), { stderr: 'Error response from daemon: removal refused\nsecond line' }); }
       if (states[n] === 'running' || states[n] === 'paused') throw new Error('You cannot remove a running container');
       delete states[n]; return { stdout: '', stderr: '' };
     }
@@ -201,6 +205,141 @@ test('ensure: other folders AND no init: made again with the "other folders" log
   assert.deepStrictEqual(did(), [`rm ${name}`, 'create', `start ${name}`]);
   assert.ok(logs.includes(`${name} was made for other folders; making it again`), logs.join('|'));
   assert.ok(!logs.some(l => l.includes('without an init process')));
+});
+
+test('ensure: a removal asked while an ensure is in flight waits for it, and a caller arriving after the removal waits for the removal instead of sharing the in-flight ensure', async () => {
+  // Before the change: B returned A's promise (no removal wait before the share) and remove() ran stop while A's start was still under way.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-order-'));
+  const ws = (a) => path.join(dir, 'workspaces', a.name);
+  const agent = { name: 'sam', model: 'claude-sdk/x' };
+  const name = 'hub-agent-sam';
+  const order = []; const states = { [name]: 'exited' };
+  let releaseStart; const startGate = new Promise(res => { releaseStart = res; });
+  let starts = 0, sb;
+  const docker = async (args) => {
+    const last = args[args.length - 1];
+    if (args[0] === 'image') return { stdout: '', stderr: '' };
+    if (args[0] === 'inspect') {
+      if (!states[name]) throw Object.assign(new Error('No such container'), { stderr: `Error: No such container: ${name}` });
+      if (args.includes('{{.HostConfig.Init}}')) return { stdout: 'true\n', stderr: '' };
+      if (String(args[2]).includes('.Mounts')) return { stdout: sb.mountsFor(agent).map(b => `${b}\n`).join(''), stderr: '' };
+      return { stdout: states[name] + '\n', stderr: '' };
+    }
+    if (args[0] === 'start') {
+      order.push('start-begin');
+      if (starts++ === 0) await startGate;   // caller A's start answer is held
+      states[last] = 'running'; order.push('start-end'); return { stdout: '', stderr: '' };
+    }
+    if (args[0] === 'stop') { order.push('stop'); return { stdout: '', stderr: '' }; }
+    if (args[0] === 'rm') { order.push('rm'); delete states[name]; return { stdout: '', stderr: '' }; }
+    if (args[0] === 'create') { order.push('create'); states[name] = 'created'; return { stdout: 'id\n', stderr: '' }; }
+    return { stdout: '', stderr: '' };
+  };
+  sb = createSandbox({ docker, wrapperDir: path.join(dir, 'w'), uid: 1000, gid: 1000, image: 'agent-hub-sandbox:test', log: () => {}, workspaceFor: ws, rootsFor: () => [] });
+  fs.mkdirSync(ws(agent), { recursive: true });
+  const wait = (ms = 30) => new Promise(res => setTimeout(res, ms));
+  const pa = sb.ensure(agent);
+  await wait();
+  assert.deepStrictEqual(order, ['start-begin'], 'A is in its start, held');
+  const removal = sb.remove(agent);
+  let bDone = false;
+  const pb = sb.ensure(agent).then((n) => { order.push('B-done'); bDone = true; return n; });
+  await wait();
+  assert.deepStrictEqual(order, ['start-begin'], 'the removal waits for A: no stop while A\'s start is under way');
+  assert.strictEqual(bDone, false);
+  releaseStart();
+  assert.strictEqual(await pa, name, 'A resolves with the name');
+  await removal;
+  assert.strictEqual(await pb, name);
+  assert.deepStrictEqual(order, ['start-begin', 'start-end', 'stop', 'rm', 'create', 'start-begin', 'start-end', 'B-done'],
+    'A finished, then the removal, then B made its own box; B never returned before the removal was done');
+  assert.strictEqual(states[name], 'running');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('ensure: a rejected ensure does not stay in the per-name map: the next ensure runs again', async () => {
+  // Depends on the .finally clean-up in ensureNow: without it the rejected promise would be returned to every later caller.
+  const { r, name } = initTest({ init: false, createFails: 1 });
+  await assert.rejects(() => r.sb.ensure(member), /create failed/);
+  assert.strictEqual(r.calls.filter(c => c[0] === 'create').length, 1);
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.strictEqual(r.calls.filter(c => c[0] === 'create').length, 2, 'a new create call, not the old rejection');
+  assert.strictEqual(r.states[name], 'running');
+});
+
+test('ensure: two concurrent callers while the first ensure fails both get the rejection (one create attempt), and a later one runs afresh', async () => {
+  let release; const gate = new Promise(res => { release = res; });
+  let n = 0;
+  const { r, name } = initTest({ init: false, createFails: 1, onInit: async () => { if (n++ === 0) await gate; } });
+  const p1 = r.sb.ensure(member).then(() => null, (e) => e);
+  await new Promise(res => setTimeout(res, 30));
+  const p2 = r.sb.ensure(member).then(() => null, (e) => e);
+  await new Promise(res => setTimeout(res, 30));
+  release();
+  const [e1, e2] = await Promise.all([p1, p2]);
+  assert.ok(e1 && /create failed/.test(e1.message), 'first caller rejected');
+  assert.ok(e2 && /create failed/.test(e2.message), 'second caller got the same rejection');
+  assert.strictEqual(r.calls.filter(c => c[0] === 'create').length, 1, 'the second caller shared the first ensure');
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.strictEqual(r.calls.filter(c => c[0] === 'create').length, 2);
+});
+
+test('ensure: no init, right folders, plain rm fails and the box is still stopped: logged "could not be removed", the old box is started, nothing created', async () => {
+  // Depends on the catch branch in ensureOnce that starts the old box (boxState exited and same folders).
+  const { r, logs, name, did } = initTest({ init: false, rmFails: true });
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.deepStrictEqual(did(), [`rm ${name}`, `start ${name}`]);
+  assert.ok(!r.calls.some(c => c[0] === 'create'));
+  assert.ok(logs.some(l => l.includes('could not be removed')), logs.join('|'));
+  assert.ok(logs.some(l => l.includes('removal refused')), 'the first line of the refusal is in the log');
+  assert.ok(!logs.some(l => l.includes('making it again')), logs.join('|'));
+});
+
+test('ensure: no init, OTHER folders, plain rm fails and the box is still stopped: ensure throws, no start, no create', async () => {
+  // Depends on the "!same" test in the catch of ensureOnce: a box for other folders must never be started as it is.
+  const { r, name, did } = initTest({ init: false, rmFails: true, binds: () => ['/somewhere/else'] });
+  await assert.rejects(() => r.sb.ensure(member), /removal refused/);
+  assert.deepStrictEqual(did(), [`rm ${name}`]);
+  assert.strictEqual(r.states[name], 'exited');
+});
+
+test('ensure: rm fails and the follow-up status inspect itself fails without "No such container" (a timeout): ensure throws, nothing started or created, right folders or not', async () => {
+  // Depends on removeStopped rethrowing the rm error when the inspect error is not "no such container", and on the
+  // "e.boxState === undefined" refusal in ensureOnce (without it the old box would be started on a guess).
+  for (const sameFolders of [true, false]) {
+    const timeout = Object.assign(new Error('Command failed: docker inspect: timed out'), { stderr: 'context deadline exceeded' });
+    const { r, name, did } = initTest({ init: false, rmFails: true, afterRmInspectError: timeout, ...(sameFolders ? {} : { binds: () => ['/somewhere/else'] }) });
+    await assert.rejects(() => r.sb.ensure(member), /removal refused/, `same folders: ${sameFolders}`);
+    assert.deepStrictEqual(did(), [`rm ${name}`], `same folders: ${sameFolders}`);
+    assert.ok(!r.calls.some(c => c[0] === 'create'));
+  }
+});
+
+test('ensure: rm fails and the follow-up status inspect says "No such container": the box counts as gone and a new one is created with --init', async () => {
+  // Depends on the no-such-container regex in removeStopped.
+  const gone = Object.assign(new Error('Command failed'), { stderr: 'Error: No such container: hub-agent-boxed' });
+  const { r, logs, name, did } = initTest({ init: false, rmFails: true, afterRmInspectError: gone });
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.deepStrictEqual(did(), [`rm ${name}`, 'create', `start ${name}`]);
+  assert.ok(r.calls.find(c => c[0] === 'create').includes('--init'));
+  assert.ok(logs.includes(`${name} was made without an init process; making it again`), logs.join('|'));
+});
+
+test('ensure: the "made without an init process; making it again" line is written only after the rm succeeded', async () => {
+  // Depends on the log call placed after the awaited rm in removeStopped (a log before the rm would also fire for a refused one).
+  for (const refused of ['running', 'paused']) {
+    const { r, logs, name } = initTest({ init: false, onInit: async (states, n) => { states[n] = refused; } });
+    if (refused === 'running') assert.strictEqual(await r.sb.ensure(member), name);
+    else await assert.rejects(() => r.sb.ensure(member), /cannot remove a running container/);
+    assert.ok(r.calls.some(c => c.join(' ') === `rm ${name}`), 'rm was tried');
+    assert.ok(!logs.some(l => l.includes('was made without an init process')), `${refused}: ${logs.join('|')}`);
+    assert.ok(!logs.some(l => l.includes('making it again')), `${refused}: ${logs.join('|')}`);
+    if (refused === 'running') assert.ok(logs.includes(`${name} is running again; left as it is`), logs.join('|'));
+  }
+  // and when the rm succeeds the line is there
+  const ok = initTest({ init: false });
+  await ok.r.sb.ensure(member);
+  assert.ok(ok.logs.includes(`${ok.name} was made without an init process; making it again`));
 });
 
 test('wrapper: the SDK launches a script that execs the client inside the box forwarding only the listed variables', () => {
