@@ -9460,6 +9460,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         overlay.dataset.dialogPersistent = '1';   // the agent waits for an answer: Esc and the backdrop leave it open
         questionOverlays[request_id] = overlay;
 
+        // The hub adds "Skip" to a question's choices (ask_user allow_skip, lib/sdk-chat.js): it is shown as a Skip button
+        // beside Submit that answers at once, not as one more choice to pick and then submit. With several questions in
+        // one card, each keeps its own Skip choice (to skip one of them) and the button skips them all.
+        const isSkip = (o) => o && String(o.label || '').trim().toLowerCase() === 'skip';
+        const canSkip = questions.every(q => (q.options || []).some(isSkip));
+        const shownOptions = (q) => (q.options || []).filter(o => !(isSkip(o) && questions.length === 1));
+        // Nothing to pick (no choices but Skip, no model list): the question is answered in words, the text box leads.
+        const textOnly = questions.every(q => !shownOptions(q).length && !(Array.isArray(q.models) && q.models.length));
+
         let html = '<div class="question-modal">';
         html += '<h3>Agent needs your input</h3>';
 
@@ -9470,7 +9479,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           }
           html += `<p class="question-text">${esc(q.question)}</p>`;
           html += `<div class="question-options">`;
-          for (const opt of (q.options || [])) {
+          for (const opt of shownOptions(q)) {
             const safeLabel = esc(opt.label).replace(/"/g, '&quot;');
             html += `<button class="question-option" data-qi="${i}" data-label="${safeLabel}">`;
             html += `<strong>${esc(opt.label)}</strong>`;
@@ -9482,11 +9491,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (Array.isArray(q.models) && q.models.length) html += `<label class="question-model-pick" data-qi="${i}"><span>Or pick any model this hub can use</span></label>`;
         }
 
-        html += '<div class="question-divider">or type a custom answer</div>';
+        if (!textOnly) html += '<div class="question-divider">or type a custom answer</div>';
         html += '<div class="question-custom">';
-        html += '<input type="text" placeholder="Type your answer..." id="question-custom-input">';
+        // A text box, not a one-line field: answers can run to a paragraph. It grows with the text (up to about ten
+        // lines, then scrolls) and its corner drags to any size. Return makes a new line; ⌘Return / Ctrl+Enter sends.
+        html += `<textarea rows="3" placeholder="${textOnly ? 'Type your answer…' : 'Type your own answer…'}" id="question-custom-input"></textarea>`;
         html += '</div>';
-        html += '<div class="question-actions"><span class="question-hint" id="question-hint">Pick an answer, then press Submit.</span><button id="question-submit" disabled>Submit</button></div>';
+        html += '<div class="question-actions"><span class="question-hint" id="question-hint">Pick an answer, then press Submit.</span>'
+          + '<span class="question-buttons">' + (canSkip ? '<button id="question-skip" type="button">Skip</button>' : '') + '<button id="question-submit" disabled>Submit</button></span></div>';
         html += '</div>';
         overlay.innerHTML = html;
 
@@ -9530,11 +9542,19 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const customInput = overlay.querySelector('#question-custom-input');
         const submitBtn = overlay.querySelector('#question-submit');
         const hint = overlay.querySelector('#question-hint');
+        const sendKeys = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? '⌘Return' : 'Ctrl+Enter';
         const refresh = () => {
           const typed = customInput.value.trim();
           const complete = typed || questions.every((q, i) => selected[i] !== undefined);
           submitBtn.disabled = !complete;
-          hint.textContent = typed ? 'Your typed answer will be sent.' : complete ? 'Press Submit to send.' : (questions.length > 1 ? 'Pick an answer for each question, then press Submit.' : 'Pick an answer, then press Submit.');
+          hint.textContent = typed ? `Your typed answer will be sent (${sendKeys}).` : complete ? 'Press Submit to send.'
+            : textOnly ? `Type your answer, then press Submit (${sendKeys}).`
+            : (questions.length > 1 ? 'Pick an answer for each question, then press Submit.' : 'Pick an answer, then press Submit.');
+        };
+        // Grows with what is typed, up to the cap; a size dragged by hand is kept (it never shrinks the box).
+        const grow = () => {
+          const cap = 260;
+          if (customInput.scrollHeight > customInput.clientHeight && customInput.clientHeight < cap) customInput.style.height = Math.min(customInput.scrollHeight + 2, cap) + 'px';
         };
         overlay.querySelectorAll('.question-option').forEach(btn => {
           btn.addEventListener('click', () => {
@@ -9555,9 +9575,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           submitAnswers(answers);
         };
         submitBtn.addEventListener('click', submitAll);
-        customInput.addEventListener('input', refresh);
+        const skipBtn = overlay.querySelector('#question-skip');
+        if (skipBtn) skipBtn.addEventListener('click', () => {   // one click: every question answered "Skip", as the choice did
+          const answers = {};
+          questions.forEach((q, i) => { answers[i.toString()] = (q.options || []).find(isSkip).label; });
+          submitAnswers(answers);
+        });
+        customInput.addEventListener('input', () => { grow(); refresh(); });
         customInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && customInput.value.trim()) submitAll();
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && customInput.value.trim()) { e.preventDefault(); submitAll(); }
         });
         refresh();
 

@@ -372,6 +372,10 @@
     .question .qhint { font-size: 12px; color: var(--text-dim); }
     .question .qsubmit { min-height: 44px; padding: 8px 18px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; }
     .question .qsubmit:disabled { opacity: 0.45; }
+    .question .qbuttons { display: flex; gap: 8px; flex-shrink: 0; }
+    .question .qskip { min-height: 44px; padding: 8px 16px; border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; color: var(--text); }
+    .question .qcustom textarea { flex: 1; min-height: 76px; max-height: 50vh; resize: vertical; font: inherit; font-size: 16px; line-height: 1.4; color: var(--text); background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 10px; }
+    .question .qcustom textarea:focus { outline: none; border-color: var(--accent); }
     .question button.opt small { display: block; color: var(--text-dim); font-size: 12px; }
     /* ask_user with choose_model: every model the hub can use, one drop-down under the buttons */
     .question .qmodel { display: block; margin-top: 8px; }
