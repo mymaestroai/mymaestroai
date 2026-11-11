@@ -802,6 +802,26 @@
       font-style: italic;
       text-align: left;
     }
+    /* Turns the hub starts by itself, folded into one closed card (or a stack of cards); tap to open */
+    .auto-card, .auto-stack { margin: 8px 0; max-width: 100%; --auto-color: #8a8a85; }
+    .auto-card-consult { --auto-color: #8b6fd6; }
+    .auto-card-schedule { --auto-color: #c9a227; }
+    .auto-card-notice { --auto-color: #8a8a85; }
+    .auto-card-head, .auto-stack-head {
+      display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; box-sizing: border-box;
+      padding: 6px 12px; text-align: left; cursor: pointer; font: inherit; font-size: 0.82rem; line-height: 1.3;
+      color: #c3c2b7; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border);
+      border-left: 3px solid var(--auto-color); border-radius: 4px;
+    }
+    .auto-card-head:hover, .auto-stack-head:hover { background: rgba(255, 255, 255, 0.06); }
+    .auto-card-head:focus-visible, .auto-stack-head:focus-visible { outline: 2px solid var(--auto-color); outline-offset: 1px; }
+    .auto-card-label { color: var(--auto-color); font-weight: 600; white-space: nowrap; flex: 0 0 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+    .auto-card-time { color: #8f8e84; font-size: 0.75rem; white-space: nowrap; flex: 0 0 auto; }
+    .auto-card-line { color: #c3c2b7; opacity: 0.8; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .auto-card-chev { flex: 0 0 auto; margin-left: auto; color: var(--auto-color); }
+    .auto-card-body, .auto-stack-body { margin: 8px 0 4px 14px; padding-left: 10px; border-left: 1px solid var(--border); }
+    .auto-card-body[hidden], .auto-stack-body[hidden] { display: none; }
+    .auto-from { margin: 4px 0 4px; font-size: 0.75rem; color: #8f8e84; }
     .system-notice {
       background: rgba(245, 166, 35, 0.06);
       border: 1px solid rgba(245, 166, 35, 0.2);

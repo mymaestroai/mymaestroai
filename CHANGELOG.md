@@ -8,6 +8,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 - **Answering a question card is easier.** The answer box is now a text area: it starts at three lines, grows as you type to about ten, then scrolls, and its corner drags to any size. Return starts a new line; ⌘Return (Ctrl+Enter on Windows and Linux) sends. When a question offers nothing to pick but Skip, the text box shows first, without the "or type a custom answer" line. Skip is now a button beside Submit that answers at once, instead of one more choice to select and then submit; when a card holds several questions, the button skips them all. Same on the phone page.
 
+- **Consultations, scheduled tasks and hub notices fold into cards in the chat.** A turn your Maestro starts by itself (another agent asking one of yours a question, a scheduled task, a finished job, a resumed session) now shows as one closed card instead of its whole prompt and reply: violet for a consultation, gold for a scheduled task, grey for other hub notices. Each card shows who started it, when, and the first line of the reply; tap it to see everything as before. Three or more in a row fold into one line. When an agent's reply needs you (an answer, a decision, or something you asked to be told), it shows open below its card and your phone gets a notice. Opening a chat lands on your last real conversation. To show every turn in full again, untick Settings → Agents → Chat on the computer, or turn off "Fold automatic turns" in the phone's ⋮ menu; each device keeps its own choice.
+
 - **On the phone, fixing a misspelled word no longer closes the keyboard.** Tapping a red-underlined word in the message box, or pressing Backspace while the phone's spelling menu is open, used to hide the keyboard while the cursor stayed in the word. Your Maestro now brings the keyboard straight back with the cursor where it was, so you can fix the word in place. If you close the keyboard with Back within a second of tapping the box, or straight after typing a letter, it may come back once; closing it again keeps it closed.
 
 - **Agent sandboxes no longer fill up with finished processes.** Each agent's box now starts with a small init process that cleans up finished programs the agent left behind (headless Chrome above all), so they no longer pile up until the box runs out of process slots. A box made before this is made again the next time it is found stopped, with its workspace, Files folder and home kept as they are; a box that is running is never touched, so to move one over now, ask Maestro to stop it while its agent is idle and the next use makes it again.
@@ -77,6 +79,12 @@ All notable changes to My Maestro AI are recorded here. The format follows
 - **One Workers button replaces the row of worker cards.** When agents ran workers, each worker got a card under the header, and the cards stayed until you closed each one, so a busy day filled the screen. Now there is one button by Files that says what is going on, for example "3 working · 2 done". Its list shows each worker with its model, how long it has run and a Stop button, and clicking one opens it full size, as the card did. A finished worker leaves the list 2 minutes after it ends. A failed one stays until you open it, or for 10 minutes; at most 3 are kept, and the button turns red while one is waiting. When nothing is running, the button just says "Workers". "All worker history" opens a panel with every worker your agents called, newest first and grouped by day. You can search what they were asked and what they answered, filter to named agents, temporary workers or failures, and pick whose workers to see (admins can see all agents at once). Click an entry to see its brief, its answer and the work it did, or open the whole run full size.
 
 - **The phone gets the same Workers list and history.** In a chat on the phone, a small chip under the agent's name appears while workers are listed, with the same counts and red warning as the desktop button. Tap it for a full-screen list (with Stop for running workers), then tap a worker to see it full screen: its tool calls, its words so far, any error. The worker history is in the ⋮ menu as "Worker history", with search, filters, whose workers to see, and each past run full screen. Temporary workers now show their label instead of "temporal" in a reply's tool panel. A worker someone stopped shows as stopped rather than failed, and when the phone missed how a worker ended (while it was asleep, for example), it asks the worker history instead of calling it done.
+
+## [5.9.1] - 2026-11-11
+
+A security release. For a hub on 5.9.0, this is the only change.
+
+- **Security: Node.js 22.23.5 for new installs, and a warning for older ones.** Node.js issued security fixes on 2026-11-11 (the highest rated HIGH for the 22.x line), touching how incoming HTTP requests are parsed, TLS session resumption and server names, and HTTP/2. New installs now get Node.js 22.23.5 (its checksums taken from nodejs.org's signed list), and the automatic tests run on it. An install made with the one-line installer keeps its own Node.js until the installer runs again: running the same one-line command again updates that install in place to the newest version of its channel, replaces its Node.js and keeps your settings, agents and data (an install that follows experimental adds `bash -s -- --channel experimental`). A hub that runs on the computer's own Node.js gets the fix from the system's updates; restart the hub afterwards. Once a hub has this update, a Node.js older than 22.23.5, 24.22.3 or 26.13.1 turns the security check red, with the exact fix for that install.
 
 ## [5.9.0] - 2026-11-04
 
@@ -1199,7 +1207,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.9.0...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.9.1...dev
+[5.9.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.9.1
 [5.9.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.9.0
 [5.8.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.8.1
 [5.8.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.8.0
