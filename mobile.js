@@ -4457,6 +4457,9 @@ function showQuestion(data, onAnswered) {
     submit(answers, 'Skipped');
   });
   input.addEventListener('input', () => { grow(); refresh(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && input.value.trim()) { e.preventDefault(); send(); }
+  });
   box.appendChild(custom);
   box.appendChild(actions);
   refresh();
