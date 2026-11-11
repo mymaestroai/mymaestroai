@@ -2403,7 +2403,7 @@
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
-      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section'] },
+      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
       { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
@@ -2790,6 +2790,13 @@
         <div class="st-hint">A notification when an agent's question (or an approval) is still unanswered after this long. Finished replies notify only when you click 🔔 Notify me next to Cancel while the reply is running.</div>
       </div>`;
       }
+
+      html += `<div class="st-section" id="st-chat-section"><h4>Chat</h4>
+        <div class="st-row">
+          <label style="flex-basis:auto"><input type="checkbox" id="st-fold-auto" ${foldAutoOn() ? 'checked' : ''} onchange="saveFoldAuto(this.checked)"> Fold consultations, scheduled tasks and hub notices into cards</label>
+        </div>
+        <div class="st-hint">This browser only. Turn it off to show every automatic turn in full.</div>
+      </div>`;
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
         <div class="st-row">
@@ -6447,16 +6454,37 @@
             // Add a visual separator so user knows this is restored history
             appendSystemNotice(chatId, `📜 Restored ${history.length} messages from previous session`);
             const times = msgTimeLines(history);   // the date and time under each message
-            for (const [i, msg] of history.entries()) {
+            for (const msg of history) {
               // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place,
               // with its tool calls, once the chat follows it (reattachIfIdle), so it is not shown twice.
               if (msg.inProgress) { chats[chatId].inProgress = { text: msg.content || '', ts: msg.ts || null }; continue; }
-              if (msg.role === 'user' && msg.origin?.kind) appendSystemNotice(chatId, `⚡ ${hubOriginLabel(msg.origin)} — ${hubTurnTime(msg.ts)}`);
-              chats[chatId].messages.push({ role: msg.role, content: msg.content });
-              const hid = appendMessage(chatId, msg.role, msg.content);
+            }
+            // One saved entry as the chat draws it: appendMessage + saved tool calls + reasoning + the time line.
+            // into: where the bubble goes (default the panel; a card's body); push: false when chat.messages already has it;
+            // show: false only pushes it (a reply drawn open after its card).
+            const draw = (i, { into = null, notice = true, push = true, show = true } = {}) => {
+              const msg = history[i];
+              if (notice) { if (msg.role === 'user' && msg.origin?.kind) appendSystemNotice(chatId, `⚡ ${hubOriginLabel(msg.origin)} — ${hubTurnTime(msg.ts)}`); }
+              if (push) chats[chatId].messages.push({ role: msg.role, content: msg.content });
+              if (!show) return null;
+              const hid = appendMessage(chatId, msg.role, msg.content, into);
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
+              return hid;
+            };
+            const panelEl = document.getElementById(`messages-${chatId}`);
+            if (foldAutoOn()) {
+              // Automatic turns (consultations, scheduled tasks, hub notices) fold into closed cards; three or more in a row into a stack.
+              for (const item of autoGroupHistory(history)) {
+                if (item.type === 'entry') draw(item.index);
+                else if (item.type === 'card') foldRenderHistoryCard(draw, item, panelEl);
+                else foldRenderHistoryStack(draw, item, panelEl);
+              }
+            } else {
+              for (const [i, msg] of history.entries()) {
+                if (!msg.inProgress) draw(i);
+              }
             }
             // Scroll to bottom after loading history
             const panel = document.getElementById(`messages-${chatId}`);
@@ -6833,7 +6861,213 @@
     // notification they tap) change what is on screen.
     // Newer hubs also publish the user's own turns (origin.kind === 'user'); those are
     // only drawn when this window is not already streaming them itself.
+    // Shared with lib/ui-auto-turns.js; test/ui-auto-turns-desktop.test.js keeps the copies in step.
+    // ── auto-turn helpers (begin) ──
+    const AUTO_STACK_MIN = 3;   // this many closed cards in a row fold into one stack
+    function autoKindOfOrigin(origin) {
+      const k = origin && typeof origin === 'object' ? origin.kind : '';
+      if (!k || typeof k !== 'string') return null;
+      if (k === 'consultation') return 'consultation';
+      if (k === 'schedule') return 'schedule';
+      if (k === 'user' || k === 'comms') return null;
+      return 'notice';
+    }
+    function autoQuoted(s) {
+      const m = /"([^"\n]*)"/.exec(s || '');
+      return m ? m[1] : null;
+    }
+    function autoInfoOf(entry) {
+      if (!entry || entry.role !== 'user' || entry.ask === true) return null;
+      const o = entry.origin;
+      if (o && typeof o === 'object' && o.kind) {
+        const kind = autoKindOfOrigin(o);
+        if (!kind) return null;
+        const from = o.from || o.jobName || null;
+        let label;
+        if (kind === 'consultation') label = `Consultation from ${from || 'another agent'}`;
+        else if (kind === 'schedule') label = `Scheduled task${o.from ? ': ' + o.from : ''}`;
+        else if (o.kind === 'job_notice') label = `Job finished${from ? ': ' + from : ''}`;
+        else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
+        else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
+        else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+        else if (o.kind === 'alert') label = 'Monitor alert';
+        else label = 'Hub turn';
+        return { kind, from, label };
+      }
+      const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
+      let m = /^\[Consultation from agent "([^"\n]*)"/.exec(text);
+      if (m) return { kind: 'consultation', from: m[1], label: `Consultation from ${m[1] || 'another agent'}` };
+      if (entry.tiger_team === true) return { kind: 'consultation', from: null, label: 'Consultation from another agent' };
+      if (text.startsWith('[Scheduled task — started by the hub scheduler')) {
+        const close = text.indexOf(']');
+        const from = close >= 0 ? (/^\s*"([^"\n]*)"/.exec(text.slice(close + 1)) || [])[1] ?? null : null;
+        return { kind: 'schedule', from, label: `Scheduled task${from ? ': ' + from : ''}` };
+      }
+      if (text.startsWith('[Job finished]') || text.startsWith('[Job ended]')) {
+        const finished = text.startsWith('[Job finished]');
+        const jm = /\bJob\s+"([^"\n]*)"/.exec(text);
+        const name = jm ? jm[1] : null;
+        return { kind: 'notice', from: name, label: `${finished ? 'Job finished' : 'Job ended'}${name ? ': ' + name : ''}` };
+      }
+      if (text.startsWith('[Resumed after compression, from the hub]')) return { kind: 'notice', from: null, label: 'Resumed after compression' };
+      if (text.startsWith('[Delivery turn started by the hub')) return { kind: 'notice', from: null, label: 'Consultation replies delivered' };
+      m = /^\[Queued consultation reply from agent "([^"\n]*)"/.exec(text);
+      if (m) return { kind: 'notice', from: m[1], label: 'Consultation replies delivered' };
+      return null;
+    }
+    function autoFirstLine(text, max = 140) {
+      if (typeof text !== 'string') return '';
+      for (const raw of text.split(/\r?\n/)) {
+        let s = raw.trim().replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+)+/, '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+        if (!s || /^[-*_=\s]*$/.test(s)) continue;
+        return s.length > max ? s.slice(0, Math.max(0, max - 1)).trimEnd() + '…' : s;
+      }
+      return '';
+    }
+    function autoCardKind(kind) {
+      return kind === 'consultation' ? 'consult' : kind === 'schedule' ? 'schedule' : 'notice';
+    }
+    function autoSummaryOf(cards) {
+      const n = (cards || []).length;
+      const count = (k) => cards.filter((c) => c.kind === k).length;
+      const parts = [];
+      const c = count('consultation'), s = count('schedule'), h = n - c - s;
+      if (c) parts.push(`${c} ${c === 1 ? 'consultation' : 'consultations'}`);
+      if (s) parts.push(`${s} ${s === 1 ? 'scheduled task' : 'scheduled tasks'}`);
+      if (h) parts.push(`${h} ${h === 1 ? 'hub notice' : 'hub notices'}`);
+      return `${n} automatic ${n === 1 ? 'turn' : 'turns'}: ${parts.join(', ')}`;
+    }
+    function autoCardLine(history, indexes, kindsInfoLabel) {
+      const isAsst = (i) => history[i].role === 'assistant';
+      const asst = indexes.filter(isAsst);
+      const pick = [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
+      if (pick !== undefined) return autoFirstLine(history[pick].content);
+      for (const i of [...indexes].reverse()) {
+        if (isAsst(i)) continue;
+        let c = typeof history[i].content === 'string' ? history[i].content : '';
+        const task = c.indexOf('\nTask:\n');
+        c = task >= 0 ? c.slice(task + 7) : c.trimStart().replace(/^\[[^\]]*\]:?/, '');
+        const line = autoFirstLine(c);
+        if (line) return line;
+      }
+      return kindsInfoLabel || '';
+    }
+    function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {}) {
+      const items = [];
+      const n = Array.isArray(history) ? history.length : 0;
+      let i = Math.max(0, from | 0);
+      while (i < n) {
+        const e = history[i];
+        if (!e || e.inProgress) { i++; continue; }
+        const info = autoInfoOf(e);
+        if (!info) { items.push({ type: 'entry', index: i }); i++; continue; }
+        let last = info, firstTs = e.ts, hasAsst = false;
+        const indexes = [i];
+        let j = i + 1;
+        for (; j < n; j++) {
+          const x = history[j];
+          if (!x) break;
+          if (x.inProgress) continue;
+          if (x.ask === true) break;
+          if (x.role === 'assistant') { hasAsst = true; indexes.push(j); continue; }
+          if (x.role !== 'user' || hasAsst) break;
+          const xi = autoInfoOf(x);
+          if (!xi) break;
+          last = xi; indexes.push(j);
+        }
+        const open = indexes.filter((k) => history[k].role === 'assistant' && history[k].for_owner === true);
+        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+        i = j;
+      }
+      const out = [];
+      let run = [];
+      const flush = () => {
+        if (run.length >= stackMin && run.length > 0) out.push({ type: 'stack', cards: run, summary: autoSummaryOf(run) });
+        else out.push(...run);
+        run = [];
+      };
+      for (const it of items) {
+        if (it.type === 'card' && it.open.length === 0) run.push(it);
+        else { flush(); out.push(it); }
+      }
+      flush();
+      return out;
+    }
+    // ── auto-turn helpers (end) ──
+
+    // Per browser, default on: hub-started turns fold into closed cards (Settings > Agents > Chat).
+    function foldAutoOn() { try { return localStorage.getItem('hub-fold-auto') !== 'off'; } catch { return true; } }
+    function saveFoldAuto(on) {
+      try { localStorage.setItem('hub-fold-auto', on ? 'on' : 'off'); } catch {}
+      hubToast(on ? 'Automatic turns fold into cards in chats opened from now on.' : 'Automatic turns show in full in chats opened from now on.');
+    }
+
+    // One closed card: a header button (label in the kind colour, time, first line, chevron) over a hidden body.
+    // Returns { wrap, head, body, setLine(text) }; the caller puts the entries' messages into body.
+    function foldCardTime(ts) {
+      const d = ts ? new Date(ts) : new Date();
+      return isNaN(d) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+    function foldToggle(head, body, open) {
+      const on = open === undefined ? head.getAttribute('aria-expanded') !== 'true' : !!open;
+      head.setAttribute('aria-expanded', on ? 'true' : 'false');
+      body.hidden = !on;
+      const chev = head.querySelector('.auto-card-chev');
+      if (chev) chev.textContent = on ? '▾' : '▸';
+    }
+    function foldPart(tag, cls, text) {
+      const el = document.createElement(tag);
+      el.className = cls; el.textContent = text;
+      return el;
+    }
+    function foldHead(cls, bodyCls, wrap) {
+      const head = document.createElement('button');
+      head.type = 'button'; head.className = cls; head.setAttribute('aria-expanded', 'false');
+      const body = document.createElement('div');
+      body.className = bodyCls; body.hidden = true;
+      head.addEventListener('click', () => foldToggle(head, body));
+      wrap.appendChild(head); wrap.appendChild(body);
+      return { head, body };
+    }
+    function foldBuildCard(parent, c) {
+      const wrap = document.createElement('div');
+      wrap.className = `auto-card auto-card-${autoCardKind(c.kind)}`;
+      const { head, body } = foldHead('auto-card-head', 'auto-card-body', wrap);
+      const line = foldPart('span', 'auto-card-line', c.firstLine || c.label);
+      head.append(foldPart('span', 'auto-card-label', c.label), foldPart('span', 'auto-card-time', foldCardTime(c.ts)), line, foldPart('span', 'auto-card-chev', '▸'));
+      parent.appendChild(wrap);
+      return { wrap, head, body, setLine: (text) => { line.textContent = text || c.label; } };
+    }
+    function foldFromLine(label) {
+      return foldPart('div', 'auto-from', `from ${label}`);
+    }
+
+    // A history card (draw: the history loader's entry painter, see startSoloChat): its entries that are not marked
+    // for the owner go into the closed body; the marked replies follow the card as ordinary messages, each under a
+    // small "from <label>" line. Every entry reaches chat.messages in order.
+    function foldRenderHistoryCard(draw, c, parent) {
+      const built = foldBuildCard(parent, c);
+      for (const k of c.indexes) {
+        if (c.open.includes(k)) draw(k, { notice: false, show: false });
+        else draw(k, { into: built.body, notice: false });
+      }
+      for (const k of c.open) {
+        parent.appendChild(foldFromLine(c.label));
+        draw(k, { notice: false, push: false });
+      }
+      return built;
+    }
+    function foldRenderHistoryStack(draw, s, panel) {
+      const wrap = document.createElement('div');
+      wrap.className = 'auto-stack';
+      const { head, body } = foldHead('auto-stack-head', 'auto-stack-body', wrap);
+      head.append(foldPart('span', 'auto-card-label', s.summary), foldPart('span', 'auto-card-chev', '▸'));
+      panel.appendChild(wrap);
+      for (const c of s.cards) foldRenderHistoryCard(draw, c, body);
+    }
+
     const hubTurns = {};   // turnId -> { chatId, msgId }
+    const hubTurnCards = {};   // turnId -> { chatId, msgId, wrap, label, setLine }: live cards, kept so a later for_owner can open the reply
     const HUB_AUTO_OPEN = new Set(['job_notice', 'job_report', 'schedule']);
 
     function hubOriginLabel(origin) {
@@ -6878,13 +7112,31 @@
       try { await chat.historyLoaded; } catch {}
       if (!chats[chat.id]) return;   // closed meanwhile
       const last = chat.messages[chat.messages.length - 1];
+      // An automatic turn (consultation, scheduled task, hub notice) draws into a closed card that updates as it runs.
+      let card = null;
+      const autoKind = foldAutoOn() ? autoKindOfOrigin(ev.origin) : null;
+      if (autoKind) {
+        const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
+        if (info) {
+          const panel = document.getElementById(`messages-${chat.id}`);
+          card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…' });
+          card.label = info.label; card.chatId = chat.id;
+          autoScroll(panel);
+        }
+      }
       if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {   // history may already hold the notice
         chat.messages.push({ role: 'user', content: ev.message });
-        setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+        setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message, card && card.body)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
       }
-      appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
-      const msgId = appendMessage(chat.id, 'assistant', '…');
-      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt) };
+      if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
+      const msgId = appendMessage(chat.id, 'assistant', '…', card && card.body);
+      hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt), card };
+      if (card) {
+        card.msgId = msgId;
+        hubTurnCards[ev.turnId] = card;
+        const ids = Object.keys(hubTurnCards);
+        for (const id of ids.slice(0, Math.max(0, ids.length - 50))) delete hubTurnCards[id];
+      }
       setStatus(chat.id, 'thinking', hubOriginLabel(ev.origin));
       markTabUnread(chat.id);   // skips the window on screen
       if (Array.isArray(ev.activity)) {   // a replayed turn_start carries what the turn has done so far
@@ -7214,6 +7466,19 @@
       paintWorkerRun(w.run);
     }
 
+    // for_owner { agent, reason, turnId, origin }: the agent marked this automatic turn's reply for the owner. Its reply
+    // bubble leaves the closed card and sits right after it, under a small "from <label>" line.
+    function onHubForOwner(ev) {
+      const card = ev && hubTurnCards[ev.turnId];
+      if (!card || card.moved || !chats[card.chatId]) return;
+      const el = document.getElementById(card.msgId);
+      if (!el || !card.wrap.isConnected) return;
+      card.moved = true;
+      const line = foldFromLine(card.label);
+      card.wrap.after(line);
+      line.after(el);
+    }
+
     function onHubTurnEnd(ev) {
       setAgentLive(ev.agent, { busy: false });
       if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
@@ -7234,6 +7499,7 @@
       const el = document.getElementById(t.msgId);
       clearLiveActivity(t.msgId);
       if (el) { t.text = reply; paintTurn(t.chatId, t, reply, false); }
+      if (t.card) t.card.setLine(autoFirstLine(reply));   // the card's one line: the reply's first line (the label when there is none)
       setMessageTime(document.getElementById(t.msgId), msgTimeLine(Date.parse(ev.endedAt) || Date.now(), t.startedAt));
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
       for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
@@ -7344,6 +7610,7 @@
       source.addEventListener('turn_progress', e => { const ev = parse(e); if (ev) onHubTurnProgress(ev); });
       source.addEventListener('turn_worker_delta', e => { const ev = parse(e); if (ev) onHubTurnWorkerDelta(ev); });
       source.addEventListener('turn_end', e => { const ev = parse(e); if (ev) { onHubTurnEnd(ev); scheduleSpendRefresh(); } });
+      source.addEventListener('for_owner', e => { const ev = parse(e); if (ev) onHubForOwner(ev); });
       source.addEventListener('turn_notify', e => {
         const ev = parse(e);
         if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;   // someone else's bell
@@ -9990,7 +10257,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       copyMessageText(b.closest('.message'));
     });
 
-    function appendMessage(chatId, role, content) {
+    // into: an element to draw the bubble in instead of the chat's panel (the body of an automatic-turn card).
+    function appendMessage(chatId, role, content, into) {
       const container = document.getElementById(`messages-${chatId}`);
       // When user sends a message, reset scroll tracking so auto-scroll
       // re-engages for the new response.
@@ -10001,7 +10269,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       div.id = msgId;
       div.innerHTML = formatContent(content);
       decorateMessage(div, content);
-      container.appendChild(div);
+      (into || container).appendChild(div);
       renderVisualBlocks(div);
       autoScroll(container);
       return msgId;

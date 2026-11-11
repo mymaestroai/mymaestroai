@@ -1767,6 +1767,15 @@ function goBackFromChat() {
 
 function chatEl() { return $('messages'); }
 
+// Where new notes and bubbles are appended: the chat, or the body of a folded automatic-turn card while one is painted.
+let renderTarget = null;
+function bubbleHost() { return renderTarget || chatEl(); }
+function withRenderTarget(el, fn) {
+  const prev = renderTarget;
+  renderTarget = el;
+  try { return fn(); } finally { renderTarget = prev; }
+}
+
 function scrollChat(force) {
   const s = $('chat-scroll');
   if (force || stick) s.scrollTop = s.scrollHeight;
@@ -1776,7 +1785,7 @@ function addNote(text) {
   const d = document.createElement('div');
   d.className = 'note';
   d.textContent = text;
-  chatEl().appendChild(d);
+  bubbleHost().appendChild(d);
   return d;
 }
 
@@ -1843,6 +1852,140 @@ function createKeepKeyboard({ now = () => Date.now(), viewport, reopen }) {
   };
 }
 // ── keep-keyboard helpers (end) ──
+
+// Shared verbatim with lib/ui-auto-turns.js (test/ui-auto-turns-phone.test.js keeps the two in step): turns the hub starts by itself fold into closed cards.
+// ── auto-turn helpers (begin) ──
+const AUTO_STACK_MIN = 3;   // this many closed cards in a row fold into one stack
+function autoKindOfOrigin(origin) {
+  const k = origin && typeof origin === 'object' ? origin.kind : '';
+  if (!k || typeof k !== 'string') return null;
+  if (k === 'consultation') return 'consultation';
+  if (k === 'schedule') return 'schedule';
+  if (k === 'user' || k === 'comms') return null;
+  return 'notice';
+}
+function autoQuoted(s) {
+  const m = /"([^"\n]*)"/.exec(s || '');
+  return m ? m[1] : null;
+}
+function autoInfoOf(entry) {
+  if (!entry || entry.role !== 'user' || entry.ask === true) return null;
+  const o = entry.origin;
+  if (o && typeof o === 'object' && o.kind) {
+    const kind = autoKindOfOrigin(o);
+    if (!kind) return null;
+    const from = o.from || o.jobName || null;
+    let label;
+    if (kind === 'consultation') label = `Consultation from ${from || 'another agent'}`;
+    else if (kind === 'schedule') label = `Scheduled task${o.from ? ': ' + o.from : ''}`;
+    else if (o.kind === 'job_notice') label = `Job finished${from ? ': ' + from : ''}`;
+    else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
+    else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
+    else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+    else if (o.kind === 'alert') label = 'Monitor alert';
+    else label = 'Hub turn';
+    return { kind, from, label };
+  }
+  const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
+  let m = /^\[Consultation from agent "([^"\n]*)"/.exec(text);
+  if (m) return { kind: 'consultation', from: m[1], label: `Consultation from ${m[1] || 'another agent'}` };
+  if (entry.tiger_team === true) return { kind: 'consultation', from: null, label: 'Consultation from another agent' };
+  if (text.startsWith('[Scheduled task — started by the hub scheduler')) {
+    const close = text.indexOf(']');
+    const from = close >= 0 ? (/^\s*"([^"\n]*)"/.exec(text.slice(close + 1)) || [])[1] ?? null : null;
+    return { kind: 'schedule', from, label: `Scheduled task${from ? ': ' + from : ''}` };
+  }
+  if (text.startsWith('[Job finished]') || text.startsWith('[Job ended]')) {
+    const finished = text.startsWith('[Job finished]');
+    const jm = /\bJob\s+"([^"\n]*)"/.exec(text);
+    const name = jm ? jm[1] : null;
+    return { kind: 'notice', from: name, label: `${finished ? 'Job finished' : 'Job ended'}${name ? ': ' + name : ''}` };
+  }
+  if (text.startsWith('[Resumed after compression, from the hub]')) return { kind: 'notice', from: null, label: 'Resumed after compression' };
+  if (text.startsWith('[Delivery turn started by the hub')) return { kind: 'notice', from: null, label: 'Consultation replies delivered' };
+  m = /^\[Queued consultation reply from agent "([^"\n]*)"/.exec(text);
+  if (m) return { kind: 'notice', from: m[1], label: 'Consultation replies delivered' };
+  return null;
+}
+function autoFirstLine(text, max = 140) {
+  if (typeof text !== 'string') return '';
+  for (const raw of text.split(/\r?\n/)) {
+    let s = raw.trim().replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+)+/, '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+    if (!s || /^[-*_=\s]*$/.test(s)) continue;
+    return s.length > max ? s.slice(0, Math.max(0, max - 1)).trimEnd() + '…' : s;
+  }
+  return '';
+}
+function autoCardKind(kind) {
+  return kind === 'consultation' ? 'consult' : kind === 'schedule' ? 'schedule' : 'notice';
+}
+function autoSummaryOf(cards) {
+  const n = (cards || []).length;
+  const count = (k) => cards.filter((c) => c.kind === k).length;
+  const parts = [];
+  const c = count('consultation'), s = count('schedule'), h = n - c - s;
+  if (c) parts.push(`${c} ${c === 1 ? 'consultation' : 'consultations'}`);
+  if (s) parts.push(`${s} ${s === 1 ? 'scheduled task' : 'scheduled tasks'}`);
+  if (h) parts.push(`${h} ${h === 1 ? 'hub notice' : 'hub notices'}`);
+  return `${n} automatic ${n === 1 ? 'turn' : 'turns'}: ${parts.join(', ')}`;
+}
+function autoCardLine(history, indexes, kindsInfoLabel) {
+  const isAsst = (i) => history[i].role === 'assistant';
+  const asst = indexes.filter(isAsst);
+  const pick = [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
+  if (pick !== undefined) return autoFirstLine(history[pick].content);
+  for (const i of [...indexes].reverse()) {
+    if (isAsst(i)) continue;
+    let c = typeof history[i].content === 'string' ? history[i].content : '';
+    const task = c.indexOf('\nTask:\n');
+    c = task >= 0 ? c.slice(task + 7) : c.trimStart().replace(/^\[[^\]]*\]:?/, '');
+    const line = autoFirstLine(c);
+    if (line) return line;
+  }
+  return kindsInfoLabel || '';
+}
+function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {}) {
+  const items = [];
+  const n = Array.isArray(history) ? history.length : 0;
+  let i = Math.max(0, from | 0);
+  while (i < n) {
+    const e = history[i];
+    if (!e || e.inProgress) { i++; continue; }
+    const info = autoInfoOf(e);
+    if (!info) { items.push({ type: 'entry', index: i }); i++; continue; }
+    let last = info, firstTs = e.ts, hasAsst = false;
+    const indexes = [i];
+    let j = i + 1;
+    for (; j < n; j++) {
+      const x = history[j];
+      if (!x) break;
+      if (x.inProgress) continue;
+      if (x.ask === true) break;
+      if (x.role === 'assistant') { hasAsst = true; indexes.push(j); continue; }
+      if (x.role !== 'user' || hasAsst) break;
+      const xi = autoInfoOf(x);
+      if (!xi) break;
+      last = xi; indexes.push(j);
+    }
+    const open = indexes.filter((k) => history[k].role === 'assistant' && history[k].for_owner === true);
+    items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+    i = j;
+  }
+  const out = [];
+  let run = [];
+  const flush = () => {
+    if (run.length >= stackMin && run.length > 0) out.push({ type: 'stack', cards: run, summary: autoSummaryOf(run) });
+    else out.push(...run);
+    run = [];
+  };
+  for (const it of items) {
+    if (it.type === 'card' && it.open.length === 0) run.push(it);
+    else { flush(); out.push(it); }
+  }
+  flush();
+  return out;
+}
+// ── auto-turn helpers (end) ──
 
 // The date and time under each message: when it was sent, when a reply was finished and how long it took.
 // Shared verbatim with lib/ui-msg-time.js and app.js (test/ui-msg-time.test.js keeps the three in step).
@@ -2034,7 +2177,7 @@ function addUserBubble(text, images) {
   if (text) d.appendChild(document.createTextNode(text));
   setRaw(d, text);
   addCopyButton(d);
-  chatEl().appendChild(d);
+  bubbleHost().appendChild(d);
   return d;
 }
 
@@ -2047,7 +2190,7 @@ function addAssistantBubble(content) {
   d.appendChild(body);
   setRaw(d, content === undefined ? '' : content);
   addCopyButton(d);
-  chatEl().appendChild(d);
+  bubbleHost().appendChild(d);
   renderVisualBlocks(body);
   return { el: d, body };
 }
@@ -2367,8 +2510,86 @@ function renderHistory() {
     box.appendChild(b);
   }
   const times = msgTimeLines(chatHistory);   // the date and time under each message
-  for (let i = start; i < chatHistory.length; i++) renderEntry(chatHistory[i], times[i]);
+  if (foldAutoOn()) {
+    for (const it of autoGroupHistory(chatHistory, start)) {
+      if (it.type === 'entry') renderEntry(chatHistory[it.index], times[it.index]);
+      else if (it.type === 'card') renderAutoCard(it, times);
+      else if (it.type === 'stack') renderAutoStack(it, times);
+    }
+  } else {
+    for (let i = start; i < chatHistory.length; i++) renderEntry(chatHistory[i], times[i]);
+  }
   if (!chatHistory.length) addNote('No messages yet');
+}
+
+// Turns the hub starts by itself fold into closed cards; the setting is per device ('off' turns it off).
+function foldAutoOn() {
+  try { return localStorage.getItem('hub-fold-auto') !== 'off'; } catch { return true; }
+}
+function paintFoldMenu() {
+  const b = $('menu-fold');
+  if (b) b.textContent = `⇅ Fold automatic turns: ${foldAutoOn() ? 'On' : 'Off'}`;
+}
+function toggleFoldAuto() {
+  $('menu').classList.remove('open');
+  try { localStorage.setItem('hub-fold-auto', foldAutoOn() ? 'off' : 'on'); } catch { /* storage refused */ }
+  paintFoldMenu();
+  if (current && !streams.has(current) && !reattaches.has(current)) { stick = true; renderHistory(); scrollChat(true); }
+  else toast(`Fold automatic turns: ${foldAutoOn() ? 'On' : 'Off'}`);
+}
+
+// A card header: a button (aria-expanded) that opens and closes the body next to it.
+function makeFoldHeader(cls, label, time, line) {
+  const wrap = document.createElement('div');
+  wrap.className = 'auto-wrap';
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = cls;
+  head.setAttribute('aria-expanded', 'false');
+  const l = document.createElement('span'); l.className = 'auto-label'; l.textContent = label;
+  head.appendChild(l);
+  if (time) { const t = document.createElement('span'); t.className = 'auto-time'; t.textContent = time; head.appendChild(t); }
+  const f = document.createElement('span'); f.className = 'auto-line'; f.textContent = line || '';
+  head.appendChild(f);
+  const c = document.createElement('span'); c.className = 'auto-chev'; c.textContent = '▸';
+  head.appendChild(c);
+  const body = document.createElement('div');
+  body.className = 'auto-body';
+  body.hidden = true;
+  head.addEventListener('click', () => {
+    const open = body.hidden;
+    body.hidden = !open;
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    c.textContent = open ? '▾' : '▸';
+  });
+  wrap.append(head, body);
+  return { wrap, head, body, line: f };
+}
+
+function addFromLine(label) {
+  const d = document.createElement('div');
+  d.className = 'auto-from';
+  d.textContent = `from ${label}`;
+  bubbleHost().appendChild(d);
+  return d;
+}
+
+// One automatic turn as a closed card; the entries the agent marked for the owner follow it, open.
+function renderAutoCard(it, times, host = chatEl()) {
+  const card = makeFoldHeader(`auto-card auto-card-${autoCardKind(it.kind)}`, it.label, timeLabel(it.ts), it.firstLine);
+  host.appendChild(card.wrap);
+  const open = new Set(it.open);
+  withRenderTarget(card.body, () => { for (const i of it.indexes) if (!open.has(i)) renderEntry(chatHistory[i], times[i]); });
+  withRenderTarget(host === chatEl() ? null : host, () => {
+    for (const i of it.open) { addFromLine(it.label); renderEntry(chatHistory[i], times[i]); }
+  });
+}
+
+// Three or more cards in a row: one line with a count; tapping it shows the cards, each still closed.
+function renderAutoStack(it, times) {
+  const st = makeFoldHeader('auto-stack', it.summary, '', '');
+  chatEl().appendChild(st.wrap);
+  for (const c of it.cards) renderAutoCard(c, times, st.body);
 }
 
 function loadEarlier() {
@@ -5085,6 +5306,7 @@ function connectEvents() {
   on('turn_progress', onTurnProgress);
   on('turn_worker_delta', onTurnWorkerDelta);
   on('turn_end', onTurnEnd);
+  on('for_owner', onForOwner);
   on('turn_notify', onTurnNotify);
   on('ask_user', (ev) => {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
@@ -5221,12 +5443,19 @@ function onTurnStart(ev) {
   const own = ev.origin?.kind === 'user' && ownTurnFor(ev.agent);
   if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !own) {
     const last = chatHistory[chatHistory.length - 1];
-    if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {
-      addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
-      setBubbleTime(addUserBubble(ev.message, null), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
-    }
-    const b = addAssistantBubble('…');
-    hubTurns[ev.turnId] = { turnId: ev.turnId, agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null };
+    // A turn the hub started by itself draws straight into a closed card (tap it to watch the turn live).
+    const info = foldAutoOn() && autoKindOfOrigin(ev.origin) ? autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' }) : null;
+    const card = info ? makeFoldHeader(`auto-card auto-card-${autoCardKind(info.kind)}`, info.label, timeLabel(ev.startedAt), 'working…') : null;
+    if (card) chatEl().appendChild(card.wrap);
+    const paint = () => {
+      if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {
+        if (!card) addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
+        setBubbleTime(addUserBubble(ev.message, null), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+      }
+      return addAssistantBubble('…');
+    };
+    const b = card ? withRenderTarget(card.body, paint) : paint();
+    hubTurns[ev.turnId] = { turnId: ev.turnId, agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null, card: card ? { ...card, label: info.label } : null };
     scrollChat();
   }
   paintStatus();
@@ -5300,6 +5529,20 @@ function onTurnProgress(ev) {
   applyTurnProgress(ev.agent, ev, turnHolder(ev));
 }
 
+// for_owner { agent, reason, turnId, origin }: the agent marked this reply for the owner. A live automatic turn's reply
+// bubble moves out of its closed card to right after it, open, under a "from <card label>" line.
+function onForOwner(ev) {
+  const t = ev && ev.turnId ? hubTurns[ev.turnId] : null;
+  if (!t || !t.card || t.card.moved || !t.el.isConnected || !chatOpenFor(t.agent)) return;
+  t.card.moved = true;
+  const from = document.createElement('div');
+  from.className = 'auto-from';
+  from.textContent = `from ${t.card.label}`;
+  t.card.wrap.after(from);
+  from.after(t.el);
+  scrollChat();
+}
+
 function onTurnEnd(ev) {
   setLive(ev.agent, { busy: false });
   if (ev.agent) wkSettleAgent(ev.agent, ev.turnId || null);
@@ -5316,6 +5559,7 @@ function onTurnEnd(ev) {
   if (t && chatOpenFor(t.agent) && t.el.isConnected) {
     setReplyText(t, reply);
     feedEnd(t);
+    if (t.card) t.card.line.textContent = autoFirstLine(reply) || t.card.label;
     setBubbleTime(t.el, msgTimeLine(Date.parse(ev.endedAt) || Date.now(), Date.parse(t.startedAt)));
     rereadHistory(t.agent);   // the finished exchange (its message came from elsewhere), as the hub saved it
     scrollChat();
@@ -5575,6 +5819,8 @@ function wire() {
   document.addEventListener('click', () => $('menu').classList.remove('open'));
   $('menu-clear').addEventListener('click', confirmClear);
   $('menu-copy').addEventListener('click', copyWholeChat);
+  $('menu-fold')?.addEventListener('click', toggleFoldAuto);
+  paintFoldMenu();
   $('menu-notify').addEventListener('click', togglePush);
   $('menu-notify-test')?.addEventListener('click', testPush);
   $('messages').addEventListener('click', onMessagesClick);
