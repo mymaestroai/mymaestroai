@@ -190,12 +190,12 @@ test('cardIsLast ignores the re-attach bubble drawn after the card', () => {
 
 test('moveReplyOut: a card inside a stack sends the reply after the stack, in the chat', () => {
   const src = js.slice(js.indexOf('function moveReplyOut('), js.indexOf('function onForOwner('));
-  const mk = (parentNode) => ({ parentNode, isConnected: true, after(x) { const c = this.parentNode.children; c.splice(c.indexOf(this) + 1, 0, x); x.parentNode = this.parentNode; } });
+  const mk = (parentNode) => ({ parentNode, isConnected: true, dataset: {}, after(x) { const c = this.parentNode.children; c.splice(c.indexOf(this) + 1, 0, x); x.parentNode = this.parentNode; } });
   const panel = { children: [], parentNode: null, isConnected: true };
   const stack = mk(panel); panel.children.push(stack);
   const body = mk(stack); body.children = [];
   const wrap = mk(body); body.children.push(wrap);
-  const el = { parentNode: body, isConnected: true };
+  const el = { parentNode: body, isConnected: true, dataset: {} };
   body.children.push(el);
   let from = null;
   const document = { createElement: () => (from = mk(null)) };
@@ -208,4 +208,22 @@ test('moveReplyOut: a card inside a stack sends the reply after the stack, in th
   const orphan = { agent: 'a', el, card: { label: 'L', wrap: mk(mk(null)) } };
   fn(orphan);
   assert.ok(!orphan.card.moved, 'not moved when the card is not in the chat');
+});
+
+test('samePrompt: only the hub\'s own clipping (12000 characters + the suffix) counts as a clipped prompt', () => {
+  const src = js.slice(js.indexOf('const TURN_CLIP_SUFFIX'), js.indexOf('// A remembered card is adopted only when'));
+  const fn = new Function(`${src}; return samePrompt;`)();
+  const long = 'x'.repeat(12500);
+  assert.strictEqual(fn('same', 'same'), true);
+  assert.strictEqual(fn(long, long.slice(0, 12000) + '\n…[truncated]'), true);
+  assert.strictEqual(fn('Please inspect the full log', 'Please inspect\n…[truncated]'), false, 'a short message that happens to end like the suffix');
+  assert.strictEqual(fn('other', 'same'), false);
+});
+
+test('a retired re-attach: only of the same turn; reattachIfIdle never starts one next to a followed hub turn', () => {
+  assert.match(js, /const raEl = ra && !ra\.text && ra\.bubble && \(!ra\.turnId \|\| ra\.turnId === ev\.turnId\) \? ra\.bubble\.el : null;/);
+  assert.match(js, /if \(raEl\) \{ reasoningEnd\(ra\); raEl\.remove\(\); reattaches\.delete\(ev\.agent\); paintChatStatus\(\); retired = true; \}/);
+  assert.match(js, /if \(retired\) catchUpOpenAgent\(\);/);
+  const ri = js.slice(js.indexOf('function reattachIfIdle('), js.indexOf('function reattachIfIdle(') + 400);
+  assert.match(ri, /if \(Object\.values\(hubTurns\)\.some\(t => t && t\.agent === agent\)\) return;/);
 });

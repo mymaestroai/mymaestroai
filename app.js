@@ -7093,8 +7093,10 @@
     // True when the saved prompt is the one the hub announced (whole, or its clipped start).
     function foldSamePrompt(saved, sent) {
       if (typeof saved !== 'string' || typeof sent !== 'string') return false;
-      if (sent.endsWith(FOLD_CLIP_SUFFIX)) return saved.startsWith(sent.slice(0, -FOLD_CLIP_SUFFIX.length));
-      return saved === sent;
+      if (saved === sent) return true;
+      // only the hub's own clipping (exactly 12000 characters and the suffix) counts as a clipped prompt
+      const head = sent.slice(0, -FOLD_CLIP_SUFFIX.length);
+      return sent.endsWith(FOLD_CLIP_SUFFIX) && head.length === 12000 && saved.length > 12000 && saved.startsWith(head);
     }
     // A remembered card is adopted only when its prompt was saved within 10 minutes of this turn starting.
     function foldPromptRecent(ts, startedAt) {
@@ -7161,6 +7163,7 @@
       const dup = typeof ev.message === 'string' && !!last && last.role === 'user' && foldSamePrompt(last.content, ev.message);
       // An automatic turn (consultation, scheduled task, hub notice) draws into a closed card that updates as it runs.
       let card = null;
+      let retiredReattach = false;   // a re-attach of this turn was followed before turn_start came; its bubble gave way to the card
       const autoKind = foldAutoOn() ? autoKindOfOrigin(ev.origin) : null;
       if (autoKind) {
         const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
@@ -7170,7 +7173,8 @@
           // not in history). Adopt that card when it is the last thing on screen rather than build a second one.
           const mem = chat.lastAutoCard;
           // A re-attach bubble drawn after that card (the chat followed this turn before turn_start came) does not count.
-          const raEl = chat.reattach && !chat.reattach.content ? document.getElementById(chat.reattach.msgId) : null;
+          const raSame = chat.reattach && !chat.reattach.content && (!chat.reattach.turnId || chat.reattach.turnId === ev.turnId);
+          const raEl = raSame ? document.getElementById(chat.reattach.msgId) : null;
           if (mem && dup && foldSamePrompt(mem.prompt, ev.message) && foldPromptRecent(mem.ts, ev.startedAt) && foldCardIsLast(panel, mem.card, raEl)) {
             card = mem.card;
             card.setLine('working…');
@@ -7179,11 +7183,13 @@
           }
           chat.lastAutoCard = null;
           // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
-          if (chat.reattach && !chat.reattach.content) {
+          if (raSame) {
             const ra = chat.reattach;
             clearLiveActivity(ra.msgId);
             document.getElementById(ra.msgId)?.remove();
             delete chat.reattach; delete chat.lastMsgId;
+            setAgentStatus(chat.agent, '');   // the re-attach marked this browser busy for the agent; the hub turn's own status takes over
+            retiredReattach = true;
           }
           card.label = info.label; card.chatId = chat.id;
           autoScroll(panel);
@@ -7204,6 +7210,7 @@
         // A for_owner that arrived while the history loaded: apply it now that the card exists.
         if (hubForOwnerPending[ev.turnId]) { delete hubForOwnerPending[ev.turnId]; hubMoveReplyOut(card); }
       }
+      if (retiredReattach) catchUpTurn(chat.id);   // what the turn already did (tool rows, text), which the retired bubble had shown
       setStatus(chat.id, 'thinking', hubOriginLabel(ev.origin));
       markTabUnread(chat.id);   // skips the window on screen
       if (Array.isArray(ev.activity)) {   // a replayed turn_start carries what the turn has done so far
@@ -7544,7 +7551,10 @@
       let anchor = card.wrap;
       while (anchor.parentNode && anchor.parentNode !== panel) anchor = anchor.parentNode;
       if (!panel || anchor.parentNode !== panel) return;
+      // replies already moved out after the same block keep their order: this one goes after them
+      while (anchor.nextElementSibling && anchor.nextElementSibling.dataset && anchor.nextElementSibling.dataset.autoMoved === '1') anchor = anchor.nextElementSibling;
       const line = foldFromLine(card.label);
+      line.dataset.autoMoved = '1'; el.dataset.autoMoved = '1';
       anchor.after(line);
       line.after(el);
       card.moved = true;

@@ -2607,8 +2607,10 @@ const TURN_CLIP_SUFFIX = '\n…[truncated]';
 // True when the saved prompt is the one the hub announced (whole, or its clipped start).
 function samePrompt(saved, sent) {
   if (typeof saved !== 'string' || typeof sent !== 'string') return false;
-  if (sent.endsWith(TURN_CLIP_SUFFIX)) return saved.startsWith(sent.slice(0, -TURN_CLIP_SUFFIX.length));
-  return saved === sent;
+  if (saved === sent) return true;
+  // only the hub's own clipping (exactly 12000 characters and the suffix) counts as a clipped prompt
+  const head = sent.slice(0, -TURN_CLIP_SUFFIX.length);
+  return sent.endsWith(TURN_CLIP_SUFFIX) && head.length === 12000 && saved.length > 12000 && saved.startsWith(head);
 }
 // A remembered card is adopted only when its prompt was saved within 10 minutes of this turn starting.
 function promptRecent(ts, startedAt) {
@@ -4303,6 +4305,7 @@ function enterReattach(agent, text, bubble, partialHtml, partial, since = null, 
 // loaded, woke from sleep, or the turn was started from another device): follow it.
 function reattachIfIdle(agent, partial = '') {
   if (!agent || !chatOpenFor(agent) || streams.has(agent) || reattaches.has(agent)) return;
+  if (Object.values(hubTurns).some(t => t && t.agent === agent)) return;   // a hub turn of this agent is already followed (onTurnStart)
   const s = live[agent];
   if (!s || !s.busy) return;
   enterReattach(agent, null, addAssistantBubble(), '', partial, s.busySince || null);
@@ -5494,11 +5497,12 @@ function onTurnStart(ev) {
     // A turn the hub started by itself draws straight into a closed card (tap it to watch the turn live).
     const info = foldAutoOn() && autoKindOfOrigin(ev.origin) ? autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' }) : null;
     let card = null;
+    let retired = false;   // a re-attach of this turn gave way to the card
     if (info) {
       const mem = lastHistoryCard;
       // A re-attach bubble drawn after that card (the chat followed this turn before turn_start came) does not count.
       const ra = reattaches.get(ev.agent);
-      const raEl = ra && !ra.text && ra.bubble ? ra.bubble.el : null;
+      const raEl = ra && !ra.text && ra.bubble && (!ra.turnId || ra.turnId === ev.turnId) ? ra.bubble.el : null;
       // Opened while this turn runs: renderHistory already drew a card with its prompt (the reply, still in progress,
       // is not in history). Adopt that card when it is the last thing on screen rather than build a second one.
       if (dup && mem && mem.agent === ev.agent && samePrompt(mem.prompt, ev.message) && promptRecent(mem.ts, ev.startedAt) && cardIsLast(mem.wrap, raEl)) {
@@ -5510,7 +5514,7 @@ function onTurnStart(ev) {
       }
       lastHistoryCard = null;
       // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
-      if (raEl) { raEl.remove(); reattaches.delete(ev.agent); paintChatStatus(); }
+      if (raEl) { reasoningEnd(ra); raEl.remove(); reattaches.delete(ev.agent); paintChatStatus(); retired = true; }
     }
     const paint = () => {
       if (typeof ev.message === 'string' && !dup) {
@@ -5524,6 +5528,7 @@ function onTurnStart(ev) {
     hubTurns[ev.turnId] = t;
     // A for_owner that arrived before this card existed: apply it now.
     if (t.card && forOwnerPending[ev.turnId]) { delete forOwnerPending[ev.turnId]; moveReplyOut(t); }
+    if (retired) catchUpOpenAgent();   // what the turn already did (tool rows, text), which the retired bubble had shown
     scrollChat();
   }
   paintStatus();
@@ -5606,9 +5611,12 @@ function moveReplyOut(t) {
   let anchor = t.card.wrap;
   while (anchor.parentNode && anchor.parentNode !== panel) anchor = anchor.parentNode;
   if (!panel || anchor.parentNode !== panel) return;
+  // replies already moved out after the same block keep their order: this one goes after them
+  while (anchor.nextElementSibling && anchor.nextElementSibling.dataset && anchor.nextElementSibling.dataset.autoMoved === '1') anchor = anchor.nextElementSibling;
   const from = document.createElement('div');
   from.className = 'auto-from';
   from.textContent = `from ${t.card.label}`;
+  from.dataset.autoMoved = '1'; t.el.dataset.autoMoved = '1';
   anchor.after(from);
   from.after(t.el);
   t.card.moved = true;

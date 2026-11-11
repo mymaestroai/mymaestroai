@@ -227,14 +227,14 @@ test('foldCardIsLast ignores the re-attach bubble drawn after the card', () => {
 test('hubMoveReplyOut: a card inside a stack sends the reply after the stack, in the panel', () => {
   const src = block(app, 'function hubMoveReplyOut(', 'function onHubForOwner(');
   const mk = (parentNode) => {
-    const n = { parentNode, isConnected: true, after(x) { const sib = this.parentNode.children; sib.splice(sib.indexOf(this) + 1, 0, x); x.parentNode = this.parentNode; } };
+    const n = { parentNode, isConnected: true, dataset: {}, after(x) { const sib = this.parentNode.children; sib.splice(sib.indexOf(this) + 1, 0, x); x.parentNode = this.parentNode; } };
     return n;
   };
   const panel = { children: [], parentNode: null, isConnected: true };
   const stack = mk(panel); panel.children.push(stack);
   const body = mk(stack); body.children = [];
   const wrap = mk(body); body.children.push(wrap);
-  const reply = { id: 'm1', parentNode: body, isConnected: true };
+  const reply = { id: 'm1', parentNode: body, isConnected: true, dataset: {} };
   body.children.push(reply);
   const line = mk(null);
   const card = { chatId: 'c1', msgId: 'm1', label: 'Lbl', wrap };
@@ -248,4 +248,20 @@ test('hubMoveReplyOut: a card inside a stack sends the reply after the stack, in
   const orphan = { chatId: 'c1', msgId: 'm1', label: 'L', wrap: mk(mk(null)) };
   fn(orphan);
   assert.ok(!orphan.moved);
+});
+
+test('a retired re-attach: only of the same turn, clears this browser\'s busy mark and catches the card up', () => {
+  assert.match(app, /const raSame = chat\.reattach && !chat\.reattach\.content && \(!chat\.reattach\.turnId \|\| chat\.reattach\.turnId === ev\.turnId\);/);
+  const start = block(app, 'async function onHubTurnStart(', 'setStatus(chat.id, \'thinking\'');
+  assert.match(start, /if \(raSame\) \{[^}]*setAgentStatus\(chat\.agent, ''\);[^}]*retiredReattach = true;/);
+  assert.match(start, /if \(retiredReattach\) catchUpTurn\(chat\.id\);/);
+});
+
+test('foldSamePrompt: only the hub\'s own clipping (12000 characters + the suffix) counts as a clipped prompt', () => {
+  const src = block(app, 'const FOLD_CLIP_SUFFIX', '// A remembered card is adopted only when');
+  const fn = new Function(`${src}; return foldSamePrompt;`)();
+  const long = 'y'.repeat(12500);
+  assert.strictEqual(fn(long, long.slice(0, 12000) + '\n…[truncated]'), true);
+  assert.strictEqual(fn('Please inspect the full log', 'Please inspect\n…[truncated]'), false);
+  assert.strictEqual(fn('a', 'a'), true);
 });
