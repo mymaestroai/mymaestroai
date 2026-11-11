@@ -58,7 +58,7 @@ test('live automatic turns draw into a closed card; for_owner moves the reply ou
   assert.match(js, /on\('for_owner', onForOwner\)/);
   const fo = js.slice(js.indexOf('function moveReplyOut('), js.indexOf('function onTurnEnd('));
   assert.match(fo, /`from \$\{t\.card\.label\}`/);
-  assert.match(fo, /wrap\.after\(from\)/);
+  assert.match(fo, /anchor\.after\(from\)/);
   assert.match(fo, /from\.after\(t\.el\)/);
 });
 
@@ -75,15 +75,17 @@ test('a for_owner that comes before the live card exists is kept and applied whe
 test('opening a chat during an automatic turn: the live turn adopts the history card of the same prompt', () => {
   const rh = js.slice(js.indexOf('function renderHistory()'), js.indexOf('function loadEarlier()'));
   assert.match(rh, /lastHistoryCard = null;/, 'reset at the start of renderHistory');
-  assert.match(js, /lastHistoryCard = lastUser === undefined \? null : \{ wrap: card\.wrap, body: card\.body, line: card\.line, label: it\.label, prompt: chatHistory\[lastUser\]\.content, agent: current \}/);
+  assert.match(js, /lastHistoryCard = lastUser === undefined \? null : \{ wrap: card\.wrap, body: card\.body, line: card\.line, label: it\.label, prompt: chatHistory\[lastUser\]\.content, ts: chatHistory\[lastUser\]\.ts \|\| null, agent: current \}/);
   const ts = js.slice(js.indexOf('function onTurnStart('), js.indexOf('function onTurnDelta('));
-  assert.match(ts, /last\.content === ev\.message/, 'only on a duplicate of the history prompt');
-  assert.match(ts, /mem\.prompt === ev\.message && cardIsLast\(mem\.wrap\)/);
+  assert.match(ts, /samePrompt\(last\.content, ev\.message\)/, 'only on a duplicate of the history prompt');
+  assert.match(ts, /samePrompt\(mem\.prompt, ev\.message\) && promptRecent\(mem\.ts, ev\.startedAt\) && cardIsLast\(mem\.wrap, raEl\)/);
+  assert.match(ts, /for \(let i = chatHistory\.length - 1; i >= 0; i--\) if \(!chatHistory\[i\]\.inProgress\)/, 'last saved entry, not an inProgress one');
+  assert.match(ts, /reattaches\.delete\(ev\.agent\)/, 'the re-attach waiting bubble is retired once the card shows the turn');
   assert.match(ts, /card = \{ wrap: mem\.wrap, body: mem\.body, line: mem\.line \};\s*card\.line\.textContent = 'working…'/);
   assert.match(ts, /card: card \? \{ \.\.\.card, label: info\.label \} : null/);
   const fn = js.slice(js.indexOf('function cardIsLast('), js.indexOf('function renderAutoCard('));
-  assert.match(fn, /box\.lastElementChild === wrap/);
-  assert.match(fn, /box\.lastElementChild === stack/);
+  assert.match(fn, /lastOf\(box\) === wrap/);
+  assert.match(fn, /lastOf\(box\) === stack/);
 });
 
 test('cardIsLast: a card is reusable only when it ends the chat (or the last stack)', () => {
@@ -157,4 +159,53 @@ test('CSS: kind colours, left border, stack, from line', () => {
 
 test('the service worker is bumped so open phones load this page', () => {
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v63'/);
+});
+
+test('samePrompt and promptRecent: clipped prompts match by start; stale or undated cards are not adopted', () => {
+  const src = js.slice(js.indexOf('const TURN_CLIP_SUFFIX'), js.indexOf('// One automatic turn as a closed card;'));
+  const { samePrompt, promptRecent } = new Function(`${src}; return { samePrompt, promptRecent };`)();
+  assert.strictEqual(samePrompt('abc', 'abc'), true);
+  assert.strictEqual(samePrompt('abc', 'abd'), false);
+  const long = 'x'.repeat(13000);
+  assert.strictEqual(samePrompt(long, long.slice(0, 12000) + '\n…[truncated]'), true);
+  assert.strictEqual(samePrompt('y' + long, long.slice(0, 12000) + '\n…[truncated]'), false);
+  assert.strictEqual(samePrompt(undefined, 'abc'), false);
+  const t0 = '2026-01-01T10:00:00.000Z';
+  assert.strictEqual(promptRecent('2026-01-01T09:55:00.000Z', t0), true);
+  assert.strictEqual(promptRecent('2026-01-01T09:40:00.000Z', t0), false);
+  assert.strictEqual(promptRecent(null, t0), false);
+  assert.strictEqual(promptRecent(t0, undefined), false);
+});
+
+test('cardIsLast ignores the re-attach bubble drawn after the card', () => {
+  const src = js.slice(js.indexOf('function cardIsLast('), js.indexOf('const TURN_CLIP_SUFFIX'));
+  const box = { parentNode: null, isConnected: true, lastElementChild: null };
+  const fn = new Function('chatEl', `${src}; return cardIsLast;`)(() => box);
+  const card = { parentNode: box, isConnected: true, lastElementChild: null };
+  const bubble = { parentNode: box, isConnected: true, previousElementSibling: card };
+  box.lastElementChild = bubble;
+  assert.strictEqual(fn(card), false);
+  assert.strictEqual(fn(card, bubble), true);
+});
+
+test('moveReplyOut: a card inside a stack sends the reply after the stack, in the chat', () => {
+  const src = js.slice(js.indexOf('function moveReplyOut('), js.indexOf('function onForOwner('));
+  const mk = (parentNode) => ({ parentNode, isConnected: true, after(x) { const c = this.parentNode.children; c.splice(c.indexOf(this) + 1, 0, x); x.parentNode = this.parentNode; } });
+  const panel = { children: [], parentNode: null, isConnected: true };
+  const stack = mk(panel); panel.children.push(stack);
+  const body = mk(stack); body.children = [];
+  const wrap = mk(body); body.children.push(wrap);
+  const el = { parentNode: body, isConnected: true };
+  body.children.push(el);
+  let from = null;
+  const document = { createElement: () => (from = mk(null)) };
+  const fn = new Function('chatOpenFor', 'chatEl', 'document', 'scrollChat', `${src}; return moveReplyOut;`)(() => true, () => panel, document, () => {});
+  const t = { agent: 'a', el, card: { label: 'Lbl', wrap } };
+  fn(t);
+  assert.strictEqual(t.card.moved, true);
+  assert.strictEqual(from.parentNode, panel);
+  assert.strictEqual(el.parentNode, panel, 'a direct child of the chat, not the hidden body');
+  const orphan = { agent: 'a', el, card: { label: 'L', wrap: mk(mk(null)) } };
+  fn(orphan);
+  assert.ok(!orphan.card.moved, 'not moved when the card is not in the chat');
 });

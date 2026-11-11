@@ -51,6 +51,16 @@ test('for_owner is in the hub MCP server (Claude and Codex clients) at depth 0 a
   assert.ok(!consulted.tools.some(x => x.name === 'for_owner'));
 });
 
+test('for_owner is not offered on tiger-team or ephemeral turns', async () => {
+  assert.ok(!getWorkspaceTools(AGENT, fakeRes(), 0, true).some(x => x.name === 'for_owner'), 'gateway list, tiger team');
+  const tt = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 0, tigerTeam: true });
+  assert.ok(!tt.tools.some(x => x.name === 'for_owner'), 'MCP server, tiger team');
+  const eph = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 0, ephemeral: true });
+  assert.ok(!eph.tools.some(x => x.name === 'for_owner'), 'MCP server, ephemeral');
+  const own = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 0 });
+  assert.ok(own.tools.some(x => x.name === 'for_owner'), 'still on an ordinary turn');
+});
+
 test('the tool policy classes for_owner as a harmless write inside the hub', () => {
   const tp = require('../lib/tool-policy');
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tool-policy.js'), 'utf8');

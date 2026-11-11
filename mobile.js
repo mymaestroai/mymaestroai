@@ -2586,15 +2586,34 @@ function promptCardLine(prompt, label) {
   return (i >= 0 && autoFirstLine(c.slice(i + 7))) || label;
 }
 
-// True when the card is the last thing in the chat (or the last card of a stack that is itself last).
-function cardIsLast(wrap) {
+// True when the card is the last thing in the chat (or the last card of a stack that is itself last). skip: a trailing
+// element that does not count (the waiting bubble a re-attach drew after the card).
+function cardIsLast(wrap, skip = null) {
   const box = chatEl();
   if (!box || !wrap || !wrap.isConnected) return false;
-  if (wrap.parentNode === box) return box.lastElementChild === wrap;
+  const lastOf = (el) => {
+    let l = el.lastElementChild;
+    if (skip && l === skip) l = l.previousElementSibling || null;
+    return l;
+  };
+  if (wrap.parentNode === box) return lastOf(box) === wrap;
   const body = wrap.parentNode;
   if (!body || body.lastElementChild !== wrap) return false;
   const stack = body.parentNode;
-  return !!stack && stack.parentNode === box && box.lastElementChild === stack;
+  return !!stack && stack.parentNode === box && lastOf(box) === stack;
+}
+// The hub clips a turn_start message to 12000 characters and ends it with this suffix.
+const TURN_CLIP_SUFFIX = '\n…[truncated]';
+// True when the saved prompt is the one the hub announced (whole, or its clipped start).
+function samePrompt(saved, sent) {
+  if (typeof saved !== 'string' || typeof sent !== 'string') return false;
+  if (sent.endsWith(TURN_CLIP_SUFFIX)) return saved.startsWith(sent.slice(0, -TURN_CLIP_SUFFIX.length));
+  return saved === sent;
+}
+// A remembered card is adopted only when its prompt was saved within 10 minutes of this turn starting.
+function promptRecent(ts, startedAt) {
+  const a = Date.parse(ts), b = Date.parse(startedAt);
+  return !isNaN(a) && !isNaN(b) && Math.abs(a - b) <= 10 * 60 * 1000;
 }
 
 // One automatic turn as a closed card; the entries the agent marked for the owner follow it, open.
@@ -2603,7 +2622,7 @@ function renderAutoCard(it, times, host = chatEl()) {
   host.appendChild(card.wrap);
   const users = it.indexes.filter(k => chatHistory[k] && chatHistory[k].role === 'user');
   const lastUser = users[users.length - 1];
-  lastHistoryCard = lastUser === undefined ? null : { wrap: card.wrap, body: card.body, line: card.line, label: it.label, prompt: chatHistory[lastUser].content, agent: current };
+  lastHistoryCard = lastUser === undefined ? null : { wrap: card.wrap, body: card.body, line: card.line, label: it.label, prompt: chatHistory[lastUser].content, ts: chatHistory[lastUser].ts || null, agent: current };
   const open = new Set(it.open);
   withRenderTarget(card.body, () => { for (const i of it.indexes) if (!open.has(i)) renderEntry(chatHistory[i], times[i]); });
   withRenderTarget(host === chatEl() ? null : host, () => {
@@ -5468,16 +5487,21 @@ function onTurnStart(ev) {
   setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin) });
   const own = ev.origin?.kind === 'user' && ownTurnFor(ev.agent);
   if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !own) {
-    const last = chatHistory[chatHistory.length - 1];
+    // The last saved entry: renderHistory leaves out a running turn's inProgress entry, so does this.
+    let last;
+    for (let i = chatHistory.length - 1; i >= 0; i--) if (!chatHistory[i].inProgress) { last = chatHistory[i]; break; }
+    const dup = typeof ev.message === 'string' && !!last && last.role === 'user' && samePrompt(last.content, ev.message);
     // A turn the hub started by itself draws straight into a closed card (tap it to watch the turn live).
     const info = foldAutoOn() && autoKindOfOrigin(ev.origin) ? autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' }) : null;
     let card = null;
     if (info) {
-      const dup = typeof ev.message === 'string' && last && last.role === 'user' && last.content === ev.message;
       const mem = lastHistoryCard;
+      // A re-attach bubble drawn after that card (the chat followed this turn before turn_start came) does not count.
+      const ra = reattaches.get(ev.agent);
+      const raEl = ra && !ra.text && ra.bubble ? ra.bubble.el : null;
       // Opened while this turn runs: renderHistory already drew a card with its prompt (the reply, still in progress,
       // is not in history). Adopt that card when it is the last thing on screen rather than build a second one.
-      if (dup && mem && mem.agent === ev.agent && mem.prompt === ev.message && cardIsLast(mem.wrap)) {
+      if (dup && mem && mem.agent === ev.agent && samePrompt(mem.prompt, ev.message) && promptRecent(mem.ts, ev.startedAt) && cardIsLast(mem.wrap, raEl)) {
         card = { wrap: mem.wrap, body: mem.body, line: mem.line };
         card.line.textContent = 'working…';
       } else {
@@ -5485,9 +5509,11 @@ function onTurnStart(ev) {
         chatEl().appendChild(card.wrap);
       }
       lastHistoryCard = null;
+      // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
+      if (raEl) { raEl.remove(); reattaches.delete(ev.agent); paintChatStatus(); }
     }
     const paint = () => {
-      if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {
+      if (typeof ev.message === 'string' && !dup) {
         if (!card) addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
         setBubbleTime(addUserBubble(ev.message, null), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
       }
@@ -5575,12 +5601,17 @@ function onTurnProgress(ev) {
 // bubble moves out of its closed card to right after it, open, under a "from <card label>" line.
 function moveReplyOut(t) {
   if (!t || !t.card || t.card.moved || !t.el.isConnected || !chatOpenFor(t.agent)) return;
-  t.card.moved = true;
+  // The card may sit inside a stack (hidden body): the reply goes after the outermost block that is in the chat.
+  const panel = chatEl();
+  let anchor = t.card.wrap;
+  while (anchor.parentNode && anchor.parentNode !== panel) anchor = anchor.parentNode;
+  if (!panel || anchor.parentNode !== panel) return;
   const from = document.createElement('div');
   from.className = 'auto-from';
   from.textContent = `from ${t.card.label}`;
-  t.card.wrap.after(from);
+  anchor.after(from);
   from.after(t.el);
+  t.card.moved = true;
   scrollChat();
 }
 function onForOwner(ev) {

@@ -6481,7 +6481,7 @@
               const remember = (built, c) => {
                 const ks = c.indexes.filter(k => history[k].role === 'user');
                 const k = ks[ks.length - 1];
-                chats[chatId].lastAutoCard = k === undefined ? null : { card: built, prompt: history[k].content, label: c.label };
+                chats[chatId].lastAutoCard = k === undefined ? null : { card: built, prompt: history[k].content, label: c.label, ts: history[k].ts || null };
               };
               // Automatic turns (consultations, scheduled tasks, hub notices) fold into closed cards; three or more in a row into a stack.
               for (const item of autoGroupHistory(history)) {
@@ -7072,15 +7072,34 @@
       const i = c.indexOf('\nTask:\n');
       return i >= 0 ? autoFirstLine(c.slice(i + 7)) : '';
     }
-    // True when the card is the last thing in the panel (or the last card of a stack that is itself last).
-    function foldCardIsLast(panel, card) {
+    // True when the card is the last thing in the panel (or the last card of a stack that is itself last). skip: a
+    // trailing element that does not count (the waiting bubble a re-attach drew after the card).
+    function foldCardIsLast(panel, card, skip = null) {
       const w = card && card.wrap;
       if (!panel || !w || !w.isConnected) return false;
-      if (w.parentNode === panel) return panel.lastElementChild === w;
+      const lastOf = (el) => {
+        let l = el.lastElementChild;
+        if (skip && l === skip) l = l.previousElementSibling || null;
+        return l;
+      };
+      if (w.parentNode === panel) return lastOf(panel) === w;
       const body = w.parentNode;
       if (!body || body.lastElementChild !== w) return false;
       const stack = body.parentNode;
-      return !!stack && stack.parentNode === panel && panel.lastElementChild === stack;
+      return !!stack && stack.parentNode === panel && lastOf(panel) === stack;
+    }
+    // The hub clips a turn_start message to 12000 characters and ends it with this suffix.
+    const FOLD_CLIP_SUFFIX = '\n…[truncated]';
+    // True when the saved prompt is the one the hub announced (whole, or its clipped start).
+    function foldSamePrompt(saved, sent) {
+      if (typeof saved !== 'string' || typeof sent !== 'string') return false;
+      if (sent.endsWith(FOLD_CLIP_SUFFIX)) return saved.startsWith(sent.slice(0, -FOLD_CLIP_SUFFIX.length));
+      return saved === sent;
+    }
+    // A remembered card is adopted only when its prompt was saved within 10 minutes of this turn starting.
+    function foldPromptRecent(ts, startedAt) {
+      const a = Date.parse(ts), b = Date.parse(startedAt);
+      return !isNaN(a) && !isNaN(b) && Math.abs(a - b) <= 10 * 60 * 1000;
     }
     function foldRenderHistoryStack(draw, s, panel, remember = null) {
       const wrap = document.createElement('div');
@@ -7137,7 +7156,9 @@
       if (!chat) return;
       try { await chat.historyLoaded; } catch {}
       if (!chats[chat.id]) return;   // closed meanwhile
+      // chat.messages never holds an inProgress entry (the history loader skips those), so its last entry is a saved one.
       const last = chat.messages[chat.messages.length - 1];
+      const dup = typeof ev.message === 'string' && !!last && last.role === 'user' && foldSamePrompt(last.content, ev.message);
       // An automatic turn (consultation, scheduled task, hub notice) draws into a closed card that updates as it runs.
       let card = null;
       const autoKind = foldAutoOn() ? autoKindOfOrigin(ev.origin) : null;
@@ -7148,18 +7169,27 @@
           // Opened while this turn runs: history already drew a card with its prompt (the reply, still in progress, is
           // not in history). Adopt that card when it is the last thing on screen rather than build a second one.
           const mem = chat.lastAutoCard;
-          if (mem && typeof ev.message === 'string' && last && last.role === 'user' && last.content === ev.message && mem.prompt === ev.message && foldCardIsLast(panel, mem.card)) {
+          // A re-attach bubble drawn after that card (the chat followed this turn before turn_start came) does not count.
+          const raEl = chat.reattach && !chat.reattach.content ? document.getElementById(chat.reattach.msgId) : null;
+          if (mem && dup && foldSamePrompt(mem.prompt, ev.message) && foldPromptRecent(mem.ts, ev.startedAt) && foldCardIsLast(panel, mem.card, raEl)) {
             card = mem.card;
             card.setLine('working…');
           } else {
             card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…' });
           }
           chat.lastAutoCard = null;
+          // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
+          if (chat.reattach && !chat.reattach.content) {
+            const ra = chat.reattach;
+            clearLiveActivity(ra.msgId);
+            document.getElementById(ra.msgId)?.remove();
+            delete chat.reattach; delete chat.lastMsgId;
+          }
           card.label = info.label; card.chatId = chat.id;
           autoScroll(panel);
         }
       }
-      if (typeof ev.message === 'string' && !(last && last.role === 'user' && last.content === ev.message)) {   // history may already hold the notice
+      if (typeof ev.message === 'string' && !dup) {   // history may already hold the notice
         chat.messages.push({ role: 'user', content: ev.message });
         setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message, card && card.body)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
       }
@@ -7509,10 +7539,15 @@
       if (!card || card.moved || !chats[card.chatId]) return;
       const el = document.getElementById(card.msgId);
       if (!el || !card.wrap.isConnected) return;
-      card.moved = true;
+      // The card may sit inside a stack (hidden body): the reply goes after the outermost block that is in the panel.
+      const panel = document.getElementById(`messages-${card.chatId}`);
+      let anchor = card.wrap;
+      while (anchor.parentNode && anchor.parentNode !== panel) anchor = anchor.parentNode;
+      if (!panel || anchor.parentNode !== panel) return;
       const line = foldFromLine(card.label);
-      card.wrap.after(line);
+      anchor.after(line);
       line.after(el);
+      card.moved = true;
     }
     function onHubForOwner(ev) {
       if (!ev || !ev.turnId) return;
