@@ -1799,7 +1799,7 @@ function setRaw(el, text) {
 // Shared verbatim with lib/ui-keep-keyboard.js (test/ui-keep-keyboard.test.js keeps the two in step): bring the keyboard back when Chrome's spell-check hides it.
 // ── keep-keyboard helpers (begin) ──
 const KEEP_KBD_MS = 1000;       // how long after a tap on the box a keyboard that goes away is brought back
-const KEEP_KBD_EDIT_MS = 400;   // ... and after a key or an edit in it (shorter: Back pressed just after typing must stay a close)
+const KEEP_KBD_EDIT_MS = 400;   // ... and after a key or an edit in it (shorter, so Back pressed more than 400 ms after a key stays a close)
 const KBD_MIN_PX = 100;     // how much taller the visible page must get to count as the keyboard going away (more than the address bar or the suggestion strip)
 function keyboardWentAway(base, now) {
   if (!base || !now || typeof base !== 'object' || typeof now !== 'object') return false;

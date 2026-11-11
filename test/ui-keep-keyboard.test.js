@@ -144,7 +144,7 @@ test('createKeepKeyboard: a tap made while the keyboard is closed, then it openi
   assert.strictEqual(r.reopens, 0);
 });
 
-test('a key or an edit arms the guard for 400 ms only, a tap for 1000 ms (Back pressed just after typing stays a close)', () => {
+test('a key or an edit arms the guard for 400 ms only, a tap for 1000 ms (Back more than 400 ms after a key stays a close; within 400 ms it reopens once)', () => {
   const s = (o) => ({ touchAt: 1000, touchChat: 'sam', chat: 'sam', base: { w: 400, h: 520 }, view: { w: 400, h: 820 }, focused: true, ...o });
   assert.strictEqual(shouldReopenKeyboard(s({ touchKind: 'edit' }), 1400), true);
   assert.strictEqual(shouldReopenKeyboard(s({ touchKind: 'edit' }), 1401), false);
@@ -154,6 +154,10 @@ test('a key or an edit arms the guard for 400 ms only, a tap for 1000 ms (Back p
   r.k.touch('sam', 'edit');                            // typing, then Back 600 ms later
   r.clock = 1600; r.view = { w: 400, h: 820 };
   assert.strictEqual(r.k.resized(r.ctx()), false);
+  const q = rig();                                     // the accepted trade-off: Back 200 ms after a key reopens once
+  q.k.touch('sam', 'edit');
+  q.clock = 1200; q.view = { w: 400, h: 820 };
+  assert.strictEqual(q.k.resized(q.ctx()), true);
   r.clock = 2000; r.view = { w: 400, h: 500 }; r.k.touch('sam', 'edit');   // Backspace with the menu open: hides at once
   r.clock = 2250; r.view = { w: 400, h: 820 };
   assert.strictEqual(r.k.resized(r.ctx()), true);

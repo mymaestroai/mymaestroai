@@ -6,7 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
-- **On the phone, fixing a misspelled word no longer closes the keyboard.** Tapping a red-underlined word in the message box, or pressing Backspace while the phone's spelling menu is open, used to hide the keyboard while the cursor stayed in the word. Your Maestro now brings the keyboard straight back with the cursor where it was, so you can fix the word in place. If you close the keyboard with Back within a second of tapping the box, it may come back once; closing it again keeps it closed.
+- **On the phone, fixing a misspelled word no longer closes the keyboard.** Tapping a red-underlined word in the message box, or pressing Backspace while the phone's spelling menu is open, used to hide the keyboard while the cursor stayed in the word. Your Maestro now brings the keyboard straight back with the cursor where it was, so you can fix the word in place. If you close the keyboard with Back within a second of tapping the box, or straight after typing a letter, it may come back once; closing it again keeps it closed.
 
 - **Agent sandboxes no longer fill up with finished processes.** Each agent's box now starts with a small init process that cleans up finished programs the agent left behind (headless Chrome above all), so they no longer pile up until the box runs out of process slots. A box made before this is made again the next time it is found stopped, with its workspace, Files folder and home kept as they are; a box that is running is never touched, so to move one over now, ask Maestro to stop it while its agent is idle and the next use makes it again.
 
