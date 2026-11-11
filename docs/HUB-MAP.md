@@ -371,7 +371,7 @@ Every tool call on every route is classified into one of: `read`, `write_inside`
 
 ### 8.4 Sandboxes (`lib/sandbox.js`)
 
-One Docker container per agent (`hub-agent-<name>`, image `agent-hub-sandbox:latest` from `sandbox/Dockerfile`): read-only root, no capabilities, CPU and memory limits, mounts limited to the agent's workspace, Files folder, team folders and `policy.roots` at identical paths. Defaults: member-owned agents `container`, admin-side `off` (`sandboxDefaults`); per agent `sandbox`. Build the image from Settings → Agent sandboxes (`POST /api/sandbox/build`). Gateway agents' `Bash` runs inside the box; client agents either run the client inside the box or, with `tools: hub`, keep the client outside and the hands inside.
+One Docker container per agent (`hub-agent-<name>`, image `agent-hub-sandbox:latest` from `sandbox/Dockerfile`): read-only root, no capabilities, CPU and memory limits, `--init` (tini as PID 1 reaps orphaned processes; a stopped box made without it is made again, a running one is left until it next stops), mounts limited to the agent's workspace, Files folder, team folders and `policy.roots` at identical paths. Defaults: member-owned agents `container`, admin-side `off` (`sandboxDefaults`); per agent `sandbox`. Build the image from Settings → Agent sandboxes (`POST /api/sandbox/build`). Gateway agents' `Bash` runs inside the box; client agents either run the client inside the box or, with `tools: hub`, keep the client outside and the hands inside.
 
 ---
 
