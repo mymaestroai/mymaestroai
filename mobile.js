@@ -1408,7 +1408,7 @@ function applySnapshot(map, repaint = true, opts = {}) {
   }
   if (repaint) paintStatus();
   // Woke up (or just loaded) while the open chat's agent is mid-turn: follow that turn.
-  if (current && map[current] && map[current].busy && !Object.values(hubTurns).some(t => t.agent === current)) reattachIfIdle(current);
+  if (current && map[current] && map[current].busy && !followedHubTurn(current)) reattachIfIdle(current);
 }
 
 async function pollStatus() {
@@ -4301,13 +4301,19 @@ function enterReattach(agent, text, bubble, partialHtml, partial, since = null, 
   return ra;
 }
 
+// A hub turn of this agent is followed on screen (onTurnStart drew its bubble and it is still in the chat).
+function followedHubTurn(agent) {
+  return Object.values(hubTurns).some(t => t && t.agent === agent && t.el && t.el.isConnected);
+}
 // The open chat's agent is mid-turn on the server and this phone has no stream to it (page just
 // loaded, woke from sleep, or the turn was started from another device): follow it.
 function reattachIfIdle(agent, partial = '') {
   if (!agent || !chatOpenFor(agent) || streams.has(agent) || reattaches.has(agent)) return;
-  if (Object.values(hubTurns).some(t => t && t.agent === agent)) return;   // a hub turn of this agent is already followed (onTurnStart)
+  if (followedHubTurn(agent)) return;   // that turn is already drawn live; a re-attach would be a second copy
   const s = live[agent];
   if (!s || !s.busy) return;
+  // a followed hub turn whose bubble a redraw removed (chat left and opened again): the re-attach takes over from it
+  for (const [id, t] of Object.entries(hubTurns)) if (t && t.agent === agent && !(t.el && t.el.isConnected)) delete hubTurns[id];
   enterReattach(agent, null, addAssistantBubble(), '', partial, s.busySince || null);
 }
 

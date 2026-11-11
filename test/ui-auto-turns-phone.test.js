@@ -224,6 +224,22 @@ test('a retired re-attach: only of the same turn; reattachIfIdle never starts on
   assert.match(js, /const raEl = ra && !ra\.text && ra\.bubble && \(!ra\.turnId \|\| ra\.turnId === ev\.turnId\) \? ra\.bubble\.el : null;/);
   assert.match(js, /if \(raEl\) \{ reasoningEnd\(ra\); raEl\.remove\(\); reattaches\.delete\(ev\.agent\); paintChatStatus\(\); retired = true; \}/);
   assert.match(js, /if \(retired\) catchUpOpenAgent\(\);/);
-  const ri = js.slice(js.indexOf('function reattachIfIdle('), js.indexOf('function reattachIfIdle(') + 400);
-  assert.match(ri, /if \(Object\.values\(hubTurns\)\.some\(t => t && t\.agent === agent\)\) return;/);
+});
+
+test('reattachIfIdle: a hub turn still on screen blocks a re-attach; a stale one (its bubble removed by a redraw) does not and is dropped', () => {
+  const src = js.slice(js.indexOf('function followedHubTurn('), js.indexOf('// The open chat\'s agent is mid-turn on the server and this phone has no stream'))
+    + js.slice(js.indexOf('function reattachIfIdle('), js.indexOf('\n}\n', js.indexOf('function reattachIfIdle(')) + 3);
+  const run = (hubTurns) => {
+    const entered = [];
+    const fn = new Function('hubTurns', 'chatOpenFor', 'streams', 'reattaches', 'live', 'enterReattach', 'addAssistantBubble',
+      `${src}; return reattachIfIdle;`)(hubTurns, () => true, new Map(), new Map(), { sam: { busy: true } }, (a) => entered.push(a), () => ({}));
+    fn('sam');
+    return entered.length;
+  };
+  assert.strictEqual(run({ t1: { agent: 'sam', el: { isConnected: true } } }), 0, 'followed on screen: no re-attach');
+  const stale = { t1: { agent: 'sam', el: { isConnected: false } } };
+  assert.strictEqual(run(stale), 1, 'stale entry: the re-attach starts');
+  assert.ok(!stale.t1, 'and the stale entry is dropped so live events reach the re-attach');
+  assert.strictEqual(run({ t2: { agent: 'other', el: { isConnected: true } } }), 1, 'another agent\'s turn does not block it');
+  assert.match(js, /if \(current && map\[current\] && map\[current\]\.busy && !followedHubTurn\(current\)\) reattachIfIdle\(current\);/);
 });
