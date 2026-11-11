@@ -1796,6 +1796,54 @@ function setRaw(el, text) {
   rawText.set(el, String(text ?? ''));
 }
 
+// Shared verbatim with lib/ui-keep-keyboard.js (test/ui-keep-keyboard.test.js keeps the two in step): bring the keyboard back when Chrome's spell-check hides it.
+// ── keep-keyboard helpers (begin) ──
+const KEEP_KBD_MS = 1000;       // how long after a tap on the box a keyboard that goes away is brought back
+const KEEP_KBD_EDIT_MS = 400;   // ... and after a key or an edit in it (shorter: Back pressed just after typing must stay a close)
+const KBD_MIN_PX = 100;     // how much taller the visible page must get to count as the keyboard going away (more than the address bar or the suggestion strip)
+function keyboardWentAway(base, now) {
+  if (!base || !now || typeof base !== 'object' || typeof now !== 'object') return false;
+  if (!Number.isFinite(base.w) || !Number.isFinite(base.h) || !Number.isFinite(now.w) || !Number.isFinite(now.h)) return false;
+  return Math.abs(now.w - base.w) <= 2 && now.h - base.h >= KBD_MIN_PX;
+}
+function shouldReopenKeyboard(s, now) {
+  if (!s) return false;
+  const t = (v) => (Number.isFinite(v) ? v : 0);
+  const touchAt = t(s.touchAt);
+  if (touchAt <= 0 || !Number.isFinite(now)) return false;
+  const age = now - touchAt;
+  if (age < 0 || age > (s.touchKind === 'edit' ? KEEP_KBD_EDIT_MS : KEEP_KBD_MS)) return false;
+  if (!s.focused || s.hidden || s.dialogOpen) return false;
+  if (s.touchChat !== s.chat) return false;
+  if (!keyboardWentAway(s.base, s.view)) return false;
+  if (t(s.elsewhereAt) >= touchAt || t(s.sentAt) >= touchAt || t(s.escapeAt) >= touchAt || t(s.hiddenAt) >= touchAt) return false;
+  return t(s.reopenedAt) < touchAt;   // once per tap or edit: a keyboard closed again with Back stays closed
+}
+function createKeepKeyboard({ now = () => Date.now(), viewport, reopen }) {
+  // base is the visible page size at the tap or edit. While the keyboard is open that is the small height, so a later
+  // growth of 100 px or more means it went away. A tap on the box while the keyboard is closed (the box is not focused,
+  // the keyboard is about to open) records a base taken with the keyboard closed: the page then shrinks as the keyboard
+  // opens and grows only back to that base, which is 0 px more, so it is not read as the keyboard going away.
+  const s = { touchAt: 0, touchKind: 'tap', touchChat: null, chat: null, base: null, view: null, focused: false, elsewhereAt: 0, sentAt: 0, escapeAt: 0, hiddenAt: 0, reopenedAt: 0, hidden: false, dialogOpen: false };
+  return {
+    touch(chat, kind = 'tap') { s.touchAt = now(); s.touchKind = kind === 'edit' ? 'edit' : 'tap'; s.touchChat = chat; s.base = viewport(); },
+    elsewhere() { s.elsewhereAt = now(); },
+    sent() { s.sentAt = now(); },
+    escape() { s.escapeAt = now(); },
+    hidden() { s.hiddenAt = now(); },
+    resized(ctx) {
+      s.view = viewport();
+      s.chat = ctx.chat; s.focused = !!ctx.focused; s.hidden = !!ctx.hidden; s.dialogOpen = !!ctx.dialogOpen;
+      const at = now();
+      if (!shouldReopenKeyboard(s, at)) return false;
+      s.reopenedAt = at;
+      reopen();
+      return true;
+    },
+  };
+}
+// ── keep-keyboard helpers (end) ──
+
 // The date and time under each message: when it was sent, when a reply was finished and how long it took.
 // Shared verbatim with lib/ui-msg-time.js and app.js (test/ui-msg-time.test.js keeps the three in step).
 // ── message-time helpers (begin) ──
@@ -3835,7 +3883,9 @@ function onComposerTap(btn, act) {
 // A tap on Send sends, then the keyboard goes away (2026-10-21: the owner wants the box let go after a
 // send). The box keeps focus until sendMessage has taken its text, which happens before its first await,
 // and only lets go if the text or images really went: a tap with nothing to send keeps the keyboard up.
+let keepKeyboard = null;   // set up with the message box; sent() tells it a send is not a keyboard that went away
 function sendAndClose() {
+  keepKeyboard && keepKeyboard.sent();
   const input = $('msg-input');
   const hadText = !!input.value.trim();
   const hadImages = pendingImages.length > 0;
@@ -5563,6 +5613,20 @@ function wire() {
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; saveDraft(current, input.value); });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
+  // Chrome's spell-check menu (a tap on an underlined word, Backspace with the menu open) hides the soft keyboard
+  // while the box keeps focus, and Android only reopens it on a new focus. So a keyboard that goes away right after
+  // a tap on the box or an edit in it, with the box still focused, is brought back by blurring and refocusing the box.
+  const vv = window.visualViewport;
+  const viewSize = () => (vv ? { w: vv.width, h: vv.height } : { w: window.innerWidth, h: window.innerHeight });
+  keepKeyboard = createKeepKeyboard({ viewport: viewSize, reopen: () => setTimeout(() => { if (document.hidden || document.activeElement !== input) return; const s = input.selectionStart, e = input.selectionEnd, d = input.selectionDirection; input.blur(); input.focus({ preventScroll: true }); try { input.setSelectionRange(s, e, d || 'none'); } catch { /* no selection */ } }, 0) });
+  input.addEventListener('pointerdown', () => keepKeyboard.touch(current));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') keepKeyboard.escape(); else keepKeyboard.touch(current, 'edit'); });
+  input.addEventListener('beforeinput', () => keepKeyboard.touch(current, 'edit'));
+  input.addEventListener('input', () => keepKeyboard.touch(current, 'edit'));
+  document.addEventListener('pointerdown', (e) => { if (e.target !== input && !(input.contains && input.contains(e.target))) keepKeyboard.elsewhere(); }, { capture: true, passive: true });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) keepKeyboard.hidden(); });
+  const onView = () => keepKeyboard.resized({ chat: current, focused: document.activeElement === input, hidden: document.hidden, dialogOpen: !!document.querySelector('dialog[open], .rsn-sheet.open, [role="dialog"].open') });
+  if (vv) vv.addEventListener('resize', onView); else window.addEventListener('resize', onView);
   // Send, and the 🔔 beside it, act on the touch itself (onComposerTap). Once a send has taken the text,
   // sendAndClose lets go of the box so the keyboard goes away.
   onComposerTap($('send-btn'), sendAndClose);
