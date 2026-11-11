@@ -5,6 +5,8 @@
 // then confirmed (journal, then a restart) or cancelled; held items decided through the modules that own them.
 // And the routes: admin only, the password asked again where it matters, the Welcome restore only before any account.
 const { test, after } = require('node:test');
+const { installTripwire, tripped } = require('./helpers/no-live-modules');
+installTripwire();   // before anything under ../lib/backup is required
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
@@ -22,12 +24,16 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-service-'));
 after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 const PW = 'service test passphrase';
 const HUB = () => ({ version: '5.8.1', channel: 'experimental' });
+const noModulePlaces = () => {
+  const no = async () => { throw new Error('no module places in this test'); };
+  return { places: () => [], put: no, list: async () => [], remove: no, get: no };
+};
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function serviceFor(inst, extra = {}) {
   const restarts = [];
   const settings = extra.settings || memSettings();
-  const svc = createBackupService({ ...inst, platform: 'linux', settings, hubInfo: HUB, restart: (why) => restarts.push(why), ...extra });
+  const svc = createBackupService({ ...inst, platform: 'linux', settings, hubInfo: HUB, restart: (why) => restarts.push(why), modulePlaces: noModulePlaces(), ...extra });
   return { svc, settings, restarts };
 }
 
@@ -354,4 +360,8 @@ test('the routes: admin only, the password asked again for restore, undo and dow
   assert.match(wel, /if \(hubAuth\.hasUsers\(\)\) return jsonResponse\(res, 403/);
   assert.match(wel, /if \(hubAuth\.hasUsers\(\)\) return jsonResponse\(res, 403[^\n]*\n[^\n]*\n\s+if \(!welcome\.checkSetupToken\(String\(req\.headers\['x-setup-token'\] \|\| ''\)\)\) return jsonResponse\(res, 403/, 'the setup code, from a header, before any body is read, on every step');
   assert.match(wel, /checkStagedAdmin\(\{ login: b\.login, password: b\.password, code: b\.code \}\)[\s\S]{0,80}confirmRestore/);
+});
+
+test('no backup test reached the real modules or connectors (a live install\'s connectors would start)', () => {
+  assert.deepStrictEqual(tripped(), []);
 });
