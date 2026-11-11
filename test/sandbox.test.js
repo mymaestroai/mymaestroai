@@ -16,7 +16,12 @@ function rig(o = {}) {
     const cmd = args[0];
     if (cmd === 'image' && o.noImage) throw new Error('No such image');
     if (cmd === 'version' && o.noDocker) throw new Error('docker: not found');
-    if (cmd === 'inspect') { const st = states[args[args.length - 1]]; if (!st) throw new Error('No such container'); return { stdout: st + '\n', stderr: '' }; }
+    if (cmd === 'inspect') {
+      const st = states[args[args.length - 1]]; if (!st) throw new Error('No such container');
+      if (args.includes('{{.HostConfig.Init}}')) return { stdout: o.init === false ? 'false\n' : (o.init === 'absent' ? '<no value>\n' : 'true\n'), stderr: '' };
+      if (o.binds && String(args[2]).includes('.Mounts')) return { stdout: o.binds().map(b => `${b}\n`).join(''), stderr: '' };
+      return { stdout: st + '\n', stderr: '' };
+    }
     if (cmd === 'create') { states[args[args.indexOf('--name') + 1]] = 'created'; return { stdout: 'id\n', stderr: '' }; }
     if (cmd === 'start') { states[args[args.length - 1]] = 'running'; return { stdout: '', stderr: '' }; }
     if (cmd === 'exec') {
@@ -31,7 +36,7 @@ function rig(o = {}) {
   const creds = path.join(dir, '.credentials.json'); fs.writeFileSync(creds, '{"tok":1}');
   const ws = (a) => path.join(dir, 'workspaces', a.name);
   const sb = createSandbox({
-    docker, wrapperDir: path.join(dir, 'wrappers'), credentialsFile: creds, uid: 1000, gid: 1000, image: 'agent-hub-sandbox:test', log: () => {},
+    docker, wrapperDir: path.join(dir, 'wrappers'), credentialsFile: creds, uid: 1000, gid: 1000, image: 'agent-hub-sandbox:test', log: o.log || (() => {}),
     getSetting: (k) => (o.settings || {})[k],
     isMemberOwned: (a) => !!(a && a.owner && a.owner !== 'admin1'),
     rootsFor: o.rootsFor || ((a) => [os.tmpdir(), '/tmp', path.join(require('../lib/tool-policy').HUB_HOME, 'share'), ws(a), path.join(dir, 'users', String(a.owner || 'x')), path.join(require('../lib/tool-policy').HUB_HOME, 'agent-hub-5.1.0')]),
@@ -70,7 +75,7 @@ test('ensure: creates a hardened container (no caps, read-only root, user, pid l
   await sb.ensure(member);
   const create = calls.find(a => a[0] === 'create');
   const s = create.join(' ');
-  for (const flag of ['--cap-drop ALL', '--read-only', '--user 1000:1000', '--pids-limit', '--security-opt no-new-privileges', '--network bridge', `-v ${ws(member)}:${ws(member)}`, 'hub-agent-boxed-home:/home/agent', '--workdir ' + ws(member)]) assert.ok(s.includes(flag), flag);
+  for (const flag of ['--cap-drop ALL', '--read-only', '--user 1000:1000', '--pids-limit', '--security-opt no-new-privileges', '--network bridge', '--init', `-v ${ws(member)}:${ws(member)}`, 'hub-agent-boxed-home:/home/agent', '--workdir ' + ws(member)]) assert.ok(s.includes(flag), flag);
   assert.ok(!s.includes('agent-hub-5.1.0/data'), 'hub data never mounted');
   calls.length = 0;
   await sb.ensure(member);
@@ -78,6 +83,45 @@ test('ensure: creates a hardened container (no caps, read-only root, user, pid l
   const g = rig(); fs.mkdirSync(g.ws(gatewayMember), { recursive: true });
   await g.sb.ensure(gatewayMember);
   assert.ok(g.calls.find(a => a[0] === 'create').join(' ').includes('--network none'), 'gateway agents get no network');
+});
+
+test('ensure: a stopped box with the right folders and an init process is started, not made again', async () => {
+  const name = 'hub-agent-boxed';
+  const r2 = rig({ states: { [name]: 'exited' }, init: true, binds: () => r2.sb.mountsFor(member) });
+  fs.mkdirSync(r2.ws(member), { recursive: true });
+  assert.strictEqual(await r2.sb.ensure(member), name);
+  assert.deepStrictEqual(r2.calls.filter(a => ['rm', 'create', 'start'].includes(a[0])), [['start', name]]);
+});
+
+test('ensure: a stopped box with the right folders but made without an init process (false or absent) is made again with --init, same mounts and home volume; the log says so', async () => {
+  for (const init of [false, 'absent']) {
+    const name = 'hub-agent-boxed';
+    const logs = [];
+    const fresh = rig(); fs.mkdirSync(fresh.ws(member), { recursive: true });
+    await fresh.sb.ensure(member);
+    const freshCreate = fresh.calls.find(a => a[0] === 'create');
+    const r = rig({ states: { [name]: 'exited' }, init, log: (m) => logs.push(m), binds: () => r.sb.mountsFor(member) });
+    fs.mkdirSync(r.ws(member), { recursive: true });
+    assert.strictEqual(await r.sb.ensure(member), name);
+    const rm = r.calls.findIndex(a => a.join(' ') === `rm -f ${name}`), create = r.calls.findIndex(a => a[0] === 'create');
+    assert.ok(rm >= 0 && create > rm, 'removed, then created');
+    const args = r.calls[create];
+    assert.ok(args.includes('--init'));
+    const vols = (a) => a.map((x, i) => (a[i - 1] === '-v' ? x : null)).filter(Boolean);
+    assert.deepStrictEqual(vols(args), ['hub-agent-boxed-home:/home/agent', ...r.sb.mountsFor(member).map(m => `${m}:${m}`)], 'same -v mounts and home volume as a fresh box');
+    assert.strictEqual(vols(args).length, vols(freshCreate).length);
+    assert.ok(vols(args).includes('hub-agent-boxed-home:/home/agent'));
+    assert.ok(logs.includes(`${name} was made without an init process; making it again`), String(init));
+  }
+});
+
+test('ensure: a running box made without an init process is never touched', async () => {
+  const name = 'hub-agent-boxed';
+  const r = rig({ states: { [name]: 'running' }, init: false });
+  fs.mkdirSync(r.ws(member), { recursive: true });
+  assert.strictEqual(await r.sb.ensure(member), name);
+  assert.ok(!r.calls.some(a => a.includes('{{.HostConfig.Init}}')), 'init not even looked at');
+  assert.ok(!r.calls.some(a => ['rm', 'create', 'start'].includes(a[0])));
 });
 
 test('wrapper: the SDK launches a script that execs the client inside the box forwarding only the listed variables', () => {
@@ -256,9 +300,10 @@ test('a stopped box made for other folders is made again instead of started (a r
     const name = args[args.length - 1];
     if (args[0] === 'image') return { stdout: '', stderr: '' };
     if (args[0] === 'inspect' && String(args[2]).includes('.Mounts')) { if (!boxes[name]) throw new Error('No such object'); return { stdout: boxes[name].binds.map(b => `${b}\n`).join(''), stderr: '' }; }
+    if (args[0] === 'inspect' && args.includes('{{.HostConfig.Init}}')) { if (!boxes[name]) throw new Error('No such object'); return { stdout: `${boxes[name].init}\n`, stderr: '' }; }
     if (args[0] === 'inspect') { if (!boxes[name]) throw new Error('No such object'); return { stdout: `${boxes[name].status}\n`, stderr: '' }; }
     if (args[0] === 'rm') { delete boxes[args[2]]; return { stdout: '', stderr: '' }; }
-    if (args[0] === 'create') { const binds = []; for (let i = 0; i < args.length; i++) if (args[i] === '-v' && args[i + 1].startsWith('/')) binds.push(args[i + 1].split(':')[0]); boxes[args[args.indexOf('--name') + 1]] = { status: 'created', binds }; return { stdout: 'id\n', stderr: '' }; }
+    if (args[0] === 'create') { const binds = []; for (let i = 0; i < args.length; i++) if (args[i] === '-v' && args[i + 1].startsWith('/')) binds.push(args[i + 1].split(':')[0]); boxes[args[args.indexOf('--name') + 1]] = { status: 'created', binds, init: args.includes('--init') }; return { stdout: 'id\n', stderr: '' }; }
     if (args[0] === 'start') { boxes[name].status = 'running'; return { stdout: '', stderr: '' }; }
     return { stdout: '', stderr: '' };
   };
@@ -268,13 +313,20 @@ test('a stopped box made for other folders is made again instead of started (a r
   // a stopped box of this agent made for other folders (its Files folder appeared, or a removal failed)
   boxes['hub-agent-newname-eeeeeeeeeeee'] = { status: 'exited', binds: [path.join(dir, 'workspaces', 'oldname')] };
   assert.strictEqual(await sb.ensure(agent), 'hub-agent-newname-eeeeeeeeeeee');
-  assert.deepStrictEqual(boxes['hub-agent-newname-eeeeeeeeeeee'], { status: 'running', binds: [ws(agent)] }, 'made again with the new folders');
+  assert.deepStrictEqual(boxes['hub-agent-newname-eeeeeeeeeeee'], { status: 'running', binds: [ws(agent)], init: true }, 'made again with the new folders');
   assert.ok(calls.includes('rm -f hub-agent-newname-eeeeeeeeeeee'));
   // stopped with the right folders: simply started again, nothing made
   boxes['hub-agent-newname-eeeeeeeeeeee'].status = 'exited';
   const before = calls.length;
   await sb.ensure(agent);
   assert.deepStrictEqual(calls.slice(before).filter(c => /^(rm|create|start) /.test(c)), ['start hub-agent-newname-eeeeeeeeeeee']);
+  // stopped with the right folders but made without an init process: made again
+  boxes['hub-agent-newname-eeeeeeeeeeee'] = { status: 'exited', binds: [ws(agent)], init: false };
+  const b2 = calls.length;
+  await sb.ensure(agent);
+  const after = calls.slice(b2).filter(c => /^(rm|create|start) /.test(c)).map(c => c.split(' ').slice(0, 2).join(' '));
+  assert.deepStrictEqual(after, ['rm -f', 'create --name', 'start hub-agent-newname-eeeeeeeeeeee']);
+  assert.deepStrictEqual(boxes['hub-agent-newname-eeeeeeeeeeee'], { status: 'running', binds: [ws(agent)], init: true });
   // a running box is never made again under a turn's feet
   boxes['hub-agent-newname-eeeeeeeeeeee'] = { status: 'running', binds: ['/somewhere/else'] };
   const n = calls.length;
