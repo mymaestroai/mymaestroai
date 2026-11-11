@@ -289,7 +289,7 @@ test('TASKS.md prompts are saved with a "not typed by the owner" header and run 
   const a = src.indexOf('function tasksMdMessage'); const b = src.indexOf('async function executeAgentTask');
   const tasksMdMessage = new Function(src.slice(a, b) + '\nreturn tasksMdMessage;')();
   const m = tasksMdMessage('daily-scout-review', 'Review the scouts.', new Date('2026-09-30T00:15:00Z'), 'America/New_York');   // the hub's zone comes from the caller
-  assert.match(m, /^\[Scheduled task — started by the hub scheduler from TASKS\.md, NOT a message typed by the owner\] "daily-scout-review", run Tue, Sep 29, 2026, 8:15 PM EDT\.\n\nTask:\nReview the scouts\.$/);
+  assert.match(m, /^\[Scheduled task — started by the hub scheduler from TASKS\.md, NOT a message typed by the owner\] "daily-scout-review", run Tue, Sep 29, 2026, 8:15 PM EDT\.\n\nTask:\nReview the scouts\.\n\nIf the person you work for must see your reply, call for_owner; otherwise it stays folded in their chat\.$/);
   assert.match(src, /const message = tasksMdMessage\(taskId, prompt, new Date\(\), require\('\.\/timezone'\)\.hubZone\(\)\);[\s\S]{0,400}message,\n\s*origin: \{ kind: 'schedule', from: taskId \}/);
 });
 

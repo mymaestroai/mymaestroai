@@ -29,14 +29,16 @@ test('mobile: same re-attach on snapshot and when opening a busy agent\'s chat; 
   assert.match(m, /function reattachIfIdle\(agent, partial = ''\) \{/);
   assert.match(m, /if \(!agent \|\| !chatOpenFor\(agent\) \|\| streams\.has\(agent\) \|\| reattaches\.has\(agent\)\) return;/);
   assert.match(m, /enterReattach\(agent, null, addAssistantBubble\(\), '', partial, s\.busySince \|\| null\)/);
-  assert.match(m, /if \(current && map\[current\] && map\[current\]\.busy && !Object\.values\(hubTurns\)\.some\(t => t\.agent === current\)\) reattachIfIdle\(current\);/);
+  // only a hub turn still drawn on screen counts as followed (one whose bubble a redraw removed does not: lib/ui-auto-turns review r4)
+  assert.match(m, /if \(current && map\[current\] && map\[current\]\.busy && !followedHubTurn\(current\)\) reattachIfIdle\(current\);/);
+  assert.match(m, /function followedHubTurn\(agent\) \{\s*return Object\.values\(hubTurns\)\.some\(t => t && t\.agent === agent && t\.el && t\.el\.isConnected\);/);
   assert.match(m, /reattachIfIdle\(name, inProgress \? String\(inProgress\.content \|\| ''\) : ''\);[\s\S]{0,420}if \(parked\) \{ pendingQuestionsByAgent\.delete\(name\); showQuestion\(parked\); \}\s*paintChatStatus\(\);\s*scrollChat\(true\);/);
   assert.match(m, /function enterReattach\(agent, text, bubble, partialHtml, partial, since = null, sentAt = null\)/);
   assert.match(m, /const ui = ra\.text \? ownEntryIndex\(hist, ra\.text, ra\.sentAt \|\| ra\.startedAt, r\.headers\.get\('Date'\)\) : -1;/);
   assert.match(m, /\} else if \(!ra\.text && ra\.since\) \{/);
   assert.match(m, /if \(stillBusy === true \|\| reply\.inProgress\) \{[^\n]*\n\s*\/\/ Still working/);
   assert.match(m, /if \(ui < 0 && ra\.text\) \{/);
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v62'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v63'/);
 });
 
 test('a chat opened while its agent is mid-turn (reload, or reopened from the sidebar) follows the turn at once', () => {
