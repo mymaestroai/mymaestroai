@@ -1225,8 +1225,10 @@ async function changeModelFromPick() {
   };
   if (model === AUTO_PICK) {
     if (a.autoModel) return;
+    sel.disabled = true;
     try { await setAuto(true); toast(`${a.display || name} now picks its model and effort for each turn (Auto)`); if (current === name) { paintChatStatus(); fillEffortPick(); } }
     catch (e) { back(); toast(`Could not turn on Auto: ${e.message}`); }
+    finally { sel.disabled = false; }
     return;
   }
   if (model === a.model && !a.autoModel) return;
