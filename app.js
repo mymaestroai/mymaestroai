@@ -6173,6 +6173,22 @@
       fillModelPick(chatId).then(() => { sel.focus(); try { if (sel.showPicker) sel.showPicker(); } catch { /* the next click opens it */ } });
       return false;
     }
+    // An Auto agent's turn says which model it picked (gateway auto_model): shown as "→ <model>" beside the picker.
+    // Only that note changes. The header also holds the model picker, the effort picker and the plan badge; writing the
+    // header's textContent (as the old "Name (model)" code did) flattened all of them into one long line of option text.
+    function noteAutoModel(chatId, modelShort) {
+      const header = document.querySelector(`#panel-${chatId} .chat-actions .agent-name`);
+      if (!header || !modelShort) return;
+      let note = header.querySelector('.auto-model-note');
+      if (!note) {
+        note = document.createElement('span');
+        note.className = 'auto-model-note';
+        const sel = header.querySelector('.model-pick');
+        if (sel) sel.after(note); else header.appendChild(note);
+      }
+      note.textContent = `→ ${modelShort}`;
+      note.title = `Auto picked ${modelShort} for this reply`;
+    }
     function fillModelPick(chatId) {
       const sel = document.getElementById(`model-pick-${chatId}`);
       if (!chats[chatId] || !sel || sel.dataset.filled === 'done') return Promise.resolve();
@@ -9644,11 +9660,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                       cib.dataset.modelAppended = '1';
                     }
                   }
-                  const headerSpan = document.querySelector(`#panel-${chatId} .agent-name`);
-                  if (headerSpan) {
-                    const agentDisplayName = headerSpan.textContent.split(' (')[0];
-                    headerSpan.textContent = `${agentDisplayName} (${modelShort})`;
-                  }
+                  noteAutoModel(chatId, modelShort);
                 } catch {}
                 continue;
               }
@@ -9963,11 +9975,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   }
                 }
                 // Update panel header
-                const headerSpan = document.querySelector(`#panel-${chatId} .agent-name`);
-                if (headerSpan) {
-                  const name = headerSpan.textContent.split(' (')[0];
-                  headerSpan.textContent = `${name} (${modelShort})`;
-                }
+                noteAutoModel(chatId, modelShort);
                 continue;
               }
               if (oc2.type === 'approval_request' || oc2.type === 'approval_resolved') {

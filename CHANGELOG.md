@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The chat header of an agent on Auto no longer turns into a long line of model names.** When an Auto agent started a reply, the header's model picker, effort picker and plan badge were replaced by the text of every model in the list, run together across several lines. The header now keeps its controls and shows the model Auto picked as a small "→ model" note beside the picker. (`app.js`)
+
 ## [5.10.0] - 2026-11-11
 
 What's new since 5.9.1: data connectors for your Ring cameras, Oura Ring and Google Drive (a copy of every backup there), Remote computers for a computer you set aside for your agents, the wallet unlocked with Face ID or a fingerprint, Maestro building new agents with you, consultations and scheduled tasks folded into cards in the chat, a Workers list, a memory check for every agent, an updated Claude client that can run Fable 5.2, an easier question card, and fixes for the phone keyboard, agent sandboxes and Claude extra usage.
