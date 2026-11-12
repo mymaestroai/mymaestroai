@@ -6,7 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
-- **The chat header of an agent on Auto no longer turns into a long line of model names.** When an Auto agent started a reply, the header's model picker, effort picker and plan badge were replaced by the text of every model in the list, run together across several lines. The header now keeps its controls and shows the model Auto picked as a small "→ model" note beside the picker. (`app.js`)
+- **"Auto" is a choice in the chat header's model picker, and an agent on Auto shows it.** Auto (the hub picks the model and effort for each turn) is the first entry in the picker, on the desktop and the phone: choose it to turn Auto on, choose any model to turn it off; you no longer need the agent's settings page for that. An Auto agent's picker reads "Auto", then "Auto · claude-sonnet-5-5" once a reply shows which model Auto picked; it used to jump to whatever model the agent was set to, as if Auto were off. The effort picker hides while Auto is on, as before. Also fixed: when an Auto agent started a reply, the header's model picker, effort picker and plan badge were replaced by the text of every model in the list, run together across several lines. (`app.js`, `mobile.js`)
 
 ## [5.10.0] - 2026-11-11
 

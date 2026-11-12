@@ -173,10 +173,10 @@ test('every model change from the chat header tests a model the hub has not seen
     assert.match(t, /return confirm\(`\$\{r\.title \|\| `\$\{name\} may not work here\.`\} \$\{r\.what \|\| r\.error \|\| ''\}\\n\\nWhat to do: \$\{r\.fix \|\| 'pick another model\.'\}\\n\\nSwitch anyway\?`\);/);
     assert.match(t, /const passed = r\.ok !== undefined \? r\.ok : r\.success;/, 'a hub not yet restarted answers in the old shape');
   }
-  assert.match(extract(app, 'changeChatModel'), /if \(!opts\.tested && !\(await testBeforeSwitch\(model\)\)\) \{ if \(sel\) sel\.value = chat\.model; return false; \}/);
+  assert.match(extract(app, 'changeChatModel'), /if \(model !== chat\.model && !opts\.tested && !\(await testBeforeSwitch\(model\)\)\) \{ back\(\); return false; \}/);
   const choose = extract(app, 'chooseOrModel');
   assert.ok(choose.indexOf('await testBeforeSwitch(model)') < choose.indexOf("fetch('/api/openrouter', { method: 'POST'"), 'desktop search: tested before it joins the list');
-  assert.match(extract(mjs, 'changeModelFromPick'), /if \(!\(await testBeforeSwitch\(model\)\)\) \{ sel\.value = a\.model; return; \}/);
+  assert.match(extract(mjs, 'changeModelFromPick'), /if \(model !== a\.model && !\(await testBeforeSwitch\(model\)\)\) \{ back\(\); return; \}/);
   const click = extract(mjs, 'onOrSheetClick');
   assert.ok(click.indexOf('await testBeforeSwitch(model)') < click.indexOf("api('/api/openrouter', { method: 'POST'"), 'phone search: tested before it joins the list');
   assert.match(app, /\$\{esc\(\(\(billing\[m\] && billing\[m\]\.short\) \|\| billingDisplay\(m, true\)\) \+ healthNote\(health && health\[m\]\)\)\}/);
