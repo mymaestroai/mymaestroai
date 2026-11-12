@@ -423,6 +423,42 @@ test('session-bound grace: a duplicate request keeps the original id binding', a
   assert.strictEqual(r.reset, false, 'bound to sOld, run under sNew');
 });
 
+test('session-bound grace: known id, request, then a null reading before the run -> strict window; sticky sessionId stays s1', async () => {
+  const h = makeBrief();
+  h.setBrief(h.now() - 60 * SEC);
+  h.sess('s1'); h.c.request('a', 'agent');
+  assert.strictEqual(h.c.get('a').requestedSessionId, 's1');
+  const r = await h.c.noteUsage('a', 10, 1000, null);   // the turn ended with no id: authoritative, not the previous one
+  assert.strictEqual(h.c.get('a').sessionId, 's1', 'sticky sessionId unchanged');
+  assert.deepStrictEqual([r.ok, r.reset], [false, false]);
+  assert.match(r.error, FAIL);
+  assert.deepStrictEqual(h.resets, []);
+});
+
+test('session-bound grace: known id, then a null reading BEFORE the request -> strict window', async () => {
+  const h = makeBrief();
+  h.setBrief(h.now() - 60 * SEC);
+  h.sess('s1');
+  h.c.noteUsage('a', 10, 1000, null);
+  assert.strictEqual(h.c.get('a').sessionId, 's1', 'sticky sessionId unchanged');
+  assert.strictEqual(h.c.get('a').lastReadingSessionId, null);
+  h.c.request('a', 'agent');
+  assert.strictEqual(h.c.get('a').requestedSessionId, null);
+  const r = await h.c.run('a', 'agent');
+  assert.deepStrictEqual([r.ok, r.reset], [false, false]);
+  assert.match(r.error, FAIL);
+});
+
+test('session-bound grace: a brief fresh within the strict window passes even when no latest id is known', async () => {
+  const h = makeBrief();
+  h.sess('s1'); h.c.noteUsage('a', 10, 1000, null);
+  h.c.request('a', 'agent');
+  h.setBrief(h.now() - 2 * SEC);
+  const r = await h.c.run('a', 'agent');
+  assert.deepStrictEqual([r.ok, r.reset], [true, true]);
+  assert.strictEqual(h.c.get('a').lastReadingSessionId, null, 'cleared by the reset');
+});
+
 test('session-bound grace: no recorded id (no session known at request time) -> strict window; id is consumed by the run', async () => {
   const h = makeBrief();
   const c2 = createCompaction({ now: h.now, log: () => {}, persist: false, post: async () => 'ok', resetSession: async () => { h.resets.push('x'); },
