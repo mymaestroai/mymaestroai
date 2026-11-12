@@ -3253,6 +3253,8 @@ server.listen(PORT, HOST, () => {
   // Only now: this process holds the port, so no older hub on it is still writing; and first, before any turn can
   // write (lib/transcript splitCombined; the old file is kept as transcript.db.pre-split).
   try { require('./lib/transcript').getTranscript().migrate(); } catch (e) { console.error('[transcript] split not run:', e.message); }
+  // A hub restart during the voice download leaves the setting on and nothing installing: pick the install up again.
+  setTimeout(() => { try { require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
   // A restored setup that has run for 30 s counts as healthy: its 7-day undo clock starts (lib/backup/apply).
   setTimeout(() => { try { if (require('./lib/backup/apply').markHealthy({ root: __dirname })) console.log('[restore] the restored setup started fine; it can be undone for 7 days'); } catch (e) { console.error('[restore]', e.message); } }, 30000).unref();
   // once a day: set-aside copies past their 7 days, a checked restore nobody confirmed, old uploads (not only at a start)

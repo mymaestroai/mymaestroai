@@ -546,7 +546,11 @@
   #voice-level { height: 4px; margin: 0 2px 6px; border-radius: 2px; background: var(--border); overflow: hidden; }
   #voice-level[hidden] { display: none; }
   #voice-level i { display: block; height: 100%; width: 0; background: var(--error, #e5484d); transition: width .08s linear; }
-  .msg .speak { position: absolute; top: 2px; right: 32px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 14px; line-height: 1; color: inherit; opacity: .45; background: none; }
+  #mic-btn svg { display: block; width: 20px; height: 20px; }
+  /* the copy button takes the right 30px of a bubble; the speaker sits just left of it, so an assistant reply keeps 58px free on the right */
+  body:not(.no-speak) .msg.assistant { padding-right: 58px; }
+  body.no-speak .msg .speak { display: none; }
+  .msg .speak { position: absolute; top: 2px; right: 30px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 14px; line-height: 1; color: inherit; opacity: .45; background: none; }
   .msg .speak:active, .msg.speaking .speak { opacity: 1; background: rgba(127,127,127,.25); }
   .voice-sheet .rsn-sheet-title { color: var(--text); }
   .vs-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; outline: none; padding: 14px 14px calc(16px + var(--sab)); display: flex; flex-direction: column; gap: 12px; font-size: 15px; color: var(--text); }
@@ -685,7 +689,7 @@
       <div class="row">
         <button class="iconbtn" id="attach-btn" aria-label="Attach a file or image">&#x1F4CE;</button>
         <button class="iconbtn" id="camera-btn" aria-label="Camera">&#x1F4F7;</button>
-        <button class="iconbtn" id="mic-btn" type="button" aria-label="Dictate a message" aria-pressed="false" title="Tap to dictate, tap again to stop" hidden>&#x1F399;</button>
+        <button class="iconbtn" id="mic-btn" type="button" aria-label="Dictate" aria-pressed="false" title="Tap to dictate, tap again to stop" hidden><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg></button>
         <textarea id="msg-input" rows="1" placeholder="Message"></textarea>
         <button class="notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
         <button id="send-btn" aria-label="Send">&#x27A4;</button>

@@ -7951,7 +7951,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" title="Talk (tap to start, tap to stop)">&#127897;</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span>
+          <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -8079,6 +8079,7 @@
       event?.stopPropagation();
       const chat = chats[chatId];
       if (!chat) return;
+      voiceChatGone(chatId);   // dictation in this chat ends without uploading
 
       if (chat.controller) chat.controller.abort();
       if (chat.controllers) Object.values(chat.controllers).forEach(c => c?.abort());
@@ -10431,6 +10432,42 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const t = String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
       return VOICE_STOP_COMMANDS.has(t);
     }
+    function voicePickLocalVoice(voices, lang) {
+      const pre = String(lang || 'en').toLowerCase();
+      const local = Array.from(voices || []).filter(v => v && v.localService === true && String(v.lang || '').toLowerCase().startsWith(pre));
+      return local.find(v => v.default === true) || local[0] || null;
+    }
+    async function voiceWaitLocalVoice(synth, lang, waitMs = 1000) {
+      if (!synth || typeof synth.getVoices !== 'function') return null;
+      let list = synth.getVoices() || [];
+      if (!list.length && typeof synth.addEventListener === 'function') {
+        list = await new Promise((resolve) => {
+          let done = false, timer = null;
+          const fin = () => {
+            if (done) return;
+            done = true; clearTimeout(timer);
+            try { synth.removeEventListener('voiceschanged', fin); } catch { /* gone */ }
+            resolve(synth.getVoices() || []);
+          };
+          timer = setTimeout(fin, waitMs);
+          synth.addEventListener('voiceschanged', fin);
+        });
+      }
+      return voicePickLocalVoice(list, lang);
+    }
+    function voiceMicGuard() {
+      const g = { pending: false, gen: 0 };
+      g.begin = () => { if (g.pending) return -1; g.pending = true; return g.gen; };
+      g.cancel = () => { g.gen++; };
+      g.fail = () => { g.pending = false; };
+      g.settle = (token, mic) => {
+        g.pending = false;
+        if (token === g.gen) return true;
+        try { if (mic && mic.close) mic.close(); } catch { /* already closed */ }
+        return false;
+      };
+      return g;
+    }
     // ── voice helpers (end) ──
 
     // The date and time under each message: when it was sent, when a reply was finished and how long it took.
@@ -10496,6 +10533,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     let voiceSettingsTimer = null;
     const VOICE_SAMPLE_TEXT = 'This is the voice I will use to read replies to you.';
     const VOICE_MAX_RECORD_S = 60;
+    const VOICE_MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg>';
+    const voiceOfflineHint = 'This device has no offline voice; turn on voice in Settings';
+    const voiceBusyToast = (status) => { if (status === 409) hubToast('Voice is turned off'); else if (status === 503) hubToast('Voice is busy, try again in a few seconds'); else return false; return true; };
     const voiceById = (id) => document.getElementById(id);
     function voicePrefsNow() {
       if (!voicePrefsCache) { try { voicePrefsCache = voiceLoadPrefs(localStorage) || {}; } catch { voicePrefsCache = {}; } }
@@ -10552,7 +10592,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
 
     // Tap-to-talk. Tap 1 opens the mic; tap 2 (or 60 s) closes it, sends the recording to the hub and puts the text in the box.
-    const voiceRec = { chatId: null, mic: null, chunks: [], samples: 0, level: -100, t0: 0, timer: null, busy: false };
+    const voiceRec = { chatId: null, mic: null, chunks: [], samples: 0, level: -100, t0: 0, timer: null, busy: false, guard: voiceMicGuard(), pendingChat: null };
     function voiceMicPaint(chatId, state, label) {
       const b = voiceById(`mic-${chatId}`), m = voiceById(`mic-meter-${chatId}`);
       if (!b) return;
@@ -10560,12 +10600,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       b.classList.toggle('wait', state === 'wait');
       b.setAttribute('aria-pressed', state === 'rec' ? 'true' : 'false');
       b.disabled = state === 'wait';
-      b.textContent = state === 'rec' ? `■ ${label || '0:00'}` : state === 'wait' ? '…' : '\u{1F399}';
+      b.setAttribute('aria-label', state === 'rec' ? 'Stop dictation' : 'Dictate');
+      if (state === 'rec') b.textContent = `■ ${label || '0:00'}`;
+      else if (state === 'wait') b.textContent = '…';
+      else if (!b.querySelector('svg')) b.innerHTML = VOICE_MIC_SVG;
       if (m) { m.style.display = state === 'rec' ? '' : 'none'; if (state !== 'rec') { const i = m.firstElementChild; if (i) i.style.width = '0%'; } }
     }
     function voiceMicTick() {
       const chatId = voiceRec.chatId;
       if (!chatId) return;
+      if (!voiceById(`mic-${chatId}`)) { voiceMicStop(false); return; }   // the chat was closed: stop, upload nothing
       const s = Math.floor((Date.now() - voiceRec.t0) / 1000);
       voiceMicPaint(chatId, 'rec', `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
       const m = voiceById(`mic-meter-${chatId}`), i = m && m.firstElementChild;
@@ -10573,23 +10617,30 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (s >= VOICE_MAX_RECORD_S) voiceMicStop(true);
     }
     async function voiceMicToggle(chatId) {
-      if (voiceRec.busy) return;
+      if (voiceRec.busy || voiceRec.guard.pending) return;   // a second tap while the microphone is still being asked for is ignored
       if (voiceRec.chatId) { await voiceMicStop(true); return; }   // a second tap, or a tap in another chat: end this recording
       if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); voiceRefreshStatus(); return; }
+      if (voiceTest.mic || voiceTest.guard.pending) { hubToast('The microphone is in use in Settings.'); return; }
       voiceStopPlayback();   // do not record the hub talking
-      voiceRec.busy = true;
+      const token = voiceRec.guard.begin();
+      voiceRec.pendingChat = chatId;
+      let mic;
       try {
         voiceRec.chunks = []; voiceRec.samples = 0; voiceRec.level = -100;
-        voiceRec.mic = await voiceOpenMic(voiceMicLevelNow(), (d) => {
+        mic = await voiceOpenMic(voiceMicLevelNow(), (d) => {
           voiceRec.chunks.push(d); voiceRec.samples += d.length; voiceRec.level = voiceLevelDb(d);
         });
-      } catch (e) { hubToast(voiceMicError(e)); return; } finally { voiceRec.busy = false; }
+      } catch (e) { voiceRec.guard.fail(); voiceRec.pendingChat = null; if (token === voiceRec.guard.gen) hubToast(voiceMicError(e)); return; }
+      voiceRec.pendingChat = null;
+      if (!voiceRec.guard.settle(token, mic)) return;   // cancelled while the browser was asking: the stream is already stopped
+      voiceRec.mic = mic;
       voiceRec.chatId = chatId; voiceRec.t0 = Date.now();
       voiceRec.timer = setInterval(voiceMicTick, 100);
       voiceMicTick();
     }
     async function voiceMicStop(send) {
       const chatId = voiceRec.chatId, mic = voiceRec.mic;
+      voiceRec.guard.cancel();   // a microphone still being asked for is dropped when it arrives
       if (!chatId || !mic) return;
       clearInterval(voiceRec.timer);
       const chunks = voiceRec.chunks, rate = mic.rate;
@@ -10609,7 +10660,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const r = await fetch(`/api/voice/stt?agent=${encodeURIComponent(chat ? chat.agent : '')}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav });
         let j = {};
         try { j = await r.json(); } catch {}
-        if (r.status === 409 && j.error === 'voice_off') { hubToast('Voice is turned off.'); voiceRefreshStatus(); return; }
+        if ((r.status === 409 && j.error === 'voice_off') || (r.status === 503 && j.error === 'voice_busy')) { voiceBusyToast(r.status); if (r.status === 409) voiceRefreshStatus(); return; }
         if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
         const text = String(j.text || '').trim();
         if (!text) { hubToast('No speech was heard. Speak closer to the microphone, or raise the Mic level in Settings.'); return; }
@@ -10650,6 +10701,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         let m = '';
         try { m = (await r.json()).error; } catch {}
         const e = new Error(m || `HTTP ${r.status}`); e.status = r.status;
+        e.toasted = voiceBusyToast(r.status);   // 409 voice_off / 503 voice_busy: the short toast is shown once, here
         throw e;
       }
       return r.arrayBuffer();
@@ -10678,11 +10730,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (voicePlay.token !== my) return;
       }
     }
+    // The device voice is used only when it is an offline one (localService): a browser's default voice may be an online
+    // service. No offline voice: nothing is spoken and the person is told.
     async function voicePlayDevice(sentences, from, my) {
+      const voice = await voiceWaitLocalVoice(window.speechSynthesis, 'en', 1000);
+      if (voicePlay.token !== my) return;
+      if (!voice) { hubToast(voiceOfflineHint); return; }
       for (let i = from; i < sentences.length; i++) {
         if (voicePlay.token !== my) return;
         await new Promise((res) => {
           const u = new SpeechSynthesisUtterance(sentences[i]);
+          u.voice = voice; u.lang = voice.lang;
           u.onend = res; u.onerror = res;
           window.speechSynthesis.speak(u);
         });
@@ -10701,7 +10759,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           try { await voicePlayHub(agent, sentences, opts.voice, my); return; }
           catch (e) {
             if (voicePlay.token !== my) return;
-            if (!voiceDeviceFallback()) { hubToast('Could not read this aloud: ' + e.message); return; }
+            if (!voiceDeviceFallback()) { if (!e.toasted) hubToast('Could not read this aloud: ' + e.message); return; }
             from = e.at || 0; useDevice = true;
           }
         } else if (voiceDeviceFallback()) useDevice = true;
@@ -10733,10 +10791,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const admin = isHubAdmin();
       const p = voicePrefsNow();
       const row = (label, inner) => `<div class="st-row"><label style="flex-basis:150px">${label}</label>${inner}</div>`;
+      // A checkbox row the way the OpenRouter privacy row is laid out: a short label column, the box and its text on one line.
+      const CHK = 'flex:1;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap';
       let h = `<div class="st-section" id="st-voice-section"><h4>Voices</h4>
         <div class="st-hint">Free local voices run on this computer: what you say and what is read aloud never leaves it, and nothing is sent to the internet. Tap the microphone in a chat to dictate; tap the speaker on a reply to hear it. Hands-free conversation comes next.</div>`;
       h += row('Voice', admin
-        ? `<label><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> Enable voice</label> <progress id="st-voice-progress" max="1" value="0" style="display:none;margin-left:8px"></progress> <span id="st-voice-status" class="st-hint" style="margin:0 0 0 8px">Checking…</span>`
+        ? `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> Enable voice</label> <progress id="st-voice-progress" max="1" value="0" style="display:none;margin-left:8px"></progress> <span id="st-voice-status" class="st-hint" style="margin:0 0 0 8px">Checking…</span>`
         : `<span id="st-voice-status" class="st-hint" style="margin:0">Checking…</span>`);
       h += row('Engines', `<span id="st-voice-engines" class="st-hint" style="margin:0">…</span>`);
       if (admin) {
@@ -10744,8 +10804,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       h += `<div class="st-hint" style="margin-top:10px">On this device only:</div>`;
       h += row('Mic level', `<input type="range" min="0" max="100" step="1" id="st-voice-mic" value="${voiceMicLevelNow()}" oninput="voiceSettingMicInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-mic-val" style="min-width:2.5em;display:inline-block">${voiceMicLevelNow()}</span> <span class="voice-meter"><i id="st-voice-meter"></i></span> <button class="st-test-btn" id="st-voice-testmic" type="button" onclick="voiceTestMic()">Test the mic</button>`);
-      h += row('', `<label><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
-      h += row('', `<label><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use the device voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
+      h += row('Replies', `<label style="${CHK}"><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
+      h += row('Fallback', `<label style="${CHK}"><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use this device's own offline voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
       return h + `</div>`;
     }
     function voicePaintSettings(st) {
@@ -10756,6 +10816,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       else if (st.platformSupported === false) text = 'Voice is not supported on this computer.';
       else if (st.installing) text = `Installing voice: ${st.step || 'working'} ${Math.round((Number(st.progress) || 0) * 100)}%`;
       else if (st.error) text = `Voice error: ${st.error}`;
+      else if (st.failed) text = 'Voice setup failed. An admin can see the details in Settings, Voices.';
       else if (st.enabled && st.ready) text = 'Voice is on and ready.';
       else if (st.enabled) text = 'Voice is on, getting ready…';
       else text = 'Voice is off.';
@@ -10772,9 +10833,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const sig = list.map(v => v.id).join('|');
         if (sel.dataset.sig !== sig) {
           sel.dataset.sig = sig;
-          const want = (st.tts && st.tts.defaultVoice) || '';
+          const want = st.defaultVoice || st.installDefaultVoice || (st.tts && st.tts.defaultVoice) || '';   // defaultVoice: the hub's effective default
           sel.innerHTML = list.length
-            ? list.map(v => `<option value="${hubEsc(v.id)}"${v.id === want ? ' selected' : ''}>${hubEsc(v.label || v.id)}${v.accent ? ` (${hubEsc(v.accent)})` : ''}</option>`).join('')
+            ? list.map(v => `<option value="${hubEsc(v.id)}"${v.id === want ? ' selected' : ''}>${hubEsc(v.label || v.id)}</option>`).join('')   // the label already carries the accent
             : '<option value="">No voices yet</option>';
           dialogGuard.markLoaded(sel);
         }
@@ -10808,7 +10869,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const state = voiceById('st-voice-state');
       try {
         const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-          body: JSON.stringify({ voice: { enabled: !!(voiceStatus && voiceStatus.enabled), defaultVoice: sel.value, sttModel: (voiceStatus && voiceStatus.stt && voiceStatus.stt.model) || undefined } }) });
+          body: JSON.stringify({ voice: { defaultVoice: sel.value } }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         saved();
         if (state) state.textContent = 'Saved.';
@@ -10821,7 +10882,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         { sentences: [VOICE_SAMPLE_TEXT], voice: sel ? sel.value : '' });
     }
     // The Mic level slider: moves the gain of the open test mic at once; saved (with the two checkboxes) on release.
-    const voiceTest = { mic: null, timer: null, level: -100 };
+    const voiceTest = { mic: null, timer: null, level: -100, guard: voiceMicGuard() };
     function voiceSettingMicInput(el) {
       const v = voiceById('st-voice-mic-val'); if (v) v.textContent = el.value;
       if (voiceTest.mic) voiceTest.mic.setGain(Number(el.value));
@@ -10838,6 +10899,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const st = voiceById('st-voice-prefs-state'); if (st) st.textContent = 'Saved on this device.';
     }
     function voiceTestStop() {
+      voiceTest.guard.cancel();   // a test mic still being asked for is dropped when it arrives
       clearInterval(voiceTest.timer);
       if (voiceTest.mic) { voiceTest.mic.close(); voiceTest.mic = null; }   // the meter runs only while the mic is open
       const bar = voiceById('st-voice-meter'); if (bar) bar.style.width = '0%';
@@ -10845,10 +10907,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     async function voiceTestMic() {
       if (voiceTest.mic) { voiceTestStop(); return; }
-      if (voiceRec.chatId || voiceRec.busy) { hubToast('The microphone is in use in a chat.'); return; }
+      if (voiceTest.guard.pending) return;   // two quick clicks: the second is ignored while the first is still being asked for
+      if (voiceRec.chatId || voiceRec.busy || voiceRec.guard.pending) { hubToast('The microphone is in use in a chat.'); return; }
       const slider = voiceById('st-voice-mic');
-      try { voiceTest.mic = await voiceOpenMic(slider ? Number(slider.value) : voiceMicLevelNow(), (d) => { voiceTest.level = voiceLevelDb(d); }); }
-      catch (e) { hubToast(voiceMicError(e)); return; }
+      const token = voiceTest.guard.begin();
+      let mic;
+      try { mic = await voiceOpenMic(slider ? Number(slider.value) : voiceMicLevelNow(), (d) => { voiceTest.level = voiceLevelDb(d); }); }
+      catch (e) { voiceTest.guard.fail(); if (token === voiceTest.guard.gen) hubToast(voiceMicError(e)); return; }
+      if (!voiceById('st-voice-section')) voiceTest.guard.cancel();   // Settings closed while the browser was asking
+      if (!voiceTest.guard.settle(token, mic)) return;
+      voiceTest.mic = mic;
       const b = voiceById('st-voice-testmic'); if (b) b.textContent = 'Stop test';
       voiceTest.timer = setInterval(() => {
         const bar = voiceById('st-voice-meter');
@@ -10856,6 +10924,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         bar.style.width = `${voiceMeterPercent(voiceTest.level)}%`;
       }, 100);
     }
+
+    // A closed chat stops its dictation without uploading it; a hidden page lets go of every microphone request.
+    function voiceChatGone(chatId) {
+      if (voiceRec.pendingChat === chatId) voiceRec.guard.cancel();
+      if (voiceRec.chatId === chatId) voiceMicStop(false);
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) return;
+      voiceTestStop();
+      voiceRec.guard.cancel();
+      if (voiceRec.chatId) voiceMicStop(true);
+    });
 
     // Message rendering
     // Copy button on every message bubble: copies the original text/markdown, not the rendered HTML.

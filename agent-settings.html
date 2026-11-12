@@ -852,7 +852,7 @@
     const sel = document.getElementById('voice-select');
     if (!sel) return;
     const opts = [{ id: '', label: 'Hub default' }, ...voiceList];
-    sel.innerHTML = opts.map(v => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.label || v.id)}${v.accent ? ` (${escapeHtml(v.accent)})` : ''}</option>`).join('');
+    sel.innerHTML = opts.map(v => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.label || v.id)}</option>`).join('');
     if (agentVoice && !opts.some(v => v.id === agentVoice)) sel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(agentVoice)}">${escapeHtml(agentVoice)}</option>`);
     sel.value = agentVoice;
     pageGuard.markLoaded(sel);

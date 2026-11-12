@@ -48,13 +48,14 @@ function fakeWorld() {
   return { manifest: { ...realManifest, NODE_PACKAGES, MODELS, WEB_PACKAGES, WEB_FILES }, blobs };
 }
 
-function fakeFetch(blobs, { corrupt, gate, calls = [] } = {}) {
+function fakeFetch(blobs, { corrupt, oversize, gate, calls = [] } = {}) {
   const f = async (url) => {
     calls.push(url);
     if (gate) await gate;
     let buf = blobs.get(url);
     if (!buf) return { ok: false, status: 404 };
-    if (corrupt && url === corrupt) buf = Buffer.concat([buf, Buffer.from('tampered')]);
+    if (corrupt && url === corrupt) { buf = Buffer.from(buf); buf[0] ^= 0xff; }   // same length, other content
+    if (oversize && url === oversize) buf = Buffer.concat([buf, Buffer.from('more than the manifest says')]);
     return new Response(buf, { status: 200 });
   };
   f.calls = calls;
@@ -153,6 +154,44 @@ test('a failed HTTP status or a broken archive fails cleanly', async () => {
   const b = engineWith({ opts: { manifest: w2.manifest }, fetchImpl: fakeFetch(w2.blobs) });
   await assert.rejects(() => b.e.install({ sttModel: 'tiny.en' }), /extract failed/);
   assert.deepStrictEqual(fs.readdirSync(path.join(b.dir, 'downloads')), []);
+});
+
+test('download: more bytes than the manifest size are refused and the partial file is removed', async () => {
+  const w = fakeWorld(); const big = w.manifest.MODELS['whisper-tiny.en'].url;
+  const { e, dir } = engineWith({ fetchImpl: fakeFetch(w.blobs, { oversize: big }), opts: { manifest: w.manifest } });
+  await assert.rejects(() => e.install({ sttModel: 'tiny.en' }), /more data than expected/);
+  assert.deepStrictEqual(fs.readdirSync(path.join(dir, 'downloads')), []);
+  assert.ok(!fs.existsSync(path.join(dir, 'models', 'whisper-tiny.en')));
+});
+
+test('download: a file still coming after the overall deadline is abandoned even if data keeps flowing', async () => {
+  const fetchImpl = (url, { signal }) => new Promise((resolve, reject) => { signal.addEventListener('abort', () => { const e = new Error('aborted'); e.name = 'AbortError'; reject(e); }); });
+  const { e } = engineWith({ fetchImpl, opts: { downloadDeadlineMs: 30 } });
+  const keepAlive = setTimeout(() => {}, 5000);   // the engine's own timers are unref'd; a real socket would keep the process up
+  try { await assert.rejects(() => e.install({ sttModel: 'tiny.en' }), /took longer than/); } finally { clearTimeout(keepAlive); }
+});
+
+test('download: a short write is continued until the whole chunk is on disk', async () => {
+  const fsReal = require('node:fs'); const orig = fsReal.writeSync; let short = 0;
+  fsReal.writeSync = (fd, buf, off, len, ...rest) => {   // takes at most half of what it is given, like a full pipe or disk can
+    if (!Buffer.isBuffer(buf)) return orig(fd, buf, off, len, ...rest);
+    const o = typeof off === 'number' ? off : 0; const l = typeof len === 'number' ? len : buf.length - o;
+    if (l > 1) { short++; return orig(fd, buf, o, Math.ceil(l / 2)); }
+    return orig(fd, buf, o, l);
+  };
+  try {
+    const { e } = engineWith();
+    await e.install({ sttModel: 'tiny.en' });
+    assert.strictEqual(e.status().ready, true, 'checksums match, so nothing was lost');
+    assert.ok(short > 0);
+  } finally { fsReal.writeSync = orig; }
+});
+
+test('extract: when tar cannot run bzip2 the error says what to install', async () => {
+  const spawnTar = async () => ({ status: 2, stderr: 'tar (child): bzip2: Cannot exec: No such file or directory\ntar: Error is not recoverable' });
+  const { e } = engineWith({ opts: { spawnTar } });
+  await assert.rejects(() => e.install({ sttModel: 'tiny.en' }), (err) => err.message === 'Voice setup needs the bzip2 program on this computer (on Ubuntu: sudo apt install bzip2).');
+  assert.match(e.status().error, /apt install bzip2/);
 });
 
 test('speedCheck: small.en needs 8+ cores and 2 GB free; Kokoro needs 4+ cores; the choice is recorded', () => {

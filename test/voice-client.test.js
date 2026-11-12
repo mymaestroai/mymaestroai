@@ -7,7 +7,7 @@ const { EventEmitter } = require('node:events');
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createVoiceClient, parseWav, resample } = require('../lib/voice/client');
+const { createVoiceClient, parseWav, resample, splitForWhisper } = require('../lib/voice/client');
 const { createWorker, wavFromFloat32 } = require('../lib/voice/worker');
 
 const engine = { paths: { worker: '/x/worker.js', dir: '/x/dir' }, status: () => ({ stt: { model: 'tiny.en' } }) };
@@ -19,7 +19,8 @@ function fakeSpawner(onLine) {
     const c = new EventEmitter();
     c.file = file; c.args = args; c.killed = false; c.lines = [];
     c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
-    c.stdin = { write: (s) => { for (const l of s.split('\n').filter(Boolean)) { const m = JSON.parse(l); c.lines.push(m); setImmediate(() => onLine(m, c, children.length)); } } };
+    c.stdin = new EventEmitter();
+    c.stdin.write = (s) => { for (const l of s.split('\n').filter(Boolean)) { const m = JSON.parse(l); c.lines.push(m); setImmediate(() => onLine(m, c, children.length)); } };
     c.reply = (obj) => c.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
     c.kill = () => { c.killed = true; };
     c.crash = () => c.emit('exit', 1, null);
@@ -172,6 +173,131 @@ test('stt resamples a 48 kHz WAV to 16 kHz before sending, and accepts raw Float
   assert.strictEqual(Buffer.from(sent[1].pcmBase64, 'base64').length / 4, 16000);
   await assert.rejects(() => cl.stt(Buffer.from('nope nope nope nope nope nope nope nope nope nope nope nope')), (e) => e.badAudio === true);
   await assert.rejects(() => cl.stt('string'), /WAV buffer/);
+  cl.stop();
+});
+
+// ── WAV limits ──
+test('a tiny WAV declaring 1 Hz is refused before anything is allocated; 3 channels, 8-bit, odd rates and over 120 s are refused too', async () => {
+  const sp = fakeSpawner((m, c) => c.reply({ id: m.id, ok: true, text: 'x', ms: 1 }));
+  const cl = createVoiceClient({ engine, spawnImpl: sp, idleMs: 0 });
+  const tiny = wav16(new Array(65000).fill(100), 1);   // ~130 KB, would be 1 billion samples at 16 kHz
+  assert.ok(tiny.length > 130000 && tiny.length < 140000);
+  const before = process.memoryUsage().arrayBuffers;
+  await assert.rejects(() => cl.stt(tiny), (e) => e.badAudio === true && /sample rate/.test(e.message));
+  assert.ok(process.memoryUsage().arrayBuffers - before < 50 * 1024 * 1024, 'nothing big allocated');
+  await assert.rejects(() => cl.stt(wav16([1, 2, 3, 4, 5, 6], 16000, 3)), (e) => e.badAudio === true && /mono or stereo/.test(e.message));
+  const eight = wav16([1, 2, 3, 4], 16000); eight.writeUInt16LE(8, 34);
+  await assert.rejects(() => cl.stt(eight), (e) => e.badAudio === true && /16-bit/.test(e.message));
+  await assert.rejects(() => cl.stt(wav16([1, 2, 3, 4], 7999)), (e) => e.badAudio === true);
+  await assert.rejects(() => cl.stt(wav16([1, 2, 3, 4], 192001)), (e) => e.badAudio === true);
+  await assert.rejects(() => cl.stt(wav16(new Array(8000 * 121).fill(0), 8000)), (e) => e.badAudio === true && /120 seconds/.test(e.message));
+  await assert.rejects(() => cl.stt(new Float32Array(10), 1), (e) => e.badAudio === true);
+  assert.strictEqual(sp.children.length, 0, 'the worker never started');
+  assert.throws(() => parseWav(tiny), /sample rate/);
+  assert.throws(() => resample(new Float32Array(200), 1, 16000), (e) => e.badAudio === true, 'resample refuses an output over 120 s on its own');
+  assert.strictEqual(parseWav(wav16(new Array(8000 * 120).fill(0), 8000)).samples.length, 8000 * 120, 'exactly 120 s is fine');
+  assert.strictEqual(parseWav(wav16([1, 2], 192000)).sampleRate, 192000);
+  cl.stop();
+});
+
+// ── long audio is cut at pauses ──
+test('45 s of audio with a silent 100 ms gap at 24 s goes to the worker in two pieces cut at the gap; the texts are joined', async () => {
+  const sent = [];
+  const sp = fakeSpawner((m, c) => { sent.push(m); c.reply({ id: m.id, ok: true, text: sent.length === 1 ? ' first part ' : 'second part', ms: 5 }); });
+  const cl = createVoiceClient({ engine, spawnImpl: sp, idleMs: 0 });
+  const n = 45 * 16000;
+  const pcm = Array.from({ length: n }, (_, i) => (i >= 24 * 16000 && i < 24 * 16000 + 1600 ? 0 : Math.round(8000 * Math.sin(i / 7))));
+  const r = await cl.stt(wav16(pcm, 16000));
+  assert.strictEqual(sent.length, 2);
+  const secs = (m) => Buffer.from(m.pcmBase64, 'base64').length / 4 / 16000;
+  assert.ok(Math.abs(secs(sent[0]) - 24) <= 0.1, `first piece ${secs(sent[0])} s`);
+  assert.ok(secs(sent[0]) <= 28 && secs(sent[1]) <= 28);
+  assert.ok(Math.abs(secs(sent[0]) + secs(sent[1]) - 45) < 0.01, 'nothing lost');
+  assert.deepStrictEqual(r, { text: 'first part second part', ms: 10 });
+  assert.strictEqual(sent[0].model, sent[1].model);
+  assert.strictEqual(sp.children.length, 1);
+  // audio up to 28 s is still one request; a near-silent or tiny remainder is dropped
+  assert.strictEqual(splitForWhisper(new Float32Array(28 * 16000).fill(0.1)).length, 1);
+  const loud = new Float32Array(28.2 * 16000).fill(0.1); loud.fill(0, 27.9 * 16000, 28 * 16000);
+  const parts = splitForWhisper(loud);
+  assert.strictEqual(parts.length, 1, 'a remainder under 0.3 s is skipped');
+  assert.ok(Math.abs(parts[0].length / 16000 - 27.95) < 0.01);
+  const quietTail = new Float32Array(40 * 16000).fill(0.1); quietTail.fill(0, 28 * 16000);
+  assert.ok(splitForWhisper(quietTail).every(p => p.length <= 28 * 16000));
+  cl.stop();
+});
+
+// ── pipe errors ──
+test('an EPIPE on the worker stdin mid-request does not throw: the request is retried once on a new worker; the old one is ignored afterwards', async () => {
+  const sp = fakeSpawner((m, c, n) => { if (n === 1) return c.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })); c.reply({ id: m.id, ok: true, text: 'recovered', ms: 2 }); });
+  const cl = createVoiceClient({ engine, spawnImpl: sp, idleMs: 0 });
+  const r = await cl.stt(wav16([1, 2, 3], 16000));
+  assert.strictEqual(r.text, 'recovered'); assert.strictEqual(sp.children.length, 2);
+  assert.strictEqual(sp.children[0].killed, true, 'the broken worker is killed');
+  const [old, cur] = sp.children;
+  old.stdin.emit('error', new Error('again')); old.stdout.emit('error', new Error('late')); old.emit('exit', 1, null); old.emit('error', new Error('late'));
+  assert.strictEqual(cur.killed, false, 'late events from the old worker leave the current one alone');
+  assert.strictEqual(sp.children.length, 2, 'and start nothing');
+  assert.strictEqual((await cl.stt(wav16([1, 2, 3], 16000))).text, 'recovered');
+  assert.strictEqual(cur.lines.length, 2, 'the current worker still serves');
+  // a stdout error counts the same way; two failures in a row reject
+  const always = fakeSpawner((m, c) => c.stdout.emit('error', new Error('broken pipe')));
+  const cl2 = createVoiceClient({ engine, spawnImpl: always, idleMs: 0 });
+  await assert.rejects(() => cl2.tts('x', 'af_heart'), /crashed/);
+  assert.strictEqual(always.children.length, 2);
+  cl.stop(); cl2.stop();
+});
+
+// ── stop / resume ──
+test('stop(): requests made while stopped fail with voice_off and never start a worker; resume() lets them run again; queued ones are failed', async () => {
+  const sp = fakeSpawner(() => {});   // never answers
+  const cl = createVoiceClient({ engine, spawnImpl: sp, idleMs: 0 });
+  const p = cl.tts('x', 'af_heart'); const q = cl.tts('y', 'af_heart');
+  await new Promise(r => setTimeout(r, 5));
+  assert.strictEqual(sp.children.length, 1);
+  cl.stop();
+  await assert.rejects(p, (e) => e.code === 'voice_off'); await assert.rejects(q, (e) => e.code === 'voice_off');
+  await assert.rejects(() => cl.tts('z', 'af_heart'), (e) => e.code === 'voice_off');
+  await assert.rejects(() => cl.stt(wav16([1, 2, 3], 16000)), (e) => e.code === 'voice_off');
+  assert.strictEqual(sp.children.length, 1, 'no new worker while stopped');
+  const ok = fakeSpawner((m, c) => c.reply({ id: m.id, ok: true, wavBase64: '', sampleRate: 1, ms: 1 }));
+  const cl2 = createVoiceClient({ engine, spawnImpl: ok, idleMs: 0 });
+  cl2.stop();
+  await assert.rejects(() => cl2.tts('a', 'af_heart'), (e) => e.code === 'voice_off');
+  cl2.resume();
+  await cl2.tts('a', 'af_heart');
+  assert.strictEqual(ok.children.length, 1);
+  cl2.stop(); cl2.start(); await cl2.tts('b', 'af_heart');
+  cl.stop(); cl2.stop();
+});
+
+// ── bounded queue / cancellation ──
+test('at most 4 requests wait behind the running one; the next is refused with voice_busy', async () => {
+  const sp = fakeSpawner(() => {});
+  const cl = createVoiceClient({ engine, spawnImpl: sp, idleMs: 0 });
+  const ps = Array.from({ length: 5 }, (_, i) => cl.tts('t' + i, 'af_heart'));   // 1 running + 4 waiting
+  ps.forEach(p => p.catch(() => {}));
+  await new Promise(r => setTimeout(r, 5));
+  assert.strictEqual(sp.children[0].lines.length, 1);
+  await assert.rejects(() => cl.tts('over', 'af_heart'), (e) => e.code === 'voice_busy');
+  cl.stop();
+  for (const p of ps) await assert.rejects(p, (e) => e.code === 'voice_off');
+});
+
+test('a queued request whose caller went away is dropped before it runs', async () => {
+  const sp = fakeSpawner((m, c) => { if (m.text === 'first') setTimeout(() => c.reply({ id: m.id, ok: true, wavBase64: '', sampleRate: 1, ms: 1 }), 20); else c.reply({ id: m.id, ok: true, wavBase64: '', sampleRate: 1, ms: 1 }); });
+  const cl = createVoiceClient({ engine, spawnImpl: sp, idleMs: 0 });
+  let gone = false;
+  const first = cl.tts('first', 'af_heart');
+  const dropped = cl.tts('dropped', 'af_heart', 1, { isCancelled: () => gone });
+  const kept = cl.tts('kept', 'af_heart', 1, { isCancelled: () => false });
+  dropped.catch(() => {});
+  await new Promise(r => setTimeout(r, 5));
+  gone = true;
+  await first; await kept;
+  await assert.rejects(dropped, (e) => e.code === 'voice_cancelled');
+  assert.deepStrictEqual(sp.children[0].lines.map(l => l.text), ['first', 'kept'], 'the dropped one never reached the worker');
+  await assert.rejects(() => cl.tts('late', 'af_heart', 1, { isCancelled: () => true }), (e) => e.code === 'voice_cancelled');
   cl.stop();
 });
 

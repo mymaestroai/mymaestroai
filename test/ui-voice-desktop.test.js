@@ -9,6 +9,7 @@ const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const app = read('app.js');
 const html = read('index.html');
 const as = read('agent-settings.html');
+const L = require('../lib/ui-voice');
 
 const BLOCK_START = '    // ── Voice, desktop page:';
 const BLOCK_END = '    // Message rendering\n';
@@ -29,14 +30,15 @@ test('settings: Voices section in the tools group, admin controls and per-device
   assert.match(b, /method: 'POST'/);
   assert.match(b, /setTimeout\(voiceSettingsRefresh, 2000\)/, 'polls every 2 s while installing');
   assert.match(b, /st\.installing/);
-  assert.match(b, /body: JSON\.stringify\(\{ voice: \{ enabled: [^}]*defaultVoice: sel\.value/, 'default voice saved through /api/settings');
+  assert.match(b, /body: JSON\.stringify\(\{ voice: \{ defaultVoice: sel\.value \} \}\)/, 'default voice saved through /api/settings, nothing else');
+  assert.doesNotMatch(b.slice(b.indexOf('async function voiceSettingDefaultVoice'), b.indexOf('function voicePlaySample')), /enabled|sttModel/);
   assert.match(b, /fetch\('\/api\/settings'/);
   assert.match(b, /Play sample/);
   assert.match(b, /nothing is sent to the internet/);
   assert.match(b, /Hands-free conversation comes next/);
   assert.match(b, /id="st-voice-mic" value=/);
   assert.match(b, /Read replies aloud/);
-  assert.match(b, /Use the device voice when the hub voice is unavailable/);
+  assert.match(b, /Use this device's own offline voice when the hub voice is unavailable/);
   assert.match(b, /voiceSavePrefs\(localStorage, prefs\)/);
   assert.match(b, /dialogGuard\.savePoint\(/);
   // the default voice and the play sample are admin only
@@ -117,7 +119,7 @@ function el(extra = {}) {
   return Object.assign({
     style: {}, dataset: {}, value: '', textContent: '', disabled: false,
     classList: { toggle(c, on) { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
-    setAttribute() {}, focus() { this.focused = true; }, firstElementChild: { style: {} },
+    setAttribute() {}, querySelector() { return null; }, focus() { this.focused = true; }, firstElementChild: { style: {} },
   }, extra);
 }
 
@@ -136,12 +138,14 @@ function makeEnv(opts = {}) {
     async resume() {}
     close() { this.state = 'closed'; }
   }
-  const win = { AudioContext: FakeCtx, speechSynthesis: opts.noSynth ? undefined : { speak(u) { calls.utter.push(u.text); setImmediate(() => u.onend && u.onend()); }, cancel() { calls.cancelled = true; } } };
+  const voices = opts.voices || [{ name: 'Online', lang: 'en-US', localService: false, default: true }, { name: 'Local', lang: 'en-GB', localService: true, default: false }];
+  const win = { AudioContext: FakeCtx, speechSynthesis: opts.noSynth ? undefined : { getVoices: () => voices, speak(u) { calls.utter.push(u.text); calls.voiceUsed = u.voice; setImmediate(() => u.onend && u.onend()); }, cancel() { calls.cancelled = true; } } };
   const fetchFn = async (url, o = {}) => {
     calls.fetch.push({ url, o });
     if (url === '/api/voice/status') return { ok: true, json: async () => status };
     if (url.startsWith('/api/voice/stt')) return opts.stt ? opts.stt() : { ok: true, status: 200, json: async () => ({ text: 'hello there', ms: 5 }) };
     if (url === '/api/voice/tts') {
+      if (opts.ttsStatus) return { ok: false, status: opts.ttsStatus, json: async () => ({ error: opts.ttsStatus === 409 ? 'voice_off' : 'voice_busy' }) };
       const n = calls.fetch.filter(c => c.url === '/api/voice/tts').length;
       if (opts.ttsFailAt === n) return { ok: false, status: 500, json: async () => ({ error: 'engine down' }) };
       return { ok: true, arrayBuffer: async () => Uint8Array.from([n]).buffer };
@@ -169,9 +173,11 @@ function makeEnv(opts = {}) {
     voiceEncodeWav: (f, r) => { calls.wavRate = r; return new Uint8Array([82, 73, 70, 70]).buffer; },
     voiceSentences: (t) => t.split(/(?<=\.)\s+/).filter(Boolean),
     voiceSpeechText: (t) => t,
+    voiceMicGuard: L.voiceMicGuard, voiceWaitLocalVoice: L.voiceWaitLocalVoice, voicePickLocalVoice: L.voicePickLocalVoice,
   };
+  if (opts.gum) stubs.navigator.mediaDevices.getUserMedia = opts.gum(calls);
   const names = Object.keys(stubs);
-  const src = voiceBlock() + '\nreturn { voiceRefreshStatus, voiceOpenMic, voiceMicToggle, voiceMicStop, voiceSpeakText, voiceStopPlayback, voicePlay, voiceRec, voiceSettingEnable, voiceSettingsSavePrefs, voiceSettingsHtml, voiceReady };';
+  const src = voiceBlock() + '\nreturn { voiceRefreshStatus, voiceOpenMic, voiceMicToggle, voiceMicStop, voiceSpeakText, voiceStopPlayback, voicePlay, voiceRec, voiceSettingEnable, voiceSettingsSavePrefs, voiceSettingsHtml, voiceReady, voiceTest, voiceTestMic, voiceTestStop, voiceChatGone, voicePaintSettings, voiceSettingDefaultVoice };';
   const api = new Function(...names, src)(...names.map(n => stubs[n]));
   return { api, calls, chats, get, els, FakeCtx };
 }
@@ -280,9 +286,127 @@ test('settings: members get no enable switch, default voice or sample; admins do
   assert.match(admin, /st-voice-default/);
   assert.match(admin, /Play sample/);
   const stubsSrc = voiceBlock().replace('const admin = isHubAdmin();', 'const admin = false;');
-  const member = new Function('document', 'window', 'localStorage', 'voiceLoadPrefs', 'voiceGainFromSlider', 'chats', 'dialogGuard',
-    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, {}, {}, () => ({ micLevel: 50 }), (v) => v, {}, {});
+  const member = new Function('document', 'window', 'localStorage', 'voiceLoadPrefs', 'voiceGainFromSlider', 'chats', 'dialogGuard', 'voiceMicGuard',
+    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, {}, {}, () => ({ micLevel: 50 }), (v) => v, {}, {}, L.voiceMicGuard);
   assert.doesNotMatch(member, /st-voice-enabled|st-voice-default|Play sample/);
   assert.match(member, /st-voice-status/);
   assert.match(member, /id="st-voice-mic"/);
+});
+
+// A getUserMedia that stays pending until calls.resolveGum() is called; each stream counts its track stops.
+const lateGum = (calls) => {
+  calls.gumCalls = 0; calls.streams = [];
+  return () => { calls.gumCalls++; return new Promise((res) => { calls.resolveGum = () => { const s = { stops: 0, getTracks: () => [{ stop() { s.stops++; } }] }; calls.streams.push(s); res(s); }; }); };
+};
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('Settings Test the mic: two quick clicks start one acquisition and Stop closes it', async () => {
+  const { api, calls } = makeEnv({ gum: lateGum });
+  const first = api.voiceTestMic();
+  const second = api.voiceTestMic();
+  await second;
+  assert.strictEqual(calls.gumCalls, 1, 'the second click is ignored while the first is pending');
+  calls.resolveGum(); await first;
+  assert.ok(api.voiceTest.mic, 'open');
+  api.voiceTestStop();
+  assert.strictEqual(calls.streams[0].stops, 1, 'Stop released the only stream');
+  assert.strictEqual(api.voiceTest.mic, null);
+});
+
+test('Settings Test the mic: closing Settings (or hiding the page) while the permission is pending stops the stream when it arrives', async () => {
+  const { api, calls } = makeEnv({ gum: lateGum });
+  const p = api.voiceTestMic();
+  api.voiceTestStop();   // what the visibilitychange handler and a closed Settings do
+  calls.resolveGum(); await p;
+  assert.strictEqual(calls.streams[0].stops, 1, 'stopped at once');
+  assert.strictEqual(api.voiceTest.mic, null);
+  assert.strictEqual(api.voiceTest.timer, null, 'no meter timer was started');
+});
+
+test('dictation: a second tap while pending is ignored; closing the chat while pending stops the late stream', async () => {
+  const { api, calls } = makeEnv({ gum: lateGum });
+  await api.voiceRefreshStatus();
+  const p = api.voiceMicToggle('c1');
+  await api.voiceMicToggle('c1');
+  assert.strictEqual(calls.gumCalls, 1, 'one acquisition');
+  api.voiceChatGone('c1');
+  calls.resolveGum(); await p;
+  assert.strictEqual(calls.streams[0].stops, 1);
+  assert.strictEqual(api.voiceRec.chatId, null);
+  assert.strictEqual(api.voiceRec.mic, null);
+  assert.strictEqual(api.voiceRec.guard.pending, false);
+  assert.strictEqual(calls.fetch.filter(c => c.url.startsWith('/api/voice/stt')).length, 0);
+});
+
+test('dictation: closing the chat while recording stops without uploading', async () => {
+  const { api, calls } = makeEnv({ gum: (c) => { c.streams = []; return async () => { const s = { stops: 0, getTracks: () => [{ stop() { s.stops++; } }] }; c.streams.push(s); return s; }; } });
+  await api.voiceRefreshStatus();
+  await api.voiceMicToggle('c1');
+  api.voiceRec.chunks.push(new Float32Array(48000));
+  api.voiceChatGone('c1');
+  await tick();
+  assert.strictEqual(calls.streams[0].stops, 1, 'microphone released');
+  assert.strictEqual(api.voiceRec.chatId, null);
+  assert.strictEqual(calls.fetch.filter(c => c.url.startsWith('/api/voice/stt')).length, 0, 'nothing uploaded');
+});
+
+test('device voice: only an offline voice is used; none means nothing is spoken and a toast', async () => {
+  const a = makeEnv({ status: { enabled: false, ready: false }, fallback: true });
+  await a.api.voiceRefreshStatus();
+  await a.api.voiceSpeakText('alice', 'Hello there.', null);
+  assert.deepStrictEqual(a.calls.utter, ['Hello there.']);
+  assert.strictEqual(a.calls.voiceUsed.name, 'Local', 'the offline voice, not the online default');
+  const b = makeEnv({ status: { enabled: false, ready: false }, fallback: true, voices: [{ name: 'Online', lang: 'en-US', localService: false, default: true }] });
+  await b.api.voiceRefreshStatus();
+  await b.api.voiceSpeakText('alice', 'Hello there.', null);
+  assert.deepStrictEqual(b.calls.utter, [], 'not spoken');
+  assert.ok(b.calls.toasts.includes('This device has no offline voice; turn on voice in Settings'));
+});
+
+test('409 voice_off / 503 voice_busy from the TTS route show a short toast (once)', async () => {
+  for (const [status, text] of [[409, 'Voice is turned off'], [503, 'Voice is busy, try again in a few seconds']]) {
+    const e = makeEnv({ ttsStatus: status });
+    await e.api.voiceRefreshStatus();
+    await e.api.voiceSpeakText('alice', 'One. Two.', null);
+    assert.deepStrictEqual(e.calls.toasts, [text], String(status));
+  }
+  const src = voiceBlock();
+  assert.match(src, /if \(status === 409\) hubToast\('Voice is turned off'\); else if \(status === 503\) hubToast\('Voice is busy, try again in a few seconds'\)/);
+  assert.match(src, /e\.toasted = voiceBusyToast\(r\.status\)/);
+  assert.match(src, /r\.status === 503 && j\.error === 'voice_busy'/);
+});
+
+test('default voice picker: starts at the hub default, saves only defaultVoice, labels show the accent once', async () => {
+  const { api, calls, get } = makeEnv();
+  api.voicePaintSettings({ enabled: true, ready: true, defaultVoice: 'b', installDefaultVoice: 'a', tts: { defaultVoice: 'a' },
+    voices: [{ id: 'a', label: 'Heart (US, female)', accent: 'US' }, { id: 'b', label: 'Emma (UK, female)', accent: 'UK' }] });
+  const html = get('st-voice-default').innerHTML;
+  assert.match(html, /<option value="b" selected>Emma \(UK, female\)<\/option>/, 'the effective default is selected');
+  assert.match(html, /<option value="a">Heart \(US, female\)<\/option>/);
+  assert.doesNotMatch(html, /\(US\) \(US\)|female\) \(US\)|female\) \(UK\)/, 'no second accent');
+  get('st-voice-default').value = 'a';
+  await api.voiceSettingDefaultVoice();
+  const post = calls.fetch.find(c => c.url === '/api/settings');
+  assert.deepStrictEqual(JSON.parse(post.o.body), { voice: { defaultVoice: 'a' } });
+  // the phone has no voice list of its own; agent settings shows the label as it is
+  assert.doesNotMatch(as, /escapeHtml\(v\.label \|\| v\.id\)\}\$\{v\.accent/);
+});
+
+test('Voices settings: both checkboxes sit in the value column on one line, ids kept', () => {
+  const h = makeEnv().api.voiceSettingsHtml({});
+  for (const id of ['st-voice-readaloud', 'st-voice-fallback']) {
+    assert.match(h, new RegExp(`<div class="st-row"><label style="flex-basis:150px">[A-Za-z ]{0,12}</label><label style="[^"]*flex:1;[^"]*white-space:nowrap[^"]*"><input type="checkbox" id="${id}"`), id);
+  }
+  assert.match(h, /<label style="flex:0 0 auto;[^"]*white-space:nowrap"><input type="checkbox" id="st-voice-enabled"/);
+  assert.match(h, /Use this device's own offline voice when the hub voice is unavailable/);
+});
+
+test('mic icon is an inline SVG, not the U+1F399 emoji; Dictate label; recording is the red .rec state', () => {
+  assert.match(app, /id="mic-\$\{chatId\}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="[^"]+">\$\{VOICE_MIC_SVG\}<\/button>/);
+  const b = voiceBlock();
+  assert.match(b, /const VOICE_MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"[^']*aria-hidden="true"/);
+  assert.ok(!b.includes('\u{1F399}') && !/&#127897;/.test(app.slice(app.indexOf('id="mic-${chatId}"'), app.indexOf('id="mic-${chatId}"') + 400)));
+  assert.match(b, /b\.setAttribute\('aria-label', state === 'rec' \? 'Stop dictation' : 'Dictate'\)/);
+  assert.match(html, /\.input-area \.mic-btn\.rec \{[^}]*#ef4444/);
+  assert.match(html, /\.input-area \.mic-btn svg \{/);
 });

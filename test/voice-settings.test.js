@@ -16,6 +16,12 @@ after(() => {
   for (const r of roots) fs.rmSync(r, { recursive: true, force: true });
 });
 
+test('a settings patch with only { voice: { defaultVoice } } keeps enabled and sttModel as stored', () => {
+  const cur = { enabled: true, defaultVoice: '', sttModel: 'small.en' };
+  assert.deepStrictEqual(cleanVoiceSettings({ defaultVoice: 'alba' }, cur), { enabled: true, defaultVoice: 'alba', sttModel: 'small.en' });
+  assert.deepStrictEqual(cleanVoiceSettings({ defaultVoice: 'alba' }, { enabled: false, defaultVoice: 'lessac', sttModel: '' }), { enabled: false, defaultVoice: 'alba', sttModel: '' });
+});
+
 test('settings sanitiser: known keys only, values checked, merged onto what is stored', () => {
   assert.deepStrictEqual(cleanVoiceSettings({}, undefined), { enabled: false, defaultVoice: '', sttModel: '' });
   assert.deepStrictEqual(cleanVoiceSettings({ enabled: true, defaultVoice: 'bf_emma', sttModel: 'small.en' }, {}), { enabled: true, defaultVoice: 'bf_emma', sttModel: 'small.en' });

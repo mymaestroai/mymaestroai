@@ -223,3 +223,62 @@ test('stop commands: the whole utterance only', () => {
   for (const no of ['please stop the timer', 'stop the music', 'don\'t stop', 'cancel my order', 'stopping', 'never mind that', '', '   ', '...', null, undefined])
     assert.strictEqual(voiceIsStopCommand(no), false, String(no));
 });
+
+test('voicePickLocalVoice: only offline voices of the language, the default one first', () => {
+  const { voicePickLocalVoice } = V;
+  const on = { name: 'on', lang: 'en-US', localService: false, default: true };
+  const a = { name: 'a', lang: 'en-GB', localService: true, default: false };
+  const b = { name: 'b', lang: 'en-US', localService: true, default: true };
+  const de = { name: 'de', lang: 'de-DE', localService: true, default: true };
+  assert.strictEqual(voicePickLocalVoice([on, a, b], 'en'), b, 'the default offline voice');
+  assert.strictEqual(voicePickLocalVoice([on, a], 'en'), a, 'any offline voice when none is the default');
+  assert.strictEqual(voicePickLocalVoice([on, de], 'en'), null, 'online voices and other languages never');
+  assert.strictEqual(voicePickLocalVoice([on, a, de], 'de'), de);
+  assert.strictEqual(voicePickLocalVoice([on, a], undefined), a, "'en' by default");
+  assert.strictEqual(voicePickLocalVoice([{ lang: 'en_US', localService: true }], 'en').lang, 'en_US', 'Android style tags');
+  assert.strictEqual(voicePickLocalVoice([{ lang: 'en-US', localService: 'true' }], 'en'), null, 'strictly true');
+  assert.strictEqual(voicePickLocalVoice([], 'en'), null);
+  assert.strictEqual(voicePickLocalVoice(null, 'en'), null);
+  assert.strictEqual(voicePickLocalVoice([null, undefined, a], 'en'), a);
+});
+
+test('voiceWaitLocalVoice: waits up to a second for voiceschanged when the list is empty', async () => {
+  const local = { lang: 'en-US', localService: true, default: true };
+  const ready = { getVoices: () => [local] };
+  assert.strictEqual(await V.voiceWaitLocalVoice(ready, 'en', 50), local, 'no waiting when the list is there');
+  let list = [], handlers = new Set();
+  const late = { getVoices: () => list, addEventListener: (_, h) => handlers.add(h), removeEventListener: (_, h) => handlers.delete(h) };
+  const p = V.voiceWaitLocalVoice(late, 'en', 1000);
+  list = [local]; for (const h of [...handlers]) h();
+  assert.strictEqual(await p, local, 'voiceschanged delivers the list');
+  assert.strictEqual(handlers.size, 0, 'listener removed');
+  const t0 = Date.now();
+  const never = { getVoices: () => [], addEventListener() {}, removeEventListener() {} };
+  assert.strictEqual(await V.voiceWaitLocalVoice(never, 'en', 40), null, 'times out with no voice');
+  assert.ok(Date.now() - t0 < 900);
+  assert.strictEqual(await V.voiceWaitLocalVoice(null, 'en', 40), null);
+  assert.strictEqual(await V.voiceWaitLocalVoice({ getVoices: () => [{ lang: 'en-US', localService: false }] }, 'en', 40), null, 'only online voices: none');
+});
+
+test('voiceMicGuard: pending flag + generation; a stream for an old generation is closed at once', async () => {
+  const g = V.voiceMicGuard();
+  const t1 = g.begin();
+  assert.strictEqual(g.begin(), -1, 'starting while pending is ignored');
+  g.cancel();                       // stop / close / hidden bumps the generation
+  let closed = 0;
+  assert.strictEqual(g.settle(t1, { close() { closed++; } }), false, 'old generation');
+  assert.strictEqual(closed, 1, 'the late stream was closed');
+  assert.strictEqual(g.pending, false);
+  const t2 = g.begin();
+  assert.notStrictEqual(t2, -1);
+  assert.strictEqual(g.settle(t2, { close() { closed++; } }), true, 'current generation is kept');
+  assert.strictEqual(closed, 1);
+  g.begin(); g.fail(); assert.strictEqual(g.pending, false, 'a failed request frees the guard');
+  // with a fake getUserMedia that resolves late
+  const open = async (gate) => { await gate; return { close() { closed++; } }; };
+  let release; const gate = new Promise((r) => { release = r; });
+  const tok = g.begin(); const pending = open(gate);
+  g.cancel(); release();
+  assert.strictEqual(g.settle(tok, await pending), false);
+  assert.strictEqual(closed, 2);
+});

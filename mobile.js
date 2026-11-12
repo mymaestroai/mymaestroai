@@ -2137,6 +2137,42 @@ function voiceIsStopCommand(text) {
   const t = String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
   return VOICE_STOP_COMMANDS.has(t);
 }
+function voicePickLocalVoice(voices, lang) {
+  const pre = String(lang || 'en').toLowerCase();
+  const local = Array.from(voices || []).filter(v => v && v.localService === true && String(v.lang || '').toLowerCase().startsWith(pre));
+  return local.find(v => v.default === true) || local[0] || null;
+}
+async function voiceWaitLocalVoice(synth, lang, waitMs = 1000) {
+  if (!synth || typeof synth.getVoices !== 'function') return null;
+  let list = synth.getVoices() || [];
+  if (!list.length && typeof synth.addEventListener === 'function') {
+    list = await new Promise((resolve) => {
+      let done = false, timer = null;
+      const fin = () => {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        try { synth.removeEventListener('voiceschanged', fin); } catch { /* gone */ }
+        resolve(synth.getVoices() || []);
+      };
+      timer = setTimeout(fin, waitMs);
+      synth.addEventListener('voiceschanged', fin);
+    });
+  }
+  return voicePickLocalVoice(list, lang);
+}
+function voiceMicGuard() {
+  const g = { pending: false, gen: 0 };
+  g.begin = () => { if (g.pending) return -1; g.pending = true; return g.gen; };
+  g.cancel = () => { g.gen++; };
+  g.fail = () => { g.pending = false; };
+  g.settle = (token, mic) => {
+    g.pending = false;
+    if (token === g.gen) return true;
+    try { if (mic && mic.close) mic.close(); } catch { /* already closed */ }
+    return false;
+  };
+  return g;
+}
 // ── voice helpers (end) ──
 
 // The date and time under each message: when it was sent, when a reply was finished and how long it took.
@@ -4322,14 +4358,29 @@ function sendAndClose() {
 const VOICE_MAX_SECONDS = 60;
 let voiceStatus = { enabled: false, ready: false };
 let voiceDictatedFor = null;   // the agent whose message was dictated with the mic here, until it is sent
-const voiceRec = { state: 'idle', handle: null, chunks: [], t0: 0, tick: null, agent: null };
-const voicePlay = { token: 0, audio: null, url: null, el: null };
+const VOICE_MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg>';
+const voiceRec = { state: 'idle', handle: null, chunks: [], t0: 0, tick: null, agent: null, guard: voiceMicGuard() };
+const voicePlay = { token: 0, audio: null, url: null, el: null, cancel: null, told: false };
 const voiceErr = (e) => (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'The microphone is blocked: allow it for this site in the browser settings'
   : e && e.name === 'NotFoundError' ? 'No microphone found' : (e && e.message) || 'The microphone did not start');
 function voicePrefsNow() { try { return voiceLoadPrefs(localStorage); } catch { return { micLevel: 50, interruptSensitivity: 50, mode: 'tap', readAloud: false, deviceVoiceFallback: true }; } }
 function voicePrefsSave(patch) { const p = { ...voicePrefsNow(), ...patch }; try { voiceSavePrefs(localStorage, p); } catch { /* storage full or blocked */ } return p; }
 function voiceTakeDictated(agent) { const d = voiceDictatedFor === agent; voiceDictatedFor = null; return d; }
 function voiceOn() { return !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready); }
+// The speaker on a reply is shown only when something can speak: the hub voice, or (when the box is ticked) an offline voice on this phone.
+let voiceLocalOk = false, voiceLocalProbed = false;
+function voiceSpeakPaint() {
+  const usable = voiceOn() || (!!voicePrefsNow().deviceVoiceFallback && voiceLocalOk);
+  if (document.body) document.body.classList.toggle('no-speak', !usable);
+}
+function voiceLocalProbe() {
+  if (voiceLocalProbed) return;
+  voiceLocalProbed = true;
+  try {
+    if (!window.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') return;
+    voiceWaitLocalVoice(window.speechSynthesis, 'en', 1000).then((v) => { voiceLocalOk = !!v; voiceSpeakPaint(); }).catch(() => {});
+  } catch { /* no device voice */ }
+}
 
 async function voiceStatusRefresh() {
   try {
@@ -4338,6 +4389,8 @@ async function voiceStatusRefresh() {
   } catch { /* offline: keep what was known */ }
   const b = $('mic-btn');
   if (b) { b.hidden = !voiceOn(); if (!voiceOn() && voiceRec.state === 'recording') voiceMicCancel(); }
+  voiceLocalProbe();
+  voiceSpeakPaint();
   paintVoiceSheet();
 }
 
@@ -4350,12 +4403,20 @@ async function voiceMicOpen(gainValue, onChunk) {
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
   catch (e) { try { ctx.close(); } catch { /* closed */ } throw e; }
-  const source = ctx.createMediaStreamSource(stream);
-  const gain = ctx.createGain();
-  gain.gain.value = voiceGainFromSlider(gainValue);
-  const proc = ctx.createScriptProcessor(4096, 1, 1);
-  proc.onaudioprocess = (ev) => onChunk(new Float32Array(ev.inputBuffer.getChannelData(0)));
-  source.connect(gain); gain.connect(proc); proc.connect(ctx.destination);   // the processor only runs while connected; it writes silence
+  let source, gain, proc;
+  try {
+    source = ctx.createMediaStreamSource(stream);
+    gain = ctx.createGain();
+    gain.gain.value = voiceGainFromSlider(gainValue);
+    proc = ctx.createScriptProcessor(4096, 1, 1);
+    proc.onaudioprocess = (ev) => onChunk(new Float32Array(ev.inputBuffer.getChannelData(0)));
+    source.connect(gain); gain.connect(proc); proc.connect(ctx.destination);   // the processor only runs while connected; it writes silence
+  } catch (e) {
+    // the graph could not be built: the microphone must not stay open
+    for (const t of stream.getTracks()) { try { t.stop(); } catch { /* stopped */ } }
+    try { ctx.close(); } catch { /* closed */ }
+    throw e;
+  }
   return {
     rate: ctx.sampleRate,
     setLevel(v) { gain.gain.value = voiceGainFromSlider(v); },
@@ -4380,12 +4441,15 @@ function voiceMicPaint() {
   b.classList.toggle('rec', rec);
   b.classList.toggle('busy', voiceRec.state === 'starting' || voiceRec.state === 'sending');
   b.setAttribute('aria-pressed', rec ? 'true' : 'false');
-  b.setAttribute('aria-label', rec ? 'Stop and transcribe' : 'Dictate a message');
-  b.textContent = rec ? `● ${Math.floor((Date.now() - voiceRec.t0) / 1000)}s` : voiceRec.state === 'sending' ? '…' : '\u{1F399}';
+  b.setAttribute('aria-label', rec ? 'Stop and transcribe' : 'Dictate');
+  if (rec) b.textContent = `● ${Math.floor((Date.now() - voiceRec.t0) / 1000)}s`;
+  else if (voiceRec.state === 'sending') b.textContent = '…';
+  else if (!b.querySelector('svg')) b.innerHTML = VOICE_MIC_SVG;
   const bar = $('voice-level'); if (bar) bar.hidden = !rec;
   if (!rec) voiceBarPaint(0);
 }
 function voiceMicCancel() {
+  voiceRec.guard.cancel();   // a microphone still being asked for is stopped the moment it arrives
   clearInterval(voiceRec.tick); voiceRec.tick = null;
   if (voiceRec.handle) { voiceRec.handle.close(); voiceRec.handle = null; }
   voiceRec.chunks = []; voiceRec.state = 'idle';
@@ -4394,16 +4458,25 @@ function voiceMicCancel() {
 
 async function voiceMicTap() {
   keepKeyboard && keepKeyboard.elsewhere();   // the mic button took the touch: the keyboard guard must not bring the keyboard back
-  if (voiceRec.state === 'starting' || voiceRec.state === 'sending') return;
+  if (voiceRec.state === 'starting' || voiceRec.state === 'sending' || voiceRec.guard.pending || voiceTest.guard.pending) return;
   if (voiceRec.state === 'recording') { voiceMicStop(); return; }
   if (!current) { toast('Pick an agent first'); return; }
+  if (voiceTest.handle) voiceTestStop();
   voiceStopPlayback();   // the phone's own speaker must not be heard by the mic
   voiceUnlockAudio();
+  const token = voiceRec.guard.begin();
   voiceRec.state = 'starting'; voiceRec.agent = current; voiceRec.chunks = [];
   voiceMicPaint();
+  let handle;
   try {
-    voiceRec.handle = await voiceMicOpen(voicePrefsNow().micLevel, (f) => { voiceRec.chunks.push(f); voiceBarPaint(voiceMeterPaint(f)); });
-  } catch (e) { voiceRec.state = 'idle'; voiceMicPaint(); toast(voiceErr(e), 4500); return; }
+    handle = await voiceMicOpen(voicePrefsNow().micLevel, (f) => { voiceRec.chunks.push(f); voiceBarPaint(voiceMeterPaint(f)); });
+  } catch (e) {
+    voiceRec.guard.fail();
+    if (token === voiceRec.guard.gen) { voiceRec.state = 'idle'; voiceMicPaint(); toast(voiceErr(e), 4500); }
+    return;
+  }
+  if (!voiceRec.guard.settle(token, handle)) return;   // cancelled while the browser was asking: the stream is already stopped
+  voiceRec.handle = handle;
   voiceRec.state = 'recording'; voiceRec.t0 = Date.now();
   voiceRec.tick = setInterval(() => { voiceMicPaint(); if (Date.now() - voiceRec.t0 >= VOICE_MAX_SECONDS * 1000) voiceMicStop(); }, 250);
   voiceMicPaint();
@@ -4423,7 +4496,8 @@ async function voiceMicStop() {
     const all = new Float32Array(n); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
     const wav = new Blob([voiceEncodeWav(voiceResample(all, rate, 16000), 16000)], { type: 'audio/wav' });
     const r = await api(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav });
-    if (r.status === 409) throw new Error('Voice is turned off on the hub');
+    if (r.status === 409) throw new Error('Voice is turned off');
+    if (r.status === 503) throw new Error('Voice is busy, try again in a few seconds');
     if (!r.ok) throw new Error(`Speech to text failed (HTTP ${r.status})`);
     const text = String((await r.json()).text || '').trim();
     if (!text) throw new Error('I did not catch that');
@@ -4463,6 +4537,7 @@ function voiceMarkPlaying(el) {
 function voiceStopPlayback() {
   voicePlay.token++;
   try { if (voicePlay.audio) { voicePlay.audio.pause(); voicePlay.audio.onended = null; voicePlay.audio.onerror = null; } } catch { /* nothing playing */ }
+  if (voicePlay.cancel) { const c = voicePlay.cancel; voicePlay.cancel = null; c(); }   // settles the waiting voicePlayBlob (not played to the end) and frees its blob URL
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch { /* no device voice */ }
   if (voicePlay.el) { voicePlay.el.classList.remove('speaking'); const s = voicePlay.el.querySelector('.speak'); if (s) s.textContent = '\u{1F50A}'; voicePlay.el = null; }
 }
@@ -4470,6 +4545,7 @@ async function voiceTtsBlob(agent, text) {   // null when the hub cannot say it 
   if (!voiceOn()) return null;
   try {
     const r = await api('/api/voice/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent, text }) });
+    if (r.status === 409 || r.status === 503) { voicePlay.told = true; toast(r.status === 409 ? 'Voice is turned off' : 'Voice is busy, try again in a few seconds', 4000); }
     if (!r.ok) return null;
     const b = await r.blob();
     return b && b.size ? b : null;
@@ -4482,7 +4558,15 @@ function voicePlayBlob(blob, my) {
     const prev = voicePlay.url;
     const url = URL.createObjectURL(blob);
     voicePlay.url = url;
-    const done = (ok) => { a.onended = null; a.onerror = null; try { URL.revokeObjectURL(url); } catch { /* gone */ } if (voicePlay.url === url) voicePlay.url = null; resolve(ok); };
+    const done = (ok) => {
+      a.onended = null; a.onerror = null;
+      try { URL.revokeObjectURL(url); } catch { /* gone */ }
+      if (voicePlay.url === url) voicePlay.url = null;
+      if (voicePlay.cancel === cancel) voicePlay.cancel = null;
+      resolve(ok);
+    };
+    const cancel = () => done(false);   // voiceStopPlayback: the promise settles as "not played to the end"
+    voicePlay.cancel = cancel;
     a.onended = () => done(true);
     a.onerror = () => done(false);
     a.src = url;
@@ -4495,9 +4579,13 @@ function voiceDeviceSpeak(sentences, my) {   // the phone's own voice, sentence 
   const synth = window.speechSynthesis;
   if (!synth || typeof SpeechSynthesisUtterance === 'undefined') return Promise.resolve(false);
   return (async () => {
+    // only an offline voice (localService) is used: the browser's default voice may be an online one
+    const voice = await voiceWaitLocalVoice(synth, 'en', 1000);
+    if (my !== voicePlay.token) return true;
+    if (!voice) { toast('This device has no offline voice; turn on voice in Settings', 4500); return true; }
     for (const s of sentences) {
       if (my !== voicePlay.token) return true;
-      await new Promise((resolve) => { const u = new SpeechSynthesisUtterance(s); u.onend = resolve; u.onerror = resolve; synth.speak(u); });
+      await new Promise((resolve) => { const u = new SpeechSynthesisUtterance(s); u.voice = voice; u.lang = voice.lang; u.onend = resolve; u.onerror = resolve; synth.speak(u); });
     }
     return true;
   })();
@@ -4505,6 +4593,7 @@ function voiceDeviceSpeak(sentences, my) {   // the phone's own voice, sentence 
 async function voiceSpeak(markdown, agent, el) {
   voiceStopPlayback();
   const my = voicePlay.token;
+  voicePlay.told = false;
   let sentences = [];
   try { sentences = voiceSentences(voiceSpeechText(markdown)) || []; } catch { sentences = []; }
   if (!sentences.length) { toast('Nothing to read aloud'); return; }
@@ -4526,7 +4615,7 @@ async function voiceSpeak(markdown, agent, el) {
   }
   if (rest.length && my === voicePlay.token) {
     if (fallback && await voiceDeviceSpeak(rest, my)) { /* spoken by the phone */ }
-    else if (my === voicePlay.token) toast(voiceOn() ? 'The hub voice did not answer' : 'Voice is off on the hub (an admin turns it on in Settings on the computer)', 4000);
+    else if (my === voicePlay.token && !voicePlay.told) toast(voiceOn() ? 'The hub voice did not answer' : 'Voice is off on the hub (an admin turns it on in Settings on the computer)', 4000);
   }
   if (my === voicePlay.token) voiceStopPlayback();
 }
@@ -4552,23 +4641,37 @@ function addSpeakButton(el) {
 }
 
 // ── Voice sheet (menu, Voice) ──
-const voiceTest = { handle: null };
+const voiceTest = { handle: null, guard: voiceMicGuard() };
 function voiceTestStop() {
+  voiceTest.guard.cancel();   // a test mic still being asked for is stopped the moment it arrives
   if (voiceTest.handle) { voiceTest.handle.close(); voiceTest.handle = null; }
   const sh = $('voice-sheet');
   if (sh) { const t = sh.querySelector('.vs-test'); if (t) { t.setAttribute('aria-pressed', 'false'); t.textContent = 'Test mic'; } const m = sh.querySelector('.vs-meter i'); if (m) m.style.width = '0%'; }
 }
 async function voiceTestToggle() {
   if (voiceTest.handle) { voiceTestStop(); return; }
-  if (voiceRec.state !== 'idle') { toast('The mic is already in use'); return; }
+  if (voiceTest.guard.pending) return;   // a second tap while the microphone is still being asked for
+  if (voiceRec.state !== 'idle' || voiceRec.guard.pending) { toast('The mic is already in use'); return; }
   const sh = $('voice-sheet'); const t = sh.querySelector('.vs-test'); const m = sh.querySelector('.vs-meter i');
+  const token = voiceTest.guard.begin();
   t.disabled = true;
+  let handle = null;
   try {
-    voiceTest.handle = await voiceMicOpen(voicePrefsNow().micLevel, (f) => { m.style.width = `${voiceMeterPaint(f)}%`; });
-    t.setAttribute('aria-pressed', 'true'); t.textContent = 'Stop test';
-  } catch (e) { toast(voiceErr(e), 4500); }
+    handle = await voiceMicOpen(voicePrefsNow().micLevel, (f) => { m.style.width = `${voiceMeterPaint(f)}%`; });
+  } catch (e) { voiceTest.guard.fail(); if (token === voiceTest.guard.gen) toast(voiceErr(e), 4500); }
   t.disabled = false;
+  if (!handle) return;
+  if (!voiceTest.guard.settle(token, handle)) return;   // the sheet was closed (or the page hidden) meanwhile: the stream is already stopped
+  voiceTest.handle = handle;
+  t.setAttribute('aria-pressed', 'true'); t.textContent = 'Stop test';
 }
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) return;
+  voiceTestStop();
+  // A hidden page does not keep the microphone: what was already said is sent, a microphone still being asked for is dropped.
+  if (voiceRec.state === 'recording') voiceMicStop();
+  else if (voiceRec.state === 'starting') voiceMicCancel();
+});
 function voiceSheet() {
   let sh = $('voice-sheet');
   if (sh) return sh;
@@ -4589,7 +4692,7 @@ function voiceSheet() {
     '<button type="button" class="vs-btn vs-test" aria-pressed="false">Test mic</button>' +
     '<label class="vs-check"><input type="checkbox" class="vs-read"> <span>Read replies aloud</span></label>' +
     '<p class="vs-hint">After a message you dictated with the mic, the reply is read when it ends. The speaker on a reply reads it any time.</p>' +
-    '<label class="vs-check"><input type="checkbox" class="vs-fallback"> <span>Use the phone&#39;s own voice when the hub voice is unavailable</span></label>' +
+    '<label class="vs-check"><input type="checkbox" class="vs-fallback"> <span>Use this device&#39;s own offline voice when the hub voice is unavailable</span></label>' +
     '<button type="button" class="vs-btn vs-sample">Play sample</button></div>';
   const close = () => { voiceTestStop(); voiceStopPlayback(); sh.classList.remove('open'); dialogGuard.closed(sh); };
   sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
@@ -4598,7 +4701,7 @@ function voiceSheet() {
   level.addEventListener('input', () => { sh.querySelector('.vs-val').textContent = level.value; if (voiceTest.handle) voiceTest.handle.setLevel(Number(level.value)); });
   level.addEventListener('change', () => voicePrefsSave({ micLevel: Number(level.value) }));
   sh.querySelector('.vs-read').addEventListener('change', (e) => voicePrefsSave({ readAloud: !!e.target.checked }));
-  sh.querySelector('.vs-fallback').addEventListener('change', (e) => voicePrefsSave({ deviceVoiceFallback: !!e.target.checked }));
+  sh.querySelector('.vs-fallback').addEventListener('change', (e) => { voicePrefsSave({ deviceVoiceFallback: !!e.target.checked }); voiceSpeakPaint(); });
   sh.querySelector('.vs-test').addEventListener('click', voiceTestToggle);
   sh.querySelector('.vs-sample').addEventListener('click', () => { voiceUnlockAudio(); voiceSpeak('This is how replies will sound.', current, null); });
   sh.closeSheet = close;
@@ -4615,7 +4718,8 @@ function paintVoiceSheet() {
   sh.querySelector('.vs-fallback').checked = !!p.deviceVoiceFallback;
   const note = sh.querySelector('.vs-note');
   note.textContent = voiceOn() ? `Voice is on${voiceStatus.stt && voiceStatus.stt.engine ? ` (${voiceStatus.stt.engine})` : ''}. Tap the mic beside the message box to dictate.`
-    : voiceStatus.enabled ? (voiceStatus.installing ? `Voice is installing on the hub${Number.isFinite(voiceStatus.progress) ? ` (${Math.round(voiceStatus.progress)}%)` : ''}.` : 'Voice is on, but not ready on the hub yet.')
+    : voiceStatus.failed ? 'Voice setup failed on the hub. An admin can see the details in Settings on the computer.'
+    : voiceStatus.enabled ? (voiceStatus.installing ? `Voice is installing on the hub${Number.isFinite(voiceStatus.progress) ? ` (${Math.round(voiceStatus.progress * 100)}%)` : ''}.` : 'Voice is on, but not ready on the hub yet.')
       : 'Voice is not enabled on the hub. An admin turns it on in Settings on the computer.';
   note.classList.toggle('off', !voiceOn());
 }
@@ -6460,7 +6564,6 @@ function wire() {
   // The mic acts on the touch itself too (the box keeps its state, no keyboard opens). Its status is polled every 60 s while the page is visible.
   if ($('mic-btn')) onComposerTap($('mic-btn'), voiceMicTap);
   setInterval(() => { if (!document.hidden && current) voiceStatusRefresh(); }, 60000);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { if (voiceRec.state === 'recording') voiceMicStop(); voiceTestStop(); } });   // the mic is not kept while the page is away
 
   $('attach-btn').addEventListener('click', () => $('file-input').click());
   $('camera-btn').addEventListener('click', () => $('camera-input').click());

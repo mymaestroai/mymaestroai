@@ -808,6 +808,9 @@ test('H5 backup rules: runtime/ and pkg/ of a module are left out, everything el
   const out = (rel) => DATA_LEAVE_OUT.some(re => re.test(rel));
   for (const rel of ['modules/demo/runtime', 'modules/demo/runtime/node_modules/a/index.js', 'modules/demo/pkg', 'modules/demo/pkg/node_modules/x/package.json', 'modules/my-mod/runtime/package.json']) assert.ok(out(rel), rel);
   for (const rel of ['modules', 'modules/demo', 'modules/demo/home/keys.json', 'modules/demo/audit.jsonl', 'modules/demo/usage.json', 'modules/demo/runtime-notes.txt', 'modules/demo/home/runtime/x', 'modules/demo/pkgs/x', 'modules.json', 'runtime/x']) assert.ok(!out(rel), rel);
+  // the speech engine's downloads (binaries, models, browser files, markers) are left out; lookalikes are not
+  for (const rel of ['voice', 'voice/node_modules/sherpa-onnx-node/package.json', 'voice/models/whisper-tiny.en/x.onnx', 'voice/state.json', 'voice/.done/a.json']) assert.ok(out(rel), rel);
+  for (const rel of ['voices.json', 'voice.json', 'voices/x', 'modules/demo/home/voice/x', 'agents/voice/x']) assert.ok(!out(rel), rel);
 });
 
 test('H5 snapshot: a real data tree keeps module homes and state and drops the installs', async () => {

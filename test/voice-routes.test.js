@@ -31,21 +31,22 @@ function fakeReq(method, url, { headers = {}, body, user = owner, service = fals
   return r;
 }
 
-function setup({ enabled = true, ready = true, voices, defaultVoice = 'af_heart', platformSupported = true } = {}) {
+function setup({ enabled = true, ready = true, voices, defaultVoice = 'af_heart', platformSupported = true, error = '', installing = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-routes-'));
   fs.mkdirSync(path.join(dir, 'web'), { recursive: true });
   const settings = { voice: { enabled, defaultVoice: '', sttModel: '' } };
-  const calls = { install: [], stt: [], tts: [], stop: 0, update: [] };
+  const calls = { install: [], stt: [], tts: [], stop: 0, resume: 0, update: [] };
   const vs = (voices || manifest.VOICES.map(v => v.id)).map(id => { const v = manifest.VOICES.find(x => x.id === id); return { id, label: v.label, engine: v.engine, accent: v.accent }; });
   const engine = {
-    paths: { web: path.join(dir, 'web'), dir },
-    status: () => ({ enabled: false, ready, installing: false, step: ready ? 'ready' : '', progress: ready ? 1 : 0, error: '', platformSupported, stt: { engine: 'local', model: 'tiny.en' }, tts: { engine: 'local', defaultVoice }, voices: ready ? vs : [] }),
+    paths: { web: path.join(dir, 'web'), dir, worker: path.join(dir, 'worker.js') },
+    status: () => ({ enabled: false, ready, installing, step: ready ? 'ready' : '', progress: ready ? 1 : 0, error, platformSupported, stt: { engine: 'local', model: 'tiny.en' }, tts: { engine: 'local', defaultVoice }, voices: ready ? vs : [] }),
     install: (o) => { calls.install.push(o); return Promise.resolve(); },
   };
   const client = {
     stt: async (buf) => { calls.stt.push(buf.length); return { text: 'turn on the lights', ms: 21 }; },
     tts: async (text, voice, speed) => { calls.tts.push({ text, voice, speed }); return { wav: Buffer.from('RIFF....WAVE'), sampleRate: 24000, ms: 42 }; },
     stop: () => { calls.stop++; },
+    resume: () => { calls.resume++; },
   };
   const deps = {
     jsonResponse: (res, code, data) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); },
@@ -90,7 +91,7 @@ test('GET status: engine status with enabled taken from the voice setting', asyn
   assert.strictEqual(r.statusCode, 200);
   const j = r.json();
   assert.strictEqual(j.enabled, true); assert.strictEqual(j.ready, true); assert.strictEqual(j.voices.length, 6);
-  assert.deepStrictEqual(Object.keys(j).sort(), ['enabled', 'error', 'installing', 'platformSupported', 'progress', 'ready', 'step', 'stt', 'tts', 'voices']);
+  assert.deepStrictEqual(Object.keys(j).sort(), ['enabled', 'error', 'failed', 'installing', 'platformSupported', 'progress', 'ready', 'step', 'stt', 'tts', 'voices']);
   const off = setup({ enabled: false });
   assert.strictEqual((await off.call(fakeReq('GET', '/api/voice/status'))).json().enabled, false);
   t.cleanup(); off.cleanup();
@@ -236,6 +237,178 @@ test('POST tts: an engine failure is a 500 without details; the text is never lo
   } finally { console.log = ol; console.error = oe; }
   assert.strictEqual(r.statusCode, 500); assert.ok(!JSON.stringify(r.json()).includes('secret'));
   assert.ok(logs.length > 0 && !logs.join('\n').match(/private/), 'metadata only');
+  t.cleanup();
+});
+
+// ── status: default voice, errors ──
+test('GET status: the default voice is the saved one when installed, else the installer\'s; installDefaultVoice is always the installer\'s', async () => {
+  const t = setup({ defaultVoice: 'af_heart' });
+  let j = (await t.call(fakeReq('GET', '/api/voice/status', { user: sam }))).json();
+  assert.strictEqual(j.tts.defaultVoice, 'af_heart'); assert.strictEqual(j.tts.installDefaultVoice, 'af_heart');
+  t.settings.voice.defaultVoice = 'alba';   // an admin saved another default
+  j = (await t.call(fakeReq('GET', '/api/voice/status', { user: sam }))).json();
+  assert.strictEqual(j.tts.defaultVoice, 'alba'); assert.strictEqual(j.tts.installDefaultVoice, 'af_heart');
+  const few = setup({ voices: ['lessac'], defaultVoice: 'lessac' });
+  few.settings.voice.defaultVoice = 'alba';   // saved but not installed here
+  j = (await few.call(fakeReq('GET', '/api/voice/status'))).json();
+  assert.strictEqual(j.tts.defaultVoice, 'lessac');
+  // the voice that speaks is the same one the picker shows
+  const r = await t.call(fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agent: 'maestro', text: 'Hi' }) }));
+  assert.strictEqual(r.headers['x-voice'], 'alba');
+  t.cleanup(); few.cleanup();
+});
+
+test('GET status: the error text goes to admins only; members get error null and failed true', async () => {
+  const t = setup({ ready: false, error: 'download failed at /srv/app/data/voice/x from https://host.invalid/a' });
+  const m = (await t.call(fakeReq('GET', '/api/voice/status', { user: sam }))).json();
+  assert.strictEqual(m.error, null); assert.strictEqual(m.failed, true);
+  assert.ok(!JSON.stringify(m).includes('/srv/app'));
+  const a = (await t.call(fakeReq('GET', '/api/voice/status', { user: owner }))).json();
+  assert.match(a.error, /download failed/); assert.strictEqual(a.failed, true);
+  const svc = (await t.call(fakeReq('GET', '/api/voice/status', { user: null, service: true }))).json();
+  assert.match(svc.error, /download failed/);
+  const ok = setup({});
+  const j = (await ok.call(fakeReq('GET', '/api/voice/status', { user: sam }))).json();
+  assert.strictEqual(j.failed, false); assert.strictEqual(j.error, '');
+  t.cleanup(); ok.cleanup();
+});
+
+// ── disable while a request is in flight ──
+const wavOf = (n = 1600, rate = 16000) => { const b = Buffer.alloc(44 + n * 2); b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVE', 8); b.write('fmt ', 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(rate, 24); b.writeUInt32LE(rate * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n * 2, 40); for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(3000 * Math.sin(i / 5)), 44 + i * 2); return b; };
+/** A request whose body arrives when the test says so. */
+function slowReq(method, url, headers, user = owner) {
+  const r = new Readable({ read() {} });
+  Object.assign(r, { method, url, headers, hubUser: user, hubService: false });
+  return r;
+}
+
+test('disable while an upload is still arriving: the finished upload is answered 409 voice_off and never reaches the worker', async () => {
+  const { createVoiceClient } = require('../lib/voice/client');
+  const t = setup();
+  let spawned = 0;
+  const eng = t.deps.getVoice().engine;
+  const real = createVoiceClient({ engine: eng, idleMs: 0, spawnImpl: () => { spawned++; throw new Error('must not start'); } });
+  t.deps.getVoice = () => ({ engine: eng, client: real });
+  const wav = wavOf();
+  const req = slowReq('POST', '/api/voice/stt?agent=maestro', { 'content-type': 'audio/wav' });
+  const res = fakeRes();
+  const done = routes.handle('/api/voice/stt', req, res, t.deps);
+  req.push(wav.subarray(0, 100));
+  await new Promise(r => setTimeout(r, 10));
+  const d = await t.call(fakeReq('POST', '/api/voice/disable'));   // the admin turns voice off mid-upload
+  assert.strictEqual(d.statusCode, 200);
+  req.push(wav.subarray(100)); req.push(null);
+  await done; await res.finished;
+  assert.strictEqual(res.statusCode, 409); assert.deepStrictEqual(res.json(), { error: 'voice_off' });
+  assert.strictEqual(spawned, 0, 'no worker was started');
+  assert.strictEqual(t.calls.stt.length, 0);
+  real.stop();
+});
+
+test('disable while the agent list is being read: tts is answered 409 and does not run', async () => {
+  const t = setup();
+  let release; const gate = new Promise(r => { release = r; });
+  t.deps.getAgents = async () => { await gate; return agents; };
+  const res = fakeRes();
+  const done = routes.handle('/api/voice/tts', fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agent: 'maestro', text: 'Hi' }) }), res, t.deps);
+  await new Promise(r => setTimeout(r, 10));
+  t.settings.voice.enabled = false;
+  release(); await done; await res.finished;
+  assert.strictEqual(res.statusCode, 409); assert.strictEqual(t.calls.tts.length, 0);
+  t.cleanup();
+});
+
+test('a voice_off rejection from the client is a 409 on both stt and tts', async () => {
+  const t = setup();
+  const c = t.deps.getVoice().client;
+  const off = async () => { throw Object.assign(new Error('voice engine stopped'), { code: 'voice_off' }); };
+  c.stt = off; c.tts = off;
+  let r = await t.call(fakeReq('POST', '/api/voice/stt?agent=maestro', { headers: { 'content-type': 'audio/wav' }, body: wavBytes() }));
+  assert.strictEqual(r.statusCode, 409); assert.deepStrictEqual(r.json(), { error: 'voice_off' });
+  r = await t.call(fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agent: 'maestro', text: 'Hi' }) }));
+  assert.strictEqual(r.statusCode, 409); assert.deepStrictEqual(r.json(), { error: 'voice_off' });
+  t.cleanup();
+});
+
+test('enable after disable resumes the client: requests run again (real client, fake worker)', async () => {
+  const { createVoiceClient } = require('../lib/voice/client');
+  const { EventEmitter } = require('node:events');
+  const t = setup({ enabled: true });
+  const spawns = [];
+  const spawnImpl = () => {
+    const c = new EventEmitter(); c.stdout = new EventEmitter(); c.kill = () => {}; spawns.push(c);
+    c.stdin = new EventEmitter();
+    c.stdin.write = (s) => { const m = JSON.parse(s); setImmediate(() => c.stdout.emit('data', Buffer.from(JSON.stringify({ id: m.id, ok: true, text: 'hello', ms: 3 }) + '\n'))); };
+    return c;
+  };
+  const eng = t.deps.getVoice().engine;
+  const real = createVoiceClient({ engine: eng, idleMs: 0, spawnImpl });
+  t.deps.getVoice = () => ({ engine: eng, client: real });
+  const stt = () => t.call(fakeReq('POST', '/api/voice/stt?agent=maestro', { headers: { 'content-type': 'audio/wav' }, body: wavOf() }));
+  assert.strictEqual((await stt()).statusCode, 200);
+  await t.call(fakeReq('POST', '/api/voice/disable'));
+  assert.strictEqual((await stt()).statusCode, 409);
+  const n = spawns.length;
+  await t.call(fakeReq('POST', '/api/voice/enable'));
+  const r = await stt();
+  assert.strictEqual(r.statusCode, 200); assert.strictEqual(r.json().text, 'hello'); assert.strictEqual(spawns.length, n + 1);
+  real.stop(); t.cleanup();
+});
+
+// ── busy / cancelled ──
+test('voice_busy from the client is a 503 with Retry-After: 5, on stt and tts', async () => {
+  const t = setup();
+  const c = t.deps.getVoice().client;
+  const busy = async () => { throw Object.assign(new Error('voice engine is busy'), { code: 'voice_busy' }); };
+  c.stt = busy; c.tts = busy;
+  let r = await t.call(fakeReq('POST', '/api/voice/stt?agent=maestro', { headers: { 'content-type': 'audio/wav' }, body: wavBytes() }));
+  assert.strictEqual(r.statusCode, 503); assert.deepStrictEqual(r.json(), { error: 'voice_busy' }); assert.strictEqual(r.headers['retry-after'], '5');
+  r = await t.call(fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agent: 'maestro', text: 'Hi' }) }));
+  assert.strictEqual(r.statusCode, 503); assert.strictEqual(r.headers['retry-after'], '5');
+  t.cleanup();
+});
+
+test('the routes hand the client a cancellation check that turns true when the caller disconnects before the answer', async () => {
+  const t = setup();
+  const c = t.deps.getVoice().client;
+  const seen = [];
+  c.stt = async (buf, rate, opts) => { seen.push(opts.isCancelled()); res.emit('close'); seen.push(opts.isCancelled()); return { text: 'x', ms: 1 }; };
+  c.tts = async (text, voice, speed, opts) => { seen.push(typeof opts.isCancelled === 'function' && opts.isCancelled()); return { wav: Buffer.from('RIFF'), sampleRate: 1, ms: 1 }; };
+  const res = fakeRes();
+  await routes.handle('/api/voice/stt', fakeReq('POST', '/api/voice/stt?agent=maestro', { headers: { 'content-type': 'audio/wav' }, body: wavBytes() }), res, t.deps);
+  assert.deepStrictEqual(seen, [false, true], 'false while connected, true after the connection closed unanswered');
+  await t.call(fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agent: 'maestro', text: 'Hi' }) }));
+  assert.strictEqual(seen[2], false);
+  // a request the client dropped as cancelled gets no answer body and does not throw
+  c.stt = async () => { throw Object.assign(new Error('request cancelled'), { code: 'voice_cancelled' }); };
+  const r = await t.call(fakeReq('POST', '/api/voice/stt?agent=maestro', { headers: { 'content-type': 'audio/wav' }, body: wavBytes() }));
+  assert.strictEqual(r.body().length, 0);
+  t.cleanup();
+});
+
+// ── resume an interrupted install ──
+test('resumeIfNeeded: installs when enabled and not ready; does nothing when disabled, ready or already installing; never throws', async () => {
+  const mk = (settingsVoice, st) => { const calls = []; const logs = []; return { calls, logs, deps: { getSetting: () => settingsVoice, getVoice: () => ({ engine: { status: () => st, install: (o) => { calls.push(o); return Promise.resolve(); } } }), log: (m) => logs.push(m) } }; };
+  let x = mk({ enabled: true, sttModel: 'small.en' }, { ready: false, installing: false });
+  assert.strictEqual(routes.resumeIfNeeded(x.deps), true); assert.deepStrictEqual(x.calls, [{ sttModel: 'small.en' }]);
+  x = mk({ enabled: true }, { ready: false, installing: false }); routes.resumeIfNeeded(x.deps); assert.deepStrictEqual(x.calls, [{ sttModel: undefined }]);
+  for (const [sv, st] of [[{ enabled: false }, { ready: false, installing: false }], [undefined, { ready: false, installing: false }], [{ enabled: true }, { ready: true, installing: false }], [{ enabled: true }, { ready: false, installing: true }]]) {
+    x = mk(sv, st); assert.strictEqual(routes.resumeIfNeeded(x.deps), false); assert.strictEqual(x.calls.length, 0);
+  }
+  // a failing install is logged on one line, not thrown (sync or async)
+  const logs = [];
+  const bad = { getSetting: () => ({ enabled: true }), getVoice: () => ({ engine: { status: () => ({ ready: false, installing: false }), install: () => Promise.reject(new Error('no network')) } }), log: (m) => logs.push(m) };
+  routes.resumeIfNeeded(bad); await new Promise(r => setTimeout(r, 5));
+  assert.ok(logs.some(l => /no network/.test(l)));
+  const bad2 = { getSetting: () => ({ enabled: true }), getVoice: () => { throw new Error('boom'); }, log: (m) => logs.push(m) };
+  assert.doesNotThrow(() => routes.resumeIfNeeded(bad2));
+  assert.doesNotThrow(() => routes.resumeIfNeeded());
+});
+
+test('enable calls the client resume before installing', async () => {
+  const t = setup({ enabled: false, ready: false });
+  await t.call(fakeReq('POST', '/api/voice/enable'));
+  assert.strictEqual(t.calls.resume, 1); assert.strictEqual(t.calls.install.length, 1);
   t.cleanup();
 });
 

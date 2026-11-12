@@ -92,7 +92,7 @@ test('Voice menu item and sheet: dialogGuard, level slider, meter, test toggle, 
   assert.match(html, /<button id="menu-voice">/);
   assert.match(js, /\$\('menu-voice'\)\?\.addEventListener\('click', openVoiceSheet\)/);
   const sheet = js.slice(js.indexOf('function voiceSheet()'), js.indexOf('function openVoiceSheet'));
-  for (const s of ['class="vs-level"', 'min="0" max="100"', 'vs-meter', 'Test mic', 'Read replies aloud', 'Use the phone&#39;s own voice when the hub voice is unavailable', 'Play sample', 'rsn-sheet voice-sheet']) assert.ok(sheet.includes(s), s);
+  for (const s of ['class="vs-level"', 'min="0" max="100"', 'vs-meter', 'Test mic', 'Read replies aloud', 'Use this device&#39;s own offline voice when the hub voice is unavailable', 'Play sample', 'rsn-sheet voice-sheet']) assert.ok(sheet.includes(s), s);
   assert.match(sheet, /voicePrefsSave\(\{ micLevel: Number\(level\.value\) \}\)/);
   assert.match(sheet, /voicePrefsSave\(\{ readAloud: /);
   assert.match(sheet, /voicePrefsSave\(\{ deviceVoiceFallback: /);
@@ -102,7 +102,125 @@ test('Voice menu item and sheet: dialogGuard, level slider, meter, test toggle, 
   assert.match(sheet, /dialogGuard\.closed\(sh\)/);
   assert.match(sheet, /voiceTestStop\(\); voiceStopPlayback\(\);/, 'closing releases the mic and stops the sample');
   assert.match(js, /Voice is not enabled on the hub\. An admin turns it on in Settings on the computer\./);
-  assert.match(js, /voiceTest\.handle = await voiceMicOpen\(/, 'meter opens the mic only through the test toggle');
+  assert.match(js, /handle = await voiceMicOpen\(voicePrefsNow\(\)\.micLevel, \(f\) => \{ m\.style\.width/, 'meter opens the mic only through the test toggle');
+});
+
+const L = require('../lib/ui-voice');
+const sliceBetween = (a, b) => { const i = js.indexOf(a), j = js.indexOf(b, i); assert.ok(i > 0 && j > i, a); return js.slice(i, j); };
+
+test('device voice is offline only: the utterance gets a localService voice, no voice means no speech and a toast', async () => {
+  const dev = sliceBetween('function voiceDeviceSpeak', 'async function voiceSpeak(');
+  assert.match(dev, /voiceWaitLocalVoice\(synth, 'en', 1000\)/);
+  assert.match(dev, /u\.voice = voice/);
+  assert.match(dev, /This device has no offline voice; turn on voice in Settings/);
+  const run = (voices) => {
+    const spoken = [], toasts = [];
+    const synth = { getVoices: () => voices, speak(u) { spoken.push(u); setImmediate(() => u.onend()); } };
+    const f = new Function('window', 'SpeechSynthesisUtterance', 'voicePlay', 'voiceWaitLocalVoice', 'toast', dev + '\nreturn voiceDeviceSpeak;')({ speechSynthesis: synth }, class { constructor(t) { this.text = t; } }, { token: 1 }, L.voiceWaitLocalVoice, (t) => toasts.push(t));
+    return f(['One.', 'Two.'], 1).then(() => ({ spoken, toasts }));
+  };
+  const local = { name: 'L', lang: 'en-US', localService: true, default: false };
+  const a = await run([{ name: 'Online', lang: 'en-US', localService: false, default: true }, local]);
+  assert.deepStrictEqual(a.spoken.map(u => u.text), ['One.', 'Two.']);
+  assert.ok(a.spoken.every(u => u.voice === local), 'the offline voice, not the default online one');
+  const b = await run([{ name: 'Online', lang: 'en-US', localService: false, default: true }]);
+  assert.deepStrictEqual(b.spoken, [], 'nothing is spoken');
+  assert.deepStrictEqual(b.toasts, ['This device has no offline voice; turn on voice in Settings']);
+});
+
+test('the speaker is hidden when neither the hub voice nor an offline device voice can speak (F8) and its room is reserved', () => {
+  assert.match(js, /function voiceSpeakPaint\(\)/);
+  assert.match(js, /classList\.toggle\('no-speak', !usable\)/);
+  assert.match(js, /const usable = voiceOn\(\) \|\| \(!!voicePrefsNow\(\)\.deviceVoiceFallback && voiceLocalOk\)/);
+  assert.match(html, /body\.no-speak \.msg \.speak \{ display: none; \}/);
+  // the copy button reserves 30px; the speaker sits left of it and the reply keeps 58px free on the right
+  assert.match(html, /\.msg \.copy \{ position: absolute; top: 2px; right: 2px; width: 28px;/);
+  assert.match(html, /\.msg \.speak \{ position: absolute; top: 2px; right: 30px; width: 28px;/);
+  assert.match(html, /body:not\(\.no-speak\) \.msg\.assistant \{ padding-right: 58px; \}/);
+});
+
+test('mic icon is an inline SVG (not the U+1F399 emoji), labelled Dictate; recording stays red', () => {
+  assert.match(html, /id="mic-btn"[^>]*aria-label="Dictate"[^>]*title="[^"]+"[^>]*hidden><svg viewBox="0 0 24 24"[^>]*stroke="currentColor"[^>]*aria-hidden="true"/);
+  assert.ok(!/id="mic-btn"[^\n]*(&#x1F399;|\u{1F399})/u.test(html));
+  const paint = sliceBetween('function voiceMicPaint()', 'function voiceMicCancel()');
+  assert.ok(!paint.includes('\u{1F399}'));
+  assert.match(paint, /b\.innerHTML = VOICE_MIC_SVG/);
+  assert.match(js, /const VOICE_MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20"/);
+  assert.match(html, /#mic-btn\.rec \{[^}]*var\(--error/);
+});
+
+test('install progress is 0..1 and shown as a percentage', () => {
+  assert.match(js, /Math\.round\(voiceStatus\.progress \* 100\)/);
+});
+
+test('stop playback settles the pending voicePlayBlob and frees its blob URL', async () => {
+  const src = sliceBetween('function voiceStopPlayback()', 'function voiceDeviceSpeak');
+  assert.match(src, /voicePlay\.cancel = cancel/);
+  assert.match(src, /const c = voicePlay\.cancel; voicePlay\.cancel = null; c\(\)/);
+  const revoked = [];
+  class FakeAudio { constructor() { this.paused = false; } pause() { this.paused = true; } play() { return Promise.resolve(); } }
+  const voicePlay = { token: 5, audio: null, url: null, el: null, cancel: null };
+  const f = new Function('voicePlay', 'window', 'URL', 'Audio', 'voiceOn', 'api', 'toast', src + '\nreturn { voicePlayBlob, voiceStopPlayback };')(
+    voicePlay, {}, { createObjectURL: () => 'blob:x', revokeObjectURL: (u) => revoked.push(u) }, FakeAudio, () => true, null, () => {});
+  const p = f.voicePlayBlob({}, 5);
+  let settled = null; p.then((v) => { settled = v; });
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(settled, null, 'still waiting while it plays');
+  f.voiceStopPlayback();
+  assert.strictEqual(await p, false, 'settles as not played to the end');
+  assert.deepStrictEqual(revoked, ['blob:x'], 'the object URL is revoked');
+  assert.strictEqual(voicePlay.url, null);
+  assert.strictEqual(voicePlay.cancel, null);
+});
+
+test('voiceMicOpen stops the stream tracks when the audio graph cannot be built', async () => {
+  const open = sliceBetween('async function voiceMicOpen', 'function voiceMeterPaint');
+  let stopped = 0, closed = 0;
+  class Ctx { constructor() { this.destination = {}; } resume() {} close() { closed++; } createMediaStreamSource() { throw new Error('graph failed'); } }
+  const navigator = { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() { stopped++; } }, { stop() { stopped++; } }] }) } };
+  const f = new Function('window', 'navigator', 'voiceGainFromSlider', open + '\nreturn voiceMicOpen;')({ AudioContext: Ctx }, navigator, (v) => v);
+  await assert.rejects(f(50, () => {}), /graph failed/);
+  assert.strictEqual(stopped, 2, 'every track stopped');
+  assert.strictEqual(closed, 1, 'context closed');
+});
+
+test('mic requests: one pending flag + generation; sheet close or a hidden page while getUserMedia is pending stops the stream', async () => {
+  assert.match(js, /guard: voiceMicGuard\(\)/);
+  const tap = sliceBetween('async function voiceMicTap()', 'async function voiceMicStop()');
+  assert.match(tap, /voiceRec\.guard\.pending/);
+  assert.match(tap, /const token = voiceRec\.guard\.begin\(\)/);
+  assert.match(tap, /voiceRec\.guard\.settle\(token, handle\)/);
+  assert.match(sliceBetween('function voiceMicCancel()', 'async function voiceMicTap()'), /voiceRec\.guard\.cancel\(\)/);
+  const test = sliceBetween('const voiceTest = {', 'function voiceSheet()');
+  assert.match(test, /voiceTest\.guard\.cancel\(\)/);
+  assert.match(test, /voiceTest\.guard\.pending/);
+  assert.match(test, /voiceTest\.guard\.settle\(token, handle\)/);
+  assert.match(test, /addEventListener\('visibilitychange'[\s\S]*voiceTestStop\(\)[\s\S]*voiceMicCancel\(\)/);
+  // run: Test mic, close the sheet while the permission prompt is open, then the stream arrives -> it is stopped at once
+  const els = {};
+  const mk = (id) => (els[id] ||= { disabled: false, textContent: '', style: {}, setAttribute() {}, querySelector: (q) => mk(q) });
+  let release; const gate = new Promise((r) => { release = r; });
+  let stopped = 0, opened = 0;
+  const handle = { close() { stopped++; } };
+  const voiceMicOpen = async () => { opened++; await gate; return handle; };
+  const f = new Function('voiceMicGuard', 'voiceRec', '$', 'toast', 'voicePrefsNow', 'voiceMicOpen', 'voiceErr', 'voiceMeterPaint', 'document',
+    test + '\nreturn { voiceTestToggle, voiceTestStop, voiceTest };')(L.voiceMicGuard, { state: 'idle', guard: L.voiceMicGuard() }, () => mk('voice-sheet'), () => {}, () => ({ micLevel: 50 }), voiceMicOpen, () => '', () => 0, { addEventListener() {} });
+  const first = f.voiceTestToggle();
+  f.voiceTestToggle();   // a second tap while pending is ignored
+  assert.strictEqual(opened, 1, 'one acquisition');
+  f.voiceTestStop();      // the sheet is closed
+  release();
+  await first;
+  assert.strictEqual(stopped, 1, 'the late stream was stopped');
+  assert.strictEqual(f.voiceTest.handle, null, 'nothing kept open');
+  assert.strictEqual(f.voiceTest.guard.pending, false);
+});
+
+test('409 voice_off and 503 voice_busy get short toasts', () => {
+  assert.match(js, /Voice is turned off/);
+  assert.match(js, /Voice is busy, try again in a few seconds/);
+  assert.match(sliceBetween('async function voiceMicStop()', 'function voiceInsert'), /r\.status === 503/);
+  assert.match(sliceBetween('async function voiceTtsBlob', 'function voicePlayBlob'), /r\.status === 409 \|\| r\.status === 503/);
 });
 
 test('no U+FE0F in the voice code or markup', () => {
