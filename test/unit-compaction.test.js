@@ -219,7 +219,9 @@ function makeBrief({ mode = 'on', bytes = 900 } = {}) {
     chunkCharsFor: async () => 2000, getRecentRows: async () => [],
     briefStatus: async () => brief ? { exists: true, bytes: brief.bytes === undefined ? bytes : brief.bytes, mtimeMs: brief.mtimeMs } : { exists: false, bytes: 0, mtimeMs: 0 },
   });
-  return { c, posts, resets, now: () => t, tick: (ms) => { t += ms; },
+  const sess = (id = 's1') => { c.noteUsage('a', 10, 1000, id); };   // stand-in session id; below the threshold, so nothing runs
+  sess();
+  return { c, sess, posts, resets, now: () => t, tick: (ms) => { t += ms; },
     setBrief: (mtimeMs, b) => { brief = { mtimeMs, ...(b || {}) }; }, clearBrief: () => { brief = null; },
     duringPost: (fn) => { onPost = fn; } };
 }
@@ -229,7 +231,7 @@ const FAIL = /didn't write its brief during the compression turn.*the session wa
 test('brief written during the run -> reset (agent, threshold and owner runs alike)', async () => {
   for (const reason of ['agent', 'threshold', 'owner']) {
     const h = makeBrief();
-    if (reason === 'agent') h.c.request('a', 'agent'); 
+    if (reason === 'agent') { h.sess(); h.c.request('a', 'agent'); }
     h.duringPost((m) => { if (/from the hub/.test(m) && !/Resumed/.test(m)) { h.tick(20 * SEC); h.setBrief(h.now()); } });
     const r = await h.c.run('a', reason);
     assert.deepStrictEqual([reason, r.ok, r.reset], [reason, true, true]);
@@ -240,7 +242,7 @@ test('brief written during the run -> reset (agent, threshold and owner runs ali
 test('agent request + brief written 30 s before the request -> reset; the stand-in clock is injected, no real files', async () => {
   const h = makeBrief();
   h.setBrief(h.now() - 30 * SEC);
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   h.tick(15 * SEC);                       // the request waits for the turn to end
   const r = await h.c.run('a', 'agent');
   assert.deepStrictEqual([r.ok, r.reset, r.error], [true, true, null]);
@@ -250,7 +252,7 @@ test('agent request + brief written 30 s before the request -> reset; the stand-
 test('agent request + brief written 10 minutes before -> refused, session kept, plain failure text', async () => {
   const h = makeBrief();
   h.setBrief(h.now() - 10 * 60 * SEC);
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   const r = await h.c.run('a', 'agent');
   assert.deepStrictEqual([r.ok, r.reset], [false, false]);
   assert.match(r.error, FAIL);
@@ -266,7 +268,7 @@ test('threshold run + brief written 10 s before -> refused (unchanged rule, no r
   assert.deepStrictEqual([r.ok, r.reset], [false, false]);
   assert.match(r.error, FAIL);
   // a stray agent request does not widen a threshold run either
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   const r2 = await h.c.run('a', 'threshold');
   assert.strictEqual(r2.reset, false);
   assert.deepStrictEqual(h.resets, []);
@@ -296,11 +298,11 @@ test('a brief not newer than the previous compactedAt is rejected, even inside t
   assert.deepStrictEqual([r.ok, r.reset], [false, false]);
   assert.match(r.error, FAIL);
   h.setBrief(prev - 1 * SEC);             // older still, and the agent's own request with its 120 s grace
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   const r2 = await h.c.run('a', 'agent');
   assert.deepStrictEqual([r2.ok, r2.reset], [false, false]);
   h.setBrief(prev + 1);                   // strictly newer is fine
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   const r3 = await h.c.run('a', 'agent');
   assert.strictEqual(r3.reset, true);
 });
@@ -309,8 +311,9 @@ test('both prompts tell the agent to overwrite the brief during THIS turn, and k
   const { assistedFinalPrompt } = require('../lib/compaction');
   const prompts = [compressionPrompt({ agent: 'a', pct: 80, mode: 'on', reason: 'agent' }), assistedFinalPrompt({ reason: 'agent', pct: 80 })];
   for (const p of prompts) {
-    assert.match(p, /overwrite/); assert.match(p, /THIS turn/); assert.match(p, /even if you updated it a moment ago/);
-    assert.match(p, /only after it sees the brief written in this run/); assert.match(p, new RegExp(BRIEF_FILE));
+    assert.ok(p.includes('Overwrite it during THIS turn even if you updated it a moment ago, so it includes everything that happened since.'));
+    assert.ok(!/Write it \(overwrite it\)/.test(p));
+    assert.doesNotMatch(p, /only after it sees the brief written in this run/); assert.match(p, new RegExp(BRIEF_FILE));
   }
   assert.match(prompts[0], /FRESH session seeded with your Records/); assert.match(prompts[0], /Replace the previous brief/);
   assert.match(prompts[1], /# Working brief/); assert.match(prompts[1], /Reply "brief written"/);
@@ -319,7 +322,7 @@ test('both prompts tell the agent to overwrite the brief during THIS turn, and k
 test('assisted mode accepts a brief written 30 s before the agent request, through the final prompt', async () => {
   const h = makeBrief({ mode: 'assisted' });
   h.setBrief(h.now() - 30 * SEC);
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   const r = await h.c.run('a', 'agent');
   assert.deepStrictEqual([r.ok, r.reset], [true, true]);
   assert.match(h.posts[0], /THIS turn/);
@@ -328,11 +331,11 @@ test('assisted mode accepts a brief written 30 s before the agent request, throu
 test('the 120 s boundary: exactly request-120 s is accepted, one ms older is not', async () => {
   const h = makeBrief();
   const reqAt = h.now();
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   h.setBrief(reqAt - 120 * SEC - 1);
   const r = await h.c.run('a', 'agent');
   assert.deepStrictEqual([r.ok, r.reset], [false, false]);
-  h.c.request('a', 'agent');              // a fresh request, a fresh time
+  h.sess(); h.c.request('a', 'agent');              // a fresh request, a fresh time
   h.setBrief(h.now() - 120 * SEC);
   const r2 = await h.c.run('a', 'agent');
   assert.deepStrictEqual([r2.ok, r2.reset], [true, true]);
@@ -342,7 +345,7 @@ test('a queued agent request runs late but is judged from the original request t
   const h = makeBrief();
   const reqAt = h.now();
   h.setBrief(reqAt - 60 * SEC);           // written a minute before the request
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   h.tick(10 * 60 * SEC);                  // a long turn kept it waiting; a second request must not move the time
   h.c.request('a', 'agent');
   const r = await h.c.noteUsage('a', 10, 1000, 's1');   // the queued request runs now
@@ -353,15 +356,15 @@ test('too-small and missing briefs are refused even when the request is fresh', 
   const { MIN_BRIEF_BYTES } = require('../lib/compaction');
   const h = makeBrief();
   h.setBrief(h.now() - 5 * SEC, { bytes: MIN_BRIEF_BYTES - 1 });
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   const r = await h.c.run('a', 'agent');
   assert.deepStrictEqual([r.reset, /didn't write/.test(r.error)], [false, true]);
   h.clearBrief();
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   const r2 = await h.c.run('a', 'agent');
   assert.deepStrictEqual([r2.reset, /no brief found/.test(r2.error)], [false, true]);
   h.setBrief(h.now() - 5 * SEC, { bytes: MIN_BRIEF_BYTES });
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   assert.strictEqual((await h.c.run('a', 'agent')).reset, true, 'exactly the minimum is enough');
   assert.deepStrictEqual(h.resets.length, 1);
 });
@@ -374,7 +377,7 @@ test('a direct run(agent) with no request cannot reuse a stale timestamp: the co
   assert.strictEqual(r0.reset, false);
   // a request is made and consumed by a run that fails...
   h.setBrief(h.now() - 10 * 60 * SEC);
-  h.c.request('a', 'agent');
+  h.sess(); h.c.request('a', 'agent');
   assert.strictEqual((await h.c.run('a', 'agent')).reset, false);
   // ...later a direct run must not reuse it, even with a brief inside what that old request allowed
   h.tick(5 * 60 * SEC);
@@ -385,4 +388,48 @@ test('a direct run(agent) with no request cannot reuse a stale timestamp: the co
   h.c.request('a', 'owner');
   assert.strictEqual((await h.c.run('a', 'agent')).reset, false);
   assert.deepStrictEqual(h.resets, []);
+});
+
+
+test('session-bound grace: same id allows the 120 s window', async () => {
+  const h = makeBrief();
+  h.setBrief(h.now() - 60 * SEC);
+  h.sess('sX'); h.c.request('a', 'agent');
+  h.tick(5 * SEC);
+  const r = await h.c.run('a', 'agent');
+  assert.deepStrictEqual([r.ok, r.reset], [true, true]);
+});
+
+test('session-bound grace: id changed between request and run -> strict window (old brief refused, fresh accepted)', async () => {
+  const h = makeBrief();
+  h.setBrief(h.now() - 60 * SEC);
+  h.sess('sOld'); h.c.request('a', 'agent');
+  const r = await h.c.noteUsage('a', 10, 1000, 'sNew');   // the turn ended in a new session: the queued request runs now
+  assert.deepStrictEqual([r.ok, r.reset], [false, false]);
+  assert.match(r.error, FAIL);
+  h.sess('sOld'); h.c.request('a', 'agent');
+  h.setBrief(h.now() - 2 * SEC);          // inside the strict run-start-5s window
+  const r2 = await h.c.noteUsage('a', 10, 1000, 'sNew');
+  assert.deepStrictEqual([r2.ok, r2.reset], [true, true]);
+});
+
+test('session-bound grace: a duplicate request keeps the original id binding', async () => {
+  const h = makeBrief();
+  h.setBrief(h.now() - 60 * SEC);
+  h.sess('sOld'); h.c.request('a', 'agent');
+  h.c.request('a', 'agent');              // duplicate while pending: same binding
+  assert.strictEqual(h.c.get('a').requestedSessionId, 'sOld');
+  const r = await h.c.noteUsage('a', 10, 1000, 'sNew');
+  assert.strictEqual(r.reset, false, 'bound to sOld, run under sNew');
+});
+
+test('session-bound grace: no recorded id (no session known at request time) -> strict window; id is consumed by the run', async () => {
+  const h = makeBrief();
+  const c2 = createCompaction({ now: h.now, log: () => {}, persist: false, post: async () => 'ok', resetSession: async () => { h.resets.push('x'); },
+    getAgent: () => ({ name: 'a', compaction: { mode: 'on', at: 0.5 } }), getRecentRows: async () => [],
+    briefStatus: async () => ({ exists: true, bytes: 900, mtimeMs: h.now() - 60 * SEC }) });
+  c2.request('a', 'agent');               // never saw a session id
+  const r = await c2.noteUsage('a', 10, 1000, 's1');   // an id appears afterwards; it was not bound at request time
+  assert.deepStrictEqual([r.ok, r.reset], [false, false]);
+  assert.strictEqual(c2.get('a').requestedSessionId, null, 'cleared by the run');
 });
