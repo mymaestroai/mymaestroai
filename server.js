@@ -248,6 +248,11 @@ function readBodyRaw(req) {
   });
 }
 
+/** The agent a non-JSON request names: ?agent=<name> or the X-Agent header (audio upload to /api/voice/stt). */
+function agentFromQuery(req) {
+  try { return new URL(req.url, 'http://x').searchParams.get('agent') || String(req.headers['x-agent'] || '') || null; } catch { return null; }
+}
+
 function jsonResponse(res, code, data) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
@@ -401,6 +406,7 @@ async function handleHttpRequest(req, res) {
     // A token may call only what its scopes list, and chat/interject only for its own agents.
     let agentName = route.agent || null;
     if (route.from === 'body') { try { agentName = JSON.parse((await readBody(req)) || '{}').agent; } catch {} }
+    if (route.from === 'query') agentName = agentFromQuery(req);
     const allow = access.tokenAllows(req.hubToken, pathname, req.method, { agent: agentName });
     if (!allow.ok) return jsonResponse(res, 403, { error: 'token_scope', detail: allow.reason });
   } else if (route.kind !== 'public') {
@@ -417,6 +423,7 @@ async function handleHttpRequest(req, res) {
       if (route.kind === 'agent' && !access.isAdmin(req.hubUser)) {
         let agentName = route.agent;
         if (route.from === 'body') { try { agentName = JSON.parse((await readBody(req)) || '{}').agent; } catch {} }
+        if (route.from === 'query') agentName = agentFromQuery(req);
         const allowed = agentName && access.canAccessAgent(req.hubUser, agentName, { agents: await getAgents(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
         if (!allowed) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
       }
@@ -1373,6 +1380,8 @@ async function handleHttpRequest(req, res) {
 
     // ── Messaging channels (Telegram etc); all logic lives in lib/comms ────────────────────
     if (pathname.startsWith('/api/comms/')) return require('./lib/comms/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents });
+    // ── Voice: local speech-to-text and text-to-speech (lib/voice) ─────────────────────────
+    if (pathname.startsWith('/api/voice/')) return require('./lib/voice/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents, getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings });
 
     // ── Trading wallet (owner controls; agents only ever get the wallet_* tools) ──────────
     if (pathname.startsWith('/api/wallet/')) {
@@ -2227,6 +2236,8 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
           if (patch && patch.workersAtOnce !== undefined) patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce);
+          // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings).
+          if (patch && patch.voice !== undefined) patch.voice = require('./lib/voice/manifest').cleanVoiceSettings(patch.voice, hubSettings.getSetting('voice'));
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
           if (patch && patch.workersAtOnce !== undefined) getPacing().setCaps(hubSettings.getSetting('workersAtOnce'));

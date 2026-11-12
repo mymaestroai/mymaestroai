@@ -2405,7 +2405,7 @@
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
-      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-cx-section', 'st-modules-section'] },
+      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
     ];
     const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
@@ -2692,6 +2692,8 @@
       </div>`;
         setTimeout(stAdmin2faPaint, 0);
       }
+      html += voiceSettingsHtml(data);
+      setTimeout(voiceSettingsInit, 0);
       // Data connectors (lib/modules): outside services with a guided setup live on their own page.
       html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
         <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>
@@ -7949,6 +7951,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
+          <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" title="Talk (tap to start, tap to stop)">&#127897;</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -7956,6 +7959,7 @@
       panels.appendChild(panel);
       // Fill the model picker now, so its list is complete before the first click (modelPickDown).
       setTimeout(() => fillModelPick(chatId), 0);
+      setTimeout(() => { if (voiceStatus) voicePaint(); else voiceRefreshStatus(); }, 0);
       
       // Initialize pending images array for this chat
       chats[chatId].pendingImages = [];
@@ -8218,6 +8222,7 @@
     // (the server keeps working through disconnects), so Stop/Pause tell the server explicitly.
     // Older hubs answer 404 here; that is ignored.
     function stopAgentTurn(agentName) {
+      try { voiceStopPlayback(); } catch {}   // Stop in the chat also stops anything being read aloud
       return fetch('/api/chat/stop', {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent: agentName })
@@ -8827,6 +8832,7 @@
       if (content && agentWorking && pendingImages.length === 0 && !skipInterjectOnce.delete(chatId)) {
         return sendInterjection(chatId);
       }
+      if (!retryCount) { chat.voiceTurn = !!chat.voiceDictated; chat.voiceDictated = false; }   // this reply follows a mic dictation: read it aloud when it ends (if the device asks for that)
 
       // Need content OR images to send
       if (!content && pendingImages.length === 0) return;
@@ -8930,6 +8936,7 @@
 
         const { text: fullResponse, images: responseImages, toolActivity, partial, steps: responseSteps } = await streamResponseSolo(response, msgId, chatId, chat.agent);
         if (!partial) setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), chat.sentAtMs));
+        if (!partial && chat.voiceTurn) { chat.voiceTurn = false; voiceAutoRead(chat, msgId, fullResponse); }
 
         // Success! Save response and clean up
         if (responseImages.length > 0) {
@@ -10277,6 +10284,155 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
     }
     
+    // Voice helpers: shared with lib/ui-voice.js, kept in step by test/ui-voice.test.js.
+    // ── voice helpers (begin) ──
+    const VOICE_STORE_KEY = 'hub-voice';
+    const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
+    const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
+    const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
+    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true };
+    function voiceSpeechText(markdown) {
+      let t = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+      let hadDetails = false;
+      t = t.replace(/(^|\n)[ \t]*(```|~~~)[\s\S]*?(\n[ \t]*(```|~~~)[^\n]*|$)/g, (m, lead) => { hadDetails = true; return lead; });
+      t = t.split('\n').filter(l => { if (/^\s*\|/.test(l)) { hadDetails = true; return false; } return true; }).join('\n');
+      t = t.replace(/!?\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');
+      t = t.replace(/(?:https?:\/\/|www\.)[^\s<>)\]]*[^\s<>)\].,;:!?'"]/gi, 'a link');
+      t = t.replace(/^[ \t]*#{1,6}[ \t]+/gm, '').replace(/^[ \t]*(?:>[ \t]?)+/gm, '').replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '');
+      t = t.replace(/[*`#]+/g, '').replace(/\b_+|_+\b/g, '').replace(/_/g, ' ');
+      t = t.replace(/[\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}\u{200D}\u{FE0E}\u{FE0F}\u{20E3}]/gu, '');
+      t = t.replace(/\s+/g, ' ').trim();
+      return hadDetails ? (t + VOICE_DETAILS_NOTE).trim() : t;
+    }
+    function voiceSplitLong(s, max) {
+      const out = [];
+      let rest = s.trim();
+      while (rest.length > max) {
+        const win = rest.slice(0, max);
+        let cut = Math.max(win.lastIndexOf(';'), win.lastIndexOf(',')) + 1;
+        if (cut < max * 0.3) cut = win.lastIndexOf(' ') + 1;
+        if (cut < max * 0.3) cut = win.lastIndexOf(' ') > 0 ? win.lastIndexOf(' ') + 1 : max;
+        out.push(rest.slice(0, cut).trim());
+        rest = rest.slice(cut).trim();
+      }
+      if (rest) out.push(rest);
+      return out.filter(Boolean);
+    }
+    function voiceSentences(text, max = 220) {
+      const s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+      const limit = Number.isFinite(max) && max >= 1 ? Math.floor(max) : 220;
+      const parts = [];
+      let start = 0;
+      const re = /[.!?]+["')\]]*(?=\s|$)/g;
+      let m;
+      while ((m = re.exec(s))) {
+        if (m[0].replace(/["')\]]/g, '') === '.') {
+          const before = s.slice(start, m.index).split(' ').pop().replace(/^[("'\[]+/, '').toLowerCase();
+          if (VOICE_ABBREVIATIONS.has(before)) continue;
+        }
+        parts.push(s.slice(start, m.index + m[0].length));
+        start = m.index + m[0].length;
+      }
+      parts.push(s.slice(start));
+      const out = [];
+      for (const p of parts) for (const q of voiceSplitLong(p, limit)) out.push(q);
+      return out;
+    }
+    function voiceResample(float32, fromRate, toRate) {
+      const src = float32 instanceof Float32Array ? float32 : Float32Array.from(float32 || []);
+      if (fromRate === toRate || !(fromRate > 0) || !(toRate > 0)) return new Float32Array(src);
+      const n = Math.max(0, Math.round(src.length * toRate / fromRate));
+      const out = new Float32Array(n);
+      const step = fromRate / toRate;
+      for (let i = 0; i < n; i++) {
+        const pos = i * step, i0 = Math.floor(pos), frac = pos - i0;
+        const a = src[Math.min(i0, src.length - 1)], b = src[Math.min(i0 + 1, src.length - 1)];
+        out[i] = a + (b - a) * frac;
+      }
+      return out;
+    }
+    function voiceEncodeWav(float32, sampleRate) {
+      const n = float32.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+      const tag = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+      tag(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE'); tag(12, 'fmt ');
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+      tag(36, 'data'); v.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) {
+        const x = Math.max(-1, Math.min(1, float32[i] || 0));
+        v.setInt16(44 + i * 2, Math.round(x < 0 ? x * 32768 : x * 32767), true);
+      }
+      return buf;
+    }
+    function voiceDecodeWav(arrayBuffer) {
+      const v = new DataView(arrayBuffer), len = arrayBuffer.byteLength;
+      const tag = (o) => String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3));
+      if (len < 12 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') throw new Error('not a WAV file');
+      let channels = 0, sampleRate = 0, bits = 0, dataAt = -1, dataLen = 0, o = 12;
+      while (o + 8 <= len) {
+        const id = tag(o), size = v.getUint32(o + 4, true);
+        if (id === 'fmt ' && o + 24 <= len) {
+          if (v.getUint16(o + 8, true) !== 1) throw new Error('only PCM WAV is supported');
+          channels = v.getUint16(o + 10, true); sampleRate = v.getUint32(o + 12, true); bits = v.getUint16(o + 22, true);
+        } else if (id === 'data') {
+          dataAt = o + 8; dataLen = Math.min(size, len - dataAt); break;
+        }
+        o += 8 + size + (size % 2);
+      }
+      if (!channels || dataAt < 0) throw new Error('WAV has no audio');
+      if (bits !== 16 || channels > 2) throw new Error('only 16-bit mono or stereo WAV is supported');
+      const frames = Math.floor(dataLen / (2 * channels)), samples = new Float32Array(frames);
+      for (let i = 0; i < frames; i++) {
+        let sum = 0;
+        for (let c = 0; c < channels; c++) sum += v.getInt16(dataAt + (i * channels + c) * 2, true);
+        samples[i] = sum / channels / 32768;
+      }
+      return { sampleRate, samples };
+    }
+    function voiceLevelDb(float32) {
+      if (!float32 || !float32.length) return -100;
+      let sum = 0;
+      for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
+      const rms = Math.sqrt(sum / float32.length);
+      if (!(rms > 0)) return -100;
+      return Math.max(-100, 20 * Math.log10(rms));
+    }
+    function voiceGainFromSlider(v) {
+      const x = Number.isFinite(Number(v)) ? Math.max(0, Math.min(100, Number(v))) : 50;
+      return Math.pow(10, ((x - 50) / 50 * 12) / 20);
+    }
+    function voiceSliderFromGain(g) {
+      if (!(g > 0)) return 0;
+      return Math.max(0, Math.min(100, 50 + 20 * Math.log10(g) / 12 * 50));
+    }
+    function voiceMeterPercent(db) {
+      if (!Number.isFinite(db)) return db === Infinity ? 100 : 0;
+      return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+    }
+    function voiceCleanPrefs(raw) {
+      const p = Object.assign({}, VOICE_DEFAULT_PREFS);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return p;
+      for (const k of ['micLevel', 'interruptSensitivity']) {
+        if (typeof raw[k] === 'number' && Number.isFinite(raw[k])) p[k] = Math.max(0, Math.min(100, raw[k]));
+      }
+      if (raw.mode === 'handsfree' || raw.mode === 'tap') p.mode = raw.mode;
+      for (const k of ['readAloud', 'deviceVoiceFallback']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
+      return p;
+    }
+    function voiceLoadPrefs(storage) {
+      try { return voiceCleanPrefs(JSON.parse(storage.getItem(VOICE_STORE_KEY))); } catch { return voiceCleanPrefs(null); }
+    }
+    function voiceSavePrefs(storage, prefs) {
+      const merged = voiceCleanPrefs(Object.assign({}, voiceLoadPrefs(storage), prefs));
+      try { storage.setItem(VOICE_STORE_KEY, JSON.stringify(merged)); } catch { /* storage full or blocked: keep going */ }
+      return merged;
+    }
+    function voiceIsStopCommand(text) {
+      const t = String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+      return VOICE_STOP_COMMANDS.has(t);
+    }
+    // ── voice helpers (end) ──
+
     // The date and time under each message: when it was sent, when a reply was finished and how long it took.
     // Shared verbatim with lib/ui-msg-time.js and mobile.js (test/ui-msg-time.test.js keeps the three in step).
     // ── message-time helpers (begin) ──
@@ -10332,6 +10488,375 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // ── message-time helpers (end) ──
 
+    // ── Voice, desktop page: tap-to-talk in the composer, read aloud on replies, the Voices settings section ──
+    // The audio helpers (voiceSpeechText, voiceSentences, voiceResample, voiceEncodeWav, voiceGainFromSlider,
+    // voiceLevelDb, voiceMeterPercent, voiceLoadPrefs, voiceSavePrefs) come from the voice helpers block.
+    let voiceStatus = null;        // GET /api/voice/status, null until read
+    let voicePrefsCache = null;    // this device's prefs (localStorage)
+    let voiceSettingsTimer = null;
+    const VOICE_SAMPLE_TEXT = 'This is the voice I will use to read replies to you.';
+    const VOICE_MAX_RECORD_S = 60;
+    const voiceById = (id) => document.getElementById(id);
+    function voicePrefsNow() {
+      if (!voicePrefsCache) { try { voicePrefsCache = voiceLoadPrefs(localStorage) || {}; } catch { voicePrefsCache = {}; } }
+      return voicePrefsCache;
+    }
+    function voiceMicLevelNow() { const v = Number(voicePrefsNow().micLevel); return Number.isFinite(v) ? v : 50; }
+    const voiceReady = () => !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready);
+    const voiceDeviceFallback = () => !!(voicePrefsNow().deviceVoiceFallback && window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined');
+    // Mic buttons show only while the hub voice is on and ready; speaker buttons while a voice is available.
+    function voicePaint() {
+      for (const b of document.querySelectorAll('.input-area .mic-btn')) b.style.display = voiceReady() ? '' : 'none';
+      document.body.classList.toggle('voice-on', voiceReady() || voiceDeviceFallback());
+    }
+    async function voiceRefreshStatus() {
+      try {
+        const r = await fetch('/api/voice/status', { credentials: 'include' });
+        if (r.ok) voiceStatus = await r.json();
+      } catch {}
+      voicePaint();
+      return voiceStatus;
+    }
+    function voiceMicError(e) {
+      const n = e && e.name;
+      if (n === 'NotAllowedError' || n === 'SecurityError') return 'The microphone is blocked: allow it for this site in the browser, then tap again.';
+      if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'No microphone was found on this device.';
+      return 'Microphone: ' + ((e && e.message) || 'could not open it');
+    }
+
+    // Open the microphone: echo cancellation, noise suppression and auto gain on; the signal goes through a GainNode set from
+    // the Mic level slider, then a ScriptProcessor hands each block of samples (Float32, already after the gain) to onChunk.
+    async function voiceOpenMic(micLevel, onChunk) {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('this browser cannot open the microphone here (it needs https or localhost)');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      let ctx = null;
+      const release = () => { try { stream.getTracks().forEach(t => t.stop()); } catch {} try { if (ctx) ctx.close(); } catch {} };
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        ctx = new AC();
+        if (ctx.state === 'suspended') await ctx.resume();
+        const src = ctx.createMediaStreamSource(stream);
+        const gain = ctx.createGain();
+        gain.gain.value = voiceGainFromSlider(micLevel);
+        const proc = ctx.createScriptProcessor(4096, 1, 1);
+        const mute = ctx.createGain();   // the processor must reach the destination to run; muted, so nothing is heard
+        mute.gain.value = 0;
+        proc.onaudioprocess = (ev) => onChunk(new Float32Array(ev.inputBuffer.getChannelData(0)));
+        src.connect(gain); gain.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+        return {
+          rate: ctx.sampleRate,
+          setGain(v) { gain.gain.value = voiceGainFromSlider(v); },
+          close() { proc.onaudioprocess = null; try { src.disconnect(); gain.disconnect(); proc.disconnect(); mute.disconnect(); } catch {} release(); },
+        };
+      } catch (e) { release(); throw e; }
+    }
+
+    // Tap-to-talk. Tap 1 opens the mic; tap 2 (or 60 s) closes it, sends the recording to the hub and puts the text in the box.
+    const voiceRec = { chatId: null, mic: null, chunks: [], samples: 0, level: -100, t0: 0, timer: null, busy: false };
+    function voiceMicPaint(chatId, state, label) {
+      const b = voiceById(`mic-${chatId}`), m = voiceById(`mic-meter-${chatId}`);
+      if (!b) return;
+      b.classList.toggle('rec', state === 'rec');
+      b.classList.toggle('wait', state === 'wait');
+      b.setAttribute('aria-pressed', state === 'rec' ? 'true' : 'false');
+      b.disabled = state === 'wait';
+      b.textContent = state === 'rec' ? `■ ${label || '0:00'}` : state === 'wait' ? '…' : '\u{1F399}';
+      if (m) { m.style.display = state === 'rec' ? '' : 'none'; if (state !== 'rec') { const i = m.firstElementChild; if (i) i.style.width = '0%'; } }
+    }
+    function voiceMicTick() {
+      const chatId = voiceRec.chatId;
+      if (!chatId) return;
+      const s = Math.floor((Date.now() - voiceRec.t0) / 1000);
+      voiceMicPaint(chatId, 'rec', `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+      const m = voiceById(`mic-meter-${chatId}`), i = m && m.firstElementChild;
+      if (i) i.style.width = `${voiceMeterPercent(voiceRec.level)}%`;
+      if (s >= VOICE_MAX_RECORD_S) voiceMicStop(true);
+    }
+    async function voiceMicToggle(chatId) {
+      if (voiceRec.busy) return;
+      if (voiceRec.chatId) { await voiceMicStop(true); return; }   // a second tap, or a tap in another chat: end this recording
+      if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); voiceRefreshStatus(); return; }
+      voiceStopPlayback();   // do not record the hub talking
+      voiceRec.busy = true;
+      try {
+        voiceRec.chunks = []; voiceRec.samples = 0; voiceRec.level = -100;
+        voiceRec.mic = await voiceOpenMic(voiceMicLevelNow(), (d) => {
+          voiceRec.chunks.push(d); voiceRec.samples += d.length; voiceRec.level = voiceLevelDb(d);
+        });
+      } catch (e) { hubToast(voiceMicError(e)); return; } finally { voiceRec.busy = false; }
+      voiceRec.chatId = chatId; voiceRec.t0 = Date.now();
+      voiceRec.timer = setInterval(voiceMicTick, 100);
+      voiceMicTick();
+    }
+    async function voiceMicStop(send) {
+      const chatId = voiceRec.chatId, mic = voiceRec.mic;
+      if (!chatId || !mic) return;
+      clearInterval(voiceRec.timer);
+      const chunks = voiceRec.chunks, rate = mic.rate;
+      voiceRec.chatId = null; voiceRec.mic = null; voiceRec.chunks = []; voiceRec.samples = 0;
+      mic.close();   // the microphone is released after every use
+      if (!send) { voiceMicPaint(chatId, 'idle'); return; }
+      voiceMicPaint(chatId, 'wait');
+      voiceRec.busy = true;
+      try {
+        const n = chunks.reduce((a, c) => a + c.length, 0);
+        if (n < rate * 0.3) { hubToast('Nothing was recorded.'); return; }
+        const all = new Float32Array(n);
+        let at = 0;
+        for (const c of chunks) { all.set(c, at); at += c.length; }
+        const wav = voiceEncodeWav(voiceResample(all, rate, 16000), 16000);
+        const chat = chats[chatId];
+        const r = await fetch(`/api/voice/stt?agent=${encodeURIComponent(chat ? chat.agent : '')}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav });
+        let j = {};
+        try { j = await r.json(); } catch {}
+        if (r.status === 409 && j.error === 'voice_off') { hubToast('Voice is turned off.'); voiceRefreshStatus(); return; }
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        const text = String(j.text || '').trim();
+        if (!text) { hubToast('No speech was heard. Speak closer to the microphone, or raise the Mic level in Settings.'); return; }
+        const ta = voiceById(`input-${chatId}`);
+        if (ta) {
+          ta.value = ta.value.trim() ? `${ta.value.replace(/\s+$/, '')} ${text}` : text;
+          autoGrowTextarea(ta);
+          ta.focus();
+        }
+        if (chat) chat.voiceDictated = true;   // the reply to this message is read aloud when "Read replies aloud" is on
+      } catch (e) { hubToast('Voice: could not turn the recording into text: ' + e.message); }
+      finally { voiceRec.busy = false; voiceMicPaint(chatId, 'idle'); }
+    }
+
+    // Read aloud. One playback at a time: the hub voice sentence by sentence through one AudioContext (the next sentence is
+    // fetched while this one plays), or the device voice (speechSynthesis) when the hub voice fails or is off and the device asks for it.
+    const voicePlay = { token: 0, ctx: null, source: null, btn: null };
+    function voicePlayState(btn, on) {
+      if (!btn) return;
+      if (btn.dataset.idle === undefined) btn.dataset.idle = btn.textContent;
+      btn.classList.toggle('on', on);
+      btn.textContent = on ? (btn.classList.contains('msg-speak') ? '■' : 'Stop') : btn.dataset.idle;
+    }
+    function voiceStopPlayback() {
+      voicePlay.token++;
+      const src = voicePlay.source;
+      voicePlay.source = null;
+      if (src) { try { src.stop(); } catch {} }   // its onended lets the waiting loop end; the changed token makes it return
+      try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch {}
+      voicePlayState(voicePlay.btn, false);
+      voicePlay.btn = null;
+    }
+    async function voiceFetchTts(agent, text, voice) {
+      const body = { agent, text };
+      if (voice) body.voice = voice;
+      const r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!r.ok) {
+        let m = '';
+        try { m = (await r.json()).error; } catch {}
+        const e = new Error(m || `HTTP ${r.status}`); e.status = r.status;
+        throw e;
+      }
+      return r.arrayBuffer();
+    }
+    // Play sentences with the hub voice; on a failure throws an Error whose .at is the sentence that could not be played.
+    async function voicePlayHub(agent, sentences, voice, my) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!voicePlay.ctx || voicePlay.ctx.state === 'closed') voicePlay.ctx = new AC();
+      const ctx = voicePlay.ctx;
+      if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+      let next = voiceFetchTts(agent, sentences[0], voice);
+      next.catch(() => {});
+      for (let i = 0; i < sentences.length; i++) {
+        let buf, ab;
+        try { buf = await next; } catch (e) { e.at = i; throw e; }
+        if (voicePlay.token !== my) return;
+        if (i + 1 < sentences.length) { next = voiceFetchTts(agent, sentences[i + 1], voice); next.catch(() => {}); }
+        try { ab = await ctx.decodeAudioData(buf); } catch (e) { e.at = i; throw e; }
+        if (voicePlay.token !== my) return;
+        await new Promise((res) => {
+          const src = ctx.createBufferSource();
+          src.buffer = ab; src.connect(ctx.destination); src.onended = res;
+          voicePlay.source = src;
+          src.start();
+        });
+        if (voicePlay.token !== my) return;
+      }
+    }
+    async function voicePlayDevice(sentences, from, my) {
+      for (let i = from; i < sentences.length; i++) {
+        if (voicePlay.token !== my) return;
+        await new Promise((res) => {
+          const u = new SpeechSynthesisUtterance(sentences[i]);
+          u.onend = res; u.onerror = res;
+          window.speechSynthesis.speak(u);
+        });
+      }
+    }
+    // opts: { sentences, voice }. btn: the button that shows "playing" (a second tap on it stops).
+    async function voiceSpeakText(agent, md, btn, opts = {}) {
+      voiceStopPlayback();
+      const my = voicePlay.token;
+      const sentences = opts.sentences || voiceSentences(voiceSpeechText(md));
+      if (!sentences || !sentences.length) return;
+      voicePlay.btn = btn || null; voicePlayState(btn, true);
+      try {
+        let from = 0, useDevice = false;
+        if (voiceReady()) {
+          try { await voicePlayHub(agent, sentences, opts.voice, my); return; }
+          catch (e) {
+            if (voicePlay.token !== my) return;
+            if (!voiceDeviceFallback()) { hubToast('Could not read this aloud: ' + e.message); return; }
+            from = e.at || 0; useDevice = true;
+          }
+        } else if (voiceDeviceFallback()) useDevice = true;
+        else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
+        if (useDevice) await voicePlayDevice(sentences, from, my);
+      } finally {
+        if (voicePlay.token === my) { voicePlayState(btn, false); voicePlay.btn = null; }
+      }
+    }
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('.msg-speak');
+      if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      if (voicePlay.btn === b) { voiceStopPlayback(); return; }
+      const el = b.closest('.message');
+      const holder = el.closest('[id^="messages-"]');
+      const chat = chats[holder ? holder.id.slice('messages-'.length) : activeChat];
+      voiceSpeakText(chat ? chat.agent : '', rawMessageText.get(el) ?? el.innerText, b);
+    });
+    // A reply that follows a mic dictation and ends in this browser: read it when the device asked for that.
+    function voiceAutoRead(chat, msgId, text) {
+      if (!voicePrefsNow().readAloud || (!voiceReady() && !voiceDeviceFallback())) return;
+      const el = document.getElementById(msgId);
+      voiceSpeakText(chat.agent, text, el ? el.querySelector(':scope > .msg-speak') : null);
+    }
+
+    // Settings, Voices.
+    function voiceSettingsHtml(data) {
+      const admin = isHubAdmin();
+      const p = voicePrefsNow();
+      const row = (label, inner) => `<div class="st-row"><label style="flex-basis:150px">${label}</label>${inner}</div>`;
+      let h = `<div class="st-section" id="st-voice-section"><h4>Voices</h4>
+        <div class="st-hint">Free local voices run on this computer: what you say and what is read aloud never leaves it, and nothing is sent to the internet. Tap the microphone in a chat to dictate; tap the speaker on a reply to hear it. Hands-free conversation comes next.</div>`;
+      h += row('Voice', admin
+        ? `<label><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> Enable voice</label> <progress id="st-voice-progress" max="1" value="0" style="display:none;margin-left:8px"></progress> <span id="st-voice-status" class="st-hint" style="margin:0 0 0 8px">Checking…</span>`
+        : `<span id="st-voice-status" class="st-hint" style="margin:0">Checking…</span>`);
+      h += row('Engines', `<span id="st-voice-engines" class="st-hint" style="margin:0">…</span>`);
+      if (admin) {
+        h += row('Default voice', `<select id="st-voice-default" onchange="voiceSettingDefaultVoice()" style="padding:4px"></select> <button class="st-test-btn" id="st-voice-sample" type="button" onclick="voicePlaySample()">Play sample</button><span id="st-voice-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
+      }
+      h += `<div class="st-hint" style="margin-top:10px">On this device only:</div>`;
+      h += row('Mic level', `<input type="range" min="0" max="100" step="1" id="st-voice-mic" value="${voiceMicLevelNow()}" oninput="voiceSettingMicInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-mic-val" style="min-width:2.5em;display:inline-block">${voiceMicLevelNow()}</span> <span class="voice-meter"><i id="st-voice-meter"></i></span> <button class="st-test-btn" id="st-voice-testmic" type="button" onclick="voiceTestMic()">Test the mic</button>`);
+      h += row('', `<label><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
+      h += row('', `<label><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use the device voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
+      return h + `</div>`;
+    }
+    function voicePaintSettings(st) {
+      const status = voiceById('st-voice-status');
+      if (!status) return;
+      let text;
+      if (!st) text = 'Could not read the voice status.';
+      else if (st.platformSupported === false) text = 'Voice is not supported on this computer.';
+      else if (st.installing) text = `Installing voice: ${st.step || 'working'} ${Math.round((Number(st.progress) || 0) * 100)}%`;
+      else if (st.error) text = `Voice error: ${st.error}`;
+      else if (st.enabled && st.ready) text = 'Voice is on and ready.';
+      else if (st.enabled) text = 'Voice is on, getting ready…';
+      else text = 'Voice is off.';
+      status.textContent = text;
+      const en = voiceById('st-voice-enabled');
+      if (en) en.checked = !!(st && (st.enabled || st.installing));
+      const pr = voiceById('st-voice-progress');
+      if (pr) { pr.style.display = st && st.installing ? '' : 'none'; pr.value = Number(st && st.progress) || 0; }
+      const eng = voiceById('st-voice-engines');
+      if (eng) eng.textContent = st && st.stt ? `Recogniser: ${st.stt.engine || '?'}${st.stt.model ? ` (${st.stt.model})` : ''} · Voices: ${(st.tts && st.tts.engine) || '?'}` : 'none yet';
+      const sel = voiceById('st-voice-default');
+      if (sel && st) {
+        const list = st.voices || [];
+        const sig = list.map(v => v.id).join('|');
+        if (sel.dataset.sig !== sig) {
+          sel.dataset.sig = sig;
+          const want = (st.tts && st.tts.defaultVoice) || '';
+          sel.innerHTML = list.length
+            ? list.map(v => `<option value="${hubEsc(v.id)}"${v.id === want ? ' selected' : ''}>${hubEsc(v.label || v.id)}${v.accent ? ` (${hubEsc(v.accent)})` : ''}</option>`).join('')
+            : '<option value="">No voices yet</option>';
+          dialogGuard.markLoaded(sel);
+        }
+      }
+    }
+    async function voiceSettingsRefresh() {
+      if (!voiceById('st-voice-section')) return;
+      const st = await voiceRefreshStatus();
+      if (!voiceById('st-voice-section')) return;
+      voicePaintSettings(st);
+      clearTimeout(voiceSettingsTimer);
+      if (st && st.installing) voiceSettingsTimer = setTimeout(voiceSettingsRefresh, 2000);   // poll while it installs
+    }
+    function voiceSettingsInit() { voiceSettingsRefresh(); }
+    async function voiceSettingEnable(cb) {
+      const on = cb.checked;
+      cb.disabled = true;
+      try {
+        const r = await fetch(`/api/voice/${on ? 'enable' : 'disable'}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let j = {};
+        try { j = await r.json(); } catch {}
+        if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+      } catch (e) { cb.checked = !on; hubToast(`Could not turn voice ${on ? 'on' : 'off'}: ${e.message}`); }
+      finally { cb.disabled = false; }
+      voiceSettingsRefresh();
+    }
+    async function voiceSettingDefaultVoice() {
+      const sel = voiceById('st-voice-default');
+      if (!sel) return;
+      const saved = dialogGuard.savePoint(sel);
+      const state = voiceById('st-voice-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+          body: JSON.stringify({ voice: { enabled: !!(voiceStatus && voiceStatus.enabled), defaultVoice: sel.value, sttModel: (voiceStatus && voiceStatus.stt && voiceStatus.stt.model) || undefined } }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        saved();
+        if (state) state.textContent = 'Saved.';
+      } catch (e) { if (state) state.textContent = `Could not save: ${e.message}`; }
+    }
+    function voicePlaySample() {
+      const sel = voiceById('st-voice-default');
+      const first = Object.values(chats).find(c => c && c.agent);
+      voiceSpeakText((chats[activeChat] && chats[activeChat].agent) || (first && first.agent) || '', VOICE_SAMPLE_TEXT, voiceById('st-voice-sample'),
+        { sentences: [VOICE_SAMPLE_TEXT], voice: sel ? sel.value : '' });
+    }
+    // The Mic level slider: moves the gain of the open test mic at once; saved (with the two checkboxes) on release.
+    const voiceTest = { mic: null, timer: null, level: -100 };
+    function voiceSettingMicInput(el) {
+      const v = voiceById('st-voice-mic-val'); if (v) v.textContent = el.value;
+      if (voiceTest.mic) voiceTest.mic.setGain(Number(el.value));
+    }
+    function voiceSettingsSavePrefs() {
+      const mic = voiceById('st-voice-mic'), ra = voiceById('st-voice-readaloud'), fb = voiceById('st-voice-fallback');
+      if (!mic || !ra || !fb) return;
+      const saved = dialogGuard.savePoint([mic, ra, fb]);
+      const prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), readAloud: ra.checked, deviceVoiceFallback: fb.checked };
+      voiceSavePrefs(localStorage, prefs);
+      voicePrefsCache = prefs;
+      saved();
+      voicePaint();
+      const st = voiceById('st-voice-prefs-state'); if (st) st.textContent = 'Saved on this device.';
+    }
+    function voiceTestStop() {
+      clearInterval(voiceTest.timer);
+      if (voiceTest.mic) { voiceTest.mic.close(); voiceTest.mic = null; }   // the meter runs only while the mic is open
+      const bar = voiceById('st-voice-meter'); if (bar) bar.style.width = '0%';
+      const b = voiceById('st-voice-testmic'); if (b) b.textContent = 'Test the mic';
+    }
+    async function voiceTestMic() {
+      if (voiceTest.mic) { voiceTestStop(); return; }
+      if (voiceRec.chatId || voiceRec.busy) { hubToast('The microphone is in use in a chat.'); return; }
+      const slider = voiceById('st-voice-mic');
+      try { voiceTest.mic = await voiceOpenMic(slider ? Number(slider.value) : voiceMicLevelNow(), (d) => { voiceTest.level = voiceLevelDb(d); }); }
+      catch (e) { hubToast(voiceMicError(e)); return; }
+      const b = voiceById('st-voice-testmic'); if (b) b.textContent = 'Stop test';
+      voiceTest.timer = setInterval(() => {
+        const bar = voiceById('st-voice-meter');
+        if (!bar) { voiceTestStop(); return; }   // Settings closed
+        bar.style.width = `${voiceMeterPercent(voiceTest.level)}%`;
+      }, 100);
+    }
+
     // Message rendering
     // Copy button on every message bubble: copies the original text/markdown, not the rendered HTML.
     const rawMessageText = new WeakMap();
@@ -10343,6 +10868,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const b = document.createElement('button');
         b.className = 'msg-copy'; b.type = 'button'; b.title = 'Copy message'; b.textContent = '⧉';
         el.appendChild(b);
+      }
+      if (el.classList.contains('assistant') && !el.querySelector(':scope > .msg-speak')) {
+        const sp = document.createElement('button');
+        sp.className = 'msg-speak'; sp.type = 'button'; sp.title = 'Read aloud (tap again to stop)'; sp.textContent = '\u25B6';
+        el.appendChild(sp);
       }
       paintMessageTime(el);
     }

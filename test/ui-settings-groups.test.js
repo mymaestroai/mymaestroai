@@ -29,9 +29,12 @@ test('eight groups, and every section openSettings draws belongs to exactly one 
   const app = read('app.js');
   const groups = groupsFromSource(app);
   assert.deepStrictEqual(groups.map(g => g.title), ['🩺 Status', '🔐 Security', '💾 Backups', '🧠 AI models', '🤖 Agents', '🔔 Notifications', '🧰 Tools and data', '💰 Money and safety']);
-  const src = settingsSource(app);
+  // The Voices section is drawn by voiceSettingsHtml(data), called from openSettings.
+  const vAt = app.indexOf('function voiceSettingsHtml(data) {');
+  assert.ok(vAt > 0 && settingsSource(app).includes('html += voiceSettingsHtml(data);'), 'Voices is drawn by openSettings');
+  const src = settingsSource(app) + app.slice(vAt, app.indexOf('function voicePaintSettings(', vAt));
   const drawn = [...src.matchAll(/class="st-section" id="(st-[a-z0-9-]+-section)"/g)].map(m => m[1]);
-  assert.strictEqual(drawn.length, 23, 'all 23 sections carry an id');
+  assert.strictEqual(drawn.length, 24, 'all 24 sections carry an id');
   assert.doesNotMatch(src, /class="st-section">/, 'no section without an id');
   const grouped = groups.flatMap(g => g.sections);
   assert.strictEqual(new Set(grouped).size, grouped.length, 'no section in two groups');

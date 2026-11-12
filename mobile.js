@@ -1801,6 +1801,7 @@ function addCopyButton(el) {
   b.setAttribute('aria-label', 'Copy message');
   b.title = 'Copy message';
   el.appendChild(b);
+  if (el.classList && el.classList.contains('assistant') && typeof addSpeakButton === 'function') addSpeakButton(el);   // read aloud, beside copy
 }
 
 function setRaw(el, text) {
@@ -1988,6 +1989,155 @@ function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {})
   return out;
 }
 // ── auto-turn helpers (end) ──
+
+// Voice helpers: shared with lib/ui-voice.js, kept in step by test/ui-voice.test.js.
+// ── voice helpers (begin) ──
+const VOICE_STORE_KEY = 'hub-voice';
+const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
+const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
+const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
+const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true };
+function voiceSpeechText(markdown) {
+  let t = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+  let hadDetails = false;
+  t = t.replace(/(^|\n)[ \t]*(```|~~~)[\s\S]*?(\n[ \t]*(```|~~~)[^\n]*|$)/g, (m, lead) => { hadDetails = true; return lead; });
+  t = t.split('\n').filter(l => { if (/^\s*\|/.test(l)) { hadDetails = true; return false; } return true; }).join('\n');
+  t = t.replace(/!?\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');
+  t = t.replace(/(?:https?:\/\/|www\.)[^\s<>)\]]*[^\s<>)\].,;:!?'"]/gi, 'a link');
+  t = t.replace(/^[ \t]*#{1,6}[ \t]+/gm, '').replace(/^[ \t]*(?:>[ \t]?)+/gm, '').replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '');
+  t = t.replace(/[*`#]+/g, '').replace(/\b_+|_+\b/g, '').replace(/_/g, ' ');
+  t = t.replace(/[\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}\u{200D}\u{FE0E}\u{FE0F}\u{20E3}]/gu, '');
+  t = t.replace(/\s+/g, ' ').trim();
+  return hadDetails ? (t + VOICE_DETAILS_NOTE).trim() : t;
+}
+function voiceSplitLong(s, max) {
+  const out = [];
+  let rest = s.trim();
+  while (rest.length > max) {
+    const win = rest.slice(0, max);
+    let cut = Math.max(win.lastIndexOf(';'), win.lastIndexOf(',')) + 1;
+    if (cut < max * 0.3) cut = win.lastIndexOf(' ') + 1;
+    if (cut < max * 0.3) cut = win.lastIndexOf(' ') > 0 ? win.lastIndexOf(' ') + 1 : max;
+    out.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) out.push(rest);
+  return out.filter(Boolean);
+}
+function voiceSentences(text, max = 220) {
+  const s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  const limit = Number.isFinite(max) && max >= 1 ? Math.floor(max) : 220;
+  const parts = [];
+  let start = 0;
+  const re = /[.!?]+["')\]]*(?=\s|$)/g;
+  let m;
+  while ((m = re.exec(s))) {
+    if (m[0].replace(/["')\]]/g, '') === '.') {
+      const before = s.slice(start, m.index).split(' ').pop().replace(/^[("'\[]+/, '').toLowerCase();
+      if (VOICE_ABBREVIATIONS.has(before)) continue;
+    }
+    parts.push(s.slice(start, m.index + m[0].length));
+    start = m.index + m[0].length;
+  }
+  parts.push(s.slice(start));
+  const out = [];
+  for (const p of parts) for (const q of voiceSplitLong(p, limit)) out.push(q);
+  return out;
+}
+function voiceResample(float32, fromRate, toRate) {
+  const src = float32 instanceof Float32Array ? float32 : Float32Array.from(float32 || []);
+  if (fromRate === toRate || !(fromRate > 0) || !(toRate > 0)) return new Float32Array(src);
+  const n = Math.max(0, Math.round(src.length * toRate / fromRate));
+  const out = new Float32Array(n);
+  const step = fromRate / toRate;
+  for (let i = 0; i < n; i++) {
+    const pos = i * step, i0 = Math.floor(pos), frac = pos - i0;
+    const a = src[Math.min(i0, src.length - 1)], b = src[Math.min(i0 + 1, src.length - 1)];
+    out[i] = a + (b - a) * frac;
+  }
+  return out;
+}
+function voiceEncodeWav(float32, sampleRate) {
+  const n = float32.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const tag = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+  tag(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE'); tag(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  tag(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const x = Math.max(-1, Math.min(1, float32[i] || 0));
+    v.setInt16(44 + i * 2, Math.round(x < 0 ? x * 32768 : x * 32767), true);
+  }
+  return buf;
+}
+function voiceDecodeWav(arrayBuffer) {
+  const v = new DataView(arrayBuffer), len = arrayBuffer.byteLength;
+  const tag = (o) => String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3));
+  if (len < 12 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') throw new Error('not a WAV file');
+  let channels = 0, sampleRate = 0, bits = 0, dataAt = -1, dataLen = 0, o = 12;
+  while (o + 8 <= len) {
+    const id = tag(o), size = v.getUint32(o + 4, true);
+    if (id === 'fmt ' && o + 24 <= len) {
+      if (v.getUint16(o + 8, true) !== 1) throw new Error('only PCM WAV is supported');
+      channels = v.getUint16(o + 10, true); sampleRate = v.getUint32(o + 12, true); bits = v.getUint16(o + 22, true);
+    } else if (id === 'data') {
+      dataAt = o + 8; dataLen = Math.min(size, len - dataAt); break;
+    }
+    o += 8 + size + (size % 2);
+  }
+  if (!channels || dataAt < 0) throw new Error('WAV has no audio');
+  if (bits !== 16 || channels > 2) throw new Error('only 16-bit mono or stereo WAV is supported');
+  const frames = Math.floor(dataLen / (2 * channels)), samples = new Float32Array(frames);
+  for (let i = 0; i < frames; i++) {
+    let sum = 0;
+    for (let c = 0; c < channels; c++) sum += v.getInt16(dataAt + (i * channels + c) * 2, true);
+    samples[i] = sum / channels / 32768;
+  }
+  return { sampleRate, samples };
+}
+function voiceLevelDb(float32) {
+  if (!float32 || !float32.length) return -100;
+  let sum = 0;
+  for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
+  const rms = Math.sqrt(sum / float32.length);
+  if (!(rms > 0)) return -100;
+  return Math.max(-100, 20 * Math.log10(rms));
+}
+function voiceGainFromSlider(v) {
+  const x = Number.isFinite(Number(v)) ? Math.max(0, Math.min(100, Number(v))) : 50;
+  return Math.pow(10, ((x - 50) / 50 * 12) / 20);
+}
+function voiceSliderFromGain(g) {
+  if (!(g > 0)) return 0;
+  return Math.max(0, Math.min(100, 50 + 20 * Math.log10(g) / 12 * 50));
+}
+function voiceMeterPercent(db) {
+  if (!Number.isFinite(db)) return db === Infinity ? 100 : 0;
+  return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+}
+function voiceCleanPrefs(raw) {
+  const p = Object.assign({}, VOICE_DEFAULT_PREFS);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return p;
+  for (const k of ['micLevel', 'interruptSensitivity']) {
+    if (typeof raw[k] === 'number' && Number.isFinite(raw[k])) p[k] = Math.max(0, Math.min(100, raw[k]));
+  }
+  if (raw.mode === 'handsfree' || raw.mode === 'tap') p.mode = raw.mode;
+  for (const k of ['readAloud', 'deviceVoiceFallback']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
+  return p;
+}
+function voiceLoadPrefs(storage) {
+  try { return voiceCleanPrefs(JSON.parse(storage.getItem(VOICE_STORE_KEY))); } catch { return voiceCleanPrefs(null); }
+}
+function voiceSavePrefs(storage, prefs) {
+  const merged = voiceCleanPrefs(Object.assign({}, voiceLoadPrefs(storage), prefs));
+  try { storage.setItem(VOICE_STORE_KEY, JSON.stringify(merged)); } catch { /* storage full or blocked: keep going */ }
+  return merged;
+}
+function voiceIsStopCommand(text) {
+  const t = String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  return VOICE_STOP_COMMANDS.has(t);
+}
+// ── voice helpers (end) ──
 
 // The date and time under each message: when it was sent, when a reply was finished and how long it took.
 // Shared verbatim with lib/ui-msg-time.js and app.js (test/ui-msg-time.test.js keeps the three in step).
@@ -2433,6 +2583,8 @@ function onReasoningGrip(e) {
 function onMessagesClick(e) {
   if (onReasoningClick(e)) return;
   if (onToolsClick(e)) return;
+  const sp = e.target.closest('.speak');
+  if (sp) { e.stopPropagation(); const m = sp.closest('.msg'); if (m) voiceSpeakToggle(m); return; }
   const b = e.target.closest('.copy');
   if (!b) { onFeedClick(e); return; }
   e.stopPropagation();
@@ -2658,6 +2810,7 @@ async function openChat(name) {
   if (!same && tsnSheetFor) closeToolsSheet();   // the full screen of another chat's calls
   current = name;
   localStorage.setItem('hub-mobile-last', name);
+  voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
   if (!same && $('files-sheet')?.open) filesRefresh(); // the Files sheet follows the open agent
   $('chat-icon').textContent = a?.icon || '🤖';
   $('chat-name').textContent = a?.display || name;
@@ -4106,6 +4259,7 @@ async function sendInterjection(agent) {
 
 // The hub no longer stops a turn when the browser goes away, so Stop has to say so explicitly.
 function stopTurn(agent) {
+  try { voiceStopPlayback(); } catch { /* nothing playing */ }
   return api('/api/chat/stop', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -4159,6 +4313,318 @@ function sendAndClose() {
   const hadImages = pendingImages.length > 0;
   sendMessage();
   if ((hadText && !input.value.trim()) || (hadImages && !pendingImages.length)) input.blur();
+}
+
+// ── Voice (phase 1): tap to talk, read aloud, the Voice sheet ───────────────
+// The hub does the speech work (POST /api/voice/stt, /api/voice/tts); this page records, plays and keeps the settings.
+// The helpers (voiceSpeechText, voiceSentences, voiceResample, voiceEncodeWav, voiceGainFromSlider, voiceLevelDb,
+// voiceMeterPercent, voiceLoadPrefs, voiceSavePrefs) are in the voice helpers block of this file.
+const VOICE_MAX_SECONDS = 60;
+let voiceStatus = { enabled: false, ready: false };
+let voiceDictatedFor = null;   // the agent whose message was dictated with the mic here, until it is sent
+const voiceRec = { state: 'idle', handle: null, chunks: [], t0: 0, tick: null, agent: null };
+const voicePlay = { token: 0, audio: null, url: null, el: null };
+const voiceErr = (e) => (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'The microphone is blocked: allow it for this site in the browser settings'
+  : e && e.name === 'NotFoundError' ? 'No microphone found' : (e && e.message) || 'The microphone did not start');
+function voicePrefsNow() { try { return voiceLoadPrefs(localStorage); } catch { return { micLevel: 50, interruptSensitivity: 50, mode: 'tap', readAloud: false, deviceVoiceFallback: true }; } }
+function voicePrefsSave(patch) { const p = { ...voicePrefsNow(), ...patch }; try { voiceSavePrefs(localStorage, p); } catch { /* storage full or blocked */ } return p; }
+function voiceTakeDictated(agent) { const d = voiceDictatedFor === agent; voiceDictatedFor = null; return d; }
+function voiceOn() { return !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready); }
+
+async function voiceStatusRefresh() {
+  try {
+    const r = await api('/api/voice/status');
+    if (r.ok) voiceStatus = (await r.json()) || { enabled: false, ready: false };
+  } catch { /* offline: keep what was known */ }
+  const b = $('mic-btn');
+  if (b) { b.hidden = !voiceOn(); if (!voiceOn() && voiceRec.state === 'recording') voiceMicCancel(); }
+  paintVoiceSheet();
+}
+
+// Opens the microphone. Called straight from a tap: the AudioContext is made and resumed before the first await.
+async function voiceMicOpen(gainValue, onChunk) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser cannot use the microphone here (it needs https)');
+  const ctx = new AC();
+  try { if (ctx.resume) ctx.resume(); } catch { /* resumes with the stream */ }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+  catch (e) { try { ctx.close(); } catch { /* closed */ } throw e; }
+  const source = ctx.createMediaStreamSource(stream);
+  const gain = ctx.createGain();
+  gain.gain.value = voiceGainFromSlider(gainValue);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  proc.onaudioprocess = (ev) => onChunk(new Float32Array(ev.inputBuffer.getChannelData(0)));
+  source.connect(gain); gain.connect(proc); proc.connect(ctx.destination);   // the processor only runs while connected; it writes silence
+  return {
+    rate: ctx.sampleRate,
+    setLevel(v) { gain.gain.value = voiceGainFromSlider(v); },
+    close() {
+      proc.onaudioprocess = null;
+      try { source.disconnect(); gain.disconnect(); proc.disconnect(); } catch { /* already apart */ }
+      for (const t of stream.getTracks()) { try { t.stop(); } catch { /* stopped */ } }
+      try { ctx.close(); } catch { /* closed */ }
+    },
+  };
+}
+function voiceMeterPaint(f32) {
+  let pct = 0;
+  try { pct = Math.max(0, Math.min(100, Number(voiceMeterPercent(voiceLevelDb(f32))) || 0)); } catch { /* no meter */ }
+  return pct;
+}
+function voiceBarPaint(pct) { const i = document.querySelector('#voice-level i'); if (i) i.style.width = `${pct}%`; }
+
+function voiceMicPaint() {
+  const b = $('mic-btn'); if (!b) return;
+  const rec = voiceRec.state === 'recording';
+  b.classList.toggle('rec', rec);
+  b.classList.toggle('busy', voiceRec.state === 'starting' || voiceRec.state === 'sending');
+  b.setAttribute('aria-pressed', rec ? 'true' : 'false');
+  b.setAttribute('aria-label', rec ? 'Stop and transcribe' : 'Dictate a message');
+  b.textContent = rec ? `● ${Math.floor((Date.now() - voiceRec.t0) / 1000)}s` : voiceRec.state === 'sending' ? '…' : '\u{1F399}';
+  const bar = $('voice-level'); if (bar) bar.hidden = !rec;
+  if (!rec) voiceBarPaint(0);
+}
+function voiceMicCancel() {
+  clearInterval(voiceRec.tick); voiceRec.tick = null;
+  if (voiceRec.handle) { voiceRec.handle.close(); voiceRec.handle = null; }
+  voiceRec.chunks = []; voiceRec.state = 'idle';
+  voiceMicPaint();
+}
+
+async function voiceMicTap() {
+  keepKeyboard && keepKeyboard.elsewhere();   // the mic button took the touch: the keyboard guard must not bring the keyboard back
+  if (voiceRec.state === 'starting' || voiceRec.state === 'sending') return;
+  if (voiceRec.state === 'recording') { voiceMicStop(); return; }
+  if (!current) { toast('Pick an agent first'); return; }
+  voiceStopPlayback();   // the phone's own speaker must not be heard by the mic
+  voiceUnlockAudio();
+  voiceRec.state = 'starting'; voiceRec.agent = current; voiceRec.chunks = [];
+  voiceMicPaint();
+  try {
+    voiceRec.handle = await voiceMicOpen(voicePrefsNow().micLevel, (f) => { voiceRec.chunks.push(f); voiceBarPaint(voiceMeterPaint(f)); });
+  } catch (e) { voiceRec.state = 'idle'; voiceMicPaint(); toast(voiceErr(e), 4500); return; }
+  voiceRec.state = 'recording'; voiceRec.t0 = Date.now();
+  voiceRec.tick = setInterval(() => { voiceMicPaint(); if (Date.now() - voiceRec.t0 >= VOICE_MAX_SECONDS * 1000) voiceMicStop(); }, 250);
+  voiceMicPaint();
+}
+
+async function voiceMicStop() {
+  if (voiceRec.state !== 'recording') return;
+  const { handle, chunks, agent } = voiceRec;
+  clearInterval(voiceRec.tick); voiceRec.tick = null;
+  voiceRec.handle = null; voiceRec.chunks = []; voiceRec.state = 'sending';
+  const rate = handle.rate;
+  handle.close();   // the microphone is released before the upload
+  voiceMicPaint();
+  try {
+    let n = 0; for (const c of chunks) n += c.length;
+    if (!n) throw new Error('Nothing was recorded');
+    const all = new Float32Array(n); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
+    const wav = new Blob([voiceEncodeWav(voiceResample(all, rate, 16000), 16000)], { type: 'audio/wav' });
+    const r = await api(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav });
+    if (r.status === 409) throw new Error('Voice is turned off on the hub');
+    if (!r.ok) throw new Error(`Speech to text failed (HTTP ${r.status})`);
+    const text = String((await r.json()).text || '').trim();
+    if (!text) throw new Error('I did not catch that');
+    voiceInsert(agent, text);
+  } catch (e) { toast(e && e.message ? e.message : 'Speech to text failed', 4000); }
+  voiceRec.state = 'idle';
+  voiceMicPaint();
+}
+
+// The text goes after what is already in the box; the box is not focused, so no keyboard opens.
+function voiceInsert(agent, text) {
+  const join = (old) => (old && old.trim() ? `${old.replace(/\s+$/, '')} ${text}` : text);
+  voiceDictatedFor = agent;
+  if (current === agent) {
+    const input = $('msg-input');
+    input.value = join(input.value);
+    input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
+    saveDraft(agent, input.value);
+  } else {
+    saveDraft(agent, join((draftsAll()[agent] || {}).text || ''));
+  }
+}
+
+// ── Read aloud ──
+function voiceUnlockAudio() {   // a tap lets one audio element play; the later sentences and automatic reads reuse it
+  try {
+    if (!voicePlay.audio) voicePlay.audio = new Audio();
+    const a = voicePlay.audio;
+    if (!a.src) { a.src = URL.createObjectURL(new Blob([voiceEncodeWav(new Float32Array(160), 16000)], { type: 'audio/wav' })); const p = a.play(); if (p && p.catch) p.catch(() => {}); }
+  } catch { /* the first real play decides */ }
+}
+function voiceMarkPlaying(el) {
+  if (voicePlay.el && voicePlay.el !== el) { voicePlay.el.classList.remove('speaking'); const o = voicePlay.el.querySelector('.speak'); if (o) o.textContent = '\u{1F50A}'; }
+  voicePlay.el = el || null;
+  if (el) { el.classList.add('speaking'); const s = el.querySelector('.speak'); if (s) s.textContent = '■'; }
+}
+function voiceStopPlayback() {
+  voicePlay.token++;
+  try { if (voicePlay.audio) { voicePlay.audio.pause(); voicePlay.audio.onended = null; voicePlay.audio.onerror = null; } } catch { /* nothing playing */ }
+  try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch { /* no device voice */ }
+  if (voicePlay.el) { voicePlay.el.classList.remove('speaking'); const s = voicePlay.el.querySelector('.speak'); if (s) s.textContent = '\u{1F50A}'; voicePlay.el = null; }
+}
+async function voiceTtsBlob(agent, text) {   // null when the hub cannot say it (never throws)
+  if (!voiceOn()) return null;
+  try {
+    const r = await api('/api/voice/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent, text }) });
+    if (!r.ok) return null;
+    const b = await r.blob();
+    return b && b.size ? b : null;
+  } catch { return null; }
+}
+function voicePlayBlob(blob, my) {
+  return new Promise((resolve) => {
+    if (my !== voicePlay.token) { resolve(false); return; }
+    const a = voicePlay.audio || (voicePlay.audio = new Audio());
+    const prev = voicePlay.url;
+    const url = URL.createObjectURL(blob);
+    voicePlay.url = url;
+    const done = (ok) => { a.onended = null; a.onerror = null; try { URL.revokeObjectURL(url); } catch { /* gone */ } if (voicePlay.url === url) voicePlay.url = null; resolve(ok); };
+    a.onended = () => done(true);
+    a.onerror = () => done(false);
+    a.src = url;
+    if (prev) { try { URL.revokeObjectURL(prev); } catch { /* gone */ } }
+    const p = a.play();
+    if (p && p.catch) p.catch(() => done(false));
+  });
+}
+function voiceDeviceSpeak(sentences, my) {   // the phone's own voice, sentence by sentence
+  const synth = window.speechSynthesis;
+  if (!synth || typeof SpeechSynthesisUtterance === 'undefined') return Promise.resolve(false);
+  return (async () => {
+    for (const s of sentences) {
+      if (my !== voicePlay.token) return true;
+      await new Promise((resolve) => { const u = new SpeechSynthesisUtterance(s); u.onend = resolve; u.onerror = resolve; synth.speak(u); });
+    }
+    return true;
+  })();
+}
+async function voiceSpeak(markdown, agent, el) {
+  voiceStopPlayback();
+  const my = voicePlay.token;
+  let sentences = [];
+  try { sentences = voiceSentences(voiceSpeechText(markdown)) || []; } catch { sentences = []; }
+  if (!sentences.length) { toast('Nothing to read aloud'); return; }
+  voiceMarkPlaying(el);
+  const fallback = voicePrefsNow().deviceVoiceFallback;
+  let rest = sentences;   // what the phone's own voice has to say when the hub voice cannot
+  if (voiceOn()) {
+    rest = [];
+    let next = voiceTtsBlob(agent, sentences[0]);   // the next sentence is fetched while this one plays
+    for (let i = 0; i < sentences.length; i++) {
+      const blob = await next;
+      if (my !== voicePlay.token) return;
+      if (!blob) { rest = sentences.slice(i); break; }
+      next = i + 1 < sentences.length ? voiceTtsBlob(agent, sentences[i + 1]) : null;
+      const ok = await voicePlayBlob(blob, my);
+      if (my !== voicePlay.token) return;
+      if (!ok) { rest = sentences.slice(i); break; }
+    }
+  }
+  if (rest.length && my === voicePlay.token) {
+    if (fallback && await voiceDeviceSpeak(rest, my)) { /* spoken by the phone */ }
+    else if (my === voicePlay.token) toast(voiceOn() ? 'The hub voice did not answer' : 'Voice is off on the hub (an admin turns it on in Settings on the computer)', 4000);
+  }
+  if (my === voicePlay.token) voiceStopPlayback();
+}
+function voiceSpeakToggle(msgEl) {
+  if (voicePlay.el === msgEl) { voiceStopPlayback(); return; }
+  const text = rawText.get(msgEl);
+  if (text === undefined || text === '') { toast('Nothing to read yet'); return; }
+  voiceUnlockAudio();
+  voiceSpeak(text, current, msgEl);
+}
+function voiceAutoRead(rec) {   // a reply to a message dictated here is read when it ends
+  if (!rec || !rec.dictated || !rec.full || !voicePrefsNow().readAloud || current !== rec.agent) return;
+  voiceSpeak(rec.full, rec.agent, rec.bubble && rec.bubble.el);
+}
+function addSpeakButton(el) {
+  const b = document.createElement('button');
+  b.className = 'speak';
+  b.type = 'button';
+  b.textContent = '\u{1F50A}';
+  b.setAttribute('aria-label', 'Read aloud');
+  b.title = 'Read aloud';
+  el.appendChild(b);
+}
+
+// ── Voice sheet (menu, Voice) ──
+const voiceTest = { handle: null };
+function voiceTestStop() {
+  if (voiceTest.handle) { voiceTest.handle.close(); voiceTest.handle = null; }
+  const sh = $('voice-sheet');
+  if (sh) { const t = sh.querySelector('.vs-test'); if (t) { t.setAttribute('aria-pressed', 'false'); t.textContent = 'Test mic'; } const m = sh.querySelector('.vs-meter i'); if (m) m.style.width = '0%'; }
+}
+async function voiceTestToggle() {
+  if (voiceTest.handle) { voiceTestStop(); return; }
+  if (voiceRec.state !== 'idle') { toast('The mic is already in use'); return; }
+  const sh = $('voice-sheet'); const t = sh.querySelector('.vs-test'); const m = sh.querySelector('.vs-meter i');
+  t.disabled = true;
+  try {
+    voiceTest.handle = await voiceMicOpen(voicePrefsNow().micLevel, (f) => { m.style.width = `${voiceMeterPaint(f)}%`; });
+    t.setAttribute('aria-pressed', 'true'); t.textContent = 'Stop test';
+  } catch (e) { toast(voiceErr(e), 4500); }
+  t.disabled = false;
+}
+function voiceSheet() {
+  let sh = $('voice-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'voice-sheet';
+  sh.className = 'rsn-sheet voice-sheet';
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Voice');
+  sh.dataset.noDirty = '';
+  sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Voice</span><span class="rsn-sheet-count"></span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div>' +
+    '<div class="vs-body" tabindex="-1">' +
+    '<p class="vs-note"></p>' +
+    '<label class="vs-row" for="vs-level"><span>Mic level</span><b class="vs-val"></b></label>' +
+    '<input type="range" id="vs-level" class="vs-level" min="0" max="100" step="1">' +
+    '<div class="vs-meter" aria-hidden="true"><i></i></div>' +
+    '<button type="button" class="vs-btn vs-test" aria-pressed="false">Test mic</button>' +
+    '<label class="vs-check"><input type="checkbox" class="vs-read"> <span>Read replies aloud</span></label>' +
+    '<p class="vs-hint">After a message you dictated with the mic, the reply is read when it ends. The speaker on a reply reads it any time.</p>' +
+    '<label class="vs-check"><input type="checkbox" class="vs-fallback"> <span>Use the phone&#39;s own voice when the hub voice is unavailable</span></label>' +
+    '<button type="button" class="vs-btn vs-sample">Play sample</button></div>';
+  const close = () => { voiceTestStop(); voiceStopPlayback(); sh.classList.remove('open'); dialogGuard.closed(sh); };
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+  const level = sh.querySelector('.vs-level');
+  level.addEventListener('input', () => { sh.querySelector('.vs-val').textContent = level.value; if (voiceTest.handle) voiceTest.handle.setLevel(Number(level.value)); });
+  level.addEventListener('change', () => voicePrefsSave({ micLevel: Number(level.value) }));
+  sh.querySelector('.vs-read').addEventListener('change', (e) => voicePrefsSave({ readAloud: !!e.target.checked }));
+  sh.querySelector('.vs-fallback').addEventListener('change', (e) => voicePrefsSave({ deviceVoiceFallback: !!e.target.checked }));
+  sh.querySelector('.vs-test').addEventListener('click', voiceTestToggle);
+  sh.querySelector('.vs-sample').addEventListener('click', () => { voiceUnlockAudio(); voiceSpeak('This is how replies will sound.', current, null); });
+  sh.closeSheet = close;
+  document.body.appendChild(sh);
+  return sh;
+}
+function paintVoiceSheet() {
+  const sh = $('voice-sheet');
+  if (!sh || !sh.classList.contains('open')) return;
+  const p = voicePrefsNow();
+  const level = sh.querySelector('.vs-level');
+  if (document.activeElement !== level) { level.value = String(p.micLevel); sh.querySelector('.vs-val').textContent = String(p.micLevel); }
+  sh.querySelector('.vs-read').checked = !!p.readAloud;
+  sh.querySelector('.vs-fallback').checked = !!p.deviceVoiceFallback;
+  const note = sh.querySelector('.vs-note');
+  note.textContent = voiceOn() ? `Voice is on${voiceStatus.stt && voiceStatus.stt.engine ? ` (${voiceStatus.stt.engine})` : ''}. Tap the mic beside the message box to dictate.`
+    : voiceStatus.enabled ? (voiceStatus.installing ? `Voice is installing on the hub${Number.isFinite(voiceStatus.progress) ? ` (${Math.round(voiceStatus.progress)}%)` : ''}.` : 'Voice is on, but not ready on the hub yet.')
+      : 'Voice is not enabled on the hub. An admin turns it on in Settings on the computer.';
+  note.classList.toggle('off', !voiceOn());
+}
+function openVoiceSheet() {
+  $('menu').classList.remove('open');
+  const sh = voiceSheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: sh.closeSheet }); }
+  paintVoiceSheet();
+  voiceStatusRefresh();
 }
 
 // The message box keeps a draft per agent in localStorage (2026-10-21: a half-typed message vanished when the app
@@ -4217,7 +4683,7 @@ async function sendMessage(fallback) {
   scrollChat(true);
 
   const controller = new AbortController();
-  const rec = { controller, agent, text, images, bubble, userEl, startedAt: Date.now(), full: '', gotAny: false, feed: newFeed(true), question: null };
+  const rec = { controller, agent, text, images, bubble, userEl, startedAt: Date.now(), full: '', gotAny: false, feed: newFeed(true), question: null, dictated: !fallback && voiceTakeDictated(agent) };
   streams.set(agent, rec);
   paintChatStatus();
 
@@ -4251,6 +4717,7 @@ async function sendMessage(fallback) {
       if (bubbleLive(rec) && !reattaches.has(agent)) setBubbleTime(rec.bubble.el, msgTimeLine(Date.now(), rec.startedAt));
       if (!rec.gotAny && bubbleLive(rec)) rec.bubble.body.innerHTML = '<span style="opacity:.6">[No response]</span>';
       if (current === agent) rereadHistory(agent);   // the finished exchange, as the hub saved it
+      try { voiceAutoRead(rec); } catch { /* reading aloud never breaks a reply */ }
     }
   } catch (e) {
     if (e.name === 'AbortError') {
@@ -5919,6 +6386,7 @@ function wire() {
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
+  $('menu-voice')?.addEventListener('click', openVoiceSheet);   // ?.: a phone page cached from before has no menu entry
   $('menu-workers').addEventListener('click', () => openWorkerSheet('history'));
   $('menu-wallet')?.addEventListener('click', openWalletSheet);   // ?.: a phone page cached from before has no menu entry
   $('menu-memory')?.addEventListener('click', openMemorySheet);   // a phone page cached from before this line has no menu entry
@@ -5989,6 +6457,10 @@ function wire() {
   // sendAndClose lets go of the box so the keyboard goes away.
   onComposerTap($('send-btn'), sendAndClose);
   onComposerTap($('chat-notify-btn'), toggleNotifyDone);
+  // The mic acts on the touch itself too (the box keeps its state, no keyboard opens). Its status is polled every 60 s while the page is visible.
+  if ($('mic-btn')) onComposerTap($('mic-btn'), voiceMicTap);
+  setInterval(() => { if (!document.hidden && current) voiceStatusRefresh(); }, 60000);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { if (voiceRec.state === 'recording') voiceMicStop(); voiceTestStop(); } });   // the mic is not kept while the page is away
 
   $('attach-btn').addEventListener('click', () => $('file-input').click());
   $('camera-btn').addEventListener('click', () => $('camera-input').click());

@@ -539,6 +539,29 @@
   #composer .notify-chip { flex: none; align-self: flex-end; height: 40px; padding: 0 12px; border-radius: 20px; font: inherit; font-size: 14px; font-weight: 600;
     border: 1px solid var(--accent, #3d7bff); color: var(--accent, #3d7bff); background: rgba(61,123,255,.10); cursor: pointer; white-space: nowrap; }
   #composer .notify-chip.on { background: var(--accent, #3d7bff); color: #fff; }
+  /* Voice: the mic beside Send, the level bar above the row while recording, the speaker on a reply, the Voice sheet. */
+  #mic-btn { flex: none; touch-action: none; font-size: 20px; }
+  #mic-btn.rec { background: var(--error, #e5484d); color: #fff; border-radius: 22px; padding: 0 12px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; animation: rsn-pulse 1.4s ease-in-out infinite; }
+  #mic-btn.busy { opacity: .55; pointer-events: none; }
+  #voice-level { height: 4px; margin: 0 2px 6px; border-radius: 2px; background: var(--border); overflow: hidden; }
+  #voice-level[hidden] { display: none; }
+  #voice-level i { display: block; height: 100%; width: 0; background: var(--error, #e5484d); transition: width .08s linear; }
+  .msg .speak { position: absolute; top: 2px; right: 32px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 14px; line-height: 1; color: inherit; opacity: .45; background: none; }
+  .msg .speak:active, .msg.speaking .speak { opacity: 1; background: rgba(127,127,127,.25); }
+  .voice-sheet .rsn-sheet-title { color: var(--text); }
+  .vs-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; outline: none; padding: 14px 14px calc(16px + var(--sab)); display: flex; flex-direction: column; gap: 12px; font-size: 15px; color: var(--text); }
+  .vs-note { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; }
+  .vs-note.off { border-color: var(--warning, #d9a441); }
+  .vs-row { display: flex; justify-content: space-between; align-items: center; }
+  .vs-level { width: 100%; min-height: 32px; accent-color: var(--accent, #3d7bff); }
+  .vs-meter { height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
+  .vs-meter i { display: block; height: 100%; width: 0; background: var(--accent, #3d7bff); transition: width .08s linear; }
+  .vs-btn { min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--border-strong); color: var(--text); font-size: 15px; }
+  .vs-btn[aria-pressed="true"] { background: var(--error, #e5484d); color: #fff; border-color: transparent; }
+  .vs-btn:disabled { opacity: .5; }
+  .vs-check { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; }
+  .vs-check input { width: 22px; height: 22px; flex: none; margin-top: 1px; }
+  .vs-hint { margin: -6px 0 0 32px; color: var(--text-dim); font-size: 12px; }
   #composer .notify-chip[hidden] { display: none; }
   @media (max-width: 379px) { #composer .notify-chip .nlabel { display: none; } #composer .notify-chip { padding: 0 10px; } }
   /* Files sheet (upload, download, browse) */
@@ -658,9 +681,11 @@
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="composer">
       <div id="previews"></div>
+      <div id="voice-level" aria-hidden="true" hidden><i></i></div>
       <div class="row">
         <button class="iconbtn" id="attach-btn" aria-label="Attach a file or image">&#x1F4CE;</button>
         <button class="iconbtn" id="camera-btn" aria-label="Camera">&#x1F4F7;</button>
+        <button class="iconbtn" id="mic-btn" type="button" aria-label="Dictate a message" aria-pressed="false" title="Tap to dictate, tap again to stop" hidden>&#x1F399;</button>
         <textarea id="msg-input" rows="1" placeholder="Message"></textarea>
         <button class="notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
         <button id="send-btn" aria-label="Send">&#x27A4;</button>
@@ -695,6 +720,7 @@
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
     <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
     <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
+    <button id="menu-voice">&#x1F399; Voice</button>
     <button id="menu-workers">&#x1F477; Worker history</button>
     <button id="menu-wallet" hidden>&#x1F45B; Wallet</button>
     <button id="menu-memory" hidden><span>&#x1F9E0; Memory</span><span class="menu-count" id="menu-memory-count"></span></button>

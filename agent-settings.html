@@ -200,6 +200,17 @@
   <div id="records-status" class="status"></div>
 </div>
 
+<div class="section" id="voice-section">
+  <label>Voice</label>
+  <small style="color:#999;display:block;margin-bottom:8px;">The free local voice this agent reads its replies in. Hub default follows Settings, Voices. Recognition of what you say is local too; nothing leaves this computer.</small>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <label for="voice-select" style="margin:0;">Voice</label>
+    <select id="voice-select" onchange="saveAgentVoice()" style="width:auto;"><option value="">Hub default</option></select>
+    <button class="btn btn-test" id="voice-sample-btn" type="button" onclick="playAgentVoiceSample()">Play sample</button>
+  </div>
+  <div id="voice-status" class="status"></div>
+</div>
+
 <div class="section" id="compaction-section">
   <label>Context compression</label>
   <small style="color:#999;display:block;margin-bottom:8px;">When the context window fills up past the threshold, the agent writes its own carry-forward (the record <code>working-brief.md</code>); the provider never summarises on its behalf.<br>Dry run = the brief only, the session goes on. On = the brief, then a fresh session seeded from Records + recent turns + recall.</small>
@@ -366,6 +377,7 @@
     ['saveLimits', 'limits-status', byId('context-budget', 'max-context-messages', 'max-output-tokens')],
     ['saveSandbox', 'sandbox-status', byId('sandbox-mode')],
     ['saveEffort', 'effort-status', byId('effort-mode')],
+    ['saveAgentVoice', 'voice-status', byId('voice-select')],
     ['saveToolsMode', 'tools-status', byId('tools-mode')],
     ['saveAutoModel', 'auto-model-status', byId('auto-model', 'auto-model-allowed')],
     ['saveAllowedModels', 'allowed-models-status', byId('auto-model-checkboxes')],
@@ -380,7 +392,7 @@
   // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
   // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
   // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
-  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveToolsMode']);
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveToolsMode', 'saveAgentVoice']);
   const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];
@@ -834,6 +846,55 @@
       else showStatus('effort-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('effort-status', 'error', e.message); }
   }
+  // ── Voice (free local voices; the list comes from the hub's voice status) ──
+  let voiceList = [], agentVoice = '', voicePlayCtx = null, voicePlaySrc = null;
+  function paintVoiceSelect() {
+    const sel = document.getElementById('voice-select');
+    if (!sel) return;
+    const opts = [{ id: '', label: 'Hub default' }, ...voiceList];
+    sel.innerHTML = opts.map(v => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.label || v.id)}${v.accent ? ` (${escapeHtml(v.accent)})` : ''}</option>`).join('');
+    if (agentVoice && !opts.some(v => v.id === agentVoice)) sel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(agentVoice)}">${escapeHtml(agentVoice)}</option>`);
+    sel.value = agentVoice;
+    pageGuard.markLoaded(sel);
+  }
+  async function loadVoiceList() {
+    try {
+      const st = await apiFetch('/api/voice/status');
+      voiceList = (st && Array.isArray(st.voices)) ? st.voices : [];
+      if (st && !st.enabled) showStatus('voice-status', 'info', 'Voice is off for the hub: an admin turns it on in Settings, Voices.');
+    } catch { voiceList = []; }
+    paintVoiceSelect();
+  }
+  async function saveAgentVoice() {
+    const v = document.getElementById('voice-select').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: { voice: v, stt: 'local', tts: 'local' } }) });
+      if (result && (result.success || result.ok)) { agentVoice = v; showStatus('voice-status', 'success', v ? 'Voice saved: used from the next time a reply is read' : 'Using the hub default voice'); }
+      else showStatus('voice-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('voice-status', 'error', e.message); }
+  }
+  async function playAgentVoiceSample() {
+    const btn = document.getElementById('voice-sample-btn');
+    if (voicePlaySrc) { try { voicePlaySrc.stop(); } catch {} voicePlaySrc = null; return; }
+    btn.disabled = true;
+    try {
+      const body = { agent: agentName, text: 'This is the voice I will use to read replies to you.' };
+      const v = document.getElementById('voice-select').value;
+      if (v) body.voice = v;
+      const r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!r.ok) { let m = ''; try { m = (await r.json()).error; } catch {} throw new Error(m || `HTTP ${r.status}`); }
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!voicePlayCtx) voicePlayCtx = new AC();
+      if (voicePlayCtx.state === 'suspended') await voicePlayCtx.resume();
+      const ab = await voicePlayCtx.decodeAudioData(await r.arrayBuffer());
+      const src = voicePlayCtx.createBufferSource();
+      src.buffer = ab; src.connect(voicePlayCtx.destination);
+      src.onended = () => { voicePlaySrc = null; btn.textContent = 'Play sample'; };
+      voicePlaySrc = src; btn.textContent = 'Stop';
+      src.start();
+    } catch (e) { showStatus('voice-status', 'error', 'Could not play the sample: ' + e.message); }
+    finally { btn.disabled = false; }
+  }
   async function saveToolsMode() {
     const v = document.getElementById('tools-mode').value;
     try {
@@ -1040,6 +1101,8 @@
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
       const effSel = document.getElementById('effort-mode'); if (effSel) effSel.value = agent?.effort || 'default';
+      agentVoice = (agent && agent.voice && agent.voice.voice) || ''; paintVoiceSelect();
+      if (!voiceList.length) loadVoiceList();
       const toolsRow = document.getElementById('tools-row'); if (toolsRow) { const clientModel = /^(claude-sdk|codex-cli)\//.test(agent?.model || currentModel || ''); toolsRow.style.display = clientModel ? 'flex' : 'none'; const th = document.getElementById('tools-help'); if (th) th.style.display = clientModel ? 'block' : 'none'; }
       const allowedPanel = document.getElementById('auto-model-allowed');
       if (agent?.autoModel) {
