@@ -41,7 +41,9 @@ test('settings sanitiser: known keys only, values checked, merged onto what is s
 
 test('server.js feeds POST /api/settings through the sanitiser and routes /api/voice/* to lib/voice/routes', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /patch\.voice = require\('\.\/lib\/voice\/manifest'\)\.cleanVoiceSettings\(patch\.voice, hubSettings\.getSetting\('voice'\)\)/);
+  assert.match(src, /if \(patch && patch\.voice !== undefined\) \{\s*const storedVoice = hubSettings\.getSetting\('voice'\);\s*patch\.voice = require\('\.\/lib\/voice\/manifest'\)\.cleanVoiceSettings\(patch\.voice, storedVoice\);/);
+  // "enabled" is never taken from the patch: it is put back from the stored value (only /api/voice/enable and /disable change it)
+  assert.match(src, /patch\.voice\.enabled = !!\(storedVoice && storedVoice\.enabled === true\);/);
   assert.match(src, /pathname\.startsWith\('\/api\/voice\/'\)\) return require\('\.\/lib\/voice\/routes'\)\.handle\(/);
   assert.match(src, /route\.from === 'query'/);
 });

@@ -305,6 +305,52 @@ test('disable while an upload is still arriving: the finished upload is answered
   real.stop();
 });
 
+test('disable then enable while an upload is still arriving: the finished upload is still answered 409 voice_off and the worker is never asked', async () => {
+  const { createVoiceClient } = require('../lib/voice/client');
+  const t = setup();
+  let spawned = 0;
+  const eng = t.deps.getVoice().engine;
+  const real = createVoiceClient({ engine: eng, idleMs: 0, spawnImpl: () => { spawned++; throw new Error('must not start'); } });
+  t.deps.getVoice = () => ({ engine: eng, client: real });
+  const wav = wavOf();
+  const req = slowReq('POST', '/api/voice/stt?agent=maestro', { 'content-type': 'audio/wav' });
+  const res = fakeRes();
+  const done = routes.handle('/api/voice/stt', req, res, t.deps);
+  req.push(wav.subarray(0, 100));
+  await new Promise(r => setTimeout(r, 10));
+  assert.strictEqual((await t.call(fakeReq('POST', '/api/voice/disable'))).statusCode, 200);
+  assert.strictEqual((await t.call(fakeReq('POST', '/api/voice/enable'))).statusCode, 200);
+  assert.strictEqual(t.settings.voice.enabled, true, 'voice is on again when the upload finishes');
+  req.push(wav.subarray(100)); req.push(null);
+  await done; await res.finished;
+  assert.strictEqual(res.statusCode, 409); assert.deepStrictEqual(res.json(), { error: 'voice_off' });
+  assert.strictEqual(spawned, 0, 'no worker was started');
+  assert.strictEqual(t.calls.stt.length, 0);
+  real.stop();
+});
+
+test('disable then enable while the agent list is being read: tts is still answered 409 voice_off and the worker is never asked', async () => {
+  const { createVoiceClient } = require('../lib/voice/client');
+  const t = setup();
+  let spawned = 0;
+  const eng = t.deps.getVoice().engine;
+  const real = createVoiceClient({ engine: eng, idleMs: 0, spawnImpl: () => { spawned++; throw new Error('must not start'); } });
+  t.deps.getVoice = () => ({ engine: eng, client: real });
+  let release; const gate = new Promise(r => { release = r; });
+  t.deps.getAgents = async () => { await gate; return agents; };
+  const res = fakeRes();
+  const done = routes.handle('/api/voice/tts', fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agent: 'maestro', text: 'Hi' }) }), res, t.deps);
+  await new Promise(r => setTimeout(r, 10));
+  assert.strictEqual((await t.call(fakeReq('POST', '/api/voice/disable'))).statusCode, 200);
+  assert.strictEqual((await t.call(fakeReq('POST', '/api/voice/enable'))).statusCode, 200);
+  assert.strictEqual(t.settings.voice.enabled, true);
+  release(); await done; await res.finished;
+  assert.strictEqual(res.statusCode, 409); assert.deepStrictEqual(res.json(), { error: 'voice_off' });
+  assert.strictEqual(spawned, 0, 'no worker was started');
+  assert.strictEqual(t.calls.tts.length, 0);
+  real.stop();
+});
+
 test('disable while the agent list is being read: tts is answered 409 and does not run', async () => {
   const t = setup();
   let release; const gate = new Promise(r => { release = r; });

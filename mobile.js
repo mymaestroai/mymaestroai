@@ -4558,8 +4558,14 @@ function voicePlayBlob(blob, my) {
     const prev = voicePlay.url;
     const url = URL.createObjectURL(blob);
     voicePlay.url = url;
+    // Runs once; the shared <audio> element's handlers are cleared only while they are still this playback's (a late
+    // rejection of an older play() must not take the handlers of the playback that replaced it).
+    let settled = false;
     const done = (ok) => {
-      a.onended = null; a.onerror = null;
+      if (settled) return;
+      settled = true;
+      if (a.onended === onEnded) a.onended = null;
+      if (a.onerror === onError) a.onerror = null;
       try { URL.revokeObjectURL(url); } catch { /* gone */ }
       if (voicePlay.url === url) voicePlay.url = null;
       if (voicePlay.cancel === cancel) voicePlay.cancel = null;
@@ -4567,8 +4573,10 @@ function voicePlayBlob(blob, my) {
     };
     const cancel = () => done(false);   // voiceStopPlayback: the promise settles as "not played to the end"
     voicePlay.cancel = cancel;
-    a.onended = () => done(true);
-    a.onerror = () => done(false);
+    const onEnded = () => done(true);
+    const onError = () => done(false);
+    a.onended = onEnded;
+    a.onerror = onError;
     a.src = url;
     if (prev) { try { URL.revokeObjectURL(prev); } catch { /* gone */ } }
     const p = a.play();

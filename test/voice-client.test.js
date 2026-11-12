@@ -301,6 +301,58 @@ test('a queued request whose caller went away is dropped before it runs', async 
   cl.stop();
 });
 
+// ── generations: a stop() refuses what was admitted before it, even after resume() ──
+test('a request admitted under generation g is refused with voice_off after stop() and resume(), and never reaches the worker; a new request runs', async () => {
+  const sp = fakeSpawner((m, c) => c.reply({ id: m.id, ok: true, wavBase64: '', sampleRate: 1, ms: 1 }));
+  const cl = createVoiceClient({ engine, spawnImpl: sp, idleMs: 0 });
+  const g = cl.generation();
+  assert.strictEqual(typeof g, 'number');
+  cl.stop(); cl.resume();
+  assert.notStrictEqual(cl.generation(), g, 'stop() bumps the generation');
+  await assert.rejects(() => cl.tts('old', 'af_heart', 1, { gen: g }), (e) => e.code === 'voice_off');
+  await assert.rejects(() => cl.stt(wav16([1, 2, 3], 16000), undefined, { gen: g }), (e) => e.code === 'voice_off');
+  assert.strictEqual(sp.children.length, 0, 'the worker was never started for them');
+  await cl.tts('new', 'af_heart', 1, { gen: cl.generation() });
+  await cl.tts('no gen given', 'af_heart');
+  assert.deepStrictEqual(sp.children[0].lines.map(l => l.text), ['new', 'no gen given']);
+  cl.stop();
+});
+
+test('a 45 s stt with the waiting queue full is not refused for its second piece, and that piece runs before the waiting requests', async () => {
+  const order = []; const extra = []; let hold = null; let sttSeen = 0; let cl;
+  const okTts = (m, c) => c.reply({ id: m.id, ok: true, wavBase64: '', sampleRate: 1, ms: 1 });
+  const sp = fakeSpawner((m, c) => {
+    order.push(m.op === 'stt' ? 'stt' + (++sttSeen) : m.text);
+    if (m.text === 'A') { hold = () => okTts(m, c); return; }
+    if (m.op === 'stt') {
+      c.reply({ id: m.id, ok: true, text: 'p' + sttSeen, ms: 1 });
+      // right after the first piece is answered, top the queue up to its cap so the second piece meets a full queue
+      if (sttSeen === 1) for (const t of ['F1', 'F2']) extra.push(cl.tts(t, 'af_heart'));
+      return;
+    }
+    okTts(m, c);
+  });
+  cl = createVoiceClient({ engine, spawnImpl: sp, idleMs: 0 });
+  const n = 45 * 16000;
+  const pcm = Array.from({ length: n }, (_, i) => (i >= 24 * 16000 && i < 24 * 16000 + 1600 ? 0 : Math.round(8000 * Math.sin(i / 7))));
+  const a = cl.tts('A', 'af_heart');                                   // running
+  const s = cl.stt(wav16(pcm, 16000));                                 // first piece waits (1 of 4)
+  const bs = ['B1', 'B2', 'B3'].map(t => cl.tts(t, 'af_heart'));       // 4 waiting
+  await new Promise(r => setTimeout(r, 5));
+  hold();
+  const r = await s;
+  assert.deepStrictEqual(r, { text: 'p1 p2', ms: 2 }, 'both pieces ran and were joined');
+  await Promise.all([a, ...bs, ...extra]);
+  assert.deepStrictEqual(order, ['A', 'stt1', 'B1', 'stt2', 'B2', 'B3', 'F1', 'F2'], 'the second piece goes ahead of the requests still waiting');
+  cl.stop();
+});
+
+test('splitForWhisper on 40 s of NaN samples returns, with every piece at most 28 s', () => {
+  const parts = splitForWhisper(new Float32Array(40 * 16000).fill(NaN));
+  assert.ok(Array.isArray(parts) && parts.length >= 1);
+  assert.ok(parts.every(p => p.length > 0 && p.length <= 28 * 16000));
+});
+
 // ── the worker's message handler (fake sherpa, no models) ──
 function fakeSherpa(log) {
   class OfflineRecognizer { constructor(cfg) { log.push(['rec', cfg.modelConfig.whisper.encoder, cfg.modelConfig.numThreads]); }

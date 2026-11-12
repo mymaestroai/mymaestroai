@@ -10791,8 +10791,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const admin = isHubAdmin();
       const p = voicePrefsNow();
       const row = (label, inner) => `<div class="st-row"><label style="flex-basis:150px">${label}</label>${inner}</div>`;
-      // A checkbox row the way the OpenRouter privacy row is laid out: a short label column, the box and its text on one line.
-      const CHK = 'flex:1;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap';
+      // A checkbox row the way the OpenRouter privacy row is laid out: a short label column, the box and its text in the
+      // value column (a long text wraps there, inside the dialog).
+      const CHK = 'flex:1;min-width:0;display:flex;gap:6px;align-items:flex-start;text-align:left;cursor:pointer';
       let h = `<div class="st-section" id="st-voice-section"><h4>Voices</h4>
         <div class="st-hint">Free local voices run on this computer: what you say and what is read aloud never leaves it, and nothing is sent to the internet. Tap the microphone in a chat to dictate; tap the speaker on a reply to hear it. Hands-free conversation comes next.</div>`;
       h += row('Voice', admin
@@ -10910,17 +10911,20 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (voiceTest.guard.pending) return;   // two quick clicks: the second is ignored while the first is still being asked for
       if (voiceRec.chatId || voiceRec.busy || voiceRec.guard.pending) { hubToast('The microphone is in use in a chat.'); return; }
       const slider = voiceById('st-voice-mic');
+      // The test belongs to this Settings section: closing Settings removes it, and reopening draws a new one.
+      const section = voiceById('st-voice-section');
+      const sameSection = () => !!section && section.isConnected && voiceById('st-voice-section') === section;
       const token = voiceTest.guard.begin();
       let mic;
       try { mic = await voiceOpenMic(slider ? Number(slider.value) : voiceMicLevelNow(), (d) => { voiceTest.level = voiceLevelDb(d); }); }
       catch (e) { voiceTest.guard.fail(); if (token === voiceTest.guard.gen) hubToast(voiceMicError(e)); return; }
-      if (!voiceById('st-voice-section')) voiceTest.guard.cancel();   // Settings closed while the browser was asking
+      if (!sameSection()) voiceTest.guard.cancel();   // Settings closed (and maybe reopened) while the browser was asking
       if (!voiceTest.guard.settle(token, mic)) return;
       voiceTest.mic = mic;
       const b = voiceById('st-voice-testmic'); if (b) b.textContent = 'Stop test';
       voiceTest.timer = setInterval(() => {
         const bar = voiceById('st-voice-meter');
-        if (!bar) { voiceTestStop(); return; }   // Settings closed
+        if (!bar || !sameSection()) { voiceTestStop(); return; }   // Settings closed
         bar.style.width = `${voiceMeterPercent(voiceTest.level)}%`;
       }, 100);
     }

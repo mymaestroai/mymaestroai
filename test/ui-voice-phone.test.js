@@ -173,6 +173,38 @@ test('stop playback settles the pending voicePlayBlob and frees its blob URL', a
   assert.strictEqual(voicePlay.cancel, null);
 });
 
+test('a late play() rejection of a replaced voicePlayBlob leaves the newer playback its handlers; the newer one still resolves when it ends', async () => {
+  const src = sliceBetween('function voiceStopPlayback()', 'function voiceDeviceSpeak');
+  const revoked = []; const rejects = []; let urls = 0;
+  class FakeAudio { constructor() { FakeAudio.last = this; this.paused = false; } pause() { this.paused = true; }
+    play() { return new Promise((res, rej) => { rejects.push(rej); }); } }
+  const voicePlay = { token: 5, audio: null, url: null, el: null, cancel: null };
+  const f = new Function('voicePlay', 'window', 'URL', 'Audio', 'voiceOn', 'api', 'toast', src + '\nreturn { voicePlayBlob, voiceStopPlayback };')(
+    voicePlay, {}, { createObjectURL: () => 'blob:' + (++urls), revokeObjectURL: (u) => revoked.push(u) }, FakeAudio, () => true, null, () => {});
+  let aRes = null, bRes = null;
+  const pa = f.voicePlayBlob({}, 5); pa.then((v) => { aRes = v; });
+  const pb = f.voicePlayBlob({}, 5); pb.then((v) => { bRes = v; });   // B replaces A on the same shared element
+  const audio = FakeAudio.last;
+  assert.strictEqual(rejects.length, 2);
+  const bEnded = audio.onended, bError = audio.onerror;
+  assert.strictEqual(typeof bEnded, 'function');
+  rejects[0](new Error('The play() request was interrupted'));        // A's play() fails late
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(aRes, false, 'A settles as not played');
+  assert.strictEqual(bRes, null, 'B is still playing');
+  assert.strictEqual(audio.onended, bEnded, "B's onended is still installed");
+  assert.strictEqual(audio.onerror, bError, "B's onerror is still installed");
+  audio.onended();                                                     // B reaches its end
+  assert.strictEqual(await pb, true, 'B resolves true when it ends');
+  assert.strictEqual(audio.onended, null, 'cleared once B is done');
+  assert.strictEqual(audio.onerror, null);
+  // completion runs once: a second signal from the same playback does nothing more
+  const before = revoked.length; bEnded(); bError();
+  assert.strictEqual(revoked.length, before, 'a finished playback does not revoke twice');
+  assert.ok(revoked.includes('blob:2'), "B's URL was revoked");
+  assert.strictEqual(voicePlay.url, null);
+});
+
 test('voiceMicOpen stops the stream tracks when the audio graph cannot be built', async () => {
   const open = sliceBetween('async function voiceMicOpen', 'function voiceMeterPaint');
   let stopped = 0, closed = 0;

@@ -117,7 +117,7 @@ test('no variation selector U+FE0F in the new voice code', () => {
 function el(extra = {}) {
   const cls = new Set();
   return Object.assign({
-    style: {}, dataset: {}, value: '', textContent: '', disabled: false,
+    style: {}, dataset: {}, value: '', textContent: '', disabled: false, isConnected: true,   // a page element stays the same connected element until removed
     classList: { toggle(c, on) { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
     setAttribute() {}, querySelector() { return null; }, focus() { this.focused = true; }, firstElementChild: { style: {} },
   }, extra);
@@ -323,6 +323,18 @@ test('Settings Test the mic: closing Settings (or hiding the page) while the per
   assert.strictEqual(api.voiceTest.timer, null, 'no meter timer was started');
 });
 
+test('Settings Test the mic: Settings closed and reopened (a new section element) while the permission is pending closes the stream and leaves no test mic', async () => {
+  const { api, calls, els, get } = makeEnv({ gum: lateGum });
+  const first = get('st-voice-section');
+  const p = api.voiceTestMic();
+  first.isConnected = false;                       // Settings closed: the section is removed
+  els['st-voice-section'] = el();                  // Settings reopened: a new, connected section
+  calls.resolveGum(); await p;
+  assert.strictEqual(calls.streams[0].stops, 1, 'the late stream was closed');
+  assert.strictEqual(api.voiceTest.mic, null);
+  assert.strictEqual(api.voiceTest.timer, null, 'no meter timer was started');
+});
+
 test('dictation: a second tap while pending is ignored; closing the chat while pending stops the late stream', async () => {
   const { api, calls } = makeEnv({ gum: lateGum });
   await api.voiceRefreshStatus();
@@ -392,10 +404,11 @@ test('default voice picker: starts at the hub default, saves only defaultVoice, 
   assert.doesNotMatch(as, /escapeHtml\(v\.label \|\| v\.id\)\}\$\{v\.accent/);
 });
 
-test('Voices settings: both checkboxes sit in the value column on one line, ids kept', () => {
+test('Voices settings: both checkboxes sit in the value column (text may wrap there, inside the dialog), ids kept', () => {
   const h = makeEnv().api.voiceSettingsHtml({});
   for (const id of ['st-voice-readaloud', 'st-voice-fallback']) {
-    assert.match(h, new RegExp(`<div class="st-row"><label style="flex-basis:150px">[A-Za-z ]{0,12}</label><label style="[^"]*flex:1;[^"]*white-space:nowrap[^"]*"><input type="checkbox" id="${id}"`), id);
+    assert.match(h, new RegExp(`<div class="st-row"><label style="flex-basis:150px">[A-Za-z ]{0,12}</label><label style="[^"]*flex:1;min-width:0;[^"]*"><input type="checkbox" id="${id}"`), id);
+    assert.doesNotMatch(h, new RegExp(`white-space:nowrap[^"]*"><input type="checkbox" id="${id}"`), id);
   }
   assert.match(h, /<label style="flex:0 0 auto;[^"]*white-space:nowrap"><input type="checkbox" id="st-voice-enabled"/);
   assert.match(h, /Use this device's own offline voice when the hub voice is unavailable/);

@@ -2236,8 +2236,13 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
           if (patch && patch.workersAtOnce !== undefined) patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce);
-          // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings).
-          if (patch && patch.voice !== undefined) patch.voice = require('./lib/voice/manifest').cleanVoiceSettings(patch.voice, hubSettings.getSetting('voice'));
+          // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings). "enabled" changes
+          // only through /api/voice/enable and /disable, which also install the engines and stop or resume the worker.
+          if (patch && patch.voice !== undefined) {
+            const storedVoice = hubSettings.getSetting('voice');
+            patch.voice = require('./lib/voice/manifest').cleanVoiceSettings(patch.voice, storedVoice);
+            patch.voice.enabled = !!(storedVoice && storedVoice.enabled === true);
+          }
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
           if (patch && patch.workersAtOnce !== undefined) getPacing().setCaps(hubSettings.getSetting('workersAtOnce'));
