@@ -6237,8 +6237,10 @@
       if (!chat || !model) return false;
       if (model === AUTO_PICK) {
         if (chat.autoModel) return false;
+        if (sel) sel.disabled = true;
         try { await setChatAuto(chat, true); paintAutoPick(chatId); refreshEffortPick(chat); return true; }
         catch (e) { back(); alert(`Could not turn on Auto: ${e.message}`); return false; }
+        finally { if (sel) sel.disabled = false; }
       }
       // A real model: Auto goes off (also when it is the model the agent was already set to).
       if (model === chat.model && !chat.autoModel) return false;
