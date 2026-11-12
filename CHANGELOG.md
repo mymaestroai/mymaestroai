@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Context compression accepts a brief the agent just updated.** When an agent asks to compress, your Maestro can use a working brief written within two minutes before that request, provided it belongs to the current session. Compression prompts also require a fresh write, and failures explain why the session was kept and when it can retry.
+
 ## [5.10.0] - 2026-11-11
 
 What's new since 5.9.1: data connectors for your Ring cameras, Oura Ring and Google Drive (a copy of every backup there), Remote computers for a computer you set aside for your agents, the wallet unlocked with Face ID or a fingerprint, Maestro building new agents with you, consultations and scheduled tasks folded into cards in the chat, a Workers list, a memory check for every agent, an updated Claude client that can run Fable 5.2, an easier question card, and fixes for the phone keyboard, agent sandboxes and Claude extra usage.
