@@ -441,6 +441,27 @@ test('safeArea and safeAreaTypical geometry', () => {
   assert.strictEqual(packs.validatePack(fresh(m => { m.safeAreaTypical = { x: 0.1, y: 0.1, w: 0.5, h: 0.5 }; }).src).ok, true, 'typical alone is fine');
 });
 
+test('safeAreaComfort: optional, validated exactly like safeArea, alone or beside the others', () => {
+  const sc = (v) => (m) => { m.safeAreaComfort = v; };
+  for (const ok of [{ x: 0, y: 0, w: 1, h: 1 }, { x: 0.2, y: 0.1, w: 0.6, h: 0.7 }, { x: 0.7, y: 0, w: 0.3, h: 0.4 }]) { const r = packs.validatePack(fresh(sc(ok)).src); assert.strictEqual(r.ok, true, JSON.stringify(ok)); assert.deepStrictEqual(r.manifest.safeAreaComfort, ok); }
+  for (const no of [{ x: -0.1, y: 0, w: 0.5, h: 0.5 }, { x: 0, y: -1, w: 0.5, h: 0.5 }, { x: 0, y: 0, w: 0, h: 0.5 }, { x: 0, y: 0, w: 0.5, h: -0.5 }, { x: 0.6, y: 0, w: 0.5, h: 0.5 }, { x: 0, y: 0.6, w: 0.5, h: 0.5 }, { x: 0, y: 0, w: 1.0001, h: 1 },
+    { x: '0', y: 0, w: 1, h: 1 }, { x: null, y: 0, w: 1, h: 1 }, { x: 0, y: 0, w: 1 }, { x: 0, y: 0, w: 1, h: 1, extra: 1 }, [0, 0, 1, 1], 'full', 5, null]) rejects(sc(no), /safeAreaComfort/);
+  const huge = fresh(); const mf = path.join(huge.src, 'manifest.json'); fs.writeFileSync(mf, fs.readFileSync(mf, 'utf8').replace('"background"', '"safeAreaComfort":{"x":0,"y":0,"w":1e999,"h":1},"background"'));
+  assert.match(packs.validatePack(huge.src).error, /safeAreaComfort/);
+  const all = packs.validatePack(fresh(m => { m.safeArea = { x: 0.1, y: 0, w: 0.8, h: 1 }; m.safeAreaTypical = { x: 0.2, y: 0.1, w: 0.6, h: 0.8 }; m.safeAreaComfort = { x: 0.25, y: 0.1, w: 0.5, h: 0.6 }; }).src);
+  assert.strictEqual(all.ok, true, all.error);
+  rejects(m => { m.safeArea = { x: 0.1, y: 0, w: 0.8, h: 1 }; m.safeAreaComfort = { x: 0.9, y: 0, w: 0.5, h: 0.5 }; }, /safeAreaComfort/);   // a bad comfort is not masked by valid siblings
+  assert.strictEqual(packs.validatePack(fresh().src).manifest.safeAreaComfort, undefined, 'back-compat: absent stays absent');
+});
+test('install keeps a valid safeAreaComfort and refuses a bad one', () => {
+  const f = withPosters(m => { m.safeAreaComfort = { x: 0.2, y: 0.1, w: 0.6, h: 0.7 }; });
+  packs.installPack(f.src, { home: f.home, id: 'comfy' }); packs.clearCache();
+  assert.deepStrictEqual(packs.getPack('comfy', { home: f.home }).manifest.safeAreaComfort, { x: 0.2, y: 0.1, w: 0.6, h: 0.7 });
+  const bad = withPosters(m => { m.safeAreaComfort = { x: 0.5, y: 0, w: 0.9, h: 1 }; });
+  assert.throws(() => packs.installPack(bad.src, { home: bad.home, id: 'bad' }), /safeAreaComfort/);
+  assert.ok(!fs.existsSync(path.join(bad.home, 'faces', 'bad')));
+});
+
 test('backward compatibility: packs without poster, posters or safe areas are unchanged', () => {
   const r = packs.validatePack(fresh().src);
   assert.strictEqual(r.ok, true, r.error);

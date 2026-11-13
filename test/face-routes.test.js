@@ -20,7 +20,7 @@ function png(w, h) {
 function mp4() { const b = Buffer.alloc(24 + 976); for (let i = 24; i < b.length; i++) b[i] = i % 251; b.writeUInt32BE(24, 0); b.write('ftypisom', 4, 'latin1'); b.write('isom', 16, 'latin1'); return b; }   // 1000 bytes
 const VIDEO = mp4();
 
-function makeHome() {
+function makeHome(mutate) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'face-rt-'));
   const src = path.join(root, 'src'); const home = path.join(root, 'home');
   for (const d of ['web', 'tracks', 'beak']) fs.mkdirSync(path.join(src, d), { recursive: true });
@@ -29,6 +29,7 @@ function makeHome() {
     { name: 'speaking-one', state: 'speaking', weight: 1, dur: 1, track: true, rare: false },
     { name: 'reaction-proud', state: 'reaction', weight: 1, dur: 2, track: false, rare: false, mood: 'proud' }],
   beak: { roi: [1, 2, 8, 6], centre: [5, 5], shapes: ['closed', 'slight', 'half', 'wide', 'oo'] } };
+  if (mutate) mutate(src, m);
   fs.writeFileSync(path.join(src, 'manifest.json'), JSON.stringify(m));
   for (const c of m.clips) { fs.writeFileSync(path.join(src, 'web', `${c.name}.mp4`), VIDEO); }
   fs.writeFileSync(path.join(src, 'tracks', 'speaking-one.json'), JSON.stringify({ fps: 24, w: 10, h: 10, frames: [[1, 1, 1, 0]] }));
@@ -81,7 +82,29 @@ test('the access table lets members reach the list and a pack\'s files, and noth
   assert.strictEqual(kind('/api/faces/bird/web/idle-one.mp4'), 'session');
   assert.strictEqual(kind('/api/faces/bird/tracks/x.json'), 'session');
   assert.strictEqual(kind('/api/faces/bird/beak/closed.png'), 'session');
-  for (const p of ['/api/faces/bird', '/api/faces/bird/other/x', '/api/faces/Bird/manifest.json', '/api/faces/bird/web/a/b', '/api/faces/bird/install']) assert.strictEqual(kind(p), 'admin', p);
+  assert.strictEqual(kind('/api/faces/bird/poster.jpg'), 'session');
+  assert.strictEqual(kind('/api/faces/bird/posters/a.png'), 'session');
+  for (const p of ['/api/faces/bird', '/api/faces/Bird/manifest.json', '/api/faces/bird/../x', '/api/faces/bird/web/../manifest.json', '/api/faces/bird/.hidden', '/api/faces/bird/web/.x', '/api/faces/bird/a%2fb', '/api/faces/bird/a\\b', '/api/faces/bird/a/b/c/d/e', '/api/faces//poster.jpg', '/api/faces/bird/web/']) {
+    // a trailing slash is stripped by classifyRoute, so only the others must be admin
+    if (p.endsWith('/') && p !== '/api/faces//poster.jpg') continue;
+    assert.strictEqual(kind(p), 'admin', p);
+  }
+});
+
+test('a signed-in member may request a manifest-listed root poster; an unlisted one is denied by path/auth and by the route', async () => {
+  const jpg = png(4, 4);   // a poster is validated by content and extension at install; use a PNG at the pack root
+  const { home } = makeHome((src, m) => { m.poster = 'poster.png'; m.posters = { A: 'poster.png' }; fs.writeFileSync(path.join(src, 'poster.png'), jpg); });
+  fs.writeFileSync(path.join(home, 'faces', 'bird', 'unlisted.png'), jpg);
+  packs.clearCache();
+  // access table: both root paths are session routes (any signed-in user), the allowlist is the handler's
+  assert.strictEqual(access.classifyRoute('/api/faces/bird/poster.png', 'GET').kind, 'session');
+  assert.strictEqual(access.classifyRoute('/api/faces/bird/unlisted.png', 'GET').kind, 'session');
+  // signed-in member: the listed poster is served, the unlisted file never
+  const ok = await call(home, '/api/faces/bird/poster.png', { user: member });
+  assert.strictEqual(ok.statusCode, 200); assert.ok(ok.body().equals(jpg)); assert.strictEqual(ok.headers['content-type'], 'image/png');
+  assert.strictEqual((await call(home, '/api/faces/bird/unlisted.png', { user: member })).statusCode, 404);
+  // no user: refused
+  assert.strictEqual((await call(home, '/api/faces/bird/poster.png', { user: null })).statusCode, 401);
 });
 
 test('the list: id, name, background, hasReactions; invalid packs are left out', async () => {

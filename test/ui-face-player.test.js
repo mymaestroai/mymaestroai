@@ -506,13 +506,41 @@ for (const how of ['idle', 'listening', 'thinking', 'poseB-settling', 'poseB-res
     if (how === 'poseB-rest') { assert.strictEqual(before.clip, 'idle-rest'); assert.strictEqual(before.pose, 'B', 'set-up: pose B'); }
     if (how === 'reaction') assert.strictEqual(before.clip, 'reaction-proud-2', 'set-up: a (non-hello) reaction is playing');
     assert.match(info.clip, /^speaking-/, 'now ' + info.clip + ' (was ' + before.clip + ')');
-    const last = info.log[info.log.length - 1]; assert.strictEqual(info.log.length, before.n + 1, 'one switch'); assert.strictEqual(last.state, 'speaking'); assert.strictEqual(last.fade, true);
+    const last = info.log[info.log.length - 1]; assert.strictEqual(info.log.length, before.n + 1, 'one switch'); assert.strictEqual(last.state, 'speaking');
+    const cold = info.coldHolds > 0;   // the clip was still loading: the poster shielded the switch, so it is a hard cut; a warm switch keeps the 120 ms cross-fade
+    assert.strictEqual(last.fade, !cold);
     assert.ok(last.latency <= 150 && info.speakLatency <= 150, 'latency ' + last.latency); assert.ok(last.ms <= 120, 'the cross-fade fits the budget: ' + last.ms);
-    const v = w.front(p); assert.strictEqual(v.clipName, info.clip); assert.strictEqual(v.paused, false); assert.match(v.style.transition, /120ms/); assert.strictEqual(v.style.opacity, '1');
+    const v = w.front(p); assert.strictEqual(v.clipName, info.clip); assert.strictEqual(v.paused, false); if (cold) assert.ok(!/\d+ms/.test(v.style.transition || '')); else assert.match(v.style.transition, /120ms/); assert.strictEqual(v.style.opacity, '1');
     assert.strictEqual(info.pose, 'A', 'a speaking clip ends on the master pose'); assert.ok(!info.bad.length);
     p.destroy();
   });
 }
+test('reaction and goodbye transitions cross-fade in 120 ms (not 250); a plain state change keeps 250 ms', async () => {
+  const w = makeWorld({ manifest: packManifest(speakPack()) }); const p = w.make(); await p.ready; await w.settle(100);
+  p.setState('listening'); await w.settle(400);
+  assert.strictEqual(p.getInfo().log.pop().ms, 250, 'same-pose state change: normal fade');
+  for (const [mood, name] of [['proud', 'reaction-proud-2'], ['goodbye', 'reaction-goodbye-1']]) {
+    p.setState('idle'); await w.settle(400);
+    const before = p.getInfo().log.length; assert.strictEqual(p.react(mood), true); await w.settle(100);
+    const i = p.getInfo(), last = i.log[i.log.length - 1];
+    assert.strictEqual(i.clip, name); assert.strictEqual(i.log.length, before + 1);
+    assert.strictEqual(last.state, 'reaction'); assert.strictEqual(last.fade, true); assert.strictEqual(last.ms, 120, mood + ' fade ms');
+    assert.match(w.front(p).style.transition, /120ms/); assert.ok(!/250ms/.test(w.front(p).style.transition));
+    await w.settle(5000);
+  }
+  p.destroy();
+});
+test('fast speaking: a warm switch (tracked clip already loaded, no cold hold) cross-fades explicitly in 120 ms', async () => {
+  const { w, p } = await started({}, {});
+  p.setState('speaking'); await w.settle(150); const first = p.getInfo().clip; assert.match(first, /^speaking-/);
+  p.setState('listening'); await w.settle(36); assert.match(p.getInfo().clip, /^listening-/, 'set-up: listening is in front');
+  const holds = p.getInfo().coldHolds, hidden = w.videos[1 - p.getInfo().front]; assert.strictEqual(hidden.clipName, first, 'set-up: the speaking video is still loaded'); assert.strictEqual(hidden.readyState, 4);
+  const n = p.getInfo().log.length; p.setState('speaking'); await w.settle(150);
+  const i = p.getInfo(), last = i.log[i.log.length - 1];
+  assert.strictEqual(i.coldHolds, holds, 'warm: no cold hold'); assert.strictEqual(i.log.length, n + 1); assert.strictEqual(last.state, 'speaking');
+  assert.strictEqual(last.fade, true); assert.strictEqual(last.ms, 120); assert.match(w.front(p).style.transition, /120ms/); assert.ok(last.latency <= 150);
+  p.destroy();
+});
 test('fast speaking: from pose B a speaking clip that starts on B is preferred; else one that ends on A; the beak track is the clip\'s own', async () => {
   const mkB = () => speakPack().filter(c => c.name !== 'idle-a1').concat([clip('speaking-b', 'speaking', { track: true, beakEnds: 'closed', startsFrom: 'B', endsOn: 'A', dur: 5, family: 'spb' })]);
   const w = makeWorld({ manifest: packManifest(mkB()) }); const p = w.make(); await p.ready; await w.settle(100);
@@ -873,14 +901,13 @@ test('fallback: no usable still (it fails to load) still starts normally; a fail
   const w2 = makeWorld(packManifest(packClips().filter(c => c.state !== 'idle'))); w2.manifest.clips = w2.manifest.clips.filter(c => c.state !== 'idle');
   const q = w2.make(); await q.ready; await w2.settle(400); assert.strictEqual(q.getInfo().still, true, 'a pose-A non-track clip of another state is the still'); q.destroy();
 });
-test('edges: the video stage is masked 9 percent left/right and 16 percent top/bottom into the background (both directions, intersected), in portrait and landscape alike', async () => {
+test('edges: landscape keeps 9 percent feather; portrait uses 16 percent vertically and 9 percent horizontally', async () => {
   const { w, p } = await started(); const stage = w.container.children[0].children[0];
   const m = stage.style.maskImage;
-  assert.match(m, /to right, transparent 0%, #000 9%, #000 91%, transparent 100%/); assert.match(m, /to bottom, transparent 0%, #000 16%, #000 84%, transparent 100%/);
-  assert.ok(!/to bottom, transparent 0%, #000 9%/.test(m) && !/to right, transparent 0%, #000 16%/.test(m), 'each direction has its own share');
-  assert.strictEqual(p.getInfo().stage.featherY, 0.16);
+  assert.match(m, /to right, transparent 0%, #000 9%, #000 91%, transparent 100%/); assert.match(m, /to bottom, transparent 0%, #000 9%, #000 91%, transparent 100%/);
+  assert.strictEqual(p.getInfo().stage.featherY, 0.09);
   const pr = await started({}, { w: 390, h: 800 }), sp = pr.w.container.children[0].children[0];   // portrait: the same mask, the stage there is the short band of the picture
-  assert.strictEqual(sp.style.maskImage, m); assert.strictEqual(pr.p.getInfo().stage.portrait, true); assert.strictEqual(pr.p.getInfo().stage.featherY, 0.16); pr.p.destroy();
+  assert.match(sp.style.maskImage, /to bottom, transparent 0%, #000 16%, #000 84%, transparent 100%/); assert.match(sp.style.maskImage, /to right, transparent 0%, #000 9%, #000 91%, transparent 100%/); assert.strictEqual(pr.p.getInfo().stage.portrait, true); assert.strictEqual(pr.p.getInfo().stage.featherY, 0.16); pr.p.destroy();
   assert.strictEqual(stage.style.maskComposite, 'intersect'); assert.strictEqual(stage.style.webkitMaskImage, m); assert.strictEqual(stage.style.webkitMaskComposite, 'source-in');
   assert.strictEqual(stage.children.length, 3, 'both videos and the poster canvas are in the masked stage'); assert.deepStrictEqual(stage.children.map(c => c.tag), ['video', 'video', 'canvas']);
   assert.ok(!w.container.children[0].children.slice(1).some(c => c.style.maskImage), 'the beak canvas is not masked');
@@ -916,7 +943,8 @@ test('portrait: a resize between portrait and landscape re-lays the stage once, 
   p.destroy();
   const r = await started({ portraitSafe: 0.5 }, { w: 390, h: 800 }); near(r.p.getInfo().stage.picture.scale, 390 / (1280 * 0.5)); r.p.destroy();
   const g = await started({ portraitSafe: 5 }, { w: 390, h: 800 }); near(g.p.getInfo().stage.picture.scale, 390 / 896, 'out of range falls back to the 0.7 default'); g.p.destroy();
-  const sq = await started({}, { w: 600, h: 600 }); assert.strictEqual(sq.p.getInfo().stage.portrait, false, 'a square view is not portrait'); near(sq.p.getInfo().stage.picture.scale, 600 / 1280); sq.p.destroy();
+  const sq = await started({}, { w: 600, h: 600 }); assert.strictEqual(sq.p.getInfo().stage.portrait, false, 'a square view is not portrait'); assert.strictEqual(sq.p.getInfo().stage.narrow, true, 'but it is narrower than 16:9');
+  near(sq.p.getInfo().stage.picture.scale, 600 / 896, 'the 70 percent box width fits the square view'); sq.p.destroy();
 });
 
 test('cancelReaction: a mood clip that has not started (waiting for the playing clip, or for the pack) is dropped; one playing finishes; hello and goodbye are kept', async () => {
@@ -1029,11 +1057,11 @@ test('safeArea: portrait fits the measured box and centres it in the view, x and
   const t = await started({}, { w: 300, h: 400, manifest: packManifest(null, { safeArea: { x: 0.4, y: 0, w: 0.2, h: 1 } }) }), ts = t.p.getInfo().stage;   // height-limited
   near(ts.picture.scale, 400 / 720); near(ts.picture.x, 150 - 640 * 400 / 720); near(ts.picture.y, 0); t.p.destroy();
 });
-test('safeArea: landscape and square are unchanged by it; a malformed or missing one (and safeAreaTypical alone) keeps the 70 percent portrait default', async () => {
+test('safeArea: a 16:9 or wider view is unchanged by it (the whole picture); a malformed or missing one keeps the 70 percent default', async () => {
   const l = await started({}, { w: 800, h: 450, manifest: packManifest(null, { safeArea: SAFE }) }); let s = l.p.getInfo().stage;
-  near(s.picture.scale, 0.625); near(s.x, 0); near(s.w, 800); near(s.picture.x, 0); near(s.picture.y, 0); l.p.destroy();
-  const q = await started({}, { w: 600, h: 600, manifest: packManifest(null, { safeArea: SAFE }) }); near(q.p.getInfo().stage.picture.scale, 600 / 1280); q.p.destroy();
-  for (const extra of [{}, { safeArea: { x: 0.8, y: 0, w: 0.5, h: 1 } }, { safeArea: 'wide' }, { safeAreaTypical: SAFE }, { safeArea: { x: 0, y: 0, w: 0, h: 0 }, safeAreaTypical: SAFE }]) {
+  near(s.picture.scale, 0.625); near(s.x, 0); near(s.w, 800); near(s.picture.x, 0); near(s.picture.y, 0); assert.strictEqual(s.narrow, false); l.p.destroy();
+  const q = await started({}, { w: 600, h: 600, manifest: packManifest(null, { safeArea: SAFE }) }); near(q.p.getInfo().stage.picture.scale, 600 / 720, 'square: the box width would need 600/640, the full height caps it at 600/720'); q.p.destroy();
+  for (const extra of [{}, { safeArea: { x: 0.8, y: 0, w: 0.5, h: 1 } }, { safeArea: 'wide' }, { safeAreaTypical: { x: 0.8, y: 0, w: 0.5, h: 1 }, safeAreaComfort: 'x' }, { safeArea: { x: 0, y: 0, w: 0, h: 0 }, safeAreaTypical: { x: 0, y: 0, w: 0, h: 1 } }]) {
     const r = await started({}, { w: 390, h: 800, manifest: packManifest(null, extra) }); s = r.p.getInfo().stage;
     near(s.picture.scale, 390 / 896, JSON.stringify(extra)); near(s.picture.x, -(1280 * 390 / 896 - 390) / 2); near(s.y, (800 - 720 * 390 / 896) / 2); near(s.safeArea.x, 0.15); near(s.safeArea.w, 0.7); r.p.destroy();
   }
@@ -1085,4 +1113,138 @@ test('poster: a browser that cannot copy the frame (no decoded size) never claim
   const w = makeWorld({ videoSize: false }); const p = w.make(); await p.ready;
   assert.strictEqual(w.ctxCalls.filter(isFrameCopy).length, 0, 'nothing copied'); assert.strictEqual(p.getInfo().poster, false); assert.strictEqual(p.getInfo().drawable, false, 'no decoded frame: no false claim');
   await w.settle(300); assert.strictEqual(p.getInfo().drawable, true, 'a clip really playing in front is a picture'); p.destroy();
+});
+
+// ── safeAreaComfort: precedence, invalid values, back-compat, and the aspect rule (narrower than 16:9 fits the box width; 16:9 and wider the whole frame) ──
+const COMFORT = { x: 0.2, y: 0.1, w: 0.6, h: 0.7 }, WIDEBOX = { x: 0.1, y: 0, w: 0.8, h: 1 }, BADBOX = { x: 0.8, y: 0, w: 0.5, h: 1 };
+async function stageOf(extra, dims) { const r = await started({}, Object.assign({ manifest: packManifest(null, extra) }, dims)); const s = r.p.getInfo().stage; r.p.destroy(); return s; }
+// the rule: scale = min(view width / box width, view height / full picture height); the box centre lands on the view centre (x and y)
+function expectBox(s, b, W, H, m) {
+  const k = Math.min(W / (b.w * 1280), H / 720);
+  near(s.picture.scale, k, (m || '') + ' scale'); near(s.picture.x + (b.x + b.w / 2) * 1280 * k, W / 2, (m || '') + ' box centre x'); near(s.picture.y + (b.y + b.h / 2) * 720 * k, H / 2, (m || '') + ' box centre y');
+}
+test('safeAreaComfort: it is normalised like the other boxes (bad values give null)', () => {
+  const n = (extra) => faceNormalizeManifest(Object.assign({ clips: packClips() }, extra));
+  assert.strictEqual(n().safeAreaComfort, null, 'an old manifest has none'); assert.deepStrictEqual(n({ safeAreaComfort: COMFORT }).safeAreaComfort, COMFORT);
+  for (const b of [{ x: 0, y: 0, w: 1, h: 1, extra: 1 }, { x: -0.1, y: 0, w: 0.5, h: 0.5 }, BADBOX, { x: 0, y: 0.6, w: 0.5, h: 0.5 }, { x: 0, y: 0, w: 0, h: 1 }, { x: '0', y: 0, w: 1, h: 1 }, { x: NaN, y: 0, w: 1, h: 1 },
+    { x: 0, y: 0, w: Infinity, h: 1 }, { x: 0, y: 0, w: 0.5 }, [0, 0, 1, 1], null, 5, 'x']) assert.strictEqual(n({ safeAreaComfort: b }).safeAreaComfort, null, JSON.stringify(b));
+});
+test('safeAreaComfort: the player uses Comfort, then Typical, then safeArea, then the 70 percent fallback; an invalid one is skipped', async () => {
+  const D = { w: 390, h: 800 };
+  let s = await stageOf({ safeAreaComfort: COMFORT, safeAreaTypical: SAFE, safeArea: WIDEBOX }, D); assert.strictEqual(s.safeSource, 'comfort'); assert.deepStrictEqual(s.safeArea, COMFORT); expectBox(s, COMFORT, 390, 800, 'comfort');
+  s = await stageOf({ safeAreaComfort: COMFORT }, D); assert.strictEqual(s.safeSource, 'comfort', 'comfort alone is enough'); expectBox(s, COMFORT, 390, 800);
+  s = await stageOf({ safeAreaComfort: BADBOX, safeAreaTypical: SAFE, safeArea: WIDEBOX }, D); assert.strictEqual(s.safeSource, 'typical'); expectBox(s, SAFE, 390, 800, 'typical');
+  s = await stageOf({ safeAreaTypical: SAFE, safeArea: WIDEBOX }, D); assert.strictEqual(s.safeSource, 'typical', 'typical now counts (it is no longer informational)');
+  s = await stageOf({ safeAreaComfort: 'x', safeAreaTypical: { x: 0, y: 0, w: 0, h: 1 }, safeArea: WIDEBOX }, D); assert.strictEqual(s.safeSource, 'safeArea'); expectBox(s, WIDEBOX, 390, 800, 'safeArea');
+  s = await stageOf({ safeArea: WIDEBOX }, D); assert.strictEqual(s.safeSource, 'safeArea', 'an old pack with only safeArea keeps working'); expectBox(s, WIDEBOX, 390, 800);
+  s = await stageOf({ safeAreaComfort: BADBOX, safeAreaTypical: BADBOX, safeArea: BADBOX }, D); assert.strictEqual(s.safeSource, 'fallback'); expectBox(s, { x: 0.15, y: 0, w: 0.7, h: 1 }, 390, 800, 'fallback');
+  s = await stageOf({}, D); assert.strictEqual(s.safeSource, 'fallback'); near(s.safeArea.w, 0.7);
+});
+test('aspect rule: narrower than 16:9 (portrait, square, 4:3) fits the box width, capped by the full picture height, centred on the box; 16:9 and wider show the whole frame', async () => {
+  // 4:3 landscape: the box width would need more than the height allows, so the full height caps it
+  let s = await stageOf({ safeAreaComfort: COMFORT }, { w: 800, h: 600 }); assert.strictEqual(s.narrow, true); assert.strictEqual(s.portrait, false); near(s.picture.scale, 600 / 720, 'height cap'); expectBox(s, COMFORT, 800, 600, '4:3 capped');
+  // a wide box: the width limits (the box edges are the view edges)
+  s = await stageOf({ safeAreaComfort: WIDEBOX }, { w: 800, h: 600 }); near(s.picture.scale, 800 / 1024); near(s.picture.x + 0.1 * 1280 * s.picture.scale, 0); near(s.picture.x + 0.9 * 1280 * s.picture.scale, 800); expectBox(s, WIDEBOX, 800, 600, '4:3 wide box');
+  s = await stageOf({ safeAreaComfort: COMFORT }, { w: 600, h: 600 }); assert.strictEqual(s.narrow, true); expectBox(s, COMFORT, 600, 600, 'square');
+  s = await stageOf({ safeAreaComfort: COMFORT }, { w: 1500, h: 900 }); assert.strictEqual(s.narrow, true, '5:3 is below 16:9'); expectBox(s, COMFORT, 1500, 900, '5:3');
+  // 16:9 and wider: the whole frame, centred, the box ignored
+  s = await stageOf({ safeAreaComfort: COMFORT }, { w: 1600, h: 900 }); assert.strictEqual(s.narrow, false); near(s.picture.scale, 1.25); near(s.picture.x, 0); near(s.picture.y, 0); near(s.w, 1600); near(s.h, 900);
+  s = await stageOf({ safeAreaComfort: COMFORT }, { w: 2000, h: 900 }); assert.strictEqual(s.narrow, false); near(s.picture.scale, 1.25); near(s.picture.x, 200); near(s.x, 200); near(s.w, 1600);
+  s = await stageOf({ safeAreaComfort: COMFORT }, { w: 1280, h: 720 }); assert.strictEqual(s.narrow, false, 'exactly 16:9 is the whole frame'); near(s.picture.scale, 1);
+  s = await stageOf({ safeAreaComfort: COMFORT }, { w: 1279, h: 720 }); assert.strictEqual(s.narrow, true, 'just under 16:9');
+});
+test('aspect rule: the poster canvas and the videos share the one transform (comfort box, 4:3 and portrait)', async () => {
+  for (const d of [{ w: 800, h: 600 }, { w: 390, h: 800 }]) {
+    const w = makeWorld(Object.assign({ manifest: posterManifest({ safeAreaComfort: COMFORT }) }, d)); const p = w.make(); await p.ready;
+    const pc = w.container.children[0].children[0].children[2], v = w.videos[0].style;
+    for (const k of ['left', 'top', 'width', 'height']) assert.strictEqual(pc.style[k], v[k], k + ' at ' + d.w + 'x' + d.h);
+    const s = p.getInfo().stage; expectBox(s, COMFORT, d.w, d.h); assert.strictEqual(parseFloat(pc.style.width), Math.round(s.picture.w * 100) / 100); p.destroy();
+  }
+});
+
+// ── cold speech: never audible speech over an untracked clip; until a tracked speaking video is loaded the poster is held with the beak animated on the MASTER transform ──
+const SPEAKERS = ['speaking-1', 'speaking-2', 'speaking-3', 'speaking-4'];
+const beakDraws = (w) => w.ctxCalls.filter(c => c[0] === 'drawImage' && c[1] && c[1].tag === 'img' && /\/beak\//.test(c[1]._s || ''));
+async function coldWorld(o, wo) {
+  const r = await started(o, Object.assign({ w: 390, h: 800, manifest: packManifest(null, { safeAreaComfort: COMFORT }) }, wo || {}));
+  SPEAKERS.forEach(n => r.w.hold.add(n)); r.p.setState('thinking'); await r.w.settle(400); assert.match(r.p.getInfo().clip, /^thinking-/, 'set-up: an untracked clip is playing');
+  r.an = analyserOf({ amp: 0.2, hz: 1500 }); r.p.setAnalyser(r.an); return r;
+}
+test('cold speech: speaking asked while no tracked video is loaded holds the poster at once with the beak drawn on the MASTER transform, no untracked clip starts', async () => {
+  const { w, p } = await coldWorld(); const n0 = p.getInfo().log.length;
+  p.setState('speaking');   // synchronous: nothing is awaited between the request and the hold
+  let i = p.getInfo(); assert.strictEqual(i.coldHold, true); assert.strictEqual(i.poster, true); assert.strictEqual(i.coldHolds, 1);
+  const pc = w.container.children[0].children[0].children[2]; assert.strictEqual(pc.style.display, 'block', 'the poster canvas is up');
+  w.ctxCalls.length = 0; for (let k = 0; k < 20; k++) w.tickRaf(16);
+  const draws = beakDraws(w); assert.ok(draws.length >= 10, 'the beak is drawn every frame while held: ' + draws.length);
+  assert.ok(draws.some(c => !/closed\.png$/.test(c[1]._s)), 'the beak follows the voice (not a frozen closed mouth): ' + [...new Set(draws.map(c => c[1]._s.split('/').pop()))].join(','));
+  const s = i.stage, tfs = w.ctxCalls.filter(c => c[0] === 'setTransform' && c[1] !== 1);
+  assert.ok(tfs.length >= 10); for (const tf of tfs) { near(tf[1], s.picture.scale); near(tf[4], s.picture.scale); near(tf[5], s.picture.x); near(tf[6], s.picture.y); }
+  for (const tr of w.ctxCalls.filter(c => c[0] === 'translate')) { assert.strictEqual(tr[1], 646); assert.strictEqual(tr[2], 350); }   // MASTER beak position, never a track frame (those start at 600)
+  // the playing clip ends and the retry timer runs: still nothing untracked is started under the voice
+  w.front(p).end(); await w.settle(3200);
+  i = p.getInfo(); assert.strictEqual(i.coldHold, true, 'still held'); assert.ok(i.log.slice(n0).every(e => e.state === 'speaking'), 'no untracked clip was started: ' + JSON.stringify(i.log.slice(n0).map(e => e.name))); assert.ok(!i.bad.length);
+  p.destroy();
+});
+test('cold speech: the delayed tracked video takes over (poster released after its first frame), the hold loop stops, nothing is left behind', async () => {
+  const { w, p } = await coldWorld(); p.setState('speaking'); await w.settle(300);
+  assert.strictEqual(p.getInfo().coldHold, true, 'the video is still loading');
+  const ld = w.videos[1 - p.getInfo().front]; assert.match(ld.clipName, /^speaking-/, 'the speaking clip is the one loading'); const name = ld.clipName;
+  ld.currentSrc = ld.src; ld.readyState = 4; ld.duration = 5; ld.fire('loadeddata'); await w.settle(100);
+  const i = p.getInfo(); assert.strictEqual(i.clip, name); assert.strictEqual(i.coldHold, true, 'MASTER beak stays while the poster is visible'); assert.strictEqual(i.coldHolds, 1); assert.ok(i.speakLatency >= 300, 'honest latency: ' + i.speakLatency);
+  assert.ok(w.raf.length > 0, 'the hold loop continues until the poster goes'); assert.strictEqual(i.poster, true, 'poster stays until the clip has presented a frame');
+  w.ctxCalls.length = 0; w.tickRaf(16);
+  assert.ok(w.ctxCalls.filter(c => c[0] === 'translate').every(c => c[1] === 646 && c[2] === 350), 'visible poster uses MASTER rather than the newly loaded video track');
+  await w.settle(500); assert.strictEqual(p.getInfo().poster, false, 'released after the bounded frame wait'); assert.strictEqual(w.container.children[0].children[0].children[2].style.display, 'none');
+  const last = i.log[i.log.length - 1]; assert.strictEqual(last.state, 'speaking'); assert.strictEqual(last.fade, false, 'the poster shields the cold switch: a hard cut, no fade'); assert.strictEqual(last.ms, 0);
+  w.ctxCalls.length = 0; w.front(p).frame(12 / 24, w.now + 20); w.front(p).frame(12 / 24, w.now + 40);
+  const tr = w.ctxCalls.filter(c => c[0] === 'translate'); assert.ok(tr.length && tr.every(c => c[1] !== 646), 'the beak now follows the clip\'s own track');
+  p.destroy();
+});
+test('cold speech: when the poster goes the speaking video is already fully opaque and the old video cannot bleed through', async () => {
+  const { w, p } = await coldWorld(); p.setState('speaking'); await w.settle(300);
+  const old = w.videos[p.getInfo().front], ld = w.videos[1 - p.getInfo().front]; assert.match(ld.clipName, /^speaking-/);
+  ld.currentSrc = ld.src; ld.readyState = 4; ld.duration = 5; ld.fire('loadeddata'); await w.settle(1);
+  const nv = w.front(p); assert.strictEqual(nv, ld); assert.strictEqual(p.getInfo().poster, true, 'poster still up at the commit');
+  assert.strictEqual(nv.style.opacity, '1'); assert.ok(!/\d+ms/.test(nv.style.transition || ''), 'no fade on the cold handoff: ' + nv.style.transition); assert.strictEqual(nv.style.zIndex, '2');
+  await w.settle(500); assert.strictEqual(p.getInfo().poster, false, 'poster released after the presented frame');
+  assert.strictEqual(nv.style.opacity, '1'); assert.ok(!/\d+ms/.test(nv.style.transition || '')); assert.strictEqual(nv.style.zIndex, '2');
+  assert.strictEqual(old.style.opacity, '0'); assert.strictEqual(old.paused, true); p.destroy();
+});
+test('cold speech: leaving speaking, hiding and destroy while held stop the loop; the poster goes with the next picture; a return from hidden holds again', async () => {
+  const a = await coldWorld(); a.p.setState('speaking'); assert.strictEqual(a.p.getInfo().coldHold, true); assert.ok(a.w.raf.length >= 1);
+  a.p.setState('listening'); assert.strictEqual(a.p.getInfo().coldHold, false); assert.strictEqual(a.w.raf.length, 0, 'the beak loop is cancelled');
+  await a.w.settle(300); assert.match(a.p.getInfo().clip, /^listening-/); await a.w.settle(500); assert.strictEqual(a.p.getInfo().poster, false, 'the poster is released once the new clip is in front (bounded frame wait)');
+  assert.strictEqual(a.p.getInfo().shape, 'closed', 'the beak is closed outside speaking'); a.p.destroy();
+  const b = await coldWorld(); b.p.setState('speaking'); b.w.hide(true);
+  assert.strictEqual(b.p.getInfo().coldHold, false, 'hidden: nothing moves'); assert.strictEqual(b.w.raf.length, 0);
+  b.w.hide(false); assert.strictEqual(b.p.getInfo().coldHold, true, 'visible again and still no tracked video: held again'); assert.strictEqual(b.p.getInfo().poster, true); assert.ok(b.w.raf.length >= 1);
+  b.p.destroy(); assert.strictEqual(b.w.raf.length, 0, 'destroy cancels the loop'); assert.strictEqual(b.w.timers.filter(x => !x.tag).length, 0); assert.strictEqual(b.p.getInfo().coldHold, false);
+  const c = await coldWorld(); c.p.setState('speaking'); c.p.setReducedMotion(true); assert.strictEqual(c.p.getInfo().coldHold, false, 'reduced motion takes over'); assert.strictEqual(c.w.raf.length <= 1, true); c.p.destroy();
+});
+test('cold speech: an already loaded tracked speaking clip is used at once even when it is the one that just played (no hold, no new load)', async () => {
+  const { w, p } = await started({}, {});
+  p.setState('speaking'); await w.settle(150); const first = p.getInfo().clip; assert.match(first, /^speaking-/);
+  p.setState('listening'); await w.settle(36); assert.match(p.getInfo().clip, /^listening-/, 'set-up: listening is in front');
+  const holds = p.getInfo().coldHolds, hidden = w.videos[1 - p.getInfo().front]; assert.strictEqual(hidden.clipName, first, 'set-up: that speaking video is still loaded in the hidden slot'); assert.strictEqual(hidden.readyState, 4);
+  const loads = hidden.loads; p.setState('speaking');
+  const i = p.getInfo(); assert.strictEqual(i.clip, first, 'the loaded clip, a repeat, beats a cold one'); assert.strictEqual(i.coldHold, false); assert.strictEqual(i.coldHolds, holds); assert.strictEqual(hidden.loads, loads, 'no reload');
+  assert.strictEqual(w.front(p), hidden); assert.strictEqual(i.log[i.log.length - 1].latency, 0); p.destroy();
+});
+test('cold speech: the selector prefers a speaking clip that is already loaded (a repeat included) and falls back to the rest', () => {
+  const cl = ['sA', 'sB', 'sC'].map(nm => clip(nm, 'speaking', { track: true, family: nm }));
+  const s = faceCreateSelector(cl, { random: faceRng(3) }); const a = s.pickSpeakNow(); s.commit(a);
+  assert.strictEqual(s.pickSpeakNow(c => c.name === a.clip.name).clip.name, a.clip.name, 'the loaded one, though it just played');
+  assert.notStrictEqual(s.pickSpeakNow().clip.name, a.clip.name, 'without a preference the variety rules still apply');
+  assert.ok(s.pickSpeakNow(() => false), 'nothing loaded: any tracked clip'); assert.ok(s.pickSpeakNow(c => c.name === 'nope'));
+  assert.strictEqual(faceCreateSelector([clip('i', 'idle')], {}).pickSpeakNow(() => true), null, 'no tracked speaking clip: null');
+});
+test('cold speech: without a real poster picture nothing is held (no false claim) and the old rules still run', async () => {
+  const { w, p } = await started({}, { videoSize: false }); p.setState('thinking'); await w.settle(400);
+  p.setState('speaking'); await w.settle(300); assert.strictEqual(p.getInfo().coldHold, false); assert.strictEqual(p.getInfo().coldHolds, 0); assert.strictEqual(w.container.children[0].children[0].children[2].style.display, 'none'); p.destroy();
+});
+test('warm: three tracked speaking clips are the first to be fetched, before idle, listening, thinking or reactions', async () => {
+  const w = makeWorld(); const p = w.make(); await p.ready; await w.settle(50);
+  const web = w.fetched.filter(u => /\/web\//.test(u)); assert.ok(web.length >= 3);
+  assert.ok(web.slice(0, 3).every(u => /\/web\/speaking-\d\.mp4$/.test(u)), 'first three: ' + web.slice(0, 3).join(' ')); p.destroy();
 });

@@ -394,6 +394,42 @@ test('moods: once per turn however they arrive, unknown words ignored, nothing a
   await w.clk.advance(CD.GOODBYE_MS + 5); await done;
 });
 
+test('real ordering: reply(end) comes before setState(listening); the mood is not consumed or played while the display still speaks, then plays exactly once', async () => {
+  const w = world({ prefs: { choice: 'pack:owl' } }); w.display.start(); await flushP();
+  const p = w.players[0];
+  w.display.setState('listening');
+  const hello = p.count('react');
+  w.display.reply('turn', 'seq:1'); w.display.setState('thinking');
+  assert.strictEqual(w.display.mood('seq:1', 'proud'), true);
+  w.display.setState('speaking'); w.display.audioStart();
+  assert.strictEqual(p.last('setState'), 'speaking');
+  w.display.audioEnd();   // the last sentence ended; the controller has not settled yet
+  assert.strictEqual(p.count('react'), hello, 'no reaction while the audio is heard / the display speaks');
+  w.display.reply('end', 'seq:1');   // the controller ends the reply BEFORE settling
+  assert.strictEqual(p.count('react'), hello, 'still speaking: the mood is retained, not consumed and not sent');
+  w.display.setState('listening');
+  assert.strictEqual(p.count('react'), hello + 1);
+  assert.strictEqual(p.last('react'), 'proud');
+  w.display.setState('hearing'); w.display.setState('listening'); w.display.audioEnd();
+  assert.strictEqual(p.count('react'), hello + 1, 'exactly once');
+  // no reaction while reply audio is heard, even after the state left speaking
+  w.display.reply('turn', 'seq:2'); assert.strictEqual(w.display.mood('seq:2', 'curious'), true);
+  w.display.setState('speaking'); w.display.audioStart(); w.display.reply('end', 'seq:2'); w.display.setState('listening');
+  assert.strictEqual(p.count('react'), hello + 1, 'audio still heard');
+  w.display.audioEnd();
+  assert.strictEqual(p.last('react'), 'curious'); assert.strictEqual(p.count('react'), hello + 2);
+});
+
+test('hang-up before the first picture: a pack that reports ready but not drawable closes at once; an older player without getInfo still says goodbye', async () => {
+  const a = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: false, drawable: false } } }); a.display.start(); await flushP();
+  await a.display.hangUp();
+  assert.strictEqual(a.players[0].count('react'), 0, 'no goodbye over a blank view'); assert.strictEqual(a.dom.overlay(), null); assert.strictEqual(a.clk.timers.length, 0);
+  const b = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: false, drawable: true } } }); b.display.start(); await flushP();
+  const pb = b.display.hangUp(); assert.strictEqual(b.players[0].last('react'), 'goodbye'); await b.clk.advance(CD.GOODBYE_MS + 5); await pb;
+  const c = world({ prefs: { choice: 'pack:owl' } }); c.display.start(); await flushP();
+  const pc = c.display.hangUp(); assert.strictEqual(c.players[0].last('react'), 'goodbye', 'no getInfo: unchanged'); await c.clk.advance(CD.GOODBYE_MS + 5); await pc;
+});
+
 test('captions: off by default and a local pref; show the spoken sentence as text only; a mood tag or markup never becomes markup', async () => {
   const w = world({ prefs: { choice: 'orb' } }); w.display.start(); await flushP();
   const cap = () => w.dom.overlay().all().find(n => n.className === 'ucd-caption');
@@ -772,13 +808,16 @@ test('reaction: queued per reply and played ONCE at the reply end, never while a
   w.display.reply('end', 'seq:1');
   assert.deepStrictEqual(reacts(p), [], 'audio still heard (the end came first): it waits for the audio to stop');
   w.display.audioEnd();
-  assert.deepStrictEqual(reacts(p), ['proud'], 'played right after the audio ended');
+  assert.deepStrictEqual(reacts(p), [], 'the display still speaks (the controller has not settled): retained');
+  w.display.setState('listening');
+  assert.deepStrictEqual(reacts(p), ['proud'], 'played as soon as the display left speaking');
   w.display.reply('end', 'seq:1'); w.display.audioEnd();
   assert.deepStrictEqual(reacts(p), ['proud'], 'once only');
   // device voice
   w.display.reply('turn', 'seq:2'); w.display.mood('seq:2', 'curious'); w.display.speech('start'); w.display.reply('end', 'seq:2');
   assert.deepStrictEqual(reacts(p), ['proud'], 'device speech still heard');
   w.display.speech('end');
+  w.display.setState('listening');
   assert.deepStrictEqual(reacts(p), ['proud', 'curious']);
 });
 
@@ -906,7 +945,7 @@ test('reaction x controller: a reply of several sentences with gaps between them
   assert.deepStrictEqual(reacts(h.p), [], 'never while the third sentence plays');
   await h.finish();
   assert.deepStrictEqual(reacts(h.p), ['proud'], 'once, after the whole reply');
-  const o = order(h.p); assert.ok(o.lastIndexOf('react:proud') < o.lastIndexOf('setState:listening'), 'before the call is shown listening: ' + o.join(' '));
+  const o = order(h.p); assert.ok(o.lastIndexOf('react:proud') > o.lastIndexOf('setState:speaking'), 'only after the display left speaking: ' + o.join(' '));
   h.call.onReplyText('First sentence. Second sentence. Third one.', true); await tick();
   assert.deepStrictEqual(reacts(h.p), ['proud'], 'a repeated end does not play it again');
 });
