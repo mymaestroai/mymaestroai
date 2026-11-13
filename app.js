@@ -12674,16 +12674,23 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const sels = ids.map((i) => voiceById(i)).filter(Boolean);
       if (!sels.length) return;
       const agent = chats[chatId] && chats[chatId].agent;
-      const prefs = CallDisplay.loadDisplayPrefs(localStorage);
+      const paintBoxes = (p) => {   // the switches need no list: set at once, and again from the prefs as they are after the wait
+        const cap = voiceById(`vp-captions-${chatId}`); if (cap) cap.checked = !!p.captions;
+        const intr = voiceById(`vp-interrupt-${chatId}`); if (intr) intr.checked = p.interrupt === true;
+      };
+      paintBoxes(CallDisplay.loadDisplayPrefs(localStorage));
+      if (!voiceDisp.paintGen) voiceDisp.paintGen = new Map();
+      const my = (voiceDisp.paintGen.get(chatId) || 0) + 1; voiceDisp.paintGen.set(chatId, my);
       let packs = [], state = 'ready';
       try { packs = await CallDisplay.fetchPacks((...a) => fetch(...a)); } catch { state = 'failed'; }
+      if (voiceDisp.paintGen.get(chatId) !== my) return;   // a newer paint started meanwhile: an older answer never puts back an older choice
+      const prefs = CallDisplay.loadDisplayPrefs(localStorage);   // read after the wait: a choice made meanwhile counts
+      paintBoxes(prefs);
       for (const sel of sels) {
         if (voiceById(sel.id) !== sel) continue;   // rebuilt meanwhile
         if (sel === document.activeElement) continue;   // an open picker is not refilled
         CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
       }
-      const cap = voiceById(`vp-captions-${chatId}`); if (cap) cap.checked = !!prefs.captions;
-      const intr = voiceById(`vp-interrupt-${chatId}`); if (intr) intr.checked = prefs.interrupt === true;
       const note = voiceById(`vp-display-note-${chatId}`);
       if (note) note.textContent = CallDisplay.displayNote(CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, packsState: state }));
     }
@@ -12969,6 +12976,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         else if (t.dataset.vcb === 'dnd' && voiceCallS.call) voiceCallS.call.setMode(t.checked ? 'dnd' : 'announce');
         else if (t.dataset.vcb === 'display') voiceDispSetChoice(chatId, t.value);
       });
+      bar.addEventListener('focusout', (e) => { const t = e.target; if (t && t.dataset && t.dataset.vcb === 'display') voiceDispPaintPanel(chatId); });   // a list skipped while it had focus is put in now
       voiceDispPaintPanel(chatId);   // the bar's Display select is filled at call start
     }
     // The "Try the microphone again" tap (the call bar's button and the display's own retry control).
@@ -13206,6 +13214,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           else if (t.dataset.vp === 'car') voiceCarCheckRun();
         });
         pop.addEventListener('input', (e) => { const t = e.target; if (t.dataset && ['mic', 'sens', 'speed', 'thinkvol'].includes(t.dataset.vp)) voiceCtlSet(t.dataset.vp, Number(t.value), false); });
+        pop.addEventListener('focusout', (e) => { const t = e.target; if (t && t.dataset && t.dataset.vp === 'display') voiceDispPaintPanel(chatId); });   // a list skipped while it had focus is put in now
         pop.addEventListener('change', (e) => {
           const t = e.target, k = t.dataset && t.dataset.vp;
           if (k === 'display') voiceDispSetChoice(chatId, t.value);

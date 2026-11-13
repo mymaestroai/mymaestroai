@@ -56,7 +56,7 @@ function desktop(o) {
   if (!o.noPanelSelect) doc.add('vp-display-c1', null, 'select');
   if (!o.noBarSelect) doc.add('vcb-display-c1', callbar, 'select');
   const stubs = {
-    window: win, document: doc, localStorage: storage, fetch: facesFetch, AGENTS: [{ name: 'bob', callDisplay: 'none' }], chats: { c1: { agent: 'bob' } },
+    window: win, document: doc, localStorage: storage, fetch: o.fetch || facesFetch, AGENTS: [{ name: 'bob', callDisplay: 'none' }], chats: { c1: { agent: 'bob' } },
     voiceById: (id) => doc.getElementById(id), voiceCallS: S, voiceCallHangUp() {}, voicePopToggle() { pop.hidden = false; }, voicePopClose() { pop.hidden = true; }, CallDisplay: CD, voicePlay: { token: 1, ctx: null },
     voiceSpeedNow: () => 1, hubToast() {}, setTimeout, clearTimeout, Promise, voiceCallRunning: () => false, hubOriginLabel: () => '', voiceSentences: (t) => [t], voiceSpeechText: (t) => t,
     VOICE_HANGUP_SVG: '', voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceMicLevelNow: () => 50, voiceSensNow: () => 50, voiceSpeedLabel: () => '1x', VOICE_SPEED_HINT: '', VOICE_CALL_HELP: '',
@@ -142,7 +142,7 @@ function phone(o) {
   const voicePlay = { token: 5, audio: null, url: null, cancel: null, el: null, told: false };
   function Audio() { this.src = ''; this.play = () => Promise.resolve(); this.pause = () => {}; }
   const stubs = {
-    window: win, document: doc, localStorage: storage, fetch: facesFetch, agents: [{ name: 'bob', callDisplay: 'none' }], current: 'bob', $: (id) => doc.getElementById(id),
+    window: win, document: doc, localStorage: storage, fetch: o.fetch || facesFetch, agents: [{ name: 'bob', callDisplay: 'none' }], current: 'bob', $: (id) => doc.getElementById(id),
     CallDisplay: CD, voicePlay, URL: { createObjectURL: () => 'blob:0', revokeObjectURL() {} }, Audio, voiceOn: () => true, api: async () => ({ ok: true }), toast() {},
     voiceSpeedNow: () => 1, voiceWaitLocalVoice: async () => ({ lang: 'en' }), SpeechSynthesisUtterance: function (t) { this.text = t; }, voicePanelPaint() {},
     voiceCallHangUp() {}, originLabel: () => '', setTimeout, clearTimeout, Promise, Blob: function Blob() {}, Float32Array, voiceEncodeWav: () => new Uint8Array(1),
@@ -283,4 +283,98 @@ test('phone: the Voice sheet has vs-interrupt with the help line, wired to voice
   const paint = between(mob, 'function paintVoiceSheet() {', 'function openVoiceSheet() {');
   assert.ok(/sh\.querySelector\('#vs-interrupt'\)[\s\S]*CallDisplay\.loadDisplayPrefs\(localStorage\)\.interrupt === true/.test(paint));
   assert.ok(/const VOICE_INTERRUPT_HINT = 'For places where talking over the reply doesn\\'t register\.';/.test(mob));
+});
+
+// ═══════════════ the paint after a wait: the newest paint and the newest prefs win; boxes at once; a skipped select is filled on blur ═══════════════
+// A fetch the test settles by hand: each call is parked; settle(i) answers the i-th request with the installed characters.
+function manualFetch() {
+  const parked = [];
+  const f = () => new Promise((res) => { parked.push(() => res({ ok: true, status: 200, json: async () => ({ packs: PACKS }) })); });
+  return { f, parked, settle: (i) => parked[i]() };
+}
+const savePrefs = (storage, p) => storage.setItem(CD.DISPLAY_STORE_KEY, JSON.stringify(p));
+
+test('desktop: two paints whose answers arrive in reverse order end on the newest prefs (the older answer does not put back the old choice)', async () => {
+  const m = manualFetch();
+  const d = desktop({ prefs: { choice: 'none', interrupt: false }, fetch: m.f });
+  const intr = d.doc.add('vp-interrupt-c1', null, 'input');
+  const p1 = d.api.voiceDispPaintPanel('c1');                       // reads the old prefs
+  savePrefs(d.storage, { choice: 'pack:owl', captions: false, interrupt: true });   // the person chose meanwhile
+  const p2 = d.api.voiceDispPaintPanel('c1');
+  assert.strictEqual(m.parked.length, 2);
+  m.settle(1); await p2; assert.strictEqual(d.barSel.value, 'pack:owl'); assert.strictEqual(d.panelSel.value, 'pack:owl'); assert.strictEqual(intr.checked, true);
+  m.settle(0); await p1;                                            // the older answer comes last
+  assert.strictEqual(d.barSel.value, 'pack:owl', 'bar select'); assert.strictEqual(d.panelSel.value, 'pack:owl', 'panel select');
+  assert.strictEqual(intr.checked, true, 'interrupt checkbox');
+});
+
+test('desktop: the older paint answering first is dropped too: after both answers the selects show the prefs as they are then', async () => {
+  const m = manualFetch();
+  const d = desktop({ prefs: { choice: 'none' }, fetch: m.f });
+  const p1 = d.api.voiceDispPaintPanel('c1');
+  savePrefs(d.storage, { choice: 'pack:owl', interrupt: true });
+  const p2 = d.api.voiceDispPaintPanel('c1');
+  m.settle(0); await p1; assert.strictEqual(d.barSel.children.length, 0, 'the superseded paint paints nothing');
+  m.settle(1); await p2; assert.strictEqual(d.barSel.value, 'pack:owl');
+});
+
+test('desktop: the captions and interrupt checkboxes are set at once, before the packs answer', async () => {
+  const d = desktop({ prefs: { choice: 'orb', captions: true, interrupt: true }, fetch: () => new Promise(() => {}) });
+  const cap = d.doc.add('vp-captions-c1', null, 'input'), intr = d.doc.add('vp-interrupt-c1', null, 'input');
+  d.api.voiceDispPaintPanel('c1');   // never answered
+  assert.strictEqual(cap.checked, true); assert.strictEqual(intr.checked, true);
+  await tick(); assert.strictEqual(d.barSel.children.length, 0, 'the lists wait for the packs');
+});
+
+test('desktop: the bar and the voice pop repaint the Display select on focusout (listener source run), a skipped select is then filled', async () => {
+  const listeners = {};
+  const re = /(bar|pop)\.addEventListener\('focusout', (\(e\) => \{[^\n]*\})\);\s*\/\//g; let mm;
+  while ((mm = re.exec(app))) listeners[mm[1]] = mm[2];
+  assert.ok(listeners.bar && /dataset\.vcb === 'display'/.test(listeners.bar), 'the call bar has a focusout listener for data-vcb="display"');
+  assert.ok(listeners.pop && /dataset\.vp === 'display'/.test(listeners.pop), 'the voice pop has a focusout listener for data-vp="display"');
+  assert.ok(/function voiceCallShowBar\([\s\S]*?bar\.addEventListener\('focusout'[\s\S]*?function voiceCallHideBar\(/.test(app), 'the bar one is in voiceCallShowBar');
+  assert.ok(/function voicePopToggle\([\s\S]*?pop\.addEventListener\('focusout'/.test(app), 'the pop one is in voicePopToggle');
+  for (const [which, key] of [['bar', 'vcb'], ['pop', 'vp']]) {
+    const d = desktop({ prefs: { choice: 'orb' } }), sel = which === 'bar' ? d.barSel : d.panelSel;
+    const run = (w, target) => new Function('voiceDispPaintPanel', 'chatId', `return ${listeners[w]};`)(d.api.voiceDispPaintPanel, 'c1')({ target });
+    sel.dataset = { [key]: 'display' }; sel.value = 'stale';
+    d.doc.activeElement = sel; await d.api.voiceDispPaintPanel('c1');
+    assert.strictEqual(sel.children.length, 0, which + ': skipped while it has focus'); assert.strictEqual(sel.value, 'stale');
+    d.doc.activeElement = null;   // focus left: the browser's focusout
+    run(which, { dataset: { [key]: 'mic' } }); await tick(30); assert.strictEqual(sel.children.length, 0, which + ': another control losing focus does nothing');
+    run(which, sel); await tick(30);
+    assert.ok(optionsOf(sel).some(([v, t]) => v === 'pack:owl' && t === 'Owl'), which + ': filled with the installed characters'); assert.strictEqual(sel.value, 'orb');
+  }
+});
+
+test('phone: two paints whose answers arrive in reverse order end on the newest prefs', async () => {
+  const m = manualFetch();
+  const p = phone({ prefs: { choice: 'none' }, fetch: m.f });
+  const intr = p.doc.add('vp-interrupt', null, 'input');
+  const p1 = p.api.voiceDispPaintPanel();
+  savePrefs(p.storage, { choice: 'pack:owl', interrupt: true });
+  const p2 = p.api.voiceDispPaintPanel();
+  assert.strictEqual(m.parked.length, 2);
+  m.settle(1); await p2; assert.strictEqual(p.cp.value, 'pack:owl'); assert.strictEqual(intr.checked, true);
+  m.settle(0); await p1;
+  assert.strictEqual(p.cp.value, 'pack:owl', '#cp-display'); assert.strictEqual(p.vp.value, 'pack:owl', '#vp-display'); assert.strictEqual(intr.checked, true, 'interrupt checkbox');
+});
+
+test('phone: the captions and interrupt checkboxes are set at once, before the packs answer', async () => {
+  const p = phone({ prefs: { choice: 'orb', captions: true, interrupt: true }, fetch: () => new Promise(() => {}) });
+  const cap = p.doc.add('vp-captions', null, 'input'), intr = p.doc.add('vp-interrupt', null, 'input');
+  p.api.voiceDispPaintPanel();
+  assert.strictEqual(cap.checked, true); assert.strictEqual(intr.checked, true);
+});
+
+test('phone: #cp-display and #vp-display repaint on blur; a select skipped while it had focus is filled by the next paint', async () => {
+  assert.ok(/function voiceCallWire\(\)[\s\S]*?\$\('cp-display'\)\?\.addEventListener\('blur', \(\) => voiceDispPaintPanel\(\)\)/.test(mob), 'cp-display blur in voiceCallWire');
+  assert.ok(/function voicePanelWire\(\)[\s\S]*?\$\('vp-display'\)\?\.addEventListener\('blur', \(\) => voiceDispPaintPanel\(\)\)/.test(mob), 'vp-display blur in voicePanelWire');
+  const p = phone({ prefs: { choice: 'orb' } });
+  p.cp.value = 'stale'; p.doc.activeElement = p.cp;
+  await p.api.voiceDispPaintPanel();
+  assert.strictEqual(p.cp.children.length, 0, 'skipped while focused'); assert.strictEqual(p.vp.value, 'orb');
+  p.doc.activeElement = null;   // blur: the listener runs the paint again
+  await p.api.voiceDispPaintPanel();
+  assert.ok(optionsOf(p.cp).some(([v, t]) => v === 'pack:owl' && t === 'Owl')); assert.strictEqual(p.cp.value, 'orb');
 });

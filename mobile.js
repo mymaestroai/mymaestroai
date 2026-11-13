@@ -6456,12 +6456,15 @@ function voiceCallSseMood(rec, mood) { const vc = voiceCall; if (vc && rec && re
 async function voiceDispPaintPanel() {
   const sels = [$('vp-display'), $('cp-display')].filter(Boolean);   // the voice sheet's select and the call panel's
   if (!sels.length || typeof CallDisplay === 'undefined') return;
-  const prefs = CallDisplay.loadDisplayPrefs(localStorage);
+  const paintBoxes = (p) => { const cap = $('vp-captions'); if (cap) cap.checked = !!p.captions; const intr = $('vp-interrupt'); if (intr) intr.checked = p.interrupt === true; };   // set at once, and again after the wait
+  paintBoxes(CallDisplay.loadDisplayPrefs(localStorage));
+  const my = voiceDisp.paintGen = (voiceDisp.paintGen || 0) + 1;
   let packs = [], state = 'ready';
   try { packs = await CallDisplay.fetchPacks((...a) => fetch(...a)); } catch { state = 'failed'; }
-  for (const sel of sels) if (document.activeElement !== sel) CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
-  const cap = $('vp-captions'); if (cap) cap.checked = !!prefs.captions;
-  const intr = $('vp-interrupt'); if (intr) intr.checked = prefs.interrupt === true;
+  if (voiceDisp.paintGen !== my) return;   // a newer paint started meanwhile: an older answer never puts back an older choice
+  const prefs = CallDisplay.loadDisplayPrefs(localStorage);   // read after the wait: a choice made meanwhile counts
+  paintBoxes(prefs);
+  for (const sel of sels) if (sel.isConnected !== false && document.activeElement !== sel) CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
   const note = $('vp-display-note');
   if (note) note.textContent = CallDisplay.displayNote(CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(current), packs, packsState: state }));
 }
@@ -6821,6 +6824,7 @@ function voiceCallWire() {   // the panel's own buttons
   $('cp-levels')?.addEventListener('click', () => openVoiceSheet());
   $('cp-retry-mic')?.addEventListener('click', () => { const vc = voiceCall; if (vc && vc.call && typeof vc.call.retryMic === 'function') Promise.resolve(vc.call.retryMic()).then((ok) => { if (!ok && voiceCall === vc) toast('Still no microphone.'); }, () => { if (voiceCall === vc) toast('Still no microphone.'); }); });   // the call is not ended: the microphone is asked for again (same as voiceCallRetryMicTap; kept inline because the page tests cut this function out on its own)
   $('cp-display')?.addEventListener('change', (e) => voiceDispSetChoice(e.target.value));
+  $('cp-display')?.addEventListener('blur', () => voiceDispPaintPanel());   // a list skipped while it had focus is put in now
   voicePanelWire();   // the chat's own voice panel, the mode chip and the "call ended" bar
   $('cp-dnd')?.addEventListener('change', (e) => { if (voiceCall) voiceCall.call.setMode(e.target.checked ? 'dnd' : 'announce'); });
   $('cp-held')?.addEventListener('click', (e) => {
@@ -7306,6 +7310,7 @@ function voicePanelWire() {
   vol?.addEventListener('change', () => save({ thinkingVolume: Math.max(0, Math.min(1, Number(vol.value) / 100)) }));
   $('vp-room')?.addEventListener('click', voiceRoomRun);
   $('vp-display')?.addEventListener('change', (e) => voiceDispSetChoice(e.target.value));
+  $('vp-display')?.addEventListener('blur', () => voiceDispPaintPanel());   // a list skipped while it had focus is put in now
   $('vp-captions')?.addEventListener('change', (e) => voiceDispSetCaptions(!!e.target.checked));
   $('vp-interrupt')?.addEventListener('change', (e) => voiceDispSetInterrupt(!!e.target.checked));
   p.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); voicePanelShow(false); $('voice-settings-btn')?.focus(); } });

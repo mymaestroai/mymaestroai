@@ -836,6 +836,75 @@ test('chooser: it is disabled by hang-up and is in the Tab list; an Orb call fet
   w.display.hangUp(); assert.ok(sel.disabled);
 });
 
+// A /api/faces the test answers by hand (each call is parked until settle()).
+function parkedFaces(packs) {
+  const parked = [];
+  const f = () => new Promise((res) => { parked.push(() => res({ ok: true, status: 200, json: async () => ({ packs }) })); });
+  return { f, parked, settle: (i) => parked[i || 0]() };
+}
+
+test('chooser: an Orb call whose installed list arrives while the Display select has focus does not refill it then; blur fills it with the characters', async () => {
+  const pf = parkedFaces(PACKS);
+  const w = world({ prefs: { choice: 'orb' }, fetch: pf.f }); const { dom } = w;
+  w.display.start(); await flushP();
+  const sel = w.display.ui.disp;
+  assert.deepStrictEqual(sel.children.map(o => o.value), ['follow', 'none', 'orb'], 'no characters yet');
+  sel.focus(); const kids = sel.children.slice();
+  pf.settle(); await flushP();
+  assert.strictEqual(w.display.info().packsState, 'ready');
+  assert.ok(sel.children.length === kids.length && sel.children.every((c, i) => c === kids[i]), 'not refilled while it has focus');
+  assert.ok((sel.listeners.blur || []).length >= 1, 'the select has a blur listener');
+  dom.doc.activeElement = null;   // the browser has moved focus on when blur fires
+  sel.dispatch('blur', {});
+  assert.deepStrictEqual(sel.children.map(o => o.value), ['follow', 'none', 'orb', 'pack:owl', 'pack:plain'], 'the installed characters are listed (owl included)');
+  assert.strictEqual(sel.value, 'orb');
+  w.display.release();
+});
+
+test('chooser: a blur with an unchanged list and choice leaves the options alone (refilled only when the key changed)', async () => {
+  const w = world({ prefs: { choice: 'orb' } });
+  w.display.start(); await flushP();
+  const sel = w.display.ui.disp, kids = sel.children.slice();
+  sel.focus(); w.dom.doc.activeElement = null; sel.dispatch('blur', {});
+  assert.ok(sel.children.length === kids.length && sel.children.every((c, i) => c === kids[i]), 'same nodes');
+  w.display.release();
+});
+
+test('chooser: an Orb call makes ONE /api/faces request, also when the choice is changed to Orb while the first request is still on its way', async () => {
+  const a = parkedFaces(PACKS);
+  const w = world({ prefs: { choice: 'orb' }, fetch: a.f });
+  w.display.start(); await flushP();
+  assert.strictEqual(a.parked.length, 1, 'one request for the Orb call');
+  w.display.setChoice('orb'); await flushP();
+  assert.strictEqual(a.parked.length, 1, 'rebuilding the Orb view does not ask again');
+  a.settle(); await flushP(); assert.strictEqual(w.display.info().packsState, 'ready'); assert.strictEqual(a.parked.length, 1);
+  w.display.release();
+  // the overlay is first built after the call began with a pack choice (the list is already on its way): switching to Orb must not replace that request
+  const b = parkedFaces(PACKS);
+  const v = world({ prefs: { choice: 'pack:owl' }, fetch: b.f });
+  v.display.start(); await flushP();
+  assert.strictEqual(b.parked.length, 1, 'one request at start');
+  v.display.setChoice('orb'); await flushP();
+  assert.strictEqual(v.dom.overlay() !== null, true, 'the Orb overlay is up');
+  assert.strictEqual(b.parked.length, 1, 'the request already on its way is not replaced');
+  b.settle(); await flushP(); assert.strictEqual(v.display.info().packsState, 'ready');
+  assert.deepStrictEqual(v.display.ui.disp.children.map(o => o.value), ['follow', 'none', 'orb', 'pack:owl', 'pack:plain']);
+  v.display.release();
+});
+
+test('chooser: a change made on the focused Display select keeps focus on it after the view is rebuilt', async () => {
+  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  w.display.start(); await flushP();
+  const sel = w.display.ui.disp;
+  assert.notStrictEqual(dom.doc.activeElement, sel, 'focus starts on the view, not on the select');
+  sel.focus(); sel.value = 'pack:owl'; sel.dispatch('change', {}); await flushP();
+  assert.strictEqual(w.display.info().choice, 'pack:owl');
+  assert.strictEqual(dom.doc.activeElement, w.display.ui.disp, 'the select still has focus'); assert.strictEqual(w.display.ui.disp, sel);
+  dom.doc.activeElement = null; w.display.setChoice('orb'); await flushP();   // focus elsewhere: the view takes it as before
+  assert.notStrictEqual(dom.doc.activeElement, sel, 'without focus on the select the view takes it');
+  w.display.release();
+});
+
 test('hang-up: the controls return at once, the buttons stop, the character says goodbye for a bounded time; Orb and release have no delay', async () => {
   const w = world({ prefs: { choice: 'pack:owl' }, adopt: () => [{ el: bar }] }); const { dom } = w;
   const home = new dom.El('div'), bar = new dom.El('div'); home.appendChild(bar); dom.doc.body.appendChild(home);
