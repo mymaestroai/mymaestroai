@@ -56,3 +56,29 @@ test('runSpawnWorkers logs that line at every worker end', () => {
   const body = src.slice(at, src.indexOf('\nfunction consultViaHubNow(', at));
   assert.match(body, /onDone: \(r, v\) => \{[\s\S]*console\.log\(workerEndLogLine\(v\.id, sseRes\)\);/);
 });
+
+test('a tap that finished reads as not tapped even when another wrapper restores observeClosed (the transcript tap does)', () => {
+  const { workerEndLogLine } = require('../lib/sdk-chat');
+  const hub = createHubEvents({ log: () => {} });
+  const res = { write: () => true, writableEnded: false, destroyed: false };
+  const tap = hub.tapTurn(res, { agent: 'sam', origin: { kind: 'user' }, message: 'hi' });
+  // a second wrapper installed after the hub tap, the way lib/transcript.js tapTurn does it, finished after it
+  const prevObserve = res.observeClosed;
+  res.observeClosed = (d) => prevObserve(d);
+  tap.finish(true);
+  res.observeClosed = prevObserve;   // the second wrapper's finish restores what it found
+  assert.strictEqual(typeof res.observeClosed, 'function');
+  assert.match(workerEndLogLine('tw-sam-1-abcd', res), /tapped=false$/);
+});
+
+test('the unknown-worker line clips and cleans the id', () => {
+  const lines = [];
+  const hub = createHubEvents({ log: (l) => lines.push(l) });
+  const res = { write: () => true };
+  const tap = hub.tapTurn(res, { agent: 'sam', origin: { kind: 'user' }, message: 'hi', turnId: 'sam-t2' });
+  res.write(sse({ type: 'worker_completed', worker_id: 'tw-x\n[forged] line' + 'z'.repeat(200) }));
+  tap.finish(true);
+  assert.strictEqual(lines.length, 1);
+  assert.ok(!/\n/.test(lines[0]), 'no newline');
+  assert.ok(lines[0].length < 130, 'clipped');
+});
