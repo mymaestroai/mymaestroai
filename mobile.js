@@ -196,6 +196,94 @@ function versionDetailsText(v, u, ua) {
 // ── version-label helpers (end) ──
 
 // Shared verbatim with lib/ui-dialog.js and app.js (test/ui-dialog.test.js keeps the three in step).
+// ── app reload (begin) ──
+const APP_RELOAD_STASH_KEY = 'hub-reload-stash';
+const APP_RELOAD_CALL_QUESTION = 'Reloading ends the call. Reload?';
+const APP_RELOAD_GROUP_QUESTION = 'Text typed in a group chat will be lost. Reload?';
+const APP_RELOAD_OFFLINE_QUESTION = 'This device seems to be offline, so the page may not come back until it is online again. Reload anyway?';
+function appIsInstalled(win) {
+  try {
+    if (win && win.navigator && win.navigator.standalone === true) return true;
+    if (!win || typeof win.matchMedia !== 'function') return false;
+    return ['standalone', 'minimal-ui', 'window-controls-overlay'].some(m => !!win.matchMedia(`(display-mode: ${m})`).matches);
+  } catch { return false; }
+}
+function appReloadUrls(doc, origin) {
+  const out = [], seen = new Set();
+  const add = (u) => {
+    if (!u) return;
+    let url;
+    try { url = new URL(u, origin + '/'); } catch { return; }
+    if (url.origin !== origin || url.pathname.startsWith('/vendor/')) return;
+    url.hash = '';
+    const s = url.href;
+    if (!seen.has(s)) { seen.add(s); out.push(s); }
+  };
+  try { add(doc.location && doc.location.href); } catch { /* no address */ }
+  const list = (sel) => { try { return Array.from(doc.querySelectorAll(sel) || []); } catch { return []; } };
+  for (const s of list('script[src]')) add(s.getAttribute('src'));
+  for (const l of list('link[rel="stylesheet"][href]')) add(l.getAttribute('href'));
+  return out;
+}
+function appFreshFetch({ urls = [], fetch: f, swUpdate, timeoutMs = 4000, setTimer = setTimeout } = {}) {
+  const jobs = [];
+  const body = (r) => (r && r.ok && typeof r.arrayBuffer === 'function' ? r.arrayBuffer() : null);
+  for (const u of urls) { try { jobs.push(Promise.resolve(f(u, { cache: 'reload', credentials: 'same-origin' })).then(body).catch(() => null)); } catch { /* skipped */ } }
+  if (typeof swUpdate === 'function') { try { jobs.push(Promise.resolve(swUpdate()).catch(() => null)); } catch { /* skipped */ } }
+  const all = Promise.all(jobs).then(() => 'done');
+  const late = new Promise(r => setTimer(() => r('timeout'), timeoutMs));
+  return Promise.race([all, late]);
+}
+function appNavigationWasReload(perf) {
+  try {
+    const nav = perf && typeof perf.getEntriesByType === 'function' ? perf.getEntriesByType('navigation') : null;
+    if (nav && nav[0] && typeof nav[0].type === 'string') return nav[0].type === 'reload';
+  } catch { /* try the older API */ }
+  try {
+    if (perf && perf.navigation && typeof perf.navigation.type === 'number') return perf.navigation.type === 1;
+  } catch { /* cannot tell */ }
+  return false;
+}
+function appReloadStashClear(storage) {
+  try { storage.removeItem(APP_RELOAD_STASH_KEY); } catch { /* nothing to clear */ }
+}
+function appReloadStashSave(storage, chats, now) {
+  const list = (Array.isArray(chats) ? chats : []).filter(c => c && c.agent).map(c => ({ agent: String(c.agent), text: String(c.text || ''), front: !!c.front }));
+  if (!list.length) { appReloadStashClear(storage); return true; }
+  try { storage.setItem(APP_RELOAD_STASH_KEY, JSON.stringify({ chats: list, at: now })); return true; } catch { return false; }
+}
+function appReloadStashTake(storage, now, maxAgeMs = 60000) {
+  let raw = null;
+  try { raw = storage.getItem(APP_RELOAD_STASH_KEY); storage.removeItem(APP_RELOAD_STASH_KEY); } catch { return null; }
+  if (!raw) return null;
+  let e;
+  try { e = JSON.parse(raw); } catch { return null; }
+  if (!e || !Array.isArray(e.chats) || typeof e.at !== 'number' || !(now - e.at >= 0 && now - e.at <= maxAgeMs)) return null;
+  const list = e.chats.filter(c => c && typeof c.agent === 'string' && c.agent).map(c => ({ agent: c.agent, text: typeof c.text === 'string' ? c.text : '', front: c.front === true }));
+  return list.length ? list : null;
+}
+function createAppReloader({ questions = () => [], confirm: ask = () => true, prepare = () => null, go, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
+  let busy = false, attempt = 0;
+  const qsNow = () => { try { return questions() || []; } catch { return []; } };
+  const yes = (q) => { try { return !!ask(q); } catch { return false; } };   // a dialog that cannot open counts as Cancel
+  const end = (my) => { if (my !== attempt || !busy) return; busy = false; try { onBusy(false); } catch { /* paint only */ } };
+  function reload() {
+    if (busy) return false;
+    const asked = new Set();
+    for (const q of qsNow()) { if (!yes(q)) return false; asked.add(q); }
+    busy = true;
+    const my = ++attempt;
+    try { onBusy(true); } catch { /* paint only */ }
+    Promise.resolve().then(prepare).catch(() => null).then(() => {
+      for (const q of qsNow()) if (!asked.has(q) && !yes(q)) { end(my); return; }
+      try { go(); } catch { /* the page stays */ }
+      setTimer(() => end(my), busyMs);
+    });
+    return true;
+  }
+  return { reload, busy: () => busy };
+}
+// ── app reload (end) ──
 // ── dialog helpers (begin) ──
 const DIALOG_TEXT = {
   discardTitle: 'Discard changes?',
@@ -1409,7 +1497,15 @@ function applySnapshot(map, repaint = true, opts = {}) {
   if (repaint) paintStatus();
   // Woke up (or just loaded) while the open chat's agent is mid-turn: follow that turn.
   if (current && map[current] && map[current].busy && !followedHubTurn(current)) reattachIfIdle(current);
+  // A full feed that no longer lists a running temporary worker: its end never reached this page.
+  if (!namedOnly) {
+    const running = [...wkSeen.values()].filter(e => e.it && e.it.status === 'running' && !e.it.inferred).map(e => ({ id: e.id, startedAt: e.it.t0 }));
+    const step = workerGoneStep(wkGoneState, { running, statusMap: map, now: Date.now() });
+    wkGoneState = step.next;
+    for (const id of step.gone) wkInferEnd(wkSeen.get(id), 0, 'gone');
+  }
 }
+let wkGoneState = {};
 
 async function pollStatus() {
   try {
@@ -4616,6 +4712,21 @@ function hubWorkerGroups(statusMap, opts) {
 function hubWorkerCount(groups) {
   return (groups || []).reduce((n, g) => n + g.items.length, 0);
 }
+function workerGoneStep(prev, opts) {
+  const { running, statusMap, now, graceMs = 15000, confirmMs = 4000 } = opts || {};
+  const before = prev || {}, map = statusMap || {}, next = {}, gone = [];
+  for (const w of running || []) {
+    const id = w && w.id;
+    if (typeof id !== 'string' || !/^tw-/.test(id)) continue;
+    const entry = map[id];
+    if (entry && (entry.busy || entry.pendingQuestion)) continue;
+    const startedAt = Number.isFinite(w.startedAt) ? w.startedAt : now;
+    if (now - startedAt < graceMs) continue;
+    if (id in before && now - before[id] >= confirmMs) gone.push(id);
+    else next[id] = id in before ? before[id] : now;
+  }
+  return { next, gone: gone.sort() };
+}
 // ── busy and hub workers helpers (end) ──
 
 // The workers this page saw start or run (live replies and catch-ups; saved replies are history, not listed):
@@ -4741,7 +4852,8 @@ function wkHubPollSoon() {
 }
 setInterval(() => {
   if (document.hidden) return;
-  if ((wkView && wkView.mode === 'list') || Object.entries(live).some(([n, s]) => s && s.busy && (busyIsWorker(n, s) || s.consultedBy))) wkHubPoll();
+  if ((wkView && wkView.mode === 'list') || Object.entries(live).some(([n, s]) => s && s.busy && (busyIsWorker(n, s) || s.consultedBy))
+    || [...wkSeen.values()].some(e => e.it && e.it.status === 'running' && /^tw-/.test(e.id))) wkHubPoll();
 }, 5000);
 function wkRefresh() {
   const now = Date.now();
@@ -8347,6 +8459,7 @@ function wire() {
   $('chat-menu-btn').addEventListener('click', toggleMenu);
   $('agents-menu-btn').addEventListener('click', toggleMenu);
   $('menu-about').addEventListener('click', (e) => { e.stopPropagation(); openAboutSheet(); });
+  $('menu-reload')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); reloadApp(); });   // ?.: a phone page cached from before has no menu entry
   $('about-sheet').addEventListener('click', onAboutClick);
   // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
@@ -8538,6 +8651,33 @@ function applyMultiUser() {
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
+}
+
+// Reload app (menu): fetch the page's own files fresh, ask the service worker to look for a new version, then reload.
+// The open chat is in the address (#chat=), its draft is saved first, and a reply still streaming is followed again by
+// openChat's own re-attach. The service worker is never unregistered; push and settings are not touched.
+function paintReloadBusy(b) {
+  const el = $('menu-reload');
+  if (el) { el.disabled = !!b; el.setAttribute('aria-busy', b ? 'true' : 'false'); }
+  if (b) toast('Reloading…');
+}
+let appReloaderInst = null;
+function reloadApp() {
+  if (!appReloaderInst) {
+    appReloaderInst = createAppReloader({
+      questions: () => (voiceCall ? [APP_RELOAD_CALL_QUESTION] : []),   // offline is fine here: the service worker keeps /mobile
+      confirm: (q) => window.confirm(q),
+      prepare: () => appFreshFetch({
+        urls: appReloadUrls(document, location.origin),
+        fetch: (u, o) => fetch(u, o),
+        swUpdate: () => ('serviceWorker' in navigator ? navigator.serviceWorker.getRegistration('/mobile').then(r => r && r.update()) : null),
+      }),
+      // the draft as it is now, right before the reload (typing goes on while the files are fetched)
+      go: () => { if (current && $('msg-input')) saveDraft(current, $('msg-input').value); location.reload(); },
+      onBusy: paintReloadBusy,
+    });
+  }
+  return appReloaderInst.reload();
 }
 
 function toggleMenu(e) {

@@ -33,13 +33,13 @@ const ids = (block) => Array.from(block.matchAll(/\bid="([^"]+)"/g)).map((m) => 
 const TUNING = ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'caveman-toggle', 'max-tokens-select', 'max-context-select'];
 const MOVED_BUTTONS = ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn'];
 
-test('header-controls holds only Workers, Files, Scheduler, Settings, Help and the ⋯ button (plus the menus they anchor)', () => {
+test('header-controls holds only Workers, Files, Scheduler, Settings, Help, Reload (shown in the installed app only) and the ⋯ button (plus the menus they anchor)', () => {
   const header = divBlock(html, '<div class="header-controls">');
   // Direct controls: strip the menu out and look at what is left.
   const menuBlock = divBlock(header, '<div id="more-menu"');
   const outsideMenu = header.replace(menuBlock, '');
   const buttonIds = Array.from(outsideMenu.matchAll(/<button[^>]*\bid="([^"]+)"/g)).map((m) => m[1]);
-  assert.deepStrictEqual(buttonIds, ['workers-btn', 'files-btn', 'schedule-btn', 'settings-btn', 'help-btn', 'more-btn']);
+  assert.deepStrictEqual(buttonIds, ['workers-btn', 'files-btn', 'schedule-btn', 'settings-btn', 'help-btn', 'reload-btn', 'more-btn']);
   for (const id of [...TUNING, ...MOVED_BUTTONS, 'advanced-toggle']) {
     assert.ok(!ids(outsideMenu).includes(id), `${id} is not in the header proper`);
   }

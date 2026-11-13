@@ -5450,6 +5450,10 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
+      paintInstalledApp();
+      for (const q of ['(display-mode: standalone)', '(display-mode: minimal-ui)', '(display-mode: window-controls-overlay)']) {
+        try { if (typeof window.matchMedia === 'function') window.matchMedia(q).addEventListener('change', paintInstalledApp); } catch { /* an old browser: painted once */ }
+      }
       await loadMe();
       applyMemberView();
       renderOwnerSwitcher();
@@ -5464,6 +5468,27 @@
       if (own && (own.update || own.backups || own.security || own.memory || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
         for (const k of ['update', 'backups', 'security', 'memory', 'connectors', 'wallet']) u.searchParams.delete(k);
+        history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+      }
+      // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message
+      // box, and bring the one that was in front to the front (one-shot, reloadAppStash). Only after a reload: any other
+      // navigation drops the hand-over. An "?agent=" left in the address from an earlier visit does not take over.
+      let reopened = 0, frontId = null;
+      const handOver = appReloadStashTake(sessionStorage, Date.now());
+      for (const back of (handOver && appNavigationWasReload(window.performance) ? handOver : [])) {
+        const a = AGENTS.find(x => x.name === back.agent);
+        if (!a) continue;
+        const id = startSoloChat(a.name, a.model);
+        reopened++;
+        if (back.front) frontId = id;
+        const box = document.getElementById('input-' + id);
+        if (back.text && box && !box.value) { box.value = back.text; autoGrowTextarea(box); }
+      }
+      if (frontId) switchToChat(frontId);
+      if (reopened && own && own.agent) {
+        delete own.agent;
+        const u = new URL(location.href);
+        u.searchParams.delete('agent');
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       openTargets.ready(own);
@@ -6695,6 +6720,51 @@
       paintAllAgentStatus();
       // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
       for (const [name, s] of Object.entries(map)) if (s.busy) reattachIfIdle(name, s.busySince || null);
+      // A full feed that no longer lists a running temporary worker: its end never reached this page.
+      if (!namedOnly) {
+        const running = [];
+        for (const chat of Object.values(chats)) {
+          if (!chat || !chat.isWorker || chat.isHistory) continue;
+          for (const [id, run] of Object.entries(chat.runs || {})) if (run && run.status === 'running') running.push({ id, startedAt: run.startedAt });
+        }
+        const step = workerGoneStep(workerGoneState, { running, statusMap: map, now: Date.now() });
+        workerGoneState = step.next;
+        for (const id of step.gone) endWorkerRunUnreported(id);
+      }
+    }
+    let workerGoneState = {};
+    // A running card the hub no longer lists: neutral "ended" now, the real outcome from the caller's worker history when it has one.
+    function endWorkerRunUnreported(workerId) {
+      const w = workerRunOf(workerId);
+      if (!w || w.run.status !== 'running') return;
+      const { workerChatId, chat, run } = w;
+      run.status = 'ended';
+      run.endedAt = Date.now();
+      settleWorkerCard(workerChatId, 'idle', 'Ended');
+      if (run.noticeEl) {
+        run.noticeEl.textContent = `${chat.agentLabel || 'Agent'} ended (no result was reported)`;
+        run.noticeEl.className = 'system-notice';
+      }
+      scheduleWorkerListRefresh();
+      const parentChatId = run.parentChatId || chat.parentChatId;
+      const caller = (chats[run.parentChatId] || chats[chat.parentChatId] || {}).agent;
+      if (!caller) return;
+      (async () => {
+        try {
+          const r = await fetch(`/api/agents/${encodeURIComponent(caller)}/workers/${encodeURIComponent(workerId)}`, { credentials: 'include', signal: AbortSignal.timeout(10000) });
+          if (!r.ok) return;
+          const rec = (await r.json()).worker;
+          if (!rec || run.status !== 'ended') return;
+          if (rec.outcome === 'done') handleWorkerEvent(parentChatId, { type: 'worker_completed', worker_id: workerId });
+          else if (rec.outcome === 'stopped') handleWorkerEvent(parentChatId, { type: 'worker_failed', worker_id: workerId, cancelled: true });
+          else if (rec.outcome === 'failed') handleWorkerEvent(parentChatId, { type: 'worker_failed', worker_id: workerId, error: rec.error || 'Failed' });
+          else if (rec.outcome === 'unfinished') handleWorkerEvent(parentChatId, { type: 'worker_failed', worker_id: workerId, error: rec.error || "Did not finish: its caller's reply ended first" });
+          else return;
+          // the list's clock runs from the recorded end, not from when this page noticed it
+          const endAt = rec.startedAt && rec.durationMs != null ? Date.parse(rec.startedAt) + Number(rec.durationMs) : NaN;
+          if (Number.isFinite(endAt) && endAt <= Date.now()) { run.endedAt = endAt; scheduleWorkerListRefresh(); }
+        } catch {}
+      })();
     }
 
     async function reattachIfIdle(agentName, since) {
@@ -6982,7 +7052,9 @@
     function workerPollWanted() {
       const menu = document.getElementById('workers-menu');
       const open = !!menu && !menu.hidden;
-      return open || Object.entries(agentStatus).some(([name, s]) => s && s.busy && (busyIsWorker(name, s) || s.consultedBy));
+      if (open || Object.entries(agentStatus).some(([name, s]) => s && s.busy && (busyIsWorker(name, s) || s.consultedBy))) return true;
+      // a temporary-worker card still running keeps being checked against the feed, even when the feed lists nothing busy
+      return Object.values(chats).some(c => c && c.isWorker && !c.isHistory && Object.entries(c.runs || {}).some(([id, r]) => r && r.status === 'running' && id.startsWith('tw-')));
     }
     setInterval(() => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); }, 5000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); });
@@ -14328,7 +14400,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       setTimeout(() => btn.classList.remove('flash'), 2000);
     }
 
+    // A run closed as 'ended' (the status feed stopped listing it) whose worker turns out to be working: running again.
+    function reopenEndedWorkerRun(workerId) {
+      const w = workerRunOf(String(workerId));
+      if (!w || w.run.status !== 'ended') return;
+      const { workerChatId, chat, run } = w;
+      run.status = 'running';
+      run.endedAt = null;
+      setStatus(workerChatId, 'thinking', 'Working...');
+      if (!chat.timerInterval) chat.timerInterval = setInterval(() => updateWorkerTabTimer(workerChatId), 1000);
+      settleWorkerCard(workerChatId);   // a running run: the card's clock follows it
+      if (run.noticeEl) { run.noticeEl.textContent = `⏳ ${chat.agentLabel || 'Agent'} is Working...`; run.noticeEl.className = 'system-notice notice-working'; }
+      scheduleWorkerListRefresh();
+    }
     function handleWorkerEvent(chatId, oc) {
+      if (oc && oc.worker_id != null && /^worker_(started|text_delta|tool_start|tool_use|tool_result)$/.test(oc.type)) reopenEndedWorkerRun(oc.worker_id);
       if (oc.type === 'worker_started') {
         const workerId = String(oc.worker_id);
         if (workerRunOf(workerId) || closedWorkerRuns.has(workerId)) return true;   // already shown (a replay), or its card was closed
@@ -14761,14 +14847,30 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function hubWorkerCount(groups) {
       return (groups || []).reduce((n, g) => n + g.items.length, 0);
     }
+    function workerGoneStep(prev, opts) {
+      const { running, statusMap, now, graceMs = 15000, confirmMs = 4000 } = opts || {};
+      const before = prev || {}, map = statusMap || {}, next = {}, gone = [];
+      for (const w of running || []) {
+        const id = w && w.id;
+        if (typeof id !== 'string' || !/^tw-/.test(id)) continue;
+        const entry = map[id];
+        if (entry && (entry.busy || entry.pendingQuestion)) continue;
+        const startedAt = Number.isFinite(w.startedAt) ? w.startedAt : now;
+        if (now - startedAt < graceMs) continue;
+        if (id in before && now - before[id] >= confirmMs) gone.push(id);
+        else next[id] = id in before ? before[id] : now;
+      }
+      return { next, gone: gone.sort() };
+    }
     // ── busy and hub workers helpers (end) ──
 
-    // running | done | stopped | failed: running while any of the card's calls runs, else how its newest call ended.
+    // running | done | stopped | failed | ended: running while any of the card's calls runs, else how its newest call ended
+    // ('ended': the hub stopped listing it and no result was reported; a late result replaces that).
     function workerCardState(chat) {
       const runs = Object.values((chat && chat.runs) || {});
       if (!runs.length || runs.some(r => r.status === 'running')) return 'running';
       const last = runs.slice().sort((a, b) => b.startedAt - a.startedAt)[0];
-      return last.status === 'failed' ? 'failed' : last.status === 'cancelled' ? 'stopped' : 'done';
+      return last.status === 'failed' ? 'failed' : last.status === 'cancelled' ? 'stopped' : last.status === 'ended' ? 'ended' : 'done';
     }
     function workerCardEndedAt(chat) {
       return Math.max(0, ...Object.values((chat && chat.runs) || {}).map(r => r.endedAt || 0)) || null;
@@ -14908,7 +15010,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         row.dataset.wid = id;
         const mark = document.createElement('span');
         mark.className = 'wm-mark';
-        mark.textContent = state === 'running' ? '' : state === 'done' ? '✓' : state === 'stopped' ? '⏹' : '✕';
+        mark.textContent = state === 'running' ? '' : state === 'done' ? '✓' : state === 'stopped' ? '⏹' : state === 'ended' ? '–' : '✕';
         const name = document.createElement('span');
         name.className = 'wm-name';
         name.textContent = chat.agentLabel || chat.display || 'Worker';
@@ -14917,7 +15019,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         meta.textContent = [workerModelLabel(chat.model), workerKindLabel(chat.agent)].filter(Boolean).join(' · ');
         const when = document.createElement('span');
         when.className = 'wm-when';
-        when.textContent = state === 'running' ? fmtWorkerClock(now - (chat.startedAt || now)) : `${state === 'failed' ? 'failed' : state === 'stopped' ? 'stopped' : 'done'} ${fmtWorkerClock(now - endedAt)} ago`;
+        when.textContent = state === 'running' ? fmtWorkerClock(now - (chat.startedAt || now)) : `${state === 'failed' ? 'failed' : state === 'stopped' ? 'stopped' : state === 'ended' ? 'ended' : 'done'} ${fmtWorkerClock(now - endedAt)} ago`;
         row.append(mark, name, meta, when);
         if (state === 'running') {
           const stop = document.createElement('button');
@@ -15612,6 +15714,94 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // ── version-label helpers (end) ──
 
     // Shared verbatim with lib/ui-dialog.js and mobile.js (test/ui-dialog.test.js keeps the three in step).
+    // ── app reload (begin) ──
+    const APP_RELOAD_STASH_KEY = 'hub-reload-stash';
+    const APP_RELOAD_CALL_QUESTION = 'Reloading ends the call. Reload?';
+    const APP_RELOAD_GROUP_QUESTION = 'Text typed in a group chat will be lost. Reload?';
+    const APP_RELOAD_OFFLINE_QUESTION = 'This device seems to be offline, so the page may not come back until it is online again. Reload anyway?';
+    function appIsInstalled(win) {
+      try {
+        if (win && win.navigator && win.navigator.standalone === true) return true;
+        if (!win || typeof win.matchMedia !== 'function') return false;
+        return ['standalone', 'minimal-ui', 'window-controls-overlay'].some(m => !!win.matchMedia(`(display-mode: ${m})`).matches);
+      } catch { return false; }
+    }
+    function appReloadUrls(doc, origin) {
+      const out = [], seen = new Set();
+      const add = (u) => {
+        if (!u) return;
+        let url;
+        try { url = new URL(u, origin + '/'); } catch { return; }
+        if (url.origin !== origin || url.pathname.startsWith('/vendor/')) return;
+        url.hash = '';
+        const s = url.href;
+        if (!seen.has(s)) { seen.add(s); out.push(s); }
+      };
+      try { add(doc.location && doc.location.href); } catch { /* no address */ }
+      const list = (sel) => { try { return Array.from(doc.querySelectorAll(sel) || []); } catch { return []; } };
+      for (const s of list('script[src]')) add(s.getAttribute('src'));
+      for (const l of list('link[rel="stylesheet"][href]')) add(l.getAttribute('href'));
+      return out;
+    }
+    function appFreshFetch({ urls = [], fetch: f, swUpdate, timeoutMs = 4000, setTimer = setTimeout } = {}) {
+      const jobs = [];
+      const body = (r) => (r && r.ok && typeof r.arrayBuffer === 'function' ? r.arrayBuffer() : null);
+      for (const u of urls) { try { jobs.push(Promise.resolve(f(u, { cache: 'reload', credentials: 'same-origin' })).then(body).catch(() => null)); } catch { /* skipped */ } }
+      if (typeof swUpdate === 'function') { try { jobs.push(Promise.resolve(swUpdate()).catch(() => null)); } catch { /* skipped */ } }
+      const all = Promise.all(jobs).then(() => 'done');
+      const late = new Promise(r => setTimer(() => r('timeout'), timeoutMs));
+      return Promise.race([all, late]);
+    }
+    function appNavigationWasReload(perf) {
+      try {
+        const nav = perf && typeof perf.getEntriesByType === 'function' ? perf.getEntriesByType('navigation') : null;
+        if (nav && nav[0] && typeof nav[0].type === 'string') return nav[0].type === 'reload';
+      } catch { /* try the older API */ }
+      try {
+        if (perf && perf.navigation && typeof perf.navigation.type === 'number') return perf.navigation.type === 1;
+      } catch { /* cannot tell */ }
+      return false;
+    }
+    function appReloadStashClear(storage) {
+      try { storage.removeItem(APP_RELOAD_STASH_KEY); } catch { /* nothing to clear */ }
+    }
+    function appReloadStashSave(storage, chats, now) {
+      const list = (Array.isArray(chats) ? chats : []).filter(c => c && c.agent).map(c => ({ agent: String(c.agent), text: String(c.text || ''), front: !!c.front }));
+      if (!list.length) { appReloadStashClear(storage); return true; }
+      try { storage.setItem(APP_RELOAD_STASH_KEY, JSON.stringify({ chats: list, at: now })); return true; } catch { return false; }
+    }
+    function appReloadStashTake(storage, now, maxAgeMs = 60000) {
+      let raw = null;
+      try { raw = storage.getItem(APP_RELOAD_STASH_KEY); storage.removeItem(APP_RELOAD_STASH_KEY); } catch { return null; }
+      if (!raw) return null;
+      let e;
+      try { e = JSON.parse(raw); } catch { return null; }
+      if (!e || !Array.isArray(e.chats) || typeof e.at !== 'number' || !(now - e.at >= 0 && now - e.at <= maxAgeMs)) return null;
+      const list = e.chats.filter(c => c && typeof c.agent === 'string' && c.agent).map(c => ({ agent: c.agent, text: typeof c.text === 'string' ? c.text : '', front: c.front === true }));
+      return list.length ? list : null;
+    }
+    function createAppReloader({ questions = () => [], confirm: ask = () => true, prepare = () => null, go, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
+      let busy = false, attempt = 0;
+      const qsNow = () => { try { return questions() || []; } catch { return []; } };
+      const yes = (q) => { try { return !!ask(q); } catch { return false; } };   // a dialog that cannot open counts as Cancel
+      const end = (my) => { if (my !== attempt || !busy) return; busy = false; try { onBusy(false); } catch { /* paint only */ } };
+      function reload() {
+        if (busy) return false;
+        const asked = new Set();
+        for (const q of qsNow()) { if (!yes(q)) return false; asked.add(q); }
+        busy = true;
+        const my = ++attempt;
+        try { onBusy(true); } catch { /* paint only */ }
+        Promise.resolve().then(prepare).catch(() => null).then(() => {
+          for (const q of qsNow()) if (!asked.has(q) && !yes(q)) { end(my); return; }
+          try { go(); } catch { /* the page stays */ }
+          setTimer(() => end(my), busyMs);
+        });
+        return true;
+      }
+      return { reload, busy: () => busy };
+    }
+    // ── app reload (end) ──
     // ── dialog helpers (begin) ──
     const DIALOG_TEXT = {
       discardTitle: 'Discard changes?',
@@ -15987,6 +16177,57 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       };
     }
     // ── dialog helpers (end) ──
+
+    // ── Reload (the ↻ button in the top bar and the ⋯ menu entry). The browser offers no reload button in the installed app,
+    // so the top-bar button only shows there (html.app-installed). A fresh load (lib/ui-reload.js) of the page and its own
+    // scripts; the open solo chat and the text in its box come back through sessionStorage (restore in DOMContentLoaded).
+    function paintInstalledApp() {
+      document.documentElement.classList.toggle('app-installed', appIsInstalled(window));
+    }
+    const reloadIsSolo = (c) => !!(c && !c.isGroup && !c.isWorker && c.agent && c.type !== 'orchestration');
+    const reloadBoxText = (c) => (document.getElementById('input-' + c.id) || {}).value || '';
+    // Written when the page really unloads (pagehide), so text typed while the files are fetched is kept. Every open
+    // solo chat in tab order, the one in front marked. The listener is armed by a Reload and stays armed if the person
+    // keeps the page at the browser's "unsaved changes" question (it is removed when the page comes back from the
+    // back-forward cache): it only ever writes the state at that moment, and the new page reads it only after a reload
+    // (appNavigationWasReload), never after other navigation such as an "?agent=" link.
+    function reloadAppStash() {
+      const front = chats[window.__activeChatId];
+      appReloadStashSave(sessionStorage, Object.values(chats).filter(reloadIsSolo).map(c => ({ agent: c.agent, text: reloadBoxText(c), front: c === front })), Date.now());
+    }
+    function reloadOnPagehide() { try { reloadAppStash(); } catch { /* the reload goes on */ } }
+    function armReloadStash() { window.addEventListener('pagehide', reloadOnPagehide); }
+    function disarmReloadStash() { window.removeEventListener('pagehide', reloadOnPagehide); }
+    window.addEventListener('pageshow', (e) => { if (e.persisted) { disarmReloadStash(); appReloadStashClear(sessionStorage); } });   // back from the back-forward cache: an earlier hand-over is out of date
+    function reloadAppQuestions() {
+      const qs = [];
+      if (voiceCallS.call || voiceCallS.starting) qs.push(APP_RELOAD_CALL_QUESTION);
+      if (Object.values(chats).some(c => c && !reloadIsSolo(c) && reloadBoxText(c).trim())) qs.push(APP_RELOAD_GROUP_QUESTION);
+      if (navigator.onLine === false) qs.push(APP_RELOAD_OFFLINE_QUESTION);   // the installed app has no browser reload to come back from an error page
+      return qs;
+    }
+    function paintReloadBusy(b) {
+      for (const id of ['reload-btn', 'reload-app-item']) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.disabled = !!b;
+        el.setAttribute('aria-busy', b ? 'true' : 'false');
+      }
+      if (b) hubToast('Reloading…');
+    }
+    let appReloaderInst = null;
+    function reloadApp() {
+      if (!appReloaderInst) {
+        appReloaderInst = createAppReloader({
+          questions: reloadAppQuestions,
+          confirm: (q) => window.confirm(q),
+          prepare: () => appFreshFetch({ urls: appReloadUrls(document, location.origin), fetch: (u, o) => fetch(u, o) }),
+          go: () => { armReloadStash(); location.reload(); },
+          onBusy: paintReloadBusy,
+        });
+      }
+      return appReloaderInst.reload();
+    }
 
     // One way out of every dialog on this page: Escape, Close / Cancel / ✕, a click on the backdrop (lib/ui-dialog.js).
     // The overlays below are found when they appear; the image viewer registers itself. A dialog's own buttons that
