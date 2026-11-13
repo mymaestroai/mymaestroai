@@ -296,3 +296,10 @@ test('the old Voice sheet and menu entry remain as a mirror; sw.js is untouched 
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v\d+';/);
   assert.ok(!/[\uFE0F\u200B\u200C\u200D]/.test(html + js.slice(js.indexOf('// ── Leaving the app (round 2'), js.indexOf('function voiceSheet()'))), 'no variation selectors or zero-width characters');
 });
+
+test('the chat panel dropdowns are dark with readable text, at 16px so iOS does not zoom on tap', () => {
+  const rule = (html.match(/#voice-panel select \{[^}]*\}/) || [''])[0];
+  assert.match(rule, /background: var\(--bg-input\)/);
+  assert.match(rule, /color: var\(--text\)/);
+  assert.match(rule, /font-size: 16px/);
+});
