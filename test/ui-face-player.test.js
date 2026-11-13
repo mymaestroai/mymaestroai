@@ -2046,6 +2046,65 @@ test('outage recovery with speech: the probe answers 200, every clip keeps faili
   assert.ok(j.badFinal.indexOf(DEC) >= 0, 'the decode error is final: ' + j.badFinal.join()); assert.strictEqual(att[DEC] - (before[DEC] || 0), 1, 'a decode error is never retried: ' + att[DEC]);
   p.destroy();
 });
+test('a speaking clip whose own file has a decode error is never revived, also by the per-reply speaking revival', async () => {
+  const DEC = 'speaking-1'; const w = makeWorld({ manifest: posterManifest() }); probeNet(w, () => 'ok'); const att = errorCodes(w, (n) => (n === DEC ? 3 : (n.length % 2 ? 2 : 4)));
+  const lost = []; const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+  const before = Object.assign({}, att); w.manifest.clips.forEach(c => w.fail.add(c.name));   // every clip fails: all tracked speakers are set aside, so reviveSpeakers has work
+  for (let k = 0; k < 24; k++) { p.setState(k % 2 ? 'listening' : 'speaking'); await runFor(w, 10000); }
+  const j = p.getInfo(); assert.strictEqual(lost.length, 0); assert.strictEqual(j.lost, null); assert.strictEqual(j.drawable, true);
+  const others = SPEAKERS.filter(n => n !== DEC), d = (n) => (att[n] || 0) - (before[n] || 0);
+  assert.ok(others.some(n => d(n) >= 2), 'the other speaking clips were revived and tried again (so the revival really ran): ' + others.map(n => n + '=' + d(n)).join());
+  assert.strictEqual(d(DEC), 1, 'the decode-error speaking clip got exactly one source assignment after its failure began: ' + d(DEC));
+  assert.ok(j.bad.indexOf(DEC) >= 0, 'it stays set aside: ' + j.bad.join()); assert.ok(j.badFinal.indexOf(DEC) >= 0, 'and final: ' + j.badFinal.join());
+  p.destroy();
+});
+test('the probe answer looks again at once when the picture stands still: a clip starts well before the 2.5 s retry would have fired, and the revive is logged', async () => {
+  const w = makeWorld(); let mode = 'ok'; probeNet(w, () => mode);
+  let gateOn = false, gate = null, gateAt = 0; const f0 = w.fetch;   // holds one manifest answer until released (the probe request stays in flight)
+  w.fetch = async (u, o) => { if (gateOn && /manifest\.json$/.test(u)) { await new Promise((res, rej) => { gate = res; gateAt = w.now; if (o && o.signal) o.signal.addEventListener('abort', () => { gate = null; rej(new Error('aborted')); }); }); gate = null; } return f0(u, o); };
+  const p = w.make(); await p.ready; await w.settle(100);
+  w.manifest.clips.forEach(c => w.fail.add(c.name)); mode = 'throw'; p.setState('listening');
+  await runFor(w, 20000); await runFor(w, 6000);   // every clip failed, the probe throws: frozen, holdLast's retry pending, every entry past its 5 s wait
+  let i = p.getInfo(); assert.ok(i.bad.length >= 5, 'set-up: clips set aside: ' + i.bad.join()); assert.strictEqual(i.clipRevivals, 0, 'set-up: nothing released while the probe fails');
+  // wait for a probe request in flight AND a holdLast retry timer armed just now (2.5 s from the answer: the kick must not wait for it)
+  const untagged = () => w.timers.filter(x => !x.tag); const seen = new Set(untagged().map(x => x.id)); gateOn = true; let armed = null;
+  for (let s = 0; s < 8000 && !armed; s++) {
+    await new Promise(r => setImmediate(r)); w.advance(10);
+    const fresh = untagged().filter(x => !seen.has(x.id)); fresh.forEach(x => seen.add(x.id));
+    if (gate && w.now - gateAt < 1400) armed = fresh.find(x => x.at - w.now >= 2480 && x.at - w.now <= 2500) || null;
+  }
+  assert.ok(armed, 'set-up: a probe in flight and a fresh 2.5 s retry timer'); const base = commitsOf(p).length, plays0 = w.played.length, revs0 = p.getInfo().clipRevivals;
+  assert.strictEqual(base, commitsOf(p).length); assert.strictEqual(p.getInfo().bad.length >= 5, true, 'still frozen');
+  w.fail.clear(); mode = 'ok'; gateOn = false; const tA = w.now; gate(); gate = null;   // the single 'exists' answer; the clips work again
+  await until(w, () => commitsOf(p).length > base, 2000, 10);
+  const cs = commitsOf(p).slice(base); assert.ok(cs.length >= 1, 'a clip started after the answer'); i = p.getInfo();
+  assert.ok(cs[0].t - tA <= 300, 'within 300 ms of the answer, not after the 2.5 s retry: ' + (cs[0].t - tA) + ' ms'); assert.ok(w.now - tA < 2400);
+  assert.ok(w.played.length > plays0, 'and it was played'); assert.strictEqual(i.probeVerdict, 'exists');
+  assert.ok(i.clipRevivals > revs0, 'entries were released'); assert.ok(i.log.some(e => e.ev === 'revive' && e.t >= tA - 5), 'a revive entry was written at the answer');
+  assert.strictEqual(w.front(p).clipName, i.clip); p.destroy();
+  // Without the kick in reviveClips (clearRetry(); next(true)) the entries are only released: nothing starts until holdLast's retry timer fires
+  // 2.5 s after it was armed (it was armed right before the answer), so the first commit lands ~2.4 s later and the 300 ms assertion fails.
+});
+test('a clip that loads and then breaks each time stops being retried after CLIP_FAILS_TOTAL failures: it ends set aside, the picture stays drawable', async () => {
+  // The harness cannot make a clip "load and then error" in the live path (a committed clip's late error is not a set-aside; only a failed start or the held first clip is),
+  // so the cap is driven through ordinary failures with a fresh good load that commits in between (that resets fails, never total).
+  const T = 'thinking-1', CLIP_FAILS_TOTAL = 12; const w = makeWorld(); probeNet(w, () => 'ok');
+  let failT = false, failures = 0; w.fail = { has: (n) => { if (n === T && failT) { failures++; return true; } return false; }, add() {}, delete() {}, clear() {} };   // failures: the loads of T that ended in an error
+  const lost = []; const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+  let thinkCommits = 0, atMid = -1;
+  for (let k = 0; k < 28; k++) {
+    failT = true; p.setState('thinking'); await runFor(w, 20000);   // it fails (at least once, and again after its wait)
+    failT = false; await until(w, () => p.getInfo().clip === T, 15000, 20); if (p.getInfo().clip === T) thinkCommits++;   // loads fresh and commits: fails reset, total does not
+    p.setState('listening'); await runFor(w, 3000); assert.strictEqual(p.getInfo().drawable, true);
+    if (k === 13) atMid = failures;
+  }
+  const j = p.getInfo(), n = failures;   // a failed load is a set-aside (counted by the cap) or a failed preload of the hidden slot (not counted): so up to about twice the cap
+  assert.strictEqual(n, atMid, 'no failing load at all in the second half: the clip was no longer tried');
+  assert.ok(thinkCommits >= 2, 'it did load and commit between failures: ' + thinkCommits); assert.ok(n >= 6, 'it failed and was retried several times first: ' + n);
+  assert.ok(n <= 2 * CLIP_FAILS_TOTAL, 'failed loads stay bounded by the lifetime cap (set-asides + their preloads): ' + n); assert.ok(j.bad.indexOf(T) >= 0, 'it ends set aside: ' + j.bad.join());
+  assert.strictEqual(lost.length, 0); assert.strictEqual(j.lost, null); assert.strictEqual(j.drawable, true);
+  p.setState('thinking'); await runFor(w, 120000); assert.notStrictEqual(p.getInfo().clip, T, 'and never again, even with the clip working and the probe answering'); p.destroy();
+});
 test('probe: hidden stops it (no request, in-flight one has no say), visible probes at once and catches a removal that happened while hidden', async () => {
   const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
   const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
