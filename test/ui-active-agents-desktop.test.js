@@ -27,15 +27,18 @@ test('renderAgents puts the Active container first and paints it', () => {
   assert.ok(/paintAllAgentStatus\(\);\s*paintActiveSection\(true\);/.test(r));
 });
 
-test('paintAgentsWorking repaints the Active section', () => {
-  assert.ok(/function paintAgentsWorking\(\)[\s\S]*?paintActiveSection\(\);\s*\n    \}/.test(app));
+test('paintAgentsWorking repaints the Active section once per burst of status events (first fill ordered by start)', () => {
+  assert.ok(/function paintAgentsWorking\(\)[\s\S]*?activePaintSoon\(\);\s*\n    \}/.test(app));
+  const q = body(app, 'function activePaintSoon(');
+  assert.ok(q.includes('queueMicrotask(') && q.includes('activePaintQueued'));
 });
 
 test('paintActiveSection uses the helpers with held and enabled', () => {
   const p = body(app, 'function paintActiveSection(');
-  assert.ok(p.includes('activeBusyFrom(agentStatus, localBusy, AGENTS.map(a => a.name))'));
+  assert.ok(p.includes("AGENTS.map(a => a.name).filter(n => document.getElementById('agent-btn-' + n))"), 'only agents with a row');
+  assert.ok(p.includes('activeBusyFrom(agentStatus, localBusy, visible)'));
   assert.ok(/activeStep\(activeState,[^\n]*held: activeHeld[^\n]*enabled: activeTopOn\(\)/.test(p));
-  assert.ok(p.includes('activeChanged('));
+  assert.ok(p.includes('activeMembersChanged('), 'rebuild only when rows join, leave or move');
   assert.ok(!p.includes('paintAgentsWorking'), 'no recursion');
   assert.ok(p.includes("prefers-reduced-motion: reduce"));
   assert.ok(p.includes('.animate('));
@@ -43,23 +46,24 @@ test('paintActiveSection uses the helpers with held and enabled', () => {
   assert.ok(p.includes('cat-collapsed-active'));
 });
 
-test('copies drop ids, are marked, and done rows say done', () => {
+test('copies drop ids, are marked, and done rows say done; a worker-only parent reads as working', () => {
   const c = body(app, 'function activeMakeCopy(');
   assert.ok(c.includes('cloneNode(true)'));
   assert.ok(c.includes("removeAttribute('id')"));
   assert.ok(c.includes("'active-copy'"));
-  assert.ok(c.includes("'active-done'"));
-  assert.ok(c.includes("remove('is-busy')"));
-  assert.ok(c.includes('✓ done'));
-  assert.ok(c.includes('agent-busy-line'));
+  assert.ok(c.includes('activeDress(copy, row, orig)'));
   assert.ok(c.includes('startSoloChat(copy.dataset.agent, copy.dataset.model)'));
+  const d = body(app, 'function activeDress(');
+  assert.ok(d.includes("'active-done'") && d.includes("remove('is-busy')") && d.includes('\\u2713 done'));
+  assert.ok(d.includes('\\u23F3 working'), 'a row busy only through its temporary workers');
+  assert.ok(d.includes('agent-busy-line'));
 });
 
 test('hold listeners use a 2000 ms timer', () => {
   const h = body(app, 'function activeWireHold(');
   for (const ev of ['mouseenter', 'mousemove', 'mouseleave']) assert.ok(h.includes(`'${ev}'`), ev);
   assert.ok(h.includes('2000'));
-  assert.ok(/setInterval\(paintActiveSection, 1000\)/.test(app));
+  assert.ok(/setInterval\(\(\) => paintActiveSection\(\), 1000\)/.test(app));
 });
 
 test('the setting defaults on and has a checkbox', () => {
@@ -83,10 +87,10 @@ test('page code does not redeclare the helpers', () => {
     assert.ok(!outside.includes(`function ${n}(`) && !new RegExp(`(const|let|var) ${n}\\b`).test(outside), n + ' not in page code');
 });
 
-test('unchanged rows are refreshed in place (a row under the pointer is never replaced mid-click); any movement holds again', () => {
+test('unchanged rows are refreshed in place, done marks included (a row under the pointer is never replaced mid-click); any movement holds again', () => {
   const p = app.slice(app.indexOf('function paintActiveSection('), app.indexOf('function activeWireHold('));
-  assert.ok(/if \(changed \|\| items\.children\.length !== activeState\.rows\.length\) \{\s*items\.replaceChildren/.test(p), 'rebuild only on a change');
-  assert.ok(/else \{[\s\S]*dst\.textContent = src\.textContent/.test(p), 'in-place status line update otherwise');
+  assert.ok(/if \(membersChanged \|\| !items\) \{[\s\S]*items\.replaceChildren/.test(p), 'rebuild only when rows join, leave or move');
+  assert.ok(/activeState\.rows\.forEach\(\(row, i\) => \{\s*const copy = items\.children\[i\];\s*if \(copy\) activeDress\(copy, row,/.test(p), 'otherwise in place');
   const h = app.slice(app.indexOf('function activeWireHold('), app.indexOf('function activeWireHold(') + 900);
   assert.ok(/'mousemove', \(\) => \{ activeHeld = true; restart\(\); \}/.test(h));
 });

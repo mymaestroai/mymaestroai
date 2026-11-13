@@ -1656,22 +1656,26 @@ function renderWorkingChip() {
 }
 
 // One row of the agent list. opts.done: a row of the Active section whose agent just finished (shows "✓ done", idle dot).
+// opts.active: a row of the Active section; when only the agent's temporary workers run it still reads as working.
 function agentRowHtml(a, opts) {
   const done = !!(opts && opts.done);
+  const viaWorkers = !!(opts && opts.active) && !done && !isBusy(a.name);
   const n = unread[a.name] || 0;
   const s = live[a.name];
   const question = !done && !!(s && s.pendingQuestion);
-  const working = !done && isBusy(a.name);
+  const working = !done && (isBusy(a.name) || viaWorkers);
   const dotCls = question ? ' question' : working ? ' busy' : statusKnown ? ' idle' : '';
   const sub = done
     ? '<div class="agent-model working">✓ done</div>'
-    : working
-      ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name))}</div>`
-      : `<div class="agent-model" title="${esc(a.blurb || '')}">${esc(a.blurb || shortModel(a.model))}</div>`;
+    : viaWorkers
+      ? '<div class="agent-model working">⏳ working</div>'
+      : working
+        ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name))}</div>`
+        : `<div class="agent-model" title="${esc(a.blurb || '')}">${esc(a.blurb || shortModel(a.model))}</div>`;
   return `<button class="agent-row${working ? ' is-busy' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}">` +
     `<span class="agent-icon">${esc(a.icon || '🤖')}</span>` +
     `<span class="agent-meta"><div class="agent-name">${esc(a.display || a.name)}${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}</div>${sub}</span>` +
-    `<span class="dot${dotCls}" title="${esc(working ? busyText(a.name) : '')}">${question ? '?' : ''}</span>` +
+    `<span class="dot${dotCls}" title="${esc(working && !viaWorkers ? busyText(a.name) : '')}">${question ? '?' : ''}</span>` +
     (n ? `<span class="badge">${n > 99 ? '99+' : n}</span>` : '') +
     '</button>';
 }
@@ -1682,6 +1686,7 @@ let activeHeld = false;
 let activeHoldTimer = null;
 let activeTicker = null;
 let activeLastH = 0;
+let activeLastCount = 0;
 let activeHoldWired = false;
 function activeTopOn() {
   try { return localStorage.getItem('hub-active-top') !== 'off'; } catch { return true; }
@@ -1696,19 +1701,27 @@ function toggleActiveTop() {
   paintActiveMenu();
   if (screen === 'agents') renderAgents();
 }
+function activeBusyNow() {
+  return activeBusyFrom(live, new Map([...streams.keys()].map(n => [n, null])), agents.map(a => a.name));
+}
+// The finger left the list (or rested 2 s): let held changes through, but only redraw when the section's rows would
+// actually change, and only after the tap's click has been delivered (a redraw inside touchend can swallow the click).
 function activeRelease() {
   clearTimeout(activeHoldTimer);
   activeHoldTimer = null;
   if (!activeHeld) return;
   activeHeld = false;
-  if (screen === 'agents') renderAgents();
+  const next = activeStep(activeState, { busy: activeBusyNow(), now: Date.now(), held: false, enabled: activeTopOn() });
+  if (!activeMembersChanged(activeState, next)) return;
+  setTimeout(() => { if (!activeHeld && screen === 'agents') renderAgents(); }, 400);
 }
 function activeWireHold(list) {
   if (activeHoldWired || !list) return;
   activeHoldWired = true;
   const restart = () => { clearTimeout(activeHoldTimer); activeHoldTimer = setTimeout(activeRelease, 2000); };
-  list.addEventListener('touchstart', () => { activeHeld = true; restart(); }, { passive: true });
-  list.addEventListener('touchmove', restart, { passive: true });
+  // With the switch off nothing is held and nothing is redrawn: the list behaves exactly as before.
+  list.addEventListener('touchstart', () => { if (!activeTopOn()) return; activeHeld = true; restart(); }, { passive: true });
+  list.addEventListener('touchmove', () => { if (activeHeld) restart(); }, { passive: true });
   list.addEventListener('touchend', activeRelease, { passive: true });
   list.addEventListener('touchcancel', activeRelease, { passive: true });
 }
@@ -1718,18 +1731,13 @@ function renderAgents() {
   renderWorkingChip();
   if (!agents.length) { list.innerHTML = '<div class="empty">No agents found.</div>'; return; }
   activeWireHold(list);
-  const busy = activeBusyFrom(live, new Map([...streams.keys()].map(n => [n, null])), agents.map(a => a.name));
-  activeState = activeStep(activeState, { busy, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
+  activeState = activeStep(activeState, { busy: activeBusyNow(), now: Date.now(), held: activeHeld, enabled: activeTopOn() });
   let activeHtml = '';
-  if (activeState.rows.length) {
+  const activeRows = activeState.rows.map(row => ({ row, a: agents.find(x => x.name === row.name) })).filter(r => r.a);
+  if (activeRows.length) {
     const activeCollapsed = !workingFilter && !!collapsed.active;
-    activeHtml = `<div class="active-sec"><button class="group-title" data-group="active"><span>⚡ ${esc(activeTitle(activeState))}</span><span>${activeCollapsed ? '&#x25B8;' : '&#x25BE;'}</span></button>`;
-    if (!activeCollapsed) {
-      for (const row of activeState.rows) {
-        const a = agents.find(x => x.name === row.name);
-        if (a) activeHtml += agentRowHtml(a, { done: row.doneAt != null });
-      }
-    }
+    activeHtml = `<div class="active-sec"><button class="group-title" data-group="active"><span>⚡ ${esc(activeTitle({ rows: activeRows }))}</span><span>${activeCollapsed ? '&#x25B8;' : '&#x25BE;'}</span></button>`;
+    if (!activeCollapsed) for (const { row, a } of activeRows) activeHtml += agentRowHtml(a, { done: row.doneAt != null, active: true });
     activeHtml += '</div>';
   }
   const known = new Set(GROUPS.map(g => g.key));
@@ -1751,14 +1759,17 @@ function renderAgents() {
   list.innerHTML = activeHtml + html;
   const sec = list.querySelector('.active-sec');
   const h = sec ? sec.offsetHeight : 0;
-  if (sec && h !== activeLastH && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  // animate only when rows joined or left (not on every status redraw, nor when coming back to this screen)
+  if (sec && activeRows.length !== activeLastCount && h !== activeLastH && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
     sec.animate([{ height: activeLastH + 'px', overflow: 'hidden' }, { height: h + 'px', overflow: 'hidden' }], { duration: 150, easing: 'ease-out' });
   }
   activeLastH = h;
+  activeLastCount = activeRows.length;
   if (!activeTicker && activeState.rows.some(r => r.doneAt != null)) {
     activeTicker = setInterval(() => {
-      if (!activeState.rows.some(r => r.doneAt != null)) { clearInterval(activeTicker); activeTicker = null; return; }
-      if (screen === 'agents') renderAgents();
+      // stops when nothing lingers or this screen is left (renderAgents steps the state again on the way back)
+      if (screen !== 'agents' || !activeState.rows.some(r => r.doneAt != null)) { clearInterval(activeTicker); activeTicker = null; return; }
+      renderAgents();
     }, 1000);
   }
 }
@@ -4402,6 +4413,12 @@ function activeChanged(a, b) {
   const x = (a && a.rows) || [], y = (b && b.rows) || [];
   if (x.length !== y.length) return true;
   for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null)) return true;
+  return false;
+}
+function activeMembersChanged(a, b) {
+  const x = (a && a.rows) || [], y = (b && b.rows) || [];
+  if (x.length !== y.length) return true;
+  for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name) return true;
   return false;
 }
 function activeTitle(state) {

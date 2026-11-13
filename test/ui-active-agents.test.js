@@ -121,3 +121,10 @@ test('activeChanged and activeTitle', () => {
   assert.strictEqual(L.activeTitle(a), 'Active 1');
   assert.strictEqual(L.activeTitle(L.activeInitial()), 'Active 0');
 });
+
+test('activeMembersChanged: names and order count, a done mark alone does not', () => {
+  const a = { rows: [{ name: 'owner', since: 1, doneAt: null }, { name: 'sam', since: 2, doneAt: null }] };
+  assert.strictEqual(L.activeMembersChanged(a, { rows: [{ name: 'owner', since: 1, doneAt: 5 }, { name: 'sam', since: 2, doneAt: null }] }), false);
+  assert.strictEqual(L.activeMembersChanged(a, { rows: [{ name: 'sam', since: 2, doneAt: null }, { name: 'owner', since: 1, doneAt: null }] }), true);
+  assert.strictEqual(L.activeMembersChanged(a, { rows: [{ name: 'owner', since: 1, doneAt: null }] }), true);
+});

@@ -84,10 +84,11 @@ test('the old inline row code is gone from the loop; it calls agentRowHtml', () 
 
 test('renderAgents steps the section with live, streams, agents, held and enabled', () => {
   const body = RENDER();
-  assert.match(body, /activeBusyFrom\(live, new Map\(\[\.\.\.streams\.keys\(\)\]\.map\(n => \[n, null\]\)\), agents\.map\(a => a\.name\)\)/);
-  assert.match(body, /activeStep\(activeState, \{ busy, now: Date\.now\(\), held: activeHeld, enabled: activeTopOn\(\) \}\)/);
-  assert.ok(body.indexOf('No agents found.') < body.indexOf('activeBusyFrom('), 'after the empty-list return');
-  assert.ok(body.indexOf('activeBusyFrom(') < body.indexOf('const known'), 'before the groups loop');
+  const now = slice('function activeBusyNow()', '// The finger left');
+  assert.match(now, /activeBusyFrom\(live, new Map\(\[\.\.\.streams\.keys\(\)\]\.map\(n => \[n, null\]\)\), agents\.map\(a => a\.name\)\)/);
+  assert.match(body, /activeStep\(activeState, \{ busy: activeBusyNow\(\), now: Date\.now\(\), held: activeHeld, enabled: activeTopOn\(\) \}\)/);
+  assert.ok(body.indexOf('No agents found.') < body.indexOf('activeBusyNow('), 'after the empty-list return');
+  assert.ok(body.indexOf('activeBusyNow(') < body.indexOf('const known'), 'before the groups loop');
 });
 
 // Runs renderAgents against stubs and returns what it wrote.
@@ -101,10 +102,10 @@ function renderEnv(over) {
     activeInitial: () => ({ rows: [] }), activeBusyFrom: (l, s, v) => { env.calls.push(['busyFrom', l, s, v]); return {}; },
     activeStep: (st, inp) => { env.calls.push(['step', inp]); return o.state || { rows: [] }; }, activeTitle: (s) => 'Active ' + s.rows.length,
     activeTopOn: () => true, screen: 'agents', matchMedia: () => ({ matches: false }), setInterval: () => 1, clearInterval() {},
-    activeHeld: false, activeLastH: 0, activeTicker: null, calls: [], localStorage: {},
+    activeHeld: false, activeLastH: 0, activeLastCount: 0, activeTicker: null, calls: [], localStorage: {},
   };
   const names = Object.keys(env).filter((n) => n !== 'calls');
-  const src = ROW() + '\nlet activeState = activeInitial();\nfunction activeWireHold() {}\n' + RENDER();
+  const src = ROW() + '\nlet activeState = activeInitial();\nfunction activeWireHold() {}\n' + slice('function activeBusyNow()', '// The finger left') + RENDER();
   const fn = new Function(...names, 'env', src + '\nreturn { renderAgents, setState(s) { activeState = s; } };')(...names.map((n) => env[n]), env);
   return { env, list, fn };
 }
@@ -127,7 +128,7 @@ test('renderAgents: the section uses data-group="active", respects collapsed.act
   const open = renderEnv({ agents, state, busy: ['a'] });
   open.fn.renderAgents();
   const h = open.list.innerHTML;
-  assert.ok(h.startsWith('<div class="active-sec"><button class="group-title" data-group="active"><span>⚡ Active 3</span>'), h.slice(0, 160));
+  assert.ok(h.startsWith('<div class="active-sec"><button class="group-title" data-group="active"><span>⚡ Active 2</span>'), 'the count is the rows drawn: ' + h.slice(0, 160));
   assert.ok(h.includes('&#x25BE;'));
   assert.ok(h.includes('active-done') && h.includes('✓ done'));
   assert.ok(h.indexOf('data-group="active"') < h.indexOf('data-group="worker"'));
@@ -153,9 +154,12 @@ test('the hold: touch listeners on agents-list, passive, 2000 ms', () => {
   for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) assert.ok(body.includes(`'${ev}'`), ev);
   assert.ok(body.includes('setTimeout(activeRelease, 2000)'));
   assert.ok((body.match(/\{ passive: true \}/g) || []).length === 4);
-  assert.ok(/touchstart', \(\) => \{ activeHeld = true;/.test(body));
+  assert.ok(/touchstart', \(\) => \{ if \(!activeTopOn\(\)\) return; activeHeld = true;/.test(body), 'off switch: no hold, no redraw');
   assert.ok(/'touchend', activeRelease/.test(body) && /'touchcancel', activeRelease/.test(body));
-  assert.ok(/activeHeld = false;\s*if \(screen === 'agents'\) renderAgents\(\);/.test(body));
+  const rel = slice('function activeRelease()', 'function activeWireHold(');
+  assert.ok(/if \(!activeMembersChanged\(activeState, next\)\) return;/.test(rel), 'no redraw unless rows join or leave');
+  assert.ok(/setTimeout\(\(\) => \{ if \(!activeHeld && screen === 'agents'\) renderAgents\(\); \}, 400\)/.test(rel), 'the redraw waits until the tap has been delivered');
+  assert.ok(!/activeHeld = false;\s*if \(screen === 'agents'\) renderAgents\(\);/.test(rel), 'never a redraw inside touchend');
   assert.ok(RENDER().includes('activeWireHold(list)'));
   assert.ok(body.includes('activeHoldWired'), 'wired once');
 });
@@ -163,7 +167,7 @@ test('the hold: touch listeners on agents-list, passive, 2000 ms', () => {
 test('the animation honours reduced motion and runs only when the height changed', () => {
   const body = RENDER();
   assert.ok(body.includes("matchMedia('(prefers-reduced-motion: reduce)').matches"));
-  assert.ok(/sec && h !== activeLastH && !matchMedia/.test(body));
+  assert.ok(/sec && activeRows\.length !== activeLastCount && h !== activeLastH && !matchMedia/.test(body), 'only when rows join or leave');
   assert.ok(body.includes("sec.animate([{ height: activeLastH + 'px', overflow: 'hidden' }, { height: h + 'px', overflow: 'hidden' }], { duration: 150, easing: 'ease-out' })"));
   assert.ok(body.includes('activeLastH = h;'));
   assert.ok(/prefers-reduced-motion: reduce\) \{ \.active-sec \{ animation: none; \} \}/.test(html));
@@ -214,4 +218,17 @@ test('the six helper names are declared exactly once in mobile.js', () => {
   for (const n of ['activeState', 'activeHeld', 'activeHoldTimer', 'activeTicker', 'activeLastH']) {
     assert.strictEqual((js.match(new RegExp(`let\\s+${n}\\b`, 'g')) || []).length, 1, n);
   }
+});
+
+test('an Active row whose agent works only through temporary workers reads as working; normal rows are unchanged', () => {
+  const { env, agentRowHtml } = rowEnv();
+  const r = agentRowHtml(AGENTS.idle, { active: true });
+  assert.ok(r.includes('class="agent-row is-busy"') && r.includes('⏳ working') && r.includes('class="dot busy"'), r);
+  assert.strictEqual(agentRowHtml(AGENTS.busy, { active: true }), oldRow(AGENTS.busy, env), 'a really busy agent: the usual row');
+  assert.strictEqual(agentRowHtml(AGENTS.idle), oldRow(AGENTS.idle, env), 'outside the section: unchanged');
+});
+
+test('the linger ticker stops when the Agents screen is left', () => {
+  const body = RENDER();
+  assert.ok(/if \(screen !== 'agents' \|\| !activeState\.rows\.some\(r => r\.doneAt != null\)\) \{ clearInterval\(activeTicker\); activeTicker = null; return; \}/.test(body));
 });

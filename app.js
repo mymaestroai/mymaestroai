@@ -6534,6 +6534,23 @@
       try { localStorage.setItem('hub-active-top', on ? 'on' : 'off'); } catch {}
       paintActiveSection(true);
     }
+    // Put a copy's status in line with its row: done rows say so; a row whose own entry is idle but whose temporary
+    // workers run (the hub counts it as working) says "working"; otherwise the real row's status line and dot.
+    function activeDress(copy, row, orig) {
+      let line = copy.querySelector('.agent-busy-line');
+      const ensureLine = () => {
+        if (!line) { line = document.createElement('span'); line.className = 'agent-busy-line'; (copy.querySelector('.agent-info') || copy).appendChild(line); }
+        return line;
+      };
+      copy.classList.toggle('active-done', row.doneAt != null);
+      if (row.doneAt != null) { copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done'; return; }
+      const src = orig && orig.querySelector('.agent-busy-line');
+      copy.classList.add('is-busy');
+      if (src) { ensureLine().className = src.className; line.textContent = src.textContent; }
+      else { ensureLine().className = 'agent-busy-line'; line.textContent = '\u23F3 working'; }
+      const sd = orig && orig.querySelector('.agent-status'), dd = copy.querySelector('.agent-status');
+      if (sd && dd) { dd.className = sd.className; dd.textContent = sd.textContent; dd.title = sd.title; }
+    }
     function activeMakeCopy(row) {
       const orig = document.getElementById('agent-btn-' + row.name);
       if (!orig) return null;
@@ -6541,28 +6558,29 @@
       copy.removeAttribute('id');
       copy.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
       copy.classList.add('active-copy');
-      if (row.doneAt != null) {
-        copy.classList.add('active-done');
-        copy.classList.remove('is-busy');
-        let line = copy.querySelector('.agent-busy-line');
-        if (!line) {
-          line = document.createElement('span');
-          line.className = 'agent-busy-line';
-          (copy.querySelector('.agent-info') || copy).appendChild(line);
-        }
-        line.textContent = '✓ done';
-      }
+      copy.classList.remove('in-group');
+      activeDress(copy, row, orig);
       copy.addEventListener('click', (e) => {
         if (!e.target.classList.contains('action-btn')) startSoloChat(copy.dataset.agent, copy.dataset.model);
       });
       return copy;
     }
+    // Status events come in bursts (a snapshot sets every agent in a row): paint once after the burst, so the first fill
+    // sees every working agent at once and orders them by start time.
+    let activePaintQueued = false;
+    function activePaintSoon() {
+      if (activePaintQueued) return;
+      activePaintQueued = true;
+      queueMicrotask(() => { activePaintQueued = false; paintActiveSection(); });
+    }
     function paintActiveSection(force) {
       const box = document.getElementById('agent-active-group');
-      if (!box) return;
-      const busy = activeBusyFrom(agentStatus, localBusy, AGENTS.map(a => a.name));
+      if (!box) { if (activeTicker) { clearInterval(activeTicker); activeTicker = null; } return; }
+      // Only agents that have a row in this list (the access-filtered AGENTS, in one of the shown groups).
+      const visible = AGENTS.map(a => a.name).filter(n => document.getElementById('agent-btn-' + n));
+      const busy = activeBusyFrom(agentStatus, localBusy, visible);
       const next = activeStep(activeState, { busy, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
-      const changed = force || activeChanged(activeState, next);
+      const membersChanged = force || activeMembersChanged(activeState, next);
       activeState = next;
       if (activeState.rows.length === 0) {
         box.innerHTML = '';
@@ -6571,35 +6589,27 @@
         return;
       }
       box.hidden = false;
-      if (!activeTicker) activeTicker = setInterval(paintActiveSection, 1000);
+      if (!activeTicker) activeTicker = setInterval(() => paintActiveSection(), 1000);
       const collapsed = localStorage.getItem('cat-collapsed-active') === 'true';
       const oldH = box.offsetHeight;
-      if (changed || !box.querySelector('.agent-group-items')) {
-        box.innerHTML = `<div class="agent-group-title" onclick="toggleCategoryCollapse('active', this)"><span class="collapse-arrow ${collapsed ? 'collapsed' : ''}">▼</span><span>⚡ Active</span><span class="active-count">${activeState.rows.length}</span></div><div class="agent-group-items" style="${collapsed ? 'display:none' : ''}"></div>`;
-      }
-      const items = box.querySelector('.agent-group-items');
-      if (changed || items.children.length !== activeState.rows.length) {
+      let items = box.querySelector('.agent-group-items');
+      if (membersChanged || !items) {
+        box.innerHTML = `<div class="agent-group-title" onclick="toggleCategoryCollapse('active', this)"><span class="collapse-arrow ${collapsed ? 'collapsed' : ''}">\u25BC</span><span>\u26A1 Active</span><span class="active-count">${activeState.rows.length}</span></div><div class="agent-group-items" style="${collapsed ? 'display:none' : ''}"></div>`;
+        items = box.querySelector('.agent-group-items');
         items.replaceChildren(...activeState.rows.map(activeMakeCopy).filter(Boolean));
-      } else {
-        // Same rows: update each copy's status line in place, so a row under the pointer is never replaced mid-click.
-        activeState.rows.forEach((row, i) => {
-          const copy = items.children[i], orig = document.getElementById('agent-btn-' + row.name);
-          if (!copy || !orig || row.doneAt != null) return;
-          copy.classList.toggle('is-busy', orig.classList.contains('is-busy'));
-          const src = orig.querySelector('.agent-busy-line'), dst = copy.querySelector('.agent-busy-line');
-          if (src && dst) { dst.textContent = src.textContent; dst.className = src.className; }
-          else if (src && !dst) (copy.querySelector('.agent-info') || copy).appendChild(src.cloneNode(true));
-          const sd = orig.querySelector('.agent-status'), dd = copy.querySelector('.agent-status');
-          if (sd && dd) { dd.className = sd.className; dd.textContent = sd.textContent; dd.title = sd.title; }
-        });
-      }
-      if (changed) {
         const newH = box.offsetHeight;
         const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         if (!reduced && oldH !== newH && box.animate) {
           box.animate([{ height: oldH + 'px', overflow: 'hidden' }, { height: newH + 'px', overflow: 'hidden' }], { duration: 150, easing: 'ease-out' });
         }
+        return;
       }
+      // Same rows in the same order: update each copy in place (status line, dot, done mark), so a row under the
+      // pointer is never replaced, even when its agent finishes mid-click.
+      activeState.rows.forEach((row, i) => {
+        const copy = items.children[i];
+        if (copy) activeDress(copy, row, document.getElementById('agent-btn-' + row.name));
+      });
     }
     function activeWireHold() {
       if (activeHoldWired) return;
@@ -6926,7 +6936,7 @@
       el.classList.toggle('filtering', busyFilterOn);
       el.textContent = busyChipLabel(split, busyFilterOn);
       list?.classList.toggle('busy-filter', busyFilterOn);
-      paintActiveSection();
+      activePaintSoon();
     }
 
     function toggleBusyFilter() {
@@ -14417,6 +14427,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const x = (a && a.rows) || [], y = (b && b.rows) || [];
       if (x.length !== y.length) return true;
       for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null)) return true;
+      return false;
+    }
+    function activeMembersChanged(a, b) {
+      const x = (a && a.rows) || [], y = (b && b.rows) || [];
+      if (x.length !== y.length) return true;
+      for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name) return true;
       return false;
     }
     function activeTitle(state) {
