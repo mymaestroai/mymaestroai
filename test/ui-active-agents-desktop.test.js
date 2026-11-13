@@ -19,10 +19,10 @@ function body(src, header) {
   return src.slice(i, next < 0 ? undefined : next);
 }
 
-test('renderAgents puts the Active container first and paints it', () => {
+test('renderAgents puts the Active container under the New Agent / Clone row, above the first group, and paints it', () => {
   const r = body(app, 'function renderAgents()');
-  assert.ok(r.includes(`let html = '<div id="agent-active-group" class="agent-group active-group" data-category="active" hidden></div>' + groupActions;`) ||
-    /let html = [^\n]*agent-active-group[^\n]*groupActions/.test(r), 'container before groupActions');
+  assert.ok(r.includes(`let html = groupActions + '<div id="agent-active-group" class="agent-group active-group" data-category="active" hidden></div>';`),
+    'container after groupActions, before the category groups');
   assert.ok(r.includes('activeWireHold()'));
   assert.ok(/paintAllAgentStatus\(\);\s*paintActiveSection\(true\);/.test(r));
 });

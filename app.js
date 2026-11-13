@@ -5854,7 +5854,7 @@
         <span class="group-action-btn" onclick="openCloneAgent(event)" title="Clone existing agent">Clone</span>
       </div>`;
 
-      let html = '<div id="agent-active-group" class="agent-group active-group" data-category="active" hidden></div>' + groupActions;
+      let html = groupActions + '<div id="agent-active-group" class="agent-group active-group" data-category="active" hidden></div>';
       categories.forEach(cat => {
         const agents = grouped[cat.key] || [];
         if (agents.length === 0) return;
