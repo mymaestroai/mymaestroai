@@ -164,6 +164,13 @@ test('lost microphone on screen: the line says "Microphone lost", the meter stay
   assert.deepStrictEqual(e.log.filter((x) => x.startsWith('meter:')), ['meter:-20'], 'the meter moves again');
   assert.ok(html.includes('<button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Try the microphone again</button>'), 'the button says what it does');
   assert.ok(html.includes('#cp-mic.cp-mic-lost {'), 'the lost line is styled');
+  // lost before any microphone was reported: back means an empty line, as on the computer
+  const e2 = callEnv();
+  e2.fns.voiceCallStart();
+  e2.created.deps.ui.micLost(true);
+  assert.strictEqual(e2.els['cp-mic'].textContent, 'Microphone lost');
+  e2.created.deps.ui.micLost(false);
+  assert.strictEqual(e2.els['cp-mic'].textContent, '');
 });
 
 test('test hooks: window.__voiceBt reads keep-alive, mic info, mic lost and echo hold', () => {

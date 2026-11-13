@@ -246,6 +246,17 @@ test('ui.micLost: shows and hides "Try the microphone again"; the line says "Mic
   assert.ok(api.voiceCallS.call, 'still in the call');
 });
 
+test('ui.micLost before any microphone report: "Microphone lost", then an empty line when it is back', async () => {
+  const { api, log, get } = makeEnv();
+  await api.voiceCallStart('c1');
+  const ui = log.created[0].ui, line = get('vcb-micinfo-c1');
+  ui.micLost(true);
+  assert.strictEqual(line.textContent, 'Microphone lost');
+  ui.micLost(false);
+  assert.strictEqual(line.textContent, '');
+  assert.strictEqual(line.classList.contains('vcb-mic-lost'), false);
+});
+
 test('test hooks: window.__voiceBt reports keep-alive, mic info, mic lost and the echo guard', async () => {
   const { api, log, stubs } = makeEnv({ prefs: { echoHold: 1500 } });
   await api.voiceCallStart('c1');

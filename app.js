@@ -11892,7 +11892,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }   // stopped meanwhile: let go of it
           // iOS leaves the context 'interrupted' (or suspended) after a route change or a phone call: resume it, or the new source is silent.
           // A resume can stay pending on iOS while a phone call holds the audio: it is given 3 s; a context still not running is a lost microphone
-          // (the new stream is let go, Tap to talk tries again later), never a recovery that hears nothing.
+          // (the new stream is let go, "Try the microphone again" tries later), never a recovery that hears nothing.
           if (st.ctx.state && st.ctx.state !== 'running' && typeof st.ctx.resume === 'function') {
             let wait = null;
             try { await Promise.race([Promise.resolve(st.ctx.resume()), new Promise((r) => { wait = setT(r, 3000); })]); } catch { /* checked below */ }

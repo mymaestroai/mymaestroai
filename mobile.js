@@ -3539,7 +3539,7 @@ function voiceCreateVad(opts) {
       if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }   // stopped meanwhile: let go of it
       // iOS leaves the context 'interrupted' (or suspended) after a route change or a phone call: resume it, or the new source is silent.
       // A resume can stay pending on iOS while a phone call holds the audio: it is given 3 s; a context still not running is a lost microphone
-      // (the new stream is let go, Tap to talk tries again later), never a recovery that hears nothing.
+      // (the new stream is let go, "Try the microphone again" tries later), never a recovery that hears nothing.
       if (st.ctx.state && st.ctx.state !== 'running' && typeof st.ctx.resume === 'function') {
         let wait = null;
         try { await Promise.race([Promise.resolve(st.ctx.resume()), new Promise((r) => { wait = setT(r, 3000); })]); } catch { /* checked below */ }
@@ -6618,7 +6618,7 @@ function voiceCallDeps(vc) {
     clearTimer: (t) => clearTimeout(t),
     prefs: () => voicePrefsNow(),
     // Everything the controller uses passes through: the "now" of setPlaybackActive (a cut by the person drops the echo guard at once),
-    // reopen (Tap to talk after a lost microphone) and info.
+    // reopen ("Try the microphone again" after a lost microphone) and info.
     vad: { start: (h) => vc.vad.start(typeof voiceDisp !== 'undefined' && voiceDisp.floor ? voiceDisp.floor.wrap(h) : h), stop: () => vc.vad.stop(),
       setPlaybackActive: (on, now) => vc.vad.setPlaybackActive(on, now), reopen: () => vc.vad.reopen(), info: () => vc.vad.info() },
     stt: (f32) => voiceCallStt(agent, f32),
@@ -6638,7 +6638,7 @@ function voiceCallDeps(vc) {
         if (voiceCall !== vc) return;
         vc.micLostOn = !!on;
         const b = $('cp-retry-mic'); if (b) b.hidden = !on;
-        const m = $('cp-mic'); if (m) { m.textContent = on ? 'Microphone lost' : voiceMicLine(vc.micInfo); m.classList.toggle('cp-mic-lost', !!on); }
+        const m = $('cp-mic'); if (m) { m.textContent = on ? 'Microphone lost' : (vc.micInfo ? voiceMicLine(vc.micInfo) : ''); m.classList.toggle('cp-mic-lost', !!on); }
         if (on) voiceCallPaintMeter(-Infinity);
       },
       state: (name) => { if (voiceCall !== vc) return; voiceCallPaintState(name); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('setState', name); if (name === 'ended' && !vc.hangingUp) voiceCallTeardown(vc); },
