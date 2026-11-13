@@ -99,9 +99,9 @@ test('agent settings: Voice row, saved through the agent PATCH, with its SAVES r
   assert.match(as, /<select id="voice-select" onchange="saveAgentVoice\(\)"/);
   assert.match(as, /<option value="">Hub default<\/option>/);
   assert.match(as, /onclick="playAgentVoiceSample\(\)"/);
-  assert.match(as, /\['saveAgentVoice', 'voice-status', byId\('voice-select'\)\],/);
+  assert.match(as, /\['saveAgentVoice', 'voice-status', byId\('voice-select', 'voice-stt', 'voice-tts', 'voice-cloud-select', 'voice-cloud-id'\)\],/);   // phase 3: the SAVES row watches the engine fields too
   assert.match(as, /SAVES_ON_CHANGE = new Set\(\[[^\]]*'saveAgentVoice'\]\)/);
-  assert.match(as, /method: 'PATCH'[^\n]*JSON\.stringify\(\{ voice: \{ voice: v, stt: 'local', tts: 'local' \} \}\)/);
+  assert.match(as, /method: 'PATCH'[^\n]*JSON\.stringify\(\{ voice: body \}\)/);   // phase 3: the body carries the chosen engines (see test/ui-voice-cloud.test.js)
   assert.match(as, /apiFetch\('\/api\/voice\/status'\)/);
   assert.match(as, /fetch\('\/api\/voice\/tts'/);
 });

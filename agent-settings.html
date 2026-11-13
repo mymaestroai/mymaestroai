@@ -202,12 +202,28 @@
 
 <div class="section" id="voice-section">
   <label>Voice</label>
-  <small style="color:#999;display:block;margin-bottom:8px;">The free local voice this agent reads its replies in. Hub default follows Settings, Voices. Recognition of what you say is local too; nothing leaves this computer.</small>
+  <small style="color:#999;display:block;margin-bottom:8px;">Free local engines are the default and nothing leaves this computer. A cloud engine is optional: it costs money per use and falls back to the free local engine if it fails.</small>
+  <div id="voice-kept-warning" class="status error" style="display:none;margin-bottom:8px;"></div>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+    <label for="voice-stt" style="margin:0;">Speech recognition</label>
+    <select id="voice-stt" onchange="saveAgentVoice()" style="width:auto;"><option value="local">Local (free)</option><option value="openai">OpenAI</option><option value="google">Google</option></select>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+    <label for="voice-tts" style="margin:0;">Voice engine</label>
+    <select id="voice-tts" onchange="saveAgentVoice()" style="width:auto;"><option value="local">Local (free)</option><option value="openai">OpenAI</option><option value="google">Google</option><option value="elevenlabs">ElevenLabs</option></select>
+  </div>
+  <div id="voice-cloud-row" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+    <label for="voice-cloud-select" id="voice-cloud-label" style="margin:0;">Cloud voice</label>
+    <select id="voice-cloud-select" onchange="saveAgentVoice()" style="width:auto;"></select>
+    <input type="text" id="voice-cloud-id" placeholder="ElevenLabs voice ID" maxlength="40" onchange="saveAgentVoice()" style="width:220px;display:none;">
+  </div>
+  <small id="voice-cloud-hint" style="color:#999;display:none;margin-bottom:6px;">Find the voice ID in your ElevenLabs account under Voices (the ID is shown on the voice's page).</small>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-    <label for="voice-select" style="margin:0;">Voice</label>
+    <label for="voice-select" style="margin:0;">Local voice (also used if the cloud voice fails)</label>
     <select id="voice-select" onchange="saveAgentVoice()" style="width:auto;"><option value="">Hub default</option></select>
     <button class="btn btn-test" id="voice-sample-btn" type="button" onclick="playAgentVoiceSample()">Play sample</button>
   </div>
+  <small id="voice-keys-line" style="color:#999;display:block;margin-top:6px;"></small>
   <div id="voice-status" class="status"></div>
 </div>
 
@@ -377,7 +393,7 @@
     ['saveLimits', 'limits-status', byId('context-budget', 'max-context-messages', 'max-output-tokens')],
     ['saveSandbox', 'sandbox-status', byId('sandbox-mode')],
     ['saveEffort', 'effort-status', byId('effort-mode')],
-    ['saveAgentVoice', 'voice-status', byId('voice-select')],
+    ['saveAgentVoice', 'voice-status', byId('voice-select', 'voice-stt', 'voice-tts', 'voice-cloud-select', 'voice-cloud-id')],
     ['saveToolsMode', 'tools-status', byId('tools-mode')],
     ['saveAutoModel', 'auto-model-status', byId('auto-model', 'auto-model-allowed')],
     ['saveAllowedModels', 'allowed-models-status', byId('auto-model-checkboxes')],
@@ -846,8 +862,16 @@
       else showStatus('effort-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('effort-status', 'error', e.message); }
   }
-  // ── Voice (free local voices; the list comes from the hub's voice status) ──
+  // ── Voice (free local engines by default; OpenAI, Google and ElevenLabs are optional cloud engines) ──
+  const VOICE_CLOUD_LISTS = {
+    openai: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'],
+    google: ['Kore', 'Puck', 'Charon', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr'],
+  };
+  const VOICE_CLOUD_DEFAULT = { openai: 'coral', google: 'Kore' };
+  const VOICE_ENGINE_NAMES = { local: 'Local (free)', openai: 'OpenAI', google: 'Google', elevenlabs: 'ElevenLabs' };
+  const VOICE_ELEVEN_ID = /^[A-Za-z0-9]{10,40}$/;
   let voiceList = [], agentVoice = '', voicePlayCtx = null, voicePlaySrc = null;
+  let voiceCfg = { stt: 'local', tts: 'local', cloudVoice: '' }, voiceKept = false, voiceCloudKeys = null, voiceConfirmed = false;
   function paintVoiceSelect() {
     const sel = document.getElementById('voice-select');
     if (!sel) return;
@@ -856,21 +880,102 @@
     if (agentVoice && !opts.some(v => v.id === agentVoice)) sel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(agentVoice)}">${escapeHtml(agentVoice)}</option>`);
     sel.value = agentVoice;
     pageGuard.markLoaded(sel);
+    paintVoiceCloud();
+  }
+  // The cloud voice control follows the engine picked for speaking; the warning and the keys line follow the engines picked.
+  function paintVoiceCloud() {
+    const stt = document.getElementById('voice-stt'), tts = document.getElementById('voice-tts');
+    if (!stt || !tts) return;
+    stt.value = voiceCfg.stt; tts.value = voiceCfg.tts;
+    const eng = tts.value, row = document.getElementById('voice-cloud-row'), sel = document.getElementById('voice-cloud-select'), idIn = document.getElementById('voice-cloud-id');
+    const list = VOICE_CLOUD_LISTS[eng];
+    row.style.display = (list || eng === 'elevenlabs') ? 'flex' : 'none';
+    sel.style.display = list ? '' : 'none';
+    idIn.style.display = eng === 'elevenlabs' ? '' : 'none';
+    document.getElementById('voice-cloud-hint').style.display = eng === 'elevenlabs' ? 'block' : 'none';
+    document.getElementById('voice-cloud-label').textContent = eng === 'elevenlabs' ? 'ElevenLabs voice ID' : (VOICE_ENGINE_NAMES[eng] || 'Cloud') + ' voice';
+    if (list) {
+      const cur = list.includes(voiceCfg.cloudVoice) ? voiceCfg.cloudVoice : VOICE_CLOUD_DEFAULT[eng];
+      sel.innerHTML = list.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      sel.value = cur;
+    }
+    if (eng === 'elevenlabs') idIn.value = VOICE_ELEVEN_ID.test(voiceCfg.cloudVoice) ? voiceCfg.cloudVoice : (voiceCfg.cloudVoice || '');
+    pageGuard.markLoaded(stt); pageGuard.markLoaded(tts); pageGuard.markLoaded(sel); pageGuard.markLoaded(idIn);
+    paintVoiceNotes();
+  }
+  function voiceCloudEngines() {
+    const out = [];
+    for (const e of [document.getElementById('voice-stt').value, document.getElementById('voice-tts').value]) if (e && e !== 'local' && !out.includes(e)) out.push(e);
+    return out;
+  }
+  function voiceEngineList(engines) { const n = engines.map(e => VOICE_ENGINE_NAMES[e] || e); return n.length > 1 ? n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1] : n[0]; }
+  function paintVoiceNotes() {
+    const warn = document.getElementById('voice-kept-warning'), line = document.getElementById('voice-keys-line');
+    if (!warn || !line) return;
+    const engines = voiceCloudEngines();
+    if (voiceKept && engines.length) {
+      warn.textContent = `This agent's data is meant to stay on this computer. A cloud engine sends what you say, and what the agent says, to ${voiceEngineList(engines)}.` + (voiceConfirmed ? ' The owner has confirmed this.' : ' Only the owner can confirm it.');
+      warn.style.display = 'block';
+    } else warn.style.display = 'none';
+    if (!voiceCloudKeys) { line.textContent = 'Cloud engines cost money per use and fall back to the free local engine if they fail.'; return; }
+    const keyOf = { openai: 'OpenAI', google: 'Google', elevenlabs: 'ElevenLabs' };
+    const parts = Object.keys(keyOf).map(k => `${keyOf[k]} key: ${voiceCloudKeys[k] ? 'set' : 'not set: add it in Settings -> providers'}`);
+    line.textContent = parts.join('. ') + '. Cloud engines cost money per use and fall back to the free local engine if they fail.';
   }
   async function loadVoiceList() {
     try {
       const st = await apiFetch('/api/voice/status');
       voiceList = (st && Array.isArray(st.voices)) ? st.voices : [];
+      voiceCloudKeys = (st && st.cloud && typeof st.cloud === 'object' && Object.keys(st.cloud).length) ? st.cloud : null;
       if (st && !st.enabled) showStatus('voice-status', 'info', 'Voice is off for the hub: an admin turns it on in Settings, Voices.');
     } catch { voiceList = []; }
     paintVoiceSelect();
   }
+  // The agent record says whether the agent is kept on this computer and what engines it has.
+  async function loadVoiceRecord(listed) {
+    // the agent's record from GET /api/agents (it carries voice and keptOnBox)
+    const rec = listed;
+    const v = (rec && rec.voice) || {};
+    agentVoice = v.voice || '';
+    voiceCfg = { stt: ['local', 'openai', 'google'].includes(v.stt) ? v.stt : 'local', tts: ['local', 'openai', 'google', 'elevenlabs'].includes(v.tts) ? v.tts : 'local', cloudVoice: v.cloudVoice || '' };
+    voiceKept = !!(rec && rec.keptOnBox);
+    voiceConfirmed = !!v.cloudConfirmedBy;
+    paintVoiceSelect();
+  }
+  function voiceFormValues() {
+    const stt = document.getElementById('voice-stt').value, tts = document.getElementById('voice-tts').value;
+    const out = { voice: document.getElementById('voice-select').value, stt, tts };
+    if (tts === 'elevenlabs') out.cloudVoice = document.getElementById('voice-cloud-id').value.trim();
+    else if (VOICE_CLOUD_LISTS[tts]) out.cloudVoice = document.getElementById('voice-cloud-select').value;
+    return out;
+  }
   async function saveAgentVoice() {
-    const v = document.getElementById('voice-select').value;
+    const body = voiceFormValues();
+    const engines = voiceCloudEngines();
+    const revert = () => { paintVoiceCloud(); };
+    if (body.tts === 'elevenlabs' && !VOICE_ELEVEN_ID.test(body.cloudVoice)) {
+      paintVoiceCloud();
+      showStatus('voice-status', 'error', 'Enter the ElevenLabs voice ID (10 to 40 letters and digits) to use ElevenLabs.');
+      return;
+    }
+    if (voiceKept && engines.length) {
+      if (!confirm(`This agent's data is meant to stay on this computer.\n\nA cloud engine sends what you say, and what the agent says, to ${voiceEngineList(engines)}.\n\nUse it anyway? Only the owner of this Maestro can confirm this.`)) { revert(); return; }
+      body.cloudConfirm = true;
+    }
     try {
-      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: { voice: v, stt: 'local', tts: 'local' } }) });
-      if (result && (result.success || result.ok)) { agentVoice = v; showStatus('voice-status', 'success', v ? 'Voice saved: used from the next time a reply is read' : 'Using the hub default voice'); }
-      else showStatus('voice-status', 'error', (result && result.error) || 'Failed');
+      const r = await fetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: body }) });
+      let result = null; try { result = await r.json(); } catch {}
+      if (r.status === 403 && result && result.error === 'owner_confirmation_required') {
+        revert();
+        showStatus('voice-status', 'error', 'Only the owner of this Maestro can choose a cloud engine for this agent.');
+        return;
+      }
+      if (result && (result.success || result.ok)) {
+        agentVoice = body.voice; voiceCfg = { stt: body.stt, tts: body.tts, cloudVoice: body.cloudVoice || '' };
+        voiceConfirmed = !!body.cloudConfirm;
+        paintVoiceNotes();
+        showStatus('voice-status', 'success', engines.length ? `Saved: ${voiceEngineList(engines)} used from the next time. If it fails, the free local engine answers.` : (body.voice ? 'Voice saved: used from the next time a reply is read' : 'Using the hub default voice'));
+      } else showStatus('voice-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('voice-status', 'error', e.message); }
   }
   async function playAgentVoiceSample() {
@@ -883,6 +988,7 @@
       if (v) body.voice = v;
       const r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!r.ok) { let m = ''; try { m = (await r.json()).error; } catch {} throw new Error(m || `HTTP ${r.status}`); }
+      const engine = r.headers.get('X-Voice-Engine') || 'local', fallback = r.headers.get('X-Voice-Fallback');
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!voicePlayCtx) voicePlayCtx = new AC();
       if (voicePlayCtx.state === 'suspended') await voicePlayCtx.resume();
@@ -892,6 +998,8 @@
       src.onended = () => { voicePlaySrc = null; btn.textContent = 'Play sample'; };
       voicePlaySrc = src; btn.textContent = 'Stop';
       src.start();
+      if (fallback) showStatus('voice-status', 'info', `Played with the ${VOICE_ENGINE_NAMES[engine] || engine} engine: the cloud engine failed (${fallback}), so the free local engine answered.`);
+      else showStatus('voice-status', 'info', `Played with the ${VOICE_ENGINE_NAMES[engine] || engine} engine.`);
     } catch (e) { showStatus('voice-status', 'error', 'Could not play the sample: ' + e.message); }
     finally { btn.disabled = false; }
   }
@@ -1101,7 +1209,7 @@
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
       const effSel = document.getElementById('effort-mode'); if (effSel) effSel.value = agent?.effort || 'default';
-      agentVoice = (agent && agent.voice && agent.voice.voice) || ''; paintVoiceSelect();
+      loadVoiceRecord(agent);
       if (!voiceList.length) loadVoiceList();
       const toolsRow = document.getElementById('tools-row'); if (toolsRow) { const clientModel = /^(claude-sdk|codex-cli)\//.test(agent?.model || currentModel || ''); toolsRow.style.display = clientModel ? 'flex' : 'none'; const th = document.getElementById('tools-help'); if (th) th.style.display = clientModel ? 'block' : 'none'; }
       const allowedPanel = document.getElementById('auto-model-allowed');

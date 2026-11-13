@@ -2331,6 +2331,7 @@
       { id: 'google',     label: 'Google (Gemini)', hasKey: true, hasUrl: false },
       { id: 'perplexity', label: 'Perplexity', hasKey: true, hasUrl: false },
       { id: 'openrouter', label: 'OpenRouter', hasKey: true, hasUrl: false },
+      { id: 'elevenlabs', label: 'ElevenLabs (voice)', hasKey: true, hasUrl: false, hasTest: false },   // speech only: no model list to test
       { id: 'lmstudio',   label: 'LM Studio', hasKey: false, hasUrl: true },
       { id: 'ollama',     label: 'Ollama', hasKey: false, hasUrl: true },
       { id: 'omlx',       label: 'oMLX (Apple Silicon)', hasKey: false, hasUrl: true },
@@ -2717,7 +2718,7 @@
             <label>${esc(p.label)}</label>
             <input type="password" id="st-key-${p.id}" placeholder="${esc(hint)}"
               data-provider="${p.id}" data-field="apiKey">
-            <button class="st-test-btn" onclick="testProvider('${p.id}')">Test</button>
+            ${p.hasTest === false ? '' : `<button class="st-test-btn" onclick="testProvider('${p.id}')">Test</button>`}
           </div>`;
         }
         if (p.hasUrl) {

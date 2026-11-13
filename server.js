@@ -925,7 +925,9 @@ async function handleHttpRequest(req, res) {
       // A member never learns the caller of a consultation they may not use (consultedBy, the activity text).
       if (!req.hubService && !access.isAdmin(req.hubUser)) status = access.statusForViewer(req.hubUser, status, { agents: all, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
       const idle = { busy: false, busySince: null, activity: null, pendingQuestion: false };
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...a, ...(status[a.name] || idle) })) });
+      // keptOnBox: this agent's data is meant to stay on this computer (medical/legal folders or the keep-on-box list): the voice settings warn before a cloud engine.
+      const kept = require('./lib/voice/cloud').keptOnBox;
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...a, keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {
@@ -1231,7 +1233,9 @@ async function handleHttpRequest(req, res) {
         if (refused.length) return jsonResponse(res, 403, { error: `only an admin can change: ${refused.join(', ')}` });
       }
       const { updateAgentField } = require('./lib/agents');
-      const result = await updateAgentField(name, body);
+      // Voice: a cloud engine for an agent kept on this computer needs the owner (the earliest admin), not just any admin.
+      const result = await updateAgentField(name, body, { isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), userId: req.hubUser ? String(req.hubUser.id) : '' });
+      if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
       // Handing a head agent to a member: it introduces itself in its (still empty) chat.
       if (result.success && body && body.owner) { const u = hubAuth.getUser(String(body.owner)); if (u && u.role === 'member') require('./lib/teams').greetIfFresh(name, u).catch(() => {}); }
       if (result.success) await publishAgentUpdate(name, Object.keys(body || {}));

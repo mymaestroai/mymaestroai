@@ -55,6 +55,7 @@ function setup({ enabled = true, ready = true, voices, defaultVoice = 'af_heart'
     updateSettings: (p) => { calls.update.push(p); Object.assign(settings, p); },
     getAgents: async () => agents,
     getVoice: () => ({ engine, client }),
+    cloud: { keys: () => ({ openai: false, google: false, elevenlabs: false }) },   // no real settings are read in these tests
   };
   const call = async (req) => { const res = fakeRes(); const u = new URL(req.url, 'http://x'); await routes.handle(u.pathname, req, res, deps); if (!res.writableEnded) await new Promise(r => setTimeout(r, 5)); await res.finished; return res; };
   return { dir, settings, calls, deps, call, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
@@ -91,7 +92,7 @@ test('GET status: engine status with enabled taken from the voice setting', asyn
   assert.strictEqual(r.statusCode, 200);
   const j = r.json();
   assert.strictEqual(j.enabled, true); assert.strictEqual(j.ready, true); assert.strictEqual(j.voices.length, 6);
-  assert.deepStrictEqual(Object.keys(j).sort(), ['enabled', 'error', 'failed', 'installing', 'platformSupported', 'progress', 'ready', 'step', 'stt', 'tts', 'voices']);
+  assert.deepStrictEqual(Object.keys(j).sort(), ['cloud', 'enabled', 'error', 'failed', 'installing', 'platformSupported', 'progress', 'ready', 'step', 'stt', 'tts', 'voices']);
   const off = setup({ enabled: false });
   assert.strictEqual((await off.call(fakeReq('GET', '/api/voice/status'))).json().enabled, false);
   t.cleanup(); off.cleanup();
@@ -129,7 +130,7 @@ test('POST stt: audio/wav body is read in chunks and answered with { text, ms };
   const t = setup();
   const body = wavBytes(1000);
   const r = await t.call(fakeReq('POST', '/api/voice/stt?agent=sam_assistant', { headers: { 'content-type': 'audio/wav', 'content-length': String(body.length) }, body: [body.subarray(0, 300), body.subarray(300)], user: sam }));
-  assert.strictEqual(r.statusCode, 200); assert.deepStrictEqual(r.json(), { text: 'turn on the lights', ms: 21 });
+  assert.strictEqual(r.statusCode, 200); assert.deepStrictEqual(r.json(), { text: 'turn on the lights', ms: 21, engine: 'local' });   // phase 3: the answer says which engine spoke
   assert.deepStrictEqual(t.calls.stt, [body.length], 'all chunks reassembled');
   const h = await t.call(fakeReq('POST', '/api/voice/stt', { headers: { 'content-type': 'audio/x-wav; charset=binary', 'x-agent': 'maestro' }, body }));
   assert.strictEqual(h.statusCode, 200);
