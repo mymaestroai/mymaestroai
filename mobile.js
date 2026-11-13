@@ -2021,6 +2021,7 @@ function voicePathsToWords(t) {
   return t;
 }
 function voiceCleanInline(s) {
+  s = s.replace(/\u2212\s*(?=\d)/g, 'minus ').replace(/\u2212/g, ' minus ');   // the minus sign is read, before the math-sign strip drops it
   s = s.replace(/[\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}\p{Cf}\u{FE0E}\u{FE0F}\u{20E3}]/gu, '')   // emoji and zero-width marks
     .replace(VOICE_SYMBOLS_RE, ' ');                                    // arrows, math signs, boxes, dingbats, bullets
   s = s.replace(/[-=]+>|<[-=]+/g, ' ');                                 // -> => <-
@@ -2596,7 +2597,10 @@ function voiceCreateCall(deps) {
         if (!t) return;
         // A later piece started within 2 s: it takes this text along (unless this one is a stop command: stop wins at once).
         if (mine.hold && !voiceIsStopCommand(t)) {
-          const next = await mine.hold.promise;
+          // At most 5 s: a later piece whose end never comes (audio interrupted) must not block this text and every one after it.
+          let holdTimer = null;
+          const next = await Promise.race([mine.hold.promise, new Promise((r) => { holdTimer = d.setTimer(() => r(null), 5000); })]);
+          if (holdTimer !== null) quiet(() => d.clearTimer(holdTimer));
           if (ended) return;
           if (next) { next.carry = t; if (next.ann == null) next.ann = mine.ann; return; }
         }

@@ -119,3 +119,8 @@ test('prefs: voice speed is 0.75 to 1.5 in steps of 0.05 (default 1), the pause 
   assert.deepStrictEqual([bad.endPause, bad.voiceSpeed, bad.speakActivity], [1200, 1, false], 'bad values fall back to the defaults');
   assert.deepStrictEqual(V.VOICE_END_PAUSES, [800, 1200, 2000]);
 });
+
+test('the typographic minus sign is read as minus, not dropped (a reviewer found -5 read as 5)', () => {
+  assert.strictEqual(say('The temperature is −5 degrees.'), 'The temperature is minus 5 degrees.');
+  assert.strictEqual(say(say('The temperature is −5 degrees.')), 'The temperature is minus 5 degrees.');
+});

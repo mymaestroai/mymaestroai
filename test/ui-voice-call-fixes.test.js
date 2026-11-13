@@ -258,3 +258,14 @@ test('vad: setEndPause changes redemptionMs live; barge-in still fires on the re
   await vad.stop();
   vad.setEndPause(2000);   // harmless after stop
 });
+
+test('join: a later piece whose end never comes (audio interrupted) does not hold the earlier text for more than 5 s', async () => {
+  const h = await started();
+  h.begin(); await h.end('turn on the light');
+  await h.advance(1000);
+  h.begin();                                             // the next piece starts, and its end never arrives
+  await h.answer();                                      // the first text is back and waits for the next piece
+  assert.deepStrictEqual(h.sent, []);
+  await h.advance(5100);
+  assert.deepStrictEqual(h.sent, ['turn on the light'], 'sent on its own after at most 5 s');
+});

@@ -211,6 +211,15 @@ test('POST tts: the text is cleaned before the engine (markdown and symbols out)
   t.cleanup();
 });
 
+test('POST tts: a clean sentence the page already cleaned is passed on as it is (not cut as a list item)', async () => {
+  const t = setup();
+  const post = (b) => t.call(fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }));
+  const r = await post({ agent: 'maestro', text: '42. That is the answer.' });
+  assert.strictEqual(r.statusCode, 200);
+  assert.strictEqual(t.calls.tts[0].text, '42. That is the answer.');
+  t.cleanup();
+});
+
 test('voiceSpeechText is idempotent: cleaning already cleaned text gives the same text (so the server may clean what the page cleaned)', () => {
   const { voiceSpeechText } = require('../lib/ui-voice');
   const replies = [
