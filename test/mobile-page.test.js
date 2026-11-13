@@ -75,10 +75,11 @@ test('mobile composer interjects into a running turn; Stop moves to the header; 
   assert.ok(js.includes("addEventListener('controllerchange'"), 'a new build reloads the installed app once it takes control');
 });
 
-test('desktop banner is dismissible and only shown on narrow screens', () => {
+test('desktop banner is dismissible and shown on phones (by the screen) and narrow windows', () => {
   const app = read('app.js');
-  assert.match(app, /window\.innerWidth >= 700/);
+  assert.match(app, /window\.innerWidth < 700/);
   assert.ok(app.includes("'hub-mobile-banner'"));
+  assert.ok(app.includes('hubPhoneLayout'));
 });
 
 test('send button sends on the touch itself (pointerdown preventDefault keeps the keyboard; pointerup sends; the trailing click is ignored)', () => {
