@@ -67,9 +67,11 @@ test('call bar: help line, switch, sliders, buttons and the dark-theme CSS', () 
 test('wake lock, visibility and leaving: re-acquire on return, release on hang-up, hidden tab keeps the call, pagehide hangs up', () => {
   const w = wiring();
   assert.match(w, /navigator\.wakeLock\.request\('screen'\)/);
-  assert.match(w, /document\.addEventListener\('visibilitychange', \(\) => \{ if \(!document\.hidden && voiceCallS\.call\) voiceCallWake\(true\); \}\)/);
+  // round 2 (voice fixes): a visible page with no call may show "The call ended when you left the app"; the wake-lock re-acquire stays
+  assert.match(w, /document\.addEventListener\('visibilitychange', \(\) => \{[^]*?if \(document\.hidden\) return;\s*if \(voiceCallS\.call\) voiceCallWake\(true\); else voiceLeftNoticeShow\(\);/);
   assert.match(w, /voiceCallWake\(false\);/);
-  assert.match(w, /document\.addEventListener\('pagehide', \(\) => \{ voiceCallHangUp\(\); \}\)/);
+  // round 2: leaving the page is an immediate release (call.release), not a wait for the hub
+  assert.match(w, /document\.addEventListener\('pagehide', \(\) => \{ voiceCallRelease\('pagehide'\); \}\)/);
   assert.match(app, /if \(voiceCallS\.chatId === chatId\) voiceCallHangUp\(\);/, 'closing the chat panel hangs up');
 });
 
@@ -126,7 +128,7 @@ function makeEnv(opts = {}) {
   let prefs = { micLevel: 60, interruptSensitivity: 40, mode: 'handsfree' };
   let clock = 0;
   const stubs = {
-    document: { getElementById: get, addEventListener() {}, createElement: () => el({ registry: els, listeners: {}, addEventListener(t, f) { this.listeners[t] = f; } }) },
+    document: { getElementById: get, querySelectorAll: () => [], addEventListener() {}, createElement: () => el({ registry: els, listeners: {}, addEventListener(t, f) { this.listeners[t] = f; } }) },
     navigator: { wakeLock: { request: async (k) => { calls.wake.push(k); const w = { release: async () => { calls.wake.push('release'); }, addEventListener() {} }; return w; } } },
     localStorage: {},
     fetch: fetchFn,

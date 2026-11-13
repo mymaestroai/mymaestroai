@@ -39,7 +39,7 @@ function harness(over) {
   h.vadHandlers = null;
   h.vad = { start: async (hd) => { h.vadHandlers = hd; }, stop: () => { h.log.push('vad.stop'); }, setPlaybackActive: (b) => { h.playing.push(b); } };
   h.deps = {
-    agent: 'a1', now: () => h.t, setTimer: h.setTimer, clearTimer: h.clearTimer, prefs: () => ({ micLevel: 50, interruptSensitivity: 50 }),
+    agent: 'a1', now: () => h.t, setTimer: h.setTimer, clearTimer: h.clearTimer, prefs: () => ({ micLevel: 50, interruptSensitivity: 50, continueWait: 0 }),   // 0: the older tests send short texts and must not wait for more
     vad: h.vad, stt: async (audio) => audio.text, isTurnRunning: () => h.running,
     send: async (t) => { h.sent.push(t); h.running = true; }, interject: async (t) => { h.interjected.push(t); }, stop: () => { h.stops++; h.log.push('stop'); },
     speak: h.speak, cancelSpeech: () => { h.log.push('cancelSpeech'); const r = h.pend.shift(); if (r) r(false); },

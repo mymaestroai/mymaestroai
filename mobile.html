@@ -554,6 +554,23 @@
   #call-panel { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
     padding: 8px 10px; background: var(--bg-card); border-top: 1px solid var(--border-strong, var(--border)); color: var(--text); font-size: 15px; }
   #call-panel[hidden] { display: none; }
+  #composer { position: relative; }
+  #voice-strip { display: flex; padding: 0 2px 4px; }
+  #voice-strip[hidden] { display: none; }
+  .voice-chip { min-height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--border-strong); background: var(--bg-card); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; }
+  .voice-chip.hands { background: var(--accent, #3d7bff); color: #fff; border-color: transparent; }
+  #voice-settings-btn { flex: none; }
+  #voice-settings-btn[aria-expanded="true"] { background: var(--border); }
+  #voice-panel { position: absolute; left: 6px; right: 6px; bottom: 100%; z-index: 30; max-height: 62vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 8px;
+    padding: 12px; border-radius: 14px 14px 0 0; background: var(--bg-card); border: 1px solid var(--border-strong, var(--border)); box-shadow: 0 -6px 24px rgba(0,0,0,.35); color: var(--text); font-size: 15px; }
+  #voice-panel[hidden] { display: none; }
+  #voice-panel .vp-row { display: flex; justify-content: space-between; align-items: center; }
+  #voice-panel .vp-modes { gap: 8px; justify-content: stretch; }
+  #call-ended-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg-card); border-top: 1px solid var(--warning, #d9a441); color: var(--text); font-size: 15px; }
+  #call-ended-bar[hidden] { display: none; }
+  #call-ended-bar .ceb-text { flex: 1; }
+  #call-ended-bar button { min-height: 44px; border-radius: 10px; font: inherit; font-weight: 600; padding: 0 14px; background: var(--border); color: var(--text); }
+  #call-ended-bar .ceb-again { background: var(--accent, #3d7bff); color: #fff; }
   #call-panel .cp-top { display: flex; align-items: center; gap: 10px; }
   #cp-state { font-weight: 700; font-size: 17px; min-width: 6.5em; }
   #call-panel[data-state="hearing"] #cp-state { color: var(--success); }
@@ -717,6 +734,7 @@
     <div id="chat-meta"><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
+    <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>
     <div id="call-panel" role="region" aria-label="Voice call" hidden>
       <div class="cp-top"><span id="cp-state" role="status" aria-live="polite">Starting</span><div id="cp-meter" aria-hidden="true"><i></i></div></div>
       <div id="cp-activity" aria-live="off"></div>
@@ -731,11 +749,35 @@
     </div>
     <div id="composer">
       <div id="previews"></div>
+      <div id="voice-strip" hidden><button type="button" id="voice-mode-chip" class="voice-chip" aria-label="Talk mode: tap to switch">Tap to talk</button></div>
+      <div id="voice-panel" role="dialog" aria-label="Voice settings" hidden>
+        <div class="vp-row vp-modes" role="radiogroup" aria-label="Talk mode">
+          <label class="vs-opt"><input type="radio" name="vp-mode" value="handsfree"> <span>Hands-free</span></label>
+          <label class="vs-opt"><input type="radio" name="vp-mode" value="tap"> <span>Tap to talk</span></label>
+        </div>
+        <label class="vp-row" for="vp-speed"><span>Voice speed</span><b class="vp-speed-val"></b></label>
+        <input type="range" id="vp-speed" class="vs-level" min="0.75" max="1.5" step="0.05">
+        <label class="vp-row" for="vp-pause"><span>Pause before I&#39;m done</span></label>
+        <select id="vp-pause" class="vs-btn"></select>
+        <label class="vp-row" for="vp-wait"><span>Wait for me to go on</span></label>
+        <select id="vp-wait" class="vs-btn"></select>
+        <label class="vp-row" for="vp-level"><span>Mic level</span><b class="vp-level-val"></b></label>
+        <input type="range" id="vp-level" class="vs-level" min="0" max="100" step="1">
+        <div id="vp-meter" class="vs-meter vp-room-meter" aria-hidden="true"><i></i></div>
+        <label class="vp-row" for="vp-sens"><span>Interrupt sensitivity</span><b class="vp-sens-val"></b></label>
+        <input type="range" id="vp-sens" class="vs-level" min="0" max="100" step="1">
+        <label class="vs-check"><input type="checkbox" id="vp-think"> <span>Thinking sound</span></label>
+        <label class="vp-row" for="vp-think-vol"><span>Thinking volume</span><b class="vp-think-val"></b></label>
+        <input type="range" id="vp-think-vol" class="vs-level" min="0" max="100" step="5">
+        <button type="button" class="vs-btn vs-room" id="vp-room">Room check</button>
+        <div class="vs-room-out" role="status" aria-live="polite"></div>
+      </div>
       <div id="voice-level" aria-hidden="true" hidden><i></i></div>
       <div class="row">
         <button class="iconbtn" id="attach-btn" aria-label="Attach a file or image">&#x1F4CE;</button>
         <button class="iconbtn" id="camera-btn" aria-label="Camera">&#x1F4F7;</button>
         <button class="iconbtn" id="mic-btn" type="button" aria-label="Dictate" aria-pressed="false" title="Tap to dictate, tap again to stop" hidden><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg></button>
+        <button class="iconbtn" id="voice-settings-btn" type="button" aria-label="Voice settings" aria-expanded="false" aria-controls="voice-panel" title="Voice settings" hidden><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h10"></path><path d="M18 7h2"></path><circle cx="16" cy="7" r="2"></circle><path d="M4 17h2"></path><path d="M10 17h10"></path><circle cx="8" cy="17" r="2"></circle></svg></button>
         <textarea id="msg-input" rows="1" placeholder="Message"></textarea>
         <button class="notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
         <button id="send-btn" aria-label="Send">&#x27A4;</button>

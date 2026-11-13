@@ -224,11 +224,12 @@ test('mic requests: one pending flag + generation; sheet close or a hidden page 
   assert.match(tap, /const token = voiceRec\.guard\.begin\(\)/);
   assert.match(tap, /voiceRec\.guard\.settle\(token, handle\)/);
   assert.match(sliceBetween('function voiceMicCancel()', 'async function voiceMicTap()'), /voiceRec\.guard\.cancel\(\)/);
-  const test = sliceBetween('const voiceTest = {', 'function voiceSheet()');
+  const testAll = sliceBetween('const voiceTest = {', 'function voiceSheet()');   // round 2: the leaving-the-app code (window listeners) follows the test-mic code
+  const test = sliceBetween('const voiceTest = {', '// ── Leaving the app (round 2');
   assert.match(test, /voiceTest\.guard\.cancel\(\)/);
   assert.match(test, /voiceTest\.guard\.pending/);
   assert.match(test, /voiceTest\.guard\.settle\(token, handle\)/);
-  assert.match(test, /addEventListener\('visibilitychange'[\s\S]*voiceTestStop\(\)[\s\S]*voiceMicCancel\(\)/);
+  assert.match(testAll, /addEventListener\('visibilitychange'[\s\S]*voiceTestStop\(\)[\s\S]*voiceMicCancel\(\)/);
   // run: Test mic, close the sheet while the permission prompt is open, then the stream arrives -> it is stopped at once
   const els = {};
   const mk = (id) => (els[id] ||= { disabled: false, textContent: '', style: {}, setAttribute() {}, querySelector: (q) => mk(q) });

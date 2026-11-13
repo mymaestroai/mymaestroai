@@ -1059,6 +1059,24 @@
     .voice-callbar .vcb-item button { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 0.8rem; }
     .voice-callbar .vcb-item button:hover { border-color: var(--accent); }
     .voice-callbar .vcb-help { font-size: 0.75rem; color: var(--text-dim); }
+    /* Voice controls in the chat: the Talk mode chip and the Voice settings panel next to the mic */
+    .input-area .voice-extra { position: relative; display: inline-flex; gap: 6px; align-items: center; }
+    .input-area .voice-mode-chip { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .input-area .voice-mode-chip:hover { background: var(--bg-input); border-color: var(--accent); color: var(--text); }
+    .input-area .voice-set-btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); padding: 8px 9px; }
+    .input-area .voice-set-btn:hover, .input-area .voice-set-btn[aria-expanded="true"] { background: var(--bg-input); border-color: var(--accent); }
+    .input-area .voice-set-btn svg { display: block; width: 18px; height: 18px; }
+    .voice-pop { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 60; width: 320px; max-width: 92vw; max-height: 70vh; overflow-y: auto; box-sizing: border-box; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 0.85rem; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
+    .voice-pop[hidden] { display: none; }
+    .voice-pop .vp-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-dim); }
+    .voice-pop .vp-label { flex: 0 0 9.5em; }
+    .voice-pop input[type=range] { width: 110px; }
+    .voice-pop .vp-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    .voice-pop .vp-seg button { background: var(--bg-input); border: 0; color: var(--text-dim); padding: 4px 10px; font-size: 0.8rem; cursor: pointer; }
+    .voice-pop .vp-seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+    .voice-left-bar { flex-direction: row; align-items: center; gap: 10px; }
+    .voice-left-bar button { background: var(--accent); border: 0; color: #fff; border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+    .voice-left-bar button[data-vleft="dismiss"] { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); }
     .message > .msg-speak {
       display: none; position: absolute; top: 4px; right: 34px; border: 1px solid var(--border); background: var(--bg-card);
       color: var(--text-dim); border-radius: 6px; font-size: 0.8rem; line-height: 1; padding: 3px 6px; cursor: pointer; opacity: 0.45; transition: opacity 0.15s;

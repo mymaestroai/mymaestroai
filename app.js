@@ -7956,7 +7956,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span>
+          <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -10307,7 +10307,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
     const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
     const VOICE_END_PAUSES = [800, 1200, 2000];   // 'Pause before I'm done': short / normal / long, in ms
-    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false };
+    const VOICE_CONTINUE_WAITS = [1500, 3000, 5000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
+    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5 };
     function voiceCleanSpeed(v) {
       const n = Number(v);
       return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
@@ -10500,7 +10501,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (raw.mode === 'handsfree' || raw.mode === 'tap') p.mode = raw.mode;
       if (VOICE_END_PAUSES.includes(raw.endPause)) p.endPause = raw.endPause;
       if (typeof raw.voiceSpeed === 'number' && Number.isFinite(raw.voiceSpeed)) p.voiceSpeed = voiceCleanSpeed(raw.voiceSpeed);
-      for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
+      if (VOICE_CONTINUE_WAITS.includes(raw.continueWait)) p.continueWait = raw.continueWait;
+      if (typeof raw.thinkingVolume === 'number' && Number.isFinite(raw.thinkingVolume)) p.thinkingVolume = Math.round(Math.max(0, Math.min(1, raw.thinkingVolume)) * 100) / 100;
+      for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity', 'thinkingSound']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
       return p;
     }
     function voiceLoadPrefs(storage) {
@@ -10514,6 +10517,31 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceIsStopCommand(text) {
       const t = String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
       return VOICE_STOP_COMMANDS.has(t);
+    }
+    // Does what was said sound unfinished? True when it ends on a joining word (and, but, to, the, ...), ends with a comma, a
+    // dash or an ellipsis, or is a fragment of one or two words without final punctuation. A whole sentence or a question is
+    // finished, and so are stop commands and short answers (now, later, skip, yes, no, ok). A final full stop does not make a
+    // fragment finished ("... difficult to."): Whisper puts one on a cut-off piece, so it is stripped before the last word is checked.
+    // Strong joining words leave a thought open even with a final full stop ("... difficult to."); weak ones (pronouns, "is",
+    // "that"...) end plenty of whole sentences ("Do it.", "That is what it is."), so they count only without final punctuation.
+    const VOICE_JOINING_WORDS = new Set(['and', 'also', 'but', 'or', 'because', 'so', 'to', 'the', 'a', 'an', 'of', 'when', 'if', 'with', 'for', 'from', 'about', 'like',
+      'my', 'your', 'our', 'their', 'as', 'at', 'in', 'on', 'by', 'than', 'very', 'um', 'uh', 'er', 'hmm']);
+    const VOICE_WEAK_JOINING_WORDS = new Set(['that', 'which', 'who', 'i', 'you', 'we', 'it', 'is', 'are', 'was', 'this', 'these', 'then', 'just', 'really']);
+    const VOICE_JOINING_PHRASES = ['you know', 'i mean'];
+    const VOICE_COMPLETE_SHORT = new Set(['stop', 'cancel', 'now', 'later', 'skip', 'yes', 'no', 'yeah', 'yep', 'nope', 'ok', 'okay', 'sure', 'thanks', 'hello', 'hi', 'go ahead', 'thank you', 'never mind', 'nevermind']);
+    function voiceSoundsUnfinished(text) {
+      const raw = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+      if (!raw) return false;
+      if (/[,–—…-]["')\]]*$/.test(raw) || /\.{3}["')\]]*$/.test(raw)) return true;   // a comma, a dash, an ellipsis: more is coming
+      if (/[!?]["')\]]*$/.test(raw)) return false;                                                    // a question or an exclamation is whole
+      const body = raw.replace(/[.\s]+$/, '');
+      const words = body.toLowerCase().replace(/[^\p{L}\p{N}'’\s]/gu, ' ').replace(/’/g, '\'').split(/\s+/).filter(Boolean);
+      if (!words.length) return false;
+      if (voiceIsStopCommand(raw) || VOICE_COMPLETE_SHORT.has(words.join(' '))) return false;
+      const last = words[words.length - 1].replace(/^'+|'+$/g, '');
+      if (VOICE_JOINING_WORDS.has(last) || (words.length >= 2 && VOICE_JOINING_PHRASES.includes(words.slice(-2).join(' ')))) return true;
+      if (VOICE_WEAK_JOINING_WORDS.has(last) && !/[.]['")\]]*$/.test(raw)) return true;                         // weak: only without a full stop
+      return words.length <= 2 && !/[.]["')\]]*$/.test(raw);                                        // one or two words and no full stop
     }
     function voicePickLocalVoice(voices, lang) {
       const pre = String(lang || 'en').toLowerCase();
@@ -10556,7 +10584,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
     // ── voice call (begin) ──
     const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
-    const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_STILL_LINE = 'Still working on it.';
+    const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
+    // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
+    const VOICE_THINKING_LINES = ['I\'m considering what you just said.', 'Still thinking about that.', 'Give me a moment, I\'m working through it.'];
     const VOICE_CALL_FILLERS = new Set(['uh', 'um', 'umm', 'uhh', 'er', 'erm', 'ah', 'hmm', 'hm', 'mm', 'mmm', 'huh']);
     const VOICE_CALL_ORDINALS = [['first', '1st', 'one', '1'], ['second', '2nd', 'two', '2'], ['third', '3rd', 'three', '3'], ['fourth', '4th', 'four', '4'], ['fifth', '5th', 'five', '5']];
     function voiceCallNorm(text) {
@@ -10644,11 +10674,42 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Joining pieces of one sentence: lastSeg is the latest speech segment (its transcript may still be pending), curCand the
       // earlier segment a new one may join, segActive that a segment has begun and has not ended.
       let lastSeg = null, curCand = null, segActive = false;
-      // "Still working on it.": when something was last spoken, when the running turn began, whether the line was said since.
-      let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null;
+      // The one spoken line after a long wait: when something was last spoken, when the running turn began, whether a line was
+      // said since, which lines this wait has used. The thinking sound: its 2 s timer and whether it is playing.
+      let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
+      let thinkTimer = null, thinkingOn = false;
+      const prefs = () => { const p = quiet(() => d.prefs && d.prefs()); return p && typeof p === 'object' ? p : {}; };
+      // 'Wait for me to go on': how long a sentence that sounds unfinished waits for the next piece.
+      const continueWait = () => { const n = Number(prefs().continueWait); return Number.isFinite(n) && n >= 0 ? n : VOICE_CALL_CONTINUE_MS; };
+
+      // The thinking sound: only when the person's turn was sent and no reply speech began within 2 s; it stops at once when the
+      // reply speaks, the person speaks, an announcement plays, the turn ends or the call ends. Nothing plays when a turn ends.
+      function stopThinking() {
+        if (thinkTimer !== null) { quiet(() => d.clearTimer(thinkTimer)); thinkTimer = null; }
+        if (!thinkingOn) return;
+        thinkingOn = false;
+        quiet(() => d.thinking.stop());
+        if (!speaking) quiet(() => vad.setPlaybackActive(false));
+      }
+      function armThinking() {
+        if (ended || thinkTimer !== null || thinkingOn || !awaitingReply || !d.thinking || prefs().thinkingSound === false) return;
+        thinkTimer = d.setTimer(() => {
+          thinkTimer = null;
+          if (ended || !awaitingReply || speaking || personSpeaking || pendingAnnounce || queue.length || prefs().thinkingSound === false) return;
+          thinkingOn = true;
+          quiet(() => vad.setPlaybackActive(true));   // the pulse is playback: it must not trigger the barge-in detector
+          quiet(() => d.thinking.start());
+        }, VOICE_CALL_THINK_MS);
+      }
+      // The person's settings changed (the in-chat voice panel): re-read them now.
+      function setPrefs() {
+        const p = prefs();
+        if (p.thinkingSound === false) stopThinking(); else armThinking();
+        if (d.thinking && d.thinking.setVolume && Number.isFinite(Number(p.thinkingVolume))) quiet(() => d.thinking.setVolume(Math.max(0, Math.min(1, Number(p.thinkingVolume)))));
+      }
 
       function clearStill() { if (stillTimer !== null) { quiet(() => d.clearTimer(stillTimer)); stillTimer = null; } }
-      // One spoken "Still working on it." when a turn runs and nothing was said for 20 s; not again until something else is said.
+      // One spoken line (VOICE_THINKING_LINES) when a turn runs and nothing was said for 20 s; not again until something else is said.
       function armStill() {
         if (ended || stillTimer !== null || stillSaid || !awaitingReply) return;
         const since = Math.max(lastSpokenAt === null ? -Infinity : lastSpokenAt, turnAt === null ? -Infinity : turnAt);
@@ -10662,7 +10723,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const since = Math.max(lastSpokenAt === null ? -Infinity : lastSpokenAt, turnAt === null ? -Infinity : turnAt);
         if (Number.isFinite(since) && now() - since < VOICE_CALL_STILL_MS) { armStill(); return; }
         stillSaid = true;
-        enqueue(VOICE_CALL_STILL_LINE, 'still');
+        let fresh = VOICE_THINKING_LINES.filter(l => !stillUsed.includes(l));
+        if (!fresh.length) { stillUsed = []; fresh = VOICE_THINKING_LINES; }
+        const line = fresh[0]; stillUsed.push(line);   // never the same line twice in one wait
+        enqueue(line, 'still');
       }
       function setState(name) { if (name === state) return; state = name; quiet(() => ui.state(name, '')); }
       function settle() {
@@ -10671,6 +10735,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         setState(speaking ? 'speaking' : personSpeaking ? 'hearing' : awaitingReply ? 'thinking' : 'listening');
         pumpAnnounce();
         armStill();
+        if (awaitingReply && !speaking && !personSpeaking) armThinking();   // a long quiet stretch inside a running turn gets the sound too
       }
       function runAfter(item) { if (item && item.after) { const f = item.after; item.after = null; quiet(f); } }
       function enqueue(text, kind, after, onStart) {
@@ -10680,7 +10745,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       async function runQueue() {
         const my = gen;
-        speaking = true; setState('speaking'); quiet(() => vad.setPlaybackActive(true));
+        speaking = true; stopThinking(); setState('speaking'); quiet(() => vad.setPlaybackActive(true));
         while (queue.length && my === gen && !personSpeaking) {
           current = queue.shift();
           if (current.onStart) { const f = current.onStart; current.onStart = null; quiet(f); }   // the line really starts playing
@@ -10722,7 +10787,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (done) {
           if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply');
           noteSpoken = true; awaitingReply = false;
-          clearStill(); quiet(() => ui.activity(''));
+          clearStill(); stopThinking(); quiet(() => ui.activity(''));
           if (!speaking) settle();
         }
       }
@@ -10834,9 +10899,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (segActive) return;
         segActive = true;
         const c = lastSeg;
-        if (c && !c.done && !c.hold && now() - c.endAt <= VOICE_CALL_JOIN_MS) {
+        // The earlier piece qualifies when it ended less than 2 s ago, or when it sounded unfinished and is waiting for more.
+        if (c && !c.done && !c.hold && (c.waiting || now() - c.endAt <= VOICE_CALL_JOIN_MS)) {
           let resolve; const promise = new Promise((r) => { resolve = r; });
           c.hold = { promise, resolve }; curCand = c;
+          if (c.onJoin) { const f = c.onJoin; c.onJoin = null; quiet(f); }   // the wait for more is over: the next piece is coming
         } else curCand = null;
       }
       // The segment was a false start: the held one is sent on its own after all.
@@ -10847,7 +10914,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       function onSpeechBegin() {
         if (ended || personSpeaking) return;
-        personSpeaking = true;
+        personSpeaking = true; stopThinking();
         speechAnn = heardAnnouncement();
         clearBegin();
         segmentStarting();
@@ -10859,7 +10926,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (ended) return;
         clearBegin();
         if (!personSpeaking) speechAnn = heardAnnouncement();   // no onSpeechBegin came first
-        personSpeaking = true;
+        personSpeaking = true; stopThinking();
         segmentStarting();
         if (speaking || queue.length) {
           const n = (current ? [current] : []).concat(queue).filter(i => i.kind === 'reply').length;
@@ -10883,11 +10950,20 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
         settle();
       }
+      // Text decides; the optional end-of-turn model (deps.turnModel, audio -> probability finished, or null) can only add doubt:
+      // a text that sounds finished is sent when the model says finished or is unsure, and waits when the model says it is not.
+      async function soundsUnfinished(text, audio) {
+        if (voiceSoundsUnfinished(text)) return true;
+        if (!d.turnModel) return false;
+        let p = null;
+        try { p = await d.turnModel(audio); } catch { p = null; }
+        return typeof p === 'number' && Number.isFinite(p) && p < 0.35;
+      }
       function onSpeechEnd(audio) {
         if (ended) return Promise.resolve();
         clearBegin();
         personSpeaking = false; speechEndAt = now(); cutRec = null;
-        const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null };
+        const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null };
         speechAnn = null; segActive = false;
         const cand = curCand; curCand = null;
         if (cand && cand.hold) cand.hold.resolve(mine);   // the earlier piece hands its text to this one
@@ -10904,11 +10980,26 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             let t = ownOk ? own : '';
             if (mine.carry) t = ownOk ? (voiceIsStopCommand(own) ? own : mine.carry + ' ' + own) : mine.carry;   // a stop word in this piece wins over the earlier one
             if (!t) return;
-            // A later piece started within 2 s: it takes this text along (unless this one is a stop command: stop wins at once).
+            // Does it sound unfinished? Then it is not sent yet: it waits up to the 'Wait for me to go on' time for the next piece,
+            // which takes this text along. Not for a stop command, an answer to a question or an announcement, or when the wait is 0.
+            let waited = false;
+            if (!mine.hold && !ended && !voiceIsStopCommand(t) && !pendingAsk && mine.ann == null && !pendingAnnounce) {
+              const ms = continueWait();
+              if (ms > 0 && await soundsUnfinished(t, audio)) {
+                waited = true; mine.waiting = true;
+                let waitTimer = null;
+                await new Promise((resolve) => { mine.onJoin = resolve; waitTimer = d.setTimer(resolve, ms); });
+                if (waitTimer !== null) quiet(() => d.clearTimer(waitTimer));
+                mine.waiting = false; mine.onJoin = null;
+                if (ended) return;
+              }
+            }
+            // A later piece started (within 2 s, or while this one waited): it takes this text along (unless this one is a stop command: stop wins at once).
             if (mine.hold && !voiceIsStopCommand(t)) {
-              // At most 5 s: a later piece whose end never comes (audio interrupted) must not block this text and every one after it.
+              // At most 5 s (20 s after a wait for more, which a long next piece may need): a later piece whose end never comes
+              // (audio interrupted) must not block this text and every one after it.
               let holdTimer = null;
-              const next = await Promise.race([mine.hold.promise, new Promise((r) => { holdTimer = d.setTimer(() => r(null), 5000); })]);
+              const next = await Promise.race([mine.hold.promise, new Promise((r) => { holdTimer = d.setTimer(() => r(null), waited ? VOICE_CALL_WAIT_HOLD_MS : VOICE_CALL_HOLD_MS); })]);
               if (holdTimer !== null) quiet(() => d.clearTimer(holdTimer));
               if (ended) return;
               if (next) { next.carry = t; if (next.ann == null) next.ann = mine.ann; return; }
@@ -10922,7 +11013,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       async function route(t, ann) {
         if (voiceIsStopCommand(t)) {
-          cancelSpeaking(); cutSkip = true; awaitingReply = false;
+          cancelSpeaking(); cutSkip = true; awaitingReply = false; stopThinking(); clearStill();
           quiet(() => d.stop()); enqueue('Stopped.', 'stop'); settle();
           return;
         }
@@ -10941,14 +11032,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try {
           if (quiet(() => d.isTurnRunning())) {
             if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
-            awaitingReply = true; turnAt = now(); stillSaid = false; setState('thinking'); armStill();
+            awaitingReply = true; turnAt = now(); stillSaid = false; setState('thinking'); armStill(); armThinking();
             await d.interject(t);
           } else {
-            awaitingReply = true; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; turnAt = now(); stillSaid = false;
-            setState('thinking'); armStill();
+            awaitingReply = true; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; turnAt = now(); stillSaid = false; stillUsed = [];
+            setState('thinking'); armStill(); armThinking();
             await d.send(t);
           }
-        } catch { awaitingReply = false; clearStill(); quiet(() => ui.activity('')); quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
+        } catch { awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity('')); quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
       }
 
       function beat() {
@@ -10962,7 +11053,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       async function start() {
         if (started) return !ended;
         started = true; setState('starting');
-        const fail = async (msg) => { quiet(() => ui.toast(msg)); ended = true; setState('ended'); await Promise.resolve().then(() => (callId ? server.end(callId) : null)).catch(() => {}); return false; };   // no id: never end another call of this person
+        const fail = async (msg) => { quiet(() => ui.toast(msg)); teardown(); await Promise.resolve().then(() => (callId ? server.end(callId) : null)).catch(() => {}); return false; };   // no id: never end another call of this person
         // The microphone starts first, still inside the tap that began the call (iOS needs that for audio); the server next.
         let vadErr = null;
         let vadStarting;
@@ -10983,14 +11074,28 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         beat(); settle();
         return true;
       }
+      // Everything the call holds is let go at once: timers, the thinking sound, the microphone and the speaking.
+      function teardown() {
+        ended = true;
+        for (const t of [hbTimer, pumpTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
+        hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); clearStill(); stopThinking();
+        for (const s of [lastSeg, curCand]) if (s) { if (s.hold) s.hold.resolve(null); if (s.onJoin) { const f = s.onJoin; s.onJoin = null; quiet(f); } }   // a held or waiting transcript is let go with the call
+        quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
+      }
+      // Immediate hang-up, for a page that is being hidden, frozen or closed (reason: 'hidden', 'pagehide', 'freeze', ...): everything is
+      // released now and the server is told in the background; nothing is waited for and nothing is read out.
+      function release(reason) {
+        if (endPromise) return endPromise;
+        teardown();
+        const tell = () => { if (callId) quiet(() => Promise.resolve(server.end(callId)).catch(() => {})); };
+        if (callId || !startP) tell(); else startP.then(tell, () => {});   // the id may still be on its way
+        endPromise = Promise.resolve([]);
+        return endPromise;
+      }
       // Hangs up: stops listening and speaking, tells the server and reads out what came in while we talked.
       function hangUp() {
         if (endPromise) return endPromise;
-        ended = true;
-        for (const t of [hbTimer, pumpTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
-        hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); clearStill();
-        for (const s of [lastSeg, curCand]) if (s && s.hold) s.hold.resolve(null);   // a held transcript is let go with the call
-        quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
+        teardown();
         const idKnown = callId || !startP ? Promise.resolve() : startP.catch(() => {});   // hanging up while the start is in flight waits for the id
         endPromise = idKnown.then(() => (callId ? server.end(callId) : { held: [] })).then(r => (r && Array.isArray(r.held) ? r.held : []), () => []).then((held) => {
           if (held.length) {
@@ -11009,8 +11114,69 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return endPromise;
       }
       return {
-        start, hangUp, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+        start, hangUp, release, setPrefs, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
         get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
+      };
+    }
+    // Every microphone track the adapter makes is counted until it is stopped (voiceLiveTracks: a test hook, and a way to prove nothing is left holding the microphone).
+    const VOICE_LIVE_TRACKS = new Set();
+    function voiceTrackLive(stream) { try { for (const tr of stream.getTracks()) VOICE_LIVE_TRACKS.add(tr); } catch { /* not a stream */ } }
+    function voiceStopStream(stream) {
+      try { for (const tr of stream.getTracks()) { try { tr.stop(); } catch { /* already stopped */ } VOICE_LIVE_TRACKS.delete(tr); } } catch { /* no stream */ }
+    }
+    function voiceLiveTracks() {
+      let n = 0;
+      for (const tr of Array.from(VOICE_LIVE_TRACKS)) { if (tr && tr.readyState === 'ended') VOICE_LIVE_TRACKS.delete(tr); else n++; }
+      return n;
+    }
+    // The thinking sound: a soft low pulse made with Web Audio only (no files). A sine near 208 Hz with a quiet second partial,
+    // attack 0.25 s, decay 1 s, repeated every 2.5 s, no melody. Its peak is volume x 0.06 at most. start(), stop() (a 0.1 s fade),
+    // setVolume(0..1). opts: { ctx, volume, setInterval, clearInterval } (the last two for tests).
+    function voiceCreateThinkingSound(opts) {
+      const o = opts || {}, ctx = o.ctx;
+      const setIv = o.setInterval || ((f, ms) => setInterval(f, ms)), clearIv = o.clearInterval || ((id) => clearInterval(id));
+      const clamp = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5; };
+      let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [];
+      const peak = () => vol * 0.06;
+      function pulse() {
+        if (!running || !master) return;
+        const t0 = ctx.currentTime + 0.02;
+        const env = ctx.createGain();
+        env.gain.setValueAtTime(0, t0);
+        env.gain.linearRampToValueAtTime(1, t0 + 0.25);            // attack
+        env.gain.linearRampToValueAtTime(0, t0 + 1.25);            // decay
+        env.connect(master);
+        for (const [freq, level] of [[208, 0.85], [416, 0.15]]) {   // the note and a gentle second partial
+          const osc = ctx.createOscillator(), g = ctx.createGain();
+          osc.type = 'sine'; osc.frequency.value = freq; g.gain.value = level;
+          osc.connect(g); g.connect(env);
+          const item = { osc, env };
+          active.push(item);
+          osc.onended = () => { active = active.filter(x => x !== item); try { g.disconnect(); } catch { /* gone */ } };
+          osc.start(t0); osc.stop(t0 + 1.3);
+        }
+      }
+      return {
+        start() {
+          if (running || !ctx) return;
+          running = true;
+          try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
+          master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+          pulse();
+          timer = setIv(pulse, 2500);
+        },
+        stop() {
+          if (!running) return;
+          running = false;
+          if (timer !== null) { clearIv(timer); timer = null; }
+          const m = master, t = ctx.currentTime; master = null;
+          try { m.gain.cancelScheduledValues(t); m.gain.setValueAtTime(m.gain.value, t); m.gain.linearRampToValueAtTime(0, t + 0.1); } catch { /* ignore */ }
+          for (const x of active) { try { x.osc.stop(t + 0.12); } catch { /* already stopped */ } }
+          active = [];
+          try { if (typeof setTimeout === 'function') setTimeout(() => { try { m.disconnect(); } catch { /* gone */ } }, 300); } catch { /* ignore */ }
+        },
+        setVolume(v) { vol = clamp(v); if (master) { try { master.gain.value = peak(); } catch { /* ignore */ } } },
+        get playing() { return running; },
       };
     }
     // The microphone and the voice activity detector. opts: { baseUrl, micLevel, interruptSensitivity, win, nav, loadScript }.
@@ -11021,7 +11187,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const o = opts || {};
       const base = o.baseUrl || '/api/voice/web/';
       const pause = (v) => (VOICE_END_PAUSES.includes(Number(v)) ? Number(v) : 1200);   // how long a pause ends the person's turn (ms)
-      const st = { micLevel: o.micLevel, sens: o.interruptSensitivity, pause: pause(o.endPause), playing: false, vad: null, ctx: null, gain: null, raw: null };
+      const st = { micLevel: o.micLevel, sens: o.interruptSensitivity, pause: pause(o.endPause), playing: false, vad: null, ctx: null, gain: null, raw: null, dest: null, gen: 0 };
       const win = () => o.win || window;
       const loadScript = o.loadScript || ((src) => new Promise((resolve, reject) => {
         const el = win().document.createElement('script');
@@ -11033,7 +11199,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (st.vad) st.vad.setOptions({ positiveSpeechThreshold: t.positiveSpeechThreshold, negativeSpeechThreshold: t.negativeSpeechThreshold, minSpeechMs: t.minSpeechFrames * 32 });
       };
       async function start(h) {
-        const w = win(), handlers = h || {};
+        const w = win(), handlers = h || {}, my = ++st.gen;
+        const stale = () => st.gen !== my;   // stop() was called while this start was still in flight: whatever it makes is let go
         // Every failure from here on (script load, resume, MicVAD) lets go of the VAD, the stream and the audio context.
         try {
           // The audio context is made and resumed first, still inside the tap that started the call: iOS keeps a context
@@ -11043,14 +11210,19 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           resumed.catch(() => {});   // a failed resume is reported by the await below, not as an unhandled rejection
           if (!w.vad || !w.vad.MicVAD) { await loadScript(base + 'ort.wasm.min.js'); await loadScript(base + 'bundle.min.js'); }
           await resumed;
+          if (stale()) throw new Error('stopped');
           const nav = o.nav || w.navigator;
           const t = voiceVadThresholds(st.sens, false);
           st.vad = await w.vad.MicVAD.new({
             model: 'v5', audioContext: st.ctx, baseAssetPath: base, onnxWASMBasePath: base,
             ortConfig: (c) => { c.env.wasm.numThreads = 1; },
             getStream: async () => {
-              st.raw = await nav.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-              const src = st.ctx.createMediaStreamSource(st.raw), dest = st.ctx.createMediaStreamDestination();
+              const raw = await nav.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+              voiceTrackLive(raw);
+              if (stale()) { voiceStopStream(raw); throw new Error('stopped'); }
+              st.raw = raw;
+              const src = st.ctx.createMediaStreamSource(raw), dest = st.ctx.createMediaStreamDestination();
+              st.dest = dest.stream; voiceTrackLive(st.dest);
               st.gain = st.ctx.createGain(); st.gain.gain.value = voiceGainFromSlider(st.micLevel);
               src.connect(st.gain); st.gain.connect(dest);
               return dest.stream;
@@ -11067,16 +11239,20 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             onVADMisfire: () => { if (handlers.onMisfire) handlers.onMisfire(); },
             onFrameProcessed: (probs, frame) => { if (handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs); },
           });
+          if (stale()) throw new Error('stopped');
           await st.vad.start();
-        } catch (e) { await stop(); throw e; }
+        } catch (e) { if (!stale()) await stop(); else await release(); throw e; }
       }
-      async function stop() {
-        const { vad, raw, ctx } = st;
-        st.vad = st.raw = st.ctx = st.gain = null;
+      // Lets go of everything this adapter holds: MicVAD, the raw microphone stream, the processed stream (the destination's
+      // tracks) and the audio context, so other apps can use the microphone at once.
+      async function release() {
+        const { vad, raw, dest, ctx } = st;
+        st.vad = st.raw = st.dest = st.ctx = st.gain = null;
+        voiceStopStream(raw); voiceStopStream(dest);   // first, so the microphone is free even when the rest is slow
         try { if (vad) await vad.destroy(); } catch { /* already gone */ }
-        try { if (raw) raw.getTracks().forEach(tr => tr.stop()); } catch { /* already stopped */ }
         try { if (ctx) await ctx.close(); } catch { /* already closed */ }
       }
+      async function stop() { st.gen++; await release(); }
       return {
         start, stop,
         setPlaybackActive(on) { st.playing = !!on; apply(); },
@@ -11165,11 +11341,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceSpeedNow() { const v = voicePrefsNow().voiceSpeed; return voiceCleanSpeed(v == null ? 1 : v); }
     const voicePauseSelectHtml = (id, attrs) => `<select id="${id}" ${attrs} style="padding:4px">${VOICE_END_PAUSES.map((ms, i) => `<option value="${ms}"${ms === voiceEndPauseNow() ? ' selected' : ''}>${['Short', 'Normal', 'Long'][i]}</option>`).join('')}</select>`;
     const VOICE_SPEED_HINT = 'Google voices ignore this setting.';
+    // VOICE_CONTINUE_WAITS ("Wait for me to go on") comes from the shared voice helpers block above.
+    function voiceContinueWaitNow() { const v = Number(voicePrefsNow().continueWait); return VOICE_CONTINUE_WAITS.includes(v) ? v : 3000; }
+    function voiceThinkingOnNow() { return voicePrefsNow().thinkingSound !== false; }
+    function voiceThinkingVolNow() { const v = Number(voicePrefsNow().thinkingVolume); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5; }
+    function voiceModeLabel() { return voicePrefsNow().mode === 'tap' ? 'Tap to talk' : 'Hands-free'; }
+    const VOICE_LEVELS_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h10"></path><path d="M18 6h2"></path><circle cx="16" cy="6" r="2"></circle><path d="M4 12h2"></path><path d="M10 12h10"></path><circle cx="8" cy="12" r="2"></circle><path d="M4 18h10"></path><path d="M18 18h2"></path><circle cx="16" cy="18" r="2"></circle></svg>';
     const voiceReady = () => !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready);
     const voiceDeviceFallback = () => !!(voicePrefsNow().deviceVoiceFallback && window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined');
     // Mic buttons show only while the hub voice is on and ready; speaker buttons while a voice is available.
     function voicePaint() {
       for (const b of document.querySelectorAll('.input-area .mic-btn')) b.style.display = voiceReady() ? '' : 'none';
+      for (const b of document.querySelectorAll('.input-area .voice-extra')) b.style.display = voiceReady() ? '' : 'none';
       document.body.classList.toggle('voice-on', voiceReady() || voiceDeviceFallback());
     }
     async function voiceRefreshStatus() {
@@ -11533,6 +11716,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voicePrefsCache = prefs;
       saved();
       voicePaint();
+      voiceModePaint();   // the chat's Talk mode chip follows
+      if (voiceCallS.call && typeof voiceCallS.call.setPrefs === 'function') voiceCallS.call.setPrefs();
       const st = voiceById('st-voice-prefs-state'); if (st) st.textContent = 'Saved on this device.';
     }
     function voiceTestStop() {
@@ -11580,7 +11765,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     // ── Hands-free call (voice phase 2): the controller (voice call block above) wired to this page ──
     // One call at a time. voiceCallS holds it; the call bar sits above the message box of the call's chat.
-    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false };
+    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false, thinking: null, leftChat: null };
     const voiceRoom = { active: false };
     const VOICE_CALL_HELP = 'Hands-free works with the page open and the screen on; locked-screen and car systems (CarPlay, Android Auto) are not supported yet.';
     const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', hearing: 'Hearing you', thinking: 'Thinking', speaking: 'Speaking', ended: 'Ended' };
@@ -11657,10 +11842,40 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try { await voiceCallApi('/api/ask_response', { agent, request_id: requestId, answers: { [q]: answer } }); closeQuestion(requestId); }
       catch { hubToast('Could not send that answer.'); }
     }
-    function voiceCallDeps(chatId, agent, vad) {
+    // The thinking sound of the call: a soft pulse (voiceCreateThinkingSound, Web Audio only) on an AudioContext of its own,
+    // made on first use. While it pulses the VAD is told playback is active, so the pulse cannot start a barge-in.
+    function voiceCallThinking(vad) {
+      if (typeof voiceCreateThinkingSound !== 'function') return null;   // an older lib: the call goes on without the sound
+      let ctx = null, snd = null, on = false;
+      const quiet = (fn) => { try { fn(); } catch { /* a comfort: never breaks the call */ } };
+      return {
+        start() {
+          if (on) return;
+          quiet(() => {
+            if (!ctx) { const AC = window.AudioContext || window.webkitAudioContext; ctx = new AC(); }
+            if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
+            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow() });
+            snd.setVolume(voiceThinkingVolNow());
+            snd.start();
+            on = true;
+            vad.setPlaybackActive(true);
+          });
+        },
+        stop() {
+          if (!on) return;
+          on = false;
+          quiet(() => snd.stop());
+          if (!voicePlay.source) quiet(() => vad.setPlaybackActive(false));   // reply audio already playing keeps the flag
+        },
+        setVolume(v) { quiet(() => { if (snd) snd.setVolume(v); }); },
+        close() { on = false; quiet(() => { if (snd) snd.stop(); }); const c = ctx; ctx = null; snd = null; if (c) quiet(() => c.close()); },
+      };
+    }
+    function voiceCallDeps(chatId, agent, vad, thinking) {
       const barEl = (n) => voiceById(`vcb-${n}-${chatId}`);
       return {
         agent,
+        ...(thinking ? { thinking } : {}),
         now: () => Date.now(),
         setTimer: (fn, ms) => setTimeout(fn, ms),
         clearTimer: (t) => clearTimeout(t),
@@ -11691,7 +11906,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         },
         ui: {
           state: (name) => { const s = barEl('state'); if (s) s.textContent = VOICE_CALL_STATE_TEXT[name] || name; },
-          level: (db) => { const i = barEl('level'); if (i) i.style.width = `${voiceMeterPercent(db)}%`; },
+          level: (db) => { const w = `${voiceMeterPercent(db)}%`; for (const i of [barEl('level'), voiceById(`vp-level-${chatId}`)]) if (i) i.style.width = w; },   // the call bar's meter and the voice panel's
           activity: (text) => { const a = barEl('activity'); if (a) a.textContent = text || ''; },   // silent: shown in the call bar only
           heard: (text) => { const h = barEl('heard'); if (h) h.textContent = text ? `Heard: ${text}` : ''; },
           held: (list) => voiceCallPaintHeld(chatId, list),
@@ -11786,9 +12001,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       } catch { /* a wake lock is a comfort: the call goes on without it */ }
     }
     function voiceCallTeardown() {
-      const S = voiceCallS, chatId = S.chatId;
-      S.call = null; S.vad = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
+      const S = voiceCallS, chatId = S.chatId, vad = S.vad, thinking = S.thinking;
+      S.call = null; S.vad = null; S.thinking = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
       S.own.clear(); S.hub.clear(); S.asks.clear();
+      // Whatever way the call ended, nothing is left holding the microphone or a speaker: the VAD (mic tracks, processed stream,
+      // AudioContext) and the thinking sound's context are let go here too; both are safe to stop twice.
+      if (thinking) { try { thinking.close(); } catch { /* already closed */ } }
+      if (vad && typeof vad.stop === 'function') { try { Promise.resolve(vad.stop()).catch(() => {}); } catch { /* already stopped */ } }
+      voiceStopPlayback();
       voiceCallWake(false);
       if (chatId) { voiceCallHideBar(chatId); voiceCallPaintBtn(chatId, false); }
     }
@@ -11799,6 +12019,35 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceCallTeardown();
       return p;
     }
+    // Leaving the app: an immediate hang-up that does not wait for the hub (call.release), then everything is let go.
+    // A note waits for the person's return ("The call ended when you left the app", with Call again).
+    function voiceCallRelease(reason) {
+      const S = voiceCallS, call = S.call, chatId = S.chatId;
+      if (!call) return;
+      try { if (typeof call.release === 'function') call.release(reason); else call.hangUp(); } catch { /* teardown below lets go anyway */ }
+      voiceCallTeardown();
+      if (chatId) { S.leftChat = chatId; if (!document.hidden) voiceLeftNoticeShow(); }
+    }
+    function voiceLeftNoticeHide() { const b = voiceById('voice-left-bar'); if (b) b.remove(); }
+    function voiceLeftNoticeShow() {
+      const S = voiceCallS, chatId = S.leftChat;
+      if (!chatId || S.call) return;
+      S.leftChat = null;
+      const input = voiceById(`input-${chatId}`), area = input && input.closest('.input-area');
+      if (!area || !area.parentNode) return;
+      voiceLeftNoticeHide();
+      const bar = document.createElement('div');
+      bar.className = 'voice-callbar voice-left-bar'; bar.id = 'voice-left-bar';
+      bar.setAttribute('role', 'status');
+      bar.innerHTML = `<span>The call ended when you left the app</span> <button type="button" data-vleft="again">Call again</button> <button type="button" data-vleft="dismiss" aria-label="Dismiss">Dismiss</button>`;
+      bar.addEventListener('click', (e) => {
+        const t = e.target.closest && e.target.closest('[data-vleft]');
+        if (!t) return;
+        voiceLeftNoticeHide();
+        if (t.dataset.vleft === 'again') voiceCallStart(chatId);
+      });
+      area.parentNode.insertBefore(bar, area);
+    }
     async function voiceCallStart(chatId) {
       const S = voiceCallS, chat = chats[chatId];
       if (S.call) return;
@@ -11808,8 +12057,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceRec.guard.cancel(); if (voiceRec.chatId) voiceMicStop(false);   // dictation ends, nothing uploaded
       voiceStopPlayback();
       const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: voiceSensNow(), endPause: voiceEndPauseNow() });
-      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad));
-      S.call = call; S.vad = vad; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
+      const thinking = voiceCallThinking(vad);
+      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad, thinking));
+      voiceLeftNoticeHide(); S.leftChat = null;
+      S.call = call; S.vad = vad; S.thinking = thinking; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
       voiceCallPaintBtn(chatId, true);
       voiceCallShowBar(chatId);
       voiceCallWake(true);
@@ -11865,16 +12116,97 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           return;
       }
     }
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && voiceCallS.call) voiceCallWake(true); });   // a hidden tab keeps the call; the lock is let go by the browser and taken again here
-    document.addEventListener('pagehide', () => { voiceCallHangUp(); });   // leaving the page hangs up (pagehide is fired at the document)
+    document.addEventListener('visibilitychange', () => {   // a hidden tab keeps the call; the lock is let go by the browser and taken again here
+      if (document.hidden) return;
+      if (voiceCallS.call) voiceCallWake(true); else voiceLeftNoticeShow();
+    });
+    document.addEventListener('pageshow', () => voiceLeftNoticeShow());   // back from the back/forward cache after a release (fired at the document, like pagehide)
+    document.addEventListener('pagehide', () => { voiceCallRelease('pagehide'); });   // leaving the page lets go of the mic at once (pagehide is fired at the document)
+    document.addEventListener('freeze', () => { voiceCallRelease('freeze'); });   // the browser is about to freeze the page
 
-    // Room check (Settings, Voices): 2.5 s speech, 2.5 s quiet; sets the mic level and the interrupt sensitivity. It is also the device check.
+    // ── In-chat voice controls (next to the mic): a Talk mode chip and a small "Voice settings" panel for every signed-in user ──
+    // They write the same per-device prefs as Settings, Voices, and act on a running call at once.
+    const VOICE_POP_KEYS = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause', wait: 'continueWait', think: 'thinkingSound', thinkvol: 'thinkingVolume', mode: 'mode' };
+    function voicePopHtml(chatId) {
+      const id = (n) => `vp-${n}-${chatId}`, tap = voicePrefsNow().mode === 'tap';
+      const waits = VOICE_CONTINUE_WAITS.map((ms) => `<option value="${ms}"${ms === voiceContinueWaitNow() ? ' selected' : ''}>${ms / 1000} s</option>`).join('');
+      return `<div class="vp-row"><span class="vp-label">Talk mode</span><span class="vp-seg" role="group" aria-label="Talk mode">
+          <button type="button" data-vp="mode" data-val="handsfree" aria-pressed="${tap ? 'false' : 'true'}">Hands-free</button><button type="button" data-vp="mode" data-val="tap" aria-pressed="${tap ? 'true' : 'false'}">Tap to talk</button></span></div>
+        <label class="vp-row"><span class="vp-label">Voice speed</span><input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vp="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span></label>
+        <label class="vp-row"><span class="vp-label">Pause before I'm done</span>${voicePauseSelectHtml(id('pause'), 'data-vp="pause"')}</label>
+        <label class="vp-row"><span class="vp-label">Wait for me to go on</span><select id="${id('wait')}" data-vp="wait" style="padding:4px">${waits}</select></label>
+        <label class="vp-row"><span class="vp-label">Mic level</span><input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vp="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
+        <div class="vp-row"><span class="vp-label">Level now</span><span class="voice-meter" aria-hidden="true"><i id="${id('level')}"></i></span></div>
+        <label class="vp-row"><span class="vp-label">Interrupt sensitivity</span><input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vp="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>
+        <label class="vp-row"><span class="vp-label">Thinking sound</span><input type="checkbox" id="${id('think')}" data-vp="think"${voiceThinkingOnNow() ? ' checked' : ''}></label>
+        <label class="vp-row"><span class="vp-label">Thinking volume</span><input type="range" min="0" max="1" step="0.05" id="${id('thinkvol')}" data-vp="thinkvol" value="${voiceThinkingVolNow()}"></label>
+        <div class="vp-row"><button type="button" class="st-test-btn" data-vp="room" id="${id('room')}">Room check</button> <span class="st-hint vp-room-out" id="${id('room-out')}" aria-live="polite" style="margin:0"></span></div>`;
+    }
+    function voicePopClose() {
+      for (const p of document.querySelectorAll('.voice-pop:not([hidden])')) p.hidden = true;
+      for (const b of document.querySelectorAll('.voice-set-btn')) b.setAttribute('aria-expanded', 'false');
+    }
+    function voicePopToggle(chatId) {
+      const pop = voiceById(`voice-pop-${chatId}`), btn = voiceById(`vset-${chatId}`);
+      if (!pop) return;
+      const open = pop.hidden;
+      voicePopClose();
+      if (!open) return;
+      pop.innerHTML = voicePopHtml(chatId);   // built when opened, so it shows the values of the moment
+      pop.hidden = false;
+      if (btn) btn.setAttribute('aria-expanded', 'true');
+      if (!pop.dataset.wired) {
+        pop.dataset.wired = '1';
+        pop.addEventListener('click', (e) => {
+          const t = e.target.closest && e.target.closest('[data-vp]');
+          if (!t) return;
+          if (t.dataset.vp === 'mode') voiceCtlSet('mode', t.dataset.val, true);
+          else if (t.dataset.vp === 'room') voiceRoomCheckRun();
+        });
+        pop.addEventListener('input', (e) => { const t = e.target; if (t.dataset && ['mic', 'sens', 'speed', 'thinkvol'].includes(t.dataset.vp)) voiceCtlSet(t.dataset.vp, Number(t.value), false); });
+        pop.addEventListener('change', (e) => {
+          const t = e.target, k = t.dataset && t.dataset.vp;
+          if (k === 'think') voiceCtlSet('think', t.checked, true);
+          else if (k === 'pause' || k === 'wait' || ['mic', 'sens', 'speed', 'thinkvol'].includes(k)) voiceCtlSet(k, Number(t.value), true);
+        });
+      }
+    }
+    function voiceModeToggle() { voiceCtlSet('mode', voicePrefsNow().mode === 'tap' ? 'handsfree' : 'tap', true); }
+    function voiceModePaint() {
+      const tap = voicePrefsNow().mode === 'tap';
+      for (const c of document.querySelectorAll('.voice-mode-chip')) c.textContent = voiceModeLabel();
+      for (const b of document.querySelectorAll('.voice-pop [data-vp="mode"]')) b.setAttribute('aria-pressed', (b.dataset.val === 'tap') === tap ? 'true' : 'false');
+    }
+    // One setting changed in the panel: shown everywhere it is shown, live on a running call, saved when `save` (on release / pick).
+    function voiceCtlSet(which, v, save) {
+      const S = voiceCallS, vad = S.vad, key = VOICE_POP_KEYS[which];
+      if (!key) return;
+      const val = which === 'speed' ? voiceCleanSpeed(v) : which === 'mode' ? (v === 'tap' ? 'tap' : 'handsfree') : which === 'think' ? !!v : which === 'thinkvol' ? Math.max(0, Math.min(1, Number(v) || 0)) : Number(v);
+      for (const el of document.querySelectorAll(`[id^="vp-${which}-val-"], [id^="vcb-${which}-val-"]`)) el.textContent = which === 'speed' ? voiceSpeedLabel(val) : String(val);
+      for (const el of document.querySelectorAll(`.voice-pop [data-vp="${which}"], .voice-callbar [data-vcb="${which}"]`)) if (el.type === 'range' || el.tagName === 'SELECT') el.value = String(val);
+      if (vad) {
+        if (which === 'mic' && vad.setMicLevel) vad.setMicLevel(val);
+        else if (which === 'sens' && vad.setInterruptSensitivity) vad.setInterruptSensitivity(val);
+        else if (which === 'pause' && vad.setEndPause) vad.setEndPause(val);
+      }
+      if (which === 'thinkvol' && S.thinking) S.thinking.setVolume(val);
+      voicePrefsCache = { ...voicePrefsNow(), [key]: val };   // the next sentence / the next wait already uses it
+      if (save) { const prefs = voiceSavePrefs(localStorage, voicePrefsCache); voicePrefsCache = { ...voicePrefsCache, ...prefs, [key]: val }; }
+      if (which === 'mode') voiceModePaint();
+      if (S.call && typeof S.call.setPrefs === 'function') S.call.setPrefs();
+    }
+    document.addEventListener('click', (e) => { if (!(e.target.closest && e.target.closest('.voice-extra'))) voicePopClose(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') voicePopClose(); });
+
+    // Room check (Settings, Voices, and the chat's voice panel): 2.5 s speech, 2.5 s quiet; sets the mic level and the interrupt sensitivity. It is also the device check.
     async function voiceRoomCheckRun() {
       if (voiceRoom.active) return;
       if (voiceCallS.call || voiceRec.chatId || voiceRec.busy || voiceRec.guard.pending || voiceTest.mic || voiceTest.guard.pending) { hubToast('The microphone is in use.'); return; }
-      const btn = voiceById('st-voice-room');
-      const say = (t) => { const o = voiceById('st-voice-room-out'); if (o) o.textContent = t; };
-      const section = voiceById('st-voice-section');
+      const btns = () => [voiceById('st-voice-room'), ...document.querySelectorAll('.voice-pop [data-vp="room"]')].filter(Boolean);
+      const btn = { set disabled(v) { for (const b of btns()) b.disabled = v; } };
+      const say = (t) => { for (const o of [voiceById('st-voice-room-out'), ...document.querySelectorAll('.voice-pop .vp-room-out')]) if (o) o.textContent = t; };
+      const sec = () => voiceById('st-voice-section') || document.querySelector('.voice-pop:not([hidden])');   // Settings, or the chat's voice panel
+      const section = sec();
       voiceRoom.active = true;
       if (btn) btn.disabled = true;
       let mic = null, phase = '', level = -100;
@@ -11885,7 +12217,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         } catch (e) { hubToast(voiceMicError(e)); say(voiceMicError(e)); return; }
         const t0 = Date.now(), TOTAL = 5000;
         while (Date.now() - t0 < TOTAL) {
-          if (!section || !section.isConnected || document.hidden) { say('Room check cancelled.'); return; }
+          if (!section || !section.isConnected || document.hidden) { say('Room check cancelled.'); return; }   // (a closed panel stays connected: the check goes on)
           const el = Date.now() - t0;
           phase = el < TOTAL / 2 ? 'speech' : 'silence';
           const left = Math.ceil(((phase === 'speech' ? TOTAL / 2 : TOTAL) - el) / 1000);
@@ -11905,11 +12237,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         for (const [id, v] of [['st-voice-mic', r.micLevel], ['st-voice-sens', r.interruptSensitivity]]) { const e = voiceById(id); if (e) e.value = String(v); }
         const mv = voiceById('st-voice-mic-val'); if (mv) mv.textContent = String(r.micLevel);
         const sv = voiceById('st-voice-sens-val'); if (sv) sv.textContent = String(r.interruptSensitivity);
+        for (const [w, val] of [['mic', r.micLevel], ['sens', r.interruptSensitivity]]) {   // the chat's voice panel shows them too
+          for (const e of document.querySelectorAll(`.voice-pop [data-vp="${w}"]`)) e.value = String(val);
+          for (const e of document.querySelectorAll(`[id^="vp-${w}-val-"]`)) e.textContent = String(val);
+        }
         say(`Mic level ${r.micLevel}, interrupt sensitivity ${r.interruptSensitivity}`);
       } finally {
         if (mic) mic.close();
         voiceRoom.active = false;
-        const b = voiceById('st-voice-room'); if (b) b.disabled = false;
+        btn.disabled = false;
       }
     }
 

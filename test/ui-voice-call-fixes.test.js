@@ -6,7 +6,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 Object.assign(globalThis, require('../lib/ui-voice'));   // the call file uses these helpers as globals, like the pages
-const { voiceCreateCall, voiceCreateVad } = require('../lib/ui-voice-call');
+const { voiceCreateCall, voiceCreateVad, VOICE_THINKING_LINES } = require('../lib/ui-voice-call');
 
 const tick = async (n = 8) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
 
@@ -30,7 +30,7 @@ function harness(over) {
   h.stt = (audio) => (h.autoStt ? Promise.resolve(audio.text) : new Promise((res) => h.gates.push(() => res(audio.text))));
   h.answer = async () => { const g = h.gates.shift(); if (g) g(); await tick(); };
   h.deps = {
-    agent: 'a1', now: () => h.t, setTimer: h.setTimer, clearTimer: h.clearTimer, prefs: () => ({}),
+    agent: 'a1', now: () => h.t, setTimer: h.setTimer, clearTimer: h.clearTimer, prefs: () => ({ continueWait: 0 }),   // 0: these tests send short texts and must not wait for more (ui-voice-call-continue.test.js tests the wait)
     vad: { start: async (hd) => { h.handlers = hd; }, stop() {}, setPlaybackActive() {} },
     stt: h.stt, isTurnRunning: () => h.running,
     send: async (t) => { h.sent.push(t); h.running = true; }, interject: async (t) => { h.interjected.push(t); },
@@ -173,18 +173,22 @@ test('still working: one "Still working on it." after 20 s of silence, not again
   await h.advance(19000);
   assert.deepStrictEqual(h.spoken, [], 'not before 20 s');
   await h.advance(1500);
-  assert.deepStrictEqual(h.spoken, ['Still working on it.']);
+  const L = VOICE_THINKING_LINES;
+  assert.strictEqual(h.spoken.length, 1); assert.ok(L.includes(h.spoken[0]), 'one of the thinking lines');
+  assert.ok(!h.spoken.includes('Still working on it.'), 'round 1 line is gone');
+  const first = h.spoken[0];
   await h.finish();
   await h.advance(120000);
-  assert.deepStrictEqual(h.spoken, ['Still working on it.'], 'not again while nothing new was said');
+  assert.deepStrictEqual(h.spoken, [first], 'not again while nothing new was said');
   h.call.onReplyText('First part is ready. ', false);    // something new is spoken
   await tick();
-  assert.deepStrictEqual(h.spoken, ['Still working on it.', 'First part is ready.']);
+  assert.deepStrictEqual(h.spoken, [first, 'First part is ready.']);
   await h.finish();
   await h.advance(19000);
   assert.strictEqual(h.spoken.length, 2);
   await h.advance(1500);
-  assert.deepStrictEqual(h.spoken, ['Still working on it.', 'First part is ready.', 'Still working on it.'], 'allowed again after something new was said');
+  assert.strictEqual(h.spoken.length, 3, 'allowed again after something new was said');
+  assert.ok(L.includes(h.spoken[2]) && h.spoken[2] !== first, 'a different line in the same wait: never twice');
 });
 
 test('still working: nothing once the reply is done, and not while the person is speaking', async () => {
@@ -211,7 +215,7 @@ test('still working: the 20 s count from the last thing spoken, not from the sta
   await h.advance(15000);
   assert.deepStrictEqual(h.spoken, ['Here is a start.'], '15 s after the last spoken line is too early');
   await h.advance(6000);
-  assert.deepStrictEqual(h.spoken, ['Here is a start.', 'Still working on it.']);
+  assert.strictEqual(h.spoken.length, 2); assert.strictEqual(h.spoken[0], 'Here is a start.'); assert.ok(VOICE_THINKING_LINES.includes(h.spoken[1]));
 });
 
 // ---- the VAD adapter: end-of-turn pause ----

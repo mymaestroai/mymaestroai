@@ -205,6 +205,7 @@ test('voiceCallStart calls call.start() inside the tap, before anything is await
     voiceCreateCall: () => ({ start: () => { order.push('call.start'); return new Promise(() => {}); } }),
     voiceCallDeps: () => ({}), voiceCallPanel: () => order.push('panel'), voiceCallPaintState: () => {}, voiceMicPaint: () => order.push('micPaint'),
     voiceCallTeardown: () => {}, voiceWakeAcquire: () => order.push('wake'), Date,
+    voiceEndedBar: () => {}, voiceCallBgNote: false, voiceMediaSession: () => {}, voiceCallBeat: () => {}, setInterval: () => 0,
   };
   const names = Object.keys(env);
   const run = new Function(...names, src.replace(/voiceCall = vc;/, 'voiceCall = vc; globalThis.__vc = vc;') + '\nreturn voiceCallStart;')(...names.map(n => env[n]));
@@ -229,12 +230,12 @@ test('hang-up: the controller hangs up, the page lets go at once, the wake lock 
   const log = [];
   const vc = { call: { hangUp: () => { log.push('hangUp'); return Promise.resolve([{ label: 'x' }]); } }, wake: { release: () => { log.push('release'); return Promise.resolve(); } } };
   const state = { voiceCall: vc };
-  const f = new Function('state', 'voiceCallPanel', 'voiceMicPaint', src.replace(/\bvoiceCall\b/g, 'state.voiceCall') + '\nreturn { voiceCallHangUp, voiceCallTeardown };')(state, (s) => log.push('panel:' + s), () => log.push('micPaint'));
+  const f = new Function('state', 'voiceCallPanel', 'voiceMicPaint', 'voiceMediaSession', 'voiceThinkingClose', src.replace(/\bvoiceCall\b/g, 'state.voiceCall') + '\nreturn { voiceCallHangUp, voiceCallTeardown };')(state, (s) => log.push('panel:' + s), () => log.push('micPaint'), () => log.push('media'), () => log.push('thinkClose'));
   const p = f.voiceCallHangUp();
   assert.strictEqual(state.voiceCall, null);
-  assert.deepStrictEqual(log, ['hangUp', 'release', 'panel:false', 'micPaint']);
+  assert.deepStrictEqual(log, ['hangUp', 'release', 'media', 'thinkClose', 'panel:false', 'micPaint']);   // round 2: the media session and the thinking sound are let go too
   f.voiceCallTeardown(vc);
-  assert.strictEqual(log.length, 4, 'a second teardown does nothing');
+  assert.strictEqual(log.length, 6, 'a second teardown does nothing');
   return p.then((held) => assert.strictEqual(held.length, 1));
 });
 
@@ -310,25 +311,25 @@ test('interjection that finds the turn over is sent as a new voice message; othe
   assert.match(b.toasts[0], /boom/);
 });
 
-test('page hidden hangs up and the toast comes when it returns; the wake lock is asked for again when visible', () => {
-  const h = sliceBetween("document.addEventListener('visibilitychange'", 'function voiceSheet()');
-  assert.match(h, /if \(voiceCall\) \{ voiceCallBgNote = true; voiceCallHangUp\(\); \}/);
-  assert.match(h, /The call ended when the app went to the background\./);
+test('page hidden: iOS releases at once (round 2: Android may keep the call); the "call ended" bar comes when it returns; the wake lock is asked for again when visible', () => {
+  const h = sliceBetween("document.addEventListener('visibilitychange'", "window.addEventListener('pagehide'");
+  assert.match(h, /if \(voiceCall && !voiceCanStayHidden\(\)\) voiceCallRelease\('hidden'\)/);
+  assert.match(h, /if \(voiceCallBgNote && !voiceCall\) voiceEndedBar\(true\)/);
   assert.match(h, /if \(voiceCall\) voiceWakeAcquire\(voiceCall\)/);
   assert.match(h, /voiceMicStop\(\)[\s\S]*voiceMicCancel\(\)/, 'phase-1 dictation behaviour is kept');
-  // run it
+  // run it as an iPhone
   const handlers = [];
   const log = [];
   const doc = { hidden: false, addEventListener: (t, fn) => handlers.push(fn) };
   const state = { voiceCall: { x: 1 }, voiceCallBgNote: false };
-  const body = h.replace(/\bvoiceCallBgNote\b/g, 'state.voiceCallBgNote').replace(/\bvoiceCall\b(?!BgNote|HangUp)/g, 'state.voiceCall').replace('function voiceSheet()', '');
-  new Function('document', 'state', 'toast', 'voiceCallHangUp', 'voiceWakeAcquire', 'voiceRoomStop', 'voiceTestStop', 'voiceRec', 'voiceMicStop', 'voiceMicCancel', body)(
-    doc, state, (t) => log.push('toast:' + t), () => { log.push('hangUp'); state.voiceCall = null; }, () => log.push('wake'), () => {}, () => {}, { state: 'idle' }, () => {}, () => {});
+  const body = h.replace(/\bvoiceCallBgNote\b/g, 'state.voiceCallBgNote').replace(/\bvoiceCall\b(?!BgNote|Release|Stalled)/g, 'state.voiceCall');
+  new Function('document', 'state', 'voiceCanStayHidden', 'voiceCallRelease', 'voiceCallStalled', 'voiceEndedBar', 'voiceWakeAcquire', 'voiceRoomStop', 'voiceTestStop', 'voiceRec', 'voiceMicStop', 'voiceMicCancel', body)(
+    doc, state, () => false, (r) => { log.push('release:' + r); state.voiceCall = null; state.voiceCallBgNote = true; }, () => false, (on) => log.push('bar:' + on), () => log.push('wake'), () => {}, () => {}, { state: 'idle' }, () => {}, () => {});
   doc.hidden = true; handlers[0]();
-  assert.deepStrictEqual(log, ['hangUp']);
+  assert.deepStrictEqual(log, ['release:hidden']);
   doc.hidden = false; handlers[0]();
-  assert.deepStrictEqual(log, ['hangUp', 'toast:The call ended when the app went to the background.']);
-  state.voiceCall = { y: 1 }; handlers[0]();
+  assert.deepStrictEqual(log, ['release:hidden', 'bar:true']);
+  state.voiceCall = { y: 1 }; state.voiceCallBgNote = false; handlers[0]();
   assert.strictEqual(log[2], 'wake');
 });
 
