@@ -11101,7 +11101,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       function cancelSpeaking(byPerson) {
         const items = (current ? [current] : []).concat(queue);
         const hadReply = items.some(i => i.kind === 'reply');
-        const keep = byPerson ? items.filter(i => i.kind === 'mic') : [];
+        // a mic line that was PLAYING when cut is kept once (it is not replayed on every barge-in); waiting ones are kept as they are
+        const keep = byPerson ? items.filter(i => i.kind === 'mic' && !(i === current && i.retried)) : [];
+        if (current && keep.includes(current)) current.retried = true;
         gen++; queue = keep; current = null;
         if (speaking) { speaking = false; quiet(() => vad.setPlaybackActive(false, !!byPerson)); }
         quiet(() => d.cancelSpeech());
@@ -11278,7 +11280,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const cutReply = cancelSpeaking(true);
           const setSkip = cutReply && awaitingReply && !cutSkip;
           if (setSkip) cutSkip = true;
-          cutRec = cutReply ? { mark: Math.max(0, spokenCount - n), setSkip } : null;
+          if (cutReply) cutRec = { mark: Math.max(0, spokenCount - n), setSkip };   // a cut of mic lines only keeps an earlier reply cut to resume
         }
         setState('hearing');
       }

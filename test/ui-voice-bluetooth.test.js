@@ -1121,3 +1121,16 @@ test('mic lines survive the person cutting in: a lost line enqueued between a ca
   assert.ok(!h.spoken.includes('Three.'), 'the cut reply is not read on');
   h.call.release('test');
 });
+
+test('a mic line cut while playing is kept once, not on every barge-in', async () => {
+  const h = await callStarted();
+  h.handlers.onMicChange({ ok: true, reason: 'devicechange', changed: true }); await tick();
+  assert.deepStrictEqual(h.spoken, ["I've switched microphones."]);
+  h.call.onSpeechBegin(); h.call.onSpeechStart(); await tick();   // cut while playing: kept once
+  h.call.onSpeechEnd({ text: 'hmm' }); await tick(60);
+  assert.strictEqual(h.spoken.filter(x => x.startsWith("I've switched")).length, 2, 'said again once they stopped');
+  h.call.onSpeechBegin(); h.call.onSpeechStart(); await tick();   // cut again: not kept a second time
+  h.call.onSpeechEnd({ text: 'ok' }); await tick(60);
+  assert.strictEqual(h.spoken.filter(x => x.startsWith("I've switched")).length, 2, 'no third time');
+  h.call.release('test');
+});
