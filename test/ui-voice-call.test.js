@@ -848,6 +848,31 @@ test('a first speech frame followed by nothing (audio interrupted) does not leav
   assert.ok(h.spoken.some(s => s.startsWith('Weekly check')), 'announced once the stuck start is let go');
 });
 
+test('the 4 s watchdog still lets a false start go after something else showed "hearing" (settle in between)', async () => {
+  const h = harness();
+  assert.strictEqual(await h.call.start(), true);
+  h.vadHandlers.onSpeechBegin();
+  h.call.onHeld({ id: 'a', kind: 'schedule', label: 'Alpha' }, false);
+  h.call.onHeld({ id: 'b', kind: 'schedule', label: 'Bravo' }, false);
+  h.call.decide('b', 'later');   // runs settle(): with personSpeaking the state shows "hearing"
+  assert.strictEqual(h.call.state, 'hearing');
+  await h.advance(4500);
+  assert.ok(h.spoken.some(s => s.startsWith('Alpha')), 'released: the waiting announcement is read');
+  await h.finish();
+  assert.notStrictEqual(h.call.state, 'hearing');
+});
+
+test('hang-up clears the speech-start watchdog', async () => {
+  const h = harness();
+  assert.strictEqual(await h.call.start(), true);
+  const before = h.timers ? Object.keys(h.timers).length : null;
+  h.vadHandlers.onSpeechBegin();
+  await h.call.hangUp();
+  await h.advance(5000);
+  assert.strictEqual(h.call.state, 'ended');
+  if (before !== null) assert.ok(Object.keys(h.timers).length <= before, 'no watchdog left behind');
+});
+
 test('a call whose start failed never sends an end without a call id', async () => {
   const h = harness();
   const ends = [];

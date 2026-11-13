@@ -2272,9 +2272,9 @@ function voiceCreateCall(deps) {
     pumpAnnounce();
   }
   function runAfter(item) { if (item && item.after) { const f = item.after; item.after = null; quiet(f); } }
-  function enqueue(text, kind, after) {
+  function enqueue(text, kind, after, onStart) {
     if (ended || !text) return;
-    queue.push({ text, kind, after });
+    queue.push({ text, kind, after, onStart });
     if (!speaking && !personSpeaking) runQueue();   // never start reading while the person is speaking: the line waits
   }
   async function runQueue() {
@@ -2282,6 +2282,7 @@ function voiceCreateCall(deps) {
     speaking = true; setState('speaking'); quiet(() => vad.setPlaybackActive(true));
     while (queue.length && my === gen && !personSpeaking) {
       current = queue.shift();
+      if (current.onStart) { const f = current.onStart; current.onStart = null; quiet(f); }   // the line really starts playing
       let ok = true;
       try { ok = await d.speak(current.text); } catch { ok = false; }
       if (my !== gen) return;
@@ -2392,13 +2393,13 @@ function voiceCreateCall(deps) {
     if (wait > 0) { pumpTimer = d.setTimer(() => { pumpTimer = null; pumpAnnounce(); }, wait); return; }
     const item = announceQueue.shift();
     item.announced = true;
-    const me = { id: item.id, timer: null };
+    const me = { id: item.id, timer: null, heard: false };
     pendingAnnounce = me;
     const start = () => {
       if (pendingAnnounce !== me) return;
       me.timer = d.setTimer(() => { if (pendingAnnounce === me) decide(me.id, 'later'); }, VOICE_CALL_ANSWER_MS);
     };
-    enqueue(String(item.label || 'Something came in').replace(/[.!?\s]+$/, '') + '. Now, or after we\'re done?', 'announce', start);
+    enqueue(String(item.label || 'Something came in').replace(/[.!?\s]+$/, '') + '. Now, or after we\'re done?', 'announce', start, () => { me.heard = true; });
   }
   function setMode(m) {
     if (m !== 'announce' && m !== 'dnd') return;
@@ -2413,7 +2414,7 @@ function voiceCreateCall(deps) {
   // them, and an answer belongs to the announcement that was pending at this moment. A false start ends in onMisfire.
   // An answer belongs to an announcement only once its line started playing (talking over it to answer is fine) or was
   // read out (its answer timer runs from then); a line still waiting in the queue was not heard yet.
-  const heardAnnouncement = () => (pendingAnnounce && (pendingAnnounce.timer !== null || (speaking && current && current.kind === 'announce')) ? pendingAnnounce.id : null);
+  const heardAnnouncement = () => (pendingAnnounce && pendingAnnounce.heard ? pendingAnnounce.id : null);   // heard: its line started playing
   // A first frame that is followed by nothing (the audio stopped: an incoming phone call, a suspended audio context)
   // must not leave the call deaf and mute: after 4 s without real speech, a misfire or an end, it is let go.
   let beginTimer = null;
@@ -2423,7 +2424,8 @@ function voiceCreateCall(deps) {
     personSpeaking = true;
     speechAnn = heardAnnouncement();
     clearBegin();
-    beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking && state !== 'hearing') { personSpeaking = false; speechAnn = null; settle(); } }, 4000);
+    // Real speech, a misfire and an end all clear this timer, so when it fires no real start came: let the false start go.
+    beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; settle(); } }, 4000);
   }
   // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
   function onSpeechStart() {
@@ -2541,7 +2543,7 @@ function voiceCreateCall(deps) {
     if (endPromise) return endPromise;
     ended = true;
     for (const t of [hbTimer, pumpTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
-    hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = [];
+    hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin();
     quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
     const idKnown = callId || !startP ? Promise.resolve() : startP.catch(() => {});   // hanging up while the start is in flight waits for the id
     endPromise = idKnown.then(() => (callId ? server.end(callId) : { held: [] })).then(r => (r && Array.isArray(r.held) ? r.held : []), () => []).then((held) => {
