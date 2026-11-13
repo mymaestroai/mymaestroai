@@ -1108,6 +1108,19 @@ test('first frame: the character overlay is in the page but transparent until tw
   const b = world({ prefs: { choice: 'orb' } }); withRaf(b); b.display.start(); await flushP(); assert.strictEqual(b.dom.overlay().attrs['data-ucd-arming'], undefined, 'the orb opens at once'); b.display.release();
   const n = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); n.display.start(); await flushP();
   n.players[0].resolvePicture(true); await flushP(); assert.strictEqual(n.dom.overlay().attrs['data-ucd-arming'], undefined, 'no requestAnimationFrame: revealed at once'); n.display.release();
+  // frames stop (a hidden tab, an occluded window): revealed after the bound anyway, and the frames that come later change nothing
+  const s = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); const sr = withRaf(s); s.display.start(); await flushP();
+  s.players[0].resolvePicture(true); await flushP(); assert.strictEqual(s.dom.overlay().attrs['data-ucd-arming'], '');
+  await s.clk.advance(200); assert.strictEqual(s.dom.overlay().attrs['data-ucd-arming'], '', 'still within the bound');
+  await s.clk.advance(60); assert.strictEqual(s.dom.overlay().attrs['data-ucd-arming'], undefined, 'revealed by the bound without any frame');
+  assert.ok(sr.cancelled.length >= 1, 'the waiting frame was cancelled'); const changes = s.log.changes; sr.frame(); sr.frame(); assert.strictEqual(s.log.changes, changes, 'a late frame does not reveal twice'); s.display.release();
+  // the frame after the second one wins over the bound: the timer is cancelled
+  const f = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); const fr = withRaf(f); f.display.start(); await flushP();
+  f.players[0].resolvePicture(true); await flushP(); fr.frame(); fr.frame(); assert.strictEqual(f.dom.overlay().attrs['data-ucd-arming'], undefined);
+  const ch2 = f.log.changes; await f.clk.advance(400); assert.strictEqual(f.log.changes, ch2, 'the bound did not fire after the reveal'); f.display.release();
+  // a requestAnimationFrame that throws: revealed at once, nothing left transparent
+  const t = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); withRaf(t); t.win.requestAnimationFrame = () => { throw new Error('no frames'); }; t.display.start(); await flushP();
+  t.players[0].resolvePicture(true); await flushP(); assert.strictEqual(t.dom.overlay().attrs['data-ucd-arming'], undefined, 'a failing requestAnimationFrame reveals at once'); t.display.release();
   assert.ok(/\.ucd-overlay\[data-ucd-arming\]\s*\{[^}]*opacity:\s*0[^}]*pointer-events:\s*none/.test(read('lib/ui-call-display.css')), 'the CSS makes arming transparent and click-through');
 });
 

@@ -3,8 +3,10 @@
   background: var(--bg, #101418); color: var(--text, #e8ecf1); font-family: inherit;
   padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0); }
 .ucd-overlay[hidden] { display: none; }
-/* arming (ui-call-display.js present): in the page and laid out, its layers composited, but not yet seen or touched; revealed two frames later */
-.ucd-overlay[data-ucd-arming] { opacity: 0 !important; pointer-events: none !important; will-change: opacity; }
+/* arming (ui-call-display.js present): in the page and laid out, not yet seen or touched; revealed two animation frames later. will-change keeps the
+   overlay its own composited layer before and after the reveal, so the browser paints it while transparent and does not re-layer it at the reveal */
+.ucd-overlay { will-change: opacity; }
+.ucd-overlay[data-ucd-arming] { opacity: 0 !important; pointer-events: none !important; }
 .ucd-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--ucd-bg, #0b0e12); }
 /* overflow stays visible: the character's edge glow runs past the host (the stage clips it). The host's bottom edge rises above the caption band while a character is shown with a caption (--ucd-caption-reserve is set by ui-call-display.js: measured caption height + 12px offset + 8px gap) */
 .ucd-host { position: absolute; inset: 0 0 var(--ucd-caption-reserve, 0px) 0; z-index: 0; overflow: visible; display: flex; align-items: center; justify-content: center; }
