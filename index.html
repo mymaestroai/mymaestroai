@@ -548,9 +548,9 @@
     .wm-group { font-size: 11px; opacity: .7; padding: 6px 10px 2px; text-transform: none; }
     .wm-hub { grid-template-columns: 16px minmax(0,1fr) auto auto; }
     .wm-failed .wm-mark { color: #d4588b; }
-    .wm-stopped .wm-mark { color: var(--text-dim); }
+    .wm-stopped .wm-mark, .wm-ended .wm-mark { color: var(--text-dim); }
     .wm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
-    .wm-done .wm-name, .wm-stopped .wm-name { color: var(--text-secondary); }
+    .wm-done .wm-name, .wm-stopped .wm-name, .wm-ended .wm-name { color: var(--text-secondary); }
     .wm-unseen .wm-name { color: #ffd0de; font-weight: 600; }
     .wm-meta { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
     .wm-when { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }

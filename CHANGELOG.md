@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **A finished worker no longer shows as running.** If your Maestro's page missed the moment a temporary worker finished, its row stayed in the Workers list as running, with a timer and a stop button. The page now checks running workers against what your Maestro is really doing every few seconds and on reconnect, marks one that is gone as ended, and shows how it finished when that was recorded. On the computer and on the phone; a reload of the page is enough.
+
 - **A phone that installed the computer layout as its app now opens the phone layout.** If the app on your phone's home screen was added while the computer layout was showing (for example with "Request Desktop Website" on), it now switches to the phone layout by itself each time it opens, and you stay signed in. In a phone's browser the computer layout stays where you opened it, with a bar offering the phone layout; to keep the computer layout in the app on purpose, open `/?desktop=1` once on that phone (`/?desktop=0` undoes it).
 
 - **A Reload button for the app.** The installed app on a computer or phone has no browser reload button, so a screen that falls out of date could not be refreshed. On a computer, ⋯ → Reload loads the page and its scripts fresh, and the installed app also shows a ↻ button at the top next to ?; on the phone it is ⋮ → Reload app. The chat you had open and the text in its message box come back, a reply still being written carries on, and during a voice call it asks first, because reloading ends the call.
