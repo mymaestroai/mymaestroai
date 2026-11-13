@@ -331,7 +331,7 @@ for (const [name, responder] of [
       assert.strictEqual(v.statusCode, 200); assert.strictEqual(v.headers['x-voice-engine'], 'local'); assert.ok(v.headers['x-voice-fallback']);
       assert.strictEqual(l2.filter(l => /\[voice\] openai tts failed \(.+\): using the local engine/.test(l)).length, 1);
       assert.ok(!lines.concat(l2).some(l => l.includes('secret sentence') || l.includes('cloud words')), 'no text in the log');
-      assert.ok(t.rows.every(r => r.ok === false && r.costUsd === 0), 'failed calls are ledgered at cost 0');
+      assert.ok(t.rows.every(r => r.ok === false), 'failed calls are ledgered ok:false (an unusable answer the provider billed keeps its estimated cost)');
     } finally { t.cleanup(); }
   });
 }
@@ -573,7 +573,8 @@ test('too_large: a cloud audio answer over 8 MB is stopped while streaming (abor
   assert.strictEqual(await reasonOf(cloud.tts('helper', 'openai', 'hi', 'coral')), 'too_large');
   assert.ok(big.st.pulled < 9 * MB, 'it did not read the whole body');
   assert.strictEqual(fetchImpl.calls[0].init.signal.aborted, true, 'the request was aborted');
-  assert.deepStrictEqual([rows.length, rows[0].ok, rows[0].costUsd], [1, false, 0]);
+  assert.deepStrictEqual([rows.length, rows[0].ok], [1, false]);
+  assert.ok(rows[0].costUsd > 0, 'the provider answered and billed: the estimate counts');
   const e = makeCloud({ respond: () => ({ bytes: Buffer.alloc(9 * MB) }) });
   assert.strictEqual(await reasonOf(e.cloud.tts('helper', 'elevenlabs', 'hi', ELEVEN_ID)), 'too_large');
 });
@@ -592,13 +593,14 @@ test('too_large: a content-length over the cap is refused before any byte is rea
 test('bad_audio: OpenAI WAV must be 16-bit PCM, 1-2 channels, 8-48 kHz, a data chunk that fits, at least 0.05 s', async () => {
   const cases = {
     'float format': wavWith({ format: 3 }), '8-bit': wavWith({ bits: 8 }), 'three channels': wavWith({ channels: 3 }), 'rate 4000': wavWith({ rate: 4000 }), 'rate 96000': wavWith({ rate: 96000 }),
-    'shorter than 0.05 s': wavWith({ data: Buffer.alloc(1000) }), 'data size beyond the buffer': wavWith({ declared: 99999 }), 'no data chunk': wavWith().subarray(0, 36), 'not RIFF': Buffer.concat([Buffer.from('JUNK'), wavWith().subarray(4)]),
+    'shorter than 0.05 s': wavWith({ data: Buffer.alloc(1000) }), 'no data chunk': wavWith().subarray(0, 36), 'not RIFF': Buffer.concat([Buffer.from('JUNK'), wavWith().subarray(4)]),
     'junk text': Buffer.from('<html>error page that is long enough to pass the old check</html>'),
   };
   for (const [name, wav] of Object.entries(cases)) {
     const rows = []; const { cloud } = makeCloud({ rows, respond: () => ({ bytes: wav }) });
     assert.strictEqual(await reasonOf(cloud.tts('helper', 'openai', 'hi', 'coral')), 'bad_audio', name);
-    assert.deepStrictEqual([rows[0].ok, rows[0].costUsd], [false, 0], name);
+    assert.strictEqual(rows[0].ok, false, name);
+    assert.ok(rows[0].costUsd > 0, 'billed answer, estimated cost kept: ' + name);
   }
   const good = makeCloud({ respond: () => ({ bytes: wavWith({ rate: 24000, channels: 2, data: Buffer.alloc(9600) }) }) });
   assert.strictEqual((await good.cloud.tts('helper', 'openai', 'hi', 'coral')).sampleRate, 24000);
@@ -610,6 +612,7 @@ test('bad_audio: Google inline data must be audio, valid base64, even length, at
   const g = {
     'not audio': inline(b64(4800), 'text/plain'), 'bad base64': inline('!!!not-base64!!!'), 'odd length': inline(Buffer.alloc(4801, 2).toString('base64')),
     'too short': inline(b64(2000)), 'empty': inline(''), 'no mime at all': inline(b64(4800), ''),
+    'mp3 payload': inline(b64(4800), 'audio/mpeg'), 'wav payload': inline(b64(4800), 'audio/wav'),
   };
   for (const [name, r] of Object.entries(g)) {
     const rows = []; const { cloud } = makeCloud({ rows, respond: () => r });
@@ -629,7 +632,7 @@ test('routes: bad cloud audio falls back to the local engine (X-Voice-Fallback: 
   try {
     const v = await withLogs(() => t.tts()); assert.strictEqual(v.value.statusCode, 200);
     assert.strictEqual(v.value.headers['x-voice-engine'], 'local'); assert.strictEqual(v.value.headers['x-voice-fallback'], 'bad_audio');
-    assert.deepStrictEqual([t.rows.length, t.rows[0].ok, t.rows[0].costUsd], [1, false, 0]);
+    assert.deepStrictEqual([t.rows.length, t.rows[0].ok], [1, false]);
   } finally { t.cleanup(); }
 });
 
@@ -731,4 +734,23 @@ test('GET /api/agents: cloudConfirmedBy and cloudConfirmedAt are stripped for no
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const i = src.indexOf("pathname === '/api/agents' && req.method === 'GET'");
   assert.ok(src.slice(i, i + 1800).includes('publicAgentVoice(a, isAdm)'));
+});
+
+test('OpenAI streamed WAV (RIFF and data sizes 0xFFFFFFFF) is accepted and handed on with the real sizes', async () => {
+  const data = Buffer.alloc(24000 * 2 * 0.2, 1);   // 0.2 s at 24 kHz mono
+  const streamed = wavWith({ rate: 24000, channels: 1, data, declared: 0xFFFFFFFF });
+  streamed.writeUInt32LE(0xFFFFFFFF, 4);
+  const rows = []; const { cloud } = makeCloud({ rows, respond: () => ({ bytes: streamed }) });
+  const out = await cloud.tts('helper', 'openai', 'hi', 'coral');
+  assert.strictEqual(out.sampleRate, 24000);
+  assert.strictEqual(out.wav.readUInt32LE(4), out.wav.length - 8, 'RIFF size repaired');
+  const w = cloudMod.parseWav(out.wav);
+  assert.strictEqual(w.dataSize, data.length, 'data size repaired');
+  assert.strictEqual(rows[0].ok, true);
+});
+
+test('an HTTP error answer aborts its request (a hanging error body is not kept open)', async () => {
+  const { cloud, fetchImpl } = makeCloud({ respond: () => ({ status: 500, body: bigBody(1).body }) });
+  assert.strictEqual(await reasonOf(cloud.tts('helper', 'openai', 'hi', 'coral')), 'http_500');
+  assert.strictEqual(fetchImpl.calls[0].init.signal.aborted, true);
 });
