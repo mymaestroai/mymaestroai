@@ -37,7 +37,7 @@ function trackFor() { return { fps: 24, w: 1280, h: 720, box: [586, 300, 120, 10
 function makeWorld(opts) {
   opts = opts || {};
   const manifest = opts.manifest || packManifest();
-  const t = { now: 1000, timers: [], tid: 0, raf: [], rid: 0, videos: [], canvases: [], imgs: [], fetched: [], listeners: {}, hold: new Set(), fail: new Set(), ctxCalls: [], canvasWrites: 0, played: [], docL: {} };
+  const t = { now: 1000, timers: [], tid: 0, raf: [], rid: 0, videos: [], canvases: [], imgs: [], fetched: [], listeners: {}, hold: new Set(), fail: new Set(), ctxCalls: [], canvasWrites: 0, played: [], docL: {}, posterReqs: [] };
   const durOf = (url) => { const m = /\/web\/([^/]+)\.mp4$/.exec(url); const n = m && decodeURIComponent(m[1]); const c = manifest.clips.find(x => x.name === n); return c ? c.dur : 4; };
   const nameOf = (url) => { const m = /\/web\/([^/]+)\.mp4$/.exec(url); return m && decodeURIComponent(m[1]); };
   const setTimeoutF = (fn, ms, tag) => { const id = ++t.tid; t.timers.push({ id, at: t.now + (ms || 0), fn, tag: !!tag }); return id; };   // tag: the fake network, not the player's
@@ -66,11 +66,14 @@ function makeWorld(opts) {
     const v = mkEl('video'); let id = 0;
     Object.assign(v, { readyState: 0, paused: true, currentTime: 0, duration: NaN, playbackRate: 1, _rvfc: null, plays: 0, pauses: 0, loads: 0 });
     Object.defineProperty(v, 'src', { get() { return v._src || ''; }, set(u) {
-      v._src = u; v.readyState = 0; v.duration = NaN; v.clipName = nameOf(u);
+      v._src = u; v.readyState = 0; v.duration = NaN; v.clipName = nameOf(u); v.videoWidth = 0; v.videoHeight = 0;   // a new source has no decoded size yet (as in a browser)
       if (t.hold.has(v.clipName)) return;
-      setTimeoutF(() => { if (v._src !== u) return; if (t.fail.has(v.clipName)) { v.currentSrc = u; v.fire('error'); return; } v.currentSrc = u; v.readyState = 4; v.duration = durOf(u); v.fire('loadeddata'); }, 10, true);
+      setTimeoutF(() => { if (v._src !== u) return; if (t.fail.has(v.clipName)) { v.currentSrc = u; v.fire('error'); return; } v.currentSrc = u; v.readyState = 4; v.duration = durOf(u);
+        if (opts.videoSize !== false) { v.videoWidth = 1280; v.videoHeight = 720; }   // the decoded frame size: real once the data is there (videoSize:false = a browser that reports none)
+        v.fire('loadeddata'); }, 10, true);
     } });
     v.load = () => { v.loads++; };
+    v.videoWidth = 0; v.videoHeight = 0;
     v.play = () => { v.paused = false; v.plays++; t.played.push(v.clipName); if (!t.noPlaying) setTimeoutF(() => { if (!v.paused) v.fire('playing'); }, 20, true); return Promise.resolve(); };
     v.pause = () => { v.paused = true; v.pauses++; };
     v.requestVideoFrameCallback = (cb) => { v._rvfc = cb; return ++id; };
@@ -92,7 +95,21 @@ function makeWorld(opts) {
         Object.defineProperty(c, 'height', { get: () => h, set: (v) => { h = v; } });
         c.getContext = () => cx; t.canvases.push(c); return c;
       }
-      if (tag === 'img') { const im = mkEl('img'); im.complete = true; Object.defineProperty(im, 'src', { get: () => im._s, set: (u) => { im._s = u; const n = (/\/beak\/([^/]+)\.png$/.exec(u) || [])[1]; if (opts.imgHold && opts.imgHold.has(n)) return; setTimeoutF(() => { if (opts.imgFail && opts.imgFail.has(n)) { if (im.onerror) im.onerror(); } else if (im.onload) im.onload(); }, 5, true); } }); t.imgs.push(im); return im; }
+      if (tag === 'img') {
+        const im = mkEl('img'); im.complete = true;
+        Object.defineProperty(im, 'src', { get: () => im._s, set: (u) => {
+          im._s = u; const n = (/\/beak\/([^/]+)\.png$/.exec(u) || [])[1];
+          if (n === undefined && /\.(png|jpe?g|webp)$/.test(u)) {   // a poster image (anything under the pack that is not a beak patch)
+            t.posterReqs.push(u); const pf = opts.posterFail, ph = opts.posterHold;
+            if (ph) return;
+            setTimeoutF(() => { if (pf === 'error') { if (im.onerror) im.onerror(); return; } im.naturalWidth = pf === 'empty' ? 0 : 1920; im.naturalHeight = pf === 'empty' ? 0 : 1080; if (im.onload) im.onload(); }, 5, true);
+            return;
+          }
+          if (opts.imgHold && opts.imgHold.has(n)) return;
+          setTimeoutF(() => { if (opts.imgFail && opts.imgFail.has(n)) { if (im.onerror) im.onerror(); } else if (im.onload) im.onload(); }, 5, true);
+        } });
+        t.imgs.push(im); return im;
+      }
       return mkEl(tag);
     },
     addEventListener(e, f) { (t.docL[e] = t.docL[e] || []).push(f); }, removeEventListener(e, f) { t.docL[e] = (t.docL[e] || []).filter(x => x !== f); } };
@@ -444,17 +461,104 @@ test('load failures: a clip that errors is set aside and another one plays; when
   assert.strictEqual(p2.getInfo().clip, null); assert.ok(p2.getInfo().bad.length >= 2, 'the idle clips that failed were set aside');
   p.destroy(); p2.destroy();
 });
-test('pose rules in the player: from rest, speaking waits for the way back (no shortcut cross-fade), then the speaking clip', async () => {
+test('pose rules in the player: other states still wait for the way back from pose B (no shortcut cross-fade)', async () => {
   const clips = [clip('idle-up', 'idle', { endsOn: 'B', dur: 3 }), clip('idle-back', 'idle', { startsFrom: 'B', dur: 2 }), clip('speaking-1', 'speaking', { track: true, beakEnds: 'closed' }), clip('listening-1', 'listening')];
   const w = makeWorld({ manifest: packManifest(clips) }); const p = w.make(); await p.ready; await w.settle(100);
   assert.strictEqual(p.getInfo().clip, 'idle-up'); assert.strictEqual(p.getInfo().pose, 'B');
-  p.setState('speaking'); await w.settle(300);
+  p.setState('listening'); await w.settle(300);
   assert.strictEqual(p.getInfo().clip, 'idle-up', 'a clip that changes the pose is not cut short');
   w.front(p).end(); await w.settle(100);
   assert.strictEqual(p.getInfo().clip, 'idle-back'); assert.strictEqual(p.getInfo().pose, 'A');
   w.front(p).currentTime = 0; w.front(p).end(); await w.settle(100);
-  assert.strictEqual(p.getInfo().clip, 'speaking-1');
+  assert.strictEqual(p.getInfo().clip, 'listening-1');
   const L = p.getInfo().log; assert.ok(L.every(e => e.kind !== 'fallback')); p.destroy();
+});
+
+// ── fast speaking: entering speaking cuts to a tracked speaking clip inside 150 ms from every state, pose B included ──
+const speakPack = () => [
+  clip('idle-a1', 'idle', { family: 'baton', dur: 5 }), clip('idle-up', 'idle', { family: 'settle', dur: 3, endsOn: 'B' }),
+  clip('idle-rest', 'idle', { family: 'rest', startsFrom: 'B', endsOn: 'B', dur: 6 }), clip('idle-back', 'idle', { family: 'back', dur: 2, startsFrom: 'B' }),
+  clip('listening-1', 'listening', { dur: 6 }), clip('thinking-1', 'thinking', { dur: 6 }),
+  clip('speaking-1', 'speaking', { track: true, beakEnds: 'closed', dur: 5 }), clip('speaking-2', 'speaking', { track: true, beakEnds: 'closed', dur: 5, family: 'sp2' }),
+  clip('reaction-hello-1', 'reaction', { mood: 'hello', dur: 3 }), clip('reaction-proud-2', 'reaction', { mood: 'proud', dur: 3 }),
+  clip('reaction-delighted-1', 'reaction', { mood: 'delighted', dur: 3 }), clip('reaction-goodbye-1', 'reaction', { mood: 'goodbye', dur: 3 }),
+];
+// drive the player into `how` (a state or a named situation), then ask for speaking and report what happened inside 150 ms.
+// The pose-B situations use a pack whose only idle clips are the A-to-B settle and the B rest (a first idle clip is then idle-up, as in the pose test above).
+async function enterSpeaking(how, wo) {
+  const clips = /^poseB/.test(how) ? speakPack().filter(c => c.name !== 'idle-a1') : speakPack();
+  const w = makeWorld(Object.assign({ manifest: packManifest(clips) }, wo || {})); const p = w.make(); await p.ready; await w.settle(100);
+  const front = () => w.front(p);
+  if (how === 'listening' || how === 'thinking') { p.setState(how); await w.settle(400); }
+  else if (how === 'poseB-settling') { /* idle-up (A to B) must be playing */ for (let i = 0; i < 8 && p.getInfo().clip !== 'idle-up'; i++) { front().end(); await w.settle(100); } }
+  else if (how === 'poseB-rest') { for (let i = 0; i < 12 && p.getInfo().clip !== 'idle-rest'; i++) { front().end(); await w.settle(100); } }
+  else if (how === 'reaction') { p.react('proud'); await w.settle(100); }
+  else if (how === 'hello') { p.react('hello'); await w.settle(100); }
+  else if (how === 'nearly-over') { front().currentTime = front().duration - 0.2; }
+  const before = { clip: p.getInfo().clip, pose: p.getInfo().pose, n: p.getInfo().log.length, t: w.now };
+  p.setState('speaking'); await w.settle(150);
+  return { w, p, before, info: p.getInfo(), took: w.now - before.t };
+}
+for (const how of ['idle', 'listening', 'thinking', 'poseB-settling', 'poseB-rest', 'reaction', 'hello', 'nearly-over']) {
+  test('fast speaking: from ' + how + ' a tracked speaking clip is in front within 150 ms, never waiting for the playing clip to end', async () => {
+    const { w, p, before, info } = await enterSpeaking(how);
+    if (how === 'poseB-settling') assert.strictEqual(before.clip, 'idle-up', 'set-up: the pose-changing clip is playing');
+    if (how === 'poseB-rest') { assert.strictEqual(before.clip, 'idle-rest'); assert.strictEqual(before.pose, 'B', 'set-up: pose B'); }
+    if (how === 'reaction') assert.strictEqual(before.clip, 'reaction-proud-2', 'set-up: a (non-hello) reaction is playing');
+    assert.match(info.clip, /^speaking-/, 'now ' + info.clip + ' (was ' + before.clip + ')');
+    const last = info.log[info.log.length - 1]; assert.strictEqual(info.log.length, before.n + 1, 'one switch'); assert.strictEqual(last.state, 'speaking'); assert.strictEqual(last.fade, true);
+    assert.ok(last.latency <= 150 && info.speakLatency <= 150, 'latency ' + last.latency); assert.ok(last.ms <= 120, 'the cross-fade fits the budget: ' + last.ms);
+    const v = w.front(p); assert.strictEqual(v.clipName, info.clip); assert.strictEqual(v.paused, false); assert.match(v.style.transition, /120ms/); assert.strictEqual(v.style.opacity, '1');
+    assert.strictEqual(info.pose, 'A', 'a speaking clip ends on the master pose'); assert.ok(!info.bad.length);
+    p.destroy();
+  });
+}
+test('fast speaking: from pose B a speaking clip that starts on B is preferred; else one that ends on A; the beak track is the clip\'s own', async () => {
+  const mkB = () => speakPack().filter(c => c.name !== 'idle-a1').concat([clip('speaking-b', 'speaking', { track: true, beakEnds: 'closed', startsFrom: 'B', endsOn: 'A', dur: 5, family: 'spb' })]);
+  const w = makeWorld({ manifest: packManifest(mkB()) }); const p = w.make(); await p.ready; await w.settle(100);
+  for (let i = 0; i < 12 && p.getInfo().clip !== 'idle-rest'; i++) { w.front(p).end(); await w.settle(100); }
+  assert.strictEqual(p.getInfo().pose, 'B'); p.setState('speaking'); await w.settle(150);
+  assert.strictEqual(p.getInfo().clip, 'speaking-b', 'the pose-B-start speaking clip'); assert.strictEqual(p.getInfo().pose, 'A');
+  // the beak draws from that clip's track, at the track's own transform (clip.track gives the frame; the same maths as in the plain case)
+  const st = { amp: 0.2, hz: 1500 }; p.setAnalyser(analyserOf(st)); const v = w.front(p);
+  v.frame(12 / 24, w.now); v.frame(12 / 24, w.now + 16.7); w.ctxCalls.length = 0; v.frame(12 / 24, w.now + 40);
+  assert.deepStrictEqual(w.ctxCalls.find(c => c[0] === 'translate').slice(1), [612, 362]); assert.ok(Math.abs(w.ctxCalls.find(c => c[0] === 'rotate')[1] + 12 * Math.PI / 180) < 1e-12);
+  assert.ok(Math.abs(w.ctxCalls.find(c => c[0] === 'scale')[1] - 1.12) < 1e-12); p.destroy();
+});
+test('fast speaking: no reaction plays while the reply is audible; a waiting mood reaction is dropped; a goodbye waits and never cuts the speech', async () => {
+  const { w, p } = await enterSpeaking('idle'); const clipAt = p.getInfo().clip, n = p.getInfo().log.length;
+  assert.strictEqual(p.react('proud'), true, 'the reaction exists'); assert.strictEqual(p.getInfo().pending, null, 'not queued'); await w.settle(300);
+  assert.strictEqual(p.getInfo().clip, clipAt); assert.strictEqual(p.getInfo().log.length, n);
+  assert.strictEqual(p.react('goodbye'), true); assert.strictEqual(p.getInfo().pending, 'goodbye'); await w.settle(300); assert.strictEqual(p.getInfo().clip, clipAt, 'a goodbye does not cut the reply');
+  p.setState('idle'); await w.settle(150); assert.strictEqual(p.getInfo().clip, 'reaction-goodbye-1', 'the goodbye plays once the reply is over');
+  p.destroy();
+  const w2 = makeWorld({ manifest: packManifest(speakPack()) }); const q = w2.make(); await q.ready; await w2.settle(100);
+  q.react('proud'); await w2.settle(100); assert.strictEqual(q.getInfo().clip, 'reaction-proud-2');
+  q.react('delighted'); assert.strictEqual(q.getInfo().pending, 'delighted', 'set-up: a reaction is waiting behind the playing one');
+  q.setState('speaking'); await w2.settle(150);
+  const L = q.getInfo().log, si = L.findIndex(e => e.state === 'speaking');
+  assert.ok(si > 0 && q.getInfo().clip.startsWith('speaking-')); assert.ok(!L.slice(si).some(e => e.state === 'reaction'), 'the waiting mood is dropped when speaking starts'); assert.strictEqual(q.getInfo().pending, null);
+  w2.front(q).end(); await w2.settle(200); assert.match(q.getInfo().clip, /^speaking-/, 'the next clip of the reply is speaking again, never a reaction'); q.destroy();
+});
+test('fast speaking: the reply keeps chaining tracked speaking clips from any pose, never an idle or transition clip', async () => {
+  const { w, p } = await enterSpeaking('poseB-rest');
+  for (let i = 0; i < 6; i++) { w.front(p).end(); await w.settle(150); const L = p.getInfo().log; assert.strictEqual(L[L.length - 1].state, 'speaking'); assert.ok(L[L.length - 1].kind !== 'transition' && L[L.length - 1].kind !== 'fallback'); }
+  p.destroy();
+});
+test('fast speaking: load latency is reported honestly; the old clip keeps playing until the speaking clip has data, then it cuts at once', async () => {
+  const w = makeWorld({ manifest: packManifest(speakPack()) }); w.hold.add('speaking-1'); w.hold.add('speaking-2');
+  const p = w.make(); await p.ready; await w.settle(100); const was = p.getInfo().clip, t0 = w.now;
+  p.setState('speaking'); await w.settle(150);
+  assert.strictEqual(p.getInfo().clip, was, 'nothing to cut to yet: the picture is not blanked'); assert.strictEqual(p.getInfo().speakLatency, null);
+  await w.settle(900); const loading = w.videos.find(v => /^speaking-/.test(v.clipName || '')); assert.ok(loading, 'the speaking clip was requested at once');
+  loading.currentSrc = loading.src; loading.readyState = 4; loading.duration = 5; loading.fire('loadeddata'); await w.settle(30);
+  assert.match(p.getInfo().clip, /^speaking-/); assert.ok(p.getInfo().speakLatency >= 900, 'the late load is visible in the number: ' + p.getInfo().speakLatency); assert.ok(w.now - t0 >= 1000);
+  p.destroy();
+});
+test('fast speaking: when no tracked speaking clip is available the old rules hold (no speaking clip, no reaction)', async () => {
+  const noSpeak = speakPack().filter(c => c.state !== 'speaking'); const w = makeWorld({ manifest: packManifest(noSpeak, { beak: undefined }) });
+  const p = w.make(); await p.ready; await w.settle(100); const was = p.getInfo().clip;
+  p.setState('speaking'); await w.settle(150); assert.ok(was); assert.match(p.getInfo().clip, /^idle-/); assert.ok(!p.getInfo().log.some(e => e.state === 'speaking' || e.state === 'reaction')); p.destroy();
 });
 
 // ── reactions ──
@@ -711,7 +815,7 @@ test('startup: the still stays on top until the first clip is really playing (no
 test('startup: a playing event of a video that is not in front does nothing; no beak over the held still', async () => {
   const w = makeWorld(); w.noPlaying = true; const p = w.make(); await p.ready; await w.settle(300);
   w.videos[0].fire('playing'); assert.strictEqual(p.getInfo().covered, true, 'the still itself playing does not release it');
-  assert.ok(!w.ctxCalls.some(c => c[0] === 'drawImage'), 'no beak patch over the held still'); p.destroy();
+  assert.ok(!w.ctxCalls.some(c => c[0] === 'drawImage' && c[1] && c[1].tag === 'img'), 'no beak patch over the held still (the poster canvas copy of the video frame is not a beak patch)'); p.destroy();
 });
 test('startup: no playing event at all keeps the still beyond 2 s (and well after), retries play a bounded number of times, then a real playing releases it', async () => {
   const w = makeWorld(); w.noPlaying = true; const p = w.make(); await p.ready; await w.settle(300);
@@ -769,12 +873,16 @@ test('fallback: no usable still (it fails to load) still starts normally; a fail
   const w2 = makeWorld(packManifest(packClips().filter(c => c.state !== 'idle'))); w2.manifest.clips = w2.manifest.clips.filter(c => c.state !== 'idle');
   const q = w2.make(); await q.ready; await w2.settle(400); assert.strictEqual(q.getInfo().still, true, 'a pose-A non-track clip of another state is the still'); q.destroy();
 });
-test('edges: the video stage is masked 9 percent on all four edges into the background (both directions, intersected)', async () => {
+test('edges: the video stage is masked 9 percent left/right and 16 percent top/bottom into the background (both directions, intersected), in portrait and landscape alike', async () => {
   const { w, p } = await started(); const stage = w.container.children[0].children[0];
   const m = stage.style.maskImage;
-  assert.match(m, /to right, transparent 0%, #000 9%, #000 91%, transparent 100%/); assert.match(m, /to bottom, transparent 0%, #000 9%, #000 91%, transparent 100%/);
+  assert.match(m, /to right, transparent 0%, #000 9%, #000 91%, transparent 100%/); assert.match(m, /to bottom, transparent 0%, #000 16%, #000 84%, transparent 100%/);
+  assert.ok(!/to bottom, transparent 0%, #000 9%/.test(m) && !/to right, transparent 0%, #000 16%/.test(m), 'each direction has its own share');
+  assert.strictEqual(p.getInfo().stage.featherY, 0.16);
+  const pr = await started({}, { w: 390, h: 800 }), sp = pr.w.container.children[0].children[0];   // portrait: the same mask, the stage there is the short band of the picture
+  assert.strictEqual(sp.style.maskImage, m); assert.strictEqual(pr.p.getInfo().stage.portrait, true); assert.strictEqual(pr.p.getInfo().stage.featherY, 0.16); pr.p.destroy();
   assert.strictEqual(stage.style.maskComposite, 'intersect'); assert.strictEqual(stage.style.webkitMaskImage, m); assert.strictEqual(stage.style.webkitMaskComposite, 'source-in');
-  assert.strictEqual(stage.children.length, 2, 'both videos are in the masked stage'); assert.ok(stage.children.every(c => c.tag === 'video'));
+  assert.strictEqual(stage.children.length, 3, 'both videos and the poster canvas are in the masked stage'); assert.deepStrictEqual(stage.children.map(c => c.tag), ['video', 'video', 'canvas']);
   assert.ok(!w.container.children[0].children.slice(1).some(c => c.style.maskImage), 'the beak canvas is not masked');
   assert.strictEqual(p.getInfo().stage.feather, 0.09); p.destroy();
 });
@@ -784,14 +892,15 @@ test('landscape: geometry is the plain fit (whole picture, letterboxed in a wide
   const r = await started({}, { w: 1000, h: 450 }); s = r.p.getInfo().stage;
   near(s.picture.scale, 0.625); near(s.x, 100); near(s.w, 800); near(s.h, 450); r.p.destroy();
 });
-test('portrait: the central 50 percent of the width at full height is fitted, the empty sides are cropped; video and beak share one transform', async () => {
+test('portrait: the central 70 percent of the width at full height is fitted (wide wing gestures stay in view), the empty sides are cropped; video and beak share one transform', async () => {
   const { w, p } = await started({}, { w: 390, h: 800 }); const s = p.getInfo().stage;
-  const k = 390 / 640;   // width-limited: 640 safe px fill the 390 view
+  const k = 390 / 896;   // width-limited: 896 safe px (70%) fill the 390 view; the default safe area is at least 65%
+  assert.ok(k <= 390 / (1280 * 0.65) + 1e-9, 'default portrait safe area is >= 65% of the width');
   assert.strictEqual(s.portrait, true); near(s.picture.scale, k); near(s.picture.w, 1280 * k); near(s.picture.x, -(1280 * k - 390) / 2);
   near(s.x, 0); near(s.w, 390, 'the stage is the visible part: cut to the view'); near(s.h, 720 * k); near(s.y, (800 - 720 * k) / 2); near(s.picture.y, s.y);
   const sl = w.videos[0].style; assert.strictEqual(sl.width, Math.round(1280 * k * 100) / 100 + 'px'); assert.strictEqual(sl.left, Math.round(-(1280 * k - 390) / 2 * 100) / 100 + 'px'); assert.strictEqual(sl.top, '0px');
-  // the safe area (x 320..960) is exactly the view width: its left/right edges land on the stage edges
-  near(s.picture.x + 320 * k, 0); near(s.picture.x + 960 * k, 390);
+  // the safe area (x 192..1088) is exactly the view width: its left/right edges land on the stage edges
+  near(s.picture.x + 192 * k, 0); near(s.picture.x + 1088 * k, 390);
   // the beak canvas uses the same origin and scale (DPR 1)
   p.setState('speaking'); await w.settle(100); const v = w.front(p); const st = { amp: 0.2, hz: 1500 }; p.setAnalyser(analyserOf(st));
   v.frame(12 / 24, w.now); v.frame(12 / 24, w.now + 16.7); w.ctxCalls.length = 0; v.frame(12 / 24, w.now + 40);
@@ -802,11 +911,11 @@ test('portrait: a resize between portrait and landscape re-lays the stage once, 
   let fire = null; const RO = function (cb) { fire = cb; this.observe = () => {}; this.disconnect = () => {}; };
   const { w, p } = await started({ ResizeObserver: RO }, { w: 800, h: 450 }); assert.strictEqual(p.getInfo().stage.portrait, false);
   w.container.clientWidth = 400; w.container.clientHeight = 800; fire();
-  let s = p.getInfo().stage; assert.strictEqual(s.portrait, true); near(s.picture.scale, 400 / 640); near(s.w, 400); near(parseFloat(w.videos[0].style.width), 1280 * 400 / 640);
+  let s = p.getInfo().stage; assert.strictEqual(s.portrait, true); near(s.picture.scale, 400 / 896); near(s.w, 400); assert.strictEqual(parseFloat(w.videos[0].style.width), Math.round(1280 * 400 / 896 * 100) / 100);
   w.container.clientWidth = 800; w.container.clientHeight = 450; fire(); s = p.getInfo().stage; assert.strictEqual(s.portrait, false); near(s.picture.scale, 0.625); near(s.w, 800);
   p.destroy();
-  const r = await started({ portraitSafe: 0.7 }, { w: 390, h: 800 }); near(r.p.getInfo().stage.picture.scale, 390 / (1280 * 0.7)); r.p.destroy();
-  const g = await started({ portraitSafe: 5 }, { w: 390, h: 800 }); near(g.p.getInfo().stage.picture.scale, 390 / 640, 'out of range falls back to 0.5'); g.p.destroy();
+  const r = await started({ portraitSafe: 0.5 }, { w: 390, h: 800 }); near(r.p.getInfo().stage.picture.scale, 390 / (1280 * 0.5)); r.p.destroy();
+  const g = await started({ portraitSafe: 5 }, { w: 390, h: 800 }); near(g.p.getInfo().stage.picture.scale, 390 / 896, 'out of range falls back to the 0.7 default'); g.p.destroy();
   const sq = await started({}, { w: 600, h: 600 }); assert.strictEqual(sq.p.getInfo().stage.portrait, false, 'a square view is not portrait'); near(sq.p.getInfo().stage.picture.scale, 600 / 1280); sq.p.destroy();
 });
 
@@ -822,4 +931,158 @@ test('cancelReaction: a mood clip that has not started (waiting for the playing 
   assert.strictEqual(p2.react('proud'), true); assert.strictEqual(p2.cancelReaction(), true);
   assert.strictEqual(p2.react('hello'), true); assert.strictEqual(p2.cancelReaction(), false, 'a hello is not a mood');
   p2.destroy();
+});
+
+// ── a real first picture before anything is shown (drawable): decoded AND presented, bounded, never a drawn placeholder ──
+test('blank start: a cold first frame that is decoded but not yet presented keeps ready (and drawable) waiting; the presented frame releases it at once', async () => {
+  const w = makeWorld(); const p = w.make(); let done = false; p.ready.then(() => { done = true; });
+  await w.settle(120); assert.strictEqual(w.videos[0].readyState, 4, 'loadeddata fired: data is there'); assert.strictEqual(done, false, 'data alone is not a picture on screen');
+  assert.strictEqual(p.getInfo().drawable, false); assert.ok(typeof w.videos[0]._rvfc === 'function', 'the player asked to be told when a frame is presented');
+  w.videos[0].frame(0, w.now); await p.ready; assert.strictEqual(p.getInfo().still, true); assert.strictEqual(p.getInfo().drawable, true); p.destroy();
+  const w2 = makeWorld(); const q = w2.make(); await w2.settle(700); await q.ready;   // a browser that never reports the frame: bounded, not an endless wait
+  assert.strictEqual(q.getInfo().drawable, true, 'the bounded wait ends with the still shown'); q.destroy();
+});
+test('blank start: a missing or rejected poster is set aside and the next one is shown; with none at all ready still resolves, drawable false', async () => {
+  const w = makeWorld(); w.fail.add('idle-a1'); const p = w.make(); await p.ready;
+  assert.ok(p.getInfo().bad.indexOf('idle-a1') >= 0); assert.strictEqual(p.getInfo().still, true, 'another A-pose clip is the still'); assert.notStrictEqual(w.videos[0].clipName, 'idle-a1'); assert.strictEqual(p.getInfo().drawable, true); p.destroy();
+  const w2 = makeWorld(); const m = w2.manifest; m.clips.forEach(c => w2.fail.add(c.name)); const q = w2.make(); await q.ready;
+  assert.strictEqual(q.getInfo().still, false); assert.strictEqual(q.getInfo().drawable, false, 'nothing real to show: it never claims a picture'); assert.strictEqual(w2.ctxCalls.filter(c => c[0] === 'drawImage').length, 0, 'no placeholder drawing'); q.destroy();
+});
+test('blank start: a still that is too slow ends the wait; drawable turns true only when a clip is really playing in front', async () => {
+  const w = makeWorld(); w.hold.add('idle-a1'); const p = w.make(); await w.settle(4500); await p.ready;
+  assert.strictEqual(p.getInfo().still, false); assert.strictEqual(p.getInfo().drawable, false, 'ready, but no picture yet');
+  await w.settle(9000); assert.strictEqual(p.getInfo().drawable, true, 'the first clip played in front'); p.destroy();
+});
+test('blank start: destroy while the first frame is pending leaves no timer, and a late frame or load changes nothing (release / reopen)', async () => {
+  const w = makeWorld(); const p = w.make(); await w.settle(120); p.destroy();
+  assert.strictEqual(w.timers.filter(x => !x.tag).length, 0, 'nothing of the player is left to fire'); w.videos[0].frame(0, w.now); w.videos[0].fire('loadeddata');
+  assert.strictEqual(p.getInfo().drawable, false); assert.strictEqual(p.getInfo().still, false);
+  const q = w.make(); await w.settle(120); assert.strictEqual(q.getInfo().drawable, false, 'a reopened player starts undrawn, never inheriting the old one'); w.videos[w.videos.length - 2].frame(0, w.now); await q.ready; assert.strictEqual(q.getInfo().drawable, true); q.destroy();
+});
+test('blank start: reduced motion still shows the real A still (drawable) and plays nothing', async () => {
+  const w = makeWorld(); const p = w.make({ reducedMotion: true }); await p.ready; await w.settle(700);
+  assert.strictEqual(p.getInfo().drawable, true); assert.strictEqual(w.played.length, 0, 'nothing was played'); assert.strictEqual(w.videos[0].style.opacity, '1'); p.destroy();
+});
+
+test('poster: the decoded first frame is painted into a canvas in the stage (same rectangle as the video) before drawable, held until a frame is presented while playing', async () => {
+  const w = makeWorld({ videoSize: true }); const p = w.make(); await w.settle(120);
+  const stage = w.container.children[0].children[0], poster = stage.children[2]; assert.strictEqual(poster.tag, 'canvas');
+  assert.strictEqual(p.getInfo().poster, false); assert.strictEqual(p.getInfo().drawable, false, 'decoded but not presented: not drawable, no poster yet');
+  w.videos[0].frame(0, w.now); await p.ready;
+  const di = w.ctxCalls.filter(c => c[0] === 'drawImage' && c[1] && c[1].tag === 'video'); assert.strictEqual(di.length, 1, 'the first frame was copied once');
+  assert.strictEqual(poster.width, 1280); assert.strictEqual(poster.height, 720);
+  assert.strictEqual(p.getInfo().poster, true); assert.strictEqual(p.getInfo().drawable, true); assert.strictEqual(poster.style.display, 'block');
+  assert.strictEqual(poster.style.width, w.videos[0].style.width); assert.strictEqual(poster.style.left, w.videos[0].style.left); assert.strictEqual(poster.style.zIndex, '3');
+  await w.settle(100);   // the first clip plays under the held still: playing event is not enough, a presented frame is
+  assert.strictEqual(p.getInfo().poster, true, 'playing alone does not remove the poster');
+  const f = w.front(p); f.frame(0.05, w.now);
+  assert.strictEqual(p.getInfo().poster, false); assert.strictEqual(poster.style.display, 'none'); p.destroy();
+});
+test('poster: no frame callback ends in a bounded wait; destroy and reduced motion leave no timer', async () => {
+  const w = makeWorld({ videoSize: true }); const p = w.make(); await w.settle(700); await p.ready; await w.settle(700);
+  assert.strictEqual(p.getInfo().poster, false, 'a browser with no frame callback still releases the poster once the clip plays (bounded)');
+  p.destroy(); assert.strictEqual(w.timers.length, 0, 'destroy leaves no timer');
+  const r = makeWorld({ videoSize: true }); const q = r.make({ reducedMotion: true }); await r.settle(700); await q.ready; r.videos[0].frame(0, r.now);
+  assert.strictEqual(q.getInfo().poster, true, 'reduced motion shows the poster of the A still'); q.destroy(); assert.strictEqual(r.timers.length, 0);
+});
+
+// ── optional pack poster image and measured portrait safe area (all fields optional; old packs behave exactly as before) ──
+const SAFE = { x: 0.25, y: 0.1, w: 0.5, h: 0.6 };
+const posterManifest = (extra) => packManifest(null, Object.assign({ poster: 'poster.webp', posters: { A: 'poster.webp', B: 'art/rest.png', C: 'ignored.gif', future: 1 } }, extra || {}));
+const isPosterDraw = (w, c) => c[0] === 'drawImage' && c[1] && c[1].tag === 'img' && /poster\.webp$/.test(c[1]._s || '');
+const isFrameCopy = (c) => c[0] === 'drawImage' && c[1] && c[1].tag === 'video' && c[4] === 1280;
+
+test('manifest: poster / posters / safeArea / safeAreaTypical are normalised; bad values and old manifests give null (the fallback)', () => {
+  const n = (extra) => faceNormalizeManifest(Object.assign({ clips: packClips() }, extra));
+  let m = n(); assert.strictEqual(m.poster, null); assert.strictEqual(m.posters, null); assert.strictEqual(m.safeArea, null); assert.strictEqual(m.safeAreaTypical, null, 'an old manifest has none of them');
+  m = n({ poster: 'art/p.JPG', posters: { A: 'art/p.JPG', B: 'b.png', C: 'no way', zzz: 3 }, safeArea: SAFE, safeAreaTypical: { x: 0, y: 0, w: 1, h: 1 } });
+  assert.strictEqual(m.poster, 'art/p.JPG'); assert.deepStrictEqual(m.posters, { A: 'art/p.JPG', B: 'b.png' }, 'unknown keys are allowed and ignored');
+  assert.deepStrictEqual(m.safeArea, SAFE); assert.deepStrictEqual(m.safeAreaTypical, { x: 0, y: 0, w: 1, h: 1 });
+  assert.strictEqual(n({ poster: 'p.webp' }).poster, 'p.webp', 'poster alone (no posters) is fine');
+  for (const bad of ['/abs.png', '../x.png', 'a/../x.png', 'a..b.png', 'x.gif', 'x.svg', 'x', '', 'a//b.png', 'a b.png', 'a%2fb.png', 'a\\b.png', '.hidden.png', 7, null, {}, [], 'x'.repeat(300) + '.png'])
+    assert.strictEqual(n({ poster: bad }).poster, null, 'bad poster ' + JSON.stringify(bad));
+  assert.strictEqual(n({ poster: 'p.png', posters: { A: 'q.png' } }).poster, null, 'posters present: poster must equal posters.A');
+  assert.strictEqual(n({ poster: 'p.png', posters: { B: 'p.png' } }).poster, null, 'posters present without A');
+  assert.strictEqual(n({ poster: 'p.png', posters: 'p.png' }).poster, null, 'posters of the wrong type'); assert.strictEqual(n({ posters: { A: 'p.png' } }).poster, null, 'posters.A without poster');
+  const bads = [{ x: 0, y: 0, w: 1, h: 1, extra: 1 }, { x: -0.1, y: 0, w: 0.5, h: 0.5 }, { x: 0.6, y: 0, w: 0.5, h: 0.5 }, { x: 0, y: 0.6, w: 0.5, h: 0.5 }, { x: 0, y: 0, w: 0, h: 1 }, { x: 0, y: 0, w: 1, h: -1 }, { x: '0', y: 0, w: 1, h: 1 },
+    { x: NaN, y: 0, w: 1, h: 1 }, { x: 0, y: 0, w: Infinity, h: 1 }, { x: 0, y: 0, w: 1, h: 1.0001 }, { x: 0, y: 0, w: 0.5 }, [0, 0, 1, 1], null, 5, 'x'];
+  for (const b of bads) { assert.strictEqual(n({ safeArea: b }).safeArea, null, 'bad safeArea ' + JSON.stringify(b)); assert.strictEqual(n({ safeAreaTypical: b }).safeAreaTypical, null); }
+  assert.deepStrictEqual(n({ safeArea: { x: 0, y: 0, w: 1, h: 1 } }).safeArea, { x: 0, y: 0, w: 1, h: 1 }, 'the whole picture is valid');
+  assert.deepStrictEqual(n({ safeArea: { x: 0.3, y: 0.7, w: 0.7, h: 0.3 } }).safeArea, { x: 0.3, y: 0.7, w: 0.7, h: 0.3 }, 'x+w and y+h may reach 1');
+});
+test('urls: a poster is requested only from a valid manifest-named path under /api/faces/<id>/', () => {
+  const u = faceUrls('owl');
+  assert.strictEqual(u.poster('poster.webp'), '/api/faces/owl/poster.webp'); assert.strictEqual(u.poster('art/p-1.png'), '/api/faces/owl/art/p-1.png');
+  for (const bad of ['../x.png', '/x.png', 'x.gif', '//host/x.png', 'a/../b.png', null, undefined, 5]) assert.strictEqual(u.poster(bad), null);
+});
+
+test('safeArea: portrait fits the measured box and centres it in the view, x and y offsets included; the manifest safeArea replaces the 70 percent default', async () => {
+  const { w, p } = await started({}, { w: 390, h: 800, manifest: packManifest(null, { safeArea: SAFE }) }); const s = p.getInfo().stage, k = 390 / 640;
+  assert.deepStrictEqual(s.safeArea, SAFE); assert.strictEqual(s.portrait, true);
+  near(s.picture.scale, k); near(s.picture.x, -195); near(s.picture.y, 224.5);
+  near(s.picture.x + (SAFE.x + SAFE.w / 2) * 1280 * k, 195, 'box centre x = view centre'); near(s.picture.y + (SAFE.y + SAFE.h / 2) * 720 * k, 400, 'box centre y = view centre');
+  near(s.picture.x + SAFE.x * 1280 * k, 0, 'width-limited: the box edges are the view edges'); near(s.picture.x + (SAFE.x + SAFE.w) * 1280 * k, 390);
+  assert.strictEqual(w.videos[0].style.left, '-195px', 'the video sits at the picture position inside the stage'); near(s.y, 224.5); near(s.h, 720 * k);
+  p.setState('speaking'); await w.settle(100); const v = w.front(p); p.setAnalyser(analyserOf({ amp: 0.2, hz: 1500 }));
+  v.frame(12 / 24, w.now); v.frame(12 / 24, w.now + 16.7); w.ctxCalls.length = 0; v.frame(12 / 24, w.now + 40);
+  const tf = w.ctxCalls.filter(c => c[0] === 'setTransform')[1]; near(tf[1], k); near(tf[5], s.picture.x); near(tf[6], s.picture.y, 'the beak canvas shares the same offset'); p.destroy();
+  const t = await started({}, { w: 300, h: 400, manifest: packManifest(null, { safeArea: { x: 0.4, y: 0, w: 0.2, h: 1 } }) }), ts = t.p.getInfo().stage;   // height-limited
+  near(ts.picture.scale, 400 / 720); near(ts.picture.x, 150 - 640 * 400 / 720); near(ts.picture.y, 0); t.p.destroy();
+});
+test('safeArea: landscape and square are unchanged by it; a malformed or missing one (and safeAreaTypical alone) keeps the 70 percent portrait default', async () => {
+  const l = await started({}, { w: 800, h: 450, manifest: packManifest(null, { safeArea: SAFE }) }); let s = l.p.getInfo().stage;
+  near(s.picture.scale, 0.625); near(s.x, 0); near(s.w, 800); near(s.picture.x, 0); near(s.picture.y, 0); l.p.destroy();
+  const q = await started({}, { w: 600, h: 600, manifest: packManifest(null, { safeArea: SAFE }) }); near(q.p.getInfo().stage.picture.scale, 600 / 1280); q.p.destroy();
+  for (const extra of [{}, { safeArea: { x: 0.8, y: 0, w: 0.5, h: 1 } }, { safeArea: 'wide' }, { safeAreaTypical: SAFE }, { safeArea: { x: 0, y: 0, w: 0, h: 0 }, safeAreaTypical: SAFE }]) {
+    const r = await started({}, { w: 390, h: 800, manifest: packManifest(null, extra) }); s = r.p.getInfo().stage;
+    near(s.picture.scale, 390 / 896, JSON.stringify(extra)); near(s.picture.x, -(1280 * 390 / 896 - 390) / 2); near(s.y, (800 - 720 * 390 / 896) / 2); near(s.safeArea.x, 0.15); near(s.safeArea.w, 0.7); r.p.destroy();
+  }
+  const o = await started({ portraitSafe: 0.5 }, { w: 390, h: 800, manifest: packManifest(null, { safeArea: SAFE }) }); near(o.p.getInfo().stage.picture.scale, 390 / 640, 'the measured box wins over the option'); o.p.destroy();
+});
+
+test('poster image: the manifest poster is loaded and decoded first, requested through the pack asset path, and painted instead of a captured video frame', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); const p = w.make(); await p.ready;
+  assert.deepStrictEqual(w.posterReqs, ['/api/faces/owl/poster.webp']);
+  const stage = w.container.children[0].children[0], pc = stage.children[2];
+  assert.strictEqual(pc.width, 1920); assert.strictEqual(pc.height, 1080, 'the poster canvas has the image size');
+  assert.strictEqual(w.ctxCalls.filter(c => isPosterDraw(w, c)).length, 1, 'the image was drawn into the poster canvas'); assert.strictEqual(w.ctxCalls.filter(isFrameCopy).length, 0, 'no video frame was copied when the image is there');
+  const i = p.getInfo(); assert.strictEqual(i.posterImage, true); assert.strictEqual(i.poster, true); assert.strictEqual(i.drawable, true); assert.strictEqual(pc.style.display, 'block');
+  assert.strictEqual(pc.style.width, w.videos[0].style.width, 'same picture rectangle as the video'); p.destroy();
+});
+test('poster image: it is released only after the front video has presented a frame (no frame callback: bounded), never by playing alone', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); const p = w.make(); await p.ready; await w.settle(100);
+  assert.strictEqual(p.getInfo().poster, true, 'the clip plays under the still: playing alone keeps the poster');
+  w.front(p).frame(0.05, w.now); assert.strictEqual(p.getInfo().poster, false); assert.strictEqual(w.container.children[0].children[0].children[2].style.display, 'none'); p.destroy();
+});
+test('poster image: missing, undecodable, empty or too slow falls back to the actual video frame; the pack still starts, nothing is claimed it does not have', async () => {
+  for (const mode of ['error', 'empty']) {
+    const w = makeWorld({ manifest: posterManifest(), posterFail: mode }); const p = w.make(); await p.ready;
+    assert.strictEqual(p.getInfo().posterImage, false, mode); assert.strictEqual(w.ctxCalls.filter(isFrameCopy).length, 1, mode + ': the actual frame is copied'); assert.strictEqual(p.getInfo().drawable, true); assert.strictEqual(p.getInfo().still, true); p.destroy();
+  }
+  const w = makeWorld({ manifest: posterManifest(), posterHold: true }); const p = w.make(); await w.settle(1500);
+  assert.strictEqual(p.getInfo().still, false, 'nothing is shown before the poster is decoded (bounded wait)'); assert.strictEqual(p.getInfo().poster, false); assert.strictEqual(p.getInfo().drawable, false);
+  await w.settle(4000); await p.ready; assert.strictEqual(p.getInfo().posterImage, false); assert.strictEqual(w.ctxCalls.filter(isFrameCopy).length, 1, 'the poster wait ended and the actual frame was copied'); assert.strictEqual(p.getInfo().drawable, true);
+  p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0, 'destroy cancelled the poster wait');
+});
+test('poster image: an invalid path or a poster/posters.A mismatch is never requested; a pack without poster behaves as before; destroy during the load leaves nothing', async () => {
+  for (const extra of [{ poster: '../x.png' }, { poster: '/x.png' }, { poster: 'x.gif' }, { poster: 'p.png', posters: { A: 'q.png' } }, { poster: 'p.png', posters: [] }, { posters: { A: 'p.png' } }, {}]) {
+    const w = makeWorld({ manifest: packManifest(null, extra) }); const p = w.make(); await p.ready;
+    assert.deepStrictEqual(w.posterReqs, [], JSON.stringify(extra)); assert.strictEqual(w.ctxCalls.filter(isFrameCopy).length, 1, 'the actual frame is the poster'); assert.strictEqual(p.getInfo().posterImage, false); p.destroy();
+  }
+  const w = makeWorld({ manifest: posterManifest(), posterHold: true }); const p = w.make(); await w.settle(100); p.destroy();
+  assert.strictEqual(w.timers.filter(x => !x.tag).length, 0); assert.strictEqual(p.getInfo().posterImage, false);
+});
+test('poster image: reduced motion shows it as the A still; hiding while it is up does not drop it early, and it goes only after a frame is presented on return', async () => {
+  const r = makeWorld({ manifest: posterManifest() }); const q = r.make({ reducedMotion: true }); await q.ready; await r.settle(700);
+  assert.strictEqual(q.getInfo().poster, true); assert.strictEqual(q.getInfo().posterImage, true); assert.strictEqual(r.played.length, 0); q.destroy();
+  const w = makeWorld({ manifest: posterManifest() }); const p = w.make(); await p.ready; await w.settle(100);
+  assert.strictEqual(p.getInfo().poster, true); w.hide(true); await w.settle(700);
+  assert.strictEqual(p.getInfo().poster, true, 'paused while hidden: no frame was presented, the poster stays');
+  w.hide(false); assert.strictEqual(p.getInfo().poster, true, 'visible again: still waiting for a presented frame'); w.front(p).frame(0.3, w.now);
+  assert.strictEqual(p.getInfo().poster, false, 'released once the front video presented a frame'); p.destroy();
+});
+test('poster: a browser that cannot copy the frame (no decoded size) never claims a picture; the clip playing in front does', async () => {
+  const w = makeWorld({ videoSize: false }); const p = w.make(); await p.ready;
+  assert.strictEqual(w.ctxCalls.filter(isFrameCopy).length, 0, 'nothing copied'); assert.strictEqual(p.getInfo().poster, false); assert.strictEqual(p.getInfo().drawable, false, 'no decoded frame: no false claim');
+  await w.settle(300); assert.strictEqual(p.getInfo().drawable, true, 'a clip really playing in front is a picture'); p.destroy();
 });

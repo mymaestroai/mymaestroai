@@ -56,11 +56,14 @@ test('the gap is tunable (gapMinMs, gapSpreadMs) and varied by default', () => {
   assert.deepStrictEqual(voiceThinkingCluster({ seed: 9, gapMinMs: -5, gapSpreadMs: 'x' }), voiceThinkingCluster({ seed: 9 }), 'rubbish falls back to the defaults');
 });
 
-test('peak: volume 0.5 (the default) is -30 dBFS, 0 is silent, the volume is clamped', () => {
-  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(0.5)) + 30) < 1e-9);
+test('peak: volume 0.5 (the default) is -25 dBFS, the top volume does not clip, 0 is silent, the volume is clamped', () => {
+  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(0.5)) + 25) < 1e-9);
+  assert.ok(Math.abs(voiceThinkingPeak(0.5) - Math.pow(10, -25 / 20)) < 1e-12);
+  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(1)) + 18.98) < 0.01, 'top volume = -25 dBFS + 6.02 dB');
+  assert.ok(voiceThinkingPeak(1) > 0 && voiceThinkingPeak(1) < 1, 'top volume stays below full scale (no clipping)');
   assert.strictEqual(voiceThinkingPeak(0), 0);
   assert.strictEqual(voiceThinkingPeak(9), voiceThinkingPeak(1)); assert.strictEqual(voiceThinkingPeak(-1), 0);
-  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(undefined)) + 30) < 1e-9, 'unknown volume = default');
+  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(undefined)) + 25) < 1e-9, 'unknown volume = default');
 });
 
 test('the event: at, kind, pops as offsets from at, the old swell fields, a copy of the pops', () => {

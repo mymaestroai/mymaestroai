@@ -11218,7 +11218,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The thinking sound: quiet random pop clusters made with Web Audio only (no files). The plan (how many pops, when, how high, the gaps) is
     // DATA from lib/ui-voice-thinking.js (voiceThinkingCluster, seeded); this function only plays an event's pops: each pop is a sine with a
     // few-ms attack and a 30-60 ms decay (a little glide), through a low-pass below 2 kHz, the whole cluster fades in and out. Peak = volume x
-    // 0.0632 (volume 0.5, the default, is -30 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
+    // 0.1125 (volume 0.5, the default, is -25 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
     // ctx.currentTime + 0.02 and moves event.at to the moment that cluster is HEARD (the audio output clock mapped to performance.now():
     // getOutputTimestamp when valid, else now + the scheduling lead + the output or base latency); it returns the same event, or false when
     // the context is not running (nothing was claimed, event.at is untouched). An event without pops (or no event) plays a cluster of a fresh
@@ -11230,7 +11230,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const setIv = o.setInterval || ((f, ms) => setInterval(f, ms)), clearIv = o.clearInterval || ((id) => clearInterval(id));
       const clamp = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5; };
       let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [], own = 0;
-      const peak = () => vol * 2 * Math.pow(10, -30 / 20);   // volume 0.5 = -30 dBFS
+      const peak = () => vol * 2 * Math.pow(10, -25 / 20);   // volume 0.5 = -25 dBFS
       // performance.now() time at which the sample scheduled for context time t0 comes out of the speakers; null when it cannot be told.
       function heardAt(ct, t0) {
         const now = Number(perf());

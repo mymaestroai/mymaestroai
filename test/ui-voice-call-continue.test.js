@@ -322,7 +322,7 @@ function fakeCtx() {
   return c;
 }
 
-test('thinking sound: a quiet random pop cluster: 4-7 soft sine pops, a few-ms attack and 30-60 ms decay through a low-pass under 2 kHz, peak -30 dBFS at the default volume', () => {
+test('thinking sound: a quiet random pop cluster: 4-7 soft sine pops, a few-ms attack and 30-60 ms decay through a low-pass under 2 kHz, peak -25 dBFS at the default volume', () => {
   const ctx = fakeCtx(), ivs = [];
   const s = voiceCreateThinkingSound({ ctx, volume: 0.5, setInterval: (f, ms) => { ivs.push({ f, ms }); return 7; }, clearInterval: (id) => { ivs.push({ cleared: id }); } });
   s.start();
@@ -330,7 +330,8 @@ test('thinking sound: a quiet random pop cluster: 4-7 soft sine pops, a few-ms a
   assert.ok(oscs.length >= 4 && oscs.length <= 7, 'pops: ' + oscs.length);
   assert.ok(oscs.every(o => o.type === 'sine' && o.frequency.value > 100 && o.frequency.value < 2000));
   const master = ctx.nodes.find(n => n.kind === 'gain' && n.connected.includes(ctx.destination));
-  assert.ok(Math.abs(20 * Math.log10(master.gain.value) - (-30)) < 0.1, 'master = -30 dBFS at volume 0.5: ' + master.gain.value);
+  assert.ok(Math.abs(20 * Math.log10(master.gain.value) - (-25)) < 0.1, 'master = -25 dBFS at volume 0.5: ' + master.gain.value);
+  assert.ok(Math.abs(master.gain.value - voiceThinkingPeak(0.5)) < 1e-9, 'the renderer literal matches the planner peak');
   const env = ctx.nodes.filter(n => n.kind === 'gain' && n.connected.includes(master))[0];
   const er = env.gain.calls.filter(c => c[0] === 'ramp');
   assert.strictEqual(er[0][1], 1); assert.strictEqual(er[er.length - 1][1], 0, 'the cluster fades in and out');
@@ -361,6 +362,7 @@ test('thinking sound: volume 0 is silent, setVolume changes the level, stop fade
   assert.ok(Math.abs(master.gain.value - voiceThinkingPeak(0.5)) < 1e-9);
   s.setVolume(0); assert.strictEqual(master.gain.value, 0);
   s.setVolume(9); assert.ok(master.gain.value <= voiceThinkingPeak(1) + 1e-9, 'capped');
+  assert.ok(master.gain.value < 1, 'top volume does not clip');
   ctx.currentTime = 11;
   s.stop();
   assert.deepStrictEqual(ivs, [3], 'the repeat is cleared');

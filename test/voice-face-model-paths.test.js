@@ -849,6 +849,124 @@ test('codex: prompt: the mood note rides the voice note only when faceMood is tr
   }
 });
 
+// ═════════════════ Orb / None: every server-verified live voice call strips a recognised tag, with no mood prompt ═════════
+test('voiceStripFor: true for any live voice call on the person\'s own turn (no pack needed); every other turn is false', () => {
+  const ctx = makeSandbox({ console: { log() {}, error() {}, warn() {} }, require: () => stub() });
+  let live = true;
+  loadHelpers(ctx, { calls: { onCall: () => live } });
+  const base = { agent: 'ada', turnOrigin: { kind: 'user' }, ephemeral: false, tigerTeam: false, consultedBy: null };
+  const f = (body, extra) => ctx.voiceStripFor(body, { ...base, ...extra });
+  assert.strictEqual(f({ voice: true }), true, 'None / Orb: no facePack');
+  assert.strictEqual(f({ voice: true, facePack: 'owl' }), true);
+  assert.strictEqual(f({ voice: true, origin: { kind: 'user' } }), true);
+  assert.strictEqual(f({}), false);
+  assert.strictEqual(f({ voice: 'true' }), false);
+  assert.strictEqual(f({ voice: true }, { ephemeral: true }), false);
+  assert.strictEqual(f({ voice: true }, { tigerTeam: true }), false);
+  assert.strictEqual(f({ voice: true }, { consultedBy: 'bob' }), false);
+  assert.strictEqual(f({ voice: true }, { turnOrigin: { kind: 'schedule' } }), false);
+  assert.strictEqual(f({ voice: true, origin: { kind: 'job' } }), false);
+  live = false;
+  assert.strictEqual(f({ voice: true }), false, 'no live call');
+  assert.strictEqual(ctx.voiceStripFor({ voice: true }, { ...base, calls: { onCall() { throw new Error('x'); } } }), false);
+});
+
+test('the three provider calls also get the checked moodStrip boolean; the mood prompt still follows faceMood alone', () => {
+  const h = SRC.slice(SRC.indexOf('async function handleChatStreamReserved('), SRC.indexOf('async function handleChat('));
+  assert.match(h, /const moodStrip = faceMood \|\| voiceStripFor\(body, \{ agent, turnOrigin, ephemeral: !!ephemeral, tigerTeam: !!tiger_team, consultedBy: consulted_by \}\);/);
+  for (const fn of ['streamViaCodex', 'streamViaSdk', 'streamViaGateway']) {
+    const call = h.slice(h.indexOf(`await ${fn}(`));
+    assert.match(call.slice(0, call.indexOf('});')), /faceMood,\n\s+moodStrip,\n/, `${fn} is passed moodStrip`);
+  }
+  assert.ok(!/moodStrip:\s*(body|req)/.test(h), 'never copied from the request');
+  assert.match(SRC, /function voiceNoteFor\(options, ephemeral\) \{[^}]*options\.faceMood === true/, 'the prompt note still depends on faceMood only');
+  assert.ok(!/voiceNoteFor[^\n]*moodStrip/.test(SRC), 'moodStrip never reaches the prompt');
+});
+
+const STRIP_OPTS = { faceMood: false, moodStrip: true };
+
+test('Orb / None (moodStrip, no faceMood): gateway strips an unsolicited tag at every split, adds no mood prompt, keeps unknown brackets', async () => {
+  const reply = '[proud] Well done. That is lovely.';
+  for (let cut = 0; cut <= reply.length; cut++) {
+    const parts = [reply.slice(0, cut), reply.slice(cut)].filter(Boolean);
+    const g = gatewayRun({ calls: [chunksOf(parts)], options: STRIP_OPTS });
+    await g.exec();
+    assert.equal(textOf(g.run.events), 'Well done. That is lovely.', `cut ${cut}`);
+    assert.deepEqual(g.run.logs.filter(l => l.role === 'assistant').map(l => l.text), ['Well done. That is lovely.']);
+    assert.ok(g.systems[0].includes('This is a voice conversation'));
+    assert.ok(!g.systems[0].includes(FACE_MOOD_NOTE), 'no mood prompt');
+  }
+  for (const text of ['[Summary] The plan is ready.', '[x] done', '[OK]']) {
+    for (let cut = 0; cut <= text.length; cut++) {
+      const parts = [text.slice(0, cut), text.slice(cut)].filter(Boolean);
+      const g = gatewayRun({ calls: [chunksOf(parts)], options: STRIP_OPTS });
+      await g.exec();
+      assert.equal(textOf(g.run.events), text, `${text} cut ${cut}`);
+      assert.deepEqual(moodsOf(g.run.events), []);
+    }
+  }
+  const typed = gatewayRun({ calls: [chunksOf(['[proud] Hi'])], options: { voice: false, ...STRIP_OPTS } });
+  await typed.exec();
+  assert.equal(textOf(typed.run.events), '[proud] Hi', 'a typed turn is never stripped');
+  const eph = gatewayRun({ calls: [chunksOf(['[proud] Hi'])], options: { ephemeral: true, ...STRIP_OPTS } });
+  await eph.exec();
+  assert.equal(textOf(eph.run.events), '[proud] Hi', 'ephemeral is never stripped');
+});
+
+test('Orb / None (moodStrip, no faceMood): SDK strips an unsolicited tag at every split (stream and result), adds no mood prompt, keeps unknown brackets', async () => {
+  const reply = '[delighted] What a lovely idea. Shall we?';
+  for (let cut = 0; cut <= reply.length; cut++) {
+    const deltas = [reply.slice(0, cut), reply.slice(cut)].filter(Boolean).map(sdkDelta);
+    const s = sdkRun({ messages: [...deltas, sdkResult(reply)], options: STRIP_OPTS });
+    await s.exec();
+    assert.equal(textOf(s.run.events), 'What a lovely idea. Shall we?', `cut ${cut}`);
+    assert.deepEqual(savedOf(s.run), ['What a lovely idea. Shall we?']);
+    assert.ok(!s.prompts[0].includes(JSON.stringify(FACE_MOOD_NOTE).slice(1, -1)), 'no mood prompt');
+    assert.ok(s.prompts[0].includes('This is a voice conversation'));
+  }
+  const only = sdkRun({ messages: [sdkResult('[curious] Why?')], options: STRIP_OPTS });
+  await only.exec();
+  assert.equal(textOf(only.run.events), 'Why?', 'result-only text is stripped too');
+  for (const text of ['[Summary] The plan is ready.', '[x] done', '[OK]']) {
+    for (let cut = 0; cut <= text.length; cut++) {
+      const deltas = [text.slice(0, cut), text.slice(cut)].filter(Boolean).map(sdkDelta);
+      const s = sdkRun({ messages: [...deltas, sdkResult(text)], options: STRIP_OPTS });
+      await s.exec();
+      assert.equal(textOf(s.run.events), text, `${text} cut ${cut}`);
+      assert.deepEqual(savedOf(s.run), [text]);
+    }
+  }
+  const typed = sdkRun({ messages: [sdkResult('[proud] Hi')], options: { voice: false, ...STRIP_OPTS } });
+  await typed.exec();
+  assert.equal(textOf(typed.run.events), '[proud] Hi', 'a typed turn is never stripped');
+});
+
+test('Orb / None (moodStrip, no faceMood): Codex strips an unsolicited tag at every split on both transports, adds no mood prompt, keeps unknown brackets', async () => {
+  const reply = '[sympathetic] I am sorry to hear that. Tell me more.';
+  for (const transport of TRANSPORTS) {
+    for (let cut = 0; cut <= reply.length; cut++) {
+      const pieces = [reply.slice(0, cut), reply.slice(cut)].filter(Boolean);
+      const c = codexRun({ transport, items: codexReply(transport, pieces), options: STRIP_OPTS });
+      await c.exec();
+      assert.equal(textOf(c.run.events), 'I am sorry to hear that. Tell me more.', `${transport} cut ${cut}`);
+      assert.deepEqual(savedOf(c.run), ['I am sorry to hear that. Tell me more.']);
+      assert.ok(c.prompts[0].includes('This is a voice conversation') && !c.prompts[0].includes(FACE_MOOD_NOTE), `${transport}: no mood prompt`);
+    }
+    for (const text of ['[Summary] The plan is ready.', '[x] done', '[OK]']) {
+      for (let cut = 0; cut <= text.length; cut++) {
+        const pieces = [text.slice(0, cut), text.slice(cut)].filter(Boolean);
+        const c = codexRun({ transport, items: codexReply(transport, pieces), options: STRIP_OPTS });
+        await c.exec();
+        assert.equal(textOf(c.run.events), text, `${transport} ${text} cut ${cut}`);
+        assert.deepEqual(savedOf(c.run), [text]);
+      }
+    }
+    const typed = codexRun({ transport, items: codexReply(transport, ['[proud] Hi']), options: { voice: false, ...STRIP_OPTS } });
+    await typed.exec();
+    assert.equal(textOf(typed.run.events), '[proud] Hi', `${transport}: a typed turn is never stripped`);
+  }
+});
+
 test('sdk: prompt: the mood note rides the per-turn voice note only when faceMood is true; off for typed, ephemeral and non-true values', async () => {
   const on = sdkRun({ messages: [sdkResult('Hi')], options: { faceMood: true } });
   await on.exec();

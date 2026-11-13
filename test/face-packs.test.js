@@ -321,3 +321,144 @@ test('openVerified refuses a same-size in-place edit, even with the mtime restor
   const real = Date.now; Date.now = () => real() + 60000;
   try { const p2 = packs.getPack('bird', { home: f.home }); assert.notStrictEqual(p2.files['web/idle-one.mp4'].ctimeMs, file.ctimeMs, 'revalidated after the interval'); } finally { Date.now = real; }
 });
+
+// ── Posters and safe area ────────────────────────────────────────────────────────────────────────────────
+function jpeg(w, h) {
+  const sof = Buffer.alloc(19); sof[0] = 0xff; sof[1] = 0xc0; sof.writeUInt16BE(17, 2); sof[4] = 8; sof.writeUInt16BE(h, 5); sof.writeUInt16BE(w, 7); sof[9] = 3;
+  const app0 = Buffer.from([0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0]);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), app0, sof, Buffer.from([0xff, 0xda, 0, 2, 0, 0, 0xff, 0xd9])]);
+}
+function webp(w, h, kind = 'VP8X') {
+  let body;
+  if (kind === 'VP8X') { body = Buffer.alloc(18); body.writeUIntLE(w - 1, 4, 3); body.writeUIntLE(h - 1, 7, 3); }
+  else if (kind === 'VP8L') { body = Buffer.alloc(10); body[0] = 0x2f; body.writeUInt32LE(((w - 1) | ((h - 1) << 14)) >>> 0, 1); }
+  else { body = Buffer.alloc(10); body[3] = 0x9d; body[4] = 0x01; body[5] = 0x2a; body.writeUInt16LE(w, 6); body.writeUInt16LE(h, 8); }
+  const ch = Buffer.alloc(8); ch.write(kind === 'VP8' ? 'VP8 ' : kind, 0, 'latin1'); ch.writeUInt32LE(body.length, 4);
+  const hd = Buffer.alloc(12); hd.write('RIFF', 0, 'latin1'); hd.writeUInt32LE(4 + ch.length + body.length, 4); hd.write('WEBP', 8, 'latin1');
+  return Buffer.concat([hd, ch, body]);
+}
+/** A valid pack whose manifest names posters; put(dir) may change the files afterwards. */
+function withPosters(tweak, put) {
+  const f = fresh(m => { m.poster = 'art/pose-a.png'; m.posters = { A: 'art/pose-a.png', B: 'art/pose-b.jpg' }; m.safeArea = { x: 0.1, y: 0.05, w: 0.8, h: 0.9 }; m.safeAreaTypical = { x: 0.2, y: 0.1, w: 0.6, h: 0.8 }; if (tweak) tweak(m); });
+  fs.mkdirSync(path.join(f.src, 'art'));
+  fs.writeFileSync(path.join(f.src, 'art', 'pose-a.png'), png(32, 48, 8, 6));
+  fs.writeFileSync(path.join(f.src, 'art', 'pose-b.jpg'), jpeg(32, 48));
+  if (put) put(f.src);
+  return f;
+}
+const pRejects = (tweak, re, put) => { const f = withPosters(tweak, put); const r = packs.validatePack(f.src); assert.strictEqual(r.ok, false, 'should be rejected'); assert.match(r.error, re); };
+const putArt = (name, buf) => (d) => fs.writeFileSync(path.join(d, 'art', name), buf);
+
+test('valid posters (PNG, JPEG, WebP) and safe areas validate, with the right MIME types', () => {
+  const f = withPosters(m => { m.posters.B = 'art/pose-b.webp'; m.posters.futurePose = 'art/not-checked.png'; }, putArt('pose-b.webp', webp(32, 48)));
+  const r = packs.validatePack(f.src);
+  assert.strictEqual(r.ok, true, r.error);
+  assert.strictEqual(r.files['art/pose-a.png'].mime, 'image/png');
+  assert.strictEqual(r.files['art/pose-b.webp'].mime, 'image/webp');
+  assert.strictEqual(r.files['art/pose-a.png'].kind, 'poster');
+  assert.ok(!r.files['art/not-checked.png'], 'unknown posters keys are neither read nor listed');
+  for (const kind of ['VP8', 'VP8L', 'VP8X']) { const g = withPosters(m => { m.posters.B = 'art/b.webp'; }, putArt('b.webp', webp(7, 9, kind))); assert.strictEqual(packs.validatePack(g.src).ok, true, kind); }
+  const j = withPosters(m => { m.poster = 'art/a.jpeg'; m.posters = { A: 'art/a.jpeg' }; }, putArt('a.jpeg', jpeg(10, 10)));
+  const jr = packs.validatePack(j.src); assert.strictEqual(jr.ok, true, jr.error); assert.strictEqual(jr.files['art/a.jpeg'].mime, 'image/jpeg');
+});
+
+test('poster alone (no posters), a posters map with only A, and a beak PNG as poster are fine', () => {
+  assert.strictEqual(packs.validatePack(withPosters(m => { delete m.posters; }).src).ok, true);
+  assert.strictEqual(packs.validatePack(withPosters(m => { m.posters = { A: m.poster }; }).src).ok, true);
+  const f = fresh(m => { m.poster = 'beak/closed.png'; });
+  const r = packs.validatePack(f.src); assert.strictEqual(r.ok, true, r.error); assert.strictEqual(r.files['beak/closed.png'].kind, 'beak');
+  fs.appendFileSync(path.join(f.src, 'beak', 'closed.png'), Buffer.alloc(1024 * 1024));
+  assert.match(packs.validatePack(f.src).error, /1 MiB limit/, 'reusing a beak file does not bypass the poster limit');
+});
+
+test('poster and posters rules', () => {
+  pRejects(m => { delete m.poster; }, /posters needs a "poster"/);
+  pRejects(m => { m.poster = 'art/pose-b.jpg'; }, /same path as posters\.A/);
+  pRejects(m => { delete m.posters.A; }, /pose "A"/);
+  pRejects(m => { m.posters = ['art/pose-a.png']; }, /posters must be an object/);
+  pRejects(m => { m.poster = 7; }, /poster must be a file path/);
+  pRejects(m => { m.posters.B = 5; }, /posters\.B must be a file path/);
+  pRejects(m => { m.posters.B = 'art/missing.png'; }, /missing/);
+  pRejects(m => { m.poster = 'art/missing.png'; m.posters.A = 'art/missing.png'; }, /missing/);
+});
+
+test('unsafe poster paths are rejected', () => {
+  for (const p of ['/etc/passwd.png', '../x.png', 'art/../x.png', 'art//x.png', './x.png', 'art/.hid.png', '.x.png', 'art\\x.png', 'art/%2e%2e.png', 'C:/x.png', 'art/x.png ', 'art/x.png.', 'x.gif', 'art/x', 'manifest.json', 'art/a\u0000.png', '', 'a/b/c/d/e.png', `art/${'x'.repeat(130)}.png`]) {
+    pRejects(m => { m.poster = p; m.posters.A = p; }, /poster|path|manifest/);
+  }
+  pRejects(m => { m.posters.B = '../up.png'; }, /posters\.B/);
+});
+
+test('poster content is sniffed: wrong type, extension mismatch, damage, bad dimensions', () => {
+  pRejects(null, /not a PNG, JPEG or WebP/, putArt('pose-a.png', Buffer.from('GIF89a not an image at all, sorry')));
+  pRejects(null, /JPEG image but its name ends in \.png/, putArt('pose-a.png', jpeg(4, 4)));
+  pRejects(null, /PNG image but its name ends in \.jpg/, putArt('pose-b.jpg', png(4, 4)));
+  pRejects(null, /WebP image but its name ends in \.jpg/, putArt('pose-b.jpg', webp(4, 4)));
+  const dmg = png(4, 4); dmg[20] ^= 0xff; pRejects(null, /damaged|dimensions/, putArt('pose-a.png', dmg));
+  pRejects(null, /dimensions/, putArt('pose-a.png', png(9000, 4)));
+  pRejects(null, /dimensions/, putArt('pose-b.jpg', jpeg(9000, 4)));
+  pRejects(null, /dimensions/, putArt('pose-b.jpg', jpeg(0, 4)));
+  pRejects(null, /no JPEG frame|damaged JPEG/, putArt('pose-b.jpg', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xd9])));
+  pRejects(null, /damaged JPEG/, putArt('pose-b.jpg', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0xff, 0xff, 0, 0, 0, 0])));
+  const t = webp(4, 4); pRejects(m => { m.posters.B = 'art/b.webp'; }, /truncated WebP/, putArt('b.webp', t.subarray(0, t.length - 4)));
+  pRejects(m => { m.posters.B = 'art/b.webp'; }, /unknown WebP layout/, putArt('b.webp', Buffer.concat([webp(4, 4).subarray(0, 12), Buffer.from('ZZZZ'), Buffer.alloc(30)])));
+  pRejects(null, /empty/, putArt('pose-a.png', Buffer.alloc(0)));
+});
+
+test('poster size: 1 MiB is the cap and posters count toward the pack total', () => {
+  const base = png(32, 48, 8, 6).length;
+  const pad = (n) => (d) => fs.appendFileSync(path.join(d, 'art', 'pose-a.png'), Buffer.alloc(n));
+  const r = packs.validatePack(withPosters(null, pad(MIB1 - base)).src);
+  assert.strictEqual(r.ok, true, r.error); assert.strictEqual(r.files['art/pose-a.png'].size, MIB1);
+  pRejects(null, /over the 1 MiB limit/, pad(MIB1 - base + 1));
+  pRejects(null, /limit for one file/, (d) => fs.truncateSync(path.join(d, 'art', 'pose-b.jpg'), 17 * 1024 * 1024));
+  const withArt = packs.validatePack(withPosters().src), plain = packs.validatePack(fresh().src);
+  assert.strictEqual(withArt.total, Object.values(withArt.files).reduce((a, f) => a + f.size, 0));
+  assert.ok(withArt.files['art/pose-a.png'] && withArt.files['art/pose-b.jpg'] && withArt.total > plain.total, 'posters are counted');
+});
+const MIB1 = 1024 * 1024;
+
+test('a symlinked poster, or a poster inside a symlinked folder, is rejected', () => {
+  let f = withPosters(); fs.renameSync(path.join(f.src, 'art', 'pose-a.png'), path.join(f.root, 'real.png')); fs.symlinkSync(path.join(f.root, 'real.png'), path.join(f.src, 'art', 'pose-a.png'));
+  assert.match(packs.validatePack(f.src).error, /symbolic link/);
+  f = withPosters(); fs.renameSync(path.join(f.src, 'art'), path.join(f.root, 'realart')); fs.symlinkSync(path.join(f.root, 'realart'), path.join(f.src, 'art'));
+  assert.match(packs.validatePack(f.src).error, /symbolic link/);
+  f = withPosters(); fs.rmSync(path.join(f.src, 'art', 'pose-b.jpg')); fs.mkdirSync(path.join(f.src, 'art', 'pose-b.jpg'));
+  assert.match(packs.validatePack(f.src).error, /not a regular file/);
+});
+
+test('safeArea and safeAreaTypical geometry', () => {
+  const sa = (v) => (m) => { m.safeArea = v; };
+  for (const ok of [{ x: 0, y: 0, w: 1, h: 1 }, { x: 0.25, y: 0.1, w: 0.5, h: 0.9 }, { x: 0.7, y: 0, w: 0.3, h: 0.4 }]) assert.strictEqual(packs.validatePack(fresh(sa(ok)).src).ok, true, JSON.stringify(ok));
+  for (const no of [{ x: -0.1, y: 0, w: 0.5, h: 0.5 }, { x: 0, y: -1, w: 0.5, h: 0.5 }, { x: 0, y: 0, w: 0, h: 0.5 }, { x: 0, y: 0, w: 0.5, h: -0.5 }, { x: 0.6, y: 0, w: 0.5, h: 0.5 }, { x: 0, y: 0.6, w: 0.5, h: 0.5 }, { x: 0, y: 0, w: 1.0001, h: 1 },
+    { x: '0', y: 0, w: 1, h: 1 }, { x: null, y: 0, w: 1, h: 1 }, { x: 0, y: 0, w: 1 }, { x: 0, y: 0, w: 1, h: 1, extra: 1 }, [0, 0, 1, 1], 'full', 5, null]) {
+    rejects(sa(no), /safeArea/);
+  }
+  const huge = fresh(); const mf = path.join(huge.src, 'manifest.json'); fs.writeFileSync(mf, fs.readFileSync(mf, 'utf8').replace('"background"', '"safeArea":{"x":0,"y":0,"w":1e999,"h":1},"background"'));
+  assert.match(packs.validatePack(huge.src).error, /safeArea/);
+  rejects(m => { m.safeAreaTypical = { x: 0.9, y: 0, w: 0.5, h: 0.5 }; }, /safeAreaTypical/);
+  rejects(m => { m.safeAreaTypical = 'x'; }, /safeAreaTypical/);
+  assert.strictEqual(packs.validatePack(fresh(m => { m.safeAreaTypical = { x: 0.1, y: 0.1, w: 0.5, h: 0.5 }; }).src).ok, true, 'typical alone is fine');
+});
+
+test('backward compatibility: packs without poster, posters or safe areas are unchanged', () => {
+  const r = packs.validatePack(fresh().src);
+  assert.strictEqual(r.ok, true, r.error);
+  assert.deepStrictEqual(Object.keys(r.files).sort(), FILES);
+  assert.strictEqual(r.manifest.poster, undefined); assert.strictEqual(r.manifest.safeArea, undefined);
+});
+
+test('install copies exactly the listed poster files (not unlisted art) and rejects a bad safeArea', () => {
+  const f = withPosters(m => { m.posters.unused = 'art/unused.png'; }, d => { fs.writeFileSync(path.join(d, 'art', 'unused.png'), png(4, 4)); fs.writeFileSync(path.join(d, 'art', 'extra.png'), png(4, 4)); });
+  const r = packs.installPack(f.src, { home: f.home, id: 'bird' });
+  assert.deepStrictEqual([...r.files].sort(), [...FILES, 'art/pose-a.png', 'art/pose-b.jpg'].sort());
+  assert.ok(!fs.existsSync(path.join(f.home, 'faces', 'bird', 'art', 'extra.png')));
+  assert.ok(!fs.existsSync(path.join(f.home, 'faces', 'bird', 'art', 'unused.png')));
+  packs.clearCache();
+  const p = packs.getPack('bird', { home: f.home });
+  assert.strictEqual(p.files['art/pose-b.jpg'].mime, 'image/jpeg');
+  assert.deepStrictEqual(p.manifest.safeArea, { x: 0.1, y: 0.05, w: 0.8, h: 0.9 });
+  const bad = withPosters(m => { m.safeArea = { x: 0.5, y: 0, w: 0.9, h: 1 }; });
+  assert.throws(() => packs.installPack(bad.src, { home: bad.home, id: 'bad' }), /safeArea/);
+  assert.ok(!fs.existsSync(path.join(bad.home, 'faces', 'bad')));
+});

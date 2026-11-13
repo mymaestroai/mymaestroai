@@ -948,3 +948,24 @@ test('reaction x controller: the person beginning real speech drops it; a false 
   assert.deepStrictEqual(reacts(h.p), ['proud']); const c = h.p.count('cancelReaction');
   h.call.onSpeechStart(); assert.ok(h.p.count('cancelReaction') > c, 'the not yet started clip is cancelled');
 });
+
+// ── never a blank stage: the character is put on screen only once the player has a real picture ──
+test('a character with no drawable picture yet is not put on screen (the call stays usable); it appears when the picture is there', async () => {
+  const info = { ready: true, failed: null, drawable: false };
+  const w = world({ prefs: { choice: 'pack:owl' }, pack: { info } }); w.display.start(); await flushP();
+  assert.strictEqual(w.dom.overlay(), null, 'no blank paper over the call'); assert.strictEqual(w.display.info().destroyed, false);
+  info.drawable = true; await w.clk.advance(150); assert.ok(w.dom.overlay(), 'the picture is there: the display opens'); w.display.release();
+});
+test('a character that never gets a picture is bounded: None after the wait, the choice stays saved, nothing keeps polling', async () => {
+  const info = { ready: true, failed: null, drawable: false };
+  const w = world({ prefs: { choice: 'pack:owl' }, pack: { info } }); w.display.start(); await flushP();
+  await w.clk.advance(8500); assert.strictEqual(w.dom.overlay(), null); assert.strictEqual(w.display.info().kind, 'none'); assert.strictEqual(w.players[0].destroyed, true);
+  assert.strictEqual(JSON.parse(w.storage.getItem(CD.DISPLAY_STORE_KEY)).choice, 'pack:owl', 'the saved choice is kept'); assert.strictEqual(w.clk.timers.length, 0);
+});
+test('stale: a display released, hidden or switched while the picture is awaited never opens late', async () => {
+  const info = { ready: true, failed: null, drawable: false };
+  const w = world({ prefs: { choice: 'pack:owl' }, pack: { info } }); w.display.start(); await flushP();
+  w.display.release(); info.drawable = true; await w.clk.advance(500); assert.strictEqual(w.dom.overlay(), null, 'released: nothing opens');
+  const v = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: false } } }); v.display.start(); await flushP();
+  v.display.hideToChat(); v.players[0].getInfo = () => ({ ready: true, drawable: true }); await v.clk.advance(500); assert.strictEqual(v.dom.overlay(), null, 'hidden while waiting: it does not appear'); v.display.release();
+});
