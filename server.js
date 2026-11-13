@@ -1332,7 +1332,8 @@ async function handleHttpRequest(req, res) {
       const body = stripHubOnlyChatFields(JSON.parse(await readBody(req)), req);
       // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
-      return handleChatStream(body, res);
+      // Identity comes only from the authenticated session (req.hubUser), never from the body.
+      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null });
     }
 
     if (pathname === '/api/chat' && req.method === 'POST') {

@@ -515,17 +515,19 @@ for (const how of ['idle', 'listening', 'thinking', 'poseB-settling', 'poseB-res
     p.destroy();
   });
 }
-test('reaction and goodbye transitions cross-fade in 120 ms (not 250); a plain state change keeps 250 ms', async () => {
+test('reaction and goodbye transitions cross-fade in one short 70 ms fade (not 120, not 250: the old pose ghosted); a plain state change keeps 250 ms', async () => {
   const w = makeWorld({ manifest: packManifest(speakPack()) }); const p = w.make(); await p.ready; await w.settle(100);
   p.setState('listening'); await w.settle(400);
   assert.strictEqual(p.getInfo().log.pop().ms, 250, 'same-pose state change: normal fade');
   for (const [mood, name] of [['proud', 'reaction-proud-2'], ['goodbye', 'reaction-goodbye-1']]) {
     p.setState('idle'); await w.settle(400);
-    const before = p.getInfo().log.length; assert.strictEqual(p.react(mood), true); await w.settle(100);
+    const before = p.getInfo().log.length; assert.strictEqual(p.react(mood), true); await w.settle(30);
     const i = p.getInfo(), last = i.log[i.log.length - 1];
     assert.strictEqual(i.clip, name); assert.strictEqual(i.log.length, before + 1);
-    assert.strictEqual(last.state, 'reaction'); assert.strictEqual(last.fade, true); assert.strictEqual(last.ms, 120, mood + ' fade ms');
-    assert.match(w.front(p).style.transition, /120ms/); assert.ok(!/250ms/.test(w.front(p).style.transition));
+    assert.strictEqual(last.state, 'reaction'); assert.strictEqual(last.fade, true); assert.strictEqual(last.ms, 70, mood + ' fade ms');
+    assert.match(w.front(p).style.transition, /\b70ms/); assert.ok(!/250ms|120ms/.test(w.front(p).style.transition));
+    const old = w.videos[1 - i.front]; await w.settle(35); assert.strictEqual(old.paused, false, 'the old video is still there while the fade runs');
+    await w.settle(40); assert.strictEqual(old.paused, true, 'the old video is gone just after the 70 ms fade (nothing ghosts for 85 ms or more)'); assert.strictEqual(old.style.opacity, '0');
     await w.settle(5000);
   }
   p.destroy();
@@ -1247,4 +1249,112 @@ test('warm: three tracked speaking clips are the first to be fetched, before idl
   const w = makeWorld(); const p = w.make(); await p.ready; await w.settle(50);
   const web = w.fetched.filter(u => /\/web\//.test(u)); assert.ok(web.length >= 3);
   assert.ok(web.slice(0, 3).every(u => /\/web\/speaking-\d\.mp4$/.test(u)), 'first three: ' + web.slice(0, 3).join(' ')); p.destroy();
+});
+
+// ── follow-ups: poster first on a slow start, hello kept until it arrives, no poster linger / flicker, an all-failed speaking set keeps the animated poster beak ──
+const posterShown = (w) => w.container.children[0].children[0].children[2];
+function recordDisplay(poster) { const writes = []; const st = poster.style; poster.style = new Proxy(st, { set(t, k, v) { if (k === 'display') writes.push(v); t[k] = v; return true; } }); return writes; }
+test('slow start: the poster is requested first, no clip request starts before it, and ready / drawable come once the real poster is painted, never waiting for a clip', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); w.manifest.clips.forEach(c => w.hold.add(c.name));   // no clip ever arrives (a very slow link)
+  const p = w.make({ manifest: w.manifest }); const t0 = w.now; const firstSrc = [];   // what the player had already done when each video was first pointed at a clip
+  w.videos.forEach(v => { const l = v.load; v.load = () => { firstSrc.push({ posterReqs: w.posterReqs.length, poster: p.getInfo().poster, drawable: p.getInfo().drawable }); l(); }; });   // setSource calls load() right after pointing the video at a clip
+  await p.ready;
+  assert.deepStrictEqual(w.posterReqs, ['/api/faces/owl/poster.webp'], 'the poster is the first picture requested'); assert.ok(firstSrc.length > 0 && firstSrc.every(s => s.posterReqs === 1 && s.poster === true && s.drawable === true), 'no clip request before the poster is loaded and painted: ' + JSON.stringify(firstSrc));
+  assert.ok(w.now - t0 < 300, 'ready did not wait for a clip or the still-wait: ' + (w.now - t0));
+  const i = p.getInfo(); assert.strictEqual(i.drawable, true, 'the painted poster is a real picture'); assert.strictEqual(i.poster, true); assert.strictEqual(i.posterImage, true); assert.strictEqual(posterShown(w).style.display, 'block');
+  assert.strictEqual(w.ctxCalls.filter(c => isPosterDraw(w, c)).length, 1); assert.strictEqual(w.ctxCalls.filter(isFrameCopy).length, 0, 'no video frame was needed');
+  await w.settle(50); assert.ok(w.videos.some(v => v._src), 'the first clip is requested after the poster is up'); p.destroy();
+});
+test('slow start: a slow poster keeps clips back until it settles (bounded by the poster wait), then the old still path takes over', async () => {
+  const w = makeWorld({ manifest: posterManifest(), posterHold: true }); const p = w.make({ manifest: w.manifest }); await w.settle(1500);
+  assert.ok(w.videos.every(v => !v._src), 'no clip request while the poster is still loading'); assert.strictEqual(p.getInfo().drawable, false);
+  await w.settle(3000); await p.ready; assert.ok(w.videos.some(v => v._src), 'after the bounded poster wait the still video is loaded'); assert.strictEqual(p.getInfo().drawable, true); p.destroy();
+});
+test('hello: asked before ready it is kept while its clip is slow (not swallowed), the cache waits for it, it plays on arrival; a person speaking cancels it for good', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); w.hold.add('reaction-hello-1'); const p = w.make(); assert.strictEqual(p.react('hello'), true);
+  assert.strictEqual(p.getInfo().helloWaiting, true, 'waiting before ready'); await p.ready; await w.settle(2000);
+  assert.strictEqual(p.getInfo().helloWaiting, true, 'ready, the hello clip has not arrived: still kept'); assert.strictEqual(w.fetched.filter(u => /\/web\//.test(u)).length, 0, 'the cache does not compete with the waiting hello');
+  await w.settle(3000); assert.strictEqual(p.getInfo().helloWaiting, true, 'kept for the bounded few seconds'); assert.ok(w.fetched.filter(u => /\/web\//.test(u)).length > 0, 'the cache starts after its bound');
+  const ld = w.videos.find(v => v.clipName === 'reaction-hello-1'); assert.ok(ld, 'the hello clip is the one loading'); ld.currentSrc = ld.src; ld.readyState = 4; ld.duration = 3; ld.fire('loadeddata'); await w.settle(100);
+  const i = p.getInfo(); assert.strictEqual(i.clip, 'reaction-hello-1'); assert.strictEqual(i.helloPlaying, true); assert.strictEqual(i.helloWaiting, false); p.destroy();
+  const q = makeWorld({ manifest: posterManifest() }); q.hold.add('reaction-hello-1'); const r = q.make(); r.react('hello'); await r.ready; await q.settle(300);
+  assert.strictEqual(r.getInfo().helloWaiting, true); r.setState('listening'); assert.strictEqual(r.getInfo().helloWaiting, false, 'real speech dropped the waiting hello'); await q.settle(300);
+  const l = q.videos.find(v => v.clipName === 'reaction-hello-1'); if (l) { l.currentSrc = l.src; l.readyState = 4; l.duration = 3; l.fire('loadeddata'); }
+  await q.settle(200); assert.notStrictEqual(r.getInfo().clip, 'reaction-hello-1', 'a hello that arrives late never plays over the person'); assert.strictEqual(r.getInfo().helloPlaying, false); r.destroy();
+});
+test('linger: speech held on the poster while the front listening clip ended; back to listening starts its clip at once, not after the 2.5 s retry', async () => {
+  const { w, p } = await coldWorld(); p.setState('listening'); await w.settle(400); assert.match(p.getInfo().clip, /^listening-/, 'set-up: a listening clip is in front');
+  p.setState('speaking'); assert.strictEqual(p.getInfo().coldHold, true); w.front(p).end(); await w.settle(50);   // the clip ended under the hold: nothing can start, the retry timer waits
+  const n = p.getInfo().log.length; p.setState('listening'); await w.settle(120);
+  const i = p.getInfo(); assert.strictEqual(i.coldHold, false); assert.ok(i.log.length > n && /^listening-/.test(i.log[i.log.length - 1].name), 'a listening clip started within 120 ms: ' + JSON.stringify(i.log.slice(n).map(e => e.name)));
+  assert.strictEqual(w.front(p).paused, false); await w.settle(600); assert.strictEqual(p.getInfo().poster, false, 'the poster is gone with the new picture, well before 2.5 s'); p.destroy();
+});
+test('all speaking clips fail: the animated poster beak is kept for the whole reply (no untracked closed mouth, no hide/show flicker), retries are bounded, and it is released cleanly after', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); SPEAKERS.forEach(n => w.fail.add(n)); const p = w.make(); await p.ready;
+  const writes = recordDisplay(posterShown(w)); p.setAnalyser(analyserOf({ amp: 0.2, hz: 1500 })); const n0 = p.getInfo().log.length;
+  p.setState('speaking'); await w.settle(400);
+  let i = p.getInfo(); assert.strictEqual(i.coldHold, true, 'held although every speaking clip failed'); assert.strictEqual(i.poster, true); assert.ok(SPEAKERS.every(s => i.bad.indexOf(s) >= 0), 'all speakers were set aside: ' + i.bad);
+  w.ctxCalls.length = 0; for (let k = 0; k < 20; k++) w.tickRaf(16);
+  const draws = beakDraws(w); assert.ok(draws.length >= 10, 'the beak is animated over the poster: ' + draws.length); assert.ok(draws.some(c => !/closed\.png$/.test(c[1]._s)), 'it follows the voice');
+  for (const tr of w.ctxCalls.filter(c => c[0] === 'translate')) { assert.strictEqual(tr[1], 646); assert.strictEqual(tr[2], 350); }
+  const loads = () => w.videos.reduce((s, v) => s + v.loads, 0);
+  await w.settle(7000); i = p.getInfo(); assert.strictEqual(i.coldHold, true); assert.ok(i.log.slice(n0).every(e => e.state === 'speaking'), 'no untracked clip under the voice: ' + JSON.stringify(i.log.slice(n0).map(e => e.name)));
+  await w.settle(7000); const a = loads(); await w.settle(7000); assert.strictEqual(loads(), a, 'bounded retries: no load storm after the retries are used up');
+  assert.ok(a <= 24, 'a bounded number of loads: ' + a); assert.ok(!writes.includes('none'), 'the poster never hid and came back during speech: ' + writes.join(','));
+  p.setState('listening'); await w.settle(700); i = p.getInfo();
+  assert.strictEqual(i.coldHold, false); assert.strictEqual(w.raf.length, 0, 'the hold loop is gone'); assert.strictEqual(i.poster, false, 'released after the reply'); assert.strictEqual(writes[writes.length - 1], 'none');
+  assert.match(i.clip, /^(listening|idle)-/); p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0);
+  const x = await started({}, { videoSize: false }); SPEAKERS.forEach(s => x.w.fail.add(s)); x.p.setState('thinking'); await x.w.settle(400); x.p.setState('speaking'); await x.w.settle(300);
+  assert.strictEqual(x.p.getInfo().coldHold, false, 'without a real poster picture nothing is held and the old rules run'); x.p.destroy();
+});
+
+// ── pictureReady: the picture is separate from `ready` (patches and tracks) ──
+function gateTracks(w) {   // every /tracks/ request waits until release() (a slow link); everything else is as in the fake world
+  const orig = w.fetch; let release; const gate = new Promise(r => { release = r; });
+  w.fetch = async (u) => { if (/\/tracks\//.test(u)) await gate; return orig(u); };
+  return release;
+}
+const patchImgs = (w) => w.imgs.filter(im => /\/beak\//.test(im._s || ''));
+test('pictureReady: settles true as soon as the poster is painted, before delayed tracks and beak patches arrive; ready keeps its meaning', async () => {
+  const w = makeWorld({ manifest: posterManifest(), imgHold: new Set(['closed', 'slight', 'half', 'wide', 'oo', 'smile']) }); const release = gateTracks(w); const p = w.make();
+  let pic = null, rdy = false; p.pictureReady.then(v => { pic = v; }); p.ready.then(() => { rdy = true; }, () => {});
+  await w.settle(300);
+  assert.strictEqual(pic, true, 'the picture is reported while tracks and patches are still outstanding'); assert.strictEqual(rdy, false); assert.strictEqual(p.getInfo().ready, false);
+  const i = p.getInfo(); assert.strictEqual(i.poster, true); assert.strictEqual(i.drawable, true); assert.strictEqual(i.posterImage, true);
+  assert.ok(patchImgs(w).length > 0 && patchImgs(w).every(im => im.onload), 'set-up: the patches are still loading');
+  patchImgs(w).forEach(im => im.onload()); release(); await p.ready; await w.settle(100);
+  assert.strictEqual(p.getInfo().ready, true); assert.strictEqual(typeof p.pictureReady.then, 'function'); p.destroy();
+});
+test('pictureReady: no picture (poster failed and no decodable frame) settles false and never rejects; a failed ready after a true picture still rejects cleanly', async () => {
+  const w = makeWorld({ manifest: posterManifest(), posterFail: 'error', videoSize: false }); const p = w.make();
+  assert.strictEqual(await p.pictureReady, false, 'no real picture: false, not a claim'); assert.strictEqual(p.getInfo().drawable, false); await p.ready; p.destroy();
+  const w2 = makeWorld({ manifest: posterManifest(), imgHold: new Set(['wide']) }); const p2 = w2.make();
+  assert.strictEqual(await p2.pictureReady, true); assert.strictEqual(p2.getInfo().ready, false);
+  patchImgs(w2).filter(im => /wide/.test(im._s))[0].onerror(); await assert.rejects(p2.ready, /beak patch.*wide/);
+  assert.strictEqual(p2.getInfo().ready, false); assert.ok(p2.getInfo().failed); assert.strictEqual(w2.played.length, 0, 'nothing plays after the later failure'); p2.destroy();
+});
+test('pictureReady: destroy before the picture settles it false (never hangs) and nothing is left running', async () => {
+  const w = makeWorld({ manifest: posterManifest(), posterHold: true }); const p = w.make(); await w.settle(100); p.destroy();
+  assert.strictEqual(await Promise.race([p.pictureReady, new Promise((_, rej) => setImmediate(() => rej(new Error('pictureReady hung'))))]), false);
+  assert.strictEqual(w.timers.filter(x => !x.tag).length, 0); assert.ok(w.imgs.every(im => im.onload === null && im.onerror === null));
+  const w2 = makeWorld({ manifest: posterManifest() }); const p2 = w2.make(); const pr = p2.pictureReady; p2.destroy();
+  assert.strictEqual(await pr, false, 'destroyed at once'); await p2.ready.catch(() => {});
+});
+test('all speaking tracks fail over HTTP: with the real poster and the full beak ready resolves (degraded, honest), speech holds the animated poster beak the whole reply and it is released after', async () => {
+  const w = makeWorld({ manifest: posterManifest(), fetchFail: u => /\/tracks\//.test(u) }); const p = w.make();
+  assert.strictEqual(await p.pictureReady, true); await p.ready;
+  let i = p.getInfo(); assert.strictEqual(i.ready, true); assert.strictEqual(i.failed, null); assert.match(i.degraded, /speaking track/); assert.strictEqual(i.tracks, 0); assert.strictEqual(i.posterImage, true);
+  const writes = recordDisplay(posterShown(w)); p.setAnalyser(analyserOf({ amp: 0.2, hz: 1500 })); await w.settle(100); const n0 = p.getInfo().log.length;
+  p.setState('speaking'); await w.settle(400); i = p.getInfo();
+  assert.strictEqual(i.coldHold, true, 'the hold covers speech although no track exists'); assert.strictEqual(i.poster, true);
+  w.ctxCalls.length = 0; for (let k = 0; k < 20; k++) w.tickRaf(16);
+  const draws = beakDraws(w); assert.ok(draws.length >= 10, 'the beak is drawn over the poster: ' + draws.length); assert.ok(draws.some(c => !/closed\.png$/.test(c[1]._s)), 'it follows the voice');
+  for (const tr of w.ctxCalls.filter(c => c[0] === 'translate')) { assert.strictEqual(tr[1], 646); assert.strictEqual(tr[2], 350); }
+  await w.settle(9000); i = p.getInfo(); assert.strictEqual(i.coldHold, true, 'held for the whole reply'); assert.ok(i.log.slice(n0).every(e => e.state === 'speaking'), 'no untracked clip under the voice');
+  assert.ok(!writes.includes('none'), 'no hide/show flicker: ' + writes.join(','));
+  p.setState('listening'); await w.settle(700); i = p.getInfo();
+  assert.strictEqual(i.coldHold, false); assert.strictEqual(w.raf.length, 0); assert.strictEqual(i.poster, false, 'released after the reply'); assert.match(i.clip, /^(listening|idle)-/);
+  p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0);
+  // without the pack's decoded poster image (a captured frame alone) ready still rejects, as before
+  const w2 = makeWorld({ fetchFail: u => /\/tracks\//.test(u), videoSize: false }); const p2 = w2.make(); await assert.rejects(p2.ready, /speaking track/); p2.destroy();
 });

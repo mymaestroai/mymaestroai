@@ -53,7 +53,10 @@ function fakePlayerFactory(kind, log, opts) {
     p.cancelReaction = rec('cancelReaction');
     if (o.info) p.getInfo = () => o.info;   // a player that reports its readiness (the real one does)
     p.destroy = () => { p.destroyed = true; p.calls.push(['destroy']); };
-    p.ready = o.rejectReady ? Promise.reject(new Error('bad pack')) : Promise.resolve(p);
+    if (o.deferred) {   // ready and pictureReady are settled by the test (a slow pack: the picture first, the tracks and patches later)
+      let rr, rj, pr; p.ready = new Promise((a, b) => { rr = a; rj = b; }); p.pictureReady = new Promise((a) => { pr = a; });
+      p.resolveReady = () => rr(p); p.rejectReadyNow = () => rj(new Error('late failure')); p.resolvePicture = (v) => pr(v);
+    } else p.ready = o.rejectReady ? Promise.reject(new Error('bad pack')) : Promise.resolve(p);
     p.ready.catch(() => {});
     p.last = (n) => { const c = p.calls.filter(x => x[0] === n); return c.length ? c[c.length - 1][1] : undefined; };
     p.count = (n) => p.calls.filter(x => x[0] === n).length;
@@ -1007,4 +1010,48 @@ test('stale: a display released, hidden or switched while the picture is awaited
   w.display.release(); info.drawable = true; await w.clk.advance(500); assert.strictEqual(w.dom.overlay(), null, 'released: nothing opens');
   const v = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: false } } }); v.display.start(); await flushP();
   v.display.hideToChat(); v.players[0].getInfo = () => ({ ready: true, drawable: true }); await v.clk.advance(500); assert.strictEqual(v.dom.overlay(), null, 'hidden while waiting: it does not appear'); v.display.release();
+});
+
+// ── pictureReady: the overlay appears with the real picture, not when the slow tracks and patches have also arrived ──
+test('pictureReady: the character opens as soon as its picture is painted, while ready (tracks, patches) is still pending; a later failure falls back to None cleanly', async () => {
+  const info = { ready: false, failed: null, drawable: true };
+  const w = world({ prefs: { choice: 'pack:owl' }, pack: { info, deferred: true } }); w.display.start(); await flushP(); const p = w.players[0];
+  assert.strictEqual(w.dom.overlay(), null, 'nothing before the picture');
+  p.resolvePicture(true); await flushP(); assert.ok(w.dom.overlay(), 'the overlay is up before ready'); assert.strictEqual(w.display.info().kind, 'pack');
+  p.rejectReadyNow(); await flushP();
+  assert.strictEqual(w.dom.overlay(), null, 'the later failed load ends in None'); assert.strictEqual(w.display.info().kind, 'none'); assert.strictEqual(p.destroyed, true);
+  assert.strictEqual(JSON.parse(w.storage.getItem(CD.DISPLAY_STORE_KEY)).choice, 'pack:owl', 'the choice stays saved'); w.display.release();
+  const v = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: true }, deferred: true } }); v.display.start(); await flushP(); const q = v.players[0];
+  q.resolvePicture(true); await flushP(); q.resolveReady(); await flushP(); await v.clk.advance(300); assert.ok(v.dom.overlay(), 'ready after the picture changes nothing, no double mount'); assert.strictEqual(v.dom.find('ucd-overlay').length, 1); v.display.release();
+});
+test('pictureReady: false does not open it (ready decides, bounded); a picture that is not drawable, a stale view and a destroyed display never open late', async () => {
+  const a = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: false }, deferred: true } }); a.display.start(); await flushP();
+  a.players[0].resolvePicture(false); await flushP(); assert.strictEqual(a.dom.overlay(), null);
+  a.players[0].resolveReady(); await flushP(); await a.clk.advance(8500); assert.strictEqual(a.dom.overlay(), null); assert.strictEqual(a.display.info().kind, 'none', 'no picture ever: bounded None'); assert.strictEqual(a.clk.timers.length, 0);
+  const b = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); b.display.start(); await flushP();
+  b.display.release(); b.players[0].resolvePicture(true); await flushP(); assert.strictEqual(b.dom.overlay(), null, 'released before the picture: nothing opens');
+  const c = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); c.display.start(); await flushP();
+  c.display.hideToChat(); c.players[0].resolvePicture(true); await flushP(); assert.strictEqual(c.dom.overlay(), null, 'hidden while waiting: it does not appear'); c.display.release();
+  const d = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); d.display.start(); await flushP();
+  d.display.setChoice('none'); await flushP(); d.players[0].resolvePicture(true); d.players[0].rejectReadyNow(); await flushP();
+  assert.strictEqual(d.players[0].destroyed, true, 'the old view was torn down'); assert.strictEqual(d.dom.overlay(), null, 'a stale picture of a switched-away view never opens'); assert.strictEqual(d.display.info().kind, 'none'); d.display.release();
+});
+
+// ── hello on a slow start: kept until its clip has arrived (bounded), played out, and still cancelled by a real person ──
+test('hello: a player whose hello clip has not arrived keeps hello past HELLO_MS, up to the bound; it then plays out; plain players keep the old timer', async () => {
+  const mk = (extra) => { const info = Object.assign({ ready: true, failed: null, drawable: true, helloWaiting: true, helloPlaying: false }, extra); const w = world({ prefs: { choice: 'pack:owl' }, pack: { info } }); return { w, info }; };
+  let { w, info } = mk(); w.display.start(); await flushP(); const p = w.players[0];
+  w.display.setState('listening'); assert.strictEqual(p.last('react'), 'hello'); assert.strictEqual(p.last('setState'), 'idle');
+  await w.clk.advance(CD.HELLO_MS + 500); assert.strictEqual(p.last('setState'), 'idle', 'still waiting for the clip: hello is NOT swallowed at HELLO_MS');
+  info.helloWaiting = true; info.helloPlaying = true;   // the clip arrived and plays
+  await w.clk.advance(1500); assert.strictEqual(p.last('setState'), 'idle', 'playing out');
+  info.helloWaiting = false; info.helloPlaying = false; await w.clk.advance(150); assert.strictEqual(p.last('setState'), 'listening', 'hello is over');
+  ({ w, info } = mk()); w.display.start(); await flushP(); w.display.setState('listening');   // never arrives: bounded
+  await w.clk.advance(CD.HELLO_WAIT_MS - 300); assert.strictEqual(w.players[0].last('setState'), 'idle');
+  await w.clk.advance(600); assert.strictEqual(w.players[0].last('setState'), 'listening', 'given up after the bound');
+  ({ w, info } = mk()); w.display.start(); await flushP(); w.display.setState('listening'); await w.clk.advance(CD.HELLO_MS + 500);
+  w.display.setState('hearing'); assert.strictEqual(w.players[0].last('setState'), 'listening', 'a real person speaking cancels the waiting hello at once');
+  const n = w.clk.timers.length; await w.clk.advance(CD.HELLO_WAIT_MS); assert.strictEqual(w.players[0].last('setState'), 'listening'); assert.ok(w.clk.timers.length <= n);
+  const q = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: true } } }); q.display.start(); await flushP(); q.display.setState('listening');
+  await q.clk.advance(CD.HELLO_MS + 10); assert.strictEqual(q.players[0].last('setState'), 'listening', 'a player that does not report hello keeps the plain timer');
 });

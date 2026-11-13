@@ -199,7 +199,7 @@ test('faceMoodFor: a raw client flag or prompt is never the decision: other fiel
 
 test('the three provider calls get the checked boolean, not the request\'s own value', () => {
   const h = SRC.slice(SRC.indexOf('async function handleChatStreamReserved('), SRC.indexOf('async function handleChat('));
-  assert.match(h, /const faceMood = faceMoodFor\(body, \{ agent, turnOrigin, ephemeral: !!ephemeral, tigerTeam: !!tiger_team, consultedBy: consulted_by \}\);/);
+  assert.match(h, /const faceMood = faceMoodFor\(body, \{ agent, turnOrigin, ephemeral: !!ephemeral, tigerTeam: !!tiger_team, consultedBy: consulted_by, userId: trustedUserId \}\);/);
   for (const fn of ['streamViaCodex', 'streamViaSdk', 'streamViaGateway']) {
     const call = h.slice(h.indexOf(`await ${fn}(`));
     assert.match(call.slice(0, call.indexOf('});')), /voice: !!voice,\n\s+faceMood,\n/, `${fn} is passed the validated faceMood`);
@@ -871,9 +871,64 @@ test('voiceStripFor: true for any live voice call on the person\'s own turn (no 
   assert.strictEqual(ctx.voiceStripFor({ voice: true }, { ...base, calls: { onCall() { throw new Error('x'); } } }), false);
 });
 
+// ═════════════════ the call must be the signed-in account's own (stable id, never the display name) ═════════════════
+test('voiceStripFor / faceMoodFor: stable account id: own call and second tab pass; another account, one-sided absence, and every non-user turn fail', async () => {
+  const { createVoiceCalls } = require('../lib/voice/call');
+  const reg = createVoiceCalls({ bus: { publish() {} }, log() {} });
+  const ctx = makeSandbox({ console: { log() {}, error() {}, warn() {} }, require: () => stub() });
+  loadHelpers(ctx, { calls: reg, packs: { getPack: () => ({ manifest: { clips: [{ state: 'reaction' }] } }) } });
+  const base = { agent: 'ada', turnOrigin: { kind: 'user' }, ephemeral: false, tigerTeam: false, consultedBy: null };
+  const strip = (userId, extra, body = { voice: true }) => ctx.voiceStripFor(body, { ...base, userId, calls: reg, ...extra });
+  const mood = (userId, extra) => ctx.faceMoodFor({ voice: true, facePack: 'owl' }, { ...base, userId, calls: reg, ...extra });
+
+  // personId is internal: the stored id of a live call only; info() / statusOf() (the API views) are unchanged
+  assert.strictEqual(reg.personId('ada'), null, 'no call');
+  reg.start('ada', { userId: 'u1', person: 'Sam', mode: 'announce' });
+  assert.strictEqual(reg.personId('ada'), 'u1');
+  assert.deepStrictEqual(Object.keys(reg.info('ada')).sort(), ['mode', 'person', 'since']);
+  assert.ok(!('userId' in reg.statusOf('ada')) && !JSON.stringify(reg.statusOf('ada')).includes('u1'));
+  assert.strictEqual(strip('u1'), true, 'own call');
+  assert.strictEqual(strip('u1'), true, 'second tab of the same account (same stable id)');
+  assert.strictEqual(mood('u1'), true);
+  // a second account sharing the agent, even with the same display name, is not the call's person
+  reg.end('ada', 'u1');
+  reg.start('ada', { userId: 'u1', person: 'Sam' });
+  assert.strictEqual(strip('u2'), false);
+  assert.strictEqual(mood('u2'), false);
+  assert.strictEqual(strip('u2', {}, { voice: true, person: 'Sam', userId: 'u1' }), false, 'a userId or person in the body is never trusted');
+  assert.strictEqual(strip(null), false, 'call has an account, the caller has none');
+  assert.strictEqual(strip(''), false);
+  assert.strictEqual(strip(undefined), false);
+  // no accounts: the call has no account (routes store owner) and the caller has none
+  reg.end('ada', 'u1');
+  reg.start('ada', { userId: 'owner', person: 'the owner' });
+  assert.strictEqual(reg.personId('ada'), null);
+  assert.strictEqual(strip(null), true, 'both absent');
+  assert.strictEqual(strip(undefined), true);
+  assert.strictEqual(mood(null), true);
+  assert.strictEqual(strip('u1'), false, 'the call has no account but the caller does');
+  // hub-started, ephemeral, tiger team and consult turns are never stripped, whoever is calling
+  reg.end('ada', 'owner');
+  reg.start('ada', { userId: 'u1', person: 'Sam' });
+  assert.strictEqual(strip('u1', { turnOrigin: { kind: 'schedule' } }), false);
+  assert.strictEqual(strip('u1', { turnOrigin: { kind: 'consultation', from: 'bob' } }), false);
+  assert.strictEqual(strip('u1', { ephemeral: true }), false);
+  assert.strictEqual(strip('u1', { tigerTeam: true }), false);
+  assert.strictEqual(strip('u1', { consultedBy: 'bob' }), false);
+  assert.strictEqual(strip('u1', {}, { voice: true, origin: { kind: 'job' } }), false);
+  assert.strictEqual(mood('u1', { consultedBy: 'bob' }), false);
+  reg.reset();
+});
+
+test('handleChatStream takes the account id only from the route\'s own argument, never the body', () => {
+  assert.match(SRC, /async function handleChatStream\(body, res, ctx\)/);
+  assert.match(SRC, /const trustedUserId = ctx && typeof ctx === 'object' && ctx\.userId != null/);
+  assert.ok(!/body\??\.(userId|person)/.test(SRC.slice(SRC.indexOf('async function handleChatStreamReserved('), SRC.indexOf('async function handleChat('))));
+});
+
 test('the three provider calls also get the checked moodStrip boolean; the mood prompt still follows faceMood alone', () => {
   const h = SRC.slice(SRC.indexOf('async function handleChatStreamReserved('), SRC.indexOf('async function handleChat('));
-  assert.match(h, /const moodStrip = faceMood \|\| voiceStripFor\(body, \{ agent, turnOrigin, ephemeral: !!ephemeral, tigerTeam: !!tiger_team, consultedBy: consulted_by \}\);/);
+  assert.match(h, /const moodStrip = faceMood \|\| voiceStripFor\(body, \{ agent, turnOrigin, ephemeral: !!ephemeral, tigerTeam: !!tiger_team, consultedBy: consulted_by, userId: trustedUserId \}\);/);
   for (const fn of ['streamViaCodex', 'streamViaSdk', 'streamViaGateway']) {
     const call = h.slice(h.indexOf(`await ${fn}(`));
     assert.match(call.slice(0, call.indexOf('});')), /faceMood,\n\s+moodStrip,\n/, `${fn} is passed moodStrip`);

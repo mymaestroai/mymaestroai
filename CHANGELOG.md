@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Character calls show their first picture sooner on slow connections.** Your Maestro keeps the greeting available while its clip loads, shortens transitions between different poses, and keeps the beak following speech when speaking clips cannot load.
+
 - **A phone that installed the computer layout as its app now opens the phone layout.** If the app on your phone's home screen was added while the computer layout was showing (for example with "Request Desktop Website" on), it now switches to the phone layout by itself each time it opens, and you stay signed in. In a phone's browser the computer layout stays where you opened it, with a bar offering the phone layout; to keep the computer layout in the app on purpose, open `/?desktop=1` once on that phone (`/?desktop=0` undoes it).
 
 - **Agents that are working show up in an "Active" section at the top of the agent list.** On the computer and on the phone, every agent that is busy right now (replying to you, running a scheduled task, answering another agent, or waiting for your answer) also appears at the top, with its status line and how long it has been at it, and stays in its usual group too. When it finishes it shows as done for three seconds and leaves; the section disappears when nobody is working. The list holds still while your pointer or finger is on it. Turn it off with "Show active agents at the top" in Settings → Chat on the computer, or "Active agents at the top" in the phone's ⋮ menu.

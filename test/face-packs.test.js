@@ -389,6 +389,31 @@ test('unsafe poster paths are rejected', () => {
   pRejects(m => { m.posters.B = '../up.png'; }, /posters\.B/);
 });
 
+test('each poster path segment follows the route rule: 1-100 safe characters, 1-4 segments', () => {
+  const seg100 = 'a'.repeat(96) + '.png';
+  const good = ['A9._-x.png', seg100, 'a/b/c/' + seg100, 'x/y.z/w_v-u.png'];
+  for (const p of good) {
+    const f = withPosters(m => { m.poster = p; m.posters = { A: p }; }, (d) => { const full = path.join(d, p); fs.mkdirSync(path.dirname(full), { recursive: true }); fs.writeFileSync(full, png(32, 48, 8, 6)); });
+    const r = packs.validatePack(f.src); assert.strictEqual(r.ok, true, `${p}: ${r.error}`);
+  }
+  const bad = ['my pic.png', 'art/my pic.png', 'café.png', 'art/é/x.png', '_x.png', '-x.png', 'art/_x.png', 'art/-x.png', 'a'.repeat(97) + '.png', 'art/' + 'a'.repeat(97) + '.png', 'a/b/c/d/e.png'];
+  for (const p of bad) pRejects(m => { m.poster = p; m.posters = { A: p }; }, /poster|path|manifest/);
+  pRejects(m => { m.posters.B = 'art/bad name.jpg'; }, /posters\.B/);
+});
+
+test('a pack with root and nested valid poster paths validates and installs', () => {
+  const f = withPosters(m => { m.poster = 'root.png'; m.posters = { A: 'root.png', B: 'art/n1/n2/pose-b.jpg' }; }, (d) => {
+    fs.writeFileSync(path.join(d, 'root.png'), png(32, 48, 8, 6));
+    fs.mkdirSync(path.join(d, 'art', 'n1', 'n2'), { recursive: true });
+    fs.writeFileSync(path.join(d, 'art', 'n1', 'n2', 'pose-b.jpg'), jpeg(32, 48));
+  });
+  const r = packs.validatePack(f.src); assert.strictEqual(r.ok, true, r.error);
+  assert.strictEqual(packs.installPack(f.src, { home: f.home, id: 'bird' }).id, 'bird');
+  const dir = path.join(f.home, 'faces', 'bird');
+  assert.ok(fs.existsSync(path.join(dir, 'root.png')));
+  assert.ok(fs.existsSync(path.join(dir, 'art', 'n1', 'n2', 'pose-b.jpg')));
+});
+
 test('poster content is sniffed: wrong type, extension mismatch, damage, bad dimensions', () => {
   pRejects(null, /not a PNG, JPEG or WebP/, putArt('pose-a.png', Buffer.from('GIF89a not an image at all, sorry')));
   pRejects(null, /JPEG image but its name ends in \.png/, putArt('pose-a.png', jpeg(4, 4)));

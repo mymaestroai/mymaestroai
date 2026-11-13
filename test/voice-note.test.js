@@ -22,10 +22,10 @@ test('VOICE_NOTE is the agreed text: a plain spoken answer first, symbols and de
 });
 
 test('handleChatStreamReserved reads voice from the body and passes voice: !!voice to all three routes', () => {
-  const start = lineOf('async function handleChatStreamReserved(body, res) {');
+  const start = lineOf('async function handleChatStreamReserved(body, res, ctx) {');
   const end = lineOf('\nasync function ', start + 10);
   const body = src.slice(start, end);
-  assert.match(body.split('\n')[1], /\bturn_link, owner_turn, voice \} = body;/);
+  assert.match(body, /\bturn_link, owner_turn, voice \} = body;/);
   for (const route of ['streamViaCodex', 'streamViaSdk', 'streamViaGateway']) {
     const call = body.slice(body.indexOf(`await ${route}(agent, finalMessage, imagePaths, res, {`));
     assert.ok(call.length, route);
