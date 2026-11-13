@@ -22,7 +22,7 @@ test('mic button: hands-free tap starts a call synchronously, a second tap hangs
   assert.ok(!start.includes('await '), 'voiceCallStart awaits nothing');
   assert.ok(start.indexOf('voiceMicCancel()') < start.indexOf('vc.call.start()'), 'dictation stops first');
   assert.ok(start.indexOf('voiceStopPlayback()') < start.indexOf('vc.call.start()'), 'playback stops first');
-  assert.match(start, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/', micLevel: prefs\.micLevel, interruptSensitivity: prefs\.interruptSensitivity, endPause: voiceEndPauseNow\(\) \}\)/);   // + the end-of-turn pause (voice fixes 1)
+  assert.match(start, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/', micLevel: prefs\.micLevel, interruptSensitivity: prefs\.interruptSensitivity, endPause: voiceEndPauseNow\(\), echoHoldMs: prefs\.echoHold \}\)/);   // + the end-of-turn pause (voice fixes 1)
   assert.match(start, /voiceCreateCall\(voiceCallDeps\(vc\)\)/);
   assert.match(js, /navigator\.wakeLock\.request\('screen'\)/);
 });
@@ -46,8 +46,8 @@ test('call panel sits between the messages and the composer, with every control,
   assert.ok(i < html.indexOf('id="tabbar"'));
   for (const id of ['cp-state', 'cp-meter', 'cp-heard', 'cp-held', 'cp-dnd', 'cp-levels', 'cp-hangup', 'cp-help']) assert.ok(html.includes(`id="${id}"`), id);
   assert.match(html, /Do not disturb/);
-  assert.match(html, /Hands-free works with the app open and the screen on; locked-screen and car systems \(CarPlay, Android Auto\) are not supported yet\./);
-  assert.match(js, /const VOICE_CALL_HELP = 'Hands-free works with the app open and the screen on; locked-screen and car systems \(CarPlay, Android Auto\) are not supported yet\.'/);
+  assert.match(html, /Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker\. Locked-screen use and car apps \(CarPlay, Android Auto\) are not supported\./);
+  assert.match(js, /const VOICE_CALL_HELP = 'Hands-free works with the app open and the screen on, also through a car\\'s Bluetooth hands-free or a Bluetooth speaker\. Locked-screen use and car apps \(CarPlay, Android Auto\) are not supported\.'/);
   assert.match(html, /#call-panel \{[^}]*flex-shrink: 0/);
   assert.ok(!/#call-panel \{[^}]*position: (fixed|absolute)/.test(html), 'in flow, so it cannot cover the composer');
   assert.match(html, /\.cp-item-acts button \{ flex: 1; min-height: 48px/);

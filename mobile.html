@@ -568,7 +568,7 @@
   #voice-panel { position: absolute; left: 6px; right: 6px; bottom: 100%; z-index: 30; max-height: 62vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 8px;
     padding: 12px; border-radius: 14px 14px 0 0; background: var(--bg-card); border: 1px solid var(--border-strong, var(--border)); box-shadow: 0 -6px 24px rgba(0,0,0,.35); color: var(--text); font-size: 15px; }
   #voice-panel[hidden] { display: none; }
-  #voice-panel select { width: 100%; background: var(--bg-input); color: var(--text); font-size: 16px; }
+  #voice-panel select, #voice-sheet select { width: 100%; background: var(--bg-input); color: var(--text); font-size: 16px; }
   #voice-panel .vp-row { display: flex; justify-content: space-between; align-items: center; }
   #voice-panel .vp-modes { gap: 8px; justify-content: stretch; }
   #call-ended-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg-card); border-top: 1px solid var(--warning, #d9a441); color: var(--text); font-size: 15px; }
@@ -602,7 +602,13 @@
   #cp-help { margin: 0; font-size: 12px; color: var(--text-dim); }
   .vs-seg { display: flex; gap: 8px; }
   .vs-opt { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); }
-  .vs-room-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
+  .vs-room-out, .vs-car-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
+  #cp-mic { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+  #cp-mic:empty { display: none; }
+  #cp-mic.cp-mic-lost { font-size: 15px; font-weight: 600; color: var(--danger, #e5484d); }
+  #voice-panel .vp-hint { margin: 0; }
+  #call-panel .cp-retry-mic { min-height: 48px; border-radius: 12px; font-size: 16px; font-weight: 600; background: var(--accent, #3d7bff); color: #fff; padding: 0 16px; }
+  #call-panel .cp-retry-mic[hidden] { display: none; }
   /* the copy button takes the right 30px of a bubble; the speaker sits just left of it, so an assistant reply keeps 58px free on the right */
   body:not(.no-speak) .msg.assistant { padding-right: 58px; }
   body.no-speak .msg .speak { display: none; }
@@ -744,13 +750,15 @@
       <div class="cp-top"><span id="cp-state" role="status" aria-live="polite">Starting</span><div id="cp-meter" aria-hidden="true"><i></i></div></div>
       <div id="cp-activity" aria-live="off"></div>
       <div id="cp-heard" aria-live="off"></div>
+      <div id="cp-mic"></div>
+      <button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Try the microphone again</button>
       <div id="cp-held"></div>
       <label class="cp-dnd"><input type="checkbox" id="cp-dnd" role="switch"> <span>Do not disturb</span></label>
       <div class="cp-actions">
         <button type="button" id="cp-levels" class="cp-levels">Levels</button>
         <button type="button" id="cp-hangup" class="cp-hang" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>
       </div>
-      <p id="cp-help">Hands-free works with the app open and the screen on; locked-screen and car systems (CarPlay, Android Auto) are not supported yet.</p>
+      <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.</p>
     </div>
     <div id="composer">
       <div id="previews"></div>
@@ -780,6 +788,13 @@
         <input type="range" id="vp-think-vol" class="vs-level" min="0" max="100" step="5">
         <button type="button" class="vs-btn vs-room" id="vp-room">Room check</button>
         <div class="vs-room-out" role="status" aria-live="polite"></div>
+        <label class="vp-row" for="vp-echo"><span>Echo guard after replies</span></label>
+        <select id="vp-echo" class="vs-btn"></select>
+        <p class="vs-hint vp-hint">Keeps the agent from hearing its own reply in a car or through a speaker.</p>
+        <label class="vs-check"><input type="checkbox" id="vp-keepalive"> <span>Keep Bluetooth awake during calls</span></label>
+        <p class="vs-hint vp-hint">Plays an inaudible hiss so a car or speaker does not cut the first word.</p>
+        <button type="button" class="vs-btn vs-car" id="vp-car">Car or Bluetooth check</button>
+        <div class="vs-car-out" role="status" aria-live="polite"></div>
       </div>
       <div id="voice-level" aria-hidden="true" hidden><i></i></div>
       <div class="row">

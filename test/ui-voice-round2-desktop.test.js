@@ -107,7 +107,7 @@ function makeEnv(opts = {}) {
     voiceRec: { guard: { cancel() {}, pending: false }, chatId: null, busy: false }, voiceTest: { mic: null, guard: { pending: false } },
     voiceMicStop() {}, voiceStopPlayback() { log.stopPlayback = (log.stopPlayback || 0) + 1; }, voicePlay: { token: 0, source: null },
     VOICE_MIC_SVG: '<svg>mic</svg>', voiceSentences: (t) => [t], voiceSpeechText: (t) => t, voiceSpeakText: async () => {}, voiceEncodeWav: () => new ArrayBuffer(1),
-    voiceBusyToast: () => false, voiceRefreshStatus() {}, voiceMeterPercent: (db) => Math.round(Math.max(0, Math.min(100, (db + 60) / 0.6))),
+    VOICE_ECHO_HOLDS: [0, 600, 1000, 1500], voiceBusyToast: () => false, voiceRefreshStatus() {}, voiceMeterPercent: (db) => Math.round(Math.max(0, Math.min(100, (db + 60) / 0.6))),
     voiceCreateVad: () => vad, voiceCreateCall: (deps) => { log.created.push(deps); return call; },
     voiceRoomCheck() {}, voiceCallMedian: () => null, voiceOpenMic: async () => ({ close() {} }), voiceLevelDb: () => -100, voiceMicError: (e) => String(e),
     appendMessage() {}, appendSystemNotice() {}, stopAgentTurn() {}, sendSoloMessage: async () => {}, closeQuestion() {}, hubOriginLabel: () => '',
@@ -171,10 +171,10 @@ test('thinking adapter: start pulses and tells the VAD playback is active; stop 
   t.stop(); t.stop();
   assert.strictEqual(log.sound.on, false);
   assert.deepStrictEqual(log.vad.filter((x) => x[0] === 'playing'), [['playing', true], ['playing', false]]);
-  t.close(); assert.ok(log.ctx.closed, 'its AudioContext is closed');
+  t.close(); assert.ok(!log.ctx.closed, 'the shared output context (voicePlay.ctx) stays open: replies use it');
 });
 
-test('thinking sound: its AudioContext is made (and resumed) in the start path, before any await, and closed in teardown', async () => {
+test('thinking sound: its AudioContext is made (and resumed) in the start path, before any await, and left open in teardown (it is the shared reply output context)', async () => {
   const { api, log, els } = makeEnv();
   assert.ok(!log.ctx);
   const p = api.voiceCallStart('c1');   // no await yet: the tap's synchronous part
@@ -184,7 +184,8 @@ test('thinking sound: its AudioContext is made (and resumed) in the start path, 
   api.voiceCallS.thinking.start();
   assert.strictEqual(log.ctx, made, 'the same context is used, not a second one');
   await api.voiceCallHangUp();
-  assert.ok(made.closed, 'closed in teardown');
+  assert.ok(!made.closed, 'the shared reply output context (voicePlay.ctx) is not closed with the call');
+  assert.ok(log.thinking.includes('stop'), 'the thinking sound is stopped in teardown');
 });
 
 test('thinking adapter: reply audio already playing keeps the playback flag', () => {
@@ -217,7 +218,8 @@ test('release (pagehide): call.release(reason) at once, the VAD and the thinking
   assert.deepStrictEqual(log.released, ['pagehide']);
   assert.strictEqual(log.hung, 0, 'not the slow hang-up');
   assert.strictEqual(log.vadStop, 1, 'the page itself stops the VAD (raw + processed tracks, context)');
-  assert.ok(log.ctx.closed, 'thinking context closed');
+  assert.ok(!log.ctx.closed, 'the shared reply output context stays open');
+  assert.ok(log.thinking.includes('stop'), 'the thinking sound is stopped');
   assert.strictEqual(api.voiceCallS.call, null);
   assert.strictEqual(api.voiceCallS.vad, null);
   assert.ok(log.stopPlayback >= 1, 'playing audio is cut');

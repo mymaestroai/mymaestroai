@@ -54,7 +54,7 @@ test('settings: Talk mode, Interrupt sensitivity, Room check; the phase-1 hint i
 
 test('call bar: help line, switch, sliders, buttons and the dark-theme CSS', () => {
   const w = wiring();
-  assert.ok(w.includes('Hands-free works with the page open and the screen on; locked-screen and car systems (CarPlay, Android Auto) are not supported yet.'));
+  assert.ok(w.includes("Hands-free works with the page open and the screen on, also through a car\\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported."));
   for (const s of ['Do not disturb', 'Mic level', 'Interrupt sensitivity', 'Hang up', "'Now'", "'Later'", "'Skip'", 'Hearing you', 'Listening', 'Thinking', 'Speaking', 'Starting']) assert.ok(w.includes(s), s);
   assert.match(w, /area\.parentNode\.insertBefore\(bar, area\)/, 'above the message box');
   assert.match(w, /voiceCallS\.call\.setMode\(t\.checked \? 'dnd' : 'announce'\)/);
@@ -164,7 +164,7 @@ function makeEnv(opts = {}) {
     voiceSpeechText: (t) => String(t),
     voiceEncodeWav: (f, r) => { calls.wavRate = r; return new Uint8Array([1]).buffer; },
     voiceBusyToast: () => false, voiceRefreshStatus() {},
-    voiceMeterPercent: (db) => Math.round(Math.max(0, Math.min(100, (db + 60) / 0.6))),
+    VOICE_ECHO_HOLDS: [0, 600, 1000, 1500], voiceMeterPercent: (db) => Math.round(Math.max(0, Math.min(100, (db + 60) / 0.6))),
     voiceCreateVad: (o) => { calls.vadOpts = o; return vad; },
     voiceCreateCall: (deps) => { calls.created.push(deps); return fakeCall; },
     voiceRoomCheck: CALL.voiceRoomCheck, voiceCallMedian: (l) => { const a = l.filter(Number.isFinite).sort((x, y) => x - y); return a.length ? a[a.length >> 1] : null; },
@@ -191,7 +191,7 @@ test('start: deps contract, VAD options from prefs, bar above the box, button be
   const { api, calls, fakeCall, get } = makeEnv();
   await api.voiceCallStart('c1');
   assert.strictEqual(fakeCall.started, 1);
-  assert.deepStrictEqual({ ...calls.vadOpts }, { baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40, endPause: 1200 });   // + the end-of-turn pause (voice fixes 1)
+  assert.deepStrictEqual({ ...calls.vadOpts }, { baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40, endPause: 1200, echoHoldMs: 600 });   // + the end-of-turn pause (voice fixes 1)
   const d = calls.created[0];
   for (const k of ['agent', 'now', 'setTimer', 'clearTimer', 'prefs', 'vad', 'stt', 'isTurnRunning', 'send', 'interject', 'stop', 'speak', 'cancelSpeech', 'answerAsk', 'server', 'ui']) assert.ok(k in d, k);
   for (const k of ['start', 'heartbeat', 'mode', 'end', 'decide']) assert.strictEqual(typeof d.server[k], 'function', 'server.' + k);

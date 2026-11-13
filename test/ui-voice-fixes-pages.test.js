@@ -60,7 +60,7 @@ test('desktop call bar: pause select and speed slider, no spoken-activity switch
   assert.match(slider, /speed: 'voiceSpeed', pause: 'endPause'/);
   assert.match(app, /activity: \(text\) => \{ const a = barEl\('activity'\); if \(a\) a\.textContent = text \|\| ''; \}/);
   assert.match(app, /speakActivity: \(\) => !!voicePrefsNow\(\)\.speakActivity/);
-  assert.match(app, /interruptSensitivity: voiceSensNow\(\), endPause: voiceEndPauseNow\(\) \}\)/);
+  assert.match(app, /interruptSensitivity: voiceSensNow\(\), endPause: voiceEndPauseNow\(\), echoHoldMs: voiceEchoHoldNow\(\) \}\)/);
   assert.match(idx, /\.voice-callbar \.vcb-activity \{/);
 });
 
@@ -76,7 +76,7 @@ test('phone Voice sheet: pause select, speed slider with the hint, spoken activi
   assert.match(sheet, /voicePrefsSave\(\{ voiceSpeed: voiceCleanSpeed\(speed\.value\) \}\)/);
   assert.match(sheet, /voicePrefsSave\(\{ speakActivity: !!e\.target\.checked \}\)/);
   assert.ok(sheet.includes("voiceSpeedLabel(speed.value)"), 'shows 1.10x');
-  assert.match(mob, /interruptSensitivity: prefs\.interruptSensitivity, endPause: voiceEndPauseNow\(\) \}\)/);
+  assert.match(mob, /interruptSensitivity: prefs\.interruptSensitivity, endPause: voiceEndPauseNow\(\), echoHoldMs: prefs\.echoHold \}\)/);
   assert.match(mob, /speakActivity: \(\) => !!voicePrefsNow\(\)\.speakActivity/);
   assert.match(mob, /activity: \(text\) => \{ const a = \$\('cp-activity'\); if \(a && voiceCall === vc\) a\.textContent = text \|\| ''; \}/);
   assert.match(mhtml, /<div id="cp-activity" aria-live="off"><\/div>/);

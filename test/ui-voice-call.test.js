@@ -616,7 +616,7 @@ function fakeBrowser() {
 test('vad adapter: loads the bundle from /api/voice/web/ and builds MicVAD with the gain stream', async () => {
   const { b, win, loadScript } = fakeBrowser();
   const events = [];
-  const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: 100, interruptSensitivity: 50, win, loadScript });
+  const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: 100, interruptSensitivity: 50, win, loadScript, echoHoldMs: 0 });   // 0: no echo hold-over, the thresholds drop at once (the hold-over is tested in ui-voice-bluetooth.test.js)
   await vad.start({ onSpeechStart: () => events.push('start'), onSpeechEnd: (a) => events.push('end ' + a.length), onFrame: (db) => events.push(['frame', Math.round(db)]), onMisfire: () => events.push('misfire') });
   assert.deepStrictEqual(b.scripts, ['/api/voice/web/ort.wasm.min.js', '/api/voice/web/bundle.min.js']);
   const m = b.created[0], o = m.options;
@@ -669,7 +669,7 @@ test('vad adapter: an already loaded bundle is not loaded again; a failing start
 
 test('the controller drives a real vad adapter: playback flips the threshold', async () => {
   const { b, win, loadScript } = fakeBrowser();
-  const vad = voiceCreateVad({ micLevel: 50, interruptSensitivity: 50, win, loadScript });
+  const vad = voiceCreateVad({ micLevel: 50, interruptSensitivity: 50, win, loadScript, echoHoldMs: 0 });   // 0: the thresholds drop at once
   const h = await started({ vad });
   h.call.onAsk({ request_id: 'q', question: 'Hello?', options: [] });
   assert.strictEqual(b.created[0].setOptionsCalls.length, 1);
