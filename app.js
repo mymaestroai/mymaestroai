@@ -10670,6 +10670,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           // 'allowed': the person said now and the producer runs it; 'done': it ran. Neither waits for a decision any more.
           if (item.state === 'done' || item.state === 'allowed') {
             if (known) { heldList = heldList.filter(h => h !== known); announceQueue = announceQueue.filter(h => h !== known); changed = true; }
+            // decided elsewhere (another device, an admin) while it was being asked: the question is over, the next one may come
+            if (pendingAnnounce && pendingAnnounce.id === item.id) { if (pendingAnnounce.timer !== null) quiet(() => d.clearTimer(pendingAnnounce.timer)); pendingAnnounce = null; changed = true; }
             continue;
           }
           if (known) { if (item.state === 'later' && !known.later) { known.later = true; known.announced = true; changed = true; } continue; }
@@ -10715,11 +10717,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         pumpAnnounce();
       }
 
+      // The first speech-like frame (vad-web onSpeechStart): the person may be starting to talk. Nothing new is started over
+      // them, and an answer belongs to the announcement that was pending at this moment. A false start ends in onMisfire.
+      function onSpeechBegin() {
+        if (ended || personSpeaking) return;
+        personSpeaking = true;
+        speechAnn = pendingAnnounce ? pendingAnnounce.id : null;
+      }
       // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
       function onSpeechStart() {
         if (ended) return;
+        if (!personSpeaking) speechAnn = pendingAnnounce ? pendingAnnounce.id : null;   // no onSpeechBegin came first
         personSpeaking = true;
-        speechAnn = pendingAnnounce ? pendingAnnounce.id : null;   // an answer belongs to the announcement that was pending when it began
         if (speaking || queue.length) {
           const n = (current ? [current] : []).concat(queue).filter(i => i.kind === 'reply').length;
           const cutReply = cancelSpeaking();
@@ -10808,7 +10817,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         let vadStarting;
         try {
           vadStarting = Promise.resolve(vad.start({
-            onSpeechStart, onMisfire, onSpeechEnd,
+            onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd,
             onFrame: (db, probs) => quiet(() => ui.level(db, probs)),
           })).catch((e) => { vadErr = e || new Error('no microphone'); });
         } catch (e) { vadErr = e || new Error('no microphone'); vadStarting = Promise.resolve(); }
@@ -10848,7 +10857,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return endPromise;
       }
       return {
-        start, hangUp, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+        start, hangUp, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
         get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
       };
     }
@@ -10897,8 +10906,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             positiveSpeechThreshold: t.positiveSpeechThreshold, negativeSpeechThreshold: t.negativeSpeechThreshold,
             redemptionMs: 384, preSpeechPadMs: 256, minSpeechMs: t.minSpeechFrames * 32,
             // vad-web 0.0.31: onSpeechStart fires on the first speech-like frame, onSpeechRealStart once minSpeechMs is reached.
-            // Playback is cut on the real start only; a candidate that never gets there ends in onVADMisfire.
-            onSpeechStart: () => {},
+            // A candidate start marks the person as speaking (nothing new starts over them); playback is cut on the real start
+            // only; a candidate that never gets there ends in onVADMisfire.
+            onSpeechStart: () => { if (handlers.onSpeechBegin) handlers.onSpeechBegin(); },
             onSpeechRealStart: () => { if (handlers.onSpeechStart) handlers.onSpeechStart(); },
             onSpeechEnd: (audio) => (handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
             onVADMisfire: () => { if (handlers.onMisfire) handlers.onMisfire(); },

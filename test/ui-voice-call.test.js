@@ -810,6 +810,33 @@ test('an item the person said now to is not brought back by a heartbeat while it
   assert.strictEqual(h.spoken.length, spokenBefore, 'not announced again');
 });
 
+test('an item decided elsewhere while it is being asked ends that question, and the next item is still announced', async () => {
+  const h = harness();
+  h.startHeld = [{ id: 'a', kind: 'consultation', label: 'Item A', state: 'held' }];
+  assert.strictEqual(await h.call.start(), true);
+  assert.deepStrictEqual(h.spoken, ['Item A. Now, or after we\'re done?']);
+  await h.finish();
+  // an admin (or another device) said now to A; this page missed the event
+  h.hbHeld = [{ id: 'a', kind: 'consultation', label: 'Item A', state: 'allowed' }, { id: 'b', kind: 'consultation', label: 'Item B', state: 'held' }];
+  await h.advance(15000);
+  await h.advance(25000);
+  await h.finish();
+  assert.ok(h.spoken.includes('Item B. Now, or after we\'re done?'), 'B is announced: the question about A did not block it');
+});
+
+test('an answer that began before an announcement is not taken as its answer (candidate speech onset)', async () => {
+  const h = harness();
+  assert.strictEqual(await h.call.start(), true);
+  h.vadHandlers.onSpeechBegin();   // first speech-like frame: the person starts to say something
+  h.call.onHeld({ id: 'x', kind: 'schedule', label: 'Daily review' }, false);
+  await h.advance(3000);
+  assert.ok(!h.spoken.some(s => s.startsWith('Daily review')), 'nothing is announced over a person who started to speak');
+  h.vadHandlers.onSpeechStart();
+  h.vadHandlers.onSpeechEnd({ text: 'yes' });
+  await tick();
+  assert.deepStrictEqual(h.decisions, [], 'the earlier "yes" is not a decision about the item');
+});
+
 test('a call whose start failed never sends an end without a call id', async () => {
   const h = harness();
   const ends = [];
