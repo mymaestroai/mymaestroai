@@ -160,6 +160,29 @@ test('ElevenLabs TTS: POST /text-to-speech/<voiceId>?output_format=pcm_24000 wit
   assert.strictEqual(fetchImpl.calls.length, 1);
 });
 
+test('speed: OpenAI gets speed (0.25-4) and ElevenLabs voice_settings.speed (0.7-1.2) only when not 1; Gemini never gets one', async () => {
+  const bodyOf = async (engine, voice, speed, respond) => {
+    const { cloud, fetchImpl } = makeCloud({ respond });
+    await cloud.tts('helper', engine, 'Hello there', voice, speed);
+    return JSON.parse(fetchImpl.calls[0].init.body);
+  };
+  const oa = () => ({ bytes: cloudMod.wavFromPcm16(pcm24(), 24000) });
+  assert.strictEqual((await bodyOf('openai', 'nova', 1, oa)).speed, undefined, 'speed 1: not sent');
+  assert.strictEqual((await bodyOf('openai', 'nova', undefined, oa)).speed, undefined, 'no speed: not sent');
+  assert.strictEqual((await bodyOf('openai', 'nova', 1.25, oa)).speed, 1.25);
+  assert.strictEqual((await bodyOf('openai', 'nova', 0.75, oa)).speed, 0.75);
+  assert.strictEqual((await bodyOf('openai', 'nova', 9, oa)).speed, 4, 'clamped to 4');
+  assert.strictEqual((await bodyOf('openai', 'nova', 0.1, oa)).speed, 0.25, 'clamped to 0.25');
+  const el = () => ({ bytes: pcm24(2400) });
+  assert.deepStrictEqual(await bodyOf('elevenlabs', ELEVEN_ID, 1, el), { text: 'Hello there', model_id: 'eleven_flash_v2_5' });
+  assert.deepStrictEqual((await bodyOf('elevenlabs', ELEVEN_ID, 1.1, el)).voice_settings, { speed: 1.1 });
+  assert.deepStrictEqual((await bodyOf('elevenlabs', ELEVEN_ID, 1.5, el)).voice_settings, { speed: 1.2 }, 'clamped to 1.2');
+  assert.deepStrictEqual((await bodyOf('elevenlabs', ELEVEN_ID, 0.5, el)).voice_settings, { speed: 0.7 }, 'clamped to 0.7');
+  const g = await bodyOf('google', 'Kore', 1.5, () => ({ json: geminiAudio(pcm24()) }));
+  assert.deepStrictEqual(Object.keys(g).sort(), ['contents', 'generationConfig'], 'Gemini: no speed field anywhere');
+  assert.ok(!JSON.stringify(g).includes('speed'));
+});
+
 test('the real base URLs are constants (OpenAI follows the provider URL setting)', () => {
   assert.strictEqual(cloudMod.BASES.google, 'https://generativelanguage.googleapis.com/v1beta');
   assert.strictEqual(cloudMod.BASES.elevenlabs, 'https://api.elevenlabs.io/v1');

@@ -1997,18 +1997,83 @@ const VOICE_STORE_KEY = 'hub-voice';
 const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
 const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
 const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
-const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true };
-function voiceSpeechText(markdown) {
+const VOICE_END_PAUSES = [800, 1200, 2000];   // 'Pause before I'm done': short / normal / long, in ms
+const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false };
+function voiceCleanSpeed(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
+}
+function voiceSpeedLabel(v) { return voiceCleanSpeed(v).toFixed(2) + 'x'; }
+// The spoken-text cleaner's pieces (see voiceSpeechText).
+const VOICE_SYMBOLS_RE = new RegExp('[\\u2190-\\u2BFF\\u2022\\u00B7]', 'g');
+const VOICE_NUM_EN_DASH_RE = new RegExp('(\\d)\\s*\\u2013\\s*(?=\\d)', 'g');
+const VOICE_DASH_RE = new RegExp('\\s*[\\u2013\\u2014\\u2015]\\s*', 'g');
+const VOICE_DQUOTE_RE = new RegExp('[\\u201C\\u201D"]', 'g');
+const VOICE_SQUOTE_RE = new RegExp('[\\u2018\\u2019]', 'g');
+const VOICE_ELLIPSIS_RE = new RegExp('\\u2026', 'g');
+const VOICE_SEG = '\\/[\\w.@+~-]*[\\w@+~-]';
+function voicePathsToWords(t) {
+  const isPath = (m) => (m.match(/\//g) || []).length >= 2 || /\.[A-Za-z0-9]{1,8}$/.test(m);
+  t = t.replace(/(^|[^\w/.~@-])[A-Za-z]:\\[^\s]*[^\s.,;:!?)\]'"]/g, '$1a file path');
+  t = t.replace(new RegExp('(^|[^\\w/.~@-])((?:~|\\.{1,2})(?:' + VOICE_SEG + ')+|(?:' + VOICE_SEG + '){2,}|' + VOICE_SEG + '(?=\\.[A-Za-z0-9]{1,8}\\b)(?:\\.[A-Za-z0-9]{1,8})?)', 'g'),
+    (m, lead, p) => lead + (isPath(p) || /^\/[\w@+~-]*\.\w/.test(p) ? 'a file path' : p));
+  t = t.replace(new RegExp('(^|[^\\w/.~@-])((?=[\\w.-]*[A-Za-z])[\\w.-]+(?:' + VOICE_SEG + ')+)', 'g'), (m, lead, p) => lead + (isPath(p) ? 'a file path' : p));
+  return t;
+}
+function voiceCleanInline(s) {
+  s = s.replace(/[\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}\p{Cf}\u{FE0E}\u{FE0F}\u{20E3}]/gu, '')   // emoji and zero-width marks
+    .replace(VOICE_SYMBOLS_RE, ' ');                                    // arrows, math signs, boxes, dingbats, bullets
+  s = s.replace(/[-=]+>|<[-=]+/g, ' ');                                 // -> => <-
+  s = s.replace(VOICE_NUM_EN_DASH_RE, '$1 to ');                        // 5 en dash 10
+  s = s.replace(VOICE_DASH_RE, ', ');                                   // en/em dash as a separator: a pause
+  s = s.replace(/(^|[\s(])-{1,2}(?=[A-Za-z])/g, '$1');                  // a command-line flag: -x --force
+  s = s.replace(/(^|[\s(])-(?=\d)/g, '$1minus ');
+  s = s.replace(/\s*-{2,}\s*/g, ', ').replace(/\s+-(?=\s|$)/g, ', ');   // -- or a lone dash between spaces
+  s = s.replace(/(^|\s)-+(?=\S)/g, '$1').replace(/(\S)-+(?=\s|$)/g, '$1');   // a dash stuck to the edge of a word (hyphens inside words stay)
+  s = s.replace(/&/g, ' and ').replace(/%/g, ' percent').replace(/@/g, ' at ').replace(/=+/g, ' equals ');
+  s = s.replace(/(\d)\s*\+\s*(?=\d)/g, '$1 plus ').replace(/(\d)\+(?=\W|$)/g, '$1 plus');
+  s = s.replace(/<\/?[A-Za-z][^<>]*>/g, ' ');
+  s = s.replace(/[*`#~^|\\<>+{}\[\]()]/g, ' ').replace(/\//g, ' ');
+  s = s.replace(/\b_+|_+\b/g, '').replace(/_/g, ' ');
+  s = s.replace(VOICE_DQUOTE_RE, '').replace(VOICE_SQUOTE_RE, '\'').replace(VOICE_ELLIPSIS_RE, '...');
+  s = s.replace(/\s+/g, ' ').trim();
+  for (let i = 0; i < 3; i++) s = s.replace(/\s+([,.;:!?])/g, '$1').replace(/([,;:])(?:\s*[,;:])+/g, '$1').replace(/([.!?])\s*,/g, '$1').replace(/,\s*([.!?])/g, '$1');
+  return s.replace(/^[,;:\s]+/, '').replace(/,$/, '').trim();
+}
+function voiceSpeechText(markdown, open) {
   let t = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
   let hadDetails = false;
   t = t.replace(/(^|\n)[ \t]*(```|~~~)[\s\S]*?(\n[ \t]*(```|~~~)[^\n]*|$)/g, (m, lead) => { hadDetails = true; return lead; });
   t = t.split('\n').filter(l => { if (/^\s*\|/.test(l)) { hadDetails = true; return false; } return true; }).join('\n');
   t = t.replace(/!?\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');
   t = t.replace(/(?:https?:\/\/|www\.)[^\s<>)\]]*[^\s<>)\].,;:!?'"]/gi, 'a link');
-  t = t.replace(/^[ \t]*#{1,6}[ \t]+/gm, '').replace(/^[ \t]*(?:>[ \t]?)+/gm, '').replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '');
-  t = t.replace(/[*`#]+/g, '').replace(/\b_+|_+\b/g, '').replace(/_/g, ' ');
-  t = t.replace(/[\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}\u{200D}\u{FE0E}\u{FE0F}\u{20E3}]/gu, '');
-  t = t.replace(/\s+/g, ' ').trim();
+  t = voicePathsToWords(t);
+  // Lines -> blocks: a heading, a list item or a bold-only line is a block of its own, a blank line or a rule ends one,
+  // other lines of a paragraph join. Each block is cleaned and ends with a full stop, so lines never run together.
+  const blocks = [];
+  let cur = '', curOwn = false;
+  const flush = () => { if (cur.trim()) blocks.push(cur.trim()); cur = ''; curOwn = false; };
+  for (const raw of t.split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim() || /^\s*([-*_=~])(?:\s*\1){2,}\s*$/.test(line)) { flush(); continue; }
+    let s = line.replace(/^[ \t]*(?:>[ \t]?)+/, '');
+    const head = /^[ \t]*#{1,6}[ \t]+/.test(s), item = /^[ \t]*(?:[-*+•]|\d+[.)])[ \t]+/.test(s);
+    s = s.replace(/^[ \t]*#{1,6}[ \t]+/, '').replace(/^[ \t]*(?:[-*+•]|\d+[.)])[ \t]+/, '');
+    const bold = /^\s*(\*\*|__)[^*_]+\1\s*:?\s*$/.test(s);
+    if (head || item || bold) { flush(); cur = s; curOwn = true; }
+    else if (!cur) cur = s;
+    else if (curOwn && !/^(?:[ \t]{2,}|\t)/.test(raw)) { flush(); cur = s; }   // text under a heading or item starts its own block
+    else cur += ' ' + s;
+  }
+  flush();
+  const done = [];
+  blocks.forEach((raw, i) => {
+    const b = voiceCleanInline(raw);
+    if (!b) return;
+    // open: the text is still being written, so its last block is not finished and gets no full stop yet
+    done.push(/[.!?:;]["')’\]]*$/.test(b) || (open && i === blocks.length - 1) ? b : b + '.');
+  });
+  t = done.join(' ').replace(/\s+/g, ' ').trim();
   return hadDetails ? (t + VOICE_DETAILS_NOTE).trim() : t;
 }
 function voiceSplitLong(s, max) {
@@ -2123,7 +2188,9 @@ function voiceCleanPrefs(raw) {
     if (typeof raw[k] === 'number' && Number.isFinite(raw[k])) p[k] = Math.max(0, Math.min(100, raw[k]));
   }
   if (raw.mode === 'handsfree' || raw.mode === 'tap') p.mode = raw.mode;
-  for (const k of ['readAloud', 'deviceVoiceFallback']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
+  if (VOICE_END_PAUSES.includes(raw.endPause)) p.endPause = raw.endPause;
+  if (typeof raw.voiceSpeed === 'number' && Number.isFinite(raw.voiceSpeed)) p.voiceSpeed = voiceCleanSpeed(raw.voiceSpeed);
+  for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
   return p;
 }
 function voiceLoadPrefs(storage) {
@@ -2179,6 +2246,7 @@ function voiceMicGuard() {
 // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
 // ── voice call (begin) ──
 const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
+const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_STILL_LINE = 'Still working on it.';
 const VOICE_CALL_FILLERS = new Set(['uh', 'um', 'umm', 'uhh', 'er', 'erm', 'ah', 'hmm', 'hm', 'mm', 'mmm', 'huh']);
 const VOICE_CALL_ORDINALS = [['first', '1st', 'one', '1'], ['second', '2nd', 'two', '2'], ['third', '3rd', 'three', '3'], ['fourth', '4th', 'four', '4'], ['fifth', '5th', 'five', '5']];
 function voiceCallNorm(text) {
@@ -2244,7 +2312,7 @@ function voiceVadThresholds(interruptSensitivity, playing) {
 }
 function voiceReplySentences(markdown, done) {
   const note = voiceSpeechText('| a |');
-  let t = voiceSpeechText(markdown), hasNote = false;
+  let t = voiceSpeechText(markdown, !done), hasNote = false;
   if (t === note) { t = ''; hasNote = true; } else if (t.endsWith(' ' + note)) { t = t.slice(0, -note.length).trim(); hasNote = true; }
   const sentences = voiceSentences(t).filter(Boolean);
   if (!done && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(String(markdown)))) sentences.pop();
@@ -2252,7 +2320,7 @@ function voiceReplySentences(markdown, done) {
 }
 function voiceCreateCall(deps) {
   const d = deps || {};
-  const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {} }, d.ui);
+  const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {} }, d.ui);
   const server = d.server || {}, vad = d.vad || {};
   const now = () => d.now();
   const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
@@ -2263,13 +2331,36 @@ function voiceCreateCall(deps) {
   let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
   let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
   let callId = null, startP = null, sttPending = 0, speechAnn = null, cutRec = null, lastDone = false;
+  // Joining pieces of one sentence: lastSeg is the latest speech segment (its transcript may still be pending), curCand the
+  // earlier segment a new one may join, segActive that a segment has begun and has not ended.
+  let lastSeg = null, curCand = null, segActive = false;
+  // "Still working on it.": when something was last spoken, when the running turn began, whether the line was said since.
+  let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null;
 
+  function clearStill() { if (stillTimer !== null) { quiet(() => d.clearTimer(stillTimer)); stillTimer = null; } }
+  // One spoken "Still working on it." when a turn runs and nothing was said for 20 s; not again until something else is said.
+  function armStill() {
+    if (ended || stillTimer !== null || stillSaid || !awaitingReply) return;
+    const since = Math.max(lastSpokenAt === null ? -Infinity : lastSpokenAt, turnAt === null ? -Infinity : turnAt);
+    const wait = Number.isFinite(since) ? Math.max(200, VOICE_CALL_STILL_MS - (now() - since)) : VOICE_CALL_STILL_MS;
+    stillTimer = d.setTimer(checkStill, wait);
+  }
+  function checkStill() {
+    stillTimer = null;
+    if (ended || stillSaid || !awaitingReply) return;
+    if (speaking || personSpeaking || sttPending || pendingAsk || pendingAnnounce || queue.length) return;   // settle() arms it again when it is quiet
+    const since = Math.max(lastSpokenAt === null ? -Infinity : lastSpokenAt, turnAt === null ? -Infinity : turnAt);
+    if (Number.isFinite(since) && now() - since < VOICE_CALL_STILL_MS) { armStill(); return; }
+    stillSaid = true;
+    enqueue(VOICE_CALL_STILL_LINE, 'still');
+  }
   function setState(name) { if (name === state) return; state = name; quiet(() => ui.state(name, '')); }
   function settle() {
     if (ended) return;
     if (!speaking && !personSpeaking && queue.length) { runQueue(); return; }   // lines that waited while the person spoke are read now
     setState(speaking ? 'speaking' : personSpeaking ? 'hearing' : awaitingReply ? 'thinking' : 'listening');
     pumpAnnounce();
+    armStill();
   }
   function runAfter(item) { if (item && item.after) { const f = item.after; item.after = null; quiet(f); } }
   function enqueue(text, kind, after, onStart) {
@@ -2284,9 +2375,12 @@ function voiceCreateCall(deps) {
       current = queue.shift();
       if (current.onStart) { const f = current.onStart; current.onStart = null; quiet(f); }   // the line really starts playing
       let ok = true;
+      lastSpokenAt = now();
       try { ok = await d.speak(current.text); } catch { ok = false; }
       if (my !== gen) return;
       const item = current; current = null;
+      lastSpokenAt = now();
+      if (item.kind !== 'still') stillSaid = false;   // something new was said: the next long silence may be filled again
       if (ok === false) { for (const q of queue) runAfter(q); queue = []; }
       runAfter(item);
     }
@@ -2318,12 +2412,17 @@ function voiceCreateCall(deps) {
     if (done) {
       if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply');
       noteSpoken = true; awaitingReply = false;
+      clearStill(); quiet(() => ui.activity(''));
       if (!speaking) settle();
     }
   }
+  // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
   function onActivity(item) {
-    if (ended || state !== 'thinking' || speaking || personSpeaking || pendingAsk || pendingAnnounce) return;
+    if (ended) return;
     if (!awaitingReply && !quiet(() => d.isTurnRunning())) return;
+    quiet(() => ui.activity(voiceStatusLine(item)));
+    if (state !== 'thinking' || speaking || personSpeaking || pendingAsk || pendingAnnounce) return;
+    if (!quiet(() => d.speakActivity && d.speakActivity())) return;
     if (lastStatusAt !== null && now() - lastStatusAt < VOICE_CALL_STATUS_GAP_MS) return;
     lastStatusAt = now();
     enqueue(voiceStatusLine(item), 'status');
@@ -2419,13 +2518,31 @@ function voiceCreateCall(deps) {
   // must not leave the call deaf and mute: after 4 s without real speech, a misfire or an end, it is let go.
   let beginTimer = null;
   const clearBegin = () => { if (beginTimer !== null) { quiet(() => d.clearTimer(beginTimer)); beginTimer = null; } };
+  // A new speech segment begins. When the previous one ended less than 2 s ago and its transcript is not sent yet (still
+  // being transcribed, or waiting in line), the previous one is held back: it is joined with this segment into one message.
+  function segmentStarting() {
+    if (segActive) return;
+    segActive = true;
+    const c = lastSeg;
+    if (c && !c.done && !c.hold && now() - c.endAt <= VOICE_CALL_JOIN_MS) {
+      let resolve; const promise = new Promise((r) => { resolve = r; });
+      c.hold = { promise, resolve }; curCand = c;
+    } else curCand = null;
+  }
+  // The segment was a false start: the held one is sent on its own after all.
+  function segmentDropped() {
+    segActive = false;
+    const c = curCand; curCand = null;
+    if (c && c.hold) { c.hold.resolve(null); c.hold = null; }
+  }
   function onSpeechBegin() {
     if (ended || personSpeaking) return;
     personSpeaking = true;
     speechAnn = heardAnnouncement();
     clearBegin();
+    segmentStarting();
     // Real speech, a misfire and an end all clear this timer, so when it fires no real start came: let the false start go.
-    beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; settle(); } }, 4000);
+    beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; segmentDropped(); settle(); } }, 4000);
   }
   // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
   function onSpeechStart() {
@@ -2433,6 +2550,7 @@ function voiceCreateCall(deps) {
     clearBegin();
     if (!personSpeaking) speechAnn = heardAnnouncement();   // no onSpeechBegin came first
     personSpeaking = true;
+    segmentStarting();
     if (speaking || queue.length) {
       const n = (current ? [current] : []).concat(queue).filter(i => i.kind === 'reply').length;
       const cutReply = cancelSpeaking();
@@ -2445,7 +2563,7 @@ function voiceCreateCall(deps) {
   // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
   function onMisfire() {
     if (ended) return;
-    clearBegin();
+    clearBegin(); segmentDropped();
     personSpeaking = false; speechAnn = null;
     const rec = cutRec; cutRec = null;
     if (rec) {
@@ -2459,19 +2577,33 @@ function voiceCreateCall(deps) {
     if (ended) return Promise.resolve();
     clearBegin();
     personSpeaking = false; speechEndAt = now(); cutRec = null;
-    const ann = speechAnn; speechAnn = null;
+    const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null };
+    speechAnn = null; segActive = false;
+    const cand = curCand; curCand = null;
+    if (cand && cand.hold) cand.hold.resolve(mine);   // the earlier piece hands its text to this one
+    lastSeg = mine;
     sttPending++;
     settle();
     sttChain = sttChain.then(async () => {
       try {
-        let text = '';
-        try { text = await d.stt(audio); } catch { quiet(() => ui.toast('Could not transcribe that.')); return; }
+        let text = '', failed = false;
+        try { text = await d.stt(audio); } catch { failed = true; quiet(() => ui.toast('Could not transcribe that.')); }
         if (ended) return;
-        const t = String(text || '').trim(), n = voiceCallNorm(t);
-        if (n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w))) return;
+        const own = String(text || '').trim(), n = voiceCallNorm(own);
+        const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
+        let t = ownOk ? own : '';
+        if (mine.carry) t = ownOk ? (voiceIsStopCommand(own) ? own : mine.carry + ' ' + own) : mine.carry;   // a stop word in this piece wins over the earlier one
+        if (!t) return;
+        // A later piece started within 2 s: it takes this text along (unless this one is a stop command: stop wins at once).
+        if (mine.hold && !voiceIsStopCommand(t)) {
+          const next = await mine.hold.promise;
+          if (ended) return;
+          if (next) { next.carry = t; if (next.ann == null) next.ann = mine.ann; return; }
+        }
+        mine.done = true;
         quiet(() => ui.heard(t));
-        await route(t, ann);
-      } finally { sttPending--; settle(); }
+        await route(t, mine.ann);
+      } finally { mine.done = true; sttPending--; settle(); }
     });
     return sttChain;
   }
@@ -2496,14 +2628,14 @@ function voiceCreateCall(deps) {
     try {
       if (quiet(() => d.isTurnRunning())) {
         if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
-        awaitingReply = true; setState('thinking');
+        awaitingReply = true; turnAt = now(); stillSaid = false; setState('thinking'); armStill();
         await d.interject(t);
       } else {
-        awaitingReply = true; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = '';
-        setState('thinking');
+        awaitingReply = true; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; turnAt = now(); stillSaid = false;
+        setState('thinking'); armStill();
         await d.send(t);
       }
-    } catch { awaitingReply = false; quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
+    } catch { awaitingReply = false; clearStill(); quiet(() => ui.activity('')); quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
   }
 
   function beat() {
@@ -2543,7 +2675,8 @@ function voiceCreateCall(deps) {
     if (endPromise) return endPromise;
     ended = true;
     for (const t of [hbTimer, pumpTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
-    hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin();
+    hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); clearStill();
+    for (const s of [lastSeg, curCand]) if (s && s.hold) s.hold.resolve(null);   // a held transcript is let go with the call
     quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
     const idKnown = callId || !startP ? Promise.resolve() : startP.catch(() => {});   // hanging up while the start is in flight waits for the id
     endPromise = idKnown.then(() => (callId ? server.end(callId) : { held: [] })).then(r => (r && Array.isArray(r.held) ? r.held : []), () => []).then((held) => {
@@ -2574,7 +2707,8 @@ function voiceCreateCall(deps) {
 function voiceCreateVad(opts) {
   const o = opts || {};
   const base = o.baseUrl || '/api/voice/web/';
-  const st = { micLevel: o.micLevel, sens: o.interruptSensitivity, playing: false, vad: null, ctx: null, gain: null, raw: null };
+  const pause = (v) => (VOICE_END_PAUSES.includes(Number(v)) ? Number(v) : 1200);   // how long a pause ends the person's turn (ms)
+  const st = { micLevel: o.micLevel, sens: o.interruptSensitivity, pause: pause(o.endPause), playing: false, vad: null, ctx: null, gain: null, raw: null };
   const win = () => o.win || window;
   const loadScript = o.loadScript || ((src) => new Promise((resolve, reject) => {
     const el = win().document.createElement('script');
@@ -2610,7 +2744,7 @@ function voiceCreateVad(opts) {
         },
         pauseStream: async () => {}, resumeStream: async (s) => s,
         positiveSpeechThreshold: t.positiveSpeechThreshold, negativeSpeechThreshold: t.negativeSpeechThreshold,
-        redemptionMs: 384, preSpeechPadMs: 256, minSpeechMs: t.minSpeechFrames * 32,
+        redemptionMs: st.pause, preSpeechPadMs: 256, minSpeechMs: t.minSpeechFrames * 32,
         // vad-web 0.0.31: onSpeechStart fires on the first speech-like frame, onSpeechRealStart once minSpeechMs is reached.
         // A candidate start marks the person as speaking (nothing new starts over them); playback is cut on the real start
         // only; a candidate that never gets there ends in onVADMisfire.
@@ -2635,6 +2769,8 @@ function voiceCreateVad(opts) {
     setPlaybackActive(on) { st.playing = !!on; apply(); },
     setMicLevel(v) { st.micLevel = v; if (st.gain) st.gain.gain.value = voiceGainFromSlider(v); },
     setInterruptSensitivity(v) { st.sens = v; apply(); },
+    // 'Pause before I'm done': only the END of a turn waits this long; the start of speech (barge-in) is not delayed.
+    setEndPause(ms) { st.pause = pause(ms); if (st.vad) st.vad.setOptions({ redemptionMs: st.pause }); },
   };
 }
 // ── voice call (end) ──
@@ -4832,6 +4968,9 @@ const voicePlay = { token: 0, audio: null, url: null, el: null, cancel: null, to
 const voiceErr = (e) => (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'The microphone is blocked: allow it for this site in the browser settings'
   : e && e.name === 'NotFoundError' ? 'No microphone found' : (e && e.message) || 'The microphone did not start');
 function voicePrefsNow() { try { return voiceLoadPrefs(localStorage); } catch { return { micLevel: 50, interruptSensitivity: 50, mode: 'tap', readAloud: false, deviceVoiceFallback: true }; } }
+function voiceEndPauseNow() { const v = Number(voicePrefsNow().endPause); return VOICE_END_PAUSES.includes(v) ? v : 1200; }
+function voiceSpeedNow() { const v = voicePrefsNow().voiceSpeed; return voiceCleanSpeed(v == null ? 1 : v); }
+const VOICE_SPEED_HINT = 'Google voices ignore this setting.';
 function voicePrefsSave(patch) { const p = { ...voicePrefsNow(), ...patch }; try { voiceSavePrefs(localStorage, p); } catch { /* storage full or blocked */ } return p; }
 function voiceTakeDictated(agent) { const d = voiceDictatedFor === agent; voiceDictatedFor = null; return d; }
 function voiceOn() { return !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready); }
@@ -5026,7 +5165,7 @@ function voiceStopPlayback() {
 async function voiceTtsBlob(agent, text) {   // null when the hub cannot say it (never throws)
   if (!voiceOn()) return null;
   try {
-    const r = await api('/api/voice/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent, text }) });
+    const r = await api('/api/voice/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent, text, speed: voiceSpeedNow() }) });
     if (r.status === 409 || r.status === 503) { voicePlay.told = true; toast(r.status === 409 ? 'Voice is turned off' : 'Voice is busy, try again in a few seconds', 4000); }
     if (!r.ok) return null;
     const b = await r.blob();
@@ -5075,7 +5214,7 @@ function voiceDeviceSpeak(sentences, my) {   // the phone's own voice, sentence 
     if (!voice) { toast('This device has no offline voice; turn on voice in Settings', 4500); return true; }
     for (const s of sentences) {
       if (my !== voicePlay.token) return true;
-      await new Promise((resolve) => { const u = new SpeechSynthesisUtterance(s); u.voice = voice; u.lang = voice.lang; u.onend = resolve; u.onerror = resolve; synth.speak(u); });
+      await new Promise((resolve) => { const u = new SpeechSynthesisUtterance(s); u.voice = voice; u.lang = voice.lang; u.rate = voiceSpeedNow(); u.onend = resolve; u.onerror = resolve; synth.speak(u); });
     }
     return true;
   })();
@@ -5237,7 +5376,9 @@ async function voiceCallStt(agent, f32) {
   return String(j.text || '');
 }
 // One sentence, resolved false when it was cut (cancelSpeech = voiceStopPlayback raises the token): the hub voice, else the offline device voice.
-async function voiceCallSpeak(agent, text) {
+async function voiceCallSpeak(agent, rawText) {
+  const text = voiceSpeechText(String(rawText || ''));   // every spoken string goes through the cleaner
+  if (!text) return true;
   const my = voicePlay.token;
   if (voiceOn()) {
     const blob = await voiceTtsBlob(agent, text);
@@ -5314,10 +5455,12 @@ function voiceCallDeps(vc) {
     speak: (text) => voiceCallSpeak(agent, text),
     cancelSpeech: () => voiceStopPlayback(),
     answerAsk: (id, text) => voiceCallAnswerAsk(vc, id, text),
+    speakActivity: () => !!voicePrefsNow().speakActivity,   // off by default: what the agent is doing is shown in the panel, not spoken
     server: voiceCallServer(agent, () => vc),
     ui: {
       state: (name) => { if (voiceCall !== vc) return; voiceCallPaintState(name); if (name === 'ended') voiceCallTeardown(vc); },
       level: (db) => { if (voiceCall === vc) voiceCallPaintMeter(db); },
+      activity: (text) => { const a = $('cp-activity'); if (a && voiceCall === vc) a.textContent = text || ''; },   // silent: shown in the panel only
       heard: (text) => { const h = $('cp-heard'); if (h && voiceCall === vc) h.textContent = `Heard: ${text}`; },
       held: (list) => { if (voiceCall === vc) voiceCallPaintHeld(list); },
       toast: (msg) => toast(msg, 4000),
@@ -5340,7 +5483,7 @@ function voiceCallStart() {
   voiceUnlockAudio();
   const prefs = voicePrefsNow();
   const vc = { agent, call: null, vad: null, callTurns: new Set(), hubTurns: new Map(), asks: new Map(), lastText: '', sendSeq: 0, expecting: false, wake: null, startedAt: Date.now() };
-  vc.vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: prefs.micLevel, interruptSensitivity: prefs.interruptSensitivity });
+  vc.vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: prefs.micLevel, interruptSensitivity: prefs.interruptSensitivity, endPause: voiceEndPauseNow() });
   vc.call = voiceCreateCall(voiceCallDeps(vc));
   voiceCall = vc;
   voiceCallPanel(true); voiceCallPaintState('starting'); voiceMicPaint();
@@ -5537,10 +5680,17 @@ function voiceSheet() {
     '<label class="vs-row" for="vs-sens"><span>Interrupt sensitivity</span><b class="vs-sens-val"></b></label>' +
     '<input type="range" id="vs-sens" class="vs-level vs-sens" min="0" max="100" step="1">' +
     '<p class="vs-hint">How easily your voice cuts in while the agent is speaking. Lower it in a noisy room.</p>' +
+    '<label class="vs-row" for="vs-pause"><span>Pause before I&#39;m done</span></label>' +
+    '<select id="vs-pause" class="vs-pause vs-btn">' + VOICE_END_PAUSES.map((ms, i) => '<option value="' + ms + '">' + ['Short', 'Normal', 'Long'][i] + '</option>').join('') + '</select>' +
+    '<p class="vs-hint">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s. A short pause can cut you off mid-sentence.</p>' +
+    '<label class="vs-row" for="vs-speed"><span>Voice speed</span><b class="vs-speed-val"></b></label>' +
+    '<input type="range" id="vs-speed" class="vs-level vs-speed" min="0.75" max="1.5" step="0.05">' +
+    '<p class="vs-hint">' + VOICE_SPEED_HINT + '</p>' +
     '<button type="button" class="vs-btn vs-room">Room check</button>' +
     '<div class="vs-room-out" role="status" aria-live="polite"></div>' +
     '<label class="vs-check"><input type="checkbox" class="vs-read"> <span>Read replies aloud</span></label>' +
     '<p class="vs-hint">After a message you dictated with the mic, the reply is read when it ends. The speaker on a reply reads it any time.</p>' +
+    '<label class="vs-check"><input type="checkbox" class="vs-activity"> <span>Say what the agent is doing</span></label>' +
     '<label class="vs-check"><input type="checkbox" class="vs-fallback"> <span>Use this device&#39;s own offline voice when the hub voice is unavailable</span></label>' +
     '<button type="button" class="vs-btn vs-sample">Play sample</button></div>';
   const close = () => { voiceTestStop(); voiceStopPlayback(); voiceRoomStop(); sh.classList.remove('open'); dialogGuard.closed(sh); };
@@ -5553,6 +5703,12 @@ function voiceSheet() {
   const sens = sh.querySelector('.vs-sens');
   sens.addEventListener('input', () => { sh.querySelector('.vs-sens-val').textContent = sens.value; if (voiceCall) voiceCall.vad.setInterruptSensitivity(Number(sens.value)); });
   sens.addEventListener('change', () => voicePrefsSave({ interruptSensitivity: Number(sens.value) }));
+  const pause = sh.querySelector('.vs-pause');
+  pause.addEventListener('change', () => { voicePrefsSave({ endPause: Number(pause.value) }); if (voiceCall) voiceCall.vad.setEndPause(Number(pause.value)); });
+  const speed = sh.querySelector('.vs-speed');
+  speed.addEventListener('input', () => { sh.querySelector('.vs-speed-val').textContent = voiceSpeedLabel(speed.value); });
+  speed.addEventListener('change', () => voicePrefsSave({ voiceSpeed: voiceCleanSpeed(speed.value) }));
+  sh.querySelector('.vs-activity').addEventListener('change', (e) => voicePrefsSave({ speakActivity: !!e.target.checked }));
   for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { voicePrefsSave({ mode: e.target.value }); voiceMicPaint(); paintVoiceSheet(); } });
   sh.querySelector('.vs-room').addEventListener('click', voiceRoomRun);
   sh.querySelector('.vs-read').addEventListener('change', (e) => voicePrefsSave({ readAloud: !!e.target.checked }));
@@ -5571,6 +5727,11 @@ function paintVoiceSheet() {
   if (document.activeElement !== level) { level.value = String(p.micLevel); sh.querySelector('.vs-val').textContent = String(p.micLevel); }
   const sens = sh.querySelector('.vs-sens');
   if (document.activeElement !== sens) { sens.value = String(p.interruptSensitivity); sh.querySelector('.vs-sens-val').textContent = String(p.interruptSensitivity); }
+  const pauseEl = sh.querySelector('.vs-pause');
+  if (document.activeElement !== pauseEl) pauseEl.value = String(voiceEndPauseNow());
+  const speedEl = sh.querySelector('.vs-speed');
+  if (document.activeElement !== speedEl) { speedEl.value = String(voiceSpeedNow()); sh.querySelector('.vs-speed-val').textContent = voiceSpeedLabel(voiceSpeedNow()); }
+  sh.querySelector('.vs-activity').checked = !!p.speakActivity;
   for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.checked = r.value === p.mode;
   sh.querySelector('.vs-help').textContent = (p.mode === 'tap' ? 'Tap to talk: tap the mic to dictate a message, tap it again to stop. ' : 'Hands-free: tap the mic to start a call, talk any time, and hang up with the red button. ') + VOICE_CALL_HELP;
   sh.querySelector('.vs-read').checked = !!p.readAloud;

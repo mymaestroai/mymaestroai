@@ -196,6 +196,36 @@ test('POST tts: audio/wav with X-Voice-Ms; voice = given, else the agent\'s, els
   t.cleanup();
 });
 
+test('POST tts: the text is cleaned before the engine (markdown and symbols out); text that is only code or symbols is a 400 nothing_to_say', async () => {
+  const t = setup();
+  const post = (b) => t.call(fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }));
+  const r = await post({ agent: 'maestro', text: '## Done\n\n- **Fixed** the `bug`, see https://example.com/x\n\n```js\nconst a = 1;\n```' });
+  assert.strictEqual(r.statusCode, 200);
+  const spoken = t.calls.tts[0].text;
+  assert.ok(!/[*`#]|https?:|const a/.test(spoken), spoken);
+  assert.ok(spoken.includes('Fixed the bug'), spoken);
+  const n = t.calls.tts.length;
+  const e = await post({ agent: 'maestro', text: '**' }); assert.strictEqual(e.statusCode, 400); assert.deepStrictEqual(e.json(), { error: 'nothing_to_say' });
+  const e2 = await post({ agent: 'maestro', text: '\u{1F600}\u{1F600}' }); assert.strictEqual(e2.statusCode, 400); assert.deepStrictEqual(e2.json(), { error: 'nothing_to_say' });
+  assert.strictEqual(t.calls.tts.length, n, 'no engine call for either');
+  t.cleanup();
+});
+
+test('voiceSpeechText is idempotent: cleaning already cleaned text gives the same text (so the server may clean what the page cleaned)', () => {
+  const { voiceSpeechText } = require('../lib/ui-voice');
+  const replies = [
+    '## Summary\n\n- **Fixed** the `bug` in [the docs](https://example.com/a), see https://example.com/b.\n- Done.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```js\nconst x = 1;\n```',
+    'Plain sentence. Another one, with a comma!',
+    'I did it \u{1F389} and it worked.',
+    '> quoted line\n1. first\n2) second',
+    '',
+  ];
+  for (const md of replies) {
+    const once = voiceSpeechText(md);
+    assert.strictEqual(voiceSpeechText(once), once, JSON.stringify(md));
+  }
+});
+
 test('POST tts: a voice that is not installed falls back to the default; an unknown voice id is a 400', async () => {
   const t = setup({ voices: ['lessac', 'alba'], defaultVoice: 'lessac' });
   const post = (b) => t.call(fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }));

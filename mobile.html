@@ -560,6 +560,7 @@
   #call-panel[data-state="speaking"] #cp-state { color: var(--accent-hover, var(--accent)); }
   #cp-meter { flex: 1; height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
   #cp-meter i { display: block; height: 100%; width: 0; background: var(--success, #00D395); transition: width .08s linear; }
+  #cp-activity { min-height: 1.2em; font-size: 13px; color: var(--text-dim); overflow-wrap: anywhere; }
   #cp-heard { min-height: 1.3em; font-size: 14px; color: var(--text-dim); overflow-wrap: anywhere; }
   #cp-held { display: flex; flex-direction: column; gap: 6px; }
   #cp-held:empty { display: none; }
@@ -718,6 +719,7 @@
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="call-panel" role="region" aria-label="Voice call" hidden>
       <div class="cp-top"><span id="cp-state" role="status" aria-live="polite">Starting</span><div id="cp-meter" aria-hidden="true"><i></i></div></div>
+      <div id="cp-activity" aria-live="off"></div>
       <div id="cp-heard" aria-live="off"></div>
       <div id="cp-held"></div>
       <label class="cp-dnd"><input type="checkbox" id="cp-dnd" role="switch"> <span>Do not disturb</span></label>

@@ -10306,18 +10306,83 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
     const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
     const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
-    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true };
-    function voiceSpeechText(markdown) {
+    const VOICE_END_PAUSES = [800, 1200, 2000];   // 'Pause before I'm done': short / normal / long, in ms
+    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false };
+    function voiceCleanSpeed(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
+    }
+    function voiceSpeedLabel(v) { return voiceCleanSpeed(v).toFixed(2) + 'x'; }
+    // The spoken-text cleaner's pieces (see voiceSpeechText).
+    const VOICE_SYMBOLS_RE = new RegExp('[\\u2190-\\u2BFF\\u2022\\u00B7]', 'g');
+    const VOICE_NUM_EN_DASH_RE = new RegExp('(\\d)\\s*\\u2013\\s*(?=\\d)', 'g');
+    const VOICE_DASH_RE = new RegExp('\\s*[\\u2013\\u2014\\u2015]\\s*', 'g');
+    const VOICE_DQUOTE_RE = new RegExp('[\\u201C\\u201D"]', 'g');
+    const VOICE_SQUOTE_RE = new RegExp('[\\u2018\\u2019]', 'g');
+    const VOICE_ELLIPSIS_RE = new RegExp('\\u2026', 'g');
+    const VOICE_SEG = '\\/[\\w.@+~-]*[\\w@+~-]';
+    function voicePathsToWords(t) {
+      const isPath = (m) => (m.match(/\//g) || []).length >= 2 || /\.[A-Za-z0-9]{1,8}$/.test(m);
+      t = t.replace(/(^|[^\w/.~@-])[A-Za-z]:\\[^\s]*[^\s.,;:!?)\]'"]/g, '$1a file path');
+      t = t.replace(new RegExp('(^|[^\\w/.~@-])((?:~|\\.{1,2})(?:' + VOICE_SEG + ')+|(?:' + VOICE_SEG + '){2,}|' + VOICE_SEG + '(?=\\.[A-Za-z0-9]{1,8}\\b)(?:\\.[A-Za-z0-9]{1,8})?)', 'g'),
+        (m, lead, p) => lead + (isPath(p) || /^\/[\w@+~-]*\.\w/.test(p) ? 'a file path' : p));
+      t = t.replace(new RegExp('(^|[^\\w/.~@-])((?=[\\w.-]*[A-Za-z])[\\w.-]+(?:' + VOICE_SEG + ')+)', 'g'), (m, lead, p) => lead + (isPath(p) ? 'a file path' : p));
+      return t;
+    }
+    function voiceCleanInline(s) {
+      s = s.replace(/[\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}\p{Cf}\u{FE0E}\u{FE0F}\u{20E3}]/gu, '')   // emoji and zero-width marks
+        .replace(VOICE_SYMBOLS_RE, ' ');                                    // arrows, math signs, boxes, dingbats, bullets
+      s = s.replace(/[-=]+>|<[-=]+/g, ' ');                                 // -> => <-
+      s = s.replace(VOICE_NUM_EN_DASH_RE, '$1 to ');                        // 5 en dash 10
+      s = s.replace(VOICE_DASH_RE, ', ');                                   // en/em dash as a separator: a pause
+      s = s.replace(/(^|[\s(])-{1,2}(?=[A-Za-z])/g, '$1');                  // a command-line flag: -x --force
+      s = s.replace(/(^|[\s(])-(?=\d)/g, '$1minus ');
+      s = s.replace(/\s*-{2,}\s*/g, ', ').replace(/\s+-(?=\s|$)/g, ', ');   // -- or a lone dash between spaces
+      s = s.replace(/(^|\s)-+(?=\S)/g, '$1').replace(/(\S)-+(?=\s|$)/g, '$1');   // a dash stuck to the edge of a word (hyphens inside words stay)
+      s = s.replace(/&/g, ' and ').replace(/%/g, ' percent').replace(/@/g, ' at ').replace(/=+/g, ' equals ');
+      s = s.replace(/(\d)\s*\+\s*(?=\d)/g, '$1 plus ').replace(/(\d)\+(?=\W|$)/g, '$1 plus');
+      s = s.replace(/<\/?[A-Za-z][^<>]*>/g, ' ');
+      s = s.replace(/[*`#~^|\\<>+{}\[\]()]/g, ' ').replace(/\//g, ' ');
+      s = s.replace(/\b_+|_+\b/g, '').replace(/_/g, ' ');
+      s = s.replace(VOICE_DQUOTE_RE, '').replace(VOICE_SQUOTE_RE, '\'').replace(VOICE_ELLIPSIS_RE, '...');
+      s = s.replace(/\s+/g, ' ').trim();
+      for (let i = 0; i < 3; i++) s = s.replace(/\s+([,.;:!?])/g, '$1').replace(/([,;:])(?:\s*[,;:])+/g, '$1').replace(/([.!?])\s*,/g, '$1').replace(/,\s*([.!?])/g, '$1');
+      return s.replace(/^[,;:\s]+/, '').replace(/,$/, '').trim();
+    }
+    function voiceSpeechText(markdown, open) {
       let t = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
       let hadDetails = false;
       t = t.replace(/(^|\n)[ \t]*(```|~~~)[\s\S]*?(\n[ \t]*(```|~~~)[^\n]*|$)/g, (m, lead) => { hadDetails = true; return lead; });
       t = t.split('\n').filter(l => { if (/^\s*\|/.test(l)) { hadDetails = true; return false; } return true; }).join('\n');
       t = t.replace(/!?\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');
       t = t.replace(/(?:https?:\/\/|www\.)[^\s<>)\]]*[^\s<>)\].,;:!?'"]/gi, 'a link');
-      t = t.replace(/^[ \t]*#{1,6}[ \t]+/gm, '').replace(/^[ \t]*(?:>[ \t]?)+/gm, '').replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '');
-      t = t.replace(/[*`#]+/g, '').replace(/\b_+|_+\b/g, '').replace(/_/g, ' ');
-      t = t.replace(/[\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}\u{200D}\u{FE0E}\u{FE0F}\u{20E3}]/gu, '');
-      t = t.replace(/\s+/g, ' ').trim();
+      t = voicePathsToWords(t);
+      // Lines -> blocks: a heading, a list item or a bold-only line is a block of its own, a blank line or a rule ends one,
+      // other lines of a paragraph join. Each block is cleaned and ends with a full stop, so lines never run together.
+      const blocks = [];
+      let cur = '', curOwn = false;
+      const flush = () => { if (cur.trim()) blocks.push(cur.trim()); cur = ''; curOwn = false; };
+      for (const raw of t.split('\n')) {
+        const line = raw.replace(/\s+$/, '');
+        if (!line.trim() || /^\s*([-*_=~])(?:\s*\1){2,}\s*$/.test(line)) { flush(); continue; }
+        let s = line.replace(/^[ \t]*(?:>[ \t]?)+/, '');
+        const head = /^[ \t]*#{1,6}[ \t]+/.test(s), item = /^[ \t]*(?:[-*+•]|\d+[.)])[ \t]+/.test(s);
+        s = s.replace(/^[ \t]*#{1,6}[ \t]+/, '').replace(/^[ \t]*(?:[-*+•]|\d+[.)])[ \t]+/, '');
+        const bold = /^\s*(\*\*|__)[^*_]+\1\s*:?\s*$/.test(s);
+        if (head || item || bold) { flush(); cur = s; curOwn = true; }
+        else if (!cur) cur = s;
+        else if (curOwn && !/^(?:[ \t]{2,}|\t)/.test(raw)) { flush(); cur = s; }   // text under a heading or item starts its own block
+        else cur += ' ' + s;
+      }
+      flush();
+      const done = [];
+      blocks.forEach((raw, i) => {
+        const b = voiceCleanInline(raw);
+        if (!b) return;
+        // open: the text is still being written, so its last block is not finished and gets no full stop yet
+        done.push(/[.!?:;]["')’\]]*$/.test(b) || (open && i === blocks.length - 1) ? b : b + '.');
+      });
+      t = done.join(' ').replace(/\s+/g, ' ').trim();
       return hadDetails ? (t + VOICE_DETAILS_NOTE).trim() : t;
     }
     function voiceSplitLong(s, max) {
@@ -10432,7 +10497,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (typeof raw[k] === 'number' && Number.isFinite(raw[k])) p[k] = Math.max(0, Math.min(100, raw[k]));
       }
       if (raw.mode === 'handsfree' || raw.mode === 'tap') p.mode = raw.mode;
-      for (const k of ['readAloud', 'deviceVoiceFallback']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
+      if (VOICE_END_PAUSES.includes(raw.endPause)) p.endPause = raw.endPause;
+      if (typeof raw.voiceSpeed === 'number' && Number.isFinite(raw.voiceSpeed)) p.voiceSpeed = voiceCleanSpeed(raw.voiceSpeed);
+      for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
       return p;
     }
     function voiceLoadPrefs(storage) {
@@ -10488,6 +10555,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
     // ── voice call (begin) ──
     const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
+    const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_STILL_LINE = 'Still working on it.';
     const VOICE_CALL_FILLERS = new Set(['uh', 'um', 'umm', 'uhh', 'er', 'erm', 'ah', 'hmm', 'hm', 'mm', 'mmm', 'huh']);
     const VOICE_CALL_ORDINALS = [['first', '1st', 'one', '1'], ['second', '2nd', 'two', '2'], ['third', '3rd', 'three', '3'], ['fourth', '4th', 'four', '4'], ['fifth', '5th', 'five', '5']];
     function voiceCallNorm(text) {
@@ -10553,7 +10621,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceReplySentences(markdown, done) {
       const note = voiceSpeechText('| a |');
-      let t = voiceSpeechText(markdown), hasNote = false;
+      let t = voiceSpeechText(markdown, !done), hasNote = false;
       if (t === note) { t = ''; hasNote = true; } else if (t.endsWith(' ' + note)) { t = t.slice(0, -note.length).trim(); hasNote = true; }
       const sentences = voiceSentences(t).filter(Boolean);
       if (!done && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(String(markdown)))) sentences.pop();
@@ -10561,7 +10629,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceCreateCall(deps) {
       const d = deps || {};
-      const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {} }, d.ui);
+      const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {} }, d.ui);
       const server = d.server || {}, vad = d.vad || {};
       const now = () => d.now();
       const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
@@ -10572,13 +10640,36 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
       let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
       let callId = null, startP = null, sttPending = 0, speechAnn = null, cutRec = null, lastDone = false;
+      // Joining pieces of one sentence: lastSeg is the latest speech segment (its transcript may still be pending), curCand the
+      // earlier segment a new one may join, segActive that a segment has begun and has not ended.
+      let lastSeg = null, curCand = null, segActive = false;
+      // "Still working on it.": when something was last spoken, when the running turn began, whether the line was said since.
+      let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null;
 
+      function clearStill() { if (stillTimer !== null) { quiet(() => d.clearTimer(stillTimer)); stillTimer = null; } }
+      // One spoken "Still working on it." when a turn runs and nothing was said for 20 s; not again until something else is said.
+      function armStill() {
+        if (ended || stillTimer !== null || stillSaid || !awaitingReply) return;
+        const since = Math.max(lastSpokenAt === null ? -Infinity : lastSpokenAt, turnAt === null ? -Infinity : turnAt);
+        const wait = Number.isFinite(since) ? Math.max(200, VOICE_CALL_STILL_MS - (now() - since)) : VOICE_CALL_STILL_MS;
+        stillTimer = d.setTimer(checkStill, wait);
+      }
+      function checkStill() {
+        stillTimer = null;
+        if (ended || stillSaid || !awaitingReply) return;
+        if (speaking || personSpeaking || sttPending || pendingAsk || pendingAnnounce || queue.length) return;   // settle() arms it again when it is quiet
+        const since = Math.max(lastSpokenAt === null ? -Infinity : lastSpokenAt, turnAt === null ? -Infinity : turnAt);
+        if (Number.isFinite(since) && now() - since < VOICE_CALL_STILL_MS) { armStill(); return; }
+        stillSaid = true;
+        enqueue(VOICE_CALL_STILL_LINE, 'still');
+      }
       function setState(name) { if (name === state) return; state = name; quiet(() => ui.state(name, '')); }
       function settle() {
         if (ended) return;
         if (!speaking && !personSpeaking && queue.length) { runQueue(); return; }   // lines that waited while the person spoke are read now
         setState(speaking ? 'speaking' : personSpeaking ? 'hearing' : awaitingReply ? 'thinking' : 'listening');
         pumpAnnounce();
+        armStill();
       }
       function runAfter(item) { if (item && item.after) { const f = item.after; item.after = null; quiet(f); } }
       function enqueue(text, kind, after, onStart) {
@@ -10593,9 +10684,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           current = queue.shift();
           if (current.onStart) { const f = current.onStart; current.onStart = null; quiet(f); }   // the line really starts playing
           let ok = true;
+          lastSpokenAt = now();
           try { ok = await d.speak(current.text); } catch { ok = false; }
           if (my !== gen) return;
           const item = current; current = null;
+          lastSpokenAt = now();
+          if (item.kind !== 'still') stillSaid = false;   // something new was said: the next long silence may be filled again
           if (ok === false) { for (const q of queue) runAfter(q); queue = []; }
           runAfter(item);
         }
@@ -10627,12 +10721,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (done) {
           if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply');
           noteSpoken = true; awaitingReply = false;
+          clearStill(); quiet(() => ui.activity(''));
           if (!speaking) settle();
         }
       }
+      // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
       function onActivity(item) {
-        if (ended || state !== 'thinking' || speaking || personSpeaking || pendingAsk || pendingAnnounce) return;
+        if (ended) return;
         if (!awaitingReply && !quiet(() => d.isTurnRunning())) return;
+        quiet(() => ui.activity(voiceStatusLine(item)));
+        if (state !== 'thinking' || speaking || personSpeaking || pendingAsk || pendingAnnounce) return;
+        if (!quiet(() => d.speakActivity && d.speakActivity())) return;
         if (lastStatusAt !== null && now() - lastStatusAt < VOICE_CALL_STATUS_GAP_MS) return;
         lastStatusAt = now();
         enqueue(voiceStatusLine(item), 'status');
@@ -10728,13 +10827,31 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // must not leave the call deaf and mute: after 4 s without real speech, a misfire or an end, it is let go.
       let beginTimer = null;
       const clearBegin = () => { if (beginTimer !== null) { quiet(() => d.clearTimer(beginTimer)); beginTimer = null; } };
+      // A new speech segment begins. When the previous one ended less than 2 s ago and its transcript is not sent yet (still
+      // being transcribed, or waiting in line), the previous one is held back: it is joined with this segment into one message.
+      function segmentStarting() {
+        if (segActive) return;
+        segActive = true;
+        const c = lastSeg;
+        if (c && !c.done && !c.hold && now() - c.endAt <= VOICE_CALL_JOIN_MS) {
+          let resolve; const promise = new Promise((r) => { resolve = r; });
+          c.hold = { promise, resolve }; curCand = c;
+        } else curCand = null;
+      }
+      // The segment was a false start: the held one is sent on its own after all.
+      function segmentDropped() {
+        segActive = false;
+        const c = curCand; curCand = null;
+        if (c && c.hold) { c.hold.resolve(null); c.hold = null; }
+      }
       function onSpeechBegin() {
         if (ended || personSpeaking) return;
         personSpeaking = true;
         speechAnn = heardAnnouncement();
         clearBegin();
+        segmentStarting();
         // Real speech, a misfire and an end all clear this timer, so when it fires no real start came: let the false start go.
-        beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; settle(); } }, 4000);
+        beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; segmentDropped(); settle(); } }, 4000);
       }
       // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
       function onSpeechStart() {
@@ -10742,6 +10859,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         clearBegin();
         if (!personSpeaking) speechAnn = heardAnnouncement();   // no onSpeechBegin came first
         personSpeaking = true;
+        segmentStarting();
         if (speaking || queue.length) {
           const n = (current ? [current] : []).concat(queue).filter(i => i.kind === 'reply').length;
           const cutReply = cancelSpeaking();
@@ -10754,7 +10872,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
       function onMisfire() {
         if (ended) return;
-        clearBegin();
+        clearBegin(); segmentDropped();
         personSpeaking = false; speechAnn = null;
         const rec = cutRec; cutRec = null;
         if (rec) {
@@ -10768,19 +10886,33 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (ended) return Promise.resolve();
         clearBegin();
         personSpeaking = false; speechEndAt = now(); cutRec = null;
-        const ann = speechAnn; speechAnn = null;
+        const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null };
+        speechAnn = null; segActive = false;
+        const cand = curCand; curCand = null;
+        if (cand && cand.hold) cand.hold.resolve(mine);   // the earlier piece hands its text to this one
+        lastSeg = mine;
         sttPending++;
         settle();
         sttChain = sttChain.then(async () => {
           try {
-            let text = '';
-            try { text = await d.stt(audio); } catch { quiet(() => ui.toast('Could not transcribe that.')); return; }
+            let text = '', failed = false;
+            try { text = await d.stt(audio); } catch { failed = true; quiet(() => ui.toast('Could not transcribe that.')); }
             if (ended) return;
-            const t = String(text || '').trim(), n = voiceCallNorm(t);
-            if (n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w))) return;
+            const own = String(text || '').trim(), n = voiceCallNorm(own);
+            const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
+            let t = ownOk ? own : '';
+            if (mine.carry) t = ownOk ? (voiceIsStopCommand(own) ? own : mine.carry + ' ' + own) : mine.carry;   // a stop word in this piece wins over the earlier one
+            if (!t) return;
+            // A later piece started within 2 s: it takes this text along (unless this one is a stop command: stop wins at once).
+            if (mine.hold && !voiceIsStopCommand(t)) {
+              const next = await mine.hold.promise;
+              if (ended) return;
+              if (next) { next.carry = t; if (next.ann == null) next.ann = mine.ann; return; }
+            }
+            mine.done = true;
             quiet(() => ui.heard(t));
-            await route(t, ann);
-          } finally { sttPending--; settle(); }
+            await route(t, mine.ann);
+          } finally { mine.done = true; sttPending--; settle(); }
         });
         return sttChain;
       }
@@ -10805,14 +10937,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try {
           if (quiet(() => d.isTurnRunning())) {
             if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
-            awaitingReply = true; setState('thinking');
+            awaitingReply = true; turnAt = now(); stillSaid = false; setState('thinking'); armStill();
             await d.interject(t);
           } else {
-            awaitingReply = true; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = '';
-            setState('thinking');
+            awaitingReply = true; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; turnAt = now(); stillSaid = false;
+            setState('thinking'); armStill();
             await d.send(t);
           }
-        } catch { awaitingReply = false; quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
+        } catch { awaitingReply = false; clearStill(); quiet(() => ui.activity('')); quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
       }
 
       function beat() {
@@ -10852,7 +10984,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (endPromise) return endPromise;
         ended = true;
         for (const t of [hbTimer, pumpTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
-        hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin();
+        hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); clearStill();
+        for (const s of [lastSeg, curCand]) if (s && s.hold) s.hold.resolve(null);   // a held transcript is let go with the call
         quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
         const idKnown = callId || !startP ? Promise.resolve() : startP.catch(() => {});   // hanging up while the start is in flight waits for the id
         endPromise = idKnown.then(() => (callId ? server.end(callId) : { held: [] })).then(r => (r && Array.isArray(r.held) ? r.held : []), () => []).then((held) => {
@@ -10883,7 +11016,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceCreateVad(opts) {
       const o = opts || {};
       const base = o.baseUrl || '/api/voice/web/';
-      const st = { micLevel: o.micLevel, sens: o.interruptSensitivity, playing: false, vad: null, ctx: null, gain: null, raw: null };
+      const pause = (v) => (VOICE_END_PAUSES.includes(Number(v)) ? Number(v) : 1200);   // how long a pause ends the person's turn (ms)
+      const st = { micLevel: o.micLevel, sens: o.interruptSensitivity, pause: pause(o.endPause), playing: false, vad: null, ctx: null, gain: null, raw: null };
       const win = () => o.win || window;
       const loadScript = o.loadScript || ((src) => new Promise((resolve, reject) => {
         const el = win().document.createElement('script');
@@ -10919,7 +11053,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             },
             pauseStream: async () => {}, resumeStream: async (s) => s,
             positiveSpeechThreshold: t.positiveSpeechThreshold, negativeSpeechThreshold: t.negativeSpeechThreshold,
-            redemptionMs: 384, preSpeechPadMs: 256, minSpeechMs: t.minSpeechFrames * 32,
+            redemptionMs: st.pause, preSpeechPadMs: 256, minSpeechMs: t.minSpeechFrames * 32,
             // vad-web 0.0.31: onSpeechStart fires on the first speech-like frame, onSpeechRealStart once minSpeechMs is reached.
             // A candidate start marks the person as speaking (nothing new starts over them); playback is cut on the real start
             // only; a candidate that never gets there ends in onVADMisfire.
@@ -10944,6 +11078,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         setPlaybackActive(on) { st.playing = !!on; apply(); },
         setMicLevel(v) { st.micLevel = v; if (st.gain) st.gain.gain.value = voiceGainFromSlider(v); },
         setInterruptSensitivity(v) { st.sens = v; apply(); },
+        // 'Pause before I'm done': only the END of a turn waits this long; the start of speech (barge-in) is not delayed.
+        setEndPause(ms) { st.pause = pause(ms); if (st.vad) st.vad.setOptions({ redemptionMs: st.pause }); },
       };
     }
     // ── voice call (end) ──
@@ -11021,6 +11157,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceMicLevelNow() { const v = Number(voicePrefsNow().micLevel); return Number.isFinite(v) ? v : 50; }
     function voiceSensNow() { const v = Number(voicePrefsNow().interruptSensitivity); return Number.isFinite(v) ? v : 50; }
+    function voiceEndPauseNow() { const v = Number(voicePrefsNow().endPause); return VOICE_END_PAUSES.includes(v) ? v : 1200; }
+    function voiceSpeedNow() { const v = voicePrefsNow().voiceSpeed; return voiceCleanSpeed(v == null ? 1 : v); }
+    const voicePauseSelectHtml = (id, attrs) => `<select id="${id}" ${attrs} style="padding:4px">${VOICE_END_PAUSES.map((ms, i) => `<option value="${ms}"${ms === voiceEndPauseNow() ? ' selected' : ''}>${['Short', 'Normal', 'Long'][i]}</option>`).join('')}</select>`;
+    const VOICE_SPEED_HINT = 'Google voices ignore this setting.';
     const voiceReady = () => !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready);
     const voiceDeviceFallback = () => !!(voicePrefsNow().deviceVoiceFallback && window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined');
     // Mic buttons show only while the hub voice is on and ready; speaker buttons while a voice is available.
@@ -11175,7 +11315,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voicePlay.btn = null;
     }
     async function voiceFetchTts(agent, text, voice) {
-      const body = { agent, text };
+      const body = { agent, text, speed: voiceSpeedNow() };
       if (voice) body.voice = voice;
       const r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!r.ok) {
@@ -11221,7 +11361,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (voicePlay.token !== my) return;
         await new Promise((res) => {
           const u = new SpeechSynthesisUtterance(sentences[i]);
-          u.voice = voice; u.lang = voice.lang;
+          u.voice = voice; u.lang = voice.lang; u.rate = voiceSpeedNow();
           u.onend = res; u.onerror = res;
           window.speechSynthesis.speak(u);
         });
@@ -11231,7 +11371,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     async function voiceSpeakText(agent, md, btn, opts = {}) {
       voiceStopPlayback();
       const my = voicePlay.token;
-      const sentences = opts.sentences || voiceSentences(voiceSpeechText(md));
+      // Every spoken string goes through the cleaner (voiceSpeechText): replies, call lines, the sample.
+      const sentences = opts.sentences ? opts.sentences.map(s => voiceSpeechText(s)).filter(Boolean) : voiceSentences(voiceSpeechText(md));
       if (!sentences || !sentences.length) return;
       voicePlay.btn = btn || null; voicePlayState(btn, true);
       try {
@@ -11288,6 +11429,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Mic level', `<input type="range" min="0" max="100" step="1" id="st-voice-mic" value="${voiceMicLevelNow()}" oninput="voiceSettingMicInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-mic-val" style="min-width:2.5em;display:inline-block">${voiceMicLevelNow()}</span> <span class="voice-meter"><i id="st-voice-meter"></i></span> <button class="st-test-btn" id="st-voice-testmic" type="button" onclick="voiceTestMic()">Test the mic</button>`);
       h += row('Talk mode', `<select id="st-voice-mode" onchange="voiceSettingsSavePrefs()" style="padding:4px"><option value="handsfree" ${p.mode !== 'tap' ? 'selected' : ''}>Hands-free</option><option value="tap" ${p.mode === 'tap' ? 'selected' : ''}>Tap to talk</option></select>`);
       h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
+      h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs()"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s.</span>`);
+      h += row('Voice speed', `<input type="range" min="0.75" max="1.5" step="0.05" id="st-voice-speed" value="${voiceSpeedNow()}" oninput="voiceSettingSpeedInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-speed-val" style="min-width:3.5em;display:inline-block">${voiceSpeedLabel(voiceSpeedNow())}</span> <span class="st-hint" style="margin:0 0 0 8px">${VOICE_SPEED_HINT}</span>`);
+      h += row('Activity', `<label style="${CHK}"><input type="checkbox" id="st-voice-speakactivity" ${p.speakActivity ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Say what the agent is doing</label>`);
       h += row('Room check', `<button class="st-test-btn" id="st-voice-room" type="button" onclick="voiceRoomCheckRun()">Room check</button> <span id="st-voice-room-out" class="st-hint" style="margin:0 0 0 8px" aria-live="polite">5 seconds: say a sentence, then stay quiet. It sets the mic level and the interrupt sensitivity.</span>`);
       h += row('Replies', `<label style="${CHK}"><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
       h += row('Fallback', `<label style="${CHK}"><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use this device's own offline voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
@@ -11375,10 +11519,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceSettingsSavePrefs() {
       const mic = voiceById('st-voice-mic'), ra = voiceById('st-voice-readaloud'), fb = voiceById('st-voice-fallback');
       const mode = voiceById('st-voice-mode'), sens = voiceById('st-voice-sens');
-      if (!mic || !ra || !fb || !mode || !sens) return;
-      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens]);
-      const prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked };
-      if (voiceCallS.vad) { voiceCallS.vad.setMicLevel(prefs.micLevel); voiceCallS.vad.setInterruptSensitivity(prefs.interruptSensitivity); }
+      const pause = voiceById('st-voice-pause'), speed = voiceById('st-voice-speed'), act = voiceById('st-voice-speakactivity');
+      if (!mic || !ra || !fb || !mode || !sens || !pause || !speed || !act) return;
+      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, speed, act]);
+      const prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
+        endPause: Number(pause.value), voiceSpeed: voiceCleanSpeed(speed.value), speakActivity: act.checked };
+      if (voiceCallS.vad) { voiceCallS.vad.setMicLevel(prefs.micLevel); voiceCallS.vad.setInterruptSensitivity(prefs.interruptSensitivity); voiceCallS.vad.setEndPause(prefs.endPause); }
       voiceSavePrefs(localStorage, prefs);
       voicePrefsCache = prefs;
       saved();
@@ -11453,7 +11599,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // Reads one line with the hub voice (or the offline device voice). Resolves false when it was cut.
     async function voiceCallSpeak(agent, text) {
-      const sentences = voiceSentences(String(text || '')).filter(Boolean);
+      const sentences = voiceSentences(voiceSpeechText(String(text || ''))).filter(Boolean);
       if (!sentences.length) return true;
       const mine = voicePlay.token + 1;   // voiceSpeakText stops the previous one first: one step on the token
       await voiceSpeakText(agent, text, null, { sentences });
@@ -11524,6 +11670,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         speak: (text) => voiceCallSpeak(agent, text),
         cancelSpeech: () => voiceStopPlayback(),
         answerAsk: (id, text) => voiceCallAnswerAsk(agent, id, text),
+        speakActivity: () => !!voicePrefsNow().speakActivity,   // off by default: what the agent is doing is shown in the bar, not spoken
         server: {
           // The call's id (callId) comes with the start answer; the controller passes it back with every later request.
           start: (mode) => voiceCallApi('/api/voice/call', { agent, action: 'start', mode }).then(r => ({ callId: r.call && r.call.callId, held: (r.call && r.call.held) || [] })),
@@ -11541,6 +11688,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         ui: {
           state: (name) => { const s = barEl('state'); if (s) s.textContent = VOICE_CALL_STATE_TEXT[name] || name; },
           level: (db) => { const i = barEl('level'); if (i) i.style.width = `${voiceMeterPercent(db)}%`; },
+          activity: (text) => { const a = barEl('activity'); if (a) a.textContent = text || ''; },   // silent: shown in the call bar only
           heard: (text) => { const h = barEl('heard'); if (h) h.textContent = text ? `Heard: ${text}` : ''; },
           held: (list) => voiceCallPaintHeld(chatId, list),
           toast: (msg) => hubToast(msg),
@@ -11557,7 +11705,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <div class="vcb-sliders">
           <label>Mic level <input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vcb="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
           <label>Interrupt sensitivity <input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vcb="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>
+          <label>Pause before I'm done ${voicePauseSelectHtml(id('pause'), 'data-vcb="pause"')}</label>
+          <label>Voice speed <input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vcb="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span> <small>${VOICE_SPEED_HINT}</small></label>
         </div>
+        <div class="vcb-activity" id="${id('activity')}" aria-live="off"></div>
         <div class="vcb-heard" id="${id('heard')}"></div>
         <div class="vcb-held" id="${id('held')}"></div>
         <div class="vcb-help">${VOICE_CALL_HELP}</div>`;
@@ -11579,26 +11730,29 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       });
       bar.addEventListener('input', (e) => {
         const t = e.target;
-        if (t.dataset && (t.dataset.vcb === 'mic' || t.dataset.vcb === 'sens')) voiceCallSlider(chatId, t.dataset.vcb, Number(t.value), false);
+        if (t.dataset && (t.dataset.vcb === 'mic' || t.dataset.vcb === 'sens' || t.dataset.vcb === 'speed')) voiceCallSlider(chatId, t.dataset.vcb, Number(t.value), false);
       });
       bar.addEventListener('change', (e) => {
         const t = e.target;
         if (!t.dataset) return;
-        if (t.dataset.vcb === 'mic' || t.dataset.vcb === 'sens') voiceCallSlider(chatId, t.dataset.vcb, Number(t.value), true);
+        if (t.dataset.vcb === 'mic' || t.dataset.vcb === 'sens' || t.dataset.vcb === 'speed' || t.dataset.vcb === 'pause') voiceCallSlider(chatId, t.dataset.vcb, Number(t.value), true);
         else if (t.dataset.vcb === 'dnd' && voiceCallS.call) voiceCallS.call.setMode(t.checked ? 'dnd' : 'announce');
       });
     }
     function voiceCallHideBar(chatId) { const b = voiceById(`voice-callbar-${chatId}`); if (b) b.remove(); }
     // A slider of the call bar: live on the VAD at once, saved to the prefs when released.
     function voiceCallSlider(chatId, which, v, save) {
-      const val = voiceById(`vcb-${which}-val-${chatId}`); if (val) val.textContent = String(v);
+      const val = voiceById(`vcb-${which}-val-${chatId}`); if (val) val.textContent = which === 'speed' ? voiceSpeedLabel(v) : String(v);
       const vad = voiceCallS.vad;
-      if (vad) { if (which === 'mic') vad.setMicLevel(v); else vad.setInterruptSensitivity(v); }
+      if (vad) { if (which === 'mic') vad.setMicLevel(v); else if (which === 'sens') vad.setInterruptSensitivity(v); else if (which === 'pause') vad.setEndPause(v); }
+      if (which === 'speed') voicePrefsCache = { ...voicePrefsNow(), voiceSpeed: voiceCleanSpeed(v) };   // the next sentence is already spoken at the new speed
       if (!save) return;
-      const prefs = { ...voicePrefsNow(), [which === 'mic' ? 'micLevel' : 'interruptSensitivity']: v };
+      const key = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause' }[which];
+      const prefs = { ...voicePrefsNow(), [key]: which === 'speed' ? voiceCleanSpeed(v) : v };
       voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
     }
     function voiceSettingSensInput(el) { const v = voiceById('st-voice-sens-val'); if (v) v.textContent = el.value; }
+    function voiceSettingSpeedInput(el) { const v = voiceById('st-voice-speed-val'); if (v) v.textContent = voiceSpeedLabel(el.value); }
     function voiceCallPaintHeld(chatId, list) {
       const box = voiceById(`vcb-held-${chatId}`);
       if (!box) return;
@@ -11649,7 +11803,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (voiceTest.mic || voiceTest.guard.pending || voiceRoom.active) { hubToast('The microphone is in use in Settings.'); return; }
       voiceRec.guard.cancel(); if (voiceRec.chatId) voiceMicStop(false);   // dictation ends, nothing uploaded
       voiceStopPlayback();
-      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: voiceSensNow() });
+      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: voiceSensNow(), endPause: voiceEndPauseNow() });
       const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad));
       S.call = call; S.vad = vad; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
       voiceCallPaintBtn(chatId, true);

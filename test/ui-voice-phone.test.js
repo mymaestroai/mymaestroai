@@ -63,7 +63,7 @@ test('read aloud: speaker on assistant bubbles, sentence by sentence TTS with pr
   assert.match(js, /b\.className = 'speak'/);
   assert.match(js, /const sp = e\.target\.closest\('\.speak'\)/);
   assert.match(js, /voiceSentences\(voiceSpeechText\(markdown\)\)/);
-  assert.match(js, /api\('\/api\/voice\/tts', \{ method: 'POST', headers: \{ 'Content-Type': 'application\/json' \}, body: JSON\.stringify\(\{ agent, text \}\) \}\)/);
+  assert.match(js, /api\('\/api\/voice\/tts', \{ method: 'POST', headers: \{ 'Content-Type': 'application\/json' \}, body: JSON\.stringify\(\{ agent, text, speed: voiceSpeedNow\(\) \}\) \}\)/);   // + the voice speed on every request (voice fixes 1)
   assert.match(js, /next = i \+ 1 < sentences\.length \? voiceTtsBlob\(agent, sentences\[i \+ 1\]\) : null/, 'next sentence is fetched while this one plays');
   assert.match(js, /function voiceStopPlayback\(\) \{\n\s*voicePlay\.token\+\+/);
   assert.match(js, /function voiceSpeak\(markdown, agent, el\) \{\n\s*voiceStopPlayback\(\)|async function voiceSpeak\(markdown, agent, el\) \{\n\s*voiceStopPlayback\(\)/, 'a new playback stops the old one');
@@ -116,13 +116,14 @@ test('device voice is offline only: the utterance gets a localService voice, no 
   const run = (voices) => {
     const spoken = [], toasts = [];
     const synth = { getVoices: () => voices, speak(u) { spoken.push(u); setImmediate(() => u.onend()); } };
-    const f = new Function('window', 'SpeechSynthesisUtterance', 'voicePlay', 'voiceWaitLocalVoice', 'toast', dev + '\nreturn voiceDeviceSpeak;')({ speechSynthesis: synth }, class { constructor(t) { this.text = t; } }, { token: 1 }, L.voiceWaitLocalVoice, (t) => toasts.push(t));
+    const f = new Function('window', 'SpeechSynthesisUtterance', 'voicePlay', 'voiceWaitLocalVoice', 'toast', 'voiceSpeedNow', dev + '\nreturn voiceDeviceSpeak;')({ speechSynthesis: synth }, class { constructor(t) { this.text = t; } }, { token: 1 }, L.voiceWaitLocalVoice, (t) => toasts.push(t), () => 1.25);
     return f(['One.', 'Two.'], 1).then(() => ({ spoken, toasts }));
   };
   const local = { name: 'L', lang: 'en-US', localService: true, default: false };
   const a = await run([{ name: 'Online', lang: 'en-US', localService: false, default: true }, local]);
   assert.deepStrictEqual(a.spoken.map(u => u.text), ['One.', 'Two.']);
   assert.ok(a.spoken.every(u => u.voice === local), 'the offline voice, not the default online one');
+  assert.ok(a.spoken.every(u => u.rate === 1.25), 'the device voice speaks at the voice speed (utterance.rate)');
   const b = await run([{ name: 'Online', lang: 'en-US', localService: false, default: true }]);
   assert.deepStrictEqual(b.spoken, [], 'nothing is spoken');
   assert.deepStrictEqual(b.toasts, ['This device has no offline voice; turn on voice in Settings']);

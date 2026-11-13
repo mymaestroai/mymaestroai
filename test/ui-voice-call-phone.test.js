@@ -22,7 +22,7 @@ test('mic button: hands-free tap starts a call synchronously, a second tap hangs
   assert.ok(!start.includes('await '), 'voiceCallStart awaits nothing');
   assert.ok(start.indexOf('voiceMicCancel()') < start.indexOf('vc.call.start()'), 'dictation stops first');
   assert.ok(start.indexOf('voiceStopPlayback()') < start.indexOf('vc.call.start()'), 'playback stops first');
-  assert.match(start, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/', micLevel: prefs\.micLevel, interruptSensitivity: prefs\.interruptSensitivity \}\)/);
+  assert.match(start, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/', micLevel: prefs\.micLevel, interruptSensitivity: prefs\.interruptSensitivity, endPause: voiceEndPauseNow\(\) \}\)/);   // + the end-of-turn pause (voice fixes 1)
   assert.match(start, /voiceCreateCall\(voiceCallDeps\(vc\)\)/);
   assert.match(js, /navigator\.wakeLock\.request\('screen'\)/);
 });
@@ -200,7 +200,7 @@ test('voiceCallStart calls call.start() inside the tap, before anything is await
     voiceCall: null, current: 'bob', toast: (t) => order.push('toast:' + t), voiceOn: () => true,
     voiceRec: { state: 'recording' }, voiceMicCancel: () => order.push('micCancel'), voiceTest: { handle: null }, voiceTestStop() {}, voiceRoomStop: () => order.push('roomStop'),
     voiceStopPlayback: () => order.push('stopPlayback'), voiceUnlockAudio: () => order.push('unlock'),
-    voicePrefsNow: () => ({ micLevel: 60, interruptSensitivity: 40 }),
+    voicePrefsNow: () => ({ micLevel: 60, interruptSensitivity: 40 }), voiceEndPauseNow: () => 1200,
     voiceCreateVad: (o) => { order.push('vad:' + o.micLevel + ':' + o.interruptSensitivity); return {}; },
     voiceCreateCall: () => ({ start: () => { order.push('call.start'); return new Promise(() => {}); } }),
     voiceCallDeps: () => ({}), voiceCallPanel: () => order.push('panel'), voiceCallPaintState: () => {}, voiceMicPaint: () => order.push('micPaint'),
@@ -278,8 +278,8 @@ test('speak resolves false when cut (the token moves), true when played, falls b
   const run = async ({ on = true, blob = {}, ok = true, cutDuring = false, fallback = true }) => {
     const voicePlay = { token: 3 };
     const dev = [];
-    const f = new Function('voicePlay', 'voiceOn', 'voiceTtsBlob', 'voicePlayBlob', 'voicePrefsNow', 'voiceDeviceSpeak', src + '\nreturn voiceCallSpeak;')(
-      voicePlay, () => on, async () => blob, async () => { if (cutDuring) voicePlay.token++; return ok; }, () => ({ deviceVoiceFallback: fallback }), async (s) => { dev.push(s); return true; });
+    const f = new Function('voicePlay', 'voiceOn', 'voiceTtsBlob', 'voicePlayBlob', 'voicePrefsNow', 'voiceDeviceSpeak', 'voiceSpeechText', src + '\nreturn voiceCallSpeak;')(
+      voicePlay, () => on, async () => blob, async () => { if (cutDuring) voicePlay.token++; return ok; }, () => ({ deviceVoiceFallback: fallback }), async (s) => { dev.push(s); return true; }, require('../lib/ui-voice').voiceSpeechText);
     return { r: await f('bob', 'Hi.'), dev };
   };
   assert.deepStrictEqual(await run({}), { r: true, dev: [] });

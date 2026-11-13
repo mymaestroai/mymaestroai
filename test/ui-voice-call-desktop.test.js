@@ -120,7 +120,7 @@ function makeEnv(opts = {}) {
     onHeld(i, q) { fakeCall.held.push([i, q]); }, onHeldDone(id, choice) { fakeCall.heldDone.push([id, choice]); },
     setMode(m) { fakeCall.modes.push(m); }, decide(id, c) { fakeCall.decisions.push([id, c]); },
   };
-  const vad = { setMicLevel(v) { calls.vadCalls.push(['mic', v]); }, setInterruptSensitivity(v) { calls.vadCalls.push(['sens', v]); } };
+  const vad = { setMicLevel(v) { calls.vadCalls.push(['mic', v]); }, setInterruptSensitivity(v) { calls.vadCalls.push(['sens', v]); }, setEndPause(v) { calls.vadCalls.push(['pause', v]); } };
   const chats = { c1: { agent: 'alice', status: 'idle', pendingImages: [] } };
   const agentStatus = {};
   let prefs = { micLevel: 60, interruptSensitivity: 40, mode: 'handsfree' };
@@ -143,6 +143,10 @@ function makeEnv(opts = {}) {
       else if (opts.sendOk) o.onSendResult(null);
     },
     voicePrefsNow: () => prefs, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
+    // voice fixes 1: pause before done, voice speed (the real ones are in app.js outside the wiring block)
+    voiceEndPauseNow: () => prefs.endPause || 1200, voiceSpeedNow: () => prefs.voiceSpeed || 1, voiceSpeedLabel: (v) => Number(v).toFixed(2) + 'x',
+    voiceCleanSpeed: (v) => Math.round(Math.max(0.75, Math.min(1.5, Number(v))) * 20) / 20,
+    voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, VOICE_SPEED_HINT: 'Google voices ignore this setting.',
     voiceSavePrefs: (s, p) => { prefs = p; calls.saved.push(p); },
     voicePrefsCacheSet: null,
     voiceById: (id) => get(id), voiceReady: () => opts.ready !== false,
@@ -185,7 +189,7 @@ test('start: deps contract, VAD options from prefs, bar above the box, button be
   const { api, calls, fakeCall, get } = makeEnv();
   await api.voiceCallStart('c1');
   assert.strictEqual(fakeCall.started, 1);
-  assert.deepStrictEqual({ ...calls.vadOpts }, { baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40 });
+  assert.deepStrictEqual({ ...calls.vadOpts }, { baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40, endPause: 1200 });   // + the end-of-turn pause (voice fixes 1)
   const d = calls.created[0];
   for (const k of ['agent', 'now', 'setTimer', 'clearTimer', 'prefs', 'vad', 'stt', 'isTurnRunning', 'send', 'interject', 'stop', 'speak', 'cancelSpeech', 'answerAsk', 'server', 'ui']) assert.ok(k in d, k);
   for (const k of ['start', 'heartbeat', 'mode', 'end', 'decide']) assert.strictEqual(typeof d.server[k], 'function', 'server.' + k);

@@ -11,9 +11,14 @@ const path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
 const lineOf = (needle, from = 0) => { const i = src.indexOf(needle, from); assert.ok(i >= 0, `missing: ${needle}`); return i; };
 
-test('VOICE_NOTE is the agreed sentence', () => {
+// Strengthened (voice fixes round 1): the owner heard dashes and symbols read out, so the note now says what the spoken part
+// must not contain; the old exact-text pin is replaced by this one.
+test('VOICE_NOTE is the agreed text: a plain spoken answer first, symbols and detail only in the written part', () => {
   const { VOICE_NOTE } = require('../lib/sdk-chat');
-  assert.strictEqual(VOICE_NOTE, 'This is a voice conversation: lead with a short spoken answer (one to three sentences) that makes sense heard aloud; put tables, code, lists and long detail after it in the chat.');
+  assert.strictEqual(VOICE_NOTE, 'This is a voice conversation: lead with a short spoken answer of one to three plain sentences, written to be heard, with no dashes, bullets, asterisks, slashes, arrows, emoji, parentheses, code, file paths, URLs or abbreviations that read badly, and with numbers, dates and times written the way you would say them. Put tables, lists, code, symbols and long detail only after the spoken answer, in the written part of the chat.');
+  for (const w of ['dashes', 'bullets', 'asterisks', 'slashes', 'arrows', 'emoji', 'parentheses', 'code', 'file paths', 'URLs', 'abbreviations', 'numbers, dates and times', 'after the spoken answer']) assert.ok(VOICE_NOTE.includes(w), w);
+  assert.ok(VOICE_NOTE.split(/[.!?]\s/).length <= 3, 'two or three sentences');
+  assert.ok([...VOICE_NOTE].every(ch => ch.charCodeAt(0) >= 32 && ch.charCodeAt(0) < 127), 'plain ASCII only: no invisible characters');
 });
 
 test('handleChatStreamReserved reads voice from the body and passes voice: !!voice to all three routes', () => {

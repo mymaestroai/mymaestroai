@@ -154,7 +154,8 @@ test('voiceVadThresholds', () => {
 
 test('voiceReplySentences and voiceJoinOr', () => {
   assert.deepStrictEqual(voiceReplySentences('One. Two. Thr', false).sentences, ['One.', 'Two.']);
-  assert.deepStrictEqual(voiceReplySentences('One. Two. Thr', true).sentences, ['One.', 'Two.', 'Thr']);
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Thr', true).sentences, ['One.', 'Two.', 'Thr.']);   // a finished text ends in a full stop: the cleaner adds it (changed on purpose)
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Thr ', false).sentences, ['One.', 'Two.'], 'a half-written last line never gets a full stop while the text streams');
   assert.deepStrictEqual(voiceReplySentences('One. Two. ', false).sentences, ['One.', 'Two.'], 'a finished last sentence counts');
   assert.deepStrictEqual(voiceReplySentences('Pi is 3.', false).sentences, [], 'a number being typed is not a sentence');
   const code = voiceReplySentences('Here is code.\n```js\nlet a\n', false);
@@ -332,8 +333,10 @@ test('reply reading: done with nothing left goes straight back to listening; a n
   assert.deepStrictEqual(h.spoken, ['Fine.']);
 });
 
-test('spoken status: one line per 10 s, never during speech or while the person talks', async () => {
-  const h = await started();
+// Changed on purpose (voice fixes 1, item 4): tool activity is no longer spoken by default (see test/ui-voice-call-fixes.test.js);
+// the old spoken lines come back only when the page's speakActivity() says so, which this test turns on.
+test('spoken status (speakActivity on): one line per 10 s, never during speech or while the person talks', async () => {
+  const h = await started({ speakActivity: () => true });
   await h.say('do the thing');
   h.call.onActivity({ tool: 'Bash' });
   assert.deepStrictEqual(h.spoken, ['Running a command.']);

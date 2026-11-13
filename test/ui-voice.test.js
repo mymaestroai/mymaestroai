@@ -34,7 +34,7 @@ test('the pages carry the helpers byte for byte', () => {
 test('speech text: code and tables are left out and a note is added once', () => {
   const md = 'Here is the fix.\n\n```js\nconst a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nDone.';
   assert.strictEqual(voiceSpeechText(md), 'Here is the fix. Done. I have put the details in the chat.');
-  assert.strictEqual(voiceSpeechText('Look:\n```\nx\n```\nand\n```\ny\n```\nok'), 'Look: and ok I have put the details in the chat.');
+  assert.strictEqual(voiceSpeechText('Look:\n```\nx\n```\nand\n```\ny\n```\nok'), 'Look: and. ok. I have put the details in the chat.');   // a removed code block ends the paragraph: each piece gets a full stop (changed on purpose)
   assert.strictEqual(voiceSpeechText('| a | b |\n|--|--|\n| 1 | 2 |'), 'I have put the details in the chat.');
   assert.strictEqual(voiceSpeechText('Unclosed:\n```\ncode forever'), 'Unclosed: I have put the details in the chat.');
   assert.strictEqual(voiceSpeechText('No code here.'), 'No code here.');
@@ -43,21 +43,21 @@ test('speech text: code and tables are left out and a note is added once', () =>
 test('speech text: links, URLs and markdown marks', () => {
   assert.strictEqual(voiceSpeechText('See [the docs](https://example.com/a?b=1) now.'), 'See the docs now.');
   assert.strictEqual(voiceSpeechText('Go to https://example.com/x, then stop.'), 'Go to a link, then stop.');
-  assert.strictEqual(voiceSpeechText('Visit www.example.com today'), 'Visit a link today');
+  assert.strictEqual(voiceSpeechText('Visit www.example.com today'), 'Visit a link today.');   // the cleaner ends every spoken block with a full stop (changed on purpose)
   assert.strictEqual(voiceSpeechText('This is **bold**, *italic*, _under_ and `code`.'), 'This is bold, italic, under and code.');
-  assert.strictEqual(voiceSpeechText('# Title\n> quoted line\n- one\n* two\n+ three\n1. first\n2) second'), 'Title quoted line one two three first second');
-  assert.strictEqual(voiceSpeechText('Use snake_case names'), 'Use snake case names');
+  assert.strictEqual(voiceSpeechText('# Title\n> quoted line\n- one\n* two\n+ three\n1. first\n2) second'), 'Title. quoted line. one. two. three. first. second.');   // headings and list items are separate spoken sentences now (changed on purpose)
+  assert.strictEqual(voiceSpeechText('Use snake_case names'), 'Use snake case names.');
   assert.strictEqual(voiceSpeechText('Price is 3.5 dollars. Really!'), 'Price is 3.5 dollars. Really!');
-  assert.strictEqual(voiceSpeechText('  lots   of\n\n\n space  '), 'lots of space');
+  assert.strictEqual(voiceSpeechText('  lots   of\n\n\n space  '), 'lots of. space.');   // a blank line ends a block, which gets a full stop (changed on purpose)
   assert.strictEqual(voiceSpeechText(''), '');
   assert.strictEqual(voiceSpeechText(null), '');
 });
 
 test('speech text: emoji are dropped', () => {
-  assert.strictEqual(voiceSpeechText('Great \u{1F600} job \u{1F44D}\u{1F3FD}! \u{2764}\u{FE0F} Thanks'), 'Great job ! Thanks');
-  assert.strictEqual(voiceSpeechText('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} family'), 'family');
-  assert.strictEqual(voiceSpeechText('Flag \u{1F1FA}\u{1F1F8} ok'), 'Flag ok');
-  assert.strictEqual(voiceSpeechText('Call 911 now #1'), 'Call 911 now 1');
+  assert.strictEqual(voiceSpeechText('Great \u{1F600} job \u{1F44D}\u{1F3FD}! \u{2764}\u{FE0F} Thanks'), 'Great job! Thanks.');   // the space before '!' is closed up and the block ends in a full stop (changed on purpose)
+  assert.strictEqual(voiceSpeechText('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} family'), 'family.');
+  assert.strictEqual(voiceSpeechText('Flag \u{1F1FA}\u{1F1F8} ok'), 'Flag ok.');
+  assert.strictEqual(voiceSpeechText('Call 911 now #1'), 'Call 911 now 1.');
 });
 
 test('sentences: split on . ! ? but not inside numbers or abbreviations', () => {
@@ -195,7 +195,7 @@ test('meter: -60 dB is 0, 0 dB is 100, clamped', () => {
 
 test('prefs: defaults, merge, bad values and bad JSON', () => {
   assert.strictEqual(V.VOICE_STORE_KEY, 'hub-voice');
-  const defaults = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true };
+  const defaults = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false };   // + the three new prefs (changed on purpose)
   assert.deepStrictEqual(voiceLoadPrefs(memStore()), defaults);
   assert.deepStrictEqual(voiceLoadPrefs(memStore({ 'hub-voice': '{not json' })), defaults);
   assert.deepStrictEqual(voiceLoadPrefs(memStore({ 'hub-voice': 'null' })), defaults);

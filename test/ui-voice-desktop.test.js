@@ -174,6 +174,7 @@ function makeEnv(opts = {}) {
     voiceEncodeWav: (f, r) => { calls.wavRate = r; return new Uint8Array([82, 73, 70, 70]).buffer; },
     voiceSentences: (t) => t.split(/(?<=\.)\s+/).filter(Boolean),
     voiceSpeechText: (t) => t,
+    voiceCleanSpeed: L.voiceCleanSpeed, voiceSpeedLabel: L.voiceSpeedLabel, VOICE_END_PAUSES: L.VOICE_END_PAUSES,   // voice fixes 1: speed and end-of-turn pause
     voiceMicGuard: L.voiceMicGuard, voiceWaitLocalVoice: L.voiceWaitLocalVoice, voicePickLocalVoice: L.voicePickLocalVoice,
   };
   if (opts.gum) stubs.navigator.mediaDevices.getUserMedia = opts.gum(calls);
@@ -278,8 +279,9 @@ test('settings prefs are saved with voiceSavePrefs from the controls', () => {
   const { api, calls, get } = makeEnv();
   get('st-voice-mic').value = '35'; get('st-voice-readaloud').checked = false; get('st-voice-fallback').checked = true;
   get('st-voice-mode').value = 'tap'; get('st-voice-sens').value = '40';   // phase 2 added these two controls to the same save
+  get('st-voice-pause').value = '2000'; get('st-voice-speed').value = '1.1'; get('st-voice-speakactivity').checked = true;   // voice fixes 1: pause, speed, spoken activity
   api.voiceSettingsSavePrefs();
-  assert.deepStrictEqual(calls.saved, { micLevel: 35, interruptSensitivity: 40, mode: 'tap', readAloud: false, deviceVoiceFallback: true });
+  assert.deepStrictEqual(calls.saved, { micLevel: 35, interruptSensitivity: 40, mode: 'tap', readAloud: false, deviceVoiceFallback: true, endPause: 2000, voiceSpeed: 1.1, speakActivity: true });
 });
 
 test('settings: members get no enable switch, default voice or sample; admins do', () => {
@@ -288,8 +290,8 @@ test('settings: members get no enable switch, default voice or sample; admins do
   assert.match(admin, /st-voice-default/);
   assert.match(admin, /Play sample/);
   const stubsSrc = voiceBlock().replace('const admin = isHubAdmin();', 'const admin = false;');
-  const member = new Function('document', 'window', 'localStorage', 'voiceLoadPrefs', 'voiceGainFromSlider', 'chats', 'dialogGuard', 'voiceMicGuard',
-    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, {}, {}, () => ({ micLevel: 50 }), (v) => v, {}, {}, L.voiceMicGuard);
+  const member = new Function('document', 'window', 'localStorage', 'voiceLoadPrefs', 'voiceGainFromSlider', 'chats', 'dialogGuard', 'voiceMicGuard', 'voiceCleanSpeed', 'voiceSpeedLabel', 'VOICE_END_PAUSES',
+    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, {}, {}, () => ({ micLevel: 50 }), (v) => v, {}, {}, L.voiceMicGuard, L.voiceCleanSpeed, L.voiceSpeedLabel, L.VOICE_END_PAUSES);
   assert.doesNotMatch(member, /st-voice-enabled|st-voice-default|Play sample/);
   assert.match(member, /st-voice-status/);
   assert.match(member, /id="st-voice-mic"/);
