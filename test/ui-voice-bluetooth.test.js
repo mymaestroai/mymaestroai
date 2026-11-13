@@ -1053,3 +1053,28 @@ test('round 3: a resume that wins clears its 3 s deadline (no timer left behind)
   assert.strictEqual(k.timers.length, before, 'the deadline timer was cleared');
   await vad.stop();
 });
+
+test('mic lines survive a cut line once: sending the person\'s last words stops playback, "I lost the microphone" is still said', async () => {
+  const h = await callStarted();
+  h.call.onSpeechEnd({ text: 'a question' }); await tick(60);
+  h.call.onReplyText('First sentence. Second sentence.', true); await tick();
+  h.handlers.onMicChange({ ok: false, reason: 'ended' });
+  await h.finish(false);   // the reply line is cut (for example the send of the last words stopped playback)
+  await tick();
+  assert.deepStrictEqual(h.spoken.slice(-1), ['I lost the microphone. Tap to talk to carry on.'], 'the mic line is tried after the cut');
+  assert.ok(!h.spoken.includes('Second sentence.'), 'the rest of the cut reply is dropped as before');
+  const n = h.spoken.length;
+  await h.finish(false);   // its own attempt is cut too: it was already kept once, so it is dropped (no loop)
+  await tick();
+  assert.strictEqual(h.spoken.length, n, 'no further attempt');
+  // a mic line that is itself cut while playing is tried once more
+  const h2 = await callStarted();
+  h2.handlers.onMicChange({ ok: false, reason: 'ended' }); await tick();
+  assert.deepStrictEqual(h2.spoken, ['I lost the microphone. Tap to talk to carry on.']);
+  await h2.finish(false); await tick();
+  assert.deepStrictEqual(h2.spoken, ['I lost the microphone. Tap to talk to carry on.', 'I lost the microphone. Tap to talk to carry on.'], 'tried once more');
+  await h2.finish(false); await tick();
+  assert.strictEqual(h2.spoken.length, 2, 'and not again');
+  h2.call.release('test');
+  h.call.release('test');
+});
