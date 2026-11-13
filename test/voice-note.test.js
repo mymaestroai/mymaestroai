@@ -36,24 +36,32 @@ test('handleChatStreamReserved reads voice from the body and passes voice: !!voi
 test('gateway: the note is appended to the system prompt only for a voice turn that is not ephemeral', () => {
   const at = lineOf("if (!ephemeral) systemPrompt += (await visualsTextFor(agentName))");
   const next = src.slice(at, at + 600).split('\n');
-  assert.ok(next[1].includes('if (!ephemeral && options.voice === true) systemPrompt += `\\n\\n${VOICE_NOTE}\\n`;'), next[1]);
+  assert.ok(next[1].includes('if (voiceNoteFor(options, ephemeral)) systemPrompt += `\\n\\n${voiceNoteFor(options, ephemeral)}\\n`;'), next[1]);
 });
 
 test('Claude client: the note goes in the per-turn prefix (a resumed session keeps its old system prompt), not in the appended system prompt', () => {
   const at = lineOf('contextPrefix = `${timeZoneLib.localTimeTag(timeZoneLib.zoneForAgent(agentName))}\\n`;');
   const after = src.slice(at, at + 700).split('\n');
-  assert.ok(after[1].includes('if (!ephemeral && options.voice === true) contextPrefix += `${VOICE_NOTE}\\n`;'), after[1]);
+  assert.ok(after[1].includes('if (voiceNoteFor(options, ephemeral)) contextPrefix += `${voiceNoteFor(options, ephemeral)}\\n`;'), after[1]);
   const sysAt = lineOf('append: agentContext + workerPolicyText + jobsPolicyText + visualsText + handsNote');
   assert.ok(!src.slice(sysAt, sysAt + 400).includes('VOICE_NOTE'));
 });
 
 test('Codex client: the note goes in the per-turn prompt', () => {
-  const at = lineOf('let prompt = `${timeZoneLib.localTimeTag(timeZoneLib.zoneForAgent(agentName))}\\n` + (!ephemeral && options.voice === true ? `${VOICE_NOTE}\\n` : \'\')');
+  const at = lineOf('let prompt = `${timeZoneLib.localTimeTag(timeZoneLib.zoneForAgent(agentName))}\\n` + (voiceNoteFor(options, ephemeral) ? `${voiceNoteFor(options, ephemeral)}\\n` : \'\')');
   assert.ok(at > 0);
 });
 
-test('the note is added in exactly three places and always behind the voice flag', () => {
-  const uses = src.split('\n').filter(l => l.includes('VOICE_NOTE') && !l.trim().startsWith('//') && !l.includes('const VOICE_NOTE') && !l.includes('holdConsultForCall, voiceGateKind'));
+test('the note is added in exactly three places, always through voiceNoteFor (behind the voice flag and not ephemeral)', () => {
+  const uses = src.split('\n').filter(l => l.includes('voiceNoteFor(options, ephemeral)') && !l.startsWith('function voiceNoteFor') && !l.trim().startsWith('//'));
   assert.strictEqual(uses.length, 3, uses.join('\n'));
-  for (const l of uses) assert.ok(l.includes('options.voice === true') && l.includes('!ephemeral'), l);
+  const { VOICE_NOTE, __voiceFace: { voiceNoteFor } } = require('../lib/sdk-chat');
+  assert.strictEqual(voiceNoteFor({ voice: true }, false), VOICE_NOTE, 'a plain voice turn gets exactly VOICE_NOTE');
+  assert.strictEqual(voiceNoteFor({ voice: true, faceMood: false }, false), VOICE_NOTE);
+  assert.strictEqual(voiceNoteFor({ voice: true }, true), '', 'ephemeral: none');
+  assert.strictEqual(voiceNoteFor({}, false), '', 'not a voice turn: none');
+  assert.strictEqual(voiceNoteFor({ voice: 'yes' }, false), '', 'only a real true');
+  // the only extra a voice turn can get is the mood note, and only behind faceMood === true
+  assert.ok(voiceNoteFor({ voice: true, faceMood: true }, false).startsWith(VOICE_NOTE));
+  assert.strictEqual(voiceNoteFor({ faceMood: true }, false), '', 'faceMood alone adds nothing');
 });

@@ -322,6 +322,15 @@
   </div>
   <small id="effort-help" style="color:#999;display:block;margin-top:4px;">How hard the model thinks before answering. Higher is slower and uses more of the subscription or API budget. The hub translates the level for each provider (Claude takes all of them; OpenAI tops out at extra high; Gemini at high; OpenRouter models that take a reasoning level, marked 🧠 in the OpenRouter list, at high); local models ignore it. Also adjustable from the chat header by admins; members cannot change it.</small>
   <div id="effort-status" class="status"></div>
+  <div id="call-display-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;">
+    <label for="call-display" style="margin:0;">Default call display</label>
+    <select id="call-display" onchange="saveCallDisplay()" style="width:auto;">
+      <option value="none">None</option>
+      <option value="orb">Orb</option>
+    </select>
+  </div>
+  <small id="call-display-help" style="color:#999;display:block;margin-top:4px;">What a voice call with this agent shows on the screen: nothing, the built-in glowing orb, or an installed character. This is only the starting point: each person's own choice on their device, made in the chat's voice panel, always wins.</small>
+  <div id="call-display-status" class="status"></div>
   <div id="tools-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
     <label for="tools-mode" style="margin:0;">Tools</label>
     <select id="tools-mode" onchange="saveToolsMode()" style="width:auto;">
@@ -393,6 +402,7 @@
     ['saveLimits', 'limits-status', byId('context-budget', 'max-context-messages', 'max-output-tokens')],
     ['saveSandbox', 'sandbox-status', byId('sandbox-mode')],
     ['saveEffort', 'effort-status', byId('effort-mode')],
+    ['saveCallDisplay', 'call-display-status', byId('call-display')],
     ['saveAgentVoice', 'voice-status', byId('voice-select', 'voice-stt', 'voice-tts', 'voice-cloud-select', 'voice-cloud-id')],
     ['saveToolsMode', 'tools-status', byId('tools-mode')],
     ['saveAutoModel', 'auto-model-status', byId('auto-model', 'auto-model-allowed')],
@@ -408,7 +418,7 @@
   // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
   // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
   // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
-  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveToolsMode', 'saveAgentVoice']);
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveCallDisplay', 'saveToolsMode', 'saveAgentVoice']);
   const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];
@@ -862,6 +872,38 @@
       else showStatus('effort-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('effort-status', 'error', e.message); }
   }
+  // ── Default call display: None / Orb / an installed character (GET /api/faces); PATCH { callDisplay } ──
+  const CALL_DISPLAY_FIXED = [{ value: 'none', label: 'None' }, { value: 'orb', label: 'Orb' }];
+  // The options for the dropdown: the fixed two, the installed characters, and (when the saved value names a character
+  // that is not installed right now) that one too, marked unavailable, so opening the page never changes what is saved.
+  function callDisplayOptions(current, packs) {
+    const out = CALL_DISPLAY_FIXED.slice();
+    const seen = new Set();
+    for (const p of Array.isArray(packs) ? packs : []) {
+      if (!p || typeof p.id !== 'string' || seen.has(p.id)) continue;
+      seen.add(p.id);
+      out.push({ value: 'pack:' + p.id, label: typeof p.name === 'string' && p.name ? p.name : p.id });
+    }
+    if (typeof current === 'string' && current.startsWith('pack:') && !out.some(o => o.value === current)) out.push({ value: current, label: current.slice(5) + ' (unavailable: not installed)' });
+    return out;
+  }
+  async function loadCallDisplay(agent) {
+    const sel = document.getElementById('call-display'); if (!sel) return;
+    const current = typeof agent?.callDisplay === 'string' && agent.callDisplay ? agent.callDisplay : 'none';
+    let packs = [];
+    try { const r = await apiFetch('/api/faces'); if (r && Array.isArray(r.packs)) packs = r.packs; } catch {}
+    sel.textContent = '';
+    for (const o of callDisplayOptions(current, packs)) { const el = document.createElement('option'); el.value = o.value; el.textContent = o.label; sel.appendChild(el); }
+    sel.value = current;
+  }
+  async function saveCallDisplay() {
+    const v = document.getElementById('call-display').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callDisplay: v }) });
+      if (result && (result.success || result.ok)) showStatus('call-display-status', 'success', v === 'none' ? 'No default display: calls look as they do today unless a person picks one' : 'Saved: the default for new devices; a person\'s own choice wins');
+      else showStatus('call-display-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('call-display-status', 'error', e.message); }
+  }
   // ── Voice (free local engines by default; OpenAI, Google and ElevenLabs are optional cloud engines) ──
   const VOICE_CLOUD_LISTS = {
     openai: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'],
@@ -1227,6 +1269,7 @@
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
       const effSel = document.getElementById('effort-mode'); if (effSel) effSel.value = agent?.effort || 'default';
+      loadCallDisplay(agent);
       loadVoiceRecord(agent);
       if (!voiceList.length) loadVoiceList();
       const toolsRow = document.getElementById('tools-row'); if (toolsRow) { const clientModel = /^(claude-sdk|codex-cli)\//.test(agent?.model || currentModel || ''); toolsRow.style.display = clientModel ? 'flex' : 'none'; const th = document.getElementById('tools-help'); if (th) th.style.display = clientModel ? 'block' : 'none'; }

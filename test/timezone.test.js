@@ -169,7 +169,7 @@ test('every route and every place an agent reads a time uses the person\'s zone'
   assert.ok(chat.includes("const timeZoneLib = require('./timezone');"));
   assert.ok(chat.includes('contextPrefix = `${timeZoneLib.localTimeTag(timeZoneLib.zoneForAgent(agentName))}\\n`;'), 'Claude route: the local time first');
   // the local time still comes first; a voice turn's note sits between it and the carried interjections
-  assert.ok(chat.includes("let prompt = `${timeZoneLib.localTimeTag(timeZoneLib.zoneForAgent(agentName))}\\n` + (!ephemeral && options.voice === true ? `${VOICE_NOTE}\\n` : '') + sdkInterject.formatCarried(carried)"), 'Codex route');
+  assert.ok(chat.includes("let prompt = `${timeZoneLib.localTimeTag(timeZoneLib.zoneForAgent(agentName))}\\n` + (voiceNoteFor(options, ephemeral) ? `${voiceNoteFor(options, ephemeral)}\\n` : '') + sdkInterject.formatCarried(carried)"), 'Codex route');
   assert.ok(chat.includes("annotateForContext(trimmed, { hubContext: hubContextOut.text || '', timeZone: timeZoneLib.zoneForAgent(agentName) })"), 'API route');
   assert.strictEqual((chat.match(/timeZoneLib\.policyText\(\)/g) || []).length, 3, 'the TIME section on all three routes');
   assert.ok(chat.includes('handler: async (args) => recallFor(agentName, args),') && chat.includes('async (args) => text(recallFor(agentName, args)),'), 'recall reads local from/to on both tool sets');

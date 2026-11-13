@@ -58,6 +58,11 @@ function harness(respond, toolHandlers = {}) {
   };
   vm.createContext(ctx);
   const start = source.indexOf('async function streamViaGateway('), end = source.indexOf('// ── Auto Memory', start);
+  // the face view's real helpers (voiceNoteFor, createVoiceMood), not stubs: with faceMood off they leave the reply unchanged
+  const hStart = source.indexOf('/** The note(s) a voice turn adds to the prompt'), hEnd = source.indexOf('/**\n * raceStop(', hStart);
+  assert.ok(hStart > 0 && hEnd > hStart, 'voice helpers found');
+  Object.assign(ctx, { VOICE_NOTE: 'voice note', ...require('../lib/voice/mood') });
+  vm.runInContext(source.slice(hStart, hEnd), ctx);
   vm.runInContext(source.slice(start, end), ctx);
   const call = state.calls['coord-call'] = { key: 'coord-call', tools: {} };
   const controller = new AbortController();

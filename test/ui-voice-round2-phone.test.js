@@ -303,3 +303,20 @@ test('the chat panel dropdowns are dark with readable text, at 16px so iOS does 
   assert.match(rule, /color: var\(--text\)/);
   assert.match(rule, /font-size: 16px/);
 });
+
+test('thinking sound adapter: pulse(event) passes the event to the sound and returns its answer; a refusal is not marked as playing', () => {
+  const src = sliceBetween('function voiceThinkingClose(vc)', 'function voiceCallApplyPrefs()');
+  const log = [];
+  class AC { constructor() { this.state = 'running'; } close() { return Promise.resolve(); } resume() { return Promise.resolve(); } }
+  let answer = 'same';
+  const mkSnd = () => ({ start() {}, stop() {}, setVolume() {}, pulse: (ev) => { log.push(ev); if (answer === 'false') return false; ev.at += 160; return ev; } });
+  const state = { voiceCall: null };
+  const vc = { call: { state: 'thinking' }, vad: { setPlaybackActive: (on) => log.push('playback:' + on) }, thinkSnd: null, thinkCtx: null, thinkOn: false };
+  state.voiceCall = vc;
+  const f = new Function('state', 'window', 'voicePrefsNow', 'voiceCreateThinkingSound', src.replace(/\bvoiceCall\b/g, 'state.voiceCall') + '\nreturn voiceThinkingDeps;')(state, { AudioContext: AC }, () => ({}), mkSnd);
+  const th = f(vc), ev = { at: 100 };
+  assert.strictEqual(th.pulse(ev), ev); assert.strictEqual(log[0], ev); assert.strictEqual(ev.at, 260);
+  assert.deepStrictEqual(log.slice(1), ['playback:true']); assert.strictEqual(vc.thinkOn, true);
+  vc.thinkOn = false; log.length = 0; answer = 'false';
+  assert.strictEqual(th.pulse({ at: 1 }), false); assert.strictEqual(vc.thinkOn, false); assert.ok(!log.includes('playback:true'));
+});

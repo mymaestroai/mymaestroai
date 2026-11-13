@@ -17,6 +17,8 @@
  *   mymaestro reset-2fa <email>      turn off two-factor for an account (lost phone); it is set up again at next sign-in
  *   mymaestro service install|remove start by itself at boot (Linux) or login (Mac)
  *   mymaestro move-home [--yes]      move shared folders (share/, users/...) out of your home folder into the install; --yes does it
+ *   mymaestro face install <folder> [--id <slug>]   add a character pack (the voice call face) from a folder
+ *   mymaestro face list              the installed character packs
  *   mymaestro uninstall              remove the service, this command and the private Node; keeps the folder and data
  *   mymaestro version
  */
@@ -354,6 +356,29 @@ const commands = {
     } else if (wasRunning) out('The hub stays stopped until the folders above are back in place; then: mymaestro start');
     if (!r.ok) process.exitCode = 1;
   },
+  // Character packs for the voice call face (lib/faces): install from a local folder into <hub home>/faces/<id>, or list them.
+  face() {
+    const sub = argv[1];
+    const { HUB_HOME } = require(path.join(DIR, 'lib', 'hub-home'));
+    const faces = require(path.join(DIR, 'lib', 'faces', 'packs'));
+    if (sub === 'install') {
+      const folder = argv[2] && !argv[2].startsWith('--') ? argv[2] : null;
+      if (!folder) fail('Usage: mymaestro face install <folder> [--id <slug>]');
+      try {
+        const r = faces.installPack(folder, { home: HUB_HOME, id: arg('id') || undefined });
+        out(`Installed the character pack "${r.id}" (${r.files.length} files, ${(r.total / 1048576).toFixed(1)} MB) in ${r.dir}.`);
+        out('Choose it per device in the voice panel, or as an agent\'s default on the agent settings page.');
+      } catch (e) { fail(`Could not install: ${e.message}`); }
+      return;
+    }
+    if (sub === 'list') {
+      const list = faces.listPacks({ home: HUB_HOME });
+      if (!list.length) { out('No character packs are installed. Add one: mymaestro face install <folder>'); return; }
+      for (const p of list) out(`${p.id}  ${p.manifest.name || p.id}  ${p.manifest.clips.length} clips`);
+      return;
+    }
+    fail('Usage: mymaestro face install <folder> [--id <slug>]\n       mymaestro face list');
+  },
   async uninstall() {
     const m = svc(); const inst = m.readInstall();
     m.remove(); out('Service removed.');
@@ -363,7 +388,7 @@ const commands = {
     out(`To delete everything, back up first (mymaestro backup), then run:  rm -rf "${DIR}"`);
   },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 21).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 23).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
 (async () => {

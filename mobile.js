@@ -2439,7 +2439,7 @@ function voiceReplySentences(markdown, done) {
 }
 function voiceCreateCall(deps) {
   const d = deps || {};
-  const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {} }, d.ui);
+  const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {}, reply() {} }, d.ui);   // ui.thinkingPulse(event) is optional; ui.reply(kind): 'start' | 'end' | 'drop' | 'resume' (a reply's boundaries, for the display's reaction)
   const server = d.server || {}, vad = d.vad || {};
   const now = () => d.now();
   const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
@@ -2456,34 +2456,93 @@ function voiceCreateCall(deps) {
   // The one spoken line after a long wait: when something was last spoken, when the running turn began, whether a line was
   // said since, which lines this wait has used. The thinking sound: its 2 s timer and whether it is playing.
   let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
-  let thinkTimer = null, thinkingOn = false;
+  let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0, thinkDueAt = 0, thinkSeed = 0;
+  let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
   const prefs = () => { const p = quiet(() => d.prefs && d.prefs()); return p && typeof p === 'object' ? p : {}; };
   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for the next piece.
   const continueWait = () => { const n = Number(prefs().continueWait); return Number.isFinite(n) && n >= 0 ? n : VOICE_CALL_CONTINUE_MS; };
 
-  // The thinking sound: only when the person's turn was sent and no reply speech began within 2 s; it stops at once when the
-  // reply speaks, the person speaks, an announcement plays, the turn ends or the call ends. Nothing plays when a turn ends.
-  function stopThinking() {
-    if (thinkTimer !== null) { quiet(() => d.clearTimer(thinkTimer)); thinkTimer = null; }
+  // The thinking clock: ONE scheduler for what is heard and what is shown. When the person's turn was sent (and nothing is being
+  // transcribed or asked) it starts: a small silent pulse at once (strength 0.35, visual only), the first full pulse VOICE_CALL_THINK_MS
+  // later (2 s, the first audible one), then a quiet random pop cluster (lib/ui-voice-thinking.js: voiceThinkingCluster, seeded) about
+  // every 1.5 s of pops + a 4-6 s gap (the gap is measured from the END of the cluster). Every pulse is one event (the contract is in
+  // lib/ui-voice-thinking.js: at, kind, durationMs, pops [{ tMs, strength, freqHz, decayMs }], and the old swell fields attackMs, decayMs,
+  // strength) handed to ui.thinkingPulse(event) (the call display's orb), and when the sound is on (thinkingSound not false; do-not-disturb never mutes it, with any display) to
+  // thinking.pulse(event) as well; `at` is the performance.now() time (d.perfNow, else d.now) the audio is scheduled to start (+20 ms);
+  // thinking.pulse(event) may move event.at to the time the pulse is really heard (audio output clock) before the picture gets it.
+  // A thinking adapter without pulse() (older) is started with start() at the first audible pulse and runs its own interval.
+  // The plan of a wait: variant 'A' (airy; the default build), 'B' (round bubble) or 'C' (sparse single pop), the seed and the gap
+  // range come from deps.thinkingPlan { variant, seed, gapMinMs, gapSpreadMs } (a fixed seed makes a wait repeatable; no seed: a new random
+  // one for each wait). No saved setting. Without voiceThinkingCluster (lib not loaded) the old single swell every 2.5 s is used.
+  // Switching the sound off or on, or do-not-disturb, only changes what is audible: the clock and its phase go on. The clock stops
+  // at once when the reply speaks, the person speaks, an announcement plays, the turn ends or the call ends.
+  const perfNow = () => { const f = d.perfNow || d.now; return Number(f()); };
+  // thinkVisual: a display really takes the pulses right now (ui.thinkingPulse exists and ui.thinkingWanted(), when the page has it, says
+  // a view is shown). With NO display (None, hidden, ended) the clock is exactly the plain thinking sound of before: nothing is armed
+  // when the sound is off, do-not-disturb does not mute it, switching it off ends the wait and switching it on starts a fresh 2 s one,
+  // and the sound's own pulse() is called without an event.
+  const thinkVisual = () => typeof (d.ui && d.ui.thinkingPulse) === 'function' && !(typeof d.ui.thinkingWanted === 'function' && !quiet(() => d.ui.thinkingWanted()));
+  const thinkAudible = () => !!d.thinking && prefs().thinkingSound !== false;   // the same in every display (None, Orb, Character): do-not-disturb does not mute the sound
+  function thinkQuiet() { return ended || !awaitingReply || sttPending || pendingAsk || speaking || personSpeaking || pendingAnnounce || queue.length; }
+  function muteThinking() {   // the sound only; the clock stays
     if (!thinkingOn) return;
     thinkingOn = false;
     quiet(() => d.thinking.stop());
     if (!speaking) quiet(() => vad.setPlaybackActive(false));
   }
-  function armThinking() {
-    if (ended || thinkTimer !== null || thinkingOn || !awaitingReply || sttPending || pendingAsk || !d.thinking || prefs().thinkingSound === false) return;
-    thinkTimer = d.setTimer(() => {
-      thinkTimer = null;
-      if (ended || !awaitingReply || sttPending || pendingAsk || speaking || personSpeaking || pendingAnnounce || queue.length || prefs().thinkingSound === false) return;
-      thinkingOn = true;
-      quiet(() => vad.setPlaybackActive(true));   // the pulse is playback: it must not trigger the barge-in detector
-      quiet(() => d.thinking.start());
-    }, VOICE_CALL_THINK_MS);
+  function stopThinking() {
+    if (thinkTimer !== null) { quiet(() => d.clearTimer(thinkTimer)); thinkTimer = null; }
+    thinkStep = 0;
+    muteThinking();
   }
-  // The person's settings changed (the in-chat voice panel): re-read them now.
+  // Pulse 0 (the small silent one) happens at t0, pulse 1 at t0 + 2000, and every next one at the previous one's time + its
+  // cluster length + its own gap (all on the controller's clock, so the audio mapping of event.at never makes it drift).
+  const thinkPlan = (k) => {
+    if (typeof voiceThinkingCluster !== 'function') return null;
+    const tp = d.thinkingPlan || {};
+    return quiet(() => voiceThinkingCluster({ seed: thinkSeed, index: k - 1, variant: tp.variant, gapMinMs: tp.gapMinMs, gapSpreadMs: tp.gapSpreadMs })) || null;
+  };
+  function thinkTick() {
+    thinkTimer = null;
+    if (thinkQuiet()) { stopThinking(); return; }
+    const k = thinkStep++, vis = thinkVisual();
+    const plan = k > 0 ? thinkPlan(k) : null;
+    const ev = plan ? voiceThinkingEvent(plan, perfNow() + 20)
+      : { at: perfNow() + 20, kind: k === 0 ? 'tick' : 'cluster', pops: [], attackMs: 250, decayMs: 1000, strength: k === 0 ? 0.35 : 1 };
+    thinkDueAt = k === 0 ? thinkT0 + VOICE_CALL_THINK_MS : thinkDueAt + (plan ? plan.durationMs + plan.gapAfterMs : 2500);
+    if (k > 0 && thinkAudible()) {
+      if (!thinkingOn) {
+        thinkingOn = true;
+        quiet(() => vad.setPlaybackActive(true));   // the pulse is playback: it must not trigger the barge-in detector
+        if (typeof d.thinking.pulse !== 'function') quiet(() => d.thinking.start());
+      }
+      if (!vis) { if (typeof d.thinking.pulse === 'function') quiet(() => d.thinking.pulse()); }   // no display: the plain sound, no event
+      else if (typeof d.thinking.pulse === 'function') {
+        // The sound schedules the pulse once on the audio clock and moves ev.at to when it is heard (it mutates ev or returns one);
+        // the picture then gets the same event. A sound that did not play (false) leaves the controller's clock and is not audible.
+        const at0 = ev.at, r = quiet(() => d.thinking.pulse(ev));
+        if (r && typeof r === 'object' && r !== ev && Number.isFinite(Number(r.at))) ev.at = Number(r.at);
+        const now = perfNow();
+        if (!Number.isFinite(ev.at) || ev.at < now - 100 || ev.at > now + 2000) ev.at = at0;   // never a stale or wild time
+        if (r === false) muteThinking();
+      }
+    } else muteThinking();
+    if (vis) quiet(() => ui.thinkingPulse(ev));
+    if (thinkTimer === null && !ended) thinkTimer = d.setTimer(thinkTick, Math.max(0, thinkDueAt - perfNow()));
+  }
+  function armThinking() {
+    if (ended || thinkTimer !== null || thinkStep > 0 || !awaitingReply || sttPending || pendingAsk || (!thinkVisual() && !thinkAudible())) return;
+    thinkT0 = perfNow();
+    const sd = Number(d.thinkingPlan && d.thinkingPlan.seed);
+    thinkSeed = Number.isFinite(sd) ? sd : Math.floor(Math.random() * 4294967296);
+    thinkTick();
+  }
+  // The person's settings changed (the in-chat voice panel): re-read them now. Muting stops the sound, not the clock.
   function setPrefs() {
     const p = prefs();
-    if (p.thinkingSound === false) stopThinking(); else armThinking();
+    if (!thinkVisual() && !thinkAudible()) stopThinking();   // no display: the sound switched off ends the wait (a fresh one starts when it is on again)
+    else if (!thinkAudible()) muteThinking();
+    armThinking();
     if (d.thinking && d.thinking.setVolume && Number.isFinite(Number(p.thinkingVolume))) quiet(() => d.thinking.setVolume(Math.max(0, Math.min(1, Number(p.thinkingVolume)))));
   }
 
@@ -2540,6 +2599,7 @@ function voiceCreateCall(deps) {
     }
     if (my !== gen) return;
     speaking = false; quiet(() => vad.setPlaybackActive(false));
+    maybeReplyEnd();
     settle();
   }
   // Cuts what is being read at once. True when part of a reply was cut (the rest of that reply is then skipped).
@@ -2554,11 +2614,19 @@ function voiceCreateCall(deps) {
   }
 
   function completeCount() { return voiceReplySentences(lastText, false).sentences.length; }
+  // The whole reply is over, reported ONCE (ui.reply('end')) for the display's reaction: its text is complete AND nothing is read or waiting to be
+  // read (so a gap between two sentences of a growing reply is not the end) AND the person is not speaking. With no speech (voice off, a failed
+  // line) that is the moment the text is complete; otherwise right after the last line ended, before the call returns to listening.
+  function maybeReplyEnd() {
+    if (ended || replyEnded || !lastDone || awaitingReply || cutSkip || speaking || personSpeaking || current || queue.length) return;
+    replyEnded = true;
+    quiet(() => ui.reply('end'));
+  }
   // Reply text so far (markdown) and whether the turn is over: speaks the complete sentences that are new.
   function onReplyText(full, done) {
     if (ended) return;
     lastText = String(full == null ? '' : full); lastDone = !!done;
-    if (!done && !awaitingReply && !cutSkip) awaitingReply = true;
+    if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
     const r = voiceReplySentences(lastText, !!done);
     if (r.sentences.length < spokenCount) spokenCount = 0;
     if (cutSkip) spokenCount = r.sentences.length;
@@ -2567,7 +2635,7 @@ function voiceCreateCall(deps) {
       if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply');
       noteSpoken = true; awaitingReply = false;
       clearStill(); stopThinking(); quiet(() => ui.activity(''));
-      if (!speaking) settle();
+      if (!speaking) { maybeReplyEnd(); settle(); }
     }
   }
   // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
@@ -2656,7 +2724,7 @@ function voiceCreateCall(deps) {
   }
   function setMode(m) {
     if (m !== 'announce' && m !== 'dnd') return;
-    mode = m;
+    mode = m;   // the thinking sound is not touched: do-not-disturb holds announcements, not the thinking sound
     if (m === 'dnd') announceQueue = [];
     else announceQueue = heldList.filter(h => !h.later && !h.announced && !(pendingAnnounce && pendingAnnounce.id === h.id));
     quiet(() => Promise.resolve(server.mode(m, callId)).catch(() => {}));
@@ -2707,6 +2775,7 @@ function voiceCreateCall(deps) {
     clearBegin();
     if (!personSpeaking) speechAnn = heardAnnouncement();   // no onSpeechBegin came first
     personSpeaking = true; stopThinking();
+    quiet(() => ui.reply('drop'));   // real speech: a reaction that has not played is dropped
     segmentStarting();
     if (speaking || queue.length) {
       const n = (current ? [current] : []).concat(queue).filter(i => i.kind === 'reply').length;
@@ -2722,6 +2791,7 @@ function voiceCreateCall(deps) {
     if (ended) return;
     clearBegin(); segmentDropped();
     personSpeaking = false; speechAnn = null;
+    quiet(() => ui.reply('resume'));
     const rec = cutRec; cutRec = null;
     if (rec) {
       if (rec.setSkip) cutSkip = false;
@@ -2824,11 +2894,11 @@ function voiceCreateCall(deps) {
     try {
       if (quiet(() => d.isTurnRunning())) {
         if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
-        awaitingReply = true; turnAt = now(); stillSaid = false; setState('thinking'); armStill(); armThinking();
+        awaitingReply = true; replyEnded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
         await d.interject(t);
       } else {
-        awaitingReply = true; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; turnAt = now(); stillSaid = false; stillUsed = [];
-        setState('thinking'); armStill(); armThinking();
+        awaitingReply = true; replyEnded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+        quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
         await d.send(t);
       }
     } catch { awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity('')); quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
@@ -2921,31 +2991,76 @@ function voiceLiveTracks() {
   for (const tr of Array.from(VOICE_LIVE_TRACKS)) { if (tr && tr.readyState === 'ended') VOICE_LIVE_TRACKS.delete(tr); else n++; }
   return n;
 }
-// The thinking sound: a soft low pulse made with Web Audio only (no files). A sine near 208 Hz with a quiet second partial,
-// attack 0.25 s, decay 1 s, repeated every 2.5 s, no melody. Its peak is volume x 0.06 at most. start(), stop() (a 0.1 s fade),
-// setVolume(0..1). opts: { ctx, volume, setInterval, clearInterval } (the last two for tests).
+// The thinking sound: quiet random pop clusters made with Web Audio only (no files). The plan (how many pops, when, how high, the gaps) is
+// DATA from lib/ui-voice-thinking.js (voiceThinkingCluster, seeded); this function only plays an event's pops: each pop is a sine with a
+// few-ms attack and a 30-60 ms decay (a little glide), through a low-pass below 2 kHz, the whole cluster fades in and out. Peak = volume x
+// 0.1125 (volume 0.5, the default, is -25 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
+// ctx.currentTime + 0.02 and moves event.at to the moment that cluster is HEARD (the audio output clock mapped to performance.now():
+// getOutputTimestamp when valid, else now + the scheduling lead + the output or base latency); it returns the same event, or false when
+// the context is not running (nothing was claimed, event.at is untouched). An event without pops (or no event) plays a cluster of a fresh
+// random seed. start() plays one now and another every 6.5 s (the old adapters without a clock of their own).
+// opts: { ctx, volume, variant, seed (a fixed seed for the clusters it makes itself), setInterval, clearInterval, perfNow } (the last four for tests).
 function voiceCreateThinkingSound(opts) {
   const o = opts || {}, ctx = o.ctx;
+  const perf = o.perfNow || (() => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function' ? performance.now() : NaN));
   const setIv = o.setInterval || ((f, ms) => setInterval(f, ms)), clearIv = o.clearInterval || ((id) => clearInterval(id));
   const clamp = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5; };
-  let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [];
-  const peak = () => vol * 0.06;
-  function pulse() {
+  let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [], own = 0;
+  const peak = () => vol * 2 * Math.pow(10, -25 / 20);   // volume 0.5 = -25 dBFS
+  // performance.now() time at which the sample scheduled for context time t0 comes out of the speakers; null when it cannot be told.
+  function heardAt(ct, t0) {
+    const now = Number(perf());
+    if (!Number.isFinite(ct) || !Number.isFinite(now)) return null;
+    const sane = (m) => Number.isFinite(m) && m >= 0 && m >= now - 5 && m <= now + 1500;   // never in the past, never far ahead
+    try {
+      const ts = typeof ctx.getOutputTimestamp === 'function' ? ctx.getOutputTimestamp() : null;
+      if (ts && Number.isFinite(ts.contextTime) && Number.isFinite(ts.performanceTime) && ts.contextTime >= 0 && ts.performanceTime > 0) {
+        const m = ts.performanceTime + (t0 - ts.contextTime) * 1000;
+        if (sane(m)) return m;
+      }
+    } catch { /* no output timestamp: the latency estimate below */ }
+    const l = Number(ctx.outputLatency) > 0 ? Number(ctx.outputLatency) : (Number(ctx.baseLatency) > 0 ? Number(ctx.baseLatency) : 0);
+    const m = now + (t0 - ct) * 1000 + l * 1000;
+    return sane(m) ? m : null;
+  }
+  function pulse(ev) {
     if (!running || !master) return;
-    const t0 = ctx.currentTime + 0.02;
-    const env = ctx.createGain();
+    const ct = ctx.currentTime, t0 = ct + 0.02;
+    if (ev && typeof ev === 'object') { const m = heardAt(ct, t0); if (m !== null) ev.at = m; }
+    // the plan: the event's own pops, else a cluster of a fresh random seed (nothing without lib/ui-voice-thinking.js)
+    let plan = ev && typeof ev === 'object' && Array.isArray(ev.pops) && ev.pops.length ? ev : null;
+    if (!plan && typeof voiceThinkingCluster === 'function') plan = voiceThinkingCluster({ seed: Number.isFinite(Number(o.seed)) ? Number(o.seed) : Math.floor(Math.random() * 4294967296), index: own++, variant: o.variant });
+    if (!plan || !Array.isArray(plan.pops) || !plan.pops.length) return;
+    const dur = Math.max(0.05, (Number(plan.durationMs) || 1500) / 1000);
+    const fin = Math.min(dur, Math.max(0.004, (Number(plan.fadeInMs) || 0) / 1000)), fout = Math.min(dur - fin, Math.max(0.01, (Number(plan.fadeOutMs) || 0) / 1000));
+    const env = ctx.createGain();   // the cluster's fade in and out
     env.gain.setValueAtTime(0, t0);
-    env.gain.linearRampToValueAtTime(1, t0 + 0.25);            // attack
-    env.gain.linearRampToValueAtTime(0, t0 + 1.25);            // decay
+    env.gain.linearRampToValueAtTime(1, t0 + fin);
+    env.gain.setValueAtTime(1, t0 + dur - fout);
+    env.gain.linearRampToValueAtTime(0, t0 + dur);
     env.connect(master);
-    for (const [freq, level] of [[208, 0.85], [416, 0.15]]) {   // the note and a gentle second partial
+    let sink = env;
+    if (typeof ctx.createBiquadFilter === 'function') {   // the low-pass: nothing above 2 kHz
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = Math.min(1990, Number(plan.lowpassHz) || 1600); if (lp.Q) lp.Q.value = 0.5;
+      lp.connect(env); sink = lp;
+    }
+    let left = plan.pops.length;
+    const done = () => { if (--left === 0) { try { sink.disconnect(); } catch { /* gone */ } try { env.disconnect(); } catch { /* gone */ } } };
+    for (const p of plan.pops) {
+      const tp = t0 + Math.max(0, Number(p.tMs) || 0) / 1000, dec = Math.max(0.03, Math.min(0.06, (Number(p.decayMs) || 45) / 1000));
+      const freq = Math.max(60, Math.min(1900, Number(p.freqHz) || 300)), level = Math.max(0, Math.min(1, Number(p.strength))), glide = Number(p.glide) > 0 ? Number(p.glide) : 1;
       const osc = ctx.createOscillator(), g = ctx.createGain();
-      osc.type = 'sine'; osc.frequency.value = freq; g.gain.value = level;
-      osc.connect(g); g.connect(env);
+      osc.type = 'sine'; osc.frequency.value = freq;
+      if (glide !== 1 && osc.frequency.setValueAtTime) { osc.frequency.setValueAtTime(freq, tp); osc.frequency.linearRampToValueAtTime(Math.min(1900, freq * glide), tp + dec); }
+      g.gain.setValueAtTime(0, tp);
+      g.gain.linearRampToValueAtTime(Number.isFinite(level) ? level : 0.7, tp + 0.004);   // a few ms attack
+      g.gain.linearRampToValueAtTime(0, tp + dec);                                          // the 30-60 ms decay ramp
+      osc.connect(g); g.connect(sink);
       const item = { osc, env };
       active.push(item);
-      osc.onended = () => { active = active.filter(x => x !== item); try { g.disconnect(); } catch { /* gone */ } };
-      osc.start(t0); osc.stop(t0 + 1.3);
+      osc.onended = () => { active = active.filter(x => x !== item); try { g.disconnect(); } catch { /* gone */ } done(); };
+      osc.start(tp); osc.stop(tp + dec + 0.02);
     }
   }
   return {
@@ -2955,7 +3070,25 @@ function voiceCreateThinkingSound(opts) {
       try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
       master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
       pulse();
-      timer = setIv(pulse, 2500);
+      timer = setIv(pulse, 6500);
+    },
+    // ONE pulse at ctx.currentTime + 0.02 (the call's thinking clock decides when); no interval of its own. stop() ends it like start().
+    // With an event: event.at becomes the moment the pulse is heard and the event is returned (the same object); a context that is
+    // not running (suspended, closed) is asked to resume, plays nothing, claims nothing and false is returned.
+    pulse(ev) {
+      if (!ctx) return ev ? false : undefined;
+      const wants = ev && typeof ev === 'object';
+      if (wants && ctx.state !== undefined && ctx.state !== 'running') {
+        try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
+        return false;
+      }
+      if (!running) {
+        running = true;
+        try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
+        master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+      }
+      pulse(wants ? ev : undefined);
+      return wants ? ev : undefined;
     },
     stop() {
       if (!running) return;
@@ -5488,6 +5621,7 @@ function voiceInsert(agent, text) {
 
 // ── Read aloud ──
 function voiceUnlockAudio() {   // a tap lets one audio element play; the later sentences and automatic reads reuse it
+  if (typeof voiceDispPageRecover === 'function') voiceDispPageRecover();   // a tap is also the moment to wake or replace the page's audio context (read aloud after a call)
   try {
     if (!voicePlay.audio) voicePlay.audio = new Audio();
     const a = voicePlay.audio;
@@ -5501,6 +5635,7 @@ function voiceMarkPlaying(el) {
 }
 function voiceStopPlayback() {
   voicePlay.token++;
+  if (typeof voiceDisplayHook === 'function') { voiceDisplayHook('audioStop'); voiceDisplayHook('clearCaption'); }   // the beak closes at once
   try { if (voicePlay.audio) { voicePlay.audio.pause(); voicePlay.audio.onended = null; voicePlay.audio.onerror = null; } } catch { /* nothing playing */ }
   if (voicePlay.cancel) { const c = voicePlay.cancel; voicePlay.cancel = null; c(); }   // settles the waiting voicePlayBlob (not played to the end) and frees its blob URL
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch { /* no device voice */ }
@@ -5516,8 +5651,12 @@ async function voiceTtsBlob(agent, text) {   // null when the hub cannot say it 
     return b && b.size ? b : null;
   } catch { return null; }
 }
-function voicePlayBlob(blob, my) {
+function voicePlayBlob(blob, my, meta) {
   return new Promise((resolve) => {
+    if (my !== voicePlay.token) { resolve(false); return; }
+    // Before the element is chosen: a closed context is replaced (a captured element is silent for good), a suspended one is resumed for a moment (display or not).
+    const wait = typeof voiceDispPagePrep === 'function' ? voiceDispPagePrep(my) : null;
+    const begin = () => {
     if (my !== voicePlay.token) { resolve(false); return; }
     const a = voicePlay.audio || (voicePlay.audio = new Audio());
     const prev = voicePlay.url;
@@ -5531,6 +5670,8 @@ function voicePlayBlob(blob, my) {
       settled = true;
       if (a.onended === onEnded) a.onended = null;
       if (a.onerror === onError) a.onerror = null;
+      if (a.onplaying === onPlaying) a.onplaying = null;
+      if (typeof voiceDisplayHook === 'function') voiceDisplayHook('audioEnd');
       try { URL.revokeObjectURL(url); } catch { /* gone */ }
       if (voicePlay.url === url) voicePlay.url = null;
       if (voicePlay.cancel === cancel) voicePlay.cancel = null;
@@ -5540,12 +5681,18 @@ function voicePlayBlob(blob, my) {
     voicePlay.cancel = cancel;
     const onEnded = () => done(true);
     const onError = () => done(false);
+    // The reply audio really started (not when it was fetched): the display's analyser and caption begin here.
+    const onPlaying = () => { if (settled || typeof voiceDisplayHook !== 'function') return; voiceDisplayHook('audioStart'); if (meta && meta.text) voiceDisplayHook('caption', meta.text); };
     a.onended = onEnded;
     a.onerror = onError;
+    a.onplaying = onPlaying;
+    if (typeof voiceDisplayRoute === 'function') voiceDisplayRoute(a);   // once per element; nothing is routed (or muted) when there is no display or the audio context is not running
     a.src = url;
     if (prev) { try { URL.revokeObjectURL(prev); } catch { /* gone */ } }
     const p = a.play();
     if (p && p.catch) p.catch(() => done(false));
+    };
+    if (wait) wait.then(begin, begin); else begin();
   });
 }
 function voiceDeviceSpeak(sentences, my) {   // the phone's own voice, sentence by sentence
@@ -5558,7 +5705,14 @@ function voiceDeviceSpeak(sentences, my) {   // the phone's own voice, sentence 
     if (!voice) { toast('This device has no offline voice; turn on voice in Settings', 4500); return true; }
     for (const s of sentences) {
       if (my !== voicePlay.token) return true;
-      await new Promise((resolve) => { const u = new SpeechSynthesisUtterance(s); u.voice = voice; u.lang = voice.lang; u.rate = voiceSpeedNow(); u.onend = resolve; u.onerror = resolve; synth.speak(u); });
+      await new Promise((resolve) => {
+        const u = new SpeechSynthesisUtterance(s); u.voice = voice; u.lang = voice.lang; u.rate = voiceSpeedNow();
+        const dsp = (k) => { if (typeof voiceDisplayHook === 'function') voiceDisplayHook('speech', k); };
+        u.onstart = () => { dsp('start'); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('caption', s); };
+        u.onboundary = () => dsp('boundary'); u.onpause = () => dsp('pause'); u.onresume = () => dsp('resume');
+        u.onend = () => { dsp('end'); resolve(); }; u.onerror = () => { dsp('end'); resolve(); };
+        synth.speak(u);
+      });
     }
     return true;
   })();
@@ -5622,6 +5776,105 @@ const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', he
 const voiceCallPost = (path, body, opts) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(opts || {}) });
 const voiceCallJson = async (r) => { try { return (await r.json()) || {}; } catch { return {}; } };
 
+// ── Call display: None / Orb / an installed character (lib/ui-call-display.js; the choice is per device, the agent only has a default) ──
+// Everything here is a no-op unless a display exists for the running call, so reading aloud and a call without a display are unchanged.
+const voiceDisp = { cur: null, last: null, floor: null, turnSeq: new Map(), shared: { ctx: null, routes: new WeakMap(), routed: 0 } };   // shared: the audio context and the routed <audio> outlive a call (an element can be routed only once, and a closed context would silence it)
+// The context a routed <audio> element was captured by is gone: that element stays silent for good, so the next playback gets a new one.
+// A routed <audio> outlives the call, and so does its audio context: read aloud after a call (or a call with None) needs them recovered by the page itself.
+// Never routes anything, never mutes a plain element, never loops: one resume per tap / per sentence, and none while the page is hidden.
+function voiceDispRoutedEl() { const s = voiceDisp.shared, a = voicePlay.audio; return !!(s && s.ctx && a && s.routes && s.routes.has(a)); }
+function voiceDispCtxClosed() {   // the context behind the routed element is closed: forget it and replace the element BEFORE a new one is chosen to play
+  if (!voiceDispRoutedEl() || voiceDisp.shared.ctx.state !== 'closed') return false;
+  const s = voiceDisp.shared;
+  if (!voiceDisp.cur) { s.ctx = null; s.routed = 0; s.routes = new WeakMap(); }   // a running display keeps its own references; its next unlock() makes a new context
+  voiceDispRoutesLost();
+  return true;
+}
+function voiceDispPageRecover() {   // inside a user gesture
+  if (voiceDispCtxClosed()) return;
+  const ctx = voiceDispRoutedEl() ? voiceDisp.shared.ctx : null;
+  if (!ctx || ctx.state === 'running' || document.hidden) return;
+  try { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } catch { /* the sentence decides */ }
+}
+function voiceDispPagePrep(my) {   // null: play now; a promise: wait (bounded) for a suspended context, else fall back to a plain element
+  if (voiceDispCtxClosed()) return null;
+  const ctx = voiceDispRoutedEl() ? voiceDisp.shared.ctx : null;
+  if (!ctx || ctx.state === 'running' || voiceDisp.cur) return null;   // with a display, routeElement() resumes and waits for the context itself
+  const a = voicePlay.audio;
+  const plain = () => { if (my === voicePlay.token && voicePlay.audio === a && ctx.state !== 'running') voiceDispRoutesLost(); };   // silent behind a context that will not run: a fresh, unrouted element is audible
+  if (document.hidden) { plain(); return null; }
+  return new Promise((res) => {
+    let t = null;
+    const fin = () => { if (t !== null) { clearTimeout(t); t = null; } plain(); res(); };
+    t = setTimeout(fin, 600);
+    try { const r = ctx.resume(); if (r && r.then) r.then(fin, fin); else fin(); } catch { fin(); }
+  });
+}
+function voiceDispRoutesLost() { try { if (voicePlay.audio) { voicePlay.audio.pause(); voicePlay.audio.onended = null; voicePlay.audio.onerror = null; voicePlay.audio.onplaying = null; } } catch { /* nothing playing */ } voicePlay.audio = null; if (voicePlay.cancel) { const c = voicePlay.cancel; voicePlay.cancel = null; c(); } }   // a play waiting on the replaced element settles as not played
+function voiceDispAgentDefault(agent) { const a = (typeof agents !== 'undefined' && Array.isArray(agents) ? agents : []).find(x => x && x.name === agent); return a && typeof a.callDisplay === 'string' ? a.callDisplay : 'none'; }
+function voiceDisplayHook(name, ...args) {
+  const d = voiceDisp.cur;
+  if (!d || typeof d[name] !== 'function') return undefined;
+  try { return d[name](...args); } catch { return undefined; }
+}
+// One media element, one source: the analyser is wired the first time and reused for every sentence (see lib/ui-call-display.js routeElement).
+function voiceDisplayRoute(el) { const d = voiceDisp.cur; if (d) { try { d.routeElement(el); } catch { /* plain playback */ } } }
+function voiceFacePackBody() { const d = voiceDisp.cur; const slug = d && typeof d.activeFacePack === 'function' ? d.activeFacePack() : null; return slug ? { facePack: slug } : {}; }
+function voiceDispTalk() { const f = voiceDisp.floor; if (f) f.take(); }
+function voiceDispAdopt() {
+  return [
+    { el: $('call-panel'), label: 'Call' },
+    { el: $('voice-panel'), label: 'Voice settings', show: true, prepare: () => voicePanelPaint() },
+  ];
+}
+function voiceDispBegin(vc) {
+  if (typeof CallDisplay === 'undefined' || typeof CallDisplay.createCallDisplay !== 'function' || typeof CallDisplay.createTalkFloor !== 'function') return;   // the module exports only window.CallDisplay
+  if (voiceDisp.last) { try { voiceDisp.last.release(); } catch { /* gone */ } voiceDisp.last = null; }
+  voiceDisp.floor = CallDisplay.createTalkFloor({ call: () => (voiceCall === vc ? vc.call : null), setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t) });
+  voiceDisp.turnSeq.clear();
+  let d = null;
+  try {
+    d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), needsContext: true, shared: voiceDisp.shared, onRoutesLost: voiceDispRoutesLost, agentDefault: () => voiceDispAgentDefault(vc.agent), adopt: voiceDispAdopt,
+      reopenHost: () => $('cp-hangup'),   // "Show display" goes inside the call panel, beside Hang up
+      onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onChange: () => voiceDispPaintPanel() });
+    voiceDisp.cur = d;
+    d.start();   // synchronous: the audio context is made and resumed inside the tap that started the call
+  } catch { voiceDisp.cur = null; }
+}
+// The call is ending: hang-up = a short goodbye (bounded), release = at once. Safe to call twice.
+function voiceDispEnd(goodbye) {
+  const d = voiceDisp.cur; voiceDisp.cur = null;
+  if (voiceDisp.floor) { try { voiceDisp.floor.cancel(); } catch { /* gone */ } voiceDisp.floor = null; }
+  voiceDisp.turnSeq.clear();
+  if (!d) return;
+  if (!goodbye) { try { d.release(); } catch { /* gone */ } return; }
+  voiceDisp.last = d;
+  let said = null; try { said = d.hangUp(); } catch { /* the view is gone */ }   // synchronous: the controls are back in the page before the page tears the call down
+  Promise.resolve(said).catch(() => {}).then(() => { if (voiceDisp.last === d) voiceDisp.last = null; });
+}
+function voiceDispMood(seq, mood) { voiceDisplayHook('mood', 'seq:' + seq, mood); }   // once per turn, whichever of the chat stream and the hub event comes first
+function voiceCallSseMood(rec, mood) { const vc = voiceCall; if (vc && rec && rec.agent === vc.agent) voiceDispMood(vc.sendSeq, mood); }
+async function voiceDispPaintPanel() {
+  const sel = $('vp-display');
+  if (!sel || typeof CallDisplay === 'undefined') return;
+  const prefs = CallDisplay.loadDisplayPrefs(localStorage);
+  let packs = [], state = 'ready';
+  try { packs = await CallDisplay.fetchPacks((...a) => fetch(...a)); } catch { state = 'failed'; }
+  if (document.activeElement !== sel) CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
+  const cap = $('vp-captions'); if (cap) cap.checked = !!prefs.captions;
+  const note = $('vp-display-note');
+  if (note) note.textContent = CallDisplay.displayNote(CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(current), packs, packsState: state }));
+}
+function voiceDispSetChoice(v) {
+  if (typeof CallDisplay === 'undefined') return;
+  if (voiceDisp.cur) voiceDisp.cur.setChoice(v); else CallDisplay.saveDisplayPrefs(localStorage, { choice: v });   // live: the view changes, the call goes on
+  voiceDispPaintPanel();
+}
+function voiceDispSetCaptions(on) {
+  if (typeof CallDisplay === 'undefined') return;
+  if (voiceDisp.cur) voiceDisp.cur.setCaptions(on); else CallDisplay.saveDisplayPrefs(localStorage, { captions: !!on });
+}
+
 function voiceCallPaintState(name) {
   const s = $('cp-state'); if (s) { s.textContent = VOICE_CALL_STATE_TEXT[name] || name; s.dataset.state = name; }
   const p = $('call-panel'); if (p) p.dataset.state = name;
@@ -5669,6 +5922,7 @@ async function voiceWakeAcquire(vc) {   // the screen stays on during a call; as
 function voiceCallTeardown(vc) {
   if (voiceCall !== vc) return;
   voiceCall = null;
+  if (typeof voiceDispEnd === 'function') voiceDispEnd(false);   // a call that ended some other way: the display goes at once (hang-up has already started its goodbye)
   const lock = vc.wake; vc.wake = null;
   try { if (lock) Promise.resolve(lock.release()).catch(() => {}); } catch { /* already released */ }
   clearInterval(vc.beatTimer); vc.beatTimer = null;
@@ -5682,7 +5936,9 @@ function voiceCallTeardown(vc) {
 function voiceCallHangUp() {
   const vc = voiceCall;
   if (!vc) return Promise.resolve([]);
-  const p = vc.call.hangUp();
+  vc.hangingUp = true;   // the controller reports 'ended' synchronously inside hangUp(): the page teardown must wait for the goodbye to start (below)
+  let p; try { p = vc.call.hangUp(); } catch { p = Promise.resolve([]); }
+  if (typeof voiceDispEnd === 'function') voiceDispEnd(true);   // the microphone and the hub are already being let go; the character says goodbye for a moment
   voiceCallTeardown(vc);
   return p;
 }
@@ -5733,7 +5989,7 @@ async function voiceCallSpeak(agent, rawText) {
     const blob = await voiceTtsBlob(agent, text);
     if (my !== voicePlay.token) return false;
     if (blob) {
-      const ok = await voicePlayBlob(blob, my);
+      const ok = await voicePlayBlob(blob, my, { text });
       if (my !== voicePlay.token) return false;
       if (ok) return true;
     }
@@ -5750,6 +6006,7 @@ function voiceCallSend(vc, text, userEl) {
   if (!userEl) { userEl = addUserBubble(text, null); setBubbleTime(userEl, msgTimeLabel(Date.now())); }
   scrollChat(true);
   const seq = ++vc.sendSeq;
+  voiceDisplayHook('reply', 'turn', 'seq:' + seq);   // a new turn: the older ones (and their moods) are over
   vc.expecting = true;
   const release = () => {   // a turn_end that never arrived must not leave the call in Thinking
     setTimeout(() => { if (voiceCall === vc && vc.sendSeq === seq && vc.expecting) { vc.expecting = false; vc.call.onReplyText(vc.lastText || '', true); } }, 2500);
@@ -5821,6 +6078,22 @@ function voiceThinkingDeps(vc) {
         vc.vad.setPlaybackActive(true);
       } catch { /* no sound: the wait is just quiet */ }
     },
+    // The event goes to the sound, which moves ev.at to when the pulse is heard (same object back); false = not playing (suspended).
+    pulse(ev) {
+      if (voiceCall !== vc || typeof voiceCreateThinkingSound !== 'function') return;
+      let r;
+      try {
+        if (!vc.thinkCtx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; vc.thinkCtx = new AC(); }
+        try { if (vc.thinkCtx.state === 'suspended') Promise.resolve(vc.thinkCtx.resume()).catch(() => {}); } catch { /* resumes later */ }
+        if (!vc.thinkSnd) vc.thinkSnd = voiceCreateThinkingSound({ ctx: vc.thinkCtx, volume: voiceThinkingVolume() });
+        vc.thinkSnd.setVolume(voiceThinkingVolume());
+        r = vc.thinkSnd.pulse(ev);
+        if (r === false) return r;
+        vc.thinkOn = true;
+        vc.vad.setPlaybackActive(true);
+      } catch { /* no sound: the wait is just quiet */ }
+      return r;
+    },
     stop() {
       if (!vc.thinkOn) return;
       vc.thinkOn = false;
@@ -5843,10 +6116,11 @@ function voiceCallDeps(vc) {
     thinking: voiceThinkingDeps(vc),
     agent,
     now: () => Date.now(),
+    perfNow: () => performance.now(),
     setTimer: (f, ms) => setTimeout(f, ms),
     clearTimer: (t) => clearTimeout(t),
     prefs: () => voicePrefsNow(),
-    vad: { start: (h) => vc.vad.start(h), stop: () => vc.vad.stop(), setPlaybackActive: (on) => vc.vad.setPlaybackActive(on) },
+    vad: { start: (h) => vc.vad.start(typeof voiceDisp !== 'undefined' && voiceDisp.floor ? voiceDisp.floor.wrap(h) : h), stop: () => vc.vad.stop(), setPlaybackActive: (on) => vc.vad.setPlaybackActive(on) },
     stt: (f32) => voiceCallStt(agent, f32),
     isTurnRunning: () => isBusy(agent) || ownTurnFor(agent),
     send: (text) => voiceCallSend(vc, text),
@@ -5858,11 +6132,14 @@ function voiceCallDeps(vc) {
     speakActivity: () => !!voicePrefsNow().speakActivity,   // off by default: what the agent is doing is shown in the panel, not spoken
     server: voiceCallServer(agent, () => vc),
     ui: {
-      state: (name) => { if (voiceCall !== vc) return; voiceCallPaintState(name); if (name === 'ended') voiceCallTeardown(vc); },
-      level: (db) => { if (voiceCall === vc) { vc.lastFrame = Date.now(); voiceCallPaintMeter(db); } },   // a VAD frame ran: the page is alive
+      state: (name) => { if (voiceCall !== vc) return; voiceCallPaintState(name); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('setState', name); if (name === 'ended' && !vc.hangingUp) voiceCallTeardown(vc); },
+      thinkingPulse: (ev) => { if (voiceCall === vc && typeof voiceDisplayHook === 'function') voiceDisplayHook('thinkingPulse', ev); },
+      reply: (kind) => { if (voiceCall === vc && typeof voiceDisplayHook === 'function') voiceDisplayHook('reply', kind, 'seq:' + vc.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
+      thinkingWanted: () => voiceCall === vc && typeof voiceDisplayHook === 'function' && voiceDisplayHook('showsPulse') === true,   // no view shown (None, hidden): the plain thinking sound
+      level: (db) => { if (voiceCall === vc) { vc.lastFrame = Date.now(); voiceCallPaintMeter(db); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('level', db); } },   // a VAD frame ran: the page is alive
       activity: (text) => { const a = $('cp-activity'); if (a && voiceCall === vc) a.textContent = text || ''; },   // silent: shown in the panel only
       heard: (text) => { const h = $('cp-heard'); if (h && voiceCall === vc) h.textContent = `Heard: ${text}`; },
-      held: (list) => { if (voiceCall === vc) voiceCallPaintHeld(list); },
+      held: (list) => { if (voiceCall === vc) { voiceCallPaintHeld(list); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('badge', (list || []).length); } },
       toast: (msg) => toast(msg, 4000),
       summary: (text) => { if (chatOpenFor(agent)) { addNote(text); scrollChat(true); } else toast(text, 6000); },   // not saved: it is gone when the chat is drawn again
     },
@@ -5891,6 +6168,7 @@ function voiceCallStart() {
   voiceMediaSession(vc, true);   // Android Chrome: a playing media session is what lets a call go on while the page is hidden
   vc.beatTimer = setInterval(voiceCallBeat, 1000);
   voiceCallPanel(true); voiceCallPaintState('starting'); voiceMicPaint();
+  if (typeof voiceDispBegin === 'function') voiceDispBegin(vc);   // synchronous, still inside the tap
   const bail = () => { if (voiceCall === vc) voiceCallTeardown(vc); };
   Promise.resolve(vc.call.start()).then((ok) => { if (!ok) bail(); }, bail);
   voiceWakeAcquire(vc);
@@ -5911,7 +6189,7 @@ function voiceCallWire() {   // the panel's own buttons
 // Hub events for the call (the same /api/events stream as the chat; see connectEvents).
 function voiceCallTurnStart(ev) {
   const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !ev.turnId) return;
-  if (ev.origin && ev.origin.kind === 'user') { vc.callTurns.add(ev.turnId); vc.lastText = ''; }
+  if (ev.origin && ev.origin.kind === 'user') { vc.callTurns.add(ev.turnId); vc.lastText = ''; if (typeof voiceDisp !== 'undefined') { voiceDisp.turnSeq.set(ev.turnId, vc.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value); } }
   else vc.hubTurns.set(ev.turnId, String((ev.origin && (ev.origin.label || ev.origin.from)) || originLabel(ev.origin) || 'A task'));
 }
 function voiceCallTurnDelta(ev) {
@@ -5938,6 +6216,10 @@ function voiceCallTurnEnd(ev) {
   if (!first) return;
   vc.call.onReplyText('', false);   // a fresh reading for the controller (it counts sentences per reply)
   vc.call.onReplyText(`${label}: ${first}`, true);
+}
+function voiceCallTurnMood(ev) {   // turn_mood { agent, turnId, mood }: only the call's own turns
+  const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !vc.callTurns.has(ev.turnId)) return;
+  voiceDispMood(voiceDisp.turnSeq.has(ev.turnId) ? voiceDisp.turnSeq.get(ev.turnId) : vc.sendSeq, ev.mood);
 }
 function voiceCallAsk(ev) {
   const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !ev.request_id) return;
@@ -6252,6 +6534,7 @@ function voicePanelPaint() {
   const vol = Math.round(voiceThinkingVolume() * 100);
   set('vp-think-vol', vol, '.vp-think-val', `${vol}%`);
   const think = $('vp-think'); if (think) think.checked = prefs.thinkingSound !== false;
+  voiceDispPaintPanel();
   const vv = $('vp-think-vol'); if (vv) vv.disabled = prefs.thinkingSound === false;
   const room = $('vp-room'); if (room && !voiceRoom.running) room.disabled = !!voiceCall;
 }
@@ -6290,6 +6573,8 @@ function voicePanelWire() {
   vol?.addEventListener('input', () => { const l = p.querySelector('.vp-think-val'); if (l) l.textContent = `${vol.value}%`; });
   vol?.addEventListener('change', () => save({ thinkingVolume: Math.max(0, Math.min(1, Number(vol.value) / 100)) }));
   $('vp-room')?.addEventListener('click', voiceRoomRun);
+  $('vp-display')?.addEventListener('change', (e) => voiceDispSetChoice(e.target.value));
+  $('vp-captions')?.addEventListener('change', (e) => voiceDispSetCaptions(!!e.target.checked));
   p.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); voicePanelShow(false); $('voice-settings-btn')?.focus(); } });
   document.addEventListener('click', (e) => { if (voicePanelOpen() && !p.contains(e.target) && !(e.target.closest && e.target.closest('#voice-settings-btn'))) voicePanelShow(false); });
   $('call-again')?.addEventListener('click', () => { voiceEndedBar(false); voiceCallStart(); });
@@ -6363,7 +6648,7 @@ async function sendMessage(fallback) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...zoneHeader() },
       signal: controller.signal,
-      body: JSON.stringify({ agent, message: text, images, confirm_tools: false, ...(fallback && fallback.voice ? { voice: true } : {}) }),   // voice: the message came from a hands-free call
+      body: JSON.stringify({ agent, message: text, images, confirm_tools: false, ...(fallback && fallback.voice ? { voice: true } : {}), ...(fallback && fallback.voice && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {}) }),   // facePack only while a character with reactions is on screen   // voice: the message came from a hands-free call
     });
     if (r.status === 409) {
       sent = false;
@@ -6638,6 +6923,7 @@ async function readStream(response, rec) {
   const handleGateway = (g) => {
     switch (g.type) {
       case 'context_health': noteCtxReading(rec.agent, g); break;
+      case 'voice_mood': voiceCallSseMood(rec, g.mood); break;   // the agent's mood word, already stripped from the text
       case 'ask_user_question':
         rec.question = g;
         if (visible()) showQuestion(g, () => { rec.question = null; });
@@ -7535,6 +7821,7 @@ function connectEvents() {
   on('turn_delta', voiceCallTurnDelta);
   on('turn_activity', voiceCallTurnActivity);
   on('turn_end', voiceCallTurnEnd);
+  on('turn_mood', voiceCallTurnMood);
   on('ask_user', voiceCallAsk);
   on('ask_user_done', voiceCallAskDone);
   on('voice_held', voiceCallHeld);
