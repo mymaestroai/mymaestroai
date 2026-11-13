@@ -683,3 +683,33 @@ test('adapter: real speech during a running hold-over ends it at once; a candida
   assert.deepStrictEqual(seen, ['begin', 'start']);
   await vad.stop();
 });
+
+// ---- late-echo simulation against the real adapter's thresholds ----
+// A frame-by-frame stand-in for MicVAD's start rule: a real start needs minSpeechMs of consecutive frames (32 ms each) at or above the
+// positive threshold that is in force at that frame. The reply ends at t = 0; the car's echo of its last syllable arrives 150-330 ms later
+// (speech probability 0.65); the person really speaks from 1000 ms (0.9).
+async function simulate(vadOpts) {
+  const { k, vad, m } = await liveVad({}, vadOpts);
+  const cur = () => Object.assign({ positiveSpeechThreshold: m.options.positiveSpeechThreshold, minSpeechMs: m.options.minSpeechMs }, ...m.setOptionsCalls);
+  vad.setPlaybackActive(true);
+  vad.setPlaybackActive(false);   // the reply's last sentence ended
+  const starts = [];
+  let run = 0;
+  for (let t = 0; t < 1600; t += 32) {
+    const p = t >= 150 && t < 330 ? 0.65 : t >= 1000 ? 0.9 : 0.05;
+    const o = cur();
+    run = p >= o.positiveSpeechThreshold ? run + 1 : 0;
+    if (run * 32 >= o.minSpeechMs && run * 32 - 32 < o.minSpeechMs) starts.push(t);
+    await k.advance(32);
+  }
+  await vad.stop();
+  return starts;
+}
+
+test('late echo: with the 600 ms echo guard the car\'s echo is not a new turn and the person still is; without it the echo starts a turn', async () => {
+  const guarded = await simulate({});
+  assert.strictEqual(guarded.length, 1, 'one start: the person');
+  assert.ok(guarded[0] >= 1000, 'the start is the person at ' + guarded[0] + ' ms');
+  const off = await simulate({ echoHoldMs: 0 });
+  assert.ok(off.length === 2 && off[0] < 400, 'without the guard the echo at ' + off[0] + ' ms counts as speech');
+});
