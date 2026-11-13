@@ -37,7 +37,7 @@ test('send path: voice: true only for messages that came from a call', () => {
   assert.match(app, /async function sendSoloMessage\(chatId, retryCount = 0, sendOpts = null\)/);
   assert.match(app, /if \(!retryCount\) chat\.voiceSend = !!\(sendOpts && sendOpts\.voice\);/);
   assert.match(app, /images: imagesToSend,\s*\.\.\.\(chat\.voiceSend \? \{ voice: true \} : \{\}\)/);
-  assert.match(wiring(), /sendSoloMessage\(chatId, 0, \{ voice: true \}\)/);
+  assert.match(wiring(), /sendSoloMessage\(chatId, 0, \{ voice: true, onSendResult: accepted \}\)/);
 });
 
 test('hub events: the call listens to turn, ask and voice events on the one EventSource', () => {
@@ -112,12 +112,12 @@ function makeEnv(opts = {}) {
     return { ok: true, status: 200, json: async () => ({ success: true }) };
   };
   const fakeCall = {
-    started: 0, hung: 0, replies: [], activities: [], asks: [], askDone: [], held: [], heldDone: [], modes: [], decisions: [],
+    callId: 'c-1', started: 0, hung: 0, replies: [], activities: [], asks: [], askDone: [], held: [], heldDone: [], modes: [], decisions: [],
     async start() { fakeCall.started++; return opts.startOk !== false; },
     hangUp() { fakeCall.hung++; return Promise.resolve([]); },
     onReplyText(t, d) { fakeCall.replies.push([t, d]); }, onActivity(i) { fakeCall.activities.push(i); },
     onAsk(a) { fakeCall.asks.push(a); }, onAskDone(id) { fakeCall.askDone.push(id); },
-    onHeld(i, q) { fakeCall.held.push([i, q]); }, onHeldDone(id) { fakeCall.heldDone.push(id); },
+    onHeld(i, q) { fakeCall.held.push([i, q]); }, onHeldDone(id, choice) { fakeCall.heldDone.push([id, choice]); },
     setMode(m) { fakeCall.modes.push(m); }, decide(id, c) { fakeCall.decisions.push([id, c]); },
   };
   const vad = { setMicLevel(v) { calls.vadCalls.push(['mic', v]); }, setInterruptSensitivity(v) { calls.vadCalls.push(['sens', v]); } };
@@ -137,7 +137,11 @@ function makeEnv(opts = {}) {
     appendMessage: (c, r, t) => calls.appended.push([c, r, t]),
     appendSystemNotice: (c, t) => calls.notices.push([c, t]),
     stopAgentTurn: (a) => calls.stops.push(a),
-    sendSoloMessage: async (c, n, o) => { calls.sent.push({ c, n, o, text: els['input-c1'].value }); },
+    sendSoloMessage: async (c, n, o) => {
+      calls.sent.push({ c, n, o: { voice: o.voice }, text: els['input-c1'].value });
+      if (opts.sendFails) o.onSendResult(new Error('HTTP 500: Internal'));
+      else if (opts.sendOk) o.onSendResult(null);
+    },
     voicePrefsNow: () => prefs, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
     voiceSavePrefs: (s, p) => { prefs = p; calls.saved.push(p); },
     voicePrefsCacheSet: null,
@@ -266,15 +270,15 @@ test('deps: server routes carry the agent and the action; end returns the held l
   const { api, calls } = makeEnv({ held: [{ id: 'job:1', label: 'Nightly job' }] });
   await api.voiceCallStart('c1');
   const s = calls.created[0].server;
-  await s.start('announce'); await s.heartbeat(); await s.mode('dnd');
-  const end = await s.end();
-  await s.decide('job:1', 'now');
+  await s.start('announce'); await s.heartbeat('c-1'); await s.mode('dnd', 'c-1');
+  const end = await s.end('c-1');
+  await s.decide('job:1', 'now', 'c-1');
   const posts = calls.fetch.filter(x => x.url.startsWith('/api/voice/call')).map(x => [x.url, x.body]);
   assert.deepStrictEqual(posts[0], ['/api/voice/call', { agent: 'alice', action: 'start', mode: 'announce' }]);
-  assert.deepStrictEqual(posts[1], ['/api/voice/call', { agent: 'alice', action: 'heartbeat' }]);
-  assert.deepStrictEqual(posts[2], ['/api/voice/call', { agent: 'alice', action: 'mode', mode: 'dnd' }]);
-  assert.deepStrictEqual(posts[3], ['/api/voice/call', { agent: 'alice', action: 'end' }]);
-  assert.deepStrictEqual(posts[4], ['/api/voice/call/decide', { agent: 'alice', id: 'job:1', choice: 'now' }]);
+  assert.deepStrictEqual(posts[1], ['/api/voice/call', { agent: 'alice', action: 'heartbeat', callId: 'c-1' }]);
+  assert.deepStrictEqual(posts[2], ['/api/voice/call', { agent: 'alice', action: 'mode', mode: 'dnd', callId: 'c-1' }]);
+  assert.deepStrictEqual(posts[3], ['/api/voice/call', { agent: 'alice', action: 'end', callId: 'c-1' }]);
+  assert.deepStrictEqual(posts[4], ['/api/voice/call/decide', { agent: 'alice', id: 'job:1', choice: 'now', callId: 'c-1' }]);
   assert.deepStrictEqual(end, { held: [{ id: 'job:1', label: 'Nightly job' }] });
 });
 
@@ -369,10 +373,10 @@ test('events: ask_user, ask_user_done, voice_held, voice_held_done reach the con
   assert.deepStrictEqual(fakeCall.askDone, ['r1']);
   ev('ask_user', { agent: 'alice', request_id: 'r2', questions: [{ question: 'a', options: [] }, { question: 'b', options: [] }] });
   assert.strictEqual(fakeCall.asks.length, 1, 'several questions are left to the screen');
-  ev('voice_held', { agent: 'alice', item: { id: 'job:1', label: 'Job' }, quiet: true });
-  ev('voice_held_done', { agent: 'alice', id: 'job:1', choice: 'skip' });
+  ev('voice_held', { agent: 'alice', callId: 'c-1', item: { id: 'job:1', label: 'Job' }, quiet: true });
+  ev('voice_held_done', { agent: 'alice', callId: 'c-1', id: 'job:1', choice: 'later' });
   assert.deepStrictEqual(fakeCall.held, [[{ id: 'job:1', label: 'Job' }, true]]);
-  assert.deepStrictEqual(fakeCall.heldDone, ['job:1']);
+  assert.deepStrictEqual(fakeCall.heldDone, [['job:1', 'later']], 'P-b: the choice is forwarded');
 });
 
 test('call bar buttons: Now/Later/Skip call decide, the switch calls setMode, Hang up hangs up', async () => {
@@ -408,9 +412,86 @@ test('hang up: controller hung up once, bar and red button removed, wake lock re
 test('events: the hub ending the call (state off, e.g. it expired) hangs up with a toast', async () => {
   const { api, fakeCall, calls } = makeEnv();
   await api.voiceCallStart('c1');
-  api.voiceCallHubEvent('voice_call', { agent: 'alice', state: 'off' });
+  api.voiceCallHubEvent('voice_call', { agent: 'alice', state: 'off', callId: 'c-1' });
   assert.strictEqual(fakeCall.hung, 1);
   assert.ok(calls.toasts.includes('The call ended.'));
+});
+
+test('P-a: events of another call (another callId, or none) are ignored', async () => {
+  const { api, fakeCall, calls } = makeEnv();
+  await api.voiceCallStart('c1');
+  const ev = api.voiceCallHubEvent;
+  ev('voice_held', { agent: 'alice', callId: 'old', item: { id: 'x' } });
+  ev('voice_held', { agent: 'alice', item: { id: 'y' } });
+  ev('voice_held_done', { agent: 'alice', callId: 'old', id: 'x', choice: 'now' });
+  ev('voice_call', { agent: 'alice', state: 'off', callId: 'old' });
+  assert.deepStrictEqual([fakeCall.held, fakeCall.heldDone, fakeCall.hung], [[], [], 0]);
+  assert.ok(!calls.toasts.includes('The call ended.'));
+});
+
+test('P-a: the server adapter sends the call id on heartbeat, mode, decide and end, and reads the id and the held items from the answers', async () => {
+  const { api, calls } = makeEnv({ fetch: (url, o) => (url === '/api/voice/call' ? { ok: true, status: 200, json: async () => ({ ok: true, call: { callId: 'c-9', mode: 'announce', held: [{ id: 'j', state: 'later' }] } }) } : null) });
+  await api.voiceCallStart('c1');
+  const s = calls.created[0].server;
+  assert.deepStrictEqual(await s.start('announce'), { callId: 'c-9', held: [{ id: 'j', state: 'later' }] });
+  assert.deepStrictEqual(await s.heartbeat('c-9'), { callId: 'c-9', held: [{ id: 'j', state: 'later' }] });
+  await s.mode('dnd', 'c-9'); await s.end('c-9'); await s.decide('j', 'now', 'c-9');
+  const bodies = calls.fetch.filter(x => x.url.startsWith('/api/voice/call')).map(x => x.body);
+  assert.deepStrictEqual(bodies.slice(1), [
+    { agent: 'alice', action: 'heartbeat', callId: 'c-9' }, { agent: 'alice', action: 'mode', mode: 'dnd', callId: 'c-9' },
+    { agent: 'alice', action: 'end', callId: 'c-9' }, { agent: 'alice', id: 'j', choice: 'now', callId: 'c-9' }]);
+});
+
+test('P-j: a heartbeat the hub answers with 409 or 403 hangs up here with a toast', async () => {
+  for (const [status, error] of [[409, 'no_call'], [409, 'stale_call'], [403, 'not_your_call']]) {
+    const { api, fakeCall, calls } = makeEnv({ fetch: (url, o) => (o.body && JSON.parse(o.body).action === 'heartbeat' ? { ok: false, status, json: async () => ({ error }) } : null) });
+    await api.voiceCallStart('c1');
+    await assert.rejects(() => calls.created[0].server.heartbeat('c-1'));
+    assert.strictEqual(fakeCall.hung, 1, error);
+    assert.ok(calls.toasts.includes('The call ended.'), error);
+  }
+  const { api, fakeCall, calls } = makeEnv({ fetch: (url, o) => (o.body && JSON.parse(o.body).action === 'heartbeat' ? { ok: false, status: 500, json: async () => ({}) } : null) });
+  await api.voiceCallStart('c1');
+  await assert.rejects(() => calls.created[0].server.heartbeat('c-1'));
+  assert.strictEqual(fakeCall.hung, 0, 'a server error is not the end of the call');
+});
+
+test('P-i: a voice send the hub did not take rejects to the controller; a taken one resolves; a missing turn_end is released after 2.5 s', async () => {
+  const e2 = makeEnv({ sendFails: true });
+  await e2.api.voiceCallStart('c1');
+  await assert.rejects(() => Promise.resolve(e2.calls.created[0].send('hello')), /HTTP 500/);
+  const e3 = makeEnv({ sendOk: true });
+  await e3.api.voiceCallStart('c1');
+  await e3.calls.created[0].send('hello');
+  await flush(); await flush();
+  assert.deepStrictEqual(e3.fakeCall.replies, [['', true]], 'no turn_end came: the call is released from Thinking');
+  const e4 = makeEnv({ sendOk: true });
+  await e4.api.voiceCallStart('c1');
+  await e4.calls.created[0].send('hello');
+  e4.api.voiceCallHubEvent('turn_start', { agent: 'alice', turnId: 't1', origin: { kind: 'user' } });
+  e4.api.voiceCallHubEvent('turn_end', { agent: 'alice', turnId: 't1', ok: true, reply: 'Hi.' });
+  await flush(); await flush();
+  assert.deepStrictEqual(e4.fakeCall.replies, [['Hi.', true]], 'a turn_end that arrived leaves nothing to release');
+});
+
+test('P-i: sendSoloMessage tells a voice caller whether the hub took the message (accepted, interjected, refused, network error)', () => {
+  const s = app.slice(app.indexOf('async function sendSoloMessage('), app.indexOf('// Group chat - free flowing'));
+  assert.match(s, /const notify = \(err\) => \{ if \(notified \|\| !sendOpts \|\| !sendOpts\.onSendResult\) return;/);
+  assert.match(s, /throw new Error\(`HTTP \$\{response\.status\}: \$\{response\.statusText\}`\);\s*\}\s*notify\(null\);/, 'accepted');
+  assert.match(s, /\} catch \(err\) \{\s*notify\(err\);/, 'network error or a non-2xx answer');
+  assert.match(s, /notify\(new Error\('busy'\)\);/, 'refused');
+});
+
+test('P-k: a wake lock that arrives after the hang-up is released at once and not kept', async () => {
+  const released = [];
+  let grant;
+  const e = makeEnv();
+  e.stubs.navigator.wakeLock.request = () => new Promise((r) => { grant = () => r({ release: async () => { released.push(1); }, addEventListener() {} }); });
+  await e.api.voiceCallStart('c1');
+  await e.api.voiceCallHangUp();
+  grant(); await flush(); await flush();
+  assert.deepStrictEqual(released, [1], 'released at once');
+  assert.strictEqual(e.api.voiceCallS.wake, null, 'not kept');
 });
 
 test('room check: counts down, sets and saves mic level and interrupt sensitivity, shows the result', async () => {

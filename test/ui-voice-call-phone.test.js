@@ -89,10 +89,10 @@ test('events feed the controller; hub events are wired on the same stream', () =
 function runEvents(overrides) {
   const calls = [];
   const call = {
-    state: 'listening',
+    state: 'listening', callId: 'c-1',
     onReplyText: (t, d) => calls.push(['reply', t, d]), onActivity: (i) => calls.push(['activity', i]),
     onAsk: (a) => calls.push(['ask', a]), onAskDone: (id) => calls.push(['askDone', id]),
-    onHeld: (i, q) => calls.push(['held', i, q]), onHeldDone: (id) => calls.push(['heldDone', id]),
+    onHeld: (i, q) => calls.push(['held', i, q]), onHeldDone: (id, choice) => calls.push(['heldDone', id, choice]),
   };
   const vc = { agent: 'bob', call, callTurns: new Set(), hubTurns: new Map(), asks: new Map(), lastText: '', expecting: true, startedAt: 0 };
   const src = js.slice(js.indexOf('function voiceCallTurnStart(ev)'), js.indexOf('// ── Room check (5 s)'));
@@ -144,13 +144,13 @@ test('ask_user, ask_user_done, voice_held and voice_held_done reach the controll
   f.voiceCallAsk({ agent: 'bob', request_id: 'r1', question: 'Which one?', options: [{ label: 'A' }, { label: 'B' }], questions: [{ question: 'Which one?', options: [{ label: 'A' }, { label: 'B' }] }] });
   f.voiceCallAsk({ agent: 'bob', request_id: 'r2', questions: [{ question: 'Only in questions?', options: [{ label: 'Yes' }] }] });
   f.voiceCallAskDone({ agent: 'bob', request_id: 'r1' });
-  f.voiceCallHeld({ agent: 'bob', item: { id: 'consult:1', label: 'Alice asks' }, quiet: true });
-  f.voiceCallHeld({ agent: 'zed', item: { id: 'x' } });
-  f.voiceCallHeldDone({ agent: 'bob', id: 'consult:1', choice: 'skip' });
+  f.voiceCallHeld({ agent: 'bob', callId: 'c-1', item: { id: 'consult:1', label: 'Alice asks' }, quiet: true });
+  f.voiceCallHeld({ agent: 'zed', callId: 'c-1', item: { id: 'x' } });
+  f.voiceCallHeldDone({ agent: 'bob', callId: 'c-1', id: 'consult:1', choice: 'skip' });
   assert.deepStrictEqual(calls, [
     ['ask', { request_id: 'r1', question: 'Which one?', options: [{ label: 'A' }, { label: 'B' }] }],
     ['ask', { request_id: 'r2', question: 'Only in questions?', options: [{ label: 'Yes' }] }],
-    ['askDone', 'r1'], ['held', { id: 'consult:1', label: 'Alice asks' }, true], ['heldDone', 'consult:1']]);
+    ['askDone', 'r1'], ['held', { id: 'consult:1', label: 'Alice asks' }, true], ['heldDone', 'consult:1', 'skip']]);
   assert.strictEqual(vc.asks.get('r2'), 'Only in questions?');
   // the answer POST
   const posted = [];
@@ -160,17 +160,36 @@ test('ask_user, ask_user_done, voice_held and voice_held_done reach the controll
   assert.deepStrictEqual(posted, [['/api/ask_response', { agent: 'bob', request_id: 'r2', answers: { 'Only in questions?': 'Yes' } }]]);
 });
 
-test('voice_call off ends the call (but not the "off" of the call it replaced)', () => {
+test('P-a: voice_call off ends this call only; an "off" with another callId (the call it replaced) is ignored, with no timer heuristic', () => {
   const a = runEvents();
   a.vc.startedAt = Date.now();
-  a.f.voiceCallState({ agent: 'bob', state: 'off' });
-  assert.deepStrictEqual(a.hung, []);
+  a.f.voiceCallState({ agent: 'bob', state: 'off', callId: 'old-call' });
+  assert.deepStrictEqual(a.hung, [], 'an older call ending does not end this one');
   const b = runEvents();
-  b.f.voiceCallState({ agent: 'bob', state: 'on' });
+  b.f.voiceCallState({ agent: 'bob', state: 'on', callId: 'c-1' });
   assert.deepStrictEqual(b.hung, []);
-  b.f.voiceCallState({ agent: 'bob', state: 'off' });
-  assert.deepStrictEqual(b.hung, [1]);
+  b.f.voiceCallState({ agent: 'bob', state: 'off', callId: 'c-1' });
+  assert.deepStrictEqual(b.hung, [1], 'this call: ended at once, even right after it started');
   assert.match(b.toasts[0], /call ended/);
+  assert.ok(!/startedAt/.test(sliceBetween('function voiceCallState(', '// ── Room check (5 s)')), 'the 5 s heuristic is gone');
+});
+
+test('P-a: voice_held and voice_held_done of another call are ignored; the choice is forwarded', () => {
+  const { f, calls } = runEvents();
+  f.voiceCallHeld({ agent: 'bob', callId: 'other', item: { id: 'a' } });
+  f.voiceCallHeld({ agent: 'bob', item: { id: 'b' } });
+  f.voiceCallHeldDone({ agent: 'bob', callId: 'other', id: 'a', choice: 'now' });
+  assert.deepStrictEqual(calls, []);
+  f.voiceCallHeldDone({ agent: 'bob', callId: 'c-1', id: 'a', choice: 'later' });
+  assert.deepStrictEqual(calls, [['heldDone', 'a', 'later']]);
+});
+
+test('P-f: several questions are left to the screen: a toast, no voice answer, no partial answer', () => {
+  const { f, calls, vc, toasts } = runEvents();
+  f.voiceCallAsk({ agent: 'bob', request_id: 'm1', questions: [{ question: 'One?', options: [{ label: 'A' }] }, { question: 'Two?', options: [{ label: 'B' }] }] });
+  assert.deepStrictEqual(calls, []);
+  assert.strictEqual(vc.asks.size, 0);
+  assert.deepStrictEqual(toasts, ['Answer these questions on screen']);
 });
 
 test('voiceCallStart calls call.start() inside the tap, before anything is awaited, and stops dictation and playback first', () => {
@@ -230,16 +249,24 @@ test('server.end reads the held list from either shape; heartbeat on 409 hangs u
     voiceCallPost, async (r) => r.json(), (t) => toasts.push(t), () => hung.push(1), state);
   const vc = {}; state.voiceCall = vc;
   const s = make('bob', () => vc);
-  await s.start('announce');
+  const started = await s.start('announce');
   assert.deepStrictEqual(posts[0], ['/api/voice/call', { agent: 'bob', action: 'start', mode: 'announce' }, undefined]);
-  assert.deepStrictEqual(await s.end(), { held: [{ id: 'a' }] });
+  assert.deepStrictEqual(started, { callId: undefined, held: [] });
+  assert.deepStrictEqual(await s.end('c-1'), { held: [{ id: 'a' }] });
+  assert.deepStrictEqual(posts[1][1], { agent: 'bob', action: 'end', callId: 'c-1' });
   assert.strictEqual(posts[1][2].keepalive, true);
   reply = { status: 200, ok: true, body: { ok: true, call: { held: [{ id: 'b' }, { id: 'c' }] } } };
-  assert.strictEqual((await s.end()).held.length, 2);
-  await s.decide('x', 'now');
-  assert.deepStrictEqual(posts[3].slice(0, 2), ['/api/voice/call/decide', { agent: 'bob', id: 'x', choice: 'now' }]);
+  assert.strictEqual((await s.end('c-1')).held.length, 2);
+  await s.decide('x', 'now', 'c-1');
+  assert.deepStrictEqual(posts[3].slice(0, 2), ['/api/voice/call/decide', { agent: 'bob', id: 'x', choice: 'now', callId: 'c-1' }]);
+  reply = { status: 200, ok: true, body: { ok: true, call: { callId: 'c-1', mode: 'announce', held: [{ id: 'h1', state: 'later' }] } } };
+  assert.deepStrictEqual(await s.start('dnd'), { callId: 'c-1', held: [{ id: 'h1', state: 'later' }] }, 'P-a/P-e: the start answer gives the id and the held items');
+  assert.deepStrictEqual(await s.heartbeat('c-1'), { callId: 'c-1', held: [{ id: 'h1', state: 'later' }] }, 'P-e: a heartbeat gives the held items');
+  assert.deepStrictEqual(posts[posts.length - 1][1], { agent: 'bob', action: 'heartbeat', callId: 'c-1' });
+  await s.mode('dnd', 'c-1');
+  assert.deepStrictEqual(posts[posts.length - 1][1], { agent: 'bob', action: 'mode', mode: 'dnd', callId: 'c-1' });
   reply = { status: 409, ok: false, body: { error: 'no_call' } };
-  await s.heartbeat();
+  await s.heartbeat('c-1');
   assert.deepStrictEqual(hung, [1]);
   await assert.rejects(s.start('announce'), /no_call/);
   reply = { status: 403, ok: false, body: { error: 'not_your_call' } };

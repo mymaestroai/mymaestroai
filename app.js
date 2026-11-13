@@ -8825,6 +8825,9 @@
       if (!retryCount) tzSentAt = Date.now();   // the person's own send: its request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
       if (!retryCount) chat.voiceSend = !!(sendOpts && sendOpts.voice);   // a message that came from a hands-free call goes with voice: true (retries keep it)
+      // A hands-free call asks to hear whether the hub took the message: notify(null) once it did, notify(error) when it did not.
+      let notified = false;
+      const notify = (err) => { if (notified || !sendOpts || !sendOpts.onSendResult) return; notified = true; try { sendOpts.onSendResult(err); } catch { /* the caller's problem */ } };
       const input = document.getElementById(`input-${chatId}`);
       const content = input.value.trim();
       const pendingImages = chat.pendingImages || [];
@@ -8836,6 +8839,7 @@
       const liveNow = agentStatus[chat.agent];
       const agentWorking = chat.status === 'thinking' || !!(liveNow && liveNow.busy);
       if (content && agentWorking && pendingImages.length === 0 && !skipInterjectOnce.delete(chatId)) {
+        notify(null);   // a voice message into a working agent goes as an interjection
         return sendInterjection(chatId);
       }
       if (!retryCount) { chat.voiceTurn = !!chat.voiceDictated; chat.voiceDictated = false; }   // this reply follows a mic dictation: read it aloud when it ends (if the device asks for that)
@@ -8927,8 +8931,10 @@
             chat.bounced409 = true;
             setAgentLive(chat.agent, { busy: true });
             input.value = content;
+            notify(null);   // delivered into the running turn instead
             return sendInterjection(chatId);
           }
+          notify(new Error('busy'));
           chat.bounced409 = false;
           if (!input.value) input.value = content;
           chat.pendingImages = imagesToSend;
@@ -8940,6 +8946,7 @@
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
+        notify(null);
 
         const { text: fullResponse, images: responseImages, toolActivity, partial, steps: responseSteps } = await streamResponseSolo(response, msgId, chatId, chat.agent);
         if (!partial) setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), chat.sentAtMs));
@@ -8963,6 +8970,7 @@
         setAgentStatus(chat.agent, '');
         delete chat.lastMsgId;
       } catch (err) {
+        notify(err);   // a no-op once the hub took the message
         // Detect user-initiated cancel: AbortError, or any error while status is already idle
         // (cancelRequest sets idle before the fetch error propagates)
         const hubRecovered = chat.forceReattach === true;
@@ -10562,10 +10570,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let queue = [], current = null, speaking = false, gen = 0;
       let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
       let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
+      let callId = null, startP = null, sttPending = 0, speechAnn = null, cutRec = null, lastDone = false;
 
       function setState(name) { if (name === state) return; state = name; quiet(() => ui.state(name, '')); }
       function settle() {
         if (ended) return;
+        if (!speaking && !personSpeaking && queue.length) { runQueue(); return; }   // lines that waited while the person spoke are read now
         setState(speaking ? 'speaking' : personSpeaking ? 'hearing' : awaitingReply ? 'thinking' : 'listening');
         pumpAnnounce();
       }
@@ -10573,12 +10583,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       function enqueue(text, kind, after) {
         if (ended || !text) return;
         queue.push({ text, kind, after });
-        if (!speaking) runQueue();
+        if (!speaking && !personSpeaking) runQueue();   // never start reading while the person is speaking: the line waits
       }
       async function runQueue() {
         const my = gen;
         speaking = true; setState('speaking'); quiet(() => vad.setPlaybackActive(true));
-        while (queue.length && my === gen) {
+        while (queue.length && my === gen && !personSpeaking) {
           current = queue.shift();
           let ok = true;
           try { ok = await d.speak(current.text); } catch { ok = false; }
@@ -10606,7 +10616,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Reply text so far (markdown) and whether the turn is over: speaks the complete sentences that are new.
       function onReplyText(full, done) {
         if (ended) return;
-        lastText = String(full == null ? '' : full);
+        lastText = String(full == null ? '' : full); lastDone = !!done;
         if (!done && !awaitingReply && !cutSkip) awaitingReply = true;
         const r = voiceReplySentences(lastText, !!done);
         if (r.sentences.length < spokenCount) spokenCount = 0;
@@ -10629,7 +10639,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       function onAsk(ask) {
         if (ended || !ask) return;
         const options = Array.from(ask.options || []).map(o => (typeof o === 'string' ? o : (o && (o.label || o.value || o.text)) || '')).filter(Boolean);
-        pendingAsk = { id: ask.request_id, options, free: !options.length || ask.allow_free_text === true || ask.allow_other === true, reasked: false };
+        pendingAsk = { id: ask.request_id, options, free: !options.length || ask.allow_free_text === true || ask.allow_other === true, reasked: false, tapped: false };
         enqueue(String(ask.question || '') + (options.length ? ' Options: ' + voiceJoinOr(options) + '.' : ''), 'ask');
       }
       function onAskDone(id) { if (pendingAsk && (id == null || pendingAsk.id === id)) pendingAsk = null; }
@@ -10641,10 +10651,33 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         heldList.push(entry); showHeld();
         if (!quietFlag && mode === 'announce') { announceQueue.push(entry); pumpAnnounce(); }
       }
-      function onHeldDone(id) {
-        heldList = heldList.filter(h => h.id !== id); announceQueue = announceQueue.filter(h => h.id !== id);
+      // The hub says an item was decided. 'later' keeps it (deferred: shown with "later", buttons stay, not announced again);
+      // 'now' and 'skip' (or no choice) remove it.
+      function onHeldDone(id, choice) {
+        announceQueue = announceQueue.filter(h => h.id !== id);
         if (pendingAnnounce && pendingAnnounce.id === id) { quiet(() => d.clearTimer(pendingAnnounce.timer)); pendingAnnounce = null; }
+        if (choice === 'later') { const e = heldList.find(h => h.id === id); if (e) { e.later = true; e.announced = true; } }
+        else heldList = heldList.filter(h => h.id !== id);
         showHeld(); settle();
+      }
+      // The hub's list of held items (the start answer, every heartbeat answer): merged by id, a known item keeps its state.
+      function hydrate(list) {
+        if (ended || !Array.isArray(list)) return;
+        let changed = false;
+        for (const item of list) {
+          if (!item || item.id == null) continue;
+          const known = heldList.find(h => h.id === item.id);
+          if (item.state === 'done') {
+            if (known) { heldList = heldList.filter(h => h !== known); announceQueue = announceQueue.filter(h => h !== known); changed = true; }
+            continue;
+          }
+          if (known) { if (item.state === 'later' && !known.later) { known.later = true; known.announced = true; changed = true; } continue; }
+          const later = item.state === 'later';
+          const entry = Object.assign({}, item, { later, announced: later });
+          heldList.push(entry); changed = true;
+          if (!later && mode === 'announce') announceQueue.push(entry);
+        }
+        if (changed) { showHeld(); pumpAnnounce(); }
       }
       function decide(id, choice) {
         const entry = heldList.find(h => h.id === id);
@@ -10654,12 +10687,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (choice === 'later') entry.later = true; else heldList = heldList.filter(h => h.id !== id);
         showHeld();
         const failed = () => quiet(() => ui.toast('Could not send that choice.'));
-        try { Promise.resolve(server.decide(id, choice)).catch(failed); } catch { failed(); }
+        try { Promise.resolve(server.decide(id, choice, callId)).catch(failed); } catch { failed(); }
         settle();
       }
       function pumpAnnounce() {
         if (pumpTimer !== null) { quiet(() => d.clearTimer(pumpTimer)); pumpTimer = null; }
-        if (ended || state !== 'listening' || speaking || personSpeaking || pendingAsk || pendingAnnounce || !announceQueue.length) return;
+        if (ended || state !== 'listening' || speaking || personSpeaking || sttPending || pendingAsk || pendingAnnounce || !announceQueue.length) return;
         const wait = speechEndAt === null ? 0 : VOICE_CALL_PAUSE_MS - (now() - speechEndAt);
         if (wait > 0) { pumpTimer = d.setTimer(() => { pumpTimer = null; pumpAnnounce(); }, wait); return; }
         const item = announceQueue.shift();
@@ -10677,38 +10710,62 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         mode = m;
         if (m === 'dnd') announceQueue = [];
         else announceQueue = heldList.filter(h => !h.later && !h.announced && !(pendingAnnounce && pendingAnnounce.id === h.id));
-        quiet(() => server.mode(m));
+        quiet(() => Promise.resolve(server.mode(m, callId)).catch(() => {}));
         pumpAnnounce();
       }
 
+      // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
       function onSpeechStart() {
         if (ended) return;
         personSpeaking = true;
-        if (speaking || queue.length) { if (cancelSpeaking() && awaitingReply) cutSkip = true; }
+        speechAnn = pendingAnnounce ? pendingAnnounce.id : null;   // an answer belongs to the announcement that was pending when it began
+        if (speaking || queue.length) {
+          const n = (current ? [current] : []).concat(queue).filter(i => i.kind === 'reply').length;
+          const cutReply = cancelSpeaking();
+          const setSkip = cutReply && awaitingReply && !cutSkip;
+          if (setSkip) cutSkip = true;
+          cutRec = cutReply ? { mark: Math.max(0, spokenCount - n), setSkip } : null;
+        }
         setState('hearing');
+      }
+      // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
+      function onMisfire() {
+        if (ended) return;
+        personSpeaking = false; speechAnn = null;
+        const rec = cutRec; cutRec = null;
+        if (rec) {
+          if (rec.setSkip) cutSkip = false;
+          spokenCount = rec.mark;
+          onReplyText(lastText, lastDone);
+        }
+        settle();
       }
       function onSpeechEnd(audio) {
         if (ended) return Promise.resolve();
-        personSpeaking = false; speechEndAt = now();
+        personSpeaking = false; speechEndAt = now(); cutRec = null;
+        const ann = speechAnn; speechAnn = null;
+        sttPending++;
         settle();
         sttChain = sttChain.then(async () => {
-          let text = '';
-          try { text = await d.stt(audio); } catch { quiet(() => ui.toast('Could not transcribe that.')); return; }
-          if (ended) return;
-          const t = String(text || '').trim(), n = voiceCallNorm(t);
-          if (n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w))) return;
-          quiet(() => ui.heard(t));
-          await route(t);
+          try {
+            let text = '';
+            try { text = await d.stt(audio); } catch { quiet(() => ui.toast('Could not transcribe that.')); return; }
+            if (ended) return;
+            const t = String(text || '').trim(), n = voiceCallNorm(t);
+            if (n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w))) return;
+            quiet(() => ui.heard(t));
+            await route(t, ann);
+          } finally { sttPending--; settle(); }
         });
         return sttChain;
       }
-      async function route(t) {
+      async function route(t, ann) {
         if (voiceIsStopCommand(t)) {
           cancelSpeaking(); cutSkip = true; awaitingReply = false;
           quiet(() => d.stop()); enqueue('Stopped.', 'stop'); settle();
           return;
         }
-        if (pendingAnnounce) {
+        if (pendingAnnounce && ann != null && pendingAnnounce.id === ann) {   // only the announcement pending when the speech began
           const id = pendingAnnounce.id, w = voiceDecisionWord(t);
           decide(id, w || 'later');
           if (w) return;
@@ -10717,6 +10774,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const a = pendingAsk, label = voiceMatchChoice(t, a.options);
           if (label !== null || a.free) { pendingAsk = null; quiet(() => d.answerAsk(a.id, label !== null ? label : t)); return; }
           if (!a.reasked) { a.reasked = true; enqueue('Please say one of: ' + voiceJoinOr(a.options) + '.', 'ask'); }
+          else if (!a.tapped) { a.tapped = true; enqueue('Please tap one of the options on the screen.', 'ask'); }
           return;
         }
         try {
@@ -10729,34 +10787,38 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             setState('thinking');
             await d.send(t);
           }
-        } catch { awaitingReply = false; quiet(() => ui.toast('Could not send that.')); settle(); }
+        } catch { awaitingReply = false; quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
       }
 
       function beat() {
         hbTimer = d.setTimer(() => {
           hbTimer = null;
           if (ended) return;
-          Promise.resolve().then(() => server.heartbeat()).catch(() => {});
+          Promise.resolve().then(() => server.heartbeat(callId)).then((r) => { if (!ended && r) hydrate(r.held); }).catch(() => {});
           beat();
         }, VOICE_CALL_HEARTBEAT_MS);
       }
       async function start() {
         if (started) return !ended;
         started = true; setState('starting');
-        const fail = async (msg) => { quiet(() => ui.toast(msg)); ended = true; setState('ended'); await Promise.resolve().then(() => server.end()).catch(() => {}); return false; };
+        const fail = async (msg) => { quiet(() => ui.toast(msg)); ended = true; setState('ended'); await Promise.resolve().then(() => server.end(callId || undefined)).catch(() => {}); return false; };
         // The microphone starts first, still inside the tap that began the call (iOS needs that for audio); the server next.
         let vadErr = null;
         let vadStarting;
         try {
           vadStarting = Promise.resolve(vad.start({
-            onSpeechStart, onSpeechEnd,
+            onSpeechStart, onMisfire, onSpeechEnd,
             onFrame: (db, probs) => quiet(() => ui.level(db, probs)),
           })).catch((e) => { vadErr = e || new Error('no microphone'); });
         } catch (e) { vadErr = e || new Error('no microphone'); vadStarting = Promise.resolve(); }
-        try { await server.start(mode); } catch (e) { await vadStarting; quiet(() => vad.stop()); return fail('Could not start the call: ' + (e && e.message || e)); }
+        // The call's id comes with the answer; a hang-up while the server is still starting ends that call once the id is known.
+        startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; return r; });
+        let startRes;
+        try { startRes = await startP; } catch (e) { await vadStarting; quiet(() => vad.stop()); return fail('Could not start the call: ' + (e && e.message || e)); }
         await vadStarting;
         if (ended) { quiet(() => vad.stop()); return false; }   // hung up while starting: a microphone that came up late is let go
         if (vadErr) return fail('Could not start the microphone: ' + (vadErr.message || vadErr));
+        hydrate(startRes && startRes.held);
         beat(); settle();
         return true;
       }
@@ -10767,11 +10829,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         for (const t of [hbTimer, pumpTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
         hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = [];
         quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
-        endPromise = Promise.resolve().then(() => server.end()).then(r => (r && Array.isArray(r.held) ? r.held : []), () => []).then((held) => {
+        const idKnown = callId || !startP ? Promise.resolve() : startP.catch(() => {});   // hanging up while the start is in flight waits for the id
+        endPromise = idKnown.then(() => server.end(callId || undefined)).then(r => (r && Array.isArray(r.held) ? r.held : []), () => []).then((held) => {
           if (held.length) {
-            const labels = held.map(h => String(h.label || h.kind || 'something').replace(/[.!?\s]+$/, ''));
-            const n = held.length;
-            const text = 'While we talked: ' + (n === 1 ? '1 thing came in' : n + ' things came in') + ': ' + labels.join(', ') + '. ' + (n === 1 ? 'It runs now.' : 'They run now.');
+            const label = (h) => String(h.label || h.kind || 'something').replace(/[.!?\s]+$/, '');
+            const n = held.length, ran = held.filter(h => h.state === 'done'), runs = held.filter(h => h.state !== 'done');
+            let tail;
+            if (!ran.length) tail = n === 1 ? 'It runs now.' : 'They run now.';
+            else if (!runs.length) tail = n === 1 ? 'It already ran.' : 'They already ran.';
+            else tail = 'Already ran: ' + ran.map(label).join(', ') + '. Running now: ' + runs.map(label).join(', ') + '.';
+            const text = 'While we talked: ' + (n === 1 ? '1 thing came in' : n + ' things came in') + ': ' + held.map(label).join(', ') + '. ' + tail;
             quiet(() => ui.summary(text));
             quiet(() => Promise.resolve(d.speak(text)).catch(() => {}));   // spoken in the background: hanging up never waits for it
           }
@@ -10780,8 +10847,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return endPromise;
       }
       return {
-        start, hangUp, onSpeechStart, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
-        get state() { return state; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
+        start, hangUp, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+        get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
       };
     }
     // The microphone and the voice activity detector. opts: { baseUrl, micLevel, interruptSensitivity, win, nav, loadScript }.
@@ -10804,15 +10871,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       };
       async function start(h) {
         const w = win(), handlers = h || {};
-        // The audio context is made and resumed first, still inside the tap that started the call: iOS keeps a context
-        // suspended when it is made after an await.
-        const Ctx = w.AudioContext || w.webkitAudioContext;
-        st.ctx = new Ctx(); const resumed = st.ctx.resume();
-        if (!w.vad || !w.vad.MicVAD) { await loadScript(base + 'ort.wasm.min.js'); await loadScript(base + 'bundle.min.js'); }
-        await resumed;
-        const nav = o.nav || w.navigator;
-        const t = voiceVadThresholds(st.sens, false);
+        // Every failure from here on (script load, resume, MicVAD) lets go of the VAD, the stream and the audio context.
         try {
+          // The audio context is made and resumed first, still inside the tap that started the call: iOS keeps a context
+          // suspended when it is made after an await.
+          const Ctx = w.AudioContext || w.webkitAudioContext;
+          st.ctx = new Ctx(); const resumed = st.ctx.resume();
+          resumed.catch(() => {});   // a failed resume is reported by the await below, not as an unhandled rejection
+          if (!w.vad || !w.vad.MicVAD) { await loadScript(base + 'ort.wasm.min.js'); await loadScript(base + 'bundle.min.js'); }
+          await resumed;
+          const nav = o.nav || w.navigator;
+          const t = voiceVadThresholds(st.sens, false);
           st.vad = await w.vad.MicVAD.new({
             model: 'v5', audioContext: st.ctx, baseAssetPath: base, onnxWASMBasePath: base,
             ortConfig: (c) => { c.env.wasm.numThreads = 1; },
@@ -10826,7 +10895,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             pauseStream: async () => {}, resumeStream: async (s) => s,
             positiveSpeechThreshold: t.positiveSpeechThreshold, negativeSpeechThreshold: t.negativeSpeechThreshold,
             redemptionMs: 384, preSpeechPadMs: 256, minSpeechMs: t.minSpeechFrames * 32,
-            onSpeechStart: () => { if (handlers.onSpeechStart) handlers.onSpeechStart(); },
+            // vad-web 0.0.31: onSpeechStart fires on the first speech-like frame, onSpeechRealStart once minSpeechMs is reached.
+            // Playback is cut on the real start only; a candidate that never gets there ends in onVADMisfire.
+            onSpeechStart: () => {},
+            onSpeechRealStart: () => { if (handlers.onSpeechStart) handlers.onSpeechStart(); },
             onSpeechEnd: (audio) => (handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
             onVADMisfire: () => { if (handlers.onMisfire) handlers.onMisfire(); },
             onFrameProcessed: (probs, frame) => { if (handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs); },
@@ -11332,7 +11404,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     // ── Hands-free call (voice phase 2): the controller (voice call block above) wired to this page ──
     // One call at a time. voiceCallS holds it; the call bar sits above the message box of the call's chat.
-    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), asks: new Map(), wake: null };
+    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false };
     const voiceRoom = { active: false };
     const VOICE_CALL_HELP = 'Hands-free works with the page open and the screen on; locked-screen and car systems (CarPlay, Android Auto) are not supported yet.';
     const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', hearing: 'Hearing you', thinking: 'Thinking', speaking: 'Speaking', ended: 'Ended' };
@@ -11366,13 +11438,31 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return !!((chat && chat.status === 'thinking') || (agentStatus[agent] && agentStatus[agent].busy));
     }
     // A message from the call goes through the normal send path (with voice: true); the person's half-typed text stays in the box.
+    // Returns a promise: it rejects when the hub did not take the message (a non-2xx answer or a network error), so the
+    // controller can say "That did not go through." and listen again. It does not wait for the reply: the next
+    // utterance must not wait for it. A turn_end that never arrives is released 2.5 s after the stream has ended.
     function voiceCallSend(chatId, text) {
       const input = document.getElementById(`input-${chatId}`);
       if (!input || !chats[chatId]) throw new Error('chat closed');
+      const S = voiceCallS, seq = ++S.sendSeq;
+      S.expecting = true;
       const prev = input.value;
       input.value = text;
-      sendSoloMessage(chatId, 0, { voice: true }).catch(() => {});
+      let accepted;
+      const result = new Promise((resolve, reject) => { accepted = (err) => (err ? reject(err) : resolve()); });
+      const release = () => {
+        setTimeout(() => {
+          if (!S.call || S.sendSeq !== seq || !S.expecting) return;
+          S.expecting = false;
+          let last = ''; for (const v of S.own.values()) last = v;
+          S.own.clear();
+          S.call.onReplyText(last, true);
+        }, 2500);
+      };
+      const run = sendSoloMessage(chatId, 0, { voice: true, onSendResult: accepted });
       input.value = prev;
+      Promise.resolve(run).then(() => accepted(null), (e) => accepted(e || new Error('send failed'))).then(release);
+      return result;
     }
     async function voiceCallInterject(chatId, text) {
       const chat = chats[chatId];
@@ -11409,11 +11499,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         cancelSpeech: () => voiceStopPlayback(),
         answerAsk: (id, text) => voiceCallAnswerAsk(agent, id, text),
         server: {
-          start: (mode) => voiceCallApi('/api/voice/call', { agent, action: 'start', mode }),
-          heartbeat: () => voiceCallApi('/api/voice/call', { agent, action: 'heartbeat' }),
-          mode: (m) => voiceCallApi('/api/voice/call', { agent, action: 'mode', mode: m }),
-          end: () => voiceCallApi('/api/voice/call', { agent, action: 'end' }, { keepalive: true }).then(r => ({ held: (r.call && r.call.held) || r.held || [] })),
-          decide: (id, choice) => voiceCallApi('/api/voice/call/decide', { agent, id, choice }),
+          // The call's id (callId) comes with the start answer; the controller passes it back with every later request.
+          start: (mode) => voiceCallApi('/api/voice/call', { agent, action: 'start', mode }).then(r => ({ callId: r.call && r.call.callId, held: (r.call && r.call.held) || [] })),
+          heartbeat: (callId) => voiceCallApi('/api/voice/call', { agent, action: 'heartbeat', callId }).then(
+            r => ({ callId: r.call && r.call.callId, held: (r.call && r.call.held) || [] }),
+            (e) => {   // the hub no longer has this call (no_call, stale_call, not_your_call): hang up here too
+              if ((e.status === 409 || e.status === 403) && voiceCallS.call && voiceCallS.chatId === chatId) { hubToast('The call ended.'); voiceCallHangUp(); }
+              throw e;
+            }),
+          mode: (m, callId) => voiceCallApi('/api/voice/call', { agent, action: 'mode', mode: m, callId }),
+          end: (callId) => voiceCallApi('/api/voice/call', { agent, action: 'end', callId }, { keepalive: true }).then(r => ({ held: (r.call && r.call.held) || r.held || [] })),
+          decide: (id, choice, callId) => voiceCallApi('/api/voice/call/decide', { agent, id, choice, callId }),
         },
         ui: {
           state: (name) => { const s = barEl('state'); if (s) s.textContent = VOICE_CALL_STATE_TEXT[name] || name; },
@@ -11499,6 +11595,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!on) { const w = S.wake; S.wake = null; if (w) await w.release(); return; }
         if (!navigator.wakeLock || S.wake) return;
         const w = await navigator.wakeLock.request('screen');
+        if (!S.call) { try { await w.release(); } catch { /* already released */ } return; }   // hung up while the request was out: let go at once
         S.wake = w;
         if (w.addEventListener) w.addEventListener('release', () => { if (S.wake === w) S.wake = null; });
       } catch { /* a wake lock is a comfort: the call goes on without it */ }
@@ -11557,7 +11654,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           return;
         }
         case 'turn_end': {
-          if (S.own.has(ev.turnId)) { const last = S.own.get(ev.turnId); S.own.delete(ev.turnId); call.onReplyText(ev.reply || last || '', true); }
+          if (S.own.has(ev.turnId)) { const last = S.own.get(ev.turnId); S.own.delete(ev.turnId); S.expecting = false; call.onReplyText(ev.reply || last || '', true); }
           else if (S.hub.has(ev.turnId)) {
             const label = S.hub.get(ev.turnId); S.hub.delete(ev.turnId);
             const first = ev.ok === false ? '' : (voiceSentences(voiceSpeechText(ev.reply || ''))[0] || '');
@@ -11575,10 +11672,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           return;
         }
         case 'ask_user_done': S.asks.delete(ev.request_id); call.onAskDone(ev.request_id); return;
-        case 'voice_held': if (ev.item) call.onHeld(ev.item, !!ev.quiet); return;
-        case 'voice_held_done': call.onHeldDone(ev.id); return;
+        // Events of another call (an earlier one this call replaced, or one on another device) carry another callId: ignored.
+        case 'voice_held': if (ev.callId === call.callId && ev.item) call.onHeld(ev.item, !!ev.quiet); return;
+        case 'voice_held_done': if (ev.callId === call.callId) call.onHeldDone(ev.id, ev.choice); return;
         case 'voice_call':
-          if (ev.state === 'off' && S.active) { hubToast('The call ended.'); voiceCallHangUp(); }
+          if (ev.state === 'off' && S.active && ev.callId === call.callId) { hubToast('The call ended.'); voiceCallHangUp(); }
           return;
       }
     }

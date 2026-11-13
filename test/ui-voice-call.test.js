@@ -22,7 +22,7 @@ function callBlock(src, indent) {
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
 
 function harness(over) {
-  const h = { t: 0, timers: [], nextId: 1, log: [], states: [], heard: [], helds: [], toasts: [], summaries: [], spoken: [], pend: [], playing: [], sent: [], interjected: [], stops: 0, asks: [], decisions: [], hb: 0, running: false, endHeld: [] };
+  const h = { t: 0, timers: [], nextId: 1, log: [], states: [], heard: [], helds: [], toasts: [], summaries: [], spoken: [], pend: [], playing: [], sent: [], interjected: [], stops: 0, asks: [], decisions: [], hb: 0, running: false, endHeld: [], hbIds: [], modeIds: [], endIds: [], decideIds: [] };
   h.setTimer = (fn, ms) => { const id = h.nextId++; h.timers.push({ id, at: h.t + ms, fn }); return id; };
   h.clearTimer = (id) => { h.timers = h.timers.filter(x => x.id !== id); };
   h.advance = async (ms) => {
@@ -44,8 +44,10 @@ function harness(over) {
     send: async (t) => { h.sent.push(t); h.running = true; }, interject: async (t) => { h.interjected.push(t); }, stop: () => { h.stops++; h.log.push('stop'); },
     speak: h.speak, cancelSpeech: () => { h.log.push('cancelSpeech'); const r = h.pend.shift(); if (r) r(false); },
     answerAsk: (id, text) => { h.asks.push([id, text]); },
-    server: { start: async (m) => { h.log.push('server.start ' + m); }, heartbeat: async () => { h.hb++; }, mode: async (m) => { h.log.push('server.mode ' + m); },
-      end: async () => ({ held: h.endHeld }), decide: async (id, c) => { h.decisions.push([id, c]); } },
+    server: { start: async (m) => { h.log.push('server.start ' + m); return { callId: 'call-1', held: h.startHeld || [] }; },
+      heartbeat: async (cid) => { h.hb++; h.hbIds.push(cid); return { callId: cid, held: h.hbHeld || [] }; },
+      mode: async (m, cid) => { h.log.push('server.mode ' + m); h.modeIds.push(cid); },
+      end: async (cid) => { h.endIds.push(cid); return { held: h.endHeld }; }, decide: async (id, c, cid) => { h.decisions.push([id, c]); h.decideIds.push(cid); } },
     ui: { state: (n) => h.states.push(n), heard: (t) => h.heard.push(t), held: (l) => h.helds.push(l), toast: (m) => h.toasts.push(m), summary: (t) => h.summaries.push(t) },
   };
   Object.assign(h.deps, over || {});
@@ -255,6 +257,8 @@ test('routing: a failing send toasts and returns to listening', async () => {
   const h = await started({ send: async () => { throw new Error('x'); } });
   await h.say('hello there');
   assert.ok(h.toasts.some(m => /Could not send/.test(m)));
+  assert.strictEqual(h.spoken[0], 'That did not go through.', 'P-i: the person is told');
+  await h.finish();
   assert.strictEqual(h.last(), 'listening');
   const s = await started({ stt: async () => { throw new Error('stt down'); } });
   await s.say('hello');
@@ -396,7 +400,11 @@ test('ask_user: an unmatched answer is re-asked once, then left pending; onAskDo
   assert.strictEqual(h.spoken[1], 'Please say one of: Alpha or Beta.');
   await h.finish();
   await h.say('still purple');
-  assert.strictEqual(h.spoken.length, 2, 'asked only once');
+  assert.strictEqual(h.spoken.length, 3, 'asked only once');
+  assert.strictEqual(h.spoken[2], 'Please tap one of the options on the screen.', 'P-l: an option-only question is not left silent');
+  await h.finish();
+  await h.say('purple again');
+  assert.strictEqual(h.spoken.length, 3, 'the tap hint is said once');
   assert.deepStrictEqual(h.sent, [], 'never sent as a message while the question is open');
   await h.say('beta');
   assert.deepStrictEqual(h.asks, [['q', 'Beta']]);
@@ -621,7 +629,8 @@ test('vad adapter: loads the bundle from /api/voice/web/ and builds MicVAD with 
   assert.strictEqual(await o.resumeStream(stream), stream);
   await o.pauseStream(stream); assert.strictEqual(b.tracksStopped, 0, 'pausing keeps the microphone');
   const cfg = { env: { wasm: {} } }; o.ortConfig(cfg); assert.strictEqual(cfg.env.wasm.numThreads, 1);
-  o.onSpeechStart(); o.onSpeechEnd(new Float32Array(3)); o.onVADMisfire(); o.onFrameProcessed({ isSpeech: 0.1 }, new Float32Array([0.1, -0.1]));
+  o.onSpeechStart(); assert.deepStrictEqual(events, [], 'the candidate start does not cut playback');
+  o.onSpeechRealStart(); o.onSpeechEnd(new Float32Array(3)); o.onVADMisfire(); o.onFrameProcessed({ isSpeech: 0.1 }, new Float32Array([0.1, -0.1]));
   assert.deepStrictEqual(events, ['start', 'end 3', 'misfire', ['frame', -20]]);
   // live changes
   vad.setMicLevel(0); assert.ok(Math.abs(b.gains[0].gain.value - voiceGainFromSlider(0)) < 1e-9);
@@ -666,4 +675,153 @@ test('the controller drives a real vad adapter: playback flips the threshold', a
   assert.strictEqual(b.created[0].setOptionsCalls[1].positiveSpeechThreshold, 0.5);
   await h.call.hangUp();
   assert.strictEqual(b.destroyed, 1);
+});
+
+// ---- review round 1 fixes (P-a .. P-l) ----
+
+test('P-a: the call id from start goes with heartbeat, mode, decide and end; the controller exposes it', async () => {
+  const h = await started();
+  assert.strictEqual(h.call.callId, 'call-1');
+  h.call.setMode('dnd');
+  h.call.onHeld({ id: 'j1', kind: 'job', label: 'Job' }, true);
+  h.call.decide('j1', 'later');
+  await h.advance(15000);
+  await h.call.hangUp();
+  assert.deepStrictEqual(h.modeIds, ['call-1']);
+  assert.deepStrictEqual(h.decideIds, ['call-1']);
+  assert.deepStrictEqual(h.hbIds, ['call-1']);
+  assert.deepStrictEqual(h.endIds, ['call-1']);
+});
+
+test('P-a: hanging up while the server is still starting ends that call once its id is known', async () => {
+  const h = harness();
+  let answer; h.deps.server.start = () => new Promise((r) => { answer = r; });
+  const c = voiceCreateCall(h.deps);
+  const p = c.start();
+  await tick();
+  const hu = c.hangUp();
+  await tick();
+  assert.deepStrictEqual(h.endIds, [], 'nothing to end yet: the id is not known');
+  answer({ callId: 'late-7', held: [] });
+  await hu;
+  assert.strictEqual(await p, false);
+  assert.deepStrictEqual(h.endIds, ['late-7']);
+});
+
+test('P-b: onHeldDone later keeps the item as deferred (not announced again); now and skip remove it', async () => {
+  const h = await started();
+  h.call.onHeld({ id: 'j1', kind: 'job', label: 'Job one' }, false);
+  await h.finish();
+  h.call.onHeld({ id: 'j2', kind: 'job', label: 'Job two' }, true);
+  h.call.onHeld({ id: 'j3', kind: 'job', label: 'Job three' }, true);
+  h.call.onHeldDone('j1', 'later');
+  h.call.onHeldDone('j2', 'now');
+  h.call.onHeldDone('j3', 'skip');
+  assert.deepStrictEqual(h.call.held.map(x => [x.id, x.later]), [['j1', true]]);
+  assert.deepStrictEqual(h.helds[h.helds.length - 1].map(x => x.id), ['j1']);
+  const n = h.spoken.length;
+  h.call.setMode('dnd'); h.call.setMode('announce');
+  await h.advance(5000);
+  assert.strictEqual(h.spoken.length, n, 'a deferred item is not announced again');
+});
+
+test('P-c: a transcript only answers the announcement that was pending when its speech began', async () => {
+  const h = await started();
+  h.call.onHeld({ id: 'j1', kind: 'job', label: 'Job one' }, false);
+  await h.finish();
+  // the person starts talking while the announcement is pending: "yes" answers it
+  h.vadHandlers.onSpeechStart(); h.vadHandlers.onSpeechEnd({ text: 'yes' }); await tick();
+  assert.deepStrictEqual(h.decisions, [['j1', 'now']]);
+  // a second item: nothing is pending when the person begins; the announcement waits for the end of the transcription
+  h.call.onHeld({ id: 'j2', kind: 'job', label: 'Job two' }, true);
+  h.call.setMode('dnd'); h.call.setMode('announce');
+  const before = h.spoken.length;
+  let resolveStt; h.deps.stt = () => new Promise((r) => { resolveStt = r; });
+  h.vadHandlers.onSpeechStart();
+  h.vadHandlers.onSpeechEnd({});
+  await h.advance(3000);
+  assert.strictEqual(h.spoken.length, before, 'no announcement starts while a transcription is pending');
+  resolveStt('what is the time');
+  await tick();
+  assert.deepStrictEqual(h.decisions, [['j1', 'now']], 'those words did not decide the item');
+  assert.deepStrictEqual(h.sent, ['what is the time']);
+  h.call.onReplyText('Fine.', true);
+  await h.finish();
+  await h.advance(3000);
+  assert.ok(h.spoken.some(x => /Job two/.test(x)), 'the announcement comes after the transcription and the reply');
+});
+
+test('P-d: a false start does not stop the call: the reply cut by it is read on, and nothing starts while the person speaks', async () => {
+  const h = await started();
+  await h.say('tell me');
+  h.call.onReplyText('One here. Two here. Three here. ', false);
+  assert.strictEqual(h.spoken[0], 'One here.');
+  h.vadHandlers.onSpeechStart();
+  assert.strictEqual(h.last(), 'hearing');
+  h.call.onAsk({ request_id: 'q', question: 'Which?', options: [] });
+  assert.strictEqual(h.spoken.length, 1, 'nothing is read while the person speaks');
+  h.vadHandlers.onMisfire();
+  assert.notStrictEqual(h.last(), 'hearing');
+  for (let i = 0; i < 5; i++) await h.finish();
+  assert.ok(h.spoken.includes('Which?'), 'the line that waited is read');
+  assert.ok(h.spoken.filter(x => x === 'One here.').length === 2 && h.spoken.includes('Two here.') && h.spoken.includes('Three here.'), 'the cut reply is read on from the sentence that was cut');
+});
+
+test('P-d: lines that waited while the person spoke are read when the speech ends', async () => {
+  const h = await started();
+  h.vadHandlers.onSpeechStart();
+  h.call.onAsk({ request_id: 'q', question: 'Which?', options: ['A', 'B'] });
+  assert.deepStrictEqual(h.spoken, []);
+  h.vadHandlers.onSpeechEnd({ text: '' }); await tick();
+  assert.strictEqual(h.spoken[0], 'Which? Options: A or B.');
+});
+
+test('P-e: held items come from the start answer and from every heartbeat answer, merged by id', async () => {
+  const h = harness();
+  h.startHeld = [{ id: 'j1', kind: 'job', label: 'Job one', state: 'held' }, { id: 'j2', kind: 'job', label: 'Job two', state: 'later' }];
+  assert.strictEqual(await h.call.start(), true);
+  assert.deepStrictEqual(h.call.held.map(x => [x.id, x.later]), [['j1', false], ['j2', true]]);
+  assert.deepStrictEqual(h.spoken, ['Job one. Now, or after we\'re done?'], 'a deferred item is not announced');
+  await h.finish();
+  h.hbHeld = [{ id: 'j1', kind: 'job', label: 'Job one', state: 'held' }, { id: 'j2', kind: 'job', label: 'Job two', state: 'held' }, { id: 'j3', kind: 'job', label: 'Job three', state: 'held' }];
+  h.call.decide('j1', 'later');
+  await h.advance(15000);
+  assert.deepStrictEqual(h.call.held.map(x => [x.id, x.later]), [['j1', true], ['j2', true], ['j3', false]], 'known items keep their state');
+  await h.advance(2000);
+  assert.deepStrictEqual(h.spoken, ['Job one. Now, or after we\'re done?', 'Job three. Now, or after we\'re done?'], 'only the new item is announced');
+  await h.finish();
+  h.hbHeld = [{ id: 'j2', kind: 'job', label: 'Job two', state: 'done' }];
+  await h.advance(15000);
+  assert.ok(!h.call.held.some(x => x.id === 'j2'), 'an item that ran is dropped');
+});
+
+test('P-g: any failure while the VAD starts lets go of the context and the stream', async () => {
+  let f = fakeBrowser();
+  f.loadScript = async () => { throw new Error('script 404'); };
+  let v = voiceCreateVad({ win: f.win, loadScript: f.loadScript });
+  await assert.rejects(() => v.start({}), /script 404/);
+  assert.strictEqual(f.b.closed, 1, 'script load failure closes the context');
+  f = fakeBrowser();
+  f.win.AudioContext = class { resume() { return Promise.reject(new Error('resume refused')); } close() { f.b.closed++; return Promise.resolve(); } };
+  f.win.vad = { MicVAD: class { static async new() { return {}; } } };
+  v = voiceCreateVad({ win: f.win, loadScript: f.loadScript });
+  await assert.rejects(() => v.start({}), /resume refused/);
+  assert.strictEqual(f.b.closed, 1, 'resume failure closes the context');
+  f = fakeBrowser();
+  v = voiceCreateVad({ win: f.win, loadScript: f.loadScript });
+  await f.loadScript('x');
+  f.win.vad.MicVAD.new = async (o) => { await o.getStream(); throw new Error('model failed'); };
+  await assert.rejects(() => v.start({}), /model failed/);
+  assert.deepStrictEqual([f.b.closed, f.b.tracksStopped], [1, 1], 'MicVAD failure closes the context and stops the microphone');
+});
+
+test('P-h: the hang-up summary tells what already ran from what runs now', async () => {
+  const h = await started();
+  h.endHeld = [{ id: 'a', label: 'Backup', state: 'done' }, { id: 'b', label: 'Report', state: 'held' }, { id: 'c', label: 'Mail', state: 'later' }];
+  await h.call.hangUp();
+  assert.deepStrictEqual(h.summaries, ['While we talked: 3 things came in: Backup, Report, Mail. Already ran: Backup. Running now: Report, Mail.']);
+  const d = await started();
+  d.endHeld = [{ id: 'a', label: 'Backup', state: 'done' }];
+  await d.call.hangUp();
+  assert.deepStrictEqual(d.summaries, ['While we talked: 1 thing came in: Backup. It already ran.']);
 });

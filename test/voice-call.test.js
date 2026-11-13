@@ -26,11 +26,12 @@ const consult = (over = {}) => ({ id: 'consult:helper:planner:abc', kind: 'consu
 
 // ── the registry ────────────────────────────────────────────────────────────────────────────────
 
-test('start / heartbeat / mode / end: one call per agent, owned by the person who started it; events carry the agent', () => {
+test('start / heartbeat / mode / end: one call per agent, owned by the person who started it; events carry the agent', async () => {
   const r = rig();
   assert.strictEqual(r.calls.onCall('planner'), false);
   const v = r.calls.start('planner', { userId: 'u1', person: 'Sam', mode: 'announce' });
   assert.deepStrictEqual([v.mode, v.person, v.held], ['announce', 'Sam', []]);
+  assert.match(v.callId, /^call-[0-9a-f]{16}$/);
   assert.ok(Date.parse(v.since));
   assert.strictEqual(r.calls.onCall('planner'), true);
   assert.deepStrictEqual(r.ofType('voice_call').map(e => [e.agent, e.state, e.mode, e.person]), [['planner', 'on', 'announce', 'Sam']]);
@@ -42,13 +43,15 @@ test('start / heartbeat / mode / end: one call per agent, owned by the person wh
   assert.strictEqual(r.ofType('voice_call').pop().mode, 'dnd');
 
   // somebody else, an admin included, cannot touch it or take it over
-  for (const r2 of [r.calls.heartbeat('planner', 'u2'), r.calls.setMode('planner', 'u2', 'announce'), r.calls.end('planner', 'u2'), r.calls.decide('planner', 'u2', 'x', 'now'), r.calls.start('planner', { userId: 'u2', person: 'Alex' })]) assert.strictEqual(r2.error, 'not_your_call');
+  for (const r2 of [r.calls.heartbeat('planner', 'u2'), r.calls.setMode('planner', 'u2', 'announce'), r.calls.end('planner', 'u2'), await r.calls.decide('planner', 'u2', 'x', 'now'), r.calls.start('planner', { userId: 'u2', person: 'Alex' })]) assert.strictEqual(r2.error, 'not_your_call');
   assert.strictEqual(r.calls.onCall('planner'), true);
   assert.strictEqual(r.calls.heartbeat('nobody', 'u1').error, 'no_call');
 
   // the same person starting again (a page reload) carries the call on
-  assert.strictEqual(r.calls.start('planner', { userId: 'u1', person: 'Sam', mode: 'dnd' }).mode, 'dnd');
-  assert.strictEqual(r.ofType('voice_call').filter(e => e.state === 'on' && e.agent === 'planner').length, 2, 'the mode change published; the restart did not publish a second "on"');
+  const again = r.calls.start('planner', { userId: 'u1', person: 'Sam', mode: 'dnd' });
+  assert.strictEqual(again.mode, 'dnd');
+  assert.notStrictEqual(again.callId, v.callId, 'a restart is a new call instance');
+  assert.strictEqual(r.ofType('voice_call').filter(e => e.state === 'on' && e.agent === 'planner').length, 3, 'start, the mode change and the restart (new id) published');
   assert.deepStrictEqual(r.calls.end('planner', 'u1'), { held: [] });
   assert.strictEqual(r.calls.onCall('planner'), false);
   assert.strictEqual(r.ofType('voice_call').pop().state, 'off');
@@ -83,7 +86,7 @@ test('do not disturb: held items are announced quietly', () => {
   assert.deepStrictEqual([ev.quiet, ev.mode], [true, 'dnd']);
 });
 
-test('decide: now allows the item and kicks its producer; later keeps it; skip calls onSkip and removes it; all publish voice_held_done', () => {
+test('decide: now allows the item and kicks its producer; later keeps it; skip calls onSkip and removes it; all publish voice_held_done', async () => {
   const r = rig(); const kicked = [], skipped = [];
   r.calls.registerProducer('consultation', { kick: () => kicked.push('consultation'), onSkip: (agent, item) => skipped.push([agent, item.id]) });
   r.calls.registerProducer('schedule', { kick: () => kicked.push('schedule') });
@@ -91,22 +94,22 @@ test('decide: now allows the item and kicks its producer; later keeps it; skip c
   r.calls.holds('planner', consult({ id: 'c1' })); r.calls.holds('planner', consult({ id: 'c2' })); r.calls.holds('planner', consult({ id: 'c3' }));
   r.calls.holds('planner', { id: 's1', kind: 'schedule', label: 'Nightly', from: 'schedule' });
 
-  assert.deepStrictEqual(r.calls.decide('planner', 'u1', 'c1', 'now'), { ok: true, choice: 'now' });
+  assert.deepStrictEqual(await r.calls.decide('planner', 'u1', 'c1', 'now'), { ok: true, choice: 'now' });
   assert.strictEqual(r.calls.holds('planner', consult({ id: 'c1' })), false, 'allowed: the producer runs it on its next check');
   assert.deepStrictEqual(kicked, ['consultation']);
 
-  assert.strictEqual(r.calls.decide('planner', 'u1', 'c2', 'later').ok, true);
+  assert.strictEqual((await r.calls.decide('planner', 'u1', 'c2', 'later')).ok, true);
   assert.strictEqual(r.calls.holds('planner', consult({ id: 'c2' })), true, 'later: stays held');
   assert.deepStrictEqual(kicked, ['consultation'], 'later kicks nothing');
 
-  assert.strictEqual(r.calls.decide('planner', 'u1', 'c3', 'skip').ok, true);
+  assert.strictEqual((await r.calls.decide('planner', 'u1', 'c3', 'skip')).ok, true);
   assert.deepStrictEqual(skipped, [['planner', 'c3']]);
   assert.ok(!r.calls.statusOf('planner').held.some(i => i.id === 'c3'), 'skipped items leave the list');
   assert.strictEqual(r.calls.holds('planner', consult({ id: 'c3' })), true, 'a skipped item that is asked about again stays out of the way, silently');
   assert.strictEqual(r.ofType('voice_held').filter(e => e.item.id === 'c3').length, 1);
 
-  assert.strictEqual(r.calls.decide('planner', 'u1', 'nope', 'now').error, 'unknown_item');
-  assert.strictEqual(r.calls.decide('planner', 'u1', 'c2', 'maybe').error, 'bad_choice');
+  assert.strictEqual((await r.calls.decide('planner', 'u1', 'nope', 'now')).error, 'unknown_item');
+  assert.strictEqual((await r.calls.decide('planner', 'u1', 'c2', 'maybe')).error, 'bad_choice');
   assert.deepStrictEqual(r.ofType('voice_held_done').map(e => [e.agent, e.id, e.choice]), [['planner', 'c1', 'now'], ['planner', 'c2', 'later'], ['planner', 'c3', 'skip']]);
 });
 
@@ -216,15 +219,20 @@ test('routes: POST /api/voice/call starts, heartbeats, changes the mode and ends
   assert.strictEqual(r.calls.onCall('sam_assistant'), false);
 });
 
-test('routes: only the person who started the call may heartbeat, change, end or decide (an admin too); bad input is refused', async () => {
+test('routes: only the person who started the call may heartbeat or start over it; other members are refused; bad input is refused', async () => {
   const r = routeRig();
   await post(r.deps, '/api/voice/call', { agent: 'sam_assistant', action: 'start' });
   r.calls.holds('sam_assistant', consult({ id: 'c1' }));
+  const alex = { id: 'u_alex', role: 'member', name: 'Alex' };
   for (const body of [{ agent: 'sam_assistant', action: 'heartbeat' }, { agent: 'sam_assistant', action: 'mode', mode: 'dnd' }, { agent: 'sam_assistant', action: 'end' }, { agent: 'sam_assistant', action: 'start' }]) {
-    const x = await post(r.deps, '/api/voice/call', body, owner);
+    const x = await post(r.deps, '/api/voice/call', body, alex);
     assert.deepStrictEqual([x.status, x.json.error], [403, 'not_your_call'], JSON.stringify(body));
   }
-  assert.deepStrictEqual((await post(r.deps, '/api/voice/call/decide', { agent: 'sam_assistant', id: 'c1', choice: 'now' }, owner)).status, 403);
+  for (const body of [{ agent: 'sam_assistant', action: 'heartbeat' }, { agent: 'sam_assistant', action: 'start' }]) {
+    const x = await post(r.deps, '/api/voice/call', body, owner);
+    assert.deepStrictEqual([x.status, x.json.error], [403, 'not_your_call'], 'an admin does not heartbeat or take over: ' + JSON.stringify(body));
+  }
+  assert.deepStrictEqual((await post(r.deps, '/api/voice/call/decide', { agent: 'sam_assistant', id: 'c1', choice: 'now' }, alex)).status, 403);
   assert.strictEqual(r.calls.onCall('sam_assistant'), true);
   assert.strictEqual((await post(r.deps, '/api/voice/call', { agent: 'sam_assistant', action: 'dance' })).status, 400);
   assert.strictEqual((await post(r.deps, '/api/voice/call', { action: 'start' })).json.error, 'agent_required');
@@ -289,7 +297,7 @@ test('scheduled tasks: a due task for an agent on a call waits in order; now run
   assert.match(held[0].item.id, /^schedule:[^:]+:2026-/);
   assert.strictEqual(r.inst.pending.filter(p => p.agent === 'analyst').length, 2, 'held items stay in pending, in order');
 
-  assert.strictEqual(r.calls.decide('analyst', 'u1', held[0].item.id, 'now').ok, true);
+  assert.strictEqual((await r.calls.decide('analyst', 'u1', held[0].item.id, 'now')).ok, true);
   assert.ok(await until(() => r.woken.some(w => w.label === 'first')), 'now: the producer ran it');
   assert.ok(!r.woken.some(w => w.label === 'second'), 'the other one still waits');
   const out = r.calls.end('analyst', 'u1');
@@ -307,7 +315,7 @@ test('scheduled tasks: skip drops that run as missed ("skipped during a voice ca
   r.advance('analyst', 'u1', 6 * 60000);
   await r.inst.tick();
   const item = r.ofType('voice_held')[0].item;
-  r.calls.decide('analyst', 'u1', item.id, 'skip');
+  assert.strictEqual((await r.calls.decide('analyst', 'u1', item.id, 'skip')).ok, true);
   assert.strictEqual(r.inst.pending.length, 0);
   const t = r.inst.tasks.get(once.id || once.task?.id || [...r.inst.tasks.keys()][0]);
   assert.strictEqual(t.runs[0].status, 'missed');
@@ -347,7 +355,7 @@ function jobRig() {
   return { ...r, runner, notes, dataDir };
 }
 
-test('jobs: a notice or report for an agent on a call is held without using up delivery attempts; now / the end release it; skip drops only the notice', async () => {
+test('jobs: a notice or report for an agent on a call is held without using up delivery attempts; now / the end release it; skip means after the call (S-f)', async () => {
   const r = jobRig();
   r.calls.start('analyst', { userId: 'u1', person: 'Sam' });
   r.runner.pending.push({ kind: 'result', jobId: 'j1', agent: 'analyst', message: 'm1', attempts: 0, notBefore: 0 });
@@ -364,18 +372,19 @@ test('jobs: a notice or report for an agent on a call is held without using up d
   assert.deepStrictEqual(r.notes[0], { agent: 'analyst', kind: 'job_notice' });
   assert.strictEqual(r.runner.pending.length, 1);
 
-  r.calls.decide('analyst', 'u1', 'job:j2:report', 'skip');
-  assert.strictEqual(r.runner.pending.length, 0, 'the notice is dropped');
-  assert.strictEqual(r.runner.jobs.get('j2').status, 'finished', 'the job keeps its own record and result');
-  assert.match(r.runner.jobs.get('j2').note, /skipped during a voice call/);
-  assert.strictEqual(r.notes.length, 1);
-
-  r.runner.pending.push({ kind: 'result', jobId: 'j2', agent: 'analyst', message: 'm3', attempts: 0, notBefore: 0 });
+  // S-f: skip on a job report must not break the report chain: it is kept ("later"), not announced again, delivered after hang-up
+  const skipRes = await r.calls.decide('analyst', 'u1', 'job:j2:report', 'skip');
+  assert.deepStrictEqual(skipRes, { ok: true, choice: 'later' });
+  assert.strictEqual(r.runner.pending.length, 1, 'the report is kept');
+  assert.strictEqual(r.calls.statusOf('analyst').held.find(i => i.id === 'job:j2:report').state, 'later');
+  assert.strictEqual(r.ofType('voice_held_done').pop().choice, 'later');
   await r.runner._deliver();
-  assert.strictEqual(r.notes.length, 1, 'a new notice during the same call is held again');
+  assert.strictEqual(r.ofType('voice_held').filter(e => e.item.id === 'job:j2:report').length, 1, 'not announced again');
+  assert.strictEqual(r.notes.length, 1, 'still waiting');
+
   r.calls.end('analyst', 'u1');
-  assert.ok(await until(() => r.notes.length === 2), 'the end of the call releases it');
-  assert.deepStrictEqual(r.notes[1], { agent: 'analyst', kind: 'job_notice' });
+  assert.ok(await until(() => r.notes.length === 2), 'the end of the call delivers it');
+  assert.deepStrictEqual(r.notes[1], { agent: 'analyst', kind: 'job_report' });
   fs.rmSync(r.dataDir, { recursive: true, force: true });
 });
 
@@ -396,7 +405,7 @@ test('consult queue: a drain skips an agent whose next job is held, keeps its pl
   assert.deepStrictEqual(ran, ['for someone else'], 'the agent on the call is skipped, the other agent is not');
   assert.deepStrictEqual(q.pendingFor('planner').map(j => j.prompt), ['first request', 'second request']);
   assert.strictEqual(cq.jobHoldId(a), `consult:helper:planner:${a.key}`);
-  assert.deepStrictEqual(r.ofType('voice_held').map(e => e.item.id), [cq.jobHoldId(a)]);
+  assert.deepStrictEqual(r.ofType('voice_held').map(e => e.item.id), [cq.jobHoldId(a), cq.jobHoldId(q.pendingFor('planner')[1])], 'every held job is announced, in queue order');
 
   r.calls.decide('planner', 'u1', cq.jobHoldId(a), 'now');
   assert.strictEqual(await q.drain(opts), 1);
