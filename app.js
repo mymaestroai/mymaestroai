@@ -5472,11 +5472,16 @@
       setTimeout(() => checkManualRestartComplete(), 2000);
     });
 
+    // Shown on a phone by the screen test in lib/ui-phone-layout.js (works when the browser requests the desktop site),
+    // and on narrow windows as before; an installed app on a phone never sees it because it moves to /mobile.
     function showMobileBanner() {
-      if (window.innerWidth >= 700 || localStorage.getItem('hub-mobile-banner') === 'off') return;
+      const pl = window.hubPhoneLayout || {};
+      if (pl.moving) return;
+      if (!(pl.offer === true || (window.innerWidth < 700 && !pl.keepDesktop))) return;
+      try { if (localStorage.getItem('hub-mobile-banner') === 'off') return; } catch (e) { /* storage blocked: show it */ }
       const bar = document.createElement('div');
       bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#14171F;border-bottom:1px solid #222632;color:#F3F4F6;font-size:13px';
-      bar.innerHTML = '<a href="/mobile" style="color:#5A93FF;text-decoration:none">Phone? Try the mobile view</a><button aria-label="Dismiss" style="background:none;border:0;color:#9CA3AF;font-size:16px;padding:4px 8px">\u2715</button>';
+      bar.innerHTML = '<span><span style="color:#C3C2B7">This is the computer layout.</span> <a href="/mobile" style="color:#5A93FF;text-decoration:none">Open the phone layout</a></span><button aria-label="Dismiss" style="background:none;border:0;color:#9CA3AF;font-size:16px;padding:4px 8px">\u2715</button>';
       bar.querySelector('button').addEventListener('click', () => { localStorage.setItem('hub-mobile-banner', 'off'); bar.remove(); });
       document.body.appendChild(bar);
     }
