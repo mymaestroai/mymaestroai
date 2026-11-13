@@ -760,6 +760,18 @@ test('drawer: a touch swipe down of 50 px on the header closes it; 20 px does no
   assert.strictEqual(ui.drawer.hidden, false, 'a short mouse drag does not close');
   head.dispatch('pointerdown', { clientY: 100, pointerType: 'mouse' }); head.dispatch('pointerup', { clientY: 150, pointerType: 'mouse' });
   assert.strictEqual(ui.drawer.hidden, true, 'a mouse drag of 50 px closes');
+  // a press on Close is never captured by the header (a captured pointer would take the click away from the button); a right button starts no drag
+  ctl.click(); assert.strictEqual(ui.drawer.hidden, false);
+  const close = dom.find('ucd-drawer-close')[0]; const captured = [];
+  head.setPointerCapture = (id) => captured.push(id); head.releasePointerCapture = () => {};
+  head.dispatch('pointerdown', { target: close, clientY: 100, pointerType: 'mouse', button: 0, pointerId: 3 });   // bubbled from the button
+  assert.deepStrictEqual(captured, [], 'no capture for a press on Close');
+  head.dispatch('pointerdown', { clientY: 100, pointerType: 'mouse', button: 2, pointerId: 4 });
+  assert.deepStrictEqual(captured, [], 'no capture for a right button');
+  head.dispatch('pointerdown', { clientY: 100, pointerType: 'mouse', button: 0, pointerId: 5 });
+  assert.deepStrictEqual(captured, [5], 'a press on the header itself is captured');
+  head.dispatch('pointerup', { clientY: 100, pointerType: 'mouse', pointerId: 5 });
+  close.click(); assert.strictEqual(ui.drawer.hidden, true, 'Close closes'); assert.strictEqual(dom.doc.activeElement, ctl);
   w.display.release();
 });
 
