@@ -10835,6 +10835,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
         // ── voice call (begin) ──
     const VOICE_ECHO_HOLD_MS = 600, VOICE_CALL_LEAD_IN_MS = 300, VOICE_KEEPALIVE_DB = -70;
+    const VOICE_MIC_LOST_LINE = 'I lost the microphone. Tap to talk to carry on.';
     const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
     const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
     // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
@@ -11078,11 +11079,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (ok === false) {
             // A failed or cut line drops what waits behind it, except a microphone line ('mic': lost / back / switched), which is
             // tried ONCE more: sending the person's last words stops playback, and that must not swallow "I lost the microphone".
-            const keep = (item.kind === 'mic' && !item.retried ? [item] : []).concat(queue.filter(q => q.kind === 'mic' && !q.retried));
+            // Only the line that was cut uses up its retry; mic lines still waiting keep theirs (each gets at most two real attempts).
+            const retryItem = item.kind === 'mic' && !item.retried;
+            const keep = (retryItem ? [item] : []).concat(queue.filter(q => q.kind === 'mic'));
             for (const q of queue) if (!keep.includes(q)) runAfter(q);
-            for (const q of keep) q.retried = true;
+            if (retryItem) item.retried = true;
             queue = keep;
-            if (keep.includes(item)) continue;   // its after() runs when it is really done
+            if (retryItem) continue;   // its after() runs when it is really done
           }
           runAfter(item);
         }
@@ -11403,10 +11406,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (ev.ok === false) {
           if (micLost) return;   // already said: a burst of device events while it is lost is not announced again
           micLost = true; quiet(() => ui.micLost(true));
-          enqueue('I lost the microphone. Tap to talk to carry on.', 'mic');
+          enqueue(VOICE_MIC_LOST_LINE, 'mic');
           return;
         }
-        if (micLost) { micLost = false; quiet(() => ui.micLost(false)); enqueue('The microphone is back.', 'mic'); return; }
+        if (micLost) {
+          micLost = false; quiet(() => ui.micLost(false));
+          queue = queue.filter(q => !(q.kind === 'mic' && q.text === VOICE_MIC_LOST_LINE));   // a lost line still waiting is no longer true
+          enqueue('The microphone is back.', 'mic'); return;
+        }
         if (ev.changed) enqueue('I\'ve switched microphones.', 'mic');
       }
       // Tries to open the microphone again (the answer arrives through onMicChange); the promise says whether it worked.

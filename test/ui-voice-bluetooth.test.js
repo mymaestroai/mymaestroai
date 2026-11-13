@@ -1064,9 +1064,11 @@ test('mic lines survive a cut line once: sending the person\'s last words stops 
   assert.deepStrictEqual(h.spoken.slice(-1), ['I lost the microphone. Tap to talk to carry on.'], 'the mic line is tried after the cut');
   assert.ok(!h.spoken.includes('Second sentence.'), 'the rest of the cut reply is dropped as before');
   const n = h.spoken.length;
-  await h.finish(false);   // its own attempt is cut too: it was already kept once, so it is dropped (no loop)
+  await h.finish(false);   // its own first attempt is cut: a waiting line kept its retry, so it is tried once more
   await tick();
-  assert.strictEqual(h.spoken.length, n, 'no further attempt');
+  assert.strictEqual(h.spoken.length, n + 1, 'one more attempt');
+  await h.finish(false); await tick();   // cut again: dropped (at most two real attempts, no loop)
+  assert.strictEqual(h.spoken.length, n + 1, 'no further attempt');
   // a mic line that is itself cut while playing is tried once more
   const h2 = await callStarted();
   h2.handlers.onMicChange({ ok: false, reason: 'ended' }); await tick();
@@ -1077,4 +1079,27 @@ test('mic lines survive a cut line once: sending the person\'s last words stops 
   assert.strictEqual(h2.spoken.length, 2, 'and not again');
   h2.call.release('test');
   h.call.release('test');
+});
+
+test('mic lines: a waiting mic line keeps its own retry; a lost line still waiting is dropped when the microphone comes back', async () => {
+  const h = await callStarted();
+  h.call.onSpeechEnd({ text: 'a question' }); await tick(60);
+  h.call.onReplyText('First sentence. Second sentence.', true); await tick();
+  h.handlers.onMicChange({ ok: false, reason: 'ended' });
+  h.handlers.onMicChange({ ok: true, reason: 'manual', changed: false });
+  await h.finish(false); await tick();   // the reply line is cut: "lost" was already dropped by the return, "back" is said
+  assert.deepStrictEqual(h.spoken.slice(1), ['The microphone is back.'], 'no stale "lost" line, the back line is said');
+  h.call.release('test');
+  const g = await callStarted();
+  g.call.onSpeechEnd({ text: 'a question' }); await tick(60);
+  g.call.onReplyText('First sentence.', true); await tick();
+  g.handlers.onMicChange({ ok: true, reason: 'devicechange', changed: true });   // "I've switched microphones." waits
+  g.handlers.onMicChange({ ok: false, reason: 'ended' });                          // and the lost line waits behind it
+  await g.finish(false); await tick();   // reply cut: both mic lines kept
+  assert.strictEqual(g.spoken[g.spoken.length - 1], "I've switched microphones.");
+  await g.finish(false); await tick();   // the switched line is cut on its own attempt: it is retried, the lost line still waits with its retry
+  assert.strictEqual(g.spoken[g.spoken.length - 1], "I've switched microphones.");
+  await g.finish(true); await tick();
+  assert.strictEqual(g.spoken[g.spoken.length - 1], 'I lost the microphone. Tap to talk to carry on.', 'the waiting lost line still gets its attempt');
+  g.call.release('test');
 });
