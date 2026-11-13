@@ -79,8 +79,9 @@ function world(o) {
   const storage = o.storage || memStorage(o.prefs ? { [CD.DISPLAY_STORE_KEY]: JSON.stringify(o.prefs) } : {});
   const log = { talk: 0, hang: 0, changes: 0 };
   const win = { document: dom.doc, AudioContext: o.AudioContext, createVoiceOrb: undefined };
+  if (o.winEvents) { win.added = []; win.removed = []; win.addEventListener = (t, f) => win.added.push([t, f]); win.removeEventListener = (t, f) => win.removed.push([t, f]); }
   const display = CD.createCallDisplay({
-    window: win, document: dom.doc, storage, fetch: o.fetch || jsonFetch(PACKS), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout,
+    window: win, ResizeObserver: o.ResizeObserver, document: dom.doc, storage, fetch: o.fetch || jsonFetch(PACKS), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout,
     reopenHost: o.reopenHost, needsContext: !!o.needsContext, shared: o.shared, onRoutesLost: o.onRoutesLost, agentDefault: () => (o.agentDefault === undefined ? 'none' : o.agentDefault), adopt: o.adopt,
     onTalk: () => { log.talk++; }, onHangUp: () => { log.hang++; }, onChange: () => { log.changes++; },
     createVoiceOrb: fakePlayerFactory('orb', orbs, o.orb), createFacePlayer: fakePlayerFactory('pack', players, o.pack),
@@ -1054,4 +1055,105 @@ test('hello: a player whose hello clip has not arrived keeps hello past HELLO_MS
   const n = w.clk.timers.length; await w.clk.advance(CD.HELLO_WAIT_MS); assert.strictEqual(w.players[0].last('setState'), 'listening'); assert.ok(w.clk.timers.length <= n);
   const q = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: true } } }); q.display.start(); await flushP(); q.display.setState('listening');
   await q.clk.advance(CD.HELLO_MS + 10); assert.strictEqual(q.players[0].last('setState'), 'listening', 'a player that does not report hello keeps the plain timer');
+});
+
+// ── caption reserve: the character's host stops above the caption band (the band never covers the feet) ──
+const stageOf = (w) => w.display.ui ? w.display.ui.stage : null;
+const capOf = (w) => w.display.ui ? w.display.ui.caption : null;
+const RES = '--ucd-caption-reserve';
+const packCaps = (extra) => world(Object.assign({ prefs: { choice: 'pack:owl', captions: true }, pack: { info: { ready: true, failed: null, drawable: true } } }, extra || {}));
+test('caption reserve: a measured band height + 12px offset + 8px gap is reserved under a character, follows multi-line growth, and clears with the caption', async () => {
+  let fire = null, made = 0, disc = 0, observed = [];
+  const RO = function (cb) { made++; fire = cb; this.observe = (n) => observed.push(n); this.disconnect = () => { disc++; }; };
+  const w = packCaps({ ResizeObserver: RO }); w.display.start(); await flushP();
+  assert.strictEqual(w.display.info().kind, 'pack'); assert.strictEqual(stageOf(w).props[RES], undefined, 'nothing reserved before there is text');
+  const cap = capOf(w); cap.offsetHeight = 100; w.display.caption('One line.');
+  assert.strictEqual(stageOf(w).props[RES], '120px', '100 + 12 + 8');
+  cap.offsetHeight = 180; w.display.caption('A much longer sentence that wraps over several lines on a narrow stage.'); assert.strictEqual(stageOf(w).props[RES], '200px', 'multi-line');
+  cap.offsetHeight = 140; fire(); assert.strictEqual(stageOf(w).props[RES], '160px', 'a resize that re-wraps the text re-measures through the observer');
+  w.display.clearCaption(); assert.strictEqual(stageOf(w).props[RES], '0px', 'cleared');
+  w.display.caption('Again.'); cap.offsetHeight = 60; w.display.caption('Again.'); assert.strictEqual(stageOf(w).props[RES], '80px');
+  w.display.setCaptions(false); assert.strictEqual(stageOf(w).props[RES], '0px', 'captions off (toggle)');
+  w.display.setCaptions(true); w.display.caption('Back.'); assert.strictEqual(stageOf(w).props[RES], '80px', 'captions on again');
+  w.display.hideToChat(); assert.strictEqual(stageOf(w).props[RES], '0px', 'hiding the view clears it');
+  w.display.showView(); await flushP(); assert.strictEqual(stageOf(w).props[RES], '0px', 'a rebuilt view starts without a reserve');
+  w.display.caption('Rebuilt.'); assert.strictEqual(stageOf(w).props[RES], '80px');
+  w.display.setChoice('pack:plain'); await flushP(); assert.strictEqual(stageOf(w).props[RES], '80px', 'another character: the caption band is still there, so is its reserve');
+  w.display.setChoice('orb'); await flushP(); assert.strictEqual(stageOf(w).props[RES], '0px', 'the Orb never reserves');
+  w.display.setChoice('pack:owl'); await flushP(); assert.strictEqual(stageOf(w).props[RES], '80px', 'back to a character with the band showing');
+  assert.strictEqual(made, 1, 'one observer for the whole call'); assert.deepStrictEqual(observed.map(n => n.className), ['ucd-caption', 'ucd-stage']);
+  w.display.release(); assert.strictEqual(disc, 1, 'the observer is disconnected on destroy'); assert.doesNotThrow(() => fire());
+});
+test('caption reserve: no measurement (no layout) falls back to an estimate from the stage size and the text, never more than 40 percent of the stage', async () => {
+  const w = packCaps(); w.display.start(); await flushP();   // fake elements have no offsetHeight / clientWidth: stage 640x360, font 26.88px
+  w.display.caption('x'.repeat(40)); assert.strictEqual(stageOf(w).props[RES], '108px', '2 lines: ceil(2 * 26.88 * 1.25 + 20) = 88, + 20');
+  w.display.caption('x'.repeat(400)); assert.strictEqual(stageOf(w).props[RES], '164px', 'capped at 40% of 360 = 144, + 20');
+  const s = stageOf(w); s.clientWidth = 1000; s.clientHeight = 600; w.display.caption('x'.repeat(10)); assert.strictEqual(stageOf(w).props[RES], '90px', 'one line at 1000px: font min(40, 42) = 40: ceil(40 * 1.25 + 20) = 70, + 20');
+  w.display.release();
+});
+test('caption reserve: the Orb and None never reserve anything; without ResizeObserver a window resize listener is used and removed', async () => {
+  const o = world({ prefs: { choice: 'orb', captions: true }, winEvents: true }); o.display.start(); await flushP(); capOf(o).offsetHeight = 90;
+  o.display.caption('Orb text.'); assert.strictEqual(stageOf(o).props[RES], undefined, 'the orb layout is untouched');
+  assert.strictEqual(o.win.added.filter(a => a[0] === 'resize').length, 1); o.display.release(); assert.deepStrictEqual(o.win.removed.map(a => a[0]), ['resize']); assert.strictEqual(o.win.removed[0][1], o.win.added[0][1]);
+  const p = packCaps({ winEvents: true }); p.display.start(); await flushP(); const cap = capOf(p); cap.offsetHeight = 50; p.display.caption('Hi.');
+  assert.strictEqual(stageOf(p).props[RES], '70px'); cap.offsetHeight = 90; p.win.added.find(a => a[0] === 'resize')[1](); assert.strictEqual(stageOf(p).props[RES], '110px', 'the resize listener re-measures');
+  p.display.release(); assert.strictEqual(p.win.removed.length, 1);
+  const n = world({ prefs: { choice: 'none', captions: true } }); n.display.start(); await flushP(); assert.strictEqual(n.dom.overlay(), null);
+  assert.match(read('lib/ui-call-display.css'), /\.ucd-host \{[^}]*inset: 0 0 var\(--ucd-caption-reserve, 0px\) 0/, 'the host leaves the reserve at its bottom');
+});
+
+// ── follow-ups: the long caption scrolls to its newest line; the stage takes the player's background ──
+test('long caption: the band keeps its newest line in view after every caption and every resize (not clipped), and the CSS lets it scroll inside the stage', async () => {
+  let fire = null; const RO = function (cb) { fire = cb; this.observe = () => {}; this.disconnect = () => {}; };
+  const w = packCaps({ ResizeObserver: RO }); w.display.start(); await flushP();
+  const cap = capOf(w); cap.offsetHeight = 300; cap.scrollHeight = 520; cap.scrollTop = 0;
+  w.display.caption('The first part of a very long reply. '.repeat(12)); assert.strictEqual(cap.scrollTop, 520, 'the end of the text is scrolled into view');
+  cap.scrollHeight = 700; cap.scrollTop = 40; w.display.caption('The first part of a very long reply. '.repeat(12) + 'And the newest sentence.'); assert.strictEqual(cap.scrollTop, 700, 'a longer caption: newest line again');
+  cap.scrollHeight = 900; cap.scrollTop = 10; fire(); assert.strictEqual(cap.scrollTop, 900, 'a resize that rewraps keeps the newest line in view');
+  w.display.clearCaption(); cap.scrollTop = 5; fire(); assert.strictEqual(cap.scrollTop, 5, 'nothing to scroll without a caption'); w.display.release();
+  const css = read('lib/ui-call-display.css'), band = /\.ucd-caption \{([^}]*)\}/.exec(css)[1];
+  assert.match(band, /overflow-y: auto/); assert.doesNotMatch(band, /overflow: hidden/, 'the old clipping is gone'); assert.match(band, /max-height: 40%/); assert.match(band, /box-sizing: border-box/, 'the 40% cap includes the padding');
+  assert.match(band, /bottom: 12px/, 'the band sits in the stage above the call bar'); assert.match(css, /\.ucd-stage \{[^}]*overflow: hidden/, 'inside the stage, which ends above the bar (flex column: stage, drawer, bar)');
+  assert.match(css, /\.ucd-caption::-webkit-scrollbar \{ display: none; \}/);
+});
+test('edge glow: the character player may run its glow past its host (the stage clips it, so the glow also fills the caption reserve below the host); the host never clips', async () => {
+  const w = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: true } } }); w.display.start(); await flushP();
+  assert.strictEqual(w.players[0].options.glowBeyond, true); w.display.release();
+  const css = read('lib/ui-call-display.css'); assert.match(css, /\.ucd-host \{[^}]*overflow: visible/, 'the host lets the glow through'); assert.match(css, /\.ucd-stage \{[^}]*overflow: hidden/, 'the stage is what clips it');
+});
+test('stage background: the colour the player reports (its poster ring) replaces the pack list colour on the stage; invalid, stale and destroyed reports are ignored', async () => {
+  const w = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: true } } }); w.display.start(); await flushP();
+  const st = stageOf(w), p = w.players[0]; assert.strictEqual(typeof p.options.onBackground, 'function'); assert.strictEqual(st.props['--ucd-bg'], '#ffd6ab', 'the list colour until the player reports');
+  p.options.onBackground('rgb(200,180,160)'); assert.strictEqual(st.props['--ucd-bg'], 'rgb(200,180,160)');
+  p.options.onBackground('url(javascript:x)'); assert.strictEqual(st.props['--ucd-bg'], '', 'an invalid colour is dropped, never written');
+  p.options.onBackground('rgb(1,2,3)'); w.display.setChoice('pack:plain'); await flushP(); const q = w.players[1];
+  assert.strictEqual(st.props['--ucd-bg'], '#222', 'the new view starts with its own list colour'); p.options.onBackground('rgb(9,9,9)'); assert.strictEqual(st.props['--ucd-bg'], '#222', 'a report from the replaced view is stale');
+  q.options.onBackground('rgb(7,7,7)'); assert.strictEqual(st.props['--ucd-bg'], 'rgb(7,7,7)');
+  w.display.release(); assert.doesNotThrow(() => q.options.onBackground('rgb(5,5,5)')); assert.strictEqual(st.props['--ucd-bg'], 'rgb(7,7,7)', 'nothing after release');
+});
+
+// ── a pack removed while a call is up ──
+test('files removed mid-call (the player reports it lost): the display closes to the ordinary call bar, the choice is kept, a stale or late report does nothing', async () => {
+  const w = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: true } } }); w.display.start(); await flushP();
+  assert.ok(w.dom.overlay(), 'the character is up'); const p = w.players[0]; assert.strictEqual(typeof p.options.onLost, 'function', 'the display asks the player to report a lost pack');
+  p.options.onLost('the character files are no longer available'); await flushP();
+  assert.strictEqual(w.dom.overlay(), null, 'no frozen picture over the call'); assert.strictEqual(w.display.info().kind, 'none'); assert.strictEqual(p.destroyed, true);
+  assert.strictEqual(JSON.parse(w.storage.getItem(CD.DISPLAY_STORE_KEY)).choice, 'pack:owl', 'the choice stays saved');
+  assert.doesNotThrow(() => p.options.onLost('again'), 'a second report of the destroyed view is ignored'); assert.strictEqual(w.display.info().destroyed, false, 'the call itself continues');
+  w.display.release();
+  const e = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: true } } }); e.display.start(); await flushP(); const q = e.players[0];
+  e.display.setChoice('orb'); await flushP(); q.options.onLost('late'); assert.strictEqual(e.display.info().kind, 'orb', 'a report from a view that was switched away does not touch the new one'); e.display.release();
+});
+test('the next call after the pack was removed resolves None (missing, saved choice kept), never an Orb and never a player', async () => {
+  const w = world({ prefs: { choice: 'pack:owl' }, fetch: jsonFetch([PACKS[1]]) }); w.display.start(); await flushP();
+  assert.strictEqual(w.display.info().kind, 'none'); assert.strictEqual(w.dom.overlay(), null); assert.strictEqual(w.players.length, 0); assert.strictEqual(w.orbs.length, 0);
+  assert.strictEqual(JSON.parse(w.storage.getItem(CD.DISPLAY_STORE_KEY)).choice, 'pack:owl'); w.display.release();
+});
+test('caption observer: when observe() throws after the observer exists, it is disconnected before the resize-listener fallback', async () => {
+  let made = 0, disc = 0;
+  const RO = function () { made++; this.observe = () => { throw new Error('observe failed'); }; this.disconnect = () => { disc++; }; };
+  const w = world({ prefs: { choice: 'pack:owl', captions: true }, pack: { info: { ready: true, failed: null, drawable: true } }, ResizeObserver: RO, winEvents: true });
+  w.display.start(); await flushP();
+  assert.ok(w.dom.overlay()); assert.strictEqual(made, 1); assert.strictEqual(disc, 1, 'the partly registered observer is released'); assert.strictEqual(w.win.added.filter(a => a[0] === 'resize').length, 1, 'the fallback listener is used');
+  w.display.release(); assert.strictEqual(disc, 1, 'not disconnected twice'); assert.strictEqual(w.win.removed.length, 1);
 });

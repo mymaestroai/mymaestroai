@@ -882,10 +882,8 @@ test('voiceStripFor / faceMoodFor: stable account id: own call and second tab pa
   const strip = (userId, extra, body = { voice: true }) => ctx.voiceStripFor(body, { ...base, userId, accounts: true, service: false, calls: reg, ...extra });
   const mood = (userId, extra) => ctx.faceMoodFor({ voice: true, facePack: 'owl' }, { ...base, userId, accounts: true, service: false, calls: reg, ...extra });
 
-  // personId is internal: the stored id of a live call only; info() / statusOf() (the API views) are unchanged
-  assert.strictEqual(reg.personId('ada'), null, 'no call');
+  // the stored identity is internal: info() / statusOf() (the API views) are unchanged
   reg.start('ada', { userId: 'u1', person: 'Sam', mode: 'announce' });
-  assert.strictEqual(reg.personId('ada'), 'u1');
   assert.deepStrictEqual(Object.keys(reg.info('ada')).sort(), ['mode', 'person', 'since']);
   assert.ok(!('userId' in reg.statusOf('ada')) && !JSON.stringify(reg.statusOf('ada')).includes('u1'));
   assert.strictEqual(strip('u1'), true, 'own call');
@@ -903,7 +901,6 @@ test('voiceStripFor / faceMoodFor: stable account id: own call and second tab pa
   // no accounts: the call has no account (routes store owner) and the caller has none
   reg.end('ada', 'u1');
   reg.start('ada', { userId: 'owner', person: 'the owner' });
-  assert.strictEqual(reg.personId('ada'), null);
   const NOACC = { accounts: false };
   assert.strictEqual(strip(null, NOACC), true, 'both absent, install has no accounts');
   assert.strictEqual(strip(undefined, NOACC), true);

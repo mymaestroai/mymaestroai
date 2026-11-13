@@ -19,6 +19,7 @@
  *   mymaestro move-home [--yes]      move shared folders (share/, users/...) out of your home folder into the install; --yes does it
  *   mymaestro face install <folder> [--id <slug>]   add a character pack (the voice call face) from a folder
  *   mymaestro face list              the installed character packs
+ *   mymaestro face remove <id> [--yes]   move a pack to <hub home>/faces-removed (never deleted; restore with face install)
  *   mymaestro uninstall              remove the service, this command and the private Node; keeps the folder and data
  *   mymaestro version
  */
@@ -357,7 +358,7 @@ const commands = {
     if (!r.ok) process.exitCode = 1;
   },
   // Character packs for the voice call face (lib/faces): install from a local folder into <hub home>/faces/<id>, or list them.
-  face() {
+  async face() {
     const sub = argv[1];
     const { HUB_HOME } = require(path.join(DIR, 'lib', 'hub-home'));
     const faces = require(path.join(DIR, 'lib', 'faces', 'packs'));
@@ -377,7 +378,31 @@ const commands = {
       for (const p of list) out(`${p.id}  ${p.manifest.name || p.id}  ${p.manifest.clips.length} clips`);
       return;
     }
-    fail('Usage: mymaestro face install <folder> [--id <slug>]\n       mymaestro face list');
+    // Remove = ONE rename into <hub home>/faces-removed/<id>-<timestamp>; nothing is deleted, and restoring is an install.
+    if (sub === 'remove') {
+      const id = argv[2] && !argv[2].startsWith('--') ? argv[2] : null;
+      if (!id) fail('Usage: mymaestro face remove <id> [--yes]');
+      let plan;
+      try { plan = faces.removePack(id, { home: HUB_HOME, dryRun: true }); } catch (e) { fail(`Could not remove: ${e.message}`); }
+      out(`The character pack "${id}" moves out of use:\n  ${plan.from}\n  -> ${plan.to}`);
+      out('Nothing is deleted. It stops being listed or served at once; the hub does not need a restart.');
+      if (!flag('--yes')) {
+        const answer = await new Promise((resolve) => {
+          const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+          rl.on('close', () => resolve(''));   // closed input (nothing piped in) counts as "no"
+          rl.question('Move it? Type y to confirm: ', (a) => { resolve(a); rl.close(); });
+        });
+        if (!/^(y|yes)$/i.test(String(answer).trim())) { process.stdin.destroy(); fail('Nothing was changed.'); }
+        process.stdin.destroy();
+      }
+      try {
+        const r = faces.removePack(id, { home: HUB_HOME });
+        out(`Moved the character pack "${r.id}" to ${r.to}`);
+        out(`To bring it back:  ${r.restore}`);
+      } catch (e) { fail(`Could not remove: ${e.message}`); }
+      return;
+    }
+    fail('Usage: mymaestro face install <folder> [--id <slug>]\n       mymaestro face list\n       mymaestro face remove <id> [--yes]');
   },
   async uninstall() {
     const m = svc(); const inst = m.readInstall();
@@ -388,7 +413,7 @@ const commands = {
     out(`To delete everything, back up first (mymaestro backup), then run:  rm -rf "${DIR}"`);
   },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 23).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 24).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
 (async () => {

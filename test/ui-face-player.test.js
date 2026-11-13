@@ -82,15 +82,32 @@ function makeWorld(opts) {
     v.end = () => { v.fire('ended'); };
     return v;
   };
-  const gradCtx = () => new Proxy({}, {
-    get(_, k) { if (k === 'getImageData') return () => ({ data: new Uint8ClampedArray(32 * 18 * 4).fill(100) }); return (...a) => { t.ctxCalls.push([k, ...a]); }; },
-    set(_, k, v) { t.ctxCalls.push([k, v]); return true; },
-  });
+  const gradCtx = (log) => { let last = null, lastA = [], style = null; return new Proxy({}, {
+    get(_, k) {
+      if (k === 'getImageData') return (gx, gy, sw, sh) => {
+        if (opts.posterEdge && sh === 1 && last && last.tag === 'canvas') {   // an edge-row read of the painted poster canvas: N columns of the top (source y 0) or bottom strip
+          const d = new Uint8ClampedArray(sw * 4), f = lastA[2] === 0 ? opts.posterEdge.top : opts.posterEdge.bottom;
+          for (let i = 0; i < sw; i++) { const c = f((i + 0.5) / sw); d[i * 4] = c[0]; d[i * 4 + 1] = c[1]; d[i * 4 + 2] = c[2]; d[i * 4 + 3] = 255; }
+          t.edgeReads = (t.edgeReads || 0) + 1; return { data: d };
+        }
+        const d = new Uint8ClampedArray(32 * 18 * 4).fill(100);
+        const rg = opts.posterRing;   // [r, g, b]: a poster image whose outer two pixels are this colour and whose inside is pure green (only the ring may be sampled)
+        if (rg && last && last.tag === 'img') for (let y = 0; y < 18; y++) for (let x = 0; x < 32; x++) {
+          const ring = !(x > 1 && x < 30 && y > 1 && y < 16), i = (y * 32 + x) * 4, c = ring ? rg : [0, 255, 0];
+          d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = 255;
+        }
+        return { data: d };
+      };
+      if (k === 'createLinearGradient') return (...a) => { const g = { a, stops: [], addColorStop(o, c) { g.stops.push([o, c]); } }; return g; };
+      return (...a) => { if (k === 'drawImage') { last = a[0]; lastA = a; } if (k === 'fillRect' && log) log.fills.push({ style, rect: a }); if (k === 'clearRect' && log) log.fills.length = 0; t.ctxCalls.push([k, ...a]); };
+    },
+    set(_, k, v) { if (k === 'fillStyle') style = v; t.ctxCalls.push([k, v]); return true; },
+  }); };
   const doc = { hidden: false, visibilityState: 'visible',
     createElement(tag) {
       if (tag === 'video') { const v = mkVideo(); t.videos.push(v); return v; }
       if (tag === 'canvas') {
-        const c = mkEl('canvas'); let w = 0, h = 0; const cx = gradCtx();
+        const c = mkEl('canvas'); let w = 0, h = 0; c.log = { fills: [] }; const cx = gradCtx(c.log);
         Object.defineProperty(c, 'width', { get: () => w, set: (v) => { w = v; t.canvasWrites++; } });
         Object.defineProperty(c, 'height', { get: () => h, set: (v) => { h = v; } });
         c.getContext = () => cx; t.canvases.push(c); return c;
@@ -968,17 +985,17 @@ test('fallback: no usable still (it fails to load) still starts normally; a fail
   const w2 = makeWorld(packManifest(packClips().filter(c => c.state !== 'idle'))); w2.manifest.clips = w2.manifest.clips.filter(c => c.state !== 'idle');
   const q = w2.make(); await q.ready; await w2.settle(400); assert.strictEqual(q.getInfo().still, true, 'a pose-A non-track clip of another state is the still'); q.destroy();
 });
-test('edges: landscape keeps 9 percent feather; portrait uses 16 percent vertically and 9 percent horizontally', async () => {
+test('edges: every layout fades over 5 percent of the stage at most (landscape and portrait alike)', async () => {
   const { w, p } = await started(); const stage = w.container.children[0].children[0];
   const m = stage.style.maskImage;
-  assert.match(m, /to right, transparent 0%, #000 9%, #000 91%, transparent 100%/); assert.match(m, /to bottom, transparent 0%, #000 9%, #000 91%, transparent 100%/);
-  assert.strictEqual(p.getInfo().stage.featherY, 0.09);
+  assert.match(m, /to right, transparent 0%, #000 5%, #000 95%, transparent 100%/); assert.match(m, /to bottom, transparent 0%, #000 5%, #000 95%, transparent 100%/);
+  assert.strictEqual(p.getInfo().stage.featherY, 0.05);
   const pr = await started({}, { w: 390, h: 800 }), sp = pr.w.container.children[0].children[0];   // portrait: the same mask, the stage there is the short band of the picture
-  assert.match(sp.style.maskImage, /to bottom, transparent 0%, #000 16%, #000 84%, transparent 100%/); assert.match(sp.style.maskImage, /to right, transparent 0%, #000 9%, #000 91%, transparent 100%/); assert.strictEqual(pr.p.getInfo().stage.portrait, true); assert.strictEqual(pr.p.getInfo().stage.featherY, 0.16); pr.p.destroy();
+  assert.match(sp.style.maskImage, /to bottom, transparent 0%, #000 5%, #000 95%, transparent 100%/); assert.match(sp.style.maskImage, /to right, transparent 0%, #000 5%, #000 95%, transparent 100%/); assert.strictEqual(pr.p.getInfo().stage.portrait, true); assert.strictEqual(pr.p.getInfo().stage.featherY, 0.05); pr.p.destroy();
   assert.strictEqual(stage.style.maskComposite, 'intersect'); assert.strictEqual(stage.style.webkitMaskImage, m); assert.strictEqual(stage.style.webkitMaskComposite, 'source-in');
   assert.strictEqual(stage.children.length, 3, 'both videos and the poster canvas are in the masked stage'); assert.deepStrictEqual(stage.children.map(c => c.tag), ['video', 'video', 'canvas']);
   assert.ok(!w.container.children[0].children.slice(1).some(c => c.style.maskImage), 'the beak canvas is not masked');
-  assert.strictEqual(p.getInfo().stage.feather, 0.09); p.destroy();
+  assert.strictEqual(p.getInfo().stage.feather, 0.05); p.destroy();
 });
 test('landscape: geometry is the plain fit (whole picture, letterboxed in a wider view); the stage is the picture', async () => {
   const { p } = await started({}, { w: 800, h: 450 }); let s = p.getInfo().stage;
@@ -1084,7 +1101,7 @@ test('poster: no frame callback ends in a bounded wait; destroy and reduced moti
 // ── optional pack poster image and measured portrait safe area (all fields optional; old packs behave exactly as before) ──
 const SAFE = { x: 0.25, y: 0.1, w: 0.5, h: 0.6 };
 const posterManifest = (extra) => packManifest(null, Object.assign({ poster: 'poster.webp', posters: { A: 'poster.webp', B: 'art/rest.png', C: 'ignored.gif', future: 1 } }, extra || {}));
-const isPosterDraw = (w, c) => c[0] === 'drawImage' && c[1] && c[1].tag === 'img' && /poster\.webp$/.test(c[1]._s || '');
+const isPosterDraw = (w, c) => c[0] === 'drawImage' && c[1] && c[1].tag === 'img' && /poster\.webp$/.test(c[1]._s || '') && c[4] === 1920;   // the full-size paint into the poster canvas (the 32x18 background-ring sample is a different draw)
 const isFrameCopy = (c) => c[0] === 'drawImage' && c[1] && c[1].tag === 'video' && c[4] === 1280;
 
 test('manifest: poster / posters / safeArea / safeAreaTypical are normalised; bad values and old manifests give null (the fallback)', () => {
@@ -1537,4 +1554,448 @@ test('packRemoved() stops pending and future track retries and clip revival; des
   const w2 = makeWorld({ manifest: posterManifest() }); const h2 = trackNet(w2, () => 503); const p2 = w2.make(); await p2.ready; await w2.settle(100);
   assert.ok(p2.getInfo().trackRetries > 0); p2.destroy(); assert.strictEqual(w2.timers.filter(x => !x.tag).length, 0, 'destroy cleared every timer, the retries included');
   const before = sp1(h2); await runFor(w2, 60000); assert.strictEqual(sp1(h2), before, 'nothing fetched after destroy');
+});
+
+// ── portrait glow: the edge fade lives OUTSIDE the owl's safe box (fake DOM: the numbers, not how it looks) ──
+const OWLBOX = { x: 0.194, y: 0.0607, w: 0.66, h: 0.9007 };   // the owl pack's real safeAreaComfort
+test('portrait glow: with the owl comfort box the paper margin above and below is faded inside the margin only; the box itself stays opaque', async () => {
+  const man = packManifest(packClips(), { safeAreaComfort: OWLBOX });
+  const { w, p } = await started({}, { manifest: man, w: 390, h: 800 }); const sp = w.container.children[0].children[0], s = p.getInfo().stage;
+  const k = 390 / (1280 * 0.66); near(s.picture.scale, k); near(s.h, 720 * k);
+  // top margin = 0.0607 of the picture height, bottom = 1 - 0.0607 - 0.9007 = 0.0386 of the stage height (20.2 px and 12.8 px at 390 wide)
+  // the 1 px margin pin (was: bottom = exactly the 3.86 percent margin): the fade now ends >= 1 css px short of the box, the 5 percent cap is unchanged
+  { const m = boxMargins(s, OWLBOX); near(s.glow.top, 0.05); assert.ok(s.glow.bottom * s.h <= m.bottom - 1 && s.glow.bottom * s.h > m.bottom - 1.1, 'bottom fade ends 1 px above the box: ' + s.glow.bottom * s.h + ' of ' + m.bottom); }
+  near(s.glow.left, 0, 'the view edge IS the box edge: no fade inside the box'); near(s.glow.right, 0);
+  assert.match(sp.style.maskImage, /to bottom, transparent 0%, rgba\(0, 0, 0, 0\.35\) 2\.5%, #000 5%, #000 9\d\.\d+%, rgba\(0, 0, 0, 0\.35\) 9\d\.\d+%, transparent 100%/);
+  assert.match(sp.style.maskImage, /to right, #000 0%, #000 100%/, 'no side feather at all over the comfort box');
+  // the owl box (y 6.07% .. 96.14% of the picture = of the stage here) is opaque: the fade is over by the box's top edge, and starts at its bottom edge
+  assert.ok(s.glow.top <= OWLBOX.y + 1e-9, 'fully opaque from the box top'); assert.ok(1 - s.glow.bottom >= OWLBOX.y + OWLBOX.h - 1e-9, 'and down to the box bottom');
+  assert.strictEqual(sp.style.webkitMaskImage, sp.style.maskImage); p.destroy();
+  // landscape: the same rule (bottom margin 3.86 percent only, so the bottom fade shrinks into it; the rest is the 5 percent cap)
+  const l = await started({}, { manifest: man, w: 800, h: 450 }); const lg = l.p.getInfo().stage.glow; near(lg.top, 0.05); assert.ok(lg.bottom < 0.0386 && lg.bottom > 0.03, 'bottom shrinks into its margin minus 1 px: ' + lg.bottom); near(lg.left, 0.05); near(lg.right, 0.05);
+  assert.match(l.w.container.children[0].children[0].style.maskImage, /to right, transparent 0%, #000 5%, #000 95%, transparent 100%/); l.p.destroy();
+});
+test('portrait glow: no safe area in the manifest (full-height fallback box) keeps the standard feather; a resize re-lays the glow; garbage safe area is ignored', async () => {
+  const f = await started({}, { w: 390, h: 800 }); const g = f.p.getInfo().stage.glow; near(g.top, 0.05); near(g.bottom, 0.05); near(g.left, 0.05); near(g.right, 0.05);
+  assert.match(f.w.container.children[0].children[0].style.maskImage, /to bottom, transparent 0%, #000 5%, #000 95%, transparent 100%/); f.p.destroy();
+  let fire = null; const RO = function (cb) { fire = cb; this.observe = () => {}; this.disconnect = () => {}; };
+  const man = packManifest(packClips(), { safeAreaComfort: OWLBOX });
+  const { w, p } = await started({ ResizeObserver: RO }, { manifest: man, w: 800, h: 450 }); near(p.getInfo().stage.glow.top, 0.05);
+  w.container.clientWidth = 390; w.container.clientHeight = 800; fire(); near(p.getInfo().stage.glow.top, 0.05); assert.match(w.container.children[0].children[0].style.maskImage, /rgba\(0, 0, 0, 0\.35\)/);
+  w.container.clientWidth = 800; w.container.clientHeight = 450; fire(); assert.ok(p.getInfo().stage.glow.bottom < 0.0386 && p.getInfo().stage.glow.bottom > 0.03); assert.match(w.container.children[0].children[0].style.maskImage, /rgba\(0, 0, 0, 0\.35\)/); p.destroy();
+  const bad = await started({}, { manifest: packManifest(packClips(), { safeAreaComfort: { x: 0.5, y: 0, w: 0.9, h: 1 } }), w: 390, h: 800 }); assert.strictEqual(bad.p.getInfo().stage.safeSource, 'fallback'); near(bad.p.getInfo().stage.glow.top, 0.05); bad.p.destroy();
+});
+
+// ── follow-ups: the comfort box is never feathered; the poster's outer ring is the background ──
+// the opacity of the stage mask (0..1) at a fraction p of the stage along an axis, from the player's own numbers (a, b = the two edge fades; 0 = none)
+// box margins in CSS px on the RENDERED (2-decimal) geometry the player writes: paper between the box edge and each stage edge
+const r2 = n => Math.round(n * 100) / 100;
+const boxMargins = (s, box) => { const pl = r2(s.picture.x - s.x), pt = r2(s.picture.y - s.y), pw = r2(s.picture.w), ph = r2(s.picture.h), sw = r2(s.w), sh = r2(s.h);
+  return { left: pl + box.x * pw, right: sw - (pl + (box.x + box.w) * pw), top: pt + box.y * ph, bottom: sh - (pt + (box.y + box.h) * ph), sw, sh }; };
+const maskAlpha = (p, a, b) => (a > 0 && p < a ? p / a : b > 0 && p > 1 - b ? (1 - p) / b : 1);
+test('feather outside the comfort box: on a narrow stage the whole safe box is opaque (>= 0.98) at several sizes, and a zero edge has no gradient stops', async () => {
+  const man = packManifest(packClips(), { safeAreaComfort: OWLBOX });
+  for (const [cw, chh] of [[390, 844], [390, 800], [768, 1024], [600, 600], [1000, 1300]]) {
+    const { w, p } = await started({}, { manifest: man, w: cw, h: chh }); const s = p.getInfo().stage, g = s.glow; assert.ok(g, cw + 'x' + chh + ': narrow stage');
+    const bx = s.picture.x + OWLBOX.x * 1280 * s.picture.scale, bx1 = bx + OWLBOX.w * 1280 * s.picture.scale, by = s.picture.y + OWLBOX.y * 720 * s.picture.scale, by1 = by + OWLBOX.h * 720 * s.picture.scale;
+    const fx = v => (v - s.x) / s.w, fy = v => (v - s.y) / s.h;   // the box edges as fractions of the stage
+    for (const t of [0, 0.02, 0.1, 0.5, 0.9, 1]) {
+      const px = fx(bx) + (fx(bx1) - fx(bx)) * t, py = fy(by) + (fy(by1) - fy(by)) * t;
+      for (const q of [0, 0.5, 1]) {
+        assert.ok(maskAlpha(Math.min(1, Math.max(0, px)), g.left, g.right) >= 0.98, cw + 'x' + chh + ' side alpha at box t=' + t);
+        assert.ok(maskAlpha(Math.min(1, Math.max(0, py)), g.top, g.bottom) >= 0.98, cw + 'x' + chh + ' vertical alpha at box t=' + t + q);
+      }
+    }
+    assert.ok(g.left <= Math.max(0, fx(bx)) + 1e-9 && g.right <= Math.max(0, 1 - fx(bx1)) + 1e-9, 'the side fades fit inside the margin outside the box');
+    assert.ok(g.top <= Math.max(0, fy(by)) + 1e-9 && g.bottom <= Math.max(0, 1 - fy(by1)) + 1e-9, 'so do the top and bottom fades');
+    if (g.left === 0) assert.ok(!/to right, transparent/.test(w.container.children[0].children[0].style.maskImage), 'a zero edge writes no transparent stop');
+    p.destroy();
+  }
+  // a stage whose width leaves paper at the sides (the height cap binds): the side fade lives in that margin only, never more than the standard feather
+  const wide = await started({}, { manifest: man, w: 700, h: 400 }); const gs = wide.p.getInfo().stage; assert.ok(gs.glow && gs.glow.left <= 0.05 + 1e-9, '700x400 is just narrower than 16:9'); wide.p.destroy();
+});
+test('feather cap: with the sampled poster border every fade is fully opaque by 5 percent of the stage in ALL layouts, the comfort box stays opaque, a zero-margin edge has no fade', async () => {
+  const man = packManifest(packClips(), { safeAreaComfort: OWLBOX });
+  for (const [cw, chh] of [[1100, 756.5], [800, 450], [1920, 1080], [390, 844], [768, 1024], [600, 600], [2000, 700]]) {
+    const { p } = await started({}, { manifest: man, w: cw, h: chh }); const s = p.getInfo().stage, g = s.glow; assert.ok(g, cw + 'x' + chh);
+    for (const [k, v] of Object.entries(g)) assert.ok(v <= 0.05 + 1e-9, cw + 'x' + chh + ' ' + k + ' fade ' + v + ' is over 5 percent');
+    for (const q of [0.05, 0.06, 0.3, 0.5, 0.95]) {   // fully opaque from 5 percent in, on both axes and both ends
+      assert.ok(maskAlpha(q, g.left, g.right) === 1 && maskAlpha(q, g.top, g.bottom) === 1 && maskAlpha(1 - q, g.left, g.right) === 1 && maskAlpha(1 - q, g.top, g.bottom) === 1, cw + 'x' + chh + ' opaque at ' + q);
+    }
+    const bx = s.picture.x + OWLBOX.x * 1280 * s.picture.scale, bx1 = bx + OWLBOX.w * 1280 * s.picture.scale, by = s.picture.y + OWLBOX.y * 720 * s.picture.scale, by1 = by + OWLBOX.h * 720 * s.picture.scale;
+    for (const t of [0, 0.01, 0.5, 0.99, 1]) {
+      const px = Math.min(1, Math.max(0, (bx + (bx1 - bx) * t - s.x) / s.w)), py = Math.min(1, Math.max(0, (by + (by1 - by) * t - s.y) / s.h));
+      assert.ok(maskAlpha(px, g.left, g.right) >= 0.999 && maskAlpha(py, g.top, g.bottom) >= 0.999, cw + 'x' + chh + ' comfort box opaque at t=' + t);
+    }
+    p.destroy();
+  }
+  // desktop 1100 x 756.5: the height binds, the sides have paper margin, so they fade over 5 percent (55 px) at most; a wing tip 79 / 85 px in from an edge is opaque
+  const d = await started({}, { manifest: man, w: 1100, h: 756.5 }); const ds = d.p.getInfo().stage; near(ds.glow.left, 0.05); near(ds.glow.right, 0.05);
+  for (const px of [79, 85]) { assert.ok(maskAlpha(px / ds.w, ds.glow.left, ds.glow.right) >= 0.97, 'left tip at ' + px + 'px'); assert.ok(maskAlpha((ds.w - px) / ds.w, ds.glow.left, ds.glow.right) >= 0.97, 'right tip at ' + px + 'px'); }
+  // the top fade (5 percent of the height) is over by 79 / 85 px too
+  for (const px of [79, 85]) assert.ok(maskAlpha(px / ds.h, ds.glow.top, ds.glow.bottom) >= 0.97, 'top at ' + px + 'px'); d.p.destroy();
+});
+test('feather outside the comfort box: no manifest box (the full-height fallback) keeps the standard feather, landscape is unchanged', async () => {
+  const f = await started({}, { w: 390, h: 800 }); const g = f.p.getInfo().stage.glow; near(g.left, 0.05); near(g.top, 0.05); f.p.destroy();
+  const l = await started({}, { manifest: packManifest(packClips(), { safeAreaComfort: OWLBOX }), w: 800, h: 450 }); near(l.p.getInfo().stage.glow.left, 0.05);
+  assert.match(l.w.container.children[0].children[0].style.maskImage, /to right, transparent 0%, #000 5%, #000 95%, transparent 100%/); l.p.destroy();
+});
+test('background from the poster: the outer ring of the decoded poster (not its inside) is the background, sampled once, before the picture is reported, and passed to the host', async () => {
+  const seen = [], man = posterManifest({ background: '#ffd6ab' });
+  const w = makeWorld({ manifest: man, posterRing: [200, 180, 160] }); let atPicture = null;
+  const p = w.make({ onBackground: c => seen.push(c) }); p.pictureReady.then(() => { atPicture = w.container.children[0].style.background; });
+  await p.ready; await w.settle(300);
+  assert.strictEqual(atPicture, 'rgb(200,180,160)', 'already the poster colour when the first picture is reported: no flash');
+  assert.strictEqual(w.container.children[0].style.background, 'rgb(200,180,160)', 'it wins over the manifest colour');
+  assert.deepStrictEqual(seen, ['rgb(200,180,160)'], 'one colour, once, to the host'); assert.strictEqual(p.getInfo().background, 'rgb(200,180,160)');
+  const draws = w.ctxCalls.filter(c => c[0] === 'drawImage' && c[1] && c[1].tag === 'img').length;
+  p.setState('speaking'); p.setState('listening'); await w.settle(1500); assert.deepStrictEqual(seen, ['rgb(200,180,160)'], 'never sampled again, not from a video frame either');
+  assert.strictEqual(w.container.children[0].style.background, 'rgb(200,180,160)'); assert.ok(draws >= 1); p.destroy();
+});
+test('background from the poster: without a poster the manifest colour stays; a failed poster, a throwing host callback and a destroy during the load change nothing else', async () => {
+  const a = makeWorld({ manifest: packManifest(), posterRing: [1, 2, 3] }); const seen = []; const pa = a.make({ onBackground: c => seen.push(c) }); await pa.ready; await a.settle(200);
+  assert.strictEqual(a.container.children[0].style.background, '#ffd6ab', 'no poster in the manifest: the manifest colour (the ring is not sampled from a video frame either)'); assert.deepStrictEqual(seen, []); pa.destroy();
+  const b = makeWorld({ manifest: posterManifest(), posterRing: [1, 2, 3], posterFail: 'error' }); const pb = b.make({ onBackground: c => seen.push(c) }); await pb.ready; await b.settle(200);
+  assert.strictEqual(b.container.children[0].style.background, '#ffd6ab', 'poster failed: the manifest colour'); assert.deepStrictEqual(seen, []); pb.destroy();
+  const c = makeWorld({ manifest: posterManifest(), posterRing: [9, 8, 7] }); const pc = c.make({ onBackground: () => { throw new Error('host bug'); } }); await pc.ready; await c.settle(200);
+  assert.strictEqual(c.container.children[0].style.background, 'rgb(9,8,7)'); assert.strictEqual(pc.getInfo().ready, true, 'a throwing host callback cannot break the player'); pc.destroy();
+  const d = makeWorld({ manifest: posterManifest(), posterRing: [5, 5, 5], posterHold: true }); const late = []; const pd = d.make({ onBackground: x => late.push(x) });
+  await d.settle(50); pd.destroy(); await d.settle(4000); assert.deepStrictEqual(late, [], 'destroyed before the poster decoded: nothing is reported afterwards');
+});
+test('background from the poster: an unreadable canvas (no pixels) keeps the manifest colour and still does not retry', async () => {
+  const w = makeWorld({ manifest: posterManifest(), posterRing: [4, 4, 4] }); const orig = w.doc.createElement;
+  w.doc.createElement = (tag) => { const e = orig(tag); if (tag === 'canvas') { const gc = e.getContext; e.getContext = (k) => { const cx = gc(k); return new Proxy({}, { get: (_, n) => (n === 'getImageData' ? () => { throw new Error('tainted'); } : cx[n]), set: () => true }); }; } return e; };
+  const seen = []; const p = w.make({ onBackground: c => seen.push(c) }); await p.ready; await w.settle(200);
+  assert.deepStrictEqual(seen, []); assert.strictEqual(w.container.children[0].style.background, '#ffd6ab'); p.destroy();
+});
+
+// ── final glow: the flat stage matches the poster corners, but the poster's top and bottom edge CENTRES are brighter, so a band showed at the clip edge.
+// A soft glow of the poster's own top / bottom edge-row colours sits BEHIND the clip, runs out into the border colour, and is laid out again on resize / caption changes. ──
+const EDGE = { top: u => { const b = Math.exp(-Math.pow((u - 0.5) / 0.22, 2)); return [240 + Math.round(16 * b), 214 + Math.round(14 * b), 171 + Math.round(12 * b)]; },
+  bottom: u => { const b = Math.exp(-Math.pow((u - 0.45) / 0.25, 2)); return [240 + Math.round(12 * b), 214 + Math.round(10 * b), 171 + Math.round(9 * b)]; } };
+const RING = [240, 214, 171];
+const rgbaOf = c => { const m = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)/.exec(c); return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]] : null; };
+const gradAt = (g, t) => {   // the colour + alpha of a recorded linear gradient at t (0..1), stops interpolated
+  const st = g.stops.map(([o, c]) => [o, rgbaOf(c)]).sort((a, b) => a[0] - b[0]); if (t <= st[0][0]) return st[0][1]; if (t >= st[st.length - 1][0]) return st[st.length - 1][1];
+  for (let i = 1; i < st.length; i++) if (t <= st[i][0]) { const a = st[i - 1], b = st[i], k = b[0] === a[0] ? 1 : (t - a[0]) / (b[0] - a[0]); return a[1].map((v, j) => v + (b[1][j] - v) * k); }
+};
+// what the glow canvas shows at container column x, container row y, over the border colour `bg`: the recorded fills, sampled the way the browser would
+function glowColour(cv, cw, x, y, bg) {
+  const top = parseFloat(cv.style.top) || 0, hpx = parseFloat(cv.style.height), col = Math.min(cv.width - 1, Math.floor(x / cw * cv.width)), row = (y - top) / hpx * cv.height;
+  let out = bg.slice();
+  for (const f of cv.log.fills) {
+    const [rx, ry, rw, rh] = f.rect; if (col < rx || col >= rx + rw || row < ry || row >= ry + rh) continue;
+    const g = f.style, t = (row - g.a[1]) / (g.a[3] - g.a[1]), c = gradAt(g, t), a = c[3];
+    out = out.map((v, j) => v * (1 - a) + c[j] * a);
+  }
+  return out;
+}
+const glowCanvas = w => w.container.children[0].children[1];   // rootEl children: the stage, the glow (z 0, under the stage's z 1), the beak canvas
+test('edge glow: a glow canvas sits BEHIND the clip stage, drawn from the decoded poster top and bottom edge rows, sampled once, and only the poster colours reach it', async () => {
+  const man = posterManifest({ safeAreaComfort: OWLBOX }), world = makeWorld({ manifest: man, posterRing: RING, posterEdge: EDGE, w: 390, h: 800 });
+  const p = world.make({}); await p.ready; await world.settle(300);
+  const root = world.container.children[0], g = glowCanvas(world), st = root.children[0];
+  assert.strictEqual(g.tag, 'canvas'); assert.strictEqual(st.tag, 'div'); assert.ok(Number(g.style.zIndex) < Number(st.style.zIndex), 'the glow is a layer BELOW the feathered clip stage'); assert.strictEqual(g.attrs['aria-hidden'], 'true');
+  assert.strictEqual(g.style.pointerEvents, 'none'); assert.notStrictEqual(g.style.display, 'none');
+  assert.strictEqual(world.edgeReads, 2, 'the top and the bottom edge row of the decoded poster were read, once each');
+  const s = p.getInfo().stage, ch = 800, eg = s.edgeGlow;
+  assert.ok(eg.top >= 0.15 * ch - 1e-6 && eg.bottom >= 0.15 * ch - 1e-6, 'the glow reaches at least 15 percent of the stage height beyond the clip top and bottom (' + eg.top + ', ' + eg.bottom + ')');
+  assert.ok(s.y > 100 && s.y + s.h < ch - 100, 'a narrow stage: paper above and below the clip');
+  // right at the clip edges the glow is the poster's own edge-row colour: the bright centre is brighter than the corner-like edge columns
+  const cx = 195, at = (x, y) => glowColour(g, 390, x, y, RING);
+  const topC = at(cx, s.y), topE = at(20, s.y), botC = at(390 * 0.45, s.y + s.h - 0.01);
+  for (let j = 0; j < 3; j++) assert.ok(Math.abs(topC[j] - EDGE.top(0.5)[j]) <= 2.5, 'top centre channel ' + j + ': ' + topC[j] + ' vs ' + EDGE.top(0.5)[j]);
+  assert.ok(topC[0] > topE[0] + 5, 'the centre glow is brighter than the edge column'); assert.ok(Math.abs(botC[0] - EDGE.bottom(0.45)[0]) <= 2.5, 'bottom row profile: ' + botC[0]);
+  // far from the clip the glow has run out into the border colour
+  const far = at(cx, s.y - eg.top + 0.5); assert.ok(far.every((v, j) => Math.abs(v - RING[j]) <= 1.5), 'far end is the border colour: ' + far);
+  // no artwork / frame / zoom change: the clip stage geometry and the 5 percent feather caps are untouched
+  near(s.glow.top, 0.05); assert.ok(s.glow.bottom < 0.0386 && s.glow.bottom > 0.03); assert.ok(s.glow.left <= 0.05 && s.glow.right <= 0.05);
+  // posters are not read again for a resize, a state change or a speech turn
+  const reads = world.edgeReads, draws = world.ctxCalls.filter(c => c[0] === 'drawImage' && c[1] && c[1].tag === 'img').length;
+  p.setState('speaking'); await world.settle(800); p.setState('listening'); await world.settle(800); assert.strictEqual(world.edgeReads, reads, 'no new poster read');
+  assert.strictEqual(world.ctxCalls.filter(c => c[0] === 'drawImage' && c[1] && c[1].tag === 'img').length >= draws, true);
+  // cleanup: destroy takes the glow with the player, and nothing draws to it afterwards
+  const n = g.log.fills.length; p.destroy(); assert.strictEqual(world.container.children.length, 0); await world.settle(500); assert.strictEqual(g.log.fills.length, n, 'nothing drawn after destroy');
+});
+test('edge glow: it is laid out again on resize and caption layout, not per frame; a flat stage with no room outside the clip hides it; no profile, no glow', async () => {
+  let fire = null; const RO = function (cb) { fire = cb; this.observe = () => {}; this.disconnect = () => {}; };
+  const man = posterManifest({ safeAreaComfort: OWLBOX }), world = makeWorld({ manifest: man, posterRing: RING, posterEdge: EDGE, w: 390, h: 800 });
+  const p = world.make({ ResizeObserver: RO }); await p.ready; await world.settle(300); const g = glowCanvas(world);
+  const e1 = p.getInfo().stage.edgeGlow.top, h1 = g.height; assert.ok(e1 > 100);
+  const writes = world.ctxCalls.length; for (let i = 0; i < 20; i++) { world.tickRaf(16); } assert.strictEqual(world.ctxCalls.slice(writes).filter(c => c[0] === 'fillRect').length, 0, 'an idle frame draws no glow');
+  world.container.clientHeight = 560; fire();   // the caption band took 240 px: the host is shorter
+  const e2 = p.getInfo().stage.edgeGlow.top; assert.ok(e2 < e1 && e2 >= 0.15 * 560 - 1e-6, 'follows the new height: ' + e1 + ' -> ' + e2); assert.notStrictEqual(g.height, h1);
+  const s2 = p.getInfo().stage; assert.ok(glowColour(g, 390, 195, s2.y, RING)[0] > 245, 'the new clip edge shows the profile colour');
+  world.container.clientWidth = 800; world.container.clientHeight = 450; fire();   // 16:9 and flat: the clip fills the stage, nothing is outside it
+  assert.strictEqual(g.style.display, 'none', 'no room outside the clip: the glow is hidden'); assert.strictEqual(p.getInfo().stage.edgeGlow.top, 0);
+  world.container.clientWidth = 390; world.container.clientHeight = 800; fire(); assert.notStrictEqual(g.style.display, 'none'); near(p.getInfo().stage.edgeGlow.top, e1); p.destroy();
+  // the poster's edge rows cannot be read (tainted canvas / odd data): no glow, the ring background and the rest are as before
+  const w2 = makeWorld({ manifest: man, posterRing: RING, w: 390, h: 800 }); const seen = []; const q = w2.make({ onBackground: c => seen.push(c) }); await q.ready; await w2.settle(300);
+  assert.strictEqual(glowCanvas(w2).style.display, 'none'); assert.deepStrictEqual(seen, ['rgb(240,214,171)']); assert.strictEqual(q.getInfo().ready, true); q.destroy();
+  const w3 = makeWorld({ manifest: packManifest(), w: 390, h: 800 }); const r = w3.make({}); await r.ready; await w3.settle(200); assert.strictEqual(glowCanvas(w3).style.display, 'none', 'no poster image: no glow'); r.destroy();
+});
+test('edge glow: at tablet and phone, at rest and with captions, columns 10 / 50 / 90 percent, +/- 60 px around the clip top and bottom edges, no 24 px channel step is over 5', async () => {
+  const man = posterManifest({ safeAreaComfort: OWLBOX });
+  for (const beyond of [true, false]) for (const [cw, chh, label] of [[390, 844, 'phone rest'], [390, 560, 'phone captions'], [768, 1024, 'tablet rest'], [768, 800, 'tablet captions'], [360, 640, 'small phone']]) {
+    const world = makeWorld({ manifest: man, posterRing: RING, posterEdge: EDGE, w: cw, h: chh }), p = world.make({ glowBeyond: beyond }); await p.ready; await world.settle(300);
+    const g = glowCanvas(world), s = p.getInfo().stage, bg = RING;
+    if (!beyond && (s.y < 0.15 * chh || chh - s.y - s.h < 0.15 * chh)) { p.destroy(); continue; }   // contained: only where the host itself has the room
+    for (const f of [0.1, 0.5, 0.9]) {
+      const x = cw * f, prof = (edge, y) => EDGE[edge](Math.min(1, Math.max(0, (x - s.picture.x) / s.picture.w)));
+      for (const [edge, yEdge, dir] of [['top', s.y, -1], ['bottom', s.y + s.h, 1]]) {
+        // outside the clip the glow, inside it the poster edge colour (the clip's own opaque picture at its edge)
+        const colourAt = y => (dir * (y - yEdge) > 0 ? glowColour(g, cw, x, y, bg) : prof(edge, y));
+        let worst = 0;
+        for (let y = yEdge - 60; y + 24 <= yEdge + 60; y += 1) {
+          if (y < 0 || y + 24 > (beyond ? chh * 1.3 : chh)) continue;
+          const a = colourAt(y), b = colourAt(y + 24); for (let j = 0; j < 3; j++) worst = Math.max(worst, Math.abs(a[j] - b[j]));
+        }
+        assert.ok(worst <= 5, (beyond ? 'spilling ' : 'contained ') + label + ' ' + cw + 'x' + chh + ' column ' + f + ' ' + edge + ': worst 24 px step ' + worst.toFixed(2));
+      }
+    }
+    p.destroy();
+  }
+});
+test('edge glow: a host that clips (glowBeyond) may let the glow run past the host; by default it stays inside the player', async () => {
+  const man = posterManifest({ safeAreaComfort: OWLBOX });
+  const a = makeWorld({ manifest: man, posterRing: RING, posterEdge: EDGE, w: 390, h: 800 }), pa = a.make({}); await pa.ready; await a.settle(300);
+  assert.strictEqual(a.container.children[0].style.overflow, 'hidden'); assert.ok(parseFloat(glowCanvas(a).style.top) >= 0 && parseFloat(glowCanvas(a).style.top) + parseFloat(glowCanvas(a).style.height) <= 800 + 1e-6, 'contained'); pa.destroy();
+  const b = makeWorld({ manifest: man, posterRing: RING, posterEdge: EDGE, w: 390, h: 800 }), pb = b.make({ glowBeyond: true }); await pb.ready; await b.settle(300); const gb = glowCanvas(b);
+  assert.strictEqual(b.container.children[0].style.overflow, 'visible'); assert.ok(parseFloat(gb.style.top) < 0 && parseFloat(gb.style.top) + parseFloat(gb.style.height) > 800, 'extends above and below the host (the host stage clips it)');
+  assert.ok(pb.getInfo().stage.edgeGlow.top >= 0.15 * 800 && pb.getInfo().stage.edgeGlow.bottom >= 0.15 * 800); pb.destroy();
+});
+
+// ── mobile data cap: no speculative background fetches on a metered or slow link; on-demand playback is untouched ──
+const webFetches = (w) => w.fetched.filter(x => /\/web\//.test(x)).length;
+test('data cap: cellular, saveData and 2g/3g links start no background clip or track warm fetches; the player still plays on demand', async () => {
+  for (const conn of [{ type: 'cellular' }, { saveData: true }, { effectiveType: '3g' }, { effectiveType: '2g' }, { effectiveType: 'slow-2g' }, { type: 'cellular', effectiveType: '4g', saveData: false }]) {
+    const w = makeWorld(); const p = w.make({ navigator: { connection: conn }, warmLimit: 50 }); await p.ready; await w.settle(3000);
+    assert.strictEqual(webFetches(w), 0, 'no clip warm fetch on ' + JSON.stringify(conn)); assert.strictEqual(p.getInfo().warmCapped, true); assert.ok(p.getInfo().tracks <= 2, 'only the first tracks (readiness), none warmed: ' + p.getInfo().tracks);
+    p.setState('speaking'); await w.settle(1500); assert.match(p.getInfo().clip || '', /^speaking-/, 'on-demand speech still plays'); assert.ok(w.videos.some(v => /^speaking-/.test(v.clipName || '') && v.readyState === 4), 'its clip loaded on demand');
+    p.setState('listening'); await w.settle(1500); assert.ok(p.getInfo().clip, 'other states still pick and load clips'); p.destroy();
+  }
+  const idle = makeWorld(); const q = idle.make({ navigator: { connection: { type: 'cellular' } } }); await q.ready; await idle.settle(3000); q.destroy();
+  assert.strictEqual(idle.timers.filter(x => !x.tag).length, 0, 'nothing of the player is left pending');
+});
+test('data cap: no connection API, a wifi/4g link, and the window navigator behave as before; an explicit warmLimit 0 still means none; the cap reads win.navigator too', async () => {
+  for (const nav of [undefined, {}, { connection: {} }, { connection: { type: 'wifi', effectiveType: '4g', saveData: false } }, { connection: { type: 'ethernet' } }, { connection: null }]) {
+    const w = makeWorld(); const p = w.make(nav === undefined ? {} : { navigator: nav }); await p.ready; await w.settle(3000);
+    assert.ok(webFetches(w) > 0, 'warm cache runs as before for ' + JSON.stringify(nav)); assert.strictEqual(p.getInfo().warmCapped, false); assert.strictEqual(p.getInfo().tracks, 4); p.destroy();
+  }
+  const z = makeWorld(); const pz = z.make({ warmLimit: 0, navigator: { connection: { type: 'wifi' } } }); await pz.ready; await z.settle(3000);
+  assert.strictEqual(webFetches(z), 0, 'warmLimit 0 still means no clip warming'); assert.strictEqual(pz.getInfo().warmCapped, false, 'and it is the option, not the cap'); assert.strictEqual(pz.getInfo().tracks, 4, 'tracks still warm as before'); pz.destroy();
+  const wn = makeWorld(); wn.win.navigator = { connection: { saveData: true } }; const pw = wn.make(); await pw.ready; await wn.settle(3000); assert.strictEqual(webFetches(wn), 0); assert.strictEqual(pw.getInfo().warmCapped, true); pw.destroy();
+  const thrower = makeWorld(); const pt = thrower.make({ navigator: { get connection() { throw new Error('blocked'); } } }); await pt.ready; await thrower.settle(3000); assert.ok(webFetches(thrower) > 0, 'a throwing connection getter is no cap'); pt.destroy();
+});
+
+// ── a pack whose files disappear mid-call ──
+test('files removed mid-call: every clip fails, retries stay bounded, and after 6 s the player reports lost once (the old build held the last picture forever, silently)', async () => {
+  let lostCalls = [];
+  const { w, p } = await started({ onLost: (r) => lostCalls.push(r) });
+  assert.strictEqual(p.getInfo().lost, null);
+  w.manifest.clips.forEach(c => w.fail.add(c.name));   // the pack was removed: every clip request now errors
+  p.setState('listening'); await w.settle(3000);
+  assert.strictEqual(lostCalls.length, 0, 'not declared lost before the bound'); assert.strictEqual(p.getInfo().lost, null);
+  await w.settle(4000);
+  assert.strictEqual(lostCalls.length, 1, 'reported once, within 6 s of the first failure'); assert.match(p.getInfo().lost, /no longer available/);
+  const loads = w.videos.reduce((n, v) => n + v.loads, 0), timers = w.timers.length;
+  await w.settle(20000);
+  assert.strictEqual(w.videos.reduce((n, v) => n + v.loads, 0), loads, 'no more clip requests once lost (no endless polling)'); assert.strictEqual(lostCalls.length, 1);
+  assert.ok(w.timers.length <= timers, 'no retry timer left running'); assert.doesNotThrow(() => p.setState('speaking')); p.destroy();
+});
+test('files removed mid-call: a failure followed by a clip that starts is not a loss; a hidden page does not count; a throwing onLost cannot break the player', async () => {
+  const a = await started({ onLost: () => { throw new Error('host bug'); } });
+  const first = a.w.manifest.clips.find(c => c.state === 'listening'); a.w.fail.add(first.name); a.p.setState('listening'); await a.w.settle(8000);
+  assert.strictEqual(a.p.getInfo().lost, null, 'another clip played: not lost'); a.p.destroy();
+  const b = await started({}); b.w.manifest.clips.forEach(c => b.w.fail.add(c.name)); b.p.setState('listening'); await b.w.settle(1000);
+  b.w.hide(true); await b.w.settle(10000); assert.strictEqual(b.p.getInfo().lost, null, 'hidden: the clock does not run against the pack'); b.p.destroy();
+  const c = await started({ onLost: () => { throw new Error('host bug'); } }); c.w.manifest.clips.forEach(x => c.w.fail.add(x.name)); c.p.setState('listening');
+  await c.w.settle(8000); assert.ok(c.p.getInfo().lost, 'declared lost even though the hook threw'); assert.doesNotThrow(() => c.p.destroy());
+});
+
+// ── availability probe: a removed pack is noticed within ~3 s of the removal (<= 5 s), never from a transient failure ──
+function playClock(w) {   // the fake video does not advance by itself: every playing, loaded video moves with the fake clock and fires 'ended' at its end (frozen once nothing new loads, as a real one)
+  const adv = w.advance;
+  w.advance = (ms) => {
+    for (const v of w.videos) {
+      if (v._frozen || v.paused || v.readyState !== 4 || !isFinite(v.duration) || v.currentTime >= v.duration) continue;
+      v.currentTime = Math.min(v.duration, v.currentTime + ms / 1000);
+      if (v.currentTime >= v.duration) v.end();
+    }
+    adv.call(w, ms);
+  };
+}
+function probeNet(w, mode) {   // mode(): 'ok' | 404 | 410 | 500 | 'throw' | 'hang'; counts the manifest requests and the ones in flight
+  playClock(w);
+  const orig = w.fetch; const st = { n: 0, inflight: 0, maxInflight: 0, opts: [], mode };
+  w.fetch = async (u, o) => {
+    if (!/manifest\.json$/.test(u)) return orig(u, o);
+    st.n++; w.fetched.push(u); st.opts.push(o); st.inflight++; st.maxInflight = Math.max(st.maxInflight, st.inflight);
+    try {
+      const m = st.mode();
+      if (m === 'hang') return await new Promise(() => {});
+      if (m === 'throw') throw new Error('network');
+      if (m === 'ok') return { ok: true, status: 200, json: async () => w.manifest };
+      return { ok: false, status: m };
+    } finally { st.inflight--; }
+  };
+  return st;
+}
+async function until(w, cond, maxMs, step) { const t0 = w.now; while (!cond() && w.now - t0 < maxMs) { await new Promise(r => setImmediate(r)); w.advance(step || 20); } return w.now - t0; }
+test('probe: pack removed right AFTER a probe answered: lost once within 3.1 s (<= 5 s), packRemoved set, no further requests, cached clip still playing until then', async () => {
+  const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+  await until(w, () => st.n >= 2, 5000); await new Promise(r => setImmediate(r)); w.advance(20);   // a probe has just been answered
+  const n0 = st.n; mode = 404; const t0 = w.now; w.advance(1);
+  assert.strictEqual(lost.length, 0); assert.ok(p.getInfo().clip, 'an animation is on screen');
+  const took = await until(w, () => lost.length > 0, 5000);
+  assert.strictEqual(lost.length, 1, 'notified once'); assert.ok(took <= 3100, 'noticed within 3.1 s: ' + took); assert.ok(w.now - t0 <= 5000);
+  assert.strictEqual(p.getInfo().packRemoved, true); assert.match(p.getInfo().lost, /no longer available/);
+  assert.ok(st.n - n0 <= 2, 'at most the confirming probe(s): ' + (st.n - n0));
+  const all = w.fetched.length; await runFor(w, 30000); assert.strictEqual(w.fetched.length, all, 'no request of any kind once lost'); assert.strictEqual(lost.length, 1);
+  assert.doesNotThrow(() => p.setState('speaking')); p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0, 'no player timer left after destroy');
+  for (const o of st.opts.slice(1)) { assert.strictEqual(o.cache, 'no-store'); }   // [0] is the boot manifest request
+});
+test('probe: 410 counts as gone too; the probe is one bounded request at a time, every 2 s, and starts only once the player is ready', async () => {
+  const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; const boot = st.n; assert.strictEqual(boot, 1, 'the boot manifest request only');
+  await runFor(w, 20000); assert.ok(st.n - boot >= 8 && st.n - boot <= 11, 'about one per 2 s: ' + (st.n - boot)); assert.strictEqual(st.maxInflight, 1); assert.strictEqual(lost.length, 0);
+  mode = 410; await until(w, () => lost.length > 0, 5000); assert.strictEqual(lost.length, 1); p.destroy();
+});
+test('probe: transient failures (500, network error, hang past 1 s) never label the pack deleted; at most one request in flight, ~every 2 s', async () => {
+  for (const kind of [500, 503, 429, 'throw', 'hang']) {
+    const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
+    const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100); mode = kind; const n0 = st.n;
+    await runFor(w, 30000);
+    assert.strictEqual(lost.length, 0, kind + ': not lost'); assert.strictEqual(p.getInfo().packRemoved, false); assert.strictEqual(p.getInfo().lost, null);
+    assert.strictEqual(st.maxInflight, kind === 'hang' ? st.maxInflight : 1); assert.ok(st.n - n0 >= 13 && st.n - n0 <= 16, kind + ': bounded rate: ' + (st.n - n0));
+    if (kind === 'hang') { assert.ok(st.inflight <= 1 || st.n - n0 <= 16); assert.ok(p.getInfo().clip, 'still animating'); }
+    mode = 404; await until(w, () => lost.length > 0, 5000); assert.strictEqual(lost.length, 1, kind + ': a later 404 is still caught'); p.destroy();
+  }
+});
+test('probe: removal while every probe hangs: the clip-failure timer still closes it within 5 s of the first failing clip; the call is not ended (no destroy)', async () => {
+  const lost = []; const w = makeWorld(); let hm = 'ok'; const st = probeNet(w, () => hm);
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100); hm = 'hang';
+  w.manifest.clips.forEach(c => w.fail.add(c.name)); const t0 = w.now; p.setState('listening');
+  const took = await until(w, () => lost.length > 0, 8000); assert.strictEqual(lost.length, 1); assert.ok(took <= 5000, 'within 5 s: ' + took);
+  assert.strictEqual(p.getInfo().destroyed, false); p.destroy();
+});
+test('probe: hidden stops it (no request, in-flight one has no say), visible probes at once and catches a removal that happened while hidden', async () => {
+  const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+  w.hide(true); const n0 = st.n; mode = 404; await runFor(w, 20000); assert.strictEqual(st.n, n0, 'nothing while hidden'); assert.strictEqual(lost.length, 0);
+  w.hide(false); await w.settle(50); assert.strictEqual(st.n, n0 + 1, 'an immediate probe on visible'); assert.strictEqual(lost.length, 1, 'gone found right away');
+  p.destroy();
+  const w2 = makeWorld(); let m2 = 'ok'; const s2 = probeNet(w2, () => m2); const l2 = []; const q = w2.make({ onLost: r => l2.push(r) }); await q.ready; await w2.settle(100);
+  await until(w2, () => s2.n >= 2, 5000); m2 = 'hang'; await until(w2, () => s2.inflight > 0, 3000);
+  m2 = 404; w2.hide(true); await runFor(w2, 5000); assert.strictEqual(l2.length, 0, 'a request cancelled by hiding gives no verdict'); q.destroy();
+});
+test('probe: destroy cancels it (no timer, no request after), an injected manifest or probe:false never probes, a lost report is not repeated by the clip timer', async () => {
+  const w = makeWorld(); const st = probeNet(w, () => 'ok'); const p = w.make(); await p.ready; await w.settle(100); await until(w, () => st.n >= 3, 6000);
+  p.destroy(); const n = st.n, f = w.fetched.length; await runFor(w, 20000); assert.strictEqual(st.n, n); assert.strictEqual(w.fetched.length, f, 'no call after destroy'); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0);
+  const wi = makeWorld(); const si = probeNet(wi, () => 404); const pi = wi.make({ manifest: wi.manifest }); await pi.ready; await runFor(wi, 10000); assert.strictEqual(si.n, 0); pi.destroy();
+  const wf = makeWorld(); let fm = 'ok'; const sf = probeNet(wf, () => fm); const lf = []; const pf = wf.make({ probe: false, onLost: r => lf.push(r) }); await pf.ready; await wf.settle(100); fm = 404; const b = sf.n; await runFor(wf, 10000); assert.strictEqual(sf.n, b); assert.strictEqual(lf.length, 0); pf.destroy();
+  const wl = makeWorld(); let m = 'ok'; probeNet(wl, () => m); const ll = []; const pl = wl.make({ onLost: r => ll.push(r) }); await pl.ready; await wl.settle(100);
+  m = 404; wl.manifest.clips.forEach(c => wl.fail.add(c.name)); pl.setState('listening'); await runFor(wl, 15000); assert.strictEqual(ll.length, 1, 'once only');
+  pl.destroy();
+});
+test('probe: transient track 500 with the manifest still there is unaffected: poster and beak fallback stay, retries stay 5 s / 20 s, never lost', async () => {
+  const lost = []; const w = makeWorld({ manifest: posterManifest() }); const hits = trackNet(w, () => 500); const st = probeNet(w, () => 'ok');
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; assert.match(p.getInfo().degraded, /speaking track/);
+  await runFor(w, 60000); assert.strictEqual(sp1(hits), 3, 'boot + 5 s + 20 s retries, then never'); assert.strictEqual(lost.length, 0); assert.strictEqual(p.getInfo().lost, null);
+  assert.strictEqual(p.getInfo().packRemoved, false); assert.ok(p.getInfo().poster || p.getInfo().posterImage, 'poster still the picture'); p.destroy();
+});
+
+// ── no-progress fallback: a probe that did not succeed while the presented video is frozen closes the display within 5 s of the REMOVAL ──
+async function removalWorld(kind, extra) {   // a pack whose probes answer, then (right after one) every file goes: the playing clip freezes at once and no next clip or probe ever resolves
+  const lost = []; const w = makeWorld(extra && extra.world); let mode = 'ok'; const st = probeNet(w, () => mode);
+  const p = w.make(Object.assign({ onLost: r => lost.push(r) }, extra && extra.opts)); await p.ready; await w.settle(100);
+  await until(w, () => st.n >= 2, 5000); await new Promise(r => setImmediate(r)); w.advance(20);   // a probe has just been answered
+  mode = kind; w.manifest.clips.forEach(c => w.hold.add(c.name));
+  const f = w.front(p); f.currentTime = Math.max(0, f.duration - 0.05); f._frozen = true; const t0 = w.now;   // the presented picture stops where it is: its decoder starves, nothing newer arrives
+  return { w, p, st, lost, t0, setMode: m => { mode = m; } };
+}
+test('no-progress fallback: removal right after a probe, probes hang / fail, the next clip never loads: lost within 5 s of the REMOVAL (not of a first failure), not labelled deleted', async () => {
+  for (const kind of ['hang', 'throw', 500, 503]) {
+    const { w, p, st, lost, t0 } = await removalWorld(kind);
+    const took = await until(w, () => lost.length > 0, 8000);
+    assert.strictEqual(lost.length, 1, kind + ': notified once'); assert.ok(w.now - t0 <= 5000, kind + ': within 5 s of the removal: ' + (w.now - t0)); assert.ok(took <= 5000);
+    assert.strictEqual(p.getInfo().packRemoved, false, kind + ': not claimed deleted'); assert.match(p.getInfo().lost, /stopped making progress/); assert.doesNotMatch(p.getInfo().lost, /no longer available/);
+    assert.strictEqual(p.getInfo().destroyed, false); assert.ok(st.maxInflight <= (kind === 'hang' ? 3 : 1), 'no probe pile-up');
+    const all = w.fetched.length; await runFor(w, 20000); assert.strictEqual(w.fetched.length, all, kind + ': no request of any kind once lost'); assert.strictEqual(lost.length, 1);
+    p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0);
+  }
+});
+test('no-progress fallback: the same frozen picture with a probe that says 404/410 is still a confirmed removal (packRemoved, retries and warming stop)', async () => {
+  for (const code of [404, 410]) {
+    const { w, p, lost, t0 } = await removalWorld(code);
+    await until(w, () => lost.length > 0, 8000); assert.strictEqual(lost.length, 1); assert.ok(w.now - t0 <= 3100);
+    assert.strictEqual(p.getInfo().packRemoved, true); assert.match(p.getInfo().lost, /no longer available/);
+    const all = w.fetched.length; await runFor(w, 30000); assert.strictEqual(w.fetched.length, all); p.destroy();
+  }
+});
+test('no-progress fallback: nothing fires while probes succeed (a frozen or deliberately still picture), under reduced motion, hidden, or while the video keeps advancing', async () => {
+  // healthy manifest, picture frozen: probes answer, so the pack is there: no fallback
+  const a = await removalWorld('ok'); await runFor(a.w, 40000); assert.strictEqual(a.lost.length, 0); assert.strictEqual(a.p.getInfo().lost, null); a.p.destroy();
+  // reduced motion (a still on purpose) with every probe failing: no progress is not expected, so no fallback
+  for (const kind of ['hang', 'throw', 500]) {
+    const w = makeWorld(); let mode = 'ok'; probeNet(w, () => mode); const lost = []; const p = w.make({ reducedMotion: true, onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+    mode = kind; await runFor(w, 40000); assert.strictEqual(lost.length, 0, kind + ': reduced motion is never a stall'); assert.strictEqual(p.getInfo().lost, null); p.destroy();
+  }
+  // a poster-only picture (no clip presented yet / healthy track failure) with failing probes is not measurable: unchanged
+  const w3 = makeWorld({ manifest: posterManifest() }); trackNet(w3, () => 500); let m3 = 'ok'; probeNet(w3, () => m3); const l3 = [];
+  const p3 = w3.make({ onLost: r => l3.push(r) }); await p3.ready; m3 = 'throw'; await runFor(w3, 40000); assert.strictEqual(l3.length, 0); assert.ok(p3.getInfo().poster || p3.getInfo().posterImage); p3.destroy();
+  // hidden: no probe, no verdict
+  const b = await removalWorld('hang'); b.w.hide(true); await runFor(b.w, 30000); assert.strictEqual(b.lost.length, 0); b.p.destroy();
+});
+test('no-progress fallback: probe requests keep to one per 2 s, bodies are cancelled, no tight loop even while frozen with failing probes', async () => {
+  const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode); let cancels = 0;
+  const f0 = w.fetch; w.fetch = async (u, o) => { const r = await f0(u, o); if (r && /manifest/.test(u) && r.status === 200 && st.n > 1) r.body = { cancel: () => { cancels++; return Promise.resolve(); } }; return r; };
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100); const n0 = st.n; await runFor(w, 20000);
+  assert.ok(st.n - n0 >= 8 && st.n - n0 <= 11, 'about one per 2 s: ' + (st.n - n0)); assert.ok(cancels >= 8, 'every probe body cancelled: ' + cancels); assert.strictEqual(lost.length, 0); p.destroy();
+});
+
+// ── no poster and the first speaking tracks fail transiently: ready rejects (the display decides, None), nothing keeps retrying, destroy cancels the rest ──
+test('no poster + first speaking tracks 500: ready rejects (no unusable first picture promise), the player stays harmless, bounded retries end, destroy cancels them', async () => {
+  for (const kind of [500, 503, 'throw']) {
+    const w = makeWorld(); const hits = trackNet(w, () => kind); const p = w.make();
+    await assert.rejects(p.ready, /speaking track/); assert.strictEqual(p.getInfo().ready, false); assert.strictEqual(p.getInfo().posterImage, false, 'there is no poster in this pack');
+    assert.strictEqual(w.played.length, 0, 'nothing plays'); assert.strictEqual(p.react('hello'), false); assert.doesNotThrow(() => p.setState('speaking'));
+    const first = w.fetched.length; await runFor(w, 90000);
+    assert.ok(sp1(hits) <= 3, kind + ': at most boot + 5 s + 20 s retries: ' + sp1(hits)); assert.strictEqual(p.getInfo().ready, false, 'a late track does not revive a rejected player into a surprise display');
+    assert.ok(w.fetched.length - first <= 4, 'no tight loop'); assert.strictEqual(p.getInfo().trackRetries, 0);
+    p.destroy();
+  }
+  // destroy right after the rejection, while a retry is still pending: nothing is requested afterwards and no player timer is left
+  const w = makeWorld(); const hits = trackNet(w, () => 500); const p = w.make(); await assert.rejects(p.ready, /speaking track/);
+  assert.ok(p.getInfo().trackRetries > 0, 'set-up: a retry is pending'); const n = sp1(hits), f = w.fetched.length; p.destroy();
+  assert.strictEqual(w.timers.filter(x => !x.tag).length, 0, 'destroy cleared every player timer'); await runFor(w, 60000);
+  assert.strictEqual(sp1(hits), n, 'no retry after destroy'); assert.strictEqual(w.fetched.length, f, 'no request of any kind after destroy');
+});
+
+// ── 1 px opaque margin outside the comfort box, on the rendered geometry ──
+test('comfort box margin: on every layout the opaque mask range reaches >= 1 css px OUTSIDE the box (rendered geometry), the 5 percent cap holds, an edge without the room has no feather', async () => {
+  const man = packManifest(packClips(), { safeAreaComfort: OWLBOX });
+  // phone, tablet, desktop, plus caption host sizes (a shorter host after the caption band) and an odd fractional one
+  for (const [cw, chh] of [[390, 844], [768, 1024], [1100, 850], [390, 560], [768, 800], [1100, 600], [1100, 756.5], [800, 450]]) {
+    const { w, p } = await started({}, { manifest: man, w: cw, h: chh }); const s = p.getInfo().stage, g = s.glow, m = boxMargins(s, OWLBOX), tag = cw + 'x' + chh;
+    const sp = w.container.children[0].children[0];
+    for (const [k, v] of Object.entries(g)) assert.ok(v <= 0.05 + 1e-9, tag + ' ' + k + ' is over the 5 percent cap: ' + v);
+    const dim = { left: m.sw, right: m.sw, top: m.sh, bottom: m.sh };
+    for (const k of ['left', 'right', 'top', 'bottom']) {
+      const ramp = g[k] * dim[k];   // px the fade covers from its stage edge
+      if (m[k] < 1) assert.strictEqual(g[k], 0, tag + ' ' + k + ': box at or past the stage edge, zero feather (margin ' + m[k] + ')');
+      else assert.ok(ramp <= m[k] - 1 + 1e-9, tag + ' ' + k + ': opaque ramp ends ' + ramp + ' px in, box starts ' + m[k] + ' px in (needs a 1 px gap)');
+      if (m[k] >= 1.5 && g[k] < 0.05 - 1e-9) assert.ok(ramp > m[k] - 1.1, tag + ' ' + k + ': no more shrink than the 1 px margin');
+    }
+    assert.match(sp.style.maskImage, /linear-gradient/); assert.strictEqual(sp.style.webkitMaskImage, sp.style.maskImage); p.destroy();
+  }
+});
+test('comfort box margin: impossible margin (a safe box wider than the picture leaves less than 1 px) gives zero feather on that edge; the fallback box keeps the standard feather', async () => {
+  const tight = packManifest(packClips(), { safeAreaComfort: { x: 0.0005, y: 0.0005, w: 0.999, h: 0.999 } });
+  const { w, p } = await started({}, { manifest: tight, w: 800, h: 450 }); const s = p.getInfo().stage, g = s.glow;
+  assert.strictEqual(s.safeSource !== 'fallback', true);
+  for (const k of ['left', 'right', 'top', 'bottom']) assert.strictEqual(g[k], 0, k + ' has under 1 px of paper outside the box');
+  assert.match(w.container.children[0].children[0].style.maskImage, /to right, #000 0%, #000 100%/); p.destroy();
+  const f = await started({}, { w: 800, h: 450 }); assert.strictEqual(f.p.getInfo().stage.safeSource, 'fallback'); near(f.p.getInfo().stage.glow.left, 0.05); f.p.destroy();
 });
