@@ -203,122 +203,155 @@ function carEnv(over) {
   const out = el(), btn = el(), meter = el();
   const root = { querySelector: (s) => (s === '.vs-car-out' ? out : s === '.vs-car' ? btn : s === '.vs-meter i' ? meter : null) };
   const rate = 8000;
-  const clock = { t: 5 };
-  const starts = [], bufs = [];
-  const ctx = {
-    sampleRate: rate, destination: { id: 'dest' }, get currentTime() { return clock.t; },
-    createBuffer: (ch, n, r) => { const b = { n, r, data: new Float32Array(n), getChannelData() { return this.data; } }; bufs.push(b); return b; },
-    createBufferSource: () => { const s = { buffer: null, connect: (d) => { s.to = d; }, start: (t) => starts.push({ t, buffer: s.buffer, to: s.to }) }; return s; },
+  const ctxs = [];
+  class AC {
+    constructor() { this.sampleRate = rate; this.state = 'running'; this.resumed = 0; this.closed = 0; ctxs.push(this); }
+    resume() { this.resumed++; return Promise.resolve(); }
+    close() { this.closed++; return Promise.resolve(); }
+  }
+  const recs = [];
+  // voiceCarRecord of the library as a controllable fake: rec.resolve(v) / rec.reject(e); cancel() rejects with code 'cancelled'
+  const voiceCarRecord = (opts) => {
+    let res, rej;
+    const done = new Promise((a, b) => { res = a; rej = b; });
+    const rec = { opts, done, resolve: res, reject: rej, cancelled: 0, cancel() { rec.cancelled++; const e = new Error('cancelled'); e.code = 'cancelled'; rej(e); } };
+    if (o.recThrows) throw o.recThrows;
+    recs.push(rec);
+    return rec;
   };
-  const handle = { rate, ctx, closed: 0, close() { this.closed++; } };
-  let onChunk = null, openArgs = null;
   const prefs = Object.assign({ micLevel: 60, interruptSensitivity: 50, echoHold: 600, keepAlive: true }, o.prefs || {});
-  let tickFn = null;
+  const vadCalls = [];
   const env = {
     voiceRoomRoot: () => root, voiceCall: o.call || null, toast: (t) => log.push('toast:' + t), voiceRec: { state: 'idle', guard: { pending: false } }, voiceTest: { guard: { pending: false }, handle: null }, voiceRoom: { running: false },
     voiceStopPlayback: () => log.push('stopPlayback'), voicePrefsNow: () => Object.assign({}, prefs),
-    voiceMicGuard: V.voiceMicGuard, voiceMicOpen: async (level, f) => { openArgs = { level }; if (o.openError) throw o.openError; onChunk = f; return handle; },
-    voiceErr: (e) => 'err:' + (e && e.message), voiceCarChirp: V.voiceCarChirp, voiceEchoAnalysis: V.voiceEchoAnalysis, voiceCarCheckResult: V.voiceCarCheckResult,
+    voiceMicGuard: V.voiceMicGuard, window: { AudioContext: AC }, navigator: { nav: 1 },
+    voiceErr: (e) => 'err:' + (e && e.message), voiceCarChirp: V.voiceCarChirp, voiceCarAnalyse: V.voiceCarAnalyse, voiceCarCheckResult: V.voiceCarCheckResult, voiceCarRecord,
     voicePrefsSave: (p) => { saved.push(p); Object.assign(prefs, p); }, paintVoiceSheet: () => log.push('paintSheet'), voicePanelPaint: () => log.push('paintPanel'),
-    setInterval: (f) => { tickFn = f; return 1; }, clearInterval: () => { tickFn = null; },
+    setTimeout, clearTimeout, Date,
   };
   const names = Object.keys(env);
-  const body = CAR_SRC().replace(/\bvoiceCall\b/g, 'env_voiceCall') + '\nreturn { voiceCarRun, voiceCarStop, voiceCarSlice, voiceCar };';
+  const body = CAR_SRC().replace(/\bvoiceCall\b/g, 'env_voiceCall') + '\nreturn { voiceCarRun, voiceCarStop, voiceCar };';
   const fns = new Function(...names, 'env_voiceCall', body)(...names.map((n) => env[n]), o.call || null);
-  return { fns, log, saved, out, btn, handle, ctx, clock, starts, bufs, rate, prefs, feed: (f, t) => onChunk(f, t), openArgs: () => openArgs, tick: () => tickFn && tickFn(), hasTick: () => !!tickFn };
+  if (o.call) o.call.vad = { setEchoHold: (v) => vadCalls.push(['echo', v]), setInterruptSensitivity: (v) => vadCalls.push(['sens', v]) };
+  return { fns, log, saved, out, btn, ctxs, recs, rate, prefs, vadCalls, env };
 }
 
-test('car check: opens the mic like the Room check, plays three chirps at t0+0.6/1.6/2.6 on the same context, records until t0+3.8, saves the result', async () => {
+// a recording as the library hands it over: ref = the chirp at 0.5 / 2.0 / 3.5 s, mic = the same chirps `delayMs` later (or silence)
+function carRecording(rate, delayMs) {
+  const chirp = V.voiceCarChirp(rate), total = Math.round(V.VOICE_CAR_END * rate);
+  const ref = new Float32Array(total), mic = new Float32Array(total);
+  for (const a of V.VOICE_CAR_AT) {
+    ref.set(chirp, Math.round(a * rate));
+    if (delayMs !== null) mic.set(chirp, Math.round(a * rate) + Math.round(delayMs / 1000 * rate));
+  }
+  return { mic, ref, rate, fallback: false };
+}
+
+test('car check: a NEW context made and resumed inside the tap, the library records with it, the analysis uses the library, the result is saved', async () => {
   const e = carEnv();
-  const run = e.fns.voiceCarRun();
-  await tick();
-  await run;
-  assert.strictEqual(e.openArgs().level, 60, 'the same helper and the mic level pref');
+  const run = e.fns.voiceCarRun();   // not awaited: the context and the recording must already exist (before any await)
+  assert.strictEqual(e.ctxs.length, 1, 'one new AudioContext, made inside the tap');
+  assert.strictEqual(e.ctxs[0].resumed, 1, 'resumed inside the tap (iOS)');
+  assert.strictEqual(e.recs.length, 1, 'voiceCarRecord started before any await');
+  const o = e.recs[0].opts;
+  assert.strictEqual(o.ctx, e.ctxs[0]); assert.strictEqual(o.nav, e.env.navigator);
+  assert.deepStrictEqual(Array.from(o.chirp), Array.from(V.voiceCarChirp(e.rate)), 'the chirp is made at the context rate');
+  assert.strictEqual(typeof o.setTimer, 'function'); assert.strictEqual(typeof o.clearTimer, 'function'); assert.strictEqual(o.now, Date.now);
   assert.strictEqual(e.out.textContent, 'Playing three short test sounds. Stay quiet.');
   assert.strictEqual(e.btn.disabled, true);
-  const t0 = 5;
-  assert.deepStrictEqual(e.starts.map((s) => Math.round((s.t - t0) * 10) / 10), [0.6, 1.6, 2.6]);
-  for (const s of e.starts) { assert.strictEqual(s.to, e.ctx.destination); assert.strictEqual(s.buffer.n, V.voiceCarChirp(e.rate).length); assert.strictEqual(s.buffer.r, e.rate); }
-  // simulate a car: the chirp comes back 500 ms after it was scheduled, quiet otherwise; blocks of 4096 with their start time
-  const rate = e.rate, chirp = V.voiceCarChirp(rate), total = Math.round(3.8 * rate);
-  const rec = new Float32Array(total);
-  for (const g of [0.6, 1.6, 2.6]) rec.set(chirp, Math.round((g + 0.5) * rate));
-  for (let i = 0; i < total; i += 4096) e.feed(rec.slice(i, i + 4096), t0 + i / rate);
-  e.clock.t = t0 + 3.5; e.tick();
-  assert.strictEqual(e.handle.closed, 0, 'still recording before t0+3.8');
-  e.clock.t = t0 + 3.8; e.tick();
-  assert.strictEqual(e.handle.closed, 1, 'the microphone is released');
+  assert.strictEqual(e.fns.voiceCar.running, true);
+  // simulate a car: every chirp comes back 500 ms later
+  e.recs[0].resolve(carRecording(e.rate, 500));
+  await run;
+  assert.strictEqual(e.ctxs[0].closed, 1, 'the check context is closed at the end');
   assert.strictEqual(e.fns.voiceCar.running, false);
   assert.strictEqual(e.btn.disabled, false);
-  const want = V.voiceCarCheckResult([0, 1, 2].map((i) => V.voiceEchoAnalysis(chirp, rec.slice(Math.round((0.6 + i) * rate), Math.round((0.6 + i + 1.5) * rate)), rate)), { echoHold: 600, interruptSensitivity: 50 });
+  const want = V.voiceCarCheckResult(V.voiceCarAnalyse(carRecording(e.rate, 500).mic, carRecording(e.rate, 500).ref, V.voiceCarChirp(e.rate), e.rate), { echoHold: 600, interruptSensitivity: 50 });
   assert.strictEqual(want.heard, true);
-  assert.strictEqual(want.echoHold, 1000);
+  assert.strictEqual(want.echoHold, 1000, '500 ms + 300 ms: the 1 s guard');
   assert.deepStrictEqual(e.saved, [{ echoHold: want.echoHold, interruptSensitivity: want.interruptSensitivity }]);
   assert.strictEqual(e.out.textContent, want.line);
   assert.ok(e.log.includes('paintSheet') && e.log.includes('paintPanel'));
 });
 
-test('car check: block times fall back to the context clock when playbackTime is missing; voiceCarSlice places blocks by time', async () => {
-  const e = carEnv();
-  const S = e.fns.voiceCarSlice;
-  const a = Float32Array.from([1, 2, 3, 4]), b = Float32Array.from([5, 6, 7, 8]);
-  const out = S([{ t: 10, data: a }, { t: 10 + 4 / 100, data: b }], 100, 10.02, 0.08);   // rate 100: starts at sample 2 of the first block
-  assert.deepStrictEqual(Array.from(out), [3, 4, 5, 6, 7, 8, 0, 0]);
-  assert.deepStrictEqual(Array.from(S([{ t: 10, data: a }], 100, 9.98, 0.06)), [0, 0, 1, 2, 3, 4].map((x) => x));
-  const run = e.fns.voiceCarRun(); await tick(); await run;
-  e.clock.t = 7.5; e.feed(Float32Array.from([1, 1]), undefined);
-  e.clock.t = 9; e.tick(); e.clock.t = 9.2; e.tick();
-  assert.strictEqual(e.fns.voiceCar.running, false);
-});
-
 test('car check: nothing heard keeps the settings and says so; the line is shown', async () => {
   const e = carEnv();
-  const run = e.fns.voiceCarRun(); await tick(); await run;
-  e.feed(new Float32Array(4096), 5.1);
-  e.clock.t = 9; e.tick();
+  const run = e.fns.voiceCarRun();
+  e.recs[0].resolve(carRecording(e.rate, null));
+  await run;
   assert.deepStrictEqual(e.saved, [{ echoHold: 600, interruptSensitivity: 50 }]);
   assert.match(e.out.textContent, /^No echo of the test sound reached the microphone/);
-  assert.strictEqual(e.handle.closed, 1);
+  assert.strictEqual(e.ctxs[0].closed, 1);
+});
+
+test('car check: audio that never started says so, changes nothing and closes the context', async () => {
+  const e = carEnv();
+  const run = e.fns.voiceCarRun();
+  const err = new Error('the audio did not start'); err.code = 'audio_not_started';
+  e.recs[0].reject(err);
+  await run;
+  assert.strictEqual(e.out.textContent, 'The check could not run: the audio did not start. Settings were not changed.');
+  assert.deepStrictEqual(e.saved, []);
+  assert.strictEqual(e.ctxs[0].closed, 1);
+  assert.strictEqual(e.fns.voiceCar.running, false);
+  assert.strictEqual(e.btn.disabled, false);
 });
 
 test('car check: refused during a call and while the mic is busy, with the Room check messages', async () => {
   const c = carEnv({ call: { x: 1 } });
   await c.fns.voiceCarRun();
   assert.deepStrictEqual(c.log.filter((l) => l.startsWith('toast')), ['toast:Hang up first: the call is using the microphone']);
-  assert.strictEqual(c.openArgs(), null);
+  assert.strictEqual(c.recs.length, 0); assert.strictEqual(c.ctxs.length, 0);
   const src = CAR_SRC();
   assert.match(src, /toast\('The mic is already in use'\)/);
   assert.match(src, /voiceRec\.state !== 'idle' \|\| voiceRec\.guard\.pending \|\| voiceTest\.guard\.pending \|\| voiceTest\.handle \|\| voiceRoom\.running/);
   const busy = carEnv();
   busy.fns.voiceCar.running = true;
   await busy.fns.voiceCarRun();
-  assert.strictEqual(busy.openArgs(), null, 'a second tap while running does nothing');
+  assert.strictEqual(busy.recs.length, 0, 'a second tap while running does nothing');
 });
 
-test('car check: an open error and a cancel release everything', async () => {
-  const f = carEnv({ openError: new Error('no mic') });
-  await f.fns.voiceCarRun();
+test('car check: a microphone error and a cancel release everything', async () => {
+  const f = carEnv();
+  const run = f.fns.voiceCarRun();
+  f.recs[0].reject(new Error('no mic'));
+  await run;
   assert.ok(f.log.includes('toast:err:no mic'));
   assert.strictEqual(f.fns.voiceCar.running, false);
   assert.strictEqual(f.btn.disabled, false);
+  assert.strictEqual(f.ctxs[0].closed, 1);
+  assert.deepStrictEqual(f.saved, []);
+  // building the recording throws: the context is closed and the button is back
+  const t = carEnv({ recThrows: new Error('boom') });
+  await t.fns.voiceCarRun();
+  assert.ok(t.log.includes('toast:err:boom'));
+  assert.strictEqual(t.ctxs[0].closed, 1);
+  assert.strictEqual(t.fns.voiceCar.running, false);
+  // cancel: sheet closed / page hidden / a call starting all go through voiceCarStop
   const e = carEnv();
-  const run = e.fns.voiceCarRun(); await tick(); await run;
+  const run2 = e.fns.voiceCarRun();
   assert.strictEqual(e.fns.voiceCar.running, true);
   e.fns.voiceCarStop();
-  assert.strictEqual(e.handle.closed, 1);
+  await run2;
+  assert.strictEqual(e.recs[0].cancelled, 1, 'rec.cancel() called');
+  assert.strictEqual(e.ctxs[0].closed, 1);
   assert.strictEqual(e.fns.voiceCar.running, false);
   assert.strictEqual(e.btn.disabled, false);
   assert.strictEqual(e.out.textContent, '');
-  assert.strictEqual(e.hasTick(), false);
   assert.deepStrictEqual(e.saved, []);
+  assert.ok(!e.log.some((l) => l.startsWith('toast')), 'a cancel is silent');
   e.fns.voiceCarStop();   // safe to repeat
-  assert.strictEqual(e.handle.closed, 1);
+  assert.strictEqual(e.recs[0].cancelled, 1);
+  assert.strictEqual(e.ctxs[0].closed, 1);
 });
 
-test('car check: voiceMicOpen hands out its context and each block\'s playbackTime; the other mic users refuse while it runs', () => {
-  const open = sliceBetween('async function voiceMicOpen', 'function voiceMeterPaint');
-  assert.match(open, /onChunk\(new Float32Array\(ev\.inputBuffer\.getChannelData\(0\)\), ev\.playbackTime\)/);
-  assert.match(open, /rate: ctx\.sampleRate, ctx,/);
+test('car check: the old method is gone from the page; voiceMicOpen is exactly what it was at 5e69a44; the other mic users refuse while it runs', () => {
+  const strip = (s, a, b) => { const i = s.indexOf(a), j = s.indexOf(b, i); return s.slice(0, i) + s.slice(j + b.length); };
+  const own = strip(strip(js, '// ── voice helpers (begin) ──', '// ── voice helpers (end) ──'), '// ── voice call (begin) ──', '// ── voice call (end) ──');
+  for (const name of ['voiceCarSlice', 'VOICE_CAR_SLICE', 'VOICE_CAR_WINDOW', 'playbackTime', 'VOICE_CAR_AT', 'VOICE_CAR_END']) assert.ok(!own.includes(name), name + ' is gone from the page code');
+  assert.ok(/voiceCarAnalyse\(/.test(own) && /voiceCarRecord\(/.test(own));
+  const fn = (s) => { const i = s.indexOf('async function voiceMicOpen('); return s.slice(i, s.indexOf('function voiceMeterPaint', i)); };
+  if (baseJs !== null) assert.strictEqual(fn(js), fn(baseJs));
   assert.match(sliceBetween('async function voiceRoomRun()', '// ── Voice sheet (menu, Voice) ──'), /voiceCar\.running/);
   assert.match(sliceBetween('async function voiceTestToggle()', '// ── Car or Bluetooth check'), /voiceCar\.running/);
 });
@@ -335,4 +368,26 @@ test('the call panel has the microphone line and the Tap to talk button, hidden 
   assert.match(html, /<button type="button" id="cp-retry-mic"[^>]*hidden[^>]*>Tap to talk<\/button>/);
   const i = html.indexOf('id="call-panel"'), j = html.indexOf('id="composer"');
   assert.ok(html.indexOf('id="cp-mic"') > i && html.indexOf('id="cp-retry-mic"') < j);
+});
+
+// ── the page's wrapper around the VAD (deps.vad) ──
+test('voiceCallDeps(vc): deps.vad passes setPlaybackActive(on, now) with both arguments, reopen() and info() to vc.vad', () => {
+  const { fns } = callEnv();
+  const calls = [];
+  const vc = { agent: 'bob', vad: {
+    start() {}, stop() {}, setPlaybackActive: (...a) => calls.push(['playing', ...a]), reopen: () => { calls.push(['reopen']); return 'reopened'; }, info: () => { calls.push(['info']); return { label: 'Car' }; } } };
+  const deps = fns.voiceCallDeps(vc);
+  deps.vad.setPlaybackActive(false, 12345);
+  deps.vad.setPlaybackActive(true);
+  assert.deepStrictEqual(calls.slice(0, 2), [['playing', false, 12345], ['playing', true, undefined]], 'the "now" reaches the VAD');
+  assert.strictEqual(deps.vad.reopen(), 'reopened');
+  assert.deepStrictEqual(deps.vad.info(), { label: 'Car' });
+  assert.deepStrictEqual(calls.slice(2), [['reopen'], ['info']]);
+  assert.ok(!js.includes('setPlaybackActive: (on) => vc.vad.setPlaybackActive(on) }'), 'the old one-argument wrapper text is gone');
+});
+
+test('round 2: the phone check passes the Mic level to the recorder; a failed Tap to talk says so', () => {
+  const mob = read('mobile.js');
+  assert.ok(/voiceCarRecord\(\{[^}]*micLevel: voicePrefsNow\(\)\.micLevel/.test(mob), 'Mic level passed');
+  assert.ok(mob.includes("vc.call.retryMic()).then((ok) => { if (!ok && voiceCall === vc) toast('Still no microphone.'); }"), 'failed retry toasts');
 });

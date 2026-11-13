@@ -713,3 +713,343 @@ test('late echo: with the 600 ms echo guard the car\'s echo is not a new turn an
   const off = await simulate({ echoHoldMs: 0 });
   assert.ok(off.length === 2 && off[0] < 400, 'without the guard the echo at ' + off[0] + ' ms counts as speech');
 });
+
+// ---- review round 1: the Car or Bluetooth check on one clock ----
+
+test('exports: the car-check constants and names (round 1)', () => {
+  assert.deepStrictEqual(V.VOICE_CAR_AT, [0.5, 2.0, 3.5]);
+  assert.strictEqual(V.VOICE_CAR_END, 5.2);
+  assert.strictEqual(V.VOICE_CAR_MAX_DELAY_MS, 1200);
+  assert.strictEqual(typeof V.voiceCarAnalyse, 'function');
+  assert.strictEqual(typeof C.voiceCarRecord, 'function');
+  assert.strictEqual(typeof C.voiceOpenMicStream, 'function');
+});
+
+// A synthetic 5.2 s recording: ref = the chirp at 0.5 / 2.0 / 3.5 s and silence; mic = noise at -55 dB plus (when delayMs is given) the three chirps delayed by it at -20 dB.
+function carRecording(rate, delayMs, seed) {
+  const chirp = V.voiceCarChirp(rate), n = Math.round(5.2 * rate);
+  const ref = new Float32Array(n), mic = noise(n, -55, seed || 5);
+  const g = Math.pow(10, -20 / 20) / rmsOf(chirp);
+  for (const a of [0.5, 2.0, 3.5]) {
+    const s = Math.round(a * rate);
+    for (let i = 0; i < chirp.length; i++) {
+      ref[s + i] = chirp[i];
+      if (delayMs != null) mic[s + Math.round(delayMs * rate / 1000) + i] += chirp[i] * g;
+    }
+  }
+  return { chirp, ref, mic };
+}
+
+test('voiceCarAnalyse: finds echoes at 230, 1100 and 1190 ms at 16 and 48 kHz; the guard follows the delay', () => {
+  for (const rate of [16000, 48000]) {
+    for (const [d, hold] of [[230, 600], [1100, 1500], [1190, 1500]]) {
+      const { chirp, ref, mic } = carRecording(rate, d, d + rate);
+      const res = V.voiceCarAnalyse(mic, ref, chirp, rate);
+      assert.strictEqual(res.length, 3, 'three results');
+      for (const r of res) assert.ok(r.delayMs !== null && Math.abs(r.delayMs - d) <= 3, rate + ' Hz, D ' + d + ': ' + JSON.stringify(res.map(x => x.delayMs)));
+      const out = V.voiceCarCheckResult(res, { echoHold: 600, interruptSensitivity: 50 });
+      assert.strictEqual(out.heard, true);
+      assert.strictEqual(out.echoHold, hold, rate + ' Hz, D ' + d);
+    }
+  }
+});
+
+test('voiceCarAnalyse: an echo of chirp i+1 is never found in the window of chirp i (D = 230: every delay is 230, never 1730 or 1230)', () => {
+  for (const rate of [16000, 48000]) {
+    const { chirp, ref, mic } = carRecording(rate, 230, 77);
+    const delays = V.voiceCarAnalyse(mic, ref, chirp, rate).map(r => r.delayMs);
+    for (const d of delays) assert.ok(d !== null && Math.abs(d - 230) <= 3, rate + ' Hz ' + JSON.stringify(delays));
+    assert.ok(V.voiceCarAnalyse(mic, ref, chirp, rate).every(r => r.delayMs !== 1730 && r.delayMs !== 1230));
+  }
+});
+
+test('voiceCarAnalyse: no echo in the microphone gives three nulls and "not heard"; a missing onset in ref gives a null result in its place', () => {
+  const { chirp, ref, mic } = carRecording(16000, null, 9);
+  const res = V.voiceCarAnalyse(mic, ref, chirp, 16000);
+  assert.strictEqual(res.length, 3);
+  for (const r of res) assert.strictEqual(r.delayMs, null);
+  assert.strictEqual(V.voiceCarCheckResult(res, { echoHold: 600, interruptSensitivity: 50 }).heard, false);
+  const none = V.voiceCarAnalyse(mic, new Float32Array(ref.length), chirp, 16000);
+  assert.deepStrictEqual(none, [0, 1, 2].map(() => ({ delayMs: null, echoDb: -Infinity, confidence: 0 })));
+  const one = carRecording(16000, 230, 3);
+  const part = new Float32Array(one.ref.length); part.set(one.ref.subarray(0, Math.round(1.0 * 16000)));   // only the first chirp is in ref
+  const r1 = V.voiceCarAnalyse(one.mic, part, one.chirp, 16000);
+  assert.strictEqual(r1.length, 3);
+  assert.ok(Math.abs(r1[0].delayMs - 230) <= 3);
+  assert.deepStrictEqual([r1[1], r1[2]], [{ delayMs: null, echoDb: -Infinity, confidence: 0 }, { delayMs: null, echoDb: -Infinity, confidence: 0 }]);
+});
+
+// ---- voiceOpenMicStream ----
+
+test('voiceOpenMicStream: the constraint ladder (same cases as the adapter)', async () => {
+  const b = browser();
+  const r = await C.voiceOpenMicStream(b.win.navigator);
+  assert.strictEqual(r.fallback, false);
+  assert.strictEqual(r.stream, b.raws[0]);
+  assert.deepStrictEqual(b.gums, [{ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }]);
+  const f = browser({ plan: [noErr('OverconstrainedError')] });
+  const fr = await C.voiceOpenMicStream(f.win.navigator);
+  assert.strictEqual(fr.fallback, true);
+  assert.deepStrictEqual(f.gums[1], { audio: true });
+  for (const name of ['NotAllowedError', 'SecurityError', 'AbortError']) {
+    const x = browser({ plan: [noErr(name)] });
+    await assert.rejects(() => C.voiceOpenMicStream(x.win.navigator), (e) => e.name === name);
+    assert.strictEqual(x.gums.length, 1, name + ': no second call');
+  }
+  const y = browser({ plan: [noErr('NotReadableError'), noErr('NotFoundError')] });
+  await assert.rejects(() => C.voiceOpenMicStream(y.win.navigator), (e) => e.name === 'NotReadableError');
+  assert.strictEqual(y.gums.length, 2);
+});
+
+// ---- voiceCarRecord ----
+
+function carCtx(rate, t) {
+  const c = { sampleRate: rate, currentTime: t, destination: { kind: 'destination' }, state: 'running', bufSources: [], micSources: [], buffers: [], merger: null, proc: null, gain: null, closed: false };
+  const node = (extra) => Object.assign({ to: [], disconnected: 0, connect(x, out, inp) { this.to.push({ x, out, inp }); }, disconnect() { this.disconnected++; } }, extra);
+  c.createMediaStreamSource = (raw) => { const s = node({ raw }); c.micSources.push(s); return s; };
+  c.createChannelMerger = (n) => { if (c.mergerThrows) throw new Error('no merger'); c.merger = node({ kind: 'merger', n }); return c.merger; };
+  c.createScriptProcessor = (size, inCh, outCh) => { c.proc = node({ kind: 'proc', size, inCh, outCh, onaudioprocess: null }); return c.proc; };
+  c.gains = [];
+  c.createGain = () => { c.gain = node({ kind: 'gain', gain: { value: 1 } }); c.gains.push(c.gain); return c.gain; };
+  c.createBuffer = (ch, len, r) => { const data = new Float32Array(len), buf = { numberOfChannels: ch, length: len, sampleRate: r, data, getChannelData: () => data }; c.buffers.push(buf); return buf; };
+  c.createBufferSource = () => { const s = node({ buffer: null, starts: [], stopped: 0, start(t) { this.starts.push(t); }, stop() { this.stopped++; } }); c.bufSources.push(s); return s; };
+  c.close = async () => { c.closed = true; };
+  return c;
+}
+function carRig(o = {}) {
+  const b = browser(o), k = clock(), ctx = carCtx(o.rate || 16000, o.t === undefined ? 1.5 : o.t);
+  if (o.mergerThrows) ctx.mergerThrows = true;
+  const chirp = V.voiceCarChirp(ctx.sampleRate);
+  const rec = C.voiceCarRecord(Object.assign({ ctx, nav: b.win.navigator, chirp, setTimer: k.setTimer, clearTimer: k.clearTimer, now: () => k.t }, o.opts));
+  const rig = { b, k, ctx, chirp, rec, settled: false, result: undefined, error: undefined };
+  rec.done.then((r) => { rig.settled = true; rig.result = r; }, (e) => { rig.settled = true; rig.error = e; });
+  return rig;
+}
+function assertCarCleanedUp(g, base, why) {
+  assert.strictEqual(voiceLiveTracks(), base, why + ': microphone tracks let go');
+  for (const t of g.b.tracks) assert.ok(t.stopped >= 1, why + ': track stopped');
+  for (const s of g.ctx.bufSources) { assert.ok(s.stopped >= 1, why + ': source stopped'); assert.ok(s.disconnected >= 1, why + ': source disconnected'); }
+  for (const s of g.ctx.micSources) assert.ok(s.disconnected >= 1, why + ': mic source disconnected');
+  for (const n of [g.ctx.merger, g.ctx.proc, g.ctx.gain]) if (n) assert.ok(n.disconnected >= 1, why + ': node disconnected');
+  if (g.ctx.proc) assert.strictEqual(g.ctx.proc.onaudioprocess, null, why + ': onaudioprocess null');
+  assert.strictEqual(g.k.timers.length, 0, why + ': timer cleared');
+  assert.strictEqual(g.ctx.closed, false, why + ': the page owns the context');
+}
+
+test('voiceCarRecord: one processor on the microphone plus the chirp channel; two sources per chirp started at t0 + a; arrays are the concatenated channels; resolves when the clock passes t0 + seconds', async () => {
+  const base = voiceLiveTracks();
+  const g = carRig({ t: 1.5 });
+  await tick();
+  const { ctx, k, chirp } = g;
+  assert.strictEqual(g.b.gums.length, 1);
+  assert.strictEqual(ctx.micSources.length, 1);
+  assert.strictEqual(ctx.merger.n, 2);
+  const micGain = ctx.gains[0];
+  assert.deepStrictEqual(ctx.micSources[0].to.map(t => t.x), [micGain], 'mic -> its Mic level gain');
+  assert.strictEqual(micGain.gain.value, 1, 'Mic level 50 (default) = 0 dB');
+  assert.deepStrictEqual(micGain.to, [{ x: ctx.merger, out: 0, inp: 0 }], 'Mic level gain -> merger input 0');
+  assert.deepStrictEqual([ctx.proc.size, ctx.proc.inCh, ctx.proc.outCh], [4096, 2, 1]);
+  assert.deepStrictEqual(ctx.merger.to.map(t => t.x), [ctx.proc], 'merger -> processor');
+  assert.deepStrictEqual(ctx.proc.to.map(t => t.x), [ctx.gain], 'processor -> gain');
+  assert.strictEqual(ctx.gain.gain.value, 0);
+  assert.deepStrictEqual(ctx.gain.to.map(t => t.x), [ctx.destination], 'gain -> destination');
+  assert.strictEqual(typeof ctx.proc.onaudioprocess, 'function');
+  assert.strictEqual(ctx.buffers.length, 1, 'ONE buffer from the chirp');
+  assert.deepStrictEqual(Array.from(ctx.buffers[0].data), Array.from(chirp));
+  assert.strictEqual(ctx.bufSources.length, 6, 'two sources per chirp');
+  const t0 = 1.5;
+  [0.5, 2.0, 3.5].forEach((a, i) => {
+    const toDest = ctx.bufSources[2 * i], toMerger = ctx.bufSources[2 * i + 1];
+    assert.strictEqual(toDest.buffer, ctx.buffers[0]); assert.strictEqual(toMerger.buffer, ctx.buffers[0]);
+    assert.deepStrictEqual(toDest.to.map(t => t.x), [ctx.destination], 'chirp ' + i + ' -> destination');
+    assert.deepStrictEqual(toMerger.to, [{ x: ctx.merger, out: 0, inp: 1 }], 'chirp ' + i + ' -> merger input 1');
+    assert.deepStrictEqual(toDest.starts, [t0 + a]); assert.deepStrictEqual(toMerger.starts, [t0 + a], 'the same scheduled time');
+  });
+  // two buffers of audio: the arrays are copies of what each channel held
+  const m1 = new Float32Array(4096).fill(0.25), r1 = new Float32Array(4096).fill(0.5), m2 = new Float32Array(4096).fill(-0.25), r2 = new Float32Array(4096).fill(-0.5);
+  const feed = (m, r) => ctx.proc.onaudioprocess({ inputBuffer: { numberOfChannels: 2, length: 4096, getChannelData: (i) => (i === 0 ? m : r) } });
+  feed(m1, r1); m1.fill(9); r1.fill(9);   // the page's buffer is reused by the browser: a copy was needed
+  feed(m2, r2);
+  ctx.currentTime = t0 + 5.2 - 0.01;
+  await k.advance(100);
+  assert.strictEqual(g.settled, false, 'not yet at t0 + seconds - 10 ms');
+  ctx.currentTime = t0 + 5.2;
+  await k.advance(100);
+  assert.strictEqual(g.settled, true);
+  assert.strictEqual(g.error, undefined);
+  assert.strictEqual(g.result.rate, 16000);
+  assert.strictEqual(g.result.fallback, false);
+  assert.strictEqual(g.result.mic.length, 8192);
+  assert.deepStrictEqual([g.result.mic[0], g.result.mic[4095], g.result.mic[4096], g.result.mic[8191]], [0.25, 0.25, -0.25, -0.25]);
+  assert.deepStrictEqual([g.result.ref[0], g.result.ref[4095], g.result.ref[4096], g.result.ref[8191]], [0.5, 0.5, -0.5, -0.5]);
+  assertCarCleanedUp(g, base, 'resolve');
+});
+
+test('voiceCarRecord: audio_not_started when the clock never moves and wallMs passes (not before); cancel() rejects with cancelled; both clean up', async () => {
+  const base = voiceLiveTracks();
+  const a = carRig({ t: 0 });
+  await tick();
+  await a.k.advance(12000);
+  assert.strictEqual(a.settled, false, 'not yet at exactly wallMs');
+  await a.k.advance(100);
+  assert.strictEqual(a.settled, true);
+  assert.strictEqual(a.error.code, 'audio_not_started');
+  assert.ok(a.error instanceof Error);
+  assertCarCleanedUp(a, base, 'audio_not_started');
+  const s = carRig({ t: 0, opts: { wallMs: 3000 } });
+  await tick(); await s.k.advance(3100);
+  assert.strictEqual(s.error.code, 'audio_not_started', 'wallMs is an option');
+  const c = carRig({});
+  await tick();
+  c.rec.cancel();
+  await tick();
+  assert.strictEqual(c.error.code, 'cancelled');
+  assertCarCleanedUp(c, base, 'cancel');
+  c.rec.cancel();   // a second cancel is harmless
+  c.ctx.currentTime = 99; await c.k.advance(500);
+  assert.strictEqual(c.result, undefined, 'nothing resolves after the end');
+});
+
+test('voiceCarRecord: cancel while the microphone is still opening lets go of the stream that arrives; an exception while building cleans up too', async () => {
+  const base = voiceLiveTracks();
+  const g = carRig({ plan: ['gate'] });
+  g.rec.cancel();
+  await tick();
+  assert.strictEqual(g.error.code, 'cancelled');
+  g.b.gate(); await tick();
+  assert.strictEqual(voiceLiveTracks(), base, 'the late stream is stopped');
+  assert.ok(g.b.tracks[0].stopped >= 1);
+  assert.strictEqual(g.ctx.micSources.length, 0, 'no graph for a cancelled check');
+  const e = carRig({ mergerThrows: true });
+  await tick();
+  assert.strictEqual(e.error.message, 'no merger');
+  assertCarCleanedUp(e, base, 'building failed');
+});
+
+test('voiceCarRecord: NotAllowedError rejects without a retry; OverconstrainedError retries with { audio: true } and fallback is true', async () => {
+  const base = voiceLiveTracks();
+  const n = carRig({ plan: [noErr('NotAllowedError')] });
+  await tick();
+  assert.strictEqual(n.error.name, 'NotAllowedError');
+  assert.strictEqual(n.b.gums.length, 1);
+  assert.strictEqual(n.ctx.micSources.length, 0);
+  assert.strictEqual(voiceLiveTracks(), base);
+  const f = carRig({ plan: [noErr('OverconstrainedError')] });
+  await tick();
+  assert.strictEqual(f.b.gums.length, 2);
+  assert.deepStrictEqual(f.b.gums[1], { audio: true });
+  f.ctx.currentTime = 1.5 + 5.2; await f.k.advance(100);
+  assert.strictEqual(f.result.fallback, true);
+  assertCarCleanedUp(f, base, 'fallback');
+});
+
+// ---- controller and adapter fixes of the lead ----
+
+test('mic: a second onMicChange({ ok: false }) while the microphone is already lost enqueues nothing and does not call ui.micLost again', async () => {
+  const h = await callStarted();
+  h.handlers.onMicChange({ ok: false, reason: 'ended' }); await tick();
+  assert.deepStrictEqual(h.lost, [true]);
+  assert.strictEqual(h.spoken.length, 1);
+  await h.finish();
+  h.handlers.onMicChange({ ok: false, reason: 'devicechange' }); await tick();
+  h.handlers.onMicChange({ ok: false, reason: 'manual' }); await tick();
+  assert.deepStrictEqual(h.lost, [true], 'ui.micLost(true) once');
+  assert.strictEqual(h.spoken.length, 1, 'nothing new spoken');
+  assert.strictEqual(h.pend.length, 0, 'nothing queued');
+  h.handlers.onMicChange({ ok: true, reason: 'manual', changed: false }); await tick();
+  assert.deepStrictEqual(h.lost, [true, false]);
+  await h.call.hangUp();
+});
+
+test('adapter: attach throwing during a reopen stops and untracks the new stream, reports ok:false and leaves the old source alone', async () => {
+  const base = voiceLiveTracks();
+  const { b, vad, events } = await liveVad();
+  assert.strictEqual(voiceLiveTracks(), base + 2);
+  b.ctxs[0].createMediaStreamSource = () => { throw new Error('no source'); };
+  assert.strictEqual(await vad.reopen(), false);
+  assert.strictEqual(events.change.length, 1);
+  assert.strictEqual(events.change[0].ok, false); assert.strictEqual(events.change[0].reason, 'manual'); assert.strictEqual(events.change[0].error.message, 'no source');
+  assert.ok(b.tracks[1].stopped >= 1, 'the new stream is stopped');
+  assert.strictEqual(voiceLiveTracks(), base + 2, 'the new stream is untracked, the old one is still the live one');
+  assert.strictEqual(b.tracks[0].stopped, 0, 'the old raw is untouched');
+  assert.strictEqual(b.sources[0].disconnected, 0, 'the old source is untouched');
+  await vad.stop();
+  assert.strictEqual(voiceLiveTracks(), base);
+});
+
+test('adapter: a context in state interrupted is resumed before the new source is attached', async () => {
+  const { b, vad, events } = await liveVad();
+  const ctx = b.ctxs[0], log = [];
+  ctx.state = 'interrupted';
+  const resume = ctx.resume.bind(ctx), make = ctx.createMediaStreamSource.bind(ctx);
+  ctx.resume = async () => { log.push('resume'); await resume(); };
+  ctx.createMediaStreamSource = (raw) => { log.push('source:' + ctx.state); return make(raw); };
+  assert.strictEqual(await vad.reopen(), true);
+  assert.deepStrictEqual(log, ['resume', 'source:running']);
+  assert.strictEqual(events.change[0].ok, true);
+  log.length = 0;
+  assert.strictEqual(await vad.reopen(), true);
+  assert.deepStrictEqual(log, ['source:running'], 'a running context is not resumed');
+  await vad.stop();
+});
+
+test('adapter: setPlaybackActive(false) after stop() starts no timer', async () => {
+  const { k, vad } = await liveVad();
+  vad.setPlaybackActive(true);
+  await vad.stop();
+  vad.setPlaybackActive(false);
+  assert.strictEqual(k.timers.length, 0, 'no hold timer after the adapter was released');
+  vad.setPlaybackActive(true); vad.setPlaybackActive(false);
+  assert.strictEqual(k.timers.length, 0);
+});
+
+test('voiceCarRecord: the microphone channel goes through the Mic level exactly as in a call (the reference does not)', async () => {
+  const g = carRig({ t: 1.5, opts: { micLevel: 100 } });
+  await tick();
+  const micGain = g.ctx.gains[0];
+  assert.ok(Math.abs(micGain.gain.value - V.voiceGainFromSlider(100)) < 1e-9, 'Mic level 100 = +12 dB on the microphone');
+  assert.ok(Math.abs(20 * Math.log10(micGain.gain.value) - 12) < 0.01);
+  for (const s of g.ctx.bufSources) assert.ok(!s.to.some(t => t.x === micGain), 'no chirp goes through the Mic level');
+  g.rec.cancel(); await tick();
+  assert.ok(micGain.disconnected >= 1, 'the Mic level node is let go too');
+});
+
+test('voiceCarAnalyse: the first onset can only be the first chirp (a strong later chirp is not taken first) at 44.1 kHz', () => {
+  for (const rate of [44100, 16000]) {
+    const chirp = V.voiceCarChirp(rate), len = Math.round(5.2 * rate);
+    const ref = new Float32Array(len), mic = noise(len, -55, 7);
+    for (const a of V.VOICE_CAR_AT) { const o = Math.round(a * rate); ref.set(chirp, o); const d = o + Math.round(0.23 * rate); for (let i = 0; i < chirp.length; i++) mic[d + i] += chirp[i] * 0.1; }
+    const r = V.voiceCarAnalyse(mic, ref, chirp, rate);
+    assert.deepStrictEqual(r.map(x => x.delayMs !== null && Math.abs(x.delayMs - 230) <= 3), [true, true, true], rate + ' Hz: all three found at 230 ms');
+  }
+});
+
+test('adapter: a resume that never settles (iOS during a phone call) is given 3 s, then the microphone is reported lost and the new stream let go', async () => {
+  const { b, k, vad, events } = await liveVad();
+  const ctx = b.ctxs[0];
+  ctx.state = 'interrupted';
+  ctx.resume = () => new Promise(() => {});   // pending until the interruption ends
+  const p = vad.reopen();
+  await tick();
+  assert.strictEqual(events.change.length, 0, 'still waiting');
+  await k.advance(3000);
+  assert.strictEqual(await p, false);
+  assert.strictEqual(events.change.length, 1);
+  assert.strictEqual(events.change[0].ok, false, 'reported lost, not recovered');
+  const fresh = b.tracks[b.tracks.length - 1];
+  assert.ok(fresh.stopped >= 1, 'the new stream is let go');
+  // the reopen settled: Tap to talk can try again later
+  ctx.state = 'running'; ctx.resume = async () => {};
+  assert.strictEqual(await vad.reopen(), true);
+  await vad.stop();
+});
+
+test('round 3: a resume that wins clears its 3 s deadline (no timer left behind)', async () => {
+  const { b, k, vad } = await liveVad();
+  const ctx = b.ctxs[0];
+  ctx.state = 'interrupted';
+  const before = k.timers.length;
+  assert.strictEqual(await vad.reopen(), true);
+  assert.strictEqual(k.timers.length, before, 'the deadline timer was cleared');
+  await vad.stop();
+});

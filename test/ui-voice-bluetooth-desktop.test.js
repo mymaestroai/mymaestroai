@@ -33,7 +33,7 @@ function el(id, extra = {}) {
 
 const HOLDS = [0, 600, 1000, 1500];
 function makeEnv(opts = {}) {
-  const log = { saved: [], vad: [], vadOpts: [], thinking: [], created: [], toasts: [], ka: [], kaCtx: [], retry: 0, hung: 0, micClosed: 0, starts: [], chirps: [], analyses: [], results: [] };
+  const log = { saved: [], vad: [], vadOpts: [], thinking: [], created: [], toasts: [], ka: [], kaCtx: [], retry: 0, hung: 0, micClosed: 0, starts: [], chirps: [], analyses: [], results: [], recs: [], opens: 0 };
   const els = {};
   const get = (id) => (els[id] || (els[id] = el(id)));
   const popBtns = { room: el('pop-room'), car: el('pop-car'), echo: el('pop-echo'), keep: el('pop-keep') };
@@ -50,11 +50,20 @@ function makeEnv(opts = {}) {
   };
   class FakeCtx {
     constructor() { this.state = 'running'; this.sampleRate = 8000; this.currentTime = 0; this.destination = { d: 1 }; (log.ctxs = log.ctxs || []).push(this); }
-    resume() {}
+    resume() { this.resumed = (this.resumed || 0) + 1; return Promise.resolve(); }
     close() { this.closed = true; return Promise.resolve(); }
     createBuffer(ch, n, rate) { const data = new Float32Array(n); return { length: n, sampleRate: rate, getChannelData: () => data, copyToChannel: (a) => data.set(a) }; }
     createBufferSource() { const s = { buffer: null, connect(d) { s.to = d; }, start(when) { s.when = when; log.chirps.push(s); }, stop() {}, disconnect() {} }; return s; }
   }
+  // voiceCarRecord of the library, replaced by a controllable fake: rec.resolve(value) / rec.reject(err); cancel() rejects with code 'cancelled'
+  const carRecord = (o) => {
+    let res, rej;
+    const done = new Promise((a, b) => { res = a; rej = b; });
+    const rec = { o, done, resolve: res, reject: rej, cancelled: 0, cancel() { rec.cancelled++; const e = new Error('cancelled'); e.code = 'cancelled'; rej(e); } };
+    log.recs.push(rec);
+    if (!opts.manualRec) res({ mic: new Float32Array(7).fill(1), ref: new Float32Array(7).fill(2), rate: 8000, fallback: false });
+    return rec;
+  };
   const voicePlay = { token: 0, ctx: null, source: null, btn: null };
   const stubs = {
     document: { hidden: false, getElementById: get, querySelectorAll: (sel) => (sel.includes('data-vp="room"') ? [popBtns.room].concat(sel.includes('data-vp="car"') ? [popBtns.car] : []) : sel === '.voice-pop .vp-car-out' ? [popOut.car] : sel === '.voice-pop .vp-room-out' ? [popOut.room] : sel.includes('data-vp="car"') ? [popBtns.car] : sel.includes('data-vp="echo"') ? [popBtns.echo] : sel.includes('data-vp="keep"') ? [popBtns.keep] : []), addEventListener() {}, createElement: () => el('', {}), querySelector: () => (opts.noSection ? null : { isConnected: true }) },
@@ -78,9 +87,10 @@ function makeEnv(opts = {}) {
     voiceCreateKeepAlive: (o) => { const k = { ctx: o && o.ctx, running: false, start() { k.running = true; log.ka.push('start'); }, stop() { k.running = false; log.ka.push('stop'); } }; log.kaCtx.push(o && o.ctx); log.keepAlive = k; return k; },
     voiceCreateThinkingSound: ({ ctx, volume }) => { const s = { ctx, volume, pulse() {}, start() { log.thinking.push('start'); }, stop() { log.thinking.push('stop'); }, setVolume() {} }; log.sound = s; return s; },
     voiceRoomCheck() {}, voiceCallMedian: () => null, voiceMicError: (e) => String(e),
-    voiceOpenMic: opts.openMic ? (...a) => opts.openMic(log, FakeCtx, ...a) : async () => ({ close() {} }),
-    voiceCarChirp: (rate) => { log.chirpRate = rate; return new Float32Array(10).fill(0.5); },
-    voiceEchoAnalysis: (ref, rec, rate) => { log.analyses.push({ ref, rec, rate }); return { delayMs: 120, echoDb: -30, confidence: 0.9 }; },
+    voiceOpenMic: async () => { log.opens++; return { close() {} }; },
+    voiceCarChirp: (rate) => { log.chirpRate = rate; return (log.chirp = new Float32Array(10).fill(0.5)); },
+    voiceCarRecord: carRecord,
+    voiceCarAnalyse: (mic, ref, chirp, rate) => { log.analyses.push({ mic, ref, chirp, rate }); return [0, 1, 2].map(() => ({ delayMs: 120, echoDb: -30, confidence: 0.9 })); },
     voiceCarCheckResult: (an, cur) => { log.results.push({ an, cur }); return { echoHold: 1000, interruptSensitivity: 40, delayMs: 120, echoDb: -30, heard: true, line: 'The echo comes back after 120 ms.' }; },
     appendMessage() {}, appendSystemNotice() {}, stopAgentTurn() {}, sendSoloMessage: async () => {}, closeQuestion() {}, hubOriginLabel: () => '',
     setTimeout, clearTimeout, setInterval, clearInterval, Date, Promise, performance,
@@ -240,72 +250,119 @@ test('test hooks: window.__voiceBt reports keep-alive, mic info, mic lost and th
 
 // ── Car or Bluetooth check ──
 
-function carMic(log, FakeCtx, lvl, onChunk) {
-  const ctx = new FakeCtx();
-  const blocks = 800;
-  let k = 0;
-  const timer = setInterval(() => {
-    const start = k * 0.1;
-    ctx.currentTime = (k + 1) * 0.1;
-    onChunk(new Float32Array(blocks).fill(k + 1), start);
-    k++;
-  }, 5);
-  log.micOpen = (log.micOpen || 0) + 1;
-  return Promise.resolve({ rate: ctx.sampleRate, ctx, close() { clearInterval(timer); log.micClosed++; } });
-}
-
-test('car check: three chirps at +0.6 / +1.6 / +2.6 s on the mic context, slices by block time, result saved and shown, mic released', async () => {
-  const env = makeEnv({ openMic: carMic });
-  const { api, log, get, popOut } = env;
+test('car check: a NEW context made and resumed inside the tap; the library records and analyses; result saved and shown; the context is closed', async () => {
+  const env = makeEnv();
+  const { api, log, get, popOut, stubs } = env;
   get('st-voice-section'); get('st-voice-car-out');
-  const run = api.voiceCarCheckRun();
+  const run = api.voiceCarCheckRun();   // not awaited: the context and the recording must already exist (before any await)
+  assert.strictEqual(log.ctxs.length, 1, 'one new AudioContext, made synchronously');
+  assert.strictEqual(log.ctxs[0].resumed, 1, 'resumed inside the tap (iOS)');
+  assert.strictEqual(log.recs.length, 1, 'voiceCarRecord started synchronously');
+  const o = log.recs[0].o;
+  assert.strictEqual(o.ctx, log.ctxs[0]);
+  assert.strictEqual(o.nav, stubs.navigator);
+  assert.strictEqual(o.chirp, log.chirp);
+  assert.strictEqual(log.chirpRate, 8000, 'the chirp is made at the context rate');
+  assert.strictEqual(typeof o.setTimer, 'function'); assert.strictEqual(typeof o.clearTimer, 'function');
+  assert.strictEqual(o.now, Date.now);
   await run;
-  assert.strictEqual(log.chirps.length, 3);
-  const t0 = 0;
-  assert.deepStrictEqual(log.chirps.map((s) => Math.round((s.when - t0) * 10) / 10), [0.6, 1.6, 2.6]);
-  assert.ok(log.chirps.every((s) => s.to === log.ctxs[0].destination), 'through ctx.destination of the same context');
-  assert.strictEqual(log.chirpRate, 8000);
-  assert.strictEqual(log.analyses.length, 3);
-  assert.deepStrictEqual(log.analyses.map((a) => a.rec[0]), [7, 17, 27], 'each slice starts at the block holding its scheduled time');
-  assert.strictEqual(log.analyses[0].rec.length, 12000);
-  assert.ok(log.analyses.every((a) => a.rate === 8000));
+  assert.strictEqual(log.opens, 0, 'voiceOpenMic is not used by the check');
+  assert.strictEqual(log.chirps.length, 0, 'the page does not schedule sounds itself');
+  assert.strictEqual(log.analyses.length, 1);
+  assert.strictEqual(log.analyses[0].mic.length, 7); assert.strictEqual(log.analyses[0].ref[0], 2);
+  assert.strictEqual(log.analyses[0].chirp, log.chirp); assert.strictEqual(log.analyses[0].rate, 8000);
+  assert.strictEqual(log.results[0].an.length, 3);
   assert.deepStrictEqual(log.results[0].cur, { echoHold: 600, interruptSensitivity: 50 });
   const saved = log.saved.pop();
   assert.strictEqual(saved.echoHold, 1000); assert.strictEqual(saved.interruptSensitivity, 40);
+  assert.deepStrictEqual(log.vad.filter((x) => x[0] === 'echo'), [], 'no live call: no VAD to update');
   assert.strictEqual(get('st-voice-car-out').textContent, 'The echo comes back after 120 ms.');
   assert.strictEqual(get('st-voice-echo').value, '1000');
-  assert.strictEqual(log.micClosed, 1);
+  assert.strictEqual(log.ctxs[0].closed, true, 'the check context is closed at the end');
+  assert.strictEqual(api.voiceRoom.active, false);
   assert.ok(popOut.car);
 });
 
 test('car check: progress text, refusal when the microphone is busy, release on cancel and on error', async () => {
-  const busy = makeEnv({ openMic: carMic });
+  const busy = makeEnv();
   busy.stubs.voiceRec.busy = true;
   await busy.api.voiceCarCheckRun();
   assert.deepStrictEqual(busy.log.toasts, ['The microphone is in use.']);
-  assert.strictEqual(busy.log.micOpen, undefined);
+  assert.strictEqual(busy.log.recs.length, 0);
+  assert.strictEqual((busy.log.ctxs || []).length, 0, 'no context made when refused');
 
   const seen = [];
-  const env = makeEnv({ openMic: carMic });
+  const env = makeEnv();
   const out = env.get('st-voice-car-out');
   env.get('st-voice-section');
   Object.defineProperty(out, 'textContent', { get: () => out._t, set: (v) => { out._t = v; seen.push(v); } });
   await env.api.voiceCarCheckRun();
   assert.ok(seen.includes('Playing three short test sounds. Stay quiet.'));
 
-  const cancel = makeEnv({ openMic: carMic });
-  const sec = cancel.get('st-voice-section');
+  // cancel: the Settings section closed -> rec.cancel(), 'cancelled' text, nothing saved, context closed
+  const cancel = makeEnv({ manualRec: true });
+  const sec = cancel.get('st-voice-section'); cancel.get('st-voice-car-out');
   const p = cancel.api.voiceCarCheckRun();
   await wait(5);
   sec.isConnected = false;
+  await wait(250);
   await p;
-  assert.strictEqual(cancel.log.micClosed, 1, 'released on cancel');
+  assert.strictEqual(cancel.log.recs[0].cancelled, 1, 'rec.cancel() called once');
+  assert.strictEqual(cancel.get('st-voice-car-out').textContent, 'Car or Bluetooth check cancelled.');
   assert.strictEqual(cancel.log.saved.length, 0);
+  assert.strictEqual(cancel.log.ctxs[0].closed, true);
   assert.strictEqual(cancel.api.voiceRoom.active, false);
 
-  const err = makeEnv({ openMic: async () => { throw new Error('denied'); } });
-  await err.api.voiceCarCheckRun();
+  // cancel: the page is hidden
+  const hid = makeEnv({ manualRec: true });
+  hid.get('st-voice-section'); hid.get('st-voice-car-out');
+  const ph = hid.api.voiceCarCheckRun();
+  hid.stubs.document.hidden = true;
+  await wait(250);
+  await ph;
+  assert.strictEqual(hid.log.recs[0].cancelled, 1);
+  assert.strictEqual(hid.get('st-voice-car-out').textContent, 'Car or Bluetooth check cancelled.');
+
+  // audio never started
+  const na = makeEnv({ manualRec: true });
+  na.get('st-voice-section'); na.get('st-voice-car-out');
+  const pn = na.api.voiceCarCheckRun();
+  const e1 = new Error('the audio did not start'); e1.code = 'audio_not_started';
+  na.log.recs[0].reject(e1);
+  await pn;
+  assert.strictEqual(na.get('st-voice-car-out').textContent, 'The check could not run: the audio did not start. Settings were not changed.');
+  assert.strictEqual(na.log.saved.length, 0);
+  assert.strictEqual(na.log.ctxs[0].closed, true);
+
+  // a microphone error: the page's existing microphone error text
+  const err = makeEnv({ manualRec: true });
+  err.get('st-voice-section'); err.get('st-voice-car-out');
+  const pe = err.api.voiceCarCheckRun();
+  err.log.recs[0].reject(new Error('denied'));
+  await pe;
+  assert.strictEqual(err.get('st-voice-car-out').textContent, 'Error: denied');   // the stub voiceMicError(e) = String(e)
+  assert.ok(err.log.toasts.includes('Error: denied'));
   assert.strictEqual(err.api.voiceRoom.active, false);
-  assert.ok(err.log.toasts.length >= 1);
+  assert.strictEqual(err.log.ctxs[0].closed, true);
+  assert.strictEqual(err.log.saved.length, 0);
   await flush();
+});
+
+test('car check: the old method is gone from the page (slices, playbackTime, ctx on the mic helper); voiceOpenMic is back to the base', () => {
+  // (the library blocks may mention playbackTime in a comment: look at the page's own code only)
+  const strip = (s, a, b) => { const i = s.indexOf(a), j = s.indexOf(b, i); return s.slice(0, i) + s.slice(j + b.length); };
+  const own = strip(strip(app, '// ── voice helpers (begin) ──', '// ── voice helpers (end) ──'), '// ── voice call (begin) ──', '// ── voice call (end) ──');
+  for (const name of ['voiceCarSlice', 'VOICE_CAR_SLICE', 'VOICE_CAR_WINDOW', 'playbackTime', 'VOICE_CAR_AT', 'VOICE_CAR_END']) assert.ok(!own.includes(name), name + ' is gone from the page code');
+  assert.ok(/voiceCarAnalyse\(/.test(own) && /voiceCarRecord\(/.test(own));
+  let base;
+  try { base = execFileSync('git', ['-C', path.join(__dirname, '..'), 'show', '5e69a44:app.js'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }); }
+  catch { return; }
+  const fn = (s) => { const i = s.indexOf('async function voiceOpenMic('); return s.slice(i, s.indexOf('// Tap-to-talk.', i)); };
+  assert.strictEqual(fn(app), fn(base), 'voiceOpenMic is exactly what it was at 5e69a44');
+});
+
+test('round 2: the Car or Bluetooth check passes the Mic level to the recorder; a failed Tap to talk says so', () => {
+  const run = app.slice(app.indexOf('async function voiceCarCheckRun'), app.indexOf('async function voiceCarCheckRun') + 4000);
+  assert.ok(/voiceCarRecord\(\{[^}]*micLevel: voiceMicLevelNow\(\)/.test(run), 'Mic level passed');
+  assert.ok(/data-?\.?vcb === 'retry'[\s\S]{0,200}retryMic\(\)\)\.then\(\(ok\) => \{ if \(!ok\) hubToast\('Still no microphone\.'\)/.test(app) || app.includes("Promise.resolve(c.retryMic()).then((ok) => { if (!ok && voiceCallS.call === c) hubToast('Still no microphone.'); }"), 'failed retry toasts');
 });

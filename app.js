@@ -10770,7 +10770,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       conf = Math.max(0, Math.min(1, conf));
       const rms = Math.sqrt(Math.max(0, energy(bestLag)) / n);
       const echoDb = rms > 0 ? Math.round(20 * Math.log10(rms) * 10) / 10 : -Infinity;
-      return { delayMs: conf < 0.3 ? null : Math.round(bestLag / rate * 1000), echoDb, confidence: conf };
+      return { delayMs: conf < 0.3 ? null : Math.round(bestLag / rate * 1000), echoDb, confidence: conf, lag: bestLag };   // lag: the same in samples (exact)
     }
     function voiceEchoHoldLabel(ms) { return ms === 0 ? 'off' : (ms / 1000) + ' s'; }   // 'off', '0.6 s', '1 s', '1.5 s'
     function voiceCarMedian(list) {
@@ -10797,6 +10797,38 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const lowered = interruptSensitivity < curSens;
       return { echoHold, interruptSensitivity, delayMs, echoDb, heard: true,
         line: 'The echo comes back after ' + delayMs + ' ms. Echo guard set to ' + voiceEchoHoldLabel(echoHold) + (lowered ? ', interrupt sensitivity lowered to ' + interruptSensitivity + '.' : '.') };
+    }
+    // The Car or Bluetooth check plays the chirp three times, VOICE_CAR_AT seconds after the start, and records until VOICE_CAR_END. The chirps are 1.5 s
+    // apart and the search for an echo stops at VOICE_CAR_MAX_DELAY_MS (1.2 s), so the window of one chirp never holds the echo of the next.
+    const VOICE_CAR_AT = [0.5, 2.0, 3.5], VOICE_CAR_END = 5.2, VOICE_CAR_MAX_DELAY_MS = 1200;
+    // The analysis of one check recording. mic = the microphone samples and ref = a copy of the chirp (silence elsewhere) from the SAME buffers of the SAME
+    // audio processor, so both share one clock and index i of one is the same instant as index i of the other. The chirp onsets are found in ref
+    // (confidence > 0.9, in samples): the first in a window shorter than the spacing (so it can only be the first chirp), each next one within
+    // +-200 ms of where the spacing puts it. Then for each onset the microphone slice [onset, onset + VOICE_CAR_MAX_DELAY_MS + chirp length] is
+    // analysed. -> always VOICE_CAR_AT.length voiceEchoAnalysis results; a chirp whose onset was not found gives { delayMs: null, echoDb: -Infinity, confidence: 0 }.
+    function voiceCarAnalyse(mic, ref, chirp, rate) {
+      const count = VOICE_CAR_AT.length, none = () => ({ delayMs: null, echoDb: -Infinity, confidence: 0 }), out = [];
+      const n = chirp ? chirp.length : 0, r = Number(rate);
+      const onsets = [];   // null where a chirp was not found
+      if (ref && n > 0 && r > 0) {
+        const firstMs = Math.max(200, ((VOICE_CAR_AT[1] - VOICE_CAR_AT[0]) || 1.5) * 1000 - 100);
+        const a0 = voiceEchoAnalysis(chirp, ref, r, { maxDelayMs: firstMs });
+        let prev = a0.delayMs !== null && a0.confidence > 0.9 ? a0.lag : null;
+        onsets.push(prev);
+        for (let i = 1; i < count; i++) {
+          if (prev === null) { onsets.push(null); continue; }
+          const from = Math.max(0, prev + Math.round((VOICE_CAR_AT[i] - VOICE_CAR_AT[i - 1]) * r) - Math.round(0.2 * r));
+          const a = voiceEchoAnalysis(chirp, ref.subarray(from), r, { maxDelayMs: 400 });
+          prev = a.delayMs !== null && a.confidence > 0.9 ? from + a.lag : null;
+          onsets.push(prev);
+        }
+      }
+      const span = Math.round(VOICE_CAR_MAX_DELAY_MS / 1000 * r) + n;
+      for (let i = 0; i < count; i++) {
+        if (i >= onsets.length || onsets[i] === null || !mic) { out.push(none()); continue; }
+        out.push(voiceEchoAnalysis(chirp, mic.subarray(onsets[i], onsets[i] + span), r, { maxDelayMs: VOICE_CAR_MAX_DELAY_MS }));
+      }
+      return out;
     }
     // ── voice helpers (end) ──
 
@@ -11361,6 +11393,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       function onMicChange(ev) {
         if (ended || !ev) return;
         if (ev.ok === false) {
+          if (micLost) return;   // already said: a burst of device events while it is lost is not announced again
           micLost = true; quiet(() => ui.micLost(true));
           enqueue('I lost the microphone. Tap to talk to carry on.', 'status');
           return;
@@ -11463,6 +11496,115 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let n = 0;
       for (const tr of Array.from(VOICE_LIVE_TRACKS)) { if (tr && tr.readyState === 'ended') VOICE_LIVE_TRACKS.delete(tr); else n++; }
       return n;
+    }
+    // The constraint ladder that opens the microphone (the VAD adapter and the Car or Bluetooth check use it): echo cancellation, noise suppression and
+    // auto gain first, exactly as ever. A refusal by the person or the browser (NotAllowedError, SecurityError, AbortError) ends it; any other failure
+    // (OverconstrainedError, NotReadableError, TypeError, NotSupportedError, NotFoundError: some Bluetooth and car inputs cannot do those) gets ONE more
+    // try with plain { audio: true }; when that fails too, the FIRST error is thrown. -> Promise of { stream, fallback }.
+    async function voiceOpenMicStream(nav) {
+      const md = nav.mediaDevices;
+      try { return { stream: await md.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }), fallback: false }; } catch (first) {
+        const name = first && first.name;
+        if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'AbortError') throw first;
+        try { return { stream: await md.getUserMedia({ audio: true }), fallback: true }; } catch { throw first; }
+      }
+    }
+    // The recording of the 'Car or Bluetooth check'. The test chirp is played three times (opts.at, seconds after the start; default VOICE_CAR_AT) and the
+    // microphone is recorded until opts.seconds (default VOICE_CAR_END) on the audio clock. WHY ONE PROCESSOR AND A REFERENCE CHANNEL: the delay is the
+    // time between the chirp leaving and its echo arriving, and two clocks (a timestamp of the played sound, one of the microphone block) never agree:
+    // the first version dated blocks with AudioProcessingEvent.playbackTime (the OUTPUT buffer's time) and every delay came out about one buffer too
+    // long. So no timestamps are used: every chirp is played twice at the same scheduled time, once to the speakers (ctx.destination) and once into
+    // input 1 of a ChannelMerger whose input 0 is the microphone; the merger feeds ONE ScriptProcessor, so a block holds the microphone (channel 0)
+    // and an exact copy of the chirp (channel 1, silence elsewhere) at the same sample positions, and the delay is the distance between the chirp
+    // in channel 1 and its echo in channel 0 (voiceCarAnalyse). WHY 1.5 s SPACING AND A 1.2 s SEARCH: the three chirps are identical, so an echo found
+    // in the window of one chirp could be the echo of the next; the chirps are 1.5 s apart and the search stops at VOICE_CAR_MAX_DELAY_MS (1.2 s), so
+    // a window never reaches the next chirp's echo. The processor only runs while connected to the destination, hence the 0-gain node at the end.
+    // opts: { ctx (made and resumed by the page inside the tap; NOT closed here), nav, chirp (Float32Array at ctx.sampleRate), micLevel (the Mic level
+    // slider, applied to the microphone channel as in a call; default 50 = 0 dB), at, seconds, setTimer,
+    // clearTimer, now (ms clock), wallMs (default 12000: the audio clock must start within this, else the error code is 'audio_not_started') }.
+    // -> { done: Promise of { mic, ref, rate, fallback }, cancel() }; cancel() rejects with an Error whose code is 'cancelled'. However it ends
+    // (result, error, cancel, an exception while building) every source is stopped and disconnected, the processor's handler is removed, the
+    // microphone stream is stopped and the timer is cleared.
+    function voiceCarRecord(opts) {
+      const o = opts || {}, ctx = o.ctx;
+      const at = Array.isArray(o.at) ? o.at : VOICE_CAR_AT;
+      const seconds = Number.isFinite(Number(o.seconds)) ? Number(o.seconds) : VOICE_CAR_END;
+      const wallMs = Number.isFinite(Number(o.wallMs)) ? Number(o.wallMs) : 12000;
+      const micChunks = [], refChunks = [], bufSources = [];
+      let finished = false, stream = null, timer = null, micSource = null, micGain = null, merger = null, proc = null, gain = null, resolveF, rejectF;
+      const done = new Promise((resolve, reject) => { resolveF = resolve; rejectF = reject; });
+      const fail = (code, message) => { const e = new Error(message); e.code = code; return e; };
+      const concat = (chunks) => {
+        let n = 0; for (const c of chunks) n += c.length;
+        const out = new Float32Array(n);
+        let at0 = 0; for (const c of chunks) { out.set(c, at0); at0 += c.length; }
+        return out;
+      };
+      function cleanup() {
+        if (timer !== null) { try { o.clearTimer(timer); } catch { /* gone */ } timer = null; }
+        if (proc) { try { proc.onaudioprocess = null; } catch { /* gone */ } }
+        for (const s of bufSources) { try { s.stop(); } catch { /* not started */ } try { s.disconnect(); } catch { /* gone */ } }
+        for (const n of [micSource, micGain, merger, proc, gain]) { if (n) { try { n.disconnect(); } catch { /* gone */ } } }
+        if (stream) voiceStopStream(stream);
+      }
+      function finish(ok, value) {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        if (ok) resolveF(value); else rejectF(value);
+      }
+      (async () => {
+        let opened;
+        try { opened = await voiceOpenMicStream(o.nav); } catch (e) { finish(false, e); return; }
+        stream = opened.stream; voiceTrackLive(stream);
+        if (finished) { voiceStopStream(stream); return; }   // cancelled while the microphone was opening: let go of it
+        // iOS can suspend or interrupt the context when the microphone starts (or after the first permission prompt): resume it, waiting at most 3 s.
+        if (ctx.state && ctx.state !== 'running' && typeof ctx.resume === 'function') {
+          let wait = null;
+          try { await Promise.race([Promise.resolve(ctx.resume()), new Promise((r) => { wait = o.setTimer(r, 3000); })]); } catch { /* the wall-clock limit below reports it */ }
+          finally { if (wait !== null) { try { o.clearTimer(wait); } catch { /* gone */ } } }
+          if (finished) return;
+        }
+        let t0, startMs;
+        try {
+          micSource = ctx.createMediaStreamSource(stream);
+          merger = ctx.createChannelMerger(2);
+          // The microphone goes through the person's Mic level, exactly as in a call (the VAD hears it after that gain); the reference does not.
+          micGain = ctx.createGain(); micGain.gain.value = voiceGainFromSlider(o.micLevel);
+          micSource.connect(micGain); micGain.connect(merger, 0, 0);
+          proc = ctx.createScriptProcessor(4096, 2, 1);
+          proc.onaudioprocess = (ev) => {
+            if (finished) return;
+            const ib = ev.inputBuffer, mic = ib.getChannelData(0);
+            micChunks.push(new Float32Array(mic));
+            refChunks.push(ib.numberOfChannels > 1 ? new Float32Array(ib.getChannelData(1)) : new Float32Array(mic.length));
+          };
+          merger.connect(proc);
+          gain = ctx.createGain(); gain.gain.value = 0;
+          proc.connect(gain); gain.connect(ctx.destination);
+          t0 = ctx.currentTime;
+          const buffer = ctx.createBuffer(1, o.chirp.length, ctx.sampleRate);
+          buffer.getChannelData(0).set(o.chirp);
+          for (const a of at) {
+            const toSpeakers = ctx.createBufferSource(); bufSources.push(toSpeakers);
+            toSpeakers.buffer = buffer; toSpeakers.connect(ctx.destination); toSpeakers.start(t0 + a);
+            const toMerger = ctx.createBufferSource(); bufSources.push(toMerger);
+            toMerger.buffer = buffer; toMerger.connect(merger, 0, 1); toMerger.start(t0 + a);
+          }
+          startMs = o.now();
+        } catch (e) { finish(false, e); return; }
+        const tick = () => {
+          timer = null;
+          if (finished) return;
+          try {
+            if (ctx.currentTime >= t0 + seconds) { finish(true, { mic: concat(micChunks), ref: concat(refChunks), rate: ctx.sampleRate, fallback: !!opened.fallback }); return; }
+            if (o.now() - startMs > wallMs) { finish(false, fail('audio_not_started', 'the audio did not start')); return; }
+            timer = o.setTimer(tick, 100);
+          } catch (e) { finish(false, e); }
+        };
+        try { timer = o.setTimer(tick, 100); } catch (e) { finish(false, e); }
+      })();
+      return { done, cancel() { finish(false, fail('cancelled', 'cancelled')); } };
     }
     // The thinking sound: quiet random pop clusters made with Web Audio only (no files). The plan (how many pops, when, how high, the gaps) is
     // DATA from lib/ui-voice-thinking.js (voiceThinkingCluster, seeded); this function only plays an event's pops: each pop is a sine with a
@@ -11654,24 +11796,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // (NotAllowedError, SecurityError, AbortError) ends it; any other failure (OverconstrainedError, NotReadableError, TypeError, NotSupportedError,
       // NotFoundError: some Bluetooth and car inputs cannot do those) gets ONE more try with plain { audio: true }; when that fails too, the FIRST error is thrown.
       async function openMic() {
-        const md = st.nav.mediaDevices;
-        try { return { raw: await md.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }), fallback: false }; } catch (first) {
-          const name = first && first.name;
-          if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'AbortError') throw first;
-          try { return { raw: await md.getUserMedia({ audio: true }), fallback: true }; } catch { throw first; }
-        }
+        const r = await voiceOpenMicStream(st.nav);
+        return { raw: r.stream, fallback: r.fallback };
       }
       function unwatchTrack() {
         if (st.trackOff) { try { st.trackOff(); } catch { /* gone */ } }
         st.trackOff = null; st.track = null;
       }
       // The new microphone goes in front of the SAME gain: the source is swapped, the destination stream (and so MicVAD) stays.
+      // The new source is made and connected first: if that throws, nothing of the old one was touched (the caller lets go of the new stream).
       function attach(raw, fallback) {
-        unwatchTrack();
         const prevRaw = st.raw, prevSrc = st.src;
         const src = st.ctx.createMediaStreamSource(raw);
+        try { src.connect(st.gain); } catch (e) { try { src.disconnect(); } catch { /* never connected */ } throw e; }
+        unwatchTrack();
         if (prevSrc) { try { prevSrc.disconnect(); } catch { /* gone */ } }
-        src.connect(st.gain);
         if (prevRaw && prevRaw !== raw) voiceStopStream(prevRaw);   // stops and untracks it
         st.src = src; st.raw = raw;
         const tr = rawTrack(raw);
@@ -11731,7 +11870,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           try { res = await openMic(); } catch (error) { if (st.gen === my) call('onMicChange', { ok: false, reason, error }); return false; }
           voiceTrackLive(res.raw);
           if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }   // stopped meanwhile: let go of it
-          attach(res.raw, res.fallback);
+          // iOS leaves the context 'interrupted' (or suspended) after a route change or a phone call: resume it, or the new source is silent.
+          // A resume can stay pending on iOS while a phone call holds the audio: it is given 3 s; a context still not running is a lost microphone
+          // (the new stream is let go, Tap to talk tries again later), never a recovery that hears nothing.
+          if (st.ctx.state && st.ctx.state !== 'running' && typeof st.ctx.resume === 'function') {
+            let wait = null;
+            try { await Promise.race([Promise.resolve(st.ctx.resume()), new Promise((r) => { wait = setT(r, 3000); })]); } catch { /* checked below */ }
+            finally { if (wait !== null) { try { clearT(wait); } catch { /* gone */ } } }
+            if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }
+            if (st.ctx.state && st.ctx.state !== 'running') { voiceStopStream(res.raw); call('onMicChange', { ok: false, reason, error: new Error('the audio is not running') }); return false; }
+          }
+          try { attach(res.raw, res.fallback); } catch (error) {
+            voiceStopStream(res.raw);   // the new stream is let go; the old source (if any) was not touched
+            call('onMicChange', { ok: false, reason, error });
+            return false;
+          }
           const info = micInfo(res.raw, res.fallback);
           st.info = info;
           snapDefault();
@@ -11774,7 +11927,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               const dest = st.ctx.createMediaStreamDestination();   // the destination and the gain are made once; a reopen only swaps the source (attach)
               st.dest = dest.stream; voiceTrackLive(st.dest);
               st.gain = st.ctx.createGain(); st.gain.gain.value = voiceGainFromSlider(st.micLevel);
-              attach(opened.raw, opened.fallback);
+              try { attach(opened.raw, opened.fallback); } catch (e) { voiceStopStream(opened.raw); throw e; }   // never leave the new stream live
               st.gain.connect(dest);
               st.info = micInfo(opened.raw, opened.fallback);
               if (!st.mdOff && nav.mediaDevices && typeof nav.mediaDevices.addEventListener === 'function') {
@@ -11834,6 +11987,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (on) { clearHold(); st.playing = true; apply(); return; }
           if (now) { clearHold(); st.playing = false; apply(); return; }
           if (st.holdTimer !== null) return;   // already counting down
+          if (!st.ctx) { st.playing = false; return; }   // released (a hang-up): no timer outlives the adapter
           if (st.hold > 0 && st.playing) {
             try { st.holdTimer = setT(() => { st.holdTimer = null; st.playing = false; apply(); }, st.hold); return; } catch { st.holdTimer = null; /* no timer: lowered at once */ }
           }
@@ -11975,10 +12129,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const proc = ctx.createScriptProcessor(4096, 1, 1);
         const mute = ctx.createGain();   // the processor must reach the destination to run; muted, so nothing is heard
         mute.gain.value = 0;
-        proc.onaudioprocess = (ev) => onChunk(new Float32Array(ev.inputBuffer.getChannelData(0)), typeof ev.playbackTime === 'number' && ev.playbackTime > 0 ? ev.playbackTime : ctx.currentTime);   // the block's start in the context's time (the Car or Bluetooth check maps its sounds to samples with it)
+        proc.onaudioprocess = (ev) => onChunk(new Float32Array(ev.inputBuffer.getChannelData(0)));
         src.connect(gain); gain.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
         return {
-          rate: ctx.sampleRate, ctx,
+          rate: ctx.sampleRate,
           setGain(v) { gain.gain.value = voiceGainFromSlider(v); },
           close() { proc.onaudioprocess = null; try { src.disconnect(); gain.disconnect(); proc.disconnect(); mute.disconnect(); } catch {} release(); },
         };
@@ -12681,7 +12835,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const t = e.target.closest && e.target.closest('[data-vcb]');
         if (!t) return;
         if (t.dataset.vcb === 'hang') voiceCallHangUp();
-        else if (t.dataset.vcb === 'retry' && voiceCallS.call && typeof voiceCallS.call.retryMic === 'function') voiceCallS.call.retryMic();
+        else if (t.dataset.vcb === 'retry' && voiceCallS.call && typeof voiceCallS.call.retryMic === 'function') { const c = voiceCallS.call; Promise.resolve(c.retryMic()).then((ok) => { if (!ok && voiceCallS.call === c) hubToast('Still no microphone.'); }, () => { if (voiceCallS.call === c) hubToast('Still no microphone.'); }); }
         else if (t.dataset.vcb === 'decide' && voiceCallS.call) voiceCallS.call.decide(t.dataset.id, t.dataset.choice);
       });
       bar.addEventListener('input', (e) => {
@@ -13012,26 +13166,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
     }
 
-    // The samples of a recording that start at `at` (context time): blocks = [{ t: the block's start in context time, d: Float32Array }]. The block that holds
-    // `at` gives the start index (its own start sample + the offset inside it); up to `seconds` of samples follow (fewer when the recording ends sooner).
-    function voiceCarSlice(blocks, rate, at, seconds) {
-      let total = 0, from = -1, pos = 0;
-      for (const b of blocks) { if (b.t <= at + 1e-9) from = pos + Math.max(0, Math.round((at - b.t) * rate)); pos += b.d.length; total = pos; }
-      if (from < 0) from = 0;
-      const n = Math.max(0, Math.min(Math.round(seconds * rate), total - from));
-      const out = new Float32Array(n);
-      let skip = from, w = 0;
-      for (const b of blocks) {
-        if (w >= n) break;
-        if (skip >= b.d.length) { skip -= b.d.length; continue; }
-        const part = b.d.subarray(skip, Math.min(b.d.length, skip + (n - w)));
-        out.set(part, w); w += part.length; skip = 0;
-      }
-      return out;
-    }
-    // Car or Bluetooth check (Settings, Voices, and the chat's voice panel): plays the test sound three times through the speaker on the microphone's own
-    // AudioContext and listens for it coming back; sets the echo guard (and lowers the interrupt sensitivity when the echo is loud). Not during a call.
-    const VOICE_CAR_AT = [0.6, 1.6, 2.6], VOICE_CAR_END = 3.8, VOICE_CAR_SLICE = 1.5;
+    // Car or Bluetooth check (Settings, Voices, and the chat's voice panel): plays the test sound three times through the speaker and listens for it coming
+    // back; sets the echo guard (and lowers the interrupt sensitivity when the echo is loud). Not during a call. The recording, the chirp's reference
+    // channel and the analysis are the library's (voiceCarRecord, voiceCarAnalyse); this page makes the check's own AudioContext inside the tap.
     async function voiceCarCheckRun() {
       if (voiceRoom.active) return;
       if (voiceCallS.call || voiceRec.chatId || voiceRec.busy || voiceRec.guard.pending || voiceTest.mic || voiceTest.guard.pending) { hubToast('The microphone is in use.'); return; }
@@ -13041,31 +13178,27 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const section = sec();
       voiceRoom.active = true;
       for (const b of btns()) b.disabled = true;
-      let mic = null;
-      const nodes = [];
+      let ctx = null, watch = null;
       try {
-        const blocks = [];
-        try { mic = await voiceOpenMic(voiceMicLevelNow(), (d, t) => { blocks.push({ t: Number.isFinite(t) ? t : (mic && mic.ctx ? mic.ctx.currentTime : 0), d }); }); }
-        catch (e) { hubToast(voiceMicError(e)); say(voiceMicError(e)); return; }
-        const ctx = mic.ctx, rate = ctx && ctx.sampleRate ? ctx.sampleRate : mic.rate;
-        if (!ctx || !rate) { say('This browser cannot run the check.'); return; }
+        // Everything up to voiceCarRecord happens before the first await, so the context is made and resumed inside the tap (iOS).
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) { say('This browser cannot run the check.'); return; }
+        ctx = new AC();
+        try { const p = ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch { /* a running context needs no resume */ }
+        const chirp = voiceCarChirp(ctx.sampleRate);
         say('Playing three short test sounds. Stay quiet.');
-        const chirp = voiceCarChirp(rate);
-        const buf = ctx.createBuffer(1, chirp.length, rate);
-        if (buf.copyToChannel) buf.copyToChannel(chirp, 0); else buf.getChannelData(0).set(chirp);
-        const t0 = ctx.currentTime;
-        for (const off of VOICE_CAR_AT) {
-          const src = ctx.createBufferSource();
-          src.buffer = buf; src.connect(ctx.destination); src.start(t0 + off);
-          nodes.push(src);
+        const rec = voiceCarRecord({ ctx, nav: navigator, chirp, micLevel: voiceMicLevelNow(), setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (h) => clearTimeout(h), now: Date.now });   // the Mic level applies as in a call
+        // a closed Settings section or panel, a hidden page or a call starting cancels the recording (a closed panel stays connected: the check goes on)
+        watch = setInterval(() => { if (!section || !section.isConnected || document.hidden || voiceCallS.call) rec.cancel(); }, 100);
+        let got;
+        try { got = await rec.done; }
+        catch (e) {
+          if (e && e.code === 'cancelled') say('Car or Bluetooth check cancelled.');
+          else if (e && e.code === 'audio_not_started') say('The check could not run: the audio did not start. Settings were not changed.');
+          else { hubToast(voiceMicError(e)); say(voiceMicError(e)); }
+          return;
         }
-        const wall = Date.now();
-        while (ctx.currentTime < t0 + VOICE_CAR_END) {
-          if (!section || !section.isConnected || document.hidden) { say('Car or Bluetooth check cancelled.'); return; }   // (a closed panel stays connected: the check goes on)
-          if (Date.now() - wall > 15000) { say('The check could not run: the audio did not start.'); return; }
-          await new Promise(r => setTimeout(r, 50));
-        }
-        const analyses = VOICE_CAR_AT.map((off) => voiceEchoAnalysis(chirp, voiceCarSlice(blocks, rate, t0 + off, VOICE_CAR_SLICE), rate));
+        const analyses = voiceCarAnalyse(got.mic, got.ref, chirp, got.rate);
         const r = voiceCarCheckResult(analyses, { echoHold: voiceEchoHoldNow(), interruptSensitivity: voiceSensNow() });
         const prefs = { ...voicePrefsNow(), echoHold: r.echoHold, interruptSensitivity: r.interruptSensitivity };
         voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
@@ -13080,8 +13213,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       } catch (e) {
         say('The check could not finish: ' + ((e && e.message) || 'unknown error'));
       } finally {
-        for (const n of nodes) { try { n.stop(); } catch { /* not started or ended */ } try { n.disconnect(); } catch { /* gone */ } }
-        if (mic) mic.close();   // the microphone, its context and the nodes: always let go
+        if (watch !== null) clearInterval(watch);
+        if (ctx) { try { const p = ctx.close(); if (p && p.catch) p.catch(() => {}); } catch { /* closed */ } }   // the check's own context: always let go (the library already freed the microphone)
         voiceRoom.active = false;
         for (const b of btns()) b.disabled = false;
       }
