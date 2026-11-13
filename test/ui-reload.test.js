@@ -72,14 +72,16 @@ test('appFreshFetch: a body still arriving holds it until it ends; offline never
   assert.strictEqual(await q, 'timeout');
 });
 
-test('appNavigationWasReload: the navigation entry, the older API, and true when the browser cannot tell', () => {
+test('appNavigationWasReload: the navigation entry, the older API (also when the newer one throws), and false when the browser cannot tell', () => {
   assert.strictEqual(R.appNavigationWasReload({ getEntriesByType: () => [{ type: 'reload' }] }), true);
   assert.strictEqual(R.appNavigationWasReload({ getEntriesByType: () => [{ type: 'navigate' }] }), false);
   assert.strictEqual(R.appNavigationWasReload({ getEntriesByType: () => [{ type: 'back_forward' }] }), false);
   assert.strictEqual(R.appNavigationWasReload({ getEntriesByType: () => [], navigation: { type: 1 } }), true);
   assert.strictEqual(R.appNavigationWasReload({ navigation: { type: 0 } }), false);
-  assert.strictEqual(R.appNavigationWasReload(null), true);
-  assert.strictEqual(R.appNavigationWasReload({ getEntriesByType: () => { throw new Error('x'); } }), true);
+  assert.strictEqual(R.appNavigationWasReload({ getEntriesByType: () => { throw new Error('x'); }, navigation: { type: 1 } }), true);
+  assert.strictEqual(R.appNavigationWasReload(null), false);
+  assert.strictEqual(R.appNavigationWasReload({}), false);
+  assert.strictEqual(R.appNavigationWasReload({ getEntriesByType: () => { throw new Error('x'); } }), false);
 });
 
 function store() { const d = {}; return { d, getItem: (k) => (k in d ? d[k] : null), setItem: (k, v) => { d[k] = String(v); }, removeItem: (k) => { delete d[k]; } }; }
@@ -181,4 +183,20 @@ test('reloader: failing questions(), prepare() or go() do not throw out of the b
   const r = R.createAppReloader({ questions: () => { throw new Error('x'); }, prepare: () => { throw new Error('p'); }, go: () => { throw new Error('y'); }, setTimer: () => 0 });
   assert.strictEqual(r.reload(), true);
   await tick();
+});
+
+test('reloader: a confirm that throws counts as Cancel, at the press and after the wait, and never leaves the button stuck', async () => {
+  let goes = 0;
+  const r = R.createAppReloader({ questions: () => ['q'], confirm: () => { throw new Error('dialogs blocked'); }, go: () => goes++, setTimer: () => 0 });
+  assert.strictEqual(r.reload(), false);
+  assert.strictEqual(r.busy(), false);
+  let qs = [], endPrep = null; const busy = [];
+  const r2 = R.createAppReloader({ questions: () => qs, confirm: () => { throw new Error('dialogs blocked'); }, prepare: () => new Promise(res => { endPrep = res; }), go: () => goes++, onBusy: (b) => busy.push(b), setTimer: () => 0 });
+  assert.strictEqual(r2.reload(), true);
+  await tick();
+  qs = ['late'];
+  endPrep('done'); await tick();
+  assert.strictEqual(goes, 0);
+  assert.strictEqual(r2.busy(), false, 'not stuck');
+  assert.deepStrictEqual(busy, [true, false]);
 });

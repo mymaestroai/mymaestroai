@@ -238,9 +238,11 @@ function appNavigationWasReload(perf) {
   try {
     const nav = perf && typeof perf.getEntriesByType === 'function' ? perf.getEntriesByType('navigation') : null;
     if (nav && nav[0] && typeof nav[0].type === 'string') return nav[0].type === 'reload';
+  } catch { /* try the older API */ }
+  try {
     if (perf && perf.navigation && typeof perf.navigation.type === 'number') return perf.navigation.type === 1;
   } catch { /* cannot tell */ }
-  return true;
+  return false;
 }
 function appReloadStashClear(storage) {
   try { storage.removeItem(APP_RELOAD_STASH_KEY); } catch { /* nothing to clear */ }
@@ -263,16 +265,17 @@ function appReloadStashTake(storage, now, maxAgeMs = 60000) {
 function createAppReloader({ questions = () => [], confirm: ask = () => true, prepare = () => null, go, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
   let busy = false, attempt = 0;
   const qsNow = () => { try { return questions() || []; } catch { return []; } };
+  const yes = (q) => { try { return !!ask(q); } catch { return false; } };   // a dialog that cannot open counts as Cancel
   const end = (my) => { if (my !== attempt || !busy) return; busy = false; try { onBusy(false); } catch { /* paint only */ } };
   function reload() {
     if (busy) return false;
     const asked = new Set();
-    for (const q of qsNow()) { if (!ask(q)) return false; asked.add(q); }
+    for (const q of qsNow()) { if (!yes(q)) return false; asked.add(q); }
     busy = true;
     const my = ++attempt;
     try { onBusy(true); } catch { /* paint only */ }
     Promise.resolve().then(prepare).catch(() => null).then(() => {
-      for (const q of qsNow()) if (!asked.has(q) && !ask(q)) { end(my); return; }
+      for (const q of qsNow()) if (!asked.has(q) && !yes(q)) { end(my); return; }
       try { go(); } catch { /* the page stays */ }
       setTimer(() => end(my), busyMs);
     });

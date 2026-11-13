@@ -239,8 +239,11 @@ test('a pageshow with persisted true removes the pagehide listener; persisted fa
   assert.strictEqual(p.pagehideCount(), 1);
   p.firePageshow(false);
   assert.strictEqual(p.pagehideCount(), 1, 'a normal pageshow keeps it');
+  p.firePagehide();
+  assert.strictEqual(p.storage._m.size, 1, 'left for the back-forward cache: the hand-over is written');
   p.firePageshow(true);
   assert.strictEqual(p.pagehideCount(), 0, 'back from the back-forward cache: removed');
+  assert.strictEqual(p.storage._m.size, 0, 'and the earlier hand-over is cleared');
   p.firePagehide();
   assert.strictEqual(p.storage._m.size, 0, 'nothing is written any more');
 });
