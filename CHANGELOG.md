@@ -6,9 +6,9 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
-- **A backup no longer fails just because Docker isn't running.** On a computer where Docker is installed but stopped (Docker Desktop not open), the backup stopped with "The agents' boxes could not be checked … Is Docker running?", even with no agent boxes at all. When the local Docker isn't running, no box can be running, so the backup now goes ahead with nothing to pause. Other Docker problems still stop it, and now say what to do: permission denied on Docker's socket, a remote Docker host that doesn't answer, or Docker not answering in time. (`lib/backup/create.js`)
+- **Context compression accepts a brief the agent just updated.** When an agent asks to compress, your Maestro can use a working brief written within two minutes before that request, provided it belongs to the current session. Compression prompts also require a fresh write, and failures explain why the session was kept and when it can retry.
 
-- **gog's Google sign-ins are now guarded in the folder gog really uses.** My Maestro AI was guarding `~/.config/gog`, a folder gog doesn't use. Its real folder is `~/.config/gogcli` (`$XDG_CONFIG_HOME/gogcli` when that's set, `~/Library/Application Support/gogcli` on a Mac). It's now treated like your other secrets, for agents reading it and for agents changing it, and the security check lists it with your personal credentials.
+- **A backup no longer fails just because Docker isn't running.** On a computer where Docker is installed but stopped (Docker Desktop not open), the backup stopped with "The agents' boxes could not be checked … Is Docker running?", even with no agent boxes at all. When the local Docker isn't running, no box can be running, so the backup now goes ahead with nothing to pause. Other Docker problems still stop it, and now say what to do: permission denied on Docker's socket, a remote Docker host that doesn't answer, or Docker not answering in time. (`lib/backup/create.js`)
 
 ## [5.10.0] - 2026-11-11
 
