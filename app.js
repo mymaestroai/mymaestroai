@@ -10719,15 +10719,25 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
       // The first speech-like frame (vad-web onSpeechStart): the person may be starting to talk. Nothing new is started over
       // them, and an answer belongs to the announcement that was pending at this moment. A false start ends in onMisfire.
+      // An answer belongs to an announcement only once its line started playing (talking over it to answer is fine) or was
+      // read out (its answer timer runs from then); a line still waiting in the queue was not heard yet.
+      const heardAnnouncement = () => (pendingAnnounce && (pendingAnnounce.timer !== null || (speaking && current && current.kind === 'announce')) ? pendingAnnounce.id : null);
+      // A first frame that is followed by nothing (the audio stopped: an incoming phone call, a suspended audio context)
+      // must not leave the call deaf and mute: after 4 s without real speech, a misfire or an end, it is let go.
+      let beginTimer = null;
+      const clearBegin = () => { if (beginTimer !== null) { quiet(() => d.clearTimer(beginTimer)); beginTimer = null; } };
       function onSpeechBegin() {
         if (ended || personSpeaking) return;
         personSpeaking = true;
-        speechAnn = pendingAnnounce ? pendingAnnounce.id : null;
+        speechAnn = heardAnnouncement();
+        clearBegin();
+        beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking && state !== 'hearing') { personSpeaking = false; speechAnn = null; settle(); } }, 4000);
       }
       // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
       function onSpeechStart() {
         if (ended) return;
-        if (!personSpeaking) speechAnn = pendingAnnounce ? pendingAnnounce.id : null;   // no onSpeechBegin came first
+        clearBegin();
+        if (!personSpeaking) speechAnn = heardAnnouncement();   // no onSpeechBegin came first
         personSpeaking = true;
         if (speaking || queue.length) {
           const n = (current ? [current] : []).concat(queue).filter(i => i.kind === 'reply').length;
@@ -10741,6 +10751,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
       function onMisfire() {
         if (ended) return;
+        clearBegin();
         personSpeaking = false; speechAnn = null;
         const rec = cutRec; cutRec = null;
         if (rec) {
@@ -10752,6 +10763,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       function onSpeechEnd(audio) {
         if (ended) return Promise.resolve();
+        clearBegin();
         personSpeaking = false; speechEndAt = now(); cutRec = null;
         const ann = speechAnn; speechAnn = null;
         sttPending++;

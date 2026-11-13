@@ -837,6 +837,17 @@ test('an answer that began before an announcement is not taken as its answer (ca
   assert.deepStrictEqual(h.decisions, [], 'the earlier "yes" is not a decision about the item');
 });
 
+test('a first speech frame followed by nothing (audio interrupted) does not leave the call deaf and mute', async () => {
+  const h = harness();
+  assert.strictEqual(await h.call.start(), true);
+  h.vadHandlers.onSpeechBegin();
+  h.call.onHeld({ id: 'y', kind: 'schedule', label: 'Weekly check' }, false);
+  await h.advance(2000);
+  assert.ok(!h.spoken.some(s => s.startsWith('Weekly check')), 'held back while the person may be speaking');
+  await h.advance(4000);
+  assert.ok(h.spoken.some(s => s.startsWith('Weekly check')), 'announced once the stuck start is let go');
+});
+
 test('a call whose start failed never sends an end without a call id', async () => {
   const h = harness();
   const ends = [];
