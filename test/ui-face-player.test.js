@@ -1031,6 +1031,20 @@ test('portrait: a resize between portrait and landscape re-lays the stage once, 
   near(sq.p.getInfo().stage.picture.scale, 600 / 896, 'the 70 percent box width fits the square view'); sq.p.destroy();
 });
 
+test('resize(): a player built in a detached host (measured the 640x360 fallback) is laid out for its real size at once, without the ResizeObserver callback', async () => {
+  let fired = 0; const RO = function () { this.observe = () => {}; this.disconnect = () => {}; this.unused = () => { fired++; }; };   // a callback that never comes
+  const w = makeWorld(); w.container.clientWidth = 0; w.container.clientHeight = 0;   // a detached host: no layout yet
+  const p = w.make({ ResizeObserver: RO }); await p.ready; await w.settle(100);
+  let s = p.getInfo().stage; near(s.w, 640); near(s.h, 360);   // detached: clientWidth/Height 0 -> the fallback size
+  w.container.clientWidth = 1280; w.container.clientHeight = 715;   // the host is now in the page (the call display mounted it)
+  p.resize();
+  s = p.getInfo().stage;
+  near(s.picture.scale, 715 / 720); near(s.h, 715); near(s.y, 0); near(s.picture.x, (1280 - 1280 * 715 / 720) / 2);
+  assert.strictEqual(parseFloat(w.videos[0].style.height), Math.round(720 * 715 / 720 * 100) / 100, 'the clips are laid out for the real size');
+  assert.strictEqual(fired, 0, 'no observer callback was needed');
+  p.destroy(); p.resize();   // destroyed: a no-op, never throws
+});
+
 test('cancelReaction: a mood clip that has not started (waiting for the playing clip, or for the pack) is dropped; one playing finishes; hello and goodbye are kept', async () => {
   const { w, p } = await started(); p.setState('listening'); await w.settle(100);
   p.react('delighted'); await w.settle(100); assert.strictEqual(p.getInfo().clip, 'reaction-delighted-1');

@@ -1074,6 +1074,43 @@ test('pictureReady: false does not open it (ready decides, bounded); a picture t
   assert.strictEqual(d.players[0].destroyed, true, 'the old view was torn down'); assert.strictEqual(d.dom.overlay(), null, 'a stale picture of a switched-away view never opens'); assert.strictEqual(d.display.info().kind, 'none'); d.display.release();
 });
 
+// ── first frame: the overlay enters the page "arming" (transparent, click-through), the player is sized at once, it is revealed two frames later ──
+function withRaf(w) {
+  const r = { q: [], id: 0, cancelled: [] };
+  w.win.requestAnimationFrame = (f) => { const id = ++r.id; r.q.push({ id, f }); return id; };
+  w.win.cancelAnimationFrame = (id) => { r.cancelled.push(id); r.q = r.q.filter(x => x.id !== id); };
+  r.frame = () => { const due = r.q; r.q = []; due.forEach(x => x.f(0)); };
+  w.dom.El.prototype.removeAttribute = function (k) { delete this.attrs[k]; };
+  return r;
+}
+test('first frame: the character overlay is in the page but transparent until two frames after its picture, with the player sized at mount', async () => {
+  const adoptEl = (w) => { const home = new w.dom.El('div'); w.dom.doc.body.appendChild(home); const node = new w.dom.El('div'); home.appendChild(node); return [{ el: node, label: 'Levels' }]; };
+  let w; const opts = { prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true }, adopt: () => adoptEl(w) };
+  w = world(opts); const raf = withRaf(w); w.display.start(); await flushP(); const p = w.players[0];
+  const sized = []; p.resize = () => { const o = w.dom.overlay(); sized.push(!!(o && o.parentNode === w.dom.doc.body && o.attrs['data-ucd-arming'] === '')); };
+  p.resolvePicture(true); await flushP();
+  const o = w.dom.overlay();
+  assert.ok(o && o.parentNode === w.dom.doc.body, 'in the page at once (laid out, its layers composited)');
+  assert.strictEqual(o.attrs['data-ucd-arming'], '', 'but arming: transparent and click-through');
+  assert.deepStrictEqual(sized, [true], 'the player was sized once, in the page, before any frame (no ResizeObserver wait)');
+  assert.strictEqual(w.display.ui.drawer.children.length, 0, 'controls are not moved in while arming');
+  raf.frame(); assert.strictEqual(o.attrs['data-ucd-arming'], '', 'still arming after one frame');
+  raf.frame(); assert.strictEqual(o.attrs['data-ucd-arming'], undefined, 'revealed on the second frame');
+  assert.strictEqual(w.display.ui.drawer.children.length, 1, 'the controls move in at the reveal');
+  assert.strictEqual(raf.q.length, 0); w.display.release();
+  // torn down while arming (back to chat): the frames are cancelled and no mark is left on the reused overlay
+  const h = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); const hr = withRaf(h); h.display.start(); await flushP();
+  h.players[0].resolvePicture(true); await flushP(); const ho = h.dom.overlay(); assert.strictEqual(ho.attrs['data-ucd-arming'], '');
+  h.display.hideToChat(); assert.ok(hr.cancelled.length >= 1, 'the pending frame was cancelled'); assert.strictEqual(ho.attrs['data-ucd-arming'], undefined); assert.strictEqual(hr.q.length, 0);
+  h.display.showView(); await flushP(); h.players[1].resolvePicture(true); await flushP(); hr.frame(); hr.frame();
+  assert.strictEqual(h.dom.overlay().attrs['data-ucd-arming'], undefined, 'shown again: revealed normally'); h.display.release();
+  // the orb (no picture to wait for) and a window without frames keep opening at once
+  const b = world({ prefs: { choice: 'orb' } }); withRaf(b); b.display.start(); await flushP(); assert.strictEqual(b.dom.overlay().attrs['data-ucd-arming'], undefined, 'the orb opens at once'); b.display.release();
+  const n = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); n.display.start(); await flushP();
+  n.players[0].resolvePicture(true); await flushP(); assert.strictEqual(n.dom.overlay().attrs['data-ucd-arming'], undefined, 'no requestAnimationFrame: revealed at once'); n.display.release();
+  assert.ok(/\.ucd-overlay\[data-ucd-arming\]\s*\{[^}]*opacity:\s*0[^}]*pointer-events:\s*none/.test(read('lib/ui-call-display.css')), 'the CSS makes arming transparent and click-through');
+});
+
 // ── hello on a slow start: kept until its clip has arrived (bounded), played out, and still cancelled by a real person ──
 test('hello: a player whose hello clip has not arrived keeps hello past HELLO_MS, up to the bound; it then plays out; plain players keep the old timer', async () => {
   const mk = (extra) => { const info = Object.assign({ ready: true, failed: null, drawable: true, helloWaiting: true, helloPlaying: false }, extra); const w = world({ prefs: { choice: 'pack:owl' }, pack: { info } }); return { w, info }; };
