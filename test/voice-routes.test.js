@@ -220,6 +220,16 @@ test('POST tts: a clean sentence the page already cleaned is passed on as it is 
   t.cleanup();
 });
 
+test('POST tts: a cleaned sentence with an in-word hyphen keeps its number; a flag emoji is still cleaned', async () => {
+  const t = setup();
+  const post = (b) => t.call(fakeReq('POST', '/api/voice/tts', { headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }));
+  assert.strictEqual((await post({ agent: 'maestro', text: '42. A non‐issue.' })).statusCode, 200);
+  assert.strictEqual(t.calls.tts[0].text, '42. A non‐issue.');
+  assert.strictEqual((await post({ agent: 'maestro', text: 'Hello \u{1F1FA}\u{1F1F8} there.' })).statusCode, 200);
+  assert.ok(!/[\u{1F1E6}-\u{1F1FF}]/u.test(t.calls.tts[1].text), t.calls.tts[1].text);
+  t.cleanup();
+});
+
 test('voiceSpeechText is idempotent: cleaning already cleaned text gives the same text (so the server may clean what the page cleaned)', () => {
   const { voiceSpeechText } = require('../lib/ui-voice');
   const replies = [
