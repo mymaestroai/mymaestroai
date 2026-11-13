@@ -18,26 +18,30 @@ const ELEVEN_ID = 'abcDEF1234567890xyz';
 const wav16 = (seconds = 1.5) => cloudMod.wavFromPcm16(Buffer.alloc(Math.round(16000 * 2 * seconds), 1), 16000);
 const pcm24 = (n = 4800) => Buffer.alloc(n * 2, 3);   // 0.2 s of 24 kHz PCM
 
-// A fake fetch: records every call and answers with whatever `respond(url, init)` returns ({status, json|bytes}) or throws.
+// A fake fetch: records every call and answers with a real Response built from whatever `respond(url, init)` returns
+// ({status, json | bytes | badJson | body (a ReadableStream), headers}) or throws.
 function fakeFetch(respond) {
   const calls = [];
   const fn = async (url, init) => {
     calls.push({ url: String(url), init });
     const r = await respond(String(url), init);
     const status = r.status || 200;
-    return { ok: status >= 200 && status < 300, status,
-      json: async () => { if (r.badJson) throw new SyntaxError('Unexpected token'); return r.json; },
-      arrayBuffer: async () => { const b = r.bytes || Buffer.alloc(0); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); } };
+    let body;
+    if (r.body) body = r.body;
+    else if (r.badJson) body = '{not json';
+    else if (r.json !== undefined) body = JSON.stringify(r.json);
+    else body = r.bytes || Buffer.alloc(0);
+    return new Response(status === 204 ? null : body, { status, headers: r.headers || {} });
   };
   fn.calls = calls;
   return fn;
 }
-function makeCloud({ respond, keys = KEYS, rows = [], openaiUrl = 'http://fake-openai.test/v1', throwLedger = false } = {}) {
+function makeCloud({ respond, keys = KEYS, rows = [], openaiUrl = 'http://fake-openai.test/v1', throwLedger = false, timeoutMs } = {}) {
   const fetchImpl = fakeFetch(respond || (() => ({ status: 500, json: {} })));
   const ledger = { record: (r) => { if (throwLedger) throw new Error('db down'); rows.push(r); } };
   let t = 1000;
   const cloud = cloudMod.createCloudVoice({ fetchImpl, getProviderKey: (p) => keys[p] || '', getProviderUrl: (p) => (p === 'openai' ? openaiUrl : ''), getLedger: () => ledger,
-    now: () => (t += 25), bases: { google: 'http://fake-google.test/v1beta', elevenlabs: 'http://fake-eleven.test/v1' } });
+    now: () => (t += 25), ...(timeoutMs ? { timeoutMs } : {}), bases: { google: 'http://fake-google.test/v1beta', elevenlabs: 'http://fake-eleven.test/v1' } });
   return { cloud, fetchImpl, rows };
 }
 const geminiText = (text) => ({ candidates: [{ content: { parts: [{ text }] } }] });
@@ -542,4 +546,189 @@ test('settings: ElevenLabs has an environment key name and reports its key sourc
     if (!s.get().providers?.elevenlabs?.apiKey) assert.strictEqual(s.keySource('elevenlabs'), 'environment');
     assert.ok(!JSON.stringify(s.getForUI().providers.elevenlabs).includes('sk-test-eleven-env'), 'the page sees a hint, never the key');
   } finally { if (before === undefined) delete process.env.ELEVENLABS_API_KEY; else process.env.ELEVENLABS_API_KEY = before; }
+});
+
+// ── review round 1: response caps, audio validation, STT pricing, abort mapping, downgrades, owner, privacy ──
+const MB = 1024 * 1024;
+// A streamed body of n bytes in 256 KiB chunks (counts what was pulled; a cancel is recorded).
+function bigBody(n) {
+  const st = { pulled: 0, cancelled: false };
+  let sent = 0;
+  const body = new ReadableStream({ pull(c) { if (sent >= n) return c.close(); const k = Math.min(262144, n - sent); sent += k; st.pulled += k; c.enqueue(new Uint8Array(k)); }, cancel() { st.cancelled = true; } });
+  return { body, st };
+}
+const hangingBody = (init) => new ReadableStream({ start(c) { init.signal.addEventListener('abort', () => c.error(init.signal.reason || Object.assign(new Error('aborted'), { name: 'AbortError' }))); } });
+function wavWith({ format = 1, channels = 1, rate = 24000, bits = 16, data = Buffer.alloc(4800, 1), declared } = {}) {
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0, 'ascii'); h.writeUInt32LE(36 + data.length, 4); h.write('WAVE', 8, 'ascii'); h.write('fmt ', 12, 'ascii');
+  h.writeUInt32LE(16, 16); h.writeUInt16LE(format, 20); h.writeUInt16LE(channels, 22); h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * channels * bits / 8, 28);
+  h.writeUInt16LE(channels * bits / 8, 32); h.writeUInt16LE(bits, 34); h.write('data', 36, 'ascii'); h.writeUInt32LE(declared === undefined ? data.length : declared, 40);
+  return Buffer.concat([h, data]);
+}
+const reasonOf = async (p) => { try { await p; return 'resolved'; } catch (e) { return e.reason; } };
+
+test('too_large: a cloud audio answer over 8 MB is stopped while streaming (aborted, ledgered ok:false)', async () => {
+  const rows = []; const big = bigBody(9 * MB);
+  const { cloud, fetchImpl } = makeCloud({ rows, respond: () => ({ body: big.body }) });
+  assert.strictEqual(await reasonOf(cloud.tts('helper', 'openai', 'hi', 'coral')), 'too_large');
+  assert.ok(big.st.pulled < 9 * MB, 'it did not read the whole body');
+  assert.strictEqual(fetchImpl.calls[0].init.signal.aborted, true, 'the request was aborted');
+  assert.deepStrictEqual([rows.length, rows[0].ok, rows[0].costUsd], [1, false, 0]);
+  const e = makeCloud({ respond: () => ({ bytes: Buffer.alloc(9 * MB) }) });
+  assert.strictEqual(await reasonOf(e.cloud.tts('helper', 'elevenlabs', 'hi', ELEVEN_ID)), 'too_large');
+});
+
+test('too_large: a content-length over the cap is refused before any byte is read; JSON answers are capped at 1 MB', async () => {
+  const big = bigBody(1);
+  const a = makeCloud({ respond: () => ({ body: big.body, headers: { 'content-length': String(20 * MB) } }) });
+  assert.strictEqual(await reasonOf(a.cloud.tts('helper', 'openai', 'hi', 'coral')), 'too_large');
+  assert.ok(big.st.pulled <= 1, 'the body was not read');
+  const j = makeCloud({ respond: () => ({ body: bigBody(2 * MB).body }) });
+  assert.strictEqual(await reasonOf(j.cloud.stt('helper', 'openai', wav16())), 'too_large');
+  const g = makeCloud({ respond: () => ({ body: bigBody(2 * MB).body }) });
+  assert.strictEqual(await reasonOf(g.cloud.stt('helper', 'google', wav16())), 'too_large');
+});
+
+test('bad_audio: OpenAI WAV must be 16-bit PCM, 1-2 channels, 8-48 kHz, a data chunk that fits, at least 0.05 s', async () => {
+  const cases = {
+    'float format': wavWith({ format: 3 }), '8-bit': wavWith({ bits: 8 }), 'three channels': wavWith({ channels: 3 }), 'rate 4000': wavWith({ rate: 4000 }), 'rate 96000': wavWith({ rate: 96000 }),
+    'shorter than 0.05 s': wavWith({ data: Buffer.alloc(1000) }), 'data size beyond the buffer': wavWith({ declared: 99999 }), 'no data chunk': wavWith().subarray(0, 36), 'not RIFF': Buffer.concat([Buffer.from('JUNK'), wavWith().subarray(4)]),
+    'junk text': Buffer.from('<html>error page that is long enough to pass the old check</html>'),
+  };
+  for (const [name, wav] of Object.entries(cases)) {
+    const rows = []; const { cloud } = makeCloud({ rows, respond: () => ({ bytes: wav }) });
+    assert.strictEqual(await reasonOf(cloud.tts('helper', 'openai', 'hi', 'coral')), 'bad_audio', name);
+    assert.deepStrictEqual([rows[0].ok, rows[0].costUsd], [false, 0], name);
+  }
+  const good = makeCloud({ respond: () => ({ bytes: wavWith({ rate: 24000, channels: 2, data: Buffer.alloc(9600) }) }) });
+  assert.strictEqual((await good.cloud.tts('helper', 'openai', 'hi', 'coral')).sampleRate, 24000);
+});
+
+test('bad_audio: Google inline data must be audio, valid base64, even length, at least 0.05 s; ElevenLabs PCM even and long enough', async () => {
+  const inline = (data, mimeType = 'audio/L16;codec=pcm;rate=24000') => ({ json: { candidates: [{ content: { parts: [{ inlineData: { mimeType, data } }] } }] } });
+  const b64 = (n) => Buffer.alloc(n, 2).toString('base64');
+  const g = {
+    'not audio': inline(b64(4800), 'text/plain'), 'bad base64': inline('!!!not-base64!!!'), 'odd length': inline(Buffer.alloc(4801, 2).toString('base64')),
+    'too short': inline(b64(2000)), 'empty': inline(''), 'no mime at all': inline(b64(4800), ''),
+  };
+  for (const [name, r] of Object.entries(g)) {
+    const rows = []; const { cloud } = makeCloud({ rows, respond: () => r });
+    assert.strictEqual(await reasonOf(cloud.tts('helper', 'google', 'hi', 'Kore')), 'bad_audio', name);
+    assert.strictEqual(rows[0].ok, false, name);
+  }
+  assert.strictEqual((await makeCloud({ respond: () => inline(b64(4800), 'audio/pcm') }).cloud.tts('helper', 'google', 'hi', 'Kore')).sampleRate, 24000);
+  for (const [name, bytes] of Object.entries({ odd: Buffer.alloc(4801), short: Buffer.alloc(2000), empty: Buffer.alloc(0) })) {
+    const rows = []; const { cloud } = makeCloud({ rows, respond: () => ({ bytes }) });
+    assert.strictEqual(await reasonOf(cloud.tts('helper', 'elevenlabs', 'hi', ELEVEN_ID)), 'bad_audio', 'eleven ' + name);
+    assert.strictEqual(rows[0].ok, false);
+  }
+});
+
+test('routes: bad cloud audio falls back to the local engine (X-Voice-Fallback: bad_audio) and the ledger row is ok:false', async () => {
+  const t = setup({ agents: [{ name: 'helper', voice: CLOUD_OPENAI }], respond: () => ({ bytes: Buffer.from('RIFF....WAVEnotreallyawavbutlongenoughtopassthenaivecheck!!!!!!') }) });
+  try {
+    const v = await withLogs(() => t.tts()); assert.strictEqual(v.value.statusCode, 200);
+    assert.strictEqual(v.value.headers['x-voice-engine'], 'local'); assert.strictEqual(v.value.headers['x-voice-fallback'], 'bad_audio');
+    assert.deepStrictEqual([t.rows.length, t.rows[0].ok, t.rows[0].costUsd], [1, false, 0]);
+  } finally { t.cleanup(); }
+});
+
+test('STT cost: priced by the real audio (a lying header rate cannot inflate it) and capped at the 10 MB maximum duration', async () => {
+  const price = cloudMod.PRICES.openai.stt;
+  const lie = wav16(1.5); lie.writeUInt32LE(1, 24);   // claims 1 Hz: the old maths gave about 6.7 hours
+  const rows = []; const a = makeCloud({ rows, respond: () => ({ json: { text: 'x' } }) });
+  await a.cloud.stt('helper', 'openai', lie);
+  assert.ok(rows[0].costUsd <= price * (3 / 60) + 1e-12, 'clamped to 8 kHz at worst: ' + rows[0].costUsd);
+  const lie2 = wav16(1.5); lie2.writeUInt16LE(60000, 22);   // claims 60000 channels
+  await a.cloud.stt('helper', 'openai', lie2);
+  assert.ok(rows[1].costUsd <= price * (3 / 60) + 1e-12 && rows[1].costUsd > 0, String(rows[1].costUsd));
+  const real = await (async () => { await a.cloud.stt('helper', 'openai', wav16(1.5)); return rows[2].costUsd; })();
+  assert.ok(Math.abs(real - price * (1.5 / 60)) < 1e-9, 'an honest 16 kHz file is priced by its length');
+  const huge = cloudMod.wavFromPcm16(Buffer.alloc(10 * MB - 44), 8000);   // 10 MB claiming 8 kHz: 655 s
+  await a.cloud.stt('helper', 'openai', huge);
+  assert.ok(rows[3].costUsd <= price * (10 * MB / 32000 / 60) + 1e-9, 'capped at the 10 MB maximum (16 kHz) duration: ' + rows[3].costUsd);
+  const g = makeCloud({ rows, respond: () => ({ json: geminiText('x') }) });
+  await g.cloud.stt('helper', 'google', lie);
+  assert.ok(rows[4].costUsd <= cloudMod.PRICES.google.stt * (3 / 60) + 1e-12);
+});
+
+test('a timeout while the body is being read is "timeout", not "bad_response"', async () => {
+  const rows = [];
+  const { cloud } = makeCloud({ rows, timeoutMs: 40, respond: (url, init) => ({ body: hangingBody(init) }) });
+  assert.strictEqual(await reasonOf(cloud.stt('helper', 'openai', wav16())), 'timeout');
+  assert.strictEqual(await reasonOf(cloud.tts('helper', 'openai', 'hi', 'coral')), 'timeout');
+  assert.ok(rows.every(r => r.ok === false));
+  const thrower = makeCloud({ respond: () => ({ body: new ReadableStream({ pull() { throw Object.assign(new Error('x'), { name: 'TimeoutError' }); } }) }) });
+  assert.strictEqual(await reasonOf(thrower.cloud.tts('helper', 'openai', 'hi', 'coral')), 'timeout');
+});
+
+test('a caller that left (isCancelled) aborts the cloud request; one that left before the call sends nothing', async () => {
+  let gone = false;
+  const rows = [];
+  const { cloud, fetchImpl } = makeCloud({ rows, respond: (url, init) => { setTimeout(() => { gone = true; }, 20); return { body: hangingBody(init) }; } });
+  assert.strictEqual(await reasonOf(cloud.tts('helper', 'openai', 'hi', 'coral', 1, { isCancelled: () => gone })), 'cancelled');
+  assert.strictEqual(fetchImpl.calls[0].init.signal.aborted, true);
+  assert.strictEqual(rows[0].ok, false);
+  const early = makeCloud({ respond: () => ({ json: { text: 'x' } }) });
+  assert.strictEqual(await reasonOf(early.cloud.stt('helper', 'openai', wav16(), { isCancelled: () => true })), 'cancelled');
+  assert.strictEqual(early.fetchImpl.calls.length, 0);
+});
+
+test('routes: stt and tts hand the route isCancelled to the cloud call', async () => {
+  const t = setup({ agents: [{ name: 'helper', voice: CLOUD_OPENAI }], respond: okResponder });
+  try {
+    const seen = {};
+    t.deps.cloud = { stt: async (a, e, au, o) => { seen.stt = o; return { text: 't', ms: 1, engine: e }; }, tts: async (a, e, tx, v, sp, o) => { seen.tts = o; return { wav: Buffer.from('RIFFxxxxWAVE'), ms: 1, engine: e }; }, keys: () => ({}) };
+    await t.stt(); await t.tts();
+    assert.strictEqual(typeof (seen.stt || {}).isCancelled, 'function', 'stt');
+    assert.strictEqual(typeof (seen.tts || {}).isCancelled, 'function', 'tts');
+    assert.strictEqual(seen.stt.isCancelled(), false);
+  } finally { t.cleanup(); }
+});
+
+test('PATCH voice, kept agent: a downgrade (each engine local or the confirmed one) keeps the confirmation without the owner; a new cloud engine needs the owner', async () => {
+  const h = loadHub({ agents: [{ name: 'helper' }], settings: { autoClassifier: { keepOnBox: ['helper'] } } });
+  const { owner, sam } = twoAdmins(h);
+  await h.ag.updateAgentField('helper', { voice: { stt: 'openai', tts: 'google', cloudVoice: 'Puck', cloudConfirm: true } }, ctxFor(h, owner));
+  const first = h.readJson().find(a => a.name === 'helper').voice;
+  const down = await h.ag.updateAgentField('helper', { voice: { stt: 'local', tts: 'google', cloudVoice: 'Puck' } }, ctxFor(h, sam));
+  assert.strictEqual(down.success, true, down.error);
+  let v = h.readJson().find(a => a.name === 'helper').voice;
+  assert.deepStrictEqual([v.stt, v.tts, v.cloudConfirmedBy, v.cloudConfirmedAt], ['local', 'google', owner.id, first.cloudConfirmedAt]);
+  // the confirmation now covers only google for tts: another provider is a new decision, and so is re-adding openai
+  assert.strictEqual((await h.ag.updateAgentField('helper', { voice: { stt: 'local', tts: 'openai' } }, ctxFor(h, sam))).error, 'owner_confirmation_required');
+  assert.strictEqual((await h.ag.updateAgentField('helper', { voice: { stt: 'openai', tts: 'local' } }, ctxFor(h, sam))).error, 'owner_confirmation_required');
+  // both local clears it
+  assert.strictEqual((await h.ag.updateAgentField('helper', { voice: { stt: 'local', tts: 'local' } }, ctxFor(h, sam))).success, true);
+  v = h.readJson().find(a => a.name === 'helper').voice;
+  assert.deepStrictEqual([v.cloudConfirmedBy, v.cloudConfirmedAt], [undefined, undefined]);
+});
+test('auth.isOwner: in a hub without accounts the signed-in person is the owner; with accounts it is unchanged', () => {
+  const h = loadHub({ agents: [{ name: 'helper' }] });
+  assert.strictEqual(h.auth.hasUsers(), false);
+  assert.strictEqual(h.auth.isOwner({ id: 'legacy', role: 'admin' }), true);
+  assert.strictEqual(h.auth.isOwner(null), false, 'nobody signed in');
+  const { owner, sam } = twoAdmins(h);
+  assert.deepStrictEqual([h.auth.isOwner(owner), h.auth.isOwner(sam), h.auth.isOwner({ id: 'legacy' })], [true, false, false]);
+});
+
+test('PATCH voice, no accounts: the legacy signed-in person (ctx.isOwner) may confirm a cloud engine for a kept agent', async () => {
+  const h = loadHub({ agents: [{ name: 'helper' }], settings: { autoClassifier: { keepOnBox: ['helper'] } } });
+  const legacy = { id: 'legacy', role: 'admin' };
+  const r = await h.ag.updateAgentField('helper', { voice: { stt: 'openai', tts: 'local', cloudConfirm: true } }, ctxFor(h, legacy));
+  assert.strictEqual(r.success, true, r.error);
+  assert.strictEqual(h.readJson().find(a => a.name === 'helper').voice.cloudConfirmedBy, 'legacy');
+});
+
+test('GET /api/agents: cloudConfirmedBy and cloudConfirmedAt are stripped for non-admins, kept for admins', () => {
+  const a = { name: 'helper', voice: { voice: '', stt: 'openai', tts: 'local', cloudConfirmedBy: 'u_owner', cloudConfirmedAt: '2026-01-01T00:00:00.000Z' } };
+  const m = cloudMod.publicAgentVoice(a, false);
+  assert.deepStrictEqual(m.voice, { voice: '', stt: 'openai', tts: 'local' });
+  assert.strictEqual(a.voice.cloudConfirmedBy, 'u_owner', 'the stored agent is not mutated');
+  assert.strictEqual(cloudMod.publicAgentVoice(a, true).voice.cloudConfirmedBy, 'u_owner');
+  assert.deepStrictEqual(cloudMod.publicAgentVoice({ name: 'x' }, false), { name: 'x' });
+  // server.js applies it to GET /api/agents
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const i = src.indexOf("pathname === '/api/agents' && req.method === 'GET'");
+  assert.ok(src.slice(i, i + 1800).includes('publicAgentVoice(a, isAdm)'));
 });

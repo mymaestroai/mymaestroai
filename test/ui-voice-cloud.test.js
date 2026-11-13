@@ -26,7 +26,7 @@ function world({ kept = false, fetchImpl, confirmAnswer = true } = {}) {
     encodeURIComponent,
     fetch: async (url, opts) => { calls.push([url, opts]); return fetchImpl(url, opts); },
   };
-  const f = new Function('ctx', `with (ctx) { ${block}; return { saveAgentVoice, paintVoiceCloud, paintVoiceNotes, set(k, v) { ({ kept: () => voiceKept = v, cloudKeys: () => voiceCloudKeys = v, cfg: () => voiceCfg = v })[k](); } }; }`);
+  const f = new Function('ctx', `with (ctx) { ${block}; return { saveAgentVoice, voiceEngineChanged, paintVoiceCloud, paintVoiceNotes, set(k, v) { ({ kept: () => voiceKept = v, cloudKeys: () => voiceCloudKeys = v, cfg: () => voiceCfg = v, confirmed: () => voiceConfirmed = v })[k](); } }; }`);
   const api = f(ctx);
   api.set('kept', kept);
   return { api, ids, statuses, confirms, calls };
@@ -35,7 +35,7 @@ const okRes = (j, status = 200) => ({ status, ok: status < 400, json: async () =
 
 test('Voice row: engine selects, cloud voice control, labels and the keys line', () => {
   assert.match(as, /<select id="voice-stt" onchange="saveAgentVoice\(\)"[^>]*><option value="local">Local \(free\)<\/option><option value="openai">OpenAI<\/option><option value="google">Google<\/option><\/select>/);
-  assert.match(as, /<select id="voice-tts" onchange="saveAgentVoice\(\)"[^>]*><option value="local">Local \(free\)<\/option><option value="openai">OpenAI<\/option><option value="google">Google<\/option><option value="elevenlabs">ElevenLabs<\/option><\/select>/);
+  assert.match(as, /<select id="voice-tts" onchange="voiceEngineChanged\(\)"[^>]*><option value="local">Local \(free\)<\/option><option value="openai">OpenAI<\/option><option value="google">Google<\/option><option value="elevenlabs">ElevenLabs<\/option><\/select>/);
   assert.ok(as.includes('Speech recognition</label>') && as.includes('>Voice engine</label>'));
   assert.ok(as.includes('Local voice (also used if the cloud voice fails)'));
   assert.ok(as.includes('placeholder="ElevenLabs voice ID"') && as.includes('id="voice-cloud-hint"'));
@@ -131,6 +131,89 @@ test('ElevenLabs needs a valid voice id before anything is sent', async () => {
   w.ids['voice-tts'].value = 'elevenlabs'; w.ids['voice-cloud-id'].value = ' abcdefghij12 ';
   await w.api.saveAgentVoice();
   assert.strictEqual(JSON.parse(w.calls[0][1].body).voice.cloudVoice, 'abcdefghij12');
+});
+
+const sent = (w, i = 0) => JSON.parse(w.calls[i][1].body).voice;
+
+test('engine change from local to ElevenLabs shows the ID field and waits; a valid ID then saves', async () => {
+  const w = world({ fetchImpl: async () => okRes({ success: true }) });
+  w.ids['voice-tts'].value = 'elevenlabs';
+  await w.api.voiceEngineChanged();
+  assert.strictEqual(w.ids['voice-cloud-row'].style.display, 'flex');
+  assert.strictEqual(w.ids['voice-cloud-id'].style.display, '');
+  assert.strictEqual(w.ids['voice-cloud-select'].style.display, 'none');
+  assert.strictEqual(w.ids['voice-tts'].value, 'elevenlabs');   // not put back to the saved engine
+  assert.strictEqual(w.calls.length, 0);
+  w.ids['voice-cloud-id'].value = ' abcdefghij12 ';
+  await w.api.saveAgentVoice();   // the ID field saves on change
+  assert.strictEqual(sent(w).tts, 'elevenlabs'); assert.strictEqual(sent(w).cloudVoice, 'abcdefghij12');
+});
+
+test('an invalid ElevenLabs ID keeps the form on ElevenLabs and sends nothing', async () => {
+  const w = world({ fetchImpl: async () => okRes({ success: true }) });
+  w.ids['voice-tts'].value = 'elevenlabs'; w.api.voiceEngineChanged();
+  w.ids['voice-cloud-id'].value = 'short';
+  await w.api.saveAgentVoice();
+  assert.strictEqual(w.calls.length, 0);
+  assert.strictEqual(w.ids['voice-tts'].value, 'elevenlabs');
+  assert.strictEqual(w.ids['voice-cloud-id'].style.display, '');
+});
+
+test('engine change local -> OpenAI shows the select with coral and saves at once', async () => {
+  const w = world({ fetchImpl: async () => okRes({ success: true }) });
+  w.ids['voice-tts'].value = 'openai';
+  await w.api.voiceEngineChanged();
+  assert.strictEqual(w.ids['voice-cloud-row'].style.display, 'flex');
+  assert.strictEqual(w.ids['voice-cloud-select'].style.display, '');
+  assert.strictEqual(w.ids['voice-cloud-select'].value, 'coral');
+  assert.deepStrictEqual(sent(w), { voice: '', stt: 'local', tts: 'openai', cloudVoice: 'coral' });
+});
+
+test('engine change local -> Google saves Kore; OpenAI <-> Google never sends the other provider voice', async () => {
+  const w = world({ fetchImpl: async () => okRes({ success: true }) });
+  w.ids['voice-tts'].value = 'google'; await w.api.voiceEngineChanged();
+  assert.strictEqual(sent(w, 0).cloudVoice, 'Kore');
+  w.ids['voice-cloud-select'].value = 'Puck'; await w.api.saveAgentVoice();
+  assert.strictEqual(sent(w, 1).cloudVoice, 'Puck');
+  w.ids['voice-tts'].value = 'openai'; await w.api.voiceEngineChanged();   // Puck is not an OpenAI voice
+  assert.strictEqual(sent(w, 2).tts, 'openai'); assert.strictEqual(sent(w, 2).cloudVoice, 'coral');
+  w.ids['voice-cloud-select'].value = 'nova'; await w.api.saveAgentVoice();
+  w.ids['voice-tts'].value = 'google'; await w.api.voiceEngineChanged();
+  assert.strictEqual(sent(w, 4).cloudVoice, 'Kore');
+  assert.strictEqual(w.ids['voice-cloud-select'].value, 'Kore');
+});
+
+test('engine change to local hides the cloud row and saves without a cloudVoice', async () => {
+  const w = world({ fetchImpl: async () => okRes({ success: true }) });
+  w.api.set('cfg', { stt: 'local', tts: 'openai', cloudVoice: 'nova' });
+  w.ids['voice-tts'].value = 'local'; await w.api.voiceEngineChanged();
+  assert.strictEqual(w.ids['voice-cloud-row'].style.display, 'none');
+  assert.deepStrictEqual(sent(w), { voice: '', stt: 'local', tts: 'local' });
+});
+
+test('kept agent: a new cloud engine asks once; the confirmed set or a move back to local does not ask again', async () => {
+  const w = world({ kept: true, fetchImpl: async () => okRes({ success: true }) });
+  w.ids['voice-tts'].value = 'openai'; await w.api.voiceEngineChanged();   // new engine: asks
+  assert.strictEqual(w.confirms.length, 1);
+  assert.strictEqual(sent(w, 0).cloudConfirm, true);
+  assert.strictEqual(w.ids['voice-tts'].value, 'openai');
+  w.ids['voice-cloud-select'].value = 'nova'; await w.api.saveAgentVoice();   // same engine, new voice: no dialog
+  assert.strictEqual(w.confirms.length, 1);
+  assert.strictEqual(sent(w, 1).cloudVoice, 'nova');
+  w.ids['voice-stt'].value = 'openai'; await w.api.saveAgentVoice();   // OpenAI already confirmed: no dialog
+  assert.strictEqual(w.confirms.length, 1);
+  w.ids['voice-tts'].value = 'local'; await w.api.voiceEngineChanged();   // one engine moved back to local
+  assert.strictEqual(w.confirms.length, 1);
+  w.ids['voice-tts'].value = 'google'; await w.api.voiceEngineChanged();   // Google is new: asks
+  assert.strictEqual(w.confirms.length, 2);
+});
+
+test('kept agent: cancelling the confirm for a newly chosen engine puts the saved engine back', async () => {
+  const w = world({ kept: true, confirmAnswer: false, fetchImpl: async () => okRes({ success: true }) });
+  w.ids['voice-tts'].value = 'google'; await w.api.voiceEngineChanged();
+  assert.strictEqual(w.calls.length, 0);
+  assert.strictEqual(w.ids['voice-tts'].value, 'local');
+  assert.strictEqual(w.ids['voice-cloud-row'].style.display, 'none');
 });
 
 test('sample: reads X-Voice-Engine and X-Voice-Fallback; record load reads keptOnBox', () => {

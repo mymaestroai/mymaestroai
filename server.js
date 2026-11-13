@@ -927,7 +927,10 @@ async function handleHttpRequest(req, res) {
       const idle = { busy: false, busySince: null, activity: null, pendingQuestion: false };
       // keptOnBox: this agent's data is meant to stay on this computer (medical/legal folders or the keep-on-box list): the voice settings warn before a cloud engine.
       const kept = require('./lib/voice/cloud').keptOnBox;
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...a, keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
+      // Who confirmed a cloud engine, and when, is for admins only.
+      const isAdm = !!req.hubService || access.isAdmin(req.hubUser);
+      const stripVoice = (a) => require('./lib/voice/cloud').publicAgentVoice(a, isAdm);
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {

@@ -210,7 +210,7 @@
   </div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
     <label for="voice-tts" style="margin:0;">Voice engine</label>
-    <select id="voice-tts" onchange="saveAgentVoice()" style="width:auto;"><option value="local">Local (free)</option><option value="openai">OpenAI</option><option value="google">Google</option><option value="elevenlabs">ElevenLabs</option></select>
+    <select id="voice-tts" onchange="voiceEngineChanged()" style="width:auto;"><option value="local">Local (free)</option><option value="openai">OpenAI</option><option value="google">Google</option><option value="elevenlabs">ElevenLabs</option></select>
   </div>
   <div id="voice-cloud-row" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
     <label for="voice-cloud-select" id="voice-cloud-label" style="margin:0;">Cloud voice</label>
@@ -883,10 +883,11 @@
     paintVoiceCloud();
   }
   // The cloud voice control follows the engine picked for speaking; the warning and the keys line follow the engines picked.
-  function paintVoiceCloud() {
+  // keepForm: the owner just picked an engine, so the controls follow the engine now in the select instead of the saved one.
+  function paintVoiceCloud(keepForm) {
     const stt = document.getElementById('voice-stt'), tts = document.getElementById('voice-tts');
     if (!stt || !tts) return;
-    stt.value = voiceCfg.stt; tts.value = voiceCfg.tts;
+    if (!keepForm) { stt.value = voiceCfg.stt; tts.value = voiceCfg.tts; }
     const eng = tts.value, row = document.getElementById('voice-cloud-row'), sel = document.getElementById('voice-cloud-select'), idIn = document.getElementById('voice-cloud-id');
     const list = VOICE_CLOUD_LISTS[eng];
     row.style.display = (list || eng === 'elevenlabs') ? 'flex' : 'none';
@@ -899,7 +900,10 @@
       sel.innerHTML = list.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
       sel.value = cur;
     }
-    if (eng === 'elevenlabs') idIn.value = VOICE_ELEVEN_ID.test(voiceCfg.cloudVoice) ? voiceCfg.cloudVoice : (voiceCfg.cloudVoice || '');
+    if (eng === 'elevenlabs') {
+      if (!keepForm) idIn.value = VOICE_ELEVEN_ID.test(voiceCfg.cloudVoice) ? voiceCfg.cloudVoice : (voiceCfg.cloudVoice || '');
+      else if (!VOICE_ELEVEN_ID.test(idIn.value.trim())) idIn.value = VOICE_ELEVEN_ID.test(voiceCfg.cloudVoice) ? voiceCfg.cloudVoice : '';
+    }
     pageGuard.markLoaded(stt); pageGuard.markLoaded(tts); pageGuard.markLoaded(sel); pageGuard.markLoaded(idIn);
     paintVoiceNotes();
   }
@@ -949,17 +953,31 @@
     else if (VOICE_CLOUD_LISTS[tts]) out.cloudVoice = document.getElementById('voice-cloud-select').value;
     return out;
   }
+  // The Voice engine select changed: show the controls for the new engine first, then save once the form is complete.
+  function voiceEngineChanged() {
+    paintVoiceCloud(true);
+    const body = voiceFormValues();
+    if (body.tts === 'elevenlabs' && !VOICE_ELEVEN_ID.test(body.cloudVoice)) {
+      showStatus('voice-status', 'info', 'Enter the ElevenLabs voice ID (10 to 40 letters and digits) to use ElevenLabs.');
+      return;
+    }
+    return saveAgentVoice();
+  }
   async function saveAgentVoice() {
     const body = voiceFormValues();
     const engines = voiceCloudEngines();
     const revert = () => { paintVoiceCloud(); };
     if (body.tts === 'elevenlabs' && !VOICE_ELEVEN_ID.test(body.cloudVoice)) {
-      paintVoiceCloud();
       showStatus('voice-status', 'error', 'Enter the ElevenLabs voice ID (10 to 40 letters and digits) to use ElevenLabs.');
       return;
     }
     if (voiceKept && engines.length) {
-      if (!confirm(`This agent's data is meant to stay on this computer.\n\nA cloud engine sends what you say, and what the agent says, to ${voiceEngineList(engines)}.\n\nUse it anyway? Only the owner of this Maestro can confirm this.`)) { revert(); return; }
+      // Ask only for a cloud engine the owner has not confirmed yet; the same set, or a move back to local, needs no new dialog.
+      const saved = [voiceCfg.stt, voiceCfg.tts];
+      const added = engines.filter(e => !saved.includes(e));
+      if (added.length || !voiceConfirmed) {
+        if (!confirm(`This agent's data is meant to stay on this computer.\n\nA cloud engine sends what you say, and what the agent says, to ${voiceEngineList(engines)}.\n\nUse it anyway? Only the owner of this Maestro can confirm this.`)) { revert(); return; }
+      }
       body.cloudConfirm = true;
     }
     try {
