@@ -12648,7 +12648,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try {
         d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
           reopenHost: () => { const b = voiceById(`voice-callbar-${chatId}`); return b ? b.querySelector('.vcb-hang') : null; },   // "Show display" goes inside the call bar, beside Hang up
-          onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onChange: () => voiceDispPaintPanel(chatId) });
+          onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(chatId) });
         voiceDisp.cur = d;
         d.start();
       } catch { voiceDisp.cur = null; }
@@ -12668,14 +12668,19 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceDispMood(seq, mood) { voiceDisplayHook('mood', 'seq:' + seq, mood); }
     // The voice panel's display selector, captions switch and the line about an unavailable character.
     async function voiceDispPaintPanel(chatId) {
-      const sel = voiceById(`vp-display-${chatId}`);
-      if (!sel || typeof CallDisplay === 'undefined') return;
+      if (typeof CallDisplay === 'undefined') return;
+      const ids = [`vp-display-${chatId}`, `vcb-display-${chatId}`];   // the voice panel's select and the call bar's
+      const sels = ids.map((i) => voiceById(i)).filter(Boolean);
+      if (!sels.length) return;
       const agent = chats[chatId] && chats[chatId].agent;
       const prefs = CallDisplay.loadDisplayPrefs(localStorage);
       let packs = [], state = 'ready';
       try { packs = await CallDisplay.fetchPacks((...a) => fetch(...a)); } catch { state = 'failed'; }
-      if (voiceById(`vp-display-${chatId}`) !== sel) return;   // the panel was rebuilt meanwhile
-      CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
+      for (const sel of sels) {
+        if (voiceById(sel.id) !== sel) continue;   // rebuilt meanwhile
+        if (sel === document.activeElement) continue;   // an open picker is not refilled
+        CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
+      }
       const cap = voiceById(`vp-captions-${chatId}`); if (cap) cap.checked = !!prefs.captions;
       const note = voiceById(`vp-display-note-${chatId}`);
       if (note) note.textContent = CallDisplay.displayNote(CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, packsState: state }));
@@ -12891,6 +12896,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             const b = barEl('retry'); if (b) b.hidden = !on;
             const m = barEl('micinfo'); if (m) { m.textContent = on ? 'Microphone lost' : (voiceCallS.micLine || ''); m.classList.toggle('vcb-mic-lost', !!on); }
             if (on) for (const i of [barEl('level'), voiceById(`vp-level-${chatId}`)]) if (i) i.style.width = '0%';
+            voiceDisplayHook('micLost', !!on);
           },
           level: (db) => { const w = voiceCallS.micLost ? '0%' : `${voiceMeterPercent(db)}%`; for (const i of [barEl('level'), voiceById(`vp-level-${chatId}`)]) if (i) i.style.width = w; voiceDisplayHook('level', db); },   // the call bar's meter and the voice panel's
           activity: (text) => { const a = barEl('activity'); if (a) a.textContent = text || ''; },   // silent: shown in the call bar only
@@ -12906,6 +12912,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return `<div class="vcb-top"><span class="vcb-state" id="${id('state')}" aria-live="polite">Starting</span>
         <span class="voice-meter" aria-hidden="true"><i id="${id('level')}"></i></span>
         <label class="vcb-dnd"><input type="checkbox" id="${id('dnd')}" data-vcb="dnd"> Do not disturb</label>
+        <label class="vcb-disp">Display <select id="${id('display')}" data-vcb="display" aria-label="Display"><option value="follow">Follow agent default</option></select></label>
         <button type="button" class="vcb-hang" data-vcb="hang" aria-label="Hang up">${VOICE_HANGUP_SVG}<span>Hang up</span></button></div>
         <div class="vcb-sliders">
           <label>Mic level <input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vcb="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
@@ -12932,7 +12939,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const t = e.target.closest && e.target.closest('[data-vcb]');
         if (!t) return;
         if (t.dataset.vcb === 'hang') voiceCallHangUp();
-        else if (t.dataset.vcb === 'retry' && voiceCallS.call && typeof voiceCallS.call.retryMic === 'function') { const c = voiceCallS.call; Promise.resolve(c.retryMic()).then((ok) => { if (!ok && voiceCallS.call === c) hubToast('Still no microphone.'); }, () => { if (voiceCallS.call === c) hubToast('Still no microphone.'); }); }
+        else if (t.dataset.vcb === 'retry') voiceCallRetryMicTap();
         else if (t.dataset.vcb === 'decide' && voiceCallS.call) voiceCallS.call.decide(t.dataset.id, t.dataset.choice);
       });
       bar.addEventListener('input', (e) => {
@@ -12944,7 +12951,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!t.dataset) return;
         if (t.dataset.vcb === 'mic' || t.dataset.vcb === 'sens' || t.dataset.vcb === 'speed' || t.dataset.vcb === 'pause') voiceCallSlider(chatId, t.dataset.vcb, Number(t.value), true);
         else if (t.dataset.vcb === 'dnd' && voiceCallS.call) voiceCallS.call.setMode(t.checked ? 'dnd' : 'announce');
+        else if (t.dataset.vcb === 'display') voiceDispSetChoice(chatId, t.value);
       });
+      voiceDispPaintPanel(chatId);   // the bar's Display select is filled at call start
+    }
+    // The "Try the microphone again" tap (the call bar's button and the display's own retry control).
+    function voiceCallRetryMicTap() {
+      if (!(voiceCallS.call && typeof voiceCallS.call.retryMic === 'function')) return;
+      const c = voiceCallS.call;
+      Promise.resolve(c.retryMic()).then((ok) => { if (!ok && voiceCallS.call === c) hubToast('Still no microphone.'); }, () => { if (voiceCallS.call === c) hubToast('Still no microphone.'); });
     }
     function voiceCallHideBar(chatId) { const b = voiceById(`voice-callbar-${chatId}`); if (b) b.remove(); }
     // A slider of the call bar: live on the VAD at once, saved to the prefs when released.

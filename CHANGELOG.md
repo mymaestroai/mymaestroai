@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **On a hands-free call, the big button now says "Interrupt" and appears only while the agent is thinking or speaking.** The character and orb screens used to show a "Talk" button all the time, which suggested you had to press it to speak; your Maestro is already listening, so you just talk. The button still cuts the reply short when you tap it, Hang up stays in the same place, and if the microphone is lost the button offers "Try the microphone again". A Display choice (follow the agent, none, orb or a character) now sits in the call bar and on the character screen itself, so you can switch during a call with one tap.
+
 - **A finished worker no longer shows as running.** If your Maestro's page missed the moment a temporary worker finished, its row stayed in the Workers list as running, with a timer and a stop button. The page now checks running workers against what your Maestro is really doing every few seconds and on reconnect, marks one that is gone as ended, and shows how it finished when that was recorded. On the computer and on the phone; a reload of the page is enough.
 
 - **Character displays stay visible through connection problems.** Your Maestro keeps the character's picture and speaking beak available while clips recover, and checks pack availability with fewer, smaller requests. A confirmed pack removal returns to chat without ending the call.

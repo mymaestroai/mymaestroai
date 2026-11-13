@@ -33,6 +33,11 @@
 .ucd-bar button { font: inherit; cursor: pointer; border: 1px solid var(--border, #2a313b); border-radius: 14px; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); }
 .ucd-bar .ucd-talk, .ucd-bar .ucd-hang { flex: 1; min-height: 64px; font-size: 20px; font-weight: 700; padding: 0 22px; }
 .ucd-bar .ucd-talk { background: var(--accent, #3d7bff); border-color: transparent; color: #fff; }
+/* the slot button keeps its place so Hang up never moves; off = invisible and inert (ui-call-display.js sets data-ucd-off and data-ucd-mode) */
+.ucd-bar .ucd-talk[data-ucd-off] { visibility: hidden; pointer-events: none; }
+.ucd-bar .ucd-talk[data-ucd-mode="mic"] { font-size: 16px; }
+.ucd-bar .ucd-disp { display: inline-flex; align-items: center; gap: 6px; min-height: 48px; padding: 0 10px; border: 1px solid var(--border, #2a313b); border-radius: 14px; background: var(--bg-input, #222831); font-size: 15px; }
+.ucd-bar .ucd-display { font: inherit; min-height: 36px; max-width: 12em; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); border: 1px solid var(--border, #2a313b); border-radius: 8px; }
 .ucd-bar .ucd-hang { background: var(--error, #e5484d); border-color: transparent; color: #fff; }
 .ucd-bar .ucd-small { min-height: 48px; padding: 0 14px; font-size: 15px; }
 .ucd-bar .ucd-caps[aria-pressed="true"] { outline: 2px solid var(--accent, #3d7bff); }

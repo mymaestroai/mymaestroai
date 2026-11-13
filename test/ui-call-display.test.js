@@ -28,6 +28,7 @@ function fakeDom() {
     remove() { if (this.parentNode) this.parentNode.removeChild(this); }
     setAttribute(k, v) { this.attrs[k] = String(v); }
     getAttribute(k) { return this.attrs[k]; }
+    removeAttribute(k) { delete this.attrs[k]; }
     addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
     contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
     focus() { doc.activeElement = this; }
@@ -77,12 +78,13 @@ function world(o) {
   o = o || {};
   const dom = fakeDom(), clk = clock(), players = [], orbs = [];
   const storage = o.storage || memStorage(o.prefs ? { [CD.DISPLAY_STORE_KEY]: JSON.stringify(o.prefs) } : {});
-  const log = { talk: 0, hang: 0, changes: 0 };
+  const log = { talk: 0, hang: 0, changes: 0, retry: 0 };
   const win = { document: dom.doc, AudioContext: o.AudioContext, createVoiceOrb: undefined };
   if (o.winEvents) { win.added = []; win.removed = []; win.addEventListener = (t, f) => win.added.push([t, f]); win.removeEventListener = (t, f) => win.removed.push([t, f]); }
   const display = CD.createCallDisplay({
     window: win, ResizeObserver: o.ResizeObserver, document: dom.doc, storage, fetch: o.fetch || jsonFetch(PACKS), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout,
     reopenHost: o.reopenHost, needsContext: !!o.needsContext, shared: o.shared, onRoutesLost: o.onRoutesLost, agentDefault: () => (o.agentDefault === undefined ? 'none' : o.agentDefault), adopt: o.adopt,
+    onRetryMic: o.retry ? () => { log.retry++; } : undefined,
     onTalk: () => { log.talk++; }, onHangUp: () => { log.hang++; }, onChange: () => { log.changes++; },
     createVoiceOrb: fakePlayerFactory('orb', orbs, o.orb), createFacePlayer: fakePlayerFactory('pack', players, o.pack),
   });
@@ -555,23 +557,154 @@ test('the real controls move into the view with a placeholder and go back before
   assert.deepStrictEqual(composer.children, before); assert.strictEqual(dom.find('ucd-reopen').length + dom.find('ucd-overlay').length, 0);
 });
 
-test('Talk and Hang up call the page; the view is a labelled modal dialog; focus goes to Talk and returns; Tab stays inside', async () => {
+// Changed with the Interrupt slot: the slot button is off while starting/listening, so the call opens with focus on the overlay root,
+// the click happens in 'speaking', and the Tab wrap goes to the first control that is in the list (Hang up once the slot is off again).
+test('Interrupt and Hang up call the page; the view is a labelled modal dialog; focus goes to the overlay and returns; Tab stays inside', async () => {
   const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
   const opener = new dom.El('button'); dom.doc.body.appendChild(opener); opener.focus();
   w.display.start(); await flushP();
   const ov = dom.overlay();
   assert.strictEqual(ov.attrs.role, 'dialog'); assert.strictEqual(ov.attrs['aria-modal'], 'true'); assert.ok(ov.attrs['aria-label']);
   const talk = dom.find('ucd-talk')[0], hang = dom.find('ucd-hang')[0];
-  assert.strictEqual(dom.doc.activeElement, talk);
+  assert.strictEqual(dom.doc.activeElement, ov, 'the slot is off at start: focus is on the overlay root'); assert.strictEqual(ov.attrs.tabindex, '-1');
+  w.display.setState('speaking');
   talk.click(); assert.strictEqual(w.log.talk, 1); hang.click(); assert.strictEqual(w.log.hang, 1);
   for (const b of ov.all().filter(n => n.tagName === 'BUTTON')) assert.ok(b.attrs['aria-label'], 'every button has a name');
   const ctl = dom.find('ucd-ctl')[0]; assert.strictEqual(ctl.attrs['aria-expanded'], 'false'); ctl.click(); assert.strictEqual(ctl.attrs['aria-expanded'], 'true');
   ctl.click();
   const last = dom.find('ucd-ctl')[0]; last.focus();
   let prevented = false; ov.dispatch('keydown', { key: 'Tab', shiftKey: false, preventDefault() { prevented = true; } });
-  assert.ok(prevented); assert.strictEqual(dom.doc.activeElement, talk, 'wraps to the first control');
+  assert.ok(prevented); assert.strictEqual(dom.doc.activeElement, talk, 'wraps to the first control (Interrupt is in the list while on)');
+  w.display.setState('listening'); dom.find('ucd-ctl')[0].focus(); prevented = false;
+  ov.dispatch('keydown', { key: 'Tab', shiftKey: false, preventDefault() { prevented = true; } });
+  assert.ok(prevented); assert.strictEqual(dom.doc.activeElement, hang, 'the off slot is left out of the Tab list');
   w.display.release(); assert.strictEqual(dom.doc.activeElement, opener, 'focus returns to where it was');
   const status = ov.all().find(n => n.className === 'ucd-status'); assert.strictEqual(status.attrs['aria-live'], 'polite');
+});
+
+// ── the slot button (Interrupt / Try the microphone again / off) and the Display chooser ──
+const slotOf = (dom) => dom.find('ucd-talk')[0];
+const statusOf = (dom) => dom.find('ucd-status')[0].textContent;
+
+test('slot: Interrupt shows only while the agent thinks or speaks; starting, listening, hearing and ended keep the place but are invisible and inert (Orb and character)', async () => {
+  for (const choice of ['orb', 'pack:owl']) {
+    const w = world({ prefs: { choice } }); const { dom } = w;
+    w.display.start(); await flushP();
+    const slot = slotOf(dom);
+    const off = (s) => { assert.strictEqual(slot.attrs['data-ucd-mode'], 'off', choice + ' ' + s); assert.strictEqual(slot.attrs['data-ucd-off'], ''); assert.strictEqual(slot.attrs['aria-hidden'], 'true'); assert.strictEqual(slot.attrs.tabindex, '-1'); assert.strictEqual(w.display.info().talk, 'off'); };
+    const on = (s) => { assert.strictEqual(slot.attrs['data-ucd-mode'], 'interrupt', choice + ' ' + s); assert.strictEqual(slot.textContent, 'Interrupt'); assert.strictEqual(slot.attrs['aria-label'], 'Interrupt the reply'); assert.ok(!('data-ucd-off' in slot.attrs)); assert.ok(!('aria-hidden' in slot.attrs)); assert.ok(!('tabindex' in slot.attrs)); assert.strictEqual(w.display.info().talk, 'interrupt'); };
+    off('starting');
+    w.display.setState('listening'); off('listening');
+    w.display.setState('hearing'); off('hearing');
+    w.display.setState('thinking'); on('thinking');
+    w.display.setState('speaking'); on('speaking');
+    w.display.setState('listening'); off('listening again');
+    w.display.setState('speaking'); on('speaking again');
+    w.display.setState('ended'); off('ended');
+    w.display.release();
+  }
+});
+
+test('slot: the click path is unchanged while Interrupt is on (onTalk once) and the off slot does nothing', async () => {
+  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  w.display.start(); await flushP();
+  w.display.setState('speaking'); slotOf(dom).click(); assert.strictEqual(w.log.talk, 1);
+  w.display.setState('listening'); slotOf(dom).click(); assert.strictEqual(w.log.talk, 1, 'off: a click does nothing');
+  w.display.setState('thinking'); slotOf(dom).click(); assert.strictEqual(w.log.talk, 2);
+  w.display.release();
+});
+
+test('slot: a lost microphone turns the slot into "Try the microphone again" (onRetryMic, never onTalk) and the status says so; back again restores Interrupt', async () => {
+  const w = world({ prefs: { choice: 'orb' }, retry: true }); const { dom } = w;
+  w.display.start(); await flushP();
+  w.display.setState('speaking'); assert.strictEqual(statusOf(dom), 'Speaking');
+  w.display.micLost(true);
+  const slot = slotOf(dom);
+  assert.strictEqual(slot.attrs['data-ucd-mode'], 'mic'); assert.strictEqual(slot.textContent, 'Try the microphone again'); assert.strictEqual(slot.attrs['aria-label'], 'Try the microphone again');
+  assert.ok(!('data-ucd-off' in slot.attrs)); assert.strictEqual(statusOf(dom), 'Microphone lost');
+  assert.deepStrictEqual([w.display.info().talk, w.display.info().micLost], ['mic', true]);
+  slot.click(); assert.strictEqual(w.log.retry, 1); assert.strictEqual(w.log.talk, 0);
+  w.display.micLost(false);
+  assert.strictEqual(slot.attrs['data-ucd-mode'], 'interrupt'); assert.strictEqual(slot.textContent, 'Interrupt'); assert.strictEqual(statusOf(dom), 'Speaking');
+  // listening with the microphone lost: the retry stays offered (the person cannot be heard), the status still says it
+  w.display.setState('listening'); w.display.micLost(true);
+  assert.strictEqual(slot.attrs['data-ucd-mode'], 'mic'); assert.strictEqual(statusOf(dom), 'Microphone lost');
+  w.display.setState('ended'); assert.strictEqual(slot.attrs['data-ucd-mode'], 'off');
+  w.display.release();
+  // without onRetryMic the slot stays the Interrupt button
+  const n = world({ prefs: { choice: 'orb' } }); n.display.start(); await flushP();
+  n.display.setState('speaking'); n.display.micLost(true);
+  assert.strictEqual(slotOf(n.dom).attrs['data-ucd-mode'], 'interrupt'); assert.strictEqual(statusOf(n.dom), 'Microphone lost');
+  slotOf(n.dom).click(); assert.strictEqual(n.log.talk, 1);
+  n.display.release();
+});
+
+test('slot: Hang up never moves: the slot stays in .ucd-main right before it in every state, is never removed and never gets the hidden property', async () => {
+  const w = world({ prefs: { choice: 'pack:owl' }, retry: true }); const { dom } = w;
+  w.display.start(); await flushP();
+  const slot = slotOf(dom), hang = dom.find('ucd-hang')[0], main = slot.parentNode;
+  assert.strictEqual(main.className, 'ucd-main');
+  const check = (s) => { assert.strictEqual(slot.parentNode, main, s); assert.strictEqual(hang.parentNode, main, s); assert.strictEqual(main.children.indexOf(slot), 0, s); assert.strictEqual(main.children.indexOf(hang), 1, s); assert.strictEqual(slot.hidden, false, s); };
+  for (const st of ['starting', 'listening', 'hearing', 'thinking', 'speaking', 'listening']) { w.display.setState(st); check(st); }
+  w.display.micLost(true); check('mic lost'); w.display.micLost(false); check('mic back');
+  w.display.setState('ended'); check('ended');
+  w.display.hangUp(); check('hang-up');
+});
+
+test('slot: when the slot turns off while it has focus, focus moves to the overlay root; at start focus is on the slot only when it is on', async () => {
+  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  w.display.start(); await flushP();
+  const ov = dom.overlay(), slot = slotOf(dom);
+  w.display.setState('speaking'); slot.focus(); assert.strictEqual(dom.doc.activeElement, slot);
+  w.display.setState('listening'); assert.strictEqual(dom.doc.activeElement, ov, 'focus is not left on an invisible button');
+  w.display.setState('thinking'); dom.find('ucd-back')[0].focus(); w.display.setState('listening'); assert.strictEqual(dom.doc.activeElement, dom.find('ucd-back')[0], 'other focus is left alone');
+  // a view built while the call is speaking puts focus on the (on) slot
+  w.display.setState('speaking'); w.display.setChoice('pack:owl'); await flushP();
+  assert.strictEqual(dom.doc.activeElement, slotOf(dom));
+  w.display.release();
+});
+
+test('chooser: a Display select sits first in the view side bar and lists Follow agent default / None / Orb / installed characters', async () => {
+  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  w.display.start(); await flushP();
+  const ui = w.display.ui;
+  assert.ok(ui.disp && ui.disp.tagName === 'SELECT' && ui.disp.className === 'ucd-display'); assert.strictEqual(ui.disp.attrs['aria-label'], 'Display');
+  const label = ui.disp.parentNode; assert.strictEqual(label.tagName, 'LABEL'); assert.strictEqual(label.children[0].textContent, 'Display');
+  const side = dom.find('ucd-side')[0]; assert.strictEqual(side.children[0], label, 'first in the side bar, before Back to chat');
+  assert.ok(label.parentNode === side && side.children[1] === dom.find('ucd-back')[0]);
+  assert.deepStrictEqual(ui.disp.children.map(o => o.value), ['follow', 'none', 'orb', 'pack:owl', 'pack:plain'], 'an Orb call lists the installed characters too');
+  assert.strictEqual(ui.disp.value, 'orb');
+  assert.strictEqual(ui.disp.children[3].textContent, 'Owl <b>x</b>', 'names are text');
+  w.display.release();
+});
+
+test('chooser: changing it applies the choice (None leaves the page and is saved); other changes repaint it; it is not refilled while it has focus', async () => {
+  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  w.display.start(); await flushP();
+  const sel = w.display.ui.disp;
+  w.display.setChoice('pack:plain'); await flushP();
+  assert.strictEqual(w.display.ui.disp.value, 'pack:plain', 'repainted from elsewhere');
+  w.display.setChoice('orb'); await flushP(); assert.strictEqual(sel.value, 'orb');
+  // focused: left alone
+  sel.focus(); const kids = sel.children.slice(); w.display.setChoice('none'); await flushP();
+  assert.ok(sel.children.every((c, i) => c === kids[i]), 'not refilled while it is the active element'); assert.strictEqual(w.display.info().choice, 'none');
+  w.display.setChoice('orb'); await flushP(); dom.find('ucd-back')[0] && dom.doc.body.focus();
+  // a change by the person
+  const s2 = w.display.ui.disp; s2.focus(); dom.doc.activeElement = null; s2.value = 'none'; s2.dispatch('change', {});
+  assert.strictEqual(dom.overlay(), null, 'None: the overlay leaves the page'); assert.strictEqual(JSON.parse(w.storage.getItem(CD.DISPLAY_STORE_KEY)).choice, 'none');
+  w.display.release();
+});
+
+test('chooser: it is disabled by hang-up and is in the Tab list; an Orb call fetches the installed characters once', async () => {
+  let fetches = 0; const base = jsonFetch(PACKS);
+  const w = world({ prefs: { choice: 'orb' }, fetch: async (...a) => { fetches++; return base(...a); } }); const { dom } = w;
+  w.display.start(); await flushP();
+  assert.strictEqual(fetches, 1); assert.strictEqual(w.display.info().packsState, 'ready');
+  const ov = dom.overlay(), sel = w.display.ui.disp;
+  w.display.setState('listening'); dom.find('ucd-hang')[0].focus();
+  ov.dispatch('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} }); assert.notStrictEqual(dom.doc.activeElement, sel, 'Tab does not wrap here: the browser moves on');
+  sel.focus(); ov.dispatch('keydown', { key: 'Tab', shiftKey: true, preventDefault() {} }); assert.strictEqual(dom.doc.activeElement, sel, 'the select is in the list: not first, so Shift+Tab is left to the browser');
+  w.display.hangUp(); assert.ok(sel.disabled);
 });
 
 test('hang-up: the controls return at once, the buttons stop, the character says goodbye for a bounded time; Orb and release have no delay', async () => {

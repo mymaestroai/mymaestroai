@@ -594,6 +594,8 @@
   #cp-held .cp-item-acts button.on { outline: 2px solid var(--accent); }
   #call-panel .cp-dnd { display: flex; align-items: center; gap: 10px; min-height: 48px; }
   #call-panel .cp-dnd input { width: 26px; height: 26px; accent-color: var(--accent, #3d7bff); flex: none; }
+  #call-panel .cp-disp { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; font-size: 16px; }
+  #call-panel .cp-disp select { flex: 1; max-width: 60%; min-height: 44px; font-size: 16px; border-radius: 10px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); padding: 0 8px; }
   #call-panel .cp-actions { display: flex; gap: 8px; }
   #call-panel .cp-actions button { min-height: 52px; border-radius: 12px; font-size: 16px; font-weight: 600; background: var(--border); color: var(--text); padding: 0 16px; }
   #call-panel .cp-actions .cp-hang { flex: 1; background: var(--error, #e5484d); color: #fff; display: flex; align-items: center; justify-content: center; gap: 8px; }
@@ -754,6 +756,7 @@
       <button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Try the microphone again</button>
       <div id="cp-held"></div>
       <label class="cp-dnd"><input type="checkbox" id="cp-dnd" role="switch"> <span>Do not disturb</span></label>
+      <label class="cp-disp" for="cp-display"><span>Display</span><select id="cp-display"><option value="follow">Follow agent default</option></select></label>
       <div class="cp-actions">
         <button type="button" id="cp-levels" class="cp-levels">Levels</button>
         <button type="button" id="cp-hangup" class="cp-hang" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>

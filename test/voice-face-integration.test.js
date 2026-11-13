@@ -77,7 +77,7 @@ function desktop(o) {
   const voicePlay = { token: 1, ctx, source: null, btn: null };
   const stubs = {
     window: win, document: doc, localStorage: storage, fetch: o.fetch || facesFetch(PACKS), AGENTS: o.agents || [{ name: 'bob', callDisplay: 'none' }], chats: { c1: { agent: 'bob' } },
-    voiceById: (id) => doc.getElementById(id), voiceCallS: S, voiceCallHangUp: () => { log.hang++; }, voicePopToggle: () => { log.popOpened++; pop.hidden = false; }, voicePopClose: () => { log.popClosed++; pop.hidden = true; },
+    voiceById: (id) => doc.getElementById(id), voiceCallS: S, voiceCallRetryMicTap: () => {}, /* app.js already passes it as onRetryMic: the glue needs the name */ voiceCallHangUp: () => { log.hang++; }, voicePopToggle: () => { log.popOpened++; pop.hidden = false; }, voicePopClose: () => { log.popClosed++; pop.hidden = true; },
     CallDisplay: CD, voicePlay,
     voiceFetchTts: async () => new ArrayBuffer(8), voiceSpeedNow: () => 1, voiceWaitLocalVoice: async () => ({ lang: 'en' }), hubToast() {}, voiceOfflineHint: '', voicePlayState() {},
     SpeechSynthesisUtterance: function (t) { this.text = t; }, setTimeout, clearTimeout, Promise, voiceCallRunning: () => false, hubOriginLabel: () => '', voiceSentences: (t) => [t], voiceSpeechText: (t) => t,
@@ -194,6 +194,7 @@ test('desktop: Talk goes through the controller entry points and a silent microp
   const wrapped = d.api.voiceDispVad(vad); const handlers = { onSpeechBegin() { seen.push('begin'); }, onSpeechEnd() { seen.push('end'); }, onMisfire() {}, onSpeechStart() {}, onFrame() {} };
   wrapped.start(handlers);
   assert.notStrictEqual(seen[0], handlers, 'the page hands the VAD the floor-wrapped handlers'); seen[0].onSpeechBegin(); assert.strictEqual(seen[1], 'begin');
+  d.api.voiceDisp.cur.setState('speaking');   // the slot button is the Interrupt button now: it exists only while the agent thinks or speaks
   d.doc.find('ucd-talk')[0].click(); assert.deepStrictEqual(d.calls, ['onSpeechStart']);
   assert.strictEqual(d.S.call.state, 'hearing');
   assert.strictEqual(typeof wrapped.setPlaybackActive, 'function');
@@ -245,7 +246,7 @@ function phone(o) {
     window: win, document: doc, localStorage: storage, fetch: facesFetch(PACKS), agents: o.agents || [{ name: 'bob', callDisplay: 'none' }], current: 'bob', $: (id) => doc.getElementById(id),
     CallDisplay: CD, voicePlay, URL: URLs, Audio, voiceOn: () => true, api: async () => ({ ok: true }), toast() {},
     voiceSpeedNow: () => 1, voiceWaitLocalVoice: async () => ({ lang: 'en' }), SpeechSynthesisUtterance: function (t) { this.text = t; }, voicePanelPaint() { state.painted++; },
-    voiceCallHangUp: () => { state.hung++; }, originLabel: () => '', setTimeout, clearTimeout, Promise, Blob: function Blob() {}, Float32Array, voiceEncodeWav: () => new Uint8Array(1),
+    voiceCallRetryMicTap: () => {}, /* mobile.js already passes it as onRetryMic: the glue needs the name */ voiceCallHangUp: () => { state.hung++; }, originLabel: () => '', setTimeout, clearTimeout, Promise, Blob: function Blob() {}, Float32Array, voiceEncodeWav: () => new Uint8Array(1),
   };
   const names = Object.keys(stubs);
   const glue = between(mob, 'const voiceDisp = {', 'function voiceCallPaintState(');
@@ -327,6 +328,7 @@ test('phone: moods once per turn from the stream or the hub event; facePack only
   assert.deepStrictEqual(pl.all('react'), [], 'queued until the reply ends');
   p.api.voiceDisplayHook('reply', 'end', 'seq:1');
   assert.deepStrictEqual(pl.all('react'), ['proud']);
+  p.api.voiceDisp.cur.setState('thinking');   // the slot button is the Interrupt button now: it exists only while the agent thinks or speaks
   p.doc.find('ucd-talk')[0].click(); assert.deepStrictEqual(p.vc.calls, ['onSpeechStart']);
   p.doc.find('ucd-back')[0].click(); assert.deepStrictEqual(p.api.voiceFacePackBody(), {}, 'hidden character: no tag request');
   p.api.voiceDispEnd(false); p.api.voiceCallTurnMood({ agent: 'bob', turnId: 't1', mood: 'curious' }); assert.deepStrictEqual(pl.all('react'), ['proud']);

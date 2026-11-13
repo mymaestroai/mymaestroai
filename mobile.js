@@ -6435,7 +6435,7 @@ function voiceDispBegin(vc) {
   try {
     d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), needsContext: true, shared: voiceDisp.shared, onRoutesLost: voiceDispRoutesLost, agentDefault: () => voiceDispAgentDefault(vc.agent), adopt: voiceDispAdopt,
       reopenHost: () => $('cp-hangup'),   // "Show display" goes inside the call panel, beside Hang up
-      onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onChange: () => voiceDispPaintPanel() });
+      onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel() });
     voiceDisp.cur = d;
     d.start();   // synchronous: the audio context is made and resumed inside the tap that started the call
   } catch { voiceDisp.cur = null; }
@@ -6454,12 +6454,12 @@ function voiceDispEnd(goodbye) {
 function voiceDispMood(seq, mood) { voiceDisplayHook('mood', 'seq:' + seq, mood); }   // once per turn, whichever of the chat stream and the hub event comes first
 function voiceCallSseMood(rec, mood) { const vc = voiceCall; if (vc && rec && rec.agent === vc.agent) voiceDispMood(vc.sendSeq, mood); }
 async function voiceDispPaintPanel() {
-  const sel = $('vp-display');
-  if (!sel || typeof CallDisplay === 'undefined') return;
+  const sels = [$('vp-display'), $('cp-display')].filter(Boolean);   // the voice sheet's select and the call panel's
+  if (!sels.length || typeof CallDisplay === 'undefined') return;
   const prefs = CallDisplay.loadDisplayPrefs(localStorage);
   let packs = [], state = 'ready';
   try { packs = await CallDisplay.fetchPacks((...a) => fetch(...a)); } catch { state = 'failed'; }
-  if (document.activeElement !== sel) CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
+  for (const sel of sels) if (document.activeElement !== sel) CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
   const cap = $('vp-captions'); if (cap) cap.checked = !!prefs.captions;
   const note = $('vp-display-note');
   if (note) note.textContent = CallDisplay.displayNote(CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(current), packs, packsState: state }));
@@ -6752,6 +6752,7 @@ function voiceCallDeps(vc) {
         const b = $('cp-retry-mic'); if (b) b.hidden = !on;
         const m = $('cp-mic'); if (m) { m.textContent = on ? 'Microphone lost' : (vc.micInfo ? voiceMicLine(vc.micInfo) : ''); m.classList.toggle('cp-mic-lost', !!on); }
         if (on) voiceCallPaintMeter(-Infinity);
+        if (typeof voiceDisplayHook === 'function') voiceDisplayHook('micLost', !!on);
       },
       state: (name) => { if (voiceCall !== vc) return; voiceCallPaintState(name); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('setState', name); if (name === 'ended' && !vc.hangingUp) voiceCallTeardown(vc); },
       thinkingPulse: (ev) => { if (voiceCall === vc && typeof voiceDisplayHook === 'function') voiceDisplayHook('thinkingPulse', ev); },
@@ -6790,16 +6791,22 @@ function voiceCallStart() {
   try { window.__voiceBt = { keepAliveRunning: () => !!(vc.keepAlive && vc.keepAlive.running), micInfo: () => vc.micInfo || null, micLost: () => !!vc.micLostOn, echoHold: () => voicePrefsNow().echoHold }; } catch { /* a test hook only */ }
   voiceMediaSession(vc, true);   // Android Chrome: a playing media session is what lets a call go on while the page is hidden
   vc.beatTimer = setInterval(voiceCallBeat, 1000);
-  voiceCallPanel(true); voiceCallPaintState('starting'); voiceMicPaint();
+  voiceCallPanel(true); voiceCallPaintState('starting'); voiceMicPaint(); if (typeof voiceDispPaintPanel === 'function') voiceDispPaintPanel();   // the Display select is filled at call start
   if (typeof voiceDispBegin === 'function') voiceDispBegin(vc);   // synchronous, still inside the tap
   const bail = () => { if (voiceCall === vc) voiceCallTeardown(vc); };
   Promise.resolve(vc.call.start()).then((ok) => { if (!ok) bail(); }, bail);
   voiceWakeAcquire(vc);
 }
+// The "Try the microphone again" tap (the panel's button and the display's own retry control).
+function voiceCallRetryMicTap() {
+  const vc = voiceCall;
+  if (vc && vc.call && typeof vc.call.retryMic === 'function') Promise.resolve(vc.call.retryMic()).then((ok) => { if (!ok && voiceCall === vc) toast('Still no microphone.'); }, () => { if (voiceCall === vc) toast('Still no microphone.'); });
+}
 function voiceCallWire() {   // the panel's own buttons
   $('cp-hangup')?.addEventListener('click', () => voiceCallHangUp());
   $('cp-levels')?.addEventListener('click', () => openVoiceSheet());
-  $('cp-retry-mic')?.addEventListener('click', () => { const vc = voiceCall; if (vc && vc.call && typeof vc.call.retryMic === 'function') Promise.resolve(vc.call.retryMic()).then((ok) => { if (!ok && voiceCall === vc) toast('Still no microphone.'); }, () => { if (voiceCall === vc) toast('Still no microphone.'); }); });   // the call is not ended: the microphone is asked for again
+  $('cp-retry-mic')?.addEventListener('click', () => { const vc = voiceCall; if (vc && vc.call && typeof vc.call.retryMic === 'function') Promise.resolve(vc.call.retryMic()).then((ok) => { if (!ok && voiceCall === vc) toast('Still no microphone.'); }, () => { if (voiceCall === vc) toast('Still no microphone.'); }); });   // the call is not ended: the microphone is asked for again (same as voiceCallRetryMicTap; kept inline because the page tests cut this function out on its own)
+  $('cp-display')?.addEventListener('change', (e) => voiceDispSetChoice(e.target.value));
   voicePanelWire();   // the chat's own voice panel, the mode chip and the "call ended" bar
   $('cp-dnd')?.addEventListener('change', (e) => { if (voiceCall) voiceCall.call.setMode(e.target.checked ? 'dnd' : 'announce'); });
   $('cp-held')?.addEventListener('click', (e) => {
