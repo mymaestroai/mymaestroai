@@ -188,6 +188,82 @@ test('faces routes: asset and list answer, then 404 and an empty list right afte
   assert.deepStrictEqual(JSON.parse((await call(s2.home, '/api/faces')).body.toString()).packs, []);
 });
 
+test('first-ever archive mkdir: EEXIST from another process is tolerated only when the folder is secure', () => {
+  const realMkdir = fs.mkdirSync;
+  const raced = (home, make) => {
+    const arch = path.join(home, 'faces-removed');
+    fs.mkdirSync = function (p, ...rest) {
+      if (p === arch) { fs.mkdirSync = realMkdir; make(arch); const e = new Error('EEXIST: file already exists'); e.code = 'EEXIST'; throw e; }
+      return realMkdir.call(fs, p, ...rest);
+    };
+  };
+  try {
+    // the other process made a secure folder: carry on and archive into it
+    let s = setup();
+    raced(s.home, (a) => { realMkdir(a, { mode: 0o700 }); fs.chmodSync(a, 0o700); });
+    const r = packs.removePack('bird', { home: s.home, now: NOW });
+    assert.strictEqual(fs.mkdirSync, realMkdir);
+    assert.ok(fs.existsSync(path.join(r.to, 'manifest.json')));
+    assert.strictEqual(fs.existsSync(path.join(s.home, 'faces', 'bird')), false);
+
+    // the other process made an insecure folder: refused, nothing moved, permissions untouched
+    s = setup();
+    raced(s.home, (a) => { realMkdir(a); fs.chmodSync(a, 0o755); });
+    assert.throws(() => packs.removePack('bird', { home: s.home, now: NOW }), /changed or is not mode 0700/);
+    assert.ok(fs.existsSync(path.join(s.home, 'faces', 'bird', 'manifest.json')));
+    assert.strictEqual(fs.statSync(path.join(s.home, 'faces-removed')).mode & 0o777, 0o755);
+    assert.deepStrictEqual(fs.readdirSync(path.join(s.home, 'faces-removed')), []);
+
+    // the other process made a symlink: refused, never followed
+    s = setup();
+    const target = path.join(s.root, 'elsewhere'); realMkdir(target);
+    raced(s.home, (a) => fs.symlinkSync(target, a));
+    assert.throws(() => packs.removePack('bird', { home: s.home, now: NOW }), /changed or is not mode 0700/);
+    assert.deepStrictEqual(fs.readdirSync(target), []);
+    assert.ok(fs.existsSync(path.join(s.home, 'faces', 'bird')));
+
+    // any other mkdir error is still an error
+    s = setup();
+    fs.mkdirSync = function (p, ...rest) {
+      if (p === path.join(s.home, 'faces-removed')) { fs.mkdirSync = realMkdir; const e = new Error('EACCES'); e.code = 'EACCES'; throw e; }
+      return realMkdir.call(fs, p, ...rest);
+    };
+    assert.throws(() => packs.removePack('bird', { home: s.home, now: NOW }), /EACCES/);
+    assert.ok(fs.existsSync(path.join(s.home, 'faces', 'bird')));
+  } finally { fs.mkdirSync = realMkdir; }
+});
+
+test('Windows: remove refuses plainly before any change', () => {
+  const { home } = setup();
+  for (const dryRun of [false, true]) {
+    assert.throws(() => packs.removePack('bird', { home, now: NOW, dryRun, platform: 'win32' }), /not supported on Windows; nothing was changed/);
+  }
+  assert.ok(fs.existsSync(path.join(home, 'faces', 'bird', 'manifest.json')));
+  assert.strictEqual(fs.existsSync(path.join(home, 'faces-removed')), false);
+  assert.ok(packs.getPack('bird', { home }));
+});
+
+test('two processes: a cached pack, list and verified open stop at once after ANOTHER process renames the folder', () => {
+  const { home } = setup();
+  const pack = packs.getPack('bird', { home });
+  const f = pack.files['web/idle-one.mp4'];
+  const o = packs.openVerified(pack, f); assert.ok(o); fs.closeSync(o.fd);
+  assert.deepStrictEqual(packs.listPacks({ home }).map(p => p.id), ['bird']);
+  const other = (from, to) => spawnSync(process.execPath, ['-e', 'require("fs").renameSync(process.argv[1], process.argv[2])', from, to], { encoding: 'utf8', timeout: 30000 });
+  const live = path.join(home, 'faces', 'bird'), away = path.join(home, 'bird-away');
+  let r = other(live, away);
+  assert.strictEqual(r.status, 0, r.stderr);
+  // no clearCache, no restart, same process cache
+  assert.strictEqual(packs.openVerified(pack, f), null);
+  assert.strictEqual(packs.getPack('bird', { home }), null);
+  assert.deepStrictEqual(packs.listPacks({ home }), []);
+  // the other process puts it back: it is found again by a fresh validation
+  r = other(away, live);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(packs.listPacks({ home }).map(p => p.id), ['bird']);
+  assert.ok(packs.getPack('bird', { home }));
+});
+
 test('dryRun changes nothing', () => {
   const { home } = setup();
   const r = packs.removePack('bird', { home, now: NOW, dryRun: true });

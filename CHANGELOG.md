@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Character displays stay visible through connection problems.** Your Maestro keeps the character's picture and speaking beak available while clips recover, and checks pack availability with fewer, smaller requests. A confirmed pack removal returns to chat without ending the call.
+
 - **Character displays keep captions readable and blend into their background.** Your Maestro keeps the character above long captions, preserves its edges during wide gestures, and downloads fewer clips on metered or slow connections. Removing a character pack moves it to a recoverable archive; an ongoing call returns to chat without ending the conversation.
 
 - **Character calls show their first picture sooner on slow connections.** Your Maestro keeps the greeting available while its clip loads, shortens transitions between different poses, and keeps the beak following speech when speaking clips cannot load. Temporary track failures get two spaced retries, and goodbye uses an already loaded clip when available.

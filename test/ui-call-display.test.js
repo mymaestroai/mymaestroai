@@ -55,8 +55,8 @@ function fakePlayerFactory(kind, log, opts) {
     p.destroy = () => { p.destroyed = true; p.calls.push(['destroy']); };
     if (o.deferred) {   // ready and pictureReady are settled by the test (a slow pack: the picture first, the tracks and patches later)
       let rr, rj, pr; p.ready = new Promise((a, b) => { rr = a; rj = b; }); p.pictureReady = new Promise((a) => { pr = a; });
-      p.resolveReady = () => rr(p); p.rejectReadyNow = () => rj(new Error('late failure')); p.resolvePicture = (v) => pr(v);
-    } else p.ready = o.rejectReady ? Promise.reject(new Error('bad pack')) : Promise.resolve(p);
+      p.resolveReady = () => rr(p); p.rejectReadyNow = (status) => rj(Object.assign(new Error('late failure'), typeof status === 'number' ? { status, packGone: true } : (status && typeof status === 'object' ? status : {}))); p.resolvePicture = (v) => pr(v);
+    } else p.ready = o.rejectReady ? Promise.reject(Object.assign(new Error('bad pack'), typeof o.rejectReady === 'number' ? { status: o.rejectReady, packGone: true } : (typeof o.rejectReady === 'object' ? o.rejectReady : {}))) : Promise.resolve(p);   // rejectReady: true = a plain failure (no verdict), a number = the MANIFEST's HTTP status (tagged packGone like the player does), an object = raw error fields (e.g. { status: 404 } of an unrelated asset)
     p.ready.catch(() => {});
     p.last = (n) => { const c = p.calls.filter(x => x[0] === n); return c.length ? c[c.length - 1][1] : undefined; };
     p.count = (n) => p.calls.filter(x => x[0] === n).length;
@@ -120,7 +120,12 @@ test('a character that is missing, failed or still being looked up falls back to
   assert.deepStrictEqual([failedList.kind, failedList.missing], ['none', true]);
   const bad = CD.resolveDisplay({ choice: 'pack:owl', packs: PACKS, unusable: new Set(['owl']) });
   assert.deepStrictEqual([bad.kind, bad.missing, bad.failed], ['none', true, true]);
-  assert.ok(/could not load/.test(CD.displayNote(bad)));
+  assert.ok(/could not load/.test(CD.displayNote(bad)), 'the existing could-not-load message is kept');
+  // machine-readable offReason: removed = not in the list or a confirmed removal; could-not-load = the list failed or a load failure without that verdict
+  assert.strictEqual(miss.offReason, 'removed'); assert.strictEqual(agentMiss.offReason, 'removed');
+  assert.strictEqual(failedList.offReason, 'could-not-load'); assert.strictEqual(bad.offReason, 'could-not-load');
+  assert.strictEqual(CD.resolveDisplay({ choice: 'pack:owl', packs: PACKS, unusable: new Set(['owl']), removed: new Set(['owl']) }).offReason, 'removed');
+  assert.strictEqual(pend.offReason, undefined); assert.strictEqual(CD.resolveDisplay({ choice: 'pack:owl', packs: PACKS }).offReason, undefined);
   assert.strictEqual(CD.displayNote(CD.resolveDisplay({ choice: 'orb' })), '');
   assert.strictEqual(CD.cleanChoice('pack:../x'), null);
   assert.strictEqual(CD.cleanChoice('pack:' + 'a'.repeat(41)), null);
@@ -466,12 +471,39 @@ test('a live choice change updates the view without ending the call; a missing c
   assert.strictEqual(w.display.setChoice('follow'), true); assert.strictEqual(w.display.info().kind, 'none', 'follow with no agent default: None');
 });
 
-test('a pack that cannot load falls back to None with a note (not the Orb) and the choice stays saved', async () => {
-  const w = world({ prefs: { choice: 'pack:owl' }, pack: { rejectReady: true } }); w.display.start(); await flushP();
-  assert.strictEqual(w.display.info().kind, 'none'); assert.strictEqual(w.dom.overlay(), null); assert.strictEqual(w.orbs.length, 0);
-  assert.ok(/could not load/.test(w.display.info().note)); assert.strictEqual(CD.loadDisplayPrefs(w.storage).choice, 'pack:owl');
+test('a pack whose manifest is CONFIRMED gone (404/410) falls back to None (not the Orb), without a notice, and the choice stays saved; any other failure is not a verdict', async () => {
+  for (const status of [404, 410]) {
+    const w = world({ prefs: { choice: 'pack:owl' }, pack: { rejectReady: status } }); w.display.start(); await flushP();
+    assert.strictEqual(w.display.info().kind, 'none'); assert.strictEqual(w.dom.overlay(), null); assert.strictEqual(w.orbs.length, 0);
+    assert.strictEqual(w.display.info().offReason, 'removed', 'a confirmed removal is machine-readable');
+    assert.ok(/could not load/.test(w.display.info().note), 'the existing message, no new notice'); assert.strictEqual(CD.loadDisplayPrefs(w.storage).choice, 'pack:owl'); assert.strictEqual(w.players[0].destroyed, true);
+  }
+  for (const status of [true, 500, 503, 429, { status: 404 }, { status: 410 }]) {   // a plain failure, a 5xx, a 429, or a 404/410 of an UNRELATED asset (no packGone tag): no verdict, the view is kept (not unusable, not None)
+    const w = world({ prefs: { choice: 'pack:owl' }, pack: { rejectReady: status } }); w.display.start(); await flushP();
+    assert.strictEqual(w.display.info().kind, 'pack', JSON.stringify(status)); assert.strictEqual(w.players[0].destroyed, false); assert.strictEqual(w.display.info().note, ''); assert.strictEqual(w.display.info().destroyed, false); assert.strictEqual(w.display.info().offReason, null, 'drawable (no info): nothing to report'); w.display.release();
+  }
   const f = world({ prefs: { choice: 'pack:owl' }, fetch: jsonFetch([], 500) }); f.display.start(); await flushP();
   assert.strictEqual(f.display.info().kind, 'none'); assert.strictEqual(f.display.info().packsState, 'failed'); assert.strictEqual(f.orbs.length, 0);
+});
+
+test('a transient boot failure with nothing drawable reports could-not-load, marks nothing unusable, and Show display / choosing again retries (no pending loop)', async () => {
+  const info = { ready: false, failed: 'x', drawable: false };
+  const w = world({ prefs: { choice: 'pack:owl' }, pack: { info, deferred: true } }); w.display.start(); await flushP();
+  const p0 = w.players[0]; const timersBefore = w.clk.timers.length;
+  p0.rejectReadyNow({ status: 503 }); await flushP();
+  assert.strictEqual(w.display.info().kind, 'pack', 'the view is kept, not None'); assert.strictEqual(w.display.info().offReason, 'could-not-load'); assert.strictEqual(w.display.info().resolved.offReason, undefined, 'nothing was marked unusable');
+  assert.strictEqual(w.dom.overlay(), null, 'nothing drawable: no overlay'); assert.strictEqual(p0.destroyed, false);
+  assert.ok(w.clk.timers.length <= timersBefore, 'no retry timer or pending loop was started'); await w.clk.advance(30000); assert.strictEqual(w.players.length, 1, 'nothing retries by itself');
+  w.display.showView();   // the person asks again: a fresh view, the old one let go
+  await flushP(); assert.strictEqual(w.players.length, 2, 'retried'); assert.strictEqual(p0.destroyed, true); assert.strictEqual(w.display.info().offReason, null, 'the reason is reset for the new view');
+  const p1 = w.players[1]; info.drawable = true; info.ready = true; p1.resolvePicture(true); p1.resolveReady(); await flushP();
+  assert.ok(w.dom.overlay(), 'the retry works: the picture opens'); assert.strictEqual(w.display.info().offReason, null);
+  w.display.release();
+  // choosing the same character again is a retry too, and recovery (a late picture) clears the reason
+  const v = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: 'x', drawable: false }, deferred: true } }); v.display.start(); await flushP();
+  v.players[0].rejectReadyNow(); await flushP(); assert.strictEqual(v.display.info().offReason, 'could-not-load');
+  assert.strictEqual(v.display.setChoice('pack:owl'), true); await flushP(); assert.strictEqual(v.players.length, 2); assert.strictEqual(v.display.info().offReason, null);
+  assert.strictEqual(v.display.setChoice('orb'), true); await flushP(); assert.strictEqual(v.display.info().offReason, null); v.display.release();
 });
 
 test('a pack list that arrives after hang-up, release or a replacement never opens a view', async () => {
@@ -999,11 +1031,12 @@ test('a character with no drawable picture yet is not put on screen (the call st
   assert.strictEqual(w.dom.overlay(), null, 'no blank paper over the call'); assert.strictEqual(w.display.info().destroyed, false);
   info.drawable = true; await w.clk.advance(150); assert.ok(w.dom.overlay(), 'the picture is there: the display opens'); w.display.release();
 });
-test('a character that never gets a picture is bounded: None after the wait, the choice stays saved, nothing keeps polling', async () => {
+test('a character that never gets a picture is bounded polling only: no verdict, so it is NOT made unusable or None; the choice stays saved, nothing keeps polling, a late picture still opens', async () => {
   const info = { ready: true, failed: null, drawable: false };
   const w = world({ prefs: { choice: 'pack:owl' }, pack: { info } }); w.display.start(); await flushP();
-  await w.clk.advance(8500); assert.strictEqual(w.dom.overlay(), null); assert.strictEqual(w.display.info().kind, 'none'); assert.strictEqual(w.players[0].destroyed, true);
-  assert.strictEqual(JSON.parse(w.storage.getItem(CD.DISPLAY_STORE_KEY)).choice, 'pack:owl', 'the saved choice is kept'); assert.strictEqual(w.clk.timers.length, 0);
+  await w.clk.advance(8500); assert.strictEqual(w.dom.overlay(), null); assert.strictEqual(w.display.info().kind, 'pack', 'still the character, never marked unusable'); assert.strictEqual(w.players[0].destroyed, false);
+  assert.strictEqual(w.display.info().note, ''); assert.strictEqual(JSON.parse(w.storage.getItem(CD.DISPLAY_STORE_KEY)).choice, 'pack:owl', 'the saved choice is kept'); assert.strictEqual(w.clk.timers.length, 0, 'the wait stopped polling');
+  w.display.release();
 });
 test('stale: a display released, hidden or switched while the picture is awaited never opens late', async () => {
   const info = { ready: true, failed: null, drawable: false };
@@ -1020,15 +1053,18 @@ test('pictureReady: the character opens as soon as its picture is painted, while
   assert.strictEqual(w.dom.overlay(), null, 'nothing before the picture');
   p.resolvePicture(true); await flushP(); assert.ok(w.dom.overlay(), 'the overlay is up before ready'); assert.strictEqual(w.display.info().kind, 'pack');
   p.rejectReadyNow(); await flushP();
-  assert.strictEqual(w.dom.overlay(), null, 'the later failed load ends in None'); assert.strictEqual(w.display.info().kind, 'none'); assert.strictEqual(p.destroyed, true);
-  assert.strictEqual(JSON.parse(w.storage.getItem(CD.DISPLAY_STORE_KEY)).choice, 'pack:owl', 'the choice stays saved'); w.display.release();
+  assert.ok(w.dom.overlay(), 'a later failed load without a verdict (no 404/410) keeps the picture up'); assert.strictEqual(w.display.info().kind, 'pack'); assert.strictEqual(p.destroyed, false); w.display.release();
+  const g = world({ prefs: { choice: 'pack:owl' }, pack: { info, deferred: true } }); g.display.start(); await flushP(); const pg = g.players[0];
+  pg.resolvePicture(true); await flushP(); pg.rejectReadyNow(404); await flushP();
+  assert.strictEqual(g.dom.overlay(), null, 'the later 404 verdict ends in None'); assert.strictEqual(g.display.info().kind, 'none'); assert.strictEqual(pg.destroyed, true);
+  assert.strictEqual(JSON.parse(g.storage.getItem(CD.DISPLAY_STORE_KEY)).choice, 'pack:owl', 'the choice stays saved'); g.display.release();
   const v = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: true }, deferred: true } }); v.display.start(); await flushP(); const q = v.players[0];
   q.resolvePicture(true); await flushP(); q.resolveReady(); await flushP(); await v.clk.advance(300); assert.ok(v.dom.overlay(), 'ready after the picture changes nothing, no double mount'); assert.strictEqual(v.dom.find('ucd-overlay').length, 1); v.display.release();
 });
 test('pictureReady: false does not open it (ready decides, bounded); a picture that is not drawable, a stale view and a destroyed display never open late', async () => {
   const a = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null, drawable: false }, deferred: true } }); a.display.start(); await flushP();
   a.players[0].resolvePicture(false); await flushP(); assert.strictEqual(a.dom.overlay(), null);
-  a.players[0].resolveReady(); await flushP(); await a.clk.advance(8500); assert.strictEqual(a.dom.overlay(), null); assert.strictEqual(a.display.info().kind, 'none', 'no picture ever: bounded None'); assert.strictEqual(a.clk.timers.length, 0);
+  a.players[0].resolveReady(); await flushP(); await a.clk.advance(8500); assert.strictEqual(a.dom.overlay(), null); assert.strictEqual(a.display.info().kind, 'pack', 'no picture ever: no overlay, but no verdict either'); assert.strictEqual(a.clk.timers.length, 0, 'the bounded wait stopped');
   const b = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); b.display.start(); await flushP();
   b.display.release(); b.players[0].resolvePicture(true); await flushP(); assert.strictEqual(b.dom.overlay(), null, 'released before the picture: nothing opens');
   const c = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); c.display.start(); await flushP();

@@ -1789,28 +1789,50 @@ test('data cap: no connection API, a wifi/4g link, and the window navigator beha
 });
 
 // ── a pack whose files disappear mid-call ──
-test('files removed mid-call: every clip fails, retries stay bounded, and after 6 s the player reports lost once (the old build held the last picture forever, silently)', async () => {
-  let lostCalls = [];
-  const { w, p } = await started({ onLost: (r) => lostCalls.push(r) });
-  assert.strictEqual(p.getInfo().lost, null);
-  w.manifest.clips.forEach(c => w.fail.add(c.name));   // the pack was removed: every clip request now errors
-  p.setState('listening'); await w.settle(3000);
-  assert.strictEqual(lostCalls.length, 0, 'not declared lost before the bound'); assert.strictEqual(p.getInfo().lost, null);
-  await w.settle(4000);
-  assert.strictEqual(lostCalls.length, 1, 'reported once, within 6 s of the first failure'); assert.match(p.getInfo().lost, /no longer available/);
-  const loads = w.videos.reduce((n, v) => n + v.loads, 0), timers = w.timers.length;
-  await w.settle(20000);
-  assert.strictEqual(w.videos.reduce((n, v) => n + v.loads, 0), loads, 'no more clip requests once lost (no endless polling)'); assert.strictEqual(lostCalls.length, 1);
-  assert.ok(w.timers.length <= timers, 'no retry timer left running'); assert.doesNotThrow(() => p.setState('speaking')); p.destroy();
+// A pack is lost ONLY on a manifest probe verdict (404/410). Failed clips, failed tracks, timeouts, network errors, 5xx and stalls are never a loss.
+test('verdict only: every clip fails and every probe times out, speech is asked: the poster and the animated beak stay for the whole reply, nothing is lost or unusable, no clip classification as lost', async () => {
+  const lost = []; const w = makeWorld({ manifest: posterManifest() }); let mode = 'ok'; const st = probeNet(w, () => mode);
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+  w.manifest.clips.forEach(c => w.fail.add(c.name)); mode = 'hang';   // the clips fail and the manifest probe never answers
+  p.setAnalyser(analyserOf({ amp: 0.2, hz: 1500 })); p.setState('speaking'); await runFor(w, 60000);
+  const i = p.getInfo(); assert.strictEqual(lost.length, 0, 'onLost never called'); assert.strictEqual(i.lost, null); assert.strictEqual(i.packRemoved, false); assert.strictEqual(i.destroyed, false);
+  assert.strictEqual(i.coldHold, true, 'the animated beak is held for the whole reply'); assert.strictEqual(i.poster, true, 'over the poster'); assert.ok(SPEAKERS.every(s => i.bad.indexOf(s) >= 0), 'every speaker was set aside');
+  w.ctxCalls.length = 0; for (let k = 0; k < 20; k++) w.tickRaf(16); assert.ok(beakDraws(w).length >= 10, 'the beak is still animated');
+  assert.ok(heads(st).length >= 3, 'failed clips did ask for probes'); assertProbeRate(st, 'hang');
+  p.setState('listening'); await w.settle(700); assert.strictEqual(p.getInfo().lost, null); p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0);
 });
-test('files removed mid-call: a failure followed by a clip that starts is not a loss; a hidden page does not count; a throwing onLost cannot break the player', async () => {
+test('verdict only: failed clips with a probe that times out, errors, answers 5xx/429, 200 or 304 are never a loss; failing probes stay within one start per second and one in flight', async () => {
+  for (const kind of ['hang', 'throw', 500, 503, 429, 'ok', 304]) {
+    const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
+    const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+    w.manifest.clips.forEach(c => w.fail.add(c.name)); mode = kind; p.setState('listening'); await runFor(w, 45000);
+    assert.strictEqual(lost.length, 0, kind + ': not lost'); assert.strictEqual(p.getInfo().lost, null); assert.strictEqual(p.getInfo().packRemoved, false); assert.strictEqual(p.getInfo().destroyed, false);
+    assert.ok(heads(st).length >= 2, kind + ': a failed clip asks for a probe'); assertProbeRate(st, kind, 45);
+    if (kind === 'ok' || kind === 304) assert.strictEqual(p.getInfo().probeVerdict, 'exists', kind + ': a recent 200/304 means the pack exists');
+    mode = 404; const n0 = lost.length; await until(w, () => lost.length > n0, 12000); assert.strictEqual(lost.length, 1, kind + ': a later 404 is still the verdict'); p.destroy();
+  }
+});
+test('verdict only: a tracked-speaking failure with the manifest answering 200 keeps the poster and beak for the reply, then the reply recovers when the clips come back (same reply and the next one)', async () => {
+  const lost = []; const w = makeWorld({ manifest: posterManifest() }); const st = probeNet(w, () => 'ok'); SPEAKERS.forEach(n => w.fail.add(n));
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+  p.setAnalyser(analyserOf({ amp: 0.2, hz: 1500 })); p.setState('speaking'); await w.settle(1000);
+  let i = p.getInfo(); assert.strictEqual(i.coldHold, true); assert.strictEqual(i.poster, true); assert.strictEqual(lost.length, 0);
+  SPEAKERS.forEach(n => w.fail.delete(n)); await w.settle(5000);   // the files are back: the bounded revival (2.5 s) picks a speaker up inside the same reply
+  i = p.getInfo(); assert.match(i.clip, /^speaking-/, 'recovered inside the reply: ' + i.clip); assert.strictEqual(i.coldHold, false); assert.strictEqual(lost.length, 0); assert.strictEqual(i.lost, null);
+  p.setState('listening'); await w.settle(700); SPEAKERS.forEach(n => w.fail.add(n)); p.setState('speaking'); await w.settle(1500); assert.strictEqual(p.getInfo().coldHold, true, 'a second reply with the clips failing again: held again');
+  SPEAKERS.forEach(n => w.fail.delete(n)); await w.settle(5000); assert.match(p.getInfo().clip, /^speaking-/, 'and recovers again'); assert.strictEqual(lost.length, 0); assert.ok(heads(st).every(o => o.method === 'HEAD')); p.destroy();
+});
+test('verdict only: a stalled (frozen) picture, a hung clip load and a hidden page never count against the pack; a throwing onLost cannot break the player', async () => {
   const a = await started({ onLost: () => { throw new Error('host bug'); } });
   const first = a.w.manifest.clips.find(c => c.state === 'listening'); a.w.fail.add(first.name); a.p.setState('listening'); await a.w.settle(8000);
   assert.strictEqual(a.p.getInfo().lost, null, 'another clip played: not lost'); a.p.destroy();
   const b = await started({}); b.w.manifest.clips.forEach(c => b.w.fail.add(c.name)); b.p.setState('listening'); await b.w.settle(1000);
-  b.w.hide(true); await b.w.settle(10000); assert.strictEqual(b.p.getInfo().lost, null, 'hidden: the clock does not run against the pack'); b.p.destroy();
-  const c = await started({ onLost: () => { throw new Error('host bug'); } }); c.w.manifest.clips.forEach(x => c.w.fail.add(x.name)); c.p.setState('listening');
-  await c.w.settle(8000); assert.ok(c.p.getInfo().lost, 'declared lost even though the hook threw'); assert.doesNotThrow(() => c.p.destroy());
+  b.w.hide(true); await b.w.settle(30000); assert.strictEqual(b.p.getInfo().lost, null, 'hidden: no verdict'); b.p.destroy();
+  const w = makeWorld(); let mode = 'ok'; probeNet(w, () => mode); const lost = []; const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+  mode = 'throw'; w.manifest.clips.forEach(c => w.hold.add(c.name)); const f = w.front(p); f.currentTime = Math.max(0, f.duration - 0.05); f._frozen = true;   // frozen picture, the next clip never loads, probes fail
+  await runFor(w, 60000); assert.strictEqual(lost.length, 0, 'no stall heuristic'); assert.strictEqual(p.getInfo().lost, null); p.destroy();
+  const d = makeWorld(); let dm = 'ok'; probeNet(d, () => dm); const pd = d.make({ onLost: () => { throw new Error('host bug'); } }); await pd.ready; await d.settle(100);
+  dm = 404; await until(d, () => pd.getInfo().lost, 12000); assert.ok(pd.getInfo().lost, 'declared lost by the verdict even though the hook threw'); assert.doesNotThrow(() => pd.destroy());
 });
 
 // ── availability probe: a removed pack is noticed within ~3 s of the removal (<= 5 s), never from a transient failure ──
@@ -1825,73 +1847,99 @@ function playClock(w) {   // the fake video does not advance by itself: every pl
     adv.call(w, ms);
   };
 }
-function probeNet(w, mode) {   // mode(): 'ok' | 404 | 410 | 500 | 'throw' | 'hang'; counts the manifest requests and the ones in flight
+function probeNet(w, mode) {   // mode(): 'ok' | 404 | 410 | 304 | 500 | 'throw' | 'hang'; counts the manifest requests and the ones in flight (a hung one ends when the player aborts it, as fetch does)
   playClock(w);
-  const orig = w.fetch; const st = { n: 0, inflight: 0, maxInflight: 0, opts: [], mode };
+  const orig = w.fetch; const st = { n: 0, inflight: 0, maxInflight: 0, opts: [], starts: [], t404: null, mode };
   w.fetch = async (u, o) => {
     if (!/manifest\.json$/.test(u)) return orig(u, o);
-    st.n++; w.fetched.push(u); st.opts.push(o); st.inflight++; st.maxInflight = Math.max(st.maxInflight, st.inflight);
+    st.n++; w.fetched.push(u); st.opts.push(o); st.starts.push(w.now); st.inflight++; st.maxInflight = Math.max(st.maxInflight, st.inflight);
+    let live = true; const end = () => { if (live) { live = false; st.inflight--; } };   // an aborted request is over at the abort, as for the network
     try {
       const m = st.mode();
-      if (m === 'hang') return await new Promise(() => {});
+      if (m === 'hang') return await new Promise((_, rej) => { if (o && o.signal) o.signal.addEventListener('abort', () => { end(); rej(new Error('aborted')); }); });
       if (m === 'throw') throw new Error('network');
       if (m === 'ok') return { ok: true, status: 200, json: async () => w.manifest };
+      if (m === 404 || m === 410) st.t404 = w.now;   // when the verdict response arrived
       return { ok: false, status: m };
-    } finally { st.inflight--; }
+    } finally { end(); }
   };
   return st;
 }
+const heads = (st) => st.opts.filter(o => o && o.method === 'HEAD');
+function headStarts(st) { const a = []; st.opts.forEach((o, k) => { if (o && o.method === 'HEAD') a.push(st.starts[k]); }); return a; }
+function assertProbeRate(st, kind, seconds) {   // one start per second at most, never two in flight, and the request is the HEAD/no-cache one
+  const s = headStarts(st); for (let k = 1; k < s.length; k++) assert.ok(s[k] - s[k - 1] >= 1000, kind + ': probe starts at least 1 s apart: ' + (s[k] - s[k - 1]));
+  assert.ok(st.maxInflight <= 1, kind + ': one in flight: ' + st.maxInflight); if (seconds) assert.ok(s.length <= seconds + 1, kind + ': at most one per second: ' + s.length);
+  for (const o of heads(st)) { assert.strictEqual(o.cache, 'no-cache'); assert.strictEqual(o.credentials, 'same-origin'); }
+}
 async function until(w, cond, maxMs, step) { const t0 = w.now; while (!cond() && w.now - t0 < maxMs) { await new Promise(r => setImmediate(r)); w.advance(step || 20); } return w.now - t0; }
-test('probe: pack removed right AFTER a probe answered: lost once within 3.1 s (<= 5 s), packRemoved set, no further requests, cached clip still playing until then', async () => {
+test('probe 404: the verdict closes at once from the RESPONSE (within 5 s of it), packRemoved set, never from anything else, no request of any kind after, every guard holds (next/holdLast/begin/warm/retries)', async () => {
   const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
   const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
-  await until(w, () => st.n >= 2, 5000); await new Promise(r => setImmediate(r)); w.advance(20);   // a probe has just been answered
-  const n0 = st.n; mode = 404; const t0 = w.now; w.advance(1);
-  assert.strictEqual(lost.length, 0); assert.ok(p.getInfo().clip, 'an animation is on screen');
-  const took = await until(w, () => lost.length > 0, 5000);
-  assert.strictEqual(lost.length, 1, 'notified once'); assert.ok(took <= 3100, 'noticed within 3.1 s: ' + took); assert.ok(w.now - t0 <= 5000);
-  assert.strictEqual(p.getInfo().packRemoved, true); assert.match(p.getInfo().lost, /no longer available/);
-  assert.ok(st.n - n0 <= 2, 'at most the confirming probe(s): ' + (st.n - n0));
-  const all = w.fetched.length; await runFor(w, 30000); assert.strictEqual(w.fetched.length, all, 'no request of any kind once lost'); assert.strictEqual(lost.length, 1);
-  assert.doesNotThrow(() => p.setState('speaking')); p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0, 'no player timer left after destroy');
-  for (const o of st.opts.slice(1)) { assert.strictEqual(o.cache, 'no-store'); }   // [0] is the boot manifest request
+  await until(w, () => heads(st).length >= 1, 15000); await new Promise(r => setImmediate(r)); w.advance(20);   // a background probe has just been answered: 200
+  assert.strictEqual(p.getInfo().probeVerdict, 'exists'); assert.strictEqual(lost.length, 0); assert.ok(p.getInfo().clip, 'an animation is on screen');
+  mode = 404; const took = await until(w, () => lost.length > 0, 11000);   // nothing failed: the next background probe is the only thing that can say it
+  assert.strictEqual(lost.length, 1, 'notified once'); assert.ok(took <= 10100, 'the next background probe: ' + took); assert.ok(w.now - st.t404 <= 100, 'closed within 5 s (here: at once) of the verdict response: ' + (w.now - st.t404));
+  assert.strictEqual(p.getInfo().packRemoved, true); assert.match(p.getInfo().lost, /no longer available/); assert.strictEqual(p.getInfo().probeVerdict, 'gone');
+  const all = w.fetched.length, loads = w.videos.reduce((n, v) => n + v.loads, 0); await runFor(w, 40000); assert.strictEqual(w.fetched.length, all, 'no request of any kind once lost'); assert.strictEqual(lost.length, 1);
+  assert.doesNotThrow(() => { p.setState('speaking'); p.setState('thinking'); p.react('curious'); w.hide(true); w.hide(false); p.setState('idle'); }); await runFor(w, 12000);
+  assert.strictEqual(w.fetched.length, all, 'begin/next/holdLast/warm/retries are all silent once lost'); assert.strictEqual(w.videos.reduce((n, v) => n + v.loads, 0), loads, 'no clip load once lost'); assert.strictEqual(lost.length, 1);
+  p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0, 'no player timer left after destroy');
+  for (const o of heads(st)) { assert.strictEqual(o.method, 'HEAD'); assert.strictEqual(o.cache, 'no-cache'); }   // the boot manifest request is the only GET
+  assert.strictEqual(st.opts.filter(o => !o || o.method !== 'HEAD').length, 1);
 });
-test('probe: 410 counts as gone too; the probe is one bounded request at a time, every 2 s, and starts only once the player is ready', async () => {
-  const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
-  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; const boot = st.n; assert.strictEqual(boot, 1, 'the boot manifest request only');
-  await runFor(w, 20000); assert.ok(st.n - boot >= 8 && st.n - boot <= 11, 'about one per 2 s: ' + (st.n - boot)); assert.strictEqual(st.maxInflight, 1); assert.strictEqual(lost.length, 0);
-  mode = 410; await until(w, () => lost.length > 0, 5000); assert.strictEqual(lost.length, 1); p.destroy();
-});
-test('probe: transient failures (500, network error, hang past 1 s) never label the pack deleted; at most one request in flight, ~every 2 s', async () => {
-  for (const kind of [500, 503, 429, 'throw', 'hang']) {
+test('probe 404/410 after a failed clip: the failure asks for a probe at once and the verdict closes it within ~1 s (rate limit), then nothing more is requested', async () => {
+  for (const code of [404, 410]) {
     const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
-    const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100); mode = kind; const n0 = st.n;
-    await runFor(w, 30000);
-    assert.strictEqual(lost.length, 0, kind + ': not lost'); assert.strictEqual(p.getInfo().packRemoved, false); assert.strictEqual(p.getInfo().lost, null);
-    assert.strictEqual(st.maxInflight, kind === 'hang' ? st.maxInflight : 1); assert.ok(st.n - n0 >= 13 && st.n - n0 <= 16, kind + ': bounded rate: ' + (st.n - n0));
-    if (kind === 'hang') { assert.ok(st.inflight <= 1 || st.n - n0 <= 16); assert.ok(p.getInfo().clip, 'still animating'); }
-    mode = 404; await until(w, () => lost.length > 0, 5000); assert.strictEqual(lost.length, 1, kind + ': a later 404 is still caught'); p.destroy();
+    const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+    mode = code; w.manifest.clips.forEach(c => w.fail.add(c.name)); const t0 = w.now; p.setState('listening');
+    await until(w, () => lost.length > 0, 8000); assert.strictEqual(lost.length, 1, code + ': lost'); assert.ok(w.now - t0 <= 2500, code + ': ASAP after the failing clip, not the 10 s cadence: ' + (w.now - t0));
+    assert.strictEqual(p.getInfo().packRemoved, true); assert.match(p.getInfo().lost, /no longer available/);
+    const all = w.fetched.length; await runFor(w, 30000); assert.strictEqual(w.fetched.length, all, 'no request after lost'); p.destroy();
   }
 });
-test('probe: removal while every probe hangs: the clip-failure timer still closes it within 5 s of the first failing clip; the call is not ended (no destroy)', async () => {
-  const lost = []; const w = makeWorld(); let hm = 'ok'; const st = probeNet(w, () => hm);
-  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100); hm = 'hang';
-  w.manifest.clips.forEach(c => w.fail.add(c.name)); const t0 = w.now; p.setState('listening');
-  const took = await until(w, () => lost.length > 0, 8000); assert.strictEqual(lost.length, 1); assert.ok(took <= 5000, 'within 5 s: ' + took);
-  assert.strictEqual(p.getInfo().destroyed, false); p.destroy();
+test('probe cadence: HEAD every 10 s in the background, starting only once ready (the boot request is the only GET), one in flight, bodies cancelled', async () => {
+  const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode); let cancels = 0;
+  const f0 = w.fetch; w.fetch = async (u, o) => { const r = await f0(u, o); if (r && /manifest/.test(u) && r.status === 200 && st.n > 1) r.body = { cancel: () => { cancels++; return Promise.resolve(); } }; return r; };
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; assert.strictEqual(st.n, 1, 'the boot manifest request only');
+  await runFor(w, 62000); const s = headStarts(st); assert.ok(s.length >= 5 && s.length <= 7, 'about one per 10 s: ' + s.length);
+  for (let k = 1; k < s.length; k++) assert.ok(s[k] - s[k - 1] >= 9500 && s[k] - s[k - 1] <= 10600, 'gap ' + (s[k] - s[k - 1]));
+  assertProbeRate(st, 'bg'); assert.ok(cancels >= s.length - 1, 'every probe body cancelled: ' + cancels); assert.strictEqual(lost.length, 0); assert.strictEqual(p.getInfo().probes, s.length); p.destroy();
+});
+test('probe cadence: 30 s on a data-capped link (cellular, saveData, 2g/3g), 10 s otherwise', async () => {
+  for (const nav of [{ connection: { type: 'cellular' } }, { connection: { saveData: true } }, { connection: { effectiveType: '3g' } }]) {
+    const w = makeWorld(); const st = probeNet(w, () => 'ok'); const p = w.make({ navigator: nav }); await p.ready; await runFor(w, 125000);
+    const s = headStarts(st); assert.ok(s.length >= 3 && s.length <= 5, JSON.stringify(nav) + ': about one per 30 s: ' + s.length);
+    for (let k = 1; k < s.length; k++) assert.ok(s[k] - s[k - 1] >= 29500 && s[k] - s[k - 1] <= 30600, 'gap ' + (s[k] - s[k - 1]));
+    assertProbeRate(st, 'capped'); p.destroy();
+  }
+});
+test('probe: 410 is gone too; transient failures (500, 503, 429, network error, timeout) are never a verdict; the timeout is bounded and a later 404 is still caught', async () => {
+  const l410 = []; const w410 = makeWorld(); let m410 = 'ok'; probeNet(w410, () => m410); const p410 = w410.make({ onLost: r => l410.push(r) }); await p410.ready; await w410.settle(100);
+  m410 = 410; await until(w410, () => l410.length > 0, 11000); assert.strictEqual(l410.length, 1); p410.destroy();
+  for (const kind of [500, 503, 429, 'throw', 'hang']) {
+    const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
+    const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100); mode = kind; const n0 = heads(st).length;
+    await runFor(w, 62000);
+    assert.strictEqual(lost.length, 0, kind + ': not lost'); assert.strictEqual(p.getInfo().packRemoved, false); assert.strictEqual(p.getInfo().lost, null); assert.strictEqual(p.getInfo().probeVerdict, null, kind + ': no verdict');
+    assertProbeRate(st, kind); assert.ok(heads(st).length - n0 >= 5 && heads(st).length - n0 <= 7, kind + ': bounded rate: ' + (heads(st).length - n0)); assert.ok(p.getInfo().clip, 'still animating');
+    mode = 404; await until(w, () => lost.length > 0, 11000); assert.strictEqual(lost.length, 1, kind + ': a later 404 is still caught'); p.destroy();
+  }
 });
 test('probe: hidden stops it (no request, in-flight one has no say), visible probes at once and catches a removal that happened while hidden', async () => {
   const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
   const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
-  w.hide(true); const n0 = st.n; mode = 404; await runFor(w, 20000); assert.strictEqual(st.n, n0, 'nothing while hidden'); assert.strictEqual(lost.length, 0);
+  w.hide(true); const n0 = st.n; mode = 404; await runFor(w, 35000); assert.strictEqual(st.n, n0, 'nothing while hidden'); assert.strictEqual(lost.length, 0);
   w.hide(false); await w.settle(50); assert.strictEqual(st.n, n0 + 1, 'an immediate probe on visible'); assert.strictEqual(lost.length, 1, 'gone found right away');
   p.destroy();
   const w2 = makeWorld(); let m2 = 'ok'; const s2 = probeNet(w2, () => m2); const l2 = []; const q = w2.make({ onLost: r => l2.push(r) }); await q.ready; await w2.settle(100);
-  await until(w2, () => s2.n >= 2, 5000); m2 = 'hang'; await until(w2, () => s2.inflight > 0, 3000);
-  m2 = 404; w2.hide(true); await runFor(w2, 5000); assert.strictEqual(l2.length, 0, 'a request cancelled by hiding gives no verdict'); q.destroy();
+  await until(w2, () => heads(s2).length >= 1, 12000); m2 = 'hang'; await until(w2, () => s2.inflight > 0, 12000);
+  m2 = 404; w2.hide(true); await runFor(w2, 5000); assert.strictEqual(l2.length, 0, 'a request cancelled by hiding gives no verdict'); assert.strictEqual(s2.inflight, 0, 'and it was aborted'); q.destroy();
+  const w3 = makeWorld(); let m3 = 'ok'; const s3 = probeNet(w3, () => m3); const p3 = w3.make(); await p3.ready; m3 = 500; w3.manifest.clips.forEach(c => w3.fail.add(c.name)); p3.setState('listening'); await w3.settle(300); w3.hide(true); const h3 = s3.n; await runFor(w3, 20000);
+  assert.strictEqual(s3.n, h3, 'failed clips while hidden do not probe'); p3.destroy();
 });
 test('probe: destroy cancels it (no timer, no request after), an injected manifest or probe:false never probes, a lost report is not repeated by the clip timer', async () => {
-  const w = makeWorld(); const st = probeNet(w, () => 'ok'); const p = w.make(); await p.ready; await w.settle(100); await until(w, () => st.n >= 3, 6000);
+  const w = makeWorld(); const st = probeNet(w, () => 'ok'); const p = w.make(); await p.ready; await w.settle(100); await until(w, () => st.n >= 2, 12000);
   p.destroy(); const n = st.n, f = w.fetched.length; await runFor(w, 20000); assert.strictEqual(st.n, n); assert.strictEqual(w.fetched.length, f, 'no call after destroy'); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0);
   const wi = makeWorld(); const si = probeNet(wi, () => 404); const pi = wi.make({ manifest: wi.manifest }); await pi.ready; await runFor(wi, 10000); assert.strictEqual(si.n, 0); pi.destroy();
   const wf = makeWorld(); let fm = 'ok'; const sf = probeNet(wf, () => fm); const lf = []; const pf = wf.make({ probe: false, onLost: r => lf.push(r) }); await pf.ready; await wf.settle(100); fm = 404; const b = sf.n; await runFor(wf, 10000); assert.strictEqual(sf.n, b); assert.strictEqual(lf.length, 0); pf.destroy();
@@ -1906,53 +1954,27 @@ test('probe: transient track 500 with the manifest still there is unaffected: po
   assert.strictEqual(p.getInfo().packRemoved, false); assert.ok(p.getInfo().poster || p.getInfo().posterImage, 'poster still the picture'); p.destroy();
 });
 
-// ── no-progress fallback: a probe that did not succeed while the presented video is frozen closes the display within 5 s of the REMOVAL ──
-async function removalWorld(kind, extra) {   // a pack whose probes answer, then (right after one) every file goes: the playing clip freezes at once and no next clip or probe ever resolves
-  const lost = []; const w = makeWorld(extra && extra.world); let mode = 'ok'; const st = probeNet(w, () => mode);
-  const p = w.make(Object.assign({ onLost: r => lost.push(r) }, extra && extra.opts)); await p.ready; await w.settle(100);
-  await until(w, () => st.n >= 2, 5000); await new Promise(r => setImmediate(r)); w.advance(20);   // a probe has just been answered
-  mode = kind; w.manifest.clips.forEach(c => w.hold.add(c.name));
-  const f = w.front(p); f.currentTime = Math.max(0, f.duration - 0.05); f._frozen = true; const t0 = w.now;   // the presented picture stops where it is: its decoder starves, nothing newer arrives
-  return { w, p, st, lost, t0, setMode: m => { mode = m; } };
-}
-test('no-progress fallback: removal right after a probe, probes hang / fail, the next clip never loads: lost within 5 s of the REMOVAL (not of a first failure), not labelled deleted', async () => {
-  for (const kind of ['hang', 'throw', 500, 503]) {
-    const { w, p, st, lost, t0 } = await removalWorld(kind);
-    const took = await until(w, () => lost.length > 0, 8000);
-    assert.strictEqual(lost.length, 1, kind + ': notified once'); assert.ok(w.now - t0 <= 5000, kind + ': within 5 s of the removal: ' + (w.now - t0)); assert.ok(took <= 5000);
-    assert.strictEqual(p.getInfo().packRemoved, false, kind + ': not claimed deleted'); assert.match(p.getInfo().lost, /stopped making progress/); assert.doesNotMatch(p.getInfo().lost, /no longer available/);
-    assert.strictEqual(p.getInfo().destroyed, false); assert.ok(st.maxInflight <= (kind === 'hang' ? 3 : 1), 'no probe pile-up');
-    const all = w.fetched.length; await runFor(w, 20000); assert.strictEqual(w.fetched.length, all, kind + ': no request of any kind once lost'); assert.strictEqual(lost.length, 1);
-    p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0);
+// ── a stalled picture is never a loss (the old no-progress fallback is gone): only a 404/410 probe verdict is ──
+test('no stall heuristic: a frozen picture, a clip that never loads and probes that fail or hang for minutes never call the pack lost; reduced motion and hidden are the same', async () => {
+  for (const kind of ['ok', 'hang', 'throw', 500, 503]) {
+    const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
+    const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+    mode = kind; w.manifest.clips.forEach(c => w.hold.add(c.name));
+    const f = w.front(p); f.currentTime = Math.max(0, f.duration - 0.05); f._frozen = true;   // the presented picture stops where it is, nothing newer ever arrives
+    await runFor(w, 90000); assert.strictEqual(lost.length, 0, kind + ': a frozen picture is not a loss'); assert.strictEqual(p.getInfo().lost, null); assert.strictEqual(p.getInfo().packRemoved, false); assertProbeRate(st, kind); p.destroy();
   }
-});
-test('no-progress fallback: the same frozen picture with a probe that says 404/410 is still a confirmed removal (packRemoved, retries and warming stop)', async () => {
-  for (const code of [404, 410]) {
-    const { w, p, lost, t0 } = await removalWorld(code);
-    await until(w, () => lost.length > 0, 8000); assert.strictEqual(lost.length, 1); assert.ok(w.now - t0 <= 3100);
-    assert.strictEqual(p.getInfo().packRemoved, true); assert.match(p.getInfo().lost, /no longer available/);
-    const all = w.fetched.length; await runFor(w, 30000); assert.strictEqual(w.fetched.length, all); p.destroy();
-  }
-});
-test('no-progress fallback: nothing fires while probes succeed (a frozen or deliberately still picture), under reduced motion, hidden, or while the video keeps advancing', async () => {
-  // healthy manifest, picture frozen: probes answer, so the pack is there: no fallback
-  const a = await removalWorld('ok'); await runFor(a.w, 40000); assert.strictEqual(a.lost.length, 0); assert.strictEqual(a.p.getInfo().lost, null); a.p.destroy();
-  // reduced motion (a still on purpose) with every probe failing: no progress is not expected, so no fallback
   for (const kind of ['hang', 'throw', 500]) {
     const w = makeWorld(); let mode = 'ok'; probeNet(w, () => mode); const lost = []; const p = w.make({ reducedMotion: true, onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
-    mode = kind; await runFor(w, 40000); assert.strictEqual(lost.length, 0, kind + ': reduced motion is never a stall'); assert.strictEqual(p.getInfo().lost, null); p.destroy();
+    mode = kind; await runFor(w, 60000); assert.strictEqual(lost.length, 0, kind + ': reduced motion'); assert.strictEqual(p.getInfo().lost, null); p.destroy();
   }
-  // a poster-only picture (no clip presented yet / healthy track failure) with failing probes is not measurable: unchanged
   const w3 = makeWorld({ manifest: posterManifest() }); trackNet(w3, () => 500); let m3 = 'ok'; probeNet(w3, () => m3); const l3 = [];
-  const p3 = w3.make({ onLost: r => l3.push(r) }); await p3.ready; m3 = 'throw'; await runFor(w3, 40000); assert.strictEqual(l3.length, 0); assert.ok(p3.getInfo().poster || p3.getInfo().posterImage); p3.destroy();
-  // hidden: no probe, no verdict
-  const b = await removalWorld('hang'); b.w.hide(true); await runFor(b.w, 30000); assert.strictEqual(b.lost.length, 0); b.p.destroy();
+  const p3 = w3.make({ onLost: r => l3.push(r) }); await p3.ready; m3 = 'throw'; await runFor(w3, 60000); assert.strictEqual(l3.length, 0); assert.ok(p3.getInfo().poster || p3.getInfo().posterImage, 'the poster stays'); p3.destroy();
+  const b = makeWorld(); let mb = 'ok'; probeNet(b, () => mb); const lb = []; const pb = b.make({ onLost: r => lb.push(r) }); await pb.ready; mb = 'hang'; b.hide(true); await runFor(b, 30000); assert.strictEqual(lb.length, 0); pb.destroy();
 });
-test('no-progress fallback: probe requests keep to one per 2 s, bodies are cancelled, no tight loop even while frozen with failing probes', async () => {
-  const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode); let cancels = 0;
-  const f0 = w.fetch; w.fetch = async (u, o) => { const r = await f0(u, o); if (r && /manifest/.test(u) && r.status === 200 && st.n > 1) r.body = { cancel: () => { cancels++; return Promise.resolve(); } }; return r; };
-  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100); const n0 = st.n; await runFor(w, 20000);
-  assert.ok(st.n - n0 >= 8 && st.n - n0 <= 11, 'about one per 2 s: ' + (st.n - n0)); assert.ok(cancels >= 8, 'every probe body cancelled: ' + cancels); assert.strictEqual(lost.length, 0); p.destroy();
+test('probe request: a HEAD of the manifest with cache no-cache and same-origin credentials, even the first one (never a body download), the boot request is the only GET', async () => {
+  const w = makeWorld(); const st = probeNet(w, () => 'ok'); const p = w.make(); await p.ready; await until(w, () => heads(st).length >= 1, 12000); await w.settle(100);
+  const h = heads(st)[0]; assert.strictEqual(h.method, 'HEAD'); assert.strictEqual(h.cache, 'no-cache'); assert.strictEqual(h.credentials, 'same-origin'); assert.ok(h.signal, 'cancellable');
+  assert.strictEqual(st.opts.filter(o => !o || o.method !== 'HEAD').length, 1, 'only the boot manifest request is not a HEAD'); assert.notStrictEqual(st.opts[0].method, 'HEAD'); assert.strictEqual(p.getInfo().probeVerdict, 'exists'); p.destroy();
 });
 
 // ── no poster and the first speaking tracks fail transiently: ready rejects (the display decides, None), nothing keeps retrying, destroy cancels the rest ──
@@ -1998,4 +2020,23 @@ test('comfort box margin: impossible margin (a safe box wider than the picture l
   for (const k of ['left', 'right', 'top', 'bottom']) assert.strictEqual(g[k], 0, k + ' has under 1 px of paper outside the box');
   assert.match(w.container.children[0].children[0].style.maskImage, /to right, #000 0%, #000 100%/); p.destroy();
   const f = await started({}, { w: 800, h: 450 }); assert.strictEqual(f.p.getInfo().stage.safeSource, 'fallback'); near(f.p.getInfo().stage.glow.left, 0.05); f.p.destroy();
+});
+
+// ── the removal verdict is the MANIFEST's, and a lost / removed pack starts nothing at all ──
+test('ready rejection: only the manifest answering 404/410 is tagged packGone; a 404 of any other asset (tracks, ...) or a plain failure never is', async () => {
+  for (const status of [404, 410]) {
+    const w = makeWorld(); w.fetch = async (u) => { w.fetched.push(u); return { ok: false, status }; };
+    const p = w.make(); const e = await p.ready.then(() => null, x => x); assert.ok(e, 'rejected'); assert.strictEqual(e.status, status); assert.strictEqual(e.packGone, true, 'manifest ' + status); p.destroy();
+  }
+  const t = makeWorld({ fetchFail: u => /\/tracks\//.test(u) }); const pt = t.make(); const et = await pt.ready.then(() => null, x => x);
+  assert.match(et.message, /speaking track/); assert.notStrictEqual(et.packGone, true, 'every track 404: not a removal'); pt.destroy();
+  const m = makeWorld({ manifest: { clips: [], beak: {} } }); const pm = m.make(); const em = await pm.ready.then(() => null, x => x); assert.notStrictEqual(em.packGone, true, 'an unusable manifest is not a removal'); pm.destroy();
+  const s = makeWorld(); s.fetch = async (u) => { s.fetched.push(u); return { ok: false, status: 503 }; };
+  const ps = s.make(); const es = await ps.ready.then(() => null, x => x); assert.strictEqual(es.status, 503); assert.notStrictEqual(es.packGone, true, '5xx is no verdict'); ps.destroy();
+});
+test('packRemoved() while the cache start still waits on a hello: no background request starts afterwards (warmSoon is guarded)', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); w.hold.add('reaction-hello-1'); const p = w.make(); p.react('hello'); await p.ready; await w.settle(300);
+  assert.strictEqual(w.fetched.filter(u => /\/web\//.test(u)).length, 0, 'the cache is still waiting for the hello');
+  assert.strictEqual(p.packRemoved(), true); const at = w.fetched.length; await w.settle(8000);
+  assert.strictEqual(w.fetched.length, at, 'nothing was requested after the removal'); p.destroy();
 });
