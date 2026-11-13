@@ -1389,6 +1389,8 @@ async function handleHttpRequest(req, res) {
     if (pathname.startsWith('/api/comms/')) return require('./lib/comms/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents });
     // ── Voice: local speech-to-text and text-to-speech (lib/voice) ─────────────────────────
     if (pathname.startsWith('/api/voice/')) return require('./lib/voice/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents, getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings });
+    // ── Character packs for the call face view (lib/faces; packs live in <hub home>/faces) ──
+    if (pathname === '/api/faces' || pathname.startsWith('/api/faces/')) return require('./lib/faces/routes').handle(pathname, req, res, { readBody, jsonResponse });
 
     // ── Trading wallet (owner controls; agents only ever get the wallet_* tools) ──────────
     if (pathname.startsWith('/api/wallet/')) {

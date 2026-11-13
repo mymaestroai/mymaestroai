@@ -116,7 +116,7 @@ function makeEnv(opts = {}) {
   };
   if (opts.lib !== false) {
     stubs.voiceCreateThinkingSound = ({ ctx, volume }) => {
-      const s = { ctx, volume, on: false, start() { s.on = true; log.thinking.push('start'); }, stop() { s.on = false; log.thinking.push('stop'); }, setVolume(v) { s.volume = v; } };
+      const s = { ctx, volume, on: false, pulse(ev) { log.pulsed = (log.pulsed || []); log.pulsed.push(ev); if (ev && s.mode === 'move') ev.at += 160; return s.mode === 'refuse' ? false : s.mode === 'move' ? ev : undefined; }, start() { s.on = true; log.thinking.push('start'); }, stop() { s.on = false; log.thinking.push('stop'); }, setVolume(v) { s.volume = v; } };
       log.sound = s;
       return s;
     };
@@ -271,4 +271,17 @@ test('after a release the person gets "The call ended when you left the app" wit
   await flush();
   assert.ok(bar.removed, 'the bar goes away');
   assert.ok(api.voiceCallS.call, 'Call again starts a new call');
+});
+
+test('thinking adapter: pulse(event) hands the event to the sound and returns what it answers; a refusing sound is not claimed as playback', () => {
+  const { api, log, vad } = makeEnv({ prefs: { thinkingVolume: 0.4 } });
+  const t = api.voiceCallThinking(vad);
+  const ev = { at: 1000, attackMs: 250, decayMs: 1000, strength: 1 };
+  assert.strictEqual(t.pulse(ev), undefined); assert.strictEqual(log.pulsed[0], ev, 'the very same event');
+  assert.deepStrictEqual(log.vad.filter((x) => x[0] === 'playing'), [['playing', true]]);
+  log.sound.mode = 'move'; const e2 = { at: 1000 };
+  assert.strictEqual(t.pulse(e2), e2); assert.strictEqual(e2.at, 1160, 'moved by the sound, same object back');
+  log.vad.length = 0; log.sound.mode = 'refuse';
+  assert.strictEqual(t.pulse({ at: 5 }), false);
+  assert.deepStrictEqual(log.vad.filter((x) => x[0] === 'playing'), [], 'a refused pulse is not playback');
 });

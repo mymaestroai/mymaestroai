@@ -1,0 +1,43 @@
+/* ui-call-display.css: the full-screen call display (lib/ui-call-display.js). Colours follow the page's theme variables. */
+.ucd-overlay { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; box-sizing: border-box; width: 100%; height: 100vh; height: 100dvh;
+  background: var(--bg, #101418); color: var(--text, #e8ecf1); font-family: inherit;
+  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0); }
+.ucd-overlay[hidden] { display: none; }
+.ucd-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--ucd-bg, #0b0e12); }
+.ucd-host { position: absolute; inset: 0; z-index: 0; display: flex; align-items: center; justify-content: center; }
+.ucd-host > canvas, .ucd-host > video, .ucd-host > div { max-width: 100%; max-height: 100%; }
+.ucd-status { position: absolute; z-index: 1; top: 10px; left: 12px; font-size: 14px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, .35); color: #fff; }
+.ucd-note { position: absolute; z-index: 1; top: 44px; left: 12px; right: 12px; font-size: 12px; color: #fff; opacity: .85; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+.ucd-note[hidden], .ucd-caption[hidden], .ucd-caption:empty { display: none; }
+.ucd-caption { position: absolute; z-index: 2; left: 12px; right: 12px; bottom: 12px; text-align: center; font-size: clamp(20px, 4.2vw, 40px); line-height: 1.25; font-weight: 600;
+  padding: 10px 14px; border-radius: 14px; background: rgba(0, 0, 0, .55); color: #fff; overflow-wrap: anywhere; max-height: 40%; overflow: hidden; }
+.ucd-drawer { flex: 0 1 auto; max-height: 48vh; max-height: 48dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 12px;
+  background: var(--bg-card, #181d24); border-top: 1px solid var(--border, #2a313b); }
+.ucd-drawer[hidden] { display: none; }
+.ucd-section + .ucd-section { margin-top: 10px; }
+.ucd-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim, #98a2b3); margin-bottom: 4px; }
+.ucd-drawer .voice-callbar, .ucd-drawer .voice-pop, .ucd-drawer #call-panel, .ucd-drawer #voice-panel { position: static; display: block; width: auto; max-width: none; max-height: none; overflow: visible; box-shadow: none; margin: 0; }
+.ucd-drawer .voice-pop[hidden], .ucd-drawer #voice-panel[hidden], .ucd-drawer #call-panel[hidden] { display: block; }
+.ucd-bar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; padding: 10px 12px; background: var(--bg-card, #181d24); border-top: 1px solid var(--border, #2a313b); }
+.ucd-main { display: flex; gap: 10px; flex: 1 1 320px; }
+.ucd-side { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.ucd-bar button { font: inherit; cursor: pointer; border: 1px solid var(--border, #2a313b); border-radius: 14px; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); }
+.ucd-bar .ucd-talk, .ucd-bar .ucd-hang { flex: 1; min-height: 64px; font-size: 20px; font-weight: 700; padding: 0 22px; }
+.ucd-bar .ucd-talk { background: var(--accent, #3d7bff); border-color: transparent; color: #fff; }
+.ucd-bar .ucd-hang { background: var(--error, #e5484d); border-color: transparent; color: #fff; }
+.ucd-bar .ucd-small { min-height: 48px; padding: 0 14px; font-size: 15px; }
+.ucd-bar .ucd-caps[aria-pressed="true"] { outline: 2px solid var(--accent, #3d7bff); }
+.ucd-bar button:focus-visible, .ucd-reopen:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent, #3d7bff); }
+.ucd-bar button:disabled { opacity: .5; cursor: default; }
+/* "Show display" sits inside the call bar beside Hang up (it is never over the page's tabs); the .ucd-reopen-float variant is only for a page with no bar */
+.ucd-reopen { flex: none; min-height: 36px; padding: 0 14px; border-radius: 8px; font: inherit; font-size: 14px; font-weight: 600; margin-left: auto;
+  border: 1px solid var(--border, #2a313b); background: var(--accent, #3d7bff); color: #fff; cursor: pointer; }
+.ucd-reopen + .vcb-hang, .ucd-reopen + .cp-hang { margin-left: 0; }
+#call-panel .cp-actions .ucd-reopen { flex: 1; min-height: 52px; margin-left: 0; border-radius: 12px; font-size: 16px; }
+.ucd-reopen-float { position: fixed; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0)); z-index: 1500; min-height: 48px; border-radius: 999px; }
+/* the phone's toast sits at z-index 30: keep it readable above the full-screen view */
+#toast.on { z-index: 10010; }
+.vp-display-note { font-size: 12px; color: var(--text-dim, #98a2b3); margin: 2px 0 0; }
+.vp-display-note:empty { display: none; }
+@media (max-width: 560px) { .ucd-main { flex-basis: 100%; } .ucd-side { width: 100%; justify-content: space-between; } }
+@media (prefers-reduced-motion: reduce) { .ucd-overlay, .ucd-overlay * { transition: none !important; animation: none !important; } }

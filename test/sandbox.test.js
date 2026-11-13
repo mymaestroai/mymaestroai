@@ -394,7 +394,7 @@ test('status: reports Docker, image and containers; wiring exists on both dispat
   const srv = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   for (const r of ["'/api/sandbox/status'", "'/api/sandbox/build'", "(reset|stop)"]) assert.ok(srv.includes(r), r);
   const ag = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agents.js'), 'utf8');
-  assert.ok(ag.includes("'minModel', 'sandbox', 'tools', 'effort', 'voice']") && ag.includes("sandbox must be inherit, off or container"));
+  assert.ok(ag.includes("'minModel', 'sandbox', 'tools', 'effort', 'voice', 'callDisplay']") && ag.includes("sandbox must be inherit, off or container"));
 });
 
 test('mounts: share/common is mounted for admin-side agents when it exists, never for a member\'s agent', () => {
