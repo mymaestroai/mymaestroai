@@ -795,6 +795,32 @@ test('P-e: held items come from the start answer and from every heartbeat answer
   assert.ok(!h.call.held.some(x => x.id === 'j2'), 'an item that ran is dropped');
 });
 
+test('an item the person said now to is not brought back by a heartbeat while it runs (server state allowed)', async () => {
+  const h = harness();
+  h.startHeld = [{ id: 'c1', kind: 'consultation', label: 'Check the dates', state: 'held' }];
+  assert.strictEqual(await h.call.start(), true);
+  await h.finish();
+  h.call.decide('c1', 'now');
+  assert.ok(!h.call.held.some(x => x.id === 'c1'), 'removed at once');
+  const spokenBefore = h.spoken.length;
+  h.hbHeld = [{ id: 'c1', kind: 'consultation', label: 'Check the dates', state: 'allowed' }];
+  await h.advance(15000);
+  await h.advance(2000);
+  assert.ok(!h.call.held.some(x => x.id === 'c1'), 'not re-added while it runs');
+  assert.strictEqual(h.spoken.length, spokenBefore, 'not announced again');
+});
+
+test('a call whose start failed never sends an end without a call id', async () => {
+  const h = harness();
+  const ends = [];
+  h.deps.server.start = async () => { throw new Error('offline'); };
+  h.deps.server.end = async (id) => { ends.push(id); return { held: [] }; };
+  const c = voiceCreateCall(h.deps);
+  assert.strictEqual(await c.start(), false);
+  await c.hangUp();
+  assert.deepStrictEqual(ends, [], 'no end(undefined): it would end another call of the same person');
+});
+
 test('P-g: any failure while the VAD starts lets go of the context and the stream', async () => {
   let f = fakeBrowser();
   f.loadScript = async () => { throw new Error('script 404'); };

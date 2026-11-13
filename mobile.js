@@ -2359,7 +2359,8 @@ function voiceCreateCall(deps) {
     for (const item of list) {
       if (!item || item.id == null) continue;
       const known = heldList.find(h => h.id === item.id);
-      if (item.state === 'done') {
+      // 'allowed': the person said now and the producer runs it; 'done': it ran. Neither waits for a decision any more.
+      if (item.state === 'done' || item.state === 'allowed') {
         if (known) { heldList = heldList.filter(h => h !== known); announceQueue = announceQueue.filter(h => h !== known); changed = true; }
         continue;
       }
@@ -2493,7 +2494,7 @@ function voiceCreateCall(deps) {
   async function start() {
     if (started) return !ended;
     started = true; setState('starting');
-    const fail = async (msg) => { quiet(() => ui.toast(msg)); ended = true; setState('ended'); await Promise.resolve().then(() => server.end(callId || undefined)).catch(() => {}); return false; };
+    const fail = async (msg) => { quiet(() => ui.toast(msg)); ended = true; setState('ended'); await Promise.resolve().then(() => (callId ? server.end(callId) : null)).catch(() => {}); return false; };   // no id: never end another call of this person
     // The microphone starts first, still inside the tap that began the call (iOS needs that for audio); the server next.
     let vadErr = null;
     let vadStarting;
@@ -2522,7 +2523,7 @@ function voiceCreateCall(deps) {
     hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = [];
     quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
     const idKnown = callId || !startP ? Promise.resolve() : startP.catch(() => {});   // hanging up while the start is in flight waits for the id
-    endPromise = idKnown.then(() => server.end(callId || undefined)).then(r => (r && Array.isArray(r.held) ? r.held : []), () => []).then((held) => {
+    endPromise = idKnown.then(() => (callId ? server.end(callId) : { held: [] })).then(r => (r && Array.isArray(r.held) ? r.held : []), () => []).then((held) => {
       if (held.length) {
         const label = (h) => String(h.label || h.kind || 'something').replace(/[.!?\s]+$/, '');
         const n = held.length, ran = held.filter(h => h.state === 'done'), runs = held.filter(h => h.state !== 'done');
