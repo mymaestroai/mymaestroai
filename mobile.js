@@ -196,6 +196,68 @@ function versionDetailsText(v, u, ua) {
 // ── version-label helpers (end) ──
 
 // Shared verbatim with lib/ui-dialog.js and app.js (test/ui-dialog.test.js keeps the three in step).
+// ── app reload (begin) ──
+const APP_RELOAD_STASH_KEY = 'hub-reload-stash';
+const APP_RELOAD_CALL_QUESTION = 'Reloading ends the call. Reload?';
+function appIsInstalled(win) {
+  try {
+    if (win && win.navigator && win.navigator.standalone === true) return true;
+    if (!win || typeof win.matchMedia !== 'function') return false;
+    return ['standalone', 'minimal-ui', 'window-controls-overlay'].some(m => !!win.matchMedia(`(display-mode: ${m})`).matches);
+  } catch { return false; }
+}
+function appReloadUrls(doc, origin) {
+  const out = [], seen = new Set();
+  const add = (u) => {
+    if (!u) return;
+    let url;
+    try { url = new URL(u, origin + '/'); } catch { return; }
+    if (url.origin !== origin) return;
+    url.hash = '';
+    const s = url.href;
+    if (!seen.has(s)) { seen.add(s); out.push(s); }
+  };
+  try { add(doc.location && doc.location.href); } catch { /* no address */ }
+  const list = (sel) => { try { return Array.from(doc.querySelectorAll(sel) || []); } catch { return []; } };
+  for (const s of list('script[src]')) add(s.getAttribute('src'));
+  for (const l of list('link[rel="stylesheet"][href]')) add(l.getAttribute('href'));
+  return out;
+}
+function appFreshReload({ urls = [], fetch: f, swUpdate, reload, timeoutMs = 4000, setTimer = setTimeout } = {}) {
+  const jobs = [];
+  for (const u of urls) { try { jobs.push(Promise.resolve(f(u, { cache: 'reload', credentials: 'same-origin' })).catch(() => null)); } catch { /* skipped */ } }
+  if (typeof swUpdate === 'function') { try { jobs.push(Promise.resolve(swUpdate()).catch(() => null)); } catch { /* skipped */ } }
+  const all = Promise.all(jobs).then(() => 'done');
+  const late = new Promise(r => setTimer(() => r('timeout'), timeoutMs));
+  return Promise.race([all, late]).then((how) => { reload(); return how; });
+}
+function appReloadStashSave(storage, entry, now) {
+  try { storage.setItem(APP_RELOAD_STASH_KEY, JSON.stringify({ agent: String(entry.agent || ''), text: String(entry.text || ''), at: now })); return true; } catch { return false; }
+}
+function appReloadStashTake(storage, now, maxAgeMs = 60000) {
+  let raw = null;
+  try { raw = storage.getItem(APP_RELOAD_STASH_KEY); storage.removeItem(APP_RELOAD_STASH_KEY); } catch { return null; }
+  if (!raw) return null;
+  let e;
+  try { e = JSON.parse(raw); } catch { return null; }
+  if (!e || typeof e.agent !== 'string' || !e.agent || typeof e.at !== 'number' || !(now - e.at >= 0 && now - e.at <= maxAgeMs)) return null;
+  return { agent: e.agent, text: typeof e.text === 'string' ? e.text : '' };
+}
+function createAppReloader({ inCall = () => false, confirm: ask = () => true, before = () => {}, run, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
+  let busy = false;
+  function reload() {
+    if (busy) return false;
+    if (inCall() && !ask(APP_RELOAD_CALL_QUESTION)) return false;
+    busy = true;
+    try { onBusy(true); } catch { /* paint only */ }
+    try { before(); } catch { /* the reload still goes on */ }
+    setTimer(() => { busy = false; try { onBusy(false); } catch { /* paint only */ } }, busyMs);
+    Promise.resolve().then(run).catch(() => {});
+    return true;
+  }
+  return { reload, busy: () => busy };
+}
+// ── app reload (end) ──
 // ── dialog helpers (begin) ──
 const DIALOG_TEXT = {
   discardTitle: 'Discard changes?',
@@ -8347,6 +8409,7 @@ function wire() {
   $('chat-menu-btn').addEventListener('click', toggleMenu);
   $('agents-menu-btn').addEventListener('click', toggleMenu);
   $('menu-about').addEventListener('click', (e) => { e.stopPropagation(); openAboutSheet(); });
+  $('menu-reload')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); reloadApp(); });   // ?.: a phone page cached from before has no menu entry
   $('about-sheet').addEventListener('click', onAboutClick);
   // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
@@ -8538,6 +8601,33 @@ function applyMultiUser() {
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
+}
+
+// Reload app (menu): fetch the page's own files fresh, ask the service worker to look for a new version, then reload.
+// The open chat is in the address (#chat=), its draft is saved first, and a reply still streaming is followed again by
+// openChat's own re-attach. The service worker is never unregistered; push and settings are not touched.
+function paintReloadBusy(b) {
+  const el = $('menu-reload');
+  if (el) { el.disabled = !!b; el.setAttribute('aria-busy', b ? 'true' : 'false'); }
+  if (b) toast('Reloading…');
+}
+let appReloaderInst = null;
+function reloadApp() {
+  if (!appReloaderInst) {
+    appReloaderInst = createAppReloader({
+      inCall: () => !!voiceCall,
+      confirm: (q) => window.confirm(q),
+      before: () => { if (current) saveDraft(current, $('msg-input') ? $('msg-input').value : ''); },
+      run: () => appFreshReload({
+        urls: appReloadUrls(document, location.origin),
+        fetch: (u, o) => fetch(u, o),
+        swUpdate: () => ('serviceWorker' in navigator ? navigator.serviceWorker.getRegistration('/mobile').then(r => r && r.update()) : null),
+        reload: () => location.reload(),
+      }),
+      onBusy: paintReloadBusy,
+    });
+  }
+  return appReloaderInst.reload();
 }
 
 function toggleMenu(e) {

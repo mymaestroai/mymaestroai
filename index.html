@@ -648,6 +648,9 @@
     .more-menu .more-row .max-tokens-control { justify-content: space-between; gap: 10px; font-size: 0.8rem; }
     .more-menu .more-row .max-tokens-control select { font-size: 0.75rem; padding: 3px 6px; background: var(--bg-input); color: var(--text); }
     .more-menu .more-row #sdk-workers-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
+    .header-controls .header-btn.reload-btn { display: none; }   /* only in the installed app, which has no browser reload button; the selector also beats the narrow-screen .main-header-top .header-btn rule */
+    html.app-installed .header-controls .header-btn.reload-btn { display: inline-flex; align-items: center; justify-content: center; }
+    .reload-btn[aria-busy="true"], #reload-app-item[aria-busy="true"] { opacity: 0.5; pointer-events: none; }
     .more-menu .more-row .toggle-switch[style] { gap: 10px !important; justify-content: space-between; }
     .more-menu .more-hint { font-size: 0.7rem; color: var(--text-dim); line-height: 1.3; white-space: normal; }
 
@@ -2661,10 +2664,12 @@
         <button id="schedule-btn" class="header-btn" title="Task scheduler: scheduled tasks and background jobs for all agents" onclick="openSchedulePanel()">📅</button>
         <button id="settings-btn" class="header-btn" title="Settings" onclick="openSettings()">⚙️</button>
         <button id="help-btn" class="header-btn" title="Help: how-tos, the phone app, and what to do when something's wrong" aria-label="Help" onclick="openHelpPanel()">?</button>
+        <button id="reload-btn" class="header-btn reload-btn" title="Reload the app" aria-label="Reload the app" onclick="reloadApp()">↻</button>
         <div class="more-wrap" id="more-wrap">
           <button id="more-btn" class="header-btn" aria-label="More" title="More options" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" onclick="toggleMoreMenu()">⋯<span class="more-badge" id="more-badge">Advanced</span></button>
           <div id="more-menu" class="more-menu" role="menu" aria-label="More options">
             <button id="about-btn" class="more-item" role="menuitem" title="Version, channel, commit and update status of this hub" onclick="closeMoreMenu(); openAboutDialog()">ℹ️ About My Maestro AI</button>
+            <button id="reload-app-item" class="more-item" role="menuitem" title="Reload the app" onclick="closeMoreMenu(); reloadApp()">↻ Reload</button>
             <button id="comms-btn" class="more-item" role="menuitem" title="Messaging channels (Telegram etc)" onclick="closeMoreMenu(); openCommsPanel()">💬 Messaging</button>
             <button id="wallet-btn" class="more-item" role="menuitem" title="Trading wallets (on-chain)" onclick="closeMoreMenu(); openWalletPanel()">👛 Wallets</button>
             <button id="dream-btn" class="more-item" role="menuitem" title="Agent Dreaming — consolidate learnings" onclick="closeMoreMenu(); startDream()">💤 Dream (consolidate learnings)</button>

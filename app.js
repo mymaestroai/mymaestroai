@@ -5450,6 +5450,10 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
+      paintInstalledApp();
+      for (const q of ['(display-mode: standalone)', '(display-mode: minimal-ui)', '(display-mode: window-controls-overlay)']) {
+        try { if (typeof window.matchMedia === 'function') window.matchMedia(q).addEventListener('change', paintInstalledApp); } catch { /* an old browser: painted once */ }
+      }
       await loadMe();
       applyMemberView();
       renderOwnerSwitcher();
@@ -5467,6 +5471,14 @@
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       openTargets.ready(own);
+      // After a Reload: open the chat that was open, with the text that was in its message box (one-shot, reloadAppStash).
+      const reloadBack = appReloadStashTake(sessionStorage, Date.now());
+      const reloadAgent = reloadBack && AGENTS.find(x => x.name === reloadBack.agent);
+      if (reloadAgent) {
+        const id = startSoloChat(reloadAgent.name, reloadAgent.model);
+        const box = document.getElementById('input-' + id);
+        if (reloadBack.text && box && !box.value) { box.value = reloadBack.text; autoGrowTextarea(box); }
+      }
       setupTabs();
       setupConfigListeners();
       startHubHealthMonitor();
@@ -15612,6 +15624,68 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // ── version-label helpers (end) ──
 
     // Shared verbatim with lib/ui-dialog.js and mobile.js (test/ui-dialog.test.js keeps the three in step).
+    // ── app reload (begin) ──
+    const APP_RELOAD_STASH_KEY = 'hub-reload-stash';
+    const APP_RELOAD_CALL_QUESTION = 'Reloading ends the call. Reload?';
+    function appIsInstalled(win) {
+      try {
+        if (win && win.navigator && win.navigator.standalone === true) return true;
+        if (!win || typeof win.matchMedia !== 'function') return false;
+        return ['standalone', 'minimal-ui', 'window-controls-overlay'].some(m => !!win.matchMedia(`(display-mode: ${m})`).matches);
+      } catch { return false; }
+    }
+    function appReloadUrls(doc, origin) {
+      const out = [], seen = new Set();
+      const add = (u) => {
+        if (!u) return;
+        let url;
+        try { url = new URL(u, origin + '/'); } catch { return; }
+        if (url.origin !== origin) return;
+        url.hash = '';
+        const s = url.href;
+        if (!seen.has(s)) { seen.add(s); out.push(s); }
+      };
+      try { add(doc.location && doc.location.href); } catch { /* no address */ }
+      const list = (sel) => { try { return Array.from(doc.querySelectorAll(sel) || []); } catch { return []; } };
+      for (const s of list('script[src]')) add(s.getAttribute('src'));
+      for (const l of list('link[rel="stylesheet"][href]')) add(l.getAttribute('href'));
+      return out;
+    }
+    function appFreshReload({ urls = [], fetch: f, swUpdate, reload, timeoutMs = 4000, setTimer = setTimeout } = {}) {
+      const jobs = [];
+      for (const u of urls) { try { jobs.push(Promise.resolve(f(u, { cache: 'reload', credentials: 'same-origin' })).catch(() => null)); } catch { /* skipped */ } }
+      if (typeof swUpdate === 'function') { try { jobs.push(Promise.resolve(swUpdate()).catch(() => null)); } catch { /* skipped */ } }
+      const all = Promise.all(jobs).then(() => 'done');
+      const late = new Promise(r => setTimer(() => r('timeout'), timeoutMs));
+      return Promise.race([all, late]).then((how) => { reload(); return how; });
+    }
+    function appReloadStashSave(storage, entry, now) {
+      try { storage.setItem(APP_RELOAD_STASH_KEY, JSON.stringify({ agent: String(entry.agent || ''), text: String(entry.text || ''), at: now })); return true; } catch { return false; }
+    }
+    function appReloadStashTake(storage, now, maxAgeMs = 60000) {
+      let raw = null;
+      try { raw = storage.getItem(APP_RELOAD_STASH_KEY); storage.removeItem(APP_RELOAD_STASH_KEY); } catch { return null; }
+      if (!raw) return null;
+      let e;
+      try { e = JSON.parse(raw); } catch { return null; }
+      if (!e || typeof e.agent !== 'string' || !e.agent || typeof e.at !== 'number' || !(now - e.at >= 0 && now - e.at <= maxAgeMs)) return null;
+      return { agent: e.agent, text: typeof e.text === 'string' ? e.text : '' };
+    }
+    function createAppReloader({ inCall = () => false, confirm: ask = () => true, before = () => {}, run, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
+      let busy = false;
+      function reload() {
+        if (busy) return false;
+        if (inCall() && !ask(APP_RELOAD_CALL_QUESTION)) return false;
+        busy = true;
+        try { onBusy(true); } catch { /* paint only */ }
+        try { before(); } catch { /* the reload still goes on */ }
+        setTimer(() => { busy = false; try { onBusy(false); } catch { /* paint only */ } }, busyMs);
+        Promise.resolve().then(run).catch(() => {});
+        return true;
+      }
+      return { reload, busy: () => busy };
+    }
+    // ── app reload (end) ──
     // ── dialog helpers (begin) ──
     const DIALOG_TEXT = {
       discardTitle: 'Discard changes?',
@@ -15987,6 +16061,40 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       };
     }
     // ── dialog helpers (end) ──
+
+    // ── Reload (the ↻ button in the top bar and the ⋯ menu entry). The browser offers no reload button in the installed app,
+    // so the top-bar button only shows there (html.app-installed). A fresh load (lib/ui-reload.js) of the page and its own
+    // scripts; the open solo chat and the text in its box come back through sessionStorage (restore in DOMContentLoaded).
+    function paintInstalledApp() {
+      document.documentElement.classList.toggle('app-installed', appIsInstalled(window));
+    }
+    function reloadAppStash() {
+      const chat = chats[window.__activeChatId];
+      if (!(chat && !chat.isGroup && chat.agent && chat.type !== 'orchestration')) return;
+      appReloadStashSave(sessionStorage, { agent: chat.agent, text: (document.getElementById('input-' + chat.id) || {}).value || '' }, Date.now());
+    }
+    function paintReloadBusy(b) {
+      for (const id of ['reload-btn', 'reload-app-item']) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.disabled = !!b;
+        el.setAttribute('aria-busy', b ? 'true' : 'false');
+      }
+      if (b) hubToast('Reloading…');
+    }
+    let appReloaderInst = null;
+    function reloadApp() {
+      if (!appReloaderInst) {
+        appReloaderInst = createAppReloader({
+          inCall: () => !!(voiceCallS.call || voiceCallS.starting),
+          confirm: (q) => window.confirm(q),
+          before: reloadAppStash,
+          run: () => appFreshReload({ urls: appReloadUrls(document, location.origin), fetch: (u, o) => fetch(u, o), reload: () => location.reload() }),
+          onBusy: paintReloadBusy,
+        });
+      }
+      return appReloaderInst.reload();
+    }
 
     // One way out of every dialog on this page: Escape, Close / Cancel / ✕, a click on the backdrop (lib/ui-dialog.js).
     // The overlays below are found when they appear; the image viewer registers itself. A dialog's own buttons that
