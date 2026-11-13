@@ -277,6 +277,10 @@
     }
     .collapse-arrow.collapsed { transform: rotate(-90deg); }
     .agent-group-items { transition: all 0.15s; display: flex; flex-direction: column; gap: 4px; padding: 2px; }
+    .active-group .active-count { margin-left: 6px; padding: 0 6px; border-radius: 8px; background: var(--bg-card, #333); font-size: 11px; }
+    .agent-btn.active-done { opacity: .6; }
+    .active-copy .action-btn { display: none; }
+    @media (prefers-reduced-motion: reduce) { #agent-active-group { animation: none; transition: none; } }
     .group-actions { display: flex; gap: 6px; }
     .group-action-btn {
       font-size: 0.6rem; text-transform: none; letter-spacing: 0;

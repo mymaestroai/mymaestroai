@@ -81,6 +81,9 @@
       min-height: 60px; padding: 8px 14px; border-bottom: 1px solid var(--border);
     }
     .agent-row:active { background: var(--bg-card); }
+    .agent-row.active-done { opacity: .6; }
+    .active-sec { overflow: hidden; }
+    @media (prefers-reduced-motion: reduce) { .active-sec { animation: none; } }
     .agent-icon { font-size: 26px; width: 36px; text-align: center; flex-shrink: 0; }
     .agent-meta { flex: 1; min-width: 0; }
     .agent-name { font-size: 16px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -812,6 +815,7 @@
     <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
     <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
+    <button id="menu-active-top">⬆ Active agents at the top: On</button>
     <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
     <button id="menu-voice">&#x1F399; Voice</button>
     <button id="menu-workers">&#x1F477; Worker history</button>

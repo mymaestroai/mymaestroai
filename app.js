@@ -2799,6 +2799,10 @@
           <label style="flex-basis:auto"><input type="checkbox" id="st-fold-auto" ${foldAutoOn() ? 'checked' : ''} onchange="saveFoldAuto(this.checked)"> Fold consultations, scheduled tasks and hub notices into cards</label>
         </div>
         <div class="st-hint">This browser only. Turn it off to show every automatic turn in full.</div>
+        <div class="st-row">
+          <label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show active agents at the top of the agent list</label>
+        </div>
+        <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
       </div>`;
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
@@ -5850,7 +5854,7 @@
         <span class="group-action-btn" onclick="openCloneAgent(event)" title="Clone existing agent">Clone</span>
       </div>`;
 
-      let html = groupActions;
+      let html = '<div id="agent-active-group" class="agent-group active-group" data-category="active" hidden></div>' + groupActions;
       categories.forEach(cat => {
         const agents = grouped[cat.key] || [];
         if (agents.length === 0) return;
@@ -5877,7 +5881,9 @@
           }
         });
       });
+      activeWireHold();
       paintAllAgentStatus();
+      paintActiveSection(true);
       renderAgentPicker();
     }
 
@@ -6519,6 +6525,100 @@
     const localBusy = new Map();     // name -> ISO time this browser started streaming a reply
     let statusKnown = false;
     let busyFilterOn = false;
+
+    // Active section at the top of the agent list (helpers: activeInitial, activeBusyFrom, activeStep, ...).
+    let activeState = activeInitial(); let activeHeld = false; let activeHoldTimer = null; let activeTicker = null;
+    let activeHoldWired = false;
+    function activeTopOn() { try { return localStorage.getItem('hub-active-top') !== 'off'; } catch { return true; } }
+    function saveActiveTop(on) {
+      try { localStorage.setItem('hub-active-top', on ? 'on' : 'off'); } catch {}
+      paintActiveSection(true);
+    }
+    function activeMakeCopy(row) {
+      const orig = document.getElementById('agent-btn-' + row.name);
+      if (!orig) return null;
+      const copy = orig.cloneNode(true);
+      copy.removeAttribute('id');
+      copy.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+      copy.classList.add('active-copy');
+      if (row.doneAt != null) {
+        copy.classList.add('active-done');
+        copy.classList.remove('is-busy');
+        let line = copy.querySelector('.agent-busy-line');
+        if (!line) {
+          line = document.createElement('span');
+          line.className = 'agent-busy-line';
+          (copy.querySelector('.agent-info') || copy).appendChild(line);
+        }
+        line.textContent = '✓ done';
+      }
+      copy.addEventListener('click', (e) => {
+        if (!e.target.classList.contains('action-btn')) startSoloChat(copy.dataset.agent, copy.dataset.model);
+      });
+      return copy;
+    }
+    function paintActiveSection(force) {
+      const box = document.getElementById('agent-active-group');
+      if (!box) return;
+      const busy = activeBusyFrom(agentStatus, localBusy, AGENTS.map(a => a.name));
+      const next = activeStep(activeState, { busy, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
+      const changed = force || activeChanged(activeState, next);
+      activeState = next;
+      if (activeState.rows.length === 0) {
+        box.innerHTML = '';
+        box.hidden = true;
+        if (activeTicker) { clearInterval(activeTicker); activeTicker = null; }
+        return;
+      }
+      box.hidden = false;
+      if (!activeTicker) activeTicker = setInterval(paintActiveSection, 1000);
+      const collapsed = localStorage.getItem('cat-collapsed-active') === 'true';
+      const oldH = box.offsetHeight;
+      if (changed || !box.querySelector('.agent-group-items')) {
+        box.innerHTML = `<div class="agent-group-title" onclick="toggleCategoryCollapse('active', this)"><span class="collapse-arrow ${collapsed ? 'collapsed' : ''}">▼</span><span>⚡ Active</span><span class="active-count">${activeState.rows.length}</span></div><div class="agent-group-items" style="${collapsed ? 'display:none' : ''}"></div>`;
+      }
+      const items = box.querySelector('.agent-group-items');
+      if (changed || items.children.length !== activeState.rows.length) {
+        items.replaceChildren(...activeState.rows.map(activeMakeCopy).filter(Boolean));
+      } else {
+        // Same rows: update each copy's status line in place, so a row under the pointer is never replaced mid-click.
+        activeState.rows.forEach((row, i) => {
+          const copy = items.children[i], orig = document.getElementById('agent-btn-' + row.name);
+          if (!copy || !orig || row.doneAt != null) return;
+          copy.classList.toggle('is-busy', orig.classList.contains('is-busy'));
+          const src = orig.querySelector('.agent-busy-line'), dst = copy.querySelector('.agent-busy-line');
+          if (src && dst) { dst.textContent = src.textContent; dst.className = src.className; }
+          else if (src && !dst) (copy.querySelector('.agent-info') || copy).appendChild(src.cloneNode(true));
+          const sd = orig.querySelector('.agent-status'), dd = copy.querySelector('.agent-status');
+          if (sd && dd) { dd.className = sd.className; dd.textContent = sd.textContent; dd.title = sd.title; }
+        });
+      }
+      if (changed) {
+        const newH = box.offsetHeight;
+        const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (!reduced && oldH !== newH && box.animate) {
+          box.animate([{ height: oldH + 'px', overflow: 'hidden' }, { height: newH + 'px', overflow: 'hidden' }], { duration: 150, easing: 'ease-out' });
+        }
+      }
+    }
+    function activeWireHold() {
+      if (activeHoldWired) return;
+      const list = document.getElementById('agent-list');
+      if (!list) return;
+      activeHoldWired = true;
+      const release = () => {
+        activeHeld = false;
+        clearTimeout(activeHoldTimer); activeHoldTimer = null;
+        paintActiveSection();
+      };
+      const restart = () => {
+        clearTimeout(activeHoldTimer);
+        activeHoldTimer = setTimeout(release, 2000);
+      };
+      list.addEventListener('mouseenter', () => { activeHeld = true; restart(); });
+      list.addEventListener('mousemove', () => { activeHeld = true; restart(); });   // any movement over the list holds it again
+      list.addEventListener('mouseleave', release);
+    }
     const STATUS_POLL_MS = 20000;
     const STATUS_TICK_MS = 30000;
     const TURN_POLL_MS = 4000;       // a followed turn's view, while the live event stream is down
@@ -6826,6 +6926,7 @@
       el.classList.toggle('filtering', busyFilterOn);
       el.textContent = busyChipLabel(split, busyFilterOn);
       list?.classList.toggle('busy-filter', busyFilterOn);
+      paintActiveSection();
     }
 
     function toggleBusyFilter() {
@@ -14266,6 +14367,62 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
     }
     // ── worker list helpers (end) ──
+    // ── active agents helpers (begin) ──
+    function activeInitial() {
+      return { rows: [] };
+    }
+    function activeIsWorker(name, entry) {
+      return entry && typeof entry.worker === 'boolean' ? entry.worker : /^tw-/.test(name);
+    }
+    function activeBusyFrom(statusMap, localBusy, visibleNames) {
+      const visible = new Set(visibleNames || []);
+      const out = {};
+      const mark = (name, iso) => {
+        if (!visible.has(name)) return;
+        const t = Date.parse(iso);
+        const since = Number.isFinite(t) ? t : Date.now();
+        out[name] = name in out ? Math.min(out[name], since) : since;
+      };
+      for (const [name, entry] of Object.entries(statusMap || {})) {
+        if (!entry || !(entry.busy || entry.pendingQuestion)) continue;
+        if (activeIsWorker(name, entry)) { if (entry.parent) mark(entry.parent, entry.busySince); }
+        else mark(name, entry.busySince);
+      }
+      const local = localBusy instanceof Map ? [...localBusy.entries()] : Object.entries(localBusy || {});
+      for (const [name, iso] of local) {
+        const entry = (statusMap || {})[name];
+        if (activeIsWorker(name, entry)) continue;
+        mark(name, iso);
+      }
+      return out;
+    }
+    function activeStep(state, input) {
+      const { busy = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
+      if (!enabled) return { rows: [] };
+      const prev = (state && state.rows) || [];
+      const rows = [];
+      for (const r of prev) {
+        if (r.name in busy) { rows.push({ name: r.name, since: Math.min(r.since, busy[r.name]), doneAt: null }); continue; }
+        const doneAt = r.doneAt == null ? now : r.doneAt;
+        if (!held && now - doneAt >= lingerMs) continue;          // leaves the section
+        rows.push({ name: r.name, since: r.since, doneAt });
+      }
+      if (held) return { rows };                                  // nothing joins while the list is held
+      const have = new Set(rows.map(r => r.name));
+      const joining = Object.keys(busy).filter(n => !have.has(n)).map(n => ({ name: n, since: busy[n], doneAt: null }));
+      joining.sort((a, b) => (a.since - b.since) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      return { rows: rows.concat(joining) };
+    }
+    function activeChanged(a, b) {
+      const x = (a && a.rows) || [], y = (b && b.rows) || [];
+      if (x.length !== y.length) return true;
+      for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null)) return true;
+      return false;
+    }
+    function activeTitle(state) {
+      return `Active ${((state && state.rows) || []).length}`;
+    }
+    // ── active agents helpers (end) ──
     // ── busy and hub workers helpers (begin) ──
     function busyIsWorker(name, entry) {
       return entry && typeof entry.worker === 'boolean' ? entry.worker : /^tw-/.test(name);
