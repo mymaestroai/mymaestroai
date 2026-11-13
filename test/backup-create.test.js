@@ -287,161 +287,239 @@ test('a new backup never takes the name of one this computer still records (kept
   assert.deepStrictEqual(places.index(inst.root).map(x => x.name).sort(), [a.name, b.name].sort(), 'both records kept');
 });
 
-test('Docker installed but not running: decided from the endpoint and a socket probe, never the error text; the gate is kept and Docker is asked again at the end', async () => {
-  const { holdBoxes, dockerFailure, dockerEndpoint } = require('../lib/backup/create');
-  const stateFile = path.join(TMP, 'r-docker-down', 'paused.json');
+// ── Docker installed but not running (a Mac with Docker Desktop closed): stand-ins for `docker`, the gate and the socket probe ──
+const DD = (() => {
+  const SOCK = '/Users/sam/.docker/run/docker.sock';
   const LINUX_DOWN = 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n';
-  const DENIED = 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.47/containers/json": dial unix /var/run/docker.sock: connect: permission denied\n';
-  const FRENCH = 'Impossible de se connecter au démon Docker : le service est arrêté\n';
-  const DOWN = { status: 1, stdout: '', stderr: LINUX_DOWN };
-  const TIMEOUT = { error: Object.assign(new Error('spawnSync docker ETIMEDOUT'), { code: 'ETIMEDOUT' }) };
-  // run stand-in: answers[n] is the reply to the n-th `docker ps` (1-based); the context command fails unless given
-  const docker = (answers, { context = null } = {}) => {
-    const calls = []; let n = 0;
-    const run = (cmd, args) => {
-      calls.push(args.join(' '));
-      if (args[0] === 'context') return context ? context() : { status: 1, stdout: '', stderr: 'context not found' };
-      if (args[0] === 'ps') { n++; const a = answers[Math.min(n, answers.length) - 1]; return typeof a === 'function' ? a() : a; }
+  const DENIED = 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: connect: permission denied\n';
+  const DOWN = { status: 1, stdout: '', stderr: `failed to connect to the docker API at unix://${SOCK}; check if the path is correct and if the daemon is running: dial unix ${SOCK}: connect: no such file or directory\n` };
+  const UP = (ids = '') => ({ status: 0, stdout: ids, stderr: '' });
+  const TIMEOUT = { error: Object.assign(new Error('spawnSync docker ETIMEDOUT'), { code: 'ETIMEDOUT' }), status: null };
+  // answers[n] answers the n-th `docker ps` (1-based; pinned or not); the context command answers with SOCK unless told otherwise
+  function docker(answers, { context = () => ({ status: 0, stdout: `unix://${SOCK}\n` }) } = {}) {
+    const calls = [], envs = []; let n = 0;
+    const run = (cmd, args, o) => {
+      calls.push(args.join(' ')); envs.push(o && o.env);
+      if (args[0] === 'context') return context();
+      if (args.includes('ps')) { n++; const a = answers[Math.min(n, answers.length) - 1]; return typeof a === 'function' ? a(args) : a; }
       return { status: 0 };
     };
-    return { run, calls };
-  };
-  // socket probe stand-in: never a real socket
+    return { run, calls, envs };
+  }
   const probeSays = (...answers) => { let i = 0; const seen = []; const f = async (p) => { seen.push(p); return answers[Math.min(i++, answers.length - 1)]; }; f.seen = seen; return f; };
-  let held = 0, taken = 0;
-  const gate = async () => { held++; taken++; const letGo = () => { held--; }; return letGo; };
-  const env = {};
+  function mkGate() { const g = { held: 0, taken: 0, released: 0 }; g.fn = async () => { g.held++; g.taken++; return () => { g.held--; g.released++; }; }; return g; }
   const quiet = () => {};
+  const base = (extra) => ({ procOk: false, env: {}, log: quiet, ...extra });
+  return { SOCK, LINUX_DOWN, DENIED, DOWN, UP, TIMEOUT, docker, probeSays, mkGate, quiet, base };
+})();
+const keptOrWhy = async (rel) => { try { await rel(); return 'kept'; } catch (e) { return e; } };
 
-  // the wording helper no longer decides "down" from text
-  assert.strictEqual(dockerFailure({ status: 1, stderr: LINUX_DOWN }), 'other');
-  assert.strictEqual(dockerFailure({ status: 1, stderr: DENIED }), 'denied');
-  assert.strictEqual(dockerFailure(TIMEOUT), 'timeout');
+test('Mac, Docker down, a gate: the gate is held for the copy, Docker asked again, kept when still down at the end on the same socket', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  const g = DD.mkGate(); const d = DD.docker([DD.DOWN, DD.DOWN, DD.DOWN]); const logs = [];
+  const rel = await holdBoxes('darwin', d.run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('dead'), log: (m) => logs.push(m) }));
+  assert.strictEqual(g.held, 1, 'held during the copy');
+  assert.strictEqual(await keptOrWhy(rel), 'kept');
+  assert.deepStrictEqual([g.held, g.taken, g.released], [0, 1, 1]);
+  assert.ok(!d.calls.some(c => /^(pause|unpause)/.test(c)), 'nothing paused');
+  assert.match(logs[0], /Docker isn't running on this Mac, so there are no running agent boxes to pause; the backup checks again at the end/);
+  assert.ok(!logs.some(m => /no box can be running/i.test(m)));
+});
 
-  // which Docker was asked: DOCKER_HOST unix://, the context command, the default when the context command fails
-  assert.deepStrictEqual(dockerEndpoint(docker([]).run, { env: { DOCKER_HOST: 'unix:///tmp/pr74-x.sock' }, platform: 'darwin' }), { local: true, path: '/tmp/pr74-x.sock', from: 'env' });
-  assert.deepStrictEqual(dockerEndpoint(docker([]).run, { env: { DOCKER_HOST: 'tcp://10.0.0.5:2376' }, platform: 'darwin' }), { local: false, from: 'env' });
-  const ctxRun = docker([], { context: () => ({ status: 0, stdout: 'unix:///Users/sam/.docker/run/docker.sock\n' }) });
-  assert.deepStrictEqual(dockerEndpoint(ctxRun.run, { env, platform: 'darwin' }), { local: true, path: '/Users/sam/.docker/run/docker.sock', from: 'context' });
-  assert.deepStrictEqual(ctxRun.calls, ['context inspect --format {{.Endpoints.docker.Host}}']);
-  assert.deepStrictEqual(dockerEndpoint(docker([], { context: () => ({ status: 0, stdout: 'ssh://me@box\n' }) }).run, { env, platform: 'darwin' }), { local: false, from: 'context' });
-  assert.deepStrictEqual(dockerEndpoint(docker([]).run, { env, platform: 'darwin' }), { local: true, path: '/var/run/docker.sock', from: 'default' });
-  assert.deepStrictEqual(dockerEndpoint(docker([], { context: () => ({ status: 0, stdout: '' }) }).run, { env, platform: 'darwin' }), { local: true, path: '/var/run/docker.sock', from: 'default' }, 'prints nothing: the default');
-  assert.strictEqual(dockerEndpoint(docker([]).run, { env, platform: 'win32' }).local, false, 'Windows: never a local unix socket');
-  // ... and holdBoxes probes exactly that socket
-  const viaEnv = probeSays('dead');
-  await (await holdBoxes('darwin', docker([DOWN, DOWN]).run, { procOk: false, env: { DOCKER_HOST: 'unix:///tmp/pr74-x.sock' }, probeSocket: viaEnv, log: quiet }))();
-  assert.deepStrictEqual(viaEnv.seen, ['/tmp/pr74-x.sock', '/tmp/pr74-x.sock']);
+test('the endpoint is the docker CLI\'s own answer, asked with the caller\'s environment (DOCKER_CONTEXT and DOCKER_HOST together: whatever the CLI reports)', () => {
+  const { dockerEndpoint } = require('../lib/backup/create');
+  const env = { DOCKER_CONTEXT: 'desktop-linux', DOCKER_HOST: 'unix:///tmp/pr74-a.sock' };
+  const d = DD.docker([], { context: () => ({ status: 0, stdout: 'unix:///tmp/pr74-a.sock\n' }) });
+  assert.deepStrictEqual(dockerEndpoint(d.run, { env, platform: 'darwin' }), { local: true, path: '/tmp/pr74-a.sock', from: 'cli' });
+  assert.deepStrictEqual(d.calls, ['context inspect --format {{.Endpoints.docker.Host}}']);
+  assert.strictEqual(d.envs[0], env, 'both variables reach the CLI unchanged; nothing is read from them by hand');
+  const viaCtx = DD.docker([], { context: () => ({ status: 0, stdout: `unix://${DD.SOCK}\n` }) });
+  assert.deepStrictEqual(dockerEndpoint(viaCtx.run, { env: { DOCKER_HOST: 'unix:///ignored.sock' }, platform: 'darwin' }), { local: true, path: DD.SOCK, from: 'cli' }, 'DOCKER_HOST is not read by hand');
+  assert.deepStrictEqual(dockerEndpoint(DD.docker([], { context: () => ({ status: 0, stdout: 'ssh://me@box\n' }) }).run, { env: {}, platform: 'darwin' }), { local: false, from: 'cli' });
+  assert.strictEqual(dockerEndpoint(DD.docker([]).run, { env: {}, platform: 'win32' }).local, false);
+});
 
-  // down + gate: the gate is taken and released; kept when Docker is still down at the end; nothing paused, no record written
-  held = 0; taken = 0;
-  const d1 = docker([DOWN, DOWN]);
-  const logs = [];
-  const rel1 = await holdBoxes('darwin', d1.run, { gate, stateFile, procOk: false, env, probeSocket: probeSays('dead'), log: (m) => logs.push(m) });
-  assert.strictEqual(held, 1, 'the launch gate is held during the copy');
-  await rel1();
-  assert.strictEqual(held, 0, 'and let go after');
-  assert.ok(!d1.calls.some(c => /^(pause|unpause)/.test(c)), 'nothing paused');
-  assert.ok(!fs.existsSync(stateFile), 'no record written');
-  assert.match(logs[0], /Docker isn't running on this computer, so there are no running agent boxes to pause; the backup checks again at the end/);
-  assert.ok(!logs.some(m => /no box can be running|no agent boxes were running/i.test(m)), 'no overclaim');
-  // down without a gate (a terminal backup): goes ahead when still down at the end
-  await (await holdBoxes('darwin', docker([DOWN, DOWN]).run, { procOk: false, env, probeSocket: probeSays('dead'), log: quiet }))();
-
-  // down, then Docker answers at the end with a running hub-agent box: not kept, with a gate and without
-  for (const g of [gate, null]) {
-    held = 0;
-    const rel = await holdBoxes('darwin', docker([DOWN, { status: 0, stdout: 'abc123\n' }, { status: 0, stdout: 'abc123\n' }]).run, { gate: g, procOk: false, env, probeSocket: probeSays('dead'), log: quiet });
-    await assert.rejects(rel(), (e) => e.code === 'EBOXES' && /Docker started while the backup was copying and an agent's box is running, so this backup was not kept/.test(e.message), g ? 'with a gate' : 'without');
-    assert.strictEqual(held, 0);
+test('a failed or empty context inspection: the endpoint is unknown, never guessed, and the backup is refused', async () => {
+  const { holdBoxes, dockerEndpoint } = require('../lib/backup/create');
+  for (const context of [() => ({ status: 1, stdout: '', stderr: 'context "x": context not found' }), () => ({ status: 0, stdout: '\n' }), () => ({ error: new Error('ETIMEDOUT'), status: null })]) {
+    assert.deepStrictEqual(dockerEndpoint(DD.docker([], { context }).run, { env: {}, platform: 'darwin' }), { local: false, from: 'unknown' });
+    const p = DD.probeSays('dead'); const g = DD.mkGate();
+    await assert.rejects(holdBoxes('darwin', DD.docker([DD.DOWN], { context }).run, DD.base({ gate: g.fn, probeSocket: p })), (e) => e.code === 'EBOXES');
+    assert.deepStrictEqual(p.seen, [], 'no socket is probed');
+    assert.strictEqual(g.held, 0);
   }
-  // down, then Docker answers with only stopped hub-agent boxes: without a gate not kept (one may have run unseen); with a gate kept
-  const stopped = () => docker([DOWN, { status: 0, stdout: 'abc123\n' }, { status: 0, stdout: '' }]).run;
-  await assert.rejects((await holdBoxes('darwin', stopped(), { procOk: false, env, probeSocket: probeSays('dead'), log: quiet }))(), (e) => e.code === 'EBOXES' && /one may have run during the copy/.test(e.message));
-  held = 0;
-  await (await holdBoxes('darwin', stopped(), { gate, procOk: false, env, probeSocket: probeSays('dead'), log: quiet }))();
-  assert.strictEqual(held, 0);
-  // down, then Docker answers with no hub-agent boxes at all: kept
-  await (await holdBoxes('darwin', docker([DOWN, { status: 0, stdout: '' }]).run, { procOk: false, env, probeSocket: probeSays('dead'), log: quiet }))();
+});
 
-  // down at start; at the end Docker times out, or is denied, or is starting (socket listening, ps still failing): not kept
-  for (const [end, sock] of [[TIMEOUT, 'dead'], [{ status: 1, stdout: '', stderr: DENIED }, 'denied'], [DOWN, 'listening'], [DOWN, 'unknown']]) {
-    held = 0;
-    const rel = await holdBoxes('darwin', docker([DOWN, end]).run, { gate, procOk: false, env, probeSocket: probeSays('dead', sock), log: quiet });
-    await assert.rejects(rel(), (e) => e.code === 'EBOXES' && /Docker started while the backup was copying and the agents' boxes could not be checked/.test(e.message), JSON.stringify(sock));
-    assert.strictEqual(held, 0);
+test('the end-of-copy check asks the pinned socket, even if the context would now answer differently', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  let ctxCalls = 0;
+  const d = DD.docker([DD.DOWN, DD.DOWN, DD.DOWN], { context: () => (++ctxCalls === 1 ? { status: 0, stdout: `unix://${DD.SOCK}\n` } : { status: 0, stdout: 'unix:///tmp/other.sock\n' }) });
+  const p = DD.probeSays('dead');
+  const rel = await holdBoxes('darwin', d.run, DD.base({ gate: DD.mkGate().fn, probeSocket: p }));
+  assert.strictEqual(await keptOrWhy(rel), 'kept');
+  assert.strictEqual(ctxCalls, 1, 'the context is asked once');
+  const pinned = d.calls.filter(c => c.startsWith('-H '));
+  assert.deepStrictEqual(pinned, [`-H unix://${DD.SOCK} ps -q -a --filter name=^hub-agent-`, `-H unix://${DD.SOCK} ps -q -a --filter name=^hub-agent-`], 'after the gate and at the end');
+  assert.deepStrictEqual(p.seen, [DD.SOCK, DD.SOCK, DD.SOCK]);
+});
+
+test('Linux and Windows with a dead socket: refused as before; only a Mac takes the down path', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  for (const platform of ['linux', 'win32']) {
+    const g = DD.mkGate();
+    await assert.rejects(holdBoxes(platform, DD.docker([DD.DOWN, DD.DOWN, DD.DOWN]).run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('dead') })), (e) => e.code === 'EBOXES' && /could not be checked/.test(e.message), platform);
+    assert.strictEqual(g.held, 0);
   }
+  assert.strictEqual(await keptOrWhy(await holdBoxes('darwin', DD.docker([DD.DOWN, DD.DOWN, DD.DOWN]).run, DD.base({ gate: DD.mkGate().fn, probeSocket: DD.probeSays('dead') }))), 'kept');
+});
 
-  // the gate timed out at the start, or during the copy: the normal messages, the gate released
-  let timedReleased = 0;
-  const timedGate = async () => { const letGo = () => { timedReleased++; }; letGo.timedOut = true; return letGo; };
-  await assert.rejects(holdBoxes('darwin', docker([DOWN]).run, { gate: timedGate, procOk: false, env, probeSocket: probeSays('dead'), log: quiet }), /busy starting for too long/);
-  assert.strictEqual(timedReleased, 1);
-  let lateLetGo = null, lateReleased = 0;
-  const lateGate = async () => { lateLetGo = () => { lateReleased++; }; return lateLetGo; };
-  const relLate = await holdBoxes('darwin', docker([DOWN, DOWN]).run, { gate: lateGate, procOk: false, env, probeSocket: probeSays('dead'), log: quiet });
-  lateLetGo.timedOut = true;
-  await assert.rejects(relLate(), /longer than agents can be kept waiting/);
-  assert.strictEqual(lateReleased, 1);
+test('no gate on the down path (a backup from a terminal): refused with the Settings message', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  await assert.rejects(holdBoxes('darwin', DD.docker([DD.DOWN, DD.DOWN]).run, DD.base({ probeSocket: DD.probeSays('dead') })), (e) => e.code === 'EBOXES' && /Settings → Backups/.test(e.message));
+});
 
-  // a remote Docker (tcp://, and a host whose name contains "docker.sock") that "cannot connect": never down, refused, no probe
+test('Docker answering right after the gate is taken: the normal path, the gate released once and taken again, nothing leaked', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  const g = DD.mkGate();
+  // 1: down; 2 (pinned, after the gate): answers; 3: the normal path's listing; 4: running boxes; 5: end check
+  const d = DD.docker([DD.DOWN, DD.UP(''), DD.UP(''), DD.UP(''), DD.UP('')]);
+  const rel = await holdBoxes('darwin', d.run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('dead') }));
+  assert.deepStrictEqual([g.held, g.taken, g.released], [1, 2, 1], 'the down gate let go, the normal path holds its own');
+  assert.strictEqual(await keptOrWhy(rel), 'kept');
+  assert.deepStrictEqual([g.held, g.taken, g.released], [0, 2, 2]);
+});
+
+test('Docker answering at the end of the copy: not kept, with no boxes, only stopped boxes, or running boxes', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  for (const ids of ['', 'abc123\n', 'abc123\ndef456\n']) {
+    const g = DD.mkGate();
+    const rel = await holdBoxes('darwin', DD.docker([DD.DOWN, DD.DOWN, DD.UP(ids)]).run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('dead') }));
+    const why = await keptOrWhy(rel);
+    assert.ok(why instanceof Error && why.code === 'EBOXES' && /Docker started while the backup was copying, so agent activity during the copy could not be ruled out/.test(why.message), JSON.stringify(ids));
+    assert.deepStrictEqual([g.held, g.released], [0, 1]);
+  }
+});
+
+test('Docker neither down nor answering at the end (timeout, denied, starting, unknown): not kept', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  for (const [end, sock] of [[DD.TIMEOUT, 'dead'], [{ status: 1, stdout: '', stderr: DD.DENIED }, 'denied'], [DD.DOWN, 'listening'], [DD.DOWN, 'unknown']]) {
+    const g = DD.mkGate();
+    const rel = await holdBoxes('darwin', DD.docker([DD.DOWN, DD.DOWN, end]).run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('dead', 'dead', sock) }));
+    const why = await keptOrWhy(rel);
+    assert.ok(why instanceof Error && /could not be checked/.test(why.message), sock);
+    assert.strictEqual(g.held, 0);
+  }
+});
+
+test('a stale socket file (connection refused) is dead; a probe that times out or is unsure is not down, and the backup is refused', async () => {
+  const { probeSocket, holdBoxes } = require('../lib/backup/create');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr74-stale-'));
+  try {
+    const notASocket = path.join(dir, 'docker.sock'); fs.writeFileSync(notASocket, '');   // connecting to a non-socket file is refused
+    assert.strictEqual(await probeSocket(notASocket, 1500), 'dead');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  const g = DD.mkGate();
+  await assert.rejects(holdBoxes('darwin', DD.docker([DD.DOWN]).run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('unknown') })), (e) => e.code === 'EBOXES');
+  assert.strictEqual(g.taken, 0);
+});
+
+test('"ran and failed" needs a numeric non-zero exit: a null status (killed by a signal) is refused, never down', async () => {
+  const { holdBoxes, ranAndFailed } = require('../lib/backup/create');
+  const killed = { status: null, signal: 'SIGKILL', stdout: '', stderr: '' };
+  assert.strictEqual(ranAndFailed(killed), false);
+  assert.strictEqual(ranAndFailed(DD.DOWN), true);
+  const p = DD.probeSays('dead');
+  await assert.rejects(holdBoxes('darwin', DD.docker([killed]).run, DD.base({ gate: DD.mkGate().fn, probeSocket: p })), (e) => e.code === 'EBOXES');
+  assert.deepStrictEqual(p.seen, []);
+});
+
+test('the error text never decides: a remote endpoint (even one named docker.sock) or a listening socket with the classic text is refused; unknown wording with a dead socket is down', async () => {
+  const { holdBoxes, dockerFailure } = require('../lib/backup/create');
+  assert.strictEqual(dockerFailure({ status: 1, stderr: DD.LINUX_DOWN }), 'other');
+  assert.strictEqual(dockerFailure({ status: 1, stderr: DD.DENIED }), 'denied');
   for (const host of ['tcp://10.0.0.5:2376', 'tcp://docker.sock.example.com:2376']) {
-    const p = probeSays('dead');
-    const said = `Cannot connect to the Docker daemon at ${host}. Is the docker daemon running?\n`;
-    await assert.rejects(holdBoxes('darwin', docker([{ status: 1, stdout: '', stderr: said }]).run, { gate, procOk: false, env: { DOCKER_HOST: host }, probeSocket: p, log: quiet }), (e) => e.code === 'EBOXES' && /`docker ps` works in a terminal/.test(e.message), host);
+    const p = DD.probeSays('dead');
+    const said = { status: 1, stdout: '', stderr: `Cannot connect to the Docker daemon at ${host}. Is the docker daemon running?\n` };
+    await assert.rejects(holdBoxes('darwin', DD.docker([said], { context: () => ({ status: 0, stdout: `${host}\n` }) }).run, DD.base({ gate: DD.mkGate().fn, probeSocket: p })), (e) => e.code === 'EBOXES' && /`docker ps` works in a terminal/.test(e.message), host);
     assert.deepStrictEqual(p.seen, [], 'a remote endpoint is never probed');
   }
-  // the local socket is listening while `docker ps` fails with the classic "cannot connect" text: not down, refused
-  await assert.rejects(holdBoxes('darwin', docker([DOWN]).run, { gate, procOk: false, env, probeSocket: probeSays('listening'), log: quiet }), (e) => e.code === 'EBOXES' && /Docker said: Cannot connect to the Docker daemon/.test(e.message));
-  // a timeout or an unknown answer from the probe: not down, refused
-  await assert.rejects(holdBoxes('darwin', docker([DOWN]).run, { gate, procOk: false, env, probeSocket: probeSays('unknown'), log: quiet }), (e) => e.code === 'EBOXES');
-  // the socket refuses this user: refused with the permission message, whatever docker printed
-  await assert.rejects(holdBoxes('darwin', docker([{ status: 1, stdout: '', stderr: FRENCH }]).run, { gate, procOk: false, env, probeSocket: probeSays('denied'), log: quiet }), (e) => e.code === 'EBOXES' && /permission denied on its socket/.test(e.message));
-  // non-English or unknown error text with a dead local socket: down, kept
-  for (const stderr of [FRENCH, 'something unexpected happened\n', '']) {
-    held = 0;
-    await (await holdBoxes('darwin', docker([{ status: 1, stdout: '', stderr }, { status: 1, stdout: '', stderr }]).run, { gate, procOk: false, env, probeSocket: probeSays('dead'), log: quiet }))();
-    assert.strictEqual(held, 0, JSON.stringify(stderr));
+  await assert.rejects(holdBoxes('darwin', DD.docker([{ status: 1, stdout: '', stderr: DD.LINUX_DOWN }]).run, DD.base({ gate: DD.mkGate().fn, probeSocket: DD.probeSays('listening') })), (e) => e.code === 'EBOXES' && /Docker said: Cannot connect to the Docker daemon/.test(e.message));
+  await assert.rejects(holdBoxes('darwin', DD.docker([{ status: 1, stdout: '', stderr: 'Impossible de se connecter\n' }]).run, DD.base({ gate: DD.mkGate().fn, probeSocket: DD.probeSays('denied') })), (e) => /permission denied on its socket/.test(e.message));
+  for (const stderr of ['Impossible de se connecter au démon Docker\n', 'something unexpected\n', '']) {
+    const odd = { status: 1, stdout: '', stderr };
+    assert.strictEqual(await keptOrWhy(await holdBoxes('darwin', DD.docker([odd, odd, odd]).run, DD.base({ gate: DD.mkGate().fn, probeSocket: DD.probeSays('dead') }))), 'kept', JSON.stringify(stderr));
   }
-  // a spawn error (timeout) is never "down", even with a dead socket
-  await assert.rejects(holdBoxes('darwin', docker([TIMEOUT]).run, { gate, procOk: false, env, probeSocket: probeSays('dead'), log: quiet }), (e) => e.code === 'EBOXES' && /didn't answer within 15 seconds/.test(e.message));
-  await assert.rejects(holdBoxes('darwin', docker([{ status: 1, stdout: '', stderr: DENIED }]).run, { gate, procOk: false, env, probeSocket: probeSays('listening'), log: quiet }), (e) => e.code === 'EBOXES' && /docker group/.test(e.message));
+  await assert.rejects(holdBoxes('darwin', DD.docker([DD.TIMEOUT]).run, DD.base({ gate: DD.mkGate().fn, probeSocket: DD.probeSays('dead') })), /didn't answer within 15 seconds/);
+});
 
-  // a throw inside the down path still releases the gate: in the log line, and in the end-of-copy check
-  held = 0;
-  await assert.rejects(holdBoxes('darwin', docker([DOWN]).run, { gate, procOk: false, env, probeSocket: probeSays('dead'), log: () => { throw new Error('log broke'); } }), /log broke/);
-  assert.strictEqual(held, 0, 'released after a throw at the start');
-  const relThrow = await holdBoxes('darwin', docker([DOWN, () => { throw new Error('run broke'); }]).run, { gate, procOk: false, env, probeSocket: probeSays('dead'), log: quiet });
-  await assert.rejects(relThrow(), (e) => e.code === 'EBOXES' && /could not be checked/.test(e.message));
-  assert.strictEqual(held, 0, 'released after a throw in the end check');
+test('the gate on the down path: a time-out at the start or during the copy gives the normal messages, and the gate is always released', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  let r1 = 0;
+  const timed = async () => { const l = () => { r1++; }; l.timedOut = true; return l; };
+  await assert.rejects(holdBoxes('darwin', DD.docker([DD.DOWN]).run, DD.base({ gate: timed, probeSocket: DD.probeSays('dead') })), /busy starting for too long/);
+  assert.strictEqual(r1, 1);
+  let l2 = null, r2 = 0;
+  const late = async () => { l2 = () => { r2++; }; return l2; };
+  const rel = await holdBoxes('darwin', DD.docker([DD.DOWN, DD.DOWN, DD.DOWN]).run, DD.base({ gate: late, probeSocket: DD.probeSays('dead') }));
+  l2.timedOut = true;
+  await assert.rejects(rel(), /longer than agents can be kept waiting/);
+  assert.strictEqual(r2, 1);
+  // a throw inside the down path still releases the gate: in the log line, and in the end check
+  const g = DD.mkGate();
+  await assert.rejects(holdBoxes('darwin', DD.docker([DD.DOWN, DD.DOWN]).run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('dead'), log: () => { throw new Error('log broke'); } })), /log broke/);
+  assert.deepStrictEqual([g.held, g.released], [0, 1]);
+  const g2 = DD.mkGate();
+  const rel2 = await holdBoxes('darwin', DD.docker([DD.DOWN, DD.DOWN, () => { throw new Error('run broke'); }]).run, DD.base({ gate: g2.fn, probeSocket: DD.probeSays('dead') }));
+  await assert.rejects(rel2(), /could not be checked/);
+  assert.deepStrictEqual([g2.held, g2.released], [0, 1]);
+});
 
-  // an earlier backup's record of paused boxes, Docker down: the backup goes ahead, the record is byte-identical after
+test('an earlier backup\'s record of paused boxes is byte-identical after a down-path backup; with Docker back and the record unsettled, refused', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  const stateFile = path.join(TMP, 'r-docker-down', 'paused.json');
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
   const rec = JSON.stringify({ ids: ['abc123def456'], at: '2026-11-04T08:30:00.000Z' });
   fs.writeFileSync(stateFile, rec);
-  const recRun = docker([DOWN, DOWN]); const recLogs = [];
-  await (await holdBoxes('darwin', recRun.run, { gate, stateFile, procOk: false, env, probeSocket: probeSays('dead'), log: (m) => recLogs.push(m) }))();
-  assert.ok(!recRun.calls.some(c => /^(unpause|inspect)/.test(c)), 'no unpause or inspect while Docker is down');
-  assert.strictEqual(fs.readFileSync(stateFile, 'utf8'), rec, 'the record is kept for when Docker starts');
-  assert.match(recLogs[0], /record of boxes an earlier backup paused is kept/);
-  // Docker back but the record still can't be settled: refused as before
+  const d = DD.docker([DD.DOWN, DD.DOWN, DD.DOWN]); const logs = [];
+  await (await holdBoxes('darwin', d.run, DD.base({ gate: DD.mkGate().fn, stateFile, probeSocket: DD.probeSays('dead'), log: (m) => logs.push(m) })))();
+  assert.ok(!d.calls.some(c => /^(unpause|inspect)/.test(c)));
+  assert.strictEqual(fs.readFileSync(stateFile, 'utf8'), rec);
+  assert.match(logs[0], /record of boxes an earlier backup paused is kept/);
   const stuck = (cmd, args) => { if (args[0] === 'ps') return { status: 0, stdout: '' }; if (args[0] === 'inspect') return { status: 0, stdout: 'true\n' }; return { status: 0 }; };
-  await assert.rejects(holdBoxes('darwin', stuck, { gate, stateFile, procOk: false, env, probeSocket: probeSays('dead') }), (e) => e.code === 'EBOXES' && /earlier backup left agents' boxes paused/.test(e.message));
+  await assert.rejects(holdBoxes('darwin', stuck, DD.base({ gate: DD.mkGate().fn, stateFile, probeSocket: DD.probeSays('dead') })), /earlier backup left agents' boxes paused/);
   fs.rmSync(stateFile, { force: true });
+});
 
-  // no Docker at all: unchanged
-  const enoent = () => ({ error: Object.assign(new Error('spawnSync docker ENOENT'), { code: 'ENOENT' }) });
-  await (await holdBoxes('darwin', enoent, { stateFile, procOk: false, env, probeSocket: probeSays('dead') }))();
-
-  // Docker running with a running box: still paused, then let go (the probe is never asked)
-  const calls = [];
-  const up = (cmd, args) => { calls.push(args.join(' ')); if (args[0] === 'ps') return { status: 0, stdout: 'abc123\n' }; return { status: 0 }; };
-  const neverAsked = probeSays('dead');
-  const release = await holdBoxes('darwin', up, { gate, stateFile, procOk: false, env, probeSocket: neverAsked });
+test('unchanged: no Docker at all needs nothing; Docker running pauses and lets go running boxes and never probes; every docker call gets the same environment', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  await (await holdBoxes('darwin', () => ({ error: Object.assign(new Error('spawnSync docker ENOENT'), { code: 'ENOENT' }) }), DD.base({ probeSocket: DD.probeSays('dead') })))();
+  const env = { DOCKER_CONTEXT: 'desktop-linux' };
+  const calls = [], envs = [];
+  const up = (cmd, args, o) => { calls.push(args.join(' ')); envs.push(o && o.env); if (args[0] === 'ps') return { status: 0, stdout: 'abc123\n' }; return { status: 0 }; };
+  const p = DD.probeSays('dead');
+  const release = await holdBoxes('darwin', up, DD.base({ gate: DD.mkGate().fn, env, probeSocket: p }));
   assert.ok(calls.includes('pause abc123'));
   await release();
   assert.ok(calls.includes('unpause abc123'));
-  assert.deepStrictEqual(neverAsked.seen, []);
+  assert.deepStrictEqual(p.seen, []);
+  assert.ok(envs.length && envs.every(e => e === env), 'the same environment for every docker call');
+});
+
+test('createBackup through the down path end to end: kept when Docker stays down; not kept when it answers at the end (no partial file, nothing recorded)', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  const settings = memSettings();
+  await keys.setup('a down path passphrase', { settings, logN: 15 });
+  const via = (answers) => (platform, _run, o) => holdBoxes(platform, DD.docker(answers).run, { ...o, env: {}, log: DD.quiet, probeSocket: DD.probeSays('dead') });
+  const inst = makeInstall('down-kept'); const g = DD.mkGate();
+  const r = await createBackup({ ...inst, platform: 'darwin', _procOk: false, gate: g.fn, _holdBoxes: via([DD.DOWN, DD.DOWN, DD.DOWN]), settings, hub: { version: '5.8.1' } });
+  assert.ok(fs.existsSync(r.places[0].file));
+  assert.deepStrictEqual([g.held, g.taken, g.released], [0, 1, 1]);
+  const inst2 = makeInstall('down-spoiled'); const g2 = DD.mkGate();
+  await assert.rejects(createBackup({ ...inst2, platform: 'darwin', _procOk: false, gate: g2.fn, _holdBoxes: via([DD.DOWN, DD.DOWN, DD.UP('')]), settings, hub: { version: '5.8.1' } }), (e) => e.code === 'EBOXES' && /agent activity during the copy could not be ruled out/.test(e.message));
+  const dir = path.join(inst2.hubHome, 'backups');
+  assert.deepStrictEqual(fs.existsSync(dir) ? fs.readdirSync(dir).filter(n => n !== 'index.json') : [], [], 'no backup, snapshot or partial file left');
+  assert.deepStrictEqual(places.index(inst2.root), [], 'nothing recorded');
+  assert.deepStrictEqual([g2.held, g2.released], [0, 1]);
 });
 
 test('probeSocket: a missing socket is dead, a listening one is listening (a throwaway socket under the test folder, never Docker\'s)', async () => {
