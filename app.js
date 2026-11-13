@@ -6733,6 +6733,11 @@
           if (rec.outcome === 'done') handleWorkerEvent(parentChatId, { type: 'worker_completed', worker_id: workerId });
           else if (rec.outcome === 'stopped') handleWorkerEvent(parentChatId, { type: 'worker_failed', worker_id: workerId, cancelled: true });
           else if (rec.outcome === 'failed') handleWorkerEvent(parentChatId, { type: 'worker_failed', worker_id: workerId, error: rec.error || 'Failed' });
+          else if (rec.outcome === 'unfinished') handleWorkerEvent(parentChatId, { type: 'worker_failed', worker_id: workerId, error: rec.error || "Did not finish: its caller's reply ended first" });
+          else return;
+          // the list's clock runs from the recorded end, not from when this page noticed it
+          const endAt = rec.startedAt && rec.durationMs != null ? Date.parse(rec.startedAt) + Number(rec.durationMs) : NaN;
+          if (Number.isFinite(endAt) && endAt <= Date.now()) { run.endedAt = endAt; scheduleWorkerListRefresh(); }
         } catch {}
       })();
     }
@@ -14370,7 +14375,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       setTimeout(() => btn.classList.remove('flash'), 2000);
     }
 
+    // A run closed as 'ended' (the status feed stopped listing it) whose worker turns out to be working: running again.
+    function reopenEndedWorkerRun(workerId) {
+      const w = workerRunOf(String(workerId));
+      if (!w || w.run.status !== 'ended') return;
+      const { workerChatId, chat, run } = w;
+      run.status = 'running';
+      run.endedAt = null;
+      setStatus(workerChatId, 'thinking', 'Working...');
+      if (!chat.timerInterval) chat.timerInterval = setInterval(() => updateWorkerTabTimer(workerChatId), 1000);
+      settleWorkerCard(workerChatId);   // a running run: the card's clock follows it
+      if (run.noticeEl) { run.noticeEl.textContent = `⏳ ${chat.agentLabel || 'Agent'} is Working...`; run.noticeEl.className = 'system-notice notice-working'; }
+      scheduleWorkerListRefresh();
+    }
     function handleWorkerEvent(chatId, oc) {
+      if (oc && oc.worker_id != null && /^worker_(started|text_delta|tool_start|tool_use|tool_result)$/.test(oc.type)) reopenEndedWorkerRun(oc.worker_id);
       if (oc.type === 'worker_started') {
         const workerId = String(oc.worker_id);
         if (workerRunOf(workerId) || closedWorkerRuns.has(workerId)) return true;   // already shown (a replay), or its card was closed

@@ -18,6 +18,13 @@ function section(src, start, endMarker) {
 }
 
 const app = read('app.js');
+// The text of one top-level page function: from its declaration to the next function declaration at the same indent.
+function fnBody(src, name) {
+  const a = src.indexOf(`function ${name}(`);
+  assert.ok(a >= 0, `${name} present`);
+  const b = src.indexOf('\n    function ', a + 10);
+  return src.slice(a, b > a ? b : undefined);
+}
 const mobile = read('mobile.js');
 
 test('app.js: applyStatusSnapshot steps workerGoneStep only for a full feed and ends each gone id', () => {
@@ -45,7 +52,7 @@ test('app.js: endWorkerRunUnreported marks the run ended and asks the caller\'s 
   assert.match(body, /rec\.outcome === 'done'[\s\S]*worker_completed/);
   assert.match(body, /rec\.outcome === 'stopped'[\s\S]*cancelled: true/);
   assert.match(body, /rec\.outcome === 'failed'[\s\S]*worker_failed/);
-  assert.ok(!/outcome === 'unfinished'/.test(body), 'unfinished leaves it ended');
+  assert.match(body, /rec\.outcome === 'unfinished'[\s\S]*worker_failed/, 'unfinished shows as a failure, as on the phone');
 });
 
 test('app.js: workerCardState returns ended, and the menu shows a neutral mark and word for it', () => {
@@ -96,4 +103,22 @@ test('mobile.js: the 5 s interval polls while a tw- worker card is running', () 
   assert.match(iv, /wkHubPoll\(\)/);
   assert.match(iv, /\}, 5000\);/);
   assert.ok(body.length > 0);
+});
+
+test('app.js: the history lookup applies "unfinished" as a failure and the recorded end time', () => {
+  const body = fnBody(app, 'endWorkerRunUnreported');
+  assert.match(body, /rec\.outcome === 'unfinished'/);
+  assert.match(body, /Did not finish: its caller's reply ended first/);
+  assert.match(body, /Date\.parse\(rec\.startedAt\) \+ Number\(rec\.durationMs\)/);
+  assert.match(body, /run\.endedAt = endAt/);
+});
+
+test('app.js: worker activity for a run closed as ended reopens it as running', () => {
+  const reopen = fnBody(app, 'reopenEndedWorkerRun');
+  assert.match(reopen, /w\.run\.status !== 'ended'/);
+  assert.match(reopen, /run\.status = 'running'/);
+  assert.match(reopen, /setStatus\(workerChatId, 'thinking'/);
+  const handler = fnBody(app, 'handleWorkerEvent');
+  assert.match(handler, /worker_\(started\|text_delta\|tool_start\|tool_use\|tool_result\)/);
+  assert.ok(handler.indexOf('reopenEndedWorkerRun(') < handler.indexOf("if (oc.type === 'worker_started')"), 'reopen runs before the started branch returns');
 });
