@@ -1975,13 +1975,76 @@ test('outage recovery: a network outage keeps the picture, idle and listening cl
   // part 2: the manifest answers 200, every clip keeps failing (one with a decode error): bounded retries over 5 minutes
   const lost2 = []; const w2 = makeWorld(); probeNet(w2, () => 'ok'); const DEC = 'listening-2'; const a2 = errorCodes(w2, (n) => (n === DEC ? 3 : (n.length % 2 ? 2 : 4)));
   const q = w2.make({ onLost: r => lost2.push(r) }); await q.ready; await w2.settle(100);
+  const before2 = Object.assign({}, a2);   // loads made before the failures began do not count
   w2.manifest.clips.forEach(c => w2.fail.add(c.name)); q.setState('listening'); await runFor(w2, 300000);
   const j = q.getInfo(); assert.strictEqual(lost2.length, 0); assert.strictEqual(j.lost, null); assert.strictEqual(j.drawable, true);
-  for (const n of Object.keys(a2)) assert.ok(a2[n] <= 5 + 1, n + ': at most CLIP_REVIVE_MAX + 1 attempts (+1 for a warm load): ' + a2[n]);
+  for (const n of Object.keys(a2)) { const d = a2[n] - (before2[n] || 0); assert.ok(d <= 1 + 4 + 1, n + ': the first failure + at most CLIP_REVIVE_MAX revivals (+1 for a warm load): ' + d); }
   assert.ok(Object.keys(a2).length > 0 && j.clipRevivals > 0, 'it did retry, a little: ' + j.clipRevivals);
   assert.ok(j.clipRevivals <= 4 * w2.manifest.clips.length, 'bounded revivals: ' + j.clipRevivals);
   assert.ok(j.badFinal.indexOf(DEC) >= 0, 'the decode error is final: ' + j.badFinal.join()); assert.strictEqual(a2[DEC], 1, 'a decode error is never retried: ' + a2[DEC]);
   const n300 = Object.values(a2).reduce((s, x) => s + x, 0); await runFor(w2, 120000); assert.ok(Object.values(a2).reduce((s, x) => s + x, 0) - n300 <= 2 * w2.manifest.clips.length, 'and it stays quiet afterwards'); q.destroy();
+});
+const commitsOf = (p) => p.getInfo().log.filter(e => e.name && e.ev !== 'revive');
+test('revive inside a start never starts a second clip: a goodbye that commits while released entries exist is the only commit of its start, and a probe answer during a load does not restart it', async () => {
+  const w = makeWorld(); let mode = 'ok'; probeNet(w, () => mode); const p = w.make(); await p.ready; await w.settle(100);
+  w.manifest.clips.forEach(c => w.fail.add(c.name)); mode = 'throw'; p.setState('listening');
+  await runFor(w, 20000);   // every clip fails, the probe throws: frozen, holdLast's retry pending
+  let i = p.getInfo(); assert.ok(i.bad.length >= 5, 'set-up: clips set aside: ' + i.bad.join()); assert.strictEqual(i.clipRevivals, 0, 'set-up: nothing revived while the probe fails');
+  await runFor(w, 6000);   // every entry is past its 5 s wait: eligible, but nothing has released them
+  const base = commitsOf(p).length, clipBefore = p.getInfo().clip, nBad = p.getInfo().bad.length;
+  w.fail.clear(); const plays0 = w.played.length, revs0 = p.getInfo().clipRevivals;
+  assert.strictEqual(p.react('goodbye'), true, 'the goodbye is accepted');
+  await runFor(w, 100);   // long enough for the 10 ms load, not for the 2.5 s retry
+  const cs = commitsOf(p).slice(base); assert.strictEqual(cs.length, 1, 'exactly one commit for this start: ' + cs.map(c => c.name).join());
+  assert.match(cs[0].name, /goodbye/); i = p.getInfo(); assert.strictEqual(i.clip, cs[0].name, 'the goodbye clip is the one shown (clip before: ' + clipBefore + ')');
+  assert.strictEqual(w.front(p).clipName, cs[0].name, 'and the one in front'); assert.ok(!w.front(p).paused);
+  assert.ok(i.clipRevivals > revs0, 'the commit released entries that were eligible'); assert.ok(i.bad.length < nBad, 'released: ' + i.bad.length + ' < ' + nBad);
+  assert.deepStrictEqual(w.played.slice(plays0), [cs[0].name], 'only the goodbye video was played by that start: ' + w.played.slice(plays0).join());
+  // a probe answer while a start is loading does not restart that load
+  const q = makeWorld(); let m2 = 'ok'; probeNet(q, () => m2); const pq = q.make(); await pq.ready; await q.settle(100);
+  q.manifest.clips.forEach(c => q.fail.add(c.name)); m2 = 'throw'; pq.setState('listening'); await runFor(q, 12000);
+  assert.ok(pq.getInfo().bad.length >= 5, 'set-up 2: clips set aside'); await runFor(q, 6000);
+  q.fail.clear(); q.hold.add('reaction-goodbye-1'); const b0 = commitsOf(pq).length, pl0 = q.played.length;
+  assert.strictEqual(pq.react('goodbye'), true); await runFor(q, 300);   // the goodbye is loading (held): loadTimer pending
+  assert.strictEqual(commitsOf(pq).length, b0, 'still loading'); m2 = 'ok'; await until(q, () => pq.getInfo().probeVerdict === 'exists', 7000, 50);   // a probe answers 200 while it loads (inside its 8 s wait)
+  assert.strictEqual(pq.getInfo().probeVerdict, 'exists'); assert.strictEqual(commitsOf(pq).length, b0, 'the probe answer started nothing else'); assert.strictEqual(q.played.length, pl0, 'no clip was started by the revive');
+  q.hold.delete('reaction-goodbye-1'); const gv = q.videos.find(v => v.clipName === 'reaction-goodbye-1' && v._src && v.readyState === 0);
+  assert.ok(gv, 'the held goodbye video is the one waiting'); gv.src = gv._src;   // released: it loads
+  await runFor(q, 200); const cq = commitsOf(pq).slice(b0); assert.strictEqual(cq.length, 1, 'the held clip still commits when released: ' + cq.map(c => c.name).join()); assert.strictEqual(cq[0].name, 'reaction-goodbye-1');
+  assert.strictEqual(pq.getInfo().clip, 'reaction-goodbye-1'); pq.destroy(); p.destroy();
+});
+test('a clip that loads again after an outage starts its failure count afresh: after two failures and one good load it is eligible after 5 s again, not 45 s', async () => {
+  const w = makeWorld(); probeNet(w, () => 'ok'); const T = 'thinking-1'; let failAll = false, failT = false;   // the only thinking clip: always the one chosen in that state
+  const loads = []; const orig = w.doc.createElement;   // the time of every source assignment of T (a failed load is over 10 ms later)
+  w.doc.createElement = function (tag) {
+    const v = orig.call(this, tag); if (tag !== 'video') return v;
+    return new Proxy(v, { get: (o, k) => o[k], set(o, k, val) { if (k === 'src' && /\/thinking-1\.mp4$/.test(val)) loads.push(w.now); o[k] = val; return true; } });
+  };
+  const p = w.make(); await p.ready; await w.settle(100);
+  w.fail = { has: (n) => (n === T ? failT : failAll), add() {}, delete() {}, clear() {} };
+  failAll = true; failT = true; p.setState('thinking');
+  await until(w, () => loads.length >= 2, 60000, 20); failT = false;   // failure 1, then the retry after its wait fails too (failure 2); the outage is over for T
+  const w1 = loads[1] - loads[0]; assert.ok(w1 >= 4900 && w1 <= 16000, 'first wait is 5 s (the revival comes with the next probe answer, every 10 s): ' + w1);
+  await until(w, () => loads.length >= 3, 60000, 20); const w2 = loads[2] - loads[1]; assert.ok(w2 >= 14900 && w2 <= 26000, 'second wait is 15 s (+ probe cadence): ' + w2);
+  await until(w, () => p.getInfo().clip === T, 3000, 20); assert.strictEqual(p.getInfo().clip, T, T + ' loaded and plays again after the second outage'); assert.ok(!p.getInfo().bad.includes(T));
+  const n = loads.length; failT = true;   // it fails again: the two old failures no longer count
+  await until(w, () => p.getInfo().bad.includes(T), 20000, 20); assert.ok(p.getInfo().bad.includes(T), 'failed again');   // the failed load is noticed when the clip is due
+  const tBad = w.now, m = loads.length; await until(w, () => loads.length > m, 60000, 20);
+  const w3 = loads[m] - tBad; assert.ok(loads.length > m, 'tried again'); assert.ok(w3 >= 4900 && w3 <= 16000, 'after a good load the wait is the first one again (5 s), not the third (45 s): ' + w3);
+  p.destroy();
+});
+test('outage recovery with speech: the probe answers 200, every clip keeps failing and the state switches speaking/listening every 10 s for 5 minutes: source assignments stay within CLIP_REVIVE_MAX plus the per-reply speaker budget, a decode error is never retried', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); probeNet(w, () => 'ok'); const DEC = 'listening-2'; const att = errorCodes(w, (n) => (n === DEC ? 3 : (n.length % 2 ? 2 : 4)));
+  const lost = []; const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+  const before = Object.assign({}, att); w.manifest.clips.forEach(c => w.fail.add(c.name));
+  let replies = 0; for (let k = 0; k < 30; k++) { const s = k % 2 ? 'listening' : 'speaking'; if (s === 'speaking') replies++; p.setState(s); await runFor(w, 10000); }
+  const j = p.getInfo(); assert.strictEqual(lost.length, 0); assert.strictEqual(j.lost, null); assert.strictEqual(j.drawable, true);
+  const SPEAK_REVIVE_MAX = 2, base = 1 + 4 + 1, cap = base + SPEAK_REVIVE_MAX * replies;   // tracked speaking clips: first failure + CLIP_REVIVE_MAX revivals + a warm load, plus 2 reviveSpeakers retries per reply (15 replies: 30)
+  const speakers = w.manifest.clips.filter(c => c.state === 'speaking' && c.track).map(c => c.name);
+  for (const n of Object.keys(att)) { const d = att[n] - (before[n] || 0); const lim = speakers.includes(n) ? cap : base; assert.ok(d <= lim, n + ': ' + d + ' source assignments, at most ' + lim + (speakers.includes(n) ? ' (= 1 + 4 + 1 + SPEAK_REVIVE_MAX * ' + replies + ' replies)' : ' (= 1 + 4 + 1)')); }
+  assert.ok(Object.keys(att).length > 0 && j.clipRevivals > 0, 'it did retry, a little: ' + j.clipRevivals);
+  assert.ok(j.badFinal.indexOf(DEC) >= 0, 'the decode error is final: ' + j.badFinal.join()); assert.strictEqual(att[DEC] - (before[DEC] || 0), 1, 'a decode error is never retried: ' + att[DEC]);
+  p.destroy();
 });
 test('probe: hidden stops it (no request, in-flight one has no say), visible probes at once and catches a removal that happened while hidden', async () => {
   const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
