@@ -378,15 +378,29 @@ test('no gate on the down path (a backup from a terminal): refused with the Sett
   await assert.rejects(holdBoxes('darwin', DD.docker([DD.DOWN, DD.DOWN]).run, DD.base({ probeSocket: DD.probeSays('dead') })), (e) => e.code === 'EBOXES' && /Settings → Backups/.test(e.message));
 });
 
-test('Docker answering right after the gate is taken: the normal path, the gate released once and taken again, nothing leaked', async () => {
+test('Docker answering right after the gate is taken: refused (no switch to the normal path), the gate taken once and released once', async () => {
   const { holdBoxes } = require('../lib/backup/create');
   const g = DD.mkGate();
-  // 1: down; 2 (pinned, after the gate): answers; 3: the normal path's listing; 4: running boxes; 5: end check
-  const d = DD.docker([DD.DOWN, DD.UP(''), DD.UP(''), DD.UP(''), DD.UP('')]);
-  const rel = await holdBoxes('darwin', d.run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('dead') }));
-  assert.deepStrictEqual([g.held, g.taken, g.released], [1, 2, 1], 'the down gate let go, the normal path holds its own');
-  assert.strictEqual(await keptOrWhy(rel), 'kept');
-  assert.deepStrictEqual([g.held, g.taken, g.released], [0, 2, 2]);
+  const d = DD.docker([DD.DOWN, DD.UP('')]);
+  await assert.rejects(holdBoxes('darwin', d.run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('dead') })), (e) => e.code === 'EBOXES' && /Docker started just as the backup began, so the backup was not made\. Try again\./.test(e.message));
+  assert.deepStrictEqual([g.held, g.taken, g.released], [0, 1, 1]);
+  assert.ok(!d.calls.some(c => /^(pause|unpause)/.test(c)), 'nothing paused');
+});
+
+test('the pinned socket answers after the gate while the context now names another Docker: refused, nothing paused, no unpinned docker call after the gate', async () => {
+  const { holdBoxes } = require('../lib/backup/create');
+  let ctx = 0;
+  // context A first (its socket dead), then the current context is switched to B
+  const d = DD.docker([DD.DOWN, DD.UP('abc123\n'), DD.UP(''), DD.UP('')], { context: () => (++ctx === 1 ? { status: 0, stdout: `unix://${DD.SOCK}\n` } : { status: 0, stdout: 'unix:///tmp/pr74-b.sock\n' }) });
+  const g = DD.mkGate();
+  let atGate = -1;
+  const gate = async (o) => { atGate = d.calls.length; return g.fn(o); };
+  await assert.rejects(holdBoxes('darwin', d.run, DD.base({ gate, probeSocket: DD.probeSays('dead') })), (e) => e.code === 'EBOXES' && /Docker started just as the backup began/.test(e.message));
+  const after = d.calls.slice(atGate);
+  assert.deepStrictEqual(after, [`-H unix://${DD.SOCK} ps -q -a --filter name=^hub-agent-`], 'only the pinned check after the gate');
+  assert.ok(!d.calls.some(c => /^(pause|unpause)/.test(c)), 'nothing paused');
+  assert.strictEqual(ctx, 1, 'the context is not asked again');
+  assert.deepStrictEqual([g.held, g.taken, g.released], [0, 1, 1]);
 });
 
 test('Docker answering at the end of the copy: not kept, with no boxes, only stopped boxes, or running boxes', async () => {
@@ -411,12 +425,15 @@ test('Docker neither down nor answering at the end (timeout, denied, starting, u
   }
 });
 
-test('a stale socket file (connection refused) is dead; a probe that times out or is unsure is not down, and the backup is refused', async () => {
+test('a missing socket is dead; a stale non-socket file is dead or unknown, never listening; a probe that times out or is unsure is not down, and the backup is refused', async () => {
   const { probeSocket, holdBoxes } = require('../lib/backup/create');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr74-stale-'));
   try {
-    const notASocket = path.join(dir, 'docker.sock'); fs.writeFileSync(notASocket, '');   // connecting to a non-socket file is refused
-    assert.strictEqual(await probeSocket(notASocket, 1500), 'dead');
+    assert.strictEqual(await probeSocket(path.join(dir, 'missing.sock'), 1500), 'dead', 'a missing path is dead');
+    // a non-socket file left where the socket was: refused on Linux (dead), ENOTSOCK on a Mac (unknown); never listening
+    const notASocket = path.join(dir, 'docker.sock'); fs.writeFileSync(notASocket, '');
+    const said = await probeSocket(notASocket, 1500);
+    assert.ok(said === 'dead' || said === 'unknown', said);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   const g = DD.mkGate();
   await assert.rejects(holdBoxes('darwin', DD.docker([DD.DOWN]).run, DD.base({ gate: g.fn, probeSocket: DD.probeSays('unknown') })), (e) => e.code === 'EBOXES');
