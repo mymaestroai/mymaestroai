@@ -1940,6 +1940,49 @@ test('probe: 410 is gone too; transient failures (500, 503, 429, network error, 
     mode = 404; await until(w, () => lost.length > 0, 11000); assert.strictEqual(lost.length, 1, kind + ': a later 404 is still caught'); p.destroy();
   }
 });
+// fake videos that report a MediaError code while their clip is in w.fail, and count the source assignments per clip name
+function errorCodes(w, codeOf) {
+  const attempts = {}; const orig = w.doc.createElement;
+  w.doc.createElement = function (tag) {
+    const v = orig.call(this, tag);
+    if (tag !== 'video') return v;
+    return new Proxy(v, {   // the player sees the proxy; the world keeps the raw video (same listeners, same state)
+      get(o, k) { if (k === 'error') return o.clipName && w.fail.has(o.clipName) ? { code: codeOf(o.clipName) } : null; return o[k]; },
+      set(o, k, val) { if (k === 'src') { const m = /\/web\/([^/]+)\.mp4$/.exec(val); if (m) { const n = decodeURIComponent(m[1]); attempts[n] = (attempts[n] || 0) + 1; } } o[k] = val; return true; } });
+  };
+  return attempts;
+}
+test('outage recovery: a network outage keeps the picture, idle and listening clips set aside by it come back within 10 s of the network, and a server that answers the manifest but not the clips causes only a bounded number of retries (a decode error never)', async () => {
+  const isIL = (n) => /^(idle|listening)-/.test(n);
+  // part 1: 30 s outage, then recovery
+  const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode); const att = errorCodes(w, (n) => (n.length % 2 ? 2 : 4));
+  const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
+  p.setState('listening'); await runFor(w, 6000);
+  assert.ok(isIL(p.getInfo().clip), 'playing normally: ' + p.getInfo().clip); assert.strictEqual(p.getInfo().clipRevivals || 0, 0);
+  w.manifest.clips.forEach(c => w.fail.add(c.name)); mode = 'throw';
+  for (let k = 0; k < 30; k++) { if (k % 3 === 0) p.setState((k / 3) % 2 ? 'listening' : 'idle'); await runFor(w, 1000); assert.strictEqual(p.getInfo().drawable, true, 'a picture all through the outage'); }
+  let i = p.getInfo();
+  assert.strictEqual(lost.length, 0); assert.strictEqual(i.lost, null); assert.strictEqual(i.destroyed, false); assert.strictEqual(i.probeVerdict, null);
+  const badIL = i.bad.filter(isIL); assert.ok(badIL.some(n => /^idle-/.test(n)) && badIL.some(n => /^listening-/.test(n)), 'idle and listening clips set aside: ' + i.bad.join());
+  const before = i.clipRevivals;
+  w.fail.clear(); mode = 'ok'; const t0 = w.now;
+  await until(w, () => { const c = p.getInfo(); return isIL(c.clip || '') && c.clipRevivals > before && !c.bad.some(isIL); }, 10000);
+  i = p.getInfo(); assert.ok(w.now - t0 <= 10000, 'within 10 s: ' + (w.now - t0));
+  assert.ok(i.clipRevivals > 0, 'revived'); assert.ok(isIL(i.clip), 'animating again: ' + i.clip); assert.strictEqual(i.drawable, true); assert.strictEqual(i.probeVerdict, 'exists');
+  const fr = w.front(p); assert.ok(fr && fr.clipName === i.clip && !fr.paused, 'the new clip is playing');
+  assert.strictEqual(i.bad.filter(isIL).length, 0, 'no idle/listening clip is left set aside: ' + i.bad.join()); assert.strictEqual(lost.length, 0);
+  await runFor(w, 10000); assert.ok(isIL(p.getInfo().clip)); p.destroy();
+  // part 2: the manifest answers 200, every clip keeps failing (one with a decode error): bounded retries over 5 minutes
+  const lost2 = []; const w2 = makeWorld(); probeNet(w2, () => 'ok'); const DEC = 'listening-2'; const a2 = errorCodes(w2, (n) => (n === DEC ? 3 : (n.length % 2 ? 2 : 4)));
+  const q = w2.make({ onLost: r => lost2.push(r) }); await q.ready; await w2.settle(100);
+  w2.manifest.clips.forEach(c => w2.fail.add(c.name)); q.setState('listening'); await runFor(w2, 300000);
+  const j = q.getInfo(); assert.strictEqual(lost2.length, 0); assert.strictEqual(j.lost, null); assert.strictEqual(j.drawable, true);
+  for (const n of Object.keys(a2)) assert.ok(a2[n] <= 5 + 1, n + ': at most CLIP_REVIVE_MAX + 1 attempts (+1 for a warm load): ' + a2[n]);
+  assert.ok(Object.keys(a2).length > 0 && j.clipRevivals > 0, 'it did retry, a little: ' + j.clipRevivals);
+  assert.ok(j.clipRevivals <= 4 * w2.manifest.clips.length, 'bounded revivals: ' + j.clipRevivals);
+  assert.ok(j.badFinal.indexOf(DEC) >= 0, 'the decode error is final: ' + j.badFinal.join()); assert.strictEqual(a2[DEC], 1, 'a decode error is never retried: ' + a2[DEC]);
+  const n300 = Object.values(a2).reduce((s, x) => s + x, 0); await runFor(w2, 120000); assert.ok(Object.values(a2).reduce((s, x) => s + x, 0) - n300 <= 2 * w2.manifest.clips.length, 'and it stays quiet afterwards'); q.destroy();
+});
 test('probe: hidden stops it (no request, in-flight one has no say), visible probes at once and catches a removal that happened while hidden', async () => {
   const lost = []; const w = makeWorld(); let mode = 'ok'; const st = probeNet(w, () => mode);
   const p = w.make({ onLost: r => lost.push(r) }); await p.ready; await w.settle(100);
