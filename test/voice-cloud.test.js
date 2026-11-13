@@ -593,7 +593,7 @@ test('too_large: a content-length over the cap is refused before any byte is rea
 test('bad_audio: OpenAI WAV must be 16-bit PCM, 1-2 channels, 8-48 kHz, a data chunk that fits, at least 0.05 s', async () => {
   const cases = {
     'float format': wavWith({ format: 3 }), '8-bit': wavWith({ bits: 8 }), 'three channels': wavWith({ channels: 3 }), 'rate 4000': wavWith({ rate: 4000 }), 'rate 96000': wavWith({ rate: 96000 }),
-    'shorter than 0.05 s': wavWith({ data: Buffer.alloc(1000) }), 'no data chunk': wavWith().subarray(0, 36), 'not RIFF': Buffer.concat([Buffer.from('JUNK'), wavWith().subarray(4)]),
+    'shorter than 0.05 s': wavWith({ data: Buffer.alloc(1000) }), 'data size beyond the buffer (cut short)': wavWith({ declared: 99999 }), 'no data chunk': wavWith().subarray(0, 36), 'not RIFF': Buffer.concat([Buffer.from('JUNK'), wavWith().subarray(4)]),
     'junk text': Buffer.from('<html>error page that is long enough to pass the old check</html>'),
   };
   for (const [name, wav] of Object.entries(cases)) {
@@ -613,6 +613,7 @@ test('bad_audio: Google inline data must be audio, valid base64, even length, at
     'not audio': inline(b64(4800), 'text/plain'), 'bad base64': inline('!!!not-base64!!!'), 'odd length': inline(Buffer.alloc(4801, 2).toString('base64')),
     'too short': inline(b64(2000)), 'empty': inline(''), 'no mime at all': inline(b64(4800), ''),
     'mp3 payload': inline(b64(4800), 'audio/mpeg'), 'wav payload': inline(b64(4800), 'audio/wav'),
+    'pcm subtype suffix': inline(b64(4800), 'audio/pcm-float'), 'l16 subtype suffix': inline(b64(4800), 'audio/L16-other'),
   };
   for (const [name, r] of Object.entries(g)) {
     const rows = []; const { cloud } = makeCloud({ rows, respond: () => r });
