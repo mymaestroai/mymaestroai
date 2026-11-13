@@ -5470,18 +5470,21 @@
         for (const k of ['update', 'backups', 'security', 'memory', 'connectors', 'wallet']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
-      // After a Reload: open the chats that were open, the one in front last, each with the text that was in its message
-      // box (one-shot, reloadAppStash). The chat that was in front stays in front: an "?agent=" left in the address
-      // from an earlier visit does not take over.
-      let reopened = 0;
-      for (const back of appReloadStashTake(sessionStorage, Date.now()) || []) {
+      // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message
+      // box, and bring the one that was in front to the front (one-shot, reloadAppStash). Only after a reload: any other
+      // navigation drops the hand-over. An "?agent=" left in the address from an earlier visit does not take over.
+      let reopened = 0, frontId = null;
+      const handOver = appReloadStashTake(sessionStorage, Date.now());
+      for (const back of (handOver && appNavigationWasReload(window.performance) ? handOver : [])) {
         const a = AGENTS.find(x => x.name === back.agent);
         if (!a) continue;
         const id = startSoloChat(a.name, a.model);
         reopened++;
+        if (back.front) frontId = id;
         const box = document.getElementById('input-' + id);
         if (back.text && box && !box.value) { box.value = back.text; autoGrowTextarea(box); }
       }
+      if (frontId) switchToChat(frontId);
       if (reopened && own && own.agent) {
         delete own.agent;
         const u = new URL(location.href);
@@ -15663,20 +15666,28 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const l of list('link[rel="stylesheet"][href]')) add(l.getAttribute('href'));
       return out;
     }
-    function appFreshReload({ urls = [], fetch: f, swUpdate, reload, timeoutMs = 4000, setTimer = setTimeout } = {}) {
+    function appFreshFetch({ urls = [], fetch: f, swUpdate, timeoutMs = 4000, setTimer = setTimeout } = {}) {
       const jobs = [];
       const body = (r) => (r && r.ok && typeof r.arrayBuffer === 'function' ? r.arrayBuffer() : null);
       for (const u of urls) { try { jobs.push(Promise.resolve(f(u, { cache: 'reload', credentials: 'same-origin' })).then(body).catch(() => null)); } catch { /* skipped */ } }
       if (typeof swUpdate === 'function') { try { jobs.push(Promise.resolve(swUpdate()).catch(() => null)); } catch { /* skipped */ } }
       const all = Promise.all(jobs).then(() => 'done');
       const late = new Promise(r => setTimer(() => r('timeout'), timeoutMs));
-      return Promise.race([all, late]).then((how) => { reload(); return how; });
+      return Promise.race([all, late]);
+    }
+    function appNavigationWasReload(perf) {
+      try {
+        const nav = perf && typeof perf.getEntriesByType === 'function' ? perf.getEntriesByType('navigation') : null;
+        if (nav && nav[0] && typeof nav[0].type === 'string') return nav[0].type === 'reload';
+        if (perf && perf.navigation && typeof perf.navigation.type === 'number') return perf.navigation.type === 1;
+      } catch { /* cannot tell */ }
+      return true;
     }
     function appReloadStashClear(storage) {
       try { storage.removeItem(APP_RELOAD_STASH_KEY); } catch { /* nothing to clear */ }
     }
     function appReloadStashSave(storage, chats, now) {
-      const list = (Array.isArray(chats) ? chats : []).filter(c => c && c.agent).map(c => ({ agent: String(c.agent), text: String(c.text || '') }));
+      const list = (Array.isArray(chats) ? chats : []).filter(c => c && c.agent).map(c => ({ agent: String(c.agent), text: String(c.text || ''), front: !!c.front }));
       if (!list.length) { appReloadStashClear(storage); return true; }
       try { storage.setItem(APP_RELOAD_STASH_KEY, JSON.stringify({ chats: list, at: now })); return true; } catch { return false; }
     }
@@ -15687,20 +15698,25 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let e;
       try { e = JSON.parse(raw); } catch { return null; }
       if (!e || !Array.isArray(e.chats) || typeof e.at !== 'number' || !(now - e.at >= 0 && now - e.at <= maxAgeMs)) return null;
-      const list = e.chats.filter(c => c && typeof c.agent === 'string' && c.agent).map(c => ({ agent: c.agent, text: typeof c.text === 'string' ? c.text : '' }));
+      const list = e.chats.filter(c => c && typeof c.agent === 'string' && c.agent).map(c => ({ agent: c.agent, text: typeof c.text === 'string' ? c.text : '', front: c.front === true }));
       return list.length ? list : null;
     }
-    function createAppReloader({ questions = () => [], confirm: ask = () => true, run, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
-      let busy = false;
+    function createAppReloader({ questions = () => [], confirm: ask = () => true, prepare = () => null, go, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
+      let busy = false, attempt = 0;
+      const qsNow = () => { try { return questions() || []; } catch { return []; } };
+      const end = (my) => { if (my !== attempt || !busy) return; busy = false; try { onBusy(false); } catch { /* paint only */ } };
       function reload() {
         if (busy) return false;
-        let qs = [];
-        try { qs = questions() || []; } catch { qs = []; }
-        for (const q of qs) if (!ask(q)) return false;
+        const asked = new Set();
+        for (const q of qsNow()) { if (!ask(q)) return false; asked.add(q); }
         busy = true;
+        const my = ++attempt;
         try { onBusy(true); } catch { /* paint only */ }
-        setTimer(() => { busy = false; try { onBusy(false); } catch { /* paint only */ } }, busyMs);
-        Promise.resolve().then(run).catch(() => {});
+        Promise.resolve().then(prepare).catch(() => null).then(() => {
+          for (const q of qsNow()) if (!asked.has(q) && !ask(q)) { end(my); return; }
+          try { go(); } catch { /* the page stays */ }
+          setTimer(() => end(my), busyMs);
+        });
         return true;
       }
       return { reload, busy: () => busy };
@@ -16088,22 +16104,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function paintInstalledApp() {
       document.documentElement.classList.toggle('app-installed', appIsInstalled(window));
     }
-    const reloadIsSolo = (c) => !!(c && !c.isGroup && c.agent && c.type !== 'orchestration');
+    const reloadIsSolo = (c) => !!(c && !c.isGroup && !c.isWorker && c.agent && c.type !== 'orchestration');
     const reloadBoxText = (c) => (document.getElementById('input-' + c.id) || {}).value || '';
-    // Written when the page really unloads (pagehide), so text typed while the files are fetched is kept and a
-    // reload the person called off leaves nothing behind. Every open solo chat, the one in front last.
+    // Written when the page really unloads (pagehide), so text typed while the files are fetched is kept. Every open
+    // solo chat in tab order, the one in front marked. The listener is armed by a Reload and stays armed if the person
+    // keeps the page at the browser's "unsaved changes" question (it is removed when the page comes back from the
+    // back-forward cache): it only ever writes the state at that moment, and the new page reads it only after a reload
+    // (appNavigationWasReload), never after other navigation such as an "?agent=" link.
     function reloadAppStash() {
-      const open = Object.values(chats).filter(reloadIsSolo);
       const front = chats[window.__activeChatId];
-      const list = open.filter(c => c !== front).concat(reloadIsSolo(front) ? [front] : []);
-      appReloadStashSave(sessionStorage, list.map(c => ({ agent: c.agent, text: reloadBoxText(c) })), Date.now());
+      appReloadStashSave(sessionStorage, Object.values(chats).filter(reloadIsSolo).map(c => ({ agent: c.agent, text: reloadBoxText(c), front: c === front })), Date.now());
     }
-    let reloadStashArmed = false;
-    function armReloadStash() {
-      if (reloadStashArmed) return;
-      reloadStashArmed = true;
-      window.addEventListener('pagehide', () => { try { reloadAppStash(); } catch { /* the reload goes on */ } });
-    }
+    function reloadOnPagehide() { try { reloadAppStash(); } catch { /* the reload goes on */ } }
+    function armReloadStash() { window.addEventListener('pagehide', reloadOnPagehide); }
+    function disarmReloadStash() { window.removeEventListener('pagehide', reloadOnPagehide); }
+    window.addEventListener('pageshow', (e) => { if (e.persisted) disarmReloadStash(); });
     function reloadAppQuestions() {
       const qs = [];
       if (voiceCallS.call || voiceCallS.starting) qs.push(APP_RELOAD_CALL_QUESTION);
@@ -16126,7 +16141,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         appReloaderInst = createAppReloader({
           questions: reloadAppQuestions,
           confirm: (q) => window.confirm(q),
-          run: () => appFreshReload({ urls: appReloadUrls(document, location.origin), fetch: (u, o) => fetch(u, o), reload: () => { armReloadStash(); location.reload(); } }),
+          prepare: () => appFreshFetch({ urls: appReloadUrls(document, location.origin), fetch: (u, o) => fetch(u, o) }),
+          go: () => { armReloadStash(); location.reload(); },
           onBusy: paintReloadBusy,
         });
       }

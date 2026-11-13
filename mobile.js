@@ -225,20 +225,28 @@ function appReloadUrls(doc, origin) {
   for (const l of list('link[rel="stylesheet"][href]')) add(l.getAttribute('href'));
   return out;
 }
-function appFreshReload({ urls = [], fetch: f, swUpdate, reload, timeoutMs = 4000, setTimer = setTimeout } = {}) {
+function appFreshFetch({ urls = [], fetch: f, swUpdate, timeoutMs = 4000, setTimer = setTimeout } = {}) {
   const jobs = [];
   const body = (r) => (r && r.ok && typeof r.arrayBuffer === 'function' ? r.arrayBuffer() : null);
   for (const u of urls) { try { jobs.push(Promise.resolve(f(u, { cache: 'reload', credentials: 'same-origin' })).then(body).catch(() => null)); } catch { /* skipped */ } }
   if (typeof swUpdate === 'function') { try { jobs.push(Promise.resolve(swUpdate()).catch(() => null)); } catch { /* skipped */ } }
   const all = Promise.all(jobs).then(() => 'done');
   const late = new Promise(r => setTimer(() => r('timeout'), timeoutMs));
-  return Promise.race([all, late]).then((how) => { reload(); return how; });
+  return Promise.race([all, late]);
+}
+function appNavigationWasReload(perf) {
+  try {
+    const nav = perf && typeof perf.getEntriesByType === 'function' ? perf.getEntriesByType('navigation') : null;
+    if (nav && nav[0] && typeof nav[0].type === 'string') return nav[0].type === 'reload';
+    if (perf && perf.navigation && typeof perf.navigation.type === 'number') return perf.navigation.type === 1;
+  } catch { /* cannot tell */ }
+  return true;
 }
 function appReloadStashClear(storage) {
   try { storage.removeItem(APP_RELOAD_STASH_KEY); } catch { /* nothing to clear */ }
 }
 function appReloadStashSave(storage, chats, now) {
-  const list = (Array.isArray(chats) ? chats : []).filter(c => c && c.agent).map(c => ({ agent: String(c.agent), text: String(c.text || '') }));
+  const list = (Array.isArray(chats) ? chats : []).filter(c => c && c.agent).map(c => ({ agent: String(c.agent), text: String(c.text || ''), front: !!c.front }));
   if (!list.length) { appReloadStashClear(storage); return true; }
   try { storage.setItem(APP_RELOAD_STASH_KEY, JSON.stringify({ chats: list, at: now })); return true; } catch { return false; }
 }
@@ -249,20 +257,25 @@ function appReloadStashTake(storage, now, maxAgeMs = 60000) {
   let e;
   try { e = JSON.parse(raw); } catch { return null; }
   if (!e || !Array.isArray(e.chats) || typeof e.at !== 'number' || !(now - e.at >= 0 && now - e.at <= maxAgeMs)) return null;
-  const list = e.chats.filter(c => c && typeof c.agent === 'string' && c.agent).map(c => ({ agent: c.agent, text: typeof c.text === 'string' ? c.text : '' }));
+  const list = e.chats.filter(c => c && typeof c.agent === 'string' && c.agent).map(c => ({ agent: c.agent, text: typeof c.text === 'string' ? c.text : '', front: c.front === true }));
   return list.length ? list : null;
 }
-function createAppReloader({ questions = () => [], confirm: ask = () => true, run, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
-  let busy = false;
+function createAppReloader({ questions = () => [], confirm: ask = () => true, prepare = () => null, go, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
+  let busy = false, attempt = 0;
+  const qsNow = () => { try { return questions() || []; } catch { return []; } };
+  const end = (my) => { if (my !== attempt || !busy) return; busy = false; try { onBusy(false); } catch { /* paint only */ } };
   function reload() {
     if (busy) return false;
-    let qs = [];
-    try { qs = questions() || []; } catch { qs = []; }
-    for (const q of qs) if (!ask(q)) return false;
+    const asked = new Set();
+    for (const q of qsNow()) { if (!ask(q)) return false; asked.add(q); }
     busy = true;
+    const my = ++attempt;
     try { onBusy(true); } catch { /* paint only */ }
-    setTimer(() => { busy = false; try { onBusy(false); } catch { /* paint only */ } }, busyMs);
-    Promise.resolve().then(run).catch(() => {});
+    Promise.resolve().then(prepare).catch(() => null).then(() => {
+      for (const q of qsNow()) if (!asked.has(q) && !ask(q)) { end(my); return; }
+      try { go(); } catch { /* the page stays */ }
+      setTimer(() => end(my), busyMs);
+    });
     return true;
   }
   return { reload, busy: () => busy };
@@ -8627,13 +8640,13 @@ function reloadApp() {
     appReloaderInst = createAppReloader({
       questions: () => (voiceCall ? [APP_RELOAD_CALL_QUESTION] : []),   // offline is fine here: the service worker keeps /mobile
       confirm: (q) => window.confirm(q),
-      run: () => appFreshReload({
+      prepare: () => appFreshFetch({
         urls: appReloadUrls(document, location.origin),
         fetch: (u, o) => fetch(u, o),
         swUpdate: () => ('serviceWorker' in navigator ? navigator.serviceWorker.getRegistration('/mobile').then(r => r && r.update()) : null),
-        // the draft as it is now, right before the reload (typing goes on while the files are fetched)
-        reload: () => { if (current && $('msg-input')) saveDraft(current, $('msg-input').value); location.reload(); },
       }),
+      // the draft as it is now, right before the reload (typing goes on while the files are fetched)
+      go: () => { if (current && $('msg-input')) saveDraft(current, $('msg-input').value); location.reload(); },
       onBusy: paintReloadBusy,
     });
   }

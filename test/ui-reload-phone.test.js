@@ -26,7 +26,9 @@ function make(over = {}) {
     querySelectorAll: (sel) => sel === 'script[src]' ? [{ getAttribute: () => '/mobile.js' }] : sel.startsWith('link') ? [{ getAttribute: () => '/mobile.css' }] : [],
   };
   const localStorage = { setItem: (k) => log.storageWrites.push(k), removeItem: (k) => log.storageWrites.push(k), clear: () => log.storageWrites.push('clear'), getItem: () => null };
-  const fetchStub = (u, o) => { log.fetches.push([u, o]); return Promise.resolve({}); };
+  let release = () => {};
+  const gate = over.hold ? new Promise(r => { release = r; }) : null;   // hold: fetches stay pending until release()
+  const fetchStub = (u, o) => { log.fetches.push([u, o]); return gate ? gate.then(() => ({})) : Promise.resolve({}); };
   const factory = new Function('S', '$', 'toast', 'window', 'navigator', 'location', 'document', 'fetch', 'localStorage', 'saveDraft', 'setTimeout',
     `${block}\nlet voiceCall = S.voiceCall; let current = S.current;\n${pageSrc}\nreturn { reloadApp, paintReloadBusy, setCall: (v) => { voiceCall = v; }, setCurrent: (v) => { current = v; }, inst: () => appReloaderInst };`);
   const api = factory(
@@ -34,7 +36,7 @@ function make(over = {}) {
     (a, t) => { log.drafts.push([a, t]); log.order.push('draft'); },
     (fn, ms) => { log.timers.push(ms); return 0; },
   );
-  return { api, log, els };
+  return { api, log, els, release: () => release() };
 }
 const settle = () => new Promise(r => setImmediate(r));
 
@@ -58,7 +60,7 @@ test('wire(): the menu entry click is wired with ?. , closes the menu and calls 
 test('page code stays outside the shared marker block and does not redeclare its names', () => {
   assert.ok(block.length > 100);
   assert.ok(!block.includes('function reloadApp'));
-  for (const n of ['appIsInstalled', 'appReloadUrls', 'appFreshReload', 'appReloadStashSave', 'appReloadStashTake', 'createAppReloader']) {
+  for (const n of ['appIsInstalled', 'appReloadUrls', 'appFreshFetch', 'appNavigationWasReload', 'appReloadStashSave', 'appReloadStashTake', 'createAppReloader']) {
     assert.strictEqual(js.split(`function ${n}(`).length - 1, 1, n);
   }
 });
@@ -104,6 +106,43 @@ test('the draft is saved inside the reload callback right before location.reload
   c.api.setCurrent('sam'); c.api.setCall({ id: 1 });
   c.api.reloadApp(); await settle();
   assert.deepStrictEqual(c.log.drafts, [], 'a Cancel saves nothing');
+});
+
+test('a call that starts during the wait (voiceCall set after the press) is asked before go; OK saves the draft and reloads', async () => {
+  const a = make({ hold: true });
+  a.api.setCurrent('sam');
+  a.api.reloadApp();
+  assert.deepStrictEqual(a.log.confirms, [], 'nothing to ask at the press');
+  a.api.setCall({ id: 1 });
+  a.release(); await settle();
+  assert.deepStrictEqual(a.log.confirms, ['Reloading ends the call. Reload?']);
+  assert.deepStrictEqual(a.log.order, ['draft', 'reload']);
+});
+
+test('Cancel on a call question raised during the wait: no reload, no draft write, busy cleared, a new press is possible', async () => {
+  const a = make({ hold: true, confirm: false });
+  a.api.setCurrent('sam');
+  a.api.reloadApp();
+  assert.strictEqual(a.els['menu-reload'].disabled, true, 'busy during the wait');
+  a.api.setCall({ id: 1 });
+  a.release(); await settle();
+  assert.deepStrictEqual(a.log.confirms, ['Reloading ends the call. Reload?']);
+  assert.strictEqual(a.log.reloads, 0);
+  assert.deepStrictEqual(a.log.drafts, []);
+  assert.strictEqual(a.els['menu-reload'].disabled, false);
+  assert.strictEqual(a.els['menu-reload'].attrs['aria-busy'], 'false');
+  a.api.setCall(null);   // the call is over: the next press is accepted
+  assert.strictEqual(a.api.reloadApp(), true);
+});
+
+test('a call already answered at the press is not asked again after the wait', async () => {
+  const a = make({ hold: true });
+  a.api.setCall({ id: 1 });
+  a.api.reloadApp();
+  assert.strictEqual(a.log.confirms.length, 1);
+  a.release(); await settle();
+  assert.strictEqual(a.log.confirms.length, 1);
+  assert.strictEqual(a.log.reloads, 1);
 });
 
 test('the page asks only the call question: no offline or group question on the phone', () => {
