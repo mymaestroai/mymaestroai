@@ -532,6 +532,71 @@ test('reaction and goodbye transitions cross-fade in one short 70 ms fade (not 1
   }
   p.destroy();
 });
+// ── goodbye: cuts the playing clip at once (never waits for it to end), pose family of the on-screen clip, first frame presented within 150 ms ──
+const goodbyeB = (name) => clip(typeof name === 'string' ? name : 'reaction-goodbye-b', 'reaction', { mood: 'goodbye', dur: 3, startsFrom: 'B', endsOn: 'A', family: 'gb' });
+async function goodbyeCut(how, withB, tweak) {
+  const clips = speakPack().filter(c => how === 'reaction' || c.name !== 'idle-a1').map(c => c.name === 'idle-up' ? Object.assign({}, c, { dur: 6.2 }) : c).concat(withB ? [goodbyeB(withB)] : []);
+  const w = makeWorld({ manifest: packManifest(clips) }); const p = w.make(); await p.ready; await w.settle(100);
+  const front = () => w.front(p);
+  if (how === 'poseB-rest') { for (let i = 0; i < 12 && p.getInfo().clip !== 'idle-rest'; i++) { front().end(); await w.settle(100); } }
+  else if (how === 'reaction') { p.react('proud'); await w.settle(100); }
+  if (tweak) tweak(front);
+  const before = { clip: p.getInfo().clip, n: p.getInfo().log.length, t: w.now, old: front() };
+  assert.strictEqual(p.react('goodbye'), true);
+  await w.settle(150);
+  const info = p.getInfo(), v = w.front(p);
+  // the frame callback of the goodbye video is the "presented" signal the player waits on: it is armed on exactly this video, and delivering it draws the clip's first frame
+  const presented = v.frame(0.04, w.now);
+  return { w, p, before, info, v, presented, last: info.log[info.log.length - 1], took: w.now - before.t };
+}
+const settling = (f) => { assert.strictEqual(f().clipName, 'idle-up'); };
+test('goodbye while the 6.2 s pose-changing clip plays (first half, on-screen pose A): cut at once to the A goodbye, first frame presented within 150 ms, old poseB code waited for the clip end', async () => {
+  const r = await goodbyeCut('poseB-settling', true, settling);
+  assert.strictEqual(r.before.clip, 'idle-up', 'set-up: the 6.2 s A-to-B clip is playing');
+  assert.strictEqual(r.info.clip, 'reaction-goodbye-1'); assert.strictEqual(r.info.log.length, r.before.n + 1, 'one switch');
+  assert.strictEqual(r.last.kind, 'reaction'); assert.strictEqual(r.last.ms, 70); assert.strictEqual(r.last.fade, true);
+  assert.ok(r.took <= 150, 'took ' + r.took); assert.strictEqual(r.v.clipName, 'reaction-goodbye-1'); assert.strictEqual(r.v.paused, false); assert.strictEqual(r.v.readyState, 4);
+  assert.strictEqual(r.presented, true, 'the goodbye video presented a frame (frame callback was armed on it)'); assert.strictEqual(r.v.style.opacity, '1'); assert.match(r.v.style.transition, /\b70ms/);
+  assert.strictEqual(r.info.pending, null); assert.strictEqual(r.info.pose, 'A');
+  r.p.destroy();
+});
+test('goodbye while the pose-changing clip is in its second half (on-screen pose B): the B-family goodbye, not the A one', async () => {
+  const r = await goodbyeCut('poseB-settling', true, (f) => { settling(f); f().currentTime = 4.5; });
+  assert.strictEqual(r.info.clip, 'reaction-goodbye-b'); assert.ok(r.took <= 150); assert.strictEqual(r.presented, true); assert.strictEqual(r.last.ms, 70);
+  r.p.destroy();
+});
+test('goodbye in pose B mid-clip: the B goodbye when the pack has one; with only an A goodbye (missing pose family) that one is used at once, not a wait for the way back to A', async () => {
+  const b = await goodbyeCut('poseB-rest', true, (f) => { assert.strictEqual(f().clipName, 'idle-rest'); f().currentTime = 1; });
+  assert.strictEqual(b.before.clip, 'idle-rest'); assert.strictEqual(b.info.clip, 'reaction-goodbye-b'); assert.ok(b.took <= 150); assert.strictEqual(b.presented, true); b.p.destroy();
+  const a = await goodbyeCut('poseB-rest', false, (f) => { f().currentTime = 1; });
+  assert.strictEqual(a.before.clip, 'idle-rest', 'set-up: pose B, long clip with seconds left');
+  assert.strictEqual(a.info.clip, 'reaction-goodbye-1', 'no B goodbye in the pack: any available one, immediately');
+  assert.ok(a.took <= 150, 'took ' + a.took); assert.strictEqual(a.presented, true); assert.strictEqual(a.last.ms, 70); assert.strictEqual(a.info.log.filter(x => x.name === 'idle-back').length, 0, 'no detour through the transition clip');
+  a.p.destroy();
+});
+test('goodbye choice is by metadata only: a B-start goodbye with a neutral name (no "-b" suffix) wins at true B rest; the A goodbye is the fallback without it', async () => {
+  const b = await goodbyeCut('poseB-rest', 'reaction-goodbye-farewell', (f) => { assert.strictEqual(f().clipName, 'idle-rest'); f().currentTime = 1; });
+  assert.strictEqual(b.before.clip, 'idle-rest'); assert.strictEqual(b.info.clip, 'reaction-goodbye-farewell', 'startsFrom B on the resting pose, whatever the name');
+  assert.ok(b.took <= 150, 'took ' + b.took); assert.strictEqual(b.presented, true); assert.strictEqual(b.last.ms, 70); b.p.destroy();
+  const a = await goodbyeCut('poseB-rest', false, (f) => { f().currentTime = 1; });
+  assert.strictEqual(a.before.clip, 'idle-rest'); assert.strictEqual(a.info.clip, 'reaction-goodbye-1', 'no B-start goodbye: the A one is cut to at once from B');
+  assert.ok(a.took <= 150, 'took ' + a.took); assert.strictEqual(a.last.ms, 70); a.p.destroy();
+});
+test('goodbye while a (non-hello) reaction plays: it cuts that too; the old picture stays under the 70 ms fade (no blank), then goes', async () => {
+  const r = await goodbyeCut('reaction', false);
+  assert.strictEqual(r.before.clip, 'reaction-proud-2'); assert.strictEqual(r.info.clip, 'reaction-goodbye-1'); assert.ok(r.took <= 150); assert.strictEqual(r.presented, true);
+  r.p.destroy();
+  const w2 = makeWorld({ manifest: packManifest(speakPack()) }); const p2 = w2.make(); await p2.ready; await w2.settle(100);
+  p2.react('proud'); await w2.settle(100); const old = w2.front(p2); p2.react('goodbye'); await w2.settle(30);
+  assert.strictEqual(p2.getInfo().clip, 'reaction-goodbye-1'); assert.strictEqual(old.paused, false, 'old video still playing under the fade'); assert.notStrictEqual(old.style.opacity, '0');
+  await w2.settle(100); assert.strictEqual(old.paused, true); assert.strictEqual(old.style.opacity, '0'); p2.destroy();
+});
+test('goodbye still never cuts the audible reply, and a goodbye that is already showing is not restarted', async () => {
+  const { w, p } = await enterSpeaking('idle'); const at = p.getInfo().clip;
+  p.react('goodbye'); await w.settle(300); assert.strictEqual(p.getInfo().clip, at, 'the reply is not cut');
+  p.setState('idle'); await w.settle(150); assert.strictEqual(p.getInfo().clip, 'reaction-goodbye-1');
+  const n = p.getInfo().log.length; p.react('goodbye'); await w.settle(200); assert.strictEqual(p.getInfo().log.length, n, 'not restarted'); p.destroy();
+});
 test('fast speaking: a warm switch (tracked clip already loaded, no cold hold) cross-fades explicitly in 120 ms', async () => {
   const { w, p } = await started({}, {});
   p.setState('speaking'); await w.settle(150); const first = p.getInfo().clip; assert.match(first, /^speaking-/);
@@ -1306,6 +1371,21 @@ test('all speaking clips fail: the animated poster beak is kept for the whole re
   assert.match(i.clip, /^(listening|idle)-/); p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0);
   const x = await started({}, { videoSize: false }); SPEAKERS.forEach(s => x.w.fail.add(s)); x.p.setState('thinking'); await x.w.settle(400); x.p.setState('speaking'); await x.w.settle(300);
   assert.strictEqual(x.p.getInfo().coldHold, false, 'without a real poster picture nothing is held and the old rules run'); x.p.destroy();
+});
+test('all speaking tracks fail over HTTP, speech asked the moment ready resolves: an idle clip that committed under the hold and presents frames never drops the poster or the animated beak', async () => {
+  const w = makeWorld({ manifest: posterManifest(), fetchFail: u => /\/tracks\//.test(u) }); const p = w.make(); await p.ready;
+  const amp = { amp: 0.2, hz: 1500 }; const writes = recordDisplay(posterShown(w)); p.setAnalyser(analyserOf(amp));
+  // A real video keeps every registered frame callback (the per-frame watcher AND the poster release); the shared fake keeps only the last one.
+  const cbs = new Map(); w.videos.forEach(v => { cbs.set(v, new Set()); v.requestVideoFrameCallback = (cb) => { cbs.get(v).add(cb); return cbs.get(v).size; }; v.cancelVideoFrameCallback = () => {}; });
+  const present = (v, mt) => { const list = [...cbs.get(v)]; cbs.get(v).clear(); list.forEach(cb => cb(w.now, { mediaTime: mt })); };
+  p.setState('speaking');   // no settle: the first (idle) clip is still starting, it commits under the hold
+  for (let k = 0; k < 40; k++) { await w.settle(25); const v = w.front(p); if (v && !v.paused) { present(v, 0.04 * k); present(v, 0.04 * k + 0.02); } }   // the front video presents frames, as Chrome does
+  let i = p.getInfo(); assert.ok(i.log.some(e => e.state === 'idle'), 'set-up: an untracked idle clip is the one in front under the hold');
+  assert.strictEqual(i.coldHold, true, 'still held while the reply is audible'); assert.strictEqual(i.poster, true, 'the poster stays up');
+  assert.ok(!writes.includes('none'), 'the poster never vanished while speaking: ' + writes.join(','));
+  w.ctxCalls.length = 0; for (let k = 0; k < 60; k++) { amp.amp = k % 10 < 5 ? 0.02 : 0.5; w.tickRaf(16); }   // a speaking rhythm (a steady level converges to closed)
+  const draws = beakDraws(w); assert.ok(draws.length >= 10, 'the beak is drawn over the poster: ' + draws.length); assert.ok(draws.some(c => !/closed\.png$/.test(c[1]._s)), 'it follows the voice: ' + [...new Set(draws.map(c => c[1]._s.split('/').pop()))].join(','));
+  p.setState('listening'); await w.settle(700); i = p.getInfo(); assert.strictEqual(i.coldHold, false); assert.strictEqual(i.poster, false, 'released after the reply'); p.destroy();
 });
 
 // ── pictureReady: the picture is separate from `ready` (patches and tracks) ──
