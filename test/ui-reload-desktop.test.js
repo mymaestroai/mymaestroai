@@ -1,7 +1,7 @@
 'use strict';
 // Reload on the desktop page: the ⋯ menu entry, the top-bar button (only in the installed app), the install paint, the
-// stash of the open solo chat, the reload itself (voice-call question, no double press, fresh fetch then reload) and the
-// restore after the reload.
+// stash of every open solo chat (written on pagehide), the questions asked before a reload (call, group text, offline),
+// the reload itself (no double press, fresh fetch then reload) and the restore after the reload.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -19,7 +19,8 @@ function extract(name) {
   for (; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}' && --depth === 0) break; }
   return src.slice(at, i + 1);
 }
-const libNames = ['appIsInstalled', 'appReloadUrls', 'appFreshReload', 'appReloadStashSave', 'appReloadStashTake', 'createAppReloader', 'APP_RELOAD_CALL_QUESTION'];
+const libNames = ['appIsInstalled', 'appReloadUrls', 'appFreshReload', 'appReloadStashSave', 'appReloadStashTake', 'appReloadStashClear', 'createAppReloader',
+  'APP_RELOAD_CALL_QUESTION', 'APP_RELOAD_GROUP_QUESTION', 'APP_RELOAD_OFFLINE_QUESTION'];
 const libArgs = libNames.map(n => lib[n]);
 
 function lineOf(id) {
@@ -87,95 +88,192 @@ test('the page paints once at load and again when any of the three display-mode 
   assert.ok(/addEventListener\('change', paintInstalledApp\)/.test(head));
 });
 
-function stashPage(chats, active, boxes) {
+// ── the page's own reload code, sliced from app.js: reloadIsSolo … reloadAppQuestions, paintReloadBusy, reloadApp ──
+const helperSrc = (() => {
+  const from = src.indexOf('const reloadIsSolo');
+  const to = src.indexOf('function paintReloadBusy(');
+  assert.ok(from >= 0 && to > from, 'reload helpers present');
+  return src.slice(from, to);
+})();
+
+function reloadPage({ chats = {}, active, boxes = {}, call = null, starting = false, online, answers = [], stored } = {}) {
+  const log = { confirms: [], fetches: [], reloads: 0, toasts: [], timers: [], order: [], listenersAtReload: -1 };
   const storage = fakeStorage();
-  const document = { getElementById: (id) => boxes[id] || null };
-  const window = { __activeChatId: active };
-  const reloadAppStash = new Function('chats', 'document', 'window', 'sessionStorage', ...libNames, `${extract('reloadAppStash')}; return reloadAppStash;`)(chats, document, window, storage, ...libArgs);
-  return { storage, reloadAppStash };
-}
-
-test('reloadAppStash stashes the open solo chat: its agent and the text in the box', () => {
-  const p = stashPage({ 'chat-1': { id: 'chat-1', agent: 'sam', isGroup: false } }, 'chat-1', { 'input-chat-1': { value: 'draft for robin' } });
-  p.reloadAppStash();
-  const got = lib.appReloadStashTake(p.storage, Date.now());
-  assert.deepStrictEqual(got, { agent: 'sam', text: 'draft for robin' });
-});
-
-test('reloadAppStash stashes nothing for a group chat, an orchestrator chat, an unknown chat or no chat', () => {
-  const chats = {
-    g: { id: 'g', agents: [{ name: 'sam' }], isGroup: true, agent: 'sam' },
-    g2: { id: 'g2', agents: [{ name: 'sam' }] },
-    'orch-1': { type: 'orchestration', coordinator: 'sam', agent: 'sam' },
-    s: { id: 's', agent: 'sam', isGroup: false },
-  };
-  for (const active of ['g', 'g2', 'orch-1', 'nope', null, undefined]) {
-    const p = stashPage(chats, active, { 'input-g': { value: 'x' } });
-    p.reloadAppStash();
-    assert.strictEqual(p.storage._m.size, 0, `nothing for ${active}`);
-  }
-});
-
-test('reloadAppStash with a missing message box stashes the agent with empty text', () => {
-  const p = stashPage({ s: { id: 's', agent: 'robin', isGroup: false } }, 's', {});
-  p.reloadAppStash();
-  assert.deepStrictEqual(lib.appReloadStashTake(p.storage, Date.now()), { agent: 'robin', text: '' });
-});
-
-function reloadPage({ call = null, starting = false, answer = true } = {}) {
-  const log = { confirms: [], fetches: [], reloads: 0, toasts: [], stashed: 0, timers: [] };
+  if (stored) lib.appReloadStashSave(storage, stored, Date.now() - 1000);
   const els = { 'reload-btn': { setAttribute(k, v) { this[k] = v; } }, 'reload-app-item': { setAttribute(k, v) { this[k] = v; } } };
   const document = {
-    getElementById: (id) => els[id] || null,
+    getElementById: (id) => els[id] || boxes[id] || null,
     location: { href: 'http://192.0.2.7:3000/' },
     querySelectorAll: (sel) => (sel === 'script[src]' ? [{ getAttribute: () => '/app.js' }] : sel.startsWith('link') ? [{ getAttribute: () => '/style.css' }] : []),
   };
   const voiceCallS = { call, starting };
-  const window = { confirm: (q) => { log.confirms.push(q); return answer; } };
-  const location = { origin: 'http://192.0.2.7:3000', reload: () => { log.reloads++; } };
+  const listeners = [];
+  const window = {
+    __activeChatId: active,
+    confirm: (q) => { log.confirms.push(q); const a = answers[log.confirms.length - 1]; return a === undefined ? true : a; },
+    addEventListener: (type, fn) => listeners.push([type, fn]),
+  };
+  const navigator = online === undefined ? {} : { onLine: online };
+  const location = { origin: 'http://192.0.2.7:3000', reload: () => { log.reloads++; log.listenersAtReload = listeners.length; log.order.push('reload'); } };
   const fetchStub = (u, o) => { log.fetches.push([u, o]); return Promise.resolve({}); };
   const hubToast = (t) => log.toasts.push(t);
-  const reloadAppStash = () => { log.stashed++; };
   const setTimeoutStub = (fn, ms) => { log.timers.push([fn, ms]); return log.timers.length; };
-  const body = `${extract('paintReloadBusy')}\nlet appReloaderInst = null;\n${extract('reloadApp')}\nreturn reloadApp;`;
+  const body = `${helperSrc}\n${extract('paintReloadBusy')}\nlet appReloaderInst = null;\n${extract('reloadApp')}\nreturn { reloadApp, reloadAppStash, armReloadStash, reloadAppQuestions };`;
   // the page's own setTimeout inside the lib is the real one; shadow it so the busy timer and the 4 s cap never run
-  const reloadApp = new Function('document', 'voiceCallS', 'window', 'location', 'fetch', 'hubToast', 'reloadAppStash', 'setTimeout', ...libNames, body)(
-    document, voiceCallS, window, location, fetchStub, hubToast, reloadAppStash, setTimeoutStub, ...libArgs);
-  return { reloadApp, log, els };
+  const api = new Function('chats', 'document', 'voiceCallS', 'window', 'navigator', 'location', 'fetch', 'hubToast', 'sessionStorage', 'setTimeout', ...libNames, body)(
+    chats, document, voiceCallS, window, navigator, location, fetchStub, hubToast, storage, setTimeoutStub, ...libArgs);
+  const firePagehide = () => { for (const [t, fn] of listeners) if (t === 'pagehide') fn(); };
+  return { ...api, log, els, storage, listeners, firePagehide, boxes };
 }
 const tick = () => new Promise(r => setImmediate(r));
+const takeStash = (p) => lib.appReloadStashTake(p.storage, Date.now());
 
-test('reloadApp asks the voice-call question during a call and does nothing on Cancel', async () => {
-  const p = reloadPage({ call: {}, answer: false });
-  p.reloadApp();
-  await tick();
-  assert.deepStrictEqual(p.log.confirms, [lib.APP_RELOAD_CALL_QUESTION]);
-  assert.strictEqual(p.log.stashed, 0);
-  assert.strictEqual(p.log.fetches.length, 0);
-  assert.strictEqual(p.log.toasts.length, 0);
-  const q = reloadPage({ starting: true, answer: false });
-  q.reloadApp();
-  assert.strictEqual(q.log.confirms.length, 1, 'a call that is starting counts');
+const soloChats = () => ({
+  a: { id: 'a', agent: 'sam', isGroup: false },
+  b: { id: 'b', agent: 'robin' },
+  g: { id: 'g', agent: 'kim', isGroup: true },
+  o: { id: 'o', agent: 'kim', type: 'orchestration' },
 });
 
-test('reloadApp without a call does not ask; two presses give one run', async () => {
+test('reloadAppStash saves every open solo chat with its box text, the one in front last; group and orchestration chats are left out', () => {
+  const boxes = { 'input-a': { value: 'draft for robin' }, 'input-b': { value: 'second' }, 'input-g': { value: 'group text' }, 'input-o': { value: 'orch text' } };
+  const p = reloadPage({ chats: soloChats(), active: 'a', boxes });
+  p.reloadAppStash();
+  assert.deepStrictEqual(takeStash(p), [{ agent: 'robin', text: 'second' }, { agent: 'sam', text: 'draft for robin' }]);
+  const q = reloadPage({ chats: soloChats(), active: 'b', boxes });
+  q.reloadAppStash();
+  assert.deepStrictEqual(takeStash(q), [{ agent: 'sam', text: 'draft for robin' }, { agent: 'robin', text: 'second' }]);
+});
+
+test('reloadAppStash with a group, orchestration, unknown or no chat in front still saves the solo chats (in their own order)', () => {
+  for (const active of ['g', 'o', 'nope', null, undefined]) {
+    const p = reloadPage({ chats: soloChats(), active, boxes: { 'input-a': { value: 'x' } } });
+    p.reloadAppStash();
+    assert.deepStrictEqual(takeStash(p), [{ agent: 'sam', text: 'x' }, { agent: 'robin', text: '' }], `front ${active}`);
+  }
+});
+
+test('reloadAppStash with no solo chat open clears an older stash', () => {
+  const chats = { g: { id: 'g', agent: 'kim', isGroup: true }, o: { id: 'o', type: 'orchestration', agent: 'kim' } };
+  const p = reloadPage({ chats, active: 'g', stored: [{ agent: 'sam', text: 'old' }] });
+  assert.ok(p.storage._m.has(lib.APP_RELOAD_STASH_KEY), 'older stash is there');
+  p.reloadAppStash();
+  assert.strictEqual(p.storage._m.has(lib.APP_RELOAD_STASH_KEY), false, 'key gone');
+  const empty = reloadPage({ chats: {}, stored: [{ agent: 'sam', text: 'old' }] });
+  empty.reloadAppStash();
+  assert.strictEqual(empty.storage._m.size, 0);
+});
+
+test('reloadAppStash with a missing message box stashes the agent with empty text', () => {
+  const p = reloadPage({ chats: { s: { id: 's', agent: 'robin', isGroup: false } }, active: 's' });
+  p.reloadAppStash();
+  assert.deepStrictEqual(takeStash(p), [{ agent: 'robin', text: '' }]);
+});
+
+test('pressing Reload does not write the stash; the run arms one pagehide listener, then reloads; pagehide writes the text typed after the press', async () => {
+  const box = { value: 'first' };
+  const p = reloadPage({ chats: { a: { id: 'a', agent: 'sam' } }, active: 'a', boxes: { 'input-a': box } });
+  p.reloadApp();
+  assert.strictEqual(p.storage._m.size, 0, 'nothing written at the press');
+  assert.strictEqual(p.listeners.length, 0, 'nothing armed at the press');
+  box.value += ' plus new words';   // typed while the files are fetched
+  await tick(); await tick();
+  assert.strictEqual(p.log.reloads, 1);
+  assert.strictEqual(p.log.listenersAtReload, 1, 'armed before location.reload');
+  assert.deepStrictEqual(p.listeners.map(l => l[0]), ['pagehide']);
+  assert.strictEqual(p.storage._m.size, 0, 'still nothing before the page unloads');
+  p.firePagehide();
+  assert.deepStrictEqual(takeStash(p), [{ agent: 'sam', text: 'first plus new words' }]);
+});
+
+test('armReloadStash arms only once, even if called twice', () => {
+  const p = reloadPage({ chats: { a: { id: 'a', agent: 'sam' } }, active: 'a', boxes: { 'input-a': { value: 'hi' } } });
+  p.armReloadStash();
+  p.armReloadStash();
+  assert.strictEqual(p.listeners.length, 1);
+  p.firePagehide();
+  assert.deepStrictEqual(takeStash(p), [{ agent: 'sam', text: 'hi' }]);
+});
+
+test('a Reload that is called off (no pagehide) leaves no stash', async () => {
+  const p = reloadPage({ chats: { a: { id: 'a', agent: 'sam' } }, active: 'a', boxes: { 'input-a': { value: 'keep me' } } });
+  p.reloadApp();
+  await tick(); await tick();
+  assert.strictEqual(p.storage._m.size, 0);
+  const c = reloadPage({ chats: { a: { id: 'a', agent: 'sam' } }, active: 'a', call: {}, answers: [false] });
+  c.reloadApp();
+  await tick(); await tick();
+  assert.strictEqual(c.listeners.length, 0, 'a Cancel arms nothing');
+  assert.strictEqual(c.storage._m.size, 0);
+});
+
+test('reloadAppQuestions: a call or a starting call -> the call question', () => {
+  assert.deepStrictEqual(reloadPage({ call: {} }).reloadAppQuestions(), [lib.APP_RELOAD_CALL_QUESTION]);
+  assert.deepStrictEqual(reloadPage({ starting: true }).reloadAppQuestions(), [lib.APP_RELOAD_CALL_QUESTION]);
+  assert.deepStrictEqual(reloadPage().reloadAppQuestions(), []);
+});
+
+test('reloadAppQuestions: text in an open group or orchestration chat -> the group question; blank text or a solo chat does not', () => {
+  const g = reloadPage({ chats: soloChats(), boxes: { 'input-g': { value: 'hello team' } } });
+  assert.deepStrictEqual(g.reloadAppQuestions(), [lib.APP_RELOAD_GROUP_QUESTION]);
+  const o = reloadPage({ chats: soloChats(), boxes: { 'input-o': { value: 'plan' } } });
+  assert.deepStrictEqual(o.reloadAppQuestions(), [lib.APP_RELOAD_GROUP_QUESTION]);
+  const blank = reloadPage({ chats: soloChats(), boxes: { 'input-g': { value: '  \n ' }, 'input-o': { value: '' } } });
+  assert.deepStrictEqual(blank.reloadAppQuestions(), []);
+  const solo = reloadPage({ chats: soloChats(), boxes: { 'input-a': { value: 'typed in a solo chat' } } });
+  assert.deepStrictEqual(solo.reloadAppQuestions(), []);
+});
+
+test('reloadAppQuestions: navigator.onLine === false -> the offline question; online or unknown does not', () => {
+  assert.deepStrictEqual(reloadPage({ online: false }).reloadAppQuestions(), [lib.APP_RELOAD_OFFLINE_QUESTION]);
+  assert.deepStrictEqual(reloadPage({ online: true }).reloadAppQuestions(), []);
+  assert.deepStrictEqual(reloadPage({}).reloadAppQuestions(), []);
+});
+
+test('reloadApp asks call, group, offline in that order with window.confirm', async () => {
+  const p = reloadPage({ call: {}, chats: soloChats(), boxes: { 'input-g': { value: 'x' } }, online: false });
+  p.reloadApp();
+  await tick(); await tick();
+  assert.deepStrictEqual(p.log.confirms, [lib.APP_RELOAD_CALL_QUESTION, lib.APP_RELOAD_GROUP_QUESTION, lib.APP_RELOAD_OFFLINE_QUESTION]);
+  assert.strictEqual(p.log.reloads, 1);
+});
+
+test('reloadApp does nothing on any Cancel (and stops asking after it)', async () => {
+  const setup = { call: {}, chats: soloChats(), boxes: { 'input-g': { value: 'x' } }, online: false };
+  for (let i = 0; i < 3; i++) {
+    const answers = [true, true, true]; answers[i] = false;
+    const p = reloadPage({ ...setup, answers });
+    assert.strictEqual(p.reloadApp(), false);
+    await tick(); await tick();
+    assert.strictEqual(p.log.confirms.length, i + 1, `stops at Cancel ${i}`);
+    assert.strictEqual(p.log.fetches.length, 0);
+    assert.strictEqual(p.log.reloads, 0);
+    assert.strictEqual(p.log.toasts.length, 0);
+    assert.strictEqual(p.listeners.length, 0);
+    assert.strictEqual(p.els['reload-btn'].disabled, undefined, 'not painted busy');
+  }
+});
+
+test('reloadApp without a question does not ask; two presses give one run', async () => {
   const p = reloadPage();
   p.reloadApp();
   p.reloadApp();
-  await tick();
+  await tick(); await tick();
   assert.strictEqual(p.log.confirms.length, 0);
-  assert.strictEqual(p.log.stashed, 1);
+  assert.strictEqual(p.log.reloads, 1);
+  assert.strictEqual(p.listeners.length, 1);
   assert.deepStrictEqual(p.log.toasts, ['Reloading…']);
   assert.strictEqual(p.log.fetches.length, 3, 'the page and its two own files, once');
 });
 
-test('reloadApp busy paint disables the button and the menu entry', async () => {
+test('reloadApp busy paint disables the button and the menu entry with aria-busy and toasts Reloading…', async () => {
   const p = reloadPage();
   p.reloadApp();
   for (const id of ['reload-btn', 'reload-app-item']) {
     assert.strictEqual(p.els[id].disabled, true);
     assert.strictEqual(p.els[id]['aria-busy'], 'true');
   }
+  assert.deepStrictEqual(p.log.toasts, ['Reloading…']);
 });
 
 test('the run fetches the page\'s own urls with cache reload, then calls location.reload', async () => {
@@ -191,44 +289,69 @@ test('reloadApp has no service-worker update on the desktop', () => {
   assert.ok(!/swUpdate/.test(extract('reloadApp')));
 });
 
+// ── the restore: the DOMContentLoaded block between "After a Reload" and openTargets.ready(own); ──
 function restoreSource() {
-  const at = src.indexOf('openTargets.ready(own);');
-  const from = src.indexOf('const reloadBack', at);
-  assert.ok(from > at && from - at < 400, 'the restore follows openTargets.ready(own)');
-  return src.slice(from, src.indexOf('setupTabs();', from));
+  const at = src.indexOf('// After a Reload');
+  assert.ok(at >= 0, 'the restore block is present');
+  const end = src.indexOf('openTargets.ready(own);', at);
+  assert.ok(end > at, 'the restore ends where openTargets.ready(own) begins');
+  return src.slice(at, end);
 }
-function restorePage({ stash, agents = [{ name: 'sam', model: 'm1' }, { name: 'robin', model: 'm2' }], boxValue = '' }) {
+function restorePage({ stash, agents = [{ name: 'sam', model: 'm1' }, { name: 'robin', model: 'm2' }], boxes = {}, ownAgent, href = 'http://192.0.2.7:3000/?agent=sam&x=1' } = {}) {
   const storage = fakeStorage();
-  if (stash) lib.appReloadStashSave(storage, stash.entry, stash.at ?? Date.now());
-  const box = { value: boxValue };
-  const calls = { solo: [], grow: 0 };
-  const startSoloChat = (n, m) => { calls.solo.push([n, m]); return 'chat-9'; };
-  const document = { getElementById: (id) => (id === 'input-chat-9' ? box : null) };
+  if (stash) lib.appReloadStashSave(storage, stash.entries, stash.at ?? Date.now());
+  const calls = { solo: [], grow: 0, replaced: [] };
+  const startSoloChat = (n, m) => { calls.solo.push([n, m]); return 'chat-' + n; };
+  const document = { getElementById: (id) => boxes[id] || null };
   const autoGrowTextarea = () => { calls.grow++; };
-  new Function('AGENTS', 'sessionStorage', 'startSoloChat', 'document', 'autoGrowTextarea', ...libNames, restoreSource())(agents, storage, startSoloChat, document, autoGrowTextarea, ...libArgs);
-  return { calls, box, storage };
+  const own = ownAgent ? { agent: ownAgent, other: 1 } : {};
+  const location = { href };
+  const history = { state: { s: 1 }, replaceState: (...a) => calls.replaced.push(a) };
+  new Function('AGENTS', 'sessionStorage', 'startSoloChat', 'document', 'autoGrowTextarea', 'appReloadStashTake', 'own', 'location', 'history', restoreSource())(
+    agents, storage, startSoloChat, document, autoGrowTextarea, lib.appReloadStashTake, own, location, history);
+  return { calls, boxes, storage, own };
 }
 
-test('the restore opens the stashed agent\'s chat once and fills an empty box', () => {
-  const p = restorePage({ stash: { entry: { agent: 'robin', text: 'hello again' } } });
-  assert.deepStrictEqual(p.calls.solo, [['robin', 'm2']]);
-  assert.strictEqual(p.box.value, 'hello again');
-  assert.strictEqual(p.calls.grow, 1);
+test('the restore opens every stashed agent known in AGENTS in order (front last) and fills only empty boxes', () => {
+  const boxes = { 'input-chat-robin': { value: '' }, 'input-chat-sam': { value: '' } };
+  const p = restorePage({ stash: { entries: [{ agent: 'robin', text: 'hello again' }, { agent: 'sam', text: 'front text' }] }, boxes });
+  assert.deepStrictEqual(p.calls.solo, [['robin', 'm2'], ['sam', 'm1']]);
+  assert.strictEqual(boxes['input-chat-robin'].value, 'hello again');
+  assert.strictEqual(boxes['input-chat-sam'].value, 'front text');
+  assert.strictEqual(p.calls.grow, 2);
   assert.strictEqual(p.storage._m.size, 0, 'taken once');
+  const typed = restorePage({ stash: { entries: [{ agent: 'sam', text: 'old' }, { agent: 'robin', text: '' }] }, boxes: { 'input-chat-sam': { value: 'typed already' }, 'input-chat-robin': { value: '' } } });
+  assert.deepStrictEqual(typed.calls.solo, [['sam', 'm1'], ['robin', 'm2']]);
+  assert.strictEqual(typed.boxes['input-chat-sam'].value, 'typed already');
+  assert.strictEqual(typed.boxes['input-chat-robin'].value, '');
+  assert.strictEqual(typed.calls.grow, 0, 'nothing filled, nothing grown');
 });
 
-test('the restore does nothing without a stash, for an unknown agent or an old stash', () => {
-  assert.deepStrictEqual(restorePage({}).calls.solo, []);
-  assert.deepStrictEqual(restorePage({ stash: { entry: { agent: 'ghost', text: 'x' } } }).calls.solo, []);
-  assert.deepStrictEqual(restorePage({ stash: { entry: { agent: 'sam', text: 'x' }, at: Date.now() - 10 * 60000 } }).calls.solo, []);
+test('the restore skips unknown agents, does nothing without a stash or with an old one', () => {
+  assert.deepStrictEqual(restorePage().calls.solo, []);
+  const mixed = restorePage({ stash: { entries: [{ agent: 'ghost', text: 'x' }, { agent: 'sam', text: 'y' }] }, boxes: { 'input-chat-sam': { value: '' } } });
+  assert.deepStrictEqual(mixed.calls.solo, [['sam', 'm1']]);
+  assert.deepStrictEqual(restorePage({ stash: { entries: [{ agent: 'ghost', text: 'x' }] } }).calls.solo, []);
+  assert.deepStrictEqual(restorePage({ stash: { entries: [{ agent: 'sam', text: 'x' }], at: Date.now() - 10 * 60000 } }).calls.solo, []);
 });
 
-test('the restore leaves typed text alone and sets nothing for an empty stash text', () => {
-  const typed = restorePage({ stash: { entry: { agent: 'sam', text: 'old' } }, boxValue: 'typed already' });
-  assert.deepStrictEqual(typed.calls.solo, [['sam', 'm1']]);
-  assert.strictEqual(typed.box.value, 'typed already');
-  assert.strictEqual(typed.calls.grow, 0);
-  const empty = restorePage({ stash: { entry: { agent: 'sam', text: '' } } });
-  assert.strictEqual(empty.box.value, '');
-  assert.strictEqual(empty.calls.grow, 0);
+test('after a restore, own.agent is cleared and "agent" is removed from the address; without a restore it stays', () => {
+  const p = restorePage({ ownAgent: 'sam', stash: { entries: [{ agent: 'robin', text: '' }, { agent: 'sam', text: '' }] }, boxes: { 'input-chat-robin': { value: '' }, 'input-chat-sam': { value: '' } } });
+  assert.strictEqual(p.own.agent, undefined);
+  assert.strictEqual(p.own.other, 1, 'other fields stay');
+  assert.strictEqual(p.calls.replaced.length, 1);
+  assert.deepStrictEqual(p.calls.replaced[0], [{ s: 1 }, '', '/?x=1']);
+  for (const stash of [undefined, { entries: [{ agent: 'ghost', text: 'x' }] }]) {
+    const q = restorePage({ ownAgent: 'sam', stash });
+    assert.strictEqual(q.own.agent, 'sam', 'own.agent stays without a restore');
+    assert.deepStrictEqual(q.calls.replaced, []);
+  }
+});
+
+test('the restore runs before openTargets.ready(own) in the page source', () => {
+  const take = src.indexOf('appReloadStashTake(sessionStorage');
+  const ready = src.indexOf('openTargets.ready(own);');
+  assert.ok(take > 0 && ready > take, 'the stash is taken before openTargets.ready(own)');
+  assert.strictEqual(src.indexOf('// After a Reload') < ready, true);
+  assert.strictEqual(src.split('openTargets.ready(own);').length - 1, 1, 'one call');
 });

@@ -15,12 +15,12 @@ const pageSrc = js.slice(js.indexOf('function paintReloadBusy(b)'), js.indexOf('
 
 // Build the page code with stubs. voiceCall / current are the page's own variables, set through the returned setters.
 function make(over = {}) {
-  const log = { confirms: [], toasts: [], fetches: [], updates: [], reloads: 0, unregister: 0, sub: 0, storageWrites: [], drafts: [], timers: [] };
+  const log = { confirms: [], toasts: [], fetches: [], updates: [], reloads: 0, unregister: 0, sub: 0, storageWrites: [], drafts: [], timers: [], order: [] };
   const els = { 'menu-reload': { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } }, 'msg-input': { value: 'hello sam' } };
   const reg = { update: () => { log.updates.push('/mobile'); return Promise.resolve(); }, unregister: () => { log.unregister++; }, pushManager: { getSubscription: () => { log.sub++; return Promise.resolve(null); } } };
   const nav = over.noSw ? {} : { serviceWorker: { getRegistration: (scope) => { log.scope = scope; return Promise.resolve(reg); } } };
   const win = { confirm: (q) => { log.confirms.push(q); return over.confirm === undefined ? true : over.confirm; } };
-  const loc = { origin: 'http://192.0.2.10:3100', href: 'http://192.0.2.10:3100/mobile#chat=sam', reload: () => { log.reloads++; } };
+  const loc = { origin: 'http://192.0.2.10:3100', href: 'http://192.0.2.10:3100/mobile#chat=sam', reload: () => { log.reloads++; log.order.push('reload'); } };
   const doc = {
     location: loc,
     querySelectorAll: (sel) => sel === 'script[src]' ? [{ getAttribute: () => '/mobile.js' }] : sel.startsWith('link') ? [{ getAttribute: () => '/mobile.css' }] : [],
@@ -31,7 +31,7 @@ function make(over = {}) {
     `${block}\nlet voiceCall = S.voiceCall; let current = S.current;\n${pageSrc}\nreturn { reloadApp, paintReloadBusy, setCall: (v) => { voiceCall = v; }, setCurrent: (v) => { current = v; }, inst: () => appReloaderInst };`);
   const api = factory(
     {}, (id) => els[id] || null, (t) => log.toasts.push(t), win, nav, loc, doc, fetchStub, localStorage,
-    (a, t) => log.drafts.push([a, t]),
+    (a, t) => { log.drafts.push([a, t]); log.order.push('draft'); },
     (fn, ms) => { log.timers.push(ms); return 0; },
   );
   return { api, log, els };
@@ -87,14 +87,28 @@ test('reloadApp with no call does not ask; with OK on the question it goes on', 
   assert.strictEqual(b.log.reloads, 1);
 });
 
-test('reloadApp saves the open chat\'s draft first; no draft write without an open chat', async () => {
+test('the draft is saved inside the reload callback right before location.reload, not at the press; text typed after the press is in it', async () => {
   const a = make();
   a.api.setCurrent('sam');
-  a.api.reloadApp(); await settle();
-  assert.deepStrictEqual(a.log.drafts, [['sam', 'hello sam']]);
+  a.api.reloadApp();
+  assert.deepStrictEqual(a.log.drafts, [], 'a press does not save the draft yet');
+  a.els['msg-input'].value = 'hello sam plus new words';   // typed while the files are fetched
+  await settle();
+  assert.deepStrictEqual(a.log.drafts, [['sam', 'hello sam plus new words']]);
+  assert.deepStrictEqual(a.log.order, ['draft', 'reload'], 'saved right before the reload');
   const b = make();
   b.api.reloadApp(); await settle();
-  assert.deepStrictEqual(b.log.drafts, []);
+  assert.deepStrictEqual(b.log.drafts, [], 'no draft write without an open chat');
+  assert.strictEqual(b.log.reloads, 1);
+  const c = make({ confirm: false });
+  c.api.setCurrent('sam'); c.api.setCall({ id: 1 });
+  c.api.reloadApp(); await settle();
+  assert.deepStrictEqual(c.log.drafts, [], 'a Cancel saves nothing');
+});
+
+test('the page asks only the call question: no offline or group question on the phone', () => {
+  assert.match(pageSrc, /questions: \(\) => \(voiceCall \? \[APP_RELOAD_CALL_QUESTION\] : \[\]\)/);
+  assert.doesNotMatch(pageSrc, /APP_RELOAD_OFFLINE_QUESTION|APP_RELOAD_GROUP_QUESTION|inCall|before:/);
 });
 
 test('two presses give one run; the button is painted busy with the toast "Reloading…"', async () => {
