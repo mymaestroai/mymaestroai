@@ -53,11 +53,11 @@ test('the hands MCP server for client agents exposes the same tools, with images
 });
 
 test('Claude client path: tools=hub disallows the client built-ins, allows only the two hub servers, adds the hands server and the note', () => {
-  assert.match(sdk, /const hands = await handsForTurn\(agentName, \{ consultationDepth: options\.consultationDepth \|\| 0 \}\);\s*\n\s*const hubHands = hands\.mode === 'hub';/);
+  assert.match(sdk, /const hands = await handsForTurn\(agentName, \{ consultationDepth: options\.consultationDepth \|\| 0, signal: abortController\.signal \}\);\s*\n\s*const hubHands = hands\.mode === 'hub';/);
   assert.match(sdk, /allowedTools: hubHands \? \['mcp__agent-hub__\*', 'mcp__hub__\*'\] : sandboxWithheld \? \['mcp__agent-hub__\*'\] : \[/);
   assert.match(sdk, /\.\.\.\(hubHands \|\| sandboxWithheld \? \{ disallowedTools: \[\.\.\.hubToolsLib\.CLIENT_BUILTINS\] \} : \{\}\),/);
   assert.match(sdk, /queryOptions\.disallowedTools = \[\.\.\.new Set\(\[\.\.\.\(queryOptions\.disallowedTools \|\| \[\]\), \.\.\.blockedTools\]\)\];/, 'scope blocks merge instead of overwriting');
-  assert.match(sdk, /if \(hubHands && !sandboxWithheld\) \{\s*\n\s*queryOptions\.mcpServers\.hub = buildHandsMcpServer\(sdk, hands\.tools, \{ blocked: blockedTools \}\);/);
+  assert.match(sdk, /if \(hubHands && !sandboxWithheld\) \{\s*\n\s*queryOptions\.mcpServers\.hub = buildHandsMcpServer\(sdk, hands\.tools, \{ blocked: blockedTools, signal: abortController\.signal \}\);/);
   assert.match(sdk, /append: agentContext \+ workerPolicyText \+ jobsPolicyText \+ visualsText \+ handsNote \+ `/);
   assert.match(sdk, /## YOUR HANDS\nYour shell, file and web tools are the hub's/);
   // with tools=hub a sandboxed agent's client is NOT launched through the wrapper: prepare() only runs on the client path
@@ -65,13 +65,13 @@ test('Claude client path: tools=hub disallows the client built-ins, allows only 
 });
 
 test('Codex path: tools=hub appends the hands to the bridge list, confines its own shell to read-only, and says so', () => {
-  assert.match(sdk, /const hubHands = hands\.mode === 'hub' && !hands\.withheld;\s*\n\s*if \(hubHands\) \{\s*\n\s*const h = buildHandsMcpServer\(codexBridge\.collectingSdk, hands\.tools, \{ blocked: twVirtual \? temporalWorkers\.sdkDisallowedFor\(twVirtual\.toolScope\) : \[\] \}\);\s*\n\s*for \(const t of h\.tools\) hubTools\.push\(t\);/);
+  assert.match(sdk, /const hubHands = hands\.mode === 'hub' && !hands\.withheld;\s*\n\s*if \(hubHands\) \{\s*\n\s*const h = buildHandsMcpServer\(codexBridge\.collectingSdk, hands\.tools, \{ blocked: twVirtual \? temporalWorkers\.sdkDisallowedFor\(twVirtual\.toolScope\) : \[\], signal: abortController\.signal \}\);\s*\n\s*for \(const t of h\.tools\) hubTools\.push\(t\);/);
   assert.match(sdk, /const sandbox = hubHands \? 'read-only' : codexCli\.sandboxFor\(/);
   assert.match(sdk, /your own shell is read-only here/);
 });
 
 test('gateway path: one hands instance per turn, withheld tools dropped, images flushed after each batch for vision models', () => {
-  assert.match(sdk, /async function handsForTurn\(agentName, \{ consultationDepth = 0 \} = \{\}\) \{/);
+  assert.match(sdk, /async function handsForTurn\(agentName, \{ consultationDepth = 0, signal = null \} = \{\}\) \{/);
   assert.match(sdk, /box = \{ exec: \(cmd, o\) => sb\.exec\(agent, cmd, o\), mounts: sb\.mountsFor\(agent\) \};/);
   assert.match(sdk, /handlers\.__images = \[\];/);
   assert.match(sdk, /if \(r\.images && r\.images\.length\) handlers\.__images\.push\(\{ tool: name, images: r\.images \}\);/);

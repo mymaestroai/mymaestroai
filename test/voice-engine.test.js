@@ -89,6 +89,27 @@ test('manifest: every download has https URL, byte size and sha256; voices point
   assert.strictEqual(m.platformPackage('linux', 'arm64'), null);
 });
 
+test('manifest: the sherpa-onnx version and every per-platform hash live in ONE block (SHERPA), everything else is derived from it', () => {
+  const m = realManifest;
+  assert.strictEqual(m.SHERPA.version, '1.13.8');
+  assert.strictEqual(m.SHERPA_VERSION, m.SHERPA.version);
+  assert.deepStrictEqual(Object.keys(m.SHERPA.packages).sort(), Object.keys(m.NODE_PACKAGES).sort());
+  for (const [name, p] of Object.entries(m.SHERPA.packages)) {
+    assert.match(p.sha256, /^[a-f0-9]{64}$/, name); assert.ok(p.bytes > 0, name);
+    const d = m.NODE_PACKAGES[name];
+    assert.deepStrictEqual([d.name, d.version, d.bytes, d.sha256, d.url], [name, m.SHERPA.version, p.bytes, p.sha256, `https://registry.npmjs.org/${name}/-/${name}-${m.SHERPA.version}.tgz`], name);
+    if (p.platform) assert.strictEqual(m.PLATFORM_PACKAGE[p.platform], name);
+  }
+  assert.deepStrictEqual(Object.keys(m.PLATFORM_PACKAGE).sort(), ['darwin-arm64', 'darwin-x64', 'linux-x64']);
+  // nothing else in the file spells out the version or a package hash: a version switch is one edit
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'voice', 'manifest.js'), 'utf8');
+  const lines = src.split('\n');
+  const from = lines.findIndex(l => l.startsWith('const SHERPA = {')), to = lines.findIndex((l, i) => i > from && l === '};');
+  assert.ok(from > 0 && to > from);
+  const outside = lines.filter((l, i) => (i < from || i > to) && !l.trim().startsWith('//') && /sherpa-onnx-(node|linux|darwin)|1\.13\.8/.test(l));
+  assert.deepStrictEqual(outside, [], 'only the SHERPA block names the version and the packages');
+});
+
 test('install: downloads, verifies, extracts, copies the browser files; status goes ready with the exact shape', async () => {
   const { e, dir } = engineWith();
   const s0 = e.status();

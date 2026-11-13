@@ -1039,6 +1039,25 @@
     .mic-meter, .voice-meter { display: inline-block; width: 56px; height: 8px; align-self: center; border-radius: 4px; background: var(--bg-input); border: 1px solid var(--border); overflow: hidden; vertical-align: middle; }
     .mic-meter > i, .voice-meter > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #22c55e, #eab308 75%, #ef4444); transition: width 0.08s linear; }
     .voice-meter { width: 120px; }
+    /* Voice call: the red hang-up mic button and the call bar above the message box */
+    .input-area .mic-btn.call { background: #dc2626; border-color: #ef4444; color: #fff; }
+    .input-area .mic-btn.call:hover { background: #b91c1c; }
+    .voice-callbar { margin: 0 12px 6px; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; font-size: 0.85rem; color: var(--text); display: flex; flex-direction: column; gap: 6px; }
+    .voice-callbar .vcb-top, .voice-callbar .vcb-sliders { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .voice-callbar .vcb-state { font-weight: 600; min-width: 5.5em; color: var(--accent); }
+    .voice-callbar label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; color: var(--text-dim); }
+    .voice-callbar input[type=range] { width: 140px; }
+    .voice-callbar .vcb-hang { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; background: #dc2626; border: 1px solid #ef4444; color: #fff; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+    .voice-callbar .vcb-hang:hover { background: #b91c1c; }
+    .voice-callbar .vcb-hang svg { width: 16px; height: 16px; display: block; }
+    .voice-callbar .vcb-heard { color: var(--text-dim); font-style: italic; min-height: 1.2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .voice-callbar .vcb-held:empty { display: none; }
+    .voice-callbar .vcb-item { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 0; border-top: 1px solid var(--border); }
+    .voice-callbar .vcb-item.later { opacity: 0.75; }
+    .voice-callbar .vcb-item-label { flex: 1; min-width: 10em; }
+    .voice-callbar .vcb-item button { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 0.8rem; }
+    .voice-callbar .vcb-item button:hover { border-color: var(--accent); }
+    .voice-callbar .vcb-help { font-size: 0.75rem; color: var(--text-dim); }
     .message > .msg-speak {
       display: none; position: absolute; top: 4px; right: 34px; border: 1px solid var(--border); background: var(--bg-card);
       color: var(--text-dim); border-radius: 6px; font-size: 0.8rem; line-height: 1; padding: 3px 6px; cursor: pointer; opacity: 0.45; transition: opacity 0.15s;

@@ -35,7 +35,8 @@ test('settings: Voices section in the tools group, admin controls and per-device
   assert.match(b, /fetch\('\/api\/settings'/);
   assert.match(b, /Play sample/);
   assert.match(b, /nothing is sent to the internet/);
-  assert.match(b, /Hands-free conversation comes next/);
+  assert.doesNotMatch(b, /Hands-free conversation comes next/, 'phase 2 replaced the phase-1 hint');
+  assert.match(b, /start a hands-free call/);
   assert.match(b, /id="st-voice-mic" value=/);
   assert.match(b, /Read replies aloud/);
   assert.match(b, /Use this device's own offline voice when the hub voice is unavailable/);
@@ -164,7 +165,7 @@ function makeEnv(opts = {}) {
     isHubAdmin: () => true, hubEsc: String, dialogGuard: { savePoint: () => () => {}, markLoaded() {} },
     autoGrowTextarea() {},
     SpeechSynthesisUtterance: class { constructor(t) { this.text = t; } },
-    voiceLoadPrefs: () => ({ micLevel: 80, readAloud: true, deviceVoiceFallback: !!opts.fallback }),
+    voiceLoadPrefs: () => ({ micLevel: 80, mode: 'tap', readAloud: true, deviceVoiceFallback: !!opts.fallback }),   // 'tap': these tests are the phase-1 dictation path (hands-free is the default since phase 2)
     voiceSavePrefs: (s, p) => { calls.saved = p; },
     voiceGainFromSlider: (v) => v / 10,
     voiceSliderFromGain: (g) => g * 10,
@@ -276,8 +277,9 @@ test('read aloud: stop ends playback and a newer playback replaces the older one
 test('settings prefs are saved with voiceSavePrefs from the controls', () => {
   const { api, calls, get } = makeEnv();
   get('st-voice-mic').value = '35'; get('st-voice-readaloud').checked = false; get('st-voice-fallback').checked = true;
+  get('st-voice-mode').value = 'tap'; get('st-voice-sens').value = '40';   // phase 2 added these two controls to the same save
   api.voiceSettingsSavePrefs();
-  assert.deepStrictEqual(calls.saved, { micLevel: 35, readAloud: false, deviceVoiceFallback: true });
+  assert.deepStrictEqual(calls.saved, { micLevel: 35, interruptSensitivity: 40, mode: 'tap', readAloud: false, deviceVoiceFallback: true });
 });
 
 test('settings: members get no enable switch, default voice or sample; admins do', () => {

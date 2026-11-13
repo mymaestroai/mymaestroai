@@ -235,8 +235,8 @@ test('mic requests: one pending flag + generation; sheet close or a hidden page 
   let stopped = 0, opened = 0;
   const handle = { close() { stopped++; } };
   const voiceMicOpen = async () => { opened++; await gate; return handle; };
-  const f = new Function('voiceMicGuard', 'voiceRec', '$', 'toast', 'voicePrefsNow', 'voiceMicOpen', 'voiceErr', 'voiceMeterPaint', 'document',
-    test + '\nreturn { voiceTestToggle, voiceTestStop, voiceTest };')(L.voiceMicGuard, { state: 'idle', guard: L.voiceMicGuard() }, () => mk('voice-sheet'), () => {}, () => ({ micLevel: 50 }), voiceMicOpen, () => '', () => 0, { addEventListener() {} });
+  const f = new Function('voiceMicGuard', 'voiceRec', '$', 'toast', 'voicePrefsNow', 'voiceMicOpen', 'voiceErr', 'voiceMeterPaint', 'document', 'voiceCall', 'voiceRoom',
+    test + '\nreturn { voiceTestToggle, voiceTestStop, voiceTest };')(L.voiceMicGuard, { state: 'idle', guard: L.voiceMicGuard() }, () => mk('voice-sheet'), () => {}, () => ({ micLevel: 50 }), voiceMicOpen, () => '', () => 0, { addEventListener() {} }, null, { running: false });   // phase 2: the toggle also looks at a call and the room check
   const first = f.voiceTestToggle();
   f.voiceTestToggle();   // a second tap while pending is ignored
   assert.strictEqual(opened, 1, 'one acquisition');

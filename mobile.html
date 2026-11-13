@@ -547,6 +547,39 @@
   #voice-level[hidden] { display: none; }
   #voice-level i { display: block; height: 100%; width: 0; background: var(--error, #e5484d); transition: width .08s linear; }
   #mic-btn svg { display: block; width: 20px; height: 20px; }
+  #mic-btn.call { background: var(--error, #e5484d); color: #fff; border-radius: 22px; min-width: 48px; }
+  #mic-btn.call svg { width: 22px; height: 22px; }
+  /* The call panel: a row of the chat screen between the messages and the composer (never over the send row, the notify chip
+     or the tab bar). Touch targets are 48px high for a phone on a car mount. */
+  #call-panel { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    padding: 8px 10px; background: var(--bg-card); border-top: 1px solid var(--border-strong, var(--border)); color: var(--text); font-size: 15px; }
+  #call-panel[hidden] { display: none; }
+  #call-panel .cp-top { display: flex; align-items: center; gap: 10px; }
+  #cp-state { font-weight: 700; font-size: 17px; min-width: 6.5em; }
+  #call-panel[data-state="hearing"] #cp-state { color: var(--success); }
+  #call-panel[data-state="speaking"] #cp-state { color: var(--accent-hover, var(--accent)); }
+  #cp-meter { flex: 1; height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
+  #cp-meter i { display: block; height: 100%; width: 0; background: var(--success, #00D395); transition: width .08s linear; }
+  #cp-heard { min-height: 1.3em; font-size: 14px; color: var(--text-dim); overflow-wrap: anywhere; }
+  #cp-held { display: flex; flex-direction: column; gap: 6px; }
+  #cp-held:empty { display: none; }
+  #cp-held .cp-item { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 10px; background: var(--bg-input); border: 1px solid var(--border); }
+  #cp-held .cp-item-text { overflow-wrap: anywhere; }
+  #cp-held .cp-item-acts { display: flex; gap: 6px; }
+  #cp-held .cp-item-acts button { flex: 1; min-height: 48px; border-radius: 10px; background: var(--border); color: var(--text); font-size: 16px; font-weight: 600; }
+  #cp-held .cp-item-acts button[data-choice="now"] { background: var(--accent); color: #fff; }
+  #cp-held .cp-item-acts button.on { outline: 2px solid var(--accent); }
+  #call-panel .cp-dnd { display: flex; align-items: center; gap: 10px; min-height: 48px; }
+  #call-panel .cp-dnd input { width: 26px; height: 26px; accent-color: var(--accent, #3d7bff); flex: none; }
+  #call-panel .cp-actions { display: flex; gap: 8px; }
+  #call-panel .cp-actions button { min-height: 52px; border-radius: 12px; font-size: 16px; font-weight: 600; background: var(--border); color: var(--text); padding: 0 16px; }
+  #call-panel .cp-actions .cp-hang { flex: 1; background: var(--error, #e5484d); color: #fff; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  #call-panel .cp-actions .cp-hang svg { width: 22px; height: 22px; }
+  #call-panel .cp-actions .cp-levels { min-width: 88px; min-height: 52px; font-size: 14px; }
+  #cp-help { margin: 0; font-size: 12px; color: var(--text-dim); }
+  .vs-seg { display: flex; gap: 8px; }
+  .vs-opt { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); }
+  .vs-room-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
   /* the copy button takes the right 30px of a bubble; the speaker sits just left of it, so an assistant reply keeps 58px free on the right */
   body:not(.no-speak) .msg.assistant { padding-right: 58px; }
   body.no-speak .msg .speak { display: none; }
@@ -683,6 +716,17 @@
     <div id="chat-meta"><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
+    <div id="call-panel" role="region" aria-label="Voice call" hidden>
+      <div class="cp-top"><span id="cp-state" role="status" aria-live="polite">Starting</span><div id="cp-meter" aria-hidden="true"><i></i></div></div>
+      <div id="cp-heard" aria-live="off"></div>
+      <div id="cp-held"></div>
+      <label class="cp-dnd"><input type="checkbox" id="cp-dnd" role="switch"> <span>Do not disturb</span></label>
+      <div class="cp-actions">
+        <button type="button" id="cp-levels" class="cp-levels">Levels</button>
+        <button type="button" id="cp-hangup" class="cp-hang" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>
+      </div>
+      <p id="cp-help">Hands-free works with the app open and the screen on; locked-screen and car systems (CarPlay, Android Auto) are not supported yet.</p>
+    </div>
     <div id="composer">
       <div id="previews"></div>
       <div id="voice-level" aria-hidden="true" hidden><i></i></div>
