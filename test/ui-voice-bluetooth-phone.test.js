@@ -16,7 +16,7 @@ const sliceBetween = (a, b) => { const i = js.indexOf(a), j = js.indexOf(b, i + 
 const baseJs = (() => { try { return execFileSync('git', ['-C', ROOT, 'show', '5e69a44:mobile.js'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 28 }); } catch { return null; } })();
 
 const tick = async (n = 10) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
-const el = (o) => Object.assign({ textContent: '', hidden: false, disabled: false, value: '', checked: false, listeners: {}, addEventListener(t, f) { this.listeners[t] = f; } }, o || {});
+const el = (o) => { const cls = new Set(); return Object.assign({ textContent: '', hidden: false, disabled: false, value: '', checked: false, listeners: {}, addEventListener(t, f) { this.listeners[t] = f; }, classList: { toggle(c, on) { if (on) cls.add(c); else cls.delete(c); }, remove(c) { cls.delete(c); }, contains: (c) => cls.has(c) } }, o || {}); };
 
 // ── the call: deps, keep-alive, echo guard, microphone line, test hooks ──
 const CALL_SRC = () => sliceBetween('function voiceThinkingClose(vc)', 'function voiceCallWire()');
@@ -39,7 +39,7 @@ function callEnv(over) {
     voiceCreateKeepAlive: (opts) => { created.kaCtx.push(opts.ctx); created.ka = { running: false, start() { this.running = true; log.push('ka.start'); }, stop() { this.running = false; log.push('ka.stop'); } }; return created.ka; },
     voiceCreateThinkingSound: (opts) => ({ opts, setVolume() {}, start() {}, stop() {}, pulse() { return true; } }),
     voiceMediaSession() {}, voiceCallBeat() {}, setInterval: () => 0, clearInterval() {}, voiceCallPanel() {}, voiceCallPaintState() {}, voiceMicPaint() {}, voiceCallTeardown() {}, voiceWakeAcquire() {},
-    voiceCallServer: () => ({}), $: getEl, voiceCallPaintMeter() {}, voiceCallPaintHeld() {}, voiceDisplayHook() {}, voiceDisp: { turnSeq: new Map() }, voiceThinkingVolume: undefined,
+    voiceCallServer: () => ({}), $: getEl, voiceCallPaintMeter: (db) => log.push('meter:' + db), voiceCallPaintHeld() {}, voiceDisplayHook() {}, voiceDisp: { turnSeq: new Map() }, voiceThinkingVolume: undefined,
   };
   delete env.voiceThinkingVolume;
   const names = Object.keys(env);
@@ -139,6 +139,31 @@ test('lost microphone: micLost(true) shows the Tap to talk button, false hides i
   assert.ok(!state.hung);
   e.created.deps.ui.micLost(false);
   assert.strictEqual(btn.hidden, true);
+});
+
+test('lost microphone on screen: the line says "Microphone lost", the meter stays empty, the button says what it does; the device name comes back', () => {
+  const e = callEnv();
+  e.fns.voiceCallStart();
+  const ui = e.created.deps.ui, line = e.els['cp-mic'];
+  ui.mic({ label: 'Car kit', sampleRate: 16000 });
+  assert.strictEqual(line.textContent, 'Microphone: Car kit · 16 kHz');
+  ui.micLost(true);
+  assert.strictEqual(line.textContent, 'Microphone lost');
+  assert.strictEqual(line.classList.contains('cp-mic-lost'), true);
+  assert.ok(e.log.includes('meter:-Infinity'), 'the meter is emptied at once');
+  e.log.length = 0;
+  ui.level(-20);
+  assert.deepStrictEqual(e.log.filter((x) => x.startsWith('meter:')), ['meter:-Infinity'], 'frames from the old stream do not fill the meter');
+  ui.mic({ label: 'Phone mic', sampleRate: 48000 });
+  assert.strictEqual(line.textContent, 'Microphone lost', 'a late mic report does not hide the lost state');
+  ui.micLost(false);
+  assert.strictEqual(line.textContent, 'Microphone: Phone mic · 48 kHz');
+  assert.strictEqual(line.classList.contains('cp-mic-lost'), false);
+  e.log.length = 0;
+  ui.level(-20);
+  assert.deepStrictEqual(e.log.filter((x) => x.startsWith('meter:')), ['meter:-20'], 'the meter moves again');
+  assert.ok(html.includes('<button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Try the microphone again</button>'), 'the button says what it does');
+  assert.ok(html.includes('#cp-mic.cp-mic-lost {'), 'the lost line is styled');
 });
 
 test('test hooks: window.__voiceBt reads keep-alive, mic info, mic lost and echo hold', () => {
@@ -363,9 +388,9 @@ test('Media Session code is unchanged against the base commit', { skip: baseJs =
   assert.ok(js.includes("for (const a of ['pause', 'stop']) { try { ms.setActionHandler(a, () => voiceCallHangUp()); }"));
 });
 
-test('the call panel has the microphone line and the Tap to talk button, hidden to begin with', () => {
+test('the call panel has the microphone line and the "Try the microphone again" button, hidden to begin with', () => {
   assert.match(html, /<div id="cp-mic"[^>]*><\/div>/);
-  assert.match(html, /<button type="button" id="cp-retry-mic"[^>]*hidden[^>]*>Tap to talk<\/button>/);
+  assert.match(html, /<button type="button" id="cp-retry-mic"[^>]*hidden[^>]*>Try the microphone again<\/button>/);
   const i = html.indexOf('id="call-panel"'), j = html.indexOf('id="composer"');
   assert.ok(html.indexOf('id="cp-mic"') > i && html.indexOf('id="cp-retry-mic"') < j);
 });

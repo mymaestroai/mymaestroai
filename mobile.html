@@ -605,6 +605,7 @@
   .vs-room-out, .vs-car-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
   #cp-mic { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
   #cp-mic:empty { display: none; }
+  #cp-mic.cp-mic-lost { font-size: 15px; font-weight: 600; color: var(--danger, #e5484d); }
   #voice-panel .vp-hint { margin: 0; }
   #call-panel .cp-retry-mic { min-height: 48px; border-radius: 12px; font-size: 16px; font-weight: 600; background: var(--accent, #3d7bff); color: #fff; padding: 0 16px; }
   #call-panel .cp-retry-mic[hidden] { display: none; }
@@ -750,7 +751,7 @@
       <div id="cp-activity" aria-live="off"></div>
       <div id="cp-heard" aria-live="off"></div>
       <div id="cp-mic"></div>
-      <button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Tap to talk</button>
+      <button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Try the microphone again</button>
       <div id="cp-held"></div>
       <label class="cp-dnd"><input type="checkbox" id="cp-dnd" role="switch"> <span>Do not disturb</span></label>
       <div class="cp-actions">

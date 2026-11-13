@@ -10835,7 +10835,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
         // ── voice call (begin) ──
     const VOICE_ECHO_HOLD_MS = 600, VOICE_CALL_LEAD_IN_MS = 300, VOICE_KEEPALIVE_DB = -70;
-    const VOICE_MIC_LOST_LINE = 'I lost the microphone. Tap to talk to carry on.';
+    const VOICE_MIC_LOST_LINE = 'I lost the microphone. Tap the button to try it again.';
     const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
     const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
     // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
@@ -12813,9 +12813,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           thinkingPulse: (ev) => { voiceDisplayHook('thinkingPulse', ev); },
           reply: (kind) => { voiceDisplayHook('reply', kind, 'seq:' + voiceCallS.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
           thinkingWanted: () => voiceDisplayHook('showsPulse') === true,   // no view shown (None, hidden): the call's thinking sound is exactly the plain one
-          mic: (info) => { const t = voiceMicLineText(info); voiceCallS.micLine = t; const m = barEl('micinfo'); if (m) m.textContent = t; },   // which microphone is open
-          micLost: (on) => { voiceCallS.micLost = !!on; const b = barEl('retry'); if (b) b.hidden = !on; },   // the call goes on; a tap tries the microphone again
-          level: (db) => { const w = `${voiceMeterPercent(db)}%`; for (const i of [barEl('level'), voiceById(`vp-level-${chatId}`)]) if (i) i.style.width = w; voiceDisplayHook('level', db); },   // the call bar's meter and the voice panel's
+          mic: (info) => { const t = voiceMicLineText(info); voiceCallS.micLine = t; const m = barEl('micinfo'); if (m && !voiceCallS.micLost) m.textContent = t; },   // which microphone is open (while it is lost the line keeps saying so)
+          micLost: (on) => {   // the call goes on; the line says the microphone is lost, the meter is empty and a tap tries it again
+            voiceCallS.micLost = !!on;
+            const b = barEl('retry'); if (b) b.hidden = !on;
+            const m = barEl('micinfo'); if (m) { m.textContent = on ? 'Microphone lost' : (voiceCallS.micLine || ''); m.classList.toggle('vcb-mic-lost', !!on); }
+            if (on) for (const i of [barEl('level'), voiceById(`vp-level-${chatId}`)]) if (i) i.style.width = '0%';
+          },
+          level: (db) => { const w = voiceCallS.micLost ? '0%' : `${voiceMeterPercent(db)}%`; for (const i of [barEl('level'), voiceById(`vp-level-${chatId}`)]) if (i) i.style.width = w; voiceDisplayHook('level', db); },   // the call bar's meter and the voice panel's
           activity: (text) => { const a = barEl('activity'); if (a) a.textContent = text || ''; },   // silent: shown in the call bar only
           heard: (text) => { const h = barEl('heard'); if (h) h.textContent = text ? `Heard: ${text}` : ''; },
           held: (list) => { voiceCallPaintHeld(chatId, list); voiceDisplayHook('badge', (list || []).length); },
@@ -12836,7 +12841,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           <label>Pause before I'm done ${voicePauseSelectHtml(id('pause'), 'data-vcb="pause"')}</label>
           <label>Voice speed <input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vcb="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span> <small>${VOICE_SPEED_HINT}</small></label>
         </div>
-        <div class="vcb-micline"><span class="vcb-micinfo" id="${id('micinfo')}"></span> <button type="button" class="st-test-btn vcb-retry" id="${id('retry')}" data-vcb="retry" hidden>Tap to talk</button></div>
+        <div class="vcb-micline"><span class="vcb-micinfo" id="${id('micinfo')}"></span> <button type="button" class="st-test-btn vcb-retry" id="${id('retry')}" data-vcb="retry" hidden>Try the microphone again</button></div>
         <div class="vcb-activity" id="${id('activity')}" aria-live="off"></div>
         <div class="vcb-heard" id="${id('heard')}"></div>
         <div class="vcb-held" id="${id('held')}"></div>

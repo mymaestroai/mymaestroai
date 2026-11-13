@@ -202,7 +202,7 @@ test('Settings and the chat panel render and save the two settings', () => {
   assert.strictEqual(saved.echoHold, 1500); assert.strictEqual(saved.keepAlive, false);
 });
 
-// ── the microphone line and Tap to talk ──
+// ── the microphone line and "Try the microphone again" ──
 
 test('ui.mic: one plain-text line (label, kHz, basic mode); never HTML', async () => {
   const { api, log, get } = makeEnv();
@@ -217,17 +217,31 @@ test('ui.mic: one plain-text line (label, kHz, basic mode); never HTML', async (
   assert.ok(!/vcb-micinfo[^\n]*innerHTML|micinfo.*innerHTML/.test(wiring()), 'textContent only');
 });
 
-test('ui.micLost: shows and hides "Tap to talk"; the button calls retryMic; the call is not ended', async () => {
+test('ui.micLost: shows and hides "Try the microphone again"; the line says "Microphone lost" and the meter is empty; the button calls retryMic; the call is not ended', async () => {
   const { api, log, get } = makeEnv();
   await api.voiceCallStart('c1');
-  const ui = log.created[0].ui, btn = get('vcb-retry-c1');
-  assert.match(log.bar.innerHTML, /id="vcb-retry-c1" data-vcb="retry" hidden>Tap to talk</, 'drawn hidden');
+  const ui = log.created[0].ui, btn = get('vcb-retry-c1'), line = get('vcb-micinfo-c1'), meter = get('vcb-level-c1');
+  assert.match(log.bar.innerHTML, /id="vcb-retry-c1" data-vcb="retry" hidden>Try the microphone again</, 'drawn hidden');
+  ui.mic({ label: 'Car kit', sampleRate: 16000 });
+  ui.level(-20);
+  assert.notStrictEqual(meter.style.width, '0%');
   ui.micLost(true);
   assert.strictEqual(btn.hidden, false);
+  assert.strictEqual(line.textContent, 'Microphone lost');
+  assert.strictEqual(line.classList.contains('vcb-mic-lost'), true);
+  assert.strictEqual(meter.style.width, '0%', 'emptied at once');
+  ui.level(-20);
+  assert.strictEqual(meter.style.width, '0%', 'frames from the old stream do not fill it');
+  ui.mic({ label: 'Phone mic', sampleRate: 48000 });
+  assert.strictEqual(line.textContent, 'Microphone lost', 'a late mic report does not hide the lost state');
   log.bar.listeners.click({ target: { closest: () => ({ dataset: { vcb: 'retry' } }) } });
   assert.strictEqual(log.retry, 1);
   ui.micLost(false);
   assert.strictEqual(btn.hidden, true);
+  assert.strictEqual(line.textContent, 'Microphone: Phone mic · 48 kHz', 'the device name is back');
+  assert.strictEqual(line.classList.contains('vcb-mic-lost'), false);
+  ui.level(-20);
+  assert.notStrictEqual(meter.style.width, '0%', 'the meter moves again');
   assert.strictEqual(log.hung, 0);
   assert.ok(api.voiceCallS.call, 'still in the call');
 });

@@ -513,7 +513,7 @@ test('mic: onMicInfo goes to ui.mic; a lost microphone is announced, the call st
   h.handlers.onMicChange({ ok: false, reason: 'ended', error: new Error('gone') });
   await tick();
   assert.deepStrictEqual(h.lost, [true]);
-  assert.deepStrictEqual(h.spoken, ['I lost the microphone. Tap to talk to carry on.']);
+  assert.deepStrictEqual(h.spoken, ['I lost the microphone. Tap the button to try it again.']);
   assert.notStrictEqual(h.call.state, 'ended');
   await h.finish();
   assert.notStrictEqual(h.call.state, 'ended');
@@ -522,7 +522,7 @@ test('mic: onMicInfo goes to ui.mic; a lost microphone is announced, the call st
   h.handlers.onMicChange({ ok: true, changed: true, reason: 'manual', info: { label: 'Phone' } });
   await tick();
   assert.deepStrictEqual(h.lost, [true, false]);
-  assert.deepStrictEqual(h.spoken, ['I lost the microphone. Tap to talk to carry on.', 'The microphone is back.']);
+  assert.deepStrictEqual(h.spoken, ['I lost the microphone. Tap the button to try it again.', 'The microphone is back.']);
   await h.finish();
   // a second failure while already lost is just another lost line
   await h.call.hangUp();
@@ -1061,7 +1061,7 @@ test('mic lines survive a cut line once: sending the person\'s last words stops 
   h.handlers.onMicChange({ ok: false, reason: 'ended' });
   await h.finish(false);   // the reply line is cut (for example the send of the last words stopped playback)
   await tick();
-  assert.deepStrictEqual(h.spoken.slice(-1), ['I lost the microphone. Tap to talk to carry on.'], 'the mic line is tried after the cut');
+  assert.deepStrictEqual(h.spoken.slice(-1), ['I lost the microphone. Tap the button to try it again.'], 'the mic line is tried after the cut');
   assert.ok(!h.spoken.includes('Second sentence.'), 'the rest of the cut reply is dropped as before');
   const n = h.spoken.length;
   await h.finish(false);   // its own first attempt is cut: a waiting line kept its retry, so it is tried once more
@@ -1072,9 +1072,9 @@ test('mic lines survive a cut line once: sending the person\'s last words stops 
   // a mic line that is itself cut while playing is tried once more
   const h2 = await callStarted();
   h2.handlers.onMicChange({ ok: false, reason: 'ended' }); await tick();
-  assert.deepStrictEqual(h2.spoken, ['I lost the microphone. Tap to talk to carry on.']);
+  assert.deepStrictEqual(h2.spoken, ['I lost the microphone. Tap the button to try it again.']);
   await h2.finish(false); await tick();
-  assert.deepStrictEqual(h2.spoken, ['I lost the microphone. Tap to talk to carry on.', 'I lost the microphone. Tap to talk to carry on.'], 'tried once more');
+  assert.deepStrictEqual(h2.spoken, ['I lost the microphone. Tap the button to try it again.', 'I lost the microphone. Tap the button to try it again.'], 'tried once more');
   await h2.finish(false); await tick();
   assert.strictEqual(h2.spoken.length, 2, 'and not again');
   h2.call.release('test');
@@ -1100,7 +1100,7 @@ test('mic lines: a waiting mic line keeps its own retry; a lost line still waiti
   await g.finish(false); await tick();   // the switched line is cut on its own attempt: it is retried, the lost line still waits with its retry
   assert.strictEqual(g.spoken[g.spoken.length - 1], "I've switched microphones.");
   await g.finish(true); await tick();
-  assert.strictEqual(g.spoken[g.spoken.length - 1], 'I lost the microphone. Tap to talk to carry on.', 'the waiting lost line still gets its attempt');
+  assert.strictEqual(g.spoken[g.spoken.length - 1], 'I lost the microphone. Tap the button to try it again.', 'the waiting lost line still gets its attempt');
   g.call.release('test');
 });
 
@@ -1112,7 +1112,7 @@ test('mic lines survive the person cutting in: a lost line enqueued between a ca
   await tick();
   assert.deepStrictEqual(h.spoken, [], 'nothing is read over the person');
   h.call.onSpeechEnd({ text: 'hello there' }); await tick(60);
-  assert.ok(h.spoken.includes('I lost the microphone. Tap to talk to carry on.'), 'said once they stopped');
+  assert.ok(h.spoken.includes('I lost the microphone. Tap the button to try it again.'), 'said once they stopped');
   // a reply line is still dropped by a cut, as before
   h.call.onReplyText('One. Two. Three.', true); await tick();
   await h.finish(); await tick();

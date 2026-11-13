@@ -2482,7 +2482,7 @@ function voiceCarAnalyse(mic, ref, chirp, rate) {
 // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
 // ── voice call (begin) ──
 const VOICE_ECHO_HOLD_MS = 600, VOICE_CALL_LEAD_IN_MS = 300, VOICE_KEEPALIVE_DB = -70;
-const VOICE_MIC_LOST_LINE = 'I lost the microphone. Tap to talk to carry on.';
+const VOICE_MIC_LOST_LINE = 'I lost the microphone. Tap the button to try it again.';
 const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
 const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
 // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
@@ -6397,7 +6397,7 @@ function voiceCallPanel(show) {
   if (show) { const d = $('cp-dnd'); if (d) d.checked = false; return; }
   voiceCallPaintHeld([]); voiceCallPaintMeter(-100);
   const h = $('cp-heard'); if (h) h.textContent = '';
-  const mic = $('cp-mic'); if (mic) mic.textContent = '';
+  const mic = $('cp-mic'); if (mic) { mic.textContent = ''; mic.classList.remove('cp-mic-lost'); }
   const retry = $('cp-retry-mic'); if (retry) retry.hidden = true;
 }
 async function voiceWakeAcquire(vc) {   // the screen stays on during a call; asked again when the page is visible again
@@ -6633,13 +6633,19 @@ function voiceCallDeps(vc) {
     server: voiceCallServer(agent, () => vc),
     ...(vc.keepAlive ? { keepAlive: vc.keepAlive } : {}),   // the controller starts it with the call and stops it with the call
     ui: {
-      mic: (info) => { if (voiceCall !== vc) return; vc.micInfo = info || null; const m = $('cp-mic'); if (m) m.textContent = voiceMicLine(info); },
-      micLost: (on) => { if (voiceCall !== vc) return; vc.micLostOn = !!on; const b = $('cp-retry-mic'); if (b) b.hidden = !on; },   // the call goes on; a tap tries the microphone again
+      mic: (info) => { if (voiceCall !== vc) return; vc.micInfo = info || null; const m = $('cp-mic'); if (m && !vc.micLostOn) m.textContent = voiceMicLine(info); },   // while it is lost the line keeps saying so
+      micLost: (on) => {   // the call goes on; the line says the microphone is lost, the meter is empty and a tap tries it again
+        if (voiceCall !== vc) return;
+        vc.micLostOn = !!on;
+        const b = $('cp-retry-mic'); if (b) b.hidden = !on;
+        const m = $('cp-mic'); if (m) { m.textContent = on ? 'Microphone lost' : voiceMicLine(vc.micInfo); m.classList.toggle('cp-mic-lost', !!on); }
+        if (on) voiceCallPaintMeter(-Infinity);
+      },
       state: (name) => { if (voiceCall !== vc) return; voiceCallPaintState(name); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('setState', name); if (name === 'ended' && !vc.hangingUp) voiceCallTeardown(vc); },
       thinkingPulse: (ev) => { if (voiceCall === vc && typeof voiceDisplayHook === 'function') voiceDisplayHook('thinkingPulse', ev); },
       reply: (kind) => { if (voiceCall === vc && typeof voiceDisplayHook === 'function') voiceDisplayHook('reply', kind, 'seq:' + vc.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
       thinkingWanted: () => voiceCall === vc && typeof voiceDisplayHook === 'function' && voiceDisplayHook('showsPulse') === true,   // no view shown (None, hidden): the plain thinking sound
-      level: (db) => { if (voiceCall === vc) { vc.lastFrame = Date.now(); voiceCallPaintMeter(db); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('level', db); } },   // a VAD frame ran: the page is alive
+      level: (db) => { if (voiceCall === vc) { vc.lastFrame = Date.now(); voiceCallPaintMeter(vc.micLostOn ? -Infinity : db); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('level', db); } },   // a VAD frame ran: the page is alive
       activity: (text) => { const a = $('cp-activity'); if (a && voiceCall === vc) a.textContent = text || ''; },   // silent: shown in the panel only
       heard: (text) => { const h = $('cp-heard'); if (h && voiceCall === vc) h.textContent = `Heard: ${text}`; },
       held: (list) => { if (voiceCall === vc) { voiceCallPaintHeld(list); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('badge', (list || []).length); } },
