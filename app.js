@@ -3072,12 +3072,13 @@
       bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:#fff;text-decoration:underline">Open the setup checklist</a>.`;
       layoutBanners();
     }
-    // The notices fixed at the top stack in this order, whichever painted first: no AI provider yet, the setup
-    // checklist, security. Each one sits below the ones above it, so none covers another (or its X), and the page moves
-    // down by their height (--banner-h), so they never cover the header and its Settings button.
+    // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
+    // (showMobileBanner), no AI provider yet, the setup checklist, security. Each one sits below the ones above it, so
+    // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
+    // header and its Settings button.
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -5480,10 +5481,12 @@
       if (!(pl.offer === true || (window.innerWidth < 700 && !pl.keepDesktop))) return;
       try { if (localStorage.getItem('hub-mobile-banner') === 'off') return; } catch (e) { /* storage blocked: show it */ }
       const bar = document.createElement('div');
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#14171F;border-bottom:1px solid #222632;color:#F3F4F6;font-size:13px';
+      bar.id = 'hub-phone-layout-notice';   // first in the notice stack (layoutBanners): the notices and the page move down below it
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#14171F;border-bottom:1px solid #222632;color:#F3F4F6;font-size:13px;box-sizing:border-box';
       bar.innerHTML = '<span><span style="color:#C3C2B7">This is the computer layout.</span> <a href="/mobile" style="color:#5A93FF;text-decoration:none">Open the phone layout</a></span><button aria-label="Dismiss" style="background:none;border:0;color:#9CA3AF;font-size:16px;padding:4px 8px">\u2715</button>';
-      bar.querySelector('button').addEventListener('click', () => { try { localStorage.setItem('hub-mobile-banner', 'off'); } catch (e) { /* storage blocked: close it for now */ } bar.remove(); });
+      bar.querySelector('button').addEventListener('click', () => { try { localStorage.setItem('hub-mobile-banner', 'off'); } catch (e) { /* storage blocked: close it for now */ } bar.remove(); layoutBanners(); });
       document.body.appendChild(bar);
+      layoutBanners();
     }
 
     // ── Hub Health Monitor ──

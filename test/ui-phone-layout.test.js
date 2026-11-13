@@ -262,6 +262,9 @@ test('wiring: the desktop banner and the help text', () => {
   const app = read('app.js');
   assert.ok(app.includes('This is the computer layout.'));
   assert.ok(app.includes("try { localStorage.setItem('hub-mobile-banner', 'off'); }"), 'the bar closes even when storage is blocked');
+  assert.ok(app.includes("for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice',"), 'the bar is the first notice in the stack, so it covers none of them');
+  const fn = app.slice(app.indexOf('function showMobileBanner()'), app.indexOf('// ── Hub Health Monitor'));
+  assert.ok(fn.includes("bar.id = 'hub-phone-layout-notice'") && fn.includes('bar.remove(); layoutBanners();') && /appendChild\(bar\);\n\s*layoutBanners\(\);/.test(fn), 'drawn and dismissed through layoutBanners');
   assert.ok(app.includes('Open the phone layout'));
   assert.ok(app.includes('window.hubPhoneLayout'));
   assert.ok(!app.includes('Phone? Try the mobile view'));
