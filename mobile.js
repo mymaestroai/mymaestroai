@@ -1409,7 +1409,15 @@ function applySnapshot(map, repaint = true, opts = {}) {
   if (repaint) paintStatus();
   // Woke up (or just loaded) while the open chat's agent is mid-turn: follow that turn.
   if (current && map[current] && map[current].busy && !followedHubTurn(current)) reattachIfIdle(current);
+  // A full feed that no longer lists a running temporary worker: its end never reached this page.
+  if (!namedOnly) {
+    const running = [...wkSeen.values()].filter(e => e.it && e.it.status === 'running' && !e.it.inferred).map(e => ({ id: e.id, startedAt: e.it.t0 }));
+    const step = workerGoneStep(wkGoneState, { running, statusMap: map, now: Date.now() });
+    wkGoneState = step.next;
+    for (const id of step.gone) wkInferEnd(wkSeen.get(id), 0, 'gone');
+  }
 }
+let wkGoneState = {};
 
 async function pollStatus() {
   try {
@@ -4616,6 +4624,21 @@ function hubWorkerGroups(statusMap, opts) {
 function hubWorkerCount(groups) {
   return (groups || []).reduce((n, g) => n + g.items.length, 0);
 }
+function workerGoneStep(prev, opts) {
+  const { running, statusMap, now, graceMs = 15000, confirmMs = 4000 } = opts || {};
+  const before = prev || {}, map = statusMap || {}, next = {}, gone = [];
+  for (const w of running || []) {
+    const id = w && w.id;
+    if (typeof id !== 'string' || !/^tw-/.test(id)) continue;
+    const entry = map[id];
+    if (entry && (entry.busy || entry.pendingQuestion)) continue;
+    const startedAt = Number.isFinite(w.startedAt) ? w.startedAt : now;
+    if (now - startedAt < graceMs) continue;
+    if (id in before && now - before[id] >= confirmMs) gone.push(id);
+    else next[id] = id in before ? before[id] : now;
+  }
+  return { next, gone: gone.sort() };
+}
 // ── busy and hub workers helpers (end) ──
 
 // The workers this page saw start or run (live replies and catch-ups; saved replies are history, not listed):
@@ -4741,7 +4764,8 @@ function wkHubPollSoon() {
 }
 setInterval(() => {
   if (document.hidden) return;
-  if ((wkView && wkView.mode === 'list') || Object.entries(live).some(([n, s]) => s && s.busy && (busyIsWorker(n, s) || s.consultedBy))) wkHubPoll();
+  if ((wkView && wkView.mode === 'list') || Object.entries(live).some(([n, s]) => s && s.busy && (busyIsWorker(n, s) || s.consultedBy))
+    || [...wkSeen.values()].some(e => e.it && e.it.status === 'running' && /^tw-/.test(e.id))) wkHubPoll();
 }, 5000);
 function wkRefresh() {
   const now = Date.now();

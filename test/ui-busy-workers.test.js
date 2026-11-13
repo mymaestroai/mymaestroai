@@ -149,6 +149,68 @@ test('elapsed time and ordering: oldest first, no start last, then id', () => {
   assert.strictEqual(items[4].startedAt, null);
 });
 
+const T0 = 1000000;
+const card = (id, startedAt = T0 - 60000) => ({ id, startedAt });
+const step = (prev, running, statusMap, now, extra = {}) => L.workerGoneStep(prev, { running, statusMap, now, ...extra });
+
+test('workerGoneStep: a busy worker is never gone, and a pending question counts as present', () => {
+  const m = { 'tw-sam-1-abcd': busy({ worker: true }), 'tw-sam-2-abcd': { ...idle, pendingQuestion: 'ok?' } };
+  const r = [card('tw-sam-1-abcd'), card('tw-sam-2-abcd')];
+  assert.deepStrictEqual(step({ 'tw-sam-1-abcd': T0 - 99999 }, r, m, T0), { next: {}, gone: [] });
+});
+
+test('workerGoneStep: missing younger than graceMs is not gone and not recorded', () => {
+  const r = [card('tw-sam-1-abcd', T0 - 14000)];
+  assert.deepStrictEqual(step({}, r, {}, T0), { next: {}, gone: [] });
+  assert.deepStrictEqual(step({ 'tw-sam-1-abcd': T0 - 9000 }, r, {}, T0), { next: {}, gone: [] });
+  const noStart = [{ id: 'tw-sam-1-abcd', startedAt: undefined }];
+  assert.deepStrictEqual(step({ 'tw-sam-1-abcd': T0 - 9000 }, noStart, {}, T0), { next: {}, gone: [] });
+  assert.deepStrictEqual(step({}, r, {}, T0, { graceMs: 1000 }).next, { 'tw-sam-1-abcd': T0 });
+});
+
+test('workerGoneStep: first miss recorded, a second miss under confirmMs later is not gone, at confirmMs it is', () => {
+  const r = [card('tw-sam-1-abcd')];
+  const a = step({}, r, { owner: idle }, T0);
+  assert.deepStrictEqual(a, { next: { 'tw-sam-1-abcd': T0 }, gone: [] });
+  const b = step(a.next, r, {}, T0 + 3999);
+  assert.deepStrictEqual(b, { next: { 'tw-sam-1-abcd': T0 }, gone: [] });
+  const c = step(b.next, r, {}, T0 + 4000);
+  assert.deepStrictEqual(c, { next: {}, gone: ['tw-sam-1-abcd'] });
+  assert.deepStrictEqual(step(a.next, r, {}, T0 + 500, { confirmMs: 500 }).gone, ['tw-sam-1-abcd']);
+});
+
+test('workerGoneStep: an idle entry counts as missing', () => {
+  const r = [card('tw-sam-1-abcd')];
+  const a = step({}, r, { 'tw-sam-1-abcd': idle }, T0);
+  assert.deepStrictEqual(a.next, { 'tw-sam-1-abcd': T0 });
+});
+
+test('workerGoneStep: a worker that reappears busy is dropped from next', () => {
+  const r = [card('tw-sam-1-abcd')];
+  const out = step({ 'tw-sam-1-abcd': T0 - 2000 }, r, { 'tw-sam-1-abcd': busy() }, T0);
+  assert.deepStrictEqual(out, { next: {}, gone: [] });
+});
+
+test('workerGoneStep: ids that are not tw- are ignored', () => {
+  const r = [card('owner'), card('worker-1'), card('casework-a')];
+  assert.deepStrictEqual(step({ owner: T0 - 99999 }, r, {}, T0), { next: {}, gone: [] });
+});
+
+test('workerGoneStep: entries of workers no longer running are dropped', () => {
+  const prev = { 'tw-sam-1-abcd': T0 - 1000, 'tw-sam-2-abcd': T0 - 1000 };
+  const out = step(prev, [card('tw-sam-2-abcd')], {}, T0);
+  assert.deepStrictEqual(out, { next: { 'tw-sam-2-abcd': T0 - 1000 }, gone: [] });
+  assert.deepStrictEqual(step(prev, [], {}, T0), { next: {}, gone: [] });
+});
+
+test('workerGoneStep: gone is sorted and does not change prev', () => {
+  const prev = { 'tw-sam-3-abcd': T0 - 5000, 'tw-sam-1-abcd': T0 - 6000, 'tw-sam-2-abcd': T0 - 5000 };
+  const copy = { ...prev };
+  const out = step(prev, [card('tw-sam-3-abcd'), card('tw-sam-1-abcd'), card('tw-sam-2-abcd')], {}, T0);
+  assert.deepStrictEqual(out.gone, ['tw-sam-1-abcd', 'tw-sam-2-abcd', 'tw-sam-3-abcd']);
+  assert.deepStrictEqual(prev, copy);
+});
+
 test('fmtElapsedShort', () => {
   assert.deepStrictEqual([null, undefined, -1, NaN].map(L.fmtElapsedShort), ['', '', '', '']);
   assert.deepStrictEqual([0, 5000, 102000, 3599000, 3725000].map(L.fmtElapsedShort), ['0:00', '0:05', '1:42', '59:59', '1:02:05']);

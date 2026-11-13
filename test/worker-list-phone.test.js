@@ -389,6 +389,8 @@ test('applySnapshot namedOnly: workers missing from a named-only map stay, and k
     const paintStatus = () => {}; const reattachIfIdle = () => {};
     ${extract('busyIsWorker')}
     ${extract('setLive')}
+    const wkSeen = new Map(); let wkGoneState = {}; const wkInferEnd = () => {};
+    ${extract('workerGoneStep')}
     ${extract('applySnapshot')}
     return { live, applySnapshot };`;
   const { live, applySnapshot } = new Function(body)();

@@ -24,6 +24,8 @@ function page() {
     const busyIsWorker = (name, e) => e && typeof e.worker === 'boolean' ? e.worker : /^tw-/.test(name);
     ${extract('setAgentLive')}
     ${extract('statusPatchOf')}
+    const chats = {}; let workerGoneState = {}; const endWorkerRunUnreported = () => {};
+    ${extract('workerGoneStep')}
     ${extract('applyStatusSnapshot')}
     return { agentStatus, applyStatusSnapshot };`;
   return new Function(body)();
