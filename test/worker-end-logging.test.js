@@ -27,6 +27,7 @@ test('the turn tap logs one line, ids only, for an end of a worker it never saw 
   res.write(sse({ type: 'worker_failed', worker_id: 'tw-sam-2-beef', error: 'secret error text' }));
   tap.finish(true);
   assert.deepStrictEqual(lines, ['[hub-events] sam turn sam-t1: end of unknown worker tw-sam-2-beef']);
+  assert.ok(lines[0].endsWith(' tw-sam-2-beef'), 'a real worker id passes the cleaning unchanged');
   assert.ok(!/secret/.test(lines[0]), 'no worker text in the line');
 });
 
