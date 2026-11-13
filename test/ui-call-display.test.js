@@ -50,6 +50,8 @@ function fakePlayerFactory(kind, log, opts) {
     p.setState = rec('setState'); p.setAnalyser = rec('setAnalyser'); p.setMicLevel = rec('setMicLevel'); p.speechEvent = rec('speechEvent'); p.setLevel = rec('setLevel');
     if (kind === 'orb') p.thinkingPulse = rec('thinkingPulse');   // the Character player has no thinkingPulse: the display must cope
     p.react = (m) => { p.calls.push(['react', m]); return typeof p.reactRet === 'function' ? p.reactRet(m) : p.reactRet; };
+    p.cancelReaction = rec('cancelReaction');
+    if (o.info) p.getInfo = () => o.info;   // a player that reports its readiness (the real one does)
     p.destroy = () => { p.destroyed = true; p.calls.push(['destroy']); };
     p.ready = o.rejectReady ? Promise.reject(new Error('bad pack')) : Promise.resolve(p);
     p.ready.catch(() => {});
@@ -274,7 +276,8 @@ test('Orb: built with the call, states map, mic level drives it, no mood request
   w.display.level(-35); assert.ok(Math.abs(orb.last('setMicLevel') - 0.5) < 1e-9);
   w.display.setState('thinking'); assert.strictEqual(orb.last('setState'), 'thinking');
   w.display.setState('speaking'); assert.strictEqual(orb.last('setState'), 'thinking', 'speaking waits for the audio');
-  w.display.mood('t1', 'delighted'); assert.strictEqual(orb.last('react'), 'delighted', 'a brief pulse if a mood arrives');
+  w.display.mood('t1', 'delighted'); assert.notStrictEqual(orb.last('react'), 'delighted', 'queued: nothing plays before the reply is over');
+  w.display.reply('end', 't1'); assert.strictEqual(orb.last('react'), 'delighted', 'a brief pulse once the whole reply is over');
 });
 
 test('Character: the pack is fetched, its background and name are data, hello plays without blocking, hearing cancels it, the tag is requested only with reactions', async () => {
@@ -373,10 +376,15 @@ test('phone: one media element source per element, only through a running contex
 test('moods: once per turn however they arrive, unknown words ignored, nothing after hang-up; the request word list is the fixed one', async () => {
   const w = world({ prefs: { choice: 'pack:owl' } }); w.display.start(); await flushP();
   const p = w.players[0];
+  w.display.reply('turn', 'seq:1');
   assert.strictEqual(w.display.mood('seq:1', 'proud'), true);
   assert.strictEqual(w.display.mood('seq:1', 'laughing'), false, 'the second mood of one turn (SSE and hub event) is dropped');
+  assert.strictEqual(p.count('react'), 0, 'queued until the reply is over');
+  w.display.reply('end', 'seq:1');
+  w.display.reply('turn', 'seq:2');
   assert.strictEqual(w.display.mood('seq:2', 'grumpy'), false); assert.strictEqual(w.display.mood('seq:2', '[proud]'), false);
   assert.strictEqual(w.display.mood('seq:2', 'curious'), true);
+  w.display.reply('end', 'seq:2');
   assert.deepStrictEqual(p.calls.filter(c => c[0] === 'react').map(c => c[1]), ['proud', 'curious']);
   assert.deepStrictEqual(CD.MOODS, ['delighted', 'laughing', 'sympathetic', 'surprised', 'proud', 'curious', 'encouraging']);
   const done = w.display.hangUp();
@@ -750,4 +758,193 @@ test('showsPulse: true only while a view is up (None, hidden and ended: false)',
   w.display.hideToChat(); assert.strictEqual(w.display.showsPulse(), false); w.display.showView(); assert.strictEqual(w.display.showsPulse(), true);
   w.display.release(); assert.strictEqual(w.display.showsPulse(), false);
   const n = world({ prefs: { choice: 'none' } }); n.display.start(); await flushP(); assert.strictEqual(n.display.showsPulse(), false);
+});
+
+// ── final behavior: the reply's reaction, the pack-list retry, the goodbye of a player that is not ready ──
+const reacts = (p) => p.calls.filter(c => c[0] === 'react' && c[1] !== 'hello' && c[1] !== 'goodbye').map(c => c[1]);   // the mood reactions (hello and goodbye are not moods)
+async function charWorld(o) { const w = world(Object.assign({ prefs: { choice: 'pack:owl' } }, o)); w.display.start(); await flushP(); w.display.setState('thinking'); return w; }
+
+test('reaction: queued per reply and played ONCE at the reply end, never while any reply audio is heard (clip audio or device voice)', async () => {
+  const w = await charWorld(); const p = w.players[0];
+  w.display.reply('turn', 'seq:1'); w.display.mood('seq:1', 'proud');
+  w.display.setState('speaking'); w.display.audioStart(); w.display.audioEnd(); w.display.audioStart();   // sentences of the reply
+  assert.deepStrictEqual(reacts(p), [], 'not between sentences, not while a sentence plays');
+  w.display.reply('end', 'seq:1');
+  assert.deepStrictEqual(reacts(p), [], 'audio still heard (the end came first): it waits for the audio to stop');
+  w.display.audioEnd();
+  assert.deepStrictEqual(reacts(p), ['proud'], 'played right after the audio ended');
+  w.display.reply('end', 'seq:1'); w.display.audioEnd();
+  assert.deepStrictEqual(reacts(p), ['proud'], 'once only');
+  // device voice
+  w.display.reply('turn', 'seq:2'); w.display.mood('seq:2', 'curious'); w.display.speech('start'); w.display.reply('end', 'seq:2');
+  assert.deepStrictEqual(reacts(p), ['proud'], 'device speech still heard');
+  w.display.speech('end');
+  assert.deepStrictEqual(reacts(p), ['proud', 'curious']);
+});
+
+test('reaction: no speech (voice off, a failed line) plays at the reply end; a late mood plays at once; a stale or dropped one never', async () => {
+  const w = await charWorld(); const p = w.players[0];
+  w.display.reply('turn', 'seq:1'); w.display.reply('end', 'seq:1');   // no audio ever
+  assert.strictEqual(w.display.mood('seq:1', 'laughing'), true, 'a late mood (the hub event after the end)');
+  assert.deepStrictEqual(reacts(p), ['laughing']);
+  w.display.reply('turn', 'seq:2'); w.display.mood('seq:2', 'proud');
+  w.display.reply('turn', 'seq:3');   // the next turn began first: the old mood is over
+  w.display.reply('end', 'seq:3');
+  assert.deepStrictEqual(reacts(p), ['laughing'], 'a mood of an older turn is never played');
+  assert.strictEqual(w.display.mood('seq:2', 'curious'), false, 'late for a closed turn');
+  assert.strictEqual(w.display.mood('seq:3', 'curious'), true); assert.deepStrictEqual(reacts(p), ['laughing', 'curious']);
+});
+
+test('reaction: real speech before the end drops it (and a queued clip), a false start lifts the hold; hello and goodbye are untouched', async () => {
+  const w = await charWorld(); const p = w.players[0];
+  w.display.reply('turn', 'seq:1'); w.display.mood('seq:1', 'proud');
+  w.display.reply('drop');
+  assert.ok(p.count('cancelReaction') >= 1, 'a clip that was asked for and has not started is cancelled');
+  w.display.reply('end', 'seq:1');
+  assert.deepStrictEqual(reacts(p), [], 'the person is speaking: nothing plays');
+  w.display.reply('resume');
+  assert.deepStrictEqual(reacts(p), ['proud'], 'it was a false start: the reply ended, the reaction plays');
+  w.display.reply('turn', 'seq:2'); w.display.mood('seq:2', 'curious'); w.display.reply('end', 'seq:2'); w.display.reply('drop'); w.display.reply('start');
+  assert.deepStrictEqual(reacts(p), ['proud', 'curious']);
+  // the next message of the person clears the hold and the old end
+  w.display.reply('drop'); w.display.reply('turn', 'seq:3'); w.display.mood('seq:3', 'delighted'); w.display.reply('end', 'seq:3');
+  assert.deepStrictEqual(reacts(p), ['proud', 'curious', 'delighted']);
+  const g = w.display.hangUp(); assert.ok(g); w.display.reply('end', 'seq:3'); assert.strictEqual(p.last('react'), 'goodbye');
+  w.display.release();
+});
+
+test('a view that is not shown at the end keeps no reaction for later', async () => {
+  const w = await charWorld(); const p = w.players[0];
+  w.display.reply('turn', 'seq:1'); w.display.mood('seq:1', 'proud'); w.display.hideToChat();
+  w.display.reply('end', 'seq:1'); w.display.showView();
+  assert.deepStrictEqual(w.players.flatMap(reacts).filter(x => x !== 'hello'), [], 'nothing replayed after the view came back');
+});
+
+test('packs list failure: choosing again retries, one automatic retry after a short wait, bounded, nothing after release or for a stale request', async () => {
+  let calls = 0, okFrom = 99;
+  const f = async () => { calls++; if (calls < okFrom) throw new Error('offline'); return { ok: true, status: 200, json: async () => ({ packs: PACKS }) }; };
+  // a manual retry
+  let w = world({ prefs: { choice: 'pack:owl' }, fetch: f }); w.display.start(); await flushP();
+  assert.strictEqual(w.display.info().packsState, 'failed'); assert.strictEqual(calls, 1);
+  okFrom = 3;   // the second call (the automatic one) still fails; the third works
+  w.display.setChoice('pack:owl'); await flushP();
+  assert.strictEqual(calls, 2, 'choosing again retries the list'); assert.strictEqual(w.display.info().packsState, 'failed');
+  w.display.setChoice('pack:owl'); await flushP();
+  assert.strictEqual(calls, 3); assert.strictEqual(w.display.info().packsState, 'ready'); assert.strictEqual(w.players.length, 1, 'the character is shown after the retry');
+  w.display.release();
+  // the automatic retry: once, after PACKS_RETRY_MS
+  calls = 0; okFrom = 2;
+  w = world({ prefs: { choice: 'pack:owl' }, fetch: f }); w.display.start(); await flushP();
+  assert.strictEqual(calls, 1); assert.strictEqual(w.clk.timers.length, 1, 'one retry is waiting');
+  await w.clk.advance(2900); assert.strictEqual(calls, 1, 'not before the wait');
+  await w.clk.advance(200); await flushP();
+  assert.strictEqual(calls, 2); assert.strictEqual(w.display.info().packsState, 'ready'); assert.strictEqual(w.players.length, 1);
+  w.display.release();
+  // failing again: no second automatic retry
+  calls = 0; okFrom = 99;
+  w = world({ prefs: { choice: 'pack:owl' }, fetch: f }); w.display.start(); await flushP();
+  await w.clk.advance(3100); await flushP(); await w.clk.advance(60000); await flushP();
+  assert.strictEqual(calls, 2, 'one automatic retry, no more'); w.display.release();
+  // release before the retry: no timer, no request
+  calls = 0; w = world({ prefs: { choice: 'pack:owl' }, fetch: f }); w.display.start(); await flushP();
+  w.display.release(); assert.strictEqual(w.clk.timers.length, 0); await w.clk.advance(10000); assert.strictEqual(calls, 1);
+  // a newer request makes the waiting retry stale
+  calls = 0; okFrom = 99; w = world({ prefs: { choice: 'pack:owl' }, fetch: f }); w.display.start(); await flushP();
+  w.display.setChoice('pack:owl'); await flushP(); const after = calls;
+  await w.clk.advance(3100); await flushP(); assert.strictEqual(calls, after, 'the old timer does nothing');
+  w.display.release();
+});
+
+test('hang-up with a character that is not ready (or failed) closes at once, no blank goodbye; a ready one still says goodbye', async () => {
+  const w = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null } } }); w.display.start(); await flushP();
+  const p = w.players[0]; let settled = false;
+  const r = w.display.hangUp().then(() => { settled = true; }); await flushP();
+  assert.strictEqual(settled, true, 'settled at once'); assert.strictEqual(w.dom.overlay(), null, 'no overlay left'); assert.strictEqual(p.count('react'), 0, 'no goodbye asked of a player that cannot show it'); assert.strictEqual(w.clk.timers.length, 0);
+  await r;
+  const f = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: 'bad' } } }); f.display.start(); await flushP();
+  await f.display.hangUp(); assert.strictEqual(f.dom.overlay(), null);
+  const ok = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: true, failed: null } } }); ok.display.start(); await flushP();
+  ok.display.hangUp(); assert.strictEqual(ok.players[0].last('react'), 'goodbye'); assert.ok(ok.dom.overlay());
+  ok.display.release();
+});
+
+// ── the reaction against the REAL call controller and the REAL display (fake player, fake clock): the boundaries are the controller's own ──
+async function reactionWorld(o) {
+  o = o || {};
+  const w = world({ prefs: { choice: 'pack:owl' } }); w.display.start(); await flushP(); const p = w.players[0];
+  const h = { w, p, t: 0, timers: [], id: 1, pend: [], spoken: [], sent: 0, ok: o.speakOk !== false };
+  const setTimer = (fn, ms) => { const id = h.id++; h.timers.push({ id, at: h.t + ms, fn }); return id; };
+  const clearTimer = (id) => { h.timers = h.timers.filter(x => x.id !== id); };
+  h.advance = async (ms) => { const end = h.t + ms; for (;;) { const d = h.timers.filter(x => x.at <= end).sort((a, b) => a.at - b.at)[0]; if (!d) break; h.timers = h.timers.filter(x => x !== d); h.t = d.at; d.fn(); await tick(); } h.t = end; await tick(); };
+  h.call = voiceCreateCall({
+    agent: 'a', now: () => h.t, setTimer, clearTimer, prefs: () => ({ continueWait: 0, thinkingSound: false }),
+    vad: { start: async () => {}, stop() {}, setPlaybackActive() {} },
+    stt: async (a) => a.text, isTurnRunning: () => false, interject: async () => {}, stop() {},
+    send: async () => { h.sent++; w.display.reply('turn', 'seq:' + h.sent); },   // the page's voiceCallSend
+    speak: (t) => { h.spoken.push(t); if (!h.ok) return Promise.resolve(false); return new Promise((res) => { w.display.audioStart(); h.pend.push((ok) => { w.display.audioEnd(); res(ok); }); }); },
+    cancelSpeech: () => { const r = h.pend.shift(); if (r) r(false); w.display.audioStop(); },
+    answerAsk() {}, server: { start: async () => ({ callId: 'c1', held: [] }), heartbeat: async () => ({ held: [] }), mode: async () => {}, end: async () => ({ held: [] }), decide: async () => {} },
+    ui: { state: (n) => w.display.setState(n), reply: (k) => w.display.reply(k, 'seq:' + h.sent) },
+  });
+  h.finish = async (ok = true) => { const r = h.pend.shift(); if (r) r(ok); await tick(); };
+  h.say = async (text) => { h.call.onSpeechStart(); await h.call.onSpeechEnd({ text }); await tick(); };
+  await h.call.start();
+  return h;
+}
+const order = (p) => p.calls.map(c => c[0] + (c[1] !== undefined && c[0] !== 'setAnalyser' ? ':' + c[1] : ''));
+
+test('reaction x controller: a reply of several sentences with gaps between them plays ONE reaction, right after the last sentence and before listening', async () => {
+  const h = await reactionWorld(); await h.say('Please check the system status.');
+  h.w.display.mood('seq:1', 'proud');
+  h.call.onReplyText('First sentence. ', false); await tick();
+  assert.deepStrictEqual(h.spoken, ['First sentence.']);
+  await h.finish();   // the reader is idle: the text has not grown yet
+  assert.deepStrictEqual(reacts(h.p), ['hello'].filter(() => false), 'a gap between two sentences is not the end of the reply');
+  h.call.onReplyText('First sentence. Second sentence. ', false); await tick(); assert.strictEqual(h.spoken.length, 2);
+  await h.finish(); assert.deepStrictEqual(reacts(h.p), []);
+  h.call.onReplyText('First sentence. Second sentence. Third one.', true); await tick(); assert.strictEqual(h.spoken.length, 3);
+  assert.deepStrictEqual(reacts(h.p), [], 'never while the third sentence plays');
+  await h.finish();
+  assert.deepStrictEqual(reacts(h.p), ['proud'], 'once, after the whole reply');
+  const o = order(h.p); assert.ok(o.lastIndexOf('react:proud') < o.lastIndexOf('setState:listening'), 'before the call is shown listening: ' + o.join(' '));
+  h.call.onReplyText('First sentence. Second sentence. Third one.', true); await tick();
+  assert.deepStrictEqual(reacts(h.p), ['proud'], 'a repeated end does not play it again');
+});
+
+test('reaction x controller: voice off or failing, and a reply with nothing to say, play when the reply text is complete', async () => {
+  const f = await reactionWorld({ speakOk: false }); await f.say('Please check the system status.');
+  f.w.display.mood('seq:1', 'curious');
+  f.call.onReplyText('Partial text. ', false); await tick();
+  assert.deepStrictEqual(reacts(f.p), [], 'text still coming');
+  f.call.onReplyText('Partial text. And the rest.', true); await tick();
+  assert.deepStrictEqual(reacts(f.p), ['curious'], 'every line failed: at the text end, once');
+  const e = await reactionWorld(); await e.say('Please check the system status.');
+  e.w.display.mood('seq:1', 'delighted'); e.call.onReplyText('```\ncode\n```', true); await tick(); await e.finish();   // only a note / nothing readable
+  assert.ok(reacts(e.p).length <= 1);
+  const n = await reactionWorld({ speakOk: false }); await n.say('Please check the system status.');
+  n.call.onReplyText('', true); await tick();
+  n.w.display.mood('seq:1', 'laughing'); assert.deepStrictEqual(reacts(n.p), ['laughing'], 'a late mood after an empty reply');
+});
+
+test('reaction x controller: the person beginning real speech drops it; a false start does not; stop commands and later turns never replay it', async () => {
+  let h = await reactionWorld(); await h.say('Please check the system status.');
+  h.w.display.mood('seq:1', 'proud');
+  h.call.onReplyText('First sentence. Second sentence.', true); await tick();
+  h.call.onSpeechStart();   // real speech over the reply
+  assert.deepStrictEqual(reacts(h.p), []); assert.ok(h.p.count('cancelReaction') >= 1);
+  await h.call.onSpeechEnd({ text: 'never mind' }); await tick();
+  assert.deepStrictEqual(reacts(h.p), [], 'dropped: it does not come back after the person finished');
+  h.w.display.mood('seq:1', 'curious');
+  assert.deepStrictEqual(reacts(h.p), [], 'nor a late mood of the cut reply');
+  // a false start over the reply: the reply is read on and the reaction plays at its end
+  h = await reactionWorld(); await h.say('Please check the system status.');
+  h.w.display.mood('seq:1', 'proud'); h.call.onReplyText('First sentence. Second sentence.', true); await tick();
+  h.call.onSpeechStart(); h.call.onMisfire(); await tick(); await h.finish(); await h.finish();
+  assert.deepStrictEqual(h.spoken.filter(s => s === 'Second sentence.').length >= 1, true);
+  assert.deepStrictEqual(reacts(h.p), ['proud'], 'a cough did not cost the reaction');
+  // the person speaks after the reply ended and before a queued clip started: it is cancelled
+  h = await reactionWorld(); await h.say('Please check the system status.');
+  h.w.display.mood('seq:1', 'proud'); h.call.onReplyText('Only sentence.', true); await tick(); await h.finish();
+  assert.deepStrictEqual(reacts(h.p), ['proud']); const c = h.p.count('cancelReaction');
+  h.call.onSpeechStart(); assert.ok(h.p.count('cancelReaction') > c, 'the not yet started clip is cancelled');
 });

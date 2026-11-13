@@ -1,12 +1,13 @@
 'use strict';
-// With display None the call's thinking sound must behave exactly as in commit cd112d2 (before the shared thinking clock): the same
-// audible pulses at the same moments, the same VAD playback notices, whatever the sound / do-not-disturb / reply sequence does.
+// With display None the call's thinking sound behaves as in commit cd112d2 (before the shared thinking clock) in everything but the
+// intentional new timbre and rhythm (quiet seeded pop clusters with a 4-6 s gap instead of a pulse every 2.5 s): the same first sound
+// 2 s into a wait, the same VAD playback notices, the same silence when the sound is off, the same do-not-disturb and phase behaviour.
 // The base controller is read from git (read-only); the test is skipped when that commit is not available.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { execFileSync } = require('child_process');
 const fs = require('fs'), os = require('os'), path = require('path');
-Object.assign(globalThis, require('../lib/ui-voice'));
+Object.assign(globalThis, require('../lib/ui-voice'), require('../lib/ui-voice-thinking'));
 const CUR = require('../lib/ui-voice-call');
 
 let BASE = null;
@@ -33,11 +34,12 @@ async function drive(M, script, o) {
   const param = () => ({ value: 0, setValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {}, exponentialRampToValueAtTime() {}, setTargetAtTime() {} });
   const ctx = { state: 'running', destination: {}, resume() { return Promise.resolve(); },
     createGain() { return { gain: param(), connect() {}, disconnect() {} }; },
+    createBiquadFilter() { return { type: '', frequency: param(), Q: param(), connect() {}, disconnect() {} }; },
     createOscillator() { return { type: '', frequency: param(), connect() {}, start() { log.push('osc@' + t.now); }, stop() {}, disconnect() {} }; } };
   Object.defineProperty(ctx, 'currentTime', { get: () => t.now / 1000 });
-  const snd = M.voiceCreateThinkingSound({ ctx, volume: 0.5, setInterval: (f, ms) => { const id = t.id++; const arm = () => t.q.push({ id, at: t.now + ms, f: () => { f(); arm(); } }); arm(); return id; }, clearInterval: clearTimer, perfNow: () => t.now });
+  const snd = M.voiceCreateThinkingSound({ ctx, volume: 0.5, seed: 3, setInterval: (f, ms) => { const id = t.id++; const arm = () => t.q.push({ id, at: t.now + ms, f: () => { f(); arm(); } }); arm(); return id; }, clearInterval: clearTimer, perfNow: () => t.now });
   let prefs = Object.assign({ continueWait: 0 }, o.prefs || {}), running = false, vadH = null;
-  const deps = { agent: 'a', now: () => t.now, setTimer, clearTimer, prefs: () => prefs, thinking: snd,
+  const deps = { agent: 'a', thinkingPlan: { seed: 3 }, now: () => t.now, setTimer, clearTimer, prefs: () => prefs, thinking: snd,
     vad: { start: async (h) => { vadH = h; }, stop() {}, setPlaybackActive: (b) => log.push('vad ' + b + '@' + t.now) },
     stt: async (a) => a.text, isTurnRunning: () => running, send: async () => { running = true; }, interject: async () => {}, stop() {}, cancelSpeech() {}, answerAsk() {},
     speak: () => new Promise(() => {}),
@@ -73,15 +75,30 @@ const SCRIPTS = {
   'volume change mid-wait': async (H) => { await H.say('Please check the system status.'); await H.adv(2600); H.setPrefs({ thinkingVolume: 0.2 }); await H.adv(6000); },
 };
 
+// One entry per cluster: its pops are scheduled in the same instant, so the times are de-duplicated.
+const clusterTimes = (log) => [...new Set(log.filter(x => x.startsWith('osc@')))].map(x => Number(x.slice(4)));
+const vadLog = (log) => log.filter(x => x.startsWith('vad '));
+
 for (const [name, script] of Object.entries(SCRIPTS)) {
-  test('display None keeps the thinking sound exactly as at cd112d2: ' + name, { skip: BASE ? false : 'base commit not available' }, async () => {
+  test('display None keeps the thinking sound as at cd112d2 (new timbre and rhythm aside): ' + name, { skip: BASE ? false : 'base commit not available' }, async () => {
     const before = await drive(BASE, script);
     const none = await drive(CUR, script, { display: true });             // a page whose display says "no view shown"
     const bare = await drive(CUR, script, { display: false });            // a call with no display hook at all
-    assert.deepStrictEqual(none, before, 'None (thinkingWanted false)');
-    assert.deepStrictEqual(bare, before, 'no display hook');
+    assert.deepStrictEqual(none, bare, 'None and no display hook sound the same');
+    assert.deepStrictEqual(vadLog(none), vadLog(before), 'the same VAD playback notices at the same moments');
+    const was = clusterTimes(before), now = clusterTimes(none);
+    assert.strictEqual(now.length > 0, was.length > 0, 'sound or silence, as before');
+    if (was.length) assert.strictEqual(now[0], was[0], 'the first sound is at the same moment (2 s into the wait)');
+    if (now.length > 1 && name.startsWith('plain wait')) assert.ok(now[1] - now[0] >= 5500 && now[1] - now[0] <= 8200, 'the next cluster: its length + a 4-6 s gap: ' + (now[1] - now[0]));
   });
 }
+
+test('display None: the new rhythm is quiet: a plain 9 s wait has the first cluster at 2 s and no second one before 7.5 s', { skip: BASE ? false : 'base commit not available' }, async () => {
+  const before = clusterTimes(await drive(BASE, SCRIPTS['plain wait: first pulse at 2 s, then every 2.5 s']));
+  const none = clusterTimes(await drive(CUR, SCRIPTS['plain wait: first pulse at 2 s, then every 2.5 s'], { display: true }));
+  assert.deepStrictEqual(before.slice(0, 3), [2000, 4500, 7000], 'before: every 2.5 s');
+  assert.strictEqual(none[0], 2000); assert.ok(none.length === 1 || none[1] >= 7500, 'now: ' + none.join());
+});
 
 test('display None: the sound never receives an event object and no picture event is sent', async () => {
   const seen = [];

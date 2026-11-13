@@ -809,3 +809,17 @@ test('portrait: a resize between portrait and landscape re-lays the stage once, 
   const g = await started({ portraitSafe: 5 }, { w: 390, h: 800 }); near(g.p.getInfo().stage.picture.scale, 390 / 640, 'out of range falls back to 0.5'); g.p.destroy();
   const sq = await started({}, { w: 600, h: 600 }); assert.strictEqual(sq.p.getInfo().stage.portrait, false, 'a square view is not portrait'); near(sq.p.getInfo().stage.picture.scale, 600 / 1280); sq.p.destroy();
 });
+
+test('cancelReaction: a mood clip that has not started (waiting for the playing clip, or for the pack) is dropped; one playing finishes; hello and goodbye are kept', async () => {
+  const { w, p } = await started(); p.setState('listening'); await w.settle(100);
+  p.react('delighted'); await w.settle(100); assert.strictEqual(p.getInfo().clip, 'reaction-delighted-1');
+  p.react('proud'); assert.strictEqual(p.getInfo().pending, 'proud');
+  assert.strictEqual(p.cancelReaction(), true); assert.strictEqual(p.getInfo().pending, null);
+  w.front(p).end(); await w.settle(100); assert.match(p.getInfo().clip, /^listening-/, 'the cancelled one never plays; the playing one was not cut');
+  assert.strictEqual(p.cancelReaction(), false, 'nothing left to drop');
+  p.destroy();
+  const w2 = makeWorld(); const p2 = w2.make();   // not ready yet: the asked-for reaction waits for the pack
+  assert.strictEqual(p2.react('proud'), true); assert.strictEqual(p2.cancelReaction(), true);
+  assert.strictEqual(p2.react('hello'), true); assert.strictEqual(p2.cancelReaction(), false, 'a hello is not a mood');
+  p2.destroy();
+});

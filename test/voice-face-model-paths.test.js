@@ -301,7 +301,10 @@ test('gateway: the mood event comes before the first visible text', async () => 
 
 test('gateway: unknown word, plain text, markdown link, a second tag and a mid-reply tag pass through; unknown words are stripped without an event', async () => {
   const cases = [
-    ['[whatever] Hello', 'Hello', []],                       // unknown word: stripped, no event
+    ['[whatever] Hello', '[whatever] Hello', []],            // unknown word: ordinary text, no event
+    ['[Summary] The plan is ready.', '[Summary] The plan is ready.', []],
+    ['[x] done', '[x] done', []],
+    ['[OK]', '[OK]', []],
     ['Hello [proud] there', 'Hello [proud] there', []],      // not leading
     ['[proud] Hello [curious] there', 'Hello [curious] there', ['proud']],   // a second tag is ordinary text
     ['[Title](http://x) rest', '[Title](http://x) rest', []],   // a link
@@ -517,6 +520,45 @@ test('sdk: a streamed leading tag split at every chunk boundary is removed, anno
   }
 });
 
+test('sdk: a non-mood bracket at the start, split at every chunk boundary, is kept whole with no mood', async () => {
+  for (const reply of ['[Summary] The plan is ready.', '[x] done', '[OK]']) {
+    for (let cut = 0; cut <= reply.length; cut++) {
+      const deltas = [reply.slice(0, cut), reply.slice(cut)].filter(Boolean).map(sdkDelta);
+      const s = sdkRun({ messages: [...deltas, sdkResult(reply)], options: { faceMood: true } });
+      await s.exec();
+      assert.equal(textOf(s.run.events), reply, `${reply} cut ${cut}`);
+      assert.deepEqual(moodsOf(s.run.events), [], `${reply} cut ${cut}`);
+      assert.deepEqual(savedOf(s.run), [reply]);
+    }
+  }
+});
+
+test('gateway: a non-mood bracket at the start, split at every chunk boundary, is kept whole with no mood', async () => {
+  for (const reply of ['[Summary] The plan is ready.', '[x] done', '[OK]']) {
+    for (let cut = 0; cut <= reply.length; cut++) {
+      const parts = [reply.slice(0, cut), reply.slice(cut)].filter(Boolean);
+      const g = gatewayRun({ calls: [chunksOf(parts)], options: { faceMood: true } });
+      await g.exec();
+      assert.equal(textOf(g.run.events), reply, `${reply} cut ${cut}`);
+      assert.deepEqual(moodsOf(g.run.events), [], `${reply} cut ${cut}`);
+      assert.deepEqual(g.run.logs.filter(l => l.role === 'assistant').map(l => l.text), [reply]);
+    }
+  }
+});
+
+test('codex: a non-mood bracket at the start, split at every chunk boundary (app-server deltas), is kept whole with no mood', async () => {
+  for (const reply of ['[Summary] The plan is ready.', '[x] done', '[OK]']) {
+    for (let cut = 0; cut <= reply.length; cut++) {
+      const pieces = [reply.slice(0, cut), reply.slice(cut)].filter(Boolean);
+      const c = codexRun({ transport: 'app-server', items: codexReply('app-server', pieces), options: { faceMood: true } });
+      await c.exec();
+      assert.equal(textOf(c.run.events), reply, `${reply} cut ${cut}`);
+      assert.deepEqual(moodsOf(c.run.events), [], `${reply} cut ${cut}`);
+      assert.deepEqual(savedOf(c.run), [reply]);
+    }
+  }
+});
+
 test('sdk: one chunk per character, and the tag in a single chunk', async () => {
   const reply = '[Surprised] Oh! Really?';
   for (const parts of [reply.split(''), [reply]]) {
@@ -530,7 +572,10 @@ test('sdk: one chunk per character, and the tag in a single chunk', async () => 
 test('sdk: result-only mode (nothing streamed): the result text goes through the same filter', async () => {
   const cases = [
     ['[proud] You did it.', 'You did it.', ['proud']],
-    ['[nonsense] Hello', 'Hello', []],
+    ['[nonsense] Hello', '[nonsense] Hello', []],
+    ['[Summary] The plan is ready.', '[Summary] The plan is ready.', []],
+    ['[x] done', '[x] done', []],
+    ['[OK]', '[OK]', []],
     ['Hello [proud] there', 'Hello [proud] there', []],
     ['[Title](http://x) rest', '[Title](http://x) rest', []],
     ['Plain.', 'Plain.', []],
@@ -702,7 +747,10 @@ test('codex: one delta per character (app-server) and a whole message (exec)', a
 
 test('codex: unknown word is stripped without an event; plain text, a link, a mid-reply and a second tag pass through (both transports)', async () => {
   const cases = [
-    ['[whatever] Hello', 'Hello', []],
+    ['[whatever] Hello', '[whatever] Hello', []],
+    ['[Summary] The plan is ready.', '[Summary] The plan is ready.', []],
+    ['[x] done', '[x] done', []],
+    ['[OK]', '[OK]', []],
     ['Hello [proud] there', 'Hello [proud] there', []],
     ['[proud] Hello [curious] there', 'Hello [curious] there', ['proud']],
     ['[Title](http://x) rest', '[Title](http://x) rest', []],

@@ -433,40 +433,65 @@ test('listening: a soft mic-driven halo of gradient lobes hugging the blob; no t
   orb.destroy();
 });
 
-test('auto visual gain: quiet ordinary speech (measured 0.11-0.34) fills most of the wave; getInfo().level stays honest', () => {
-  const e = makeEnv({ w: 800, h: 600 });
-  const orb = createVoiceOrb(e.container, e.o);
-  const maxH = Math.min(600 * 0.22, 600 * 0.28);
-  // syllable-like level 0.11..0.34 via analyser amplitude modulation (byte units); level = (rms-0.01)*3.5, rms = amp/128/sqrt2 for a sine
-  let k = 0, ampB = 17;
-  orb.setState('speaking');
-  orb.setAnalyser({ fftSize: 512, getByteTimeDomainData(b) { k++; const a = ampB * (0.55 + 0.45 * Math.sin(k * 0.35)); for (let i = 0; i < b.length; i++) b[i] = Math.round(128 + a * Math.sin(i * 0.9)); } });
-  let lo = 1, hi = 0, peakY = 0;
-  for (let n = 0; n < 240; n++) {
-    e.tick(1, 33); const l = orb.getInfo().level;
-    if (n > 120) { lo = Math.min(lo, l); hi = Math.max(hi, l); }
-  }
-  assert.ok(lo > 0.03 && hi < 0.4 && hi > 0.15, 'honest measured level ' + lo + '..' + hi);
-  const v = orb.getInfo().visual;
-  assert.ok(v.peak > 0.15 && v.level > 0.4 && v.level <= 0.85, 'visual diagnostics ' + JSON.stringify(v));
-  assert.ok(v.gain > 1.5, 'quiet speech is boosted, gain ' + v.gain);
-  for (let n = 0; n < 60; n++) { e.calls.length = 0; e.tick(1, 33); const ys = lastPath(e.calls).map(p => Math.abs(p[1] - 300)); peakY = Math.max(peakY, ...ys); }
-  assert.ok(peakY > 0.55 * maxH && peakY <= maxH, 'wave reaches 60-80% of max height: ' + (peakY / maxH).toFixed(2));
+// steady level through the real draw path: the largest |y| of the wave over a stretch of frames, as a fraction of the maximum wave height
+function steadyWaveFraction(level, w, h) {
+  const e = makeEnv({ w, h }); const orb = createVoiceOrb(e.container, e.o);
+  const maxH = Math.min(h * 0.22, h * 0.28);
+  orb.setState('speaking'); orb.setLevel(level); e.tick(150, 33);
+  let pk = 0;
+  for (let n = 0; n < 60; n++) { e.calls.length = 0; e.tick(1, 33); if (e.calls.some(c => c[0] === 'stroke')) pk = Math.max(pk, ...lastPath(e.calls).map(p => Math.abs(p[1] - h / 2))); }
+  const info = orb.getInfo(); orb.destroy();
+  return { frac: pk / maxH, info };
+}
+
+test('fixed wave curve: quiet is flat, ordinary speech 0.1-0.35 is 25-35% of the height, 0.7+ is full; no auto-gain', () => {
+  const q = steadyWaveFraction(0.04, 800, 600), q2 = steadyWaveFraction(0.055, 800, 600);
+  assert.strictEqual(q.frac, 0, 'sub-gate level draws no wave'); assert.strictEqual(q2.frac, 0, 'breath level stays flat');
+  const o1 = steadyWaveFraction(0.1, 800, 600), o2 = steadyWaveFraction(0.2, 800, 600), o3 = steadyWaveFraction(0.35, 800, 600);
+  // visual diagnostics are exactly the fixed curve
+  assert.ok(Math.abs(o1.info.visual.level - 0.25) < 0.01, JSON.stringify(o1.info.visual));
+  assert.ok(Math.abs(o3.info.visual.level - 0.35) < 0.01, JSON.stringify(o3.info.visual));
+  assert.ok(o2.info.visual.level > 0.25 && o2.info.visual.level < 0.35);
+  // drawn height: ordinary speech is a modest wave (not filling the height), growing with level
+  for (const [o, nm] of [[o1, '0.1'], [o2, '0.2'], [o3, '0.35']]) assert.ok(o.frac > 0.2 && o.frac < 0.5, 'ordinary speech ' + nm + ' is a modest wave: ' + o.frac.toFixed(2));
+  assert.ok(o1.frac < o3.frac, 'louder is taller');
+  const l = steadyWaveFraction(0.7, 800, 600), l2 = steadyWaveFraction(1, 800, 600);
+  assert.ok(l.frac > 0.85 && l.frac <= 1.0001 && l2.frac > 0.85 && l2.frac <= 1.0001, 'loud fills the height: ' + l.frac.toFixed(2) + ' ' + l2.frac.toFixed(2));
+  assert.ok(Math.abs(l.frac - l2.frac) < 0.03, '0.7 already counts as full');
+  assert.ok(l.frac > 2 * o3.frac, 'loud is far taller than ordinary speech');
+  // honest measured level, and the old normalising gain is gone: gain is only the curve's ratio, never a boost to full
+  assert.ok(Math.abs(o1.info.level - 0.1) < 0.01);
+  assert.ok(o1.info.visual.gain > 2 && o1.info.visual.gain < 3, 'gain is just curve/level: ' + o1.info.visual.gain);
+});
+
+test('fixed wave curve: the same voice stays the same after loud speech (no AGC memory), and a quiet voice is not normalised to full', () => {
+  const e = makeEnv({ w: 800, h: 600 }); const orb = createVoiceOrb(e.container, e.o);
+  orb.setState('speaking'); orb.setLevel(0.12); e.tick(150, 33);
+  const before = orb.getInfo().visual.level;
+  orb.setLevel(0.9); e.tick(60, 33); orb.setLevel(0.12); e.tick(45, 33);
+  assert.ok(Math.abs(orb.getInfo().visual.level - before) < 0.02, 'loud history does not change the quiet mapping: ' + before + ' -> ' + orb.getInfo().visual.level);
+  e.tick(300, 33);
+  assert.ok(Math.abs(orb.getInfo().visual.level - before) < 0.02 && orb.getInfo().visual.level < 0.35, 'still ordinary height after any time: ' + orb.getInfo().visual.level);
+  // a very quiet but audible voice and a loud one differ by the curve, not by a normaliser
+  orb.setLevel(0.08); e.tick(60, 33); const v08 = orb.getInfo().visual.level;
+  assert.ok(v08 > 0 && v08 < 0.25, 'just above the gate is small: ' + v08);
   orb.destroy();
 });
 
-test('auto visual gain: slow ~2 s peak, loud speech is not blown past the maximum, breath/room noise stays flat', () => {
+test('fixed wave curve: monotone, continuous, bounded in 0..1 across the whole level range', () => {
+  const e = makeEnv(); const orb = createVoiceOrb(e.container, e.o);
+  orb.setState('speaking');
+  let prev = 0;
+  for (let l = 0; l <= 1.0001; l += 0.01) { orb.setLevel(l); e.tick(120, 33); const v = orb.getInfo().visual.level; assert.ok(v >= prev - 1e-6 && v <= 1, 'monotone at ' + l + ': ' + v); assert.ok(v - prev < 0.12, 'no jump at ' + l); prev = v; }
+  orb.destroy();
+});
+
+test('fixed curve: breath/room noise stays flat after loud speech, whatever the running peak is', () => {
   const e = makeEnv({ w: 800, h: 600 });
   const orb = createVoiceOrb(e.container, e.o);
   orb.setState('speaking'); orb.setLevel(0.9); e.tick(40, 33);
-  const loud = orb.getInfo().visual; assert.ok(loud.level <= 0.85 && loud.level > 0.7, JSON.stringify(loud));
+  const loud = orb.getInfo().visual; assert.ok(loud.level > 0.95 && loud.level <= 1, JSON.stringify(loud));
   assert.ok(Math.abs(loud.gain - 1) < 0.5, 'loud speech is not boosted much');
-  // the peak decays slowly: after loud speech ends, a quiet voice is still at moderate height after 0.5 s, and rises ~2 s later
-  orb.setLevel(0.12); e.tick(15, 33);
-  const soon = orb.getInfo().visual.level;
-  e.tick(150, 33);
-  const later = orb.getInfo().visual.level;
-  assert.ok(later > soon + 0.1, 'visual gain adapts over a couple of seconds: ' + soon + ' -> ' + later);
   // breath/noise: low measured levels draw nothing, whatever the peak is
   orb.setLevel(0.04); e.tick(200, 33);
   assert.strictEqual(orb.getInfo().visual.level, 0, 'sub-gate level is not amplified');
@@ -505,7 +530,8 @@ test('wave moves outward from the blob on both sides, is mirror-symmetric and sm
   orb.destroy();
 });
 
-// ---- thinking pulse events: { at, attackMs: 250, decayMs: 1000, strength } ----
+const ORB_THINK_REST_ALPHA = 0.8; // normal resting brightness while thinking (not the old 0.42 dim)
+// ---- thinking pulse events: the shared cluster event (lib/ui-voice-thinking.js) and the old { at, attackMs: 250, decayMs: 1000, strength } ----
 function thinkRig(opts) {
   const e = makeEnv(opts || { w: 400, h: 300 });
   const orb = createVoiceOrb(e.container, e.o);
@@ -525,7 +551,7 @@ test('thinking: rests dim and still without events (no sine pulse of its own)', 
   orb.destroy();
 });
 
-test('thinking: one timestamped event swells smoothly to 14% at attack, glows brighter, and returns to rest by attack+decay', () => {
+test('thinking: one timestamped event (old contract) swells smoothly to 6% at attack, glows a little brighter, and returns to rest by attack+decay', () => {
   const { e, orb, frame } = thinkRig();
   const rest = frame(16), R = rest.r;
   const at = e.ms + 20;
@@ -535,31 +561,31 @@ test('thinking: one timestamped event swells smoothly to 14% at attack, glows br
   while (e.ms < at + 1400) { const f = frame(10); rs.push(f.r); as.push(f.a); ts.push(e.ms - at); }
   const iMax = rs.indexOf(Math.max(...rs));
   assert.ok(Math.abs(ts[iMax] - 250) <= 20, 'peak at the attack time, got ' + ts[iMax]);
-  assert.ok(Math.abs(Math.max(...rs) / R - 1.14) < 0.005, 'peak swell is 14%: ' + (Math.max(...rs) / R));
-  assert.ok(Math.max(...rs) / R <= 1.1401, 'never beyond 14%');
-  assert.ok(Math.max(...as) > rest.a * 1.5, 'glows brighter at the peak: ' + rest.a + ' -> ' + Math.max(...as));
+  assert.ok(Math.abs(Math.max(...rs) / R - 1.06) < 0.003, 'peak swell is 6%: ' + (Math.max(...rs) / R));
+  assert.ok(Math.max(...rs) / R <= 1.0601, 'never beyond 6%');
+  assert.ok(Math.max(...as) > rest.a + 0.05 && Math.max(...as) <= 1, 'glows a little brighter at the peak: ' + rest.a + ' -> ' + Math.max(...as));
   // monotone rise to the peak and monotone fall after (one smooth swell, no wobble)
   for (let i = 1; i <= iMax; i++) assert.ok(rs[i] >= rs[i - 1] - 1e-9, 'rises smoothly');
   for (let i = iMax + 1; i < rs.length; i++) assert.ok(rs[i] <= rs[i - 1] + 1e-9, 'falls smoothly');
   let maxStep = 0; for (let i = 1; i < rs.length; i++) maxStep = Math.max(maxStep, Math.abs(rs[i] - rs[i - 1]));
-  assert.ok(maxStep < R * 0.14 * 0.1, 'no jumps: ' + maxStep);
+  assert.ok(maxStep < R * 0.06 * 0.1, 'no jumps: ' + maxStep);
   assert.ok(Math.abs(rs[rs.length - 1] - R) < 1e-6 && Math.abs(as[as.length - 1] - rest.a) < 1e-6, 'back at rest after attack+decay');
   assert.strictEqual(orb.getInfo().thinking.phase, 'idle');
   assert.strictEqual(orb.getInfo().thinking.events, 0);
   orb.destroy();
 });
 
-test('thinking: a future-dated event waits, strength scales the swell, overlapping events never exceed 14%', () => {
+test('thinking: a future-dated event waits, strength scales the swell, overlapping events never exceed 6%', () => {
   const { e, orb, frame } = thinkRig();
   const R = frame(16).r, at = e.ms + 400;
   assert.strictEqual(orb.thinkingPulse({ at, attackMs: 250, decayMs: 1000, strength: 0.5 }), true);
   assert.strictEqual(frame(100).v, 0); assert.strictEqual(orb.getInfo().thinking.phase, 'pending');
   let mx = 0; while (e.ms < at + 300) mx = Math.max(mx, frame(10).r);
-  assert.ok(Math.abs(mx / R - 1.07) < 0.006, 'half strength is a 7% swell: ' + mx / R);
+  assert.ok(Math.abs(mx / R - 1.03) < 0.003, 'half strength is a 3% swell: ' + mx / R);
   const e2 = thinkRig(); const R2 = e2.frame(16).r; let mx2 = 0;
   for (let k = 0; k < 4; k++) e2.orb.thinkingPulse({ at: e2.e.ms + 50 * k, strength: 1 }); // defaults 250/1000, overlapping
   while (e2.e.ms < 1500) mx2 = Math.max(mx2, e2.frame(10).r);
-  assert.ok(mx2 / R2 <= 1.1401 && mx2 / R2 > 1.12, 'overlap is capped at 14%: ' + mx2 / R2);
+  assert.ok(mx2 / R2 <= 1.0601 && mx2 / R2 > 1.05, 'overlap is capped at 6%: ' + mx2 / R2);
   assert.ok(e2.orb.getInfo().thinking.events <= 6);
   orb.destroy(); e2.orb.destroy();
 });
@@ -603,7 +629,7 @@ test('thinking in reduced motion: only brightness changes at the peak, never siz
   let ra = [], aa = [];
   for (let i = 0; i < 130; i++) { const f = frame(10); ra.push(f.r); aa.push(f.a); }
   assert.ok(Math.max(...ra) - Math.min(...ra) < 1e-9, 'size does not change');
-  assert.ok(Math.max(...aa) > rest.a * 1.2, 'brightness rises: ' + rest.a + ' -> ' + Math.max(...aa));
+  assert.ok(Math.max(...aa) > rest.a + 0.05, 'brightness rises: ' + rest.a + ' -> ' + Math.max(...aa));
   const fin = aa.filter(isFinite); // the loop settles (stops drawing) once the blob is steady again
   assert.ok(fin.length > 20 && Math.abs(fin[fin.length - 1] - rest.a) < 0.005, 'returns to the steady blob: ' + fin[fin.length - 1] + ' vs ' + rest.a);
   assert.strictEqual(orb.getInfo().thinking.value, 0);
@@ -734,7 +760,7 @@ test('thinking peak glow: the outer edge fades smoothly to 0 (feathered), pulse 
   for (let i = 1; i < al.length; i++) assert.ok(al[i] <= al[i - 1] + 1e-9, 'monotone fade ' + al);
   assert.strictEqual(al[6], 0);
   assert.ok(al[5] < 0.01 * al[0] && al[4] < 0.05 * al[0], 'soft tail, no rim: ' + al);
-  assert.ok(al[0] > 0.5, 'peak glow magnitude is still the full pulse: ' + al[0]);
+  assert.ok(al[0] > 0.34 * ORB_THINK_REST_ALPHA * 1.2, 'peak glow is brighter than rest: ' + al[0]);
   orb.destroy();
 });
 
@@ -749,4 +775,108 @@ test('reduced motion: no moving curves, no trail, no rim, even with real audio w
   assert.ok(!e.calls.some(c => ['lineTo', 'moveTo', 'quadraticCurveTo', 'closePath', 'stroke'].includes(c[0])), 'only the steady blob and finish');
   for (const c of e.calls) for (const v of c.slice(1)) if (typeof v === 'number') assert.ok(isFinite(v));
   orb.destroy();
+});
+
+// ---- shared thinking cluster event (lib/ui-voice-thinking.js): window + soft pops on the caller's clock, normal rest in the gap ----
+const CLUSTER = (at) => ({ at, kind: 'cluster', durationMs: 1500, fadeInMs: 320, fadeOutMs: 480, gapAfterMs: 4500,
+  pops: [{ tMs: 400, strength: 1, decayMs: 40 }, { tMs: 900, strength: 0.6, decayMs: 40 }], strength: 1 });
+const restOf = (rig) => rig.frame(16);
+
+test('thinking cluster: gentle 6% window swell (fade in, hold, fade out), back to the normal rest brightness in the gap', () => {
+  const rig = thinkRig(); const { e, orb, frame } = rig;
+  const rest = restOf(rig), R = rest.r;
+  assert.ok(rest.a > 0.7 && Math.abs(rest.a - 0.95 * ORB_THINK_REST_ALPHA) < 0.01, 'rests at the normal brightness, not the old 0.42 dim: ' + rest.a);
+  const at = e.ms + 20;
+  assert.strictEqual(orb.thinkingPulse(CLUSTER(at)), true);
+  const S = []; while (e.ms < at + 1700) { const f = frame(8); S.push({ t: e.ms - at, r: f.r / R, a: f.a, fl: orb.getInfo().thinking.flicker, ph: orb.getInfo().thinking.phase }); }
+  const at_ = t => S.reduce((b, s) => Math.abs(s.t - t) < Math.abs(b.t - t) ? s : b);
+  assert.ok(Math.max(...S.map(s => s.r)) <= 1.0601 && Math.max(...S.map(s => s.r)) > 1.059, 'swell is 6% at most: ' + Math.max(...S.map(s => s.r)));
+  assert.ok(at_(160).r > 1.025 && at_(160).r < 1.035, 'half-way up the fade in at 160 ms: ' + at_(160).r);
+  assert.ok(Math.abs(at_(700).r - 1.06) < 1e-6 && Math.abs(at_(1000).r - 1.06) < 1e-6, 'held between fade in and fade out');
+  assert.ok(at_(1260).r < 1.035 && at_(1260).r > 1.025, 'half-way down the fade out');
+  assert.strictEqual(at_(100).ph, 'attack'); assert.strictEqual(at_(700).ph, 'hold'); assert.strictEqual(at_(1300).ph, 'decay');
+  for (let i = 1; i < S.length; i++) assert.ok(Math.abs(S[i].r - S[i - 1].r) < 0.06 * 0.05, 'smooth swell, no jump at ' + S[i].t);
+  const gap = S.filter(s => s.t >= 1500);
+  assert.ok(gap.length > 5 && gap.every(s => Math.abs(s.r - 1) < 1e-9 && Math.abs(s.a - rest.a) < 1e-9), 'the gap after the window is exactly the normal rest');
+  assert.strictEqual(orb.getInfo().thinking.events, 0); assert.strictEqual(orb.getInfo().thinking.phase, 'idle');
+  assert.strictEqual(orb.getInfo().thinking.peakAt, at + 320, 'peak is at at + fadeInMs');
+  orb.destroy();
+});
+
+test('thinking cluster: each pop is a small SOFT brightness flicker at at+tMs, no harsh flash, size untouched by the pop', () => {
+  const rig = thinkRig(); const { e, orb, frame } = rig;
+  const rest = restOf(rig), at = e.ms + 20;
+  orb.thinkingPulse(CLUSTER(at));
+  const S = []; while (e.ms < at + 1500) { const f = frame(4); S.push({ t: e.ms - at, a: f.a, fl: orb.getInfo().thinking.flicker }); }
+  const win = (lo, hi) => S.filter(s => s.t >= lo && s.t <= hi);
+  const p1 = Math.max(...win(400, 560).map(s => s.fl)), p2 = Math.max(...win(900, 1060).map(s => s.fl));
+  assert.ok(p1 > 0.95 && p1 <= 1, 'the loudest pop reaches 1: ' + p1); assert.ok(p2 > 0.55 && p2 < 0.65, 'strength 0.6 pop: ' + p2);
+  assert.strictEqual(Math.max(...win(600, 880).map(s => s.fl)), 0, 'between pops the flicker is 0');
+  assert.strictEqual(Math.max(...win(0, 395).map(s => s.fl)), 0, 'no flicker before the first pop (pops are at event.at + tMs)');
+  const calm = win(650, 850).map(s => s.a), flick = win(400, 560).map(s => s.a);
+  const lift = Math.max(...flick) - Math.max(...calm);
+  assert.ok(lift > 0.03 && lift < 0.12, 'a small lift, not a flash: ' + lift);
+  let step = 0; for (let i = 1; i < S.length; i++) step = Math.max(step, Math.abs(S[i].a - S[i - 1].a));
+  assert.ok(step < 0.02, 'brightness never jumps by more than 2% per 4 ms frame: ' + step);
+  assert.ok(Math.max(...S.map(s => s.a)) <= 0.95, 'never brighter than the normal full glow: ' + Math.max(...S.map(s => s.a)));
+  assert.ok(rest.a > 0);
+  orb.destroy();
+});
+
+test('thinking cluster: one shared clock; the same event timestamps give the same picture whatever the frame rate; a future cluster waits', () => {
+  const run = (dt) => {
+    const rig = thinkRig(); const { e, orb } = rig; const out = {};
+    const at = 400; orb.thinkingPulse(CLUSTER(at));
+    assert.strictEqual(orb.getInfo().thinking.phase, 'idle', 'not yet started: pending only after a frame');
+    for (const t of [100, 300, 600, 960, 1300, 1700]) {
+      while (e.ms + dt <= at + t) rig.frame(dt);
+      rig.frame(at + t - e.ms || dt);
+      out[t] = { r: +rig.frame(0.001).r.toFixed(2), ms: Math.round(e.ms), fl: +orb.getInfo().thinking.flicker.toFixed(3) };
+    }
+    orb.destroy(); return out;
+  };
+  const a = run(8), b = run(20);
+  for (const t of Object.keys(a)) { assert.ok(Math.abs(a[t].r - b[t].r) < 0.6, 'same size at +' + t + ' ms regardless of frame rate: ' + a[t].r + ' vs ' + b[t].r); }
+  const rig = thinkRig(); const at = rig.e.ms + 600;
+  assert.strictEqual(rig.orb.thinkingPulse(CLUSTER(at)), true);
+  assert.strictEqual(rig.frame(100).v, 0); assert.strictEqual(rig.orb.getInfo().thinking.phase, 'pending');
+  rig.orb.destroy();
+});
+
+test('thinking cluster: the initial tick is small and gentle; malformed pops are skipped; stale or invalid clusters are ignored', () => {
+  const rig = thinkRig(); const { e, orb, frame } = rig;
+  const R = restOf(rig).r, at = e.ms + 10;
+  assert.strictEqual(orb.thinkingPulse({ at, kind: 'tick', attackMs: 250, decayMs: 1000, durationMs: 0, pops: [], strength: 1 }), true, 'a tick with pops [] and no window is the old swell');
+  let mx = 0, ma = 0; while (e.ms < at + 1400) { const f = frame(10); mx = Math.max(mx, f.r / R); ma = Math.max(ma, orb.getInfo().thinking.flicker); }
+  assert.ok(mx > 1.01 && mx <= 1.025, 'tick swell is small: ' + mx); assert.strictEqual(ma, 0, 'a tick has no pops');
+  assert.strictEqual(orb.thinkingPulse(Object.assign(CLUSTER(e.ms), { pops: [null, { tMs: NaN }, { tMs: -5 }, { tMs: 100, strength: 0.5, decayMs: 'x' }, 7] })), true);
+  e.tick(30, 16); assert.ok(isFinite(orb.getInfo().radius));
+  assert.strictEqual(orb.thinkingPulse(Object.assign(CLUSTER(e.ms - 9000))), false, 'stale cluster');
+  orb.setState('idle'); assert.strictEqual(orb.thinkingPulse(CLUSTER(e.ms)), false, 'not thinking');
+  orb.destroy();
+});
+
+test('thinking cluster in reduced motion: brightness only (window lift + pop flicker), never size or curves, back to the steady blob', () => {
+  const rig = thinkRig({ reduced: true, w: 400, h: 300 }); const { e, orb, frame } = rig;
+  const at = e.ms + 5;
+  assert.strictEqual(orb.thinkingPulse(CLUSTER(at)), true); // (the settled reduced-motion loop wakes up on the event)
+  const rest = frame(1);
+  const S = []; for (let i = 0; i < 200; i++) { const f = frame(10); S.push({ t: e.ms - at, r: f.r, a: f.a }); }
+  const fin = S.filter(s => isFinite(s.a));
+  assert.ok(Math.max(...S.map(s => s.r).filter(isFinite)) - Math.min(...S.map(s => s.r).filter(isFinite)) < 1e-9, 'size does not change');
+  assert.ok(Math.max(...fin.map(s => s.a)) > rest.a + 0.05, 'brightness rises: ' + rest.a + ' -> ' + Math.max(...fin.map(s => s.a)));
+  const calm = Math.max(...fin.filter(s => s.t > 640 && s.t < 860).map(s => s.a)), pop = Math.max(...fin.filter(s => s.t > 400 && s.t < 560).map(s => s.a));
+  assert.ok(pop > calm + 0.01, 'a pop adds a little brightness in reduced motion too: ' + calm + ' -> ' + pop);
+  assert.ok(Math.abs(fin[fin.length - 1].a - rest.a) < 0.005, 'returns to the steady blob');
+  assert.ok(!e.calls.some(c => ['lineTo', 'moveTo', 'quadraticCurveTo', 'stroke'].includes(c[0])));
+  orb.destroy();
+});
+
+test('wave height: ordinary speech draws a quarter to a third of the full height (no 1.3x envelope inflation), loud speech still fills it', () => {
+  const r1 = steadyWaveFraction(0.1, 800, 600), r2 = steadyWaveFraction(0.2, 800, 600), r3 = steadyWaveFraction(0.35, 800, 600);
+  assert.ok(r1.frac > 0.22 && r1.frac < 0.29, 'level 0.1 draws about 25%: ' + r1.frac.toFixed(3));
+  assert.ok(r3.frac > 0.31 && r3.frac < 0.37, 'level 0.35 draws about 35% (not 45%): ' + r3.frac.toFixed(3));
+  assert.ok(r2.frac > r1.frac && r2.frac < r3.frac);
+  const l = steadyWaveFraction(0.7, 800, 600), l2 = steadyWaveFraction(1, 800, 600);
+  assert.ok(l.frac > 0.85 && l2.frac > 0.85 && l.frac <= 1.0001 && l2.frac <= 1.0001, 'loud is still full: ' + l.frac.toFixed(3) + ' ' + l2.frac.toFixed(3));
 });

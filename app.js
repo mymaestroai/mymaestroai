@@ -10663,7 +10663,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceCreateCall(deps) {
       const d = deps || {};
-      const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {} }, d.ui);   // ui.thinkingPulse(event) is optional
+      const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {}, reply() {} }, d.ui);   // ui.thinkingPulse(event) is optional; ui.reply(kind): 'start' | 'end' | 'drop' | 'resume' (a reply's boundaries, for the display's reaction)
       const server = d.server || {}, vad = d.vad || {};
       const now = () => d.now();
       const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
@@ -10680,18 +10680,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // The one spoken line after a long wait: when something was last spoken, when the running turn began, whether a line was
       // said since, which lines this wait has used. The thinking sound: its 2 s timer and whether it is playing.
       let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
-      let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0;
+      let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0, thinkDueAt = 0, thinkSeed = 0;
+      let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
       const prefs = () => { const p = quiet(() => d.prefs && d.prefs()); return p && typeof p === 'object' ? p : {}; };
       // 'Wait for me to go on': how long a sentence that sounds unfinished waits for the next piece.
       const continueWait = () => { const n = Number(prefs().continueWait); return Number.isFinite(n) && n >= 0 ? n : VOICE_CALL_CONTINUE_MS; };
 
       // The thinking clock: ONE scheduler for what is heard and what is shown. When the person's turn was sent (and nothing is being
       // transcribed or asked) it starts: a small silent pulse at once (strength 0.35, visual only), the first full pulse VOICE_CALL_THINK_MS
-      // later (2 s, the first audible one), then one every 2.5 s. Every pulse is one event { at, attackMs, decayMs, strength } handed to
-      // ui.thinkingPulse(event) (the call display's orb), and when the sound is on (thinkingSound not false, not do-not-disturb) to
+      // later (2 s, the first audible one), then a quiet random pop cluster (lib/ui-voice-thinking.js: voiceThinkingCluster, seeded) about
+      // every 1.5 s of pops + a 4-6 s gap (the gap is measured from the END of the cluster). Every pulse is one event (the contract is in
+      // lib/ui-voice-thinking.js: at, kind, durationMs, pops [{ tMs, strength, freqHz, decayMs }], and the old swell fields attackMs, decayMs,
+      // strength) handed to ui.thinkingPulse(event) (the call display's orb), and when the sound is on (thinkingSound not false; do-not-disturb never mutes it, with any display) to
       // thinking.pulse(event) as well; `at` is the performance.now() time (d.perfNow, else d.now) the audio is scheduled to start (+20 ms);
       // thinking.pulse(event) may move event.at to the time the pulse is really heard (audio output clock) before the picture gets it.
       // A thinking adapter without pulse() (older) is started with start() at the first audible pulse and runs its own interval.
+      // The plan of a wait: variant 'A' (airy; the default build), 'B' (round bubble) or 'C' (sparse single pop), the seed and the gap
+      // range come from deps.thinkingPlan { variant, seed, gapMinMs, gapSpreadMs } (a fixed seed makes a wait repeatable; no seed: a new random
+      // one for each wait). No saved setting. Without voiceThinkingCluster (lib not loaded) the old single swell every 2.5 s is used.
       // Switching the sound off or on, or do-not-disturb, only changes what is audible: the clock and its phase go on. The clock stops
       // at once when the reply speaks, the person speaks, an announcement plays, the turn ends or the call ends.
       const perfNow = () => { const f = d.perfNow || d.now; return Number(f()); };
@@ -10700,7 +10706,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // when the sound is off, do-not-disturb does not mute it, switching it off ends the wait and switching it on starts a fresh 2 s one,
       // and the sound's own pulse() is called without an event.
       const thinkVisual = () => typeof (d.ui && d.ui.thinkingPulse) === 'function' && !(typeof d.ui.thinkingWanted === 'function' && !quiet(() => d.ui.thinkingWanted()));
-      const thinkAudible = () => !!d.thinking && prefs().thinkingSound !== false && (mode !== 'dnd' || !thinkVisual());
+      const thinkAudible = () => !!d.thinking && prefs().thinkingSound !== false;   // the same in every display (None, Orb, Character): do-not-disturb does not mute the sound
       function thinkQuiet() { return ended || !awaitingReply || sttPending || pendingAsk || speaking || personSpeaking || pendingAnnounce || queue.length; }
       function muteThinking() {   // the sound only; the clock stays
         if (!thinkingOn) return;
@@ -10713,13 +10719,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         thinkStep = 0;
         muteThinking();
       }
-      // Pulse k happens at t0 for k = 0, and at t0 + 2000 + 2500 (k - 1) after.
-      const thinkDue = (k) => thinkT0 + (k === 0 ? 0 : VOICE_CALL_THINK_MS + 2500 * (k - 1));
+      // Pulse 0 (the small silent one) happens at t0, pulse 1 at t0 + 2000, and every next one at the previous one's time + its
+      // cluster length + its own gap (all on the controller's clock, so the audio mapping of event.at never makes it drift).
+      const thinkPlan = (k) => {
+        if (typeof voiceThinkingCluster !== 'function') return null;
+        const tp = d.thinkingPlan || {};
+        return quiet(() => voiceThinkingCluster({ seed: thinkSeed, index: k - 1, variant: tp.variant, gapMinMs: tp.gapMinMs, gapSpreadMs: tp.gapSpreadMs })) || null;
+      };
       function thinkTick() {
         thinkTimer = null;
         if (thinkQuiet()) { stopThinking(); return; }
         const k = thinkStep++, vis = thinkVisual();
-        const ev = { at: perfNow() + 20, attackMs: 250, decayMs: 1000, strength: k === 0 ? 0.35 : 1 };
+        const plan = k > 0 ? thinkPlan(k) : null;
+        const ev = plan ? voiceThinkingEvent(plan, perfNow() + 20)
+          : { at: perfNow() + 20, kind: k === 0 ? 'tick' : 'cluster', pops: [], attackMs: 250, decayMs: 1000, strength: k === 0 ? 0.35 : 1 };
+        thinkDueAt = k === 0 ? thinkT0 + VOICE_CALL_THINK_MS : thinkDueAt + (plan ? plan.durationMs + plan.gapAfterMs : 2500);
         if (k > 0 && thinkAudible()) {
           if (!thinkingOn) {
             thinkingOn = true;
@@ -10738,11 +10752,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           }
         } else muteThinking();
         if (vis) quiet(() => ui.thinkingPulse(ev));
-        if (thinkTimer === null && !ended) thinkTimer = d.setTimer(thinkTick, Math.max(0, thinkDue(thinkStep) - perfNow()));
+        if (thinkTimer === null && !ended) thinkTimer = d.setTimer(thinkTick, Math.max(0, thinkDueAt - perfNow()));
       }
       function armThinking() {
         if (ended || thinkTimer !== null || thinkStep > 0 || !awaitingReply || sttPending || pendingAsk || (!thinkVisual() && !thinkAudible())) return;
         thinkT0 = perfNow();
+        const sd = Number(d.thinkingPlan && d.thinkingPlan.seed);
+        thinkSeed = Number.isFinite(sd) ? sd : Math.floor(Math.random() * 4294967296);
         thinkTick();
       }
       // The person's settings changed (the in-chat voice panel): re-read them now. Muting stops the sound, not the clock.
@@ -10807,6 +10823,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
         if (my !== gen) return;
         speaking = false; quiet(() => vad.setPlaybackActive(false));
+        maybeReplyEnd();
         settle();
       }
       // Cuts what is being read at once. True when part of a reply was cut (the rest of that reply is then skipped).
@@ -10821,11 +10838,19 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
 
       function completeCount() { return voiceReplySentences(lastText, false).sentences.length; }
+      // The whole reply is over, reported ONCE (ui.reply('end')) for the display's reaction: its text is complete AND nothing is read or waiting to be
+      // read (so a gap between two sentences of a growing reply is not the end) AND the person is not speaking. With no speech (voice off, a failed
+      // line) that is the moment the text is complete; otherwise right after the last line ended, before the call returns to listening.
+      function maybeReplyEnd() {
+        if (ended || replyEnded || !lastDone || awaitingReply || cutSkip || speaking || personSpeaking || current || queue.length) return;
+        replyEnded = true;
+        quiet(() => ui.reply('end'));
+      }
       // Reply text so far (markdown) and whether the turn is over: speaks the complete sentences that are new.
       function onReplyText(full, done) {
         if (ended) return;
         lastText = String(full == null ? '' : full); lastDone = !!done;
-        if (!done && !awaitingReply && !cutSkip) awaitingReply = true;
+        if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
         const r = voiceReplySentences(lastText, !!done);
         if (r.sentences.length < spokenCount) spokenCount = 0;
         if (cutSkip) spokenCount = r.sentences.length;
@@ -10834,7 +10859,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply');
           noteSpoken = true; awaitingReply = false;
           clearStill(); stopThinking(); quiet(() => ui.activity(''));
-          if (!speaking) settle();
+          if (!speaking) { maybeReplyEnd(); settle(); }
         }
       }
       // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
@@ -10923,8 +10948,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       function setMode(m) {
         if (m !== 'announce' && m !== 'dnd') return;
-        mode = m;
-        if (thinkVisual() && !thinkAudible()) muteThinking();   // do-not-disturb with a display: the pulses go on silently (without one the sound is unchanged)
+        mode = m;   // the thinking sound is not touched: do-not-disturb holds announcements, not the thinking sound
         if (m === 'dnd') announceQueue = [];
         else announceQueue = heldList.filter(h => !h.later && !h.announced && !(pendingAnnounce && pendingAnnounce.id === h.id));
         quiet(() => Promise.resolve(server.mode(m, callId)).catch(() => {}));
@@ -10975,6 +10999,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         clearBegin();
         if (!personSpeaking) speechAnn = heardAnnouncement();   // no onSpeechBegin came first
         personSpeaking = true; stopThinking();
+        quiet(() => ui.reply('drop'));   // real speech: a reaction that has not played is dropped
         segmentStarting();
         if (speaking || queue.length) {
           const n = (current ? [current] : []).concat(queue).filter(i => i.kind === 'reply').length;
@@ -10990,6 +11015,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (ended) return;
         clearBegin(); segmentDropped();
         personSpeaking = false; speechAnn = null;
+        quiet(() => ui.reply('resume'));
         const rec = cutRec; cutRec = null;
         if (rec) {
           if (rec.setSkip) cutSkip = false;
@@ -11092,11 +11118,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try {
           if (quiet(() => d.isTurnRunning())) {
             if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
-            awaitingReply = true; turnAt = now(); stillSaid = false; setState('thinking'); armStill(); armThinking();
+            awaitingReply = true; replyEnded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
             await d.interject(t);
           } else {
-            awaitingReply = true; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; turnAt = now(); stillSaid = false; stillUsed = [];
-            setState('thinking'); armStill(); armThinking();
+            awaitingReply = true; replyEnded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+            quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
             await d.send(t);
           }
         } catch { awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity('')); quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
@@ -11189,19 +11215,22 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const tr of Array.from(VOICE_LIVE_TRACKS)) { if (tr && tr.readyState === 'ended') VOICE_LIVE_TRACKS.delete(tr); else n++; }
       return n;
     }
-    // The thinking sound: a soft low pulse made with Web Audio only (no files). A sine near 208 Hz with a quiet second partial,
-    // attack 0.25 s, decay 1 s, repeated every 2.5 s, no melody. Its peak is volume x 0.06 at most. start(), stop() (a 0.1 s fade),
-    // setVolume(0..1). pulse(event) schedules ONE pulse at ctx.currentTime + 0.02 and moves event.at to the moment that pulse is HEARD
-    // (the audio output clock mapped to performance.now(): getOutputTimestamp when valid, else now + the scheduling lead + the output
-    // or base latency); it returns the same event, or false when the context is not running (nothing was claimed, event.at is untouched).
-    // opts: { ctx, volume, setInterval, clearInterval, perfNow } (the last three for tests).
+    // The thinking sound: quiet random pop clusters made with Web Audio only (no files). The plan (how many pops, when, how high, the gaps) is
+    // DATA from lib/ui-voice-thinking.js (voiceThinkingCluster, seeded); this function only plays an event's pops: each pop is a sine with a
+    // few-ms attack and a 30-60 ms decay (a little glide), through a low-pass below 2 kHz, the whole cluster fades in and out. Peak = volume x
+    // 0.0632 (volume 0.5, the default, is -30 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
+    // ctx.currentTime + 0.02 and moves event.at to the moment that cluster is HEARD (the audio output clock mapped to performance.now():
+    // getOutputTimestamp when valid, else now + the scheduling lead + the output or base latency); it returns the same event, or false when
+    // the context is not running (nothing was claimed, event.at is untouched). An event without pops (or no event) plays a cluster of a fresh
+    // random seed. start() plays one now and another every 6.5 s (the old adapters without a clock of their own).
+    // opts: { ctx, volume, variant, seed (a fixed seed for the clusters it makes itself), setInterval, clearInterval, perfNow } (the last four for tests).
     function voiceCreateThinkingSound(opts) {
       const o = opts || {}, ctx = o.ctx;
       const perf = o.perfNow || (() => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function' ? performance.now() : NaN));
       const setIv = o.setInterval || ((f, ms) => setInterval(f, ms)), clearIv = o.clearInterval || ((id) => clearInterval(id));
       const clamp = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5; };
-      let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [];
-      const peak = () => vol * 0.06;
+      let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [], own = 0;
+      const peak = () => vol * 2 * Math.pow(10, -30 / 20);   // volume 0.5 = -30 dBFS
       // performance.now() time at which the sample scheduled for context time t0 comes out of the speakers; null when it cannot be told.
       function heardAt(ct, t0) {
         const now = Number(perf());
@@ -11222,19 +11251,40 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!running || !master) return;
         const ct = ctx.currentTime, t0 = ct + 0.02;
         if (ev && typeof ev === 'object') { const m = heardAt(ct, t0); if (m !== null) ev.at = m; }
-        const env = ctx.createGain();
+        // the plan: the event's own pops, else a cluster of a fresh random seed (nothing without lib/ui-voice-thinking.js)
+        let plan = ev && typeof ev === 'object' && Array.isArray(ev.pops) && ev.pops.length ? ev : null;
+        if (!plan && typeof voiceThinkingCluster === 'function') plan = voiceThinkingCluster({ seed: Number.isFinite(Number(o.seed)) ? Number(o.seed) : Math.floor(Math.random() * 4294967296), index: own++, variant: o.variant });
+        if (!plan || !Array.isArray(plan.pops) || !plan.pops.length) return;
+        const dur = Math.max(0.05, (Number(plan.durationMs) || 1500) / 1000);
+        const fin = Math.min(dur, Math.max(0.004, (Number(plan.fadeInMs) || 0) / 1000)), fout = Math.min(dur - fin, Math.max(0.01, (Number(plan.fadeOutMs) || 0) / 1000));
+        const env = ctx.createGain();   // the cluster's fade in and out
         env.gain.setValueAtTime(0, t0);
-        env.gain.linearRampToValueAtTime(1, t0 + 0.25);            // attack
-        env.gain.linearRampToValueAtTime(0, t0 + 1.25);            // decay
+        env.gain.linearRampToValueAtTime(1, t0 + fin);
+        env.gain.setValueAtTime(1, t0 + dur - fout);
+        env.gain.linearRampToValueAtTime(0, t0 + dur);
         env.connect(master);
-        for (const [freq, level] of [[208, 0.85], [416, 0.15]]) {   // the note and a gentle second partial
+        let sink = env;
+        if (typeof ctx.createBiquadFilter === 'function') {   // the low-pass: nothing above 2 kHz
+          const lp = ctx.createBiquadFilter();
+          lp.type = 'lowpass'; lp.frequency.value = Math.min(1990, Number(plan.lowpassHz) || 1600); if (lp.Q) lp.Q.value = 0.5;
+          lp.connect(env); sink = lp;
+        }
+        let left = plan.pops.length;
+        const done = () => { if (--left === 0) { try { sink.disconnect(); } catch { /* gone */ } try { env.disconnect(); } catch { /* gone */ } } };
+        for (const p of plan.pops) {
+          const tp = t0 + Math.max(0, Number(p.tMs) || 0) / 1000, dec = Math.max(0.03, Math.min(0.06, (Number(p.decayMs) || 45) / 1000));
+          const freq = Math.max(60, Math.min(1900, Number(p.freqHz) || 300)), level = Math.max(0, Math.min(1, Number(p.strength))), glide = Number(p.glide) > 0 ? Number(p.glide) : 1;
           const osc = ctx.createOscillator(), g = ctx.createGain();
-          osc.type = 'sine'; osc.frequency.value = freq; g.gain.value = level;
-          osc.connect(g); g.connect(env);
+          osc.type = 'sine'; osc.frequency.value = freq;
+          if (glide !== 1 && osc.frequency.setValueAtTime) { osc.frequency.setValueAtTime(freq, tp); osc.frequency.linearRampToValueAtTime(Math.min(1900, freq * glide), tp + dec); }
+          g.gain.setValueAtTime(0, tp);
+          g.gain.linearRampToValueAtTime(Number.isFinite(level) ? level : 0.7, tp + 0.004);   // a few ms attack
+          g.gain.linearRampToValueAtTime(0, tp + dec);                                          // the 30-60 ms decay ramp
+          osc.connect(g); g.connect(sink);
           const item = { osc, env };
           active.push(item);
-          osc.onended = () => { active = active.filter(x => x !== item); try { g.disconnect(); } catch { /* gone */ } };
-          osc.start(t0); osc.stop(t0 + 1.3);
+          osc.onended = () => { active = active.filter(x => x !== item); try { g.disconnect(); } catch { /* gone */ } done(); };
+          osc.start(tp); osc.stop(tp + dec + 0.02);
         }
       }
       return {
@@ -11244,7 +11294,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
           master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
           pulse();
-          timer = setIv(pulse, 2500);
+          timer = setIv(pulse, 6500);
         },
         // ONE pulse at ctx.currentTime + 0.02 (the call's thinking clock decides when); no interval of its own. stop() ends it like start().
         // With an event: event.at becomes the moment the pulse is heard and the event is returned (the same object); a context that is
@@ -11987,6 +12037,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const input = document.getElementById(`input-${chatId}`);
       if (!input || !chats[chatId]) throw new Error('chat closed');
       const S = voiceCallS, seq = ++S.sendSeq;
+      voiceDisplayHook('reply', 'turn', 'seq:' + seq);   // a new turn: the older ones (and their moods) are over
       S.expecting = true;
       const prev = input.value;
       input.value = text;
@@ -12107,6 +12158,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         ui: {
           state: (name) => { const s = barEl('state'); if (s) s.textContent = VOICE_CALL_STATE_TEXT[name] || name; voiceDisplayHook('setState', name); },
           thinkingPulse: (ev) => { voiceDisplayHook('thinkingPulse', ev); },
+          reply: (kind) => { voiceDisplayHook('reply', kind, 'seq:' + voiceCallS.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
           thinkingWanted: () => voiceDisplayHook('showsPulse') === true,   // no view shown (None, hidden): the call's thinking sound is exactly the plain one
           level: (db) => { const w = `${voiceMeterPercent(db)}%`; for (const i of [barEl('level'), voiceById(`vp-level-${chatId}`)]) if (i) i.style.width = w; voiceDisplayHook('level', db); },   // the call bar's meter and the voice panel's
           activity: (text) => { const a = barEl('activity'); if (a) a.textContent = text || ''; },   // silent: shown in the call bar only

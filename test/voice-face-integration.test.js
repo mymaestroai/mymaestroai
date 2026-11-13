@@ -173,10 +173,14 @@ test('desktop: a mood arrives by the chat stream or the hub event, plays once pe
   assert.strictEqual(p.all('react').length, 0, 'not the call own turn');
   d.api.voiceCallHubEvent('turn_mood', { agent: 'bob', turnId: 't1', mood: 'proud' });
   d.api.voiceCallSseMood('c1', 'proud'); d.api.voiceCallSseMood('c1', 'laughing');
+  assert.deepStrictEqual(p.all('react'), [], 'queued: the reaction waits for the end of the reply');
+  d.api.voiceDisplayHook('reply', 'end', 'seq:1');   // what the page's ui.reply passes on from the controller
   assert.deepStrictEqual(p.all('react'), ['proud'], 'the stream chunk and the hub event of one turn count once');
   S.sendSeq = 2; d.api.voiceCallHubEvent('turn_start', { agent: 'bob', turnId: 't2', origin: { kind: 'user' } });
+  d.api.voiceDisplayHook('reply', 'turn', 'seq:2');
   d.api.voiceCallSseMood('c1', 'curious'); d.api.voiceCallHubEvent('turn_mood', { agent: 'bob', turnId: 't2', mood: 'curious' });
   d.api.voiceCallSseMood('other', 'proud');
+  d.api.voiceDisplayHook('reply', 'end', 'seq:2');
   assert.deepStrictEqual(p.all('react'), ['proud', 'curious']);
   d.api.voiceDispEnd(false);
   S.sendSeq = 3; d.api.voiceCallSseMood('c1', 'delighted'); d.api.voiceCallHubEvent('turn_mood', { agent: 'bob', turnId: 't2', mood: 'delighted' });
@@ -320,6 +324,8 @@ test('phone: moods once per turn from the stream or the hub event; facePack only
   p.vc.sendSeq = 1; p.api.voiceCallTurnStart({ agent: 'bob', turnId: 't1', origin: { kind: 'user' } });
   p.api.voiceCallTurnMood({ agent: 'bob', turnId: 'zzz', mood: 'proud' }); assert.strictEqual(pl.all('react').length, 0);
   p.api.voiceCallTurnMood({ agent: 'bob', turnId: 't1', mood: 'proud' }); p.api.voiceCallSseMood({ agent: 'bob' }, 'proud'); p.api.voiceCallSseMood({ agent: 'other' }, 'laughing');
+  assert.deepStrictEqual(pl.all('react'), [], 'queued until the reply ends');
+  p.api.voiceDisplayHook('reply', 'end', 'seq:1');
   assert.deepStrictEqual(pl.all('react'), ['proud']);
   p.doc.find('ucd-talk')[0].click(); assert.deepStrictEqual(p.vc.calls, ['onSpeechStart']);
   p.doc.find('ucd-back')[0].click(); assert.deepStrictEqual(p.api.voiceFacePackBody(), {}, 'hidden character: no tag request');
@@ -342,6 +348,8 @@ test('phone: the real call panel and voice panel move into the view and return; 
 test('both pages carry the same wiring: same hooks, same events, same send field, the shared controller copies untouched', () => {
   const each = (re, what) => { assert.ok(re.test(app), 'desktop: ' + what); assert.ok(re.test(mob), 'phone: ' + what); };
   each(/voiceDisplayHook\('audioStop'\)/, 'barge-in / stop closes the beak');
+  each(/reply: \(kind\) => \{[^}]*voiceDisplayHook\('reply', kind, 'seq:' \+ /, 'the controller\'s reply boundaries reach the display (the reaction plays at the reply end)');
+  each(/voiceDisplayHook\('reply', 'turn', 'seq:' \+ seq\)/, 'a sent turn closes the older ones');
   each(/voiceDisplayHook\('audioStart'\)/, 'audio start'); each(/voiceDisplayHook\('audioEnd'\)/, 'audio end'); each(/voiceDisplayHook\('caption'/, 'caption of the spoken sentence');
   each(/dsp\('boundary'\)/, 'device speech boundary'); each(/u\.onpause = /, 'device speech pause'); each(/u\.onresume = /, 'device speech resume'); each(/dsp\('end'\)/, 'device speech end');
   each(/voiceDisplayHook\('setState', name\)/, 'controller state'); each(/voiceDisplayHook\('level', db\)/, 'mic level');

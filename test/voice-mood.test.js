@@ -38,10 +38,9 @@ test('known tags stripped, mood reported once, all splits', () => {
   }
 });
 
-test('unknown words stripped without a mood', () => {
-  check('[excited] Great news', 'Great news', []);
-  check('[Zzz]ok', 'ok', []);
-  check('[excited]', '', []);
+test('unknown words are ordinary text: kept, no mood, never empty', () => {
+  for (const s of ['[excited] Great news', '[Zzz]ok', '[excited]', '[Summary] The plan is ready.', '[x] done', '[OK]',
+    '  [OK] fine', '[curiou] x', '[curiouss] x', '[proudly]']) check(s, s, []);
 });
 
 test('ordinary bracket syntax preserved', () => {
@@ -62,8 +61,12 @@ test('only the first leading tag is a tag', () => {
 test('unclosed / malformed bounded at 64', () => {
   const long = '[' + 'a'.repeat(200) + '] text';
   check(long, long, []);
-  const exact = '[' + 'a'.repeat(MAX_BUFFER - 2) + '] text'; // 64 chars of tag
-  check(exact, 'text', []);
+  const exact = '[' + 'a'.repeat(MAX_BUFFER - 2) + '] text'; // 64 chars, unknown word
+  check(exact, exact, []);
+  const wsMood = ' '.repeat(MAX_BUFFER - '[curious]'.length) + '[curious] text'; // tag exactly 64 chars
+  check(wsMood, 'text', ['curious']);
+  const wsOver = ' '.repeat(MAX_BUFFER - '[curious]'.length + 1) + '[curious] text';
+  check(wsOver, wsOver, []);
   const over = '[' + 'a'.repeat(MAX_BUFFER - 1) + '] text'; // 65
   check(over, over, []);
   const ws = ' '.repeat(100) + '[curious] x';
@@ -88,12 +91,16 @@ test('plain text streaming passes through promptly', () => {
 
 test('held markdown link waits for the char after the bracket', () => {
   const f = createMoodFilter({ enabled: true });
-  assert.strictEqual(f.push('[Docs]'), '');
-  assert.strictEqual(f.push('('), '[Docs](');
+  assert.strictEqual(f.push('[curious]'), '');
+  assert.strictEqual(f.push('('), '[curious](');
   assert.strictEqual(f.push('u)'), 'u)');
   const g = createMoodFilter({ enabled: true, onMood: () => {} });
-  assert.strictEqual(g.push('[Docs]'), '');
+  assert.strictEqual(g.push('[curious]'), '');
   assert.strictEqual(g.push(' x'), 'x');
+  // a non-mood word is ordinary text at once: nothing to wait for
+  const h = createMoodFilter({ enabled: true });
+  assert.strictEqual(h.push('[Docs]'), '[Docs]');
+  assert.strictEqual(h.push('(u)'), '(u)');
 });
 
 test('finish flushes pending plain content', () => {
