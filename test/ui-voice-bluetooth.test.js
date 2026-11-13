@@ -1103,3 +1103,21 @@ test('mic lines: a waiting mic line keeps its own retry; a lost line still waiti
   assert.strictEqual(g.spoken[g.spoken.length - 1], 'I lost the microphone. Tap to talk to carry on.', 'the waiting lost line still gets its attempt');
   g.call.release('test');
 });
+
+test('mic lines survive the person cutting in: a lost line enqueued between a candidate and a real speech start is said when they stop', async () => {
+  const h = await callStarted();
+  h.call.onSpeechBegin();
+  h.handlers.onMicChange({ ok: false, reason: 'ended' });
+  h.call.onSpeechStart();   // the real start of words heard just before the microphone went
+  await tick();
+  assert.deepStrictEqual(h.spoken, [], 'nothing is read over the person');
+  h.call.onSpeechEnd({ text: 'hello there' }); await tick(60);
+  assert.ok(h.spoken.includes('I lost the microphone. Tap to talk to carry on.'), 'said once they stopped');
+  // a reply line is still dropped by a cut, as before
+  h.call.onReplyText('One. Two. Three.', true); await tick();
+  await h.finish(); await tick();
+  h.call.onSpeechBegin(); h.call.onSpeechStart(); await tick();
+  h.call.onSpeechEnd({ text: 'stop' }); await tick(60);
+  assert.ok(!h.spoken.includes('Three.'), 'the cut reply is not read on');
+  h.call.release('test');
+});

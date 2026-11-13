@@ -11095,14 +11095,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       // Cuts what is being read at once. True when part of a reply was cut (the rest of that reply is then skipped).
-      // byPerson: the person's real speech cut it, so the thresholds drop at once (no echo hold-over over their own words).
+      // byPerson: the person's real speech cut it, so the thresholds drop at once (no echo hold-over over their own words), and the
+      // microphone lines ('mic': lost / back / switched) are kept: they are about the call, not the reply, and are said when the person
+      // stops (the words that cut them may be the last ones heard before the microphone went).
       function cancelSpeaking(byPerson) {
         const items = (current ? [current] : []).concat(queue);
         const hadReply = items.some(i => i.kind === 'reply');
-        gen++; queue = []; current = null;
+        const keep = byPerson ? items.filter(i => i.kind === 'mic') : [];
+        gen++; queue = keep; current = null;
         if (speaking) { speaking = false; quiet(() => vad.setPlaybackActive(false, !!byPerson)); }
         quiet(() => d.cancelSpeech());
-        items.forEach(runAfter);
+        items.filter(i => !keep.includes(i)).forEach(runAfter);
         return hadReply;
       }
 
