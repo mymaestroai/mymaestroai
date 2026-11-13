@@ -136,16 +136,16 @@ test('a character that is missing, failed or still being looked up falls back to
 test('the choice is saved per device under the voice-prefs style key; a missing character stays saved; garbage is ignored; no credentials are stored', () => {
   assert.strictEqual(CD.DISPLAY_STORE_KEY, 'hub-voice-display');
   const st = memStorage();
-  assert.deepStrictEqual(CD.loadDisplayPrefs(st), { choice: 'follow', captions: false });
+  assert.deepStrictEqual(CD.loadDisplayPrefs(st), { choice: 'follow', captions: false, interrupt: false });
   CD.saveDisplayPrefs(st, { choice: 'pack:ghost' });
-  assert.deepStrictEqual(CD.loadDisplayPrefs(st), { choice: 'pack:ghost', captions: false }, 'saved even though nothing installed matches');
+  assert.deepStrictEqual(CD.loadDisplayPrefs(st), { choice: 'pack:ghost', captions: false, interrupt: false }, 'saved even though nothing installed matches');
   CD.saveDisplayPrefs(st, { captions: true });
-  assert.deepStrictEqual(CD.loadDisplayPrefs(st), { choice: 'pack:ghost', captions: true });
+  assert.deepStrictEqual(CD.loadDisplayPrefs(st), { choice: 'pack:ghost', captions: true, interrupt: false });
   CD.saveDisplayPrefs(st, { choice: 'bogus', captions: 'yes' });
-  assert.deepStrictEqual(CD.loadDisplayPrefs(st), { choice: 'pack:ghost', captions: true });
-  assert.deepStrictEqual(CD.loadDisplayPrefs(memStorage({ 'hub-voice-display': '{not json' })), { choice: 'follow', captions: false });
-  assert.deepStrictEqual(CD.loadDisplayPrefs(memStorage({ 'hub-voice-display': '[1]' })), { choice: 'follow', captions: false });
-  assert.deepStrictEqual(CD.loadDisplayPrefs({ getItem() { throw new Error('blocked'); } }), { choice: 'follow', captions: false });
+  assert.deepStrictEqual(CD.loadDisplayPrefs(st), { choice: 'pack:ghost', captions: true, interrupt: false });
+  assert.deepStrictEqual(CD.loadDisplayPrefs(memStorage({ 'hub-voice-display': '{not json' })), { choice: 'follow', captions: false, interrupt: false });
+  assert.deepStrictEqual(CD.loadDisplayPrefs(memStorage({ 'hub-voice-display': '[1]' })), { choice: 'follow', captions: false, interrupt: false });
+  assert.deepStrictEqual(CD.loadDisplayPrefs({ getItem() { throw new Error('blocked'); } }), { choice: 'follow', captions: false, interrupt: false });
   assert.ok(!/token|password|cookie|credential/i.test(st.m.get('hub-voice-display')));
   assert.doesNotThrow(() => CD.saveDisplayPrefs({ getItem: () => null, setItem() { throw new Error('full'); } }, { choice: 'orb' }));
 });
@@ -446,7 +446,7 @@ test('captions: off by default and a local pref; show the spoken sentence as tex
   const cap = () => w.dom.overlay().all().find(n => n.className === 'ucd-caption');
   w.display.caption('Hello there.'); assert.strictEqual(cap().textContent, ''); assert.strictEqual(cap().hidden, true, 'off by default');
   w.display.setCaptions(true);
-  assert.deepStrictEqual(CD.loadDisplayPrefs(w.storage), { choice: 'orb', captions: true }, 'saved locally');
+  assert.deepStrictEqual(CD.loadDisplayPrefs(w.storage), { choice: 'orb', captions: true, interrupt: false }, 'saved locally');
   w.display.caption('[proud] Well done <img src=x onerror=alert(1)>.');
   assert.strictEqual(cap().textContent, 'Well done <img src=x onerror=alert(1)>.'); assert.strictEqual(cap().children.length, 0, 'text node only');
   assert.strictEqual(cap().hidden, false);
@@ -560,7 +560,7 @@ test('the real controls move into the view with a placeholder and go back before
 // Changed with the Interrupt slot: the slot button is off while starting/listening, so the call opens with focus on the overlay root,
 // the click happens in 'speaking', and the Tab wrap goes to the first control that is in the list (Hang up once the slot is off again).
 test('Interrupt and Hang up call the page; the view is a labelled modal dialog; focus goes to the overlay and returns; Tab stays inside', async () => {
-  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  const w = world({ prefs: { choice: 'orb', interrupt: true } }); const { dom } = w;
   const opener = new dom.El('button'); dom.doc.body.appendChild(opener); opener.focus();
   w.display.start(); await flushP();
   const ov = dom.overlay();
@@ -588,7 +588,7 @@ const statusOf = (dom) => dom.find('ucd-status')[0].textContent;
 
 test('slot: Interrupt shows only while the agent thinks or speaks; starting, listening, hearing and ended keep the place but are invisible and inert (Orb and character)', async () => {
   for (const choice of ['orb', 'pack:owl']) {
-    const w = world({ prefs: { choice } }); const { dom } = w;
+    const w = world({ prefs: { choice, interrupt: true } }); const { dom } = w;
     w.display.start(); await flushP();
     const slot = slotOf(dom);
     const off = (s) => { assert.strictEqual(slot.attrs['data-ucd-mode'], 'off', choice + ' ' + s); assert.strictEqual(slot.attrs['data-ucd-off'], ''); assert.strictEqual(slot.attrs['aria-hidden'], 'true'); assert.strictEqual(slot.attrs.tabindex, '-1'); assert.strictEqual(w.display.info().talk, 'off'); };
@@ -606,7 +606,7 @@ test('slot: Interrupt shows only while the agent thinks or speaks; starting, lis
 });
 
 test('slot: the click path is unchanged while Interrupt is on (onTalk once) and the off slot does nothing', async () => {
-  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  const w = world({ prefs: { choice: 'orb', interrupt: true } }); const { dom } = w;
   w.display.start(); await flushP();
   w.display.setState('speaking'); slotOf(dom).click(); assert.strictEqual(w.log.talk, 1);
   w.display.setState('listening'); slotOf(dom).click(); assert.strictEqual(w.log.talk, 1, 'off: a click does nothing');
@@ -615,7 +615,7 @@ test('slot: the click path is unchanged while Interrupt is on (onTalk once) and 
 });
 
 test('slot: a lost microphone turns the slot into "Try the microphone again" (onRetryMic, never onTalk) and the status says so; back again restores Interrupt', async () => {
-  const w = world({ prefs: { choice: 'orb' }, retry: true }); const { dom } = w;
+  const w = world({ prefs: { choice: 'orb', interrupt: true }, retry: true }); const { dom } = w;
   w.display.start(); await flushP();
   w.display.setState('speaking'); assert.strictEqual(statusOf(dom), 'Speaking');
   w.display.micLost(true);
@@ -632,7 +632,7 @@ test('slot: a lost microphone turns the slot into "Try the microphone again" (on
   w.display.setState('ended'); assert.strictEqual(slot.attrs['data-ucd-mode'], 'off');
   w.display.release();
   // without onRetryMic the slot stays the Interrupt button
-  const n = world({ prefs: { choice: 'orb' } }); n.display.start(); await flushP();
+  const n = world({ prefs: { choice: 'orb', interrupt: true } }); n.display.start(); await flushP();
   n.display.setState('speaking'); n.display.micLost(true);
   assert.strictEqual(slotOf(n.dom).attrs['data-ucd-mode'], 'interrupt'); assert.strictEqual(statusOf(n.dom), 'Microphone lost');
   slotOf(n.dom).click(); assert.strictEqual(n.log.talk, 1);
@@ -640,7 +640,7 @@ test('slot: a lost microphone turns the slot into "Try the microphone again" (on
 });
 
 test('slot: Hang up never moves: the slot stays in .ucd-main right before it in every state, is never removed and never gets the hidden property', async () => {
-  const w = world({ prefs: { choice: 'pack:owl' }, retry: true }); const { dom } = w;
+  const w = world({ prefs: { choice: 'pack:owl', interrupt: true }, retry: true }); const { dom } = w;
   w.display.start(); await flushP();
   const slot = slotOf(dom), hang = dom.find('ucd-hang')[0], main = slot.parentNode;
   assert.strictEqual(main.className, 'ucd-main');
@@ -652,7 +652,7 @@ test('slot: Hang up never moves: the slot stays in .ucd-main right before it in 
 });
 
 test('slot: when the slot turns off while it has focus, focus moves to the overlay root; at start focus is on the slot only when it is on', async () => {
-  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  const w = world({ prefs: { choice: 'orb', interrupt: true } }); const { dom } = w;
   w.display.start(); await flushP();
   const ov = dom.overlay(), slot = slotOf(dom);
   w.display.setState('speaking'); slot.focus(); assert.strictEqual(dom.doc.activeElement, slot);
@@ -662,6 +662,135 @@ test('slot: when the slot turns off while it has focus, focus moves to the overl
   w.display.setState('speaking'); w.display.setChoice('pack:owl'); await flushP();
   assert.strictEqual(dom.doc.activeElement, slotOf(dom));
   w.display.release();
+});
+
+// ── the Interrupt button is an option (off by default, per device) ──
+test('interrupt option: by default no Interrupt in any state (mode off, data-ucd-off), and Hang up keeps its index in .ucd-main', async () => {
+  for (const choice of ['orb', 'pack:owl']) {
+    const w = world({ prefs: { choice }, retry: true }); const { dom } = w;
+    w.display.start(); await flushP();
+    const slot = slotOf(dom), hang = dom.find('ucd-hang')[0], main = slot.parentNode;
+    assert.strictEqual(w.display.info().interruptButton, false);
+    for (const st of ['starting', 'listening', 'hearing', 'thinking', 'speaking', 'ended']) {
+      w.display.setState(st);
+      assert.strictEqual(slot.attrs['data-ucd-mode'], 'off', choice + ' ' + st); assert.ok('data-ucd-off' in slot.attrs, st); assert.strictEqual(w.display.info().talk, 'off', st);
+      assert.strictEqual(main.children.indexOf(hang), 1, 'Hang up stays at the same index in ' + st); assert.strictEqual(main.children.indexOf(slot), 0, st);
+    }
+    slot.click(); assert.strictEqual(w.log.talk, 0);
+    w.display.release();
+  }
+});
+
+test('interrupt option: on shows Interrupt only while thinking or speaking (onTalk once); setInterruptButton saves it and turns it on or off at once', async () => {
+  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  w.display.start(); await flushP();
+  const slot = slotOf(dom);
+  w.display.setState('speaking'); assert.strictEqual(slot.attrs['data-ucd-mode'], 'off');
+  w.display.setInterruptButton(true);
+  assert.strictEqual(CD.loadDisplayPrefs(w.storage).interrupt, true); assert.strictEqual(w.display.info().interruptButton, true);
+  assert.strictEqual(slot.attrs['data-ucd-mode'], 'interrupt'); assert.strictEqual(slot.textContent, 'Interrupt'); assert.ok(!('data-ucd-off' in slot.attrs));
+  for (const st of ['starting', 'listening', 'hearing', 'ended']) { w.display.setState(st); assert.strictEqual(slot.attrs['data-ucd-mode'], 'off', st); }
+  w.display.setState('thinking'); assert.strictEqual(slot.attrs['data-ucd-mode'], 'interrupt');
+  w.display.setState('speaking'); slot.click(); assert.strictEqual(w.log.talk, 1);
+  const before = w.log.changes;
+  w.display.setInterruptButton(false);
+  assert.strictEqual(slot.attrs['data-ucd-mode'], 'off', 'off at once mid-speaking'); assert.ok('data-ucd-off' in slot.attrs);
+  assert.strictEqual(CD.loadDisplayPrefs(w.storage).interrupt, false); assert.strictEqual(w.display.info().interruptButton, false); assert.ok(w.log.changes > before, 'onChange fires');
+  slot.click(); assert.strictEqual(w.log.talk, 1, 'off: a click does nothing');
+  w.display.release();
+  assert.strictEqual(CD.loadDisplayPrefs(memStorage({ 'hub-voice-display': JSON.stringify({ interrupt: 'true' }) })).interrupt, false, 'only exactly true counts');
+});
+
+test('interrupt option: with the option off a lost microphone still shows "Try the microphone again"', async () => {
+  const w = world({ prefs: { choice: 'orb' }, retry: true }); const { dom } = w;
+  w.display.start(); await flushP();
+  w.display.setState('speaking'); w.display.micLost(true);
+  const slot = slotOf(dom);
+  assert.strictEqual(slot.attrs['data-ucd-mode'], 'mic'); assert.strictEqual(slot.textContent, 'Try the microphone again'); assert.ok(!('data-ucd-off' in slot.attrs));
+  slot.click(); assert.strictEqual(w.log.retry, 1); assert.strictEqual(w.log.talk, 0);
+  w.display.micLost(false); assert.strictEqual(slot.attrs['data-ucd-mode'], 'off');
+  w.display.release();
+});
+
+// ── the Controls drawer can be closed ──
+async function drawerWorld() {
+  const w = world({ prefs: { choice: 'orb' }, adopt: () => [{ el: bar, label: 'Call' }, { el: pop, label: 'Voice settings', show: true }] }); const { dom } = w;
+  const composer = new dom.El('div'), bar = new dom.El('div'), pop = new dom.El('div');
+  composer.appendChild(bar); composer.appendChild(pop); dom.doc.body.appendChild(composer);
+  w.display.start(); await flushP();
+  const ui = w.display.ui, ctl = dom.find('ucd-ctl')[0];
+  return { w, dom, ui, ctl, bar, pop, head: dom.find('ucd-drawer-head')[0], section: bar.parentNode };
+}
+const touch = (el, type, y) => el.dispatch(type, type === 'touchend' ? { changedTouches: [{ clientY: y }] } : { touches: [{ clientY: y }] });
+
+test('drawer: opening shows a header (grab handle + Close) as the first child with the adopted sections after it; Close closes it and focus goes to Controls', async () => {
+  const { w, dom, ui, ctl, head } = await drawerWorld();
+  assert.strictEqual(ui.drawer.hidden, true); assert.strictEqual(ctl.attrs['aria-expanded'], 'false');
+  ctl.click();
+  assert.strictEqual(ui.drawer.hidden, false); assert.strictEqual(ctl.attrs['aria-expanded'], 'true');
+  assert.strictEqual(ui.drawer.children[0], head); assert.strictEqual(head.className, 'ucd-drawer-head');
+  const grab = head.children.find(c => c.className === 'ucd-grab'); assert.ok(grab); assert.strictEqual(grab.attrs['aria-hidden'], 'true');
+  const close = dom.find('ucd-drawer-close')[0]; assert.strictEqual(close.textContent, 'Close'); assert.strictEqual(close.attrs['aria-label'], 'Close the controls'); assert.ok(head.contains(close));
+  assert.ok(ui.drawer.children.length >= 3 && ui.drawer.children.slice(1).every(c => /ucd-section/.test(c.className)), 'sections follow the header');
+  dom.doc.activeElement = close; close.click();
+  assert.strictEqual(ui.drawer.hidden, true); assert.strictEqual(ctl.attrs['aria-expanded'], 'false'); assert.strictEqual(dom.doc.activeElement, ctl);
+  const other = dom.find('ucd-back')[0]; other.focus();
+  ctl.click(); assert.strictEqual(dom.doc.activeElement, other, 'opening does not move focus');
+  assert.strictEqual(ui.drawer.children[0], head, 'the header is still first');
+  w.display.release();
+  assert.strictEqual(dom.overlay(), null);
+});
+
+test('drawer: a touch swipe down of 50 px on the header closes it; 20 px does not; touches inside the list never close it; a pointer (mouse) drag works and a touch pointer is ignored', async () => {
+  const { w, dom, ui, ctl, head, section } = await drawerWorld();
+  ctl.click();
+  touch(head, 'touchstart', 100); touch(head, 'touchmove', 120); touch(head, 'touchend', 120);
+  assert.strictEqual(ui.drawer.hidden, false, '20 px is not a swipe');
+  touch(head, 'touchstart', 100); touch(head, 'touchmove', 130); touch(head, 'touchmove', 150); touch(head, 'touchend', 150);
+  assert.strictEqual(ui.drawer.hidden, true, 'a 50 px swipe closes'); assert.strictEqual(ctl.attrs['aria-expanded'], 'false'); assert.strictEqual(dom.doc.activeElement, ctl);
+  ctl.click(); assert.strictEqual(ui.drawer.hidden, false);
+  touch(head, 'touchstart', 100); touch(head, 'touchmove', 40); touch(head, 'touchend', 40);
+  assert.strictEqual(ui.drawer.hidden, false, 'an upward swipe does not close');
+  touch(section, 'touchstart', 100); touch(section, 'touchmove', 200); touch(section, 'touchend', 200);
+  section.dispatch('pointerdown', { clientY: 100, pointerType: 'mouse' }); section.dispatch('pointerup', { clientY: 200, pointerType: 'mouse' });
+  assert.strictEqual(ui.drawer.hidden, false, 'touches inside the list scroll and never close it');
+  head.dispatch('pointerdown', { clientY: 100, pointerType: 'touch' }); head.dispatch('pointerup', { clientY: 200, pointerType: 'touch' });
+  assert.strictEqual(ui.drawer.hidden, false, 'a touch pointer does not count twice');
+  head.dispatch('pointerdown', { clientY: 100, pointerType: 'mouse' }); head.dispatch('pointerup', { clientY: 120, pointerType: 'mouse' });
+  assert.strictEqual(ui.drawer.hidden, false, 'a short mouse drag does not close');
+  head.dispatch('pointerdown', { clientY: 100, pointerType: 'mouse' }); head.dispatch('pointerup', { clientY: 150, pointerType: 'mouse' });
+  assert.strictEqual(ui.drawer.hidden, true, 'a mouse drag of 50 px closes');
+  w.display.release();
+});
+
+test('drawer: a tap on the stage closes it when open and does nothing when closed; Escape closes the drawer only, a second Escape hides the view to chat; Controls aria-expanded follows every path', async () => {
+  const { w, dom, ui, ctl } = await drawerWorld();
+  const stage = dom.find('ucd-stage')[0];
+  stage.click(); assert.strictEqual(ui.drawer.hidden, true); assert.strictEqual(ctl.attrs['aria-expanded'], 'false');
+  assert.strictEqual(w.display.info().visible, true, 'a stage tap with the drawer closed does nothing');
+  ctl.click(); assert.strictEqual(ctl.attrs['aria-expanded'], 'true');
+  stage.click(); assert.strictEqual(ui.drawer.hidden, true); assert.strictEqual(ctl.attrs['aria-expanded'], 'false'); assert.strictEqual(dom.doc.activeElement, ctl);
+  ctl.click(); assert.strictEqual(ctl.attrs['aria-expanded'], 'true');
+  ctl.click(); assert.strictEqual(ui.drawer.hidden, true, 'the Controls button toggles it closed'); assert.strictEqual(ctl.attrs['aria-expanded'], 'false'); assert.strictEqual(dom.doc.activeElement, ctl);
+  ctl.click();
+  dom.overlay().dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(ui.drawer.hidden, true); assert.strictEqual(ctl.attrs['aria-expanded'], 'false'); assert.strictEqual(dom.doc.activeElement, ctl);
+  assert.ok(dom.overlay(), 'the view is still visible'); assert.strictEqual(w.display.info().visible, true);
+  dom.overlay().dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(dom.overlay(), null, 'a second Escape hides the view to chat as before'); assert.strictEqual(w.display.info().visible, false);
+  w.display.release();
+});
+
+test('drawer: hang up hides the open drawer without moving focus; the open Controls button has an accent style; Hang up stays in the bar', async () => {
+  const { w, dom, ui, ctl } = await drawerWorld();
+  ctl.click(); const hang = dom.find('ucd-hang')[0]; dom.doc.activeElement = hang;
+  const idx = hang.parentNode.children.indexOf(hang);
+  w.display.hangUp();
+  assert.strictEqual(ui.drawer.hidden, true); assert.strictEqual(dom.doc.activeElement, hang, 'focus is not moved');
+  assert.strictEqual(hang.parentNode.children.indexOf(hang), idx);
+  const css = read('lib/ui-call-display.css');
+  assert.ok(/\.ucd-bar \.ucd-ctl\[aria-expanded="true"\]\s*\{[^}]*background: var\(--accent/.test(css));
+  assert.ok(/\.ucd-drawer-head\s*\{[^}]*position: sticky[^}]*top: 0/.test(css));
 });
 
 test('chooser: a Display select sits first in the view side bar and lists Follow agent default / None / Orb / installed characters', async () => {
@@ -1236,10 +1365,10 @@ test('first frame: the character overlay is in the page but transparent until tw
   assert.ok(o && o.parentNode === w.dom.doc.body, 'in the page at once (laid out, its layers composited)');
   assert.strictEqual(o.attrs['data-ucd-arming'], '', 'but arming: transparent and click-through');
   assert.deepStrictEqual(sized, [true], 'the player was sized once, in the page, before any frame (no ResizeObserver wait)');
-  assert.strictEqual(w.display.ui.drawer.children.length, 0, 'controls are not moved in while arming');
+  assert.strictEqual(w.display.ui.drawer.children.length, 1, 'controls are not moved in while arming (only the drawer header is there)');
   raf.frame(); assert.strictEqual(o.attrs['data-ucd-arming'], '', 'still arming after one frame');
   raf.frame(); assert.strictEqual(o.attrs['data-ucd-arming'], undefined, 'revealed on the second frame');
-  assert.strictEqual(w.display.ui.drawer.children.length, 1, 'the controls move in at the reveal');
+  assert.strictEqual(w.display.ui.drawer.children.length, 2, 'the controls move in at the reveal (after the header)');
   assert.strictEqual(raf.q.length, 0); w.display.release();
   // torn down while arming (back to chat): the frames are cancelled and no mark is left on the reused overlay
   const h = world({ prefs: { choice: 'pack:owl' }, pack: { info: { ready: false, failed: null, drawable: true }, deferred: true } }); const hr = withRaf(h); h.display.start(); await flushP();

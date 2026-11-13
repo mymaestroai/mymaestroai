@@ -12463,6 +12463,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Room check', `<button class="st-test-btn" id="st-voice-room" type="button" onclick="voiceRoomCheckRun()">Room check</button> <span id="st-voice-room-out" class="st-hint" style="margin:0 0 0 8px" aria-live="polite">5 seconds: say a sentence, then stay quiet. It sets the mic level and the interrupt sensitivity.</span>`);
       h += row('Echo guard after replies', `${voiceEchoSelectHtml('st-voice-echo', 'onchange="voiceSettingsSavePrefs()"')} <span class="st-hint" style="margin:0 0 0 8px">${VOICE_ECHO_HINT}</span>`);
       h += row('Bluetooth', `<label style="${CHK}"><input type="checkbox" id="st-voice-keepalive" ${voiceKeepAliveNow() ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Keep Bluetooth awake during calls</label><span class="st-hint" style="margin:0 0 0 8px;flex:1;min-width:0">${VOICE_KEEP_HINT}</span>`);
+      h += row('Interrupt button', `<label style="${CHK}"><input type="checkbox" id="st-voice-interrupt" ${voiceInterruptNow() ? 'checked' : ''} onchange="voiceDispSetInterrupt(null, this.checked)"> Show an Interrupt button</label><span class="st-hint" style="margin:0 0 0 8px;flex:1;min-width:0">${VOICE_INTERRUPT_HINT}</span>`);
       h += row('Car or Bluetooth check', `<button class="st-test-btn" id="st-voice-car" type="button" onclick="voiceCarCheckRun()">Car or Bluetooth check</button> <span id="st-voice-car-out" class="st-hint" style="margin:0 0 0 8px" aria-live="polite">Plays three short sounds and listens for the echo. It sets the echo guard.</span>`);
       h += row('Replies', `<label style="${CHK}"><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
       h += row('Fallback', `<label style="${CHK}"><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use this device's own offline voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
@@ -12682,6 +12683,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
       }
       const cap = voiceById(`vp-captions-${chatId}`); if (cap) cap.checked = !!prefs.captions;
+      const intr = voiceById(`vp-interrupt-${chatId}`); if (intr) intr.checked = prefs.interrupt === true;
       const note = voiceById(`vp-display-note-${chatId}`);
       if (note) note.textContent = CallDisplay.displayNote(CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, packsState: state }));
     }
@@ -12693,6 +12695,20 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceDispSetCaptions(chatId, on) {
       if (typeof CallDisplay === 'undefined') return;
       if (voiceDisp.cur) voiceDisp.cur.setCaptions(on); else CallDisplay.saveDisplayPrefs(localStorage, { captions: !!on });
+    }
+    const VOICE_INTERRUPT_HINT = 'For places where talking over the reply doesn\'t register.';
+    function voiceInterruptNow() { return typeof CallDisplay !== 'undefined' && CallDisplay.loadDisplayPrefs(localStorage).interrupt === true; }
+    // Every open place that shows the option (Settings and each chat's voice panel) follows it.
+    function voiceInterruptPaint() {
+      const on = voiceInterruptNow();
+      const s = voiceById('st-voice-interrupt'); if (s) s.checked = on;
+      for (const e of document.querySelectorAll('.voice-pop [data-vp="interrupt"]')) e.checked = on;
+    }
+    function voiceDispSetInterrupt(chatId, on) {
+      if (typeof CallDisplay === 'undefined') return;
+      if (voiceDisp.cur && typeof voiceDisp.cur.setInterruptButton === 'function') voiceDisp.cur.setInterruptButton(!!on); else CallDisplay.saveDisplayPrefs(localStorage, { interrupt: !!on });
+      voiceInterruptPaint();
+      if (chatId && typeof voiceDispPaintPanel === 'function') voiceDispPaintPanel(chatId);
     }
     const VOICE_CALL_HELP = 'Hands-free works with the page open and the screen on, also through a car\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.';
     // The reply playback context (made the way voicePlayHub makes it): the replies, the call's thinking pulse and the keep-alive all go out through it.
@@ -13156,6 +13172,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <label class="vp-row"><span class="vp-label">Call display</span><select id="${id('display')}" data-vp="display" style="padding:4px"><option value="follow">Follow agent default</option></select></label>
         <div class="vp-display-note" id="${id('display-note')}" aria-live="polite"></div>
         <label class="vp-row"><span class="vp-label">Show captions</span><input type="checkbox" id="${id('captions')}" data-vp="captions"></label>
+        <label class="vp-row"><span class="vp-label">Show an Interrupt button</span><input type="checkbox" id="${id('interrupt')}" data-vp="interrupt"></label>
+        <div class="vp-display-note">For places where talking over the reply doesn't register.</div>
         <label class="vp-row"><span class="vp-label">Thinking volume</span><input type="range" min="0" max="1" step="0.05" id="${id('thinkvol')}" data-vp="thinkvol" value="${voiceThinkingVolNow()}"></label>
         <div class="vp-row"><button type="button" class="st-test-btn" data-vp="room" id="${id('room')}">Room check</button> <span class="st-hint vp-room-out" id="${id('room-out')}" aria-live="polite" style="margin:0"></span></div>
         <label class="vp-row"><span class="vp-label">Echo guard after replies</span>${voiceEchoSelectHtml(id('echo'), 'data-vp="echo"')}</label>
@@ -13192,6 +13210,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const t = e.target, k = t.dataset && t.dataset.vp;
           if (k === 'display') voiceDispSetChoice(chatId, t.value);
           else if (k === 'captions') voiceDispSetCaptions(chatId, t.checked);
+          else if (k === 'interrupt') voiceDispSetInterrupt(chatId, t.checked);
           else if (k === 'think') voiceCtlSet('think', t.checked, true);
           else if (k === 'keep') voiceCtlSet('keep', t.checked, true);
           else if (k === 'echo' || k === 'pause' || k === 'wait' || ['mic', 'sens', 'speed', 'thinkvol'].includes(k)) voiceCtlSet(k, Number(t.value), true);

@@ -6461,6 +6461,7 @@ async function voiceDispPaintPanel() {
   try { packs = await CallDisplay.fetchPacks((...a) => fetch(...a)); } catch { state = 'failed'; }
   for (const sel of sels) if (document.activeElement !== sel) CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
   const cap = $('vp-captions'); if (cap) cap.checked = !!prefs.captions;
+  const intr = $('vp-interrupt'); if (intr) intr.checked = prefs.interrupt === true;
   const note = $('vp-display-note');
   if (note) note.textContent = CallDisplay.displayNote(CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(current), packs, packsState: state }));
 }
@@ -6472,6 +6473,19 @@ function voiceDispSetChoice(v) {
 function voiceDispSetCaptions(on) {
   if (typeof CallDisplay === 'undefined') return;
   if (voiceDisp.cur) voiceDisp.cur.setCaptions(on); else CallDisplay.saveDisplayPrefs(localStorage, { captions: !!on });
+}
+const VOICE_INTERRUPT_HINT = 'For places where talking over the reply doesn\'t register.';
+// The option is shown in the call panel and in the Voice sheet; both follow it.
+function voiceInterruptPaint() {
+  const on = typeof CallDisplay !== 'undefined' && CallDisplay.loadDisplayPrefs(localStorage).interrupt === true;
+  const a = $('vp-interrupt'); if (a) a.checked = on;
+  const b = $('vs-interrupt'); if (b) b.checked = on;
+}
+function voiceDispSetInterrupt(on) {
+  if (typeof CallDisplay === 'undefined') return;
+  if (voiceDisp.cur && typeof voiceDisp.cur.setInterruptButton === 'function') voiceDisp.cur.setInterruptButton(!!on); else CallDisplay.saveDisplayPrefs(localStorage, { interrupt: !!on });
+  voiceInterruptPaint();
+  voiceDispPaintPanel();
 }
 
 function voiceCallPaintState(name) {
@@ -7120,6 +7134,8 @@ function voiceSheet() {
     '<label class="vs-row" for="vs-sens"><span>Interrupt sensitivity</span><b class="vs-sens-val"></b></label>' +
     '<input type="range" id="vs-sens" class="vs-level vs-sens" min="0" max="100" step="1">' +
     '<p class="vs-hint">How easily your voice cuts in while the agent is speaking. Lower it in a noisy room.</p>' +
+    '<label class="vs-check"><input type="checkbox" id="vs-interrupt"> <span>Show an Interrupt button</span></label>' +
+    '<p class="vs-hint">' + VOICE_INTERRUPT_HINT + '</p>' +
     '<label class="vs-row" for="vs-pause"><span>Pause before I&#39;m done</span></label>' +
     '<select id="vs-pause" class="vs-pause vs-btn">' + VOICE_END_PAUSES.map((ms, i) => '<option value="' + ms + '">' + ['Short', 'Normal', 'Long'][i] + '</option>').join('') + '</select>' +
     '<p class="vs-hint">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s. A short pause can cut you off mid-sentence.</p>' +
@@ -7156,6 +7172,7 @@ function voiceSheet() {
   speed.addEventListener('input', () => { sh.querySelector('.vs-speed-val').textContent = voiceSpeedLabel(speed.value); });
   speed.addEventListener('change', () => voicePrefsSave({ voiceSpeed: voiceCleanSpeed(speed.value) }));
   sh.querySelector('.vs-activity').addEventListener('change', (e) => voicePrefsSave({ speakActivity: !!e.target.checked }));
+  sh.querySelector('#vs-interrupt').addEventListener('change', (e) => voiceDispSetInterrupt(!!e.target.checked));
   for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { voicePrefsSave({ mode: e.target.value }); voiceMicPaint(); paintVoiceSheet(); } });
   sh.querySelector('.vs-room').addEventListener('click', voiceRoomRun);
   sh.querySelector('.vs-car').addEventListener('click', voiceCarRun);
@@ -7183,6 +7200,8 @@ function paintVoiceSheet() {
   const speedEl = sh.querySelector('.vs-speed');
   if (document.activeElement !== speedEl) { speedEl.value = String(voiceSpeedNow()); sh.querySelector('.vs-speed-val').textContent = voiceSpeedLabel(voiceSpeedNow()); }
   sh.querySelector('.vs-activity').checked = !!p.speakActivity;
+  const intrEl = sh.querySelector('#vs-interrupt');
+  if (intrEl) intrEl.checked = typeof CallDisplay !== 'undefined' && CallDisplay.loadDisplayPrefs(localStorage).interrupt === true;
   const echoEl = sh.querySelector('.vs-echo');
   if (document.activeElement !== echoEl) echoEl.value = String(p.echoHold);
   sh.querySelector('.vs-keepalive').checked = p.keepAlive !== false;
@@ -7288,6 +7307,7 @@ function voicePanelWire() {
   $('vp-room')?.addEventListener('click', voiceRoomRun);
   $('vp-display')?.addEventListener('change', (e) => voiceDispSetChoice(e.target.value));
   $('vp-captions')?.addEventListener('change', (e) => voiceDispSetCaptions(!!e.target.checked));
+  $('vp-interrupt')?.addEventListener('change', (e) => voiceDispSetInterrupt(!!e.target.checked));
   p.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); voicePanelShow(false); $('voice-settings-btn')?.focus(); } });
   document.addEventListener('click', (e) => { if (voicePanelOpen() && !p.contains(e.target) && !(e.target.closest && e.target.closest('#voice-settings-btn'))) voicePanelShow(false); });
   $('call-again')?.addEventListener('click', () => { voiceEndedBar(false); voiceCallStart(); });

@@ -65,7 +65,7 @@ function desktop(o) {
   const glue = between(app, '    const voiceDisp = {', '    const VOICE_CALL_HELP');
   const bar = between(app, '    function voiceCallBarHtml(', '    function voiceCallShowBar(');
   const retry = between(app, '    function voiceCallRetryMicTap(', '    function voiceCallHideBar(');   // onRetryMic is handed to the display at begin
-  const code = [glue, bar, retry, 'return { voiceDisp, voiceDispBegin, voiceDispEnd, voiceDispSetChoice, voiceDispPaintPanel, voiceCallBarHtml };'].join('\n');
+  const code = [glue, bar, retry, 'return { voiceDisp, voiceDispBegin, voiceDispEnd, voiceDispSetChoice, voiceDispPaintPanel, voiceCallBarHtml, voiceDispSetInterrupt };'].join('\n');
   const api = new Function(...names, code)(...names.map(n => stubs[n]));
   S.call = { state: 'listening', onSpeechStart() {}, onMisfire() {}, callId: 'k1' };
   return { api, doc, storage, orbs, faces, callbar, panelSel: doc.getElementById('vp-display-c1'), barSel: doc.getElementById('vcb-display-c1') };
@@ -149,7 +149,7 @@ function phone(o) {
   };
   const names = Object.keys(stubs);
   const glue = between(mob, 'const voiceDisp = {', 'function voiceCallPaintState(');
-  const code = ['let voiceCall = null;', glue, 'return { voiceDisp, voiceDispBegin, voiceDispEnd, voiceDispSetChoice, voiceDispPaintPanel };'].join('\n');
+  const code = ['let voiceCall = null;', glue, 'return { voiceDisp, voiceDispBegin, voiceDispEnd, voiceDispSetChoice, voiceDispPaintPanel, voiceDispSetInterrupt };'].join('\n');
   const api = new Function(...names, code)(...names.map(n => stubs[n]));
   return { api, doc, storage, orbs, faces, vp: doc.getElementById('vp-display'), cp, vpEl: vp };
 }
@@ -193,4 +193,94 @@ test('phone: #cp-display change is wired to voiceDispSetChoice; the panel is pai
   const ml = between(mob, '      micLost: (on) => {', '      state: (name)');
   assert.ok(ml.indexOf('if (voiceCall !== vc) return;') >= 0 && /if \(typeof voiceDisplayHook === 'function'\) voiceDisplayHook\('micLost', !!on\);/.test(ml), 'guarded by the same call check');
   assert.ok(/id="cp-levels" class="cp-levels">Levels</.test(mobHtml), 'Levels keeps its name');
+});
+
+// ═══════════════ the Interrupt button option (off by default; no Talk button anywhere) ═══════════════
+const HINT = "For places where talking over the reply doesn't register.";
+
+function popHtml() {
+  const stubs = {
+    voicePrefsNow: () => ({ mode: 'handsfree' }), VOICE_CONTINUE_WAITS: [1500, 3000, 5000], voiceContinueWaitNow: () => 3000,
+    voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceMicLevelNow: () => 50, voiceSensNow: () => 50, voiceSpeedNow: () => 1, voiceSpeedLabel: () => '1x',
+    voiceThinkingOnNow: () => true, voiceThinkingVolNow: () => 0.5, voiceEchoSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, VOICE_ECHO_HINT: 'echo', VOICE_KEEP_HINT: 'keep', voiceKeepAliveNow: () => true,
+  };
+  const names = Object.keys(stubs);
+  const src = between(app, '    function voicePopHtml(', '    function voicePopClose(');
+  return new Function(...names, src + '\nreturn voicePopHtml;')(...names.map(n => stubs[n]))('c1');
+}
+
+test('desktop: the voice pop has the Show an Interrupt button checkbox (data-vp="interrupt") with its help line, after captions, and no Talk button text', () => {
+  const html = popHtml();
+  assert.ok(/<label class="vp-row"><span class="vp-label">Show an Interrupt button<\/span><input type="checkbox" id="vp-interrupt-c1" data-vp="interrupt"><\/label>/.test(html), 'the row');
+  assert.ok(html.indexOf('data-vp="captions"') < html.indexOf('data-vp="interrupt"'), 'after captions');
+  assert.ok(html.indexOf(`<div class="vp-display-note">${HINT}</div>`) > html.indexOf('data-vp="interrupt"'), 'the help line follows');
+  assert.ok(!/Talk button/i.test(html));
+  assert.ok(/else if \(k === 'interrupt'\) voiceDispSetInterrupt\(chatId, t\.checked\);/.test(app), 'the change handler');
+});
+
+test('desktop: voiceDispSetInterrupt reaches a running display; with none it saves { interrupt } through the prefs; the panel checkbox follows', async () => {
+  const d = desktop({ prefs: { choice: 'orb' } });
+  const box = d.doc.add('vp-interrupt-c1', null, 'input'), st = d.doc.add('st-voice-interrupt', null, 'input');
+  d.doc.querySelectorAll = () => [];   // the open voice pops (none in this harness)
+  d.api.voiceDispBegin('c1', 'bob'); await tick();
+  const cur = d.api.voiceDisp.cur; assert.ok(cur, 'a display is running');
+  const seen = []; cur.setInterruptButton = (v) => { seen.push(v); };
+  d.api.voiceDispSetInterrupt('c1', true); d.api.voiceDispSetInterrupt('c1', false);
+  assert.deepStrictEqual(seen, [true, false]);
+  d.api.voiceDispEnd(false);
+  d.api.voiceDispSetInterrupt('c1', true); await tick(30);
+  assert.strictEqual(JSON.parse(d.storage.m.get(CD.DISPLAY_STORE_KEY)).interrupt, true);
+  assert.strictEqual(box.checked, true, 'the panel checkbox'); assert.strictEqual(st.checked, true, 'the Settings checkbox');
+  d.api.voiceDispSetInterrupt('c1', false); await tick(30);
+  assert.strictEqual(JSON.parse(d.storage.m.get(CD.DISPLAY_STORE_KEY)).interrupt, false);
+  assert.strictEqual(box.checked, false); assert.strictEqual(st.checked, false);
+});
+
+test('desktop: voiceDispPaintPanel sets the interrupt checkbox from the prefs (off by default)', async () => {
+  const off = desktop(); const b0 = off.doc.add('vp-interrupt-c1', null, 'input'); b0.checked = true;
+  await off.api.voiceDispPaintPanel('c1'); assert.strictEqual(b0.checked, false, 'off by default');
+  const on = desktop({ prefs: { interrupt: true } }); const b1 = on.doc.add('vp-interrupt-c1', null, 'input');
+  await on.api.voiceDispPaintPanel('c1'); assert.strictEqual(b1.checked, true);
+});
+
+test('desktop: Settings Voices has st-voice-interrupt, painted from the display prefs and saved as a display pref (not a voice pref)', () => {
+  assert.ok(/id="st-voice-interrupt" \$\{voiceInterruptNow\(\) \? 'checked' : ''\} onchange="voiceDispSetInterrupt\(null, this\.checked\)"> Show an Interrupt button<\/label>[^`]*\$\{VOICE_INTERRUPT_HINT\}/.test(app));
+  assert.ok(/const VOICE_INTERRUPT_HINT = 'For places where talking over the reply doesn\\'t register\.';/.test(app));
+  assert.ok(/CallDisplay\.loadDisplayPrefs\(localStorage\)\.interrupt === true/.test(app));
+  assert.ok(/for \(const e of document\.querySelectorAll\('\.voice-pop \[data-vp="interrupt"\]'\)\) e\.checked = on;/.test(app), 'every open pop follows');
+  const save = between(app, '    function voiceSettingsSavePrefs() {', '    function voiceTestStop(');
+  assert.ok(!/interrupt(?!Sensitivity)/i.test(save.replace(/interruptSensitivity|interrupt sensitivity/gi, '')), 'not part of the voice prefs');
+  assert.ok(!/Talk button/i.test(app));
+});
+
+test('phone: #voice-panel has #vp-interrupt right after #vp-captions with the help line; the change is wired; the paint sets it; no Talk button text', async () => {
+  const a = mobHtml.indexOf('id="vp-captions"'), b = mobHtml.indexOf('id="vp-interrupt"');
+  assert.ok(a > 0 && b > a, 'after captions');
+  assert.ok(/<label class="vs-check"><input type="checkbox" id="vp-interrupt"> <span>Show an Interrupt button<\/span><\/label>\s*<p class="vs-hint vp-hint">For places where talking over the reply doesn't register\.<\/p>/.test(mobHtml));
+  assert.ok(mobHtml.indexOf('id="vp-think"') > b);
+  assert.ok(/\$\('vp-interrupt'\)\?\.addEventListener\('change', \(e\) => voiceDispSetInterrupt\(!!e\.target\.checked\)\);/.test(mob));
+  assert.ok(!/Talk button/i.test(mob + mobHtml));
+  const off = phone(); const v = off.doc.add('vp-interrupt', null, 'input'); v.checked = true;
+  await off.api.voiceDispPaintPanel(); assert.strictEqual(v.checked, false, 'off by default');
+  const on = phone({ prefs: { interrupt: true } }); const w = on.doc.add('vp-interrupt', null, 'input');
+  await on.api.voiceDispPaintPanel(); assert.strictEqual(w.checked, true);
+});
+
+test('phone: voiceDispSetInterrupt reaches a running display or saves the pref; vp-interrupt and vs-interrupt stay in step', async () => {
+  const p = phone({ prefs: { choice: 'orb' } });
+  const a = p.doc.add('vp-interrupt', null, 'input'), s = p.doc.add('vs-interrupt', null, 'input');
+  p.api.voiceDispSetInterrupt(true); await tick(30);
+  assert.strictEqual(JSON.parse(p.storage.m.get(CD.DISPLAY_STORE_KEY)).interrupt, true);
+  assert.strictEqual(a.checked, true); assert.strictEqual(s.checked, true);
+  const seen = []; p.api.voiceDisp.cur = { setInterruptButton: (v) => { seen.push(v); } };   // a running display
+  p.api.voiceDispSetInterrupt(false); assert.deepStrictEqual(seen, [false]);
+});
+
+test('phone: the Voice sheet has vs-interrupt with the help line, wired to voiceDispSetInterrupt and painted from the display prefs', () => {
+  const sheet = between(mob, 'function voiceSheet() {', 'function paintVoiceSheet() {');
+  assert.ok(/<label class="vs-check"><input type="checkbox" id="vs-interrupt"> <span>Show an Interrupt button<\/span><\/label>' \+\s*'<p class="vs-hint">' \+ VOICE_INTERRUPT_HINT \+ '<\/p>'/.test(sheet));
+  assert.ok(/sh\.querySelector\('#vs-interrupt'\)\.addEventListener\('change', \(e\) => voiceDispSetInterrupt\(!!e\.target\.checked\)\);/.test(sheet));
+  const paint = between(mob, 'function paintVoiceSheet() {', 'function openVoiceSheet() {');
+  assert.ok(/sh\.querySelector\('#vs-interrupt'\)[\s\S]*CallDisplay\.loadDisplayPrefs\(localStorage\)\.interrupt === true/.test(paint));
+  assert.ok(/const VOICE_INTERRUPT_HINT = 'For places where talking over the reply doesn\\'t register\.';/.test(mob));
 });

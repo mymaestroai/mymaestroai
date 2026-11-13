@@ -189,7 +189,7 @@ test('desktop: a mood arrives by the chat stream or the hub event, plays once pe
 });
 
 test('desktop: Talk goes through the controller entry points and a silent microphone is released; the VAD handlers pass through the floor', async () => {
-  const d = desktop({ prefs: { choice: 'orb' } }); d.api.voiceDispBegin('c1', 'bob'); await tick();
+  const d = desktop({ prefs: { choice: 'orb', interrupt: true } }); d.api.voiceDispBegin('c1', 'bob'); await tick();
   const seen = []; const vad = { start: (h) => { seen.push(h); return Promise.resolve(); }, stop() {}, setPlaybackActive() {} };
   const wrapped = d.api.voiceDispVad(vad); const handlers = { onSpeechBegin() { seen.push('begin'); }, onSpeechEnd() { seen.push('end'); }, onMisfire() {}, onSpeechStart() {}, onFrame() {} };
   wrapped.start(handlers);
@@ -319,7 +319,7 @@ test('phone: device speech hooks, captions of the spoken sentence, goodbye and r
 });
 
 test('phone: moods once per turn from the stream or the hub event; facePack only for a shown character; Talk uses the controller entry points', async () => {
-  const p = phone({ prefs: { choice: 'pack:owl' } }); p.api.voiceDispBegin(p.vc); await flushPhone();
+  const p = phone({ prefs: { choice: 'pack:owl', interrupt: true } }); p.api.voiceDispBegin(p.vc); await flushPhone();
   const pl = p.faces[0];
   assert.deepStrictEqual(p.api.voiceFacePackBody(), { facePack: 'owl' });
   p.vc.sendSeq = 1; p.api.voiceCallTurnStart({ agent: 'bob', turnId: 't1', origin: { kind: 'user' } });

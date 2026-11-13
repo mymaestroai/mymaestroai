@@ -23,6 +23,12 @@
 .ucd-drawer { flex: 0 1 auto; max-height: 48vh; max-height: 48dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 12px;
   background: var(--bg-card, #181d24); border-top: 1px solid var(--border, #2a313b); }
 .ucd-drawer[hidden] { display: none; }
+/* the drawer's header stays at the top of the scrolling list: a grab handle (centred) and Close; a swipe down on it closes the drawer */
+.ucd-drawer-head { position: sticky; top: 0; z-index: 1; background: var(--bg-card, #181d24); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; justify-content: space-between; padding: 6px 12px; margin: -8px -12px 6px; touch-action: none; }
+.ucd-grab { grid-column: 2; display: block; width: 40px; height: 5px; border-radius: 3px; background: var(--border, #2a313b); }
+.ucd-drawer-close { grid-column: 3; justify-self: end; font: inherit; font-size: 15px; min-height: 40px; padding: 0 14px; cursor: pointer; border: 1px solid var(--border, #2a313b); border-radius: 12px; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); }
+.ucd-drawer-close:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent, #3d7bff); }
+.ucd-bar .ucd-ctl[aria-expanded="true"] { background: var(--accent, #3d7bff); color: #fff; border-color: transparent; }
 .ucd-section + .ucd-section { margin-top: 10px; }
 .ucd-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim, #98a2b3); margin-bottom: 4px; }
 .ucd-drawer .voice-callbar, .ucd-drawer .voice-pop, .ucd-drawer #call-panel, .ucd-drawer #voice-panel { position: static; display: block; width: auto; max-width: none; max-height: none; overflow: visible; box-shadow: none; margin: 0; }
