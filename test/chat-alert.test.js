@@ -47,7 +47,7 @@ function loadAlertModule() {
   };
   vm.createContext(ctx);
   const code = [
-    slice('async function handleChat(body, res) {', '\nfunction handleAskResponse('),
+    slice('async function handleChat(body, res, ctx) {', '\nfunction handleAskResponse('),
     slice('function handleInterjection(body) {', '\n// ── Exports'),
     slice('function isAgentActive(agentName) {', '\n// ── Detached jobs (run_job)'),
   ].join('\n');
@@ -264,6 +264,23 @@ describe('handleAlert busy path', () => {
 });
 
 describe('handleChat passes a refused turn through', () => {
+  it('forwards trusted context to the stream handler without returning it', async () => {
+    const m = loadAlertModule();
+    const trusted = { userId: 'user-a', service: false, accounts: true };
+    let received;
+    m.ctx.handleChatStream = async (body, res, ctx) => {
+      received = ctx;
+      res.writeHead(200, {});
+      res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: 'hello' } }] }) + '\n\n');
+      res.end();
+    };
+    let response;
+    await m.api.handleChat({ agent: 'sam', message: 'hi', ctx: { userId: 'forged' } }, {
+      writeHead() {}, end(data) { response = JSON.parse(data); }
+    }, trusted);
+    assert.strictEqual(received, trusted);
+    assert.deepEqual(response, { response: 'hello' });
+  });
   function run(api, streamImpl, body = { agent: 'trader', message: 'hi' }) {
     api.ctx.handleChatStream = streamImpl;
     const out = {};
@@ -295,6 +312,167 @@ describe('handleChat passes a refused turn through', () => {
     });
     assert.strictEqual(out.status, 200);
     assert.deepEqual(out.body, { response: 'hello' });
+  });
+});
+
+// ── Alert identity: a monitor alert is a hub-started turn with NO person behind it ──────────────────────────────
+// Runs the REAL default idle route (handleAlert -> real wakeAgent -> handleChatStream stub) and the REAL identity
+// predicates (voiceStripFor / faceMoodFor, plus the trusted-id and turnOrigin lines of handleChatStreamReserved),
+// all sliced from lib/sdk-chat.js. Only the provider-facing handleChatStream is a stub that records what it is given.
+const IDENTITY_LINES = (() => {
+  const a = SRC.indexOf('const trustedUserId = ');
+  const b = SRC.indexOf('const { agent, images,', a);
+  assert.ok(a > 0 && b > a, 'trusted identity lines not found');
+  const o = SRC.indexOf('const turnOrigin = ');
+  const oe = SRC.indexOf('{ kind: \'user\' };', o) + "{ kind: 'user' };".length;
+  assert.ok(o > 0 && oe > o, 'turnOrigin line not found');
+  return { trusted: SRC.slice(a, b), turnOrigin: SRC.slice(o, oe) };
+})();
+
+function loadRealWakeAndIdentity({ caller = { kind: 'user', id: 'user-a' } } = {}) {
+  const m = loadAlertModule();
+  const calls = { onCall: () => true, caller: () => caller };   // a live personal voice call is up with this agent
+  Object.assign(m.ctx, {
+    voiceCall: calls,
+    facePacks: { getPack: () => ({ manifest: { clips: [{ name: 'r', state: 'reaction' }] } }) },
+    consulted_by: null,
+  });
+  vm.runInContext([
+    slice('function wakeAgent(', '\n// A hub-started turn an admin asked for'),
+    slice('function faceMoodFor(', 'function voiceNoteFor('),
+    slice('function voiceNoteFor(', '\n/**\n * One per reply'),
+    `this.identity = (body, ctx) => { ${IDENTITY_LINES.trusted}
+      const { origin, consulted_by } = body; const agent = body.agent;
+      ${IDENTITY_LINES.turnOrigin}
+      return { trustedUserId, trustedService, trustedAccounts, turnOrigin }; };`,
+    'this.real = { wakeAgent, faceMoodFor, voiceStripFor, voiceNoteFor };',
+  ].join('\n'), m.ctx);
+  m.ctx.VOICE_NOTE = 'voice-note'; m.ctx.FACE_MOOD_NOTE = 'mood-note';
+  return m;
+}
+
+// What the strip / mood predicates and the prompt notes say about a turn, exactly as handleChatStreamReserved asks.
+function identityVerdict(m, body, ctx) {
+  const id = m.ctx.identity(body, ctx);
+  const o = { agent: body.agent, turnOrigin: id.turnOrigin, ephemeral: false, tigerTeam: false, consultedBy: null, userId: id.trustedUserId, service: id.trustedService, accounts: id.trustedAccounts };
+  const faceMood = m.ctx.real.faceMoodFor(body, { ...o, home: '/unused' });
+  const strip = m.ctx.real.voiceStripFor(body, o);
+  return { id, faceMood, strip, note: m.ctx.real.voiceNoteFor({ voice: body.voice === true, faceMood }, false) };
+}
+
+describe('alert identity: no trusted person, never a personal live call', () => {
+  const personalCallBody = { agent: 'trader', message: 'hi', voice: true, facePack: 'ada' };
+  const personalCtx = { userId: 'user-a', service: false, accounts: true };
+
+  it('control: the same predicates DO match the signed-in person\'s own live call (the fake call is live)', () => {
+    const m = loadRealWakeAndIdentity();
+    const v = identityVerdict(m, personalCallBody, personalCtx);
+    assert.strictEqual(v.strip, true);
+    assert.strictEqual(v.faceMood, true);
+    assert.match(v.note, /voice-note\n\nmood-note/);
+  });
+
+  it('default idle route: real wakeAgent hands handleChatStream the fixed message, an alert origin and no ctx', async () => {
+    const m = loadRealWakeAndIdentity();
+    const { secret, file } = writeSecret(tmpDir());
+    const seen = [];
+    m.ctx.handleChatStream = async function (body, res) {
+      seen.push({ argc: arguments.length, body, ctx: arguments[2] });
+      res.writeHead(200, {}); res.end();
+    };
+    // No runTurn and no isActive: the real default route and the real isAgentActive (idle).
+    const r = await m.api.handleAlert({ agent: 'trader', id: 'EXIT_EMERGENCY', secret, userId: 'forged', voice: true, ctx: { userId: 'forged' } }, { secretFile: file });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.path, 'turn');
+    assert.strictEqual(seen.length, 1, 'the real wakeAgent reached handleChatStream once');
+    assert.strictEqual(seen[0].argc, 2, 'wakeAgent passes (body, sink) only');
+    assert.strictEqual(seen[0].ctx, undefined, 'no trusted context');
+    const b = seen[0].body;
+    assert.strictEqual(b.agent, 'trader');
+    assert.strictEqual(b.message, m.api.alertMessage('EXIT_EMERGENCY'));
+    assert.deepEqual(b.origin, { kind: 'alert', from: 'monitor', jobId: null, jobName: null });
+    for (const k of ['userId', 'service', 'accounts', 'ctx', 'voice', 'facePack', 'secret', 'id']) assert.ok(!(k in b), `body carries no ${k}`);
+  });
+
+  it('that idle turn matches no personal live voice call: no tag stripping, no mood note', async () => {
+    const m = loadRealWakeAndIdentity();
+    const { secret, file } = writeSecret(tmpDir());
+    let body, ctxArg = 'unset';
+    m.ctx.handleChatStream = async function (b, res) { body = b; ctxArg = arguments[2]; res.writeHead(200, {}); res.end(); };
+    await m.api.handleAlert({ agent: 'trader', id: 'HF_LOW', secret }, { secretFile: file });
+    const v = identityVerdict(m, body, ctxArg);
+    assert.deepEqual(v.id.turnOrigin, { kind: 'alert', from: 'monitor', jobId: null, jobName: null });
+    assert.strictEqual(v.id.trustedUserId, null);
+    assert.strictEqual(v.id.trustedService, false);
+    assert.strictEqual(v.id.trustedAccounts, true);
+    assert.strictEqual(v.strip, false);
+    assert.strictEqual(v.faceMood, false);
+    assert.strictEqual(v.note, '');
+    // Even a body somebody forged to look like a voice call, on the alert's origin and untrusted ctx, stays unmatched,
+    // whoever the live call belongs to (a signed-in person, or a call with no account on an install without accounts).
+    for (const caller of [{ kind: 'user', id: 'user-a' }, { kind: 'none', id: null }]) {
+      const m2 = loadRealWakeAndIdentity({ caller });
+      const forged = { ...body, voice: true, facePack: 'ada' };
+      for (const c of [ctxArg, { userId: 'user-a', accounts: true }]) {
+        const o = { agent: 'trader', turnOrigin: v.id.turnOrigin, ephemeral: false, tigerTeam: false, consultedBy: null, userId: m2.ctx.identity(forged, c).trustedUserId, service: false, accounts: caller.kind === 'none' ? false : true };
+        assert.strictEqual(m2.ctx.real.voiceStripFor(forged, o), false, `alert origin never strips (${caller.kind})`);
+        assert.strictEqual(m2.ctx.real.faceMoodFor(forged, { ...o, home: '/unused' }), false, `alert origin never asks for a mood (${caller.kind})`);
+      }
+    }
+  });
+
+  it('default idle route reports a refused wake (409) as an interjection, still with no trusted id', async () => {
+    const m = loadRealWakeAndIdentity();
+    const { secret, file } = writeSecret(tmpDir());
+    m.ctx.handleChatStream = async (b, res) => { res.writeHead(409, {}); res.end(JSON.stringify({ error: 'busy' })); };
+    const r = await m.api.handleAlert({ agent: 'trader', id: 'CRASH_FAST', secret }, { secretFile: file });
+    assert.strictEqual(r.status, 202);
+    assert.strictEqual(r.body.path, 'interjected');
+    const q = m.ctx.interjectionQueues.get('trader');
+    assert.strictEqual(q.length, 1);
+    assert.strictEqual(q[0].priority, 'emergency');
+  });
+
+  it('busy path: queues the emergency interjection without starting a turn, and the item carries no person, ctx or voice', async () => {
+    const m = loadRealWakeAndIdentity();
+    const { secret, file } = writeSecret(tmpDir());
+    let started = 0;
+    m.ctx.handleChatStream = async () => { started++; };
+    m.ctx.activeResponses.set('trader', {});    // the real isAgentActive sees a running turn
+    const r = await m.api.handleAlert({ agent: 'trader', id: 'LIQ_DISTANCE', secret, userId: 'user-a', voice: true }, { secretFile: file });
+    assert.strictEqual(r.status, 202);
+    assert.strictEqual(r.body.path, 'interjected');
+    assert.strictEqual(started, 0, 'busy: no new turn, so no second handleChatStream');
+    const [item] = m.ctx.interjectionQueues.get('trader');
+    assert.strictEqual(item.priority, 'emergency');
+    assert.strictEqual(item.id, 'LIQ_DISTANCE');
+    assert.strictEqual(item.message, m.api.alertMessage('LIQ_DISTANCE'));
+    for (const k of ['userId', 'service', 'accounts', 'ctx', 'voice', 'origin', 'facePack']) assert.ok(!(k in item), `queued item carries no ${k}`);
+    assert.ok(!JSON.stringify(item).includes('user-a'));
+  });
+
+  it('handleChat called with two arguments forwards an undefined ctx, which resolves to no trusted person', async () => {
+    const m = loadRealWakeAndIdentity();
+    let argc = -1, received = 'unset';
+    m.ctx.handleChatStream = async function (body, res) {
+      argc = arguments.length; received = arguments[2];
+      res.writeHead(200, {}); res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: 'ok' } }] }) + '\n\n'); res.end();
+    };
+    let out;
+    await m.api.handleChat({ agent: 'trader', message: 'hi', voice: true, facePack: 'ada', ctx: { userId: 'user-a' }, userId: 'user-a' }, { writeHead() {}, end(d) { out = JSON.parse(d); } });
+    assert.strictEqual(argc, 3, 'handleChat always forwards its ctx slot');
+    assert.strictEqual(received, undefined, 'never taken from the body');
+    assert.deepEqual(out, { response: 'ok' });
+    const id = m.ctx.identity({ agent: 'trader' }, received);
+    assert.strictEqual(id.trustedUserId, null);
+    assert.strictEqual(id.trustedService, false);
+    assert.strictEqual(id.trustedAccounts, true);
+  });
+
+  it('source guard: the default alert route is wakeAgent(agent, message, null, {kind:"alert"}) with no ctx argument', () => {
+    const h = slice('async function handleAlert(', '\n// ── Exports');
+    assert.match(h, /wakeAgent\(agent, message, null, \{ kind: 'alert', from: 'monitor' \}\)/);
+    assert.ok(!/userId|ctx\b/.test(h.replace(/opts\.[a-zA-Z]+/g, '')), 'handleAlert never reads or passes a user id / ctx');
   });
 });
 

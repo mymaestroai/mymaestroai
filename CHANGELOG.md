@@ -6,7 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
-- **Character calls show their first picture sooner on slow connections.** Your Maestro keeps the greeting available while its clip loads, shortens transitions between different poses, and keeps the beak following speech when speaking clips cannot load.
+- **Character calls show their first picture sooner on slow connections.** Your Maestro keeps the greeting available while its clip loads, shortens transitions between different poses, and keeps the beak following speech when speaking clips cannot load. Temporary track failures get two spaced retries, and goodbye uses an already loaded clip when available.
 
 - **A phone that installed the computer layout as its app now opens the phone layout.** If the app on your phone's home screen was added while the computer layout was showing (for example with "Request Desktop Website" on), it now switches to the phone layout by itself each time it opens, and you stay signed in. In a phone's browser the computer layout stays where you opened it, with a bar offering the phone layout; to keep the computer layout in the app on purpose, open `/?desktop=1` once on that phone (`/?desktop=0` undoes it).
 

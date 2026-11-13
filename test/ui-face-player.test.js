@@ -1438,3 +1438,103 @@ test('all speaking tracks fail over HTTP: with the real poster and the full beak
   // without the pack's decoded poster image (a captured frame alone) ready still rejects, as before
   const w2 = makeWorld({ fetchFail: u => /\/tracks\//.test(u), videoSize: false }); const p2 = w2.make(); await assert.rejects(p2.ready, /speaking track/); p2.destroy();
 });
+
+// ── review follow-ups: no-frame-callback poster release, goodbye prefers a loaded clip, bounded retry of failed speaking tracks ──
+test('no requestVideoFrameCallback: the poster hold ends when the tracked speaking clip commits (the selector commits before the poster release decides)', async () => {
+  const { w, p } = await coldWorld(); w.videos.forEach(v => { v.requestVideoFrameCallback = undefined; v.cancelVideoFrameCallback = undefined; });
+  p.setState('speaking'); await w.settle(300);
+  assert.strictEqual(p.getInfo().coldHold, true, 'set-up: cold hold, the tracked clip is still loading'); assert.strictEqual(p.getInfo().poster, true);
+  const ld = w.videos[1 - p.getInfo().front]; assert.match(ld.clipName, /^speaking-/); const name = ld.clipName;
+  ld.currentSrc = ld.src; ld.readyState = 4; ld.duration = 5; ld.fire('loadeddata'); await w.settle(60);
+  const i = p.getInfo(); assert.strictEqual(i.clip, name, 'the tracked clip is in front');
+  assert.strictEqual(i.poster, false, 'the poster is gone at once, not up to a clip length later'); assert.strictEqual(posterShown(w).style.display, 'none');
+  assert.strictEqual(i.coldHold, false, 'the MASTER-position beak is dropped, the beak follows the clip track');
+  p.destroy();
+});
+test('goodbye: a LOADED clip of the other pose beats waiting for an unloaded clip of the on-screen pose (pose jump accepted)', async () => {
+  const clips = speakPack().filter(c => c.name !== 'idle-a1').concat([goodbyeB('reaction-goodbye-b')]);
+  const w = makeWorld({ manifest: packManifest(clips) }); const p = w.make(); await p.ready; await w.settle(100);
+  for (let i = 0; i < 12 && p.getInfo().clip !== 'idle-rest'; i++) { w.front(p).end(); await w.settle(100); }
+  assert.strictEqual(p.getInfo().clip, 'idle-rest', 'set-up: pose B rest'); w.front(p).currentTime = 1;
+  assert.strictEqual(p.react('goodbye'), true); await w.settle(150); assert.strictEqual(p.getInfo().clip, 'reaction-goodbye-b', 'set-up: the B goodbye played and is loaded');
+  w.front(p).end(); await w.settle(24);   // the next clip is in front (pose A); the goodbye video still sits loaded in the hidden slot (before the plan-ahead reload)
+  const front = p.getInfo().clip; assert.ok(!/^reaction/.test(front), 'set-up: ' + front); assert.strictEqual(p.getInfo().pose === 'A' || /^idle-up$/.test(front), true);
+  assert.ok(w.videos.some(v => v.clipName === 'reaction-goodbye-b' && v.readyState === 4), 'set-up: the B goodbye is still loaded in the hidden video');
+  w.hold.add('reaction-goodbye-1');   // the on-screen-pose (A-start) goodbye would have to load: not yet there
+  const n = p.getInfo().log.length, t0 = w.now; assert.strictEqual(p.react('goodbye'), true); await w.settle(100);
+  const i = p.getInfo(); assert.strictEqual(i.clip, 'reaction-goodbye-b', 'the loaded goodbye plays at once: ' + i.clip); assert.strictEqual(i.log.length, n + 1); assert.ok(w.now - t0 <= 150);
+  p.destroy();
+});
+test('goodbye: with nothing loaded the on-screen pose family is chosen (and waited for), as before', async () => {
+  const r = await goodbyeCut('poseB-rest', 'reaction-goodbye-b', (f) => { f().currentTime = 1; });
+  assert.strictEqual(r.info.clip, 'reaction-goodbye-b'); r.p.destroy();   // nothing loaded: the matching pose group, waited for, as before
+});
+// the fake network: every /tracks/ request answers per `mode` (a function of the url and the attempt number)
+function trackNet(w, mode) {
+  const orig = w.fetch; const hits = {};
+  w.fetch = async (u) => { if (/\/tracks\//.test(u)) { hits[u] = (hits[u] || 0) + 1; w.fetched.push(u); const m = mode(u, hits[u]); if (m === 'ok') return { ok: true, json: async () => trackFor() }; if (m === 'throw') throw new Error('network'); return { ok: false, status: m }; } return orig(u); };
+  return hits;
+}
+const sp1 = (hits) => hits['/api/faces/owl/tracks/speaking-1.json'] || 0;
+async function runFor(w, ms) { for (let k = 0; k < ms; k += 250) await w.settle(250); }
+test('transient track failures are retried after 5 s, then 20 s, then never again (no tight loop, no endless polling)', async () => {
+  for (const kind of [503, 'throw', 429]) {
+    const w = makeWorld({ manifest: posterManifest() }); const hits = trackNet(w, () => kind); const p = w.make(); await p.ready; const t0 = w.now;
+    assert.strictEqual(sp1(hits), 1, kind + ': the boot request'); assert.match(p.getInfo().degraded, /speaking track/);
+    await runFor(w, 3500); assert.strictEqual(sp1(hits), 1, 'no retry before 5 s');
+    await runFor(w, 3000); assert.strictEqual(sp1(hits), 2, 'first retry at ~5 s'); assert.ok(w.now - t0 >= 5000);
+    await runFor(w, 14000); assert.strictEqual(sp1(hits), 2, 'the second retry waits ~20 s after the first');
+    await runFor(w, 8000); assert.strictEqual(sp1(hits), 3, 'second retry at ~25 s'); 
+    await runFor(w, 90000); assert.strictEqual(sp1(hits), 3, 'then it stops for good');
+    assert.strictEqual(p.getInfo().trackRetries, 0); assert.strictEqual(p.getInfo().tracks, 0);
+    p.destroy();
+  }
+});
+test('a track that loads on a retry clears degraded and speech uses the tracked clip (no poster hold) from then on', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); let up = false; const hits = trackNet(w, () => (up ? 'ok' : 503)); const p = w.make(); await p.ready;
+  assert.match(p.getInfo().degraded, /speaking track/); p.setState('speaking'); await w.settle(300); assert.strictEqual(p.getInfo().coldHold, true, 'before the retry: the hold');
+  up = true; await runFor(w, 6000);
+  let i = p.getInfo(); assert.ok(i.tracks > 0, 'a retried track arrived'); assert.strictEqual(i.degraded, null); assert.ok(sp1(hits) >= 2);
+  await w.settle(400); i = p.getInfo(); assert.match(i.clip, /^speaking-/, 'the tracked clip now plays: ' + i.clip); p.setState('listening'); await w.settle(700);
+  p.destroy(); assert.strictEqual(w.timers.filter(x => !x.tag).length, 0);
+});
+test('404 / 410 (the file is absent) and an unusable body are final: no retry at all; a transient failure beside them still retries', async () => {
+  for (const kind of [404, 410]) {
+    const w = makeWorld({ manifest: posterManifest() }); const hits = trackNet(w, () => kind); const p = w.make(); await p.ready; await runFor(w, 60000);
+    assert.strictEqual(sp1(hits), 1, kind + ': one request, never retried'); assert.ok(p.getInfo().trackGone.indexOf('speaking-1') >= 0); assert.strictEqual(p.getInfo().trackRetries, 0); p.destroy();
+  }
+  const w = makeWorld({ manifest: posterManifest() }); const hits = trackNet(w, u => (/speaking-1/.test(u) ? 503 : 404)); const p = w.make(); await p.ready; await runFor(w, 60000);
+  assert.strictEqual(sp1(hits), 3, 'the transient one retried twice'); assert.strictEqual(hits['/api/faces/owl/tracks/speaking-2.json'], 1, 'the absent one not at all'); p.destroy();
+  const w2 = makeWorld({ manifest: posterManifest() }); let bodies = 0; const orig = w2.fetch;
+  w2.fetch = async (u) => { if (/\/tracks\/speaking-1/.test(u)) { bodies++; return { ok: true, json: async () => ({ nonsense: true }) }; } return orig(u); };
+  const p2 = w2.make(); await p2.ready; await runFor(w2, 60000); assert.strictEqual(bodies, 1, 'an unusable track body is not retried'); p2.destroy();
+});
+test('packRemoved() stops new clip and track requests even when the warm queues are already built with many tracks and clips queued', async () => {
+  const clips = packClips(); for (let i = 0; i < 40; i++) clips.push(clip('extra-' + i, 'idle', { family: 'f' + i }));
+  const run = async (remove) => {
+    const w = makeWorld({ manifest: packManifest(clips) }); const hits = trackNet(w, () => 'ok');
+    const p = w.make({ warmConcurrency: 1 }); await p.ready; await w.settle(60);   // the warm queues are built and started, work still queued
+    const mid = w.fetched.length; if (remove) { assert.strictEqual(p.packRemoved(), true); }
+    const at = w.fetched.length, trackHitsAt = Object.values(hits).reduce((a, b) => a + b, 0);
+    await runFor(w, 60000);
+    const out = { mid, at, after: w.fetched.length, trackHitsAt, trackHitsAfter: Object.values(hits).reduce((a, b) => a + b, 0), tracks: p.getInfo().tracks }; p.destroy(); return out;
+  };
+  const ctl = await run(false); assert.ok(ctl.after > ctl.at, 'control: without removal the queues keep fetching (' + ctl.at + ' -> ' + ctl.after + ')');
+  const r = await run(true);
+  assert.strictEqual(r.after, r.at, 'no clip or track request after packRemoved(): ' + r.at + ' -> ' + r.after);
+  assert.strictEqual(r.trackHitsAfter, r.trackHitsAt, 'no track request after packRemoved()');
+});
+test('loadTrack never fetches once the player is destroyed or the pack removed (queued warm tracks included)', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); const hits = trackNet(w, () => 404); const p = w.make(); await p.ready; await w.settle(200);
+  const gone = Object.keys(hits).reduce((a, b) => a + hits[b], 0); await runFor(w, 60000);
+  assert.strictEqual(Object.keys(hits).reduce((a, b) => a + hits[b], 0), gone, 'a track known absent (404) is never requested again'); p.destroy();
+});
+test('packRemoved() stops pending and future track retries and clip revival; destroy() cancels the retry timers; neither leaves a timer behind', async () => {
+  const w = makeWorld({ manifest: posterManifest() }); const hits = trackNet(w, () => 503); const p = w.make(); await p.ready;
+  assert.ok(p.getInfo().trackRetries > 0, 'a retry is pending'); assert.strictEqual(p.packRemoved(), true); assert.strictEqual(p.packRemoved(), false, 'once');
+  assert.strictEqual(p.getInfo().trackRetries, 0); assert.strictEqual(p.getInfo().packRemoved, true); await runFor(w, 60000); assert.strictEqual(sp1(hits), 1, 'no retry after the pack was removed'); p.destroy();
+  assert.strictEqual(p.packRemoved(), false, 'destroyed');
+  const w2 = makeWorld({ manifest: posterManifest() }); const h2 = trackNet(w2, () => 503); const p2 = w2.make(); await p2.ready; await w2.settle(100);
+  assert.ok(p2.getInfo().trackRetries > 0); p2.destroy(); assert.strictEqual(w2.timers.filter(x => !x.tag).length, 0, 'destroy cleared every timer, the retries included');
+  const before = sp1(h2); await runFor(w2, 60000); assert.strictEqual(sp1(h2), before, 'nothing fetched after destroy');
+});

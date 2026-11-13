@@ -1333,14 +1333,15 @@ async function handleHttpRequest(req, res) {
       // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       // Identity comes only from the authenticated session (req.hubUser), never from the body.
-      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null });
+      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers() });
     }
 
     if (pathname === '/api/chat' && req.method === 'POST') {
       const body = stripHubOnlyChatFields(JSON.parse(await readBody(req)), req);
       // The owner's own message: a signed-in admin's browser session (never an API token, the hub itself or legacy credentials).
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
-      return handleChat(body, res);
+      // Same trusted identity as the stream route (never from the body), so the voice call match works here too.
+      return handleChat(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers() });
     }
 
     // Stop button: a browser disconnect no longer ends a turn, so stopping is explicit.
