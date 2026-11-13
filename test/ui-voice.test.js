@@ -195,7 +195,7 @@ test('meter: -60 dB is 0, 0 dB is 100, clamped', () => {
 
 test('prefs: defaults, merge, bad values and bad JSON', () => {
   assert.strictEqual(V.VOICE_STORE_KEY, 'hub-voice');
-  const defaults = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5 };   // voice fixes round 2: wait for more, thinking sound
+  const defaults = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true };   // voice fixes round 2: wait for more, thinking sound; Bluetooth / car: echo guard, keep-alive
   assert.deepStrictEqual(voiceLoadPrefs(memStore()), defaults);
   assert.deepStrictEqual(voiceLoadPrefs(memStore({ 'hub-voice': '{not json' })), defaults);
   assert.deepStrictEqual(voiceLoadPrefs(memStore({ 'hub-voice': 'null' })), defaults);
