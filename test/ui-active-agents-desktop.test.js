@@ -90,7 +90,9 @@ test('page code does not redeclare the helpers', () => {
 test('unchanged rows are refreshed in place, done marks included (a row under the pointer is never replaced mid-click); any movement holds again', () => {
   const p = app.slice(app.indexOf('function paintActiveSection('), app.indexOf('function activeWireHold('));
   assert.ok(/if \(membersChanged \|\| !items\) \{[\s\S]*items\.replaceChildren/.test(p), 'rebuild only when rows join, leave or move');
-  assert.ok(/activeState\.rows\.forEach\(\(row, i\) => \{\s*const copy = items\.children\[i\];\s*if \(copy\) activeDress\(copy, row,/.test(p), 'otherwise in place');
+  assert.ok(/const byName = new Map\(\[\.\.\.items\.children\]\.map\(c => \[c\.dataset\.agent, c\]\)\);[\s\S]*if \(copy\) activeDress\(copy, row,/.test(p), 'otherwise in place, matched by agent');
+  const d = app.slice(app.indexOf('function activeDress('), app.indexOf('function activeMakeCopy('));
+  assert.ok(d.includes("dd.className = 'agent-status live-idle'") && d.includes("dd.className = 'agent-status live-busy'"), 'the dot agrees with the line');
   const h = app.slice(app.indexOf('function activeWireHold('), app.indexOf('function activeWireHold(') + 900);
   assert.ok(/'mousemove', \(\) => \{ activeHeld = true; restart\(\); \}/.test(h));
 });

@@ -102,7 +102,7 @@ function renderEnv(over) {
     activeInitial: () => ({ rows: [] }), activeBusyFrom: (l, s, v) => { env.calls.push(['busyFrom', l, s, v]); return {}; },
     activeStep: (st, inp) => { env.calls.push(['step', inp]); return o.state || { rows: [] }; }, activeTitle: (s) => 'Active ' + s.rows.length,
     activeTopOn: () => true, screen: 'agents', matchMedia: () => ({ matches: false }), setInterval: () => 1, clearInterval() {},
-    activeHeld: false, activeLastH: 0, activeLastCount: 0, activeTicker: null, calls: [], localStorage: {},
+    activeHeld: false, activeMissed: false, activeLastH: 0, activeLastCount: 0, activeTicker: null, calls: [], localStorage: {},
   };
   const names = Object.keys(env).filter((n) => n !== 'calls');
   const src = ROW() + '\nlet activeState = activeInitial();\nfunction activeWireHold() {}\n' + slice('function activeBusyNow()', '// The finger left') + RENDER();
@@ -157,7 +157,8 @@ test('the hold: touch listeners on agents-list, passive, 2000 ms', () => {
   assert.ok(/touchstart', \(\) => \{ if \(!activeTopOn\(\)\) return; activeHeld = true;/.test(body), 'off switch: no hold, no redraw');
   assert.ok(/'touchend', activeRelease/.test(body) && /'touchcancel', activeRelease/.test(body));
   const rel = slice('function activeRelease()', 'function activeWireHold(');
-  assert.ok(/if \(!activeMembersChanged\(activeState, next\)\) return;/.test(rel), 'no redraw unless rows join or leave');
+  assert.ok(/if \(!activeMissed && !activeMembersChanged\(activeState, next\)\) return;/.test(rel), 'no redraw unless rows join or leave or one was skipped');
+  assert.ok(/if \(activeHeld && list && list\.firstChild\) \{ activeMissed = true; return; \}/.test(RENDER()), 'no redraw from any source while a finger is on the list');
   assert.ok(/setTimeout\(\(\) => \{ if \(!activeHeld && screen === 'agents'\) renderAgents\(\); \}, 400\)/.test(rel), 'the redraw waits until the tap has been delivered');
   assert.ok(!/activeHeld = false;\s*if \(screen === 'agents'\) renderAgents\(\);/.test(rel), 'never a redraw inside touchend');
   assert.ok(RENDER().includes('activeWireHold(list)'));
@@ -230,5 +231,20 @@ test('an Active row whose agent works only through temporary workers reads as wo
 
 test('the linger ticker stops when the Agents screen is left', () => {
   const body = RENDER();
-  assert.ok(/if \(screen !== 'agents' \|\| !activeState\.rows\.some\(r => r\.doneAt != null\)\) \{ clearInterval\(activeTicker\); activeTicker = null; return; \}/.test(body));
+  assert.ok(/if \(screen !== 'agents' \|\| !agents\.length \|\| !activeState\.rows\.some\(r => r\.doneAt != null\)\) \{ clearInterval\(activeTicker\); activeTicker = null; return; \}/.test(body));
+});
+
+test('renderAgents does nothing while a finger is on a drawn list, and draws normally otherwise', () => {
+  const held = renderEnv({ agents: [{ name: 'a', model: 'm' }] });
+  const src = ROW() + '\nlet activeState = activeInitial();\nfunction activeWireHold() {}\n' + slice('function activeBusyNow()', '// The finger left') + RENDER();
+  const names = Object.keys(held.env).filter((n) => n !== 'calls' && n !== 'activeHeld' && n !== 'activeMissed');
+  const list = { innerHTML: 'old rows', firstChild: {}, querySelector: () => null, addEventListener() {} };
+  const env = { ...held.env, $: () => list };
+  const fn = new Function(...names, 'activeHeld', 'activeMissed', 'env', src + '\nreturn { renderAgents, missed: () => activeMissed };')(...names.map((n) => env[n]), true, false, env);
+  fn.renderAgents();
+  assert.strictEqual(list.innerHTML, 'old rows', 'the touched rows stay in place');
+  assert.strictEqual(fn.missed(), true, 'the skipped redraw is remembered for the release');
+  const free = renderEnv({ agents: [{ name: 'a', model: 'm' }] });
+  free.fn.renderAgents();
+  assert.ok(free.list.innerHTML.includes('data-agent="a"'));
 });

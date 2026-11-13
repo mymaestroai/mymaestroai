@@ -6542,14 +6542,23 @@
         if (!line) { line = document.createElement('span'); line.className = 'agent-busy-line'; (copy.querySelector('.agent-info') || copy).appendChild(line); }
         return line;
       };
+      const dd = copy.querySelector('.agent-status');
       copy.classList.toggle('active-done', row.doneAt != null);
-      if (row.doneAt != null) { copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done'; return; }
+      if (row.doneAt != null) {
+        copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done';
+        if (dd) { dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done'; }
+        return;
+      }
       const src = orig && orig.querySelector('.agent-busy-line');
+      const sd = orig && orig.querySelector('.agent-status');
       copy.classList.add('is-busy');
-      if (src) { ensureLine().className = src.className; line.textContent = src.textContent; }
-      else { ensureLine().className = 'agent-busy-line'; line.textContent = '\u23F3 working'; }
-      const sd = orig && orig.querySelector('.agent-status'), dd = copy.querySelector('.agent-status');
-      if (sd && dd) { dd.className = sd.className; dd.textContent = sd.textContent; dd.title = sd.title; }
+      if (src) {
+        ensureLine().className = src.className; line.textContent = src.textContent;
+        if (sd && dd) { dd.className = sd.className; dd.textContent = sd.textContent; dd.title = sd.title; }
+      } else {   // working only through its temporary workers
+        ensureLine().className = 'agent-busy-line'; line.textContent = '\u23F3 working';
+        if (dd) { dd.className = 'agent-status live-busy'; dd.textContent = ''; dd.title = 'Working with helpers'; }
+      }
     }
     function activeMakeCopy(row) {
       const orig = document.getElementById('agent-btn-' + row.name);
@@ -6606,10 +6615,11 @@
       }
       // Same rows in the same order: update each copy in place (status line, dot, done mark), so a row under the
       // pointer is never replaced, even when its agent finishes mid-click.
-      activeState.rows.forEach((row, i) => {
-        const copy = items.children[i];
+      const byName = new Map([...items.children].map(c => [c.dataset.agent, c]));
+      for (const row of activeState.rows) {
+        const copy = byName.get(row.name);
         if (copy) activeDress(copy, row, document.getElementById('agent-btn-' + row.name));
-      });
+      }
     }
     function activeWireHold() {
       if (activeHoldWired) return;

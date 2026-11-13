@@ -1687,6 +1687,7 @@ let activeHoldTimer = null;
 let activeTicker = null;
 let activeLastH = 0;
 let activeLastCount = 0;
+let activeMissed = false;   // a redraw skipped while a finger was on the list; done after release
 let activeHoldWired = false;
 function activeTopOn() {
   try { return localStorage.getItem('hub-active-top') !== 'off'; } catch { return true; }
@@ -1712,7 +1713,7 @@ function activeRelease() {
   if (!activeHeld) return;
   activeHeld = false;
   const next = activeStep(activeState, { busy: activeBusyNow(), now: Date.now(), held: false, enabled: activeTopOn() });
-  if (!activeMembersChanged(activeState, next)) return;
+  if (!activeMissed && !activeMembersChanged(activeState, next)) return;
   setTimeout(() => { if (!activeHeld && screen === 'agents') renderAgents(); }, 400);
 }
 function activeWireHold(list) {
@@ -1728,6 +1729,10 @@ function activeWireHold(list) {
 
 function renderAgents() {
   const list = $('agents-list');
+  // While a finger is on the list (switch on), no redraw from any source (status events, the linger ticker): it would
+  // replace the touched row before its click. The redraw happens after release (activeRelease).
+  if (activeHeld && list && list.firstChild) { activeMissed = true; return; }
+  activeMissed = false;
   renderWorkingChip();
   if (!agents.length) { list.innerHTML = '<div class="empty">No agents found.</div>'; return; }
   activeWireHold(list);
@@ -1768,7 +1773,7 @@ function renderAgents() {
   if (!activeTicker && activeState.rows.some(r => r.doneAt != null)) {
     activeTicker = setInterval(() => {
       // stops when nothing lingers or this screen is left (renderAgents steps the state again on the way back)
-      if (screen !== 'agents' || !activeState.rows.some(r => r.doneAt != null)) { clearInterval(activeTicker); activeTicker = null; return; }
+      if (screen !== 'agents' || !agents.length || !activeState.rows.some(r => r.doneAt != null)) { clearInterval(activeTicker); activeTicker = null; return; }
       renderAgents();
     }, 1000);
   }
