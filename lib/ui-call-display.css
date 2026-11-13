@@ -3,8 +3,9 @@
   background: var(--bg, #101418); color: var(--text, #e8ecf1); font-family: inherit;
   padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0); }
 .ucd-overlay[hidden] { display: none; }
-/* arming (ui-call-display.js present): in the page and laid out, not yet seen or touched; revealed two animation frames later. will-change keeps the
-   overlay its own composited layer before and after the reveal, so the browser paints it while transparent and does not re-layer it at the reveal */
+/* arming (ui-call-display.js present): in the page and laid out, not yet seen or touched; revealed after two animation frames. will-change is the
+   opacity hint, kept on the overlay before and after the reveal (a hint only, no guarantee of painting while transparent); the Orb's overlay carries
+   it too, a small cost with no visible change */
 .ucd-overlay { will-change: opacity; }
 .ucd-overlay[data-ucd-arming] { opacity: 0 !important; pointer-events: none !important; }
 .ucd-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--ucd-bg, #0b0e12); }
