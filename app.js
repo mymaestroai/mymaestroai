@@ -5482,7 +5482,7 @@
       const bar = document.createElement('div');
       bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#14171F;border-bottom:1px solid #222632;color:#F3F4F6;font-size:13px';
       bar.innerHTML = '<span><span style="color:#C3C2B7">This is the computer layout.</span> <a href="/mobile" style="color:#5A93FF;text-decoration:none">Open the phone layout</a></span><button aria-label="Dismiss" style="background:none;border:0;color:#9CA3AF;font-size:16px;padding:4px 8px">\u2715</button>';
-      bar.querySelector('button').addEventListener('click', () => { localStorage.setItem('hub-mobile-banner', 'off'); bar.remove(); });
+      bar.querySelector('button').addEventListener('click', () => { try { localStorage.setItem('hub-mobile-banner', 'off'); } catch (e) { /* storage blocked: close it for now */ } bar.remove(); });
       document.body.appendChild(bar);
     }
 

@@ -88,6 +88,10 @@ test('phoneLayoutTarget', () => {
   assert.strictEqual(L.phoneLayoutTarget('', '#x'), '/mobile#x');
   assert.strictEqual(L.phoneLayoutTarget('?desktop=0', ''), '/mobile');
   assert.strictEqual(L.phoneLayoutTarget('?agent=sam&desktop=0', '#x'), '/mobile?agent=sam#x');
+  // A notification for an app installed from "/" opens "/?agent=<name>"; the phone page's chat address is "#chat=<name>".
+  assert.strictEqual(L.phoneLayoutTarget('?agent=sam', ''), '/mobile#chat=sam');
+  assert.strictEqual(L.phoneLayoutTarget('?agent=patient%20a&update=1', ''), '/mobile?update=1#chat=patient%20a');
+  assert.strictEqual(L.phoneLayoutTarget('?wallet=unlock', ''), '/mobile?wallet=unlock');
   assert.strictEqual(L.phoneLayoutTarget('?a=1&desktop=1&b=2', ''), '/mobile?a=1&b=2');
 });
 
@@ -205,6 +209,8 @@ test('runner: a location.replace that throws restores the page and does not thro
   assert.doesNotThrow(() => L.startPhoneLayout(win));
   assert.strictEqual(replaceCalls.length, 1);
   assert.strictEqual(win.document.documentElement.style.visibility, '');
+  assert.strictEqual(win.hubPhoneLayout.moving, false, 'not moving after all');
+  assert.strictEqual(win.hubPhoneLayout.offer, true, 'so the bar offers the phone layout');
 });
 
 test('runner: a desktop computer does nothing', () => {
@@ -255,6 +261,7 @@ test('wiring: mobile page links to the desktop with ?desktop=once and never send
 test('wiring: the desktop banner and the help text', () => {
   const app = read('app.js');
   assert.ok(app.includes('This is the computer layout.'));
+  assert.ok(app.includes("try { localStorage.setItem('hub-mobile-banner', 'off'); }"), 'the bar closes even when storage is blocked');
   assert.ok(app.includes('Open the phone layout'));
   assert.ok(app.includes('window.hubPhoneLayout'));
   assert.ok(!app.includes('Phone? Try the mobile view'));
