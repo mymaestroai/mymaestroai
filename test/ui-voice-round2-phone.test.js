@@ -265,6 +265,20 @@ test('thinking sound adapter: an older lib without voiceCreateThinkingSound, or 
   assert.match(src, /typeof voiceCreateThinkingSound !== 'function'/);
 });
 
+test('thinking sound: the AudioContext is made and resumed in the tap that starts the call (iOS), before any await, and closed in teardown', () => {
+  const start = sliceBetween('function voiceCallStart()', 'function voiceCallWire()');
+  assert.ok(start.indexOf('voiceThinkingCtxMake(vc)') > 0 && start.indexOf('voiceThinkingCtxMake(vc)') < start.indexOf('vc.call.start()'), 'made in the start path before call.start');
+  const src = sliceBetween('function voiceThinkingClose(vc)', 'function voiceCallApplyPrefs()');
+  const log = [];
+  class AC { constructor() { log.push('ctx.new'); this.state = 'suspended'; } close() { log.push('ctx.close'); return Promise.resolve(); } resume() { log.push('ctx.resume'); return Promise.resolve(); } }
+  const vc = { call: {}, vad: {}, thinkSnd: null, thinkCtx: null, thinkOn: false };
+  const f = new Function('state', 'window', 'voicePrefsNow', 'voiceCreateThinkingSound', src.replace(/\bvoiceCall\b/g, 'state.voiceCall') + '\nreturn { voiceThinkingCtxMake, voiceThinkingClose };')({ voiceCall: vc }, { AudioContext: AC }, () => ({}), () => ({}));
+  f.voiceThinkingCtxMake(vc);
+  assert.deepStrictEqual(log, ['ctx.new', 'ctx.resume']); assert.ok(vc.thinkCtx);
+  f.voiceThinkingCtxMake(vc); assert.strictEqual(log.length, 2, 'kept for the call, not made twice');
+  f.voiceThinkingClose(vc); assert.deepStrictEqual(log.slice(2), ['ctx.close']); assert.strictEqual(vc.thinkCtx, null);
+});
+
 test('settings applied live: voiceCallApplyPrefs reaches the VAD, call.setPrefs() and the sound volume; an older controller is tolerated (run)', () => {
   const src = sliceBetween('function voiceCallApplyPrefs()', 'function voiceCallDeps(vc)');
   const log = [];

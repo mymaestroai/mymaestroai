@@ -47,10 +47,10 @@ test('css: chip, button, panel and the left-the-app bar exist; no U+FE0F or zero
 
 test('leaving the app: visibilitychange keeps the call on a hidden tab; pagehide and freeze release; pageshow shows the note', () => {
   const w = wiring();
-  assert.match(w, /document\.addEventListener\('pagehide', \(\) => \{ voiceCallRelease\('pagehide'\); \}\)/);
+  assert.match(w, /window\.addEventListener\('pagehide', \(\) => \{ voiceCallRelease\('pagehide'\); \}\)/);
   assert.match(w, /document\.addEventListener\('freeze', \(\) => \{ voiceCallRelease\('freeze'\); \}\)/);
-  assert.match(w, /document\.addEventListener\('pageshow', \(\) => voiceLeftNoticeShow\(\)\)/);
-  const vis = between("document.addEventListener('visibilitychange', () => {   // a hidden tab keeps", "document.addEventListener('pageshow'");
+  assert.match(w, /window\.addEventListener\('pageshow', \(\) => voiceLeftNoticeShow\(\)\)/);
+  const vis = between("document.addEventListener('visibilitychange', () => {   // a hidden tab keeps", "window.addEventListener('pageshow'");
   assert.ok(!/voiceCallRelease/.test(vis), 'a hidden desktop tab keeps the call');
   assert.ok(w.includes('The call ended when you left the app') && w.includes('Call again'));
 });
@@ -72,7 +72,7 @@ function makeEnv(opts = {}) {
   const log = { saved: [], vad: [], thinking: [], released: [], hung: 0, setPrefs: 0, vadStop: 0, toasts: [], created: [] };
   const els = {};
   const get = (id) => (els[id] || (els[id] = el(id)));
-  const docL = {};
+  const docL = {}, winL = {};
   const area = { parentNode: { insertBefore(bar) { log.bar = bar; els[bar.id] = bar; } } };
   get('input-c1').closest = () => area;
   let prefs = Object.assign({ micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', endPause: 1200, voiceSpeed: 1 }, opts.prefs || {});
@@ -112,7 +112,7 @@ function makeEnv(opts = {}) {
     voiceRoomCheck() {}, voiceCallMedian: () => null, voiceOpenMic: async () => ({ close() {} }), voiceLevelDb: () => -100, voiceMicError: (e) => String(e),
     appendMessage() {}, appendSystemNotice() {}, stopAgentTurn() {}, sendSoloMessage: async () => {}, closeQuestion() {}, hubOriginLabel: () => '',
     setTimeout, clearTimeout, Date,
-    window: { AudioContext: FakeCtx },
+    window: { AudioContext: FakeCtx, addEventListener(t, f) { winL[t] = f; } },
   };
   if (opts.lib !== false) {
     stubs.voiceCreateThinkingSound = ({ ctx, volume }) => {
@@ -124,7 +124,7 @@ function makeEnv(opts = {}) {
   const names = Object.keys(stubs);
   const src = wiring() + '\nreturn { voiceCallS, voiceCallStart, voiceCallRelease, voiceCallHangUp, voiceCallThinking, voiceCtlSet, voicePopHtml, voiceLeftNoticeShow };';
   const api = new Function(...names, src)(...names.map((n) => stubs[n]));
-  return { api, log, els, get, docL, stubs, vad, call, setHidden: (h) => { stubs.document.hidden = h; }, getPrefs: () => prefs };
+  return { api, log, els, get, docL, winL, stubs, vad, call, setHidden: (h) => { stubs.document.hidden = h; }, getPrefs: () => prefs };
 }
 
 test('panel html: values of the moment, every label, no admin parts', () => {
@@ -174,6 +174,19 @@ test('thinking adapter: start pulses and tells the VAD playback is active; stop 
   t.close(); assert.ok(log.ctx.closed, 'its AudioContext is closed');
 });
 
+test('thinking sound: its AudioContext is made (and resumed) in the start path, before any await, and closed in teardown', async () => {
+  const { api, log, els } = makeEnv();
+  assert.ok(!log.ctx);
+  const p = api.voiceCallStart('c1');   // no await yet: the tap's synchronous part
+  assert.ok(log.ctx, 'created synchronously in voiceCallStart');
+  await p;
+  const made = log.ctx;
+  api.voiceCallS.thinking.start();
+  assert.strictEqual(log.ctx, made, 'the same context is used, not a second one');
+  await api.voiceCallHangUp();
+  assert.ok(made.closed, 'closed in teardown');
+});
+
 test('thinking adapter: reply audio already playing keeps the playback flag', () => {
   const { api, log, vad, stubs } = makeEnv();
   const t = api.voiceCallThinking(vad);
@@ -219,14 +232,15 @@ test('release without call.release (older controller) falls back to hangUp and s
 });
 
 test('pagehide and freeze listeners release; a hidden desktop tab does not', async () => {
-  const { api, log, docL, setHidden } = makeEnv();
+  const { api, log, docL, winL, setHidden } = makeEnv();
+  assert.ok(winL.pagehide && winL.pageshow && !docL.pagehide && !docL.pageshow, 'pagehide and pageshow are on the window, where they fire');
   await api.voiceCallStart('c1');
   setHidden(true); docL.visibilitychange();
   assert.deepStrictEqual(log.released, [], 'hidden: the call goes on');
   docL.freeze();
   assert.deepStrictEqual(log.released, ['freeze']);
   await api.voiceCallStart('c1');
-  docL.pagehide();
+  winL.pagehide();
   assert.deepStrictEqual(log.released, ['freeze', 'pagehide']);
 });
 

@@ -10524,24 +10524,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // fragment finished ("... difficult to."): Whisper puts one on a cut-off piece, so it is stripped before the last word is checked.
     // Strong joining words leave a thought open even with a final full stop ("... difficult to."); weak ones (pronouns, "is",
     // "that"...) end plenty of whole sentences ("Do it.", "That is what it is."), so they count only without final punctuation.
-    const VOICE_JOINING_WORDS = new Set(['and', 'also', 'but', 'or', 'because', 'so', 'to', 'the', 'a', 'an', 'of', 'when', 'if', 'with', 'for', 'from', 'about', 'like',
-      'my', 'your', 'our', 'their', 'as', 'at', 'in', 'on', 'by', 'than', 'very', 'um', 'uh', 'er', 'hmm']);
-    const VOICE_WEAK_JOINING_WORDS = new Set(['that', 'which', 'who', 'i', 'you', 'we', 'it', 'is', 'are', 'was', 'this', 'these', 'then', 'just', 'really']);
+    const VOICE_JOINING_WORDS = new Set(['and', 'also', 'but', 'or', 'because', 'to', 'the', 'a', 'an', 'of', 'when', 'if', 'with', 'from', 'about', 'like',
+      'my', 'your', 'our', 'their', 'very', 'um', 'uh', 'er', 'hmm']);
+    const VOICE_WEAK_JOINING_WORDS = new Set(['that', 'which', 'who', 'i', 'you', 'we', 'it', 'is', 'are', 'was', 'this', 'these', 'then', 'just', 'really', 'so', 'as', 'at', 'in', 'on', 'by', 'than', 'for']);
     const VOICE_JOINING_PHRASES = ['you know', 'i mean'];
     const VOICE_COMPLETE_SHORT = new Set(['stop', 'cancel', 'now', 'later', 'skip', 'yes', 'no', 'yeah', 'yep', 'nope', 'ok', 'okay', 'sure', 'thanks', 'hello', 'hi', 'go ahead', 'thank you', 'never mind', 'nevermind']);
     function voiceSoundsUnfinished(text) {
       const raw = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
       if (!raw) return false;
       if (/[,–—…-]["')\]]*$/.test(raw) || /\.{3}["')\]]*$/.test(raw)) return true;   // a comma, a dash, an ellipsis: more is coming
-      if (/[!?]["')\]]*$/.test(raw)) return false;                                                    // a question or an exclamation is whole
-      const body = raw.replace(/[.\s]+$/, '');
+      if (/[!?\uFF01\uFF1F]["')\]]*$/.test(raw)) return false;                                                    // a question or an exclamation is whole
+      const body = raw.replace(/[.\u3002\s]+$/, '');
       const words = body.toLowerCase().replace(/[^\p{L}\p{N}'’\s]/gu, ' ').replace(/’/g, '\'').split(/\s+/).filter(Boolean);
       if (!words.length) return false;
       if (voiceIsStopCommand(raw) || VOICE_COMPLETE_SHORT.has(words.join(' '))) return false;
       const last = words[words.length - 1].replace(/^'+|'+$/g, '');
       if (VOICE_JOINING_WORDS.has(last) || (words.length >= 2 && VOICE_JOINING_PHRASES.includes(words.slice(-2).join(' ')))) return true;
-      if (VOICE_WEAK_JOINING_WORDS.has(last) && !/[.]['")\]]*$/.test(raw)) return true;                         // weak: only without a full stop
-      return words.length <= 2 && !/[.]["')\]]*$/.test(raw);                                        // one or two words and no full stop
+      if (VOICE_WEAK_JOINING_WORDS.has(last) && !/[.\u3002]['")\]]*$/.test(raw)) return true;                         // weak: only without a full stop
+      return words.length <= 2 && !/[.\u3002]["')\]]*$/.test(raw);                                        // one or two words and no full stop
     }
     function voicePickLocalVoice(voices, lang) {
       const pre = String(lang || 'en').toLowerCase();
@@ -10692,10 +10692,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!speaking) quiet(() => vad.setPlaybackActive(false));
       }
       function armThinking() {
-        if (ended || thinkTimer !== null || thinkingOn || !awaitingReply || !d.thinking || prefs().thinkingSound === false) return;
+        if (ended || thinkTimer !== null || thinkingOn || !awaitingReply || sttPending || pendingAsk || !d.thinking || prefs().thinkingSound === false) return;
         thinkTimer = d.setTimer(() => {
           thinkTimer = null;
-          if (ended || !awaitingReply || speaking || personSpeaking || pendingAnnounce || queue.length || prefs().thinkingSound === false) return;
+          if (ended || !awaitingReply || sttPending || pendingAsk || speaking || personSpeaking || pendingAnnounce || queue.length || prefs().thinkingSound === false) return;
           thinkingOn = true;
           quiet(() => vad.setPlaybackActive(true));   // the pulse is playback: it must not trigger the barge-in detector
           quiet(() => d.thinking.start());
@@ -10899,8 +10899,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (segActive) return;
         segActive = true;
         const c = lastSeg;
-        // The earlier piece qualifies when it ended less than 2 s ago, or when it sounded unfinished and is waiting for more.
-        if (c && !c.done && !c.hold && (c.waiting || now() - c.endAt <= VOICE_CALL_JOIN_MS)) {
+        // The earlier piece qualifies while its text is not sent yet (its transcript pending, held, or in the continue wait): one chain,
+        // in order, however slow the transcription is, so a later stop word still wins over it.
+        if (c && !c.done && !c.hold) {
           let resolve; const promise = new Promise((r) => { resolve = r; });
           c.hold = { promise, resolve }; curCand = c;
           if (c.onJoin) { const f = c.onJoin; c.onJoin = null; quiet(f); }   // the wait for more is over: the next piece is coming
@@ -10971,6 +10972,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         sttPending++;
         settle();
         sttChain = sttChain.then(async () => {
+          let counted = false;
           try {
             let text = '', failed = false;
             try { text = await d.stt(audio); } catch { failed = true; quiet(() => ui.toast('Could not transcribe that.')); }
@@ -10982,32 +10984,43 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             if (!t) return;
             // Does it sound unfinished? Then it is not sent yet: it waits up to the 'Wait for me to go on' time for the next piece,
             // which takes this text along. Not for a stop command, an answer to a question or an announcement, or when the wait is 0.
-            let waited = false;
+            let waited = false, waitStart = 0, ms = 0;
+            const waitMore = async (len) => {
+              mine.waiting = true;
+              let waitTimer = null;
+              await new Promise((resolve) => { mine.onJoin = resolve; waitTimer = d.setTimer(resolve, len); });
+              if (waitTimer !== null) quiet(() => d.clearTimer(waitTimer));
+              mine.waiting = false; mine.onJoin = null;
+            };
             if (!mine.hold && !ended && !voiceIsStopCommand(t) && !pendingAsk && mine.ann == null && !pendingAnnounce) {
-              const ms = continueWait();
+              ms = continueWait();
               if (ms > 0 && await soundsUnfinished(t, audio)) {
-                waited = true; mine.waiting = true;
-                let waitTimer = null;
-                await new Promise((resolve) => { mine.onJoin = resolve; waitTimer = d.setTimer(resolve, ms); });
-                if (waitTimer !== null) quiet(() => d.clearTimer(waitTimer));
-                mine.waiting = false; mine.onJoin = null;
+                waited = true; waitStart = now();
+                await waitMore(ms);
                 if (ended) return;
               }
             }
             // A later piece started (within 2 s, or while this one waited): it takes this text along (unless this one is a stop command: stop wins at once).
-            if (mine.hold && !voiceIsStopCommand(t)) {
+            while (mine.hold && !voiceIsStopCommand(t)) {
               // At most 5 s (20 s after a wait for more, which a long next piece may need): a later piece whose end never comes
               // (audio interrupted) must not block this text and every one after it.
-              let holdTimer = null;
-              const next = await Promise.race([mine.hold.promise, new Promise((r) => { holdTimer = d.setTimer(() => r(null), waited ? VOICE_CALL_WAIT_HOLD_MS : VOICE_CALL_HOLD_MS); })]);
+              let holdTimer = null, timedOut = false;
+              const next = await Promise.race([mine.hold.promise, new Promise((r) => { holdTimer = d.setTimer(() => { timedOut = true; r(null); }, waited ? VOICE_CALL_WAIT_HOLD_MS : VOICE_CALL_HOLD_MS); })]);
               if (holdTimer !== null) quiet(() => d.clearTimer(holdTimer));
               if (ended) return;
               if (next) { next.carry = t; if (next.ann == null) next.ann = mine.ann; return; }
+              if (timedOut || !waited) break;
+              // A misfire (cough, click) ended the wait early: the rest of the wait goes on.
+              const left = ms - (now() - waitStart);
+              if (left <= 0) break;
+              await waitMore(left);
+              if (ended) return;
             }
             mine.done = true;
             quiet(() => ui.heard(t));
+            sttPending--; counted = true;   // the transcript is out of the queue: the thinking sound may arm while the turn runs
             await route(t, mine.ann);
-          } finally { mine.done = true; sttPending--; settle(); }
+          } finally { mine.done = true; if (!counted) sttPending--; settle(); }
         });
         return sttChain;
       }
@@ -11848,6 +11861,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof voiceCreateThinkingSound !== 'function') return null;   // an older lib: the call goes on without the sound
       let ctx = null, snd = null, on = false;
       const quiet = (fn) => { try { fn(); } catch { /* a comfort: never breaks the call */ } };
+      // iOS keeps an AudioContext made outside a tap suspended: this runs inside the tap that starts the call (voiceCallStart, before any await).
+      quiet(() => { const AC = window.AudioContext || window.webkitAudioContext; if (AC) { ctx = new AC(); if (ctx.resume) Promise.resolve(ctx.resume()).catch(() => {}); } });
       return {
         start() {
           if (on) return;
@@ -12120,8 +12135,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (document.hidden) return;
       if (voiceCallS.call) voiceCallWake(true); else voiceLeftNoticeShow();
     });
-    document.addEventListener('pageshow', () => voiceLeftNoticeShow());   // back from the back/forward cache after a release (fired at the document, like pagehide)
-    document.addEventListener('pagehide', () => { voiceCallRelease('pagehide'); });   // leaving the page lets go of the mic at once (pagehide is fired at the document)
+    window.addEventListener('pageshow', () => voiceLeftNoticeShow());   // back from the back/forward cache after a release (pageshow and pagehide fire at the window; freeze at the document)
+    window.addEventListener('pagehide', () => { voiceCallRelease('pagehide'); });   // leaving the page lets go of the mic at once
     document.addEventListener('freeze', () => { voiceCallRelease('freeze'); });   // the browser is about to freeze the page
 
     // ── In-chat voice controls (next to the mic): a Talk mode chip and a small "Voice settings" panel for every signed-in user ──

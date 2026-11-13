@@ -506,3 +506,84 @@ test('release: voiceCreateVad.stop() alone stops both streams, destroys MicVAD a
   assert.strictEqual(voiceLiveTracks(), 0);
   assert.deepStrictEqual([f.b.destroyed, f.b.closed], [1, 1]);
 });
+
+// ---- round 2 review fixes ----
+
+function slowStt(h) {
+  h.sttWait = [];
+  h.deps.stt = (audio) => new Promise((resolve) => { h.sttWait.push(() => resolve(audio.text)); });
+  h.answerStt = async () => { const f = h.sttWait.shift(); if (f) f(); await tick(); };
+}
+
+test('slow transcription: a stop word said 2.5 s after a segment (its text still pending) wins; nothing is sent', async () => {
+  const h = harness(); slowStt(h); h.call = voiceCreateCall(h.deps);
+  assert.strictEqual(await h.call.start(), true);
+  await h.say('delete the files and');            // ends at t=0, transcript pending
+  await h.advance(2500);
+  await h.say('stop');                            // outside the 2 s window
+  await h.answerStt();                            // the first text comes back: 'delete the files and'
+  await h.advance(3500);
+  await h.answerStt();                            // the stop comes back
+  await h.advance(100);
+  assert.deepStrictEqual(h.sent, [], 'the earlier text was dropped');
+  assert.strictEqual(h.stops, 1);
+});
+
+test('slow transcription: a later piece joins an earlier text that is still being transcribed', async () => {
+  const h = harness(); slowStt(h); h.call = voiceCreateCall(h.deps);
+  await h.call.start();
+  await h.say('please open the file');
+  await h.advance(4000);
+  await h.say('called report.');
+  await h.answerStt(); await h.answerStt(); await h.advance(100);
+  assert.deepStrictEqual(h.sent, ['please open the file called report.']);
+});
+
+test('a cough during the continue wait does not cut the wait short: the rest of it is kept', async () => {
+  const h = await started();
+  await h.say('please open the file and');
+  await h.advance(500);
+  h.handlers.onSpeechBegin(); await tick();
+  await h.advance(100);
+  h.handlers.onMisfire(); await tick();
+  await h.advance(2000);
+  assert.deepStrictEqual(h.sent, [], 'still waiting (2.6 s of 3 s)');
+  await h.advance(500);
+  assert.deepStrictEqual(h.sent, ['please open the file and']);
+});
+
+test('a cough during the wait, then a real piece, still joins into one message', async () => {
+  const h = await started();
+  await h.say('please open the file and');
+  await h.advance(500);
+  h.handlers.onSpeechBegin(); await tick(); h.handlers.onMisfire(); await tick();
+  await h.advance(300);
+  await h.say('read it to me.');
+  await h.advance(2000);
+  assert.deepStrictEqual(h.sent, ['please open the file and read it to me.']);
+});
+
+test('thinking sound: never starts while the person\'s words are still being transcribed', async () => {
+  const h = harness(); slowStt(h); h.deps.thinking = thinking(h); h.call = voiceCreateCall(h.deps);
+  await h.call.start();
+  await h.say('Please check the system status.');
+  h.call.onReplyText('Working. ', false);        // a running reply arms the wait
+  await h.finish();
+  await h.advance(5000);
+  assert.deepStrictEqual(h.think, [], 'no pulse while a transcript is pending');
+  await h.answerStt(); await h.advance(2100);
+  assert.deepStrictEqual(h.think, ['start'], 'it starts once the turn was sent');
+});
+
+test('thinking sound: never starts while a question from the agent waits for the answer', async () => {
+  const h = await started(); h.deps.thinking = thinking(h); h.call = voiceCreateCall(h.deps);
+  await h.call.start();
+  await h.say('Please check the system status.');
+  h.call.onAsk({ request_id: 'r1', question: 'Which one?', options: ['Alpha', 'Beta'] });
+  await h.finish();
+  await h.advance(10000);
+  assert.deepStrictEqual(h.think, [], 'no pulse while the question is open');
+  await h.say('Alpha');
+  await h.advance(2100);
+  assert.deepStrictEqual(h.think, ['start'], 'after the answer the turn thinks again');
+});

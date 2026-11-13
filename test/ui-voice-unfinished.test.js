@@ -40,6 +40,17 @@ test('voiceSoundsUnfinished: Whisper puts a full stop on a cut-off piece; it is 
   assert.strictEqual(u('for you to articulate things like dashes and symbols so you should avoid using those in a voice chat.'), false);
 });
 
+test('voiceSoundsUnfinished: complete sentences that end in a particle are finished; CJK stops count like . ! ?', () => {
+  for (const s of ['Turn the light on.', 'Log in.', 'I think so.', 'I guess so.', 'Sign in.', 'Go on.', 'Come in.', '我喜欢这个。', '你好吗？', '太好了！']) {
+    assert.strictEqual(u(s), false, s);
+  }
+  for (const s of ['Turn the light on', 'I think so', 'Log in']) assert.strictEqual(u(s), true, s + ' (no final stop: a weak word still reads as cut off)');
+  assert.strictEqual(u('I think you and other agents should know when'), true);
+  for (const w of ['and', 'also', 'but', 'or', 'because', 'to', 'the', 'a', 'an', 'of', 'when', 'if', 'with', 'from', 'about', 'like', 'my', 'your', 'our', 'their', 'very', 'um', 'uh', 'er', 'hmm']) {
+    assert.strictEqual(u('please check the logs ' + w + '.'), true, w + ' with a final stop');
+  }
+});
+
 test('prefs: continueWait is one of 1.5 / 3 / 5 s, thinkingSound a boolean, thinkingVolume 0..1', () => {
   const load = (o) => voiceLoadPrefs(memStore({ 'hub-voice': JSON.stringify(o) }));
   assert.deepStrictEqual([load({}).continueWait, load({}).thinkingSound, load({}).thinkingVolume], [3000, true, 0.5], 'defaults');

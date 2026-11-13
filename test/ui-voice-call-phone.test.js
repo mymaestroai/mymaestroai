@@ -205,7 +205,7 @@ test('voiceCallStart calls call.start() inside the tap, before anything is await
     voiceCreateCall: () => ({ start: () => { order.push('call.start'); return new Promise(() => {}); } }),
     voiceCallDeps: () => ({}), voiceCallPanel: () => order.push('panel'), voiceCallPaintState: () => {}, voiceMicPaint: () => order.push('micPaint'),
     voiceCallTeardown: () => {}, voiceWakeAcquire: () => order.push('wake'), Date,
-    voiceEndedBar: () => {}, voiceCallBgNote: false, voiceMediaSession: () => {}, voiceCallBeat: () => {}, setInterval: () => 0,
+    voiceEndedBar: () => {}, voiceCallBgNote: false, voiceThinkingCtxMake: () => {}, voiceMediaSession: () => {}, voiceCallBeat: () => {}, setInterval: () => 0,
   };
   const names = Object.keys(env);
   const run = new Function(...names, src.replace(/voiceCall = vc;/, 'voiceCall = vc; globalThis.__vc = vc;') + '\nreturn voiceCallStart;')(...names.map(n => env[n]));

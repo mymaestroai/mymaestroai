@@ -69,7 +69,7 @@ test('join: three pieces in a row become one message', async () => {
   assert.deepStrictEqual(h.sent, ['one two three']);
 });
 
-test('join: not when the previous piece was already sent, or when 2 s have passed', async () => {
+test('join: not when the previous piece was already sent; a slow transcript (2.5 s later, still pending) is still joined', async () => {
   let h = await started();
   h.autoStt = true;
   h.begin(); await h.end('first thing'); await tick();
@@ -82,8 +82,8 @@ test('join: not when the previous piece was already sent, or when 2 s have passe
   await h.advance(2500);                                  // more than 2 s later, its text is still not back
   h.begin(); await h.end('another piece');
   await h.answer(); await h.answer();
-  assert.deepStrictEqual(h.sent, ['slow piece'], 'sent on its own');
-  assert.deepStrictEqual(h.interjected, ['another piece']);
+  assert.deepStrictEqual(h.sent, ['slow piece another piece'], 'its text was still unsent: one chain');
+  assert.deepStrictEqual(h.interjected, []);
 });
 
 test('join: while a turn runs, the joined text is one interjection', async () => {
@@ -129,13 +129,13 @@ test('join: a piece that is only a filler does not hold back the earlier one', a
   assert.deepStrictEqual(h.sent, ['open the door']);
 });
 
-test('join: a pause longer than 2 s since the end never joins even before the text is back (end 0, start 2.5 s)', async () => {
+test('join: a later piece joins an earlier one whose text is not back yet, even after 2 s', async () => {
   const h = await started();
   h.begin(); await h.end('alpha');
   await h.advance(2100);
   h.begin(); await h.end('beta');
-  await h.answer();
-  assert.deepStrictEqual(h.sent, ['alpha']);
+  await h.answer(); await h.answer();
+  assert.deepStrictEqual(h.sent, ['alpha beta']);
 });
 
 // ---- (4) no spoken tool activity ----

@@ -140,7 +140,7 @@ function makeEnv(opts = {}) {
     close() { this.state = 'closed'; }
   }
   const voices = opts.voices || [{ name: 'Online', lang: 'en-US', localService: false, default: true }, { name: 'Local', lang: 'en-GB', localService: true, default: false }];
-  const win = { AudioContext: FakeCtx, speechSynthesis: opts.noSynth ? undefined : { getVoices: () => voices, speak(u) { calls.utter.push(u.text); calls.voiceUsed = u.voice; setImmediate(() => u.onend && u.onend()); }, cancel() { calls.cancelled = true; } } };
+  const win = { AudioContext: FakeCtx, addEventListener() {}, speechSynthesis: opts.noSynth ? undefined : { getVoices: () => voices, speak(u) { calls.utter.push(u.text); calls.voiceUsed = u.voice; setImmediate(() => u.onend && u.onend()); }, cancel() { calls.cancelled = true; } } };
   const fetchFn = async (url, o = {}) => {
     calls.fetch.push({ url, o });
     if (url === '/api/voice/status') return { ok: true, json: async () => status };
@@ -291,7 +291,7 @@ test('settings: members get no enable switch, default voice or sample; admins do
   assert.match(admin, /Play sample/);
   const stubsSrc = voiceBlock().replace('const admin = isHubAdmin();', 'const admin = false;');
   const member = new Function('document', 'window', 'localStorage', 'voiceLoadPrefs', 'voiceGainFromSlider', 'chats', 'dialogGuard', 'voiceMicGuard', 'voiceCleanSpeed', 'voiceSpeedLabel', 'VOICE_END_PAUSES',
-    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, {}, {}, () => ({ micLevel: 50 }), (v) => v, {}, {}, L.voiceMicGuard, L.voiceCleanSpeed, L.voiceSpeedLabel, L.VOICE_END_PAUSES);
+    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, { addEventListener() {} }, {}, () => ({ micLevel: 50 }), (v) => v, {}, {}, L.voiceMicGuard, L.voiceCleanSpeed, L.voiceSpeedLabel, L.VOICE_END_PAUSES);
   assert.doesNotMatch(member, /st-voice-enabled|st-voice-default|Play sample/);
   assert.match(member, /st-voice-status/);
   assert.match(member, /id="st-voice-mic"/);

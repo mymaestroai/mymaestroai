@@ -71,7 +71,7 @@ test('wake lock, visibility and leaving: re-acquire on return, release on hang-u
   assert.match(w, /document\.addEventListener\('visibilitychange', \(\) => \{[^]*?if \(document\.hidden\) return;\s*if \(voiceCallS\.call\) voiceCallWake\(true\); else voiceLeftNoticeShow\(\);/);
   assert.match(w, /voiceCallWake\(false\);/);
   // round 2: leaving the page is an immediate release (call.release), not a wait for the hub
-  assert.match(w, /document\.addEventListener\('pagehide', \(\) => \{ voiceCallRelease\('pagehide'\); \}\)/);
+  assert.match(w, /window\.addEventListener\('pagehide', \(\) => \{ voiceCallRelease\('pagehide'\); \}\)/);
   assert.match(app, /if \(voiceCallS\.chatId === chatId\) voiceCallHangUp\(\);/, 'closing the chat panel hangs up');
 });
 
@@ -172,7 +172,7 @@ function makeEnv(opts = {}) {
     voiceLevelDb: (d) => d[0], voiceMicError: (e) => 'mic: ' + e.message,
     setTimeout: (fn, ms) => { clock += ms; setImmediate(fn); return 1; }, clearTimeout() {},
     Date: { now: () => clock },
-    window: {},
+    window: { addEventListener() {} },
   };
   let micFeed = null;
   if (opts.roomSpeech) {
