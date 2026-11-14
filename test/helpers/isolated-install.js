@@ -27,8 +27,9 @@ function makeIsolatedInstall(prefix = 'isolated-install-', { copy = [] } = {}) {
   for (const f of ['package.json']) { try { fs.copyFileSync(path.join(REAL, f), path.join(inst, f)); } catch { /* not there */ } }
   // The example agents list is shipped in git (not install data); lib/ falls back to it when data/agents.json is missing.
   try { fs.copyFileSync(path.join(REAL, 'data', 'agents.example.json'), path.join(data, 'agents.example.json')); } catch { /* not there */ }
-  for (const rel of copy) {
-    if (/^data(\/|$)/.test(rel) || rel.split('/').includes('..')) throw new Error(`isolated-install: ${rel} is not a path to copy`);
+  for (const raw of copy) {
+    const rel = path.posix.normalize(String(raw).split(path.sep).join('/'));
+    if (path.isAbsolute(rel) || rel === '.' || /^data(\/|$)/.test(rel) || rel.split('/').includes('..')) throw new Error(`isolated-install: ${raw} is not a path to copy`);
     const to = path.join(inst, rel);
     fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.cpSync(path.join(REAL, rel), to, { recursive: true, dereference: true });

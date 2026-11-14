@@ -3,11 +3,17 @@
 // accounts, memory, transcripts and settings). scripts/run-tests.js loads this file into every process of a run through
 // NODE_OPTIONS=--require, so test files and anything they start with Node (scripts, servers, workers) are covered.
 //
-// Every path-taking call of fs (sync, callback and promise forms, streams, watch) and every better-sqlite3 database opened is
-// checked. A call whose path resolves under <install>/data is refused at the call site with an EACCES error, the process
-// prints one line per refused path on stderr, and it exits non-zero, so the run fails even when the test caught the error.
-// Allowed exceptions are the ALLOW list below, each with its reason. Tests build a throwaway install instead
-// (test/helpers/isolated-install.js).
+// What is checked: every path-taking call of fs (sync, callback and promise forms, streams, watch), and better-sqlite3 opening
+// a database file (the constructor) or writing a backup. Each path is judged by its real path too, so a link into data/ from
+// anywhere, or a data/ that is itself a link, counts. Removing, renaming or copying a folder that holds data/ counts as
+// touching data/. Not covered: processes that are not Node (git, sqlite3), children started with an environment that drops
+// NODE_OPTIONS, and files SQL itself opens on an already open database (ATTACH, VACUUM INTO).
+//
+// A refused call throws EACCES at the call site (promise forms reject), prints one `data-guard:` line per path on stderr and
+// makes the process exit non-zero. When MM_DATA_GUARD_REPORT names a file (run-tests.js sets one per run), each refusal is
+// also appended there, and the runner fails the run on any line in it, so a refusal in a child whose exit code a test
+// ignored still fails the run. Allowed exceptions are the ALLOW list below, each with its reason. Tests build a throwaway
+// install instead (test/helpers/isolated-install.js).
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -17,16 +23,18 @@ const Module = require('node:module');
 const ROOT = path.resolve(__dirname, '..', '..');
 
 // { file, path, access, reason }: file = the test file (relative to the install, '*' = any), path = the entry under data/
-// (exact, or a prefix ending in '/'), access = 'read' (look and read only) or 'any'.
+// (exact, or a prefix ending in '/'), access = 'read' (look and read only) or 'any'. Judged on the entry's real path.
 const ALLOW = [
   { file: '*', path: 'agents.example.json', access: 'read', reason: 'tracked in git: the example agents list shipped with the code, not install data (isolated-install.js copies it)' },
 ];
 
+const MARK = Symbol('data-guard');   // this copy's own mark, so a second copy of the guard (another install's) still wraps
 const realpath = fs.realpathSync.native;
+const appendRaw = fs.appendFileSync;
 function canonical(p) {
-  // The real path of the nearest existing ancestor, plus the rest: a path through a symlink into data/ still counts.
+  // The real path of the nearest existing ancestor, plus the rest.
   let cur = p; const tail = [];
-  for (let i = 0; i < 64; i++) {
+  for (let i = 0; i < 256; i++) {
     try { return path.join(realpath(cur), ...tail.reverse()); } catch { /* not there yet */ }
     const up = path.dirname(cur);
     if (up === cur) break;
@@ -34,9 +42,11 @@ function canonical(p) {
   }
   return p;
 }
-const INSTALLS = [ROOT, ...(process.env.MM_DATA_GUARD_ROOT ? [path.resolve(process.env.MM_DATA_GUARD_ROOT)] : [])]
-  .map(root => ({ root, data: path.join(canonical(root), 'data'), nodeModules: path.join(root, 'node_modules') + path.sep }));
-const DATA = INSTALLS[0].data;
+// Every name a protected data/ folder goes by: <install>/data as written, under the install's real path, and its own real
+// path when data/ is a link.
+const PROTECTED = [...new Set([ROOT, ...(process.env.MM_DATA_GUARD_ROOT ? [path.resolve(process.env.MM_DATA_GUARD_ROOT)] : [])]
+  .flatMap(root => [path.join(root, 'data'), path.join(canonical(root), 'data'), canonical(path.join(root, 'data'))]))];
+const DATA = path.join(ROOT, 'data');
 
 const TEST_FILE = process.env.MM_DATA_GUARD_TEST
   || (process.env.NODE_TEST_CONTEXT && process.argv[1] ? path.relative(ROOT, path.resolve(process.argv[1])).split(path.sep).join('/') : '');
@@ -51,39 +61,46 @@ function toPath(p) {
   return null;   // a file descriptor or nothing: not a path
 }
 
-// -> the entry under data/ ('' for data/ itself, 'a/b.json') when p is in a protected data/ folder, else null.
-function underData(p) {
+const entryIn = (q) => {
+  for (const d of PROTECTED) if (q === d || q.startsWith(d + path.sep)) return path.relative(d, q).split(path.sep).join('/');
+  return null;
+};
+const holdsData = (q) => PROTECTED.some(d => d.startsWith(q.endsWith(path.sep) ? q : q + path.sep));
+
+const allowed = (entry, access) => ALLOW.some(a => (a.file === '*' || a.file === TEST_FILE) && (a.access === 'any' || a.access === access)
+  && (a.path === entry || (a.path.endsWith('/') && (entry + '/').startsWith(a.path))));
+
+// -> null when p may be used, else the refused entry ('' = data/ itself, a/b.json, or '*' = a folder holding data/).
+// A path already inside data/ as written is refused without a look at the disk. Otherwise its real path decides (an allowed
+// entry is allowed only when its real path is allowed too). follow = false for calls that act on a link itself (unlink, rm,
+// rename, lstat, readlink, lchown ...): only the folders on the way are resolved, so removing a link that points into data/
+// is fine and removing data/ through a linked folder is not.
+function refusedEntry(p, access, tree, follow) {
   const s = toPath(p);
   if (s === null || s === '' || s.startsWith('\0')) return null;
   const abs = path.resolve(s);
-  const inData = (q) => {
-    for (const i of INSTALLS) if (q === i.data || q.startsWith(i.data + path.sep)) return path.relative(i.data, q).split(path.sep).join('/');
-    return null;
-  };
-  const direct = inData(abs);
-  if (direct !== null) return direct;
-  // A path through a link into data/ is caught by its real path: any path inside an install (a link there may point into
-  // data/ under another name), and elsewhere any path naming a "data" folder (<tmp>/link-to-the-install/data/...). A link
-  // outside the install whose own name hides data/ is not followed; isolated-install.js links only node_modules.
-  if (abs.includes(`${path.sep}data`) || INSTALLS.some(i => abs.startsWith(i.root + path.sep) && !abs.startsWith(i.nodeModules))) {
-    const c = canonical(abs);
-    if (c !== abs) return inData(c);
-  }
+  const lex = entryIn(abs);
+  if (lex !== null && !allowed(lex, access)) return lex;
+  if (tree && holdsData(abs)) return '*';
+  const real = follow || abs === path.parse(abs).root ? canonical(abs) : path.join(canonical(path.dirname(abs)), path.basename(abs));
+  if (real === abs) return null;
+  const rl = entryIn(real);
+  if (rl !== null) return allowed(rl, access) ? null : rl;
+  if (tree && holdsData(real)) return '*';
   return null;
 }
 
-function allowed(rel, access) {
-  return ALLOW.some(a => (a.file === '*' || a.file === TEST_FILE) && (a.access === 'any' || a.access === access)
-    && (a.path === rel || (a.path.endsWith('/') && (rel + '/').startsWith(a.path))));
-}
-
-function check(p, access, how) {
-  const entry = underData(p);
-  if (entry === null || allowed(entry, access)) return;
-  const rel = entry ? `data/${entry}` : 'data/';
+function check(p, access, how, tree = false, follow = true) {
+  const entry = refusedEntry(p, access, tree, follow);
+  if (entry === null) return;
+  const rel = entry === '*' ? `${path.resolve(toPath(p))} (a folder holding data/)` : `data/${entry}`;
   if (!refused.has(rel)) {
     refused.set(rel, how);
-    try { process.stderr.write(`data-guard: ${TEST_FILE || process.argv[1] || 'a process'} ${access === 'read' ? 'read' : 'wrote'} ${rel} (${how}); tests must use a throwaway install (test/helpers/isolated-install.js)\n`); } catch { /* stderr gone */ }
+    const who = TEST_FILE || process.argv[1] || 'a process';
+    try { process.stderr.write(`data-guard: ${who} ${access === 'read' ? 'read' : 'wrote'} ${rel} (${how}); tests must use a throwaway install (test/helpers/isolated-install.js)\n`); } catch { /* stderr gone */ }
+    if (process.env.MM_DATA_GUARD_REPORT) {
+      try { appendRaw(process.env.MM_DATA_GUARD_REPORT, JSON.stringify({ test: who, path: rel, how, access, pid: process.pid }) + '\n'); } catch { /* the exit code still fails it */ }
+    }
   }
   process.exitCode = 1;
   const e = new Error(`data-guard: a test may not touch ${rel}`);
@@ -97,70 +114,91 @@ function openAccess(flags) {
   return /^r$|^rs$|^sr$/.test(String(flags)) ? 'read' : 'write';
 }
 
-// name -> how its arguments are judged: [argument indexes that are paths, access] or a function (args) -> [[path, access], ...]
-const READS = ['access', 'exists', 'readFile', 'readdir', 'readlink', 'realpath', 'stat', 'lstat', 'statfs', 'opendir', 'watch', 'watchFile', 'unwatchFile', 'createReadStream', 'glob'];
-const WRITES = ['appendFile', 'chmod', 'chown', 'lchmod', 'lchown', 'lutimes', 'mkdir', 'mkdtemp', 'rm', 'rmdir', 'truncate', 'unlink', 'utimes', 'writeFile', 'createWriteStream'];
-const TWO_WRITES = ['copyFile', 'cp', 'link', 'rename', 'symlink'];   // (from, to): from is read (or moved), to is written
-
+const READS = ['access', 'exists', 'readFile', 'readlink', 'realpath', 'stat', 'lstat', 'statfs', 'opendir', 'watch', 'watchFile', 'unwatchFile', 'createReadStream', 'glob'];
+const WRITES = ['appendFile', 'chmod', 'chown', 'lchmod', 'lchown', 'lutimes', 'mkdir', 'mkdtemp', 'truncate', 'unlink', 'utimes', 'writeFile', 'createWriteStream'];
+const TREES = ['rm', 'rmdir'];   // a whole folder goes: a folder holding data/ counts
+const NO_FOLLOW = new Set(['unlink', 'rm', 'rmdir', 'rename', 'lstat', 'readlink', 'lchown', 'lchmod', 'lutimes']);
+// -> [[path, access, tree, follow]] for one call
 function judge(name, args) {
-  if (name === 'open') return [[args[0], openAccess(args[1])]];
-  if (TWO_WRITES.includes(name)) return [[args[0], name === 'rename' ? 'write' : 'read'], [args[1], 'write']];
-  if (READS.includes(name)) return [[args[0], 'read']];
-  if (WRITES.includes(name)) return [[args[0], 'write']];
+  const f = !NO_FOLLOW.has(name);
+  if (name === 'open') return [[args[0], openAccess(args[1]), false, f]];
+  if (name === 'readdir') return [[args[0], 'read', !!(args[1] && typeof args[1] === 'object' && args[1].recursive), f]];
+  if (name === 'rename') return [[args[0], 'write', true, f], [args[1], 'write', true, f]];
+  if (name === 'cp') return [[args[0], 'read', true, f], [args[1], 'write', true, f]];
+  if (name === 'copyFile') return [[args[0], 'read', false, f], [args[1], 'write', false, f]];
+  if (name === 'link') return [[args[0], 'read', false, f], [args[1], 'write', false, false]];
+  if (name === 'symlink') return [[args[1], 'write', false, false]];   // the target is only text (relative to the link's folder); using the link is checked
+  if (TREES.includes(name)) return [[args[0], 'write', true, f]];
+  if (READS.includes(name)) return [[args[0], 'read', false, f]];
+  if (WRITES.includes(name)) return [[args[0], 'write', false, f]];
   return [];
 }
 
 function wrap(obj, key, name, label, promise = false) {
   const orig = obj[key];
-  if (typeof orig !== 'function' || orig.__dataGuard) return;
+  if (typeof orig !== 'function' || orig[MARK]) return;
   const wrapped = function (...args) {
-    try { for (const [p, access] of judge(name, args)) check(p, access, label); }
+    try { for (const [p, access, tree, follow] of judge(name, args)) check(p, access, label, tree, follow); }
     catch (e) { if (promise) return Promise.reject(e); throw e; }
     return orig.apply(this, args);
   };
   Object.defineProperties(wrapped, Object.getOwnPropertyDescriptors(orig));
-  Object.defineProperty(wrapped, '__dataGuard', { value: true });
+  Object.defineProperty(wrapped, MARK, { value: true });
   try { obj[key] = wrapped; } catch { /* read-only on this Node: left as it is */ }
 }
 
-const NAMES = ['open', ...READS, ...WRITES, ...TWO_WRITES];
-for (const n of NAMES) {
-  if (n !== 'createReadStream' && n !== 'createWriteStream' && n !== 'watch' && n !== 'watchFile' && n !== 'unwatchFile') wrap(fs, n + 'Sync', n, `fs.${n}Sync`);
+const NO_SYNC = new Set(['createReadStream', 'createWriteStream', 'watch', 'watchFile', 'unwatchFile', 'exists']);   // existsSync: below
+for (const n of ['open', 'readdir', 'rename', 'cp', 'copyFile', 'link', 'symlink', ...TREES, ...READS, ...WRITES]) {
+  if (!NO_SYNC.has(n)) wrap(fs, n + 'Sync', n, `fs.${n}Sync`);
   wrap(fs, n, n, `fs.${n}`);
   if (fs.promises && typeof fs.promises[n] === 'function') wrap(fs.promises, n, n, `fs.promises.${n}`, true);
 }
 // existsSync answers false for a refused path instead of throwing (it never throws), and still counts as a refusal.
 {
   const orig = fs.existsSync;
-  const guarded = function existsSync(p) {
-    try { check(p, 'read', 'fs.existsSync'); } catch { return false; }
-    return orig.call(this, p);
-  };
-  Object.defineProperty(guarded, '__dataGuard', { value: true });
-  fs.existsSync = guarded;
+  if (!orig[MARK]) {
+    const guarded = function existsSync(p) {
+      try { check(p, 'read', 'fs.existsSync'); } catch { return false; }
+      return orig.call(this, p);
+    };
+    Object.defineProperty(guarded, MARK, { value: true });
+    fs.existsSync = guarded;
+  }
 }
 
-// better-sqlite3 opens its file in native code, past fs: its constructor is checked as it is loaded.
+// better-sqlite3 opens its file in native code, past fs: its constructor (and backup()) are checked as it is loaded.
 const sqliteGuarded = new WeakMap();   // one guarded constructor per loaded copy, so every require gets the same one
 function sqliteOpen(args) {
   const file = args[0];
   if (typeof file === 'string' && file !== ':memory:' && file !== '') check(file, args[1] && args[1].readonly ? 'read' : 'write', 'better-sqlite3');
 }
+function guardSqlite(Database) {
+  if (sqliteGuarded.has(Database)) return sqliteGuarded.get(Database);
+  const backup = Database.prototype && Database.prototype.backup;
+  if (typeof backup === 'function' && !backup[MARK]) {
+    const guardedBackup = function (destination, ...rest) {
+      try { check(destination, 'write', 'better-sqlite3 backup'); } catch (e) { return Promise.reject(e); }
+      return backup.call(this, destination, ...rest);
+    };
+    Object.defineProperty(guardedBackup, MARK, { value: true });
+    Database.prototype.backup = guardedBackup;
+  }
+  const proxy = new Proxy(Database, {
+    construct(target, args, newTarget) { sqliteOpen(args); return Reflect.construct(target, args, newTarget === proxy ? target : newTarget); },
+    apply(target, self, args) { sqliteOpen(args); return Reflect.apply(target, self, args); },
+  });
+  sqliteGuarded.set(Database, proxy);
+  sqliteGuarded.set(proxy, proxy);
+  return proxy;
+}
 const origLoad = Module._load;
 Module._load = function (request, parent, isMain) {
   const out = origLoad.apply(this, arguments);
-  if (typeof out !== 'function' || !(request === 'better-sqlite3' || /[\\/]better-sqlite3(?:[\\/](?:lib[\\/]?(?:index(?:\.js)?)?)?)?$/.test(request))) return out;
-  if (!sqliteGuarded.has(out)) {
-    sqliteGuarded.set(out, new Proxy(out, {
-      construct(target, args, newTarget) { sqliteOpen(args); return Reflect.construct(target, args, newTarget === guardedOf(target) ? target : newTarget); },
-      apply(target, self, args) { sqliteOpen(args); return Reflect.apply(target, self, args); },
-    }));
-  }
-  return sqliteGuarded.get(out);
+  if (typeof out === 'function' && /(?:^|[\\/])better-sqlite3(?:[\\/]|$)/.test(String(request)) && out.prototype && typeof out.prototype.prepare === 'function') return guardSqlite(out);
+  return out;
 };
-function guardedOf(target) { return sqliteGuarded.get(target); }
 
-// A refusal the test caught still fails the run.
+// A refusal the test caught still fails the process.
 process.on('exit', (code) => { if (refused.size && !code) process.exitCode = 1; });
 
-module.exports = { ROOT, DATA, ALLOW, refused };
+module.exports = { ROOT, DATA, PROTECTED, ALLOW, refused };
