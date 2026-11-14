@@ -13206,7 +13206,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             consenting = true; quiet(() => q.playback && q.playback(true));
             let cut = null;
             try {
-              spoken = await Promise.race([Promise.resolve(q.speak(String(rec.consentLine))).then(() => true, () => false),
+              // speak resolves true only when the line played to the end (the pages' voiceCallSpeakLine); anything else is "not spoken", and the hub then announces on the next call
+              spoken = await Promise.race([Promise.resolve(q.speak(String(rec.consentLine))).then((played) => played === true, () => false),
                 new Promise((resolve) => { cut = (q.setTimer || setTimeout)(() => resolve(false), 20000); })]);
             } catch { spoken = false; }
             if (cut !== null) quiet(() => (q.clearTimer || clearTimeout)(cut));
@@ -13595,10 +13596,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // The device voice is used only when it is an offline one (localService): a browser's default voice may be an online
     // service. No offline voice: nothing is spoken and the person is told.
-    async function voicePlayDevice(sentences, from, my, agent) {
+    // report (optional): report.spoke is set true only when every sentence ended normally (no offline voice, an error or a cut: false).
+    async function voicePlayDevice(sentences, from, my, agent, report) {
       const voice = await voiceWaitLocalVoice(window.speechSynthesis, 'en', 1000);
       if (voicePlay.token !== my) return;
       if (!voice) { hubToast(voiceOfflineHint); return; }
+      let failed = false;
       for (let i = from; i < sentences.length; i++) {
         if (voicePlay.token !== my) return;
         await new Promise((res) => {
@@ -13607,10 +13610,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const dsp = (k) => { if (typeof voiceDisplaySpeech === 'function') voiceDisplaySpeech(k); };
           u.onstart = () => { dsp('start'); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('caption', sentences[i]); };
           u.onboundary = () => dsp('boundary'); u.onpause = () => dsp('pause'); u.onresume = () => dsp('resume');
-          u.onend = () => { dsp('end'); res(); }; u.onerror = () => { dsp('end'); res(); };
+          u.onend = () => { dsp('end'); res(); }; u.onerror = () => { failed = true; dsp('end'); res(); };
           window.speechSynthesis.speak(u);
         });
       }
+      if (report && !failed && voicePlay.token === my) report.spoke = true;
     }
     // opts: { sentences, voice }. btn: the button that shows "playing" (a second tap on it stops).
     async function voiceSpeakText(agent, md, btn, opts = {}) {
@@ -13631,7 +13635,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           }
         } else if (voiceDeviceFallback()) useDevice = true;
         else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
-        if (useDevice) { await voicePlayDevice(sentences, from, my, agent); if (opts.out) opts.out.played = voicePlay.token === my; }
+        if (useDevice) { const rep = {}; await voicePlayDevice(sentences, from, my, agent, rep); if (opts.out) opts.out.played = rep.spoke === true && voicePlay.token === my; }
       } finally {
         if (voicePlay.token === my) { voicePlayState(btn, false); voicePlay.btn = null; }
       }
