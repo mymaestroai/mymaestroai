@@ -309,3 +309,25 @@ test('phone: Auto waiting in line behind another change, then a model: the super
   assert.deepStrictEqual(hub.state, { model: 'claude-sdk/c', autoModel: false });
   assert.strictEqual(p.sel.value, 'claude-sdk/c');
 });
+
+test('desktop: Auto still saving, then the agent own model in the OpenRouter window: the last choice wins (Auto ends off)', async () => {
+  const hub = fakeHub({ model: 'openrouter/x', autoModel: false }); hub.hold.add('PATCH');
+  const d = desktop(hub); withOrWindow(d, ['x']);
+  const p1 = d.pick('__auto__'); await tick();
+  const p2 = d.ctx.choose('x', null); await tick();
+  await hub.release('PATCH'); hub.hold.delete('PATCH'); if (hub.held.length) await hub.release('PATCH');
+  await Promise.all([p1, p2]); await tick();
+  assert.deepStrictEqual(hub.calls, ['PATCH auto=true', 'PATCH auto=false']);
+  assert.deepStrictEqual(hub.state, { model: 'openrouter/x', autoModel: false });
+});
+
+test('phone: Auto still saving, then the agent own model in the OpenRouter sheet: the last choice wins (Auto ends off)', async () => {
+  const row = (id) => ({ target: { closest: () => ({ dataset: { id }, disabled: false }) } });
+  const hub = fakeHub({ model: 'openrouter/x', autoModel: false }); hub.hold.add('PATCH'); const p = phone(hub); await p.ready();
+  const s1 = p.pick('__auto__'); await tick();
+  const s2 = p.ctx.sheet(row('x')); await tick();
+  await hub.release('PATCH'); hub.hold.delete('PATCH'); if (hub.held.length) await hub.release('PATCH');
+  await Promise.all([s1, s2]); await tick();
+  assert.deepStrictEqual(hub.calls, ['PATCH auto=true', 'PATCH auto=false']);
+  assert.deepStrictEqual(hub.state, { model: 'openrouter/x', autoModel: false });
+});

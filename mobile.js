@@ -1389,7 +1389,7 @@ async function onOrSheetClick(e) {
   const id = btn.dataset.id; const model = `openrouter/${id}`;
   if (!a) return;
   const slot = reserveModelChange(name);   // its place in the line is now, before the test
-  if (model === a.model) { sheet.close(); if (a.autoModel && isAdmin()) await queueModelChange(name, model, { tested: true }, slot); return; }   // its own model: leaves Auto
+  if (model === a.model) { sheet.close(); await queueModelChange(name, model, { tested: true }, slot); return; }   // its own model: leaves Auto (judged in line, after earlier changes)
   const v = orSheetView ? orSheetView.view : {};
   btn.disabled = true; $('ors-msg').textContent = `Testing ${id}…`;
   const passed = await testBeforeSwitch(model);

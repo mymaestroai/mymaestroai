@@ -6428,7 +6428,7 @@
       if (!chat) { closeOrPicker(); return; }
       const model = `openrouter/${id}`;
       const slot = reserveModelChange(chat.agent);   // its place in the line is now, before the test
-      if (model === chat.model) { closeOrPicker(); if (chat.autoModel && isHubAdmin()) await queueModelChange(chatId, model, { tested: true }, slot); return; }   // its own model: leaves Auto
+      if (model === chat.model) { closeOrPicker(); await queueModelChange(chatId, model, { tested: true }, slot); return; }   // its own model: leaves Auto (judged in line, after earlier changes)
       if (btn) btn.disabled = true;
       const msg = document.getElementById('or-pick-msg'); if (msg) msg.textContent = `Testing ${id}…`;
       const passed = await testBeforeSwitch(model);
