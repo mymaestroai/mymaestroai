@@ -147,7 +147,7 @@ test('the phone page draws the line under saved messages, sends, replies and fol
   const mob = read('mobile.js');
   assert.match(block(mob, 'function renderHistory(', '\n}\n'), /const times = msgTimeLines\(chatHistory\);[\s\S]*renderEntry\(chatHistory\[i\], times\[i\]\)/);
   const entry = block(mob, 'function renderEntry(', '\n}\n');
-  assert.match(entry, /setBubbleTime\(addUserBubble\(ij \? ij\.text : m\.content, null\), time\)/);
+  assert.match(entry, /setBubbleTime\(addUserBubble\(ij \? ij\.text : m\.content, savedImageUrls\(m\.images\)\), time\)/);
   assert.match(entry, /setBubbleTime\(b\.el, time\)/);
   const send = block(mob, 'async function sendMessage(', '\n}\n');
   assert.match(send, /if \(!fallback\) setBubbleTime\(userEl, msgTimeLabel\(Date\.now\(\)\)\)/);

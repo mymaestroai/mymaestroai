@@ -6612,6 +6612,10 @@
               if (!show) return null;
               const ijView = interjectionView(msg);   // an interjection: the person's bubble with the interjection marker
               const hid = appendMessage(chatId, msg.role, ijView ? interjectionBubbleText(ijView) : msg.content, into);
+              if (msg.role === 'user' && Array.isArray(msg.images) && msg.images.length) {   // the pictures this line was sent with (an interjection's or a normal message's)
+                const picEl = document.getElementById(hid);
+                if (picEl) picEl.insertAdjacentHTML('beforeend', imageGalleryHtml(savedImageUrls(msg.images), 'max-height:200px;'));
+              }
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
@@ -7973,7 +7977,7 @@
         return 'tool';
       }
       if (item.kind === 'interjection') {   // a message the person sent into the running turn (journaled by the hub when it was sent)
-        if (!t.items.has(item.id)) t.items.set(item.id, { ij: { text: String(item.message || ''), emergency: item.priority === 'emergency' }, done: true, at: Number.isFinite(item.at) ? item.at : 0, ts: item.ts });
+        if (!t.items.has(item.id)) t.items.set(item.id, { ij: { text: String(item.message || ''), emergency: item.priority === 'emergency', images: savedImageUrls(item.images) }, done: true, at: Number.isFinite(item.at) ? item.at : 0, ts: item.ts });
         return 'interjection';
       }
       if (item.kind === 'worker') { turnWorkerUpsert(chatId, t, item); return 'worker'; }
@@ -9334,6 +9338,10 @@
       return { text: m ? m[2] : entry.content, emergency };
     }
     // ── interjection helpers (end) ──
+    // A saved picture file as the page loads it: /api/image/<base64(path)> (serveImage allows data/uploads).
+    function savedImageUrls(paths) {
+      return (Array.isArray(paths) ? paths : []).filter(p => typeof p === 'string' && p).map(p => '/api/image/' + btoa(p));
+    }
     // The text of an interjection bubble: what sendInterjection shows when the person sends it, an emergency one marked as such.
     function interjectionBubbleText(view) {
       return `${view.emergency ? '🚨 [Emergency interjection]' : '⚡ [Interjection]'} ${view.text}`;
@@ -9421,13 +9429,15 @@
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
       const content = input.value.trim();
-      if (!content) return;
+      const imagesToSend = [...(chat.pendingImages || [])];   // the pictures waiting in the input go with the interjection
+      if (!content && imagesToSend.length === 0) return;
 
       input.value = '';
       input.style.height = 'auto';
+      clearPendingImages(chatId);
 
-      // Show the interjection in the chat as a user message with a distinct style
-      setMessageTime(document.getElementById(appendMessage(chatId, 'user', `⚡ [Interjection] ${content}`)), msgTimeLabel(Date.now()));
+      // Show the interjection in the chat as a user message with a distinct style (with its pictures)
+      setMessageTime(document.getElementById(appendMessageWithImages(chatId, 'user', `⚡ [Interjection] ${content}`.trim(), imagesToSend)), msgTimeLabel(Date.now()));
 
       // Show a transient "sent" notice that will be updated when the agent picks it up
       const noticeEl = appendSystemNotice(chatId, '⚡ Interjection sent - waiting for agent to pick it up...');
@@ -9438,22 +9448,26 @@
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent: chat.agent, message: content })
+          body: JSON.stringify({ agent: chat.agent, message: content, ...(imagesToSend.length ? { images: imagesToSend } : {}) })
         });
         const result = await resp.json();
         if (result.success) {
           if (noticeEl) noticeEl.textContent = '⚡ Interjection delivered into the running turn';
         } else if (/not currently processing/i.test(String(result.error || ''))) {
-          // The turn ended between the status update and the send: go as a normal message.
+          // The turn ended between the status update and the send: go as a normal message (the pictures with it).
           if (noticeEl) noticeEl.textContent = '↪ The turn had already ended, sending as a new message…';
           skipInterjectOnce.add(chatId);
           input.value = content;
+          chat.pendingImages = imagesToSend;
+          renderImagePreviews(chatId);
           return sendSoloMessage(chatId);
         } else {
           if (noticeEl) { noticeEl.textContent = `⚠️ Interjection failed: ${result.error}`; }
+          if (imagesToSend.length) { chat.pendingImages = imagesToSend; renderImagePreviews(chatId); }   // not sent: the pictures are back in the input
         }
       } catch (e) {
         if (noticeEl) { noticeEl.textContent = `⚠️ Interjection failed: ${e.message}`; }
+        if (imagesToSend.length) { chat.pendingImages = imagesToSend; renderImagePreviews(chatId); }
       }
     }
 
@@ -9472,10 +9486,10 @@
       // Route to interjection whenever the agent is working: a turn this tab started, or one the hub
       // reports busy (started from the phone, a schedule, a consult or another tab). Before this the
       // desktop only interjected into its own turn and every other send bounced as "busy".
-      // Images cannot be interjected, so a message with images still goes the normal way.
+      // A message with pictures goes the same way: the pictures travel with the interjection.
       const liveNow = agentStatus[chat.agent];
       const agentWorking = chat.status === 'thinking' || !!(liveNow && liveNow.busy);
-      if (content && agentWorking && pendingImages.length === 0 && !skipInterjectOnce.delete(chatId)) {
+      if ((content || pendingImages.length > 0) && agentWorking && !skipInterjectOnce.delete(chatId)) {
         notify(null);   // a voice message into a working agent goes as an interjection
         return sendInterjection(chatId);
       }
@@ -9556,7 +9570,7 @@
 
         if (response.status === 409) {
           // Agent busy: nothing was sent. Deliver the text into the running turn instead of bouncing it
-          // (once per message; a message with images cannot be interjected and is handed back).
+          // (once per message; the pictures go with it).
           document.getElementById(msgId)?.remove();
           if (userMsgEl) userMsgEl.remove();
           const last = chat.messages[chat.messages.length - 1];
@@ -9565,10 +9579,12 @@
           setAgentStatus(chat.agent, '');
           delete chat.lastMsgId;
           chat.controller = null;
-          if (!imagesToSend.length && !chat.bounced409) {
+          if (!chat.bounced409) {
             chat.bounced409 = true;
             setAgentLive(chat.agent, { busy: true });
             input.value = content;
+            chat.pendingImages = imagesToSend;
+            renderImagePreviews(chatId);
             notify(null);   // delivered into the running turn instead
             return sendInterjection(chatId);
           }
@@ -10701,6 +10717,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 // The turn ended before the agent could take the interjection in.
                 // It is saved and will be delivered with the next message.
                 const noticeEl = document.getElementById(`interject-notice-${chatId}`);
+                if (oc2.note) {   // a picture on a Codex turn: queued for the round right after the current step (the notice stays until it is received)
+                  const waiting = `⏳ Interjection with a picture: ${oc2.note}`;
+                  if (noticeEl) noticeEl.textContent = waiting; else appendSystemNotice(chatId, waiting);
+                  continue;
+                }
                 const text = `⏭️ Interjection arrived too late for this turn — it will be delivered with your next message`;
                 if (noticeEl) { noticeEl.textContent = text; noticeEl.removeAttribute('id'); }
                 else appendSystemNotice(chatId, text);
@@ -16592,7 +16613,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           html += `<div class="${cls}">${formatContent(step.text.replace(/^\s*\n/, ''))}</div>`;   // the paragraph break after a tool call is the layout's job
         }
         // The person's interjections, where they came in the reply (the same marker as the bubble sendInterjection draws).
-        for (const ij of step.ijs || []) html += `<div class="step-interjection" style="margin:6px 0;padding:6px 10px;border-left:3px solid ${ij.emergency ? '#d32f2f' : '#f9a825'};background:rgba(128,128,128,0.12);border-radius:4px">${esc(interjectionBubbleText(ij))}</div>`;
+        for (const ij of step.ijs || []) html += `<div class="step-interjection" style="margin:6px 0;padding:6px 10px;border-left:3px solid ${ij.emergency ? '#d32f2f' : '#f9a825'};background:rgba(128,128,128,0.12);border-radius:4px">${esc(interjectionBubbleText(ij))}${imageGalleryHtml(ij.images, 'max-height:200px;')}</div>`;
       }
 
       // Append images (escaped; click handled by the delegated listener)

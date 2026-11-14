@@ -303,7 +303,7 @@ test('hub-started turns keep their origin in the conversation log; the reloaded 
   const logOriginOf = new Function(src.slice(a, b) + '\nreturn logOriginOf;')();
   assert.deepStrictEqual(logOriginOf({ kind: 'schedule', from: 'HYPE follow-up', taskId: 'st_1', jobId: null, extra: { big: 1 } }),
     { kind: 'schedule', from: 'HYPE follow-up', taskId: 'st_1' });
-  assert.match(src, /const logOrigin = \(origin && typeof origin === 'object' && origin\.kind\) \? \{ origin: logOriginOf\(origin\) \} : undefined;\n\s*appendConversationLog\(agent, 'user', message, false, \(tiger_team \|\| logOrigin\)/);
+  assert.match(src, /const logOrigin = \(origin && typeof origin === 'object' && origin\.kind\) \? \{ origin: logOriginOf\(origin\) \} : undefined;\n[^\n]*\n\s*const logMeta = \{ \.\.\.\(tiger_team \? \{ tiger_team: true \} : \{\}\), \.\.\.logOrigin, [^\n]*\n\s*appendConversationLog\(agent, 'user', message, false, Object\.keys\(logMeta\)\.length \? logMeta : undefined\)/);
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert.match(app, /if \(msg\.role === 'user' && msg\.origin\?\.kind\) appendSystemNotice\(chatId, `⚡ \$\{hubOriginLabel\(msg\.origin\)\} — \$\{hubTurnTime\(msg\.ts\)\}`\);/);
   assert.match(app, /appendSystemNotice\(chat\.id, `⚡ \$\{hubOriginLabel\(ev\.origin\)\} — \$\{hubTurnTime\(\)\}`\);/);

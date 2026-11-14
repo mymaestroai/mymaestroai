@@ -5202,6 +5202,16 @@ function setBubbleTime(el, text) {
   el.classList.add('has-time');
 }
 
+// A saved picture file as the page loads it: /api/image/<base64(path)> (serveImage allows data/uploads).
+function savedImageUrls(paths) {
+  const out = [];
+  for (const p of Array.isArray(paths) ? paths : []) {
+    if (typeof p !== 'string' || !p) continue;
+    try { out.push('/api/image/' + btoa(p)); } catch { /* a path btoa cannot encode: skipped */ }
+  }
+  return out;
+}
+
 function addUserBubble(text, images) {
   const d = document.createElement('div');
   d.className = 'msg user';
@@ -5518,7 +5528,7 @@ function renderEntry(m, time = '') {
   if (m.role === 'user') {
     if (m.origin?.kind) addNote(`⚡ ${originLabel(m.origin)} — ${timeLabel(m.ts)}`);
     const ij = interjectionView(m);   // an interjection: the person's words, then the note the live send shows
-    setBubbleTime(addUserBubble(ij ? ij.text : m.content, null), time);
+    setBubbleTime(addUserBubble(ij ? ij.text : m.content, savedImageUrls(m.images)), time);   // the pictures the line was sent with come back as bubble images
     if (ij) addNote(ij.emergency ? '🚨 emergency interjection' : '⤵ interjection').classList.add('interject');
   } else if (m.role === 'assistant') {
     const saved = Array.isArray(m.activity) && m.activity.length;
@@ -5846,7 +5856,7 @@ function attachStreamBubble(rec) {
   for (const x of rec.sentIjs || []) {
     const feed = holderFeed(rec);
     if (!feed.ijs) feed.ijs = new Map();
-    if (!feed.ijs.has(x.id)) feed.ijs.set(x.id, { kind: 'ij', id: x.id, text: x.text, emergency: false, at: x.at });
+    if (!feed.ijs.has(x.id)) feed.ijs.set(x.id, { kind: 'ij', id: x.id, text: x.text, emergency: false, images: x.images || [], at: x.at });
   }
   if (rec.rsn) paintReasoning(rec);
   if (!rec.gotAny) { b.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>'; return; }
@@ -5975,6 +5985,12 @@ function paintReply(holder, text, changed = null) {
       b.el.className = b.type === 'ij' ? 'seg ij-seg' : 'seg';
       if (b.type === 'ij') {   // the person's interjection, where it came in the reply: the person's words and the interjection note
         b.el.textContent = b.ij.text;
+        for (const src of b.ij.images || []) {   // the pictures sent with it, the same image look as the person's bubble
+          const pic = document.createElement('img');
+          pic.className = 'att';
+          pic.src = src;
+          b.el.appendChild(pic);
+        }
         const note = document.createElement('div');
         note.className = 'note interject';
         note.textContent = b.ij.emergency ? '🚨 emergency interjection' : '⤵ interjection';
@@ -6019,7 +6035,7 @@ function feedUpsert(holder, item) {
   if (item.kind === 'interjection') {   // the person's message sent into the running turn: drawn in its place in the reply (replyBlocks), not a row
     if (!feed.ijs) feed.ijs = new Map();
     if (!feed.ijs.has(item.id)) {
-      feed.ijs.set(item.id, { kind: 'ij', id: item.id, text: String(item.message || ''), emergency: item.priority === 'emergency', at: placeOf(holder, feed, item) });
+      feed.ijs.set(item.id, { kind: 'ij', id: item.id, text: String(item.message || ''), emergency: item.priority === 'emergency', images: savedImageUrls(item.images), at: placeOf(holder, feed, item) });
       paintReply(holder);
     }
     return feed.ijs.get(item.id);
@@ -7352,13 +7368,16 @@ function setSendMode(own) {
 async function sendInterjection(agent) {
   const input = $('msg-input');
   const text = input.value.trim();
-  if (!text) { if (pendingImages.length) toast('Images cannot be interjected; send them when the turn ends'); return; }
+  const images = pendingImages.slice();   // the pictures waiting in the composer go with the interjection
+  if (!text && !images.length) return;
   input.value = '';
   input.style.height = 'auto';
   saveDraft(agent, '');
   composerTypingPaint();
+  pendingImages = [];
+  renderPreviews();
   stick = true;
-  const userEl = addUserBubble(text, null);
+  const userEl = addUserBubble(text, images);
   setBubbleTime(userEl, msgTimeLabel(Date.now()));
   const noteEl = addNote('⤵ delivering mid-turn…');
   noteEl.classList.add('interject');
@@ -7368,7 +7387,7 @@ async function sendInterjection(agent) {
     const r = await api('/api/chat/interject', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent, message: text }),
+      body: JSON.stringify({ agent, message: text, ...(images.length ? { images } : {}) }),
     });
     result = await r.json().catch(() => ({ success: false, error: `HTTP ${r.status}` }));
   } catch (e) {
@@ -7377,7 +7396,7 @@ async function sendInterjection(agent) {
   if (result && result.success) {
     noteEl.textContent = 'delivered mid-turn';
     const rec = streams.get(agent);   // a turn streaming to this phone: back in this chat it draws the interjection in its place
-    if (rec) (rec.sentIjs = rec.sentIjs || []).push({ id: `local-ij-${Date.now()}-${(rec.sentIjs || []).length}`, text, at: String(typeof rec.full === 'string' ? rec.full : '').length });
+    if (rec) (rec.sentIjs = rec.sentIjs || []).push({ id: `local-ij-${Date.now()}-${(rec.sentIjs || []).length}`, text, images, at: String(typeof rec.full === 'string' ? rec.full : '').length });
     return;
   }
   const error = String((result && result.error) || 'request failed');
@@ -7389,11 +7408,12 @@ async function sendInterjection(agent) {
     if (stale) { stale.stale = true; stale.controller.abort(); }
     setLive(agent, { busy: false, pendingQuestion: false });
     paintStatus();
-    await sendMessage({ agent, text, userEl, noteEl });
+    await sendMessage({ agent, text, images, userEl, noteEl });   // the pictures go with the normal send
     return;
   }
   noteEl.textContent = `⚠ not delivered: ${error}`;
   if (current === agent && !input.value) { input.value = text; saveDraft(agent, text); }
+  if (current === agent && images.length && !pendingImages.length) { pendingImages = images; renderPreviews(); }   // not sent: the pictures are back in the composer
   composerTypingPaint();
 }
 
@@ -9184,7 +9204,7 @@ async function sendMessage(fallback) {
   if (!fallback) tzSentAt = Date.now();   // the person's own send: its request carries the phone's zone (zoneHeader)
   const input = $('msg-input');
   const text = fallback ? fallback.text : input.value.trim();
-  const images = fallback ? [] : pendingImages.slice();
+  const images = fallback ? (fallback.images || []) : pendingImages.slice();   // a fallback keeps the interjection's pictures
   if (!text && !images.length) return;
 
   if (!fallback) {

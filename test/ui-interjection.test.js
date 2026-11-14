@@ -53,7 +53,7 @@ test('desktop history draws an interjection as the person\'s bubble with the liv
   assert.ok(app.includes('appendMessage(chatId, msg.role, ijView ? interjectionBubbleText(ijView) : msg.content, into)'), 'and draws the bubble from it');
   const { interjectionBubbleText } = load(app, ['interjectionBubbleText']);
   assert.strictEqual(interjectionBubbleText({ text: 'hurry', emergency: false }), '⚡ [Interjection] hurry', 'the same marker sendInterjection shows');
-  assert.ok(app.includes('appendMessage(chatId, \'user\', `⚡ [Interjection] ${content}`)'), 'the live send still uses that marker');
+  assert.ok(app.includes('appendMessageWithImages(chatId, \'user\', `⚡ [Interjection] ${content}`.trim(), imagesToSend)'), 'the live send still uses that marker (and draws its pictures)');
   assert.match(interjectionBubbleText({ text: 'stop', emergency: true }), /^🚨 \[Emergency interjection\] stop$/);
 });
 
@@ -61,12 +61,12 @@ test('phone history draws an interjection as the person\'s bubble followed by th
   const mob = read('mobile.js');
   const entry = fnSource(mob, 'renderEntry');
   assert.ok(entry.includes('const ij = interjectionView(m);'));
-  assert.ok(entry.includes('setBubbleTime(addUserBubble(ij ? ij.text : m.content, null), time);'), 'the words only, no prefix');
+  assert.ok(entry.includes('setBubbleTime(addUserBubble(ij ? ij.text : m.content, savedImageUrls(m.images)), time);'), 'the words only, no prefix (and the saved pictures)');
   assert.ok(entry.includes("addNote(ij.emergency ? '🚨 emergency interjection' : '⤵ interjection').classList.add('interject')"), 'the note style of the live send');
   assert.ok(mob.includes("const noteEl = addNote('⤵ delivering mid-turn…');") && mob.includes("noteEl.classList.add('interject');"), 'the live send\'s note is the same style');
   // run it: the bubble text and the note
   const added = [];
-  const api = load(mob, ['renderEntry'], {
+  const api = load(mob, ['savedImageUrls', 'renderEntry'], {
     interjectionView, originLabel: () => '', timeLabel: () => '', setBubbleTime: () => {},
     addNote: (t) => { const n = { text: t, classList: { add: (c) => { n.cls = c; } } }; added.push(n); return n; },
     addUserBubble: (t) => { added.push({ bubble: t }); return {}; },
@@ -104,7 +104,7 @@ test('desktop live turn: an interjection item is drawn in its place in the reply
   assert.deepStrictEqual(Array.from(turnToolActivity(t), x => x.type), ['call', 'result'], 'the interjections are not tool rows');
   // the page's activity apply turns the hub's item into that shape
   const apply = fnSource(app, 'turnActivityApply');
-  assert.ok(apply.includes("if (item.kind === 'interjection')") && apply.includes('ij: { text: String(item.message || \'\'), emergency: item.priority === \'emergency\' }'));
+  assert.ok(apply.includes("if (item.kind === 'interjection')") && apply.includes('ij: { text: String(item.message || \'\'), emergency: item.priority === \'emergency\', images: savedImageUrls(item.images) }'));
   assert.ok(app.includes("else if (kind === 'tool' || kind === 'interjection') paintTurn(h.chatId, h.t, h.t.text);"), 'a followed turn repaints when one comes');
   assert.ok(app.includes("for (const ij of step.ijs || []) html += `<div class=\"step-interjection\""), 'renderSteps draws the marker');
 });
