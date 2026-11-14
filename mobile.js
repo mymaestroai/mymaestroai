@@ -2215,7 +2215,7 @@ function autoQuoted(s) {
   return m ? m[1] : null;
 }
 function autoInfoOf(entry) {
-  if (!entry || entry.role !== 'user' || entry.ask === true) return null;
+  if (!entry || entry.role !== 'user' || entry.ask === true || entry.interjection) return null;
   const o = entry.origin;
   if (o && typeof o === 'object' && o.kind) {
     const kind = autoKindOfOrigin(o);
@@ -2306,7 +2306,7 @@ function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {})
       const x = history[j];
       if (!x) break;
       if (x.inProgress) continue;
-      if (x.ask === true) break;
+      if (x.ask === true || x.interjection) break;
       if (x.role === 'assistant') { hasAsst = true; indexes.push(j); continue; }
       if (x.role !== 'user' || hasAsst) break;
       const xi = autoInfoOf(x);
@@ -5064,7 +5064,7 @@ function msgTimeLines(history, now = Date.now(), locale = [], zone = msgTimeZone
     const m = history[i] || {};
     const t = m.inProgress ? NaN : Date.parse(m.ts);   // the running turn's reply so far: not finished, no line
     lines.push(Number.isFinite(t) ? msgTimeLabel(t, now, locale, zone) : '');
-    if (m.role === 'user' && !m.ask) { start = t; last = -1; continue; }   // the next turn
+    if (m.role === 'user' && !m.ask && !m.interjection) { start = t; last = -1; continue; }   // the next turn
     if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
     if (last >= 0 && m.base > 0 && m.base === joined) {
       lines[last] = msgTimeLabel(Date.parse(history[last].ts), now, locale, zone);   // an earlier piece: its time only
@@ -5324,7 +5324,7 @@ async function rereadHistory(agent, attempt = 0) {
     if (attempt < 3) setTimeout(() => { if (seq === histReadSeq && gen === histGen) rereadHistory(agent, attempt + 1); }, 1000 * 2 ** attempt);
     return false;
   }
-  if (hist.length && hist[hist.length - 1].inProgress) hist.pop();   // a new turn's reply so far (the live turn shows it)
+  hist = hist.filter(e => !(e && e.inProgress));   // the running turn's reply so far and its interjections (the live turn shows them)
   // Older pages the person already loaded ("Load earlier") stay in front of the fresh newest page, with their cursor.
   const first = hist.length ? Date.parse(hist[0].ts) : NaN;
   const older = Number.isFinite(first) ? chatHistory.filter(e => e && Date.parse(e.ts) < first) : [];
@@ -5517,7 +5517,9 @@ function renderEntry(m, time = '') {
   if (m.archived === true) { renderArchived(m, time); return; }
   if (m.role === 'user') {
     if (m.origin?.kind) addNote(`⚡ ${originLabel(m.origin)} — ${timeLabel(m.ts)}`);
-    setBubbleTime(addUserBubble(m.content, null), time);
+    const ij = interjectionView(m);   // an interjection: the person's words, then the note the live send shows
+    setBubbleTime(addUserBubble(ij ? ij.text : m.content, null), time);
+    if (ij) addNote(ij.emergency ? '🚨 emergency interjection' : '⤵ interjection').classList.add('interject');
   } else if (m.role === 'assistant') {
     const saved = Array.isArray(m.activity) && m.activity.length;
     const b = addAssistantBubble(saved ? undefined : m.content);
@@ -5795,8 +5797,12 @@ async function openChat(name) {
   chatHistory = loadedHist; chatNext = loadedNext;
   histGen++;
   // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place, with its
-  // tool calls, so it is not shown twice. The hub flags it only while that turn runs.
-  const inProgress = chatHistory.length && chatHistory[chatHistory.length - 1].inProgress ? chatHistory.pop() : null;
+  // tool calls, so it is not shown twice. The hub flags it only while that turn runs. A turn with an interjection is
+  // saved in several pieces (a piece, the interjection line, the rest): every flagged line is left out here (the
+  // interjections come back with the live turn, in their places), and the text so far is the pieces joined.
+  const flagged = chatHistory.filter(e => e && e.inProgress);
+  const inProgress = flagged.length ? { content: flagged.filter(e => e.role === 'assistant' && !e.ask).map(e => e.content || '').join(''), ts: flagged[flagged.length - 1].ts } : null;
+  if (flagged.length) chatHistory = chatHistory.filter(e => !(e && e.inProgress));
   if (inProgress && !isBusy(name)) setLive(name, { busy: true });
   renderHistory();
   if (streams.has(name)) {
@@ -5835,6 +5841,13 @@ function attachStreamBubble(rec) {
   const b = addAssistantBubble();
   rec.bubble = b;
   rec._blocks = null; rec._sig = null;
+  // Interjections this phone sent into its own streaming turn: history leaves out the running turn's lines, so they are
+  // drawn here, in their places in the reply (the live bubble had them at the bottom of the chat as bubbles of the person's).
+  for (const x of rec.sentIjs || []) {
+    const feed = holderFeed(rec);
+    if (!feed.ijs) feed.ijs = new Map();
+    if (!feed.ijs.has(x.id)) feed.ijs.set(x.id, { kind: 'ij', id: x.id, text: x.text, emergency: false, at: x.at });
+  }
   if (rec.rsn) paintReasoning(rec);
   if (!rec.gotAny) { b.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>'; return; }
   paintReply(rec, rec.full);   // text and activity rows in the order they happened
@@ -5906,7 +5919,14 @@ function clearPlaceholder(body) {
 // before and after it. The own stream and every catch-up (re-attach, a turn started elsewhere, a reopened chat) paint
 // through paintReply, so a reconnected turn reads like one watched live. Items without a place (an older hub) go first.
 function replyBlocks(holder, text) {
-  const items = holder.feed ? [...holder.feed.items.values()] : [];
+  const tools = holder.feed ? [...holder.feed.items.values()] : [];
+  // The person's interjections (feed.ijs) go in among the rows by their place in the reply, each ending the group before it.
+  const atOf = (x) => (Number.isFinite(x.at) ? x.at : 0);
+  const ijs = holder.feed && holder.feed.ijs ? [...holder.feed.ijs.values()].sort((a, b) => atOf(a) - atOf(b)) : [];
+  const items = [];
+  let k = 0;
+  for (const it of tools) { while (k < ijs.length && atOf(ijs[k]) < atOf(it)) items.push(ijs[k++]); items.push(it); }
+  while (k < ijs.length) items.push(ijs[k++]);
   const blocks = [];
   let pos = 0; let group = null;
   for (const it of items) {
@@ -5915,6 +5935,11 @@ function replyBlocks(holder, text) {
       if (group) { blocks.push(group); group = null; }
       blocks.push({ type: 'text', from: pos, to: at });
       pos = at;
+    }
+    if (it.kind === 'ij') {
+      if (group) { blocks.push(group); group = null; }
+      blocks.push({ type: 'ij', ij: it });
+      continue;
     }
     if (!group) group = { type: 'group', items: [] };
     group.items.push(it);
@@ -5937,17 +5962,24 @@ function paintReply(holder, text, changed = null) {
   const body = holder.bubble.body;
   const full = holder.replyText || '';
   const blocks = replyBlocks(holder, full);
-  const sig = blocks.map(b => (b.type === 'text' ? `t${b.from}` : `g${b.items.map(i => i.id).join(',')}`)).join('|');
-  const intact = holder._blocks && holder._sig === sig && holder._blocks.every(b => b.type !== 'text' || (b.el && b.el.parentNode === body));
+  const sig = blocks.map(b => (b.type === 'text' ? `t${b.from}` : b.type === 'ij' ? `i${b.ij.id}` : `g${b.items.map(i => i.id).join(',')}`)).join('|');
+  const intact = holder._blocks && holder._sig === sig && holder._blocks.every(b => b.type === 'group' || (b.el && b.el.parentNode === body));
   if (!intact) {
     resetLayout(holder);
     for (const n of [...body.children]) if (n.classList.contains('seg') || n.classList.contains('feed')) n.remove();
     clearPlaceholder(body);
     const before = [...body.children].find(n => n.tagName === 'IMG') || null;   // attached images stay last
     for (const b of blocks) {
-      if (b.type !== 'text') continue;   // the calls go into the tool panel (paintTools)
+      if (b.type === 'group') continue;   // the calls go into the tool panel (paintTools)
       b.el = document.createElement('div');
-      b.el.className = 'seg';
+      b.el.className = b.type === 'ij' ? 'seg ij-seg' : 'seg';
+      if (b.type === 'ij') {   // the person's interjection, where it came in the reply: the person's words and the interjection note
+        b.el.textContent = b.ij.text;
+        const note = document.createElement('div');
+        note.className = 'note interject';
+        note.textContent = b.ij.emergency ? '🚨 emergency interjection' : '⤵ interjection';
+        b.el.appendChild(note);
+      }
       body.insertBefore(b.el, before);
     }
     holder._blocks = blocks; holder._sig = sig;
@@ -5984,6 +6016,14 @@ function feedUpsert(holder, item) {
   if (!item || typeof item !== 'object' || !item.id) return null;
   const feed = holderFeed(holder);
   let it = null;
+  if (item.kind === 'interjection') {   // the person's message sent into the running turn: drawn in its place in the reply (replyBlocks), not a row
+    if (!feed.ijs) feed.ijs = new Map();
+    if (!feed.ijs.has(item.id)) {
+      feed.ijs.set(item.id, { kind: 'ij', id: item.id, text: String(item.message || ''), emergency: item.priority === 'emergency', at: placeOf(holder, feed, item) });
+      paintReply(holder);
+    }
+    return feed.ijs.get(item.id);
+  }
   if (item.kind === 'worker_tool') {
     const w = feed.byWorker.get(String(item.workerId));
     if (!w) return null;
@@ -7145,6 +7185,7 @@ function applyTurnFeed(holder, turn) {
   if (feed.local) {   // rows the own stream built have other ids: the hub's rows replace them
     feed.items.clear();
     feed.byWorker.clear();
+    if (feed.ijs) feed.ijs.clear();
     feed.local = false;
     resetLayout(holder);
   }
@@ -7333,7 +7374,12 @@ async function sendInterjection(agent) {
   } catch (e) {
     result = { success: false, error: e.message || 'request failed' };
   }
-  if (result && result.success) { noteEl.textContent = 'delivered mid-turn'; return; }
+  if (result && result.success) {
+    noteEl.textContent = 'delivered mid-turn';
+    const rec = streams.get(agent);   // a turn streaming to this phone: back in this chat it draws the interjection in its place
+    if (rec) (rec.sentIjs = rec.sentIjs || []).push({ id: `local-ij-${Date.now()}-${(rec.sentIjs || []).length}`, text, at: String(typeof rec.full === 'string' ? rec.full : '').length });
+    return;
+  }
   const error = String((result && result.error) || 'request failed');
   if (/not currently processing/i.test(error)) {
     noteEl.textContent = 'turn had already ended, sent as a new message';
@@ -9341,7 +9387,7 @@ function turnReplyFrom(history, start, minTs) {
   for (let i = Math.max(0, start); i < history.length; i++) {
     const m = history[i];
     if (!m) continue;
-    if (m.role === 'user' && !m.ask) break;                                  // the next turn
+    if (m.role === 'user' && !m.ask && !m.interjection) break;                // the next turn (a question or interjection line is inside the reply)
     if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
     if (minTs && m.ts && Date.parse(m.ts) < minTs) continue;
     if (!reply) { reply = m; content = m.content; continue; }                 // the reply's first piece
@@ -9353,12 +9399,22 @@ function turnReplyFrom(history, start, minTs) {
 function turnReplySince(history, sinceTs) {
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
-    if (!m || (m.role === 'user' && !m.ask) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
+    if (!m || (m.role === 'user' && !m.ask && !m.interjection) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
     if (m.role === 'assistant' && !m.ask && typeof m.content === 'string' && !(m.base > 0)) return turnReplyFrom(history, i, sinceTs);
   }
   return null;
 }
 // ── turn-reply helpers (end) ──
+
+// An interjection read back from history: the person's own bubble, marked. Shared verbatim with lib/ui-interjection.js and app.js (test/ui-interjection.test.js).
+// ── interjection helpers (begin) ──
+function interjectionView(entry) {
+  if (!entry || entry.role !== 'user' || !entry.interjection || typeof entry.content !== 'string') return null;
+  const m = /^\[([^\]\n]*)\]: ?([\s\S]*)$/.exec(entry.content);
+  const emergency = entry.interjection.priority === 'emergency' || (!!m && /^EMERGENCY/i.test(m[1]));
+  return { text: m ? m[2] : entry.content, emergency };
+}
+// ── interjection helpers (end) ──
 
 async function reattachCheck(ra) {
   if (!ra || ra.checking || reattaches.get(ra.agent) !== ra) return;

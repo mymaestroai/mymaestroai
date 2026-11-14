@@ -32,6 +32,7 @@ function slice(startMarker, endMarker) {
 // into an isolated context with fakes for the module state they touch.
 function loadAlertModule() {
   const logs = { log: [], warn: [] };
+  const convLog = [], noted = [];
   const ctx = {
     fs, path, crypto, Buffer, __dirname: ISO.lib,
     require: (m) => { if (m === './sdk-interject') return sdkInterject; throw new Error('unexpected require ' + m); },
@@ -43,6 +44,9 @@ function loadAlertModule() {
     codexSteerChannels: new Map(),
     activeResponses: new Map(),
     pendingChatRequests: new Set(),
+    // queueInterjection writes the interjection's history line when it is sent (and journals it in the hub's turn view)
+    appendConversationLog: (...a) => { convLog.push(a); return true; },
+    hubEvents: { events: { noteInterjection: (agent, ij) => { noted.push([agent, ij]); return null; } } },
     sdkInterject,
     hubHalt: { getHubHalt: () => ({ isHalted: () => false, status: () => ({ halted: false }), refusal: () => null }) },
     wakeAgent: async () => { throw new Error('wakeAgent should be stubbed via opts.runTurn'); },
@@ -55,7 +59,7 @@ function loadAlertModule() {
     slice('function isAgentActive(agentName) {', '\n// ── Detached jobs (run_job)'),
   ].join('\n');
   vm.runInContext(code + '\nthis.api = { handleChat, handleInterjection, handleAlert, ensureAlertSecret, ALERT_IDS, alertMessage, drainInterjections };', ctx);
-  return { ctx, api: ctx.api, logs };
+  return { ctx, api: ctx.api, logs, convLog, noted };
 }
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'chat-alert-')); }
@@ -501,5 +505,45 @@ describe('server.js /api/chat/alert route', () => {
     assert.deepEqual(seen[0], { agent: 'trader', id: 'HF_LOW', secret: 'x' });
     assert.strictEqual(await ctx.route('/api/chat/alert', { method: 'GET' }, {}), 'unhandled');
     assert.ok(source.includes('ensureAlertSecret();'), 'secret is created at boot');
+  });
+});
+
+describe('the history line of an interjection (alerts included), written once when it is sent', () => {
+  it('an alert queued behind a running turn is logged as an emergency interjection line carrying its id; a deduped one adds none', async () => {
+    const { api, ctx, convLog, noted } = loadAlertModule();
+    const { secret, file } = writeSecret(tmpDir());
+    ctx.activeResponses.set('trader', {});
+    await api.handleAlert({ agent: 'trader', id: 'HF_LOW', secret }, { secretFile: file });
+    assert.strictEqual(convLog.length, 1);
+    const [agent, role, content, overwrite, meta] = convLog[0];
+    assert.deepStrictEqual([agent, role, overwrite], ['trader', 'user', false]);
+    assert.strictEqual(content, `[EMERGENCY INTERJECTION]: ${api.alertMessage('HF_LOW')}`);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(meta)), { interjection: { id: 'HF_LOW', transport: 'gateway-loop', priority: 'emergency' } });   // (made in the vm: compared as plain data)
+    assert.deepStrictEqual(noted.map(n => [n[0], n[1].priority]), [['trader', 'emergency']], 'journaled in the hub\'s turn view too');
+    await api.handleAlert({ agent: 'trader', id: 'HF_LOW', secret }, { secretFile: file });   // deduped
+    assert.strictEqual(convLog.length, 1, 'a deduped alert is not logged again');
+  });
+
+  it('a routine interjection gets an id when it has none, and the reply so far is saved before its line', () => {
+    const { api, ctx, convLog } = loadAlertModule();
+    const order = [];
+    ctx.activeResponses.set('trader', { flush: () => order.push('flush') });
+    ctx.appendConversationLog = (...a) => { order.push('write'); convLog.push(a); return true; };
+    api.handleInterjection({ agent: 'trader', message: 'routine note' });
+    assert.deepStrictEqual(order, ['flush', 'write']);
+    const meta = convLog[0][4];
+    assert.match(meta.interjection.id, /^ij-[0-9a-f-]{36}$/);
+    assert.strictEqual(meta.interjection.priority, undefined);
+    assert.strictEqual(convLog[0][2], '[OPERATOR INTERJECTION]: routine note');
+    assert.strictEqual(ctx.interjectionQueues.get('trader')[0].id, meta.interjection.id, 'the queued item carries the same id (stash and carry use it)');
+  });
+
+  it('an interjection to an ephemeral turn is queued as before but never logged', () => {
+    const { api, ctx, convLog, noted } = loadAlertModule();
+    ctx.activeResponses.set('worker-1', { ephemeral: true });
+    const r = api.handleInterjection({ agent: 'worker-1', message: 'note' });
+    assert.strictEqual(r.success, true);
+    assert.strictEqual(ctx.interjectionQueues.get('worker-1').length, 1);
+    assert.deepStrictEqual([convLog.length, noted.length], [0, 0]);
   });
 });

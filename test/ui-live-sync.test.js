@@ -27,7 +27,7 @@ test('desktop: no live event stream -> followed turns are fetched every few seco
 });
 
 test('desktop: the reply saved in progress is not drawn twice; its text seeds the live bubble of the same turn only', () => {
-  assert.ok(app.includes("if (msg.inProgress) { chats[chatId].inProgress = { text: msg.content || '', ts: msg.ts || null }; continue; }"));
+  assert.match(app, /if \(msg\.inProgress\) \{\s*if \(msg\.role === 'assistant'\) \{ const prev = chats\[chatId\]\.inProgress; chats\[chatId\]\.inProgress = \{ text: \(msg\.base > 0 && prev \? prev\.text : ''\) \+ \(msg\.content \|\| ''\), ts: msg\.ts \|\| null \}; \}\s*continue;\s*\}/);   // every flagged piece of the turn, joined; interjection lines are left for the live turn
   assert.ok(app.includes("const partial = ip && (!since || !ip.ts || Date.parse(ip.ts) >= Date.parse(since) - 1000) ? ip.text : '';"));
   assert.ok(app.includes('if (reply && (stillBusy === true || reply.inProgress)) {'), 'a flagged entry never finishes the bubble early');
   assert.ok(app.includes('if (reply.content && reply.content.length > (ra.partial || \'\').length) ra.partial = reply.content;'), 'the history copy never rolls the live text back');
@@ -38,7 +38,7 @@ test('phone: turn_progress, polling without a stream, one bubble for the turn', 
   assert.match(mjs, /function applyTurnProgress\(agent, p, holder = null\) \{[\s\S]{0,200}noteCtxReading\(agent, p\.context\);[\s\S]{0,200}setLive\(agent, \{ busy: true, activity: phaseText\(p\.progress\) \}\);/);
   assert.ok(mjs.includes('const TURN_POLL_MS = 4000;'));
   assert.match(mjs, /if \(es && es\.readyState === EventSource\.OPEN && esLastEventAt && Date\.now\(\) - esLastEventAt <= ES_STALE_MS\) return;\n\s+if \(current && screen === 'chat' && !streams\.has\(current\)[^\n]+catchUpOpenAgent\(\);\n\s+\}, TURN_POLL_MS\);/);
-  assert.ok(mjs.includes('const inProgress = chatHistory.length && chatHistory[chatHistory.length - 1].inProgress ? chatHistory.pop() : null;'));
+  assert.ok(mjs.includes('const flagged = chatHistory.filter(e => e && e.inProgress);') && mjs.includes("const inProgress = flagged.length ? { content: flagged.filter(e => e.role === 'assistant' && !e.ask).map(e => e.content || '').join('')"));
   assert.ok(mjs.includes("reattachIfIdle(name, inProgress ? String(inProgress.content || '') : '');"));
   assert.ok(mjs.includes('if (stillBusy === true || reply.inProgress) {'));
   assert.ok(mjs.includes("if (reply.content.length > (ra.partial || '').length) ra.partial = reply.content;"));

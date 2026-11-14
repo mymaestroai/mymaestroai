@@ -135,7 +135,7 @@ test('phone: the model counts calls and workers, a failed tool by its output and
 
 test('phone: the reply text stays in the bubble, the calls go to one panel above it, closed at first, rows still tap open', () => {
   const pr = extract(mjs, 'paintReply');
-  assert.match(pr, /if \(b\.type !== 'text'\) continue;   \/\/ the calls go into the tool panel/);
+  assert.match(pr, /if \(b\.type === 'group'\) continue;   \/\/ the calls go into the tool panel/);   // (text and interjection blocks get an element; groups of calls do not)
   assert.match(pr, /paintTools\(holder, blocks, changed\);/);
   assert.ok(!pr.includes("'feed fgroup'"), 'no rows between the text any more');
   const pt = extract(mjs, 'paintTools');

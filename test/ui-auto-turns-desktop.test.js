@@ -192,7 +192,7 @@ test('the remembered card carries the prompt time', () => {
 
 test('chat.messages never holds an inProgress entry, so onHubTurnStart `last` is a saved entry', () => {
   const load = block(app, 'for (const msg of history) {', 'const draw = (i,');
-  assert.match(load, /if \(msg\.inProgress\) \{.*; continue; \}/);
+  assert.match(load, /if \(msg\.inProgress\) \{[^}]*\}[^}]*\}?\s*continue;\s*\}/);
   assert.match(app, /for \(const \[i, msg\] of history\.entries\(\)\) \{\s*if \(!msg\.inProgress\) draw\(i\);/);
   assert.match(block(app, 'async function onHubTurnStart(', 'function onHubTurnDelta('), /never holds an inProgress entry/);
 });

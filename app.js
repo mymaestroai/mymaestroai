@@ -6595,7 +6595,12 @@
             for (const msg of history) {
               // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place,
               // with its tool calls, once the chat follows it (reattachIfIdle), so it is not shown twice.
-              if (msg.inProgress) { chats[chatId].inProgress = { text: msg.content || '', ts: msg.ts || null }; continue; }
+              // A turn with an interjection is saved in several pieces (a piece, the interjection line, the rest): the
+              // text so far is the pieces joined; the interjection lines come back as the live turn's own activity.
+              if (msg.inProgress) {
+                if (msg.role === 'assistant') { const prev = chats[chatId].inProgress; chats[chatId].inProgress = { text: (msg.base > 0 && prev ? prev.text : '') + (msg.content || ''), ts: msg.ts || null }; }
+                continue;
+              }
             }
             // One saved entry as the chat draws it: appendMessage + saved tool calls + reasoning + the time line.
             // into: where the bubble goes (default the panel; a card's body); push: false when chat.messages already has it;
@@ -6605,7 +6610,8 @@
               if (notice) { if (msg.role === 'user' && msg.origin?.kind) appendSystemNotice(chatId, `⚡ ${hubOriginLabel(msg.origin)} — ${hubTurnTime(msg.ts)}`); }
               if (push) chats[chatId].messages.push({ role: msg.role, content: msg.content });
               if (!show) return null;
-              const hid = appendMessage(chatId, msg.role, msg.content, into);
+              const ijView = interjectionView(msg);   // an interjection: the person's bubble with the interjection marker
+              const hid = appendMessage(chatId, msg.role, ijView ? interjectionBubbleText(ijView) : msg.content, into);
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
@@ -7465,7 +7471,7 @@
       return m ? m[1] : null;
     }
     function autoInfoOf(entry) {
-      if (!entry || entry.role !== 'user' || entry.ask === true) return null;
+      if (!entry || entry.role !== 'user' || entry.ask === true || entry.interjection) return null;
       const o = entry.origin;
       if (o && typeof o === 'object' && o.kind) {
         const kind = autoKindOfOrigin(o);
@@ -7556,7 +7562,7 @@
           const x = history[j];
           if (!x) break;
           if (x.inProgress) continue;
-          if (x.ask === true) break;
+          if (x.ask === true || x.interjection) break;
           if (x.role === 'assistant') { hasAsst = true; indexes.push(j); continue; }
           if (x.role !== 'user' || hasAsst) break;
           const xi = autoInfoOf(x);
@@ -7850,6 +7856,7 @@
       const out = [];
       if (!t.items) return out;
       for (const it of t.items.values()) {
+        if (it.ij) continue;   // an interjection is the person's, drawn in the text (turnSteps), not a tool row
         out.push({ type: 'call', tool: it.tool, input: it.input });
         if (it.done) out.push({ type: 'result', output: it.output || '' });
       }
@@ -7889,6 +7896,13 @@
         if (at > pos) {
           if (cur.tools.length) { steps.push(cur); cur = { text: '', tools: [] }; }
           cur.text += body.slice(pos, at); pos = at;
+        }
+        if (it.ij) {   // an interjection of the person's: marked where it came, the reply goes on after it
+          const prev = steps[steps.length - 1];
+          if (!cur.text && !cur.tools.length && prev && prev.ijs) { prev.ijs.push(it.ij); continue; }   // two in a row: one marker group
+          (cur.ijs = cur.ijs || []).push(it.ij);
+          steps.push(cur); cur = { text: '', tools: [] };
+          continue;
         }
         const started = it.ts ? Date.parse(it.ts) : NaN;
         const ended = it.doneTs ? Date.parse(it.doneTs) : NaN;
@@ -7957,6 +7971,10 @@
           if (item.output != null) it.output = typeof item.output === 'string' ? item.output : JSON.stringify(item.output);
         }
         return 'tool';
+      }
+      if (item.kind === 'interjection') {   // a message the person sent into the running turn (journaled by the hub when it was sent)
+        if (!t.items.has(item.id)) t.items.set(item.id, { ij: { text: String(item.message || ''), emergency: item.priority === 'emergency' }, done: true, at: Number.isFinite(item.at) ? item.at : 0, ts: item.ts });
+        return 'interjection';
       }
       if (item.kind === 'worker') { turnWorkerUpsert(chatId, t, item); return 'worker'; }
       if (item.kind === 'worker_tool') {
@@ -8103,7 +8121,7 @@
       if (!h || !ev.item) return;
       const kind = turnActivityApply(h.chatId, h.t, ev.item);
       if (h.ra) paintReattach(h.chatId, reattachLine(chats[h.chatId], h.ra));
-      else if (kind === 'tool') paintTurn(h.chatId, h.t, h.t.text);
+      else if (kind === 'tool' || kind === 'interjection') paintTurn(h.chatId, h.t, h.t.text);
     }
 
     // turn_worker_delta { turnId, agent, workerId, text }: the worker's text so far.
@@ -9288,7 +9306,7 @@
       for (let i = Math.max(0, start); i < history.length; i++) {
         const m = history[i];
         if (!m) continue;
-        if (m.role === 'user' && !m.ask) break;                                  // the next turn
+        if (m.role === 'user' && !m.ask && !m.interjection) break;                // the next turn (a question or interjection line is inside the reply)
         if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
         if (minTs && m.ts && Date.parse(m.ts) < minTs) continue;
         if (!reply) { reply = m; content = m.content; continue; }                 // the reply's first piece
@@ -9300,12 +9318,26 @@
     function turnReplySince(history, sinceTs) {
       for (let i = history.length - 1; i >= 0; i--) {
         const m = history[i];
-        if (!m || (m.role === 'user' && !m.ask) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
+        if (!m || (m.role === 'user' && !m.ask && !m.interjection) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
         if (m.role === 'assistant' && !m.ask && typeof m.content === 'string' && !(m.base > 0)) return turnReplyFrom(history, i, sinceTs);
       }
       return null;
     }
     // ── turn-reply helpers (end) ──
+
+    // An interjection read back from history: the person's own bubble, marked. Shared verbatim with lib/ui-interjection.js and mobile.js (test/ui-interjection.test.js).
+    // ── interjection helpers (begin) ──
+    function interjectionView(entry) {
+      if (!entry || entry.role !== 'user' || !entry.interjection || typeof entry.content !== 'string') return null;
+      const m = /^\[([^\]\n]*)\]: ?([\s\S]*)$/.exec(entry.content);
+      const emergency = entry.interjection.priority === 'emergency' || (!!m && /^EMERGENCY/i.test(m[1]));
+      return { text: m ? m[2] : entry.content, emergency };
+    }
+    // ── interjection helpers (end) ──
+    // The text of an interjection bubble: what sendInterjection shows when the person sends it, an emergency one marked as such.
+    function interjectionBubbleText(view) {
+      return `${view.emergency ? '🚨 [Emergency interjection]' : '⚡ [Interjection]'} ${view.text}`;
+    }
 
     async function reattachCheck(chatId) {
       const chat = chats[chatId];
@@ -13637,7 +13669,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const m = history[i] || {};
         const t = m.inProgress ? NaN : Date.parse(m.ts);   // the running turn's reply so far: not finished, no line
         lines.push(Number.isFinite(t) ? msgTimeLabel(t, now, locale, zone) : '');
-        if (m.role === 'user' && !m.ask) { start = t; last = -1; continue; }   // the next turn
+        if (m.role === 'user' && !m.ask && !m.interjection) { start = t; last = -1; continue; }   // the next turn
         if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
         if (last >= 0 && m.base > 0 && m.base === joined) {
           lines[last] = msgTimeLabel(Date.parse(history[last].ts), now, locale, zone);   // an earlier piece: its time only
@@ -16559,6 +16591,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const cls = isIntermediate ? 'step-text step-intermediate' : 'step-text';
           html += `<div class="${cls}">${formatContent(step.text.replace(/^\s*\n/, ''))}</div>`;   // the paragraph break after a tool call is the layout's job
         }
+        // The person's interjections, where they came in the reply (the same marker as the bubble sendInterjection draws).
+        for (const ij of step.ijs || []) html += `<div class="step-interjection" style="margin:6px 0;padding:6px 10px;border-left:3px solid ${ij.emergency ? '#d32f2f' : '#f9a825'};background:rgba(128,128,128,0.12);border-radius:4px">${esc(interjectionBubbleText(ij))}</div>`;
       }
 
       // Append images (escaped; click handled by the delegated listener)

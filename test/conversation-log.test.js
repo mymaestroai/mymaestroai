@@ -293,7 +293,10 @@ test('every progress-save timer and the shutdown flush go through the guard that
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   const timers = src.match(/incrementalSaveTimer = setInterval\(\(\) => [^\n]*/g) || [];
   assert.ok(timers.length >= 3, `found ${timers.length} save timers`);
-  for (const t of timers) assert.match(t, /=> guardedSave\(agentName, \(\) => \{$/, t);
+  for (const t of timers) assert.match(t, /=> guardedSave\(agentName, (\(\) => \{$|saveProgressNow\)|\(\) => saveProgressNow\(100\)\))/, t);   // the timer's save is the same function queueInterjection's flush calls
+  const saves = src.match(/saveProgressNow = \([^\n]*=> \{|saveProgressNow = \(\) => \{/g) || [];
+  assert.ok(saves.length >= 3, 'each route has its progress-save function');
+  assert.strictEqual((src.match(/\.flush = \(\) => guardedSave\(agentName, /g) || []).length, saves.length, 'and its interjection flush goes through the same guard');
   const flush = src.slice(src.indexOf('function flushActiveResponses'), src.indexOf('function flushActiveResponses') + 800);
   assert.match(flush, /guardedSave\(agentName, \(\) => appendConversationLog\(/);
 });
@@ -311,10 +314,10 @@ test('a save says whether it landed, and the save timers count a reply as saved 
   assert.strictEqual(appendConversationLog(AGENT, 'assistant', 'partial and more', true), true, 'the same save, once the disk clears, lands');
   assert.deepStrictEqual(loadConversationLog(AGENT, 50).map(e => e.content), ['question', 'partial and more']);
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
-  const starts = [...src.matchAll(/incrementalSaveTimer = setInterval\(/g)].map(x => x.index);
-  assert.ok(starts.length >= 3, `found ${starts.length} save timers`);
+  const starts = [...src.matchAll(/saveProgressNow = \(/g)].map(x => x.index);
+  assert.ok(starts.length >= 3, `found ${starts.length} save functions`);
   for (const i of starts) {
-    const block = src.slice(i, src.indexOf('}),', i) + 3);
+    const block = src.slice(i, src.indexOf('\n  };', i) + 5);
     assert.match(block, /&& appendConversationLog\(/, 'the reply counts as saved only when the save landed');
     assert.doesNotMatch(block, /^\s*appendConversationLog\(/m, 'no save whose result is ignored');
   }
@@ -436,4 +439,119 @@ test('the chat file is still trimmed to the last 200 entries once it passes 300,
   h = loadConversationLog(AGENT, 1000);
   assert.strictEqual(h.length, 200, 'the outside rewrite was counted');
   assert.strictEqual(h[199].content, 'r301');
+});
+
+// ── An interjection stays in the history, in its place (spec B) ──────────────────────────────────────────────
+// A message sent while the agent is mid-reply is written once, when it is sent (queueInterjection), as a user line
+// marked `interjection`. The reply goes on after it as a new piece (base = what was saved before), like after an
+// ask_user question: [piece 1][interjection][piece 2], no text twice.
+const IJ = (n = 1, extra = {}) => ({ interjection: { id: `ij-${n}`, transport: 'sdk-live', ...extra } });
+const joinReply = (h) => h.filter(e => e.role === 'assistant' && !e.ask).map(e => e.content).join('');
+
+test('progress saves around an interjection: [piece 1][interjection][piece 2], no text twice', () => {
+  clearConversationLog(AGENT);
+  appendConversationLog(AGENT, 'user', 'start the report');
+  appendConversationLog(AGENT, 'assistant', 'Collecting the figures. ', false);
+  appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: use last quarter', false, IJ(1));
+  appendConversationLog(AGENT, 'assistant', 'Collecting the figures. Using last quarter now.', true);
+  appendConversationLog(AGENT, 'assistant', 'Collecting the figures. Using last quarter now. Done.', true);
+  const h = loadConversationLog(AGENT, 50);
+  assert.deepStrictEqual(h.map(e => [e.role, e.content]), [
+    ['user', 'start the report'],
+    ['assistant', 'Collecting the figures. '],
+    ['user', '[OPERATOR INTERJECTION]: use last quarter'],
+    ['assistant', 'Using last quarter now. Done.'],
+  ]);
+  assert.strictEqual(h[3].base, 'Collecting the figures. '.length);
+  assert.strictEqual(h[1].base, undefined);
+  assert.strictEqual(h[2].interjection.id, 'ij-1');
+  assert.strictEqual(joinReply(h), 'Collecting the figures. Using last quarter now. Done.', 'the pieces join back to the whole reply');
+});
+
+test('the final save and the shutdown flush after an interjection go through the same path', () => {
+  clearConversationLog(AGENT);
+  appendConversationLog(AGENT, 'user', 'go');
+  appendConversationLog(AGENT, 'assistant', 'One. ', false);
+  appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: hurry', false, IJ(1));
+  // the flush at shutdown (flushActiveResponses): the whole reply so far, overwriteLast because a partial was saved
+  appendConversationLog(AGENT, 'assistant', 'One. Two. ', true);
+  // and the final save with the turn's metadata, after the same flush: it replaces the last piece
+  appendConversationLog(AGENT, 'assistant', 'One. Two. Three.', true, { reasoning: 'thought', activity: [{ id: 'a1', kind: 'tool', at: 2 }, { id: 'a2', kind: 'tool', at: 7 }] });
+  const h = loadConversationLog(AGENT, 50);
+  assert.deepStrictEqual(h.map(e => e.content), ['go', 'One. ', '[OPERATOR INTERJECTION]: hurry', 'Two. Three.']);
+  assert.strictEqual(h[3].base, 5);
+  assert.strictEqual(h[3].reasoning, 'thought');
+  assert.deepStrictEqual(h[3].activity, [{ id: 'a2', kind: 'tool', at: 2 }], 'the activity of the first piece stays with it: offsets are the piece\'s own');
+  assert.strictEqual(joinReply(h), 'One. Two. Three.');
+});
+
+test('several interjections in one turn: each stays where it was sent, the reply continues after each', () => {
+  clearConversationLog(AGENT);
+  appendConversationLog(AGENT, 'user', 'work');
+  appendConversationLog(AGENT, 'assistant', 'A. ', false);
+  appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: first', false, IJ(1));
+  appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: second, right after', false, IJ(2));   // two in a row, no text between
+  appendConversationLog(AGENT, 'assistant', 'A. B. ', true);
+  appendConversationLog(AGENT, 'assistant', 'A. B. C. ', true);
+  appendConversationLog(AGENT, 'user', '[EMERGENCY INTERJECTION]: stop', false, IJ(3, { priority: 'emergency' }));
+  appendConversationLog(AGENT, 'assistant', 'A. B. C. D.', true);
+  const h = loadConversationLog(AGENT, 50);
+  assert.deepStrictEqual(h.map(e => e.content), [
+    'work', 'A. ', '[OPERATOR INTERJECTION]: first', '[OPERATOR INTERJECTION]: second, right after', 'B. C. ', '[EMERGENCY INTERJECTION]: stop', 'D.',
+  ]);
+  assert.deepStrictEqual(h.map(e => e.base), [undefined, undefined, undefined, undefined, 3, undefined, 9]);
+  assert.strictEqual(h[5].interjection.priority, 'emergency');
+  assert.strictEqual(joinReply(h), 'A. B. C. D.');
+});
+
+test('an interjection before the reply has any text: the reply is added after it, whole', () => {
+  clearConversationLog(AGENT);
+  appendConversationLog(AGENT, 'user', 'go');
+  appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: quick note', false, IJ(1));
+  appendConversationLog(AGENT, 'assistant', 'Noted. Here is the answer.', false);   // first save: nothing saved yet, so no overwrite
+  appendConversationLog(AGENT, 'assistant', 'Noted. Here is the answer. More.', true);
+  const h = loadConversationLog(AGENT, 50);
+  assert.deepStrictEqual(h.map(e => e.content), ['go', '[OPERATOR INTERJECTION]: quick note', 'Noted. Here is the answer. More.']);
+  assert.strictEqual(h[2].base, undefined);
+  // a save with nothing new after the interjection writes nothing
+  clearConversationLog(AGENT);
+  appendConversationLog(AGENT, 'user', 'go');
+  appendConversationLog(AGENT, 'assistant', 'Text. ', false);
+  appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: x', false, IJ(1));
+  appendConversationLog(AGENT, 'assistant', 'Text. ', true);
+  assert.strictEqual(loadConversationLog(AGENT, 50).length, 3);
+});
+
+test('an interjection and a question in one turn: both lines sit inside the reply, the pieces join', () => {
+  clearConversationLog(AGENT);
+  appendConversationLog(AGENT, 'user', 'deploy');
+  appendConversationLog(AGENT, 'assistant', 'Building. ', false);
+  appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: use the staging key', false, IJ(1));
+  appendConversationLog(AGENT, 'assistant', 'Building. Staging key set. ', true);
+  appendConversationLog(AGENT, 'assistant', '❓ Release? [Yes / No]', false, { ask: true });
+  appendConversationLog(AGENT, 'user', '↳ Yes', false, { ask: true });
+  appendConversationLog(AGENT, 'assistant', 'Building. Staging key set. Released.', true);
+  appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: thanks', false, IJ(2));
+  appendConversationLog(AGENT, 'assistant', 'Building. Staging key set. Released. Bye.', true);
+  const h = loadConversationLog(AGENT, 50);
+  assert.deepStrictEqual(h.map(e => e.content), [
+    'deploy', 'Building. ', '[OPERATOR INTERJECTION]: use the staging key', 'Staging key set. ', '❓ Release? [Yes / No]', '↳ Yes', 'Released.', '[OPERATOR INTERJECTION]: thanks', ' Bye.',
+  ]);
+  assert.strictEqual(joinReply(h), 'Building. Staging key set. Released. Bye.', 'the reply is whole, no text twice, the question line left out');
+});
+
+test('a reply that failed to save around an interjection is never written twice', () => {
+  clearConversationLog(AGENT);
+  appendConversationLog(AGENT, 'user', 'go');
+  appendConversationLog(AGENT, 'assistant', 'First. ', false);
+  appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: note', false, IJ(1));
+  const w = flakyWrites(Array(8).fill('enospc'));
+  const q = quietErrors();
+  let landed;
+  try { landed = appendConversationLog(AGENT, 'assistant', 'First. Second.', true); } finally { w.restore(); q.restore(); }
+  assert.strictEqual(landed, false);
+  appendConversationLog(AGENT, 'assistant', 'First. Second.', true);
+  const h = loadConversationLog(AGENT, 50);
+  assert.strictEqual(joinReply(h), 'First. Second.');
+  assert.strictEqual(h.length, 4);
 });
