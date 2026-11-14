@@ -29,6 +29,8 @@ function harness(respond, toolHandlers = {}) {
     sendSSE: (res, event) => events.push(event), makeChunk: (content, model, gateway) => ({ content, model, gateway }),
     MAX_TOOL_TURNS: 12, MAX_TRUNCATION_RESUMES: 3, MAX_LENGTH_CONTINUATIONS: 3, REASON_FLUSH_MS: 250,
     drainInterjections: () => [], interjectionQueues: new Map(),
+    retryUnloggedInterjections() {}, activityForFlush: () => undefined,   // interjection history helpers (lib/sdk-chat): no-ops here
+    sdkInterject: { takeUndelivered: () => [], formatCarried: () => '', carriedImages: () => [], stashUndelivered() {} },   // no carried interjections in this sandbox
     providerPacing: require('../lib/provider-pacing'),   // the gateway catch emits a typed turn_error for the pacing layer
     errorHelp: require('../lib/error-help'),   // ...and the error in plain words for the reply text
     modelHealth: { record() {} },   // model health marks are a no-op in this sandbox
@@ -58,6 +60,11 @@ function harness(respond, toolHandlers = {}) {
   };
   vm.createContext(ctx);
   const start = source.indexOf('async function streamViaGateway('), end = source.indexOf('// ── Auto Memory', start);
+  // the face view's real helpers (voiceNoteFor, createVoiceMood), not stubs: with faceMood off they leave the reply unchanged
+  const hStart = source.indexOf('/** The note(s) a voice turn adds to the prompt'), hEnd = source.indexOf('/**\n * raceStop(', hStart);
+  assert.ok(hStart > 0 && hEnd > hStart, 'voice helpers found');
+  Object.assign(ctx, { VOICE_NOTE: 'voice note', ...require('../lib/voice/mood') });
+  vm.runInContext(source.slice(hStart, hEnd), ctx);
   vm.runInContext(source.slice(start, end), ctx);
   const call = state.calls['coord-call'] = { key: 'coord-call', tools: {} };
   const controller = new AbortController();

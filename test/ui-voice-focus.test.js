@@ -1,0 +1,167 @@
+'use strict';
+// Audio focus for calls: a very quiet looping WAV in a hidden <audio> element, so a phone browser takes full audio focus and other apps pause.
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
+const { voiceFocusWav, voiceCreateAudioFocus } = require('../lib/ui-voice');
+
+const ROOT = path.join(__dirname, '..');
+const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+const tag = (u, o) => String.fromCharCode(u[o], u[o + 1], u[o + 2], u[o + 3]);
+
+// Chrome (services/audio/output_stream.cc) counts a stream as playing only at or above this power; below it the tab is silent and Android
+// gives the audio back to the music app within a second (the owner heard music resume a second into a call with the -90 dBFS noise).
+const CHROME_SILENCE_DBFS = -72.24719896;
+const levels = (w) => {
+  const dv = new DataView(w.buffer, w.byteOffset, w.byteLength), n = (w.length - 44) / 2, v = new Array(n);
+  let peak = 0, sq = 0;
+  for (let i = 0; i < n; i++) { v[i] = dv.getInt16(44 + i * 2, true); peak = Math.max(peak, Math.abs(v[i])); sq += (v[i] / 32768) ** 2; }
+  return { v, n, peak, powerDb: 10 * Math.log10(sq / n) };
+};
+
+test('voiceFocusWav: a valid 16-bit mono PCM WAV', () => {
+  const w = voiceFocusWav(2, 8000), dv = new DataView(w.buffer, w.byteOffset, w.byteLength);
+  assert.ok(w instanceof Uint8Array);
+  assert.strictEqual(w.length, 44 + 2 * 2 * 8000);
+  assert.strictEqual(tag(w, 0), 'RIFF'); assert.strictEqual(tag(w, 8), 'WAVE'); assert.strictEqual(tag(w, 12), 'fmt '); assert.strictEqual(tag(w, 36), 'data');
+  assert.strictEqual(dv.getUint32(4, true), w.length - 8);
+  assert.strictEqual(dv.getUint32(16, true), 16); assert.strictEqual(dv.getUint16(20, true), 1); assert.strictEqual(dv.getUint16(22, true), 1);
+  assert.strictEqual(dv.getUint32(24, true), 8000); assert.strictEqual(dv.getUint32(28, true), 16000); assert.strictEqual(dv.getUint16(32, true), 2); assert.strictEqual(dv.getUint16(34, true), 16);
+  assert.strictEqual(dv.getUint32(40, true), 2 * 2 * 8000);
+  assert.deepStrictEqual(Array.from(voiceFocusWav(2, 8000)), Array.from(w), 'deterministic');
+});
+
+test('voiceFocusWav: loud enough for Chrome to keep audio focus (music stays paused), with a margin', () => {
+  const { powerDb } = levels(voiceFocusWav());
+  assert.ok(powerDb >= CHROME_SILENCE_DBFS + 10, 'power ' + powerDb.toFixed(1) + ' dBFS, at least 10 dB above Chrome\'s ' + CHROME_SILENCE_DBFS.toFixed(2));
+  assert.ok(powerDb <= -58, 'and no louder than about -60 dBFS: ' + powerDb.toFixed(1));
+});
+
+test('voiceFocusWav: a 20 Hz tone, not noise: nothing a phone speaker plays or anyone hears; whole cycles, so the loop has no click', () => {
+  const { v, n, peak } = levels(voiceFocusWav());
+  assert.ok(peak <= 47, 'peak ' + peak + ' of 32767');
+  let up = 0; for (let i = 1; i < n; i++) if (v[i - 1] < 0 && v[i] >= 0) up++;
+  const seconds = n / 8000, hz = (up + 1) / seconds;   // the first cycle starts at sample 0
+  assert.ok(Math.abs(hz - 20) < 0.5, 'about 20 Hz: ' + hz.toFixed(2));
+  for (let i = 2; i < n; i++) assert.ok(Math.abs(v[i] - 2 * v[i - 1] + v[i - 2]) <= 2, 'smooth (a low tone, no noise) at sample ' + i);
+  assert.strictEqual(v[0], 0, 'starts at zero');
+  assert.ok(v[n - 1] < 0 && Math.abs(v[n - 1]) <= 2, 'ends just below zero, so sample 0 continues the wave: ' + v[n - 1]);
+});
+
+test('voiceFocusWav: longer than 5 seconds by default (Chrome gives full focus only then)', () => {
+  const w = voiceFocusWav(), dv = new DataView(w.buffer, w.byteOffset, w.byteLength);
+  assert.ok((dv.getUint32(40, true) / 2) / dv.getUint32(24, true) > 5);
+});
+
+function fakeEnv(playImpl) {
+  const log = { created: [], appended: [], urls: 0, blobs: [], plays: 0, pauses: 0 };
+  const doc = {
+    body: { appendChild: (e) => log.appended.push(e) },
+    createElement: (t) => {
+      const e = { tag: t, style: {}, attrs: {}, setAttribute(k, v) { e.attrs[k] = v; }, currentTime: 5,
+        play() { log.plays++; return playImpl(); }, pause() { log.pauses++; } };
+      log.created.push(e); return e;
+    },
+  };
+  const URLf = { createObjectURL: () => { log.urls++; return 'blob:x'; } };
+  const BlobF = function (parts, opts) { log.blobs.push({ parts, opts }); };
+  return { log, args: { doc, URL: URLf, Blob: BlobF } };
+}
+
+test('voiceCreateAudioFocus: start plays a looping unmuted hidden element synchronously and resolves true', async () => {
+  const { log, args } = fakeEnv(() => Promise.resolve());
+  const f = voiceCreateAudioFocus(args);
+  assert.strictEqual(f.running, false);
+  const p = f.start();
+  assert.strictEqual(log.plays, 1, 'play() is called inside start()');
+  const e = log.created[0];
+  assert.strictEqual(e.tag, 'audio'); assert.strictEqual(e.loop, true); assert.strictEqual(e.muted, false); assert.strictEqual(e.volume, 1);
+  assert.strictEqual(e.preload, 'auto'); assert.strictEqual(e.playsInline, true); assert.ok('playsinline' in e.attrs);
+  assert.strictEqual(e.style.display, 'none'); assert.strictEqual(e.attrs['aria-hidden'], 'true'); assert.strictEqual(e.src, 'blob:x');
+  assert.strictEqual(log.appended.length, 1);
+  assert.strictEqual(log.blobs[0].opts.type, 'audio/wav');
+  assert.strictEqual(await p, true);
+  assert.strictEqual(f.running, true);
+});
+
+test('voiceCreateAudioFocus: a refused or throwing play resolves false and never rejects', async () => {
+  const a = voiceCreateAudioFocus(fakeEnv(() => Promise.reject(new Error('NotAllowed'))).args);
+  assert.strictEqual(await a.start(), false); assert.strictEqual(a.running, false);
+  const b = voiceCreateAudioFocus(fakeEnv(() => { throw new Error('boom'); }).args);
+  assert.strictEqual(await b.start(), false); assert.strictEqual(b.running, false);
+});
+
+test('voiceCreateAudioFocus: stop pauses and resets; start twice makes one element and one blob URL; stop is safe early and twice', async () => {
+  const { log, args } = fakeEnv(() => Promise.resolve());
+  const f = voiceCreateAudioFocus(args);
+  assert.doesNotThrow(() => f.stop());
+  await f.start(); assert.strictEqual(await f.start(), true);
+  assert.strictEqual(log.created.length, 1); assert.strictEqual(log.urls, 1); assert.strictEqual(log.plays, 1);
+  f.stop(); f.stop();
+  assert.strictEqual(f.running, false); assert.ok(log.pauses >= 1); assert.strictEqual(log.created[0].currentTime, 0);
+  assert.strictEqual(await f.start(), true);   // the next call reuses the element and the blob
+  assert.strictEqual(log.created.length, 1); assert.strictEqual(log.urls, 1); assert.strictEqual(log.plays, 2);
+});
+
+test('voiceCreateAudioFocus: no document means start resolves false and stop is harmless', async () => {
+  const f = voiceCreateAudioFocus({});
+  assert.strictEqual(await f.start(), false); assert.doesNotThrow(() => f.stop()); assert.strictEqual(f.running, false);
+  assert.strictEqual(await voiceCreateAudioFocus().start(), false);
+});
+
+// ── source checks ──
+const upTo = (src, startMark, awaitMark) => { const i = src.indexOf(startMark); assert.ok(i >= 0, startMark); const j = src.indexOf(awaitMark, i); assert.ok(j > i, awaitMark); return [i, j]; };
+
+test('phone: the focus is created and started in the tap before any await, stopped in the teardown, with the hint', () => {
+  const js = read('mobile.js'), html = read('mobile.html');
+  const i = js.indexOf('function voiceCallStart()'), body = js.slice(i, js.indexOf('\n}\n', i));
+  const aw = body.search(/\bawait +[\w(]/), create = body.indexOf('voiceCreateAudioFocus({ doc: document, URL, Blob })'), start = body.indexOf('vc.focus.start()');
+  assert.ok(create > 0 && start > create, 'created then started');
+  assert.ok(aw < 0 || start < aw, 'before the first await');
+  assert.ok(body.indexOf('typeof voiceCreateAudioFocus') >= 0 && /voiceFocusHint\(!ok \|\| /.test(body) && body.includes('voiceIsIOS()'));
+  const t = js.indexOf('function voiceCallTeardown(vc)'), tb = js.slice(t, js.indexOf('\n}\n', t));
+  assert.ok(/if \(vc\.focus\) \{ try \{ vc\.focus\.stop\(\); \} catch \{\} \}/.test(tb)); assert.ok(tb.includes('voiceFocusHint(false)'));
+  assert.ok(/function voiceFocusHint\(show\)/.test(js));
+  assert.ok(html.includes('<p id="cp-focus-hint" class="cp-focus-hint" role="status" hidden>Music playing? Pause it for a clearer call</p>'));
+  assert.ok(html.indexOf('class="cp-top"') < html.indexOf('id="cp-focus-hint"'));
+});
+
+test('desktop: started before the first await, stopped in the teardown, hint only when play is refused', () => {
+  const app = read('app.js'), html = read('index.html');
+  const i = app.indexOf('async function voiceCallStart(chatId)'), body = app.slice(i, app.indexOf('\n    }\n', i));
+  const aw = body.search(/\bawait\b/), create = body.indexOf('voiceCreateAudioFocus({ doc: document, URL, Blob })'), start = body.indexOf('focus.start()');
+  assert.ok(create > 0 && start > create && start < aw, 'before the first await');
+  assert.ok(body.indexOf('S.focus = focus') > 0 && body.indexOf('S.focus = focus') < aw);
+  assert.ok(/!ok && S\.focus === focus/.test(body), 'hint only on refusal');
+  const t = app.indexOf('function voiceCallTeardown()'), tb = app.slice(t, app.indexOf('\n    }\n', t));
+  assert.ok(tb.includes('focus = S.focus') && tb.includes('S.focus = null') && tb.includes('focus.stop()'));
+  assert.ok(app.includes('<div class="vcb-focus-hint" id="${id(\'focushint\')}" hidden>Music playing? Pause it for a clearer call</div>'));
+  assert.ok(html.includes('.voice-callbar .vcb-focus-hint'));
+});
+
+test('each page makes one focus element and one sound, reused by every call (no pile-up over a long session)', () => {
+  for (const f of ['app.js', 'mobile.js']) assert.ok(/window\.__voiceFocusOne \|\| \(window\.__voiceFocusOne = voiceCreateAudioFocus\(/.test(read(f)), f);
+});
+
+test('a play() of an earlier start never changes a later start (review r1)', async () => {
+  const plays = [];
+  const el = { setAttribute() {}, style: {}, play() { let res, rej; const p = new Promise((a, b) => { res = a; rej = b; }); plays.push({ res, rej }); return p; }, pause() {} };
+  const doc = { createElement: () => el, body: { appendChild() {} } };
+  const f = voiceCreateAudioFocus({ doc, URL: { createObjectURL: () => 'blob:x' }, Blob: function B() {} });
+  const a = f.start(); f.stop();
+  const b = f.start();
+  plays[1].res();
+  assert.strictEqual(await b, true);
+  plays[0].rej(new Error('interrupted by pause'));
+  assert.strictEqual(await a, false);
+  assert.strictEqual(f.running, true, 'the later call is still marked running');
+});
+
+test('the desktop page takes audio focus only on Android (no media keys or media hub drawn to a desktop tab)', () => {
+  assert.ok(/if \(typeof voiceCreateAudioFocus === 'function' && typeof navigator !== 'undefined' && \/Android\/i\.test\(navigator\.userAgent \|\| ''\)\) \{/.test(read('app.js')));
+});
+
+test('the synced blocks carry the new functions', () => {
+  for (const f of ['app.js', 'mobile.js']) { const s = read(f); assert.strictEqual(s.split('function voiceFocusWav(').length, 2, f); assert.strictEqual(s.split('function voiceCreateAudioFocus(').length, 2, f); }
+});

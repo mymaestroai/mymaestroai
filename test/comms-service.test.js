@@ -7,7 +7,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs'), os = require('os'), path = require('path'), http = require('node:http');
-const { CommsService, DEFAULT_CONFIG } = require('../lib/comms/service');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('comms-service-iso-');
+const { CommsService, DEFAULT_CONFIG } = require(path.join(ISO.lib, 'comms/service'));
 const { fakeTelegramServer } = require('./helpers/fake-telegram-server');
 
 const FAKE_TOKEN = 'FAKE:not-a-real-token';

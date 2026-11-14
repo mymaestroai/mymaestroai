@@ -686,7 +686,7 @@ test('review 2: agent settings: a wrapped save never writes its status after it 
   const HELPERS = ['showStatus', 'recordsStatus', 'compactionStatus'];
   const statusCall = /\b(?:showStatus|recordsStatus|compactionStatus)\(/;
   const saves = [...as.matchAll(/\['(save[A-Za-z]+)', '[\w-]+-status',/g)].map(m => m[1]);
-  assert.strictEqual(saves.length, 18);
+  assert.strictEqual(saves.length, 22);   // the 20th is saveCallDisplay, the 21st saveVoiceDefaults, the 22nd saveRecordings (call recordings; each checked below like the rest: status written last, nothing awaited after it)
   for (const fn of saves) {
     let body = fnBody(fn);
     const own = fn === 'savePolicy' ? ['patchPolicy'] : [];   // savePolicy reports through patchPolicy

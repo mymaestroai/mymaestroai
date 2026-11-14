@@ -8,7 +8,10 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const CLI = path.join(__dirname, '..', 'scripts', 'hub-cli.js');
+// The command runs from a throwaway install (lib/ and scripts/ copied), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('connect-chatgpt-iso-', { copy: ['scripts'] });
+const CLI = path.join(ISO.inst, 'scripts', 'hub-cli.js');
 
 // signedIn: the stand-in's starting state; login: 'ok' signs it in, anything else leaves it signed out.
 function install({ signedIn = false, login = 'ok', status = 'Logged in using ChatGPT' } = {}) {

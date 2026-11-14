@@ -19,7 +19,7 @@ function extract(src, name) {
   for (; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}' && --depth === 0) break; }
   return src.slice(at, i + 1);
 }
-const turnSteps = new Function(`${extract(app, 'turnSteps')}; return turnSteps;`)();
+const turnSteps = new Function(`${extract(app, 'toolResultDenied')}\n${extract(app, 'turnSteps')}; return turnSteps;`)();
 const replyBlocks = new Function(`${extract(mjs, 'replyBlocks')}; return replyBlocks;`)();
 
 const TEXT = 'Checking the logs. Found it. Now the config. Done.';

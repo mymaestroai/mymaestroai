@@ -115,3 +115,19 @@ test('a later reply that starts with the same words, or is the same text, is ano
   assert.deepStrictEqual(turnReplyFrom(twin, 1, Date.parse(t(0))), same[1], 'not the later entry\'s flags');
   assert.strictEqual(turnReplySince(same, Date.parse(t(0)) - 2000).content, 'Done. The scheduled backup finished.');
 });
+
+test('an interjection line inside the reply does not end it: the pieces on both sides join (like a question line)', () => {
+  const IJ = [
+    { ts: t(0), role: 'user', content: 'write it' },
+    { ts: t(1), role: 'assistant', content: 'First part. ' },
+    { ts: t(5), role: 'user', content: '[OPERATOR INTERJECTION]: shorter please', interjection: { id: 'ij-1', transport: 'sdk-live' } },
+    { ts: t(9), role: 'assistant', content: 'Second part.', base: 12, inProgress: true },
+  ];
+  const r = turnReplyFrom(IJ, 1, Date.parse(t(0)));
+  assert.strictEqual(r.content, 'First part. Second part.');
+  assert.strictEqual(r.inProgress, true, 'flags come from the newest piece');
+  assert.strictEqual(turnReplySince(IJ, Date.parse(t(0)) - 2000).content, 'First part. Second part.');
+  // the person's next message (no interjection mark) still ends the reply
+  const next = [...IJ, { ts: t(20), role: 'user', content: 'thanks' }, { ts: t(21), role: 'assistant', content: 'Welcome.' }];
+  assert.strictEqual(turnReplyFrom(next, 1, Date.parse(t(0))).content, 'First part. Second part.');
+});

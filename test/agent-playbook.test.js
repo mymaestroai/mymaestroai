@@ -12,11 +12,15 @@ const path = require('path');
 
 // The create_agent tool itself, on the Codex path: sign-ins come from a throwaway store, and createAgent is a stand-in
 // (taken by sdk-chat when it loads), so nothing is written into this install's agents or workspaces.
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('agent-playbook-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
 const AUTH_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'playbook-auth-'));
 process.env.HUB_AUTH_DIR = AUTH_DIR;
 after(() => fs.rmSync(AUTH_DIR, { recursive: true, force: true }));
 const created = [];
-require('../lib/agents').createAgent = async (...args) => { created.push(args); return { success: true, name: args[0] }; };
+L('agents').createAgent = async (...args) => { created.push(args); return { success: true, name: args[0] }; };
 
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
@@ -85,7 +89,7 @@ test('a fresh or existing install gets the playbook at start-up: seeding copies 
     fs.copyFileSync(path.join(ROOT, PLAYBOOK), path.join(tpl, 'maestro', 'AGENT-PLAYBOOK.md'));
     fs.mkdirSync(path.join(ws, 'maestro'), { recursive: true });
     fs.writeFileSync(path.join(ws, 'maestro', 'SOUL.md'), 'their own soul\n');   // an existing install's edited files stay
-    const { seedDefaultWorkspaces } = require(path.join(ROOT, 'lib', 'agents.js'));
+    const { seedDefaultWorkspaces } = L('agents');
     assert.deepStrictEqual(seedDefaultWorkspaces(tpl, ws), [path.join('maestro', 'AGENT-PLAYBOOK.md')]);
     assert.strictEqual(fs.readFileSync(path.join(ws, 'maestro', 'AGENT-PLAYBOOK.md'), 'utf8'), read(PLAYBOOK));
     fs.writeFileSync(path.join(ws, 'maestro', 'AGENT-PLAYBOOK.md'), 'their own playbook\n');
@@ -97,8 +101,8 @@ test('a fresh or existing install gets the playbook at start-up: seeding copies 
 function fakeRes() { return { events: [], writableEnded: false, destroyed: false, on() {}, write() { return true; } }; }
 
 test('create_agent on the Codex path: the bridge lists every field, nested Records included; for_user gives the agent to a member, and only a member', async () => {
-  const sdkChat = require('../lib/sdk-chat');
-  const teams = require('../lib/teams');
+  const sdkChat = L('sdk-chat');
+  const teams = L('teams');
   const greeted = [];
   teams.greetIfFresh = async (name, user) => { greeted.push([name, user.id]); return 'hello'; };
   const sdk = { tool: (name, description, shape, handler, opts) => ({ name, description, shape, handler, opts }), createSdkMcpServer: (cfg) => cfg };
@@ -107,7 +111,7 @@ test('create_agent on the Codex path: the bridge lists every field, nested Recor
   assert.ok(tool, 'create_agent registered');
 
   // What a Codex model is shown: the same fields, the Records as a list of { name, content } (not an empty object).
-  const bridge = require('../lib/codex-cli/bridge');
+  const bridge = L('codex-cli/bridge');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'playbook-bridge-'));
   const reg = bridge.register('zz_playbook_lead', server.tools, { url: 'http://127.0.0.1:1', dir });
   try {
@@ -123,7 +127,7 @@ test('create_agent on the Codex path: the bridge lists every field, nested Recor
     assert.deepStrictEqual([ask.descriptions.type, ask.descriptions.items.type, ask.choose_model.type], ['array', 'string', 'boolean']);
   } finally { reg.release(); fs.rmSync(dir, { recursive: true, force: true }); }
 
-  const auth = require('../lib/auth').getAuth();
+  const auth = L('auth').getAuth();
   const robin = auth.createUser({ login: 'robin@example.com', name: 'Robin', role: 'member' }).user;
   auth.createUser({ login: 'boss@example.com', name: 'Boss', role: 'admin' });
   const gone = auth.createUser({ login: 'gone@example.com', name: 'Gone', role: 'member' }).user;
@@ -138,7 +142,7 @@ test('create_agent on the Codex path: the bridge lists every field, nested Recor
   assert.match(forRobin, /^Agent "helper" created with SOUL\.md as written\. It belongs to Robin now: it is in their agent list, and it has been asked to write them a hello in its chat \(not checked yet: an admin can open that chat to see it\)\. You can't consult it/);
   assert.strictEqual(created[0][5], robin.id, 'the owner is the member');
   assert.deepStrictEqual(created[0][6].files, { 'SOUL.md': '# SOUL.md' });
-  assert.strictEqual(created[0][1], require('../lib/settings').getSetting('memberDefaultModel', 'claude-sdk/claude-sonnet-5-5'), 'no model given: the member default, not the API fallback');
+  assert.strictEqual(created[0][1], L('settings').getSetting('memberDefaultModel', 'claude-sdk/claude-sonnet-5-5'), 'no model given: the member default, not the API fallback');
   assert.deepStrictEqual(greeted, [['helper', robin.id]], 'a head agent says hello to them');
   assert.match(await run({ name: 'quiet', for_user: 'robin@example.com' }), /It belongs to Robin now: it is in their agent list\. You can't consult it/);
   assert.strictEqual(greeted.length, 1, 'a specialist does not greet');

@@ -200,6 +200,97 @@
   <div id="records-status" class="status"></div>
 </div>
 
+<div class="section" id="voice-section">
+  <label>Voice</label>
+  <small style="color:#999;display:block;margin-bottom:8px;">Free local engines are the default and nothing leaves this computer. A cloud engine is optional: it costs money per use and falls back to the free local engine if it fails.</small>
+  <div id="voice-kept-warning" class="status error" style="display:none;margin-bottom:8px;"></div>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+    <label for="voice-stt" style="margin:0;">Speech recognition</label>
+    <select id="voice-stt" onchange="saveAgentVoice()" style="width:auto;"><option value="local">Local (free)</option><option value="openai">OpenAI</option><option value="google">Google</option></select>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+    <label for="voice-tts" style="margin:0;">Voice engine</label>
+    <select id="voice-tts" onchange="voiceEngineChanged()" style="width:auto;"><option value="local">Local (free)</option><option value="openai">OpenAI</option><option value="google">Google</option><option value="elevenlabs">ElevenLabs</option></select>
+  </div>
+  <div id="voice-cloud-row" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+    <label for="voice-cloud-select" id="voice-cloud-label" style="margin:0;">Cloud voice</label>
+    <select id="voice-cloud-select" onchange="saveAgentVoice()" style="width:auto;"></select>
+    <input type="text" id="voice-cloud-id" placeholder="ElevenLabs voice ID" maxlength="40" onchange="saveAgentVoice()" style="width:220px;display:none;">
+  </div>
+  <small id="voice-cloud-hint" style="color:#999;display:none;margin-bottom:6px;">Find the voice ID in your ElevenLabs account under Voices (the ID is shown on the voice's page).</small>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <label for="voice-select" style="margin:0;">Local voice (also used if the cloud voice fails)</label>
+    <select id="voice-select" onchange="saveAgentVoice()" style="width:auto;"><option value="">Hub default</option></select>
+    <button class="btn btn-test" id="voice-sample-btn" type="button" onclick="playAgentVoiceSample()">Play sample</button>
+  </div>
+  <small id="voice-keys-line" style="color:#999;display:block;margin-top:6px;"></small>
+  <div id="voice-status" class="status"></div>
+  <div id="voice-defaults-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <label for="voice-defaults" style="margin:0;">Voice defaults</label>
+    <select id="voice-defaults" onchange="voiceDefaultsChanged()" style="width:auto;max-width:100%;">
+      <option value="none">None</option>
+      <option value="patient">Patient listener (waits 4 s before replying, 8 s for you to go on, harder to interrupt, speaks a little slower)</option>
+      <option value="custom">Custom</option>
+    </select>
+  </div>
+  <div id="voice-defaults-custom" style="display:none;margin-top:6px;">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+      <label for="vd-pause" style="margin:0;">Pause before I'm done</label>
+      <select id="vd-pause" onchange="saveVoiceDefaults()" style="width:auto;"><option value="800">Short (0.8 s)</option><option value="1200">Normal (1.2 s)</option><option value="2000">Long (2 s)</option><option value="4000">Very long (4 s)</option></select>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+      <label for="vd-wait" style="margin:0;">Wait for me to go on</label>
+      <select id="vd-wait" onchange="saveVoiceDefaults()" style="width:auto;"><option value="1500">Short (1.5 s)</option><option value="3000">Normal (3 s)</option><option value="5000">Long (5 s)</option><option value="8000">Very long (8 s)</option></select>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+      <label for="vd-sens" style="margin:0;">Interrupt sensitivity</label>
+      <input type="range" id="vd-sens" min="0" max="100" step="1" oninput="document.getElementById('vd-sens-val').textContent = this.value" onchange="saveVoiceDefaults()" style="width:180px;"> <span id="vd-sens-val">50</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+      <label for="vd-speed" style="margin:0;">Voice speed</label>
+      <input type="range" id="vd-speed" min="0.75" max="1.5" step="0.05" oninput="document.getElementById('vd-speed-val').textContent = Number(this.value).toFixed(2) + 'x'" onchange="saveVoiceDefaults()" style="width:180px;"> <span id="vd-speed-val">1.00x</span>
+    </div>
+  </div>
+  <small style="color:#999;display:block;margin-top:4px;">Devices follow these unless the person changed that setting on that device.</small>
+  <div id="voice-defaults-status" class="status"></div>
+</div>
+
+<div class="section" id="recordings-section">
+  <label>Call recordings</label>
+  <div id="rec-owner-note" style="display:none;color:#999;font-size:13px;">Only the owner of this Maestro can change call recordings.</div>
+  <div id="rec-controls" style="display:none;">
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <label for="rec-keep" style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rec-keep" onchange="saveRecordings()" style="width:20px;height:20px;"> Keep call recordings</label>
+  </div>
+  <small style="color:#999;display:block;margin:4px 0 8px;">Each call with this agent is recorded losslessly on this computer, encrypted. The agent can say a short line when a call starts (see Announce recording), and the call screen shows Recording.</small>
+  <div id="rec-cloud-warning" style="display:none;margin-bottom:8px;font-size:12px;padding:4px 8px;border-radius:4px;background:#3a1a1a;color:#e74c3c;">Recorded calls only start with speech recognition on this computer. Change the agent's speech recognition above.</div>
+  <label style="margin-top:8px;">Who can download</label>
+  <div id="rec-allowed" onchange="saveRecordings()" style="display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid #333;border-radius:6px;background:#0f0f23;"><span style="color:#888;font-size:13px;">Loading…</span></div>
+  <small style="color:#999;display:block;margin:4px 0 8px;">Only the people ticked here can play, download or delete these recordings. Agents never can.</small>
+  <label for="rec-consent">Consent line</label>
+  <input type="text" id="rec-consent" maxlength="300" placeholder="This conversation is being recorded." onchange="saveRecordings()">
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
+    <label for="rec-announce" style="margin:0;">Announce recording</label>
+    <select id="rec-announce" onchange="saveRecordings()" style="width:auto;max-width:100%;">
+      <option value="first">First call with each person</option>
+      <option value="every">Every call</option>
+      <option value="never">Never</option>
+    </select>
+  </div>
+  <small style="color:#999;display:block;margin:4px 0 8px;">The line is spoken when a recorded call starts. The Recording badge shows on every call.</small>
+  <div style="margin-top:10px;"><label for="rec-replies" style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rec-replies" onchange="saveRecordings()" style="width:20px;height:20px;"> Also keep the agent's voice</label></div>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
+    <label for="rec-mic" style="margin:0;">Microphone for recordings</label>
+    <select id="rec-mic" onchange="saveRecordings()" style="width:auto;max-width:100%;">
+      <option value="processed">Processed (clearer on a speakerphone)</option>
+      <option value="unprocessed">Unprocessed (best for a future voice model; use a headset or a quiet room)</option>
+    </select>
+  </div>
+  <small id="rec-storage" style="color:#999;display:none;margin-top:8px;"></small>
+  <div id="recordings-status" class="status"></div>
+  </div>
+</div>
+
 <div class="section" id="compaction-section">
   <label>Context compression</label>
   <small style="color:#999;display:block;margin-bottom:8px;">When the context window fills up past the threshold, the agent writes its own carry-forward (the record <code>working-brief.md</code>); the provider never summarises on its behalf.<br>Dry run = the brief only, the session goes on. On = the brief, then a fresh session seeded from Records + recent turns + recall.</small>
@@ -295,6 +386,15 @@
   </div>
   <small id="effort-help" style="color:#999;display:block;margin-top:4px;">How hard the model thinks before answering. Higher is slower and uses more of the subscription or API budget. The hub translates the level for each provider (Claude takes all of them; OpenAI tops out at extra high; Gemini at high; OpenRouter models that take a reasoning level, marked 🧠 in the OpenRouter list, at high); local models ignore it. Also adjustable from the chat header by admins; members cannot change it.</small>
   <div id="effort-status" class="status"></div>
+  <div id="call-display-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;">
+    <label for="call-display" style="margin:0;">Default call display</label>
+    <select id="call-display" onchange="saveCallDisplay()" style="width:auto;">
+      <option value="none">None</option>
+      <option value="orb">Orb</option>
+    </select>
+  </div>
+  <small id="call-display-help" style="color:#999;display:block;margin-top:4px;">What a voice call with this agent shows on the screen: nothing, the built-in glowing orb, or an installed character. This is only the starting point: each person's own choice on their device, made in the chat's voice panel, always wins.</small>
+  <div id="call-display-status" class="status"></div>
   <div id="tools-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
     <label for="tools-mode" style="margin:0;">Tools</label>
     <select id="tools-mode" onchange="saveToolsMode()" style="width:auto;">
@@ -366,6 +466,10 @@
     ['saveLimits', 'limits-status', byId('context-budget', 'max-context-messages', 'max-output-tokens')],
     ['saveSandbox', 'sandbox-status', byId('sandbox-mode')],
     ['saveEffort', 'effort-status', byId('effort-mode')],
+    ['saveCallDisplay', 'call-display-status', byId('call-display')],
+    ['saveVoiceDefaults', 'voice-defaults-status', byId('voice-defaults', 'vd-pause', 'vd-wait', 'vd-sens', 'vd-speed')],
+    ['saveAgentVoice', 'voice-status', byId('voice-select', 'voice-stt', 'voice-tts', 'voice-cloud-select', 'voice-cloud-id')],
+    ['saveRecordings', 'recordings-status', byId('rec-keep', 'rec-allowed', 'rec-consent', 'rec-replies', 'rec-mic', 'rec-announce')],
     ['saveToolsMode', 'tools-status', byId('tools-mode')],
     ['saveAutoModel', 'auto-model-status', byId('auto-model', 'auto-model-allowed')],
     ['saveAllowedModels', 'allowed-models-status', byId('auto-model-checkboxes')],
@@ -380,7 +484,7 @@
   // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
   // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
   // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
-  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveToolsMode']);
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
   const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];
@@ -834,6 +938,303 @@
       else showStatus('effort-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('effort-status', 'error', e.message); }
   }
+  // ── Default call display: None / Orb / an installed character (GET /api/faces); PATCH { callDisplay } ──
+  const CALL_DISPLAY_FIXED = [{ value: 'none', label: 'None' }, { value: 'orb', label: 'Orb' }];
+  // The options for the dropdown: the fixed two, the installed characters, and (when the saved value names a character
+  // that is not installed right now) that one too, marked unavailable, so opening the page never changes what is saved.
+  function callDisplayOptions(current, packs, available) {
+    const out = CALL_DISPLAY_FIXED.slice();
+    const seen = new Set();
+    for (const p of Array.isArray(packs) ? packs : []) {
+      if (!p || typeof p.id !== 'string' || seen.has(p.id)) continue;
+      seen.add(p.id);
+      out.push({ value: 'pack:' + p.id, label: typeof p.name === 'string' && p.name ? p.name : p.id });
+    }
+    // characters the hub can download but are not installed: choosing one saves 'pack:<id>' as usual; the download happens on first use (a call or the voice panel)
+    for (const p of Array.isArray(available) ? available : []) {
+      if (!p || typeof p.id !== 'string' || seen.has(p.id)) continue;
+      seen.add(p.id);
+      const mb = Math.round((Number(p.size) || 0) / 1000000);
+      out.push({ value: 'pack:' + p.id, label: (typeof p.name === 'string' && p.name ? p.name : p.id) + (mb > 0 ? ' · downloads ' + mb + ' MB' : ' · downloads on first use') });
+    }
+    if (typeof current === 'string' && current.startsWith('pack:') && !out.some(o => o.value === current)) out.push({ value: current, label: current.slice(5) + ' (unavailable: not installed)' });
+    return out;
+  }
+  async function loadCallDisplay(agent) {
+    const sel = document.getElementById('call-display'); if (!sel) return;
+    const current = typeof agent?.callDisplay === 'string' && agent.callDisplay ? agent.callDisplay : 'none';
+    let packs = [], available = [];
+    try { const r = await apiFetch('/api/faces'); if (r && Array.isArray(r.packs)) packs = r.packs; if (r && Array.isArray(r.available)) available = r.available; } catch {}
+    sel.textContent = '';
+    for (const o of callDisplayOptions(current, packs, available)) { const el = document.createElement('option'); el.value = o.value; el.textContent = o.label; sel.appendChild(el); }
+    sel.value = current;
+  }
+  async function saveCallDisplay() {
+    const v = document.getElementById('call-display').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callDisplay: v }) });
+      if (result && (result.success || result.ok)) showStatus('call-display-status', 'success', v === 'none' ? 'No default display: calls look as they do today unless a person picks one' : 'Saved: the default for new devices; a person\'s own choice wins');
+      else showStatus('call-display-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('call-display-status', 'error', e.message); }
+  }
+  // ── Voice defaults: what a call with this agent uses on a device that has not set that itself; PATCH { voiceDefaults } (null removes it) ──
+  const VD_PATIENT = { endPause: 4000, continueWait: 8000, interruptSensitivity: 30, voiceSpeed: 0.9 };
+  const VD_FACTORY = { endPause: 1200, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 };
+  function vdFill(v) {
+    document.getElementById('vd-pause').value = String(v.endPause); document.getElementById('vd-wait').value = String(v.continueWait);
+    document.getElementById('vd-sens').value = String(v.interruptSensitivity); document.getElementById('vd-sens-val').textContent = String(v.interruptSensitivity);
+    document.getElementById('vd-speed').value = String(v.voiceSpeed); document.getElementById('vd-speed-val').textContent = Number(v.voiceSpeed).toFixed(2) + 'x';
+  }
+  function loadVoiceDefaults(agent) {
+    const sel = document.getElementById('voice-defaults'); if (!sel) return;
+    const d = agent && agent.voiceDefaults && typeof agent.voiceDefaults === 'object' ? agent.voiceDefaults : null;
+    sel.value = !d ? 'none' : d.preset === 'patient' ? 'patient' : 'custom';
+    vdFill({ ...VD_FACTORY, ...(d || {}) });
+    document.getElementById('voice-defaults-custom').style.display = sel.value === 'custom' ? 'block' : 'none';
+  }
+  function voiceDefaultsChanged() {
+    const mode = document.getElementById('voice-defaults').value;
+    document.getElementById('voice-defaults-custom').style.display = mode === 'custom' ? 'block' : 'none';
+    saveVoiceDefaults();
+  }
+  async function saveVoiceDefaults() {
+    const mode = document.getElementById('voice-defaults').value;
+    const val = (id) => Number(document.getElementById(id).value);
+    const body = mode === 'patient' ? { preset: 'patient' }
+      : mode === 'custom' ? { endPause: val('vd-pause'), continueWait: val('vd-wait'), interruptSensitivity: val('vd-sens'), voiceSpeed: val('vd-speed') }
+      : null;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voiceDefaults: body }) });
+      if (result && (result.success || result.ok)) showStatus('voice-defaults-status', 'success', body ? 'Saved' : 'No voice defaults: calls use each device\'s own settings');
+      else showStatus('voice-defaults-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('voice-defaults-status', 'error', e.message); }
+  }
+  // ── Call recordings: keep, who may download, the consent line, the agent's voice, the microphone; PATCH { recordings: {...} } ──
+  let recStored = { allowed: [] }, recUsersOk = false;
+  function recordingsFormValues() {
+    const allowed = recUsersOk ? [...document.querySelectorAll('#rec-allowed input[type=checkbox]')].filter(cb => cb.checked).map(cb => cb.value) : recStored.allowed;   // the account list did not load: keep the stored people
+    return {
+      keep: document.getElementById('rec-keep').checked,
+      allowed,
+      consentLine: document.getElementById('rec-consent').value.trim(),
+      keepReplies: document.getElementById('rec-replies').checked,
+      mic: document.getElementById('rec-mic').value,
+      announce: document.getElementById('rec-announce').value,
+    };
+  }
+  // One warning while keep is on and the speech recognition picked above is a cloud engine; the storage line (nothing for an admin who is not on the list).
+  function paintRecordingsNotes() {
+    const warn = document.getElementById('rec-cloud-warning'), stt = document.getElementById('voice-stt');
+    if (warn) warn.style.display = document.getElementById('rec-keep').checked && stt && stt.value !== 'local' ? 'block' : 'none';
+  }
+  async function loadRecordings(agent) {
+    // Only the owner of this Maestro changes call recordings (GET /api/me: isOwner); any other admin sees one line and nothing else is loaded.
+    let owner = false;
+    try { const me = await apiFetch('/api/me'); owner = !!(me && me.isOwner === true); } catch { owner = false; }
+    document.getElementById('rec-controls').style.display = owner ? '' : 'none';
+    document.getElementById('rec-owner-note').style.display = owner ? 'none' : 'block';
+    if (!owner) return;
+    const r = (agent && agent.recordings) || {};
+    recStored = { allowed: Array.isArray(r.allowed) ? r.allowed : [] };
+    const keep = document.getElementById('rec-keep'), replies = document.getElementById('rec-replies'), consent = document.getElementById('rec-consent'), mic = document.getElementById('rec-mic'), announce = document.getElementById('rec-announce');
+    keep.checked = r.keep === true; replies.checked = r.keepReplies === true; mic.value = r.mic === 'unprocessed' ? 'unprocessed' : 'processed';
+    announce.value = ['first', 'every', 'never'].includes(r.announce) ? r.announce : 'first';
+    consent.value = r.consentLine && r.consentLine !== consent.placeholder ? r.consentLine : '';
+    pageGuard.markLoaded([keep, replies, consent, mic, announce]);
+    paintRecordingsNotes();
+    const box = document.getElementById('rec-allowed');
+    try {
+      const data = await apiFetch('/api/users');   // the accounts the Users page lists (admin route)
+      const users = Array.isArray(data && data.users) ? data.users : null;
+      if (!users) throw new Error('no users');
+      box.replaceChildren();
+      for (const u of users) {
+        const lab = document.createElement('label'), cb = document.createElement('input'), t = document.createElement('span');
+        lab.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;color:#ddd;font-size:13px;';
+        cb.type = 'checkbox'; cb.value = u.id; cb.checked = recStored.allowed.includes(u.id); cb.style.cssText = 'width:20px;height:20px;';
+        t.textContent = `${u.name || u.login} (${u.login})`;
+        lab.append(cb, t); box.appendChild(lab);
+      }
+      if (!users.length) box.textContent = 'No accounts yet.';
+      recUsersOk = users.length > 0;
+      pageGuard.markLoaded([...box.querySelectorAll('input')]);
+    } catch { recUsersOk = false; box.textContent = "The accounts couldn't be loaded; the people already ticked stay as they are."; }
+    try {
+      const data = await apiFetch('/api/recordings');
+      const mine = ((data && data.agents) || []).find(a => a.name === agentName);
+      const line = document.getElementById('rec-storage');
+      if (mine) { line.textContent = `Stored so far: ${mine.sessions} sessions, ${(mine.speechMs / 3600000).toFixed(1)} hours of speech, ${(mine.bytes / 1048576).toFixed(1)} MB on this computer.`; line.style.display = 'block'; }
+      else line.style.display = 'none';   // an admin who is not on the list sees nothing
+    } catch { document.getElementById('rec-storage').style.display = 'none'; }
+  }
+  async function saveRecordings() {
+    const body = recordingsFormValues();
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recordings: body }) });
+      if (result && (result.success || result.ok)) { paintRecordingsNotes(); showStatus('recordings-status', 'success', body.keep ? 'Saved: calls with this agent are recorded' : 'Saved: calls with this agent are not recorded'); }
+      else showStatus('recordings-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('recordings-status', 'error', e.message); }
+  }
+  document.getElementById('voice-stt').addEventListener('change', paintRecordingsNotes);
+  // ── Voice (free local engines by default; OpenAI, Google and ElevenLabs are optional cloud engines) ──
+  const VOICE_CLOUD_LISTS = {
+    openai: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'],
+    google: ['Kore', 'Puck', 'Charon', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr'],
+  };
+  const VOICE_CLOUD_DEFAULT = { openai: 'coral', google: 'Kore' };
+  const VOICE_ENGINE_NAMES = { local: 'Local (free)', openai: 'OpenAI', google: 'Google', elevenlabs: 'ElevenLabs' };
+  const VOICE_ELEVEN_ID = /^[A-Za-z0-9]{10,40}$/;
+  let voiceList = [], agentVoice = '', voicePlayCtx = null, voicePlaySrc = null;
+  let voiceCfg = { stt: 'local', tts: 'local', cloudVoice: '' }, voiceKept = false, voiceCloudKeys = null, voiceConfirmed = false;
+  function paintVoiceSelect() {
+    const sel = document.getElementById('voice-select');
+    if (!sel) return;
+    const opts = [{ id: '', label: 'Hub default' }, ...voiceList];
+    sel.innerHTML = opts.map(v => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.label || v.id)}</option>`).join('');
+    if (agentVoice && !opts.some(v => v.id === agentVoice)) sel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(agentVoice)}">${escapeHtml(agentVoice)}</option>`);
+    sel.value = agentVoice;
+    pageGuard.markLoaded(sel);
+    paintVoiceCloud();
+  }
+  // The cloud voice control follows the engine picked for speaking; the warning and the keys line follow the engines picked.
+  // keepForm: the owner just picked an engine, so the controls follow the engine now in the select instead of the saved one.
+  function paintVoiceCloud(keepForm) {
+    const stt = document.getElementById('voice-stt'), tts = document.getElementById('voice-tts');
+    if (!stt || !tts) return;
+    if (!keepForm) { stt.value = voiceCfg.stt; tts.value = voiceCfg.tts; }
+    const eng = tts.value, row = document.getElementById('voice-cloud-row'), sel = document.getElementById('voice-cloud-select'), idIn = document.getElementById('voice-cloud-id');
+    const list = VOICE_CLOUD_LISTS[eng];
+    row.style.display = (list || eng === 'elevenlabs') ? 'flex' : 'none';
+    sel.style.display = list ? '' : 'none';
+    idIn.style.display = eng === 'elevenlabs' ? '' : 'none';
+    document.getElementById('voice-cloud-hint').style.display = eng === 'elevenlabs' ? 'block' : 'none';
+    document.getElementById('voice-cloud-label').textContent = eng === 'elevenlabs' ? 'ElevenLabs voice ID' : (VOICE_ENGINE_NAMES[eng] || 'Cloud') + ' voice';
+    if (list) {
+      const cur = list.includes(voiceCfg.cloudVoice) ? voiceCfg.cloudVoice : VOICE_CLOUD_DEFAULT[eng];
+      sel.innerHTML = list.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      sel.value = cur;
+    }
+    if (eng === 'elevenlabs') {
+      if (!keepForm) idIn.value = VOICE_ELEVEN_ID.test(voiceCfg.cloudVoice) ? voiceCfg.cloudVoice : (voiceCfg.cloudVoice || '');
+      else if (!VOICE_ELEVEN_ID.test(idIn.value.trim())) idIn.value = VOICE_ELEVEN_ID.test(voiceCfg.cloudVoice) ? voiceCfg.cloudVoice : '';
+    }
+    pageGuard.markLoaded(stt); pageGuard.markLoaded(tts); pageGuard.markLoaded(sel); pageGuard.markLoaded(idIn);
+    paintVoiceNotes();
+  }
+  function voiceCloudEngines() {
+    const out = [];
+    for (const e of [document.getElementById('voice-stt').value, document.getElementById('voice-tts').value]) if (e && e !== 'local' && !out.includes(e)) out.push(e);
+    return out;
+  }
+  function voiceEngineList(engines) { const n = engines.map(e => VOICE_ENGINE_NAMES[e] || e); return n.length > 1 ? n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1] : n[0]; }
+  function paintVoiceNotes() {
+    const warn = document.getElementById('voice-kept-warning'), line = document.getElementById('voice-keys-line');
+    if (!warn || !line) return;
+    const engines = voiceCloudEngines();
+    if (voiceKept && engines.length) {
+      warn.textContent = `This agent's data is meant to stay on this computer. A cloud engine sends what you say, and what the agent says, to ${voiceEngineList(engines)}.` + (voiceConfirmed ? ' The owner has confirmed this.' : ' Only the owner can confirm it.');
+      warn.style.display = 'block';
+    } else warn.style.display = 'none';
+    if (!voiceCloudKeys) { line.textContent = 'Cloud engines cost money per use and fall back to the free local engine if they fail.'; return; }
+    const keyOf = { openai: 'OpenAI', google: 'Google', elevenlabs: 'ElevenLabs' };
+    const parts = Object.keys(keyOf).map(k => `${keyOf[k]} key: ${voiceCloudKeys[k] ? 'set' : 'not set: add it in Settings -> providers'}`);
+    line.textContent = parts.join('. ') + '. Cloud engines cost money per use and fall back to the free local engine if they fail.';
+  }
+  async function loadVoiceList() {
+    try {
+      const st = await apiFetch('/api/voice/status');
+      voiceList = (st && Array.isArray(st.voices)) ? st.voices : [];
+      voiceCloudKeys = (st && st.cloud && typeof st.cloud === 'object' && Object.keys(st.cloud).length) ? st.cloud : null;
+      if (st && !st.enabled) showStatus('voice-status', 'info', 'Voice is off for the hub: an admin turns it on in Settings, Voices.');
+    } catch { voiceList = []; }
+    paintVoiceSelect();
+  }
+  // The agent record says whether the agent is kept on this computer and what engines it has.
+  async function loadVoiceRecord(listed) {
+    // the agent's record from GET /api/agents (it carries voice and keptOnBox)
+    const rec = listed;
+    const v = (rec && rec.voice) || {};
+    agentVoice = v.voice || '';
+    voiceCfg = { stt: ['local', 'openai', 'google'].includes(v.stt) ? v.stt : 'local', tts: ['local', 'openai', 'google', 'elevenlabs'].includes(v.tts) ? v.tts : 'local', cloudVoice: v.cloudVoice || '' };
+    voiceKept = !!(rec && rec.keptOnBox);
+    voiceConfirmed = !!v.cloudConfirmedBy;
+    paintVoiceSelect();
+  }
+  function voiceFormValues() {
+    const stt = document.getElementById('voice-stt').value, tts = document.getElementById('voice-tts').value;
+    const out = { voice: document.getElementById('voice-select').value, stt, tts };
+    if (tts === 'elevenlabs') out.cloudVoice = document.getElementById('voice-cloud-id').value.trim();
+    else if (VOICE_CLOUD_LISTS[tts]) out.cloudVoice = document.getElementById('voice-cloud-select').value;
+    return out;
+  }
+  // The Voice engine select changed: show the controls for the new engine first, then save once the form is complete.
+  function voiceEngineChanged() {
+    paintVoiceCloud(true);
+    const body = voiceFormValues();
+    if (body.tts === 'elevenlabs' && !VOICE_ELEVEN_ID.test(body.cloudVoice)) {
+      showStatus('voice-status', 'info', 'Enter the ElevenLabs voice ID (10 to 40 letters and digits) to use ElevenLabs.');
+      return;
+    }
+    return saveAgentVoice();
+  }
+  async function saveAgentVoice() {
+    const body = voiceFormValues();
+    const engines = voiceCloudEngines();
+    const revert = () => { paintVoiceCloud(); };
+    if (body.tts === 'elevenlabs' && !VOICE_ELEVEN_ID.test(body.cloudVoice)) {
+      showStatus('voice-status', 'error', 'Enter the ElevenLabs voice ID (10 to 40 letters and digits) to use ElevenLabs.');
+      return;
+    }
+    if (voiceKept && engines.length) {
+      // Ask only for a cloud engine the owner has not confirmed yet; the same set, or a move back to local, needs no new dialog.
+      const saved = [voiceCfg.stt, voiceCfg.tts];
+      const added = engines.filter(e => !saved.includes(e));
+      if (added.length || !voiceConfirmed) {
+        if (!confirm(`This agent's data is meant to stay on this computer.\n\nA cloud engine sends what you say, and what the agent says, to ${voiceEngineList(engines)}.\n\nUse it anyway? Only the owner of this Maestro can confirm this.`)) { revert(); return; }
+      }
+      body.cloudConfirm = true;
+    }
+    try {
+      const r = await fetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: body }) });
+      let result = null; try { result = await r.json(); } catch {}
+      if (r.status === 403 && result && result.error === 'owner_confirmation_required') {
+        revert();
+        showStatus('voice-status', 'error', 'Only the owner of this Maestro can choose a cloud engine for this agent.');
+        return;
+      }
+      if (result && (result.success || result.ok)) {
+        agentVoice = body.voice; voiceCfg = { stt: body.stt, tts: body.tts, cloudVoice: body.cloudVoice || '' };
+        voiceConfirmed = !!body.cloudConfirm;
+        paintVoiceNotes();
+        showStatus('voice-status', 'success', engines.length ? `Saved: ${voiceEngineList(engines)} used from the next time. If it fails, the free local engine answers.` : (body.voice ? 'Voice saved: used from the next time a reply is read' : 'Using the hub default voice'));
+      } else showStatus('voice-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('voice-status', 'error', e.message); }
+  }
+  async function playAgentVoiceSample() {
+    const btn = document.getElementById('voice-sample-btn');
+    if (voicePlaySrc) { try { voicePlaySrc.stop(); } catch {} voicePlaySrc = null; return; }
+    btn.disabled = true;
+    try {
+      const body = { agent: agentName, text: 'This is the voice I will use to read replies to you.' };
+      const v = document.getElementById('voice-select').value;
+      if (v) body.voice = v;
+      const r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!r.ok) { let m = ''; try { m = (await r.json()).error; } catch {} throw new Error(m || `HTTP ${r.status}`); }
+      const engine = r.headers.get('X-Voice-Engine') || 'local', fallback = r.headers.get('X-Voice-Fallback');
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!voicePlayCtx) voicePlayCtx = new AC();
+      if (voicePlayCtx.state === 'suspended') await voicePlayCtx.resume();
+      const ab = await voicePlayCtx.decodeAudioData(await r.arrayBuffer());
+      const src = voicePlayCtx.createBufferSource();
+      src.buffer = ab; src.connect(voicePlayCtx.destination);
+      src.onended = () => { voicePlaySrc = null; btn.textContent = 'Play sample'; };
+      voicePlaySrc = src; btn.textContent = 'Stop';
+      src.start();
+      if (fallback) showStatus('voice-status', 'info', `Played with the ${VOICE_ENGINE_NAMES[engine] || engine} engine: the cloud engine failed (${fallback}), so the free local engine answered.`);
+      else showStatus('voice-status', 'info', `Played with the ${VOICE_ENGINE_NAMES[engine] || engine} engine.`);
+    } catch (e) { showStatus('voice-status', 'error', 'Could not play the sample: ' + e.message); }
+    finally { btn.disabled = false; }
+  }
   async function saveToolsMode() {
     const v = document.getElementById('tools-mode').value;
     try {
@@ -1040,6 +1441,11 @@
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
       const effSel = document.getElementById('effort-mode'); if (effSel) effSel.value = agent?.effort || 'default';
+      loadCallDisplay(agent);
+      loadVoiceDefaults(agent);
+      loadVoiceRecord(agent);
+      loadRecordings(agent);
+      if (!voiceList.length) loadVoiceList();
       const toolsRow = document.getElementById('tools-row'); if (toolsRow) { const clientModel = /^(claude-sdk|codex-cli)\//.test(agent?.model || currentModel || ''); toolsRow.style.display = clientModel ? 'flex' : 'none'; const th = document.getElementById('tools-help'); if (th) th.style.display = clientModel ? 'block' : 'none'; }
       const allowedPanel = document.getElementById('auto-model-allowed');
       if (agent?.autoModel) {

@@ -8,7 +8,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createModelHealth, MARK } = require('../lib/model-health');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('model-health-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createModelHealth, MARK } = L('model-health');
 
 const root = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
@@ -111,7 +115,7 @@ test('an agent that consults a failing agent gets the plain explanation, not the
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /type: 'turn_error', kind: cls\.kind === 'ok' \? 'error' : cls\.kind, transient: cls\.transient, retryAfterMs: cls\.retryAfterMs, message: providerPacing\.describeError\(e\)\.slice\(0, 300\) \|\| 'error', help: errorHelp\.oneLine\(turnErrorInfo\) \}/);
   assert.match(chat, /err\.pacing = \{ kind: turnError\.kind \|\| 'error', retryAfterMs: turnError\.retryAfterMs \|\| null, \.\.\.\(turnError\.help \? \{ help: String\(turnError\.help\)\.slice\(0, 900\) \} : \{\}\) \};/);
-  const pacing = require('../lib/provider-pacing');
+  const pacing = L('provider-pacing');
   const cls = pacing.classify({ pacing: { kind: 'error', help: 'Grok 4.7 couldn\'t reply. The OpenRouter account is out of credit. What to do: Add credit…' }, message: 'Provider 402: {}' });
   assert.strictEqual(cls.help, 'Grok 4.7 couldn\'t reply. The OpenRouter account is out of credit. What to do: Add credit…', 'the explanation survives the pacing layer');
   const src = read('lib/provider-pacing.js');
@@ -124,7 +128,7 @@ test('the model test route: one route for the Test button and the pickers; admin
   assert.match(srv, /if \(!isMythosModel\(model\)\) \{\n\s*const r = await require\('\.\/lib\/model-health'\)\.getModelHealth\(\)\.test\(String\(model\)\.slice\(0, 200\), \{ ledger: getLedger\(\), force: !!body\.force \}\);/);
   assert.match(srv, /return jsonResponse\(res, 200, \{ success: !!r\.ok, model, latency: r\.ms,/, 'the agent settings page\'s Test button keeps its answer');
   assert.match(srv, /health: require\('\.\/lib\/model-health'\)\.getModelHealth\(\)\.view\(\),/);
-  const { classifyRoute } = require('../lib/access');
+  const { classifyRoute } = L('access');
   assert.strictEqual(classifyRoute('/api/models/test', 'POST').kind, 'admin');
   assert.match(read('agent-settings.html'), /if \(result\.success && result\.toolCall === false\) \{/, 'the Test button says when a model answered without using the tool');
 });

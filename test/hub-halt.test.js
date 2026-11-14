@@ -6,17 +6,22 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('hub-halt-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-halt-'));
 const FLAG = path.join(tmp, 'hub-halt.json');
 process.env.HUB_HALT_FILE = FLAG;
 
-const hubHaltMod = require('../lib/hub-halt');
-const sdkChat = require('../lib/sdk-chat');
-const hubEvents = require('../lib/hub-events');
+const hubHaltMod = L('hub-halt');
+const sdkChat = L('sdk-chat');
+const hubEvents = L('hub-events');
 const { turnRegistry, setTestStreamer } = sdkChat.__turn;
 const { buildHubMcpServer } = sdkChat.__askUser;
 
-const convDir = path.join(__dirname, '..', 'data', 'conversations');
+const convDir = path.join(ISO.data, 'conversations');
 fs.mkdirSync(convDir, { recursive: true });
 const AGENTS = ['zz_halt_a', 'zz_halt_b', 'zz_halt_c'];
 after(() => {
@@ -58,8 +63,8 @@ test('the flag survives a module reload (a hub restart), and deleting the file r
   const b = hubHaltMod.createHubHalt({ file: FLAG });            // a fresh instance = a fresh process
   assert.strictEqual(b.isHalted(), true);
   assert.strictEqual(b.status().reason, 'restart me');
-  delete require.cache[require.resolve('../lib/hub-halt')];
-  const reloaded = require('../lib/hub-halt');
+  delete require.cache[require.resolve(path.join(ISO.lib, 'hub-halt'))];
+  const reloaded = L('hub-halt');
   assert.strictEqual(reloaded.getHubHalt().isHalted(), true);
   fs.unlinkSync(FLAG);                                           // hand-deleting the file resumes
   assert.strictEqual(a.isHalted(), false);
@@ -170,7 +175,7 @@ test('delegation tools (consult_agent, spawn_workers) and run_job refuse while h
 });
 
 test('job runner: run() refuses while halted, cancelAll stops only running jobs', async () => {
-  const { JobRunner } = require('../lib/jobs');
+  const { JobRunner } = L('jobs');
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-halt-jobs-'));
   let refusal = null;
   const runner = new JobRunner({ dataDir, spawnMode: 'setsid', pollMs: 100, log: () => {}, notify: async () => {}, isAgentActive: () => false, agentExists: async () => true, defaultCwd: async () => dataDir, haltRefusal: () => refusal });
@@ -194,7 +199,7 @@ test('job runner: run() refuses while halted, cancelAll stops only running jobs'
 });
 
 test('scheduler: a halted hub fires no TASKS.md task and logs "skipped: hub halted"', async () => {
-  const sched = require('../lib/scheduler');
+  const sched = L('scheduler');
   assert.strictEqual(typeof sched.executeAgentTask, 'function');
   const logs = [];
   const orig = console.log; console.log = (...a) => { logs.push(a.join(' ')); };
@@ -206,7 +211,7 @@ test('scheduler: a halted hub fires no TASKS.md task and logs "skipped: hub halt
 });
 
 test('schedule_task: due tasks are not delivered while halted (dropped as missed, recurring keeps its next run)', async () => {
-  const st = require('../lib/scheduled-tasks');
+  const st = L('scheduled-tasks');
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-halt-sched-'));
   const T0 = Date.parse('2026-09-29T18:00:00Z');
   const clock = { t: T0 }; const woken = []; let refusal = null;

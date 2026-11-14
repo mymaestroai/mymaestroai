@@ -8,7 +8,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const sc = require('../lib/security-check');
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+// lib/ and scripts/security-check.js come from a throwaway install, so nothing under the real data/ is touched.
+const ISO = makeIsolatedInstall('security-check-iso-', { copy: ['scripts/security-check.js'] });
+const sc = require(path.join(ISO.lib, 'security-check'));
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const byId = (r, id) => r.items.find(i => i.id === id);
@@ -182,7 +185,7 @@ test('fixModes tightens only the loose secret files (600 / 700) and run() stores
 test('the terminal script runs with no hub process and prints clean JSON', { timeout: 90000 }, () => {
   let stdout = '';
   let code = 0;
-  try { stdout = execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'security-check.js'), '--json'], { cwd: path.join(__dirname, '..'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 80000 }); }
+  try { stdout = execFileSync(process.execPath, [path.join(ISO.inst, 'scripts', 'security-check.js'), '--json'], { cwd: ISO.inst, env: { ...process.env }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 80000 }); }
   catch (e) { code = e.status; stdout = e.stdout || ''; }
   assert.ok([0, 1, 2].includes(code), `exit code ${code}`);
   const r = JSON.parse(stdout);

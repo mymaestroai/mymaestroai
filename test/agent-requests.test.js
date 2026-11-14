@@ -5,9 +5,13 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createAgentRequests } = require('../lib/agent-requests');
-const teams = require('../lib/teams');
-const { isValidAgentName } = require('../lib/agents');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('areq-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createAgentRequests } = L('agent-requests');
+const teams = L('teams');
+const { isValidAgentName } = L('agents');
 
 function make(extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'areq-'));

@@ -9,8 +9,12 @@ const http = require('http');
 const { spawn } = require('child_process');
 const { z } = require('zod');
 
-const codex = require('../lib/codex-cli');
-const bridge = require('../lib/codex-cli/bridge');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('codex-cli-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const codex = L('codex-cli');
+const bridge = L('codex-cli/bridge');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-test-'));
 
@@ -246,7 +250,7 @@ test('mcp-bridge.js speaks stdio MCP and proxies to the hub', async () => {
 // ── gateway guard ────────────────────────────────────────────────────────
 
 test('gateway refuses codex-cli models but still answers supportsImages', () => {
-  const gw = require('../lib/gateway-client');
+  const gw = L('gateway-client');
   assert.strictEqual(gw.supportsImages('codex-cli/gpt-5.5'), true);
   assert.strictEqual(gw.resolveProvider('codex-cli/gpt-5.5').provider, 'codex-cli');
   assert.throws(() => gw.transportFor('codex-cli/gpt-5.5'), /only through the Codex CLI/);

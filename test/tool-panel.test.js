@@ -27,7 +27,7 @@ function extract(src, name) {
 }
 const fns = (src, names, ret, pre = '') => new Function(`${pre}${names.map(n => extract(src, n)).join('\n')}; return { ${ret} };`)();
 
-const D = fns(app, ['escapeHtmlSafe', 'fmtDur', 'durClass', 'toolPanelModel', 'toolSpanMs', 'toolSummaryText', 'toolDurHtml', 'toolDetailText', 'toolRowsHtml', 'sameToolRows'],
+const D = fns(app, ['escapeHtmlSafe', 'fmtDur', 'durClass', 'toolResultDenied', 'toolPanelModel', 'toolSpanMs', 'toolSummaryText', 'toolDurHtml', 'toolDetailText', 'toolRowsHtml', 'sameToolRows'],
   'toolPanelModel, toolSpanMs, toolSummaryText, toolRowsHtml, toolDetailText, sameToolRows', 'const TOOL_DETAIL_MAX = 20000;\n');
 const steps = [
   { text: 'Looking.', tools: [{ tool: 'Read', input: 'lib/a.js', status: 'done', result: 'x', startedAt: 1000, durationMs: 100 },
@@ -113,7 +113,7 @@ test('desktop: the reply text stays in the message, the calls go to one panel ke
   for (const sel of ['.tool-stream.collapsed .ts-body', '.ts-row {', '.ts-detail {', '.tools-full .rsn-full-box', '.ts-fail[hidden]']) assert.ok(css.includes(sel), sel);
 });
 
-const P = fns(mjs, ['clipText', 'tsnDur', 'tsnFailed', 'tsnSpan', 'tsnModel', 'tsnSummary'], 'tsnDur, tsnFailed, tsnSpan, tsnModel, tsnSummary');
+const P = fns(mjs, ['clipText', 'tsnDur', 'toolResultDenied', 'tsnFailed', 'tsnSpan', 'tsnModel', 'tsnSummary'], 'tsnDur, tsnFailed, tsnSpan, tsnModel, tsnSummary');
 const feed = (ended, rows) => ({ ended, items: new Map(rows.map((r, i) => [`i${i}`, { id: `i${i}`, ...r }])) });
 
 test('phone: the model counts calls and workers, a failed tool by its output and a failed worker by its status', () => {
@@ -135,7 +135,7 @@ test('phone: the model counts calls and workers, a failed tool by its output and
 
 test('phone: the reply text stays in the bubble, the calls go to one panel above it, closed at first, rows still tap open', () => {
   const pr = extract(mjs, 'paintReply');
-  assert.match(pr, /if \(b\.type !== 'text'\) continue;   \/\/ the calls go into the tool panel/);
+  assert.match(pr, /if \(b\.type === 'group'\) continue;   \/\/ the calls go into the tool panel/);   // (text and interjection blocks get an element; groups of calls do not)
   assert.match(pr, /paintTools\(holder, blocks, changed\);/);
   assert.ok(!pr.includes("'feed fgroup'"), 'no rows between the text any more');
   const pt = extract(mjs, 'paintTools');

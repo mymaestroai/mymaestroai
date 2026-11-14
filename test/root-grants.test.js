@@ -5,10 +5,14 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createRootGrants } = require('../lib/root-grants');
-const tp = require('../lib/tool-policy');
-const { createGate } = require('../lib/policy-gate');
-const { createApprovals } = require('../lib/approvals');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('root-grants-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createRootGrants } = L('root-grants');
+const tp = L('tool-policy');
+const { createGate } = L('policy-gate');
+const { createApprovals } = L('approvals');
 
 function rig() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'root-grants-'));

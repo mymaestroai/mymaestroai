@@ -6,10 +6,14 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createConnectors } = require('../lib/connectors');
-const McpStdioClient = require('../lib/skills/mcp-stdio');
-const { createModules } = require('../lib/modules');
-const manifestLib = require('../lib/modules/manifest');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('mod-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createConnectors } = L('connectors');
+const McpStdioClient = L('skills/mcp-stdio');
+const { createModules } = L('modules');
+const manifestLib = L('modules/manifest');
 
 const FIX_ROOT = path.join(__dirname, 'fixtures', 'modules');
 
@@ -152,7 +156,7 @@ test('a hand-made connector with the module id is never taken over', async (t) =
 });
 
 test('installer: exact version into the module data folder, scripts off; Node version gate', async () => {
-  const installer = require('../lib/modules/installer');
+  const installer = L('modules/installer');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inst-'));
   const calls = [];
   const runNpm = async (args, cwd) => {
@@ -201,7 +205,7 @@ test('guard protocol hardening: batches, reserved ids, notifications and unknown
   assert.strictEqual(new Set(pids.map(x => JSON.parse(x).pid)).size, 1);
   // raw protocol against the guard process
   const { spawn } = require('child_process');
-  const g = spawn(process.execPath, [path.join(__dirname, '..', 'lib', 'modules', 'mcp-guard.js'), 'fakebank', '--root', FIX_ROOT, '--data', path.join(r.dir, 'modules'), '--state', path.join(r.dir, 'modules.json'), '--connectors', path.join(r.dir, 'connectors.json')], { stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: process.env.PATH, FAKEBANK_TOKEN: 'secret-token-1' } });
+  const g = spawn(process.execPath, [path.join(ISO.lib, 'modules', 'mcp-guard.js'), 'fakebank', '--root', FIX_ROOT, '--data', path.join(r.dir, 'modules'), '--state', path.join(r.dir, 'modules.json'), '--connectors', path.join(r.dir, 'connectors.json')], { stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: process.env.PATH, FAKEBANK_TOKEN: 'secret-token-1' } });
   const out = []; let buf = '';
   g.stdout.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { out.push(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); } });
   const send = (m) => g.stdin.write(JSON.stringify(m) + '\n');
@@ -497,7 +501,7 @@ test('minTools: a module with no agent-visible tools answers a hub call without 
 });
 
 test('setup steps: a tick box needs its text (confirm: true is refused)', () => {
-  const { validateSetup } = require('../lib/modules/manifest');
+  const { validateSetup } = L('modules/manifest');
   const steps = (confirm) => ({ steps: [{ id: 'about', type: 'explain', title: 'About', body: 'x', confirm }, { id: 'done', type: 'finish', title: 'Done', body: 'x' }] });
   const ok = validateSetup(steps('I understand.'), { secretNames: new Set(), settingKeys: new Set() });
   const bad = validateSetup(steps(true), { secretNames: new Set(), settingKeys: new Set() });
@@ -539,7 +543,7 @@ test("the guard passes a module server's hub request up and the hub's response b
   fs.writeFileSync(path.join(root, 'fakereq', 'module.json'), JSON.stringify({ id: 'fakereq', name: 'Fake Req', category: 'Test', summary: 'A test module whose server sends requests to the hub.', risk: 'read', server: { type: 'mcp-stdio', script: 'server.js' }, secrets: [{ name: 'FAKEREQ_ID', label: 'Id' }, { name: 'FAKEREQ_SECRET', label: 'Secret' }, { name: 'FAKEREQ_TOKEN', label: 'Token', optional: true }], oauth: { flow: 'code', authorizeUrl: 'https://auth.example.com/a', tokenUrl: 'https://auth.example.com/t', rotatesRefreshToken: true, scopes: ['x'], clientIdSecret: 'FAKEREQ_ID', clientSecretSecret: 'FAKEREQ_SECRET', refreshTokenSecret: 'FAKEREQ_TOKEN' }, tools: { ping: 'read' } }));
   fs.writeFileSync(path.join(root, 'fakereq', 'setup.json'), JSON.stringify({ steps: [{ id: 'intro', type: 'explain', title: 'About', body: 'Test.' }, { id: 'install', type: 'install', title: 'Install' }, { id: 'done', type: 'finish', title: 'Finish' }] }));
   fs.writeFileSync(path.join(root, 'fakereq', 'server.js'), FAKEREQ_SERVER);
-  const g = spawn(process.execPath, [path.join(__dirname, '..', 'lib', 'modules', 'mcp-guard.js'), 'fakereq', '--root', root, '--data', path.join(dir, 'modules'), '--state', path.join(dir, 'modules.json'), '--connectors', path.join(dir, 'connectors.json')], { stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: process.env.PATH } });
+  const g = spawn(process.execPath, [path.join(ISO.lib, 'modules', 'mcp-guard.js'), 'fakereq', '--root', root, '--data', path.join(dir, 'modules'), '--state', path.join(dir, 'modules.json'), '--connectors', path.join(dir, 'connectors.json')], { stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: process.env.PATH } });
   try {
     const out = []; let buf = '';
     g.stdout.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { out.push(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); } });

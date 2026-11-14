@@ -9,6 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="My Maestro AI">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/ui-call-display.css">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="apple-touch-icon" href="/icons/hub-192.png">
   <title>My Maestro AI</title>
@@ -81,6 +82,12 @@
       min-height: 60px; padding: 8px 14px; border-bottom: 1px solid var(--border);
     }
     .agent-row:active { background: var(--bg-card); }
+    .agent-row.active-done { opacity: .6; }
+    .active-sec { overflow: hidden; }
+    .agent-job { display: flex; font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; min-width: 0; }
+    .agent-job .ajl-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+    .agent-job .ajl-tail { flex: none; white-space: pre; }
+    @media (prefers-reduced-motion: reduce) { .active-sec { animation: none; } }
     .agent-icon { font-size: 26px; width: 36px; text-align: center; flex-shrink: 0; }
     .agent-meta { flex: 1; min-width: 0; }
     .agent-name { font-size: 16px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -184,6 +191,8 @@
     .auto-from { align-self: flex-start; font-size: 11px; color: var(--text-tertiary); padding: 0 4px; }
     .note { align-self: center; font-size: 12px; color: var(--text-tertiary); text-align: center; padding: 2px 8px; }
     .note.interject { align-self: flex-end; font-style: italic; margin-top: -4px; }
+    .ij-seg { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--warning); background: rgba(128,128,128,0.12); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .ij-seg .note.interject { text-align: right; margin-top: 2px; padding: 0; }
     .toolline { font-size: 12px; color: #8AB4FF; font-family: 'Geist Mono', ui-monospace, monospace; margin-top: 6px; overflow-wrap: anywhere; }
     /* Activity feed in an in-progress bubble: tool calls and workers, reply text below it. Tool calls read apart from the
        reply: light blue on a faint blue panel with a blue bar; a failed call turns red. */
@@ -347,6 +356,9 @@
     .tsn-grip::after { content: ''; width: 44px; height: 4px; border-radius: 2px; background: rgba(61,123,255,.45); }
     .tsn.closed .tsn-body, .tsn.closed .tsn-grip { display: none; }
     .tsn-sheet .rsn-sheet-title { color: #8AB4FF; }
+    .chat-view-hidden { display: none !important; }
+    .chat-busy-card { align-self: stretch; max-width: 100%; box-sizing: border-box; font-size: 12px; color: var(--text-tertiary); text-align: center; padding: 4px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .msg-time .archive-mark { font-size: 10px; opacity: .8; }
     .more { align-self: center; min-height: 44px; padding: 0 16px; color: var(--accent-hover); }
     .question { align-self: stretch; background: var(--bg-card); border: 1px solid var(--accent); border-radius: 12px; padding: 10px; }
     .question .qh { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
@@ -403,7 +415,7 @@
     #send-btn.interject { background: var(--warning); color: #000; }
     #send-btn:disabled { opacity: .5; }
     /* A touch on the buttons beside the message box is always a tap, never the start of a scroll. */
-    #send-btn, #composer .notify-chip { touch-action: none; }
+    #send-btn { touch-action: none; }
     .qcustom button { min-height: 44px; padding: 0 14px; border-radius: 8px; background: var(--accent); color: #fff; }
 
     /* Activity */
@@ -535,12 +547,128 @@
   /* Narrow phones: the square alone (red outline, aria-label), so the line under the agent's name keeps room to say
      what the agent is doing. */
   @media (max-width: 430px) { #chat-stop-btn .stop-label { display: none; } #chat-head .iconbtn.stop-remote { min-width: 40px; padding: 0 8px; } }
-  /* "Notify me when done": next to the Interject button while a reply runs, gone when it is done; filled once tapped. */
-  #composer .notify-chip { flex: none; align-self: flex-end; height: 40px; padding: 0 12px; border-radius: 20px; font: inherit; font-size: 14px; font-weight: 600;
-    border: 1px solid var(--accent, #3d7bff); color: var(--accent, #3d7bff); background: rgba(61,123,255,.10); cursor: pointer; white-space: nowrap; }
-  #composer .notify-chip.on { background: var(--accent, #3d7bff); color: #fff; }
-  #composer .notify-chip[hidden] { display: none; }
-  @media (max-width: 379px) { #composer .notify-chip .nlabel { display: none; } #composer .notify-chip { padding: 0 10px; } }
+  /* "Notify me when done": a bell in the chat header beside Stop while a reply runs, gone when it is done; filled once tapped. */
+  #chat-head .notify-chip { flex: none; touch-action: none; font-size: 18px; border: 1px solid var(--accent, #3d7bff); color: var(--accent, #3d7bff); background: rgba(61,123,255,.10); cursor: pointer; white-space: nowrap; }
+  #chat-head .notify-chip.on { background: var(--accent, #3d7bff); color: #fff; }
+  #chat-head .notify-chip:active { filter: brightness(1.35); }
+  #chat-head .notify-chip .nlabel { display: none; }
+  #chat-head .notify-chip[hidden] { display: none; }
+  /* Voice: the mic beside Send, the level bar above the row while recording, the speaker on a reply, the Voice sheet. */
+  #mic-btn { flex: none; touch-action: none; font-size: 20px; }
+  #mic-btn.rec { background: var(--error, #e5484d); color: #fff; border-radius: 22px; padding: 0 12px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; animation: rsn-pulse 1.4s ease-in-out infinite; }
+  #mic-btn.busy { opacity: .55; pointer-events: none; }
+  #voice-level { height: 4px; margin: 0 2px 6px; border-radius: 2px; background: var(--border); overflow: hidden; }
+  #voice-level[hidden] { display: none; }
+  #voice-level i { display: block; height: 100%; width: 0; background: var(--error, #e5484d); transition: width .08s linear; }
+  #mic-btn svg { display: block; width: 20px; height: 20px; }
+  #mic-btn.call { background: var(--error, #e5484d); color: #fff; border-radius: 22px; min-width: 48px; }
+  #mic-btn.call svg { width: 22px; height: 22px; }
+  /* The call panel: a row of the chat screen between the messages and the composer (never over the send row, the notify chip
+     or the tab bar). Touch targets are 48px high for a phone on a car mount. */
+  #call-panel { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    padding: 8px 10px; background: var(--bg-card); border-top: 1px solid var(--border-strong, var(--border)); color: var(--text); font-size: 15px; }
+  #call-panel[hidden] { display: none; }
+  #composer { position: relative; }
+  #voice-strip { display: flex; padding: 0 2px 4px; }
+  #voice-strip[hidden] { display: none; }
+  #voice-strip { align-items: center; }
+  /* The + sheet: Attach, Camera and Voice settings, just above the row, left-aligned. */
+  #composer .row { position: relative; }
+  #plus-sheet { position: absolute; left: 0; bottom: 100%; margin-bottom: 6px; z-index: 31; display: flex; flex-direction: column; min-width: 190px; padding: 6px; border-radius: 14px;
+    background: var(--bg-card); border: 1px solid var(--border-strong, var(--border)); box-shadow: 0 -6px 24px rgba(0,0,0,.35); color: var(--text); font-size: 15px; }
+  #plus-sheet[hidden] { display: none; }
+  #plus-sheet .ps-item { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 12px; border-radius: 10px; font: inherit; font-size: 15px; color: inherit; text-align: left; background: none; border: 0; width: 100%; cursor: pointer; }
+  #plus-sheet .ps-item[hidden] { display: none; }
+  #plus-sheet .ps-item:active { background: var(--border); }
+  #plus-sheet .ps-ico { width: 24px; display: inline-flex; align-items: center; justify-content: center; font-size: 20px; }
+  #plus-btn { flex: none; font-size: 26px; font-weight: 400; }
+  #plus-btn[aria-expanded="true"] { background: var(--border); }
+  /* Phone, while the message box is in use: the strip gives its row of height to the box. Nothing else is hidden on focus (Android's Back
+     closes the keyboard without leaving the box); attach, camera and voice settings are always in the + sheet. */
+  @media (max-width: 600px) {
+    #composer.typing #voice-strip { display: none; }
+  }
+  /* Compact call panel (short screen or the keyboard open): only the state line, held items and mic trouble stay. */
+  /* never inside the call display's drawer (adopted into a .ucd-section), which has room for the whole panel */
+  :not(.ucd-section) > #call-panel.compact #cp-activity, :not(.ucd-section) > #call-panel.compact #cp-heard, :not(.ucd-section) > #call-panel.compact .cp-dnd,
+  :not(.ucd-section) > #call-panel.compact .cp-disp, :not(.ucd-section) > #call-panel.compact .cp-actions, :not(.ucd-section) > #call-panel.compact #cp-help { display: none; }
+  :not(.ucd-section) > #call-panel.compact #cp-mic:not(.cp-mic-lost) { display: none; }
+  .voice-chip { min-height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--border-strong); background: var(--bg-card); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; }
+  .voice-chip.hands { background: var(--accent, #3d7bff); color: #fff; border-color: transparent; }
+  #voice-settings-btn { flex: none; }
+  #voice-settings-btn[aria-expanded="true"] { background: var(--border); }
+  #voice-panel { position: absolute; left: 6px; right: 6px; bottom: 100%; z-index: 30; max-height: 62vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 8px;
+    padding: 12px; border-radius: 14px 14px 0 0; background: var(--bg-card); border: 1px solid var(--border-strong, var(--border)); box-shadow: 0 -6px 24px rgba(0,0,0,.35); color: var(--text); font-size: 15px; }
+  #voice-panel[hidden] { display: none; }
+  #voice-panel select, #voice-sheet select { width: 100%; background: var(--bg-input); color: var(--text); font-size: 16px; }
+  #voice-panel .vp-row { display: flex; justify-content: space-between; align-items: center; }
+  #voice-panel .vp-modes { gap: 8px; justify-content: stretch; }
+  #call-ended-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg-card); border-top: 1px solid var(--warning, #d9a441); color: var(--text); font-size: 15px; }
+  #call-ended-bar[hidden] { display: none; }
+  #call-ended-bar .ceb-text { flex: 1; }
+  #call-ended-bar button { min-height: 44px; border-radius: 10px; font: inherit; font-weight: 600; padding: 0 14px; background: var(--border); color: var(--text); }
+  #call-ended-bar .ceb-again { background: var(--accent, #3d7bff); color: #fff; }
+  #call-panel .cp-top { display: flex; align-items: center; gap: 10px; }
+  #cp-state { font-weight: 700; font-size: 17px; min-width: 6.5em; }
+  #call-panel[data-state="hearing"] #cp-state { color: var(--success); }
+  #call-panel[data-state="speaking"] #cp-state { color: var(--accent-hover, var(--accent)); }
+  #cp-meter { flex: 1; height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
+  #cp-meter i { display: block; height: 100%; width: 0; background: var(--success, #00D395); transition: width .08s linear; }
+  #cp-activity { min-height: 1.2em; font-size: 13px; color: var(--text-dim); overflow-wrap: anywhere; }
+  /* The panel is a column with a max-height: its rows must never shrink (a min-height row shrank to one line and its second line drew over the Microphone line below) */
+  #call-panel > * { flex-shrink: 0; }
+  #cp-heard { min-height: 1.3em; font-size: 14px; line-height: 1.3; color: var(--text-dim); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  #cp-heard:empty { display: block; }
+  #cp-held { display: flex; flex-direction: column; gap: 6px; }
+  #cp-held:empty { display: none; }
+  #cp-held .cp-item { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 10px; background: var(--bg-input); border: 1px solid var(--border); }
+  #cp-held .cp-item-text { overflow-wrap: anywhere; }
+  #cp-held .cp-item-acts { display: flex; gap: 6px; }
+  #cp-held .cp-item-acts button { flex: 1; min-height: 48px; border-radius: 10px; background: var(--border); color: var(--text); font-size: 16px; font-weight: 600; }
+  #cp-held .cp-item-acts button[data-choice="now"] { background: var(--accent); color: #fff; }
+  #cp-held .cp-item-acts button.on { outline: 2px solid var(--accent); }
+  #call-panel .cp-dnd { display: flex; align-items: center; gap: 10px; min-height: 48px; }
+  #call-panel .cp-dnd input { width: 26px; height: 26px; accent-color: var(--accent, #3d7bff); flex: none; }
+  #call-panel .cp-disp { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; font-size: 16px; }
+  #call-panel .cp-disp select { flex: 1; max-width: 60%; min-height: 44px; font-size: 16px; border-radius: 10px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); padding: 0 8px; }
+  /* Hang up never needs a scroll: on a short or landscape phone the panel scrolls, and this row stays at its bottom edge on an opaque panel-colored background. */
+  #call-panel .cp-actions { display: flex; gap: 8px; position: sticky; bottom: 0; z-index: 2; background: var(--bg-card); padding-top: 8px; }
+  /* The Recording badge of a recorded call is the panel's first line, pinned to its top on the same opaque background, so it never scrolls away. */
+  #call-panel .cp-actions button { min-height: 52px; border-radius: 12px; font-size: 16px; font-weight: 600; background: var(--border); color: var(--text); padding: 0 16px; }
+  #call-panel .cp-actions .cp-hang { flex: 1; background: var(--error, #e5484d); color: #fff; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  #call-panel .cp-actions .cp-hang svg { width: 22px; height: 22px; }
+  #call-panel .cp-actions .cp-levels { min-width: 88px; min-height: 52px; font-size: 14px; }
+  #cp-help { margin: 0; font-size: 12px; color: var(--text-dim); }
+  #call-panel .cp-focus-hint { margin: 0; font-size: 12px; color: var(--text-dim); }
+  #call-panel .cp-focus-hint[hidden] { display: none; }
+  .vs-seg { display: flex; gap: 8px; }
+  .vs-opt { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); }
+  .vs-room-out, .vs-car-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
+  #cp-mic { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+  #cp-mic:empty { display: none; }
+  #cp-mic.cp-mic-lost { font-size: 15px; font-weight: 600; color: var(--danger, #e5484d); }
+  #voice-panel .vp-hint { margin: 0; }
+  #call-panel .cp-retry-mic { min-height: 48px; border-radius: 12px; font-size: 16px; font-weight: 600; background: var(--accent, #3d7bff); color: #fff; padding: 0 16px; }
+  #call-panel .cp-retry-mic[hidden] { display: none; }
+  /* the copy button takes the right 30px of a bubble; the speaker sits just left of it, so an assistant reply keeps 58px free on the right */
+  body:not(.no-speak) .msg.assistant { padding-right: 58px; }
+  body.no-speak .msg .speak { display: none; }
+  .msg .speak { position: absolute; top: 2px; right: 30px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 14px; line-height: 1; color: inherit; opacity: .45; background: none; }
+  .msg .speak:active, .msg.speaking .speak { opacity: 1; background: rgba(127,127,127,.25); }
+  .voice-sheet .rsn-sheet-title { color: var(--text); }
+  .vs-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; outline: none; padding: 14px 14px calc(16px + var(--sab)); display: flex; flex-direction: column; gap: 12px; font-size: 15px; color: var(--text); }
+  .vs-note { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; }
+  .vs-note.off { border-color: var(--warning, #d9a441); }
+  .vs-row { display: flex; justify-content: space-between; align-items: center; }
+  .vs-level { width: 100%; min-height: 32px; accent-color: var(--accent, #3d7bff); }
+  .vs-meter { height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
+  .vs-meter i { display: block; height: 100%; width: 0; background: var(--accent, #3d7bff); transition: width .08s linear; }
+  .vs-btn { min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--border-strong); color: var(--text); font-size: 15px; }
+  .vs-btn[aria-pressed="true"] { background: var(--error, #e5484d); color: #fff; border-color: transparent; }
+  .vs-btn:disabled { opacity: .5; }
+  .vs-check { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; }
+  .vs-check input { width: 22px; height: 22px; flex: none; margin-top: 1px; }
+  .vs-hint { margin: -6px 0 0 32px; color: var(--text-dim); font-size: 12px; }
   /* Files sheet (upload, download, browse) */
   #files-sheet { width: min(94vw, 460px); max-height: 88vh; overflow-y: auto; }
   #files-sheet h3 { margin-bottom: 6px; }
@@ -635,7 +763,7 @@
 </head>
 <body>
   <section id="screen-agents" class="screen active">
-    <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button class="iconbtn" id="agents-refresh" aria-label="Refresh">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
+    <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/?desktop=once" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button class="iconbtn" id="agents-refresh" aria-label="Refresh">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
     <div id="update-card" hidden></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <button id="working-chip" title="Tap to show only the agents that are working"></button>
@@ -648,6 +776,7 @@
       <span class="agent-icon" id="chat-icon"></span>
       <div id="chat-title"><b id="chat-name">Chat</b><span class="sub-row"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span></span></div>
       <button class="iconbtn" id="chat-resync" aria-label="Re-sync" title="Re-sync with the hub">&#x21BB;</button>
+      <button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
       <button class="iconbtn stop-remote" id="chat-stop-btn" aria-label="Stop this agent" title="Stop this agent's current turn" hidden>&#x25A0;<span class="stop-label"> Stop</span></button>
       <button class="iconbtn" id="chat-menu-btn" aria-label="Menu">&#x22EE;</button>
     </div>
@@ -656,14 +785,89 @@
     <div id="chat-meta"><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
+    <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>
+    <div id="call-panel" role="region" aria-label="Voice call" hidden>
+      <div class="cp-top ucd-dup"><span id="cp-state" role="status" aria-live="polite">Starting</span><div id="cp-meter" aria-hidden="true"><i></i></div></div>
+      <p id="cp-focus-hint" class="cp-focus-hint" role="status" hidden>Music playing? Pause it for a clearer call</p>
+      <div id="cp-activity" aria-live="off"></div>
+      <div id="cp-heard" aria-live="off"></div>
+      <div id="cp-mic"></div>
+      <button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Try the microphone again</button>
+      <div id="cp-held"></div>
+      <label class="cp-dnd"><input type="checkbox" id="cp-dnd" role="switch"> <span>Do not disturb</span></label>
+      <label class="cp-disp ucd-dup" for="cp-display"><span>Display</span><select id="cp-display"><option value="follow">Follow agent default</option></select></label>
+      <div class="cp-actions">
+        <button type="button" id="cp-levels" class="cp-levels">Levels</button>
+        <button type="button" id="cp-hangup" class="cp-hang ucd-dup" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>
+      </div>
+      <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.</p>
+    </div>
     <div id="composer">
       <div id="previews"></div>
+      <div id="voice-strip" hidden><button type="button" id="voice-mode-chip" class="voice-chip" aria-label="Talk mode: tap to switch">Tap to talk</button></div>
+      <div id="voice-panel" role="dialog" aria-label="Voice settings" hidden>
+        <div class="vp-row vp-modes" role="radiogroup" aria-label="Talk mode">
+          <label class="vs-opt"><input type="radio" name="vp-mode" value="handsfree"> <span>Hands-free</span></label>
+          <label class="vs-opt"><input type="radio" name="vp-mode" value="tap"> <span>Tap to talk</span></label>
+        </div>
+        <label class="vp-row" for="vp-speed"><span>Voice speed</span><b class="vp-speed-val"></b></label>
+        <input type="range" id="vp-speed" class="vs-level" min="0.75" max="1.5" step="0.05">
+        <div class="vp-display-note vp-follow" id="vp-follow-voiceSpeed" hidden></div>
+        <label class="vp-row" for="vp-loudness"><span>Voice loudness, speaker</span></label>
+        <select id="vp-loudness" class="vs-btn"><option value="normal">Normal</option><option value="louder">Louder</option><option value="loudest">Loudest</option></select>
+        <label class="vp-row" for="vp-loudness-bt"><span>Voice loudness, Bluetooth / car</span></label>
+        <select id="vp-loudness-bt" class="vs-btn"><option value="normal">Normal</option><option value="louder">Louder</option><option value="loudest">Loudest</option></select>
+        <label class="vp-row" for="vp-pause"><span>Pause before I&#39;m done</span></label>
+        <select id="vp-pause" class="vs-btn"></select>
+        <div class="vp-display-note vp-follow" id="vp-follow-endPause" hidden></div>
+        <label class="vp-row" for="vp-wait"><span>Wait for me to go on</span></label>
+        <select id="vp-wait" class="vs-btn"></select>
+        <div class="vp-display-note vp-follow" id="vp-follow-continueWait" hidden></div>
+        <label class="vp-row" for="vp-level"><span>Mic level</span><b class="vp-level-val"></b></label>
+        <input type="range" id="vp-level" class="vs-level" min="0" max="100" step="1">
+        <div id="vp-meter" class="vs-meter vp-room-meter" aria-hidden="true"><i></i></div>
+        <label class="vp-row" for="vp-sens"><span>Interrupt sensitivity</span><b class="vp-sens-val"></b></label>
+        <input type="range" id="vp-sens" class="vs-level" min="0" max="100" step="1">
+        <div class="vp-display-note vp-follow" id="vp-follow-interruptSensitivity" hidden></div>
+        <label class="vp-row ucd-dup" for="vp-display"><span>Call display</span></label>
+        <select id="vp-display" class="vs-btn ucd-dup"><option value="follow">Follow agent default</option></select>
+        <div class="vp-display-note" id="vp-display-note" role="status" aria-live="polite"></div>
+        <label class="vs-check ucd-dup"><input type="checkbox" id="vp-captions"> <span>Show captions</span></label>
+        <label class="vs-check"><input type="checkbox" id="vp-interrupt"> <span>Show an Interrupt button</span></label>
+        <p class="vs-hint vp-hint">For places where talking over the reply doesn't register.</p>
+        <label class="vs-check"><input type="checkbox" id="vp-think"> <span>Thinking sound</span></label>
+        <label class="vp-row" for="vp-think-vol"><span>Thinking volume</span><b class="vp-think-val"></b></label>
+        <input type="range" id="vp-think-vol" class="vs-level" min="0" max="100" step="5">
+        <button type="button" class="vs-btn vs-room" id="vp-room">Room check</button>
+        <div class="vs-room-out" role="status" aria-live="polite"></div>
+        <label class="vp-row" for="vp-echo"><span>Echo guard after replies</span></label>
+        <select id="vp-echo" class="vs-btn"></select>
+        <p class="vs-hint vp-hint">Keeps the agent from hearing its own reply in a car or through a speaker.</p>
+        <label class="vs-check"><input type="checkbox" id="vp-keepalive"> <span>Keep Bluetooth awake during calls</span></label>
+        <p class="vs-hint vp-hint">While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.</p>
+        <button type="button" class="vs-btn vs-car" id="vp-car">Car or Bluetooth check</button>
+        <div class="vs-car-out" role="status" aria-live="polite"></div>
+        <div id="vp-wake-box">
+          <label class="vs-check"><input type="checkbox" id="vp-wake"> <span>Wait for the wake phrase</span></label>
+          <input type="text" id="vp-wake-phrase" class="vs-btn" maxlength="60" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Wake phrase" placeholder="Hey">
+          <div class="vp-display-note" id="vp-wake-hint" role="status" aria-live="polite" hidden></div>
+          <label class="vp-row" for="vp-wake-quiet"><span>Back to waiting after</span></label>
+          <select id="vp-wake-quiet" class="vs-btn"></select>
+          <p class="vs-hint vp-hint">The call stays up and answers only after the phrase. Keep the app open with the screen on; a hidden page still hangs up. Say “that’s all” to go back to waiting.</p>
+          <p class="vs-hint vp-hint" id="vp-wake-off" hidden>Needs speech recognition on this computer; this agent uses a cloud recognizer or voice is off.</p>
+        </div>
+      </div>
+      <div id="voice-level" aria-hidden="true" hidden><i></i></div>
       <div class="row">
-        <button class="iconbtn" id="attach-btn" aria-label="Attach a file or image">&#x1F4CE;</button>
-        <button class="iconbtn" id="camera-btn" aria-label="Camera">&#x1F4F7;</button>
+        <button class="iconbtn" id="plus-btn" type="button" aria-label="More: attach, camera, voice settings" aria-haspopup="true" aria-expanded="false" aria-controls="plus-sheet">+</button>
         <textarea id="msg-input" rows="1" placeholder="Message"></textarea>
-        <button class="notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
+        <button class="iconbtn" id="mic-btn" type="button" aria-label="Dictate" aria-pressed="false" title="Tap to dictate, tap again to stop" hidden><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg></button>
         <button id="send-btn" aria-label="Send">&#x27A4;</button>
+        <div id="plus-sheet" role="menu" aria-label="More" hidden>
+          <button type="button" class="ps-item" id="attach-btn" role="menuitem" aria-label="Attach a file or image"><span class="ps-ico" aria-hidden="true">&#x1F4CE;</span><span class="ps-label">Attach file</span></button>
+          <button type="button" class="ps-item" id="camera-btn" role="menuitem" aria-label="Camera"><span class="ps-ico" aria-hidden="true">&#x1F4F7;</span><span class="ps-label">Camera</span></button>
+          <button type="button" class="ps-item" id="voice-settings-btn" role="menuitem" aria-label="Voice settings" aria-expanded="false" aria-controls="voice-panel" title="Voice settings" hidden><span class="ps-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h10"></path><path d="M18 7h2"></path><circle cx="16" cy="7" r="2"></circle><path d="M4 17h2"></path><path d="M10 17h10"></path><circle cx="8" cy="17" r="2"></circle></svg></span><span class="ps-label">Voice settings</span></button>
+        </div>
       </div>
       <input type="file" id="file-input" multiple hidden>
       <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
@@ -689,12 +893,17 @@
   <div id="menu">
     <div id="menu-credit" hidden></div>
     <button id="menu-about"><span>&#x2139;&#xFE0F; About My Maestro AI</span><span id="menu-version" class="menu-version"></span></button>
-    <a href="/">Open full UI</a>
+    <a href="/?desktop=once">Open full UI</a>
+    <button id="menu-reload">&#x21BB; Reload app</button>
+    <a id="menu-recordings" href="/recordings?from=mobile" hidden>&#x1F399; Recordings</a>
     <button id="menu-notify">&#x1F514; Notifications</button>
     <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
     <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
+    <button id="menu-agentwork" class="chat-only">&#x1F9F0; Show agent work</button>
+    <button id="menu-active-top">⬆ Active agents at the top: On</button>
     <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
+    <button id="menu-voice">&#x1F399; Voice</button>
     <button id="menu-workers">&#x1F477; Worker history</button>
     <button id="menu-wallet" hidden>&#x1F45B; Wallet</button>
     <button id="menu-memory" hidden><span>&#x1F9E0; Memory</span><span class="menu-count" id="menu-memory-count"></span></button>
@@ -726,6 +935,10 @@
   <dialog id="or-sheet" data-no-dirty></dialog>
   <input type="file" id="files-upload-input" multiple hidden>
 
+  <script src="/ui-voice-thinking.js"></script>
+  <script src="/ui-voice-orb.js"></script>
+  <script src="/ui-face-player.js"></script>
+  <script src="/ui-call-display.js"></script>
   <script src="mobile.js"></script>
 </body>
 </html>

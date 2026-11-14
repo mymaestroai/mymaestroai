@@ -75,6 +75,7 @@
     <li><b>On your phone</b>, open that https address, sign in, then add it to your home screen: iPhone, Share → Add to Home Screen; Android, menu → Install app.</li>
     <li>In the phone app's menu, turn on <b>notifications</b> and send a test notification.</li>
   </ol>
+  <p>A phone app that was added from the computer layout opens the phone layout by itself. To keep the computer layout on a phone, open <code>/?desktop=1</code> once; <code>/?desktop=0</code> undoes it.</p>
 
   <h2 id="security">Security</h2>
   <p>Ask <b>Maestro</b>: <i>"Check this computer's security."</i> It reviews the hub and the computer it runs on: network services other devices can reach, missing updates, known vulnerabilities, and settings such as password logins. Then it explains each finding and how to fix it. It only looks: nothing changes unless you say yes to that change, and it never asks for your password.</p>
@@ -84,6 +85,7 @@
   <div class="tip warn"><b>A Claude agent says "not signed in", "authentication" or "expired".</b> The Claude sign-in on this computer is missing or has run out. Open a terminal, type <code>claude</code> and press Enter, sign in, then type <code>/exit</code>. Send your message again. No restart is needed. (<code>mymaestro doctor</code> tests the sign-in.)</div>
   <table>
     <tr><td><b>An agent seems stuck</b></td><td>Press ↻ in the chat bar to re-sync, or reload the page. Still stuck: press Stop and send the message again.</td></tr>
+    <tr><td><b>The screen looks out of date</b></td><td>Reload the app: ⋯ → Reload on a computer (the installed app also has ↻ at the top), ⋮ → Reload app on the phone.</td></tr>
     <tr><td><b>"Usage limit reached"</b></td><td>Your plan's limit is used up until it resets. Meanwhile switch the agent's model at the top of its chat.</td></tr>
     <tr><td><b>An API key is refused</b></td><td>Settings → LLM Providers: paste a fresh key from the provider's website.</td></tr>
     <tr><td><b>A local model doesn't answer</b></td><td>Start LM Studio or Ollama with the model loaded, or open Local models in your account menu.</td></tr>

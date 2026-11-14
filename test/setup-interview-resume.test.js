@@ -8,8 +8,12 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { refreshShippedWorkspaceFiles } = require('../lib/agents');
-const { createWelcome } = require('../lib/welcome');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('interview-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { refreshShippedWorkspaceFiles } = L('agents');
+const { createWelcome } = L('welcome');
 
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');

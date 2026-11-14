@@ -8,12 +8,16 @@ const os = require('os');
 const path = require('path');
 const Database = require('better-sqlite3');
 
-const MOD = require.resolve('../lib/memory-db');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('unit-memdb-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const MOD = require.resolve(path.join(ISO.lib, 'memory-db'));
 const dirs = [];
 const opened = [];
 const savedEnv = process.env.HUB_MEMORY_DB;
 // Session notes are filed under the local day of the person the agent works for (lib/timezone)
-const tzLib = require('../lib/timezone');
+const tzLib = L('timezone');
 const today = () => tzLib.localDate(tzLib.zoneForAgent('a'));
 const daysAgo = (n) => tzLib.addDays(today(), -n);
 

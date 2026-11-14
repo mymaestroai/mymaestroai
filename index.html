@@ -4,12 +4,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- An installed app on a phone screen opens the phone layout (lib/ui-phone-layout.js); loaded first so it moves before the desktop layout draws. -->
+  <script src="/ui-phone-layout.js"></script>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="My Maestro AI">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png">
   <!-- Installed as an app (Chrome/Edge "Install page as app", Safari "Add to Dock"): the desktop layout, with the Maestro icon. The phone app has its own manifest (/manifest.json, start_url /mobile.html). -->
   <link rel="manifest" href="/icons/desktop.webmanifest">
+  <link rel="stylesheet" href="/ui-call-display.css">
   <link rel="apple-touch-icon" href="/icons/hub-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -277,6 +280,14 @@
     }
     .collapse-arrow.collapsed { transform: rotate(-90deg); }
     .agent-group-items { transition: all 0.15s; display: flex; flex-direction: column; gap: 4px; padding: 2px; }
+    .active-group .active-count { margin-left: 6px; padding: 0 6px; border-radius: 8px; background: var(--bg-card, #333); font-size: 11px; }
+    .agent-btn.active-done { opacity: .6; }
+    .active-copy .action-btn { display: none; }
+    /* Background-job line on an agent row (normal rows and Active copies): 'Background job: <name> + N more · 4 min'. */
+    .agent-btn .agent-job-line { display: flex; font-size: 0.6rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; min-width: 0; }
+    .agent-btn .agent-job-line .ajl-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+    .agent-btn .agent-job-line .ajl-tail { flex: none; white-space: pre; }
+    @media (prefers-reduced-motion: reduce) { #agent-active-group { animation: none; transition: none; } }
     .group-actions { display: flex; gap: 6px; }
     .group-action-btn {
       font-size: 0.6rem; text-transform: none; letter-spacing: 0;
@@ -541,9 +552,9 @@
     .wm-group { font-size: 11px; opacity: .7; padding: 6px 10px 2px; text-transform: none; }
     .wm-hub { grid-template-columns: 16px minmax(0,1fr) auto auto; }
     .wm-failed .wm-mark { color: #d4588b; }
-    .wm-stopped .wm-mark { color: var(--text-dim); }
+    .wm-stopped .wm-mark, .wm-ended .wm-mark { color: var(--text-dim); }
     .wm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
-    .wm-done .wm-name, .wm-stopped .wm-name { color: var(--text-secondary); }
+    .wm-done .wm-name, .wm-stopped .wm-name, .wm-ended .wm-name { color: var(--text-secondary); }
     .wm-unseen .wm-name { color: #ffd0de; font-weight: 600; }
     .wm-meta { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
     .wm-when { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -641,6 +652,9 @@
     .more-menu .more-row .max-tokens-control { justify-content: space-between; gap: 10px; font-size: 0.8rem; }
     .more-menu .more-row .max-tokens-control select { font-size: 0.75rem; padding: 3px 6px; background: var(--bg-input); color: var(--text); }
     .more-menu .more-row #sdk-workers-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
+    .header-controls .header-btn.reload-btn { display: none; }   /* only in the installed app, which has no browser reload button; the selector also beats the narrow-screen .main-header-top .header-btn rule */
+    html.app-installed .header-controls .header-btn.reload-btn { display: inline-flex; align-items: center; justify-content: center; }
+    .reload-btn[aria-busy="true"], #reload-app-item[aria-busy="true"] { opacity: 0.5; pointer-events: none; }
     .more-menu .more-row .toggle-switch[style] { gap: 10px !important; justify-content: space-between; }
     .more-menu .more-hint { font-size: 0.7rem; color: var(--text-dim); line-height: 1.3; white-space: normal; }
 
@@ -822,6 +836,12 @@
     .auto-card-body, .auto-stack-body { margin: 8px 0 4px 14px; padding-left: 10px; border-left: 1px solid var(--border); }
     .auto-card-body[hidden], .auto-stack-body[hidden] { display: none; }
     .auto-from { margin: 4px 0 4px; font-size: 0.75rem; color: #8f8e84; }
+    .chat-view-hidden { display: none !important; }
+    .chat-busy-card { margin: 8px 0; padding: 4px 10px; font-size: 0.75rem; color: #8f8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-earlier-btn { display: block; margin: 6px auto 10px; padding: 4px 14px; font-size: 0.78rem; color: #8f8e84; background: transparent; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+    .chat-earlier-btn:disabled { opacity: 0.6; cursor: default; }
+    .message.msg-archived > .msg-time { font-size: 0.7rem; color: #8f8e84; }
+    .chat-view-btn[aria-pressed="true"] { border-color: var(--accent, #d97757); }
     .system-notice {
       background: rgba(245, 166, 35, 0.06);
       border: 1px solid rgba(245, 166, 35, 0.2);
@@ -1028,6 +1048,69 @@
     }
     .input-area button:hover { background: var(--accent-hover); }
     .input-area button:disabled { background: var(--border); cursor: not-allowed; opacity: 0.5; }
+    /* Voice: mic button in the composer (idle, recording, waiting for the text), its level meter, the speaker on replies */
+    .input-area .mic-btn { background: var(--bg-input); border: 1px solid var(--border); padding: 8px 10px; font-size: 1rem; color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .input-area .mic-btn svg { display: block; width: 20px; height: 20px; }
+    .input-area .mic-btn:hover { background: var(--bg-input); border-color: var(--accent); }
+    .input-area .mic-btn.rec { background: rgba(239, 68, 68, 0.18); border-color: #ef4444; color: #fca5a5; animation: mic-pulse 1.2s ease-in-out infinite; }
+    .input-area .mic-btn.rec:hover { background: rgba(239, 68, 68, 0.28); }
+    .input-area .mic-btn.wait { opacity: 0.7; cursor: progress; }
+    @keyframes mic-pulse { 50% { box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25); } }
+    .mic-meter, .voice-meter { display: inline-block; width: 56px; height: 8px; align-self: center; border-radius: 4px; background: var(--bg-input); border: 1px solid var(--border); overflow: hidden; vertical-align: middle; }
+    .mic-meter > i, .voice-meter > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #22c55e, #eab308 75%, #ef4444); transition: width 0.08s linear; }
+    .voice-meter { width: 120px; }
+    /* Voice call: the red hang-up mic button and the call bar above the message box */
+    .input-area .mic-btn.call { background: #dc2626; border-color: #ef4444; color: #fff; }
+    .input-area .mic-btn.call:hover { background: #b91c1c; }
+    .voice-callbar { margin: 0 12px 6px; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; font-size: 0.85rem; color: var(--text); display: flex; flex-direction: column; gap: 6px; }
+    .voice-callbar .vcb-top, .voice-callbar .vcb-sliders { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .voice-callbar .vcb-state { font-weight: 600; min-width: 5.5em; color: var(--accent); }
+    .voice-callbar label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; color: var(--text-dim); }
+    .voice-callbar input[type=range] { width: 140px; }
+    .voice-callbar .vcb-hang { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; background: #dc2626; border: 1px solid #ef4444; color: #fff; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+    .voice-callbar .vcb-disp { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+    .voice-callbar .vcb-disp select { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 13px; }
+    .voice-callbar .vcb-focus-hint { color: var(--text-dim); font-size: 0.8rem; }
+    .voice-callbar .vcb-focus-hint[hidden] { display: none; }
+    .voice-callbar .vcb-hang:hover { background: #b91c1c; }
+    .voice-callbar .vcb-hang svg { width: 16px; height: 16px; display: block; }
+    .voice-callbar .vcb-activity { color: var(--text-dim); font-size: 0.8rem; min-height: 1.1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .voice-callbar .vcb-heard { color: var(--text-dim); font-style: italic; min-height: 1.2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .voice-callbar .vcb-held:empty { display: none; }
+    .voice-callbar .vcb-micinfo.vcb-mic-lost { color: #ef4444; font-weight: 600; }
+    .voice-callbar .vcb-item { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 0; border-top: 1px solid var(--border); }
+    .voice-callbar .vcb-item.later { opacity: 0.75; }
+    .voice-callbar .vcb-item-label { flex: 1; min-width: 10em; }
+    .voice-callbar .vcb-item button { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 0.8rem; }
+    .voice-callbar .vcb-item button:hover { border-color: var(--accent); }
+    .voice-callbar .vcb-help { font-size: 0.75rem; color: var(--text-dim); }
+    /* Voice controls in the chat: the Talk mode chip and the Voice settings panel next to the mic */
+    .input-area .voice-extra { position: relative; display: inline-flex; gap: 6px; align-items: center; }
+    .input-area .voice-mode-chip { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .input-area .voice-mode-chip:hover { background: var(--bg-input); border-color: var(--accent); color: var(--text); }
+    .input-area .voice-set-btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); padding: 8px 9px; }
+    .input-area .voice-set-btn:hover, .input-area .voice-set-btn[aria-expanded="true"] { background: var(--bg-input); border-color: var(--accent); }
+    .input-area .voice-set-btn svg { display: block; width: 18px; height: 18px; }
+    .voice-pop { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 60; width: 320px; max-width: 92vw; max-height: 70vh; overflow-y: auto; box-sizing: border-box; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 0.85rem; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
+    .voice-pop[hidden] { display: none; }
+    .voice-pop .vp-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-dim); }
+    .voice-pop .vp-label { flex: 0 0 9.5em; }
+    .voice-pop input[type=range] { width: 110px; }
+    .voice-pop .vp-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    .voice-pop .vp-seg button { background: var(--bg-input); border: 0; color: var(--text-dim); padding: 4px 10px; font-size: 0.8rem; cursor: pointer; }
+    .voice-pop .vp-seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+    .voice-left-bar { flex-direction: row; align-items: center; gap: 10px; }
+    .voice-left-bar button { background: var(--accent); border: 0; color: #fff; border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+    .voice-left-bar button[data-vleft="dismiss"] { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); }
+    .message > .msg-speak {
+      display: none; position: absolute; top: 4px; right: 34px; border: 1px solid var(--border); background: var(--bg-card);
+      color: var(--text-dim); border-radius: 6px; font-size: 0.8rem; line-height: 1; padding: 3px 6px; cursor: pointer; opacity: 0.45; transition: opacity 0.15s;
+    }
+    body.voice-on .message > .msg-speak { display: block; }
+    .message:hover > .msg-speak, .message > .msg-speak:focus, .message > .msg-speak.on { opacity: 0.95; }
+    .message > .msg-speak:hover { color: var(--text); border-color: var(--accent); }
+    .message > .msg-speak.on { color: var(--accent); border-color: var(--accent); }
+    @media (hover: none) { .message > .msg-speak { opacity: 0.6; } }
     .input-area button.secondary {
       background: var(--purple);
     }
@@ -2596,10 +2679,13 @@
         <button id="schedule-btn" class="header-btn" title="Task scheduler: scheduled tasks and background jobs for all agents" onclick="openSchedulePanel()">📅</button>
         <button id="settings-btn" class="header-btn" title="Settings" onclick="openSettings()">⚙️</button>
         <button id="help-btn" class="header-btn" title="Help: how-tos, the phone app, and what to do when something's wrong" aria-label="Help" onclick="openHelpPanel()">?</button>
+        <button id="reload-btn" class="header-btn reload-btn" title="Reload the app" aria-label="Reload the app" onclick="reloadApp()">↻</button>
         <div class="more-wrap" id="more-wrap">
           <button id="more-btn" class="header-btn" aria-label="More" title="More options" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" onclick="toggleMoreMenu()">⋯<span class="more-badge" id="more-badge">Advanced</span></button>
           <div id="more-menu" class="more-menu" role="menu" aria-label="More options">
             <button id="about-btn" class="more-item" role="menuitem" title="Version, channel, commit and update status of this hub" onclick="closeMoreMenu(); openAboutDialog()">ℹ️ About My Maestro AI</button>
+            <button id="reload-app-item" class="more-item" role="menuitem" title="Reload the app" onclick="closeMoreMenu(); reloadApp()">↻ Reload</button>
+            <button id="recordings-item" class="more-item" role="menuitem" title="Call recordings you may open" style="display:none" onclick="closeMoreMenu(); location.href = '/recordings'">🎙 Recordings</button>
             <button id="comms-btn" class="more-item" role="menuitem" title="Messaging channels (Telegram etc)" onclick="closeMoreMenu(); openCommsPanel()">💬 Messaging</button>
             <button id="wallet-btn" class="more-item" role="menuitem" title="Trading wallets (on-chain)" onclick="closeMoreMenu(); openWalletPanel()">👛 Wallets</button>
             <button id="dream-btn" class="more-item" role="menuitem" title="Agent Dreaming — consolidate learnings" onclick="closeMoreMenu(); startDream()">💤 Dream (consolidate learnings)</button>
@@ -2697,6 +2783,10 @@
       </div>
     </div>
   </div>
+  <script src="/ui-voice-thinking.js"></script>
+  <script src="/ui-voice-orb.js"></script>
+  <script src="/ui-face-player.js"></script>
+  <script src="/ui-call-display.js"></script>
   <script src="app.js"></script>
   <script src="comms-panel.js"></script>
   <!-- Image Modal -->

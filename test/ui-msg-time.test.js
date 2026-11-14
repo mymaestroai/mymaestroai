@@ -147,7 +147,7 @@ test('the phone page draws the line under saved messages, sends, replies and fol
   const mob = read('mobile.js');
   assert.match(block(mob, 'function renderHistory(', '\n}\n'), /const times = msgTimeLines\(chatHistory\);[\s\S]*renderEntry\(chatHistory\[i\], times\[i\]\)/);
   const entry = block(mob, 'function renderEntry(', '\n}\n');
-  assert.match(entry, /setBubbleTime\(addUserBubble\(m\.content, null\), time\)/);
+  assert.match(entry, /setBubbleTime\(addUserBubble\(ij \? ij\.text : m\.content, savedImageUrls\(m\.images\)\), time\)/);
   assert.match(entry, /setBubbleTime\(b\.el, time\)/);
   const send = block(mob, 'async function sendMessage(', '\n}\n');
   assert.match(send, /if \(!fallback\) setBubbleTime\(userEl, msgTimeLabel\(Date\.now\(\)\)\)/);
@@ -156,4 +156,18 @@ test('the phone page draws the line under saved messages, sends, replies and fol
   assert.match(block(mob, 'function finishReattach(', '\n}\n'), /if \(ok\) setBubbleTime\(ra\.bubble\.el, /);
   assert.match(block(mob, 'function setBubbleTime(', '\n}\n'), /line\.textContent = text/, 'the text goes in as text');
   assert.match(read('mobile.html'), /\.msg\.has-time \{ margin-bottom: 16px; \}/);
+});
+
+test('an interjection line inside a reply does not start a new turn: the reply keeps its time and took-time from the message', () => {
+  const h = [
+    { ts: '2026-10-29T14:00:00Z', role: 'user', content: 'go' },
+    { ts: '2026-10-29T14:00:10Z', role: 'assistant', content: 'One. ' },
+    { ts: '2026-10-29T14:00:20Z', role: 'user', content: '[OPERATOR INTERJECTION]: hurry', interjection: { id: 'ij-1' } },
+    { ts: '2026-10-29T14:01:00Z', role: 'assistant', content: 'Two.', base: 5 },
+  ];
+  const lines = msgTimeLines(h, NOW, 'en-US').map(sp);
+  assert.strictEqual(lines.length, 4);
+  assert.match(lines[3], / · 1m 00s$/, 'the whole reply took 1 minute from the person\'s message');
+  assert.doesNotMatch(lines[1], /·/, 'an earlier piece shows its time only');
+  assert.doesNotMatch(lines[2], /·/, 'the interjection line has a time, no took-time');
 });

@@ -1,0 +1,102 @@
+/* ui-call-display.css: the full-screen call display (lib/ui-call-display.js). Colours follow the page's theme variables. */
+.ucd-overlay { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; box-sizing: border-box; width: 100%; height: 100vh; height: 100dvh;
+  background: var(--bg, #101418); color: var(--text, #e8ecf1); font-family: inherit;
+  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0); }
+.ucd-overlay[hidden] { display: none; }
+/* arming (ui-call-display.js present): in the page and laid out, not yet seen or touched; revealed after two animation frames. will-change is the
+   opacity hint, kept on the overlay before and after the reveal (a hint only, no guarantee of painting while transparent); the Orb's overlay carries
+   it too, a small cost with no visible change */
+.ucd-overlay { will-change: opacity; }
+.ucd-overlay[data-ucd-arming] { opacity: 0 !important; pointer-events: none !important; }
+.ucd-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--ucd-bg, #0b0e12); }
+/* overflow stays visible: the character's edge glow runs past the host (the stage clips it). The host's bottom edge rises above the caption band while a character is shown with a caption (--ucd-caption-reserve is set by ui-call-display.js: measured caption height + 12px offset + 8px gap) */
+.ucd-host { position: absolute; inset: 0 0 var(--ucd-caption-reserve, 0px) 0; z-index: 0; overflow: visible; display: flex; align-items: center; justify-content: center; }
+.ucd-host > canvas, .ucd-host > video, .ucd-host > div { max-width: 100%; max-height: 100%; }
+.ucd-status { position: absolute; z-index: 1; top: 10px; left: 12px; font-size: 14px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, .35); color: #fff; }
+.ucd-note { position: absolute; z-index: 1; top: 44px; left: 12px; right: 12px; font-size: 12px; color: #fff; opacity: .85; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+.ucd-note[hidden], .ucd-caption[hidden], .ucd-caption:empty { display: none; }
+.ucd-caption { position: absolute; z-index: 2; left: 12px; right: 12px; bottom: 12px; text-align: center; font-size: clamp(20px, 4.2vw, 40px); line-height: 1.25; font-weight: 600;
+  padding: 10px 14px; border-radius: 14px; background: rgba(0, 0, 0, .55); color: #fff; overflow-wrap: anywhere; box-sizing: border-box; max-height: 40%;
+  /* a long caption scrolls (ui-call-display.js keeps the newest line in view) instead of clipping it; the band stays inside the stage, which ends above the call bar */
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.ucd-caption::-webkit-scrollbar { display: none; }
+.ucd-drawer { flex: 0 1 auto; max-height: 48vh; max-height: 48dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 12px;
+  background: var(--bg-card, #181d24); border-top: 1px solid var(--border, #2a313b); }
+.ucd-drawer[hidden] { display: none; }
+/* in the Controls drawer, a control the call bar already has (status line, Display, Hang up, Captions) or the drawer's Voice settings already have
+   (the desktop call bar's sliders) is not shown again: one place for each. The pages mark them .ucd-dup; outside a call screen they show as usual. */
+.ucd-drawer .ucd-dup { display: none !important; }
+.ucd-drawer #call-panel > div:empty, .ucd-drawer .voice-callbar > div:empty { display: none; }   /* an empty line (no activity, nothing heard yet) leaves no gap */
+/* the drawer's header stays at the top of the scrolling list: a grab handle (centred) and Close; a swipe down on it closes the drawer */
+.ucd-drawer-head { position: sticky; top: 0; z-index: 1; background: var(--bg-card, #181d24); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; justify-content: space-between; padding: 6px 12px; margin: -8px -12px 6px; touch-action: none; }
+.ucd-grab { grid-column: 2; display: block; width: 40px; height: 5px; border-radius: 3px; background: var(--border, #2a313b); }
+.ucd-drawer-close { grid-column: 3; justify-self: end; font: inherit; font-size: 15px; min-height: 40px; padding: 0 14px; cursor: pointer; border: 1px solid var(--border, #2a313b); border-radius: 12px; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); }
+.ucd-drawer-close:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent, #3d7bff); }
+.ucd-bar .ucd-ctl[aria-expanded="true"] { background: var(--accent, #3d7bff); color: #fff; border-color: transparent; }
+.ucd-section + .ucd-section { margin-top: 10px; }
+.ucd-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim, #98a2b3); margin-bottom: 4px; }
+.ucd-drawer .voice-callbar, .ucd-drawer .voice-pop, .ucd-drawer #call-panel, .ucd-drawer #voice-panel { position: static; display: block; width: auto; max-width: none; max-height: none; overflow: visible; box-shadow: none; margin: 0; }
+.ucd-drawer .voice-pop[hidden], .ucd-drawer #voice-panel[hidden], .ucd-drawer #call-panel[hidden] { display: block; }
+.ucd-bar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; padding: 10px 12px; background: var(--bg-card, #181d24); border-top: 1px solid var(--border, #2a313b); }
+.ucd-main { display: flex; gap: 10px; flex: 1 1 320px; }
+.ucd-side { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.ucd-bar button { font: inherit; cursor: pointer; border: 1px solid var(--border, #2a313b); border-radius: 14px; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); }
+.ucd-bar .ucd-talk, .ucd-bar .ucd-hang { flex: 1; min-height: 64px; font-size: 20px; font-weight: 700; padding: 0 22px; }
+.ucd-bar .ucd-talk { background: var(--accent, #3d7bff); border-color: transparent; color: #fff; }
+/* the slot button keeps its place so Hang up never moves; off = invisible and inert (ui-call-display.js sets data-ucd-off and data-ucd-mode) */
+.ucd-bar .ucd-talk[data-ucd-off] { visibility: hidden; pointer-events: none; }
+.ucd-bar .ucd-talk[data-ucd-mode="mic"] { font-size: 16px; }
+.ucd-bar .ucd-disp { display: inline-flex; align-items: center; gap: 6px; min-height: 48px; padding: 0 10px; border: 1px solid var(--border, #2a313b); border-radius: 14px; background: var(--bg-input, #222831); font-size: 15px; }
+.ucd-bar .ucd-display { font: inherit; min-height: 36px; max-width: 12em; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); border: 1px solid var(--border, #2a313b); border-radius: 8px; }
+.ucd-bar .ucd-hang { background: var(--error, #e5484d); border-color: transparent; color: #fff; }
+.ucd-bar .ucd-small { min-height: 48px; padding: 0 14px; font-size: 15px; }
+.ucd-bar .ucd-caps[aria-pressed="true"] { outline: 2px solid var(--accent, #3d7bff); }
+.ucd-bar button:focus-visible, .ucd-reopen:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent, #3d7bff); }
+.ucd-bar button:disabled { opacity: .5; cursor: default; }
+/* "Show display" after Back to chat is the docked bar's own button (.ucd-show); the fixed .ucd-reopen-float button is only for an embedder with no dock */
+.ucd-bar .ucd-show[hidden], .ucd-overlay:not(.ucd-docked) .ucd-bar .ucd-show { display: none !important; }
+.ucd-reopen { flex: none; min-height: 36px; padding: 0 14px; border-radius: 8px; font: inherit; font-size: 14px; font-weight: 600; margin-left: auto;
+  border: 1px solid var(--border, #2a313b); background: var(--accent, #3d7bff); color: #fff; cursor: pointer; }
+.ucd-reopen-float { position: fixed; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0)); z-index: 1500; min-height: 48px; border-radius: 999px; }
+/* the recording indicator of a recorded call (lib/ui-call-display.js setRecording): a small badge with a red dot ("Recording"; hollow dot and "Recording paused"; no dot for
+   "Not recording" / "Recording stopped") and the Pause / Resume button beside it. In the view it sits at the stage's top right (Hang up is in the bar below); in the docked bar
+   (a display of None, Back to chat) on its status line. Dark pill with white text so it reads on every theme and over a character. */
+.ucd-rec { display: inline-flex; align-items: center; gap: 8px; flex: none; font-size: 13px; font-weight: 600; line-height: 1.2; color: #fff; max-width: 100%; }
+.ucd-stage > .ucd-rec { position: absolute; z-index: 3; top: 10px; right: 12px; }
+.ucd-rec-text { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, .65); }
+.ucd-rec-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; background: #e5484d; box-shadow: 0 0 0 2px rgba(0, 0, 0, .35); margin-right: -4px; position: relative; z-index: 1; }
+.ucd-rec[data-state="paused"] .ucd-rec-dot { background: transparent; border: 2px solid #e5484d; }
+.ucd-rec [hidden] { display: none !important; }
+.ucd-rec .ucd-rec-pause { font: inherit; font-size: 13px; font-weight: 600; min-height: 36px; padding: 0 12px; border-radius: 999px; cursor: pointer; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); border: 1px solid var(--border, #2a313b); }
+.ucd-rec .ucd-rec-pause:disabled { opacity: .5; cursor: default; }
+.ucd-rec .ucd-rec-pause:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent, #3d7bff); }
+/* the phone's toast sits at z-index 30: keep it readable above the full-screen view */
+#toast.on { z-index: 10010; }
+/* the phone's Voice sheet (Levels in the call panel, the menu's Voice) opens above the full-screen view, never hidden under it; only
+   while that view is in the page, so outside it the phone's other sheets keep their own order */
+body:has(> .ucd-overlay) .voice-sheet.open { z-index: 10005; }
+.vp-display-note { font-size: 12px; color: var(--text-dim, #98a2b3); margin: 2px 0 0; }
+.vp-display-note:empty { display: none; }
+@media (max-width: 560px) { .ucd-main { flex-basis: 100%; } .ucd-side { width: 100%; justify-content: space-between; } }
+/* docked (the chat layout of a call: a display of None, Back to chat, a character still loading; lib/ui-call-display.js dockOn): the same root sits in the chat where the page's bottom bar was, for the length of
+   the call: a slim status line (and the recording badge), the Controls drawer opening upward, the bar. The page's bar is hidden meanwhile. */
+[data-ucd-replaced] { display: none !important; }
+.ucd-overlay.ucd-docked { position: relative; inset: auto; z-index: auto; width: 100%; height: auto; flex: 0 0 auto; background: transparent; will-change: auto;
+  padding: 0; }   /* in the page's flow: the page's own layout (the phone's tab bar) keeps the safe area, as for the bar it replaces */
+.ucd-docked .ucd-stage { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow: visible; min-height: 0; padding: 6px 12px; background: transparent; }
+.ucd-docked .ucd-status { position: static; }
+.ucd-docked .ucd-stage > .ucd-rec { position: static; margin-left: auto; }
+.ucd-docked .ucd-host, .ucd-docked .ucd-note, .ucd-docked .ucd-caption, .ucd-docked .ucd-bar .ucd-back, .ucd-docked .ucd-bar .ucd-caps { display: none !important; }
+/* the character download's line (ui-call-display.js): small, under the status pill and note, inside the stage so it never reaches the call bar's Hang up */
+.cd-download { position: absolute; z-index: 1; top: 72px; left: 12px; right: 12px; max-width: 360px; box-sizing: border-box; padding: 6px 10px; border-radius: 10px; font-size: 12px; line-height: 1.35; background: rgba(0, 0, 0, .45); color: #fff; }
+.cd-download[hidden], .cd-download-bar[hidden], .cd-download-retry[hidden] { display: none; }
+.cd-download-bar { display: block; width: 100%; height: 6px; margin-top: 5px; accent-color: var(--accent, #3d7bff); }
+.cd-download-retry { font: inherit; font-size: 13px; min-height: 36px; margin-top: 6px; padding: 0 14px; cursor: pointer; border: 1px solid rgba(255, 255, 255, .4); border-radius: 10px; color: #fff; background: rgba(255, 255, 255, .12); }
+.cd-download-retry:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.cd-download-panel { display: block; width: 100%; max-width: 320px; height: 6px; margin-top: 4px; }   /* the same bar in the voice panel / sheet */
+/* Both bars drawn explicitly (a native progress bar can paint nothing on a dark panel): a light track and the accent fill. */
+.cd-download-bar, .cd-download-panel { flex: none; min-height: 6px; -webkit-appearance: none; appearance: none; border: 0; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, .18); color: var(--accent, #3d7bff); }
+.cd-download-bar::-webkit-progress-bar, .cd-download-panel::-webkit-progress-bar { background: rgba(255, 255, 255, .18); border-radius: 3px; }
+.cd-download-bar::-webkit-progress-value, .cd-download-panel::-webkit-progress-value { background: var(--accent, #3d7bff); border-radius: 3px; }
+.cd-download-bar::-moz-progress-bar, .cd-download-panel::-moz-progress-bar { background: var(--accent, #3d7bff); border-radius: 3px; }
+@media (prefers-reduced-motion: reduce) { .ucd-overlay, .ucd-overlay * { transition: none !important; animation: none !important; } }

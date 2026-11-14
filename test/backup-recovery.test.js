@@ -96,7 +96,8 @@ test('the gates are in place: start-up order, the turn gate, the scheduler, the 
   // lib/modules/manifest.js is allowed: apply.js imports holdNoAskSettings from it, and it requires only fs and path (no env reads).
   const probe = require('child_process').spawnSync(process.execPath, ['-e', `require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'backup', 'apply.js'))}); console.log(JSON.stringify(Object.keys(require.cache).map(f => require('path').relative(${JSON.stringify(path.join(__dirname, '..'))}, f))))`], { encoding: 'utf8' });
   const loaded = JSON.parse(probe.stdout);
-  assert.deepStrictEqual(loaded.filter(f => !f.startsWith('node_modules')).sort(), ['lib/backup/accounts.js', 'lib/backup/apply.js', 'lib/backup/dirs.js', 'lib/modules/manifest.js'], loaded.join(', '));
+  // The suite's data/ guard (test/helpers/data-guard.js) is preloaded into every test process: it is not something apply.js loads.
+  assert.deepStrictEqual(loaded.filter(f => !f.startsWith('node_modules') && f !== 'test/helpers/data-guard.js').sort(), ['lib/backup/accounts.js', 'lib/backup/apply.js', 'lib/backup/dirs.js', 'lib/modules/manifest.js'], loaded.join(', '));
   assert.match(server, /markHealthy\(\{ root: __dirname \}\)[\s\S]{0,300}30000\)\.unref\(\)/);
   const chat = read('lib/sdk-chat.js');
   const gate = chat.indexOf("require('./backup/recovery').active(");

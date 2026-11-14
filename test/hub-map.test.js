@@ -7,7 +7,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createHubMap, newestCode, MAP_REL } = require('../lib/hub-map');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched. ROOT stays the real install: it is only read for docs/ and templates/.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('hub-map-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createHubMap, newestCode, MAP_REL } = L('hub-map');
 
 const ROOT = path.join(__dirname, '..');
 const T0 = new Date('2026-01-01T12:00:00Z');
@@ -33,7 +37,7 @@ test('brief: lead agent gets the facts and the map pointer; others and the off s
   assert.strictEqual(await hm.briefFor('worker'), '', 'not a lead agent');
   const text = await hm.briefFor('maestro');
   assert.ok(text.startsWith('\n\n---\n\n## THIS HUB'), 'its own section, so a change re-sends only this block');
-  for (const s of ['My Maestro AI 9.9.9, commit abc1234 2026-01-01', 'process started 2026-01-01 12:00 UTC', 'systemd user service', `install ${ROOT}`, `hub home ${path.resolve(ROOT, '..')}`,
+  for (const s of ['My Maestro AI 9.9.9, commit abc1234 2026-01-01', 'process started 2026-01-01 12:00 UTC', 'systemd user service', `install ${ROOT}`, `hub home ${ISO.home}` /* the throwaway install's HUB_HOME, which lib/hub-home honours first */,
     'Port 8888, localhost only', 'Accounts: 1 admin, 2 members', 'Agents: 4 (primary 1, worker 2, thing 1)', 'Providers with keys: openai, google', 'Claude client signed in: yes',
     `- New agents: when someone asks for one, or you suggest one, follow ${path.join('workspaces', 'maestro', 'AGENT-PLAYBOOK.md')}: a short interview, then you write its files and create it with create_agent`,
     'never print secrets', `The map, ${MAP_REL}: 1 What the hub is`, '14 Setup recipes', 'Read the section that applies']) assert.ok(text.includes(s), s);
@@ -109,7 +113,7 @@ test('brief: the models the lead agent can assign, newest first, without preview
   const l2 = (await withCodex.briefFor('maestro')).split('\n').find(l => l.startsWith('- Models you can assign'));
   assert.match(l2, /claude-sdk\/ \(Claude sign-in\) and codex-cli\/ \(ChatGPT\): a subscription the owner already pays for, no bill per use; openai\/, google\/: billed per use/);
   // A local provider pointed at another machine is free, but not on this computer.
-  const settingsMod = require('../lib/settings'); const realUrl = settingsMod.getProviderUrl;
+  const settingsMod = L('settings'); const realUrl = settingsMod.getProviderUrl;
   const urls = { ollama: 'http://192.168.1.20:11434/v1', lmstudio: 'not a url at all', omlx: 'http://127.0.0.2:8000/v1', ninfer: 'http://[::1]:18101/v1' };
   settingsMod.getProviderUrl = (p) => (p in urls ? urls[p] : realUrl(p));
   try {

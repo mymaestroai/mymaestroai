@@ -7,8 +7,12 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { BUILTIN_TOOLS } = require('../lib/provider-tools');
-const { createHubTools, TOOL_NAMES, CLIENT_BUILTINS } = require('../lib/hub-tools');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('tools-parity-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { BUILTIN_TOOLS } = L('provider-tools');
+const { createHubTools, TOOL_NAMES, CLIENT_BUILTINS } = L('hub-tools');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const sdk = read('lib/sdk-chat.js');
@@ -34,7 +38,7 @@ test('the hands MCP server for client agents exposes the same tools, with images
     tool: (name, description, shape, handler, extras) => ({ name, description, shape, handler, extras }),
     createSdkMcpServer: (cfg) => { made.push(cfg); return { name: cfg.name, tools: cfg.tools }; },
   };
-  const build = require('../lib/sdk-chat').buildHandsMcpServer;
+  const build = L('sdk-chat').buildHandsMcpServer;
   const d = fs.mkdtempSync(path.join(require('os').tmpdir(), 'parity-'));
   fs.writeFileSync(path.join(d, 'i.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
   const t = createHubTools({ cwd: d, log: () => {} });
@@ -53,11 +57,11 @@ test('the hands MCP server for client agents exposes the same tools, with images
 });
 
 test('Claude client path: tools=hub disallows the client built-ins, allows only the two hub servers, adds the hands server and the note', () => {
-  assert.match(sdk, /const hands = await handsForTurn\(agentName, \{ consultationDepth: options\.consultationDepth \|\| 0 \}\);\s*\n\s*const hubHands = hands\.mode === 'hub';/);
+  assert.match(sdk, /const hands = await handsForTurn\(agentName, \{ consultationDepth: options\.consultationDepth \|\| 0, signal: abortController\.signal \}\);\s*\n\s*const hubHands = hands\.mode === 'hub';/);
   assert.match(sdk, /allowedTools: hubHands \? \['mcp__agent-hub__\*', 'mcp__hub__\*'\] : sandboxWithheld \? \['mcp__agent-hub__\*'\] : \[/);
   assert.match(sdk, /\.\.\.\(hubHands \|\| sandboxWithheld \? \{ disallowedTools: \[\.\.\.hubToolsLib\.CLIENT_BUILTINS\] \} : \{\}\),/);
   assert.match(sdk, /queryOptions\.disallowedTools = \[\.\.\.new Set\(\[\.\.\.\(queryOptions\.disallowedTools \|\| \[\]\), \.\.\.blockedTools\]\)\];/, 'scope blocks merge instead of overwriting');
-  assert.match(sdk, /if \(hubHands && !sandboxWithheld\) \{\s*\n\s*queryOptions\.mcpServers\.hub = buildHandsMcpServer\(sdk, hands\.tools, \{ blocked: blockedTools \}\);/);
+  assert.match(sdk, /if \(hubHands && !sandboxWithheld\) \{\s*\n\s*queryOptions\.mcpServers\.hub = buildHandsMcpServer\(sdk, hands\.tools, \{ blocked: blockedTools, signal: abortController\.signal \}\);/);
   assert.match(sdk, /append: agentContext \+ workerPolicyText \+ jobsPolicyText \+ visualsText \+ handsNote \+ `/);
   assert.match(sdk, /## YOUR HANDS\nYour shell, file and web tools are the hub's/);
   // with tools=hub a sandboxed agent's client is NOT launched through the wrapper: prepare() only runs on the client path
@@ -65,13 +69,13 @@ test('Claude client path: tools=hub disallows the client built-ins, allows only 
 });
 
 test('Codex path: tools=hub appends the hands to the bridge list, confines its own shell to read-only, and says so', () => {
-  assert.match(sdk, /const hubHands = hands\.mode === 'hub' && !hands\.withheld;\s*\n\s*if \(hubHands\) \{\s*\n\s*const h = buildHandsMcpServer\(codexBridge\.collectingSdk, hands\.tools, \{ blocked: twVirtual \? temporalWorkers\.sdkDisallowedFor\(twVirtual\.toolScope\) : \[\] \}\);\s*\n\s*for \(const t of h\.tools\) hubTools\.push\(t\);/);
+  assert.match(sdk, /const hubHands = hands\.mode === 'hub' && !hands\.withheld;\s*\n\s*if \(hubHands\) \{\s*\n\s*const h = buildHandsMcpServer\(codexBridge\.collectingSdk, hands\.tools, \{ blocked: twVirtual \? temporalWorkers\.sdkDisallowedFor\(twVirtual\.toolScope\) : \[\], signal: abortController\.signal \}\);\s*\n\s*for \(const t of h\.tools\) hubTools\.push\(t\);/);
   assert.match(sdk, /const sandbox = hubHands \? 'read-only' : codexCli\.sandboxFor\(/);
   assert.match(sdk, /your own shell is read-only here/);
 });
 
 test('gateway path: one hands instance per turn, withheld tools dropped, images flushed after each batch for vision models', () => {
-  assert.match(sdk, /async function handsForTurn\(agentName, \{ consultationDepth = 0 \} = \{\}\) \{/);
+  assert.match(sdk, /async function handsForTurn\(agentName, \{ consultationDepth = 0, signal = null \} = \{\}\) \{/);
   assert.match(sdk, /box = \{ exec: \(cmd, o\) => sb\.exec\(agent, cmd, o\), mounts: sb\.mountsFor\(agent\) \};/);
   assert.match(sdk, /handlers\.__images = \[\];/);
   assert.match(sdk, /if \(r\.images && r\.images\.length\) handlers\.__images\.push\(\{ tool: name, images: r\.images \}\);/);

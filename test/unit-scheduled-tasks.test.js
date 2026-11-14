@@ -5,7 +5,10 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const S = require('../lib/scheduled-tasks.js');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('unit-sched-iso-');
+const S = require(path.join(ISO.lib, 'scheduled-tasks.js'));
 const { ScheduledTasks, parseWhen, checkSchedule, parseCron, nextCronRun, TOOL_SPECS, runTool } = S;
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-sched-'));

@@ -42,13 +42,18 @@
     async function loadMe() {
       try {
         const r = await fetch('/api/me', { credentials: 'include' });
-        if (r.ok) window.hubMe = await r.json();
+        if (r.ok) {
+          window.hubMe = await r.json();
+          // Signed in: recorded-call pieces the hub never acknowledged (a closed tab, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
+          if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe.user.id }); } catch { /* the call page's code is not up yet */ } }, 0);
+        }
         else if (r.status === 401) {
           // No session. On a hub with no accounts at all (updated from before multi-user) /api/me is refused too, so
           // ask the public auth status; hubMe stays undefined so the rest of the page behaves as before.
           try { const a = await (await fetch('/api/auth/status', { credentials: 'include' })).json(); window.hubNoAccounts = a && a.setupNeeded === true && !a.signedIn; } catch {}
         }
       } catch (e) { /* offline: behave as before */ }
+      try { activeJobsSync(); } catch { /* the Active state is declared further down; its own first sync covers an early call */ }
       paintSetupNotice();
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
@@ -2331,6 +2336,7 @@
       { id: 'google',     label: 'Google (Gemini)', hasKey: true, hasUrl: false },
       { id: 'perplexity', label: 'Perplexity', hasKey: true, hasUrl: false },
       { id: 'openrouter', label: 'OpenRouter', hasKey: true, hasUrl: false },
+      { id: 'elevenlabs', label: 'ElevenLabs (voice)', hasKey: true, hasUrl: false, hasTest: false },   // speech only: no model list to test
       { id: 'lmstudio',   label: 'LM Studio', hasKey: false, hasUrl: true },
       { id: 'ollama',     label: 'Ollama', hasKey: false, hasUrl: true },
       { id: 'omlx',       label: 'oMLX (Apple Silicon)', hasKey: false, hasUrl: true },
@@ -2405,7 +2411,7 @@
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
-      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-cx-section', 'st-modules-section'] },
+      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
     ];
     const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
@@ -2692,6 +2698,8 @@
       </div>`;
         setTimeout(stAdmin2faPaint, 0);
       }
+      html += voiceSettingsHtml(data);
+      setTimeout(voiceSettingsInit, 0);
       // Data connectors (lib/modules): outside services with a guided setup live on their own page.
       html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
         <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>
@@ -2715,7 +2723,7 @@
             <label>${esc(p.label)}</label>
             <input type="password" id="st-key-${p.id}" placeholder="${esc(hint)}"
               data-provider="${p.id}" data-field="apiKey">
-            <button class="st-test-btn" onclick="testProvider('${p.id}')">Test</button>
+            ${p.hasTest === false ? '' : `<button class="st-test-btn" onclick="testProvider('${p.id}')">Test</button>`}
           </div>`;
         }
         if (p.hasUrl) {
@@ -2796,6 +2804,10 @@
           <label style="flex-basis:auto"><input type="checkbox" id="st-fold-auto" ${foldAutoOn() ? 'checked' : ''} onchange="saveFoldAuto(this.checked)"> Fold consultations, scheduled tasks and hub notices into cards</label>
         </div>
         <div class="st-hint">This browser only. Turn it off to show every automatic turn in full.</div>
+        <div class="st-row">
+          <label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show active agents at the top of the agent list</label>
+        </div>
+        <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
       </div>`;
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
@@ -3072,12 +3084,13 @@
       bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:#fff;text-decoration:underline">Open the setup checklist</a>.`;
       layoutBanners();
     }
-    // The notices fixed at the top stack in this order, whichever painted first: no AI provider yet, the setup
-    // checklist, security. Each one sits below the ones above it, so none covers another (or its X), and the page moves
-    // down by their height (--banner-h), so they never cover the header and its Settings button.
+    // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
+    // (showMobileBanner), no AI provider yet, the setup checklist, security. Each one sits below the ones above it, so
+    // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
+    // header and its Settings button.
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -5308,6 +5321,8 @@
         const response = await fetch('/api/agents' + ownerQuery, { credentials: 'include' });
         const data = await response.json();
         AGENTS = data.agents || [];
+        if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
+        { const ri = document.getElementById('recordings-item'); if (ri) ri.style.display = AGENTS.some(a => a && a.recordings && a.recordings.canDownload === true) ? '' : 'none'; }   // ⋯ menu: Recordings only for a person on at least one agent's download list
         for (const a of AGENTS) { if (a.owner) agentOwnerCache.set(a.name, a.owner); else agentOwnerCache.delete(a.name); }
         if (!CYBER_MODELS.size) loadCyberModels();
         // Newer hubs report busy/busySince/activity/pendingQuestion per agent; older ones do not (then no dots are drawn).
@@ -5325,6 +5340,7 @@
         console.error('Failed to load agents:', err);
         // Fallback to empty - user will need to reload
         AGENTS = [];
+        if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();
         renderAgents();
       }
     }
@@ -5442,6 +5458,10 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
+      paintInstalledApp();
+      for (const q of ['(display-mode: standalone)', '(display-mode: minimal-ui)', '(display-mode: window-controls-overlay)']) {
+        try { if (typeof window.matchMedia === 'function') window.matchMedia(q).addEventListener('change', paintInstalledApp); } catch { /* an old browser: painted once */ }
+      }
       await loadMe();
       applyMemberView();
       renderOwnerSwitcher();
@@ -5458,6 +5478,27 @@
         for (const k of ['update', 'backups', 'security', 'memory', 'connectors', 'wallet']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
+      // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message
+      // box, and bring the one that was in front to the front (one-shot, reloadAppStash). Only after a reload: any other
+      // navigation drops the hand-over. An "?agent=" left in the address from an earlier visit does not take over.
+      let reopened = 0, frontId = null;
+      const handOver = appReloadStashTake(sessionStorage, Date.now());
+      for (const back of (handOver && appNavigationWasReload(window.performance) ? handOver : [])) {
+        const a = AGENTS.find(x => x.name === back.agent);
+        if (!a) continue;
+        const id = startSoloChat(a.name, a.model);
+        reopened++;
+        if (back.front) frontId = id;
+        const box = document.getElementById('input-' + id);
+        if (back.text && box && !box.value) { box.value = back.text; autoGrowTextarea(box); }
+      }
+      if (frontId) switchToChat(frontId);
+      if (reopened && own && own.agent) {
+        delete own.agent;
+        const u = new URL(location.href);
+        u.searchParams.delete('agent');
+        history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+      }
       openTargets.ready(own);
       setupTabs();
       setupConfigListeners();
@@ -5472,13 +5513,20 @@
       setTimeout(() => checkManualRestartComplete(), 2000);
     });
 
+    // Shown on a phone by the screen test in lib/ui-phone-layout.js (works when the browser requests the desktop site),
+    // and on narrow windows as before; an installed app on a phone never sees it because it moves to /mobile.
     function showMobileBanner() {
-      if (window.innerWidth >= 700 || localStorage.getItem('hub-mobile-banner') === 'off') return;
+      const pl = window.hubPhoneLayout || {};
+      if (pl.moving) return;
+      if (!(pl.offer === true || (window.innerWidth < 700 && !pl.keepDesktop))) return;
+      try { if (localStorage.getItem('hub-mobile-banner') === 'off') return; } catch (e) { /* storage blocked: show it */ }
       const bar = document.createElement('div');
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#14171F;border-bottom:1px solid #222632;color:#F3F4F6;font-size:13px';
-      bar.innerHTML = '<a href="/mobile" style="color:#5A93FF;text-decoration:none">Phone? Try the mobile view</a><button aria-label="Dismiss" style="background:none;border:0;color:#9CA3AF;font-size:16px;padding:4px 8px">\u2715</button>';
-      bar.querySelector('button').addEventListener('click', () => { localStorage.setItem('hub-mobile-banner', 'off'); bar.remove(); });
+      bar.id = 'hub-phone-layout-notice';   // first in the notice stack (layoutBanners): the notices and the page move down below it
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#14171F;border-bottom:1px solid #222632;color:#F3F4F6;font-size:13px;box-sizing:border-box';
+      bar.innerHTML = '<span><span style="color:#C3C2B7">This is the computer layout.</span> <a href="/mobile" style="color:#5A93FF;text-decoration:none">Open the phone layout</a></span><button aria-label="Dismiss" style="background:none;border:0;color:#9CA3AF;font-size:16px;padding:4px 8px">\u2715</button>';
+      bar.querySelector('button').addEventListener('click', () => { try { localStorage.setItem('hub-mobile-banner', 'off'); } catch (e) { /* storage blocked: close it for now */ } bar.remove(); layoutBanners(); });
       document.body.appendChild(bar);
+      layoutBanners();
     }
 
     // ── Hub Health Monitor ──
@@ -5847,7 +5895,7 @@
         <span class="group-action-btn" onclick="openCloneAgent(event)" title="Clone existing agent">Clone</span>
       </div>`;
 
-      let html = groupActions;
+      let html = groupActions + '<div id="agent-active-group" class="agent-group active-group" data-category="active" hidden></div>';
       categories.forEach(cat => {
         const agents = grouped[cat.key] || [];
         if (agents.length === 0) return;
@@ -5874,7 +5922,9 @@
           }
         });
       });
+      activeWireHold();
       paintAllAgentStatus();
+      paintActiveSection(true);
       renderAgentPicker();
     }
 
@@ -6545,12 +6595,100 @@
       } else markTabUnread(chatId);
       compactionRefresh(chatId);   // context % and compression mode under the toolbar (cheap GET)
       paintPlanBadges();           // plan usage next to the model (Claude subscription agents)
+      soloViewPaint();             // the "Agent work" toggle shows the device's choice
 
-      // Load conversation history from server
-      chats[chatId].historyLoaded = fetch(`/api/history/${encodeURIComponent(agentName)}`, { credentials: 'include' })
-        .then(r => r.ok ? r.json() : { history: [] })
-        .then(data => {
-          const history = data.history || [];
+      // Load conversation history from server (the newest page of the chosen view; "Load earlier" fetches the rest)
+      chats[chatId].historyLoaded = soloHistoryLoad(chatId);
+      // An agent already mid-turn when its chat opens (after a page reload, or reopened from the sidebar): follow that
+      // turn now, as the ↻ button does. The hub's status snapshot only arrives when the event stream connects, usually
+      // before this chat existed, so the chat sat green with "Send" while the sidebar card said busy.
+      chats[chatId].historyLoaded.then(() => { if (chats[chatId]) pollAgentStatus(); });
+      return chatId;
+    }
+
+    // ── Main chat view: the person's own conversation (the hub-started turns are the "Agent work" view) ──
+    // The newest page of the chat's history in the chosen view; the cursor of the page before it is kept for "Load earlier".
+    async function soloHistoryFetch(agentName, view, before) {
+      const r = await fetch(chatViewHistoryUrl(agentName, { view, before }), { credentials: 'include' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      return { history: Array.isArray(d && d.history) ? d.history : [], next: d && d.next != null ? d.next : null };
+    }
+    // Opening a chat, and the reload when the view changes. A newer load makes an older one's answer void.
+    function soloHistoryLoad(chatId) {
+      const chat = chats[chatId];
+      if (!chat) return Promise.resolve();
+      const view = chatViewGet(localStorage);
+      const seq = chat.histSeq = (chat.histSeq || 0) + 1;
+      const reset = chat.viewLoaded !== undefined;   // not the first load: the panel is drawn again from nothing
+      // a redraw never wipes a reply this page streams; the first draw of a chat only appends, so it always happens
+      return soloHistoryFetch(chat.agent, view, null)
+        .then(page => { if (chats[chatId] && chat.histSeq === seq && !(reset && chat.controller)) soloHistoryDraw(chatId, page.history, page.next, view, { reset }); })
+        .catch(e => console.warn('[history] Failed to load:', e));
+    }
+    // The chat's loaded history brought up to date: the newest page again, and the pages before it until they reach what
+    // is already loaded (more than a page may have come in since), then the loaded entries older than that in front.
+    // null when 20 pages still do not reach it: the caller keeps what it shows rather than leave a gap (review r3).
+    async function soloHistoryCurrent(chat, view) {
+      const MAX_PAGES = 20;
+      const tsOf = (e) => { const n = e && (typeof e.ts === 'number' ? e.ts : Date.parse(e.ts)); return Number.isFinite(n) ? n : null; };
+      const raw = chat.rawHistory || [];
+      const lastKnown = raw.length ? tsOf(raw[raw.length - 1]) : null;
+      let page = await soloHistoryFetch(chat.agent, view, null);
+      let fresh = page.history;
+      const short = () => page.next != null && lastKnown !== null && fresh.length && tsOf(fresh[0]) !== null && tsOf(fresh[0]) > lastKnown;
+      for (let pages = 1; short(); pages++) {
+        if (pages >= MAX_PAGES) return null;
+        page = await soloHistoryFetch(chat.agent, view, page.next);
+        fresh = page.history.concat(fresh);
+      }
+      if (!fresh.length) return raw.slice();
+      const firstTs = tsOf(fresh[0]);
+      const kept = firstTs === null ? [] : raw.filter(e => tsOf(e) !== null && tsOf(e) < firstTs);
+      return chatViewMergeOlder(kept, fresh);
+    }
+    // After a hub-started turn this page did not follow: bring the chat up to date (a reply marked for the owner shows),
+    // redrawing only when something new came in, with the older pages and the scroll position kept.
+    async function soloHistoryRefresh(chatId) {
+      const chat = chats[chatId];
+      if (!chat || chat.histBusy) return;
+      const view = chat.viewLoaded || chatViewGet(localStorage);
+      const seq = chat.histSeq;
+      let list;
+      try { list = await soloHistoryCurrent(chat, view); } catch (e) { console.warn('[history] Failed to refresh:', e); return; }
+      if (list === null) return;   // too much came in to join up: the display stays (it never shows a gap)
+      if (!chats[chatId] || chat.histSeq !== seq || chat.controller || chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) return;
+      const key = (e) => `${e && e.ts}|${e && e.role}|${e && e.content}`;
+      const had = new Set((chat.rawHistory || []).map(key));
+      if (!list.some(e => !had.has(key(e)))) return;   // nothing new: nothing visible changes
+      const panel = document.getElementById(`messages-${chatId}`);
+      const fromBottom = panel ? panel.scrollHeight - panel.scrollTop : 0;
+      const atBottom = panel ? fromBottom - panel.clientHeight < 40 : true;
+      soloHistoryDraw(chatId, list, chat.histNext, view, { reset: true, keepScroll: !atBottom });
+      if (panel && !atBottom) panel.scrollTop = Math.max(0, panel.scrollHeight - fromBottom);
+    }
+    // Draw a history list (oldest first) into the chat's panel. reset: clear the panel and the chat's messages first
+    // (a view change, or "Load earlier" drawing the merged list); keepScroll: the caller restores the scroll position.
+    function soloHistoryDraw(chatId, data, next, view, { reset = false, keepScroll = false } = {}) {
+      const chat = chats[chatId];
+      if (!chat) return;
+      if (reset) {
+        const panel0 = document.getElementById(`messages-${chatId}`);
+        if (panel0) panel0.textContent = '';
+        chat.messages = chat.messages.slice(0, 1);   // the system message stays
+        chat.inProgress = null;
+        // Live turns drawn in the cleared panel are gone from it: the status check below follows a running one again.
+        let lost = false;
+        for (const [id, t] of Object.entries(hubTurns)) if (t.chatId === chatId) { delete hubTurns[id]; delete hubTurnCards[id]; lost = true; }
+        if (chat.reattach) { clearLiveActivity(chat.reattach.msgId); delete chat.reattach; delete chat.lastMsgId; lost = true; }
+        if (lost) setStatus(chatId, 'idle');
+      }
+      chat.rawHistory = data;
+      chat.histNext = next;
+      chat.viewLoaded = view;
+      {
+        {
+          const history = data || [];
           if (history.length > 0) {
             // Add a visual separator so user knows this is restored history
             appendSystemNotice(chatId, `📜 Restored ${history.length} messages from previous session`);
@@ -6558,7 +6696,12 @@
             for (const msg of history) {
               // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place,
               // with its tool calls, once the chat follows it (reattachIfIdle), so it is not shown twice.
-              if (msg.inProgress) { chats[chatId].inProgress = { text: msg.content || '', ts: msg.ts || null }; continue; }
+              // A turn with an interjection is saved in several pieces (a piece, the interjection line, the rest): the
+              // text so far is the pieces joined; the interjection lines come back as the live turn's own activity.
+              if (msg.inProgress) {
+                if (msg.role === 'assistant') { const prev = chats[chatId].inProgress; chats[chatId].inProgress = { text: (msg.base > 0 && prev ? prev.text : '') + (msg.content || ''), ts: msg.ts || null }; }
+                continue;
+              }
             }
             // One saved entry as the chat draws it: appendMessage + saved tool calls + reasoning + the time line.
             // into: where the bubble goes (default the panel; a card's body); push: false when chat.messages already has it;
@@ -6568,10 +6711,20 @@
               if (notice) { if (msg.role === 'user' && msg.origin?.kind) appendSystemNotice(chatId, `⚡ ${hubOriginLabel(msg.origin)} — ${hubTurnTime(msg.ts)}`); }
               if (push) chats[chatId].messages.push({ role: msg.role, content: msg.content });
               if (!show) return null;
-              const hid = appendMessage(chatId, msg.role, msg.content, into);
+              const ijView = interjectionView(msg);   // an interjection: the person's bubble with the interjection marker
+              const hid = appendMessage(chatId, msg.role, ijView ? interjectionBubbleText(ijView) : msg.content, into);
+              if (msg.role === 'user' && Array.isArray(msg.images) && msg.images.length) {   // the pictures this line was sent with (an interjection's or a normal message's)
+                const picEl = document.getElementById(hid);
+                if (picEl) picEl.insertAdjacentHTML('beforeend', imageGalleryHtml(savedImageUrls(msg.images), 'max-height:200px;'));
+              }
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
+              // An archived entry is text only (the hub saved no tool calls or reasoning for it) and says where it comes from.
+              if (msg.archived) {
+                setMessageTime(document.getElementById(hid), times[i] ? `${times[i]} · from the archive` : 'from the archive');
+                document.getElementById(hid)?.classList.add('msg-archived');
+              }
               return hid;
             };
             const panelEl = document.getElementById(`messages-${chatId}`);
@@ -6597,15 +6750,132 @@
             }
             // Scroll to bottom after loading history
             const panel = document.getElementById(`messages-${chatId}`);
-            if (panel) setTimeout(() => panel.scrollTop = panel.scrollHeight, 100);
+            if (panel && !keepScroll) setTimeout(() => panel.scrollTop = panel.scrollHeight, 100);
           }
-        })
-        .catch(e => console.warn('[history] Failed to load:', e));
-      // An agent already mid-turn when its chat opens (after a page reload, or reopened from the sidebar): follow that
-      // turn now, as the ↻ button does. The hub's status snapshot only arrives when the event stream connects, usually
-      // before this chat existed, so the chat sat green with "Send" while the sidebar card said busy.
-      chats[chatId].historyLoaded.then(() => { if (chats[chatId]) pollAgentStatus(); });
-      return chatId;
+        }
+      }
+      soloEarlierPaint(chatId);
+      busyCardRefresh(chat);
+      if (reset) pollAgentStatus();   // a turn that was running before the redraw is followed again
+    }
+
+    // "Load earlier": a button at the top of the chat while the view has older entries (histNext is the cursor).
+    function soloEarlierPaint(chatId) {
+      const chat = chats[chatId];
+      const panel = document.getElementById(`messages-${chatId}`);
+      if (!chat || !panel) return;
+      panel.querySelectorAll(':scope > .chat-earlier-btn').forEach(b => b.remove());
+      if (chat.histNext == null) return;
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'chat-earlier-btn';
+      b.textContent = chat.histBusy ? 'Loading…' : 'Load earlier';
+      b.disabled = !!chat.histBusy;
+      b.addEventListener('click', () => soloHistoryEarlier(chatId));
+      panel.prepend(b);
+    }
+    // Fetch the page before histNext (an empty page that still has a next asks again, at most 5 fetches per click),
+    // merge it in front of what is loaded and draw the merged list; the person keeps looking at the same content.
+    async function soloHistoryEarlier(chatId) {
+      const chat = chats[chatId];
+      if (!chat || chat.histNext == null || chat.histBusy) return;
+      if (chat.controller) { hubToast('Wait for the reply to finish, then load earlier.'); return; }
+      const view = chat.viewLoaded || chatViewGet(localStorage);
+      const seq = chat.histSeq;
+      chat.histBusy = true; soloEarlierPaint(chatId);
+      try {
+        let older = [], cursor = chat.histNext;
+        for (let tries = 0; tries < 5 && cursor != null; tries++) {
+          const page = await soloHistoryFetch(chat.agent, view, cursor);
+          older = page.history.concat(older);
+          cursor = page.next;
+          if (older.length) break;
+        }
+        if (!chats[chatId] || chat.histSeq !== seq) return;   // closed, or reloaded in another view meanwhile
+        if (!older.length) { chat.histNext = cursor; return; }
+        // rawHistory is only the opening snapshot: what was sent or received since is read again (soloHistoryCurrent).
+        const base = await soloHistoryCurrent(chat, view);
+        if (!chats[chatId] || chat.histSeq !== seq) return;
+        // too much came in since the chat opened to join it up: the display stays as it is (no gap drawn)
+        if (base === null) { hubToast('Many new messages since this chat opened: open it again to load earlier ones'); return; }
+        // A reply started while the pages were loading: a redraw would wipe it (re-checked after all the awaits).
+        if (chat.controller || chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) { hubToast('Load earlier once the reply is done'); return; }
+        const panel = document.getElementById(`messages-${chatId}`);
+        const fromBottom = panel ? panel.scrollHeight - panel.scrollTop : 0;
+        soloHistoryDraw(chatId, chatViewMergeOlder(older, base), cursor, view, { reset: true, keepScroll: true });
+        if (panel) { panel.scrollTop = Math.max(0, panel.scrollHeight - fromBottom); userScrolledUp.set(panel, true); }
+      } catch (e) {
+        hubToast(`Could not load earlier messages: ${e.message}`);
+      } finally {
+        chat.histBusy = false;
+        if (chats[chatId]) soloEarlierPaint(chatId);
+      }
+    }
+    // The toolbar toggle (one choice for the device): store it, repaint every button, reload the open chat now; the
+    // other open chats reload when they come to the front (switchToChat).
+    function soloViewToggle() {
+      const next = chatViewSet(localStorage, chatViewGet(localStorage) === 'all' ? 'main' : 'all');
+      soloViewPaint();
+      for (const chat of Object.values(chats)) {
+        if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent) continue;
+        if (chat.id === activeChat) soloViewReload(chat);
+        busyCardRefresh(chat);
+      }
+      return next;
+    }
+    function soloViewReload(chat) {
+      if (!chat || chat.controller || chat.viewLoaded === chatViewGet(localStorage)) return;   // an own stream is never wiped
+      chat.historyLoaded = soloHistoryLoad(chat.id);
+    }
+    function soloViewPaint() {
+      const all = chatViewGet(localStorage) === 'all';
+      for (const b of document.querySelectorAll('.chat-view-btn')) {
+        b.textContent = all ? 'Agent work ✓' : 'Agent work';
+        b.setAttribute('aria-pressed', all ? 'true' : 'false');
+      }
+    }
+
+    // ── The busy card: ONE line at the bottom of the main view while the agent works on a hub-started turn ──
+    const busyRun = {};   // agent -> { turnId, origin, since, own }: the agent's running turn as turn_start announced it
+    let busyCardTimer = null;
+    function busyCardState(chat) {
+      if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent) return null;
+      if (chatViewGet(localStorage) !== 'main') return null;
+      if (chat.controller || chat.reattach) return null;   // this page's own stream
+      let run = busyRun[chat.agent];
+      const stNow = agentStatus[chat.agent];
+      if (run && !(stNow && stNow.busy)) { delete busyRun[chat.agent]; run = null; }   // a turn_end was missed: the card must not stay
+      if (run) return run.own ? null : { text: chatViewBusyText(run.origin, null), since: run.since };
+      const st = agentStatus[chat.agent];   // the page opened mid-turn: the status feed's words
+      if (!st || !st.busy || st.pendingQuestion || localBusy.has(chat.agent)) return null;
+      if (st.activity === 'replying to you') return null;
+      return { text: chatViewBusyText(null, st.activity), since: Date.parse(st.busySince) || Date.now() };
+    }
+    // Show, update or remove the chat's busy card; it is always the last element of the messages list.
+    function busyCardRefresh(chat) {
+      if (!chat) return false;
+      const panel = document.getElementById(`messages-${chat.id}`);
+      if (!panel) return false;
+      let el = panel.querySelector(':scope > .chat-busy-card');
+      const st = busyCardState(chat);
+      if (!st) { if (el) el.remove(); return false; }
+      const text = `⏳ ${st.text} · ${chatViewElapsed(st.since, Date.now())}`;
+      const fresh = !el;
+      if (!el) { el = document.createElement('div'); el.className = 'chat-busy-card'; el.setAttribute('role', 'status'); }
+      if (el.textContent !== text) el.textContent = text;
+      if (panel.lastElementChild !== el) panel.appendChild(el);
+      if (fresh) autoScroll(panel);
+      if (!busyCardTimer) busyCardTimer = setInterval(busyCardRefreshAll, 5000);   // the elapsed time moves while shown
+      return true;
+    }
+    function busyCardRefreshAll() {
+      let any = false;
+      for (const chat of Object.values(chats)) if (chat && !chat.isGroup && !chat.isWorker && chat.agent && busyCardRefresh(chat)) any = true;
+      if (!any && busyCardTimer) { clearInterval(busyCardTimer); busyCardTimer = null; }
+    }
+    // Anything added to the list goes before the busy card.
+    function busyCardKeepLast(container) {
+      const b = container && container.querySelector(':scope > .chat-busy-card');
+      if (b && container.lastElementChild !== b) container.appendChild(b);
     }
 
     // ── Live agent status (sidebar dots) ──────────────────────────────────
@@ -6615,8 +6885,213 @@
     // drawn (only this browser's own in-flight replies show, as before).
     const agentStatus = {};          // name -> { busy, busySince, activity, pendingQuestion }
     const localBusy = new Map();     // name -> ISO time this browser started streaming a reply
+    const openTurns = {};            // name -> [turnIds] the hub started and has not ended (activeTurnStart / activeTurnEnd)
     let statusKnown = false;
     let busyFilterOn = false;
+
+    // Active section at the top of the agent list (helpers: activeInitial, activeBusyFrom, activeStep, ...).
+    let activeState = activeInitial(); let activeHeld = false; let activeHoldTimer = null; let activeTicker = null;
+    let activeHoldWired = false;
+    // Background-job state for the Active section (poll below, after paintActiveSection).
+    const ACTIVE_JOBS_MS = 15000;
+    const ACTIVE_JOBS_STALE_MS = 60000;
+    let activeJobList = []; let activeJobs = {}; let activeJobsOkAt = 0; let activeJobsSig = '';
+    let activeJobsStopped = false; let activeJobsTimer = null; let activeJobsSeq = 0;
+    const ACTIVE_JOBS_TIMEOUT_MS = 10000;
+    function activeJobsFresh() { return Date.now() - activeJobsOkAt <= ACTIVE_JOBS_STALE_MS; }
+    function activeTopOn() { try { return localStorage.getItem('hub-active-top') !== 'off'; } catch { return true; } }
+    function saveActiveTop(on) {
+      try { localStorage.setItem('hub-active-top', on ? 'on' : 'off'); } catch {}
+      activeJobsSync();
+      paintActiveSection(true);
+      paintAgentsWorking();   // the chip and the working-only filter follow the switch
+    }
+    // Put a copy's status in line with its row: done rows say so; a row whose own entry is idle but whose temporary
+    // workers run (the hub counts it as working) says "working"; otherwise the real row's status line and dot.
+    function activeDress(copy, row, orig) {
+      let line = copy.querySelector('.agent-busy-line');
+      const ensureLine = () => {
+        if (!line) { line = document.createElement('span'); line.className = 'agent-busy-line'; (copy.querySelector('.agent-info') || copy).appendChild(line); }
+        return line;
+      };
+      const dd = copy.querySelector('.agent-status');
+      // a row in Active is always busy-looking (yellow dot and status line) or done; the job line sits below it
+      copy.classList.toggle('active-done', row.doneAt != null);
+      if (row.doneAt != null) {
+        copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done';
+        if (dd) { dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done'; }
+        return;
+      }
+      const src = orig && orig.querySelector('.agent-busy-line');
+      const sd = orig && orig.querySelector('.agent-status');
+      copy.classList.add('is-busy');
+      if (src) {
+        ensureLine().className = src.className; line.textContent = src.textContent;
+        if (sd && dd) { dd.className = sd.className; dd.textContent = sd.textContent; dd.title = sd.title; }
+      } else {   // working only through its temporary workers
+        ensureLine().className = 'agent-busy-line'; line.textContent = '\u23F3 working';
+        if (dd) { dd.className = 'agent-status live-busy'; dd.textContent = ''; dd.title = 'Working with helpers'; }
+      }
+    }
+    // The background-job line under the status line of a row (normal group rows and Active copies):
+    // 'Background job: <oldest job> + N more · 4 min', the full names as its tooltip. info is the agent's activeJobs entry
+    // (null / undefined = none, or a done Active copy). Rewritten in place on every paint, so the elapsed time moves
+    // without a rebuild; removed when there is no job. Always the last element of .agent-info (one per row).
+    function activeDressJob(copy, info) {
+      const all = copy.querySelectorAll('.agent-job-line');
+      for (let i = 1; i < all.length; i++) all[i].remove();
+      let el = all[0];
+      if (!info) { if (el) el.remove(); return; }
+      if (!el) { el = document.createElement('span'); el.className = 'agent-job-line'; }
+      // Two parts: the name may be cut short (ellipsis); the tail (' + N more · 4 min') never shrinks, so the time always shows.
+      let nm = el.querySelector('.ajl-name'), tl = el.querySelector('.ajl-tail');
+      if (!nm || !tl) {
+        el.textContent = '';
+        nm = document.createElement('span'); nm.className = 'ajl-name';
+        tl = document.createElement('span'); tl.className = 'ajl-tail';
+        el.appendChild(nm); el.appendChild(tl);
+      }
+      nm.textContent = activeJobLead(info);
+      tl.textContent = activeJobTail(info, Date.now());
+      el.title = activeJobTitle(info);
+      const host = copy.querySelector('.agent-info') || copy;
+      if (el.parentNode !== host || host.lastElementChild !== el) host.appendChild(el);   // always after the busy line
+    }
+    function activeMakeCopy(row) {
+      const orig = document.getElementById('agent-btn-' + row.name);
+      if (!orig) return null;
+      const copy = orig.cloneNode(true);
+      copy.removeAttribute('id');
+      copy.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+      copy.classList.add('active-copy');
+      copy.classList.remove('in-group');
+      activeDress(copy, row, orig);
+      activeDressJob(copy, row.doneAt == null ? activeJobs[row.name] : null);
+      copy.addEventListener('click', (e) => {
+        if (!e.target.classList.contains('action-btn')) startSoloChat(copy.dataset.agent, copy.dataset.model);
+      });
+      return copy;
+    }
+    // Status events come in bursts (a snapshot sets every agent in a row): paint once after the burst, so the first fill
+    // sees every working agent at once and orders them by start time.
+    let activePaintQueued = false;
+    function activePaintSoon() {
+      if (activePaintQueued) return;
+      activePaintQueued = true;
+      queueMicrotask(() => { activePaintQueued = false; paintActiveSection(); });
+    }
+    function paintActiveSection(force) {
+      const box = document.getElementById('agent-active-group');
+      if (!box) { if (activeTicker) { clearInterval(activeTicker); activeTicker = null; } return; }
+      // Only agents that have a row in this list (the access-filtered AGENTS, in one of the shown groups).
+      const visible = AGENTS.map(a => a.name).filter(n => document.getElementById('agent-btn-' + n));
+      const busy = activeBusyFrom(agentStatus, localBusy, visible);
+      activeJobs = activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible);   // a list older than 60 s is not shown; the switch does not matter
+      // Every normal row of an agent with a job gets the job line (an idle agent with a job is not "working"; it just says so).
+      for (const n of visible) activeDressJob(document.getElementById('agent-btn-' + n), activeJobs[n]);
+      const next = activeStep(activeState, { busy, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
+      const membersChanged = force || activeMembersChanged(activeState, next);
+      activeState = next;
+      if (activeState.rows.length === 0) {
+        box.innerHTML = '';
+        box.hidden = true;
+        if (activeTicker) { clearInterval(activeTicker); activeTicker = null; }
+        return;
+      }
+      box.hidden = false;
+      if (!activeTicker) activeTicker = setInterval(() => paintActiveSection(), 1000);
+      const collapsed = localStorage.getItem('cat-collapsed-active') === 'true';
+      const oldH = box.offsetHeight;
+      let items = box.querySelector('.agent-group-items');
+      if (membersChanged || !items) {
+        box.innerHTML = `<div class="agent-group-title" onclick="toggleCategoryCollapse('active', this)"><span class="collapse-arrow ${collapsed ? 'collapsed' : ''}">\u25BC</span><span>\u26A1 Active</span><span class="active-count">${activeState.rows.length}</span></div><div class="agent-group-items" style="${collapsed ? 'display:none' : ''}"></div>`;
+        items = box.querySelector('.agent-group-items');
+        items.replaceChildren(...activeState.rows.map(activeMakeCopy).filter(Boolean));
+        const newH = box.offsetHeight;
+        const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (!reduced && oldH !== newH && box.animate) {
+          box.animate([{ height: oldH + 'px', overflow: 'hidden' }, { height: newH + 'px', overflow: 'hidden' }], { duration: 150, easing: 'ease-out' });
+        }
+        return;
+      }
+      // Same rows in the same order: update each copy in place (status line, dot, done mark), so a row under the
+      // pointer is never replaced, even when its agent finishes mid-click.
+      const byName = new Map([...items.children].map(c => [c.dataset.agent, c]));
+      for (const row of activeState.rows) {
+        const copy = byName.get(row.name);
+        if (copy) { activeDress(copy, row, document.getElementById('agent-btn-' + row.name)); activeDressJob(copy, row.doneAt == null ? activeJobs[row.name] : null); }
+      }
+    }
+    // Agents' detached background jobs (GET /api/jobs, admins only). Polled once at load and every 15 s while the
+    // switch is on and the tab is visible; 401/403 (not an admin) stops it for good; after other errors the last good
+    // list is kept for at most 60 s. A changed list repaints through paintActiveSection (held / membership rules apply).
+    // (Its state is declared with the other Active state above, so an early paint never meets it uninitialised.)
+    // Only a known admin polls (window.hubMe loads asynchronously: unknown = no request; loadMe re-runs the sync).
+    function activeJobsWanted() { return !activeJobsStopped && !!(window.hubMe && window.hubMe.isAdmin === true) && document.visibilityState === 'visible'; }
+    function activeJobsSync() {
+      const want = activeJobsWanted();
+      if (want && !activeJobsTimer) { activeJobsPoll(); activeJobsTimer = setInterval(activeJobsPoll, ACTIVE_JOBS_MS); }
+      else if (!want && activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
+    }
+    async function activeJobsPoll() {
+      if (!activeJobsWanted()) return;
+      const seq = ++activeJobsSeq;   // only the newest request may change the list (an older answer arriving late is dropped)
+      let list = null, good = false, wasFresh = true;
+      const ac = typeof AbortController === 'function' ? new AbortController() : null;
+      const to = ac ? setTimeout(() => ac.abort(), ACTIVE_JOBS_TIMEOUT_MS) : null;   // a stalled request ends; the list also expires by itself
+      try {
+        const res = await fetch('/api/jobs', ac ? { credentials: 'include', signal: ac.signal } : { credentials: 'include' });
+        if (seq !== activeJobsSeq) return;
+        if (res.status === 401 || res.status === 403) {
+          activeJobsStopped = true;
+          if (activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
+          list = [];
+        } else if (!res.ok) throw new Error('HTTP ' + res.status);
+        else { const d = await res.json(); if (seq !== activeJobsSeq) return; list = Array.isArray(d && d.jobs) ? d.jobs : []; wasFresh = activeJobsFresh(); activeJobsOkAt = Date.now(); good = true; }   // freshness as the answer arrives
+      } catch {
+        if (seq !== activeJobsSeq) return;
+        if (!activeJobsFresh()) list = [];
+      } finally {
+        if (to) clearTimeout(to);
+      }
+      if (!list) return;
+      const sig = JSON.stringify(list.map(j => [j && j.id, j && j.name, j && j.owner, j && j.status, j && j.startedAt]));
+      if (sig === activeJobsSig && !(good && !wasFresh)) { activeJobsRelabel(); return; }   // a good answer after the list expired is drawn even when it is the same
+      activeJobsSig = sig;
+      activeJobList = list;
+      paintActiveSection();
+      paintAgentsWorking();
+    }
+    // Same list: only the job lines' text (the elapsed time) is refreshed in place, no Active repaint.
+    function activeJobsRelabel() {
+      const now = Date.now();
+      document.querySelectorAll('#agent-list .agent-job-line').forEach(el => {
+        const btn = el.closest('.agent-btn');
+        const info = btn && activeJobs[btn.dataset.agent];
+        const tl = el.querySelector('.ajl-tail');
+        if (info && tl) tl.textContent = activeJobTail(info, now);
+      });
+    }
+    document.addEventListener('visibilitychange', activeJobsSync);
+    activeJobsSync();
+    function activeWireHold() {
+      if (activeHoldWired) return;
+      const list = document.getElementById('agent-list');
+      if (!list) return;
+      activeHoldWired = true;
+      const release = () => {
+        activeHeld = false;
+        clearTimeout(activeHoldTimer); activeHoldTimer = null;
+        paintActiveSection();
+      };
+      const restart = () => {
+        clearTimeout(activeHoldTimer);
+        activeHoldTimer = setTimeout(release, 2000);
+      };
+      list.addEventListener('mouseenter', () => { activeHeld = true; restart(); });
+      list.addEventListener('mousemove', () => { activeHeld = true; restart(); });   // any movement over the list holds it again
+      list.addEventListener('mouseleave', release);
+    }
     const STATUS_POLL_MS = 20000;
     const STATUS_TICK_MS = 30000;
     const TURN_POLL_MS = 4000;       // a followed turn's view, while the live event stream is down
@@ -6641,6 +7116,7 @@
       agentStatus[name] = next;
       paintAgentStatus(name);
       paintAgentsWorking();
+      { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
     }
 
     // keepMissing (the /api/agents list, which has no worker fields): a key the entry lacks is left as it is. A full feed
@@ -6665,6 +7141,53 @@
       paintAllAgentStatus();
       // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
       for (const [name, s] of Object.entries(map)) if (s.busy) reattachIfIdle(name, s.busySince || null);
+      // the hub says idle (or a gone worker): a turn whose end this page missed is not open any more
+      for (const n of Object.keys(openTurns)) if (map[n] ? !map[n].busy : !(namedOnly && busyIsWorker(n, agentStatus[n]))) delete openTurns[n];
+      // A full feed that no longer lists a running temporary worker: its end never reached this page.
+      if (!namedOnly) {
+        const running = [];
+        for (const chat of Object.values(chats)) {
+          if (!chat || !chat.isWorker || chat.isHistory) continue;
+          for (const [id, run] of Object.entries(chat.runs || {})) if (run && run.status === 'running') running.push({ id, startedAt: run.startedAt });
+        }
+        const step = workerGoneStep(workerGoneState, { running, statusMap: map, now: Date.now() });
+        workerGoneState = step.next;
+        for (const id of step.gone) endWorkerRunUnreported(id);
+      }
+    }
+    let workerGoneState = {};
+    // A running card the hub no longer lists: neutral "ended" now, the real outcome from the caller's worker history when it has one.
+    function endWorkerRunUnreported(workerId) {
+      const w = workerRunOf(workerId);
+      if (!w || w.run.status !== 'running') return;
+      const { workerChatId, chat, run } = w;
+      run.status = 'ended';
+      run.endedAt = Date.now();
+      settleWorkerCard(workerChatId, 'idle', 'Ended');
+      if (run.noticeEl) {
+        run.noticeEl.textContent = `${chat.agentLabel || 'Agent'} ended (no result was reported)`;
+        run.noticeEl.className = 'system-notice';
+      }
+      scheduleWorkerListRefresh();
+      const parentChatId = run.parentChatId || chat.parentChatId;
+      const caller = (chats[run.parentChatId] || chats[chat.parentChatId] || {}).agent;
+      if (!caller) return;
+      (async () => {
+        try {
+          const r = await fetch(`/api/agents/${encodeURIComponent(caller)}/workers/${encodeURIComponent(workerId)}`, { credentials: 'include', signal: AbortSignal.timeout(10000) });
+          if (!r.ok) return;
+          const rec = (await r.json()).worker;
+          if (!rec || run.status !== 'ended') return;
+          if (rec.outcome === 'done') handleWorkerEvent(parentChatId, { type: 'worker_completed', worker_id: workerId });
+          else if (rec.outcome === 'stopped') handleWorkerEvent(parentChatId, { type: 'worker_failed', worker_id: workerId, cancelled: true });
+          else if (rec.outcome === 'failed') handleWorkerEvent(parentChatId, { type: 'worker_failed', worker_id: workerId, error: rec.error || 'Failed' });
+          else if (rec.outcome === 'unfinished') handleWorkerEvent(parentChatId, { type: 'worker_failed', worker_id: workerId, error: rec.error || "Did not finish: its caller's reply ended first" });
+          else return;
+          // the list's clock runs from the recorded end, not from when this page noticed it
+          const endAt = rec.startedAt && rec.durationMs != null ? Date.parse(rec.startedAt) + Number(rec.durationMs) : NaN;
+          if (Number.isFinite(endAt) && endAt <= Date.now()) { run.endedAt = endAt; scheduleWorkerListRefresh(); }
+        } catch {}
+      })();
     }
 
     async function reattachIfIdle(agentName, since) {
@@ -6675,6 +7198,8 @@
       if (!chats[chat.id] || chat.controller || chat.reattach || chat.status === 'thinking') return;
       const live = agentStatus[agentName];
       if (!live || !live.busy) return;
+      // Main view: a running hub-started turn is not followed with a live bubble; the busy card says it is working.
+      if (busyCardState(chat)) { busyCardRefresh(chat); return; }
       const ip = chat.inProgress; chat.inProgress = null;   // that turn's text so far, from history (only if it is this turn's)
       const partial = ip && (!since || !ip.ts || Date.parse(ip.ts) >= Date.parse(since) - 1000) ? ip.text : '';
       const msgId = appendMessage(chat.id, 'assistant', partial || '…');
@@ -6924,6 +7449,7 @@
       el.classList.toggle('filtering', busyFilterOn);
       el.textContent = busyChipLabel(split, busyFilterOn);
       list?.classList.toggle('busy-filter', busyFilterOn);
+      activePaintSoon();
     }
 
     function toggleBusyFilter() {
@@ -6946,12 +7472,15 @@
     }
     function scheduleWorkerStatusPoll() {
       if (workerPollSoon) return;
-      workerPollSoon = setTimeout(() => { workerPollSoon = null; pollWorkerStatus(); }, 800);
+      // a poll still in flight was asked before this request's reason (e.g. a turn_end): wait for it and ask again, never drop it
+      workerPollSoon = setTimeout(() => { workerPollSoon = null; if (workerPollBusy) { scheduleWorkerStatusPoll(); return; } pollWorkerStatus(); }, 800);
     }
     function workerPollWanted() {
       const menu = document.getElementById('workers-menu');
       const open = !!menu && !menu.hidden;
-      return open || Object.entries(agentStatus).some(([name, s]) => s && s.busy && (busyIsWorker(name, s) || s.consultedBy));
+      if (open || Object.entries(agentStatus).some(([name, s]) => s && s.busy && (busyIsWorker(name, s) || s.consultedBy))) return true;
+      // a temporary-worker card still running keeps being checked against the feed, even when the feed lists nothing busy
+      return Object.values(chats).some(c => c && c.isWorker && !c.isHistory && Object.entries(c.runs || {}).some(([id, r]) => r && r.status === 'running' && id.startsWith('tw-')));
     }
     setInterval(() => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); }, 5000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden && workerPollWanted()) pollWorkerStatus(); });
@@ -6971,6 +7500,67 @@
     // Newer hubs also publish the user's own turns (origin.kind === 'user'); those are
     // only drawn when this window is not already streaming them itself.
     // Shared with lib/ui-auto-turns.js; test/ui-auto-turns-desktop.test.js keeps the copies in step.
+    // ── chat view helpers (begin) ──
+    const CHAT_VIEW_KEY = 'hub-chat-view';
+    const CHAT_VIEW_PAGE = 40;
+    function chatViewGet(storage) {
+      try { return storage && storage.getItem(CHAT_VIEW_KEY) === 'all' ? 'all' : 'main'; } catch (e) { return 'main'; }
+    }
+    function chatViewSet(storage, view) {
+      const v = view === 'all' ? 'all' : 'main';
+      try { if (storage) storage.setItem(CHAT_VIEW_KEY, v); } catch (e) { /* storage refused: the choice lasts this page */ }
+      return v;
+    }
+    function chatViewHistoryUrl(agent, opts) {
+      const o = opts || {};
+      const q = [`view=${o.view === 'all' ? 'all' : 'main'}`, `limit=${Math.max(1, Math.min(200, Number(o.limit) || CHAT_VIEW_PAGE))}`];
+      if (o.before != null && o.before !== '') q.push(`before=${encodeURIComponent(String(o.before))}`);
+      return `/api/history/${encodeURIComponent(agent)}?${q.join('&')}`;
+    }
+    function chatViewIsHubOrigin(origin) {
+      const k = origin && typeof origin === 'object' ? origin.kind : '';
+      return !!k && typeof k === 'string' && k !== 'user' && k !== 'comms';
+    }
+    function chatViewBusyText(origin, activity) {
+      const o = origin && typeof origin === 'object' ? origin : null;
+      const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+      if (o && o.kind) {
+        switch (o.kind) {
+          case 'consultation': return `Answering a consultation from ${cap(o.from) || 'another agent'}`;
+          case 'schedule': { const l = o.label || o.from; return l ? `Working on a scheduled task: ${l}` : 'Working on a scheduled task'; }
+          case 'job_notice': return o.jobName ? `Reading a job result: ${o.jobName}` : 'Reading a job result';
+          case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
+          case 'consult_reply': return 'Reading consultation replies';
+          case 'alert': return 'Handling a monitor alert';
+          case 'task': return o.label === 'context compression' ? 'Resuming after compression' : `Working on a hub task${o.label ? ': ' + o.label : ''}`;
+          default: return 'Working on a hub task';
+        }
+      }
+      const a = typeof activity === 'string' ? activity.trim() : '';
+      let m = /^consulted by (.+)$/i.exec(a);
+      if (m) return `Answering a consultation from ${cap(m[1])}`;
+      m = /^scheduled task(?::\s*(.+))?$/i.exec(a);
+      if (m) return m[1] ? `Working on a scheduled task: ${m[1]}` : 'Working on a scheduled task';
+      if (/^job finished/i.test(a)) return 'Reading a job result';
+      if (/^job report/i.test(a)) return 'Reading a job report';
+      if (/^alert$/i.test(a)) return 'Handling a monitor alert';
+      return 'Working on a hub task';
+    }
+    function chatViewElapsed(sinceMs, nowMs) {
+      const s = Math.max(0, Math.floor(((Number(nowMs) || 0) - (Number(sinceMs) || 0)) / 1000));
+      if (s < 60) return `${s} s`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m} min`;
+      const h = Math.floor(m / 60), r = m % 60;
+      return r ? `${h} h ${r} min` : `${h} h`;
+    }
+    function chatViewMergeOlder(older, current) {
+      const cur = Array.isArray(current) ? current : [];
+      const key = (e) => `${e && e.ts}|${e && e.role}|${e && typeof e.content === 'string' ? e.content : ''}`;
+      const have = new Set(cur.slice(0, 50).map(key));
+      return (Array.isArray(older) ? older : []).filter((e) => e && !have.has(key(e))).concat(cur);
+    }
+    // ── chat view helpers (end) ──
     // ── auto-turn helpers (begin) ──
     const AUTO_STACK_MIN = 3;   // this many closed cards in a row fold into one stack
     function autoKindOfOrigin(origin) {
@@ -6986,7 +7576,7 @@
       return m ? m[1] : null;
     }
     function autoInfoOf(entry) {
-      if (!entry || entry.role !== 'user' || entry.ask === true) return null;
+      if (!entry || entry.role !== 'user' || entry.ask === true || entry.interjection) return null;
       const o = entry.origin;
       if (o && typeof o === 'object' && o.kind) {
         const kind = autoKindOfOrigin(o);
@@ -7077,7 +7667,7 @@
           const x = history[j];
           if (!x) break;
           if (x.inProgress) continue;
-          if (x.ask === true) break;
+          if (x.ask === true || x.interjection) break;
           if (x.role === 'assistant') { hasAsst = true; indexes.push(j); continue; }
           if (x.role !== 'user' || hasAsst) break;
           const xi = autoInfoOf(x);
@@ -7243,6 +7833,8 @@
     }
 
     async function onHubTurnStart(ev) {
+      if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
+      if (ev && ev.agent) busyRun[ev.agent] = { turnId: ev.turnId, origin: ev.origin, since: Date.parse(ev.startedAt) || Date.now(), own: !chatViewIsHubOrigin(ev.origin) };
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
       setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin) });
       let chat = findSoloChat(ev.agent);
@@ -7265,7 +7857,9 @@
       // An automatic turn (consultation, scheduled task, hub notice) draws into a closed card that updates as it runs.
       let card = null;
       let retiredReattach = false;   // a re-attach of this turn was followed before turn_start came; its bubble gave way to the card
-      const autoKind = foldAutoOn() ? autoKindOfOrigin(ev.origin) : null;
+      // Main view: a hub-started turn is still followed (its card), but hidden unless its reply is marked for the owner.
+      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin);
+      const autoKind = foldAutoOn() || hubMain ? autoKindOfOrigin(ev.origin) : null;
       if (autoKind) {
         const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
         if (info) {
@@ -7281,6 +7875,7 @@
             card.setLine('working…');
           } else {
             card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…' });
+            if (hubMain) { card.wrap.classList.add('chat-view-hidden'); card.hiddenMsgs = []; }
           }
           chat.lastAutoCard = null;
           // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
@@ -7297,7 +7892,9 @@
         }
       }
       if (typeof ev.message === 'string' && !dup) {   // history may already hold the notice
-        chat.messages.push({ role: 'user', content: ev.message });
+        const um = { role: 'user', content: ev.message };
+        if (card && card.hiddenMsgs) { um.hidden = true; card.hiddenMsgs.push(um); }   // not shown: not saved either (saveChat)
+        chat.messages.push(um);
         setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message, card && card.body)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
       }
       if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
@@ -7311,6 +7908,8 @@
         // A for_owner that arrived while the history loaded: apply it now that the card exists.
         if (hubForOwnerPending[ev.turnId]) { delete hubForOwnerPending[ev.turnId]; hubMoveReplyOut(card); }
       }
+      busyCardKeepLast(document.getElementById(`messages-${chat.id}`));
+      busyCardRefresh(chat);
       if (retiredReattach) catchUpTurn(chat.id);   // what the turn already did (tool rows, text), which the retired bubble had shown
       setStatus(chat.id, 'thinking', hubOriginLabel(ev.origin));
       markTabUnread(chat.id);   // skips the window on screen
@@ -7362,6 +7961,7 @@
       const out = [];
       if (!t.items) return out;
       for (const it of t.items.values()) {
+        if (it.ij) continue;   // an interjection is the person's, drawn in the text (turnSteps), not a tool row
         out.push({ type: 'call', tool: it.tool, input: it.input });
         if (it.done) out.push({ type: 'result', output: it.output || '' });
       }
@@ -7402,10 +8002,17 @@
           if (cur.tools.length) { steps.push(cur); cur = { text: '', tools: [] }; }
           cur.text += body.slice(pos, at); pos = at;
         }
+        if (it.ij) {   // an interjection of the person's: marked where it came, the reply goes on after it
+          const prev = steps[steps.length - 1];
+          if (!cur.text && !cur.tools.length && prev && prev.ijs) { prev.ijs.push(it.ij); continue; }   // two in a row: one marker group
+          (cur.ijs = cur.ijs || []).push(it.ij);
+          steps.push(cur); cur = { text: '', tools: [] };
+          continue;
+        }
         const started = it.ts ? Date.parse(it.ts) : NaN;
         const ended = it.doneTs ? Date.parse(it.doneTs) : NaN;
         cur.tools.push({ id, tool: it.tool, input: it.input || '', result: it.done ? (it.output || '') : null,
-          status: it.done ? (/^(Error|⚠|✗)/.test(it.output || '') ? 'error' : 'done') : 'running',
+          status: it.done ? (/^(Error|⚠|✗)/.test(it.output || '') || toolResultDenied(it.output) ? 'error' : 'done') : 'running',
           startedAt: Number.isFinite(started) ? started : null, durationMs: Number.isFinite(started) && Number.isFinite(ended) ? ended - started : undefined });
       }
       if (pos < body.length) {
@@ -7469,6 +8076,10 @@
           if (item.output != null) it.output = typeof item.output === 'string' ? item.output : JSON.stringify(item.output);
         }
         return 'tool';
+      }
+      if (item.kind === 'interjection') {   // a message the person sent into the running turn (journaled by the hub when it was sent)
+        if (!t.items.has(item.id)) t.items.set(item.id, { ij: { text: String(item.message || ''), emergency: item.priority === 'emergency', images: savedImageUrls(item.images) }, done: true, at: Number.isFinite(item.at) ? item.at : 0, ts: item.ts });
+        return 'interjection';
       }
       if (item.kind === 'worker') { turnWorkerUpsert(chatId, t, item); return 'worker'; }
       if (item.kind === 'worker_tool') {
@@ -7615,7 +8226,7 @@
       if (!h || !ev.item) return;
       const kind = turnActivityApply(h.chatId, h.t, ev.item);
       if (h.ra) paintReattach(h.chatId, reattachLine(chats[h.chatId], h.ra));
-      else if (kind === 'tool') paintTurn(h.chatId, h.t, h.t.text);
+      else if (kind === 'tool' || kind === 'interjection') paintTurn(h.chatId, h.t, h.t.text);
     }
 
     // turn_worker_delta { turnId, agent, workerId, text }: the worker's text so far.
@@ -7647,6 +8258,9 @@
       if (!card || card.moved || !chats[card.chatId]) return;
       const el = document.getElementById(card.msgId);
       if (!el || !card.wrap.isConnected) return;
+      card.wrap.classList.remove('chat-view-hidden');   // main view: the marked turn shows, its card and its open reply
+      for (const m of card.hiddenMsgs || []) delete m.hidden;
+      card.hiddenMsgs = null;
       // The card may sit inside a stack (hidden body): the reply goes after the outermost block that is in the panel.
       const panel = document.getElementById(`messages-${card.chatId}`);
       let anchor = card.wrap;
@@ -7672,12 +8286,20 @@
     }
 
     function onHubTurnEnd(ev) {
-      setAgentLive(ev.agent, { busy: false });
+      if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setAgentLive(ev.agent, { busy: false });   // busy while another turn is open
       if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
       { const c = findSoloChat(ev.agent); if (c) { c.inProgress = null; setTimeout(() => compactionRefresh(c.id), 3500); } }   // context % moved (the hub records it 2.5 s after the turn)
+      const endedRun = busyRun[ev.agent];   // read before it is dropped: says whether the turn was hub-started
+      if (busyRun[ev.agent] && (!ev.turnId || busyRun[ev.agent].turnId === ev.turnId)) delete busyRun[ev.agent];
+      { const c = findSoloChat(ev.agent); if (c) busyCardRefresh(c); }   // the busy card goes with the turn
+      if (ev.agent) scheduleWorkerStatusPoll();   // re-read the status once: a reply can run without a turn of its own
       const t = hubTurns[ev.turnId]; delete hubTurns[ev.turnId];
       if (!t) {
         const chat = findSoloChat(ev.agent);
+        // A hub-started turn this page never followed (opened mid-turn, or a redraw dropped it): a reply marked for the
+        // owner would be missing, so the newest page is read again (nothing visible changes otherwise).
+        const hubStarted = chatViewIsHubOrigin(ev.origin) || (endedRun && (!ev.turnId || endedRun.turnId === ev.turnId) && !endedRun.own);
+        if (hubStarted && chat && chatViewGet(localStorage) === 'main' && !chat.controller && !chat.reattach) soloHistoryRefresh(chat.id);   // a marked reply shows; nothing else moves
         if (chat?.reattach) {
           if (ev.reply) finishReattach(chat.id, ev.reply, true);
           else if (ev.ok === false) finishReattach(chat.id, `${chat.reattach.partial ? chat.reattach.partial + '\n\n' : ''}⚠ turn failed: ${ev.error || 'unknown error'}`, false);
@@ -7698,7 +8320,11 @@
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
       for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
       const last = chat.messages[chat.messages.length - 1];
-      if (!(last && last.role === 'assistant' && last.content === reply)) chat.messages.push({ role: 'assistant', content: reply });
+      if (!(last && last.role === 'assistant' && last.content === reply)) {
+        const rm = { role: 'assistant', content: reply };
+        if (t.card && t.card.hiddenMsgs) { rm.hidden = true; t.card.hiddenMsgs.push(rm); }
+        chat.messages.push(rm);
+      }
       setStatus(t.chatId, ev.ok ? 'idle' : 'error', ev.ok ? null : 'Hub turn failed');
       autoScroll(document.getElementById(`messages-${t.chatId}`));
       // Hub turns, job reports included, never take the screen: the tab is marked unread instead.
@@ -7823,6 +8449,11 @@
       });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev && ev.request_id) closeQuestion(ev.request_id); });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev) setAgentLive(ev.agent, { pendingQuestion: false }); });
+      // A hands-free call (voice phase 2) follows the events of its agent: replies, tool activity, questions, held items.
+      for (const t of ['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call']) {
+        source.addEventListener(t, e => { const ev = parse(e); if (ev) voiceCallHubEvent(t, ev); });
+      }
+      source.addEventListener('turn_mood', e => { const ev = parse(e); if (ev) voiceCallHubEvent('turn_mood', ev); });
       source.addEventListener('compaction_start', e => { const ev = parse(e); if (ev) onCompactionStart(ev); });
       source.addEventListener('compaction_progress', e => { const ev = parse(e); if (ev) onCompactionProgress(ev); });
       source.addEventListener('compaction_end', e => { const ev = parse(e); if (ev) onCompactionEnd(ev); });
@@ -8036,6 +8667,7 @@
           <button onclick="clearChat('${chatId}')">🗑️ Clear</button>
           <button onclick="saveChat('${chatId}')">💾 Save</button>
           <button onclick="openRecallPanel('${chatId}')" id="recall-btn-${chatId}" title="Search this agent's whole history">🔎 Recall</button>
+          <button onclick="soloViewToggle()" id="view-btn-${chatId}" class="chat-view-btn" aria-pressed="false" title="Show the turns the hub started (consultations, scheduled tasks, job notices)">Agent work</button>
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
 
@@ -8050,6 +8682,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
+          <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -8057,6 +8690,7 @@
       panels.appendChild(panel);
       // Fill the model picker now, so its list is complete before the first click (modelPickDown).
       setTimeout(() => fillModelPick(chatId), 0);
+      setTimeout(() => { if (voiceStatus) voicePaint(); else voiceRefreshStatus(); }, 0);
       
       // Initialize pending images array for this chat
       chats[chatId].pendingImages = [];
@@ -8163,6 +8797,7 @@
       document.getElementById(`tab-${chatId}`)?.classList.remove('unread');
       document.getElementById(`panel-${chatId}`)?.classList.add('active');
       if (wasUnread) { const m = document.getElementById(`messages-${chatId}`); if (m) m.scrollTop = m.scrollHeight; }
+      if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent && opened.viewLoaded !== undefined) soloViewReload(opened);   // the view changed while it was behind
       activeChat = chatId;
       window.__activeChatId = chatId;
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
@@ -8176,6 +8811,7 @@
       event?.stopPropagation();
       const chat = chats[chatId];
       if (!chat) return;
+      voiceChatGone(chatId);   // dictation in this chat ends without uploading
 
       if (chat.controller) chat.controller.abort();
       if (chat.controllers) Object.values(chat.controllers).forEach(c => c?.abort());
@@ -8257,7 +8893,7 @@
         }).join('\n---\n\n');
       } else {
         header = `# Chat with ${chat.agent}\nModel: ${chat.model}\nDate: ${new Date().toISOString()}\n\n---\n\n`;
-        content = chat.messages.map(m => `[${m.role.toUpperCase()}]\n${m.content}\n`).join('\n---\n\n');
+        content = chat.messages.filter(m => !m.hidden).map(m => `[${m.role.toUpperCase()}]\n${m.content}\n`).join('\n---\n\n');   // what is shown (hidden hub turns are not)
       }
       
       const blob = new Blob([header + content], { type: 'text/markdown' });
@@ -8319,6 +8955,7 @@
     // (the server keeps working through disconnects), so Stop/Pause tell the server explicitly.
     // Older hubs answer 404 here; that is ignored.
     function stopAgentTurn(agentName) {
+      try { voiceStopPlayback(); } catch {}   // Stop in the chat also stops anything being read aloud
       return fetch('/api/chat/stop', {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent: agentName })
@@ -8774,7 +9411,7 @@
       for (let i = Math.max(0, start); i < history.length; i++) {
         const m = history[i];
         if (!m) continue;
-        if (m.role === 'user' && !m.ask) break;                                  // the next turn
+        if (m.role === 'user' && !m.ask && !m.interjection) break;                // the next turn (a question or interjection line is inside the reply)
         if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
         if (minTs && m.ts && Date.parse(m.ts) < minTs) continue;
         if (!reply) { reply = m; content = m.content; continue; }                 // the reply's first piece
@@ -8786,12 +9423,42 @@
     function turnReplySince(history, sinceTs) {
       for (let i = history.length - 1; i >= 0; i--) {
         const m = history[i];
-        if (!m || (m.role === 'user' && !m.ask) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
+        if (!m || (m.role === 'user' && !m.ask && !m.interjection) || !m.ts || !(Date.parse(m.ts) >= sinceTs)) return null;
         if (m.role === 'assistant' && !m.ask && typeof m.content === 'string' && !(m.base > 0)) return turnReplyFrom(history, i, sinceTs);
       }
       return null;
     }
     // ── turn-reply helpers (end) ──
+
+    // An interjection read back from history: the person's own bubble, marked. Shared verbatim with lib/ui-interjection.js and mobile.js (test/ui-interjection.test.js).
+    // ── interjection helpers (begin) ──
+    function interjectionView(entry) {
+      if (!entry || entry.role !== 'user' || !entry.interjection || typeof entry.content !== 'string') return null;
+      const m = /^\[([^\]\n]*)\]: ?([\s\S]*)$/.exec(entry.content);
+      const emergency = entry.interjection.priority === 'emergency' || (!!m && /^EMERGENCY/i.test(m[1]));
+      return { text: m ? m[2] : entry.content, emergency };
+    }
+    // ── interjection helpers (end) ──
+    // A saved picture file as the page loads it: /api/image/<base64(path)> (serveImage allows data/uploads).
+    // The path goes as base64 of its UTF-8 bytes (what the server decodes; plain btoa throws above U+00FF and mis-encodes
+    // U+0080-U+00FF). A path that cannot be encoded is skipped, so it never breaks the history render.
+    function savedImageUrls(paths) {
+      const out = [];
+      for (const p of Array.isArray(paths) ? paths : []) {
+        if (typeof p !== 'string' || !p) continue;
+        try {
+          const bytes = new TextEncoder().encode(p);
+          let bin = '';
+          for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+          out.push('/api/image/' + btoa(bin));
+        } catch { /* skipped */ }
+      }
+      return out;
+    }
+    // The text of an interjection bubble: what sendInterjection shows when the person sends it, an emergency one marked as such.
+    function interjectionBubbleText(view) {
+      return `${view.emergency ? '🚨 [Emergency interjection]' : '⚡ [Interjection]'} ${view.text}`;
+    }
 
     async function reattachCheck(chatId) {
       const chat = chats[chatId];
@@ -8875,59 +9542,80 @@
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
       const content = input.value.trim();
-      if (!content) return;
+      const imagesToSend = [...(chat.pendingImages || [])];   // the pictures waiting in the input go with the interjection
+      if (!content && imagesToSend.length === 0) return;
 
       input.value = '';
       input.style.height = 'auto';
+      clearPendingImages(chatId);
 
-      // Show the interjection in the chat as a user message with a distinct style
-      setMessageTime(document.getElementById(appendMessage(chatId, 'user', `⚡ [Interjection] ${content}`)), msgTimeLabel(Date.now()));
+      // Show the interjection in the chat as a user message with a distinct style (with its pictures)
+      setMessageTime(document.getElementById(appendMessageWithImages(chatId, 'user', `⚡ [Interjection] ${content}`.trim(), imagesToSend)), msgTimeLabel(Date.now()));
 
       // Show a transient "sent" notice that will be updated when the agent picks it up
       const noticeEl = appendSystemNotice(chatId, '⚡ Interjection sent - waiting for agent to pick it up...');
       if (noticeEl) noticeEl.id = `interject-notice-${chatId}`;
+      // Not sent: the pictures go back in front of whatever was attached while the request was out (never replacing it).
+      const restoreImages = () => {
+        if (!imagesToSend.length) return;
+        chat.pendingImages = [...imagesToSend, ...(chat.pendingImages || [])];
+        renderImagePreviews(chatId);
+      };
 
       try {
         const resp = await fetch('/api/chat/interject', {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent: chat.agent, message: content })
+          body: JSON.stringify({ agent: chat.agent, message: content, ...(imagesToSend.length ? { images: imagesToSend } : {}) })
         });
         const result = await resp.json();
         if (result.success) {
           if (noticeEl) noticeEl.textContent = '⚡ Interjection delivered into the running turn';
         } else if (/not currently processing/i.test(String(result.error || ''))) {
-          // The turn ended between the status update and the send: go as a normal message.
+          // The turn ended between the status update and the send: go as a normal message (the pictures with it).
           if (noticeEl) noticeEl.textContent = '↪ The turn had already ended, sending as a new message…';
+          // The text and pictures go straight to the normal send (sendOpts.fallback): the composer is not touched, so
+          // whatever was typed or attached since is left alone.
           skipInterjectOnce.add(chatId);
-          input.value = content;
-          return sendSoloMessage(chatId);
+          return sendSoloMessage(chatId, 0, { fallback: { text: content, images: imagesToSend } });
         } else {
           if (noticeEl) { noticeEl.textContent = `⚠️ Interjection failed: ${result.error}`; }
+          restoreImages();
         }
       } catch (e) {
         if (noticeEl) { noticeEl.textContent = `⚠️ Interjection failed: ${e.message}`; }
+        restoreImages();
       }
     }
 
     // Solo chat - multi-provider LLM routing (with retry logic)
-    async function sendSoloMessage(chatId, retryCount = 0) {
+    async function sendSoloMessage(chatId, retryCount = 0, sendOpts = null) {
       if (!retryCount) tzSentAt = Date.now();   // the person's own send: its request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
+      if (!retryCount) chat.voiceSend = !!(sendOpts && sendOpts.voice);   // a message that came from a hands-free call goes with voice: true (retries keep it)
+      // A hands-free call asks to hear whether the hub took the message: notify(null) once it did, notify(error) when it did not.
+      let notified = false;
+      const notify = (err) => { if (notified || !sendOpts || !sendOpts.onSendResult) return; notified = true; try { sendOpts.onSendResult(err); } catch { /* the caller's problem */ } };
       const input = document.getElementById(`input-${chatId}`);
-      const content = input.value.trim();
-      const pendingImages = chat.pendingImages || [];
+      // sendOpts.fallback { text, images }: a message that was meant as an interjection but found the turn over. It goes
+      // with its own text and pictures; the composer (what is typed or attached now) is neither read nor changed.
+      const fallback = sendOpts && sendOpts.fallback ? sendOpts.fallback : null;
+      const content = fallback ? String(fallback.text || '').trim() : input.value.trim();
+      const pendingImages = fallback ? [...(fallback.images || [])] : (chat.pendingImages || []);
 
       // Route to interjection whenever the agent is working: a turn this tab started, or one the hub
       // reports busy (started from the phone, a schedule, a consult or another tab). Before this the
       // desktop only interjected into its own turn and every other send bounced as "busy".
-      // Images cannot be interjected, so a message with images still goes the normal way.
+      // A message with pictures goes the same way: the pictures travel with the interjection.
       const liveNow = agentStatus[chat.agent];
       const agentWorking = chat.status === 'thinking' || !!(liveNow && liveNow.busy);
-      if (content && agentWorking && pendingImages.length === 0 && !skipInterjectOnce.delete(chatId)) {
+      if ((content || pendingImages.length > 0) && agentWorking && !skipInterjectOnce.delete(chatId)) {
+        notify(null);   // a voice message into a working agent goes as an interjection
         return sendInterjection(chatId);
       }
+      skipInterjectOnce.delete(chatId);   // a fallback send has used its pass (the check above stepped aside for it, or the agent was not busy)
+      if (!retryCount) { chat.voiceTurn = !!chat.voiceDictated; chat.voiceDictated = false; }   // this reply follows a mic dictation: read it aloud when it ends (if the device asks for that)
 
       // Need content OR images to send
       if (!content && pendingImages.length === 0) return;
@@ -8950,8 +9638,10 @@
       // Only clear input and add to history on first attempt (not retries)
       let userMsgEl = null;
       if (retryCount === 0) {
-        input.value = '';
-        input.style.height = 'auto';
+        if (!fallback) {
+          input.value = '';
+          input.style.height = 'auto';
+        }
 
         // Store images with message for history
         chat.messages.push({ role: 'user', content, images: pendingImages.length > 0 ? [...pendingImages] : undefined });
@@ -8963,7 +9653,7 @@
 
       // Clear pending images
       const imagesToSend = [...pendingImages];
-      if (retryCount === 0) {
+      if (retryCount === 0 && !fallback) {
         clearPendingImages(chatId);
       }
 
@@ -8996,13 +9686,15 @@
           body: JSON.stringify({
             agent: chat.agent,
             message: content,
-            images: imagesToSend
+            images: imagesToSend,
+            ...(chat.voiceSend ? { voice: true } : {}),
+            ...(chat.voiceSend && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {})   // only while a character with reactions is on screen
           })
         });
 
         if (response.status === 409) {
           // Agent busy: nothing was sent. Deliver the text into the running turn instead of bouncing it
-          // (once per message; a message with images cannot be interjected and is handed back).
+          // (once per message; the pictures go with it).
           document.getElementById(msgId)?.remove();
           if (userMsgEl) userMsgEl.remove();
           const last = chat.messages[chat.messages.length - 1];
@@ -9011,15 +9703,20 @@
           setAgentStatus(chat.agent, '');
           delete chat.lastMsgId;
           chat.controller = null;
-          if (!imagesToSend.length && !chat.bounced409) {
+          if (fallback) chat.bounced409 = true;   // a fallback send is not bounced into an interjection again: it goes back to the composer below
+          if (!chat.bounced409) {
             chat.bounced409 = true;
             setAgentLive(chat.agent, { busy: true });
             input.value = content;
+            chat.pendingImages = imagesToSend;
+            renderImagePreviews(chatId);
+            notify(null);   // delivered into the running turn instead
             return sendInterjection(chatId);
           }
+          notify(new Error('busy'));
           chat.bounced409 = false;
           if (!input.value) input.value = content;
-          chat.pendingImages = imagesToSend;
+          chat.pendingImages = fallback ? [...imagesToSend, ...(chat.pendingImages || [])] : imagesToSend;   // a fallback send: in front of what was attached since
           renderImagePreviews(chatId);
           appendSystemNotice(chatId, `⛔ ${chat.display || chat.agent} is busy; it will finish first. Your message was not sent — it is back in the input box.`, 'warning');
           return;
@@ -9028,9 +9725,11 @@
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
+        notify(null);
 
         const { text: fullResponse, images: responseImages, toolActivity, partial, steps: responseSteps } = await streamResponseSolo(response, msgId, chatId, chat.agent);
         if (!partial) setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), chat.sentAtMs));
+        if (!partial && chat.voiceTurn) { chat.voiceTurn = false; voiceAutoRead(chat, msgId, fullResponse); }
 
         // Success! Save response and clean up
         if (responseImages.length > 0) {
@@ -9050,6 +9749,7 @@
         setAgentStatus(chat.agent, '');
         delete chat.lastMsgId;
       } catch (err) {
+        notify(err);   // a no-op once the hub took the message
         // Detect user-initiated cancel: AbortError, or any error while status is already idle
         // (cancelRequest sets idle before the fetch error propagates)
         const hubRecovered = chat.forceReattach === true;
@@ -9974,6 +10674,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 askFromStream(oc2, chatId);
                 continue;
               }
+              if (oc2.type === 'voice_mood') { if (typeof voiceCallSseMood === 'function') voiceCallSseMood(chatId, oc2.mood); continue; }   // the agent's mood word, already stripped from the text
               // Session ID tracking
               if (oc2.type === 'session_id') {
                 const chat = chats[chatId];
@@ -10107,7 +10808,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 const runningTool = (oc2.tool_call_id && currentStep.tools.find(t => t.toolCallId === oc2.tool_call_id && t.status === 'running')) || currentStep.tools.find(t => t.status === 'running');
                 if (runningTool) {
                   runningTool.result = oc2.output || '';
-                  runningTool.status = oc2.output?.startsWith('Error') ? 'error' : 'done';
+                  runningTool.status = oc2.output?.startsWith('Error') || toolResultDenied(oc2.output) ? 'error' : 'done';
                   if (runningTool.startedAt) runningTool.durationMs = Date.now() - runningTool.startedAt;
                 }
                 lastEventWasToolResult = true;
@@ -10133,6 +10834,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 // The turn ended before the agent could take the interjection in.
                 // It is saved and will be delivered with the next message.
                 const noticeEl = document.getElementById(`interject-notice-${chatId}`);
+                if (oc2.note) {   // a picture on a Codex turn: queued for the round right after the current step (the notice stays until it is received)
+                  const waiting = `⏳ Interjection with a picture: ${oc2.note}`;
+                  if (noticeEl) noticeEl.textContent = waiting; else appendSystemNotice(chatId, waiting);
+                  continue;
+                }
                 const text = `⏭️ Interjection arrived too late for this turn — it will be delivered with your next message`;
                 if (noticeEl) { noticeEl.textContent = text; noticeEl.removeAttribute('id'); }
                 else appendSystemNotice(chatId, text);
@@ -10370,6 +11076,2699 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
     }
     
+    // Voice helpers: shared with lib/ui-voice.js, kept in step by test/ui-voice.test.js.
+    // ── voice helpers (begin) ──
+    const VOICE_STORE_KEY = 'hub-voice';
+    const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
+    const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
+    const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
+    const VOICE_END_PAUSES = [800, 1200, 2000, 4000];   // 'Pause before I'm done': short / normal / long / very long, in ms
+    const VOICE_CONTINUE_WAITS = [1500, 3000, 5000, 8000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
+    const VOICE_ECHO_HOLDS = [0, 600, 1000, 1500];   // 'Echo guard': how long the raised barge-in thresholds stay after playback stops, in ms (0 = off)
+    const VOICE_WAKE_QUIET_MS = [10000, 20000, 45000];   // 'Go back to standby after': how long a quiet call stays awake (default 20000)
+    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder', loudnessBt: 'normal' };
+    function voiceCleanSpeed(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
+    }
+    function voiceSpeedLabel(v) { return voiceCleanSpeed(v).toFixed(2) + 'x'; }
+    // Agent-level voice defaults: an admin sets them on an agent; a device follows them for every key the person has not set there.
+    const VOICE_AGENT_DEFAULT_KEYS = ['endPause', 'continueWait', 'interruptSensitivity', 'voiceSpeed'];
+    const VOICE_PRESETS = { patient: { endPause: 4000, continueWait: 8000, interruptSensitivity: 30, voiceSpeed: 0.9 } };
+    function voiceCleanAgentDefaults(raw) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+      const out = {};
+      const preset = typeof raw.preset === 'string' && Object.prototype.hasOwnProperty.call(VOICE_PRESETS, raw.preset) ? raw.preset : '';
+      if (preset) out.preset = preset;
+      const num = (v) => typeof v === 'number' && Number.isFinite(v);
+      const valid = { endPause: (v) => VOICE_END_PAUSES.includes(v), continueWait: (v) => VOICE_CONTINUE_WAITS.includes(v), interruptSensitivity: num, voiceSpeed: num };
+      // each key: the raw value when it is valid, else the preset's (a bad value never cancels the preset)
+      for (const k of VOICE_AGENT_DEFAULT_KEYS) {
+        const v = valid[k](raw[k]) ? raw[k] : (preset ? VOICE_PRESETS[preset][k] : undefined);
+        if (v === undefined) continue;
+        out[k] = k === 'interruptSensitivity' ? Math.max(0, Math.min(100, v)) : k === 'voiceSpeed' ? voiceCleanSpeed(v) : v;
+      }
+      return out;
+    }
+    function voiceMarkChosen(prefs, keys) {
+      const p = Object.assign({}, prefs);
+      const have = Array.isArray(p.chosen) ? p.chosen : [];
+      p.chosen = VOICE_AGENT_DEFAULT_KEYS.filter(k => have.includes(k) || (Array.isArray(keys) && keys.includes(k)));
+      return p;
+    }
+    // The prefs a call with this agent uses: the agent's default for each key the person has not set on this device.
+    function voiceEffectivePrefs(prefs, agentDefaults) {
+      const p = Object.assign({}, prefs);
+      const d = voiceCleanAgentDefaults(agentDefaults);
+      const chosen = Array.isArray(p.chosen) ? p.chosen : [];
+      for (const k of VOICE_AGENT_DEFAULT_KEYS) {
+        if (d[k] !== undefined && !chosen.includes(k) && p[k] === VOICE_DEFAULT_PREFS[k]) p[k] = d[k];
+      }
+      return p;
+    }
+    // The spoken-text cleaner's pieces (see voiceSpeechText).
+    const VOICE_SYMBOLS_RE = new RegExp('[\\u2190-\\u2BFF\\u2022\\u00B7]', 'g');
+    const VOICE_NUM_EN_DASH_RE = new RegExp('(\\d)\\s*\\u2013\\s*(?=\\d)', 'g');
+    const VOICE_DASH_RE = new RegExp('\\s*[\\u2013\\u2014\\u2015]\\s*', 'g');
+    const VOICE_DQUOTE_RE = new RegExp('[\\u201C\\u201D"]', 'g');
+    const VOICE_SQUOTE_RE = new RegExp('[\\u2018\\u2019]', 'g');
+    const VOICE_ELLIPSIS_RE = new RegExp('\\u2026', 'g');
+    const VOICE_SEG = '\\/[\\w.@+~-]*[\\w@+~-]';
+    function voicePathsToWords(t) {
+      const isPath = (m) => (m.match(/\//g) || []).length >= 2 || /\.[A-Za-z0-9]{1,8}$/.test(m);
+      t = t.replace(/(^|[^\w/.~@-])[A-Za-z]:\\[^\s]*[^\s.,;:!?)\]'"]/g, '$1a file path');
+      t = t.replace(new RegExp('(^|[^\\w/.~@-])((?:~|\\.{1,2})(?:' + VOICE_SEG + ')+|(?:' + VOICE_SEG + '){2,}|' + VOICE_SEG + '(?=\\.[A-Za-z0-9]{1,8}\\b)(?:\\.[A-Za-z0-9]{1,8})?)', 'g'),
+        (m, lead, p) => lead + (isPath(p) || /^\/[\w@+~-]*\.\w/.test(p) ? 'a file path' : p));
+      t = t.replace(new RegExp('(^|[^\\w/.~@-])((?=[\\w.-]*[A-Za-z])[\\w.-]+(?:' + VOICE_SEG + ')+)', 'g'), (m, lead, p) => lead + (isPath(p) ? 'a file path' : p));
+      return t;
+    }
+    function voiceCleanInline(s) {
+      s = s.replace(/\u2212\s*(?=\d)/g, 'minus ').replace(/\u2212/g, ' minus ');   // the minus sign is read, before the math-sign strip drops it
+      s = s.replace(/[\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}\p{Cf}\u{FE0E}\u{FE0F}\u{20E3}]/gu, '')   // emoji and zero-width marks
+        .replace(VOICE_SYMBOLS_RE, ' ');                                    // arrows, math signs, boxes, dingbats, bullets
+      s = s.replace(/[-=]+>|<[-=]+/g, ' ');                                 // -> => <-
+      s = s.replace(VOICE_NUM_EN_DASH_RE, '$1 to ');                        // 5 en dash 10
+      s = s.replace(VOICE_DASH_RE, ', ');                                   // en/em dash as a separator: a pause
+      s = s.replace(/(^|[\s(])-{1,2}(?=[A-Za-z])/g, '$1');                  // a command-line flag: -x --force
+      s = s.replace(/(^|[\s(])-(?=\d)/g, '$1minus ');
+      s = s.replace(/\s*-{2,}\s*/g, ', ').replace(/\s+-(?=\s|$)/g, ', ');   // -- or a lone dash between spaces
+      s = s.replace(/(^|\s)-+(?=\S)/g, '$1').replace(/(\S)-+(?=\s|$)/g, '$1');   // a dash stuck to the edge of a word (hyphens inside words stay)
+      s = s.replace(/&/g, ' and ').replace(/%/g, ' percent').replace(/@/g, ' at ').replace(/=+/g, ' equals ');
+      s = s.replace(/(\d)\s*\+\s*(?=\d)/g, '$1 plus ').replace(/(\d)\+(?=\W|$)/g, '$1 plus');
+      s = s.replace(/<\/?[A-Za-z][^<>]*>/g, ' ');
+      s = s.replace(/[*`#~^|\\<>+{}\[\]()]/g, ' ').replace(/\//g, ' ');
+      s = s.replace(/\b_+|_+\b/g, '').replace(/_/g, ' ');
+      s = s.replace(VOICE_DQUOTE_RE, '').replace(VOICE_SQUOTE_RE, '\'').replace(VOICE_ELLIPSIS_RE, '...');
+      s = s.replace(/\s+/g, ' ').trim();
+      for (let i = 0; i < 3; i++) s = s.replace(/\s+([,.;:!?])/g, '$1').replace(/([,;:])(?:\s*[,;:])+/g, '$1').replace(/([.!?])\s*,/g, '$1').replace(/,\s*([.!?])/g, '$1');
+      return s.replace(/^[,;:\s]+/, '').replace(/,$/, '').trim();
+    }
+    function voiceSpeechText(markdown, open) {
+      let t = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+      let hadDetails = false;
+      t = t.replace(/(^|\n)[ \t]*(```|~~~)[\s\S]*?(\n[ \t]*(```|~~~)[^\n]*|$)/g, (m, lead) => { hadDetails = true; return lead; });
+      t = t.split('\n').filter(l => { if (/^\s*\|/.test(l)) { hadDetails = true; return false; } return true; }).join('\n');
+      t = t.replace(/!?\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');
+      t = t.replace(/(?:https?:\/\/|www\.)[^\s<>)\]]*[^\s<>)\].,;:!?'"]/gi, 'a link');
+      t = voicePathsToWords(t);
+      // Lines -> blocks: a heading, a list item or a bold-only line is a block of its own, a blank line or a rule ends one,
+      // other lines of a paragraph join. Each block is cleaned and ends with a full stop, so lines never run together.
+      const blocks = [];
+      let cur = '', curOwn = false;
+      const flush = () => { if (cur.trim()) blocks.push(cur.trim()); cur = ''; curOwn = false; };
+      for (const raw of t.split('\n')) {
+        const line = raw.replace(/\s+$/, '');
+        if (!line.trim() || /^\s*([-*_=~])(?:\s*\1){2,}\s*$/.test(line)) { flush(); continue; }
+        let s = line.replace(/^[ \t]*(?:>[ \t]?)+/, '');
+        const head = /^[ \t]*#{1,6}[ \t]+/.test(s), item = /^[ \t]*(?:[-*+•]|\d+[.)])[ \t]+/.test(s);
+        s = s.replace(/^[ \t]*#{1,6}[ \t]+/, '').replace(/^[ \t]*(?:[-*+•]|\d+[.)])[ \t]+/, '');
+        const bold = /^\s*(\*\*|__)[^*_]+\1\s*:?\s*$/.test(s);
+        if (head || item || bold) { flush(); cur = s; curOwn = true; }
+        else if (!cur) cur = s;
+        else if (curOwn && !/^(?:[ \t]{2,}|\t)/.test(raw)) { flush(); cur = s; }   // text under a heading or item starts its own block
+        else cur += ' ' + s;
+      }
+      flush();
+      const done = [];
+      blocks.forEach((raw, i) => {
+        const b = voiceCleanInline(raw);
+        if (!b) return;
+        // open: the text is still being written, so its last block is not finished and gets no full stop yet
+        done.push(/[.!?:;]["')’\]]*$/.test(b) || (open && i === blocks.length - 1) ? b : b + '.');
+      });
+      t = done.join(' ').replace(/\s+/g, ' ').trim();
+      return hadDetails ? (t + VOICE_DETAILS_NOTE).trim() : t;
+    }
+    function voiceSplitLong(s, max) {
+      const out = [];
+      let rest = s.trim();
+      while (rest.length > max) {
+        const win = rest.slice(0, max);
+        let cut = Math.max(win.lastIndexOf(';'), win.lastIndexOf(',')) + 1;
+        if (cut < max * 0.3) cut = win.lastIndexOf(' ') + 1;
+        if (cut < max * 0.3) cut = win.lastIndexOf(' ') > 0 ? win.lastIndexOf(' ') + 1 : max;
+        out.push(rest.slice(0, cut).trim());
+        rest = rest.slice(cut).trim();
+      }
+      if (rest) out.push(rest);
+      return out.filter(Boolean);
+    }
+    function voiceSentences(text, max = 220) {
+      const s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+      const limit = Number.isFinite(max) && max >= 1 ? Math.floor(max) : 220;
+      const parts = [];
+      let start = 0;
+      const re = /[.!?]+["')\]]*(?=\s|$)/g;
+      let m;
+      while ((m = re.exec(s))) {
+        if (m[0].replace(/["')\]]/g, '') === '.') {
+          const before = s.slice(start, m.index).split(' ').pop().replace(/^[("'\[]+/, '').toLowerCase();
+          if (VOICE_ABBREVIATIONS.has(before)) continue;
+        }
+        parts.push(s.slice(start, m.index + m[0].length));
+        start = m.index + m[0].length;
+      }
+      parts.push(s.slice(start));
+      const out = [];
+      for (const p of parts) for (const q of voiceSplitLong(p, limit)) out.push(q);
+      return out;
+    }
+    function voiceResample(float32, fromRate, toRate) {
+      const src = float32 instanceof Float32Array ? float32 : Float32Array.from(float32 || []);
+      if (fromRate === toRate || !(fromRate > 0) || !(toRate > 0)) return new Float32Array(src);
+      const n = Math.max(0, Math.round(src.length * toRate / fromRate));
+      const out = new Float32Array(n);
+      const step = fromRate / toRate;
+      for (let i = 0; i < n; i++) {
+        const pos = i * step, i0 = Math.floor(pos), frac = pos - i0;
+        const a = src[Math.min(i0, src.length - 1)], b = src[Math.min(i0 + 1, src.length - 1)];
+        out[i] = a + (b - a) * frac;
+      }
+      return out;
+    }
+    function voiceEncodeWav(float32, sampleRate) {
+      const n = float32.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+      const tag = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+      tag(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE'); tag(12, 'fmt ');
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+      tag(36, 'data'); v.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) {
+        const x = Math.max(-1, Math.min(1, float32[i] || 0));
+        v.setInt16(44 + i * 2, Math.round(x < 0 ? x * 32768 : x * 32767), true);
+      }
+      return buf;
+    }
+    function voiceDecodeWav(arrayBuffer) {
+      const v = new DataView(arrayBuffer), len = arrayBuffer.byteLength;
+      const tag = (o) => String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3));
+      if (len < 12 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') throw new Error('not a WAV file');
+      let channels = 0, sampleRate = 0, bits = 0, dataAt = -1, dataLen = 0, o = 12;
+      while (o + 8 <= len) {
+        const id = tag(o), size = v.getUint32(o + 4, true);
+        if (id === 'fmt ' && o + 24 <= len) {
+          if (v.getUint16(o + 8, true) !== 1) throw new Error('only PCM WAV is supported');
+          channels = v.getUint16(o + 10, true); sampleRate = v.getUint32(o + 12, true); bits = v.getUint16(o + 22, true);
+        } else if (id === 'data') {
+          dataAt = o + 8; dataLen = Math.min(size, len - dataAt); break;
+        }
+        o += 8 + size + (size % 2);
+      }
+      if (!channels || dataAt < 0) throw new Error('WAV has no audio');
+      if (bits !== 16 || channels > 2) throw new Error('only 16-bit mono or stereo WAV is supported');
+      const frames = Math.floor(dataLen / (2 * channels)), samples = new Float32Array(frames);
+      for (let i = 0; i < frames; i++) {
+        let sum = 0;
+        for (let c = 0; c < channels; c++) sum += v.getInt16(dataAt + (i * channels + c) * 2, true);
+        samples[i] = sum / channels / 32768;
+      }
+      return { sampleRate, samples };
+    }
+    function voiceLevelDb(float32) {
+      if (!float32 || !float32.length) return -100;
+      let sum = 0;
+      for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
+      const rms = Math.sqrt(sum / float32.length);
+      if (!(rms > 0)) return -100;
+      return Math.max(-100, 20 * Math.log10(rms));
+    }
+    function voiceGainFromSlider(v) {
+      const x = Number.isFinite(Number(v)) ? Math.max(0, Math.min(100, Number(v))) : 50;
+      return Math.pow(10, ((x - 50) / 50 * 12) / 20);
+    }
+    function voiceSliderFromGain(g) {
+      if (!(g > 0)) return 0;
+      return Math.max(0, Math.min(100, 50 + 20 * Math.log10(g) / 12 * 50));
+    }
+    function voiceMeterPercent(db) {
+      if (!Number.isFinite(db)) return db === Infinity ? 100 : 0;
+      return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+    }
+    function voiceCleanPrefs(raw) {
+      const p = Object.assign({}, VOICE_DEFAULT_PREFS);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return p;
+      for (const k of ['micLevel', 'interruptSensitivity']) {
+        if (typeof raw[k] === 'number' && Number.isFinite(raw[k])) p[k] = Math.max(0, Math.min(100, raw[k]));
+      }
+      if (raw.mode === 'handsfree' || raw.mode === 'tap') p.mode = raw.mode;
+      if (VOICE_END_PAUSES.includes(raw.endPause)) p.endPause = raw.endPause;
+      if (typeof raw.voiceSpeed === 'number' && Number.isFinite(raw.voiceSpeed)) p.voiceSpeed = voiceCleanSpeed(raw.voiceSpeed);
+      if (VOICE_CONTINUE_WAITS.includes(raw.continueWait)) p.continueWait = raw.continueWait;
+      if (VOICE_ECHO_HOLDS.includes(raw.echoHold)) p.echoHold = raw.echoHold;
+      if (typeof raw.thinkingVolume === 'number' && Number.isFinite(raw.thinkingVolume)) p.thinkingVolume = Math.round(Math.max(0, Math.min(1, raw.thinkingVolume)) * 100) / 100;
+      for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity', 'thinkingSound', 'keepAlive']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
+      if (typeof raw.loudness === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, raw.loudness)) p.loudness = raw.loudness;
+      if (typeof raw.loudnessBt === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, raw.loudnessBt)) p.loudnessBt = raw.loudnessBt;
+      // wake: per agent { on, phrase, quietMs }; the key exists only when the raw prefs carried an object (the defaults have none)
+      if (raw.wake && typeof raw.wake === 'object' && !Array.isArray(raw.wake)) {
+        const wake = {};
+        let n = 0;
+        for (const name of Object.keys(raw.wake)) {
+          if (n >= 50) break;
+          const e = raw.wake[name];
+          if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(name) || !e || typeof e !== 'object' || Array.isArray(e)) continue;
+          wake[name] = { on: e.on === true, phrase: voiceCleanWakePhrase(e.phrase), quietMs: VOICE_WAKE_QUIET_MS.includes(e.quietMs) ? e.quietMs : 20000 };
+          n++;
+        }
+        p.wake = wake;
+      }
+      // chosen: the agent-default keys the person set on this device (the key exists only when the raw prefs carried an array)
+      if (Array.isArray(raw.chosen)) p.chosen = VOICE_AGENT_DEFAULT_KEYS.filter(k => raw.chosen.includes(k));
+      return p;
+    }
+    // The wake phrase of an agent from the cleaned prefs: { on, phrase, quietMs } or null.
+    function voiceWakeForAgent(prefs, agent) {
+      try {
+        const w = prefs && prefs.wake;
+        if (!w || typeof w !== 'object' || typeof agent !== 'string' || !Object.prototype.hasOwnProperty.call(w, agent)) return null;
+        const e = w[agent];
+        if (!e || typeof e !== 'object') return null;
+        return { on: e.on === true, phrase: typeof e.phrase === 'string' ? e.phrase : '', quietMs: VOICE_WAKE_QUIET_MS.includes(e.quietMs) ? e.quietMs : 20000 };
+      } catch { return null; }
+    }
+    const VOICE_WAKE_GREETINGS = new Set(['hey', 'hi', 'hello', 'hay', 'ok', 'okay', 'yo', 'oh', 'um', 'uh', 'so', 'well']);
+    // The phrase tidied for display, '' when it is not usable: 1-4 words of letters, digits or apostrophes (1-20 characters each), at most
+    // 60 characters, and at least one word of 3+ characters that is not a greeting or filler.
+    function voiceCleanWakePhrase(text) {
+      if (typeof text !== 'string') return '';
+      const s = text.replace(/\s+/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+      if (!s || s.length > 60) return '';
+      const words = s.split(' ').map(w => w.replace(/[,.]/g, '')).filter(Boolean);
+      if (words.length < 1 || words.length > 4) return '';
+      if (!words.every(w => /^[\p{L}\p{N}'’]{1,20}$/u.test(w))) return '';
+      if (!words.some(w => w.replace(/['’]/g, '').length >= 3 && !VOICE_WAKE_GREETINGS.has(w.toLowerCase().replace(/['’]/g, '')))) return '';
+      return words.join(' ');
+    }
+    // Tokens for matching: lowercase, apostrophes removed, everything else that is not a letter or digit separates; each token keeps the
+    // offset just after its last character in the original text.
+    function voiceWakeTokens(text) {
+      const s = String(text), out = [];
+      let cur = '', end = 0;
+      for (let i = 0; i < s.length;) {
+        const ch = String.fromCodePoint(s.codePointAt(i)), at = i;
+        i += ch.length;
+        if (ch === '\'' || ch === '’' || ch === '‘' || ch === 'ʼ') continue;
+        if (/[\p{L}\p{N}]/u.test(ch)) { cur += ch.toLowerCase(); end = at + ch.length; }
+        else if (cur) { out.push({ t: cur, end }); cur = ''; }
+      }
+      if (cur) out.push({ t: cur, end });
+      return out;
+    }
+    function voiceWakeDistance(a, b) {
+      let prev = []; for (let j = 0; j <= b.length; j++) prev.push(j);
+      for (let i = 1; i <= a.length; i++) {
+        const cur = [i];
+        for (let j = 1; j <= b.length; j++) cur.push(Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)));
+        prev = cur;
+      }
+      return prev[b.length];
+    }
+    const VOICE_WAKE_FILLERS = new Set(['um', 'uh', 'umm', 'uhh', 'er', 'erm', 'ah', 'hmm', 'hm', 'mm', 'oh', 'so', 'ok', 'okay', 'well', 'and', 'yeah']);
+    // Does the utterance start with the wake phrase? -> { match, rest }: rest is the original text after the phrase without the pause
+    // punctuation. Leading fillers are skipped (not one that is the phrase's own first word); the first 1..words+2 tokens are joined and
+    // compared to the phrase without spaces by edit distance (0 up to 6 letters, 1 up to 12, 2 above), the first letters must agree.
+    function voiceWakeMatch(text, phrase) {
+      const none = { match: false, rest: '' };
+      try {
+        if (typeof text !== 'string' || !text) return none;
+        const clean = voiceCleanWakePhrase(phrase);
+        if (!clean) return none;
+        const pt = voiceWakeTokens(clean).map(x => x.t);
+        if (!pt.length) return none;
+        const ut = voiceWakeTokens(text);
+        let i = 0;
+        while (i < ut.length && VOICE_WAKE_FILLERS.has(ut[i].t) && ut[i].t !== pt[0]) i++;
+        if (i >= ut.length || ut[i].t[0] !== pt[0][0]) return none;
+        const P = pt.join(''), tol = P.length <= 6 ? 0 : P.length <= 12 ? 1 : 2;
+        // Every span of 1 .. k+2 words is tried and the closest one wins (fewest edits, then the word count nearest the phrase's), so
+        // "Hey Watchman AI" heard in full is never taken as "Hey Watchman" plus a message starting "AI".
+        let U = '', best = null;
+        for (let n = 1; n <= pt.length + 2 && i + n <= ut.length; n++) {
+          U += ut[i + n - 1].t;
+          if (Math.abs(U.length - P.length) > tol) continue;
+          const dist = voiceWakeDistance(U, P);
+          if (dist > tol) continue;
+          const off = Math.abs(n - pt.length);
+          if (!best || dist < best.dist || (dist === best.dist && off < best.off)) best = { dist, off, end: ut[i + n - 1].end };
+        }
+        if (!best) return none;
+        return { match: true, rest: text.slice(best.end).replace(/^[\s,.!?;:\-–—…"'“”‘’()\[\]]+/, '').trimEnd() };
+      } catch { return none; }
+    }
+    function voiceLoadPrefs(storage) {
+      try { return voiceCleanPrefs(JSON.parse(storage.getItem(VOICE_STORE_KEY))); } catch { return voiceCleanPrefs(null); }
+    }
+    function voiceSavePrefs(storage, prefs) {
+      const merged = voiceCleanPrefs(Object.assign({}, voiceLoadPrefs(storage), prefs));
+      try { storage.setItem(VOICE_STORE_KEY, JSON.stringify(merged)); } catch { /* storage full or blocked: keep going */ }
+      return merged;
+    }
+    function voiceIsStopCommand(text) {
+      const t = String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+      return VOICE_STOP_COMMANDS.has(t);
+    }
+    // The words that put an awake call back to standby: 'that's all', 'that is all', 'go to sleep', each with 'thanks' or 'thank you' after.
+    const VOICE_SLEEP_COMMANDS = new Set(['thats all', 'that is all', 'go to sleep'].flatMap(c => [c, c + ' thanks', c + ' thank you']));
+    function voiceIsSleepCommand(text) {
+      const t = String(text == null ? '' : text).toLowerCase().replace(/['’]/g, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+      return VOICE_SLEEP_COMMANDS.has(t);
+    }
+    // Does what was said sound unfinished? True when it ends on a joining word (and, but, to, the, ...), ends with a comma, a
+    // dash or an ellipsis, or is a fragment of one or two words without final punctuation. A whole sentence or a question is
+    // finished, and so are stop commands and short answers (now, later, skip, yes, no, ok). A final full stop does not make a
+    // fragment finished ("... difficult to."): Whisper puts one on a cut-off piece, so it is stripped before the last word is checked.
+    // Strong joining words leave a thought open even with a final full stop ("... difficult to."); weak ones (pronouns, "is",
+    // "that"...) end plenty of whole sentences ("Do it.", "That is what it is."), so they count only without final punctuation.
+    const VOICE_JOINING_WORDS = new Set(['and', 'also', 'but', 'or', 'because', 'to', 'the', 'a', 'an', 'of', 'when', 'if', 'with', 'from', 'about', 'like',
+      'my', 'your', 'our', 'their', 'very', 'um', 'uh', 'er', 'hmm']);
+    const VOICE_WEAK_JOINING_WORDS = new Set(['that', 'which', 'who', 'i', 'you', 'we', 'it', 'is', 'are', 'was', 'this', 'these', 'then', 'just', 'really', 'so', 'as', 'at', 'in', 'on', 'by', 'than', 'for']);
+    const VOICE_JOINING_PHRASES = ['you know', 'i mean'];
+    const VOICE_COMPLETE_SHORT = new Set(['stop', 'cancel', 'now', 'later', 'skip', 'yes', 'no', 'yeah', 'yep', 'nope', 'ok', 'okay', 'sure', 'thanks', 'hello', 'hi', 'go ahead', 'thank you', 'never mind', 'nevermind']);
+    function voiceSoundsUnfinished(text) {
+      const raw = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+      if (!raw) return false;
+      if (/[,–—…-]["')\]]*$/.test(raw) || /\.{3}["')\]]*$/.test(raw)) return true;   // a comma, a dash, an ellipsis: more is coming
+      if (/[!?\uFF01\uFF1F]["')\]]*$/.test(raw)) return false;                                                    // a question or an exclamation is whole
+      const body = raw.replace(/[.\u3002\s]+$/, '');
+      const words = body.toLowerCase().replace(/[^\p{L}\p{N}'’\s]/gu, ' ').replace(/’/g, '\'').split(/\s+/).filter(Boolean);
+      if (!words.length) return false;
+      if (voiceIsStopCommand(raw) || VOICE_COMPLETE_SHORT.has(words.join(' '))) return false;
+      const last = words[words.length - 1].replace(/^'+|'+$/g, '');
+      if (VOICE_JOINING_WORDS.has(last) || (words.length >= 2 && VOICE_JOINING_PHRASES.includes(words.slice(-2).join(' ')))) return true;
+      if (VOICE_WEAK_JOINING_WORDS.has(last) && !/[.\u3002]['")\]]*$/.test(raw)) return true;                         // weak: only without a full stop
+      return words.length <= 2 && !/[.\u3002]["')\]]*$/.test(raw);                                        // one or two words and no full stop
+    }
+    function voicePickLocalVoice(voices, lang) {
+      const pre = String(lang || 'en').toLowerCase();
+      const local = Array.from(voices || []).filter(v => v && v.localService === true && String(v.lang || '').toLowerCase().startsWith(pre));
+      return local.find(v => v.default === true) || local[0] || null;
+    }
+    async function voiceWaitLocalVoice(synth, lang, waitMs = 1000) {
+      if (!synth || typeof synth.getVoices !== 'function') return null;
+      let list = synth.getVoices() || [];
+      if (!list.length && typeof synth.addEventListener === 'function') {
+        list = await new Promise((resolve) => {
+          let done = false, timer = null;
+          const fin = () => {
+            if (done) return;
+            done = true; clearTimeout(timer);
+            try { synth.removeEventListener('voiceschanged', fin); } catch { /* gone */ }
+            resolve(synth.getVoices() || []);
+          };
+          timer = setTimeout(fin, waitMs);
+          synth.addEventListener('voiceschanged', fin);
+        });
+      }
+      return voicePickLocalVoice(list, lang);
+    }
+    function voiceMicGuard() {
+      const g = { pending: false, gen: 0 };
+      g.begin = () => { if (g.pending) return -1; g.pending = true; return g.gen; };
+      g.cancel = () => { g.gen++; };
+      g.fail = () => { g.pending = false; };
+      g.settle = (token, mic) => {
+        g.pending = false;
+        if (token === g.gen) return true;
+        try { if (mic && mic.close) mic.close(); } catch { /* already closed */ }
+        return false;
+      };
+      return g;
+    }
+    // The test sound of the 'Car or Bluetooth check': a 120 ms linear sweep from 500 Hz to 3000 Hz (inside narrowband car audio, 300-3400 Hz),
+    // Hann-windowed so it does not click, peak 0.5.
+    function voiceCarChirp(rate) {
+      const r = Number(rate) > 0 ? Number(rate) : 16000, n = Math.max(2, Math.round(r * 0.12)), dur = n / r, f0 = 500, f1 = 3000;
+      const out = new Float32Array(n);
+      let peak = 0;
+      for (let i = 0; i < n; i++) {
+        const t = i / r, phase = 2 * Math.PI * (f0 * t + (f1 - f0) * t * t / (2 * dur));
+        out[i] = Math.sin(phase) * 0.5 * (1 - Math.cos(2 * Math.PI * i / (n - 1)));
+        peak = Math.max(peak, Math.abs(out[i]));
+      }
+      if (peak > 0) for (let i = 0; i < n; i++) out[i] = out[i] * 0.5 / peak;
+      return out;
+    }
+    // Where does the test sound come back? ref = the chirp, rec = microphone samples that start when the chirp was scheduled to start, both at
+    // `rate`. Searches the lags 0..opts.maxDelayMs (default 1500) for the peak of the NORMALISED cross-correlation (divided by
+    // sqrt(energy of ref x energy of the recorded window)): a coarse pass over every few samples (so 48 kHz input stays fast), then the exact
+    // values around the best one. -> { delayMs, echoDb, confidence }: confidence is the normalised peak (0..1), delayMs the lag in ms (null when
+    // confidence < 0.3: no echo found), echoDb the RMS level of the recorded window at that lag (-Infinity for silence).
+    function voiceEchoAnalysis(ref, rec, rate, opts) {
+      const o = opts || {}, none = { delayMs: null, echoDb: -Infinity, confidence: 0 };
+      const n = ref ? ref.length : 0, m = rec ? rec.length : 0;
+      if (!(n > 0) || !(Number(rate) > 0)) return none;
+      const maxMs = Number.isFinite(Number(o.maxDelayMs)) && Number(o.maxDelayMs) >= 0 ? Number(o.maxDelayMs) : 1500;
+      const maxLag = Math.min(Math.floor(maxMs * rate / 1000), m - n);
+      if (maxLag < 0) return none;
+      let eref = 0;
+      for (let i = 0; i < n; i++) eref += ref[i] * ref[i];
+      if (!(eref > 0)) return none;
+      const pre = new Float64Array(m + 1);   // running sums of rec squared: the energy of any window in O(1)
+      for (let i = 0; i < m; i++) pre[i + 1] = pre[i] + rec[i] * rec[i];
+      const energy = (lag) => pre[lag + n] - pre[lag];
+      const step = Math.max(1, Math.round(rate / 12000));   // 48 kHz: every 4th sample; 16 kHz and 8 kHz: every sample
+      const cols = Math.ceil(n / step), refD = new Float32Array(cols);
+      for (let j = 0; j < cols; j++) refD[j] = ref[j * step];
+      let bestLag = 0, best = -Infinity;
+      for (let lag = 0; lag <= maxLag; lag += step) {
+        const e = energy(lag);
+        if (!(e > 0)) continue;
+        let s = 0;
+        for (let j = 0; j < cols; j++) s += refD[j] * rec[lag + j * step];
+        const score = s * step / Math.sqrt(eref * e);
+        if (score > best) { best = score; bestLag = lag; }
+      }
+      let conf = 0;
+      const lo = Math.max(0, bestLag - Math.max(4, step)), hi = Math.min(maxLag, bestLag + Math.max(4, step));
+      for (let lag = lo; lag <= hi; lag++) {
+        const e = energy(lag);
+        if (!(e > 0)) continue;
+        let s = 0;
+        for (let i = 0; i < n; i++) s += ref[i] * rec[lag + i];
+        const score = s / Math.sqrt(eref * e);
+        if (score > conf) { conf = score; bestLag = lag; }
+      }
+      conf = Math.max(0, Math.min(1, conf));
+      const rms = Math.sqrt(Math.max(0, energy(bestLag)) / n);
+      const echoDb = rms > 0 ? Math.round(20 * Math.log10(rms) * 10) / 10 : -Infinity;
+      return { delayMs: conf < 0.3 ? null : Math.round(bestLag / rate * 1000), echoDb, confidence: conf, lag: bestLag };   // lag: the same in samples (exact)
+    }
+    function voiceEchoHoldLabel(ms) { return ms === 0 ? 'off' : (ms / 1000) + ' s'; }   // 'off', '0.6 s', '1 s', '1.5 s'
+    function voiceCarMedian(list) {
+      const a = list.slice().sort((x, y) => x - y), k = a.length >> 1;
+      return a.length % 2 ? a[k] : (a[k - 1] + a[k]) / 2;
+    }
+    // What the car test decides. analyses = voiceEchoAnalysis results (usually 3), current = { echoHold, interruptSensitivity }. The sound was heard
+    // when at least two analyses found an echo. Then the Echo guard becomes the smallest hold (0 is not a candidate) of at least the median delay
+    // + 300 ms (else the longest), and a loud echo lowers the interrupt sensitivity (never raises it): echo above -30 dB: at most 30; above -45 dB: at most 40.
+    // -> { echoHold, interruptSensitivity, delayMs, echoDb, heard, line } (line: what is said and shown).
+    function voiceCarCheckResult(analyses, current) {
+      const cur = current || {};
+      const curHold = VOICE_ECHO_HOLDS.includes(cur.echoHold) ? cur.echoHold : 600;
+      const curSens = Number.isFinite(Number(cur.interruptSensitivity)) ? Number(cur.interruptSensitivity) : 50;
+      const found = Array.from(analyses || []).filter(a => a && typeof a === 'object' && a.delayMs !== null && Number.isFinite(Number(a.delayMs)));
+      if (found.length < 2) {
+        return { echoHold: curHold, interruptSensitivity: curSens, delayMs: null, echoDb: null, heard: false,
+          line: 'No echo of the test sound reached the microphone. Echo guard stays at ' + voiceEchoHoldLabel(curHold) + '.' };
+      }
+      const delayMs = Math.round(voiceCarMedian(found.map(a => Number(a.delayMs))));
+      const echoDb = Math.round(voiceCarMedian(found.map(a => (Number.isNaN(Number(a.echoDb)) ? -Infinity : Number(a.echoDb)))) * 10) / 10;
+      const echoHold = VOICE_ECHO_HOLDS.filter(h => h > 0).find(h => h >= delayMs + 300) || 1500;
+      const interruptSensitivity = echoDb > -30 ? Math.min(curSens, 30) : echoDb > -45 ? Math.min(curSens, 40) : curSens;
+      const lowered = interruptSensitivity < curSens;
+      return { echoHold, interruptSensitivity, delayMs, echoDb, heard: true,
+        line: 'The echo comes back after ' + delayMs + ' ms. Echo guard set to ' + voiceEchoHoldLabel(echoHold) + (lowered ? ', interrupt sensitivity lowered to ' + interruptSensitivity + '.' : '.') };
+    }
+    // The Car or Bluetooth check plays the chirp three times, VOICE_CAR_AT seconds after the start, and records until VOICE_CAR_END. The chirps are 1.5 s
+    // apart and the search for an echo stops at VOICE_CAR_MAX_DELAY_MS (1.2 s), so the window of one chirp never holds the echo of the next.
+    const VOICE_CAR_AT = [0.5, 2.0, 3.5], VOICE_CAR_END = 5.2, VOICE_CAR_MAX_DELAY_MS = 1200;
+    // The analysis of one check recording. mic = the microphone samples and ref = a copy of the chirp (silence elsewhere) from the SAME buffers of the SAME
+    // audio processor, so both share one clock and index i of one is the same instant as index i of the other. The chirp onsets are found in ref
+    // (confidence > 0.9, in samples): the first in a window shorter than the spacing (so it can only be the first chirp), each next one within
+    // +-200 ms of where the spacing puts it. Then for each onset the microphone slice [onset, onset + VOICE_CAR_MAX_DELAY_MS + chirp length] is
+    // analysed. -> always VOICE_CAR_AT.length voiceEchoAnalysis results; a chirp whose onset was not found gives { delayMs: null, echoDb: -Infinity, confidence: 0 }.
+    function voiceCarAnalyse(mic, ref, chirp, rate) {
+      const count = VOICE_CAR_AT.length, none = () => ({ delayMs: null, echoDb: -Infinity, confidence: 0 }), out = [];
+      const n = chirp ? chirp.length : 0, r = Number(rate);
+      const onsets = [];   // null where a chirp was not found
+      if (ref && n > 0 && r > 0) {
+        const firstMs = Math.max(200, ((VOICE_CAR_AT[1] - VOICE_CAR_AT[0]) || 1.5) * 1000 - 100);
+        const a0 = voiceEchoAnalysis(chirp, ref, r, { maxDelayMs: firstMs });
+        let prev = a0.delayMs !== null && a0.confidence > 0.9 ? a0.lag : null;
+        onsets.push(prev);
+        for (let i = 1; i < count; i++) {
+          if (prev === null) { onsets.push(null); continue; }
+          const from = Math.max(0, prev + Math.round((VOICE_CAR_AT[i] - VOICE_CAR_AT[i - 1]) * r) - Math.round(0.2 * r));
+          const a = voiceEchoAnalysis(chirp, ref.subarray(from), r, { maxDelayMs: 400 });
+          prev = a.delayMs !== null && a.confidence > 0.9 ? from + a.lag : null;
+          onsets.push(prev);
+        }
+      }
+      const span = Math.round(VOICE_CAR_MAX_DELAY_MS / 1000 * r) + n;
+      for (let i = 0; i < count; i++) {
+        if (i >= onsets.length || onsets[i] === null || !mic) { out.push(none()); continue; }
+        out.push(voiceEchoAnalysis(chirp, mic.subarray(onsets[i], onsets[i] + span), r, { maxDelayMs: VOICE_CAR_MAX_DELAY_MS }));
+      }
+      return out;
+    }
+    // A looping WAV that keeps Chrome for Android holding full audio focus (other apps' music stays paused) without a sound anyone hears.
+    // Chrome counts a stream as playing only at or above -72.25 dBFS of power (services/audio kSilenceThresholdDBFS); below that it treats the tab
+    // as silent and the music app takes the audio back within a second. White noise loud enough for that (-60 dBFS) is a hiss on a phone
+    // speaker; noise below it (+/-1, about -90 dBFS) let the music resume. So: a 20 Hz tone at -60 dBFS. Chrome measures it before the phone's own
+    // speaker processing, so it counts; it is far below hearing at 20 Hz, and a phone speaker cannot play it. Whole cycles per loop, so the loop has no click.
+    const VOICE_FOCUS_HZ = 20, VOICE_FOCUS_DBFS = -60;
+    function voiceFocusWav(seconds = 6, sampleRate = 8000) {
+      const cycles = Math.max(1, Math.round(seconds * VOICE_FOCUS_HZ));
+      const n = Math.max(1, Math.round(cycles * sampleRate / VOICE_FOCUS_HZ)), bytes = n * 2;
+      const out = new Uint8Array(44 + bytes), dv = new DataView(out.buffer);
+      const tag = (o, s) => { for (let i = 0; i < s.length; i++) out[o + i] = s.charCodeAt(i); };
+      tag(0, 'RIFF'); dv.setUint32(4, 36 + bytes, true); tag(8, 'WAVE'); tag(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+      dv.setUint32(24, sampleRate, true); dv.setUint32(28, sampleRate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); tag(36, 'data'); dv.setUint32(40, bytes, true);
+      const peak = 32767 * Math.pow(10, VOICE_FOCUS_DBFS / 20) * Math.SQRT2;   // RMS of a sine = peak / sqrt(2)
+      for (let i = 0; i < n; i++) dv.setInt16(44 + i * 2, Math.round(peak * Math.sin(2 * Math.PI * cycles * i / n)), true);
+      return out;
+    }
+    // A hidden looping <audio> element playing that tone for the length of a call, so other apps pause instead of just ducking. start() must run inside the user's tap.
+    function voiceCreateAudioFocus(opts) {
+      const o = opts || {};
+      const doc = o.doc, urlApi = o.URL, BlobCtor = o.Blob;
+      let el = null, src = null, running = false, gen = 0;   // gen: a play() of an earlier start never changes a later one's state
+      function make() {
+        if (el) return el;
+        if (!doc || typeof doc.createElement !== 'function') return null;
+        if (!src) {
+          if (!urlApi || typeof urlApi.createObjectURL !== 'function' || typeof BlobCtor !== 'function') return null;
+          src = urlApi.createObjectURL(new BlobCtor([voiceFocusWav()], { type: 'audio/wav' }));
+        }
+        const a = doc.createElement('audio');
+        if (!a) return null;
+        a.loop = true; a.preload = 'auto'; a.playsInline = true;
+        if (typeof a.setAttribute === 'function') { a.setAttribute('playsinline', ''); a.setAttribute('aria-hidden', 'true'); }
+        a.muted = false; a.volume = 1;
+        if (a.style) a.style.display = 'none';
+        a.src = src;
+        if (doc.body && typeof doc.body.appendChild === 'function') doc.body.appendChild(a);
+        el = a;
+        return el;
+      }
+      return {
+        start() {
+          if (running) return Promise.resolve(true);
+          try {
+            const a = make();
+            if (!a || typeof a.play !== 'function') return Promise.resolve(false);
+            const my = ++gen;
+            const p = a.play();
+            running = true;
+            return Promise.resolve(p).then(() => my === gen, () => { if (my === gen) running = false; return false; });
+          } catch { running = false; return Promise.resolve(false); }
+        },
+        stop() {
+          gen++;
+          running = false;
+          if (!el) return;
+          try { if (typeof el.pause === 'function') el.pause(); } catch {}
+          try { el.currentTime = 0; } catch {}
+        },
+        get running() { return running; },
+      };
+    }
+    // Loudness boost for call replies (dB): the speech engine leaves headroom, and Android's call mode lowers the output further.
+    const VOICE_LOUDNESS = { normal: 0, louder: 9, loudest: 14 };
+    // The same levels when the hub already sent the voice normalised to -16 dBFS (header X-Voice-Normalized: 1): less boost is needed.
+    const VOICE_LOUDNESS_NORMALIZED = { normal: 0, louder: 4, loudest: 8 };
+    function voiceLoudnessDb(name, normalized) {
+      const t = normalized ? VOICE_LOUDNESS_NORMALIZED : VOICE_LOUDNESS;
+      return typeof name === 'string' && Object.prototype.hasOwnProperty.call(t, name) ? t[name] : t.louder;
+    }
+    // Which output a call's sound goes to, from the open microphone's label (the output follows the input route during a call): 'bluetooth' for
+    // a Bluetooth headset, hands-free or car input, else 'speaker' (the phone or computer speaker; a wired headset counts as speaker). Android's
+    // Chrome names inputs "Bluetooth headset", "Speakerphone", "Wired headset", "Headset earpiece", "USB audio".
+    function voiceOutputKind(label) {
+      return typeof label === 'string' && /bluetooth|hands[- ]?free|\bhfp\b|airpods|\bcar\b|car audio/i.test(label) ? 'bluetooth' : 'speaker';
+    }
+    // The loudness level name for an output kind: the speaker pref, or the Bluetooth / car pref.
+    function voiceLoudnessFor(prefs, kind) {
+      const p = prefs && typeof prefs === 'object' ? prefs : {};
+      const v = kind === 'bluetooth' ? p.loudnessBt : p.loudness;
+      return typeof v === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, v) ? v : (kind === 'bluetooth' ? 'normal' : 'louder');
+    }
+    // The output ceiling: no sample leaves the call chain louder than this (-1 dBFS).
+    const VOICE_CEILING = Math.pow(10, -1 / 20);
+    // The compressor's automatic makeup gain at threshold -3 dB, ratio 20, knee 0 is (3 - 3/20) * 0.6 = 1.71 dB; the trim takes it back off,
+    // so speech below the threshold plays at exactly the chosen loudness. (At -6 dB the compressor held speech near -18.5 dBFS with peaks
+    // near -4 and left the headroom to the ceiling unused; the curve below is what guarantees the ceiling.)
+    const VOICE_LIMIT_THRESHOLD_DB = -3;
+    const VOICE_LIMIT_TRIM_DB = -1.71;
+    // A fixed safety curve after the compressor: straight up to 0.7 (-3.1 dBFS), then a smooth bend that never reaches the ceiling,
+    // even for inputs past full scale (a WaveShaper holds its last value there). This is what makes the limit hard: the compressor
+    // alone lets the first milliseconds of a peak through.
+    function voiceCeilingCurve(n) {
+      const len = Math.max(3, n | 0), k = 0.7, room = VOICE_CEILING - k;
+      const curve = new Float32Array(len);
+      for (let i = 0; i < len; i++) {
+        const x = (i / (len - 1)) * 2 - 1, a = Math.abs(x);
+        const y = a <= k ? a : k + room * Math.tanh((a - k) / room);
+        curve[i] = x < 0 ? -y : y;
+      }
+      return curve;
+    }
+    // One chain per AudioContext: gain -> compressor -> trim -> ceiling curve -> analyser -> destination. Returns null when the context cannot build it.
+    function voiceCreateLoudness(ctx) {
+      if (!ctx) return null;
+      try { if (ctx.__voiceLoudness) return ctx.__voiceLoudness; } catch {}
+      if (typeof ctx.createGain !== 'function' || typeof ctx.createDynamicsCompressor !== 'function') return null;
+      let gain, comp, trim, shaper = null, an = null, db = voiceLoudnessDb('louder'), buf = null;
+      try {
+        gain = ctx.createGain();
+        comp = ctx.createDynamicsCompressor();
+        const set = (prm, v) => { try { if (prm && typeof prm === 'object') prm.value = v; } catch {} };
+        set(comp.threshold, VOICE_LIMIT_THRESHOLD_DB); set(comp.knee, 0); set(comp.ratio, 20); set(comp.attack, 0.001); set(comp.release, 0.1);
+        trim = ctx.createGain();
+        set(trim.gain, Math.pow(10, VOICE_LIMIT_TRIM_DB / 20));
+        if (typeof ctx.createWaveShaper === 'function') {
+          try { shaper = ctx.createWaveShaper(); shaper.curve = voiceCeilingCurve(4097); shaper.oversample = 'none'; } catch { shaper = null; }
+        }
+        if (typeof ctx.createAnalyser === 'function') { try { an = ctx.createAnalyser(); an.fftSize = 2048; } catch { an = null; } }
+        gain.connect(comp);
+        comp.connect(trim);
+        let last = trim;
+        if (shaper) { last.connect(shaper); last = shaper; }
+        if (an) { last.connect(an); an.connect(ctx.destination); } else last.connect(ctx.destination);
+      } catch { return null; }
+      let levelName = 'louder', normalized = false;
+      const apply = () => { db = voiceLoudnessDb(levelName, normalized); try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
+      apply();
+      const chain = {
+        input: gain,
+        setLevel(name) { levelName = name; apply(); },
+        setNormalized(flag) { normalized = !!flag; apply(); },
+        get normalized() { return normalized; },
+        get gainDb() { return db; },
+        meter() {
+          try {
+            if (!an || typeof an.getFloatTimeDomainData !== 'function') return null;
+            if (!buf || buf.length !== (an.fftSize || 2048)) buf = new Float32Array(an.fftSize || 2048);
+            an.getFloatTimeDomainData(buf);
+            let sum = 0, peak = 0;
+            for (let i = 0; i < buf.length; i++) { const v = buf[i]; sum += v * v; const a = Math.abs(v); if (a > peak) peak = a; }
+            const toDb = (x) => (x > 0 ? Math.max(-120, 20 * Math.log10(x)) : -120);
+            return { rmsDb: toDb(Math.sqrt(sum / buf.length)), peakDb: toDb(peak) };
+          } catch { return null; }
+        },
+      };
+      try { ctx.__voiceLoudness = chain; } catch {}
+      return chain;
+    }
+    // ── voice helpers (end) ──
+
+    // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
+        // ── voice call (begin) ──
+    const VOICE_ECHO_HOLD_MS = 600, VOICE_CALL_LEAD_IN_MS = 300, VOICE_KEEPALIVE_DB = -70;
+    const VOICE_MIC_LOST_LINE = 'I lost the microphone. Tap the button to try it again.';
+    const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
+    const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
+    // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
+    const VOICE_THINKING_LINES = ['I\'m considering what you just said.', 'Still thinking about that.', 'Give me a moment, I\'m working through it.'];
+    const VOICE_CALL_FILLERS = new Set(['uh', 'um', 'umm', 'uhh', 'er', 'erm', 'ah', 'hmm', 'hm', 'mm', 'mmm', 'huh']);
+    const VOICE_CALL_ORDINALS = [['first', '1st', 'one', '1'], ['second', '2nd', 'two', '2'], ['third', '3rd', 'three', '3'], ['fourth', '4th', 'four', '4'], ['fifth', '5th', 'five', '5']];
+    function voiceCallNorm(text) {
+      return String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+    }
+    function voiceJoinOr(list) {
+      const a = Array.from(list || []).filter(Boolean);
+      return a.length < 2 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' or ' + a[a.length - 1];
+    }
+    function voiceDecisionWord(text) {
+      const t = voiceCallNorm(text);
+      if (!t || t.split(' ').length > 6) return null;
+      if (/\b(later|after|afterwards|not now|wait|hold on)\b/.test(t)) return 'later';
+      if (/\b(skip|no|nope|decline|cancel it|drop it|dismiss)\b/.test(t)) return 'skip';
+      if (/\b(now|go ahead|yes|yeah|yep|sure)\b/.test(t)) return 'now';
+      return null;
+    }
+    function voiceMatchChoice(text, options) {
+      const labels = Array.from(options || []).map(o => (typeof o === 'string' ? o : (o && (o.label || o.value || o.text)) || '')).filter(Boolean);
+      const t = voiceCallNorm(text);
+      if (!t || !labels.length) return null;
+      const norm = labels.map(voiceCallNorm);
+      let i = norm.indexOf(t);
+      if (i >= 0) return labels[i];
+      const byLen = norm.map((n, k) => k).filter(k => norm[k]).sort((a, b) => norm[b].length - norm[a].length);
+      for (const k of byLen) if ((' ' + t + ' ').includes(' ' + norm[k] + ' ')) return labels[k];
+      const words = t.split(' ');
+      for (const w of words) {
+        const k = VOICE_CALL_ORDINALS.findIndex(set => set.includes(w));
+        if (k >= 0 && k < labels.length) return labels[k];
+      }
+      i = norm.findIndex(n => n && n.split(' ')[0] === words[0] && words[0].length > 1);
+      return i >= 0 ? labels[i] : null;
+    }
+    function voiceStatusLine(item) {
+      const s = (typeof item === 'string' ? item : item && (item.tool || item.name || item.label || item.kind || item.type) || '').toString().toLowerCase();
+      if (/consult|agent|delegate/.test(s)) return 'Asking another agent.';
+      if (/web|search|fetch|browse|url/.test(s)) return 'Searching the web.';
+      if (/bash|shell|command|exec|terminal|\brun/.test(s)) return 'Running a command.';
+      if (/read|file|grep|glob|\bls\b|view/.test(s)) return 'Reading a file.';
+      return 'Working on it.';
+    }
+    function voiceCallMedian(list) {
+      const a = Array.from(list || []).filter(x => Number.isFinite(x) && x > -100).sort((x, y) => x - y);
+      if (!a.length) return null;
+      const m = a.length >> 1;
+      return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+    }
+    function voiceRoomCheck(speechDb, silenceDb, currentMicLevel) {
+      const cur = Number.isFinite(currentMicLevel) ? Math.max(0, Math.min(100, currentMicLevel)) : 50;
+      const speech = voiceCallMedian(speechDb), noise = voiceCallMedian(silenceDb);
+      if (speech === null) return { micLevel: cur, interruptSensitivity: 50 };
+      const micLevel = Math.round(Math.max(0, Math.min(100, cur + (-20 - speech) * 50 / 12)));
+      const gap = noise === null ? 60 : speech - noise;
+      const interruptSensitivity = Math.round(Math.max(10, Math.min(90, 10 + (gap - 10) / 30 * 60)));
+      return { micLevel, interruptSensitivity };
+    }
+    function voiceVadThresholds(interruptSensitivity, playing) {
+      if (!playing) return { positiveSpeechThreshold: 0.5, negativeSpeechThreshold: 0.35, minSpeechFrames: 3 };
+      const s = Number.isFinite(Number(interruptSensitivity)) ? Math.max(0, Math.min(100, Number(interruptSensitivity))) : 50;
+      const positive = 0.9 - 0.4 * s / 100;
+      return { positiveSpeechThreshold: +positive.toFixed(3), negativeSpeechThreshold: +(positive - 0.15).toFixed(3), minSpeechFrames: Math.round(8 - 5 * s / 100) };
+    }
+    // On a call only the spoken lead of a reply is read aloud: at most this many sentences.
+    const VOICE_LEAD_MAX_SENTENCES = 3;
+    // A 'detail' line ends the spoken lead: a table row starting with |, a code fence, a heading, a list item, a rule, or a bold label
+    // (bold text ending in a colon: **Details:** or **Details**:). A bold sentence (**Yes, it finished.**) is an answer and is read.
+    const VOICE_DETAIL_LINE_RE = /^[ \t]*(?:\||```|~~~|#{1,6}[ \t]|[-*+•◦▪‣][ \t]|\d+[.)][ \t]|([-*_])(?:[ \t]*\1){2,}[ \t]*$|(\*\*|__)[^*_\n]+(?::\2|\2[ \t]*:)[ \t]*$)/;
+    // A table's delimiter row, also without outer pipes (--- | ---); the line before it is the table's header.
+    const VOICE_TABLE_RULE_RE = /^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$/;
+    // voiceSpokenLead(markdown, done) -> { lead, cut }: the text before the first detail line; cut is true when such a line was found.
+    // While the reply streams (done false) the last line is still being typed: a detail-looking last line, or a line with a pipe whose next
+    // line has not arrived (it may be a table header), is held back (cut false, so nothing before it is taken as finished).
+    function voiceSpokenLead(markdown, done) {
+      const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+      const lines = text.split('\n'), last = lines.length - 1;
+      const before = (i) => (i > 0 ? lines.slice(0, i).join('\n') + '\n' : '');
+      // A line with a pipe keeps its text before the first pipe as lead text, read like text still being typed (openTail): its complete
+      // sentences count, an unfinished last one does not. That is exactly the lead the line had before the pipe arrived, so a sentence
+      // already spoken is never taken back, whether the line turns out to be prose or a table header (whose cells are never read).
+      const pipeKeep = (i) => before(i) + lines[i].slice(0, lines[i].indexOf('|'));
+      for (let i = 0; i < lines.length; i++) {
+        const open = !done && i === last;
+        if (VOICE_DETAIL_LINE_RE.test(lines[i]) || VOICE_TABLE_RULE_RE.test(lines[i])) return { lead: before(i), cut: !open };
+        if (lines[i].includes('|')) {
+          if (open || (!done && i + 1 === last)) return { lead: pipeKeep(i), cut: false };
+          if (i + 1 <= last && VOICE_TABLE_RULE_RE.test(lines[i + 1])) return { lead: pipeKeep(i), cut: true, openTail: true };
+        }
+      }
+      return { lead: text, cut: false };
+    }
+    function voiceReplySentences(markdown, done) {
+      const note = voiceSpeechText('| a |');
+      const sp = voiceSpokenLead(markdown, done);
+      const finished = (!!done || sp.cut) && !sp.openTail;   // a cut lead is complete; an uncut reply may still be streaming; text before a table header's pipe is read as typed
+      let lead = sp.lead;
+      // While streaming, a last line that is only the start of a detail line (a lone marker, digits, an unclosed bold) is not lead text yet.
+      if (!finished) lead = lead.replace(/(^|\n)[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?|(?:\*\*|__)[^\n]*)$/, '$1');
+      let t = voiceSpeechText(lead, !finished), hasNote = sp.cut;
+      if (t === note) { t = ''; hasNote = true; } else if (t.endsWith(' ' + note)) { t = t.slice(0, -note.length).trim(); hasNote = true; }
+      let sentences = voiceSentences(t).filter(Boolean);
+      if (!finished && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(lead))) sentences.pop();
+      if (sentences.length > VOICE_LEAD_MAX_SENTENCES) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
+      return { sentences, note: hasNote ? note : '' };
+    }
+    function voiceCreateCall(deps) {
+      const d = deps || {};
+      const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {}, reply() {}, mic() {}, micLost() {} }, d.ui);   // ui.mic(info): the open microphone; ui.micLost(bool): it was lost / is back; ui.thinkingPulse(event) is optional; ui.reply(kind): 'start' | 'end' | 'drop' | 'resume' (a reply's boundaries, for the display's reaction)
+      const server = d.server || {}, vad = d.vad || {};
+      const now = () => d.now();
+      const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
+      let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
+      let personSpeaking = false, speechEndAt = null, awaitingReply = false, cutSkip = false;
+      let lastText = '', spokenCount = 0, noteSpoken = false, lastStatusAt = null;
+      let queue = [], current = null, speaking = false, gen = 0;
+      let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
+      let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
+      let callId = null, startP = null, sttPending = 0, speechAnn = null, cutRec = null, lastDone = false;
+      // Joining pieces of one sentence: lastSeg is the latest speech segment (its transcript may still be pending), curCand the
+      // earlier segment a new one may join, segActive that a segment has begun and has not ended.
+      let lastSeg = null, curCand = null, segActive = false;
+      // The one spoken line after a long wait: when something was last spoken, when the running turn began, whether a line was
+      // said since, which lines this wait has used. The thinking sound: its 2 s timer and whether it is playing.
+      let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
+      let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0, thinkDueAt = 0, thinkSeed = 0;
+      let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
+      // Recording (deps.recorder, only for an agent that keeps recordings; without it none of this acts). recDecided: the decision for the speech now
+      // under way was made (at its begin); recOn: it is being recorded. Nothing said in standby is ever recorded: the decision is made at speech begin.
+      // deps.recordTranscript(seq, text) and deps.recordReplyText(text) hand the saved text to the page.
+      const recorder = d.recorder || null;
+      let recDecided = false, recOn = false, replyRecorded = false;
+      function recBegin() {
+        if (!recorder || recDecided) return;
+        recDecided = true;
+        if (!standby) { recOn = true; quiet(() => recorder.begin()); }
+      }
+      function recDrop() {
+        recDecided = false;
+        if (recOn) { recOn = false; quiet(() => recorder.drop()); }
+      }
+      // deps.keepAlive ({ start(), stop() }, optional): an inaudible sound that keeps a Bluetooth / car audio route awake. It starts with the call and
+      // the first spoken line of the call waits until VOICE_CALL_LEAD_IN_MS after that (the route needs a moment to open, or the first syllable is lost).
+      let leadInUntil = 0, keepAliveOn = false, micLost = false;
+      let linkLost = false, linkWasLost = false, linkDropped = false;   // the connection to the server is lost (setLinkLost): speech is dropped, nothing is reported as an error
+      // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost); it is dropped when
+      // that differs from the count when it is transcribed or sent, so nothing heard around an outage reaches the agent after the link is back.
+      let linkGen = 0, segLinkGen = 0;
+      // linkDropped is kept per outage: set when the outage begins (a sendable utterance is being spoken or is in flight: inflight holds every
+      // utterance from its end until its transcript was sent or dropped), when a sendable one ends during it, and at its end (one started
+      // during it is still going). A stale result found later never sets it (it was counted at the start). Standby speech is never sendable.
+      const inflight = new Set();
+      const isSendable = (sb, seq) => !(standby || (sb && seq === wakeSeq));
+      const prefs = () => { const p = quiet(() => d.prefs && d.prefs()); return p && typeof p === 'object' ? p : {}; };
+      // 'Wait for me to go on': how long a sentence that sounds unfinished waits for the next piece.
+      const continueWait = () => { const n = Number(prefs().continueWait); return Number.isFinite(n) && n >= 0 ? n : VOICE_CALL_CONTINUE_MS; };
+
+      // The thinking clock: ONE scheduler for what is heard and what is shown. When the person's turn was sent (and nothing is being
+      // transcribed or asked) it starts: a small silent pulse at once (strength 0.35, visual only), the first full pulse VOICE_CALL_THINK_MS
+      // later (2 s, the first audible one), then a quiet random pop cluster (lib/ui-voice-thinking.js: voiceThinkingCluster, seeded) about
+      // every 1.5 s of pops + a 4-6 s gap (the gap is measured from the END of the cluster). Every pulse is one event (the contract is in
+      // lib/ui-voice-thinking.js: at, kind, durationMs, pops [{ tMs, strength, freqHz, decayMs }], and the old swell fields attackMs, decayMs,
+      // strength) handed to ui.thinkingPulse(event) (the call display's orb), and when the sound is on (thinkingSound not false; do-not-disturb never mutes it, with any display) to
+      // thinking.pulse(event) as well; `at` is the performance.now() time (d.perfNow, else d.now) the audio is scheduled to start (+20 ms);
+      // thinking.pulse(event) may move event.at to the time the pulse is really heard (audio output clock) before the picture gets it.
+      // A thinking adapter without pulse() (older) is started with start() at the first audible pulse and runs its own interval.
+      // The plan of a wait: variant 'A' (airy; the default build), 'B' (round bubble) or 'C' (sparse single pop), the seed and the gap
+      // range come from deps.thinkingPlan { variant, seed, gapMinMs, gapSpreadMs } (a fixed seed makes a wait repeatable; no seed: a new random
+      // one for each wait). No saved setting. Without voiceThinkingCluster (lib not loaded) the old single swell every 2.5 s is used.
+      // Switching the sound off or on, or do-not-disturb, only changes what is audible: the clock and its phase go on. The clock stops
+      // at once when the reply speaks, the person speaks, an announcement plays, the turn ends or the call ends.
+      const perfNow = () => { const f = d.perfNow || d.now; return Number(f()); };
+      // thinkVisual: a display really takes the pulses right now (ui.thinkingPulse exists and ui.thinkingWanted(), when the page has it, says
+      // a view is shown). With NO display (None, hidden, ended) the clock is exactly the plain thinking sound of before: nothing is armed
+      // when the sound is off, do-not-disturb does not mute it, switching it off ends the wait and switching it on starts a fresh 2 s one,
+      // and the sound's own pulse() is called without an event.
+      const thinkVisual = () => typeof (d.ui && d.ui.thinkingPulse) === 'function' && !(typeof d.ui.thinkingWanted === 'function' && !quiet(() => d.ui.thinkingWanted()));
+      const thinkAudible = () => !!d.thinking && prefs().thinkingSound !== false;   // the same in every display (None, Orb, Character): do-not-disturb does not mute the sound
+      function thinkQuiet() { return ended || !awaitingReply || sttPending || pendingAsk || speaking || personSpeaking || pendingAnnounce || queue.length; }
+      function muteThinking() {   // the sound only; the clock stays
+        if (!thinkingOn) return;
+        thinkingOn = false;
+        quiet(() => d.thinking.stop());
+        if (!speaking) quiet(() => vad.setPlaybackActive(false));
+      }
+      function stopThinking() {
+        if (thinkTimer !== null) { quiet(() => d.clearTimer(thinkTimer)); thinkTimer = null; }
+        thinkStep = 0;
+        muteThinking();
+      }
+      // Pulse 0 (the small silent one) happens at t0, pulse 1 at t0 + 2000, and every next one at the previous one's time + its
+      // cluster length + its own gap (all on the controller's clock, so the audio mapping of event.at never makes it drift).
+      const thinkPlan = (k) => {
+        if (typeof voiceThinkingCluster !== 'function') return null;
+        const tp = d.thinkingPlan || {};
+        return quiet(() => voiceThinkingCluster({ seed: thinkSeed, index: k - 1, variant: tp.variant, gapMinMs: tp.gapMinMs, gapSpreadMs: tp.gapSpreadMs })) || null;
+      };
+      function thinkTick() {
+        thinkTimer = null;
+        if (thinkQuiet()) { stopThinking(); return; }
+        const k = thinkStep++, vis = thinkVisual();
+        const plan = k > 0 ? thinkPlan(k) : null;
+        const ev = plan ? voiceThinkingEvent(plan, perfNow() + 20)
+          : { at: perfNow() + 20, kind: k === 0 ? 'tick' : 'cluster', pops: [], attackMs: 250, decayMs: 1000, strength: k === 0 ? 0.35 : 1 };
+        thinkDueAt = k === 0 ? thinkT0 + VOICE_CALL_THINK_MS : thinkDueAt + (plan ? plan.durationMs + plan.gapAfterMs : 2500);
+        if (k > 0 && thinkAudible()) {
+          if (!thinkingOn) {
+            thinkingOn = true;
+            quiet(() => vad.setPlaybackActive(true));   // the pulse is playback: it must not trigger the barge-in detector
+            if (typeof d.thinking.pulse !== 'function') quiet(() => d.thinking.start());
+          }
+          if (!vis) { if (typeof d.thinking.pulse === 'function') quiet(() => d.thinking.pulse()); }   // no display: the plain sound, no event
+          else if (typeof d.thinking.pulse === 'function') {
+            // The sound schedules the pulse once on the audio clock and moves ev.at to when it is heard (it mutates ev or returns one);
+            // the picture then gets the same event. A sound that did not play (false) leaves the controller's clock and is not audible.
+            const at0 = ev.at, r = quiet(() => d.thinking.pulse(ev));
+            if (r && typeof r === 'object' && r !== ev && Number.isFinite(Number(r.at))) ev.at = Number(r.at);
+            const now = perfNow();
+            if (!Number.isFinite(ev.at) || ev.at < now - 100 || ev.at > now + 2000) ev.at = at0;   // never a stale or wild time
+            if (r === false) muteThinking();
+          }
+        } else muteThinking();
+        if (vis) quiet(() => ui.thinkingPulse(ev));
+        if (thinkTimer === null && !ended) thinkTimer = d.setTimer(thinkTick, Math.max(0, thinkDueAt - perfNow()));
+      }
+      function armThinking() {
+        if (ended || thinkTimer !== null || thinkStep > 0 || !awaitingReply || sttPending || pendingAsk || (!thinkVisual() && !thinkAudible())) return;
+        thinkT0 = perfNow();
+        const sd = Number(d.thinkingPlan && d.thinkingPlan.seed);
+        thinkSeed = Number.isFinite(sd) ? sd : Math.floor(Math.random() * 4294967296);
+        thinkTick();
+      }
+      // The person's settings changed (the in-chat voice panel): re-read them now. Muting stops the sound, not the clock.
+      function setPrefs() {
+        const p = prefs();
+        if (!thinkVisual() && !thinkAudible()) stopThinking();   // no display: the sound switched off ends the wait (a fresh one starts when it is on again)
+        else if (!thinkAudible()) muteThinking();
+        armThinking();
+        if (d.thinking && d.thinking.setVolume && Number.isFinite(Number(p.thinkingVolume))) quiet(() => d.thinking.setVolume(Math.max(0, Math.min(1, Number(p.thinkingVolume)))));
+      }
+
+      function clearStill() { if (stillTimer !== null) { quiet(() => d.clearTimer(stillTimer)); stillTimer = null; } }
+      // One spoken line (VOICE_THINKING_LINES) when a turn runs and nothing was said for 20 s; not again until something else is said.
+      function armStill() {
+        if (ended || stillTimer !== null || stillSaid || !awaitingReply) return;
+        const since = Math.max(lastSpokenAt === null ? -Infinity : lastSpokenAt, turnAt === null ? -Infinity : turnAt);
+        const wait = Number.isFinite(since) ? Math.max(200, VOICE_CALL_STILL_MS - (now() - since)) : VOICE_CALL_STILL_MS;
+        stillTimer = d.setTimer(checkStill, wait);
+      }
+      function checkStill() {
+        stillTimer = null;
+        if (ended || stillSaid || !awaitingReply) return;
+        if (speaking || personSpeaking || sttPending || pendingAsk || pendingAnnounce || queue.length) return;   // settle() arms it again when it is quiet
+        const since = Math.max(lastSpokenAt === null ? -Infinity : lastSpokenAt, turnAt === null ? -Infinity : turnAt);
+        if (Number.isFinite(since) && now() - since < VOICE_CALL_STILL_MS) { armStill(); return; }
+        stillSaid = true;
+        let fresh = VOICE_THINKING_LINES.filter(l => !stillUsed.includes(l));
+        if (!fresh.length) { stillUsed = []; fresh = VOICE_THINKING_LINES; }
+        const line = fresh[0]; stillUsed.push(line);   // never the same line twice in one wait
+        enqueue(line, 'still');
+      }
+      // Standby (deps.wake(), optional): { phrase, quietMs, local } while the person has the wake phrase on, else null (switched off).
+      // local is true only when speech is known to be recognized on this computer. Standby shows state 'standby' (ui.state gets the
+      // phrase as its second argument), drops everything said that does not start with the phrase and is left again when the phrase is
+      // heard; an awake call that stays quiet for quietMs goes back to standby. Wake mode starts only with local true, and once on it fails
+      // closed: if local turns false the call stays in (or returns to) standby and nothing heard there is even transcribed. Only the
+      // person switching it off (wake() -> null) makes it an ordinary call. Without deps.wake nothing here acts.
+      const wake = () => { if (!d.wake) return null; const w = quiet(() => d.wake()); return w && typeof w === 'object' ? w : null; };
+      const wakePhrase = () => { const w = wake(); return w && typeof w.phrase === 'string' ? w.phrase : ''; };
+      let standby = false, wakeMode = false, wakeSeq = 0, quietTimer = null, chimeTimer = null, statePhrase = '';
+      let capWake = null, heardShown = false;   // heardShown: a 'Heard' line is on screen (cleared when the call goes back to standby)   // { sb, seq } taken when the person starts to speak: what counts is whether the call was in standby then
+      const wakeIdle = () => !awaitingReply && !speaking && !personSpeaking && !sttPending && !queue.length && !current && !pendingAsk && !pendingAnnounce;
+      function clearQuiet() { if (quietTimer !== null) { quiet(() => d.clearTimer(quietTimer)); quietTimer = null; } }
+      function enterStandby() {
+        if (ended) return;
+        standby = true; clearQuiet(); stopThinking();
+        if (heardShown) { heardShown = false; quiet(() => ui.heard('')); }   // the last message does not stay on screen while waiting
+        if (!speaking) setState('standby');
+      }
+      function leaveStandby() { standby = false; clearQuiet(); settle(); }
+      function setState(name) {
+        const phrase = name === 'standby' ? wakePhrase() : '';
+        if (name === state && phrase === statePhrase) return;   // (the phrase of a standby can change with the setting)
+        state = name; statePhrase = phrase; quiet(() => ui.state(name, phrase));
+      }
+      function armQuiet() {
+        const w = wake();
+        if (!wakeMode || standby || state !== 'listening' || !wakeIdle()) { clearQuiet(); return; }
+        if (quietTimer !== null) return;
+        const ms = w && VOICE_WAKE_QUIET_MS.includes(w.quietMs) ? w.quietMs : 20000;
+        quietTimer = d.setTimer(() => {
+          quietTimer = null;
+          if (ended) return;
+          if (wakeMode && !standby && wakeIdle()) enterStandby(); else settle();
+        }, ms);
+      }
+      function settle() {
+        if (ended) return;
+        if (!speaking && !personSpeaking && queue.length) { clearQuiet(); runQueue(); return; }   // lines that waited while the person spoke are read now
+        setState(speaking ? 'speaking' : standby ? 'standby' : personSpeaking ? 'hearing' : awaitingReply ? 'thinking' : 'listening');
+        armQuiet();
+        pumpAnnounce();
+        armStill();
+        if (awaitingReply && !speaking && !personSpeaking && !standby) armThinking();   // a long quiet stretch inside a running turn gets the sound too
+      }
+      function runAfter(item) { if (item && item.after) { const f = item.after; item.after = null; quiet(f); } }
+      function enqueue(text, kind, after, onStart, again) {
+        if (ended || !text) return;
+        queue.push({ text, kind, after, onStart, again });
+        if (!speaking && !personSpeaking) runQueue();   // never start reading while the person is speaking: the line waits
+      }
+      async function runQueue() {
+        const my = gen;
+        speaking = true; stopThinking(); setState('speaking'); quiet(() => vad.setPlaybackActive(true));
+        const lead = leadInUntil; leadInUntil = 0;   // only before the first speak of the call
+        if (lead && now() < lead) {
+          await new Promise((resolve) => { d.setTimer(resolve, lead - now()); });
+          if (my !== gen) return;
+        }
+        while (queue.length && my === gen && !personSpeaking) {
+          current = queue.shift();
+          if (current.onStart) { const f = current.onStart; current.onStart = null; quiet(f); }   // the line really starts playing
+          let ok = true;
+          lastSpokenAt = now();
+          try { ok = await d.speak(current.text); } catch { ok = false; }
+          if (my !== gen) return;
+          const item = current; current = null;
+          lastSpokenAt = now();
+          if (item.kind !== 'still') stillSaid = false;   // something new was said: the next long silence may be filled again
+          if (ok === false) {
+            // A failed or cut line drops what waits behind it, except a microphone line ('mic': lost / back / switched), which is
+            // tried ONCE more: sending the person's last words stops playback, and that must not swallow "I lost the microphone".
+            // Only the line that was cut uses up its retry; mic lines still waiting keep theirs (each gets at most two real attempts).
+            const retryItem = item.kind === 'mic' && !item.retried;
+            const keep = (retryItem ? [item] : []).concat(queue.filter(q => q.kind === 'mic'));
+            for (const q of queue) if (!keep.includes(q)) runAfter(q);
+            if (retryItem) item.retried = true;
+            queue = keep;
+            if (retryItem) continue;   // its after() runs when it is really done
+          }
+          runAfter(item);
+        }
+        if (my !== gen) return;
+        speaking = false; quiet(() => vad.setPlaybackActive(false));
+        maybeReplyEnd();
+        settle();
+      }
+      // Cuts what is being read at once. True when part of a reply was cut (the rest of that reply is then skipped).
+      // byPerson: the person's real speech cut it, so the thresholds drop at once (no echo hold-over over their own words), and the
+      // microphone lines ('mic': lost / back / switched) are kept: they are about the call, not the reply, and are said when the person
+      // stops (the words that cut them may be the last ones heard before the microphone went).
+      function cancelSpeaking(byPerson) {
+        const items = (current ? [current] : []).concat(queue);
+        const hadReply = items.some(i => i.kind === 'reply');
+        // a mic line that was PLAYING when cut is kept once (it is not replayed on every barge-in); waiting ones are kept as they are
+        const keep = byPerson ? items.filter(i => i.kind === 'mic' && !i.again && !(i === current && i.retried)) : [];
+        if (current && keep.includes(current)) current.retried = true;
+        gen++; queue = keep; current = null;
+        if (speaking) { speaking = false; quiet(() => vad.setPlaybackActive(false, !!byPerson)); }
+        quiet(() => d.cancelSpeech());
+        items.filter(i => !keep.includes(i)).forEach(runAfter);
+        return hadReply;
+      }
+
+      function completeCount() { return voiceReplySentences(lastText, false).sentences.length; }
+      // The whole reply is over, reported ONCE (ui.reply('end')) for the display's reaction: its text is complete AND nothing is read or waiting to be
+      // read (so a gap between two sentences of a growing reply is not the end) AND the person is not speaking. With no speech (voice off, a failed
+      // line) that is the moment the text is complete; otherwise right after the last line ended, before the call returns to listening.
+      function maybeReplyEnd() {
+        if (ended || replyEnded || !lastDone || awaitingReply || cutSkip || speaking || personSpeaking || current || queue.length) return;
+        replyEnded = true;
+        quiet(() => ui.reply('end'));
+      }
+      // Reply text so far (markdown) and whether the turn is over: speaks the complete sentences that are new.
+      function onReplyText(full, done) {
+        if (ended) return;
+        lastText = String(full == null ? '' : full); lastDone = !!done;
+        if (!done) replyRecorded = false;   // a reply is being written: its text is saved once, when complete
+        if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
+        const r = voiceReplySentences(lastText, !!done);
+        if (r.sentences.length < spokenCount) spokenCount = 0;
+        if (cutSkip) spokenCount = r.sentences.length;
+        else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
+        if (done) {
+          if (recorder && !replyRecorded && lastText.trim()) { replyRecorded = true; quiet(() => d.recordReplyText(lastText)); }
+          if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply');
+          noteSpoken = true; awaitingReply = false;
+          clearStill(); stopThinking(); quiet(() => ui.activity(''));
+          if (!speaking) { maybeReplyEnd(); settle(); }
+        }
+      }
+      // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
+      function onActivity(item) {
+        if (ended) return;
+        if (!awaitingReply && !quiet(() => d.isTurnRunning())) return;
+        quiet(() => ui.activity(voiceStatusLine(item)));
+        if (state !== 'thinking' || speaking || personSpeaking || pendingAsk || pendingAnnounce) return;
+        if (!quiet(() => d.speakActivity && d.speakActivity())) return;
+        if (lastStatusAt !== null && now() - lastStatusAt < VOICE_CALL_STATUS_GAP_MS) return;
+        lastStatusAt = now();
+        enqueue(voiceStatusLine(item), 'status');
+      }
+
+      function onAsk(ask) {
+        if (ended || !ask) return;
+        const options = Array.from(ask.options || []).map(o => (typeof o === 'string' ? o : (o && (o.label || o.value || o.text)) || '')).filter(Boolean);
+        pendingAsk = { id: ask.request_id, options, free: !options.length || ask.allow_free_text === true || ask.allow_other === true, reasked: false, tapped: false };
+        if (standby && wake() && wake().local === true) { standby = false; clearQuiet(); }   // the agent asks: the answer is listened for without the phrase (talk from before the question is still dropped)
+        enqueue(String(ask.question || '') + (options.length ? ' Options: ' + voiceJoinOr(options) + '.' : ''), 'ask');
+      }
+      function onAskDone(id) { if (pendingAsk && (id == null || pendingAsk.id === id)) pendingAsk = null; }
+
+      function showHeld() { quiet(() => ui.held(heldList.map(h => Object.assign({}, h)))); }
+      function onHeld(item, quietFlag) {
+        if (ended || !item || heldList.some(h => h.id === item.id)) return;
+        const entry = Object.assign({}, item, { later: false, announced: false });
+        heldList.push(entry); showHeld();
+        if (!quietFlag && mode === 'announce') { announceQueue.push(entry); pumpAnnounce(); }
+      }
+      // The hub says an item was decided. 'later' keeps it (deferred: shown with "later", buttons stay, not announced again);
+      // 'now' and 'skip' (or no choice) remove it.
+      function onHeldDone(id, choice) {
+        announceQueue = announceQueue.filter(h => h.id !== id);
+        if (pendingAnnounce && pendingAnnounce.id === id) { quiet(() => d.clearTimer(pendingAnnounce.timer)); pendingAnnounce = null; }
+        if (choice === 'later') { const e = heldList.find(h => h.id === id); if (e) { e.later = true; e.announced = true; } }
+        else heldList = heldList.filter(h => h.id !== id);
+        showHeld(); settle();
+      }
+      // The hub's list of held items (the start answer, every heartbeat answer): merged by id, a known item keeps its state.
+      function hydrate(list) {
+        if (ended || !Array.isArray(list)) return;
+        let changed = false;
+        for (const item of list) {
+          if (!item || item.id == null) continue;
+          const known = heldList.find(h => h.id === item.id);
+          // 'allowed': the person said now and the producer runs it; 'done': it ran. Neither waits for a decision any more.
+          if (item.state === 'done' || item.state === 'allowed') {
+            if (known) { heldList = heldList.filter(h => h !== known); announceQueue = announceQueue.filter(h => h !== known); changed = true; }
+            // decided elsewhere (another device, an admin) while it was being asked: the question is over, the next one may come
+            if (pendingAnnounce && pendingAnnounce.id === item.id) { if (pendingAnnounce.timer !== null) quiet(() => d.clearTimer(pendingAnnounce.timer)); pendingAnnounce = null; changed = true; }
+            continue;
+          }
+          if (known) { if (item.state === 'later' && !known.later) { known.later = true; known.announced = true; changed = true; } continue; }
+          const later = item.state === 'later';
+          const entry = Object.assign({}, item, { later, announced: later });
+          heldList.push(entry); changed = true;
+          if (!later && mode === 'announce') announceQueue.push(entry);
+        }
+        if (changed) { showHeld(); pumpAnnounce(); }
+      }
+      function decide(id, choice) {
+        const entry = heldList.find(h => h.id === id);
+        if (!entry || !['now', 'later', 'skip'].includes(choice)) return;
+        announceQueue = announceQueue.filter(h => h.id !== id);
+        if (pendingAnnounce && pendingAnnounce.id === id) { quiet(() => d.clearTimer(pendingAnnounce.timer)); pendingAnnounce = null; }
+        if (choice === 'later') entry.later = true; else heldList = heldList.filter(h => h.id !== id);
+        showHeld();
+        const failed = () => { if (!linkLost) quiet(() => ui.toast('Could not send that choice.')); };
+        try { Promise.resolve(server.decide(id, choice, callId)).catch(failed); } catch { failed(); }
+        settle();
+      }
+      function pumpAnnounce() {
+        if (pumpTimer !== null) { quiet(() => d.clearTimer(pumpTimer)); pumpTimer = null; }
+        if (ended || state !== 'listening' || speaking || personSpeaking || sttPending || pendingAsk || pendingAnnounce || !announceQueue.length) return;
+        const wait = speechEndAt === null ? 0 : VOICE_CALL_PAUSE_MS - (now() - speechEndAt);
+        if (wait > 0) { pumpTimer = d.setTimer(() => { pumpTimer = null; pumpAnnounce(); }, wait); return; }
+        const item = announceQueue.shift();
+        item.announced = true;
+        const me = { id: item.id, timer: null, heard: false };
+        pendingAnnounce = me;
+        const start = () => {
+          if (pendingAnnounce !== me) return;
+          me.timer = d.setTimer(() => { if (pendingAnnounce === me) decide(me.id, 'later'); }, VOICE_CALL_ANSWER_MS);
+        };
+        enqueue(String(item.label || 'Something came in').replace(/[.!?\s]+$/, '') + '. Now, or after we\'re done?', 'announce', start, () => { me.heard = true; });
+      }
+      function setMode(m) {
+        if (m !== 'announce' && m !== 'dnd') return;
+        mode = m;   // the thinking sound is not touched: do-not-disturb holds announcements, not the thinking sound
+        if (m === 'dnd') announceQueue = [];
+        else announceQueue = heldList.filter(h => !h.later && !h.announced && !(pendingAnnounce && pendingAnnounce.id === h.id));
+        quiet(() => Promise.resolve(server.mode(m, callId)).catch(() => {}));
+        pumpAnnounce();
+      }
+
+      // The first speech-like frame (vad-web onSpeechStart): the person may be starting to talk. Nothing new is started over
+      // them, and an answer belongs to the announcement that was pending at this moment. A false start ends in onMisfire.
+      // An answer belongs to an announcement only once its line started playing (talking over it to answer is fine) or was
+      // read out (its answer timer runs from then); a line still waiting in the queue was not heard yet.
+      const heardAnnouncement = () => (pendingAnnounce && pendingAnnounce.heard ? pendingAnnounce.id : null);   // heard: its line started playing
+      // A first frame that is followed by nothing (the audio stopped: an incoming phone call, a suspended audio context)
+      // must not leave the call deaf and mute: after 4 s without real speech, a misfire or an end, it is let go.
+      let beginTimer = null;
+      const clearBegin = () => { if (beginTimer !== null) { quiet(() => d.clearTimer(beginTimer)); beginTimer = null; } };
+      // A new speech segment begins. When the previous one ended less than 2 s ago and its transcript is not sent yet (still
+      // being transcribed, or waiting in line), the previous one is held back: it is joined with this segment into one message.
+      function segmentStarting() {
+        if (segActive) return;
+        segActive = true;
+        const c = lastSeg;
+        // The earlier piece qualifies while its text is not sent yet (its transcript pending, held, or in the continue wait): one chain,
+        // in order, however slow the transcription is, so a later stop word still wins over it.
+        if (c && !c.done && !c.hold) {
+          let resolve; const promise = new Promise((r) => { resolve = r; });
+          c.hold = { promise, resolve }; curCand = c;
+          if (c.onJoin) { const f = c.onJoin; c.onJoin = null; quiet(f); }   // the wait for more is over: the next piece is coming
+        } else curCand = null;
+      }
+      // The segment was a false start: the held one is sent on its own after all.
+      function segmentDropped() {
+        segActive = false;
+        const c = curCand; curCand = null;
+        if (c && c.hold) { c.hold.resolve(null); c.hold = null; }
+      }
+      function onSpeechBegin() {
+        if (ended || personSpeaking) return;
+        personSpeaking = true; stopThinking(); clearQuiet();
+        capWake = { sb: standby, seq: wakeSeq };
+        speechAnn = heardAnnouncement();
+        segLinkGen = linkLost ? -1 : linkGen;
+        clearBegin();
+        segmentStarting();
+        recBegin();
+        // Real speech, a misfire and an end all clear this timer, so when it fires no real start came: let the false start go.
+        beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; capWake = null; recDrop(); segmentDropped(); settle(); } }, 4000);
+      }
+      // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
+      function onSpeechStart() {
+        if (ended) return;
+        clearBegin();
+        if (!personSpeaking) { speechAnn = heardAnnouncement(); segLinkGen = linkLost ? -1 : linkGen; }   // no onSpeechBegin came first
+        if (!personSpeaking || !capWake) capWake = { sb: standby, seq: wakeSeq };
+        personSpeaking = true; stopThinking(); clearQuiet();
+        quiet(() => ui.reply('drop'));   // real speech: a reaction that has not played is dropped
+        segmentStarting();
+        recBegin();   // no onSpeechBegin came first (a begin already decided this speech)
+        if (!standby) queue = queue.filter(i => !i.again);   // already repeating themselves: a queued "Say that again." is dropped, never read
+        if (!standby && (speaking || queue.length)) {   // in standby a sound does not cut the reading ("<phrase>, stop" does, once heard)
+          const noteText = voiceSpeechText('| a |');   // the details note is a reply item but not one of the counted sentences
+          const items = (current ? [current] : []).concat(queue);
+          const n = items.filter(i => i.kind === 'reply' && i.text !== noteText).length;
+          const noteCut = items.some(i => i.kind === 'reply' && i.text === noteText);   // a false start puts the note back too
+          const cutReply = cancelSpeaking(true);
+          const setSkip = cutReply && awaitingReply && !cutSkip;
+          if (setSkip) cutSkip = true;
+          if (cutReply) cutRec = { mark: Math.max(0, spokenCount - n), setSkip, noteCut };   // a cut of mic lines only keeps an earlier reply cut to resume
+        }
+        if (!standby) setState('hearing');   // in standby the person is not addressed until the phrase
+      }
+      // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
+      function onMisfire() {
+        if (ended) return;
+        clearBegin(); segmentDropped(); recDrop();
+        personSpeaking = false; speechAnn = null; capWake = null;
+        quiet(() => ui.reply('resume'));
+        const rec = cutRec; cutRec = null;
+        if (rec) {
+          if (rec.setSkip) cutSkip = false;
+          spokenCount = rec.mark;
+          if (rec.noteCut) noteSpoken = false;
+          onReplyText(lastText, lastDone);
+        }
+        settle();
+      }
+      // Text decides; the optional end-of-turn model (deps.turnModel, audio -> probability finished, or null) can only add doubt:
+      // a text that sounds finished is sent when the model says finished or is unsure, and waits when the model says it is not.
+      async function soundsUnfinished(text, audio) {
+        if (voiceSoundsUnfinished(text)) return true;
+        if (!d.turnModel) return false;
+        let p = null;
+        try { p = await d.turnModel(audio); } catch { p = null; }
+        return typeof p === 'number' && Number.isFinite(p) && p < 0.35;
+      }
+      function onSpeechEnd(audio) {
+        if (ended) return Promise.resolve();
+        clearBegin();
+        // The recorded audio of this speech (null when it was not recorded: standby, paused, no recorder): its transcript is saved below.
+        const recHandle = recOn ? quiet(() => recorder.end()) || null : null;
+        recOn = false; recDecided = false;
+        personSpeaking = false; speechEndAt = now(); cutRec = null;
+        // sb and seq: was this said in standby (when it began, or now), and how many wakes had there been. Said in standby, it needs the phrase unless a wake came
+        // in between (the phrase said alone, then this): so neither a switch-off nor a lost recognizer check can release it.
+        const cap = capWake || { sb: standby, seq: wakeSeq }; capWake = null;
+        const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq,
+          linkGen: segLinkGen === linkGen && !linkLost ? linkGen : -1 };
+        const stale = () => linkLost || mine.linkGen !== linkGen;   // heard while the link was lost, or an outage began since: never sent
+        if (linkLost && isSendable(mine.sb, mine.seq)) linkDropped = true;   // a sendable utterance ended during an outage: "Say that again." follows "Reconnected."
+        inflight.add(mine);
+        speechAnn = null; segActive = false;
+        const cand = curCand; curCand = null;
+        if (cand && cand.hold) cand.hold.resolve(mine);   // the earlier piece hands its text to this one
+        lastSeg = mine;
+        sttPending++;
+        settle();
+        sttChain = sttChain.then(async () => {
+          let counted = false;
+          try {
+            let text = '', failed = false;
+            const mustMatch = () => standby || (mine.sb && mine.seq === wakeSeq);
+            const w0 = wake();
+            if (mustMatch() && !(w0 && w0.local === true)) return;   // standby without a recognizer known to be local: not even transcribed
+            const dropLong = mustMatch() && !!audio && audio.length > 30 * 16000;   // a long stretch of talk in standby is not transcribed at all
+            try { text = dropLong || stale() ? '' : await d.stt(audio); } catch { failed = true; if (!mustMatch() && !linkLost) quiet(() => ui.toast('Could not transcribe that.')); }
+            // The person's words for this piece, as the recognizer gave them, are saved with its audio (also a filler or text that is not sent).
+            if (recHandle && !failed && !dropLong && !stale() && String(text || '').trim()) quiet(() => d.recordTranscript(recHandle.seq, String(text).trim()));
+            if (ended) return;
+            if (stale()) return;   // heard around an outage: dropped, not sent (also when the link came back while this waited)
+            const own = String(text || '').trim(), n = voiceCallNorm(own);
+            const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
+            let t = ownOk ? own : '';
+            if (mine.carry) t = ownOk ? (voiceIsStopCommand(own) || (wakeMode && voiceIsSleepCommand(own)) ? own : mine.carry + ' ' + own) : mine.carry;   // a stop or sleep command in this piece wins over the earlier one
+            if (!t) return;
+            if (mustMatch()) {   // only the wake phrase is listened for: anything else is dropped (not shown, not sent, nothing kept)
+              const w = wake();
+              if (!(w && w.local === true)) return;   // switched off, or the check failed, while this was waiting: what was said in standby stays dropped
+              const m = voiceWakeMatch(t, w.phrase);
+              if (!m.match) return;
+              standby = false; wakeSeq++;
+              quiet(() => d.chime && d.chime());
+              quiet(() => vad.setPlaybackActive(true));   // the chime is playback: it must not be taken as speech
+              if (chimeTimer !== null) quiet(() => d.clearTimer(chimeTimer));
+              chimeTimer = d.setTimer(() => { chimeTimer = null; if (!ended && !speaking) quiet(() => vad.setPlaybackActive(false)); }, 700);
+              if (!m.rest) { settle(); return; }   // the next utterance is the message
+              t = m.rest;
+            }
+            const sleepy = wakeMode && voiceIsSleepCommand(t);
+            if (sleepy) { mine.done = true; enterStandby(); return; }   // 'that's all': back to standby at once, not shown, not sent, never joined to what follows
+            // Does it sound unfinished? Then it is not sent yet: it waits up to the 'Wait for me to go on' time for the next piece,
+            // which takes this text along. Not for a stop command, an answer to a question or an announcement, or when the wait is 0.
+            let waited = false, waitStart = 0, ms = 0;
+            const waitMore = async (len) => {
+              mine.waiting = true;
+              let waitTimer = null;
+              await new Promise((resolve) => { mine.onJoin = resolve; waitTimer = d.setTimer(resolve, len); });
+              if (waitTimer !== null) quiet(() => d.clearTimer(waitTimer));
+              mine.waiting = false; mine.onJoin = null;
+            };
+            if (!mine.hold && !ended && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {
+              ms = continueWait();
+              if (ms > 0 && await soundsUnfinished(t, audio)) {
+                waited = true; waitStart = now();
+                await waitMore(ms);
+                if (ended) return;
+              }
+            }
+            // A later piece started (within 2 s, or while this one waited): it takes this text along (unless this one is a stop command: stop wins at once).
+            while (mine.hold && !voiceIsStopCommand(t)) {
+              // At most 5 s (20 s after a wait for more, which a long next piece may need): a later piece whose end never comes
+              // (audio interrupted) must not block this text and every one after it.
+              let holdTimer = null, timedOut = false;
+              const next = await Promise.race([mine.hold.promise, new Promise((r) => { holdTimer = d.setTimer(() => { timedOut = true; r(null); }, waited ? VOICE_CALL_WAIT_HOLD_MS : VOICE_CALL_HOLD_MS); })]);
+              if (holdTimer !== null) quiet(() => d.clearTimer(holdTimer));
+              if (ended || stale()) return;
+              if (next) { next.carry = t; if (next.ann == null) next.ann = mine.ann; return; }
+              if (timedOut || !waited) break;
+              // A misfire (cough, click) ended the wait early: the rest of the wait goes on.
+              const left = ms - (now() - waitStart);
+              if (left <= 0) break;
+              await waitMore(left);
+              if (ended) return;
+            }
+            if (stale()) return;
+            mine.done = true;
+            heardShown = true; quiet(() => ui.heard(t));
+            sttPending--; counted = true;   // the transcript is out of the queue: the thinking sound may arm while the turn runs
+            inflight.delete(mine);   // handed to route(): no longer at risk of being discarded by an outage (the finally below is cleanup)
+            await route(t, mine.ann);
+          } finally { mine.done = true; inflight.delete(mine); if (!counted) sttPending--; settle(); }
+        });
+        return sttChain;
+      }
+      async function route(t, ann) {
+        if (voiceIsStopCommand(t)) {
+          cancelSpeaking(); cutSkip = true; awaitingReply = false; stopThinking(); clearStill();
+          quiet(() => d.stop()); enqueue('Stopped.', 'stop'); settle();
+          return;
+        }
+        if (pendingAnnounce && ann != null && pendingAnnounce.id === ann) {   // only the announcement pending when the speech began
+          const id = pendingAnnounce.id, w = voiceDecisionWord(t);
+          decide(id, w || 'later');
+          if (w) return;
+        }
+        if (pendingAsk) {
+          const a = pendingAsk, label = voiceMatchChoice(t, a.options);
+          if (label !== null || a.free) { pendingAsk = null; quiet(() => d.answerAsk(a.id, label !== null ? label : t)); return; }
+          if (!a.reasked) { a.reasked = true; enqueue('Please say one of: ' + voiceJoinOr(a.options) + '.', 'ask'); }
+          else if (!a.tapped) { a.tapped = true; enqueue('Please tap one of the options on the screen.', 'ask'); }
+          return;
+        }
+        try {
+          if (quiet(() => d.isTurnRunning())) {
+            if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
+            awaitingReply = true; replyEnded = false; replyRecorded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
+            await d.interject(t);
+          } else {
+            awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+            quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
+            await d.send(t);
+          }
+        } catch {
+          awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity(''));
+          if (!linkLost) { quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); }   // a lost connection is reported by the link watch, not as an error line
+          settle();
+        }
+      }
+      // The connection to the server was lost (on) or is back (!on). While lost, what is heard is dropped and no error is spoken or shown;
+      // when it is back after a real outage, "Reconnected." is spoken (kind 'mic': a barge-in does not drop it).
+      function setLinkLost(on) {
+        if (ended) return;
+        if (on) {
+          if (!linkLost) {   // the outage begins: speech being said now, or in flight (not one already stale from an earlier outage), is lost
+            linkDropped = false;
+            const cap = capWake || { sb: standby, seq: wakeSeq };
+            if (personSpeaking && segLinkGen !== -1 && isSendable(cap.sb, cap.seq)) linkDropped = true;   // only speech that began while the link was up (one begun in an earlier outage was counted then)
+            for (const m of inflight) if (m.linkGen === linkGen && isSendable(m.sb, m.seq)) linkDropped = true;
+            linkGen++;
+          }
+          linkLost = true; linkWasLost = true; return;
+        }
+        if (!linkLost) return;
+        if (personSpeaking && segLinkGen === -1) { const cap = capWake || { sb: standby, seq: wakeSeq }; if (isSendable(cap.sb, cap.seq)) linkDropped = true; }   // started during the outage, still going
+        linkLost = false;
+        if (linkWasLost) {
+          linkWasLost = false;
+          enqueue('Reconnected.', 'mic');
+          if (linkDropped) enqueue('Say that again.', 'mic', undefined, undefined, true);
+        }
+        linkDropped = false;
+      }
+
+      // The microphone (from the VAD adapter): onMicInfo shows which one is open; onMicChange says a reopen after the microphone ended or
+      // changed (Bluetooth connected or dropped, a car started) worked or failed. A lost microphone does not end the call: the heartbeat, held
+      // items and the reading of replies go on, and a tap (retryMic) tries again. Nothing is retried on its own.
+      function onMicInfo(info) { if (!ended) quiet(() => ui.mic(info)); }
+      function onMicChange(ev) {
+        if (ended || !ev) return;
+        if (ev.ok === false) {
+          if (micLost) return;   // already said: a burst of device events while it is lost is not announced again
+          micLost = true; quiet(() => ui.micLost(true));
+          enqueue(VOICE_MIC_LOST_LINE, 'mic');
+          return;
+        }
+        if (micLost) {
+          micLost = false; quiet(() => ui.micLost(false));
+          queue = queue.filter(q => !(q.kind === 'mic' && q.text === VOICE_MIC_LOST_LINE));   // a lost line still waiting is no longer true
+          enqueue('The microphone is back.', 'mic'); return;
+        }
+        if (ev.changed) enqueue('I\'ve switched microphones.', 'mic');
+      }
+      // Tries to open the microphone again (the answer arrives through onMicChange); the promise says whether it worked.
+      function retryMic() {
+        if (ended || typeof vad.reopen !== 'function') return Promise.resolve(false);
+        try { return Promise.resolve(vad.reopen()).then((r) => !!r, () => false); } catch { return Promise.resolve(false); }
+      }
+
+      function beat() {
+        hbTimer = d.setTimer(() => {
+          hbTimer = null;
+          if (ended) return;
+          Promise.resolve().then(() => server.heartbeat(callId)).then((r) => { if (!ended && r) hydrate(r.held); }).catch(() => {});
+          beat();
+        }, VOICE_CALL_HEARTBEAT_MS);
+      }
+      async function start() {
+        if (started) return !ended;
+        started = true; setState('starting');
+        if (d.keepAlive) { keepAliveOn = true; quiet(() => d.keepAlive.start()); leadInUntil = now() + VOICE_CALL_LEAD_IN_MS; }   // inside the tap, before anything is awaited
+        const fail = async (msg) => { quiet(() => ui.toast(msg)); teardown(); await Promise.resolve().then(() => (callId ? server.end(callId) : null)).catch(() => {}); return false; };   // no id: never end another call of this person
+        // Standby is decided before the microphone opens, so nothing said while the call starts gets past it.
+        const w0 = wake();
+        wakeMode = !!(w0 && w0.local === true); standby = wakeMode;
+        if (w0 && !wakeMode) quiet(() => ui.toast('The wake phrase is not in use on this call: speech recognition is not known to run on this computer.'));
+        // The microphone starts first, still inside the tap that began the call (iOS needs that for audio); the server next.
+        let vadErr = null;
+        let vadStarting;
+        try {
+          vadStarting = Promise.resolve(vad.start({
+            onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd,
+            onFrame: (db, probs) => quiet(() => ui.level(db, probs)),
+            onMicInfo, onMicChange,
+          })).catch((e) => { vadErr = e || new Error('no microphone'); });
+        } catch (e) { vadErr = e || new Error('no microphone'); vadStarting = Promise.resolve(); }
+        // The call's id comes with the answer; a hang-up while the server is still starting ends that call once the id is known.
+        startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; return r; });
+        let startRes;
+        try { startRes = await startP; } catch (e) { await vadStarting; quiet(() => vad.stop()); return fail('Could not start the call: ' + (e && e.message || e)); }
+        await vadStarting;
+        if (ended) { quiet(() => vad.stop()); return false; }   // hung up while starting: a microphone that came up late is let go
+        if (vadErr) return fail('Could not start the microphone: ' + (vadErr.message || vadErr));
+        hydrate(startRes && startRes.held);
+        beat();
+        if (!wake()) { wakeMode = false; standby = false; }   // switched off while the call started (wakeChanged waits for the start)
+        if (standby) enterStandby();   // (a phrase heard while the call started has already woken it)
+        settle();
+        return true;
+      }
+      // Everything the call holds is let go at once: timers, the thinking sound, the microphone and the speaking.
+      function teardown() {
+        ended = true; capWake = null;
+        for (const t of [hbTimer, pumpTimer, quietTimer, chimeTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
+        hbTimer = pumpTimer = quietTimer = chimeTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); clearStill(); stopThinking();
+        for (const s of [lastSeg, curCand]) if (s) { if (s.hold) s.hold.resolve(null); if (s.onJoin) { const f = s.onJoin; s.onJoin = null; quiet(f); } }   // a held or waiting transcript is let go with the call
+        quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
+        if (recorder) { recOn = false; quiet(() => recorder.stop()); }
+        if (keepAliveOn) { keepAliveOn = false; quiet(() => d.keepAlive.stop()); }
+      }
+      // Immediate hang-up, for a page that is being hidden, frozen or closed (reason: 'hidden', 'pagehide', 'freeze', ...): everything is
+      // released now and the server is told in the background; nothing is waited for and nothing is read out.
+      function release(reason) {
+        if (endPromise) return endPromise;
+        teardown();
+        const tell = () => { if (callId) quiet(() => Promise.resolve(server.end(callId)).catch(() => {})); };
+        if (callId || !startP) tell(); else startP.then(tell, () => {});   // the id may still be on its way
+        endPromise = Promise.resolve([]);
+        return endPromise;
+      }
+      // Hangs up: stops listening and speaking, tells the server and shows what came in while we talked. After Hang up nothing is
+      // spoken: the person asked for silence, and the labels of held jobs and tasks read badly aloud.
+      function hangUp() {
+        if (endPromise) return endPromise;
+        teardown();
+        const idKnown = callId || !startP ? Promise.resolve() : startP.catch(() => {});   // hanging up while the start is in flight waits for the id
+        endPromise = idKnown.then(() => (callId ? server.end(callId) : { held: [] })).then(r => (r && Array.isArray(r.held) ? r.held : []), () => []).then((held) => {
+          if (held.length) {
+            const label = (h) => String(h.label || h.kind || 'something').replace(/[.!?\s]+$/, '');
+            const n = held.length, ran = held.filter(h => h.state === 'done'), runs = held.filter(h => h.state !== 'done');
+            let tail;
+            if (!ran.length) tail = n === 1 ? 'It runs now.' : 'They run now.';
+            else if (!runs.length) tail = n === 1 ? 'It already ran.' : 'They already ran.';
+            else tail = 'Already ran: ' + ran.map(label).join(', ') + '. Running now: ' + runs.map(label).join(', ') + '.';
+            const text = 'While we talked: ' + (n === 1 ? '1 thing came in' : n + ' things came in') + ': ' + held.map(label).join(', ') + '. ' + tail;
+            quiet(() => ui.summary(text));   // shown only, never spoken
+          }
+          return held;
+        });
+        return endPromise;
+      }
+      // The page calls this when the wake setting or the recognizer check may have changed (also on routine refreshes: nothing that is
+      // unchanged may move the call). Switched off: an ordinary call. Switched on (with a local recognizer): standby now if idle, else after
+      // the quiet time. Anything else (a new phrase or quiet time, a check that failed) leaves the mode and the state as they are.
+      function wakeChanged() {
+        if (ended || !started || state === 'starting') return;
+        const w = wake();
+        if (!w) { wakeMode = false; if (standby) leaveStandby(); else settle(); return; }
+        if (!wakeMode && w.local === true) { wakeMode = true; if (!standby && wakeIdle()) enterStandby(); }
+        settle();
+      }
+      return {
+        start, hangUp, release, wakeChanged, isStandby: () => standby, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+        get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
+      };
+    }
+    // The link watch of a call: is the server reachable? o = { probe: () => Promise<boolean> (true = reachable), setTimeout, clearTimeout, onLost(), onBack(),
+    // onGiveUp(), everyMs = 5000, lostEveryMs = 1000, giveUpMs = 10000, now = Date.now }. While the link is fine it probes every everyMs; a failed probe, report()
+    // (a network failure seen on one of the call's own requests) or offline() mark it LOST at once (onLost, once per outage), and it then probes every
+    // lostEveryMs. A probe that succeeds within giveUpMs -> onBack (once) and the normal rhythm; no success within giveUpMs -> onGiveUp (once), and nothing runs
+    // any more. One probe is in flight at a time; after stop() nothing fires, and a probe that resolves late is ignored.
+    // -> { start(), stop(), report(), offline(), online() (probe at once), get lost() }
+    function voiceCreateLinkWatch(o) {
+      const c = o || {};
+      const setT = c.setTimeout, clrT = c.clearTimeout, clock = typeof c.now === 'function' ? c.now : Date.now;
+      const every = Number.isFinite(Number(c.everyMs)) ? Number(c.everyMs) : 5000;
+      const lostEvery = Number.isFinite(Number(c.lostEveryMs)) ? Number(c.lostEveryMs) : 1000;
+      const giveUp = Number.isFinite(Number(c.giveUpMs)) ? Number(c.giveUpMs) : 10000;
+      let running = false, lost = false, lostAt = 0, probing = false, gen = 0, timer = null, giveTimer = null;
+      let outage = 0;   // each loss adds one: only a probe started after the loss can say the link is back
+      const say = (f) => { try { if (typeof f === 'function') f(); } catch { /* a listener must not break the watch */ } };
+      const clear = (t) => { if (t !== null) { try { clrT(t); } catch { /* gone */ } } return null; };
+      function schedule(ms) {
+        timer = clear(timer);
+        if (running) timer = setT(() => { timer = null; probeNow(); }, ms);
+      }
+      function markLost() {
+        if (!running || lost) return;
+        lost = true; lostAt = clock(); outage++;
+        giveTimer = clear(giveTimer);
+        giveTimer = setT(() => {
+          giveTimer = null;
+          if (!running || !lost) return;
+          running = false; gen++; probing = false;   // a probe still out is ignored
+          timer = clear(timer);
+          say(c.onGiveUp);
+        }, giveUp);
+        schedule(lostEvery);
+        say(c.onLost);
+      }
+      function probeNow() {
+        if (!running || probing) return;
+        probing = true;
+        timer = clear(timer);
+        const my = gen, myOutage = outage;
+        let p;
+        try { p = Promise.resolve(c.probe()); } catch { p = Promise.resolve(false); }
+        p.then((ok) => ok === true, () => false).then((ok) => {
+          if (my !== gen || !running) return;
+          probing = false;
+          if (ok) {
+            if (lost) {
+              if (myOutage !== outage) { schedule(0); return; }   // it left before the loss: it proves nothing, so ask again at once (the deadline stands)
+              if (clock() - lostAt > giveUp) return;   // too late: the give-up timer ends the call
+              lost = false; giveTimer = clear(giveTimer);
+              schedule(every);
+              say(c.onBack);
+            } else schedule(every);
+          } else if (lost) schedule(lostEvery);
+          else markLost();
+        });
+      }
+      return {
+        start() { if (running) return; running = true; lost = false; probing = false; gen++; schedule(every); },
+        stop() { running = false; gen++; probing = false; lost = false; timer = clear(timer); giveTimer = clear(giveTimer); },
+        report() { markLost(); },
+        offline() { markLost(); },
+        online() { if (running) probeNow(); },
+        get lost() { return lost; },
+      };
+    }
+    // Two short soft tones on the call's own audio context: descending (660 then 440 Hz) = the connection was lost, rising (440 then 660 Hz) = it is back.
+    // Nothing happens without a context; it never throws.
+    function voiceLinkTone(ctx, up) {
+      try {
+        if (!ctx || typeof ctx.createOscillator !== 'function' || typeof ctx.createGain !== 'function') return false;
+        if (ctx.state === 'suspended' && typeof ctx.resume === 'function') { try { Promise.resolve(ctx.resume()).catch(() => {}); } catch { /* not resumable */ } }
+        const t0 = (Number(ctx.currentTime) || 0) + 0.02, freqs = up ? [440, 660] : [660, 440], len = 0.16;
+        freqs.forEach((hz, i) => {
+          const osc = ctx.createOscillator(), g = ctx.createGain(), s = t0 + i * len;
+          osc.type = 'sine'; osc.frequency.value = hz;
+          g.gain.setValueAtTime(0, s); g.gain.linearRampToValueAtTime(0.12, s + 0.015); g.gain.linearRampToValueAtTime(0, s + len);
+          osc.connect(g); g.connect(ctx.destination);
+          osc.start(s); osc.stop(s + len + 0.02);
+        });
+        return true;
+      } catch { return false; }
+    }
+    // Every microphone track the adapter makes is counted until it is stopped (voiceLiveTracks: a test hook, and a way to prove nothing is left holding the microphone).
+    const VOICE_LIVE_TRACKS = new Set();
+    function voiceTrackLive(stream) { try { for (const tr of stream.getTracks()) VOICE_LIVE_TRACKS.add(tr); } catch { /* not a stream */ } }
+    function voiceStopStream(stream) {
+      try { for (const tr of stream.getTracks()) { try { tr.stop(); } catch { /* already stopped */ } VOICE_LIVE_TRACKS.delete(tr); } } catch { /* no stream */ }
+    }
+    function voiceLiveTracks() {
+      let n = 0;
+      for (const tr of Array.from(VOICE_LIVE_TRACKS)) { if (tr && tr.readyState === 'ended') VOICE_LIVE_TRACKS.delete(tr); else n++; }
+      return n;
+    }
+    // The constraint ladder that opens the microphone (the VAD adapter and the Car or Bluetooth check use it): echo cancellation, noise suppression and
+    // auto gain first, exactly as ever. A refusal by the person or the browser (NotAllowedError, SecurityError, AbortError) ends it; any other failure
+    // (OverconstrainedError, NotReadableError, TypeError, NotSupportedError, NotFoundError: some Bluetooth and car inputs cannot do those) gets ONE more
+    // try with plain { audio: true }; when that fails too, the FIRST error is thrown. -> Promise of { stream, fallback }.
+    // o.unprocessed (a call whose voice is recorded, mic 'unprocessed'): the first try asks for echo cancellation, noise suppression and auto gain OFF; the ladder is the same after that.
+    async function voiceOpenMicStream(nav, o) {
+      const md = nav.mediaDevices, on = !(o && o.unprocessed);
+      try { return { stream: await md.getUserMedia({ audio: { echoCancellation: on, noiseSuppression: on, autoGainControl: on } }), fallback: false }; } catch (first) {
+        const name = first && first.name;
+        if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'AbortError') throw first;
+        try { return { stream: await md.getUserMedia({ audio: true }), fallback: true }; } catch { throw first; }
+      }
+    }
+    // The recording of the 'Car or Bluetooth check'. The test chirp is played three times (opts.at, seconds after the start; default VOICE_CAR_AT) and the
+    // microphone is recorded until opts.seconds (default VOICE_CAR_END) on the audio clock. WHY ONE PROCESSOR AND A REFERENCE CHANNEL: the delay is the
+    // time between the chirp leaving and its echo arriving, and two clocks (a timestamp of the played sound, one of the microphone block) never agree:
+    // the first version dated blocks with AudioProcessingEvent.playbackTime (the OUTPUT buffer's time) and every delay came out about one buffer too
+    // long. So no timestamps are used: every chirp is played twice at the same scheduled time, once to the speakers (ctx.destination) and once into
+    // input 1 of a ChannelMerger whose input 0 is the microphone; the merger feeds ONE ScriptProcessor, so a block holds the microphone (channel 0)
+    // and an exact copy of the chirp (channel 1, silence elsewhere) at the same sample positions, and the delay is the distance between the chirp
+    // in channel 1 and its echo in channel 0 (voiceCarAnalyse). WHY 1.5 s SPACING AND A 1.2 s SEARCH: the three chirps are identical, so an echo found
+    // in the window of one chirp could be the echo of the next; the chirps are 1.5 s apart and the search stops at VOICE_CAR_MAX_DELAY_MS (1.2 s), so
+    // a window never reaches the next chirp's echo. The processor only runs while connected to the destination, hence the 0-gain node at the end.
+    // opts: { ctx (made and resumed by the page inside the tap; NOT closed here), nav, chirp (Float32Array at ctx.sampleRate), micLevel (the Mic level
+    // slider, applied to the microphone channel as in a call; default 50 = 0 dB), at, seconds, setTimer,
+    // clearTimer, now (ms clock), wallMs (default 12000: the audio clock must start within this, else the error code is 'audio_not_started') }.
+    // -> { done: Promise of { mic, ref, rate, fallback }, cancel() }; cancel() rejects with an Error whose code is 'cancelled'. However it ends
+    // (result, error, cancel, an exception while building) every source is stopped and disconnected, the processor's handler is removed, the
+    // microphone stream is stopped and the timer is cleared.
+    function voiceCarRecord(opts) {
+      const o = opts || {}, ctx = o.ctx;
+      const at = Array.isArray(o.at) ? o.at : VOICE_CAR_AT;
+      const seconds = Number.isFinite(Number(o.seconds)) ? Number(o.seconds) : VOICE_CAR_END;
+      const wallMs = Number.isFinite(Number(o.wallMs)) ? Number(o.wallMs) : 12000;
+      const micChunks = [], refChunks = [], bufSources = [];
+      let finished = false, stream = null, timer = null, micSource = null, micGain = null, merger = null, proc = null, gain = null, resolveF, rejectF;
+      const done = new Promise((resolve, reject) => { resolveF = resolve; rejectF = reject; });
+      const fail = (code, message) => { const e = new Error(message); e.code = code; return e; };
+      const concat = (chunks) => {
+        let n = 0; for (const c of chunks) n += c.length;
+        const out = new Float32Array(n);
+        let at0 = 0; for (const c of chunks) { out.set(c, at0); at0 += c.length; }
+        return out;
+      };
+      function cleanup() {
+        if (timer !== null) { try { o.clearTimer(timer); } catch { /* gone */ } timer = null; }
+        if (proc) { try { proc.onaudioprocess = null; } catch { /* gone */ } }
+        for (const s of bufSources) { try { s.stop(); } catch { /* not started */ } try { s.disconnect(); } catch { /* gone */ } }
+        for (const n of [micSource, micGain, merger, proc, gain]) { if (n) { try { n.disconnect(); } catch { /* gone */ } } }
+        if (stream) voiceStopStream(stream);
+      }
+      function finish(ok, value) {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        if (ok) resolveF(value); else rejectF(value);
+      }
+      (async () => {
+        let opened;
+        try { opened = await voiceOpenMicStream(o.nav); } catch (e) { finish(false, e); return; }
+        stream = opened.stream; voiceTrackLive(stream);
+        if (finished) { voiceStopStream(stream); return; }   // cancelled while the microphone was opening: let go of it
+        // iOS can suspend or interrupt the context when the microphone starts (or after the first permission prompt): resume it, waiting at most 3 s.
+        if (ctx.state && ctx.state !== 'running' && typeof ctx.resume === 'function') {
+          let wait = null;
+          try { await Promise.race([Promise.resolve(ctx.resume()), new Promise((r) => { wait = o.setTimer(r, 3000); })]); } catch { /* the wall-clock limit below reports it */ }
+          finally { if (wait !== null) { try { o.clearTimer(wait); } catch { /* gone */ } } }
+          if (finished) return;
+        }
+        let t0, startMs;
+        try {
+          micSource = ctx.createMediaStreamSource(stream);
+          merger = ctx.createChannelMerger(2);
+          // The microphone goes through the person's Mic level, exactly as in a call (the VAD hears it after that gain); the reference does not.
+          micGain = ctx.createGain(); micGain.gain.value = voiceGainFromSlider(o.micLevel);
+          micSource.connect(micGain); micGain.connect(merger, 0, 0);
+          proc = ctx.createScriptProcessor(4096, 2, 1);
+          proc.onaudioprocess = (ev) => {
+            if (finished) return;
+            const ib = ev.inputBuffer, mic = ib.getChannelData(0);
+            micChunks.push(new Float32Array(mic));
+            refChunks.push(ib.numberOfChannels > 1 ? new Float32Array(ib.getChannelData(1)) : new Float32Array(mic.length));
+          };
+          merger.connect(proc);
+          gain = ctx.createGain(); gain.gain.value = 0;
+          proc.connect(gain); gain.connect(ctx.destination);
+          t0 = ctx.currentTime;
+          const buffer = ctx.createBuffer(1, o.chirp.length, ctx.sampleRate);
+          buffer.getChannelData(0).set(o.chirp);
+          for (const a of at) {
+            const toSpeakers = ctx.createBufferSource(); bufSources.push(toSpeakers);
+            toSpeakers.buffer = buffer; toSpeakers.connect(ctx.destination); toSpeakers.start(t0 + a);
+            const toMerger = ctx.createBufferSource(); bufSources.push(toMerger);
+            toMerger.buffer = buffer; toMerger.connect(merger, 0, 1); toMerger.start(t0 + a);
+          }
+          startMs = o.now();
+        } catch (e) { finish(false, e); return; }
+        const tick = () => {
+          timer = null;
+          if (finished) return;
+          try {
+            if (ctx.currentTime >= t0 + seconds) { finish(true, { mic: concat(micChunks), ref: concat(refChunks), rate: ctx.sampleRate, fallback: !!opened.fallback }); return; }
+            if (o.now() - startMs > wallMs) { finish(false, fail('audio_not_started', 'the audio did not start')); return; }
+            timer = o.setTimer(tick, 100);
+          } catch (e) { finish(false, e); }
+        };
+        try { timer = o.setTimer(tick, 100); } catch (e) { finish(false, e); }
+      })();
+      return { done, cancel() { finish(false, fail('cancelled', 'cancelled')); } };
+    }
+    // The thinking sound: quiet random pop clusters made with Web Audio only (no files). The plan (how many pops, when, how high, the gaps) is
+    // DATA from lib/ui-voice-thinking.js (voiceThinkingCluster, seeded); this function only plays an event's pops: each pop is a sine with a
+    // few-ms attack and a 30-60 ms decay (a little glide), through a low-pass below 2 kHz, the whole cluster fades in and out. Peak = volume x
+    // 0.1125 (volume 0.5, the default, is -25 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
+    // ctx.currentTime + 0.02 and moves event.at to the moment that cluster is HEARD (the audio output clock mapped to performance.now():
+    // getOutputTimestamp when valid, else now + the scheduling lead + the output or base latency); it returns the same event, or false when
+    // the context is not running (nothing was claimed, event.at is untouched). An event without pops (or no event) plays a cluster of a fresh
+    // random seed. start() plays one now and another every 6.5 s (the old adapters without a clock of their own).
+    // opts: { ctx, volume, variant, seed (a fixed seed for the clusters it makes itself), setInterval, clearInterval, perfNow } (the last four for tests).
+    function voiceCreateThinkingSound(opts) {
+      const o = opts || {}, ctx = o.ctx;
+      const perf = o.perfNow || (() => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function' ? performance.now() : NaN));
+      const setIv = o.setInterval || ((f, ms) => setInterval(f, ms)), clearIv = o.clearInterval || ((id) => clearInterval(id));
+      const clamp = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5; };
+      let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [], own = 0;
+      const peak = () => vol * 2 * Math.pow(10, -25 / 20);   // volume 0.5 = -25 dBFS
+      // performance.now() time at which the sample scheduled for context time t0 comes out of the speakers; null when it cannot be told.
+      function heardAt(ct, t0) {
+        const now = Number(perf());
+        if (!Number.isFinite(ct) || !Number.isFinite(now)) return null;
+        const sane = (m) => Number.isFinite(m) && m >= 0 && m >= now - 5 && m <= now + 1500;   // never in the past, never far ahead
+        try {
+          const ts = typeof ctx.getOutputTimestamp === 'function' ? ctx.getOutputTimestamp() : null;
+          if (ts && Number.isFinite(ts.contextTime) && Number.isFinite(ts.performanceTime) && ts.contextTime >= 0 && ts.performanceTime > 0) {
+            const m = ts.performanceTime + (t0 - ts.contextTime) * 1000;
+            if (sane(m)) return m;
+          }
+        } catch { /* no output timestamp: the latency estimate below */ }
+        const l = Number(ctx.outputLatency) > 0 ? Number(ctx.outputLatency) : (Number(ctx.baseLatency) > 0 ? Number(ctx.baseLatency) : 0);
+        const m = now + (t0 - ct) * 1000 + l * 1000;
+        return sane(m) ? m : null;
+      }
+      function pulse(ev) {
+        if (!running || !master) return;
+        const ct = ctx.currentTime, t0 = ct + 0.02;
+        if (ev && typeof ev === 'object') { const m = heardAt(ct, t0); if (m !== null) ev.at = m; }
+        // the plan: the event's own pops, else a cluster of a fresh random seed (nothing without lib/ui-voice-thinking.js)
+        let plan = ev && typeof ev === 'object' && Array.isArray(ev.pops) && ev.pops.length ? ev : null;
+        if (!plan && typeof voiceThinkingCluster === 'function') plan = voiceThinkingCluster({ seed: Number.isFinite(Number(o.seed)) ? Number(o.seed) : Math.floor(Math.random() * 4294967296), index: own++, variant: o.variant });
+        if (!plan || !Array.isArray(plan.pops) || !plan.pops.length) return;
+        const dur = Math.max(0.05, (Number(plan.durationMs) || 1500) / 1000);
+        const fin = Math.min(dur, Math.max(0.004, (Number(plan.fadeInMs) || 0) / 1000)), fout = Math.min(dur - fin, Math.max(0.01, (Number(plan.fadeOutMs) || 0) / 1000));
+        const env = ctx.createGain();   // the cluster's fade in and out
+        env.gain.setValueAtTime(0, t0);
+        env.gain.linearRampToValueAtTime(1, t0 + fin);
+        env.gain.setValueAtTime(1, t0 + dur - fout);
+        env.gain.linearRampToValueAtTime(0, t0 + dur);
+        env.connect(master);
+        let sink = env;
+        if (typeof ctx.createBiquadFilter === 'function') {   // the low-pass: nothing above 2 kHz
+          const lp = ctx.createBiquadFilter();
+          lp.type = 'lowpass'; lp.frequency.value = Math.min(1990, Number(plan.lowpassHz) || 1600); if (lp.Q) lp.Q.value = 0.5;
+          lp.connect(env); sink = lp;
+        }
+        let left = plan.pops.length;
+        const done = () => { if (--left === 0) { try { sink.disconnect(); } catch { /* gone */ } try { env.disconnect(); } catch { /* gone */ } } };
+        for (const p of plan.pops) {
+          const tp = t0 + Math.max(0, Number(p.tMs) || 0) / 1000, dec = Math.max(0.03, Math.min(0.06, (Number(p.decayMs) || 45) / 1000));
+          const freq = Math.max(60, Math.min(1900, Number(p.freqHz) || 300)), level = Math.max(0, Math.min(1, Number(p.strength))), glide = Number(p.glide) > 0 ? Number(p.glide) : 1;
+          const osc = ctx.createOscillator(), g = ctx.createGain();
+          osc.type = 'sine'; osc.frequency.value = freq;
+          if (glide !== 1 && osc.frequency.setValueAtTime) { osc.frequency.setValueAtTime(freq, tp); osc.frequency.linearRampToValueAtTime(Math.min(1900, freq * glide), tp + dec); }
+          g.gain.setValueAtTime(0, tp);
+          g.gain.linearRampToValueAtTime(Number.isFinite(level) ? level : 0.7, tp + 0.004);   // a few ms attack
+          g.gain.linearRampToValueAtTime(0, tp + dec);                                          // the 30-60 ms decay ramp
+          osc.connect(g); g.connect(sink);
+          const item = { osc, env };
+          active.push(item);
+          osc.onended = () => { active = active.filter(x => x !== item); try { g.disconnect(); } catch { /* gone */ } done(); };
+          osc.start(tp); osc.stop(tp + dec + 0.02);
+        }
+      }
+      return {
+        start() {
+          if (running || !ctx) return;
+          running = true;
+          try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
+          master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+          pulse();
+          timer = setIv(pulse, 6500);
+        },
+        // ONE pulse at ctx.currentTime + 0.02 (the call's thinking clock decides when); no interval of its own. stop() ends it like start().
+        // With an event: event.at becomes the moment the pulse is heard and the event is returned (the same object); a context that is
+        // not running (suspended, closed) is asked to resume, plays nothing, claims nothing and false is returned.
+        pulse(ev) {
+          if (!ctx) return ev ? false : undefined;
+          const wants = ev && typeof ev === 'object';
+          if (wants && ctx.state !== undefined && ctx.state !== 'running') {
+            try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
+            return false;
+          }
+          if (!running) {
+            running = true;
+            try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
+            master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+          }
+          pulse(wants ? ev : undefined);
+          return wants ? ev : undefined;
+        },
+        stop() {
+          if (!running) return;
+          running = false;
+          if (timer !== null) { clearIv(timer); timer = null; }
+          const m = master, t = ctx.currentTime; master = null;
+          try { m.gain.cancelScheduledValues(t); m.gain.setValueAtTime(m.gain.value, t); m.gain.linearRampToValueAtTime(0, t + 0.1); } catch { /* ignore */ }
+          for (const x of active) { try { x.osc.stop(t + 0.12); } catch { /* already stopped */ } }
+          active = [];
+          try { if (typeof setTimeout === 'function') setTimeout(() => { try { m.disconnect(); } catch { /* gone */ } }, 300); } catch { /* ignore */ }
+        },
+        setVolume(v) { vol = clamp(v); if (master) { try { master.gain.value = peak(); } catch { /* ignore */ } } },
+        get playing() { return running; },
+      };
+    }
+    // The keep-alive sound: a 2 s loop of white noise at levelDb (default -70 dB, amplitude 10^(levelDb/20), mono) through a GainNode to
+    // ctx.destination. It is inaudible noise, not digital silence: phones and Bluetooth links that put the audio route to sleep on silence keep
+    // it open, so the first syllable of a reply and the thinking sound are not clipped. start() makes the buffer once and a source node each
+    // time; stop() stops and disconnects it. A missing or failing context makes every call a no-op. opts: { ctx, levelDb, allow }.
+    // allow() (optional): whether it may sound right now (the pages: the "Keep Bluetooth awake" switch is on; on the phone page also the call's
+    // audio goes to Bluetooth or a car, since on the phone's own speaker the noise is only a hiss in the pauses). start() asks for it, stop() ends
+    // it, refresh() applies a change of allow() at once (the switch flipped, the microphone moved to or from Bluetooth), mid-call.
+    function voiceCreateKeepAlive(opts) {
+      const o = opts || {}, ctx = o.ctx;
+      const db = typeof o.levelDb === 'number' && Number.isFinite(o.levelDb) ? o.levelDb : VOICE_KEEPALIVE_DB;
+      const allowed = () => { if (typeof o.allow !== 'function') return true; try { return o.allow() === true; } catch { return false; } };
+      let buffer = null, src = null, gain = null, wanted = false;
+      const drop = () => {
+        const s = src, g = gain; src = gain = null;
+        if (s) { try { s.stop(); } catch { /* not started */ } try { s.disconnect(); } catch { /* gone */ } }
+        if (g) { try { g.disconnect(); } catch { /* gone */ } }
+      };
+      const play = () => {
+        if (!ctx || src) return;
+        try {
+          if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); }
+          if (!buffer) {
+            const rate = ctx.sampleRate, amp = Math.pow(10, db / 20);
+            buffer = ctx.createBuffer(1, Math.max(1, Math.round(rate * 2)), rate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * amp;
+          }
+          gain = ctx.createGain(); gain.gain.value = 1;
+          src = ctx.createBufferSource(); src.buffer = buffer; src.loop = true;
+          src.connect(gain); gain.connect(ctx.destination);
+          src.start();
+        } catch { drop(); }
+      };
+      const apply = () => { if (wanted && allowed()) play(); else drop(); };
+      return {
+        start() { wanted = true; apply(); },
+        stop() { wanted = false; drop(); },
+        refresh() { apply(); },
+        get running() { return !!src; },
+      };
+    }
+    // The microphone and the voice activity detector. opts: { baseUrl, micLevel, interruptSensitivity, endPause, echoHoldMs, win, nav, loadScript, setTimer, clearTimer }.
+    // MicVAD 0.0.31 only takes getStream (no stream option), so the stream it gets is built here: microphone (echo
+    // cancellation, noise suppression and auto gain on) -> GainNode (the Mic level) -> MediaStreamDestination; the VAD
+    // listens to that destination stream, so the gain acts on what it hears and on what is sent to transcription.
+    // The gain and the destination are made once; the microphone source in front of them can be swapped (attach), so when the microphone
+    // ends or changes (Bluetooth connected or dropped, a car started) it is opened again without restarting the speech detector.
+    // handlers.onMicInfo(info) after every open; handlers.onMicChange({ ok, reason, info, changed, error }) after every reopen.
+    function voiceCreateVad(opts) {
+      const o = opts || {};
+      const base = o.baseUrl || '/api/voice/web/';
+      const pause = (v) => (VOICE_END_PAUSES.includes(Number(v)) ? Number(v) : 1200);   // how long a pause ends the person's turn (ms)
+      const holdMs = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : VOICE_ECHO_HOLD_MS; };
+      const st = { micLevel: o.micLevel, sens: o.interruptSensitivity, pause: pause(o.endPause), playing: false, vad: null, ctx: null, gain: null, raw: null, dest: null, gen: 0,
+        hold: o.echoHoldMs === undefined ? VOICE_ECHO_HOLD_MS : holdMs(o.echoHoldMs), holdTimer: null, nav: null, handlers: {}, src: null, track: null, trackOff: null,
+        mdOff: null, devTimer: null, reopening: null, info: null, defSnap: null,
+        unprocessed: !!o.unprocessed,   // the call's own microphone is opened with echo cancellation, noise suppression and auto gain off (a recorded call, mic 'unprocessed': the fallback)
+        recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [] };   // the recording's own second microphone track (openRecordingTap) and who follows the tap
+      const win = () => o.win || window;
+      const setT = o.setTimer || ((fn, ms) => { const w = win(); return (typeof w.setTimeout === 'function' ? w.setTimeout.bind(w) : setTimeout)(fn, ms); });
+      const clearT = o.clearTimer || ((id) => { const w = win(); return (typeof w.clearTimeout === 'function' ? w.clearTimeout.bind(w) : clearTimeout)(id); });
+      const clearHold = () => { if (st.holdTimer !== null) { try { clearT(st.holdTimer); } catch { /* gone */ } st.holdTimer = null; } };
+      const loadScript = o.loadScript || ((src) => new Promise((resolve, reject) => {
+        const el = win().document.createElement('script');
+        el.src = src; el.onload = () => resolve(); el.onerror = () => reject(new Error('could not load ' + src));
+        win().document.head.appendChild(el);
+      }));
+      const apply = () => {
+        const t = voiceVadThresholds(st.sens, st.playing);
+        if (st.vad) st.vad.setOptions({ positiveSpeechThreshold: t.positiveSpeechThreshold, negativeSpeechThreshold: t.negativeSpeechThreshold, minSpeechMs: t.minSpeechFrames * 32 });
+      };
+      // The microphone helpers. A handler (onMicInfo, onMicChange) must never break the microphone.
+      const callH = (name, arg) => { try { const f = st.handlers[name]; if (typeof f === 'function') f(arg); } catch { /* the handler's own problem */ } };
+      const call = callH;
+      const rawTrack = (raw) => { try { const l = raw && (raw.getAudioTracks ? raw.getAudioTracks() : (raw.getTracks ? raw.getTracks() : [])); return (l && l[0]) || null; } catch { return null; } };
+      // { label, sampleRate, channelCount, echoCancellation, fallback } from the track (each may be missing; the rate then is the context's).
+      function micInfo(raw, fallback) {
+        const tr = rawTrack(raw);
+        let s = {};
+        try { s = (tr && typeof tr.getSettings === 'function' && tr.getSettings()) || {}; } catch { s = {}; }
+        return { label: tr && typeof tr.label === 'string' ? tr.label : '', sampleRate: Number.isFinite(s.sampleRate) ? s.sampleRate : (st.ctx ? st.ctx.sampleRate : undefined),
+          channelCount: s.channelCount, echoCancellation: s.echoCancellation, fallback: !!fallback };
+      }
+      // The constraint ladder: echo cancellation, noise suppression and auto gain first, exactly as ever. A refusal by the person or the browser
+      // (NotAllowedError, SecurityError, AbortError) ends it; any other failure (OverconstrainedError, NotReadableError, TypeError, NotSupportedError,
+      // NotFoundError: some Bluetooth and car inputs cannot do those) gets ONE more try with plain { audio: true }; when that fails too, the FIRST error is thrown.
+      async function openMic() {
+        const r = await voiceOpenMicStream(st.nav, { unprocessed: st.unprocessed });
+        return { raw: r.stream, fallback: r.fallback };
+      }
+      // The recording follows the microphone: handlers registered with onSourceChange(fn) get the node to tap (recordingNode()) after every swap.
+      const recordingNode = () => st.recSrc || st.src;
+      function fireSource() { for (const f of st.srcWatchers.slice()) { try { f(recordingNode()); } catch { /* the watcher's own problem */ } } }
+      function flushOpen(ok) { const w = st.openWaiters; st.openWaiters = []; for (const f of w) { try { f(ok); } catch { /* gone */ } } }
+      function dropRecording() {
+        if (st.recOff) { try { st.recOff(); } catch { /* gone */ } }
+        const s = st.recSrc, r = st.recRaw;
+        st.recOff = st.recTrack = st.recSrc = st.recRaw = null;
+        if (s) { try { s.disconnect(); } catch { /* gone */ } }
+        if (r) voiceStopStream(r);
+      }
+      // The recording's microphone (a recorded call). Not unprocessed: the call's own source is tapped ('processed'). Unprocessed: a SECOND stream is opened with
+      // echo cancellation, noise suppression and auto gain off (the call track's device when known) and used only when its track says echo cancellation is off
+      // ('second-track'); else it is let go and the call's own microphone is opened again without that processing ('call-track'; 'processed' if even that failed).
+      // -> Promise of { processing, node } (node: what the recorder taps).
+      async function openRecordingTap(unprocessed) {
+        if (!st.ctx || !st.src) return { processing: 'processed', node: null };
+        if (!unprocessed) return { processing: 'processed', node: st.src };
+        const my = st.gen;
+        let dev;
+        try { dev = st.track && typeof st.track.getSettings === 'function' ? st.track.getSettings().deviceId : undefined; } catch { dev = undefined; }
+        const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+        if (dev) audio.deviceId = dev;
+        let raw = null;
+        try { raw = await st.nav.mediaDevices.getUserMedia({ audio }); } catch { raw = null; }
+        if (raw) {
+          voiceTrackLive(raw);
+          if (st.gen !== my || !st.ctx) { voiceStopStream(raw); return { processing: 'processed', node: null }; }
+          const tr = rawTrack(raw);
+          let ec;
+          try { ec = tr && typeof tr.getSettings === 'function' ? tr.getSettings().echoCancellation : undefined; } catch { ec = undefined; }
+          if (ec === false) {
+            let src;
+            try { src = st.ctx.createMediaStreamSource(raw); } catch { src = null; }
+            if (src) {
+              dropRecording();
+              st.recRaw = raw; st.recSrc = src; st.recTrack = tr;
+              if (tr && typeof tr.addEventListener === 'function') {
+                // The second track ended: the recording goes back to the call's own microphone, opened without processing.
+                const f = () => { if (st.recTrack !== tr) return; dropRecording(); st.unprocessed = true; reopen('recording', true).then(() => fireSource(), () => fireSource()); };
+                tr.addEventListener('ended', f);
+                st.recOff = () => { if (typeof tr.removeEventListener === 'function') tr.removeEventListener('ended', f); };
+              }
+              return { processing: 'second-track', node: src };
+            }
+          }
+          voiceStopStream(raw);   // processing is still on (or unusable): not used
+        }
+        if (st.gen !== my || !st.ctx) return { processing: 'processed', node: null };
+        st.unprocessed = true;
+        const ok = await reopen('recording', true);
+        return { processing: ok ? 'call-track' : 'processed', node: st.src };
+      }
+      function unwatchTrack() {
+        if (st.trackOff) { try { st.trackOff(); } catch { /* gone */ } }
+        st.trackOff = null; st.track = null;
+      }
+      // The new microphone goes in front of the SAME gain: the source is swapped, the destination stream (and so MicVAD) stays.
+      // The new source is made and connected first: if that throws, nothing of the old one was touched (the caller lets go of the new stream).
+      function attach(raw, fallback) {
+        const prevRaw = st.raw, prevSrc = st.src;
+        const src = st.ctx.createMediaStreamSource(raw);
+        try { src.connect(st.gain); } catch (e) { try { src.disconnect(); } catch { /* never connected */ } throw e; }
+        unwatchTrack();
+        if (prevSrc) { try { prevSrc.disconnect(); } catch { /* gone */ } }
+        if (prevRaw && prevRaw !== raw) voiceStopStream(prevRaw);   // stops and untracks it
+        st.src = src; st.raw = raw;
+        const tr = rawTrack(raw);
+        if (tr && typeof tr.addEventListener === 'function') {
+          const f = () => { if (st.track === tr) reopen('ended').catch(() => {}); };   // ended: opened again at once
+          tr.addEventListener('ended', f);
+          st.track = tr;
+          st.trackOff = () => { if (typeof tr.removeEventListener === 'function') tr.removeEventListener('ended', f); };
+        }
+        fireSource();
+      }
+      // The 'default' audio input as it was at the last open (its group and label change when the system switches, for example to a car).
+      async function snapDefault() {
+        const my = st.gen, md = st.nav && st.nav.mediaDevices;
+        if (!md || typeof md.enumerateDevices !== 'function') return;
+        try {
+          const list = await md.enumerateDevices();
+          if (st.gen !== my || !st.ctx) return;
+          const def = Array.from(list || []).find(x => x && x.kind === 'audioinput' && x.deviceId === 'default');
+          st.defSnap = def ? { groupId: def.groupId, label: def.label } : null;
+        } catch { /* no list: the default entry is simply not compared */ }
+      }
+      // devicechange: waits 700 ms (a burst of events counts once), then opens the microphone again only when it matters for this call: the
+      // current track ended, its device is no longer listed, or the 'default' input moved to another device or name.
+      function deviceChanged() {
+        if (!st.ctx) return;
+        if (st.devTimer !== null) { try { clearT(st.devTimer); } catch { /* gone */ } }
+        st.devTimer = setT(() => { st.devTimer = null; checkDevices().catch(() => {}); }, 700);
+      }
+      async function checkDevices() {
+        const my = st.gen;
+        if (!st.ctx || st.reopening) return;
+        let need = !!(st.track && st.track.readyState === 'ended');
+        if (!need) {
+          const md = st.nav.mediaDevices;
+          if (typeof md.enumerateDevices !== 'function') return;
+          let list;
+          try { list = await md.enumerateDevices(); } catch { return; }
+          if (st.gen !== my || !st.ctx) return;
+          const inputs = Array.from(list || []).filter(x => x && x.kind === 'audioinput');
+          let id;
+          try { id = st.track && typeof st.track.getSettings === 'function' ? st.track.getSettings().deviceId : undefined; } catch { id = undefined; }
+          if (id && !inputs.some(x => x.deviceId === id)) need = true;
+          const def = inputs.find(x => x.deviceId === 'default');
+          if (!need && def && st.defSnap && (def.groupId !== st.defSnap.groupId || def.label !== st.defSnap.label)) need = true;
+        }
+        if (need) await reopen('devicechange');
+      }
+      // ONE attempt (with the constraint ladder), never two at once: a reopen in flight absorbs further triggers (and answers them with its own
+      // result). Success: the new source is attached, onMicInfo and onMicChange({ ok: true, info, reason, changed }) (changed: the label differs from
+      // before). Failure: onMicChange({ ok: false, reason, error }); the speech detector keeps running on the silent destination and nothing is retried.
+      // silent (the recording's own reopen): the result is not reported through onMicChange (nothing is said to the person).
+      function reopen(reason, silent) {
+        if (st.reopening) return st.reopening;
+        if (!st.ctx || !st.gain || !st.nav) return Promise.resolve(false);
+        const my = st.gen, prev = st.info ? st.info.label : '';
+        const call = silent ? ((name, arg) => { if (name !== 'onMicChange') callH(name, arg); }) : callH;
+        st.reopening = (async () => {
+          let res;
+          try { res = await openMic(); } catch (error) { if (st.gen === my) call('onMicChange', { ok: false, reason, error }); return false; }
+          voiceTrackLive(res.raw);
+          if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }   // stopped meanwhile: let go of it
+          // iOS leaves the context 'interrupted' (or suspended) after a route change or a phone call: resume it, or the new source is silent.
+          // A resume can stay pending on iOS while a phone call holds the audio: it is given 3 s; a context still not running is a lost microphone
+          // (the new stream is let go, "Try the microphone again" tries later), never a recovery that hears nothing.
+          if (st.ctx.state && st.ctx.state !== 'running' && typeof st.ctx.resume === 'function') {
+            let wait = null;
+            try { await Promise.race([Promise.resolve(st.ctx.resume()), new Promise((r) => { wait = setT(r, 3000); })]); } catch { /* checked below */ }
+            finally { if (wait !== null) { try { clearT(wait); } catch { /* gone */ } } }
+            if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }
+            if (st.ctx.state && st.ctx.state !== 'running') { voiceStopStream(res.raw); call('onMicChange', { ok: false, reason, error: new Error('the audio is not running') }); return false; }
+          }
+          try { attach(res.raw, res.fallback); } catch (error) {
+            voiceStopStream(res.raw);   // the new stream is let go; the old source (if any) was not touched
+            call('onMicChange', { ok: false, reason, error });
+            return false;
+          }
+          const info = micInfo(res.raw, res.fallback);
+          st.info = info;
+          snapDefault();
+          call('onMicInfo', info);
+          call('onMicChange', { ok: true, reason, info, changed: (info.label || '') !== (prev || '') });
+          return true;
+        })().finally(() => { st.reopening = null; });
+        return st.reopening;
+      }
+      async function start(h) {
+        const w = win(), handlers = h || {}, my = ++st.gen;
+        const stale = () => st.gen !== my;   // stop() was called while this start was still in flight: whatever it makes is let go
+        st.handlers = handlers;
+        // Every failure from here on (script load, resume, MicVAD) lets go of the VAD, the stream and the audio context.
+        try {
+          // The audio context is made and resumed first, still inside the tap that started the call: iOS keeps a context
+          // suspended when it is made after an await. Speech detection needs at least 16 kHz: a context that came up lower (some
+          // Bluetooth hands-free profiles run at 8 kHz) is closed and a 48 kHz one made instead (a plain one when that is refused).
+          const Ctx = w.AudioContext || w.webkitAudioContext;
+          st.ctx = new Ctx();
+          if (typeof st.ctx.sampleRate === 'number' && st.ctx.sampleRate < 16000) {
+            try { const c = st.ctx.close(); if (c && c.catch) c.catch(() => {}); } catch { /* already closed */ }
+            try { st.ctx = new Ctx({ sampleRate: 48000 }); } catch { st.ctx = new Ctx(); }
+          }
+          const resumed = st.ctx.resume();
+          resumed.catch(() => {});   // a failed resume is reported by the await below, not as an unhandled rejection
+          if (!w.vad || !w.vad.MicVAD) { await loadScript(base + 'ort.wasm.min.js'); await loadScript(base + 'bundle.min.js'); }
+          await resumed;
+          if (stale()) throw new Error('stopped');
+          const nav = o.nav || w.navigator;
+          st.nav = nav;
+          const t = voiceVadThresholds(st.sens, false);
+          st.vad = await w.vad.MicVAD.new({
+            model: 'v5', audioContext: st.ctx, baseAssetPath: base, onnxWASMBasePath: base,
+            ortConfig: (c) => { c.env.wasm.numThreads = 1; },
+            getStream: async () => {
+              const opened = await openMic();
+              voiceTrackLive(opened.raw);
+              if (stale()) { voiceStopStream(opened.raw); throw new Error('stopped'); }
+              const dest = st.ctx.createMediaStreamDestination();   // the destination and the gain are made once; a reopen only swaps the source (attach)
+              st.dest = dest.stream; voiceTrackLive(st.dest);
+              st.gain = st.ctx.createGain(); st.gain.gain.value = voiceGainFromSlider(st.micLevel);
+              try { attach(opened.raw, opened.fallback); } catch (e) { voiceStopStream(opened.raw); throw e; }   // never leave the new stream live
+              st.gain.connect(dest);
+              st.info = micInfo(opened.raw, opened.fallback);
+              if (!st.mdOff && nav.mediaDevices && typeof nav.mediaDevices.addEventListener === 'function') {
+                const md = nav.mediaDevices, onChange = () => deviceChanged();
+                md.addEventListener('devicechange', onChange);
+                st.mdOff = () => { try { md.removeEventListener('devicechange', onChange); } catch { /* gone */ } };
+              }
+              snapDefault();
+              call('onMicInfo', st.info);
+              flushOpen(true);
+              return dest.stream;
+            },
+            pauseStream: async () => {}, resumeStream: async (s) => s,
+            positiveSpeechThreshold: t.positiveSpeechThreshold, negativeSpeechThreshold: t.negativeSpeechThreshold,
+            redemptionMs: st.pause, preSpeechPadMs: 256, minSpeechMs: t.minSpeechFrames * 32,
+            // vad-web 0.0.31: onSpeechStart fires on the first speech-like frame, onSpeechRealStart once minSpeechMs is reached.
+            // A candidate start marks the person as speaking (nothing new starts over them); playback is cut on the real start
+            // only; a candidate that never gets there ends in onVADMisfire.
+            onSpeechStart: () => { if (handlers.onSpeechBegin) handlers.onSpeechBegin(); },
+            // Real speech passed the raised thresholds: an echo hold-over still running (after a reply or a thinking pulse) ends at once, so
+            // it never stays raised over the person's own words.
+            onSpeechRealStart: () => {
+              if (st.holdTimer !== null) { clearHold(); st.playing = false; apply(); }
+              if (handlers.onSpeechStart) handlers.onSpeechStart();
+            },
+            onSpeechEnd: (audio) => (handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
+            onVADMisfire: () => { if (handlers.onMisfire) handlers.onMisfire(); },
+            onFrameProcessed: (probs, frame) => { if (handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs); },
+          });
+          if (stale()) throw new Error('stopped');
+          await st.vad.start();
+        } catch (e) { flushOpen(false); if (!stale()) await stop(); else await release(); throw e; }
+      }
+      // Lets go of everything this adapter holds: MicVAD, the raw microphone stream, the processed stream (the destination's
+      // tracks) and the audio context, so other apps can use the microphone at once.
+      async function release() {
+        const { vad, raw, dest, ctx } = st;
+        if (st.holdTimer !== null) st.playing = false;   // an echo hold-over that was still running ends with the adapter
+        clearHold();
+        if (st.devTimer !== null) { try { clearT(st.devTimer); } catch { /* gone */ } st.devTimer = null; }
+        unwatchTrack();
+        if (st.mdOff) { st.mdOff(); st.mdOff = null; }
+        const src = st.src;
+        flushOpen(false); dropRecording(); st.srcWatchers = [];
+        st.vad = st.raw = st.dest = st.ctx = st.gain = st.src = st.defSnap = null;
+        if (src) { try { src.disconnect(); } catch { /* gone */ } }
+        voiceStopStream(raw); voiceStopStream(dest);   // first, so the microphone is free even when the rest is slow
+        try { if (vad) await vad.destroy(); } catch { /* already gone */ }
+        try { if (ctx) await ctx.close(); } catch { /* already closed */ }
+      }
+      async function stop() { st.gen++; await release(); }
+      return {
+        start, stop,
+        // While a reply plays the barge-in thresholds are raised. Playback stopping does NOT lower them at once: a car cabin's echo of the reply
+        // reaches the microphone 150-300 ms after playback stops (longer through Bluetooth), and would be heard as the person speaking. So they stay
+        // raised for echoHoldMs (default VOICE_ECHO_HOLD_MS; 0 = off: lowered at once) and a new playback in between cancels the lowering.
+        // now = true (the person's real speech cut the playback): lowered at once, so the hold-over never shortens their own turn.
+        setPlaybackActive(on, now) {
+          if (on) { clearHold(); st.playing = true; apply(); return; }
+          if (now) { clearHold(); st.playing = false; apply(); return; }
+          if (st.holdTimer !== null) return;   // already counting down
+          if (!st.ctx) { st.playing = false; return; }   // released (a hang-up): no timer outlives the adapter
+          if (st.hold > 0 && st.playing) {
+            try { st.holdTimer = setT(() => { st.holdTimer = null; st.playing = false; apply(); }, st.hold); return; } catch { st.holdTimer = null; /* no timer: lowered at once */ }
+          }
+          st.playing = false; apply();
+        },
+        // 'Echo guard' (ms, 0 = off); lowering it to 0 ends a hold-over that is running.
+        setEchoHold(ms) { st.hold = holdMs(ms); if (st.hold === 0 && st.holdTimer !== null) { clearHold(); st.playing = false; apply(); } },
+        // Opens the microphone again (the same path as a lost or changed one, reason 'manual'): a promise of true / false.
+        reopen() { return reopen('manual'); },
+        info() { return st.info; },
+        // The recording's taps (a recorded call): tapNode() is the call's current microphone source (before the Mic level gain); recordingNode() is what the
+        // recorder listens to (the second track's source when openRecordingTap made one, else tapNode()); onSourceChange(fn) calls fn(recordingNode()) after
+        // every swap of the source (a reopen); whenOpen() -> Promise of true once the microphone is open (false: the start failed or the adapter was released);
+        // audioContext() is the call's AudioContext; openRecordingTap(unprocessed) -> { processing, node } (see its doc above).
+        tapNode() { return st.src; },
+        recordingNode,
+        onSourceChange(fn) { if (typeof fn === 'function') st.srcWatchers.push(fn); },
+        whenOpen() { return st.info && st.src ? Promise.resolve(true) : new Promise((resolve) => { st.openWaiters.push(resolve); }); },
+        audioContext() { return st.ctx; },
+        openRecordingTap,
+        setMicLevel(v) { st.micLevel = v; if (st.gain) st.gain.gain.value = voiceGainFromSlider(v); },
+        setInterruptSensitivity(v) { st.sens = v; apply(); },
+        // 'Pause before I'm done': only the END of a turn waits this long; the start of speech (barge-in) is not delayed.
+        setEndPause(ms) { st.pause = pause(ms); if (st.vad) st.vad.setOptions({ redemptionMs: st.pause }); },
+      };
+    }
+    // The recorder of a recorded call (only made when the agent keeps recordings). It taps an audio node (the microphone source) on the call's own
+    // AudioContext and keeps the last prerollMs of audio in a ring buffer; begin() opens a segment with that preroll in front, end() closes it, encodes
+    // 16-bit PCM mono WAV at ctx.sampleRate (never resampled) and uploads it. opts: { ctx, source, upload(segment) -> Promise<{ seq }>, now, setTimer, clearTimer,
+    // prerollMs = 600, maxMs = 3 min, onTrouble(reason) }. A segment is { wav: Uint8Array, startedAt, endedAt (ms), sampleRate }.
+    // The tap is an AudioWorkletNode (a processor from a Blob URL) when ctx.audioWorklet exists, else a ScriptProcessorNode (4096); either way it goes to a
+    // zero-gain node to ctx.destination, so it runs and makes no sound.
+    // begin() is ignored while a segment is open or while paused. drop() discards the open segment. end() -> { seq: Promise<number|null> } or null; seq is
+    // null when the upload finally failed. A segment longer than maxMs is cut at maxMs and the rest goes on as a new one (the handle is the last piece's).
+    // pause(true): the open segment is SENT first (what was already said is kept), then nothing is captured; it returns flushed() (a promise that resolves when
+    // every upload queued or in flight before the pause has finished, resolved or given up); pause(false) resumes. flushed() is that promise at any time.
+    // cut() sends the open segment and goes on with a new one (a page being hidden or closed: the piece is on its way and stored). ready: a promise of true (the tap
+    // is made) or false (it could not be). setSource(node) moves the tap; stop() sends the open segment (the words being said at hang-up; not while paused) and
+    // disconnects (uploads in flight go on while the page is open; the hub takes a call's last pieces for 60 minutes after it ends).
+    // Uploads (opts.agent, callId, speaker 'person' name the piece in the store): each piece is written to IndexedDB (database 'hub-rec-pending', store 'pieces',
+    // opts.store overrides; none or a failing one: memory only, the call is never held) BEFORE its first try and deleted when the hub answers 2xx or finally refuses.
+    // At most 2 uploads at once; a failed one is tried again after waits of 1, 2, 4, 8, 15, 30, 60 s, then every 60 s, until 55 minutes after the piece's end;
+    // a 4xx other than 408 and 429 is final (the upload function gives 409, paused or no call, as a result, which is final too). onTrouble('upload_failed') is
+    // called ONCE, when the first piece has been failing for more than 60 s (it still retries) or when one is given up. The transcript of a piece that is resent
+    // after a reload (voiceRecResendPending) is lost: the audio is what matters.
+    const VOICE_REC_WORKLET = 'class VoiceRecTap extends AudioWorkletProcessor { constructor() { super(); this.b = new Float32Array(1024); this.n = 0; } process(inputs) { const c = inputs[0] && inputs[0][0]; if (!c) return true; for (let k = 0; k < c.length; k++) { this.b[this.n++] = c[k]; if (this.n === 1024) { const o = this.b; this.port.postMessage(o, [o.buffer]); this.b = new Float32Array(1024); this.n = 0; } } return true; } } registerProcessor("voice-rec-tap", VoiceRecTap);';
+    function voiceWavFromFloat(samples, rate) {
+      const n = samples.length, out = new Uint8Array(44 + n * 2), dv = new DataView(out.buffer);
+      const tag = (at, s) => { for (let i = 0; i < s.length; i++) out[at + i] = s.charCodeAt(i); };
+      tag(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE'); tag(12, 'fmt '); dv.setUint32(16, 16, true);
+      dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true);
+      dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); tag(36, 'data'); dv.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) { const v = Math.max(-1, Math.min(1, Number(samples[i]) || 0)); dv.setInt16(44 + i * 2, Math.round(v * 32767), true); }
+      return out;
+    }
+    // The pieces the hub has not acknowledged yet, kept in IndexedDB so a flaky network, a closed tab or a reload does not lose them (the hub takes a call's pieces for
+    // 60 minutes after it ends, so a piece is kept for 55). voiceRecStore(idb) -> { put(record), del(id), all() } (each a Promise that never rejects: put / del give
+    // true or false, all gives an array), or null when there is no IndexedDB. A record is { id, agent, callId, speaker, startedAt, endedAt (ms), wav (ArrayBuffer),
+    // createdAt (ms) }. The database opens at once and put() starts its transaction synchronously once it is open, so a page that is closing still gets its piece written.
+    const VOICE_REC_KEEP_MS = 55 * 60 * 1000;
+    const VOICE_REC_UNREADABLE = { unreadable: true };
+    function voiceRecStore(idb) {
+      if (!idb || typeof idb.open !== 'function') return null;
+      let db = null, opening = null;
+      const open = () => opening || (opening = new Promise((resolve) => {
+        try {
+          const req = idb.open('hub-rec-pending', 1);
+          req.onupgradeneeded = () => { try { req.result.createObjectStore('pieces', { keyPath: 'id' }); } catch { /* it exists */ } };
+          req.onsuccess = () => { db = req.result; resolve(db); };
+          req.onerror = () => resolve(null);
+          req.onblocked = () => resolve(null);
+        } catch { resolve(null); }
+      }));
+      const run = (mode, fn, bad) => new Promise((resolve) => {
+        const go = (d) => {
+          if (!d) { resolve(bad); return; }
+          try {
+            const tx = d.transaction('pieces', mode), r = fn(tx.objectStore('pieces'));
+            tx.oncomplete = () => resolve(mode === 'readonly' ? r.result : true);
+            tx.onerror = () => resolve(bad); tx.onabort = () => resolve(bad);
+          } catch { resolve(bad); }
+        };
+        if (db) go(db); else open().then(go, () => resolve(bad));
+      });
+      open();
+      return { put: (rec) => run('readwrite', (st) => st.put(rec), false), del: (id) => run('readwrite', (st) => st.delete(id), false),
+        all: () => run('readonly', (st) => st.getAll(), []).then((v) => (Array.isArray(v) ? v : [])),
+        // get: the record, or null when it is not there; it REJECTS when it could not be read (a missing record means "sent by another tab", an unreadable one is a failed try)
+        get: (id) => run('readonly', (st) => st.get(id), VOICE_REC_UNREADABLE).then((v) => { if (v === VOICE_REC_UNREADABLE) throw new Error('the stored piece could not be read'); return v || null; }) };
+    }
+    const voiceRecShared = { store: undefined, resending: false };   // store: made on first use (undefined = not tried yet, null = this browser has none)
+    function voiceRecStoreOf(idb) {
+      if (idb !== undefined) return voiceRecStore(idb);
+      if (voiceRecShared.store === undefined) voiceRecShared.store = voiceRecStore(typeof indexedDB !== 'undefined' ? indexedDB : null);
+      return voiceRecShared.store;
+    }
+    // piece: the piece's id (letters, digits, _ and -, 8 to 64 characters): the hub answers the same piece sent again with the first answer.
+    function voiceRecSegmentUrl(agent, callId, speaker, startedAt, endedAt, piece) {
+      const iso = (ms) => new Date(ms).toISOString();
+      return '/api/recordings/segment?agent=' + encodeURIComponent(agent) + '&callId=' + encodeURIComponent(callId || '') + '&speaker=' + speaker
+        + '&startedAt=' + encodeURIComponent(iso(startedAt)) + '&endedAt=' + encodeURIComponent(iso(endedAt)) + (piece ? '&piece=' + encodeURIComponent(piece) : '');
+    }
+    const voiceRecLive = new Set();   // ids of the pieces a live recorder is still sending: the resend leaves them alone
+    // Sends every stored piece that is less than 55 minutes old, one at a time, and deletes older ones (the hub no longer takes them). fetch(url, init) answers like
+    // fetch. A piece is deleted when the hub answers 2xx or refuses it for good (409, or a 4xx other than 408 / 429 / 401: a sign-in that ran out keeps the audio);
+    // a 5xx, 413, 401 and so on on one piece leaves that piece for the next pass and goes on to the next piece; only no network at all (fetch throws) stops the pass.
+    // Pieces belong to a person: only those stored with the signed-in user's id (opts.userId) are sent. Another person's pieces, and pieces with no userId, are left alone
+    // (not sent, not deleted) until they are 55 minutes old. With no userId known, nothing is sent. Every try carries the piece's id (&piece=): the hub answers a piece it
+    // has already taken with the first answer. Called at page start (after sign-in is known) and when a call starts.
+    // The transcript of a piece resent this way is lost (it needs the seq of the first upload); the audio is what matters.
+    // opts: { store, indexedDB, now, userId }. -> { sent, dropped, kept }
+    async function voiceRecResendPending(fetchFn, opts) {
+      const x = opts || {}, out = { sent: 0, dropped: 0, kept: 0 };
+      if (voiceRecShared.resending || typeof fetchFn !== 'function') return out;
+      const userId = x.userId === undefined || x.userId === null ? '' : String(x.userId);
+      if (!userId) return out;
+      const store = x.store !== undefined ? x.store : voiceRecStoreOf(x.indexedDB);
+      if (!store) return out;
+      voiceRecShared.resending = true;
+      try {
+        const now = typeof x.now === 'function' ? x.now() : Date.now();
+        const all = (await store.all()).filter(r => r && r.id && !voiceRecLive.has(r.id)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        for (let i = 0; i < all.length; i++) {
+          const r = all[i];
+          if (!(now - Number(r.createdAt) < VOICE_REC_KEEP_MS)) { await store.del(r.id); out.dropped++; continue; }
+          if (!r.userId || String(r.userId) !== userId) continue;   // somebody else's piece, or nobody's: left alone
+          let res;
+          try { res = await fetchFn(voiceRecSegmentUrl(r.agent, r.callId, r.speaker || 'person', r.startedAt, r.endedAt, r.id), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: new Uint8Array(r.wav) }); } catch { out.kept += all.length - i; break; }
+          const s = Number(res && res.status);
+          if (res && (res.ok || s === 409 || (s >= 400 && s < 500 && s !== 408 && s !== 429 && s !== 401 && s !== 413))) { await store.del(r.id); out.sent += res.ok ? 1 : 0; out.dropped += res.ok ? 0 : 1; } else out.kept++;
+        }
+      } catch { /* the next pass tries again */ } finally { voiceRecShared.resending = false; }
+      return out;
+    }
+    function voiceCreateRecorder(opts) {
+      const o = opts || {}, ctx = o.ctx;
+      const clock = typeof o.now === 'function' ? o.now : () => Date.now();
+      const setT = o.setTimer || ((fn, ms) => setTimeout(fn, ms)), clrT = o.clearTimer || ((id) => clearTimeout(id));
+      const rate = ctx.sampleRate;
+      const preMs = Number.isFinite(Number(o.prerollMs)) ? Number(o.prerollMs) : 600;
+      // A long stretch of talk is cut into pieces of at most 3 minutes (about 35 MB of samples in memory at 48 kHz, a 17 MB upload), so a phone never holds more.
+      const maxMs = Number.isFinite(Number(o.maxMs)) && Number(o.maxMs) > 0 ? Number(o.maxMs) : 3 * 60 * 1000;
+      const preSamples = Math.round(rate * preMs / 1000), maxSamples = Math.round(rate * maxMs / 1000);
+      let src = null, tap = null, zero = null, url = null, ring = [], ringN = 0, seg = null, paused = false, stopped = false, troubled = false;
+      let inflight = 0; const waiting = [], jobs = new Set();
+      const store = o.store !== undefined ? o.store : voiceRecStoreOf();
+      const WAITS = [1000, 2000, 4000, 8000, 15000, 30000, 60000], GIVE_UP_MS = 55 * 60 * 1000, TROUBLE_MS = 60 * 1000;
+      let counter = 0, lost = 0;
+      const userId = o.userId === undefined || o.userId === null ? '' : String(o.userId);
+      const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
+      const concat = (chunks, n) => { const out = new Float32Array(n); let at = 0; for (const c of chunks) { out.set(c, at); at += c.length; } return out; };
+      // A 401 (the sign-in ran out) is retryable: the audio is kept and tried again on the normal schedule.
+      const retryable = (e) => { const s = e && Number(e.status); return !(s >= 400 && s < 500 && s !== 408 && s !== 429 && s !== 401); };
+      function trouble() { if (troubled) return; troubled = true; if (typeof o.onTrouble === 'function') quiet(() => o.onTrouble('upload_failed')); }
+      const failing = () => { for (const j of jobs) if (j.failedAt !== undefined && !j.over) return true; return false; };
+      // Every piece that failed has since been sent (none given up, none failing): the people are told it is fine again (onRecover); a later failure tells them again.
+      // keep: the stored copy stays (the hub refused the piece because the call is not recording: voiceRecResendPending may still place it under the person's own id).
+      function finish(job, seq, sent, keep) {
+        job.over = true; job.keep = keep === true; jobs.delete(job); voiceRecLive.delete(job.id); if (store && !job.keep) Promise.resolve(quiet(() => store.del(job.id))).catch(() => {});
+        if (!sent) lost++;
+        if (sent && troubled && !lost && !failing()) { troubled = false; if (typeof o.onRecover === 'function') quiet(() => o.onRecover()); }
+        job.resolve(seq);
+      }
+      // One try of a piece. A piece that fails is tried again later (its slot is free meanwhile) until the hub has it, refuses it for good, or time is up.
+      // A piece whose copy is in the store (its put succeeded) has no WAV in memory: it is read back for each try; a read that fails counts as a failed try.
+      async function attempt(job) {
+        try {
+          let seg = job.segment;
+          if (!seg.wav) {
+            // The read-back is raced against 2 s: a store that hangs counts as one failed try (the slot is freed, the piece is tried again later).
+            let rec = null;
+            if (store && typeof store.get === 'function') {
+              let timer = null;
+              const timeout = new Promise((_, no) => { timer = setT(() => no(new Error('the stored piece could not be read in time')), 2000); });
+              try { rec = await Promise.race([Promise.resolve(store.get(job.id)), timeout]); } finally { if (timer !== null) quiet(() => clrT(timer)); }
+            }
+            // No record at all: another tab (its resend) sent the piece and deleted it. It was sent: no trouble, no failure.
+            if (rec === null || rec === undefined) { finish(job, null, true); return; }
+            if (!rec.wav) throw new Error('the stored piece could not be read');
+            seg = { wav: new Uint8Array(rec.wav), startedAt: seg.startedAt, endedAt: seg.endedAt, sampleRate: seg.sampleRate, piece: seg.piece };
+          }
+          const r = await o.upload(seg);
+          if (r && r.status === 409) {   // the hub's answer is no: not sent, and not retried live. Only piece_conflict (a different body under that id) leaves nothing to resend.
+            finish(job, null, false, r.error !== 'piece_conflict'); return;
+          }
+          finish(job, r && Number.isInteger(r.seq) ? r.seq : null, true); return;
+        } catch (e) {
+          if (!retryable(e)) { trouble(); finish(job, null, false); return; }
+          const now = clock(), first = job.failedAt === undefined;
+          if (first) job.failedAt = now;
+          else if (now - job.failedAt > TROUBLE_MS) trouble();
+          if (now - job.segment.endedAt >= GIVE_UP_MS) { trouble(); finish(job, null); return; }
+          const wait = WAITS[Math.min(job.fails++, WAITS.length - 1)];
+          setT(() => { waiting.push(job); pump(); }, wait);
+          if (first) setT(() => { if (!job.over) trouble(); }, TROUBLE_MS + 1);   // still failing after a minute: the people are told while it goes on trying
+        }
+      }
+      function pump() {
+        while (inflight < 2 && waiting.length) {
+          const job = waiting.shift(); inflight++;
+          attempt(job).then(() => { inflight--; pump(); });
+        }
+      }
+      function send(samples, startedAt, endedAt) {
+        const wav = voiceWavFromFloat(samples, rate);
+        return new Promise((resolve) => {
+          // The piece's id: base36 parts joined with '-', 8 to 64 characters of [A-Za-z0-9_-] (the hub's rule); it is sent as &piece= on every try, so a retry is never a second piece.
+          const id = Date.now().toString(36) + '-' + (counter++).toString(36) + '-' + Math.random().toString(36).slice(2, 8).padEnd(4, '0');
+          const segment = { wav, startedAt, endedAt, sampleRate: rate, piece: id };
+          const job = { id, segment, resolve, fails: 0, over: false };
+          jobs.add(job); voiceRecLive.add(job.id);
+          job.done = new Promise((r) => { job.settle = r; });
+          const was = job.resolve; job.resolve = (v) => { was(v); job.settle(); };
+          const go = () => { waiting.push(job); pump(); };
+          let saved = null;
+          if (store) saved = quiet(() => store.put({ id: job.id, userId, agent: String(o.agent || ''), callId: String(o.callId || ''), speaker: o.speaker || 'person', startedAt, endedAt,
+            wav: wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength), createdAt: clock() }));   // written BEFORE the first try
+          if (saved && typeof saved.then === 'function') {
+            // A store that hangs does not hold the call's uploads: after 2 s the piece goes to the network anyway (its copy stays in memory). Once the put has succeeded the
+            // copy in memory is dropped (a long outage must not fill a phone) and each try reads it back from the store.
+            let t = null, done = false;
+            const next = (ok) => {
+              if (done) { if (ok === true && job.over && !job.keep) quiet(() => store.del(job.id)); return; }   // a put that finished after the piece was already sent leaves nothing behind
+              done = true; if (t !== null) quiet(() => clrT(t));
+              if (ok === true && typeof store.get === 'function') segment.wav = null;
+              go();
+            };
+            t = setT(() => next(false), 2000);
+            saved.then(next, () => next(false));
+          } else go();
+        });
+      }
+      function flushed() { return Promise.all(Array.from(jobs).map(j => j.done)).then(() => undefined); }
+      function onChunk(f32) {
+        if (stopped || paused || !f32 || !f32.length) return;
+        ring.push(f32); ringN += f32.length;
+        while (ring.length > 1 && ringN - ring[0].length >= preSamples) ringN -= ring.shift().length;
+        if (!seg) return;
+        seg.chunks.push(f32); seg.samples += f32.length;
+        while (seg && seg.samples > maxSamples) {   // cut at maxMs; the rest goes on as a new segment
+          const all = concat(seg.chunks, seg.samples), cutAt = seg.startedAt + maxMs;
+          send(all.subarray(0, maxSamples), seg.startedAt, cutAt);
+          const rest = all.subarray(maxSamples);
+          seg = { chunks: [rest], samples: rest.length, startedAt: cutAt };
+        }
+      }
+      function connectSource(node) {
+        if (src && tap) quiet(() => src.disconnect(tap));
+        src = node || null;
+        if (src && tap) quiet(() => src.connect(tap));
+      }
+      function makeTap() {
+        zero = ctx.createGain(); zero.gain.value = 0; zero.connect(ctx.destination);
+        const sp = () => {
+          tap = ctx.createScriptProcessor(4096, 1, 1);
+          tap.onaudioprocess = (e) => { const d = e && e.inputBuffer && e.inputBuffer.getChannelData(0); if (d) onChunk(new Float32Array(d)); };
+          tap.connect(zero); connectSource(src);
+        };
+        const W = o.AudioWorkletNode || (typeof AudioWorkletNode !== 'undefined' ? AudioWorkletNode : null);
+        const B = o.Blob || (typeof Blob !== 'undefined' ? Blob : null), U = o.URL || (typeof URL !== 'undefined' ? URL : null);
+        if (ctx.audioWorklet && W && B && U) {
+          url = U.createObjectURL(new B([VOICE_REC_WORKLET], { type: 'application/javascript' }));
+          return Promise.resolve(ctx.audioWorklet.addModule(url)).then(() => {
+            if (stopped) return;
+            tap = new W(ctx, 'voice-rec-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 1, channelCountMode: 'explicit' });
+            tap.port.onmessage = (e) => onChunk(e.data);
+            tap.connect(zero); connectSource(src);
+          }).catch(() => { if (!stopped) sp(); });
+        }
+        sp();
+        return Promise.resolve();
+      }
+      src = o.source || null;
+      const ready = Promise.resolve().then(makeTap).then(() => !!tap || stopped, () => false);   // false: the tap could not be made, nothing will be recorded
+      return {
+        ready,
+        flushed,
+        // A page being hidden or closed: the open segment is sent now (written to IndexedDB first) and a new one goes on from here; not while paused.
+        cut() {
+          if (stopped || paused || !seg || seg.samples <= 0) return;
+          const s = seg, at = clock();
+          send(concat(s.chunks, s.samples), s.startedAt, at);
+          seg = { chunks: [], samples: 0, startedAt: at };
+        },
+        begin() {
+          if (stopped || paused || seg) return;
+          const all = concat(ring, ringN), take = Math.min(all.length, preSamples);
+          const pre = all.subarray(all.length - take);
+          seg = { chunks: [pre], samples: pre.length, startedAt: clock() - Math.round(take * 1000 / rate) };
+        },
+        drop() { seg = null; },
+        end() {
+          if (!seg) return null;
+          const s = seg; seg = null;
+          if (s.samples <= 0) return null;
+          return { seq: send(concat(s.chunks, s.samples), s.startedAt, clock()) };
+        },
+        // pause(true) first sends the open segment (as end() does), then stops capturing; it returns flushed(): every upload queued or in flight so far.
+        pause(on) {
+          if (!on) { paused = false; return Promise.resolve(); }
+          if (!paused && !stopped && seg && seg.samples > 0) { const s = seg; send(concat(s.chunks, s.samples), s.startedAt, clock()); }
+          paused = true; seg = null; ring = []; ringN = 0;
+          return flushed();
+        },
+        setSource(node) { connectSource(node); },
+        // Hang-up: what the person was saying at that moment is kept (sent like any other piece), then the tap is let go.
+        stop() {
+          if (stopped) return;
+          if (seg && !paused && seg.samples > 0) { const s = seg; send(concat(s.chunks, s.samples), s.startedAt, clock()); }
+          stopped = true; seg = null; ring = []; ringN = 0;
+          if (src && tap) quiet(() => src.disconnect(tap));
+          src = null;
+          if (tap) { quiet(() => { tap.onaudioprocess = null; }); quiet(() => { if (tap.port) tap.port.onmessage = null; }); quiet(() => tap.disconnect()); }
+          if (zero) quiet(() => zero.disconnect());
+          if (url) { quiet(() => (o.URL || URL).revokeObjectURL(url)); url = null; }
+        },
+        get paused() { return paused; },
+      };
+    }
+    // What the hub answers a call start with when the agent keeps recordings but its speech recognition is not on this computer (409 recording_needs_local_stt).
+    const VOICE_REC_NEEDS_LOCAL = 'This agent keeps recordings of its calls, and recordings are only made with speech recognition on this computer. An admin can switch this agent\'s speech recognition to this computer on its settings page.';
+    // The agent's recordings setting as the page needs it (GET /api/agents gives `recordings` on each agent): keep on or off, and the microphone mode.
+    function voiceRecSettings(agentRecord) {
+      const r = agentRecord && typeof agentRecord === 'object' ? agentRecord.recordings : null;
+      return { keep: !!(r && r.keep === true), mic: r && r.mic === 'unprocessed' ? 'unprocessed' : 'processed' };
+    }
+    // The page's side of a recorded call (made only when the agent's recordings.keep is true; the pages never call it otherwise). One per call.
+    // o: { agent, userId (the signed-in user's id: stored with every piece, so only that person's page resends it), vad (the adapter: whenOpen, openRecordingTap, audioContext, recordingNode, onSourceChange, info), fetch(url, init), nav, unprocessed (mic 'unprocessed'),
+    //      wired (deps.recorder was given to the controller: false makes a recording answer an error), speak(line) -> Promise (the consent line, in the agent's voice),
+    //      playback(on) (the page tells the speech detector a line is playing), badge(state) ('on' | 'trouble' | 'paused' | 'error' | 'stopped'), toast(msg), onNetFail(e),
+    //      now, setTimer, clearTimer, createRecorder (default voiceCreateRecorder), waitMs (how long the start waits for the microphone, default 15000) }
+    // -> { device() (Promise of the start body's device: userAgent, micLabel, sampleRate, processing), recorder (the controller's deps.recorder: begin, drop, end, stop),
+    //      recordTranscript(seq, text), recordReplyText(text), started(recording, callId) (the start answer's `recording`: the consent line, the recorder, the badge),
+    //      togglePause(wantPaused), replyAudio(arrayBuffer) (a spoken reply sentence's WAV: uploaded as speaker 'agent' only when the agent keeps replies), trouble(reason), stop(),
+    //      get state() }
+    function voiceCreateRecordingSession(o) {
+      const q = o || {}, agent = String(q.agent || '');
+      const clock = typeof q.now === 'function' ? q.now : () => Date.now();
+      const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
+      let callId = null, sessionId = null, keepReplies = false, recorder = null, tap = null, active = false, paused = false, state = 'off', troubled = false, uploadTrouble = false, ended = false, consenting = false, replyCount = 0;
+      const iso = (ms) => new Date(ms).toISOString();
+      const show = (s) => { state = s; quiet(() => q.badge(s)); };
+      async function postJson(path, body) {
+        let r;
+        try { r = await q.fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { quiet(() => q.onNetFail && q.onNetFail(e)); throw e; }
+        let j = {}; try { j = await r.json(); } catch { /* no body */ }
+        if (!r.ok) { const e = new Error(j.error || 'HTTP ' + r.status); e.status = r.status; throw e; }
+        return j;
+      }
+      // One audio segment. 409 (paused, or the call is over) is not a failure: nothing is kept on purpose. A 4xx other than 408 / 429 carries .status (the recorder does not retry it).
+      // piece: the piece's id (&piece=): the same on every try of the same piece, so the hub never takes it twice.
+      async function sendAudio(speaker, body, startedAt, endedAt, piece) {
+        const url = voiceRecSegmentUrl(agent, callId, speaker, startedAt, endedAt, piece);
+        let r;
+        try { r = await q.fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body }); } catch (e) { quiet(() => q.onNetFail && q.onNetFail(e)); throw e; }
+        if (r.ok) { let j = {}; try { j = await r.json(); } catch { /* no body */ } return { seq: j.seq }; }
+        // 409 is the hub's answer, not a failure of the network: { seq: null, status: 409, error } where error is its code ('not_recording' when it gave none, or 'piece_conflict').
+        // The recorder ends the piece's live tries on it but keeps the stored copy unless the code is piece_conflict.
+        if (r.status === 409) { let j = {}; try { j = await r.json(); } catch { /* no body */ } return { seq: null, status: 409, error: j && typeof j.error === 'string' && j.error ? j.error : 'not_recording' }; }
+        let j = {}; try { j = await r.json(); } catch { /* no body */ }
+        const e = new Error('HTTP ' + r.status); e.status = r.status; if (j && typeof j.error === 'string') e.code = j.error; throw e;
+      }
+      // An upload that has been failing for a minute does NOT stop the recording: 'trouble' ("Recording (some speech not sent yet)", red dot, Pause stays) while it
+      // keeps trying. 'stopped' is only for a recording that really cannot go on (the recorder could not be made, or its tap failed: start_failed).
+      function trouble(reason) {
+        if (reason === 'upload_failed') { uploadTrouble = true; if (state === 'on') show('trouble'); }   // the badge follows every failure (it went back to normal when the pieces were sent) ...
+        if (troubled) return;   // ... but the hub is told only once
+        troubled = true;
+        if (reason !== 'upload_failed' && (state === 'on' || state === 'trouble' || state === 'paused')) show('stopped');   // "Recording stopped" for the rest of the call; the call carries on
+        if (callId) postJson('/api/recordings/trouble', { agent, callId, reason }).catch(() => {});
+      }
+      // Every piece that failed has been sent since: the badge goes back to 'on' (or 'paused'). The hub was told once already and is not told again.
+      function recovered() { uploadTrouble = false; if (state === 'trouble') show(live()); }
+      const proxy = {
+        begin() { if (active && recorder) recorder.begin(); },
+        drop() { if (recorder) recorder.drop(); },
+        end() { return active && recorder ? recorder.end() : null; },
+        stop() { ended = true; active = false; if (recorder) quiet(() => recorder.stop()); },
+      };
+      const live = () => (paused ? 'paused' : uploadTrouble ? 'trouble' : 'on');   // what the badge says while the recording goes on
+      return {
+        recorder: proxy,
+        get state() { return state; },
+        // Waits (up to waitMs) for the call's microphone, then makes the recording's tap. Never throws: a missing field is simply not sent.
+        async device() {
+          const nav = q.nav || (typeof navigator !== 'undefined' ? navigator : {});
+          const dev = { userAgent: String(nav.userAgent || '') };
+          let open = false;
+          try {
+            let wait = null;
+            open = await Promise.race([Promise.resolve(q.vad.whenOpen()), new Promise((resolve) => { wait = (q.setTimer || setTimeout)(() => resolve(false), Number.isFinite(Number(q.waitMs)) ? Number(q.waitMs) : 15000); })]);
+            if (wait !== null) quiet(() => (q.clearTimer || clearTimeout)(wait));
+          } catch { open = false; }
+          if (open !== true) return dev;
+          try { tap = await q.vad.openRecordingTap(q.unprocessed === true); if (tap && tap.processing) dev.processing = tap.processing; } catch { tap = null; }
+          const info = quiet(() => q.vad.info()), ctx = quiet(() => q.vad.audioContext());
+          if (info && typeof info.label === 'string') dev.micLabel = info.label;
+          if (ctx && Number.isInteger(ctx.sampleRate)) dev.sampleRate = ctx.sampleRate;
+          return dev;
+        },
+        // The start answer's `recording`: { sessionId, consentLine, keepReplies, mic } or { error }. The consent line is spoken first (not recorded), then the
+        // consent is posted and the recorder starts. A line that could not be spoken (TTS failed) changes nothing else: the text is on screen.
+        async started(rec, id) {
+          callId = id || null;
+          if (!rec || rec.error || !rec.sessionId || q.wired === false) { show('error'); trouble('start_failed'); return; }   // "Not recording": the hub could not start it (or this page cannot make it); the call carries on
+          sessionId = rec.sessionId; keepReplies = rec.keepReplies === true;
+          show('on');
+          let spoken = true;
+          if (rec.consentLine) {
+            // The line gets at most 20 s; after that the call carries on as if it had played. A line that failed or timed out is put on screen (toast) and the hub is told.
+            consenting = true; quiet(() => q.playback && q.playback(true));
+            let cut = null;
+            try {
+              // speak resolves true only when the line played to the end (the pages' voiceCallSpeakLine); anything else is "not spoken", and the hub then announces on the next call
+              spoken = await Promise.race([Promise.resolve(q.speak(String(rec.consentLine))).then((played) => played === true, () => false),
+                new Promise((resolve) => { cut = (q.setTimer || setTimeout)(() => resolve(false), 20000); })]);
+            } catch { spoken = false; }
+            if (cut !== null) quiet(() => (q.clearTimer || clearTimeout)(cut));
+            consenting = false; quiet(() => q.playback && q.playback(false));
+            if (!spoken && !ended) quiet(() => q.toast(String(rec.consentLine)));
+          }
+          if (ended) return;
+          postJson('/api/recordings/consent', spoken ? { agent, callId } : { agent, callId, spoken: false }).catch(() => {});
+          const ctx = quiet(() => q.vad.audioContext()), node = (tap && tap.node) || quiet(() => q.vad.recordingNode());
+          const make = q.createRecorder || voiceCreateRecorder;
+          try {
+            recorder = make({ ctx, source: node, now: clock, setTimer: q.setTimer, clearTimer: q.clearTimer, prerollMs: 600, agent, callId, speaker: 'person', userId: q.userId,
+              upload: (seg) => sendAudio('person', seg.wav, seg.startedAt, seg.endedAt, seg.piece), onTrouble: (reason) => trouble(reason), onRecover: () => recovered() });
+            quiet(() => q.vad.onSourceChange((n) => { if (recorder && n) recorder.setSource(n); }));
+            if (paused) recorder.pause(true);
+            active = true;
+            // The tap could not be made (ready false): nothing will be recorded. The call carries on.
+            Promise.resolve(recorder.ready).then((ok) => { if (ok === false && !ended) { active = false; if (state !== 'stopped') show('stopped'); trouble('start_failed'); } }, () => {});
+          } catch { recorder = null; trouble('start_failed'); }
+        },
+        // The person's words for one recorded piece, saved with its audio (seq is the recorder handle's promise: null when its upload failed).
+        async recordTranscript(seq, text) {
+          let n = null; try { n = await seq; } catch { n = null; }
+          if (!Number.isInteger(n) || !callId) return;
+          try { await postJson('/api/recordings/transcript', { agent, callId, seq: n, text: String(text), engine: 'local' }); } catch { /* the audio is kept without its text */ }
+        },
+        recordReplyText(text) {
+          if (!sessionId || !callId || paused || ended || !String(text || '').trim()) return;
+          postJson('/api/recordings/text', { agent, callId, text: String(text), at: iso(clock()) }).catch(() => {});
+        },
+        // The Pause / Resume button. The badge follows the server's answer; on a failure the old state stays and a short toast is shown.
+        // Pausing first keeps what was already said: the recorder sends its open segment and stops capturing, and the hub is asked to pause at once (it takes pieces
+        // while paused, so nothing waits for them). If the hub's answer is an error, capture goes back to what it was.
+        async togglePause(want) {
+          if (!callId || (state !== 'on' && state !== 'trouble' && state !== 'paused')) return;
+          const old = paused;
+          try {
+            if (want && recorder) recorder.pause(true);   // nothing more is captured at once
+            const j = await postJson('/api/recordings/pause', { agent, callId, paused: !!want });
+            paused = j.paused === true;
+            if (recorder) recorder.pause(paused);
+            if (state === 'on' || state === 'trouble' || state === 'paused') show(live());
+          } catch {
+            if (recorder) recorder.pause(old);
+            quiet(() => q.toast('Could not change the recording. It stays as it was.'));
+          }
+        },
+        replyAudio(buf) {
+          if (!active || !keepReplies || paused || consenting || ended || state === 'stopped' || !buf || !callId) return;
+          let ms = 0;
+          try { const dv = new DataView(buf); if (dv.byteLength >= 44 && dv.getUint32(28, true) > 0) ms = Math.round(dv.getUint32(40, true) * 1000 / dv.getUint32(28, true)); } catch { ms = 0; }
+          const at = clock();
+          sendAudio('agent', buf, at, at + ms, Date.now().toString(36) + '-' + (replyCount++).toString(36) + '-' + Math.random().toString(36).slice(2, 8).padEnd(4, '0')).catch(() => { /* a reply sentence that was not kept is not an alarm: the person's side is what is watched */ });
+        },
+        trouble,
+        // The page is being hidden or closed: what the person is saying now is sent (stored in IndexedDB first). The call is not ended.
+        flushOpen() { if (active && recorder && typeof recorder.cut === 'function') quiet(() => recorder.cut()); },
+        stop() { proxy.stop(); },
+      };
+    }
+    // The wake chime: two soft sine notes (660 Hz, then 880 Hz), 110 ms each, 40 ms apart, peak gain 0.08 (10 ms attack, exponential decay).
+    // Pure Web Audio on the given AudioContext, no asset. -> true when scheduled, false when there is no context or anything threw.
+    function voicePlayWakeChime(ctx) {
+      try {
+        if (!ctx || typeof ctx.createOscillator !== 'function') return false;
+        const t0 = ctx.currentTime + 0.02;
+        [[660, 0], [880, 0.15]].forEach(([freq, offset]) => {
+          const osc = ctx.createOscillator(), gain = ctx.createGain(), s = t0 + offset, e = s + 0.11;
+          osc.type = 'sine'; osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.0001, s);
+          gain.gain.linearRampToValueAtTime(0.08, s + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0001, e);
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.start(s); osc.stop(e + 0.02);
+        });
+        return true;
+      } catch { return false; }
+    }
+    // ── voice call (end) ──
+
     // The date and time under each message: when it was sent, when a reply was finished and how long it took.
     // Shared verbatim with lib/ui-msg-time.js and mobile.js (test/ui-msg-time.test.js keeps the three in step).
     // ── message-time helpers (begin) ──
@@ -10410,7 +13809,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const m = history[i] || {};
         const t = m.inProgress ? NaN : Date.parse(m.ts);   // the running turn's reply so far: not finished, no line
         lines.push(Number.isFinite(t) ? msgTimeLabel(t, now, locale, zone) : '');
-        if (m.role === 'user' && !m.ask) { start = t; last = -1; continue; }   // the next turn
+        if (m.role === 'user' && !m.ask && !m.interjection) { start = t; last = -1; continue; }   // the next turn
         if (m.role !== 'assistant' || m.ask || typeof m.content !== 'string') continue;
         if (last >= 0 && m.base > 0 && m.base === joined) {
           lines[last] = msgTimeLabel(Date.parse(history[last].ts), now, locale, zone);   // an earlier piece: its time only
@@ -10425,6 +13824,1550 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // ── message-time helpers (end) ──
 
+    // ── Voice, desktop page: tap-to-talk in the composer, read aloud on replies, the Voices settings section ──
+    // The audio helpers (voiceSpeechText, voiceSentences, voiceResample, voiceEncodeWav, voiceGainFromSlider,
+    // voiceLevelDb, voiceMeterPercent, voiceLoadPrefs, voiceSavePrefs) come from the voice helpers block.
+    let voiceStatus = null;        // GET /api/voice/status, null until read
+    let voicePrefsCache = null;    // this device's prefs (localStorage)
+    let voiceSettingsTimer = null;
+    const VOICE_SAMPLE_TEXT = 'This is the voice I will use to read replies to you.';
+    const VOICE_MAX_RECORD_S = 60;
+    const VOICE_MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg>';
+    const voiceOfflineHint = 'This device has no offline voice; turn on voice in Settings';
+    const voiceBusyToast = (status) => { if (status === 409) hubToast('Voice is turned off'); else if (status === 503) hubToast('Voice is busy, try again in a few seconds'); else return false; return true; };
+    const voiceById = (id) => document.getElementById(id);
+    function voicePrefsNow() {
+      if (!voicePrefsCache) { try { voicePrefsCache = voiceLoadPrefs(localStorage) || {}; } catch { voicePrefsCache = {}; } }
+      return voicePrefsCache;
+    }
+    function voiceMicLevelNow() { const v = Number(voicePrefsNow().micLevel); return Number.isFinite(v) ? v : 50; }
+    function voiceSensNow() { const v = Number(voicePrefsNow().interruptSensitivity); return Number.isFinite(v) ? v : 50; }
+    function voiceEndPauseNow() { const v = Number(voicePrefsNow().endPause); return VOICE_END_PAUSES.includes(v) ? v : 1200; }
+    function voiceSpeedNow() { const v = voicePrefsNow().voiceSpeed; return voiceCleanSpeed(v == null ? 1 : v); }
+    const voicePauseSelectHtml = (id, attrs) => `<select id="${id}" ${attrs} style="padding:4px">${VOICE_END_PAUSES.map((ms, i) => `<option value="${ms}"${ms === voiceEndPauseNow() ? ' selected' : ''}>${['Short', 'Normal', 'Long', 'Very long (4 s)'][i]}</option>`).join('')}</select>`;
+    const VOICE_SPEED_HINT = 'Google voices ignore this setting.';
+    // VOICE_CONTINUE_WAITS ("Wait for me to go on") comes from the shared voice helpers block above.
+    function voiceContinueWaitNow() { const v = Number(voicePrefsNow().continueWait); return VOICE_CONTINUE_WAITS.includes(v) ? v : 3000; }
+    // The agent's voice defaults (admin-set, from GET /api/agents) and the prefs a call with that agent uses: the device's own
+    // values, except a key the agent gives a default for that the person has not set on this device (voiceEffectivePrefs).
+    function voiceAgentRecord(agent) { return (typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(a => a && a.name === agent) || null; }
+    function voiceAgentDefaultsOf(agent) { const a = voiceAgentRecord(agent); return a && a.voiceDefaults && typeof a.voiceDefaults === 'object' ? a.voiceDefaults : null; }
+    function voiceEffNow(agent) { return voiceEffectivePrefs(voicePrefsNow(), voiceAgentDefaultsOf(agent)); }
+    function voiceCallAgent() { const c = voiceCallS.chatId && chats[voiceCallS.chatId]; return c && c.agent ? c.agent : ''; }
+    function voiceSpeedFor(agent) { const v = voiceEffNow(agent).voiceSpeed; return voiceCleanSpeed(v == null ? 1 : v); }
+    // "Following <agent>'s default: <value>" under a control while the agent's default is the one in force for that key.
+    function voiceFollowLine(agent, key) {
+      const d = voiceAgentDefaultsOf(agent);
+      const own = voicePrefsNow();
+      if (!d || d[key] === undefined || (own.chosen || []).includes(key) || own[key] !== VOICE_DEFAULT_PREFS[key]) return '';   // the agent's default is in force only for a key the person has not set here
+      const a = voiceAgentRecord(agent), name = (a && a.display) || capName(agent);
+      const label = key === 'endPause' || key === 'continueWait' ? `${d[key] / 1000} s` : key === 'voiceSpeed' ? voiceSpeedLabel(d[key]) : String(d[key]);
+      return `<div class="vp-display-note voice-follow" data-follow="${key}">Following ${hubEsc(name)}'s default: ${label}</div>`;
+    }
+    function voiceThinkingOnNow() { return voicePrefsNow().thinkingSound !== false; }
+    function voiceThinkingVolNow() { const v = Number(voicePrefsNow().thinkingVolume); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5; }
+    function voiceModeLabel() { return voicePrefsNow().mode === 'tap' ? 'Tap to talk' : 'Hands-free'; }
+    const VOICE_LEVELS_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h10"></path><path d="M18 6h2"></path><circle cx="16" cy="6" r="2"></circle><path d="M4 12h2"></path><path d="M10 12h10"></path><circle cx="8" cy="12" r="2"></circle><path d="M4 18h10"></path><path d="M18 18h2"></path><circle cx="16" cy="18" r="2"></circle></svg>';
+    const voiceReady = () => !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready);
+    const voiceDeviceFallback = () => !!(voicePrefsNow().deviceVoiceFallback && window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined');
+    // Mic buttons show only while the hub voice is on and ready; speaker buttons while a voice is available.
+    function voicePaint() {
+      for (const b of document.querySelectorAll('.input-area .mic-btn')) b.style.display = voiceReady() ? '' : 'none';
+      for (const b of document.querySelectorAll('.input-area .voice-extra')) b.style.display = voiceReady() ? '' : 'none';
+      if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();   // a chat bar drawn during a call gets its pill
+      document.body.classList.toggle('voice-on', voiceReady() || voiceDeviceFallback());
+    }
+    async function voiceRefreshStatus() {
+      try {
+        const r = await fetch('/api/voice/status', { credentials: 'include' });
+        if (r.ok) voiceStatus = await r.json();
+      } catch {}
+      voicePaint();
+      voiceWakeRecheck();   // the recognizer check can have changed
+      return voiceStatus;
+    }
+    function voiceMicError(e) {
+      const n = e && e.name;
+      if (n === 'NotAllowedError' || n === 'SecurityError') return 'The microphone is blocked: allow it for this site in the browser, then tap again.';
+      if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'No microphone was found on this device.';
+      return 'Microphone: ' + ((e && e.message) || 'could not open it');
+    }
+
+    // Open the microphone: echo cancellation, noise suppression and auto gain on; the signal goes through a GainNode set from
+    // the Mic level slider, then a ScriptProcessor hands each block of samples (Float32, already after the gain) to onChunk.
+    async function voiceOpenMic(micLevel, onChunk) {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('this browser cannot open the microphone here (it needs https or localhost)');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      let ctx = null;
+      const release = () => { try { stream.getTracks().forEach(t => t.stop()); } catch {} try { if (ctx) ctx.close(); } catch {} };
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        ctx = new AC();
+        if (ctx.state === 'suspended') await ctx.resume();
+        const src = ctx.createMediaStreamSource(stream);
+        const gain = ctx.createGain();
+        gain.gain.value = voiceGainFromSlider(micLevel);
+        const proc = ctx.createScriptProcessor(4096, 1, 1);
+        const mute = ctx.createGain();   // the processor must reach the destination to run; muted, so nothing is heard
+        mute.gain.value = 0;
+        proc.onaudioprocess = (ev) => onChunk(new Float32Array(ev.inputBuffer.getChannelData(0)));
+        src.connect(gain); gain.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+        return {
+          rate: ctx.sampleRate,
+          setGain(v) { gain.gain.value = voiceGainFromSlider(v); },
+          close() { proc.onaudioprocess = null; try { src.disconnect(); gain.disconnect(); proc.disconnect(); mute.disconnect(); } catch {} release(); },
+        };
+      } catch (e) { release(); throw e; }
+    }
+
+    // Tap-to-talk. Tap 1 opens the mic; tap 2 (or 60 s) closes it, sends the recording to the hub and puts the text in the box.
+    const voiceRec = { chatId: null, mic: null, chunks: [], samples: 0, level: -100, t0: 0, timer: null, busy: false, guard: voiceMicGuard(), pendingChat: null };
+    function voiceMicPaint(chatId, state, label) {
+      const b = voiceById(`mic-${chatId}`), m = voiceById(`mic-meter-${chatId}`);
+      if (!b) return;
+      b.classList.toggle('rec', state === 'rec');
+      b.classList.toggle('wait', state === 'wait');
+      b.setAttribute('aria-pressed', state === 'rec' ? 'true' : 'false');
+      b.disabled = state === 'wait';
+      b.setAttribute('aria-label', state === 'rec' ? 'Stop dictation' : 'Dictate');
+      if (state === 'rec') b.textContent = `■ ${label || '0:00'}`;
+      else if (state === 'wait') b.textContent = '…';
+      else if (!b.querySelector('svg')) b.innerHTML = VOICE_MIC_SVG;
+      if (m) { m.style.display = state === 'rec' ? '' : 'none'; if (state !== 'rec') { const i = m.firstElementChild; if (i) i.style.width = '0%'; } }
+    }
+    function voiceMicTick() {
+      const chatId = voiceRec.chatId;
+      if (!chatId) return;
+      if (!voiceById(`mic-${chatId}`)) { voiceMicStop(false); return; }   // the chat was closed: stop, upload nothing
+      const s = Math.floor((Date.now() - voiceRec.t0) / 1000);
+      voiceMicPaint(chatId, 'rec', `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+      const m = voiceById(`mic-meter-${chatId}`), i = m && m.firstElementChild;
+      if (i) i.style.width = `${voiceMeterPercent(voiceRec.level)}%`;
+      if (s >= VOICE_MAX_RECORD_S) voiceMicStop(true);
+    }
+    async function voiceMicToggle(chatId) {
+      if (voiceCallS.active || voiceCallS.starting) { voiceCallHangUp(); return; }   // the red hang-up button
+      if (voiceRec.busy || voiceRec.guard.pending) return;   // a second tap while the microphone is still being asked for is ignored
+      if (voiceRec.chatId) { await voiceMicStop(true); return; }   // a second tap, or a tap in another chat: end this recording
+      if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); voiceRefreshStatus(); return; }
+      if (voicePrefsNow().mode !== 'tap') { voiceCallStart(chatId); return; }   // hands-free is the default; 'tap' keeps dictation
+      if (voiceTest.mic || voiceTest.guard.pending) { hubToast('The microphone is in use in Settings.'); return; }
+      voiceStopPlayback();   // do not record the hub talking
+      const token = voiceRec.guard.begin();
+      voiceRec.pendingChat = chatId;
+      let mic;
+      try {
+        voiceRec.chunks = []; voiceRec.samples = 0; voiceRec.level = -100;
+        mic = await voiceOpenMic(voiceMicLevelNow(), (d) => {
+          voiceRec.chunks.push(d); voiceRec.samples += d.length; voiceRec.level = voiceLevelDb(d);
+        });
+      } catch (e) { voiceRec.guard.fail(); voiceRec.pendingChat = null; if (token === voiceRec.guard.gen) hubToast(voiceMicError(e)); return; }
+      voiceRec.pendingChat = null;
+      if (!voiceRec.guard.settle(token, mic)) return;   // cancelled while the browser was asking: the stream is already stopped
+      voiceRec.mic = mic;
+      voiceRec.chatId = chatId; voiceRec.t0 = Date.now();
+      voiceRec.timer = setInterval(voiceMicTick, 100);
+      voiceMicTick();
+    }
+    async function voiceMicStop(send) {
+      const chatId = voiceRec.chatId, mic = voiceRec.mic;
+      voiceRec.guard.cancel();   // a microphone still being asked for is dropped when it arrives
+      if (!chatId || !mic) return;
+      clearInterval(voiceRec.timer);
+      const chunks = voiceRec.chunks, rate = mic.rate;
+      voiceRec.chatId = null; voiceRec.mic = null; voiceRec.chunks = []; voiceRec.samples = 0;
+      mic.close();   // the microphone is released after every use
+      if (!send) { voiceMicPaint(chatId, 'idle'); return; }
+      voiceMicPaint(chatId, 'wait');
+      voiceRec.busy = true;
+      try {
+        const n = chunks.reduce((a, c) => a + c.length, 0);
+        if (n < rate * 0.3) { hubToast('Nothing was recorded.'); return; }
+        const all = new Float32Array(n);
+        let at = 0;
+        for (const c of chunks) { all.set(c, at); at += c.length; }
+        const wav = voiceEncodeWav(voiceResample(all, rate, 16000), 16000);
+        const chat = chats[chatId];
+        const r = await fetch(`/api/voice/stt?agent=${encodeURIComponent(chat ? chat.agent : '')}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav });
+        let j = {};
+        try { j = await r.json(); } catch {}
+        if ((r.status === 409 && j.error === 'voice_off') || (r.status === 503 && j.error === 'voice_busy')) { voiceBusyToast(r.status); if (r.status === 409) voiceRefreshStatus(); return; }
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        const text = String(j.text || '').trim();
+        if (!text) { hubToast('No speech was heard. Speak closer to the microphone, or raise the Mic level in Settings.'); return; }
+        const ta = voiceById(`input-${chatId}`);
+        if (ta) {
+          ta.value = ta.value.trim() ? `${ta.value.replace(/\s+$/, '')} ${text}` : text;
+          autoGrowTextarea(ta);
+          ta.focus();
+        }
+        if (chat) chat.voiceDictated = true;   // the reply to this message is read aloud when "Read replies aloud" is on
+      } catch (e) { hubToast('Voice: could not turn the recording into text: ' + e.message); }
+      finally { voiceRec.busy = false; voiceMicPaint(chatId, 'idle'); }
+    }
+
+    // Read aloud. One playback at a time: the hub voice sentence by sentence through one AudioContext (the next sentence is
+    // fetched while this one plays), or the device voice (speechSynthesis) when the hub voice fails or is off and the device asks for it.
+    const voicePlay = { token: 0, ctx: null, source: null, btn: null };
+    function voicePlayState(btn, on) {
+      if (!btn) return;
+      if (btn.dataset.idle === undefined) btn.dataset.idle = btn.textContent;
+      btn.classList.toggle('on', on);
+      btn.textContent = on ? (btn.classList.contains('msg-speak') ? '■' : 'Stop') : btn.dataset.idle;
+    }
+    function voiceStopPlayback() {
+      if (typeof voiceDisplayHook === 'function') { voiceDisplayHook('audioStop'); voiceDisplayHook('clearCaption'); }   // the beak closes at once
+      voicePlay.token++;
+      const src = voicePlay.source;
+      voicePlay.source = null;
+      if (src) { try { src.stop(); } catch {} }   // its onended lets the waiting loop end; the changed token makes it return
+      try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch {}
+      voicePlayState(voicePlay.btn, false);
+      voicePlay.btn = null;
+    }
+    async function voiceFetchTts(agent, text, voice) {
+      const body = { agent, text, speed: voiceSpeedFor(agent) };
+      if (voice) body.voice = voice;
+      const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
+      let r;
+      try { r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost (text-to-speech)
+      if (!r.ok) {
+        let m = '';
+        try { m = (await r.json()).error; } catch {}
+        const e = new Error(m || `HTTP ${r.status}`); e.status = r.status;
+        e.toasted = voiceBusyToast(r.status);   // 409 voice_off / 503 voice_busy: the short toast is shown once, here
+        throw e;
+      }
+      let norm = false;
+      try { norm = !!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1'); } catch { norm = false; }
+      const buf = await r.arrayBuffer();
+      try { buf.__voiceNorm = norm; } catch { /* the flag is applied only when this audio starts playing (voicePlayHub) */ }
+      try { if (voiceCallS.rec) voiceCallS.rec.replyAudio(buf.slice(0)); } catch { /* a recorded call keeps this sentence's audio only when the agent keeps replies; never breaks the reading */ }   // a copy: decodeAudioData takes the original
+      return buf;
+    }
+    // Play sentences with the hub voice; on a failure throws an Error whose .at is the sentence that could not be played.
+    async function voicePlayHub(agent, sentences, voice, my) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!voicePlay.ctx || voicePlay.ctx.state === 'closed') voicePlay.ctx = new AC();
+      const ctx = voicePlay.ctx;
+      if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+      let next = voiceFetchTts(agent, sentences[0], voice);
+      next.catch(() => {});
+      for (let i = 0; i < sentences.length; i++) {
+        let buf, ab;
+        try { buf = await next; } catch (e) { e.at = i; throw e; }
+        if (voicePlay.token !== my) return;
+        if (i + 1 < sentences.length) { next = voiceFetchTts(agent, sentences[i + 1], voice); next.catch(() => {}); }
+        const norm = !!(buf && buf.__voiceNorm === true);   // read before decoding (decodeAudioData detaches the buffer)
+        try { ab = await ctx.decodeAudioData(buf); } catch (e) { e.at = i; throw e; }
+        if (voicePlay.token !== my) return;
+        // The loudness follows the audio that is about to play, never a response that merely arrived (a prefetch or a cancelled request).
+        try { if (typeof voiceNoteNormalized === 'function') voiceNoteNormalized(norm); } catch { /* the level stays as it was */ }
+        await new Promise((res) => {
+          const src = ctx.createBufferSource();
+          src.buffer = ab;
+          if (typeof voiceDisplayRoute === 'function') voiceDisplayRoute(ctx, src); else src.connect(typeof voiceOutNode === 'function' ? voiceOutNode(ctx) : ctx.destination);   // with a display: source -> analyser -> destination
+          src.onended = () => { if (typeof voiceDisplayHook === 'function') voiceDisplayHook('audioEnd'); res(); };
+          voicePlay.source = src;
+          src.start();
+          if (typeof voiceDisplayHook === 'function') { voiceDisplayHook('audioStart'); voiceDisplayHook('caption', sentences[i]); }   // the sentence really playing
+        });
+        if (voicePlay.token !== my) return;
+      }
+    }
+    // The device voice is used only when it is an offline one (localService): a browser's default voice may be an online
+    // service. No offline voice: nothing is spoken and the person is told.
+    // report (optional): report.spoke is set true only when every sentence ended normally (no offline voice, an error or a cut: false).
+    async function voicePlayDevice(sentences, from, my, agent, report) {
+      const voice = await voiceWaitLocalVoice(window.speechSynthesis, 'en', 1000);
+      if (voicePlay.token !== my) return;
+      if (!voice) { hubToast(voiceOfflineHint); return; }
+      let failed = false;
+      for (let i = from; i < sentences.length; i++) {
+        if (voicePlay.token !== my) return;
+        await new Promise((res) => {
+          const u = new SpeechSynthesisUtterance(sentences[i]);
+          u.voice = voice; u.lang = voice.lang; u.rate = voiceSpeedFor(agent);
+          const dsp = (k) => { if (typeof voiceDisplaySpeech === 'function') voiceDisplaySpeech(k); };
+          u.onstart = () => { dsp('start'); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('caption', sentences[i]); };
+          u.onboundary = () => dsp('boundary'); u.onpause = () => dsp('pause'); u.onresume = () => dsp('resume');
+          u.onend = () => { dsp('end'); res(); }; u.onerror = () => { failed = true; dsp('end'); res(); };
+          window.speechSynthesis.speak(u);
+        });
+      }
+      if (report && !failed && voicePlay.token === my) report.spoke = true;
+    }
+    // opts: { sentences, voice }. btn: the button that shows "playing" (a second tap on it stops).
+    async function voiceSpeakText(agent, md, btn, opts = {}) {
+      voiceStopPlayback();
+      const my = voicePlay.token;
+      // Every spoken string goes through the cleaner (voiceSpeechText): replies, call lines, the sample.
+      const sentences = opts.sentences ? opts.sentences.map(s => voiceSpeechText(s)).filter(Boolean) : voiceSentences(voiceSpeechText(md));
+      if (!sentences || !sentences.length) return;
+      voicePlay.btn = btn || null; voicePlayState(btn, true);
+      try {
+        let from = 0, useDevice = false;
+        if (voiceReady()) {
+          try { await voicePlayHub(agent, sentences, opts.voice, my); if (opts.out) opts.out.played = voicePlay.token === my; return; }
+          catch (e) {
+            if (voicePlay.token !== my) return;
+            if (!voiceDeviceFallback()) { if (!e.toasted && !voiceCallS.linkLost) hubToast('Could not read this aloud: ' + e.message); return; }   // while a call's connection is lost the link watch speaks for it
+            from = e.at || 0; useDevice = true;
+          }
+        } else if (voiceDeviceFallback()) useDevice = true;
+        else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
+        if (useDevice) { const rep = {}; await voicePlayDevice(sentences, from, my, agent, rep); if (opts.out) opts.out.played = rep.spoke === true && voicePlay.token === my; }
+      } finally {
+        if (voicePlay.token === my) { voicePlayState(btn, false); voicePlay.btn = null; }
+      }
+    }
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('.msg-speak');
+      if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      if (voicePlay.btn === b) { voiceStopPlayback(); return; }
+      const el = b.closest('.message');
+      const holder = el.closest('[id^="messages-"]');
+      const chat = chats[holder ? holder.id.slice('messages-'.length) : activeChat];
+      voiceSpeakText(chat ? chat.agent : '', rawMessageText.get(el) ?? el.innerText, b);
+    });
+    // A reply that follows a mic dictation and ends in this browser: read it when the device asked for that.
+    function voiceAutoRead(chat, msgId, text) {
+      if (voiceCallS.call) return;   // never over a call (a reply to an earlier dictation that ends during it)
+      if (!voicePrefsNow().readAloud || (!voiceReady() && !voiceDeviceFallback())) return;
+      const el = document.getElementById(msgId);
+      voiceSpeakText(chat.agent, text, el ? el.querySelector(':scope > .msg-speak') : null);
+    }
+
+    // Settings, Voices.
+    function voiceSettingsHtml(data) {
+      const admin = isHubAdmin();
+      const p = voicePrefsNow();
+      const row = (label, inner) => `<div class="st-row"><label style="flex-basis:150px">${label}</label>${inner}</div>`;
+      // A checkbox row the way the OpenRouter privacy row is laid out: a short label column, the box and its text in the
+      // value column (a long text wraps there, inside the dialog).
+      const CHK = 'flex:1;min-width:0;display:flex;gap:6px;align-items:flex-start;text-align:left;cursor:pointer';
+      let h = `<div class="st-section" id="st-voice-section"><h4>Voices</h4>
+        <div class="st-hint">Free local voices run on this computer: what you say and what is read aloud never leaves it, and nothing is sent to the internet. Tap the microphone in a chat to start a hands-free call: talk, interrupt the agent any time by speaking, and say "stop" to stop it; tap the speaker on a reply to hear it.</div>`;
+      h += row('Voice', admin
+        ? `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> Enable voice</label> <progress id="st-voice-progress" max="1" value="0" style="display:none;margin-left:8px"></progress> <span id="st-voice-status" class="st-hint" style="margin:0 0 0 8px">Checking…</span>`
+        : `<span id="st-voice-status" class="st-hint" style="margin:0">Checking…</span>`);
+      h += row('Engines', `<span id="st-voice-engines" class="st-hint" style="margin:0">…</span>`);
+      if (admin) {
+        h += row('Default voice', `<select id="st-voice-default" onchange="voiceSettingDefaultVoice()" style="padding:4px"></select> <button class="st-test-btn" id="st-voice-sample" type="button" onclick="voicePlaySample()">Play sample</button><span id="st-voice-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
+      }
+      h += `<div class="st-hint" style="margin-top:10px">On this device only:</div>`;
+      h += row('Mic level', `<input type="range" min="0" max="100" step="1" id="st-voice-mic" value="${voiceMicLevelNow()}" oninput="voiceSettingMicInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-mic-val" style="min-width:2.5em;display:inline-block">${voiceMicLevelNow()}</span> <span class="voice-meter"><i id="st-voice-meter"></i></span> <button class="st-test-btn" id="st-voice-testmic" type="button" onclick="voiceTestMic()">Test the mic</button>`);
+      h += row('Talk mode', `<select id="st-voice-mode" onchange="voiceSettingsSavePrefs()" style="padding:4px"><option value="handsfree" ${p.mode !== 'tap' ? 'selected' : ''}>Hands-free</option><option value="tap" ${p.mode === 'tap' ? 'selected' : ''}>Tap to talk</option></select>`);
+      h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs('interruptSensitivity')" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
+      h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs(\'endPause\')"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s.</span>`);
+      h += row('Voice speed', `<input type="range" min="0.75" max="1.5" step="0.05" id="st-voice-speed" value="${voiceSpeedNow()}" oninput="voiceSettingSpeedInput(this)" onchange="voiceSettingsSavePrefs('voiceSpeed')" style="width:180px"> <span id="st-voice-speed-val" style="min-width:3.5em;display:inline-block">${voiceSpeedLabel(voiceSpeedNow())}</span> <span class="st-hint" style="margin:0 0 0 8px">${VOICE_SPEED_HINT}</span>`);
+      h += row('Voice loudness, speaker', `${voiceLoudnessSelectHtml('st-voice-loudness', 'onchange="voiceSettingsSavePrefs()"', 'loudness')} <span class="st-hint" style="margin:0 0 0 8px">Makes the agent's voice louder during calls on the computer's speaker.</span>`);
+      h += row('Voice loudness, Bluetooth / car', `${voiceLoudnessSelectHtml('st-voice-loudness-bt', 'onchange="voiceSettingsSavePrefs()"', 'loudnessBt')} <span class="st-hint" style="margin:0 0 0 8px">Used while a Bluetooth headset or a car is the call's microphone. A car has its own amplifier, so Normal is usually right.</span>`);
+      h += row('Activity', `<label style="${CHK}"><input type="checkbox" id="st-voice-speakactivity" ${p.speakActivity ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Say what the agent is doing</label>`);
+      h += row('Room check', `<button class="st-test-btn" id="st-voice-room" type="button" onclick="voiceRoomCheckRun()">Room check</button> <span id="st-voice-room-out" class="st-hint" style="margin:0 0 0 8px" aria-live="polite">5 seconds: say a sentence, then stay quiet. It sets the mic level and the interrupt sensitivity.</span>`);
+      h += row('Echo guard after replies', `${voiceEchoSelectHtml('st-voice-echo', 'onchange="voiceSettingsSavePrefs()"')} <span class="st-hint" style="margin:0 0 0 8px">${VOICE_ECHO_HINT}</span>`);
+      h += row('Bluetooth', `<label style="${CHK}"><input type="checkbox" id="st-voice-keepalive" ${voiceKeepAliveNow() ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Keep Bluetooth awake during calls</label><span class="st-hint" style="margin:0 0 0 8px;flex:1;min-width:0">${VOICE_KEEP_HINT}</span>`);
+      h += row('Interrupt button', `<label style="${CHK}"><input type="checkbox" id="st-voice-interrupt" ${voiceInterruptNow() ? 'checked' : ''} onchange="voiceDispSetInterrupt(null, this.checked)"> Show an Interrupt button</label><span class="st-hint" style="margin:0 0 0 8px;flex:1;min-width:0">${VOICE_INTERRUPT_HINT}</span>`);
+      h += row('Car or Bluetooth check', `<button class="st-test-btn" id="st-voice-car" type="button" onclick="voiceCarCheckRun()">Car or Bluetooth check</button> <span id="st-voice-car-out" class="st-hint" style="margin:0 0 0 8px" aria-live="polite">Plays three short sounds and listens for the echo. It sets the echo guard.</span>`);
+      h += row('Replies', `<label style="${CHK}"><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
+      h += row('Fallback', `<label style="${CHK}"><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use this device's own offline voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
+      return h + `</div>`;
+    }
+    function voicePaintSettings(st) {
+      const status = voiceById('st-voice-status');
+      if (!status) return;
+      let text;
+      if (!st) text = 'Could not read the voice status.';
+      else if (st.platformSupported === false) text = 'Voice is not supported on this computer.';
+      else if (st.installing) text = `Installing voice: ${st.step || 'working'} ${Math.round((Number(st.progress) || 0) * 100)}%`;
+      else if (st.error) text = `Voice error: ${st.error}`;
+      else if (st.failed) text = 'Voice setup failed. An admin can see the details in Settings, Voices.';
+      else if (st.enabled && st.ready) text = 'Voice is on and ready.';
+      else if (st.enabled) text = 'Voice is on, getting ready…';
+      else text = 'Voice is off.';
+      status.textContent = text;
+      const en = voiceById('st-voice-enabled');
+      if (en) en.checked = !!(st && (st.enabled || st.installing));
+      const pr = voiceById('st-voice-progress');
+      if (pr) { pr.style.display = st && st.installing ? '' : 'none'; pr.value = Number(st && st.progress) || 0; }
+      const eng = voiceById('st-voice-engines');
+      if (eng) eng.textContent = st && st.stt ? `Recogniser: ${st.stt.engine || '?'}${st.stt.model ? ` (${st.stt.model})` : ''} · Voices: ${(st.tts && st.tts.engine) || '?'}` : 'none yet';
+      const sel = voiceById('st-voice-default');
+      if (sel && st) {
+        const list = st.voices || [];
+        const sig = list.map(v => v.id).join('|');
+        if (sel.dataset.sig !== sig) {
+          sel.dataset.sig = sig;
+          const want = st.defaultVoice || st.installDefaultVoice || (st.tts && st.tts.defaultVoice) || '';   // defaultVoice: the hub's effective default
+          sel.innerHTML = list.length
+            ? list.map(v => `<option value="${hubEsc(v.id)}"${v.id === want ? ' selected' : ''}>${hubEsc(v.label || v.id)}</option>`).join('')   // the label already carries the accent
+            : '<option value="">No voices yet</option>';
+          dialogGuard.markLoaded(sel);
+        }
+      }
+    }
+    async function voiceSettingsRefresh() {
+      if (!voiceById('st-voice-section')) return;
+      const st = await voiceRefreshStatus();
+      if (!voiceById('st-voice-section')) return;
+      voicePaintSettings(st);
+      clearTimeout(voiceSettingsTimer);
+      if (st && st.installing) voiceSettingsTimer = setTimeout(voiceSettingsRefresh, 2000);   // poll while it installs
+    }
+    function voiceSettingsInit() { voiceSettingsRefresh(); }
+    async function voiceSettingEnable(cb) {
+      const on = cb.checked;
+      cb.disabled = true;
+      try {
+        const r = await fetch(`/api/voice/${on ? 'enable' : 'disable'}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let j = {};
+        try { j = await r.json(); } catch {}
+        if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+      } catch (e) { cb.checked = !on; hubToast(`Could not turn voice ${on ? 'on' : 'off'}: ${e.message}`); }
+      finally { cb.disabled = false; }
+      voiceSettingsRefresh();
+    }
+    async function voiceSettingDefaultVoice() {
+      const sel = voiceById('st-voice-default');
+      if (!sel) return;
+      const saved = dialogGuard.savePoint(sel);
+      const state = voiceById('st-voice-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+          body: JSON.stringify({ voice: { defaultVoice: sel.value } }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        saved();
+        if (state) state.textContent = 'Saved.';
+      } catch (e) { if (state) state.textContent = `Could not save: ${e.message}`; }
+    }
+    function voicePlaySample() {
+      const sel = voiceById('st-voice-default');
+      const first = Object.values(chats).find(c => c && c.agent);
+      voiceSpeakText((chats[activeChat] && chats[activeChat].agent) || (first && first.agent) || '', VOICE_SAMPLE_TEXT, voiceById('st-voice-sample'),
+        { sentences: [VOICE_SAMPLE_TEXT], voice: sel ? sel.value : '' });
+    }
+    // The Mic level slider: moves the gain of the open test mic at once; saved (with the two checkboxes) on release.
+    const voiceTest = { mic: null, timer: null, level: -100, guard: voiceMicGuard() };
+    function voiceSettingMicInput(el) {
+      const v = voiceById('st-voice-mic-val'); if (v) v.textContent = el.value;
+      if (voiceTest.mic) voiceTest.mic.setGain(Number(el.value));
+    }
+    function voiceSettingsSavePrefs(changed) {   // changed: the agent-default key the person just changed (endPause, interruptSensitivity, voiceSpeed), if any
+      const mic = voiceById('st-voice-mic'), ra = voiceById('st-voice-readaloud'), fb = voiceById('st-voice-fallback');
+      const mode = voiceById('st-voice-mode'), sens = voiceById('st-voice-sens');
+      const pause = voiceById('st-voice-pause'), speed = voiceById('st-voice-speed'), act = voiceById('st-voice-speakactivity');
+      if (!mic || !ra || !fb || !mode || !sens || !pause || !speed || !act) return;
+      const echo = voiceById('st-voice-echo'), keep = voiceById('st-voice-keepalive'), loud = voiceById('st-voice-loudness'), loudBt = voiceById('st-voice-loudness-bt');
+      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, speed, act, echo, keep, loud, loudBt].filter(Boolean));
+      const echoNow = echo && VOICE_ECHO_HOLDS.includes(Number(echo.value)) ? Number(echo.value) : voiceEchoHoldNow();
+      let prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
+        endPause: Number(pause.value), voiceSpeed: voiceCleanSpeed(speed.value), speakActivity: act.checked, echoHold: echoNow, keepAlive: keep ? !!keep.checked : voiceKeepAliveNow(),
+        loudness: loud && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loud.value) ? loud.value : voiceLoudnessFor(voicePrefsNow(), 'speaker'),
+        loudnessBt: loudBt && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loudBt.value) ? loudBt.value : voiceLoudnessFor(voicePrefsNow(), 'bluetooth') };
+      if (VOICE_AGENT_DEFAULT_KEYS.includes(changed)) prefs = voiceMarkChosen(prefs, [changed]);   // the person set it here: an agent's default no longer applies to it
+      voiceSavePrefs(localStorage, prefs);
+      voicePrefsCache = prefs;
+      voiceLoudApply();   // a running call follows the choice at once
+      voiceKeepAliveRefresh();   // the Keep Bluetooth awake switch too
+      // A call that is up takes the EFFECTIVE values (the person's own, else this agent's defaults), as the phone page does: the dialog never undoes the agent's pacing mid-call.
+      if (voiceCallS.vad) { const eff = voiceEffNow(voiceCallS.agent); voiceCallS.vad.setMicLevel(eff.micLevel); voiceCallS.vad.setInterruptSensitivity(eff.interruptSensitivity); voiceCallS.vad.setEndPause(eff.endPause); if (voiceCallS.vad.setEchoHold) voiceCallS.vad.setEchoHold(eff.echoHold); }
+      for (const el of document.querySelectorAll('.voice-pop [data-vp="loudness"]')) el.value = prefs.loudness;
+      for (const el of document.querySelectorAll('.voice-pop [data-vp="loudnessBt"]')) el.value = prefs.loudnessBt;
+      saved();
+      voicePaint();
+      voiceEchoKeepPaint();   // the chat's voice panel follows
+      voiceModePaint();   // the chat's Talk mode chip follows
+      if (voiceCallS.call && typeof voiceCallS.call.setPrefs === 'function') voiceCallS.call.setPrefs();
+      const st = voiceById('st-voice-prefs-state'); if (st) st.textContent = 'Saved on this device.';
+    }
+    function voiceTestStop() {
+      voiceTest.guard.cancel();   // a test mic still being asked for is dropped when it arrives
+      clearInterval(voiceTest.timer);
+      if (voiceTest.mic) { voiceTest.mic.close(); voiceTest.mic = null; }   // the meter runs only while the mic is open
+      const bar = voiceById('st-voice-meter'); if (bar) bar.style.width = '0%';
+      const b = voiceById('st-voice-testmic'); if (b) b.textContent = 'Test the mic';
+    }
+    async function voiceTestMic() {
+      if (voiceTest.mic) { voiceTestStop(); return; }
+      if (voiceTest.guard.pending) return;   // two quick clicks: the second is ignored while the first is still being asked for
+      if (voiceRec.chatId || voiceRec.busy || voiceRec.guard.pending || voiceCallS.call || voiceRoom.active) { hubToast('The microphone is in use in a chat.'); return; }
+      const slider = voiceById('st-voice-mic');
+      // The test belongs to this Settings section: closing Settings removes it, and reopening draws a new one.
+      const section = voiceById('st-voice-section');
+      const sameSection = () => !!section && section.isConnected && voiceById('st-voice-section') === section;
+      const token = voiceTest.guard.begin();
+      let mic;
+      try { mic = await voiceOpenMic(slider ? Number(slider.value) : voiceMicLevelNow(), (d) => { voiceTest.level = voiceLevelDb(d); }); }
+      catch (e) { voiceTest.guard.fail(); if (token === voiceTest.guard.gen) hubToast(voiceMicError(e)); return; }
+      if (!sameSection()) voiceTest.guard.cancel();   // Settings closed (and maybe reopened) while the browser was asking
+      if (!voiceTest.guard.settle(token, mic)) return;
+      voiceTest.mic = mic;
+      const b = voiceById('st-voice-testmic'); if (b) b.textContent = 'Stop test';
+      voiceTest.timer = setInterval(() => {
+        const bar = voiceById('st-voice-meter');
+        if (!bar || !sameSection()) { voiceTestStop(); return; }   // Settings closed
+        bar.style.width = `${voiceMeterPercent(voiceTest.level)}%`;
+      }, 100);
+    }
+
+    // A closed chat stops its dictation without uploading it; a hidden page lets go of every microphone request.
+    function voiceChatGone(chatId) {
+      if (voiceRec.pendingChat === chatId) voiceRec.guard.cancel();
+      if (voiceRec.chatId === chatId) voiceMicStop(false);
+      if (voiceCallS.chatId === chatId) voiceCallHangUp();   // closing the chat panel hangs up
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) return;
+      voiceTestStop();
+      voiceRec.guard.cancel();
+      if (voiceRec.chatId) voiceMicStop(true);
+    });
+
+    // ── Hands-free call (voice phase 2): the controller (voice call block above) wired to this page ──
+    // One call at a time. voiceCallS holds it; the call bar sits above the message box of the call's chat.
+    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false, thinking: null, leftChat: null, link: null, linkLost: false, rec: null };   // rec: the recorded call's page side (voiceCreateRecordingSession), only when the agent keeps recordings
+    const voiceRoom = { active: false };
+    // ── Call display: None / Orb / an installed character (lib/ui-call-display.js; the choice is per device, the agent only has a default) ──
+    // Everything here is a no-op unless a display exists for the running call, so reading aloud and the call without a display are unchanged.
+    const voiceDisp = { cur: null, last: null, floor: null, turnSeq: new Map() };
+    function voiceDispAgentDefault(agent) {
+      const list = typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : [];
+      const a = list.find(x => x && x.name === agent);
+      return a && typeof a.callDisplay === 'string' ? a.callDisplay : 'none';
+    }
+    function voiceDisplayHook(name, ...args) {
+      const d = voiceDisp.cur;
+      if (!d || typeof d[name] !== 'function') return undefined;
+      try { return d[name](...args); } catch { return undefined; }
+    }
+    // Loudness of call replies: while a call is up, reply audio ends in a gain -> limiter chain on the playback context; read-aloud outside a call plays as before.
+    // The output of a call follows its open microphone: voiceCallS.micLabel is set by ui.mic (every open and reopen) and refreshed on devicechange.
+    function voiceOutputNow() { const label = (voiceCallS.call && voiceCallS.micLabel) || ''; return { output: voiceOutputKind(label), label }; }
+    function voiceLoudnessNow() { return voiceLoudnessFor(voicePrefsNow(), voiceOutputNow().output); }
+    function voiceOutputChanged() { try { voiceLoudApply(); } catch { /* the next sentence applies it */ } voiceKeepAliveRefresh(); }   // a new mic label: the level of that output, and the keep-alive, at once
+    // The keep-alive follows the switch alone on this page, at once mid-call: a computer often plays to a Bluetooth speaker or headphones while
+    // its own microphone is open, so the microphone's label cannot tell whether the output may sleep (the phone page also asks the label).
+    function voiceKeepAliveAllowed() { return voiceKeepAliveNow(); }
+    function voiceKeepAliveRefresh() { try { const k = voiceCallS.keepAlive; if (k && k.refresh) k.refresh(); } catch { /* not playing */ } }
+    function voiceOutputOnDeviceChange() {   // devicechange during a call: read the open microphone's label again
+      if (!voiceCallS.call) return;
+      try { const i = voiceCallS.vad && typeof voiceCallS.vad.info === 'function' && voiceCallS.vad.info(); if (i && typeof i.label === 'string') voiceCallS.micLabel = i.label; } catch { /* keep the last label */ }
+      voiceOutputChanged();
+    }
+    try { if (typeof navigator !== 'undefined' && navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') navigator.mediaDevices.addEventListener('devicechange', voiceOutputOnDeviceChange); } catch { /* no devicechange: the mic reopen still reports the label */ }
+    function voiceLoudChain(ctx) {
+      let c = null;
+      try { if (!ctx || !voiceCallS.call) return null; c = voiceCreateLoudness(ctx); if (c) { if (typeof c.setNormalized === 'function') c.setNormalized(voiceNormFlag); c.setLevel(voiceLoudnessNow()); } } catch { c = null; }   // a loudness fault never stops a reply
+      return c;
+    }
+    // The last reply audio's X-Voice-Normalized header (the hub sent the voice already at -16 dBFS): the chain boosts less. New chains pick it up in voiceLoudChain.
+    let voiceNormFlag = false;
+    function voiceNoteNormalized(flag) { voiceNormFlag = !!flag; try { const c = voicePlay.ctx && voicePlay.ctx.__voiceLoudness; if (c && typeof c.setNormalized === 'function') c.setNormalized(voiceNormFlag); } catch { /* applied at the next chain use */ } }
+    function voiceOutNode(ctx) { const c = voiceLoudChain(ctx); return c ? c.input : ctx.destination; }
+    function voiceLoudApply() { voiceLoudChain(voicePlay.ctx); }   // at call start and when the pref changes: a running call follows at once
+    try { window.__voiceOut = () => { const c = voicePlay.ctx && voicePlay.ctx.__voiceLoudness; return { level: voiceLoudnessNow(), ...voiceOutputNow(), gainDb: c ? c.gainDb : null, normalized: c ? !!c.normalized : voiceNormFlag, meter: c ? c.meter() : null }; }; } catch { /* a test hook only */ }
+    function voiceDisplayRoute(ctx, src) { const d = voiceDisp.cur; if (d) { try { d.routeBufferSource(ctx, src); return; } catch { /* plain playback below */ } } src.connect(voiceOutNode(ctx)); }
+    function voiceDisplaySpeech(kind) { voiceDisplayHook('speech', kind); }
+    // The VAD handlers pass through the Talk floor, so a tap on Talk is released when the microphone hears nothing.
+    function voiceDispVad(vad) { return { start: (h) => vad.start(voiceDisp.floor ? voiceDisp.floor.wrap(h) : h), stop: () => vad.stop(), setPlaybackActive: (on, now) => vad.setPlaybackActive(on, now), reopen: () => vad.reopen(), info: () => vad.info() }; }
+    function voiceFacePackBody() { const d = voiceDisp.cur; const slug = d && typeof d.activeFacePack === 'function' ? d.activeFacePack() : null; return slug ? { facePack: slug } : {}; }
+    function voiceDispTalk() { const f = voiceDisp.floor; if (f) f.take(); }
+    function voiceDispAdopt(chatId) {
+      return [
+        { el: voiceById(`voice-callbar-${chatId}`), label: 'Call' },
+        { el: voiceById(`voice-pop-${chatId}`), label: 'Voice settings', wrapClass: 'voice-extra', show: true, prepare: () => { const pop = voiceById(`voice-pop-${chatId}`); if (pop && pop.hidden) voicePopToggle(chatId); }, release: () => voicePopClose() },
+      ];
+    }
+    function voiceDispBegin(chatId, agent) {
+      if (typeof CallDisplay === 'undefined' || typeof CallDisplay.createCallDisplay !== 'function' || typeof CallDisplay.createTalkFloor !== 'function') return;   // the module exports only window.CallDisplay
+      if (voiceDisp.last) { try { voiceDisp.last.release(); } catch { /* gone */ } voiceDisp.last = null; }
+      voiceDisp.floor = CallDisplay.createTalkFloor({ call: () => voiceCallS.call, setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t) });
+      voiceDisp.turnSeq.clear();
+      let d = null;
+      try {
+        d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), output: (ctx) => voiceOutNode(ctx), agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
+          dock: () => { const i = voiceById(`input-${chatId}`); return i ? i.closest('.input-area') : null; },   // whenever no full view is shown (None, Back to chat, a character loading) the call screen's bar takes the message box's place in this chat; the call bar lives in its Controls drawer
+          onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(chatId),
+          onRecordingToggle: (wantPaused) => (voiceCallS.rec ? voiceCallS.rec.togglePause(wantPaused) : undefined) });   // the Pause / Resume recording button of a recorded call
+        voiceDisp.cur = d;
+        d.start();
+      } catch { voiceDisp.cur = null; }
+    }
+    // The call is ending: hang-up = a short goodbye (bounded), release = at once. Safe to call twice.
+    function voiceDispEnd(goodbye) {
+      const d = voiceDisp.cur; voiceDisp.cur = null;
+      if (voiceDisp.floor) { try { voiceDisp.floor.cancel(); } catch { /* gone */ } voiceDisp.floor = null; }
+      voiceDisp.turnSeq.clear();
+      if (!d) return;
+      if (!goodbye) { try { d.release(); } catch { /* gone */ } return; }
+      voiceDisp.last = d;
+      let said = null; try { said = d.hangUp(); } catch { /* the view is gone */ }   // synchronous: the controls are back in the page before the page tears the call down
+      Promise.resolve(said).catch(() => {}).then(() => { if (voiceDisp.last === d) voiceDisp.last = null; });
+    }
+    // The mood word of a turn: once per turn however it arrives (the chat stream's voice_mood chunk or the hub's turn_mood event).
+    function voiceDispMood(seq, mood) { voiceDisplayHook('mood', 'seq:' + seq, mood); }
+    // The voice panel's display selector, captions switch and the line about an unavailable character.
+    async function voiceDispPaintPanel(chatId) {
+      if (typeof CallDisplay === 'undefined') return;
+      const ids = [`vp-display-${chatId}`, `vcb-display-${chatId}`];   // the voice panel's select and the call bar's
+      const sels = ids.map((i) => voiceById(i)).filter(Boolean);
+      if (!sels.length) return;
+      const agent = chats[chatId] && chats[chatId].agent;
+      const paintBoxes = (p) => {   // the switches need no list: set at once, and again from the prefs as they are after the wait
+        const cap = voiceById(`vp-captions-${chatId}`); if (cap) cap.checked = !!p.captions;
+        const intr = voiceById(`vp-interrupt-${chatId}`); if (intr) intr.checked = p.interrupt === true;
+      };
+      paintBoxes(CallDisplay.loadDisplayPrefs(localStorage));
+      if (!voiceDisp.paintGen) voiceDisp.paintGen = new Map();
+      const my = (voiceDisp.paintGen.get(chatId) || 0) + 1; voiceDisp.paintGen.set(chatId, my);
+      let packs = [], available = [], state = 'ready';
+      try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; } catch { state = 'failed'; }
+      if (voiceDisp.paintGen.get(chatId) !== my) return;   // a newer paint started meanwhile: an older answer never puts back an older choice
+      const prefs = CallDisplay.loadDisplayPrefs(localStorage);   // read after the wait: a choice made meanwhile counts
+      paintBoxes(prefs);
+      for (const sel of sels) {
+        if (voiceById(sel.id) !== sel) continue;   // rebuilt meanwhile
+        if (sel === document.activeElement) continue;   // an open picker is not refilled
+        CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs, available });
+      }
+      const note = voiceById(`vp-display-note-${chatId}`);
+      const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, available, packsState: state });
+      if (note) note.textContent = CallDisplay.displayNote(resolved);
+      // a character that is on the hub's list but not installed here is downloaded now (the one download per id is shared by the whole page); its progress shows under the note
+      if (resolved.downloadable === true && resolved.wanted) {
+        const a = available.find((x) => x.id === resolved.wanted);
+        voiceDispDownloadFor(chatId, resolved.wanted, a ? a.name : resolved.wanted);
+        voiceDispPaintDownload(chatId);
+      } else if (note) CallDisplay.paintDownloadNote(document, note, null);
+    }
+    // One download per character id for the whole page (voiceDisp.downloads: id -> { name, dl, chats }); every chat panel that asked repaints its own note.
+    function voiceDispDownloadFor(chatId, id, name) {
+      const map = voiceDisp.downloads || (voiceDisp.downloads = new Map());
+      let ent = map.get(id);
+      if (!ent) {
+        ent = { id, name, chats: new Set(), dl: null };
+        ent.chats.add(chatId);
+        // the shared download of this id (the call display uses the very same one): a Retry from any place restarts it, every place hears the result
+        ent.dl = CallDisplay.sharedFaceDownload({ fetch: (...a) => fetch(...a), id, name });
+        ent.off = ent.dl.subscribe((st) => {
+          for (const c of ent.chats) voiceDispPaintDownload(c);
+          if (st.state === 'done') { map.delete(id); if (ent.off) { ent.off(); ent.off = null; } for (const c of ent.chats) voiceDispPaintPanel(c); }   // installed: the select lists it now
+        });
+        map.set(id, ent);
+        ent.dl.start();
+      }
+      ent.chats.add(chatId);
+      return ent;
+    }
+    function voiceDispPaintDownload(chatId) {
+      const note = voiceById(`vp-display-note-${chatId}`);
+      if (!note) return;
+      const prefs = CallDisplay.loadDisplayPrefs(localStorage);
+      const want = prefs.choice === 'follow' ? voiceDispAgentDefault(chats[chatId] && chats[chatId].agent) : prefs.choice;
+      const id = typeof want === 'string' && want.startsWith('pack:') ? want.slice(5) : '';
+      const ent = id && voiceDisp.downloads && voiceDisp.downloads.get(id);
+      if (!ent) { CallDisplay.paintDownloadNote(document, note, null); return; }
+      CallDisplay.paintDownloadNote(document, note, ent.dl.status || { state: 'downloading', received: 0, total: 0 }, ent.name, () => { ent.dl.retry(); voiceDispPaintDownload(chatId); });
+    }
+    function voiceDispSetChoice(chatId, v) {
+      if (typeof CallDisplay === 'undefined') return;
+      const pid = typeof v === 'string' && v.startsWith('pack:') ? v.slice(5) : '';
+      const prev = pid && voiceDisp.downloads && voiceDisp.downloads.get(pid);
+      if (prev && prev.dl.status && (prev.dl.status.state === 'failed' || prev.dl.status.state === 'busy')) prev.dl.retry();   // choosing it again tries again at once
+      if (voiceDisp.cur) voiceDisp.cur.setChoice(v); else CallDisplay.saveDisplayPrefs(localStorage, { choice: v });   // live: the view changes, the call goes on
+      voiceDispPaintPanel(chatId);
+    }
+    function voiceDispSetCaptions(chatId, on) {
+      if (typeof CallDisplay === 'undefined') return;
+      if (voiceDisp.cur) voiceDisp.cur.setCaptions(on); else CallDisplay.saveDisplayPrefs(localStorage, { captions: !!on });
+    }
+    const VOICE_INTERRUPT_HINT = 'For places where talking over the reply doesn\'t register.';
+    function voiceInterruptNow() { return typeof CallDisplay !== 'undefined' && CallDisplay.loadDisplayPrefs(localStorage).interrupt === true; }
+    // Every open place that shows the option (Settings and each chat's voice panel) follows it.
+    function voiceInterruptPaint() {
+      const on = voiceInterruptNow();
+      const s = voiceById('st-voice-interrupt'); if (s) s.checked = on;
+      for (const e of document.querySelectorAll('.voice-pop [data-vp="interrupt"]')) e.checked = on;
+    }
+    function voiceDispSetInterrupt(chatId, on) {
+      if (typeof CallDisplay === 'undefined') return;
+      if (voiceDisp.cur && typeof voiceDisp.cur.setInterruptButton === 'function') voiceDisp.cur.setInterruptButton(!!on); else CallDisplay.saveDisplayPrefs(localStorage, { interrupt: !!on });
+      voiceInterruptPaint();
+      if (chatId && typeof voiceDispPaintPanel === 'function') voiceDispPaintPanel(chatId);
+    }
+    const VOICE_CALL_HELP = 'Hands-free works with the page open and the screen on, also through a car\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.';
+    // The reply playback context (made the way voicePlayHub makes it): the replies, the call's thinking pulse and the keep-alive all go out through it.
+    function voiceOutputCtx() {
+      if (!voicePlay.ctx || voicePlay.ctx.state === 'closed') { const AC = window.AudioContext || window.webkitAudioContext; if (AC) voicePlay.ctx = new AC(); }
+      return voicePlay.ctx;
+    }
+    function voiceEchoHoldNow() { const v = voicePrefsNow().echoHold; return VOICE_ECHO_HOLDS.includes(v) ? v : 600; }
+    const VOICE_ECHO_HINT = 'Keeps the agent from hearing its own reply in a car or through a speaker.';
+    const VOICE_KEEP_HINT = 'Plays a very quiet hiss during a call so a car or Bluetooth speaker does not cut the first word.';
+    // The "Echo guard after replies" select (Off / 0.6 s / 1 s / 1.5 s): Settings and the chat's voice panel.
+    function voiceEchoSelectHtml(id, attrs) {
+      const cur = voiceEchoHoldNow();
+      return `<select id="${id}" ${attrs} style="padding:4px">${VOICE_ECHO_HOLDS.map((ms) => `<option value="${ms}"${ms === cur ? ' selected' : ''}>${ms === 0 ? 'Off' : (ms / 1000) + ' s'}</option>`).join('')}</select>`;
+    }
+    function voiceKeepAliveNow() { return voicePrefsNow().keepAlive !== false; }
+    // The two "Voice loudness" selects (Normal / Louder / Loudest), one per output: key 'loudness' (speaker) or 'loudnessBt' (Bluetooth / car). Settings and the chat's voice panel.
+    const VOICE_LOUDNESS_LABELS = { normal: 'Normal', louder: 'Louder', loudest: 'Loudest' };
+    function voiceLoudnessSelectHtml(id, attrs, key) {
+      const bt = key === 'loudnessBt';
+      const cur = voiceLoudnessFor(voicePrefsNow(), bt ? 'bluetooth' : 'speaker');
+      return `<select id="${id}" ${attrs} aria-label="Voice loudness, ${bt ? 'Bluetooth / car' : 'speaker'}" style="padding:4px">${Object.keys(VOICE_LOUDNESS_LABELS).map((k) => `<option value="${k}"${k === cur ? ' selected' : ''}>${VOICE_LOUDNESS_LABELS[k]}</option>`).join('')}</select>`;
+    }
+    // The two settings shown everywhere they are shown (Settings and every open chat panel).
+    function voiceEchoKeepPaint() {
+      const hold = String(voiceEchoHoldNow()), keep = voiceKeepAliveNow();
+      const a = voiceById('st-voice-echo'); if (a) a.value = hold;
+      const b = voiceById('st-voice-keepalive'); if (b) b.checked = keep;
+      for (const e of document.querySelectorAll('.voice-pop [data-vp="echo"]')) e.value = hold;
+      for (const e of document.querySelectorAll('.voice-pop [data-vp="keep"]')) e.checked = keep;
+    }
+    const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', hearing: 'Hearing you', thinking: 'Thinking', speaking: 'Speaking', ended: 'Ended' };
+    const VOICE_LINK_LOST_TEXT = 'Connection lost', VOICE_LINK_ENDED_TEXT = 'Call ended: connection lost';
+    const VOICE_HANGUP_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 14c5-4 13-4 18 0l-2.5 3-3-1.5v-2.5c-2-.8-4-.8-6 0v2.5L5.5 17z"></path></svg>';
+    async function voiceCallApi(path, body, opts) {
+      const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
+      let r;
+      try { r = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: !!(opts && opts.keepalive) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure (the heartbeat, interjections) marks the link lost
+      let j = {};
+      try { j = await r.json(); } catch {}
+      if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
+      return j;
+    }
+    // Speech to text for one utterance (16 kHz samples from the VAD).
+    async function voiceCallStt(audio, agent) {
+      const wav = voiceEncodeWav(audio, 16000);
+      const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
+      let r;
+      try { r = await fetch(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost
+      let j = {};
+      try { j = await r.json(); } catch {}
+      if (!r.ok) { if (voiceBusyToast(r.status) && r.status === 409) voiceRefreshStatus(); throw new Error(j.error || `HTTP ${r.status}`); }
+      return j.text || '';
+    }
+    // Reads one line with the hub voice (or the offline device voice). Resolves false when it was cut.
+    async function voiceCallSpeak(agent, text) {
+      const sentences = voiceSentences(voiceSpeechText(String(text || ''))).filter(Boolean);
+      if (!sentences.length) return true;
+      const mine = voicePlay.token + 1;   // voiceSpeakText stops the previous one first: one step on the token
+      await voiceSpeakText(agent, text, null, { sentences });
+      return voicePlay.token === mine;
+    }
+    // The recording's consent line: true only when it was played to the end (hub voice, or the device voice where that is on).
+    // Voice off, a voice that failed with no fallback, or a cut line: false, so the hub does not count the line as heard.
+    async function voiceCallSpeakLine(agent, text) {
+      const sentences = voiceSentences(voiceSpeechText(String(text || ''))).filter(Boolean);
+      if (!sentences.length) return false;
+      const mine = voicePlay.token + 1, out = { played: false };
+      await voiceSpeakText(agent, text, null, { sentences, out });
+      return out.played === true && voicePlay.token === mine;
+    }
+    function voiceCallRunning(chatId, agent) {
+      const chat = chats[chatId];
+      return !!((chat && chat.status === 'thinking') || (agentStatus[agent] && agentStatus[agent].busy));
+    }
+    // A message from the call goes through the normal send path (with voice: true); the person's half-typed text stays in the box.
+    // Returns a promise: it rejects when the hub did not take the message (a non-2xx answer or a network error), so the
+    // controller can say "That did not go through." and listen again. It does not wait for the reply: the next
+    // utterance must not wait for it. A turn_end that never arrives is released 2.5 s after the stream has ended.
+    function voiceCallSend(chatId, text) {
+      const input = document.getElementById(`input-${chatId}`);
+      if (!input || !chats[chatId]) throw new Error('chat closed');
+      const S = voiceCallS, seq = ++S.sendSeq, linkOwner = S.call;
+      voiceDisplayHook('reply', 'turn', 'seq:' + seq);   // a new turn: the older ones (and their moods) are over
+      S.expecting = true;
+      const prev = input.value;
+      input.value = text;
+      let accepted;
+      const result = new Promise((resolve, reject) => { accepted = (err) => { if (err && typeof voiceLinkNetFail === 'function') voiceLinkNetFail(err, linkOwner); err ? reject(err) : resolve(); }; });   // a network failure on the message marks the link lost
+      const release = () => {
+        setTimeout(() => {
+          if (!S.call || S.sendSeq !== seq || !S.expecting) return;
+          S.expecting = false;
+          let last = ''; for (const v of S.own.values()) last = v;
+          S.own.clear();
+          S.call.onReplyText(last, true);
+        }, 2500);
+      };
+      const run = sendSoloMessage(chatId, 0, { voice: true, onSendResult: accepted });
+      input.value = prev;
+      Promise.resolve(run).then(() => accepted(null), (e) => accepted(e || new Error('send failed'))).then(release);
+      return result;
+    }
+    async function voiceCallInterject(chatId, text) {
+      const chat = chats[chatId];
+      if (!chat) throw new Error('chat closed');
+      appendMessage(chatId, 'user', `⚡ [Interjection] ${text}`);
+      try { await voiceCallApi('/api/chat/interject', { agent: chat.agent, message: text }); }
+      catch (e) {
+        if (/not currently processing/i.test(String(e.message))) { voiceCallSend(chatId, text); return; }   // the turn had just ended
+        throw e;
+      }
+    }
+    async function voiceCallAnswerAsk(agent, requestId, answer) {
+      const q = voiceCallS.asks.get(requestId);
+      voiceCallS.asks.delete(requestId);
+      if (!q) return;
+      try { await voiceCallApi('/api/ask_response', { agent, request_id: requestId, answers: { [q]: answer } }); closeQuestion(requestId); }
+      catch { hubToast('Could not send that answer.'); }
+    }
+    // The thinking sound of the call: a soft pulse (voiceCreateThinkingSound, Web Audio only) on an AudioContext of its own,
+    // made on first use. While it pulses the VAD is told playback is active, so the pulse cannot start a barge-in.
+    function voiceCallThinking(vad) {
+      if (typeof voiceCreateThinkingSound !== 'function') return null;   // an older lib: the call goes on without the sound
+      let ctx = null, snd = null, on = false;
+      const quiet = (fn) => { try { fn(); } catch { /* a comfort: never breaks the call */ } };
+      // The call's output context is the reply playback context (voicePlay.ctx, via voiceOutputCtx), so replies, this pulse and the keep-alive go out
+      // through one output. It is made inside the tap that starts the call (voiceCallStart, before any await) and is NOT closed with the call.
+      const getCtx = () => { const c = voiceOutputCtx(); if (c !== ctx) { ctx = c; snd = null; } return ctx; };
+      quiet(() => { const c = getCtx(); if (c && c.resume) Promise.resolve(c.resume()).catch(() => {}); });
+      return {
+        start() {
+          if (on) return;
+          quiet(() => {
+            getCtx();
+            if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
+            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow() });
+            snd.setVolume(voiceThinkingVolNow());
+            snd.start();
+            on = true;
+            vad.setPlaybackActive(true);
+          });
+        },
+        // One pulse for the call's thinking clock (the controller decides when and whether it is audible).
+        // The event goes to the sound, which moves ev.at to when the pulse is heard (same object back); false = not playing (suspended).
+        pulse(ev) {
+          let r;
+          quiet(() => {
+            getCtx();
+            if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
+            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow() });
+            snd.setVolume(voiceThinkingVolNow());
+            r = snd.pulse(ev);
+            if (r === false) return;
+            on = true;
+            vad.setPlaybackActive(true);
+          });
+          return r;
+        },
+        stop() {
+          if (!on) return;
+          on = false;
+          quiet(() => snd.stop());
+          if (!voicePlay.source) quiet(() => vad.setPlaybackActive(false));   // reply audio already playing keeps the flag
+        },
+        setVolume(v) { quiet(() => { if (snd) snd.setVolume(v); }); },
+        close() { on = false; quiet(() => { if (snd) snd.stop(); }); ctx = null; snd = null; },   // the shared output context stays: replies still use it
+      };
+    }
+    // The microphone line of the call bar: 'Microphone: <label or default>' + ' · 16 kHz' when known + ' · basic mode' (plain text, never HTML).
+    function voiceMicLineText(info) {
+      const i = info || {};
+      let t = 'Microphone: ' + (String(i.label || '').trim() || 'default');
+      const rate = Number(i.sampleRate);
+      if (Number.isFinite(rate) && rate > 0) t += ' · ' + (Math.round(rate / 100) / 10) + ' kHz';
+      if (i.fallback) t += ' · basic mode';
+      return t;
+    }
+    // ── Wake phrase standby: allowed only with a ready local recognizer (the server rule is engineFor in lib/voice/routes.js) ──
+    function voiceWakeAllowed(agent) {
+      try {
+        const st = voiceStatus;
+        if (!agent || !st || st.enabled !== true || st.ready !== true || !st.stt || st.stt.engine !== 'local') return false;
+        const a = (typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(x => x && x.name === agent);
+        if (!a) return false;
+        return !a.voice || !a.voice.stt || a.voice.stt === 'local';
+      } catch { return false; }
+    }
+    function voiceWakeNow(agent) {
+      // null only when the person has it off; on, local says whether standby may run (a call in standby with local false stays deaf).
+      try {
+        const w = voiceWakeForAgent(voicePrefsNow(), agent);
+        if (!(w && w.on === true && w.phrase)) return null;
+        let local = false;
+        try { local = voiceWakeAllowed(agent) === true; } catch { local = false; }
+        return { phrase: w.phrase, quietMs: w.quietMs, local };
+      } catch { return { phrase: '', quietMs: 20000, local: false }; }
+    }
+    function voiceWakeChime() {
+      try {
+        const ctx = voiceOutputCtx();   // the reply playback context (made inside the tap that started the call)
+        if (!ctx) return false;
+        if (ctx.state === 'suspended' && typeof ctx.resume === 'function') ctx.resume().catch(() => {});
+        return voicePlayWakeChime(ctx) === true;
+      } catch { return false; }
+    }
+    function voiceCallStateText(name, phrase) { return name === 'standby' ? (phrase ? `Waiting for “${phrase}”` : 'Waiting') : (VOICE_CALL_STATE_TEXT[name] || name); }
+    function voiceWakeAgentOf(chatId) { const c = chats[chatId]; return c && !c.isGroup && !c.isWorker && c.agent ? c.agent : ''; }
+    function voiceWakeName(agent) { const a = (typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(x => x && x.name === agent); return String((a && a.display) || agent || ''); }
+    // The panel's wake rows: disabled, with one line why, while the recognizer check says no (a ticked box stays free to untick).
+    function voiceWakePaint() {
+      for (const box of document.querySelectorAll('.voice-pop .vp-wake')) {
+        const ok = voiceWakeAllowed(voiceWakeAgentOf(box.dataset.chat));
+        for (const el of box.querySelectorAll('input, select')) el.disabled = !ok && !(el.type === 'checkbox' && el.checked);   // a ticked box can always be unticked
+        const off = box.querySelector('.vp-wake-off'); if (off) off.hidden = ok;
+      }
+    }
+    // The recognizer check can change mid-call (the status or the agent list was read again): the controller looks again.
+    function voiceWakeRecheck() {
+      try { const S = voiceCallS; if (S.call && typeof S.call.wakeChanged === 'function') S.call.wakeChanged(); } catch { /* the call carries on */ }
+      try { voiceWakePaint(); } catch { /* no panel */ }
+    }
+    function voiceWakeSave(chatId) {
+      const agent = voiceWakeAgentOf(chatId); if (!agent) return;
+      const q = (n) => voiceById(`vp-wake${n}-${chatId}`);
+      const cb = q(''), ph = q('-phrase'), qs = q('-quiet'), hint = q('-hint');
+      if (!cb || !ph || !qs) return;
+      const name = voiceWakeName(agent), on = !!cb.checked;
+      let typed = ph.value.trim();
+      if (on && !typed) { typed = `Hey ${name}`; ph.value = voiceCleanWakePhrase(typed) || typed; }   // turned on with nothing typed: the placeholder phrase
+      const phrase = voiceCleanWakePhrase(typed);
+      if (hint) { hint.textContent = typed && !phrase ? `Use 1 to 4 words, e.g. Hey ${name}` : ''; hint.hidden = !hint.textContent; }
+      if (phrase) ph.value = phrase;
+      const quietMs = VOICE_WAKE_QUIET_MS.includes(Number(qs.value)) ? Number(qs.value) : 20000;
+      const wake = { ...(voicePrefsNow().wake || {}), [agent]: { on, phrase, quietMs } };
+      voicePrefsCache = { ...voicePrefsNow(), wake };
+      const prefs = voiceSavePrefs(localStorage, { wake });
+      voicePrefsCache = { ...voicePrefsCache, ...prefs };
+      const S = voiceCallS;
+      if (S.call && S.agent === agent && typeof S.call.wakeChanged === 'function') S.call.wakeChanged();
+    }
+    function voiceWakeRowsHtml(chatId) {
+      try { return voiceWakeRowsBuild(chatId); } catch { return ''; }   // never breaks the rest of the panel
+    }
+    function voiceWakeRowsBuild(chatId) {
+      const agent = voiceWakeAgentOf(chatId), name = voiceWakeName(agent), w = voiceWakeForAgent(voicePrefsNow(), agent) || { on: false, phrase: '', quietMs: 20000 };
+      const id = (n) => `vp-wake${n}-${chatId}`;
+      const allowed = voiceWakeAllowed(agent), dis = allowed ? '' : ' disabled';   // built disabled when the recognizer check says no (voiceWakePaint keeps it current)
+      const opts = VOICE_WAKE_QUIET_MS.map((ms) => `<option value="${ms}"${ms === w.quietMs ? ' selected' : ''}>${ms / 1000} s</option>`).join('');
+      return `<div class="vp-wake" data-chat="${hubEsc(chatId)}">
+        <label class="vp-row"><span class="vp-label">Wait for the wake phrase</span><input type="checkbox" id="${id('')}" data-vp="wake"${w.on ? ' checked' : ''}${w.on ? '' : dis}></label>
+        <label class="vp-row"><span class="vp-label">Wake phrase</span><input type="text" id="${id('-phrase')}" data-vp="wake" maxlength="60" autocomplete="off" spellcheck="false" placeholder="${hubEsc(`Hey ${name}`)}" value="${hubEsc(w.phrase)}"${dis}></label>
+        <div class="vp-display-note" id="${id('-hint')}" role="status" aria-live="polite" hidden></div>
+        <label class="vp-row"><span class="vp-label">Back to waiting after</span><select id="${id('-quiet')}" data-vp="wake" style="padding:4px"${dis}>${opts}</select></label>
+        <div class="vp-display-note">The call stays up and answers only after the phrase. Keep the app open with the screen on; a hidden page still hangs up. Say “that’s all” to go back to waiting.</div>
+        <div class="vp-display-note vp-wake-off"${allowed ? ' hidden' : ''}>Needs speech recognition on this computer; this agent uses a cloud recognizer or voice is off.</div>
+      </div>`;
+    }
+    // The recorded call's page side (lib/ui-voice-call.js voiceCreateRecordingSession): made at call start only for an agent whose recordings.keep is on, so a call
+    // with recording off has no start-body device, no recorder, no upload and no badge. wired: the controller was given the recorder (false: a stale agent list).
+    function voiceRecMake(agent, vad, cfg, wired) {
+      return voiceCreateRecordingSession({ agent, userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '', vad, wired, unprocessed: cfg.mic === 'unprocessed', nav: navigator,
+        fetch: (...a) => fetch(...a),   // the same fetch the call's other requests use: the sign-in cookie and the Origin header go with it
+        speak: (line) => voiceCallSpeakLine(agent, line),   // the consent line: the agent's voice, the replies' own TTS path; true only when it really played
+        playback: (on) => { try { vad.setPlaybackActive(on); } catch { /* the line is heard anyway */ } },
+        badge: (state) => voiceDisplayHook('setRecording', { state }), toast: (m) => hubToast(m),
+        onNetFail: (e) => voiceLinkNetFail(e, voiceLinkOwner()),
+        now: () => Date.now(), setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (t) => clearTimeout(t) });
+    }
+    function voiceCallDeps(chatId, agent, vad, thinking, keepAlive, rec) {
+      const barEl = (n) => voiceById(`vcb-${n}-${chatId}`);
+      return {
+        agent,
+        ...(thinking ? { thinking } : {}),
+        ...(keepAlive ? { keepAlive } : {}),
+        ...(rec ? { recorder: rec.recorder, recordTranscript: (seq, text) => rec.recordTranscript(seq, text), recordReplyText: (text) => rec.recordReplyText(text) } : {}),   // a recorded call only
+        now: () => Date.now(),
+        perfNow: () => performance.now(),
+        setTimer: (fn, ms) => setTimeout(fn, ms),
+        clearTimer: (t) => clearTimeout(t),
+        prefs: () => voiceEffNow(agent),   // this agent's voice defaults for any setting the person has not set on this device
+        vad: voiceDispVad(vad),
+        stt: (audio) => voiceCallStt(audio, agent),
+        isTurnRunning: () => voiceCallRunning(chatId, agent),
+        send: (text) => voiceCallSend(chatId, text),
+        interject: (text) => voiceCallInterject(chatId, text),
+        stop: () => stopAgentTurn(agent),
+        speak: (text) => voiceCallSpeak(agent, text),
+        cancelSpeech: () => voiceStopPlayback(),
+        answerAsk: (id, text) => voiceCallAnswerAsk(agent, id, text),
+        speakActivity: () => !!voicePrefsNow().speakActivity,   // off by default: what the agent is doing is shown in the bar, not spoken
+        wake: () => voiceWakeNow(agent),   // null (the default) unless the person turned the wake phrase on and the recognizer is local
+        chime: () => voiceWakeChime(),
+        server: {
+          // The call's id (callId) comes with the start answer; the controller passes it back with every later request.
+          start: async (mode) => {
+            const body = { agent, action: 'start', mode };
+            if (rec) body.device = await rec.device();   // only when the agent keeps recordings (recordings.keep): the call's microphone, rate and processing; otherwise the body is exactly as before
+            let r;
+            try { r = await voiceCallApi('/api/voice/call', body); }
+            catch (e) { if (e && e.status === 409 && e.message === 'recording_needs_local_stt') throw new Error(VOICE_REC_NEEDS_LOCAL); throw e; }   // the call does not start; the controller shows this in the call's usual error toast
+            const id = r.call && r.call.callId;
+            const g = rec || (r.recording ? voiceRecMake(agent, vad, { mic: 'processed' }, false) : null);   // the hub recorded it though this page did not expect that (an old agent list): "Not recording"
+            if (g) { if (!rec) voiceCallS.rec = g; try { await g.started(r.recording, id); } catch { /* the call carries on without a recording */ } }   // the consent line is spoken before the call listens
+            return { callId: id, held: (r.call && r.call.held) || [] };
+          },
+          heartbeat: (callId) => voiceCallApi('/api/voice/call', { agent, action: 'heartbeat', callId }).then(
+            r => ({ callId: r.call && r.call.callId, held: (r.call && r.call.held) || [] }),
+            (e) => {   // the hub no longer has this call (no_call, stale_call, not_your_call): hang up here too
+              // only when this heartbeat belongs to the call still up (a late answer for an earlier call must not end a new one)
+              if ((e.status === 409 || e.status === 403) && voiceCallS.call && voiceCallS.chatId === chatId && voiceCallS.call.callId === callId) { hubToast('The call ended.'); voiceCallHangUp(); }
+              throw e;
+            }),
+          mode: (m, callId) => voiceCallApi('/api/voice/call', { agent, action: 'mode', mode: m, callId }),
+          end: (callId) => voiceCallApi('/api/voice/call', { agent, action: 'end', callId }, { keepalive: true }).then(r => ({ held: (r.call && r.call.held) || r.held || [] })),
+          decide: (id, choice, callId) => voiceCallApi('/api/voice/call/decide', { agent, id, choice, callId }),
+        },
+        ui: {
+          state: (name, phrase) => { const s = barEl('state'); if (s) { s.textContent = voiceCallS.linkLost ? VOICE_LINK_LOST_TEXT : voiceCallStateText(name, phrase); s.dataset.state = name; s.dataset.phrase = phrase || ''; } voiceDisplayHook('setState', name, phrase); },   // while the connection is lost the bar keeps saying so
+          thinkingPulse: (ev) => { voiceDisplayHook('thinkingPulse', ev); },
+          reply: (kind) => { voiceDisplayHook('reply', kind, 'seq:' + voiceCallS.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
+          thinkingWanted: () => voiceDisplayHook('showsPulse') === true,   // no view shown (None, hidden): the call's thinking sound is exactly the plain one
+          mic: (info) => { const t = voiceMicLineText(info); voiceCallS.micLine = t; voiceCallS.micLabel = info && typeof info.label === 'string' ? info.label : ''; voiceOutputChanged(); const m = barEl('micinfo'); if (m && !voiceCallS.micLost) m.textContent = t; },   // which microphone is open (while it is lost the line keeps saying so)
+          micLost: (on) => {   // the call goes on; the line says the microphone is lost, the meter is empty and a tap tries it again
+            voiceCallS.micLost = !!on;
+            const b = barEl('retry'); if (b) b.hidden = !on;
+            const m = barEl('micinfo'); if (m) { m.textContent = on ? 'Microphone lost' : (voiceCallS.micLine || ''); m.classList.toggle('vcb-mic-lost', !!on); }
+            if (on) for (const i of [barEl('level'), voiceById(`vp-level-${chatId}`)]) if (i) i.style.width = '0%';
+            voiceDisplayHook('micLost', !!on);
+          },
+          level: (db) => { const w = voiceCallS.micLost ? '0%' : `${voiceMeterPercent(db)}%`; for (const i of [barEl('level'), voiceById(`vp-level-${chatId}`)]) if (i) i.style.width = w; voiceDisplayHook('level', db); },   // the call bar's meter and the voice panel's
+          activity: (text) => { const a = barEl('activity'); if (a) a.textContent = text || ''; },   // silent: shown in the call bar only
+          heard: (text) => { const h = barEl('heard'); if (h) h.textContent = text ? `Heard: ${text}` : ''; },
+          held: (list) => { voiceCallPaintHeld(chatId, list); voiceDisplayHook('badge', (list || []).length); },
+          toast: (msg) => hubToast(msg, String(msg).length > 90 ? 10000 : 3000),   // a long reason (a recorded call that cannot start) stays long enough to read
+          summary: (text) => { if (voiceById(`messages-${chatId}`)) appendSystemNotice(chatId, text); },   // a line in the panel only: not saved to history
+        },
+      };
+    }
+    function voiceCallBarHtml(chatId) {
+      const id = (n) => `vcb-${n}-${chatId}`;
+      return `<div class="vcb-top"><span class="vcb-state ucd-dup" id="${id('state')}" aria-live="polite">Starting</span>
+        <span class="voice-meter ucd-dup" aria-hidden="true"><i id="${id('level')}"></i></span>
+        <label class="vcb-dnd"><input type="checkbox" id="${id('dnd')}" data-vcb="dnd"> Do not disturb</label>
+        <label class="vcb-disp ucd-dup">Display <select id="${id('display')}" data-vcb="display" aria-label="Display"><option value="follow">Follow agent default</option></select></label>
+        <button type="button" class="vcb-hang ucd-dup" data-vcb="hang" aria-label="Hang up">${VOICE_HANGUP_SVG}<span>Hang up</span></button></div>
+        <div class="vcb-focus-hint" id="${id('focushint')}" hidden>Music playing? Pause it for a clearer call</div>
+        <div class="vcb-sliders ucd-dup">
+          <label>Mic level <input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vcb="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
+          <label>Interrupt sensitivity <input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vcb="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>
+          <label>Pause before I'm done ${voicePauseSelectHtml(id('pause'), 'data-vcb="pause"')}</label>
+          <label>Voice speed <input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vcb="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span> <small>${VOICE_SPEED_HINT}</small></label>
+        </div>
+        <div class="vcb-micline"><span class="vcb-micinfo" id="${id('micinfo')}"></span> <button type="button" class="st-test-btn vcb-retry" id="${id('retry')}" data-vcb="retry" hidden>Try the microphone again</button></div>
+        <div class="vcb-activity" id="${id('activity')}" aria-live="off"></div>
+        <div class="vcb-heard" id="${id('heard')}"></div>
+        <div class="vcb-held" id="${id('held')}"></div>
+        <div class="vcb-help">${VOICE_CALL_HELP}</div>`;
+    }
+    function voiceCallShowBar(chatId) {
+      voiceCallHideBar(chatId);
+      const input = voiceById(`input-${chatId}`), area = input && input.closest('.input-area');
+      if (!area || !area.parentNode) return;
+      const bar = document.createElement('div');
+      bar.className = 'voice-callbar'; bar.id = `voice-callbar-${chatId}`;
+      bar.setAttribute('role', 'region'); bar.setAttribute('aria-label', 'Voice call');
+      bar.innerHTML = voiceCallBarHtml(chatId);
+      area.parentNode.insertBefore(bar, area);
+      bar.addEventListener('click', (e) => {
+        const t = e.target.closest && e.target.closest('[data-vcb]');
+        if (!t) return;
+        if (t.dataset.vcb === 'hang') voiceCallHangUp();
+        else if (t.dataset.vcb === 'retry') voiceCallRetryMicTap();
+        else if (t.dataset.vcb === 'decide' && voiceCallS.call) voiceCallS.call.decide(t.dataset.id, t.dataset.choice);
+      });
+      bar.addEventListener('input', (e) => {
+        const t = e.target;
+        if (t.dataset && (t.dataset.vcb === 'mic' || t.dataset.vcb === 'sens' || t.dataset.vcb === 'speed')) voiceCallSlider(chatId, t.dataset.vcb, Number(t.value), false);
+      });
+      bar.addEventListener('change', (e) => {
+        const t = e.target;
+        if (!t.dataset) return;
+        if (t.dataset.vcb === 'mic' || t.dataset.vcb === 'sens' || t.dataset.vcb === 'speed' || t.dataset.vcb === 'pause') voiceCallSlider(chatId, t.dataset.vcb, Number(t.value), true);
+        else if (t.dataset.vcb === 'dnd' && voiceCallS.call) voiceCallS.call.setMode(t.checked ? 'dnd' : 'announce');
+        else if (t.dataset.vcb === 'display') voiceDispSetChoice(chatId, t.value);
+      });
+      bar.addEventListener('focusout', (e) => { const t = e.target; if (t && t.dataset && t.dataset.vcb === 'display') voiceDispPaintPanel(chatId); });   // a list skipped while it had focus is put in now
+      voiceDispPaintPanel(chatId);   // the bar's Display select is filled at call start
+    }
+    // The "Try the microphone again" tap (the call bar's button and the display's own retry control).
+    function voiceCallRetryMicTap() {
+      if (!(voiceCallS.call && typeof voiceCallS.call.retryMic === 'function')) return;
+      const c = voiceCallS.call;
+      Promise.resolve(c.retryMic()).then((ok) => { if (!ok && voiceCallS.call === c) hubToast('Still no microphone.'); }, () => { if (voiceCallS.call === c) hubToast('Still no microphone.'); });
+    }
+    function voiceCallHideBar(chatId) { const b = voiceById(`voice-callbar-${chatId}`); if (b) b.remove(); }
+    // A slider of the call bar: live on the VAD at once, saved to the prefs when released.
+    function voiceCallSlider(chatId, which, v, save) {
+      const val = voiceById(`vcb-${which}-val-${chatId}`); if (val) val.textContent = which === 'speed' ? voiceSpeedLabel(v) : String(v);
+      const vad = voiceCallS.vad;
+      if (vad) { if (which === 'mic') vad.setMicLevel(v); else if (which === 'sens') vad.setInterruptSensitivity(v); else if (which === 'pause') vad.setEndPause(v); }
+      if (which === 'speed') voicePrefsCache = voiceMarkChosen({ ...voicePrefsNow(), voiceSpeed: voiceCleanSpeed(v) }, ['voiceSpeed']);   // the next sentence is already spoken at the new speed
+      if (!save) return;
+      const key = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause' }[which];
+      let prefs = { ...voicePrefsNow(), [key]: which === 'speed' ? voiceCleanSpeed(v) : v };
+      if (VOICE_AGENT_DEFAULT_KEYS.includes(key)) prefs = voiceMarkChosen(prefs, [key]);   // the person set it: an agent's default no longer applies to it
+      voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
+    }
+    function voiceSettingSensInput(el) { const v = voiceById('st-voice-sens-val'); if (v) v.textContent = el.value; }
+    function voiceSettingSpeedInput(el) { const v = voiceById('st-voice-speed-val'); if (v) v.textContent = voiceSpeedLabel(el.value); }
+    function voiceCallPaintHeld(chatId, list) {
+      const box = voiceById(`vcb-held-${chatId}`);
+      if (!box) return;
+      box.innerHTML = (list || []).map(h => `<div class="vcb-item${h.later ? ' later' : ''}"><span class="vcb-item-label">${hubEsc(h.label || h.kind || 'Something')}${h.from ? ` <small>from ${hubEsc(h.from)}</small>` : ''}${h.later ? ' <small>(later)</small>' : ''}</span>`
+        + ['now', 'later', 'skip'].map(c => `<button type="button" data-vcb="decide" data-id="${hubEsc(h.id)}" data-choice="${c}">${c === 'now' ? 'Now' : c === 'later' ? 'Later' : 'Skip'}</button>`).join('') + '</div>').join('');
+    }
+    // The mic button is the call's hang-up button while a call is up.
+    function voiceCallPaintBtn(chatId, on) {
+      const b = voiceById(`mic-${chatId}`);
+      if (!b) return;
+      b.classList.toggle('call', on);
+      b.disabled = false;
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.setAttribute('aria-label', on ? 'Hang up' : 'Dictate');
+      b.title = on ? 'Hang up' : 'Talk (tap to start, tap to stop)';
+      b.innerHTML = on ? VOICE_HANGUP_SVG : VOICE_MIC_SVG;
+    }
+    async function voiceCallWake(on) {
+      const S = voiceCallS;
+      try {
+        if (!on) { const w = S.wake; S.wake = null; if (w) await w.release(); return; }
+        if (!navigator.wakeLock || S.wake) return;
+        const w = await navigator.wakeLock.request('screen');
+        if (!S.call) { try { await w.release(); } catch { /* already released */ } return; }   // hung up while the request was out: let go at once
+        S.wake = w;
+        if (w.addEventListener) w.addEventListener('release', () => { if (S.wake === w) S.wake = null; });
+      } catch { /* a wake lock is a comfort: the call goes on without it */ }
+    }
+    // The Hands-free pill shows only in the chat whose call is up; outside a call the mode lives in Voice settings.
+    function voiceModeChipPaint() {
+      let id = null;
+      try { id = voiceCallS.call ? voiceCallS.chatId : null; } catch { id = null; }   // painted from voicePaint before the call state exists
+      for (const c of document.querySelectorAll('.input-area .voice-mode-chip')) c.style.display = id && c.id === 'vmode-' + id ? '' : 'none';
+    }
+    function voiceCallTeardown() {
+      const S = voiceCallS, chatId = S.chatId, vad = S.vad, thinking = S.thinking, keepAlive = S.keepAlive, focus = S.focus;
+      for (const c of Object.values(chats)) if (c) { c.voiceTurn = false; c.voiceDictated = false; }   // nothing dictated before the call is read aloud after Hang up
+      if (S.link) { try { S.link.stop(); } catch { /* gone */ } S.link = null; }
+      S.linkLost = false;
+      const rec = S.rec; S.rec = null;
+      if (rec) { try { rec.stop(); } catch { /* already stopped */ } }   // a recorded call: the recorder lets go of its tap (uploads in flight finish)
+      S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.focus = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
+      S.own.clear(); S.hub.clear(); S.asks.clear();
+      voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
+      // Whatever way the call ended, nothing is left holding the microphone or a speaker: the VAD (mic tracks, processed stream,
+      // AudioContext) and the thinking sound's context are let go here too; both are safe to stop twice.
+      if (thinking) { try { thinking.close(); } catch { /* already closed */ } }
+      if (keepAlive) { try { keepAlive.stop(); } catch { /* already stopped */ } }   // the controller stops it too; both are safe twice
+      if (focus) { try { focus.stop(); } catch { /* already stopped */ } }
+      if (vad && typeof vad.stop === 'function') { try { Promise.resolve(vad.stop()).catch(() => {}); } catch { /* already stopped */ } }
+      voiceStopPlayback();
+      voiceCallWake(false);
+      if (chatId) { voiceCallHideBar(chatId); voiceCallPaintBtn(chatId, false); }
+      if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();
+    }
+    function voiceCallHangUp() {
+      const call = voiceCallS.call;
+      if (!call) return Promise.resolve([]);
+      const p = call.hangUp();
+      voiceDispEnd(true);   // the microphone and the hub are already being let go; the character says goodbye for a moment
+      voiceCallTeardown();
+      return p;
+    }
+    // Leaving the app: an immediate hang-up that does not wait for the hub (call.release), then everything is let go.
+    // A note waits for the person's return ("The call ended when you left the app", with Call again).
+    function voiceCallRelease(reason) {
+      const S = voiceCallS, call = S.call, chatId = S.chatId;
+      if (!call) return;
+      try { if (typeof call.release === 'function') call.release(reason); else call.hangUp(); } catch { /* teardown below lets go anyway */ }
+      voiceDispEnd(false);   // hidden, frozen or failed: no goodbye animation
+      voiceCallTeardown();
+      if (chatId) { S.leftChat = chatId; if (!document.hidden) voiceLeftNoticeShow(); }
+    }
+    function voiceLeftNoticeHide() { const b = voiceById('voice-left-bar'); if (b) b.remove(); }
+    function voiceLeftNoticeShow() {
+      const S = voiceCallS, chatId = S.leftChat;
+      if (!chatId || S.call) return;
+      S.leftChat = null;
+      const input = voiceById(`input-${chatId}`), area = input && input.closest('.input-area');
+      if (!area || !area.parentNode) return;
+      voiceLeftNoticeHide();
+      const bar = document.createElement('div');
+      bar.className = 'voice-callbar voice-left-bar'; bar.id = 'voice-left-bar';
+      bar.setAttribute('role', 'status');
+      bar.innerHTML = `<span>The call ended when you left the app</span> <button type="button" data-vleft="again">Call again</button> <button type="button" data-vleft="dismiss" aria-label="Dismiss">Dismiss</button>`;
+      bar.addEventListener('click', (e) => {
+        const t = e.target.closest && e.target.closest('[data-vleft]');
+        if (!t) return;
+        voiceLeftNoticeHide();
+        if (t.dataset.vleft === 'again') voiceCallStart(chatId);
+      });
+      area.parentNode.insertBefore(bar, area);
+    }
+    // ── Lost connection ends the call ──
+    // While a call is up the page asks /health every 5 s (4 s limit); a failed probe, a network failure on the call's own requests (heartbeat, speech-to-text,
+    // sending, text-to-speech) or the offline event marks the link LOST: a falling two-tone, "Connection lost" in the call bar and the display, speech heard
+    // meanwhile is dropped, probes every 1 s. Back within 10 s: a rising two-tone and "Reconnected." Not back: the call ends cleanly and the chat says so.
+    function voiceLinkProbe() {
+      return new Promise((resolve) => {
+        let ac = null;
+        try { ac = typeof AbortController === 'function' ? new AbortController() : null; } catch { ac = null; }
+        const timer = setTimeout(() => { try { if (ac) ac.abort(); } catch { /* done */ } resolve(false); }, 4000);
+        let p;
+        try { p = fetch('/health', { cache: 'no-store', credentials: 'include', ...(ac ? { signal: ac.signal } : {}) }); } catch { clearTimeout(timer); resolve(false); return; }
+        Promise.resolve(p).then((r) => { clearTimeout(timer); resolve(!!r && !(r.status >= 500)); }, () => { clearTimeout(timer); resolve(false); });   // a server error from a proxy in front of a dead hub counts as unreachable
+      });
+    }
+    // A network failure (fetch threw a TypeError; not an HTTP error status) seen on one of the active call's requests.
+    // The call that is up now (null if none), taken when a request starts: a failure is charged only to that call, never to a newer one.
+    function voiceLinkOwner() { try { return voiceCallS.call || null; } catch { return null; } }
+    function voiceLinkNetFail(e, owner) {
+      if (!e || e.name !== 'TypeError') return;
+      const S = voiceCallS;
+      if (!owner || S.call !== owner || !S.link) return;
+      try { S.link.report(); } catch { /* gone */ }
+    }
+    function voiceLinkPaint(on) {
+      const S = voiceCallS;
+      S.linkLost = !!on;
+      const s = S.chatId ? voiceById(`vcb-state-${S.chatId}`) : null;
+      if (s) s.textContent = on ? VOICE_LINK_LOST_TEXT : voiceCallStateText((S.call && S.call.state) || s.dataset.state || 'listening', s.dataset.phrase || '');   // back: the call's own line, standby's "Waiting for ..." included
+      voiceDisplayHook('connLost', !!on);
+    }
+    function voiceCallLinkGiveUp(call) {
+      const S = voiceCallS, chatId = S.chatId;
+      if (S.call !== call) return;
+      voiceCallRelease('link');   // the immediate path: microphone released, the hub told in the background, the display ended with no goodbye
+      S.leftChat = null; voiceLeftNoticeHide();   // this is not the "left the app" note
+      if (chatId && voiceById(`messages-${chatId}`)) appendSystemNotice(chatId, VOICE_LINK_ENDED_TEXT);   // a line in the chat only: never sent to the agent
+      else hubToast(VOICE_LINK_ENDED_TEXT);
+    }
+    function voiceLinkMake(call) {
+      const S = voiceCallS;
+      if (typeof voiceCreateLinkWatch !== 'function') return null;
+      const tone = (up) => { if (typeof voiceLinkTone === 'function') voiceLinkTone(voicePlay.ctx, up); };
+      const setLost = (on) => { if (typeof call.setLinkLost === 'function') call.setLinkLost(on); };
+      return voiceCreateLinkWatch({
+        probe: () => voiceLinkProbe(),
+        setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (t) => clearTimeout(t),
+        onLost: () => { if (S.call !== call) return; setLost(true); tone(false); voiceLinkPaint(true); },
+        onBack: () => { if (S.call !== call) return; voiceLinkPaint(false); tone(true); setLost(false); },
+        onGiveUp: () => voiceCallLinkGiveUp(call),
+      });
+    }
+    async function voiceCallStart(chatId) {
+      const S = voiceCallS, chat = chats[chatId];
+      if (S.call) return;
+      if (!chat || chat.isGroup || chat.isWorker || !chat.agent) { hubToast('A call works in a chat with one agent.'); return; }
+      if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
+      if (voiceTest.mic || voiceTest.guard.pending || voiceRoom.active) { hubToast('The microphone is in use in Settings.'); return; }
+      voiceRec.guard.cancel(); if (voiceRec.chatId) voiceMicStop(false);   // dictation ends, nothing uploaded
+      voiceStopPlayback();
+      const eff = voiceEffNow(chat.agent);   // this agent's voice defaults for any setting the person has not set on this device
+      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow() });
+      const thinking = voiceCallThinking(vad);   // makes / resumes the reply playback context (voicePlay.ctx) inside the tap
+      // Keep Bluetooth awake: a very quiet hiss on the same output context as the replies; the controller starts and stops it, and it sounds
+      // only while the switch is on (a change applies at once, mid-call).
+      let keepAlive = null;
+      if (typeof voiceCreateKeepAlive === 'function') { try { const kc = voiceOutputCtx(); if (kc) keepAlive = voiceCreateKeepAlive({ ctx: kc, allow: voiceKeepAliveAllowed }); } catch { keepAlive = null; } }
+      // Audio focus: a looping media element, so a phone browser takes focus and other apps pause. Only on Android (a tablet on this page): a desktop
+      // browser has no focus to take, and a playing element would only draw the media keys and the browser's media hub to this tab.
+      let focus = null;
+      if (typeof voiceCreateAudioFocus === 'function' && typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '')) {
+        try {
+          focus = window.__voiceFocusOne || (window.__voiceFocusOne = voiceCreateAudioFocus({ doc: document, URL, Blob }));   // one element and one sound for the page, reused by every call
+          const focusTry = (S.focusTry = (S.focusTry || 0) + 1);   // the element is shared by every call: only this start's answer may show this call's hint
+          focus.start().then((ok) => { const h = !ok && S.focus === focus && S.focusTry === focusTry && typeof voiceById === 'function' ? voiceById(`vcb-focushint-${chatId}`) : null; if (h) h.hidden = false; });
+        } catch { focus = null; }
+      }
+      // A call with an agent that keeps recordings (recordings.keep, from GET /api/agents): its page side is made here, before the call starts.
+      const recCfg = typeof voiceRecSettings === 'function' ? voiceRecSettings((typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(x => x && x.name === chat.agent)) : { keep: false, mic: 'processed' };
+      const rec = recCfg.keep ? voiceRecMake(chat.agent, vad, recCfg, true) : null;
+      if (typeof voiceRecResendPending === 'function') voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '' }).catch(() => {});   // pieces left from an earlier call or page are sent while this one starts
+      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad, thinking, keepAlive, rec));
+      voiceLeftNoticeHide(); S.leftChat = null;
+      S.rec = rec; S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
+      window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow() };   // read-only hooks for the browser proof
+      voiceLoudApply();   // the reply loudness chain, at the level of the pref
+      voiceCallPaintBtn(chatId, true);
+      voiceCallShowBar(chatId);
+      if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();
+      voiceDispBegin(chatId, chat.agent);   // synchronous, still inside the tap (the phone page unlocks its audio context here)
+      S.link = typeof voiceLinkMake === 'function' ? voiceLinkMake(call) : null; S.linkLost = false; if (S.link) S.link.start();   // is the server still there? a lost connection ends the call
+      voiceCallWake(true);
+      let ok = false;
+      try { ok = await call.start(); } catch { ok = false; }
+      if (S.call !== call) return;   // hung up while it was starting
+      if (!ok) { voiceCallTeardown(); return; }   // the controller already said why
+      S.starting = false; S.active = true;
+    }
+    function voiceCallSseMood(chatId, mood) { const S = voiceCallS; if (S.call && S.chatId === chatId) voiceDispMood(S.sendSeq, mood); }
+    // Hub events of the call's agent -> the controller.
+    function voiceCallHubEvent(type, ev) {
+      const S = voiceCallS, call = S.call;
+      if (!call || !ev || ev.agent !== S.agent) return;
+      switch (type) {
+        case 'turn_start': {
+          if (!ev.turnId) return;
+          if (ev.origin && ev.origin.kind === 'user') { S.own.set(ev.turnId, ''); voiceDisp.turnSeq.set(ev.turnId, S.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value); }
+          else S.hub.set(ev.turnId, (ev.origin && (ev.origin.label || ev.origin.from)) || hubOriginLabel(ev.origin));
+          return;
+        }
+        case 'turn_delta': {
+          if (S.own.has(ev.turnId)) { S.own.set(ev.turnId, String(ev.text || '')); call.onReplyText(String(ev.text || ''), false); }
+          return;
+        }
+        case 'turn_activity': {
+          if (ev.item && (S.own.has(ev.turnId) || (!S.hub.has(ev.turnId) && voiceCallRunning(S.chatId, S.agent)))) call.onActivity(ev.item);
+          return;
+        }
+        case 'turn_end': {
+          if (S.own.has(ev.turnId)) { const last = S.own.get(ev.turnId); S.own.delete(ev.turnId); S.expecting = false; call.onReplyText(ev.reply || last || '', true); }
+          else if (S.hub.has(ev.turnId)) {
+            const label = S.hub.get(ev.turnId); S.hub.delete(ev.turnId);
+            const first = ev.ok === false ? '' : (voiceSentences(voiceSpeechText(ev.reply || ''))[0] || '');
+            if (first) call.onReplyText(`${label}: ${first}`, true);
+          }
+          return;
+        }
+        case 'ask_user': {
+          const qs = Array.isArray(ev.questions) ? ev.questions : [];
+          if (qs.length > 1) { hubToast('The agent asked several questions: answer them on screen.'); return; }
+          const q = qs[0] || { question: ev.question, options: ev.options };
+          if (!ev.request_id || !q.question) return;
+          S.asks.set(ev.request_id, q.question);
+          call.onAsk({ request_id: ev.request_id, question: q.question, options: (q.options || []).map(o => (o && o.label) || o) });
+          return;
+        }
+        case 'ask_user_done': S.asks.delete(ev.request_id); call.onAskDone(ev.request_id); return;
+        case 'turn_mood': if (S.own.has(ev.turnId)) voiceDispMood(voiceDisp.turnSeq.has(ev.turnId) ? voiceDisp.turnSeq.get(ev.turnId) : S.sendSeq, ev.mood); return;   // the agent's mood word for this turn (the same one the chat stream carries)
+        // Events of another call (an earlier one this call replaced, or one on another device) carry another callId: ignored.
+        case 'voice_held': if (ev.callId === call.callId && ev.item) call.onHeld(ev.item, !!ev.quiet); return;
+        case 'voice_held_done': if (ev.callId === call.callId) call.onHeldDone(ev.id, ev.choice); return;
+        case 'voice_call':
+          if (ev.state === 'off' && S.active && ev.callId === call.callId) { hubToast('The call ended.'); voiceCallHangUp(); }
+          return;
+      }
+    }
+    document.addEventListener('visibilitychange', () => {   // a hidden tab keeps the call; the lock is let go by the browser and taken again here
+      if (document.hidden) { voiceRecFlushOpen(); return; }
+      if (voiceCallS.call) voiceCallWake(true); else voiceLeftNoticeShow();
+    });
+    // A recorded call in progress: when the page is hidden or closed, the open segment is sent (stored in IndexedDB first), so a close or a reload keeps it. A hidden page does not end the call.
+    function voiceRecFlushOpen() { try { if (typeof voiceCallS !== 'undefined' && voiceCallS.rec) voiceCallS.rec.flushOpen(); } catch { /* nothing open */ } }
+    window.addEventListener('pageshow', () => voiceLeftNoticeShow());   // back from the back/forward cache after a release (pageshow and pagehide fire at the window; freeze at the document)
+    window.addEventListener('offline', () => { if (voiceCallS.link) voiceCallS.link.offline(); });   // the link watch of the active call
+    window.addEventListener('online', () => { if (voiceCallS.link) voiceCallS.link.online(); });
+    window.addEventListener('pagehide', () => { voiceRecFlushOpen(); });   // before the release below, which sends what is left through the recorder's stop
+    window.addEventListener('pagehide', () => { voiceCallRelease('pagehide'); });   // leaving the page lets go of the mic at once
+    document.addEventListener('freeze', () => { voiceCallRelease('freeze'); });   // the browser is about to freeze the page
+
+    // ── In-chat voice controls (next to the mic): a Talk mode chip and a small "Voice settings" panel for every signed-in user ──
+    // They write the same per-device prefs as Settings, Voices, and act on a running call at once.
+    const VOICE_POP_KEYS = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause', wait: 'continueWait', think: 'thinkingSound', thinkvol: 'thinkingVolume', mode: 'mode', echo: 'echoHold', keep: 'keepAlive', loudness: 'loudness', loudnessBt: 'loudnessBt' };
+    function voicePopHtml(chatId) {
+      const id = (n) => `vp-${n}-${chatId}`, tap = voicePrefsNow().mode === 'tap';
+      const waits = VOICE_CONTINUE_WAITS.map((ms) => `<option value="${ms}"${ms === voiceContinueWaitNow() ? ' selected' : ''}>${ms === 8000 ? 'Very long (8 s)' : ms / 1000 + ' s'}</option>`).join('');
+      const agent = (chats[chatId] && chats[chatId].agent) || '';
+      return `<div class="vp-row"><span class="vp-label">Talk mode</span><span class="vp-seg" role="group" aria-label="Talk mode">
+          <button type="button" data-vp="mode" data-val="handsfree" aria-pressed="${tap ? 'false' : 'true'}">Hands-free</button><button type="button" data-vp="mode" data-val="tap" aria-pressed="${tap ? 'true' : 'false'}">Tap to talk</button></span></div>
+        <label class="vp-row"><span class="vp-label">Voice speed</span><input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vp="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span></label>${voiceFollowLine(agent, 'voiceSpeed')}
+        <label class="vp-row"><span class="vp-label">Voice loudness, speaker</span>${voiceLoudnessSelectHtml(id('loudness'), 'data-vp="loudness"', 'loudness')}</label>
+        <label class="vp-row"><span class="vp-label">Voice loudness, Bluetooth / car</span>${voiceLoudnessSelectHtml(id('loudnessBt'), 'data-vp="loudnessBt"', 'loudnessBt')}</label>
+        <label class="vp-row"><span class="vp-label">Pause before I'm done</span>${voicePauseSelectHtml(id('pause'), 'data-vp="pause"')}</label>${voiceFollowLine(agent, 'endPause')}
+        <label class="vp-row"><span class="vp-label">Wait for me to go on</span><select id="${id('wait')}" data-vp="wait" style="padding:4px">${waits}</select></label>${voiceFollowLine(agent, 'continueWait')}
+        <label class="vp-row"><span class="vp-label">Mic level</span><input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vp="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
+        <div class="vp-row"><span class="vp-label">Level now</span><span class="voice-meter" aria-hidden="true"><i id="${id('level')}"></i></span></div>
+        <label class="vp-row"><span class="vp-label">Interrupt sensitivity</span><input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vp="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>${voiceFollowLine(agent, 'interruptSensitivity')}
+        <label class="vp-row"><span class="vp-label">Thinking sound</span><input type="checkbox" id="${id('think')}" data-vp="think"${voiceThinkingOnNow() ? ' checked' : ''}></label>
+        <label class="vp-row ucd-dup"><span class="vp-label">Call display</span><select id="${id('display')}" data-vp="display" style="padding:4px"><option value="follow">Follow agent default</option></select></label>
+        <div class="vp-display-note" id="${id('display-note')}" aria-live="polite"></div>
+        <label class="vp-row ucd-dup"><span class="vp-label">Show captions</span><input type="checkbox" id="${id('captions')}" data-vp="captions"></label>
+        <label class="vp-row"><span class="vp-label">Show an Interrupt button</span><input type="checkbox" id="${id('interrupt')}" data-vp="interrupt"></label>
+        <div class="vp-display-note">For places where talking over the reply doesn't register.</div>
+        <label class="vp-row"><span class="vp-label">Thinking volume</span><input type="range" min="0" max="1" step="0.05" id="${id('thinkvol')}" data-vp="thinkvol" value="${voiceThinkingVolNow()}"></label>
+        <div class="vp-row"><button type="button" class="st-test-btn" data-vp="room" id="${id('room')}">Room check</button> <span class="st-hint vp-room-out" id="${id('room-out')}" aria-live="polite" style="margin:0"></span></div>
+        <label class="vp-row"><span class="vp-label">Echo guard after replies</span>${voiceEchoSelectHtml(id('echo'), 'data-vp="echo"')}</label>
+        <div class="vp-display-note">${VOICE_ECHO_HINT}</div>
+        <label class="vp-row"><span class="vp-label">Keep Bluetooth awake during calls</span><input type="checkbox" id="${id('keep')}" data-vp="keep"${voiceKeepAliveNow() ? ' checked' : ''}></label>
+        <div class="vp-display-note">${VOICE_KEEP_HINT}</div>
+        <div class="vp-row"><button type="button" class="st-test-btn" data-vp="car" id="${id('car')}">Car or Bluetooth check</button> <span class="st-hint vp-car-out" id="${id('car-out')}" aria-live="polite" style="margin:0"></span></div>
+        ${voiceWakeRowsHtml(chatId)}`;
+    }
+    function voicePopClose() {
+      for (const p of document.querySelectorAll('.voice-pop:not([hidden])')) p.hidden = true;
+      for (const b of document.querySelectorAll('.voice-set-btn')) b.setAttribute('aria-expanded', 'false');
+    }
+    function voicePopToggle(chatId) {
+      const pop = voiceById(`voice-pop-${chatId}`), btn = voiceById(`vset-${chatId}`);
+      if (!pop) return;
+      const open = pop.hidden;
+      voicePopClose();
+      if (!open) return;
+      pop.innerHTML = voicePopHtml(chatId);   // built when opened, so it shows the values of the moment
+      if (typeof voiceDispPaintPanel === 'function') voiceDispPaintPanel(chatId);
+      pop.hidden = false;
+      if (btn) btn.setAttribute('aria-expanded', 'true');
+      if (!pop.dataset.wired) {
+        pop.dataset.wired = '1';
+        pop.addEventListener('click', (e) => {
+          const t = e.target.closest && e.target.closest('[data-vp]');
+          if (!t) return;
+          if (t.dataset.vp === 'mode') voiceCtlSet('mode', t.dataset.val, true);
+          else if (t.dataset.vp === 'room') voiceRoomCheckRun();
+          else if (t.dataset.vp === 'car') voiceCarCheckRun();
+        });
+        pop.addEventListener('input', (e) => { const t = e.target; if (t.dataset && ['mic', 'sens', 'speed', 'thinkvol'].includes(t.dataset.vp)) voiceCtlSet(t.dataset.vp, Number(t.value), false); });
+        pop.addEventListener('focusout', (e) => { const t = e.target; if (t && t.dataset && t.dataset.vp === 'display') voiceDispPaintPanel(chatId); });   // a list skipped while it had focus is put in now
+        pop.addEventListener('change', (e) => {
+          const t = e.target, k = t.dataset && t.dataset.vp;
+          if (k === 'wake') voiceWakeSave(chatId);
+          else if (k === 'display') voiceDispSetChoice(chatId, t.value);
+          else if (k === 'captions') voiceDispSetCaptions(chatId, t.checked);
+          else if (k === 'interrupt') voiceDispSetInterrupt(chatId, t.checked);
+          else if (k === 'think') voiceCtlSet('think', t.checked, true);
+          else if (k === 'keep') voiceCtlSet('keep', t.checked, true);
+          else if (k === 'loudness' || k === 'loudnessBt') voiceCtlSet(k, t.value, true);
+          else if (k === 'echo' || k === 'pause' || k === 'wait' || ['mic', 'sens', 'speed', 'thinkvol'].includes(k)) voiceCtlSet(k, Number(t.value), true);
+        });
+      }
+    }
+    function voiceModeToggle() { voiceCtlSet('mode', voicePrefsNow().mode === 'tap' ? 'handsfree' : 'tap', true); }
+    function voiceModePaint() {
+      const tap = voicePrefsNow().mode === 'tap';
+      for (const c of document.querySelectorAll('.voice-mode-chip')) c.textContent = voiceModeLabel();
+      for (const b of document.querySelectorAll('.voice-pop [data-vp="mode"]')) b.setAttribute('aria-pressed', (b.dataset.val === 'tap') === tap ? 'true' : 'false');
+    }
+    // One setting changed in the panel: shown everywhere it is shown, live on a running call, saved when `save` (on release / pick).
+    function voiceCtlSet(which, v, save) {
+      const S = voiceCallS, vad = S.vad, key = VOICE_POP_KEYS[which];
+      if (!key) return;
+      const val = which === 'speed' ? voiceCleanSpeed(v) : which === 'mode' ? (v === 'tap' ? 'tap' : 'handsfree') : which === 'think' || which === 'keep' ? !!v : which === 'echo' ? (VOICE_ECHO_HOLDS.includes(Number(v)) ? Number(v) : 600) : which === 'thinkvol' ? Math.max(0, Math.min(1, Number(v) || 0)) : which === 'loudness' || which === 'loudnessBt' ? (Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, v) ? v : (which === 'loudnessBt' ? 'normal' : 'louder')) : Number(v);
+      for (const el of document.querySelectorAll(`[id^="vp-${which}-val-"], [id^="vcb-${which}-val-"]`)) el.textContent = which === 'speed' ? voiceSpeedLabel(val) : String(val);
+      for (const el of document.querySelectorAll(`.voice-pop [data-vp="${which}"], .voice-callbar [data-vcb="${which}"]`)) if (el.type === 'range' || el.tagName === 'SELECT') el.value = String(val);
+      if (vad) {
+        if (which === 'mic' && vad.setMicLevel) vad.setMicLevel(val);
+        else if (which === 'sens' && vad.setInterruptSensitivity) vad.setInterruptSensitivity(val);
+        else if (which === 'pause' && vad.setEndPause) vad.setEndPause(val);
+        else if (which === 'echo' && vad.setEchoHold) vad.setEchoHold(val);
+      }
+      if (which === 'thinkvol' && S.thinking) S.thinking.setVolume(val);
+      voicePrefsCache = { ...voicePrefsNow(), [key]: val };   // the next sentence / the next wait already uses it
+      if (which === 'loudness' || which === 'loudnessBt') { voiceLoudApply(); const st = voiceById(which === 'loudnessBt' ? 'st-voice-loudness-bt' : 'st-voice-loudness'); if (st) st.value = val; }   // the chain takes the level of the current output
+      if (VOICE_AGENT_DEFAULT_KEYS.includes(key)) {
+        voicePrefsCache = voiceMarkChosen(voicePrefsCache, [key]);   // the person set it here: an agent's default no longer applies to it
+        for (const el of document.querySelectorAll(`.voice-follow[data-follow="${key}"]`)) el.remove();   // so its "Following ..." line goes
+      }
+      if (save) { const prefs = voiceSavePrefs(localStorage, voicePrefsCache); voicePrefsCache = { ...voicePrefsCache, ...prefs, [key]: val }; }
+      if (which === 'mode') voiceModePaint();
+      if (which === 'echo' || which === 'keep') voiceEchoKeepPaint();   // Settings follows the panel
+      if (which === 'keep') voiceKeepAliveRefresh();   // the switch acts on a running call at once
+      if (S.call && typeof S.call.setPrefs === 'function') S.call.setPrefs();
+    }
+    document.addEventListener('click', (e) => { if (!(e.target.closest && e.target.closest('.voice-extra'))) voicePopClose(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') voicePopClose(); });
+
+    // Room check (Settings, Voices, and the chat's voice panel): 2.5 s speech, 2.5 s quiet; sets the mic level and the interrupt sensitivity. It is also the device check.
+    async function voiceRoomCheckRun() {
+      if (voiceRoom.active) return;
+      if (voiceCallS.call || voiceRec.chatId || voiceRec.busy || voiceRec.guard.pending || voiceTest.mic || voiceTest.guard.pending) { hubToast('The microphone is in use.'); return; }
+      const btns = () => [voiceById('st-voice-room'), ...document.querySelectorAll('.voice-pop [data-vp="room"]')].filter(Boolean);
+      const btn = { set disabled(v) { for (const b of btns()) b.disabled = v; } };
+      const say = (t) => { for (const o of [voiceById('st-voice-room-out'), ...document.querySelectorAll('.voice-pop .vp-room-out')]) if (o) o.textContent = t; };
+      const sec = () => voiceById('st-voice-section') || document.querySelector('.voice-pop:not([hidden])');   // Settings, or the chat's voice panel
+      const section = sec();
+      voiceRoom.active = true;
+      if (btn) btn.disabled = true;
+      let mic = null, phase = '', level = -100;
+      const speechDb = [], silenceDb = [];
+      try {
+        try {
+          mic = await voiceOpenMic(voiceMicLevelNow(), (d) => { level = voiceLevelDb(d); if (phase === 'speech') speechDb.push(level); else if (phase === 'silence') silenceDb.push(level); });
+        } catch (e) { hubToast(voiceMicError(e)); say(voiceMicError(e)); return; }
+        const t0 = Date.now(), TOTAL = 5000;
+        while (Date.now() - t0 < TOTAL) {
+          if (!section || !section.isConnected || document.hidden) { say('Room check cancelled.'); return; }   // (a closed panel stays connected: the check goes on)
+          const el = Date.now() - t0;
+          phase = el < TOTAL / 2 ? 'speech' : 'silence';
+          const left = Math.ceil(((phase === 'speech' ? TOTAL / 2 : TOTAL) - el) / 1000);
+          say(phase === 'speech' ? `Say a sentence now (${left})` : `Now stay quiet (${left})`);
+          await new Promise(r => setTimeout(r, 100));
+        }
+        phase = '';
+        // Only the louder half of the speech frames count: the pauses between words are not the voice.
+        const sorted = speechDb.filter(Number.isFinite).sort((a, b) => a - b);
+        const loud = sorted.slice(sorted.length >> 1);
+        const noise = voiceCallMedian(silenceDb);
+        const peak = sorted.length ? sorted[sorted.length - 1] : -100;
+        if (!loud.length || peak < -50 || (noise !== null && peak - noise < 6)) { say('No speech heard: check the microphone and its permission.'); return; }
+        const r = voiceRoomCheck(loud, silenceDb, voiceMicLevelNow());
+        let prefs = { ...voicePrefsNow(), micLevel: r.micLevel, interruptSensitivity: r.interruptSensitivity };
+        if (r.interruptSensitivity !== voiceSensNow()) prefs = voiceMarkChosen(prefs, ['interruptSensitivity']);   // the check picked a new sensitivity: it is this device's choice now
+        voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
+        for (const [id, v] of [['st-voice-mic', r.micLevel], ['st-voice-sens', r.interruptSensitivity]]) { const e = voiceById(id); if (e) e.value = String(v); }
+        const mv = voiceById('st-voice-mic-val'); if (mv) mv.textContent = String(r.micLevel);
+        const sv = voiceById('st-voice-sens-val'); if (sv) sv.textContent = String(r.interruptSensitivity);
+        for (const [w, val] of [['mic', r.micLevel], ['sens', r.interruptSensitivity]]) {   // the chat's voice panel shows them too
+          for (const e of document.querySelectorAll(`.voice-pop [data-vp="${w}"]`)) e.value = String(val);
+          for (const e of document.querySelectorAll(`[id^="vp-${w}-val-"]`)) e.textContent = String(val);
+        }
+        say(`Mic level ${r.micLevel}, interrupt sensitivity ${r.interruptSensitivity}`);
+      } finally {
+        if (mic) mic.close();
+        voiceRoom.active = false;
+        btn.disabled = false;
+      }
+    }
+
+    // Car or Bluetooth check (Settings, Voices, and the chat's voice panel): plays the test sound three times through the speaker and listens for it coming
+    // back; sets the echo guard (and lowers the interrupt sensitivity when the echo is loud). Not during a call. The recording, the chirp's reference
+    // channel and the analysis are the library's (voiceCarRecord, voiceCarAnalyse); this page makes the check's own AudioContext inside the tap.
+    async function voiceCarCheckRun() {
+      if (voiceRoom.active) return;
+      if (voiceCallS.call || voiceRec.chatId || voiceRec.busy || voiceRec.guard.pending || voiceTest.mic || voiceTest.guard.pending) { hubToast('The microphone is in use.'); return; }
+      const btns = () => [voiceById('st-voice-car'), ...document.querySelectorAll('.voice-pop [data-vp="car"]')].filter(Boolean);
+      const say = (t) => { for (const o of [voiceById('st-voice-car-out'), ...document.querySelectorAll('.voice-pop .vp-car-out')]) if (o) o.textContent = t; };
+      const sec = () => voiceById('st-voice-section') || document.querySelector('.voice-pop:not([hidden])');   // Settings, or the chat's voice panel
+      const section = sec();
+      voiceRoom.active = true;
+      for (const b of btns()) b.disabled = true;
+      let ctx = null, watch = null;
+      try {
+        // Everything up to voiceCarRecord happens before the first await, so the context is made and resumed inside the tap (iOS).
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) { say('This browser cannot run the check.'); return; }
+        ctx = new AC();
+        try { const p = ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch { /* a running context needs no resume */ }
+        const chirp = voiceCarChirp(ctx.sampleRate);
+        say('Playing three short test sounds. Stay quiet.');
+        const rec = voiceCarRecord({ ctx, nav: navigator, chirp, micLevel: voiceMicLevelNow(), setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (h) => clearTimeout(h), now: Date.now });   // the Mic level applies as in a call
+        // a closed Settings section or panel, a hidden page or a call starting cancels the recording (a closed panel stays connected: the check goes on)
+        watch = setInterval(() => { if (!section || !section.isConnected || document.hidden || voiceCallS.call) rec.cancel(); }, 100);
+        let got;
+        try { got = await rec.done; }
+        catch (e) {
+          if (e && e.code === 'cancelled') say('Car or Bluetooth check cancelled.');
+          else if (e && e.code === 'audio_not_started') say('The check could not run: the audio did not start. Settings were not changed.');
+          else { hubToast(voiceMicError(e)); say(voiceMicError(e)); }
+          return;
+        }
+        const analyses = voiceCarAnalyse(got.mic, got.ref, chirp, got.rate);
+        const r = voiceCarCheckResult(analyses, { echoHold: voiceEchoHoldNow(), interruptSensitivity: voiceSensNow() });
+        let prefs = { ...voicePrefsNow(), echoHold: r.echoHold, interruptSensitivity: r.interruptSensitivity };
+        if (r.interruptSensitivity !== voiceSensNow()) prefs = voiceMarkChosen(prefs, ['interruptSensitivity']);   // the check lowered the sensitivity: it is this device's choice now
+        voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
+        const vad = voiceCallS.vad;
+        if (vad) { if (vad.setEchoHold) vad.setEchoHold(r.echoHold); if (vad.setInterruptSensitivity) vad.setInterruptSensitivity(r.interruptSensitivity); }
+        voiceEchoKeepPaint();
+        const se = voiceById('st-voice-sens'); if (se) se.value = String(r.interruptSensitivity);
+        const sv = voiceById('st-voice-sens-val'); if (sv) sv.textContent = String(r.interruptSensitivity);
+        for (const e of document.querySelectorAll('.voice-pop [data-vp="sens"]')) e.value = String(r.interruptSensitivity);
+        for (const e of document.querySelectorAll('[id^="vp-sens-val-"]')) e.textContent = String(r.interruptSensitivity);
+        say(r.line);
+      } catch (e) {
+        say('The check could not finish: ' + ((e && e.message) || 'unknown error'));
+      } finally {
+        if (watch !== null) clearInterval(watch);
+        if (ctx) { try { const p = ctx.close(); if (p && p.catch) p.catch(() => {}); } catch { /* closed */ } }   // the check's own context: always let go (the library already freed the microphone)
+        voiceRoom.active = false;
+        for (const b of btns()) b.disabled = false;
+      }
+    }
+
     // Message rendering
     // Copy button on every message bubble: copies the original text/markdown, not the rendered HTML.
     const rawMessageText = new WeakMap();
@@ -10436,6 +15379,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const b = document.createElement('button');
         b.className = 'msg-copy'; b.type = 'button'; b.title = 'Copy message'; b.textContent = '⧉';
         el.appendChild(b);
+      }
+      if (el.classList.contains('assistant') && !el.querySelector(':scope > .msg-speak')) {
+        const sp = document.createElement('button');
+        sp.className = 'msg-speak'; sp.type = 'button'; sp.title = 'Read aloud (tap again to stop)'; sp.textContent = '\u25B6';
+        el.appendChild(sp);
       }
       paintMessageTime(el);
     }
@@ -10482,6 +15430,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       div.innerHTML = formatContent(content);
       decorateMessage(div, content);
       (into || container).appendChild(div);
+      busyCardKeepLast(container);
       renderVisualBlocks(div);
       autoScroll(container);
       return msgId;
@@ -10623,6 +15572,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         div.textContent = text;
       }
       container.appendChild(div);
+      busyCardKeepLast(container);
       autoScroll(container);
       return div;
     }
@@ -10980,7 +15930,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           toolCalls.push(currentCall);
         } else if (t.type === 'result' && currentCall) {
           currentCall.result = t.output || '';
-          currentCall.status = t.output?.startsWith('Error') ? 'error' : 'done';
+          currentCall.status = t.output?.startsWith('Error') || toolResultDenied(t.output) ? 'error' : 'done';
           currentCall = null; // Next result pairs with next call
         }
       }
@@ -10996,7 +15946,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const statusIcon = tc.status === 'running'
           ? '<div class="tool-call-spinner"></div>'
           : tc.status === 'error'
-            ? '<span class="tool-call-icon" style="color:#f87171">✗</span>'
+            ? `<span class="tool-call-icon" style="color:#f87171"${toolResultDenied(tc.result) ? ' title="Denied by policy"' : ''}>✗</span>`
             : '<span class="tool-call-icon" style="color:#4ade80">✓</span>';
 
         const inputHtml = tc.input ? `<span class="tool-call-input">— ${esc(tc.input)}</span>` : '';
@@ -11004,7 +15954,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const statusLabel = tc.status === 'done' 
           ? '<span class="tool-call-status done">Done</span>' 
           : tc.status === 'error' 
-            ? '<span class="tool-call-status error">Error</span>' 
+            ? `<span class="tool-call-status error">${toolResultDenied(tc.result) ? 'Denied' : 'Error'}</span>`
             : '';
 
         let resultHtml = '';
@@ -11521,6 +16471,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // a long list scrolls inside the panel and the grip sets its height; ⤢ shows every call with its output at the size
     // of the window. The text the agent writes between calls stays in the reply. Tool names, inputs and outputs are
     // text (escaped), never markup. The panel is one node that message rewrites keep (setMessageHtml).
+    // ── tool-result helpers (begin) ──
+    function toolResultDenied(output) {
+      return /^\s*(?:PreToolUse:\S+ hook [A-Za-z ]*:\s*)?\[(?:DENIED(?: BY (?:POLICY|OWNER))?|NOT APPROVED)\]/.test(String(output ?? ''));
+    }
+    // ── tool-result helpers (end) ──
     const TOOLS_HEIGHT_KEY = 'hub-tools-height';
     const toolsHeightPref = () => { const h = Number(localStorage.getItem(TOOLS_HEIGHT_KEY)); return Number.isFinite(h) && h >= 60 ? h : 260; };
     const TOOL_DETAIL_MAX = 20000;   // characters of one call's output shown in a detail
@@ -11533,7 +16488,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const rows = [];
       (steps || []).forEach((st, group) => {
         for (const tc of (st && st.tools) || []) {
-          const status = tc.status === 'running' ? (live ? 'running' : 'stopped') : tc.status === 'error' ? 'error' : 'done';
+          const status = tc.status === 'running' ? (live ? 'running' : 'stopped') : tc.status === 'error' || toolResultDenied(tc.result) ? 'error' : 'done';
           rows.push({ id: tc.id || tc.toolCallId || null, tool: String(tc.tool || 'tool'), input: String(tc.input || ''), result: tc.result == null ? '' : String(tc.result), status,
             startedAt: Number(tc.startedAt) || null, durationMs: Number.isFinite(tc.durationMs) ? tc.durationMs : null, group });
         }
@@ -11586,7 +16541,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (group !== null && r.group !== group) html += '<div class="ts-sep"></div>';
         group = r.group;
         const shown = all || !!(open && open.has(r.key));
-        const icon = r.status === 'running' ? '<span class="ts-spin"></span>' : r.status === 'error' ? '✗' : r.status === 'stopped' ? '⏹' : '✓';
+        const icon = r.status === 'running' ? '<span class="ts-spin"></span>' : r.status === 'error' ? (toolResultDenied(r.result) ? '<span title="Denied by policy">✗</span>' : '✗') : r.status === 'stopped' ? '⏹' : '✓';
         html += `<div class="ts-row ${r.status}" data-i="${i}"${all ? '' : ` role="button" tabindex="0" aria-expanded="${shown}"`}>` +
           `<span class="ts-ic">${icon}</span><span class="ts-name">${escapeHtmlSafe(r.tool)}</span><span class="ts-in">${escapeHtmlSafe(r.input)}</span>` +
           `${toolDurHtml(r)}${all ? '' : `<span class="ts-chev">${shown ? '⌄' : '›'}</span>`}</div>`;
@@ -11814,6 +16769,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const cls = isIntermediate ? 'step-text step-intermediate' : 'step-text';
           html += `<div class="${cls}">${formatContent(step.text.replace(/^\s*\n/, ''))}</div>`;   // the paragraph break after a tool call is the layout's job
         }
+        // The person's interjections, where they came in the reply (the same marker as the bubble sendInterjection draws).
+        for (const ij of step.ijs || []) html += `<div class="step-interjection" style="margin:6px 0;padding:6px 10px;border-left:3px solid ${ij.emergency ? '#d32f2f' : '#f9a825'};background:rgba(128,128,128,0.12);border-radius:4px">${esc(interjectionBubbleText(ij))}${imageGalleryHtml(ij.images, 'max-height:200px;')}</div>`;
       }
 
       // Append images (escaped; click handled by the delegated listener)
@@ -12104,7 +17061,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       setTimeout(() => btn.classList.remove('flash'), 2000);
     }
 
+    // A run closed as 'ended' (the status feed stopped listing it) whose worker turns out to be working: running again.
+    function reopenEndedWorkerRun(workerId) {
+      const w = workerRunOf(String(workerId));
+      if (!w || w.run.status !== 'ended') return;
+      const { workerChatId, chat, run } = w;
+      run.status = 'running';
+      run.endedAt = null;
+      setStatus(workerChatId, 'thinking', 'Working...');
+      if (!chat.timerInterval) chat.timerInterval = setInterval(() => updateWorkerTabTimer(workerChatId), 1000);
+      settleWorkerCard(workerChatId);   // a running run: the card's clock follows it
+      if (run.noticeEl) { run.noticeEl.textContent = `⏳ ${chat.agentLabel || 'Agent'} is Working...`; run.noticeEl.className = 'system-notice notice-working'; }
+      scheduleWorkerListRefresh();
+    }
     function handleWorkerEvent(chatId, oc) {
+      if (oc && oc.worker_id != null && /^worker_(started|text_delta|tool_start|tool_use|tool_result)$/.test(oc.type)) reopenEndedWorkerRun(oc.worker_id);
       if (oc.type === 'worker_started') {
         const workerId = String(oc.worker_id);
         if (workerRunOf(workerId) || closedWorkerRuns.has(workerId)) return true;   // already shown (a replay), or its card was closed
@@ -12422,6 +17393,116 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
     }
     // ── worker list helpers (end) ──
+    // ── active agents helpers (begin) ──
+    function activeInitial() {
+      return { rows: [] };
+    }
+    function activeIsWorker(name, entry) {
+      return entry && typeof entry.worker === 'boolean' ? entry.worker : /^tw-/.test(name);
+    }
+    function activeBusyFrom(statusMap, localBusy, visibleNames) {
+      const visible = new Set(visibleNames || []);
+      const out = {};
+      const mark = (name, iso) => {
+        if (!visible.has(name)) return;
+        const t = Date.parse(iso);
+        const since = Number.isFinite(t) ? t : Date.now();
+        out[name] = name in out ? Math.min(out[name], since) : since;
+      };
+      for (const [name, entry] of Object.entries(statusMap || {})) {
+        if (!entry || !(entry.busy || entry.pendingQuestion)) continue;
+        if (activeIsWorker(name, entry)) { if (entry.parent) mark(entry.parent, entry.busySince); }
+        else mark(name, entry.busySince);
+      }
+      const local = localBusy instanceof Map ? [...localBusy.entries()] : Object.entries(localBusy || {});
+      for (const [name, iso] of local) {
+        const entry = (statusMap || {})[name];
+        if (activeIsWorker(name, entry)) continue;
+        mark(name, iso);
+      }
+      return out;
+    }
+    function activeJobsFrom(jobs, visibleNames) {
+      const visible = new Set(visibleNames || []);
+      const list = [];
+      for (const j of Array.isArray(jobs) ? jobs : []) {
+        if (!j || !j.owner || !visible.has(j.owner)) continue;
+        if (j.status !== 'running' && j.status !== 'cancelling') continue;
+        const t = typeof j.startedAt === 'number' ? j.startedAt : Date.parse(j.startedAt);
+        list.push({ owner: j.owner, name: String(j.name == null ? '' : j.name).trim() || 'job', at: Number.isFinite(t) ? t : Date.now() });
+      }
+      list.sort((a, b) => a.at - b.at);                           // oldest first (the sort is stable)
+      const out = {};
+      for (const j of list) {
+        const o = out[j.owner] || (out[j.owner] = { names: [], since: j.at, count: 0 });
+        o.names.push(j.name); o.count++;
+      }
+      return out;
+    }
+    function activeJobTail(info, now) {
+      if (!info || !info.count) return '';
+      const m = Math.max(0, Math.floor(((now == null ? Date.now() : now) - info.since) / 60000));
+      const t = m < 1 ? '<1 min' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
+      return `${info.count > 1 ? ` + ${info.count - 1} more` : ''} \u00B7 ${t}`;
+    }
+    function activeJobLead(info) {
+      if (!info || !info.count) return '';
+      return 'Background job: ' + info.names[0];
+    }
+    function activeJobLabel(info, now) {
+      return activeJobLead(info) + activeJobTail(info, now);
+    }
+    function activeJobTitle(info) {
+      return info && info.names ? info.names.join('\n') : '';
+    }
+    function activeStep(state, input) {
+      const { busy = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
+      if (!enabled) return { rows: [] };
+      const prev = (state && state.rows) || [];
+      const rows = [];
+      for (const r of prev) {
+        if (r.name in busy) { rows.push({ name: r.name, since: Math.min(r.since, busy[r.name]), doneAt: null }); continue; }
+        const doneAt = r.doneAt == null ? now : r.doneAt;
+        if (!held && now - doneAt >= lingerMs) continue;          // leaves the section
+        rows.push({ name: r.name, since: r.since, doneAt });
+      }
+      if (held) return { rows };                                  // nothing joins while the list is held
+      const have = new Set(rows.map(r => r.name));
+      const joining = Object.keys(busy).filter(n => !have.has(n)).map(n => ({ name: n, since: busy[n], doneAt: null }));
+      joining.sort((a, b) => (a.since - b.since) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      return { rows: rows.concat(joining) };
+    }
+    function activeChanged(a, b) {
+      const x = (a && a.rows) || [], y = (b && b.rows) || [];
+      if (x.length !== y.length) return true;
+      for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null)) return true;
+      return false;
+    }
+    function activeMembersChanged(a, b) {
+      const x = (a && a.rows) || [], y = (b && b.rows) || [];
+      if (x.length !== y.length) return true;
+      for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name) return true;
+      return false;
+    }
+    function activeTitle(state) {
+      return `Active ${((state && state.rows) || []).length}`;
+    }
+    function activeTurnStart(open, agent, turnId) {
+      if (!open || !agent) return false;
+      const ids = open[agent] || (open[agent] = []);
+      if (turnId && ids.indexOf(turnId) < 0) ids.push(turnId);
+      if (ids.length > 20) ids.splice(0, ids.length - 20);   // a lost turn_end must not pin the agent busy forever
+      return ids.length > 0;
+    }
+    function activeTurnEnd(open, agent, turnId) {
+      if (!open || !agent) return false;
+      const ids = open[agent] || [];
+      const i = turnId ? ids.indexOf(turnId) : -1;
+      if (i >= 0) ids.splice(i, 1);
+      if (!ids.length) delete open[agent];
+      return ids.length > 0;
+    }
+    // ── active agents helpers (end) ──
     // ── busy and hub workers helpers (begin) ──
     function busyIsWorker(name, entry) {
       return entry && typeof entry.worker === 'boolean' ? entry.worker : /^tw-/.test(name);
@@ -12475,14 +17556,30 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function hubWorkerCount(groups) {
       return (groups || []).reduce((n, g) => n + g.items.length, 0);
     }
+    function workerGoneStep(prev, opts) {
+      const { running, statusMap, now, graceMs = 15000, confirmMs = 4000 } = opts || {};
+      const before = prev || {}, map = statusMap || {}, next = {}, gone = [];
+      for (const w of running || []) {
+        const id = w && w.id;
+        if (typeof id !== 'string' || !/^tw-/.test(id)) continue;
+        const entry = map[id];
+        if (entry && (entry.busy || entry.pendingQuestion)) continue;
+        const startedAt = Number.isFinite(w.startedAt) ? w.startedAt : now;
+        if (now - startedAt < graceMs) continue;
+        if (id in before && now - before[id] >= confirmMs) gone.push(id);
+        else next[id] = id in before ? before[id] : now;
+      }
+      return { next, gone: gone.sort() };
+    }
     // ── busy and hub workers helpers (end) ──
 
-    // running | done | stopped | failed: running while any of the card's calls runs, else how its newest call ended.
+    // running | done | stopped | failed | ended: running while any of the card's calls runs, else how its newest call ended
+    // ('ended': the hub stopped listing it and no result was reported; a late result replaces that).
     function workerCardState(chat) {
       const runs = Object.values((chat && chat.runs) || {});
       if (!runs.length || runs.some(r => r.status === 'running')) return 'running';
       const last = runs.slice().sort((a, b) => b.startedAt - a.startedAt)[0];
-      return last.status === 'failed' ? 'failed' : last.status === 'cancelled' ? 'stopped' : 'done';
+      return last.status === 'failed' ? 'failed' : last.status === 'cancelled' ? 'stopped' : last.status === 'ended' ? 'ended' : 'done';
     }
     function workerCardEndedAt(chat) {
       return Math.max(0, ...Object.values((chat && chat.runs) || {}).map(r => r.endedAt || 0)) || null;
@@ -12622,7 +17719,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         row.dataset.wid = id;
         const mark = document.createElement('span');
         mark.className = 'wm-mark';
-        mark.textContent = state === 'running' ? '' : state === 'done' ? '✓' : state === 'stopped' ? '⏹' : '✕';
+        mark.textContent = state === 'running' ? '' : state === 'done' ? '✓' : state === 'stopped' ? '⏹' : state === 'ended' ? '–' : '✕';
         const name = document.createElement('span');
         name.className = 'wm-name';
         name.textContent = chat.agentLabel || chat.display || 'Worker';
@@ -12631,7 +17728,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         meta.textContent = [workerModelLabel(chat.model), workerKindLabel(chat.agent)].filter(Boolean).join(' · ');
         const when = document.createElement('span');
         when.className = 'wm-when';
-        when.textContent = state === 'running' ? fmtWorkerClock(now - (chat.startedAt || now)) : `${state === 'failed' ? 'failed' : state === 'stopped' ? 'stopped' : 'done'} ${fmtWorkerClock(now - endedAt)} ago`;
+        when.textContent = state === 'running' ? fmtWorkerClock(now - (chat.startedAt || now)) : `${state === 'failed' ? 'failed' : state === 'stopped' ? 'stopped' : state === 'ended' ? 'ended' : 'done'} ${fmtWorkerClock(now - endedAt)} ago`;
         row.append(mark, name, meta, when);
         if (state === 'running') {
           const stop = document.createElement('button');
@@ -13326,6 +18423,94 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // ── version-label helpers (end) ──
 
     // Shared verbatim with lib/ui-dialog.js and mobile.js (test/ui-dialog.test.js keeps the three in step).
+    // ── app reload (begin) ──
+    const APP_RELOAD_STASH_KEY = 'hub-reload-stash';
+    const APP_RELOAD_CALL_QUESTION = 'Reloading ends the call. Reload?';
+    const APP_RELOAD_GROUP_QUESTION = 'Text typed in a group chat will be lost. Reload?';
+    const APP_RELOAD_OFFLINE_QUESTION = 'This device seems to be offline, so the page may not come back until it is online again. Reload anyway?';
+    function appIsInstalled(win) {
+      try {
+        if (win && win.navigator && win.navigator.standalone === true) return true;
+        if (!win || typeof win.matchMedia !== 'function') return false;
+        return ['standalone', 'minimal-ui', 'window-controls-overlay'].some(m => !!win.matchMedia(`(display-mode: ${m})`).matches);
+      } catch { return false; }
+    }
+    function appReloadUrls(doc, origin) {
+      const out = [], seen = new Set();
+      const add = (u) => {
+        if (!u) return;
+        let url;
+        try { url = new URL(u, origin + '/'); } catch { return; }
+        if (url.origin !== origin || url.pathname.startsWith('/vendor/')) return;
+        url.hash = '';
+        const s = url.href;
+        if (!seen.has(s)) { seen.add(s); out.push(s); }
+      };
+      try { add(doc.location && doc.location.href); } catch { /* no address */ }
+      const list = (sel) => { try { return Array.from(doc.querySelectorAll(sel) || []); } catch { return []; } };
+      for (const s of list('script[src]')) add(s.getAttribute('src'));
+      for (const l of list('link[rel="stylesheet"][href]')) add(l.getAttribute('href'));
+      return out;
+    }
+    function appFreshFetch({ urls = [], fetch: f, swUpdate, timeoutMs = 4000, setTimer = setTimeout } = {}) {
+      const jobs = [];
+      const body = (r) => (r && r.ok && typeof r.arrayBuffer === 'function' ? r.arrayBuffer() : null);
+      for (const u of urls) { try { jobs.push(Promise.resolve(f(u, { cache: 'reload', credentials: 'same-origin' })).then(body).catch(() => null)); } catch { /* skipped */ } }
+      if (typeof swUpdate === 'function') { try { jobs.push(Promise.resolve(swUpdate()).catch(() => null)); } catch { /* skipped */ } }
+      const all = Promise.all(jobs).then(() => 'done');
+      const late = new Promise(r => setTimer(() => r('timeout'), timeoutMs));
+      return Promise.race([all, late]);
+    }
+    function appNavigationWasReload(perf) {
+      try {
+        const nav = perf && typeof perf.getEntriesByType === 'function' ? perf.getEntriesByType('navigation') : null;
+        if (nav && nav[0] && typeof nav[0].type === 'string') return nav[0].type === 'reload';
+      } catch { /* try the older API */ }
+      try {
+        if (perf && perf.navigation && typeof perf.navigation.type === 'number') return perf.navigation.type === 1;
+      } catch { /* cannot tell */ }
+      return false;
+    }
+    function appReloadStashClear(storage) {
+      try { storage.removeItem(APP_RELOAD_STASH_KEY); } catch { /* nothing to clear */ }
+    }
+    function appReloadStashSave(storage, chats, now) {
+      const list = (Array.isArray(chats) ? chats : []).filter(c => c && c.agent).map(c => ({ agent: String(c.agent), text: String(c.text || ''), front: !!c.front }));
+      if (!list.length) { appReloadStashClear(storage); return true; }
+      try { storage.setItem(APP_RELOAD_STASH_KEY, JSON.stringify({ chats: list, at: now })); return true; } catch { return false; }
+    }
+    function appReloadStashTake(storage, now, maxAgeMs = 60000) {
+      let raw = null;
+      try { raw = storage.getItem(APP_RELOAD_STASH_KEY); storage.removeItem(APP_RELOAD_STASH_KEY); } catch { return null; }
+      if (!raw) return null;
+      let e;
+      try { e = JSON.parse(raw); } catch { return null; }
+      if (!e || !Array.isArray(e.chats) || typeof e.at !== 'number' || !(now - e.at >= 0 && now - e.at <= maxAgeMs)) return null;
+      const list = e.chats.filter(c => c && typeof c.agent === 'string' && c.agent).map(c => ({ agent: c.agent, text: typeof c.text === 'string' ? c.text : '', front: c.front === true }));
+      return list.length ? list : null;
+    }
+    function createAppReloader({ questions = () => [], confirm: ask = () => true, prepare = () => null, go, onBusy = () => {}, setTimer = setTimeout, busyMs = 8000 } = {}) {
+      let busy = false, attempt = 0;
+      const qsNow = () => { try { return questions() || []; } catch { return []; } };
+      const yes = (q) => { try { return !!ask(q); } catch { return false; } };   // a dialog that cannot open counts as Cancel
+      const end = (my) => { if (my !== attempt || !busy) return; busy = false; try { onBusy(false); } catch { /* paint only */ } };
+      function reload() {
+        if (busy) return false;
+        const asked = new Set();
+        for (const q of qsNow()) { if (!yes(q)) return false; asked.add(q); }
+        busy = true;
+        const my = ++attempt;
+        try { onBusy(true); } catch { /* paint only */ }
+        Promise.resolve().then(prepare).catch(() => null).then(() => {
+          for (const q of qsNow()) if (!asked.has(q) && !yes(q)) { end(my); return; }
+          try { go(); } catch { /* the page stays */ }
+          setTimer(() => end(my), busyMs);
+        });
+        return true;
+      }
+      return { reload, busy: () => busy };
+    }
+    // ── app reload (end) ──
     // ── dialog helpers (begin) ──
     const DIALOG_TEXT = {
       discardTitle: 'Discard changes?',
@@ -13701,6 +18886,57 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       };
     }
     // ── dialog helpers (end) ──
+
+    // ── Reload (the ↻ button in the top bar and the ⋯ menu entry). The browser offers no reload button in the installed app,
+    // so the top-bar button only shows there (html.app-installed). A fresh load (lib/ui-reload.js) of the page and its own
+    // scripts; the open solo chat and the text in its box come back through sessionStorage (restore in DOMContentLoaded).
+    function paintInstalledApp() {
+      document.documentElement.classList.toggle('app-installed', appIsInstalled(window));
+    }
+    const reloadIsSolo = (c) => !!(c && !c.isGroup && !c.isWorker && c.agent && c.type !== 'orchestration');
+    const reloadBoxText = (c) => (document.getElementById('input-' + c.id) || {}).value || '';
+    // Written when the page really unloads (pagehide), so text typed while the files are fetched is kept. Every open
+    // solo chat in tab order, the one in front marked. The listener is armed by a Reload and stays armed if the person
+    // keeps the page at the browser's "unsaved changes" question (it is removed when the page comes back from the
+    // back-forward cache): it only ever writes the state at that moment, and the new page reads it only after a reload
+    // (appNavigationWasReload), never after other navigation such as an "?agent=" link.
+    function reloadAppStash() {
+      const front = chats[window.__activeChatId];
+      appReloadStashSave(sessionStorage, Object.values(chats).filter(reloadIsSolo).map(c => ({ agent: c.agent, text: reloadBoxText(c), front: c === front })), Date.now());
+    }
+    function reloadOnPagehide() { try { reloadAppStash(); } catch { /* the reload goes on */ } }
+    function armReloadStash() { window.addEventListener('pagehide', reloadOnPagehide); }
+    function disarmReloadStash() { window.removeEventListener('pagehide', reloadOnPagehide); }
+    window.addEventListener('pageshow', (e) => { if (e.persisted) { disarmReloadStash(); appReloadStashClear(sessionStorage); } });   // back from the back-forward cache: an earlier hand-over is out of date
+    function reloadAppQuestions() {
+      const qs = [];
+      if (voiceCallS.call || voiceCallS.starting) qs.push(APP_RELOAD_CALL_QUESTION);
+      if (Object.values(chats).some(c => c && !reloadIsSolo(c) && reloadBoxText(c).trim())) qs.push(APP_RELOAD_GROUP_QUESTION);
+      if (navigator.onLine === false) qs.push(APP_RELOAD_OFFLINE_QUESTION);   // the installed app has no browser reload to come back from an error page
+      return qs;
+    }
+    function paintReloadBusy(b) {
+      for (const id of ['reload-btn', 'reload-app-item']) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.disabled = !!b;
+        el.setAttribute('aria-busy', b ? 'true' : 'false');
+      }
+      if (b) hubToast('Reloading…');
+    }
+    let appReloaderInst = null;
+    function reloadApp() {
+      if (!appReloaderInst) {
+        appReloaderInst = createAppReloader({
+          questions: reloadAppQuestions,
+          confirm: (q) => window.confirm(q),
+          prepare: () => appFreshFetch({ urls: appReloadUrls(document, location.origin), fetch: (u, o) => fetch(u, o) }),
+          go: () => { armReloadStash(); location.reload(); },
+          onBusy: paintReloadBusy,
+        });
+      }
+      return appReloaderInst.reload();
+    }
 
     // One way out of every dialog on this page: Escape, Close / Cancel / ✕, a click on the backdrop (lib/ui-dialog.js).
     // The overlays below are found when they appear; the image viewer registers itself. A dialog's own buttons that

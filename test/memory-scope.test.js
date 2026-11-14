@@ -7,9 +7,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('memscope-iso-');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memscope-'));
-process.env.HUB_MEMORY_DB = path.join(dir, 'memory.db');
-const memoryDb = require('../lib/memory-db');
+process.env.HUB_MEMORY_DB = path.join(dir, 'memory.db');   // after the helper, which clears HUB_*_DB
+const memoryDb = require(path.join(ISO.lib, 'memory-db'));
 
 test('getMemoryContext only embeds the shared pool of the requested owner', () => {
   memoryDb.writeSharedMemory('operating-rules', 'NEVER restart the hub without confirmation', 'maestro', [], null);

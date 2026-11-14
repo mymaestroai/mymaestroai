@@ -5,7 +5,12 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
 const os = require('os');
+// This file keeps the REAL lib/tool-policy: its assertions compare against that module's HUB_ROOT and classify paths of the
+// install it lives in, so a copy under /tmp would change the answers. Nothing under the real data/ is touched: tool-policy reads
+// data/ only through its member providers (lib/settings -> data/settings.json, lib/auth -> data/users.json), which are set here
+// to what an install without member policy or grants answers, before any test runs.
 const tp = require('../lib/tool-policy');
+tp.setMemberProviders({ memberDefaults: () => ({}), ownerGrants: () => ({}) });
 
 const HUB = tp.HUB_ROOT;
 const worker = { name: 'haiku', category: 'worker' };

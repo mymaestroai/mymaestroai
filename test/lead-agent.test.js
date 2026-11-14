@@ -4,7 +4,12 @@
 // the primary agents, else maestro.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { leadAgentNames, isLeadAgent, defaultLeadAgent } = require('../lib/agents');
+const path = require('path');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('lead-agent-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { leadAgentNames, isLeadAgent, defaultLeadAgent } = L('agents');
 
 // This hub: one flagged lead, several primaries (team heads), specialists.
 const HUB = [
@@ -72,7 +77,7 @@ test('no flag: a member\'s own primary assistant is never a lead by default (rev
 });
 
 test('shouldMarkMaestroLead: only when no agent is marked and maestro is the owner\'s', () => {
-  const { shouldMarkMaestroLead } = require('../lib/agents');
+  const { shouldMarkMaestroLead } = L('agents');
   const admins = new Set(['u_admin']);
   assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', category: 'primary' }, { name: 'doc', category: 'primary' }], admins), true, 'an install that marks no lead');
   assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', category: 'primary', owner: 'u_admin' }], admins), true, 'an admin owns maestro');
@@ -86,7 +91,7 @@ test('shouldMarkMaestroLead: only when no agent is marked and maestro is the own
 
 test('new installs: the seed marks maestro as the lead, and server.js runs the one-time check at start', () => {
   const fs = require('fs'); const path = require('path');
-  const seed = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'agents.example.json'), 'utf8'));
+  const seed = JSON.parse(fs.readFileSync(path.join(ISO.data, 'agents.example.json'), 'utf8'));
   assert.strictEqual(seed.find(a => a.name === 'maestro').lead, true);
   assert.deepStrictEqual(leadAgentNames(seed), ['maestro']);
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
@@ -94,7 +99,7 @@ test('new installs: the seed marks maestro as the lead, and server.js runs the o
 });
 
 test('shouldMarkMaestroLead never promotes a repurposed maestro, and respects an explicit lead: false', () => {
-  const { shouldMarkMaestroLead } = require('../lib/agents');
+  const { shouldMarkMaestroLead } = L('agents');
   const admins = new Set();
   assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', category: 'worker' }, { name: 'doc', category: 'primary' }], admins), false, 'a worker maestro next to primary agents was never a lead');
   assert.strictEqual(shouldMarkMaestroLead([{ name: 'maestro', category: 'specialist' }], admins), true, 'no primary agents: maestro is already the lead by its name');
