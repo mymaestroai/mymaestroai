@@ -7,7 +7,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const tz = require('../lib/timezone');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('timezone-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const tz = L('timezone');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const tmpDirs = [];
@@ -124,7 +128,7 @@ test('whose zone: an owned agent uses its owner\'s; the hub\'s own agents use th
 });
 
 test('a person\'s zone: reports from their device follow them; a pinned zone stays; only choices are audited', () => {
-  const A = require('../lib/auth');
+  const A = L('auth');
   const dir = tmp('tz-auth-');
   const auth = A.createAuth({ dataDir: dir, log: () => {} });
   const u = auth.createUser({ login: 'owner@example.com', name: 'Owner', role: 'admin', password: 'correct-horse-battery-9' }).user;
@@ -149,7 +153,7 @@ test('a person\'s zone: reports from their device follow them; a pinned zone sta
 });
 
 test('what agents read: recall results, history stamps and the current request are local, zone named', () => {
-  const sdk = require('../lib/sdk-chat');
+  const sdk = L('sdk-chat');
   const rows = [{ id: 7, ts: AT, kind: 'user', text: 'Push to experimental.' }];
   assert.strictEqual(sdk.formatRecall(rows, 'America/New_York'), '#7 2026-10-28 15:47 EDT user\nPush to experimental.');
   assert.strictEqual(sdk.formatRecall(rows, 'America/Los_Angeles'), '#7 2026-10-28 12:47 PDT user\nPush to experimental.');
@@ -160,7 +164,7 @@ test('what agents read: recall results, history stamps and the current request a
   assert.ok(out[1].content.includes('<current_request sent="Oct 28 2026 16:05 EDT" zone="America/New_York">\nnow\n</current_request>'), out[1].content);
   const plain = sdk.__cache.annotateForContext([{ role: 'user', content: 'now' }], { now });
   assert.ok(!plain[0].content.includes('<local_time'), 'without a zone: as before');
-  const chunks = require('../lib/context-budget').chunkRows([{ ts: AT, kind: 'user', text: 'hello' }], 1000, 'America/New_York');
+  const chunks = L('context-budget').chunkRows([{ ts: AT, kind: 'user', text: 'hello' }], 1000, 'America/New_York');
   assert.deepStrictEqual(chunks, ['[2026-10-28 15:47 EDT] Owner: hello']);
 });
 
@@ -192,7 +196,7 @@ test('every route and every place an agent reads a time uses the person\'s zone'
 });
 
 test('recent session notes: the last local calendar days, also across the nights the clocks change', () => {
-  const MOD = require.resolve('../lib/memory-db');
+  const MOD = require.resolve(path.join(ISO.lib, 'memory-db'));
   const keepDb = process.env.HUB_MEMORY_DB, realNow = Date.now;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tz-notes-'));
   process.env.HUB_MEMORY_DB = path.join(dir, 'memory.db');
@@ -228,7 +232,7 @@ test('recent session notes: the last local calendar days, also across the nights
 });
 
 test('old notes are cleaned up by each agent\'s own days', () => {
-  const MOD = require.resolve('../lib/memory-db');
+  const MOD = require.resolve(path.join(ISO.lib, 'memory-db'));
   const keepDb = process.env.HUB_MEMORY_DB, realNow = Date.now;
   const dir = tmp('tz-clean-');
   process.env.HUB_MEMORY_DB = path.join(dir, 'memory.db');
@@ -255,13 +259,13 @@ test('old notes are cleaned up by each agent\'s own days', () => {
 });
 
 test('recall says when it can\'t read a from/to, instead of searching without it', () => {
-  const sdk = require('../lib/sdk-chat');
+  const sdk = L('sdk-chat');
   assert.strictEqual(sdk.recallFor('nobody', { query: 'x', from: 'next blue moon' }), 'Could not read from "next blue moon" as a date or time. Give a local date or time such as 2026-10-28 or 2026-10-28 09:00.');
   assert.match(sdk.recallFor('nobody', { query: 'x', from: '2026-02-30', to: 'soon' }), /^Could not read from "2026-02-30" or to "soon"/);
 });
 
 test('Records, the Files folder index, plan reset times and dreaming use local days and times too', () => {
-  const rec = require('../lib/records');
+  const rec = L('records');
   const dir = tmp('tz-files-');
   fs.writeFileSync(path.join(dir, 'late.pdf'), 'x');
   const t = new Date('2026-10-29T02:00:00Z');   // 10 PM on Oct 28 in New York, already Oct 29 in UTC
@@ -270,7 +274,7 @@ test('Records, the Files folder index, plan reset times and dreaming use local d
   assert.match(rec.filesIndex(dir), /- late\.pdf \(1 bytes, 2026-10-29\)$/, 'no zone given: UTC, as before');
   assert.ok(read('lib/agents.js').includes("records.filesIndex(filesRoot, { max: opts.compressionTurn ? 40 : 150, zone: require('./timezone').zoneForAgent(agentName) })"));
   assert.ok(read('lib/records.js').includes('updated ${tz.stamp(i.mtime, zone)}'), 'record_list');
-  const plan = require('../lib/plan-usage');
+  const plan = L('plan-usage');
   assert.strictEqual(plan.whenText('2026-10-29T00:00:00Z', 'America/New_York'), 'Wed 8:00 PM EDT');
   assert.strictEqual(plan.whenText('2026-10-29T00:00:00Z', 'America/Los_Angeles'), 'Wed 5:00 PM PDT');
   assert.match(read('lib/plan-usage.js'), /function whenText\(iso, zone = require\('\.\/timezone'\)\.hubZone\(\)\)/, 'the plan\'s owner: the hub\'s zone');
@@ -281,7 +285,7 @@ test('Records, the Files folder index, plan reset times and dreaming use local d
 });
 
 test('scheduled tasks: "tomorrow at 9am" means 9 AM where the agent\'s person is', async () => {
-  const st = require('../lib/scheduled-tasks');
+  const st = L('scheduled-tasks');
   const T0 = Date.parse('2026-10-28T19:47:00Z');
   const zones = { east: 'America/New_York', west: 'America/Los_Angeles' };
   const inst = new st.ScheduledTasks({ dataDir: tmp('tz-sched-'), now: () => T0, log: () => {},
@@ -463,6 +467,6 @@ test('the Profile shows who you are and holds the time zone; Security no longer 
   assert.ok(server.includes("hubAuth.setTimeZone(req.hubUser.id, tz, { auto: body.auto === true, pinned: body.pinned === true })"));
   const chatRoute = server.slice(server.indexOf("if (pathname === '/api/chat/stream' && req.method === 'POST') {"), server.indexOf("return handleChatStream(body, res);"));
   assert.ok(chatRoute.includes("const deviceZone = req.headers['x-hub-time-zone'];\n      if (req.hubUser && typeof deviceZone === 'string' && deviceZone) { try { hubAuth.setTimeZone(req.hubUser.id, deviceZone.trim(), { auto: true }); } catch {} }"), 'a message\'s device zone is saved before its turn is built');
-  const access = require('../lib/access');
+  const access = L('access');
   assert.deepStrictEqual(access.classifyRoute('/api/me/timezone', 'POST'), { kind: 'session' }, 'any signed-in person, for themselves');
 });

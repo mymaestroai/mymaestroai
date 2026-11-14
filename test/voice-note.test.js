@@ -7,6 +7,10 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('voice-note-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
 const lineOf = (needle, from = 0) => { const i = src.indexOf(needle, from); assert.ok(i >= 0, `missing: ${needle}`); return i; };
@@ -16,7 +20,7 @@ const lineOf = (needle, from = 0) => { const i = src.indexOf(needle, from); asse
 // Changed on purpose (owner, 2026-11-13: agents should not put out tables when talking through voice): on a call the agent speaks
 // plainly and writes nothing for the screen; detail is offered for the chat after the call.
 test('VOICE_NOTE is the agreed text: plain conversational speech only, no written part during the call', () => {
-  const { VOICE_NOTE } = require('../lib/sdk-chat');
+  const { VOICE_NOTE } = L('sdk-chat');
   assert.strictEqual(VOICE_NOTE, 'This is a voice conversation: reply in plain conversational speech only, in one to three short sentences unless the person asks for more, written to be heard, with numbers, dates and times written the way you would say them. Your replies must not contain tables, lists, headings, code, file paths, links, ids, symbols or emoji (an optional mood word, when one is asked for below, is the only exception) or a separate written part; this is about what you say, so use your tools for the work as usual. If the answer really needs detail on screen, say so in one sentence and offer to put it in the chat after the call; do not write it during the call.');
   for (const w of ['plain conversational speech only', 'one to three short sentences', 'numbers, dates and times', 'tables', 'lists', 'headings', 'code', 'file paths', 'links', 'ids', 'symbols', 'separate written part', 'after the call',
     'use your tools for the work as usual', 'mood word']) assert.ok(VOICE_NOTE.includes(w), w);   // the rule is about the spoken reply, not tool work; the face's mood word stays allowed
@@ -59,7 +63,7 @@ test('Codex client: the note goes in the per-turn prompt', () => {
 test('the note is added in exactly three places, always through voiceNoteFor (behind the voice flag and not ephemeral)', () => {
   const uses = src.split('\n').filter(l => l.includes('voiceNoteFor(options, ephemeral)') && !l.startsWith('function voiceNoteFor') && !l.trim().startsWith('//'));
   assert.strictEqual(uses.length, 3, uses.join('\n'));
-  const { VOICE_NOTE, __voiceFace: { voiceNoteFor } } = require('../lib/sdk-chat');
+  const { VOICE_NOTE, __voiceFace: { voiceNoteFor } } = L('sdk-chat');
   assert.strictEqual(voiceNoteFor({ voice: true }, false), VOICE_NOTE, 'a plain voice turn gets exactly VOICE_NOTE');
   assert.strictEqual(voiceNoteFor({ voice: true, faceMood: false }, false), VOICE_NOTE);
   assert.strictEqual(voiceNoteFor({ voice: true }, true), '', 'ephemeral: none');

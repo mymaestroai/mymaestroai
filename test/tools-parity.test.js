@@ -7,8 +7,12 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { BUILTIN_TOOLS } = require('../lib/provider-tools');
-const { createHubTools, TOOL_NAMES, CLIENT_BUILTINS } = require('../lib/hub-tools');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('tools-parity-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { BUILTIN_TOOLS } = L('provider-tools');
+const { createHubTools, TOOL_NAMES, CLIENT_BUILTINS } = L('hub-tools');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const sdk = read('lib/sdk-chat.js');
@@ -34,7 +38,7 @@ test('the hands MCP server for client agents exposes the same tools, with images
     tool: (name, description, shape, handler, extras) => ({ name, description, shape, handler, extras }),
     createSdkMcpServer: (cfg) => { made.push(cfg); return { name: cfg.name, tools: cfg.tools }; },
   };
-  const build = require('../lib/sdk-chat').buildHandsMcpServer;
+  const build = L('sdk-chat').buildHandsMcpServer;
   const d = fs.mkdtempSync(path.join(require('os').tmpdir(), 'parity-'));
   fs.writeFileSync(path.join(d, 'i.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
   const t = createHubTools({ cwd: d, log: () => {} });

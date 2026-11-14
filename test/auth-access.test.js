@@ -5,8 +5,12 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const authMod = require('../lib/auth');
-const access = require('../lib/access');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('auth-access-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const authMod = L('auth');
+const access = L('access');
 
 function fresh(now) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-'));

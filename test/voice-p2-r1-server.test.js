@@ -6,9 +6,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Readable, Writable } = require('node:stream');
-const { createSandbox } = require('../lib/sandbox');
-const { createVoiceCalls } = require('../lib/voice/call');
-const cq = require('../lib/consult-queue');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('voice-p2-r1-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createSandbox } = L('sandbox');
+const { createVoiceCalls } = L('voice/call');
+const cq = L('consult-queue');
 
 function rig() {
   const clock = { t: Date.parse('2026-11-12T20:00:00Z') };
@@ -130,7 +134,7 @@ const owner = { id: 'u_owner', role: 'admin', name: 'Owner' };
 const sam = { id: 'u_sam', role: 'member', name: 'Sam' };
 const alex = { id: 'u_alex', role: 'member', name: 'Alex' };
 async function post(deps, url, body, user = sam) {
-  const routes = require('../lib/voice/routes');
+  const routes = L('voice/routes');
   const res = fakeRes();
   const done = new Promise(resolve => res.on('finish', resolve));
   const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), { method: 'POST', url, headers: {}, hubUser: user, hubService: false });
@@ -287,7 +291,7 @@ test('S-f: "later" marks the item with state later; items carry held | later | d
 // ── S-g: holdConsultForCall enqueues first ───────────────────────────────────────────────────────
 
 test('S-g: a request that cannot be queued is never announced to the person', async () => {
-  const { holdConsultForCall } = require('../lib/sdk-chat');
+  const { holdConsultForCall } = L('sdk-chat');
   const r = rig(); const q = queueRig();
   r.calls.start('planner', { userId: 'u1', person: 'Sam' });
   for (let i = 0; i < cq.MAX_PER_PAIR; i++) await holdConsultForCall('planner', `request ${i}`, 'helper', { queue: q, calls: r.calls, displayOf: async () => 'Planner' });
@@ -299,7 +303,7 @@ test('S-g: a request that cannot be queued is never announced to the person', as
 });
 
 test('S-g: after a skip, sending the same consult again is a new item and is announced again', async () => {
-  const { holdConsultForCall } = require('../lib/sdk-chat');
+  const { holdConsultForCall } = L('sdk-chat');
   const r = rig(); const q = queueRig();
   r.calls.registerProducer('consultation', { onSkip: async (agent, item) => q.declineJob(q.pendingFor(agent).find(j => cq.jobHoldId(j) === item.id).id, 'declined') });
   const a = r.calls.start('planner', { userId: 'u1', person: 'Sam' });

@@ -7,7 +7,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createHubTools, runShell } = require('../lib/hub-tools');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('stop-step-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createHubTools, runShell } = L('hub-tools');
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -83,7 +87,7 @@ test('hands.tools.call passes { signal } to the tool; a boxed Bash hands it to s
 });
 
 test('sandbox exec: the command runs as a recorded process-group leader and an abort kills that group inside the box', async () => {
-  const { createSandbox } = require('../lib/sandbox');
+  const { createSandbox } = L('sandbox');
   const calls = [];
   let hang = null, hangs = true;
   const docker = async (args, opts) => {
@@ -131,7 +135,7 @@ test('sandbox exec: the command runs as a recorded process-group leader and an a
 });
 
 test('raceStop: a tool that ignores Stop is answered at once; values and errors pass through; no listener is left behind', async () => {
-  const { raceStop } = require('../lib/sdk-chat');
+  const { raceStop } = L('sdk-chat');
   const ac = new AbortController();
   const never = new Promise(() => {});
   const p = raceStop(never, ac.signal);
@@ -149,7 +153,7 @@ test('raceStop: a tool that ignores Stop is answered at once; values and errors 
 });
 
 test('buildHandsMcpServer: the MCP tool wrapper passes the turn signal to hands.tools.call', async () => {
-  const { buildHandsMcpServer } = require('../lib/sdk-chat');
+  const { buildHandsMcpServer } = L('sdk-chat');
   const got = [];
   const turnTools = {
     specs: () => [{ name: 'Bash', description: 'run', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } }],

@@ -3,8 +3,13 @@
 // stream), and text that resumes after a tool call starts a new paragraph.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const hubEvents = require('../lib/hub-events');
-const { activityForSave, paragraphAfterTool, metaForPiece } = require('../lib/sdk-chat');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const path = require('path');
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('saved-activity-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const hubEvents = L('hub-events');
+const { activityForSave, paragraphAfterTool, metaForPiece } = L('sdk-chat');
 
 function fakeRes() { const r = { chunks: [], write: (s) => { r.chunks.push(s); return true; } }; return r; }
 const sse = (res, obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);

@@ -10,13 +10,16 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('session-reset-iso-');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sessreset-'));
 const sdkMap = path.join(tmp, 'agent-sessions.json');
 const codexMap = path.join(tmp, 'codex-sessions.json');
 process.env.HUB_AGENT_SESSIONS_FILE = sdkMap;
 process.env.HUB_CODEX_SESSIONS_FILE = codexMap;
 
-const { clearConversation } = require('../lib/sdk-chat');
+const { clearConversation } = require(path.join(ISO.lib, 'sdk-chat'));
 
 test('clearConversation drops the stored SDK session and Codex thread for that agent only', () => {
   const stamp = new Date().toISOString();

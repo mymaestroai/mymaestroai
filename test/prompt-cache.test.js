@@ -5,10 +5,14 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs'), os = require('os'), path = require('path');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('prompt-cache-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
 const log = console.log; console.log = () => {};
-const gw = require('../lib/gateway-client');
-const { __cache } = require('../lib/sdk-chat');
-const { estimateCost } = require('../lib/ledger');
+const gw = L('gateway-client');
+const { __cache } = L('sdk-chat');
+const { estimateCost } = L('ledger');
 console.log = log;
 
 const hist = (n, t0 = Date.parse('2026-10-14T10:00:00')) => Array.from({ length: n }, (_, i) =>
@@ -76,7 +80,7 @@ test('OpenAI cache key is per agent and does not contain the agent name', () => 
 
 test('ledger: the cached part of the input is priced at cache rates', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-cache-'));
-  const { createLedger } = require('../lib/ledger');
+  const { createLedger } = L('ledger');
   const l = createLedger({ file: path.join(dir, 'l.db') });
   const plain = l.record({ agent: 'a', model: 'anthropic/claude-sonnet-5-5', inputTokens: 100000, outputTokens: 100 });
   const cached = l.record({ agent: 'a', model: 'anthropic/claude-sonnet-5-5', inputTokens: 100000, outputTokens: 100, cacheRead: 90000, cacheWrite: 0 });

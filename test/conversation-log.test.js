@@ -8,11 +8,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const sdkChat = require('../lib/sdk-chat');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('conversation-log-iso-');
+const sdkChat = require(path.join(ISO.lib, 'sdk-chat'));
 const { appendConversationLog, loadConversationLog, clearConversationLog } = sdkChat;
 
 const AGENT = 'zz_convlog_test';
-const convFile = path.join(__dirname, '..', 'data', 'conversations', `${AGENT}.jsonl`);
+const convFile = path.join(ISO.data, 'conversations', `${AGENT}.jsonl`);
 fs.mkdirSync(path.dirname(convFile), { recursive: true });
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'convlog-'));
 after(() => { try { fs.unlinkSync(convFile); } catch {} fs.rmSync(tmp, { recursive: true, force: true }); });

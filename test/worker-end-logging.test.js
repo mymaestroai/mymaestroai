@@ -4,7 +4,12 @@
 // (lib/sdk-chat.js workerEndLogLine). Ids and flags only, never a worker's label or task.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { createHubEvents } = require('../lib/hub-events');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const path = require('path');
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('worker-end-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createHubEvents } = L('hub-events');
 
 const sse = (gateway) => 'data: ' + JSON.stringify({ choices: [{ delta: {} }], gateway }) + '\n\n';
 
@@ -40,7 +45,7 @@ test('a logger that throws never breaks the turn tap', () => {
 });
 
 test('workerEndLogLine: the caller stream state at a worker end (live and tapped, ended, none)', () => {
-  const { workerEndLogLine } = require('../lib/sdk-chat');
+  const { workerEndLogLine } = L('sdk-chat');
   const hub = createHubEvents({ log: () => {} });
   const res = { write: () => true, writableEnded: false, destroyed: false };
   const tap = hub.tapTurn(res, { agent: 'sam', origin: { kind: 'user' }, message: 'hi' });
@@ -59,7 +64,7 @@ test('runSpawnWorkers logs that line at every worker end', () => {
 });
 
 test('a tap that finished reads as not tapped even when another wrapper restores observeClosed (the transcript tap does)', () => {
-  const { workerEndLogLine } = require('../lib/sdk-chat');
+  const { workerEndLogLine } = L('sdk-chat');
   const hub = createHubEvents({ log: () => {} });
   const res = { write: () => true, writableEnded: false, destroyed: false };
   const tap = hub.tapTurn(res, { agent: 'sam', origin: { kind: 'user' }, message: 'hi' });

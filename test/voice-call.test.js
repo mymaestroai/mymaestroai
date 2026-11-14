@@ -8,7 +8,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Readable, Writable } = require('node:stream');
-const { createVoiceCalls, HELD_KINDS, EXPIRE_MS } = require('../lib/voice/call');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('voice-call-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createVoiceCalls, HELD_KINDS, EXPIRE_MS } = L('voice/call');
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 async function until(fn, ms = 3000) { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await sleep(15); } return false; }
@@ -184,7 +188,7 @@ const owner = { id: 'u_owner', role: 'admin', name: 'Owner' };
 const sam = { id: 'u_sam', role: 'member', name: 'Sam' };
 
 async function post(deps, url, body, user = sam) {
-  const routes = require('../lib/voice/routes');
+  const routes = L('voice/routes');
   const res = fakeRes();
   const done = new Promise(resolve => res.on('finish', resolve));
   await routes.handle(url, fakeReq('POST', url, body, user), res, deps);
@@ -254,20 +258,20 @@ test('routes: POST /api/voice/call/decide applies now / later / skip to a held i
   assert.strictEqual((await post(r.deps, '/api/voice/call/decide', { agent: 'sam_assistant', id: 'c1', choice: 'whenever' })).status, 400);
   assert.strictEqual((await post(r.deps, '/api/voice/call/decide', { agent: 'idle_agent', id: 'c1', choice: 'now' })).status, 409);
   const get = fakeRes(); const done = new Promise(resolve => get.on('finish', resolve));
-  await require('../lib/voice/routes').handle('/api/voice/call', fakeReq('GET', '/api/voice/call', undefined, sam), get, r.deps); await done;
+  await L('voice/routes').handle('/api/voice/call', fakeReq('GET', '/api/voice/call', undefined, sam), get, r.deps); await done;
   assert.strictEqual(get.statusCode, 405);
 });
 
 test('access table: the call routes need access to the agent named in the body, like tts', () => {
-  const access = require('../lib/access');
+  const access = L('access');
   for (const p of ['/api/voice/call', '/api/voice/call/decide']) assert.deepStrictEqual(access.classifyRoute(p, 'POST'), { kind: 'agent', from: 'body' }, p);
 });
 
 // ── the producers ───────────────────────────────────────────────────────────────────────────────
 
-const st = require('../lib/scheduled-tasks');
+const st = L('scheduled-tasks');
 process.env.HUB_TZ = 'America/New_York';
-require('../lib/timezone')._setDeps({ auth: { admins: () => [], getUser: () => null }, agents: () => [] });
+L('timezone')._setDeps({ auth: { admins: () => [], getUser: () => null }, agents: () => [] });
 const T0 = Date.parse('2026-09-29T18:00:00Z');
 
 function schedRig() {
@@ -344,7 +348,7 @@ test('scheduled tasks: time held on a call does not count toward the 12 hour wai
   fs.rmSync(r.dataDir, { recursive: true, force: true });
 });
 
-const { JobRunner } = require('../lib/jobs');
+const { JobRunner } = L('jobs');
 function jobRig() {
   const r = rig();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-jobs-'));
@@ -388,7 +392,7 @@ test('jobs: a notice or report for an agent on a call is held without using up d
   fs.rmSync(r.dataDir, { recursive: true, force: true });
 });
 
-const cq = require('../lib/consult-queue');
+const cq = L('consult-queue');
 function queueRig() {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'voice-cq-')), 'q.json');
   return { q: new cq.ConsultQueue({ file, now: () => 1_000_000 }), file };
@@ -424,7 +428,7 @@ test('consult queue: a drain skips an agent whose next job is held, keeps its pl
 });
 
 test('a consult to an agent on a call is queued with the status text; no stand-in, no waiting; after the call ends it drains', async () => {
-  const { holdConsultForCall } = require('../lib/sdk-chat');
+  const { holdConsultForCall } = L('sdk-chat');
   const r = rig(); const { q } = queueRig();
   assert.strictEqual(await holdConsultForCall('planner', 'Please review this', 'helper', { queue: q, calls: r.calls }), null, 'no call: the consult goes the usual way');
   assert.strictEqual(q.pendingFor('planner').length, 0);
@@ -451,7 +455,7 @@ test('a consult to an agent on a call is queued with the status text; no stand-i
 });
 
 test('a consult the person already allowed is not run twice: the queued job is run by the queue', async () => {
-  const { holdConsultForCall } = require('../lib/sdk-chat');
+  const { holdConsultForCall } = L('sdk-chat');
   const r = rig(); const { q } = queueRig();
   r.calls.start('planner', { userId: 'u1', person: 'Sam' });
   await holdConsultForCall('planner', 'Please review this', 'helper', { queue: q, calls: r.calls, displayOf: async () => 'Planner' });
@@ -462,7 +466,7 @@ test('a consult the person already allowed is not run twice: the queued job is r
 });
 
 test('a full queue is said plainly, not silently dropped', async () => {
-  const { holdConsultForCall } = require('../lib/sdk-chat');
+  const { holdConsultForCall } = L('sdk-chat');
   const r = rig(); const { q } = queueRig();
   r.calls.start('planner', { userId: 'u1', person: 'Sam' });
   for (let i = 0; i < cq.MAX_PER_PAIR; i++) assert.ok(/queued/.test(await holdConsultForCall('planner', `request ${i}`, 'helper', { queue: q, calls: r.calls })));
@@ -473,8 +477,8 @@ test('a full queue is said plainly, not silently dropped', async () => {
 // ── the gate, alerts and the wiring in lib/sdk-chat.js ───────────────────────────────────────────
 
 test('handleChatStream: a hub task (condense, compaction) for an agent on a call gets 409 on_voice_call; the person, comms and alerts do not match the gate', async () => {
-  const chat = require('../lib/sdk-chat');
-  const calls = require('../lib/voice/call');
+  const chat = L('sdk-chat');
+  const calls = L('voice/call');
   assert.strictEqual(chat.voiceGateKind({ origin: { kind: 'task', from: 'hub', label: 'context compression' } }), 'task');
   assert.strictEqual(chat.voiceGateKind({ origin: { kind: 'schedule', from: 'task-1' } }), 'schedule', 'lib/scheduler.js turns carry no task id');
   assert.strictEqual(chat.voiceGateKind({ origin: { kind: 'schedule', from: 'Nightly', taskId: 't1' } }), null, 'lib/scheduled-tasks holds its own');

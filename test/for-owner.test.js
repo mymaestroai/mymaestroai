@@ -8,15 +8,19 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const sdkChat = require('../lib/sdk-chat');
-const hubEvents = require('../lib/hub-events');
-const { createPush } = require('../lib/push');
-const scheduledTasks = require('../lib/scheduled-tasks');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('for-owner-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const sdkChat = L('sdk-chat');
+const hubEvents = L('hub-events');
+const { createPush } = L('push');
+const scheduledTasks = L('scheduled-tasks');
 const { handleForOwner, forOwnerMarks, FOR_OWNER_DESC, getWorkspaceTools } = sdkChat.__forOwner;
 const { buildHubMcpServer, appendConversationLog } = sdkChat.__askUser;
 
 const AGENT = 'zz_for_owner_test';
-const convFile = path.join(__dirname, '..', 'data', 'conversations', `${AGENT}.jsonl`);
+const convFile = path.join(ISO.data, 'conversations', `${AGENT}.jsonl`);
 fs.mkdirSync(path.dirname(convFile), { recursive: true });
 after(() => { try { fs.unlinkSync(convFile); } catch {} });
 const readLog = () => fs.existsSync(convFile) ? fs.readFileSync(convFile, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
@@ -62,7 +66,7 @@ test('for_owner is not offered on tiger-team or ephemeral turns', async () => {
 });
 
 test('the tool policy classes for_owner as a harmless write inside the hub', () => {
-  const tp = require('../lib/tool-policy');
+  const tp = L('tool-policy');
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tool-policy.js'), 'utf8');
   assert.match(src, /HUB_WRITE_INSIDE = new Set\([^)]*'for_owner'/);
   assert.ok(tp);
@@ -195,7 +199,7 @@ test('push: for_owner sends once per turn to the devices that follow the agent, 
 
 test('the agent notes explain for_owner, and automatic prompts carry the one-line reminder', () => {
   assert.match(scheduledTasks.policyText(), /## REPLIES THEY MUST SEE[\s\S]*`for_owner`/);
-  const jobs = require('../lib/jobs');
+  const jobs = L('jobs');
   const src = (f) => fs.readFileSync(path.join(__dirname, '..', 'lib', f), 'utf8');
   assert.ok(src('scheduler.js').includes(REMINDER), 'TASKS.md prompt');
   assert.ok(src('scheduled-tasks.js').includes(REMINDER), 'scheduled-task prompt');
