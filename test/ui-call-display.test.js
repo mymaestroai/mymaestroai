@@ -1709,6 +1709,34 @@ test('None docked: the recording badge sits in the docked status strip; a page w
   plain.display.release();
 });
 
+test('None docked: a character confirmed gone docks; a character still being looked up does not dock in between; a keyboard choice of None keeps focus on the docked Display', async () => {
+  // a pack the server confirms missing -> None -> the docked bar
+  const gone = dockedWorld({ choice: 'pack:owl' });
+  gone.w.display.start(); await flushP();
+  assert.ok(!isDocked(gone.dom), 'the character first');
+  gone.w.display.setChoice('pack:ghost'); await flushP();
+  assert.ok(isDocked(gone.dom), 'a choice that is not installed is None: docked');
+  gone.w.display.release();
+  // a pack choice while the list is still loading: no flash of the docked bar before the character
+  let release; const slow = () => new Promise((r) => { release = () => r({ ok: true, status: 200, json: async () => ({ packs: PACKS }) }); });
+  let page, composer;
+  const p = world({ prefs: { choice: 'pack:owl' }, fetch: slow, dock: () => composer });
+  page = new p.dom.El('div'); composer = new p.dom.El('div'); page.appendChild(composer); p.dom.doc.body.appendChild(page);
+  p.display.start(); await flushP();
+  assert.strictEqual(p.display.info().resolved.pending, true, 'still looking for the character');
+  assert.ok(!isDocked(p.dom) && composer.getAttribute('data-ucd-replaced') === undefined, 'not docked while it is pending');
+  release(); await flushP();
+  assert.ok(!isDocked(p.dom), 'the character, not the docked bar');
+  p.display.release();
+  // a keyboard user choosing None on the full view's Display select keeps focus there (on the docked one)
+  const k = dockedWorld({ choice: 'orb' });
+  k.w.display.start(); await flushP();
+  const disp = k.dom.find('ucd-display')[0]; disp.focus();
+  k.w.display.setChoice('none'); await flushP();
+  assert.ok(isDocked(k.dom)); assert.strictEqual(k.dom.doc.activeElement, disp, 'focus stays on the Display select');
+  k.w.display.release();
+});
+
 test('docked CSS: the page\'s bar hidden, Back to chat and Captions hidden, the root in the page flow (not full-screen)', () => {
   const css = read('lib/ui-call-display.css');
   assert.match(css, /\[data-ucd-replaced\] \{ display: none !important; \}/);
