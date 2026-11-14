@@ -568,6 +568,11 @@
   @media (max-width: 600px) {
     #composer.typing #attach-btn, #composer.typing #camera-btn, #composer.typing #voice-strip { display: none; }
   }
+  /* While a reply runs, the Notify chip shows only its bell when typing, so the box keeps its width. */
+  @media (max-width: 600px) {
+    #composer.typing .notify-chip .nlabel { display: none; }
+    #composer.typing .notify-chip { padding: 0 10px; }
+  }
   /* Compact call panel (short screen or the keyboard open): only the state line, held items and mic trouble stay. */
   /* never inside the call display's drawer (adopted into a .ucd-section), which has room for the whole panel */
   :not(.ucd-section) > #call-panel.compact #cp-activity, :not(.ucd-section) > #call-panel.compact #cp-heard, :not(.ucd-section) > #call-panel.compact .cp-dnd,

@@ -66,6 +66,14 @@ test('(b) CSS hides attach, camera and the strip under #composer.typing inside m
   assert.ok(!/#composer\.typing[^,{]*(#mic-btn|#send-btn)/.test(body), 'mic and send stay');
 });
 
+test('(b) while typing during a running reply, the Notify chip shows only its bell (inside max-width 600px)', () => {
+  const m = html.match(/@media \(max-width: 600px\) \{\s*(#composer\.typing \.notify-chip \.nlabel[^}]*\}[^}]*\})\s*\}/);
+  assert.ok(m, 'media block for the chip');
+  assert.ok(/#composer\.typing \.notify-chip \.nlabel \{ display: none; \}/.test(m[1]), 'label hidden');
+  assert.ok(/#composer\.typing \.notify-chip \{ padding: 0 10px; \}/.test(m[1]), 'narrow padding');
+  assert.ok(!/#composer\.typing \.notify-chip \{[^}]*display: none/.test(html), 'the chip itself stays');
+});
+
 test('(b) composerTypingPaint: typing only while the box has focus (a draft left in the box still lets you attach a file)', () => {
   const { api, els, doc } = harness();
   const c = els.composer, i = els['msg-input'];
