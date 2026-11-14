@@ -1751,10 +1751,9 @@ async function resetPacing() {
   }
 }
 
-// Busy agents plus those the Active section shows as working only through a running background job (what the working filter keeps).
+// Busy agents only (what the working chip and the working filter list); an agent that only runs a background job is not busy.
 function workingNames() {
-  const jobs = activeJobsNow();
-  return agents.map(a => a.name).filter(n => isBusy(n) || n in jobs);
+  return agents.map(a => a.name).filter(n => isBusy(n));
 }
 
 function renderWorkingChip() {
@@ -1772,28 +1771,25 @@ function renderWorkingChip() {
 // opts.active: a row of the Active section; when only the agent's temporary workers run it still reads as working.
 function agentRowHtml(a, opts) {
   const done = !!(opts && opts.done);
-  // working only through a background job: hollow dot, the job line instead of the status. A busy agent always keeps the busy
-  // look (yellow dot and status line); its job line is drawn below the status.
-  const jobOnly = !!(opts && opts.jobOnly) && !done && !isBusy(a.name);
-  const viaWorkers = !!(opts && opts.active) && !done && !jobOnly && !isBusy(a.name);
+  // opts.job: the agent's activeJobs entry; its worded job line ('Background job: <name> + N more · 4 min') shows after the
+  // status / blurb line on any row (group or Active), never on a done row.
+  const viaWorkers = !!(opts && opts.active) && !done && !isBusy(a.name);
   const n = unread[a.name] || 0;
   const s = live[a.name];
-  const question = !done && !jobOnly && !!(s && s.pendingQuestion);
-  const working = !done && !jobOnly && (isBusy(a.name) || viaWorkers);
-  const dotCls = question ? ' question' : working ? ' busy' : jobOnly ? ' joby' : statusKnown ? ' idle' : '';
+  const question = !done && !!(s && s.pendingQuestion);
+  const working = !done && (isBusy(a.name) || viaWorkers);
+  const dotCls = question ? ' question' : working ? ' busy' : statusKnown ? ' idle' : '';
   const job = !done && opts && opts.job ? opts.job : null;
   // the name may be cut short (ellipsis); the tail (' + N more · 4 min') never shrinks, so the time always shows
-  const jobHtml = job ? `<div class="agent-job" title="${esc(activeJobTitle(job))}"><span class="ajl-name">⏳ ${esc(job.names[0])}</span><span class="ajl-tail">${esc(activeJobTail(job, Date.now()))}</span></div>` : '';
+  const jobHtml = job ? `<div class="agent-job" title="${esc(activeJobTitle(job))}"><span class="ajl-name">${esc(activeJobLead(job))}</span><span class="ajl-tail">${esc(activeJobTail(job, Date.now()))}</span></div>` : '';
   const sub = (done
     ? '<div class="agent-model working">✓ done</div>'
-    : jobOnly
-      ? ''
-      : viaWorkers
-        ? '<div class="agent-model working">⏳ working</div>'
-        : working
-          ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name))}</div>`
-          : `<div class="agent-model" title="${esc(a.blurb || '')}">${esc(a.blurb || shortModel(a.model))}</div>`) + jobHtml;
-  return `<button class="agent-row${working ? ' is-busy' : ''}${jobOnly ? ' active-joby' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}">` +
+    : viaWorkers
+      ? '<div class="agent-model working">⏳ working</div>'
+      : working
+        ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name))}</div>`
+        : `<div class="agent-model" title="${esc(a.blurb || '')}">${esc(a.blurb || shortModel(a.model))}</div>`) + jobHtml;
+  return `<button class="agent-row${working ? ' is-busy' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}">` +
     `<span class="agent-icon">${esc(a.icon || '🤖')}</span>` +
     `<span class="agent-meta"><div class="agent-name">${esc(a.display || a.name)}${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}</div>${sub}</span>` +
     `<span class="dot${dotCls}" title="${esc(working && !viaWorkers ? busyText(a.name) : '')}">${question ? '?' : ''}</span>` +
@@ -1834,7 +1830,7 @@ function activeRelease() {
   activeHoldTimer = null;
   if (!activeHeld) return;
   activeHeld = false;
-  const next = activeStep(activeState, { busy: activeBusyNow(), jobs: activeJobsNow(), now: Date.now(), held: false, enabled: activeTopOn() });
+  const next = activeStep(activeState, { busy: activeBusyNow(), now: Date.now(), held: false, enabled: activeTopOn() });
   if (!activeMissed && !activeMembersChanged(activeState, next)) return;
   setTimeout(() => { if (!activeHeld && screen === 'agents') renderAgents(); }, 400);
 }
@@ -1865,7 +1861,7 @@ const ACTIVE_JOBS_TIMEOUT_MS = 10000;
 function activeJobsFresh() { return Date.now() - activeJobsOkAt <= ACTIVE_JOBS_STALE_MS; }
 let activeJobsTick = null;
 function activeJobsWanted() {
-  return !activeJobsStopped && isAdmin() && activeTopOn() && document.visibilityState === 'visible';   // members never ask (isAdmin() is false once /api/me says so)
+  return !activeJobsStopped && isAdmin() && document.visibilityState === 'visible';   // members never ask (isAdmin() is false once /api/me says so)
 }
 function activeJobsSync() {
   const want = activeJobsWanted();
@@ -1901,19 +1897,18 @@ async function activeJobsPoll() {
   if (screen === 'agents') renderAgents();
 }
 function activeJobsNow() {
-  if (!activeTopOn()) return {};   // switch off: no job counts as working
   return activeJobsFrom(activeJobsFresh() ? activeJobList : [], agents.map(a => a.name));   // a list older than 60 s is not shown
 }
 // The elapsed time changes between polls: relabel the drawn rows in place (no redraw).
 function activeJobsRelabel() {
   const list = $('agents-list');
   if (screen !== 'agents' || !list || !Object.keys(activeJobs).length) { clearInterval(activeJobsTick); activeJobsTick = null; return; }
-  for (const el of list.querySelectorAll('.active-sec .agent-row')) {
+  for (const el of list.querySelectorAll('.agent-row')) {
     const info = activeJobs[el.dataset.agent];
     const j = el.querySelector('.agent-job');
     if (info && j) {
       const nm = j.querySelector('.ajl-name'), tl = j.querySelector('.ajl-tail');
-      if (nm) nm.textContent = '⏳ ' + info.names[0];
+      if (nm) nm.textContent = activeJobLead(info);
       if (tl) tl.textContent = activeJobTail(info, Date.now());
       j.title = activeJobTitle(info);
     }
@@ -1931,13 +1926,13 @@ function renderAgents() {
   if (!agents.length) { list.innerHTML = '<div class="empty">No agents found.</div>'; return; }
   activeWireHold(list);
   activeJobs = activeJobsNow();
-  activeState = activeStep(activeState, { busy: activeBusyNow(), jobs: activeJobs, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
+  activeState = activeStep(activeState, { busy: activeBusyNow(), now: Date.now(), held: activeHeld, enabled: activeTopOn() });
   let activeHtml = '';
   const activeRows = activeState.rows.map(row => ({ row, a: agents.find(x => x.name === row.name) })).filter(r => r.a);
   if (activeRows.length) {
     const activeCollapsed = !workingFilter && !!collapsed.active;
     activeHtml = `<div class="active-sec"><button class="group-title" data-group="active"><span>⚡ ${esc(activeTitle({ rows: activeRows }))}</span><span>${activeCollapsed ? '&#x25B8;' : '&#x25BE;'}</span></button>`;
-    if (!activeCollapsed) for (const { row, a } of activeRows) activeHtml += agentRowHtml(a, { done: row.doneAt != null, active: true, jobOnly: !!row.jobOnly, job: activeJobs[a.name] });
+    if (!activeCollapsed) for (const { row, a } of activeRows) activeHtml += agentRowHtml(a, { done: row.doneAt != null, active: true, job: activeJobs[a.name] });
     activeHtml += '</div>';
   }
   const known = new Set(GROUPS.map(g => g.key));
@@ -1946,13 +1941,13 @@ function renderAgents() {
   for (const c of extra) groups.push({ key: c, title: c, items: agents.filter(a => a.category === c) });
   let html = '';
   for (const g of groups) {
-    if (workingFilter) g.items = g.items.filter(a => isBusy(a.name) || a.name in activeJobs);
+    if (workingFilter) g.items = g.items.filter(a => isBusy(a.name));
     if (!g.items.length) continue;
     const isCollapsed = !workingFilter && !!collapsed[g.key];
     html += `<button class="group-title" data-group="${esc(g.key)}"><span>${esc(g.title)} (${g.items.length})</span><span>${isCollapsed ? '&#x25B8;' : '&#x25BE;'}</span></button>`;
     if (isCollapsed) continue;
     for (const a of g.items.slice().sort((x, y) => (!!x.lead !== !!y.lead) ? (x.lead ? -1 : 1) : (x.display || x.name).localeCompare(y.display || y.name))) {
-      html += agentRowHtml(a);
+      html += agentRowHtml(a, { job: activeJobs[a.name] });
     }
   }
   if (!html) html = '<div class="empty">No agent is working right now.</div>';
@@ -1965,7 +1960,7 @@ function renderAgents() {
   }
   activeLastH = h;
   activeLastCount = activeRows.length;
-  if (!activeJobsTick && activeRows.some(r => activeJobs[r.row.name])) activeJobsTick = setInterval(activeJobsRelabel, 30000);
+  if (!activeJobsTick && list.querySelector('.agent-job')) activeJobsTick = setInterval(activeJobsRelabel, 30000);
   if (!activeTicker && activeState.rows.some(r => r.doneAt != null)) {
     activeTicker = setInterval(() => {
       // stops when nothing lingers or this screen is left (renderAgents steps the state again on the way back)
@@ -6337,36 +6332,37 @@ function activeJobTail(info, now) {
   const t = m < 1 ? '<1 min' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
   return `${info.count > 1 ? ` + ${info.count - 1} more` : ''} \u00B7 ${t}`;
 }
-function activeJobLabel(info, now) {
+function activeJobLead(info) {
   if (!info || !info.count) return '';
-  return `${info.names[0]}${activeJobTail(info, now)}`;
+  return 'Background job: ' + info.names[0];
+}
+function activeJobLabel(info, now) {
+  return activeJobLead(info) + activeJobTail(info, now);
 }
 function activeJobTitle(info) {
   return info && info.names ? info.names.join('\n') : '';
 }
 function activeStep(state, input) {
-  const { busy = {}, jobs = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
+  const { busy = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
   if (!enabled) return { rows: [] };
-  const work = Object.assign({}, busy);                       // working: busy, or has a running job
-  for (const n of Object.keys(jobs)) work[n] = n in work ? Math.min(work[n], jobs[n].since) : jobs[n].since;
   const prev = (state && state.rows) || [];
   const rows = [];
   for (const r of prev) {
-    if (r.name in work) { rows.push({ name: r.name, since: Math.min(r.since, work[r.name]), doneAt: null, jobOnly: !(r.name in busy) }); continue; }
+    if (r.name in busy) { rows.push({ name: r.name, since: Math.min(r.since, busy[r.name]), doneAt: null }); continue; }
     const doneAt = r.doneAt == null ? now : r.doneAt;
     if (!held && now - doneAt >= lingerMs) continue;          // leaves the section
-    rows.push({ name: r.name, since: r.since, doneAt, jobOnly: false });
+    rows.push({ name: r.name, since: r.since, doneAt });
   }
   if (held) return { rows };                                  // nothing joins while the list is held
   const have = new Set(rows.map(r => r.name));
-  const joining = Object.keys(work).filter(n => !have.has(n)).map(n => ({ name: n, since: work[n], doneAt: null, jobOnly: !(n in busy) }));
+  const joining = Object.keys(busy).filter(n => !have.has(n)).map(n => ({ name: n, since: busy[n], doneAt: null }));
   joining.sort((a, b) => (a.since - b.since) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return { rows: rows.concat(joining) };
 }
 function activeChanged(a, b) {
   const x = (a && a.rows) || [], y = (b && b.rows) || [];
   if (x.length !== y.length) return true;
-  for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null) || !!x[i].jobOnly !== !!y[i].jobOnly) return true;
+  for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null)) return true;
   return false;
 }
 function activeMembersChanged(a, b) {
