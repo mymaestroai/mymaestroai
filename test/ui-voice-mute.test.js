@@ -266,3 +266,42 @@ for (const [file, label] of [['app.js', 'app.js'], ['mobile.js', 'mobile.js']]) 
     assert.ok(/\bd\.setMuted\(/.test(m[0]), 'calls setMuted on the display');
   });
 }
+
+// ── Interrupt while muted: the reply still stops (the Interrupt button's floor asks the call's interrupt()) ──
+test('mute: interrupt() while muted stops the reply being read and the rest of it; unmuted or idle it does nothing', async () => {
+  const h = await started();
+  assert.strictEqual(h.call.interrupt(), false, 'not muted: the floor is taken the usual way instead');
+  h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'read it' }); await tick();
+  h.call.onReplyText('Sentence one. Sentence two. Sentence three. ', false);
+  await advance(h, 5000);
+  assert.ok(h.log.includes('speak Sentence one.'));
+  h.call.setMuted(true);
+  assert.strictEqual(h.call.interrupt(), true, 'something was stopped');
+  assert.strictEqual(count(h, 'cancelSpeech'), 1, 'the reading is cut');
+  await advance(h, 5000);
+  assert.ok(!h.log.some(x => x === 'speak Sentence two.' || x === 'speak Sentence three.'), 'the rest of the reply is not read');
+  assert.strictEqual(h.call.interrupt(), false, 'nothing left to stop');
+  assert.deepStrictEqual(h.stt.slice(1), [], 'nothing listened for');
+  h.call.onReplyText('Sentence one. Sentence two. Sentence three. Sentence four. ', true);   // the rest of this reply arrives after the interrupt
+  await advance(h, 5000);
+  assert.ok(!h.log.includes('speak Sentence four.'), 'text arriving after the interrupt is not read either');
+  // unmuted, the next turn is heard and its reply read as usual
+  h.running = false; h.call.setMuted(false);
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'next question' }); await tick(); await advance(h, 3000);
+  assert.ok(h.stt.includes('next question') && h.sent.some(x => /next question/.test(x)), 'the next turn is sent');
+  h.call.onReplyText('A new answer. ', true); await advance(h, 5000);
+  assert.ok(h.log.includes('speak A new answer.'), 'and its reply is read');
+});
+
+test('talk floor: while the call is muted, take() asks interrupt() and never sends a speech start', () => {
+  const CD = require('../lib/ui-call-display');
+  const log = [];
+  const fake = { state: 'speaking', isMuted: () => true, interrupt: () => { log.push('interrupt'); return true; }, onSpeechStart: () => log.push('start'), onMisfire: () => log.push('misfire') };
+  const f = CD.createTalkFloor({ call: () => fake, setTimer: () => 1, clearTimer() {} });
+  assert.strictEqual(f.take(), true);
+  assert.deepStrictEqual(log, ['interrupt']);
+  assert.strictEqual(f.taken, false, 'the floor is not taken while muted');
+  fake.isMuted = () => false;
+  assert.strictEqual(f.take(), true);
+  assert.deepStrictEqual(log, ['interrupt', 'start'], 'unmuted: the floor as before');
+});

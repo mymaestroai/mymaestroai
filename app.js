@@ -12543,6 +12543,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (want) { sinceUnmute = false; if (personSpeaking || segActive) dropSpeech(); }
         return muted;
       }
+      // The Interrupt button while muted (the Talk floor asks this instead of taking the floor: nothing is listened for while muted): the reply being read
+      // stops and the rest of this turn's reply is not read, as when the person cuts it by speaking. -> true when something was stopped.
+      function interrupt() {
+        if (ended || !muted || (!speaking && !queue.length)) return false;
+        quiet(() => ui.reply('drop'));   // a reaction that has not played is dropped, as for a cut by speech
+        const cutReply = cancelSpeaking(true);
+        if (cutReply && awaitingReply && !cutSkip) cutSkip = true;
+        settle();
+        return true;
+      }
       function beat() {
         hbTimer = d.setTimer(() => {
           hbTimer = null;
@@ -12637,7 +12647,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       return {
-        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
         get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
       };
     }
@@ -13014,8 +13024,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         hold: o.echoHoldMs === undefined ? VOICE_ECHO_HOLD_MS : holdMs(o.echoHoldMs), holdTimer: null, nav: null, handlers: {}, src: null, track: null, trackOff: null,
         mdOff: null, devTimer: null, reopening: null, info: null, defSnap: null,
         unprocessed: !!o.unprocessed,   // the call's own microphone is opened with echo cancellation, noise suppression and auto gain off (a recorded call, mic 'unprocessed': the fallback)
-        recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [],
-        muted: false };   // setMuted: every microphone track of the call is switched off   // the recording's own second microphone track (openRecordingTap) and who follows the tap
+        recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [],   // the recording's own second microphone track (openRecordingTap) and who follows the tap
+        muted: false };   // setMuted: every microphone track of the call is switched off
       const win = () => o.win || window;
       const setT = o.setTimer || ((fn, ms) => { const w = win(); return (typeof w.setTimeout === 'function' ? w.setTimeout.bind(w) : setTimeout)(fn, ms); });
       const clearT = o.clearTimer || ((id) => { const w = win(); return (typeof w.clearTimeout === 'function' ? w.clearTimeout.bind(w) : clearTimeout)(id); });
