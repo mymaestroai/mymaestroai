@@ -6617,7 +6617,16 @@
       let el = copy.querySelector('.agent-job-line');
       if (!info) { if (el) el.remove(); return; }
       if (!el) { el = document.createElement('span'); el.className = 'agent-job-line'; }
-      el.textContent = '⏳ ' + activeJobLabel(info, Date.now());
+      // Two parts: the name may be cut short (ellipsis); the tail (' + N more · 4 min') never shrinks, so the time always shows.
+      let nm = el.querySelector('.ajl-name'), tl = el.querySelector('.ajl-tail');
+      if (!nm || !tl) {
+        el.textContent = '';
+        nm = document.createElement('span'); nm.className = 'ajl-name';
+        tl = document.createElement('span'); tl.className = 'ajl-tail';
+        el.appendChild(nm); el.appendChild(tl);
+      }
+      nm.textContent = '⏳ ' + info.names[0];
+      tl.textContent = activeJobTail(info, Date.now());
       el.title = activeJobTitle(info);
       const host = copy.querySelector('.agent-info') || copy;
       if (el.parentNode !== host || host.lastElementChild !== el) host.appendChild(el);   // always after the busy line
@@ -16197,11 +16206,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return out;
     }
-    function activeJobLabel(info, now) {
+    function activeJobTail(info, now) {
       if (!info || !info.count) return '';
       const m = Math.max(0, Math.floor(((now == null ? Date.now() : now) - info.since) / 60000));
       const t = m < 1 ? '<1 min' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
-      return `${info.names[0]}${info.count > 1 ? ` + ${info.count - 1} more` : ''} \u00B7 ${t}`;
+      return `${info.count > 1 ? ` + ${info.count - 1} more` : ''} \u00B7 ${t}`;
+    }
+    function activeJobLabel(info, now) {
+      if (!info || !info.count) return '';
+      return `${info.names[0]}${activeJobTail(info, now)}`;
     }
     function activeJobTitle(info) {
       return info && info.names ? info.names.join('\n') : '';

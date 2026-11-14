@@ -86,7 +86,9 @@
     .active-sec { overflow: hidden; }
     /* A row that works only through a background job (active-joby): hollow muted dot, the job line instead of the status. */
     .dot.joby { background: transparent; box-shadow: inset 0 0 0 2px var(--text-dim); }
-    .agent-job { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .agent-job { display: flex; font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; min-width: 0; }
+    .agent-job .ajl-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+    .agent-job .ajl-tail { flex: none; white-space: pre; }
     @media (prefers-reduced-motion: reduce) { .active-sec { animation: none; } }
     .agent-icon { font-size: 26px; width: 36px; text-align: center; flex-shrink: 0; }
     .agent-meta { flex: 1; min-width: 0; }

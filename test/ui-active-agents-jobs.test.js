@@ -127,7 +127,7 @@ test('activeChanged is true on a jobOnly flip alone; activeMembersChanged is not
 
 test('the jobs helpers exist exactly once in lib, app.js and mobile.js (inside the byte-identical block)', () => {
   const lib = fs.readFileSync(path.join(ROOT, 'lib/ui-active-agents.js'), 'utf8');
-  for (const n of ['activeJobsFrom', 'activeJobLabel', 'activeJobTitle']) {
+  for (const n of ['activeJobsFrom', 'activeJobLabel', 'activeJobTail', 'activeJobTitle']) {
     for (const [name, src] of [['lib', lib], ['app.js', app], ['mobile.js', mob]]) {
       assert.strictEqual(src.split(`function ${n}(`).length - 1, 1, `${n} in ${name}`);
     }
@@ -184,7 +184,7 @@ function desk(o) {
     clearInterval: (id) => { rec.cleared.push(id); },
     paintActiveSection: () => { rec.paints++; },
     Date: { now: () => clock.now },
-    activeJobsFrom: L.activeJobsFrom, activeJobLabel: L.activeJobLabel, activeJobTitle: L.activeJobTitle,
+    activeJobsFrom: L.activeJobsFrom, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
   };
   const names = Object.keys(env);
   const api = new Function(...names, DESK_SRC + `
@@ -300,13 +300,18 @@ test('desktop activeDressJob writes the "⏳ " label and title, keeps one line l
   d.api.activeDressJob(copy, { name: 'sam', doneAt: null });
   const line = info.querySelector('.agent-job-line');
   assert.ok(line, 'line added');
-  assert.strictEqual(line.textContent, '⏳ build <b> + 1 more · 4 min');
+  // changed (Maestro 23:40): the name and the tail are separate spans, so only the name can be cut short
+  const part = (c) => line.children.find(x => x.className === c);
+  assert.strictEqual(part('ajl-name').textContent, '⏳ build <b>');
+  assert.strictEqual(part('ajl-tail').textContent, ' + 1 more · 4 min');
+  assert.strictEqual(line.children.length, 2);
   assert.strictEqual(line.title, 'build <b>\nlint');
   assert.strictEqual(info.lastElementChild, line, 'after the busy line');
   d.clock.now += 2 * MIN;
   d.api.activeDressJob(copy, { name: 'sam', doneAt: null });
   assert.strictEqual(info.children.filter(c => c.className === 'agent-job-line').length, 1, 'rewritten in place, not duplicated');
-  assert.ok(line.textContent.endsWith('6 min'), line.textContent);
+  assert.strictEqual(part('ajl-tail').textContent, ' + 1 more · 6 min', 'the tail is rewritten in place');
+  assert.strictEqual(line.children.length, 2, 'no extra spans');
   info.appendChild(el('agent-busy-line'));   // something appended after it: the job line moves back to the end
   d.api.activeDressJob(copy, { name: 'sam', doneAt: null });
   assert.strictEqual(info.lastElementChild, line);
@@ -373,7 +378,7 @@ function phone(o) {
     setInterval: (fn, ms) => { rec.timers.push({ fn, ms }); return rec.timers.length; },
     clearInterval: (id) => { rec.cleared.push(id); },
     Date: { now: () => clock.now },
-    activeJobsFrom: L.activeJobsFrom, activeJobLabel: L.activeJobLabel, activeJobTitle: L.activeJobTitle,
+    activeJobsFrom: L.activeJobsFrom, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
   };
   const names = Object.keys(env);
   const apiObj = new Function(...names, PHONE_POLL + `
@@ -451,13 +456,16 @@ test('phone poll: after 60 s of failures the jobs are treated as none; activeJob
 });
 
 test('phone activeJobsRelabel rewrites the drawn labels in place and stops its timer off the agents screen', () => {
-  const j = { textContent: '', title: '' };
+  // changed (Maestro 23:40): the label is two spans, name and tail
+  const nm = { textContent: '' }, tl = { textContent: '' };
+  const j = { textContent: '', title: '', querySelector: (s) => (s === '.ajl-name' ? nm : s === '.ajl-tail' ? tl : null) };
   const row = { dataset: { agent: 'sam' }, querySelector: (s) => (s === '.agent-job' ? j : null) };
   const d = phone({ rows: [row, { dataset: { agent: 'robin' }, querySelector: () => null }] });
   d.api.setJobs({ sam: { names: ['x', 'y'], since: d.clock.now - 7 * MIN, count: 2 } });
   d.api.setTick(9);
   d.api.activeJobsRelabel();
-  assert.strictEqual(j.textContent, '⏳ x + 1 more · 7 min');
+  assert.strictEqual(nm.textContent, '⏳ x');
+  assert.strictEqual(tl.textContent, ' + 1 more · 7 min');
   assert.strictEqual(j.title, 'x\ny');
   assert.deepStrictEqual(d.rec.cleared, [], 'still running');
   d.api.setJobs({});
@@ -475,7 +483,7 @@ test('phone activeJobsRelabel rewrites the drawn labels in place and stops its t
 function phoneRow(over) {
   const env = Object.assign({
     unread: {}, live: {}, isBusy: () => false, statusKnown: true, busyText: () => 'busy', shortModel: (m) => 'm:' + m,
-    activeJobLabel: L.activeJobLabel, activeJobTitle: L.activeJobTitle,
+    activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
   }, over || {});
   const names = Object.keys(env);
   return new Function(...names, ESC_SRC + '\n' + ROW_SRC + '\nreturn agentRowHtml;')(...names.map(n => env[n]));
@@ -488,7 +496,7 @@ test('phone agentRowHtml: a jobOnly row has active-joby, the joby dot, and the a
   assert.ok(h.includes('class="agent-row active-joby"'), h);
   assert.ok(h.includes('class="dot joby"'), h);
   assert.ok(h.includes('<div class="agent-job" title="build\nlint\ntest">'), h);
-  assert.ok(h.includes('⏳ build + 2 more · 4 min</div>'), h);
+  assert.ok(h.includes('<span class="ajl-name">⏳ build</span><span class="ajl-tail"> + 2 more · 4 min</span></div>'), h);   // changed (Maestro 23:40): name and tail spans
   assert.ok(!h.includes('is-busy') && !h.includes('active-done'));
   assert.ok(!h.includes('agent-model'), 'a job-only row has no status or blurb line');
 });
@@ -496,7 +504,7 @@ test('phone agentRowHtml: a jobOnly row has active-joby, the joby dot, and the a
 test('phone agentRowHtml: job names are escaped in the text and in the title', () => {
   const row = phoneRow();
   const h = row({ name: 'sam', model: 'x' }, { active: true, jobOnly: true, job: jobInfo([`<b>&"'`, 'second']) });
-  assert.ok(h.includes('&lt;b&gt;&amp;&quot;&#39; + 1 more'), h);
+  assert.ok(h.includes('⏳ &lt;b&gt;&amp;&quot;&#39;</span><span class="ajl-tail"> + 1 more'), h);   // changed: name and tail spans
   assert.ok(h.includes('title="&lt;b&gt;&amp;&quot;&#39;\nsecond"'), h);
   assert.ok(!h.includes('<b>'), 'no raw markup from a job name');
   assert.strictEqual((h.match(/"/g) || []).length % 2, 0, 'attribute quotes stay balanced');

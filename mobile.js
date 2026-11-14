@@ -1764,7 +1764,8 @@ function agentRowHtml(a, opts) {
   const working = !done && !jobOnly && (isBusy(a.name) || viaWorkers);
   const dotCls = question ? ' question' : working ? ' busy' : jobOnly ? ' joby' : statusKnown ? ' idle' : '';
   const job = !done && opts && opts.job ? opts.job : null;
-  const jobHtml = job ? `<div class="agent-job" title="${esc(activeJobTitle(job))}">⏳ ${esc(activeJobLabel(job, Date.now()))}</div>` : '';
+  // the name may be cut short (ellipsis); the tail (' + N more · 4 min') never shrinks, so the time always shows
+  const jobHtml = job ? `<div class="agent-job" title="${esc(activeJobTitle(job))}"><span class="ajl-name">⏳ ${esc(job.names[0])}</span><span class="ajl-tail">${esc(activeJobTail(job, Date.now()))}</span></div>` : '';
   const sub = (done
     ? '<div class="agent-model working">✓ done</div>'
     : jobOnly
@@ -1891,7 +1892,12 @@ function activeJobsRelabel() {
   for (const el of list.querySelectorAll('.active-sec .agent-row')) {
     const info = activeJobs[el.dataset.agent];
     const j = el.querySelector('.agent-job');
-    if (info && j) { j.textContent = '⏳ ' + activeJobLabel(info, Date.now()); j.title = activeJobTitle(info); }
+    if (info && j) {
+      const nm = j.querySelector('.ajl-name'), tl = j.querySelector('.ajl-tail');
+      if (nm) nm.textContent = '⏳ ' + info.names[0];
+      if (tl) tl.textContent = activeJobTail(info, Date.now());
+      j.title = activeJobTitle(info);
+    }
   }
 }
 document.addEventListener('visibilitychange', activeJobsSync);
@@ -5688,11 +5694,15 @@ function activeJobsFrom(jobs, visibleNames) {
   }
   return out;
 }
-function activeJobLabel(info, now) {
+function activeJobTail(info, now) {
   if (!info || !info.count) return '';
   const m = Math.max(0, Math.floor(((now == null ? Date.now() : now) - info.since) / 60000));
   const t = m < 1 ? '<1 min' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
-  return `${info.names[0]}${info.count > 1 ? ` + ${info.count - 1} more` : ''} \u00B7 ${t}`;
+  return `${info.count > 1 ? ` + ${info.count - 1} more` : ''} \u00B7 ${t}`;
+}
+function activeJobLabel(info, now) {
+  if (!info || !info.count) return '';
+  return `${info.names[0]}${activeJobTail(info, now)}`;
 }
 function activeJobTitle(info) {
   return info && info.names ? info.names.join('\n') : '';
