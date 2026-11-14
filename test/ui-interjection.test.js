@@ -83,7 +83,9 @@ test('the phone drops every in-progress line of the running turn from the histor
   assert.ok(mob.includes('const flagged = chatHistory.filter(e => e && e.inProgress);'));
   assert.ok(mob.includes('chatHistory = chatHistory.filter(e => !(e && e.inProgress));'));
   assert.doesNotMatch(mob, /chatHistory\[chatHistory\.length - 1\]\.inProgress \? chatHistory\.pop\(\)/, 'no longer only a last entry');
-  assert.ok(mob.includes('chatHistory = hist.filter(e => !(e && e.inProgress)); histGen++;'), 'the re-read of history too');
+  // the re-read of history too (before the paged merge with older pages already loaded)
+  assert.ok(mob.includes('hist = hist.filter(e => !(e && e.inProgress));'), 'the re-read of history too');
+  assert.doesNotMatch(mob, /hist\[hist\.length - 1\]\.inProgress\) hist\.pop\(\)/, 'the re-read drops every flagged line, not only a last one');
   const app = read('app.js');
   assert.ok(app.includes("(msg.base > 0 && prev ? prev.text : '') + (msg.content || '')"), 'the desktop joins the flagged pieces for the re-attach\'s text so far');
 });
