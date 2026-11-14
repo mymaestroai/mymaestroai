@@ -111,7 +111,29 @@ test('1: the store lets a real I/O error on the agent folder through, and treats
   try { await assert.rejects(broken.findSessionByCall('biographer', 'call-none'), (e) => e.code === 'EIO'); } finally { fs.promises.readdir = orig; }
 });
 
-test('1: a damaged manifest in the window makes a miss inconclusive (503); a match elsewhere still wins; a clean miss is 409', async () => {
+function captureLog(fn) {
+  const lines = []; const orig = console.log;
+  console.log = (...a) => { lines.push(a.join(' ')); };
+  return Promise.resolve().then(fn).then((r) => { console.log = orig; return { r, lines }; }, (e) => { console.log = orig; throw e; });
+}
+
+test('1: a damaged session is skipped: an unknown call id is a miss, logged once per hour', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  await t.startCall();
+  fs.writeFileSync(manifestFile(t, a.sessionId), Buffer.from('not a sealed file'));
+  const { r, lines } = await captureLog(async () => [
+    await t.real.findSessionByCall('biographer', 'call-unknown-x'),
+    await t.real.findSessionByCall('biographer', 'call-unknown-y'),
+  ]);
+  assert.deepStrictEqual(r, [null, null]);
+  assert.deepStrictEqual(lines, [`[recordings] skipped a session that does not open: biographer/${a.sessionId}`]);
+  t.clock.t += 61 * MIN;
+  const again = await captureLog(() => t.real.findSessionByCall('biographer', 'call-unknown-x'));
+  assert.strictEqual(again.lines.length, 1);
+});
+
+test('1: a damaged manifest in the window is skipped (409, logged once); a match elsewhere still wins', async () => {
   const t = fx();
   const a = await t.startCall();
   const b = await t.startCall();   // another call, a later session
@@ -123,9 +145,10 @@ test('1: a damaged manifest in the window makes a miss inconclusive (503); a mat
   // damage the first session's manifest
   fs.writeFileSync(manifestFile(t, a.sessionId), Buffer.from('not a sealed file'));
   routes.resetForTests();
-  const bad = await t.call(tr('call-unknown-2'));
-  assert.strictEqual(bad.statusCode, 503);
-  assert.deepStrictEqual(bad.json(), { error: 'try_later' });
+  const { r: bad, lines } = await captureLog(() => t.call(tr('call-unknown-2')));
+  assert.strictEqual(bad.statusCode, 409);
+  assert.deepStrictEqual(bad.json(), { error: 'not_recording' });
+  assert.deepStrictEqual(lines, [`[recordings] skipped a session that does not open: biographer/${a.sessionId}`]);
   // the other session is found even though one in the window is damaged
   await t.real.addSegment('biographer', b.sessionId, { speaker: 'person', wav: wav(tone(800)) });
   const ok = await t.call(tr(b.callId));
