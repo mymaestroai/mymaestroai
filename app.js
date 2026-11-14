@@ -11023,7 +11023,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceCreateAudioFocus(opts) {
       const o = opts || {};
       const doc = o.doc, urlApi = o.URL, BlobCtor = o.Blob;
-      let el = null, src = null, running = false;
+      let el = null, src = null, running = false, gen = 0;   // gen: a play() of an earlier start never changes a later one's state
       function make() {
         if (el) return el;
         if (!doc || typeof doc.createElement !== 'function') return null;
@@ -11048,12 +11048,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           try {
             const a = make();
             if (!a || typeof a.play !== 'function') return Promise.resolve(false);
+            const my = ++gen;
             const p = a.play();
             running = true;
-            return Promise.resolve(p).then(() => true, () => { running = false; return false; });
+            return Promise.resolve(p).then(() => my === gen, () => { if (my === gen) running = false; return false; });
           } catch { running = false; return Promise.resolve(false); }
         },
         stop() {
+          gen++;
           running = false;
           if (!el) return;
           try { if (typeof el.pause === 'function') el.pause(); } catch {}
@@ -13622,9 +13624,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Keep Bluetooth awake: an inaudible hiss on the same output context as the replies; the controller starts and stops it.
       let keepAlive = null;
       if (voicePrefsNow().keepAlive !== false && typeof voiceCreateKeepAlive === 'function') { try { const kc = voiceOutputCtx(); if (kc) keepAlive = voiceCreateKeepAlive({ ctx: kc }); } catch { keepAlive = null; } }
-      // Audio focus: a looping media element, so a phone browser takes focus and other apps pause. A desktop browser has none to take: the hint shows only if play() is refused.
+      // Audio focus: a looping media element, so a phone browser takes focus and other apps pause. Only on Android (a tablet on this page): a desktop
+      // browser has no focus to take, and a playing element would only draw the media keys and the browser's media hub to this tab.
       let focus = null;
-      if (typeof voiceCreateAudioFocus === 'function') {
+      if (typeof voiceCreateAudioFocus === 'function' && typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '')) {
         try {
           focus = window.__voiceFocusOne || (window.__voiceFocusOne = voiceCreateAudioFocus({ doc: document, URL, Blob }));   // one element and one sound for the page, reused by every call
           focus.start().then((ok) => { const h = !ok && S.focus === focus && typeof voiceById === 'function' ? voiceById(`vcb-focushint-${chatId}`) : null; if (h) h.hidden = false; });

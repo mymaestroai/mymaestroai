@@ -121,6 +121,24 @@ test('each page makes one focus element and one sound, reused by every call (no 
   for (const f of ['app.js', 'mobile.js']) assert.ok(/window\.__voiceFocusOne \|\| \(window\.__voiceFocusOne = voiceCreateAudioFocus\(/.test(read(f)), f);
 });
 
+test('a play() of an earlier start never changes a later start (review r1)', async () => {
+  const plays = [];
+  const el = { setAttribute() {}, style: {}, play() { let res, rej; const p = new Promise((a, b) => { res = a; rej = b; }); plays.push({ res, rej }); return p; }, pause() {} };
+  const doc = { createElement: () => el, body: { appendChild() {} } };
+  const f = voiceCreateAudioFocus({ doc, URL: { createObjectURL: () => 'blob:x' }, Blob: function B() {} });
+  const a = f.start(); f.stop();
+  const b = f.start();
+  plays[1].res();
+  assert.strictEqual(await b, true);
+  plays[0].rej(new Error('interrupted by pause'));
+  assert.strictEqual(await a, false);
+  assert.strictEqual(f.running, true, 'the later call is still marked running');
+});
+
+test('the desktop page takes audio focus only on Android (no media keys or media hub drawn to a desktop tab)', () => {
+  assert.ok(/if \(typeof voiceCreateAudioFocus === 'function' && typeof navigator !== 'undefined' && \/Android\/i\.test\(navigator\.userAgent \|\| ''\)\) \{/.test(read('app.js')));
+});
+
 test('the synced blocks carry the new functions', () => {
   for (const f of ['app.js', 'mobile.js']) { const s = read(f); assert.strictEqual(s.split('function voiceFocusWav(').length, 2, f); assert.strictEqual(s.split('function voiceCreateAudioFocus(').length, 2, f); }
 });
