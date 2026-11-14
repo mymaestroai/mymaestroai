@@ -24,6 +24,7 @@ const recentOwn = new Map();   // agent -> time our own stream for it ended (ded
 let pendingImages = [];
 let stick = true;
 const live = {};               // name -> { busy, busySince, activity, pendingQuestion } from the hub
+const openTurns = {};          // name -> [turnIds] the hub started and has not ended (activeTurnStart / activeTurnEnd)
 let statusKnown = false;       // true once the hub told us anything about busy state (older hubs never do)
 let workingFilter = false;     // Agents list shows only working agents
 const reattaches = new Map();  // agent -> { agent, text, bubble, line, partial, startedAt } after a dropped stream
@@ -1490,11 +1491,12 @@ function applySnapshot(map, repaint = true, opts = {}) {
       patch[k] = k === 'worker' ? busyIsWorker(name, s) : (s[k] || null);
     }
     setLive(name, patch);
+    if (!patch.busy) delete openTurns[name];   // the hub says idle: a turn whose end this page missed is not open any more
   }
   for (const name of Object.keys(live)) {
     if (name in map) continue;
     if (busyIsWorker(name, live[name])) { if (!namedOnly) delete live[name]; }   // a worker that is gone, not an agent gone idle
-    else setLive(name, { busy: false });
+    else { setLive(name, { busy: false }); delete openTurns[name]; }
   }
   if (repaint) paintStatus();
   // Woke up (or just loaded) while the open chat's agent is mid-turn: follow that turn.
@@ -1517,6 +1519,13 @@ async function pollStatus() {
     if (d && d.agents) applySnapshot(d.agents);
   } catch {}
   pollApprovals();
+}
+// After a turn ends, ask the hub once (debounced) whether the agent is still busy: a reply can still be running without a
+// turn of its own (or another turn's start can have gone missing), and the event stream sends no new snapshot by itself.
+let _statusSoon = null;
+function pollStatusSoon() {
+  if (_statusSoon) return;
+  _statusSoon = setTimeout(() => { _statusSoon = null; pollStatus(); }, 800);
 }
 
 function isBusy(name) {
@@ -1763,7 +1772,9 @@ function renderWorkingChip() {
 // opts.active: a row of the Active section; when only the agent's temporary workers run it still reads as working.
 function agentRowHtml(a, opts) {
   const done = !!(opts && opts.done);
-  const jobOnly = !!(opts && opts.jobOnly) && !done;   // working only through a background job: hollow dot, the job line instead of the status
+  // working only through a background job: hollow dot, the job line instead of the status. A busy agent always keeps the busy
+  // look (yellow dot and status line); its job line is drawn below the status.
+  const jobOnly = !!(opts && opts.jobOnly) && !done && !isBusy(a.name);
   const viaWorkers = !!(opts && opts.active) && !done && !jobOnly && !isBusy(a.name);
   const n = unread[a.name] || 0;
   const s = live[a.name];
@@ -6360,6 +6371,21 @@ function activeMembersChanged(a, b) {
 function activeTitle(state) {
   return `Active ${((state && state.rows) || []).length}`;
 }
+function activeTurnStart(open, agent, turnId) {
+  if (!open || !agent) return false;
+  const ids = open[agent] || (open[agent] = []);
+  if (turnId && ids.indexOf(turnId) < 0) ids.push(turnId);
+  if (ids.length > 20) ids.splice(0, ids.length - 20);   // a lost turn_end must not pin the agent busy forever
+  return ids.length > 0;
+}
+function activeTurnEnd(open, agent, turnId) {
+  if (!open || !agent) return false;
+  const ids = open[agent] || [];
+  const i = turnId ? ids.indexOf(turnId) : -1;
+  if (i >= 0) ids.splice(i, 1);
+  if (!ids.length) delete open[agent];
+  return ids.length > 0;
+}
 // ── active agents helpers (end) ──
 // ── busy and hub workers helpers (begin) ──
 function busyIsWorker(name, entry) {
@@ -10267,6 +10293,7 @@ async function compressNow() {
 }
 
 function onTurnStart(ev) {
+  if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
   if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
   setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin) });
   const own = ev.origin?.kind === 'user' && ownTurnFor(ev.agent);
@@ -10414,7 +10441,9 @@ function onForOwner(ev) {
 }
 
 function onTurnEnd(ev) {
-  setLive(ev.agent, { busy: false });
+  // another turn of the same agent still open (the hub started it before this one ended): the agent stays busy
+  if (!(ev && ev.agent && activeTurnEnd(openTurns, ev.agent, ev.turnId))) setLive(ev.agent, { busy: false });
+  if (ev && ev.agent) pollStatusSoon();
   if (ev.agent) wkSettleAgent(ev.agent, ev.turnId || null);
   if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }
   if (ev.agent && ev.agent === current) setTimeout(() => refreshCtx(ev.agent), 3500);   // the hub records the size 2.5 s after the turn

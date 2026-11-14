@@ -6564,6 +6564,7 @@
     // drawn (only this browser's own in-flight replies show, as before).
     const agentStatus = {};          // name -> { busy, busySince, activity, pendingQuestion }
     const localBusy = new Map();     // name -> ISO time this browser started streaming a reply
+    const openTurns = {};            // name -> [turnIds] the hub started and has not ended (activeTurnStart / activeTurnEnd)
     let statusKnown = false;
     let busyFilterOn = false;
 
@@ -6593,15 +6594,18 @@
         return line;
       };
       const dd = copy.querySelector('.agent-status');
+      // a busy agent always keeps the busy look (yellow dot and status line); the job tag sits below it
+      const st = agentStatus[row.name];
+      const jobOnly = !!row.jobOnly && !(st && (st.busy || st.pendingQuestion)) && !localBusy.has(row.name);
       copy.classList.toggle('active-done', row.doneAt != null);
-      copy.classList.toggle('active-joby', !!row.jobOnly && row.doneAt == null);
+      copy.classList.toggle('active-joby', jobOnly && row.doneAt == null);
       if (row.doneAt != null) copy.classList.remove('job-busy');   // a finished row is not "working" for the working-only filter
       if (row.doneAt != null) {
         copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done';
         if (dd) { dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done'; }
         return;
       }
-      if (row.jobOnly) {   // working only through a background job: no status line, a hollow muted dot (the job tag says the rest)
+      if (jobOnly) {   // working only through a background job: no status line, a hollow muted dot (the job tag says the rest)
         copy.classList.remove('is-busy');
         if (line) line.remove();
         if (dd) { dd.className = 'agent-status live-joby'; dd.textContent = ''; dd.title = 'Running a background job'; }
@@ -6803,10 +6807,13 @@
       if (!map || typeof map !== 'object') return;
       statusKnown = true;
       const namedOnly = !!(arguments[1] && arguments[1].namedOnly);
-      for (const [name, s] of Object.entries(map)) setAgentLive(name, statusPatchOf(s, namedOnly));
+      for (const [name, s] of Object.entries(map)) {
+        setAgentLive(name, statusPatchOf(s, namedOnly));
+        if (!s.busy) delete openTurns[name];   // the hub says idle: a turn whose end this page missed is not open any more
+      }
       for (const name of Object.keys(agentStatus)) {
         if (name in map) continue;
-        if (!busyIsWorker(name, agentStatus[name])) setAgentLive(name, { busy: false });
+        if (!busyIsWorker(name, agentStatus[name])) { setAgentLive(name, { busy: false }); delete openTurns[name]; }
         else if (!namedOnly) delete agentStatus[name];   // a worker that is gone
       }
       paintAllAgentStatus();
@@ -7445,6 +7452,7 @@
     }
 
     async function onHubTurnStart(ev) {
+      if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
       setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin) });
       let chat = findSoloChat(ev.agent);
@@ -7874,7 +7882,10 @@
     }
 
     function onHubTurnEnd(ev) {
-      setAgentLive(ev.agent, { busy: false });
+      // another turn of the same agent still open (the hub started it before this one ended): the agent stays busy; then ask the
+      // hub once (debounced) whether it is still busy, since a reply can run without a turn of its own and no snapshot follows
+      if (!(ev && ev.agent && activeTurnEnd(openTurns, ev.agent, ev.turnId))) setAgentLive(ev.agent, { busy: false });
+      if (ev && ev.agent) scheduleWorkerStatusPoll();
       if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
       { const c = findSoloChat(ev.agent); if (c) { c.inProgress = null; setTimeout(() => compactionRefresh(c.id), 3500); } }   // context % moved (the hub records it 2.5 s after the turn)
       const t = hubTurns[ev.turnId]; delete hubTurns[ev.turnId];
@@ -16941,6 +16952,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function activeTitle(state) {
       return `Active ${((state && state.rows) || []).length}`;
+    }
+    function activeTurnStart(open, agent, turnId) {
+      if (!open || !agent) return false;
+      const ids = open[agent] || (open[agent] = []);
+      if (turnId && ids.indexOf(turnId) < 0) ids.push(turnId);
+      if (ids.length > 20) ids.splice(0, ids.length - 20);   // a lost turn_end must not pin the agent busy forever
+      return ids.length > 0;
+    }
+    function activeTurnEnd(open, agent, turnId) {
+      if (!open || !agent) return false;
+      const ids = open[agent] || [];
+      const i = turnId ? ids.indexOf(turnId) : -1;
+      if (i >= 0) ids.splice(i, 1);
+      if (!ids.length) delete open[agent];
+      return ids.length > 0;
     }
     // ── active agents helpers (end) ──
     // ── busy and hub workers helpers (begin) ──

@@ -174,6 +174,7 @@ function desk(o) {
     // changed: the poll only runs for a known admin (window.hubMe.isAdmin === true); o.me overrides the signed-in user (null = not known yet)
     window: { hubMe: o.me === undefined ? { isAdmin: true } : o.me },
     paintAgentsWorking: () => { rec.chips++; },
+    agentStatus: o.status || {}, localBusy: o.localBusy || new Map(),   // activeDress: a busy agent keeps the busy look
     activeTopOn: () => (o.on === undefined ? true : o.on),
     document: { visibilityState: 'hidden', addEventListener: (ev, fn) => { rec.listeners[ev] = fn; }, createElement: () => el('') },
     fetch: async (url, opts) => {
@@ -520,6 +521,59 @@ test('phone agentRowHtml: a really busy row with a job keeps its status line and
   assert.ok(h.includes('class="agent-row is-busy"') && h.includes('class="dot busy"'), h);
   assert.ok(!h.includes('active-joby'));
   assert.ok(h.indexOf('class="agent-model working"') < h.indexOf('class="agent-job"'), 'job line after the status line');
+});
+
+test('phone agentRowHtml: a busy agent keeps the busy look even when its row says jobOnly (owner report 05:52)', () => {
+  const row = phoneRow({ isBusy: (n) => n === 'maestro', busyText: () => '⏳ replying · 3m' });
+  const h = row({ name: 'maestro', model: 'x' }, { active: true, jobOnly: true, job: jobInfo(['live server'], 10 * 60 * MIN) });
+  assert.ok(h.includes('class="agent-row is-busy"') && h.includes('class="dot busy"'), 'yellow dot: ' + h);
+  assert.ok(!h.includes('active-joby') && !h.includes('dot joby'), 'never the hollow job-only dot for a busy agent');
+  assert.ok(h.includes('<div class="agent-model working">⏳ replying · 3m</div>'), 'the yellow status line');
+  assert.ok(h.indexOf('class="agent-model working"') < h.indexOf('class="agent-job"'), 'the job line after the status');
+  const idle = phoneRow()({ name: 'kim', model: 'x' }, { active: true, jobOnly: true, job: jobInfo(['backup']) });
+  assert.ok(idle.includes('class="dot joby"') && idle.includes('active-joby'), 'idle with a job: the job-only look stays');
+});
+
+test('desktop activeDress: a busy agent keeps the busy look even when its row says jobOnly', () => {
+  for (const o of [{ status: { maestro: { busy: true } } }, { localBusy: new Map([['maestro', '2026-11-14T10:00:00Z']]) }]) {
+    const d = desk(o);
+    const { copy, info, dd } = freshCopy();
+    const orig = el(''); const ol = el('agent-busy-line'); ol.textContent = '⏳ replying'; orig.appendChild(ol);
+    const od = el('agent-status live-busy'); orig.appendChild(od);
+    info.appendChild(el('agent-busy-line'));
+    d.api.activeDress(copy, { name: 'maestro', doneAt: null, jobOnly: true }, orig);
+    assert.ok(!copy.classList.contains('active-joby'), 'no job-only class for a busy agent');
+    assert.ok(copy.classList.contains('is-busy'));
+    assert.strictEqual(dd.className, 'agent-status live-busy', 'the yellow dot');
+  }
+});
+
+test('turn bookkeeping: a turn_end leaves the agent busy while another of its turns is open', () => {
+  const open = {};
+  assert.strictEqual(L.activeTurnStart(open, 'maestro', 't1'), true);
+  assert.strictEqual(L.activeTurnStart(open, 'maestro', 't2'), true, 'the next turn started before the first ended');
+  assert.strictEqual(L.activeTurnEnd(open, 'maestro', 't1'), true, 't2 still open: busy');
+  assert.strictEqual(L.activeTurnEnd(open, 'maestro', 't2'), false, 'nothing open: idle');
+  assert.deepStrictEqual(open, {});
+  assert.strictEqual(L.activeTurnEnd(open, 'maestro', 'never-seen'), false, 'an unknown turn on an idle agent: idle');
+  L.activeTurnStart(open, 'sam', 'a'); L.activeTurnStart(open, 'sam', 'a');
+  assert.deepStrictEqual(open.sam, ['a'], 'a replayed turn_start is not counted twice');
+  for (let i = 0; i < 30; i++) L.activeTurnStart(open, 'kim', 'k' + i);
+  assert.strictEqual(open.kim.length, 20, 'lost ends cannot pile up');
+  assert.strictEqual(L.activeTurnStart(null, 'x', 'y'), false); assert.strictEqual(L.activeTurnEnd(open, '', 'y'), false);
+});
+
+test('both pages: turn_end clears busy only through activeTurnEnd, asks the hub again, and an idle snapshot clears open turns', () => {
+  const ms = cut(mob, 'function onTurnEnd(', 'function ');
+  assert.ok(/if \(!\(ev && ev\.agent && activeTurnEnd\(openTurns, ev\.agent, ev\.turnId\)\)\) setLive\(ev\.agent, \{ busy: false \}\);/.test(ms), ms.slice(0, 300));
+  assert.ok(ms.includes('pollStatusSoon();'));
+  assert.ok(cut(mob, 'function onTurnStart(', 'function ').includes('activeTurnStart(openTurns, ev.agent, ev.turnId);'));
+  assert.ok(cut(mob, 'function applySnapshot(', 'let wkGoneState').includes('if (!patch.busy) delete openTurns[name];'));
+  const ds = cut(app, 'function onHubTurnEnd(', 'function ');
+  assert.ok(/if \(!\(ev && ev\.agent && activeTurnEnd\(openTurns, ev\.agent, ev\.turnId\)\)\) setAgentLive\(ev\.agent, \{ busy: false \}\);/.test(ds));
+  assert.ok(ds.includes('scheduleWorkerStatusPoll();'));
+  assert.ok(cut(app, 'async function onHubTurnStart(', 'function ').includes('activeTurnStart(openTurns, ev.agent, ev.turnId);'));
+  assert.ok(cut(app, 'function applyStatusSnapshot(', 'let workerGoneState').includes('if (!s.busy) delete openTurns[name];'));
 });
 
 test('phone agentRowHtml: without opts (or without a job) there is no job markup; done rows drop the job', () => {
