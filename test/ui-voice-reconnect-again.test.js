@@ -148,6 +148,20 @@ test('reconnect: an accepted interjection still awaiting its response when an ou
   assert.deepStrictEqual(h.spoken, ['Reconnected.']);   // it was accepted, so nothing to repeat
 });
 
+test('reconnect: an interjection that fails because the connection dropped -> "Reconnected." then "Say that again."', async () => {
+  const h = harness(); await h.call.start();
+  let fail; h.interjected = [];
+  h.deps.isTurnRunning = () => true;
+  h.deps.interject = (t) => { h.interjected.push(t); return new Promise((_, rej) => { fail = rej; }); };
+  await h.say('actually make it blue');
+  assert.deepStrictEqual(h.interjected, ['actually make it blue']);
+  h.call.setLinkLost(true);
+  fail(new TypeError('Failed to fetch')); await tick(); await tick();   // the request dies with the link
+  h.call.setLinkLost(false); await tick();
+  await h.finish(); await h.finish(); await tick();
+  assert.deepStrictEqual(h.spoken, ['Reconnected.', 'Say that again.']);   // the words never arrived
+});
+
 test('reconnect: a long utterance begun in outage 1, going on across recovery and into outage 2 -> "Say that again." once per outage', async () => {
   const h = harness(); await h.call.start();
   h.call.setLinkLost(true);

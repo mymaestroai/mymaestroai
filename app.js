@@ -11997,6 +11997,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         } catch {
           awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity(''));
           if (!linkLost) { quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); }   // a lost connection is reported by the link watch, not as an error line
+          else linkDropped = true;   // sent text lost to the outage: "Say that again." follows "Reconnected."
           settle();
         }
       }
