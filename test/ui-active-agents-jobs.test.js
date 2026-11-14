@@ -554,3 +554,26 @@ test('desktop poll: each request carries an abort signal; a list older than 60 s
   assert.ok(app.includes('activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible)') && mob.includes('activeJobsFrom(activeJobsFresh() ? activeJobList : [], agents.map(a => a.name))'), 'both pages draw only a fresh list');
   assert.ok(mob.includes("api('/api/jobs', ac ? { signal: ac.signal } : {})"), 'the phone request carries the signal too');
 });
+test('desktop poll: freshness is judged when the answer arrives (a request started at 55 s and answered at 62 s repaints)', async () => {
+  const d = desk({ first: { status: 200, ok: true, jobs: [JOB('1', 'sam', 'a')] } });
+  await d.api.activeJobsPoll();
+  d.clock.now += 55000;
+  d.resp.next = { defer: true, jobs: [JOB('1', 'sam', 'a')] };    // the same list, slow to answer
+  const p = d.api.activeJobsPoll();
+  d.clock.now += 7000;                                               // expired while the request was out
+  assert.strictEqual(d.api.fresh(), false);
+  const paints = d.rec.paints;
+  d.rec.pending.shift()();
+  await p;
+  assert.strictEqual(d.rec.paints, paints + 1, 'the rows come back with the answer');
+  assert.strictEqual(d.api.fresh(), true);
+});
+test('both pages drop a superseded answer after the body read as well', () => {
+  for (const [page, open, close] of [[app, 'async function activeJobsPoll() {', "document.addEventListener('visibilitychange', activeJobsSync);"], [mob, 'async function activeJobsPoll() {', 'function activeJobsNow() {']]) {
+    const src = cut(page, open, close);
+    assert.ok(/const res = await [^\n]+\n\s*if \(seq !== activeJobsSeq\) return;/.test(src), 'checked after the request');
+    assert.ok(/const d = await res\.json\(\); if \(seq !== activeJobsSeq\) return;/.test(src), 'checked after the body read');
+    assert.ok(/\} catch \{\s*if \(seq !== activeJobsSeq\) return;/.test(src), 'and on failure');
+    assert.ok(/finally \{\s*if \(to\) clearTimeout\(to\);/.test(src), 'the timeout is cleared on every path');
+  }
+});

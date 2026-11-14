@@ -6698,8 +6698,7 @@
     async function activeJobsPoll() {
       if (!activeJobsWanted()) return;
       const seq = ++activeJobsSeq;   // only the newest request may change the list (an older answer arriving late is dropped)
-      const wasFresh = activeJobsFresh();
-      let list = null, good = false;
+      let list = null, good = false, wasFresh = true;
       const ac = typeof AbortController === 'function' ? new AbortController() : null;
       const to = ac ? setTimeout(() => ac.abort(), ACTIVE_JOBS_TIMEOUT_MS) : null;   // a stalled request ends; the list also expires by itself
       try {
@@ -6710,7 +6709,7 @@
           if (activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
           list = [];
         } else if (!res.ok) throw new Error('HTTP ' + res.status);
-        else { const d = await res.json(); if (seq !== activeJobsSeq) return; list = Array.isArray(d && d.jobs) ? d.jobs : []; activeJobsOkAt = Date.now(); good = true; }
+        else { const d = await res.json(); if (seq !== activeJobsSeq) return; list = Array.isArray(d && d.jobs) ? d.jobs : []; wasFresh = activeJobsFresh(); activeJobsOkAt = Date.now(); good = true; }   // freshness as the answer arrives
       } catch {
         if (seq !== activeJobsSeq) return;
         if (!activeJobsFresh()) list = [];
