@@ -5970,6 +5970,7 @@ async function sendInterjection(agent) {
   input.value = '';
   input.style.height = 'auto';
   saveDraft(agent, '');
+  composerTypingPaint();
   stick = true;
   const userEl = addUserBubble(text, null);
   setBubbleTime(userEl, msgTimeLabel(Date.now()));
@@ -6002,6 +6003,7 @@ async function sendInterjection(agent) {
   }
   noteEl.textContent = `⚠ not delivered: ${error}`;
   if (current === agent && !input.value) { input.value = text; saveDraft(agent, text); }
+  composerTypingPaint();
 }
 
 // The hub no longer stops a turn when the browser goes away, so Stop has to say so explicitly.
@@ -6249,6 +6251,7 @@ function voiceInsert(agent, text) {
   if (current === agent) {
     const input = $('msg-input');
     input.value = join(input.value);
+    composerTypingPaint();
     input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
     saveDraft(agent, input.value);
   } else {
@@ -6561,6 +6564,7 @@ function voiceCallPaintHeld(list) {
 function voiceCallPanel(show) {
   const p = $('call-panel'); if (!p) return;
   p.hidden = !show;
+  callPanelCompactPaint();
   if (show) { const d = $('cp-dnd'); if (d) d.checked = false; return; }
   voiceCallPaintHeld([]); voiceCallPaintMeter(-100);
   const h = $('cp-heard'); if (h) h.textContent = '';
@@ -7372,12 +7376,30 @@ function restoreDraft(agent) {
   const input = $('msg-input'); if (!input) return;
   const d = draftsAll()[agent];
   input.value = d && typeof d.text === 'string' ? d.text : '';
+  composerTypingPaint();
   input.style.height = 'auto';
   if (input.value) input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
 }
 // A reload the app wants (a new version, a hub restart) waits while the message box is in use: focused or holding
 // text. At most 10 minutes; the draft is saved either way, so even a reload that has to happen brings the text back.
 function typingNow() { const i = $('msg-input'); return !!i && (document.activeElement === i || !!i.value.trim()); }
+// The phone's composer while the message box has focus (the keyboard is up): #composer gets 'typing' (the CSS hides attach, camera
+// and the voice strip on a narrow screen so the box gets the width). Leaving the box brings them back, also with a draft in it, so a
+// file can be attached to a typed message. Called on focus / blur / input and after the page fills or clears the box.
+function composerTypingPaint() {
+  const c = $('composer'), i = $('msg-input'); if (!c || !i) return;
+  c.classList.toggle('typing', document.activeElement === i);
+}
+// The call panel in compact mode (box focused, or a short screen such as a phone with the keyboard open): the CSS keeps only the
+// state line, held items and mic trouble. Never inside the call display's drawer, which has its own room.
+function callPanelCompactPaint() {
+  const p = $('call-panel'), i = $('msg-input'); if (!p) return;
+  const vv = window.visualViewport;
+  const h = vv && vv.height ? vv.height : window.innerHeight;
+  const inDrawer = !!(p.closest && p.closest('.ucd-drawer'));
+  p.classList.toggle('compact', !inDrawer && ((!!i && document.activeElement === i) || h < 600));
+}
+function composerPaintAll() { composerTypingPaint(); callPanelCompactPaint(); }
 
 // `fallback` is set when an interjection found the turn already over: the text and its user
 // bubble are reused instead of being read from the composer again.
@@ -7397,6 +7419,7 @@ async function sendMessage(fallback) {
     input.value = '';
     input.style.height = 'auto';
     saveDraft(agent, '');
+    composerTypingPaint();
     pendingImages = [];
     renderPreviews();
   }
@@ -7436,6 +7459,7 @@ async function sendMessage(fallback) {
       } else if (current === agent) {
         input.value = text;
         saveDraft(agent, text);
+        composerTypingPaint();
         pendingImages = images;
         renderPreviews();
         toast('Agent is busy; it will finish first');
@@ -7643,7 +7667,7 @@ async function reattachCheck(ra) {
     if (stillBusy === false && waited > 15000) {
       if (ui < 0 && ra.text) {
         const input = $('msg-input');
-        if (input && !input.value && current === ra.agent) input.value = ra.text;
+        if (input && !input.value && current === ra.agent) { input.value = ra.text; composerTypingPaint(); }
         finishReattach(ra, '⚠ The hub has no record of this message, so it is back in the input box. If you are not sure it was lost, reload the chat before sending it again.', false);
       } else {
         finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ ${displayName(ra.agent)} stopped without a reply (the hub may have restarted).`, false);
@@ -9186,6 +9210,11 @@ function wire() {
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; saveDraft(current, input.value); });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
+  for (const ev of ['focus', 'blur', 'input']) input.addEventListener(ev, composerPaintAll);
+  const vvPaint = window.visualViewport;
+  if (vvPaint) vvPaint.addEventListener('resize', callPanelCompactPaint);
+  window.addEventListener('resize', callPanelCompactPaint);
+  composerPaintAll();
   // Chrome's spell-check menu (a tap on an underlined word, Backspace with the menu open) hides the soft keyboard
   // while the box keeps focus, and Android only reopens it on a new focus. So a keyboard that goes away right after
   // a tap on the box or an edit in it, with the box still focused, is brought back by blurring and refocusing the box.

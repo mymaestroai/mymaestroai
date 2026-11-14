@@ -40,9 +40,12 @@ const fakeCall = (log, withRelease) => {
 const fakeVc = (log, withRelease = true) => ({ agent: 'bob', call: fakeCall(log, withRelease), vad: { stop: () => { log.push('vad.stop'); return Promise.resolve(); } }, lastFrame: Date.now(), lastTick: Date.now() });
 
 // ── item 7: the controls in the chat ──
-test('chat controls: a Voice settings button beside the mic, a visible mode chip, a panel with every control, all hidden until voice is on', () => {
-  const mic = html.indexOf('id="mic-btn"'), btn = html.indexOf('id="voice-settings-btn"'), box = html.indexOf('id="msg-input"');
-  assert.ok(mic > 0 && btn > mic && btn < box, 'the button is right after the mic, before the message box');
+test('chat controls: a Voice settings button beside the mode chip, a visible mode chip, a panel with every control, all hidden until voice is on', () => {
+  // changed on purpose (owner, 2026-11-13: the message box was too small in portrait): the button moved from the composer row to the
+  // voice strip, beside the Hands-free chip, so the message box gets its width
+  const strip = html.indexOf('id="voice-strip"'), chip = html.indexOf('id="voice-mode-chip"'), btn = html.indexOf('id="voice-settings-btn"'), box = html.indexOf('id="msg-input"');
+  const stripEnd = html.indexOf('</div>', strip);
+  assert.ok(strip > 0 && chip > strip && btn > chip && btn < stripEnd && btn < box, 'the button is in the voice strip, after the mode chip');
   assert.match(html, /id="voice-settings-btn"[^>]*aria-label="Voice settings"[^>]*hidden/);
   assert.match(html, /id="voice-settings-btn"[^>]*aria-controls="voice-panel"/);
   assert.match(html, /id="voice-strip" hidden/);
