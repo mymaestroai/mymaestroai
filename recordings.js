@@ -53,7 +53,8 @@ function fmtSize(bytes) {
   const mb = (Number(bytes) || 0) / 1048576;
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
-function fmtHours(ms) { return ((Number(ms) || 0) / 3600000).toFixed(1); }
+// Speech time in plain words: minutes under an hour ("4 minutes of speech"), else hours with one decimal ("2.5 hours of speech").
+function fmtSpeech(ms) { const m = (Number(ms) || 0) / 60000; if (m < 60) { const n = Math.max(m > 0 ? 1 : 0, Math.round(m)); return `${n} ${n === 1 ? 'minute' : 'minutes'} of speech`; } return `${(m / 60).toFixed(1)} hours of speech`; }
 const when = (iso) => new Date(iso);   // shown in the person's own time zone
 const dateOf = (iso) => when(iso).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 const timeOf = (iso) => when(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
@@ -76,7 +77,7 @@ async function openAgent(agent, canGoBack) {
   const head = [];
   if (canGoBack) head.push(el('button', { type: 'button', class: 'btn', onclick: start, text: '← All agents' }));
   head.push(el('h2', { text: agent.display || agent.name, style: 'margin-top:12px' }));
-  head.push(el('div', { class: 'summary', text: `${agent.sessions} sessions, ${fmtHours(agent.speechMs)} hours of speech, ${fmtSize(agent.bytes)} on disk` }));
+  head.push(el('div', { class: 'summary', text: `${agent.sessions} sessions, ${fmtSpeech(agent.speechMs)}, ${fmtSize(agent.bytes)} on disk` }));
   head.push(el('a', { class: 'btn btn-primary', href: `${API}/${enc}/all.zip`, download: '', text: 'Download everything' }));
   head.push(el('div', { class: 'note', text: 'One file with every recording, its transcripts and details.' }));
   const listBox = el('div', { id: 'sessions' }, plain('Loading…'));

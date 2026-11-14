@@ -672,20 +672,20 @@ test('display: "trouble" reads "Recording (some speech not sent yet)" with the r
   assert.strictEqual(w.display.info().recording, 'trouble');
 });
 
-test('display, None: no view, so the badge sits in the page\'s call bar before Hang up; it moves into the view and back with Back to chat', async () => {
+test('display, None: no view, so the badge sits on its own line just above the page\'s call bar (never in its button row, so Hang up keeps its place); it moves into the view and back with Back to chat', async () => {
   const w = displayWorld('none');
   w.display.start(); await tick();
   assert.strictEqual(w.dom.find('ucd-overlay').length, 0);
   w.display.setRecording({ state: 'on' });
-  assert.strictEqual(rec(w).parentNode, w.bar, 'in the call bar');
-  assert.strictEqual(rec(w).nextSibling, w.hang, 'right before Hang up, never over it');
+  assert.notStrictEqual(rec(w).parentNode, w.bar, 'not in the row with Hang up (a narrow phone pushed Hang up off the screen)');
+  assert.strictEqual(rec(w).nextSibling, w.bar, 'its own line, right above the bar');
+  assert.strictEqual(rec(w).getAttribute('data-place'), 'bar');
   const o = displayWorld('orb');
   o.display.start(); await tick();
   o.display.setRecording({ state: 'on' });
   assert.ok(o.dom.find('ucd-stage')[0].contains(rec(o)));
   o.display.hideToChat();
-  assert.strictEqual(rec(o).parentNode, o.bar, 'back to chat: in the call bar');
-  assert.ok(rec(o).nextSibling && rec(o).nextSibling !== o.hang ? rec(o).nextSibling.className.includes('ucd-reopen') : rec(o).nextSibling === o.hang, 'beside Show display / Hang up');
+  assert.strictEqual(rec(o).nextSibling, o.bar, 'back to chat: its own line above the call bar');
   o.display.showView();
   assert.ok(o.dom.find('ucd-stage')[0].contains(rec(o)), 'the view is shown again: in its stage');
 });

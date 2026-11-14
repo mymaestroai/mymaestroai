@@ -87,6 +87,16 @@ test('updateAgentField stores it cleaned, lists it cleaned, and the defaults rem
   assert.ok(!('recordings' in onDisk('biographer')), 'null removes it');
 });
 
+test('a partial change is merged into the stored setting: it never switches recording off or empties the list', async () => {
+  await agentsLib.updateAgentField('biographer', { recordings: { keep: true, allowed: [OWNER] } });
+  assert.deepStrictEqual(await agentsLib.updateAgentField('biographer', { recordings: { mic: 'unprocessed' } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').recordings, { ...DEFAULTS, keep: true, allowed: [OWNER], mic: 'unprocessed' });
+  await agentsLib.updateAgentField('biographer', { recordings: { keep: false } });
+  assert.deepStrictEqual(onDisk('biographer').recordings, { ...DEFAULTS, keep: false, allowed: [OWNER], mic: 'unprocessed' }, 'keep off keeps the list');
+  await agentsLib.updateAgentField('biographer', { recordings: null });
+  assert.ok(!('recordings' in onDisk('biographer')));
+});
+
 test('a hand-edited bad record in agents.json is cleaned on read', async () => {
   seed([base({ recordings: { keep: 'yes', allowed: ['sam', OWNER], consentLine: 5, mic: 'x' } })]);
   assert.deepStrictEqual((await listed('biographer')).recordings, { ...DEFAULTS, allowed: [OWNER] });
