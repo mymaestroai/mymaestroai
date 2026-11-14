@@ -9,23 +9,17 @@ const vm = require('node:vm');
 const { test, beforeEach } = require('node:test');
 const assert = require('node:assert');
 
-const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-settings-'));
-const HOME = path.join(ROOT, 'home');
-fs.mkdirSync(HOME, { recursive: true });
-process.env.HUB_HOME = HOME;   // before anything loads lib/hub-home
-
+// The whole lib/ is copied into a throwaway install (test/helpers/isolated-install.js): every module keeps its data under that
+// install's data/, never under the real one (symlinked modules would resolve to the real install and open its databases).
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('rec-settings-');
+const ROOT = ISO.root;
+const HOME = ISO.home;
 const REAL = path.join(__dirname, '..');
-const INST = path.join(ROOT, 'inst');
+const INST = ISO.inst;
 const AGENTS_FILE = path.join(INST, 'data', 'agents.json');
-fs.mkdirSync(path.join(INST, 'lib'), { recursive: true });
-fs.mkdirSync(path.join(INST, 'data'), { recursive: true });
-for (const f of fs.readdirSync(path.join(REAL, 'lib'))) {
-  const dst = path.join(INST, 'lib', f);
-  if (f === 'agents.js') fs.copyFileSync(path.join(REAL, 'lib', f), dst);
-  else fs.symlinkSync(path.join(REAL, 'lib', f), dst);
-}
 const agentsLib = require(path.join(INST, 'lib', 'agents.js'));
-const rs = require('../lib/recordings/settings');
+const rs = require(path.join(INST, 'lib', 'recordings', 'settings.js'));
 
 const OWNER = 'u_0000000000a1';
 const SAM = 'u_0000000000b2';

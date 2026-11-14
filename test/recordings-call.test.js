@@ -6,13 +6,18 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// Every lib/ module is loaded from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing it reads or
+// writes under data/ (users.json, settings.json, push subscriptions ...) is the real install's.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('rec-call-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
 const { Readable, Writable } = require('node:stream');
-const routes = require('../lib/voice/routes');
-const recIndex = require('../lib/recordings');
-const { createStore } = require('../lib/recordings/store');
-const { deriveKey } = require('../lib/recordings/crypt');
-const { createVoiceCalls } = require('../lib/voice/call');
-const manifest = require('../lib/voice/manifest');
+const routes = L('voice/routes');
+const recIndex = L('recordings');
+const { createStore } = L('recordings/store');
+const { deriveKey } = L('recordings/crypt');
+const { createVoiceCalls } = L('voice/call');
+const manifest = L('voice/manifest');
 
 const KEY = deriveKey(Buffer.alloc(32, 9));
 const sam = { id: 'u_0000000000b2', role: 'member', name: 'Sam' };

@@ -4,7 +4,12 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
-const tp = require('../lib/tool-policy');
+// Every lib/ module is loaded from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing it reads or
+// writes under data/ (users.json, settings.json, push subscriptions ...) is the real install's.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('tp-rec-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const tp = L('tool-policy');
 
 const HUB = tp.HUB_ROOT;
 const DIR = path.join(tp.HUB_HOME, 'call-recordings');

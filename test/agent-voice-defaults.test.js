@@ -9,21 +9,15 @@ const vm = require('node:vm');
 const { test, beforeEach } = require('node:test');
 const assert = require('node:assert');
 
-const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-defaults-'));
-const HOME = path.join(ROOT, 'home');
-fs.mkdirSync(HOME, { recursive: true });
-process.env.HUB_HOME = HOME;   // before anything loads lib/hub-home
-
+// The whole lib/ is copied into a throwaway install (test/helpers/isolated-install.js): every module keeps its data under that
+// install's data/, never under the real one (symlinked modules would resolve to the real install and open its databases).
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('voice-defaults-');
+const ROOT = ISO.root;
+const HOME = ISO.home;
 const REAL = path.join(__dirname, '..');
-const INST = path.join(ROOT, 'inst');
+const INST = ISO.inst;
 const AGENTS_FILE = path.join(INST, 'data', 'agents.json');
-fs.mkdirSync(path.join(INST, 'lib'), { recursive: true });
-fs.mkdirSync(path.join(INST, 'data'), { recursive: true });
-for (const f of fs.readdirSync(path.join(REAL, 'lib'))) {
-  const dst = path.join(INST, 'lib', f);
-  if (f === 'agents.js') fs.copyFileSync(path.join(REAL, 'lib', f), dst);
-  else fs.symlinkSync(path.join(REAL, 'lib', f), dst);
-}
 const agentsLib = require(path.join(INST, 'lib', 'agents.js'));
 
 const seed = (agents) => { fs.writeFileSync(AGENTS_FILE, JSON.stringify(agents, null, 2)); };
@@ -93,7 +87,7 @@ test('a member cannot PATCH voiceDefaults: the server guard refuses it; an admin
     let sent = null;
     const jsonResponse = (res, code, obj) => { sent = { code, obj }; return 'sent'; };
     const fn = vm.runInNewContext(`(function (req, body, access, jsonResponse, res) { ${guard}\n return 'continued'; })`, {});
-    const out = fn({ hubService, hubUser: user }, body, require('../lib/access'), jsonResponse, {});
+    const out = fn({ hubService, hubUser: user }, body, require(path.join(INST, 'lib', 'access.js')), jsonResponse, {});
     return { out, sent };
   };
   const member = { id: 'u2', role: 'member' }, admin = { id: 'u1', role: 'admin' };

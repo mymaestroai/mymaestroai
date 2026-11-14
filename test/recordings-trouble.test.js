@@ -6,16 +6,21 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// Every lib/ module is loaded from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing it reads or
+// writes under data/ (users.json, settings.json, push subscriptions ...) is the real install's.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('rec-trouble-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
 const { Readable, Writable } = require('node:stream');
-const routes = require('../lib/recordings/routes');
-const voiceRoutes = require('../lib/voice/routes');
-const trouble = require('../lib/recordings/trouble');
-const recIndex = require('../lib/recordings');
-const access = require('../lib/access');
-const { createPush } = require('../lib/push');
-const { createStore } = require('../lib/recordings/store');
-const { deriveKey } = require('../lib/recordings/crypt');
-const { createVoiceCalls } = require('../lib/voice/call');
+const routes = L('recordings/routes');
+const voiceRoutes = L('voice/routes');
+const trouble = L('recordings/trouble');
+const recIndex = L('recordings');
+const access = L('access');
+const { createPush } = L('push');
+const { createStore } = L('recordings/store');
+const { deriveKey } = L('recordings/crypt');
+const { createVoiceCalls } = L('voice/call');
 
 const KEY = deriveKey(Buffer.alloc(32, 7));
 const T0 = Date.UTC(2026, 10, 13, 22, 0, 0);
