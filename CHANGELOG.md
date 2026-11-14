@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The character moves more naturally in quiet moments of a call.** After about 13 seconds of silence, calm everyday movements join the listening ones, so the same few gestures no longer come back every minute and a half. The moment you speak, it turns back to listening.
 - **After a dropped connection, the call asks you to repeat yourself.** If you spoke while the connection was down, the call now says "Say that again." right after "Reconnected.", since those words never reached your Maestro.
 - **The phone's Voice sheet has the Voice loudness settings.** "Voice loudness, speaker" and "Voice loudness, Bluetooth / car" are now in the Voice sheet as well as in the voice panel, and both stay in step.
 - **"Showing only working" includes agents running a background job.** An agent that is busy with a long job now stays in the list when you filter to working agents, matching the Active section.

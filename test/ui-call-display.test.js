@@ -52,6 +52,7 @@ function fakePlayerFactory(kind, log, opts) {
     if (kind === 'orb') p.thinkingPulse = rec('thinkingPulse');   // the Character player has no thinkingPulse: the display must cope
     p.react = (m) => { p.calls.push(['react', m]); return typeof p.reactRet === 'function' ? p.reactRet(m) : p.reactRet; };
     p.cancelReaction = rec('cancelReaction');
+    if (kind === 'pack' && !o.noHearing) p.setHearing = o.hearingThrows ? () => { throw new Error('boom'); } : rec('setHearing');   // the orb has none (noHearing: a character view without it)
     if (o.info) p.getInfo = () => o.info;   // a player that reports its readiness (the real one does)
     p.destroy = () => { p.destroyed = true; p.calls.push(['destroy']); };
     if (o.deferred) {   // ready and pictureReady are settled by the test (a slow pack: the picture first, the tracks and patches later)
@@ -316,6 +317,24 @@ test('Character: the pack is fetched, its background and name are data, hello pl
   await w2.clk.advance(CD.HELLO_MS + 10); assert.strictEqual(w2.players[0].last('setState'), 'listening');
   const w3 = world({ prefs: { choice: 'pack:plain' } }); w3.display.start(); await flushP();
   assert.strictEqual(w3.display.activeFacePack(), null, 'a pack without reactions: no tag request');
+});
+
+test('Character: the controller state hearing tells the view the person is talking (setHearing(true)); listening and the rest say false; views without it cope', async () => {
+  const w = world({ prefs: { choice: 'pack:owl' } }); w.display.start(); await flushP();
+  const p = w.players[0];
+  w.display.setState('listening'); assert.strictEqual(p.last('setHearing'), false);
+  w.display.setState('hearing'); assert.strictEqual(p.last('setHearing'), true); assert.strictEqual(p.last('setState'), 'listening', 'the display state is still listening');
+  w.display.setState('listening'); assert.strictEqual(p.last('setHearing'), false);
+  w.display.setState('hearing'); w.display.setState('thinking'); assert.strictEqual(p.last('setHearing'), false); assert.strictEqual(p.last('setState'), 'thinking');
+  const ord = p.calls.map(c => c[0]).filter(n => n === 'setHearing' || n === 'setState'), i = ord.lastIndexOf('setHearing'); assert.strictEqual(ord[i + 1], 'setState', 'setHearing comes before the setState it goes with');
+  const w2 = world({ prefs: { choice: 'pack:owl' }, pack: { noHearing: true } }); w2.display.start(); await flushP();
+  assert.doesNotThrow(() => { w2.display.setState('listening'); w2.display.setState('hearing'); });
+  assert.strictEqual(w2.players[0].last('setState'), 'listening');
+  const w3 = world({ prefs: { choice: 'pack:owl' }, pack: { hearingThrows: true } }); w3.display.start(); await flushP();
+  assert.doesNotThrow(() => { w3.display.setState('listening'); w3.display.setState('thinking'); });
+  assert.strictEqual(w3.players[0].last('setState'), 'thinking', 'a throwing view never breaks the call');
+  const wo = world({ prefs: { choice: 'orb' } }); wo.display.start(); await flushP();
+  assert.doesNotThrow(() => wo.display.setState('hearing'));
 });
 
 test('reply audio gates the analyser: speaking only after the audio starts, the beak closes at once on end, cut and barge-in; device speech maps for both players', async () => {

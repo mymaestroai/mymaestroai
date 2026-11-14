@@ -314,6 +314,36 @@ test('selection: idle pose changes after the hold: settle, rest with B-to-B, ret
   nowRef.v += 61000; const back = s2.pick('idle'); assert.strictEqual(back.clip.name, 'up'); assert.strictEqual(back.kind, 'transition');
 });
 
+// ── calm idle clips in long quiet stretches ──
+const quietFixture = () => [
+  ...['a', 'b', 'c', 'd', 'e', 'f'].map(x => clip('listen-' + x, 'listening', { family: 'lf-' + x })),
+  ...['a', 'b', 'c', 'd'].map(x => mk('idle-' + x, { family: 'if-' + x })),
+  mk('idle-low', { family: 'if-low', weight: 1 }), mk('idle-rare', { family: 'if-rare', rare: true }), mk('idle-hop-small', { family: 'if-hs' }),
+  mk('idle-slow', { family: 'stretch' }), mk('idle-settle', { family: 'if-set', endsOn: 'B' }), mk('idle-fromb', { family: 'if-fb', startsFrom: 'B', endsOn: 'B' }),
+];
+test('quiet idle: without the option (or with it off) every listening pick sequence is identical, and the option brings idle clips in', () => {
+  assert.strictEqual(typeof FP.faceCalmIdle, 'function'); assert.strictEqual(FP.QUIET_MIX_MS, 13000); assert.strictEqual(FP.QUIET_IDLE_SHARE, 1 / 3);
+  const names = (opt) => play(sel(quietFixture(), 11), 'listening', 200, opt).map(p => p.clip.name);
+  const plain = names(), off = names({ quietIdle: false });
+  assert.deepStrictEqual(off, plain); assert.ok(plain.every(n => n.startsWith('listen-')));
+  assert.ok(names({ quietIdle: true }).some(n => n.startsWith('idle-')), 'quietIdle: true lets idle clips in');
+});
+test('quiet idle: about a third of the picks are calm idle clips; rare, weight 1, hop/stretch, pose-changing and B-start idle clips never', () => {
+  const s = sel(quietFixture(), 5), out = play(s, 'listening', 3000, { quietIdle: true });
+  const idle = out.filter(p => p.clip.state === 'idle'), share = idle.length / out.length;
+  assert.ok(share > 0.28 && share < 0.39, 'idle share ' + share);
+  assert.ok(idle.every(p => p.quiet === true && p.kind === 'state' && /^idle-[a-d]$/.test(p.clip.name)), 'only the four calm clips: ' + [...new Set(idle.map(p => p.clip.name))]);
+  assert.ok(out.filter(p => p.clip.state === 'listening').every(p => !p.quiet));
+  assert.strictEqual(s.state.pose, 'A');
+});
+test('quiet idle: faceCalmIdle keeps only calm idle clips', () => {
+  const f = FP.faceCalmIdle, ok = mk('idle-a', { weight: 2 });
+  assert.strictEqual(typeof f, 'function'); assert.strictEqual(f(ok), true);
+  for (const bad of [mk('idle-a', { rare: true }), mk('idle-a', { weight: 1 }), mk('idle-a', { family: 'hop' }), mk('idle-a', { family: 'doze' }), mk('idle-wiggle-a'), mk('wiggle'), mk('idle-big-bounce'),
+    clip('idle-a', 'listening'), clip('idle-a', 'thinking')]) assert.strictEqual(f(bad), false, JSON.stringify(bad.name + bad.family));
+  assert.strictEqual(f(mk('idle-wiggler')), true, 'only whole name parts count');
+});
+
 // ── manifest, urls, readiness ──
 test('urls: every request is /api/faces/<encoded id>/<known file>; hostile names and ids never reach the network', async () => {
   const u = faceUrls('my pack'); assert.strictEqual(u.manifest(), '/api/faces/my%20pack/manifest.json');
@@ -711,6 +741,44 @@ test('hello: hearing the person (listening) interrupts hello at once, speaking a
   assert.match(p3.getInfo().clip, /^thinking-/, 'a hello that had not started is dropped, the mic/state path is never delayed');
   p3.destroy();
 });
+// ── calm idle clips in a long quiet stretch of a call ──
+const quietPlayerPack = () => packManifest([
+  clip('idle-a', 'idle', { family: 'ia' }), clip('idle-b', 'idle', { family: 'ib' }), clip('idle-c', 'idle', { family: 'ic' }),
+  clip('listen-a', 'listening', { family: 'la' }), clip('listen-b', 'listening', { family: 'lb' }), clip('listen-c', 'listening', { family: 'lc' }),
+  clip('think-a', 'thinking'), clip('speak-a', 'speaking', { track: true, beakEnds: 'closed' }), clip('speak-b', 'speaking', { track: true, beakEnds: 'closed' }),
+  clip('speak-c', 'speaking', { track: true, beakEnds: 'closed' }), clip('speak-d', 'speaking', { track: true, beakEnds: 'closed' }),
+]);
+const quietStart = async () => { const r = await started({ seed: 3 }, { manifest: quietPlayerPack() }); r.p.setState('listening'); await r.w.settle(100); return r; };
+const playedNames = (p, from) => p.getInfo().log.slice(from).map(e => e.name);
+// end clips one after the other (the clock hardly moves) until an idle clip is on; null when none came in `max` clips
+async function untilIdle(w, p, max) { for (let i = 0; i < max; i++) { if (/^idle-/.test(p.getInfo().clip)) return p.getInfo().clip; w.front(p).end(); await w.settle(30); } return /^idle-/.test(p.getInfo().clip) ? p.getInfo().clip : null; }
+test('quiet idle (player): no idle clip before 13 s of silence; after it idle clips join; hearing the person cross-fades to a listening clip at once', async () => {
+  const { w, p } = await quietStart(); const n0 = p.getInfo().log.length;
+  assert.strictEqual(p.getInfo().quietMix, false);
+  assert.strictEqual(await untilIdle(w, p, 40), null, 'no idle clip while the silence is short');
+  assert.ok(playedNames(p, n0).length >= 30 && playedNames(p, n0).every(n => /^listen-/.test(n)));
+  w.advance(14000); assert.strictEqual(p.getInfo().quietMix, true);
+  const idle = await untilIdle(w, p, 60); assert.ok(idle, 'an idle clip starts in a long quiet stretch');
+  const n1 = p.getInfo().log.length; assert.strictEqual(p.setHearing(true), true); await w.settle(60);
+  assert.match(p.getInfo().clip, /^listen-/); assert.strictEqual(p.getInfo().log.length, n1 + 1); assert.strictEqual(p.getInfo().log.pop().fade, true);
+  assert.strictEqual(p.getInfo().quietMix, false);
+  for (let i = 0; i < 30; i++) { w.front(p).end(); await w.settle(30); assert.match(p.getInfo().clip, /^listen-/, 'no idle clip while the person talks'); }
+  w.advance(20000); assert.strictEqual(p.getInfo().quietMix, false, 'still hearing');
+  p.setHearing(false); assert.strictEqual(p.getInfo().quietMix, false, 'the count starts again when the person stops'); w.advance(14000); assert.strictEqual(p.getInfo().quietMix, true);
+  p.destroy(); assert.strictEqual(p.setHearing(true), false);
+});
+test('quiet idle (player): leaving listening and coming back restarts the 13 s count; an unrelated evaluate does not cut a quiet idle clip', async () => {
+  const { w, p } = await quietStart(); w.advance(14000); assert.strictEqual(p.getInfo().quietMix, true);
+  p.setState('thinking'); await w.settle(60); assert.strictEqual(p.getInfo().quietMix, false);
+  p.setState('listening'); await w.settle(60); assert.strictEqual(p.getInfo().quietMix, false, 'the count restarted');
+  w.advance(12000); assert.strictEqual(p.getInfo().quietMix, false); w.advance(1500); assert.strictEqual(p.getInfo().quietMix, true);
+  const idle = await untilIdle(w, p, 60); assert.ok(idle);
+  const n = p.getInfo().log.length; w.hide(true); w.hide(false); p.setState('listening'); await w.settle(60);
+  assert.strictEqual(p.getInfo().clip, idle, 'the playing quiet idle clip is not cut'); assert.strictEqual(p.getInfo().log.length, n);
+  p.setState('thinking'); await w.settle(60); assert.match(p.getInfo().clip, /^think-/, 'leaving listening cuts it like any state change');
+  p.destroy();
+});
+
 test('goodbye plays to its end and is not cut by idle', async () => {
   const { w, p } = await started(); p.react('goodbye'); await w.settle(100); p.setState('idle'); await w.settle(300);
   assert.strictEqual(p.getInfo().clip, 'reaction-goodbye-1'); w.front(p).end(); await w.settle(100); assert.match(p.getInfo().clip, /^idle-/); p.destroy();
@@ -871,7 +939,7 @@ test('reduced motion entered from pose B: the still is the canonical A frame, th
 test('hidden: pause when hidden (no frames, no advancing), resume when visible; state changes while hidden apply on return', async () => {
   const { w, p } = await started(); const v = w.front(p); const n = p.getInfo().log.length;
   w.hide(true); assert.strictEqual(v.paused, true); assert.strictEqual(v._rvfc, null, 'frame callbacks cancelled'); assert.strictEqual(p.getInfo().hidden, true);
-  p.setState('listening'); await w.settle(15000); assert.strictEqual(p.getInfo().log.length, n, 'nothing advanced while hidden');
+  p.setState('listening'); await w.settle(12000); assert.strictEqual(p.getInfo().log.length, n, 'nothing advanced while hidden');   // under QUIET_MIX_MS: a longer silence would let the idle clip stay
   w.hide(false); await w.settle(300); assert.strictEqual(w.front(p).paused, false); assert.match(p.getInfo().clip, /^listening-/); assert.ok(w.front(p)._rvfc, 'frames resume'); p.destroy();
 });
 test('destroy: cancels timers, frame callbacks, loads and listeners; late events change nothing; safe twice', async () => {
