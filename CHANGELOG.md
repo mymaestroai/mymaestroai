@@ -7,6 +7,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 ## [Unreleased]
 
 - **The agent's voice is louder on calls.** On the phone or computer speaker, replies on a voice call play about three times louder than before, with peaks kept from distorting. Voice settings has two new choices on each device, "Voice loudness, speaker" (Louder by default) and "Voice loudness, Bluetooth / car" (Normal by default, since a car has its own amplifier); each offers Normal, Louder and Loudest, and the call switches between them by itself when a car or headset connects or disconnects.
+- **Every voice on your Maestro speaks at the same, clearer level.** The voices that run on your Maestro itself are now brought to one even loudness, about twice as loud as before, with the loudest moments kept from distorting. Cloud voices are unchanged.
 
 - **A voice call tells you when the connection drops, and hangs up if it doesn't come back.** If your phone or computer loses touch with your Maestro during a call, you hear a short falling tone and the call screen says "Connection lost". If it is back within 10 seconds you hear a rising tone and "Reconnected." and the call carries on; otherwise the call ends cleanly and the chat says "Call ended: connection lost".
 
