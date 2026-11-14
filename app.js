@@ -13623,7 +13623,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try {
         let from = 0, useDevice = false;
         if (voiceReady()) {
-          try { await voicePlayHub(agent, sentences, opts.voice, my); return; }
+          try { await voicePlayHub(agent, sentences, opts.voice, my); if (opts.out) opts.out.played = voicePlay.token === my; return; }
           catch (e) {
             if (voicePlay.token !== my) return;
             if (!voiceDeviceFallback()) { if (!e.toasted && !voiceCallS.linkLost) hubToast('Could not read this aloud: ' + e.message); return; }   // while a call's connection is lost the link watch speaks for it
@@ -13631,7 +13631,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           }
         } else if (voiceDeviceFallback()) useDevice = true;
         else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
-        if (useDevice) await voicePlayDevice(sentences, from, my, agent);
+        if (useDevice) { await voicePlayDevice(sentences, from, my, agent); if (opts.out) opts.out.played = voicePlay.token === my; }
       } finally {
         if (voicePlay.token === my) { voicePlayState(btn, false); voicePlay.btn = null; }
       }
@@ -14028,6 +14028,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       await voiceSpeakText(agent, text, null, { sentences });
       return voicePlay.token === mine;
     }
+    // The recording's consent line: true only when it was played to the end (hub voice, or the device voice where that is on).
+    // Voice off, a voice that failed with no fallback, or a cut line: false, so the hub does not count the line as heard.
+    async function voiceCallSpeakLine(agent, text) {
+      const sentences = voiceSentences(voiceSpeechText(String(text || ''))).filter(Boolean);
+      if (!sentences.length) return false;
+      const mine = voicePlay.token + 1, out = { played: false };
+      await voiceSpeakText(agent, text, null, { sentences, out });
+      return out.played === true && voicePlay.token === mine;
+    }
     function voiceCallRunning(chatId, agent) {
       const chat = chats[chatId];
       return !!((chat && chat.status === 'thinking') || (agentStatus[agent] && agentStatus[agent].busy));
@@ -14220,7 +14229,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceRecMake(agent, vad, cfg, wired) {
       return voiceCreateRecordingSession({ agent, userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '', vad, wired, unprocessed: cfg.mic === 'unprocessed', nav: navigator,
         fetch: (...a) => fetch(...a),   // the same fetch the call's other requests use: the sign-in cookie and the Origin header go with it
-        speak: (line) => voiceCallSpeak(agent, line),   // the consent line: the agent's voice, the replies' own TTS path
+        speak: (line) => voiceCallSpeakLine(agent, line),   // the consent line: the agent's voice, the replies' own TTS path; true only when it really played
         playback: (on) => { try { vad.setPlaybackActive(on); } catch { /* the line is heard anyway */ } },
         badge: (state) => voiceDisplayHook('setRecording', { state }), toast: (m) => hubToast(m),
         onNetFail: (e) => voiceLinkNetFail(e, voiceLinkOwner()),

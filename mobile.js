@@ -7941,6 +7941,27 @@ async function voiceCallSpeak(agent, rawText) {
   }
   return my === voicePlay.token;
 }
+// The recording's consent line: true only when it was played to the end (hub voice, or the device voice where that is on).
+// Voice off, a voice that failed with no fallback, or a cut line: false, so the hub does not count the line as heard.
+async function voiceCallSpeakLine(agent, rawText) {
+  const text = voiceSpeechText(String(rawText || ''));
+  if (!text) return false;
+  const my = voicePlay.token;
+  if (voiceOn()) {
+    const blob = await voiceTtsBlob(agent, text);
+    if (my !== voicePlay.token) return false;
+    if (blob) {
+      const ok = await voicePlayBlob(blob, my, { text });
+      if (my !== voicePlay.token) return false;
+      if (ok) return true;
+    }
+  }
+  if (voicePrefsNow().deviceVoiceFallback) {
+    await voiceDeviceSpeak([text], my, agent);
+    return my === voicePlay.token;
+  }
+  return false;
+}
 // A spoken message starts a voice turn (voice: true). The stream is not awaited: the next utterance must not wait for the reply.
 function voiceCallSend(vc, text, userEl) {
   stick = true;
@@ -8135,7 +8156,7 @@ function voiceRecMake(vc, cfg, wired) {
   const agent = vc.agent;
   return voiceCreateRecordingSession({ agent, userId: hubMe && hubMe.user ? hubMe.user.id : '', vad: vc.vad, wired, unprocessed: cfg.mic === 'unprocessed', nav: navigator,
     fetch: (url, init) => api(url, init),   // the page's usual helper: the sign-in cookie, the Origin header and the redirect to sign-in come with it
-    speak: (line) => voiceCallSpeak(agent, line),   // the consent line: the agent's voice, the replies' own TTS path
+    speak: (line) => voiceCallSpeakLine(agent, line),   // the consent line: the agent's voice, the replies' own TTS path; true only when it really played
     playback: (on) => { try { vc.vad.setPlaybackActive(on); } catch { /* the line is heard anyway */ } },
     badge: (state) => voiceDisplayHook('setRecording', { state }), toast: (m) => toast(m, 4000),
     onNetFail: (e) => voiceLinkNetFail(e, vc),

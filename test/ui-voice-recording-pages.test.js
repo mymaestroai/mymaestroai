@@ -41,7 +41,7 @@ for (const [name, file] of [['desktop', 'app.js'], ['phone', 'mobile.js']]) {
   });
   test(`${name} page: reply audio is handed to the session only in a recorded call; the consent line goes through the replies' TTS path`, () => {
     assert.match(src, /\.replyAudio\(/);
-    assert.match(src, /speak: \(line\) => voiceCallSpeak\(agent, line\)/);
+    assert.match(src, /speak: \(line\) => voiceCallSpeakLine\(agent, line\)/);
   });
 }
 
@@ -725,4 +725,60 @@ test('display CSS: the badge is dark with white text, has a red dot, a hollow on
   assert.match(css, /\.ucd-rec-dot \{[^}]*background: #e5484d/);
   assert.match(css, /\.ucd-rec\[data-state="paused"\] \.ucd-rec-dot \{[^}]*background: transparent; border: 2px solid #e5484d/);
   assert.match(css, /\.ucd-stage > \.ucd-rec \{ position: absolute; z-index: 3; top: 10px; right: 12px; \}/);
+});
+
+// ── the consent line counts only when it really played (the hub then counts it as heard: announce once per person) ──
+const vm = require('node:vm');
+function pageFn(src, start, end) {
+  const i = src.indexOf(start);
+  assert.ok(i >= 0, start);
+  return src.slice(i, src.indexOf(end, i) + end.length);
+}
+test('desktop page: voiceCallSpeakLine is true only when the line played to the end', async () => {
+  const src = read('app.js');
+  const code = pageFn(src, '    async function voiceSpeakText(', '\n    }\n') + pageFn(src, '    async function voiceCallSpeakLine(', '\n    }\n');
+  async function run({ ready = true, device = false, hub = 'ok', dev = 'ok' }) {
+    const toasts = [];
+    const ctx = {
+      voicePlay: { token: 0, btn: null }, voiceCallS: { linkLost: false },
+      voiceStopPlayback() { ctx.voicePlay.token++; }, voiceSentences: (s) => [s], voiceSpeechText: (s) => String(s || ''),
+      voiceReady: () => ready, voiceDeviceFallback: () => device, hubToast: (m) => toasts.push(m), voicePlayState() {},
+      async voicePlayHub() { if (hub === 'fail') { const e = new Error('tts down'); throw e; } if (hub === 'cut') ctx.voicePlay.token++; },
+      async voicePlayDevice() { if (dev === 'cut') ctx.voicePlay.token++; },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(code + '\nthis.f = voiceCallSpeakLine;', ctx);
+    return { ok: await ctx.f('maestro', 'This conversation is being recorded.'), toasts };
+  }
+  assert.strictEqual((await run({})).ok, true, 'the hub voice played it');
+  assert.strictEqual((await run({ hub: 'cut' })).ok, false, 'cut while playing');
+  assert.strictEqual((await run({ hub: 'fail' })).ok, false, 'the hub voice failed and there is no device voice');
+  assert.strictEqual((await run({ hub: 'fail', device: true })).ok, true, 'the device voice took over and played it');
+  assert.strictEqual((await run({ ready: false })).ok, false, 'voice is off');
+  assert.strictEqual((await run({ ready: false, device: true })).ok, true, 'voice off, the device voice played it');
+  assert.strictEqual((await run({ ready: false, device: true, dev: 'cut' })).ok, false, 'the device voice was cut');
+});
+test('phone page: voiceCallSpeakLine is true only when the line played to the end', async () => {
+  const src = read('mobile.js');
+  const code = pageFn(src, 'async function voiceCallSpeakLine(', '\n}\n');
+  async function run({ on = true, blob = true, plays = true, device = false, cut = '' }) {
+    const ctx = {
+      voicePlay: { token: 0 }, voiceSpeechText: (s) => String(s || ''), voiceOn: () => on, voicePrefsNow: () => ({ deviceVoiceFallback: device }),
+      async voiceTtsBlob() { if (cut === 'fetch') ctx.voicePlay.token++; return blob ? {} : null; },
+      async voicePlayBlob() { if (cut === 'play') ctx.voicePlay.token++; return plays; },
+      async voiceDeviceSpeak() { if (cut === 'device') ctx.voicePlay.token++; },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(code + '\nthis.f = voiceCallSpeakLine;', ctx);
+    return ctx.f('maestro', 'This conversation is being recorded.');
+  }
+  assert.strictEqual(await run({}), true, 'the hub voice played it');
+  assert.strictEqual(await run({ cut: 'play' }), false, 'cut while playing');
+  assert.strictEqual(await run({ cut: 'fetch' }), false, 'cut while fetching');
+  assert.strictEqual(await run({ blob: false }), false, 'no audio from the hub, no device voice');
+  assert.strictEqual(await run({ plays: false }), false, 'the audio did not play, no device voice');
+  assert.strictEqual(await run({ on: false }), false, 'voice is off');
+  assert.strictEqual(await run({ on: false, device: true }), true, 'the device voice played it');
+  assert.strictEqual(await run({ blob: false, device: true, cut: 'device' }), false, 'the device voice was cut');
+  assert.strictEqual(await run({ on: true }), true);
 });
