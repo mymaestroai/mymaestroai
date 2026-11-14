@@ -68,6 +68,19 @@ test('markInProgress keeps its old rules: a question line is flagged only as the
   assert.deepStrictEqual(flags(h), [false, false, false, false, true, true]);
 });
 
+test('BF1-1: a turn that ended 0.5 s before this one began is not flagged; only this turn\'s pieces and interjection are', () => {
+  const h = [
+    { ts: at(-5), role: 'user', content: 'first prompt' },
+    { ts: at(-0.001), role: 'assistant', content: 'first answer' },
+    { ts: at(0.5), role: 'user', content: 'second prompt' },
+    { ts: at(2), role: 'assistant', content: 'piece one' },
+    { ts: at(3), role: 'user', content: '[OPERATOR INTERJECTION]: hurry', interjection: { id: 'ij-1' } },
+    { ts: at(4), role: 'assistant', content: 'piece two', base: 9 },
+  ];
+  markInProgress(h, { active: true, startedAt: at(0.5) });
+  assert.deepStrictEqual(flags(h), [false, false, false, true, true, true]);
+});
+
 test('the hub\'s turn view journals an interjection with the turn\'s activity, at the point of the reply where it came, and publishes it', () => {
   const hub = createHubEvents();
   const out = [];

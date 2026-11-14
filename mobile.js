@@ -5856,14 +5856,38 @@ function attachStreamBubble(rec) {
   for (const x of rec.sentIjs || []) {
     const feed = holderFeed(rec);
     if (!feed.ijs) feed.ijs = new Map();
-    if (!feed.ijs.has(x.id)) feed.ijs.set(x.id, { kind: 'ij', id: x.id, text: x.text, emergency: false, images: x.images || [], at: x.at });
+    if (x.ijId && [...feed.ijs.values()].some(v => v.ijId === x.ijId)) continue;   // the turn view's copy of it is already drawn
+    if (!feed.ijs.has(x.id)) feed.ijs.set(x.id, { kind: 'ij', id: x.id, text: x.text, emergency: false, images: x.images || [], at: x.at, ijId: x.ijId || null });
   }
   if (rec.rsn) paintReasoning(rec);
+  catchUpOwnInterjections(rec, b);   // the ones sent from another device, which only the hub's turn view has
   if (!rec.gotAny) { b.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>'; return; }
   paintReply(rec, rec.full);   // text and activity rows in the order they happened
   if (rec.question) showQuestion(rec.question, () => { rec.question = null; });
   const pq = pendingQuestionsByAgent.get(rec.agent);
   if (pq) { pendingQuestionsByAgent.delete(rec.agent); showQuestion(pq); }
+}
+
+// A turn this phone streams, drawn again after a chat switch: the interjections this phone sent come from rec.sentIjs, but
+// one sent from another device is only in the hub's turn view (its `interjection` activity items, the same ones a
+// re-attaching page draws). Added here, each once: an item is skipped when this phone already drew it (the same
+// interjection id, or, for a hub without ids, an unused local one with the same text), so no interjection shows twice.
+async function catchUpOwnInterjections(rec, bubble) {
+  const d = await fetchTurn(rec.agent);
+  const turn = d && d.turn;
+  if (!turn || turn.ended || !Array.isArray(turn.activity)) return;
+  if (streams.get(rec.agent) !== rec || rec.bubble !== bubble || rec.stale) return;   // the chat moved on or the stream was replaced meanwhile
+  if (!(turn.message === rec.text || Math.abs(Date.parse(turn.startedAt) - rec.startedAt) < 10000)) return;   // not this stream's turn
+  const feed = holderFeed(rec);
+  if (!feed.ijs) feed.ijs = new Map();
+  const unused = (rec.sentIjs || []).filter(x => !x.ijId);   // local ones that cannot be matched by id
+  for (const item of turn.activity) {
+    if (!item || item.kind !== 'interjection' || !item.id || feed.ijs.has(item.id)) continue;
+    if (item.ijId && [...feed.ijs.values()].some(v => v.ijId === item.ijId)) continue;   // this phone's own (or already drawn)
+    const k = item.ijId ? -1 : unused.findIndex(x => x.text === String(item.message || ''));
+    if (k >= 0) { unused.splice(k, 1); continue; }
+    feedUpsert(rec, item);   // draws it in its place (the reply is painted again)
+  }
 }
 
 // ── Turn activity feed: tool calls and workers inside the in-progress bubble ─────────────────
@@ -6035,7 +6059,7 @@ function feedUpsert(holder, item) {
   if (item.kind === 'interjection') {   // the person's message sent into the running turn: drawn in its place in the reply (replyBlocks), not a row
     if (!feed.ijs) feed.ijs = new Map();
     if (!feed.ijs.has(item.id)) {
-      feed.ijs.set(item.id, { kind: 'ij', id: item.id, text: String(item.message || ''), emergency: item.priority === 'emergency', images: savedImageUrls(item.images), at: placeOf(holder, feed, item) });
+      feed.ijs.set(item.id, { kind: 'ij', id: item.id, text: String(item.message || ''), emergency: item.priority === 'emergency', images: savedImageUrls(item.images), at: placeOf(holder, feed, item), ijId: item.ijId || null });
       paintReply(holder);
     }
     return feed.ijs.get(item.id);
@@ -7382,6 +7406,10 @@ async function sendInterjection(agent) {
   const noteEl = addNote('⤵ delivering mid-turn…');
   noteEl.classList.add('interject');
   scrollChat(true);
+  // The place of this interjection in the reply is taken now, against the stream record it was sent into: text that
+  // arrives while the request is out comes after it, and a turn that ended and another that began meanwhile is not this one.
+  const sentInto = streams.get(agent);
+  const sentAt = sentInto ? String(typeof sentInto.full === 'string' ? sentInto.full : '').length : 0;
   let result;
   try {
     const r = await api('/api/chat/interject', {
@@ -7395,8 +7423,11 @@ async function sendInterjection(agent) {
   }
   if (result && result.success) {
     noteEl.textContent = 'delivered mid-turn';
-    const rec = streams.get(agent);   // a turn streaming to this phone: back in this chat it draws the interjection in its place
-    if (rec) (rec.sentIjs = rec.sentIjs || []).push({ id: `local-ij-${Date.now()}-${(rec.sentIjs || []).length}`, text, images, at: String(typeof rec.full === 'string' ? rec.full : '').length });
+    // A turn streaming to this phone: back in this chat it draws the interjection in its place. Only when that same stream
+    // record is still the agent's (and not stale); otherwise nothing is kept (the hub's turn view and history have it).
+    if (sentInto && streams.get(agent) === sentInto && !sentInto.stale) {
+      (sentInto.sentIjs = sentInto.sentIjs || []).push({ id: `local-ij-${Date.now()}-${sentInto.sentIjs.length}`, ...(result.id ? { ijId: String(result.id) } : {}), text, images, at: sentAt });
+    }
     return;
   }
   const error = String((result && result.error) || 'request failed');
