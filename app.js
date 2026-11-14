@@ -10975,12 +10975,31 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const positive = 0.9 - 0.4 * s / 100;
       return { positiveSpeechThreshold: +positive.toFixed(3), negativeSpeechThreshold: +(positive - 0.15).toFixed(3), minSpeechFrames: Math.round(8 - 5 * s / 100) };
     }
+    // On a call only the spoken lead of a reply is read aloud: at most this many sentences.
+    const VOICE_LEAD_MAX_SENTENCES = 3;
+    // A 'detail' line ends the spoken lead: a table row, a code fence, a heading, a list item, a rule or a bold-only label line.
+    const VOICE_DETAIL_LINE_RE = /^[ \t]*(?:\||```|~~~|#{1,6}[ \t]|(?:[-*+•◦▪‣][ \t]|\d+[.)][ \t])|([-*_])(?:[ \t]*\1){2,}[ \t]*$|(\*\*|__)[^*_\n]+\2[ \t]*:?[ \t]*$)/;
+    // voiceSpokenLead(markdown) -> { lead, cut }: the text before the first detail line; cut is true when such a line was found.
+    function voiceSpokenLead(markdown) {
+      const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+      const lines = text.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (VOICE_DETAIL_LINE_RE.test(lines[i])) return { lead: lines.slice(0, i).join('\n'), cut: true };
+      }
+      return { lead: text, cut: false };
+    }
     function voiceReplySentences(markdown, done) {
       const note = voiceSpeechText('| a |');
-      let t = voiceSpeechText(markdown, !done), hasNote = false;
+      const sp = voiceSpokenLead(markdown);
+      const finished = !!done || sp.cut;   // a cut lead is complete; an uncut reply may still be streaming
+      let lead = sp.lead;
+      // While streaming, a last line that is only the start of a detail line (a lone marker, digits, an unclosed bold) is not lead text yet.
+      if (!finished) lead = lead.replace(/(^|\n)[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?|(?:\*\*|__)[^\n]*)$/, '$1');
+      let t = voiceSpeechText(lead, !finished), hasNote = sp.cut;
       if (t === note) { t = ''; hasNote = true; } else if (t.endsWith(' ' + note)) { t = t.slice(0, -note.length).trim(); hasNote = true; }
-      const sentences = voiceSentences(t).filter(Boolean);
-      if (!done && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(String(markdown)))) sentences.pop();
+      let sentences = voiceSentences(t).filter(Boolean);
+      if (!finished && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(lead))) sentences.pop();
+      if (sentences.length > VOICE_LEAD_MAX_SENTENCES) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
       return { sentences, note: hasNote ? note : '' };
     }
     function voiceCreateCall(deps) {

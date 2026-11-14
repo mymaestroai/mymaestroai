@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **On a voice call, the agent reads only its short spoken answer.** Tables, lists, headings, code and everything after them stay in the chat instead of being read out as strings of numbers and letters; the agent reads at most three sentences and then says the details are in the chat. A reply that is only a table or a list is announced with that one line. The read-aloud button on a message still reads the whole reply.
+
 - **Hands-free calls show only the buttons you need, and the display choice is one tap away.** On the character and orb screens you just talk, and talking over a reply cuts it short; Hang up stays where it was. If you want a button for cutting in (somewhere talking over the reply doesn't register), turn on "Show an Interrupt button" in the voice settings: it then appears while the agent is thinking or speaking. If the microphone is lost, a "Try the microphone again" button appears in the same place. A Display choice (follow the agent, none, orb or a character) now sits in the call bar and on the character screen itself, and the Controls panel has a Close button and closes with a swipe down, a tap on the picture or Escape.
 
 - **A finished worker no longer shows as running.** If your Maestro's page missed the moment a temporary worker finished, its row stayed in the Workers list as running, with a timer and a stop button. The page now checks running workers against what your Maestro is really doing every few seconds and on reconnect, marks one that is gone as ended, and shows how it finished when that was recorded. On the computer and on the phone; a reload of the page is enough.
