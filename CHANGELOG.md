@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Starting a voice call pauses your music on Android.** When a call starts, your Maestro takes the phone's audio the way a music player does, so an app like Spotify pauses for the whole call instead of playing over the conversation. Where the browser cannot do that (iPhone, or if the phone refuses), the call shows "Music playing? Pause it for a clearer call".
+
 - **On a voice call, the agent reads only its short spoken answer.** Tables, lists, headings, code and everything after them stay in the chat instead of being read out as strings of numbers and letters; the agent reads at most three sentences and then says the details are in the chat. A reply that is only a table or a list is announced with that one line. The read-aloud button on a message still reads the whole reply.
 
 - **On a voice call, agents talk instead of writing.** Agents now answer in one to three plain spoken sentences, with no tables, lists, codes or file names, and numbers and times said the way a person says them. When an answer really needs detail on the screen, the agent says so and offers to put it in the chat after the call. This takes effect after your Maestro restarts.

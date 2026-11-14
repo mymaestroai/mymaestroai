@@ -11003,6 +11003,65 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return out;
     }
+    // A very quiet, looping WAV (white noise near -60 dBFS, never silence). Played through a media element it makes Chrome for Android take full audio focus.
+    function voiceFocusWav(seconds = 6, sampleRate = 8000) {
+      const n = Math.max(1, Math.round(seconds * sampleRate)), bytes = n * 2;
+      const out = new Uint8Array(44 + bytes), dv = new DataView(out.buffer);
+      const tag = (o, s) => { for (let i = 0; i < s.length; i++) out[o + i] = s.charCodeAt(i); };
+      tag(0, 'RIFF'); dv.setUint32(4, 36 + bytes, true); tag(8, 'WAVE'); tag(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+      dv.setUint32(24, sampleRate, true); dv.setUint32(28, sampleRate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); tag(36, 'data'); dv.setUint32(40, bytes, true);
+      let s = 123456789;
+      for (let i = 0; i < n; i++) {
+        s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+        let v = Math.round(((s >>> 8) / 8388607.5 - 1) * 33);
+        if (v === 0) v = (i & 1) ? 1 : -1;
+        dv.setInt16(44 + i * 2, v, true);
+      }
+      return out;
+    }
+    // A hidden looping <audio> element playing that noise for the length of a call, so other apps pause instead of just ducking. start() must run inside the user's tap.
+    function voiceCreateAudioFocus(opts) {
+      const o = opts || {};
+      const doc = o.doc, urlApi = o.URL, BlobCtor = o.Blob;
+      let el = null, src = null, running = false;
+      function make() {
+        if (el) return el;
+        if (!doc || typeof doc.createElement !== 'function') return null;
+        if (!src) {
+          if (!urlApi || typeof urlApi.createObjectURL !== 'function' || typeof BlobCtor !== 'function') return null;
+          src = urlApi.createObjectURL(new BlobCtor([voiceFocusWav()], { type: 'audio/wav' }));
+        }
+        const a = doc.createElement('audio');
+        if (!a) return null;
+        a.loop = true; a.preload = 'auto'; a.playsInline = true;
+        if (typeof a.setAttribute === 'function') { a.setAttribute('playsinline', ''); a.setAttribute('aria-hidden', 'true'); }
+        a.muted = false; a.volume = 1;
+        if (a.style) a.style.display = 'none';
+        a.src = src;
+        if (doc.body && typeof doc.body.appendChild === 'function') doc.body.appendChild(a);
+        el = a;
+        return el;
+      }
+      return {
+        start() {
+          if (running) return Promise.resolve(true);
+          try {
+            const a = make();
+            if (!a || typeof a.play !== 'function') return Promise.resolve(false);
+            const p = a.play();
+            running = true;
+            return Promise.resolve(p).then(() => true, () => { running = false; return false; });
+          } catch { running = false; return Promise.resolve(false); }
+        },
+        stop() {
+          running = false;
+          if (!el) return;
+          try { if (typeof el.pause === 'function') el.pause(); } catch {}
+          try { el.currentTime = 0; } catch {}
+        },
+        get running() { return running; },
+      };
+    }
     // ── voice helpers (end) ──
 
     // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
@@ -13255,6 +13314,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <label class="vcb-dnd"><input type="checkbox" id="${id('dnd')}" data-vcb="dnd"> Do not disturb</label>
         <label class="vcb-disp">Display <select id="${id('display')}" data-vcb="display" aria-label="Display"><option value="follow">Follow agent default</option></select></label>
         <button type="button" class="vcb-hang" data-vcb="hang" aria-label="Hang up">${VOICE_HANGUP_SVG}<span>Hang up</span></button></div>
+        <div class="vcb-focus-hint" id="${id('focushint')}" hidden>Music playing? Pause it for a clearer call</div>
         <div class="vcb-sliders">
           <label>Mic level <input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vcb="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
           <label>Interrupt sensitivity <input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vcb="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>
@@ -13346,15 +13406,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       } catch { /* a wake lock is a comfort: the call goes on without it */ }
     }
     function voiceCallTeardown() {
-      const S = voiceCallS, chatId = S.chatId, vad = S.vad, thinking = S.thinking, keepAlive = S.keepAlive;
+      const S = voiceCallS, chatId = S.chatId, vad = S.vad, thinking = S.thinking, keepAlive = S.keepAlive, focus = S.focus;
       for (const c of Object.values(chats)) if (c) { c.voiceTurn = false; c.voiceDictated = false; }   // nothing dictated before the call is read aloud after Hang up
-      S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
+      S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.focus = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
       S.own.clear(); S.hub.clear(); S.asks.clear();
       voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
       // Whatever way the call ended, nothing is left holding the microphone or a speaker: the VAD (mic tracks, processed stream,
       // AudioContext) and the thinking sound's context are let go here too; both are safe to stop twice.
       if (thinking) { try { thinking.close(); } catch { /* already closed */ } }
       if (keepAlive) { try { keepAlive.stop(); } catch { /* already stopped */ } }   // the controller stops it too; both are safe twice
+      if (focus) { try { focus.stop(); } catch { /* already stopped */ } }
       if (vad && typeof vad.stop === 'function') { try { Promise.resolve(vad.stop()).catch(() => {}); } catch { /* already stopped */ } }
       voiceStopPlayback();
       voiceCallWake(false);
@@ -13411,9 +13472,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Keep Bluetooth awake: an inaudible hiss on the same output context as the replies; the controller starts and stops it.
       let keepAlive = null;
       if (voicePrefsNow().keepAlive !== false && typeof voiceCreateKeepAlive === 'function') { try { const kc = voiceOutputCtx(); if (kc) keepAlive = voiceCreateKeepAlive({ ctx: kc }); } catch { keepAlive = null; } }
+      // Audio focus: a looping media element, so a phone browser takes focus and other apps pause. A desktop browser has none to take: the hint shows only if play() is refused.
+      let focus = null;
+      if (typeof voiceCreateAudioFocus === 'function') {
+        try {
+          focus = window.__voiceFocusOne || (window.__voiceFocusOne = voiceCreateAudioFocus({ doc: document, URL, Blob }));   // one element and one sound for the page, reused by every call
+          focus.start().then((ok) => { const h = !ok && S.focus === focus && typeof voiceById === 'function' ? voiceById(`vcb-focushint-${chatId}`) : null; if (h) h.hidden = false; });
+        } catch { focus = null; }
+      }
       const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad, thinking, keepAlive));
       voiceLeftNoticeHide(); S.leftChat = null;
-      S.call = call; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
+      S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
       window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow() };   // read-only hooks for the browser proof
       voiceCallPaintBtn(chatId, true);
       voiceCallShowBar(chatId);

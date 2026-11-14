@@ -620,6 +620,8 @@
   #call-panel .cp-actions .cp-hang svg { width: 22px; height: 22px; }
   #call-panel .cp-actions .cp-levels { min-width: 88px; min-height: 52px; font-size: 14px; }
   #cp-help { margin: 0; font-size: 12px; color: var(--text-dim); }
+  #call-panel .cp-focus-hint { margin: 0; font-size: 12px; color: var(--text-dim); }
+  #call-panel .cp-focus-hint[hidden] { display: none; }
   .vs-seg { display: flex; gap: 8px; }
   .vs-opt { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); }
   .vs-room-out, .vs-car-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
@@ -768,6 +770,7 @@
     <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>
     <div id="call-panel" role="region" aria-label="Voice call" hidden>
       <div class="cp-top"><span id="cp-state" role="status" aria-live="polite">Starting</span><div id="cp-meter" aria-hidden="true"><i></i></div></div>
+      <p id="cp-focus-hint" class="cp-focus-hint" role="status" hidden>Music playing? Pause it for a clearer call</p>
       <div id="cp-activity" aria-live="off"></div>
       <div id="cp-heard" aria-live="off"></div>
       <div id="cp-mic"></div>

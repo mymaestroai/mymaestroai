@@ -2673,6 +2673,65 @@ function voiceCarAnalyse(mic, ref, chirp, rate) {
   }
   return out;
 }
+// A very quiet, looping WAV (white noise near -60 dBFS, never silence). Played through a media element it makes Chrome for Android take full audio focus.
+function voiceFocusWav(seconds = 6, sampleRate = 8000) {
+  const n = Math.max(1, Math.round(seconds * sampleRate)), bytes = n * 2;
+  const out = new Uint8Array(44 + bytes), dv = new DataView(out.buffer);
+  const tag = (o, s) => { for (let i = 0; i < s.length; i++) out[o + i] = s.charCodeAt(i); };
+  tag(0, 'RIFF'); dv.setUint32(4, 36 + bytes, true); tag(8, 'WAVE'); tag(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, sampleRate, true); dv.setUint32(28, sampleRate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); tag(36, 'data'); dv.setUint32(40, bytes, true);
+  let s = 123456789;
+  for (let i = 0; i < n; i++) {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    let v = Math.round(((s >>> 8) / 8388607.5 - 1) * 33);
+    if (v === 0) v = (i & 1) ? 1 : -1;
+    dv.setInt16(44 + i * 2, v, true);
+  }
+  return out;
+}
+// A hidden looping <audio> element playing that noise for the length of a call, so other apps pause instead of just ducking. start() must run inside the user's tap.
+function voiceCreateAudioFocus(opts) {
+  const o = opts || {};
+  const doc = o.doc, urlApi = o.URL, BlobCtor = o.Blob;
+  let el = null, src = null, running = false;
+  function make() {
+    if (el) return el;
+    if (!doc || typeof doc.createElement !== 'function') return null;
+    if (!src) {
+      if (!urlApi || typeof urlApi.createObjectURL !== 'function' || typeof BlobCtor !== 'function') return null;
+      src = urlApi.createObjectURL(new BlobCtor([voiceFocusWav()], { type: 'audio/wav' }));
+    }
+    const a = doc.createElement('audio');
+    if (!a) return null;
+    a.loop = true; a.preload = 'auto'; a.playsInline = true;
+    if (typeof a.setAttribute === 'function') { a.setAttribute('playsinline', ''); a.setAttribute('aria-hidden', 'true'); }
+    a.muted = false; a.volume = 1;
+    if (a.style) a.style.display = 'none';
+    a.src = src;
+    if (doc.body && typeof doc.body.appendChild === 'function') doc.body.appendChild(a);
+    el = a;
+    return el;
+  }
+  return {
+    start() {
+      if (running) return Promise.resolve(true);
+      try {
+        const a = make();
+        if (!a || typeof a.play !== 'function') return Promise.resolve(false);
+        const p = a.play();
+        running = true;
+        return Promise.resolve(p).then(() => true, () => { running = false; return false; });
+      } catch { running = false; return Promise.resolve(false); }
+    },
+    stop() {
+      running = false;
+      if (!el) return;
+      try { if (typeof el.pause === 'function') el.pause(); } catch {}
+      try { el.currentTime = 0; } catch {}
+    },
+    get running() { return running; },
+  };
+}
 // ── voice helpers (end) ──
 
 // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
@@ -6761,6 +6820,9 @@ function voiceCallPaintHeld(list) {
     row.appendChild(acts); box.appendChild(row);
   }
 }
+function voiceFocusHint(show) {   // "Music playing? Pause it": shown where the page cannot pause other apps (iPhone) or the focus sound was refused
+  const h = $('cp-focus-hint'); if (h) h.hidden = !show;
+}
 function voiceCallPanel(show) {
   const p = $('call-panel'); if (!p) return;
   p.hidden = !show;
@@ -6789,6 +6851,8 @@ function voiceCallTeardown(vc) {
   clearInterval(vc.beatTimer); vc.beatTimer = null;
   try { if (vc.vad && typeof vc.vad.stop === 'function') Promise.resolve(vc.vad.stop()).catch(() => {}); } catch { /* the mic is never left held: stop() is safe to repeat */ }
   voiceMediaSession(vc, false);
+  if (vc.focus) { try { vc.focus.stop(); } catch {} }
+  if (typeof voiceFocusHint === 'function') voiceFocusHint(false);
   voiceThinkingClose(vc);
   voiceCallPanel(false);
   voiceMicPaint();
@@ -7117,6 +7181,9 @@ function voiceCallStart() {
   vc.vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: prefs.micLevel, interruptSensitivity: prefs.interruptSensitivity, endPause: voiceEndPauseNow(), echoHoldMs: prefs.echoHold });
   voiceThinkingCtxMake(vc);   // iOS: the thinking sound's AudioContext is made and resumed inside this tap, before any await
   if (prefs.keepAlive !== false && vc.thinkCtx && typeof voiceCreateKeepAlive === 'function') vc.keepAlive = voiceCreateKeepAlive({ ctx: vc.thinkCtx });   // the route stays awake in a car or on a speaker; the controller starts it
+  if (typeof voiceCreateAudioFocus === 'function') {   // a looping media element: Android then takes full audio focus and other apps pause for the call (inside the tap)
+    try { vc.focus = window.__voiceFocusOne || (window.__voiceFocusOne = voiceCreateAudioFocus({ doc: document, URL, Blob })); vc.focus.start().then((ok) => { if (voiceCall === vc && typeof voiceFocusHint === 'function') voiceFocusHint(!ok || (typeof voiceIsIOS === 'function' && voiceIsIOS())); }); } catch { vc.focus = null; }
+  }
   vc.call = voiceCreateCall(voiceCallDeps(vc));
   voiceCall = vc;
   try { window.__voiceBt = { keepAliveRunning: () => !!(vc.keepAlive && vc.keepAlive.running), micInfo: () => vc.micInfo || null, micLost: () => !!vc.micLostOn, echoHold: () => voicePrefsNow().echoHold }; } catch { /* a test hook only */ }
