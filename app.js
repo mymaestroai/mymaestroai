@@ -6814,7 +6814,7 @@
       for (const name of Object.keys(agentStatus)) {
         if (name in map) continue;
         if (!busyIsWorker(name, agentStatus[name])) { setAgentLive(name, { busy: false }); delete openTurns[name]; }
-        else if (!namedOnly) delete agentStatus[name];   // a worker that is gone
+        else if (!namedOnly) { delete agentStatus[name]; delete openTurns[name]; }   // a worker that is gone
       }
       paintAllAgentStatus();
       // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
@@ -7153,7 +7153,8 @@
     }
     function scheduleWorkerStatusPoll() {
       if (workerPollSoon) return;
-      workerPollSoon = setTimeout(() => { workerPollSoon = null; pollWorkerStatus(); }, 800);
+      // a poll still in flight was asked before this request's reason (e.g. a turn_end): wait for it and ask again, never drop it
+      workerPollSoon = setTimeout(() => { workerPollSoon = null; if (workerPollBusy) { scheduleWorkerStatusPoll(); return; } pollWorkerStatus(); }, 800);
     }
     function workerPollWanted() {
       const menu = document.getElementById('workers-menu');

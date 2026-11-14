@@ -1495,7 +1495,7 @@ function applySnapshot(map, repaint = true, opts = {}) {
   }
   for (const name of Object.keys(live)) {
     if (name in map) continue;
-    if (busyIsWorker(name, live[name])) { if (!namedOnly) delete live[name]; }   // a worker that is gone, not an agent gone idle
+    if (busyIsWorker(name, live[name])) { if (!namedOnly) { delete live[name]; delete openTurns[name]; } }   // a worker that is gone, not an agent gone idle
     else { setLive(name, { busy: false }); delete openTurns[name]; }
   }
   if (repaint) paintStatus();
