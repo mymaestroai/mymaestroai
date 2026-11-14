@@ -95,7 +95,7 @@ body:has(> .ucd-overlay) .voice-sheet.open { z-index: 10005; }
 .cd-download-retry:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .cd-download-panel { display: block; width: 100%; max-width: 320px; height: 6px; margin-top: 4px; }   /* the same bar in the voice panel / sheet */
 /* Both bars drawn explicitly (a native progress bar can paint nothing on a dark panel): a light track and the accent fill. */
-.cd-download-bar, .cd-download-panel { -webkit-appearance: none; appearance: none; border: 0; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, .18); color: var(--accent, #3d7bff); }
+.cd-download-bar, .cd-download-panel { flex: none; min-height: 6px; -webkit-appearance: none; appearance: none; border: 0; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, .18); color: var(--accent, #3d7bff); }
 .cd-download-bar::-webkit-progress-bar, .cd-download-panel::-webkit-progress-bar { background: rgba(255, 255, 255, .18); border-radius: 3px; }
 .cd-download-bar::-webkit-progress-value, .cd-download-panel::-webkit-progress-value { background: var(--accent, #3d7bff); border-radius: 3px; }
 .cd-download-bar::-moz-progress-bar, .cd-download-panel::-moz-progress-bar { background: var(--accent, #3d7bff); border-radius: 3px; }
