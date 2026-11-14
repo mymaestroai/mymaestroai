@@ -25,6 +25,11 @@ function makeIsolatedInstall(prefix = 'isolated-install-') {
   for (const f of ['package.json']) { try { fs.copyFileSync(path.join(REAL, f), path.join(inst, f)); } catch { /* not there */ } }
   process.env.HUB_HOME = home;
   process.env.HUB_AUTH_DIR = data;
+  // Any other path override a parent shell may export (they win over the copy's own data/ paths) is cleared, so the copy keeps
+  // everything under its own data/. Every process.env.HUB_*_FILE|DIR|DB that lib/ reads.
+  for (const k of Object.keys(process.env)) if (/^HUB_[A-Z_]+_(FILE|DIR|DB)$/.test(k) && k !== 'HUB_AUTH_DIR') delete process.env[k];
+  // The throwaway install goes when the test process ends (rmSync removes the node_modules link itself, never what it points to).
+  process.on('exit', () => { try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ } });
   return { root, inst, home, data, lib: path.join(inst, 'lib') };
 }
 
