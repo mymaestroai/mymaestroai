@@ -87,4 +87,11 @@ body:has(> .ucd-overlay) .voice-sheet.open { z-index: 10005; }
 .ucd-docked .ucd-status { position: static; }
 .ucd-docked .ucd-stage > .ucd-rec { position: static; margin-left: auto; }
 .ucd-docked .ucd-host, .ucd-docked .ucd-note, .ucd-docked .ucd-caption, .ucd-docked .ucd-bar .ucd-back, .ucd-docked .ucd-bar .ucd-caps { display: none !important; }
+/* the character download's line (ui-call-display.js): small, under the status pill and note, inside the stage so it never reaches the call bar's Hang up */
+.cd-download { position: absolute; z-index: 1; top: 72px; left: 12px; right: 12px; max-width: 360px; box-sizing: border-box; padding: 6px 10px; border-radius: 10px; font-size: 12px; line-height: 1.35; background: rgba(0, 0, 0, .45); color: #fff; }
+.cd-download[hidden], .cd-download-bar[hidden], .cd-download-retry[hidden] { display: none; }
+.cd-download-bar { display: block; width: 100%; height: 6px; margin-top: 5px; accent-color: var(--accent, #3d7bff); }
+.cd-download-retry { font: inherit; font-size: 13px; min-height: 36px; margin-top: 6px; padding: 0 14px; cursor: pointer; border: 1px solid rgba(255, 255, 255, .4); border-radius: 10px; color: #fff; background: rgba(255, 255, 255, .12); }
+.cd-download-retry:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.cd-download-panel { display: block; width: 100%; max-width: 320px; height: 6px; margin-top: 4px; }   /* the same bar in the voice panel / sheet */
 @media (prefers-reduced-motion: reduce) { .ucd-overlay, .ucd-overlay * { transition: none !important; animation: none !important; } }

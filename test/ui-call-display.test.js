@@ -997,7 +997,7 @@ test('the pages load the three scripts and the stylesheet before app.js / mobile
 test('the shared module is CSP-safe plain JS: no network but /api/faces, no inline style markup, nothing at load time, no retired code-drawn owl', () => {
   const src = read('lib/ui-call-display.js'), code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   assert.ok(!/\brequire\(/.test(code) && !/XMLHttpRequest|WebSocket|sendBeacon|importScripts|\bimport\(/.test(code));
-  assert.deepStrictEqual(code.match(/'\/api\/[^']*'/g), ["'/api/faces'"]);
+  assert.deepStrictEqual(code.match(/'\/api\/[^']*'/g), ["'/api/faces'", "'/api/faces/'"], 'the list, and the download of one character (/api/faces/<id>/download)');
   assert.ok(!/https?:\/\//.test(code), 'no external request');
   assert.ok(!/\.style\.cssText|setAttribute\('style'/.test(code), 'styles only through CSSOM property writes');
   assert.ok(!/owl/i.test(code.replace(/'owl'/g, '')), 'no owl drawing code');

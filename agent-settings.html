@@ -942,7 +942,7 @@
   const CALL_DISPLAY_FIXED = [{ value: 'none', label: 'None' }, { value: 'orb', label: 'Orb' }];
   // The options for the dropdown: the fixed two, the installed characters, and (when the saved value names a character
   // that is not installed right now) that one too, marked unavailable, so opening the page never changes what is saved.
-  function callDisplayOptions(current, packs) {
+  function callDisplayOptions(current, packs, available) {
     const out = CALL_DISPLAY_FIXED.slice();
     const seen = new Set();
     for (const p of Array.isArray(packs) ? packs : []) {
@@ -950,16 +950,23 @@
       seen.add(p.id);
       out.push({ value: 'pack:' + p.id, label: typeof p.name === 'string' && p.name ? p.name : p.id });
     }
+    // characters the hub can download but are not installed: choosing one saves 'pack:<id>' as usual; the download happens on first use (a call or the voice panel)
+    for (const p of Array.isArray(available) ? available : []) {
+      if (!p || typeof p.id !== 'string' || seen.has(p.id)) continue;
+      seen.add(p.id);
+      const mb = Math.round((Number(p.size) || 0) / 1048576);
+      out.push({ value: 'pack:' + p.id, label: (typeof p.name === 'string' && p.name ? p.name : p.id) + (mb > 0 ? ' · downloads ' + mb + ' MB' : ' · downloads on first use') });
+    }
     if (typeof current === 'string' && current.startsWith('pack:') && !out.some(o => o.value === current)) out.push({ value: current, label: current.slice(5) + ' (unavailable: not installed)' });
     return out;
   }
   async function loadCallDisplay(agent) {
     const sel = document.getElementById('call-display'); if (!sel) return;
     const current = typeof agent?.callDisplay === 'string' && agent.callDisplay ? agent.callDisplay : 'none';
-    let packs = [];
-    try { const r = await apiFetch('/api/faces'); if (r && Array.isArray(r.packs)) packs = r.packs; } catch {}
+    let packs = [], available = [];
+    try { const r = await apiFetch('/api/faces'); if (r && Array.isArray(r.packs)) packs = r.packs; if (r && Array.isArray(r.available)) available = r.available; } catch {}
     sel.textContent = '';
-    for (const o of callDisplayOptions(current, packs)) { const el = document.createElement('option'); el.value = o.value; el.textContent = o.label; sel.appendChild(el); }
+    for (const o of callDisplayOptions(current, packs, available)) { const el = document.createElement('option'); el.value = o.value; el.textContent = o.label; sel.appendChild(el); }
     sel.value = current;
   }
   async function saveCallDisplay() {

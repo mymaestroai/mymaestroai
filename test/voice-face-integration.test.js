@@ -363,7 +363,7 @@ test('both pages carry the same wiring: same hooks, same events, same send field
   each(/voiceDisplayHook\('setState', name(, phrase)?\)/, 'controller state'); each(/voiceDisplayHook\('level', db\)/, 'mic level');
   each(/floor\.wrap\(h\)/, 'Talk floor wraps the VAD handlers'); each(/voiceDispEnd\(true\)/, 'goodbye on hang-up'); each(/voiceDispEnd\(false\)/, 'immediate release');
   each(/function voiceFacePackBody\(\)/, 'facePack body helper'); each(/voiceCallSseMood/, 'stream mood'); each(/turn_mood/, 'hub mood event');
-  each(/CallDisplay\.fetchPacks/, 'installed packs from the server'); each(/hub-voice-display|CallDisplay\.saveDisplayPrefs/, 'device choice saved through the shared module');
+  each(/CallDisplay\.fetchFaces/, 'installed packs (and the downloadable ones) from the server'); each(/hub-voice-display|CallDisplay\.saveDisplayPrefs/, 'device choice saved through the shared module');
   assert.ok(/'turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call'\]\) \{/.test(app), 'the existing subscription list is unchanged; turn_mood has its own line');
   assert.ok(/on\('turn_mood', voiceCallTurnMood\)/.test(mob) && /source\.addEventListener\('turn_mood'/.test(app));
   assert.ok(/case 'voice_mood':/.test(mob) && /oc2\.type === 'voice_mood'/.test(app));

@@ -14421,21 +14421,58 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       paintBoxes(CallDisplay.loadDisplayPrefs(localStorage));
       if (!voiceDisp.paintGen) voiceDisp.paintGen = new Map();
       const my = (voiceDisp.paintGen.get(chatId) || 0) + 1; voiceDisp.paintGen.set(chatId, my);
-      let packs = [], state = 'ready';
-      try { packs = await CallDisplay.fetchPacks((...a) => fetch(...a)); } catch { state = 'failed'; }
+      let packs = [], available = [], state = 'ready';
+      try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; } catch { state = 'failed'; }
       if (voiceDisp.paintGen.get(chatId) !== my) return;   // a newer paint started meanwhile: an older answer never puts back an older choice
       const prefs = CallDisplay.loadDisplayPrefs(localStorage);   // read after the wait: a choice made meanwhile counts
       paintBoxes(prefs);
       for (const sel of sels) {
         if (voiceById(sel.id) !== sel) continue;   // rebuilt meanwhile
         if (sel === document.activeElement) continue;   // an open picker is not refilled
-        CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs });
+        CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs, available });
       }
       const note = voiceById(`vp-display-note-${chatId}`);
-      if (note) note.textContent = CallDisplay.displayNote(CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, packsState: state }));
+      const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, available, packsState: state });
+      if (note) note.textContent = CallDisplay.displayNote(resolved);
+      // a character that is on the hub's list but not installed here is downloaded now (the one download per id is shared by the whole page); its progress shows under the note
+      if (resolved.downloadable === true && resolved.wanted) {
+        const a = available.find((x) => x.id === resolved.wanted);
+        voiceDispDownloadFor(chatId, resolved.wanted, a ? a.name : resolved.wanted);
+        voiceDispPaintDownload(chatId);
+      } else if (note) CallDisplay.paintDownloadNote(document, note, null);
+    }
+    // One download per character id for the whole page (voiceDisp.downloads: id -> { name, dl, chats }); every chat panel that asked repaints its own note.
+    function voiceDispDownloadFor(chatId, id, name) {
+      const map = voiceDisp.downloads || (voiceDisp.downloads = new Map());
+      let ent = map.get(id);
+      if (!ent) {
+        ent = { id, name, chats: new Set(), dl: null };
+        ent.chats.add(chatId);
+        ent.dl = CallDisplay.createFaceDownload({ fetch: (...a) => fetch(...a), id, name, onUpdate: (st) => {
+          for (const c of ent.chats) voiceDispPaintDownload(c);
+          if (st.state === 'done') { map.delete(id); for (const c of ent.chats) voiceDispPaintPanel(c); }   // installed: the select lists it now
+        } });
+        map.set(id, ent);
+        ent.dl.start();
+      }
+      ent.chats.add(chatId);
+      return ent;
+    }
+    function voiceDispPaintDownload(chatId) {
+      const note = voiceById(`vp-display-note-${chatId}`);
+      if (!note) return;
+      const prefs = CallDisplay.loadDisplayPrefs(localStorage);
+      const want = prefs.choice === 'follow' ? voiceDispAgentDefault(chats[chatId] && chats[chatId].agent) : prefs.choice;
+      const id = typeof want === 'string' && want.startsWith('pack:') ? want.slice(5) : '';
+      const ent = id && voiceDisp.downloads && voiceDisp.downloads.get(id);
+      if (!ent) { CallDisplay.paintDownloadNote(document, note, null); return; }
+      CallDisplay.paintDownloadNote(document, note, ent.dl.status || { state: 'downloading', received: 0, total: 0 }, ent.name, () => { voiceDisp.downloads.delete(id); ent.dl.stop(); voiceDispPaintPanel(chatId); });
     }
     function voiceDispSetChoice(chatId, v) {
       if (typeof CallDisplay === 'undefined') return;
+      const pid = typeof v === 'string' && v.startsWith('pack:') ? v.slice(5) : '';
+      const prev = pid && voiceDisp.downloads && voiceDisp.downloads.get(pid);
+      if (prev && prev.dl.status && (prev.dl.status.state === 'failed' || prev.dl.status.state === 'busy')) { voiceDisp.downloads.delete(pid); prev.dl.stop(); }   // choosing it again tries again at once
       if (voiceDisp.cur) voiceDisp.cur.setChoice(v); else CallDisplay.saveDisplayPrefs(localStorage, { choice: v });   // live: the view changes, the call goes on
       voiceDispPaintPanel(chatId);
     }
