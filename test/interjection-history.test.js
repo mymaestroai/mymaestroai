@@ -33,6 +33,14 @@ gw.parseSSEStream = (resp) => resp.fake();
 const appServer = L(path.join('codex-cli', 'app-server'));
 let codexSession = null;
 appServer.CodexAppSession.open = async () => codexSession;
+// The Codex route first looks for a `codex` executable (codex-cli resolveBinary) and answers "not installed" without
+// one, before any session is opened. This computer may have the real CLI installed and a test runner does not: a stand-in
+// executable in the throwaway install (never run: the session above is the fake) makes the route the same everywhere,
+// and the app-server transport is pinned (HUB_CODEX_TRANSPORT=exec would pick `codex exec` instead).
+const fakeCodexBin = path.join(ISO.root, 'fake-codex');
+fs.writeFileSync(fakeCodexBin, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+process.env.CODEX_CLI_PATH = fakeCodexBin;
+delete process.env.HUB_CODEX_TRANSPORT;
 
 const sdkChat = L('sdk-chat');
 const sdkInterject = L('sdk-interject');
