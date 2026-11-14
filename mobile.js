@@ -5323,7 +5323,12 @@ async function rereadHistory(agent, attempt = 0) {
     return;
   }
   if (hist.length && hist[hist.length - 1].inProgress) hist.pop();   // a new turn's reply so far (the live turn shows it)
-  chatHistory = hist; chatNext = nextCursor; histGen++;
+  // Older pages the person already loaded ("Load earlier") stay in front of the fresh newest page, with their cursor.
+  const first = hist.length ? Date.parse(hist[0].ts) : NaN;
+  const older = Number.isFinite(first) ? chatHistory.filter(e => e && Date.parse(e.ts) < first) : [];
+  chatHistory = older.length ? chatViewMergeOlder(older, hist) : hist;
+  if (!older.length) chatNext = nextCursor;
+  histGen++;
 }
 function reasoningEnd(holder) {
   const r = holder && holder.rsn;
