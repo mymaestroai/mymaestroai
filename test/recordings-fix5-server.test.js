@@ -81,7 +81,7 @@ function fx({ wrap } = {}) {
 const manifestFile = (t, sid) => path.join(t.dir, 'call-recordings', 'biographer', sid, 'manifest.json.enc');
 
 // ── 1. an inconclusive lookup is not a refusal ──
-test('1: a lookup that fails with an I/O error answers 503 try_later with Retry-After 30 and caches nothing', async () => {
+test('1: a lookup that fails with an I/O error answers 503 try_later with Retry-After 30 and is rescanned after 30 s', async () => {
   let fail = true; let scans = 0;
   const t = fx({ wrap: (s) => Object.assign(Object.create(s), { findSessionByCall: async (...a) => { scans++; if (fail) throw Object.assign(new Error('x'), { code: 'EIO' }); return s.findSessionByCall(...a); } }) });
   const { callId, sessionId } = await t.startCall();
@@ -90,8 +90,9 @@ test('1: a lookup that fails with an I/O error answers 503 try_later with Retry-
   assert.strictEqual(r.statusCode, 503);
   assert.deepStrictEqual(r.json(), { error: 'try_later' });
   assert.strictEqual(r.headers['Retry-After'], '30');
-  // nothing was remembered: the next try scans again and, now that the disk answers, finds the session
+  // it is remembered as "try later" for 30 s only (see recordings-fix6); after that the next try scans again and finds the session
   fail = false;
+  t.clock.t += 31 * 1000;
   await t.real.addSegment('biographer', sessionId, { speaker: 'person', wav: wav(tone(800)) });
   const r2 = await t.call(jsonReq('/api/recordings/transcript', { agent: 'biographer', callId, seq: 1, text: 'hi' }));
   assert.strictEqual(r2.statusCode, 200);
