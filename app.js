@@ -11068,8 +11068,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // Loudness boost for call replies (dB): the speech engine leaves headroom, and Android's call mode lowers the output further.
     const VOICE_LOUDNESS = { normal: 0, louder: 9, loudest: 14 };
-    function voiceLoudnessDb(name) {
-      return typeof name === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, name) ? VOICE_LOUDNESS[name] : VOICE_LOUDNESS.louder;
+    // The same levels when the hub already sent the voice normalised to -16 dBFS (header X-Voice-Normalized: 1): less boost is needed.
+    const VOICE_LOUDNESS_NORMALIZED = { normal: 0, louder: 4, loudest: 8 };
+    function voiceLoudnessDb(name, normalized) {
+      const t = normalized ? VOICE_LOUDNESS_NORMALIZED : VOICE_LOUDNESS;
+      return typeof name === 'string' && Object.prototype.hasOwnProperty.call(t, name) ? t[name] : t.louder;
     }
     // Which output a call's sound goes to, from the open microphone's label (the output follows the input route during a call): 'bluetooth' for
     // a Bluetooth headset, hands-free or car input, else 'speaker' (the phone or computer speaker; a wired headset counts as speaker). Android's
@@ -11124,11 +11127,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (shaper) { last.connect(shaper); last = shaper; }
         if (an) { last.connect(an); an.connect(ctx.destination); } else last.connect(ctx.destination);
       } catch { return null; }
-      const apply = () => { try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
+      let levelName = 'louder', normalized = false;
+      const apply = () => { db = voiceLoudnessDb(levelName, normalized); try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
       apply();
       const chain = {
         input: gain,
-        setLevel(name) { db = voiceLoudnessDb(name); apply(); },
+        setLevel(name) { levelName = name; apply(); },
+        setNormalized(flag) { normalized = !!flag; apply(); },
+        get normalized() { return normalized; },
         get gainDb() { return db; },
         meter() {
           try {
@@ -12830,6 +12836,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         e.toasted = voiceBusyToast(r.status);   // 409 voice_off / 503 voice_busy: the short toast is shown once, here
         throw e;
       }
+      try { if (typeof voiceNoteNormalized === 'function') voiceNoteNormalized(!!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1')); } catch { /* the level stays as it was */ }
       return r.arrayBuffer();
     }
     // Play sentences with the hub voice; on a failure throws an Error whose .at is the sentence that could not be played.
@@ -13132,12 +13139,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     try { if (typeof navigator !== 'undefined' && navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') navigator.mediaDevices.addEventListener('devicechange', voiceOutputOnDeviceChange); } catch { /* no devicechange: the mic reopen still reports the label */ }
     function voiceLoudChain(ctx) {
       let c = null;
-      try { if (!ctx || !voiceCallS.call) return null; c = voiceCreateLoudness(ctx); if (c) c.setLevel(voiceLoudnessNow()); } catch { c = null; }   // a loudness fault never stops a reply
+      try { if (!ctx || !voiceCallS.call) return null; c = voiceCreateLoudness(ctx); if (c) { if (typeof c.setNormalized === 'function') c.setNormalized(voiceNormFlag); c.setLevel(voiceLoudnessNow()); } } catch { c = null; }   // a loudness fault never stops a reply
       return c;
     }
+    // The last reply audio's X-Voice-Normalized header (the hub sent the voice already at -16 dBFS): the chain boosts less. New chains pick it up in voiceLoudChain.
+    let voiceNormFlag = false;
+    function voiceNoteNormalized(flag) { voiceNormFlag = !!flag; try { const c = voicePlay.ctx && voicePlay.ctx.__voiceLoudness; if (c && typeof c.setNormalized === 'function') c.setNormalized(voiceNormFlag); } catch { /* applied at the next chain use */ } }
     function voiceOutNode(ctx) { const c = voiceLoudChain(ctx); return c ? c.input : ctx.destination; }
     function voiceLoudApply() { voiceLoudChain(voicePlay.ctx); }   // at call start and when the pref changes: a running call follows at once
-    try { window.__voiceOut = () => { const c = voicePlay.ctx && voicePlay.ctx.__voiceLoudness; return { level: voiceLoudnessNow(), ...voiceOutputNow(), gainDb: c ? c.gainDb : null, meter: c ? c.meter() : null }; }; } catch { /* a test hook only */ }
+    try { window.__voiceOut = () => { const c = voicePlay.ctx && voicePlay.ctx.__voiceLoudness; return { level: voiceLoudnessNow(), ...voiceOutputNow(), gainDb: c ? c.gainDb : null, normalized: c ? !!c.normalized : voiceNormFlag, meter: c ? c.meter() : null }; }; } catch { /* a test hook only */ }
     function voiceDisplayRoute(ctx, src) { const d = voiceDisp.cur; if (d) { try { d.routeBufferSource(ctx, src); return; } catch { /* plain playback below */ } } src.connect(voiceOutNode(ctx)); }
     function voiceDisplaySpeech(kind) { voiceDisplayHook('speech', kind); }
     // The VAD handlers pass through the Talk floor, so a tap on Talk is released when the microphone hears nothing.

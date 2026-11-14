@@ -2738,8 +2738,11 @@ function voiceCreateAudioFocus(opts) {
 }
 // Loudness boost for call replies (dB): the speech engine leaves headroom, and Android's call mode lowers the output further.
 const VOICE_LOUDNESS = { normal: 0, louder: 9, loudest: 14 };
-function voiceLoudnessDb(name) {
-  return typeof name === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, name) ? VOICE_LOUDNESS[name] : VOICE_LOUDNESS.louder;
+// The same levels when the hub already sent the voice normalised to -16 dBFS (header X-Voice-Normalized: 1): less boost is needed.
+const VOICE_LOUDNESS_NORMALIZED = { normal: 0, louder: 4, loudest: 8 };
+function voiceLoudnessDb(name, normalized) {
+  const t = normalized ? VOICE_LOUDNESS_NORMALIZED : VOICE_LOUDNESS;
+  return typeof name === 'string' && Object.prototype.hasOwnProperty.call(t, name) ? t[name] : t.louder;
 }
 // Which output a call's sound goes to, from the open microphone's label (the output follows the input route during a call): 'bluetooth' for
 // a Bluetooth headset, hands-free or car input, else 'speaker' (the phone or computer speaker; a wired headset counts as speaker). Android's
@@ -2794,11 +2797,14 @@ function voiceCreateLoudness(ctx) {
     if (shaper) { last.connect(shaper); last = shaper; }
     if (an) { last.connect(an); an.connect(ctx.destination); } else last.connect(ctx.destination);
   } catch { return null; }
-  const apply = () => { try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
+  let levelName = 'louder', normalized = false;
+  const apply = () => { db = voiceLoudnessDb(levelName, normalized); try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
   apply();
   const chain = {
     input: gain,
-    setLevel(name) { db = voiceLoudnessDb(name); apply(); },
+    setLevel(name) { levelName = name; apply(); },
+    setNormalized(flag) { normalized = !!flag; apply(); },
+    get normalized() { return normalized; },
     get gainDb() { return db; },
     meter() {
       try {
@@ -6732,6 +6738,7 @@ async function voiceTtsBlob(agent, text) {   // null when the hub cannot say it 
     if (r.status === 409 || r.status === 503) { voicePlay.told = true; toast(r.status === 409 ? 'Voice is turned off' : 'Voice is busy, try again in a few seconds', 4000); }
     if (!r.ok) return null;
     const b = await r.blob();
+    try { if (typeof voiceNoteNormalized === 'function') voiceNoteNormalized(!!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1')); } catch { /* the level stays as it was */ }
     return b && b.size ? b : null;
   } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner, agent); return null; }   // a network failure marks the link lost
 }
@@ -6928,7 +6935,13 @@ function voiceOutputOnDeviceChange() {   // devicechange during a call: read the
 try { if (typeof navigator !== 'undefined' && navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') navigator.mediaDevices.addEventListener('devicechange', voiceOutputOnDeviceChange); } catch { /* no devicechange: the mic reopen still reports the label */ }
 function voiceLoudChain(ctx) {
   if (!ctx || !voiceCall) return null;
-  try { const c = voiceCreateLoudness(ctx); if (c) c.setLevel(voiceLoudnessNow()); return c || null; } catch { return null; }
+  try { const c = voiceCreateLoudness(ctx); if (c) { if (typeof c.setNormalized === 'function') c.setNormalized(voiceNormFlag); c.setLevel(voiceLoudnessNow()); } return c || null; } catch { return null; }
+}
+// The last reply audio's X-Voice-Normalized header (the hub sent the voice already at -16 dBFS): the chains boost less. New chains pick it up in voiceLoudChain.
+let voiceNormFlag = false;
+function voiceNoteNormalized(flag) {
+  voiceNormFlag = !!flag;
+  for (const ctx of voiceLoudCtxs()) { const c = ctx.__voiceLoudness; if (c && typeof c.setNormalized === 'function') { try { c.setNormalized(voiceNormFlag); } catch { /* gone */ } } }
 }
 function voiceOutNode(ctx) { const c = voiceLoudChain(ctx); return c ? c.input : ctx.destination; }
 function voiceLoudCtxs() { const a = voiceDisp.shared && voiceDisp.shared.ctx, b = voiceCall && voiceCall.thinkCtx; return [a, b && b !== a ? b : null].filter(Boolean); }
@@ -6947,7 +6960,7 @@ function voiceOwnRoute(el) {
   const chain = voiceLoudChain(ctx); if (!chain) return false;
   try { const srcNode = ctx.createMediaElementSource(el); srcNode.connect(chain.input); voiceOwnRoutes.set(el, { ctx, srcNode }); return true; } catch { return false; }
 }
-try { window.__voiceOut = () => { let c = null; for (const ctx of voiceLoudCtxs()) { if (ctx.__voiceLoudness) { c = ctx.__voiceLoudness; break; } } return { level: voiceLoudnessNow(), ...voiceOutputNow(), gainDb: c ? c.gainDb : null, meter: c ? c.meter() : null }; }; } catch { /* a test hook only */ }
+try { window.__voiceOut = () => { let c = null; for (const ctx of voiceLoudCtxs()) { if (ctx.__voiceLoudness) { c = ctx.__voiceLoudness; break; } } return { level: voiceLoudnessNow(), ...voiceOutputNow(), gainDb: c ? c.gainDb : null, normalized: c ? !!c.normalized : voiceNormFlag, meter: c ? c.meter() : null }; }; } catch { /* a test hook only */ }
 function voiceFacePackBody() { const d = voiceDisp.cur; const slug = d && typeof d.activeFacePack === 'function' ? d.activeFacePack() : null; return slug ? { facePack: slug } : {}; }
 function voiceDispTalk() { const f = voiceDisp.floor; if (f) f.take(); }
 function voiceDispAdopt() {

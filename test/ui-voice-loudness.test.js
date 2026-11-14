@@ -459,3 +459,69 @@ test('phone: __voiceOut reports the output and label; the panel paints and saves
   assert.ok(mob.includes("set('vp-loudness', voiceLoudnessFor(voicePrefsNow(), 'speaker'));") && mob.includes("set('vp-loudness-bt', voiceLoudnessFor(voicePrefsNow(), 'bluetooth'));"));
   assert.ok(mob.includes("save({ loudnessBt: Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, e.target.value) ? e.target.value : 'normal' })"));
 });
+
+// ── normalised voices (header X-Voice-Normalized: 1): less boost, same -1 dBFS ceiling ──
+test('voiceLoudnessDb(name, true): normalised table 0 / 4 / 8, defaults to 4; without the flag nothing changes', () => {
+  assert.deepStrictEqual(V.VOICE_LOUDNESS_NORMALIZED, { normal: 0, louder: 4, loudest: 8 });
+  assert.strictEqual(V.voiceLoudnessDb('normal', true), 0);
+  assert.strictEqual(V.voiceLoudnessDb('louder', true), 4);
+  assert.strictEqual(V.voiceLoudnessDb('loudest', true), 8);
+  for (const v of [undefined, null, '', 'LOUD', 'toString', '__proto__', 5, {}]) assert.strictEqual(V.voiceLoudnessDb(v, true), 4, String(v));
+  for (const [n, d] of [['normal', 0], ['louder', 9], ['loudest', 14], ['x', 9]]) { assert.strictEqual(V.voiceLoudnessDb(n), d); assert.strictEqual(V.voiceLoudnessDb(n, false), d); }
+});
+test('chain.setNormalized: louder is +9 dB, +4 dB when normalised, back on false; setLevel afterwards uses the current table', () => {
+  const ctx = fakeCtx(); const c = V.voiceCreateLoudness(ctx);
+  const lin = (db) => Math.pow(10, db / 20);
+  assert.strictEqual(c.normalized, false);
+  assert.ok(Math.abs(c.input.gain.value - lin(9)) < 1e-9);
+  c.setNormalized(true); assert.strictEqual(c.normalized, true); assert.strictEqual(c.gainDb, 4); assert.ok(Math.abs(c.input.gain.value - lin(4)) < 1e-9);
+  c.setLevel('loudest'); assert.strictEqual(c.gainDb, 8); assert.ok(Math.abs(c.input.gain.value - lin(8)) < 1e-9);
+  c.setLevel('normal'); assert.strictEqual(c.gainDb, 0);
+  c.setLevel('nonsense'); assert.strictEqual(c.gainDb, 4, 'unknown -> louder of the normalised table');
+  c.setNormalized(0); assert.strictEqual(c.normalized, false); assert.strictEqual(c.gainDb, 9, 'back on the old table, same remembered name');
+  c.setLevel('loudest'); c.setNormalized('yes'); assert.strictEqual(c.normalized, true); assert.strictEqual(c.gainDb, 8);
+  c.setNormalized(false); assert.strictEqual(c.gainDb, 14);
+});
+test('per output: Bluetooth default stays normal (0 dB) with or without the normalised flag, the speaker default is 9 / 4', () => {
+  const kindBt = V.voiceLoudnessFor({}, 'bluetooth'), kindSp = V.voiceLoudnessFor({}, 'speaker');
+  assert.strictEqual(V.voiceLoudnessDb(kindBt), 0); assert.strictEqual(V.voiceLoudnessDb(kindBt, true), 0);
+  assert.strictEqual(V.voiceLoudnessDb(kindSp), 9); assert.strictEqual(V.voiceLoudnessDb(kindSp, true), 4);
+  const c = V.voiceCreateLoudness(fakeCtx()); c.setLevel(kindBt); c.setNormalized(true); assert.strictEqual(c.gainDb, 0); c.setNormalized(false); assert.strictEqual(c.gainDb, 0);
+});
+test('desktop: voiceFetchTts reads X-Voice-Normalized and the flag reaches the call chain (and a chain made later)', async () => {
+  const fetchSrc = between(app, 'async function voiceFetchTts(agent, text, voice) {', '// Play sentences with the hub voice');
+  const mk = (header, ctx) => {
+    const headers = { get: (k) => (String(k).toLowerCase() === 'x-voice-normalized' ? header : null) };
+    const fetchFn = async () => ({ ok: true, status: 200, headers, arrayBuffer: async () => new ArrayBuffer(4) });
+    return new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window', 'fetch', 'voiceSpeedNow', 'voiceBusyToast',
+      desk() + '\n' + fetchSrc + '; return { voiceOutNode, voiceFetchTts, voiceNoteNormalized };')({ call: {} }, () => ({ loudness: 'louder' }), V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {}, fetchFn, () => 1, () => false);
+  };
+  let ctx = fakeCtx(); let env = mk('1', ctx);
+  env.voiceOutNode(ctx); assert.strictEqual(ctx.__voiceLoudness.gainDb, 9);
+  await env.voiceFetchTts('a', 'hello'); assert.strictEqual(ctx.__voiceLoudness.gainDb, 4, 'header 1: +4 dB');
+  env = mk(null, ctx); await env.voiceFetchTts('a', 'hello'); assert.strictEqual(ctx.__voiceLoudness.gainDb, 9, 'no header: +9 dB again');
+  ctx = fakeCtx(); env = mk('1', ctx); await env.voiceFetchTts('a', 'hello');
+  env.voiceOutNode(ctx); assert.strictEqual(ctx.__voiceLoudness.gainDb, 4, 'a chain created after the header picks the flag up');
+  assert.ok(app.includes('normalized: c ? !!c.normalized : voiceNormFlag'), '__voiceOut reports normalized');
+  // without the helper (a page test with stubs) the fetch helper still works
+  const bare = new Function('fetch', 'voiceSpeedNow', 'voiceBusyToast', fetchSrc + '; return voiceFetchTts;')(async () => ({ ok: true, status: 200, headers: { get: () => '1' }, arrayBuffer: async () => new ArrayBuffer(1) }), () => 1, () => false);
+  assert.strictEqual((await bare('a', 't')).byteLength, 1);
+});
+test('phone: voiceTtsBlob reads X-Voice-Normalized and the flag reaches the call chain (and a chain made later)', async () => {
+  const blobSrc = between(mob, 'async function voiceTtsBlob(agent, text) {', 'function voicePlayBlob(');
+  const mk = (header, ctx) => {
+    const headers = { get: (k) => (String(k).toLowerCase() === 'x-voice-normalized' ? header : null) };
+    const api = async () => ({ ok: true, status: 200, headers, blob: async () => ({ size: 4 }) });
+    const prefs = { loudness: 'louder', loudnessBt: 'normal' };
+    const state = { voiceCall: { thinkCtx: null, micInfo: { label: '' } }, voiceDisp: { cur: null, shared: { ctx, routes: new WeakMap() } }, voicePlay: { audio: null } };
+    return new Function('state', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'window', 'api', 'voiceOn', 'voiceSpeedNow', 'toast',
+      'let voiceCall = state.voiceCall; const voiceDisp = state.voiceDisp, voicePlay = state.voicePlay;\n' + phoneSrc() + '\n' + blobSrc + '; return { voiceOutNode, voiceTtsBlob, voiceNoteNormalized };')(state, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, {}, api, () => true, () => 1, () => {});
+  };
+  let ctx = fakeCtx(); let env = mk('1', ctx);
+  env.voiceOutNode(ctx); assert.strictEqual(ctx.__voiceLoudness.gainDb, 9);
+  assert.ok(await env.voiceTtsBlob('a', 'hello')); assert.strictEqual(ctx.__voiceLoudness.gainDb, 4, 'header 1: +4 dB');
+  env = mk(null, ctx); await env.voiceTtsBlob('a', 'hello'); assert.strictEqual(ctx.__voiceLoudness.gainDb, 9, 'no header: +9 dB again');
+  ctx = fakeCtx(); env = mk('1', ctx); await env.voiceTtsBlob('a', 'hello');
+  env.voiceOutNode(ctx); assert.strictEqual(ctx.__voiceLoudness.gainDb, 4, 'a chain created after the header picks the flag up');
+  assert.ok(mob.includes('normalized: c ? !!c.normalized : voiceNormFlag'), '__voiceOut reports normalized');
+});
