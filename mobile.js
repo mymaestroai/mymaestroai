@@ -6738,7 +6738,8 @@ async function voiceTtsBlob(agent, text) {   // null when the hub cannot say it 
     if (r.status === 409 || r.status === 503) { voicePlay.told = true; toast(r.status === 409 ? 'Voice is turned off' : 'Voice is busy, try again in a few seconds', 4000); }
     if (!r.ok) return null;
     const b = await r.blob();
-    try { if (typeof voiceNoteNormalized === 'function') voiceNoteNormalized(!!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1')); } catch { /* the level stays as it was */ }
+    // The flag travels with the audio and is applied only when it starts playing (voicePlayBlob), never on arrival.
+    try { if (b) b.__voiceNorm = !!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1'); } catch { /* old defaults */ }
     return b && b.size ? b : null;
   } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner, agent); return null; }   // a network failure marks the link lost
 }
@@ -6749,6 +6750,7 @@ function voicePlayBlob(blob, my, meta) {
     const wait = typeof voiceDispPagePrep === 'function' ? voiceDispPagePrep(my) : null;
     const begin = () => {
     if (my !== voicePlay.token) { resolve(false); return; }
+    try { if (typeof voiceNoteNormalized === 'function') voiceNoteNormalized(!!(blob && blob.__voiceNorm === true)); } catch { /* the level stays as it was */ }
     const a = voicePlay.audio || (voicePlay.audio = new Audio());
     const prev = voicePlay.url;
     const url = URL.createObjectURL(blob);

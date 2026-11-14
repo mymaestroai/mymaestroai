@@ -12836,8 +12836,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         e.toasted = voiceBusyToast(r.status);   // 409 voice_off / 503 voice_busy: the short toast is shown once, here
         throw e;
       }
-      try { if (typeof voiceNoteNormalized === 'function') voiceNoteNormalized(!!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1')); } catch { /* the level stays as it was */ }
-      return r.arrayBuffer();
+      let norm = false;
+      try { norm = !!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1'); } catch { norm = false; }
+      const buf = await r.arrayBuffer();
+      try { buf.__voiceNorm = norm; } catch { /* the flag is applied only when this audio starts playing (voicePlayHub) */ }
+      return buf;
     }
     // Play sentences with the hub voice; on a failure throws an Error whose .at is the sentence that could not be played.
     async function voicePlayHub(agent, sentences, voice, my) {
@@ -12852,8 +12855,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try { buf = await next; } catch (e) { e.at = i; throw e; }
         if (voicePlay.token !== my) return;
         if (i + 1 < sentences.length) { next = voiceFetchTts(agent, sentences[i + 1], voice); next.catch(() => {}); }
+        const norm = !!(buf && buf.__voiceNorm === true);   // read before decoding (decodeAudioData detaches the buffer)
         try { ab = await ctx.decodeAudioData(buf); } catch (e) { e.at = i; throw e; }
         if (voicePlay.token !== my) return;
+        // The loudness follows the audio that is about to play, never a response that merely arrived (a prefetch or a cancelled request).
+        try { if (typeof voiceNoteNormalized === 'function') voiceNoteNormalized(norm); } catch { /* the level stays as it was */ }
         await new Promise((res) => {
           const src = ctx.createBufferSource();
           src.buffer = ab;
