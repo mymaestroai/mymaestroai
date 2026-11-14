@@ -612,7 +612,10 @@
   #cp-meter { flex: 1; height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
   #cp-meter i { display: block; height: 100%; width: 0; background: var(--success, #00D395); transition: width .08s linear; }
   #cp-activity { min-height: 1.2em; font-size: 13px; color: var(--text-dim); overflow-wrap: anywhere; }
-  #cp-heard { min-height: 1.3em; font-size: 14px; color: var(--text-dim); overflow-wrap: anywhere; }
+  /* The panel is a column with a max-height: its rows must never shrink (a min-height row shrank to one line and its second line drew over the Microphone line below) */
+  #call-panel > * { flex-shrink: 0; }
+  #cp-heard { min-height: 1.3em; font-size: 14px; line-height: 1.3; color: var(--text-dim); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  #cp-heard:empty { display: block; }
   #cp-held { display: flex; flex-direction: column; gap: 6px; }
   #cp-held:empty { display: none; }
   #cp-held .cp-item { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 10px; background: var(--bg-input); border: 1px solid var(--border); }
