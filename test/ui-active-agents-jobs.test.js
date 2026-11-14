@@ -176,6 +176,7 @@ function desk(o) {
     fetch: async (url, opts) => {
       rec.fetches.push([url, opts]);
       const r = resp.next;
+      if (r.defer) return new Promise((res) => { (rec.pending || (rec.pending = [])).push(() => res({ status: 200, ok: true, json: async () => ({ jobs: r.jobs }) })); });
       if (r.throws) throw new Error('offline');
       return { status: r.status, ok: r.ok, json: async () => ({ jobs: r.jobs }) };
     },
@@ -188,7 +189,8 @@ function desk(o) {
   const names = Object.keys(env);
   const api = new Function(...names, DESK_SRC + `
     return { activeDress, activeDressJob, activeJobsPoll, activeJobsSync, activeJobsWanted,
-      list: () => activeJobList, jobs: () => activeJobs, setJobs: (v) => { activeJobs = v; }, timer: () => activeJobsTimer, stopped: () => activeJobsStopped };`)(...names.map(n => env[n]));
+      list: () => activeJobList, jobs: () => activeJobs, setJobs: (v) => { activeJobs = v; }, timer: () => activeJobsTimer, stopped: () => activeJobsStopped,
+      fresh: () => activeJobsFresh() };`)(...names.map(n => env[n]));
   env.document.visibilityState = o.hidden ? 'hidden' : 'visible';
   return { env, rec, clock, resp, api };
 }
@@ -198,7 +200,8 @@ test('desktop poll: fetches /api/jobs with credentials and stops for good after 
   const d = desk({ first: { status: 403, ok: false } });
   await d.api.activeJobsPoll();
   assert.strictEqual(d.rec.fetches.length, 1);
-  assert.deepStrictEqual(d.rec.fetches[0], ['/api/jobs', { credentials: 'include' }]);
+  // changed (review r1): the request also carries an abort signal (10 s timeout)
+  assert.strictEqual(d.rec.fetches[0][0], '/api/jobs'); assert.strictEqual(d.rec.fetches[0][1].credentials, 'include'); assert.ok(d.rec.fetches[0][1].signal, 'abort signal');
   assert.strictEqual(d.api.stopped(), true);
   await d.api.activeJobsPoll();
   d.api.activeJobsSync();
@@ -337,7 +340,7 @@ test('desktop activeDress: a jobOnly row gets class active-joby and a hollow dot
 test('desktop paintActiveSection passes jobs from the polled list to activeStep', () => {
   const p = cut(app, 'function paintActiveSection(', "// Agents' detached background jobs (GET /api/jobs");
   assert.ok(app.indexOf('const ACTIVE_JOBS_MS') < app.indexOf('function paintActiveSection('), 'the job state exists before any paint');
-  assert.ok(p.includes('activeJobs = activeJobsFrom(activeJobList, visible);'));
+  assert.ok(p.includes('activeJobs = activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible);'), 'changed (review r1): a list older than 60 s is not shown');
   assert.ok(/activeStep\(activeState, \{ busy, jobs: activeJobs, now: Date\.now\(\)/.test(p));
   assert.ok(app.includes('activeDressJob(copy, row);'));
   const save = cut(app, 'function saveActiveTop(', 'function activeDress(');
@@ -523,4 +526,31 @@ test('phone renderAgents passes jobs to the step and the job to the Active rows;
   assert.ok(r.includes('jobOnly: !!row.jobOnly, job: activeJobs[a.name]'));
   assert.ok(cut(mob, 'function toggleActiveTop() {', 'function activeBusyNow()').includes('activeJobsSync();'), 'the switch starts or stops the poll');
   assert.ok(/await loadAgents\(\);\s*activeJobsSync\(\);/.test(mob), 'started in init after loadAgents');
+});
+
+// ── review r1 follow-ups: answers out of order, stalled requests, expired lists ──
+test('desktop poll: a late answer from an older request is dropped (the newest request decides)', async () => {
+  const d = desk({ first: { defer: true, jobs: [JOB('1', 'sam', 'old')] } });
+  const older = d.api.activeJobsPoll();                      // request 1, pending
+  d.resp.next = { status: 200, ok: true, jobs: [] };
+  await d.api.activeJobsPoll();                              // request 2 answers first: no jobs
+  assert.deepStrictEqual(d.api.list(), []);
+  d.rec.pending.shift()();                                   // request 1 answers late with the job still running
+  await older;
+  assert.deepStrictEqual(d.api.list(), [], 'the older answer does not bring the job back');
+});
+test('desktop poll: each request carries an abort signal; a list older than 60 s is not shown even without a failure', async () => {
+  const d = desk({ first: { status: 200, ok: true, jobs: [JOB('1', 'sam', 'a')] } });
+  await d.api.activeJobsPoll();
+  assert.ok(d.rec.fetches[0][1].signal, 'abort signal (10 s timeout)');
+  assert.strictEqual(d.api.fresh(), true);
+  d.clock.now += 61000;                                       // e.g. the tab was hidden, or a request is stalled
+  assert.strictEqual(d.api.fresh(), false, 'paintActiveSection then draws no jobs');
+  const paints = d.rec.paints;
+  await d.api.activeJobsPoll();                              // the same answer comes back
+  assert.strictEqual(d.rec.paints, paints + 1, 'a good answer after expiry is drawn even when it is the same');
+  await d.api.activeJobsPoll();
+  assert.strictEqual(d.rec.paints, paints + 1, 'and not again while nothing changes');
+  assert.ok(app.includes('activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible)') && mob.includes('activeJobsFrom(activeJobsFresh() ? activeJobList : [], agents.map(a => a.name))'), 'both pages draw only a fresh list');
+  assert.ok(mob.includes("api('/api/jobs', ac ? { signal: ac.signal } : {})"), 'the phone request carries the signal too');
 });

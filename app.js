@@ -6568,7 +6568,9 @@
     const ACTIVE_JOBS_MS = 15000;
     const ACTIVE_JOBS_STALE_MS = 60000;
     let activeJobList = []; let activeJobs = {}; let activeJobsOkAt = 0; let activeJobsSig = '';
-    let activeJobsStopped = false; let activeJobsTimer = null;
+    let activeJobsStopped = false; let activeJobsTimer = null; let activeJobsSeq = 0;
+    const ACTIVE_JOBS_TIMEOUT_MS = 10000;
+    function activeJobsFresh() { return Date.now() - activeJobsOkAt <= ACTIVE_JOBS_STALE_MS; }
     function activeTopOn() { try { return localStorage.getItem('hub-active-top') !== 'off'; } catch { return true; } }
     function saveActiveTop(on) {
       try { localStorage.setItem('hub-active-top', on ? 'on' : 'off'); } catch {}
@@ -6649,7 +6651,7 @@
       // Only agents that have a row in this list (the access-filtered AGENTS, in one of the shown groups).
       const visible = AGENTS.map(a => a.name).filter(n => document.getElementById('agent-btn-' + n));
       const busy = activeBusyFrom(agentStatus, localBusy, visible);
-      activeJobs = activeJobsFrom(activeJobList, visible);
+      activeJobs = activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible);   // a list older than 60 s is not shown
       const next = activeStep(activeState, { busy, jobs: activeJobs, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
       const membersChanged = force || activeMembersChanged(activeState, next);
       activeState = next;
@@ -6695,21 +6697,29 @@
     }
     async function activeJobsPoll() {
       if (!activeJobsWanted()) return;
-      let list = null;
+      const seq = ++activeJobsSeq;   // only the newest request may change the list (an older answer arriving late is dropped)
+      const wasFresh = activeJobsFresh();
+      let list = null, good = false;
+      const ac = typeof AbortController === 'function' ? new AbortController() : null;
+      const to = ac ? setTimeout(() => ac.abort(), ACTIVE_JOBS_TIMEOUT_MS) : null;   // a stalled request ends; the list also expires by itself
       try {
-        const res = await fetch('/api/jobs', { credentials: 'include' });
+        const res = await fetch('/api/jobs', ac ? { credentials: 'include', signal: ac.signal } : { credentials: 'include' });
+        if (seq !== activeJobsSeq) return;
         if (res.status === 401 || res.status === 403) {
           activeJobsStopped = true;
           if (activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
           list = [];
         } else if (!res.ok) throw new Error('HTTP ' + res.status);
-        else { const d = await res.json(); list = Array.isArray(d && d.jobs) ? d.jobs : []; activeJobsOkAt = Date.now(); }
+        else { const d = await res.json(); if (seq !== activeJobsSeq) return; list = Array.isArray(d && d.jobs) ? d.jobs : []; activeJobsOkAt = Date.now(); good = true; }
       } catch {
-        if (Date.now() - activeJobsOkAt > ACTIVE_JOBS_STALE_MS) list = [];
+        if (seq !== activeJobsSeq) return;
+        if (!activeJobsFresh()) list = [];
+      } finally {
+        if (to) clearTimeout(to);
       }
       if (!list) return;
       const sig = JSON.stringify(list.map(j => [j && j.id, j && j.name, j && j.owner, j && j.status, j && j.startedAt]));
-      if (sig === activeJobsSig) return;
+      if (sig === activeJobsSig && !(good && !wasFresh)) return;   // a good answer after the list expired is drawn even when it is the same
       activeJobsSig = sig;
       activeJobList = list;
       paintActiveSection();

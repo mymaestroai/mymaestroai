@@ -1841,6 +1841,9 @@ let activeJobsOkAt = 0;
 let activeJobsSig = '';
 let activeJobsStopped = false;
 let activeJobsTimer = null;
+let activeJobsSeq = 0;
+const ACTIVE_JOBS_TIMEOUT_MS = 10000;
+function activeJobsFresh() { return Date.now() - activeJobsOkAt <= ACTIVE_JOBS_STALE_MS; }
 let activeJobsTick = null;
 function activeJobsWanted() {
   return !activeJobsStopped && activeTopOn() && document.visibilityState === 'visible';
@@ -1852,27 +1855,35 @@ function activeJobsSync() {
 }
 async function activeJobsPoll() {
   if (!activeJobsWanted()) return;
-  let list = null;
+  const seq = ++activeJobsSeq;   // only the newest request may change the list (an older answer arriving late is dropped)
+  const wasFresh = activeJobsFresh();
+  let list = null, good = false;
+  const ac = typeof AbortController === 'function' ? new AbortController() : null;
+  const to = ac ? setTimeout(() => ac.abort(), ACTIVE_JOBS_TIMEOUT_MS) : null;   // a stalled request ends; the list also expires by itself
   try {
-    const res = await api('/api/jobs');
+    const res = await api('/api/jobs', ac ? { signal: ac.signal } : {});
+    if (seq !== activeJobsSeq) return;
     if (res.status === 401 || res.status === 403) {
       activeJobsStopped = true;
       if (activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
       list = [];
     } else if (!res.ok) throw new Error('HTTP ' + res.status);
-    else { const d = await res.json(); list = Array.isArray(d && d.jobs) ? d.jobs : []; activeJobsOkAt = Date.now(); }
+    else { const d = await res.json(); if (seq !== activeJobsSeq) return; list = Array.isArray(d && d.jobs) ? d.jobs : []; activeJobsOkAt = Date.now(); good = true; }
   } catch {
-    if (Date.now() - activeJobsOkAt > ACTIVE_JOBS_STALE_MS) list = [];
+    if (seq !== activeJobsSeq) return;
+    if (!activeJobsFresh()) list = [];
+  } finally {
+    if (to) clearTimeout(to);
   }
   if (!list) return;
   const sig = JSON.stringify(list.map(j => [j && j.id, j && j.name, j && j.owner, j && j.status, j && j.startedAt]));
-  if (sig === activeJobsSig) return;
+  if (sig === activeJobsSig && !(good && !wasFresh)) return;   // a good answer after the list expired is drawn even when it is the same
   activeJobsSig = sig;
   activeJobList = list;
   if (screen === 'agents') renderAgents();
 }
 function activeJobsNow() {
-  return activeJobsFrom(activeJobList, agents.map(a => a.name));
+  return activeJobsFrom(activeJobsFresh() ? activeJobList : [], agents.map(a => a.name));   // a list older than 60 s is not shown
 }
 // The elapsed time changes between polls: relabel the drawn rows in place (no redraw).
 function activeJobsRelabel() {
