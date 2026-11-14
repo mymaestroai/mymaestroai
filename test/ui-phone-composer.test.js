@@ -242,3 +242,35 @@ test('(d) plusSheetWire: second tap on + closes, outside tap, Escape (focus back
   assert.ok(/async function openChat\(name\) \{[^]*?plusSheetShow\(false\);/.test(mob.slice(mob.indexOf('async function openChat(name)'), mob.indexOf('async function openChat(name)') + 400)), 'opening a chat closes it');
   assert.ok(/plusSheetWire\(\);\n\s+\$\('attach-btn'\)\.addEventListener\('click', \(\) => \$\('file-input'\)\.click\(\)\);\n\s+\$\('camera-btn'\)\.addEventListener\('click', \(\) => \$\('camera-input'\)\.click\(\)\);/.test(mob), 'attach and camera still click the file inputs directly, in the same tap');
 });
+
+// Owner's live build, 2026-11-13: + sheet -> Voice settings -> Escape -> start a call -> Hang up left the call running.
+test('(e) Hang up always ends the call: the red phone hangs up first even while a mic test is starting (run)', async () => {
+  let hung = 0;
+  const api = new Function('voiceCall', 'voiceRec', 'voiceTest', 'keepKeyboard', 'voiceCallHangUp', 'voiceMicStop', 'current', 'toast', 'voicePrefsNow', 'voiceCallStart',
+    'async ' + fnSource(mob, 'voiceMicTap').replace(/^async /, '') + '\nreturn voiceMicTap;')(
+    { call: {} }, { state: 'idle', guard: { pending: false } }, { guard: { pending: true } }, null, () => { hung++; }, () => {}, 'sam', () => {}, () => ({ mode: 'handsfree' }), () => {});
+  await api();
+  assert.equal(hung, 1, 'the tap hung up although the voice panel\'s mic test was starting');
+});
+
+test('(e) a call starts with the voice panel and the + sheet closed (nothing over Hang up)', () => {
+  const body = fnSource(mob, 'voiceCallStart');
+  const head = body.slice(0, body.indexOf('const agent = current;'));
+  assert.match(head, /voicePanelOpen\(\) && typeof voicePanelShow === 'function'\) voicePanelShow\(false\);/);
+  assert.match(head, /plusSheetShow\(false\);/);
+});
+
+test('(e) Escape closes the layer on top: the + sheet first, else an open voice panel, even with focus outside the panel (run)', () => {
+  const mk = (name) => ({ name, hidden: true, attrs: {}, focused: 0, on: {}, setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, f) { (this.on[t] = this.on[t] || []).push(f); }, focus() { this.focused++; }, contains: () => false });
+  const sheet = mk('sheet'), btn = mk('btn'), input = mk('input'), doc = mk('doc');
+  let panelOpen = true;
+  const $ = (id) => ({ 'plus-sheet': sheet, 'plus-btn': btn, 'msg-input': input }[id] || null);
+  const src = ['plusSheetOpen', 'plusSheetShow', 'plusSheetWire'].map((n) => fnSource(mob, n)).join('\n');
+  new Function('$', 'document', 'voicePanelOpen', 'voicePanelShow', src + '\nplusSheetWire();')($, doc, () => panelOpen, (v) => { panelOpen = !!v; });
+  const esc = () => { const e = { key: 'Escape', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; (sheet.on.keydown || []).forEach((f) => f(e)); (doc.on.keydown || []).forEach((f) => f(e)); return e; };
+  esc();   // the sheet is closed (its item had focus): the voice panel is the layer on top
+  assert.equal(panelOpen, false, 'Escape closed the voice panel');
+  sheet.hidden = false; panelOpen = true;
+  esc();
+  assert.equal(sheet.hidden, true, 'the sheet closes first'); assert.equal(panelOpen, true, 'one layer per Escape');
+});

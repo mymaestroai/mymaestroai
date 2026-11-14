@@ -6555,9 +6555,9 @@ function voiceMicCancel() {
 
 async function voiceMicTap() {
   keepKeyboard && keepKeyboard.elsewhere();   // the mic button took the touch: the keyboard guard must not bring the keyboard back
+  if (voiceCall) { voiceCallHangUp(); return; }   // during a call it is the red phone: it hangs up first, whatever else is busy
   if (voiceRec.state === 'starting' || voiceRec.state === 'sending' || voiceRec.guard.pending || voiceTest.guard.pending) return;
   if (voiceRec.state === 'recording') { voiceMicStop(); return; }
-  if (voiceCall) { voiceCallHangUp(); return; }
   if (!current) { toast('Pick an agent first'); return; }
   if (voicePrefsNow().mode !== 'tap') { voiceCallStart(); return; }   // hands-free: a tap starts a call (nothing awaited before call.start, for iOS)
   if (voiceTest.handle) voiceTestStop();
@@ -7329,6 +7329,9 @@ function voiceLinkMake(vc) {
 function voiceCallStart() {
   if (typeof voiceAutoReadReset === 'function') voiceAutoReadReset();   // a reply to an earlier dictation is not read aloud over the call
   if (voiceCall) return;
+  // A call starts with nothing over its controls: the voice panel sits right above the composer, where Hang up is.
+  if (typeof voicePanelOpen === 'function' && voicePanelOpen() && typeof voicePanelShow === 'function') voicePanelShow(false);
+  if (typeof plusSheetShow === 'function') plusSheetShow(false);
   const agent = current;
   if (!agent) { toast('Pick an agent first'); return; }
   if (!voiceOn()) { toast('Voice is not ready on the hub yet'); return; }
@@ -7799,7 +7802,13 @@ function plusSheetWire() {
   b.addEventListener('click', (e) => { e.stopPropagation(); plusSheetShow(!plusSheetOpen()); });
   // Capture phase: the sheet closes first, then the item's own handler acts (same tap, so a file picker still opens).
   s.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('[role="menuitem"]')) plusSheetShow(false); }, true);
-  s.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); plusSheetShow(false); b.focus(); } });
+  s.addEventListener('keydown', (e) => { if (e.key === 'Escape' && plusSheetOpen()) { e.preventDefault(); plusSheetShow(false); b.focus(); } });
+  // Escape closes the layer on top: the + sheet if it is open, else an open voice panel (whose own Escape needs focus inside it).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    if (plusSheetOpen()) { e.preventDefault(); plusSheetShow(false); b.focus(); return; }
+    if (typeof voicePanelOpen === 'function' && voicePanelOpen() && typeof voicePanelShow === 'function') { e.preventDefault(); voicePanelShow(false); b.focus(); }
+  });
   b.addEventListener('keydown', (e) => { if (e.key === 'Escape' && plusSheetOpen()) { e.preventDefault(); plusSheetShow(false); b.focus(); } });
   document.addEventListener('click', (e) => { if (plusSheetOpen() && !s.contains(e.target) && !(e.target.closest && e.target.closest('#plus-btn'))) plusSheetShow(false); });
   $('msg-input')?.addEventListener('focus', () => plusSheetShow(false));
