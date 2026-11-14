@@ -12475,9 +12475,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // ctx.destination. It is inaudible noise, not digital silence: phones and Bluetooth links that put the audio route to sleep on silence keep
     // it open, so the first syllable of a reply and the thinking sound are not clipped. start() makes the buffer once and a source node each
     // time; stop() stops and disconnects it. A missing or failing context makes every call a no-op. opts: { ctx, levelDb, allow }.
-    // allow() (optional): whether it may sound right now (the pages: the "Keep Bluetooth awake" switch is on AND the call's audio goes to
-    // Bluetooth or a car; on a phone or laptop speaker the noise is only a hiss in the pauses). start() asks for it, stop() ends it, refresh()
-    // applies a change of allow() at once (the switch flipped, the microphone moved to or from Bluetooth), mid-call.
+    // allow() (optional): whether it may sound right now (the pages: the "Keep Bluetooth awake" switch is on; on the phone page also the call's
+    // audio goes to Bluetooth or a car, since on the phone's own speaker the noise is only a hiss in the pauses). start() asks for it, stop() ends
+    // it, refresh() applies a change of allow() at once (the switch flipped, the microphone moved to or from Bluetooth), mid-call.
     function voiceCreateKeepAlive(opts) {
       const o = opts || {}, ctx = o.ctx;
       const db = typeof o.levelDb === 'number' && Number.isFinite(o.levelDb) ? o.levelDb : VOICE_KEEPALIVE_DB;
