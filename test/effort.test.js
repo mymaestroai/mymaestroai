@@ -54,7 +54,7 @@ test('wired: Claude client query option, gateway option, Codex; agent field vali
   assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null \}\);/);
   const agents = read('lib/agents.js');
   assert.match(agents, /effort: require\('\.\/effort'\)\.normalize\(a\.effort\)/);
-  assert.match(agents, /'tools', 'effort'(, 'voice')?(, 'callDisplay')?\];/);   // the voice build and the call display add fields after effort
+  assert.match(agents, /'tools', 'effort'(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // the voice build and the call display add fields after effort
   assert.match(agents, /effort must be default, low, medium, high, xhigh or max/);
   const server = read('server.js');
   assert.match(server, /const MEMBER_EDITABLE = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/, 'effort is not member-editable');

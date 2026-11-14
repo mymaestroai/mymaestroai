@@ -29,7 +29,7 @@ test('mic button: hands-free starts a call, tap mode keeps dictation, a call tur
   const w = wiring();
   assert.match(w, /b\.setAttribute\('aria-label', on \? 'Hang up' : 'Dictate'\)/);
   assert.match(w, /voiceRec\.guard\.cancel\(\); if \(voiceRec\.chatId\) voiceMicStop\(false\);/, 'starting a call ends dictation first');
-  assert.match(w, /voiceStopPlayback\(\);\s*const vad = voiceCreateVad\(/);
+  assert.match(w, /voiceStopPlayback\(\);\s*const eff = voiceEffNow\(chat\.agent\);[^\n]*\n\s*const vad = voiceCreateVad\(/);
   assert.match(w, /if \(S\.call\) return;/, 'one call at a time');
 });
 
@@ -68,7 +68,7 @@ test('wake lock, visibility and leaving: re-acquire on return, release on hang-u
   const w = wiring();
   assert.match(w, /navigator\.wakeLock\.request\('screen'\)/);
   // round 2 (voice fixes): a visible page with no call may show "The call ended when you left the app"; the wake-lock re-acquire stays
-  assert.match(w, /document\.addEventListener\('visibilitychange', \(\) => \{[^]*?if \(document\.hidden\) return;\s*if \(voiceCallS\.call\) voiceCallWake\(true\); else voiceLeftNoticeShow\(\);/);
+  assert.match(w, /document\.addEventListener\('visibilitychange', \(\) => \{[^]*?if \(document\.hidden\) (?:return;|\{ voiceRecFlushOpen\(\); return; \})\s*if \(voiceCallS\.call\) voiceCallWake\(true\); else voiceLeftNoticeShow\(\);/);
   assert.match(w, /voiceCallWake\(false\);/);
   // round 2: leaving the page is an immediate release (call.release), not a wait for the hub
   assert.match(w, /window\.addEventListener\('pagehide', \(\) => \{ voiceCallRelease\('pagehide'\); \}\)/);
@@ -144,7 +144,7 @@ function makeEnv(opts = {}) {
       if (opts.sendFails) o.onSendResult(new Error('HTTP 500: Internal'));
       else if (opts.sendOk) o.onSendResult(null);
     },
-    voicePrefsNow: () => prefs, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
+    voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...require('../lib/ui-voice').VOICE_DEFAULT_PREFS, ...prefs }), voiceSpeedFor: () => prefs.voiceSpeed || 1, voiceFollowLine: () => '', voiceMarkChosen: require('../lib/ui-voice').voiceMarkChosen, voiceEffectivePrefs: require('../lib/ui-voice').voiceEffectivePrefs, VOICE_AGENT_DEFAULT_KEYS: require('../lib/ui-voice').VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: require('../lib/ui-voice').VOICE_DEFAULT_PREFS, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
     // voice fixes 1: pause before done, voice speed (the real ones are in app.js outside the wiring block)
     voiceEndPauseNow: () => prefs.endPause || 1200, voiceSpeedNow: () => prefs.voiceSpeed || 1, voiceSpeedLabel: (v) => Number(v).toFixed(2) + 'x',
     voiceCleanSpeed: (v) => Math.round(Math.max(0.75, Math.min(1.5, Number(v))) * 20) / 20,
@@ -329,7 +329,7 @@ test('sliders: live on the VAD at once, saved to the prefs when released', async
   assert.strictEqual(calls.saved.length, 0, 'no write while dragging');
   assert.strictEqual(get('vcb-mic-val-c1').textContent, '70');
   api.voiceCallSlider('c1', 'sens', 25, true);
-  assert.deepStrictEqual(getPrefs(), { micLevel: 60, interruptSensitivity: 25, mode: 'handsfree' });
+  assert.deepStrictEqual(getPrefs(), { micLevel: 60, interruptSensitivity: 25, mode: 'handsfree', chosen: ['interruptSensitivity'] });
 });
 
 test('events: replies of turns the call started feed onReplyText; other agents are ignored', async () => {

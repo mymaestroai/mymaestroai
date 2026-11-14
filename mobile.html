@@ -804,19 +804,23 @@
         </div>
         <label class="vp-row" for="vp-speed"><span>Voice speed</span><b class="vp-speed-val"></b></label>
         <input type="range" id="vp-speed" class="vs-level" min="0.75" max="1.5" step="0.05">
+        <div class="vp-display-note vp-follow" id="vp-follow-voiceSpeed" hidden></div>
         <label class="vp-row" for="vp-loudness"><span>Voice loudness, speaker</span></label>
         <select id="vp-loudness" class="vs-btn"><option value="normal">Normal</option><option value="louder">Louder</option><option value="loudest">Loudest</option></select>
         <label class="vp-row" for="vp-loudness-bt"><span>Voice loudness, Bluetooth / car</span></label>
         <select id="vp-loudness-bt" class="vs-btn"><option value="normal">Normal</option><option value="louder">Louder</option><option value="loudest">Loudest</option></select>
         <label class="vp-row" for="vp-pause"><span>Pause before I&#39;m done</span></label>
         <select id="vp-pause" class="vs-btn"></select>
+        <div class="vp-display-note vp-follow" id="vp-follow-endPause" hidden></div>
         <label class="vp-row" for="vp-wait"><span>Wait for me to go on</span></label>
         <select id="vp-wait" class="vs-btn"></select>
+        <div class="vp-display-note vp-follow" id="vp-follow-continueWait" hidden></div>
         <label class="vp-row" for="vp-level"><span>Mic level</span><b class="vp-level-val"></b></label>
         <input type="range" id="vp-level" class="vs-level" min="0" max="100" step="1">
         <div id="vp-meter" class="vs-meter vp-room-meter" aria-hidden="true"><i></i></div>
         <label class="vp-row" for="vp-sens"><span>Interrupt sensitivity</span><b class="vp-sens-val"></b></label>
         <input type="range" id="vp-sens" class="vs-level" min="0" max="100" step="1">
+        <div class="vp-display-note vp-follow" id="vp-follow-interruptSensitivity" hidden></div>
         <label class="vp-row" for="vp-display"><span>Call display</span></label>
         <select id="vp-display" class="vs-btn"><option value="follow">Follow agent default</option></select>
         <div class="vp-display-note" id="vp-display-note" role="status" aria-live="polite"></div>
@@ -883,6 +887,7 @@
     <button id="menu-about"><span>&#x2139;&#xFE0F; About My Maestro AI</span><span id="menu-version" class="menu-version"></span></button>
     <a href="/?desktop=once">Open full UI</a>
     <button id="menu-reload">&#x21BB; Reload app</button>
+    <a id="menu-recordings" href="/recordings?from=mobile" hidden>&#x1F399; Recordings</a>
     <button id="menu-notify">&#x1F514; Notifications</button>
     <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>

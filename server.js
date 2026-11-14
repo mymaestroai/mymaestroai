@@ -651,6 +651,7 @@ async function handleHttpRequest(req, res) {
       // accounts: false = no admin account exists yet (an updated older install): no login, multi-user features off.
       const out = { user: u, isAdmin, accounts: hubAuth.hasUsers() };
       if (req.hubUser) out.admin2faRequired = admin2fa.required();
+      out.isOwner = !!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser));
       if (isAdmin) { const oe = access.ownerEntries(await getAgents(), hubAuth.listUsers()); out.owners = oe.owners; out.infraCount = oe.infraCount; }
       out.timeZone = u ? require('./lib/timezone').zoneForUser(u.id) : require('./lib/timezone').hubZone();   // what this person's agents use
       return jsonResponse(res, 200, out);
@@ -930,7 +931,10 @@ async function handleHttpRequest(req, res) {
       // Who confirmed a cloud engine, and when, is for admins only.
       const isAdm = !!req.hubService || access.isAdmin(req.hubUser);
       const stripVoice = (a) => require('./lib/voice/cloud').publicAgentVoice(a, isAdm);
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
+      // Call recordings: a signed-in admin sees the whole setting; everybody else (members, the hub's own service calls that agents' tools use) gets it without the allowed list. canDownload: is this caller on the list.
+      const recView = { admin: access.isAdmin(req.hubUser) && !req.hubPendingTotp, userId: req.hubUser && !req.hubPendingTotp ? String(req.hubUser.id) : '' };
+      const recordingsFor = require('./lib/recordings/settings').recordingsForViewer;
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {
@@ -1230,6 +1234,12 @@ async function handleHttpRequest(req, res) {
       const body = JSON.parse(await readBody(req));
       // A member may tune their own agent's conversation settings, never its permissions, folders, sandbox, tools,
       // owner or sharing: those are admin decisions (member grants: Users page, Settings page, agent settings page).
+      // Call recordings are switched and shared by a signed-in admin only: never a member (not in MEMBER_EDITABLE below) and never the hub's own service calls (agents' tools).
+      // Only the owner (the earliest admin) does: who may download a family's recordings is not any admin's call.
+      const recordingsChange = !!body && typeof body === 'object' && 'recordings' in body;
+      if (recordingsChange && (req.hubService || req.hubToken || !req.hubUser || !hubAuth.isOwner(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only the owner can change: recordings' });
+      const recSettings = require('./lib/recordings/settings');
+      const allowedBefore = recordingsChange ? recSettings.recordingsOf((await getAgents()).find(a => a.name === name)).allowed : [];
       if (!req.hubService && !access.isAdmin(req.hubUser)) {
         const MEMBER_EDITABLE = new Set(['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext']);
         const refused = Object.keys(body || {}).filter(k => !MEMBER_EDITABLE.has(k));
@@ -1237,10 +1247,26 @@ async function handleHttpRequest(req, res) {
       }
       const { updateAgentField } = require('./lib/agents');
       // Voice: a cloud engine for an agent kept on this computer needs the owner (the earliest admin), not just any admin.
-      const result = await updateAgentField(name, body, { isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), userId: req.hubUser ? String(req.hubUser.id) : '' });
+      const result = await updateAgentField(name, body, { isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), userId: req.hubUser ? String(req.hubUser.id) : '',
+        // Changes to the call-recordings setting are audited (agent.recordings): who, which agent, keep on/off, the allowed ids, the mic.
+        audit: (action, detail) => hubAuth.audit(req.hubUser ? String(req.hubUser.id) : null, action, detail, hubAuth.clientIp(req)) });
       if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
       // Handing a head agent to a member: it introduces itself in its (still empty) chat.
       if (result.success && body && body.owner) { const u = hubAuth.getUser(String(body.owner)); if (u && u.role === 'member') require('./lib/teams').greetIfFresh(name, u).catch(() => {}); }
+      // A change of who may download this agent's recordings is told to everybody on the old and the new list.
+      if (result.success && recordingsChange) {
+        try {
+          const rec = (await getAgents()).find(a => a.name === name);
+          const allowedAfter = recSettings.recordingsOf(rec).allowed;
+          if (allowedBefore.length !== allowedAfter.length || allowedBefore.some(id => !allowedAfter.includes(id))) {
+            await require('./lib/push').getPush().notifyUsers({
+              title: 'Recording access changed',
+              body: `${(rec && rec.display) || name}: the list of people who can download its recordings was changed.`,
+              tag: `rec-access-${name}`,
+            }, [...new Set([...allowedBefore, ...allowedAfter])]);
+          }
+        } catch {}
+      }
       if (result.success) await publishAgentUpdate(name, Object.keys(body || {}));
       // Folders, sandbox mode or hands changed: the container is rebuilt with the new mounts on the agent's next turn
       // (and removed when the sandbox was switched off). The session volume stays.
@@ -1389,6 +1415,8 @@ async function handleHttpRequest(req, res) {
 
     // ── Messaging channels (Telegram etc); all logic lives in lib/comms ────────────────────
     if (pathname.startsWith('/api/comms/')) return require('./lib/comms/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents });
+    // ── Call recordings (lib/recordings): uploads from the person on the call, and list/play/download/delete for the allowed users only ──
+    if (pathname === '/api/recordings' || pathname.startsWith('/api/recordings/')) return require('./lib/recordings/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents });
     // ── Voice: local speech-to-text and text-to-speech (lib/voice) ─────────────────────────
     if (pathname.startsWith('/api/voice/')) return require('./lib/voice/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents, getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings });
     // ── Character packs for the call face view (lib/faces; packs live in <hub home>/faces) ──
@@ -3168,6 +3196,8 @@ async function handleHttpRequest(req, res) {
       filePath = path.join(__dirname, 'login.html');
     } else if (pathname === '/users') {
       filePath = path.join(__dirname, 'users.html');
+    } else if (pathname === '/recordings') {
+      filePath = path.join(__dirname, 'recordings.html');   // any signed-in user may load the page; the data routes refuse anyone not on an agent's list
     } else if (/^\/oauth\/callback\/[a-z][a-z0-9-]{1,31}$/.test(pathname)) {
       // A data connector's sign-in comes back here (lib/modules signinCallback). A signed-in admin only, never the hub service or a token.
       const id = pathname.split('/')[3];

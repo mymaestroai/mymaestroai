@@ -320,5 +320,5 @@ test('page: the agent record the page reads carries callDisplay (GET /api/agents
 
 test('the allowlist change is only in lib/agents (no member change in the server)', () => {
   const src = fs.readFileSync(path.join(REAL, 'lib', 'agents.js'), 'utf8');
-  assert.match(src, /allowedFields = \[[^\]]*'callDisplay'\]/);
+  assert.match(src, /allowedFields = \[[^\]]*'callDisplay'(, 'voiceDefaults')?\]/);
 });

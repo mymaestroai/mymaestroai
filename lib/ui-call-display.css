@@ -55,6 +55,21 @@
 .ucd-reopen + .vcb-hang, .ucd-reopen + .cp-hang { margin-left: 0; }
 #call-panel .cp-actions .ucd-reopen { flex: 1; min-height: 52px; margin-left: 0; border-radius: 12px; font-size: 16px; }
 .ucd-reopen-float { position: fixed; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0)); z-index: 1500; min-height: 48px; border-radius: 999px; }
+/* the recording indicator of a recorded call (lib/ui-call-display.js setRecording): a small badge with a red dot ("Recording"; hollow dot and "Recording paused"; no dot for
+   "Not recording" / "Recording stopped") and the Pause / Resume button beside it. In the view it sits at the stage's top right (Hang up is in the bar below); with the view
+   hidden, or a display of None, it sits in the page's call bar before Show display / Hang up. Dark pill with white text so it reads on every theme and over a character. */
+.ucd-rec { display: inline-flex; align-items: center; gap: 8px; flex: none; font-size: 13px; font-weight: 600; line-height: 1.2; color: #fff; max-width: 100%; }
+.ucd-stage > .ucd-rec { position: absolute; z-index: 3; top: 10px; right: 12px; }
+.ucd-rec-text { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, .65); }
+.ucd-rec-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; background: #e5484d; box-shadow: 0 0 0 2px rgba(0, 0, 0, .35); margin-right: -4px; position: relative; z-index: 1; }
+.ucd-rec[data-state="paused"] .ucd-rec-dot { background: transparent; border: 2px solid #e5484d; }
+.ucd-rec [hidden] { display: none !important; }
+.ucd-rec .ucd-rec-pause { font: inherit; font-size: 13px; font-weight: 600; min-height: 36px; padding: 0 12px; border-radius: 999px; cursor: pointer; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); border: 1px solid var(--border, #2a313b); }
+.ucd-rec .ucd-rec-pause:disabled { opacity: .5; cursor: default; }
+.ucd-rec .ucd-rec-pause:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent, #3d7bff); }
+/* in a call bar the badge may wrap rather than push Hang up off the screen */
+#call-panel .ucd-rec, .callbar .ucd-rec { flex-wrap: wrap; }
+.ucd-rec[data-place="bar"] { display: flex; margin: 6px 0; }   /* its own line above the bar's buttons */
 /* the phone's toast sits at z-index 30: keep it readable above the full-screen view */
 #toast.on { z-index: 10010; }
 .vp-display-note { font-size: 12px; color: var(--text-dim, #98a2b3); margin: 2px 0 0; }

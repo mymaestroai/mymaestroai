@@ -73,7 +73,8 @@ test('chat controls: every control writes the same per-device prefs and reaches 
   assert.match(sliceBetween('function voiceCallWire()', '// Hub events for the call'), /voicePanelWire\(\)/);
   assert.match(sliceBetween('function voiceMicPaint()', 'function voiceMicCancel()'), /voiceStripPaint\(\)/);
   const apply = sliceBetween('function voiceCallApplyPrefs()', 'function voiceCallDeps(vc)');
-  assert.match(apply, /vc\.vad\.setEndPause\(voiceEndPauseNow\(\)\)/);
+  assert.match(apply, /vc\.vad\.setEndPause\(voiceEndPauseFor\(vc\.agent\)\)/);
+  assert.match(apply, /const p = voiceEffNow\(vc\.agent\)/, 'a call uses the agent\'s voice defaults');
   assert.match(apply, /typeof vc\.call\.setPrefs === 'function'\) vc\.call\.setPrefs\(\)/);
   assert.match(sliceBetween('function voiceCallPaintMeter(db)', 'function voiceCallPaintHeld'), /#vp-meter i/, 'the live meter in the panel');
 });
@@ -296,7 +297,7 @@ test('settings applied live: voiceCallApplyPrefs reaches the VAD, call.setPrefs(
   const log = [];
   const vc = { vad: { setMicLevel: (v) => log.push('mic:' + v), setInterruptSensitivity: (v) => log.push('sens:' + v), setEndPause: (v) => log.push('pause:' + v) }, call: { setPrefs: () => log.push('setPrefs') }, thinkSnd: { setVolume: (v) => log.push('vol:' + v) } };
   const state = { voiceCall: vc };
-  const mk = () => new Function('state', 'voicePrefsNow', 'voiceEndPauseNow', 'voiceThinkingVolume', src.replace(/\bvoiceCall\b/g, 'state.voiceCall') + '\nreturn voiceCallApplyPrefs;')(state, () => ({ micLevel: 70, interruptSensitivity: 30 }), () => 2000, () => 0.25);
+  const mk = () => new Function('state', 'voiceEffNow', 'voiceEndPauseFor', 'voiceThinkingVolume', src.replace(/\bvoiceCall\b/g, 'state.voiceCall') + '\nreturn voiceCallApplyPrefs;')(state, () => ({ micLevel: 70, interruptSensitivity: 30 }), () => 2000, () => 0.25);
   mk()();
   assert.deepStrictEqual(log, ['mic:70', 'sens:30', 'pause:2000', 'setPrefs', 'vol:0.25']);
   delete vc.call.setPrefs; log.length = 0; mk()(); assert.ok(!log.includes('setPrefs'));

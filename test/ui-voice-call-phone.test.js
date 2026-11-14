@@ -22,7 +22,7 @@ test('mic button: hands-free tap starts a call synchronously, a second tap hangs
   assert.ok(!start.includes('await '), 'voiceCallStart awaits nothing');
   assert.ok(start.indexOf('voiceMicCancel()') < start.indexOf('vc.call.start()'), 'dictation stops first');
   assert.ok(start.indexOf('voiceStopPlayback()') < start.indexOf('vc.call.start()'), 'playback stops first');
-  assert.match(start, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/', micLevel: prefs\.micLevel, interruptSensitivity: prefs\.interruptSensitivity, endPause: voiceEndPauseNow\(\), echoHoldMs: prefs\.echoHold \}\)/);   // + the end-of-turn pause (voice fixes 1)
+  assert.match(start, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/', micLevel: prefs\.micLevel, interruptSensitivity: prefs\.interruptSensitivity, endPause: prefs\.endPause, echoHoldMs: prefs\.echoHold \}\)/);   // + the end-of-turn pause (voice fixes 1)
   assert.match(start, /voiceCreateCall\(voiceCallDeps\(vc\)\)/);
   assert.match(js, /navigator\.wakeLock\.request\('screen'\)/);
 });
@@ -200,7 +200,7 @@ test('voiceCallStart calls call.start() inside the tap, before anything is await
     voiceCall: null, current: 'bob', toast: (t) => order.push('toast:' + t), voiceOn: () => true,
     voiceRec: { state: 'recording' }, voiceMicCancel: () => order.push('micCancel'), voiceTest: { handle: null }, voiceTestStop() {}, voiceRoomStop: () => order.push('roomStop'),
     voiceStopPlayback: () => order.push('stopPlayback'), voiceUnlockAudio: () => order.push('unlock'),
-    voicePrefsNow: () => ({ micLevel: 60, interruptSensitivity: 40 }), voiceEndPauseNow: () => 1200,
+    voicePrefsNow: () => ({ micLevel: 60, interruptSensitivity: 40 }), voiceEffNow: () => ({ micLevel: 60, interruptSensitivity: 40, endPause: 1200 }), voiceEndPauseNow: () => 1200,
     voiceCreateVad: (o) => { order.push('vad:' + o.micLevel + ':' + o.interruptSensitivity); return {}; },
     voiceCreateCall: () => ({ start: () => { order.push('call.start'); return new Promise(() => {}); } }),
     voiceCallDeps: () => ({}), voiceCallPanel: () => order.push('panel'), voiceCallPaintState: () => {}, voiceMicPaint: () => order.push('micPaint'),

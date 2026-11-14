@@ -174,7 +174,8 @@ function makeEnv(opts = {}) {
     voiceEncodeWav: (f, r) => { calls.wavRate = r; return new Uint8Array([82, 73, 70, 70]).buffer; },
     voiceSentences: (t) => t.split(/(?<=\.)\s+/).filter(Boolean),
     voiceSpeechText: (t) => t,
-    voiceCleanSpeed: L.voiceCleanSpeed, voiceSpeedLabel: L.voiceSpeedLabel, VOICE_END_PAUSES: L.VOICE_END_PAUSES,   // voice fixes 1: speed and end-of-turn pause
+    voiceCleanSpeed: L.voiceCleanSpeed, voiceSpeedLabel: L.voiceSpeedLabel, VOICE_END_PAUSES: L.VOICE_END_PAUSES,
+    voiceEffectivePrefs: L.voiceEffectivePrefs, voiceMarkChosen: L.voiceMarkChosen, VOICE_AGENT_DEFAULT_KEYS: L.VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: L.VOICE_DEFAULT_PREFS, AGENTS: [], capName: (n) => n,   // agent voice defaults (part 6)   // voice fixes 1: speed and end-of-turn pause
     voiceMicGuard: L.voiceMicGuard, voiceWaitLocalVoice: L.voiceWaitLocalVoice, voicePickLocalVoice: L.voicePickLocalVoice,
   };
   if (opts.gum) stubs.navigator.mediaDevices.getUserMedia = opts.gum(calls);

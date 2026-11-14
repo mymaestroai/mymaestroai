@@ -117,7 +117,7 @@ test('prefs: voice speed is 0.75 to 1.5 in steps of 0.05 (default 1), the pause 
   assert.deepStrictEqual([voiceLoadPrefs(st).endPause, voiceLoadPrefs(st).voiceSpeed], [2000, 1.3], 'remembered per device');
   const bad = voiceLoadPrefs(memStore({ 'hub-voice': '{"endPause":1500,"voiceSpeed":"fast","speakActivity":"yes"}' }));
   assert.deepStrictEqual([bad.endPause, bad.voiceSpeed, bad.speakActivity], [1200, 1, false], 'bad values fall back to the defaults');
-  assert.deepStrictEqual(V.VOICE_END_PAUSES, [800, 1200, 2000]);
+  assert.deepStrictEqual(V.VOICE_END_PAUSES, [800, 1200, 2000, 4000]);   // + very long (part 6)
 });
 
 test('the typographic minus sign is read as minus, not dropped (a reviewer found -5 read as 5)', () => {
