@@ -782,7 +782,7 @@
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>
     <div id="call-panel" role="region" aria-label="Voice call" hidden>
-      <div class="cp-top"><span id="cp-state" role="status" aria-live="polite">Starting</span><div id="cp-meter" aria-hidden="true"><i></i></div></div>
+      <div class="cp-top ucd-dup"><span id="cp-state" role="status" aria-live="polite">Starting</span><div id="cp-meter" aria-hidden="true"><i></i></div></div>
       <p id="cp-focus-hint" class="cp-focus-hint" role="status" hidden>Music playing? Pause it for a clearer call</p>
       <div id="cp-activity" aria-live="off"></div>
       <div id="cp-heard" aria-live="off"></div>
@@ -790,10 +790,10 @@
       <button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Try the microphone again</button>
       <div id="cp-held"></div>
       <label class="cp-dnd"><input type="checkbox" id="cp-dnd" role="switch"> <span>Do not disturb</span></label>
-      <label class="cp-disp" for="cp-display"><span>Display</span><select id="cp-display"><option value="follow">Follow agent default</option></select></label>
+      <label class="cp-disp ucd-dup" for="cp-display"><span>Display</span><select id="cp-display"><option value="follow">Follow agent default</option></select></label>
       <div class="cp-actions">
         <button type="button" id="cp-levels" class="cp-levels">Levels</button>
-        <button type="button" id="cp-hangup" class="cp-hang" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>
+        <button type="button" id="cp-hangup" class="cp-hang ucd-dup" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>
       </div>
       <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.</p>
     </div>
@@ -824,10 +824,10 @@
         <label class="vp-row" for="vp-sens"><span>Interrupt sensitivity</span><b class="vp-sens-val"></b></label>
         <input type="range" id="vp-sens" class="vs-level" min="0" max="100" step="1">
         <div class="vp-display-note vp-follow" id="vp-follow-interruptSensitivity" hidden></div>
-        <label class="vp-row" for="vp-display"><span>Call display</span></label>
-        <select id="vp-display" class="vs-btn"><option value="follow">Follow agent default</option></select>
-        <div class="vp-display-note" id="vp-display-note" role="status" aria-live="polite"></div>
-        <label class="vs-check"><input type="checkbox" id="vp-captions"> <span>Show captions</span></label>
+        <label class="vp-row ucd-dup" for="vp-display"><span>Call display</span></label>
+        <select id="vp-display" class="vs-btn ucd-dup"><option value="follow">Follow agent default</option></select>
+        <div class="vp-display-note ucd-dup" id="vp-display-note" role="status" aria-live="polite"></div>
+        <label class="vs-check ucd-dup"><input type="checkbox" id="vp-captions"> <span>Show captions</span></label>
         <label class="vs-check"><input type="checkbox" id="vp-interrupt"> <span>Show an Interrupt button</span></label>
         <p class="vs-hint vp-hint">For places where talking over the reply doesn't register.</p>
         <label class="vs-check"><input type="checkbox" id="vp-think"> <span>Thinking sound</span></label>

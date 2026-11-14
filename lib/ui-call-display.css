@@ -23,6 +23,10 @@
 .ucd-drawer { flex: 0 1 auto; max-height: 48vh; max-height: 48dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 12px;
   background: var(--bg-card, #181d24); border-top: 1px solid var(--border, #2a313b); }
 .ucd-drawer[hidden] { display: none; }
+/* in the Controls drawer, a control the call bar already has (status line, Display, Hang up, Captions) or the drawer's Voice settings already have
+   (the desktop call bar's sliders) is not shown again: one place for each. The pages mark them .ucd-dup; outside a call screen they show as usual. */
+.ucd-drawer .ucd-dup { display: none !important; }
+.ucd-drawer #call-panel > div:empty, .ucd-drawer .voice-callbar > div:empty { display: none; }   /* an empty line (no activity, nothing heard yet) leaves no gap */
 /* the drawer's header stays at the top of the scrolling list: a grab handle (centred) and Close; a swipe down on it closes the drawer */
 .ucd-drawer-head { position: sticky; top: 0; z-index: 1; background: var(--bg-card, #181d24); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; justify-content: space-between; padding: 6px 12px; margin: -8px -12px 6px; touch-action: none; }
 .ucd-grab { grid-column: 2; display: block; width: 40px; height: 5px; border-radius: 3px; background: var(--border, #2a313b); }

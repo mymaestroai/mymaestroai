@@ -74,9 +74,9 @@ function desktop(o) {
 test('desktop: the call bar carries a labelled Display select (id vcb-display-<chat>, data-vcb="display") before Hang up', () => {
   const html = desktop().api.voiceCallBarHtml('c1');
   assert.ok(/<select id="vcb-display-c1" data-vcb="display" aria-label="Display">/.test(html), 'the select');
-  assert.ok(/<label class="vcb-disp">Display <select/.test(html), 'labelled Display');
+  assert.ok(/<label class="vcb-disp ucd-dup">Display <select/.test(html), 'labelled Display (marked .ucd-dup: the call screen\'s drawer does not repeat the bar\'s Display)');
   assert.ok(html.indexOf('data-vcb="display"') < html.indexOf('data-vcb="hang"'), 'before the Hang up button');
-  assert.ok(html.indexOf('data-vcb="display"') < html.indexOf('class="vcb-sliders"'), 'in the first row');
+  assert.ok(html.indexOf('data-vcb="display"') < html.indexOf('class="vcb-sliders'), 'in the first row');
 });
 
 test('desktop: the paint fills the bar select like the voice panel select, also when the panel select is absent', async () => {
@@ -158,7 +158,7 @@ test('phone: mobile.html has #cp-display in #call-panel, labelled Display, befor
   const start = mobHtml.indexOf('<div id="call-panel"'), end = mobHtml.indexOf('<div id="composer"', start);
   assert.ok(start > 0 && end > start);
   const block = mobHtml.slice(start, end);
-  assert.ok(/<label class="cp-disp" for="cp-display"><span>Display<\/span><select id="cp-display">/.test(block), 'label and select');
+  assert.ok(/<label class="cp-disp ucd-dup" for="cp-display"><span>Display<\/span><select id="cp-display">/.test(block), 'label and select (marked .ucd-dup: the call screen\'s drawer does not repeat the bar\'s Display)');
   assert.ok(block.indexOf('id="cp-display"') < block.indexOf('<div class="cp-actions">'), 'before the actions row');
   assert.ok(block.indexOf('id="cp-levels"') > block.indexOf('id="cp-display"'), 'Levels is still there');
   assert.ok(/#call-panel \.cp-disp \{[^}]*min-height: 48px[^}]*font-size: 16px/.test(mobHtml) && /#call-panel \.cp-disp select \{[^}]*min-height: 44px[^}]*font-size: 16px/.test(mobHtml), 'touch size, 16px against iOS zoom');

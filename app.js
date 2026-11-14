@@ -14327,13 +14327,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceCallBarHtml(chatId) {
       const id = (n) => `vcb-${n}-${chatId}`;
-      return `<div class="vcb-top"><span class="vcb-state" id="${id('state')}" aria-live="polite">Starting</span>
-        <span class="voice-meter" aria-hidden="true"><i id="${id('level')}"></i></span>
+      return `<div class="vcb-top"><span class="vcb-state ucd-dup" id="${id('state')}" aria-live="polite">Starting</span>
+        <span class="voice-meter ucd-dup" aria-hidden="true"><i id="${id('level')}"></i></span>
         <label class="vcb-dnd"><input type="checkbox" id="${id('dnd')}" data-vcb="dnd"> Do not disturb</label>
-        <label class="vcb-disp">Display <select id="${id('display')}" data-vcb="display" aria-label="Display"><option value="follow">Follow agent default</option></select></label>
-        <button type="button" class="vcb-hang" data-vcb="hang" aria-label="Hang up">${VOICE_HANGUP_SVG}<span>Hang up</span></button></div>
+        <label class="vcb-disp ucd-dup">Display <select id="${id('display')}" data-vcb="display" aria-label="Display"><option value="follow">Follow agent default</option></select></label>
+        <button type="button" class="vcb-hang ucd-dup" data-vcb="hang" aria-label="Hang up">${VOICE_HANGUP_SVG}<span>Hang up</span></button></div>
         <div class="vcb-focus-hint" id="${id('focushint')}" hidden>Music playing? Pause it for a clearer call</div>
-        <div class="vcb-sliders">
+        <div class="vcb-sliders ucd-dup">
           <label>Mic level <input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vcb="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
           <label>Interrupt sensitivity <input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vcb="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>
           <label>Pause before I'm done ${voicePauseSelectHtml(id('pause'), 'data-vcb="pause"')}</label>
@@ -14665,9 +14665,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <div class="vp-row"><span class="vp-label">Level now</span><span class="voice-meter" aria-hidden="true"><i id="${id('level')}"></i></span></div>
         <label class="vp-row"><span class="vp-label">Interrupt sensitivity</span><input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vp="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>${voiceFollowLine(agent, 'interruptSensitivity')}
         <label class="vp-row"><span class="vp-label">Thinking sound</span><input type="checkbox" id="${id('think')}" data-vp="think"${voiceThinkingOnNow() ? ' checked' : ''}></label>
-        <label class="vp-row"><span class="vp-label">Call display</span><select id="${id('display')}" data-vp="display" style="padding:4px"><option value="follow">Follow agent default</option></select></label>
-        <div class="vp-display-note" id="${id('display-note')}" aria-live="polite"></div>
-        <label class="vp-row"><span class="vp-label">Show captions</span><input type="checkbox" id="${id('captions')}" data-vp="captions"></label>
+        <label class="vp-row ucd-dup"><span class="vp-label">Call display</span><select id="${id('display')}" data-vp="display" style="padding:4px"><option value="follow">Follow agent default</option></select></label>
+        <div class="vp-display-note ucd-dup" id="${id('display-note')}" aria-live="polite"></div>
+        <label class="vp-row ucd-dup"><span class="vp-label">Show captions</span><input type="checkbox" id="${id('captions')}" data-vp="captions"></label>
         <label class="vp-row"><span class="vp-label">Show an Interrupt button</span><input type="checkbox" id="${id('interrupt')}" data-vp="interrupt"></label>
         <div class="vp-display-note">For places where talking over the reply doesn't register.</div>
         <label class="vp-row"><span class="vp-label">Thinking volume</span><input type="range" min="0" max="1" step="0.05" id="${id('thinkvol')}" data-vp="thinkvol" value="${voiceThinkingVolNow()}"></label>
