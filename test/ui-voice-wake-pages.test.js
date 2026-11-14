@@ -10,8 +10,9 @@ const VW = require('../lib/ui-voice');
 const CD = require('../lib/ui-call-display');
 
 const PAGES = [
-  { name: 'desktop', js: read('app.js'), html: null, prefs: 'voicePrefsNow', stateText: /textContent\s*=\s*voiceCallStateText\(name,\s*phrase\)/ },
-  { name: 'phone', js: read('mobile.js'), html: read('mobile.html'), prefs: 'voicePrefsNow', stateText: /textContent\s*=\s*voiceCallStateText\(name,\s*phrase\)/ },
+  // The state line paints the call's own text, or "Connection lost" while the link is down (lost connection, 2026-11-13).
+  { name: 'desktop', js: read('app.js'), html: null, prefs: 'voicePrefsNow', stateText: /textContent\s*=\s*(?:voiceCallS\.linkLost \? VOICE_LINK_LOST_TEXT : )?voiceCallStateText\(name,\s*phrase\)/ },
+  { name: 'phone', js: read('mobile.js'), html: read('mobile.html'), prefs: 'voicePrefsNow', stateText: /textContent\s*=\s*(?:lostNow \? VOICE_LINK_LOST_TEXT : )?voiceCallStateText\(name,\s*phrase\)/ },
 ];
 
 function extract(src, name) {

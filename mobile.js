@@ -2871,6 +2871,7 @@ function voiceCreateCall(deps) {
   // deps.keepAlive ({ start(), stop() }, optional): an inaudible sound that keeps a Bluetooth / car audio route awake. It starts with the call and
   // the first spoken line of the call waits until VOICE_CALL_LEAD_IN_MS after that (the route needs a moment to open, or the first syllable is lost).
   let leadInUntil = 0, keepAliveOn = false, micLost = false;
+  let linkLost = false, linkWasLost = false;   // the connection to the server is lost (setLinkLost): speech is dropped, nothing is reported as an error
   const prefs = () => { const p = quiet(() => d.prefs && d.prefs()); return p && typeof p === 'object' ? p : {}; };
   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for the next piece.
   const continueWait = () => { const n = Number(prefs().continueWait); return Number.isFinite(n) && n >= 0 ? n : VOICE_CALL_CONTINUE_MS; };
@@ -3173,7 +3174,7 @@ function voiceCreateCall(deps) {
     if (pendingAnnounce && pendingAnnounce.id === id) { quiet(() => d.clearTimer(pendingAnnounce.timer)); pendingAnnounce = null; }
     if (choice === 'later') entry.later = true; else heldList = heldList.filter(h => h.id !== id);
     showHeld();
-    const failed = () => quiet(() => ui.toast('Could not send that choice.'));
+    const failed = () => { if (!linkLost) quiet(() => ui.toast('Could not send that choice.')); };
     try { Promise.resolve(server.decide(id, choice, callId)).catch(failed); } catch { failed(); }
     settle();
   }
@@ -3307,8 +3308,8 @@ function voiceCreateCall(deps) {
         const w0 = wake();
         if (mustMatch() && !(w0 && w0.local === true)) return;   // standby without a recognizer known to be local: not even transcribed
         const dropLong = mustMatch() && !!audio && audio.length > 30 * 16000;   // a long stretch of talk in standby is not transcribed at all
-        try { text = dropLong ? '' : await d.stt(audio); } catch { failed = true; if (!mustMatch()) quiet(() => ui.toast('Could not transcribe that.')); }
-        if (ended) return;
+        try { text = dropLong || linkLost ? '' : await d.stt(audio); } catch { failed = true; if (!mustMatch() && !linkLost) quiet(() => ui.toast('Could not transcribe that.')); }
+        if (ended || linkLost) return;   // while the connection is lost what was heard is dropped, not sent
         const own = String(text || '').trim(), n = voiceCallNorm(own);
         const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
         let t = ownOk ? own : '';
@@ -3363,6 +3364,7 @@ function voiceCreateCall(deps) {
           await waitMore(left);
           if (ended) return;
         }
+        if (linkLost) return;
         mine.done = true;
         heardShown = true; quiet(() => ui.heard(t));
         sttPending--; counted = true;   // the transcript is out of the queue: the thinking sound may arm while the turn runs
@@ -3399,7 +3401,20 @@ function voiceCreateCall(deps) {
         quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
         await d.send(t);
       }
-    } catch { awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity('')); quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); settle(); }
+    } catch {
+      awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity(''));
+      if (!linkLost) { quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); }   // a lost connection is reported by the link watch, not as an error line
+      settle();
+    }
+  }
+  // The connection to the server was lost (on) or is back (!on). While lost, what is heard is dropped and no error is spoken or shown;
+  // when it is back after a real outage, "Reconnected." is spoken (kind 'mic': a barge-in does not drop it).
+  function setLinkLost(on) {
+    if (ended) return;
+    if (on) { linkLost = true; linkWasLost = true; return; }
+    if (!linkLost) return;
+    linkLost = false;
+    if (linkWasLost) { linkWasLost = false; enqueue('Reconnected.', 'mic'); }
   }
 
   // The microphone (from the VAD adapter): onMicInfo shows which one is open; onMicChange says a reopen after the microphone ended or
@@ -3519,9 +3534,89 @@ function voiceCreateCall(deps) {
     settle();
   }
   return {
-    start, hangUp, release, wakeChanged, isStandby: () => standby, setPrefs, retryMic, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+    start, hangUp, release, wakeChanged, isStandby: () => standby, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
     get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
   };
+}
+// The link watch of a call: is the server reachable? o = { probe: () => Promise<boolean> (true = reachable), setTimeout, clearTimeout, onLost(), onBack(),
+// onGiveUp(), everyMs = 5000, lostEveryMs = 1000, giveUpMs = 10000, now = Date.now }. While the link is fine it probes every everyMs; a failed probe, report()
+// (a network failure seen on one of the call's own requests) or offline() mark it LOST at once (onLost, once per outage), and it then probes every
+// lostEveryMs. A probe that succeeds within giveUpMs -> onBack (once) and the normal rhythm; no success within giveUpMs -> onGiveUp (once), and nothing runs
+// any more. One probe is in flight at a time; after stop() nothing fires, and a probe that resolves late is ignored.
+// -> { start(), stop(), report(), offline(), online() (probe at once), get lost() }
+function voiceCreateLinkWatch(o) {
+  const c = o || {};
+  const setT = c.setTimeout, clrT = c.clearTimeout, clock = typeof c.now === 'function' ? c.now : Date.now;
+  const every = Number.isFinite(Number(c.everyMs)) ? Number(c.everyMs) : 5000;
+  const lostEvery = Number.isFinite(Number(c.lostEveryMs)) ? Number(c.lostEveryMs) : 1000;
+  const giveUp = Number.isFinite(Number(c.giveUpMs)) ? Number(c.giveUpMs) : 10000;
+  let running = false, lost = false, lostAt = 0, probing = false, gen = 0, timer = null, giveTimer = null;
+  const say = (f) => { try { if (typeof f === 'function') f(); } catch { /* a listener must not break the watch */ } };
+  const clear = (t) => { if (t !== null) { try { clrT(t); } catch { /* gone */ } } return null; };
+  function schedule(ms) {
+    timer = clear(timer);
+    if (running) timer = setT(() => { timer = null; probeNow(); }, ms);
+  }
+  function markLost() {
+    if (!running || lost) return;
+    lost = true; lostAt = clock();
+    giveTimer = clear(giveTimer);
+    giveTimer = setT(() => {
+      giveTimer = null;
+      if (!running || !lost) return;
+      running = false; gen++; probing = false;   // a probe still out is ignored
+      timer = clear(timer);
+      say(c.onGiveUp);
+    }, giveUp);
+    schedule(lostEvery);
+    say(c.onLost);
+  }
+  function probeNow() {
+    if (!running || probing) return;
+    probing = true;
+    timer = clear(timer);
+    const my = gen;
+    let p;
+    try { p = Promise.resolve(c.probe()); } catch { p = Promise.resolve(false); }
+    p.then((ok) => ok === true, () => false).then((ok) => {
+      if (my !== gen || !running) return;
+      probing = false;
+      if (ok) {
+        if (lost) {
+          if (clock() - lostAt > giveUp) return;   // too late: the give-up timer ends the call
+          lost = false; giveTimer = clear(giveTimer);
+          schedule(every);
+          say(c.onBack);
+        } else schedule(every);
+      } else if (lost) schedule(lostEvery);
+      else markLost();
+    });
+  }
+  return {
+    start() { if (running) return; running = true; lost = false; probing = false; gen++; schedule(every); },
+    stop() { running = false; gen++; probing = false; lost = false; timer = clear(timer); giveTimer = clear(giveTimer); },
+    report() { markLost(); },
+    offline() { markLost(); },
+    online() { if (running) probeNow(); },
+    get lost() { return lost; },
+  };
+}
+// Two short soft tones on the call's own audio context: descending (660 then 440 Hz) = the connection was lost, rising (440 then 660 Hz) = it is back.
+// Nothing happens without a context; it never throws.
+function voiceLinkTone(ctx, up) {
+  try {
+    if (!ctx || typeof ctx.createOscillator !== 'function' || typeof ctx.createGain !== 'function') return false;
+    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') { try { Promise.resolve(ctx.resume()).catch(() => {}); } catch { /* not resumable */ } }
+    const t0 = (Number(ctx.currentTime) || 0) + 0.02, freqs = up ? [440, 660] : [660, 440], len = 0.16;
+    freqs.forEach((hz, i) => {
+      const osc = ctx.createOscillator(), g = ctx.createGain(), s = t0 + i * len;
+      osc.type = 'sine'; osc.frequency.value = hz;
+      g.gain.setValueAtTime(0, s); g.gain.linearRampToValueAtTime(0.12, s + 0.015); g.gain.linearRampToValueAtTime(0, s + len);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(s); osc.stop(s + len + 0.02);
+    });
+    return true;
+  } catch { return false; }
 }
 // Every microphone track the adapter makes is counted until it is stopped (voiceLiveTracks: a test hook, and a way to prove nothing is left holding the microphone).
 const VOICE_LIVE_TRACKS = new Set();
@@ -6545,7 +6640,7 @@ async function voiceTtsBlob(agent, text) {   // null when the hub cannot say it 
     if (!r.ok) return null;
     const b = await r.blob();
     return b && b.size ? b : null;
-  } catch { return null; }
+  } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, null, agent); return null; }   // a network failure marks the link lost
 }
 function voicePlayBlob(blob, my, meta) {
   return new Promise((resolve) => {
@@ -6671,6 +6766,7 @@ function addSpeakButton(el) {
 // file; this part gives them their deps: the hub routes, the chat, playback and the call panel above the composer.
 // Hands-free works with the app open and the screen on: a hidden page hangs up, the screen stays on during a call.
 const VOICE_CALL_HELP = 'Hands-free works with the app open and the screen on, also through a car\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.';
+const VOICE_LINK_LOST_TEXT = 'Connection lost', VOICE_LINK_ENDED_TEXT = 'Call ended: connection lost';
 const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', hearing: 'Hearing you', thinking: 'Thinking', speaking: 'Speaking', ended: 'Call ended' };
 const voiceCallPost = (path, body, opts) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(opts || {}) });
 const voiceCallJson = async (r) => { try { return (await r.json()) || {}; } catch { return {}; } };
@@ -6792,7 +6888,8 @@ function voiceDispSetInterrupt(on) {
 }
 
 function voiceCallPaintState(name, phrase) {
-  const s = $('cp-state'); if (s) { s.textContent = voiceCallStateText(name, phrase); s.dataset.state = name; }
+  const lostNow = typeof voiceCall !== 'undefined' && voiceCall && voiceCall.linkLostOn;   // while the connection is lost the line keeps saying so
+  const s = $('cp-state'); if (s) { s.textContent = lostNow ? VOICE_LINK_LOST_TEXT : voiceCallStateText(name, phrase); s.dataset.state = name; s.dataset.phrase = phrase || ''; }
   const p = $('call-panel'); if (p) p.dataset.state = name;
 }
 function voiceCallPaintMeter(db) {
@@ -6849,6 +6946,7 @@ function voiceCallTeardown(vc) {
   const lock = vc.wake; vc.wake = null;
   try { if (lock) Promise.resolve(lock.release()).catch(() => {}); } catch { /* already released */ }
   clearInterval(vc.beatTimer); vc.beatTimer = null;
+  if (vc.link) { try { vc.link.stop(); } catch { /* gone */ } vc.link = null; }
   try { if (vc.vad && typeof vc.vad.stop === 'function') Promise.resolve(vc.vad.stop()).catch(() => {}); } catch { /* the mic is never left held: stop() is safe to repeat */ }
   voiceMediaSession(vc, false);
   if (vc.focus) { try { vc.focus.stop(); } catch {} }
@@ -6879,7 +6977,8 @@ function voiceCallServer(agent, getVc) {
       return { callId: j.call && j.call.callId, held: (j.call && Array.isArray(j.call.held)) ? j.call.held : [] };   // the controller keeps the id and passes it back
     },
     async heartbeat(callId) {
-      const r = await voiceCallPost(url, { agent, action: 'heartbeat', callId });
+      let r;
+      try { r = await voiceCallPost(url, { agent, action: 'heartbeat', callId }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, getVc()); throw e; }   // a network failure marks the link lost
       if (r.status === 409 || r.status === 403) { const vc = getVc(); if (vc && voiceCall === vc) { toast('The call ended.'); voiceCallHangUp(); } return null; }
       const j = await voiceCallJson(r);
       return { callId: j.call && j.call.callId, held: (j.call && Array.isArray(j.call.held)) ? j.call.held : [] };
@@ -6898,7 +6997,8 @@ function voiceCallServer(agent, getVc) {
 }
 async function voiceCallStt(agent, f32) {
   const wav = new Blob([voiceEncodeWav(f32, 16000)], { type: 'audio/wav' });
-  const r = await api(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav });
+  let r;
+  try { r = await api(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, null, agent); throw e; }   // a network failure marks the link lost
   if (r.status === 409) throw new Error('Voice is turned off');
   if (r.status === 503) throw new Error('Voice is busy');
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -6948,8 +7048,9 @@ async function voiceCallInterject(vc, text) {
   try {
     const r = await voiceCallPost('/api/chat/interject', { agent: vc.agent, message: text });
     result = await r.json().catch(() => ({ success: false, error: `HTTP ${r.status}` }));
-  } catch (e) { result = { success: false, error: e.message || 'request failed' }; }
+  } catch (e) { result = { success: false, error: e.message || 'request failed' }; if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, vc); }
   if (result && result.success) return;
+  if (vc.link && vc.link.lost) return;   // the link watch speaks for a lost connection: no error toast
   const error = String((result && result.error) || 'request failed');
   if (/not currently processing/i.test(error)) {
     const stale = streams.get(vc.agent);
@@ -7162,6 +7263,53 @@ function voiceCallDeps(vc) {
   };
 }
 
+// ── Lost connection ends the call ──
+// While a call is up the page asks /health every 5 s (4 s limit); a failed probe, a network failure on the call's own requests (heartbeat, speech-to-text,
+// sending, text-to-speech) or the offline event marks the link LOST: a falling two-tone, "Connection lost" on the screens, speech heard meanwhile is dropped,
+// probes every 1 s. Back within 10 s: a rising two-tone and "Reconnected." Not back: the call ends cleanly and the chat says so.
+function voiceLinkProbe() {
+  return new Promise((resolve) => {
+    let ac = null;
+    try { ac = typeof AbortController === 'function' ? new AbortController() : null; } catch { ac = null; }
+    const timer = setTimeout(() => { try { if (ac) ac.abort(); } catch { /* done */ } resolve(false); }, 4000);
+    let p;
+    try { p = fetch('/health', { cache: 'no-store', credentials: 'include', ...(ac ? { signal: ac.signal } : {}) }); } catch { clearTimeout(timer); resolve(false); return; }
+    Promise.resolve(p).then((r) => { clearTimeout(timer); resolve(!!r && !(r.status >= 500)); }, () => { clearTimeout(timer); resolve(false); });   // a server error from a proxy in front of a dead hub counts as unreachable
+  });
+}
+// A network failure (fetch threw a TypeError; not an HTTP error status) seen on one of the active call's requests. vc, or the agent the request was for.
+function voiceLinkNetFail(e, vc, agent) {
+  if (!e || e.name !== 'TypeError') return;
+  const v = vc || (typeof voiceCall !== 'undefined' ? voiceCall : null);
+  if (!v || !v.link || (agent && v.agent !== agent)) return;
+  if (typeof voiceCall !== 'undefined' && voiceCall !== v) return;
+  try { v.link.report(); } catch { /* gone */ }
+}
+function voiceLinkPaint(vc, on) {
+  if (voiceCall !== vc) return;
+  vc.linkLostOn = !!on;
+  const s = $('cp-state');
+  if (s) { if (on) s.textContent = VOICE_LINK_LOST_TEXT; else s.textContent = voiceCallStateText(s.dataset.state || 'listening', s.dataset.phrase || ''); }   // back: the call's own line, standby's "Waiting for ..." included
+  if (typeof voiceDisplayHook === 'function') voiceDisplayHook('connLost', !!on);
+}
+function voiceCallLinkGiveUp(vc) {
+  if (voiceCall !== vc) return;
+  voiceCallRelease('link');   // the immediate path: microphone released, the hub told in the background, the display ended with no goodbye
+  voiceEndedBar(true, VOICE_LINK_ENDED_TEXT);
+}
+function voiceLinkMake(vc) {
+  if (typeof voiceCreateLinkWatch !== 'function') return;
+  const tone = (up) => { if (typeof voiceLinkTone === 'function') voiceLinkTone(vc.thinkCtx, up); };
+  const setLost = (on) => { if (vc.call && typeof vc.call.setLinkLost === 'function') vc.call.setLinkLost(on); };
+  vc.link = voiceCreateLinkWatch({
+    probe: () => voiceLinkProbe(),
+    setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (t) => clearTimeout(t),
+    onLost: () => { if (voiceCall !== vc) return; setLost(true); tone(false); voiceLinkPaint(vc, true); },
+    onBack: () => { if (voiceCall !== vc) return; voiceLinkPaint(vc, false); tone(true); setLost(false); },
+    onGiveUp: () => voiceCallLinkGiveUp(vc),
+  });
+}
+
 // The tap on the mic button. call.start() runs synchronously in the tap (the controller starts the microphone and
 // the audio context first, which iOS only allows inside the tap), so nothing is awaited before it.
 function voiceCallStart() {
@@ -7186,9 +7334,11 @@ function voiceCallStart() {
   }
   vc.call = voiceCreateCall(voiceCallDeps(vc));
   voiceCall = vc;
+  if (typeof voiceLinkMake === 'function') voiceLinkMake(vc);   // is the server still there? a lost connection ends the call
   try { window.__voiceBt = { keepAliveRunning: () => !!(vc.keepAlive && vc.keepAlive.running), micInfo: () => vc.micInfo || null, micLost: () => !!vc.micLostOn, echoHold: () => voicePrefsNow().echoHold }; } catch { /* a test hook only */ }
   voiceMediaSession(vc, true);   // Android Chrome: a playing media session is what lets a call go on while the page is hidden
   vc.beatTimer = setInterval(voiceCallBeat, 1000);
+  if (vc.link) vc.link.start();
   voiceCallPanel(true); voiceCallPaintState('starting'); voiceMicPaint(); if (typeof voiceDispPaintPanel === 'function') voiceDispPaintPanel();   // the Display select is filled at call start
   if (typeof voiceDispBegin === 'function') voiceDispBegin(vc);   // synchronous, still inside the tap
   const bail = () => { if (voiceCall === vc) voiceCallTeardown(vc); };
@@ -7462,9 +7612,10 @@ function voiceCallRelease(reason) {
   try { Promise.resolve(vc.vad.stop()).catch(() => {}); } catch { /* already stopped */ }   // belt and braces: stop() is safe to repeat
   voiceCallTeardown(vc);
 }
-function voiceEndedBar(show) {
+function voiceEndedBar(show, text) {
   const b = $('call-ended-bar');
-  if (!b) { if (show) toast(VOICE_ENDED_TEXT, 5000); voiceCallBgNote = false; return; }
+  if (!b) { if (show) toast(text || VOICE_ENDED_TEXT, 5000); voiceCallBgNote = false; return; }
+  if (show) { const t = b.querySelector && b.querySelector('.ceb-text'); if (t) t.textContent = text || VOICE_ENDED_TEXT; }
   b.hidden = !show;
   if (show) voiceCallBgNote = false;
 }
@@ -7491,6 +7642,8 @@ document.addEventListener('visibilitychange', () => {
   else if (voiceRec.state === 'starting') voiceMicCancel();
 });
 window.addEventListener('pagehide', () => voiceLeaveApp('pagehide'));
+window.addEventListener('offline', () => { const vc = typeof voiceCall !== 'undefined' ? voiceCall : null; if (vc && vc.link) vc.link.offline(); });   // the link watch of the active call
+window.addEventListener('online', () => { const vc = typeof voiceCall !== 'undefined' ? voiceCall : null; if (vc && vc.link) vc.link.online(); });
 document.addEventListener('freeze', () => voiceLeaveApp('freeze'));
 window.addEventListener('pageshow', () => { if (!document.hidden && voiceCallBgNote && !voiceCall) voiceEndedBar(true); });
 function voiceSheet() {
@@ -7825,6 +7978,7 @@ async function sendMessage(fallback) {
         else addNote('(stopped)');
       }
     } else if (e.name === 'TypeError' || /HTTP 50[234]/.test(e.message || '') || /network|fetch|stream|socket/i.test(e.message || '')) {
+      if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, null, agent);   // a call's own message that did not get through: the link is lost
       // Connection dropped (phone slept, network changed, hub restarted). Never resend:
       // the hub keeps running the turn and the reply lands in history.
       lost = true;

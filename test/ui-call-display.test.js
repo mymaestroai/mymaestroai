@@ -1596,3 +1596,15 @@ test('caption observer: when observe() throws after the observer exists, it is d
   assert.ok(w.dom.overlay()); assert.strictEqual(made, 1); assert.strictEqual(disc, 1, 'the partly registered observer is released'); assert.strictEqual(w.win.added.filter(a => a[0] === 'resize').length, 1, 'the fallback listener is used');
   w.display.release(); assert.strictEqual(disc, 1, 'not disconnected twice'); assert.strictEqual(w.win.removed.length, 1);
 });
+
+test('connLost(true): the status reads "Connection lost" (over a lost microphone too); false restores the call state', async () => {
+  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  w.display.start(); await flushP();
+  w.display.setState('listening'); assert.strictEqual(statusOf(dom), 'Listening');
+  w.display.connLost(true); assert.strictEqual(statusOf(dom), 'Connection lost'); assert.strictEqual(w.display.info().connLost, true);
+  w.display.setState('speaking'); assert.strictEqual(statusOf(dom), 'Connection lost', 'a state change keeps it');
+  w.display.micLost(true); assert.strictEqual(statusOf(dom), 'Connection lost');
+  w.display.connLost(false); assert.strictEqual(statusOf(dom), 'Microphone lost'); assert.strictEqual(w.display.info().connLost, false);
+  w.display.micLost(false); assert.strictEqual(statusOf(dom), 'Speaking');
+  w.display.release();
+});
