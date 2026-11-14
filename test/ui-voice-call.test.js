@@ -162,7 +162,7 @@ test('voiceReplySentences and voiceJoinOr', () => {
   assert.deepStrictEqual(code.sentences, ['Here is code.'], 'the open code block is not read, the note waits for the end');
   assert.strictEqual(code.note, 'I have put the details in the chat.');
   const done = voiceReplySentences('Here is code.\n```js\nlet a\n```\nAll set.', true);
-  assert.deepStrictEqual(done.sentences, ['Here is code.', 'All set.']);
+  assert.deepStrictEqual(done.sentences, ['Here is code.']);   // on a call only the spoken lead (before the first code/table/list/heading line) is read; the note says the rest is in the chat
   assert.strictEqual(done.note, 'I have put the details in the chat.');
   assert.deepStrictEqual(voiceReplySentences('', true), { sentences: [], note: '' });
   assert.strictEqual(voiceJoinOr(['A']), 'A');
@@ -293,7 +293,7 @@ test('barge-in: speech start while speaking cuts the audio before transcription'
   assert.deepStrictEqual(h.interjected, ['no make it shorter'], 'a spoken correction becomes an interjection');
   h.call.onReplyText('Sentence one. Sentence two. Sentence three. Sentence four. Sentence five.', true);
   await h.finish();
-  assert.deepStrictEqual(h.spoken, ['Sentence one.', 'Sentence four.', 'Sentence five.'], 'only text after the cut is read');
+  assert.deepStrictEqual(h.spoken, ['Sentence one.', 'I have put the details in the chat.'], 'only the 3-sentence lead is ever read (sentences 4 and 5 are cut by the cap), so after the cut only the note follows');
 });
 
 test('barge-in: the VAD is told when playback starts and stops', async () => {
@@ -316,7 +316,8 @@ test('reply reading: sentences as they arrive, code and tables skipped, note onc
   await h.finish();
   h.call.onReplyText('Here is the plan. Step one is easy. Step two:\n```js\nrun();\n```\n| a | b |\n|--|--|\n| 1 | 2 |\nDone.', true);
   await h.finish();
-  assert.deepStrictEqual(h.spoken.slice(2), ['Step two: Done.', 'I have put the details in the chat.']);
+  // only the lead before the first code fence is read now: the text after the code and the table ('Done.') stays in the chat
+  assert.deepStrictEqual(h.spoken.slice(2), ['Step two:', 'I have put the details in the chat.']);
   await h.finish(); await h.finish();
   assert.strictEqual(h.last(), 'listening');
   assert.strictEqual(h.spoken.filter(s => /details/.test(s)).length, 1);
