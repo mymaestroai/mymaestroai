@@ -6521,7 +6521,7 @@
       const seq = chat.histSeq = (chat.histSeq || 0) + 1;
       const reset = chat.viewLoaded !== undefined;   // not the first load: the panel is drawn again from nothing
       return soloHistoryFetch(chat.agent, view, null)
-        .then(page => { if (chats[chatId] && chat.histSeq === seq) soloHistoryDraw(chatId, page.history, page.next, view, { reset }); })
+        .then(page => { if (chats[chatId] && chat.histSeq === seq && !chat.controller) soloHistoryDraw(chatId, page.history, page.next, view, { reset }); })
         .catch(e => console.warn('[history] Failed to load:', e));
     }
     // Draw a history list (oldest first) into the chat's panel. reset: clear the panel and the chat's messages first
@@ -6639,9 +6639,18 @@
         }
         if (!chats[chatId] || chat.histSeq !== seq) return;   // closed, or reloaded in another view meanwhile
         if (!older.length) { chat.histNext = cursor; return; }
+        // rawHistory is only the opening snapshot: read the newest page again so what was sent or received since stays.
+        const fresh = await soloHistoryFetch(chat.agent, view, null);
+        if (!chats[chatId] || chat.histSeq !== seq) return;
+        // A reply started while the pages were loading: a redraw would wipe it (re-checked after all the awaits).
+        if (chat.controller || chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) { hubToast('Load earlier once the reply is done'); return; }
+        const tsOf = (e) => { const n = typeof e.ts === 'number' ? e.ts : Date.parse(e.ts); return Number.isFinite(n) ? n : null; };
+        const firstTs = fresh.history.length ? tsOf(fresh.history[0]) : null;
+        const kept = (chat.rawHistory || []).filter(e => firstTs === null ? fresh.history.length === 0 : (tsOf(e) !== null && tsOf(e) < firstTs));
+        const base = kept.concat(fresh.history);
         const panel = document.getElementById(`messages-${chatId}`);
         const fromBottom = panel ? panel.scrollHeight - panel.scrollTop : 0;
-        soloHistoryDraw(chatId, chatViewMergeOlder(older, chat.rawHistory), cursor, view, { reset: true, keepScroll: true });
+        soloHistoryDraw(chatId, chatViewMergeOlder(older, base), cursor, view, { reset: true, keepScroll: true });
         if (panel) { panel.scrollTop = Math.max(0, panel.scrollHeight - fromBottom); userScrolledUp.set(panel, true); }
       } catch (e) {
         hubToast(`Could not load earlier messages: ${e.message}`);
@@ -6681,7 +6690,9 @@
       if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent) return null;
       if (chatViewGet(localStorage) !== 'main') return null;
       if (chat.controller || chat.reattach) return null;   // this page's own stream
-      const run = busyRun[chat.agent];
+      let run = busyRun[chat.agent];
+      const stNow = agentStatus[chat.agent];
+      if (run && !(stNow && stNow.busy)) { delete busyRun[chat.agent]; run = null; }   // a turn_end was missed: the card must not stay
       if (run) return run.own ? null : { text: chatViewBusyText(run.origin, null), since: run.since };
       const st = agentStatus[chat.agent];   // the page opened mid-turn: the status feed's words
       if (!st || !st.busy || st.pendingQuestion || localBusy.has(chat.agent)) return null;
@@ -8119,12 +8130,17 @@
       if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setAgentLive(ev.agent, { busy: false });   // busy while another turn is open
       if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
       { const c = findSoloChat(ev.agent); if (c) { c.inProgress = null; setTimeout(() => compactionRefresh(c.id), 3500); } }   // context % moved (the hub records it 2.5 s after the turn)
+      const endedRun = busyRun[ev.agent];   // read before it is dropped: says whether the turn was hub-started
       if (busyRun[ev.agent] && (!ev.turnId || busyRun[ev.agent].turnId === ev.turnId)) delete busyRun[ev.agent];
       { const c = findSoloChat(ev.agent); if (c) busyCardRefresh(c); }   // the busy card goes with the turn
       if (ev.agent) scheduleWorkerStatusPoll();   // re-read the status once: a reply can run without a turn of its own
       const t = hubTurns[ev.turnId]; delete hubTurns[ev.turnId];
       if (!t) {
         const chat = findSoloChat(ev.agent);
+        // A hub-started turn this page never followed (opened mid-turn, or a redraw dropped it): a reply marked for the
+        // owner would be missing, so the newest page is read again (nothing visible changes otherwise).
+        const hubStarted = chatViewIsHubOrigin(ev.origin) || (endedRun && (!ev.turnId || endedRun.turnId === ev.turnId) && !endedRun.own);
+        if (hubStarted && chat && chatViewGet(localStorage) === 'main' && !chat.controller && !chat.reattach) chat.historyLoaded = soloHistoryLoad(chat.id);
         if (chat?.reattach) {
           if (ev.reply) finishReattach(chat.id, ev.reply, true);
           else if (ev.ok === false) finishReattach(chat.id, `${chat.reattach.partial ? chat.reattach.partial + '\n\n' : ''}⚠ turn failed: ${ev.error || 'unknown error'}`, false);

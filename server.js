@@ -2030,7 +2030,7 @@ async function handleHttpRequest(req, res) {
         const tr = require('./lib/transcript').getTranscript();
         const page = require('./lib/chat-history').historyPage({
           logEntries: loadConversationLog(name, 0),
-          archive: { rowsBefore: (o) => tr.rowsBefore(name, o), forOwnerTurns: (ids) => tr.forOwnerTurns(name, ids) },
+          archive: { rowsBefore: (o) => tr.rowsBefore(name, o), forOwnerTurns: (ids) => tr.forOwnerTurns(name, ids), lastMarkTs: (tool) => tr.lastMarkTs(name, tool) },
           view, before, limit: hq.get('limit'),
           inProgressMark: (entries) => hubEv.markInProgress(entries, hubEv.events.turnFor(name)),
         });

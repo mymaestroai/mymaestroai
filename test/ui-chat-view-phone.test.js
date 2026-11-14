@@ -31,12 +31,13 @@ function mkEl(box) {
 test('openChat fetches the history of the stored view with chatViewHistoryUrl and remembers next; the reread keeps to the view', () => {
   const oc = cut('async function openChat(name)', 'function attachStreamBubble(');
   assert.match(oc, /api\(chatViewHistoryUrl\(name, \{ view: viewNow\(\) \}\)\)/);
-  assert.match(oc, /chatNext = d && d\.next != null \? d\.next : null;/);
+  assert.match(oc, /loadedNext = d && d\.next != null \? d\.next : null;/);
+  assert.match(oc, /chatHistory = loadedHist; chatNext = loadedNext;/);
   assert.doesNotMatch(oc, /api\(`\/api\/history\//, 'no bare history call any more');
   assert.match(oc, /openSeq !== chatOpenSeq\) return;/, 'a late answer of an older load is dropped');
   const rr = cut('async function rereadHistory(', 'function reasoningEnd(');
   assert.match(rr, /chatViewHistoryUrl\(agent, \{ view: viewNow\(\), limit: 50 \}\)/);
-  assert.match(rr, /chatHistory = hist; chatNext = nextCursor; histGen\+\+;/);
+  assert.match(rr, /chatHistory = older\.length \? chatViewMergeOlder\(older, hist\) : hist;[\s\S]*histGen\+\+;\s*return true;/);
   // the re-attach read-back keeps the bare form
   assert.match(cut('async function reattachCheck(', 'const ui = ra.text'), /api\(`\/api\/history\/\$\{encodeURIComponent\(ra\.agent\)\}`/);
   const vn = new Function('chatViewGet', 'localStorage', `${cut('function viewNow()', 'function paintViewMenu()')}; return viewNow;`)(V.chatViewGet, store('all'));
@@ -111,6 +112,56 @@ test('Load earlier: an error is a toast and the button stays; nothing happens wi
   await busy.mod.loadEarlier(); assert.strictEqual(busy.calls.urls.length, 0); assert.strictEqual(busy.calls.toasts.length, 1);
   const hub = loadEarlierHarness({ pages: [], followed: true });
   await hub.mod.loadEarlier(); assert.strictEqual(hub.calls.urls.length, 0);
+});
+
+test('Load earlier: a reply that began while the page was fetched (stream, re-attach, followed hub turn) is a toast and nothing is committed', async () => {
+  for (const kind of ['stream', 'reattach', 'followed']) {
+    const src = cut('async function loadEarlier()', '// A stream or re-attach paints only while');
+    const calls = { render: 0, toasts: [] };
+    const streams = new Map(), reattaches = new Map(); let followed = false;
+    const btn = { disabled: false, textContent: 'Load earlier', isConnected: true };
+    const scroller = { scrollHeight: 1000, scrollTop: 40 };
+    const api = async () => {   // the reply starts while the answer is on its way
+      if (kind === 'stream') streams.set('forge', {}); else if (kind === 'reattach') reattaches.set('forge', {}); else followed = true;
+      return { ok: true, json: async () => ({ history: [{ ts: '1', role: 'user', content: 'a' }], next: 'log:60' }) };
+    };
+    const mod = new Function('api', 'viewNow', 'chatEl', '$', 'chatViewHistoryUrl', 'chatViewMergeOlder', 'renderHistory', 'toast', 'streams', 'reattaches', 'followedHubTurn',
+      `let current = 'forge', chatNext = 'log:100', chatHistory = [{ ts: '3', role: 'user', content: 'c' }], chatLoadingOlder = false, chatOpenSeq = 1, histGen = 0, stick = true;
+       ${src}; return { loadEarlier, get: () => ({ chatNext, chatHistory, histGen, chatLoadingOlder }) };`)(
+      api, () => 'main', () => ({ querySelector: () => btn }), () => scroller, V.chatViewHistoryUrl, V.chatViewMergeOlder, () => { calls.render++; }, (m) => calls.toasts.push(m), streams, reattaches, () => followed);
+    await mod.loadEarlier();
+    const st = mod.get();
+    assert.deepStrictEqual(calls.toasts, ['Load earlier once the reply is done'], kind);
+    assert.strictEqual(calls.render, 0, kind);
+    assert.strictEqual(st.chatNext, 'log:100', kind); assert.deepStrictEqual(st.chatHistory.map(e => e.content), ['c'], kind); assert.strictEqual(st.histGen, 0, kind);
+    assert.strictEqual(st.chatLoadingOlder, false, kind);
+    assert.strictEqual(btn.disabled, false, kind); assert.strictEqual(btn.textContent, 'Load earlier', kind);
+  }
+});
+
+test('openChat: a late answer for chat A does not overwrite chat B\'s history, next or histGen', async () => {
+  const frag = cut('let loadedHist = [], loadedNext = null;', '  // The running turn\'s reply so far');
+  const run = new Function('api', 'chatViewHistoryUrl', 'viewNow', 'S',
+    `let current, chatOpenSeq, chatHistory = [], chatNext = null, histGen = 0;
+     S.get = () => ({ chatHistory, chatNext, histGen });
+     S.set = (c, q, h, n) => { current = c; chatOpenSeq = q; chatHistory = h; chatNext = n; };
+     return async function(name, openSeq) { ${frag} };`);
+  const S = {};
+  let release;
+  const api = (url) => url.includes('/aaa') ? new Promise(r => { release = () => r({ ok: true, json: async () => ({ history: [{ ts: '1', content: 'from A' }], next: 'A:1' }) }); }) : Promise.resolve({ ok: true, json: async () => ({ history: [{ ts: '2', content: 'from B' }], next: 'B:1' }) });
+  const load = run(api, V.chatViewHistoryUrl, () => 'main', S);
+  S.set('aaa', 1, [], null);
+  const pa = load('aaa', 1);                       // A's answer is slow
+  S.set('bbb', 2, [{ ts: '2', content: 'from B' }], 'B:1');   // the person opened B, whose history is loaded
+  const g = S.get().histGen;
+  release(); await pa;
+  const st = S.get();
+  assert.deepStrictEqual(st.chatHistory.map(e => e.content), ['from B']);
+  assert.strictEqual(st.chatNext, 'B:1'); assert.strictEqual(st.histGen, g);
+  // and the current chat's own answer is committed
+  S.set('bbb', 3, [], null);
+  const pb = load('bbb', 3); await pb;
+  assert.deepStrictEqual(S.get().chatHistory.map(e => e.content), ['from B']); assert.strictEqual(S.get().chatNext, 'B:1'); assert.strictEqual(S.get().histGen, g + 1);
 });
 
 // ── the main view switch ──
@@ -283,7 +334,67 @@ test('busy card: removed at turn_end, in the all view, when the chat closes; the
 
 test('a hub-started turn this page never followed does not draw its reply into the main chat at turn_end', () => {
   const te = cut('function onTurnEnd(ev) {', 'function plain(');
-  assert.match(te, /viewNow\(\) === 'main' && chatViewIsHubOrigin\(ev\.origin\) && !forOwnerPending\[ev\.turnId\]\) \{/);
+  assert.match(te, /viewNow\(\) === 'main' && hubStarted && !forOwnerPending\[ev\.turnId\]\) \{/);
+});
+
+// P3: onTurnEnd with the real source and stubs
+function turnEndHarness({ turnOrigins = {}, hubTurns = {}, streams = new Map(), reattaches = new Map(), open = true, reread = true, view = 'main' } = {}) {
+  const src = cut('function onTurnEnd(ev) {', 'function plain(');
+  const calls = { reread: [], render: 0, bubbles: 0 };
+  const names = ['rrImpl', 'activeTurnEnd', 'openTurns', 'setLive', 'wkSettleAgent', 'notifyArmed', 'refreshCtx', 'pollStatusSoon', 'hubTurns', 'turnOrigins', 'chatViewIsHubOrigin', 'streams', 'recentOwn', 'reattaches', 'reasoningEnd', 'chatOpenFor', 'setReplyText', 'feedEnd', 'promptCardLine', 'autoFirstLine', 'setBubbleTime', 'msgTimeLine', 'scrollChat', 'finishReattach', 'reattachCheck', 'viewNow', 'forOwnerPending', 'addAssistantBubble', 'msgTimeLabel', 'markUnread', 'activity', 'ACTIVITY_MAX', 'saveJson', 'renderActivity', 'paintStatus', 'updateDots', 'renderHistory', 'setTimeout'];
+  const impl = {
+    activeTurnEnd: () => true, openTurns: {}, setLive() {}, wkSettleAgent() {}, notifyArmed: {}, refreshCtx() {}, pollStatusSoon() {}, hubTurns, turnOrigins,
+    chatViewIsHubOrigin: V.chatViewIsHubOrigin, streams, recentOwn: new Map(), reattaches, reasoningEnd() {}, chatOpenFor: () => open, setReplyText() {}, feedEnd() {},
+    promptCardLine() {}, autoFirstLine() {}, setBubbleTime() {}, msgTimeLine() {}, scrollChat() {}, finishReattach() {}, reattachCheck() {}, viewNow: () => view,
+    forOwnerPending: {}, addAssistantBubble: () => { calls.bubbles++; return { el: {} }; }, msgTimeLabel() {}, markUnread() {}, activity: [], ACTIVITY_MAX: 50, saveJson() {},
+    renderActivity() {}, paintStatus() {}, updateDots() {}, setTimeout() {},
+    rrImpl: async (a) => { calls.reread.push(a); return reread; },
+    renderHistory: () => { calls.render++; },
+  };
+  // rereadHistory, like the real one, bumps histGen when it replaced the history and says so
+  const mod = new Function(...names, `let current = 'forge', screen = 'chat', actUnseen = 0, histGen = 0;
+    async function rereadHistory(a) { const r = await rrImpl(a); if (r) histGen++; return r; }
+    ${src}; return { onTurnEnd };`)(...names.map(n => impl[n]));
+  return { mod, calls, impl };
+}
+const flush = () => new Promise(r => setImmediate(r));
+const endEv = (o = {}) => ({ agent: 'forge', turnId: 'T1', ok: true, reply: 'hello', origin: { kind: 'consultation', from: 'anvil' }, ...o });
+
+test('turn_end of a hub-started turn this page did not follow, main chat open, no stream: the newest page is re-read and redrawn', async () => {
+  const h = turnEndHarness({ turnOrigins: { forge: { turnId: 'T1', hub: true, origin: { kind: 'consultation' } } } });
+  h.mod.onTurnEnd(endEv());
+  await flush();
+  assert.deepStrictEqual(h.calls.reread, ['forge']);
+  assert.strictEqual(h.calls.render, 1, 'redrawn once the read replaced the history');
+  assert.strictEqual(h.calls.bubbles, 0, 'no bubble is drawn from the event');
+  // hub-started by the turn_start only (the end event carries no usable origin): the remembered origin counts
+  const h2 = turnEndHarness({ turnOrigins: { forge: { turnId: 'T1', hub: true, origin: { kind: 'alert' } } } });
+  h2.mod.onTurnEnd(endEv({ origin: undefined }));
+  await flush();
+  assert.deepStrictEqual(h2.calls.reread, ['forge']);
+});
+
+test('turn_end re-read: no redraw when the read was dropped, a stream or re-attach is there, the turn is the person\'s own, or the view is "all"', async () => {
+  const o = { forge: { turnId: 'T1', hub: true, origin: { kind: 'consultation' } } };
+  const dropped = turnEndHarness({ turnOrigins: o, reread: false });
+  dropped.mod.onTurnEnd(endEv()); await flush();
+  assert.strictEqual(dropped.calls.reread.length, 1); assert.strictEqual(dropped.calls.render, 0);
+  const st = turnEndHarness({ turnOrigins: o, streams: new Map([['forge', {}]]) });
+  st.mod.onTurnEnd(endEv()); await flush();
+  assert.strictEqual(st.calls.reread.length, 0); assert.strictEqual(st.calls.render, 0);
+  const own = turnEndHarness({ turnOrigins: { forge: { turnId: 'T1', hub: false, origin: { kind: 'user' } } } });
+  own.mod.onTurnEnd(endEv({ origin: { kind: 'user' } })); await flush();
+  assert.strictEqual(own.calls.render, 0);
+  const all = turnEndHarness({ turnOrigins: o, view: 'all' });
+  all.mod.onTurnEnd(endEv()); await flush();
+  assert.strictEqual(all.calls.render, 0);
+});
+
+test('turn_end of a followed hub turn does not take the re-read-and-redraw path', async () => {
+  const el = { isConnected: true };
+  const h = turnEndHarness({ turnOrigins: { forge: { turnId: 'T1', hub: true, origin: { kind: 'consultation' } } }, hubTurns: { T1: { agent: 'forge', el, card: null } } });
+  h.mod.onTurnEnd(endEv()); await flush();
+  assert.strictEqual(h.calls.render, 0, 'the followed turn is finished in place');
 });
 
 // ── re-attach ──

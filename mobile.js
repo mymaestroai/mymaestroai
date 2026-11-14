@@ -5317,10 +5317,10 @@ async function rereadHistory(agent, attempt = 0) {
     const r = await api(chatViewHistoryUrl(agent, { view: viewNow(), limit: 50 }));   // the part of the chat that is shown
     if (r.ok) { const d = await r.json(); if (Array.isArray(d.history)) { hist = d.history; nextCursor = d.next != null ? d.next : null; } }
   } catch { /* tried again below */ }
-  if (seq !== histReadSeq || gen !== histGen || current !== agent || streams.has(agent) || reattaches.has(agent)) return;
+  if (seq !== histReadSeq || gen !== histGen || current !== agent || streams.has(agent) || reattaches.has(agent)) return;   // dropped: resolves undefined (falsy: nothing replaced)
   if (!hist) {   // the hub did not answer: again in 1, 2, 4 s (a newer read, or the chat moving on, cancels it)
     if (attempt < 3) setTimeout(() => { if (seq === histReadSeq && gen === histGen) rereadHistory(agent, attempt + 1); }, 1000 * 2 ** attempt);
-    return;
+    return false;
   }
   if (hist.length && hist[hist.length - 1].inProgress) hist.pop();   // a new turn's reply so far (the live turn shows it)
   // Older pages the person already loaded ("Load earlier") stay in front of the fresh newest page, with their cursor.
@@ -5329,6 +5329,7 @@ async function rereadHistory(agent, attempt = 0) {
   chatHistory = older.length ? chatViewMergeOlder(older, hist) : hist;
   if (!older.length) chatNext = nextCursor;
   histGen++;
+  return true;   // chatHistory was replaced
 }
 function reasoningEnd(holder) {
   const r = holder && holder.rsn;
@@ -5727,6 +5728,12 @@ async function loadEarlier() {
       cursor = next;
     }
     if (current !== agent || seq !== chatOpenSeq) return;   // the chat moved on or was reloaded meanwhile
+    // A reply began while the page was being fetched: a redraw would detach it. Nothing is committed.
+    if (streams.has(agent) || reattaches.has(agent) || followedHubTurn(agent)) {
+      toast('Load earlier once the reply is done');
+      if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = 'Load earlier'; }
+      return;
+    }
     const s = $('chat-scroll');
     const prevHeight = s.scrollHeight, prevTop = s.scrollTop;
     chatHistory = chatViewMergeOlder(older, chatHistory); histGen++;
@@ -5775,14 +5782,16 @@ async function openChat(name) {
   stick = true;
   const openSeq = ++chatOpenSeq;
   chatNext = null;
+  let loadedHist = [], loadedNext = null;
   try {
     const r = await api(chatViewHistoryUrl(name, { view: viewNow() }));
     const d = r.ok ? await r.json() : null;
-    chatHistory = (d && d.history) || [];
-    chatNext = d && d.next != null ? d.next : null;
-  } catch { chatHistory = []; chatNext = null; }
+    loadedHist = (d && d.history) || [];
+    loadedNext = d && d.next != null ? d.next : null;
+  } catch { loadedHist = []; loadedNext = null; }
+  if (current !== name || openSeq !== chatOpenSeq) return;   // a late answer for another chat (or an older load) must not touch this one's history
+  chatHistory = loadedHist; chatNext = loadedNext;
   histGen++;
-  if (current !== name || openSeq !== chatOpenSeq) return;
   // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place, with its
   // tool calls, so it is not shown twice. The hub flags it only while that turn runs.
   const inProgress = chatHistory.length && chatHistory[chatHistory.length - 1].inProgress ? chatHistory.pop() : null;
@@ -10672,6 +10681,8 @@ function onTurnEnd(ev) {
   const to = turnOrigins[ev.agent];
   if (to && (!ev.turnId || !to.turnId || to.turnId === ev.turnId)) delete turnOrigins[ev.agent];   // the busy card goes with paintStatus below
   const ownTurn = ev.origin?.kind === 'user';
+  // Hub-started: by the turn_start this page saw (read before it was cleared above) or by the end event's origin.
+  const hubStarted = chatViewIsHubOrigin(ev.origin) || !!(to && to.hub && (!ev.turnId || !to.turnId || to.turnId === ev.turnId));
   // A turn this device streamed itself: sendMessage paints and flags it; the hub's event is a duplicate.
   const ownStream = streams.has(ev.agent) || (Date.now() - (recentOwn.get(ev.agent) || 0) < 15000);
   const ra = reattaches.get(ev.agent);
@@ -10688,8 +10699,14 @@ function onTurnEnd(ev) {
     if (ev.reply) finishReattach(ra, ev.reply, true);
     else if (ev.ok === false) finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}${reply}`, false);
     else reattachCheck(ra);
-  } else if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !ownTurn && viewNow() === 'main' && chatViewIsHubOrigin(ev.origin) && !forOwnerPending[ev.turnId]) {
-    // main view, a hub-started turn this page never followed (opened mid-turn): its reply stays out of the chat
+  } else if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !ownTurn && viewNow() === 'main' && hubStarted && !forOwnerPending[ev.turnId]) {
+    // main view, a hub-started turn this page never followed (opened mid-turn): its reply stays out of the chat, unless the
+    // hub marked it for the person (for_owner): the newest page is read back and redrawn, which shows a marked reply
+    // (and changes nothing visible otherwise).
+    const hg = histGen;
+    rereadHistory(ev.agent).then(replaced => {
+      if (replaced && hg !== histGen && chatOpenFor(ev.agent) && !streams.has(ev.agent) && !reattaches.has(ev.agent)) renderHistory();
+    });
   } else if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !ownTurn) {
     setBubbleTime(addAssistantBubble(reply).el, msgTimeLabel(Date.parse(ev.endedAt) || Date.now()));
     rereadHistory(ev.agent);

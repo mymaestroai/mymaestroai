@@ -81,26 +81,28 @@ test('a second load (a view change) resets the panel; an older answer arriving l
 });
 
 // ── Load earlier ──────────────────────────────────────────────────────────────────────────────────
-function earlierPage(pages, { controller = null } = {}) {
-  const fetched = []; const draws = []; const toasts = [];
+function earlierPage(pages, { controller = null, raw = null, fresh = null, hubTurns = {}, onFresh = null } = {}) {
+  const fetched = []; const draws = []; const toasts = []; const freshFetches = [];
   const panel = el('messages'); panel.scrollHeight = 1000; panel.scrollTop = 100;
-  const chat = { id: 'c1', agent: 'forge', histNext: 'log:40', viewLoaded: 'main', histSeq: 1, rawHistory: [{ ts: 't9', role: 'user', content: 'newest' }], controller };
+  const rawHistory = raw || [{ ts: 100, role: 'user', content: 'newest' }];
+  const chat = { id: 'c1', agent: 'forge', histNext: 'log:40', viewLoaded: 'main', histSeq: 1, rawHistory, controller };
   const chats = { c1: chat };
   const painted = [];
   const body = `${extract('soloHistoryEarlier')}\nreturn soloHistoryEarlier;`;
-  const fn = new Function('chats', 'hubToast', 'chatViewGet', 'localStorage', 'soloEarlierPaint', 'soloHistoryFetch', 'chatViewMergeOlder', 'soloHistoryDraw', 'document', 'userScrolledUp', body)(
+  const fn = new Function('chats', 'hubToast', 'chatViewGet', 'localStorage', 'soloEarlierPaint', 'soloHistoryFetch', 'chatViewMergeOlder', 'soloHistoryDraw', 'document', 'userScrolledUp', 'hubTurns', body)(
     chats, (m) => toasts.push(m), V.chatViewGet, storage(null), (id) => painted.push(chat.histBusy), async (agent, view, before) => {
+      if (before === null) { freshFetches.push(view); if (onFresh) onFresh(chat); return { history: (fresh || rawHistory).slice(), next: 'ignored' }; }
       fetched.push(before);
       const p = pages.shift();
       if (p instanceof Error) throw p;
       return p;
     }, V.chatViewMergeOlder, (id, list, next, view, o) => { draws.push({ list, next, view, o }); panel.scrollHeight = 1500; chat.rawHistory = list; chat.histNext = next; },
-    { getElementById: () => panel }, new WeakMap());
-  return { fn, fetched, draws, toasts, panel, chat, painted };
+    { getElementById: () => panel }, new WeakMap(), hubTurns);
+  return { fn, fetched, draws, toasts, panel, chat, painted, freshFetches };
 }
 
 test('Load earlier: fetches before: next, merges in front, redraws, and keeps the content the person was looking at in place', async () => {
-  const t = earlierPage([{ history: [{ ts: 't1', role: 'user', content: 'older' }], next: 'log:20' }]);
+  const t = earlierPage([{ history: [{ ts: 1, role: 'user', content: 'older' }], next: 'log:20' }]);
   await t.fn('c1');
   assert.deepStrictEqual(t.fetched, ['log:40']);
   assert.strictEqual(t.draws.length, 1);
@@ -115,7 +117,7 @@ test('Load earlier: fetches before: next, merges in front, redraws, and keeps th
 
 test('Load earlier: an empty page that still has a next asks again, at most 5 fetches per click', async () => {
   const empty = (next) => ({ history: [], next });
-  const t = earlierPage([empty('a'), empty('b'), { history: [{ ts: 't3', role: 'user', content: 'found' }], next: null }]);
+  const t = earlierPage([empty('a'), empty('b'), { history: [{ ts: 3, role: 'user', content: 'found' }], next: null }]);
   await t.fn('c1');
   assert.deepStrictEqual(t.fetched, ['log:40', 'a', 'b']);
   assert.deepStrictEqual(t.draws[0].list.map(e => e.content), ['found', 'newest']);
@@ -212,7 +214,7 @@ function busyPage({ view = null, status = {}, run = {} } = {}) {
 const busyCards = (p) => p.panel.children.filter(c => c.className === 'chat-busy-card');
 
 test('busy card: a running hub-started turn (turn_start origin) shows text, elapsed time, role status; one instance, always last', () => {
-  const p = busyPage({ run: { forge: { turnId: 't1', origin: { kind: 'consultation', from: 'forge2' }, since: 1000000 - 12000, own: false } } });
+  const p = busyPage({ status: { forge: { busy: true } }, run: { forge: { turnId: 't1', origin: { kind: 'consultation', from: 'forge2' }, since: 1000000 - 12000, own: false } } });
   p.panel.appendChild(el('message'));
   assert.strictEqual(p.busyCardRefresh(p.chat), true);
   assert.strictEqual(busyCards(p).length, 1);
@@ -249,6 +251,7 @@ test('busy card: never for an own turn (turn_start origin user), removed when th
   assert.strictEqual(busyCards(p).length, 0, 'own turn: the live reply streams as today');
   delete run.forge;
   run.forge = { turnId: 't2', origin: { kind: 'schedule', label: 'nightly' }, since: 1000000, own: false };
+  p.status.forge.busy = true;
   p.busyCardRefresh(p.chat);
   assert.strictEqual(busyCards(p).length, 1);
   delete run.forge; p.status.forge.busy = false;   // turn_end: the page forgets the turn and the agent is idle
@@ -329,4 +332,92 @@ test('toolbar markup and CSS: the button sits next to Recall; archived entries a
   assert.match(html, /\.chat-busy-card \{[^}]*text-overflow: ellipsis/);
   assert.match(html, /\.msg-archived > \.msg-time/);
   assert.match(html, /\.chat-earlier-btn \{/);
+});
+
+// ── review r1 fixes (D1-D4) ──────────────────────────────────────────────────────────────────────
+test('D1 Load earlier: the newest page is read again, so what was sent and received since the opening snapshot stays', async () => {
+  const raw = [{ ts: 50, role: 'user', content: 'x' }, { ts: 100, role: 'user', content: 'a' }];
+  const fresh = [{ ts: 100, role: 'user', content: 'a' }, { ts: 200, role: 'user', content: 'hi' }, { ts: 201, role: 'assistant', content: 'reply' }];
+  const t = earlierPage([{ history: [{ ts: 1, role: 'user', content: 'older' }], next: 'log:20' }], { raw, fresh });
+  await t.fn('c1');
+  assert.deepStrictEqual(t.freshFetches, ['main'], 'one fetch of the newest page of the same view');
+  assert.deepStrictEqual(t.draws[0].list.map(e => e.content), ['older', 'x', 'a', 'hi', 'reply']);
+  assert.strictEqual(t.draws[0].next, 'log:20', 'the cursor of the older fetch is the new histNext');
+  const empty = earlierPage([{ history: [{ ts: 1, role: 'user', content: 'older' }], next: null }], { fresh: [] });
+  await empty.fn('c1');
+  assert.deepStrictEqual(empty.draws[0].list.map(e => e.content), ['older', 'newest'], 'an empty fresh page keeps the snapshot');
+});
+
+test('D2 Load earlier: a reply that started during the awaits blocks the redraw; the cursor stays', async () => {
+  const page = () => [{ history: [{ ts: 1, role: 'user', content: 'older' }], next: 'log:20' }];
+  for (const [what, arm] of [['own stream', (c) => { c.controller = {}; }], ['re-attach', (c) => { c.reattach = { msgId: 'm' }; }], ['followed hub turn', (c, ht) => { ht.t1 = { chatId: 'c1' }; }]]) {
+    const hubTurns = {};
+    const t = earlierPage(page(), { hubTurns, onFresh: (c) => arm(c, hubTurns) });
+    await t.fn('c1');
+    assert.strictEqual(t.draws.length, 0, `${what}: no redraw`);
+    assert.deepStrictEqual(t.toasts, ['Load earlier once the reply is done'], what);
+    assert.strictEqual(t.chat.histNext, 'log:40', `${what}: histNext unchanged`);
+    assert.strictEqual(t.chat.histBusy, false);
+  }
+  const other = earlierPage(page(), { hubTurns: { t9: { chatId: 'other' } } });
+  await other.fn('c1');
+  assert.strictEqual(other.draws.length, 1, 'a turn of another chat does not block');
+});
+
+test('D2 history load: an own stream set when the answer arrives means no draw (viewLoaded left as it was)', async () => {
+  let release; const gate = new Promise(r => { release = r; });
+  const t = loadPage(null, async () => { await gate; return ok({ history: [{ ts: 1, role: 'user', content: 'x' }], next: null }); });
+  const p = t.soloHistoryLoad('c1');
+  t.chats.c1.controller = {};
+  release(); await p;
+  assert.strictEqual(t.draws.length, 0);
+  assert.strictEqual(t.chats.c1.viewLoaded, undefined);
+});
+
+test('D3 busy card: a run whose turn_end was missed (agent not busy) is dropped and no card shows', () => {
+  const p = busyPage({ status: { forge: { busy: false } }, run: { forge: { turnId: 't1', origin: { kind: 'consultation', from: 'x' }, since: 1, own: false } } });
+  assert.strictEqual(p.busyCardState(p.chat), null);
+  assert.strictEqual(p.run.forge, undefined, 'busyRun entry dropped');
+  p.run.forge = { turnId: 't2', origin: { kind: 'consultation', from: 'x' }, since: 1, own: false };
+  delete p.status.forge;   // no status at all
+  assert.strictEqual(p.busyCardRefresh(p.chat), false);
+  assert.strictEqual(p.run.forge, undefined);
+  p.run.forge = { turnId: 't3', origin: { kind: 'consultation', from: 'x' }, since: 1, own: false }; p.status.forge = { busy: true };
+  assert.ok(p.busyCardState(p.chat), 'a busy agent keeps the card');
+});
+
+function turnEndPage({ view = null, run = null, followed = false, chat = {}, origin } = {}) {
+  const loads = [];
+  const chats = { c1: Object.assign({ id: 'c1', agent: 'forge' }, chat) };
+  const busyRun = run ? { forge: run } : {};
+  const hubTurns = followed ? { t1: { chatId: 'c-none' } } : {};
+  const body = `${extract('onHubTurnEnd')}\nreturn onHubTurnEnd;`;
+  const fn = new Function('activeTurnEnd', 'openTurns', 'setAgentLive', 'notifyArmed', 'paintNotifyBtns', 'findSoloChat', 'setTimeout', 'compactionRefresh', 'busyRun', 'busyCardRefresh', 'scheduleWorkerStatusPoll', 'hubTurns', 'chatViewIsHubOrigin', 'chatViewGet', 'localStorage', 'soloHistoryLoad', 'finishReattach', 'reattachCheck', 'chats', body)(
+    () => true, {}, () => {}, {}, () => {}, () => chats.c1, () => {}, () => {}, busyRun, () => {}, () => {}, hubTurns, V.chatViewIsHubOrigin, V.chatViewGet, storage(view), (id) => { loads.push(id); return Promise.resolve(); }, () => {}, () => {}, chats);
+  return { end: (ev) => fn(Object.assign({ turnId: 't1', agent: 'forge', ok: true, reply: 'r', origin }, ev)), loads, chats };
+}
+
+test('D4 turn_end of a hub-started turn this page never followed reloads the newest page', () => {
+  const byOrigin = turnEndPage({ origin: { kind: 'consultation', from: 'x' } });
+  byOrigin.end({});
+  assert.deepStrictEqual(byOrigin.loads, ['c1']);
+  assert.ok(byOrigin.chats.c1.historyLoaded, 'historyLoaded holds the reload');
+  const byRun = turnEndPage({ run: { turnId: 't1', origin: { kind: 'schedule' }, since: 1, own: false } });   // turn_end carries no origin
+  byRun.end({});
+  assert.deepStrictEqual(byRun.loads, ['c1'], 'busyRun read before it is deleted');
+});
+
+test('D4 no reload for an own turn, a followed turn, the all view, or a live own stream / re-attach', () => {
+  const hub = { kind: 'consultation', from: 'x' };
+  const cases = [
+    ['own turn', turnEndPage({ run: { turnId: 't1', origin: { kind: 'user' }, since: 1, own: true } })],
+    ['followed', turnEndPage({ origin: hub, followed: true })],
+    ['all view', turnEndPage({ origin: hub, view: 'all' })],
+    ['controller', turnEndPage({ origin: hub, chat: { controller: {} } })],
+    ['reattach', turnEndPage({ origin: hub, chat: { reattach: { msgId: 'm' } } })],
+  ];
+  for (const [what, p] of cases) { p.end({}); assert.deepStrictEqual(p.loads, [], what); }
+  const none = turnEndPage({});
+  none.end({});
+  assert.deepStrictEqual(none.loads, [], 'unknown origin, no busyRun: not hub-started');
 });
