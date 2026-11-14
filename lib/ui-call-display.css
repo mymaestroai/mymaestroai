@@ -78,4 +78,13 @@ body:has(> .ucd-overlay) .voice-sheet.open { z-index: 10005; }
 .vp-display-note { font-size: 12px; color: var(--text-dim, #98a2b3); margin: 2px 0 0; }
 .vp-display-note:empty { display: none; }
 @media (max-width: 560px) { .ucd-main { flex-basis: 100%; } .ucd-side { width: 100%; justify-content: space-between; } }
+/* docked (a display of None, lib/ui-call-display.js dockOn): the same root sits in the chat where the page's bottom bar was, for the length of
+   the call: a slim status line (and the recording badge), the Controls drawer opening upward, the bar. The page's bar is hidden meanwhile. */
+[data-ucd-replaced] { display: none !important; }
+.ucd-overlay.ucd-docked { position: relative; inset: auto; z-index: auto; width: 100%; height: auto; flex: 0 0 auto; background: transparent; will-change: auto;
+  padding: 0; }   /* in the page's flow: the page's own layout (the phone's tab bar) keeps the safe area, as for the bar it replaces */
+.ucd-docked .ucd-stage { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow: visible; min-height: 0; padding: 6px 12px; background: transparent; }
+.ucd-docked .ucd-status { position: static; }
+.ucd-docked .ucd-stage > .ucd-rec { position: static; margin-left: auto; }
+.ucd-docked .ucd-host, .ucd-docked .ucd-note, .ucd-docked .ucd-caption, .ucd-docked .ucd-bar .ucd-back, .ucd-docked .ucd-bar .ucd-caps { display: none !important; }
 @media (prefers-reduced-motion: reduce) { .ucd-overlay, .ucd-overlay * { transition: none !important; animation: none !important; } }
