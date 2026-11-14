@@ -26,6 +26,11 @@ const files = find('test');
 if (!files.length) { console.error('run-tests: no test files found under test/'); process.exit(1); }
 // No test reaches this computer's real Docker (its agent boxes): DOCKER_HOST points nowhere unless a run opts in.
 const env = { ...process.env, DOCKER_HOST: process.env.MM_TEST_REAL_DOCKER === '1' ? (process.env.DOCKER_HOST || '') : 'unix:///nonexistent/docker-for-tests.sock' };
+// No test touches this install's own data/ (in the live install: the owner's accounts, memory and transcripts). The guard is
+// loaded into every Node process of the run, test files and what they start, and fails a file that reads or writes there
+// (test/helpers/data-guard.js; tests use a throwaway install, test/helpers/isolated-install.js).
+const GUARD = path.join(ROOT, 'test', 'helpers', 'data-guard.js');
+env.NODE_OPTIONS = `${env.NODE_OPTIONS ? env.NODE_OPTIONS + ' ' : ''}--require ${JSON.stringify(GUARD)}`;
 const r = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: ROOT, stdio: 'inherit', env });
 if (r.error) { console.error(`run-tests: ${r.error.message}`); process.exit(1); }
 process.exit(r.status === null ? 1 : r.status);
