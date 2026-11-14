@@ -55,12 +55,13 @@ test('(a) #voice-settings-btn is in #voice-strip, not in the composer .row', () 
   assert.ok(/\$\('voice-settings-btn'\)\?\.addEventListener\('click'/.test(mob), 'still wired by id');
 });
 
-test('(b) CSS hides attach, camera and the strip under #composer.typing inside max-width 600px', () => {
+// Changed on purpose (owner, 2026-11-13: "I can no longer add file attachments"): attach and camera are never hidden while typing.
+test('(b) CSS hides only the strip under #composer.typing inside max-width 600px; attach and camera always stay', () => {
   const m = html.match(/@media \(max-width: 600px\) \{\s*(#composer\.typing[^}]*)\}\s*\}/);
   assert.ok(m, 'media block');
   const body = m[1];
-  assert.ok(body.includes('#composer.typing #attach-btn'));
-  assert.ok(body.includes('#composer.typing #camera-btn'));
+  assert.ok(!/#attach-btn|#camera-btn/.test(body), 'attach and camera are not hidden while typing');
+  assert.ok(!/#composer\.typing #(attach|camera)-btn[^{]*\{[^}]*display: none/.test(html), 'nowhere else either');
   assert.ok(body.includes('#composer.typing #voice-strip'));
   assert.ok(/display: none/.test(body));
   assert.ok(!/#composer\.typing[^,{]*(#mic-btn|#send-btn)/.test(body), 'mic and send stay');

@@ -564,9 +564,10 @@
   #voice-strip { align-items: center; }
   #voice-strip #voice-settings-btn { margin-left: auto; }
   #voice-strip #voice-settings-btn[hidden] { display: none; }
-  /* Phone, while the message box is in use: it gets the width of the attach and camera buttons, and the strip's row of height. */
+  /* Phone, while the message box is in use: it gets the strip's row of height. Attach and camera always stay (Android's Back closes the
+     keyboard without leaving the box, so hiding them while focused left no way to attach). */
   @media (max-width: 600px) {
-    #composer.typing #attach-btn, #composer.typing #camera-btn, #composer.typing #voice-strip { display: none; }
+    #composer.typing #voice-strip { display: none; }
   }
   /* While a reply runs, the Notify chip shows only its bell when typing, so the box keeps its width. */
   @media (max-width: 600px) {
