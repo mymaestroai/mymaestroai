@@ -13,11 +13,15 @@ const lineOf = (needle, from = 0) => { const i = src.indexOf(needle, from); asse
 
 // Strengthened (voice fixes round 1): the owner heard dashes and symbols read out, so the note now says what the spoken part
 // must not contain; the old exact-text pin is replaced by this one.
-test('VOICE_NOTE is the agreed text: a plain spoken answer first, symbols and detail only in the written part', () => {
+// Changed on purpose (owner, 2026-11-13: agents should not put out tables when talking through voice): on a call the agent speaks
+// plainly and writes nothing for the screen; detail is offered for the chat after the call.
+test('VOICE_NOTE is the agreed text: plain conversational speech only, no written part during the call', () => {
   const { VOICE_NOTE } = require('../lib/sdk-chat');
-  assert.strictEqual(VOICE_NOTE, 'This is a voice conversation: lead with a short spoken answer of one to three plain sentences, written to be heard, with no dashes, bullets, asterisks, slashes, arrows, emoji, parentheses, code, file paths, URLs or abbreviations that read badly, and with numbers, dates and times written the way you would say them. Put tables, lists, code, symbols and long detail only after the spoken answer, in the written part of the chat.');
-  for (const w of ['dashes', 'bullets', 'asterisks', 'slashes', 'arrows', 'emoji', 'parentheses', 'code', 'file paths', 'URLs', 'abbreviations', 'numbers, dates and times', 'after the spoken answer']) assert.ok(VOICE_NOTE.includes(w), w);
-  assert.ok(VOICE_NOTE.split(/[.!?]\s/).length <= 3, 'two or three sentences');
+  assert.strictEqual(VOICE_NOTE, 'This is a voice conversation: reply in plain conversational speech only, in one to three short sentences unless the person asks for more, written to be heard, with numbers, dates and times written the way you would say them. Your replies must not contain tables, lists, headings, code, file paths, links, ids, symbols or emoji (an optional mood word, when one is asked for below, is the only exception) or a separate written part; this is about what you say, so use your tools for the work as usual. If the answer really needs detail on screen, say so in one sentence and offer to put it in the chat after the call; do not write it during the call.');
+  for (const w of ['plain conversational speech only', 'one to three short sentences', 'numbers, dates and times', 'tables', 'lists', 'headings', 'code', 'file paths', 'links', 'ids', 'symbols', 'separate written part', 'after the call',
+    'use your tools for the work as usual', 'mood word']) assert.ok(VOICE_NOTE.includes(w), w);   // the rule is about the spoken reply, not tool work; the face's mood word stays allowed
+  assert.ok(!/after the spoken answer|written part of the chat/.test(VOICE_NOTE), 'the old "detail after the spoken answer" rule is gone');
+  assert.ok(VOICE_NOTE.split(/[.!?]\s/).length <= 3, 'three sentences at most');
   assert.ok([...VOICE_NOTE].every(ch => ch.charCodeAt(0) >= 32 && ch.charCodeAt(0) < 127), 'plain ASCII only: no invisible characters');
 });
 
