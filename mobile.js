@@ -3239,6 +3239,8 @@ function voiceCreateCall(deps) {
   // deps.keepAlive ({ start(), stop() }, optional): an inaudible sound that keeps a Bluetooth / car audio route awake. It starts with the call and
   // the first spoken line of the call waits until VOICE_CALL_LEAD_IN_MS after that (the route needs a moment to open, or the first syllable is lost).
   let leadInUntil = 0, keepAliveOn = false, micLost = false;
+  // Mute (setMuted, the call bar's Mute button). sinceUnmute: a piece of speech began after the last unmute (an end or misfire for one that began before is ignored).
+  let muted = false, sinceUnmute = true;
   let linkLost = false, linkWasLost = false, linkDropped = false;   // the connection to the server is lost (setLinkLost): speech is dropped, nothing is reported as an error
   // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost); it is dropped when
   // that differs from the count when it is transcribed or sent, so nothing heard around an outage reaches the agent after the link is back.
@@ -3610,7 +3612,8 @@ function voiceCreateCall(deps) {
     if (c && c.hold) { c.hold.resolve(null); c.hold = null; }
   }
   function onSpeechBegin() {
-    if (ended || personSpeaking) return;
+    if (ended || personSpeaking || muted) return;
+    sinceUnmute = true;
     personSpeaking = true; stopThinking(); clearQuiet();
     capWake = { sb: standby, seq: wakeSeq };
     speechAnn = heardAnnouncement();
@@ -3623,7 +3626,8 @@ function voiceCreateCall(deps) {
   }
   // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
   function onSpeechStart() {
-    if (ended) return;
+    if (ended || muted) return;
+    sinceUnmute = true;
     clearBegin();
     if (!personSpeaking) { speechAnn = heardAnnouncement(); segLinkGen = linkLost ? -1 : linkGen; }   // no onSpeechBegin came first
     if (!personSpeaking || !capWake) capWake = { sb: standby, seq: wakeSeq };
@@ -3646,7 +3650,10 @@ function voiceCreateCall(deps) {
   }
   // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
   function onMisfire() {
-    if (ended) return;
+    if (ended || muted || !sinceUnmute) return;
+    dropSpeech();
+  }
+  function dropSpeech() {
     clearBegin(); segmentDropped(); recDrop();
     personSpeaking = false; speechAnn = null; capWake = null;
     quiet(() => ui.reply('resume'));
@@ -3669,7 +3676,7 @@ function voiceCreateCall(deps) {
     return typeof p === 'number' && Number.isFinite(p) && p < 0.35;
   }
   function onSpeechEnd(audio) {
-    if (ended) return Promise.resolve();
+    if (ended || muted || !sinceUnmute) return Promise.resolve();   // muted: nothing is heard; just unmuted: a piece begun before it is not sent
     clearBegin();
     // The recorded audio of this speech (null when it was not recorded: standby, paused, no recorder): its transcript is saved below.
     const recHandle = recOn ? quiet(() => recorder.end()) || null : null;
@@ -3850,6 +3857,28 @@ function voiceCreateCall(deps) {
     try { return Promise.resolve(vad.reopen()).then((r) => !!r, () => false); } catch { return Promise.resolve(false); }
   }
 
+  // Mute: the agent hears nothing. The microphone tracks are switched off (vad.setMuted: the speech detector, the recognizer and the recorder get digital
+  // silence, also from a microphone opened again while muted) and the speech events are ignored here. Speech under way when Mute is tapped is dropped as a
+  // false start: nothing of it is sent or recorded, and a reply it had cut reads on. After unmute, only speech that begins after it counts. The agent's own
+  // speech, the thinking sound, the keep-alive and the music focus are not touched. Every call starts unmuted; the end of the call clears it. -> muted.
+  function setMuted(on) {
+    const want = !!on;
+    if (ended || want === muted) return muted;
+    muted = want;
+    quiet(() => { if (typeof vad.setMuted === 'function') vad.setMuted(want); });
+    if (want) { sinceUnmute = false; if (personSpeaking || segActive) dropSpeech(); }
+    return muted;
+  }
+  // The Interrupt button while muted (the Talk floor asks this instead of taking the floor: nothing is listened for while muted): the reply being read
+  // stops and the rest of this turn's reply is not read, as when the person cuts it by speaking. -> true when something was stopped.
+  function interrupt() {
+    if (ended || !muted || (!speaking && !queue.length)) return false;
+    quiet(() => ui.reply('drop'));   // a reaction that has not played is dropped, as for a cut by speech
+    const cutReply = cancelSpeaking(true);
+    if (cutReply && awaitingReply && !cutSkip) cutSkip = true;
+    settle();
+    return true;
+  }
   function beat() {
     hbTimer = d.setTimer(() => {
       hbTimer = null;
@@ -3897,6 +3926,7 @@ function voiceCreateCall(deps) {
     for (const t of [hbTimer, pumpTimer, quietTimer, chimeTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
     hbTimer = pumpTimer = quietTimer = chimeTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); clearStill(); stopThinking();
     for (const s of [lastSeg, curCand]) if (s) { if (s.hold) s.hold.resolve(null); if (s.onJoin) { const f = s.onJoin; s.onJoin = null; quiet(f); } }   // a held or waiting transcript is let go with the call
+    if (muted) { muted = false; quiet(() => { if (typeof vad.setMuted === 'function') vad.setMuted(false); }); }
     quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
     if (recorder) { recOn = false; quiet(() => recorder.stop()); }
     if (keepAliveOn) { keepAliveOn = false; quiet(() => d.keepAlive.stop()); }
@@ -3943,7 +3973,7 @@ function voiceCreateCall(deps) {
     settle();
   }
   return {
-    start, hangUp, release, wakeChanged, isStandby: () => standby, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+    start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
     get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
   };
 }
@@ -4320,7 +4350,8 @@ function voiceCreateVad(opts) {
     hold: o.echoHoldMs === undefined ? VOICE_ECHO_HOLD_MS : holdMs(o.echoHoldMs), holdTimer: null, nav: null, handlers: {}, src: null, track: null, trackOff: null,
     mdOff: null, devTimer: null, reopening: null, info: null, defSnap: null,
     unprocessed: !!o.unprocessed,   // the call's own microphone is opened with echo cancellation, noise suppression and auto gain off (a recorded call, mic 'unprocessed': the fallback)
-    recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [] };   // the recording's own second microphone track (openRecordingTap) and who follows the tap
+    recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [],   // the recording's own second microphone track (openRecordingTap) and who follows the tap
+    muted: false };   // setMuted: every microphone track of the call is switched off
   const win = () => o.win || window;
   const setT = o.setTimer || ((fn, ms) => { const w = win(); return (typeof w.setTimeout === 'function' ? w.setTimeout.bind(w) : setTimeout)(fn, ms); });
   const clearT = o.clearTimer || ((id) => { const w = win(); return (typeof w.clearTimeout === 'function' ? w.clearTimeout.bind(w) : clearTimeout)(id); });
@@ -4390,6 +4421,7 @@ function voiceCreateVad(opts) {
         if (src) {
           dropRecording();
           st.recRaw = raw; st.recSrc = src; st.recTrack = tr;
+          applyMute();
           if (tr && typeof tr.addEventListener === 'function') {
             // The second track ended: the recording goes back to the call's own microphone, opened without processing.
             const f = () => { if (st.recTrack !== tr) return; dropRecording(); st.unprocessed = true; reopen('recording', true).then(() => fireSource(), () => fireSource()); };
@@ -4406,6 +4438,15 @@ function voiceCreateVad(opts) {
     const ok = await reopen('recording', true);
     return { processing: ok ? 'call-track' : 'processed', node: st.src };
   }
+  // Mute: each track of the call's microphone and of the recording's own second microphone gets enabled = !muted (a switched-off track gives digital silence;
+  // the microphone stays open, so unmute is instant). Run after every open, so a microphone opened while muted starts switched off.
+  function applyMute() {
+    for (const raw of [st.raw, st.recRaw]) {
+      let list = [];
+      try { list = raw ? (raw.getAudioTracks ? raw.getAudioTracks() : (raw.getTracks ? raw.getTracks() : [])) : []; } catch { list = []; }
+      for (const tr of list || []) { try { tr.enabled = !st.muted; } catch { /* a track that will not take it */ } }
+    }
+  }
   function unwatchTrack() {
     if (st.trackOff) { try { st.trackOff(); } catch { /* gone */ } }
     st.trackOff = null; st.track = null;
@@ -4420,6 +4461,7 @@ function voiceCreateVad(opts) {
     if (prevSrc) { try { prevSrc.disconnect(); } catch { /* gone */ } }
     if (prevRaw && prevRaw !== raw) voiceStopStream(prevRaw);   // stops and untracks it
     st.src = src; st.raw = raw;
+    applyMute();
     const tr = rawTrack(raw);
     if (tr && typeof tr.addEventListener === 'function') {
       const f = () => { if (st.track === tr) reopen('ended').catch(() => {}); };   // ended: opened again at once
@@ -4621,6 +4663,9 @@ function voiceCreateVad(opts) {
     audioContext() { return st.ctx; },
     openRecordingTap,
     setMicLevel(v) { st.micLevel = v; if (st.gain) st.gain.gain.value = voiceGainFromSlider(v); },
+    // Mute (see applyMute): true switches every microphone track of the call off, false on again (whatever is open now, after any reopen).
+    setMuted(on) { st.muted = !!on; applyMute(); },
+    isMuted() { return st.muted; },
     setInterruptSensitivity(v) { st.sens = v; apply(); },
     // 'Pause before I'm done': only the END of a turn waits this long; the start of speech (barge-in) is not delayed.
     setEndPause(ms) { st.pause = pause(ms); if (st.vad) st.vad.setOptions({ redemptionMs: st.pause }); },
@@ -8072,6 +8117,8 @@ function voiceOwnRoute(el) {
 }
 try { window.__voiceOut = () => { let c = null; for (const ctx of voiceLoudCtxs()) { if (ctx.__voiceLoudness) { c = ctx.__voiceLoudness; break; } } return { level: voiceLoudnessNow(), ...voiceOutputNow(), gainDb: c ? c.gainDb : null, normalized: c ? !!c.normalized : voiceNormFlag, meter: c ? c.meter() : null }; }; } catch { /* a test hook only */ }
 function voiceFacePackBody() { const d = voiceDisp.cur; const slug = d && typeof d.activeFacePack === 'function' ? d.activeFacePack() : null; return slug ? { facePack: slug } : {}; }
+// The call bar's Mute (display option onMute): the call is muted or unmuted and the bar shows what the call says now.
+function voiceCallMuteTap(want) { const vc = voiceCall; if (!vc || !vc.call || typeof vc.call.setMuted !== 'function') return; const m = vc.call.setMuted(want); const d = voiceDisp.cur; if (d) { try { d.setMuted(m); } catch { /* the display is gone */ } } }
 function voiceDispTalk() { const f = voiceDisp.floor; if (f) f.take(); }
 function voiceDispAdopt() {
   return [
@@ -8090,7 +8137,8 @@ function voiceDispBegin(vc) {
       output: (ctx) => voiceOutNode(ctx),   // reply audio ends in the loudness chain
       dock: () => $('composer'),   // whenever no full view is shown (None, Back to chat, a character loading) the call screen's bar takes the composer's place; the call panel lives in its Controls drawer
       onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(),
-      onRecordingToggle: (wantPaused) => (voiceCall && voiceCall.rec ? voiceCall.rec.togglePause(wantPaused) : undefined) });   // the Pause / Resume recording button of a recorded call
+      onRecordingToggle: (wantPaused) => (voiceCall && voiceCall.rec ? voiceCall.rec.togglePause(wantPaused) : undefined),   // the Pause / Resume recording button of a recorded call
+      onMute: voiceCallMuteTap });   // the Pause / Resume recording button of a recorded call
     voiceDisp.cur = d;
     d.start();   // synchronous: the audio context is made and resumed inside the tap that started the call
   } catch { voiceDisp.cur = null; }
@@ -8578,9 +8626,9 @@ function voiceCallDeps(vc) {
     clearTimer: (t) => clearTimeout(t),
     prefs: () => voiceEffNow(agent),   // this agent's voice defaults for any setting the person has not set on this device
     // Everything the controller uses passes through: the "now" of setPlaybackActive (a cut by the person drops the echo guard at once),
-    // reopen ("Try the microphone again" after a lost microphone) and info.
+    // reopen ("Try the microphone again" after a lost microphone), info and setMuted (the call bar's Mute).
     vad: { start: (h) => vc.vad.start(typeof voiceDisp !== 'undefined' && voiceDisp.floor ? voiceDisp.floor.wrap(h) : h), stop: () => vc.vad.stop(),
-      setPlaybackActive: (on, now) => vc.vad.setPlaybackActive(on, now), reopen: () => vc.vad.reopen(), info: () => vc.vad.info() },
+      setPlaybackActive: (on, now) => vc.vad.setPlaybackActive(on, now), reopen: () => vc.vad.reopen(), info: () => vc.vad.info(), setMuted: (on) => vc.vad.setMuted(on) },
     stt: (f32) => voiceCallStt(agent, f32),
     isTurnRunning: () => isBusy(agent) || ownTurnFor(agent),
     send: (text) => voiceCallSend(vc, text),

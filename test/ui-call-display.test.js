@@ -79,13 +79,14 @@ function world(o) {
   o = o || {};
   const dom = fakeDom(), clk = clock(), players = [], orbs = [];
   const storage = o.storage || memStorage(o.prefs ? { [CD.DISPLAY_STORE_KEY]: JSON.stringify(o.prefs) } : {});
-  const log = { talk: 0, hang: 0, changes: 0, retry: 0 };
+  const log = { talk: 0, hang: 0, changes: 0, retry: 0, mute: [] };
   const win = { document: dom.doc, AudioContext: o.AudioContext, createVoiceOrb: undefined };
   if (o.winEvents) { win.added = []; win.removed = []; win.addEventListener = (t, f) => win.added.push([t, f]); win.removeEventListener = (t, f) => win.removed.push([t, f]); }
   const display = CD.createCallDisplay({
     window: win, ResizeObserver: o.ResizeObserver, document: dom.doc, storage, fetch: o.fetch || jsonFetch(PACKS), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout,
     reopenHost: o.reopenHost, dock: o.dock, needsContext: !!o.needsContext, shared: o.shared, onRoutesLost: o.onRoutesLost, agentDefault: () => (o.agentDefault === undefined ? 'none' : o.agentDefault), adopt: o.adopt,
     onRetryMic: o.retry ? () => { log.retry++; } : undefined,
+    onMute: o.mute ? (v) => { log.mute.push(v); } : undefined,
     onTalk: () => { log.talk++; }, onHangUp: () => { log.hang++; }, onChange: () => { log.changes++; },
     createVoiceOrb: fakePlayerFactory('orb', orbs, o.orb), createFacePlayer: fakePlayerFactory('pack', players, o.pack),
   });
@@ -658,12 +659,12 @@ test('slot: a lost microphone turns the slot into "Try the microphone again" (on
   n.display.release();
 });
 
-test('slot: Hang up never moves: the slot stays in .ucd-main right before it in every state, is never removed and never gets the hidden property', async () => {
+test('slot: Hang up never moves: the slot stays at index 0 of .ucd-main, Mute at 1 and Hang up at 2 in every state, is never removed and never gets the hidden property', async () => {
   const w = world({ prefs: { choice: 'pack:owl', interrupt: true }, retry: true }); const { dom } = w;
   w.display.start(); await flushP();
   const slot = slotOf(dom), hang = dom.find('ucd-hang')[0], main = slot.parentNode;
   assert.strictEqual(main.className, 'ucd-main');
-  const check = (s) => { assert.strictEqual(slot.parentNode, main, s); assert.strictEqual(hang.parentNode, main, s); assert.strictEqual(main.children.indexOf(slot), 0, s); assert.strictEqual(main.children.indexOf(hang), 1, s); assert.strictEqual(slot.hidden, false, s); };
+  const check = (s) => { assert.strictEqual(slot.parentNode, main, s); assert.strictEqual(hang.parentNode, main, s); assert.strictEqual(main.children.indexOf(slot), 0, s); assert.strictEqual(main.children.indexOf(dom.find('ucd-mute')[0]), 1, s); assert.strictEqual(main.children.indexOf(hang), 2, s); assert.strictEqual(slot.hidden, false, s); };
   for (const st of ['starting', 'listening', 'hearing', 'thinking', 'speaking', 'listening']) { w.display.setState(st); check(st); }
   w.display.micLost(true); check('mic lost'); w.display.micLost(false); check('mic back');
   w.display.setState('ended'); check('ended');
@@ -684,7 +685,7 @@ test('slot: when the slot turns off while it has focus, focus moves to the overl
 });
 
 // ── the Interrupt button is an option (off by default, per device) ──
-test('interrupt option: by default no Interrupt in any state (mode off, data-ucd-off), and Hang up keeps its index in .ucd-main', async () => {
+test('interrupt option: by default no Interrupt in any state (mode off, data-ucd-off), and Hang up keeps its index (2, after the slot and Mute) in .ucd-main', async () => {
   for (const choice of ['orb', 'pack:owl']) {
     const w = world({ prefs: { choice }, retry: true }); const { dom } = w;
     w.display.start(); await flushP();
@@ -693,7 +694,7 @@ test('interrupt option: by default no Interrupt in any state (mode off, data-ucd
     for (const st of ['starting', 'listening', 'hearing', 'thinking', 'speaking', 'ended']) {
       w.display.setState(st);
       assert.strictEqual(slot.attrs['data-ucd-mode'], 'off', choice + ' ' + st); assert.ok('data-ucd-off' in slot.attrs, st); assert.strictEqual(w.display.info().talk, 'off', st);
-      assert.strictEqual(main.children.indexOf(hang), 1, 'Hang up stays at the same index in ' + st); assert.strictEqual(main.children.indexOf(slot), 0, st);
+      assert.strictEqual(main.children.indexOf(hang), 2, 'Hang up stays at the same index in ' + st); assert.strictEqual(main.children.indexOf(slot), 0, st);
     }
     slot.click(); assert.strictEqual(w.log.talk, 0);
     w.display.release();
@@ -1854,5 +1855,67 @@ test('without o.dock, Back to chat still gives the fixed float button in the bod
   assert.strictEqual(dom.doc.activeElement, f[0], 'focus goes to it');
   f[0].click();
   assert.ok(dom.overlay() && !isDocked(dom)); assert.strictEqual(dom.find('ucd-reopen-float').length, 0);
+  w.display.release();
+});
+
+// ── Mute button ──
+const muteOf = (dom) => dom.find('ucd-mute')[0];
+test('Mute: sits in .ucd-main right before Hang up (slot 0, Mute 1, Hang up 2), with its label and aria-pressed false', async () => {
+  const w = world({ prefs: { choice: 'orb' }, mute: true }); const { dom } = w;
+  w.display.start(); await flushP();
+  const m = muteOf(dom), hang = dom.find('ucd-hang')[0], main = hang.parentNode;
+  assert.ok(m, 'a Mute button'); assert.strictEqual(m.parentNode, main);
+  assert.deepStrictEqual([main.children.indexOf(slotOf(dom)), main.children.indexOf(m), main.children.indexOf(hang)], [0, 1, 2]);
+  assert.strictEqual(m.textContent, 'Mute'); assert.strictEqual(m.attrs['aria-label'], 'Mute the microphone'); assert.strictEqual(m.attrs['aria-pressed'], 'false');
+  assert.strictEqual(m.hidden, false); assert.strictEqual(w.display.info().muted, false);
+  w.display.release();
+});
+
+test('Mute: hidden without the onMute option, still at index 1', async () => {
+  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  w.display.start(); await flushP();
+  const m = muteOf(dom); assert.ok(m); assert.strictEqual(m.hidden, true);
+  assert.strictEqual(m.parentNode.children.indexOf(m), 1);
+  w.display.release();
+});
+
+test('Mute: a click asks onMute(true); the display follows only on setMuted (pressed, Unmute, status Muted, info().muted); the next click asks onMute(false)', async () => {
+  const w = world({ prefs: { choice: 'orb' }, mute: true }); const { dom } = w;
+  w.display.start(); await flushP();
+  w.display.setState('listening');
+  const m = muteOf(dom);
+  m.click(); assert.deepStrictEqual(w.log.mute, [true]);
+  assert.strictEqual(m.attrs['aria-pressed'], 'false', 'the page answers with setMuted');
+  w.display.setMuted(true);
+  assert.strictEqual(m.attrs['aria-pressed'], 'true'); assert.strictEqual(m.textContent, 'Unmute'); assert.strictEqual(statusOf(dom), 'Muted'); assert.strictEqual(w.display.info().muted, true);
+  w.display.setState('speaking'); assert.strictEqual(statusOf(dom), 'Muted', 'a state change keeps it');
+  m.click(); assert.deepStrictEqual(w.log.mute, [true, false]);
+  w.display.setMuted(false);
+  assert.strictEqual(m.attrs['aria-pressed'], 'false'); assert.strictEqual(m.textContent, 'Mute'); assert.strictEqual(statusOf(dom), 'Speaking'); assert.strictEqual(w.display.info().muted, false);
+  w.display.release();
+});
+
+test('Mute: Connection lost and Microphone lost win over Muted; hang-up disables the button and says Goodbye', async () => {
+  const w = world({ prefs: { choice: 'orb' }, mute: true }); const { dom } = w;
+  w.display.start(); await flushP();
+  w.display.setState('listening'); w.display.setMuted(true); assert.strictEqual(statusOf(dom), 'Muted');
+  w.display.micLost(true); assert.strictEqual(statusOf(dom), 'Microphone lost');
+  w.display.connLost(true); assert.strictEqual(statusOf(dom), 'Connection lost');
+  w.display.connLost(false); w.display.micLost(false); assert.strictEqual(statusOf(dom), 'Muted');
+  w.display.hangUp();
+  assert.strictEqual(muteOf(dom).disabled, true); assert.strictEqual(statusOf(dom), 'Goodbye');
+  muteOf(dom).click(); assert.deepStrictEqual(w.log.mute, [], 'no click while ending');
+  w.display.release();
+});
+
+test('Mute: the docked bar (display None) has the same Mute button between the slot and Hang up', async () => {
+  const { w, dom } = dockedWorld({ choice: 'none' });
+  w.display.start(); await flushP();
+  assert.ok(isDocked(dom));
+  const m = muteOf(dom), hang = dom.find('ucd-hang')[0];
+  assert.ok(m, 'docked Mute'); assert.strictEqual(m.parentNode, hang.parentNode);
+  assert.deepStrictEqual([m.parentNode.children.indexOf(slotOf(dom)), m.parentNode.children.indexOf(m), m.parentNode.children.indexOf(hang)], [0, 1, 2]);
+  assert.strictEqual(m.textContent, 'Mute'); assert.strictEqual(m.attrs['aria-pressed'], 'false');
+  w.display.setMuted(true); assert.strictEqual(m.textContent, 'Unmute'); assert.strictEqual(m.attrs['aria-pressed'], 'true');
   w.display.release();
 });
