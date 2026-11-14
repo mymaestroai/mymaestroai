@@ -10441,12 +10441,11 @@ function onForOwner(ev) {
 }
 
 function onTurnEnd(ev) {
-  // another turn of the same agent still open (the hub started it before this one ended): the agent stays busy
-  if (!(ev && ev.agent && activeTurnEnd(openTurns, ev.agent, ev.turnId))) setLive(ev.agent, { busy: false });
-  if (ev && ev.agent) pollStatusSoon();
+  if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setLive(ev.agent, { busy: false });   // busy while another turn is open
   if (ev.agent) wkSettleAgent(ev.agent, ev.turnId || null);
   if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }
   if (ev.agent && ev.agent === current) setTimeout(() => refreshCtx(ev.agent), 3500);   // the hub records the size 2.5 s after the turn
+  if (ev.agent) pollStatusSoon();   // re-read the status once: a reply can run without a turn of its own
   const reply = ev.reply || (ev.ok ? '(no reply)' : `⚠ turn failed: ${ev.error || 'unknown error'}`);
   const t = hubTurns[ev.turnId];
   delete hubTurns[ev.turnId];

@@ -565,15 +565,15 @@ test('turn bookkeeping: a turn_end leaves the agent busy while another of its tu
 
 test('both pages: turn_end clears busy only through activeTurnEnd, asks the hub again, and an idle snapshot clears open turns', () => {
   const ms = cut(mob, 'function onTurnEnd(', 'function ');
-  assert.ok(/if \(!\(ev && ev\.agent && activeTurnEnd\(openTurns, ev\.agent, ev\.turnId\)\)\) setLive\(ev\.agent, \{ busy: false \}\);/.test(ms), ms.slice(0, 300));
-  assert.ok(ms.includes('pollStatusSoon();'));
+  assert.ok(ms.includes('if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setLive(ev.agent, { busy: false });'), ms.slice(0, 300));
+  assert.ok(ms.includes('if (ev.agent) pollStatusSoon();'));
   assert.ok(cut(mob, 'function onTurnStart(', 'function ').includes('activeTurnStart(openTurns, ev.agent, ev.turnId);'));
   assert.ok(cut(mob, 'function applySnapshot(', 'let wkGoneState').includes('if (!patch.busy) delete openTurns[name];'));
   const ds = cut(app, 'function onHubTurnEnd(', 'function ');
-  assert.ok(/if \(!\(ev && ev\.agent && activeTurnEnd\(openTurns, ev\.agent, ev\.turnId\)\)\) setAgentLive\(ev\.agent, \{ busy: false \}\);/.test(ds));
-  assert.ok(ds.includes('scheduleWorkerStatusPoll();'));
+  assert.ok(ds.includes('if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setAgentLive(ev.agent, { busy: false });'));
+  assert.ok(ds.includes('if (ev.agent) scheduleWorkerStatusPoll();'));
   assert.ok(cut(app, 'async function onHubTurnStart(', 'function ').includes('activeTurnStart(openTurns, ev.agent, ev.turnId);'));
-  assert.ok(cut(app, 'function applyStatusSnapshot(', 'let workerGoneState').includes('if (!s.busy) delete openTurns[name];'));
+  assert.ok(cut(app, 'function applyStatusSnapshot(', 'let workerGoneState').includes('for (const n of Object.keys(openTurns)) if (map[n] ? !map[n].busy : !(namedOnly && busyIsWorker(n, agentStatus[n]))) delete openTurns[n];'));
 });
 
 test('phone agentRowHtml: without opts (or without a job) there is no job markup; done rows drop the job', () => {

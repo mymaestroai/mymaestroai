@@ -19,7 +19,7 @@ function extract(name) {
 }
 
 function page() {
-  const body = `const agentStatus = {}; let statusKnown = false;
+  const body = `const agentStatus = {}, openTurns = {}; let statusKnown = false;
     const paintAgentStatus = () => {}, paintAgentsWorking = () => {}, paintAllAgentStatus = () => {}, reattachIfIdle = () => {};
     const busyIsWorker = (name, e) => e && typeof e.worker === 'boolean' ? e.worker : /^tw-/.test(name);
     ${extract('setAgentLive')}

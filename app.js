@@ -6807,18 +6807,17 @@
       if (!map || typeof map !== 'object') return;
       statusKnown = true;
       const namedOnly = !!(arguments[1] && arguments[1].namedOnly);
-      for (const [name, s] of Object.entries(map)) {
-        setAgentLive(name, statusPatchOf(s, namedOnly));
-        if (!s.busy) delete openTurns[name];   // the hub says idle: a turn whose end this page missed is not open any more
-      }
+      for (const [name, s] of Object.entries(map)) setAgentLive(name, statusPatchOf(s, namedOnly));
       for (const name of Object.keys(agentStatus)) {
         if (name in map) continue;
-        if (!busyIsWorker(name, agentStatus[name])) { setAgentLive(name, { busy: false }); delete openTurns[name]; }
-        else if (!namedOnly) { delete agentStatus[name]; delete openTurns[name]; }   // a worker that is gone
+        if (!busyIsWorker(name, agentStatus[name])) setAgentLive(name, { busy: false });
+        else if (!namedOnly) delete agentStatus[name];   // a worker that is gone
       }
       paintAllAgentStatus();
       // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
       for (const [name, s] of Object.entries(map)) if (s.busy) reattachIfIdle(name, s.busySince || null);
+      // the hub says idle (or a gone worker): a turn whose end this page missed is not open any more
+      for (const n of Object.keys(openTurns)) if (map[n] ? !map[n].busy : !(namedOnly && busyIsWorker(n, agentStatus[n]))) delete openTurns[n];
       // A full feed that no longer lists a running temporary worker: its end never reached this page.
       if (!namedOnly) {
         const running = [];
@@ -7883,12 +7882,10 @@
     }
 
     function onHubTurnEnd(ev) {
-      // another turn of the same agent still open (the hub started it before this one ended): the agent stays busy; then ask the
-      // hub once (debounced) whether it is still busy, since a reply can run without a turn of its own and no snapshot follows
-      if (!(ev && ev.agent && activeTurnEnd(openTurns, ev.agent, ev.turnId))) setAgentLive(ev.agent, { busy: false });
-      if (ev && ev.agent) scheduleWorkerStatusPoll();
+      if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setAgentLive(ev.agent, { busy: false });   // busy while another turn is open
       if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
       { const c = findSoloChat(ev.agent); if (c) { c.inProgress = null; setTimeout(() => compactionRefresh(c.id), 3500); } }   // context % moved (the hub records it 2.5 s after the turn)
+      if (ev.agent) scheduleWorkerStatusPoll();   // re-read the status once: a reply can run without a turn of its own
       const t = hubTurns[ev.turnId]; delete hubTurns[ev.turnId];
       if (!t) {
         const chat = findSoloChat(ev.agent);
