@@ -14666,7 +14666,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <label class="vp-row"><span class="vp-label">Interrupt sensitivity</span><input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vp="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>${voiceFollowLine(agent, 'interruptSensitivity')}
         <label class="vp-row"><span class="vp-label">Thinking sound</span><input type="checkbox" id="${id('think')}" data-vp="think"${voiceThinkingOnNow() ? ' checked' : ''}></label>
         <label class="vp-row ucd-dup"><span class="vp-label">Call display</span><select id="${id('display')}" data-vp="display" style="padding:4px"><option value="follow">Follow agent default</option></select></label>
-        <div class="vp-display-note ucd-dup" id="${id('display-note')}" aria-live="polite"></div>
+        <div class="vp-display-note" id="${id('display-note')}" aria-live="polite"></div>
         <label class="vp-row ucd-dup"><span class="vp-label">Show captions</span><input type="checkbox" id="${id('captions')}" data-vp="captions"></label>
         <label class="vp-row"><span class="vp-label">Show an Interrupt button</span><input type="checkbox" id="${id('interrupt')}" data-vp="interrupt"></label>
         <div class="vp-display-note">For places where talking over the reply doesn't register.</div>
