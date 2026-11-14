@@ -2648,20 +2648,31 @@ function voiceVadThresholds(interruptSensitivity, playing) {
 }
 // On a call only the spoken lead of a reply is read aloud: at most this many sentences.
 const VOICE_LEAD_MAX_SENTENCES = 3;
-// A 'detail' line ends the spoken lead: a table row, a code fence, a heading, a list item, a rule or a bold-only label line.
-const VOICE_DETAIL_LINE_RE = /^[ \t]*(?:\||```|~~~|#{1,6}[ \t]|(?:[-*+•◦▪‣][ \t]|\d+[.)][ \t])|([-*_])(?:[ \t]*\1){2,}[ \t]*$|(\*\*|__)[^*_\n]+\2[ \t]*:?[ \t]*$)/;
-// voiceSpokenLead(markdown) -> { lead, cut }: the text before the first detail line; cut is true when such a line was found.
-function voiceSpokenLead(markdown) {
+// A 'detail' line ends the spoken lead: a table row starting with |, a code fence, a heading, a list item, a rule, or a bold label
+// (bold text ending in a colon: **Details:** or **Details**:). A bold sentence (**Yes, it finished.**) is an answer and is read.
+const VOICE_DETAIL_LINE_RE = /^[ \t]*(?:\||```|~~~|#{1,6}[ \t]|[-*+•◦▪‣][ \t]|\d+[.)][ \t]|([-*_])(?:[ \t]*\1){2,}[ \t]*$|(\*\*|__)[^*_\n]+(?::\2|\2[ \t]*:)[ \t]*$)/;
+// A table's delimiter row, also without outer pipes (--- | ---); the line before it is the table's header.
+const VOICE_TABLE_RULE_RE = /^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$/;
+// voiceSpokenLead(markdown, done) -> { lead, cut }: the text before the first detail line; cut is true when such a line was found.
+// While the reply streams (done false) the last line is still being typed: a detail-looking last line, or a line with a pipe whose next
+// line has not arrived (it may be a table header), is held back (cut false, so nothing before it is taken as finished).
+function voiceSpokenLead(markdown, done) {
   const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
-  const lines = text.split('\n');
+  const lines = text.split('\n'), last = lines.length - 1;
+  const before = (i) => (i > 0 ? lines.slice(0, i).join('\n') + '\n' : '');
   for (let i = 0; i < lines.length; i++) {
-    if (VOICE_DETAIL_LINE_RE.test(lines[i])) return { lead: lines.slice(0, i).join('\n'), cut: true };
+    const open = !done && i === last;
+    if (VOICE_DETAIL_LINE_RE.test(lines[i]) || VOICE_TABLE_RULE_RE.test(lines[i])) return { lead: before(i), cut: !open };
+    if (lines[i].includes('|')) {
+      if (open || (!done && i + 1 === last)) return { lead: before(i), cut: false };
+      if (i + 1 <= last && VOICE_TABLE_RULE_RE.test(lines[i + 1])) return { lead: before(i), cut: true };
+    }
   }
   return { lead: text, cut: false };
 }
 function voiceReplySentences(markdown, done) {
   const note = voiceSpeechText('| a |');
-  const sp = voiceSpokenLead(markdown);
+  const sp = voiceSpokenLead(markdown, done);
   const finished = !!done || sp.cut;   // a cut lead is complete; an uncut reply may still be streaming
   let lead = sp.lead;
   // While streaming, a last line that is only the start of a detail line (a lone marker, digits, an unclosed bold) is not lead text yet.
@@ -3038,11 +3049,14 @@ function voiceCreateCall(deps) {
     quiet(() => ui.reply('drop'));   // real speech: a reaction that has not played is dropped
     segmentStarting();
     if (speaking || queue.length) {
-      const n = (current ? [current] : []).concat(queue).filter(i => i.kind === 'reply').length;
+      const noteText = voiceSpeechText('| a |');   // the details note is a reply item but not one of the counted sentences
+      const items = (current ? [current] : []).concat(queue);
+      const n = items.filter(i => i.kind === 'reply' && i.text !== noteText).length;
+      const noteCut = items.some(i => i.kind === 'reply' && i.text === noteText);   // a false start puts the note back too
       const cutReply = cancelSpeaking(true);
       const setSkip = cutReply && awaitingReply && !cutSkip;
       if (setSkip) cutSkip = true;
-      if (cutReply) cutRec = { mark: Math.max(0, spokenCount - n), setSkip };   // a cut of mic lines only keeps an earlier reply cut to resume
+      if (cutReply) cutRec = { mark: Math.max(0, spokenCount - n), setSkip, noteCut };   // a cut of mic lines only keeps an earlier reply cut to resume
     }
     setState('hearing');
   }
@@ -3056,6 +3070,7 @@ function voiceCreateCall(deps) {
     if (rec) {
       if (rec.setSkip) cutSkip = false;
       spokenCount = rec.mark;
+      if (rec.noteCut) noteSpoken = false;
       onReplyText(lastText, lastDone);
     }
     settle();
