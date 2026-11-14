@@ -205,6 +205,21 @@ test('(d) plusSheetShow toggles hidden and aria-expanded; plusSheetOpen follows'
   assert.doesNotThrow(() => new Function('$', fnSource(mob, 'plusSheetShow') + '\nplusSheetShow(true);')(() => null), 'no sheet on the page: nothing happens');
 });
 
+test('(d) opening the + sheet closes an open voice panel and moves focus to its first shown item (keyboard reachable; review r1)', () => {
+  let focused = null, panelOpen = true;
+  const item = (id, hidden) => ({ id, hidden, focus() { focused = id; } });
+  const items = [item('attach-btn', true), item('camera-btn', false), item('voice-settings-btn', false)];
+  const sheet = { hidden: true, querySelectorAll: (sel) => (sel === '[role="menuitem"]' ? items : []) };
+  const btn = { setAttribute() {} };
+  const $ = (id) => (id === 'plus-sheet' ? sheet : id === 'plus-btn' ? btn : null);
+  const api = new Function('$', 'voicePanelOpen', 'voicePanelShow', fnSource(mob, 'plusSheetShow') + '\nreturn { plusSheetShow };')($, () => panelOpen, (v) => { panelOpen = !!v; });
+  api.plusSheetShow(true);
+  assert.equal(panelOpen, false, 'the voice panel closed');
+  assert.equal(focused, 'camera-btn', 'first shown item has focus (a hidden one is skipped)');
+  focused = null; api.plusSheetShow(false);
+  assert.equal(focused, null, 'closing moves no focus');
+});
+
 test('(d) plusSheetWire: second tap on + closes, outside tap, Escape (focus back on +), box focus, menu item (before it acts); send and openChat close it', () => {
   const listeners = {};
   const mk = (name) => ({ name, hidden: true, attrs: {}, focused: 0, on: {}, setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, f, cap) { (this.on[t] = this.on[t] || []).push({ f, cap }); }, focus() { this.focused++; }, contains(x) { return x === this || (x && x.inSheet); } });

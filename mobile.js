@@ -7789,6 +7789,10 @@ function plusSheetShow(show) {
   const s = $('plus-sheet'), b = $('plus-btn'); if (!s) return;
   s.hidden = !show;
   if (b) b.setAttribute('aria-expanded', show ? 'true' : 'false');
+  if (!show) return;
+  if (typeof voicePanelOpen === 'function' && voicePanelOpen() && typeof voicePanelShow === 'function') voicePanelShow(false);   // never both open at once
+  const first = s.querySelectorAll ? [...s.querySelectorAll('[role="menuitem"]')].find((i) => !i.hidden) : null;
+  if (first && first.focus) first.focus();   // keyboard: Tab from + would reach the box and close the sheet; start inside it
 }
 function plusSheetWire() {
   const s = $('plus-sheet'), b = $('plus-btn'); if (!s || !b) return;

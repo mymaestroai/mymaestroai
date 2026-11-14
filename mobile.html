@@ -539,10 +539,10 @@
   /* Narrow phones: the square alone (red outline, aria-label), so the line under the agent's name keeps room to say
      what the agent is doing. */
   @media (max-width: 430px) { #chat-stop-btn .stop-label { display: none; } #chat-head .iconbtn.stop-remote { min-width: 40px; padding: 0 8px; } }
-  /* "Notify me when done": next to the Interject button while a reply runs, gone when it is done; filled once tapped. */
-  /* It sits in the chat header beside Stop: only the bell, as big as the header's other icon buttons. */
+  /* "Notify me when done": a bell in the chat header beside Stop while a reply runs, gone when it is done; filled once tapped. */
   #chat-head .notify-chip { flex: none; touch-action: none; font-size: 18px; border: 1px solid var(--accent, #3d7bff); color: var(--accent, #3d7bff); background: rgba(61,123,255,.10); cursor: pointer; white-space: nowrap; }
   #chat-head .notify-chip.on { background: var(--accent, #3d7bff); color: #fff; }
+  #chat-head .notify-chip:active { filter: brightness(1.35); }
   #chat-head .notify-chip .nlabel { display: none; }
   #chat-head .notify-chip[hidden] { display: none; }
   /* Voice: the mic beside Send, the level bar above the row while recording, the speaker on a reply, the Voice sheet. */
