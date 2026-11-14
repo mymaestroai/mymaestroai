@@ -625,7 +625,10 @@
   #call-panel .cp-dnd input { width: 26px; height: 26px; accent-color: var(--accent, #3d7bff); flex: none; }
   #call-panel .cp-disp { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; font-size: 16px; }
   #call-panel .cp-disp select { flex: 1; max-width: 60%; min-height: 44px; font-size: 16px; border-radius: 10px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); padding: 0 8px; }
-  #call-panel .cp-actions { display: flex; gap: 8px; }
+  /* Hang up never needs a scroll: on a short or landscape phone the panel scrolls, and this row stays at its bottom edge on an opaque panel-colored background. */
+  #call-panel .cp-actions { display: flex; gap: 8px; position: sticky; bottom: 0; z-index: 2; background: var(--bg-card); padding-top: 8px; }
+  /* The Recording badge of a recorded call is the panel's first line, pinned to its top on the same opaque background, so it never scrolls away. */
+  #call-panel > .ucd-rec[data-place="bar"] { margin: 0; padding: 6px 0; background: var(--bg-card); }
   #call-panel .cp-actions button { min-height: 52px; border-radius: 12px; font-size: 16px; font-weight: 600; background: var(--border); color: var(--text); padding: 0 16px; }
   #call-panel .cp-actions .cp-hang { flex: 1; background: var(--error, #e5484d); color: #fff; display: flex; align-items: center; justify-content: center; gap: 8px; }
   #call-panel .cp-actions .cp-hang svg { width: 22px; height: 22px; }

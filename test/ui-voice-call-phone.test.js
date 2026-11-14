@@ -60,6 +60,17 @@ test('call panel sits between the messages and the composer, with every control,
   assert.match(js, /voiceCallWire\(\);/);
 });
 
+test('call panel: the Levels / Hang up row is sticky at the bottom of the scrolling panel, on the panel background', () => {
+  const panel = html.match(/#call-panel \{[^}]*\}/)[0];
+  const bg = panel.match(/background: ([^;]+);/)[1];
+  const rule = html.match(/#call-panel \.cp-actions \{[^}]*\}/)[0];
+  assert.match(rule, /position: sticky/);
+  assert.match(rule, /bottom: 0/);
+  assert.ok(rule.includes(`background: ${bg}`), 'opaque, the same background as the panel');
+  assert.match(rule, /padding-top: \d+px/);
+  assert.match(rule, /z-index: [1-9]/);
+});
+
 test('deps: every key of the controller contract is given', () => {
   const deps = sliceBetween('function voiceCallDeps(vc)', 'function voiceCallStart()');
   for (const k of ['agent', 'now:', 'setTimer:', 'clearTimer:', 'prefs:', 'vad:', 'stt:', 'isTurnRunning:', 'send:', 'interject:', 'stop:', 'speak:', 'cancelSpeech:', 'answerAsk:', 'server:', 'ui:']) assert.ok(deps.includes(k), k);

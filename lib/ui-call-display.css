@@ -69,7 +69,7 @@
 .ucd-rec .ucd-rec-pause:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent, #3d7bff); }
 /* in a call bar the badge may wrap rather than push Hang up off the screen */
 #call-panel .ucd-rec, .callbar .ucd-rec { flex-wrap: wrap; }
-.ucd-rec[data-place="bar"] { display: flex; margin: 6px 0; }   /* its own line above the bar's buttons */
+.ucd-rec[data-place="bar"] { display: flex; margin: 6px 0; position: sticky; top: 0; z-index: 2; }   /* its own line at the top of the bar, pinned while a panel scrolls */
 /* the phone's toast sits at z-index 30: keep it readable above the full-screen view */
 #toast.on { z-index: 10010; }
 .vp-display-note { font-size: 12px; color: var(--text-dim, #98a2b3); margin: 2px 0 0; }
