@@ -242,6 +242,7 @@ function gatewayRun({ calls, options, abortAfterFirstCall, model }) {
     timeZoneLib: { zoneForAgent: () => 'UTC', policyText: () => '', localTimeTag: () => '[time]' },
     accumulateToolCallDelta: L('tool-call-deltas').accumulateToolCallDelta,
     activityMeta: (agent, text, extra) => extra, history: [], interjectionQueues: new Map(), drainInterjections: () => [],
+    sdkInterject: { takeUndelivered: () => [], formatCarried: () => '', carriedImages: () => [], stashUndelivered() {} },   // no carried interjections in this sandbox
     MAX_TOOL_TURNS: 12, MAX_TRUNCATION_RESUMES: 3, MAX_LENGTH_CONTINUATIONS: 3, REASON_FLUSH_MS: 250,
     pendingToolConfirms: new Map(), isStoppedResult: () => false, raceStop: (p) => p,
     chatCompletionStream: async (messages, opts) => {

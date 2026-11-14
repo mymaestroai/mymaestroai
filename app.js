@@ -9339,8 +9339,20 @@
     }
     // ── interjection helpers (end) ──
     // A saved picture file as the page loads it: /api/image/<base64(path)> (serveImage allows data/uploads).
+    // The path goes as base64 of its UTF-8 bytes (what the server decodes; plain btoa throws above U+00FF and mis-encodes
+    // U+0080-U+00FF). A path that cannot be encoded is skipped, so it never breaks the history render.
     function savedImageUrls(paths) {
-      return (Array.isArray(paths) ? paths : []).filter(p => typeof p === 'string' && p).map(p => '/api/image/' + btoa(p));
+      const out = [];
+      for (const p of Array.isArray(paths) ? paths : []) {
+        if (typeof p !== 'string' || !p) continue;
+        try {
+          const bytes = new TextEncoder().encode(p);
+          let bin = '';
+          for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+          out.push('/api/image/' + btoa(bin));
+        } catch { /* skipped */ }
+      }
+      return out;
     }
     // The text of an interjection bubble: what sendInterjection shows when the person sends it, an emergency one marked as such.
     function interjectionBubbleText(view) {
@@ -9442,6 +9454,12 @@
       // Show a transient "sent" notice that will be updated when the agent picks it up
       const noticeEl = appendSystemNotice(chatId, '⚡ Interjection sent - waiting for agent to pick it up...');
       if (noticeEl) noticeEl.id = `interject-notice-${chatId}`;
+      // Not sent: the pictures go back in front of whatever was attached while the request was out (never replacing it).
+      const restoreImages = () => {
+        if (!imagesToSend.length) return;
+        chat.pendingImages = [...imagesToSend, ...(chat.pendingImages || [])];
+        renderImagePreviews(chatId);
+      };
 
       try {
         const resp = await fetch('/api/chat/interject', {
@@ -9456,18 +9474,17 @@
         } else if (/not currently processing/i.test(String(result.error || ''))) {
           // The turn ended between the status update and the send: go as a normal message (the pictures with it).
           if (noticeEl) noticeEl.textContent = '↪ The turn had already ended, sending as a new message…';
+          // The text and pictures go straight to the normal send (sendOpts.fallback): the composer is not touched, so
+          // whatever was typed or attached since is left alone.
           skipInterjectOnce.add(chatId);
-          input.value = content;
-          chat.pendingImages = imagesToSend;
-          renderImagePreviews(chatId);
-          return sendSoloMessage(chatId);
+          return sendSoloMessage(chatId, 0, { fallback: { text: content, images: imagesToSend } });
         } else {
           if (noticeEl) { noticeEl.textContent = `⚠️ Interjection failed: ${result.error}`; }
-          if (imagesToSend.length) { chat.pendingImages = imagesToSend; renderImagePreviews(chatId); }   // not sent: the pictures are back in the input
+          restoreImages();
         }
       } catch (e) {
         if (noticeEl) { noticeEl.textContent = `⚠️ Interjection failed: ${e.message}`; }
-        if (imagesToSend.length) { chat.pendingImages = imagesToSend; renderImagePreviews(chatId); }
+        restoreImages();
       }
     }
 
@@ -9480,8 +9497,11 @@
       let notified = false;
       const notify = (err) => { if (notified || !sendOpts || !sendOpts.onSendResult) return; notified = true; try { sendOpts.onSendResult(err); } catch { /* the caller's problem */ } };
       const input = document.getElementById(`input-${chatId}`);
-      const content = input.value.trim();
-      const pendingImages = chat.pendingImages || [];
+      // sendOpts.fallback { text, images }: a message that was meant as an interjection but found the turn over. It goes
+      // with its own text and pictures; the composer (what is typed or attached now) is neither read nor changed.
+      const fallback = sendOpts && sendOpts.fallback ? sendOpts.fallback : null;
+      const content = fallback ? String(fallback.text || '').trim() : input.value.trim();
+      const pendingImages = fallback ? [...(fallback.images || [])] : (chat.pendingImages || []);
 
       // Route to interjection whenever the agent is working: a turn this tab started, or one the hub
       // reports busy (started from the phone, a schedule, a consult or another tab). Before this the
@@ -9493,6 +9513,7 @@
         notify(null);   // a voice message into a working agent goes as an interjection
         return sendInterjection(chatId);
       }
+      skipInterjectOnce.delete(chatId);   // a fallback send has used its pass (the check above stepped aside for it, or the agent was not busy)
       if (!retryCount) { chat.voiceTurn = !!chat.voiceDictated; chat.voiceDictated = false; }   // this reply follows a mic dictation: read it aloud when it ends (if the device asks for that)
 
       // Need content OR images to send
@@ -9516,8 +9537,10 @@
       // Only clear input and add to history on first attempt (not retries)
       let userMsgEl = null;
       if (retryCount === 0) {
-        input.value = '';
-        input.style.height = 'auto';
+        if (!fallback) {
+          input.value = '';
+          input.style.height = 'auto';
+        }
 
         // Store images with message for history
         chat.messages.push({ role: 'user', content, images: pendingImages.length > 0 ? [...pendingImages] : undefined });
@@ -9529,7 +9552,7 @@
 
       // Clear pending images
       const imagesToSend = [...pendingImages];
-      if (retryCount === 0) {
+      if (retryCount === 0 && !fallback) {
         clearPendingImages(chatId);
       }
 
@@ -9579,6 +9602,7 @@
           setAgentStatus(chat.agent, '');
           delete chat.lastMsgId;
           chat.controller = null;
+          if (fallback) chat.bounced409 = true;   // a fallback send is not bounced into an interjection again: it goes back to the composer below
           if (!chat.bounced409) {
             chat.bounced409 = true;
             setAgentLive(chat.agent, { busy: true });
@@ -9591,7 +9615,7 @@
           notify(new Error('busy'));
           chat.bounced409 = false;
           if (!input.value) input.value = content;
-          chat.pendingImages = imagesToSend;
+          chat.pendingImages = fallback ? [...imagesToSend, ...(chat.pendingImages || [])] : imagesToSend;   // a fallback send: in front of what was attached since
           renderImagePreviews(chatId);
           appendSystemNotice(chatId, `⛔ ${chat.display || chat.agent} is busy; it will finish first. Your message was not sent — it is back in the input box.`, 'warning');
           return;

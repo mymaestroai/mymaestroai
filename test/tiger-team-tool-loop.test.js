@@ -30,6 +30,7 @@ function harness(respond, toolHandlers = {}) {
     MAX_TOOL_TURNS: 12, MAX_TRUNCATION_RESUMES: 3, MAX_LENGTH_CONTINUATIONS: 3, REASON_FLUSH_MS: 250,
     drainInterjections: () => [], interjectionQueues: new Map(),
     retryUnloggedInterjections() {}, activityForFlush: () => undefined,   // interjection history helpers (lib/sdk-chat): no-ops here
+    sdkInterject: { takeUndelivered: () => [], formatCarried: () => '', carriedImages: () => [], stashUndelivered() {} },   // no carried interjections in this sandbox
     providerPacing: require('../lib/provider-pacing'),   // the gateway catch emits a typed turn_error for the pacing layer
     errorHelp: require('../lib/error-help'),   // ...and the error in plain words for the reply text
     modelHealth: { record() {} },   // model health marks are a no-op in this sandbox

@@ -29,12 +29,13 @@ gwClient.parseSSEStream = (resp) => resp.fake();
 const sdkChat = L('sdk-chat');
 const hubEvents = L('hub-events');
 
-const A = { retryNext: 'zz_bf1_retry_next', retryEnd: 'zz_bf1_retry_end', pieces: 'zz_bf1_pieces', tail: 'zz_bf1_tail', idAgent: 'zz_bf1_id', toolSdk: 'zz_bf1_tool_sdk', toolPlain: 'zz_bf1_tool_plain', toolGw: 'zz_bf1_tool_gw' };
+const A = { retryNext: 'zz_bf1_retry_next', retryEnd: 'zz_bf1_retry_end', pieces: 'zz_bf1_pieces', tail: 'zz_bf1_tail', idAgent: 'zz_bf1_id', toolSdk: 'zz_bf1_tool_sdk', toolPlain: 'zz_bf1_tool_plain', toolGw: 'zz_bf1_tool_gw', runOne: 'zz_bf1_run_one', runTwo: 'zz_bf1_run_two', runGw: 'zz_bf1_run_gw' };
 const convDir = path.join(ISO.data, 'conversations');
 fs.mkdirSync(convDir, { recursive: true });
 fs.writeFileSync(path.join(ISO.data, 'agents.json'), JSON.stringify([
-  ...[A.retryNext, A.retryEnd, A.idAgent, A.toolSdk, A.toolPlain].map(name => ({ name, model: 'claude-sdk/claude-sonnet-5-5', displayName: name })),
+  ...[A.retryNext, A.retryEnd, A.idAgent, A.toolSdk, A.toolPlain, A.runOne, A.runTwo].map(name => ({ name, model: 'claude-sdk/claude-sonnet-5-5', displayName: name })),
   { name: A.toolGw, model: 'openai/gpt-5.5', displayName: A.toolGw },
+  { name: A.runGw, model: 'openai/gpt-5.5', displayName: A.runGw },
 ]));
 after(() => { for (const a of Object.values(A)) try { fs.writeFileSync(path.join(convDir, `${a}.jsonl`), ''); } catch {} });
 
@@ -198,6 +199,7 @@ test('BF2 sdk-live: the tool that ran before the interjection is in piece 1, the
     await it.next();
     yield delta('First. ');
     yield toolStart('tu1', 'Bash');
+    yield { type: 'tool_use_summary', preceding_tool_use_ids: ['tu1'], summary: 'ok' };   // finished before the interjection
     yield delta('Second. ');
     await tick(30);
     sdkChat.handleInterjection({ agent, message: 'hurry' });
@@ -236,6 +238,89 @@ test('BF2 gateway: the tool that ran before the interjection is in piece 1, the 
   assert.deepStrictEqual(h.map(e => e.role), ['user', 'assistant', 'user', 'assistant'], JSON.stringify(h.map(e => [e.role, e.content])));
   assert.deepStrictEqual(toolRows(h[1]), ['read_memory'], 'piece 1 holds the first tool row');
   assert.deepStrictEqual(toolRows(h[3]), ['read_memory'], 'piece 2 holds the second, not the first again');
+});
+
+// ── a tool still running at an interjection is saved once, finished, with a later piece (F3 item 2) ──────────
+const toolDone = (id, summary) => ({ type: 'tool_use_summary', preceding_tool_use_ids: [id], summary });
+const allRows = (agent) => assistantPieces(agent).flatMap(e => (Array.isArray(e.activity) ? e.activity.filter(a => a.kind === 'tool') : []));
+
+test('F3-2 sdk-live: an interjection during a running tool; the tool completes; more text; final save, reload: one row, done, with its result', async () => {
+  const agent = A.runOne;
+  sdkScript = async function* (prompt) {
+    const it = prompt[Symbol.asyncIterator]();
+    await it.next();
+    yield delta('First. ');
+    yield toolStart('tr1', 'Bash');   // still running when the interjection comes
+    await tick(30);
+    sdkChat.handleInterjection({ agent, message: 'hurry' });
+    const m = await it.next();
+    yield { type: 'user', isReplay: true, uuid: m.value.uuid, session_id: 's1' };
+    yield delta('Second. ');
+    yield toolDone('tr1', 'result-of-tr1');
+    yield delta('Third.');
+    yield { type: 'result', subtype: 'success', session_id: 's1', usage: {} };
+  };
+  await sdkChat.handleChatStream({ agent, message: 'go' }, browserRes());
+  const h = history(agent);   // reloaded from the file
+  assert.deepStrictEqual(h.map(e => e.role), ['user', 'assistant', 'user', 'assistant']);
+  assert.deepStrictEqual(toolRows(h[1]), [], 'piece 1 was saved while the tool ran: no row left "running" in it');
+  const rows = allRows(agent);
+  assert.strictEqual(rows.length, 1, 'the row is saved once');
+  assert.strictEqual(rows[0].status, 'done');
+  assert.match(rows[0].output, /result-of-tr1/, 'with its result');
+  assert.deepStrictEqual(toolRows(h[3]), ['Bash']);
+  assert.ok(Number.isFinite(rows[0].at) && rows[0].at >= 0 && rows[0].at <= h[3].content.length, 'its offset is inside its own piece');
+  assert.ok(!allRows(agent).some(a => a.status === 'running'), 'nothing saved as running');
+});
+
+test('F3-2 sdk-live: two interjections in one reply: no tool row twice, none lost, none left running', async () => {
+  const agent = A.runTwo;
+  sdkScript = async function* (prompt) {
+    const it = prompt[Symbol.asyncIterator]();
+    await it.next();
+    yield delta('A. ');
+    yield toolStart('r1', 'Bash'); yield toolDone('r1', 'one');   // done before the first interjection
+    yield delta('B. ');
+    yield toolStart('r2', 'Read');   // running over the first interjection
+    await tick(30);
+    sdkChat.handleInterjection({ agent, message: 'first' });
+    let m = await it.next();
+    yield { type: 'user', isReplay: true, uuid: m.value.uuid, session_id: 's1' };
+    yield delta('C. ');
+    yield toolDone('r2', 'two');
+    yield toolStart('r3', 'Glob');   // running over the second one
+    await tick(30);
+    sdkChat.handleInterjection({ agent, message: 'second' });
+    m = await it.next();
+    yield { type: 'user', isReplay: true, uuid: m.value.uuid, session_id: 's1' };
+    yield delta('D. ');
+    yield toolDone('r3', 'three');
+    yield delta('E.');
+    yield { type: 'result', subtype: 'success', session_id: 's1', usage: {} };
+  };
+  await sdkChat.handleChatStream({ agent, message: 'go' }, browserRes());
+  const rows = allRows(agent);
+  assert.deepStrictEqual(rows.map(a => a.tool).sort(), ['Bash', 'Glob', 'Read'], 'each tool once: none twice, none lost');
+  assert.ok(rows.every(a => a.status === 'done'), 'every row saved as done');
+  assert.ok(rows.every(a => /one|two|three/.test(a.output)), 'with their results');
+  assert.strictEqual(assistantPieces(agent).length, 3);
+  assert.strictEqual(assistantPieces(agent).map(e => e.content).join(''), 'A. \n\nB. \n\nC. \n\nD. E.', 'the text is whole');
+});
+
+test('F3-2 gateway: an interjection during a running tool is saved once, finished', async () => {
+  const agent = A.runGw;
+  const call = (id) => ({ choices: [{ delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name: 'read_memory', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] });
+  const txt = (t) => ({ choices: [{ delta: { content: t } }] });
+  gwCalls = 0;
+  gwScripts = [
+    async function* () { yield txt('Checking. '); yield call('call_a'); },
+    async function* () { yield txt('Found it. '); await tick(30); sdkChat.handleInterjection({ agent, message: 'hurry' }); yield txt('More. '); yield call('call_b'); },
+    async function* () { yield txt('Done.'); yield { choices: [{ delta: {}, finish_reason: 'stop' }] }; },
+  ];
+  await sdkChat.handleChatStream({ agent, message: 'go' }, browserRes());
+  const rows = allRows(agent);
+  assert.strictEqual(rows.length, 2, 'two tools, each saved once');
+  assert.ok(rows.every(a => a.status === 'done'), 'all saved as done: ' + JSON.stringify(rows.map(a => a.status)));
 });
 
 test('BF2: a turn without an interjection saves the same activity as before (one line, every tool row, no flush)', async () => {

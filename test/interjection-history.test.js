@@ -39,12 +39,12 @@ const sdkInterject = L('sdk-interject');
 const hubEvents = L('hub-events');
 
 const A = { sdk: 'zz_ij_sdk', sdk2: 'zz_ij_sdk_late', eph: 'zz_ij_eph', gw: 'zz_ij_gw', gw2: 'zz_ij_gw_last', cx: 'zz_ij_cx', cx2: 'zz_ij_cx_follow', cx3: 'zz_ij_cx_late',
-  img: 'zz_ij_img', imgCarry: 'zz_ij_img_carry', gwv: 'zz_ij_gw_vision', gwn: 'zz_ij_gw_novision', cxi: 'zz_ij_cx_img', cxc: 'zz_ij_cx_carry', hist: 'zz_ij_hist' };
+  img: 'zz_ij_img', imgCarry: 'zz_ij_img_carry', gwv: 'zz_ij_gw_vision', gwn: 'zz_ij_gw_novision', cxi: 'zz_ij_cx_img', cxc: 'zz_ij_cx_carry', hist: 'zz_ij_hist', dataOnly: 'zz_ij_dataonly', saveFail: 'zz_ij_savefail', gwStash: 'zz_ij_gw_stash' };
 const convDir = path.join(ISO.data, 'conversations');
 fs.mkdirSync(convDir, { recursive: true });
 fs.writeFileSync(path.join(ISO.data, 'agents.json'), JSON.stringify([
-  ...[A.sdk, A.sdk2, A.eph, A.img, A.imgCarry, A.hist].map(name => ({ name, model: 'claude-sdk/claude-sonnet-5-5', displayName: name })),
-  ...[A.gw, A.gw2, A.gwv].map(name => ({ name, model: 'openai/gpt-5.5', displayName: name })),
+  ...[A.sdk, A.sdk2, A.eph, A.img, A.imgCarry, A.hist, A.dataOnly, A.saveFail].map(name => ({ name, model: 'claude-sdk/claude-sonnet-5-5', displayName: name })),
+  ...[A.gw, A.gw2, A.gwv, A.gwStash].map(name => ({ name, model: 'openai/gpt-5.5', displayName: name })),
   { name: A.gwn, model: 'perplexity/sonar', displayName: A.gwn },
   ...[A.cx, A.cx2, A.cx3, A.cxi, A.cxc].map(name => ({ name, model: 'codex-cli/gpt-5.6-sol', displayName: name })),
 ]));
@@ -449,6 +449,115 @@ test('gateway: a model without vision gets the text with a line about the pictur
   assert.strictEqual(typeof m.content, 'string', 'plain text: no picture parts for a model that cannot see');
   assert.match(m.content, /^\[OPERATOR INTERJECTION\]: hurry\n\(The operator attached 2 pictures that this model cannot see\.\)$/);
   assert.match(res.written.join(''), /2 image\(s\) removed — model `[^`]*perplexity\/sonar[^`]*` does not support vision/);
+});
+
+// ── F3: data URLs only on the interjection route; no files left behind; the gateway carries a late one ─────────
+test('F3-1 handleInterjection: only data URLs are accepted; a path, a file: URL or a relative path refuses the whole interjection', async () => {
+  const agent = A.dataOnly;
+  const hostFile = path.join(ISO.data, 'zz-host-picture.png');   // a real image on the host, inside the isolated install
+  fs.writeFileSync(hostFile, Buffer.from(PNG_B64, 'base64'));
+  let seen = null;
+  sdkScript = async function* (prompt) {
+    const it = prompt[Symbol.asyncIterator]();
+    await it.next();
+    yield delta('Looking. ');
+    await tick(30);
+    const before = uploads();
+    const bad = {
+      'an absolute path': [hostFile],
+      'a path with a good picture first': [PNG_URL, hostFile],
+      'a file: URL': ['file://' + hostFile],
+      'a relative path': ['zz-host-picture.png'],
+      'a path to an image elsewhere': ['/srv/example/pic.png'],
+      'not a string': [{ url: PNG_URL }],
+    };
+    const refused = {};
+    for (const [why, imgs] of Object.entries(bad)) refused[why] = send(agent, 'x', imgs);
+    const afterRefused = { files: uploads(), lines: ijLines(agent).length };
+    const ok = send(agent, 'fine', [PNG_URL]);
+    const m = await it.next();
+    yield { type: 'user', isReplay: true, uuid: m.value.uuid, session_id: 's20' };
+    seen = { before, refused, afterRefused, ok, content: m.value.message.content };
+    yield delta('Seen.');
+    yield { type: 'result', subtype: 'success', session_id: 's20', usage: {} };
+  };
+  await sdkChat.handleChatStream({ agent, message: 'go' }, browserRes());
+  assert.ok(seen, 'the script ran');
+  for (const [why, r] of Object.entries(seen.refused)) {
+    assert.strictEqual(r.success, false, `${why}: refused`);
+    assert.match(r.error, /^Interjection not sent: pictures must be data URLs/, `${why}: says why`);
+  }
+  assert.deepStrictEqual(seen.afterRefused.files, seen.before, 'nothing saved');
+  assert.strictEqual(seen.afterRefused.lines, 0, 'nothing queued: no history line');
+  assert.strictEqual(seen.ok.success, true, 'a data URL still works');
+  assert.ok(Array.isArray(seen.content), 'and the one accepted interjection reached the model, alone');
+  assert.strictEqual(ijLines(agent).length, 1);
+});
+
+test('F3-5 handleInterjection: a save that fails on the second picture removes the first one again', async () => {
+  const agent = A.saveFail;
+  let seen = null;
+  sdkScript = async function* (prompt) {
+    const it = prompt[Symbol.asyncIterator]();
+    await it.next();
+    yield delta('Looking. ');
+    await tick(30);
+    const before = uploads();
+    const origWrite = fs.writeFileSync;
+    let n = 0;
+    fs.writeFileSync = function (p, ...rest) {   // the second picture file cannot be written (a full disk)
+      if (typeof p === 'string' && p.startsWith(uploadDir + path.sep) && ++n === 2) { const e = new Error('ENOSPC: no space left on device'); e.code = 'ENOSPC'; throw e; }
+      return origWrite.call(this, p, ...rest);
+    };
+    let r;
+    try { r = send(agent, 'two pictures', [PNG_URL, JPG_URL]); } finally { fs.writeFileSync = origWrite; }
+    seen = { before, r, after: uploads(), lines: ijLines(agent).length, writes: n };
+    yield delta('Done.');
+    yield { type: 'result', subtype: 'success', session_id: 's21', usage: {} };
+  };
+  await sdkChat.handleChatStream({ agent, message: 'go' }, browserRes());
+  assert.ok(seen, 'the script ran');
+  assert.strictEqual(seen.writes, 2, 'the first picture was saved, the second failed');
+  assert.strictEqual(seen.r.success, false);
+  assert.match(seen.r.error, /^Interjection not sent: interjection\[1\]: could not save/);
+  assert.deepStrictEqual(seen.after, seen.before, 'the first picture file is gone again');
+  assert.strictEqual(seen.lines, 0, 'nothing queued');
+});
+
+test('F3-6 gateway: an interjection (with a picture) that arrives after the last model call is stashed, the page is told, and it reaches the next gateway turn once', async () => {
+  const agent = A.gwStash;
+  gwCalls = 0; gwSeen.length = 0;
+  gwScripts = [async function* () {
+    yield txt('Final answer.');
+    await tick(30);
+    send(agent, 'one more thing', [PNG_URL]);   // after the last model call: the loop never drains it
+    yield stop;
+  }];
+  const res = browserRes();
+  await sdkChat.handleChatStream({ agent, message: 'go' }, res);
+  assert.ok(gatewayEvents(res).some(e => e.type === 'interjection_deferred' && e.count === 1), 'the page is told');
+  const stashed = sdkInterject.peekUndelivered(agent);
+  assert.strictEqual(stashed.length, 1, 'stashed, not dropped');
+  assert.strictEqual(stashed[0].message, 'one more thing');
+  assert.ok(underUploads(stashed[0].images[0]), 'the picture is kept');
+  assert.strictEqual(gwSeen.length, 1, 'the model never saw it in that turn');
+
+  gwScripts = [async function* () { yield txt('Got it.'); yield stop; }];
+  await sdkChat.handleChatStream({ agent, message: 'next question' }, browserRes());
+  assert.strictEqual(gwSeen.length, 2);
+  const last = gwSeen[1].filter(x => x.role === 'user').pop();
+  assert.ok(Array.isArray(last.content), 'the turn goes as block content (the carried picture rides with it)');
+  assert.deepStrictEqual(last.content.map(p => p.type), ['image_url', 'text']);
+  assert.strictEqual(last.content[0].image_url.url, PNG_URL, 'the carried picture goes through the normal image path');
+  assert.match(last.content[1].text, /one more thing \[1 picture attached/, 'the carried text comes before the message');
+  assert.match(last.content[1].text, /next question\n<\/current_request>$/);
+  assert.deepStrictEqual(sdkInterject.peekUndelivered(agent), [], 'taken');
+
+  gwScripts = [async function* () { yield txt('Again.'); yield stop; }];
+  await sdkChat.handleChatStream({ agent, message: 'third' }, browserRes());
+  const third = gwSeen[2].filter(x => x.role === 'user').pop();
+  assert.strictEqual(typeof third.content, 'string', 'no picture parts the third time');
+  assert.doesNotMatch(third.content, /one more thing|picture attached|could not be delivered/, 'nothing is delivered twice');
 });
 
 // ── Codex: a picture is not steered; it runs in the follow-up round as a turn image ─────────────────────────

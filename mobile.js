@@ -5207,7 +5207,13 @@ function savedImageUrls(paths) {
   const out = [];
   for (const p of Array.isArray(paths) ? paths : []) {
     if (typeof p !== 'string' || !p) continue;
-    try { out.push('/api/image/' + btoa(p)); } catch { /* a path btoa cannot encode: skipped */ }
+    try {
+      // base64 of the path's UTF-8 bytes, as the server decodes it (plain btoa throws above U+00FF, mis-encodes U+0080-U+00FF)
+      const bytes = new TextEncoder().encode(p);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+      out.push('/api/image/' + btoa(bin));
+    } catch { /* a path that cannot be encoded: skipped */ }
   }
   return out;
 }
@@ -7423,6 +7429,8 @@ async function sendInterjection(agent) {
   }
   if (result && result.success) {
     noteEl.textContent = 'delivered mid-turn';
+    // The turn's stream may later say it could not take this one in (interjection_deferred): that event finds the note here.
+    if (sentInto && streams.get(agent) === sentInto) { (sentInto.ijNotes = sentInto.ijNotes || []).push(noteEl); if (sentInto.ijNotes.length > 50) sentInto.ijNotes.shift(); }
     // A turn streaming to this phone: back in this chat it draws the interjection in its place. Only when that same stream
     // record is still the agent's (and not stale); otherwise nothing is kept (the hub's turn view and history have it).
     if (sentInto && streams.get(agent) === sentInto && !sentInto.stale) {
@@ -7446,6 +7454,16 @@ async function sendInterjection(agent) {
   if (current === agent && !input.value) { input.value = text; saveDraft(agent, text); }
   if (current === agent && images.length && !pendingImages.length) { pendingImages = images; renderPreviews(); }   // not sent: the pictures are back in the composer
   composerTypingPaint();
+}
+
+// interjection_deferred { count, note? }: the last `count` interjections this phone sent into the turn were not taken in
+// by it. Their notes say so instead of "delivered mid-turn": after the current step (a picture on a Codex turn, note set)
+// or with the next message (the turn ended first). A note that is gone from the page is skipped.
+function interjectionDeferredNotes(rec, g) {
+  const notes = rec && Array.isArray(rec.ijNotes) ? rec.ijNotes : [];
+  const n = Math.max(1, Math.floor(Number(g && g.count)) || 1);
+  const text = g && g.note ? '⏳ will reach the agent after its current step' : '⏭ not taken in by this turn: will reach the agent with the next message';
+  for (const el of notes.splice(Math.max(0, notes.length - n))) { if (el) el.textContent = text; }
 }
 
 // The hub no longer stops a turn when the browser goes away, so Stop has to say so explicitly.
@@ -9603,6 +9621,7 @@ async function readStream(response, rec) {
       case 'worker_failed':
         feedUpsert(rec, { kind: 'worker', id: `w:${g.worker_id}`, workerId: g.worker_id, status: g.type === 'worker_completed' ? 'completed' : 'failed', error: g.error, cancelled: g.cancelled === true });
         break;
+      case 'interjection_deferred': interjectionDeferredNotes(rec, g); break;   // the turn could not take it in: its note says when it will reach the agent
       case 'reasoning': reasoningAdd(rec, g.text); break;   // the panel above the reply (painted only while the chat is open)
       case 'session_interrupted': if (visible()) addNote('⚠ Session interrupted'); break;
       case 'context_exhausted': if (visible()) addNote('⚠ Context is full; use Clear chat / new session'); break;

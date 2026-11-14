@@ -471,7 +471,7 @@ test('progress saves around an interjection: [piece 1][interjection][piece 2], n
 test('the final save and the shutdown flush after an interjection go through the same path', () => {
   clearConversationLog(AGENT);
   appendConversationLog(AGENT, 'user', 'go');
-  appendConversationLog(AGENT, 'assistant', 'One. ', false);
+  appendConversationLog(AGENT, 'assistant', 'One. ', false, { activity: [{ id: 'a1', kind: 'tool', at: 2 }] });   // the flush before the interjection saved a1 with piece 1
   appendConversationLog(AGENT, 'user', '[OPERATOR INTERJECTION]: hurry', false, IJ(1));
   // the flush at shutdown (flushActiveResponses): the whole reply so far, overwriteLast because a partial was saved
   appendConversationLog(AGENT, 'assistant', 'One. Two. ', true);

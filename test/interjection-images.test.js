@@ -90,7 +90,7 @@ function fnSource(src, name) {
   for (; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}' && --depth === 0) break; }
   return src.slice(start, i + 1);
 }
-const load = (src, names, ctx = {}) => { const c = vm.createContext({ btoa: (s) => Buffer.from(s, 'latin1').toString('base64'), ...ctx }); vm.runInContext(names.map(n => fnSource(src, n)).join('\n') + `\nthis.__fns = { ${names.join(', ')} };`, c); return { api: c.__fns, ctx: c }; };
+const load = (src, names, ctx = {}) => { const c = vm.createContext({ btoa: (s) => { if (/[^\x00-\xff]/.test(s)) throw new Error('InvalidCharacterError'); return Buffer.from(s, 'latin1').toString('base64'); }, TextEncoder, ...ctx }); vm.runInContext(names.map(n => fnSource(src, n)).join('\n') + `\nthis.__fns = { ${names.join(', ')} };`, c); return { api: c.__fns, ctx: c }; };
 
 test('pages: the old "Images cannot be interjected" toast is gone from both pages', () => {
   assert.doesNotMatch(MOBILE, /Images cannot be interjected/);
@@ -154,6 +154,28 @@ test('phone sendInterjection: when the hub says the turn already ended, the norm
   assert.match(MOBILE, /const images = fallback \? \(fallback\.images \|\| \[\]\) : pendingImages\.slice\(\);/);
 });
 
+test('phone: interjection_deferred changes the note of the interjection(s) from "delivered mid-turn" to when it will reach the agent', async () => {
+  const h = phoneHarness({ apiResult: { success: true }, text: 'first' });
+  const rec = { full: 'so far', stale: false };
+  h.ctx.streams.set('agent_x', rec);
+  await h.send();
+  h.ctx.pendingImages = [PNG_URL];
+  await h.send();
+  const [n1, n2] = h.calls.notes;
+  assert.strictEqual(n1.textContent, 'delivered mid-turn');
+  assert.strictEqual(rec.ijNotes.length, 2, 'the stream record keeps the notes of what was sent into it');
+  const { api } = load(MOBILE, ['interjectionDeferredNotes']);
+  api.interjectionDeferredNotes(rec, { type: 'interjection_deferred', count: 1 });   // the turn ended first: the last one only
+  assert.strictEqual(n1.textContent, 'delivered mid-turn');
+  assert.match(n2.textContent, /will reach the agent with the next message/);
+  assert.doesNotMatch(n2.textContent, /mid-turn/);
+  api.interjectionDeferredNotes(rec, { type: 'interjection_deferred', count: 1, note: 'queued for the next round' });   // a picture on a Codex turn
+  assert.match(n1.textContent, /will reach the agent after its current step/);
+  api.interjectionDeferredNotes(rec, { type: 'interjection_deferred', count: 3 });   // nothing left, or no record: no error
+  api.interjectionDeferredNotes(null, { count: 1 });
+  assert.match(MOBILE, /case 'interjection_deferred': interjectionDeferredNotes\(rec, g\); break;/, 'the stream handler calls it');
+});
+
 test('phone: history entries with images draw them in the bubble (an interjection and a normal message); live blocks draw them too', () => {
   const calls = [];
   const { api } = load(MOBILE, ['savedImageUrls', 'renderEntry'], {
@@ -171,7 +193,7 @@ test('phone: history entries with images draw them in the bubble (an interjectio
   assert.match(MOBILE, /images: x\.images \|\| \[\]/);
 });
 
-function deskHarness({ result, pending = [PNG_URL], text = '' }) {
+function deskHarness({ result, pending = [PNG_URL], text = '', during = null }) {
   const calls = { fetch: [], messages: [], notices: [], solo: [], previews: 0 };
   const input = { value: text, style: {} };
   const chat = { agent: 'agent_x', pendingImages: pending.slice() };
@@ -183,8 +205,9 @@ function deskHarness({ result, pending = [PNG_URL], text = '' }) {
     appendMessageWithImages: (id, role, content, imgs) => { calls.messages.push({ content, images: imgs }); return 'm1'; },
     setMessageTime() {}, msgTimeLabel: () => 't',
     appendSystemNotice: () => { const n = { textContent: '' }; calls.notices.push(n); return n; },
-    fetch: async (url, o) => { calls.fetch.push({ url, body: JSON.parse(o.body) }); return { json: async () => result }; },
-    sendSoloMessage: async (id) => { calls.solo.push({ id, value: input.value, images: chat.pendingImages.slice() }); },
+    // `during` runs while the request is out: what the person attaches or types meanwhile
+    fetch: async (url, o) => { calls.fetch.push({ url, body: JSON.parse(o.body) }); if (during) during({ chat, input }); if (result instanceof Error) throw result; return { json: async () => result }; },
+    sendSoloMessage: async (id, retry, opts) => { calls.solo.push({ id, opts, value: input.value, images: chat.pendingImages.slice() }); },
   };
   const { api } = load(APP, ['sendInterjection'], ctx);
   return { send: () => api.sendInterjection('c1'), calls, chat, input };
@@ -208,11 +231,52 @@ test('desktop sendInterjection: pictures without text go with the interjection, 
 test('desktop sendInterjection: the turn had already ended -> the normal send gets the text and the pictures back; a refusal returns the pictures', async () => {
   const ended = deskHarness({ result: { success: false, error: 'Agent "agent_x" is not currently processing a request' }, text: 'late' });
   await ended.send();
-  eq(ended.calls.solo, [{ id: 'c1', value: 'late', images: [PNG_URL] }]);
+  eq(ended.calls.solo.map(s => [s.id, s.opts]), [['c1', { fallback: { text: 'late', images: [PNG_URL] } }]], 'the text and pictures go straight to the normal send');
+  eq(ended.calls.solo[0].images, [], 'the composer is not refilled');
   const refused = deskHarness({ result: { success: false, error: 'Interjection not sent: interjection[0]: data URL does not contain an image' } });
   await refused.send();
   eq(refused.chat.pendingImages, [PNG_URL], 'not sent: the pictures are back in the input');
   assert.match(refused.calls.notices[0].textContent, /Interjection failed: Interjection not sent/);
+});
+
+const JPG_URL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==';
+
+test('desktop sendInterjection: a failed request puts the pictures back in front of what was attached meanwhile; it never replaces them', async () => {
+  const attachB = ({ chat }) => { chat.pendingImages.push(JPG_URL); };   // attach B while A's request is out
+  const failed = deskHarness({ result: { success: false, error: 'HTTP 500' }, during: attachB });
+  await failed.send();
+  eq(failed.chat.pendingImages, [PNG_URL, JPG_URL], 'A in front, B kept');
+  const thrown = deskHarness({ result: new Error('network down'), during: attachB });
+  await thrown.send();
+  eq(thrown.chat.pendingImages, [PNG_URL, JPG_URL], 'the same when the request itself fails');
+  assert.match(thrown.calls.notices[0].textContent, /Interjection failed: network down/);
+});
+
+test('desktop sendInterjection: the ended-turn fallback sends A directly and leaves B in the composer', async () => {
+  const h = deskHarness({ result: { success: false, error: 'Agent "agent_x" is not currently processing a request' }, text: 'late',
+    during: ({ chat, input }) => { chat.pendingImages.push(JPG_URL); input.value = 'next words'; } });
+  await h.send();
+  assert.strictEqual(h.calls.solo.length, 1);
+  eq(h.calls.solo[0].opts, { fallback: { text: 'late', images: [PNG_URL] } }, 'A goes with its own text');
+  eq(h.calls.solo[0].images, [JPG_URL], 'B is still pending: not touched');
+  assert.strictEqual(h.calls.solo[0].value, 'next words', 'and so is the text typed since');
+  // sendSoloMessage reads the fallback and leaves the composer alone (the lines in the page)
+  assert.match(APP, /const content = fallback \? String\(fallback\.text \|\| ''\)\.trim\(\) : input\.value\.trim\(\);/);
+  assert.match(APP, /const pendingImages = fallback \? \[\.\.\.\(fallback\.images \|\| \[\]\)\] : \(chat\.pendingImages \|\| \[\]\);/);
+  assert.match(APP, /if \(retryCount === 0 && !fallback\) \{\s*clearPendingImages\(chatId\);/);
+});
+
+test('pages: a picture path with any character is encoded as the server decodes it (UTF-8 bytes), and a bad one never breaks the render', () => {
+  const paths = ['/srv/example/pic é.png', '/srv/example/ň中文.png', '/srv/example/' + 'x'.repeat(40000) + '.png'];
+  const want = paths.map(p => '/api/image/' + Buffer.from(p).toString('base64'));
+  for (const src of [APP, MOBILE]) {
+    const { savedImageUrls } = load(src, ['savedImageUrls']).api;
+    eq(savedImageUrls(paths), want);
+    eq(savedImageUrls([paths[0], 'ok.png']), [want[0], '/api/image/' + Buffer.from('ok.png').toString('base64')]);
+  }
+  // a path that cannot be encoded is skipped, the rest still render
+  const broken = load(MOBILE, ['savedImageUrls'], { btoa: (s) => { if (s.includes('BAD')) throw new Error('x'); return Buffer.from(s, 'latin1').toString('base64'); } }).api;
+  eq(broken.savedImageUrls(['/a/BAD.png', '/a/good.png']), ['/api/image/' + Buffer.from('/a/good.png').toString('base64')]);
 });
 
 test('desktop: a message with pictures while the agent is busy goes as an interjection (not the normal send); history and the live block draw pictures', () => {
