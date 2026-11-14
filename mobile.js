@@ -7469,7 +7469,6 @@ function voicePlayBlob(blob, my, meta) {
     const wait = typeof voiceDispPagePrep === 'function' ? voiceDispPagePrep(my) : null;
     const begin = () => {
     if (my !== voicePlay.token) { resolve(false); return; }
-    try { if (typeof voiceNoteNormalized === 'function') voiceNoteNormalized(!!(blob && blob.__voiceNorm === true)); } catch { /* the level stays as it was */ }
     const a = voicePlay.audio || (voicePlay.audio = new Audio());
     const prev = voicePlay.url;
     const url = URL.createObjectURL(blob);
@@ -7501,8 +7500,12 @@ function voicePlayBlob(blob, my, meta) {
     if (typeof voiceDisplayRoute === 'function') voiceDisplayRoute(a);   // once per element; nothing is routed (or muted) when there is no display or the audio context is not running
     a.src = url;
     if (prev) { try { URL.revokeObjectURL(prev); } catch { /* gone */ } }
+    // The loudness follows audio the browser accepted: applied only once play() has resolved (a refused play() never
+    // changes the flag), and only while this playback is still the current one.
+    const applyNorm = () => { if (settled || my !== voicePlay.token) return; try { if (typeof voiceNoteNormalized === 'function') voiceNoteNormalized(!!(blob && blob.__voiceNorm === true)); } catch { /* the level stays as it was */ } };
     const p = a.play();
-    if (p && p.catch) p.catch(() => done(false));
+    if (p && typeof p.then === 'function') p.then(applyNorm, () => done(false));
+    else applyNorm();   // old browsers: play() is not a promise
     };
     if (wait) wait.then(begin, begin); else begin();
   });

@@ -512,8 +512,20 @@ test('desktop: voiceFetchTts tags the audio with X-Voice-Normalized and leaves t
   env.voiceOutNode(ctx); assert.strictEqual(ctx.__voiceLoudness.gainDb, 4, 'a chain created after the flag picks it up');
   // voicePlayHub: the flag is read before decoding and applied after the token check, right before the source starts
   const play = between(app, 'async function voicePlayHub(agent, sentences, voice, my) {', '// The device voice is used only');
-  const iRead = play.indexOf('buf.__voiceNorm === true'), iDecode = play.indexOf('decodeAudioData(buf)'), iTok = play.indexOf('if (voicePlay.token !== my) return;', iDecode), iNote = play.indexOf('voiceNoteNormalized(norm)'), iStart = play.indexOf('src.start()');
-  assert.ok(iRead > 0 && iRead < iDecode && iDecode < iTok && iTok < iNote && iNote < iStart, 'read, decode, token check, apply, start');
+  const runHub = async (norms, onDecoded) => {
+    const log = []; const voicePlay = { token: 1, ctx: null };
+    class FakeCtx {
+      constructor() { this.state = 'running'; this.destination = {}; }
+      async decodeAudioData(buf) { const ab = { norm: buf.__voiceNorm }; if (onDecoded) onDecoded(voicePlay); return ab; }
+      createBufferSource() { const s = { connect() {}, buffer: null, start() { log.push('start:' + s.buffer.norm); setImmediate(() => s.onended && s.onended()); } }; return s; }
+    }
+    const fetchTts = async (a, text) => { const b = new ArrayBuffer(2); b.__voiceNorm = norms[Number(text)]; return b; };
+    const fn = new Function('voicePlay', 'window', 'voiceFetchTts', 'voiceNoteNormalized', play + '; return voicePlayHub;');
+    await fn(voicePlay, { AudioContext: FakeCtx }, fetchTts, (f) => log.push('note:' + f))('a', norms.map((_, i) => String(i)), 'v', 1);
+    return log;
+  };
+  assert.deepStrictEqual(await runHub([true, false, true]), ['note:true', 'start:true', 'note:false', 'start:false', 'note:true', 'start:true'], "each sentence's flag is applied right before its own start()");
+  assert.deepStrictEqual(await runHub([true, true], (vp) => { vp.token = 2; }), [], 'a token change after decode applies nothing and starts nothing');
   assert.ok(!fetchSrc.includes('voiceNoteNormalized'), 'the fetch never touches the chain');
   assert.ok(app.includes('normalized: c ? !!c.normalized : voiceNormFlag'), '__voiceOut reports normalized');
   const bare = new Function('fetch', 'voiceSpeedNow', 'voiceBusyToast', 'voiceSpeedFor', fetchSrc + '; return voiceFetchTts;')(async () => ({ ok: true, status: 200, headers: { get: () => '1' }, arrayBuffer: async () => new ArrayBuffer(1) }), () => 1, () => false, () => 1);   // voiceSpeedFor: stub
@@ -538,9 +550,37 @@ test('phone: voiceTtsBlob tags the blob with X-Voice-Normalized and leaves the l
   env.voiceNoteNormalized(false); assert.strictEqual(ctx.__voiceLoudness.gainDb, 9);
   ctx = fakeCtx(); env = mk('1', ctx); env.voiceNoteNormalized(true);
   env.voiceOutNode(ctx); assert.strictEqual(ctx.__voiceLoudness.gainDb, 4, 'a chain created after the flag picks it up');
-  const play = between(mob, 'function voicePlayBlob(blob, my, meta) {', 'const prev = voicePlay.url;');
-  const iBegin = play.indexOf('const begin = () => {'), iTok = play.indexOf('if (my !== voicePlay.token) { resolve(false); return; }', iBegin), iNote = play.indexOf('voiceNoteNormalized(!!(blob && blob.__voiceNorm === true))');
-  assert.ok(iBegin > 0 && iBegin < iTok && iTok < iNote, 'applied inside begin, after the token check');
+  // voicePlayBlob: the flag is applied only once play() has resolved (behaviour, with a fake <audio> element)
+  const playSrc = between(mob, 'function voicePlayBlob(blob, my, meta) {', 'function voiceDeviceSpeak(');
+  const mkPlay = (playImpl) => {
+    const applied = []; const state = { token: 1, audio: null, url: null, cancel: null }; const plays = [];
+    class FakeAudio { play() { const p = playImpl(); plays.push(p); return p; } }
+    const URLStub = { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} };
+    const fn = new Function('voicePlay', 'Audio', 'URL', 'voiceDispPagePrep', 'voiceNoteNormalized', playSrc + '; return voicePlayBlob;');
+    return { applied, state, plays, run: (blob, my) => fn(state, FakeAudio, URLStub, () => null, (f) => applied.push(f))(blob, my, {}) };
+  };
+  const ctl = () => { let res, rej; const p = new Promise((a, b) => { res = a; rej = b; }); return { p, res, rej }; };
+  const tick = () => new Promise((r) => setImmediate(r));
+  { // resolved: applied after, with the blob's flag
+    const c = ctl(); const t = mkPlay(() => c.p); t.run({ size: 4, __voiceNorm: true }, 1);
+    await tick(); assert.deepStrictEqual(t.applied, [], 'not applied before play() resolves');
+    c.res(); await tick(); assert.deepStrictEqual(t.applied, [true], 'applied with the blob flag once play() resolved');
+  }
+  { const c = ctl(); const t = mkPlay(() => c.p); t.run({ size: 4 }, 1); c.res(); await tick(); assert.deepStrictEqual(t.applied, [false], 'an untagged blob applies false'); }
+  { // rejected play(): never applied
+    const c = ctl(); const t = mkPlay(() => c.p); const done = t.run({ size: 4, __voiceNorm: true }, 1);
+    c.rej(new Error('NotAllowedError')); assert.strictEqual(await done, false); await tick(); assert.deepStrictEqual(t.applied, [], 'a refused play() leaves the flag alone');
+  }
+  { // token changes before resolve: never applied
+    const c = ctl(); const t = mkPlay(() => c.p); t.run({ size: 4, __voiceNorm: true }, 1);
+    t.state.token = 2; c.res(); await tick(); assert.deepStrictEqual(t.applied, [], 'a token change before resolve applies nothing');
+  }
+  { // play() not a promise (old browsers): applied right after the call
+    const t = mkPlay(() => undefined); t.run({ size: 4, __voiceNorm: true }, 1); assert.deepStrictEqual(t.applied, [true]);
+  }
+  { // token already stale at the call: nothing happens at all
+    const t = mkPlay(() => Promise.resolve()); t.state.token = 5; assert.strictEqual(await t.run({ size: 4, __voiceNorm: true }, 1), false); assert.deepStrictEqual(t.applied, []); assert.strictEqual(t.plays.length, 0);
+  }
   assert.ok(!blobSrc.includes('voiceNoteNormalized'), 'the fetch never touches the chain');
   assert.ok(mob.includes('normalized: c ? !!c.normalized : voiceNormFlag'), '__voiceOut reports normalized');
 });
