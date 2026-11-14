@@ -569,9 +569,10 @@
     #composer.typing #attach-btn, #composer.typing #camera-btn, #composer.typing #voice-strip { display: none; }
   }
   /* Compact call panel (short screen or the keyboard open): only the state line, held items and mic trouble stay. */
-  #call-panel.compact #cp-activity, #call-panel.compact #cp-heard, #call-panel.compact .cp-dnd, #call-panel.compact .cp-disp,
-  #call-panel.compact .cp-actions, #call-panel.compact #cp-help { display: none; }
-  #call-panel.compact #cp-mic:not(.cp-mic-lost) { display: none; }
+  /* never inside the call display's drawer (adopted into a .ucd-section), which has room for the whole panel */
+  :not(.ucd-section) > #call-panel.compact #cp-activity, :not(.ucd-section) > #call-panel.compact #cp-heard, :not(.ucd-section) > #call-panel.compact .cp-dnd,
+  :not(.ucd-section) > #call-panel.compact .cp-disp, :not(.ucd-section) > #call-panel.compact .cp-actions, :not(.ucd-section) > #call-panel.compact #cp-help { display: none; }
+  :not(.ucd-section) > #call-panel.compact #cp-mic:not(.cp-mic-lost) { display: none; }
   .voice-chip { min-height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--border-strong); background: var(--bg-card); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; }
   .voice-chip.hands { background: var(--accent, #3d7bff); color: #fff; border-color: transparent; }
   #voice-settings-btn { flex: none; }

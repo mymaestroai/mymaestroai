@@ -6071,6 +6071,7 @@ function sendAndClose() {
 const VOICE_MAX_SECONDS = 60;
 let voiceStatus = { enabled: false, ready: false };
 let voiceDictatedFor = null;   // the agent whose message was dictated with the mic here, until it is sent
+let voiceAutoReadGen = 0;   // raised when a call starts or ends: a dictated reply still on its way is then never read aloud (not over the call, not after Hang up)
 let voiceCall = null;          // the hands-free call that is up (see "Voice call (phone)" below), or null
 let voiceCallBgNote = false;   // a call was ended by the page going to the background: say so when it returns
 const VOICE_MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg>';
@@ -6393,7 +6394,10 @@ function voiceSpeakToggle(msgEl) {
   voiceUnlockAudio();
   voiceSpeak(text, current, msgEl);
 }
+// A call starting or ending drops any read-aloud still owed to an earlier dictation.
+function voiceAutoReadReset() { voiceAutoReadGen++; voiceDictatedFor = null; }
 function voiceAutoRead(rec) {   // a reply to a message dictated here is read when it ends
+  if (voiceCall || !rec || rec.readGen !== voiceAutoReadGen) return;
   if (!rec || !rec.dictated || !rec.full || !voicePrefsNow().readAloud || current !== rec.agent) return;
   voiceSpeak(rec.full, rec.agent, rec.bubble && rec.bubble.el);
 }
@@ -6582,6 +6586,7 @@ async function voiceWakeAcquire(vc) {   // the screen stays on during a call; as
 function voiceCallTeardown(vc) {
   if (voiceCall !== vc) return;
   voiceCall = null;
+  if (typeof voiceAutoReadReset === 'function') voiceAutoReadReset();   // nor after the call has ended
   if (typeof voiceDispEnd === 'function') voiceDispEnd(false);   // a call that ended some other way: the display goes at once (hang-up has already started its goodbye)
   const lock = vc.wake; vc.wake = null;
   try { if (lock) Promise.resolve(lock.release()).catch(() => {}); } catch { /* already released */ }
@@ -6592,7 +6597,7 @@ function voiceCallTeardown(vc) {
   voiceCallPanel(false);
   voiceMicPaint();
 }
-// Hangs up the call that is up (the controller tells the hub and reads out what came in); the page lets go at once.
+// Hangs up the call that is up (the controller tells the hub and shows what came in; nothing is spoken after Hang up); the page lets go at once.
 function voiceCallHangUp() {
   const vc = voiceCall;
   if (!vc) return Promise.resolve([]);
@@ -6830,6 +6835,7 @@ function voiceCallDeps(vc) {
 // The tap on the mic button. call.start() runs synchronously in the tap (the controller starts the microphone and
 // the audio context first, which iOS only allows inside the tap), so nothing is awaited before it.
 function voiceCallStart() {
+  if (typeof voiceAutoReadReset === 'function') voiceAutoReadReset();   // a reply to an earlier dictation is not read aloud over the call
   if (voiceCall) return;
   const agent = current;
   if (!agent) { toast('Pick an agent first'); return; }
@@ -7436,7 +7442,7 @@ async function sendMessage(fallback) {
   scrollChat(true);
 
   const controller = new AbortController();
-  const rec = { controller, agent, text, images, bubble, userEl, startedAt: Date.now(), full: '', gotAny: false, feed: newFeed(true), question: null, dictated: !fallback && voiceTakeDictated(agent) };
+  const rec = { controller, agent, text, images, bubble, userEl, startedAt: Date.now(), full: '', gotAny: false, feed: newFeed(true), question: null, dictated: !fallback && voiceTakeDictated(agent), readGen: voiceAutoReadGen };
   streams.set(agent, rec);
   paintChatStatus();
 
@@ -9210,7 +9216,8 @@ function wire() {
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; saveDraft(current, input.value); });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
-  for (const ev of ['focus', 'blur', 'input']) input.addEventListener(ev, composerPaintAll);
+  for (const ev of ['focus', 'input']) input.addEventListener(ev, composerPaintAll);
+  input.addEventListener('blur', () => setTimeout(composerPaintAll, 300));   // a tap on a call-panel button lands before the panel grows back
   const vvPaint = window.visualViewport;
   if (vvPaint) vvPaint.addEventListener('resize', callPanelCompactPaint);
   window.addEventListener('resize', callPanelCompactPaint);

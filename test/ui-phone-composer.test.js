@@ -84,7 +84,9 @@ test('(b) composerTypingPaint: typing only while the box has focus (a draft left
 });
 
 test('(b) listeners, initial paint and programmatic fills are wired', () => {
-  assert.ok(/for \(const ev of \['focus', 'blur', 'input'\]\) input\.addEventListener\(ev, composerPaintAll\);/.test(mob));
+  assert.ok(/for \(const ev of \['focus', 'input'\]\) input\.addEventListener\(ev, composerPaintAll\);/.test(mob));
+  // review r1: the repaint on blur waits, so a tap on a call-panel button (Now / Later / Skip) lands before the panel grows back
+  assert.ok(/input\.addEventListener\('blur', \(\) => setTimeout\(composerPaintAll, 300\)\);/.test(mob));
   assert.ok(/visualViewport.*addEventListener\('resize', callPanelCompactPaint\)|vvPaint\.addEventListener\('resize', callPanelCompactPaint\)/.test(mob));
   assert.ok(/window\.addEventListener\('resize', callPanelCompactPaint\)/.test(mob));
   assert.ok(/composerPaintAll\(\);\n/.test(mob), 'initial paint');
@@ -95,15 +97,38 @@ test('(b) listeners, initial paint and programmatic fills are wired', () => {
   assert.ok(/input\.value = ra\.text; composerTypingPaint\(\)/.test(mob));
 });
 
-test('(c) compact rules hide exactly the listed parts and keep .cp-top', () => {
-  const rules = html.match(/#call-panel\.compact[^{]*\{[^}]*\}/g).join('\n');
-  const sels = rules.match(/#call-panel\.compact [^,{]+/g).map((s) => s.trim());
-  assert.deepEqual(sels.sort(), [
+test('(c) compact rules hide exactly the listed parts, keep .cp-top, and never apply inside the call display drawer', () => {
+  const rules = html.match(/(?::not\(\.ucd-section\) > )?#call-panel\.compact[^{]*\{[^}]*\}/g).join('\n');
+  const sels = rules.match(/[^,{\n]*#call-panel\.compact [^,{]+/g).map((s) => s.trim());
+  // review r1: every rule is scoped to a panel that is not in a .ucd-section (the drawer wraps an adopted panel in one), so a panel
+  // that was compact when the display adopted it shows in full in the drawer
+  for (const s of sels) assert.ok(s.startsWith(':not(.ucd-section) > #call-panel.compact '), s);
+  assert.deepEqual(sels.map((s) => s.replace(':not(.ucd-section) > ', '')).sort(), [
     '#call-panel.compact #cp-activity', '#call-panel.compact #cp-heard', '#call-panel.compact .cp-dnd', '#call-panel.compact .cp-disp',
     '#call-panel.compact .cp-actions', '#call-panel.compact #cp-help', '#call-panel.compact #cp-mic:not(.cp-mic-lost)',
   ].sort());
   assert.ok(!/cp-top|cp-held|cp-retry-mic|cp-state|cp-meter/.test(rules));
   assert.equal((rules.match(/display: none/g) || []).length, 2);
+  const lib = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'ui-call-display.js'), 'utf8');
+  assert.ok(/el\('div', 'ucd-section'/.test(lib), 'the display wraps an adopted control in .ucd-section');
+});
+
+// review r1: a reply to an earlier dictation is never read aloud over a call or after Hang up
+test('read-aloud: nothing owed to an earlier dictation is read over a call or after Hang up (phone and desktop)', () => {
+  const auto = fnSource(mob, 'voiceAutoRead');
+  assert.ok(/if \(voiceCall \|\| !rec \|\| rec\.readGen !== voiceAutoReadGen\) return;/.test(auto), 'phone: not during a call, not for an older generation');
+  assert.ok(/function voiceAutoReadReset\(\) \{ voiceAutoReadGen\+\+; voiceDictatedFor = null; \}/.test(mob));
+  assert.ok(/readGen: voiceAutoReadGen/.test(fnSource(mob, 'sendMessage')), 'a new message records the generation');
+  for (const name of ['voiceCallStart', 'voiceCallTeardown']) assert.ok(/voiceAutoReadReset\(\)/.test(fnSource(mob, name)), name + ' resets');
+  // behaviour: the guard, run with a fake rec
+  const run = (voiceCall, gen, rec) => { let spoke = 0; new Function('voiceCall', 'voiceAutoReadGen', 'voicePrefsNow', 'current', 'voiceSpeak', auto + '\nreturn voiceAutoRead;')(voiceCall, gen, () => ({ readAloud: true }), 'bob', () => { spoke++; })(rec); return spoke; };
+  const rec = { dictated: true, full: 'Hello.', agent: 'bob', readGen: 4 };
+  assert.equal(run(null, 4, rec), 1, 'same generation, no call: read');
+  assert.equal(run({}, 4, rec), 0, 'a call is up: not read');
+  assert.equal(run(null, 5, rec), 0, 'a call started or ended since: not read');
+  const app = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  assert.ok(/function voiceAutoRead\(chat, msgId, text\) \{\n\s+if \(voiceCallS\.call\) return;/.test(app), 'desktop: not during a call');
+  assert.ok(/function voiceCallTeardown\(\) \{\n[^\n]*\n\s+for \(const c of Object\.values\(chats\)\) if \(c\) \{ c\.voiceTurn = false; c\.voiceDictated = false; \}/.test(app), 'desktop: the call ending drops it');
 });
 
 test('(c) callPanelCompactPaint: focus, short viewport, tall viewport, not in the drawer', () => {

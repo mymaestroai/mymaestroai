@@ -12469,6 +12469,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     });
     // A reply that follows a mic dictation and ends in this browser: read it when the device asked for that.
     function voiceAutoRead(chat, msgId, text) {
+      if (voiceCallS.call) return;   // never over a call (a reply to an earlier dictation that ends during it)
       if (!voicePrefsNow().readAloud || (!voiceReady() && !voiceDeviceFallback())) return;
       const el = document.getElementById(msgId);
       voiceSpeakText(chat.agent, text, el ? el.querySelector(':scope > .msg-speak') : null);
@@ -13067,6 +13068,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceCallTeardown() {
       const S = voiceCallS, chatId = S.chatId, vad = S.vad, thinking = S.thinking, keepAlive = S.keepAlive;
+      for (const c of Object.values(chats)) if (c) { c.voiceTurn = false; c.voiceDictated = false; }   // nothing dictated before the call is read aloud after Hang up
       S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
       S.own.clear(); S.hub.clear(); S.asks.clear();
       voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
