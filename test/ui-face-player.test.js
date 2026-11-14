@@ -343,6 +343,28 @@ test('quiet idle: faceCalmIdle keeps only calm idle clips', () => {
     clip('idle-a', 'listening'), clip('idle-a', 'thinking')]) assert.strictEqual(f(bad), false, JSON.stringify(bad.name + bad.family));
   assert.strictEqual(f(mk('idle-wiggler')), true, 'only whole name parts count');
 });
+test('quiet idle: a pack that marks its idle clips calm or not decides; a clip lively in its middle is kept out whatever its name', () => {
+  const f = FP.faceCalmIdle;
+  assert.strictEqual(f(mk('idle-peek-a', { calm: false })), false, 'marked not calm: out, though the name rules would let it in');
+  assert.strictEqual(f(mk('idle-hop-a', { calm: true })), true, 'marked calm: the pack decides over the name guess');
+  assert.strictEqual(f(mk('idle-a', { calm: true, rare: true })), false, 'rare stays out');
+  assert.strictEqual(f(mk('idle-a', { calm: true, weight: 1 })), false, 'weight 1 stays out');
+  assert.strictEqual(f(clip('listen-a', 'listening', { calm: true })), false, 'only idle clips');
+  const n = FP.faceNormalizeManifest({ clips: [mk('idle-a', { calm: true }), mk('idle-b', { calm: false }), mk('idle-c'), mk('idle-d', { calm: 'yes' }), clip('listen-a', 'listening')] });
+  const by = Object.fromEntries(n.clips.map(c => [c.name, c]));
+  assert.strictEqual(by['idle-a'].calm, true); assert.strictEqual(by['idle-b'].calm, false);
+  assert.strictEqual(by['idle-c'].calm, false, 'a marked pack: an unmarked idle clip is not calm');
+  assert.strictEqual(by['idle-d'].calm, false, 'a non-boolean mark is dropped, then counts as unmarked');
+  assert.strictEqual(by['listen-a'].calm, undefined, 'only idle clips get the default');
+  const plain = FP.faceNormalizeManifest({ clips: [mk('idle-c'), mk('idle-d', { calm: 'yes' })] });
+  assert.ok(plain.clips.every(c => !('calm' in c)), 'an unmarked pack keeps no mark (the name rules apply)');
+  assert.strictEqual(f(plain.clips[0]), true);
+  // the selector with a marked pack: over many quiet picks only the calm-marked idle clip ever comes in
+  const s = sel(FP.faceNormalizeManifest({ clips: [...['a', 'b', 'c'].map(x => clip('listen-' + x, 'listening', { family: 'l' + x })),
+    mk('idle-calm', { family: 'ic', calm: true }), mk('idle-peek', { family: 'ip', calm: false }), mk('idle-other', { family: 'io' })] }).clips, 7);
+  const idle = play(s, 'listening', 600, { quietIdle: true }).filter(p => p.clip.state === 'idle').map(p => p.clip.name);
+  assert.ok(idle.length > 50 && idle.every(n => n === 'idle-calm'), [...new Set(idle)].join(','));
+});
 
 // ── manifest, urls, readiness ──
 test('urls: every request is /api/faces/<encoded id>/<known file>; hostile names and ids never reach the network', async () => {
