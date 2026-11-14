@@ -7766,8 +7766,7 @@ function voiceDispBegin(vc) {
   try {
     d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), needsContext: true, shared: voiceDisp.shared, onRoutesLost: voiceDispRoutesLost, agentDefault: () => voiceDispAgentDefault(vc.agent), adopt: voiceDispAdopt,
       output: (ctx) => voiceOutNode(ctx),   // reply audio ends in the loudness chain
-      reopenHost: () => $('cp-hangup'),   // "Show display" goes inside the call panel, beside Hang up
-      dock: () => $('composer'),   // a display of None: the call screen's bar takes the composer's place for the call
+      dock: () => $('composer'),   // whenever no full view is shown (None, Back to chat, a character loading) the call screen's bar takes the composer's place; the call panel lives in its Controls drawer
       onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(),
       onRecordingToggle: (wantPaused) => (voiceCall && voiceCall.rec ? voiceCall.rec.togglePause(wantPaused) : undefined) });   // the Pause / Resume recording button of a recorded call
     voiceDisp.cur = d;

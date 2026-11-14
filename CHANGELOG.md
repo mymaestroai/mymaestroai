@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **One call layout in the chat.** "Back to chat" on the owl or orb screen now gives the same simple call bar as a call with no display, with a "Show display" button to go back to the owl or orb. The older call panel above the message box no longer appears during a call; everything it held is in Controls.
 - **A call with no display uses the same simple call bar as the owl and the orb.** With Display set to None, the chat stays on screen and, for the length of the call, the message box row is replaced by the call screen's own bar: Hang up, Display and Controls, with the call's status above it. Controls opens the same drawer as on the owl and orb screens. The message box comes back the moment the call ends.
 - **No more static in the quiet moments of a call.** The near-silent sound that lets your Maestro pause other apps during a call is now far below anything a speaker can play, and on the phone the "Keep Bluetooth awake" hiss plays only while the call uses Bluetooth or a car, never on the phone's own speaker. Turning "Keep Bluetooth awake" on or off now takes effect at once, mid-call.
 - **Levels opens the voice settings during a call again.** On the phone, with the orb or a character on screen, the Levels button in Controls opened the voice settings behind the call screen, so nothing seemed to happen. They now open on top.

@@ -633,7 +633,7 @@ function displayWorld(choice, extra) {
   const display = CD.createCallDisplay(Object.assign({
     window: { document: dom.doc }, document: dom.doc, storage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
     fetch: async () => ({ ok: true, status: 200, json: async () => ({ packs: [] }) }), setTimeout: (f) => { f; return 1; }, clearTimeout() {},
-    agentDefault: () => 'none', adopt: () => [], reopenHost: () => hang, onTalk() {}, onHangUp() {}, onChange() {},
+    agentDefault: () => 'none', adopt: () => [], onTalk() {}, onHangUp() {}, onChange() {},
     onRecordingToggle: (want) => { toggles.push(want); },
     createVoiceOrb: orbFactory(), createFacePlayer: orbFactory(),
   }, extra));
@@ -698,21 +698,31 @@ test('display: "trouble" reads "Recording (some speech not sent yet)" with the r
   assert.strictEqual(w.display.info().recording, 'trouble');
 });
 
-test('display, None: no view, so the badge sits on its own first line in the call bar\'s container (never in its button row, so Hang up keeps its place); it moves into the view and back with Back to chat', async () => {
-  const w = displayWorld('none');
+test('display, None: with a dock the badge sits in the docked bar\'s stage (data-place stage, never in the button row); without a dock it is in the body (data-place page); it stays in the stage through Back to chat and the view', async () => {
+  let holder = {};
+  const w = displayWorld('none', { dock: () => holder.composer });
+  holder.composer = new w.dom.El('div'); w.bar.parentNode.appendChild(holder.composer); w.composer = holder.composer;
   w.display.start(); await tick();
-  assert.strictEqual(w.dom.find('ucd-overlay').length, 0);
+  const root = w.dom.find('ucd-overlay')[0];
+  assert.ok(root && root.className.includes('ucd-docked'), 'None with a dock: the docked bar');
   w.display.setRecording({ state: 'on' });
-  assert.notStrictEqual(rec(w).parentNode, w.bar, 'not in the row with Hang up (a narrow phone pushed Hang up off the screen)');
-  assert.strictEqual(rec(w).parentNode, w.bar.parentNode, 'in the bar\'s container');
-  assert.strictEqual(w.bar.parentNode.firstChild, rec(w), 'its own first line, pinned at the top by the CSS (never under a pinned Hang up row)');
-  assert.strictEqual(rec(w).getAttribute('data-place'), 'bar');
-  const o = displayWorld('orb');
+  assert.ok(w.dom.find('ucd-stage')[0].contains(rec(w)), 'in the docked bar\'s stage');
+  assert.ok(!w.dom.find('ucd-bar')[0].contains(rec(w)), 'not in the row with Hang up');
+  assert.strictEqual(rec(w).getAttribute('data-place'), 'stage');
+  const n = displayWorld('none');
+  n.display.start(); await tick();
+  n.display.setRecording({ state: 'on' });
+  assert.strictEqual(n.dom.find('ucd-overlay').length, 0, 'no dock, no view');
+  assert.strictEqual(rec(n).parentNode, n.dom.doc.body); assert.strictEqual(rec(n).getAttribute('data-place'), 'page');
+  const o = displayWorld('orb', { dock: () => o.composer });
+  o.composer = new o.dom.El('div'); o.bar.parentNode.appendChild(o.composer);
   o.display.start(); await tick();
   o.display.setRecording({ state: 'on' });
   assert.ok(o.dom.find('ucd-stage')[0].contains(rec(o)));
   o.display.hideToChat();
-  assert.strictEqual(o.bar.parentNode.firstChild, rec(o), 'back to chat: its own first line in the bar\'s container');
+  assert.ok(o.dom.find('ucd-overlay')[0].className.includes('ucd-docked'));
+  assert.ok(o.dom.find('ucd-stage')[0].contains(rec(o)), 'back to chat: in the docked bar\'s stage');
+  assert.strictEqual(rec(o).getAttribute('data-place'), 'stage');
   o.display.showView();
   assert.ok(o.dom.find('ucd-stage')[0].contains(rec(o)), 'the view is shown again: in its stage');
 });

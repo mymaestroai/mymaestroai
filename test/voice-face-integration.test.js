@@ -335,15 +335,21 @@ test('phone: moods once per turn from the stream or the hub event; facePack only
   const o = phone({ prefs: { choice: 'orb' } }); o.api.voiceDispBegin(o.vc); await flushPhone(); assert.deepStrictEqual(o.api.voiceFacePackBody(), {});
 });
 
-test('phone: the real call panel and voice panel move into the view and return; the panel is shown while adopted and hidden again after', async () => {
+test('phone: the real call panel and voice panel move into the view, stay in the docked bar\'s drawer after Back to chat, and return home at hang-up; the panel is shown while adopted and hidden again after', async () => {
   const p = phone({ prefs: { choice: 'orb' } });
   p.api.voiceDispBegin(p.vc); await flushPhone();
   const ov = p.doc.find('ucd-overlay')[0];
   assert.ok(ov.contains(p.panel) && ov.contains(p.vpanel)); assert.strictEqual(p.vpanel.hidden, false); assert.ok(p.state.painted >= 1, 'the panel was painted when adopted');
   p.doc.find('ucd-back')[0].click();
-  assert.strictEqual(p.vpanel.parentNode, p.home); assert.strictEqual(p.vpanel.hidden, true); assert.strictEqual(p.panel.parentNode, p.doc.body);
+  const dr = p.doc.find('ucd-drawer')[0];
+  assert.ok(ov.className.includes('ucd-docked'), 'Back to chat: the docked bar');
+  assert.ok(dr.contains(p.panel) && dr.contains(p.vpanel), 'the real panels stay in the docked bar\'s drawer, never at home');
+  assert.notStrictEqual(p.vpanel.parentNode, p.home); assert.notStrictEqual(p.panel.parentNode, p.doc.body);
   p.api.voiceDispSetChoice('none'); assert.strictEqual(JSON.parse(p.storage.m.get(CD.DISPLAY_STORE_KEY)).choice, 'none'); assert.strictEqual(p.state.hung, 0);
+  assert.ok(dr.contains(p.panel), 'still in the drawer with None');
   p.api.voiceDispEnd(false);
+  assert.strictEqual(p.vpanel.parentNode, p.home); assert.strictEqual(p.vpanel.hidden, true, 'the voice panel is home and closed again'); assert.strictEqual(p.panel.parentNode, p.doc.body, 'the call panel is back at home');
+  assert.strictEqual(p.doc.find('ucd-overlay').length, 0);
 });
 
 // ═══════════════ parity and source-level checks ═══════════════
@@ -564,20 +570,32 @@ test('phone: a tap (voiceUnlockAudio) recovers the page audio: a suspended conte
   h.ctxs[0].state = 'suspended'; const k = h.ctxs[0].resumed; h.doc.hidden = true; h.api.voiceUnlockAudio(); assert.strictEqual(h.ctxs[0].resumed, k);
 });
 
-test('phone: Show display sits inside the call panel beside Hang up, never in the body; None gives no thinking-clock consumer', async () => {
+test('phone: Show display is the docked bar\'s own button (no .ucd-reopen, none in the body, panel stays in the drawer); None gives no thinking-clock consumer', async () => {
   const p = phone({ prefs: { choice: 'orb' } }); p.api.voiceDispBegin(p.vc); await flushPhone();
   assert.ok(p.doc.find('ucd-overlay')[0].contains(p.panel), 'the call panel is in the view');
   p.doc.find('ucd-back')[0].click();
-  const r = p.doc.find('ucd-reopen')[0];
-  assert.ok(r, 'a way back'); assert.strictEqual(r.parentNode, p.panel, 'inside the call panel'); assert.strictEqual(p.panel.children[p.panel.children.indexOf(r) + 1], p.cpHang, 'beside Hang up');
-  assert.ok(!p.doc.body.children.includes(r));
-  r.click(); assert.strictEqual(p.doc.find('ucd-reopen').length, 0);
-  p.api.voiceDispEnd(false); assert.strictEqual(p.doc.find('ucd-reopen').length, 0);
+  const sh = p.doc.find('ucd-show')[0], dr = p.doc.find('ucd-drawer')[0];
+  assert.ok(sh && sh.hidden === false, 'a way back'); assert.strictEqual(sh.textContent, 'Show display');
+  assert.strictEqual(p.doc.find('ucd-reopen').length, 0, 'no separate reopen button'); assert.ok(!p.doc.body.children.includes(sh));
+  assert.ok(dr.contains(p.panel) && !p.panel.contains(sh), 'the call panel is in the drawer, the button is in the docked bar');
+  sh.click(); assert.strictEqual(sh.hidden, true); assert.ok(!p.doc.find('ucd-overlay')[0].className.includes('ucd-docked'), 'the view is back');
+  p.api.voiceDispEnd(false); assert.strictEqual(p.doc.find('ucd-reopen').length + p.doc.find('ucd-overlay').length, 0);
   const n = phone({ prefs: { choice: 'none' } }); n.api.voiceDispBegin(n.vc); await flushPhone();
-  assert.strictEqual(n.doc.find('ucd-reopen').length, 0, 'None: no Show display');
+  assert.strictEqual(n.doc.find('ucd-reopen').length, 0, 'None: no Show display'); assert.strictEqual(n.doc.find('ucd-show')[0].hidden, true, 'None: the docked bar\'s Show display is hidden');
   const ov = n.doc.find('ucd-overlay');   // None: the call screen's bar docked in the chat in place of the composer (no full-screen view)
   assert.strictEqual(ov.length, 1, 'None: the docked bar');
   assert.ok((' ' + ov[0].className + ' ').includes(' ucd-docked '), 'docked, never the full-screen view');
   const sib = ov[0].parentNode.children; assert.strictEqual(sib[sib.indexOf(ov[0]) + 1], n.home, 'right before the composer, which it replaces for the call');
   assert.strictEqual(n.api.voiceDisp.cur.showsPulse(), false);
+});
+
+test('page sources: neither app.js nor mobile.js passes reopenHost to createCallDisplay, both still pass dock:', () => {
+  for (const [name, src] of [['app.js', app], ['mobile.js', mob]]) {
+    const i = src.indexOf('CallDisplay.createCallDisplay({');
+    assert.ok(i > 0, name + ': createCallDisplay call found');
+    const call = src.slice(i, src.indexOf('onRecordingToggle', i));
+    assert.ok(!/reopenHost/.test(call), name + ': no reopenHost in the call');
+    assert.ok(/\bdock: \(\) =>/.test(call), name + ': dock: is passed');
+  }
+  assert.ok(!/reopenHost/.test(app) && !/reopenHost/.test(mob), 'reopenHost is gone from both pages');
 });
