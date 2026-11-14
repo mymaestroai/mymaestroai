@@ -4878,7 +4878,8 @@ function voiceCreateRecordingSession(o) {
         consenting = true; quiet(() => q.playback && q.playback(true));
         let cut = null;
         try {
-          spoken = await Promise.race([Promise.resolve(q.speak(String(rec.consentLine))).then(() => true, () => false),
+          // speak resolves true only when the line played to the end (the pages' voiceCallSpeakLine); anything else is "not spoken", and the hub then announces on the next call
+          spoken = await Promise.race([Promise.resolve(q.speak(String(rec.consentLine))).then((played) => played === true, () => false),
             new Promise((resolve) => { cut = (q.setTimer || setTimeout)(() => resolve(false), 20000); })]);
         } catch { spoken = false; }
         if (cut !== null) quiet(() => (q.clearTimer || clearTimeout)(cut));
@@ -7567,7 +7568,9 @@ function voicePlayBlob(blob, my, meta) {
     if (wait) wait.then(begin, begin); else begin();
   });
 }
-function voiceDeviceSpeak(sentences, my, agent) {   // the phone's own voice, sentence by sentence
+// report (optional): report.spoke is set true only when every sentence ended normally (no speech engine, no offline voice, an
+// error or a cut: false). The return value is unchanged for the other callers.
+function voiceDeviceSpeak(sentences, my, agent, report) {   // the phone's own voice, sentence by sentence
   const synth = window.speechSynthesis;
   if (!synth || typeof SpeechSynthesisUtterance === 'undefined') return Promise.resolve(false);
   return (async () => {
@@ -7575,6 +7578,7 @@ function voiceDeviceSpeak(sentences, my, agent) {   // the phone's own voice, se
     const voice = await voiceWaitLocalVoice(synth, 'en', 1000);
     if (my !== voicePlay.token) return true;
     if (!voice) { toast('This device has no offline voice; turn on voice in Settings', 4500); return true; }
+    let failed = false;
     for (const s of sentences) {
       if (my !== voicePlay.token) return true;
       await new Promise((resolve) => {
@@ -7582,10 +7586,11 @@ function voiceDeviceSpeak(sentences, my, agent) {   // the phone's own voice, se
         const dsp = (k) => { if (typeof voiceDisplayHook === 'function') voiceDisplayHook('speech', k); };
         u.onstart = () => { dsp('start'); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('caption', s); };
         u.onboundary = () => dsp('boundary'); u.onpause = () => dsp('pause'); u.onresume = () => dsp('resume');
-        u.onend = () => { dsp('end'); resolve(); }; u.onerror = () => { dsp('end'); resolve(); };
+        u.onend = () => { dsp('end'); resolve(); }; u.onerror = () => { failed = true; dsp('end'); resolve(); };
         synth.speak(u);
       });
     }
+    if (report && !failed && my === voicePlay.token) report.spoke = true;
     return true;
   })();
 }
@@ -7967,6 +7972,28 @@ async function voiceCallSpeak(agent, rawText) {
   }
   return my === voicePlay.token;
 }
+// The recording's consent line: true only when it was played to the end (hub voice, or the device voice where that is on).
+// Voice off, a voice that failed with no fallback, or a cut line: false, so the hub does not count the line as heard.
+async function voiceCallSpeakLine(agent, rawText) {
+  const text = voiceSpeechText(String(rawText || ''));
+  if (!text) return false;
+  const my = voicePlay.token;
+  if (voiceOn()) {
+    const blob = await voiceTtsBlob(agent, text);
+    if (my !== voicePlay.token) return false;
+    if (blob) {
+      const ok = await voicePlayBlob(blob, my, { text });
+      if (my !== voicePlay.token) return false;
+      if (ok) return true;
+    }
+  }
+  if (voicePrefsNow().deviceVoiceFallback) {
+    const rep = {};
+    await voiceDeviceSpeak([text], my, agent, rep);
+    return rep.spoke === true && my === voicePlay.token;
+  }
+  return false;
+}
 // A spoken message starts a voice turn (voice: true). The stream is not awaited: the next utterance must not wait for the reply.
 function voiceCallSend(vc, text, userEl) {
   stick = true;
@@ -8161,7 +8188,7 @@ function voiceRecMake(vc, cfg, wired) {
   const agent = vc.agent;
   return voiceCreateRecordingSession({ agent, userId: hubMe && hubMe.user ? hubMe.user.id : '', vad: vc.vad, wired, unprocessed: cfg.mic === 'unprocessed', nav: navigator,
     fetch: (url, init) => api(url, init),   // the page's usual helper: the sign-in cookie, the Origin header and the redirect to sign-in come with it
-    speak: (line) => voiceCallSpeak(agent, line),   // the consent line: the agent's voice, the replies' own TTS path
+    speak: (line) => voiceCallSpeakLine(agent, line),   // the consent line: the agent's voice, the replies' own TTS path; true only when it really played
     playback: (on) => { try { vc.vad.setPlaybackActive(on); } catch { /* the line is heard anyway */ } },
     badge: (state) => voiceDisplayHook('setRecording', { state }), toast: (m) => toast(m, 4000),
     onNetFail: (e) => voiceLinkNetFail(e, vc),

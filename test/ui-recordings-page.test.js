@@ -79,20 +79,20 @@ test('the menus show Recordings only when an agent has recordings.canDownload ==
   assert.ok(mob.indexOf('id="menu-recordings"') > mob.indexOf('<div id="menu">'));
 });
 
-test('agent settings: the Call recordings section saves the five fields and loads the accounts list', () => {
+test('agent settings: the Call recordings section saves the six fields and loads the accounts list', () => {
   const as = read('agent-settings.html');
   assert.ok(as.indexOf('id="recordings-section"') > as.indexOf('id="voice-section"') && as.indexOf('id="recordings-section"') < as.indexOf('id="compaction-section"'), 'under the voice section');
   for (const t of ['Keep call recordings', 'Who can download', 'Consent line', "Also keep the agent's voice", 'Microphone for recordings',
     'Processed (clearer on a speakerphone)', 'Unprocessed (best for a future voice model; use a headset or a quiet room)',
-    'Each call with this agent is recorded losslessly on this computer, encrypted. The agent says a short line at the start, and the call screen shows Recording.',
+    'Each call with this agent is recorded losslessly on this computer, encrypted. The agent can say a short line when a call starts (see Announce recording), and the call screen shows Recording.',
     'Only the people ticked here can play, download or delete these recordings. Agents never can.',
     "Recorded calls only start with speech recognition on this computer. Change the agent's speech recognition above."]) assert.ok(as.includes(t), t);
-  assert.match(as, /id="rec-consent" maxlength="300" placeholder="This conversation is being recorded for the family\."/);
+  assert.match(as, /id="rec-consent" maxlength="300" placeholder="This conversation is being recorded\."/);
   const body = as.slice(as.indexOf('  function recordingsFormValues()'), as.indexOf('  // One warning while keep is on'));
-  for (const k of ['keep:', 'allowed', 'consentLine:', 'keepReplies:', 'mic:']) assert.ok(body.includes(k), k);
+  for (const k of ['keep:', 'allowed', 'consentLine:', 'keepReplies:', 'mic:', 'announce:']) assert.ok(body.includes(k), k);
   const save = as.slice(as.indexOf('  async function saveRecordings()'));
   assert.match(save, /method: 'PATCH'[\s\S]*JSON\.stringify\(\{ recordings: body \}\)/);
-  assert.match(as, /\['saveRecordings', 'recordings-status', byId\('rec-keep', 'rec-allowed', 'rec-consent', 'rec-replies', 'rec-mic'\)\]/, 'a wrapped save');
+  assert.match(as, /\['saveRecordings', 'recordings-status', byId\('rec-keep', 'rec-allowed', 'rec-consent', 'rec-replies', 'rec-mic', 'rec-announce'\)\]/, 'a wrapped save');
   assert.match(as, /SAVES_ON_CHANGE = new Set\(\[[^\]]*'saveRecordings'[^\]]*\]\)/, 'saves on change');
   assert.match(as, /apiFetch\('\/api\/users'\)/, 'the accounts list is loaded');
   assert.match(as, /apiFetch\('\/api\/recordings'\)/, 'the storage line');

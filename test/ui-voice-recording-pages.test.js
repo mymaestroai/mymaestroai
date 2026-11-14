@@ -41,7 +41,7 @@ for (const [name, file] of [['desktop', 'app.js'], ['phone', 'mobile.js']]) {
   });
   test(`${name} page: reply audio is handed to the session only in a recorded call; the consent line goes through the replies' TTS path`, () => {
     assert.match(src, /\.replyAudio\(/);
-    assert.match(src, /speak: \(line\) => voiceCallSpeak\(agent, line\)/);
+    assert.match(src, /speak: \(line\) => voiceCallSpeakLine\(agent, line\)/);
   });
 }
 
@@ -65,7 +65,7 @@ function session(over, vadOver) {
   t.createRecorder = (o) => { const r = { o, log: [], begin() { r.log.push('begin'); }, drop() { r.log.push('drop'); }, end() { r.log.push('end'); return { seq: Promise.resolve(7) }; }, pause(on) { r.log.push('pause:' + on); }, setSource(n) { r.log.push('source:' + n.name); }, stop() { r.log.push('stop'); } }; t.recorders.push(r); return r; };
   t.s = CALL.voiceCreateRecordingSession(Object.assign({
     agent: 'biographer', vad: t.vad, fetch: t.fetch, nav: { userAgent: 'TestAgent/1' }, unprocessed: true, wired: true,
-    speak: async (line) => { t.spoken.push(line); t.order.push('speak'); }, playback: (on) => t.vad.playback.push(on),
+    speak: async (line) => { t.spoken.push(line); t.order.push('speak'); return true; }, playback: (on) => t.vad.playback.push(on),   // true: the line played to the end
     badge: (s) => t.badges.push(s), toast: (m) => t.toasts.push(m), now: () => t.now, setTimer: (fn, ms) => { t.timers.push([fn, ms]); return t.timers.length; }, clearTimer() {},
     createRecorder: t.createRecorder,
   }, over));
@@ -225,6 +225,31 @@ test('session consent: a line that failed is shown and reported the same way; on
   await ok.s.started({ sessionId: 's', consentLine: 'Recorded.' }, 'c2');
   assert.deepStrictEqual(bodyOf(posted(ok, '/consent')[0]), { agent: 'biographer', callId: 'c2' });
   assert.deepStrictEqual(ok.toasts, []);
+});
+
+test('session consent: only a speak that resolves true counts as spoken (voice off, no voice, a cut line resolve false)', async () => {
+  for (const [label, speak, spoken] of [
+    ['false (did not play)', async () => false, false],
+    ['nothing', async () => undefined, false],
+    ['a truthy non-true value', async () => 'yes', false],
+    ['true (played to the end)', async () => true, true],
+  ]) {
+    const t = session({ speak });
+    await t.s.started({ sessionId: 's', consentLine: 'Recorded.' }, 'c1');
+    assert.deepStrictEqual(bodyOf(posted(t, '/consent')[0]), spoken ? { agent: 'biographer', callId: 'c1' } : { agent: 'biographer', callId: 'c1', spoken: false }, label);
+    assert.deepStrictEqual(t.toasts, spoken ? [] : ['Recorded.'], label + ': the line is shown when it was not heard');
+    assert.strictEqual(t.recorders.length, 1, label + ': the recording carries on');
+  }
+});
+
+test('session consent: a call hung up during the line posts no consent at all', async () => {
+  let release;
+  const t = session({ speak: () => new Promise((r) => { release = r; }) });
+  const p = t.s.started({ sessionId: 's', consentLine: 'Recorded.' }, 'c1');
+  await tick();
+  t.s.stop(); release(true); await p;
+  assert.deepStrictEqual(posted(t, '/consent'), []);
+  assert.strictEqual(t.recorders.length, 0);
 });
 
 test('session.flushOpen(): the recorder cuts its open segment (page hidden or closed); the call is not ended', async () => {
@@ -725,4 +750,74 @@ test('display CSS: the badge is dark with white text, has a red dot, a hollow on
   assert.match(css, /\.ucd-rec-dot \{[^}]*background: #e5484d/);
   assert.match(css, /\.ucd-rec\[data-state="paused"\] \.ucd-rec-dot \{[^}]*background: transparent; border: 2px solid #e5484d/);
   assert.match(css, /\.ucd-stage > \.ucd-rec \{ position: absolute; z-index: 3; top: 10px; right: 12px; \}/);
+});
+
+// ── the consent line counts only when it really played (the hub then counts it as heard: announce once per person) ──
+const vm = require('node:vm');
+function pageFn(src, start, end) {
+  const i = src.indexOf(start);
+  assert.ok(i >= 0, start);
+  return src.slice(i, src.indexOf(end, i) + end.length);
+}
+test('desktop page: voiceCallSpeakLine is true only when the line played to the end', async () => {
+  const src = read('app.js');
+  const code = pageFn(src, '    async function voicePlayDevice(', '\n    }\n') + pageFn(src, '    async function voiceSpeakText(', '\n    }\n') + pageFn(src, '    async function voiceCallSpeakLine(', '\n    }\n');
+  // dev: the browser's speech engine: 'ok' (each sentence ends), 'novoice' (no offline voice), 'error' (a sentence errors), 'cut' (stopped while speaking)
+  async function run({ ready = true, device = false, hub = 'ok', dev = 'ok' }) {
+    const toasts = [];
+    const ctx = {
+      voicePlay: { token: 0, btn: null }, voiceCallS: { linkLost: false }, voiceOfflineHint: 'no offline voice',
+      voiceStopPlayback() { ctx.voicePlay.token++; }, voiceSentences: (s) => [s], voiceSpeechText: (s) => String(s || ''),
+      voiceReady: () => ready, voiceDeviceFallback: () => device, hubToast: (m) => toasts.push(m), voicePlayState() {}, voiceSpeedFor: () => 1,
+      async voicePlayHub() { if (hub === 'fail') { const e = new Error('tts down'); throw e; } if (hub === 'cut') ctx.voicePlay.token++; },
+      async voiceWaitLocalVoice() { return dev === 'novoice' ? null : { lang: 'en-US' }; },
+      SpeechSynthesisUtterance: class { constructor(t) { this.text = t; } },
+      window: { speechSynthesis: { speak(u) { Promise.resolve().then(() => { if (dev === 'cut') ctx.voicePlay.token++; if (dev === 'error') u.onerror(); else u.onend(); }); } } },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(code + '\nthis.f = voiceCallSpeakLine;', ctx);
+    return { ok: await ctx.f('maestro', 'This conversation is being recorded.'), toasts };
+  }
+  assert.strictEqual((await run({})).ok, true, 'the hub voice played it');
+  assert.strictEqual((await run({ hub: 'cut' })).ok, false, 'cut while playing');
+  assert.strictEqual((await run({ hub: 'fail' })).ok, false, 'the hub voice failed and there is no device voice');
+  assert.strictEqual((await run({ hub: 'fail', device: true })).ok, true, 'the device voice took over and played it');
+  assert.strictEqual((await run({ ready: false })).ok, false, 'voice is off');
+  assert.strictEqual((await run({ ready: false, device: true })).ok, true, 'voice off, the device voice played it');
+  assert.strictEqual((await run({ ready: false, device: true, dev: 'novoice' })).ok, false, 'the device has no offline voice: nothing was said');
+  assert.strictEqual((await run({ ready: false, device: true, dev: 'error' })).ok, false, 'the device voice failed on the sentence');
+  assert.strictEqual((await run({ ready: false, device: true, dev: 'cut' })).ok, false, 'the device voice was cut');
+  assert.strictEqual((await run({ hub: 'fail', device: true, dev: 'novoice' })).ok, false, 'hub failed, no offline voice');
+});
+test('phone page: voiceCallSpeakLine is true only when the line played to the end', async () => {
+  const src = read('mobile.js');
+  const code = pageFn(src, 'function voiceDeviceSpeak(', '\n}\n') + pageFn(src, 'async function voiceCallSpeakLine(', '\n}\n');
+  // dev: 'ok', 'nosynth' (no speech engine), 'novoice' (no offline voice), 'error', 'cut'
+  async function run({ on = true, blob = true, plays = true, device = false, cut = '', dev = 'ok' }) {
+    const toasts = [];
+    const ctx = {
+      voicePlay: { token: 0 }, voiceSpeechText: (s) => String(s || ''), voiceOn: () => on, voicePrefsNow: () => ({ deviceVoiceFallback: device }),
+      toast: (m) => toasts.push(m), voiceSpeedFor: () => 1,
+      async voiceTtsBlob() { if (cut === 'fetch') ctx.voicePlay.token++; return blob ? {} : null; },
+      async voicePlayBlob() { if (cut === 'play') ctx.voicePlay.token++; return plays; },
+      async voiceWaitLocalVoice() { return dev === 'novoice' ? null : { lang: 'en-US' }; },
+      SpeechSynthesisUtterance: class { constructor(t) { this.text = t; } },
+      window: { speechSynthesis: dev === 'nosynth' ? undefined : { speak(u) { Promise.resolve().then(() => { if (dev === 'cut') ctx.voicePlay.token++; if (dev === 'error') u.onerror(); else u.onend(); }); } } },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(code + '\nthis.f = voiceCallSpeakLine;', ctx);
+    return ctx.f('maestro', 'This conversation is being recorded.');
+  }
+  assert.strictEqual(await run({}), true, 'the hub voice played it');
+  assert.strictEqual(await run({ cut: 'play' }), false, 'cut while playing');
+  assert.strictEqual(await run({ cut: 'fetch' }), false, 'cut while fetching');
+  assert.strictEqual(await run({ blob: false }), false, 'no audio from the hub, no device voice');
+  assert.strictEqual(await run({ plays: false }), false, 'the audio did not play, no device voice');
+  assert.strictEqual(await run({ on: false }), false, 'voice is off');
+  assert.strictEqual(await run({ on: false, device: true }), true, 'the device voice played it');
+  assert.strictEqual(await run({ on: false, device: true, dev: 'nosynth' }), false, 'no speech engine on this device');
+  assert.strictEqual(await run({ on: false, device: true, dev: 'novoice' }), false, 'no offline voice: nothing was said');
+  assert.strictEqual(await run({ on: false, device: true, dev: 'error' }), false, 'the device voice failed on the sentence');
+  assert.strictEqual(await run({ on: false, device: true, dev: 'cut' }), false, 'the device voice was cut');
+  assert.strictEqual(await run({ blob: false, device: true, dev: 'novoice' }), false, 'no hub audio, no offline voice');
 });

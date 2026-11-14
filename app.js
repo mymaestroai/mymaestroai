@@ -13215,7 +13215,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             consenting = true; quiet(() => q.playback && q.playback(true));
             let cut = null;
             try {
-              spoken = await Promise.race([Promise.resolve(q.speak(String(rec.consentLine))).then(() => true, () => false),
+              // speak resolves true only when the line played to the end (the pages' voiceCallSpeakLine); anything else is "not spoken", and the hub then announces on the next call
+              spoken = await Promise.race([Promise.resolve(q.speak(String(rec.consentLine))).then((played) => played === true, () => false),
                 new Promise((resolve) => { cut = (q.setTimer || setTimeout)(() => resolve(false), 20000); })]);
             } catch { spoken = false; }
             if (cut !== null) quiet(() => (q.clearTimer || clearTimeout)(cut));
@@ -13604,10 +13605,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // The device voice is used only when it is an offline one (localService): a browser's default voice may be an online
     // service. No offline voice: nothing is spoken and the person is told.
-    async function voicePlayDevice(sentences, from, my, agent) {
+    // report (optional): report.spoke is set true only when every sentence ended normally (no offline voice, an error or a cut: false).
+    async function voicePlayDevice(sentences, from, my, agent, report) {
       const voice = await voiceWaitLocalVoice(window.speechSynthesis, 'en', 1000);
       if (voicePlay.token !== my) return;
       if (!voice) { hubToast(voiceOfflineHint); return; }
+      let failed = false;
       for (let i = from; i < sentences.length; i++) {
         if (voicePlay.token !== my) return;
         await new Promise((res) => {
@@ -13616,10 +13619,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const dsp = (k) => { if (typeof voiceDisplaySpeech === 'function') voiceDisplaySpeech(k); };
           u.onstart = () => { dsp('start'); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('caption', sentences[i]); };
           u.onboundary = () => dsp('boundary'); u.onpause = () => dsp('pause'); u.onresume = () => dsp('resume');
-          u.onend = () => { dsp('end'); res(); }; u.onerror = () => { dsp('end'); res(); };
+          u.onend = () => { dsp('end'); res(); }; u.onerror = () => { failed = true; dsp('end'); res(); };
           window.speechSynthesis.speak(u);
         });
       }
+      if (report && !failed && voicePlay.token === my) report.spoke = true;
     }
     // opts: { sentences, voice }. btn: the button that shows "playing" (a second tap on it stops).
     async function voiceSpeakText(agent, md, btn, opts = {}) {
@@ -13632,7 +13636,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try {
         let from = 0, useDevice = false;
         if (voiceReady()) {
-          try { await voicePlayHub(agent, sentences, opts.voice, my); return; }
+          try { await voicePlayHub(agent, sentences, opts.voice, my); if (opts.out) opts.out.played = voicePlay.token === my; return; }
           catch (e) {
             if (voicePlay.token !== my) return;
             if (!voiceDeviceFallback()) { if (!e.toasted && !voiceCallS.linkLost) hubToast('Could not read this aloud: ' + e.message); return; }   // while a call's connection is lost the link watch speaks for it
@@ -13640,7 +13644,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           }
         } else if (voiceDeviceFallback()) useDevice = true;
         else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
-        if (useDevice) await voicePlayDevice(sentences, from, my, agent);
+        if (useDevice) { const rep = {}; await voicePlayDevice(sentences, from, my, agent, rep); if (opts.out) opts.out.played = rep.spoke === true && voicePlay.token === my; }
       } finally {
         if (voicePlay.token === my) { voicePlayState(btn, false); voicePlay.btn = null; }
       }
@@ -14037,6 +14041,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       await voiceSpeakText(agent, text, null, { sentences });
       return voicePlay.token === mine;
     }
+    // The recording's consent line: true only when it was played to the end (hub voice, or the device voice where that is on).
+    // Voice off, a voice that failed with no fallback, or a cut line: false, so the hub does not count the line as heard.
+    async function voiceCallSpeakLine(agent, text) {
+      const sentences = voiceSentences(voiceSpeechText(String(text || ''))).filter(Boolean);
+      if (!sentences.length) return false;
+      const mine = voicePlay.token + 1, out = { played: false };
+      await voiceSpeakText(agent, text, null, { sentences, out });
+      return out.played === true && voicePlay.token === mine;
+    }
     function voiceCallRunning(chatId, agent) {
       const chat = chats[chatId];
       return !!((chat && chat.status === 'thinking') || (agentStatus[agent] && agentStatus[agent].busy));
@@ -14229,7 +14242,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceRecMake(agent, vad, cfg, wired) {
       return voiceCreateRecordingSession({ agent, userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '', vad, wired, unprocessed: cfg.mic === 'unprocessed', nav: navigator,
         fetch: (...a) => fetch(...a),   // the same fetch the call's other requests use: the sign-in cookie and the Origin header go with it
-        speak: (line) => voiceCallSpeak(agent, line),   // the consent line: the agent's voice, the replies' own TTS path
+        speak: (line) => voiceCallSpeakLine(agent, line),   // the consent line: the agent's voice, the replies' own TTS path; true only when it really played
         playback: (on) => { try { vad.setPlaybackActive(on); } catch { /* the line is heard anyway */ } },
         badge: (state) => voiceDisplayHook('setRecording', { state }), toast: (m) => hubToast(m),
         onNetFail: (e) => voiceLinkNetFail(e, voiceLinkOwner()),
