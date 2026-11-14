@@ -15412,7 +15412,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const statusLabel = tc.status === 'done' 
           ? '<span class="tool-call-status done">Done</span>' 
           : tc.status === 'error' 
-            ? '<span class="tool-call-status error">Error</span>' 
+            ? `<span class="tool-call-status error">${toolResultDenied(tc.result) ? 'Denied' : 'Error'}</span>`
             : '';
 
         let resultHtml = '';
@@ -15931,7 +15931,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // text (escaped), never markup. The panel is one node that message rewrites keep (setMessageHtml).
     // ── tool-result helpers (begin) ──
     function toolResultDenied(output) {
-      return /^\s*\[(?:DENIED(?: BY (?:POLICY|OWNER))?|NOT APPROVED)\]/.test(String(output ?? ''));
+      return /^\s*(?:PreToolUse:\S+ hook [A-Za-z ]*:\s*)?\[(?:DENIED(?: BY (?:POLICY|OWNER))?|NOT APPROVED)\]/.test(String(output ?? ''));
     }
     // ── tool-result helpers (end) ──
     const TOOLS_HEIGHT_KEY = 'hub-tools-height';

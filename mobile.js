@@ -5907,7 +5907,7 @@ function feedStatus(feed) {
   if (!feed || !feed.items.size) return '';
   const items = [...feed.items.values()];
   const x = items.filter(r => r.status === 'running').pop() || items[items.length - 1];
-  if (x.kind === 'tool') return x.status === 'running' ? `running ${x.tool}${x.summary ? `: ${clipText(x.summary, 60)}` : ''}` : `${x.tool} done`;
+  if (x.kind === 'tool') return x.status === 'running' ? `running ${x.tool}${x.summary ? `: ${clipText(x.summary, 60)}` : ''}` : `${x.tool} ${toolResultDenied(x.output) ? 'denied' : 'done'}`;
   const who = workerName(x);
   if (x.status === 'running') {
     const t = x.last === 'tool' ? x.tools[x.tools.length - 1] : null;
@@ -5942,7 +5942,7 @@ function tsnDur(ms) {
 }
 // ── tool-result helpers (begin) ──
 function toolResultDenied(output) {
-  return /^\s*\[(?:DENIED(?: BY (?:POLICY|OWNER))?|NOT APPROVED)\]/.test(String(output ?? ''));
+  return /^\s*(?:PreToolUse:\S+ hook [A-Za-z ]*:\s*)?\[(?:DENIED(?: BY (?:POLICY|OWNER))?|NOT APPROVED)\]/.test(String(output ?? ''));
 }
 // ── tool-result helpers (end) ──
 function tsnFailed(it) {

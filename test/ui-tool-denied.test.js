@@ -59,6 +59,23 @@ test('the helper ignores ordinary text that merely mentions policy', () => {
     assert.strictEqual(lib.toolResultDenied(t), false, String(t));
 });
 
+const SDK_WRAPPED = `PreToolUse:mcp__hub__Bash hook error: ${DENIED_POLICY.replace('reading outside your own folders', 'writing outside your allowed folders')}`;
+
+test('the helper recognises a refusal wrapped by the Claude SDK hook prefix', () => {
+  const real = 'PreToolUse:mcp__hub__Bash hook error: [DENIED BY POLICY] writing outside your allowed folders is not allowed for this agent (worker policy: write_outside = deny; ls /x). Do not work around it: report what you need to the agent that asked you, or to the owner.';
+  assert.strictEqual(lib.toolResultDenied(real), true);
+  assert.strictEqual(lib.toolResultDenied(SDK_WRAPPED), true);
+  assert.strictEqual(lib.toolResultDenied(real.replace('hook error:', 'hook blocking error:')), true);
+  assert.strictEqual(lib.toolResultDenied(`  ${real}`), true);
+  assert.strictEqual(lib.toolResultDenied(real.replace('[DENIED BY POLICY]', '[NOT APPROVED]')), true);
+});
+
+test('the helper still ignores the marker after other words or a non-hook prefix', () => {
+  for (const t of ['The log says PreToolUse:mcp__hub__Bash hook error: fine and [DENIED BY POLICY] later', 'note: PreToolUse:x hook error: [DENIED BY POLICY] x',
+    'PreToolUse:mcp__hub__Bash hook error: it failed. [DENIED BY POLICY] x', 'PreToolUse:mcp__hub__Bash hook error: ok', 'hook error: [DENIED BY POLICY] x'])
+    assert.strictEqual(lib.toolResultDenied(t), false, t);
+});
+
 // ── desktop ──
 const D = fns(app, ['escapeHtmlSafe', 'fmtDur', 'durClass', 'toolResultDenied', 'toolPanelModel', 'toolSpanMs', 'toolSummaryText', 'toolDurHtml', 'toolDetailText', 'toolRowsHtml', 'buildToolsHtml'],
   'toolPanelModel, toolRowsHtml, buildToolsHtml', 'const TOOL_DETAIL_MAX = 20000;\n');
@@ -85,6 +102,26 @@ test('desktop inline tool lines: a denied result is paired as an error with the 
   assert.match(lines[0], /^error/); assert.match(lines[0], /title="Denied by policy">✗/);
   assert.match(lines[1], /^done/); assert.match(lines[1], /✓/);
   assert.match(lines[2], /^error/); assert.doesNotMatch(lines[2], /Denied/);
+});
+
+test('desktop inline status word: "Denied" for a denied call, "Error" for an ordinary error, "Done" for success', () => {
+  const act = [{ type: 'call', tool: 'Bash', input: 'a' }, { type: 'result', output: SDK_WRAPPED }, { type: 'call', tool: 'Bash', input: 'b' }, { type: 'result', output: 'Error: x' },
+    { type: 'call', tool: 'Bash', input: 'c' }, { type: 'result', output: 'ok' }];
+  const lines = D.buildToolsHtml(act, false).split('<div class="tool-call-line ').slice(1);
+  assert.match(lines[0], /tool-call-status error">Denied</); assert.doesNotMatch(lines[0], />Error</);
+  assert.match(lines[1], /tool-call-status error">Error</); assert.doesNotMatch(lines[1], />Denied</);
+  assert.match(lines[2], /tool-call-status done">Done</);
+});
+
+test('phone screen-reader status text: "<tool> denied" for a denied call, "<tool> done" otherwise', () => {
+  const F = new Function(`${['toolResultDenied', 'feedStatus'].map(n => extract(mjs, n)).join('\n')}
+    const clipText = (s) => s; const workerName = () => 'w'; return { feedStatus };`)();
+  const feed = (output, status = 'done') => ({ items: new Map([['t', { kind: 'tool', id: 't', tool: 'Read', status, summary: 's', output }]]) });
+  assert.strictEqual(F.feedStatus(feed(DENIED_POLICY)), 'Read denied');
+  assert.strictEqual(F.feedStatus(feed(SDK_WRAPPED)), 'Read denied');
+  assert.strictEqual(F.feedStatus(feed('file contents')), 'Read done');
+  assert.strictEqual(F.feedStatus(feed('Error: boom')), 'Read done');
+  assert.strictEqual(F.feedStatus(feed(DENIED_POLICY, 'running')), 'running Read: s');
 });
 
 test('desktop live and reloaded paths test the result with the helper', () => {
