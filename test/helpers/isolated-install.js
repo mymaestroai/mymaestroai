@@ -4,15 +4,17 @@
 // module would then compute data/ from the real install folder and open its databases, even in the live install). node_modules
 // is linked, so packages load as usual. Nothing outside the returned folders is written.
 //
-// makeIsolatedInstall(prefix) -> { root, inst, home, data, lib } with process.env.HUB_HOME and HUB_AUTH_DIR pointing into it.
-// Call it before requiring any lib/ module.
+// makeIsolatedInstall(prefix, { copy }) -> { root, inst, home, data, lib } with process.env.HUB_HOME and HUB_AUTH_DIR pointing
+// into it. Call it before requiring any lib/ module. `copy` names more install paths to copy in (files or folders, relative
+// to the install, e.g. ['server.js', 'scripts']) for tests that run them; data/agents.example.json (tracked in git) always
+// comes along.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const REAL = path.join(__dirname, '..', '..');
 
-function makeIsolatedInstall(prefix = 'isolated-install-') {
+function makeIsolatedInstall(prefix = 'isolated-install-', { copy = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const inst = path.join(root, 'inst');
   const home = path.join(root, 'home');
@@ -23,6 +25,14 @@ function makeIsolatedInstall(prefix = 'isolated-install-') {
   fs.symlinkSync(path.join(REAL, 'node_modules'), path.join(inst, 'node_modules'));
   // Files at the top of the install that lib/ modules read (never write): copied so their paths stay inside the throwaway install.
   for (const f of ['package.json']) { try { fs.copyFileSync(path.join(REAL, f), path.join(inst, f)); } catch { /* not there */ } }
+  // The example agents list is shipped in git (not install data); lib/ falls back to it when data/agents.json is missing.
+  try { fs.copyFileSync(path.join(REAL, 'data', 'agents.example.json'), path.join(data, 'agents.example.json')); } catch { /* not there */ }
+  for (const rel of copy) {
+    if (/^data(\/|$)/.test(rel) || rel.split('/').includes('..')) throw new Error(`isolated-install: ${rel} is not a path to copy`);
+    const to = path.join(inst, rel);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.cpSync(path.join(REAL, rel), to, { recursive: true, dereference: true });
+  }
   process.env.HUB_HOME = home;
   process.env.HUB_AUTH_DIR = data;
   // Any other path override a parent shell may export (they win over the copy's own data/ paths) is cleared, so the copy keeps
