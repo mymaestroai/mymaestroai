@@ -50,6 +50,7 @@ function fakeCtx(over) {
   const param = (v) => ({ value: v });
   if (!o.noGain) ctx.createGain = () => node('gain', { gain: param(1) });
   if (!o.noComp) ctx.createDynamicsCompressor = () => node('comp', { threshold: param(0), knee: param(0), ratio: param(0), attack: param(0), release: param(0) });
+  if (o.shaper) ctx.createWaveShaper = () => node('shaper', { curve: null, oversample: '' });
   if (!o.noAnalyser) ctx.createAnalyser = () => node('analyser', { fftSize: 0, getFloatTimeDomainData(buf) { const d = ctx.analysis || []; for (let i = 0; i < buf.length; i++) buf[i] = d.length ? d[i % d.length] : 0; } });
   ctx.createMediaElementSource = (el) => { const n = node('mediaSrc', { el }); ctx.sources = (ctx.sources || []).concat([el]); return n; };
   ctx.createBufferSource = () => node('bufSrc');
@@ -67,16 +68,39 @@ test('voiceLoudnessDb maps the three names and defaults to louder', () => {
 });
 
 // ── voiceCreateLoudness ──
-test('voiceCreateLoudness builds gain -> limiter -> analyser -> destination with the limiter settings', () => {
-  const ctx = fakeCtx();
+// changed: the limit is now compressor (-6 dB, 20:1) -> makeup trim -> fixed ceiling curve, so no peak passes -1 dBFS
+test('voiceCreateLoudness builds gain -> compressor -> trim -> ceiling -> analyser -> destination with the limiter settings', () => {
+  const ctx = fakeCtx({ shaper: true });
   const c = V.voiceCreateLoudness(ctx);
   assert.ok(c && c.input);
-  assert.deepStrictEqual(names(ctx), ['gain>comp', 'comp>analyser', 'analyser>dest']);
-  const comp = ctx.nodes.find((n) => n.kind === 'comp'), an = ctx.nodes.find((n) => n.kind === 'analyser');
-  assert.strictEqual(c.input, ctx.nodes.find((n) => n.kind === 'gain'));
-  assert.strictEqual(comp.threshold.value, -3); assert.strictEqual(comp.knee.value, 0); assert.strictEqual(comp.ratio.value, 20);
-  assert.strictEqual(comp.attack.value, 0.003); assert.strictEqual(comp.release.value, 0.12);
+  assert.deepStrictEqual(names(ctx), ['gain>comp', 'comp>gain', 'gain>shaper', 'shaper>analyser', 'analyser>dest']);
+  const gains = ctx.nodes.filter((n) => n.kind === 'gain');
+  const comp = ctx.nodes.find((n) => n.kind === 'comp'), an = ctx.nodes.find((n) => n.kind === 'analyser'), sh = ctx.nodes.find((n) => n.kind === 'shaper');
+  assert.strictEqual(c.input, gains[0]);
+  assert.strictEqual(comp.threshold.value, -6); assert.strictEqual(comp.knee.value, 0); assert.strictEqual(comp.ratio.value, 20);
+  assert.strictEqual(comp.attack.value, 0.001); assert.strictEqual(comp.release.value, 0.1);
+  assert.ok(Math.abs(gains[1].gain.value - Math.pow(10, -3.42 / 20)) < 1e-9, 'the trim takes the compressor makeup back off');
+  assert.ok(sh.curve instanceof Float32Array && sh.curve.length === 4097); assert.strictEqual(sh.oversample, 'none');
   assert.strictEqual(an.fftSize, 2048);
+});
+test('voiceCreateLoudness without WaveShaper still limits: gain -> compressor -> trim -> analyser', () => {
+  const ctx = fakeCtx();
+  assert.ok(V.voiceCreateLoudness(ctx));
+  assert.deepStrictEqual(names(ctx), ['gain>comp', 'comp>gain', 'gain>analyser', 'analyser>dest']);
+});
+test('voiceCeilingCurve: straight below 0.7, never at or past -1 dBFS, odd, monotonic', () => {
+  const c = V.voiceCeilingCurve(4097), n = c.length;
+  assert.ok(Math.abs(V.VOICE_CEILING - Math.pow(10, -1 / 20)) < 1e-12);
+  let max = 0;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    max = Math.max(max, Math.abs(c[i]));
+    if (Math.abs(x) <= 0.7) assert.ok(Math.abs(c[i] - x) < 1e-6, 'unchanged at ' + x);
+    if (i) assert.ok(c[i] >= c[i - 1], 'monotonic at ' + i);
+    assert.ok(Math.abs(c[i] + c[n - 1 - i]) < 1e-6, 'odd at ' + i);
+  }
+  assert.ok(max < V.VOICE_CEILING, 'the end of the curve (held for every input past full scale) stays under -1 dBFS: ' + max);
+  assert.ok(20 * Math.log10(max) < -1);
 });
 test('voiceCreateLoudness: the gain value of each level, default louder, setLevel changes it', () => {
   const ctx = fakeCtx(); const c = V.voiceCreateLoudness(ctx);
@@ -88,7 +112,7 @@ test('voiceCreateLoudness: the gain value of each level, default louder, setLeve
 });
 test('voiceCreateLoudness: one chain per context (cached), a second context gets its own', () => {
   const ctx = fakeCtx(); const a = V.voiceCreateLoudness(ctx), b = V.voiceCreateLoudness(ctx);
-  assert.strictEqual(a, b); assert.strictEqual(ctx.nodes.filter((n) => n.kind === 'gain').length, 1);
+  assert.strictEqual(a, b); assert.strictEqual(ctx.nodes.filter((n) => n.kind === 'gain').length, 2);   // changed: input gain + makeup trim, made once
   assert.strictEqual(ctx.__voiceLoudness, a);
   const other = fakeCtx(); assert.notStrictEqual(V.voiceCreateLoudness(other), a);
 });
@@ -102,7 +126,7 @@ test('voiceCreateLoudness: null without the nodes, never throws', () => {
   const noAn = V.voiceCreateLoudness(fakeCtx({ noAnalyser: true })); assert.ok(noAn); assert.strictEqual(noAn.meter(), null);   // no analyser: still a chain, no meter
   const badAn = fakeCtx(); badAn.createAnalyser = () => { throw new Error('x'); };
   const c = V.voiceCreateLoudness(badAn); assert.ok(c); assert.strictEqual(c.meter(), null);
-  assert.deepStrictEqual(names(badAn), ['gain>comp', 'comp>dest']);
+  assert.deepStrictEqual(names(badAn), ['gain>comp', 'comp>gain', 'gain>dest']);   // changed: the trim sits after the compressor
 });
 test('voiceCreateLoudness.meter reads rms and peak in dBFS from the analyser, -120 when silent', () => {
   const ctx = fakeCtx(); const c = V.voiceCreateLoudness(ctx);

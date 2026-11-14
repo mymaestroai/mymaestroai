@@ -2753,20 +2753,46 @@ function voiceLoudnessFor(prefs, kind) {
   const v = kind === 'bluetooth' ? p.loudnessBt : p.loudness;
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, v) ? v : (kind === 'bluetooth' ? 'normal' : 'louder');
 }
-// One chain per AudioContext: gain -> limiter -> analyser -> destination. Returns null when the context cannot build it.
+// The output ceiling: no sample leaves the call chain louder than this (-1 dBFS).
+const VOICE_CEILING = Math.pow(10, -1 / 20);
+// The compressor's automatic makeup gain at threshold -6 dB, ratio 20, knee 0 is (6 - 6/20) * 0.6 = 3.42 dB; the trim takes it back off,
+// so speech below the threshold plays at exactly the chosen loudness.
+const VOICE_LIMIT_TRIM_DB = -3.42;
+// A fixed safety curve after the compressor: straight up to 0.7 (-3.1 dBFS), then a smooth bend that never reaches the ceiling,
+// even for inputs past full scale (a WaveShaper holds its last value there). This is what makes the limit hard: the compressor
+// alone lets the first milliseconds of a peak through.
+function voiceCeilingCurve(n) {
+  const len = Math.max(3, n | 0), k = 0.7, room = VOICE_CEILING - k;
+  const curve = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const x = (i / (len - 1)) * 2 - 1, a = Math.abs(x);
+    const y = a <= k ? a : k + room * Math.tanh((a - k) / room);
+    curve[i] = x < 0 ? -y : y;
+  }
+  return curve;
+}
+// One chain per AudioContext: gain -> compressor -> trim -> ceiling curve -> analyser -> destination. Returns null when the context cannot build it.
 function voiceCreateLoudness(ctx) {
   if (!ctx) return null;
   try { if (ctx.__voiceLoudness) return ctx.__voiceLoudness; } catch {}
   if (typeof ctx.createGain !== 'function' || typeof ctx.createDynamicsCompressor !== 'function') return null;
-  let gain, comp, an = null, db = voiceLoudnessDb('louder'), buf = null;
+  let gain, comp, trim, shaper = null, an = null, db = voiceLoudnessDb('louder'), buf = null;
   try {
     gain = ctx.createGain();
     comp = ctx.createDynamicsCompressor();
     const set = (prm, v) => { try { if (prm && typeof prm === 'object') prm.value = v; } catch {} };
-    set(comp.threshold, -3); set(comp.knee, 0); set(comp.ratio, 20); set(comp.attack, 0.003); set(comp.release, 0.12);
+    set(comp.threshold, -6); set(comp.knee, 0); set(comp.ratio, 20); set(comp.attack, 0.001); set(comp.release, 0.1);
+    trim = ctx.createGain();
+    set(trim.gain, Math.pow(10, VOICE_LIMIT_TRIM_DB / 20));
+    if (typeof ctx.createWaveShaper === 'function') {
+      try { shaper = ctx.createWaveShaper(); shaper.curve = voiceCeilingCurve(4097); shaper.oversample = 'none'; } catch { shaper = null; }
+    }
     if (typeof ctx.createAnalyser === 'function') { try { an = ctx.createAnalyser(); an.fftSize = 2048; } catch { an = null; } }
     gain.connect(comp);
-    if (an) { comp.connect(an); an.connect(ctx.destination); } else comp.connect(ctx.destination);
+    comp.connect(trim);
+    let last = trim;
+    if (shaper) { last.connect(shaper); last = shaper; }
+    if (an) { last.connect(an); an.connect(ctx.destination); } else last.connect(ctx.destination);
   } catch { return null; }
   const apply = () => { try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
   apply();
