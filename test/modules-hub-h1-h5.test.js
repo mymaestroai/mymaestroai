@@ -8,14 +8,18 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
-const manifestLib = require('../lib/modules/manifest');
-const installer = require('../lib/modules/installer');
-const { createModules } = require('../lib/modules');
-const { createConnectors } = require('../lib/connectors');
-const { createApprovals } = require('../lib/approvals');
-const { HUB_HOME } = require('../lib/hub-home');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('modules-h-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const manifestLib = L('modules/manifest');
+const installer = L('modules/installer');
+const { createModules } = L('modules');
+const { createConnectors } = L('connectors');
+const { createApprovals } = L('approvals');
+const { HUB_HOME } = L('hub-home');
 
-const GUARD = path.join(__dirname, '..', 'lib', 'modules', 'mcp-guard.js');
+const GUARD = path.join(ISO.lib, 'modules', 'mcp-guard.js');
 const HUB_SECRET = 'cd'.repeat(32);
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const rm = (d) => fs.rmSync(d, { recursive: true, force: true });
@@ -520,7 +524,7 @@ test('H2 approvals: request() without a timeout option keeps the settings window
 
 test('H2 push: a module request reaches the phone and names the module and the agent', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { createPush, QUESTION_DELAY_MS } = require('../lib/push');
+  const { createPush, QUESTION_DELAY_MS } = L('push');
   const dir = tmp('hub-hp-'); const sent = [];
   try {
     const push = createPush({ dir, now: () => 1_000_000, minGapMs: 20000, displayName: (a) => ({ sam: 'Sam' }[a] || a),
@@ -804,7 +808,7 @@ test('R1 installer and modules: a second Install while one runs is refused', asy
 
 // ---- H5: backups ----
 test('H5 backup rules: runtime/ and pkg/ of a module are left out, everything else under data/modules stays', () => {
-  const { DATA_LEAVE_OUT } = require('../lib/backup/collect');
+  const { DATA_LEAVE_OUT } = L('backup/collect');
   const out = (rel) => DATA_LEAVE_OUT.some(re => re.test(rel));
   for (const rel of ['modules/demo/runtime', 'modules/demo/runtime/node_modules/a/index.js', 'modules/demo/pkg', 'modules/demo/pkg/node_modules/x/package.json', 'modules/my-mod/runtime/package.json']) assert.ok(out(rel), rel);
   for (const rel of ['modules', 'modules/demo', 'modules/demo/home/keys.json', 'modules/demo/audit.jsonl', 'modules/demo/usage.json', 'modules/demo/runtime-notes.txt', 'modules/demo/home/runtime/x', 'modules/demo/pkgs/x', 'modules.json', 'runtime/x']) assert.ok(!out(rel), rel);
@@ -814,7 +818,7 @@ test('H5 backup rules: runtime/ and pkg/ of a module are left out, everything el
 });
 
 test('H5 snapshot: a real data tree keeps module homes and state and drops the installs', async () => {
-  const collect = require('../lib/backup/collect');
+  const collect = L('backup/collect');
   const dir = tmp('hub-h5-');
   try {
     const root = path.join(dir, 'app'); const hubHome = path.join(dir, 'hh'); const home = path.join(dir, 'home');

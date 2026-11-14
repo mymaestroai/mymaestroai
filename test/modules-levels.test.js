@@ -6,8 +6,12 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const manifestLib = require('../lib/modules/manifest');
-const { createModules } = require('../lib/modules');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('mod-levels-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const manifestLib = L('modules/manifest');
+const { createModules } = L('modules');
 
 const LEVELS = { setting: 'levels', choices: ['look', 'act', 'drive'], default: 'look', sessionApproval: { setting: 'no_ask_agents', levels: ['act', 'drive'] } };
 const baseManifest = () => ({

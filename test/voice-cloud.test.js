@@ -9,9 +9,13 @@ const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
 const { Readable, Writable } = require('node:stream');
-const cloudMod = require('../lib/voice/cloud');
-const routes = require('../lib/voice/routes');
-const manifest = require('../lib/voice/manifest');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('voice-cloud-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const cloudMod = L('voice/cloud');
+const routes = L('voice/routes');
+const manifest = L('voice/manifest');
 
 const KEYS = { openai: 'sk-test-openai-KEY1', google: 'sk-test-google-KEY2', elevenlabs: 'sk-test-eleven-KEY3' };
 const ELEVEN_ID = 'abcDEF1234567890xyz';
@@ -261,7 +265,7 @@ function fakeReq(method, url, { headers = {}, body, user = { id: 'u_owner', role
   Object.assign(r, { method, url, headers: Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])), hubUser: user, hubService: false });
   return r;
 }
-const HOME = require('../lib/hub-home').HUB_HOME;
+const HOME = L('hub-home').HUB_HOME;
 const CLOUD_OPENAI = { voice: '', stt: 'openai', tts: 'openai', cloudVoice: 'coral' };
 
 function setup({ agents, ready = true, respond, keys = KEYS, keepOnBox = [], rows = [] } = {}) {
@@ -443,6 +447,7 @@ function loadHub({ agents, settings } = {}) {
   if (settings) fs.writeFileSync(path.join(hub, 'data', 'settings.json'), JSON.stringify(settings));
   process.env.HUB_MEMORY_DB = path.join(hub, 'data', 'memory.db');
   process.env.HUB_AUTH_DIR = path.join(hub, 'data');
+  delete process.env.HUB_HOME;   // makeIsolatedInstall set it for the lib/ copy above; this temp hub works out its own home (the folder above it)
   const gw = new Module(path.join(hub, 'lib', 'gateway-client.js'));
   gw.filename = gw.id; gw.loaded = true; gw.exports = { listModels: async () => [], chatCompletion: async () => ({}) };
   require.cache[gw.id] = gw;
@@ -559,7 +564,7 @@ test('cloud.keptOnBox: medical/legal folder grants or the keep-on-box list', () 
 });
 
 test('settings: ElevenLabs has an environment key name and reports its key source like the other providers', () => {
-  const s = require('../lib/settings');
+  const s = L('settings');
   assert.strictEqual(s.ENV_KEY_MAP.elevenlabs, 'ELEVENLABS_API_KEY');
   assert.ok(s.PROVIDER_DEFAULTS.elevenlabs, 'listed in the providers the Settings page shows');
   const before = process.env.ELEVENLABS_API_KEY;

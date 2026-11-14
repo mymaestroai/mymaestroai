@@ -18,8 +18,12 @@ const mobileHtml = read('mobile.html');
 const tiger = read('tiger-team.html');
 const sw = read('sw.js');
 const libSrc = read('lib/ui-safe-text.js');
-const safe = require('../lib/ui-safe-text');
-const agents = require('../lib/agents');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('ui-escaping-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const safe = L('ui-safe-text');
+const agents = L('agents');
 
 const BEGIN = '// ── safe-text helpers (begin) ──';
 const END = '// ── safe-text helpers (end) ──';

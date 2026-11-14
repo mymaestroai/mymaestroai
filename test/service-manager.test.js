@@ -6,7 +6,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createServiceManager, renderSystemdUnit, renderLaunchdPlist } = require('../lib/service-manager');
+// lib/ (and scripts/) come from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('svcmgr-iso-', { copy: ['scripts'] });
+const L = (p) => require(path.join(ISO.lib, p));
+const { createServiceManager, renderSystemdUnit, renderLaunchdPlist } = L('service-manager');
 
 function sandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'svcmgr-'));
@@ -109,9 +113,9 @@ test('a broken link among the user\'s units (a removed service) does not hide th
 
 test('the mymaestro command: help and version run, and every command named in the help exists', () => {
   const { execFileSync } = require('child_process');
-  const cli = path.join(__dirname, '..', 'scripts', 'hub-cli.js');
-  assert.match(execFileSync(process.execPath, [cli, 'version'], { encoding: 'utf8' }), /^My Maestro AI \d+\.\d+\.\d+ /);
-  const help = execFileSync(process.execPath, [cli, 'help'], { encoding: 'utf8' });
+  const cli = path.join(ISO.inst, 'scripts', 'hub-cli.js');
+  assert.match(execFileSync(process.execPath, [cli, 'version'], { encoding: 'utf8', cwd: ISO.inst }), /^My Maestro AI \d+\.\d+\.\d+ /);
+  const help = execFileSync(process.execPath, [cli, 'help'], { encoding: 'utf8', cwd: ISO.inst });
   for (const c of ['status', 'start | stop | restart', 'logs', 'open', 'setup-link', 'update', 'doctor', 'backup', 'reset-2fa', 'service install', 'uninstall']) assert.ok(help.includes(`mymaestro ${c}`), c);
   const src = fs.readFileSync(cli, 'utf8');
   for (const c of ['status', 'start', 'stop', 'restart', 'logs', 'open', "'setup-link'", 'update', 'doctor', 'backup', "'reset-2fa'", 'service', 'uninstall', 'version']) assert.match(src, new RegExp(`^  (async )?${c.replace(/'/g, "'")}\\(\\)`, 'm'), c);

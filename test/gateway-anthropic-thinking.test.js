@@ -8,9 +8,13 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const gw = require('../lib/gateway-client');
-const errorHelp = require('../lib/error-help');
-const cb = require('../lib/context-budget');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('gw-thinking-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const gw = L('gateway-client');
+const errorHelp = L('error-help');
+const cb = L('context-budget');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 
 // An upstream Anthropic SSE body: [delayMs, event] pairs, each sent after its delay.

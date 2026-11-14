@@ -10,7 +10,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createMoodFilter, FACE_MOOD_NOTE, MOODS } = require('../lib/voice/mood');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('voice-face-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createMoodFilter, FACE_MOOD_NOTE, MOODS } = L('voice/mood');
 
 const SRC = fs.readFileSync(path.join(__dirname, '../lib/sdk-chat.js'), 'utf8');
 
@@ -182,7 +186,7 @@ test('faceMoodFor: with the real pack lookup, a slug that is not a valid pack id
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'face-mood-home-'));
   try {
     const ctx = makeSandbox({ console: { log() {}, error() {}, warn() {} }, require: (m) => (m === './hub-home' ? { HUB_HOME: home } : stub()) });
-    loadHelpers(ctx, { calls: { onCall: () => true, caller: () => ({ kind: 'none', id: null }) }, packs: require('../lib/faces/packs') });
+    loadHelpers(ctx, { calls: { onCall: () => true, caller: () => ({ kind: 'none', id: null }) }, packs: L('faces/packs') });
     const ok = (b) => ctx.faceMoodFor(b, { agent: 'ada', turnOrigin: { kind: 'user' }, accounts: false });
     for (const slug of ['owl', '../owl', '../../etc', 'a/b', '..', '.', 'OWL', 'x'.repeat(200), 'owl\0', 'con']) assert.strictEqual(ok({ voice: true, facePack: slug }), false, slug);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
@@ -226,17 +230,17 @@ function gatewayRun({ calls, options, abortAfterFirstCall, model }) {
     buildAllTools: async () => ({ openaiTools: [], handlers: new Map([['Echo', async () => 'echoed']]) }),
     visualsTextFor: async () => '', connectorsTextFor: () => '', hubBriefTextFor: async () => '',
     peerAgents: async () => [], workerPolicy: { buildRoster: () => [], platformPolicyText: () => '' },
-    contextBudget: require('../lib/context-budget'), records: { maxBytesFor: () => 262144 },
+    contextBudget: L('context-budget'), records: { maxBytesFor: () => 262144 },
     compaction: { compactedAt: () => null, noteUsage: () => null, settingsFor: () => ({ mode: 'off' }) },
     trimConversation: x => x, annotateForContext: x => x, capOutputTokens: () => 500, stableTrim: x => x,
     gate: { check: async () => ({ allowed: true }) },
-    providerPacing: require('../lib/provider-pacing'), errorHelp: require('../lib/error-help'),
+    providerPacing: L('provider-pacing'), errorHelp: L('error-help'),
     modelTelemetry: { recordRequest() {}, recordToolCall() {} },
-    executeToolCallsBatched: require('../lib/tool-concurrency').executeToolCallsBatched, isReadOnlyTool: () => false,
+    executeToolCallsBatched: L('tool-concurrency').executeToolCallsBatched, isReadOnlyTool: () => false,
     queryCache: { get: () => null, put() {} }, recordToolError() {}, getInlineErrorGuidance: () => '', getToolGuidance: () => '',
     temporalWorkers: { isVirtual: () => false, getVirtual: () => null }, jobs: { policyText: () => '' }, scheduledTasks: { policyText: () => '' },
     timeZoneLib: { zoneForAgent: () => 'UTC', policyText: () => '', localTimeTag: () => '[time]' },
-    accumulateToolCallDelta: require('../lib/tool-call-deltas').accumulateToolCallDelta,
+    accumulateToolCallDelta: L('tool-call-deltas').accumulateToolCallDelta,
     activityMeta: (agent, text, extra) => extra, history: [], interjectionQueues: new Map(), drainInterjections: () => [],
     MAX_TOOL_TURNS: 12, MAX_TRUNCATION_RESUMES: 3, MAX_LENGTH_CONTINUATIONS: 3, REASON_FLUSH_MS: 250,
     pendingToolConfirms: new Map(), isStoppedResult: () => false, raceStop: (p) => p,
@@ -477,21 +481,21 @@ function sdkRun({ messages, options, throwAfter, abortAt }) {
     loadAgentContext: async () => 'Test system',
     timeZoneLib: { zoneForAgent: () => 'UTC', policyText: () => '', localTimeTag: () => '[time]' },
     workerPolicy: { buildRoster: () => [], platformPolicyText: () => '', disallowedToolsFor: () => [], getMode: () => 'off', policyText: () => '' },
-    require: (m) => (m === './claude-auth' ? require('../lib/claude-auth') : stub()),   // anything else the slice requires inline (billing, ...) does nothing
+    require: (m) => (m === './claude-auth' ? L('claude-auth') : stub()),   // anything else the slice requires inline (billing, ...) does nothing
     peerAgents: async () => [], visualsTextFor: async () => '', connectorsTextFor: () => '', hubBriefTextFor: async () => '',
     ownerOfAgent: async () => null, adminIdSet: () => new Set(),
     temporalWorkers: { isVirtual: () => false, getVirtual: () => null, sdkDisallowedFor: () => [] },
     records: { maxBytesFor: () => 262144 },
     contextRefresh: { getContextRefresh: () => ({ plan: () => ({ block: '', summary: '', commit() {} }), forget() {} }) },
     promptCounts: new Map(), sdkInterjectChannels: new Map(),
-    providerPacing: require('../lib/provider-pacing'), errorHelp: require('../lib/error-help'),
+    providerPacing: L('provider-pacing'), errorHelp: L('error-help'),
     paragraphAfterTool: (t) => (t && !/\n\s*$/.test(t) ? '\n\n' : ''),
     activityMeta: (agent, text, extra) => extra,
     SdkWorkerTracker: class { constructor() { this.size = 0; } workerFor() { return null; } drain() { return []; } completeByIds() { return []; } },
     drainInterjections: () => [], interjectionQueues: new Map(),
     getAgentSessionId: () => null, setAgentSessionId() {},
-    sdkInterject: { ...require('../lib/sdk-interject'), takeUndelivered: () => [], stashUndelivered() {} },   // the stash lives on disk: faked
-    contextWindow: require('../lib/context-window'),
+    sdkInterject: { ...L('sdk-interject'), takeUndelivered: () => [], stashUndelivered() {} },   // the stash lives on disk: faked
+    contextWindow: L('context-window'),
     compaction: { compactedAt: () => null, noteUsage: () => null, settingsFor: () => ({ mode: 'off' }) },
     handsForTurn: async () => ({ mode: 'client', withheld: false, agent: null }),
     sandboxLib: { getSandbox: () => ({ isSandboxed: () => false }) },
@@ -667,7 +671,7 @@ function codexRun({ transport, items, options, throwAfter, abortAt, status }) {
     close() {},
   };
   const codexCli = {
-    ...require('../lib/codex-cli'),
+    ...L('codex-cli'),
     modelId: (m) => String(m).replace(/^codex-cli\//, ''), resolveBinary: () => '/fake/codex', getSession: () => null, setSession() {}, clearSession() {},
     sandboxFor: () => 'read-only', buildArgs: () => [], approvalPolicyFor: () => 'never', MAX_INSTRUCTIONS_ARG: 1e9,
   };
@@ -695,9 +699,9 @@ function codexRun({ transport, items, options, throwAfter, abortAt, status }) {
     jobs: { policyText: () => '' }, scheduledTasks: { policyText: () => '' },
     timeZoneLib: { zoneForAgent: () => 'UTC', policyText: () => '', localTimeTag: () => '[time]' },
     handsForTurn: async () => ({ mode: 'client', withheld: false, agent: null }),
-    sdkInterject: { ...require('../lib/sdk-interject'), takeUndelivered: () => [], stashUndelivered() {}, formatCarried: () => '' },
+    sdkInterject: { ...L('sdk-interject'), takeUndelivered: () => [], stashUndelivered() {}, formatCarried: () => '' },
     drainInterjections: () => [], requeueInterjections() {}, ownerOfAgent: async () => null, adminIdSet: () => new Set(),
-    providerPacing: require('../lib/provider-pacing'), errorHelp: require('../lib/error-help'),
+    providerPacing: L('provider-pacing'), errorHelp: L('error-help'),
     reasoningForSave: () => undefined, showReasoning: () => false, sendReasoning() {},
     setPhase() {}, progressTicker: 1,
   });
@@ -873,7 +877,7 @@ test('voiceStripFor: true for any live voice call on the person\'s own turn (no 
 
 // ═════════════════ the call must be the signed-in account's own (stable id, never the display name) ═════════════════
 test('voiceStripFor / faceMoodFor: stable account id: own call and second tab pass; another account, one-sided absence, and every non-user turn fail', async () => {
-  const { createVoiceCalls } = require('../lib/voice/call');
+  const { createVoiceCalls } = L('voice/call');
   const reg = createVoiceCalls({ bus: { publish() {} }, log() {} });
   const ctx = makeSandbox({ console: { log() {}, error() {}, warn() {} }, require: () => stub() });
   loadHelpers(ctx, { calls: reg, packs: { getPack: () => ({ manifest: { clips: [{ state: 'reaction' }] } }) } });

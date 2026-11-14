@@ -4,7 +4,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const st = require('../lib/scheduled-tasks');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('sched-tasks-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const st = L('scheduled-tasks');
 
 const NY = 'America/New_York';
 const T0 = Date.parse('2026-09-29T18:00:00Z');   // Tue 2:00 PM EDT
@@ -13,7 +17,7 @@ const local = (ms) => st.fmtLocal(ms, NY);
 // Task times default to the zone of the person the agent works for, else the hub's (lib/timezone). These tests are
 // written for US Eastern: fix that zone, whatever computer or account runs them.
 process.env.HUB_TZ = 'America/New_York';
-require('../lib/timezone')._setDeps({ auth: { admins: () => [], getUser: () => null }, agents: () => [] });
+L('timezone')._setDeps({ auth: { admins: () => [], getUser: () => null }, agents: () => [] });
 
 function mk(o = {}) {
   const dataDir = o.dataDir || fs.mkdtempSync(path.join(os.tmpdir(), 'sched-'));

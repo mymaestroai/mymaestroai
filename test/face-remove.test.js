@@ -7,9 +7,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const packs = require('../lib/faces/packs');
+// lib/ and scripts/ come from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('face-remove-iso-', { copy: ['scripts'] });
+const L = (p) => require(path.join(ISO.lib, p));
+const packs = L('faces/packs');
 
-const CLI = path.join(__dirname, '..', 'scripts', 'hub-cli.js');
+const CLI = path.join(ISO.inst, 'scripts', 'hub-cli.js');
 const mp4 = () => { const b = Buffer.alloc(88); b.writeUInt32BE(24, 0); b.write('ftypisom', 4, 'latin1'); return b; };
 function makeSource(dir) {
   fs.mkdirSync(path.join(dir, 'web'), { recursive: true });
@@ -152,7 +156,7 @@ test('an existing faces-removed that is not mode 0700 is refused, untouched, and
 });
 
 test('faces routes: asset and list answer, then 404 and an empty list right after removal, with no restart', async () => {
-  const routes = require('../lib/faces/routes');
+  const routes = L('faces/routes');
   const { Readable, Writable } = require('node:stream');
   const call = async (home, pathname) => {
     const chunks = [];

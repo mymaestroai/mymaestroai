@@ -12,7 +12,10 @@ const os = require('os');
 const path = require('path');
 const vm = require('vm');
 const crypto = require('crypto');
-const sdkInterject = require('../lib/sdk-interject');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('chat-alert-iso-');
+const sdkInterject = require(path.join(ISO.lib, 'sdk-interject'));
 const { SdkInterjectionChannel, EMERGENCY_PREFIX, INTERJECTION_PREFIX } = sdkInterject;
 
 const SRC = fs.readFileSync(path.join(__dirname, '../lib/sdk-chat.js'), 'utf8');
@@ -30,7 +33,7 @@ function slice(startMarker, endMarker) {
 function loadAlertModule() {
   const logs = { log: [], warn: [] };
   const ctx = {
-    fs, path, crypto, Buffer, __dirname: path.join(__dirname, '../lib'),
+    fs, path, crypto, Buffer, __dirname: ISO.lib,
     require: (m) => { if (m === './sdk-interject') return sdkInterject; throw new Error('unexpected require ' + m); },
     console: { log: (...a) => logs.log.push(a.join(' ')), warn: (...a) => logs.warn.push(a.join(' ')), error: () => {} },
     setTimeout, clearTimeout, setImmediate,

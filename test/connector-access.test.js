@@ -4,7 +4,11 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createConnectorAccess, runTool, OWNER_ONLY } = require('../lib/connector-access');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('connector-access-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createConnectorAccess, runTool, OWNER_ONLY } = L('connector-access');
 
 const YES = async () => true;
 
@@ -180,12 +184,12 @@ test('the owner_turn mark is set on the stream route too, with the same expressi
 });
 
 test('ownerLeadNames: owner-less and admin-owned flagged leads, never a member-owned one, no fallback', () => {
-  const agents = require('../lib/agents');
+  const agents = L('agents');
   const list = [
     { name: 'a1', lead: true }, { name: 'a2', lead: true, owner: 'adm1' }, { name: 'a3', lead: true, owner: 'mem1' },
     { name: 'a4', category: 'primary' }, { name: 'a5', lead: false },
   ];
-  const auth = require('../lib/auth'); const real = auth.getAuth;
+  const auth = L('auth'); const real = auth.getAuth;
   auth.getAuth = () => ({ admins: () => [{ id: 'adm1' }] });
   try {
     assert.deepEqual(agents.ownerLeadNames(list), ['a1', 'a2']);

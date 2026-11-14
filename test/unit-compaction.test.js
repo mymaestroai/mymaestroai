@@ -3,7 +3,11 @@
 // the one rule that matters most: a session is reset ONLY in mode 'on'.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { createCompaction, compressionPrompt, BRIEF_FILE, MIN_GAP_MS } = require('../lib/compaction');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('compaction-iso-');
+const L = (p) => require(require('path').join(ISO.lib, p));
+const { createCompaction, compressionPrompt, BRIEF_FILE, MIN_GAP_MS } = L('compaction');
 
 function make({ agents = {}, settings = {} } = {}) {
   let t = 1_000_000;
@@ -135,7 +139,7 @@ test('safety: no brief written during the run -> the session is NOT reset, the e
 
 test('history: the last 20 context readings and compression runs (with how each ended) are kept, and survive a restart', async () => {
   const fs = require('fs'); const os = require('os'); const path = require('path');
-  const { HISTORY } = require('../lib/compaction');
+  const { HISTORY } = L('compaction');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'compaction-h-')); const file = path.join(dir, 'c.json');
   let t = 5_000_000;
   const mk = (post) => createCompaction({ file, persist: true, now: () => t, log: () => {}, post, resetSession: async () => {}, getAgent: () => ({ name: 'a', compaction: { mode: 'dry', at: 0.95 } }) });
@@ -308,7 +312,7 @@ test('a brief not newer than the previous compactedAt is rejected, even inside t
 });
 
 test('both prompts tell the agent to overwrite the brief during THIS turn, and keep their other wording', () => {
-  const { assistedFinalPrompt } = require('../lib/compaction');
+  const { assistedFinalPrompt } = L('compaction');
   const prompts = [compressionPrompt({ agent: 'a', pct: 80, mode: 'on', reason: 'agent' }), assistedFinalPrompt({ reason: 'agent', pct: 80 })];
   for (const p of prompts) {
     assert.ok(p.includes('Overwrite it during THIS turn even if you updated it a moment ago, so it includes everything that happened since.'));
@@ -353,7 +357,7 @@ test('a queued agent request runs late but is judged from the original request t
 });
 
 test('too-small and missing briefs are refused even when the request is fresh', async () => {
-  const { MIN_BRIEF_BYTES } = require('../lib/compaction');
+  const { MIN_BRIEF_BYTES } = L('compaction');
   const h = makeBrief();
   h.setBrief(h.now() - 5 * SEC, { bytes: MIN_BRIEF_BYTES - 1 });
   h.sess(); h.c.request('a', 'agent');

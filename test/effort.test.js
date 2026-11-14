@@ -3,12 +3,16 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs'), path = require('path');
-const effort = require('../lib/effort');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('effort-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const effort = L('effort');
 const log = console.log; console.log = () => {};
-const gw = require('../lib/gateway-client');
+const gw = L('gateway-client');
 console.log = log;
-const codexCli = require('../lib/codex-cli');
-const appServer = require('../lib/codex-cli/app-server');
+const codexCli = L('codex-cli');
+const appServer = L('codex-cli/app-server');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 
 test('levels map to what each provider accepts (checked against the live APIs)', () => {
@@ -32,7 +36,7 @@ test('gateway: Anthropic gets output_config.effort, OpenAI/Gemini reasoning_effo
   assert.deepStrictEqual(gw.applyEffort({}, 'google/gemini-flash-latest', 'max', 'chat'), { reasoning_effort: 'high' });
   assert.deepStrictEqual(gw.applyEffort({}, 'openai/gpt-4.1', 'high', 'chat'), {});
   assert.deepStrictEqual(gw.applyEffort({}, 'openai/gpt-5.5', 'default', 'chat'), {});
-  assert.deepStrictEqual(require('../lib/openai-responses').toResponsesBody({ model: 'gpt-6', messages: [], reasoning_effort: 'xhigh' }).reasoning, { effort: 'xhigh', summary: 'auto' }, 'the Responses translation carries it');
+  assert.deepStrictEqual(L('openai-responses').toResponsesBody({ model: 'gpt-6', messages: [], reasoning_effort: 'xhigh' }).reasoning, { effort: 'xhigh', summary: 'auto' }, 'the Responses translation carries it');
 });
 
 test('Codex client: model_reasoning_effort on both transports', () => {
