@@ -158,7 +158,7 @@ test('CSS: kind colours, left border, stack, from line', () => {
 });
 
 test('the service worker is bumped so open phones load this page', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v65'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v66'/);
 });
 
 test('samePrompt and promptRecent: clipped prompts match by start; stale or undated cards are not adopted', () => {
@@ -199,7 +199,7 @@ test('moveReplyOut: a card inside a stack sends the reply after the stack, in th
   body.children.push(el);
   let from = null;
   const document = { createElement: () => (from = mk(null)) };
-  const fn = new Function('chatOpenFor', 'chatEl', 'document', 'scrollChat', `${src}; return moveReplyOut;`)(() => true, () => panel, document, () => {});
+  const fn = new Function('chatOpenFor', 'chatEl', 'document', 'scrollChat', 'unhideHubTurn', `${src}; return moveReplyOut;`)(() => true, () => panel, document, () => {}, () => {});
   const t = { agent: 'a', el, card: { label: 'Lbl', wrap } };
   fn(t);
   assert.strictEqual(t.card.moved, true);
@@ -231,8 +231,8 @@ test('reattachIfIdle: a hub turn still on screen blocks a re-attach; a stale one
     + js.slice(js.indexOf('function reattachIfIdle('), js.indexOf('\n}\n', js.indexOf('function reattachIfIdle(')) + 3);
   const run = (hubTurns) => {
     const entered = [];
-    const fn = new Function('hubTurns', 'chatOpenFor', 'streams', 'reattaches', 'live', 'enterReattach', 'addAssistantBubble',
-      `${src}; return reattachIfIdle;`)(hubTurns, () => true, new Map(), new Map(), { sam: { busy: true } }, (a) => entered.push(a), () => ({}));
+    const fn = new Function('hubTurns', 'chatOpenFor', 'streams', 'reattaches', 'live', 'enterReattach', 'addAssistantBubble', 'busyCardInfo',
+      `${src}; return reattachIfIdle;`)(hubTurns, () => true, new Map(), new Map(), { sam: { busy: true } }, (a) => entered.push(a), () => ({}), () => null);
     fn('sam');
     return entered.length;
   };

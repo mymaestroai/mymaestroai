@@ -1,7 +1,6 @@
 'use strict';
 // My Maestro AI phone UI: Agents / Chat / Activity. Same-origin calls to the existing hub APIs only.
 
-const HISTORY_PAGE = 40;
 const ACTIVITY_MAX = 50;
 const GROUPS = [
   { key: 'primary', title: 'Primary' },
@@ -16,7 +15,9 @@ let current = null;            // agent name whose chat is loaded
 let chatHistory = [];              // full history array of the open chat
 let histGen = 0;                   // bumped whenever chatHistory is replaced (a fetch, a clear)
 let histReadSeq = 0;               // the newest history re-read wins (rereadHistory)
-let shown = 0;                 // how many trailing history entries are rendered
+let chatNext = null;           // cursor of the page before the loaded part of the open chat's view (null: nothing older)
+let chatLoadingOlder = false;  // a "Load earlier" request is running
+let chatOpenSeq = 0;           // bumped by every history load of the open chat: a late answer for an older load is dropped
 // Replies this phone is streaming, one per agent: several chats can run at once and each one
 // keeps running in the background while another chat is open.
 const streams = new Map();     // agent -> { controller, agent, text, bubble, userEl, full, tools, startedAt, ... }
@@ -1592,6 +1593,7 @@ function paintChatStatus() {
   const bell = $('chat-notify-btn');
   if (bell) { bell.hidden = !working && !own; paintNotifyBtn(); }
   setSendMode(own);
+  paintBusyCard();
 }
 
 // ── "Notify me when done" (the 🔔 next to Interject while a reply runs): the hub keeps who asked on the running turn and
@@ -5310,10 +5312,10 @@ function reasoningSet(holder, text, { live = false, total, onlyIfLonger = false 
 async function rereadHistory(agent, attempt = 0) {
   const seq = ++histReadSeq;
   const gen = histGen;
-  let hist = null;
+  let hist = null, nextCursor = null;
   try {
-    const r = await api(`/api/history/${encodeURIComponent(agent)}`);
-    if (r.ok) { const d = await r.json(); if (Array.isArray(d.history)) hist = d.history; }
+    const r = await api(chatViewHistoryUrl(agent, { view: viewNow(), limit: 50 }));   // the part of the chat that is shown
+    if (r.ok) { const d = await r.json(); if (Array.isArray(d.history)) { hist = d.history; nextCursor = d.next != null ? d.next : null; } }
   } catch { /* tried again below */ }
   if (seq !== histReadSeq || gen !== histGen || current !== agent || streams.has(agent) || reattaches.has(agent)) return;
   if (!hist) {   // the hub did not answer: again in 1, 2, 4 s (a newer read, or the chat moving on, cancels it)
@@ -5321,7 +5323,7 @@ async function rereadHistory(agent, attempt = 0) {
     return;
   }
   if (hist.length && hist[hist.length - 1].inProgress) hist.pop();   // a new turn's reply so far (the live turn shows it)
-  chatHistory = hist; histGen++;
+  chatHistory = hist; chatNext = nextCursor; histGen++;
 }
 function reasoningEnd(holder) {
   const r = holder && holder.rsn;
@@ -5504,6 +5506,7 @@ function copyWholeChat() {
 }
 
 function renderEntry(m, time = '') {
+  if (m.archived === true) { renderArchived(m, time); return; }
   if (m.role === 'user') {
     if (m.origin?.kind) addNote(`⚡ ${originLabel(m.origin)} — ${timeLabel(m.ts)}`);
     setBubbleTime(addUserBubble(m.content, null), time);
@@ -5514,6 +5517,30 @@ function renderEntry(m, time = '') {
     if (typeof m.reasoning === 'string' && m.reasoning) reasoningSet({ agent: current, bubble: b }, m.reasoning, { total: Number(m.reasoningChars) });
     setBubbleTime(b.el, time);
   }
+}
+
+// An entry from the transcript archive: text only (no tool panel, no reasoning), its time line ends " · from the archive".
+function renderArchived(m, time) {
+  let el = null;
+  if (m.role === 'user') {
+    if (m.origin?.kind) addNote(`⚡ ${originLabel(m.origin)} — ${timeLabel(m.ts)}`);
+    el = addUserBubble(m.content, null);
+  } else if (m.role === 'assistant') {
+    el = addAssistantBubble(m.content).el;
+  }
+  if (el) markArchived(el, time);
+}
+
+// The time line of an entry that comes from the archive ends with a small muted " · from the archive".
+function markArchived(el, time) {
+  if (!time) { setBubbleTime(el, 'from the archive'); return; }
+  setBubbleTime(el, time);
+  const line = el && el.querySelector(':scope > .msg-time');
+  if (!line) return;
+  const mark = document.createElement('span');
+  mark.className = 'archive-mark';
+  mark.textContent = ' · from the archive';
+  line.appendChild(mark);
 }
 
 // A saved reply with the tool calls and workers of its turn: the same layout as the live stream (paintReply).
@@ -5536,11 +5563,11 @@ function paintSaved(bubble, m) {
 function renderHistory() {
   const box = chatEl();
   box.innerHTML = '';
-  const start = Math.max(0, chatHistory.length - shown);
-  if (start > 0) {
+  const start = 0;   // the whole loaded list is drawn; older entries come from the hub, a page per tap (loadEarlier)
+  if (chatNext != null) {
     const b = document.createElement('button');
     b.className = 'more';
-    b.textContent = `Load earlier (${start} more)`;
+    b.textContent = 'Load earlier';
     b.addEventListener('click', loadEarlier);
     box.appendChild(b);
   }
@@ -5555,7 +5582,8 @@ function renderHistory() {
   } else {
     for (let i = start; i < chatHistory.length; i++) renderEntry(chatHistory[i], times[i]);
   }
-  if (!chatHistory.length) addNote('No messages yet');
+  if (!chatHistory.length && chatNext == null) addNote('No messages yet');
+  paintBusyCard();   // the redraw cleared the chat, the busy card goes back at the bottom
 }
 
 // Turns the hub starts by itself fold into closed cards; the setting is per device ('off' turns it off).
@@ -5672,12 +5700,41 @@ function renderAutoStack(it, times) {
   for (const c of it.cards) renderAutoCard(c, times, st.body);
 }
 
-function loadEarlier() {
-  const s = $('chat-scroll');
-  const prevHeight = s.scrollHeight;
-  shown = Math.min(chatHistory.length, shown + HISTORY_PAGE);
-  renderHistory();
-  s.scrollTop = s.scrollHeight - prevHeight;
+// The page before what is loaded, from the hub; a page that comes back empty while there is more is asked again (5 times at most).
+async function loadEarlier() {
+  const agent = current;
+  if (!agent || chatLoadingOlder || chatNext == null) return;
+  // A redraw would detach a reply this phone is drawing live (own stream, re-attach, a followed hub turn).
+  if (streams.has(agent) || reattaches.has(agent) || followedHubTurn(agent)) { toast('Load earlier once the reply is done'); return; }
+  const seq = chatOpenSeq, view = viewNow();
+  const btn = chatEl().querySelector(':scope > button.more');
+  chatLoadingOlder = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+  try {
+    let cursor = chatNext, older = [], next = cursor;
+    for (let tries = 0; tries < 5; tries++) {
+      const r = await api(chatViewHistoryUrl(agent, { view, before: cursor }));
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      older = Array.isArray(d.history) ? d.history : [];
+      next = d.next != null ? d.next : null;
+      if (older.length || next == null) break;
+      cursor = next;
+    }
+    if (current !== agent || seq !== chatOpenSeq) return;   // the chat moved on or was reloaded meanwhile
+    const s = $('chat-scroll');
+    const prevHeight = s.scrollHeight, prevTop = s.scrollTop;
+    chatHistory = chatViewMergeOlder(older, chatHistory); histGen++;
+    chatNext = next;
+    stick = false;
+    renderHistory();
+    s.scrollTop = prevTop + (s.scrollHeight - prevHeight);   // what the person was looking at stays where it was
+  } catch (e) {
+    toast(`Could not load earlier messages: ${e.message}`);
+    if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = 'Load earlier'; }
+  } finally {
+    chatLoadingOlder = false;
+  }
 }
 
 // A stream or re-attach paints only while its own chat is open and its bubble is still in the page.
@@ -5711,17 +5768,20 @@ async function openChat(name) {
   chatEl().innerHTML = '';
   addNote('Loading…');
   stick = true;
+  const openSeq = ++chatOpenSeq;
+  chatNext = null;
   try {
-    const r = await api(`/api/history/${encodeURIComponent(name)}`);
-    chatHistory = r.ok ? ((await r.json()).history || []) : [];
-  } catch { chatHistory = []; }
+    const r = await api(chatViewHistoryUrl(name, { view: viewNow() }));
+    const d = r.ok ? await r.json() : null;
+    chatHistory = (d && d.history) || [];
+    chatNext = d && d.next != null ? d.next : null;
+  } catch { chatHistory = []; chatNext = null; }
   histGen++;
-  if (current !== name) return;
+  if (current !== name || openSeq !== chatOpenSeq) return;
   // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place, with its
   // tool calls, so it is not shown twice. The hub flags it only while that turn runs.
   const inProgress = chatHistory.length && chatHistory[chatHistory.length - 1].inProgress ? chatHistory.pop() : null;
   if (inProgress && !isBusy(name)) setLive(name, { busy: true });
-  shown = Math.min(chatHistory.length, HISTORY_PAGE);
   renderHistory();
   if (streams.has(name)) {
     // Back in a chat whose reply is still streaming on this device: a fresh live bubble with
@@ -7169,6 +7229,7 @@ async function probeTurn(agent) {
   const d = await fetchTurn(agent);
   if (!d || !d.turn || d.turn.ended || !chatOpenFor(agent) || streams.has(agent) || reattaches.has(agent)) return;
   setLive(agent, { busy: true, busySince: d.turn.startedAt || null, activity: d.turn.activityLabel || originLabel(d.turn.origin) });
+  noteTurnOrigin(agent, d.turn.turnId, d.turn.origin, d.turn.startedAt);
   paintStatus();
   reattachIfIdle(agent);
 }
@@ -9146,6 +9207,7 @@ function reattachIfIdle(agent, partial = '') {
   if (followedHubTurn(agent)) return;   // that turn is already drawn live; a re-attach would be a second copy
   const s = live[agent];
   if (!s || !s.busy) return;
+  if (busyCardInfo(agent)) return;   // main view, a hub-started turn is running: the busy card says so, no live bubble
   // a followed hub turn whose bubble a redraw removed (chat left and opened again): the re-attach takes over from it
   for (const [id, t] of Object.entries(hubTurns)) if (t && t.agent === agent && !(t.el && t.el.isConnected)) delete hubTurns[id];
   enterReattach(agent, null, addAssistantBubble(), '', partial, s.busySince || null);
@@ -10353,10 +10415,87 @@ async function compressNow() {
   toast(`Compression started (${compactionModeLabel(d.mode || mode)})`);
 }
 
+// ── Main view / agent work view ─────────────────────────────────────────────────────────────
+// The main view is the person's own conversation; the turns the hub starts (consultations, scheduled tasks, job notices)
+// are followed as before but stay out of sight, with ONE busy card at the bottom while the agent works on one.
+function viewNow() {
+  try { return chatViewGet(localStorage); } catch { return 'main'; }
+}
+function paintViewMenu() {
+  const b = $('menu-agentwork');
+  if (b) b.textContent = viewNow() === 'all' ? '\u{1F9F0} Hide agent work' : '\u{1F9F0} Show agent work';
+}
+function toggleAgentWork() {
+  $('menu').classList.remove('open');
+  const next = viewNow() === 'all' ? 'main' : 'all';
+  chatViewSet(localStorage, next);
+  paintViewMenu();
+  if (!current) return;
+  // A redraw would detach a reply this phone is drawing live: the new view is read when that reply is done (next open).
+  if (streams.has(current) || reattaches.has(current)) { toast(`${next === 'all' ? 'Agent work shown' : 'Agent work hidden'} once the reply is done`); return; }
+  openChat(current);
+}
+
+// Per agent: the origin of its running turn, from turn_start ({ turnId, origin, hub, since }); gone at turn_end.
+const turnOrigins = {};
+function noteTurnOrigin(agent, turnId, origin, startedAt) {
+  if (!agent || !origin || typeof origin !== 'object') return;
+  turnOrigins[agent] = { turnId: turnId || null, origin, hub: chatViewIsHubOrigin(origin), since: Date.parse(startedAt) || Date.now() };
+}
+// What the busy card says for this agent, or null: only in the main view, only while the agent works on a hub-started turn
+// (never the person's own: that reply streams live).
+function busyCardInfo(agent) {
+  if (!agent || viewNow() !== 'main' || ownTurnFor(agent)) return null;
+  const s = live[agent];
+  if (!s || !s.busy) return null;
+  const o = turnOrigins[agent];
+  const ids = openTurns[agent];
+  if (o && !(o.turnId && ids && ids.length && !ids.includes(o.turnId))) {
+    return o.hub ? { text: chatViewBusyText(o.origin, s.activity), since: o.since } : null;
+  }
+  // No turn_start seen (the page opened mid-turn): the status feed's words.
+  if (s.pendingQuestion || s.activity === 'replying to you') return null;
+  return { text: chatViewBusyText(null, s.activity), since: Date.parse(s.busySince) || Date.now() };
+}
+let busyCardEl = null, busyCardTimer = null, busyCardObs = null;
+// Shows, updates or removes the card; it is always the last element of the messages list.
+function paintBusyCard() {
+  const box = chatEl();
+  const info = box && screen === 'chat' ? busyCardInfo(current) : null;
+  if (!info) {
+    if (busyCardEl) { busyCardEl.remove(); busyCardEl = null; }
+    if (busyCardTimer) { clearInterval(busyCardTimer); busyCardTimer = null; }
+    if (busyCardObs) { busyCardObs.disconnect(); busyCardObs = null; }
+    return;
+  }
+  const fresh = !busyCardEl || busyCardEl.parentNode !== box;
+  if (fresh) {
+    busyCardEl = document.createElement('div');
+    busyCardEl.className = 'chat-busy-card';
+    busyCardEl.setAttribute('role', 'status');
+  }
+  busyCardEl.textContent = `\u23F3 ${info.text} \u00B7 ${chatViewElapsed(info.since, Date.now())}`;
+  if (box.lastElementChild !== busyCardEl) box.appendChild(busyCardEl);
+  if (fresh) scrollChat();
+  if (!busyCardTimer) busyCardTimer = setInterval(paintBusyCard, 5000);
+  // Anything added after it (a bubble, a note) is put above it again.
+  if (!busyCardObs && typeof MutationObserver === 'function') {
+    busyCardObs = new MutationObserver(() => { if (busyCardEl && busyCardEl.parentNode === box && box.lastElementChild !== busyCardEl) box.appendChild(busyCardEl); });
+    busyCardObs.observe(box, { childList: true });
+  }
+}
+// A hub-started turn kept out of sight in the main view comes back when its reply is marked for the owner.
+function unhideHubTurn(t) {
+  if (!t) return;
+  if (t.card && t.card.wrap) t.card.wrap.classList.remove('chat-view-hidden');
+  for (const e of t.hiddenEls || []) e.classList.remove('chat-view-hidden');
+}
+
 function onTurnStart(ev) {
   if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
   if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
   setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin) });
+  noteTurnOrigin(ev.agent, ev.turnId, ev.origin, ev.startedAt);
   const own = ev.origin?.kind === 'user' && ownTurnFor(ev.agent);
   if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !own) {
     // The last saved entry: renderHistory leaves out a running turn's inProgress entry, so does this.
@@ -10392,11 +10531,25 @@ function onTurnStart(ev) {
       }
       return addAssistantBubble('…');
     };
+    const lastBefore = chatEl().lastElementChild;
     const b = card ? withRenderTarget(card.body, paint) : paint();
-    const t = { turnId: ev.turnId, agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null, prompt: ev.message, card: card ? { ...card, label: info.label } : null };
+    // Main view: a hub-started turn is followed as ever but not shown (until its reply is marked for the owner).
+    let hiddenEls = null;
+    if (viewNow() === 'main' && chatViewIsHubOrigin(ev.origin)) {
+      if (card) card.wrap.classList.add('chat-view-hidden');
+      else {
+        hiddenEls = [];
+        for (let e = lastBefore ? lastBefore.nextElementSibling : chatEl().firstElementChild; e; e = e.nextElementSibling) {
+          if (e === busyCardEl) continue;
+          e.classList.add('chat-view-hidden'); hiddenEls.push(e);
+        }
+      }
+    }
+    const t = { turnId: ev.turnId, agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null, prompt: ev.message, card: card ? { ...card, label: info.label } : null, hiddenEls };
     hubTurns[ev.turnId] = t;
     // A for_owner that arrived before this card existed: apply it now.
     if (t.card && forOwnerPending[ev.turnId]) { delete forOwnerPending[ev.turnId]; moveReplyOut(t); }
+    else if (t.hiddenEls && forOwnerPending[ev.turnId]) { delete forOwnerPending[ev.turnId]; unhideHubTurn(t); }
     if (retired) catchUpOpenAgent();   // what the turn already did (tool rows, text), which the retired bubble had shown
     scrollChat();
   }
@@ -10474,6 +10627,7 @@ function onTurnProgress(ev) {
 // for_owner { agent, reason, turnId, origin }: the agent marked this reply for the owner. A live automatic turn's reply
 // bubble moves out of its closed card to right after it, open, under a "from <card label>" line.
 function moveReplyOut(t) {
+  unhideHubTurn(t);   // main view: the card (or the turn's bubbles) and its reply show now
   if (!t || !t.card || t.card.moved || !t.el.isConnected || !chatOpenFor(t.agent)) return;
   // The card may sit inside a stack (hidden body): the reply goes after the outermost block that is in the chat.
   const panel = chatEl();
@@ -10510,6 +10664,8 @@ function onTurnEnd(ev) {
   const reply = ev.reply || (ev.ok ? '(no reply)' : `⚠ turn failed: ${ev.error || 'unknown error'}`);
   const t = hubTurns[ev.turnId];
   delete hubTurns[ev.turnId];
+  const to = turnOrigins[ev.agent];
+  if (to && (!ev.turnId || !to.turnId || to.turnId === ev.turnId)) delete turnOrigins[ev.agent];   // the busy card goes with paintStatus below
   const ownTurn = ev.origin?.kind === 'user';
   // A turn this device streamed itself: sendMessage paints and flags it; the hub's event is a duplicate.
   const ownStream = streams.has(ev.agent) || (Date.now() - (recentOwn.get(ev.agent) || 0) < 15000);
@@ -10527,6 +10683,8 @@ function onTurnEnd(ev) {
     if (ev.reply) finishReattach(ra, ev.reply, true);
     else if (ev.ok === false) finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}${reply}`, false);
     else reattachCheck(ra);
+  } else if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !ownTurn && viewNow() === 'main' && chatViewIsHubOrigin(ev.origin) && !forOwnerPending[ev.turnId]) {
+    // main view, a hub-started turn this page never followed (opened mid-turn): its reply stays out of the chat
   } else if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !ownTurn) {
     setBubbleTime(addAssistantBubble(reply).el, msgTimeLabel(Date.parse(ev.endedAt) || Date.now()));
     rereadHistory(ev.agent);
@@ -10781,6 +10939,8 @@ function wire() {
   document.addEventListener('click', () => $('menu').classList.remove('open'));
   $('menu-clear').addEventListener('click', confirmClear);
   $('menu-copy').addEventListener('click', copyWholeChat);
+  $('menu-agentwork')?.addEventListener('click', toggleAgentWork);
+  paintViewMenu();
   $('menu-fold')?.addEventListener('click', toggleFoldAuto);
   paintFoldMenu();
   $('menu-active-top')?.addEventListener('click', toggleActiveTop);
