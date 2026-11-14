@@ -37,7 +37,7 @@ function callEnv(over) {
     voiceCreateVad: (opts) => { created.vadOpts = opts; created.vad = { setMicLevel() {}, setInterruptSensitivity() {}, setEndPause() {}, setEchoHold: (ms) => log.push('setEchoHold:' + ms), setPlaybackActive() {}, stop() {} }; return created.vad; },
     voiceCreateCall: (deps) => { created.deps = deps; created.call = { start: () => new Promise(() => {}), retryMic: () => { log.push('retryMic'); return Promise.resolve(true); }, hangUp: () => { log.push('hangUp'); return Promise.resolve([]); }, setPrefs() {} }; return created.call; },
     voiceCreateKeepAlive: (opts) => { created.kaCtx.push(opts.ctx); created.kaAllow = opts.allow; created.ka = { running: false, start() { this.running = true; log.push('ka.start'); }, stop() { this.running = false; log.push('ka.stop'); }, refresh() { log.push('ka.refresh'); } }; return created.ka; },
-    voiceOutputNow: () => ({ output: env.output || 'speaker' }),
+    voiceOutputNow: () => ({ output: 'speaker' }), voiceOutputKind: V.voiceOutputKind,
     voiceCreateThinkingSound: (opts) => ({ opts, setVolume() {}, start() {}, stop() {}, pulse() { return true; } }),
     voiceMediaSession() {}, voiceCallBeat() {}, setInterval: () => 0, clearInterval() {}, voiceCallPanel() {}, voiceCallPaintState() {}, voiceMicPaint() {}, voiceCallTeardown() {}, voiceWakeAcquire() {},
     voiceCallServer: () => ({}), $: getEl, voiceCallPaintMeter: (db) => log.push('meter:' + db), voiceCallPaintHeld() {}, voiceDisplayHook() {}, voiceDisp: { turnSeq: new Map() }, voiceThinkingVolume: undefined,
@@ -75,21 +75,30 @@ test('keep-alive: made for every call, but it may sound only while the switch is
   assert.strictEqual(t.created.kaCtx.length, 1);
   const allow = t.created.kaAllow;
   assert.strictEqual(typeof allow, 'function');
-  assert.strictEqual(allow(), false, 'the phone speaker: never (a hiss in every pause, and that route never sleeps)');
-  t.env.output = 'bluetooth';
+  assert.strictEqual(allow(), false, 'no microphone reported yet, no earlier call: the speaker (a hiss in every pause, and that route never sleeps)');
+  t.log.length = 0;
+  t.created.deps.ui.mic({ label: 'Bluetooth headset' });
+  assert.ok(t.log.includes('ka.refresh'), 'a new microphone (to or from Bluetooth) re-checks it at once');
   assert.strictEqual(allow(), true, 'Bluetooth / car with the switch on');
   t.prefs.keepAlive = false;
   assert.strictEqual(allow(), false, 'the switch off');
   t.log.length = 0;
   t.fns.voiceCallApplyPrefs();
   assert.ok(t.log.includes('ka.refresh'), 'a change of the switch reaches the running call at once');
-  t.log.length = 0;
+  t.prefs.keepAlive = true;
+  t.created.deps.ui.mic({ label: 'Speakerphone' });
+  assert.strictEqual(allow(), false, 'moved to the phone\'s own microphone and speaker');
   t.created.deps.ui.mic({ label: 'Bluetooth headset' });
-  assert.ok(t.log.includes('ka.refresh'), 'a new microphone (to or from Bluetooth) re-checks it at once');
+  // the next call: until its microphone reports, the last call's label stands in, so a Bluetooth call is awake from the start
+  t.fns.voiceThinkingClose(t.fns.getCall());
+  t.fns.voiceCallStart();
+  const next = t.created.kaAllow;
+  t.fns.getCall().micInfo = undefined;
+  assert.strictEqual(next(), true, 'the last call was on Bluetooth');
   const off = callEnv({ prefs: { keepAlive: false } });
   off.fns.voiceCallStart();
   assert.strictEqual(off.created.kaCtx.length, 1, 'made even with the switch off, so switching it on mid-call works');
-  off.env.output = 'bluetooth';
+  off.created.deps.ui.mic({ label: 'Bluetooth headset' });
   assert.strictEqual(off.created.kaAllow(), false);
 });
 

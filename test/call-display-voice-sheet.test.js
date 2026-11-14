@@ -17,9 +17,12 @@ const z = (css, sel) => {
 
 test('the open Voice sheet sits above the full-screen call view, below the toast', () => {
   const css = read('lib/ui-call-display.css');
-  const overlay = z(css, '.ucd-overlay'), sheet = z(css, '.voice-sheet.open'), toast = z(css, '#toast.on');
+  const overlay = z(css, '.ucd-overlay'), sheet = z(css, 'body:has(> .ucd-overlay) .voice-sheet.open'), toast = z(css, '#toast.on');
   assert.ok(sheet > overlay, `sheet ${sheet} > view ${overlay}`);
   assert.ok(toast > sheet, `toast ${toast} > sheet ${sheet}`);
+  assert.ok(!/(^|\n)\.voice-sheet\.open \{/.test(css), 'only while the view is in the page: outside a call the other sheets (approvals) keep their order');
+  assert.match(read('lib/ui-call-display.js'), /const root = el\('div', 'ucd-overlay'\);/, 'the view\'s root is .ucd-overlay');
+  assert.match(read('lib/ui-call-display.js'), /doc\.body\.appendChild\(ui\.root\)/, 'and it is a child of body while shown');
 });
 
 test('the phone page loads that stylesheet and its Levels button opens the Voice sheet', () => {

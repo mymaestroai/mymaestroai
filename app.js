@@ -13880,9 +13880,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceOutputNow() { const label = (voiceCallS.call && voiceCallS.micLabel) || ''; return { output: voiceOutputKind(label), label }; }
     function voiceLoudnessNow() { return voiceLoudnessFor(voicePrefsNow(), voiceOutputNow().output); }
     function voiceOutputChanged() { try { voiceLoudApply(); } catch { /* the next sentence applies it */ } voiceKeepAliveRefresh(); }   // a new mic label: the level of that output, and the keep-alive, at once
-    // The keep-alive hiss may sound only while the switch is on AND the call's audio goes to Bluetooth or a car (on a speaker it is only a
-    // hiss in the pauses, and that route never sleeps).
-    function voiceKeepAliveAllowed() { return voiceKeepAliveNow() && voiceOutputNow().output === 'bluetooth'; }
+    // The keep-alive follows the switch alone on this page, at once mid-call: a computer often plays to a Bluetooth speaker or headphones while
+    // its own microphone is open, so the microphone's label cannot tell whether the output may sleep (the phone page also asks the label).
+    function voiceKeepAliveAllowed() { return voiceKeepAliveNow(); }
     function voiceKeepAliveRefresh() { try { const k = voiceCallS.keepAlive; if (k && k.refresh) k.refresh(); } catch { /* not playing */ } }
     function voiceOutputOnDeviceChange() {   // devicechange during a call: read the open microphone's label again
       if (!voiceCallS.call) return;
@@ -13999,7 +13999,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceEchoHoldNow() { const v = voicePrefsNow().echoHold; return VOICE_ECHO_HOLDS.includes(v) ? v : 600; }
     const VOICE_ECHO_HINT = 'Keeps the agent from hearing its own reply in a car or through a speaker.';
-    const VOICE_KEEP_HINT = 'While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.';
+    const VOICE_KEEP_HINT = 'Plays a very quiet hiss during a call so a car or Bluetooth speaker does not cut the first word.';
     // The "Echo guard after replies" select (Off / 0.6 s / 1 s / 1.5 s): Settings and the chat's voice panel.
     function voiceEchoSelectHtml(id, attrs) {
       const cur = voiceEchoHoldNow();
@@ -14556,7 +14556,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow() });
       const thinking = voiceCallThinking(vad);   // makes / resumes the reply playback context (voicePlay.ctx) inside the tap
       // Keep Bluetooth awake: a very quiet hiss on the same output context as the replies; the controller starts and stops it, and it sounds
-      // only while allowed (the switch is on and the call's audio goes to Bluetooth or a car); a change of either applies at once.
+      // only while the switch is on (a change applies at once, mid-call).
       let keepAlive = null;
       if (typeof voiceCreateKeepAlive === 'function') { try { const kc = voiceOutputCtx(); if (kc) keepAlive = voiceCreateKeepAlive({ ctx: kc, allow: voiceKeepAliveAllowed }); } catch { keepAlive = null; } }
       // Audio focus: a looping media element, so a phone browser takes focus and other apps pause. Only on Android (a tablet on this page): a desktop
@@ -14750,6 +14750,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (save) { const prefs = voiceSavePrefs(localStorage, voicePrefsCache); voicePrefsCache = { ...voicePrefsCache, ...prefs, [key]: val }; }
       if (which === 'mode') voiceModePaint();
       if (which === 'echo' || which === 'keep') voiceEchoKeepPaint();   // Settings follows the panel
+      if (which === 'keep') voiceKeepAliveRefresh();   // the switch acts on a running call at once
       if (S.call && typeof S.call.setPrefs === 'function') S.call.setPrefs();
     }
     document.addEventListener('click', (e) => { if (!(e.target.closest && e.target.closest('.voice-extra'))) voicePopClose(); });

@@ -141,17 +141,19 @@ test('keep-alive: made inside the tap on voicePlay.ctx and passed as deps.keepAl
   await p;
 });
 
-test('keep-alive: made for every call but sounds only while the switch is on AND the output is Bluetooth / car; a closed voicePlay.ctx is replaced', async () => {
+test('keep-alive: made for every call, sounds while the switch is on (the label cannot tell a Bluetooth speaker here); the switch acts at once; a closed voicePlay.ctx is replaced', async () => {
   const off = makeEnv({ prefs: { keepAlive: false } });
   await off.api.voiceCallStart('c1');
   assert.strictEqual(off.log.kaCtx.length, 1, 'made even with the switch off, so switching it on mid-call works');
   const S = off.api.voiceCallS;
-  S.micLabel = 'Bluetooth headset (Hands-Free)';
+  S.micLabel = 'Built-in Microphone';
   assert.strictEqual(off.log.kaAllow(), false, 'the switch off');
   off.setPrefs({ ...off.getPrefs(), keepAlive: true });
-  assert.strictEqual(off.log.kaAllow(), true, 'the switch on, Bluetooth');
-  S.micLabel = 'Built-in Microphone';
-  assert.strictEqual(off.log.kaAllow(), false, 'a computer speaker: never');
+  assert.strictEqual(off.log.kaAllow(), true, 'the switch on: also with the computer\'s own microphone (it may play to a Bluetooth speaker)');
+  off.log.ka.length = 0;
+  off.api.voiceCtlSet('keep', false, true);
+  assert.ok(off.log.ka.includes('refresh'), 'the chat\'s voice popover switch reaches the running call at once');
+  assert.strictEqual(off.log.kaAllow(), false);
   const src = app.slice(app.indexOf('function voiceSettingsSavePrefs('), app.indexOf('function voiceSettingsSavePrefs(') + 2500);
   assert.ok(src.includes('voiceKeepAliveRefresh();'), 'the settings save applies the switch to a running call at once');
   assert.match(app, /function voiceOutputChanged\(\) \{[^\n]*voiceKeepAliveRefresh\(\); \}/, 'a new microphone label re-checks it at once');
@@ -193,7 +195,7 @@ test('Settings and the chat panel render and save the two settings', () => {
   const { api, get, log } = makeEnv({ prefs: { echoHold: 1000, keepAlive: false } });
   const s = api.voiceSettingsHtml({});
   for (const t of ['Echo guard after replies', 'Off', '0.6 s', '1 s', '1.5 s', 'Keeps the agent from hearing its own reply in a car or through a speaker.',
-    'Keep Bluetooth awake during calls', 'While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.', 'Car or Bluetooth check', 'id="st-voice-echo"', 'id="st-voice-keepalive"', 'id="st-voice-car"', 'id="st-voice-car-out"']) assert.ok(s.includes(t), t);
+    'Keep Bluetooth awake during calls', 'Plays a very quiet hiss during a call so a car or Bluetooth speaker does not cut the first word.', 'Car or Bluetooth check', 'id="st-voice-echo"', 'id="st-voice-keepalive"', 'id="st-voice-car"', 'id="st-voice-car-out"']) assert.ok(s.includes(t), t);
   assert.match(s, /<option value="1000" selected>/);
   assert.match(s, /id="st-voice-keepalive"(?![^>]*checked)/);
   const h = api.voicePopHtml('c1');

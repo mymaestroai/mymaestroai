@@ -8116,8 +8116,15 @@ function voiceCallApplyPrefs() {
   try { if (vc.keepAlive && vc.keepAlive.refresh) vc.keepAlive.refresh(); } catch { /* not playing */ }   // the Keep Bluetooth awake switch acts at once
 }
 // The keep-alive hiss may sound only while the switch is on AND the call's audio goes to Bluetooth or a car (on the phone's own
-// speaker it is only a hiss in the pauses, and that route never sleeps).
-function voiceKeepAliveAllowed() { return voicePrefsNow().keepAlive !== false && voiceOutputNow().output === 'bluetooth'; }
+// speaker it is only a hiss in the pauses, and that route never sleeps). During a call Android routes the audio with the microphone, so
+// the open microphone's label says which; until this call's microphone reports, the last call's label stands in, so a Bluetooth call
+// has its route awake from the start.
+let voiceLastMicLabel = '';
+function voiceKeepAliveAllowed() {
+  if (voicePrefsNow().keepAlive === false) return false;
+  const i = voiceCall && voiceCall.micInfo;
+  return voiceOutputKind(i && typeof i.label === 'string' ? i.label : voiceLastMicLabel) === 'bluetooth';
+}
 // The call panel's microphone line: plain text only (the label comes from the device).
 function voiceMicLine(info) {
   const i = info || {};
@@ -8233,7 +8240,7 @@ function voiceCallDeps(vc) {
     server: voiceCallServer(agent, () => vc),
     ...(vc.keepAlive ? { keepAlive: vc.keepAlive } : {}),   // the controller starts it with the call and stops it with the call
     ui: {
-      mic: (info) => { if (voiceCall !== vc) return; vc.micInfo = info || null; try { voiceLoudSync(); } catch { /* the next sentence syncs it */ } try { if (vc.keepAlive && vc.keepAlive.refresh) vc.keepAlive.refresh(); } catch { /* not playing */ } const m = $('cp-mic'); if (m && !vc.micLostOn) m.textContent = voiceMicLine(info); },   // while it is lost the line keeps saying so
+      mic: (info) => { if (voiceCall !== vc) return; vc.micInfo = info || null; if (info && typeof info.label === 'string') voiceLastMicLabel = info.label; try { voiceLoudSync(); } catch { /* the next sentence syncs it */ } try { if (vc.keepAlive && vc.keepAlive.refresh) vc.keepAlive.refresh(); } catch { /* not playing */ } const m = $('cp-mic'); if (m && !vc.micLostOn) m.textContent = voiceMicLine(info); },   // while it is lost the line keeps saying so
       micLost: (on) => {   // the call goes on; the line says the microphone is lost, the meter is empty and a tap tries it again
         if (voiceCall !== vc) return;
         vc.micLostOn = !!on;
