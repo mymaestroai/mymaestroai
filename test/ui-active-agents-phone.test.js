@@ -78,7 +78,7 @@ test('done rows carry active-done, "✓ done", no is-busy and an idle dot', () =
 
 test('the old inline row code is gone from the loop; it calls agentRowHtml', () => {
   const body = RENDER();
-  assert.ok(body.includes('html += agentRowHtml(a);'));
+  assert.ok(body.includes('html += agentRowHtml(a, { job: activeJobs[a.name] });'), 'changed: normal group rows pass the agent\'s job (none: the same markup as before)');
   assert.ok(!body.includes('class="agent-row'));
 });
 
@@ -86,8 +86,8 @@ test('renderAgents steps the section with live, streams, agents, held and enable
   const body = RENDER();
   const now = slice('function activeBusyNow()', '// The finger left');
   assert.match(now, /activeBusyFrom\(live, new Map\(\[\.\.\.streams\.keys\(\)\]\.map\(n => \[n, null\]\)\), agents\.map\(a => a\.name\)\)/);
-  // changed: the step also passes jobs (the agents' running background jobs); everything else it checks is the same
-  assert.match(body, /activeStep\(activeState, \{ busy: activeBusyNow\(\), jobs: activeJobs, now: Date\.now\(\), held: activeHeld, enabled: activeTopOn\(\) \}\)/);
+  // the step gets busy only: an agent with just a background job is not a row
+  assert.match(body, /activeStep\(activeState, \{ busy: activeBusyNow\(\), now: Date\.now\(\), held: activeHeld, enabled: activeTopOn\(\) \}\)/);
   assert.ok(body.indexOf('No agents found.') < body.indexOf('activeBusyNow('), 'after the empty-list return');
   assert.ok(body.indexOf('activeBusyNow(') < body.indexOf('const known'), 'before the groups loop');
 });
