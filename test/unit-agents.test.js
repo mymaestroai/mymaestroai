@@ -1079,3 +1079,20 @@ test('renaming onto an empty folder of the new name works (nothing of anyone\'s 
   assert.deepStrictEqual(await a.ag.renameAgent('scout', 'ranger'), { success: true, newName: 'ranger' });
   assert.ok(fs.existsSync(path.join(a.ws('ranger'), 'records', 'f.md')) && fs.existsSync(path.join(a.hub, 'data', 'sessions', 'ranger', 'n.md')));
 });
+
+test('call recordings block a rename and a delete only when a real session folder is there: a stray folder does not', async () => {
+  const a = load({ agents: [{ name: 'maestro' }, { name: 'stray' }, { name: 'kept' }, { name: 'stray2' }] });
+  chatStandIn(a);
+  const rec = (agent, ...parts) => fs.mkdirSync(path.join(a.root, 'call-recordings', agent, ...parts), { recursive: true });
+  rec('stray', 'notes-folder');   // not the store's session pattern
+  rec('kept', '20261113-220000-0a0b0c');
+  const r = await a.ag.renameAgent('stray', 'stray-moved');
+  assert.deepStrictEqual(r, { success: true, newName: 'stray-moved' }, 'only a stray folder: no block');
+  const blocked = await a.ag.renameAgent('kept', 'kept2');
+  assert.strictEqual(blocked.success, false);
+  assert.match(blocked.error, /has call recordings/);
+  assert.match((await a.ag.deleteAgent('kept')).error, /has call recordings/);
+  rec('stray2', 'something-else');
+  const del = await a.ag.deleteAgent('stray2');
+  assert.strictEqual(del.success, true, JSON.stringify(del));
+});

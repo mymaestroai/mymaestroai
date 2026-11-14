@@ -204,6 +204,7 @@ function popHtml() {
     voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceMicLevelNow: () => 50, voiceSensNow: () => 50, voiceSpeedNow: () => 1, voiceSpeedLabel: () => '1x',
     voiceThinkingOnNow: () => true, voiceThinkingVolNow: () => 0.5, voiceLoudnessSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceEchoSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, VOICE_ECHO_HINT: 'echo', VOICE_KEEP_HINT: 'keep', voiceKeepAliveNow: () => true,
     voiceWakeRowsHtml: () => '',   // the wake rows have their own tests (ui-voice-wake-pages)
+    chats: { c1: { agent: 'alice' } }, voiceFollowLine: () => '',   // agent voice defaults (part 6)
   };
   const names = Object.keys(stubs);
   const src = between(app, '    function voicePopHtml(', '    function voicePopClose(');
@@ -249,7 +250,7 @@ test('desktop: Settings Voices has st-voice-interrupt, painted from the display 
   assert.ok(/const VOICE_INTERRUPT_HINT = 'For places where talking over the reply doesn\\'t register\.';/.test(app));
   assert.ok(/CallDisplay\.loadDisplayPrefs\(localStorage\)\.interrupt === true/.test(app));
   assert.ok(/for \(const e of document\.querySelectorAll\('\.voice-pop \[data-vp="interrupt"\]'\)\) e\.checked = on;/.test(app), 'every open pop follows');
-  const save = between(app, '    function voiceSettingsSavePrefs() {', '    function voiceTestStop(');
+  const save = between(app, '    function voiceSettingsSavePrefs(changed) {', '    function voiceTestStop(');
   assert.ok(!/interrupt(?!Sensitivity)/i.test(save.replace(/interruptSensitivity|interrupt sensitivity/gi, '')), 'not part of the voice prefs');
   assert.ok(!/Talk button/i.test(app));
 });

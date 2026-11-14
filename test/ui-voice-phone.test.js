@@ -64,7 +64,7 @@ test('read aloud: speaker on assistant bubbles, sentence by sentence TTS with pr
   assert.match(js, /b\.className = 'speak'/);
   assert.match(js, /const sp = e\.target\.closest\('\.speak'\)/);
   assert.match(js, /voiceSentences\(voiceSpeechText\(markdown\)\)/);
-  assert.match(js, /api\('\/api\/voice\/tts', \{ method: 'POST', headers: \{ 'Content-Type': 'application\/json' \}, body: JSON\.stringify\(\{ agent, text, speed: voiceSpeedNow\(\) \}\) \}\)/);   // + the voice speed on every request (voice fixes 1)
+  assert.match(js, /api\('\/api\/voice\/tts', \{ method: 'POST', headers: \{ 'Content-Type': 'application\/json' \}, body: JSON\.stringify\(\{ agent, text, speed: voiceSpeedFor\(agent\) }\) \}\)/);   // + the voice speed on every request (voice fixes 1)
   assert.match(js, /next = i \+ 1 < sentences\.length \? voiceTtsBlob\(agent, sentences\[i \+ 1\]\) : null/, 'next sentence is fetched while this one plays');
   assert.match(js, /function voiceStopPlayback\(\) \{\n\s*voicePlay\.token\+\+/);
   assert.match(js, /function voiceSpeak\(markdown, agent, el\) \{\n\s*voiceStopPlayback\(\)|async function voiceSpeak\(markdown, agent, el\) \{\n\s*voiceStopPlayback\(\)/, 'a new playback stops the old one');
@@ -79,7 +79,7 @@ test('device voice fallback via speechSynthesis, gated by deviceVoiceFallback', 
   assert.match(js, /synth\.speak\(u\)/);
   assert.match(js, /window\.speechSynthesis\.cancel\(\)/);
   assert.match(js, /const fallback = voicePrefsNow\(\)\.deviceVoiceFallback/);
-  assert.match(js, /if \(fallback && await voiceDeviceSpeak\(rest, my\)\)/);
+  assert.match(js, /if \(fallback && await voiceDeviceSpeak\(rest, my, agent\)\)/);
   assert.match(js, /if \(!voiceOn\(\)\) return null;/, 'voice off: no hub call, the phone voice or a plain toast');
 });
 
@@ -117,7 +117,7 @@ test('device voice is offline only: the utterance gets a localService voice, no 
   const run = (voices) => {
     const spoken = [], toasts = [];
     const synth = { getVoices: () => voices, speak(u) { spoken.push(u); setImmediate(() => u.onend()); } };
-    const f = new Function('window', 'SpeechSynthesisUtterance', 'voicePlay', 'voiceWaitLocalVoice', 'toast', 'voiceSpeedNow', dev + '\nreturn voiceDeviceSpeak;')({ speechSynthesis: synth }, class { constructor(t) { this.text = t; } }, { token: 1 }, L.voiceWaitLocalVoice, (t) => toasts.push(t), () => 1.25);
+    const f = new Function('window', 'SpeechSynthesisUtterance', 'voicePlay', 'voiceWaitLocalVoice', 'toast', 'voiceSpeedFor', dev + '\nreturn voiceDeviceSpeak;')({ speechSynthesis: synth }, class { constructor(t) { this.text = t; } }, { token: 1 }, L.voiceWaitLocalVoice, (t) => toasts.push(t), () => 1.25);
     return f(['One.', 'Two.'], 1).then(() => ({ spoken, toasts }));
   };
   const local = { name: 'L', lang: 'en-US', localService: true, default: false };

@@ -79,7 +79,7 @@ function desktop(o) {
     window: win, document: doc, localStorage: storage, fetch: o.fetch || facesFetch(PACKS), AGENTS: o.agents || [{ name: 'bob', callDisplay: 'none' }], chats: { c1: { agent: 'bob' } },
     voiceById: (id) => doc.getElementById(id), voiceCallS: S, voiceCallRetryMicTap: () => {}, /* app.js already passes it as onRetryMic: the glue needs the name */ voiceCallHangUp: () => { log.hang++; }, voicePopToggle: () => { log.popOpened++; pop.hidden = false; }, voicePopClose: () => { log.popClosed++; pop.hidden = true; },
     CallDisplay: CD, voicePlay,
-    voiceFetchTts: async () => new ArrayBuffer(8), voiceSpeedNow: () => 1, voiceWaitLocalVoice: async () => ({ lang: 'en' }), hubToast() {}, voiceOfflineHint: '', voicePlayState() {},
+    voiceFetchTts: async () => new ArrayBuffer(8), voiceSpeedNow: () => 1, voiceSpeedFor: () => 1, voiceWaitLocalVoice: async () => ({ lang: 'en' }), hubToast() {}, voiceOfflineHint: '', voicePlayState() {},
     SpeechSynthesisUtterance: function (t) { this.text = t; }, setTimeout, clearTimeout, Promise, voiceCallRunning: () => false, hubOriginLabel: () => '', voiceSentences: (t) => [t], voiceSpeechText: (t) => t,
   };
   const names = Object.keys(stubs);
@@ -245,7 +245,7 @@ function phone(o) {
   const stubs = {
     window: win, document: doc, localStorage: storage, fetch: facesFetch(PACKS), agents: o.agents || [{ name: 'bob', callDisplay: 'none' }], current: 'bob', $: (id) => doc.getElementById(id),
     CallDisplay: CD, voicePlay, URL: URLs, Audio, voiceOn: () => true, api: async () => ({ ok: true }), toast() {},
-    voiceSpeedNow: () => 1, voiceWaitLocalVoice: async () => ({ lang: 'en' }), SpeechSynthesisUtterance: function (t) { this.text = t; }, voicePanelPaint() { state.painted++; },
+    voiceSpeedNow: () => 1, voiceSpeedFor: () => 1, voiceWaitLocalVoice: async () => ({ lang: 'en' }), SpeechSynthesisUtterance: function (t) { this.text = t; }, voicePanelPaint() { state.painted++; },
     voiceCallRetryMicTap: () => {}, /* mobile.js already passes it as onRetryMic: the glue needs the name */ voiceCallHangUp: () => { state.hung++; }, originLabel: () => '', setTimeout, clearTimeout, Promise, Blob: function Blob() {}, Float32Array, voiceEncodeWav: () => new Uint8Array(1),
   };
   const names = Object.keys(stubs);

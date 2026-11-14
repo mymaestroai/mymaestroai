@@ -44,6 +44,6 @@ test('call start, teardown and voicePaint repaint the pill (guarded calls)', () 
   const guarded = /if \(typeof voiceModeChipPaint === 'function'\) voiceModeChipPaint\(\);/;
   assert.ok(guarded.test(fnSource('voiceCallTeardown')), 'teardown');
   assert.ok(guarded.test(fnSource('voicePaint')), 'voicePaint (a chat bar drawn during a call)');
-  const start = app.slice(app.indexOf('async function voiceCallStart(chatId)'), app.indexOf('async function voiceCallStart(chatId)') + 4000);
+  const start = app.slice(app.indexOf('async function voiceCallStart(chatId)'), app.indexOf('async function voiceCallStart(chatId)') + 6000);   // the recorded-call setup made the start longer
   assert.ok(/voiceCallShowBar\(chatId\);\n\s+if \(typeof voiceModeChipPaint === 'function'\) voiceModeChipPaint\(\);/.test(start), 'start, after S.chatId is set');
 });

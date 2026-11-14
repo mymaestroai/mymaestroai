@@ -35,7 +35,7 @@ test('panel: every control of the spec is there and writes the per-device prefs'
   for (const s of ['Talk mode', 'Hands-free', 'Tap to talk', 'Voice speed', "Pause before I'm done", 'Wait for me to go on', 'Mic level', 'Interrupt sensitivity', 'Thinking sound', 'Thinking volume', 'Room check', "id('level')"]) assert.ok(h.includes(s), s);
   const keys = app.match(/const VOICE_POP_KEYS = (\{[^}]*\})/)[1];
   for (const k of ['micLevel', 'interruptSensitivity', 'voiceSpeed', 'endPause', 'continueWait', 'thinkingSound', 'thinkingVolume', 'mode']) assert.ok(keys.includes(k), k);
-  assert.match(app, /VOICE_CONTINUE_WAITS = \[1500, 3000, 5000\]/);
+  assert.match(app, /VOICE_CONTINUE_WAITS = \[1500, 3000, 5000, 8000\]/);
   assert.match(app, /document\.addEventListener\('keydown', \(e\) => \{ if \(e\.key === 'Escape'\) voicePopClose\(\); \}\)/);
 });
 
@@ -94,7 +94,7 @@ function makeEnv(opts = {}) {
     document: { hidden: false, getElementById: get, querySelectorAll: () => [], addEventListener(t, f) { docL[t] = f; }, createElement: () => el('', {}) },
     navigator: {}, localStorage: {}, fetch: async () => ({ ok: true, status: 200, json: async () => ({ call: { callId: 'k1' } }) }),
     hubToast: (t) => log.toasts.push(t), hubEsc: (s) => String(s), chats: { c1: { agent: 'alice', status: 'idle' } }, agentStatus: {},
-    voicePrefsNow: () => prefs, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
+    voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...require('../lib/ui-voice').VOICE_DEFAULT_PREFS, ...prefs }), voiceSpeedFor: () => prefs.voiceSpeed || 1, voiceFollowLine: () => '', voiceMarkChosen: require('../lib/ui-voice').voiceMarkChosen, voiceEffectivePrefs: require('../lib/ui-voice').voiceEffectivePrefs, VOICE_AGENT_DEFAULT_KEYS: require('../lib/ui-voice').VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: require('../lib/ui-voice').VOICE_DEFAULT_PREFS, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
     voiceEndPauseNow: () => prefs.endPause, voiceSpeedNow: () => prefs.voiceSpeed || 1, voiceSpeedLabel: (v) => Number(v).toFixed(2) + 'x',
     voiceCleanSpeed: (v) => Math.round(Math.max(0.75, Math.min(1.5, Number(v))) * 20) / 20,
     voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, VOICE_SPEED_HINT: '', VOICE_END_PAUSES: [800, 1200, 2000],

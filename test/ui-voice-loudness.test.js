@@ -496,8 +496,8 @@ test('desktop: voiceFetchTts tags the audio with X-Voice-Normalized and leaves t
   const mk = (header, ctx) => {
     const headers = { get: (k) => (String(k).toLowerCase() === 'x-voice-normalized' ? header : null) };
     const fetchFn = async () => ({ ok: true, status: 200, headers, arrayBuffer: async () => new ArrayBuffer(4) });
-    return new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window', 'fetch', 'voiceSpeedNow', 'voiceBusyToast',
-      desk() + '\n' + fetchSrc + '; return { voiceOutNode, voiceFetchTts, voiceNoteNormalized };')({ call: {} }, () => ({ loudness: 'louder' }), V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {}, fetchFn, () => 1, () => false);
+    return new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window', 'fetch', 'voiceSpeedNow', 'voiceBusyToast', 'voiceSpeedFor',
+      desk() + '\n' + fetchSrc + '; return { voiceOutNode, voiceFetchTts, voiceNoteNormalized };')({ call: {} }, () => ({ loudness: 'louder' }), V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {}, fetchFn, () => 1, () => false, () => 1);   // voiceSpeedFor: the agent's voice defaults (stub)
   };
   let ctx = fakeCtx(); let env = mk('1', ctx);
   env.voiceOutNode(ctx); env.voiceNoteNormalized(true); assert.strictEqual(ctx.__voiceLoudness.gainDb, 4, 'a normalised local reply is playing at +4');
@@ -514,7 +514,7 @@ test('desktop: voiceFetchTts tags the audio with X-Voice-Normalized and leaves t
   assert.ok(iRead > 0 && iRead < iDecode && iDecode < iTok && iTok < iNote && iNote < iStart, 'read, decode, token check, apply, start');
   assert.ok(!fetchSrc.includes('voiceNoteNormalized'), 'the fetch never touches the chain');
   assert.ok(app.includes('normalized: c ? !!c.normalized : voiceNormFlag'), '__voiceOut reports normalized');
-  const bare = new Function('fetch', 'voiceSpeedNow', 'voiceBusyToast', fetchSrc + '; return voiceFetchTts;')(async () => ({ ok: true, status: 200, headers: { get: () => '1' }, arrayBuffer: async () => new ArrayBuffer(1) }), () => 1, () => false);
+  const bare = new Function('fetch', 'voiceSpeedNow', 'voiceBusyToast', 'voiceSpeedFor', fetchSrc + '; return voiceFetchTts;')(async () => ({ ok: true, status: 200, headers: { get: () => '1' }, arrayBuffer: async () => new ArrayBuffer(1) }), () => 1, () => false, () => 1);   // voiceSpeedFor: stub
   assert.strictEqual((await bare('a', 't')).byteLength, 1);
 });
 test('phone: voiceTtsBlob tags the blob with X-Voice-Normalized and leaves the live chain alone; voicePlayBlob applies it at play', async () => {
@@ -524,8 +524,8 @@ test('phone: voiceTtsBlob tags the blob with X-Voice-Normalized and leaves the l
     const api = async () => ({ ok: true, status: 200, headers, blob: async () => ({ size: 4 }) });
     const prefs = { loudness: 'louder', loudnessBt: 'normal' };
     const state = { voiceCall: { thinkCtx: null, micInfo: { label: '' } }, voiceDisp: { cur: null, shared: { ctx, routes: new WeakMap() } }, voicePlay: { audio: null } };
-    return new Function('state', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'window', 'api', 'voiceOn', 'voiceSpeedNow', 'toast',
-      'let voiceCall = state.voiceCall; const voiceDisp = state.voiceDisp, voicePlay = state.voicePlay;\n' + phoneSrc() + '\n' + blobSrc + '; return { voiceOutNode, voiceTtsBlob, voiceNoteNormalized };')(state, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, {}, api, () => true, () => 1, () => {});
+    return new Function('state', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'window', 'api', 'voiceOn', 'voiceSpeedNow', 'toast', 'voiceSpeedFor',
+      'let voiceCall = state.voiceCall; const voiceDisp = state.voiceDisp, voicePlay = state.voicePlay;\n' + phoneSrc() + '\n' + blobSrc + '; return { voiceOutNode, voiceTtsBlob, voiceNoteNormalized };')(state, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, {}, api, () => true, () => 1, () => {}, () => 1);   // voiceSpeedFor: the agent's voice defaults (stub)
   };
   let ctx = fakeCtx(); let env = mk('1', ctx);
   env.voiceOutNode(ctx); env.voiceNoteNormalized(true); assert.strictEqual(ctx.__voiceLoudness.gainDb, 4);

@@ -33,7 +33,7 @@ function callEnv(over) {
   const created = { kaCtx: [], vadOpts: null, deps: null, ka: null, vad: null, call: null };
   const env = {
     window: win, current: 'bob', toast: (t) => log.push('toast:' + t), voiceOn: () => true, voiceRec: { state: 'idle' }, voiceMicCancel() {}, voiceTest: { handle: null }, voiceTestStop() {}, voiceRoomStop() {},
-    voiceStopPlayback() {}, voiceUnlockAudio() {}, voicePrefsNow: () => prefs, voiceEndPauseNow: () => 1200, voiceEndedBar() {}, voiceCallBgNote: false,
+    voiceStopPlayback() {}, voiceUnlockAudio() {}, voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...prefs, endPause: 1200 }), voiceEndPauseNow: () => 1200, voiceEndedBar() {}, voiceCallBgNote: false,
     voiceCreateVad: (opts) => { created.vadOpts = opts; created.vad = { setMicLevel() {}, setInterruptSensitivity() {}, setEndPause() {}, setEchoHold: (ms) => log.push('setEchoHold:' + ms), setPlaybackActive() {}, stop() {} }; return created.vad; },
     voiceCreateCall: (deps) => { created.deps = deps; created.call = { start: () => new Promise(() => {}), retryMic: () => { log.push('retryMic'); return Promise.resolve(true); }, hangUp: () => { log.push('hangUp'); return Promise.resolve([]); }, setPrefs() {} }; return created.call; },
     voiceCreateKeepAlive: (opts) => { created.kaCtx.push(opts.ctx); created.ka = { running: false, start() { this.running = true; log.push('ka.start'); }, stop() { this.running = false; log.push('ka.stop'); } }; return created.ka; },

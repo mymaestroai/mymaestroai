@@ -42,7 +42,11 @@
     async function loadMe() {
       try {
         const r = await fetch('/api/me', { credentials: 'include' });
-        if (r.ok) window.hubMe = await r.json();
+        if (r.ok) {
+          window.hubMe = await r.json();
+          // Signed in: recorded-call pieces the hub never acknowledged (a closed tab, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
+          if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe.user.id }); } catch { /* the call page's code is not up yet */ } }, 0);
+        }
         else if (r.status === 401) {
           // No session. On a hub with no accounts at all (updated from before multi-user) /api/me is refused too, so
           // ask the public auth status; hubMe stays undefined so the rest of the page behaves as before.
@@ -5317,6 +5321,7 @@
         const data = await response.json();
         AGENTS = data.agents || [];
         if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
+        { const ri = document.getElementById('recordings-item'); if (ri) ri.style.display = AGENTS.some(a => a && a.recordings && a.recordings.canDownload === true) ? '' : 'none'; }   // ⋯ menu: Recordings only for a person on at least one agent's download list
         for (const a of AGENTS) { if (a.owner) agentOwnerCache.set(a.name, a.owner); else agentOwnerCache.delete(a.name); }
         if (!CYBER_MODELS.size) loadCyberModels();
         // Newer hubs report busy/busySince/activity/pendingQuestion per agent; older ones do not (then no dots are drawn).
@@ -10512,8 +10517,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
     const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
     const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
-    const VOICE_END_PAUSES = [800, 1200, 2000];   // 'Pause before I'm done': short / normal / long, in ms
-    const VOICE_CONTINUE_WAITS = [1500, 3000, 5000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
+    const VOICE_END_PAUSES = [800, 1200, 2000, 4000];   // 'Pause before I'm done': short / normal / long / very long, in ms
+    const VOICE_CONTINUE_WAITS = [1500, 3000, 5000, 8000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
     const VOICE_ECHO_HOLDS = [0, 600, 1000, 1500];   // 'Echo guard': how long the raised barge-in thresholds stay after playback stops, in ms (0 = off)
     const VOICE_WAKE_QUIET_MS = [10000, 20000, 45000];   // 'Go back to standby after': how long a quiet call stays awake (default 20000)
     const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder', loudnessBt: 'normal' };
@@ -10522,6 +10527,40 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
     }
     function voiceSpeedLabel(v) { return voiceCleanSpeed(v).toFixed(2) + 'x'; }
+    // Agent-level voice defaults: an admin sets them on an agent; a device follows them for every key the person has not set there.
+    const VOICE_AGENT_DEFAULT_KEYS = ['endPause', 'continueWait', 'interruptSensitivity', 'voiceSpeed'];
+    const VOICE_PRESETS = { patient: { endPause: 4000, continueWait: 8000, interruptSensitivity: 30, voiceSpeed: 0.9 } };
+    function voiceCleanAgentDefaults(raw) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+      const out = {};
+      const preset = typeof raw.preset === 'string' && Object.prototype.hasOwnProperty.call(VOICE_PRESETS, raw.preset) ? raw.preset : '';
+      if (preset) out.preset = preset;
+      const num = (v) => typeof v === 'number' && Number.isFinite(v);
+      const valid = { endPause: (v) => VOICE_END_PAUSES.includes(v), continueWait: (v) => VOICE_CONTINUE_WAITS.includes(v), interruptSensitivity: num, voiceSpeed: num };
+      // each key: the raw value when it is valid, else the preset's (a bad value never cancels the preset)
+      for (const k of VOICE_AGENT_DEFAULT_KEYS) {
+        const v = valid[k](raw[k]) ? raw[k] : (preset ? VOICE_PRESETS[preset][k] : undefined);
+        if (v === undefined) continue;
+        out[k] = k === 'interruptSensitivity' ? Math.max(0, Math.min(100, v)) : k === 'voiceSpeed' ? voiceCleanSpeed(v) : v;
+      }
+      return out;
+    }
+    function voiceMarkChosen(prefs, keys) {
+      const p = Object.assign({}, prefs);
+      const have = Array.isArray(p.chosen) ? p.chosen : [];
+      p.chosen = VOICE_AGENT_DEFAULT_KEYS.filter(k => have.includes(k) || (Array.isArray(keys) && keys.includes(k)));
+      return p;
+    }
+    // The prefs a call with this agent uses: the agent's default for each key the person has not set on this device.
+    function voiceEffectivePrefs(prefs, agentDefaults) {
+      const p = Object.assign({}, prefs);
+      const d = voiceCleanAgentDefaults(agentDefaults);
+      const chosen = Array.isArray(p.chosen) ? p.chosen : [];
+      for (const k of VOICE_AGENT_DEFAULT_KEYS) {
+        if (d[k] !== undefined && !chosen.includes(k) && p[k] === VOICE_DEFAULT_PREFS[k]) p[k] = d[k];
+      }
+      return p;
+    }
     // The spoken-text cleaner's pieces (see voiceSpeechText).
     const VOICE_SYMBOLS_RE = new RegExp('[\\u2190-\\u2BFF\\u2022\\u00B7]', 'g');
     const VOICE_NUM_EN_DASH_RE = new RegExp('(\\d)\\s*\\u2013\\s*(?=\\d)', 'g');
@@ -10728,6 +10767,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
         p.wake = wake;
       }
+      // chosen: the agent-default keys the person set on this device (the key exists only when the raw prefs carried an array)
+      if (Array.isArray(raw.chosen)) p.chosen = VOICE_AGENT_DEFAULT_KEYS.filter(k => raw.chosen.includes(k));
       return p;
     }
     // The wake phrase of an agent from the cleaned prefs: { on, phrase, quietMs } or null.
@@ -11289,6 +11330,20 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
       let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0, thinkDueAt = 0, thinkSeed = 0;
       let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
+      // Recording (deps.recorder, only for an agent that keeps recordings; without it none of this acts). recDecided: the decision for the speech now
+      // under way was made (at its begin); recOn: it is being recorded. Nothing said in standby is ever recorded: the decision is made at speech begin.
+      // deps.recordTranscript(seq, text) and deps.recordReplyText(text) hand the saved text to the page.
+      const recorder = d.recorder || null;
+      let recDecided = false, recOn = false, replyRecorded = false;
+      function recBegin() {
+        if (!recorder || recDecided) return;
+        recDecided = true;
+        if (!standby) { recOn = true; quiet(() => recorder.begin()); }
+      }
+      function recDrop() {
+        recDecided = false;
+        if (recOn) { recOn = false; quiet(() => recorder.drop()); }
+      }
       // deps.keepAlive ({ start(), stop() }, optional): an inaudible sound that keeps a Bluetooth / car audio route awake. It starts with the call and
       // the first spoken line of the call waits until VOICE_CALL_LEAD_IN_MS after that (the route needs a moment to open, or the first syllable is lost).
       let leadInUntil = 0, keepAliveOn = false, micLost = false;
@@ -11520,12 +11575,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       function onReplyText(full, done) {
         if (ended) return;
         lastText = String(full == null ? '' : full); lastDone = !!done;
+        if (!done) replyRecorded = false;   // a reply is being written: its text is saved once, when complete
         if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
         const r = voiceReplySentences(lastText, !!done);
         if (r.sentences.length < spokenCount) spokenCount = 0;
         if (cutSkip) spokenCount = r.sentences.length;
         else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
         if (done) {
+          if (recorder && !replyRecorded && lastText.trim()) { replyRecorded = true; quiet(() => d.recordReplyText(lastText)); }
           if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply');
           noteSpoken = true; awaitingReply = false;
           clearStill(); stopThinking(); quiet(() => ui.activity(''));
@@ -11663,8 +11720,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         segLinkGen = linkLost ? -1 : linkGen;
         clearBegin();
         segmentStarting();
+        recBegin();
         // Real speech, a misfire and an end all clear this timer, so when it fires no real start came: let the false start go.
-        beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; capWake = null; segmentDropped(); settle(); } }, 4000);
+        beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; capWake = null; recDrop(); segmentDropped(); settle(); } }, 4000);
       }
       // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
       function onSpeechStart() {
@@ -11675,6 +11733,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         personSpeaking = true; stopThinking(); clearQuiet();
         quiet(() => ui.reply('drop'));   // real speech: a reaction that has not played is dropped
         segmentStarting();
+        recBegin();   // no onSpeechBegin came first (a begin already decided this speech)
         if (!standby && (speaking || queue.length)) {   // in standby a sound does not cut the reading ("<phrase>, stop" does, once heard)
           const noteText = voiceSpeechText('| a |');   // the details note is a reply item but not one of the counted sentences
           const items = (current ? [current] : []).concat(queue);
@@ -11690,7 +11749,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
       function onMisfire() {
         if (ended) return;
-        clearBegin(); segmentDropped();
+        clearBegin(); segmentDropped(); recDrop();
         personSpeaking = false; speechAnn = null; capWake = null;
         quiet(() => ui.reply('resume'));
         const rec = cutRec; cutRec = null;
@@ -11714,6 +11773,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       function onSpeechEnd(audio) {
         if (ended) return Promise.resolve();
         clearBegin();
+        // The recorded audio of this speech (null when it was not recorded: standby, paused, no recorder): its transcript is saved below.
+        const recHandle = recOn ? quiet(() => recorder.end()) || null : null;
+        recOn = false; recDecided = false;
         personSpeaking = false; speechEndAt = now(); cutRec = null;
         // sb and seq: was this said in standby (when it began, or now), and how many wakes had there been. Said in standby, it needs the phrase unless a wake came
         // in between (the phrase said alone, then this): so neither a switch-off nor a lost recognizer check can release it.
@@ -11736,6 +11798,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             if (mustMatch() && !(w0 && w0.local === true)) return;   // standby without a recognizer known to be local: not even transcribed
             const dropLong = mustMatch() && !!audio && audio.length > 30 * 16000;   // a long stretch of talk in standby is not transcribed at all
             try { text = dropLong || stale() ? '' : await d.stt(audio); } catch { failed = true; if (!mustMatch() && !linkLost) quiet(() => ui.toast('Could not transcribe that.')); }
+            // The person's words for this piece, as the recognizer gave them, are saved with its audio (also a filler or text that is not sent).
+            if (recHandle && !failed && !dropLong && !stale() && String(text || '').trim()) quiet(() => d.recordTranscript(recHandle.seq, String(text).trim()));
             if (ended || stale()) return;   // heard around an outage: dropped, not sent (also when the link came back while this waited)
             const own = String(text || '').trim(), n = voiceCallNorm(own);
             const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
@@ -11821,10 +11885,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try {
           if (quiet(() => d.isTurnRunning())) {
             if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
-            awaitingReply = true; replyEnded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
+            awaitingReply = true; replyEnded = false; replyRecorded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
             await d.interject(t);
           } else {
-            awaitingReply = true; replyEnded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+            awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
             quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
             await d.send(t);
           }
@@ -11917,6 +11981,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         hbTimer = pumpTimer = quietTimer = chimeTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); clearStill(); stopThinking();
         for (const s of [lastSeg, curCand]) if (s) { if (s.hold) s.hold.resolve(null); if (s.onJoin) { const f = s.onJoin; s.onJoin = null; quiet(f); } }   // a held or waiting transcript is let go with the call
         quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
+        if (recorder) { recOn = false; quiet(() => recorder.stop()); }
         if (keepAliveOn) { keepAliveOn = false; quiet(() => d.keepAlive.stop()); }
       }
       // Immediate hang-up, for a page that is being hidden, frozen or closed (reason: 'hidden', 'pagehide', 'freeze', ...): everything is
@@ -12062,9 +12127,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // auto gain first, exactly as ever. A refusal by the person or the browser (NotAllowedError, SecurityError, AbortError) ends it; any other failure
     // (OverconstrainedError, NotReadableError, TypeError, NotSupportedError, NotFoundError: some Bluetooth and car inputs cannot do those) gets ONE more
     // try with plain { audio: true }; when that fails too, the FIRST error is thrown. -> Promise of { stream, fallback }.
-    async function voiceOpenMicStream(nav) {
-      const md = nav.mediaDevices;
-      try { return { stream: await md.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }), fallback: false }; } catch (first) {
+    // o.unprocessed (a call whose voice is recorded, mic 'unprocessed'): the first try asks for echo cancellation, noise suppression and auto gain OFF; the ladder is the same after that.
+    async function voiceOpenMicStream(nav, o) {
+      const md = nav.mediaDevices, on = !(o && o.unprocessed);
+      try { return { stream: await md.getUserMedia({ audio: { echoCancellation: on, noiseSuppression: on, autoGainControl: on } }), fallback: false }; } catch (first) {
         const name = first && first.name;
         if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'AbortError') throw first;
         try { return { stream: await md.getUserMedia({ audio: true }), fallback: true }; } catch { throw first; }
@@ -12328,7 +12394,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const holdMs = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : VOICE_ECHO_HOLD_MS; };
       const st = { micLevel: o.micLevel, sens: o.interruptSensitivity, pause: pause(o.endPause), playing: false, vad: null, ctx: null, gain: null, raw: null, dest: null, gen: 0,
         hold: o.echoHoldMs === undefined ? VOICE_ECHO_HOLD_MS : holdMs(o.echoHoldMs), holdTimer: null, nav: null, handlers: {}, src: null, track: null, trackOff: null,
-        mdOff: null, devTimer: null, reopening: null, info: null, defSnap: null };
+        mdOff: null, devTimer: null, reopening: null, info: null, defSnap: null,
+        unprocessed: !!o.unprocessed,   // the call's own microphone is opened with echo cancellation, noise suppression and auto gain off (a recorded call, mic 'unprocessed': the fallback)
+        recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [] };   // the recording's own second microphone track (openRecordingTap) and who follows the tap
       const win = () => o.win || window;
       const setT = o.setTimer || ((fn, ms) => { const w = win(); return (typeof w.setTimeout === 'function' ? w.setTimeout.bind(w) : setTimeout)(fn, ms); });
       const clearT = o.clearTimer || ((id) => { const w = win(); return (typeof w.clearTimeout === 'function' ? w.clearTimeout.bind(w) : clearTimeout)(id); });
@@ -12343,7 +12411,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (st.vad) st.vad.setOptions({ positiveSpeechThreshold: t.positiveSpeechThreshold, negativeSpeechThreshold: t.negativeSpeechThreshold, minSpeechMs: t.minSpeechFrames * 32 });
       };
       // The microphone helpers. A handler (onMicInfo, onMicChange) must never break the microphone.
-      const call = (name, arg) => { try { const f = st.handlers[name]; if (typeof f === 'function') f(arg); } catch { /* the handler's own problem */ } };
+      const callH = (name, arg) => { try { const f = st.handlers[name]; if (typeof f === 'function') f(arg); } catch { /* the handler's own problem */ } };
+      const call = callH;
       const rawTrack = (raw) => { try { const l = raw && (raw.getAudioTracks ? raw.getAudioTracks() : (raw.getTracks ? raw.getTracks() : [])); return (l && l[0]) || null; } catch { return null; } };
       // { label, sampleRate, channelCount, echoCancellation, fallback } from the track (each may be missing; the rate then is the context's).
       function micInfo(raw, fallback) {
@@ -12357,8 +12426,61 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // (NotAllowedError, SecurityError, AbortError) ends it; any other failure (OverconstrainedError, NotReadableError, TypeError, NotSupportedError,
       // NotFoundError: some Bluetooth and car inputs cannot do those) gets ONE more try with plain { audio: true }; when that fails too, the FIRST error is thrown.
       async function openMic() {
-        const r = await voiceOpenMicStream(st.nav);
+        const r = await voiceOpenMicStream(st.nav, { unprocessed: st.unprocessed });
         return { raw: r.stream, fallback: r.fallback };
+      }
+      // The recording follows the microphone: handlers registered with onSourceChange(fn) get the node to tap (recordingNode()) after every swap.
+      const recordingNode = () => st.recSrc || st.src;
+      function fireSource() { for (const f of st.srcWatchers.slice()) { try { f(recordingNode()); } catch { /* the watcher's own problem */ } } }
+      function flushOpen(ok) { const w = st.openWaiters; st.openWaiters = []; for (const f of w) { try { f(ok); } catch { /* gone */ } } }
+      function dropRecording() {
+        if (st.recOff) { try { st.recOff(); } catch { /* gone */ } }
+        const s = st.recSrc, r = st.recRaw;
+        st.recOff = st.recTrack = st.recSrc = st.recRaw = null;
+        if (s) { try { s.disconnect(); } catch { /* gone */ } }
+        if (r) voiceStopStream(r);
+      }
+      // The recording's microphone (a recorded call). Not unprocessed: the call's own source is tapped ('processed'). Unprocessed: a SECOND stream is opened with
+      // echo cancellation, noise suppression and auto gain off (the call track's device when known) and used only when its track says echo cancellation is off
+      // ('second-track'); else it is let go and the call's own microphone is opened again without that processing ('call-track'; 'processed' if even that failed).
+      // -> Promise of { processing, node } (node: what the recorder taps).
+      async function openRecordingTap(unprocessed) {
+        if (!st.ctx || !st.src) return { processing: 'processed', node: null };
+        if (!unprocessed) return { processing: 'processed', node: st.src };
+        const my = st.gen;
+        let dev;
+        try { dev = st.track && typeof st.track.getSettings === 'function' ? st.track.getSettings().deviceId : undefined; } catch { dev = undefined; }
+        const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+        if (dev) audio.deviceId = dev;
+        let raw = null;
+        try { raw = await st.nav.mediaDevices.getUserMedia({ audio }); } catch { raw = null; }
+        if (raw) {
+          voiceTrackLive(raw);
+          if (st.gen !== my || !st.ctx) { voiceStopStream(raw); return { processing: 'processed', node: null }; }
+          const tr = rawTrack(raw);
+          let ec;
+          try { ec = tr && typeof tr.getSettings === 'function' ? tr.getSettings().echoCancellation : undefined; } catch { ec = undefined; }
+          if (ec === false) {
+            let src;
+            try { src = st.ctx.createMediaStreamSource(raw); } catch { src = null; }
+            if (src) {
+              dropRecording();
+              st.recRaw = raw; st.recSrc = src; st.recTrack = tr;
+              if (tr && typeof tr.addEventListener === 'function') {
+                // The second track ended: the recording goes back to the call's own microphone, opened without processing.
+                const f = () => { if (st.recTrack !== tr) return; dropRecording(); st.unprocessed = true; reopen('recording', true).then(() => fireSource(), () => fireSource()); };
+                tr.addEventListener('ended', f);
+                st.recOff = () => { if (typeof tr.removeEventListener === 'function') tr.removeEventListener('ended', f); };
+              }
+              return { processing: 'second-track', node: src };
+            }
+          }
+          voiceStopStream(raw);   // processing is still on (or unusable): not used
+        }
+        if (st.gen !== my || !st.ctx) return { processing: 'processed', node: null };
+        st.unprocessed = true;
+        const ok = await reopen('recording', true);
+        return { processing: ok ? 'call-track' : 'processed', node: st.src };
       }
       function unwatchTrack() {
         if (st.trackOff) { try { st.trackOff(); } catch { /* gone */ } }
@@ -12381,6 +12503,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           st.track = tr;
           st.trackOff = () => { if (typeof tr.removeEventListener === 'function') tr.removeEventListener('ended', f); };
         }
+        fireSource();
       }
       // The 'default' audio input as it was at the last open (its group and label change when the system switches, for example to a car).
       async function snapDefault() {
@@ -12422,10 +12545,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // ONE attempt (with the constraint ladder), never two at once: a reopen in flight absorbs further triggers (and answers them with its own
       // result). Success: the new source is attached, onMicInfo and onMicChange({ ok: true, info, reason, changed }) (changed: the label differs from
       // before). Failure: onMicChange({ ok: false, reason, error }); the speech detector keeps running on the silent destination and nothing is retried.
-      function reopen(reason) {
+      // silent (the recording's own reopen): the result is not reported through onMicChange (nothing is said to the person).
+      function reopen(reason, silent) {
         if (st.reopening) return st.reopening;
         if (!st.ctx || !st.gain || !st.nav) return Promise.resolve(false);
         const my = st.gen, prev = st.info ? st.info.label : '';
+        const call = silent ? ((name, arg) => { if (name !== 'onMicChange') callH(name, arg); }) : callH;
         st.reopening = (async () => {
           let res;
           try { res = await openMic(); } catch (error) { if (st.gen === my) call('onMicChange', { ok: false, reason, error }); return false; }
@@ -12498,6 +12623,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               }
               snapDefault();
               call('onMicInfo', st.info);
+              flushOpen(true);
               return dest.stream;
             },
             pauseStream: async () => {}, resumeStream: async (s) => s,
@@ -12519,7 +12645,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           });
           if (stale()) throw new Error('stopped');
           await st.vad.start();
-        } catch (e) { if (!stale()) await stop(); else await release(); throw e; }
+        } catch (e) { flushOpen(false); if (!stale()) await stop(); else await release(); throw e; }
       }
       // Lets go of everything this adapter holds: MicVAD, the raw microphone stream, the processed stream (the destination's
       // tracks) and the audio context, so other apps can use the microphone at once.
@@ -12531,6 +12657,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         unwatchTrack();
         if (st.mdOff) { st.mdOff(); st.mdOff = null; }
         const src = st.src;
+        flushOpen(false); dropRecording(); st.srcWatchers = [];
         st.vad = st.raw = st.dest = st.ctx = st.gain = st.src = st.defSnap = null;
         if (src) { try { src.disconnect(); } catch { /* gone */ } }
         voiceStopStream(raw); voiceStopStream(dest);   // first, so the microphone is free even when the rest is slow
@@ -12559,10 +12686,468 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // Opens the microphone again (the same path as a lost or changed one, reason 'manual'): a promise of true / false.
         reopen() { return reopen('manual'); },
         info() { return st.info; },
+        // The recording's taps (a recorded call): tapNode() is the call's current microphone source (before the Mic level gain); recordingNode() is what the
+        // recorder listens to (the second track's source when openRecordingTap made one, else tapNode()); onSourceChange(fn) calls fn(recordingNode()) after
+        // every swap of the source (a reopen); whenOpen() -> Promise of true once the microphone is open (false: the start failed or the adapter was released);
+        // audioContext() is the call's AudioContext; openRecordingTap(unprocessed) -> { processing, node } (see its doc above).
+        tapNode() { return st.src; },
+        recordingNode,
+        onSourceChange(fn) { if (typeof fn === 'function') st.srcWatchers.push(fn); },
+        whenOpen() { return st.info && st.src ? Promise.resolve(true) : new Promise((resolve) => { st.openWaiters.push(resolve); }); },
+        audioContext() { return st.ctx; },
+        openRecordingTap,
         setMicLevel(v) { st.micLevel = v; if (st.gain) st.gain.gain.value = voiceGainFromSlider(v); },
         setInterruptSensitivity(v) { st.sens = v; apply(); },
         // 'Pause before I'm done': only the END of a turn waits this long; the start of speech (barge-in) is not delayed.
         setEndPause(ms) { st.pause = pause(ms); if (st.vad) st.vad.setOptions({ redemptionMs: st.pause }); },
+      };
+    }
+    // The recorder of a recorded call (only made when the agent keeps recordings). It taps an audio node (the microphone source) on the call's own
+    // AudioContext and keeps the last prerollMs of audio in a ring buffer; begin() opens a segment with that preroll in front, end() closes it, encodes
+    // 16-bit PCM mono WAV at ctx.sampleRate (never resampled) and uploads it. opts: { ctx, source, upload(segment) -> Promise<{ seq }>, now, setTimer, clearTimer,
+    // prerollMs = 600, maxMs = 3 min, onTrouble(reason) }. A segment is { wav: Uint8Array, startedAt, endedAt (ms), sampleRate }.
+    // The tap is an AudioWorkletNode (a processor from a Blob URL) when ctx.audioWorklet exists, else a ScriptProcessorNode (4096); either way it goes to a
+    // zero-gain node to ctx.destination, so it runs and makes no sound.
+    // begin() is ignored while a segment is open or while paused. drop() discards the open segment. end() -> { seq: Promise<number|null> } or null; seq is
+    // null when the upload finally failed. A segment longer than maxMs is cut at maxMs and the rest goes on as a new one (the handle is the last piece's).
+    // pause(true): the open segment is SENT first (what was already said is kept), then nothing is captured; it returns flushed() (a promise that resolves when
+    // every upload queued or in flight before the pause has finished, resolved or given up); pause(false) resumes. flushed() is that promise at any time.
+    // cut() sends the open segment and goes on with a new one (a page being hidden or closed: the piece is on its way and stored). ready: a promise of true (the tap
+    // is made) or false (it could not be). setSource(node) moves the tap; stop() sends the open segment (the words being said at hang-up; not while paused) and
+    // disconnects (uploads in flight go on while the page is open; the hub takes a call's last pieces for 60 minutes after it ends).
+    // Uploads (opts.agent, callId, speaker 'person' name the piece in the store): each piece is written to IndexedDB (database 'hub-rec-pending', store 'pieces',
+    // opts.store overrides; none or a failing one: memory only, the call is never held) BEFORE its first try and deleted when the hub answers 2xx or finally refuses.
+    // At most 2 uploads at once; a failed one is tried again after waits of 1, 2, 4, 8, 15, 30, 60 s, then every 60 s, until 55 minutes after the piece's end;
+    // a 4xx other than 408 and 429 is final (the upload function gives 409, paused or no call, as a result, which is final too). onTrouble('upload_failed') is
+    // called ONCE, when the first piece has been failing for more than 60 s (it still retries) or when one is given up. The transcript of a piece that is resent
+    // after a reload (voiceRecResendPending) is lost: the audio is what matters.
+    const VOICE_REC_WORKLET = 'class VoiceRecTap extends AudioWorkletProcessor { constructor() { super(); this.b = new Float32Array(1024); this.n = 0; } process(inputs) { const c = inputs[0] && inputs[0][0]; if (!c) return true; for (let k = 0; k < c.length; k++) { this.b[this.n++] = c[k]; if (this.n === 1024) { const o = this.b; this.port.postMessage(o, [o.buffer]); this.b = new Float32Array(1024); this.n = 0; } } return true; } } registerProcessor("voice-rec-tap", VoiceRecTap);';
+    function voiceWavFromFloat(samples, rate) {
+      const n = samples.length, out = new Uint8Array(44 + n * 2), dv = new DataView(out.buffer);
+      const tag = (at, s) => { for (let i = 0; i < s.length; i++) out[at + i] = s.charCodeAt(i); };
+      tag(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE'); tag(12, 'fmt '); dv.setUint32(16, 16, true);
+      dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true);
+      dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); tag(36, 'data'); dv.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) { const v = Math.max(-1, Math.min(1, Number(samples[i]) || 0)); dv.setInt16(44 + i * 2, Math.round(v * 32767), true); }
+      return out;
+    }
+    // The pieces the hub has not acknowledged yet, kept in IndexedDB so a flaky network, a closed tab or a reload does not lose them (the hub takes a call's pieces for
+    // 60 minutes after it ends, so a piece is kept for 55). voiceRecStore(idb) -> { put(record), del(id), all() } (each a Promise that never rejects: put / del give
+    // true or false, all gives an array), or null when there is no IndexedDB. A record is { id, agent, callId, speaker, startedAt, endedAt (ms), wav (ArrayBuffer),
+    // createdAt (ms) }. The database opens at once and put() starts its transaction synchronously once it is open, so a page that is closing still gets its piece written.
+    const VOICE_REC_KEEP_MS = 55 * 60 * 1000;
+    const VOICE_REC_UNREADABLE = { unreadable: true };
+    function voiceRecStore(idb) {
+      if (!idb || typeof idb.open !== 'function') return null;
+      let db = null, opening = null;
+      const open = () => opening || (opening = new Promise((resolve) => {
+        try {
+          const req = idb.open('hub-rec-pending', 1);
+          req.onupgradeneeded = () => { try { req.result.createObjectStore('pieces', { keyPath: 'id' }); } catch { /* it exists */ } };
+          req.onsuccess = () => { db = req.result; resolve(db); };
+          req.onerror = () => resolve(null);
+          req.onblocked = () => resolve(null);
+        } catch { resolve(null); }
+      }));
+      const run = (mode, fn, bad) => new Promise((resolve) => {
+        const go = (d) => {
+          if (!d) { resolve(bad); return; }
+          try {
+            const tx = d.transaction('pieces', mode), r = fn(tx.objectStore('pieces'));
+            tx.oncomplete = () => resolve(mode === 'readonly' ? r.result : true);
+            tx.onerror = () => resolve(bad); tx.onabort = () => resolve(bad);
+          } catch { resolve(bad); }
+        };
+        if (db) go(db); else open().then(go, () => resolve(bad));
+      });
+      open();
+      return { put: (rec) => run('readwrite', (st) => st.put(rec), false), del: (id) => run('readwrite', (st) => st.delete(id), false),
+        all: () => run('readonly', (st) => st.getAll(), []).then((v) => (Array.isArray(v) ? v : [])),
+        // get: the record, or null when it is not there; it REJECTS when it could not be read (a missing record means "sent by another tab", an unreadable one is a failed try)
+        get: (id) => run('readonly', (st) => st.get(id), VOICE_REC_UNREADABLE).then((v) => { if (v === VOICE_REC_UNREADABLE) throw new Error('the stored piece could not be read'); return v || null; }) };
+    }
+    const voiceRecShared = { store: undefined, resending: false };   // store: made on first use (undefined = not tried yet, null = this browser has none)
+    function voiceRecStoreOf(idb) {
+      if (idb !== undefined) return voiceRecStore(idb);
+      if (voiceRecShared.store === undefined) voiceRecShared.store = voiceRecStore(typeof indexedDB !== 'undefined' ? indexedDB : null);
+      return voiceRecShared.store;
+    }
+    // piece: the piece's id (letters, digits, _ and -, 8 to 64 characters): the hub answers the same piece sent again with the first answer.
+    function voiceRecSegmentUrl(agent, callId, speaker, startedAt, endedAt, piece) {
+      const iso = (ms) => new Date(ms).toISOString();
+      return '/api/recordings/segment?agent=' + encodeURIComponent(agent) + '&callId=' + encodeURIComponent(callId || '') + '&speaker=' + speaker
+        + '&startedAt=' + encodeURIComponent(iso(startedAt)) + '&endedAt=' + encodeURIComponent(iso(endedAt)) + (piece ? '&piece=' + encodeURIComponent(piece) : '');
+    }
+    const voiceRecLive = new Set();   // ids of the pieces a live recorder is still sending: the resend leaves them alone
+    // Sends every stored piece that is less than 55 minutes old, one at a time, and deletes older ones (the hub no longer takes them). fetch(url, init) answers like
+    // fetch. A piece is deleted when the hub answers 2xx or refuses it for good (409, or a 4xx other than 408 / 429 / 401: a sign-in that ran out keeps the audio);
+    // a 5xx, 413, 401 and so on on one piece leaves that piece for the next pass and goes on to the next piece; only no network at all (fetch throws) stops the pass.
+    // Pieces belong to a person: only those stored with the signed-in user's id (opts.userId) are sent. Another person's pieces, and pieces with no userId, are left alone
+    // (not sent, not deleted) until they are 55 minutes old. With no userId known, nothing is sent. Every try carries the piece's id (&piece=): the hub answers a piece it
+    // has already taken with the first answer. Called at page start (after sign-in is known) and when a call starts.
+    // The transcript of a piece resent this way is lost (it needs the seq of the first upload); the audio is what matters.
+    // opts: { store, indexedDB, now, userId }. -> { sent, dropped, kept }
+    async function voiceRecResendPending(fetchFn, opts) {
+      const x = opts || {}, out = { sent: 0, dropped: 0, kept: 0 };
+      if (voiceRecShared.resending || typeof fetchFn !== 'function') return out;
+      const userId = x.userId === undefined || x.userId === null ? '' : String(x.userId);
+      if (!userId) return out;
+      const store = x.store !== undefined ? x.store : voiceRecStoreOf(x.indexedDB);
+      if (!store) return out;
+      voiceRecShared.resending = true;
+      try {
+        const now = typeof x.now === 'function' ? x.now() : Date.now();
+        const all = (await store.all()).filter(r => r && r.id && !voiceRecLive.has(r.id)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        for (let i = 0; i < all.length; i++) {
+          const r = all[i];
+          if (!(now - Number(r.createdAt) < VOICE_REC_KEEP_MS)) { await store.del(r.id); out.dropped++; continue; }
+          if (!r.userId || String(r.userId) !== userId) continue;   // somebody else's piece, or nobody's: left alone
+          let res;
+          try { res = await fetchFn(voiceRecSegmentUrl(r.agent, r.callId, r.speaker || 'person', r.startedAt, r.endedAt, r.id), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: new Uint8Array(r.wav) }); } catch { out.kept += all.length - i; break; }
+          const s = Number(res && res.status);
+          if (res && (res.ok || s === 409 || (s >= 400 && s < 500 && s !== 408 && s !== 429 && s !== 401 && s !== 413))) { await store.del(r.id); out.sent += res.ok ? 1 : 0; out.dropped += res.ok ? 0 : 1; } else out.kept++;
+        }
+      } catch { /* the next pass tries again */ } finally { voiceRecShared.resending = false; }
+      return out;
+    }
+    function voiceCreateRecorder(opts) {
+      const o = opts || {}, ctx = o.ctx;
+      const clock = typeof o.now === 'function' ? o.now : () => Date.now();
+      const setT = o.setTimer || ((fn, ms) => setTimeout(fn, ms)), clrT = o.clearTimer || ((id) => clearTimeout(id));
+      const rate = ctx.sampleRate;
+      const preMs = Number.isFinite(Number(o.prerollMs)) ? Number(o.prerollMs) : 600;
+      // A long stretch of talk is cut into pieces of at most 3 minutes (about 35 MB of samples in memory at 48 kHz, a 17 MB upload), so a phone never holds more.
+      const maxMs = Number.isFinite(Number(o.maxMs)) && Number(o.maxMs) > 0 ? Number(o.maxMs) : 3 * 60 * 1000;
+      const preSamples = Math.round(rate * preMs / 1000), maxSamples = Math.round(rate * maxMs / 1000);
+      let src = null, tap = null, zero = null, url = null, ring = [], ringN = 0, seg = null, paused = false, stopped = false, troubled = false;
+      let inflight = 0; const waiting = [], jobs = new Set();
+      const store = o.store !== undefined ? o.store : voiceRecStoreOf();
+      const WAITS = [1000, 2000, 4000, 8000, 15000, 30000, 60000], GIVE_UP_MS = 55 * 60 * 1000, TROUBLE_MS = 60 * 1000;
+      let counter = 0, lost = 0;
+      const userId = o.userId === undefined || o.userId === null ? '' : String(o.userId);
+      const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
+      const concat = (chunks, n) => { const out = new Float32Array(n); let at = 0; for (const c of chunks) { out.set(c, at); at += c.length; } return out; };
+      // A 401 (the sign-in ran out) is retryable: the audio is kept and tried again on the normal schedule.
+      const retryable = (e) => { const s = e && Number(e.status); return !(s >= 400 && s < 500 && s !== 408 && s !== 429 && s !== 401); };
+      function trouble() { if (troubled) return; troubled = true; if (typeof o.onTrouble === 'function') quiet(() => o.onTrouble('upload_failed')); }
+      const failing = () => { for (const j of jobs) if (j.failedAt !== undefined && !j.over) return true; return false; };
+      // Every piece that failed has since been sent (none given up, none failing): the people are told it is fine again (onRecover); a later failure tells them again.
+      // keep: the stored copy stays (the hub refused the piece because the call is not recording: voiceRecResendPending may still place it under the person's own id).
+      function finish(job, seq, sent, keep) {
+        job.over = true; job.keep = keep === true; jobs.delete(job); voiceRecLive.delete(job.id); if (store && !job.keep) Promise.resolve(quiet(() => store.del(job.id))).catch(() => {});
+        if (!sent) lost++;
+        if (sent && troubled && !lost && !failing()) { troubled = false; if (typeof o.onRecover === 'function') quiet(() => o.onRecover()); }
+        job.resolve(seq);
+      }
+      // One try of a piece. A piece that fails is tried again later (its slot is free meanwhile) until the hub has it, refuses it for good, or time is up.
+      // A piece whose copy is in the store (its put succeeded) has no WAV in memory: it is read back for each try; a read that fails counts as a failed try.
+      async function attempt(job) {
+        try {
+          let seg = job.segment;
+          if (!seg.wav) {
+            // The read-back is raced against 2 s: a store that hangs counts as one failed try (the slot is freed, the piece is tried again later).
+            let rec = null;
+            if (store && typeof store.get === 'function') {
+              let timer = null;
+              const timeout = new Promise((_, no) => { timer = setT(() => no(new Error('the stored piece could not be read in time')), 2000); });
+              try { rec = await Promise.race([Promise.resolve(store.get(job.id)), timeout]); } finally { if (timer !== null) quiet(() => clrT(timer)); }
+            }
+            // No record at all: another tab (its resend) sent the piece and deleted it. It was sent: no trouble, no failure.
+            if (rec === null || rec === undefined) { finish(job, null, true); return; }
+            if (!rec.wav) throw new Error('the stored piece could not be read');
+            seg = { wav: new Uint8Array(rec.wav), startedAt: seg.startedAt, endedAt: seg.endedAt, sampleRate: seg.sampleRate, piece: seg.piece };
+          }
+          const r = await o.upload(seg);
+          if (r && r.status === 409) {   // the hub's answer is no: not sent, and not retried live. Only piece_conflict (a different body under that id) leaves nothing to resend.
+            finish(job, null, false, r.error !== 'piece_conflict'); return;
+          }
+          finish(job, r && Number.isInteger(r.seq) ? r.seq : null, true); return;
+        } catch (e) {
+          if (!retryable(e)) { trouble(); finish(job, null, false); return; }
+          const now = clock(), first = job.failedAt === undefined;
+          if (first) job.failedAt = now;
+          else if (now - job.failedAt > TROUBLE_MS) trouble();
+          if (now - job.segment.endedAt >= GIVE_UP_MS) { trouble(); finish(job, null); return; }
+          const wait = WAITS[Math.min(job.fails++, WAITS.length - 1)];
+          setT(() => { waiting.push(job); pump(); }, wait);
+          if (first) setT(() => { if (!job.over) trouble(); }, TROUBLE_MS + 1);   // still failing after a minute: the people are told while it goes on trying
+        }
+      }
+      function pump() {
+        while (inflight < 2 && waiting.length) {
+          const job = waiting.shift(); inflight++;
+          attempt(job).then(() => { inflight--; pump(); });
+        }
+      }
+      function send(samples, startedAt, endedAt) {
+        const wav = voiceWavFromFloat(samples, rate);
+        return new Promise((resolve) => {
+          // The piece's id: base36 parts joined with '-', 8 to 64 characters of [A-Za-z0-9_-] (the hub's rule); it is sent as &piece= on every try, so a retry is never a second piece.
+          const id = Date.now().toString(36) + '-' + (counter++).toString(36) + '-' + Math.random().toString(36).slice(2, 8).padEnd(4, '0');
+          const segment = { wav, startedAt, endedAt, sampleRate: rate, piece: id };
+          const job = { id, segment, resolve, fails: 0, over: false };
+          jobs.add(job); voiceRecLive.add(job.id);
+          job.done = new Promise((r) => { job.settle = r; });
+          const was = job.resolve; job.resolve = (v) => { was(v); job.settle(); };
+          const go = () => { waiting.push(job); pump(); };
+          let saved = null;
+          if (store) saved = quiet(() => store.put({ id: job.id, userId, agent: String(o.agent || ''), callId: String(o.callId || ''), speaker: o.speaker || 'person', startedAt, endedAt,
+            wav: wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength), createdAt: clock() }));   // written BEFORE the first try
+          if (saved && typeof saved.then === 'function') {
+            // A store that hangs does not hold the call's uploads: after 2 s the piece goes to the network anyway (its copy stays in memory). Once the put has succeeded the
+            // copy in memory is dropped (a long outage must not fill a phone) and each try reads it back from the store.
+            let t = null, done = false;
+            const next = (ok) => {
+              if (done) { if (ok === true && job.over && !job.keep) quiet(() => store.del(job.id)); return; }   // a put that finished after the piece was already sent leaves nothing behind
+              done = true; if (t !== null) quiet(() => clrT(t));
+              if (ok === true && typeof store.get === 'function') segment.wav = null;
+              go();
+            };
+            t = setT(() => next(false), 2000);
+            saved.then(next, () => next(false));
+          } else go();
+        });
+      }
+      function flushed() { return Promise.all(Array.from(jobs).map(j => j.done)).then(() => undefined); }
+      function onChunk(f32) {
+        if (stopped || paused || !f32 || !f32.length) return;
+        ring.push(f32); ringN += f32.length;
+        while (ring.length > 1 && ringN - ring[0].length >= preSamples) ringN -= ring.shift().length;
+        if (!seg) return;
+        seg.chunks.push(f32); seg.samples += f32.length;
+        while (seg && seg.samples > maxSamples) {   // cut at maxMs; the rest goes on as a new segment
+          const all = concat(seg.chunks, seg.samples), cutAt = seg.startedAt + maxMs;
+          send(all.subarray(0, maxSamples), seg.startedAt, cutAt);
+          const rest = all.subarray(maxSamples);
+          seg = { chunks: [rest], samples: rest.length, startedAt: cutAt };
+        }
+      }
+      function connectSource(node) {
+        if (src && tap) quiet(() => src.disconnect(tap));
+        src = node || null;
+        if (src && tap) quiet(() => src.connect(tap));
+      }
+      function makeTap() {
+        zero = ctx.createGain(); zero.gain.value = 0; zero.connect(ctx.destination);
+        const sp = () => {
+          tap = ctx.createScriptProcessor(4096, 1, 1);
+          tap.onaudioprocess = (e) => { const d = e && e.inputBuffer && e.inputBuffer.getChannelData(0); if (d) onChunk(new Float32Array(d)); };
+          tap.connect(zero); connectSource(src);
+        };
+        const W = o.AudioWorkletNode || (typeof AudioWorkletNode !== 'undefined' ? AudioWorkletNode : null);
+        const B = o.Blob || (typeof Blob !== 'undefined' ? Blob : null), U = o.URL || (typeof URL !== 'undefined' ? URL : null);
+        if (ctx.audioWorklet && W && B && U) {
+          url = U.createObjectURL(new B([VOICE_REC_WORKLET], { type: 'application/javascript' }));
+          return Promise.resolve(ctx.audioWorklet.addModule(url)).then(() => {
+            if (stopped) return;
+            tap = new W(ctx, 'voice-rec-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 1, channelCountMode: 'explicit' });
+            tap.port.onmessage = (e) => onChunk(e.data);
+            tap.connect(zero); connectSource(src);
+          }).catch(() => { if (!stopped) sp(); });
+        }
+        sp();
+        return Promise.resolve();
+      }
+      src = o.source || null;
+      const ready = Promise.resolve().then(makeTap).then(() => !!tap || stopped, () => false);   // false: the tap could not be made, nothing will be recorded
+      return {
+        ready,
+        flushed,
+        // A page being hidden or closed: the open segment is sent now (written to IndexedDB first) and a new one goes on from here; not while paused.
+        cut() {
+          if (stopped || paused || !seg || seg.samples <= 0) return;
+          const s = seg, at = clock();
+          send(concat(s.chunks, s.samples), s.startedAt, at);
+          seg = { chunks: [], samples: 0, startedAt: at };
+        },
+        begin() {
+          if (stopped || paused || seg) return;
+          const all = concat(ring, ringN), take = Math.min(all.length, preSamples);
+          const pre = all.subarray(all.length - take);
+          seg = { chunks: [pre], samples: pre.length, startedAt: clock() - Math.round(take * 1000 / rate) };
+        },
+        drop() { seg = null; },
+        end() {
+          if (!seg) return null;
+          const s = seg; seg = null;
+          if (s.samples <= 0) return null;
+          return { seq: send(concat(s.chunks, s.samples), s.startedAt, clock()) };
+        },
+        // pause(true) first sends the open segment (as end() does), then stops capturing; it returns flushed(): every upload queued or in flight so far.
+        pause(on) {
+          if (!on) { paused = false; return Promise.resolve(); }
+          if (!paused && !stopped && seg && seg.samples > 0) { const s = seg; send(concat(s.chunks, s.samples), s.startedAt, clock()); }
+          paused = true; seg = null; ring = []; ringN = 0;
+          return flushed();
+        },
+        setSource(node) { connectSource(node); },
+        // Hang-up: what the person was saying at that moment is kept (sent like any other piece), then the tap is let go.
+        stop() {
+          if (stopped) return;
+          if (seg && !paused && seg.samples > 0) { const s = seg; send(concat(s.chunks, s.samples), s.startedAt, clock()); }
+          stopped = true; seg = null; ring = []; ringN = 0;
+          if (src && tap) quiet(() => src.disconnect(tap));
+          src = null;
+          if (tap) { quiet(() => { tap.onaudioprocess = null; }); quiet(() => { if (tap.port) tap.port.onmessage = null; }); quiet(() => tap.disconnect()); }
+          if (zero) quiet(() => zero.disconnect());
+          if (url) { quiet(() => (o.URL || URL).revokeObjectURL(url)); url = null; }
+        },
+        get paused() { return paused; },
+      };
+    }
+    // What the hub answers a call start with when the agent keeps recordings but its speech recognition is not on this computer (409 recording_needs_local_stt).
+    const VOICE_REC_NEEDS_LOCAL = 'This agent keeps recordings of its calls, and recordings are only made with speech recognition on this computer. An admin can switch this agent\'s speech recognition to this computer on its settings page.';
+    // The agent's recordings setting as the page needs it (GET /api/agents gives `recordings` on each agent): keep on or off, and the microphone mode.
+    function voiceRecSettings(agentRecord) {
+      const r = agentRecord && typeof agentRecord === 'object' ? agentRecord.recordings : null;
+      return { keep: !!(r && r.keep === true), mic: r && r.mic === 'unprocessed' ? 'unprocessed' : 'processed' };
+    }
+    // The page's side of a recorded call (made only when the agent's recordings.keep is true; the pages never call it otherwise). One per call.
+    // o: { agent, userId (the signed-in user's id: stored with every piece, so only that person's page resends it), vad (the adapter: whenOpen, openRecordingTap, audioContext, recordingNode, onSourceChange, info), fetch(url, init), nav, unprocessed (mic 'unprocessed'),
+    //      wired (deps.recorder was given to the controller: false makes a recording answer an error), speak(line) -> Promise (the consent line, in the agent's voice),
+    //      playback(on) (the page tells the speech detector a line is playing), badge(state) ('on' | 'trouble' | 'paused' | 'error' | 'stopped'), toast(msg), onNetFail(e),
+    //      now, setTimer, clearTimer, createRecorder (default voiceCreateRecorder), waitMs (how long the start waits for the microphone, default 15000) }
+    // -> { device() (Promise of the start body's device: userAgent, micLabel, sampleRate, processing), recorder (the controller's deps.recorder: begin, drop, end, stop),
+    //      recordTranscript(seq, text), recordReplyText(text), started(recording, callId) (the start answer's `recording`: the consent line, the recorder, the badge),
+    //      togglePause(wantPaused), replyAudio(arrayBuffer) (a spoken reply sentence's WAV: uploaded as speaker 'agent' only when the agent keeps replies), trouble(reason), stop(),
+    //      get state() }
+    function voiceCreateRecordingSession(o) {
+      const q = o || {}, agent = String(q.agent || '');
+      const clock = typeof q.now === 'function' ? q.now : () => Date.now();
+      const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
+      let callId = null, sessionId = null, keepReplies = false, recorder = null, tap = null, active = false, paused = false, state = 'off', troubled = false, uploadTrouble = false, ended = false, consenting = false, replyCount = 0;
+      const iso = (ms) => new Date(ms).toISOString();
+      const show = (s) => { state = s; quiet(() => q.badge(s)); };
+      async function postJson(path, body) {
+        let r;
+        try { r = await q.fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { quiet(() => q.onNetFail && q.onNetFail(e)); throw e; }
+        let j = {}; try { j = await r.json(); } catch { /* no body */ }
+        if (!r.ok) { const e = new Error(j.error || 'HTTP ' + r.status); e.status = r.status; throw e; }
+        return j;
+      }
+      // One audio segment. 409 (paused, or the call is over) is not a failure: nothing is kept on purpose. A 4xx other than 408 / 429 carries .status (the recorder does not retry it).
+      // piece: the piece's id (&piece=): the same on every try of the same piece, so the hub never takes it twice.
+      async function sendAudio(speaker, body, startedAt, endedAt, piece) {
+        const url = voiceRecSegmentUrl(agent, callId, speaker, startedAt, endedAt, piece);
+        let r;
+        try { r = await q.fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body }); } catch (e) { quiet(() => q.onNetFail && q.onNetFail(e)); throw e; }
+        if (r.ok) { let j = {}; try { j = await r.json(); } catch { /* no body */ } return { seq: j.seq }; }
+        // 409 is the hub's answer, not a failure of the network: { seq: null, status: 409, error } where error is its code ('not_recording' when it gave none, or 'piece_conflict').
+        // The recorder ends the piece's live tries on it but keeps the stored copy unless the code is piece_conflict.
+        if (r.status === 409) { let j = {}; try { j = await r.json(); } catch { /* no body */ } return { seq: null, status: 409, error: j && typeof j.error === 'string' && j.error ? j.error : 'not_recording' }; }
+        let j = {}; try { j = await r.json(); } catch { /* no body */ }
+        const e = new Error('HTTP ' + r.status); e.status = r.status; if (j && typeof j.error === 'string') e.code = j.error; throw e;
+      }
+      // An upload that has been failing for a minute does NOT stop the recording: 'trouble' ("Recording (some speech not sent yet)", red dot, Pause stays) while it
+      // keeps trying. 'stopped' is only for a recording that really cannot go on (the recorder could not be made, or its tap failed: start_failed).
+      function trouble(reason) {
+        if (reason === 'upload_failed') { uploadTrouble = true; if (state === 'on') show('trouble'); }   // the badge follows every failure (it went back to normal when the pieces were sent) ...
+        if (troubled) return;   // ... but the hub is told only once
+        troubled = true;
+        if (reason !== 'upload_failed' && (state === 'on' || state === 'trouble' || state === 'paused')) show('stopped');   // "Recording stopped" for the rest of the call; the call carries on
+        if (callId) postJson('/api/recordings/trouble', { agent, callId, reason }).catch(() => {});
+      }
+      // Every piece that failed has been sent since: the badge goes back to 'on' (or 'paused'). The hub was told once already and is not told again.
+      function recovered() { uploadTrouble = false; if (state === 'trouble') show(live()); }
+      const proxy = {
+        begin() { if (active && recorder) recorder.begin(); },
+        drop() { if (recorder) recorder.drop(); },
+        end() { return active && recorder ? recorder.end() : null; },
+        stop() { ended = true; active = false; if (recorder) quiet(() => recorder.stop()); },
+      };
+      const live = () => (paused ? 'paused' : uploadTrouble ? 'trouble' : 'on');   // what the badge says while the recording goes on
+      return {
+        recorder: proxy,
+        get state() { return state; },
+        // Waits (up to waitMs) for the call's microphone, then makes the recording's tap. Never throws: a missing field is simply not sent.
+        async device() {
+          const nav = q.nav || (typeof navigator !== 'undefined' ? navigator : {});
+          const dev = { userAgent: String(nav.userAgent || '') };
+          let open = false;
+          try {
+            let wait = null;
+            open = await Promise.race([Promise.resolve(q.vad.whenOpen()), new Promise((resolve) => { wait = (q.setTimer || setTimeout)(() => resolve(false), Number.isFinite(Number(q.waitMs)) ? Number(q.waitMs) : 15000); })]);
+            if (wait !== null) quiet(() => (q.clearTimer || clearTimeout)(wait));
+          } catch { open = false; }
+          if (open !== true) return dev;
+          try { tap = await q.vad.openRecordingTap(q.unprocessed === true); if (tap && tap.processing) dev.processing = tap.processing; } catch { tap = null; }
+          const info = quiet(() => q.vad.info()), ctx = quiet(() => q.vad.audioContext());
+          if (info && typeof info.label === 'string') dev.micLabel = info.label;
+          if (ctx && Number.isInteger(ctx.sampleRate)) dev.sampleRate = ctx.sampleRate;
+          return dev;
+        },
+        // The start answer's `recording`: { sessionId, consentLine, keepReplies, mic } or { error }. The consent line is spoken first (not recorded), then the
+        // consent is posted and the recorder starts. A line that could not be spoken (TTS failed) changes nothing else: the text is on screen.
+        async started(rec, id) {
+          callId = id || null;
+          if (!rec || rec.error || !rec.sessionId || q.wired === false) { show('error'); trouble('start_failed'); return; }   // "Not recording": the hub could not start it (or this page cannot make it); the call carries on
+          sessionId = rec.sessionId; keepReplies = rec.keepReplies === true;
+          show('on');
+          let spoken = true;
+          if (rec.consentLine) {
+            // The line gets at most 20 s; after that the call carries on as if it had played. A line that failed or timed out is put on screen (toast) and the hub is told.
+            consenting = true; quiet(() => q.playback && q.playback(true));
+            let cut = null;
+            try {
+              spoken = await Promise.race([Promise.resolve(q.speak(String(rec.consentLine))).then(() => true, () => false),
+                new Promise((resolve) => { cut = (q.setTimer || setTimeout)(() => resolve(false), 20000); })]);
+            } catch { spoken = false; }
+            if (cut !== null) quiet(() => (q.clearTimer || clearTimeout)(cut));
+            consenting = false; quiet(() => q.playback && q.playback(false));
+            if (!spoken && !ended) quiet(() => q.toast(String(rec.consentLine)));
+          }
+          if (ended) return;
+          postJson('/api/recordings/consent', spoken ? { agent, callId } : { agent, callId, spoken: false }).catch(() => {});
+          const ctx = quiet(() => q.vad.audioContext()), node = (tap && tap.node) || quiet(() => q.vad.recordingNode());
+          const make = q.createRecorder || voiceCreateRecorder;
+          try {
+            recorder = make({ ctx, source: node, now: clock, setTimer: q.setTimer, clearTimer: q.clearTimer, prerollMs: 600, agent, callId, speaker: 'person', userId: q.userId,
+              upload: (seg) => sendAudio('person', seg.wav, seg.startedAt, seg.endedAt, seg.piece), onTrouble: (reason) => trouble(reason), onRecover: () => recovered() });
+            quiet(() => q.vad.onSourceChange((n) => { if (recorder && n) recorder.setSource(n); }));
+            if (paused) recorder.pause(true);
+            active = true;
+            // The tap could not be made (ready false): nothing will be recorded. The call carries on.
+            Promise.resolve(recorder.ready).then((ok) => { if (ok === false && !ended) { active = false; if (state !== 'stopped') show('stopped'); trouble('start_failed'); } }, () => {});
+          } catch { recorder = null; trouble('start_failed'); }
+        },
+        // The person's words for one recorded piece, saved with its audio (seq is the recorder handle's promise: null when its upload failed).
+        async recordTranscript(seq, text) {
+          let n = null; try { n = await seq; } catch { n = null; }
+          if (!Number.isInteger(n) || !callId) return;
+          try { await postJson('/api/recordings/transcript', { agent, callId, seq: n, text: String(text), engine: 'local' }); } catch { /* the audio is kept without its text */ }
+        },
+        recordReplyText(text) {
+          if (!sessionId || !callId || paused || ended || !String(text || '').trim()) return;
+          postJson('/api/recordings/text', { agent, callId, text: String(text), at: iso(clock()) }).catch(() => {});
+        },
+        // The Pause / Resume button. The badge follows the server's answer; on a failure the old state stays and a short toast is shown.
+        // Pausing first keeps what was already said: the recorder sends its open segment and stops capturing, and the hub is asked to pause at once (it takes pieces
+        // while paused, so nothing waits for them). If the hub's answer is an error, capture goes back to what it was.
+        async togglePause(want) {
+          if (!callId || (state !== 'on' && state !== 'trouble' && state !== 'paused')) return;
+          const old = paused;
+          try {
+            if (want && recorder) recorder.pause(true);   // nothing more is captured at once
+            const j = await postJson('/api/recordings/pause', { agent, callId, paused: !!want });
+            paused = j.paused === true;
+            if (recorder) recorder.pause(paused);
+            if (state === 'on' || state === 'trouble' || state === 'paused') show(live());
+          } catch {
+            if (recorder) recorder.pause(old);
+            quiet(() => q.toast('Could not change the recording. It stays as it was.'));
+          }
+        },
+        replyAudio(buf) {
+          if (!active || !keepReplies || paused || consenting || ended || state === 'stopped' || !buf || !callId) return;
+          let ms = 0;
+          try { const dv = new DataView(buf); if (dv.byteLength >= 44 && dv.getUint32(28, true) > 0) ms = Math.round(dv.getUint32(40, true) * 1000 / dv.getUint32(28, true)); } catch { ms = 0; }
+          const at = clock();
+          sendAudio('agent', buf, at, at + ms, Date.now().toString(36) + '-' + (replyCount++).toString(36) + '-' + Math.random().toString(36).slice(2, 8).padEnd(4, '0')).catch(() => { /* a reply sentence that was not kept is not an alarm: the person's side is what is watched */ });
+        },
+        trouble,
+        // The page is being hidden or closed: what the person is saying now is sent (stored in IndexedDB first). The call is not ended.
+        flushOpen() { if (active && recorder && typeof recorder.cut === 'function') quiet(() => recorder.cut()); },
+        stop() { proxy.stop(); },
       };
     }
     // The wake chime: two soft sine notes (660 Hz, then 880 Hz), 110 ms each, 40 ms apart, peak gain 0.08 (10 ms attack, exponential decay).
@@ -12660,10 +13245,26 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceSensNow() { const v = Number(voicePrefsNow().interruptSensitivity); return Number.isFinite(v) ? v : 50; }
     function voiceEndPauseNow() { const v = Number(voicePrefsNow().endPause); return VOICE_END_PAUSES.includes(v) ? v : 1200; }
     function voiceSpeedNow() { const v = voicePrefsNow().voiceSpeed; return voiceCleanSpeed(v == null ? 1 : v); }
-    const voicePauseSelectHtml = (id, attrs) => `<select id="${id}" ${attrs} style="padding:4px">${VOICE_END_PAUSES.map((ms, i) => `<option value="${ms}"${ms === voiceEndPauseNow() ? ' selected' : ''}>${['Short', 'Normal', 'Long'][i]}</option>`).join('')}</select>`;
+    const voicePauseSelectHtml = (id, attrs) => `<select id="${id}" ${attrs} style="padding:4px">${VOICE_END_PAUSES.map((ms, i) => `<option value="${ms}"${ms === voiceEndPauseNow() ? ' selected' : ''}>${['Short', 'Normal', 'Long', 'Very long (4 s)'][i]}</option>`).join('')}</select>`;
     const VOICE_SPEED_HINT = 'Google voices ignore this setting.';
     // VOICE_CONTINUE_WAITS ("Wait for me to go on") comes from the shared voice helpers block above.
     function voiceContinueWaitNow() { const v = Number(voicePrefsNow().continueWait); return VOICE_CONTINUE_WAITS.includes(v) ? v : 3000; }
+    // The agent's voice defaults (admin-set, from GET /api/agents) and the prefs a call with that agent uses: the device's own
+    // values, except a key the agent gives a default for that the person has not set on this device (voiceEffectivePrefs).
+    function voiceAgentRecord(agent) { return (typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(a => a && a.name === agent) || null; }
+    function voiceAgentDefaultsOf(agent) { const a = voiceAgentRecord(agent); return a && a.voiceDefaults && typeof a.voiceDefaults === 'object' ? a.voiceDefaults : null; }
+    function voiceEffNow(agent) { return voiceEffectivePrefs(voicePrefsNow(), voiceAgentDefaultsOf(agent)); }
+    function voiceCallAgent() { const c = voiceCallS.chatId && chats[voiceCallS.chatId]; return c && c.agent ? c.agent : ''; }
+    function voiceSpeedFor(agent) { const v = voiceEffNow(agent).voiceSpeed; return voiceCleanSpeed(v == null ? 1 : v); }
+    // "Following <agent>'s default: <value>" under a control while the agent's default is the one in force for that key.
+    function voiceFollowLine(agent, key) {
+      const d = voiceAgentDefaultsOf(agent);
+      const own = voicePrefsNow();
+      if (!d || d[key] === undefined || (own.chosen || []).includes(key) || own[key] !== VOICE_DEFAULT_PREFS[key]) return '';   // the agent's default is in force only for a key the person has not set here
+      const a = voiceAgentRecord(agent), name = (a && a.display) || capName(agent);
+      const label = key === 'endPause' || key === 'continueWait' ? `${d[key] / 1000} s` : key === 'voiceSpeed' ? voiceSpeedLabel(d[key]) : String(d[key]);
+      return `<div class="vp-display-note voice-follow" data-follow="${key}">Following ${hubEsc(name)}'s default: ${label}</div>`;
+    }
     function voiceThinkingOnNow() { return voicePrefsNow().thinkingSound !== false; }
     function voiceThinkingVolNow() { const v = Number(voicePrefsNow().thinkingVolume); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5; }
     function voiceModeLabel() { return voicePrefsNow().mode === 'tap' ? 'Tap to talk' : 'Hands-free'; }
@@ -12826,7 +13427,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voicePlay.btn = null;
     }
     async function voiceFetchTts(agent, text, voice) {
-      const body = { agent, text, speed: voiceSpeedNow() };
+      const body = { agent, text, speed: voiceSpeedFor(agent) };
       if (voice) body.voice = voice;
       const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
       let r;
@@ -12842,6 +13443,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try { norm = !!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1'); } catch { norm = false; }
       const buf = await r.arrayBuffer();
       try { buf.__voiceNorm = norm; } catch { /* the flag is applied only when this audio starts playing (voicePlayHub) */ }
+      try { if (voiceCallS.rec) voiceCallS.rec.replyAudio(buf.slice(0)); } catch { /* a recorded call keeps this sentence's audio only when the agent keeps replies; never breaks the reading */ }   // a copy: decodeAudioData takes the original
       return buf;
     }
     // Play sentences with the hub voice; on a failure throws an Error whose .at is the sentence that could not be played.
@@ -12876,7 +13478,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // The device voice is used only when it is an offline one (localService): a browser's default voice may be an online
     // service. No offline voice: nothing is spoken and the person is told.
-    async function voicePlayDevice(sentences, from, my) {
+    async function voicePlayDevice(sentences, from, my, agent) {
       const voice = await voiceWaitLocalVoice(window.speechSynthesis, 'en', 1000);
       if (voicePlay.token !== my) return;
       if (!voice) { hubToast(voiceOfflineHint); return; }
@@ -12884,7 +13486,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (voicePlay.token !== my) return;
         await new Promise((res) => {
           const u = new SpeechSynthesisUtterance(sentences[i]);
-          u.voice = voice; u.lang = voice.lang; u.rate = voiceSpeedNow();
+          u.voice = voice; u.lang = voice.lang; u.rate = voiceSpeedFor(agent);
           const dsp = (k) => { if (typeof voiceDisplaySpeech === 'function') voiceDisplaySpeech(k); };
           u.onstart = () => { dsp('start'); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('caption', sentences[i]); };
           u.onboundary = () => dsp('boundary'); u.onpause = () => dsp('pause'); u.onresume = () => dsp('resume');
@@ -12912,7 +13514,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           }
         } else if (voiceDeviceFallback()) useDevice = true;
         else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
-        if (useDevice) await voicePlayDevice(sentences, from, my);
+        if (useDevice) await voicePlayDevice(sentences, from, my, agent);
       } finally {
         if (voicePlay.token === my) { voicePlayState(btn, false); voicePlay.btn = null; }
       }
@@ -12955,9 +13557,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += `<div class="st-hint" style="margin-top:10px">On this device only:</div>`;
       h += row('Mic level', `<input type="range" min="0" max="100" step="1" id="st-voice-mic" value="${voiceMicLevelNow()}" oninput="voiceSettingMicInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-mic-val" style="min-width:2.5em;display:inline-block">${voiceMicLevelNow()}</span> <span class="voice-meter"><i id="st-voice-meter"></i></span> <button class="st-test-btn" id="st-voice-testmic" type="button" onclick="voiceTestMic()">Test the mic</button>`);
       h += row('Talk mode', `<select id="st-voice-mode" onchange="voiceSettingsSavePrefs()" style="padding:4px"><option value="handsfree" ${p.mode !== 'tap' ? 'selected' : ''}>Hands-free</option><option value="tap" ${p.mode === 'tap' ? 'selected' : ''}>Tap to talk</option></select>`);
-      h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
-      h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs()"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s.</span>`);
-      h += row('Voice speed', `<input type="range" min="0.75" max="1.5" step="0.05" id="st-voice-speed" value="${voiceSpeedNow()}" oninput="voiceSettingSpeedInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-speed-val" style="min-width:3.5em;display:inline-block">${voiceSpeedLabel(voiceSpeedNow())}</span> <span class="st-hint" style="margin:0 0 0 8px">${VOICE_SPEED_HINT}</span>`);
+      h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs('interruptSensitivity')" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
+      h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs(\'endPause\')"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s.</span>`);
+      h += row('Voice speed', `<input type="range" min="0.75" max="1.5" step="0.05" id="st-voice-speed" value="${voiceSpeedNow()}" oninput="voiceSettingSpeedInput(this)" onchange="voiceSettingsSavePrefs('voiceSpeed')" style="width:180px"> <span id="st-voice-speed-val" style="min-width:3.5em;display:inline-block">${voiceSpeedLabel(voiceSpeedNow())}</span> <span class="st-hint" style="margin:0 0 0 8px">${VOICE_SPEED_HINT}</span>`);
       h += row('Voice loudness, speaker', `${voiceLoudnessSelectHtml('st-voice-loudness', 'onchange="voiceSettingsSavePrefs()"', 'loudness')} <span class="st-hint" style="margin:0 0 0 8px">Makes the agent's voice louder during calls on the computer's speaker.</span>`);
       h += row('Voice loudness, Bluetooth / car', `${voiceLoudnessSelectHtml('st-voice-loudness-bt', 'onchange="voiceSettingsSavePrefs()"', 'loudnessBt')} <span class="st-hint" style="margin:0 0 0 8px">Used while a Bluetooth headset or a car is the call's microphone. A car has its own amplifier, so Normal is usually right.</span>`);
       h += row('Activity', `<label style="${CHK}"><input type="checkbox" id="st-voice-speakactivity" ${p.speakActivity ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Say what the agent is doing</label>`);
@@ -13049,7 +13651,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const v = voiceById('st-voice-mic-val'); if (v) v.textContent = el.value;
       if (voiceTest.mic) voiceTest.mic.setGain(Number(el.value));
     }
-    function voiceSettingsSavePrefs() {
+    function voiceSettingsSavePrefs(changed) {   // changed: the agent-default key the person just changed (endPause, interruptSensitivity, voiceSpeed), if any
       const mic = voiceById('st-voice-mic'), ra = voiceById('st-voice-readaloud'), fb = voiceById('st-voice-fallback');
       const mode = voiceById('st-voice-mode'), sens = voiceById('st-voice-sens');
       const pause = voiceById('st-voice-pause'), speed = voiceById('st-voice-speed'), act = voiceById('st-voice-speakactivity');
@@ -13057,14 +13659,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const echo = voiceById('st-voice-echo'), keep = voiceById('st-voice-keepalive'), loud = voiceById('st-voice-loudness'), loudBt = voiceById('st-voice-loudness-bt');
       const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, speed, act, echo, keep, loud, loudBt].filter(Boolean));
       const echoNow = echo && VOICE_ECHO_HOLDS.includes(Number(echo.value)) ? Number(echo.value) : voiceEchoHoldNow();
-      const prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
+      let prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
         endPause: Number(pause.value), voiceSpeed: voiceCleanSpeed(speed.value), speakActivity: act.checked, echoHold: echoNow, keepAlive: keep ? !!keep.checked : voiceKeepAliveNow(),
         loudness: loud && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loud.value) ? loud.value : voiceLoudnessFor(voicePrefsNow(), 'speaker'),
         loudnessBt: loudBt && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loudBt.value) ? loudBt.value : voiceLoudnessFor(voicePrefsNow(), 'bluetooth') };
-      if (voiceCallS.vad) { voiceCallS.vad.setMicLevel(prefs.micLevel); voiceCallS.vad.setInterruptSensitivity(prefs.interruptSensitivity); voiceCallS.vad.setEndPause(prefs.endPause); if (voiceCallS.vad.setEchoHold) voiceCallS.vad.setEchoHold(prefs.echoHold); }
+      if (VOICE_AGENT_DEFAULT_KEYS.includes(changed)) prefs = voiceMarkChosen(prefs, [changed]);   // the person set it here: an agent's default no longer applies to it
       voiceSavePrefs(localStorage, prefs);
       voicePrefsCache = prefs;
       voiceLoudApply();   // a running call follows the choice at once
+      // A call that is up takes the EFFECTIVE values (the person's own, else this agent's defaults), as the phone page does: the dialog never undoes the agent's pacing mid-call.
+      if (voiceCallS.vad) { const eff = voiceEffNow(voiceCallS.agent); voiceCallS.vad.setMicLevel(eff.micLevel); voiceCallS.vad.setInterruptSensitivity(eff.interruptSensitivity); voiceCallS.vad.setEndPause(eff.endPause); if (voiceCallS.vad.setEchoHold) voiceCallS.vad.setEchoHold(eff.echoHold); }
       for (const el of document.querySelectorAll('.voice-pop [data-vp="loudness"]')) el.value = prefs.loudness;
       for (const el of document.querySelectorAll('.voice-pop [data-vp="loudnessBt"]')) el.value = prefs.loudnessBt;
       saved();
@@ -13119,7 +13723,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     // ── Hands-free call (voice phase 2): the controller (voice call block above) wired to this page ──
     // One call at a time. voiceCallS holds it; the call bar sits above the message box of the call's chat.
-    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false, thinking: null, leftChat: null, link: null, linkLost: false };
+    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false, thinking: null, leftChat: null, link: null, linkLost: false, rec: null };   // rec: the recorded call's page side (voiceCreateRecordingSession), only when the agent keeps recordings
     const voiceRoom = { active: false };
     // ── Call display: None / Orb / an installed character (lib/ui-call-display.js; the choice is per device, the agent only has a default) ──
     // Everything here is a no-op unless a display exists for the running call, so reading aloud and the call without a display are unchanged.
@@ -13177,7 +13781,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try {
         d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), output: (ctx) => voiceOutNode(ctx), agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
           reopenHost: () => { const b = voiceById(`voice-callbar-${chatId}`); return b ? b.querySelector('.vcb-hang') : null; },   // "Show display" goes inside the call bar, beside Hang up
-          onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(chatId) });
+          onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(chatId),
+          onRecordingToggle: (wantPaused) => (voiceCallS.rec ? voiceCallS.rec.togglePause(wantPaused) : undefined) });   // the Pause / Resume recording button of a recorded call
         voiceDisp.cur = d;
         d.start();
       } catch { voiceDisp.cur = null; }
@@ -13493,17 +14098,29 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <div class="vp-display-note vp-wake-off"${allowed ? ' hidden' : ''}>Needs speech recognition on this computer; this agent uses a cloud recognizer or voice is off.</div>
       </div>`;
     }
-    function voiceCallDeps(chatId, agent, vad, thinking, keepAlive) {
+    // The recorded call's page side (lib/ui-voice-call.js voiceCreateRecordingSession): made at call start only for an agent whose recordings.keep is on, so a call
+    // with recording off has no start-body device, no recorder, no upload and no badge. wired: the controller was given the recorder (false: a stale agent list).
+    function voiceRecMake(agent, vad, cfg, wired) {
+      return voiceCreateRecordingSession({ agent, userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '', vad, wired, unprocessed: cfg.mic === 'unprocessed', nav: navigator,
+        fetch: (...a) => fetch(...a),   // the same fetch the call's other requests use: the sign-in cookie and the Origin header go with it
+        speak: (line) => voiceCallSpeak(agent, line),   // the consent line: the agent's voice, the replies' own TTS path
+        playback: (on) => { try { vad.setPlaybackActive(on); } catch { /* the line is heard anyway */ } },
+        badge: (state) => voiceDisplayHook('setRecording', { state }), toast: (m) => hubToast(m),
+        onNetFail: (e) => voiceLinkNetFail(e, voiceLinkOwner()),
+        now: () => Date.now(), setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (t) => clearTimeout(t) });
+    }
+    function voiceCallDeps(chatId, agent, vad, thinking, keepAlive, rec) {
       const barEl = (n) => voiceById(`vcb-${n}-${chatId}`);
       return {
         agent,
         ...(thinking ? { thinking } : {}),
         ...(keepAlive ? { keepAlive } : {}),
+        ...(rec ? { recorder: rec.recorder, recordTranscript: (seq, text) => rec.recordTranscript(seq, text), recordReplyText: (text) => rec.recordReplyText(text) } : {}),   // a recorded call only
         now: () => Date.now(),
         perfNow: () => performance.now(),
         setTimer: (fn, ms) => setTimeout(fn, ms),
         clearTimer: (t) => clearTimeout(t),
-        prefs: () => voicePrefsNow(),
+        prefs: () => voiceEffNow(agent),   // this agent's voice defaults for any setting the person has not set on this device
         vad: voiceDispVad(vad),
         stt: (audio) => voiceCallStt(audio, agent),
         isTurnRunning: () => voiceCallRunning(chatId, agent),
@@ -13518,7 +14135,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         chime: () => voiceWakeChime(),
         server: {
           // The call's id (callId) comes with the start answer; the controller passes it back with every later request.
-          start: (mode) => voiceCallApi('/api/voice/call', { agent, action: 'start', mode }).then(r => ({ callId: r.call && r.call.callId, held: (r.call && r.call.held) || [] })),
+          start: async (mode) => {
+            const body = { agent, action: 'start', mode };
+            if (rec) body.device = await rec.device();   // only when the agent keeps recordings (recordings.keep): the call's microphone, rate and processing; otherwise the body is exactly as before
+            let r;
+            try { r = await voiceCallApi('/api/voice/call', body); }
+            catch (e) { if (e && e.status === 409 && e.message === 'recording_needs_local_stt') throw new Error(VOICE_REC_NEEDS_LOCAL); throw e; }   // the call does not start; the controller shows this in the call's usual error toast
+            const id = r.call && r.call.callId;
+            const g = rec || (r.recording ? voiceRecMake(agent, vad, { mic: 'processed' }, false) : null);   // the hub recorded it though this page did not expect that (an old agent list): "Not recording"
+            if (g) { if (!rec) voiceCallS.rec = g; try { await g.started(r.recording, id); } catch { /* the call carries on without a recording */ } }   // the consent line is spoken before the call listens
+            return { callId: id, held: (r.call && r.call.held) || [] };
+          },
           heartbeat: (callId) => voiceCallApi('/api/voice/call', { agent, action: 'heartbeat', callId }).then(
             r => ({ callId: r.call && r.call.callId, held: (r.call && r.call.held) || [] }),
             (e) => {   // the hub no longer has this call (no_call, stale_call, not_your_call): hang up here too
@@ -13547,7 +14174,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           activity: (text) => { const a = barEl('activity'); if (a) a.textContent = text || ''; },   // silent: shown in the call bar only
           heard: (text) => { const h = barEl('heard'); if (h) h.textContent = text ? `Heard: ${text}` : ''; },
           held: (list) => { voiceCallPaintHeld(chatId, list); voiceDisplayHook('badge', (list || []).length); },
-          toast: (msg) => hubToast(msg),
+          toast: (msg) => hubToast(msg, String(msg).length > 90 ? 10000 : 3000),   // a long reason (a recorded call that cannot start) stays long enough to read
           summary: (text) => { if (voiceById(`messages-${chatId}`)) appendSystemNotice(chatId, text); },   // a line in the panel only: not saved to history
         },
       };
@@ -13614,10 +14241,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const val = voiceById(`vcb-${which}-val-${chatId}`); if (val) val.textContent = which === 'speed' ? voiceSpeedLabel(v) : String(v);
       const vad = voiceCallS.vad;
       if (vad) { if (which === 'mic') vad.setMicLevel(v); else if (which === 'sens') vad.setInterruptSensitivity(v); else if (which === 'pause') vad.setEndPause(v); }
-      if (which === 'speed') voicePrefsCache = { ...voicePrefsNow(), voiceSpeed: voiceCleanSpeed(v) };   // the next sentence is already spoken at the new speed
+      if (which === 'speed') voicePrefsCache = voiceMarkChosen({ ...voicePrefsNow(), voiceSpeed: voiceCleanSpeed(v) }, ['voiceSpeed']);   // the next sentence is already spoken at the new speed
       if (!save) return;
       const key = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause' }[which];
-      const prefs = { ...voicePrefsNow(), [key]: which === 'speed' ? voiceCleanSpeed(v) : v };
+      let prefs = { ...voicePrefsNow(), [key]: which === 'speed' ? voiceCleanSpeed(v) : v };
+      if (VOICE_AGENT_DEFAULT_KEYS.includes(key)) prefs = voiceMarkChosen(prefs, [key]);   // the person set it: an agent's default no longer applies to it
       voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
     }
     function voiceSettingSensInput(el) { const v = voiceById('st-voice-sens-val'); if (v) v.textContent = el.value; }
@@ -13661,6 +14289,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const c of Object.values(chats)) if (c) { c.voiceTurn = false; c.voiceDictated = false; }   // nothing dictated before the call is read aloud after Hang up
       if (S.link) { try { S.link.stop(); } catch { /* gone */ } S.link = null; }
       S.linkLost = false;
+      const rec = S.rec; S.rec = null;
+      if (rec) { try { rec.stop(); } catch { /* already stopped */ } }   // a recorded call: the recorder lets go of its tap (uploads in flight finish)
       S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.focus = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
       S.own.clear(); S.hub.clear(); S.asks.clear();
       voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
@@ -13772,7 +14402,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (voiceTest.mic || voiceTest.guard.pending || voiceRoom.active) { hubToast('The microphone is in use in Settings.'); return; }
       voiceRec.guard.cancel(); if (voiceRec.chatId) voiceMicStop(false);   // dictation ends, nothing uploaded
       voiceStopPlayback();
-      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: voiceSensNow(), endPause: voiceEndPauseNow(), echoHoldMs: voiceEchoHoldNow() });
+      const eff = voiceEffNow(chat.agent);   // this agent's voice defaults for any setting the person has not set on this device
+      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow() });
       const thinking = voiceCallThinking(vad);   // makes / resumes the reply playback context (voicePlay.ctx) inside the tap
       // Keep Bluetooth awake: an inaudible hiss on the same output context as the replies; the controller starts and stops it.
       let keepAlive = null;
@@ -13787,9 +14418,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           focus.start().then((ok) => { const h = !ok && S.focus === focus && S.focusTry === focusTry && typeof voiceById === 'function' ? voiceById(`vcb-focushint-${chatId}`) : null; if (h) h.hidden = false; });
         } catch { focus = null; }
       }
-      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad, thinking, keepAlive));
+      // A call with an agent that keeps recordings (recordings.keep, from GET /api/agents): its page side is made here, before the call starts.
+      const recCfg = typeof voiceRecSettings === 'function' ? voiceRecSettings((typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(x => x && x.name === chat.agent)) : { keep: false, mic: 'processed' };
+      const rec = recCfg.keep ? voiceRecMake(chat.agent, vad, recCfg, true) : null;
+      if (typeof voiceRecResendPending === 'function') voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '' }).catch(() => {});   // pieces left from an earlier call or page are sent while this one starts
+      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad, thinking, keepAlive, rec));
       voiceLeftNoticeHide(); S.leftChat = null;
-      S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
+      S.rec = rec; S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
       window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow() };   // read-only hooks for the browser proof
       voiceLoudApply();   // the reply loudness chain, at the level of the pref
       voiceCallPaintBtn(chatId, true);
@@ -13853,12 +14488,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
     }
     document.addEventListener('visibilitychange', () => {   // a hidden tab keeps the call; the lock is let go by the browser and taken again here
-      if (document.hidden) return;
+      if (document.hidden) { voiceRecFlushOpen(); return; }
       if (voiceCallS.call) voiceCallWake(true); else voiceLeftNoticeShow();
     });
+    // A recorded call in progress: when the page is hidden or closed, the open segment is sent (stored in IndexedDB first), so a close or a reload keeps it. A hidden page does not end the call.
+    function voiceRecFlushOpen() { try { if (typeof voiceCallS !== 'undefined' && voiceCallS.rec) voiceCallS.rec.flushOpen(); } catch { /* nothing open */ } }
     window.addEventListener('pageshow', () => voiceLeftNoticeShow());   // back from the back/forward cache after a release (pageshow and pagehide fire at the window; freeze at the document)
     window.addEventListener('offline', () => { if (voiceCallS.link) voiceCallS.link.offline(); });   // the link watch of the active call
     window.addEventListener('online', () => { if (voiceCallS.link) voiceCallS.link.online(); });
+    window.addEventListener('pagehide', () => { voiceRecFlushOpen(); });   // before the release below, which sends what is left through the recorder's stop
     window.addEventListener('pagehide', () => { voiceCallRelease('pagehide'); });   // leaving the page lets go of the mic at once
     document.addEventListener('freeze', () => { voiceCallRelease('freeze'); });   // the browser is about to freeze the page
 
@@ -13867,17 +14505,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_POP_KEYS = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause', wait: 'continueWait', think: 'thinkingSound', thinkvol: 'thinkingVolume', mode: 'mode', echo: 'echoHold', keep: 'keepAlive', loudness: 'loudness', loudnessBt: 'loudnessBt' };
     function voicePopHtml(chatId) {
       const id = (n) => `vp-${n}-${chatId}`, tap = voicePrefsNow().mode === 'tap';
-      const waits = VOICE_CONTINUE_WAITS.map((ms) => `<option value="${ms}"${ms === voiceContinueWaitNow() ? ' selected' : ''}>${ms / 1000} s</option>`).join('');
+      const waits = VOICE_CONTINUE_WAITS.map((ms) => `<option value="${ms}"${ms === voiceContinueWaitNow() ? ' selected' : ''}>${ms === 8000 ? 'Very long (8 s)' : ms / 1000 + ' s'}</option>`).join('');
+      const agent = (chats[chatId] && chats[chatId].agent) || '';
       return `<div class="vp-row"><span class="vp-label">Talk mode</span><span class="vp-seg" role="group" aria-label="Talk mode">
           <button type="button" data-vp="mode" data-val="handsfree" aria-pressed="${tap ? 'false' : 'true'}">Hands-free</button><button type="button" data-vp="mode" data-val="tap" aria-pressed="${tap ? 'true' : 'false'}">Tap to talk</button></span></div>
-        <label class="vp-row"><span class="vp-label">Voice speed</span><input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vp="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span></label>
+        <label class="vp-row"><span class="vp-label">Voice speed</span><input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vp="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span></label>${voiceFollowLine(agent, 'voiceSpeed')}
         <label class="vp-row"><span class="vp-label">Voice loudness, speaker</span>${voiceLoudnessSelectHtml(id('loudness'), 'data-vp="loudness"', 'loudness')}</label>
         <label class="vp-row"><span class="vp-label">Voice loudness, Bluetooth / car</span>${voiceLoudnessSelectHtml(id('loudnessBt'), 'data-vp="loudnessBt"', 'loudnessBt')}</label>
-        <label class="vp-row"><span class="vp-label">Pause before I'm done</span>${voicePauseSelectHtml(id('pause'), 'data-vp="pause"')}</label>
-        <label class="vp-row"><span class="vp-label">Wait for me to go on</span><select id="${id('wait')}" data-vp="wait" style="padding:4px">${waits}</select></label>
+        <label class="vp-row"><span class="vp-label">Pause before I'm done</span>${voicePauseSelectHtml(id('pause'), 'data-vp="pause"')}</label>${voiceFollowLine(agent, 'endPause')}
+        <label class="vp-row"><span class="vp-label">Wait for me to go on</span><select id="${id('wait')}" data-vp="wait" style="padding:4px">${waits}</select></label>${voiceFollowLine(agent, 'continueWait')}
         <label class="vp-row"><span class="vp-label">Mic level</span><input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vp="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
         <div class="vp-row"><span class="vp-label">Level now</span><span class="voice-meter" aria-hidden="true"><i id="${id('level')}"></i></span></div>
-        <label class="vp-row"><span class="vp-label">Interrupt sensitivity</span><input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vp="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>
+        <label class="vp-row"><span class="vp-label">Interrupt sensitivity</span><input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vp="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>${voiceFollowLine(agent, 'interruptSensitivity')}
         <label class="vp-row"><span class="vp-label">Thinking sound</span><input type="checkbox" id="${id('think')}" data-vp="think"${voiceThinkingOnNow() ? ' checked' : ''}></label>
         <label class="vp-row"><span class="vp-label">Call display</span><select id="${id('display')}" data-vp="display" style="padding:4px"><option value="follow">Follow agent default</option></select></label>
         <div class="vp-display-note" id="${id('display-note')}" aria-live="polite"></div>
@@ -13953,6 +14592,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (which === 'thinkvol' && S.thinking) S.thinking.setVolume(val);
       voicePrefsCache = { ...voicePrefsNow(), [key]: val };   // the next sentence / the next wait already uses it
       if (which === 'loudness' || which === 'loudnessBt') { voiceLoudApply(); const st = voiceById(which === 'loudnessBt' ? 'st-voice-loudness-bt' : 'st-voice-loudness'); if (st) st.value = val; }   // the chain takes the level of the current output
+      if (VOICE_AGENT_DEFAULT_KEYS.includes(key)) {
+        voicePrefsCache = voiceMarkChosen(voicePrefsCache, [key]);   // the person set it here: an agent's default no longer applies to it
+        for (const el of document.querySelectorAll(`.voice-follow[data-follow="${key}"]`)) el.remove();   // so its "Following ..." line goes
+      }
       if (save) { const prefs = voiceSavePrefs(localStorage, voicePrefsCache); voicePrefsCache = { ...voicePrefsCache, ...prefs, [key]: val }; }
       if (which === 'mode') voiceModePaint();
       if (which === 'echo' || which === 'keep') voiceEchoKeepPaint();   // Settings follows the panel
@@ -13995,7 +14638,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const peak = sorted.length ? sorted[sorted.length - 1] : -100;
         if (!loud.length || peak < -50 || (noise !== null && peak - noise < 6)) { say('No speech heard: check the microphone and its permission.'); return; }
         const r = voiceRoomCheck(loud, silenceDb, voiceMicLevelNow());
-        const prefs = { ...voicePrefsNow(), micLevel: r.micLevel, interruptSensitivity: r.interruptSensitivity };
+        let prefs = { ...voicePrefsNow(), micLevel: r.micLevel, interruptSensitivity: r.interruptSensitivity };
+        if (r.interruptSensitivity !== voiceSensNow()) prefs = voiceMarkChosen(prefs, ['interruptSensitivity']);   // the check picked a new sensitivity: it is this device's choice now
         voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
         for (const [id, v] of [['st-voice-mic', r.micLevel], ['st-voice-sens', r.interruptSensitivity]]) { const e = voiceById(id); if (e) e.value = String(v); }
         const mv = voiceById('st-voice-mic-val'); if (mv) mv.textContent = String(r.micLevel);
@@ -14046,7 +14690,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
         const analyses = voiceCarAnalyse(got.mic, got.ref, chirp, got.rate);
         const r = voiceCarCheckResult(analyses, { echoHold: voiceEchoHoldNow(), interruptSensitivity: voiceSensNow() });
-        const prefs = { ...voicePrefsNow(), echoHold: r.echoHold, interruptSensitivity: r.interruptSensitivity };
+        let prefs = { ...voicePrefsNow(), echoHold: r.echoHold, interruptSensitivity: r.interruptSensitivity };
+        if (r.interruptSensitivity !== voiceSensNow()) prefs = voiceMarkChosen(prefs, ['interruptSensitivity']);   // the check lowered the sensitivity: it is this device's choice now
         voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
         const vad = voiceCallS.vad;
         if (vad) { if (vad.setEchoHold) vad.setEchoHold(r.echoHold); if (vad.setInterruptSensitivity) vad.setInterruptSensitivity(r.interruptSensitivity); }
