@@ -68,7 +68,7 @@ test('voiceLoudnessDb maps the three names and defaults to louder', () => {
 });
 
 // ── voiceCreateLoudness ──
-// changed: the limit is now compressor (-6 dB, 20:1) -> makeup trim -> fixed ceiling curve, so no peak passes -1 dBFS
+// changed: the limit is now compressor (-3 dB, 20:1) -> makeup trim -> fixed ceiling curve, so no peak passes -1 dBFS
 test('voiceCreateLoudness builds gain -> compressor -> trim -> ceiling -> analyser -> destination with the limiter settings', () => {
   const ctx = fakeCtx({ shaper: true });
   const c = V.voiceCreateLoudness(ctx);
@@ -77,9 +77,10 @@ test('voiceCreateLoudness builds gain -> compressor -> trim -> ceiling -> analys
   const gains = ctx.nodes.filter((n) => n.kind === 'gain');
   const comp = ctx.nodes.find((n) => n.kind === 'comp'), an = ctx.nodes.find((n) => n.kind === 'analyser'), sh = ctx.nodes.find((n) => n.kind === 'shaper');
   assert.strictEqual(c.input, gains[0]);
-  assert.strictEqual(comp.threshold.value, -6); assert.strictEqual(comp.knee.value, 0); assert.strictEqual(comp.ratio.value, 20);
+  assert.strictEqual(comp.threshold.value, -3); assert.strictEqual(comp.knee.value, 0); assert.strictEqual(comp.ratio.value, 20);   // changed: -6 held speech near -18.5 dBFS (browser measurement), -3 uses the headroom; the curve holds the ceiling
   assert.strictEqual(comp.attack.value, 0.001); assert.strictEqual(comp.release.value, 0.1);
-  assert.ok(Math.abs(gains[1].gain.value - Math.pow(10, -3.42 / 20)) < 1e-9, 'the trim takes the compressor makeup back off');
+  assert.ok(Math.abs(gains[1].gain.value - Math.pow(10, -1.71 / 20)) < 1e-9, 'the trim takes the compressor makeup back off');
+  const t = -V.VOICE_LIMIT_THRESHOLD_DB; assert.ok(Math.abs(V.VOICE_LIMIT_TRIM_DB + (t - t / 20) * 0.6) < 0.005, 'trim = minus the Blink makeup gain (t - t/ratio) * 0.6 at the set threshold');
   assert.ok(sh.curve instanceof Float32Array && sh.curve.length === 4097); assert.strictEqual(sh.oversample, 'none');
   assert.strictEqual(an.fftSize, 2048);
 });
