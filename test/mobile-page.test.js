@@ -174,7 +174,9 @@ test('phone: Update hub in the menu (admins only) asks the channel like the desk
 test('send and notify buttons take the whole touch: touch-action none, touchstart cancelled, pointerup still acts', () => {
   const js = read('mobile.js');
   const html = read('mobile.html');
-  assert.match(html, /#send-btn, #composer \.notify-chip \{ touch-action: none; \}/);
+  // the bell moved to the chat header: its own touch-action rule is there, Send keeps its rule
+  assert.match(html, /#send-btn \{ touch-action: none; \}/);
+  assert.match(html, /#chat-head \.notify-chip \{[^}]*touch-action: none;/);
   const fn = js.slice(js.indexOf('function onComposerTap(btn, act)'), js.indexOf('function sendAndClose()'));
   assert.ok(fn.includes("btn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });"));
   assert.ok(js.includes("onComposerTap($('send-btn'), sendAndClose);") && js.includes("onComposerTap($('chat-notify-btn'), toggleNotifyDone);"), 'both buttons');

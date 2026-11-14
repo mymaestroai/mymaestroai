@@ -41,11 +41,13 @@ const fakeVc = (log, withRelease = true) => ({ agent: 'bob', call: fakeCall(log,
 
 // ── item 7: the controls in the chat ──
 test('chat controls: a Voice settings button beside the mode chip, a visible mode chip, a panel with every control, all hidden until voice is on', () => {
-  // changed on purpose (owner, 2026-11-13: the message box was too small in portrait): the button moved from the composer row to the
-  // voice strip, beside the Hands-free chip, so the message box gets its width
-  const strip = html.indexOf('id="voice-strip"'), chip = html.indexOf('id="voice-mode-chip"'), btn = html.indexOf('id="voice-settings-btn"'), box = html.indexOf('id="msg-input"');
+  // changed on purpose (owner: the bottom of the phone screen was too busy): the button moved from the voice strip into the + sheet
+  // (a menu item); the strip keeps only the mode chip
+  const strip = html.indexOf('id="voice-strip"'), chip = html.indexOf('id="voice-mode-chip"'), btn = html.indexOf('id="voice-settings-btn"');
   const stripEnd = html.indexOf('</div>', strip);
-  assert.ok(strip > 0 && chip > strip && btn > chip && btn < stripEnd && btn < box, 'the button is in the voice strip, after the mode chip');
+  const sheet = html.indexOf('id="plus-sheet"'), sheetEnd = html.indexOf('</div>', sheet);
+  assert.ok(strip > 0 && chip > strip && chip < stripEnd && !html.slice(strip, stripEnd).includes('voice-settings-btn'), 'the strip holds only the mode chip');
+  assert.ok(sheet > 0 && btn > sheet && btn < sheetEnd, 'the button is a menu item in the + sheet');
   assert.match(html, /id="voice-settings-btn"[^>]*aria-label="Voice settings"[^>]*hidden/);
   assert.match(html, /id="voice-settings-btn"[^>]*aria-controls="voice-panel"/);
   assert.match(html, /id="voice-strip" hidden/);

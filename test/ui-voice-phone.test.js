@@ -12,7 +12,8 @@ const html = read('mobile.html');
 test('mic button sits before Send, hidden until the hub says voice is enabled and ready, acts on the touch', () => {
   assert.match(html, /id="mic-btn"[^>]*hidden/);
   assert.ok(html.indexOf('id="mic-btn"') < html.indexOf('id="send-btn"'), 'before Send');
-  assert.ok(html.indexOf('id="mic-btn"') > html.indexOf('id="camera-btn"') && html.indexOf('id="mic-btn"') < html.indexOf('id="msg-input"'), 'left of the box: notify-done test pins the bell right before Send');
+  // changed on purpose (one calm bottom row: + , box, mic, Send): the mic is now right of the box, just before Send
+  assert.ok(html.indexOf('id="mic-btn"') > html.indexOf('id="msg-input"') && html.indexOf('id="mic-btn"') < html.indexOf('id="send-btn"'), 'right of the box, before Send');
   assert.match(js, /onComposerTap\(\$\('mic-btn'\), voiceMicTap\)/);
   assert.match(js, /api\('\/api\/voice\/status'\)/);
   assert.match(js, /b\.hidden = !voiceOn\(\)/);

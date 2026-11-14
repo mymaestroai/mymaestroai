@@ -4834,6 +4834,7 @@ function bubbleLive(rec) {
 async function openChat(name) {
   const a = agentByName(name);
   const same = current === name;
+  if (typeof plusSheetShow === 'function') plusSheetShow(false);   // opening a chat closes the + sheet
   if (!same && voiceCall) voiceCallHangUp();   // switching to another agent's chat ends a hands-free call
   if (!same && tsnSheetFor) closeToolsSheet();   // the full screen of another chat's calls
   current = name;
@@ -7782,6 +7783,23 @@ function openVoiceSheet() {
 const VOICE_WAIT_LABELS = ['Short (1.5 s)', 'Normal (3 s)', 'Long (5 s)'];
 function voiceContinueWaitNow() { const v = Number(voicePrefsNow().continueWait); return VOICE_CONTINUE_WAITS.includes(v) ? v : 3000; }
 function voicePanelOpen() { const p = $('voice-panel'); return !!p && !p.hidden; }
+// The + sheet beside the message box: Attach file, Camera and Voice settings (moved here from the row and the voice strip, same ids).
+function plusSheetOpen() { const s = $('plus-sheet'); return !!s && !s.hidden; }
+function plusSheetShow(show) {
+  const s = $('plus-sheet'), b = $('plus-btn'); if (!s) return;
+  s.hidden = !show;
+  if (b) b.setAttribute('aria-expanded', show ? 'true' : 'false');
+}
+function plusSheetWire() {
+  const s = $('plus-sheet'), b = $('plus-btn'); if (!s || !b) return;
+  b.addEventListener('click', (e) => { e.stopPropagation(); plusSheetShow(!plusSheetOpen()); });
+  // Capture phase: the sheet closes first, then the item's own handler acts (same tap, so a file picker still opens).
+  s.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('[role="menuitem"]')) plusSheetShow(false); }, true);
+  s.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); plusSheetShow(false); b.focus(); } });
+  b.addEventListener('keydown', (e) => { if (e.key === 'Escape' && plusSheetOpen()) { e.preventDefault(); plusSheetShow(false); b.focus(); } });
+  document.addEventListener('click', (e) => { if (plusSheetOpen() && !s.contains(e.target) && !(e.target.closest && e.target.closest('#plus-btn'))) plusSheetShow(false); });
+  $('msg-input')?.addEventListener('focus', () => plusSheetShow(false));
+}
 function voiceStripPaint() {
   const on = voiceOn();
   const strip = $('voice-strip'), btn = $('voice-settings-btn'), chip = $('voice-mode-chip');
@@ -7864,7 +7882,7 @@ function voicePanelWire() {
   $('vp-display')?.addEventListener('blur', () => voiceDispPaintPanel());   // a list skipped while it had focus is put in now
   $('vp-captions')?.addEventListener('change', (e) => voiceDispSetCaptions(!!e.target.checked));
   $('vp-interrupt')?.addEventListener('change', (e) => voiceDispSetInterrupt(!!e.target.checked));
-  p.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); voicePanelShow(false); $('voice-settings-btn')?.focus(); } });
+  p.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); voicePanelShow(false); $('plus-btn')?.focus(); } });   // its opener now lives in the closed + sheet
   document.addEventListener('click', (e) => { if (voicePanelOpen() && !p.contains(e.target) && !(e.target.closest && e.target.closest('#voice-settings-btn'))) voicePanelShow(false); });
   $('call-again')?.addEventListener('click', () => { voiceEndedBar(false); voiceCallStart(); });
   $('call-ended-x')?.addEventListener('click', () => voiceEndedBar(false));
@@ -7913,6 +7931,7 @@ function composerPaintAll() { composerTypingPaint(); callPanelCompactPaint(); }
 // `fallback` is set when an interjection found the turn already over: the text and its user
 // bubble are reused instead of being read from the composer again.
 async function sendMessage(fallback) {
+  if (typeof plusSheetShow === 'function') plusSheetShow(false);   // sending closes the + sheet
   const linkOwner = typeof voiceCall !== 'undefined' ? voiceCall : null;   // a failed send is charged only to the call that was up when it was sent
   if (!current) { toast('Pick an agent first'); return; }
   const agent = fallback ? fallback.agent : current;
@@ -9750,6 +9769,7 @@ function wire() {
   voiceCallWire();
   setInterval(() => { if (!document.hidden && current) voiceStatusRefresh(); }, 60000);
 
+  plusSheetWire();
   $('attach-btn').addEventListener('click', () => $('file-input').click());
   $('camera-btn').addEventListener('click', () => $('camera-input').click());
   // Images ride along with the message; any other file from the paperclip is uploaded to the

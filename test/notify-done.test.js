@@ -77,13 +77,15 @@ test('desktop: the bell sits next to Send/Interject, shows exactly while a reply
   assert.ok(css.includes('.input-area .notify-done-btn {') && css.includes('.input-area .notify-done-btn.on {'));
 });
 
-test('phone: the bell sits next to the send/interject button, shows exactly while a reply runs, toggles on the hub and follows other devices', () => {
+test('phone: the bell sits in the chat header before Stop, shows exactly while a reply runs, toggles on the hub and follows other devices', () => {
+  // changed on purpose (owner: the bottom of the phone screen was too busy): the bell moved from the composer row to the header, before Stop
   const m = read('mobile.js'), html = read('mobile.html');
-  assert.ok(html.includes(`<textarea id="msg-input" rows="1" placeholder="Message"></textarea>
-        <button class="notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
-        <button id="send-btn" aria-label="Send">&#x27A4;</button>`), 'right before the send button, which becomes Interject while a reply runs');
-  assert.ok(!html.slice(html.indexOf('id="chat-head"'), html.indexOf('id="chat-scroll"')).includes('chat-notify-btn'), 'not in the header');
-  assert.ok(html.includes('#composer .notify-chip {') && html.includes('#composer .notify-chip.on {') && html.includes('#composer .notify-chip[hidden] { display: none; }'));
+  assert.ok(html.includes(`<button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
+      <button class="iconbtn stop-remote" id="chat-stop-btn"`), 'right before the Stop button in the header');
+  const head = html.slice(html.indexOf('id="chat-head"'), html.indexOf('id="chat-scroll"'));
+  assert.ok(head.includes('chat-notify-btn'), 'in the header');
+  assert.ok(!html.slice(html.indexOf('id="composer"'), html.indexOf('id="file-input"')).includes('chat-notify-btn'), 'not in the composer');
+  assert.ok(html.includes('#chat-head .notify-chip {') && html.includes('#chat-head .notify-chip.on {') && html.includes('#chat-head .notify-chip .nlabel { display: none; }') && html.includes('#chat-head .notify-chip[hidden] { display: none; }'));
   assert.ok(m.includes("if (bell) { bell.hidden = !working && !own; paintNotifyBtn(); }"), 'same condition as Stop: only while a reply runs');
   assert.ok(m.includes("r = await api(`/api/agents/${encodeURIComponent(agent)}/notify`, { method: 'POST'"));
   assert.ok(m.includes("on('turn_notify', onTurnNotify);") && m.includes("if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;"));

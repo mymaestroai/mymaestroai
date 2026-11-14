@@ -44,35 +44,36 @@ function harness({ inDrawer = false, vvHeight = 800 } = {}) {
   return { api, els, doc, win };
 }
 
-test('(a) #voice-settings-btn is in #voice-strip, not in the composer .row', () => {
+// changed on purpose (owner: the bottom of the phone screen was too busy): #voice-settings-btn, #attach-btn and #camera-btn are menu
+// items in the + sheet, the strip keeps only the mode chip, and the Notify bell lives in the chat header.
+test('(a) #voice-settings-btn is a menu item in #plus-sheet: not in #voice-strip, still one element, still wired by id', () => {
   const strip = html.match(/<div id="voice-strip"[^>]*>[\s\S]*?<\/div>/)[0];
-  assert.ok(strip.includes('id="voice-settings-btn"'));
-  assert.ok(strip.indexOf('id="voice-mode-chip"') < strip.indexOf('id="voice-settings-btn"'), 'after the chip');
-  const row = html.slice(html.indexOf('<div class="row">', html.indexOf('id="composer"')), html.indexOf('id="file-input"'));
-  assert.ok(!row.includes('voice-settings-btn'));
-  assert.ok(/#voice-strip #voice-settings-btn \{[^}]*margin-left: auto/.test(html));
+  assert.ok(strip.includes('id="voice-mode-chip"'));
+  assert.ok(!strip.includes('voice-settings-btn'), 'the strip holds only the mode chip');
+  const sheet = html.match(/<div id="plus-sheet"[^>]*>[\s\S]*?<\/div>/)[0];
+  assert.ok(sheet.includes('id="voice-settings-btn"'));
+  assert.ok(/id="voice-settings-btn"[^>]*role="menuitem"/.test(sheet));
+  assert.ok(!/#voice-strip #voice-settings-btn/.test(html), 'dead strip rule removed');
   assert.equal(html.split('id="voice-settings-btn"').length - 1, 1);
   assert.ok(/\$\('voice-settings-btn'\)\?\.addEventListener\('click'/.test(mob), 'still wired by id');
 });
 
-// Changed on purpose (owner, 2026-11-13: "I can no longer add file attachments"): attach and camera are never hidden while typing.
-test('(b) CSS hides only the strip under #composer.typing inside max-width 600px; attach and camera always stay', () => {
+// Owner, 2026-11-13: "I can no longer add file attachments": nothing is hidden on focus alone; attach and camera live in the + sheet.
+test('(b) CSS hides only the strip under #composer.typing inside max-width 600px (attach and camera now live in the + sheet)', () => {
   const m = html.match(/@media \(max-width: 600px\) \{\s*(#composer\.typing[^}]*)\}\s*\}/);
   assert.ok(m, 'media block');
   const body = m[1];
-  assert.ok(!/#attach-btn|#camera-btn/.test(body), 'attach and camera are not hidden while typing');
-  assert.ok(!/#composer\.typing #(attach|camera)-btn[^{]*\{[^}]*display: none/.test(html), 'nowhere else either');
-  assert.ok(body.includes('#composer.typing #voice-strip'));
-  assert.ok(/display: none/.test(body));
+  assert.ok(body.includes('#composer.typing #voice-strip { display: none;'));
+  assert.ok(!body.includes('#attach-btn') && !body.includes('#camera-btn'));
+  assert.ok(!/#composer\.typing #(attach|camera|plus)-btn[^{]*\{[^}]*display: none/.test(html), 'attach, camera and + are never hidden on focus');
   assert.ok(!/#composer\.typing[^,{]*(#mic-btn|#send-btn)/.test(body), 'mic and send stay');
 });
 
-test('(b) while typing during a running reply, the Notify chip shows only its bell (inside max-width 600px)', () => {
-  const m = html.match(/@media \(max-width: 600px\) \{\s*(#composer\.typing \.notify-chip \.nlabel[^}]*\}[^}]*\})\s*\}/);
-  assert.ok(m, 'media block for the chip');
-  assert.ok(/#composer\.typing \.notify-chip \.nlabel \{ display: none; \}/.test(m[1]), 'label hidden');
-  assert.ok(/#composer\.typing \.notify-chip \{ padding: 0 10px; \}/.test(m[1]), 'narrow padding');
-  assert.ok(!/#composer\.typing \.notify-chip \{[^}]*display: none/.test(html), 'the chip itself stays');
+test('(b) the Notify bell in the header shows only its bell, at the header icon size; no composer notify rules are left', () => {
+  assert.ok(/#chat-head \.notify-chip \.nlabel \{ display: none; \}/.test(html), 'label hidden in the header');
+  assert.ok(!/#chat-head \.notify-chip \{[^}]*display: none/.test(html), 'the bell itself is not hidden by a rule');
+  assert.ok(!/#composer[^{]*\.notify-chip/.test(html), 'no rule left for the old composer position');
+  assert.ok(/<button class="iconbtn notify-chip" id="chat-notify-btn"/.test(html), 'iconbtn: same size as the other header buttons');
 });
 
 test('(b) composerTypingPaint: typing only while the box has focus (a draft left in the box still lets you attach a file)', () => {
@@ -154,4 +155,75 @@ test('(c) callPanelCompactPaint: focus, short viewport, tall viewport, not in th
   assert.equal(h.els['call-panel'].classList.contains('compact'), true, 'short innerHeight fallback');
   h = harness({ inDrawer: true, vvHeight: 300 }); h.doc.activeElement = h.els['msg-input']; h.api.callPanelCompactPaint();
   assert.equal(h.els['call-panel'].classList.contains('compact'), false, 'never inside .ucd-drawer');
+});
+
+// ── one calm bottom row: + , message box, mic, Send ──
+const rowHtml = () => html.slice(html.indexOf('<div class="row">', html.indexOf('id="composer"')), html.indexOf('id="file-input"'));
+const idsOf = (s) => [...s.matchAll(/<(?:button|textarea)\b[^>]*\bid="([^"]+)"/g)].map((m) => m[1]);
+
+test('(d) the row is: + button, message box, mic, Send (the sheet is not part of the order)', () => {
+  const row = rowHtml();
+  const noSheet = row.replace(/<div id="plus-sheet"[\s\S]*?<\/div>/, '');
+  assert.deepEqual(idsOf(noSheet), ['plus-btn', 'msg-input', 'mic-btn', 'send-btn']);
+  const plus = noSheet.match(/<button[^>]*id="plus-btn"[^>]*>\+<\/button>/)[0];
+  assert.ok(/class="iconbtn"/.test(plus) && /aria-label="More: attach, camera, voice settings"/.test(plus) && /aria-haspopup="true"/.test(plus) && /aria-expanded="false"/.test(plus));
+  for (const gone of ['attach-btn', 'camera-btn', 'chat-notify-btn', 'voice-settings-btn']) assert.ok(!noSheet.includes('id="' + gone + '"'), gone + ' left the row');
+});
+
+test('(d) #plus-sheet is a hidden menu holding Attach file, Camera and Voice settings as labelled menu items', () => {
+  const sheet = html.match(/<div id="plus-sheet"[^>]*>[\s\S]*?<\/div>/)[0];
+  assert.ok(/role="menu"/.test(sheet) && /\bhidden>/.test(sheet.split('>')[0] + '>'), 'menu, hidden by default');
+  assert.deepEqual(idsOf(sheet), ['attach-btn', 'camera-btn', 'voice-settings-btn']);
+  for (const [id, label] of [['attach-btn', 'Attach file'], ['camera-btn', 'Camera'], ['voice-settings-btn', 'Voice settings']]) {
+    const b = sheet.match(new RegExp('<button[^>]*id="' + id + '"[^>]*>[\\s\\S]*?</button>'))[0];
+    assert.ok(/role="menuitem"/.test(b), id + ' is a menuitem');
+    assert.ok(b.includes('<span class="ps-label">' + label + '</span>'), id + ' has a visible label');
+  }
+  assert.ok(/id="voice-settings-btn"[^>]*\bhidden\b/.test(sheet), 'Voice settings starts hidden (voice off)');
+  assert.ok(/#plus-sheet \{ position: absolute; left: 0; bottom: 100%/.test(html), 'above the row, left-aligned');
+  assert.ok(!/[\u{FE0F}]/u.test(sheet + rowHtml()), 'no emoji variation selector');
+});
+
+test('(d) #chat-notify-btn is in #chat-head right before #chat-stop-btn, and not in the composer', () => {
+  const head = html.slice(html.indexOf('id="chat-head"'), html.indexOf('id="chat-scroll"'));
+  const bell = head.indexOf('id="chat-notify-btn"'), stop = head.indexOf('id="chat-stop-btn"');
+  assert.ok(bell > 0 && stop > bell, 'bell before Stop');
+  assert.ok(!head.slice(bell, stop).includes('<button class="iconbtn" id'), 'directly before Stop (no other button between)');
+  assert.ok(!html.slice(html.indexOf('id="composer"'), html.indexOf('id="file-input"')).includes('chat-notify-btn'));
+  assert.ok(/id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done"[^>]*hidden>/.test(head));
+});
+
+test('(d) plusSheetShow toggles hidden and aria-expanded; plusSheetOpen follows', () => {
+  const sheet = { hidden: true }, btn = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+  const $ = (id) => (id === 'plus-sheet' ? sheet : id === 'plus-btn' ? btn : null);
+  const api = new Function('$', fnSource(mob, 'plusSheetOpen') + '\n' + fnSource(mob, 'plusSheetShow') + '\nreturn { plusSheetOpen, plusSheetShow };')($);
+  assert.equal(api.plusSheetOpen(), false);
+  api.plusSheetShow(true);
+  assert.equal(sheet.hidden, false); assert.equal(btn.attrs['aria-expanded'], 'true'); assert.equal(api.plusSheetOpen(), true);
+  api.plusSheetShow(false);
+  assert.equal(sheet.hidden, true); assert.equal(btn.attrs['aria-expanded'], 'false'); assert.equal(api.plusSheetOpen(), false);
+  assert.doesNotThrow(() => new Function('$', fnSource(mob, 'plusSheetShow') + '\nplusSheetShow(true);')(() => null), 'no sheet on the page: nothing happens');
+});
+
+test('(d) plusSheetWire: second tap on + closes, outside tap, Escape (focus back on +), box focus, menu item (before it acts); send and openChat close it', () => {
+  const listeners = {};
+  const mk = (name) => ({ name, hidden: true, attrs: {}, focused: 0, on: {}, setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, f, cap) { (this.on[t] = this.on[t] || []).push({ f, cap }); }, focus() { this.focused++; }, contains(x) { return x === this || (x && x.inSheet); } });
+  const sheet = mk('sheet'), btn = mk('btn'), input = mk('input'), doc = mk('doc');
+  const $ = (id) => ({ 'plus-sheet': sheet, 'plus-btn': btn, 'msg-input': input }[id] || null);
+  const src = ['plusSheetOpen', 'plusSheetShow', 'plusSheetWire'].map((n) => fnSource(mob, n)).join('\n');
+  new Function('$', 'document', src + '\nplusSheetWire();')($, doc);
+  const fire = (o, t, e) => (o.on[t] || []).forEach((l) => l.f(e));
+  const ev = (o = {}) => Object.assign({ stopPropagation() {}, preventDefault() {}, target: { closest: () => null } }, o);
+  fire(btn, 'click', ev()); assert.equal(sheet.hidden, false, 'tap on +'); assert.equal(btn.attrs['aria-expanded'], 'true');
+  fire(btn, 'click', ev()); assert.equal(sheet.hidden, true, 'second tap on +');
+  fire(btn, 'click', ev()); fire(doc, 'click', ev({ target: { closest: (s) => (s === '#plus-btn' ? {} : null) } })); assert.equal(sheet.hidden, false, 'a click on + itself is not an outside tap');
+  fire(doc, 'click', ev()); assert.equal(sheet.hidden, true, 'tap outside');
+  fire(btn, 'click', ev()); fire(sheet, 'keydown', ev({ key: 'Escape' })); assert.equal(sheet.hidden, true, 'Escape'); assert.equal(btn.focused, 1, 'focus back on +');
+  fire(btn, 'click', ev()); fire(input, 'focus', ev()); assert.equal(sheet.hidden, true, 'the box got focus');
+  fire(btn, 'click', ev()); fire(sheet, 'click', ev({ target: { closest: (s) => (s === '[role="menuitem"]' ? {} : null) } })); assert.equal(sheet.hidden, true, 'a menu item closes it');
+  assert.ok(sheet.on.click[0].cap === true, 'the item listener runs in the capture phase: it closes before the item acts');
+  assert.ok(/async function sendMessage\(fallback\) \{\n\s+if \(typeof plusSheetShow === 'function'\) plusSheetShow\(false\);/.test(mob), 'sending closes it (guarded: page tests cut sendMessage with stubs)');
+  assert.ok(/voicePanelShow\(false\); \$\('plus-btn'\)\?\.focus\(\);/.test(mob), 'Escape in the voice panel returns focus to + (its opener sits in the closed sheet)');
+  assert.ok(/async function openChat\(name\) \{[^]*?plusSheetShow\(false\);/.test(mob.slice(mob.indexOf('async function openChat(name)'), mob.indexOf('async function openChat(name)') + 400)), 'opening a chat closes it');
+  assert.ok(/plusSheetWire\(\);\n\s+\$\('attach-btn'\)\.addEventListener\('click', \(\) => \$\('file-input'\)\.click\(\)\);\n\s+\$\('camera-btn'\)\.addEventListener\('click', \(\) => \$\('camera-input'\)\.click\(\)\);/.test(mob), 'attach and camera still click the file inputs directly, in the same tap');
 });
