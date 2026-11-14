@@ -8731,6 +8731,17 @@ function plusSheetWire() {
   b.addEventListener('keydown', (e) => { if (e.key === 'Escape' && plusSheetOpen()) { e.preventDefault(); plusSheetShow(false); b.focus(); } });
   document.addEventListener('click', (e) => { if (plusSheetOpen() && !s.contains(e.target) && !(e.target.closest && e.target.closest('#plus-btn'))) plusSheetShow(false); });
   $('msg-input')?.addEventListener('focus', () => plusSheetShow(false));
+  // Keyboard focus leaving the sheet (Tab past the last item, Shift+Tab before the first) closes it like Escape or an outside tap.
+  // A tap inside the sheet also blurs the item: only a new focus target outside the sheet counts (relatedTarget, else checked after a microtask).
+  let tabbing = false;
+  s.addEventListener('keydown', (e) => { if (e.key === 'Tab') { tabbing = true; setTimeout(() => { tabbing = false; }, 0); } });
+  const leftSheet = (t) => !!t && !s.contains(t) && (t !== b || tabbing);   // the + button itself: a tap on it has its own toggle
+  s.addEventListener('focusout', (e) => {
+    if (!plusSheetOpen()) return;
+    const rt = e.relatedTarget;
+    if (rt) { if (leftSheet(rt)) plusSheetShow(false); return; }
+    Promise.resolve().then(() => { const a = document.activeElement; if (plusSheetOpen() && a && a !== document.body && leftSheet(a)) plusSheetShow(false); });
+  });
 }
 function voiceStripPaint() {
   const on = voiceOn();
@@ -8787,6 +8798,12 @@ function voicePanelShow(show) {
   if (b) b.setAttribute('aria-expanded', show ? 'true' : 'false');
   if (show) voicePanelPaint(); else voiceRoomStop();   // a Room check still running lets go of the mic when the panel closes
 }
+function voicePanelFocusFirst() {
+  const p = $('voice-panel'); if (!p || p.hidden || !p.querySelectorAll) return;
+  const vis = (el) => !el.disabled && !el.hidden && !(el.closest && el.closest('[hidden]'));
+  const first = [...p.querySelectorAll('select, button, input, textarea, [tabindex]:not([tabindex="-1"])')].find(vis);
+  if (first && first.focus) first.focus();
+}
 function voicePanelWire() {
   const p = $('voice-panel'); if (!p) return;
   const pause = $('vp-pause');
@@ -8794,7 +8811,12 @@ function voicePanelWire() {
   const wait = $('vp-wait');
   if (wait) wait.innerHTML = VOICE_CONTINUE_WAITS.map((ms, i) => '<option value="' + ms + '">' + VOICE_WAIT_LABELS[i] + '</option>').join('');
   const save = (patch) => { voicePrefsSave(patch); voiceCallApplyPrefs(); voiceMicPaint(); voicePanelPaint(); paintVoiceSheet(); };
-  $('voice-settings-btn')?.addEventListener('click', (e) => { e.stopPropagation(); voicePanelShow(!voicePanelOpen()); });
+  $('voice-settings-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = !voicePanelOpen();
+    voicePanelShow(open);
+    if (open) requestAnimationFrame(voicePanelFocusFirst);   // the sheet (and the button that had focus) just closed: land on the panel, not <body>
+  });
   $('voice-mode-chip')?.addEventListener('click', () => save({ mode: voicePrefsNow().mode === 'tap' ? 'handsfree' : 'tap' }));
   for (const r of p.querySelectorAll('input[name="vp-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) save({ mode: e.target.value }); });
   const speed = $('vp-speed');
