@@ -86,7 +86,8 @@ test('renderAgents steps the section with live, streams, agents, held and enable
   const body = RENDER();
   const now = slice('function activeBusyNow()', '// The finger left');
   assert.match(now, /activeBusyFrom\(live, new Map\(\[\.\.\.streams\.keys\(\)\]\.map\(n => \[n, null\]\)\), agents\.map\(a => a\.name\)\)/);
-  assert.match(body, /activeStep\(activeState, \{ busy: activeBusyNow\(\), now: Date\.now\(\), held: activeHeld, enabled: activeTopOn\(\) \}\)/);
+  // changed: the step also passes jobs (the agents' running background jobs); everything else it checks is the same
+  assert.match(body, /activeStep\(activeState, \{ busy: activeBusyNow\(\), jobs: activeJobs, now: Date\.now\(\), held: activeHeld, enabled: activeTopOn\(\) \}\)/);
   assert.ok(body.indexOf('No agents found.') < body.indexOf('activeBusyNow('), 'after the empty-list return');
   assert.ok(body.indexOf('activeBusyNow(') < body.indexOf('const known'), 'before the groups loop');
 });
@@ -103,6 +104,9 @@ function renderEnv(over) {
     activeStep: (st, inp) => { env.calls.push(['step', inp]); return o.state || { rows: [] }; }, activeTitle: (s) => 'Active ' + s.rows.length,
     activeTopOn: () => true, screen: 'agents', matchMedia: () => ({ matches: false }), setInterval: () => 1, clearInterval() {},
     activeHeld: false, activeMissed: false, activeLastH: 0, activeLastCount: 0, activeTicker: null, calls: [], localStorage: {},
+    // changed: renderAgents and agentRowHtml now also read the jobs helpers and state (stubbed: no jobs)
+    activeJobsFrom: () => ({}), activeJobLabel: () => '', activeJobTitle: () => '', activeJobsSync() {}, activeJobsNow: () => ({}),
+    activeJobsRelabel() {}, activeJobs: {}, activeJobsTick: null,
   };
   const names = Object.keys(env).filter((n) => n !== 'calls');
   const src = ROW() + '\nlet activeState = activeInitial();\nfunction activeWireHold() {}\n' + slice('function activeBusyNow()', '// The finger left') + RENDER();
@@ -193,7 +197,8 @@ test('the menu switch: button without chat-only, wired, painted, key defaults on
   const make = (ls) => {
     const els = { 'menu-active-top': { textContent: '' }, menu: { classList: { remove() { els.closed = true; } } } };
     const calls = [];
-    const f = new Function('localStorage', '$', 'screen', 'renderAgents', fnSrc + '\nreturn { activeTopOn, paintActiveMenu, toggleActiveTop };')(ls, (id) => els[id], 'agents', () => calls.push('render'));
+    // changed: toggleActiveTop also calls activeJobsSync (stubbed here; it is recorded as 'sync' before the redraw)
+    const f = new Function('localStorage', '$', 'screen', 'renderAgents', 'activeJobsSync', fnSrc + '\nreturn { activeTopOn, paintActiveMenu, toggleActiveTop };')(ls, (id) => els[id], 'agents', () => calls.push('render'), () => calls.push('sync'));
     return { f, els, calls };
   };
   const store = {};

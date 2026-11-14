@@ -283,6 +283,9 @@
     .active-group .active-count { margin-left: 6px; padding: 0 6px; border-radius: 8px; background: var(--bg-card, #333); font-size: 11px; }
     .agent-btn.active-done { opacity: .6; }
     .active-copy .action-btn { display: none; }
+    /* Background-job tag in an Active row; a row working only through a job (active-joby) has a hollow muted dot. */
+    .agent-btn .agent-job-line { display: block; font-size: 0.6rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .agent-btn.active-joby .agent-status.live-joby { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-dim); animation: none; }
     @media (prefers-reduced-motion: reduce) { #agent-active-group { animation: none; transition: none; } }
     .group-actions { display: flex; gap: 6px; }
     .group-action-btn {

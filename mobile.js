@@ -1756,20 +1756,25 @@ function renderWorkingChip() {
 // opts.active: a row of the Active section; when only the agent's temporary workers run it still reads as working.
 function agentRowHtml(a, opts) {
   const done = !!(opts && opts.done);
-  const viaWorkers = !!(opts && opts.active) && !done && !isBusy(a.name);
+  const jobOnly = !!(opts && opts.jobOnly) && !done;   // working only through a background job: hollow dot, the job line instead of the status
+  const viaWorkers = !!(opts && opts.active) && !done && !jobOnly && !isBusy(a.name);
   const n = unread[a.name] || 0;
   const s = live[a.name];
-  const question = !done && !!(s && s.pendingQuestion);
-  const working = !done && (isBusy(a.name) || viaWorkers);
-  const dotCls = question ? ' question' : working ? ' busy' : statusKnown ? ' idle' : '';
-  const sub = done
+  const question = !done && !jobOnly && !!(s && s.pendingQuestion);
+  const working = !done && !jobOnly && (isBusy(a.name) || viaWorkers);
+  const dotCls = question ? ' question' : working ? ' busy' : jobOnly ? ' joby' : statusKnown ? ' idle' : '';
+  const job = !done && opts && opts.job ? opts.job : null;
+  const jobHtml = job ? `<div class="agent-job" title="${esc(activeJobTitle(job))}">⏳ ${esc(activeJobLabel(job, Date.now()))}</div>` : '';
+  const sub = (done
     ? '<div class="agent-model working">✓ done</div>'
-    : viaWorkers
-      ? '<div class="agent-model working">⏳ working</div>'
-      : working
-        ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name))}</div>`
-        : `<div class="agent-model" title="${esc(a.blurb || '')}">${esc(a.blurb || shortModel(a.model))}</div>`;
-  return `<button class="agent-row${working ? ' is-busy' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}">` +
+    : jobOnly
+      ? ''
+      : viaWorkers
+        ? '<div class="agent-model working">⏳ working</div>'
+        : working
+          ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name))}</div>`
+          : `<div class="agent-model" title="${esc(a.blurb || '')}">${esc(a.blurb || shortModel(a.model))}</div>`) + jobHtml;
+  return `<button class="agent-row${working ? ' is-busy' : ''}${jobOnly ? ' active-joby' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}">` +
     `<span class="agent-icon">${esc(a.icon || '🤖')}</span>` +
     `<span class="agent-meta"><div class="agent-name">${esc(a.display || a.name)}${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}</div>${sub}</span>` +
     `<span class="dot${dotCls}" title="${esc(working && !viaWorkers ? busyText(a.name) : '')}">${question ? '?' : ''}</span>` +
@@ -1797,6 +1802,7 @@ function toggleActiveTop() {
   $('menu').classList.remove('open');
   try { localStorage.setItem('hub-active-top', activeTopOn() ? 'off' : 'on'); } catch { /* storage refused */ }
   paintActiveMenu();
+  activeJobsSync();
   if (screen === 'agents') renderAgents();
 }
 function activeBusyNow() {
@@ -1809,7 +1815,7 @@ function activeRelease() {
   activeHoldTimer = null;
   if (!activeHeld) return;
   activeHeld = false;
-  const next = activeStep(activeState, { busy: activeBusyNow(), now: Date.now(), held: false, enabled: activeTopOn() });
+  const next = activeStep(activeState, { busy: activeBusyNow(), jobs: activeJobsNow(), now: Date.now(), held: false, enabled: activeTopOn() });
   if (!activeMissed && !activeMembersChanged(activeState, next)) return;
   setTimeout(() => { if (!activeHeld && screen === 'agents') renderAgents(); }, 400);
 }
@@ -1824,6 +1830,62 @@ function activeWireHold(list) {
   list.addEventListener('touchcancel', activeRelease, { passive: true });
 }
 
+// Agents' detached background jobs in the Active section (GET /api/jobs, admins only). Polled every 15 s while the
+// switch is on and the page is visible; 401/403 (not an admin) stops it for good; after other errors the last good
+// list is kept for at most 60 s. A changed list redraws through renderAgents (so the hold rules apply).
+const ACTIVE_JOBS_MS = 15000;
+const ACTIVE_JOBS_STALE_MS = 60000;
+let activeJobList = [];
+let activeJobs = {};          // activeJobsFrom(activeJobList, agents) as last drawn
+let activeJobsOkAt = 0;
+let activeJobsSig = '';
+let activeJobsStopped = false;
+let activeJobsTimer = null;
+let activeJobsTick = null;
+function activeJobsWanted() {
+  return !activeJobsStopped && activeTopOn() && document.visibilityState === 'visible';
+}
+function activeJobsSync() {
+  const want = activeJobsWanted();
+  if (want && !activeJobsTimer) { activeJobsPoll(); activeJobsTimer = setInterval(activeJobsPoll, ACTIVE_JOBS_MS); }
+  else if (!want && activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
+}
+async function activeJobsPoll() {
+  if (!activeJobsWanted()) return;
+  let list = null;
+  try {
+    const res = await api('/api/jobs');
+    if (res.status === 401 || res.status === 403) {
+      activeJobsStopped = true;
+      if (activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
+      list = [];
+    } else if (!res.ok) throw new Error('HTTP ' + res.status);
+    else { const d = await res.json(); list = Array.isArray(d && d.jobs) ? d.jobs : []; activeJobsOkAt = Date.now(); }
+  } catch {
+    if (Date.now() - activeJobsOkAt > ACTIVE_JOBS_STALE_MS) list = [];
+  }
+  if (!list) return;
+  const sig = JSON.stringify(list.map(j => [j && j.id, j && j.name, j && j.owner, j && j.status, j && j.startedAt]));
+  if (sig === activeJobsSig) return;
+  activeJobsSig = sig;
+  activeJobList = list;
+  if (screen === 'agents') renderAgents();
+}
+function activeJobsNow() {
+  return activeJobsFrom(activeJobList, agents.map(a => a.name));
+}
+// The elapsed time changes between polls: relabel the drawn rows in place (no redraw).
+function activeJobsRelabel() {
+  const list = $('agents-list');
+  if (screen !== 'agents' || !list || !Object.keys(activeJobs).length) { clearInterval(activeJobsTick); activeJobsTick = null; return; }
+  for (const el of list.querySelectorAll('.active-sec .agent-row')) {
+    const info = activeJobs[el.dataset.agent];
+    const j = el.querySelector('.agent-job');
+    if (info && j) { j.textContent = '⏳ ' + activeJobLabel(info, Date.now()); j.title = activeJobTitle(info); }
+  }
+}
+document.addEventListener('visibilitychange', activeJobsSync);
+
 function renderAgents() {
   const list = $('agents-list');
   // While a finger is on the list (switch on), no redraw from any source (status events, the linger ticker): it would
@@ -1833,13 +1895,14 @@ function renderAgents() {
   renderWorkingChip();
   if (!agents.length) { list.innerHTML = '<div class="empty">No agents found.</div>'; return; }
   activeWireHold(list);
-  activeState = activeStep(activeState, { busy: activeBusyNow(), now: Date.now(), held: activeHeld, enabled: activeTopOn() });
+  activeJobs = activeJobsNow();
+  activeState = activeStep(activeState, { busy: activeBusyNow(), jobs: activeJobs, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
   let activeHtml = '';
   const activeRows = activeState.rows.map(row => ({ row, a: agents.find(x => x.name === row.name) })).filter(r => r.a);
   if (activeRows.length) {
     const activeCollapsed = !workingFilter && !!collapsed.active;
     activeHtml = `<div class="active-sec"><button class="group-title" data-group="active"><span>⚡ ${esc(activeTitle({ rows: activeRows }))}</span><span>${activeCollapsed ? '&#x25B8;' : '&#x25BE;'}</span></button>`;
-    if (!activeCollapsed) for (const { row, a } of activeRows) activeHtml += agentRowHtml(a, { done: row.doneAt != null, active: true });
+    if (!activeCollapsed) for (const { row, a } of activeRows) activeHtml += agentRowHtml(a, { done: row.doneAt != null, active: true, jobOnly: !!row.jobOnly, job: activeJobs[a.name] });
     activeHtml += '</div>';
   }
   const known = new Set(GROUPS.map(g => g.key));
@@ -1867,6 +1930,7 @@ function renderAgents() {
   }
   activeLastH = h;
   activeLastCount = activeRows.length;
+  if (!activeJobsTick && activeRows.some(r => activeJobs[r.row.name])) activeJobsTick = setInterval(activeJobsRelabel, 30000);
   if (!activeTicker && activeState.rows.some(r => r.doneAt != null)) {
     activeTicker = setInterval(() => {
       // stops when nothing lingers or this screen is left (renderAgents steps the state again on the way back)
@@ -5597,27 +5661,55 @@ function activeBusyFrom(statusMap, localBusy, visibleNames) {
   }
   return out;
 }
+function activeJobsFrom(jobs, visibleNames) {
+  const visible = new Set(visibleNames || []);
+  const list = [];
+  for (const j of Array.isArray(jobs) ? jobs : []) {
+    if (!j || !j.owner || !visible.has(j.owner)) continue;
+    if (j.status !== 'running' && j.status !== 'cancelling') continue;
+    const t = typeof j.startedAt === 'number' ? j.startedAt : Date.parse(j.startedAt);
+    list.push({ owner: j.owner, name: String(j.name == null ? '' : j.name).trim() || 'job', at: Number.isFinite(t) ? t : Date.now() });
+  }
+  list.sort((a, b) => a.at - b.at);                           // oldest first (the sort is stable)
+  const out = {};
+  for (const j of list) {
+    const o = out[j.owner] || (out[j.owner] = { names: [], since: j.at, count: 0 });
+    o.names.push(j.name); o.count++;
+  }
+  return out;
+}
+function activeJobLabel(info, now) {
+  if (!info || !info.count) return '';
+  const m = Math.max(0, Math.floor(((now == null ? Date.now() : now) - info.since) / 60000));
+  const t = m < 1 ? '<1 min' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
+  return `${info.names[0]}${info.count > 1 ? ` + ${info.count - 1} more` : ''} \u00B7 ${t}`;
+}
+function activeJobTitle(info) {
+  return info && info.names ? info.names.join('\n') : '';
+}
 function activeStep(state, input) {
-  const { busy = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
+  const { busy = {}, jobs = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
   if (!enabled) return { rows: [] };
+  const work = Object.assign({}, busy);                       // working: busy, or has a running job
+  for (const n of Object.keys(jobs)) work[n] = n in work ? Math.min(work[n], jobs[n].since) : jobs[n].since;
   const prev = (state && state.rows) || [];
   const rows = [];
   for (const r of prev) {
-    if (r.name in busy) { rows.push({ name: r.name, since: Math.min(r.since, busy[r.name]), doneAt: null }); continue; }
+    if (r.name in work) { rows.push({ name: r.name, since: Math.min(r.since, work[r.name]), doneAt: null, jobOnly: !(r.name in busy) }); continue; }
     const doneAt = r.doneAt == null ? now : r.doneAt;
     if (!held && now - doneAt >= lingerMs) continue;          // leaves the section
-    rows.push({ name: r.name, since: r.since, doneAt });
+    rows.push({ name: r.name, since: r.since, doneAt, jobOnly: false });
   }
   if (held) return { rows };                                  // nothing joins while the list is held
   const have = new Set(rows.map(r => r.name));
-  const joining = Object.keys(busy).filter(n => !have.has(n)).map(n => ({ name: n, since: busy[n], doneAt: null }));
+  const joining = Object.keys(work).filter(n => !have.has(n)).map(n => ({ name: n, since: work[n], doneAt: null, jobOnly: !(n in busy) }));
   joining.sort((a, b) => (a.since - b.since) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return { rows: rows.concat(joining) };
 }
 function activeChanged(a, b) {
   const x = (a && a.rows) || [], y = (b && b.rows) || [];
   if (x.length !== y.length) return true;
-  for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null)) return true;
+  for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null) || !!x[i].jobOnly !== !!y[i].jobOnly) return true;
   return false;
 }
 function activeMembersChanged(a, b) {
@@ -10765,6 +10857,7 @@ async function init() {
   refreshPlanUsage();
   if (new URLSearchParams(location.search).get('security') === '1') openSecuritySheet();
   await loadAgents();
+  activeJobsSync();
   const route = routeFromHash();
   window.history.replaceState({ screen: route.screen, agent: route.agent }, '');
   applyRoute(route);

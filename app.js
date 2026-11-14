@@ -6564,9 +6564,15 @@
     // Active section at the top of the agent list (helpers: activeInitial, activeBusyFrom, activeStep, ...).
     let activeState = activeInitial(); let activeHeld = false; let activeHoldTimer = null; let activeTicker = null;
     let activeHoldWired = false;
+    // Background-job state for the Active section (poll below, after paintActiveSection).
+    const ACTIVE_JOBS_MS = 15000;
+    const ACTIVE_JOBS_STALE_MS = 60000;
+    let activeJobList = []; let activeJobs = {}; let activeJobsOkAt = 0; let activeJobsSig = '';
+    let activeJobsStopped = false; let activeJobsTimer = null;
     function activeTopOn() { try { return localStorage.getItem('hub-active-top') !== 'off'; } catch { return true; } }
     function saveActiveTop(on) {
       try { localStorage.setItem('hub-active-top', on ? 'on' : 'off'); } catch {}
+      activeJobsSync();
       paintActiveSection(true);
     }
     // Put a copy's status in line with its row: done rows say so; a row whose own entry is idle but whose temporary
@@ -6579,9 +6585,16 @@
       };
       const dd = copy.querySelector('.agent-status');
       copy.classList.toggle('active-done', row.doneAt != null);
+      copy.classList.toggle('active-joby', !!row.jobOnly && row.doneAt == null);
       if (row.doneAt != null) {
         copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done';
         if (dd) { dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done'; }
+        return;
+      }
+      if (row.jobOnly) {   // working only through a background job: no status line, a hollow muted dot (the job tag says the rest)
+        copy.classList.remove('is-busy');
+        if (line) line.remove();
+        if (dd) { dd.className = 'agent-status live-joby'; dd.textContent = ''; dd.title = 'Running a background job'; }
         return;
       }
       const src = orig && orig.querySelector('.agent-busy-line');
@@ -6595,6 +6608,18 @@
         if (dd) { dd.className = 'agent-status live-busy'; dd.textContent = ''; dd.title = 'Working with helpers'; }
       }
     }
+    // The background-job tag under the status line: '⏳ <oldest job> + N more · 4 min', the full names as its tooltip.
+    // Rewritten in place on every paint, so the elapsed time moves without a rebuild; removed when the agent has no job.
+    function activeDressJob(copy, row) {
+      const info = row.doneAt == null ? activeJobs[row.name] : null;
+      let el = copy.querySelector('.agent-job-line');
+      if (!info) { if (el) el.remove(); return; }
+      if (!el) { el = document.createElement('span'); el.className = 'agent-job-line'; }
+      el.textContent = '⏳ ' + activeJobLabel(info, Date.now());
+      el.title = activeJobTitle(info);
+      const host = copy.querySelector('.agent-info') || copy;
+      if (el.parentNode !== host || host.lastElementChild !== el) host.appendChild(el);   // always after the busy line
+    }
     function activeMakeCopy(row) {
       const orig = document.getElementById('agent-btn-' + row.name);
       if (!orig) return null;
@@ -6604,6 +6629,7 @@
       copy.classList.add('active-copy');
       copy.classList.remove('in-group');
       activeDress(copy, row, orig);
+      activeDressJob(copy, row);
       copy.addEventListener('click', (e) => {
         if (!e.target.classList.contains('action-btn')) startSoloChat(copy.dataset.agent, copy.dataset.model);
       });
@@ -6623,7 +6649,8 @@
       // Only agents that have a row in this list (the access-filtered AGENTS, in one of the shown groups).
       const visible = AGENTS.map(a => a.name).filter(n => document.getElementById('agent-btn-' + n));
       const busy = activeBusyFrom(agentStatus, localBusy, visible);
-      const next = activeStep(activeState, { busy, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
+      activeJobs = activeJobsFrom(activeJobList, visible);
+      const next = activeStep(activeState, { busy, jobs: activeJobs, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
       const membersChanged = force || activeMembersChanged(activeState, next);
       activeState = next;
       if (activeState.rows.length === 0) {
@@ -6653,9 +6680,42 @@
       const byName = new Map([...items.children].map(c => [c.dataset.agent, c]));
       for (const row of activeState.rows) {
         const copy = byName.get(row.name);
-        if (copy) activeDress(copy, row, document.getElementById('agent-btn-' + row.name));
+        if (copy) { activeDress(copy, row, document.getElementById('agent-btn-' + row.name)); activeDressJob(copy, row); }
       }
     }
+    // Agents' detached background jobs (GET /api/jobs, admins only). Polled once at load and every 15 s while the
+    // switch is on and the tab is visible; 401/403 (not an admin) stops it for good; after other errors the last good
+    // list is kept for at most 60 s. A changed list repaints through paintActiveSection (held / membership rules apply).
+    // (Its state is declared with the other Active state above, so an early paint never meets it uninitialised.)
+    function activeJobsWanted() { return !activeJobsStopped && activeTopOn() && document.visibilityState === 'visible'; }
+    function activeJobsSync() {
+      const want = activeJobsWanted();
+      if (want && !activeJobsTimer) { activeJobsPoll(); activeJobsTimer = setInterval(activeJobsPoll, ACTIVE_JOBS_MS); }
+      else if (!want && activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
+    }
+    async function activeJobsPoll() {
+      if (!activeJobsWanted()) return;
+      let list = null;
+      try {
+        const res = await fetch('/api/jobs', { credentials: 'include' });
+        if (res.status === 401 || res.status === 403) {
+          activeJobsStopped = true;
+          if (activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
+          list = [];
+        } else if (!res.ok) throw new Error('HTTP ' + res.status);
+        else { const d = await res.json(); list = Array.isArray(d && d.jobs) ? d.jobs : []; activeJobsOkAt = Date.now(); }
+      } catch {
+        if (Date.now() - activeJobsOkAt > ACTIVE_JOBS_STALE_MS) list = [];
+      }
+      if (!list) return;
+      const sig = JSON.stringify(list.map(j => [j && j.id, j && j.name, j && j.owner, j && j.status, j && j.startedAt]));
+      if (sig === activeJobsSig) return;
+      activeJobsSig = sig;
+      activeJobList = list;
+      paintActiveSection();
+    }
+    document.addEventListener('visibilitychange', activeJobsSync);
+    activeJobsSync();
     function activeWireHold() {
       if (activeHoldWired) return;
       const list = document.getElementById('agent-list');
@@ -16111,27 +16171,55 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return out;
     }
+    function activeJobsFrom(jobs, visibleNames) {
+      const visible = new Set(visibleNames || []);
+      const list = [];
+      for (const j of Array.isArray(jobs) ? jobs : []) {
+        if (!j || !j.owner || !visible.has(j.owner)) continue;
+        if (j.status !== 'running' && j.status !== 'cancelling') continue;
+        const t = typeof j.startedAt === 'number' ? j.startedAt : Date.parse(j.startedAt);
+        list.push({ owner: j.owner, name: String(j.name == null ? '' : j.name).trim() || 'job', at: Number.isFinite(t) ? t : Date.now() });
+      }
+      list.sort((a, b) => a.at - b.at);                           // oldest first (the sort is stable)
+      const out = {};
+      for (const j of list) {
+        const o = out[j.owner] || (out[j.owner] = { names: [], since: j.at, count: 0 });
+        o.names.push(j.name); o.count++;
+      }
+      return out;
+    }
+    function activeJobLabel(info, now) {
+      if (!info || !info.count) return '';
+      const m = Math.max(0, Math.floor(((now == null ? Date.now() : now) - info.since) / 60000));
+      const t = m < 1 ? '<1 min' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
+      return `${info.names[0]}${info.count > 1 ? ` + ${info.count - 1} more` : ''} \u00B7 ${t}`;
+    }
+    function activeJobTitle(info) {
+      return info && info.names ? info.names.join('\n') : '';
+    }
     function activeStep(state, input) {
-      const { busy = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
+      const { busy = {}, jobs = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
       if (!enabled) return { rows: [] };
+      const work = Object.assign({}, busy);                       // working: busy, or has a running job
+      for (const n of Object.keys(jobs)) work[n] = n in work ? Math.min(work[n], jobs[n].since) : jobs[n].since;
       const prev = (state && state.rows) || [];
       const rows = [];
       for (const r of prev) {
-        if (r.name in busy) { rows.push({ name: r.name, since: Math.min(r.since, busy[r.name]), doneAt: null }); continue; }
+        if (r.name in work) { rows.push({ name: r.name, since: Math.min(r.since, work[r.name]), doneAt: null, jobOnly: !(r.name in busy) }); continue; }
         const doneAt = r.doneAt == null ? now : r.doneAt;
         if (!held && now - doneAt >= lingerMs) continue;          // leaves the section
-        rows.push({ name: r.name, since: r.since, doneAt });
+        rows.push({ name: r.name, since: r.since, doneAt, jobOnly: false });
       }
       if (held) return { rows };                                  // nothing joins while the list is held
       const have = new Set(rows.map(r => r.name));
-      const joining = Object.keys(busy).filter(n => !have.has(n)).map(n => ({ name: n, since: busy[n], doneAt: null }));
+      const joining = Object.keys(work).filter(n => !have.has(n)).map(n => ({ name: n, since: work[n], doneAt: null, jobOnly: !(n in busy) }));
       joining.sort((a, b) => (a.since - b.since) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       return { rows: rows.concat(joining) };
     }
     function activeChanged(a, b) {
       const x = (a && a.rows) || [], y = (b && b.rows) || [];
       if (x.length !== y.length) return true;
-      for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null)) return true;
+      for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null) || !!x[i].jobOnly !== !!y[i].jobOnly) return true;
       return false;
     }
     function activeMembersChanged(a, b) {
