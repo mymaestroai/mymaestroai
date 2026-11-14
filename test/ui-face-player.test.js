@@ -356,6 +356,9 @@ test('quiet idle: a pack that marks its idle clips calm or not decides; a clip l
   assert.strictEqual(by['idle-c'].calm, false, 'a marked pack: an unmarked idle clip is not calm');
   assert.strictEqual(by['idle-d'].calm, false, 'a non-boolean mark is dropped, then counts as unmarked');
   assert.strictEqual(by['listen-a'].calm, undefined, 'only idle clips get the default');
+  const other = FP.faceNormalizeManifest({ clips: [mk('idle-c'), clip('listen-a', 'listening', { calm: true })] });
+  assert.ok(!('calm' in other.clips[0]), 'a mark on a non-idle clip does not turn the idle guess off (review r3)');
+  assert.strictEqual(FP.faceCalmIdle(other.clips[0]), true);
   const plain = FP.faceNormalizeManifest({ clips: [mk('idle-c'), mk('idle-d', { calm: 'yes' })] });
   assert.ok(plain.clips.every(c => !('calm' in c)), 'an unmarked pack keeps no mark (the name rules apply)');
   assert.strictEqual(f(plain.clips[0]), true);
