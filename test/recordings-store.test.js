@@ -151,6 +151,7 @@ test('nothing on disk is plaintext', async () => {
   for (const f of walk(root)) {
     const b = fs.readFileSync(f);
     if (path.basename(f) === '.mymaestro-recordings') continue;
+    if (path.basename(f).startsWith('call-')) { assert.strictEqual(b.length, 0, `${f}: a call marker is empty`); continue; }
     assert.ok(!b.includes('fLaC'), f);
     for (const word of ['born by the sea', 'Tell me more', 'patient-a', 'sessionId', 'biographer', 'TestAgent']) assert.ok(!b.includes(word), `${word} in ${f}`);
     assert.strictEqual(b.toString('latin1', 0, 6), 'MMREC1');

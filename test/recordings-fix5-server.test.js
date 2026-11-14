@@ -10,7 +10,7 @@ const path = require('node:path');
 const { Readable, Writable } = require('node:stream');
 const routes = require('../lib/recordings/routes');
 const voiceRoutes = require('../lib/voice/routes');
-const { createStore } = require('../lib/recordings/store');
+const { createStore, callMarkerName } = require('../lib/recordings/store');
 const { deriveKey, open } = require('../lib/recordings/crypt');
 const { createVoiceCalls } = require('../lib/voice/call');
 const { mergeRecordings } = require('../lib/backup/recordings-merge');
@@ -117,10 +117,56 @@ function captureLog(fn) {
   return Promise.resolve().then(fn).then((r) => { console.log = orig; return { r, lines }; }, (e) => { console.log = orig; throw e; });
 }
 
+const markerFile = (t, sid, callId) => path.join(t.dir, 'call-recordings', 'biographer', sid, callMarkerName(callId));
+const damage = (t, sid) => fs.writeFileSync(manifestFile(t, sid), Buffer.from('not a sealed file'));
+
+test('1: createSession writes an empty 0600 call marker named from sha256(callId)', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  const name = `call-${crypto.createHash('sha256').update(a.callId).digest('hex').slice(0, 32)}`;
+  assert.strictEqual(callMarkerName(a.callId), name);
+  const st = fs.statSync(markerFile(t, a.sessionId, a.callId));
+  assert.strictEqual(st.size, 0);
+  assert.strictEqual(st.mode & 0o777, 0o600);
+});
+
+test('1: a damaged manifest that IS the requested call is inconclusive (503 try_later), never a miss', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  await t.startCall();
+  damage(t, a.sessionId);
+  await assert.rejects(t.real.findSessionByCall('biographer', a.callId), (e) => e.code === 'lookup_inconclusive');
+  t.restart();
+  const r = await t.call(tr(a.callId));
+  assert.strictEqual(r.statusCode, 503);
+  assert.deepStrictEqual(r.json(), { error: 'try_later' });
+});
+
+test('1: a damaged unrelated session with a marker is not opened: an unknown call id is a clean miss', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  damage(t, a.sessionId);
+  const { r, lines } = await captureLog(() => t.real.findSessionByCall('biographer', 'call-unknown-q'));
+  assert.strictEqual(r, null);
+  assert.deepStrictEqual(lines, []);
+});
+
+test('1: a session folder without a marker (made before markers) is still matched by its manifest', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  const b = await t.startCall();
+  fs.rmSync(markerFile(t, a.sessionId, a.callId));
+  fs.rmSync(markerFile(t, b.sessionId, b.callId));
+  assert.strictEqual((await t.real.findSessionByCall('biographer', a.callId)).sessionId, a.sessionId);
+  assert.strictEqual((await t.real.findSessionByCall('biographer', b.callId)).sessionId, b.sessionId);
+  assert.strictEqual(await t.real.findSessionByCall('biographer', 'call-unknown-z'), null);
+});
+
 test('1: a damaged session is skipped: an unknown call id is a miss, logged once per hour', async () => {
   const t = fx();
   const a = await t.startCall();
   await t.startCall();
+  fs.rmSync(markerFile(t, a.sessionId, a.callId));   // a session without a marker (legacy)
   fs.writeFileSync(manifestFile(t, a.sessionId), Buffer.from('not a sealed file'));
   const { r, lines } = await captureLog(async () => [
     await t.real.findSessionByCall('biographer', 'call-unknown-x'),
@@ -142,7 +188,8 @@ test('1: a damaged manifest in the window is skipped (409, logged once); a match
   const miss = await t.call(tr('call-unknown-1'));
   assert.strictEqual(miss.statusCode, 409);
   assert.deepStrictEqual(miss.json(), { error: 'not_recording' });
-  // damage the first session's manifest
+  // damage the first session's manifest (a legacy session: no marker)
+  fs.rmSync(markerFile(t, a.sessionId, a.callId));
   fs.writeFileSync(manifestFile(t, a.sessionId), Buffer.from('not a sealed file'));
   routes.resetForTests();
   const { r: bad, lines } = await captureLog(() => t.call(tr('call-unknown-2')));

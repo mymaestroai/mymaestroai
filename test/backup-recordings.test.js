@@ -131,6 +131,25 @@ test('a backup from another install key: the live-only session is re-sealed and 
   assert.deepStrictEqual(rep.notOpened, []);
 });
 
+test('the empty call marker in a session folder is copied unchanged across a key change and is not listed as unopened', async () => {
+  const { callMarkerName } = require('../lib/recordings/store');
+  const { inst, file } = await backupOf('marker');
+  const oldHex = keyHex(inst);
+  const newHex = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(path.join(inst.root, 'data', '.auth-key'), newHex);
+  fs.rmSync(path.join(inst.hubHome, RECORDINGS), { recursive: true, force: true });
+  const s = storeOf(inst, newHex);
+  const { sessionId } = await s.createSession('biographer', { userId: 'owner', callId: 'call-marker-1' });
+  await s.addSegment('biographer', sessionId, { speaker: 'person', wav: wav(), startedAt: new Date().toISOString() });
+  const { applied } = await restoreAndApply(inst, file);
+  assert.strictEqual(keyHex(inst), oldHex);
+  const mk = path.join(inst.hubHome, RECORDINGS, 'biographer', sessionId, callMarkerName('call-marker-1'));
+  assert.ok(fs.existsSync(mk), 'the marker is placed');
+  assert.strictEqual(fs.statSync(mk).size, 0, 'unchanged: still empty');
+  assert.deepStrictEqual(applied.journal.report.recordings.notOpened, []);
+  await opens(inst, sessionId, oldHex);
+});
+
 test('a live file that does not open is copied unchanged and named in the report', async () => {
   const { inst, file } = await backupOf('broken');
   const oldHex = keyHex(inst);
