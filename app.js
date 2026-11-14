@@ -11204,6 +11204,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // the first spoken line of the call waits until VOICE_CALL_LEAD_IN_MS after that (the route needs a moment to open, or the first syllable is lost).
       let leadInUntil = 0, keepAliveOn = false, micLost = false;
       let linkLost = false, linkWasLost = false;   // the connection to the server is lost (setLinkLost): speech is dropped, nothing is reported as an error
+      // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost); it is dropped when
+      // that differs from the count when it is transcribed or sent, so nothing heard around an outage reaches the agent after the link is back.
+      let linkGen = 0, segLinkGen = 0;
       const prefs = () => { const p = quiet(() => d.prefs && d.prefs()); return p && typeof p === 'object' ? p : {}; };
       // 'Wait for me to go on': how long a sentence that sounds unfinished waits for the next piece.
       const continueWait = () => { const n = Number(prefs().continueWait); return Number.isFinite(n) && n >= 0 ? n : VOICE_CALL_CONTINUE_MS; };
@@ -11568,6 +11571,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         personSpeaking = true; stopThinking(); clearQuiet();
         capWake = { sb: standby, seq: wakeSeq };
         speechAnn = heardAnnouncement();
+        segLinkGen = linkLost ? -1 : linkGen;
         clearBegin();
         segmentStarting();
         // Real speech, a misfire and an end all clear this timer, so when it fires no real start came: let the false start go.
@@ -11577,7 +11581,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       function onSpeechStart() {
         if (ended) return;
         clearBegin();
-        if (!personSpeaking) speechAnn = heardAnnouncement();   // no onSpeechBegin came first
+        if (!personSpeaking) { speechAnn = heardAnnouncement(); segLinkGen = linkLost ? -1 : linkGen; }   // no onSpeechBegin came first
         if (!personSpeaking || !capWake) capWake = { sb: standby, seq: wakeSeq };
         personSpeaking = true; stopThinking(); clearQuiet();
         quiet(() => ui.reply('drop'));   // real speech: a reaction that has not played is dropped
@@ -11625,7 +11629,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // sb and seq: was this said in standby (when it began, or now), and how many wakes had there been. Said in standby, it needs the phrase unless a wake came
         // in between (the phrase said alone, then this): so neither a switch-off nor a lost recognizer check can release it.
         const cap = capWake || { sb: standby, seq: wakeSeq }; capWake = null;
-        const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq };
+        const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq,
+          linkGen: segLinkGen === linkGen && !linkLost ? linkGen : -1 };
+        const stale = () => linkLost || mine.linkGen !== linkGen;   // heard while the link was lost, or an outage began since: never sent
         speechAnn = null; segActive = false;
         const cand = curCand; curCand = null;
         if (cand && cand.hold) cand.hold.resolve(mine);   // the earlier piece hands its text to this one
@@ -11640,8 +11646,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             const w0 = wake();
             if (mustMatch() && !(w0 && w0.local === true)) return;   // standby without a recognizer known to be local: not even transcribed
             const dropLong = mustMatch() && !!audio && audio.length > 30 * 16000;   // a long stretch of talk in standby is not transcribed at all
-            try { text = dropLong || linkLost ? '' : await d.stt(audio); } catch { failed = true; if (!mustMatch() && !linkLost) quiet(() => ui.toast('Could not transcribe that.')); }
-            if (ended || linkLost) return;   // while the connection is lost what was heard is dropped, not sent
+            try { text = dropLong || stale() ? '' : await d.stt(audio); } catch { failed = true; if (!mustMatch() && !linkLost) quiet(() => ui.toast('Could not transcribe that.')); }
+            if (ended || stale()) return;   // heard around an outage: dropped, not sent (also when the link came back while this waited)
             const own = String(text || '').trim(), n = voiceCallNorm(own);
             const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
             let t = ownOk ? own : '';
@@ -11687,7 +11693,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               let holdTimer = null, timedOut = false;
               const next = await Promise.race([mine.hold.promise, new Promise((r) => { holdTimer = d.setTimer(() => { timedOut = true; r(null); }, waited ? VOICE_CALL_WAIT_HOLD_MS : VOICE_CALL_HOLD_MS); })]);
               if (holdTimer !== null) quiet(() => d.clearTimer(holdTimer));
-              if (ended) return;
+              if (ended || stale()) return;
               if (next) { next.carry = t; if (next.ann == null) next.ann = mine.ann; return; }
               if (timedOut || !waited) break;
               // A misfire (cough, click) ended the wait early: the rest of the wait goes on.
@@ -11696,7 +11702,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               await waitMore(left);
               if (ended) return;
             }
-            if (linkLost) return;
+            if (stale()) return;
             mine.done = true;
             heardShown = true; quiet(() => ui.heard(t));
             sttPending--; counted = true;   // the transcript is out of the queue: the thinking sound may arm while the turn runs
@@ -11743,7 +11749,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // when it is back after a real outage, "Reconnected." is spoken (kind 'mic': a barge-in does not drop it).
       function setLinkLost(on) {
         if (ended) return;
-        if (on) { linkLost = true; linkWasLost = true; return; }
+        if (on) { if (!linkLost) linkGen++; linkLost = true; linkWasLost = true; return; }
         if (!linkLost) return;
         linkLost = false;
         if (linkWasLost) { linkWasLost = false; enqueue('Reconnected.', 'mic'); }
@@ -11883,6 +11889,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const lostEvery = Number.isFinite(Number(c.lostEveryMs)) ? Number(c.lostEveryMs) : 1000;
       const giveUp = Number.isFinite(Number(c.giveUpMs)) ? Number(c.giveUpMs) : 10000;
       let running = false, lost = false, lostAt = 0, probing = false, gen = 0, timer = null, giveTimer = null;
+      let outage = 0;   // each loss adds one: only a probe started after the loss can say the link is back
       const say = (f) => { try { if (typeof f === 'function') f(); } catch { /* a listener must not break the watch */ } };
       const clear = (t) => { if (t !== null) { try { clrT(t); } catch { /* gone */ } } return null; };
       function schedule(ms) {
@@ -11891,7 +11898,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       function markLost() {
         if (!running || lost) return;
-        lost = true; lostAt = clock();
+        lost = true; lostAt = clock(); outage++;
         giveTimer = clear(giveTimer);
         giveTimer = setT(() => {
           giveTimer = null;
@@ -11907,7 +11914,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!running || probing) return;
         probing = true;
         timer = clear(timer);
-        const my = gen;
+        const my = gen, myOutage = outage;
         let p;
         try { p = Promise.resolve(c.probe()); } catch { p = Promise.resolve(false); }
         p.then((ok) => ok === true, () => false).then((ok) => {
@@ -11915,6 +11922,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           probing = false;
           if (ok) {
             if (lost) {
+              if (myOutage !== outage) { schedule(0); return; }   // it left before the loss: it proves nothing, so ask again at once (the deadline stands)
               if (clock() - lostAt > giveUp) return;   // too late: the give-up timer ends the call
               lost = false; giveTimer = clear(giveTimer);
               schedule(every);
@@ -12730,8 +12738,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     async function voiceFetchTts(agent, text, voice) {
       const body = { agent, text, speed: voiceSpeedNow() };
       if (voice) body.voice = voice;
+      const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
       let r;
-      try { r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e); throw e; }   // a network failure marks the link lost (text-to-speech)
+      try { r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost (text-to-speech)
       if (!r.ok) {
         let m = '';
         try { m = (await r.json()).error; } catch {}
@@ -13137,8 +13146,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_LINK_LOST_TEXT = 'Connection lost', VOICE_LINK_ENDED_TEXT = 'Call ended: connection lost';
     const VOICE_HANGUP_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 14c5-4 13-4 18 0l-2.5 3-3-1.5v-2.5c-2-.8-4-.8-6 0v2.5L5.5 17z"></path></svg>';
     async function voiceCallApi(path, body, opts) {
+      const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
       let r;
-      try { r = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: !!(opts && opts.keepalive) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e); throw e; }   // a network failure (the heartbeat, interjections) marks the link lost
+      try { r = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: !!(opts && opts.keepalive) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure (the heartbeat, interjections) marks the link lost
       let j = {};
       try { j = await r.json(); } catch {}
       if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
@@ -13147,8 +13157,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // Speech to text for one utterance (16 kHz samples from the VAD).
     async function voiceCallStt(audio, agent) {
       const wav = voiceEncodeWav(audio, 16000);
+      const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
       let r;
-      try { r = await fetch(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e); throw e; }   // a network failure marks the link lost
+      try { r = await fetch(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost
       let j = {};
       try { j = await r.json(); } catch {}
       if (!r.ok) { if (voiceBusyToast(r.status) && r.status === 409) voiceRefreshStatus(); throw new Error(j.error || `HTTP ${r.status}`); }
@@ -13173,13 +13184,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceCallSend(chatId, text) {
       const input = document.getElementById(`input-${chatId}`);
       if (!input || !chats[chatId]) throw new Error('chat closed');
-      const S = voiceCallS, seq = ++S.sendSeq;
+      const S = voiceCallS, seq = ++S.sendSeq, linkOwner = S.call;
       voiceDisplayHook('reply', 'turn', 'seq:' + seq);   // a new turn: the older ones (and their moods) are over
       S.expecting = true;
       const prev = input.value;
       input.value = text;
       let accepted;
-      const result = new Promise((resolve, reject) => { accepted = (err) => { if (err && typeof voiceLinkNetFail === 'function') voiceLinkNetFail(err); err ? reject(err) : resolve(); }; });   // a network failure on the message marks the link lost
+      const result = new Promise((resolve, reject) => { accepted = (err) => { if (err && typeof voiceLinkNetFail === 'function') voiceLinkNetFail(err, linkOwner); err ? reject(err) : resolve(); }; });   // a network failure on the message marks the link lost
       const release = () => {
         setTimeout(() => {
           if (!S.call || S.sendSeq !== seq || !S.expecting) return;
@@ -13577,10 +13588,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       });
     }
     // A network failure (fetch threw a TypeError; not an HTTP error status) seen on one of the active call's requests.
-    function voiceLinkNetFail(e) {
+    // The call that is up now (null if none), taken when a request starts: a failure is charged only to that call, never to a newer one.
+    function voiceLinkOwner() { try { return voiceCallS.call || null; } catch { return null; } }
+    function voiceLinkNetFail(e, owner) {
       if (!e || e.name !== 'TypeError') return;
       const S = voiceCallS;
-      if (!S.call || !S.link) return;
+      if (!owner || S.call !== owner || !S.link) return;
       try { S.link.report(); } catch { /* gone */ }
     }
     function voiceLinkPaint(on) {
@@ -13630,7 +13643,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof voiceCreateAudioFocus === 'function' && typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '')) {
         try {
           focus = window.__voiceFocusOne || (window.__voiceFocusOne = voiceCreateAudioFocus({ doc: document, URL, Blob }));   // one element and one sound for the page, reused by every call
-          focus.start().then((ok) => { const h = !ok && S.focus === focus && typeof voiceById === 'function' ? voiceById(`vcb-focushint-${chatId}`) : null; if (h) h.hidden = false; });
+          const focusTry = (S.focusTry = (S.focusTry || 0) + 1);   // the element is shared by every call: only this start's answer may show this call's hint
+          focus.start().then((ok) => { const h = !ok && S.focus === focus && S.focusTry === focusTry && typeof voiceById === 'function' ? voiceById(`vcb-focushint-${chatId}`) : null; if (h) h.hidden = false; });
         } catch { focus = null; }
       }
       const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad, thinking, keepAlive));

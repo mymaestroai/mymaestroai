@@ -244,3 +244,51 @@ for (const [file, kind] of [['mobile.js', 'phone'], ['app.js', 'desktop']]) {
     if (!phone) assert.match(body, /voiceLeftNoticeHide\(\)/, 'not the "left the app" note');
   });
 }
+
+// ── review r1 (GPT-6): the two outage-boundary sequences ──
+test('link watch: a probe that left before the loss and answers OK afterwards does not count as back; a fresh probe does (deadline kept)', async () => {
+  const w = watch(); w.watch.start();
+  await w.c.advance(5000);                       // a probe is out (link fine)
+  w.watch.offline();                             // the loss comes while it is out
+  await w.answer(true);                          // the old probe answers OK
+  assert.deepStrictEqual(nonProbe(w), ['lost@5000'], 'not back on an answer from before the loss');
+  assert.strictEqual(w.watch.lost, true);
+  await w.c.advance(0);                          // asked again at once
+  assert.strictEqual(w.probes.length, 1, 'a fresh probe is out');
+  await w.answer(true);
+  assert.deepStrictEqual(nonProbe(w), ['lost@5000', 'back@5000']);
+  w.watch.stop();
+});
+
+test('link watch: a fresh probe that keeps failing still gives up 10 s after the loss (the old answer does not move the deadline)', async () => {
+  const w = watch(); w.watch.start();
+  await w.c.advance(5000); w.watch.offline(); await w.answer(true);
+  for (let i = 0; i < 12 && w.probes.length; i++) { await w.answer(false); await w.c.advance(1000); }
+  await w.c.advance(10000);
+  assert.ok(nonProbe(w).includes('giveup@15000'), JSON.stringify(nonProbe(w)));
+});
+
+test('controller: speech heard during an outage is never sent, even when an earlier transcript was still pending when the link came back', async () => {
+  let release = null;
+  const h = harness({ stt: (audio) => { h.sttCalls++; if (audio.text === 'first words') return new Promise((r) => { release = () => r(audio.text); }); return Promise.resolve(audio.text); } });
+  await h.call.start();
+  await h.say('first words');                    // its transcription is pending
+  h.call.setLinkLost(true);
+  await h.say('private words during outage');    // heard while the link is down
+  h.call.setLinkLost(false);                     // back before the first transcript arrives
+  release(); await tick(); await h.c.advance(3000);
+  assert.ok(!h.sent.some((t) => /private words/.test(t)), 'nothing heard during the outage is sent: ' + JSON.stringify(h.sent));
+  assert.ok(!h.sent.some((t) => /first words/.test(t)), 'a piece whose transcript straddled the outage is dropped too: ' + JSON.stringify(h.sent));
+  await h.say('after the outage'); await h.c.advance(3000);
+  assert.ok(h.sent.includes('after the outage'), 'speech after the link is back is sent: ' + JSON.stringify(h.sent));
+});
+
+test('pages: a network failure is charged only to the call that was up when the request started (review r1)', () => {
+  const app = read('app.js'), mob = read('mobile.js');
+  assert.match(app, /function voiceLinkNetFail\(e, owner\) \{\n\s+if \(!e \|\| e\.name !== 'TypeError'\) return;\n\s+const S = voiceCallS;\n\s+if \(!owner \|\| S\.call !== owner \|\| !S\.link\) return;/);
+  for (const fn of ['voiceFetchTts', 'voiceCallApi', 'voiceCallStt']) assert.match(app.slice(app.indexOf(`function ${fn}(`), app.indexOf(`function ${fn}(`) + 900), /const linkOwner = typeof voiceLinkOwner === 'function' \? voiceLinkOwner\(\) : null;[^]*voiceLinkNetFail\(e, linkOwner\)/, fn);
+  assert.match(app, /seq = \+\+S\.sendSeq, linkOwner = S\.call;[^]*voiceLinkNetFail\(err, linkOwner\)/);
+  assert.match(mob, /function voiceLinkNetFail\(e, vc, agent\) \{\n\s+if \(!e \|\| e\.name !== 'TypeError'\) return;\n\s+const v = vc;/);
+  for (const fn of ['voiceTtsBlob', 'voiceCallStt', 'sendMessage']) assert.match(mob.slice(mob.indexOf(`function ${fn}(`), mob.indexOf(`function ${fn}(`) + 6000), /const linkOwner = typeof voiceCall !== 'undefined' \? voiceCall : null;[^]*voiceLinkNetFail\(e, linkOwner, agent\)/, fn);
+  assert.match(app, /S\.focusTry === focusTry/, 'a late focus refusal from an earlier call never shows the hint in a newer one');
+});
