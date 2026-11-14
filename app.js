@@ -6804,21 +6804,11 @@
         return line;
       };
       const dd = copy.querySelector('.agent-status');
-      // a busy agent always keeps the busy look (yellow dot and status line); the job tag sits below it
-      const st = agentStatus[row.name];
-      const jobOnly = !!row.jobOnly && !(st && (st.busy || st.pendingQuestion)) && !localBusy.has(row.name);
+      // a row in Active is always busy-looking (yellow dot and status line) or done; the job line sits below it
       copy.classList.toggle('active-done', row.doneAt != null);
-      copy.classList.toggle('active-joby', jobOnly && row.doneAt == null);
-      if (row.doneAt != null) copy.classList.remove('job-busy');   // a finished row is not "working" for the working-only filter
       if (row.doneAt != null) {
         copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done';
         if (dd) { dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done'; }
-        return;
-      }
-      if (jobOnly) {   // working only through a background job: no status line, a hollow muted dot (the job tag says the rest)
-        copy.classList.remove('is-busy');
-        if (line) line.remove();
-        if (dd) { dd.className = 'agent-status live-joby'; dd.textContent = ''; dd.title = 'Running a background job'; }
         return;
       }
       const src = orig && orig.querySelector('.agent-busy-line');
@@ -6832,11 +6822,14 @@
         if (dd) { dd.className = 'agent-status live-busy'; dd.textContent = ''; dd.title = 'Working with helpers'; }
       }
     }
-    // The background-job tag under the status line: '⏳ <oldest job> + N more · 4 min', the full names as its tooltip.
-    // Rewritten in place on every paint, so the elapsed time moves without a rebuild; removed when the agent has no job.
-    function activeDressJob(copy, row) {
-      const info = row.doneAt == null ? activeJobs[row.name] : null;
-      let el = copy.querySelector('.agent-job-line');
+    // The background-job line under the status line of a row (normal group rows and Active copies):
+    // 'Background job: <oldest job> + N more · 4 min', the full names as its tooltip. info is the agent's activeJobs entry
+    // (null / undefined = none, or a done Active copy). Rewritten in place on every paint, so the elapsed time moves
+    // without a rebuild; removed when there is no job. Always the last element of .agent-info (one per row).
+    function activeDressJob(copy, info) {
+      const all = copy.querySelectorAll('.agent-job-line');
+      for (let i = 1; i < all.length; i++) all[i].remove();
+      let el = all[0];
       if (!info) { if (el) el.remove(); return; }
       if (!el) { el = document.createElement('span'); el.className = 'agent-job-line'; }
       // Two parts: the name may be cut short (ellipsis); the tail (' + N more · 4 min') never shrinks, so the time always shows.
@@ -6847,7 +6840,7 @@
         tl = document.createElement('span'); tl.className = 'ajl-tail';
         el.appendChild(nm); el.appendChild(tl);
       }
-      nm.textContent = '⏳ ' + info.names[0];
+      nm.textContent = activeJobLead(info);
       tl.textContent = activeJobTail(info, Date.now());
       el.title = activeJobTitle(info);
       const host = copy.querySelector('.agent-info') || copy;
@@ -6862,7 +6855,7 @@
       copy.classList.add('active-copy');
       copy.classList.remove('in-group');
       activeDress(copy, row, orig);
-      activeDressJob(copy, row);
+      activeDressJob(copy, row.doneAt == null ? activeJobs[row.name] : null);
       copy.addEventListener('click', (e) => {
         if (!e.target.classList.contains('action-btn')) startSoloChat(copy.dataset.agent, copy.dataset.model);
       });
@@ -6882,10 +6875,10 @@
       // Only agents that have a row in this list (the access-filtered AGENTS, in one of the shown groups).
       const visible = AGENTS.map(a => a.name).filter(n => document.getElementById('agent-btn-' + n));
       const busy = activeBusyFrom(agentStatus, localBusy, visible);
-      activeJobs = activeTopOn() ? activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible) : {};   // a list older than 60 s is not shown; none with the switch off
-      // An agent with a running job counts as working for the working-only filter (rows get .job-busy; the chip counts them).
-      for (const n of visible) { const b = document.getElementById('agent-btn-' + n); if (b) b.classList.toggle('job-busy', n in activeJobs); }
-      const next = activeStep(activeState, { busy, jobs: activeJobs, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
+      activeJobs = activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible);   // a list older than 60 s is not shown; the switch does not matter
+      // Every normal row of an agent with a job gets the job line (an idle agent with a job is not "working"; it just says so).
+      for (const n of visible) activeDressJob(document.getElementById('agent-btn-' + n), activeJobs[n]);
+      const next = activeStep(activeState, { busy, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
       const membersChanged = force || activeMembersChanged(activeState, next);
       activeState = next;
       if (activeState.rows.length === 0) {
@@ -6915,7 +6908,7 @@
       const byName = new Map([...items.children].map(c => [c.dataset.agent, c]));
       for (const row of activeState.rows) {
         const copy = byName.get(row.name);
-        if (copy) { activeDress(copy, row, document.getElementById('agent-btn-' + row.name)); activeDressJob(copy, row); }
+        if (copy) { activeDress(copy, row, document.getElementById('agent-btn-' + row.name)); activeDressJob(copy, row.doneAt == null ? activeJobs[row.name] : null); }
       }
     }
     // Agents' detached background jobs (GET /api/jobs, admins only). Polled once at load and every 15 s while the
@@ -6923,7 +6916,7 @@
     // list is kept for at most 60 s. A changed list repaints through paintActiveSection (held / membership rules apply).
     // (Its state is declared with the other Active state above, so an early paint never meets it uninitialised.)
     // Only a known admin polls (window.hubMe loads asynchronously: unknown = no request; loadMe re-runs the sync).
-    function activeJobsWanted() { return !activeJobsStopped && !!(window.hubMe && window.hubMe.isAdmin === true) && activeTopOn() && document.visibilityState === 'visible'; }
+    function activeJobsWanted() { return !activeJobsStopped && !!(window.hubMe && window.hubMe.isAdmin === true) && document.visibilityState === 'visible'; }
     function activeJobsSync() {
       const want = activeJobsWanted();
       if (want && !activeJobsTimer) { activeJobsPoll(); activeJobsTimer = setInterval(activeJobsPoll, ACTIVE_JOBS_MS); }
@@ -6952,11 +6945,21 @@
       }
       if (!list) return;
       const sig = JSON.stringify(list.map(j => [j && j.id, j && j.name, j && j.owner, j && j.status, j && j.startedAt]));
-      if (sig === activeJobsSig && !(good && !wasFresh)) return;   // a good answer after the list expired is drawn even when it is the same
+      if (sig === activeJobsSig && !(good && !wasFresh)) { activeJobsRelabel(); return; }   // a good answer after the list expired is drawn even when it is the same
       activeJobsSig = sig;
       activeJobList = list;
       paintActiveSection();
-      paintAgentsWorking();   // the chip and the working-only filter count job-only agents (activeJobs as just drawn)
+      paintAgentsWorking();
+    }
+    // Same list: only the job lines' text (the elapsed time) is refreshed in place, no Active repaint.
+    function activeJobsRelabel() {
+      const now = Date.now();
+      document.querySelectorAll('#agent-list .agent-job-line').forEach(el => {
+        const btn = el.closest('.agent-btn');
+        const info = btn && activeJobs[btn.dataset.agent];
+        const tl = el.querySelector('.ajl-tail');
+        if (info && tl) tl.textContent = activeJobTail(info, now);
+      });
     }
     document.addEventListener('visibilitychange', activeJobsSync);
     activeJobsSync();
@@ -7324,18 +7327,11 @@
       return [...names];
     }
 
-    // busySplit plus the agents the Active section shows as working only through a background job (activeJobs as last drawn).
-    function busySplitJobs() {
-      const split = busySplit(agentStatus, [...localBusy.keys()]);
-      const extra = Object.keys(activeJobs).filter(n => !split.agents.includes(n));
-      return extra.length ? { agents: [...split.agents, ...extra].sort(), workers: split.workers } : split;
-    }
-
     function paintAgentsWorking() {
       const el = document.getElementById('agents-working');
       const list = document.getElementById('agent-list');
       if (!el) return;
-      const split = busySplitJobs();
+      const split = busySplit(agentStatus, [...localBusy.keys()]);
       if (split.agents.length === 0) busyFilterOn = false;
       const any = split.agents.length > 0 || split.workers.length > 0;
       el.classList.toggle('on', any);
@@ -7346,7 +7342,7 @@
     }
 
     function toggleBusyFilter() {
-      if (busySplitJobs().agents.length === 0) return;
+      if (busySplit(agentStatus, [...localBusy.keys()]).agents.length === 0) return;
       busyFilterOn = !busyFilterOn;
       paintAgentsWorking();
     }
@@ -11445,7 +11441,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return out;
     }
-    // A very quiet, looping WAV (white noise near -60 dBFS, never silence). Played through a media element it makes Chrome for Android take full audio focus.
+    // A very quiet, looping WAV (the smallest step of 16-bit audio, +/-1 at random: about -90 dBFS, never digital silence). Played through a media
+    // element it makes Chrome for Android take full audio focus. It was -60 dBFS once: on a phone speaker turned up that is a hiss in every pause.
     function voiceFocusWav(seconds = 6, sampleRate = 8000) {
       const n = Math.max(1, Math.round(seconds * sampleRate)), bytes = n * 2;
       const out = new Uint8Array(44 + bytes), dv = new DataView(out.buffer);
@@ -11455,9 +11452,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let s = 123456789;
       for (let i = 0; i < n; i++) {
         s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-        let v = Math.round(((s >>> 8) / 8388607.5 - 1) * 33);
-        if (v === 0) v = (i & 1) ? 1 : -1;
-        dv.setInt16(44 + i * 2, v, true);
+        dv.setInt16(44 + i * 2, (s >>> 31) ? 1 : -1, true);
       }
       return out;
     }
@@ -12773,34 +12768,41 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The keep-alive sound: a 2 s loop of white noise at levelDb (default -70 dB, amplitude 10^(levelDb/20), mono) through a GainNode to
     // ctx.destination. It is inaudible noise, not digital silence: phones and Bluetooth links that put the audio route to sleep on silence keep
     // it open, so the first syllable of a reply and the thinking sound are not clipped. start() makes the buffer once and a source node each
-    // time; stop() stops and disconnects it. A missing or failing context makes every call a no-op. opts: { ctx, levelDb }.
+    // time; stop() stops and disconnects it. A missing or failing context makes every call a no-op. opts: { ctx, levelDb, allow }.
+    // allow() (optional): whether it may sound right now (the pages: the "Keep Bluetooth awake" switch is on; on the phone page also the call's
+    // audio goes to Bluetooth or a car, since on the phone's own speaker the noise is only a hiss in the pauses). start() asks for it, stop() ends
+    // it, refresh() applies a change of allow() at once (the switch flipped, the microphone moved to or from Bluetooth), mid-call.
     function voiceCreateKeepAlive(opts) {
       const o = opts || {}, ctx = o.ctx;
       const db = typeof o.levelDb === 'number' && Number.isFinite(o.levelDb) ? o.levelDb : VOICE_KEEPALIVE_DB;
-      let buffer = null, src = null, gain = null;
+      const allowed = () => { if (typeof o.allow !== 'function') return true; try { return o.allow() === true; } catch { return false; } };
+      let buffer = null, src = null, gain = null, wanted = false;
       const drop = () => {
         const s = src, g = gain; src = gain = null;
         if (s) { try { s.stop(); } catch { /* not started */ } try { s.disconnect(); } catch { /* gone */ } }
         if (g) { try { g.disconnect(); } catch { /* gone */ } }
       };
+      const play = () => {
+        if (!ctx || src) return;
+        try {
+          if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); }
+          if (!buffer) {
+            const rate = ctx.sampleRate, amp = Math.pow(10, db / 20);
+            buffer = ctx.createBuffer(1, Math.max(1, Math.round(rate * 2)), rate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * amp;
+          }
+          gain = ctx.createGain(); gain.gain.value = 1;
+          src = ctx.createBufferSource(); src.buffer = buffer; src.loop = true;
+          src.connect(gain); gain.connect(ctx.destination);
+          src.start();
+        } catch { drop(); }
+      };
+      const apply = () => { if (wanted && allowed()) play(); else drop(); };
       return {
-        start() {
-          if (!ctx || src) return;
-          try {
-            if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); }
-            if (!buffer) {
-              const rate = ctx.sampleRate, amp = Math.pow(10, db / 20);
-              buffer = ctx.createBuffer(1, Math.max(1, Math.round(rate * 2)), rate);
-              const data = buffer.getChannelData(0);
-              for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * amp;
-            }
-            gain = ctx.createGain(); gain.gain.value = 1;
-            src = ctx.createBufferSource(); src.buffer = buffer; src.loop = true;
-            src.connect(gain); gain.connect(ctx.destination);
-            src.start();
-          } catch { drop(); }
-        },
-        stop() { drop(); },
+        start() { wanted = true; apply(); },
+        stop() { wanted = false; drop(); },
+        refresh() { apply(); },
         get running() { return !!src; },
       };
     }
@@ -14095,6 +14097,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceSavePrefs(localStorage, prefs);
       voicePrefsCache = prefs;
       voiceLoudApply();   // a running call follows the choice at once
+      voiceKeepAliveRefresh();   // the Keep Bluetooth awake switch too
       // A call that is up takes the EFFECTIVE values (the person's own, else this agent's defaults), as the phone page does: the dialog never undoes the agent's pacing mid-call.
       if (voiceCallS.vad) { const eff = voiceEffNow(voiceCallS.agent); voiceCallS.vad.setMicLevel(eff.micLevel); voiceCallS.vad.setInterruptSensitivity(eff.interruptSensitivity); voiceCallS.vad.setEndPause(eff.endPause); if (voiceCallS.vad.setEchoHold) voiceCallS.vad.setEchoHold(eff.echoHold); }
       for (const el of document.querySelectorAll('.voice-pop [data-vp="loudness"]')) el.value = prefs.loudness;
@@ -14170,7 +14173,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The output of a call follows its open microphone: voiceCallS.micLabel is set by ui.mic (every open and reopen) and refreshed on devicechange.
     function voiceOutputNow() { const label = (voiceCallS.call && voiceCallS.micLabel) || ''; return { output: voiceOutputKind(label), label }; }
     function voiceLoudnessNow() { return voiceLoudnessFor(voicePrefsNow(), voiceOutputNow().output); }
-    function voiceOutputChanged() { try { voiceLoudApply(); } catch { /* the next sentence applies it */ } }   // a new mic label: the level of that output, at once
+    function voiceOutputChanged() { try { voiceLoudApply(); } catch { /* the next sentence applies it */ } voiceKeepAliveRefresh(); }   // a new mic label: the level of that output, and the keep-alive, at once
+    // The keep-alive follows the switch alone on this page, at once mid-call: a computer often plays to a Bluetooth speaker or headphones while
+    // its own microphone is open, so the microphone's label cannot tell whether the output may sleep (the phone page also asks the label).
+    function voiceKeepAliveAllowed() { return voiceKeepAliveNow(); }
+    function voiceKeepAliveRefresh() { try { const k = voiceCallS.keepAlive; if (k && k.refresh) k.refresh(); } catch { /* not playing */ } }
     function voiceOutputOnDeviceChange() {   // devicechange during a call: read the open microphone's label again
       if (!voiceCallS.call) return;
       try { const i = voiceCallS.vad && typeof voiceCallS.vad.info === 'function' && voiceCallS.vad.info(); if (i && typeof i.label === 'string') voiceCallS.micLabel = i.label; } catch { /* keep the last label */ }
@@ -14286,7 +14293,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceEchoHoldNow() { const v = voicePrefsNow().echoHold; return VOICE_ECHO_HOLDS.includes(v) ? v : 600; }
     const VOICE_ECHO_HINT = 'Keeps the agent from hearing its own reply in a car or through a speaker.';
-    const VOICE_KEEP_HINT = 'Plays an inaudible hiss so a car or speaker does not cut the first word.';
+    const VOICE_KEEP_HINT = 'Plays a very quiet hiss during a call so a car or Bluetooth speaker does not cut the first word.';
     // The "Echo guard after replies" select (Off / 0.6 s / 1 s / 1.5 s): Settings and the chat's voice panel.
     function voiceEchoSelectHtml(id, attrs) {
       const cur = voiceEchoHoldNow();
@@ -14842,9 +14849,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const eff = voiceEffNow(chat.agent);   // this agent's voice defaults for any setting the person has not set on this device
       const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow() });
       const thinking = voiceCallThinking(vad);   // makes / resumes the reply playback context (voicePlay.ctx) inside the tap
-      // Keep Bluetooth awake: an inaudible hiss on the same output context as the replies; the controller starts and stops it.
+      // Keep Bluetooth awake: a very quiet hiss on the same output context as the replies; the controller starts and stops it, and it sounds
+      // only while the switch is on (a change applies at once, mid-call).
       let keepAlive = null;
-      if (voicePrefsNow().keepAlive !== false && typeof voiceCreateKeepAlive === 'function') { try { const kc = voiceOutputCtx(); if (kc) keepAlive = voiceCreateKeepAlive({ ctx: kc }); } catch { keepAlive = null; } }
+      if (typeof voiceCreateKeepAlive === 'function') { try { const kc = voiceOutputCtx(); if (kc) keepAlive = voiceCreateKeepAlive({ ctx: kc, allow: voiceKeepAliveAllowed }); } catch { keepAlive = null; } }
       // Audio focus: a looping media element, so a phone browser takes focus and other apps pause. Only on Android (a tablet on this page): a desktop
       // browser has no focus to take, and a playing element would only draw the media keys and the browser's media hub to this tab.
       let focus = null;
@@ -15036,6 +15044,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (save) { const prefs = voiceSavePrefs(localStorage, voicePrefsCache); voicePrefsCache = { ...voicePrefsCache, ...prefs, [key]: val }; }
       if (which === 'mode') voiceModePaint();
       if (which === 'echo' || which === 'keep') voiceEchoKeepPaint();   // Settings follows the panel
+      if (which === 'keep') voiceKeepAliveRefresh();   // the switch acts on a running call at once
       if (S.call && typeof S.call.setPrefs === 'function') S.call.setPrefs();
     }
     document.addEventListener('click', (e) => { if (!(e.target.closest && e.target.closest('.voice-extra'))) voicePopClose(); });
@@ -17223,36 +17232,37 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const t = m < 1 ? '<1 min' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
       return `${info.count > 1 ? ` + ${info.count - 1} more` : ''} \u00B7 ${t}`;
     }
-    function activeJobLabel(info, now) {
+    function activeJobLead(info) {
       if (!info || !info.count) return '';
-      return `${info.names[0]}${activeJobTail(info, now)}`;
+      return 'Background job: ' + info.names[0];
+    }
+    function activeJobLabel(info, now) {
+      return activeJobLead(info) + activeJobTail(info, now);
     }
     function activeJobTitle(info) {
       return info && info.names ? info.names.join('\n') : '';
     }
     function activeStep(state, input) {
-      const { busy = {}, jobs = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
+      const { busy = {}, now = Date.now(), held = false, enabled = true, lingerMs = 3000 } = input || {};
       if (!enabled) return { rows: [] };
-      const work = Object.assign({}, busy);                       // working: busy, or has a running job
-      for (const n of Object.keys(jobs)) work[n] = n in work ? Math.min(work[n], jobs[n].since) : jobs[n].since;
       const prev = (state && state.rows) || [];
       const rows = [];
       for (const r of prev) {
-        if (r.name in work) { rows.push({ name: r.name, since: Math.min(r.since, work[r.name]), doneAt: null, jobOnly: !(r.name in busy) }); continue; }
+        if (r.name in busy) { rows.push({ name: r.name, since: Math.min(r.since, busy[r.name]), doneAt: null }); continue; }
         const doneAt = r.doneAt == null ? now : r.doneAt;
         if (!held && now - doneAt >= lingerMs) continue;          // leaves the section
-        rows.push({ name: r.name, since: r.since, doneAt, jobOnly: false });
+        rows.push({ name: r.name, since: r.since, doneAt });
       }
       if (held) return { rows };                                  // nothing joins while the list is held
       const have = new Set(rows.map(r => r.name));
-      const joining = Object.keys(work).filter(n => !have.has(n)).map(n => ({ name: n, since: work[n], doneAt: null, jobOnly: !(n in busy) }));
+      const joining = Object.keys(busy).filter(n => !have.has(n)).map(n => ({ name: n, since: busy[n], doneAt: null }));
       joining.sort((a, b) => (a.since - b.since) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       return { rows: rows.concat(joining) };
     }
     function activeChanged(a, b) {
       const x = (a && a.rows) || [], y = (b && b.rows) || [];
       if (x.length !== y.length) return true;
-      for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null) || !!x[i].jobOnly !== !!y[i].jobOnly) return true;
+      for (let i = 0; i < x.length; i++) if (x[i].name !== y[i].name || (x[i].doneAt == null) !== (y[i].doneAt == null)) return true;
       return false;
     }
     function activeMembersChanged(a, b) {

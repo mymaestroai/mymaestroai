@@ -19,10 +19,13 @@ test('voiceFocusWav: a valid 16-bit mono PCM WAV of very quiet noise', () => {
   assert.strictEqual(dv.getUint32(16, true), 16); assert.strictEqual(dv.getUint16(20, true), 1); assert.strictEqual(dv.getUint16(22, true), 1);
   assert.strictEqual(dv.getUint32(24, true), 8000); assert.strictEqual(dv.getUint32(28, true), 16000); assert.strictEqual(dv.getUint16(32, true), 2); assert.strictEqual(dv.getUint16(34, true), 16);
   assert.strictEqual(dv.getUint32(40, true), 2 * 2 * 8000);
-  let peak = 0, nonzero = 0;
-  for (let i = 44; i < w.length; i += 2) { const v = dv.getInt16(i, true); peak = Math.max(peak, Math.abs(v)); if (v) nonzero++; }
-  assert.ok(peak >= 10 && peak <= 100, 'peak ' + peak);
-  assert.ok(nonzero > 0);
+  let peak = 0, nonzero = 0, sq = 0, plus = 0;
+  for (let i = 44; i < w.length; i += 2) { const v = dv.getInt16(i, true); peak = Math.max(peak, Math.abs(v)); if (v) nonzero++; if (v > 0) plus++; sq += (v / 32768) ** 2; }
+  const n = (w.length - 44) / 2, rmsDb = 10 * Math.log10(sq / n);
+  assert.strictEqual(peak, 1, 'the smallest 16-bit step: no hiss on a phone speaker turned up (it was about 33, -60 dBFS)');
+  assert.ok(rmsDb < -85, 'RMS ' + rmsDb.toFixed(1) + ' dBFS');
+  assert.strictEqual(nonzero, n, 'never digital silence: every sample is +1 or -1');
+  assert.ok(plus > n * 0.4 && plus < n * 0.6, 'noise, not a constant offset: ' + plus + ' of ' + n);
   assert.deepStrictEqual(Array.from(voiceFocusWav(2, 8000)), Array.from(w), 'deterministic');
 });
 

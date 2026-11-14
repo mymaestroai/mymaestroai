@@ -72,6 +72,9 @@
 .ucd-rec[data-place="bar"] { display: flex; margin: 6px 0; position: sticky; top: 0; z-index: 2; }   /* its own line at the top of the bar, pinned while a panel scrolls */
 /* the phone's toast sits at z-index 30: keep it readable above the full-screen view */
 #toast.on { z-index: 10010; }
+/* the phone's Voice sheet (Levels in the call panel, the menu's Voice) opens above the full-screen view, never hidden under it; only
+   while that view is in the page, so outside it the phone's other sheets keep their own order */
+body:has(> .ucd-overlay) .voice-sheet.open { z-index: 10005; }
 .vp-display-note { font-size: 12px; color: var(--text-dim, #98a2b3); margin: 2px 0 0; }
 .vp-display-note:empty { display: none; }
 @media (max-width: 560px) { .ucd-main { flex-basis: 100%; } .ucd-side { width: 100%; justify-content: space-between; } }

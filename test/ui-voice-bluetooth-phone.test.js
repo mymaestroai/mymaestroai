@@ -36,7 +36,8 @@ function callEnv(over) {
     voiceStopPlayback() {}, voiceUnlockAudio() {}, voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...prefs, endPause: 1200 }), voiceEndPauseNow: () => 1200, voiceEndedBar() {}, voiceCallBgNote: false,
     voiceCreateVad: (opts) => { created.vadOpts = opts; created.vad = { setMicLevel() {}, setInterruptSensitivity() {}, setEndPause() {}, setEchoHold: (ms) => log.push('setEchoHold:' + ms), setPlaybackActive() {}, stop() {} }; return created.vad; },
     voiceCreateCall: (deps) => { created.deps = deps; created.call = { start: () => new Promise(() => {}), retryMic: () => { log.push('retryMic'); return Promise.resolve(true); }, hangUp: () => { log.push('hangUp'); return Promise.resolve([]); }, setPrefs() {} }; return created.call; },
-    voiceCreateKeepAlive: (opts) => { created.kaCtx.push(opts.ctx); created.ka = { running: false, start() { this.running = true; log.push('ka.start'); }, stop() { this.running = false; log.push('ka.stop'); } }; return created.ka; },
+    voiceCreateKeepAlive: (opts) => { created.kaCtx.push(opts.ctx); created.kaAllow = opts.allow; created.ka = { running: false, start() { this.running = true; log.push('ka.start'); }, stop() { this.running = false; log.push('ka.stop'); }, refresh() { log.push('ka.refresh'); } }; return created.ka; },
+    voiceOutputNow: () => ({ output: 'speaker' }), voiceOutputKind: V.voiceOutputKind,
     voiceCreateThinkingSound: (opts) => ({ opts, setVolume() {}, start() {}, stop() {}, pulse() { return true; } }),
     voiceMediaSession() {}, voiceCallBeat() {}, setInterval: () => 0, clearInterval() {}, voiceCallPanel() {}, voiceCallPaintState() {}, voiceMicPaint() {}, voiceCallTeardown() {}, voiceWakeAcquire() {},
     voiceCallServer: () => ({}), $: getEl, voiceCallPaintMeter: (db) => log.push('meter:' + db), voiceCallPaintHeld() {}, voiceDisplayHook() {}, voiceDisp: { turnSeq: new Map() }, voiceThinkingVolume: undefined,
@@ -45,7 +46,7 @@ function callEnv(over) {
   const names = Object.keys(env);
   const body = 'let voiceCall = null;\n' + CALL_SRC() + '\nreturn { voiceCallStart, voiceCallDeps, voiceCallApplyPrefs, voiceThinkingClose, voiceMicLine, getCall: () => voiceCall };';
   const fns = new Function(...names, body)(...names.map((n) => env[n]));
-  return { fns, log, els, prefs, created, AC, win };
+  return { fns, log, els, prefs, created, AC, win, env };
 }
 
 test('help text: the call help names Bluetooth hands-free in a car or speaker (app, phone page)', () => {
@@ -68,14 +69,37 @@ test('keep-alive: made on the call\'s thinking context inside the tap when the p
   assert.ok(src.indexOf('voiceThinkingCtxMake(vc)') < src.indexOf('voiceCreateCall('), 'the context exists before the controller is made');
 });
 
-test('keep-alive: not made when the pref is off; made when the pref is missing (default on)', () => {
+test('keep-alive: made for every call, but it may sound only while the switch is on AND the output is Bluetooth / car; a switch or output change applies at once', () => {
+  const t = callEnv({ prefs: { keepAlive: undefined } });   // missing pref: on by default
+  t.fns.voiceCallStart();
+  assert.strictEqual(t.created.kaCtx.length, 1);
+  const allow = t.created.kaAllow;
+  assert.strictEqual(typeof allow, 'function');
+  assert.strictEqual(allow(), false, 'no microphone reported yet, no earlier call: the speaker (a hiss in every pause, and that route never sleeps)');
+  t.log.length = 0;
+  t.created.deps.ui.mic({ label: 'Bluetooth headset' });
+  assert.ok(t.log.includes('ka.refresh'), 'a new microphone (to or from Bluetooth) re-checks it at once');
+  assert.strictEqual(allow(), true, 'Bluetooth / car with the switch on');
+  t.prefs.keepAlive = false;
+  assert.strictEqual(allow(), false, 'the switch off');
+  t.log.length = 0;
+  t.fns.voiceCallApplyPrefs();
+  assert.ok(t.log.includes('ka.refresh'), 'a change of the switch reaches the running call at once');
+  t.prefs.keepAlive = true;
+  t.created.deps.ui.mic({ label: 'Speakerphone' });
+  assert.strictEqual(allow(), false, 'moved to the phone\'s own microphone and speaker');
+  t.created.deps.ui.mic({ label: 'Bluetooth headset' });
+  // the next call: until its microphone reports, the last call's label stands in, so a Bluetooth call is awake from the start
+  t.fns.voiceThinkingClose(t.fns.getCall());
+  t.fns.voiceCallStart();
+  const next = t.created.kaAllow;
+  t.fns.getCall().micInfo = undefined;
+  assert.strictEqual(next(), true, 'the last call was on Bluetooth');
   const off = callEnv({ prefs: { keepAlive: false } });
   off.fns.voiceCallStart();
-  assert.strictEqual(off.created.kaCtx.length, 0);
-  assert.strictEqual(off.created.deps.keepAlive, undefined);
-  const dflt = callEnv({ prefs: { keepAlive: undefined } });
-  dflt.fns.voiceCallStart();
-  assert.strictEqual(dflt.created.kaCtx.length, 1);
+  assert.strictEqual(off.created.kaCtx.length, 1, 'made even with the switch off, so switching it on mid-call works');
+  off.created.deps.ui.mic({ label: 'Bluetooth headset' });
+  assert.strictEqual(off.created.kaAllow(), false);
 });
 
 test('keep-alive: stopped in the page\'s own teardown (voiceThinkingClose) before its context is closed', () => {
@@ -197,10 +221,10 @@ test('settings: the Voice sheet and the chat panel show Echo guard and Keep Blue
   const sheet = sliceBetween('function voiceSheet()', 'function paintVoiceSheet()');
   for (const s of ['Echo guard after replies', 'vs-echo', 'VOICE_ECHO_HINT', 'Keep Bluetooth awake during calls', 'vs-keepalive', 'VOICE_KEEPALIVE_HINT', 'Car or Bluetooth check', 'vs-car', 'vs-car-out']) assert.ok(sheet.includes(s), 'sheet: ' + s);
   assert.ok(js.includes("const VOICE_ECHO_HINT = 'Keeps the agent from hearing its own reply in a car or through a speaker.';"));
-  assert.ok(js.includes("const VOICE_KEEPALIVE_HINT = 'Plays an inaudible hiss so a car or speaker does not cut the first word.';"));
+  assert.ok(js.includes("const VOICE_KEEPALIVE_HINT = 'While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.';"));
   const panel = html.slice(html.indexOf('id="voice-panel"'), html.indexOf('id="voice-level"'));
   for (const s of ['Echo guard after replies', 'id="vp-echo"', 'Keeps the agent from hearing its own reply in a car or through a speaker.', 'Keep Bluetooth awake during calls', 'id="vp-keepalive"',
-    'Plays an inaudible hiss so a car or speaker does not cut the first word.', 'Car or Bluetooth check', 'id="vp-car"', 'vs-car-out']) assert.ok(panel.includes(s), 'panel: ' + s);
+    'While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.', 'Car or Bluetooth check', 'id="vp-car"', 'vs-car-out']) assert.ok(panel.includes(s), 'panel: ' + s);
   assert.match(panel, /class="vs-car-out"[^>]*aria-live="polite"|aria-live="polite"[^>]*class="vs-car-out"/);
   assert.ok(sheet.includes("aria-live=\"polite\"") );
   assert.match(js, /const VOICE_ECHO_LABELS = \['Off', '0\.6 s', '1 s', '1\.5 s'\]/);

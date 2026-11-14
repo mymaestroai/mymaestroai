@@ -58,17 +58,26 @@ test('activeJobsFrom: an empty or missing name becomes "job"; entries without an
   assert.deepStrictEqual(L.activeJobsFrom(jobs, ['sam', '']), { sam: { names: ['job', 'job', 'job', 'job'], since: T, count: 4 } });
 });
 
-test('activeJobLabel: oldest name, "+ N more", and the elapsed time', () => {
+test('activeJobLabel: "Background job: " + oldest name, "+ N more", and the elapsed time', () => {
   const one = { names: ['build'], since: T, count: 1 };
-  assert.strictEqual(L.activeJobLabel(one, T + 30000), 'build · <1 min');
-  assert.strictEqual(L.activeJobLabel(one, T + 4 * MIN + 10000), 'build · 4 min');
-  assert.strictEqual(L.activeJobLabel(one, T + 65 * MIN), 'build · 1 h 5 min');
-  assert.strictEqual(L.activeJobLabel(one, T + 120 * MIN), 'build · 2 h');
-  assert.strictEqual(L.activeJobLabel({ names: ['a', 'b', 'c'], since: T, count: 3 }, T + 4 * MIN), 'a + 2 more · 4 min');
-  assert.strictEqual(L.activeJobLabel({ names: ['a', 'b'], since: T, count: 2 }, T + 4 * MIN), 'a + 1 more · 4 min');
-  assert.strictEqual(L.activeJobLabel(one, T - 5000), 'build · <1 min', 'a clock that runs behind never shows a negative time');
+  assert.strictEqual(L.activeJobLabel(one, T + 30000), 'Background job: build \u00B7 <1 min');
+  assert.strictEqual(L.activeJobLabel(one, T + 4 * MIN + 10000), 'Background job: build \u00B7 4 min');
+  assert.strictEqual(L.activeJobLabel(one, T + 65 * MIN), 'Background job: build \u00B7 1 h 5 min');
+  assert.strictEqual(L.activeJobLabel(one, T + 120 * MIN), 'Background job: build \u00B7 2 h');
+  assert.strictEqual(L.activeJobLabel({ names: ['a', 'b', 'c'], since: T, count: 3 }, T + 4 * MIN), 'Background job: a + 2 more \u00B7 4 min');
+  assert.strictEqual(L.activeJobLabel({ names: ['a', 'b'], since: T, count: 2 }, T + 4 * MIN), 'Background job: a + 1 more \u00B7 4 min');
+  assert.strictEqual(L.activeJobLabel(one, T - 5000), 'Background job: build \u00B7 <1 min', 'a clock that runs behind never shows a negative time');
   assert.strictEqual(L.activeJobLabel(null, T), '');
   assert.strictEqual(L.activeJobLabel(undefined, T), '');
+});
+
+test('activeJobLead: "Background job: " + the oldest name, empty for no info; the label is lead + tail', () => {
+  const info = { names: ['build', 'x'], since: T, count: 2 };
+  assert.strictEqual(L.activeJobLead(info), 'Background job: build');
+  assert.strictEqual(L.activeJobLead(null), '');
+  assert.strictEqual(L.activeJobLead(undefined), '');
+  assert.strictEqual(L.activeJobLabel(info, T + MIN), L.activeJobLead(info) + L.activeJobTail(info, T + MIN));
+  assert.ok(!L.activeJobLabel(info, T).includes('\u23F3'), 'no hourglass');
 });
 
 test('activeJobTitle: the names, one per line', () => {
@@ -79,55 +88,49 @@ test('activeJobTitle: the names, one per line', () => {
 
 const S = (name, since, extra) => Object.assign({ name, since, doneAt: null }, extra);
 
-test('activeStep with jobs: a job-only agent joins with jobOnly true', () => {
-  const st = L.activeStep(L.activeInitial(), { busy: {}, jobs: { sam: { names: ['x'], since: T, count: 1 } }, now: T + 10 });
-  assert.deepStrictEqual(st.rows, [{ name: 'sam', since: T, doneAt: null, jobOnly: true }]);
-  const both = L.activeStep(L.activeInitial(), { busy: { robin: T + 5 }, jobs: { sam: { names: ['x'], since: T, count: 1 } }, now: T + 10 });
-  assert.deepStrictEqual(both.rows.map(r => [r.name, r.jobOnly]), [['sam', true], ['robin', false]], 'ordered by since; a really busy agent is not jobOnly');
+test('activeStep: an agent with only a background job is not a row (passed as jobs or in any other way); a busy agent is', () => {
+  const jobs = { sam: { names: ['x'], since: T, count: 1 } };
+  assert.deepStrictEqual(L.activeStep(L.activeInitial(), { busy: {}, jobs, now: T + 10 }).rows, [], 'jobs input is ignored');
+  assert.deepStrictEqual(L.activeStep(L.activeInitial(), { jobs, now: T + 10 }).rows, []);
+  assert.deepStrictEqual(L.activeStep(L.activeInitial(), { busy: {}, now: T + 10, work: jobs }).rows, []);
+  const both = L.activeStep(L.activeInitial(), { busy: { robin: T + 5 }, jobs, now: T + 10 });
+  assert.deepStrictEqual(both.rows, [{ name: 'robin', since: T + 5, doneAt: null }], 'rows are { name, since, doneAt } only; the job agent is absent');
+  assert.ok(!('jobOnly' in both.rows[0]));
 });
 
-test('activeStep with jobs: when the job-only agent also becomes busy it stays one row, jobOnly false', () => {
+test('activeStep: a busy agent with a running job is one row; when it stops the row is done (the job does not keep it), then leaves after lingerMs', () => {
   const jobs = { sam: { names: ['x'], since: T, count: 1 } };
-  const a = L.activeStep(L.activeInitial(), { jobs, now: T + 10 });
-  const b = L.activeStep(a, { busy: { sam: T + 20 }, jobs, now: T + 30 });
-  assert.deepStrictEqual(b.rows, [{ name: 'sam', since: T, doneAt: null, jobOnly: false }]);
-  const c = L.activeStep(b, { busy: {}, jobs, now: T + 40 });
-  assert.deepStrictEqual(c.rows.map(r => [r.name, r.jobOnly]), [['sam', true]], 'busy ends, job still runs: back to jobOnly, same row');
-});
-
-test('activeStep with jobs: when the job ends and the agent is not busy the row is done, then leaves after lingerMs', () => {
-  const jobs = { sam: { names: ['x'], since: T, count: 1 } };
-  const a = L.activeStep(L.activeInitial(), { jobs, now: T + 10 });
-  const d = L.activeStep(a, { busy: {}, jobs: {}, now: T + 1000 });
-  assert.deepStrictEqual(d.rows, [{ name: 'sam', since: T, doneAt: T + 1000, jobOnly: false }]);
-  assert.strictEqual(L.activeStep(d, { now: T + 1000 + 2999 }).rows.length, 1, 'still lingering');
-  assert.strictEqual(L.activeStep(d, { now: T + 1000 + 3000 }).rows.length, 0, 'gone after 3000 ms');
+  const a = L.activeStep(L.activeInitial(), { busy: { sam: T + 20 }, jobs, now: T + 30 });
+  assert.deepStrictEqual(a.rows, [{ name: 'sam', since: T + 20, doneAt: null }]);
+  const d = L.activeStep(a, { busy: {}, jobs, now: T + 1000 });
+  assert.deepStrictEqual(d.rows, [{ name: 'sam', since: T + 20, doneAt: T + 1000 }]);
+  assert.strictEqual(L.activeStep(d, { jobs, now: T + 1000 + 2999 }).rows.length, 1, 'still lingering');
+  assert.strictEqual(L.activeStep(d, { jobs, now: T + 1000 + 3000 }).rows.length, 0, 'gone after 3000 ms even though the job still runs');
   assert.strictEqual(L.activeStep(d, { now: T + 1000 + 500, lingerMs: 500 }).rows.length, 0, 'custom lingerMs');
-  assert.strictEqual(L.activeStep(d, { jobs, now: T + 1100 }).rows[0].doneAt, null, 'a new job before the linger ends revives the row');
+  assert.strictEqual(L.activeStep(d, { busy: { sam: T + 1100 }, now: T + 1100 }).rows[0].doneAt, null, 'busy again before the linger ends revives the row');
 });
 
-test('activeStep with jobs: held blocks joining; enabled false gives no rows', () => {
-  const jobs = { sam: { names: ['x'], since: T, count: 1 } };
-  assert.deepStrictEqual(L.activeStep(L.activeInitial(), { jobs, held: true, now: T }).rows, []);
-  const a = L.activeStep(L.activeInitial(), { jobs, now: T });
-  const held = L.activeStep(a, { jobs: { sam: jobs.sam, kim: { names: ['y'], since: T + 1, count: 1 } }, held: true, now: T + 5 });
-  assert.deepStrictEqual(held.rows.map(r => r.name), ['sam'], 'a new job-only agent does not join while held');
-  assert.deepStrictEqual(L.activeStep(a, { jobs, enabled: false, now: T }).rows, []);
+test('activeStep: held blocks joining; enabled false gives no rows', () => {
+  const busy = { sam: T };
+  assert.deepStrictEqual(L.activeStep(L.activeInitial(), { busy, held: true, now: T }).rows, []);
+  const a = L.activeStep(L.activeInitial(), { busy, now: T });
+  const held = L.activeStep(a, { busy: { sam: T, kim: T + 1 }, held: true, now: T + 5 });
+  assert.deepStrictEqual(held.rows.map(r => r.name), ['sam'], 'a newly busy agent does not join while held');
+  assert.deepStrictEqual(L.activeStep(a, { busy, enabled: false, now: T }).rows, []);
 });
 
-test('activeChanged is true on a jobOnly flip alone; activeMembersChanged is not', () => {
-  const a = { rows: [S('sam', T, { jobOnly: true })] };
-  const b = { rows: [S('sam', T, { jobOnly: false })] };
-  assert.strictEqual(L.activeChanged(a, b), true);
-  assert.strictEqual(L.activeChanged(b, a), true);
-  assert.strictEqual(L.activeChanged(a, { rows: [S('sam', T, { jobOnly: true })] }), false);
-  assert.strictEqual(L.activeChanged({ rows: [S('sam', T)] }, { rows: [S('sam', T, { jobOnly: false })] }), false, 'missing and false are the same');
-  assert.strictEqual(L.activeMembersChanged(a, b), false);
+test('activeChanged looks at names, order and done marks only (no jobOnly flag); activeMembersChanged ignores done marks', () => {
+  const a = { rows: [S('sam', T)] };
+  assert.strictEqual(L.activeChanged(a, { rows: [S('sam', T, { jobOnly: true })] }), false, 'a stray jobOnly field changes nothing');
+  assert.strictEqual(L.activeChanged(a, { rows: [S('sam', T, { doneAt: T + 5 })] }), true);
+  assert.strictEqual(L.activeChanged(a, { rows: [S('kim', T)] }), true);
+  assert.strictEqual(L.activeMembersChanged(a, { rows: [S('sam', T, { doneAt: T + 5 })] }), false);
+  assert.ok(!/jobOnly/.test(fs.readFileSync(path.join(ROOT, 'lib/ui-active-agents.js'), 'utf8')), 'no jobOnly anywhere in the lib');
 });
 
 test('the jobs helpers exist exactly once in lib, app.js and mobile.js (inside the byte-identical block)', () => {
   const lib = fs.readFileSync(path.join(ROOT, 'lib/ui-active-agents.js'), 'utf8');
-  for (const n of ['activeJobsFrom', 'activeJobLabel', 'activeJobTail', 'activeJobTitle']) {
+  for (const n of ['activeJobsFrom', 'activeJobLead', 'activeJobLabel', 'activeJobTail', 'activeJobTitle']) {
     for (const [name, src] of [['lib', lib], ['app.js', app], ['mobile.js', mob]]) {
       assert.strictEqual(src.split(`function ${n}(`).length - 1, 1, `${n} in ${name}`);
     }
@@ -143,6 +146,12 @@ function el(cls) {
     get lastElementChild() { return this.children[this.children.length - 1] || null; },
     appendChild(c) { if (c.parentNode) c.remove(); this.children.push(c); c.parentNode = this; return c; },
     remove() { if (this.parentNode) { this.parentNode.children = this.parentNode.children.filter(x => x !== this); this.parentNode = null; } },
+    querySelectorAll(sel) {
+      const cls = sel.slice(1), out = [];
+      const walk = (n) => { for (const c of n.children) { if (c.className.split(' ').includes(cls)) out.push(c); walk(c); } };
+      walk(this);
+      return out;
+    },
     querySelector(sel) {
       const cls = sel.slice(1);
       for (const c of this.children) { if (c.className.split(' ').includes(cls)) return c; const r = c.querySelector(sel); if (r) return r; }
@@ -176,7 +185,7 @@ function desk(o) {
     paintAgentsWorking: () => { rec.chips++; },
     agentStatus: o.status || {}, localBusy: o.localBusy || new Map(),   // activeDress: a busy agent keeps the busy look
     activeTopOn: () => (o.on === undefined ? true : o.on),
-    document: { visibilityState: 'hidden', addEventListener: (ev, fn) => { rec.listeners[ev] = fn; }, createElement: () => el('') },
+    document: { visibilityState: 'hidden', addEventListener: (ev, fn) => { rec.listeners[ev] = fn; }, createElement: () => el(''), querySelectorAll: () => o.jobEls || [] },
     fetch: async (url, opts) => {
       rec.fetches.push([url, opts]);
       const r = resp.next;
@@ -188,11 +197,11 @@ function desk(o) {
     clearInterval: (id) => { rec.cleared.push(id); },
     paintActiveSection: () => { rec.paints++; },
     Date: { now: () => clock.now },
-    activeJobsFrom: L.activeJobsFrom, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
+    activeJobsFrom: L.activeJobsFrom, activeJobLead: L.activeJobLead, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
   };
   const names = Object.keys(env);
   const api = new Function(...names, DESK_SRC + `
-    return { activeDress, activeDressJob, activeJobsPoll, activeJobsSync, activeJobsWanted,
+    return { activeDress, activeDressJob, activeJobsPoll, activeJobsSync, activeJobsWanted, activeJobsRelabel,
       list: () => activeJobList, jobs: () => activeJobs, setJobs: (v) => { activeJobs = v; }, timer: () => activeJobsTimer, stopped: () => activeJobsStopped,
       fresh: () => activeJobsFresh() };`)(...names.map(n => env[n]));
   env.document.visibilityState = o.hidden ? 'hidden' : 'visible';
@@ -230,12 +239,13 @@ test('desktop poll: a 403 clears the running timer and the job list', async () =
   assert.strictEqual(d.rec.paints, 2);
 });
 
-test('desktop poll: does nothing when the switch is off or the tab is hidden', async () => {
+test('desktop poll: polls even with the Active switch off (job lines are on the normal rows); does nothing when the tab is hidden', async () => {
   const off = desk({ on: false });
-  await off.api.activeJobsPoll();
+  assert.strictEqual(off.api.activeJobsWanted(), true, 'the switch no longer matters');
   off.api.activeJobsSync();
-  assert.strictEqual(off.rec.fetches.length, 0);
-  assert.strictEqual(off.rec.timers.length, 0);
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(off.rec.fetches.length, 1);
+  assert.strictEqual(off.rec.timers.length, 1);
   const hid = desk({ hidden: true });
   await hid.api.activeJobsPoll();
   hid.api.activeJobsSync();
@@ -274,6 +284,26 @@ test('desktop poll: a changed job list paints once, an unchanged one does not', 
   assert.strictEqual(d.rec.paints, 3, 'a status change counts');
 });
 
+test('desktop poll: an unchanged list still refreshes the elapsed time of the drawn job lines in place, without a repaint', async () => {
+  const mkLine = () => { const l = el('agent-job-line'); const nm = el('ajl-name'), tl = el('ajl-tail'); l.appendChild(nm); l.appendChild(tl); return { l, nm, tl }; };
+  const sam = mkLine(), robin = mkLine();
+  const btn = (name, line) => { const b = el('agent-btn'); b.dataset = { agent: name }; b.closest = () => b; b.appendChild(line); return b; };
+  const lines = [sam.l, robin.l];
+  sam.l.closest = () => btn('sam', sam.l); robin.l.closest = () => btn('robin', robin.l);
+  const d = desk({ first: { status: 200, ok: true, jobs: [JOB('1', 'sam', 'a', { startedAt: 1000000 - 50000 })] }, jobEls: lines });
+  await d.api.activeJobsPoll();
+  assert.strictEqual(d.rec.paints, 1);
+  d.clock.now += 30000;
+  await d.api.activeJobsPoll();
+  assert.strictEqual(d.rec.paints, 1, 'same list: no repaint');
+  assert.strictEqual(d.api.jobs().sam, undefined, 'activeJobs is set by paintActiveSection (stubbed here); the relabel only touches lines whose agent has a job');
+  d.api.setJobs({ sam: { names: ['a'], since: 1000000 - 50000, count: 1 } });
+  await d.api.activeJobsPoll();
+  assert.strictEqual(sam.tl.textContent, ' · 1 min', 'the tail of a drawn line moves');
+  assert.strictEqual(robin.tl.textContent, '', 'a line whose agent has no job is left alone');
+  assert.strictEqual(d.rec.paints, 1);
+});
+
 test('desktop poll: after 60 s of failures the jobs are treated as none', async () => {
   const d = desk({ first: { status: 200, ok: true, jobs: [JOB('1', 'sam', 'a')] } });
   await d.api.activeJobsPoll();
@@ -296,64 +326,124 @@ test('desktop poll: after 60 s of failures the jobs are treated as none', async 
   assert.strictEqual(d.api.stopped(), false, 'a 500 never stops the poll');
 });
 
-test('desktop activeDressJob writes the "⏳ " label and title, keeps one line last, and removes it when there is no job', () => {
+test('desktop activeDressJob writes "Background job: <name>" (no hourglass) and the tail, keeps one line last, and removes it when there is no job', () => {
   const d = desk();
   const { copy, info } = freshCopy();
   const busyLine = el('agent-busy-line'); info.appendChild(busyLine);
-  d.api.setJobs({ sam: { names: ['build <b>', 'lint'], since: d.clock.now - 4 * MIN - 1000, count: 2 } });
-  d.api.activeDressJob(copy, { name: 'sam', doneAt: null });
+  const JI = { names: ['build <b>', 'lint'], since: d.clock.now - 4 * MIN - 1000, count: 2 };
+  d.api.activeDressJob(copy, JI);
   const line = info.querySelector('.agent-job-line');
   assert.ok(line, 'line added');
   // changed (Maestro 23:40): the name and the tail are separate spans, so only the name can be cut short
   const part = (c) => line.children.find(x => x.className === c);
-  assert.strictEqual(part('ajl-name').textContent, '⏳ build <b>');
+  assert.strictEqual(part('ajl-name').textContent, 'Background job: build <b>');
   assert.strictEqual(part('ajl-tail').textContent, ' + 1 more · 4 min');
   assert.strictEqual(line.children.length, 2);
   assert.strictEqual(line.title, 'build <b>\nlint');
   assert.strictEqual(info.lastElementChild, line, 'after the busy line');
   d.clock.now += 2 * MIN;
-  d.api.activeDressJob(copy, { name: 'sam', doneAt: null });
+  d.api.activeDressJob(copy, JI);
   assert.strictEqual(info.children.filter(c => c.className === 'agent-job-line').length, 1, 'rewritten in place, not duplicated');
   assert.strictEqual(part('ajl-tail').textContent, ' + 1 more · 6 min', 'the tail is rewritten in place');
   assert.strictEqual(line.children.length, 2, 'no extra spans');
   info.appendChild(el('agent-busy-line'));   // something appended after it: the job line moves back to the end
-  d.api.activeDressJob(copy, { name: 'sam', doneAt: null });
+  d.api.activeDressJob(copy, JI);
   assert.strictEqual(info.lastElementChild, line);
-  d.api.activeDressJob(copy, { name: 'sam', doneAt: 5 });
-  assert.strictEqual(info.querySelector('.agent-job-line'), null, 'a done row has no job line');
-  d.api.activeDressJob(copy, { name: 'sam', doneAt: null });
+  const dup = el('agent-job-line'); info.appendChild(dup);   // a stray second line (a copy cloned from a row that had one) is dropped
+  d.api.activeDressJob(copy, JI);
+  assert.strictEqual(info.querySelectorAll('.agent-job-line').length, 1, 'exactly one job line');
+  assert.strictEqual(info.lastElementChild.className, 'agent-job-line', 'and it is last in .agent-info');
+  d.api.activeDressJob(copy, null);
+  assert.strictEqual(info.querySelector('.agent-job-line'), null, 'no info (a done Active copy, or no job): the line is removed');
+  d.api.activeDressJob(copy, JI);
   assert.ok(info.querySelector('.agent-job-line'));
-  d.api.setJobs({});
-  d.api.activeDressJob(copy, { name: 'sam', doneAt: null });
+  d.api.activeDressJob(copy, undefined);
   assert.strictEqual(info.querySelector('.agent-job-line'), null, 'no job: the line is removed');
-  d.api.activeDressJob(copy, { name: 'sam', doneAt: null });   // and removing nothing is fine
+  d.api.activeDressJob(copy, undefined);   // and removing nothing is fine
 });
 
-test('desktop activeDress: a jobOnly row gets class active-joby and a hollow dot, others do not', () => {
+test('desktop activeDress: an Active copy is busy-looking or done, never "job only" (no active-joby class, no hollow dot)', () => {
   const d = desk();
   const { copy, info, dd } = freshCopy();
   info.appendChild(el('agent-busy-line'));
   d.api.activeDress(copy, { name: 'sam', doneAt: null, jobOnly: true }, null);
-  assert.ok(copy.classList.contains('active-joby'));
-  assert.strictEqual(dd.className, 'agent-status live-joby');
-  assert.strictEqual(info.querySelector('.agent-busy-line'), null, 'no status line on a job-only row');
-  assert.ok(!copy.classList.contains('is-busy'));
-  d.api.activeDress(copy, { name: 'sam', doneAt: null, jobOnly: false }, null);
-  assert.ok(!copy.classList.contains('active-joby'), 'busy again: the class goes');
+  assert.ok(!copy.classList.contains('active-joby'), 'even a stray jobOnly flag does nothing');
+  assert.notStrictEqual(dd.className, 'agent-status live-joby');
+  assert.ok(info.querySelector('.agent-busy-line'), 'the status line stays');
   assert.ok(copy.classList.contains('is-busy'));
-  d.api.activeDress(copy, { name: 'sam', doneAt: 9, jobOnly: true }, null);
-  assert.ok(!copy.classList.contains('active-joby'), 'a done row is not job-only');
-  assert.ok(copy.classList.contains('active-done'));
+  d.api.activeDress(copy, { name: 'sam', doneAt: 9 }, null);
+  assert.ok(copy.classList.contains('active-done') && !copy.classList.contains('is-busy'));
+  assert.strictEqual(dd.className, 'agent-status live-idle');
+  assert.ok(!/jobOnly|active-joby|live-joby/.test(cut(app, 'function activeDress(', 'function activeDressJob(')), 'the branch is gone from the source');
 });
 
-test('desktop paintActiveSection passes jobs from the polled list to activeStep', () => {
+test('desktop paintActiveSection: jobs come from the polled list whatever the switch says; the step gets busy only', () => {
   const p = cut(app, 'function paintActiveSection(', "// Agents' detached background jobs (GET /api/jobs");
   assert.ok(app.indexOf('const ACTIVE_JOBS_MS') < app.indexOf('function paintActiveSection('), 'the job state exists before any paint');
-  assert.ok(p.includes('activeJobs = activeTopOn() ? activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible) : {};'), 'changed: a list older than 60 s is not shown, none with the switch off');
-  assert.ok(/activeStep\(activeState, \{ busy, jobs: activeJobs, now: Date\.now\(\)/.test(p));
-  assert.ok(app.includes('activeDressJob(copy, row);'));
+  assert.ok(p.includes('activeJobs = activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible);'), 'a list older than 60 s is not shown; no switch in it');
+  assert.ok(/activeStep\(activeState, \{ busy, now: Date\.now\(\)/.test(p) && !/jobs:/.test(p), 'the step gets no jobs');
+  assert.ok(p.indexOf('activeDressJob(document.getElementById') > 0 && p.indexOf('activeDressJob(document.getElementById') < p.indexOf('activeState.rows.length === 0'), 'normal rows get their job line before the early return');
+  assert.ok(app.includes('activeDressJob(copy, row.doneAt == null ? activeJobs[row.name] : null);'));
   const save = cut(app, 'function saveActiveTop(', 'function activeDress(');
-  assert.ok(save.includes('activeJobsSync();') && save.indexOf('activeJobsSync();') < save.indexOf('paintActiveSection(true)'), 'the switch starts or stops the poll');
+  assert.ok(save.includes('activeJobsSync();') && save.indexOf('activeJobsSync();') < save.indexOf('paintActiveSection(true)'), 'the switch still calls the sync');
+});
+
+// paintActiveSection run for real against a tiny fake list: job lines on normal rows
+const PAINT_SRC = cut(app, 'function activeDressJob(', 'function activeMakeCopy(') + '\n' + cut(app, 'function paintActiveSection(', "// Agents' detached background jobs (GET /api/jobs");
+function deskPaint(o) {
+  const clock = { now: 1000000 };
+  const rows = {};
+  for (const n of ['sam', 'robin']) { const b = el('agent-btn'); b.dataset = { agent: n }; const inf = el('agent-info'); b.appendChild(inf); rows[n] = { b, inf }; }
+  const box = { innerHTML: 'x', hidden: false, offsetHeight: 0, querySelector: () => ({ replaceChildren() {}, children: [] }) };
+  const env = {
+    document: { getElementById: (id) => (id === 'agent-active-group' ? box : id.startsWith('agent-btn-') && rows[id.slice(10)] ? rows[id.slice(10)].b : null), createElement: () => el('') },
+    AGENTS: [{ name: 'sam' }, { name: 'robin' }], agentStatus: o.status || {}, localBusy: new Map(), localStorage: { getItem: () => null },
+    activeTopOn: () => o.on !== false, window: { matchMedia: null }, setInterval: () => 1, clearInterval() {},
+    Date: { now: () => clock.now },
+    activeBusyFrom: L.activeBusyFrom, activeJobsFrom: L.activeJobsFrom, activeStep: L.activeStep, activeMembersChanged: L.activeMembersChanged,
+    activeJobLead: L.activeJobLead, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle, activeMakeCopy: () => null,
+  };
+  const names = Object.keys(env);
+  const api = new Function(...names, 'let activeState = { rows: [] }; let activeHeld = false; let activeTicker = null; let activeJobList = []; let activeJobs = {}; let activeJobsOkAt = Date.now();\n' +
+    'function activeJobsFresh() { return Date.now() - activeJobsOkAt <= 60000; }\n' + PAINT_SRC + `
+    return { paintActiveSection, setList: (l) => { activeJobList = l; activeJobsOkAt = Date.now(); }, state: () => activeState };`)(...names.map(n => env[n]));
+  return { api, rows, box, clock };
+}
+
+test('desktop: an idle agent with a job gets "Background job: <name>" + tail on its normal row, even with the Active switch off; the line goes when the job ends', () => {
+  for (const on of [true, false]) {
+    const d = deskPaint({ on });
+    d.api.setList([JOB('1', 'sam', 'build', { startedAt: d.clock.now - 4 * MIN - 500 })]);
+    d.api.paintActiveSection();
+    const lines = d.rows.sam.inf.querySelectorAll('.agent-job-line');
+    assert.strictEqual(lines.length, 1, 'switch ' + on);
+    assert.strictEqual(lines[0].children[0].textContent, 'Background job: build');
+    assert.strictEqual(lines[0].children[1].textContent, ' · 4 min');
+    assert.strictEqual(d.rows.robin.inf.querySelectorAll('.agent-job-line').length, 0, 'an agent without a job has none');
+    assert.deepStrictEqual(d.api.state().rows, [], 'an agent with only a job is not in Active');
+    d.api.paintActiveSection();
+    assert.strictEqual(d.rows.sam.inf.querySelectorAll('.agent-job-line').length, 1, 'repainting does not duplicate');
+    d.api.setList([]);
+    d.api.paintActiveSection();
+    assert.strictEqual(d.rows.sam.inf.querySelectorAll('.agent-job-line').length, 0, 'the job ended: no line');
+  }
+});
+
+test('desktop: a busy agent with a job is in Active and its normal row carries the job line below the status line', () => {
+  const d = deskPaint({ status: { sam: { busy: true, busySince: '2026-01-01T10:00:00Z' } } });
+  d.rows.sam.inf.appendChild(el('agent-busy-line'));
+  d.api.setList([JOB('1', 'sam', 'build', { startedAt: d.clock.now })]);
+  d.api.paintActiveSection();
+  assert.deepStrictEqual(d.api.state().rows.map(r => r.name), ['sam']);
+  assert.strictEqual(d.rows.sam.inf.lastElementChild.className, 'agent-job-line');
+});
+
+test('desktop: no joby / job-busy / jobOnly / busySplitJobs strings remain in app.js, index.html, the lib or mobile', () => {
+  const files = ['app.js', 'index.html', 'mobile.js', 'mobile.html', 'lib/ui-active-agents.js'];
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    for (const w of ['joby', 'job-busy', 'jobOnly', 'busySplitJobs']) assert.ok(!src.includes(w), `${w} in ${f}`);
+  }
 });
 
 // ── phone (mobile.js) ────────────────────────────────────────────────────────────────────────────
@@ -383,7 +473,7 @@ function phone(o) {
     setInterval: (fn, ms) => { rec.timers.push({ fn, ms }); return rec.timers.length; },
     clearInterval: (id) => { rec.cleared.push(id); },
     Date: { now: () => clock.now },
-    activeJobsFrom: L.activeJobsFrom, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
+    activeJobsFrom: L.activeJobsFrom, activeJobLead: L.activeJobLead, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
   };
   const names = Object.keys(env);
   const apiObj = new Function(...names, PHONE_POLL + `
@@ -407,10 +497,17 @@ test('phone poll: uses api("/api/jobs") and stops for good after a 403 (or 401)'
   assert.strictEqual(u.api.stopped(), true);
 });
 
-test('phone poll: does nothing when the switch is off or the page is hidden; sync starts a 15 s timer when wanted', async () => {
-  const off = phone({ on: false });
-  await off.api.activeJobsPoll(); off.api.activeJobsSync();
-  assert.strictEqual(off.rec.apis.length + off.rec.timers.length, 0);
+test('phone: activeJobsNow returns the jobs with the Active switch off, and the poll runs with it off', async () => {
+  const off = phone({ on: false, first: { status: 200, ok: true, jobs: [JOB('1', 'sam', 'a')] } });
+  assert.strictEqual(off.api.activeJobsWanted(), true, 'the switch no longer matters');
+  await off.api.activeJobsPoll();
+  assert.strictEqual(off.rec.apis.length, 1);
+  assert.deepStrictEqual(Object.keys(off.api.activeJobsNow()), ['sam'], 'jobs are returned with the switch off');
+  off.api.activeJobsSync();
+  assert.strictEqual(off.rec.timers.length, 1, 'and the timer starts');
+});
+
+test('phone poll: does nothing when the page is hidden; sync starts a 15 s timer when wanted', async () => {
   const hid = phone({ hidden: true });
   await hid.api.activeJobsPoll(); hid.api.activeJobsSync();
   assert.strictEqual(hid.rec.apis.length + hid.rec.timers.length, 0);
@@ -469,7 +566,8 @@ test('phone activeJobsRelabel rewrites the drawn labels in place and stops its t
   d.api.setJobs({ sam: { names: ['x', 'y'], since: d.clock.now - 7 * MIN, count: 2 } });
   d.api.setTick(9);
   d.api.activeJobsRelabel();
-  assert.strictEqual(nm.textContent, '⏳ x');
+  assert.strictEqual(nm.textContent, 'Background job: x');
+  assert.ok(!cut(mob, 'function activeJobsRelabel()', 'document.addEventListener(\'visibilitychange\', activeJobsSync);').includes('.active-sec'), 'every drawn row is relabelled, not only the Active section');
   assert.strictEqual(tl.textContent, ' + 1 more · 7 min');
   assert.strictEqual(j.title, 'x\ny');
   assert.deepStrictEqual(d.rec.cleared, [], 'still running');
@@ -488,28 +586,28 @@ test('phone activeJobsRelabel rewrites the drawn labels in place and stops its t
 function phoneRow(over) {
   const env = Object.assign({
     unread: {}, live: {}, isBusy: () => false, statusKnown: true, busyText: () => 'busy', shortModel: (m) => 'm:' + m,
-    activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
+    activeJobLead: L.activeJobLead, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
   }, over || {});
   const names = Object.keys(env);
   return new Function(...names, ESC_SRC + '\n' + ROW_SRC + '\nreturn agentRowHtml;')(...names.map(n => env[n]));
 }
 const jobInfo = (names, ago) => ({ names, since: Date.now() - (ago == null ? 4 * MIN + 500 : ago), count: names.length });
 
-test('phone agentRowHtml: a jobOnly row has active-joby, the joby dot, and the agent-job div with label and title', () => {
+test('phone agentRowHtml: an idle agent with a job (a normal group row) carries the agent-job div "Background job: ..." with title, after the blurb line, idle dot, not busy', () => {
   const row = phoneRow();
-  const h = row({ name: 'sam', display: 'Sam', model: 'x' }, { active: true, jobOnly: true, job: jobInfo(['build', 'lint', 'test']) });
-  assert.ok(h.includes('class="agent-row active-joby"'), h);
-  assert.ok(h.includes('class="dot joby"'), h);
+  const h = row({ name: 'sam', display: 'Sam', model: 'x', blurb: 'helper' }, { job: jobInfo(['build', 'lint', 'test']) });
+  assert.ok(h.includes('class="agent-row"'), h);
+  assert.ok(h.includes('class="dot idle"'), h);
   assert.ok(h.includes('<div class="agent-job" title="build\nlint\ntest">'), h);
-  assert.ok(h.includes('<span class="ajl-name">⏳ build</span><span class="ajl-tail"> + 2 more · 4 min</span></div>'), h);   // changed (Maestro 23:40): name and tail spans
-  assert.ok(!h.includes('is-busy') && !h.includes('active-done'));
-  assert.ok(!h.includes('agent-model'), 'a job-only row has no status or blurb line');
+  assert.ok(h.includes('<span class="ajl-name">Background job: build</span><span class="ajl-tail"> + 2 more · 4 min</span></div>'), h);
+  assert.ok(!h.includes('is-busy') && !h.includes('active-done') && !h.includes('⏳'));
+  assert.ok(h.indexOf('class="agent-model"') > 0 && h.indexOf('class="agent-model"') < h.indexOf('class="agent-job"'), 'the job line follows the blurb');
 });
 
 test('phone agentRowHtml: job names are escaped in the text and in the title', () => {
   const row = phoneRow();
-  const h = row({ name: 'sam', model: 'x' }, { active: true, jobOnly: true, job: jobInfo([`<b>&"'`, 'second']) });
-  assert.ok(h.includes('⏳ &lt;b&gt;&amp;&quot;&#39;</span><span class="ajl-tail"> + 1 more'), h);   // changed: name and tail spans
+  const h = row({ name: 'sam', model: 'x' }, { job: jobInfo([`<b>&"'`, 'second']) });
+  assert.ok(h.includes('Background job: &lt;b&gt;&amp;&quot;&#39;</span><span class="ajl-tail"> + 1 more'), h);
   assert.ok(h.includes('title="&lt;b&gt;&amp;&quot;&#39;\nsecond"'), h);
   assert.ok(!h.includes('<b>'), 'no raw markup from a job name');
   assert.strictEqual((h.match(/"/g) || []).length % 2, 0, 'attribute quotes stay balanced');
@@ -517,32 +615,29 @@ test('phone agentRowHtml: job names are escaped in the text and in the title', (
 
 test('phone agentRowHtml: a really busy row with a job keeps its status line and shows the job line after it', () => {
   const row = phoneRow({ isBusy: (n) => n === 'sam' });
-  const h = row({ name: 'sam', model: 'x' }, { active: true, jobOnly: false, job: jobInfo(['build']) });
+  const h = row({ name: 'sam', model: 'x' }, { active: true, job: jobInfo(['build']) });
   assert.ok(h.includes('class="agent-row is-busy"') && h.includes('class="dot busy"'), h);
-  assert.ok(!h.includes('active-joby'));
   assert.ok(h.indexOf('class="agent-model working"') < h.indexOf('class="agent-job"'), 'job line after the status line');
 });
 
-test('phone agentRowHtml: a busy agent keeps the busy look even when its row says jobOnly (owner report 05:52)', () => {
+test('phone agentRowHtml: a busy agent with a job keeps the busy look and the status line; an idle one with a job is a plain idle row (no hollow dot)', () => {
   const row = phoneRow({ isBusy: (n) => n === 'maestro', busyText: () => '⏳ replying · 3m' });
-  const h = row({ name: 'maestro', model: 'x' }, { active: true, jobOnly: true, job: jobInfo(['live server'], 10 * 60 * MIN) });
+  const h = row({ name: 'maestro', model: 'x' }, { active: true, job: jobInfo(['live server'], 10 * 60 * MIN) });
   assert.ok(h.includes('class="agent-row is-busy"') && h.includes('class="dot busy"'), 'yellow dot: ' + h);
-  assert.ok(!h.includes('active-joby') && !h.includes('dot joby'), 'never the hollow job-only dot for a busy agent');
   assert.ok(h.includes('<div class="agent-model working">⏳ replying · 3m</div>'), 'the yellow status line');
   assert.ok(h.indexOf('class="agent-model working"') < h.indexOf('class="agent-job"'), 'the job line after the status');
-  const idle = phoneRow()({ name: 'kim', model: 'x' }, { active: true, jobOnly: true, job: jobInfo(['backup']) });
-  assert.ok(idle.includes('class="dot joby"') && idle.includes('active-joby'), 'idle with a job: the job-only look stays');
+  const idle = phoneRow()({ name: 'kim', model: 'x' }, { job: jobInfo(['backup']) });
+  assert.ok(!idle.includes('joby') && !idle.includes('is-busy'), idle);
 });
 
-test('desktop activeDress: a busy agent keeps the busy look even when its row says jobOnly', () => {
+test('desktop activeDress: a busy agent keeps the busy look (yellow dot, status line copied from its row)', () => {
   for (const o of [{ status: { maestro: { busy: true } } }, { localBusy: new Map([['maestro', '2026-11-14T10:00:00Z']]) }]) {
     const d = desk(o);
     const { copy, info, dd } = freshCopy();
     const orig = el(''); const ol = el('agent-busy-line'); ol.textContent = '⏳ replying'; orig.appendChild(ol);
     const od = el('agent-status live-busy'); orig.appendChild(od);
     info.appendChild(el('agent-busy-line'));
-    d.api.activeDress(copy, { name: 'maestro', doneAt: null, jobOnly: true }, orig);
-    assert.ok(!copy.classList.contains('active-joby'), 'no job-only class for a busy agent');
+    d.api.activeDress(copy, { name: 'maestro', doneAt: null }, orig);
     assert.ok(copy.classList.contains('is-busy'));
     assert.strictEqual(dd.className, 'agent-status live-busy', 'the yellow dot');
   }
@@ -578,18 +673,19 @@ test('both pages: turn_end clears busy only through activeTurnEnd, asks the hub 
 
 test('phone agentRowHtml: without opts (or without a job) there is no job markup; done rows drop the job', () => {
   const row = phoneRow();
-  for (const h of [row({ name: 'sam', model: 'x' }), row({ name: 'sam', model: 'x' }, undefined), row({ name: 'sam', model: 'x' }, {}), row({ name: 'sam', model: 'x' }, { active: true, jobOnly: false })]) {
-    assert.ok(!h.includes('agent-job') && !h.includes('active-joby') && !h.includes('joby'), h);
+  for (const h of [row({ name: 'sam', model: 'x' }), row({ name: 'sam', model: 'x' }, undefined), row({ name: 'sam', model: 'x' }, {}), row({ name: 'sam', model: 'x' }, { active: true })]) {
+    assert.ok(!h.includes('agent-job') && !h.includes('joby'), h);
   }
-  const done = row({ name: 'sam', model: 'x' }, { done: true, jobOnly: true, job: jobInfo(['build']) });
-  assert.ok(done.includes('active-done') && !done.includes('agent-job') && !done.includes('active-joby'), done);
+  const done = row({ name: 'sam', model: 'x' }, { done: true, job: jobInfo(['build']) });
+  assert.ok(done.includes('active-done') && !done.includes('agent-job'), done);
 });
 
-test('phone renderAgents passes jobs to the step and the job to the Active rows; init and the switch start the poll', () => {
+test('phone renderAgents: the step gets busy only, the job goes to the Active rows and to the normal group rows; init and the switch start the poll', () => {
   const r = cut(mob, 'function renderAgents() {', 'function updateDots()');
   assert.ok(r.includes('activeJobs = activeJobsNow();'));
-  assert.ok(/jobs: activeJobs, now: Date\.now\(\)/.test(r));
-  assert.ok(r.includes('jobOnly: !!row.jobOnly, job: activeJobs[a.name]'));
+  assert.ok(/activeStep\(activeState, \{ busy: activeBusyNow\(\), now: Date\.now\(\)/.test(r) && !/jobs: activeJobs/.test(r), 'the step gets no jobs');
+  assert.ok(r.includes('active: true, job: activeJobs[a.name]'));
+  assert.ok(r.includes('html += agentRowHtml(a, { job: activeJobs[a.name] });'), 'normal group rows carry the job line');
   assert.ok(cut(mob, 'function toggleActiveTop() {', 'function activeBusyNow()').includes('activeJobsSync();'), 'the switch starts or stops the poll');
   assert.ok(/await loadAgents\(\);\s*activeJobsSync\(\);/.test(mob), 'started in init after loadAgents');
 });
@@ -689,8 +785,8 @@ test('phone poll: a member never fetches /api/jobs (not at load, not on visibili
   assert.ok(/await loadMe\(\);[\s\S]{0,400}?await loadAgents\(\);\s*activeJobsSync\(\);/.test(mob), 'hubMe is loaded before the poll starts');
 });
 
-// The phone's renderAgents run for real against stubs: the working-only filter with a job-only agent.
-const PH_FILTER = cut(mob, '// Busy agents plus those the Active section shows', 'function updateDots()');
+// The phone's renderAgents run for real against stubs: the working-only filter and the job lines on group rows.
+const PH_FILTER = cut(mob, '// Busy agents only (what the working chip', 'function updateDots()');
 function phoneFilter(o) {
   const chip = { cls: new Set(), textContent: '', classList: { add: (c) => chip.cls.add(c), remove: (...cs) => cs.forEach(c => chip.cls.delete(c)), toggle: (c, f) => (f ? chip.cls.add(c) : chip.cls.delete(c)) } };
   const listEl = { innerHTML: '', addEventListener() {}, firstChild: null, querySelector: () => null };
@@ -702,42 +798,59 @@ function phoneFilter(o) {
     busyText: () => 'busy', shortModel: (m) => m, displayName: (n) => n,
     localStorage: { getItem: () => null }, matchMedia: () => ({ matches: true }), screen: 'agents',
     document: { visibilityState: 'visible', addEventListener() {} }, isAdmin: () => true, api: async () => ({}), setInterval: () => 0, clearInterval() {},
-    activeBusyFrom: L.activeBusyFrom, activeJobsFrom: L.activeJobsFrom, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
+    activeBusyFrom: L.activeBusyFrom, activeJobsFrom: L.activeJobsFrom, activeJobLead: L.activeJobLead, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
     activeInitial: L.activeInitial, activeStep: L.activeStep, activeMembersChanged: L.activeMembersChanged, activeTitle: L.activeTitle,
   };
   const names = Object.keys(env);
   const api = new Function(...names, 'let workingFilter = false;\n' + ESC_SRC + '\n' + PH_FILTER + `
-    return { renderAgents, setFilter: (v) => { workingFilter = v; }, setList: (l) => { activeJobList = l; activeJobsOkAt = Date.now(); } };`)(...names.map(n => env[n]));
+    return { renderAgents, workingNames, setFilter: (v) => { workingFilter = v; }, filterOn: () => workingFilter, setList: (l) => { activeJobList = l; activeJobsOkAt = Date.now(); } };`)(...names.map(n => env[n]));
   return { api, chip, listEl };
 }
 const groupRows = (html) => html.slice(html.indexOf('data-group="worker"')).match(/data-agent="([^"]+)"/g) || [];
 
-test('phone working filter: an agent with only a running job is listed in its group and the empty message is not shown', () => {
+test('phone: a normal group row of an idle agent with a job carries the agent-job div "Background job: ..."; no Active section, no busy look', () => {
   const p = phoneFilter({});
-  p.api.setList([JOB('1', 'sam', 'build')]);
-  p.api.setFilter(true);
+  p.api.setList([JOB('1', 'sam', 'build', { startedAt: Date.now() - 4 * MIN - 500 })]);
   p.api.renderAgents();
-  assert.ok(!p.listEl.innerHTML.includes('No agent is working right now'), p.listEl.innerHTML);
-  assert.ok(p.listEl.innerHTML.includes('Workers (1)'), 'the group count agrees with the Active section');
-  assert.ok(!p.listEl.innerHTML.includes('Leads'), 'agents without work stay hidden');
-  assert.ok(groupRows(p.listEl.innerHTML).includes('data-agent="sam"'));
-  assert.ok(!p.listEl.innerHTML.includes('data-agent="robin"'));
-  assert.ok(p.chip.cls.has('on') && p.chip.cls.has('filtering') && p.chip.textContent.includes('sam'));
+  const html = p.listEl.innerHTML;
+  const samRow = html.split('<button').find(b => b.includes('data-agent="sam"'));
+  assert.ok(samRow.includes('<div class="agent-job"') && samRow.includes('Background job: build'), samRow);
+  assert.ok(!html.includes('active-sec'), 'an agent with only a job is not in Active');
+  assert.ok(!html.includes('is-busy'), 'and not busy');
+  assert.strictEqual((html.match(/<div class="agent-job"/g) || []).length, 1, 'only sam has a job line');
 });
 
-test('phone working filter: no jobs keeps the old behaviour (only busy agents; the empty message when none)', () => {
+test('phone working filter and chip list busy agents only: an agent with only a job is not listed; the working names are the busy ones', () => {
+  const p = phoneFilter({});
+  p.api.setList([JOB('1', 'sam', 'build')]);
+  assert.deepStrictEqual(p.api.workingNames(), [], 'a job alone is not working');
+  p.api.setFilter(true);
+  p.api.renderAgents();
+  assert.strictEqual(p.api.filterOn(), false, 'nothing is busy: the filter switches itself off (as before)');
+  assert.ok(!p.chip.cls.has('on') && p.chip.textContent === '', 'the chip stays off for a job-only agent');
+  const busy = phoneFilter({ live: { robin: { busy: true } } });
+  busy.api.setList([JOB('1', 'sam', 'build')]);
+  assert.deepStrictEqual(busy.api.workingNames(), ['robin'], 'only the busy agent');
+  busy.api.setFilter(true);
+  busy.api.renderAgents();
+  assert.ok(busy.listEl.innerHTML.includes('Workers (1)') && groupRows(busy.listEl.innerHTML).includes('data-agent="robin"'));
+  assert.ok(!busy.listEl.innerHTML.includes('data-agent="sam"'), 'sam (job only) is filtered out');
+  assert.ok(busy.chip.textContent.includes('robin') && !busy.chip.textContent.includes('sam'));
+  const src = cut(mob, 'function workingNames()', 'function renderWorkingChip()');
+  assert.ok(!/activeJobs/.test(src), 'workingNames does not look at jobs');
+  assert.ok(cut(mob, 'function renderAgents() {', 'function updateDots()').includes('if (workingFilter) g.items = g.items.filter(a => isBusy(a.name));'));
+});
+
+test('phone: with the filter on and nothing busy the list falls back to the whole list (the filter resets), and "No agent is working right now." stays for an empty filtered result', () => {
+  assert.ok(cut(mob, 'function renderAgents() {', 'function updateDots()').includes("No agent is working right now."));
   const none = phoneFilter({});
   none.api.setFilter(true);
   none.api.renderAgents();
-  assert.ok(none.listEl.innerHTML.includes('Leads') && none.listEl.innerHTML.includes('data-agent="robin"'), 'nobody working: the filter resets itself and the whole list shows (as before)');
-  const busy = phoneFilter({ live: { robin: { busy: true } } });
-  busy.api.setFilter(true);
-  busy.api.renderAgents();
-  assert.ok(busy.listEl.innerHTML.includes('Workers (1)') && groupRows(busy.listEl.innerHTML).includes('data-agent="robin"') && !busy.listEl.innerHTML.includes('data-agent="sam"'));
+  assert.ok(none.listEl.innerHTML.includes('Leads') && none.listEl.innerHTML.includes('data-agent="robin"'));
 });
 
-// The desktop filter: busySplitJobs / paintAgentsWorking / toggleBusyFilter and the CSS that hides the other rows.
-const DK_FILTER = cut(app, 'function busyIsWorker(', 'function fmtElapsedShort(') + '\n' + cut(app, '// busySplit plus the agents the Active section shows', '// Hub-wide worker freshness');
+// The desktop filter: paintAgentsWorking / toggleBusyFilter and the CSS that hides the other rows.
+const DK_FILTER = cut(app, 'function busyIsWorker(', 'function fmtElapsedShort(') + '\n' + cut(app, 'function paintAgentsWorking()', '// Hub-wide worker freshness');
 function deskFilter(o) {
   const mk = () => { const s = new Set(); return { cls: s, textContent: '', classList: { toggle: (c, f) => (f ? s.add(c) : s.delete(c)) } }; };
   const els = { 'agents-working': mk(), 'agent-list': mk() };
@@ -748,25 +861,28 @@ function deskFilter(o) {
   return { api, els };
 }
 
-test('desktop working filter: an agent with only a running job counts as working (chip, toggle, filter class)', () => {
+test('desktop working chip and filter count busy agents only: an agent with only a running job is not counted; the CSS has no job-busy exception', () => {
   const d = deskFilter({});
   d.api.setJobs(L.activeJobsFrom([JOB('1', 'sam', 'build')], ['sam']));
-  d.api.toggleBusyFilter();
-  assert.strictEqual(d.api.on(), true, 'the filter can be switched on with only a job running');
-  assert.ok(d.els['agent-list'].cls.has('busy-filter'));
-  assert.ok(d.els['agents-working'].cls.has('on') && d.els['agents-working'].textContent.startsWith('1 agent working'), d.els['agents-working'].textContent);
-  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  assert.ok(html.includes('#agent-list.busy-filter .agent-btn:not(.is-busy):not(.job-busy) { display: none; }'));
-  assert.ok(html.includes('#agent-list.busy-filter .agent-group:not(:has(.agent-btn.is-busy, .agent-btn.job-busy)) { display: none; }'));
-  const p = cut(app, 'function paintActiveSection(', "// Agents' detached background jobs (GET /api/jobs");
-  assert.ok(p.includes("classList.toggle('job-busy', n in activeJobs)"), 'rows of agents with a job are marked as working');
-  assert.ok(cut(app, 'async function activeJobsPoll()', 'document.addEventListener(\'visibilitychange\', activeJobsSync);').includes('paintActiveSection();\n      paintAgentsWorking();'), 'a new list refreshes the chip');
-  d.api.setJobs({});
   d.api.paintAgentsWorking();
-  assert.strictEqual(d.api.on(), false, 'the job ended: the filter switches itself off');
+  assert.ok(!d.els['agents-working'].cls.has('on'), 'the chip stays off for a job-only agent');
+  d.api.toggleBusyFilter();
+  assert.strictEqual(d.api.on(), false, 'the filter cannot be switched on with only a job running');
+  assert.ok(!d.els['agent-list'].cls.has('busy-filter'));
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  assert.ok(html.includes('#agent-list.busy-filter .agent-btn:not(.is-busy) { display: none; }'));
+  assert.ok(html.includes('#agent-list.busy-filter .agent-group:not(:has(.agent-btn.is-busy)) { display: none; }'));
+  assert.ok(/\.agent-btn \.agent-job-line \{/.test(html), 'the job line rule applies to every .agent-btn, not only Active copies');
+  assert.ok(!/active-copy[^{]*agent-job-line/.test(html));
+  const w = cut(app, 'function paintAgentsWorking()', '// Hub-wide worker freshness');
+  assert.ok(w.includes('busySplit(agentStatus, [...localBusy.keys()])') && !/activeJobs/.test(w), 'the chip and the toggle look at busy agents only');
+  const busy = deskFilter({ status: { robin: { busy: true } } });
+  busy.api.setJobs(L.activeJobsFrom([JOB('1', 'sam', 'build')], ['sam']));
+  busy.api.paintAgentsWorking();
+  assert.ok(busy.els['agents-working'].textContent.startsWith('1 agent working'), 'robin only: ' + busy.els['agents-working'].textContent);
 });
 
-test('desktop working filter: without jobs nothing changes (nothing busy: toggle is a no-op; busy agents count as before)', () => {
+test('desktop working filter: nothing busy: toggle is a no-op; busy agents count', () => {
   const none = deskFilter({});
   none.api.toggleBusyFilter();
   assert.strictEqual(none.api.on(), false);
