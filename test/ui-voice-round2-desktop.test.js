@@ -107,7 +107,7 @@ function makeEnv(opts = {}) {
     voiceRec: { guard: { cancel() {}, pending: false }, chatId: null, busy: false }, voiceTest: { mic: null, guard: { pending: false } },
     voiceMicStop() {}, voiceStopPlayback() { log.stopPlayback = (log.stopPlayback || 0) + 1; }, voicePlay: { token: 0, source: null },
     VOICE_MIC_SVG: '<svg>mic</svg>', voiceSentences: (t) => [t], voiceSpeechText: (t) => t, voiceSpeakText: async () => {}, voiceEncodeWav: () => new ArrayBuffer(1),
-    VOICE_LOUDNESS: { normal: 0, louder: 9, loudest: 14 }, voiceLoudnessNow: () => 'louder', voiceLoudnessSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceLoudApply() {}, VOICE_ECHO_HOLDS: [0, 600, 1000, 1500], voiceBusyToast: () => false, voiceRefreshStatus() {}, voiceMeterPercent: (db) => Math.round(Math.max(0, Math.min(100, (db + 60) / 0.6))),
+    VOICE_LOUDNESS: { normal: 0, louder: 9, loudest: 14 }, voiceLoudnessNow: () => 'louder', voiceLoudnessFor: (p, kind) => (kind === 'bluetooth' ? 'normal' : 'louder'), voiceLoudnessSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceLoudApply() {}, VOICE_ECHO_HOLDS: [0, 600, 1000, 1500], voiceBusyToast: () => false, voiceRefreshStatus() {}, voiceMeterPercent: (db) => Math.round(Math.max(0, Math.min(100, (db + 60) / 0.6))),
     voiceCreateVad: () => vad, voiceCreateCall: (deps) => { log.created.push(deps); return call; },
     voiceRoomCheck() {}, voiceCallMedian: () => null, voiceOpenMic: async () => ({ close() {} }), voiceLevelDb: () => -100, voiceMicError: (e) => String(e),
     appendMessage() {}, appendSystemNotice() {}, stopAgentTurn() {}, sendSoloMessage: async () => {}, closeQuestion() {}, hubOriginLabel: () => '',

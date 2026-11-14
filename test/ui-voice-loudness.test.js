@@ -126,11 +126,11 @@ test('prefs: loudness is kept, defaulted and cleaned (lib)', () => {
 });
 test('prefs: both pages carry the same cleaner and default (the synced lib block)', () => {
   for (const [name, src] of [['app.js', app], ['mobile.js', mob]]) {
-    assert.ok(/VOICE_DEFAULT_PREFS = \{[^}]*loudness: 'louder'[^}]*\}/.test(src), name + ' default');
+    assert.ok(/VOICE_DEFAULT_PREFS = \{[^}]*loudness: 'louder', loudnessBt: 'normal'[^}]*\}/.test(src), name + ' default');   // changed: both defaults
     assert.ok(src.includes("if (typeof raw.loudness === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, raw.loudness)) p.loudness = raw.loudness;"), name + ' cleaner');
     const fn = between(src, 'function voiceCleanPrefs(raw) {', '// The wake phrase of an agent');
     const run = new Function('VOICE_DEFAULT_PREFS', 'VOICE_LOUDNESS', 'VOICE_END_PAUSES', 'VOICE_CONTINUE_WAITS', 'VOICE_ECHO_HOLDS', 'VOICE_WAKE_QUIET_MS', 'voiceCleanSpeed', 'voiceCleanWakePhrase',
-      fn + '; return voiceCleanPrefs;')({ micLevel: 50, loudness: 'louder' }, V.VOICE_LOUDNESS, V.VOICE_END_PAUSES, V.VOICE_CONTINUE_WAITS, V.VOICE_ECHO_HOLDS, V.VOICE_WAKE_QUIET_MS, V.voiceCleanSpeed, V.voiceCleanWakePhrase);
+      fn + '; return voiceCleanPrefs;')({ micLevel: 50, loudness: 'louder', loudnessBt: 'normal' }, V.VOICE_LOUDNESS, V.VOICE_END_PAUSES, V.VOICE_CONTINUE_WAITS, V.VOICE_ECHO_HOLDS, V.VOICE_WAKE_QUIET_MS, V.voiceCleanSpeed, V.voiceCleanWakePhrase);
     assert.strictEqual(run({ loudness: 'loudest' }).loudness, 'loudest', name);
     assert.strictEqual(run({ loudness: 'x' }).loudness, 'louder', name);
     assert.strictEqual(run({}).loudness, 'louder', name);
@@ -192,8 +192,8 @@ test('desktop: reply audio joins the loudness chain only while a call is up; rea
   const src = desk();
   const mk = (callUp) => {
     const ctx = fakeCtx();
-    const env = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceDisp', 'voicePlay', 'window',
-      src + '; return { voiceOutNode, voiceDisplayRoute, voiceLoudApply, voiceLoudnessNow };')({ call: callUp ? {} : null }, () => ({ loudness: 'loudest' }), V.VOICE_LOUDNESS, V.voiceCreateLoudness, { cur: null }, { ctx }, {});
+    const env = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window',
+      src + '; return { voiceOutNode, voiceDisplayRoute, voiceLoudApply, voiceLoudnessNow };')({ call: callUp ? {} : null }, () => ({ loudness: 'loudest' }), V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {});   // changed: injects the two output helpers
     return { ctx, env };
   };
   let { ctx, env } = mk(true);
@@ -206,28 +206,31 @@ test('desktop: reply audio joins the loudness chain only while a call is up; rea
   assert.strictEqual(ctx.__voiceLoudness, undefined, 'and no chain is even built');
   // with a display, the display routes it (its output option is voiceOutNode)
   const ctx3 = fakeCtx(); const routed = [];
-  const e3 = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceDisp', 'voicePlay', 'window',
-    src + '; return { voiceDisplayRoute };')({ call: {} }, () => ({}), V.VOICE_LOUDNESS, V.voiceCreateLoudness, { cur: { routeBufferSource: (c, x) => routed.push([c, x]) } }, { ctx: ctx3 }, {});
+  const e3 = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window',
+    src + '; return { voiceDisplayRoute };')({ call: {} }, () => ({}), V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: { routeBufferSource: (c, x) => routed.push([c, x]) } }, { ctx: ctx3 }, {});
   const sx = node0(ctx3); e3.voiceDisplayRoute(ctx3, sx); assert.strictEqual(routed.length, 1); assert.strictEqual(sx.out.length, 0, 'not connected twice');
 });
 test('desktop: setLevel follows the pref at call start and when it changes; the page passes output to the display and exposes __voiceOut', () => {
   assert.ok(/output: \(ctx\) => voiceOutNode\(ctx\)/.test(between(app, 'function voiceDispBegin(chatId, agent)', 'function voiceDispEnd(goodbye)')));
   assert.ok(/voiceLoudApply\(\);[^\n]*\n\s+voiceCallPaintBtn\(chatId, true\);/.test(app), 'at call start');
-  assert.ok(/if \(which === 'loudness'\) \{ voiceLoudApply\(\);/.test(app), 'popover change');
+  assert.ok(/if \(which === 'loudness' \|\| which === 'loudnessBt'\) \{ voiceLoudApply\(\);/.test(app), 'popover change (changed: both selects)');
   assert.ok(/voicePrefsCache = prefs;\n\s+voiceLoudApply\(\);/.test(app), 'Settings change');
   assert.ok(app.includes('window.__voiceOut = () =>'));
   assert.ok(app.includes('src.connect(typeof voiceOutNode === \'function\' ? voiceOutNode(ctx) : ctx.destination)'), 'no-display branch of the hub voice playback');
   assert.ok(!/src\.connect\(ctx\.destination\)/.test(between(app, 'async function voicePlayHub(', 'async function voicePlayDevice(')), 'no direct destination in the hub voice playback');
 });
-test('desktop: the Voice loudness select (Normal / Louder / Loudest) is in Settings and the voice popover, and saves through the same paths', () => {
+test('desktop: the two Voice loudness selects (speaker, Bluetooth / car; Normal / Louder / Loudest) are in Settings and the voice popover, and save through the same paths', () => {
   const pop = between(app, 'function voicePopHtml(chatId) {', 'function voiceModeToggle()');
-  assert.ok(pop.includes('Voice loudness') && pop.includes("voiceLoudnessSelectHtml(id('loudness'), 'data-vp=\"loudness\"')"));
-  assert.ok(app.includes("h += row('Voice loudness', `${voiceLoudnessSelectHtml('st-voice-loudness', 'onchange=\"voiceSettingsSavePrefs()\"')}"));
+  assert.ok(pop.includes('Voice loudness, speaker') && pop.includes("voiceLoudnessSelectHtml(id('loudness'), 'data-vp=\"loudness\"', 'loudness')"));   // changed: was the single select
+  assert.ok(pop.includes('Voice loudness, Bluetooth / car') && pop.includes("voiceLoudnessSelectHtml(id('loudnessBt'), 'data-vp=\"loudnessBt\"', 'loudnessBt')"));
+  assert.ok(app.includes("h += row('Voice loudness, speaker', `${voiceLoudnessSelectHtml('st-voice-loudness', 'onchange=\"voiceSettingsSavePrefs()\"', 'loudness')}"));
+  assert.ok(app.includes("h += row('Voice loudness, Bluetooth / car', `${voiceLoudnessSelectHtml('st-voice-loudness-bt', 'onchange=\"voiceSettingsSavePrefs()\"', 'loudnessBt')}"));
   assert.ok(/VOICE_LOUDNESS_LABELS = \{ normal: 'Normal', louder: 'Louder', loudest: 'Loudest' \}/.test(app));
-  assert.ok(/keep: 'keepAlive', loudness: 'loudness' \}/.test(app));
-  assert.ok(app.includes("else if (k === 'loudness') voiceCtlSet('loudness', t.value, true);"));
+  assert.ok(/keep: 'keepAlive', loudness: 'loudness', loudnessBt: 'loudnessBt' \}/.test(app));
+  assert.ok(app.includes("else if (k === 'loudness' || k === 'loudnessBt') voiceCtlSet(k, t.value, true);"));
   assert.ok(app.includes('loudness: loud && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loud.value)'), 'Settings save');
-  const html = between(app, 'function voiceLoudnessSelectHtml(id, attrs) {', '// The two settings shown everywhere');
+  assert.ok(app.includes('loudnessBt: loudBt && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loudBt.value)'), 'Settings save, Bluetooth');
+  const html = between(app, 'function voiceLoudnessSelectHtml(id, attrs, key) {', '// The two settings shown everywhere');
   assert.ok(html.includes('<select') && html.includes('VOICE_LOUDNESS_LABELS'));
 });
 
@@ -235,13 +238,13 @@ test('desktop: the Voice loudness select (Normal / Louder / Loudest) is in Setti
 const phoneSrc = () => between(mob, '// One media element, one source: the analyser is wired the first time', 'function voiceFacePackBody()');
 function phoneEnv(o) {
   const x = o || {};
-  const prefs = { loudness: x.loudness || 'louder' };
-  const voiceCall = x.call === false ? null : { thinkCtx: x.thinkCtx || null };
+  const prefs = { loudness: x.loudness || 'louder', loudnessBt: x.loudnessBt || 'normal' };
+  const voiceCall = x.call === false ? null : { thinkCtx: x.thinkCtx || null, micInfo: x.micLabel === undefined ? null : { label: x.micLabel } };
   const shared = { ctx: x.sharedCtx || null, routes: x.routes || new WeakMap() };
   const state = { voiceCall, voiceDisp: { cur: x.display || null, shared }, voicePlay: { audio: x.audio || null } };
-  const fn = new Function('state', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'window',
-    'let voiceCall = state.voiceCall; const voiceDisp = state.voiceDisp, voicePlay = state.voicePlay;\n' + phoneSrc() + '; return { voiceDisplayRoute, voiceOwnRoute, voiceLoudSync, voiceOutNode, voiceOwnCtx, voiceOwnRoutes, setCall(v) { voiceCall = v; } };');
-  const env = fn(state, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, {});
+  const fn = new Function('state', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'window',
+    'let voiceCall = state.voiceCall; const voiceDisp = state.voiceDisp, voicePlay = state.voicePlay;\n' + phoneSrc() + '; return { voiceDisplayRoute, voiceOwnRoute, voiceLoudSync, voiceOutNode, voiceOwnCtx, voiceOwnRoutes, voiceOutputNow, voiceLoudnessNow, voiceOutputOnDeviceChange, setCall(v) { voiceCall = v; }, getCall: () => voiceCall };');   // changed: the two output helpers, and the new page functions returned
+  const env = fn(state, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, {});
   return Object.assign(env, { state, prefs });
 }
 test('phone: the display captures the element -> the page makes no second source; output() sends it through the chain', () => {
@@ -299,9 +302,136 @@ test('phone: page wiring - output option, voiceCallApplyPrefs syncs, the hook, t
   assert.ok(mob.includes('if (typeof voiceDisplayRoute === \'function\') voiceDisplayRoute(a);'), 'voicePlayBlob still routes through voiceDisplayRoute');
   assert.ok(/ctx\.state !== 'running'/.test(between(mob, 'function voiceOwnRoute(el)', 'try { window.__voiceOut')));
   assert.ok(mob.includes("$('vp-loudness')?.addEventListener('change'"));
-  const sel = between(mobHtml, '<select id="vp-loudness"', '</select>');
-  for (const v of ['normal', 'louder', 'loudest']) assert.ok(sel.includes(`value="${v}"`), v);
-  assert.ok(sel.includes('Normal') && sel.includes('Louder') && sel.includes('Loudest'));
+  assert.ok(mob.includes("$('vp-loudness-bt')?.addEventListener('change'"));   // changed: the second select
+  for (const id of ['vp-loudness', 'vp-loudness-bt']) {
+    const sel = between(mobHtml, `<select id="${id}"`, '</select>');
+    for (const v of ['normal', 'louder', 'loudest']) assert.ok(sel.includes(`value="${v}"`), id + ' ' + v);
+    assert.ok(sel.includes('Normal') && sel.includes('Louder') && sel.includes('Loudest'));
+  }
+  assert.ok(mobHtml.includes('<span>Voice loudness, speaker</span>') && mobHtml.includes('<span>Voice loudness, Bluetooth / car</span>'));
   const html = between(mobHtml, '<div id="voice-panel"', 'id="vp-pause"');
   assert.ok(html.indexOf('id="vp-speed"') < html.indexOf('id="vp-loudness"'), 'right after the Voice speed row');
+});
+
+// ── per output: speaker and Bluetooth / car ──
+test('voiceOutputKind: Bluetooth / hands-free / car labels are bluetooth, everything else (Android names, wired, empty) is speaker', () => {
+  for (const l of ['Bluetooth headset', 'Bluetooth', 'AirPods Pro', 'Hands-Free AG Audio', 'Handsfree', 'Hands Free', 'HFP Headset', 'Car Audio', 'My car', 'Default - Bluetooth Speaker (Sony)']) assert.strictEqual(V.voiceOutputKind(l), 'bluetooth', l);
+  for (const l of ['Speakerphone', 'Headset earpiece', 'Wired headset', 'USB audio', 'Fake Default Audio Input', 'Default - MacBook Pro Microphone', 'Realtek Audio', 'Cardioid microphone', 'Scarcity', '', null, undefined, 5]) assert.strictEqual(V.voiceOutputKind(l), 'speaker', String(l));
+});
+test('voiceLoudnessFor: the speaker pref or the Bluetooth pref, defaults louder / normal', () => {
+  const p = { loudness: 'loudest', loudnessBt: 'louder' };
+  assert.strictEqual(V.voiceLoudnessFor(p, 'speaker'), 'loudest');
+  assert.strictEqual(V.voiceLoudnessFor(p, 'bluetooth'), 'louder');
+  assert.strictEqual(V.voiceLoudnessFor({}, 'speaker'), 'louder');
+  assert.strictEqual(V.voiceLoudnessFor({}, 'bluetooth'), 'normal');
+  for (const bad of [null, undefined, 5, { loudness: 'x', loudnessBt: 'toString' }]) { assert.strictEqual(V.voiceLoudnessFor(bad, 'speaker'), 'louder'); assert.strictEqual(V.voiceLoudnessFor(bad, 'bluetooth'), 'normal'); }
+  assert.strictEqual(V.voiceLoudnessFor(p), 'loudest', 'no kind: the speaker');
+});
+test('prefs: loudnessBt defaults to normal, is kept and cleaned (lib, both pages, round trip)', () => {
+  assert.strictEqual(V.voiceCleanPrefs(null).loudnessBt, 'normal');
+  assert.strictEqual(V.voiceCleanPrefs({}).loudnessBt, 'normal');
+  for (const v of ['normal', 'louder', 'loudest']) assert.strictEqual(V.voiceCleanPrefs({ loudnessBt: v }).loudnessBt, v);
+  for (const v of ['loud', 9, null, 'toString', '__proto__']) assert.strictEqual(V.voiceCleanPrefs({ loudnessBt: v }).loudnessBt, 'normal', String(v));
+  assert.deepStrictEqual([V.voiceCleanPrefs({}).loudness, V.voiceCleanPrefs({}).loudnessBt], ['louder', 'normal']);
+  assert.strictEqual(V.voiceCleanPrefs({ loudness: 'loudest', loudnessBt: 'louder' }).loudness, 'loudest', 'independent');
+  for (const [name, src] of [['app.js', app], ['mobile.js', mob]]) {
+    const fn = between(src, 'function voiceCleanPrefs(raw) {', '// The wake phrase of an agent');
+    const run = new Function('VOICE_DEFAULT_PREFS', 'VOICE_LOUDNESS', 'VOICE_END_PAUSES', 'VOICE_CONTINUE_WAITS', 'VOICE_ECHO_HOLDS', 'VOICE_WAKE_QUIET_MS', 'voiceCleanSpeed', 'voiceCleanWakePhrase',
+      fn + '; return voiceCleanPrefs;')({ loudness: 'louder', loudnessBt: 'normal' }, V.VOICE_LOUDNESS, V.VOICE_END_PAUSES, V.VOICE_CONTINUE_WAITS, V.VOICE_ECHO_HOLDS, V.VOICE_WAKE_QUIET_MS, V.voiceCleanSpeed, V.voiceCleanWakePhrase);
+    assert.strictEqual(run({ loudnessBt: 'loudest' }).loudnessBt, 'loudest', name);
+    assert.strictEqual(run({ loudnessBt: 'x' }).loudnessBt, 'normal', name);
+    assert.strictEqual(run({}).loudnessBt, 'normal', name);
+  }
+  const st = memStorage(); V.voiceSavePrefs(st, { loudnessBt: 'louder' });
+  assert.strictEqual(V.voiceLoadPrefs(st).loudnessBt, 'louder'); assert.strictEqual(V.voiceLoadPrefs(memStorage()).loudnessBt, 'normal');
+});
+test('lib: voiceOutputKind and voiceLoudnessFor are exported and both pages carry the same block', () => {
+  assert.strictEqual(typeof V.voiceOutputKind, 'function'); assert.strictEqual(typeof V.voiceLoudnessFor, 'function');
+  const norm = (s) => s.split('\n').map((l) => l.trim()).join('\n');
+  const blk = norm(between(read('lib/ui-voice.js'), 'function voiceOutputKind(label) {', '// One chain per AudioContext'));
+  assert.ok(norm(app).includes(blk), 'app.js'); assert.ok(norm(mob).includes(blk), 'mobile.js');
+});
+
+test('desktop: a mid-call switch - ui.mic with a Bluetooth label drops the chain to 0 dB, a Speakerphone label brings back +9 dB', () => {
+  const ctx = fakeCtx();
+  const S = { call: {}, micLabel: '', micLine: '', vad: null };
+  const prefs = { loudness: 'louder', loudnessBt: 'normal' };
+  const micFn = between(app, '          mic: (info) => { const t = voiceMicLineText(info);', '   // which microphone is open').trim().replace(/,\s*$/, '');
+  const env = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window', 'voiceMicLineText', 'barEl',
+    desk() + '; return { voiceOutNode, voiceLoudApply, voiceLoudnessNow, voiceOutputNow, voiceOutputOnDeviceChange, ui: { ' + micFn + ' } };')(
+    S, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {}, (i) => (i && i.label) || '', () => null);
+  env.voiceOutNode(ctx);
+  const chain = ctx.__voiceLoudness;
+  assert.strictEqual(chain.gainDb, 9, 'unknown mic: the speaker level');
+  env.ui.mic({ label: 'Bluetooth headset' });
+  assert.strictEqual(chain.gainDb, 0, 'Bluetooth: its own level, at once');
+  assert.deepStrictEqual({ ...env.voiceOutputNow() }, { output: 'bluetooth', label: 'Bluetooth headset' });
+  env.ui.mic({ label: 'Speakerphone' });
+  assert.strictEqual(chain.gainDb, 9, 'back on the speaker');
+  prefs.loudnessBt = 'loudest'; env.ui.mic({ label: 'Bluetooth headset' }); assert.strictEqual(chain.gainDb, 14, 'the Bluetooth pref is its own');
+  env.ui.mic(null); assert.strictEqual(chain.gainDb, 9, 'no info: speaker');
+  assert.strictEqual(env.voiceLoudnessNow(), 'louder');
+});
+test('desktop: devicechange during a call re-reads the open mic and re-applies; one listener; nothing outside a call', () => {
+  const ctx = fakeCtx(); const added = [];
+  const S = { call: {}, micLabel: 'Speakerphone', vad: { info: () => ({ label: 'Bluetooth headset' }) } };
+  const nav = { mediaDevices: { addEventListener: (t, f) => added.push([t, f]) } };
+  const env = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window', 'navigator',
+    desk() + '; return { voiceOutNode, voiceOutputNow, voiceOutputOnDeviceChange };')(S, () => ({ loudness: 'louder', loudnessBt: 'normal' }), V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {}, nav);
+  assert.strictEqual(added.length, 1); assert.strictEqual(added[0][0], 'devicechange'); assert.strictEqual(added[0][1], env.voiceOutputOnDeviceChange);
+  env.voiceOutNode(ctx); assert.strictEqual(ctx.__voiceLoudness.gainDb, 9);
+  added[0][1]();
+  assert.strictEqual(ctx.__voiceLoudness.gainDb, 0, 'the track now says Bluetooth');
+  assert.strictEqual(S.micLabel, 'Bluetooth headset');
+  S.vad = { info: () => ({ label: 'Speakerphone' }) }; added[0][1]();
+  assert.strictEqual(ctx.__voiceLoudness.gainDb, 9);
+  S.vad = { info() { throw new Error('gone'); } }; assert.doesNotThrow(() => added[0][1]());
+  S.call = null; S.vad = { info: () => ({ label: 'Bluetooth headset' }) }; added[0][1]();
+  assert.strictEqual(S.micLabel, 'Speakerphone', 'outside a call the listener does nothing');
+  assert.strictEqual(env.voiceOutputNow().output, 'speaker');
+  assert.strictEqual((desk().match(/addEventListener\('devicechange'/g) || []).length, 1, 'registered once in the page source');
+});
+test('desktop: __voiceOut reports the output and label; the call start resets the label', () => {
+  assert.ok(app.includes('...voiceOutputNow(), gainDb'));
+  assert.ok(app.includes("S.micLine = ''; S.micLabel = '';"));
+});
+
+test('phone: a mid-call switch - ui.mic with a Bluetooth label drops the chain to 0 dB, a Speakerphone label brings back +9 dB', () => {
+  const ctx = fakeCtx();
+  const e = phoneEnv({ sharedCtx: ctx, loudness: 'louder', loudnessBt: 'normal', micLabel: 'Speakerphone' });
+  const vc = e.getCall();
+  const ui = new Function('voiceCall', 'vc', 'voiceLoudSync', '$', 'voiceMicLine', 'return { ' + between(mob, '      mic: (info) => { if (voiceCall !== vc) return;', '   // while it is lost').trim().replace(/,\s*$/, '') + ' };')(vc, vc, e.voiceLoudSync, () => null, () => '');
+  e.voiceOutNode(ctx); const chain = ctx.__voiceLoudness;
+  assert.strictEqual(chain.gainDb, 9);
+  ui.mic({ label: 'Bluetooth headset' });
+  assert.strictEqual(chain.gainDb, 0, 'Bluetooth: at once');
+  assert.deepStrictEqual({ ...e.voiceOutputNow() }, { output: 'bluetooth', label: 'Bluetooth headset' });
+  ui.mic({ label: 'Speakerphone' });
+  assert.strictEqual(chain.gainDb, 9);
+  e.prefs.loudnessBt = 'loudest'; ui.mic({ label: 'Bluetooth headset' }); assert.strictEqual(chain.gainDb, 14);
+  ui.mic({ label: 'Wired headset' }); assert.strictEqual(chain.gainDb, 9, 'a wired headset counts as speaker');
+  assert.strictEqual(e.voiceLoudnessNow(), 'louder');
+});
+test('phone: devicechange during a call re-reads the open mic and re-applies; one listener; nothing outside a call', () => {
+  const ctx = fakeCtx(); const added = [];
+  const nav = { mediaDevices: { addEventListener: (t, f) => added.push([t, f]) } };
+  const prefs = { loudness: 'louder', loudnessBt: 'normal' };
+  const vc = { thinkCtx: null, micInfo: { label: 'Speakerphone' }, vad: { info: () => ({ label: 'Bluetooth headset' }) } };
+  const env = new Function('state', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'window', 'navigator',
+    'let voiceCall = state.vc; const voiceDisp = { cur: null, shared: { ctx: state.ctx, routes: new WeakMap() } }, voicePlay = { audio: null };\n' + phoneSrc() + '; return { voiceOutNode, voiceOutputNow, voiceOutputOnDeviceChange, setCall(v) { voiceCall = v; } };')({ vc, ctx }, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, {}, nav);
+  assert.strictEqual(added.length, 1); assert.strictEqual(added[0][0], 'devicechange'); assert.strictEqual(added[0][1], env.voiceOutputOnDeviceChange);
+  env.voiceOutNode(ctx); assert.strictEqual(ctx.__voiceLoudness.gainDb, 9);
+  added[0][1]();
+  assert.strictEqual(ctx.__voiceLoudness.gainDb, 0, 'the track now says Bluetooth');
+  vc.vad = { info: () => ({ label: 'Speakerphone' }) }; added[0][1]();
+  assert.strictEqual(ctx.__voiceLoudness.gainDb, 9);
+  vc.vad = { info() { throw new Error('gone'); } }; assert.doesNotThrow(() => added[0][1]());
+  env.setCall(null); assert.doesNotThrow(() => added[0][1]());
+  assert.strictEqual(env.voiceOutputNow().output, 'speaker', 'no call: speaker');
+  assert.strictEqual((phoneSrc().match(/addEventListener\('devicechange'/g) || []).length, 1, 'registered once in the page source');
+});
+test('phone: __voiceOut reports the output and label; the panel paints and saves both selects', () => {
+  assert.ok(mob.includes('...voiceOutputNow(), gainDb'));
+  assert.ok(mob.includes("set('vp-loudness', voiceLoudnessFor(voicePrefsNow(), 'speaker'));") && mob.includes("set('vp-loudness-bt', voiceLoudnessFor(voicePrefsNow(), 'bluetooth'));"));
+  assert.ok(mob.includes("save({ loudnessBt: Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, e.target.value) ? e.target.value : 'normal' })"));
 });

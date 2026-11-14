@@ -74,7 +74,7 @@ function makeEnv(opts = {}) {
     voiceCleanSpeed: (v) => Math.round(Math.max(0.75, Math.min(1.5, Number(v))) * 20) / 20,
     voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, VOICE_SPEED_HINT: '', VOICE_END_PAUSES: [800, 1200, 2000],
     voiceContinueWaitNow: () => 3000, voiceThinkingVolNow: () => 0.5, voiceThinkingOnNow: () => true, voiceModeLabel: () => 'Hands-free', VOICE_CONTINUE_WAITS: [1500, 3000, 5000],
-    VOICE_LOUDNESS: { normal: 0, louder: 9, loudest: 14 }, voiceLoudnessNow: () => 'louder', voiceLoudnessSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceLoudApply() {}, VOICE_ECHO_HOLDS: HOLDS, voiceEchoHoldLabel: (ms) => (ms === 0 ? 'off' : (ms / 1000) + ' s'),
+    VOICE_LOUDNESS: { normal: 0, louder: 9, loudest: 14 }, voiceLoudnessNow: () => 'louder', voiceLoudnessFor: (p, kind) => (kind === 'bluetooth' ? 'normal' : 'louder'), voiceLoudnessSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceLoudApply() {}, VOICE_ECHO_HOLDS: HOLDS, voiceEchoHoldLabel: (ms) => (ms === 0 ? 'off' : (ms / 1000) + ' s'),
     voiceSavePrefs: (s, p) => { prefs = { ...p }; log.saved.push({ ...p }); return { ...p }; },
     voiceById: get, voiceReady: () => true,
     voiceRec: { guard: { cancel() {}, pending: false }, chatId: null, busy: false },
