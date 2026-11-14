@@ -262,13 +262,22 @@
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <label for="rec-keep" style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rec-keep" onchange="saveRecordings()" style="width:20px;height:20px;"> Keep call recordings</label>
   </div>
-  <small style="color:#999;display:block;margin:4px 0 8px;">Each call with this agent is recorded losslessly on this computer, encrypted. The agent says a short line at the start, and the call screen shows Recording.</small>
+  <small style="color:#999;display:block;margin:4px 0 8px;">Each call with this agent is recorded losslessly on this computer, encrypted. The agent can say a short line when a call starts (see Announce recording), and the call screen shows Recording.</small>
   <div id="rec-cloud-warning" style="display:none;margin-bottom:8px;font-size:12px;padding:4px 8px;border-radius:4px;background:#3a1a1a;color:#e74c3c;">Recorded calls only start with speech recognition on this computer. Change the agent's speech recognition above.</div>
   <label style="margin-top:8px;">Who can download</label>
   <div id="rec-allowed" onchange="saveRecordings()" style="display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid #333;border-radius:6px;background:#0f0f23;"><span style="color:#888;font-size:13px;">Loading…</span></div>
   <small style="color:#999;display:block;margin:4px 0 8px;">Only the people ticked here can play, download or delete these recordings. Agents never can.</small>
   <label for="rec-consent">Consent line</label>
-  <input type="text" id="rec-consent" maxlength="300" placeholder="This conversation is being recorded for the family." onchange="saveRecordings()">
+  <input type="text" id="rec-consent" maxlength="300" placeholder="This conversation is being recorded." onchange="saveRecordings()">
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
+    <label for="rec-announce" style="margin:0;">Announce recording</label>
+    <select id="rec-announce" onchange="saveRecordings()" style="width:auto;max-width:100%;">
+      <option value="first">First call with each person</option>
+      <option value="every">Every call</option>
+      <option value="never">Never</option>
+    </select>
+  </div>
+  <small style="color:#999;display:block;margin:4px 0 8px;">The line is spoken when a recorded call starts. The Recording badge shows on every call.</small>
   <div style="margin-top:10px;"><label for="rec-replies" style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rec-replies" onchange="saveRecordings()" style="width:20px;height:20px;"> Also keep the agent's voice</label></div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
     <label for="rec-mic" style="margin:0;">Microphone for recordings</label>
@@ -460,7 +469,7 @@
     ['saveCallDisplay', 'call-display-status', byId('call-display')],
     ['saveVoiceDefaults', 'voice-defaults-status', byId('voice-defaults', 'vd-pause', 'vd-wait', 'vd-sens', 'vd-speed')],
     ['saveAgentVoice', 'voice-status', byId('voice-select', 'voice-stt', 'voice-tts', 'voice-cloud-select', 'voice-cloud-id')],
-    ['saveRecordings', 'recordings-status', byId('rec-keep', 'rec-allowed', 'rec-consent', 'rec-replies', 'rec-mic')],
+    ['saveRecordings', 'recordings-status', byId('rec-keep', 'rec-allowed', 'rec-consent', 'rec-replies', 'rec-mic', 'rec-announce')],
     ['saveToolsMode', 'tools-status', byId('tools-mode')],
     ['saveAutoModel', 'auto-model-status', byId('auto-model', 'auto-model-allowed')],
     ['saveAllowedModels', 'allowed-models-status', byId('auto-model-checkboxes')],
@@ -1003,6 +1012,7 @@
       consentLine: document.getElementById('rec-consent').value.trim(),
       keepReplies: document.getElementById('rec-replies').checked,
       mic: document.getElementById('rec-mic').value,
+      announce: document.getElementById('rec-announce').value,
     };
   }
   // One warning while keep is on and the speech recognition picked above is a cloud engine; the storage line (nothing for an admin who is not on the list).
@@ -1019,10 +1029,11 @@
     if (!owner) return;
     const r = (agent && agent.recordings) || {};
     recStored = { allowed: Array.isArray(r.allowed) ? r.allowed : [] };
-    const keep = document.getElementById('rec-keep'), replies = document.getElementById('rec-replies'), consent = document.getElementById('rec-consent'), mic = document.getElementById('rec-mic');
+    const keep = document.getElementById('rec-keep'), replies = document.getElementById('rec-replies'), consent = document.getElementById('rec-consent'), mic = document.getElementById('rec-mic'), announce = document.getElementById('rec-announce');
     keep.checked = r.keep === true; replies.checked = r.keepReplies === true; mic.value = r.mic === 'unprocessed' ? 'unprocessed' : 'processed';
+    announce.value = ['first', 'every', 'never'].includes(r.announce) ? r.announce : 'first';
     consent.value = r.consentLine && r.consentLine !== consent.placeholder ? r.consentLine : '';
-    pageGuard.markLoaded([keep, replies, consent, mic]);
+    pageGuard.markLoaded([keep, replies, consent, mic, announce]);
     paintRecordingsNotes();
     const box = document.getElementById('rec-allowed');
     try {

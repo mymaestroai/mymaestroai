@@ -28,7 +28,7 @@ const seed = (agents) => { fs.writeFileSync(AGENTS_FILE, JSON.stringify(agents, 
 const onDisk = (name) => JSON.parse(fs.readFileSync(AGENTS_FILE, 'utf8')).find(a => a.name === name);
 const listed = async (name) => (await agentsLib.getAgents(true)).find(a => a.name === name);
 const base = (extra = {}) => ({ name: 'biographer', model: 'claude-sdk/default', display: 'Biographer', category: 'specialist', ...extra });
-const DEFAULTS = { keep: false, allowed: [], keepReplies: false, consentLine: 'This conversation is being recorded for the family.', mic: 'processed' };
+const DEFAULTS = { keep: false, allowed: [], keepReplies: false, consentLine: 'This conversation is being recorded.', mic: 'processed', announce: 'first' };
 
 beforeEach(() => { seed([base()]); });
 
@@ -101,18 +101,18 @@ test('every change is audited as agent.recordings with the agent, keep, allowed 
   const log = [];
   const ctx = { userId: OWNER, audit: (action, detail) => log.push([action, detail]) };
   await agentsLib.updateAgentField('biographer', { recordings: { keep: true, allowed: [OWNER, SAM], mic: 'unprocessed', consentLine: 'Private words here' } }, ctx);
-  assert.deepStrictEqual(log, [['agent.recordings', `biographer keep=on allowed=${OWNER},${SAM} mic=unprocessed`]]);
+  assert.deepStrictEqual(log, [['agent.recordings', `biographer keep=on allowed=${OWNER},${SAM} mic=unprocessed announce=first`]]);
   assert.ok(!log[0][1].includes('Private'));
   await agentsLib.updateAgentField('biographer', { recordings: { keep: false, allowed: [OWNER, SAM], mic: 'unprocessed', consentLine: 'Private words here' } }, ctx);
   assert.strictEqual(log.length, 2);
-  assert.strictEqual(log[1][1], `biographer keep=off allowed=${OWNER},${SAM} mic=unprocessed`);
+  assert.strictEqual(log[1][1], `biographer keep=off allowed=${OWNER},${SAM} mic=unprocessed announce=first`);
   await agentsLib.updateAgentField('biographer', { recordings: { keep: false, allowed: [OWNER, SAM], mic: 'unprocessed', consentLine: 'Private words here' } }, ctx);
   assert.strictEqual(log.length, 2, 'no change, no audit entry');
   await agentsLib.updateAgentField('biographer', { blurb: 'hello' }, ctx);
   assert.strictEqual(log.length, 2, 'other fields are not audited here');
   await agentsLib.updateAgentField('biographer', { recordings: null }, ctx);
   assert.strictEqual(log.length, 3);
-  assert.strictEqual(log[2][1], 'biographer keep=off allowed=- mic=processed');
+  assert.strictEqual(log[2][1], 'biographer keep=off allowed=- mic=processed announce=first');
 });
 
 test('a failing audit never stops the save', async () => {
