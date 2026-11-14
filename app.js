@@ -7607,7 +7607,7 @@
         const started = it.ts ? Date.parse(it.ts) : NaN;
         const ended = it.doneTs ? Date.parse(it.doneTs) : NaN;
         cur.tools.push({ id, tool: it.tool, input: it.input || '', result: it.done ? (it.output || '') : null,
-          status: it.done ? (/^(Error|⚠|✗)/.test(it.output || '') ? 'error' : 'done') : 'running',
+          status: it.done ? (/^(Error|⚠|✗)/.test(it.output || '') || toolResultDenied(it.output) ? 'error' : 'done') : 'running',
           startedAt: Number.isFinite(started) ? started : null, durationMs: Number.isFinite(started) && Number.isFinite(ended) ? ended - started : undefined });
       }
       if (pos < body.length) {
@@ -10340,7 +10340,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 const runningTool = (oc2.tool_call_id && currentStep.tools.find(t => t.toolCallId === oc2.tool_call_id && t.status === 'running')) || currentStep.tools.find(t => t.status === 'running');
                 if (runningTool) {
                   runningTool.result = oc2.output || '';
-                  runningTool.status = oc2.output?.startsWith('Error') ? 'error' : 'done';
+                  runningTool.status = oc2.output?.startsWith('Error') || toolResultDenied(oc2.output) ? 'error' : 'done';
                   if (runningTool.startedAt) runningTool.durationMs = Date.now() - runningTool.startedAt;
                 }
                 lastEventWasToolResult = true;
@@ -15389,7 +15389,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           toolCalls.push(currentCall);
         } else if (t.type === 'result' && currentCall) {
           currentCall.result = t.output || '';
-          currentCall.status = t.output?.startsWith('Error') ? 'error' : 'done';
+          currentCall.status = t.output?.startsWith('Error') || toolResultDenied(t.output) ? 'error' : 'done';
           currentCall = null; // Next result pairs with next call
         }
       }
@@ -15405,7 +15405,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const statusIcon = tc.status === 'running'
           ? '<div class="tool-call-spinner"></div>'
           : tc.status === 'error'
-            ? '<span class="tool-call-icon" style="color:#f87171">✗</span>'
+            ? `<span class="tool-call-icon" style="color:#f87171"${toolResultDenied(tc.result) ? ' title="Denied by policy"' : ''}>✗</span>`
             : '<span class="tool-call-icon" style="color:#4ade80">✓</span>';
 
         const inputHtml = tc.input ? `<span class="tool-call-input">— ${esc(tc.input)}</span>` : '';
@@ -15930,6 +15930,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // a long list scrolls inside the panel and the grip sets its height; ⤢ shows every call with its output at the size
     // of the window. The text the agent writes between calls stays in the reply. Tool names, inputs and outputs are
     // text (escaped), never markup. The panel is one node that message rewrites keep (setMessageHtml).
+    // ── tool-result helpers (begin) ──
+    function toolResultDenied(output) {
+      return /^\s*\[(?:DENIED(?: BY (?:POLICY|OWNER))?|NOT APPROVED)\]/.test(String(output ?? ''));
+    }
+    // ── tool-result helpers (end) ──
     const TOOLS_HEIGHT_KEY = 'hub-tools-height';
     const toolsHeightPref = () => { const h = Number(localStorage.getItem(TOOLS_HEIGHT_KEY)); return Number.isFinite(h) && h >= 60 ? h : 260; };
     const TOOL_DETAIL_MAX = 20000;   // characters of one call's output shown in a detail
@@ -15942,7 +15947,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const rows = [];
       (steps || []).forEach((st, group) => {
         for (const tc of (st && st.tools) || []) {
-          const status = tc.status === 'running' ? (live ? 'running' : 'stopped') : tc.status === 'error' ? 'error' : 'done';
+          const status = tc.status === 'running' ? (live ? 'running' : 'stopped') : tc.status === 'error' || toolResultDenied(tc.result) ? 'error' : 'done';
           rows.push({ id: tc.id || tc.toolCallId || null, tool: String(tc.tool || 'tool'), input: String(tc.input || ''), result: tc.result == null ? '' : String(tc.result), status,
             startedAt: Number(tc.startedAt) || null, durationMs: Number.isFinite(tc.durationMs) ? tc.durationMs : null, group });
         }
@@ -15995,7 +16000,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (group !== null && r.group !== group) html += '<div class="ts-sep"></div>';
         group = r.group;
         const shown = all || !!(open && open.has(r.key));
-        const icon = r.status === 'running' ? '<span class="ts-spin"></span>' : r.status === 'error' ? '✗' : r.status === 'stopped' ? '⏹' : '✓';
+        const icon = r.status === 'running' ? '<span class="ts-spin"></span>' : r.status === 'error' ? (toolResultDenied(r.result) ? '<span title="Denied by policy">✗</span>' : '✗') : r.status === 'stopped' ? '⏹' : '✓';
         html += `<div class="ts-row ${r.status}" data-i="${i}"${all ? '' : ` role="button" tabindex="0" aria-expanded="${shown}"`}>` +
           `<span class="ts-ic">${icon}</span><span class="ts-name">${escapeHtmlSafe(r.tool)}</span><span class="ts-in">${escapeHtmlSafe(r.input)}</span>` +
           `${toolDurHtml(r)}${all ? '' : `<span class="ts-chev">${shown ? '⌄' : '›'}</span>`}</div>`;

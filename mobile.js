@@ -5941,8 +5941,13 @@ function tsnDur(ms) {
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 }
+// ── tool-result helpers (begin) ──
+function toolResultDenied(output) {
+  return /^\s*\[(?:DENIED(?: BY (?:POLICY|OWNER))?|NOT APPROVED)\]/.test(String(output ?? ''));
+}
+// ── tool-result helpers (end) ──
 function tsnFailed(it) {
-  return it.kind === 'worker' ? it.status === 'failed' : it.status === 'done' && /^(Error|⚠|✗)/.test(it.output || '');
+  return it.kind === 'worker' ? it.status === 'failed' : it.status === 'done' && (/^(Error|⚠|✗)/.test(it.output || '') || toolResultDenied(it.output));
 }
 // The time the calls took: the union of their intervals (calls side by side count once). Null unless every call has a
 // start and an end (a call cut off when the reply ended, or a reply saved by an older version, shows no total).
@@ -6161,7 +6166,7 @@ function paintFeedRow(feed, it, list = null) {
   it.el.className = `frow ${it.kind} ${it.status}${it.open ? ' open' : ''}`;
   const [line, sub, det] = it.el.children;
   if (it.kind === 'tool') {
-    const failed = it.status === 'done' && /^(Error|⚠|✗)/.test(it.output || '');
+    const failed = tsnFailed(it);
     const mark = it.status === 'done' ? (failed ? '✗' : '✓') : '⚙';
     // The tool's name in bold, then what it did: tool calls read apart from the reply (light blue, mobile.html .frow.tool).
     const name = document.createElement('span');
@@ -6169,6 +6174,7 @@ function paintFeedRow(feed, it, list = null) {
     name.textContent = it.tool;
     line.replaceChildren(`${mark} `, name, it.summary ? ` · ${clipText(it.summary, 80)}` : '');
     if (failed) it.el.classList.add('failed');
+    if (failed && toolResultDenied(it.output)) line.title = 'Denied by policy'; else line.removeAttribute('title');
     sub.textContent = '';
     det.textContent = it.open ? [it.summary, it.output ? String(it.output).slice(0, 3000) : ''].filter(Boolean).join('\n\n') : '';
     return;
