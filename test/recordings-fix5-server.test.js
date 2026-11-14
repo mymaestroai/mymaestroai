@@ -10,7 +10,7 @@ const path = require('node:path');
 const { Readable, Writable } = require('node:stream');
 const routes = require('../lib/recordings/routes');
 const voiceRoutes = require('../lib/voice/routes');
-const { createStore } = require('../lib/recordings/store');
+const { createStore, callMarkerName } = require('../lib/recordings/store');
 const { deriveKey, open } = require('../lib/recordings/crypt');
 const { createVoiceCalls } = require('../lib/voice/call');
 const { mergeRecordings } = require('../lib/backup/recordings-merge');
@@ -111,7 +111,76 @@ test('1: the store lets a real I/O error on the agent folder through, and treats
   try { await assert.rejects(broken.findSessionByCall('biographer', 'call-none'), (e) => e.code === 'EIO'); } finally { fs.promises.readdir = orig; }
 });
 
-test('1: a damaged manifest in the window makes a miss inconclusive (503); a match elsewhere still wins; a clean miss is 409', async () => {
+function captureLog(fn) {
+  const lines = []; const orig = console.log;
+  console.log = (...a) => { lines.push(a.join(' ')); };
+  return Promise.resolve().then(fn).then((r) => { console.log = orig; return { r, lines }; }, (e) => { console.log = orig; throw e; });
+}
+
+const markerFile = (t, sid, callId) => path.join(t.dir, 'call-recordings', 'biographer', sid, callMarkerName(callId));
+const damage = (t, sid) => fs.writeFileSync(manifestFile(t, sid), Buffer.from('not a sealed file'));
+
+test('1: createSession writes an empty 0600 call marker named from sha256(callId)', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  const name = `call-${crypto.createHash('sha256').update(a.callId).digest('hex').slice(0, 32)}`;
+  assert.strictEqual(callMarkerName(a.callId), name);
+  const st = fs.statSync(markerFile(t, a.sessionId, a.callId));
+  assert.strictEqual(st.size, 0);
+  assert.strictEqual(st.mode & 0o777, 0o600);
+});
+
+test('1: a damaged manifest that IS the requested call is inconclusive (503 try_later), never a miss', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  await t.startCall();
+  damage(t, a.sessionId);
+  await assert.rejects(t.real.findSessionByCall('biographer', a.callId), (e) => e.code === 'lookup_inconclusive');
+  t.restart();
+  const r = await t.call(tr(a.callId));
+  assert.strictEqual(r.statusCode, 503);
+  assert.deepStrictEqual(r.json(), { error: 'try_later' });
+});
+
+test('1: a damaged unrelated session with a marker is not opened: an unknown call id is a clean miss', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  damage(t, a.sessionId);
+  const { r, lines } = await captureLog(() => t.real.findSessionByCall('biographer', 'call-unknown-q'));
+  assert.strictEqual(r, null);
+  assert.deepStrictEqual(lines, []);
+});
+
+test('1: a session folder without a marker (made before markers) is still matched by its manifest', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  const b = await t.startCall();
+  fs.rmSync(markerFile(t, a.sessionId, a.callId));
+  fs.rmSync(markerFile(t, b.sessionId, b.callId));
+  assert.strictEqual((await t.real.findSessionByCall('biographer', a.callId)).sessionId, a.sessionId);
+  assert.strictEqual((await t.real.findSessionByCall('biographer', b.callId)).sessionId, b.sessionId);
+  assert.strictEqual(await t.real.findSessionByCall('biographer', 'call-unknown-z'), null);
+});
+
+test('1: a damaged UNMARKED (legacy) session might be the call: an unknown call id is "cannot tell", logged once per hour', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  await t.startCall();
+  fs.rmSync(markerFile(t, a.sessionId, a.callId));   // a session without a marker (legacy)
+  fs.writeFileSync(manifestFile(t, a.sessionId), Buffer.from('not a sealed file'));
+  const code = (p) => p.then(() => 'resolved', (e) => e.code);
+  const { r, lines } = await captureLog(async () => [
+    await code(t.real.findSessionByCall('biographer', 'call-unknown-x')),
+    await code(t.real.findSessionByCall('biographer', 'call-unknown-y')),
+  ]);
+  assert.deepStrictEqual(r, ['lookup_inconclusive', 'lookup_inconclusive'], 'never a definite miss: the page keeps its piece');
+  assert.deepStrictEqual(lines, [`[recordings] skipped a session that does not open: biographer/${a.sessionId}`]);
+  t.clock.t += 61 * MIN;
+  const again = await captureLog(() => code(t.real.findSessionByCall('biographer', 'call-unknown-x')));
+  assert.strictEqual(again.lines.length, 1);
+});
+
+test('1: a damaged unmarked manifest in the window gives try later (503, logged once); a match elsewhere still wins', async () => {
   const t = fx();
   const a = await t.startCall();
   const b = await t.startCall();   // another call, a later session
@@ -120,16 +189,29 @@ test('1: a damaged manifest in the window makes a miss inconclusive (503); a mat
   const miss = await t.call(tr('call-unknown-1'));
   assert.strictEqual(miss.statusCode, 409);
   assert.deepStrictEqual(miss.json(), { error: 'not_recording' });
-  // damage the first session's manifest
+  // damage the first session's manifest (a legacy session: no marker)
+  fs.rmSync(markerFile(t, a.sessionId, a.callId));
   fs.writeFileSync(manifestFile(t, a.sessionId), Buffer.from('not a sealed file'));
   routes.resetForTests();
-  const bad = await t.call(tr('call-unknown-2'));
+  const { r: bad, lines } = await captureLog(() => t.call(tr('call-unknown-2')));
   assert.strictEqual(bad.statusCode, 503);
   assert.deepStrictEqual(bad.json(), { error: 'try_later' });
+  assert.deepStrictEqual(lines, [`[recordings] skipped a session that does not open: biographer/${a.sessionId}`]);
   // the other session is found even though one in the window is damaged
   await t.real.addSegment('biographer', b.sessionId, { speaker: 'person', wav: wav(tone(800)) });
   const ok = await t.call(tr(b.callId));
   assert.strictEqual(ok.statusCode, 200);
+});
+
+test('1: the call\'s marker with its manifest missing is "cannot tell" (503), never a miss', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  t.restart();
+  fs.rmSync(manifestFile(t, a.sessionId));
+  await assert.rejects(() => t.real.findSessionByCall('biographer', a.callId), (e) => e.code === 'lookup_inconclusive');
+  routes.resetForTests();
+  const r = await t.call(tr(a.callId));
+  assert.strictEqual(r.statusCode, 503);
 });
 
 // ── 2. the server clock ──
