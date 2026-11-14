@@ -3104,6 +3104,11 @@ function voiceCreateCall(deps) {
   // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost); it is dropped when
   // that differs from the count when it is transcribed or sent, so nothing heard around an outage reaches the agent after the link is back.
   let linkGen = 0, segLinkGen = 0;
+  // linkDropped is kept per outage: set when the outage begins (a sendable utterance is being spoken or is in flight: inflight holds every
+  // utterance from its end until its transcript was sent or dropped), when a sendable one ends during it, and at its end (one started
+  // during it is still going). A stale result found later never sets it (it was counted at the start). Standby speech is never sendable.
+  const inflight = new Set();
+  const isSendable = (sb, seq) => !(standby || (sb && seq === wakeSeq));
   const prefs = () => { const p = quiet(() => d.prefs && d.prefs()); return p && typeof p === 'object' ? p : {}; };
   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for the next piece.
   const continueWait = () => { const n = Number(prefs().continueWait); return Number.isFinite(n) && n >= 0 ? n : VOICE_CALL_CONTINUE_MS; };
@@ -3257,9 +3262,9 @@ function voiceCreateCall(deps) {
     if (awaitingReply && !speaking && !personSpeaking && !standby) armThinking();   // a long quiet stretch inside a running turn gets the sound too
   }
   function runAfter(item) { if (item && item.after) { const f = item.after; item.after = null; quiet(f); } }
-  function enqueue(text, kind, after, onStart) {
+  function enqueue(text, kind, after, onStart, again) {
     if (ended || !text) return;
-    queue.push({ text, kind, after, onStart });
+    queue.push({ text, kind, after, onStart, again });
     if (!speaking && !personSpeaking) runQueue();   // never start reading while the person is speaking: the line waits
   }
   async function runQueue() {
@@ -3306,7 +3311,7 @@ function voiceCreateCall(deps) {
     const items = (current ? [current] : []).concat(queue);
     const hadReply = items.some(i => i.kind === 'reply');
     // a mic line that was PLAYING when cut is kept once (it is not replayed on every barge-in); waiting ones are kept as they are
-    const keep = byPerson ? items.filter(i => i.kind === 'mic' && !(i === current && i.retried)) : [];
+    const keep = byPerson ? items.filter(i => i.kind === 'mic' && !i.again && !(i === current && i.retried)) : [];
     if (current && keep.includes(current)) current.retried = true;
     gen++; queue = keep; current = null;
     if (speaking) { speaking = false; quiet(() => vad.setPlaybackActive(false, !!byPerson)); }
@@ -3487,6 +3492,7 @@ function voiceCreateCall(deps) {
     quiet(() => ui.reply('drop'));   // real speech: a reaction that has not played is dropped
     segmentStarting();
     recBegin();   // no onSpeechBegin came first (a begin already decided this speech)
+    if (!standby) queue = queue.filter(i => !i.again);   // already repeating themselves: a queued "Say that again." is dropped, never read
     if (!standby && (speaking || queue.length)) {   // in standby a sound does not cut the reading ("<phrase>, stop" does, once heard)
       const noteText = voiceSpeechText('| a |');   // the details note is a reply item but not one of the counted sentences
       const items = (current ? [current] : []).concat(queue);
@@ -3536,7 +3542,8 @@ function voiceCreateCall(deps) {
     const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq,
       linkGen: segLinkGen === linkGen && !linkLost ? linkGen : -1 };
     const stale = () => linkLost || mine.linkGen !== linkGen;   // heard while the link was lost, or an outage began since: never sent
-    if (linkLost) linkDropped = true;   // an utterance dropped by an outage: "Say that again." follows "Reconnected."
+    if (linkLost && isSendable(mine.sb, mine.seq)) linkDropped = true;   // a sendable utterance ended during an outage: "Say that again." follows "Reconnected."
+    inflight.add(mine);
     speechAnn = null; segActive = false;
     const cand = curCand; curCand = null;
     if (cand && cand.hold) cand.hold.resolve(mine);   // the earlier piece hands its text to this one
@@ -3555,7 +3562,7 @@ function voiceCreateCall(deps) {
         // The person's words for this piece, as the recognizer gave them, are saved with its audio (also a filler or text that is not sent).
         if (recHandle && !failed && !dropLong && !stale() && String(text || '').trim()) quiet(() => d.recordTranscript(recHandle.seq, String(text).trim()));
         if (ended) return;
-        if (stale()) { if (linkLost) linkDropped = true; return; }   // heard around an outage: dropped, not sent (also when the link came back while this waited)
+        if (stale()) return;   // heard around an outage: dropped, not sent (also when the link came back while this waited)
         const own = String(text || '').trim(), n = voiceCallNorm(own);
         const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
         let t = ownOk ? own : '';
@@ -3615,7 +3622,7 @@ function voiceCreateCall(deps) {
         heardShown = true; quiet(() => ui.heard(t));
         sttPending--; counted = true;   // the transcript is out of the queue: the thinking sound may arm while the turn runs
         await route(t, mine.ann);
-      } finally { mine.done = true; if (!counted) sttPending--; settle(); }
+      } finally { mine.done = true; inflight.delete(mine); if (!counted) sttPending--; settle(); }
     });
     return sttChain;
   }
@@ -3657,13 +3664,23 @@ function voiceCreateCall(deps) {
   // when it is back after a real outage, "Reconnected." is spoken (kind 'mic': a barge-in does not drop it).
   function setLinkLost(on) {
     if (ended) return;
-    if (on) { if (!linkLost) { linkGen++; linkDropped = false; } linkLost = true; linkWasLost = true; return; }
+    if (on) {
+      if (!linkLost) {   // the outage begins: speech being said now, or in flight (not one already stale from an earlier outage), is lost
+        linkDropped = false;
+        const cap = capWake || { sb: standby, seq: wakeSeq };
+        if (personSpeaking && isSendable(cap.sb, cap.seq)) linkDropped = true;
+        for (const m of inflight) if (m.linkGen === linkGen && isSendable(m.sb, m.seq)) linkDropped = true;
+        linkGen++;
+      }
+      linkLost = true; linkWasLost = true; return;
+    }
     if (!linkLost) return;
+    if (personSpeaking && segLinkGen === -1) { const cap = capWake || { sb: standby, seq: wakeSeq }; if (isSendable(cap.sb, cap.seq)) linkDropped = true; }   // started during the outage, still going
     linkLost = false;
     if (linkWasLost) {
       linkWasLost = false;
       enqueue('Reconnected.', 'mic');
-      if (linkDropped) enqueue('Say that again.', 'mic');
+      if (linkDropped) enqueue('Say that again.', 'mic', undefined, undefined, true);
     }
     linkDropped = false;
   }
