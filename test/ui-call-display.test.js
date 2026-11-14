@@ -824,14 +824,14 @@ test('drawer: hang up hides the open drawer without moving focus; the open Contr
   assert.ok(/\.ucd-drawer-head\s*\{[^}]*position: sticky[^}]*top: 0/.test(css));
 });
 
-test('chooser: a Display select sits first in the view side bar and lists Follow agent default / None / Orb / installed characters', async () => {
+test('chooser: a Display select sits first in the view side bar (before the hidden Show display and Back to chat) and lists Follow agent default / None / Orb / installed characters', async () => {
   const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
   w.display.start(); await flushP();
   const ui = w.display.ui;
   assert.ok(ui.disp && ui.disp.tagName === 'SELECT' && ui.disp.className === 'ucd-display'); assert.strictEqual(ui.disp.attrs['aria-label'], 'Display');
   const label = ui.disp.parentNode; assert.strictEqual(label.tagName, 'LABEL'); assert.strictEqual(label.children[0].textContent, 'Display');
   const side = dom.find('ucd-side')[0]; assert.strictEqual(side.children[0], label, 'first in the side bar, before Back to chat');
-  assert.ok(label.parentNode === side && side.children[1] === dom.find('ucd-back')[0]);
+  assert.ok(label.parentNode === side && side.children[1] === dom.find('ucd-show')[0] && side.children[1].hidden === true && side.children[2] === dom.find('ucd-back')[0], 'Show display (hidden in the full view) then Back to chat');
   assert.deepStrictEqual(ui.disp.children.map(o => o.value), ['follow', 'none', 'orb', 'pack:owl', 'pack:plain'], 'an Orb call lists the installed characters too');
   assert.strictEqual(ui.disp.value, 'orb');
   assert.strictEqual(ui.disp.children[3].textContent, 'Owl <b>x</b>', 'names are text');
@@ -1112,48 +1112,58 @@ function barWorld(o) {
 function barDisplay(o) {
   const dom = fakeDom(), clk = clock(), orbs = [], tabs = new dom.El('div'), page = new dom.El('div'), bar = new dom.El('div'), top = new dom.El('div'), hang = new dom.El('button');
   hang.className = 'vcb-hang'; bar.id = 'voice-callbar-c1'; top.appendChild(hang); bar.appendChild(top); page.appendChild(tabs); page.appendChild(bar); dom.doc.body.appendChild(page);
-  let host = hang;
+  const composer = new dom.El('div'); page.appendChild(composer);
+  let host = composer;   // the element o.dock() returns (the message box row); null = the page has none right now
   const log = { hang: 0 };
   const display = CD.createCallDisplay({ window: { document: dom.doc }, document: dom.doc, storage: memStorage({ [CD.DISPLAY_STORE_KEY]: JSON.stringify({ choice: 'orb', captions: true }) }), fetch: jsonFetch(PACKS),
-    setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, agentDefault: () => 'none', adopt: () => [{ el: bar, label: 'Call' }], reopenHost: () => host,
+    setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, agentDefault: () => 'none', adopt: () => [{ el: bar, label: 'Call' }], dock: (o && o.dock === false) ? undefined : () => host,
     onTalk() {}, onHangUp: () => { log.hang++; }, onChange() {}, createVoiceOrb: fakePlayerFactory('orb', orbs), createFacePlayer: fakePlayerFactory('pack', [], {}) });
-  return { dom, display, tabs, page, bar, top, hang, orbs, log, setHost: (h) => { host = h; } };
+  return { dom, display, tabs, page, bar, top, hang, composer, orbs, log, setHost: (h) => { host = h; } };
 }
 
-test('Show display sits inside the call bar right before Hang up (never in the body or by the tabs), and is gone when the view is shown', async () => {
+test('Show display is the docked bar\'s own button after Back to chat (never in the body or by the tabs, no .ucd-reopen), and is hidden when the view is shown', async () => {
   const w = barDisplay();
   w.display.start(); await flushP();
+  const ui = w.display.ui;
   assert.ok(w.dom.overlay().contains(w.bar), 'the bar was adopted into the view');
   assert.strictEqual(w.dom.find('ucd-reopen').length, 0);
+  assert.strictEqual(ui.show.hidden, true, 'hidden while the view is shown');
   w.dom.find('ucd-back')[0].click();
-  const r = w.dom.find('ucd-reopen')[0];
-  assert.ok(r, 'the way back exists');
-  assert.strictEqual(r.parentNode, w.top, 'inside the bar, in the same row as Hang up');
-  assert.strictEqual(r.nextSibling === undefined ? w.top.children[w.top.children.indexOf(r) + 1] : r.nextSibling, w.hang, 'right beside Hang up');
-  assert.ok(!w.dom.doc.body.children.includes(r) && !w.tabs.contains(r), 'not floating over the page, not in the tab strip');
-  assert.strictEqual(w.page.children.includes(w.bar), true, 'the bar is back in the page');
-  r.click();
-  assert.ok(w.dom.overlay() && w.dom.overlay().contains(w.bar), 'Show display brings the view and the bar back');
-  assert.strictEqual(w.dom.find('ucd-reopen').length, 0, 'removed while the view is shown');
+  assert.strictEqual(w.dom.find('ucd-reopen').length, 0, 'no separate reopen button any more');
+  assert.ok(isDocked(w.dom) && ui.root.parentNode === w.page, 'docked in the page');
+  assert.strictEqual(ui.show.hidden, false, 'the way back exists');
+  assert.strictEqual(ui.show.className, 'ucd-small ucd-show'); assert.strictEqual(ui.show.textContent, 'Show display'); assert.strictEqual(ui.show.attrs['aria-label'], 'Show the call display');
+  assert.ok(ui.bar.contains(ui.show) && !w.dom.doc.body.children.includes(ui.show) && !w.tabs.contains(ui.show), 'in the docked bar, not floating, not in the tab strip');
+  assert.ok(ui.drawer.contains(w.bar), 'the call bar stays in the drawer, not back at home');
+  ui.show.click();
+  assert.ok(w.dom.overlay() && !isDocked(w.dom) && w.dom.overlay().contains(w.bar), 'Show display brings the view back');
+  assert.strictEqual(ui.show.hidden, true, 'hidden again while the view is shown');
   w.dom.find('ucd-back')[0].click();
-  assert.strictEqual(w.dom.find('ucd-reopen').length, 1, 'back again after a second Back, once');
+  assert.strictEqual(ui.show.hidden, false, 'back again after a second Back');
   w.display.release();
-  assert.strictEqual(w.dom.find('ucd-reopen').length, 0, 'nothing is left after the call');
+  assert.strictEqual(w.dom.find('ucd-reopen').length + w.dom.find('ucd-overlay').length, 0, 'nothing is left after the call');
 });
 
-test('Show display: no call bar on screen -> no button at all (nothing floats); syncReopen puts it in when the bar is back', async () => {
+test('Show display: no dock element -> the docked bar falls back (no button floats); syncReopen docks again when the element is back or re-made', async () => {
   const w = barDisplay();
   w.display.start(); await flushP();
   w.setHost(null);
   w.dom.find('ucd-back')[0].click();
-  assert.strictEqual(w.dom.find('ucd-reopen').length, 0, 'no host: no button, and none in the body');
-  w.setHost(w.hang); w.display.syncReopen();
-  assert.strictEqual(w.dom.find('ucd-reopen').length, 1); assert.strictEqual(w.dom.find('ucd-reopen')[0].parentNode, w.top);
-  // the page re-made the bar: the button moves to the new Hang up
-  const top2 = new w.dom.El('div'), hang2 = new w.dom.El('button'); top2.appendChild(hang2); w.page.appendChild(top2);
-  w.setHost(hang2); w.display.syncReopen();
-  assert.strictEqual(w.dom.find('ucd-reopen').length, 1); assert.strictEqual(w.dom.find('ucd-reopen')[0].parentNode, top2);
-  w.display.syncReopen(); assert.strictEqual(w.dom.find('ucd-reopen').length, 1, 'idempotent');
+  assert.ok(!isDocked(w.dom), 'no dock element: nothing to dock to');
+  assert.strictEqual(w.dom.find('ucd-overlay').length, 0, 'the view is not forced back on screen');
+  assert.ok(w.page.children.includes(w.bar), 'the page controls are home');
+  assert.strictEqual(w.dom.find('ucd-reopen-float').length, 1, 'the fixed button is the only way back');
+  w.setHost(w.composer); w.display.syncReopen();
+  assert.ok(!isDocked(w.dom), 'syncReopen on a hidden view without a dock keeps the float button');
+  assert.strictEqual(w.dom.find('ucd-reopen-float').length, 1);
+  // docked, then the page re-makes its message box: the bar follows it
+  w.dom.find('ucd-reopen-float')[0].click(); w.dom.find('ucd-back')[0].click();
+  assert.ok(isDocked(w.dom)); assert.strictEqual(w.dom.find('ucd-reopen-float').length, 0);
+  const c2 = new w.dom.El('div'); w.page.appendChild(c2); w.setHost(c2); w.display.syncReopen();
+  assert.ok(isDocked(w.dom)); assert.strictEqual(w.page.children[w.page.children.indexOf(c2) - 1], w.dom.overlay(), 'right before the new box');
+  assert.strictEqual(c2.getAttribute('data-ucd-replaced'), '');
+  w.display.syncReopen(); assert.strictEqual(w.dom.find('ucd-overlay').length, 1, 'idempotent');
+  w.display.release();
 });
 
 test('captions: no band while the text is empty; the text clears when the reply ends and when the call stops speaking', async () => {
@@ -1182,7 +1192,7 @@ test('the full-screen view covers the page notice bars (above their z-index) and
   const notices = [...idx.matchAll(/#(?:hub-update-card|update-chip)[^{]*\{[^}]*z-index: (\d+)/g)].map(m => Number(m[1]));
   assert.ok(z > 1100, 'above the desktop banner and menus (' + z + ')');
   for (const n of notices) assert.ok(z > n, 'above a notice at ' + n);
-  const w = barDisplay();
+  const w = barDisplay({ dock: false });
   w.display.start(); await flushP(); assert.ok(w.dom.overlay());
   w.dom.find('ucd-back')[0].click();
   assert.strictEqual(w.dom.overlay(), null, 'Back removes the view and the page shows again');
@@ -1709,7 +1719,7 @@ test('None docked: the recording badge sits in the docked status strip; a page w
   plain.display.release();
 });
 
-test('None docked: a character confirmed gone docks; a character still being looked up does not dock in between; a keyboard choice of None keeps focus on the docked Display', async () => {
+test('None docked: a character confirmed gone docks; a character still being looked up docks meanwhile and gives way to the view; a keyboard choice of None keeps focus on the docked Display', async () => {
   // a pack the server confirms missing -> None -> the docked bar
   const gone = dockedWorld({ choice: 'pack:owl' });
   gone.w.display.start(); await flushP();
@@ -1717,16 +1727,17 @@ test('None docked: a character confirmed gone docks; a character still being loo
   gone.w.display.setChoice('pack:ghost'); await flushP();
   assert.ok(isDocked(gone.dom), 'a choice that is not installed is None: docked');
   gone.w.display.release();
-  // a pack choice while the list is still loading: no flash of the docked bar before the character
+  // a pack choice while the list is still loading: the docked bar is the layout meanwhile, then the character's view
   let release; const slow = () => new Promise((r) => { release = () => r({ ok: true, status: 200, json: async () => ({ packs: PACKS }) }); });
   let page, composer;
   const p = world({ prefs: { choice: 'pack:owl' }, fetch: slow, dock: () => composer });
   page = new p.dom.El('div'); composer = new p.dom.El('div'); page.appendChild(composer); p.dom.doc.body.appendChild(page);
   p.display.start(); await flushP();
   assert.strictEqual(p.display.info().resolved.pending, true, 'still looking for the character');
-  assert.ok(!isDocked(p.dom) && composer.getAttribute('data-ucd-replaced') === undefined, 'not docked while it is pending');
+  assert.ok(isDocked(p.dom) && composer.getAttribute('data-ucd-replaced') === '', 'docked while it is pending');
   release(); await flushP();
-  assert.ok(!isDocked(p.dom), 'the character, not the docked bar');
+  assert.ok(p.dom.overlay() && !isDocked(p.dom), 'the character, not the docked bar');
+  assert.strictEqual(composer.getAttribute('data-ucd-replaced'), undefined, 'the page box is no longer replaced');
   p.display.release();
   // a keyboard user choosing None on the full view's Display select keeps focus there (on the docked one)
   const k = dockedWorld({ choice: 'orb' });
@@ -1745,4 +1756,103 @@ test('docked CSS: the page\'s bar hidden, Back to chat and Captions hidden, the 
   assert.match(css, /\.ucd-docked \.ucd-host, \.ucd-docked \.ucd-note, \.ucd-docked \.ucd-caption/);
   assert.match(read('mobile.js'), /dock: \(\) => \$\('composer'\),/, 'the phone docks in place of its composer');
   assert.match(read('app.js'), /dock: \(\) => \{ const i = voiceById\(`input-\$\{chatId\}`\); return i \? i\.closest\('\.input-area'\) : null; \},/, 'the desktop in place of that chat\'s message box');
+});
+
+// ── one call layout: Back to chat docks the same root (o.dock); Show display is its own button ──
+const dockedBack = async (extra) => {
+  const d = dockedWorld(Object.assign({ choice: 'orb' }, extra));
+  d.before = d.page.children.slice();
+  d.w.display.start(); await flushP();
+  d.w.display.hideToChat();
+  return d;
+};
+
+test('Back to chat with a dock: the root docks before the dock target, the controls stay in the drawer, Show display is visible and focused, no .ucd-reopen anywhere', async () => {
+  const { w, dom, page, composer, panel, pop } = await dockedBack();
+  const ui = w.display.ui, ov = dom.overlay();
+  assert.ok(ov && isDocked(dom), 'docked, not a view'); assert.strictEqual(ov.parentNode, page);
+  assert.strictEqual(page.children[page.children.indexOf(composer) - 1], ov, 'right before the dock target');
+  assert.strictEqual(composer.getAttribute('data-ucd-replaced'), '');
+  assert.ok(ui.drawer.contains(panel) && ui.drawer.contains(pop), 'the controls are still in the drawer, never at home');
+  assert.ok(!page.children.includes(panel) || ui.drawer.contains(panel)); assert.ok(!composer.contains(pop));
+  assert.strictEqual(ui.show.hidden, false); assert.strictEqual(ui.show.textContent, 'Show display'); assert.strictEqual(ui.show.className, 'ucd-small ucd-show');
+  assert.strictEqual(dom.doc.activeElement, ui.show, 'focus goes to Show display');
+  assert.ok(ui.back && ui.caps && ov.contains(ui.back) && ov.contains(ui.caps), 'Back to chat and Captions are in the root (the CSS hides them while docked)');
+  assert.strictEqual(dom.find('ucd-reopen').length, 0); assert.strictEqual(dom.find('ucd-reopen-float').length, 0);
+  assert.strictEqual(w.orbs[0].destroyed, true, 'nothing is drawn behind the chat');
+  w.display.release();
+});
+
+test('Show display from the docked bar: the full view comes back as the overlay, the page box is no longer replaced, the button is hidden, the controls stay in the drawer', async () => {
+  const { w, dom, composer, panel, pop } = await dockedBack();
+  const ui = w.display.ui;
+  ui.show.click();
+  const ov = dom.overlay();
+  assert.ok(ov && !isDocked(dom), 'the overlay, not docked'); assert.strictEqual(ov.parentNode, dom.doc.body);
+  assert.strictEqual(composer.getAttribute('data-ucd-replaced'), undefined);
+  assert.strictEqual(ui.show.hidden, true);
+  assert.ok(ui.drawer.contains(panel) && ui.drawer.contains(pop), 'the controls are still in the drawer');
+  assert.strictEqual(dom.find('ucd-reopen').length, 0);
+  assert.strictEqual(w.orbs.length, 2, 'the orb is drawn again'); assert.strictEqual(w.display.info().visible, true);
+  w.display.release();
+});
+
+test('Hang up from the docked bar after Back to chat: the root is gone, the page box is back, the controls are home', async () => {
+  const { w, dom, page, composer, panel, pop, before } = await dockedBack();
+  await w.display.hangUp();
+  assert.strictEqual(dom.overlay(), null, 'the root is gone');
+  assert.strictEqual(composer.getAttribute('data-ucd-replaced'), undefined);
+  assert.deepStrictEqual(page.children, before, 'the call panel is back in its place');
+  assert.ok(composer.contains(pop) && pop.hidden === true, 'the voice settings are home and closed');
+  assert.strictEqual(panel.parentNode, page);
+  assert.strictEqual(dom.find('ucd-reopen').length + dom.find('ucd-reopen-float').length, 0);
+});
+
+test('a character still being looked up docks at the start and gives way to the view; a character loading its first picture is docked meanwhile', async () => {
+  let release; const slow = () => new Promise((r) => { release = () => r({ ok: true, status: 200, json: async () => ({ packs: PACKS }) }); });
+  let page, composer;
+  const p = world({ prefs: { choice: 'pack:owl' }, fetch: slow, dock: () => composer, pack: { deferred: true, info: { ready: false, failed: null, drawable: true } } });
+  page = new p.dom.El('div'); composer = new p.dom.El('div'); page.appendChild(composer); p.dom.doc.body.appendChild(page);
+  p.display.start(); await flushP();
+  assert.strictEqual(p.display.info().resolved.pending, true);
+  assert.ok(isDocked(p.dom), 'docked while the list is out'); assert.strictEqual(composer.getAttribute('data-ucd-replaced'), '');
+  release(); await flushP();
+  assert.strictEqual(p.players.length, 1, 'the character is being loaded');
+  assert.ok(isDocked(p.dom) && composer.getAttribute('data-ucd-replaced') === '', 'docked while its first picture loads');
+  p.players[0].resolvePicture(true); await flushP();
+  assert.ok(p.dom.overlay() && !isDocked(p.dom), 'the view is shown once the picture is ready');
+  assert.strictEqual(p.dom.overlay().parentNode, p.dom.doc.body);
+  assert.strictEqual(composer.getAttribute('data-ucd-replaced'), undefined, 'the target is no longer replaced');
+  assert.strictEqual(p.display.ui.show.hidden, true);
+  p.display.release();
+  // the list arrives and the picture is already ready: straight to the view
+  let rel2; const slow2 = () => new Promise((r) => { rel2 = () => r({ ok: true, status: 200, json: async () => ({ packs: PACKS }) }); });
+  let c2; const q = world({ prefs: { choice: 'pack:owl' }, fetch: slow2, dock: () => c2 });
+  const pg = new q.dom.El('div'); c2 = new q.dom.El('div'); pg.appendChild(c2); q.dom.doc.body.appendChild(pg);
+  q.display.start(); await flushP(); assert.ok(isDocked(q.dom));
+  rel2(); await flushP();
+  assert.ok(q.dom.overlay() && !isDocked(q.dom)); assert.strictEqual(c2.getAttribute('data-ucd-replaced'), undefined);
+  q.display.release();
+});
+
+test('the recording badge after Back to chat sits in the docked root\'s stage (data-place stage)', async () => {
+  const { w, dom } = await dockedBack();
+  w.display.setRecording({ state: 'on' });
+  const rec = dom.find('ucd-rec')[0];
+  assert.ok(rec, 'the badge exists'); assert.ok(w.display.ui.stage.contains(rec), 'in ui.stage');
+  assert.strictEqual(rec.getAttribute('data-place'), 'stage'); assert.ok(isDocked(dom));
+  w.display.release();
+});
+
+test('without o.dock, Back to chat still gives the fixed float button in the body (and no docked bar); Show display brings the view back', async () => {
+  const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
+  w.display.start(); await flushP();
+  w.display.hideToChat();
+  assert.strictEqual(dom.overlay(), null, 'no docked bar without a dock');
+  const f = dom.find('ucd-reopen-float');
+  assert.strictEqual(f.length, 1); assert.strictEqual(f[0].parentNode, dom.doc.body); assert.strictEqual(f[0].textContent, 'Show display');
+  assert.strictEqual(dom.doc.activeElement, f[0], 'focus goes to it');
+  f[0].click();
+  assert.ok(dom.overlay() && !isDocked(dom)); assert.strictEqual(dom.find('ucd-reopen-float').length, 0);
+  w.display.release();
 });
