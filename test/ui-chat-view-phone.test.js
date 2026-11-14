@@ -338,24 +338,27 @@ test('a hub-started turn this page never followed does not draw its reply into t
 });
 
 // P3: onTurnEnd with the real source and stubs
-function turnEndHarness({ turnOrigins = {}, hubTurns = {}, streams = new Map(), reattaches = new Map(), open = true, reread = true, view = 'main' } = {}) {
+function turnEndHarness({ turnOrigins = {}, hubTurns = {}, streams = new Map(), reattaches = new Map(), open = true, reread = true, view = 'main', changes = true } = {}) {
   const src = cut('function onTurnEnd(ev) {', 'function plain(');
   const calls = { reread: [], render: 0, bubbles: 0 };
-  const names = ['rrImpl', 'activeTurnEnd', 'openTurns', 'setLive', 'wkSettleAgent', 'notifyArmed', 'refreshCtx', 'pollStatusSoon', 'hubTurns', 'turnOrigins', 'chatViewIsHubOrigin', 'streams', 'recentOwn', 'reattaches', 'reasoningEnd', 'chatOpenFor', 'setReplyText', 'feedEnd', 'promptCardLine', 'autoFirstLine', 'setBubbleTime', 'msgTimeLine', 'scrollChat', 'finishReattach', 'reattachCheck', 'viewNow', 'forOwnerPending', 'addAssistantBubble', 'msgTimeLabel', 'markUnread', 'activity', 'ACTIVITY_MAX', 'saveJson', 'renderActivity', 'paintStatus', 'updateDots', 'renderHistory', 'setTimeout'];
+  const hist = { cur: [{ ts: 1, role: 'user', content: 'hi' }] };   // what the re-read puts into chatHistory
+  const scroll = { scrollHeight: 1000, scrollTop: 100, clientHeight: 300 };
+  const names = ['rrImpl', 'activeTurnEnd', 'openTurns', 'setLive', 'wkSettleAgent', 'notifyArmed', 'refreshCtx', 'pollStatusSoon', 'hubTurns', 'turnOrigins', 'chatViewIsHubOrigin', 'streams', 'recentOwn', 'reattaches', 'reasoningEnd', 'chatOpenFor', 'setReplyText', 'feedEnd', 'promptCardLine', 'autoFirstLine', 'setBubbleTime', 'msgTimeLine', 'scrollChat', 'finishReattach', 'reattachCheck', 'viewNow', 'forOwnerPending', 'addAssistantBubble', 'msgTimeLabel', 'markUnread', 'activity', 'ACTIVITY_MAX', 'saveJson', 'renderActivity', 'paintStatus', 'updateDots', 'renderHistory', 'setTimeout', '$', 'hist'];
   const impl = {
     activeTurnEnd: () => true, openTurns: {}, setLive() {}, wkSettleAgent() {}, notifyArmed: {}, refreshCtx() {}, pollStatusSoon() {}, hubTurns, turnOrigins,
     chatViewIsHubOrigin: V.chatViewIsHubOrigin, streams, recentOwn: new Map(), reattaches, reasoningEnd() {}, chatOpenFor: () => open, setReplyText() {}, feedEnd() {},
     promptCardLine() {}, autoFirstLine() {}, setBubbleTime() {}, msgTimeLine() {}, scrollChat() {}, finishReattach() {}, reattachCheck() {}, viewNow: () => view,
     forOwnerPending: {}, addAssistantBubble: () => { calls.bubbles++; return { el: {} }; }, msgTimeLabel() {}, markUnread() {}, activity: [], ACTIVITY_MAX: 50, saveJson() {},
     renderActivity() {}, paintStatus() {}, updateDots() {}, setTimeout() {},
-    rrImpl: async (a) => { calls.reread.push(a); return reread; },
-    renderHistory: () => { calls.render++; },
+    rrImpl: async (a) => { calls.reread.push(a); if (reread && changes) hist.cur = hist.cur.concat([{ ts: 2, role: 'assistant', content: 'owner reply' }]); return reread; },
+    renderHistory: () => { calls.render++; scroll.scrollHeight = 1500; },
+    $: (id) => (id === 'chat-scroll' ? scroll : null), hist,
   };
   // rereadHistory, like the real one, bumps histGen when it replaced the history and says so
-  const mod = new Function(...names, `let current = 'forge', screen = 'chat', actUnseen = 0, histGen = 0;
-    async function rereadHistory(a) { const r = await rrImpl(a); if (r) histGen++; return r; }
+  const mod = new Function(...names, `let current = 'forge', screen = 'chat', actUnseen = 0, histGen = 0, chatHistory = hist.cur;
+    async function rereadHistory(a) { const r = await rrImpl(a); if (r) { histGen++; chatHistory = hist.cur; } return r; }
     ${src}; return { onTurnEnd };`)(...names.map(n => impl[n]));
-  return { mod, calls, impl };
+  return { mod, calls, impl, scroll };
 }
 const flush = () => new Promise(r => setImmediate(r));
 const endEv = (o = {}) => ({ agent: 'forge', turnId: 'T1', ok: true, reply: 'hello', origin: { kind: 'consultation', from: 'anvil' }, ...o });
@@ -365,13 +368,22 @@ test('turn_end of a hub-started turn this page did not follow, main chat open, n
   h.mod.onTurnEnd(endEv());
   await flush();
   assert.deepStrictEqual(h.calls.reread, ['forge']);
-  assert.strictEqual(h.calls.render, 1, 'redrawn once the read replaced the history');
+  assert.strictEqual(h.calls.render, 1, 'redrawn once the read brought a changed history');
+  assert.strictEqual(h.scroll.scrollTop, 100, 'not at the bottom: the scroll position is kept');
   assert.strictEqual(h.calls.bubbles, 0, 'no bubble is drawn from the event');
   // hub-started by the turn_start only (the end event carries no usable origin): the remembered origin counts
   const h2 = turnEndHarness({ turnOrigins: { forge: { turnId: 'T1', hub: true, origin: { kind: 'alert' } } } });
   h2.mod.onTurnEnd(endEv({ origin: undefined }));
   await flush();
   assert.deepStrictEqual(h2.calls.reread, ['forge']);
+});
+
+test('turn_end re-read: the same entries come back -> renderHistory is not called', async () => {
+  const same = turnEndHarness({ turnOrigins: { forge: { turnId: 'T1', hub: true, origin: { kind: 'consultation' } } }, changes: false });
+  same.mod.onTurnEnd(endEv()); await flush();
+  assert.deepStrictEqual(same.calls.reread, ['forge'], 'the history was read');
+  assert.strictEqual(same.calls.render, 0, 'nothing new: no redraw');
+  assert.strictEqual(same.scroll.scrollTop, 100);
 });
 
 test('turn_end re-read: no redraw when the read was dropped, a stream or re-attach is there, the turn is the person\'s own, or the view is "all"', async () => {

@@ -6520,9 +6520,46 @@
       const view = chatViewGet(localStorage);
       const seq = chat.histSeq = (chat.histSeq || 0) + 1;
       const reset = chat.viewLoaded !== undefined;   // not the first load: the panel is drawn again from nothing
+      // a redraw never wipes a reply this page streams; the first draw of a chat only appends, so it always happens
       return soloHistoryFetch(chat.agent, view, null)
-        .then(page => { if (chats[chatId] && chat.histSeq === seq && !chat.controller) soloHistoryDraw(chatId, page.history, page.next, view, { reset }); })
+        .then(page => { if (chats[chatId] && chat.histSeq === seq && !(reset && chat.controller)) soloHistoryDraw(chatId, page.history, page.next, view, { reset }); })
         .catch(e => console.warn('[history] Failed to load:', e));
+    }
+    // The chat's loaded history brought up to date: the newest page again, and the pages before it until they reach what
+    // is already loaded (more than a page may have come in since), then the loaded entries older than that in front.
+    async function soloHistoryCurrent(chat, view) {
+      const tsOf = (e) => { const n = e && (typeof e.ts === 'number' ? e.ts : Date.parse(e.ts)); return Number.isFinite(n) ? n : null; };
+      const raw = chat.rawHistory || [];
+      const lastKnown = raw.length ? tsOf(raw[raw.length - 1]) : null;
+      let page = await soloHistoryFetch(chat.agent, view, null);
+      let fresh = page.history;
+      for (let tries = 0; tries < 5 && page.next != null && lastKnown !== null && fresh.length && tsOf(fresh[0]) !== null && tsOf(fresh[0]) > lastKnown; tries++) {
+        page = await soloHistoryFetch(chat.agent, view, page.next);
+        fresh = page.history.concat(fresh);
+      }
+      if (!fresh.length) return raw.slice();
+      const firstTs = tsOf(fresh[0]);
+      const kept = firstTs === null ? [] : raw.filter(e => tsOf(e) !== null && tsOf(e) < firstTs);
+      return chatViewMergeOlder(kept, fresh);
+    }
+    // After a hub-started turn this page did not follow: bring the chat up to date (a reply marked for the owner shows),
+    // redrawing only when something new came in, with the older pages and the scroll position kept.
+    async function soloHistoryRefresh(chatId) {
+      const chat = chats[chatId];
+      if (!chat || chat.histBusy) return;
+      const view = chat.viewLoaded || chatViewGet(localStorage);
+      const seq = chat.histSeq;
+      let list;
+      try { list = await soloHistoryCurrent(chat, view); } catch (e) { console.warn('[history] Failed to refresh:', e); return; }
+      if (!chats[chatId] || chat.histSeq !== seq || chat.controller || chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) return;
+      const key = (e) => `${e && e.ts}|${e && e.role}|${e && e.content}`;
+      const had = new Set((chat.rawHistory || []).map(key));
+      if (!list.some(e => !had.has(key(e)))) return;   // nothing new: nothing visible changes
+      const panel = document.getElementById(`messages-${chatId}`);
+      const fromBottom = panel ? panel.scrollHeight - panel.scrollTop : 0;
+      const atBottom = panel ? fromBottom - panel.clientHeight < 40 : true;
+      soloHistoryDraw(chatId, list, chat.histNext, view, { reset: true, keepScroll: !atBottom });
+      if (panel && !atBottom) panel.scrollTop = Math.max(0, panel.scrollHeight - fromBottom);
     }
     // Draw a history list (oldest first) into the chat's panel. reset: clear the panel and the chat's messages first
     // (a view change, or "Load earlier" drawing the merged list); keepScroll: the caller restores the scroll position.
@@ -6639,15 +6676,11 @@
         }
         if (!chats[chatId] || chat.histSeq !== seq) return;   // closed, or reloaded in another view meanwhile
         if (!older.length) { chat.histNext = cursor; return; }
-        // rawHistory is only the opening snapshot: read the newest page again so what was sent or received since stays.
-        const fresh = await soloHistoryFetch(chat.agent, view, null);
+        // rawHistory is only the opening snapshot: what was sent or received since is read again (soloHistoryCurrent).
+        const base = await soloHistoryCurrent(chat, view);
         if (!chats[chatId] || chat.histSeq !== seq) return;
         // A reply started while the pages were loading: a redraw would wipe it (re-checked after all the awaits).
         if (chat.controller || chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) { hubToast('Load earlier once the reply is done'); return; }
-        const tsOf = (e) => { const n = typeof e.ts === 'number' ? e.ts : Date.parse(e.ts); return Number.isFinite(n) ? n : null; };
-        const firstTs = fresh.history.length ? tsOf(fresh.history[0]) : null;
-        const kept = (chat.rawHistory || []).filter(e => firstTs === null ? fresh.history.length === 0 : (tsOf(e) !== null && tsOf(e) < firstTs));
-        const base = kept.concat(fresh.history);
         const panel = document.getElementById(`messages-${chatId}`);
         const fromBottom = panel ? panel.scrollHeight - panel.scrollTop : 0;
         soloHistoryDraw(chatId, chatViewMergeOlder(older, base), cursor, view, { reset: true, keepScroll: true });
@@ -8140,7 +8173,7 @@
         // A hub-started turn this page never followed (opened mid-turn, or a redraw dropped it): a reply marked for the
         // owner would be missing, so the newest page is read again (nothing visible changes otherwise).
         const hubStarted = chatViewIsHubOrigin(ev.origin) || (endedRun && (!ev.turnId || endedRun.turnId === ev.turnId) && !endedRun.own);
-        if (hubStarted && chat && chatViewGet(localStorage) === 'main' && !chat.controller && !chat.reattach) chat.historyLoaded = soloHistoryLoad(chat.id);
+        if (hubStarted && chat && chatViewGet(localStorage) === 'main' && !chat.controller && !chat.reattach) soloHistoryRefresh(chat.id);   // a marked reply shows; nothing else moves
         if (chat?.reattach) {
           if (ev.reply) finishReattach(chat.id, ev.reply, true);
           else if (ev.ok === false) finishReattach(chat.id, `${chat.reattach.partial ? chat.reattach.partial + '\n\n' : ''}⚠ turn failed: ${ev.error || 'unknown error'}`, false);

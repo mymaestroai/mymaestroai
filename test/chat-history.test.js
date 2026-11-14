@@ -78,7 +78,8 @@ test('historyPage: bad cursors throw, the newest page is the default, limit is c
   const log = [user('a'), asst('b')];
   // changed (review r1): a chat-log cursor is a time, not a position, so a trim between two pages cannot shift it
   for (const bad of ['nope', 'log:-1', 'arc:x', 'log:1.5', 'log:3', 'log:2026-13-45T99:99:99Z']) assert.throws(() => historyPage({ logEntries: log, archive: none, before: bad }), /bad_cursor/);
-  assert.deepStrictEqual(parseCursor('log:2026-01-01T00:00:03.000Z'), { kind: 'log', ts: '2026-01-01T00:00:03.000Z' });
+  assert.deepStrictEqual(parseCursor('log:2026-01-01T00:00:03.000Z'), { kind: 'log', ts: '2026-01-01T00:00:03.000Z', rank: 0 });
+  assert.deepStrictEqual(parseCursor('log:2026-01-01T00:00:03.000Z~2'), { kind: 'log', ts: '2026-01-01T00:00:03.000Z', rank: 2 });
   assert.deepStrictEqual(parseCursor('arc:top'), { kind: 'arc', id: null });
   assert.strictEqual(historyPage({ logEntries: log, archive: none, limit: 9999 }).history.length, 2);
   assert.strictEqual(historyPage({ logEntries: log, archive: none, limit: 0 }).history.length, 2);   // 0 -> default
@@ -103,14 +104,36 @@ function fakeArchive(rows, owner = [], { cleared = null } = {}) {
 // review r1 (GPT-6 BLOCK 1): the seam dedupe compared every archive row's text with the log's oldest entries, so an older
 // "Yes" vanished whenever the log began with a "Yes"
 test('historyPage: an older message with the same words as one at the start of the chat log is not dropped', () => {
-  const t = (n) => new Date(Date.parse('2026-03-01T00:00:00Z') + n * 60000).toISOString();
+  const t = (s) => new Date(Date.parse('2026-03-01T00:00:00Z') + s * 1000).toISOString();
   let id = 0;
-  const row = (n, kind, text, turn) => ({ id: ++id, ts: t(n), kind, text, origin: 'user', turn_id: turn, meta: {} });
-  const rows = [row(1, 'user', 'Yes', 'a'), row(2, 'assistant', 'Done.', 'a'), row(500, 'user', 'Yes', 'b'), row(500.5, 'assistant', 'Done.', 'b')];
-  const log = [{ ts: t(500.6), role: 'user', content: 'Yes' }, { ts: t(500.7), role: 'assistant', content: 'Done.' }, { ts: t(600), role: 'user', content: 'later' }, { ts: t(601), role: 'assistant', content: 'ok' }];
+  const row = (s, kind, text, turn) => ({ id: ++id, ts: t(s), kind, text, origin: 'user', turn_id: turn, meta: {} });
+  // hours old; 50 s before the log's first "Yes" (review r2, GPT-6: a separate reply close by); and the reply saved in
+  // both stores 3 ms apart (the archive row first): only that last one is the same message
+  const rows = [row(60, 'user', 'Yes', 'a'), row(120, 'assistant', 'Done.', 'a'), row(30000, 'assistant', 'Yes', 'b'), row(30050, 'assistant', 'Done.', 'c')];
+  const log = [{ ts: t(30050.003), role: 'assistant', content: 'Done.' }, { ts: t(30100), role: 'assistant', content: 'Yes' }, { ts: t(36000), role: 'user', content: 'later' }, { ts: t(36001), role: 'assistant', content: 'ok' }];
   const p = historyPage({ logEntries: log, archive: fakeArchive(rows), view: 'all', limit: 50 });
-  assert.deepStrictEqual(p.history.map(e => `${e.archived ? 'A' : 'L'}:${e.content}`), ['A:Yes', 'A:Done.', 'L:Yes', 'L:Done.', 'L:later', 'L:ok'],
-    'the hours-old "Yes" stays; the copy within two minutes of the log (the same message kept twice) is dropped');
+  assert.deepStrictEqual(p.history.map(e => `${e.archived ? 'A' : 'L'}:${e.content}`), ['A:Yes', 'A:Done.', 'A:Yes', 'L:Done.', 'L:Yes', 'L:later', 'L:ok'],
+    'the hours-old "Yes" and the "Yes" 50 s before the log stay; only the copy saved 3 ms before its log line is dropped');
+});
+
+// review r2 (GPT-6 BLOCK 2): entries saved in the same millisecond must not be skipped (or repeated) at a page cut
+test('historyPage: a page cut inside entries that share a timestamp loses and repeats nothing', () => {
+  const t = (s) => new Date(Date.parse('2026-03-02T00:00:00Z') + s * 1000).toISOString();
+  const log = [
+    { ts: t(1), role: 'user', content: 'a' }, { ts: t(2), role: 'assistant', content: 'b' }, { ts: t(2), role: 'user', content: 'c' },
+    { ts: t(2), role: 'assistant', content: 'd' }, { ts: t(3), role: 'user', content: 'e' },
+  ];
+  const none = fakeArchive([]);
+  for (const lim of [1, 2, 3]) {
+    const seen = [];
+    let cursor = null, guard = 0;
+    do {
+      const p = historyPage({ logEntries: log, archive: none, view: 'all', limit: lim, before: cursor });
+      seen.unshift(...p.history.map(e => e.content));
+      cursor = p.next;
+    } while (cursor && ++guard < 20);
+    assert.deepStrictEqual(seen, ['a', 'b', 'c', 'd', 'e'], `limit ${lim}`);
+  }
 });
 
 // review r1 (GPT-6 BLOCK 2): a position cursor shifted when the log was trimmed between two pages
@@ -166,6 +189,11 @@ test('historyPage: nothing from before the last Clear comes back from the archiv
   assert.deepStrictEqual(p.history.map(e => e.content), ['after clear', 'new chat']);
   const never = historyPage({ logEntries: log, archive: fakeArchive(rows), view: 'all', limit: 50 });
   assert.strictEqual(never.history.length, 4, 'without a clear mark the archive goes all the way back');
+  // review r2 (GPT-6): a clear mark that cannot be read must not let the cleared chat back in: no archive at all then
+  const broken = { ...fakeArchive(rows), lastMarkTs: () => { throw new Error('disk'); } };
+  const shut = historyPage({ logEntries: log, archive: broken, view: 'all', limit: 50 });
+  assert.deepStrictEqual(shut.history.map(e => e.content), ['new chat']);
+  assert.strictEqual(shut.next, null);
 });
 
 test('historyPage: the archive continues behind the chat log, no duplicate at the seam, hidden turns hidden, for_owner kept, next null at the start', () => {

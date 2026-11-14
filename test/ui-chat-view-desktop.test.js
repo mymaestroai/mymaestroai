@@ -88,7 +88,7 @@ function earlierPage(pages, { controller = null, raw = null, fresh = null, hubTu
   const chat = { id: 'c1', agent: 'forge', histNext: 'log:40', viewLoaded: 'main', histSeq: 1, rawHistory, controller };
   const chats = { c1: chat };
   const painted = [];
-  const body = `${extract('soloHistoryEarlier')}\nreturn soloHistoryEarlier;`;
+  const body = `${extract('soloHistoryCurrent')}\n${extract('soloHistoryEarlier')}\nreturn soloHistoryEarlier;`;
   const fn = new Function('chats', 'hubToast', 'chatViewGet', 'localStorage', 'soloEarlierPaint', 'soloHistoryFetch', 'chatViewMergeOlder', 'soloHistoryDraw', 'document', 'userScrolledUp', 'hubTurns', body)(
     chats, (m) => toasts.push(m), V.chatViewGet, storage(null), (id) => painted.push(chat.histBusy), async (agent, view, before) => {
       if (before === null) { freshFetches.push(view); if (onFresh) onFresh(chat); return { history: (fresh || rawHistory).slice(), next: 'ignored' }; }
@@ -364,14 +364,74 @@ test('D2 Load earlier: a reply that started during the awaits blocks the redraw;
   assert.strictEqual(other.draws.length, 1, 'a turn of another chat does not block');
 });
 
-test('D2 history load: an own stream set when the answer arrives means no draw (viewLoaded left as it was)', async () => {
+test('D2 history load: an own stream set when the answer of a redraw arrives means no draw (viewLoaded left as it was)', async () => {
   let release; const gate = new Promise(r => { release = r; });
   const t = loadPage(null, async () => { await gate; return ok({ history: [{ ts: 1, role: 'user', content: 'x' }], next: null }); });
+  t.chats.c1.viewLoaded = 'all';   // not the first load: a reset draw
   const p = t.soloHistoryLoad('c1');
   t.chats.c1.controller = {};
   release(); await p;
   assert.strictEqual(t.draws.length, 0);
-  assert.strictEqual(t.chats.c1.viewLoaded, undefined);
+  assert.strictEqual(t.chats.c1.viewLoaded, 'all');
+});
+
+test('history load: the first draw happens even with chat.controller set; a reset draw does not', async () => {
+  const page = () => ok({ history: [{ ts: 1, role: 'user', content: 'x' }], next: null });
+  const first = loadPage(null, page);
+  first.chats.c1.controller = {};
+  await first.soloHistoryLoad('c1');
+  assert.strictEqual(first.draws.length, 1, 'first draw with a controller still draws');
+  assert.strictEqual(first.draws[0][4].reset, false);
+  const redraw = loadPage(null, page);
+  redraw.chats.c1.viewLoaded = 'main'; redraw.chats.c1.controller = {};
+  await redraw.soloHistoryLoad('c1');
+  assert.strictEqual(redraw.draws.length, 0, 'a reset draw is skipped while a stream runs');
+});
+
+test('Load earlier: a gap between the snapshot and the server\'s newest page is filled from the pages before it', async () => {
+  const mk = (n) => ({ ts: n, role: 'user', content: `e${n}` });
+  const range = (a, b) => { const r = []; for (let i = a; i <= b; i++) r.push(mk(i)); return r; };
+  // snapshot ends at 79; the newest page starts at 90 and has a next; the page before holds 80-89
+  const t = earlierPage([
+    { history: [mk(1)], next: 'log:20' },   // the older page ("Load earlier")
+    { history: range(80, 89), next: null },   // the gap page
+  ], { raw: range(70, 79), fresh: range(90, 92) });
+  await t.fn('c1');
+  assert.deepStrictEqual(t.fetched, ['log:40', 'ignored'], 'the page before the newest one is fetched');
+  assert.deepStrictEqual(t.draws[0].list.map(e => e.ts), [1, ...range(70, 92).map(e => e.ts)], '80-89 are kept, nothing lost or doubled');
+});
+
+function refreshPage({ list, raw, view = null, hubTurns = {}, chat = {}, panelMetrics = { scrollHeight: 1000, scrollTop: 100, clientHeight: 300 } } = {}) {
+  const draws = []; let currentCalls = 0;
+  const panel = Object.assign(el('messages'), panelMetrics);
+  const c = Object.assign({ id: 'c1', agent: 'forge', viewLoaded: 'main', histSeq: 1, histNext: 'log:9', rawHistory: raw }, chat);
+  const chats = { c1: c };
+  const fn = new Function('chats', 'chatViewGet', 'localStorage', 'soloHistoryCurrent', 'soloHistoryDraw', 'document', 'hubTurns', `${extract('soloHistoryRefresh')}\nreturn soloHistoryRefresh;`)(
+    chats, V.chatViewGet, storage(view), async () => { currentCalls++; return list; },
+    (id, l, next, v, o) => { draws.push({ l, next, v, o }); panel.scrollHeight = 1500; }, { getElementById: () => panel }, hubTurns);
+  return { fn, draws, panel, chat: c, calls: () => currentCalls };
+}
+
+test('soloHistoryRefresh redraws when a new (for_owner) entry came in, keeping the scroll when not at the bottom; nothing new: no redraw', async () => {
+  const raw = [{ ts: 1, role: 'user', content: 'a' }, { ts: 2, role: 'assistant', content: 'b' }];
+  const withNew = raw.concat([{ ts: 3, role: 'assistant', content: 'owner reply', for_owner: true }]);
+  const r = refreshPage({ list: withNew, raw });
+  await r.fn('c1');
+  assert.strictEqual(r.draws.length, 1, 'redrawn');
+  assert.deepStrictEqual(r.draws[0].l, withNew);
+  assert.strictEqual(r.draws[0].next, 'log:9', 'the cursor stays');
+  assert.deepStrictEqual(r.draws[0].o, { reset: true, keepScroll: true }, 'not at the bottom: the scroll is kept');
+  assert.strictEqual(r.panel.scrollTop, 600, 'same distance from the bottom after the redraw');
+  const atBottom = refreshPage({ list: withNew, raw, panelMetrics: { scrollHeight: 1000, scrollTop: 690, clientHeight: 300 } });
+  await atBottom.fn('c1');
+  assert.deepStrictEqual(atBottom.draws[0].o, { reset: true, keepScroll: false });
+  const same = refreshPage({ list: raw.map(e => ({ ...e })), raw });
+  await same.fn('c1');
+  assert.strictEqual(same.calls(), 1, 'the list was read');
+  assert.strictEqual(same.draws.length, 0, 'nothing new: no redraw');
+  const busy = refreshPage({ list: withNew, raw, hubTurns: { t1: { chatId: 'c1' } } });
+  await busy.fn('c1');
+  assert.strictEqual(busy.draws.length, 0, 'a followed turn blocks the redraw');
 });
 
 test('D3 busy card: a run whose turn_end was missed (agent not busy) is dropped and no card shows', () => {
@@ -392,16 +452,15 @@ function turnEndPage({ view = null, run = null, followed = false, chat = {}, ori
   const busyRun = run ? { forge: run } : {};
   const hubTurns = followed ? { t1: { chatId: 'c-none' } } : {};
   const body = `${extract('onHubTurnEnd')}\nreturn onHubTurnEnd;`;
-  const fn = new Function('activeTurnEnd', 'openTurns', 'setAgentLive', 'notifyArmed', 'paintNotifyBtns', 'findSoloChat', 'setTimeout', 'compactionRefresh', 'busyRun', 'busyCardRefresh', 'scheduleWorkerStatusPoll', 'hubTurns', 'chatViewIsHubOrigin', 'chatViewGet', 'localStorage', 'soloHistoryLoad', 'finishReattach', 'reattachCheck', 'chats', body)(
+  const fn = new Function('activeTurnEnd', 'openTurns', 'setAgentLive', 'notifyArmed', 'paintNotifyBtns', 'findSoloChat', 'setTimeout', 'compactionRefresh', 'busyRun', 'busyCardRefresh', 'scheduleWorkerStatusPoll', 'hubTurns', 'chatViewIsHubOrigin', 'chatViewGet', 'localStorage', 'soloHistoryRefresh', 'finishReattach', 'reattachCheck', 'chats', body)(
     () => true, {}, () => {}, {}, () => {}, () => chats.c1, () => {}, () => {}, busyRun, () => {}, () => {}, hubTurns, V.chatViewIsHubOrigin, V.chatViewGet, storage(view), (id) => { loads.push(id); return Promise.resolve(); }, () => {}, () => {}, chats);
   return { end: (ev) => fn(Object.assign({ turnId: 't1', agent: 'forge', ok: true, reply: 'r', origin }, ev)), loads, chats };
 }
 
-test('D4 turn_end of a hub-started turn this page never followed reloads the newest page', () => {
+test('D4 turn_end of a hub-started turn this page never followed refreshes the history (soloHistoryRefresh)', () => {
   const byOrigin = turnEndPage({ origin: { kind: 'consultation', from: 'x' } });
   byOrigin.end({});
   assert.deepStrictEqual(byOrigin.loads, ['c1']);
-  assert.ok(byOrigin.chats.c1.historyLoaded, 'historyLoaded holds the reload');
   const byRun = turnEndPage({ run: { turnId: 't1', origin: { kind: 'schedule' }, since: 1, own: false } });   // turn_end carries no origin
   byRun.end({});
   assert.deepStrictEqual(byRun.loads, ['c1'], 'busyRun read before it is deleted');

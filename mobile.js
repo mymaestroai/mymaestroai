@@ -10704,8 +10704,15 @@ function onTurnEnd(ev) {
     // hub marked it for the person (for_owner): the newest page is read back and redrawn, which shows a marked reply
     // (and changes nothing visible otherwise).
     const hg = histGen;
+    const key = (e) => `${e && e.ts}|${e && e.role}|${e && e.content}`;
+    const before = chatHistory.map(key).join('\n');
     rereadHistory(ev.agent).then(replaced => {
-      if (replaced && hg !== histGen && chatOpenFor(ev.agent) && !streams.has(ev.agent) && !reattaches.has(ev.agent)) renderHistory();
+      // redraw only when the re-read brought something new (a marked reply): otherwise the person's place and open cards stay
+      if (replaced && hg !== histGen && chatHistory.map(key).join('\n') !== before && chatOpenFor(ev.agent) && !streams.has(ev.agent) && !reattaches.has(ev.agent)) {
+        const s = $('chat-scroll'), atBottom = !s || s.scrollHeight - s.scrollTop - s.clientHeight < 40, top = s ? s.scrollTop : 0;
+        renderHistory();
+        if (s && !atBottom) s.scrollTop = top;
+      }
     });
   } else if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !ownTurn) {
     setBubbleTime(addAssistantBubble(reply).el, msgTimeLabel(Date.parse(ev.endedAt) || Date.now()));
