@@ -430,8 +430,8 @@
     #plan-warn.on { display: inline-block; }
     #plan-warn.hot { color: #d4588b; background: rgba(212, 88, 139, 0.12); border-color: rgba(212, 88, 139, 0.4); }
     #plan-warn:hover { filter: brightness(1.2); }
-    #agent-list.busy-filter .agent-btn:not(.is-busy) { display: none; }
-    #agent-list.busy-filter .agent-group:not(:has(.agent-btn.is-busy)) { display: none; }
+    #agent-list.busy-filter .agent-btn:not(.is-busy):not(.job-busy) { display: none; }
+    #agent-list.busy-filter .agent-group:not(:has(.agent-btn.is-busy, .agent-btn.job-busy)) { display: none; }
     .agent-btn .cyber-tag {
       display: inline-block;
       margin-right: 5px;

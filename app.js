@@ -53,6 +53,7 @@
           try { const a = await (await fetch('/api/auth/status', { credentials: 'include' })).json(); window.hubNoAccounts = a && a.setupNeeded === true && !a.signedIn; } catch {}
         }
       } catch (e) { /* offline: behave as before */ }
+      try { activeJobsSync(); } catch { /* the Active state is declared further down; its own first sync covers an early call */ }
       paintSetupNotice();
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
@@ -6581,6 +6582,7 @@
       try { localStorage.setItem('hub-active-top', on ? 'on' : 'off'); } catch {}
       activeJobsSync();
       paintActiveSection(true);
+      paintAgentsWorking();   // the chip and the working-only filter follow the switch
     }
     // Put a copy's status in line with its row: done rows say so; a row whose own entry is idle but whose temporary
     // workers run (the hub counts it as working) says "working"; otherwise the real row's status line and dot.
@@ -6593,6 +6595,7 @@
       const dd = copy.querySelector('.agent-status');
       copy.classList.toggle('active-done', row.doneAt != null);
       copy.classList.toggle('active-joby', !!row.jobOnly && row.doneAt == null);
+      if (row.doneAt != null) copy.classList.remove('job-busy');   // a finished row is not "working" for the working-only filter
       if (row.doneAt != null) {
         copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done';
         if (dd) { dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done'; }
@@ -6665,7 +6668,9 @@
       // Only agents that have a row in this list (the access-filtered AGENTS, in one of the shown groups).
       const visible = AGENTS.map(a => a.name).filter(n => document.getElementById('agent-btn-' + n));
       const busy = activeBusyFrom(agentStatus, localBusy, visible);
-      activeJobs = activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible);   // a list older than 60 s is not shown
+      activeJobs = activeTopOn() ? activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible) : {};   // a list older than 60 s is not shown; none with the switch off
+      // An agent with a running job counts as working for the working-only filter (rows get .job-busy; the chip counts them).
+      for (const n of visible) { const b = document.getElementById('agent-btn-' + n); if (b) b.classList.toggle('job-busy', n in activeJobs); }
       const next = activeStep(activeState, { busy, jobs: activeJobs, now: Date.now(), held: activeHeld, enabled: activeTopOn() });
       const membersChanged = force || activeMembersChanged(activeState, next);
       activeState = next;
@@ -6703,7 +6708,8 @@
     // switch is on and the tab is visible; 401/403 (not an admin) stops it for good; after other errors the last good
     // list is kept for at most 60 s. A changed list repaints through paintActiveSection (held / membership rules apply).
     // (Its state is declared with the other Active state above, so an early paint never meets it uninitialised.)
-    function activeJobsWanted() { return !activeJobsStopped && activeTopOn() && document.visibilityState === 'visible'; }
+    // Only a known admin polls (window.hubMe loads asynchronously: unknown = no request; loadMe re-runs the sync).
+    function activeJobsWanted() { return !activeJobsStopped && !!(window.hubMe && window.hubMe.isAdmin === true) && activeTopOn() && document.visibilityState === 'visible'; }
     function activeJobsSync() {
       const want = activeJobsWanted();
       if (want && !activeJobsTimer) { activeJobsPoll(); activeJobsTimer = setInterval(activeJobsPoll, ACTIVE_JOBS_MS); }
@@ -6736,6 +6742,7 @@
       activeJobsSig = sig;
       activeJobList = list;
       paintActiveSection();
+      paintAgentsWorking();   // the chip and the working-only filter count job-only agents (activeJobs as just drawn)
     }
     document.addEventListener('visibilitychange', activeJobsSync);
     activeJobsSync();
@@ -7098,11 +7105,18 @@
       return [...names];
     }
 
+    // busySplit plus the agents the Active section shows as working only through a background job (activeJobs as last drawn).
+    function busySplitJobs() {
+      const split = busySplit(agentStatus, [...localBusy.keys()]);
+      const extra = Object.keys(activeJobs).filter(n => !split.agents.includes(n));
+      return extra.length ? { agents: [...split.agents, ...extra].sort(), workers: split.workers } : split;
+    }
+
     function paintAgentsWorking() {
       const el = document.getElementById('agents-working');
       const list = document.getElementById('agent-list');
       if (!el) return;
-      const split = busySplit(agentStatus, [...localBusy.keys()]);
+      const split = busySplitJobs();
       if (split.agents.length === 0) busyFilterOn = false;
       const any = split.agents.length > 0 || split.workers.length > 0;
       el.classList.toggle('on', any);
@@ -7113,7 +7127,7 @@
     }
 
     function toggleBusyFilter() {
-      if (busySplit(agentStatus, [...localBusy.keys()]).agents.length === 0) return;
+      if (busySplitJobs().agents.length === 0) return;
       busyFilterOn = !busyFilterOn;
       paintAgentsWorking();
     }

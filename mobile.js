@@ -1742,10 +1742,16 @@ async function resetPacing() {
   }
 }
 
+// Busy agents plus those the Active section shows as working only through a running background job (what the working filter keeps).
+function workingNames() {
+  const jobs = activeJobsNow();
+  return agents.map(a => a.name).filter(n => isBusy(n) || n in jobs);
+}
+
 function renderWorkingChip() {
   const chip = $('working-chip');
   if (!chip) return;
-  const names = busyNames();
+  const names = workingNames();
   if (!names.length) { workingFilter = false; chip.classList.remove('on', 'filtering'); chip.textContent = ''; return; }
   const label = names.map(displayName).join(', ');
   chip.textContent = workingFilter ? `Showing only ${label} ✕` : `${label} working…`;
@@ -1848,7 +1854,7 @@ const ACTIVE_JOBS_TIMEOUT_MS = 10000;
 function activeJobsFresh() { return Date.now() - activeJobsOkAt <= ACTIVE_JOBS_STALE_MS; }
 let activeJobsTick = null;
 function activeJobsWanted() {
-  return !activeJobsStopped && activeTopOn() && document.visibilityState === 'visible';
+  return !activeJobsStopped && isAdmin() && activeTopOn() && document.visibilityState === 'visible';   // members never ask (isAdmin() is false once /api/me says so)
 }
 function activeJobsSync() {
   const want = activeJobsWanted();
@@ -1884,6 +1890,7 @@ async function activeJobsPoll() {
   if (screen === 'agents') renderAgents();
 }
 function activeJobsNow() {
+  if (!activeTopOn()) return {};   // switch off: no job counts as working
   return activeJobsFrom(activeJobsFresh() ? activeJobList : [], agents.map(a => a.name));   // a list older than 60 s is not shown
 }
 // The elapsed time changes between polls: relabel the drawn rows in place (no redraw).
@@ -1928,7 +1935,7 @@ function renderAgents() {
   for (const c of extra) groups.push({ key: c, title: c, items: agents.filter(a => a.category === c) });
   let html = '';
   for (const g of groups) {
-    if (workingFilter) g.items = g.items.filter(a => isBusy(a.name));
+    if (workingFilter) g.items = g.items.filter(a => isBusy(a.name) || a.name in activeJobs);
     if (!g.items.length) continue;
     const isCollapsed = !workingFilter && !!collapsed[g.key];
     html += `<button class="group-title" data-group="${esc(g.key)}"><span>${esc(g.title)} (${g.items.length})</span><span>${isCollapsed ? '&#x25B8;' : '&#x25BE;'}</span></button>`;

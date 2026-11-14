@@ -168,9 +168,12 @@ const DESK_SRC = cut(app, 'const ACTIVE_JOBS_MS', 'function activeTopOn()') + '\
 function desk(o) {
   o = o || {};
   const clock = { now: 1000000 };
-  const rec = { paints: 0, fetches: [], timers: [], cleared: [], listeners: {} };
+  const rec = { paints: 0, chips: 0, fetches: [], timers: [], cleared: [], listeners: {} };
   const resp = { next: o.first || { status: 200, ok: true, jobs: [] } };
   const env = {
+    // changed: the poll only runs for a known admin (window.hubMe.isAdmin === true); o.me overrides the signed-in user (null = not known yet)
+    window: { hubMe: o.me === undefined ? { isAdmin: true } : o.me },
+    paintAgentsWorking: () => { rec.chips++; },
     activeTopOn: () => (o.on === undefined ? true : o.on),
     document: { visibilityState: 'hidden', addEventListener: (ev, fn) => { rec.listeners[ev] = fn; }, createElement: () => el('') },
     fetch: async (url, opts) => {
@@ -345,7 +348,7 @@ test('desktop activeDress: a jobOnly row gets class active-joby and a hollow dot
 test('desktop paintActiveSection passes jobs from the polled list to activeStep', () => {
   const p = cut(app, 'function paintActiveSection(', "// Agents' detached background jobs (GET /api/jobs");
   assert.ok(app.indexOf('const ACTIVE_JOBS_MS') < app.indexOf('function paintActiveSection('), 'the job state exists before any paint');
-  assert.ok(p.includes('activeJobs = activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible);'), 'changed (review r1): a list older than 60 s is not shown');
+  assert.ok(p.includes('activeJobs = activeTopOn() ? activeJobsFrom(activeJobsFresh() ? activeJobList : [], visible) : {};'), 'changed: a list older than 60 s is not shown, none with the switch off');
   assert.ok(/activeStep\(activeState, \{ busy, jobs: activeJobs, now: Date\.now\(\)/.test(p));
   assert.ok(app.includes('activeDressJob(copy, row);'));
   const save = cut(app, 'function saveActiveTop(', 'function activeDress(');
@@ -365,6 +368,7 @@ function phone(o) {
   const resp = { next: o.first || { status: 200, ok: true, jobs: [] } };
   const listEl = { querySelectorAll: () => o.rows || [] };
   const env = {
+    isAdmin: () => o.admin !== false,   // changed: the page's isAdmin() (false for a member once /api/me answered)
     activeTopOn: () => (o.on === undefined ? true : o.on),
     document: { visibilityState: 'hidden', addEventListener: (ev, fn) => { rec.listeners[ev] = fn; } },
     api: async (url) => {
@@ -584,4 +588,136 @@ test('both pages drop a superseded answer after the body read as well', () => {
     assert.ok(/\} catch \{\s*if \(seq !== activeJobsSeq\) return;/.test(src), 'and on failure');
     assert.ok(/finally \{\s*if \(to\) clearTimeout\(to\);/.test(src), 'the timeout is cleared on every path');
   }
+});
+
+// ── admin-only polling and the working-only filter ───────────────────────────────────────────────
+
+test('desktop poll: a member never fetches /api/jobs (not at load, not on visibilitychange, not on the switch)', async () => {
+  const m = desk({ me: { isAdmin: false } });
+  assert.strictEqual(m.api.activeJobsWanted(), false);
+  await m.api.activeJobsPoll(); m.api.activeJobsSync();
+  m.rec.listeners.visibilitychange();
+  m.env.document.visibilityState = 'hidden'; m.env.document.visibilityState = 'visible';
+  m.rec.listeners.visibilitychange();
+  m.api.activeJobsSync();   // what saveActiveTop does for the switch
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(m.rec.fetches.length, 0);
+  assert.strictEqual(m.rec.timers.length, 0);
+  assert.strictEqual(m.api.stopped(), false, 'nothing was asked, so nothing was refused');
+});
+
+test('desktop poll: no request until the signed-in user is known; an admin that becomes known starts it', async () => {
+  const d = desk({ me: null });
+  d.api.activeJobsSync(); await d.api.activeJobsPoll();
+  d.rec.listeners.visibilitychange();
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(d.rec.fetches.length, 0, 'unknown user: no fetch');
+  assert.strictEqual(d.api.activeJobsWanted(), false);
+  d.env.window.hubMe = { isAdmin: true };   // loadMe() sets this and runs activeJobsSync()
+  d.api.activeJobsSync();
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(d.rec.fetches.length, 1, 'a known admin polls at once');
+  assert.strictEqual(d.rec.timers.length, 1);
+  const lm = cut(app, 'async function loadMe()', 'paintSetupNotice();');
+  assert.ok(lm.indexOf('window.hubMe = await r.json()') > 0 && lm.indexOf('window.hubMe = await r.json()') < lm.indexOf('activeJobsSync()'), 'loadMe re-runs the sync once hubMe is set');
+});
+
+test('phone poll: a member never fetches /api/jobs (not at load, not on visibilitychange, not on the switch)', async () => {
+  const m = phone({ admin: false });
+  assert.strictEqual(m.api.activeJobsWanted(), false);
+  await m.api.activeJobsPoll(); m.api.activeJobsSync();
+  m.env.document.visibilityState = 'visible';
+  m.rec.listeners.visibilitychange();
+  m.api.activeJobsSync();   // what toggleActiveTop does
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(m.rec.apis.length, 0);
+  assert.strictEqual(m.rec.timers.length, 0);
+  assert.ok(/await loadMe\(\);[\s\S]{0,400}?await loadAgents\(\);\s*activeJobsSync\(\);/.test(mob), 'hubMe is loaded before the poll starts');
+});
+
+// The phone's renderAgents run for real against stubs: the working-only filter with a job-only agent.
+const PH_FILTER = cut(mob, '// Busy agents plus those the Active section shows', 'function updateDots()');
+function phoneFilter(o) {
+  const chip = { cls: new Set(), textContent: '', classList: { add: (c) => chip.cls.add(c), remove: (...cs) => cs.forEach(c => chip.cls.delete(c)), toggle: (c, f) => (f ? chip.cls.add(c) : chip.cls.delete(c)) } };
+  const listEl = { innerHTML: '', addEventListener() {}, firstChild: null, querySelector: () => null };
+  const env = {
+    $: (id) => (id === 'working-chip' ? chip : id === 'agents-list' ? listEl : null),
+    agents: [{ name: 'sam', category: 'worker' }, { name: 'robin', category: 'worker' }, { name: 'kim', category: 'lead' }],
+    GROUPS: [{ key: 'lead', title: 'Leads' }, { key: 'worker', title: 'Workers' }], collapsed: {},
+    live: o.live || {}, streams: new Map(), unread: {}, statusKnown: true, isBusy: (n) => !!(o.live && o.live[n] && o.live[n].busy),
+    busyText: () => 'busy', shortModel: (m) => m, displayName: (n) => n,
+    localStorage: { getItem: () => null }, matchMedia: () => ({ matches: true }), screen: 'agents',
+    document: { visibilityState: 'visible', addEventListener() {} }, isAdmin: () => true, api: async () => ({}), setInterval: () => 0, clearInterval() {},
+    activeBusyFrom: L.activeBusyFrom, activeJobsFrom: L.activeJobsFrom, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
+    activeInitial: L.activeInitial, activeStep: L.activeStep, activeMembersChanged: L.activeMembersChanged, activeTitle: L.activeTitle,
+  };
+  const names = Object.keys(env);
+  const api = new Function(...names, 'let workingFilter = false;\n' + ESC_SRC + '\n' + PH_FILTER + `
+    return { renderAgents, setFilter: (v) => { workingFilter = v; }, setList: (l) => { activeJobList = l; activeJobsOkAt = Date.now(); } };`)(...names.map(n => env[n]));
+  return { api, chip, listEl };
+}
+const groupRows = (html) => html.slice(html.indexOf('data-group="worker"')).match(/data-agent="([^"]+)"/g) || [];
+
+test('phone working filter: an agent with only a running job is listed in its group and the empty message is not shown', () => {
+  const p = phoneFilter({});
+  p.api.setList([JOB('1', 'sam', 'build')]);
+  p.api.setFilter(true);
+  p.api.renderAgents();
+  assert.ok(!p.listEl.innerHTML.includes('No agent is working right now'), p.listEl.innerHTML);
+  assert.ok(p.listEl.innerHTML.includes('Workers (1)'), 'the group count agrees with the Active section');
+  assert.ok(!p.listEl.innerHTML.includes('Leads'), 'agents without work stay hidden');
+  assert.ok(groupRows(p.listEl.innerHTML).includes('data-agent="sam"'));
+  assert.ok(!p.listEl.innerHTML.includes('data-agent="robin"'));
+  assert.ok(p.chip.cls.has('on') && p.chip.cls.has('filtering') && p.chip.textContent.includes('sam'));
+});
+
+test('phone working filter: no jobs keeps the old behaviour (only busy agents; the empty message when none)', () => {
+  const none = phoneFilter({});
+  none.api.setFilter(true);
+  none.api.renderAgents();
+  assert.ok(none.listEl.innerHTML.includes('Leads') && none.listEl.innerHTML.includes('data-agent="robin"'), 'nobody working: the filter resets itself and the whole list shows (as before)');
+  const busy = phoneFilter({ live: { robin: { busy: true } } });
+  busy.api.setFilter(true);
+  busy.api.renderAgents();
+  assert.ok(busy.listEl.innerHTML.includes('Workers (1)') && groupRows(busy.listEl.innerHTML).includes('data-agent="robin"') && !busy.listEl.innerHTML.includes('data-agent="sam"'));
+});
+
+// The desktop filter: busySplitJobs / paintAgentsWorking / toggleBusyFilter and the CSS that hides the other rows.
+const DK_FILTER = cut(app, 'function busyIsWorker(', 'function fmtElapsedShort(') + '\n' + cut(app, '// busySplit plus the agents the Active section shows', '// Hub-wide worker freshness');
+function deskFilter(o) {
+  const mk = () => { const s = new Set(); return { cls: s, textContent: '', classList: { toggle: (c, f) => (f ? s.add(c) : s.delete(c)) } }; };
+  const els = { 'agents-working': mk(), 'agent-list': mk() };
+  const env = { document: { getElementById: (id) => els[id] || null }, agentStatus: o.status || {}, localBusy: new Map(), activePaintSoon() {} };
+  const names = Object.keys(env);
+  const api = new Function(...names, 'let busyFilterOn = false; let activeJobs = {};\n' + DK_FILTER + `
+    return { toggleBusyFilter, paintAgentsWorking, setJobs: (j) => { activeJobs = j; }, on: () => busyFilterOn };`)(...names.map(n => env[n]));
+  return { api, els };
+}
+
+test('desktop working filter: an agent with only a running job counts as working (chip, toggle, filter class)', () => {
+  const d = deskFilter({});
+  d.api.setJobs(L.activeJobsFrom([JOB('1', 'sam', 'build')], ['sam']));
+  d.api.toggleBusyFilter();
+  assert.strictEqual(d.api.on(), true, 'the filter can be switched on with only a job running');
+  assert.ok(d.els['agent-list'].cls.has('busy-filter'));
+  assert.ok(d.els['agents-working'].cls.has('on') && d.els['agents-working'].textContent.startsWith('1 agent working'), d.els['agents-working'].textContent);
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  assert.ok(html.includes('#agent-list.busy-filter .agent-btn:not(.is-busy):not(.job-busy) { display: none; }'));
+  assert.ok(html.includes('#agent-list.busy-filter .agent-group:not(:has(.agent-btn.is-busy, .agent-btn.job-busy)) { display: none; }'));
+  const p = cut(app, 'function paintActiveSection(', "// Agents' detached background jobs (GET /api/jobs");
+  assert.ok(p.includes("classList.toggle('job-busy', n in activeJobs)"), 'rows of agents with a job are marked as working');
+  assert.ok(cut(app, 'async function activeJobsPoll()', 'document.addEventListener(\'visibilitychange\', activeJobsSync);').includes('paintActiveSection();\n      paintAgentsWorking();'), 'a new list refreshes the chip');
+  d.api.setJobs({});
+  d.api.paintAgentsWorking();
+  assert.strictEqual(d.api.on(), false, 'the job ended: the filter switches itself off');
+});
+
+test('desktop working filter: without jobs nothing changes (nothing busy: toggle is a no-op; busy agents count as before)', () => {
+  const none = deskFilter({});
+  none.api.toggleBusyFilter();
+  assert.strictEqual(none.api.on(), false);
+  const busy = deskFilter({ status: { robin: { busy: true } } });
+  busy.api.toggleBusyFilter();
+  assert.strictEqual(busy.api.on(), true);
+  assert.ok(busy.els['agents-working'].textContent.startsWith('1 agent working'));
 });
