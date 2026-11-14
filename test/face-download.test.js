@@ -400,6 +400,8 @@ test('routes: GET /api/faces lists the catalogue entries that are not installed 
   const after = (await call(home, '/api/faces')).json();
   assert.deepStrictEqual(after.packs.map(p => p.id), ['bird']);
   assert.deepStrictEqual(after.available.map(a => a.id), ['crow']);
+  const m = JSON.parse(require('fs').readFileSync(require('path').join(home, 'faces', 'bird', 'manifest.json'), 'utf8'));
+  assert.strictEqual(after.packs[0].name, typeof m.name === 'string' && m.name ? m.name : 'Bird', 'an installed catalogue pack without its own name keeps the catalogue name');
 });
 
 test('the real route default lists the owl as available on an empty hub', async () => {

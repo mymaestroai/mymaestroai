@@ -10,7 +10,7 @@ Object.assign(globalThis, require('../lib/ui-voice'));
 const CD = require('../lib/ui-call-display');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const tick = async (n = 12) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
-const MB = 1048576;
+const MB = 1000000;
 
 function fakeDom() {
   const doc = { activeElement: null };

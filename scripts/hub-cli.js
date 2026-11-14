@@ -369,7 +369,7 @@ const commands = {
         if (arg('id')) fail('--id is only for installing from a folder.');
         const download = require(path.join(DIR, 'lib', 'faces', 'download'));
         const entry = require(path.join(DIR, 'lib', 'faces', 'catalog')).catalogEntry(folder);
-        const mb = (n) => Math.round(n / 1048576);
+        const mb = (n) => Math.round(n / 1000000);
         let st = download.startDownload(entry.id, { home: HUB_HOME });
         if (st.state === 'busy') fail(st.error);
         if (st.state === 'done') { out(`The character pack "${entry.id}" is already installed.`); return; }
@@ -391,7 +391,7 @@ const commands = {
         if (!shownInstalling) { out(`Downloading the ${entry.name.toLowerCase()}\u2026 100% \u00b7 ${mb(st.total)} of ${mb(st.total)} MB`); out('Installing\u2026'); }
         const pack = faces.getPack(entry.id, { home: HUB_HOME });
         const total = pack ? Object.values(pack.files).reduce((a, f) => a + f.size, 0) : st.total;
-        out(`Installed the character pack "${entry.id}" (${pack ? Object.keys(pack.files).length : '?'} files, ${(total / 1048576).toFixed(1)} MB) in ${path.join(HUB_HOME, 'faces', entry.id)}.`);
+        out(`Installed the character pack "${entry.id}" (${pack ? Object.keys(pack.files).length : '?'} files, ${(total / 1000000).toFixed(1)} MB) in ${path.join(HUB_HOME, 'faces', entry.id)}.`);
         out('Choose it per device in the voice panel, or as an agent\'s default on the agent settings page.');
         return;
       }

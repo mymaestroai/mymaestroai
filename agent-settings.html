@@ -954,7 +954,7 @@
     for (const p of Array.isArray(available) ? available : []) {
       if (!p || typeof p.id !== 'string' || seen.has(p.id)) continue;
       seen.add(p.id);
-      const mb = Math.round((Number(p.size) || 0) / 1048576);
+      const mb = Math.round((Number(p.size) || 0) / 1000000);
       out.push({ value: 'pack:' + p.id, label: (typeof p.name === 'string' && p.name ? p.name : p.id) + (mb > 0 ? ' · downloads ' + mb + ' MB' : ' · downloads on first use') });
     }
     if (typeof current === 'string' && current.startsWith('pack:') && !out.some(o => o.value === current)) out.push({ value: current, label: current.slice(5) + ' (unavailable: not installed)' });
