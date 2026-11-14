@@ -458,7 +458,9 @@ test('phone: devicechange during a call re-reads the open mic and re-applies; on
 test('phone: __voiceOut reports the output and label; the panel paints and saves both selects', () => {
   assert.ok(mob.includes('...voiceOutputNow(), gainDb'));
   assert.ok(mob.includes("set('vp-loudness', voiceLoudnessFor(voicePrefsNow(), 'speaker'));") && mob.includes("set('vp-loudness-bt', voiceLoudnessFor(voicePrefsNow(), 'bluetooth'));"));
-  assert.ok(mob.includes("save({ loudnessBt: Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, e.target.value) ? e.target.value : 'normal' })"));
+  // changed: the panel and the Voice sheet share voiceLoudnessSave, which holds the validation and the default
+  assert.ok(mob.includes("voiceLoudnessSave('loudnessBt', e.target.value)"));
+  assert.ok(mob.includes("(bt ? 'normal' : 'louder')") && mob.includes('Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, value)'));
 });
 
 // ── normalised voices (header X-Voice-Normalized: 1): less boost, same -1 dBFS ceiling ──

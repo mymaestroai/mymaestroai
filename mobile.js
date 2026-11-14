@@ -8554,6 +8554,14 @@ window.addEventListener('offline', () => { const vc = typeof voiceCall !== 'unde
 window.addEventListener('online', () => { const vc = typeof voiceCall !== 'undefined' ? voiceCall : null; if (vc && vc.link) vc.link.online(); });
 document.addEventListener('freeze', () => voiceLeaveApp('freeze'));
 window.addEventListener('pageshow', () => { if (!document.hidden && voiceCallBgNote && !voiceCall) voiceEndedBar(true); });
+// Loudness for the speaker and for Bluetooth / car: one save for #voice-panel and the Voice sheet. kind is 'loudness' (speaker) or 'loudnessBt'.
+const VOICE_LOUDNESS_OPTIONS = '<option value="normal">Normal</option><option value="louder">Louder</option><option value="loudest">Loudest</option>';
+function voiceLoudnessSave(kind, value) {
+  const bt = kind === 'loudnessBt';
+  voicePrefsSave({ [bt ? 'loudnessBt' : 'loudness']: Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, value) ? value : (bt ? 'normal' : 'louder') });
+  voiceCallApplyPrefs();   // a call that is up takes it at once (Bluetooth: when it is the current output, voiceLoudSync)
+  voiceMicPaint(); voicePanelPaint(); paintVoiceSheet();
+}
 function voiceSheet() {
   let sh = $('voice-sheet');
   if (sh) return sh;
@@ -8588,6 +8596,10 @@ function voiceSheet() {
     '<label class="vs-row" for="vs-speed"><span>Voice speed</span><b class="vs-speed-val"></b></label>' +
     '<input type="range" id="vs-speed" class="vs-level vs-speed" min="0.75" max="1.5" step="0.05">' +
     '<p class="vs-hint">' + VOICE_SPEED_HINT + '</p>' +
+    '<label class="vs-row" for="vs-loudness"><span>Voice loudness, speaker</span></label>' +
+    '<select id="vs-loudness" class="vs-btn">' + VOICE_LOUDNESS_OPTIONS + '</select>' +
+    '<label class="vs-row" for="vs-loudness-bt"><span>Voice loudness, Bluetooth / car</span></label>' +
+    '<select id="vs-loudness-bt" class="vs-btn">' + VOICE_LOUDNESS_OPTIONS + '</select>' +
     '<button type="button" class="vs-btn vs-room">Room check</button>' +
     '<div class="vs-room-out" role="status" aria-live="polite"></div>' +
     '<label class="vs-row" for="vs-echo"><span>Echo guard after replies</span></label>' +
@@ -8617,6 +8629,8 @@ function voiceSheet() {
   const speed = sh.querySelector('.vs-speed');
   speed.addEventListener('input', () => { sh.querySelector('.vs-speed-val').textContent = voiceSpeedLabel(speed.value); });
   speed.addEventListener('change', () => voicePrefsSave({ voiceSpeed: voiceCleanSpeed(speed.value) }));
+  sh.querySelector('#vs-loudness').addEventListener('change', (e) => voiceLoudnessSave('loudness', e.target.value));
+  sh.querySelector('#vs-loudness-bt').addEventListener('change', (e) => voiceLoudnessSave('loudnessBt', e.target.value));
   sh.querySelector('.vs-activity').addEventListener('change', (e) => voicePrefsSave({ speakActivity: !!e.target.checked }));
   sh.querySelector('#vs-interrupt').addEventListener('change', (e) => voiceDispSetInterrupt(!!e.target.checked));
   for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { voicePrefsSave({ mode: e.target.value }); voiceMicPaint(); paintVoiceSheet(); } });
@@ -8645,6 +8659,10 @@ function paintVoiceSheet() {
   if (document.activeElement !== pauseEl) pauseEl.value = String(voiceEndPauseNow());
   const speedEl = sh.querySelector('.vs-speed');
   if (document.activeElement !== speedEl) { speedEl.value = String(voiceSpeedNow()); sh.querySelector('.vs-speed-val').textContent = voiceSpeedLabel(voiceSpeedNow()); }
+  for (const [id, kind] of [['vs-loudness', 'speaker'], ['vs-loudness-bt', 'bluetooth']]) {
+    const el = sh.querySelector('#' + id);
+    if (el && document.activeElement !== el) el.value = voiceLoudnessFor(p, kind);
+  }
   sh.querySelector('.vs-activity').checked = !!p.speakActivity;
   const intrEl = sh.querySelector('#vs-interrupt');
   if (intrEl) intrEl.checked = typeof CallDisplay !== 'undefined' && CallDisplay.loadDisplayPrefs(localStorage).interrupt === true;
@@ -8772,8 +8790,8 @@ function voicePanelWire() {
   const speed = $('vp-speed');
   speed?.addEventListener('input', () => { const l = p.querySelector('.vp-speed-val'); if (l) l.textContent = voiceSpeedLabel(speed.value); });
   speed?.addEventListener('change', () => save({ voiceSpeed: voiceCleanSpeed(speed.value) }));
-  $('vp-loudness-bt')?.addEventListener('change', (e) => save({ loudnessBt: Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, e.target.value) ? e.target.value : 'normal' }));   // applied at once when Bluetooth is the current output (voiceLoudSync)
-  $('vp-loudness')?.addEventListener('change', (e) => save({ loudness: Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, e.target.value) ? e.target.value : 'louder' }));   // save() reaches a call that is up (voiceCallApplyPrefs)
+  $('vp-loudness-bt')?.addEventListener('change', (e) => voiceLoudnessSave('loudnessBt', e.target.value));   // applied at once when Bluetooth is the current output (voiceLoudSync)
+  $('vp-loudness')?.addEventListener('change', (e) => voiceLoudnessSave('loudness', e.target.value));   // reaches a call that is up (voiceCallApplyPrefs)
   pause?.addEventListener('change', () => save({ endPause: Number(pause.value) }));
   wait?.addEventListener('change', () => save({ continueWait: Number(wait.value) }));
   const echo = $('vp-echo');
