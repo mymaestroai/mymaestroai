@@ -107,13 +107,13 @@ test('historyPage: an older message with the same words as one at the start of t
   const t = (s) => new Date(Date.parse('2026-03-01T00:00:00Z') + s * 1000).toISOString();
   let id = 0;
   const row = (s, kind, text, turn) => ({ id: ++id, ts: t(s), kind, text, origin: 'user', turn_id: turn, meta: {} });
-  // hours old; 50 s before the log's first "Yes" (review r2, GPT-6: a separate reply close by); and the reply saved in
-  // both stores 3 ms apart (the archive row first): only that last one is the same message
+  // hours old; 50 s before the log's first "Yes" (review r2, GPT-6: a separate reply close by); and a "Done." 3 ms before
+  // the log's first "Done." (review r3, GPT-6: words and time cannot tell a copy from a second message, so none is dropped)
   const rows = [row(60, 'user', 'Yes', 'a'), row(120, 'assistant', 'Done.', 'a'), row(30000, 'assistant', 'Yes', 'b'), row(30050, 'assistant', 'Done.', 'c')];
   const log = [{ ts: t(30050.003), role: 'assistant', content: 'Done.' }, { ts: t(30100), role: 'assistant', content: 'Yes' }, { ts: t(36000), role: 'user', content: 'later' }, { ts: t(36001), role: 'assistant', content: 'ok' }];
   const p = historyPage({ logEntries: log, archive: fakeArchive(rows), view: 'all', limit: 50 });
-  assert.deepStrictEqual(p.history.map(e => `${e.archived ? 'A' : 'L'}:${e.content}`), ['A:Yes', 'A:Done.', 'A:Yes', 'L:Done.', 'L:Yes', 'L:later', 'L:ok'],
-    'the hours-old "Yes" and the "Yes" 50 s before the log stay; only the copy saved 3 ms before its log line is dropped');
+  assert.deepStrictEqual(p.history.map(e => `${e.archived ? 'A' : 'L'}:${e.content}`), ['A:Yes', 'A:Done.', 'A:Yes', 'A:Done.', 'L:Done.', 'L:Yes', 'L:later', 'L:ok'],
+    'no archive row is dropped for matching words near the seam');
 });
 
 // review r2 (GPT-6 BLOCK 2): entries saved in the same millisecond must not be skipped (or repeated) at a page cut
@@ -196,7 +196,7 @@ test('historyPage: nothing from before the last Clear comes back from the archiv
   assert.strictEqual(shut.next, null);
 });
 
-test('historyPage: the archive continues behind the chat log, no duplicate at the seam, hidden turns hidden, for_owner kept, next null at the start', () => {
+test('historyPage: the archive continues behind the chat log, rows saved after the log\'s oldest entry stay out, hidden turns hidden, for_owner kept, next null at the start', () => {
   clock = Date.parse('2026-02-01T00:00:00Z');
   const t = (n) => new Date(Date.parse('2026-01-01T00:00:00Z') + n * 1000).toISOString();
   let id = 0;
@@ -209,7 +209,7 @@ test('historyPage: the archive continues behind the chat log, no duplicate at th
     row(5, 'user', '[Scheduled task — started by the hub scheduler] "nightly"', 't3', 'schedule'),
     row(6, 'assistant', 'please decide', 't3'),
     row(7, 'user', 'robin follows up', 't4', 'interjection'),
-    row(8, 'user', 'owner message at the seam', 't5'),       // also in the chat log
+    row(8.6, 'user', 'owner message at the seam', 't5'),     // also in the chat log (archived just after its log line)
     row(9, 'assistant', 'reply at the seam', 't5'),          // also in the chat log
   ];
   const log = [
@@ -230,7 +230,7 @@ test('historyPage: the archive continues behind the chat log, no duplicate at th
   assert.strictEqual(arch[3].for_owner, true);
   assert.deepStrictEqual(arch[2].origin, { kind: 'schedule' });
   assert.ok(!('origin' in arch[4]) && !('origin' in arch[0]), 'user and interjection rows carry no origin');
-  assert.strictEqual(main.history.filter(e => e.content === 'owner message at the seam').length, 1, 'no duplicate at the seam');
+  assert.strictEqual(main.history.filter(e => e.content === 'owner message at the seam').length, 1, 'no duplicate at the seam: archive rows start before the log\'s oldest entry');
 
   // the all view shows the hidden turn too
   const all = historyPage({ logEntries: log, archive: fakeArchive(rows, ['t3']), view: 'all', limit: 50 });

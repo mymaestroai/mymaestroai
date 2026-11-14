@@ -6527,13 +6527,17 @@
     }
     // The chat's loaded history brought up to date: the newest page again, and the pages before it until they reach what
     // is already loaded (more than a page may have come in since), then the loaded entries older than that in front.
+    // null when 20 pages still do not reach it: the caller keeps what it shows rather than leave a gap (review r3).
     async function soloHistoryCurrent(chat, view) {
+      const MAX_PAGES = 20;
       const tsOf = (e) => { const n = e && (typeof e.ts === 'number' ? e.ts : Date.parse(e.ts)); return Number.isFinite(n) ? n : null; };
       const raw = chat.rawHistory || [];
       const lastKnown = raw.length ? tsOf(raw[raw.length - 1]) : null;
       let page = await soloHistoryFetch(chat.agent, view, null);
       let fresh = page.history;
-      for (let tries = 0; tries < 5 && page.next != null && lastKnown !== null && fresh.length && tsOf(fresh[0]) !== null && tsOf(fresh[0]) > lastKnown; tries++) {
+      const short = () => page.next != null && lastKnown !== null && fresh.length && tsOf(fresh[0]) !== null && tsOf(fresh[0]) > lastKnown;
+      for (let pages = 1; short(); pages++) {
+        if (pages >= MAX_PAGES) return null;
         page = await soloHistoryFetch(chat.agent, view, page.next);
         fresh = page.history.concat(fresh);
       }
@@ -6551,6 +6555,7 @@
       const seq = chat.histSeq;
       let list;
       try { list = await soloHistoryCurrent(chat, view); } catch (e) { console.warn('[history] Failed to refresh:', e); return; }
+      if (list === null) return;   // too much came in to join up: the display stays (it never shows a gap)
       if (!chats[chatId] || chat.histSeq !== seq || chat.controller || chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) return;
       const key = (e) => `${e && e.ts}|${e && e.role}|${e && e.content}`;
       const had = new Set((chat.rawHistory || []).map(key));
@@ -6679,6 +6684,8 @@
         // rawHistory is only the opening snapshot: what was sent or received since is read again (soloHistoryCurrent).
         const base = await soloHistoryCurrent(chat, view);
         if (!chats[chatId] || chat.histSeq !== seq) return;
+        // too much came in since the chat opened to join it up: the display stays as it is (no gap drawn)
+        if (base === null) { hubToast('Many new messages since this chat opened: open it again to load earlier ones'); return; }
         // A reply started while the pages were loading: a redraw would wipe it (re-checked after all the awaits).
         if (chat.controller || chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) { hubToast('Load earlier once the reply is done'); return; }
         const panel = document.getElementById(`messages-${chatId}`);

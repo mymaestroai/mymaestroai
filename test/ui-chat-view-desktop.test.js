@@ -401,6 +401,24 @@ test('Load earlier: a gap between the snapshot and the server\'s newest page is 
   assert.deepStrictEqual(t.draws[0].list.map(e => e.ts), [1, ...range(70, 92).map(e => e.ts)], '80-89 are kept, nothing lost or doubled');
 });
 
+// review r3 (GPT-6 BLOCK 2): a gap wider than the page limit must never be drawn as if it were joined up
+test('Load earlier: a gap that 20 pages do not close keeps the display as it is (a toast, no redraw)', async () => {
+  const mk = (n) => ({ ts: n, role: 'user', content: `e${n}` });
+  const gap = []; for (let i = 0; i < 30; i++) gap.push({ history: [mk(85)], next: `log:g${i}` });   // never reaches 79
+  const raw = [mk(78), mk(79)];
+  const t = earlierPage([{ history: [mk(1)], next: 'log:20' }, ...gap], { raw, fresh: [mk(90)] });
+  await t.fn('c1');
+  assert.strictEqual(t.fetched.length, 1 + 19, 'the older page, then 19 pages before the newest one (20 in all with it)');
+  assert.strictEqual(t.draws.length, 0, 'nothing drawn: no gap');
+  assert.strictEqual(t.toasts.length, 1);
+  assert.match(t.toasts[0], /open it again/);
+  assert.strictEqual(t.chat.histNext, 'log:40', 'the cursor is kept');
+  assert.deepStrictEqual(t.chat.rawHistory, raw, 'the loaded history is kept');
+  const r = refreshPage({ list: null, raw });
+  await r.fn('c1');
+  assert.strictEqual(r.draws.length, 0, 'the refresh draws nothing either');
+});
+
 function refreshPage({ list, raw, view = null, hubTurns = {}, chat = {}, panelMetrics = { scrollHeight: 1000, scrollTop: 100, clientHeight: 300 } } = {}) {
   const draws = []; let currentCalls = 0;
   const panel = Object.assign(el('messages'), panelMetrics);
