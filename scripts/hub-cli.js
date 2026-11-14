@@ -17,7 +17,7 @@
  *   mymaestro reset-2fa <email>      turn off two-factor for an account (lost phone); it is set up again at next sign-in
  *   mymaestro service install|remove start by itself at boot (Linux) or login (Mac)
  *   mymaestro move-home [--yes]      move shared folders (share/, users/...) out of your home folder into the install; --yes does it
- *   mymaestro face install <folder> [--id <slug>]   add a character pack (the voice call face) from a folder
+ *   mymaestro face install <folder|owl> [--id <slug>]   add a character pack (the voice call face) from a folder, or download one (owl)
  *   mymaestro face list              the installed character packs
  *   mymaestro face remove <id> [--yes]   move a pack to <hub home>/faces-removed (never deleted; restore with face install)
  *   mymaestro uninstall              remove the service, this command and the private Node; keeps the folder and data
@@ -364,7 +364,37 @@ const commands = {
     const faces = require(path.join(DIR, 'lib', 'faces', 'packs'));
     if (sub === 'install') {
       const folder = argv[2] && !argv[2].startsWith('--') ? argv[2] : null;
-      if (!folder) fail('Usage: mymaestro face install <folder> [--id <slug>]');
+      if (!folder) fail('Usage: mymaestro face install <folder|owl> [--id <slug>]');
+      if (!fs.existsSync(folder) && require(path.join(DIR, 'lib', 'faces', 'catalog')).catalogEntry(folder)) {
+        if (arg('id')) fail('--id is only for installing from a folder.');
+        const download = require(path.join(DIR, 'lib', 'faces', 'download'));
+        const entry = require(path.join(DIR, 'lib', 'faces', 'catalog')).catalogEntry(folder);
+        const mb = (n) => Math.round(n / 1048576);
+        let st = download.startDownload(entry.id, { home: HUB_HOME });
+        if (st.state === 'busy') fail(st.error);
+        if (st.state === 'done') { out(`The character pack "${entry.id}" is already installed.`); return; }
+        let lastLine = 0, shownInstalling = false;
+        while (st.state === 'downloading' || st.state === 'installing') {
+          const now = Date.now();
+          if (st.state === 'downloading' && now - lastLine >= 1000) {
+            lastLine = now;
+            out(`Downloading the ${entry.name.toLowerCase()}\u2026 ${Math.floor(st.received * 100 / st.total)}% \u00b7 ${mb(st.received)} of ${mb(st.total)} MB`);
+          } else if (st.state === 'installing' && !shownInstalling) {
+            shownInstalling = true;
+            out(`Downloading the ${entry.name.toLowerCase()}\u2026 100% \u00b7 ${mb(st.total)} of ${mb(st.total)} MB`);
+            out('Installing\u2026');
+          }
+          await new Promise(res => setTimeout(res, 250));
+          st = download.downloadStatus(entry.id, { home: HUB_HOME });
+        }
+        if (st.state !== 'done') fail(`Could not install: ${st.error || 'the download failed'}`);
+        if (!shownInstalling) { out(`Downloading the ${entry.name.toLowerCase()}\u2026 100% \u00b7 ${mb(st.total)} of ${mb(st.total)} MB`); out('Installing\u2026'); }
+        const pack = faces.getPack(entry.id, { home: HUB_HOME });
+        const total = pack ? Object.values(pack.files).reduce((a, f) => a + f.size, 0) : st.total;
+        out(`Installed the character pack "${entry.id}" (${pack ? Object.keys(pack.files).length : '?'} files, ${(total / 1048576).toFixed(1)} MB) in ${path.join(HUB_HOME, 'faces', entry.id)}.`);
+        out('Choose it per device in the voice panel, or as an agent\'s default on the agent settings page.');
+        return;
+      }
       try {
         const r = faces.installPack(folder, { home: HUB_HOME, id: arg('id') || undefined });
         out(`Installed the character pack "${r.id}" (${r.files.length} files, ${(r.total / 1048576).toFixed(1)} MB) in ${r.dir}.`);
@@ -374,7 +404,7 @@ const commands = {
     }
     if (sub === 'list') {
       const list = faces.listPacks({ home: HUB_HOME });
-      if (!list.length) { out('No character packs are installed. Add one: mymaestro face install <folder>'); return; }
+      if (!list.length) { out('No character packs are installed. Add one: mymaestro face install <folder|owl>'); return; }
       for (const p of list) out(`${p.id}  ${p.manifest.name || p.id}  ${p.manifest.clips.length} clips`);
       return;
     }
@@ -402,7 +432,7 @@ const commands = {
       } catch (e) { fail(`Could not remove: ${e.message}`); }
       return;
     }
-    fail('Usage: mymaestro face install <folder> [--id <slug>]\n       mymaestro face list\n       mymaestro face remove <id> [--yes]');
+    fail('Usage: mymaestro face install <folder|owl> [--id <slug>]\n       mymaestro face list\n       mymaestro face remove <id> [--yes]');
   },
   async uninstall() {
     const m = svc(); const inst = m.readInstall();

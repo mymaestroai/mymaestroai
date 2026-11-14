@@ -112,11 +112,11 @@ test('the list: id, name, background, hasReactions; invalid packs are left out',
   fs.mkdirSync(path.join(home, 'faces', 'broken'));
   const r = await call(home, '/api/faces');
   assert.strictEqual(r.statusCode, 200);
-  assert.deepStrictEqual(r.json(), { packs: [{ id: 'bird', name: 'Test Bird', background: '#102030', hasReactions: true }] });
+  assert.deepStrictEqual(r.json(), { packs: [{ id: 'bird', name: 'Test Bird', background: '#102030', hasReactions: true }], available: [{ id: 'owl', name: 'Owl', size: require('../lib/faces/catalog').CATALOG[0].size }] });
   const h = await call(home, '/api/faces', { method: 'HEAD' });
   assert.strictEqual(h.statusCode, 200); assert.strictEqual(h.body().length, 0);
   assert.deepStrictEqual((await call(home, '/api/faces/', {})).json().packs.length, 1);
-  assert.deepStrictEqual((await call(path.join(home, 'none'), '/api/faces')).json(), { packs: [] });
+  assert.deepStrictEqual((await call(path.join(home, 'none'), '/api/faces')).json().packs, []);
 });
 
 test('serving the manifest and each file kind with the right type and headers', async () => {
