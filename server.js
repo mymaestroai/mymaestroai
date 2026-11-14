@@ -2020,6 +2020,22 @@ async function handleHttpRequest(req, res) {
     // ── Session/History Routes ──────────────────────────────────────
     if (/^\/api\/history\/([^/]+)$/.test(pathname) && req.method === 'GET') {
       const name = pathname.split('/')[3];
+      const hq = new URL(req.url, 'http://x').searchParams;
+      if (hq.has('view') || hq.has('limit') || hq.has('before')) {
+        // Paged, filtered history (lib/chat-history): the whole chat log, then the transcript archive behind it.
+        const view = hq.get('view') === 'all' ? 'all' : 'main';
+        const before = hq.get('before') || null;
+        if (before !== null && !require('./lib/chat-history').parseCursor(before)) return jsonResponse(res, 400, { error: 'bad_cursor' });
+        const hubEv = require('./lib/hub-events');
+        const tr = require('./lib/transcript').getTranscript();
+        const page = require('./lib/chat-history').historyPage({
+          logEntries: loadConversationLog(name, 0),
+          archive: { rowsBefore: (o) => tr.rowsBefore(name, o), forOwnerTurns: (ids) => tr.forOwnerTurns(name, ids), lastMarkTs: (tool) => tr.lastMarkTs(name, tool) },
+          view, before, limit: hq.get('limit'),
+          inProgressMark: (entries) => hubEv.markInProgress(entries, hubEv.events.turnFor(name)),
+        });
+        return jsonResponse(res, 200, { history: page.history, next: page.next, view });
+      }
       const history = loadConversationLog(name);
       // The running turn's reply is saved every 5 s as plain text (so a restart loses nothing); it is not a finished
       // reply. Flagged, pages show the live turn in its place (text and tool calls) instead of a text-only copy.

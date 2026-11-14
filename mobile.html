@@ -356,6 +356,9 @@
     .tsn-grip::after { content: ''; width: 44px; height: 4px; border-radius: 2px; background: rgba(61,123,255,.45); }
     .tsn.closed .tsn-body, .tsn.closed .tsn-grip { display: none; }
     .tsn-sheet .rsn-sheet-title { color: #8AB4FF; }
+    .chat-view-hidden { display: none !important; }
+    .chat-busy-card { align-self: stretch; max-width: 100%; box-sizing: border-box; font-size: 12px; color: var(--text-tertiary); text-align: center; padding: 4px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .msg-time .archive-mark { font-size: 10px; opacity: .8; }
     .more { align-self: center; min-height: 44px; padding: 0 16px; color: var(--accent-hover); }
     .question { align-self: stretch; background: var(--bg-card); border: 1px solid var(--accent); border-radius: 12px; padding: 10px; }
     .question .qh { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
@@ -898,6 +901,7 @@
     <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
     <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
+    <button id="menu-agentwork" class="chat-only">&#x1F9F0; Show agent work</button>
     <button id="menu-active-top">⬆ Active agents at the top: On</button>
     <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
     <button id="menu-voice">&#x1F399; Voice</button>

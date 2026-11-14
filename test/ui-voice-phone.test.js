@@ -265,5 +265,5 @@ test('no U+FE0F in the voice code or markup', () => {
 });
 
 test('service worker cache is v65', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v65'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v66'/);
 });

@@ -6,6 +6,9 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Your chat shows your own conversation.** Consultations from other agents, scheduled tasks and job notices no longer fill your chat: you see your messages and the agent's replies, plus any reply the agent marked for you. While the agent works on one of those turns, one small line at the bottom says what it is doing ("Answering a consultation from Forge · 2 min"). "Agent work" (desktop toolbar) or "Show agent work" (phone ⋮ menu) shows everything, and your Maestro remembers the choice on each device.
+- **"Load earlier" reaches back to your first message.** Each tap brings the earlier part of your conversation, however many agent turns happened in between; messages older than the chat's recent part come from your Maestro's full record, as text, marked "from the archive".
+
 - **A busy agent always shows as busy in the agent list.** An agent replying while it also runs a background job now keeps its yellow dot and yellow status line, with the job line below. An agent that starts a new turn before its previous one has finished no longer drops to idle in the list for the rest of the reply.
 - **A recorded call announces itself once per person.** By default the recording line is now spoken only on the first recorded call between an agent and each person; later calls record without it, and the Recording badge still shows every time. An agent's "Announce recording" setting can choose every call or never instead. The default line is now "This conversation is being recorded."; a line you wrote yourself is kept.
 - **The character moves more naturally in quiet moments of a call.** After about 13 seconds of silence, calm everyday movements join the listening ones, so the same few gestures no longer come back every minute and a half. The moment you speak, it turns back to listening.
