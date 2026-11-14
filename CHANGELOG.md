@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The agent's voice is louder on calls.** Replies on a voice call play about three times louder than before, with peaks kept from distorting. Voice settings has a new "Voice loudness" choice (Normal, Louder, Loudest) on each device; Louder is the default, and Normal is the old level.
+
 - **A voice call tells you when the connection drops, and hangs up if it doesn't come back.** If your phone or computer loses touch with your Maestro during a call, you hear a short falling tone and the call screen says "Connection lost". If it is back within 10 seconds you hear a rising tone and "Reconnected." and the call carries on; otherwise the call ends cleanly and the chat says "Call ended: connection lost".
 
 - **Starting a voice call asks Android to pause your music.** When a call starts, your Maestro claims the phone's audio the way a music player does, so an app like Spotify should pause for the call instead of playing over the conversation. Where the browser cannot do that (iPhone, or if the phone refuses), the call shows "Music playing? Pause it for a clearer call".

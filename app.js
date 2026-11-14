@@ -10516,7 +10516,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_CONTINUE_WAITS = [1500, 3000, 5000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
     const VOICE_ECHO_HOLDS = [0, 600, 1000, 1500];   // 'Echo guard': how long the raised barge-in thresholds stay after playback stops, in ms (0 = off)
     const VOICE_WAKE_QUIET_MS = [10000, 20000, 45000];   // 'Go back to standby after': how long a quiet call stays awake (default 20000)
-    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true };
+    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder' };
     function voiceCleanSpeed(v) {
       const n = Number(v);
       return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
@@ -10713,6 +10713,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (VOICE_ECHO_HOLDS.includes(raw.echoHold)) p.echoHold = raw.echoHold;
       if (typeof raw.thinkingVolume === 'number' && Number.isFinite(raw.thinkingVolume)) p.thinkingVolume = Math.round(Math.max(0, Math.min(1, raw.thinkingVolume)) * 100) / 100;
       for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity', 'thinkingSound', 'keepAlive']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
+      if (typeof raw.loudness === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, raw.loudness)) p.loudness = raw.loudness;
       // wake: per agent { on, phrase, quietMs }; the key exists only when the raw prefs carried an object (the defaults have none)
       if (raw.wake && typeof raw.wake === 'object' && !Array.isArray(raw.wake)) {
         const wake = {};
@@ -11063,6 +11064,47 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         },
         get running() { return running; },
       };
+    }
+    // Loudness boost for call replies (dB): the speech engine leaves headroom, and Android's call mode lowers the output further.
+    const VOICE_LOUDNESS = { normal: 0, louder: 9, loudest: 14 };
+    function voiceLoudnessDb(name) {
+      return typeof name === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, name) ? VOICE_LOUDNESS[name] : VOICE_LOUDNESS.louder;
+    }
+    // One chain per AudioContext: gain -> limiter -> analyser -> destination. Returns null when the context cannot build it.
+    function voiceCreateLoudness(ctx) {
+      if (!ctx) return null;
+      try { if (ctx.__voiceLoudness) return ctx.__voiceLoudness; } catch {}
+      if (typeof ctx.createGain !== 'function' || typeof ctx.createDynamicsCompressor !== 'function') return null;
+      let gain, comp, an = null, db = voiceLoudnessDb('louder'), buf = null;
+      try {
+        gain = ctx.createGain();
+        comp = ctx.createDynamicsCompressor();
+        const set = (prm, v) => { try { if (prm && typeof prm === 'object') prm.value = v; } catch {} };
+        set(comp.threshold, -3); set(comp.knee, 0); set(comp.ratio, 20); set(comp.attack, 0.003); set(comp.release, 0.12);
+        if (typeof ctx.createAnalyser === 'function') { try { an = ctx.createAnalyser(); an.fftSize = 2048; } catch { an = null; } }
+        gain.connect(comp);
+        if (an) { comp.connect(an); an.connect(ctx.destination); } else comp.connect(ctx.destination);
+      } catch { return null; }
+      const apply = () => { try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
+      apply();
+      const chain = {
+        input: gain,
+        setLevel(name) { db = voiceLoudnessDb(name); apply(); },
+        get gainDb() { return db; },
+        meter() {
+          try {
+            if (!an || typeof an.getFloatTimeDomainData !== 'function') return null;
+            if (!buf || buf.length !== (an.fftSize || 2048)) buf = new Float32Array(an.fftSize || 2048);
+            an.getFloatTimeDomainData(buf);
+            let sum = 0, peak = 0;
+            for (let i = 0; i < buf.length; i++) { const v = buf[i]; sum += v * v; const a = Math.abs(v); if (a > peak) peak = a; }
+            const toDb = (x) => (x > 0 ? Math.max(-120, 20 * Math.log10(x)) : -120);
+            return { rmsDb: toDb(Math.sqrt(sum / buf.length)), peakDb: toDb(peak) };
+          } catch { return null; }
+        },
+      };
+      try { ctx.__voiceLoudness = chain; } catch {}
+      return chain;
     }
     // ── voice helpers (end) ──
 
@@ -12769,7 +12811,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         await new Promise((res) => {
           const src = ctx.createBufferSource();
           src.buffer = ab;
-          if (typeof voiceDisplayRoute === 'function') voiceDisplayRoute(ctx, src); else src.connect(ctx.destination);   // with a display: source -> analyser -> destination
+          if (typeof voiceDisplayRoute === 'function') voiceDisplayRoute(ctx, src); else src.connect(typeof voiceOutNode === 'function' ? voiceOutNode(ctx) : ctx.destination);   // with a display: source -> analyser -> destination
           src.onended = () => { if (typeof voiceDisplayHook === 'function') voiceDisplayHook('audioEnd'); res(); };
           voicePlay.source = src;
           src.start();
@@ -12862,6 +12904,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
       h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs()"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s.</span>`);
       h += row('Voice speed', `<input type="range" min="0.75" max="1.5" step="0.05" id="st-voice-speed" value="${voiceSpeedNow()}" oninput="voiceSettingSpeedInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-speed-val" style="min-width:3.5em;display:inline-block">${voiceSpeedLabel(voiceSpeedNow())}</span> <span class="st-hint" style="margin:0 0 0 8px">${VOICE_SPEED_HINT}</span>`);
+      h += row('Voice loudness', `${voiceLoudnessSelectHtml('st-voice-loudness', 'onchange="voiceSettingsSavePrefs()"')} <span class="st-hint" style="margin:0 0 0 8px">Makes the agent's voice louder during calls.</span>`);
       h += row('Activity', `<label style="${CHK}"><input type="checkbox" id="st-voice-speakactivity" ${p.speakActivity ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Say what the agent is doing</label>`);
       h += row('Room check', `<button class="st-test-btn" id="st-voice-room" type="button" onclick="voiceRoomCheckRun()">Room check</button> <span id="st-voice-room-out" class="st-hint" style="margin:0 0 0 8px" aria-live="polite">5 seconds: say a sentence, then stay quiet. It sets the mic level and the interrupt sensitivity.</span>`);
       h += row('Echo guard after replies', `${voiceEchoSelectHtml('st-voice-echo', 'onchange="voiceSettingsSavePrefs()"')} <span class="st-hint" style="margin:0 0 0 8px">${VOICE_ECHO_HINT}</span>`);
@@ -12956,14 +12999,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const mode = voiceById('st-voice-mode'), sens = voiceById('st-voice-sens');
       const pause = voiceById('st-voice-pause'), speed = voiceById('st-voice-speed'), act = voiceById('st-voice-speakactivity');
       if (!mic || !ra || !fb || !mode || !sens || !pause || !speed || !act) return;
-      const echo = voiceById('st-voice-echo'), keep = voiceById('st-voice-keepalive');
-      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, speed, act, echo, keep].filter(Boolean));
+      const echo = voiceById('st-voice-echo'), keep = voiceById('st-voice-keepalive'), loud = voiceById('st-voice-loudness');
+      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, speed, act, echo, keep, loud].filter(Boolean));
       const echoNow = echo && VOICE_ECHO_HOLDS.includes(Number(echo.value)) ? Number(echo.value) : voiceEchoHoldNow();
       const prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
-        endPause: Number(pause.value), voiceSpeed: voiceCleanSpeed(speed.value), speakActivity: act.checked, echoHold: echoNow, keepAlive: keep ? !!keep.checked : voiceKeepAliveNow() };
+        endPause: Number(pause.value), voiceSpeed: voiceCleanSpeed(speed.value), speakActivity: act.checked, echoHold: echoNow, keepAlive: keep ? !!keep.checked : voiceKeepAliveNow(),
+        loudness: loud && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loud.value) ? loud.value : voiceLoudnessNow() };
       if (voiceCallS.vad) { voiceCallS.vad.setMicLevel(prefs.micLevel); voiceCallS.vad.setInterruptSensitivity(prefs.interruptSensitivity); voiceCallS.vad.setEndPause(prefs.endPause); if (voiceCallS.vad.setEchoHold) voiceCallS.vad.setEchoHold(prefs.echoHold); }
       voiceSavePrefs(localStorage, prefs);
       voicePrefsCache = prefs;
+      voiceLoudApply();   // a running call follows the choice at once
+      for (const el of document.querySelectorAll('.voice-pop [data-vp="loudness"]')) el.value = prefs.loudness;
       saved();
       voicePaint();
       voiceEchoKeepPaint();   // the chat's voice panel follows
@@ -13031,7 +13077,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!d || typeof d[name] !== 'function') return undefined;
       try { return d[name](...args); } catch { return undefined; }
     }
-    function voiceDisplayRoute(ctx, src) { const d = voiceDisp.cur; if (d) { try { d.routeBufferSource(ctx, src); return; } catch { /* plain playback below */ } } src.connect(ctx.destination); }
+    // Loudness of call replies: while a call is up, reply audio ends in a gain -> limiter chain on the playback context; read-aloud outside a call plays as before.
+    function voiceLoudnessNow() { const v = voicePrefsNow().loudness; return Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, v) ? v : 'louder'; }
+    function voiceLoudChain(ctx) {
+      let c = null;
+      try { if (!ctx || !voiceCallS.call) return null; c = voiceCreateLoudness(ctx); if (c) c.setLevel(voiceLoudnessNow()); } catch { c = null; }   // a loudness fault never stops a reply
+      return c;
+    }
+    function voiceOutNode(ctx) { const c = voiceLoudChain(ctx); return c ? c.input : ctx.destination; }
+    function voiceLoudApply() { voiceLoudChain(voicePlay.ctx); }   // at call start and when the pref changes: a running call follows at once
+    try { window.__voiceOut = () => { const c = voicePlay.ctx && voicePlay.ctx.__voiceLoudness; return { level: voiceLoudnessNow(), gainDb: c ? c.gainDb : null, meter: c ? c.meter() : null }; }; } catch { /* a test hook only */ }
+    function voiceDisplayRoute(ctx, src) { const d = voiceDisp.cur; if (d) { try { d.routeBufferSource(ctx, src); return; } catch { /* plain playback below */ } } src.connect(voiceOutNode(ctx)); }
     function voiceDisplaySpeech(kind) { voiceDisplayHook('speech', kind); }
     // The VAD handlers pass through the Talk floor, so a tap on Talk is released when the microphone hears nothing.
     function voiceDispVad(vad) { return { start: (h) => vad.start(voiceDisp.floor ? voiceDisp.floor.wrap(h) : h), stop: () => vad.stop(), setPlaybackActive: (on, now) => vad.setPlaybackActive(on, now), reopen: () => vad.reopen(), info: () => vad.info() }; }
@@ -13050,7 +13106,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceDisp.turnSeq.clear();
       let d = null;
       try {
-        d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
+        d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), output: (ctx) => voiceOutNode(ctx), agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
           reopenHost: () => { const b = voiceById(`voice-callbar-${chatId}`); return b ? b.querySelector('.vcb-hang') : null; },   // "Show display" goes inside the call bar, beside Hang up
           onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(chatId) });
         voiceDisp.cur = d;
@@ -13135,6 +13191,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return `<select id="${id}" ${attrs} style="padding:4px">${VOICE_ECHO_HOLDS.map((ms) => `<option value="${ms}"${ms === cur ? ' selected' : ''}>${ms === 0 ? 'Off' : (ms / 1000) + ' s'}</option>`).join('')}</select>`;
     }
     function voiceKeepAliveNow() { return voicePrefsNow().keepAlive !== false; }
+    // The "Voice loudness" select (Normal / Louder / Loudest): Settings and the chat's voice panel.
+    const VOICE_LOUDNESS_LABELS = { normal: 'Normal', louder: 'Louder', loudest: 'Loudest' };
+    function voiceLoudnessSelectHtml(id, attrs) {
+      const cur = voiceLoudnessNow();
+      return `<select id="${id}" ${attrs} aria-label="Voice loudness" style="padding:4px">${Object.keys(VOICE_LOUDNESS_LABELS).map((k) => `<option value="${k}"${k === cur ? ' selected' : ''}>${VOICE_LOUDNESS_LABELS[k]}</option>`).join('')}</select>`;
+    }
     // The two settings shown everywhere they are shown (Settings and every open chat panel).
     function voiceEchoKeepPaint() {
       const hold = String(voiceEchoHoldNow()), keep = voiceKeepAliveNow();
@@ -13659,6 +13721,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceLeftNoticeHide(); S.leftChat = null;
       S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
       window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow() };   // read-only hooks for the browser proof
+      voiceLoudApply();   // the reply loudness chain, at the level of the pref
       voiceCallPaintBtn(chatId, true);
       voiceCallShowBar(chatId);
       if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();
@@ -13731,13 +13794,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     // ── In-chat voice controls (next to the mic): a Talk mode chip and a small "Voice settings" panel for every signed-in user ──
     // They write the same per-device prefs as Settings, Voices, and act on a running call at once.
-    const VOICE_POP_KEYS = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause', wait: 'continueWait', think: 'thinkingSound', thinkvol: 'thinkingVolume', mode: 'mode', echo: 'echoHold', keep: 'keepAlive' };
+    const VOICE_POP_KEYS = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause', wait: 'continueWait', think: 'thinkingSound', thinkvol: 'thinkingVolume', mode: 'mode', echo: 'echoHold', keep: 'keepAlive', loudness: 'loudness' };
     function voicePopHtml(chatId) {
       const id = (n) => `vp-${n}-${chatId}`, tap = voicePrefsNow().mode === 'tap';
       const waits = VOICE_CONTINUE_WAITS.map((ms) => `<option value="${ms}"${ms === voiceContinueWaitNow() ? ' selected' : ''}>${ms / 1000} s</option>`).join('');
       return `<div class="vp-row"><span class="vp-label">Talk mode</span><span class="vp-seg" role="group" aria-label="Talk mode">
           <button type="button" data-vp="mode" data-val="handsfree" aria-pressed="${tap ? 'false' : 'true'}">Hands-free</button><button type="button" data-vp="mode" data-val="tap" aria-pressed="${tap ? 'true' : 'false'}">Tap to talk</button></span></div>
         <label class="vp-row"><span class="vp-label">Voice speed</span><input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vp="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span></label>
+        <label class="vp-row"><span class="vp-label">Voice loudness</span>${voiceLoudnessSelectHtml(id('loudness'), 'data-vp="loudness"')}</label>
         <label class="vp-row"><span class="vp-label">Pause before I'm done</span>${voicePauseSelectHtml(id('pause'), 'data-vp="pause"')}</label>
         <label class="vp-row"><span class="vp-label">Wait for me to go on</span><select id="${id('wait')}" data-vp="wait" style="padding:4px">${waits}</select></label>
         <label class="vp-row"><span class="vp-label">Mic level</span><input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vp="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
@@ -13791,6 +13855,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           else if (k === 'interrupt') voiceDispSetInterrupt(chatId, t.checked);
           else if (k === 'think') voiceCtlSet('think', t.checked, true);
           else if (k === 'keep') voiceCtlSet('keep', t.checked, true);
+          else if (k === 'loudness') voiceCtlSet('loudness', t.value, true);
           else if (k === 'echo' || k === 'pause' || k === 'wait' || ['mic', 'sens', 'speed', 'thinkvol'].includes(k)) voiceCtlSet(k, Number(t.value), true);
         });
       }
@@ -13805,7 +13870,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceCtlSet(which, v, save) {
       const S = voiceCallS, vad = S.vad, key = VOICE_POP_KEYS[which];
       if (!key) return;
-      const val = which === 'speed' ? voiceCleanSpeed(v) : which === 'mode' ? (v === 'tap' ? 'tap' : 'handsfree') : which === 'think' || which === 'keep' ? !!v : which === 'echo' ? (VOICE_ECHO_HOLDS.includes(Number(v)) ? Number(v) : 600) : which === 'thinkvol' ? Math.max(0, Math.min(1, Number(v) || 0)) : Number(v);
+      const val = which === 'speed' ? voiceCleanSpeed(v) : which === 'mode' ? (v === 'tap' ? 'tap' : 'handsfree') : which === 'think' || which === 'keep' ? !!v : which === 'echo' ? (VOICE_ECHO_HOLDS.includes(Number(v)) ? Number(v) : 600) : which === 'thinkvol' ? Math.max(0, Math.min(1, Number(v) || 0)) : which === 'loudness' ? (Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, v) ? v : 'louder') : Number(v);
       for (const el of document.querySelectorAll(`[id^="vp-${which}-val-"], [id^="vcb-${which}-val-"]`)) el.textContent = which === 'speed' ? voiceSpeedLabel(val) : String(val);
       for (const el of document.querySelectorAll(`.voice-pop [data-vp="${which}"], .voice-callbar [data-vcb="${which}"]`)) if (el.type === 'range' || el.tagName === 'SELECT') el.value = String(val);
       if (vad) {
@@ -13816,6 +13881,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       if (which === 'thinkvol' && S.thinking) S.thinking.setVolume(val);
       voicePrefsCache = { ...voicePrefsNow(), [key]: val };   // the next sentence / the next wait already uses it
+      if (which === 'loudness') { voiceLoudApply(); const st = voiceById('st-voice-loudness'); if (st) st.value = val; }
       if (save) { const prefs = voiceSavePrefs(localStorage, voicePrefsCache); voicePrefsCache = { ...voicePrefsCache, ...prefs, [key]: val }; }
       if (which === 'mode') voiceModePaint();
       if (which === 'echo' || which === 'keep') voiceEchoKeepPaint();   // Settings follows the panel

@@ -169,7 +169,7 @@ function makeEnv(opts = {}) {
     voiceSavePrefs: (s, p) => { calls.saved = p; },
     voiceGainFromSlider: (v) => v / 10,
     voiceSliderFromGain: (g) => g * 10,
-    voiceLevelDb: () => -20, voiceMeterPercent: () => 50, VOICE_ECHO_HOLDS: [0, 600, 1000, 1500],
+    voiceLevelDb: () => -20, voiceMeterPercent: () => 50, VOICE_LOUDNESS: { normal: 0, louder: 9, loudest: 14 }, voiceLoudnessNow: () => 'louder', voiceLoudnessSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceLoudApply() {}, VOICE_ECHO_HOLDS: [0, 600, 1000, 1500],
     voiceResample: (f, from, to) => { calls.resample = [f.length, from, to]; return f; },
     voiceEncodeWav: (f, r) => { calls.wavRate = r; return new Uint8Array([82, 73, 70, 70]).buffer; },
     voiceSentences: (t) => t.split(/(?<=\.)\s+/).filter(Boolean),
@@ -281,7 +281,7 @@ test('settings prefs are saved with voiceSavePrefs from the controls', () => {
   get('st-voice-mode').value = 'tap'; get('st-voice-sens').value = '40';   // phase 2 added these two controls to the same save
   get('st-voice-pause').value = '2000'; get('st-voice-speed').value = '1.1'; get('st-voice-speakactivity').checked = true;   // voice fixes 1: pause, speed, spoken activity
   api.voiceSettingsSavePrefs();
-  assert.deepStrictEqual(calls.saved, { micLevel: 35, interruptSensitivity: 40, mode: 'tap', readAloud: false, deviceVoiceFallback: true, endPause: 2000, voiceSpeed: 1.1, speakActivity: true, echoHold: 0, keepAlive: false });   // + the Bluetooth settings (the fake controls read as 0 / unchecked)
+  assert.deepStrictEqual(calls.saved, { micLevel: 35, interruptSensitivity: 40, mode: 'tap', readAloud: false, deviceVoiceFallback: true, endPause: 2000, voiceSpeed: 1.1, speakActivity: true, echoHold: 0, keepAlive: false, loudness: 'louder' });   // + the Bluetooth settings; loudness: no select in the fake controls keeps the current pref (default louder) (the fake controls read as 0 / unchecked)
 });
 
 test('settings: members get no enable switch, default voice or sample; admins do', () => {
@@ -290,8 +290,8 @@ test('settings: members get no enable switch, default voice or sample; admins do
   assert.match(admin, /st-voice-default/);
   assert.match(admin, /Play sample/);
   const stubsSrc = voiceBlock().replace('const admin = isHubAdmin();', 'const admin = false;');
-  const member = new Function('document', 'window', 'localStorage', 'voiceLoadPrefs', 'voiceGainFromSlider', 'chats', 'dialogGuard', 'voiceMicGuard', 'voiceCleanSpeed', 'voiceSpeedLabel', 'VOICE_END_PAUSES', 'VOICE_ECHO_HOLDS',
-    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, { addEventListener() {} }, {}, () => ({ micLevel: 50 }), (v) => v, {}, {}, L.voiceMicGuard, L.voiceCleanSpeed, L.voiceSpeedLabel, L.VOICE_END_PAUSES, [0, 600, 1000, 1500]);
+  const member = new Function('document', 'window', 'localStorage', 'voiceLoadPrefs', 'voiceGainFromSlider', 'chats', 'dialogGuard', 'voiceMicGuard', 'voiceCleanSpeed', 'voiceSpeedLabel', 'VOICE_END_PAUSES', 'VOICE_ECHO_HOLDS', 'voiceLoudnessSelectHtml', 'voiceLoudnessNow', 'VOICE_LOUDNESS',
+    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, { addEventListener() {} }, {}, () => ({ micLevel: 50 }), (v) => v, {}, {}, L.voiceMicGuard, L.voiceCleanSpeed, L.voiceSpeedLabel, L.VOICE_END_PAUSES, [0, 600, 1000, 1500], () => '', () => 'louder', { normal: 0, louder: 9, loudest: 14 });
   assert.doesNotMatch(member, /st-voice-enabled|st-voice-default|Play sample/);
   assert.match(member, /st-voice-status/);
   assert.match(member, /id="st-voice-mic"/);

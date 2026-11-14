@@ -2186,7 +2186,7 @@ const VOICE_END_PAUSES = [800, 1200, 2000];   // 'Pause before I'm done': short 
 const VOICE_CONTINUE_WAITS = [1500, 3000, 5000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
 const VOICE_ECHO_HOLDS = [0, 600, 1000, 1500];   // 'Echo guard': how long the raised barge-in thresholds stay after playback stops, in ms (0 = off)
 const VOICE_WAKE_QUIET_MS = [10000, 20000, 45000];   // 'Go back to standby after': how long a quiet call stays awake (default 20000)
-const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true };
+const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder' };
 function voiceCleanSpeed(v) {
   const n = Number(v);
   return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
@@ -2383,6 +2383,7 @@ function voiceCleanPrefs(raw) {
   if (VOICE_ECHO_HOLDS.includes(raw.echoHold)) p.echoHold = raw.echoHold;
   if (typeof raw.thinkingVolume === 'number' && Number.isFinite(raw.thinkingVolume)) p.thinkingVolume = Math.round(Math.max(0, Math.min(1, raw.thinkingVolume)) * 100) / 100;
   for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity', 'thinkingSound', 'keepAlive']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
+  if (typeof raw.loudness === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, raw.loudness)) p.loudness = raw.loudness;
   // wake: per agent { on, phrase, quietMs }; the key exists only when the raw prefs carried an object (the defaults have none)
   if (raw.wake && typeof raw.wake === 'object' && !Array.isArray(raw.wake)) {
     const wake = {};
@@ -2733,6 +2734,47 @@ function voiceCreateAudioFocus(opts) {
     },
     get running() { return running; },
   };
+}
+// Loudness boost for call replies (dB): the speech engine leaves headroom, and Android's call mode lowers the output further.
+const VOICE_LOUDNESS = { normal: 0, louder: 9, loudest: 14 };
+function voiceLoudnessDb(name) {
+  return typeof name === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, name) ? VOICE_LOUDNESS[name] : VOICE_LOUDNESS.louder;
+}
+// One chain per AudioContext: gain -> limiter -> analyser -> destination. Returns null when the context cannot build it.
+function voiceCreateLoudness(ctx) {
+  if (!ctx) return null;
+  try { if (ctx.__voiceLoudness) return ctx.__voiceLoudness; } catch {}
+  if (typeof ctx.createGain !== 'function' || typeof ctx.createDynamicsCompressor !== 'function') return null;
+  let gain, comp, an = null, db = voiceLoudnessDb('louder'), buf = null;
+  try {
+    gain = ctx.createGain();
+    comp = ctx.createDynamicsCompressor();
+    const set = (prm, v) => { try { if (prm && typeof prm === 'object') prm.value = v; } catch {} };
+    set(comp.threshold, -3); set(comp.knee, 0); set(comp.ratio, 20); set(comp.attack, 0.003); set(comp.release, 0.12);
+    if (typeof ctx.createAnalyser === 'function') { try { an = ctx.createAnalyser(); an.fftSize = 2048; } catch { an = null; } }
+    gain.connect(comp);
+    if (an) { comp.connect(an); an.connect(ctx.destination); } else comp.connect(ctx.destination);
+  } catch { return null; }
+  const apply = () => { try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
+  apply();
+  const chain = {
+    input: gain,
+    setLevel(name) { db = voiceLoudnessDb(name); apply(); },
+    get gainDb() { return db; },
+    meter() {
+      try {
+        if (!an || typeof an.getFloatTimeDomainData !== 'function') return null;
+        if (!buf || buf.length !== (an.fftSize || 2048)) buf = new Float32Array(an.fftSize || 2048);
+        an.getFloatTimeDomainData(buf);
+        let sum = 0, peak = 0;
+        for (let i = 0; i < buf.length; i++) { const v = buf[i]; sum += v * v; const a = Math.abs(v); if (a > peak) peak = a; }
+        const toDb = (x) => (x > 0 ? Math.max(-120, 20 * Math.log10(x)) : -120);
+        return { rmsDb: toDb(Math.sqrt(sum / buf.length)), peakDb: toDb(peak) };
+      } catch { return null; }
+    },
+  };
+  try { ctx.__voiceLoudness = chain; } catch {}
+  return chain;
 }
 // ── voice helpers (end) ──
 
@@ -6789,8 +6831,10 @@ const voiceDisp = { cur: null, last: null, floor: null, turnSeq: new Map(), shar
 // The context a routed <audio> element was captured by is gone: that element stays silent for good, so the next playback gets a new one.
 // A routed <audio> outlives the call, and so does its audio context: read aloud after a call (or a call with None) needs them recovered by the page itself.
 // Never routes anything, never mutes a plain element, never loops: one resume per tap / per sentence, and none while the page is hidden.
-function voiceDispRoutedEl() { const s = voiceDisp.shared, a = voicePlay.audio; return !!(s && s.ctx && a && s.routes && s.routes.has(a)); }
+function voiceDispRoutedEl() { const s = voiceDisp.shared, a = voicePlay.audio; return !!(s && s.ctx && a && s.routes && (s.routes.has(a) || (typeof voiceOwnCtx === 'function' && voiceOwnCtx() === s.ctx))); }   // captured by the display, or by the page's own loudness route on the same context
 function voiceDispCtxClosed() {   // the context behind the routed element is closed: forget it and replace the element BEFORE a new one is chosen to play
+  const own = typeof voiceOwnCtx === 'function' ? voiceOwnCtx() : null;
+  if (own && own.state === 'closed') { voiceDispRoutesLost(); return true; }   // the page's own loudness route: the call's context closed with the call
   if (!voiceDispRoutedEl() || voiceDisp.shared.ctx.state !== 'closed') return false;
   const s = voiceDisp.shared;
   if (!voiceDisp.cur) { s.ctx = null; s.routed = 0; s.routes = new WeakMap(); }   // a running display keeps its own references; its next unlock() makes a new context
@@ -6825,7 +6869,38 @@ function voiceDisplayHook(name, ...args) {
   try { return d[name](...args); } catch { return undefined; }
 }
 // One media element, one source: the analyser is wired the first time and reused for every sentence (see lib/ui-call-display.js routeElement).
-function voiceDisplayRoute(el) { const d = voiceDisp.cur; if (d) { try { d.routeElement(el); } catch { /* plain playback */ } } }
+function voiceDisplayRoute(el) {
+  try { voiceLoudSync(); } catch { /* a loudness fault never stops a reply */ }
+  const d = voiceDisp.cur; let took = false;
+  if (d) { try { took = d.routeElement(el) === true; } catch { /* plain playback */ } }
+  if (!took) { try { voiceOwnRoute(el); } catch { /* plain playback */ } }   // no display route took the element: a call still gets the loudness chain
+}
+// Loudness of call replies: while a call is up the reply element ends in a gain -> limiter chain (voiceCreateLoudness) on the audio context
+// that captured it; read aloud outside a call is left at 0 dB. The display sends its element there through its `output` option.
+const voiceOwnRoutes = new WeakMap();   // <audio> -> { ctx, srcNode }: elements this page captured itself (a media element has one source per element)
+function voiceLoudnessNow() { const v = voicePrefsNow().loudness; return Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, v) ? v : 'louder'; }
+function voiceLoudChain(ctx) {
+  if (!ctx || !voiceCall) return null;
+  try { const c = voiceCreateLoudness(ctx); if (c) c.setLevel(voiceLoudnessNow()); return c || null; } catch { return null; }
+}
+function voiceOutNode(ctx) { const c = voiceLoudChain(ctx); return c ? c.input : ctx.destination; }
+function voiceLoudCtxs() { const a = voiceDisp.shared && voiceDisp.shared.ctx, b = voiceCall && voiceCall.thinkCtx; return [a, b && b !== a ? b : null].filter(Boolean); }
+function voiceLoudSync() {   // the chains follow the pref during a call and sit at 0 dB outside one
+  const lv = voiceCall ? voiceLoudnessNow() : 'normal';
+  for (const ctx of voiceLoudCtxs()) { const c = ctx.__voiceLoudness; if (c) { try { c.setLevel(lv); } catch { /* gone */ } } }
+}
+function voiceOwnCtx() { const a = voicePlay.audio, r = a && voiceOwnRoutes.get(a); return r ? r.ctx : null; }
+function voiceOwnRoute(el) {
+  if (!voiceCall || !el || typeof voiceCreateLoudness !== 'function') return false;
+  if (voiceDisp.shared && voiceDisp.shared.routes && voiceDisp.shared.routes.has(el)) return false;   // the display captured it: its output option already sends it through the chain
+  const ctx = (voiceDisp.shared && voiceDisp.shared.ctx) || voiceCall.thinkCtx;
+  if (!ctx || ctx.state !== 'running' || typeof ctx.createMediaElementSource !== 'function') return false;   // never route (and so mute) through a context that is not running
+  const had = voiceOwnRoutes.get(el);
+  if (had) return had.ctx === ctx;   // one route per element per context: never a second source
+  const chain = voiceLoudChain(ctx); if (!chain) return false;
+  try { const srcNode = ctx.createMediaElementSource(el); srcNode.connect(chain.input); voiceOwnRoutes.set(el, { ctx, srcNode }); return true; } catch { return false; }
+}
+try { window.__voiceOut = () => { let c = null; for (const ctx of voiceLoudCtxs()) { if (ctx.__voiceLoudness) { c = ctx.__voiceLoudness; break; } } return { level: voiceLoudnessNow(), gainDb: c ? c.gainDb : null, meter: c ? c.meter() : null }; }; } catch { /* a test hook only */ }
 function voiceFacePackBody() { const d = voiceDisp.cur; const slug = d && typeof d.activeFacePack === 'function' ? d.activeFacePack() : null; return slug ? { facePack: slug } : {}; }
 function voiceDispTalk() { const f = voiceDisp.floor; if (f) f.take(); }
 function voiceDispAdopt() {
@@ -6842,6 +6917,7 @@ function voiceDispBegin(vc) {
   let d = null;
   try {
     d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), needsContext: true, shared: voiceDisp.shared, onRoutesLost: voiceDispRoutesLost, agentDefault: () => voiceDispAgentDefault(vc.agent), adopt: voiceDispAdopt,
+      output: (ctx) => voiceOutNode(ctx),   // reply audio ends in the loudness chain
       reopenHost: () => $('cp-hangup'),   // "Show display" goes inside the call panel, beside Hang up
       onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel() });
     voiceDisp.cur = d;
@@ -7144,6 +7220,7 @@ function voiceThinkingDeps(vc) {
 }
 // Changing a setting in the chat panel or the Voice sheet reaches a call that is up straight away.
 function voiceCallApplyPrefs() {
+  try { voiceLoudSync(); } catch { /* the next sentence syncs it */ }   // the loudness of a running call follows at once
   const vc = voiceCall; if (!vc) return;
   const p = voicePrefsNow();
   try { vc.vad.setMicLevel(p.micLevel); vc.vad.setInterruptSensitivity(p.interruptSensitivity); vc.vad.setEndPause(voiceEndPauseNow()); } catch { /* vad not up yet */ }
@@ -7833,6 +7910,7 @@ function voicePanelPaint() {
   const set = (id, v, labelSel, label) => { const el = $(id); if (el && document.activeElement !== el) el.value = String(v); if (labelSel) { const l = p.querySelector(labelSel); if (l) l.textContent = label; } };
   for (const r of p.querySelectorAll('input[name="vp-mode"]')) r.checked = r.value === prefs.mode;
   set('vp-speed', voiceSpeedNow(), '.vp-speed-val', voiceSpeedLabel(voiceSpeedNow()));
+  set('vp-loudness', voiceLoudnessNow());
   set('vp-pause', voiceEndPauseNow());
   set('vp-wait', voiceContinueWaitNow());
   set('vp-level', prefs.micLevel, '.vp-level-val', String(prefs.micLevel));
@@ -7867,6 +7945,7 @@ function voicePanelWire() {
   const speed = $('vp-speed');
   speed?.addEventListener('input', () => { const l = p.querySelector('.vp-speed-val'); if (l) l.textContent = voiceSpeedLabel(speed.value); });
   speed?.addEventListener('change', () => save({ voiceSpeed: voiceCleanSpeed(speed.value) }));
+  $('vp-loudness')?.addEventListener('change', (e) => save({ loudness: Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, e.target.value) ? e.target.value : 'louder' }));   // save() reaches a call that is up (voiceCallApplyPrefs)
   pause?.addEventListener('change', () => save({ endPause: Number(pause.value) }));
   wait?.addEventListener('change', () => save({ continueWait: Number(wait.value) }));
   const echo = $('vp-echo');
