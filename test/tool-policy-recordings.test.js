@@ -52,7 +52,7 @@ test('a Bash command naming the folder is denied for every role, however it read
       `cp ${sessionFile} /tmp/x.enc`,
       `tar -czf /tmp/all.tgz -C ${tp.HUB_HOME} call-recordings`,
       `cd ${tp.HUB_HOME} && ls call-recordings`,
-      `find ${tp.HUB_HOME} -path '*call-recordings*' -name '*.enc'`,
+      `find ${DIR} -name '*.enc'`,
       `cat "${sessionFile}" | base64`,
       `python3 -c "print(open('${sessionFile}','rb').read()[:8])"`,
       `rm -f ${sessionFile}`,
@@ -81,6 +81,66 @@ test('the classifiers also call it an admin place (read and write), like data/.a
   assert.strictEqual(tp.classifyPath(sessionFile, { roots: [DIR] }), 'admin');
   assert.ok(tp.isSensitiveRead(sessionFile));
   assert.ok(tp.isSensitiveRead(path.join(HUB, 'data', '.auth-key')));
+});
+
+const T = (input, agent = worker) => tp.touchesRecordings({ input, cwd: cwd(agent), agentName: agent.name });
+const sh = (command) => T({ command });
+
+test('the folder name in command text is not an access (commit messages, grep words, sibling file names)', () => {
+  assert.strictEqual(sh('git commit -m "fix call-recordings docs"'), false);
+  assert.strictEqual(sh('git commit -m "call-recordings docs"'), false);
+  assert.strictEqual(sh('grep -rn call-recordings /some/repo/lib'), false);
+  assert.strictEqual(sh('cat ./call-recordings-notes.md'), false);
+  assert.strictEqual(sh(`ls ${tp.HUB_HOME}`), false);
+  assert.strictEqual(sh('echo call-recordings'), false);
+  assert.strictEqual(T({ file_path: path.join(tp.HUB_HOME, 'call-recordings-notes.txt') }), false);
+  const d = tp.decide({ agent: worker, tool: 'Bash', input: { command: 'git commit -m "fix call-recordings docs"' }, cwd: cwd(worker) });
+  assert.doesNotMatch(d.reason || '', /call recordings are not available/);
+});
+
+test('real access is refused: absolute, ~, $HOME, relative, and after cd / pushd / tar -C', () => {
+  const home = tp.HUB_HOME;
+  assert.ok(sh(`ls ${DIR}`));
+  assert.ok(sh(`find ${DIR} -name x`));
+  assert.ok(sh(`tar cf x.tar ${DIR}`));
+  assert.ok(sh(`cd ${home}; ls call-recordings`));
+  assert.ok(sh(`cd ${home} && cat call-recordings/x`));
+  assert.ok(sh(`pushd ${home} >/dev/null && ls call-recordings/biographer`));
+  assert.ok(sh(`cd "${home}" && ls ./call-recordings`));
+  assert.ok(sh(`tar -czf /tmp/a.tgz -C ${home} call-recordings`));
+  assert.ok(tp.touchesRecordings({ input: { command: 'cat call-recordings/x' }, cwd: home }));
+  assert.ok(tp.touchesRecordings({ input: { command: 'cat ../call-recordings/x' }, cwd: path.join(DIR, 'a') }));
+  const rel = DIR.startsWith(require('os').homedir() + '/') ? DIR.slice(require('os').homedir().length + 1) : null;
+  if (rel) {
+    assert.ok(sh(`cat ~/${rel}/x`));
+    assert.ok(sh(`cat $HOME/${rel}/x`));
+    assert.ok(sh(`cat \${HOME}/${rel}/x`));
+    assert.ok(sh(`cd ~/${path.dirname(rel)} && cat ${path.basename(rel)}/x`));
+  }
+});
+
+test('globs that could match the folder or anything under it are refused', () => {
+  const home = tp.HUB_HOME;
+  assert.ok(sh(`cat ${home}/call-rec*/*/*`));
+  assert.ok(sh(`cat ${home}/call-recording?/x`));
+  assert.ok(sh(`cat ${home}/call-[r]ecordings/x`));
+  assert.ok(sh(`cat ${home}/{a,call-recordings}/x`));
+  assert.ok(sh(`ls ${home}/**/x.enc`));
+  assert.ok(sh(`cd ${home} && cat call-rec*/*/*`));
+  assert.ok(T({ path: home, pattern: '**/*.flac.enc' }));
+  assert.ok(T({ path: home, pattern: 'call-recordings/**' }));
+  assert.ok(T({ pattern: `${home}/**/*.enc` }));
+  assert.ok(T({ file_path: DIR + '/a/b.enc' }));
+  for (const [, agent, extra] of roles) {
+    const d = tp.decide({ agent, tool: 'Glob', input: { path: home, pattern: '**/*.flac.enc' }, cwd: cwd(agent), ...extra });
+    assert.strictEqual(d.decision, 'deny');
+    assert.match(d.reason, /call recordings are not available to agents/);
+  }
+  // globs elsewhere, or only on a parent, are not refused
+  assert.strictEqual(sh('ls /some/repo/lib/*.js'), false);
+  assert.strictEqual(sh(`cat ${home}/other*/x`), false);
+  assert.strictEqual(sh(`ls ${path.dirname(home)}/*`), false);
+  assert.strictEqual(T({ path: '/some/repo', pattern: '**/*.js' }), false);
 });
 
 test('other reads and commands are untouched', () => {
