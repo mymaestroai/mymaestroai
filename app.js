@@ -6245,14 +6245,21 @@
     // agent: one change at a time, the latest choice winning. A newer choice makes an older one stop at its next step
     // (after the model test, after each request); whatever the older one already wrote stays, and the newer one then
     // runs against the hub's actual state, so the agent always ends on the last thing chosen.
+    // A choice takes its place in the line when it is made (reserveModelChange), not when its own preparation (the
+    // OpenRouter window's model test and list update) has finished, so a later choice always wins.
     const modelChanges = {};   // agent -> { seq, chain }
-    function queueModelChange(chatId, choice, opts = {}) {
+    function reserveModelChange(agent) {
+      const q = modelChanges[agent] || (modelChanges[agent] = { seq: 0, chain: Promise.resolve() });
+      const seq = ++q.seq;
+      return { q, stale: () => seq !== q.seq };
+    }
+    function queueModelChange(chatId, choice, opts = {}, slot = null) {
       const chat = chats[chatId];
       if (!chat || !choice) return Promise.resolve(false);
-      const q = modelChanges[chat.agent] || (modelChanges[chat.agent] = { seq: 0, chain: Promise.resolve() });
-      const seq = ++q.seq;
-      const run = q.chain.then(() => applyModelChange(chatId, chat, choice, opts, () => seq !== q.seq));
-      q.chain = run.catch(() => {});
+      const s = slot || reserveModelChange(chat.agent);
+      if (s.stale()) return Promise.resolve(false);
+      const run = s.q.chain.then(() => applyModelChange(chatId, chat, choice, opts, s.stale));
+      s.q.chain = run.catch(() => {});
       return run;
     }
     // One change, against the state the hub confirmed last. Auto (on or off) is an admin's choice: a member can switch an
@@ -6262,9 +6269,10 @@
       const admin = isHubAdmin();
       const say = (t) => alert(t);
       try {
+        if (stale()) return false;   // a newer choice came while this one waited: it sends nothing
         if (choice === AUTO_PICK) {
           if (chat.autoModel || !admin) return false;
-          try { await setChatAuto(chat, true); return true; }
+          try { await setChatAuto(chat, true); return !stale(); }
           catch (e) { say(`Could not turn on Auto: ${e.message}`); return false; }
         }
         const model = choice;
@@ -6419,16 +6427,20 @@
       const ov = document.getElementById('or-pick-overlay'); const chatId = ov && ov.dataset.chat; const chat = chats[chatId];
       if (!chat) { closeOrPicker(); return; }
       const model = `openrouter/${id}`;
-      if (model === chat.model) { closeOrPicker(); if (chat.autoModel && isHubAdmin()) await queueModelChange(chatId, model, { tested: true }); return; }   // its own model: leaves Auto
+      const slot = reserveModelChange(chat.agent);   // its place in the line is now, before the test
+      if (model === chat.model) { closeOrPicker(); if (chat.autoModel && isHubAdmin()) await queueModelChange(chatId, model, { tested: true }, slot); return; }   // its own model: leaves Auto
       if (btn) btn.disabled = true;
       const msg = document.getElementById('or-pick-msg'); if (msg) msg.textContent = `Testing ${id}…`;
-      if (!(await testBeforeSwitch(model))) { if (btn) btn.disabled = false; if (msg) msg.textContent = `Not switched: ${chat.display || capName(chat.agent)} stays on ${String(chat.model || '').split('/').pop()}.`; return; }
+      const passed = await testBeforeSwitch(model);
+      if (slot.stale()) { closeOrPicker(); return; }   // another choice was made meanwhile: it wins
+      if (!passed) { if (btn) btn.disabled = false; if (msg) msg.textContent = `Not switched: ${chat.display || capName(chat.agent)} stays on ${String(chat.model || '').split('/').pop()}.`; return; }
       if (msg) msg.textContent = `Switching to ${id}…`;
       const v = orPickView ? orPickView.view : {};
       let note = '';
       if (!(v.chosen || []).includes(id)) {   // add it to the offer first, so every picker lists it from now on
         note = '. It could not be added to the OpenRouter list';
         try {
+          if (slot.stale()) throw new Error('superseded');
           const r = await fetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ models: orOfferWith(v.chosen, id) }) });
           const j = await r.json().catch(() => ({}));
           if (r.ok && j.ok !== false) { orPickView = { at: Date.now(), view: j }; if (orView) orView = j; if ((j.chosen || []).includes(id)) note = ''; }
@@ -6437,7 +6449,7 @@
         document.querySelectorAll('select.model-pick[data-filled]').forEach(s => { delete s.dataset.filled; });
       }
       closeOrPicker();
-      if (await queueModelChange(chatId, model, { tested: true })) hubToast(`${chat.display || capName(chat.agent)} switches to ${billingDisplay(model, true)}${note}`, note ? 6000 : 3000);
+      if (await queueModelChange(chatId, model, { tested: true }, slot)) hubToast(`${chat.display || capName(chat.agent)} switches to ${billingDisplay(model, true)}${note}`, note ? 6000 : 3000);
     }
 
     // Reasoning effort in the chat header, next to the model (lib/effort). Admins choose it for any agent; members see

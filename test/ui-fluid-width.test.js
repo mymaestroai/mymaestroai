@@ -45,7 +45,7 @@ test('phone page: the chat scroller is vertical only; bubbles and their contents
   assert.match(rule(mhtml, '    #messages'), /min-width: 0;/);
   assert.match(rule(mhtml, '    .msg'), /min-width: 0;/);
   assert.match(mhtml, /\.msg\.assistant pre, \.msg\.assistant table, \.msg\.assistant \.visual \{ max-width: 100%; \}/);
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v66';/, 'service worker cache bumped');
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v67';/, 'service worker cache bumped');
 });
 
 test('phone page: table cells wrap to the screen and keep whole words; code and links in a cell may break', () => {

@@ -11,8 +11,9 @@ const vm = require('vm');
 const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const mob = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
 // A function's source: desktop functions are indented four spaces, the phone's are top level.
-const fnApp = (name) => app.match(new RegExp(`\\n    (?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n    \\}\\n`))[0];
-const fnMob = (name) => mob.match(new RegExp(`\\n(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`))[0];
+// (A function an older version doesn't have yet comes back empty, so these tests also run against that version.)
+const fnApp = (name) => (app.match(new RegExp(`\\n    (?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n    \\}\\n`)) || [''])[0];
+const fnMob = (name) => (mob.match(new RegExp(`\\n(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`)) || [''])[0];
 const tick = async (n = 20) => { for (let i = 0; i < n; i++) await new Promise(r => setImmediate(r)); };
 
 // The hub: one agent's { model, autoModel }. Request kinds ('test', 'POST', 'PATCH') listed in hold wait until released.
@@ -36,6 +37,7 @@ function fakeHub({ model = 'claude-sdk/a', autoModel = false, admin = true } = {
       if (hub.fail.PATCH) return res(500, { success: false, error: hub.fail.PATCH });
       hub.state.autoModel = !!body.autoModel; return res(200, { success: true });
     }
+    if (method === 'POST' && url === '/api/openrouter') { hub.calls.push(`list + ${body.models.slice(-1)[0]}`); return res(200, { ok: true, chosen: body.models }); }
     throw new Error(`unexpected ${method} ${url}`);
   };
   hub.test = async (m) => { hub.calls.push(`test ${m}`); await wait('test'); return true; };
@@ -61,7 +63,7 @@ function desktop(hub, { admin = true, chat: c = {} } = {}) {
     document: { getElementById: (id) => (id === 'model-pick-c1' ? sel : null) },
   };
   vm.runInNewContext(`const AUTO_PICK='__auto__'; const AUTO_TIP='Auto tip'; const OR_MORE='__or_more__'; const modelChanges = {};\n`
-    + ['autoPickLabel', 'paintAutoPick', 'setChatAuto', 'agentStateFromHub', 'queueModelChange', 'applyModelChange', 'changeChatModel'].map(fnApp).join('')
+    + ['autoPickLabel', 'paintAutoPick', 'setChatAuto', 'agentStateFromHub', 'reserveModelChange', 'queueModelChange', 'applyModelChange', 'changeChatModel'].map(fnApp).join('')
     + '\nthis.pick = changeChatModel; this.queue = queueModelChange;', ctx);
   return { ctx, chat, sel, alerts, toasts, pick: (m, o) => ctx.pick('c1', m, o) };
 }
@@ -176,6 +178,37 @@ test('desktop: the "More OpenRouter models" window goes through the same path, a
   assert.deepStrictEqual(hub.state, { model: 'openrouter/x', autoModel: false });
 });
 
+function withOrWindow(d, chosen) {
+  const overlay = { dataset: { chat: 'c1' } };
+  Object.assign(d.ctx, { closeOrPicker: () => {}, orPickView: { view: { chosen } }, capName: (s) => s, orView: null, __modelListCache: null,
+    orOfferWith: (c, id) => [...(c || []), id] });
+  d.ctx.document.getElementById = (id) => (id === 'model-pick-c1' ? d.sel : id === 'or-pick-overlay' ? overlay : null);
+  d.ctx.document.querySelectorAll = () => [];
+  vm.runInContext(fnApp('chooseOrModel') + '\nthis.choose = chooseOrModel;', d.ctx);
+}
+test('desktop: an OpenRouter model whose test is slow, then Auto meanwhile: Auto wins, the OpenRouter model is never saved', async () => {
+  const hub = fakeHub(); hub.hold.add('test');
+  const d = desktop(hub); withOrWindow(d, ['x']);
+  const p1 = d.ctx.choose('y', null); await tick();
+  const p2 = d.pick('__auto__'); await tick();
+  await hub.release('test'); await Promise.all([p1, p2]);
+  assert.deepStrictEqual(hub.calls, ['test openrouter/y', 'PATCH auto=true'], 'no list update, no POST of the older choice, Auto never turned off');
+  assert.deepStrictEqual(hub.state, { model: 'claude-sdk/a', autoModel: true });
+  assert.strictEqual(d.sel.value, '__auto__');
+});
+
+test('desktop: Auto waiting in line behind another change, then a model: the superseded Auto sends nothing', async () => {
+  const hub = fakeHub(); hub.hold.add('POST');
+  const d = desktop(hub);
+  const p1 = d.pick('claude-sdk/b'); await tick();
+  const p2 = d.pick('__auto__'); await tick();
+  const p3 = d.pick('claude-sdk/c'); await tick();
+  await hub.release('POST'); await hub.release('POST'); await Promise.all([p1, p2, p3]);
+  assert.deepStrictEqual(hub.calls, ['test claude-sdk/b', 'POST claude-sdk/b', 'test claude-sdk/c', 'POST claude-sdk/c']);
+  assert.deepStrictEqual(hub.state, { model: 'claude-sdk/c', autoModel: false });
+  assert.strictEqual(d.sel.value, 'claude-sdk/c');
+});
+
 test('desktop: model names in the auto_model HTML are escaped (the two stream readers and the context box)', () => {
   assert.strictEqual((app.match(/<strong style="color:#7eb8f7">\$\{esc\(modelShort\)\}<\/strong>/g) || []).length, 2);
   assert.match(app, /<strong style="color:#7eb8f7">\$\{esc\(pending\)\}<\/strong>/);
@@ -193,7 +226,7 @@ function phone(hub, { admin = true } = {}) {
   };
   ctx.loadAgents = async () => { ctx.agents = [{ name: 'compass', display: 'Compass', ...hub.state }]; };
   vm.runInNewContext(`const AUTO_PICK='__auto__'; const OR_MORE='__or_more__';\nfunction agentByName(n) { return agents.find(a => a.name === n); }\n`
-    + ['queueModelChange', 'setAgentAuto', 'applyModelChange', 'changeModelFromPick', 'onOrSheetClick'].map(fnMob).join('').replace('const modelChanges', 'var modelChanges')
+    + ['reserveModelChange', 'queueModelChange', 'setAgentAuto', 'applyModelChange', 'changeModelFromPick', 'onOrSheetClick'].map(fnMob).join('').replace('const modelChanges', 'var modelChanges')
     + '\nvar modelChanges = {};\nthis.pickNow = changeModelFromPick; this.sheet = onOrSheetClick;', ctx);
   return { ctx, sel, els, toasts, ready: () => ctx.loadAgents(), pick: async (m) => { sel.value = m; return ctx.pickNow(); } };
 }
@@ -252,4 +285,27 @@ test('phone: the "More OpenRouter models" sheet turns Auto off, also for the mod
   await p.ctx.sheet(row('x'));
   assert.deepStrictEqual(hub.calls, ['test openrouter/x', 'POST openrouter/x', 'PATCH auto=false']);
   assert.deepStrictEqual(hub.state, { model: 'openrouter/x', autoModel: false });
+});
+
+test('phone: an OpenRouter model whose test is slow, then Auto meanwhile: Auto wins, the OpenRouter model is never saved', async () => {
+  const row = (id) => ({ target: { closest: () => ({ dataset: { id }, disabled: false }) } });
+  const hub = fakeHub(); hub.hold.add('test'); const p = phone(hub); await p.ready();
+  p.ctx.orOfferWith = (c, id) => [...(c || []), id];
+  const s1 = p.ctx.sheet(row('y')); await tick();
+  const s2 = p.pick('__auto__'); await tick();
+  await hub.release('test'); await Promise.all([s1, s2]);
+  assert.deepStrictEqual(hub.calls, ['test openrouter/y', 'PATCH auto=true'], 'no list update, no POST of the older choice, Auto never turned off');
+  assert.deepStrictEqual(hub.state, { model: 'claude-sdk/a', autoModel: true });
+  assert.strictEqual(p.sel.value, '__auto__');
+});
+
+test('phone: Auto waiting in line behind another change, then a model: the superseded Auto sends nothing', async () => {
+  const hub = fakeHub(); hub.hold.add('POST'); const p = phone(hub); await p.ready();
+  const p1 = p.pick('claude-sdk/b'); await tick();
+  const p2 = p.pick('__auto__'); await tick();
+  const p3 = p.pick('claude-sdk/c'); await tick();
+  await hub.release('POST'); await hub.release('POST'); await Promise.all([p1, p2, p3]);
+  assert.deepStrictEqual(hub.calls, ['test claude-sdk/b', 'POST claude-sdk/b', 'test claude-sdk/c', 'POST claude-sdk/c']);
+  assert.deepStrictEqual(hub.state, { model: 'claude-sdk/c', autoModel: false });
+  assert.strictEqual(p.sel.value, 'claude-sdk/c');
 });

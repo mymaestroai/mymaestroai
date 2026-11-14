@@ -103,7 +103,7 @@ test('desktop: the picker\'s OpenRouter group ends with the search entry, and ch
   assert.match(open, /if \(e\.target === ov\) closeOrPicker\(\);/, 'a click outside closes it');
   assert.match(open, /ov\.dataset\.noDirty = '1';/, 'search and filter only: Esc (the shared dialog guard) closes it without asking');
   const choose = extract(app, 'chooseOrModel');
-  const add = choose.indexOf("fetch('/api/openrouter', { method: 'POST'"); const sw = choose.indexOf('if (await queueModelChange(chatId, model, { tested: true }))');
+  const add = choose.indexOf("fetch('/api/openrouter', { method: 'POST'"); const sw = choose.indexOf('if (await queueModelChange(chatId, model, { tested: true }, slot))');
   assert.ok(add > 0 && sw > add, 'the list is saved before the agent switches');
   assert.match(choose, /body: JSON\.stringify\(\{ models: orOfferWith\(v\.chosen, id\) \}\)/);
   assert.match(choose, /__modelListCache = null;/);
@@ -161,5 +161,5 @@ test('the catalogue and the list are admin-only routes', () => {
 });
 
 test('the phone app version moved on, so phones load the new code', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v66'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v67'/);
 });

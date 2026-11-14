@@ -1215,13 +1215,20 @@ function paintPlan() {
 // one change at a time, the latest choice winning (as on the desktop). A newer choice makes an older one stop at its next
 // step; the newer one then runs against the hub's actual state. Auto (on or off) is an admin's choice. The picker is
 // shared by every chat: a change only repaints it while that agent's chat is still the one open.
+// A choice takes its place in the line when it is made (reserveModelChange), not when the sheet's model test and list
+// update have finished, so a later choice always wins.
 const modelChanges = {};   // agent -> { seq, chain }
-function queueModelChange(name, choice, opts = {}) {
-  if (!name || !choice) return Promise.resolve(false);
+function reserveModelChange(name) {
   const q = modelChanges[name] || (modelChanges[name] = { seq: 0, chain: Promise.resolve() });
   const seq = ++q.seq;
-  const run = q.chain.then(() => applyModelChange(name, choice, opts, () => seq !== q.seq));
-  q.chain = run.catch(() => {});
+  return { q, stale: () => seq !== q.seq };
+}
+function queueModelChange(name, choice, opts = {}, slot = null) {
+  if (!name || !choice) return Promise.resolve(false);
+  const s = slot || reserveModelChange(name);
+  if (s.stale()) return Promise.resolve(false);
+  const run = s.q.chain.then(() => applyModelChange(name, choice, opts, s.stale));
+  s.q.chain = run.catch(() => {});
   return run;
 }
 async function setAgentAuto(name, on) {   // the agent's Auto setting, as the agent settings page sets it (admins only)
@@ -1235,9 +1242,10 @@ async function applyModelChange(name, choice, opts, stale) {
   const label = a.display || name;
   const say = opts.say || toast;
   try {
+    if (stale()) return false;   // a newer choice came while this one waited: it sends nothing
     if (choice === AUTO_PICK) {
       if (a.autoModel || !isAdmin()) return false;
-      try { await setAgentAuto(name, true); a.autoModel = true; toast(`${label} now picks its model and effort for each turn (Auto)`); return true; }
+      try { await setAgentAuto(name, true); a.autoModel = true; if (stale()) return false; toast(`${label} now picks its model and effort for each turn (Auto)`); return true; }
       catch (e) { say(`Could not turn on Auto: ${e.message}`); return false; }
     }
     const model = choice;
@@ -1380,15 +1388,19 @@ async function onOrSheetClick(e) {
   const sheet = $('or-sheet'); const name = sheet.dataset.agent; const a = agentByName(name);
   const id = btn.dataset.id; const model = `openrouter/${id}`;
   if (!a) return;
-  if (model === a.model) { sheet.close(); if (a.autoModel && isAdmin()) await queueModelChange(name, model, { tested: true }); return; }   // its own model: leaves Auto
+  const slot = reserveModelChange(name);   // its place in the line is now, before the test
+  if (model === a.model) { sheet.close(); if (a.autoModel && isAdmin()) await queueModelChange(name, model, { tested: true }, slot); return; }   // its own model: leaves Auto
   const v = orSheetView ? orSheetView.view : {};
   btn.disabled = true; $('ors-msg').textContent = `Testing ${id}…`;
-  if (!(await testBeforeSwitch(model))) { btn.disabled = false; $('ors-msg').textContent = `Not switched: ${a.display || name} stays on ${shortModel(a.model)}.`; return; }
+  const passed = await testBeforeSwitch(model);
+  if (slot.stale()) { btn.disabled = false; sheet.close(); return; }   // another choice was made meanwhile: it wins
+  if (!passed) { btn.disabled = false; $('ors-msg').textContent = `Not switched: ${a.display || name} stays on ${shortModel(a.model)}.`; return; }
   $('ors-msg').textContent = `Switching ${a.display || name} to ${id}…`;
   let note = '';
   if (!(v.chosen || []).includes(id)) {   // add it to the offer first, so the picker lists it from now on
     note = '. It could not be added to the OpenRouter list';
     try {
+      if (slot.stale()) throw new Error('superseded');
       const r = await api('/api/openrouter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ models: orOfferWith(v.chosen, id) }) });
       const d = await r.json().catch(() => ({}));
       if (r.ok && d.ok !== false) { orSheetView = { at: Date.now(), view: d }; if ((d.chosen || []).includes(id)) note = ''; }
@@ -1396,7 +1408,7 @@ async function onOrSheetClick(e) {
     _modelListCache = null;
   }
   let failed = '';
-  const ok = await queueModelChange(name, model, { tested: true, note, say: (t) => { failed = t; } });
+  const ok = await queueModelChange(name, model, { tested: true, note, say: (t) => { failed = t; } }, slot);
   if (!ok && failed) { btn.disabled = false; $('ors-msg').textContent = failed; return; }
   sheet.close();
   if (failed) toast(failed);   // switched, but Auto could not be turned off
