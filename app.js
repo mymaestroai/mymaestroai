@@ -11425,7 +11425,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // deps.keepAlive ({ start(), stop() }, optional): an inaudible sound that keeps a Bluetooth / car audio route awake. It starts with the call and
       // the first spoken line of the call waits until VOICE_CALL_LEAD_IN_MS after that (the route needs a moment to open, or the first syllable is lost).
       let leadInUntil = 0, keepAliveOn = false, micLost = false;
-      let linkLost = false, linkWasLost = false;   // the connection to the server is lost (setLinkLost): speech is dropped, nothing is reported as an error
+      let linkLost = false, linkWasLost = false, linkDropped = false;   // the connection to the server is lost (setLinkLost): speech is dropped, nothing is reported as an error
       // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost); it is dropped when
       // that differs from the count when it is transcribed or sent, so nothing heard around an outage reaches the agent after the link is back.
       let linkGen = 0, segLinkGen = 0;
@@ -11861,6 +11861,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq,
           linkGen: segLinkGen === linkGen && !linkLost ? linkGen : -1 };
         const stale = () => linkLost || mine.linkGen !== linkGen;   // heard while the link was lost, or an outage began since: never sent
+        if (linkLost) linkDropped = true;   // an utterance dropped by an outage: "Say that again." follows "Reconnected."
         speechAnn = null; segActive = false;
         const cand = curCand; curCand = null;
         if (cand && cand.hold) cand.hold.resolve(mine);   // the earlier piece hands its text to this one
@@ -11878,7 +11879,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             try { text = dropLong || stale() ? '' : await d.stt(audio); } catch { failed = true; if (!mustMatch() && !linkLost) quiet(() => ui.toast('Could not transcribe that.')); }
             // The person's words for this piece, as the recognizer gave them, are saved with its audio (also a filler or text that is not sent).
             if (recHandle && !failed && !dropLong && !stale() && String(text || '').trim()) quiet(() => d.recordTranscript(recHandle.seq, String(text).trim()));
-            if (ended || stale()) return;   // heard around an outage: dropped, not sent (also when the link came back while this waited)
+            if (ended) return;
+            if (stale()) { if (linkLost) linkDropped = true; return; }   // heard around an outage: dropped, not sent (also when the link came back while this waited)
             const own = String(text || '').trim(), n = voiceCallNorm(own);
             const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
             let t = ownOk ? own : '';
@@ -11980,10 +11982,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // when it is back after a real outage, "Reconnected." is spoken (kind 'mic': a barge-in does not drop it).
       function setLinkLost(on) {
         if (ended) return;
-        if (on) { if (!linkLost) linkGen++; linkLost = true; linkWasLost = true; return; }
+        if (on) { if (!linkLost) { linkGen++; linkDropped = false; } linkLost = true; linkWasLost = true; return; }
         if (!linkLost) return;
         linkLost = false;
-        if (linkWasLost) { linkWasLost = false; enqueue('Reconnected.', 'mic'); }
+        if (linkWasLost) {
+          linkWasLost = false;
+          enqueue('Reconnected.', 'mic');
+          if (linkDropped) enqueue('Say that again.', 'mic');
+        }
+        linkDropped = false;
       }
 
       // The microphone (from the VAD adapter): onMicInfo shows which one is open; onMicChange says a reopen after the microphone ended or
