@@ -162,24 +162,25 @@ test('1: a session folder without a marker (made before markers) is still matche
   assert.strictEqual(await t.real.findSessionByCall('biographer', 'call-unknown-z'), null);
 });
 
-test('1: a damaged session is skipped: an unknown call id is a miss, logged once per hour', async () => {
+test('1: a damaged UNMARKED (legacy) session might be the call: an unknown call id is "cannot tell", logged once per hour', async () => {
   const t = fx();
   const a = await t.startCall();
   await t.startCall();
   fs.rmSync(markerFile(t, a.sessionId, a.callId));   // a session without a marker (legacy)
   fs.writeFileSync(manifestFile(t, a.sessionId), Buffer.from('not a sealed file'));
+  const code = (p) => p.then(() => 'resolved', (e) => e.code);
   const { r, lines } = await captureLog(async () => [
-    await t.real.findSessionByCall('biographer', 'call-unknown-x'),
-    await t.real.findSessionByCall('biographer', 'call-unknown-y'),
+    await code(t.real.findSessionByCall('biographer', 'call-unknown-x')),
+    await code(t.real.findSessionByCall('biographer', 'call-unknown-y')),
   ]);
-  assert.deepStrictEqual(r, [null, null]);
+  assert.deepStrictEqual(r, ['lookup_inconclusive', 'lookup_inconclusive'], 'never a definite miss: the page keeps its piece');
   assert.deepStrictEqual(lines, [`[recordings] skipped a session that does not open: biographer/${a.sessionId}`]);
   t.clock.t += 61 * MIN;
-  const again = await captureLog(() => t.real.findSessionByCall('biographer', 'call-unknown-x'));
+  const again = await captureLog(() => code(t.real.findSessionByCall('biographer', 'call-unknown-x')));
   assert.strictEqual(again.lines.length, 1);
 });
 
-test('1: a damaged manifest in the window is skipped (409, logged once); a match elsewhere still wins', async () => {
+test('1: a damaged unmarked manifest in the window gives try later (503, logged once); a match elsewhere still wins', async () => {
   const t = fx();
   const a = await t.startCall();
   const b = await t.startCall();   // another call, a later session
@@ -193,13 +194,24 @@ test('1: a damaged manifest in the window is skipped (409, logged once); a match
   fs.writeFileSync(manifestFile(t, a.sessionId), Buffer.from('not a sealed file'));
   routes.resetForTests();
   const { r: bad, lines } = await captureLog(() => t.call(tr('call-unknown-2')));
-  assert.strictEqual(bad.statusCode, 409);
-  assert.deepStrictEqual(bad.json(), { error: 'not_recording' });
+  assert.strictEqual(bad.statusCode, 503);
+  assert.deepStrictEqual(bad.json(), { error: 'try_later' });
   assert.deepStrictEqual(lines, [`[recordings] skipped a session that does not open: biographer/${a.sessionId}`]);
   // the other session is found even though one in the window is damaged
   await t.real.addSegment('biographer', b.sessionId, { speaker: 'person', wav: wav(tone(800)) });
   const ok = await t.call(tr(b.callId));
   assert.strictEqual(ok.statusCode, 200);
+});
+
+test('1: the call\'s marker with its manifest missing is "cannot tell" (503), never a miss', async () => {
+  const t = fx();
+  const a = await t.startCall();
+  t.restart();
+  fs.rmSync(manifestFile(t, a.sessionId));
+  await assert.rejects(() => t.real.findSessionByCall('biographer', a.callId), (e) => e.code === 'lookup_inconclusive');
+  routes.resetForTests();
+  const r = await t.call(tr(a.callId));
+  assert.strictEqual(r.statusCode, 503);
 });
 
 // ── 2. the server clock ──
