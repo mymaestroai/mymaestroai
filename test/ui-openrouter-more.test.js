@@ -71,7 +71,7 @@ test('both pages agree row for row', () => {
 test('phone: the picker\'s OpenRouter group ends with the search entry, and choosing it opens the sheet', () => {
   assert.match(mjs, /const OR_MORE = '__or_more__';/);
   assert.match(mjs, /\+ \(label\.startsWith\('OpenRouter'\) \? `<option value="\$\{OR_MORE\}">🔎 More OpenRouter models…<\/option>` : ''\) \+ '<\/optgroup>'/);
-  assert.match(mjs, /const model = sel\.value;\n  if \(model === OR_MORE\) \{ sel\.value = a \? a\.model : ''; if \(a\) openOrSheet\(name\); return; \}\n  if \(!a \|\| !model \|\| model === a\.model\) return;/,
+  assert.match(mjs, /const model = sel\.value;\n  if \(model === OR_MORE\) \{ sel\.value = [^\n]*; if \(a\) openOrSheet\(name\); return; \}\n  return queueModelChange\(name, model\);/,
     'the entry is never posted as a model');
   assert.match(mhtml, /<dialog id="or-sheet" data-no-dirty><\/dialog>/);   // search and filter only (lib/ui-dialog.js)
   assert.match(mhtml, /#or-sheet input\[type="search"\] \{[^}]*font-size: 16px;/, '16px, so iOS does not zoom into the search box');
@@ -82,27 +82,28 @@ test('phone: the sheet loads the catalogue, adds the model to the list, then swi
   const open = extract(mjs, 'openOrSheet'); const click = extract(mjs, 'onOrSheetClick');
   assert.match(open, /await api\('\/api\/openrouter'\)/);
   assert.match(open, /Date\.now\(\) - orSheetView\.at > 10 \* 60000/, 'the catalogue is reused for ten minutes');
-  const add = click.indexOf("api('/api/openrouter', { method: 'POST'"); const sw = click.indexOf('/model`, { method: \'POST\'');
+  const add = click.indexOf("api('/api/openrouter', { method: 'POST'"); const sw = click.indexOf('queueModelChange(name, model, { tested: true, note');
   assert.ok(add > 0 && sw > add, 'the list is saved before the agent switches');
   assert.match(click, /body: JSON\.stringify\(\{ models: orOfferWith\(v\.chosen, id\) \}\)/);
   assert.match(click, /if \(!\(v\.chosen \|\| \[\]\)\.includes\(id\)\)/, 'a model already in the list is not saved again');
   assert.match(click, /_modelListCache = null;/, 'the picker refetches the list');
   assert.match(click, /note = '\. It could not be added to the OpenRouter list';[\s\S]*?if \(\(d\.chosen \|\| \[\]\)\.includes\(id\)\) note = '';/,
     'the toast says so when the hub did not keep the model in the list');
-  assert.match(click, /modelChanged\(a, name, model, note\);\n  if \(current === name\) fillModelPick\(\);/);
+  assert.match(click, /const ok = await queueModelChange\(name, model, \{ tested: true, note, say: [^\n]*\n[\s\S]*?if \(current === name\) fillModelPick\(\);/, 'the sheet switches through the picker\'s own path');
+  assert.match(extract(mjs, 'applyModelChange'), /else modelChanged\(a, name, model, opts\.note \|\| ''\);/);
   assert.match(extract(mjs, 'modelChanged'), /switches to \$\{mpLabel\(model\)\} after this reply/, 'a busy agent switches after its reply, as from the picker');
 });
 
 test('desktop: the picker\'s OpenRouter group ends with the search entry, and choosing it opens the window', () => {
   assert.match(app, /const OR_MORE = '__or_more__';/);
   assert.match(app, /\+ \(label\.startsWith\('OpenRouter'\) \? `<option value="\$\{OR_MORE\}">🔎 More OpenRouter models…<\/option>` : ''\) \+ '<\/optgroup>'/);
-  assert.match(extract(app, 'changeChatModel'), /if \(chat && model === OR_MORE\) \{ if \(sel\) sel\.value = chat\.model; openOrPicker\(chatId\); return false; \}\n\s*if \(!chat \|\| !model \|\| model === chat\.model\) return false;/);
+  assert.match(extract(app, 'changeChatModel'), /if \(chat && model === OR_MORE\) \{ paintAutoPick\(chatId\); openOrPicker\(chatId\); return false; \}\n\s*return queueModelChange\(chatId, model, opts\);/);
   const open = extract(app, 'openOrPicker');
   assert.match(open, /fetch\('\/api\/openrouter', \{ credentials: 'include' \}\)/);
   assert.match(open, /if \(e\.target === ov\) closeOrPicker\(\);/, 'a click outside closes it');
   assert.match(open, /ov\.dataset\.noDirty = '1';/, 'search and filter only: Esc (the shared dialog guard) closes it without asking');
   const choose = extract(app, 'chooseOrModel');
-  const add = choose.indexOf("fetch('/api/openrouter', { method: 'POST'"); const sw = choose.indexOf('await changeChatModel(chatId, model, { tested: true })');
+  const add = choose.indexOf("fetch('/api/openrouter', { method: 'POST'"); const sw = choose.indexOf('if (await queueModelChange(chatId, model, { tested: true }, slot))');
   assert.ok(add > 0 && sw > add, 'the list is saved before the agent switches');
   assert.match(choose, /body: JSON\.stringify\(\{ models: orOfferWith\(v\.chosen, id\) \}\)/);
   assert.match(choose, /__modelListCache = null;/);
@@ -160,5 +161,5 @@ test('the catalogue and the list are admin-only routes', () => {
 });
 
 test('the phone app version moved on, so phones load the new code', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v66'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v68'/);
 });

@@ -1138,6 +1138,9 @@ async function testBeforeSwitch(model) {
   $('toast').classList.remove('on');
   return confirm(`${r.title || `${name} may not work here.`} ${r.what || r.error || ''}\n\nWhat to do: ${r.fix || 'pick another model.'}\n\nSwitch anyway?`);
 }
+// An agent on Auto (the hub picks the model and effort for each turn) reads "Auto", not the model it happens to be set to.
+const AUTO_PICK = '__auto__';
+function modelText(a) { return a && a.autoModel ? 'Auto' : shortModel(a?.model); }
 async function fillModelPick() {
   const sel = $('chat-model-pick'); const wrap = sel && sel.parentElement;
   if (!sel) return;
@@ -1147,11 +1150,12 @@ async function fillModelPick() {
     const models = await mpModelList();
     if (agentByName(current) !== a) return;   // the user moved on while the list loaded
     const cur = String(a.model || '');
-    let html = '';
-    if (cur && !models.includes(cur)) html += `<option value="${esc(cur)}">${esc(mpLabel(cur))} (current)</option>`;
+    // "Auto" first: it turns the agent's Auto setting on; any real model turns it off (as on the desktop).
+    let html = isAdmin() || a.autoModel ? `<optgroup label="Auto"><option value="${AUTO_PICK}">Auto</option></optgroup>` : '';
+    if (cur && !a.autoModel && !models.includes(cur)) html += `<option value="${esc(cur)}">${esc(mpLabel(cur))} (current)</option>`;
     // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
     for (const [label, rows] of mpGroups(models)) html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}">${esc(mpLabel(m) + healthNote(_modelHealth[m]))}</option>`).join('') + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
-    sel.innerHTML = html; sel.value = cur; sel.dataset.agent = a.name;
+    sel.innerHTML = html; sel.value = a.autoModel ? AUTO_PICK : cur; sel.dataset.agent = a.name;
     sel.hidden = !html; wrap && wrap.classList.toggle('pickable', !!html);
   } catch (e) { sel.hidden = true; wrap && wrap.classList.remove('pickable'); }
 }
@@ -1297,18 +1301,81 @@ function paintPlan() {
   el.hidden = false;
 }
 
+// Every model change (the picker, its Auto entry, the "More OpenRouter models" sheet) runs through one queue per agent:
+// one change at a time, the latest choice winning (as on the desktop). A newer choice makes an older one stop at its next
+// step; the newer one then runs against the hub's actual state. Auto (on or off) is an admin's choice. The picker is
+// shared by every chat: a change only repaints it while that agent's chat is still the one open.
+// A choice takes its place in the line when it is made (reserveModelChange), not when the sheet's model test and list
+// update have finished, so a later choice always wins.
+const modelChanges = {};   // agent -> { seq, chain }
+function reserveModelChange(name) {
+  const q = modelChanges[name] || (modelChanges[name] = { seq: 0, chain: Promise.resolve() });
+  const seq = ++q.seq;
+  return { q, stale: () => seq !== q.seq };
+}
+function queueModelChange(name, choice, opts = {}, slot = null) {
+  if (!name || !choice) return Promise.resolve(false);
+  const s = slot || reserveModelChange(name);
+  if (s.stale()) return Promise.resolve(false);
+  const run = s.q.chain.then(() => applyModelChange(name, choice, opts, s.stale));
+  s.q.chain = run.catch(() => {});
+  return run;
+}
+async function setAgentAuto(name, on) {   // the agent's Auto setting, as the agent settings page sets it (admins only)
+  const r = await api(`/api/agents/${encodeURIComponent(name)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoModel: on }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.success === false) throw new Error(d.error || `HTTP ${r.status}`);
+}
+async function applyModelChange(name, choice, opts, stale) {
+  const a = agentByName(name);
+  if (!a) return false;
+  const label = a.display || name;
+  const say = opts.say || toast;
+  try {
+    if (stale()) return false;   // a newer choice came while this one waited: it sends nothing
+    if (choice === AUTO_PICK) {
+      if (a.autoModel || !isAdmin()) return false;
+      try { await setAgentAuto(name, true); a.autoModel = true; if (stale()) return false; toast(`${label} now picks its model and effort for each turn (Auto)`); return true; }
+      catch (e) { say(`Could not turn on Auto: ${e.message}`); return false; }
+    }
+    const model = choice;
+    const offAuto = !!a.autoModel && isAdmin();
+    if (model === a.model && !offAuto) return false;
+    let switched = false;
+    if (model !== a.model) {
+      if (!opts.tested && !(await testBeforeSwitch(model))) return false;
+      if (stale()) return false;
+      try {
+        const r = await api(`/api/agents/${encodeURIComponent(name)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.success) { say(`Could not change the model: ${d.error || r.status}`); return false; }
+      } catch (e) { say(`Could not change the model: ${e.message}`); return false; }
+      switched = true;
+    }
+    if (offAuto) {
+      if (stale()) return switched;
+      try { await setAgentAuto(name, false); a.autoModel = false; }
+      catch (e) { say(switched ? `Switched ${label} to ${mpLabel(model)}, but could not turn Auto off: ${e.message}` : `Could not turn Auto off: ${e.message}`); return switched; }
+    }
+    if (switched && a.autoModel) toast(`Saved ${mpLabel(model)} as ${label}'s model. Auto stays on: only an admin can turn it off.`);
+    else modelChanged(a, name, model, opts.note || '');
+    return true;
+  } finally {
+    // The hub's state, not what this page assumed (a step may have failed halfway).
+    try { await loadAgents(); } catch { /* the next agent_updated repaints */ }
+    const sel = $('chat-model-pick');
+    if (!stale() && current === name && sel && sel.dataset.agent === name) {
+      const now = agentByName(name);
+      if (now) sel.value = now.autoModel ? AUTO_PICK : now.model;
+      paintChatStatus(); fillEffortPick();
+    }
+  }
+}
 async function changeModelFromPick() {
   const sel = $('chat-model-pick');
   const name = sel.dataset.agent; const a = agentByName(name); const model = sel.value;
-  if (model === OR_MORE) { sel.value = a ? a.model : ''; if (a) openOrSheet(name); return; }
-  if (!a || !model || model === a.model) return;
-  if (!(await testBeforeSwitch(model))) { sel.value = a.model; return; }
-  try {
-    const r = await api(`/api/agents/${encodeURIComponent(name)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.success) { sel.value = a.model; toast(`Could not change the model: ${d.error || r.status}`); return; }
-    modelChanged(a, name, model);
-  } catch (e) { sel.value = a.model; toast(`Could not change the model: ${e.message}`); }
+  if (model === OR_MORE) { sel.value = a && a.autoModel ? AUTO_PICK : (a ? a.model : ''); if (a) openOrSheet(name); return; }
+  return queueModelChange(name, model);
 }
 function modelChanged(a, name, model, note = '') {
   toast((isBusy(name) || streams.has(name) ? `${a.display || name} switches to ${mpLabel(model)} after this reply` : `${a.display || name} now runs on ${mpLabel(model)}`) + note);
@@ -1411,28 +1478,30 @@ async function onOrSheetClick(e) {
   const sheet = $('or-sheet'); const name = sheet.dataset.agent; const a = agentByName(name);
   const id = btn.dataset.id; const model = `openrouter/${id}`;
   if (!a) return;
-  if (model === a.model) { sheet.close(); return; }
+  const slot = reserveModelChange(name);   // its place in the line is now, before the test
+  if (model === a.model) { sheet.close(); await queueModelChange(name, model, { tested: true }, slot); return; }   // its own model: leaves Auto (judged in line, after earlier changes)
   const v = orSheetView ? orSheetView.view : {};
   btn.disabled = true; $('ors-msg').textContent = `Testing ${id}…`;
-  if (!(await testBeforeSwitch(model))) { btn.disabled = false; $('ors-msg').textContent = `Not switched: ${a.display || name} stays on ${shortModel(a.model)}.`; return; }
+  const passed = await testBeforeSwitch(model);
+  if (slot.stale()) { btn.disabled = false; sheet.close(); return; }   // another choice was made meanwhile: it wins
+  if (!passed) { btn.disabled = false; $('ors-msg').textContent = `Not switched: ${a.display || name} stays on ${shortModel(a.model)}.`; return; }
   $('ors-msg').textContent = `Switching ${a.display || name} to ${id}…`;
   let note = '';
   if (!(v.chosen || []).includes(id)) {   // add it to the offer first, so the picker lists it from now on
     note = '. It could not be added to the OpenRouter list';
     try {
+      if (slot.stale()) throw new Error('superseded');
       const r = await api('/api/openrouter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ models: orOfferWith(v.chosen, id) }) });
       const d = await r.json().catch(() => ({}));
       if (r.ok && d.ok !== false) { orSheetView = { at: Date.now(), view: d }; if ((d.chosen || []).includes(id)) note = ''; }
     } catch { /* the note says so */ }
     _modelListCache = null;
   }
-  try {
-    const r = await api(`/api/agents/${encodeURIComponent(name)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.success) { btn.disabled = false; $('ors-msg').textContent = `Could not change the model: ${d.error || r.status}`; return; }
-  } catch (err) { btn.disabled = false; $('ors-msg').textContent = `Could not change the model: ${err.message}`; return; }
+  let failed = '';
+  const ok = await queueModelChange(name, model, { tested: true, note, say: (t) => { failed = t; } }, slot);
+  if (!ok && failed) { btn.disabled = false; $('ors-msg').textContent = failed; return; }
   sheet.close();
-  modelChanged(a, name, model, note);
+  if (failed) toast(failed);   // switched, but Auto could not be turned off
   if (current === name) fillModelPick();
 }
 
@@ -1582,7 +1651,7 @@ function paintChatStatus() {
   const a = agentByName(current);
   const own = ownTurnFor(current);
   const working = isBusy(current) && !own;
-  sub.textContent = working ? busyText(current) : shortModel(a?.model);
+  sub.textContent = working ? busyText(current) : modelText(a);
   sub.classList.toggle('working', working);
   // Stop lives in the header whenever the agent is busy: for a turn this device did not start
   // (e.g. launched on the laptop; the hub keeps turns running through disconnects) and for one
@@ -5788,7 +5857,7 @@ async function openChat(name) {
   if (!same && $('files-sheet')?.open) filesRefresh(); // the Files sheet follows the open agent
   $('chat-icon').textContent = a?.icon || '🤖';
   $('chat-name').textContent = a?.display || name;
-  $('chat-model').textContent = shortModel(a?.model);
+  $('chat-model').textContent = modelText(a);
   fillModelPick(); fillEffortPick();
   paintCtx(); refreshCtx(name); paintPlan();
   if (unread[name]) { delete unread[name]; saveJson('hub-mobile-unread', unread); updateDots(); }
