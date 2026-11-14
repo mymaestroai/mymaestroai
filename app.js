@@ -8160,7 +8160,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
+          <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -12585,6 +12585,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voicePaint() {
       for (const b of document.querySelectorAll('.input-area .mic-btn')) b.style.display = voiceReady() ? '' : 'none';
       for (const b of document.querySelectorAll('.input-area .voice-extra')) b.style.display = voiceReady() ? '' : 'none';
+      if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();   // a chat bar drawn during a call gets its pill
       document.body.classList.toggle('voice-on', voiceReady() || voiceDeviceFallback());
     }
     async function voiceRefreshStatus() {
@@ -13517,6 +13518,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (w.addEventListener) w.addEventListener('release', () => { if (S.wake === w) S.wake = null; });
       } catch { /* a wake lock is a comfort: the call goes on without it */ }
     }
+    // The Hands-free pill shows only in the chat whose call is up; outside a call the mode lives in Voice settings.
+    function voiceModeChipPaint() {
+      let id = null;
+      try { id = voiceCallS.call ? voiceCallS.chatId : null; } catch { id = null; }   // painted from voicePaint before the call state exists
+      for (const c of document.querySelectorAll('.input-area .voice-mode-chip')) c.style.display = id && c.id === 'vmode-' + id ? '' : 'none';
+    }
     function voiceCallTeardown() {
       const S = voiceCallS, chatId = S.chatId, vad = S.vad, thinking = S.thinking, keepAlive = S.keepAlive, focus = S.focus;
       for (const c of Object.values(chats)) if (c) { c.voiceTurn = false; c.voiceDictated = false; }   // nothing dictated before the call is read aloud after Hang up
@@ -13534,6 +13541,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceStopPlayback();
       voiceCallWake(false);
       if (chatId) { voiceCallHideBar(chatId); voiceCallPaintBtn(chatId, false); }
+      if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();
     }
     function voiceCallHangUp() {
       const call = voiceCallS.call;
@@ -13653,6 +13661,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow() };   // read-only hooks for the browser proof
       voiceCallPaintBtn(chatId, true);
       voiceCallShowBar(chatId);
+      if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();
       voiceDispBegin(chatId, chat.agent);   // synchronous, still inside the tap (the phone page unlocks its audio context here)
       S.link = typeof voiceLinkMake === 'function' ? voiceLinkMake(call) : null; S.linkLost = false; if (S.link) S.link.start();   // is the server still there? a lost connection ends the call
       voiceCallWake(true);

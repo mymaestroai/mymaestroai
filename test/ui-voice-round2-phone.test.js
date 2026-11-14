@@ -78,15 +78,22 @@ test('chat controls: every control writes the same per-device prefs and reaches 
   assert.match(sliceBetween('function voiceCallPaintMeter(db)', 'function voiceCallPaintHeld'), /#vp-meter i/, 'the live meter in the panel');
 });
 
-test('chat controls: the mode chip shows the mode at all times, toggles it, and follows the mic visibility (run)', () => {
+// Changed on purpose (owner, 2026-11-13): the Hands-free pill shows only while a call is up; Voice settings (in the + sheet) follows voice on/off.
+test('chat controls: the mode chip shows only during a call, names the mode, and the settings button follows the mic visibility (run)', () => {
   const src = sliceBetween('const VOICE_WAIT_LABELS', 'function voicePanelPaint()');
   const els = { 'voice-strip': { hidden: true }, 'voice-settings-btn': { hidden: true }, 'voice-mode-chip': { textContent: '', classList: { toggle(c, v) { this.on = v; } }, setAttribute(k, v) { this.aria = v; } } };
   let prefs = { mode: 'tap' }, on = false, repainted = 0;
-  const f = new Function('VOICE_CONTINUE_WAITS', '$', 'voicePrefsNow', 'voiceOn', 'voicePanelShow', 'voicePanelPaint', src + '\nreturn { voiceStripPaint, voiceContinueWaitNow };')([1500, 3000, 5000], (id) => els[id], () => prefs, () => on, () => {}, () => { repainted++; });
+  const f = new Function('VOICE_CONTINUE_WAITS', '$', 'voicePrefsNow', 'voiceOn', 'voicePanelShow', 'voicePanelPaint', 'let voiceCall = null;\n' + src + '\nreturn { voiceStripPaint, voiceContinueWaitNow, setCall: (v) => { voiceCall = v; } };')([1500, 3000, 5000], (id) => els[id], () => prefs, () => on, () => {}, () => { repainted++; });
   f.voiceStripPaint();
   assert.strictEqual(els['voice-strip'].hidden, true); assert.strictEqual(els['voice-settings-btn'].hidden, true);
   on = true; f.voiceStripPaint();
-  assert.strictEqual(els['voice-strip'].hidden, false); assert.strictEqual(els['voice-settings-btn'].hidden, false);
+  assert.strictEqual(els['voice-strip'].hidden, true, 'voice on but no call: no pill');
+  assert.strictEqual(els['voice-settings-btn'].hidden, false, 'Voice settings is there whenever voice is on');
+  f.setCall({ call: {} }); f.voiceStripPaint();
+  assert.strictEqual(els['voice-strip'].hidden, false, 'during a call the pill shows');
+  f.setCall(null); f.voiceStripPaint();
+  assert.strictEqual(els['voice-strip'].hidden, true, 'after the call it goes again');
+  f.setCall({ call: {} }); f.voiceStripPaint();
   assert.strictEqual(els['voice-mode-chip'].textContent, 'Tap to talk');
   prefs = { mode: 'handsfree' }; f.voiceStripPaint();
   assert.strictEqual(els['voice-mode-chip'].textContent, 'Hands-free');

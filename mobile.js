@@ -7803,7 +7803,7 @@ function plusSheetWire() {
 function voiceStripPaint() {
   const on = voiceOn();
   const strip = $('voice-strip'), btn = $('voice-settings-btn'), chip = $('voice-mode-chip');
-  if (strip) strip.hidden = !on;
+  if (strip) strip.hidden = !on || !voiceCall;   // the Hands-free pill only while a call is up; the mode stays in Voice settings
   if (btn) btn.hidden = !on;
   if (chip) {
     const hands = voicePrefsNow().mode !== 'tap';
