@@ -312,7 +312,8 @@ test('interjection that finds the turn over is sent as a new voice message; othe
 });
 
 test('page hidden: iOS releases at once (round 2: Android may keep the call); the "call ended" bar comes when it returns; the wake lock is asked for again when visible', () => {
-  const h = sliceBetween("document.addEventListener('visibilitychange'", "window.addEventListener('pagehide'");
+  // changed: anchored on the voice handler itself; the Active list's job poll registers its own visibilitychange listener earlier in the page
+  const h = sliceBetween("document.addEventListener('visibilitychange', () => {\n", "window.addEventListener('pagehide'");
   assert.match(h, /if \(voiceCall && !voiceCanStayHidden\(\)\) voiceCallRelease\('hidden'\)/);
   assert.match(h, /if \(voiceCallBgNote && !voiceCall\) voiceEndedBar\(true\)/);
   assert.match(h, /if \(voiceCall\) voiceWakeAcquire\(voiceCall\)/);
