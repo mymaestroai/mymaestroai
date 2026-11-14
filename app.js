@@ -6105,8 +6105,9 @@
           else span.textContent = `${chat.display || capName(chat.agent)} (${chat.autoModel ? 'Auto' : String(chat.model || '').split('/').pop()})`;
           if (sel) {
             const m = String(chat.model || '');
-            if (m && ![...sel.options].some(o => o.value === m)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(m)}">${esc(chat.autoModel ? 'Auto' : billingDisplay(m, true))}</option>`);
-            sel.value = m;
+            if (m && !chat.autoModel && ![...sel.options].some(o => o.value === m)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(m)}">${esc(billingDisplay(m, true))}</option>`);
+            if (!chat.autoModel) chat.lastAutoModel = null;
+            paintAutoPick(chat.id);
           }
         }
         if (chat._pendingAgentNote) { chat._pendingAgentNote.remove(); chat._pendingAgentNote = null; }
@@ -6173,6 +6174,29 @@
       fillModelPick(chatId).then(() => { sel.focus(); try { if (sel.showPicker) sel.showPicker(); } catch { /* the next click opens it */ } });
       return false;
     }
+    // "Auto" is the picker's first choice: it turns the agent's Auto setting on (PATCH autoModel, the setting the agent
+    // settings page uses); any real model turns it off. An Auto agent's picker shows "Auto", then "Auto · <model>" once a
+    // turn's gateway auto_model event names the model Auto picked. Only the picker's Auto option changes; the header
+    // also holds the effort picker and the plan badge (the old "Name (model)" rewrite of the header's textContent
+    // flattened all of them into one long line of option text).
+    const AUTO_PICK = '__auto__';
+    const AUTO_TIP = 'Auto picks the model and effort for each turn.';
+    function autoPickLabel(chat) { return chat && chat.lastAutoModel ? `Auto · ${chat.lastAutoModel}` : 'Auto'; }
+    function paintAutoPick(chatId) {
+      const chat = chats[chatId]; const sel = document.getElementById(`model-pick-${chatId}`);
+      if (!chat || !sel) return;
+      let opt = [...sel.options].find(o => o.value === AUTO_PICK);
+      if (!opt && chat.autoModel) { sel.insertAdjacentHTML('afterbegin', `<option value="${AUTO_PICK}"></option>`); opt = sel.options[0]; }
+      if (opt) opt.textContent = autoPickLabel(chat);
+      if (chat.autoModel) { sel.value = AUTO_PICK; sel.title = AUTO_TIP; }
+      else { if (chat.model) sel.value = chat.model; sel.title = sel.dataset.tip || sel.title; }
+    }
+    function noteAutoModel(chatId, modelShort) {
+      const chat = chats[chatId];
+      if (!chat || !modelShort) return;
+      chat.lastAutoModel = modelShort;
+      paintAutoPick(chatId);
+    }
     function fillModelPick(chatId) {
       const sel = document.getElementById(`model-pick-${chatId}`);
       if (!chats[chatId] || !sel || sel.dataset.filled === 'done') return Promise.resolve();
@@ -6187,29 +6211,102 @@
         const cur = String(chat.model || '');
         // Groups by vendor (Anthropic, OpenAI, Google, ...); every line starts with the route: "API / gpt-6-astra",
         // "Subscription (Claude sign-in) / claude-fable-5-1". The route is in the text, not in a grey group label.
-        let html = '';
-        if (cur && !models.includes(cur)) html += `<option value="${esc(cur)}" selected>${esc(billingDisplay(cur, true))} (current; not in the hub's list)</option>`;
+        // Auto is an admin's choice; a member sees it only as the current entry of an agent an admin set to Auto.
+        let html = isHubAdmin() || chat.autoModel ? `<optgroup label="Auto"><option value="${AUTO_PICK}">${esc(autoPickLabel(chat))}</option></optgroup>` : '';
+        if (cur && !chat.autoModel && !models.includes(cur)) html += `<option value="${esc(cur)}" selected>${esc(billingDisplay(cur, true))} (current; not in the hub's list)</option>`;
         // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
         for (const [label, rows] of groupModels(models)) {
           html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(((billing[m] && billing[m].short) || billingDisplay(m, true)) + healthNote(health && health[m]))}</option>`).join('')
             + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
         }
-        if (html) { sel.innerHTML = html; sel.value = cur; }
+        sel.innerHTML = html; sel.value = cur;
+        paintAutoPick(chatId);   // an Auto agent stays on "Auto", never shown as the model it happens to be set to
         sel.dataset.filled = 'done';
       } catch (e) { delete sel.dataset.filled; console.warn('[model-pick] list failed:', e.message); }
     }
-    async function changeChatModel(chatId, model, opts = {}) {
-      const chat = chats[chatId]; const sel = document.getElementById(`model-pick-${chatId}`);
-      if (chat && model === OR_MORE) { if (sel) sel.value = chat.model; openOrPicker(chatId); return false; }
-      if (!chat || !model || model === chat.model) return false;
-      if (!opts.tested && !(await testBeforeSwitch(model))) { if (sel) sel.value = chat.model; return false; }
+    // The agent's Auto setting, the same call the agent settings page makes (admins only: PATCH refuses autoModel for a
+    // member).
+    async function setChatAuto(chat, on) {
+      const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ autoModel: on }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) throw new Error(d.error || `HTTP ${r.status}`);
+      chat.autoModel = on;
+    }
+    // What the hub has now for an agent: { model, autoModel }, or null when it can't be read.
+    async function agentStateFromHub(name) {
+      const r = await fetch('/api/agents', { credentials: 'include' });
+      if (!r.ok) return null;
+      const d = await r.json().catch(() => ({}));
+      const a = (d.agents || []).find(x => x && x.name === name);
+      return a ? { model: String(a.model || ''), autoModel: !!a.autoModel } : null;
+    }
+
+    // Every model change (the picker, its Auto entry, the "More OpenRouter models" window) runs through one queue per
+    // agent: one change at a time, the latest choice winning. A newer choice makes an older one stop at its next step
+    // (after the model test, after each request); whatever the older one already wrote stays, and the newer one then
+    // runs against the hub's actual state, so the agent always ends on the last thing chosen.
+    // A choice takes its place in the line when it is made (reserveModelChange), not when its own preparation (the
+    // OpenRouter window's model test and list update) has finished, so a later choice always wins.
+    const modelChanges = {};   // agent -> { seq, chain }
+    function reserveModelChange(agent) {
+      const q = modelChanges[agent] || (modelChanges[agent] = { seq: 0, chain: Promise.resolve() });
+      const seq = ++q.seq;
+      return { q, stale: () => seq !== q.seq };
+    }
+    function queueModelChange(chatId, choice, opts = {}, slot = null) {
+      const chat = chats[chatId];
+      if (!chat || !choice) return Promise.resolve(false);
+      const s = slot || reserveModelChange(chat.agent);
+      if (s.stale()) return Promise.resolve(false);
+      const run = s.q.chain.then(() => applyModelChange(chatId, chat, choice, opts, s.stale));
+      s.q.chain = run.catch(() => {});
+      return run;
+    }
+    // One change, against the state the hub confirmed last. Auto (on or off) is an admin's choice: a member can switch an
+    // Auto agent's model to one they are allowed, and Auto stays on. Ends by reading the hub's state back, so a step that
+    // failed halfway never leaves the picker showing something the hub doesn't have.
+    async function applyModelChange(chatId, chat, choice, opts, stale) {
+      const admin = isHubAdmin();
+      const say = (t) => alert(t);
       try {
-        const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ model }) });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok || !d.success) { if (sel) sel.value = chat.model; alert(`Could not change the model: ${d.error || r.status}`); return false; }
-        // The hub's agent_updated event relabels the header (or parks the change until the current turn ends).
+        if (stale()) return false;   // a newer choice came while this one waited: it sends nothing
+        if (choice === AUTO_PICK) {
+          if (chat.autoModel || !admin) return false;
+          try { await setChatAuto(chat, true); return !stale(); }
+          catch (e) { say(`Could not turn on Auto: ${e.message}`); return false; }
+        }
+        const model = choice;
+        const offAuto = !!chat.autoModel && admin;
+        if (model === chat.model && !offAuto) return false;
+        let switched = false;
+        if (model !== chat.model) {
+          if (!opts.tested && !(await testBeforeSwitch(model))) return false;
+          if (stale()) return false;
+          try {
+            const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ model }) });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || !d.success) { say(`Could not change the model: ${d.error || r.status}`); return false; }
+          } catch (e) { say(`Could not change the model: ${e.message}`); return false; }
+          chat.model = model; switched = true;
+        }
+        if (offAuto) {
+          if (stale()) return switched;
+          try { await setChatAuto(chat, false); }
+          catch (e) { say(switched ? `Switched to ${billingDisplay(model, true)}, but could not turn Auto off: ${e.message}` : `Could not turn Auto off: ${e.message}`); return switched; }
+        } else if (switched && chat.autoModel) {
+          hubToast(`Saved ${billingDisplay(model, true)} as this agent's model. Auto stays on: only an admin can turn it off.`, 6000);
+        }
         return true;
-      } catch (e) { if (sel) sel.value = chat.model; alert(`Could not change the model: ${e.message}`); return false; }
+      } finally {
+        // The hub's state, not what this page assumed. The agent_updated event follows later (or after the agent's turn).
+        try { const st = await agentStateFromHub(chat.agent); if (st) { chat.model = st.model; chat.autoModel = st.autoModel; if (!st.autoModel) chat.lastAutoModel = null; } } catch {}
+        if (!stale()) { paintAutoPick(chatId); refreshEffortPick(chat); }
+      }
+    }
+    async function changeChatModel(chatId, model, opts = {}) {
+      const chat = chats[chatId];
+      if (chat && model === OR_MORE) { paintAutoPick(chatId); openOrPicker(chatId); return false; }
+      return queueModelChange(chatId, model, opts);
     }
 
     // What the hub has seen a model do (lib/model-health): " — ⚠ blocked by the privacy setting" after its name in the
@@ -6330,16 +6427,20 @@
       const ov = document.getElementById('or-pick-overlay'); const chatId = ov && ov.dataset.chat; const chat = chats[chatId];
       if (!chat) { closeOrPicker(); return; }
       const model = `openrouter/${id}`;
-      if (model === chat.model) { closeOrPicker(); return; }
+      const slot = reserveModelChange(chat.agent);   // its place in the line is now, before the test
+      if (model === chat.model) { closeOrPicker(); await queueModelChange(chatId, model, { tested: true }, slot); return; }   // its own model: leaves Auto (judged in line, after earlier changes)
       if (btn) btn.disabled = true;
       const msg = document.getElementById('or-pick-msg'); if (msg) msg.textContent = `Testing ${id}…`;
-      if (!(await testBeforeSwitch(model))) { if (btn) btn.disabled = false; if (msg) msg.textContent = `Not switched: ${chat.display || capName(chat.agent)} stays on ${String(chat.model || '').split('/').pop()}.`; return; }
+      const passed = await testBeforeSwitch(model);
+      if (slot.stale()) { closeOrPicker(); return; }   // another choice was made meanwhile: it wins
+      if (!passed) { if (btn) btn.disabled = false; if (msg) msg.textContent = `Not switched: ${chat.display || capName(chat.agent)} stays on ${String(chat.model || '').split('/').pop()}.`; return; }
       if (msg) msg.textContent = `Switching to ${id}…`;
       const v = orPickView ? orPickView.view : {};
       let note = '';
       if (!(v.chosen || []).includes(id)) {   // add it to the offer first, so every picker lists it from now on
         note = '. It could not be added to the OpenRouter list';
         try {
+          if (slot.stale()) throw new Error('superseded');
           const r = await fetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ models: orOfferWith(v.chosen, id) }) });
           const j = await r.json().catch(() => ({}));
           if (r.ok && j.ok !== false) { orPickView = { at: Date.now(), view: j }; if (orView) orView = j; if ((j.chosen || []).includes(id)) note = ''; }
@@ -6348,7 +6449,7 @@
         document.querySelectorAll('select.model-pick[data-filled]').forEach(s => { delete s.dataset.filled; });
       }
       closeOrPicker();
-      if (await changeChatModel(chatId, model, { tested: true })) hubToast(`${chat.display || capName(chat.agent)} switches to ${billingDisplay(model, true)}${note}`, note ? 6000 : 3000);
+      if (await queueModelChange(chatId, model, { tested: true }, slot)) hubToast(`${chat.display || capName(chat.agent)} switches to ${billingDisplay(model, true)}${note}`, note ? 6000 : 3000);
     }
 
     // Reasoning effort in the chat header, next to the model (lib/effort). Admins choose it for any agent; members see
@@ -7938,7 +8039,7 @@
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
 
-          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" title="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="return modelPickDown(event, '${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
+          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" data-tip="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." title="${chat.autoModel ? AUTO_TIP : "Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn."}" aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="return modelPickDown(event, '${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${chat.autoModel ? AUTO_PICK : esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
@@ -9640,15 +9741,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   if (container) {
                     const cib = container.querySelector('.context-info-box');
                     if (cib && !cib.dataset.modelAppended) {
-                      cib.innerHTML += ` · <strong style="color:#7eb8f7">${modelShort}</strong>`;
+                      cib.innerHTML += ` · <strong style="color:#7eb8f7">${esc(modelShort)}</strong>`;
                       cib.dataset.modelAppended = '1';
                     }
                   }
-                  const headerSpan = document.querySelector(`#panel-${chatId} .agent-name`);
-                  if (headerSpan) {
-                    const agentDisplayName = headerSpan.textContent.split(' (')[0];
-                    headerSpan.textContent = `${agentDisplayName} (${modelShort})`;
-                  }
+                  noteAutoModel(chatId, modelShort);
                 } catch {}
                 continue;
               }
@@ -9958,16 +10055,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 if (container) {
                   const cib = container.querySelector('.context-info-box');
                   if (cib && !cib.dataset.modelAppended) {
-                    cib.innerHTML += ` · <strong style="color:#7eb8f7">${modelShort}</strong>`;
+                    cib.innerHTML += ` · <strong style="color:#7eb8f7">${esc(modelShort)}</strong>`;
                     cib.dataset.modelAppended = '1';
                   }
                 }
                 // Update panel header
-                const headerSpan = document.querySelector(`#panel-${chatId} .agent-name`);
-                if (headerSpan) {
-                  const name = headerSpan.textContent.split(' (')[0];
-                  headerSpan.textContent = `${name} (${modelShort})`;
-                }
+                noteAutoModel(chatId, modelShort);
                 continue;
               }
               if (oc2.type === 'approval_request' || oc2.type === 'approval_resolved') {
@@ -10404,7 +10497,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Append auto-model if already known
       const pending = window.__pendingAutoModel && window.__pendingAutoModel[chatId];
       if (pending) {
-        html += ` · <strong style="color:#7eb8f7">${pending}</strong>`;
+        html += ` · <strong style="color:#7eb8f7">${esc(pending)}</strong>`;
         div.dataset.modelAppended = '1';
         delete window.__pendingAutoModel[chatId];
       }
