@@ -635,6 +635,28 @@ test('voiceCreateKeepAlive: levelDb sets the amplitude; a null or throwing conte
   assert.doesNotThrow(() => C.voiceCreateKeepAlive().start());
 });
 
+test('voiceCreateKeepAlive: allow() gates it; refresh() applies a change at once; stop() wins; a throwing allow is "no"', () => {
+  const ctx = fakeAudioCtx();
+  let ok = false;
+  const ka = C.voiceCreateKeepAlive({ ctx, allow: () => ok });
+  ka.start();
+  assert.strictEqual(ka.running, false, 'not allowed (a phone or computer speaker, or the switch off): no sound at all');
+  assert.strictEqual(ctx.sources.length, 0);
+  ok = true; ka.refresh();
+  assert.strictEqual(ka.running, true, 'allowed now (Bluetooth / car, switch on): it starts at once, mid-call');
+  ok = false; ka.refresh();
+  assert.strictEqual(ka.running, false, 'the switch turned off mid-call: it stops at once');
+  assert.strictEqual(ctx.sources[0].stopped, 1);
+  ok = true; ka.stop(); ka.refresh();
+  assert.strictEqual(ka.running, false, 'after stop() (the call ended) a refresh never starts it again');
+  ka.start(); assert.strictEqual(ka.running, true);
+  const bad = C.voiceCreateKeepAlive({ ctx: fakeAudioCtx(), allow: () => { throw new Error('no prefs'); } });
+  bad.start(); assert.strictEqual(bad.running, false);
+  const plain = C.voiceCreateKeepAlive({ ctx: fakeAudioCtx() });
+  plain.start(); assert.strictEqual(plain.running, true, 'no allow(): as before');
+  ka.stop(); plain.stop();
+});
+
 test('exports: the new constants and names', () => {
   assert.strictEqual(C.VOICE_ECHO_HOLD_MS, 600);
   assert.strictEqual(C.VOICE_CALL_LEAD_IN_MS, 300);

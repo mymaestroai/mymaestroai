@@ -2810,7 +2810,8 @@ function voiceCarAnalyse(mic, ref, chirp, rate) {
   }
   return out;
 }
-// A very quiet, looping WAV (white noise near -60 dBFS, never silence). Played through a media element it makes Chrome for Android take full audio focus.
+// A very quiet, looping WAV (the smallest step of 16-bit audio, +/-1 at random: about -90 dBFS, never digital silence). Played through a media
+// element it makes Chrome for Android take full audio focus. It was -60 dBFS once: on a phone speaker turned up that is a hiss in every pause.
 function voiceFocusWav(seconds = 6, sampleRate = 8000) {
   const n = Math.max(1, Math.round(seconds * sampleRate)), bytes = n * 2;
   const out = new Uint8Array(44 + bytes), dv = new DataView(out.buffer);
@@ -2820,9 +2821,7 @@ function voiceFocusWav(seconds = 6, sampleRate = 8000) {
   let s = 123456789;
   for (let i = 0; i < n; i++) {
     s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-    let v = Math.round(((s >>> 8) / 8388607.5 - 1) * 33);
-    if (v === 0) v = (i & 1) ? 1 : -1;
-    dv.setInt16(44 + i * 2, v, true);
+    dv.setInt16(44 + i * 2, (s >>> 31) ? 1 : -1, true);
   }
   return out;
 }
@@ -4138,34 +4137,41 @@ function voiceCreateThinkingSound(opts) {
 // The keep-alive sound: a 2 s loop of white noise at levelDb (default -70 dB, amplitude 10^(levelDb/20), mono) through a GainNode to
 // ctx.destination. It is inaudible noise, not digital silence: phones and Bluetooth links that put the audio route to sleep on silence keep
 // it open, so the first syllable of a reply and the thinking sound are not clipped. start() makes the buffer once and a source node each
-// time; stop() stops and disconnects it. A missing or failing context makes every call a no-op. opts: { ctx, levelDb }.
+// time; stop() stops and disconnects it. A missing or failing context makes every call a no-op. opts: { ctx, levelDb, allow }.
+// allow() (optional): whether it may sound right now (the pages: the "Keep Bluetooth awake" switch is on AND the call's audio goes to
+// Bluetooth or a car; on a phone or laptop speaker the noise is only a hiss in the pauses). start() asks for it, stop() ends it, refresh()
+// applies a change of allow() at once (the switch flipped, the microphone moved to or from Bluetooth), mid-call.
 function voiceCreateKeepAlive(opts) {
   const o = opts || {}, ctx = o.ctx;
   const db = typeof o.levelDb === 'number' && Number.isFinite(o.levelDb) ? o.levelDb : VOICE_KEEPALIVE_DB;
-  let buffer = null, src = null, gain = null;
+  const allowed = () => { if (typeof o.allow !== 'function') return true; try { return o.allow() === true; } catch { return false; } };
+  let buffer = null, src = null, gain = null, wanted = false;
   const drop = () => {
     const s = src, g = gain; src = gain = null;
     if (s) { try { s.stop(); } catch { /* not started */ } try { s.disconnect(); } catch { /* gone */ } }
     if (g) { try { g.disconnect(); } catch { /* gone */ } }
   };
+  const play = () => {
+    if (!ctx || src) return;
+    try {
+      if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); }
+      if (!buffer) {
+        const rate = ctx.sampleRate, amp = Math.pow(10, db / 20);
+        buffer = ctx.createBuffer(1, Math.max(1, Math.round(rate * 2)), rate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * amp;
+      }
+      gain = ctx.createGain(); gain.gain.value = 1;
+      src = ctx.createBufferSource(); src.buffer = buffer; src.loop = true;
+      src.connect(gain); gain.connect(ctx.destination);
+      src.start();
+    } catch { drop(); }
+  };
+  const apply = () => { if (wanted && allowed()) play(); else drop(); };
   return {
-    start() {
-      if (!ctx || src) return;
-      try {
-        if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); }
-        if (!buffer) {
-          const rate = ctx.sampleRate, amp = Math.pow(10, db / 20);
-          buffer = ctx.createBuffer(1, Math.max(1, Math.round(rate * 2)), rate);
-          const data = buffer.getChannelData(0);
-          for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * amp;
-        }
-        gain = ctx.createGain(); gain.gain.value = 1;
-        src = ctx.createBufferSource(); src.buffer = buffer; src.loop = true;
-        src.connect(gain); gain.connect(ctx.destination);
-        src.start();
-      } catch { drop(); }
-    },
-    stop() { drop(); },
+    start() { wanted = true; apply(); },
+    stop() { wanted = false; drop(); },
+    refresh() { apply(); },
     get running() { return !!src; },
   };
 }
@@ -7293,7 +7299,7 @@ function voiceSpeedNow() { const v = voicePrefsNow().voiceSpeed; return voiceCle
 const VOICE_SPEED_HINT = 'Google voices ignore this setting.';
 const VOICE_ECHO_LABELS = ['Off', '0.6 s', '1 s', '1.5 s'];   // one per VOICE_ECHO_HOLDS entry
 const VOICE_ECHO_HINT = 'Keeps the agent from hearing its own reply in a car or through a speaker.';
-const VOICE_KEEPALIVE_HINT = 'Plays an inaudible hiss so a car or speaker does not cut the first word.';
+const VOICE_KEEPALIVE_HINT = 'While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.';
 // Saves a change the person made (every caller is a control or a check they ran). A key among the agent-default keys whose value changed is
 // marked as chosen on this device: from then on an agent's voice default no longer applies to it.
 function voicePrefsSave(patch) {
@@ -8107,7 +8113,11 @@ function voiceCallApplyPrefs() {
   try { if (typeof vc.call.setPrefs === 'function') vc.call.setPrefs(); } catch { /* older controller */ }
   try { if (vc.thinkSnd) vc.thinkSnd.setVolume(voiceThinkingVolume()); } catch { /* not playing */ }
   try { vc.vad.setEchoHold(p.echoHold); } catch { /* vad not up yet */ }
+  try { if (vc.keepAlive && vc.keepAlive.refresh) vc.keepAlive.refresh(); } catch { /* not playing */ }   // the Keep Bluetooth awake switch acts at once
 }
+// The keep-alive hiss may sound only while the switch is on AND the call's audio goes to Bluetooth or a car (on the phone's own
+// speaker it is only a hiss in the pauses, and that route never sleeps).
+function voiceKeepAliveAllowed() { return voicePrefsNow().keepAlive !== false && voiceOutputNow().output === 'bluetooth'; }
 // The call panel's microphone line: plain text only (the label comes from the device).
 function voiceMicLine(info) {
   const i = info || {};
@@ -8223,7 +8233,7 @@ function voiceCallDeps(vc) {
     server: voiceCallServer(agent, () => vc),
     ...(vc.keepAlive ? { keepAlive: vc.keepAlive } : {}),   // the controller starts it with the call and stops it with the call
     ui: {
-      mic: (info) => { if (voiceCall !== vc) return; vc.micInfo = info || null; try { voiceLoudSync(); } catch { /* the next sentence syncs it */ } const m = $('cp-mic'); if (m && !vc.micLostOn) m.textContent = voiceMicLine(info); },   // while it is lost the line keeps saying so
+      mic: (info) => { if (voiceCall !== vc) return; vc.micInfo = info || null; try { voiceLoudSync(); } catch { /* the next sentence syncs it */ } try { if (vc.keepAlive && vc.keepAlive.refresh) vc.keepAlive.refresh(); } catch { /* not playing */ } const m = $('cp-mic'); if (m && !vc.micLostOn) m.textContent = voiceMicLine(info); },   // while it is lost the line keeps saying so
       micLost: (on) => {   // the call goes on; the line says the microphone is lost, the meter is empty and a tap tries it again
         if (voiceCall !== vc) return;
         vc.micLostOn = !!on;
@@ -8315,7 +8325,7 @@ function voiceCallStart() {
   const vc = { agent, call: null, vad: null, callTurns: new Set(), hubTurns: new Map(), asks: new Map(), lastText: '', sendSeq: 0, expecting: false, wake: null, startedAt: Date.now(), lastFrame: Date.now(), lastTick: Date.now(), beatTimer: null, thinkSnd: null, thinkCtx: null, thinkOn: false };
   vc.vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: prefs.micLevel, interruptSensitivity: prefs.interruptSensitivity, endPause: prefs.endPause, echoHoldMs: prefs.echoHold });
   voiceThinkingCtxMake(vc);   // iOS: the thinking sound's AudioContext is made and resumed inside this tap, before any await
-  if (prefs.keepAlive !== false && vc.thinkCtx && typeof voiceCreateKeepAlive === 'function') vc.keepAlive = voiceCreateKeepAlive({ ctx: vc.thinkCtx });   // the route stays awake in a car or on a speaker; the controller starts it
+  if (vc.thinkCtx && typeof voiceCreateKeepAlive === 'function') vc.keepAlive = voiceCreateKeepAlive({ ctx: vc.thinkCtx, allow: voiceKeepAliveAllowed });   // the Bluetooth / car route stays awake; the controller starts it, it sounds only while allowed
   if (typeof voiceCreateAudioFocus === 'function') {   // a looping media element: Android then takes full audio focus and other apps pause for the call (inside the tap)
     try { vc.focus = window.__voiceFocusOne || (window.__voiceFocusOne = voiceCreateAudioFocus({ doc: document, URL, Blob })); vc.focus.start().then((ok) => { if (voiceCall === vc && typeof voiceFocusHint === 'function') voiceFocusHint(!ok || (typeof voiceIsIOS === 'function' && voiceIsIOS())); }); } catch { vc.focus = null; }
   }
@@ -8725,7 +8735,7 @@ function voiceSheet() {
   sh.querySelector('.vs-car').addEventListener('click', voiceCarRun);
   const echo = sh.querySelector('.vs-echo');
   echo.addEventListener('change', () => { voicePrefsSave({ echoHold: Number(echo.value) }); voiceCallApplyPrefs(); voicePanelPaint(); });   // a call that is up takes it at once
-  sh.querySelector('.vs-keepalive').addEventListener('change', (e) => { voicePrefsSave({ keepAlive: !!e.target.checked }); voicePanelPaint(); });
+  sh.querySelector('.vs-keepalive').addEventListener('change', (e) => { voicePrefsSave({ keepAlive: !!e.target.checked }); voiceCallApplyPrefs(); voicePanelPaint(); });
   sh.querySelector('.vs-read').addEventListener('change', (e) => voicePrefsSave({ readAloud: !!e.target.checked }));
   sh.querySelector('.vs-fallback').addEventListener('change', (e) => { voicePrefsSave({ deviceVoiceFallback: !!e.target.checked }); voiceSpeakPaint(); });
   sh.querySelector('.vs-test').addEventListener('click', voiceTestToggle);

@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **No more static in the quiet moments of a call.** The near-silent sound that lets your Maestro pause other apps during a call is now far below anything a speaker can play, and the "Keep Bluetooth awake" hiss plays only while the call uses Bluetooth or a car, never on a phone or computer speaker. Turning "Keep Bluetooth awake" off now takes effect at once, mid-call.
+- **Levels opens the voice settings during a call again.** On the phone, with the orb or a character on screen, the Levels button in Controls opened the voice settings behind the call screen, so nothing seemed to happen. They now open on top.
 - **A busy agent always shows as busy in the agent list.** An agent replying while it also runs a background job now keeps its yellow dot and yellow status line, with the job line below. An agent that starts a new turn before its previous one has finished no longer drops to idle in the list for the rest of the reply.
 - **A recorded call announces itself once per person.** By default the recording line is now spoken only on the first recorded call between an agent and each person; later calls record without it, and the Recording badge still shows every time. An agent's "Announce recording" setting can choose every call or never instead. The default line is now "This conversation is being recorded."; a line you wrote yourself is kept.
 - **The character moves more naturally in quiet moments of a call.** After about 13 seconds of silence, calm everyday movements join the listening ones, so the same few gestures no longer come back every minute and a half. The moment you speak, it turns back to listening.

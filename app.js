@@ -11147,7 +11147,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return out;
     }
-    // A very quiet, looping WAV (white noise near -60 dBFS, never silence). Played through a media element it makes Chrome for Android take full audio focus.
+    // A very quiet, looping WAV (the smallest step of 16-bit audio, +/-1 at random: about -90 dBFS, never digital silence). Played through a media
+    // element it makes Chrome for Android take full audio focus. It was -60 dBFS once: on a phone speaker turned up that is a hiss in every pause.
     function voiceFocusWav(seconds = 6, sampleRate = 8000) {
       const n = Math.max(1, Math.round(seconds * sampleRate)), bytes = n * 2;
       const out = new Uint8Array(44 + bytes), dv = new DataView(out.buffer);
@@ -11157,9 +11158,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let s = 123456789;
       for (let i = 0; i < n; i++) {
         s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-        let v = Math.round(((s >>> 8) / 8388607.5 - 1) * 33);
-        if (v === 0) v = (i & 1) ? 1 : -1;
-        dv.setInt16(44 + i * 2, v, true);
+        dv.setInt16(44 + i * 2, (s >>> 31) ? 1 : -1, true);
       }
       return out;
     }
@@ -12475,34 +12474,41 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The keep-alive sound: a 2 s loop of white noise at levelDb (default -70 dB, amplitude 10^(levelDb/20), mono) through a GainNode to
     // ctx.destination. It is inaudible noise, not digital silence: phones and Bluetooth links that put the audio route to sleep on silence keep
     // it open, so the first syllable of a reply and the thinking sound are not clipped. start() makes the buffer once and a source node each
-    // time; stop() stops and disconnects it. A missing or failing context makes every call a no-op. opts: { ctx, levelDb }.
+    // time; stop() stops and disconnects it. A missing or failing context makes every call a no-op. opts: { ctx, levelDb, allow }.
+    // allow() (optional): whether it may sound right now (the pages: the "Keep Bluetooth awake" switch is on AND the call's audio goes to
+    // Bluetooth or a car; on a phone or laptop speaker the noise is only a hiss in the pauses). start() asks for it, stop() ends it, refresh()
+    // applies a change of allow() at once (the switch flipped, the microphone moved to or from Bluetooth), mid-call.
     function voiceCreateKeepAlive(opts) {
       const o = opts || {}, ctx = o.ctx;
       const db = typeof o.levelDb === 'number' && Number.isFinite(o.levelDb) ? o.levelDb : VOICE_KEEPALIVE_DB;
-      let buffer = null, src = null, gain = null;
+      const allowed = () => { if (typeof o.allow !== 'function') return true; try { return o.allow() === true; } catch { return false; } };
+      let buffer = null, src = null, gain = null, wanted = false;
       const drop = () => {
         const s = src, g = gain; src = gain = null;
         if (s) { try { s.stop(); } catch { /* not started */ } try { s.disconnect(); } catch { /* gone */ } }
         if (g) { try { g.disconnect(); } catch { /* gone */ } }
       };
+      const play = () => {
+        if (!ctx || src) return;
+        try {
+          if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); }
+          if (!buffer) {
+            const rate = ctx.sampleRate, amp = Math.pow(10, db / 20);
+            buffer = ctx.createBuffer(1, Math.max(1, Math.round(rate * 2)), rate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * amp;
+          }
+          gain = ctx.createGain(); gain.gain.value = 1;
+          src = ctx.createBufferSource(); src.buffer = buffer; src.loop = true;
+          src.connect(gain); gain.connect(ctx.destination);
+          src.start();
+        } catch { drop(); }
+      };
+      const apply = () => { if (wanted && allowed()) play(); else drop(); };
       return {
-        start() {
-          if (!ctx || src) return;
-          try {
-            if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); }
-            if (!buffer) {
-              const rate = ctx.sampleRate, amp = Math.pow(10, db / 20);
-              buffer = ctx.createBuffer(1, Math.max(1, Math.round(rate * 2)), rate);
-              const data = buffer.getChannelData(0);
-              for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * amp;
-            }
-            gain = ctx.createGain(); gain.gain.value = 1;
-            src = ctx.createBufferSource(); src.buffer = buffer; src.loop = true;
-            src.connect(gain); gain.connect(ctx.destination);
-            src.start();
-          } catch { drop(); }
-        },
-        stop() { drop(); },
+        start() { wanted = true; apply(); },
+        stop() { wanted = false; drop(); },
+        refresh() { apply(); },
         get running() { return !!src; },
       };
     }
@@ -13797,6 +13803,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceSavePrefs(localStorage, prefs);
       voicePrefsCache = prefs;
       voiceLoudApply();   // a running call follows the choice at once
+      voiceKeepAliveRefresh();   // the Keep Bluetooth awake switch too
       // A call that is up takes the EFFECTIVE values (the person's own, else this agent's defaults), as the phone page does: the dialog never undoes the agent's pacing mid-call.
       if (voiceCallS.vad) { const eff = voiceEffNow(voiceCallS.agent); voiceCallS.vad.setMicLevel(eff.micLevel); voiceCallS.vad.setInterruptSensitivity(eff.interruptSensitivity); voiceCallS.vad.setEndPause(eff.endPause); if (voiceCallS.vad.setEchoHold) voiceCallS.vad.setEchoHold(eff.echoHold); }
       for (const el of document.querySelectorAll('.voice-pop [data-vp="loudness"]')) el.value = prefs.loudness;
@@ -13872,7 +13879,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The output of a call follows its open microphone: voiceCallS.micLabel is set by ui.mic (every open and reopen) and refreshed on devicechange.
     function voiceOutputNow() { const label = (voiceCallS.call && voiceCallS.micLabel) || ''; return { output: voiceOutputKind(label), label }; }
     function voiceLoudnessNow() { return voiceLoudnessFor(voicePrefsNow(), voiceOutputNow().output); }
-    function voiceOutputChanged() { try { voiceLoudApply(); } catch { /* the next sentence applies it */ } }   // a new mic label: the level of that output, at once
+    function voiceOutputChanged() { try { voiceLoudApply(); } catch { /* the next sentence applies it */ } voiceKeepAliveRefresh(); }   // a new mic label: the level of that output, and the keep-alive, at once
+    // The keep-alive hiss may sound only while the switch is on AND the call's audio goes to Bluetooth or a car (on a speaker it is only a
+    // hiss in the pauses, and that route never sleeps).
+    function voiceKeepAliveAllowed() { return voiceKeepAliveNow() && voiceOutputNow().output === 'bluetooth'; }
+    function voiceKeepAliveRefresh() { try { const k = voiceCallS.keepAlive; if (k && k.refresh) k.refresh(); } catch { /* not playing */ } }
     function voiceOutputOnDeviceChange() {   // devicechange during a call: read the open microphone's label again
       if (!voiceCallS.call) return;
       try { const i = voiceCallS.vad && typeof voiceCallS.vad.info === 'function' && voiceCallS.vad.info(); if (i && typeof i.label === 'string') voiceCallS.micLabel = i.label; } catch { /* keep the last label */ }
@@ -13988,7 +13999,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceEchoHoldNow() { const v = voicePrefsNow().echoHold; return VOICE_ECHO_HOLDS.includes(v) ? v : 600; }
     const VOICE_ECHO_HINT = 'Keeps the agent from hearing its own reply in a car or through a speaker.';
-    const VOICE_KEEP_HINT = 'Plays an inaudible hiss so a car or speaker does not cut the first word.';
+    const VOICE_KEEP_HINT = 'While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.';
     // The "Echo guard after replies" select (Off / 0.6 s / 1 s / 1.5 s): Settings and the chat's voice panel.
     function voiceEchoSelectHtml(id, attrs) {
       const cur = voiceEchoHoldNow();
@@ -14544,9 +14555,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const eff = voiceEffNow(chat.agent);   // this agent's voice defaults for any setting the person has not set on this device
       const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow() });
       const thinking = voiceCallThinking(vad);   // makes / resumes the reply playback context (voicePlay.ctx) inside the tap
-      // Keep Bluetooth awake: an inaudible hiss on the same output context as the replies; the controller starts and stops it.
+      // Keep Bluetooth awake: a very quiet hiss on the same output context as the replies; the controller starts and stops it, and it sounds
+      // only while allowed (the switch is on and the call's audio goes to Bluetooth or a car); a change of either applies at once.
       let keepAlive = null;
-      if (voicePrefsNow().keepAlive !== false && typeof voiceCreateKeepAlive === 'function') { try { const kc = voiceOutputCtx(); if (kc) keepAlive = voiceCreateKeepAlive({ ctx: kc }); } catch { keepAlive = null; } }
+      if (typeof voiceCreateKeepAlive === 'function') { try { const kc = voiceOutputCtx(); if (kc) keepAlive = voiceCreateKeepAlive({ ctx: kc, allow: voiceKeepAliveAllowed }); } catch { keepAlive = null; } }
       // Audio focus: a looping media element, so a phone browser takes focus and other apps pause. Only on Android (a tablet on this page): a desktop
       // browser has no focus to take, and a playing element would only draw the media keys and the browser's media hub to this tab.
       let focus = null;
