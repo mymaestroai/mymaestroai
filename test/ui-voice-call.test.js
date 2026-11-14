@@ -540,7 +540,10 @@ test('hang-up: stops the vad and speech, ends the call, summarises what came in'
   assert.strictEqual(held.length, 2);
   const text = 'While we talked: 2 things came in: Weekly summary, Nightly job. They run now.';
   assert.deepStrictEqual(h.summaries, [text]);
-  assert.strictEqual(h.spoken[h.spoken.length - 1], text);
+  // changed on purpose (owner, 2026-11-13: after Hang up the agents kept talking): the summary is shown, never spoken after Hang up
+  assert.ok(!h.spoken.includes(text), 'nothing is spoken after Hang up');
+  const spokenAtEnd = h.spoken.length; await new Promise(r => setTimeout(r, 30));
+  assert.strictEqual(h.spoken.length, spokenAtEnd, 'and nothing later either');
   assert.strictEqual(await h.call.hangUp(), held, 'idempotent');
   assert.strictEqual(h.summaries.length, 1);
 });

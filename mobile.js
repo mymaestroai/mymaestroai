@@ -3428,7 +3428,8 @@ function voiceCreateCall(deps) {
     endPromise = Promise.resolve([]);
     return endPromise;
   }
-  // Hangs up: stops listening and speaking, tells the server and reads out what came in while we talked.
+  // Hangs up: stops listening and speaking, tells the server and shows what came in while we talked. After Hang up nothing is
+  // spoken: the person asked for silence, and the labels of held jobs and tasks read badly aloud.
   function hangUp() {
     if (endPromise) return endPromise;
     teardown();
@@ -3442,8 +3443,7 @@ function voiceCreateCall(deps) {
         else if (!runs.length) tail = n === 1 ? 'It already ran.' : 'They already ran.';
         else tail = 'Already ran: ' + ran.map(label).join(', ') + '. Running now: ' + runs.map(label).join(', ') + '.';
         const text = 'While we talked: ' + (n === 1 ? '1 thing came in' : n + ' things came in') + ': ' + held.map(label).join(', ') + '. ' + tail;
-        quiet(() => ui.summary(text));
-        quiet(() => Promise.resolve(d.speak(text)).catch(() => {}));   // spoken in the background: hanging up never waits for it
+        quiet(() => ui.summary(text));   // shown only, never spoken
       }
       return held;
     });
@@ -6165,6 +6165,7 @@ async function sendInterjection(agent) {
   input.value = '';
   input.style.height = 'auto';
   saveDraft(agent, '');
+  composerTypingPaint();
   stick = true;
   const userEl = addUserBubble(text, null);
   setBubbleTime(userEl, msgTimeLabel(Date.now()));
@@ -6197,6 +6198,7 @@ async function sendInterjection(agent) {
   }
   noteEl.textContent = `⚠ not delivered: ${error}`;
   if (current === agent && !input.value) { input.value = text; saveDraft(agent, text); }
+  composerTypingPaint();
 }
 
 // The hub no longer stops a turn when the browser goes away, so Stop has to say so explicitly.
@@ -6264,6 +6266,7 @@ function sendAndClose() {
 const VOICE_MAX_SECONDS = 60;
 let voiceStatus = { enabled: false, ready: false };
 let voiceDictatedFor = null;   // the agent whose message was dictated with the mic here, until it is sent
+let voiceAutoReadGen = 0;   // raised when a call starts or ends: a dictated reply still on its way is then never read aloud (not over the call, not after Hang up)
 let voiceCall = null;          // the hands-free call that is up (see "Voice call (phone)" below), or null
 let voiceCallBgNote = false;   // a call was ended by the page going to the background: say so when it returns
 const VOICE_MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg>';
@@ -6445,6 +6448,7 @@ function voiceInsert(agent, text) {
   if (current === agent) {
     const input = $('msg-input');
     input.value = join(input.value);
+    composerTypingPaint();
     input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
     saveDraft(agent, input.value);
   } else {
@@ -6586,7 +6590,10 @@ function voiceSpeakToggle(msgEl) {
   voiceUnlockAudio();
   voiceSpeak(text, current, msgEl);
 }
+// A call starting or ending drops any read-aloud still owed to an earlier dictation.
+function voiceAutoReadReset() { voiceAutoReadGen++; voiceDictatedFor = null; }
 function voiceAutoRead(rec) {   // a reply to a message dictated here is read when it ends
+  if (voiceCall || !rec || rec.readGen !== voiceAutoReadGen) return;
   if (!rec || !rec.dictated || !rec.full || !voicePrefsNow().readAloud || current !== rec.agent) return;
   voiceSpeak(rec.full, rec.agent, rec.bubble && rec.bubble.el);
 }
@@ -6757,6 +6764,7 @@ function voiceCallPaintHeld(list) {
 function voiceCallPanel(show) {
   const p = $('call-panel'); if (!p) return;
   p.hidden = !show;
+  callPanelCompactPaint();
   if (show) { const d = $('cp-dnd'); if (d) d.checked = false; return; }
   voiceCallPaintHeld([]); voiceCallPaintMeter(-100);
   const h = $('cp-heard'); if (h) h.textContent = '';
@@ -6774,6 +6782,7 @@ async function voiceWakeAcquire(vc) {   // the screen stays on during a call; as
 function voiceCallTeardown(vc) {
   if (voiceCall !== vc) return;
   voiceCall = null;
+  if (typeof voiceAutoReadReset === 'function') voiceAutoReadReset();   // nor after the call has ended
   if (typeof voiceDispEnd === 'function') voiceDispEnd(false);   // a call that ended some other way: the display goes at once (hang-up has already started its goodbye)
   const lock = vc.wake; vc.wake = null;
   try { if (lock) Promise.resolve(lock.release()).catch(() => {}); } catch { /* already released */ }
@@ -6784,7 +6793,7 @@ function voiceCallTeardown(vc) {
   voiceCallPanel(false);
   voiceMicPaint();
 }
-// Hangs up the call that is up (the controller tells the hub and reads out what came in); the page lets go at once.
+// Hangs up the call that is up (the controller tells the hub and shows what came in; nothing is spoken after Hang up); the page lets go at once.
 function voiceCallHangUp() {
   const vc = voiceCall;
   if (!vc) return Promise.resolve([]);
@@ -7092,6 +7101,7 @@ function voiceCallDeps(vc) {
 // The tap on the mic button. call.start() runs synchronously in the tap (the controller starts the microphone and
 // the audio context first, which iOS only allows inside the tap), so nothing is awaited before it.
 function voiceCallStart() {
+  if (typeof voiceAutoReadReset === 'function') voiceAutoReadReset();   // a reply to an earlier dictation is not read aloud over the call
   if (voiceCall) return;
   const agent = current;
   if (!agent) { toast('Pick an agent first'); return; }
@@ -7642,12 +7652,30 @@ function restoreDraft(agent) {
   const input = $('msg-input'); if (!input) return;
   const d = draftsAll()[agent];
   input.value = d && typeof d.text === 'string' ? d.text : '';
+  composerTypingPaint();
   input.style.height = 'auto';
   if (input.value) input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
 }
 // A reload the app wants (a new version, a hub restart) waits while the message box is in use: focused or holding
 // text. At most 10 minutes; the draft is saved either way, so even a reload that has to happen brings the text back.
 function typingNow() { const i = $('msg-input'); return !!i && (document.activeElement === i || !!i.value.trim()); }
+// The phone's composer while the message box has focus (the keyboard is up): #composer gets 'typing' (the CSS hides attach, camera
+// and the voice strip on a narrow screen so the box gets the width). Leaving the box brings them back, also with a draft in it, so a
+// file can be attached to a typed message. Called on focus / blur / input and after the page fills or clears the box.
+function composerTypingPaint() {
+  const c = $('composer'), i = $('msg-input'); if (!c || !i) return;
+  c.classList.toggle('typing', document.activeElement === i);
+}
+// The call panel in compact mode (box focused, or a short screen such as a phone with the keyboard open): the CSS keeps only the
+// state line, held items and mic trouble. Never inside the call display's drawer, which has its own room.
+function callPanelCompactPaint() {
+  const p = $('call-panel'), i = $('msg-input'); if (!p) return;
+  const vv = window.visualViewport;
+  const h = vv && vv.height ? vv.height : window.innerHeight;
+  const inDrawer = !!(p.closest && p.closest('.ucd-drawer'));
+  p.classList.toggle('compact', !inDrawer && ((!!i && document.activeElement === i) || h < 600));
+}
+function composerPaintAll() { composerTypingPaint(); callPanelCompactPaint(); }
 
 // `fallback` is set when an interjection found the turn already over: the text and its user
 // bubble are reused instead of being read from the composer again.
@@ -7667,6 +7695,7 @@ async function sendMessage(fallback) {
     input.value = '';
     input.style.height = 'auto';
     saveDraft(agent, '');
+    composerTypingPaint();
     pendingImages = [];
     renderPreviews();
   }
@@ -7683,7 +7712,7 @@ async function sendMessage(fallback) {
   scrollChat(true);
 
   const controller = new AbortController();
-  const rec = { controller, agent, text, images, bubble, userEl, startedAt: Date.now(), full: '', gotAny: false, feed: newFeed(true), question: null, dictated: !fallback && voiceTakeDictated(agent) };
+  const rec = { controller, agent, text, images, bubble, userEl, startedAt: Date.now(), full: '', gotAny: false, feed: newFeed(true), question: null, dictated: !fallback && voiceTakeDictated(agent), readGen: voiceAutoReadGen };
   streams.set(agent, rec);
   paintChatStatus();
 
@@ -7706,6 +7735,7 @@ async function sendMessage(fallback) {
       } else if (current === agent) {
         input.value = text;
         saveDraft(agent, text);
+        composerTypingPaint();
         pendingImages = images;
         renderPreviews();
         toast('Agent is busy; it will finish first');
@@ -7913,7 +7943,7 @@ async function reattachCheck(ra) {
     if (stillBusy === false && waited > 15000) {
       if (ui < 0 && ra.text) {
         const input = $('msg-input');
-        if (input && !input.value && current === ra.agent) input.value = ra.text;
+        if (input && !input.value && current === ra.agent) { input.value = ra.text; composerTypingPaint(); }
         finishReattach(ra, '⚠ The hub has no record of this message, so it is back in the input box. If you are not sure it was lost, reload the chat before sending it again.', false);
       } else {
         finishReattach(ra, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ ${displayName(ra.agent)} stopped without a reply (the hub may have restarted).`, false);
@@ -9456,6 +9486,12 @@ function wire() {
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; saveDraft(current, input.value); });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
+  for (const ev of ['focus', 'input']) input.addEventListener(ev, composerPaintAll);
+  input.addEventListener('blur', () => setTimeout(composerPaintAll, 300));   // a tap on a call-panel button lands before the panel grows back
+  const vvPaint = window.visualViewport;
+  if (vvPaint) vvPaint.addEventListener('resize', callPanelCompactPaint);
+  window.addEventListener('resize', callPanelCompactPaint);
+  composerPaintAll();
   // Chrome's spell-check menu (a tap on an underlined word, Backspace with the menu open) hides the soft keyboard
   // while the box keeps focus, and Android only reopens it on a new focus. So a keyboard that goes away right after
   // a tap on the box or an edit in it, with the box still focused, is brought back by blurring and refocusing the box.
