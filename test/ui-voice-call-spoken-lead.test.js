@@ -142,6 +142,13 @@ test('streaming: a pipe later in a line never takes back a sentence already spok
   assert.deepStrictEqual(prefixProperty('Summary.\nPrice. | ID\n--- | ---\n123 | ABC'), ['Summary.', 'Price.'], 'a sentence before the first pipe of a table header stays (it may already have been spoken); the table is not read');
   assert.deepStrictEqual(prefixProperty('Summary.\nPrice | ID\n--- | ---\n123 | ABC'), ['Summary.']);
 });
+// ── review round 3: the text before the pipe is judged exactly as it was before the pipe arrived ──
+test('streaming: formatted sentences before a pipe (bold, an ellipsis character) are never taken back', () => {
+  assert.deepStrictEqual(prefixProperty('Yes, **it works.** Run ls | wc.'), ['Yes, it works.', 'Run ls wc.']);
+  assert.deepStrictEqual(prefixProperty('Yes, it works… Run ls | wc.'), ['Yes, it works...', 'Run ls wc.']);
+  assert.deepStrictEqual(prefixProperty('**Note.** Use a | b here. Done.'), ['Note.', 'Use a b here.', 'Done.']);
+  assert.deepStrictEqual(voiceReplySentences('Price | ID\n--- | ---\n1 | 2', true), { sentences: [], note: NOTE }, 'a table header with no sentence before its pipe reads nothing');
+});
 test('a false start during the last sentence re-reads only that sentence, and the cut details note comes back', async () => {
   const h = { t: 0, timers: [], nextId: 1, spoken: [], pend: [], sent: [], running: false };
   const deps = {

@@ -10989,15 +10989,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
       const lines = text.split('\n'), last = lines.length - 1;
       const before = (i) => (i > 0 ? lines.slice(0, i).join('\n') + '\n' : '');
-      // the complete sentences before the first pipe of a line stay lead text whatever the line turns out to be (prose or a table header),
-      // so a sentence already spoken is never taken back
-      const pipeKeep = (i) => { const m = lines[i].slice(0, lines[i].indexOf('|')).match(/^.*[.!?]["')\]]*\s+/); return before(i) + (m ? m[0] : ''); };
+      // A line with a pipe keeps its text before the first pipe as lead text, read like text still being typed (openTail): its complete
+      // sentences count, an unfinished last one does not. That is exactly the lead the line had before the pipe arrived, so a sentence
+      // already spoken is never taken back, whether the line turns out to be prose or a table header (whose cells are never read).
+      const pipeKeep = (i) => before(i) + lines[i].slice(0, lines[i].indexOf('|'));
       for (let i = 0; i < lines.length; i++) {
         const open = !done && i === last;
         if (VOICE_DETAIL_LINE_RE.test(lines[i]) || VOICE_TABLE_RULE_RE.test(lines[i])) return { lead: before(i), cut: !open };
         if (lines[i].includes('|')) {
           if (open || (!done && i + 1 === last)) return { lead: pipeKeep(i), cut: false };
-          if (i + 1 <= last && VOICE_TABLE_RULE_RE.test(lines[i + 1])) return { lead: pipeKeep(i), cut: true };
+          if (i + 1 <= last && VOICE_TABLE_RULE_RE.test(lines[i + 1])) return { lead: pipeKeep(i), cut: true, openTail: true };
         }
       }
       return { lead: text, cut: false };
@@ -11005,7 +11006,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceReplySentences(markdown, done) {
       const note = voiceSpeechText('| a |');
       const sp = voiceSpokenLead(markdown, done);
-      const finished = !!done || sp.cut;   // a cut lead is complete; an uncut reply may still be streaming
+      const finished = (!!done || sp.cut) && !sp.openTail;   // a cut lead is complete; an uncut reply may still be streaming; text before a table header's pipe is read as typed
       let lead = sp.lead;
       // While streaming, a last line that is only the start of a detail line (a lone marker, digits, an unclosed bold) is not lead text yet.
       if (!finished) lead = lead.replace(/(^|\n)[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?|(?:\*\*|__)[^\n]*)$/, '$1');
