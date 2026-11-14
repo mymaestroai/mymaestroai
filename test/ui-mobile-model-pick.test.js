@@ -25,7 +25,7 @@ test('filled from /api/models, grouped by vendor and who pays; admins only; refr
 test('changing it posts to the same route as the desktop and reverts on failure', () => {
   assert.match(js, /\$\('chat-model-pick'\)\?\.addEventListener\('change', changeModelFromPick\);/);
   assert.match(js, /api\(`\/api\/agents\/\$\{encodeURIComponent\(name\)\}\/model`, \{ method: 'POST'/);
-  assert.match(js, /if \(!r\.ok \|\| !d\.success\) \{ back\(\); toast\(`Could not change the model/);
+  assert.match(js, /if \(!r\.ok \|\| !d\.success\) \{ say\(`Could not change the model/);
   assert.match(js, /switches to \$\{mpLabel\(model\)\} after this reply/);
 });
 

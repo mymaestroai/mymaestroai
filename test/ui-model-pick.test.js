@@ -32,9 +32,9 @@ test('the list comes from /api/models once, grouped by provider, with the curren
 });
 
 test('a change posts to the same route the settings page uses and reverts the select on failure', () => {
-  assert.match(app, /async function changeChatModel\(chatId, model, opts = \{\}\) \{[\s\S]*?fetch\(`\/api\/agents\/\$\{encodeURIComponent\(chat\.agent\)\}\/model`, \{ method: 'POST'[\s\S]*?body: JSON\.stringify\(\{ model \}\)/);
-  assert.match(app, /if \(!r\.ok \|\| !d\.success\) \{ back\(\); alert\(/);
-  assert.match(app, /const back = \(\) => \{ if \(sel\) sel\.value = chat && chat\.autoModel \? AUTO_PICK : \(chat && chat\.model\) \|\| ''; \};/, 'a failed change puts the picker back (Auto, or the model)');
+  assert.match(app, /async function applyModelChange\(chatId, chat, choice, opts, stale\) \{[\s\S]*?fetch\(`\/api\/agents\/\$\{encodeURIComponent\(chat\.agent\)\}\/model`, \{ method: 'POST'[\s\S]*?body: JSON\.stringify\(\{ model \}\)/);
+  assert.match(app, /if \(!r\.ok \|\| !d\.success\) \{ say\(`Could not change the model: /);
+  assert.match(app, /\} finally \{[\s\S]*?agentStateFromHub\(chat\.agent\)[\s\S]*?if \(!stale\(\)\) \{ paintAutoPick\(chatId\); refreshEffortPick\(chat\); \}/, 'the picker is repainted from the hub\'s state, also after a failure');
 });
 
 test('agent_updated relabels the name and sets the select value, inserting the model when the list lacks it', () => {

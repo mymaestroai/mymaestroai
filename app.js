@@ -6211,7 +6211,8 @@
         const cur = String(chat.model || '');
         // Groups by vendor (Anthropic, OpenAI, Google, ...); every line starts with the route: "API / gpt-6-astra",
         // "Subscription (Claude sign-in) / claude-fable-5-1". The route is in the text, not in a grey group label.
-        let html = `<optgroup label="Auto"><option value="${AUTO_PICK}">${esc(autoPickLabel(chat))}</option></optgroup>`;
+        // Auto is an admin's choice; a member sees it only as the current entry of an agent an admin set to Auto.
+        let html = isHubAdmin() || chat.autoModel ? `<optgroup label="Auto"><option value="${AUTO_PICK}">${esc(autoPickLabel(chat))}</option></optgroup>` : '';
         if (cur && !chat.autoModel && !models.includes(cur)) html += `<option value="${esc(cur)}" selected>${esc(billingDisplay(cur, true))} (current; not in the hub's list)</option>`;
         // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
         for (const [label, rows] of groupModels(models)) {
@@ -6223,38 +6224,81 @@
         sel.dataset.filled = 'done';
       } catch (e) { delete sel.dataset.filled; console.warn('[model-pick] list failed:', e.message); }
     }
-    // The agent's Auto setting, the same call the agent settings page makes; the hub's agent_updated event repaints.
+    // The agent's Auto setting, the same call the agent settings page makes (admins only: PATCH refuses autoModel for a
+    // member).
     async function setChatAuto(chat, on) {
       const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ autoModel: on }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.success === false) throw new Error(d.error || `HTTP ${r.status}`);
       chat.autoModel = on;
     }
-    async function changeChatModel(chatId, model, opts = {}) {
-      const chat = chats[chatId]; const sel = document.getElementById(`model-pick-${chatId}`);
-      const back = () => { if (sel) sel.value = chat && chat.autoModel ? AUTO_PICK : (chat && chat.model) || ''; };
-      if (chat && model === OR_MORE) { back(); openOrPicker(chatId); return false; }
-      if (!chat || !model) return false;
-      if (model === AUTO_PICK) {
-        if (chat.autoModel) return false;
-        if (sel) sel.disabled = true;
-        try { await setChatAuto(chat, true); paintAutoPick(chatId); refreshEffortPick(chat); return true; }
-        catch (e) { back(); alert(`Could not turn on Auto: ${e.message}`); return false; }
-        finally { if (sel) sel.disabled = false; }
-      }
-      // A real model: Auto goes off (also when it is the model the agent was already set to).
-      if (model === chat.model && !chat.autoModel) return false;
-      if (model !== chat.model && !opts.tested && !(await testBeforeSwitch(model))) { back(); return false; }
+    // What the hub has now for an agent: { model, autoModel }, or null when it can't be read.
+    async function agentStateFromHub(name) {
+      const r = await fetch('/api/agents', { credentials: 'include' });
+      if (!r.ok) return null;
+      const d = await r.json().catch(() => ({}));
+      const a = (d.agents || []).find(x => x && x.name === name);
+      return a ? { model: String(a.model || ''), autoModel: !!a.autoModel } : null;
+    }
+
+    // Every model change (the picker, its Auto entry, the "More OpenRouter models" window) runs through one queue per
+    // agent: one change at a time, the latest choice winning. A newer choice makes an older one stop at its next step
+    // (after the model test, after each request); whatever the older one already wrote stays, and the newer one then
+    // runs against the hub's actual state, so the agent always ends on the last thing chosen.
+    const modelChanges = {};   // agent -> { seq, chain }
+    function queueModelChange(chatId, choice, opts = {}) {
+      const chat = chats[chatId];
+      if (!chat || !choice) return Promise.resolve(false);
+      const q = modelChanges[chat.agent] || (modelChanges[chat.agent] = { seq: 0, chain: Promise.resolve() });
+      const seq = ++q.seq;
+      const run = q.chain.then(() => applyModelChange(chatId, chat, choice, opts, () => seq !== q.seq));
+      q.chain = run.catch(() => {});
+      return run;
+    }
+    // One change, against the state the hub confirmed last. Auto (on or off) is an admin's choice: a member can switch an
+    // Auto agent's model to one they are allowed, and Auto stays on. Ends by reading the hub's state back, so a step that
+    // failed halfway never leaves the picker showing something the hub doesn't have.
+    async function applyModelChange(chatId, chat, choice, opts, stale) {
+      const admin = isHubAdmin();
+      const say = (t) => alert(t);
       try {
-        if (model !== chat.model) {
-          const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ model }) });
-          const d = await r.json().catch(() => ({}));
-          if (!r.ok || !d.success) { back(); alert(`Could not change the model: ${d.error || r.status}`); return false; }
+        if (choice === AUTO_PICK) {
+          if (chat.autoModel || !admin) return false;
+          try { await setChatAuto(chat, true); return true; }
+          catch (e) { say(`Could not turn on Auto: ${e.message}`); return false; }
         }
-        if (chat.autoModel) { await setChatAuto(chat, false); paintAutoPick(chatId); refreshEffortPick(chat); }
-        // The hub's agent_updated event relabels the header (or parks the change until the current turn ends).
+        const model = choice;
+        const offAuto = !!chat.autoModel && admin;
+        if (model === chat.model && !offAuto) return false;
+        let switched = false;
+        if (model !== chat.model) {
+          if (!opts.tested && !(await testBeforeSwitch(model))) return false;
+          if (stale()) return false;
+          try {
+            const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ model }) });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || !d.success) { say(`Could not change the model: ${d.error || r.status}`); return false; }
+          } catch (e) { say(`Could not change the model: ${e.message}`); return false; }
+          chat.model = model; switched = true;
+        }
+        if (offAuto) {
+          if (stale()) return switched;
+          try { await setChatAuto(chat, false); }
+          catch (e) { say(switched ? `Switched to ${billingDisplay(model, true)}, but could not turn Auto off: ${e.message}` : `Could not turn Auto off: ${e.message}`); return switched; }
+        } else if (switched && chat.autoModel) {
+          hubToast(`Saved ${billingDisplay(model, true)} as this agent's model. Auto stays on: only an admin can turn it off.`, 6000);
+        }
         return true;
-      } catch (e) { back(); alert(`Could not change the model: ${e.message}`); return false; }
+      } finally {
+        // The hub's state, not what this page assumed. The agent_updated event follows later (or after the agent's turn).
+        try { const st = await agentStateFromHub(chat.agent); if (st) { chat.model = st.model; chat.autoModel = st.autoModel; if (!st.autoModel) chat.lastAutoModel = null; } } catch {}
+        if (!stale()) { paintAutoPick(chatId); refreshEffortPick(chat); }
+      }
+    }
+    async function changeChatModel(chatId, model, opts = {}) {
+      const chat = chats[chatId];
+      if (chat && model === OR_MORE) { paintAutoPick(chatId); openOrPicker(chatId); return false; }
+      return queueModelChange(chatId, model, opts);
     }
 
     // What the hub has seen a model do (lib/model-health): " — ⚠ blocked by the privacy setting" after its name in the
@@ -6375,7 +6419,7 @@
       const ov = document.getElementById('or-pick-overlay'); const chatId = ov && ov.dataset.chat; const chat = chats[chatId];
       if (!chat) { closeOrPicker(); return; }
       const model = `openrouter/${id}`;
-      if (model === chat.model) { closeOrPicker(); return; }
+      if (model === chat.model) { closeOrPicker(); if (chat.autoModel && isHubAdmin()) await queueModelChange(chatId, model, { tested: true }); return; }   // its own model: leaves Auto
       if (btn) btn.disabled = true;
       const msg = document.getElementById('or-pick-msg'); if (msg) msg.textContent = `Testing ${id}…`;
       if (!(await testBeforeSwitch(model))) { if (btn) btn.disabled = false; if (msg) msg.textContent = `Not switched: ${chat.display || capName(chat.agent)} stays on ${String(chat.model || '').split('/').pop()}.`; return; }
@@ -6393,7 +6437,7 @@
         document.querySelectorAll('select.model-pick[data-filled]').forEach(s => { delete s.dataset.filled; });
       }
       closeOrPicker();
-      if (await changeChatModel(chatId, model, { tested: true })) hubToast(`${chat.display || capName(chat.agent)} switches to ${billingDisplay(model, true)}${note}`, note ? 6000 : 3000);
+      if (await queueModelChange(chatId, model, { tested: true })) hubToast(`${chat.display || capName(chat.agent)} switches to ${billingDisplay(model, true)}${note}`, note ? 6000 : 3000);
     }
 
     // Reasoning effort in the chat header, next to the model (lib/effort). Admins choose it for any agent; members see
@@ -9685,7 +9729,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   if (container) {
                     const cib = container.querySelector('.context-info-box');
                     if (cib && !cib.dataset.modelAppended) {
-                      cib.innerHTML += ` · <strong style="color:#7eb8f7">${modelShort}</strong>`;
+                      cib.innerHTML += ` · <strong style="color:#7eb8f7">${esc(modelShort)}</strong>`;
                       cib.dataset.modelAppended = '1';
                     }
                   }
@@ -9999,7 +10043,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 if (container) {
                   const cib = container.querySelector('.context-info-box');
                   if (cib && !cib.dataset.modelAppended) {
-                    cib.innerHTML += ` · <strong style="color:#7eb8f7">${modelShort}</strong>`;
+                    cib.innerHTML += ` · <strong style="color:#7eb8f7">${esc(modelShort)}</strong>`;
                     cib.dataset.modelAppended = '1';
                   }
                 }
@@ -10441,7 +10485,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Append auto-model if already known
       const pending = window.__pendingAutoModel && window.__pendingAutoModel[chatId];
       if (pending) {
-        html += ` · <strong style="color:#7eb8f7">${pending}</strong>`;
+        html += ` · <strong style="color:#7eb8f7">${esc(pending)}</strong>`;
         div.dataset.modelAppended = '1';
         delete window.__pendingAutoModel[chatId];
       }

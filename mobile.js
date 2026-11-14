@@ -1061,7 +1061,7 @@ async function fillModelPick() {
     if (agentByName(current) !== a) return;   // the user moved on while the list loaded
     const cur = String(a.model || '');
     // "Auto" first: it turns the agent's Auto setting on; any real model turns it off (as on the desktop).
-    let html = `<optgroup label="Auto"><option value="${AUTO_PICK}">Auto</option></optgroup>`;
+    let html = isAdmin() || a.autoModel ? `<optgroup label="Auto"><option value="${AUTO_PICK}">Auto</option></optgroup>` : '';
     if (cur && !a.autoModel && !models.includes(cur)) html += `<option value="${esc(cur)}">${esc(mpLabel(cur))} (current)</option>`;
     // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
     for (const [label, rows] of mpGroups(models)) html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}">${esc(mpLabel(m) + healthNote(_modelHealth[m]))}</option>`).join('') + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
@@ -1211,37 +1211,73 @@ function paintPlan() {
   el.hidden = false;
 }
 
+// Every model change (the picker, its Auto entry, the "More OpenRouter models" sheet) runs through one queue per agent:
+// one change at a time, the latest choice winning (as on the desktop). A newer choice makes an older one stop at its next
+// step; the newer one then runs against the hub's actual state. Auto (on or off) is an admin's choice. The picker is
+// shared by every chat: a change only repaints it while that agent's chat is still the one open.
+const modelChanges = {};   // agent -> { seq, chain }
+function queueModelChange(name, choice, opts = {}) {
+  if (!name || !choice) return Promise.resolve(false);
+  const q = modelChanges[name] || (modelChanges[name] = { seq: 0, chain: Promise.resolve() });
+  const seq = ++q.seq;
+  const run = q.chain.then(() => applyModelChange(name, choice, opts, () => seq !== q.seq));
+  q.chain = run.catch(() => {});
+  return run;
+}
+async function setAgentAuto(name, on) {   // the agent's Auto setting, as the agent settings page sets it (admins only)
+  const r = await api(`/api/agents/${encodeURIComponent(name)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoModel: on }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.success === false) throw new Error(d.error || `HTTP ${r.status}`);
+}
+async function applyModelChange(name, choice, opts, stale) {
+  const a = agentByName(name);
+  if (!a) return false;
+  const label = a.display || name;
+  const say = opts.say || toast;
+  try {
+    if (choice === AUTO_PICK) {
+      if (a.autoModel || !isAdmin()) return false;
+      try { await setAgentAuto(name, true); a.autoModel = true; toast(`${label} now picks its model and effort for each turn (Auto)`); return true; }
+      catch (e) { say(`Could not turn on Auto: ${e.message}`); return false; }
+    }
+    const model = choice;
+    const offAuto = !!a.autoModel && isAdmin();
+    if (model === a.model && !offAuto) return false;
+    let switched = false;
+    if (model !== a.model) {
+      if (!opts.tested && !(await testBeforeSwitch(model))) return false;
+      if (stale()) return false;
+      try {
+        const r = await api(`/api/agents/${encodeURIComponent(name)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.success) { say(`Could not change the model: ${d.error || r.status}`); return false; }
+      } catch (e) { say(`Could not change the model: ${e.message}`); return false; }
+      switched = true;
+    }
+    if (offAuto) {
+      if (stale()) return switched;
+      try { await setAgentAuto(name, false); a.autoModel = false; }
+      catch (e) { say(switched ? `Switched ${label} to ${mpLabel(model)}, but could not turn Auto off: ${e.message}` : `Could not turn Auto off: ${e.message}`); return switched; }
+    }
+    if (switched && a.autoModel) toast(`Saved ${mpLabel(model)} as ${label}'s model. Auto stays on: only an admin can turn it off.`);
+    else modelChanged(a, name, model, opts.note || '');
+    return true;
+  } finally {
+    // The hub's state, not what this page assumed (a step may have failed halfway).
+    try { await loadAgents(); } catch { /* the next agent_updated repaints */ }
+    const sel = $('chat-model-pick');
+    if (!stale() && current === name && sel && sel.dataset.agent === name) {
+      const now = agentByName(name);
+      if (now) sel.value = now.autoModel ? AUTO_PICK : now.model;
+      paintChatStatus(); fillEffortPick();
+    }
+  }
+}
 async function changeModelFromPick() {
   const sel = $('chat-model-pick');
   const name = sel.dataset.agent; const a = agentByName(name); const model = sel.value;
-  const back = () => { sel.value = a && a.autoModel ? AUTO_PICK : (a ? a.model : ''); };
-  if (model === OR_MORE) { back(); if (a) openOrSheet(name); return; }
-  if (!a || !model) return;
-  const setAuto = async (on) => {   // the agent's Auto setting, as the agent settings page sets it
-    const r = await api(`/api/agents/${encodeURIComponent(name)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoModel: on }) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || d.success === false) throw new Error(d.error || `HTTP ${r.status}`);
-    a.autoModel = on;
-  };
-  if (model === AUTO_PICK) {
-    if (a.autoModel) return;
-    sel.disabled = true;
-    try { await setAuto(true); toast(`${a.display || name} now picks its model and effort for each turn (Auto)`); if (current === name) { paintChatStatus(); fillEffortPick(); } }
-    catch (e) { back(); toast(`Could not turn on Auto: ${e.message}`); }
-    finally { sel.disabled = false; }
-    return;
-  }
-  if (model === a.model && !a.autoModel) return;
-  if (model !== a.model && !(await testBeforeSwitch(model))) { back(); return; }
-  try {
-    if (model !== a.model) {
-      const r = await api(`/api/agents/${encodeURIComponent(name)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d.success) { back(); toast(`Could not change the model: ${d.error || r.status}`); return; }
-    }
-    if (a.autoModel) await setAuto(false);
-    modelChanged(a, name, model);
-  } catch (e) { back(); toast(`Could not change the model: ${e.message}`); }
+  if (model === OR_MORE) { sel.value = a && a.autoModel ? AUTO_PICK : (a ? a.model : ''); if (a) openOrSheet(name); return; }
+  return queueModelChange(name, model);
 }
 function modelChanged(a, name, model, note = '') {
   toast((isBusy(name) || streams.has(name) ? `${a.display || name} switches to ${mpLabel(model)} after this reply` : `${a.display || name} now runs on ${mpLabel(model)}`) + note);
@@ -1344,7 +1380,7 @@ async function onOrSheetClick(e) {
   const sheet = $('or-sheet'); const name = sheet.dataset.agent; const a = agentByName(name);
   const id = btn.dataset.id; const model = `openrouter/${id}`;
   if (!a) return;
-  if (model === a.model) { sheet.close(); return; }
+  if (model === a.model) { sheet.close(); if (a.autoModel && isAdmin()) await queueModelChange(name, model, { tested: true }); return; }   // its own model: leaves Auto
   const v = orSheetView ? orSheetView.view : {};
   btn.disabled = true; $('ors-msg').textContent = `Testing ${id}…`;
   if (!(await testBeforeSwitch(model))) { btn.disabled = false; $('ors-msg').textContent = `Not switched: ${a.display || name} stays on ${shortModel(a.model)}.`; return; }
@@ -1359,13 +1395,11 @@ async function onOrSheetClick(e) {
     } catch { /* the note says so */ }
     _modelListCache = null;
   }
-  try {
-    const r = await api(`/api/agents/${encodeURIComponent(name)}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.success) { btn.disabled = false; $('ors-msg').textContent = `Could not change the model: ${d.error || r.status}`; return; }
-  } catch (err) { btn.disabled = false; $('ors-msg').textContent = `Could not change the model: ${err.message}`; return; }
+  let failed = '';
+  const ok = await queueModelChange(name, model, { tested: true, note, say: (t) => { failed = t; } });
+  if (!ok && failed) { btn.disabled = false; $('ors-msg').textContent = failed; return; }
   sheet.close();
-  modelChanged(a, name, model, note);
+  if (failed) toast(failed);   // switched, but Auto could not be turned off
   if (current === name) fillModelPick();
 }
 
