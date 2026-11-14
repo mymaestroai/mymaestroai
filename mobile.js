@@ -2660,12 +2660,15 @@ function voiceSpokenLead(markdown, done) {
   const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
   const lines = text.split('\n'), last = lines.length - 1;
   const before = (i) => (i > 0 ? lines.slice(0, i).join('\n') + '\n' : '');
+  // the complete sentences before the first pipe of a line stay lead text whatever the line turns out to be (prose or a table header),
+  // so a sentence already spoken is never taken back
+  const pipeKeep = (i) => { const m = lines[i].slice(0, lines[i].indexOf('|')).match(/^.*[.!?]["')\]]*\s+/); return before(i) + (m ? m[0] : ''); };
   for (let i = 0; i < lines.length; i++) {
     const open = !done && i === last;
     if (VOICE_DETAIL_LINE_RE.test(lines[i]) || VOICE_TABLE_RULE_RE.test(lines[i])) return { lead: before(i), cut: !open };
     if (lines[i].includes('|')) {
-      if (open || (!done && i + 1 === last)) return { lead: before(i), cut: false };
-      if (i + 1 <= last && VOICE_TABLE_RULE_RE.test(lines[i + 1])) return { lead: before(i), cut: true };
+      if (open || (!done && i + 1 === last)) return { lead: pipeKeep(i), cut: false };
+      if (i + 1 <= last && VOICE_TABLE_RULE_RE.test(lines[i + 1])) return { lead: pipeKeep(i), cut: true };
     }
   }
   return { lead: text, cut: false };

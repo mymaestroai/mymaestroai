@@ -136,6 +136,12 @@ test('streaming: a bold line that later gains text, and a table without outer pi
   assert.deepStrictEqual(prefixProperty('Summary.\nPrice | ID\n--- | ---\n123.45 | AB123'), ['Summary.']);
   assert.deepStrictEqual(prefixProperty('**Yes, it works.**\n\nThe build passed.\n\n**Details:**\n- 1.2.3'), ['Yes, it works.', 'The build passed.']);
 });
+// ── review round 2 ──
+test('streaming: a pipe later in a line never takes back a sentence already spoken on that line', () => {
+  assert.deepStrictEqual(prefixProperty('Yes, it works. Run ls | wc to count. Then you are done.'), ['Yes, it works.', 'Run ls wc to count.', 'Then you are done.']);
+  assert.deepStrictEqual(prefixProperty('Summary.\nPrice. | ID\n--- | ---\n123 | ABC'), ['Summary.', 'Price.'], 'a sentence before the first pipe of a table header stays (it may already have been spoken); the table is not read');
+  assert.deepStrictEqual(prefixProperty('Summary.\nPrice | ID\n--- | ---\n123 | ABC'), ['Summary.']);
+});
 test('a false start during the last sentence re-reads only that sentence, and the cut details note comes back', async () => {
   const h = { t: 0, timers: [], nextId: 1, spoken: [], pend: [], sent: [], running: false };
   const deps = {
