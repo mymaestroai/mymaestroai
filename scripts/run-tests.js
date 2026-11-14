@@ -35,9 +35,11 @@ const GUARD = path.join(ROOT, 'test', 'helpers', 'data-guard.js');
 env.NODE_OPTIONS = `${env.NODE_OPTIONS ? env.NODE_OPTIONS + ' ' : ''}--require ${JSON.stringify(GUARD)}`;
 const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'data-guard-run-'));
 env.MM_DATA_GUARD_REPORT = path.join(reportDir, 'refused.jsonl');
+fs.writeFileSync(env.MM_DATA_GUARD_REPORT, '', { mode: 0o600 });   // made before the run: a report that cannot be read back fails it
 const r = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: ROOT, stdio: 'inherit', env });
 let refused = [];
-try { refused = fs.readFileSync(env.MM_DATA_GUARD_REPORT, 'utf8').split('\n').filter(Boolean); } catch { /* none */ }
+try { refused = fs.readFileSync(env.MM_DATA_GUARD_REPORT, 'utf8').split('\n').filter(Boolean); }
+catch (e) { refused = [JSON.stringify({ test: 'run-tests', path: `the guard's report could not be read (${e.code || e.message})`, how: 'report' })]; }
 try { fs.rmSync(reportDir, { recursive: true, force: true }); } catch { /* best effort */ }
 if (refused.length) {
   const seen = new Set();

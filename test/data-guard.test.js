@@ -96,9 +96,11 @@ t('link from outside', () => fs.readFileSync(path.join(T, 'alias', 'x.json'), 'u
 t('file link from outside', () => fs.readFileSync(path.join(T, 'link-to-x'), 'utf8'));
 t('allowed name pointing elsewhere in data/', () => fs.readFileSync(path.join(F, 'data', 'agents.example.json'), 'utf8'));
 t('removing a link that points into data/', () => { fs.symlinkSync(path.join(F, 'data', 'x.json'), path.join(T, 'tmp-link')); fs.unlinkSync(path.join(T, 'tmp-link')); });
+t('unlink through a linked folder', () => fs.unlinkSync(path.join(T, 'alias', 'x.json')));
+t('rm through a linked folder', () => fs.rmSync(path.join(T, 'alias', 'x.json'), { force: true }));
 console.log(out.join('\\n'));`);
   const got = results(g);
-  for (const k of ['link inside the install', 'link from outside', 'file link from outside', 'allowed name pointing elsewhere in data/']) assert.strictEqual(got[k], 'EACCES', k);
+  for (const k of ['link inside the install', 'link from outside', 'file link from outside', 'allowed name pointing elsewhere in data/', 'unlink through a linked folder', 'rm through a linked folder']) assert.strictEqual(got[k], 'EACCES', k);
   assert.strictEqual(got['removing a link that points into data/'], 'ok', 'a link is removed, never what it points to');
   assert.ok(fs.existsSync(path.join(FAKE, 'data', 'x.json')));
   const linked = probe(`t('the linked store by its own path', () => fs.readFileSync(path.join(T, 'store', 's.json'), 'utf8')); console.log(out.join('\\n'));`, { env: { MM_DATA_GUARD_ROOT: LINKED } });
@@ -113,10 +115,10 @@ t('rename of the install', () => fs.renameSync(F, path.join(T, 'moved')));
 t('cp of the install', () => fs.cpSync(F, path.join(T, 'copy'), { recursive: true }));
 t('recursive readdir of the install', () => fs.readdirSync(F, { recursive: true }));
 t('plain readdir of the install', () => fs.readdirSync(F).includes('data'));
-t('sqlite backup into data/', () => { const D = require(${JSON.stringify(SQLITE)}); const d = new D(':memory:'); return d.backup(path.join(F, 'data', 'b.db')); });
-Promise.resolve().then(() => console.log(out.join('\\n')));`);
+const D = require(${JSON.stringify(SQLITE)});
+new D(':memory:').backup(path.join(F, 'data', 'b.db')).then(() => 'ok', e => e.code).then(b => { out.push('sqlite backup into data/: ' + b); console.log(out.join('\\n')); });`);
   const got = results(r);
-  for (const k of ['rm of the install', 'rm of its parent', 'rename of the install', 'cp of the install', 'recursive readdir of the install']) assert.strictEqual(got[k], 'EACCES', k);
+  for (const k of ['rm of the install', 'rm of its parent', 'rename of the install', 'cp of the install', 'recursive readdir of the install', 'sqlite backup into data/']) assert.strictEqual(got[k], 'EACCES', k);
   assert.strictEqual(got['plain readdir of the install'], 'ok true', 'listing the install itself is fine');
   assert.ok(fs.existsSync(path.join(FAKE, 'data', 'x.json')) && !fs.existsSync(path.join(tmp, 'moved')) && !fs.existsSync(path.join(tmp, 'copy')));
   assert.strictEqual(r.code, 1);
@@ -178,7 +180,7 @@ function fakeRun(name, tests) {
   fs.copyFileSync(path.join(REAL, 'scripts', 'run-tests.js'), path.join(inst, 'scripts', 'run-tests.js'));
   fs.copyFileSync(GUARD, path.join(inst, 'test', 'helpers', 'data-guard.js'));
   for (const [f, src] of Object.entries(tests)) fs.writeFileSync(path.join(inst, 'test', f), `'use strict';\nconst { test } = require('node:test');\nconst path = require('path');\n${src}\n`);
-  return spawnSync(process.execPath, [path.join(inst, 'scripts', 'run-tests.js')], { cwd: inst, encoding: 'utf8', timeout: 60000, env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+  return spawnSync(process.execPath, [path.join(inst, 'scripts', 'run-tests.js'), '--test-reporter=tap'], { cwd: inst, encoding: 'utf8', timeout: 60000, env: { PATH: process.env.PATH, HOME: process.env.HOME } });
 }
 
 test('npm test fails the run when a child touched data/, even if its test ignored the child', () => {
