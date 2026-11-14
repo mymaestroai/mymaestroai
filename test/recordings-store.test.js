@@ -292,7 +292,10 @@ test('exportEntries piped through writeZip reads back with Python, and the FLAC 
     `${sessionId}/0003-person.flac`, `${sessionId}/0003-person.txt`,
   ]);
   const get = (n) => Buffer.from(res.items[names.indexOf(`${sessionId}/${n}`)][1], 'hex');
-  assert.deepStrictEqual(JSON.parse(get('manifest.json').toString()), await store.readManifest('biographer', sessionId));
+  const full = await store.readManifest('biographer', sessionId);
+  assert.ok('userId' in full && 'callId' in full, 'the stored manifest keeps them');
+  const { userId: _u, callId: _c, ...shown } = full;
+  assert.deepStrictEqual(JSON.parse(get('manifest.json').toString()), shown, 'the downloaded manifest leaves out userId and callId');
   assert.strictEqual(get('transcript.txt').toString(), [
     '[00:00:01] Person: I was born by the sea in a small house.',
     '[00:00:03] Agent: (no transcript)',
