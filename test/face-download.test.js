@@ -295,6 +295,56 @@ test('a data stall fails after the idle timeout', async () => {
   assert.deepStrictEqual(leftovers(home), []);
 });
 
+test('a redirect whose body never ends is destroyed before the next request; everything the job opened is destroyed after a 404', async () => {
+  const home = makeHome(); const opened = [];
+  const t = (url, options, onResponse) => {
+    const req = new EventEmitter(); req.setTimeout = () => req; req.destroy = () => { req.destroyed = true; };
+    opened.push(req);
+    setImmediate(() => {
+      const res = new EventEmitter(); res.headers = {}; res.resume = () => {}; res.destroyed = false;
+      res.destroy = () => { res.destroyed = true; };
+      opened.push(res);
+      if (url === URL1) { res.statusCode = 302; res.headers.location = goodRedirect; } else res.statusCode = 404;   // neither body ever ends
+      onResponse(res);
+    });
+    return req;
+  };
+  download.__setTransportForTests(t);
+  download.startDownload('bird', { home, catalog });
+  const s = await finish('bird', home);
+  assert.strictEqual(s.state, 'failed'); assert.match(s.error, /404/);
+  assert.strictEqual(opened.length, 4);
+  assert.ok(opened.every(o => o.destroyed === true), 'the first response and every request were destroyed');
+  assert.deepStrictEqual(leftovers(home), []);
+});
+
+test('downloadStatus reports an installed pack as done even when an old failure is stored', async () => {
+  const home = makeHome();
+  download.__setTransportForTests(fake({ [URL1]: { status: 404 } }));
+  download.startDownload('bird', { home, catalog });
+  assert.strictEqual((await finish('bird', home)).state, 'failed');
+  const un = path.join(home, 'unp'); fs.mkdirSync(un, { recursive: true });
+  for (const e of packEntries()) { const f = path.join(un, e.name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, e.data); }
+  packs.installPack(un, { home, id: 'bird' }); packs.clearCache();
+  assert.strictEqual(download.downloadStatus('bird', { home, catalog }).state, 'done');
+});
+
+test('before a job, old .download-* / .unpack-* leftovers in faces are swept; fresh ones and links are handled safely', async () => {
+  const home = makeHome(); const faces = path.join(home, 'faces'); fs.mkdirSync(faces, { recursive: true });
+  const old = new Date(Date.now() - 30 * 60 * 1000);
+  const oldPart = path.join(faces, '.download-old.part'), oldDir = path.join(faces, '.unpack-old'), newPart = path.join(faces, '.download-new.part'), newDir = path.join(faces, '.unpack-new');
+  fs.writeFileSync(oldPart, 'x'); fs.mkdirSync(oldDir); fs.writeFileSync(path.join(oldDir, 'f'), 'x'); fs.writeFileSync(newPart, 'x'); fs.mkdirSync(newDir);
+  fs.utimesSync(oldPart, old, old); fs.utimesSync(oldDir, old, old);
+  const outside = path.join(home, 'outside'); fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, 'keep.txt'), 'keep');
+  fs.symlinkSync(outside, path.join(faces, '.download-x'));
+  download.__setTransportForTests(fake({ [URL1]: { status: 404 } }));
+  download.startDownload('bird', { home, catalog }); await finish('bird', home);
+  assert.ok(!fs.existsSync(oldPart) && !fs.existsSync(oldDir), 'old leftovers removed');
+  assert.ok(fs.existsSync(newPart) && fs.existsSync(newDir), 'fresh ones kept');
+  assert.throws(() => fs.lstatSync(path.join(faces, '.download-x')), 'the link itself is gone');
+  assert.strictEqual(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'keep', 'its target was not touched');
+});
+
 test('the real catalogue entry is shaped as promised', () => {
   assert.ok(Object.isFrozen(CATALOG));
   const e = CATALOG[0];

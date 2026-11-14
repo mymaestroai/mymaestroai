@@ -147,6 +147,85 @@ test('createFaceDownload: a network error is a plain failure, a 404 says the cha
   await e.start(); assert.strictEqual(nf[0].state, 'failed'); assert.ok(/not available/.test(nf[0].error));
 });
 
+test('createFaceDownload: every request has a 15 s deadline that becomes a retryable failure; stop() aborts the request in the air', async () => {
+  const clk = clock(), seen = [], signals = [];
+  const hang = (url, init) => { signals.push(init.signal); return new Promise(() => {}); };
+  const d = CD.createFaceDownload({ fetch: hang, id: 'owl', onUpdate: (s) => seen.push(s), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  d.start(); await tick();
+  await clk.advance(14999); assert.strictEqual(seen.length, 0, 'still waiting');
+  await clk.advance(1);
+  assert.deepStrictEqual([seen.length, seen[0].state, seen[0].error], [1, 'failed', 'The hub did not answer; try again.']);
+  if (signals[0]) assert.strictEqual(signals[0].aborted, true, 'the request was aborted');
+  assert.strictEqual(CD.downloadText(seen[0], 'Owl'), 'Could not download the owl: The hub did not answer; try again.');
+  // a poll that hangs too
+  const hub = fakeHub({ script: [dl('downloading', 4, 40)] }); const seen2 = [];
+  let hangNext = false;
+  const f2 = (url, init) => (hangNext && (init.method || 'GET') === 'GET' ? new Promise(() => {}) : hub.fetch(url, init));
+  const e = CD.createFaceDownload({ fetch: f2, id: 'owl', onUpdate: (s) => seen2.push(s.state), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  await e.start(); hangNext = true; await clk.advance(500); await clk.advance(15000);
+  assert.deepStrictEqual(seen2, ['downloading', 'failed']);
+  // stop() aborts the request in the air and nothing is reported
+  const sigs = []; const seen3 = [];
+  const g = CD.createFaceDownload({ fetch: (u, init) => { sigs.push(init.signal); return new Promise(() => {}); }, id: 'owl', onUpdate: (s) => seen3.push(s), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  g.start(); await tick(); g.stop();
+  if (sigs[0]) assert.strictEqual(sigs[0].aborted, true, 'stop() aborted it');
+  await clk.advance(20000); assert.strictEqual(seen3.length, 0);
+});
+test('createFaceDownload: a poll answering idle while downloading (the hub restarted) becomes a retryable failure', async () => {
+  const hub = fakeHub({ script: [dl('downloading', 4, 40), { id: 'owl', state: 'idle', received: 0, total: 40 * MB }] });
+  const clk = clock(), seen = [];
+  const d = CD.createFaceDownload({ fetch: hub.fetch, id: 'owl', onUpdate: (s) => seen.push(s.state + ':' + (s.error || '')), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  await d.start(); await clk.advance(500); await clk.advance(3000);
+  assert.deepStrictEqual(seen, ['downloading:', 'failed:The download stopped (your Maestro may have restarted). Try again.']);
+  assert.strictEqual(hub.calls.length, 2, 'not polled after the failure');
+});
+
+// ── sharedFaceDownload ──
+test('sharedFaceDownload: one object per id; start() joins a running one, retry() restarts it for every listener, the last unsubscribe frees it', async () => {
+  CD.__resetSharedDownloadsForTests();
+  const hub = fakeHub({ script: [dl('downloading', 4, 40)] }), clk = clock();
+  const mk = () => CD.sharedFaceDownload({ fetch: hub.fetch, id: 'owl', name: 'Owl', setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  const a = mk(), b = mk(); const sa = [], sb = [];
+  const offA = a.subscribe((s) => sa.push(s.state)), offB = b.subscribe((s) => sb.push(s.state));
+  await a.start(); await b.start(); await tick();
+  assert.strictEqual(hub.calls.filter(c => c.method === 'POST').length, 1, 'the second start() joined');
+  assert.deepStrictEqual([sa, sb], [['downloading'], ['downloading']]);
+  assert.strictEqual(b.status.state, 'downloading');
+  offA(); offA(); await clk.advance(500); assert.deepStrictEqual(sb, ['downloading', 'downloading'], 'the other listener still hears it');
+  assert.strictEqual(sa.length, 1);
+  offB(); const n = hub.calls.length; await clk.advance(3000);
+  assert.strictEqual(hub.calls.length, n, 'no listeners left: polling stopped');
+  assert.notStrictEqual(mk().status, b.status, 'a fresh object after the last listener left');
+  CD.__resetSharedDownloadsForTests();
+});
+test('call view + voice panel share one download: POST fails for both, Retry from the panel runs it, the call switches to the character', async () => {
+  CD.__resetSharedDownloadsForTests();
+  const clk = clock(); let phase = 'fail';
+  const hub = fakeHub({ script: [dl('downloading', 10, 40), dl('done', 40, 40)] });
+  const inner = hub.fetch;
+  const fetch = async (url, init) => {
+    if (/download$/.test(url) && (init && init.method) === 'POST' && phase === 'fail') { hub.calls.push({ url, method: 'POST', init }); return { ok: false, status: 500, json: async () => ({ error: 'disk full' }) }; }
+    return inner(url, init);
+  };
+  const dom = fakeDom(), players = [], orbs = [];
+  const mkp = (kind, log) => (host, options) => { const p = { kind, options, destroyed: false, setState() {}, setAnalyser() {}, react: () => false, destroy() { p.destroyed = true; }, ready: Promise.resolve() }; if (kind === 'orb') p.thinkingPulse = () => {}; log.push(p); return p; };
+  const display = CD.createCallDisplay({ window: { document: dom.doc }, document: dom.doc, storage: { getItem: () => JSON.stringify({ choice: 'pack:owl' }), setItem() {} }, fetch, setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, agentDefault: () => 'none', createVoiceOrb: mkp('orb', orbs), createFacePlayer: mkp('pack', players) });
+  await display.ensurePacks(); await tick();
+  const panel = []; const handle = CD.sharedFaceDownload({ fetch, id: 'owl', name: 'Owl', setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  const off = handle.subscribe((s) => panel.push(s.state));
+  assert.strictEqual(display.info().download.state, 'failed', 'the call shows the failure');
+  assert.strictEqual(handle.status.state, 'failed', 'and so does the panel');
+  assert.strictEqual(orbs.length, 1);
+  phase = 'ok'; handle.retry(); await tick();
+  assert.deepStrictEqual(panel, ['downloading']);
+  assert.strictEqual(display.info().download.state, 'downloading', 'the call hears the retry');
+  await clk.advance(500); await tick(20);
+  assert.deepStrictEqual(panel, ['downloading', 'done']);
+  assert.strictEqual(display.info().resolved.kind, 'pack', 'the call switched to the pack');
+  assert.strictEqual(players.length, 1); assert.ok(orbs[0].destroyed);
+  off(); display.release(); CD.__resetSharedDownloadsForTests();
+});
+
 // ── select, resolve ──
 test('fillDisplaySelect lists a downloadable character after the installed ones, with its size', () => {
   const dom = fakeDom(), sel = dom.doc.createElement('select');
@@ -253,10 +332,10 @@ test('desktop voice panel: fetchFaces, available into the select and resolveDisp
   assert.ok(/CallDisplay\.fetchFaces\(/.test(body) && !/fetchPacks/.test(body));
   assert.ok(/fillDisplaySelect\(document, sel, \{ choice: prefs\.choice, packs, available \}\)/.test(body));
   assert.ok(/resolveDisplay\(\{[^}]*available[^}]*\}\)/.test(body));
-  assert.ok(/resolved\.downloadable === true/.test(body) && /voiceDisp\.downloads/.test(body) && /createFaceDownload\(/.test(body));
+  assert.ok(/resolved\.downloadable === true/.test(body) && /voiceDisp\.downloads/.test(body) && /sharedFaceDownload\(/.test(body));
   assert.ok(/paintDownloadNote\(document, note,/.test(body), 'the note area shows the live text, a progress bar and Retry');
   assert.ok(/vp-display-note-\$\{chatId\}/.test(body));
-  assert.ok(/prev\.dl\.stop\(\)/.test(body) && /choosing it again tries again/.test(body), 'choosing a failed character again starts a new download at once');
+  assert.ok(/prev\.dl\.retry\(\)/.test(body) && /choosing it again tries again/.test(body), 'choosing a failed character again starts a new download at once');
 });
 test('phone voice sheet: the same, and the call screen gets it through createCallDisplay', () => {
   const src = read('mobile.js');
@@ -265,7 +344,7 @@ test('phone voice sheet: the same, and the call screen gets it through createCal
   const body = src.slice(i, j);
   assert.ok(/CallDisplay\.fetchFaces\(/.test(body) && !/fetchPacks/.test(body));
   assert.ok(/fillDisplaySelect\(document, sel, \{ choice: prefs\.choice, packs, available \}\)/.test(body));
-  assert.ok(/resolved\.downloadable === true/.test(body) && /voiceDisp\.downloads/.test(body) && /createFaceDownload\(/.test(body) && /paintDownloadNote\(document, note,/.test(body));
+  assert.ok(/resolved\.downloadable === true/.test(body) && /voiceDisp\.downloads/.test(body) && /sharedFaceDownload\(/.test(body) && /paintDownloadNote\(document, note,/.test(body));
   assert.ok(/CallDisplay\.createCallDisplay\(\{[^]*?fetch: \(\.\.\.a\) => fetch\(\.\.\.a\)/.test(src), 'the call screen display has a fetch for the download');
   assert.ok(/\.cd-download-retry/.test(read('lib/ui-call-display.css')) && /\.cd-download \{/.test(read('lib/ui-call-display.css')));
 });

@@ -8136,10 +8136,12 @@ function voiceDispDownloadFor(id, name) {
   let ent = map.get(id);
   if (!ent) {
     ent = { id, name, dl: null };
-    ent.dl = CallDisplay.createFaceDownload({ fetch: (...a) => fetch(...a), id, name, onUpdate: (st) => {
+    // the shared download of this id (the call display uses the very same one): a Retry from any place restarts it, every place hears the result
+    ent.dl = CallDisplay.sharedFaceDownload({ fetch: (...a) => fetch(...a), id, name });
+    ent.off = ent.dl.subscribe((st) => {
       voiceDispPaintDownload();
-      if (st.state === 'done') { map.delete(id); voiceDispPaintPanel(); }   // installed: the select lists it now
-    } });
+      if (st.state === 'done') { map.delete(id); if (ent.off) { ent.off(); ent.off = null; } voiceDispPaintPanel(); }   // installed: the select lists it now
+    });
     map.set(id, ent);
     ent.dl.start();
   }
@@ -8153,13 +8155,13 @@ function voiceDispPaintDownload() {
   const id = typeof want === 'string' && want.startsWith('pack:') ? want.slice(5) : '';
   const ent = id && voiceDisp.downloads && voiceDisp.downloads.get(id);
   if (!ent) { CallDisplay.paintDownloadNote(document, note, null); return; }
-  CallDisplay.paintDownloadNote(document, note, ent.dl.status || { state: 'downloading', received: 0, total: 0 }, ent.name, () => { voiceDisp.downloads.delete(id); ent.dl.stop(); voiceDispPaintPanel(); });
+  CallDisplay.paintDownloadNote(document, note, ent.dl.status || { state: 'downloading', received: 0, total: 0 }, ent.name, () => { ent.dl.retry(); voiceDispPaintDownload(); });
 }
 function voiceDispSetChoice(v) {
   if (typeof CallDisplay === 'undefined') return;
   const pid = typeof v === 'string' && v.startsWith('pack:') ? v.slice(5) : '';
   const prev = pid && voiceDisp.downloads && voiceDisp.downloads.get(pid);
-  if (prev && prev.dl.status && (prev.dl.status.state === 'failed' || prev.dl.status.state === 'busy')) { voiceDisp.downloads.delete(pid); prev.dl.stop(); }   // choosing it again tries again at once
+  if (prev && prev.dl.status && (prev.dl.status.state === 'failed' || prev.dl.status.state === 'busy')) prev.dl.retry();   // choosing it again tries again at once
   if (voiceDisp.cur) voiceDisp.cur.setChoice(v); else CallDisplay.saveDisplayPrefs(localStorage, { choice: v });   // live: the view changes, the call goes on
   voiceDispPaintPanel();
 }
