@@ -47,9 +47,9 @@ for (const f of FILES) {
     assert.ok(r.touched / samples.length < 0.5, `touched ${r.touched / samples.length}`);
     assert.strictEqual(r.clamped, 0);
     const wav = wavFromFloat32(r.samples, sampleRate);
-    const back = (() => { const s = new Float32Array((wav.length - 44) >> 1); for (let i = 0; i < s.length; i++) s[i] = wav.readInt16LE(44 + i * 2) / 32768; return s; })();
-    assert.ok(maxAbs(back) <= CEIL + 1 / 32768, `encoded peak ${peakDb(back)}`);
-    assert.ok(peakDb(back) <= -0.99, 'encoded peak at or under -1 dBFS (within one 16-bit step)');
+    // changed (review r1): decoded the stricter way for positive samples (/32767), and the bound is the exact ceiling
+    const back = (() => { const s = new Float32Array((wav.length - 44) >> 1); for (let i = 0; i < s.length; i++) { const v = wav.readInt16LE(44 + i * 2); s[i] = v < 0 ? v / 32768 : v / 32767; } return s; })();
+    assert.ok(maxAbs(back) <= CEIL, `encoded peak ${peakDb(back)} at or under -1 dBFS exactly`);
   });
 }
 
