@@ -778,6 +778,24 @@ test('quiet idle (player): leaving listening and coming back restarts the 13 s c
   p.setState('thinking'); await w.settle(60); assert.match(p.getInfo().clip, /^think-/, 'leaving listening cuts it like any state change');
   p.destroy();
 });
+test('quiet idle (player): an idle clip still loading when the person starts talking never starts (review r1)', async () => {
+  const { w, p } = await quietStart(); for (const n of ['idle-a', 'idle-b', 'idle-c']) w.hold.add(n);
+  w.advance(14000); assert.strictEqual(p.getInfo().quietMix, true);
+  let held = null;
+  for (let i = 0; i < 80 && !held; i++) {
+    const before = p.getInfo().log.length; w.front(p).end(); await w.settle(30);
+    // the front clip ended and no new clip committed: the next start waits on a held (cold) idle video
+    if (p.getInfo().log.length === before) held = w.videos.find(v => /^idle-/.test(v.clipName || '') && v.readyState === 0 && v._src);
+  }
+  assert.ok(held, 'set-up: a quiet idle clip is waiting for its video');
+  const n0 = p.getInfo().log.length; p.setHearing(true); await w.settle(60);
+  assert.match(p.getInfo().clip, /^listen-/, 'a listening clip goes on at once');
+  w.hold.delete(held.clipName); held.currentSrc = held._src; held.readyState = 4; held.duration = 4; held.videoWidth = 1280; held.videoHeight = 720; held.fire('loadeddata');
+  await w.settle(200);
+  assert.match(p.getInfo().clip, /^listen-/, 'the late idle video does not start under the voice');
+  assert.ok(p.getInfo().log.slice(n0).every(e => !/^idle-/.test(e.name)), 'no idle clip played after the person started talking');
+  p.destroy();
+});
 
 test('goodbye plays to its end and is not cut by idle', async () => {
   const { w, p } = await started(); p.react('goodbye'); await w.settle(100); p.setState('idle'); await w.settle(300);
