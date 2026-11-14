@@ -190,7 +190,7 @@ test('phone: #cp-display change is wired to voiceDispSetChoice; the panel is pai
   assert.ok(/\$\('cp-retry-mic'\)\?\.addEventListener\('click', \(\) => \{ const vc = voiceCall;/.test(mob), 'the panel button keeps its own retry (same behaviour as voiceCallRetryMicTap)');
   assert.ok(/function voiceCallRetryMicTap\(\) \{[\s\S]*retryMic\(\)[\s\S]*Still no microphone\./.test(mob));
   assert.ok(/createCallDisplay\(\{[^]*onRetryMic: voiceCallRetryMicTap[,\s]/.test(mob), 'onRetryMic goes to the display');
-  const ml = between(mob, '      micLost: (on) => {', '      state: (name)');
+  const ml = between(mob, '      micLost: (on) => {', '      state: (name');
   assert.ok(ml.indexOf('if (voiceCall !== vc) return;') >= 0 && /if \(typeof voiceDisplayHook === 'function'\) voiceDisplayHook\('micLost', !!on\);/.test(ml), 'guarded by the same call check');
   assert.ok(/id="cp-levels" class="cp-levels">Levels</.test(mobHtml), 'Levels keeps its name');
 });
@@ -203,6 +203,7 @@ function popHtml() {
     voicePrefsNow: () => ({ mode: 'handsfree' }), VOICE_CONTINUE_WAITS: [1500, 3000, 5000], voiceContinueWaitNow: () => 3000,
     voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceMicLevelNow: () => 50, voiceSensNow: () => 50, voiceSpeedNow: () => 1, voiceSpeedLabel: () => '1x',
     voiceThinkingOnNow: () => true, voiceThinkingVolNow: () => 0.5, voiceEchoSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, VOICE_ECHO_HINT: 'echo', VOICE_KEEP_HINT: 'keep', voiceKeepAliveNow: () => true,
+    voiceWakeRowsHtml: () => '',   // the wake rows have their own tests (ui-voice-wake-pages)
   };
   const names = Object.keys(stubs);
   const src = between(app, '    function voicePopHtml(', '    function voicePopClose(');

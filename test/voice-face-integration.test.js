@@ -354,7 +354,7 @@ test('both pages carry the same wiring: same hooks, same events, same send field
   each(/voiceDisplayHook\('reply', 'turn', 'seq:' \+ seq\)/, 'a sent turn closes the older ones');
   each(/voiceDisplayHook\('audioStart'\)/, 'audio start'); each(/voiceDisplayHook\('audioEnd'\)/, 'audio end'); each(/voiceDisplayHook\('caption'/, 'caption of the spoken sentence');
   each(/dsp\('boundary'\)/, 'device speech boundary'); each(/u\.onpause = /, 'device speech pause'); each(/u\.onresume = /, 'device speech resume'); each(/dsp\('end'\)/, 'device speech end');
-  each(/voiceDisplayHook\('setState', name\)/, 'controller state'); each(/voiceDisplayHook\('level', db\)/, 'mic level');
+  each(/voiceDisplayHook\('setState', name(, phrase)?\)/, 'controller state'); each(/voiceDisplayHook\('level', db\)/, 'mic level');
   each(/floor\.wrap\(h\)/, 'Talk floor wraps the VAD handlers'); each(/voiceDispEnd\(true\)/, 'goodbye on hang-up'); each(/voiceDispEnd\(false\)/, 'immediate release');
   each(/function voiceFacePackBody\(\)/, 'facePack body helper'); each(/voiceCallSseMood/, 'stream mood'); each(/turn_mood/, 'hub mood event');
   each(/CallDisplay\.fetchPacks/, 'installed packs from the server'); each(/hub-voice-display|CallDisplay\.saveDisplayPrefs/, 'device choice saved through the shared module');

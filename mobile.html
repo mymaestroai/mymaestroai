@@ -800,6 +800,15 @@
         <p class="vs-hint vp-hint">Plays an inaudible hiss so a car or speaker does not cut the first word.</p>
         <button type="button" class="vs-btn vs-car" id="vp-car">Car or Bluetooth check</button>
         <div class="vs-car-out" role="status" aria-live="polite"></div>
+        <div id="vp-wake-box">
+          <label class="vs-check"><input type="checkbox" id="vp-wake"> <span>Wait for the wake phrase</span></label>
+          <input type="text" id="vp-wake-phrase" class="vs-btn" maxlength="60" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Wake phrase" placeholder="Hey">
+          <div class="vp-display-note" id="vp-wake-hint" role="status" aria-live="polite" hidden></div>
+          <label class="vp-row" for="vp-wake-quiet"><span>Back to waiting after</span></label>
+          <select id="vp-wake-quiet" class="vs-btn"></select>
+          <p class="vs-hint vp-hint">The call stays up and answers only after the phrase. Keep the app open with the screen on; a hidden page still hangs up. Say “that’s all” to go back to waiting.</p>
+          <p class="vs-hint vp-hint" id="vp-wake-off" hidden>Needs speech recognition on this computer; this agent uses a cloud recognizer or voice is off.</p>
+        </div>
       </div>
       <div id="voice-level" aria-hidden="true" hidden><i></i></div>
       <div class="row">

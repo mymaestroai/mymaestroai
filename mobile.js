@@ -1444,6 +1444,7 @@ async function loadAgents() {
     const r = await api('/api/agents' + (hubMe && hubMe.isAdmin ? `?owner=${encodeURIComponent(ownerView())}` : ''));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     agents = (await r.json()).agents || [];
+    if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
     if (agents.some(a => 'busy' in a)) {
       const map = {};
       for (const a of agents) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
@@ -2184,6 +2185,7 @@ const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', '
 const VOICE_END_PAUSES = [800, 1200, 2000];   // 'Pause before I'm done': short / normal / long, in ms
 const VOICE_CONTINUE_WAITS = [1500, 3000, 5000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
 const VOICE_ECHO_HOLDS = [0, 600, 1000, 1500];   // 'Echo guard': how long the raised barge-in thresholds stay after playback stops, in ms (0 = off)
+const VOICE_WAKE_QUIET_MS = [10000, 20000, 45000];   // 'Go back to standby after': how long a quiet call stays awake (default 20000)
 const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true };
 function voiceCleanSpeed(v) {
   const n = Number(v);
@@ -2381,7 +2383,99 @@ function voiceCleanPrefs(raw) {
   if (VOICE_ECHO_HOLDS.includes(raw.echoHold)) p.echoHold = raw.echoHold;
   if (typeof raw.thinkingVolume === 'number' && Number.isFinite(raw.thinkingVolume)) p.thinkingVolume = Math.round(Math.max(0, Math.min(1, raw.thinkingVolume)) * 100) / 100;
   for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity', 'thinkingSound', 'keepAlive']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
+  // wake: per agent { on, phrase, quietMs }; the key exists only when the raw prefs carried an object (the defaults have none)
+  if (raw.wake && typeof raw.wake === 'object' && !Array.isArray(raw.wake)) {
+    const wake = {};
+    let n = 0;
+    for (const name of Object.keys(raw.wake)) {
+      if (n >= 50) break;
+      const e = raw.wake[name];
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(name) || !e || typeof e !== 'object' || Array.isArray(e)) continue;
+      wake[name] = { on: e.on === true, phrase: voiceCleanWakePhrase(e.phrase), quietMs: VOICE_WAKE_QUIET_MS.includes(e.quietMs) ? e.quietMs : 20000 };
+      n++;
+    }
+    p.wake = wake;
+  }
   return p;
+}
+// The wake phrase of an agent from the cleaned prefs: { on, phrase, quietMs } or null.
+function voiceWakeForAgent(prefs, agent) {
+  try {
+    const w = prefs && prefs.wake;
+    if (!w || typeof w !== 'object' || typeof agent !== 'string' || !Object.prototype.hasOwnProperty.call(w, agent)) return null;
+    const e = w[agent];
+    if (!e || typeof e !== 'object') return null;
+    return { on: e.on === true, phrase: typeof e.phrase === 'string' ? e.phrase : '', quietMs: VOICE_WAKE_QUIET_MS.includes(e.quietMs) ? e.quietMs : 20000 };
+  } catch { return null; }
+}
+const VOICE_WAKE_GREETINGS = new Set(['hey', 'hi', 'hello', 'hay', 'ok', 'okay', 'yo', 'oh', 'um', 'uh', 'so', 'well']);
+// The phrase tidied for display, '' when it is not usable: 1-4 words of letters, digits or apostrophes (1-20 characters each), at most
+// 60 characters, and at least one word of 3+ characters that is not a greeting or filler.
+function voiceCleanWakePhrase(text) {
+  if (typeof text !== 'string') return '';
+  const s = text.replace(/\s+/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+  if (!s || s.length > 60) return '';
+  const words = s.split(' ').map(w => w.replace(/[,.]/g, '')).filter(Boolean);
+  if (words.length < 1 || words.length > 4) return '';
+  if (!words.every(w => /^[\p{L}\p{N}'’]{1,20}$/u.test(w))) return '';
+  if (!words.some(w => w.replace(/['’]/g, '').length >= 3 && !VOICE_WAKE_GREETINGS.has(w.toLowerCase().replace(/['’]/g, '')))) return '';
+  return words.join(' ');
+}
+// Tokens for matching: lowercase, apostrophes removed, everything else that is not a letter or digit separates; each token keeps the
+// offset just after its last character in the original text.
+function voiceWakeTokens(text) {
+  const s = String(text), out = [];
+  let cur = '', end = 0;
+  for (let i = 0; i < s.length;) {
+    const ch = String.fromCodePoint(s.codePointAt(i)), at = i;
+    i += ch.length;
+    if (ch === '\'' || ch === '’' || ch === '‘' || ch === 'ʼ') continue;
+    if (/[\p{L}\p{N}]/u.test(ch)) { cur += ch.toLowerCase(); end = at + ch.length; }
+    else if (cur) { out.push({ t: cur, end }); cur = ''; }
+  }
+  if (cur) out.push({ t: cur, end });
+  return out;
+}
+function voiceWakeDistance(a, b) {
+  let prev = []; for (let j = 0; j <= b.length; j++) prev.push(j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur.push(Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+const VOICE_WAKE_FILLERS = new Set(['um', 'uh', 'umm', 'uhh', 'er', 'erm', 'ah', 'hmm', 'hm', 'mm', 'oh', 'so', 'ok', 'okay', 'well', 'and', 'yeah']);
+// Does the utterance start with the wake phrase? -> { match, rest }: rest is the original text after the phrase without the pause
+// punctuation. Leading fillers are skipped (not one that is the phrase's own first word); the first 1..words+2 tokens are joined and
+// compared to the phrase without spaces by edit distance (0 up to 6 letters, 1 up to 12, 2 above), the first letters must agree.
+function voiceWakeMatch(text, phrase) {
+  const none = { match: false, rest: '' };
+  try {
+    if (typeof text !== 'string' || !text) return none;
+    const clean = voiceCleanWakePhrase(phrase);
+    if (!clean) return none;
+    const pt = voiceWakeTokens(clean).map(x => x.t);
+    if (!pt.length) return none;
+    const ut = voiceWakeTokens(text);
+    let i = 0;
+    while (i < ut.length && VOICE_WAKE_FILLERS.has(ut[i].t) && ut[i].t !== pt[0]) i++;
+    if (i >= ut.length || ut[i].t[0] !== pt[0][0]) return none;
+    const P = pt.join(''), tol = P.length <= 6 ? 0 : P.length <= 12 ? 1 : 2;
+    // Every span of 1 .. k+2 words is tried and the closest one wins (fewest edits, then the word count nearest the phrase's), so
+    // "Hey Watchman AI" heard in full is never taken as "Hey Watchman" plus a message starting "AI".
+    let U = '', best = null;
+    for (let n = 1; n <= pt.length + 2 && i + n <= ut.length; n++) {
+      U += ut[i + n - 1].t;
+      if (Math.abs(U.length - P.length) > tol) continue;
+      const dist = voiceWakeDistance(U, P);
+      if (dist > tol) continue;
+      const off = Math.abs(n - pt.length);
+      if (!best || dist < best.dist || (dist === best.dist && off < best.off)) best = { dist, off, end: ut[i + n - 1].end };
+    }
+    if (!best) return none;
+    return { match: true, rest: text.slice(best.end).replace(/^[\s,.!?;:\-–—…"'“”‘’()\[\]]+/, '').trimEnd() };
+  } catch { return none; }
 }
 function voiceLoadPrefs(storage) {
   try { return voiceCleanPrefs(JSON.parse(storage.getItem(VOICE_STORE_KEY))); } catch { return voiceCleanPrefs(null); }
@@ -2394,6 +2488,12 @@ function voiceSavePrefs(storage, prefs) {
 function voiceIsStopCommand(text) {
   const t = String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
   return VOICE_STOP_COMMANDS.has(t);
+}
+// The words that put an awake call back to standby: 'that's all', 'that is all', 'go to sleep', each with 'thanks' or 'thank you' after.
+const VOICE_SLEEP_COMMANDS = new Set(['thats all', 'that is all', 'go to sleep'].flatMap(c => [c, c + ' thanks', c + ' thank you']));
+function voiceIsSleepCommand(text) {
+  const t = String(text == null ? '' : text).toLowerCase().replace(/['’]/g, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  return VOICE_SLEEP_COMMANDS.has(t);
 }
 // Does what was said sound unfinished? True when it ends on a joining word (and, but, to, the, ...), ends with a comma, a
 // dash or an ellipsis, or is a fragment of one or two words without final punctuation. A whole sentence or a question is
@@ -2820,14 +2920,49 @@ function voiceCreateCall(deps) {
     const line = fresh[0]; stillUsed.push(line);   // never the same line twice in one wait
     enqueue(line, 'still');
   }
-  function setState(name) { if (name === state) return; state = name; quiet(() => ui.state(name, '')); }
+  // Standby (deps.wake(), optional): { phrase, quietMs, local } while the person has the wake phrase on, else null (switched off).
+  // local is true only when speech is known to be recognized on this computer. Standby shows state 'standby' (ui.state gets the
+  // phrase as its second argument), drops everything said that does not start with the phrase and is left again when the phrase is
+  // heard; an awake call that stays quiet for quietMs goes back to standby. Wake mode starts only with local true, and once on it fails
+  // closed: if local turns false the call stays in (or returns to) standby and nothing heard there is even transcribed. Only the
+  // person switching it off (wake() -> null) makes it an ordinary call. Without deps.wake nothing here acts.
+  const wake = () => { if (!d.wake) return null; const w = quiet(() => d.wake()); return w && typeof w === 'object' ? w : null; };
+  const wakePhrase = () => { const w = wake(); return w && typeof w.phrase === 'string' ? w.phrase : ''; };
+  let standby = false, wakeMode = false, wakeSeq = 0, quietTimer = null, chimeTimer = null, statePhrase = '';
+  let capWake = null, heardShown = false;   // heardShown: a 'Heard' line is on screen (cleared when the call goes back to standby)   // { sb, seq } taken when the person starts to speak: what counts is whether the call was in standby then
+  const wakeIdle = () => !awaitingReply && !speaking && !personSpeaking && !sttPending && !queue.length && !current && !pendingAsk && !pendingAnnounce;
+  function clearQuiet() { if (quietTimer !== null) { quiet(() => d.clearTimer(quietTimer)); quietTimer = null; } }
+  function enterStandby() {
+    if (ended) return;
+    standby = true; clearQuiet(); stopThinking();
+    if (heardShown) { heardShown = false; quiet(() => ui.heard('')); }   // the last message does not stay on screen while waiting
+    if (!speaking) setState('standby');
+  }
+  function leaveStandby() { standby = false; clearQuiet(); settle(); }
+  function setState(name) {
+    const phrase = name === 'standby' ? wakePhrase() : '';
+    if (name === state && phrase === statePhrase) return;   // (the phrase of a standby can change with the setting)
+    state = name; statePhrase = phrase; quiet(() => ui.state(name, phrase));
+  }
+  function armQuiet() {
+    const w = wake();
+    if (!wakeMode || standby || state !== 'listening' || !wakeIdle()) { clearQuiet(); return; }
+    if (quietTimer !== null) return;
+    const ms = w && VOICE_WAKE_QUIET_MS.includes(w.quietMs) ? w.quietMs : 20000;
+    quietTimer = d.setTimer(() => {
+      quietTimer = null;
+      if (ended) return;
+      if (wakeMode && !standby && wakeIdle()) enterStandby(); else settle();
+    }, ms);
+  }
   function settle() {
     if (ended) return;
-    if (!speaking && !personSpeaking && queue.length) { runQueue(); return; }   // lines that waited while the person spoke are read now
-    setState(speaking ? 'speaking' : personSpeaking ? 'hearing' : awaitingReply ? 'thinking' : 'listening');
+    if (!speaking && !personSpeaking && queue.length) { clearQuiet(); runQueue(); return; }   // lines that waited while the person spoke are read now
+    setState(speaking ? 'speaking' : standby ? 'standby' : personSpeaking ? 'hearing' : awaitingReply ? 'thinking' : 'listening');
+    armQuiet();
     pumpAnnounce();
     armStill();
-    if (awaitingReply && !speaking && !personSpeaking) armThinking();   // a long quiet stretch inside a running turn gets the sound too
+    if (awaitingReply && !speaking && !personSpeaking && !standby) armThinking();   // a long quiet stretch inside a running turn gets the sound too
   }
   function runAfter(item) { if (item && item.after) { const f = item.after; item.after = null; quiet(f); } }
   function enqueue(text, kind, after, onStart) {
@@ -2929,6 +3064,7 @@ function voiceCreateCall(deps) {
     if (ended || !ask) return;
     const options = Array.from(ask.options || []).map(o => (typeof o === 'string' ? o : (o && (o.label || o.value || o.text)) || '')).filter(Boolean);
     pendingAsk = { id: ask.request_id, options, free: !options.length || ask.allow_free_text === true || ask.allow_other === true, reasked: false, tapped: false };
+    if (standby && wake() && wake().local === true) { standby = false; clearQuiet(); }   // the agent asks: the answer is listened for without the phrase (talk from before the question is still dropped)
     enqueue(String(ask.question || '') + (options.length ? ' Options: ' + voiceJoinOr(options) + '.' : ''), 'ask');
   }
   function onAskDone(id) { if (pendingAsk && (id == null || pendingAsk.id === id)) pendingAsk = null; }
@@ -3037,22 +3173,24 @@ function voiceCreateCall(deps) {
   }
   function onSpeechBegin() {
     if (ended || personSpeaking) return;
-    personSpeaking = true; stopThinking();
+    personSpeaking = true; stopThinking(); clearQuiet();
+    capWake = { sb: standby, seq: wakeSeq };
     speechAnn = heardAnnouncement();
     clearBegin();
     segmentStarting();
     // Real speech, a misfire and an end all clear this timer, so when it fires no real start came: let the false start go.
-    beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; segmentDropped(); settle(); } }, 4000);
+    beginTimer = d.setTimer(() => { beginTimer = null; if (!ended && personSpeaking) { personSpeaking = false; speechAnn = null; capWake = null; segmentDropped(); settle(); } }, 4000);
   }
   // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
   function onSpeechStart() {
     if (ended) return;
     clearBegin();
     if (!personSpeaking) speechAnn = heardAnnouncement();   // no onSpeechBegin came first
-    personSpeaking = true; stopThinking();
+    if (!personSpeaking || !capWake) capWake = { sb: standby, seq: wakeSeq };
+    personSpeaking = true; stopThinking(); clearQuiet();
     quiet(() => ui.reply('drop'));   // real speech: a reaction that has not played is dropped
     segmentStarting();
-    if (speaking || queue.length) {
+    if (!standby && (speaking || queue.length)) {   // in standby a sound does not cut the reading ("<phrase>, stop" does, once heard)
       const noteText = voiceSpeechText('| a |');   // the details note is a reply item but not one of the counted sentences
       const items = (current ? [current] : []).concat(queue);
       const n = items.filter(i => i.kind === 'reply' && i.text !== noteText).length;
@@ -3062,13 +3200,13 @@ function voiceCreateCall(deps) {
       if (setSkip) cutSkip = true;
       if (cutReply) cutRec = { mark: Math.max(0, spokenCount - n), setSkip, noteCut };   // a cut of mic lines only keeps an earlier reply cut to resume
     }
-    setState('hearing');
+    if (!standby) setState('hearing');   // in standby the person is not addressed until the phrase
   }
   // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
   function onMisfire() {
     if (ended) return;
     clearBegin(); segmentDropped();
-    personSpeaking = false; speechAnn = null;
+    personSpeaking = false; speechAnn = null; capWake = null;
     quiet(() => ui.reply('resume'));
     const rec = cutRec; cutRec = null;
     if (rec) {
@@ -3092,7 +3230,10 @@ function voiceCreateCall(deps) {
     if (ended) return Promise.resolve();
     clearBegin();
     personSpeaking = false; speechEndAt = now(); cutRec = null;
-    const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null };
+    // sb and seq: was this said in standby (when it began, or now), and how many wakes had there been. Said in standby, it needs the phrase unless a wake came
+    // in between (the phrase said alone, then this): so neither a switch-off nor a lost recognizer check can release it.
+    const cap = capWake || { sb: standby, seq: wakeSeq }; capWake = null;
+    const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq };
     speechAnn = null; segActive = false;
     const cand = curCand; curCand = null;
     if (cand && cand.hold) cand.hold.resolve(mine);   // the earlier piece hands its text to this one
@@ -3103,13 +3244,32 @@ function voiceCreateCall(deps) {
       let counted = false;
       try {
         let text = '', failed = false;
-        try { text = await d.stt(audio); } catch { failed = true; quiet(() => ui.toast('Could not transcribe that.')); }
+        const mustMatch = () => standby || (mine.sb && mine.seq === wakeSeq);
+        const w0 = wake();
+        if (mustMatch() && !(w0 && w0.local === true)) return;   // standby without a recognizer known to be local: not even transcribed
+        const dropLong = mustMatch() && !!audio && audio.length > 30 * 16000;   // a long stretch of talk in standby is not transcribed at all
+        try { text = dropLong ? '' : await d.stt(audio); } catch { failed = true; if (!mustMatch()) quiet(() => ui.toast('Could not transcribe that.')); }
         if (ended) return;
         const own = String(text || '').trim(), n = voiceCallNorm(own);
         const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
         let t = ownOk ? own : '';
-        if (mine.carry) t = ownOk ? (voiceIsStopCommand(own) ? own : mine.carry + ' ' + own) : mine.carry;   // a stop word in this piece wins over the earlier one
+        if (mine.carry) t = ownOk ? (voiceIsStopCommand(own) || (wakeMode && voiceIsSleepCommand(own)) ? own : mine.carry + ' ' + own) : mine.carry;   // a stop or sleep command in this piece wins over the earlier one
         if (!t) return;
+        if (mustMatch()) {   // only the wake phrase is listened for: anything else is dropped (not shown, not sent, nothing kept)
+          const w = wake();
+          if (!(w && w.local === true)) return;   // switched off, or the check failed, while this was waiting: what was said in standby stays dropped
+          const m = voiceWakeMatch(t, w.phrase);
+          if (!m.match) return;
+          standby = false; wakeSeq++;
+          quiet(() => d.chime && d.chime());
+          quiet(() => vad.setPlaybackActive(true));   // the chime is playback: it must not be taken as speech
+          if (chimeTimer !== null) quiet(() => d.clearTimer(chimeTimer));
+          chimeTimer = d.setTimer(() => { chimeTimer = null; if (!ended && !speaking) quiet(() => vad.setPlaybackActive(false)); }, 700);
+          if (!m.rest) { settle(); return; }   // the next utterance is the message
+          t = m.rest;
+        }
+        const sleepy = wakeMode && voiceIsSleepCommand(t);
+        if (sleepy) { mine.done = true; enterStandby(); return; }   // 'that's all': back to standby at once, not shown, not sent, never joined to what follows
         // Does it sound unfinished? Then it is not sent yet: it waits up to the 'Wait for me to go on' time for the next piece,
         // which takes this text along. Not for a stop command, an answer to a question or an announcement, or when the wait is 0.
         let waited = false, waitStart = 0, ms = 0;
@@ -3120,7 +3280,7 @@ function voiceCreateCall(deps) {
           if (waitTimer !== null) quiet(() => d.clearTimer(waitTimer));
           mine.waiting = false; mine.onJoin = null;
         };
-        if (!mine.hold && !ended && !voiceIsStopCommand(t) && !pendingAsk && mine.ann == null && !pendingAnnounce) {
+        if (!mine.hold && !ended && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {
           ms = continueWait();
           if (ms > 0 && await soundsUnfinished(t, audio)) {
             waited = true; waitStart = now();
@@ -3145,7 +3305,7 @@ function voiceCreateCall(deps) {
           if (ended) return;
         }
         mine.done = true;
-        quiet(() => ui.heard(t));
+        heardShown = true; quiet(() => ui.heard(t));
         sttPending--; counted = true;   // the transcript is out of the queue: the thinking sound may arm while the turn runs
         await route(t, mine.ann);
       } finally { mine.done = true; if (!counted) sttPending--; settle(); }
@@ -3221,6 +3381,10 @@ function voiceCreateCall(deps) {
     started = true; setState('starting');
     if (d.keepAlive) { keepAliveOn = true; quiet(() => d.keepAlive.start()); leadInUntil = now() + VOICE_CALL_LEAD_IN_MS; }   // inside the tap, before anything is awaited
     const fail = async (msg) => { quiet(() => ui.toast(msg)); teardown(); await Promise.resolve().then(() => (callId ? server.end(callId) : null)).catch(() => {}); return false; };   // no id: never end another call of this person
+    // Standby is decided before the microphone opens, so nothing said while the call starts gets past it.
+    const w0 = wake();
+    wakeMode = !!(w0 && w0.local === true); standby = wakeMode;
+    if (w0 && !wakeMode) quiet(() => ui.toast('The wake phrase is not in use on this call: speech recognition is not known to run on this computer.'));
     // The microphone starts first, still inside the tap that began the call (iOS needs that for audio); the server next.
     let vadErr = null;
     let vadStarting;
@@ -3239,14 +3403,17 @@ function voiceCreateCall(deps) {
     if (ended) { quiet(() => vad.stop()); return false; }   // hung up while starting: a microphone that came up late is let go
     if (vadErr) return fail('Could not start the microphone: ' + (vadErr.message || vadErr));
     hydrate(startRes && startRes.held);
-    beat(); settle();
+    beat();
+    if (!wake()) { wakeMode = false; standby = false; }   // switched off while the call started (wakeChanged waits for the start)
+    if (standby) enterStandby();   // (a phrase heard while the call started has already woken it)
+    settle();
     return true;
   }
   // Everything the call holds is let go at once: timers, the thinking sound, the microphone and the speaking.
   function teardown() {
-    ended = true;
-    for (const t of [hbTimer, pumpTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
-    hbTimer = pumpTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); clearStill(); stopThinking();
+    ended = true; capWake = null;
+    for (const t of [hbTimer, pumpTimer, quietTimer, chimeTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
+    hbTimer = pumpTimer = quietTimer = chimeTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); clearStill(); stopThinking();
     for (const s of [lastSeg, curCand]) if (s) { if (s.hold) s.hold.resolve(null); if (s.onJoin) { const f = s.onJoin; s.onJoin = null; quiet(f); } }   // a held or waiting transcript is let go with the call
     quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
     if (keepAliveOn) { keepAliveOn = false; quiet(() => d.keepAlive.stop()); }
@@ -3282,8 +3449,18 @@ function voiceCreateCall(deps) {
     });
     return endPromise;
   }
+  // The page calls this when the wake setting or the recognizer check may have changed (also on routine refreshes: nothing that is
+  // unchanged may move the call). Switched off: an ordinary call. Switched on (with a local recognizer): standby now if idle, else after
+  // the quiet time. Anything else (a new phrase or quiet time, a check that failed) leaves the mode and the state as they are.
+  function wakeChanged() {
+    if (ended || !started || state === 'starting') return;
+    const w = wake();
+    if (!w) { wakeMode = false; if (standby) leaveStandby(); else settle(); return; }
+    if (!wakeMode && w.local === true) { wakeMode = true; if (!standby && wakeIdle()) enterStandby(); }
+    settle();
+  }
   return {
-    start, hangUp, release, setPrefs, retryMic, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+    start, hangUp, release, wakeChanged, isStandby: () => standby, setPrefs, retryMic, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
     get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
   };
 }
@@ -3804,6 +3981,24 @@ function voiceCreateVad(opts) {
     // 'Pause before I'm done': only the END of a turn waits this long; the start of speech (barge-in) is not delayed.
     setEndPause(ms) { st.pause = pause(ms); if (st.vad) st.vad.setOptions({ redemptionMs: st.pause }); },
   };
+}
+// The wake chime: two soft sine notes (660 Hz, then 880 Hz), 110 ms each, 40 ms apart, peak gain 0.08 (10 ms attack, exponential decay).
+// Pure Web Audio on the given AudioContext, no asset. -> true when scheduled, false when there is no context or anything threw.
+function voicePlayWakeChime(ctx) {
+  try {
+    if (!ctx || typeof ctx.createOscillator !== 'function') return false;
+    const t0 = ctx.currentTime + 0.02;
+    [[660, 0], [880, 0.15]].forEach(([freq, offset]) => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain(), s = t0 + offset, e = s + 0.11;
+      osc.type = 'sine'; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, s);
+      gain.gain.linearRampToValueAtTime(0.08, s + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, e);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(s); osc.stop(e + 0.02);
+    });
+    return true;
+  } catch { return false; }
 }
 // ── voice call (end) ──
 
@@ -6114,6 +6309,7 @@ async function voiceStatusRefresh() {
   voiceLocalProbe();
   voiceSpeakPaint();
   paintVoiceSheet();
+  if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // the recognizer check can have changed
 }
 
 // Opens the microphone. Called straight from a tap: the AudioContext is made and resumed before the first await.
@@ -6529,8 +6725,8 @@ function voiceDispSetInterrupt(on) {
   voiceDispPaintPanel();
 }
 
-function voiceCallPaintState(name) {
-  const s = $('cp-state'); if (s) { s.textContent = VOICE_CALL_STATE_TEXT[name] || name; s.dataset.state = name; }
+function voiceCallPaintState(name, phrase) {
+  const s = $('cp-state'); if (s) { s.textContent = voiceCallStateText(name, phrase); s.dataset.state = name; }
   const p = $('call-panel'); if (p) p.dataset.state = name;
 }
 function voiceCallPaintMeter(db) {
@@ -6774,6 +6970,74 @@ function voiceMicLine(info) {
   const rate = Number(i.sampleRate);
   return 'Microphone: ' + (i.label ? String(i.label) : 'default') + (rate > 0 ? ' · ' + Math.round(rate / 100) / 10 + ' kHz' : '') + (i.fallback ? ' · basic mode' : '');
 }
+// ── Wake phrase standby: allowed only with a ready local recognizer (the server rule is engineFor in lib/voice/routes.js) ──
+function voiceWakeAllowed(agent) {
+  try {
+    const st = voiceStatus;
+    if (!agent || !st || st.enabled !== true || st.ready !== true || !st.stt || st.stt.engine !== 'local') return false;
+    const a = agentByName(agent);
+    if (!a) return false;
+    return !a.voice || !a.voice.stt || a.voice.stt === 'local';
+  } catch { return false; }
+}
+function voiceWakeNow(agent) {
+  // null only when the person has it off; on, local says whether standby may run (a call in standby with local false stays deaf).
+  try {
+    const w = voiceWakeForAgent(voicePrefsNow(), agent);
+    if (!(w && w.on === true && w.phrase)) return null;
+    let local = false;
+    try { local = voiceWakeAllowed(agent) === true; } catch { local = false; }
+    return { phrase: w.phrase, quietMs: w.quietMs, local };
+  } catch { return { phrase: '', quietMs: 20000, local: false }; }
+}
+function voiceWakeChime(vc) {
+  try {
+    if (!vc) return false;
+    if (vc.thinkCtx && vc.thinkCtx.state === 'closed') vc.thinkCtx = null;
+    if (!vc.thinkCtx) voiceThinkingCtxMake(vc);   // the call's own context (made inside the tap); a new one only if it is gone
+    const ctx = vc.thinkCtx;
+    if (!ctx) return false;
+    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') Promise.resolve(ctx.resume()).catch(() => {});
+    return voicePlayWakeChime(ctx) === true;
+  } catch { return false; }
+}
+function voiceCallStateText(name, phrase) { return name === 'standby' ? (phrase ? `Waiting for “${phrase}”` : 'Waiting') : (VOICE_CALL_STATE_TEXT[name] || name); }
+function voiceWakeName(agent) { const a = agentByName(agent); return String((a && a.display) || agent || ''); }
+// The panel's wake rows follow the recognizer check: disabled, with one line why, while it says no.
+function voiceWakePaint() {
+  const box = $('vp-wake-box'); if (!box) return;
+  const agent = current || '', ok = voiceWakeAllowed(agent), w = voiceWakeForAgent(voicePrefsNow(), agent) || { on: false, phrase: '', quietMs: 20000 };
+  const cb = $('vp-wake'), ph = $('vp-wake-phrase'), qs = $('vp-wake-quiet'), off = $('vp-wake-off');
+  const hint = $('vp-wake-hint');
+  if (hint && voiceWakePaint.agent !== agent) { hint.textContent = ''; hint.hidden = true; }   // another agent: its phrase hint is gone
+  voiceWakePaint.agent = agent;
+  if (cb) { cb.checked = w.on; cb.disabled = !ok && !w.on; }   // a ticked box can always be unticked
+  if (ph) {
+    if (document.activeElement !== ph && !(hint && !hint.hidden)) ph.value = w.phrase;   // (a phrase that was refused stays in the box beside its hint)
+    ph.placeholder = `Hey ${voiceWakeName(agent)}`; ph.disabled = !ok;
+  }
+  if (qs) { qs.value = String(w.quietMs); qs.disabled = !ok; }
+  if (off) off.hidden = ok;
+}
+// The recognizer check can change mid-call (the status or the agent list was read again): the controller looks again.
+function voiceWakeRecheck() {
+  try { if (voiceCall && voiceCall.call && typeof voiceCall.call.wakeChanged === 'function') voiceCall.call.wakeChanged(); } catch { /* the call carries on */ }
+  try { voiceWakePaint(); } catch { /* no panel */ }
+}
+function voiceWakeSave() {
+  const agent = current; if (!agent) return;
+  const cb = $('vp-wake'), ph = $('vp-wake-phrase'), qs = $('vp-wake-quiet'), hint = $('vp-wake-hint');
+  if (!cb || !ph || !qs) return;
+  const name = voiceWakeName(agent), on = !!cb.checked;
+  let typed = ph.value.trim();
+  if (on && !typed) { typed = `Hey ${name}`; ph.value = voiceCleanWakePhrase(typed) || typed; }   // turned on with nothing typed: the placeholder phrase
+  const phrase = voiceCleanWakePhrase(typed);
+  if (hint) { hint.textContent = typed && !phrase ? `Use 1 to 4 words, e.g. Hey ${name}` : ''; hint.hidden = !hint.textContent; }
+  if (phrase) ph.value = phrase;
+  const quietMs = VOICE_WAKE_QUIET_MS.includes(Number(qs.value)) ? Number(qs.value) : 20000;
+  voicePrefsSave({ wake: { ...(voicePrefsNow().wake || {}), [agent]: { on, phrase, quietMs } } });
+  if (voiceCall && voiceCall.agent === agent && voiceCall.call && typeof voiceCall.call.wakeChanged === 'function') voiceCall.call.wakeChanged();
+}
 function voiceCallDeps(vc) {
   const agent = vc.agent;
   return {
@@ -6797,6 +7061,8 @@ function voiceCallDeps(vc) {
     cancelSpeech: () => voiceStopPlayback(),
     answerAsk: (id, text) => voiceCallAnswerAsk(vc, id, text),
     speakActivity: () => !!voicePrefsNow().speakActivity,   // off by default: what the agent is doing is shown in the panel, not spoken
+    wake: () => voiceWakeNow(agent),   // null (the default) unless the person turned the wake phrase on and the recognizer is local
+    chime: () => voiceWakeChime(vc),
     server: voiceCallServer(agent, () => vc),
     ...(vc.keepAlive ? { keepAlive: vc.keepAlive } : {}),   // the controller starts it with the call and stops it with the call
     ui: {
@@ -6809,13 +7075,13 @@ function voiceCallDeps(vc) {
         if (on) voiceCallPaintMeter(-Infinity);
         if (typeof voiceDisplayHook === 'function') voiceDisplayHook('micLost', !!on);
       },
-      state: (name) => { if (voiceCall !== vc) return; voiceCallPaintState(name); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('setState', name); if (name === 'ended' && !vc.hangingUp) voiceCallTeardown(vc); },
+      state: (name, phrase) => { if (voiceCall !== vc) return; voiceCallPaintState(name, phrase); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('setState', name, phrase); if (name === 'ended' && !vc.hangingUp) voiceCallTeardown(vc); },
       thinkingPulse: (ev) => { if (voiceCall === vc && typeof voiceDisplayHook === 'function') voiceDisplayHook('thinkingPulse', ev); },
       reply: (kind) => { if (voiceCall === vc && typeof voiceDisplayHook === 'function') voiceDisplayHook('reply', kind, 'seq:' + vc.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
       thinkingWanted: () => voiceCall === vc && typeof voiceDisplayHook === 'function' && voiceDisplayHook('showsPulse') === true,   // no view shown (None, hidden): the plain thinking sound
       level: (db) => { if (voiceCall === vc) { vc.lastFrame = Date.now(); voiceCallPaintMeter(vc.micLostOn ? -Infinity : db); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('level', db); } },   // a VAD frame ran: the page is alive
       activity: (text) => { const a = $('cp-activity'); if (a && voiceCall === vc) a.textContent = text || ''; },   // silent: shown in the panel only
-      heard: (text) => { const h = $('cp-heard'); if (h && voiceCall === vc) h.textContent = `Heard: ${text}`; },
+      heard: (text) => { const h = $('cp-heard'); if (h && voiceCall === vc) h.textContent = text ? `Heard: ${text}` : ''; },
       held: (list) => { if (voiceCall === vc) { voiceCallPaintHeld(list); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('badge', (list || []).length); } },
       toast: (msg) => toast(msg, 4000),
       summary: (text) => { if (chatOpenFor(agent)) { addNote(text); scrollChat(true); } else toast(text, 6000); },   // not saved: it is gone when the chat is drawn again
@@ -7303,6 +7569,7 @@ function voicePanelPaint() {
   set('vp-echo', prefs.echoHold);
   const ka = $('vp-keepalive'); if (ka) ka.checked = prefs.keepAlive !== false;
   voiceDispPaintPanel();
+  voiceWakePaint();
   const vv = $('vp-think-vol'); if (vv) vv.disabled = prefs.thinkingSound === false;
   const room = $('vp-room'); if (room && !voiceRoom.running) room.disabled = !!voiceCall;
   const car = $('vp-car'); if (car && !voiceCar.running) car.disabled = !!voiceCall;
@@ -7333,6 +7600,9 @@ function voicePanelWire() {
   $('vp-echo')?.addEventListener('change', () => save({ echoHold: Number(echo.value) }));   // save() reaches a call that is up (voiceCallApplyPrefs)
   $('vp-keepalive')?.addEventListener('change', (e) => save({ keepAlive: !!e.target.checked }));
   $('vp-car')?.addEventListener('click', voiceCarRun);
+  const wq = $('vp-wake-quiet');
+  if (wq) wq.innerHTML = VOICE_WAKE_QUIET_MS.map((ms) => '<option value="' + ms + '">' + ms / 1000 + ' s</option>').join('');
+  for (const id of ['vp-wake', 'vp-wake-phrase', 'vp-wake-quiet']) $(id)?.addEventListener('change', () => voiceWakeSave());
   const level = $('vp-level');
   level?.addEventListener('input', () => { const l = p.querySelector('.vp-level-val'); if (l) l.textContent = level.value; if (voiceCall) voiceCall.vad.setMicLevel(Number(level.value)); });
   level?.addEventListener('change', () => save({ micLevel: Number(level.value) }));
