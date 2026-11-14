@@ -574,6 +574,10 @@ test('phone: Show display sits inside the call panel beside Hang up, never in th
   r.click(); assert.strictEqual(p.doc.find('ucd-reopen').length, 0);
   p.api.voiceDispEnd(false); assert.strictEqual(p.doc.find('ucd-reopen').length, 0);
   const n = phone({ prefs: { choice: 'none' } }); n.api.voiceDispBegin(n.vc); await flushPhone();
-  assert.strictEqual(n.doc.find('ucd-overlay').length + n.doc.find('ucd-reopen').length, 0, 'None: nothing in the page');
+  assert.strictEqual(n.doc.find('ucd-reopen').length, 0, 'None: no Show display');
+  const ov = n.doc.find('ucd-overlay');   // None: the call screen's bar docked in the chat in place of the composer (no full-screen view)
+  assert.strictEqual(ov.length, 1, 'None: the docked bar');
+  assert.ok((' ' + ov[0].className + ' ').includes(' ucd-docked '), 'docked, never the full-screen view');
+  const sib = ov[0].parentNode.children; assert.strictEqual(sib[sib.indexOf(ov[0]) + 1], n.home, 'right before the composer, which it replaces for the call');
   assert.strictEqual(n.api.voiceDisp.cur.showsPulse(), false);
 });

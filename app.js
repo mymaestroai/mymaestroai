@@ -13922,6 +13922,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try {
         d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), output: (ctx) => voiceOutNode(ctx), agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
           reopenHost: () => { const b = voiceById(`voice-callbar-${chatId}`); return b ? b.querySelector('.vcb-hang') : null; },   // "Show display" goes inside the call bar, beside Hang up
+          dock: () => { const i = voiceById(`input-${chatId}`); return i ? i.closest('.input-area') : null; },   // a display of None: the call screen's bar takes the message box's place in this chat for the call
           onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(chatId),
           onRecordingToggle: (wantPaused) => (voiceCallS.rec ? voiceCallS.rec.togglePause(wantPaused) : undefined) });   // the Pause / Resume recording button of a recorded call
         voiceDisp.cur = d;

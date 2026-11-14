@@ -84,7 +84,7 @@ function world(o) {
   if (o.winEvents) { win.added = []; win.removed = []; win.addEventListener = (t, f) => win.added.push([t, f]); win.removeEventListener = (t, f) => win.removed.push([t, f]); }
   const display = CD.createCallDisplay({
     window: win, ResizeObserver: o.ResizeObserver, document: dom.doc, storage, fetch: o.fetch || jsonFetch(PACKS), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout,
-    reopenHost: o.reopenHost, needsContext: !!o.needsContext, shared: o.shared, onRoutesLost: o.onRoutesLost, agentDefault: () => (o.agentDefault === undefined ? 'none' : o.agentDefault), adopt: o.adopt,
+    reopenHost: o.reopenHost, dock: o.dock, needsContext: !!o.needsContext, shared: o.shared, onRoutesLost: o.onRoutesLost, agentDefault: () => (o.agentDefault === undefined ? 'none' : o.agentDefault), adopt: o.adopt,
     onRetryMic: o.retry ? () => { log.retry++; } : undefined,
     onTalk: () => { log.talk++; }, onHangUp: () => { log.hang++; }, onChange: () => { log.changes++; },
     createVoiceOrb: fakePlayerFactory('orb', orbs, o.orb), createFacePlayer: fakePlayerFactory('pack', players, o.pack),
@@ -1626,4 +1626,95 @@ test('connLost(true): the status reads "Connection lost" (over a lost microphone
   w.display.connLost(false); assert.strictEqual(statusOf(dom), 'Microphone lost'); assert.strictEqual(w.display.info().connLost, false);
   w.display.micLost(false); assert.strictEqual(statusOf(dom), 'Speaking');
   w.display.release();
+});
+
+// ── docked: a display of None puts the SAME call bar where the page's bottom bar was, for the length of the call ──
+function dockedWorld(prefs) {
+  let page, composer, panel, pop;
+  const w = world({ prefs, dock: () => composer, adopt: () => [{ el: panel, label: 'Call' }, { el: pop, label: 'Voice settings', show: true }] });
+  const { dom } = w;
+  page = new dom.El('div'); panel = new dom.El('div'); composer = new dom.El('div'); pop = new dom.El('div');
+  panel.id = 'call-panel'; composer.id = 'composer'; pop.id = 'voice-panel'; pop.hidden = true;
+  composer.appendChild(pop); page.appendChild(panel); page.appendChild(composer); dom.doc.body.appendChild(page);
+  return { w, dom, page, composer, panel, pop };
+}
+const isDocked = (dom) => { const ov = dom.overlay(); return !!ov && (' ' + ov.className + ' ').includes(' ucd-docked '); };
+
+test('None with a dock: the call bar replaces the page\'s bottom bar in the chat (same component), the controls go into its drawer, nothing covers the chat', async () => {
+  const { w, dom, page, composer, panel, pop } = dockedWorld({ choice: 'none' });
+  w.display.start(); await flushP();
+  const ov = dom.overlay();
+  assert.ok(ov, 'the call bar is on screen');
+  assert.ok(isDocked(dom), 'docked, not the full-screen view');
+  assert.strictEqual(ov.parentNode, page, 'in the page, where the bottom bar is');
+  assert.strictEqual(page.children[page.children.indexOf(composer) - 1], ov, 'right before the page\'s bottom bar');
+  assert.strictEqual(composer.getAttribute('data-ucd-replaced'), '', 'the page\'s bottom bar is hidden for the call');
+  assert.strictEqual(ov.getAttribute('role'), 'region'); assert.strictEqual(ov.getAttribute('aria-modal'), undefined, 'not a modal dialog: the chat stays usable to read');
+  for (const cls of ['ucd-hang', 'ucd-disp', 'ucd-ctl', 'ucd-talk']) assert.ok(dom.find(cls).length === 1 && ov.contains(dom.find(cls)[0]), cls + ' (the same bar)');
+  const drawer = dom.find('ucd-drawer')[0];
+  assert.ok(drawer.contains(panel) && drawer.contains(pop), 'the call panel and the voice settings are in its Controls drawer');
+  assert.strictEqual(pop.hidden, false);
+  assert.strictEqual(drawer.hidden, true, 'the drawer is closed until Controls');
+  dom.find('ucd-ctl')[0].click(); assert.strictEqual(drawer.hidden, false, 'Controls opens it');
+  assert.strictEqual(w.orbs.length + w.players.length, 0, 'nothing is drawn');
+  w.display.setState('listening'); assert.strictEqual(dom.find('ucd-status')[0].textContent, 'Listening', 'the status line shows the call\'s state');
+  w.display.release();
+});
+
+test('None docked: Escape closes the drawer only; Hang up and the end of the call put the page\'s bottom bar back at once, controls in their places', async () => {
+  const { w, dom, page, composer, panel, pop } = dockedWorld({ choice: 'none' });
+  const before = page.children.slice();
+  w.display.start(); await flushP();
+  const ov = dom.overlay(), drawer = dom.find('ucd-drawer')[0];
+  dom.find('ucd-ctl')[0].click();
+  ov.dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(drawer.hidden, true, 'Escape closes the drawer');
+  ov.dispatch('keydown', { key: 'Escape' });
+  assert.ok(isDocked(dom) && w.display.info().visible, 'a second Escape does not hide anything (there is no view to leave)');
+  dom.find('ucd-hang')[0].click(); assert.strictEqual(w.log.hang, 1, 'Hang up is the call\'s own');
+  await w.display.hangUp();
+  assert.strictEqual(dom.overlay(), null, 'the call bar is gone');
+  assert.strictEqual(composer.getAttribute('data-ucd-replaced'), undefined, 'the page\'s bottom bar is back');
+  assert.deepStrictEqual(page.children, before, 'the call panel is back where it was');
+  assert.ok(composer.contains(pop) && pop.hidden === true, 'the voice settings are back in the composer, closed');
+  void panel;
+});
+
+test('None docked <-> Orb: choosing the Orb opens the full-screen view and gives the page\'s bar back underneath; choosing None docks again', async () => {
+  const { w, dom, page, composer } = dockedWorld({ choice: 'none' });
+  w.display.start(); await flushP();
+  w.display.setChoice('orb'); await flushP();
+  const ov = dom.overlay();
+  assert.ok(ov && !isDocked(dom), 'the full-screen view');
+  assert.strictEqual(ov.parentNode, dom.doc.body);
+  assert.strictEqual(ov.getAttribute('aria-modal'), 'true');
+  assert.strictEqual(composer.getAttribute('data-ucd-replaced'), undefined, 'the page\'s own bar is not marked while the full view is shown');
+  w.display.setChoice('none'); await flushP();
+  assert.ok(isDocked(dom)); assert.strictEqual(dom.overlay().parentNode, page);
+  assert.strictEqual(composer.getAttribute('data-ucd-replaced'), '');
+  w.display.release();
+  assert.strictEqual(dom.overlay(), null); assert.strictEqual(composer.getAttribute('data-ucd-replaced'), undefined, 'release (the call ended without a goodbye) gives the bar back too');
+});
+
+test('None docked: the recording badge sits in the docked status strip; a page without a dock keeps the old None (nothing mounted)', async () => {
+  const { w, dom } = dockedWorld({ choice: 'none' });
+  w.display.start(); await flushP();
+  w.display.setRecording({ state: 'on' });
+  const rec = dom.find('ucd-rec')[0];
+  assert.ok(rec && dom.find('ucd-stage')[0].contains(rec), 'in the docked strip, on screen for the whole call');
+  w.display.release();
+  const plain = world({ prefs: { choice: 'none' } });
+  plain.display.start(); await flushP();
+  assert.strictEqual(plain.dom.overlay(), null, 'no dock option: as before');
+  plain.display.release();
+});
+
+test('docked CSS: the page\'s bar hidden, Back to chat and Captions hidden, the root in the page flow (not full-screen)', () => {
+  const css = read('lib/ui-call-display.css');
+  assert.match(css, /\[data-ucd-replaced\] \{ display: none !important; \}/);
+  assert.match(css, /\.ucd-overlay\.ucd-docked \{ position: relative; inset: auto; z-index: auto;/);
+  assert.match(css, /\.ucd-docked \.ucd-bar \.ucd-back, \.ucd-docked \.ucd-bar \.ucd-caps \{ display: none !important; \}/);
+  assert.match(css, /\.ucd-docked \.ucd-host, \.ucd-docked \.ucd-note, \.ucd-docked \.ucd-caption/);
+  assert.match(read('mobile.js'), /dock: \(\) => \$\('composer'\),/, 'the phone docks in place of its composer');
+  assert.match(read('app.js'), /dock: \(\) => \{ const i = voiceById\(`input-\$\{chatId\}`\); return i \? i\.closest\('\.input-area'\) : null; \},/, 'the desktop in place of that chat\'s message box');
 });
