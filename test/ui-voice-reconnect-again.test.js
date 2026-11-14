@@ -131,7 +131,35 @@ test('reconnect: the person speaks again right after "Reconnected." -> "Say that
   h.hd.onSpeechEnd({ text: 'lost words again' }); await tick();
   await h.finish(); await tick();
   assert.deepStrictEqual(h.spoken.filter(s => s === 'Say that again.'), []);
+  assert.ok(h.spoken.includes('Reconnected.'));   // "Reconnected." itself is still spoken
   assert.deepStrictEqual(h.sent, ['lost words again']);
+});
+
+test('reconnect: an accepted interjection still awaiting its response when an outage starts and ends -> only "Reconnected."', async () => {
+  const h = harness(); await h.call.start();
+  const g = gate(); h.interjected = [];
+  h.deps.isTurnRunning = () => true;   // a turn is running: the utterance is an interjection
+  h.deps.interject = (t) => { h.interjected.push(t); return g.p; };   // slow response, resolved later
+  await h.say('actually make it blue');
+  assert.deepStrictEqual(h.interjected, ['actually make it blue']);   // handed off to route()
+  h.call.setLinkLost(true); h.call.setLinkLost(false); await tick();   // the whole outage happens before it resolves
+  g.open(); await tick();
+  await h.finish(); await h.finish(); await tick();
+  assert.deepStrictEqual(h.spoken, ['Reconnected.']);   // it was accepted, so nothing to repeat
+});
+
+test('reconnect: a long utterance begun in outage 1, going on across recovery and into outage 2 -> "Say that again." once per outage', async () => {
+  const h = harness(); await h.call.start();
+  h.call.setLinkLost(true);
+  h.hd.onSpeechStart(); await tick();   // begun during outage 1 (segLinkGen -1)
+  h.call.setLinkLost(false); await tick();   // recovery 1 counts it: "Reconnected." + "Say that again." queue (the person is still talking)
+  h.call.setLinkLost(true);   // outage 2 begins: the speech is not counted again at the start (it began in outage 1)
+  h.call.setLinkLost(false); await tick();   // recovery 2: it is still going and is lost for this outage too
+  h.hd.onSpeechEnd({ text: 'a very long story' }); await tick();
+  for (let i = 0; i < 6; i++) await h.finish();
+  // One "Say that again." per outage it was lost in (two outages, two lines), never three: the outage-2 start did not add a third.
+  assert.deepStrictEqual(h.spoken, ['Reconnected.', 'Say that again.', 'Reconnected.', 'Say that again.']);
+  assert.deepStrictEqual(h.sent, []);
 });
 
 test('reconnect: a give-up (the call ends) says neither', async () => {

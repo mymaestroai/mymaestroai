@@ -3621,6 +3621,7 @@ function voiceCreateCall(deps) {
         mine.done = true;
         heardShown = true; quiet(() => ui.heard(t));
         sttPending--; counted = true;   // the transcript is out of the queue: the thinking sound may arm while the turn runs
+        inflight.delete(mine);   // handed to route(): no longer at risk of being discarded by an outage (the finally below is cleanup)
         await route(t, mine.ann);
       } finally { mine.done = true; inflight.delete(mine); if (!counted) sttPending--; settle(); }
     });
@@ -3668,7 +3669,7 @@ function voiceCreateCall(deps) {
       if (!linkLost) {   // the outage begins: speech being said now, or in flight (not one already stale from an earlier outage), is lost
         linkDropped = false;
         const cap = capWake || { sb: standby, seq: wakeSeq };
-        if (personSpeaking && isSendable(cap.sb, cap.seq)) linkDropped = true;
+        if (personSpeaking && segLinkGen !== -1 && isSendable(cap.sb, cap.seq)) linkDropped = true;   // only speech that began while the link was up (one begun in an earlier outage was counted then)
         for (const m of inflight) if (m.linkGen === linkGen && isSendable(m.sb, m.seq)) linkDropped = true;
         linkGen++;
       }
