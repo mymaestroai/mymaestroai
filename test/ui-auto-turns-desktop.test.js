@@ -37,7 +37,7 @@ test('history: folding on goes through autoGroupHistory; entries, cards and stac
   assert.match(loop, /item\.type === 'card'/);
   assert.match(loop, /foldRenderHistoryStack\(/);
   assert.match(loop, /history\.entries\(\)/, 'folding off keeps every entry in full');
-  assert.match(app, /document\.getElementById\(`messages-\$\{chatId\}`\);\s*if \(panel\) setTimeout\(\(\) => panel\.scrollTop = panel\.scrollHeight, 100\)/, 'still lands at the bottom');
+  assert.match(app, /document\.getElementById\(`messages-\$\{chatId\}`\);\s*if \(panel && !keepScroll\) setTimeout\(\(\) => panel\.scrollTop = panel\.scrollHeight, 100\)/, 'still lands at the bottom');
 });
 
 test('cards: class per kind, aria-expanded header, hidden body, every entry still pushed in order', () => {
@@ -76,7 +76,7 @@ test('stacks: the summary is the header; the cards are inside', () => {
 
 test('live hub turns: autoKindOfOrigin picks the card; the reply bubble draws inside; turn_end sets the line', () => {
   const start = block(app, 'async function onHubTurnStart(', 'function onHubTurnDelta(');
-  assert.match(start, /foldAutoOn\(\) \? autoKindOfOrigin\(ev\.origin\)/);
+  assert.match(start, /foldAutoOn\(\) \|\| hubMain \? autoKindOfOrigin\(ev\.origin\)/);
   assert.match(start, /autoInfoOf\(\{ role: 'user', origin: ev\.origin/);
   assert.match(start, /'working…'/);
   assert.match(start, /appendMessage\(chat\.id, 'assistant', '…', card && card\.body\)/);
@@ -233,7 +233,7 @@ test('hubMoveReplyOut: a card inside a stack sends the reply after the stack, in
   const panel = { children: [], parentNode: null, isConnected: true };
   const stack = mk(panel); panel.children.push(stack);
   const body = mk(stack); body.children = [];
-  const wrap = mk(body); body.children.push(wrap);
+  const wrap = mk(body); body.children.push(wrap); wrap.classList = { remove() {} };
   const reply = { id: 'm1', parentNode: body, isConnected: true, dataset: {} };
   body.children.push(reply);
   const line = mk(null);
@@ -245,7 +245,7 @@ test('hubMoveReplyOut: a card inside a stack sends the reply after the stack, in
   assert.strictEqual(line.parentNode, panel);
   assert.strictEqual(reply.parentNode, panel, 'a direct child of the panel, not the hidden body');
   // detached from the panel: nothing moves
-  const orphan = { chatId: 'c1', msgId: 'm1', label: 'L', wrap: mk(mk(null)) };
+  const orphan = { chatId: 'c1', msgId: 'm1', label: 'L', wrap: Object.assign(mk(mk(null)), { classList: { remove() {} } }) };
   fn(orphan);
   assert.ok(!orphan.moved);
 });

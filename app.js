@@ -6494,12 +6494,58 @@
       } else markTabUnread(chatId);
       compactionRefresh(chatId);   // context % and compression mode under the toolbar (cheap GET)
       paintPlanBadges();           // plan usage next to the model (Claude subscription agents)
+      soloViewPaint();             // the "Agent work" toggle shows the device's choice
 
-      // Load conversation history from server
-      chats[chatId].historyLoaded = fetch(`/api/history/${encodeURIComponent(agentName)}`, { credentials: 'include' })
-        .then(r => r.ok ? r.json() : { history: [] })
-        .then(data => {
-          const history = data.history || [];
+      // Load conversation history from server (the newest page of the chosen view; "Load earlier" fetches the rest)
+      chats[chatId].historyLoaded = soloHistoryLoad(chatId);
+      // An agent already mid-turn when its chat opens (after a page reload, or reopened from the sidebar): follow that
+      // turn now, as the ↻ button does. The hub's status snapshot only arrives when the event stream connects, usually
+      // before this chat existed, so the chat sat green with "Send" while the sidebar card said busy.
+      chats[chatId].historyLoaded.then(() => { if (chats[chatId]) pollAgentStatus(); });
+      return chatId;
+    }
+
+    // ── Main chat view: the person's own conversation (the hub-started turns are the "Agent work" view) ──
+    // The newest page of the chat's history in the chosen view; the cursor of the page before it is kept for "Load earlier".
+    async function soloHistoryFetch(agentName, view, before) {
+      const r = await fetch(chatViewHistoryUrl(agentName, { view, before }), { credentials: 'include' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      return { history: Array.isArray(d && d.history) ? d.history : [], next: d && d.next != null ? d.next : null };
+    }
+    // Opening a chat, and the reload when the view changes. A newer load makes an older one's answer void.
+    function soloHistoryLoad(chatId) {
+      const chat = chats[chatId];
+      if (!chat) return Promise.resolve();
+      const view = chatViewGet(localStorage);
+      const seq = chat.histSeq = (chat.histSeq || 0) + 1;
+      const reset = chat.viewLoaded !== undefined;   // not the first load: the panel is drawn again from nothing
+      return soloHistoryFetch(chat.agent, view, null)
+        .then(page => { if (chats[chatId] && chat.histSeq === seq) soloHistoryDraw(chatId, page.history, page.next, view, { reset }); })
+        .catch(e => console.warn('[history] Failed to load:', e));
+    }
+    // Draw a history list (oldest first) into the chat's panel. reset: clear the panel and the chat's messages first
+    // (a view change, or "Load earlier" drawing the merged list); keepScroll: the caller restores the scroll position.
+    function soloHistoryDraw(chatId, data, next, view, { reset = false, keepScroll = false } = {}) {
+      const chat = chats[chatId];
+      if (!chat) return;
+      if (reset) {
+        const panel0 = document.getElementById(`messages-${chatId}`);
+        if (panel0) panel0.textContent = '';
+        chat.messages = chat.messages.slice(0, 1);   // the system message stays
+        chat.inProgress = null;
+        // Live turns drawn in the cleared panel are gone from it: the status check below follows a running one again.
+        let lost = false;
+        for (const [id, t] of Object.entries(hubTurns)) if (t.chatId === chatId) { delete hubTurns[id]; delete hubTurnCards[id]; lost = true; }
+        if (chat.reattach) { clearLiveActivity(chat.reattach.msgId); delete chat.reattach; delete chat.lastMsgId; lost = true; }
+        if (lost) setStatus(chatId, 'idle');
+      }
+      chat.rawHistory = data;
+      chat.histNext = next;
+      chat.viewLoaded = view;
+      {
+        {
+          const history = data || [];
           if (history.length > 0) {
             // Add a visual separator so user knows this is restored history
             appendSystemNotice(chatId, `📜 Restored ${history.length} messages from previous session`);
@@ -6521,6 +6567,11 @@
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
+              // An archived entry is text only (the hub saved no tool calls or reasoning for it) and says where it comes from.
+              if (msg.archived) {
+                setMessageTime(document.getElementById(hid), times[i] ? `${times[i]} · from the archive` : 'from the archive');
+                document.getElementById(hid)?.classList.add('msg-archived');
+              }
               return hid;
             };
             const panelEl = document.getElementById(`messages-${chatId}`);
@@ -6546,15 +6597,123 @@
             }
             // Scroll to bottom after loading history
             const panel = document.getElementById(`messages-${chatId}`);
-            if (panel) setTimeout(() => panel.scrollTop = panel.scrollHeight, 100);
+            if (panel && !keepScroll) setTimeout(() => panel.scrollTop = panel.scrollHeight, 100);
           }
-        })
-        .catch(e => console.warn('[history] Failed to load:', e));
-      // An agent already mid-turn when its chat opens (after a page reload, or reopened from the sidebar): follow that
-      // turn now, as the ↻ button does. The hub's status snapshot only arrives when the event stream connects, usually
-      // before this chat existed, so the chat sat green with "Send" while the sidebar card said busy.
-      chats[chatId].historyLoaded.then(() => { if (chats[chatId]) pollAgentStatus(); });
-      return chatId;
+        }
+      }
+      soloEarlierPaint(chatId);
+      busyCardRefresh(chat);
+      if (reset) pollAgentStatus();   // a turn that was running before the redraw is followed again
+    }
+
+    // "Load earlier": a button at the top of the chat while the view has older entries (histNext is the cursor).
+    function soloEarlierPaint(chatId) {
+      const chat = chats[chatId];
+      const panel = document.getElementById(`messages-${chatId}`);
+      if (!chat || !panel) return;
+      panel.querySelectorAll(':scope > .chat-earlier-btn').forEach(b => b.remove());
+      if (chat.histNext == null) return;
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'chat-earlier-btn';
+      b.textContent = chat.histBusy ? 'Loading…' : 'Load earlier';
+      b.disabled = !!chat.histBusy;
+      b.addEventListener('click', () => soloHistoryEarlier(chatId));
+      panel.prepend(b);
+    }
+    // Fetch the page before histNext (an empty page that still has a next asks again, at most 5 fetches per click),
+    // merge it in front of what is loaded and draw the merged list; the person keeps looking at the same content.
+    async function soloHistoryEarlier(chatId) {
+      const chat = chats[chatId];
+      if (!chat || chat.histNext == null || chat.histBusy) return;
+      if (chat.controller) { hubToast('Wait for the reply to finish, then load earlier.'); return; }
+      const view = chat.viewLoaded || chatViewGet(localStorage);
+      const seq = chat.histSeq;
+      chat.histBusy = true; soloEarlierPaint(chatId);
+      try {
+        let older = [], cursor = chat.histNext;
+        for (let tries = 0; tries < 5 && cursor != null; tries++) {
+          const page = await soloHistoryFetch(chat.agent, view, cursor);
+          older = page.history.concat(older);
+          cursor = page.next;
+          if (older.length) break;
+        }
+        if (!chats[chatId] || chat.histSeq !== seq) return;   // closed, or reloaded in another view meanwhile
+        if (!older.length) { chat.histNext = cursor; return; }
+        const panel = document.getElementById(`messages-${chatId}`);
+        const fromBottom = panel ? panel.scrollHeight - panel.scrollTop : 0;
+        soloHistoryDraw(chatId, chatViewMergeOlder(older, chat.rawHistory), cursor, view, { reset: true, keepScroll: true });
+        if (panel) { panel.scrollTop = Math.max(0, panel.scrollHeight - fromBottom); userScrolledUp.set(panel, true); }
+      } catch (e) {
+        hubToast(`Could not load earlier messages: ${e.message}`);
+      } finally {
+        chat.histBusy = false;
+        if (chats[chatId]) soloEarlierPaint(chatId);
+      }
+    }
+    // The toolbar toggle (one choice for the device): store it, repaint every button, reload the open chat now; the
+    // other open chats reload when they come to the front (switchToChat).
+    function soloViewToggle() {
+      const next = chatViewSet(localStorage, chatViewGet(localStorage) === 'all' ? 'main' : 'all');
+      soloViewPaint();
+      for (const chat of Object.values(chats)) {
+        if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent) continue;
+        if (chat.id === activeChat) soloViewReload(chat);
+        busyCardRefresh(chat);
+      }
+      return next;
+    }
+    function soloViewReload(chat) {
+      if (!chat || chat.controller || chat.viewLoaded === chatViewGet(localStorage)) return;   // an own stream is never wiped
+      chat.historyLoaded = soloHistoryLoad(chat.id);
+    }
+    function soloViewPaint() {
+      const all = chatViewGet(localStorage) === 'all';
+      for (const b of document.querySelectorAll('.chat-view-btn')) {
+        b.textContent = all ? 'Agent work ✓' : 'Agent work';
+        b.setAttribute('aria-pressed', all ? 'true' : 'false');
+      }
+    }
+
+    // ── The busy card: ONE line at the bottom of the main view while the agent works on a hub-started turn ──
+    const busyRun = {};   // agent -> { turnId, origin, since, own }: the agent's running turn as turn_start announced it
+    let busyCardTimer = null;
+    function busyCardState(chat) {
+      if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent) return null;
+      if (chatViewGet(localStorage) !== 'main') return null;
+      if (chat.controller || chat.reattach) return null;   // this page's own stream
+      const run = busyRun[chat.agent];
+      if (run) return run.own ? null : { text: chatViewBusyText(run.origin, null), since: run.since };
+      const st = agentStatus[chat.agent];   // the page opened mid-turn: the status feed's words
+      if (!st || !st.busy || st.pendingQuestion || localBusy.has(chat.agent)) return null;
+      if (st.activity === 'replying to you') return null;
+      return { text: chatViewBusyText(null, st.activity), since: Date.parse(st.busySince) || Date.now() };
+    }
+    // Show, update or remove the chat's busy card; it is always the last element of the messages list.
+    function busyCardRefresh(chat) {
+      if (!chat) return false;
+      const panel = document.getElementById(`messages-${chat.id}`);
+      if (!panel) return false;
+      let el = panel.querySelector(':scope > .chat-busy-card');
+      const st = busyCardState(chat);
+      if (!st) { if (el) el.remove(); return false; }
+      const text = `⏳ ${st.text} · ${chatViewElapsed(st.since, Date.now())}`;
+      const fresh = !el;
+      if (!el) { el = document.createElement('div'); el.className = 'chat-busy-card'; el.setAttribute('role', 'status'); }
+      if (el.textContent !== text) el.textContent = text;
+      if (panel.lastElementChild !== el) panel.appendChild(el);
+      if (fresh) autoScroll(panel);
+      if (!busyCardTimer) busyCardTimer = setInterval(busyCardRefreshAll, 5000);   // the elapsed time moves while shown
+      return true;
+    }
+    function busyCardRefreshAll() {
+      let any = false;
+      for (const chat of Object.values(chats)) if (chat && !chat.isGroup && !chat.isWorker && chat.agent && busyCardRefresh(chat)) any = true;
+      if (!any && busyCardTimer) { clearInterval(busyCardTimer); busyCardTimer = null; }
+    }
+    // Anything added to the list goes before the busy card.
+    function busyCardKeepLast(container) {
+      const b = container && container.querySelector(':scope > .chat-busy-card');
+      if (b && container.lastElementChild !== b) container.appendChild(b);
     }
 
     // ── Live agent status (sidebar dots) ──────────────────────────────────
@@ -6792,6 +6951,7 @@
       agentStatus[name] = next;
       paintAgentStatus(name);
       paintAgentsWorking();
+      { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
     }
 
     // keepMissing (the /api/agents list, which has no worker fields): a key the entry lacks is left as it is. A full feed
@@ -6873,6 +7033,8 @@
       if (!chats[chat.id] || chat.controller || chat.reattach || chat.status === 'thinking') return;
       const live = agentStatus[agentName];
       if (!live || !live.busy) return;
+      // Main view: a running hub-started turn is not followed with a live bubble; the busy card says it is working.
+      if (busyCardState(chat)) { busyCardRefresh(chat); return; }
       const ip = chat.inProgress; chat.inProgress = null;   // that turn's text so far, from history (only if it is this turn's)
       const partial = ip && (!since || !ip.ts || Date.parse(ip.ts) >= Date.parse(since) - 1000) ? ip.text : '';
       const msgId = appendMessage(chat.id, 'assistant', partial || '…');
@@ -7514,6 +7676,7 @@
 
     async function onHubTurnStart(ev) {
       if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
+      if (ev && ev.agent) busyRun[ev.agent] = { turnId: ev.turnId, origin: ev.origin, since: Date.parse(ev.startedAt) || Date.now(), own: !chatViewIsHubOrigin(ev.origin) };
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
       setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin) });
       let chat = findSoloChat(ev.agent);
@@ -7536,7 +7699,9 @@
       // An automatic turn (consultation, scheduled task, hub notice) draws into a closed card that updates as it runs.
       let card = null;
       let retiredReattach = false;   // a re-attach of this turn was followed before turn_start came; its bubble gave way to the card
-      const autoKind = foldAutoOn() ? autoKindOfOrigin(ev.origin) : null;
+      // Main view: a hub-started turn is still followed (its card), but hidden unless its reply is marked for the owner.
+      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin);
+      const autoKind = foldAutoOn() || hubMain ? autoKindOfOrigin(ev.origin) : null;
       if (autoKind) {
         const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
         if (info) {
@@ -7552,6 +7717,7 @@
             card.setLine('working…');
           } else {
             card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…' });
+            if (hubMain) { card.wrap.classList.add('chat-view-hidden'); card.hiddenMsgs = []; }
           }
           chat.lastAutoCard = null;
           // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
@@ -7568,7 +7734,9 @@
         }
       }
       if (typeof ev.message === 'string' && !dup) {   // history may already hold the notice
-        chat.messages.push({ role: 'user', content: ev.message });
+        const um = { role: 'user', content: ev.message };
+        if (card && card.hiddenMsgs) { um.hidden = true; card.hiddenMsgs.push(um); }   // not shown: not saved either (saveChat)
+        chat.messages.push(um);
         setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message, card && card.body)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
       }
       if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
@@ -7582,6 +7750,8 @@
         // A for_owner that arrived while the history loaded: apply it now that the card exists.
         if (hubForOwnerPending[ev.turnId]) { delete hubForOwnerPending[ev.turnId]; hubMoveReplyOut(card); }
       }
+      busyCardKeepLast(document.getElementById(`messages-${chat.id}`));
+      busyCardRefresh(chat);
       if (retiredReattach) catchUpTurn(chat.id);   // what the turn already did (tool rows, text), which the retired bubble had shown
       setStatus(chat.id, 'thinking', hubOriginLabel(ev.origin));
       markTabUnread(chat.id);   // skips the window on screen
@@ -7918,6 +8088,9 @@
       if (!card || card.moved || !chats[card.chatId]) return;
       const el = document.getElementById(card.msgId);
       if (!el || !card.wrap.isConnected) return;
+      card.wrap.classList.remove('chat-view-hidden');   // main view: the marked turn shows, its card and its open reply
+      for (const m of card.hiddenMsgs || []) delete m.hidden;
+      card.hiddenMsgs = null;
       // The card may sit inside a stack (hidden body): the reply goes after the outermost block that is in the panel.
       const panel = document.getElementById(`messages-${card.chatId}`);
       let anchor = card.wrap;
@@ -7946,6 +8119,8 @@
       if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setAgentLive(ev.agent, { busy: false });   // busy while another turn is open
       if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
       { const c = findSoloChat(ev.agent); if (c) { c.inProgress = null; setTimeout(() => compactionRefresh(c.id), 3500); } }   // context % moved (the hub records it 2.5 s after the turn)
+      if (busyRun[ev.agent] && (!ev.turnId || busyRun[ev.agent].turnId === ev.turnId)) delete busyRun[ev.agent];
+      { const c = findSoloChat(ev.agent); if (c) busyCardRefresh(c); }   // the busy card goes with the turn
       if (ev.agent) scheduleWorkerStatusPoll();   // re-read the status once: a reply can run without a turn of its own
       const t = hubTurns[ev.turnId]; delete hubTurns[ev.turnId];
       if (!t) {
@@ -7970,7 +8145,11 @@
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
       for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
       const last = chat.messages[chat.messages.length - 1];
-      if (!(last && last.role === 'assistant' && last.content === reply)) chat.messages.push({ role: 'assistant', content: reply });
+      if (!(last && last.role === 'assistant' && last.content === reply)) {
+        const rm = { role: 'assistant', content: reply };
+        if (t.card && t.card.hiddenMsgs) { rm.hidden = true; t.card.hiddenMsgs.push(rm); }
+        chat.messages.push(rm);
+      }
       setStatus(t.chatId, ev.ok ? 'idle' : 'error', ev.ok ? null : 'Hub turn failed');
       autoScroll(document.getElementById(`messages-${t.chatId}`));
       // Hub turns, job reports included, never take the screen: the tab is marked unread instead.
@@ -8313,6 +8492,7 @@
           <button onclick="clearChat('${chatId}')">🗑️ Clear</button>
           <button onclick="saveChat('${chatId}')">💾 Save</button>
           <button onclick="openRecallPanel('${chatId}')" id="recall-btn-${chatId}" title="Search this agent's whole history">🔎 Recall</button>
+          <button onclick="soloViewToggle()" id="view-btn-${chatId}" class="chat-view-btn" aria-pressed="false" title="Show the turns the hub started (consultations, scheduled tasks, job notices)">Agent work</button>
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
 
@@ -8442,6 +8622,7 @@
       document.getElementById(`tab-${chatId}`)?.classList.remove('unread');
       document.getElementById(`panel-${chatId}`)?.classList.add('active');
       if (wasUnread) { const m = document.getElementById(`messages-${chatId}`); if (m) m.scrollTop = m.scrollHeight; }
+      if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent && opened.viewLoaded !== undefined) soloViewReload(opened);   // the view changed while it was behind
       activeChat = chatId;
       window.__activeChatId = chatId;
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
@@ -8537,7 +8718,7 @@
         }).join('\n---\n\n');
       } else {
         header = `# Chat with ${chat.agent}\nModel: ${chat.model}\nDate: ${new Date().toISOString()}\n\n---\n\n`;
-        content = chat.messages.map(m => `[${m.role.toUpperCase()}]\n${m.content}\n`).join('\n---\n\n');
+        content = chat.messages.filter(m => !m.hidden).map(m => `[${m.role.toUpperCase()}]\n${m.content}\n`).join('\n---\n\n');   // what is shown (hidden hub turns are not)
       }
       
       const blob = new Blob([header + content], { type: 'text/markdown' });
@@ -14960,6 +15141,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       div.innerHTML = formatContent(content);
       decorateMessage(div, content);
       (into || container).appendChild(div);
+      busyCardKeepLast(container);
       renderVisualBlocks(div);
       autoScroll(container);
       return msgId;
@@ -15101,6 +15283,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         div.textContent = text;
       }
       container.appendChild(div);
+      busyCardKeepLast(container);
       autoScroll(container);
       return div;
     }

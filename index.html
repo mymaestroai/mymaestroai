@@ -837,6 +837,12 @@
     .auto-card-body, .auto-stack-body { margin: 8px 0 4px 14px; padding-left: 10px; border-left: 1px solid var(--border); }
     .auto-card-body[hidden], .auto-stack-body[hidden] { display: none; }
     .auto-from { margin: 4px 0 4px; font-size: 0.75rem; color: #8f8e84; }
+    .chat-view-hidden { display: none !important; }
+    .chat-busy-card { margin: 8px 0; padding: 4px 10px; font-size: 0.75rem; color: #8f8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-earlier-btn { display: block; margin: 6px auto 10px; padding: 4px 14px; font-size: 0.78rem; color: #8f8e84; background: transparent; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+    .chat-earlier-btn:disabled { opacity: 0.6; cursor: default; }
+    .message.msg-archived > .msg-time { font-size: 0.7rem; color: #8f8e84; }
+    .chat-view-btn[aria-pressed="true"] { border-color: var(--accent, #d97757); }
     .system-notice {
       background: rgba(245, 166, 35, 0.06);
       border: 1px solid rgba(245, 166, 35, 0.2);
