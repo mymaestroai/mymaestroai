@@ -2868,22 +2868,24 @@ function voiceCarAnalyse(mic, ref, chirp, rate) {
   }
   return out;
 }
-// A very quiet, looping WAV (the smallest step of 16-bit audio, +/-1 at random: about -90 dBFS, never digital silence). Played through a media
-// element it makes Chrome for Android take full audio focus. It was -60 dBFS once: on a phone speaker turned up that is a hiss in every pause.
+// A looping WAV that keeps Chrome for Android holding full audio focus (other apps' music stays paused) without a sound anyone hears.
+// Chrome counts a stream as playing only at or above -72.25 dBFS of power (services/audio kSilenceThresholdDBFS); below that it treats the tab
+// as silent and the music app takes the audio back within a second. White noise loud enough for that (-60 dBFS) is a hiss on a phone
+// speaker; noise below it (+/-1, about -90 dBFS) let the music resume. So: a 20 Hz tone at -60 dBFS. Chrome measures it before the phone's own
+// speaker processing, so it counts; it is far below hearing at 20 Hz, and a phone speaker cannot play it. Whole cycles per loop, so the loop has no click.
+const VOICE_FOCUS_HZ = 20, VOICE_FOCUS_DBFS = -60;
 function voiceFocusWav(seconds = 6, sampleRate = 8000) {
-  const n = Math.max(1, Math.round(seconds * sampleRate)), bytes = n * 2;
+  const cycles = Math.max(1, Math.round(seconds * VOICE_FOCUS_HZ));
+  const n = Math.max(1, Math.round(cycles * sampleRate / VOICE_FOCUS_HZ)), bytes = n * 2;
   const out = new Uint8Array(44 + bytes), dv = new DataView(out.buffer);
   const tag = (o, s) => { for (let i = 0; i < s.length; i++) out[o + i] = s.charCodeAt(i); };
   tag(0, 'RIFF'); dv.setUint32(4, 36 + bytes, true); tag(8, 'WAVE'); tag(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
   dv.setUint32(24, sampleRate, true); dv.setUint32(28, sampleRate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); tag(36, 'data'); dv.setUint32(40, bytes, true);
-  let s = 123456789;
-  for (let i = 0; i < n; i++) {
-    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-    dv.setInt16(44 + i * 2, (s >>> 31) ? 1 : -1, true);
-  }
+  const peak = 32767 * Math.pow(10, VOICE_FOCUS_DBFS / 20) * Math.SQRT2;   // RMS of a sine = peak / sqrt(2)
+  for (let i = 0; i < n; i++) dv.setInt16(44 + i * 2, Math.round(peak * Math.sin(2 * Math.PI * cycles * i / n)), true);
   return out;
 }
-// A hidden looping <audio> element playing that noise for the length of a call, so other apps pause instead of just ducking. start() must run inside the user's tap.
+// A hidden looping <audio> element playing that tone for the length of a call, so other apps pause instead of just ducking. start() must run inside the user's tap.
 function voiceCreateAudioFocus(opts) {
   const o = opts || {};
   const doc = o.doc, urlApi = o.URL, BlobCtor = o.Blob;

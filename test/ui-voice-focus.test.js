@@ -10,7 +10,17 @@ const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const tag = (u, o) => String.fromCharCode(u[o], u[o + 1], u[o + 2], u[o + 3]);
 
-test('voiceFocusWav: a valid 16-bit mono PCM WAV of very quiet noise', () => {
+// Chrome (services/audio/output_stream.cc) counts a stream as playing only at or above this power; below it the tab is silent and Android
+// gives the audio back to the music app within a second (the owner heard music resume a second into a call with the -90 dBFS noise).
+const CHROME_SILENCE_DBFS = -72.24719896;
+const levels = (w) => {
+  const dv = new DataView(w.buffer, w.byteOffset, w.byteLength), n = (w.length - 44) / 2, v = new Array(n);
+  let peak = 0, sq = 0;
+  for (let i = 0; i < n; i++) { v[i] = dv.getInt16(44 + i * 2, true); peak = Math.max(peak, Math.abs(v[i])); sq += (v[i] / 32768) ** 2; }
+  return { v, n, peak, powerDb: 10 * Math.log10(sq / n) };
+};
+
+test('voiceFocusWav: a valid 16-bit mono PCM WAV', () => {
   const w = voiceFocusWav(2, 8000), dv = new DataView(w.buffer, w.byteOffset, w.byteLength);
   assert.ok(w instanceof Uint8Array);
   assert.strictEqual(w.length, 44 + 2 * 2 * 8000);
@@ -19,14 +29,24 @@ test('voiceFocusWav: a valid 16-bit mono PCM WAV of very quiet noise', () => {
   assert.strictEqual(dv.getUint32(16, true), 16); assert.strictEqual(dv.getUint16(20, true), 1); assert.strictEqual(dv.getUint16(22, true), 1);
   assert.strictEqual(dv.getUint32(24, true), 8000); assert.strictEqual(dv.getUint32(28, true), 16000); assert.strictEqual(dv.getUint16(32, true), 2); assert.strictEqual(dv.getUint16(34, true), 16);
   assert.strictEqual(dv.getUint32(40, true), 2 * 2 * 8000);
-  let peak = 0, nonzero = 0, sq = 0, plus = 0;
-  for (let i = 44; i < w.length; i += 2) { const v = dv.getInt16(i, true); peak = Math.max(peak, Math.abs(v)); if (v) nonzero++; if (v > 0) plus++; sq += (v / 32768) ** 2; }
-  const n = (w.length - 44) / 2, rmsDb = 10 * Math.log10(sq / n);
-  assert.strictEqual(peak, 1, 'the smallest 16-bit step: no hiss on a phone speaker turned up (it was about 33, -60 dBFS)');
-  assert.ok(rmsDb < -85, 'RMS ' + rmsDb.toFixed(1) + ' dBFS');
-  assert.strictEqual(nonzero, n, 'never digital silence: every sample is +1 or -1');
-  assert.ok(plus > n * 0.4 && plus < n * 0.6, 'noise, not a constant offset: ' + plus + ' of ' + n);
   assert.deepStrictEqual(Array.from(voiceFocusWav(2, 8000)), Array.from(w), 'deterministic');
+});
+
+test('voiceFocusWav: loud enough for Chrome to keep audio focus (music stays paused), with a margin', () => {
+  const { powerDb } = levels(voiceFocusWav());
+  assert.ok(powerDb >= CHROME_SILENCE_DBFS + 10, 'power ' + powerDb.toFixed(1) + ' dBFS, at least 10 dB above Chrome\'s ' + CHROME_SILENCE_DBFS.toFixed(2));
+  assert.ok(powerDb <= -58, 'and no louder than about -60 dBFS: ' + powerDb.toFixed(1));
+});
+
+test('voiceFocusWav: a 20 Hz tone, not noise: nothing a phone speaker plays or anyone hears; whole cycles, so the loop has no click', () => {
+  const { v, n, peak } = levels(voiceFocusWav());
+  assert.ok(peak <= 47, 'peak ' + peak + ' of 32767');
+  let up = 0; for (let i = 1; i < n; i++) if (v[i - 1] < 0 && v[i] >= 0) up++;
+  const seconds = n / 8000, hz = (up + 1) / seconds;   // the first cycle starts at sample 0
+  assert.ok(Math.abs(hz - 20) < 0.5, 'about 20 Hz: ' + hz.toFixed(2));
+  for (let i = 2; i < n; i++) assert.ok(Math.abs(v[i] - 2 * v[i - 1] + v[i - 2]) <= 2, 'smooth (a low tone, no noise) at sample ' + i);
+  assert.strictEqual(v[0], 0, 'starts at zero');
+  assert.ok(v[n - 1] < 0 && Math.abs(v[n - 1]) <= 2, 'ends just below zero, so sample 0 continues the wave: ' + v[n - 1]);
 });
 
 test('voiceFocusWav: longer than 5 seconds by default (Chrome gives full focus only then)', () => {

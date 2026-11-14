@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Music stays paused for the whole voice call.** On Android, music paused when a call started but could come back a second later, during the quiet moments before your Maestro spoke. It now stays paused until you hang up, still without any hiss from the phone's speaker. Music is not restarted after the call.
 - **Your chat shows your own conversation.** Consultations from other agents, scheduled tasks and job notices no longer fill your chat: you see your messages and the agent's replies, plus any reply the agent marked for you. While the agent works on one of those turns, one small line at the bottom says what it is doing ("Answering a consultation from Forge · 2 min"). "Agent work" (desktop toolbar) or "Show agent work" (phone ⋮ menu) shows everything, and your Maestro remembers the choice on each device.
 - **"Load earlier" reaches back to your first message.** Each tap brings the earlier part of your conversation, however many agent turns happened in between; messages older than the chat's recent part come from your Maestro's full record, as text, marked "from the archive".
 - **One call layout in the chat.** "Back to chat" on the owl or orb screen now gives the same simple call bar as a call with no display, with a "Show display" button to go back to the owl or orb. The older call panel above the message box no longer appears during a call; everything it held is in Controls.
