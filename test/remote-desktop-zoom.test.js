@@ -270,7 +270,8 @@ test('page: wheel — Ctrl+wheel zooms about the cursor and is not sent; plain w
   const m = p.decode(p.sent[0]); assert.equal(m.len, 0x0C);
   assert.equal(m.x, Math.floor((300 - p.rect().left) * 1920 / 800)); assert.equal(m.y, Math.floor((200 - p.rect().top) * 1080 / 450));
   const u0 = (300 - p.rect().left) / p.rect().width;
-  assert.ok(w({ ctrlKey: true, deltaY: -50 }));
+  assert.ok(w({ ctrlKey: true, deltaY: -30 }));
+  for (let i = 0; i < 4; i++) w({ ctrlKey: true, deltaY: -30 });   // smooth steps: zoomed far enough that the view scrolls on both axes
   assert.equal(p.sent.length, 1, 'ctrl+wheel not sent');
   assert.ok(p.size()[0] > 800);
   near((300 - p.rect().left) / p.rect().width, u0, 1e-3);
@@ -417,7 +418,7 @@ test('page: wheel on the scroller — Ctrl+wheel over the black band zooms, a pl
   // on the way back out, close to 1 snaps to exactly 1
   p.click('fit'); w({ ctrlKey: true, deltaY: -5 }); assert.ok(p.size()[0] > 800);
   w({ ctrlKey: true, deltaY: 4.9 }); assert.equal(p.size()[0], 800, 'zooming out near 1 snaps to Fit');
-  // a mouse notch (line mode, or a pixel step of 50 or more) is one step of 1.15x
+  // a mouse notch (line mode, or a pixel step of 40 or more) is one step of 1.15x
   w({ ctrlKey: true, deltaY: -1, deltaMode: 1 }); assert.ok(Math.abs(p.size()[0] - 920) < 1, 'line-mode notch: 1.15x');
   p.click('fit'); w({ ctrlKey: true, deltaY: -100 }); assert.ok(Math.abs(p.size()[0] - 920) < 1, 'a 100 px notch: 1.15x, not 1.8x');
   // the view can scroll in one direction only: still a pan, not the PC
@@ -466,4 +467,16 @@ test('page text: iOS and mouse-user CSS (touch-action on body, no callout, scrol
   assert.match(viewer, /#scroller \{[^}]*scrollbar-width: none/);
   assert.match(viewer, /@media \(pointer: fine\) \{[^}]*scrollbar-width: auto[^}]*\}[^}]*::-webkit-scrollbar \{ display: block/);
   assert.match(viewer, /gesturestart/); assert.match(viewer, /lostpointercapture/); assert.match(viewer, /visibilitychange/);
+});
+
+test('page: wheel — a Windows display-scaled notch (|deltaY| 40..100, e.g. 66 or 80) is one 1.15x step, never about 2x; trackpad steps stay smooth', { skip }, () => {
+  const p = boot();
+  const w = (e) => p.fire(p.scroller, 'wheel', { clientX: 300, clientY: canvasY, deltaY: 0, deltaX: 0, deltaMode: 0, ctrlKey: true, preventDefault() {}, ...e });
+  for (const dy of [-66, -80, -40, -99]) { p.click('fit'); w({ deltaY: dy }); assert.ok(Math.abs(p.size()[0] - 920) < 1, `deltaY ${dy}: one 1.15x step, got ${p.size()[0] / 800}`); }
+  for (const dy of [66, 80]) { p.click('fit'); w({ deltaY: -100 }); const z = p.size()[0]; w({ deltaY: dy }); assert.ok(Math.abs(z / p.size()[0] - 1.15) < 0.01, `deltaY ${dy}: one step out`); }
+  // trackpad: -3 is exp(0.03) about 1.03 per event, -39 is still smooth (exp(0.39)), not a notch
+  p.click('fit'); w({ deltaY: -3 }); assert.ok(Math.abs(p.size()[0] / 800 - Math.exp(0.03)) < 0.005, 'a small step zooms smoothly');
+  p.click('fit'); w({ deltaY: -39 }); assert.ok(Math.abs(p.size()[0] / 800 - Math.exp(0.39)) < 0.01, '39 is the last smooth step');
+  assert.match(viewer, /Math\.exp\(-Math\.max\(-40, Math\.min\(40, dy\)\) \* 0\.01\)/, 'the smooth branch is clamped to 40');
+  assert.equal(p.sent.length, 0);
 });

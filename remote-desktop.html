@@ -244,9 +244,10 @@ var rdView = (function () {
     if (!live || !desktop) return;
     var box = scroller.getBoundingClientRect ? scroller.getBoundingClientRect() : { left: 0, top: 0 };
     var k = e.deltaMode === 1 ? 16 : 1, dy = (e.deltaY || 0) * k, dx = (e.deltaX || 0) * k;
-    // A mouse notch (line mode, or a pixel step of 100 or more, which is what a mouse wheel notch reports) zooms one step of 1.15x; a trackpad's small steps zoom smoothly.
-    var notch = e.deltaMode === 1 || Math.abs(e.deltaY || 0) >= 100;
-    if (e.ctrlKey) place(zoom * (notch ? (dy < 0 ? 1.15 : dy > 0 ? 1 / 1.15 : 1) : Math.exp(-dy * 0.01)), e.clientX - box.left, e.clientY - box.top);
+    // A mouse notch (line mode, or a pixel step of 40 or more: 100 on most systems, 66-80 on Windows with display scaling) zooms one step of
+    // 1.15x; a trackpad's small steps (typically 1-20) zoom smoothly, never by more than one smooth step of 40.
+    var notch = e.deltaMode === 1 || Math.abs(e.deltaY || 0) >= 40;
+    if (e.ctrlKey) place(zoom * (notch ? (dy < 0 ? 1.15 : dy > 0 ? 1 / 1.15 : 1) : Math.exp(-Math.max(-40, Math.min(40, dy)) * 0.01)), e.clientX - box.left, e.clientY - box.top);
     else if (!(inCanvas(e) && scroller.scrollWidth <= scroller.clientWidth && scroller.scrollHeight <= scroller.clientHeight)) { scroller.scrollLeft += dx; scroller.scrollTop += dy; }
     else send('mousewheel', e.clientX, e.clientY, 0, 0, 0, { wheelDelta: typeof e.wheelDelta === 'number' ? e.wheelDelta : (dy > 0 ? -120 : dy < 0 ? 120 : 0), detail: e.detail || 0 });
     e.preventDefault();
@@ -273,7 +274,29 @@ var rdView = (function () {
     endAll();
     try { if (desktop && desktop.m.handleReleaseKeys) desktop.m.handleReleaseKeys(); } catch (x) {}
   }
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') lostFocus(); });
+  // Leaving and coming back. Closing the page (or the tab/app being discarded) says End, so the computer is not locked for the rest of
+  // the 30 minutes; the hub also ends a session that has had no connection for a minute. An app switch (visibilitychange) never ends it.
+  function sessionLive() { return live && Number(boot.until) > Date.now(); }
+  window.addEventListener('pagehide', function (e) {
+    if ((e && e.persisted === true) || !sessionLive()) return;   // back/forward cache: the page may return, the hub's grace covers it
+    var sent = false;
+    try { if (typeof navigator !== 'undefined' && navigator.sendBeacon) sent = !!navigator.sendBeacon(boot.endUrl); } catch (x) { sent = false; }
+    if (!sent) { try { fetch(boot.endUrl, { method: 'POST', credentials: 'include', keepalive: true }).then(function () {}, function () {}); } catch (x) {} }
+  });
+  // Back on the page (or restored from the cache) with the connection gone: connect again while the hub still keeps the session.
+  // At most 2 automatic restarts in 10 s (a session that has ended fails at once): after that the Reconnect button is the way.
+  var autoStarts = [];
+  function comeBack() {
+    if (!sessionLive() || (desktop && desktop.State !== 0)) return;
+    var t = Date.now();
+    autoStarts = autoStarts.filter(function (x) { return t - x < 10000; });
+    if (autoStarts.length >= 2) return;
+    autoStarts.push(t);
+    $('reconnect').style.display = 'none';
+    start();
+  }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') lostFocus(); else if (document.visibilityState === 'visible') comeBack(); });
+  window.addEventListener('pageshow', function (e) { if (e && e.persisted === true) comeBack(); });
   window.addEventListener('blur', lostFocus);
   var gesturing = false, gz = 1;   // Safari's own pinch events; while one runs the pointer pinch must not zoom a second time
   scroller.addEventListener('gesturestart', function (e) { e.preventDefault(); gesturing = true; gz = zoom; cancelTouch(); });

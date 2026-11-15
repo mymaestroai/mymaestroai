@@ -180,7 +180,7 @@ test('open, reuse, busy, end and expiry: one log line and one audit record per s
   assert.strictEqual(a.res.code, 200);
   assert.deepStrictEqual(a.json(), { url: `/remote-desktop/${SID}/`, session: SID, until: T0 + 30 * MIN });
   assert.deepStrictEqual(st.calls[0], { tool: 'desktop_open', args: { nodeid: 'node//pc1', who: { id: 'u1', name: 'Owner' }, minutes: 30 } });
-  assert.strictEqual(st.timers.length, 1); assert.strictEqual(st.timers[0].ms, 30 * MIN);
+  assert.strictEqual(st.timers.length, 2); assert.strictEqual(st.timers[0].ms, 30 * MIN); assert.strictEqual(st.timers[1].ms, 2 * 60000, 'plus the never-loaded grace');
   const again = await open(rd, 'owner');
   assert.strictEqual(again.json().session, SID);
   assert.strictEqual(st.calls.filter((c) => c.tool === 'desktop_open').length, 1, 'the same person gets the same session');
@@ -208,7 +208,7 @@ test('open, reuse, busy, end and expiry: one log line and one audit record per s
   assert.strictEqual(st.logs.length, 1); assert.strictEqual(st.audits.length, 1);
   // a new session on the freed computer expires by time
   const b = await open(rd, 'sam'); assert.strictEqual(b.json().session, SID2);
-  const t = st.timers[st.timers.length - 1]; assert.strictEqual(t.ms, 30 * MIN);
+  const t = st.timers.filter((x) => x.ms === 30 * MIN).pop(); assert.ok(t && t.live);
   st.now = T0 + 5 * MIN + 30 * MIN;
   t.fn(); await new Promise((r) => setImmediate(r));
   assert.ok(st.calls.some((c) => c.tool === 'desktop_end' && c.args.session === SID2 && c.args.reason === 'time'));
@@ -751,4 +751,135 @@ test('access.js: the desktop pages are admin pages and nothing about it is in TO
   const sw = read('sw.js');
   assert.ok(!sw.includes('remote-desktop'));
   assert.match(sw, /if \(!RUNTIME\.includes\(url\.pathname\)\) return;/, 'only the listed shell files are intercepted');
+});
+
+// ── leaving without End: the grace (real relay sockets against the fake upstream, fake timers; the grace timers are 60000 ms and the never-loaded one 120000 ms) ──
+const graceTimers = (st, ms) => st.timers.filter((t) => t.live && t.ms === ms);
+const ended = (st, reason) => st.calls.filter((q) => q.tool === 'desktop_end' && q.args.reason === reason);
+const RELAY_URL = `/remote-desktop/${SID}/meshrelay.ashx?id=tun12345`;
+const connected = async (x) => { const c = await wsClient(x.port, { url: RELAY_URL, headers: SAME }); await until(() => c.got.includes('hello-from-mesh')); return c; };
+
+test('grace: the last relay closing and no reconnect for 60 s ends the session as "left" (one log line, one audit record, desktop_end, lock freed)', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const c = await connected(x);
+    assert.strictEqual(graceTimers(x.st, 60000).length, 0, 'no grace while a relay is up');
+    assert.strictEqual(graceTimers(x.st, 120000).length, 0, 'the never-loaded grace is cleared once a relay came');
+    c.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    assert.strictEqual(x.rd.sessions.size, 1, 'still open during the grace');
+    assert.strictEqual(ended(x.st, 'left').length, 0);
+    x.st.now = T0 + MIN;
+    const fired = graceTimers(x.st, 60000)[0];
+    fired.fn(); fired.live = false;   // a timer that has fired is no longer pending
+    await until(() => ended(x.st, 'left').length === 1);
+    assert.strictEqual(x.rd.sessions.size, 0);
+    assert.strictEqual(x.st.mod.size, 0, 'the module lock is freed');
+    assert.strictEqual(x.st.logs.length, 1); assert.match(x.st.logs[0], /\(left\)$/);
+    assert.strictEqual(x.st.audits.length, 1); assert.strictEqual(x.st.audits[0].ended_by, 'left');
+    assert.strictEqual(x.st.timers[0].live, false, 'the expiry timer is cancelled');
+    await new Promise((r) => setTimeout(r, 30));
+    assert.strictEqual(x.st.logs.length, 1, 'closing sockets after finish arms nothing and logs nothing more');
+    assert.deepStrictEqual(x.st.timers.filter((t) => t.live).map((t) => t.ms), []);
+  } finally { await x.close(); }
+});
+
+test('grace: a reconnect within the grace keeps the session (no desktop_end, no log); the old timer is cleared', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const a = await connected(x);
+    a.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    const old = graceTimers(x.st, 60000)[0];
+    const b = await connected(x);
+    assert.strictEqual(old.live, false, 'the reconnect clears the grace');
+    old.fn();   // even a timer that slipped through does nothing while a relay is up
+    await new Promise((r) => setTimeout(r, 30));
+    assert.strictEqual(x.rd.sessions.size, 1);
+    assert.strictEqual(ended(x.st, 'left').length, 0); assert.strictEqual(x.st.logs.length, 0);
+    assert.strictEqual(graceTimers(x.st, 60000).length, 0);
+    b.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    assert.strictEqual(graceTimers(x.st, 60000).length, 1, 'never two grace timers for one session');
+  } finally { await x.close(); }
+});
+
+test('grace: with two relays up, one closing arms nothing; the second closing arms exactly one', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const a = await connected(x); const b = await connected(x);
+    a.sock.destroy();
+    await until(() => x.rd.sessions.get(SID).relays === 1);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.strictEqual(graceTimers(x.st, 60000).length, 0);
+    b.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    assert.strictEqual(x.st.timers.filter((t) => t.ms === 60000).length, 1);
+  } finally { await x.close(); }
+});
+
+test('grace: a relay that fails (not 101) leaves the session in the grace, not forever', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(403);
+  try {
+    await open(x.rd, 'owner');
+    const c = await wsClient(x.port, { url: RELAY_URL, headers: SAME }); await c.closedP;
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    x.st.now = T0 + MIN;
+    graceTimers(x.st, 60000)[0].fn();
+    await until(() => ended(x.st, 'left').length === 1);
+  } finally { await x.close(); }
+});
+
+test('grace: a session no relay ever reaches ends as "left" after 2 x the grace', async () => {
+  const { rd, st } = rig();
+  await open(rd, 'owner');
+  assert.deepStrictEqual(st.timers.map((t) => t.ms), [30 * MIN, 120000]);
+  st.now = T0 + 2 * MIN;
+  st.timers[1].fn(); await new Promise((r) => setImmediate(r));
+  assert.strictEqual(ended(st, 'left').length, 1); assert.strictEqual(rd.sessions.size, 0); assert.strictEqual(st.mod.size, 0);
+  assert.strictEqual(st.logs.length, 1); assert.match(st.logs[0], /\(left\)$/);
+  assert.strictEqual(st.audits[0].ended_by, 'left');
+  assert.strictEqual(st.timers[0].live, false, 'the expiry timer is cancelled');
+});
+
+test('grace: leaveGraceMs is injectable', async () => {
+  const { rd, st } = rig({ deps: { leaveGraceMs: 5000 } });
+  await open(rd, 'owner');
+  assert.deepStrictEqual(st.timers.map((t) => t.ms), [30 * MIN, 10000]);
+  assert.ok(rd);
+});
+
+test('grace: End, the 30-minute time and a revoke each clear it; a stale grace timer never logs a second line', async () => {
+  for (const how of ['ended', 'time', 'revoked']) {
+    const { rd, st } = rig();
+    await open(rd, 'owner');
+    const g = st.timers[1];
+    assert.strictEqual(g.live, true);
+    if (how === 'ended') await call(rd, { method: 'POST', url: `/api/remote-desktop/${SID}/end`, who: 'owner' });
+    else if (how === 'time') { st.now = T0 + 30 * MIN; st.timers[0].fn(); await new Promise((r) => setImmediate(r)); }
+    else { st.gone.push('u1'); await rd.sweep(); }
+    assert.strictEqual(g.live, false, `${how}: grace cleared`);
+    assert.strictEqual(ended(st, how).length, 1, how);
+    g.fn(); await new Promise((r) => setImmediate(r));
+    assert.strictEqual(st.logs.length, 1, `${how}: still one log line`);
+    assert.match(st.logs[0], new RegExp(`\\(${how}\\)$`));
+    assert.strictEqual(st.audits.length, 1);
+  }
+});
+
+test('grace: the 30-minute expiry still ends a session that keeps its relay with reason "time"', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const c = await connected(x);
+    x.st.now = T0 + 30 * MIN;
+    x.st.timers[0].fn();
+    await c.closedP;
+    await until(() => ended(x.st, 'time').length === 1);
+    assert.strictEqual(ended(x.st, 'left').length, 0);
+    assert.strictEqual(x.st.logs.length, 1); assert.match(x.st.logs[0], /\(time\)$/);
+  } finally { await x.close(); }
 });

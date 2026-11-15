@@ -125,10 +125,12 @@ function runViewer(boot, opts = {}) {
   el('rd-boot').textContent = JSON.stringify(boot);
   const log = { starts: [], stops: 0, cad: 0, fetches: [], keys: [] };
   const timers = [];
+  const win = {};
   let now = opts.now || 1000000;
   const sandbox = {
-    document: { getElementById: el, addEventListener(n, f) { (el('doc').listeners[n] = el('doc').listeners[n] || []).push(f); }, querySelector: () => ({ setAttribute() {} }), title: '', activeElement: null },
-    window: { addEventListener() {} },
+    document: { getElementById: el, addEventListener(n, f) { (el('doc').listeners[n] = el('doc').listeners[n] || []).push(f); }, querySelector: () => ({ setAttribute() {} }), title: '', activeElement: null, visibilityState: 'visible' },
+    window: { addEventListener(n, f) { (win[n] = win[n] || []).push(f); } },
+    ...(opts.navigator === undefined ? {} : { navigator: opts.navigator }),
     CreateAgentRemoteDesktop: () => ({}),
     CreateAgentRedirect: () => {
       const d = { m: { SendCtrlAltDelMsg() { log.cad++; }, handleKeyDown(e) { log.keys.push(e.keyCode); }, handleKeyUp() {}, handleKeys() {} }, Start(id) { log.starts.push(id); }, Stop() { log.stops++; } };
@@ -141,7 +143,9 @@ function runViewer(boot, opts = {}) {
   vm.createContext(sandbox);
   vm.runInContext(math, sandbox);
   vm.runInContext(src, sandbox);
-  return { els, log, el, tick: () => timers.forEach(f => f()), setNow: (n) => { now = n; }, sandbox };
+  const fireWin = (n, e) => (win[n] || []).forEach(f => f({ ...e }));
+  const vis = (v) => { sandbox.document.visibilityState = v; (els.doc.listeners.visibilitychange || []).forEach(f => f({})); };
+  return { els, log, el, tick: () => timers.forEach(f => f()), setNow: (n) => { now = n; }, sandbox, fireWin, vis };
 }
 
 test('remote-desktop.html runs: starts, countdown, Ctrl+Alt+Del, End posts to endUrl then stops', async () => {
@@ -275,4 +279,80 @@ test('remote-desktop.html with the REAL MeshCentral viewer scripts: a key press 
   assert.doesNotThrow(() => vm.runInContext('desktop.State', sandbox));
   const x = sandbox.window.desktop;
   assert.equal(x.State, 0);
+});
+
+// ── leaving without End, and coming back ──
+const settle = () => new Promise(res => setImmediate(res));
+const beaconRig = (over = {}) => { const beacons = []; const navigator = { sendBeacon: (u, b) => { beacons.push([u, b]); return over.beaconOk !== false; } }; return { beacons, navigator }; };
+
+test('remote-desktop.html: pagehide that is not a cache entry sends End once with sendBeacon; nothing for persisted, an ended or an expired session', async () => {
+  const { beacons, navigator } = beaconRig();
+  const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end' }, { navigator });
+  r.fireWin('pagehide', { persisted: true });
+  assert.equal(beacons.length, 0, 'back/forward cache: the hub grace covers it');
+  r.vis('hidden');
+  assert.equal(beacons.length, 0, 'an app switch never ends the session');
+  r.fireWin('pagehide', { persisted: false });
+  assert.deepEqual(beacons.map(b => b[0]), ['/api/remote-desktop/s/end']);
+  assert.equal(r.log.fetches.length, 0, 'no fetch when the beacon was queued');
+  // already ended (the End button): nothing more
+  const e = beaconRig();
+  const r2 = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/e' }, { navigator: e.navigator });
+  r2.els.end.listeners.click[0](); await settle();
+  r2.fireWin('pagehide', { persisted: false });
+  assert.equal(e.beacons.length, 0);
+  // expired
+  const x = beaconRig();
+  const r3 = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 5000, endUrl: '/e' }, { navigator: x.navigator });
+  r3.setNow(1005000);
+  r3.fireWin('pagehide', {});
+  assert.equal(x.beacons.length, 0);
+});
+
+test('remote-desktop.html: pagehide falls back to fetch with keepalive when sendBeacon is missing or refuses', () => {
+  for (const navigator of [{}, beaconRig({ beaconOk: false }).navigator, undefined]) {
+    const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end' }, { navigator });
+    r.fireWin('pagehide', { persisted: false });
+    assert.equal(r.log.fetches.length, 1);
+    assert.equal(r.log.fetches[0][0], '/api/remote-desktop/s/end');
+    assert.deepEqual({ ...r.log.fetches[0][1] }, { method: 'POST', credentials: 'include', keepalive: true });
+  }
+});
+
+test('remote-desktop.html: back on the page with the viewer disconnected starts again while live; never after End or the end time; never while connected', async () => {
+  const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/e' });
+  assert.equal(r.log.starts.length, 1);
+  const first = r.log.desktop;
+  r.vis('hidden'); r.vis('visible');
+  assert.equal(r.log.starts.length, 1, 'still connecting (state not 0): nothing restarts');
+  first.State = 3; r.vis('hidden'); r.vis('visible');
+  assert.equal(r.log.starts.length, 1, 'connected: nothing restarts');
+  first.State = 0; first.onStateChanged(first, 0);
+  assert.equal(r.els.reconnect.style.display, '');
+  r.vis('hidden'); r.vis('visible');
+  assert.equal(r.log.starts.length, 2, 'disconnected and back: started again');
+  assert.notEqual(r.log.desktop, first);
+  assert.equal(r.els.reconnect.style.display, 'none');
+  // restored from the back/forward cache
+  r.log.desktop.State = 0;
+  r.fireWin('pageshow', { persisted: true });
+  assert.equal(r.log.starts.length, 3, 'pageshow persisted: started again');
+  r.log.desktop.State = 0;
+  r.fireWin('pageshow', { persisted: false });
+  assert.equal(r.log.starts.length, 3, 'a plain load does not restart');
+  // a session that has ended: the viewer fails at once; two automatic tries per 10 s, then only the Reconnect button
+  r.log.desktop.State = 0; r.vis('visible');
+  assert.equal(r.log.starts.length, 3, 'third automatic restart inside 10 s is refused');
+  r.setNow(1000000 + 11000); r.log.desktop.State = 0; r.vis('visible');
+  assert.equal(r.log.starts.length, 4, 'after 10 s it may try again');
+  // after the end time and after End: nothing
+  const e = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/e' });
+  e.log.desktop.State = 0;
+  e.els.end.listeners.click[0](); await settle();
+  e.vis('visible'); e.fireWin('pageshow', { persisted: true });
+  assert.equal(e.log.starts.length, 1, 'after End nothing restarts');
+  const t = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 5000, endUrl: '/e' });
+  t.log.desktop.State = 0; t.setNow(1005000);
+  t.vis('visible');
+  assert.equal(t.log.starts.length, 1, 'after the end time nothing restarts');
 });
