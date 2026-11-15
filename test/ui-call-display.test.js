@@ -216,7 +216,7 @@ test('Talk while a reply is read cuts it at once; real speech then belongs to th
   h.vad.onSpeechBegin();   // the microphone hears the person
   await h.advance(CD.TALK_WAIT_MS + 1000);
   assert.strictEqual(h.call.state, 'hearing', 'the watchdog does not run past a person who is speaking (frames keep it fed)');
-  for (let i = 0; i < 3; i++) { h.vad.onFrame(-30, {}); await h.advance(5000); }
+  for (let i = 0; i < 15; i++) { h.vad.onFrame(-30, {}); await h.advance(1000); }   // a real detector sends a frame every 32 ms; a 2 s gap ends the piece (ui-voice-ios-call.test.js)
   assert.strictEqual(h.call.state, 'hearing');
   h.vad.onSpeechEnd({ text: 'please stop that' }); await tick(20);
   assert.strictEqual(h.stt, 1);

@@ -102,7 +102,7 @@ test('Voice menu item and sheet: dialogGuard, level slider, meter, test toggle, 
   assert.match(js, /dialogGuard\.open\(sh, \{ close: sh\.closeSheet \}\); \}\n\s*paintVoiceSheet/);
   assert.match(sheet, /dialogGuard\.closed\(sh\)/);
   assert.match(sheet, /voiceTestStop\(\); voiceStopPlayback\(\);/, 'closing releases the mic and stops the sample');
-  assert.match(js, /Voice is not enabled on the hub\. An admin turns it on in Settings on the computer\./);
+  assert.match(js, /Voice is off\. An admin of your Maestro can turn it on, from the Voice menu on their phone or in Settings, Voices on the computer\./);   // was "Voice is not enabled on the hub..." (see ui-voice-ios-pages.test.js)
   assert.match(js, /handle = await voiceMicOpen\(voicePrefsNow\(\)\.micLevel, \(f\) => \{ m\.style\.width/, 'meter opens the mic only through the test toggle');
 });
 
@@ -152,7 +152,7 @@ test('mic icon is an inline SVG (not the U+1F399 emoji), labelled Dictate; recor
 });
 
 test('install progress is 0..1 and shown as a percentage', () => {
-  assert.match(js, /Math\.round\(voiceStatus\.progress \* 100\)/);
+  assert.match(js, /Math\.round\(frac \* 100\)/);   // frac is st.progress clamped to 0..1
 });
 
 test('stop playback settles the pending voicePlayBlob and frees its blob URL', async () => {

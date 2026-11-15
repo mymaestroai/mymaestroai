@@ -21,6 +21,7 @@ function leaveEnv(over) {
   const els = {};
   const env = {
     document: doc, window: win, state, navigator: o.navigator || { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/126', platform: 'Linux armv81', maxTouchPoints: 5, mediaSession: { setActionHandler() {} } },
+    voiceIsIOSNav: (n) => /iPhone|iPad|iPod/.test(String(n.userAgent || '')) || (String(n.platform || '') === 'MacIntel' && Number(n.maxTouchPoints) > 1),   // the shared helper's rule (lib), as the page calls it
     toast: (t) => log.push('toast:' + t), $: (id) => els[id] || null, voiceCallHangUp: () => log.push('hangUp'),
     voiceCallTeardown: (vc) => { log.push('teardown'); if (state.voiceCall === vc) state.voiceCall = null; },
     voiceWakeAcquire: () => log.push('wake'), voiceRoomStop: () => log.push('roomStop'), voiceTestStop: () => log.push('testStop'),

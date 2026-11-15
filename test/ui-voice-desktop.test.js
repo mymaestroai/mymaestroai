@@ -11,6 +11,15 @@ const html = read('index.html');
 const as = read('agent-settings.html');
 const L = require('../lib/ui-voice');
 
+// The shared device helpers of the library (the real ones) and the page's own voiceMarkDeviceChanged, taken from app.js.
+const DEV = (() => {
+  const LL = require('../lib/ui-voice');
+  const i = app.indexOf('    function voiceMarkDeviceChanged('), j = app.indexOf('    function voiceMicLevelNow()', i);
+  if (!(i > 0 && j > i)) throw new Error('voiceMarkDeviceChanged not found in app.js');
+  const voiceMarkDeviceChanged = new Function('VOICE_DEVICE_DEFAULT_KEYS', 'voiceMarkDeviceSet', app.slice(i, j) + '\nreturn voiceMarkDeviceChanged;')(LL.VOICE_DEVICE_DEFAULT_KEYS, LL.voiceMarkDeviceSet);
+  return { ...LL, voiceMarkDeviceChanged };
+})();
+
 const BLOCK_START = '    // ── Voice, desktop page:';
 const BLOCK_END = '    // Message rendering\n';
 function voiceBlock() {
@@ -165,7 +174,7 @@ function makeEnv(opts = {}) {
     isHubAdmin: () => true, hubEsc: String, dialogGuard: { savePoint: () => () => {}, markLoaded() {} },
     autoGrowTextarea() {},
     SpeechSynthesisUtterance: class { constructor(t) { this.text = t; } },
-    voiceLoadPrefs: () => ({ micLevel: 80, mode: 'tap', readAloud: true, deviceVoiceFallback: !!opts.fallback }),   // 'tap': these tests are the phase-1 dictation path (hands-free is the default since phase 2)
+    voiceLoadPrefs: () => ({ micLevel: 80, mode: 'tap', readAloud: true, deviceVoiceFallback: !!opts.fallback, echoHold: 0, loudness: 'louder', loudnessBt: 'normal' }),   // the two device defaults are already the stored values, so a save that keeps them marks nothing as chosen (the page marks `set` only for a changed device default)   // 'tap': these tests are the phase-1 dictation path (hands-free is the default since phase 2)
     voiceSavePrefs: (s, p) => { calls.saved = p; },
     voiceGainFromSlider: (v) => v / 10,
     voiceSliderFromGain: (g) => g * 10,
@@ -175,7 +184,7 @@ function makeEnv(opts = {}) {
     voiceSentences: (t) => t.split(/(?<=\.)\s+/).filter(Boolean),
     voiceSpeechText: (t) => t,
     voiceCleanSpeed: L.voiceCleanSpeed, voiceSpeedLabel: L.voiceSpeedLabel, VOICE_END_PAUSES: L.VOICE_END_PAUSES,
-    voiceEffectivePrefs: L.voiceEffectivePrefs, voiceMarkChosen: L.voiceMarkChosen, VOICE_AGENT_DEFAULT_KEYS: L.VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: L.VOICE_DEFAULT_PREFS, AGENTS: [], capName: (n) => n,   // agent voice defaults (part 6)   // voice fixes 1: speed and end-of-turn pause
+    voiceEffectivePrefs: L.voiceEffectivePrefs, voiceMarkChosen: L.voiceMarkChosen, voiceIsIOSNav: DEV.voiceIsIOSNav, voiceEchoHoldOk: DEV.voiceEchoHoldOk, voiceEchoHoldLabel: DEV.voiceEchoHoldLabel, VOICE_ECHO_HOLDS: DEV.VOICE_ECHO_HOLDS, voiceEchoChoices: DEV.voiceEchoChoices, VOICE_DEVICE_DEFAULT_KEYS: DEV.VOICE_DEVICE_DEFAULT_KEYS, voiceMarkDeviceSet: DEV.voiceMarkDeviceSet, voiceDevicePrefs: DEV.voiceDevicePrefs, VOICE_ECHO_HOLD_IOS: DEV.VOICE_ECHO_HOLD_IOS, voiceMarkDeviceChanged: DEV.voiceMarkDeviceChanged, VOICE_AGENT_DEFAULT_KEYS: L.VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: L.VOICE_DEFAULT_PREFS, AGENTS: [], capName: (n) => n,   // agent voice defaults (part 6)   // voice fixes 1: speed and end-of-turn pause
     voiceMicGuard: L.voiceMicGuard, voiceWaitLocalVoice: L.voiceWaitLocalVoice, voicePickLocalVoice: L.voicePickLocalVoice,
   };
   if (opts.gum) stubs.navigator.mediaDevices.getUserMedia = opts.gum(calls);
@@ -291,8 +300,8 @@ test('settings: members get no enable switch, default voice or sample; admins do
   assert.match(admin, /st-voice-default/);
   assert.match(admin, /Play sample/);
   const stubsSrc = voiceBlock().replace('const admin = isHubAdmin();', 'const admin = false;');
-  const member = new Function('document', 'window', 'localStorage', 'voiceLoadPrefs', 'voiceGainFromSlider', 'chats', 'dialogGuard', 'voiceMicGuard', 'voiceCleanSpeed', 'voiceSpeedLabel', 'VOICE_END_PAUSES', 'VOICE_ECHO_HOLDS', 'voiceLoudnessSelectHtml', 'voiceLoudnessNow', 'VOICE_LOUDNESS', 'voiceLoudnessFor',
-    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, { addEventListener() {} }, {}, () => ({ micLevel: 50 }), (v) => v, {}, {}, L.voiceMicGuard, L.voiceCleanSpeed, L.voiceSpeedLabel, L.VOICE_END_PAUSES, [0, 600, 1000, 1500], () => '', () => 'louder', { normal: 0, louder: 9, loudest: 14 }, () => 'louder');
+  const member = new Function('document', 'window', 'localStorage', 'voiceLoadPrefs', 'voiceGainFromSlider', 'chats', 'dialogGuard', 'voiceMicGuard', 'voiceCleanSpeed', 'voiceSpeedLabel', 'VOICE_END_PAUSES', 'VOICE_ECHO_HOLDS', 'voiceLoudnessSelectHtml', 'voiceLoudnessNow', 'VOICE_LOUDNESS', 'voiceLoudnessFor', 'voiceIsIOSNav', 'voiceEchoHoldOk', 'voiceEchoHoldLabel', 'voiceEchoChoices', 'VOICE_DEVICE_DEFAULT_KEYS', 'voiceMarkDeviceSet', 'voiceDevicePrefs', 'voiceMarkDeviceChanged', 'VOICE_ECHO_HOLD_IOS',
+    stubsSrc + '\nreturn voiceSettingsHtml({});')({ getElementById() {}, body: { classList: {} }, addEventListener() {} }, { addEventListener() {} }, {}, () => ({ micLevel: 50 }), (v) => v, {}, {}, L.voiceMicGuard, L.voiceCleanSpeed, L.voiceSpeedLabel, L.VOICE_END_PAUSES, [0, 600, 1000, 1500], () => '', () => 'louder', { normal: 0, louder: 9, loudest: 14 }, () => 'louder', DEV.voiceIsIOSNav, DEV.voiceEchoHoldOk, DEV.voiceEchoHoldLabel, DEV.voiceEchoChoices, DEV.VOICE_DEVICE_DEFAULT_KEYS, DEV.voiceMarkDeviceSet, DEV.voiceDevicePrefs, DEV.voiceMarkDeviceChanged, DEV.VOICE_ECHO_HOLD_IOS);
   assert.doesNotMatch(member, /st-voice-enabled|st-voice-default|Play sample/);
   assert.match(member, /st-voice-status/);
   assert.match(member, /id="st-voice-mic"/);

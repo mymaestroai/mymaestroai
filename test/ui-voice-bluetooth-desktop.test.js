@@ -10,6 +10,15 @@ const { execFileSync } = require('child_process');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const app = read('app.js');
 
+// The shared device helpers of the library (the real ones) and the page's own voiceMarkDeviceChanged, taken from app.js.
+const DEV = (() => {
+  const LL = require('../lib/ui-voice');
+  const i = app.indexOf('    function voiceMarkDeviceChanged('), j = app.indexOf('    function voiceMicLevelNow()', i);
+  if (!(i > 0 && j > i)) throw new Error('voiceMarkDeviceChanged not found in app.js');
+  const voiceMarkDeviceChanged = new Function('VOICE_DEVICE_DEFAULT_KEYS', 'voiceMarkDeviceSet', app.slice(i, j) + '\nreturn voiceMarkDeviceChanged;')(LL.VOICE_DEVICE_DEFAULT_KEYS, LL.voiceMarkDeviceSet);
+  return { ...LL, voiceMarkDeviceChanged };
+})();
+
 function between(a, b) {
   const i = app.indexOf(a), j = app.indexOf(b, i + a.length);
   assert.ok(i > 0 && j > i, 'found ' + a);
@@ -69,7 +78,7 @@ function makeEnv(opts = {}) {
     document: { hidden: false, getElementById: get, querySelectorAll: (sel) => (sel.includes('data-vp="room"') ? [popBtns.room].concat(sel.includes('data-vp="car"') ? [popBtns.car] : []) : sel === '.voice-pop .vp-car-out' ? [popOut.car] : sel === '.voice-pop .vp-room-out' ? [popOut.room] : sel.includes('data-vp="car"') ? [popBtns.car] : sel.includes('data-vp="echo"') ? [popBtns.echo] : sel.includes('data-vp="keep"') ? [popBtns.keep] : []), addEventListener() {}, createElement: () => el('', {}), querySelector: () => (opts.noSection ? null : { isConnected: true }) },
     navigator: {}, localStorage: {}, fetch: async () => ({ ok: true, status: 200, json: async () => ({ call: { callId: 'k1' } }) }),
     hubToast: (t) => log.toasts.push(t), hubEsc: (s) => String(s), chats: { c1: { agent: 'alice', status: 'idle' } }, agentStatus: {},
-    voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...require('../lib/ui-voice').VOICE_DEFAULT_PREFS, ...prefs }), voiceSpeedFor: () => prefs.voiceSpeed || 1, voiceFollowLine: () => '', voiceMarkChosen: require('../lib/ui-voice').voiceMarkChosen, voiceEffectivePrefs: require('../lib/ui-voice').voiceEffectivePrefs, VOICE_AGENT_DEFAULT_KEYS: require('../lib/ui-voice').VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: require('../lib/ui-voice').VOICE_DEFAULT_PREFS, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity, voiceEndPauseNow: () => prefs.endPause,
+    voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...require('../lib/ui-voice').VOICE_DEFAULT_PREFS, ...prefs }), voiceSpeedFor: () => prefs.voiceSpeed || 1, voiceFollowLine: () => '', voiceMarkChosen: require('../lib/ui-voice').voiceMarkChosen, voiceIsIOSNav: DEV.voiceIsIOSNav, voiceEchoHoldOk: DEV.voiceEchoHoldOk, voiceEchoChoices: DEV.voiceEchoChoices, VOICE_DEVICE_DEFAULT_KEYS: DEV.VOICE_DEVICE_DEFAULT_KEYS, voiceMarkDeviceSet: DEV.voiceMarkDeviceSet, voiceDevicePrefs: DEV.voiceDevicePrefs, VOICE_ECHO_HOLD_IOS: DEV.VOICE_ECHO_HOLD_IOS, voiceMarkDeviceChanged: DEV.voiceMarkDeviceChanged, voiceEffectivePrefs: require('../lib/ui-voice').voiceEffectivePrefs, VOICE_AGENT_DEFAULT_KEYS: require('../lib/ui-voice').VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: require('../lib/ui-voice').VOICE_DEFAULT_PREFS, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity, voiceEndPauseNow: () => prefs.endPause,
     voiceSpeedNow: () => prefs.voiceSpeed || 1, voiceSpeedLabel: (v) => Number(v).toFixed(2) + 'x',
     voiceCleanSpeed: (v) => Math.round(Math.max(0.75, Math.min(1.5, Number(v))) * 20) / 20,
     voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, VOICE_SPEED_HINT: '', VOICE_END_PAUSES: [800, 1200, 2000],

@@ -659,6 +659,10 @@
   .vs-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; outline: none; padding: 14px 14px calc(16px + var(--sab)); display: flex; flex-direction: column; gap: 12px; font-size: 15px; color: var(--text); }
   .vs-note { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; }
   .vs-note.off { border-color: var(--warning, #d9a441); }
+  .vs-enable { display: flex; flex-direction: column; gap: 8px; }
+  .vs-enable[hidden], .vs-enable [hidden] { display: none; }
+  .vs-enable-text, .vs-progress-line { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; }
+  .vs-progress { width: 100%; }
   .vs-row { display: flex; justify-content: space-between; align-items: center; }
   .vs-level { width: 100%; min-height: 32px; accent-color: var(--accent, #3d7bff); }
   .vs-meter { height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
