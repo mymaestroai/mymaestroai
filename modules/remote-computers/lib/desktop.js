@@ -35,16 +35,23 @@ const checkTunnel = (t) => { if (typeof t !== 'string' || !TUNNEL_RE.test(t)) th
  * createDesktop({ file, now, randomBytes }) -> the session store. `file` may be '' (kept in memory only).
  * Records: { session, nodeid, name, who: { id, name }, start, until }.
  */
-function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.randomBytes(n) } = {}) {
+function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.randomBytes(n), readFile = (f) => fs.readFileSync(f, 'utf8'), log = () => {} } = {}) {
   let memory = {};
+  let lastGood = {};      // the last map read or written successfully: what is used while the file cannot be read (fail closed: known locks stay)
+  let warned = false;
   function readRaw() {
     if (!file) return { ...memory };
     let raw;
     try {
-      const st = fs.statSync(file);
-      if (st.size > MAX_FILE_BYTES) return {};
-      raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch { return {}; }   // missing or unreadable: no sessions
+      const txt = readFile(file);
+      if (typeof txt !== 'string' || txt.length > MAX_FILE_BYTES) throw new Error('unreadable');
+      raw = JSON.parse(txt);
+    } catch (e) {
+      if (e && e.code === 'ENOENT') { lastGood = {}; warned = false; return {}; }   // no file: no sessions
+      if (!warned) { warned = true; try { log('the desktop sessions file cannot be read; the sessions already known stay locked'); } catch { /* none */ } }
+      return { ...lastGood };
+    }
+    warned = false;
     const out = {};
     const src = raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object' && !Array.isArray(raw.sessions) ? raw.sessions : {};
     for (const [id, r] of Object.entries(src)) {
@@ -53,11 +60,13 @@ function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.
       if (typeof r.nodeid !== 'string' || !r.nodeid || typeof r.name !== 'string' || !r.who || typeof r.who.id !== 'string' || typeof r.who.name !== 'string' || !Number.isFinite(start) || !Number.isFinite(until)) continue;
       out[id] = { session: id, nodeid: r.nodeid, name: r.name, who: { id: r.who.id, name: r.who.name }, start, until };
     }
+    lastGood = { ...out };
     return out;
   }
   function writeRaw(map) {
     if (!file) { memory = { ...map }; return; }
     writeFileAtomic(file, JSON.stringify({ sessions: map }, null, 2) + '\n');
+    lastGood = { ...map };
   }
   // Drops what ran out more than the grace ago; the file is rewritten only when something was dropped.
   function load() {
@@ -106,11 +115,11 @@ function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.
     writeRaw(map);
     return { ...r, ended: Math.min(now(), r.until) };
   }
-  // The same by computer: the session the module holds for it (live, or run out within the grace).
-  function endNode(nodeid) {
+  // The same by computer, only while the stored record has exactly that start (a newer session opened since is never ended by an old orphan check).
+  function endNode(nodeid, start) {
     const map = load();
     const r = Object.values(map).find((x) => x.nodeid === nodeid);
-    if (!r) throw new DesktopError('That desktop session is not open.');
+    if (!r || typeof start !== 'number' || r.start !== start) throw new DesktopError('That desktop session is not open.');
     return end(r.session);
   }
   return { list, get, forNode, forQuery, open, end, endNode, hhmm };

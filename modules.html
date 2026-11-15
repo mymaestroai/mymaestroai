@@ -225,38 +225,44 @@ function render() {
 }
 
 // ── Computers box (remote-computers only): open a computer's desktop in this tab ──
-let deskComputers = [];
+let deskComputers = [], deskGen = 0;
 function deskTime(ms) { const d = new Date(ms); return isNaN(d) ? '' : d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }); }
-function deskRow(c, i, allowed) {
+function deskRow(c, allowed) {
   const b = c.busy;
+  const btn = `<button class="primary" data-nodeid="${esc(c.nodeid)}" onclick="deskOpen(this)">Open desktop</button>`;
   let act = '';
   if (!allowed) act = '';
-  else if (b && b.mine) act = `<button class="primary" onclick="deskOpen(${i}, this)">Open desktop</button>`;
+  else if (b && b.mine) act = btn;
   else if (b) act = `<span class="dim">In use by ${esc(b.who && b.who.name || b.who)} until ${esc(deskTime(b.until))}</span>`;
-  else if (c.online) act = `<button class="primary" onclick="deskOpen(${i}, this)">Open desktop</button>`;
+  else if (c.online) act = btn;
   return `<div class="desk-row"><span class="desk-name">${esc(c.name)}</span><span class="pill ${c.online ? 'ready' : ''}">${c.online ? 'Online' : 'Offline'}</span><span class="spacer"></span>${act}</div>`;
 }
 async function loadDesktopBox() {
   const m = current;
   if (!m || m.id !== 'remote-computers' || !m.enabled) return;
-  const paint = (html) => { if (current === m && selected === null) { const el = document.getElementById('desk-list'); if (el) el.innerHTML = html; } };
+  const gen = ++deskGen;
+  // An older response (or one for another module or step) must change nothing: same guard for the data and for the paint.
+  const fresh = () => gen === deskGen && current === m && selected === null;
+  const paint = (html) => { if (fresh()) { const el = document.getElementById('desk-list'); if (el) el.innerHTML = html; } };
   try {
     const r = await api('GET', '/api/remote-desktop');
+    if (!fresh()) return;
     deskComputers = r.computers || [];
     const ownerOnly = m.settings && m.settings.desktop_who === 'owner';
     const note = r.allowed ? '' : `<p class="dim">${ownerOnly ? "Only the owner can open a computer's desktop." : "You can't open a computer's desktop here."}</p>`;
-    paint(note + (deskComputers.length ? deskComputers.map((c, i) => deskRow(c, i, r.allowed)).join('') : '<p class="dim">No computers are connected yet.</p>') + '<div class="actions"><a class="open-link" href="#" onclick="loadDesktopBox(); return false">Refresh</a></div>');
+    paint(note + (deskComputers.length ? deskComputers.map(c => deskRow(c, r.allowed)).join('') : '<p class="dim">No computers are connected yet.</p>') + '<div class="actions"><a class="open-link" href="#" onclick="loadDesktopBox(); return false">Refresh</a></div>');
   } catch (e) {
+    if (!fresh()) return;
     paint(`<p class="dim">Could not load the computers.</p><div class="actions"><a class="open-link" href="#" onclick="loadDesktopBox(); return false">Refresh</a></div>`);
     setMsg('err', e.message);
   }
 }
-async function deskOpen(i, btn) {
-  const c = deskComputers[i];
-  if (!c) return;
+async function deskOpen(btn) {
+  const nodeid = btn && btn.getAttribute && btn.getAttribute('data-nodeid');
+  if (!nodeid) return;
   await busy(btn, async () => {
     try {
-      const r = await api('POST', '/api/remote-desktop/open', { nodeid: c.nodeid });
+      const r = await api('POST', '/api/remote-desktop/open', { nodeid });
       if (typeof r.url !== 'string' || !r.url) throw new Error('The hub did not give a desktop address.');
       location.assign(r.url);
     } catch (e) { setMsg('err', e.message); loadDesktopBox(); }

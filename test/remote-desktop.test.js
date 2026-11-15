@@ -18,6 +18,7 @@ const { createRemoteDesktop, SCRIPTS } = require(path.join(ISO.lib, 'remote-desk
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 
+const sha = (s) => require('crypto').createHash('sha256').update(Buffer.from(s, 'utf8')).digest('hex');
 const T0 = Date.UTC(2026, 10, 15, 14, 0, 0);
 const MIN = 60000;
 const SID = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-aaaaa';   // 43 chars like 32 random bytes in base64url
@@ -33,7 +34,8 @@ const USERS = {
 
 function rig(over = {}) {
   const st = { now: T0, timers: [], calls: [], logs: [], audits: [], settings: { desktop_who: 'admins', desktop_minutes: 30, desktop_address: '' }, enabled: true, tailnet: true,
-    mod: new Map(), endpoint: { port: 9971, servername: 'mesh.example', ca: 'CA-PEM' }, got: [], page: PAGE, script: 'console.log(1)', connectReply: null, openReply: null };
+    mod: new Map(), endpoint: { port: 9971, servername: 'mesh.example', ca: 'CA-PEM' }, got: [], page: PAGE, script: 'console.log(1)', connectReply: null, openReply: null,
+    demoted: [], gone: [], repeats: [] };
   let n = 0;
   const handlers = {
     computers_status: () => ({ computers: [{ nodeid: 'node//pc1', name: 'PC One', online: true }, { nodeid: 'node//pc2', name: 'PC Two', online: false }] }),
@@ -65,7 +67,10 @@ function rig(over = {}) {
       if (w === 'pending') return { user: USERS.owner, pendingTotp: true };
       return USERS[w] ? { user: USERS[w] } : {};
     },
-    isAdmin: (u) => u.role === 'admin', isOwner: (u) => u.id === 'u1',
+    isAdmin: (u) => u.role === 'admin' && !st.demoted.includes(u.id), isOwner: (u) => u.id === 'u1',
+    stillAdmin: (id) => !st.gone.includes(id),
+    scriptHashes: Object.fromEntries(Array.from(SCRIPTS).map((n) => [n, sha('console.log(1)')])),
+    setRepeat: (fn, ms) => { const t = { fn, ms }; st.repeats.push(t); return t; }, clearRepeat: () => {},
     tailnetOk: () => st.tailnet, enabled: () => st.enabled, settings: () => st.settings, readPage: () => st.page,
     log: (l) => st.logs.push(l), audit: (r) => st.audits.push(r), now: () => st.now,
     setTimer: (fn, ms) => { const t = { fn, ms, live: true }; st.timers.push(t); return t; }, clearTimer: (t) => { if (t) t.live = false; },
@@ -224,7 +229,7 @@ test('a hub restart: the list ends module sessions the hub does not know (reason
   const { rd, st } = rig();
   st.mod.set('lost', { session: 'lost', nodeid: 'node//pc1', name: 'PC One', who: { id: 'u1', name: 'Owner' }, start: T0 - MIN, until: T0 + 20 * MIN });
   const l = (await call(rd, { url: '/api/remote-desktop', who: 'owner' })).json();
-  assert.ok(st.calls.some((c) => c.tool === 'desktop_end' && c.args.reason === 'restart' && c.args.nodeid === 'node//pc1'));
+  assert.ok(st.calls.some((c) => c.tool === 'desktop_end' && c.args.reason === 'restart' && c.args.nodeid === 'node//pc1' && c.args.start === T0 - MIN), 'ended by computer and start');
   assert.strictEqual(l.computers[0].busy, null);
   assert.strictEqual(st.logs.length, 1); assert.match(st.logs[0], /^\[remote-desktop\] Owner \(u1\) PC One: .* \(restart\)$/);
   assert.strictEqual(st.audits.length, 1);
@@ -336,7 +341,7 @@ function makeCert() {
 const CERT = makeCert();
 
 /** A fake MeshCentral: answers the upgrade (101 or the given status) then echoes every byte upper-cased. */
-function fakeMesh(status = 101) {
+function fakeMesh(status = 101, extraHead = '') {
   const seen = { heads: [], data: [], conns: [] };
   const srv = tls.createServer({ key: CERT.key, cert: CERT.cert }, (c) => {
     seen.conns.push(c);
@@ -347,15 +352,15 @@ function fakeMesh(status = 101) {
       buf = Buffer.concat([buf, d]);
       const i = buf.indexOf('\r\n\r\n'); if (i < 0) return;
       seen.heads.push(buf.subarray(0, i).toString());
-      if (status === 101) { up = true; c.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: fakeaccept\r\n\r\nhello-from-mesh'); }
+      if (status === 101) { up = true; c.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: fakeaccept\r\n' + extraHead + '\r\nhello-from-mesh'); }
       else c.end(`HTTP/1.1 ${status} Nope\r\nContent-Length: 0\r\n\r\n`);
     });
   });
   return new Promise((res) => srv.listen(0, '127.0.0.1', () => res({ srv, seen, port: srv.address().port })));
 }
 
-async function relayRig(status, over = {}) {
-  const mesh = await fakeMesh(status);
+async function relayRig(status, over = {}, extraHead = '') {
+  const mesh = await fakeMesh(status, extraHead);
   const R = rig({ ...over });
   R.st.endpoint = { port: mesh.port, servername: 'mesh.example', ca: CERT.cert };
   const web = http.createServer((q, s) => { s.end('x'); });
@@ -500,7 +505,205 @@ test('upgrade: the desktop_address origin is an accepted Origin; a valid address
   } finally { await x.close(); }
 });
 
+// ── revocation, relay bound, script pins, 101 head, start-up cleanup ──────
+test('sweep: ends a session when the module is off ("disabled"), when desktop_who became owner and the opener is not the owner, or the opener is no longer an admin ("revoked")', async () => {
+  const cases = [
+    ['module off', (st) => { st.enabled = false; }, 'disabled'],
+    ['owner only now', (st) => { st.settings.desktop_who = 'owner'; }, 'revoked'],
+    ['no longer an admin', (st) => { st.gone.push('u2'); }, 'revoked'],
+  ];
+  for (const [label, change, reason] of cases) {
+    const { rd, st } = rig();
+    await open(rd, 'sam');
+    await rd.sweep();
+    assert.strictEqual(rd.sessions.size, 1, `${label}: nothing changed, the session stays`);
+    change(st);
+    await rd.sweep();
+    assert.strictEqual(rd.sessions.size, 0, label);
+    assert.ok(st.calls.some((c) => c.tool === 'desktop_end' && c.args.session === SID && c.args.reason === reason), `${label}: desktop_end ${reason}`);
+    assert.strictEqual(st.logs.length, 1, label); assert.match(st.logs[0], new RegExp(`\\(${reason}\\)$`));
+    assert.strictEqual(st.audits.length, 1);
+    assert.strictEqual(st.timers[0].live, false, 'the expiry timer is cancelled');
+    await rd.sweep();
+    assert.strictEqual(st.logs.length, 1, `${label}: a second sweep logs nothing more`);
+  }
+  // the owner's own session survives desktop_who "owner"
+  const own = rig(); await open(own.rd, 'owner'); own.st.settings.desktop_who = 'owner'; await own.rd.sweep();
+  assert.strictEqual(own.rd.sessions.size, 1);
+  // a standing check that throws closes the session (unknown standing is not trusted)
+  const thr = rig({ deps: { stillAdmin: () => { throw new Error('store'); } } }); await open(thr.rd, 'sam'); await thr.rd.sweep();
+  assert.strictEqual(thr.rd.sessions.size, 0);
+});
+
+test('sweep runs every 15 s on an injected timer', async () => {
+  const { rd, st } = rig();
+  assert.strictEqual(st.repeats.length, 1); assert.strictEqual(st.repeats[0].ms, 15000);
+  await open(rd, 'sam');
+  st.gone.push('u2');
+  st.repeats[0].fn();
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(rd.sessions.size, 0);
+  assert.strictEqual(typeof rd.close, 'function');
+});
+
+test('End works for the opener whose role no longer allows opening; nobody else, no token, no pending 2FA', async () => {
+  const { rd, st } = rig();
+  await open(rd, 'sam');
+  st.demoted.push('u2');
+  assert.strictEqual((await call(rd, { url: `/remote-desktop/${SID}/`, who: 'sam' })).res.code, 403, 'the page is no longer theirs');
+  assert.strictEqual((await open(rd, 'sam', 'node//pc2')).res.code, 403, 'and neither is opening');
+  assert.strictEqual((await call(rd, { method: 'POST', url: `/api/remote-desktop/${SID}/end`, who: 'ann' })).res.code, 403);
+  assert.strictEqual((await call(rd, { method: 'POST', url: `/api/remote-desktop/${SID}/end`, who: 'token' })).res.code, 403);
+  assert.strictEqual(rd.sessions.size, 1);
+  const e = await call(rd, { method: 'POST', url: `/api/remote-desktop/${SID}/end`, who: 'sam' });
+  assert.strictEqual(e.res.code, 200); assert.deepStrictEqual(e.json(), { ok: true });
+  assert.strictEqual(rd.sessions.size, 0); assert.strictEqual(st.logs.length, 1); assert.match(st.logs[0], /\(ended\)$/);
+});
+
+test('relay: a change during the awaits (desktop_who owner, opener demoted, module off) refuses the upgrade; nothing reaches MeshCentral and the slot is freed', { skip: !CERT && 'openssl not available' }, async () => {
+  for (const [tool, change] of [
+    ['desktop_endpoint', (st) => { st.settings.desktop_who = 'owner'; }],
+    ['desktop_connect', (st) => { st.settings.desktop_who = 'owner'; }],
+    ['desktop_endpoint', (st) => { st.demoted.push('u2'); }],
+    ['desktop_connect', (st) => { st.demoted.push('u2'); }],
+    ['desktop_connect', (st) => { st.enabled = false; }],
+  ]) {
+    const x = await relayRig(101, { callTool: async (t, a, s) => { if (t === tool && s.armed) change(s); } });
+    try {
+      await open(x.rd, 'sam');
+      x.st.armed = true;
+      const c = await wsClient(x.port, { url: `/remote-desktop/${SID}/meshrelay.ashx?id=tun12345`, headers: { ...SAME, 'x-who': 'sam' } });
+      await c.closedP;
+      assert.match(c.got, /^HTTP\/1\.1 (403|404) /, `${tool}: ${c.got.split('\r\n')[0]}`);
+      assert.ok(!c.got.includes('hello-from-mesh'));
+      assert.strictEqual(x.mesh.seen.conns.length, 0, `${tool}: no connection to MeshCentral`);
+      assert.strictEqual(x.rd.sessions.get(SID).relays, 0, 'the slot is freed');
+    } finally { await x.close(); }
+  }
+});
+
+test('relay: a session ended while desktop_connect is in flight is not served', { skip: !CERT && 'openssl not available' }, async () => {
+  let rdRef = null;
+  const x = await relayRig(101, { callTool: async (t) => { if (t === 'desktop_connect' && rdRef) await rdRef.sweep(); } });
+  rdRef = x.rd;
+  try {
+    await open(x.rd, 'owner');
+    x.st.gone.push('u1');
+    const c = await wsClient(x.port, { url: `/remote-desktop/${SID}/meshrelay.ashx?id=tun12345`, headers: SAME });
+    await c.closedP;
+    assert.match(c.got, /^HTTP\/1\.1 404 /);
+    assert.strictEqual(x.mesh.seen.conns.length, 0);
+  } finally { await x.close(); }
+});
+
+test('relay: a sweep closes an established relay (opener no longer an admin)', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'sam');
+    const c = await wsClient(x.port, { url: `/remote-desktop/${SID}/meshrelay.ashx?id=tun12345`, headers: { ...SAME, 'x-who': 'sam' } });
+    await until(() => c.got.includes('hello-from-mesh'));
+    x.st.gone.push('u2');
+    await x.rd.sweep();
+    await c.closedP;
+    await until(() => x.mesh.seen.conns.every((q) => q.destroyed));
+    assert.ok(x.st.calls.some((q) => q.tool === 'desktop_end' && q.args.reason === 'revoked'));
+    assert.strictEqual(x.st.logs.length, 1);
+  } finally { await x.close(); }
+});
+
+test('relay: at most 2 per session at once; the third gets 429 and nothing is asked of the module; every failure frees its slot', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101, { callTool: async (tool, a, s) => { if (s.failTool === tool) return 'broken'; } });
+  try {
+    await open(x.rd, 'owner');
+    const url = `/remote-desktop/${SID}/meshrelay.ashx?id=tun12345`;
+    x.st.failTool = 'desktop_connect';
+    for (let i = 0; i < 4; i++) { const f = await wsClient(x.port, { url, headers: SAME }); await f.closedP; assert.match(f.got, /^HTTP\/1\.1 502 /); }
+    assert.strictEqual(x.rd.sessions.get(SID).relays, 0, 'failed relays free their slot');
+    x.st.failTool = null;
+    const a = await wsClient(x.port, { url, headers: SAME }); await until(() => a.got.includes('hello-from-mesh'));
+    const b = await wsClient(x.port, { url, headers: SAME }); await until(() => b.got.includes('hello-from-mesh'));
+    const before = x.st.calls.length;
+    const third = await wsClient(x.port, { url, headers: SAME }); await third.closedP;
+    assert.match(third.got, /^HTTP\/1\.1 429 /);
+    assert.strictEqual(x.st.calls.length, before, 'nothing was sent to the module');
+    assert.strictEqual(x.mesh.seen.heads.length, 2);
+    a.sock.destroy();
+    await until(() => x.rd.sessions.get(SID).relays === 1);
+    const d = await wsClient(x.port, { url, headers: SAME }); await until(() => d.got.includes('hello-from-mesh'));
+    b.sock.destroy(); d.sock.destroy();
+  } finally { await x.close(); }
+});
+
+test('scripts: the three pins are MeshCentral 1.3.1\'s hashes; a script that differs is refused with 404 and one console line, never cached', async () => {
+  const { SCRIPT_SHA256 } = require(path.join(ISO.lib, 'remote-desktop'));
+  assert.deepStrictEqual(SCRIPT_SHA256, {
+    'common-0.0.1.js': '4ccd0253f97129d855ece6f68a4629bc4767fe3af33d0b61eeac73f5402db013',
+    'agent-redir-ws-0.1.1.js': '54911cffc1e7da5822e772339e79017c1265fa40413cac15134b23b7305a9d54',
+    'agent-desktop-0.0.2.js': '5df980270ebf68a74dca6e2a352dea6ab97cd16c6867d71a30effe2b79038d20',
+  });
+  let body = 'alert("swapped")';
+  const { rd, st } = rig({ deps: { httpsGet: async () => ({ status: 200, body }) } });
+  await open(rd, 'owner');
+  const url = `/remote-desktop/${SID}/scripts/common-0.0.1.js`;
+  const bad = await call(rd, { url, who: 'owner' });
+  assert.strictEqual(bad.res.code, 404); assert.ok(!bad.res.body.includes('swapped'));
+  assert.strictEqual(st.logs.length, 1); assert.match(st.logs[0], /common-0\.0\.1\.js/);
+  body = 'console.log(1)';
+  const good = await call(rd, { url, who: 'owner' });
+  assert.strictEqual(good.res.code, 200, 'the mismatch was never cached');
+  // with the real pins, a stand-in body is refused
+  const real = rig({ deps: { scriptHashes: undefined } });
+  await open(real.rd, 'owner');
+  assert.strictEqual((await call(real.rd, { url, who: 'owner' })).res.code, 404);
+});
+
+test('relay: MeshCentral\'s 101 head is rebuilt: only Upgrade, Connection, Sec-WebSocket-Accept/Extensions/Protocol reach the browser (no Set-Cookie)', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101, {}, 'Set-Cookie: meshauth=UPSTREAMSECRET; Path=/\r\nX-Leak: 1\r\nSec-WebSocket-Protocol: p1\r\nSec-WebSocket-Extensions: permessage-deflate\r\n');
+  try {
+    await open(x.rd, 'owner');
+    const c = await wsClient(x.port, { url: `/remote-desktop/${SID}/meshrelay.ashx?id=tun12345`, headers: SAME });
+    await until(() => c.got.includes('hello-from-mesh'));
+    const [head, rest] = c.got.split('\r\n\r\n');
+    const lines = head.split('\r\n');
+    assert.strictEqual(lines[0], 'HTTP/1.1 101 Switching Protocols');
+    assert.deepStrictEqual(lines.slice(1).map((l) => l.split(':')[0].toLowerCase()).sort(), ['connection', 'sec-websocket-accept', 'sec-websocket-extensions', 'sec-websocket-protocol', 'upgrade']);
+    assert.ok(!/set-cookie|UPSTREAMSECRET|x-leak/i.test(c.got));
+    assert.ok(lines.includes('Sec-WebSocket-Accept: fakeaccept'));
+    assert.strictEqual(rest, 'hello-from-mesh');
+    c.sock.destroy();
+  } finally { await x.close(); }
+});
+
+test('reconcile: ends module sessions the hub does not know (by computer and start, reason restart); keeps the hub\'s own; does nothing when off; never throws', async () => {
+  const { rd, st } = rig();
+  st.mod.set('lost', { session: 'lost', nodeid: 'node//pc2', name: 'PC Two', who: { id: 'u1', name: 'Owner' }, start: T0 - MIN, until: T0 + 20 * MIN });
+  await open(rd, 'owner');   // the hub's own session on pc1
+  await rd.reconcile();
+  const ends = st.calls.filter((c) => c.tool === 'desktop_end');
+  assert.deepStrictEqual(ends.map((c) => c.args), [{ nodeid: 'node//pc2', start: T0 - MIN, reason: 'restart' }]);
+  assert.ok(st.mod.has(SID), 'the hub\'s own session is untouched');
+  assert.strictEqual(st.logs.length, 1); assert.match(st.logs[0], /\(restart\)$/);
+  const off = rig(); off.st.enabled = false; off.st.mod.set('lost', { session: 'lost', nodeid: 'node//pc2', name: 'PC Two', who: { id: 'u1', name: 'Owner' }, start: T0, until: T0 + MIN });
+  await off.rd.reconcile(); assert.strictEqual(off.st.calls.length, 0);
+  const broken = rig({ callTool: async () => { throw new Error('down'); } });
+  await broken.rd.reconcile();
+  const junk = rig({ callTool: async () => 'nope' });
+  await junk.rd.reconcile();
+});
+
 // ── wiring (text checks, as test/ui-modules.test.js) ──────────────────────
+test('server.js wiring: stillAdmin reads the current account; sweeps after settings and enable/disable; one start-up reconcile 30 s after listening', () => {
+  const s = read('server.js');
+  assert.match(s, /stillAdmin: \(userId\) => \{[\s\S]*?hubAuth\.getUser\(String\(userId\)\)[\s\S]*?!u\.disabled && access\.isAdmin\(u\)/);
+  assert.match(s, /function sweepRemoteDesktop\(moduleId\) \{\s*if \(moduleId !== 'remote-computers' \|\| !_remoteDesktop\) return;/);
+  assert.match(s, /const saved = mods\.saveSettings\(id, b\.values \|\| \{\}\);\s*sweepRemoteDesktop\(id\);/);
+  assert.match(s, /const changed = mods\.setEnabled\(id, act === 'enable'\);\s*sweepRemoteDesktop\(id\);/);
+  const at = s.indexOf('server.listen(PORT, HOST, () => {');
+  const rec = s.indexOf('remoteDesktop().reconcile()');
+  assert.ok(at > 0 && rec > at, 'inside the listen callback');
+  assert.match(s.slice(rec, rec + 200), /\}, 30000\)\.unref\(\);/);
+});
+
 test('server.js wiring: lazy instance with the connector call, upgrade hook that closes every other socket, dispatch before the static files', () => {
   const s = read('server.js');
   assert.match(s, /function remoteDesktop\(\) \{\s*if \(!_remoteDesktop\)/);

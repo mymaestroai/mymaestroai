@@ -38,7 +38,9 @@
 <div id="scroller" class="fit"><canvas id="Desk" width="640" height="480"></canvas></div>
 <input id="kb" type="text" autocapitalize="off" autocomplete="off" autocorrect="off" inputmode="text" spellcheck="false">
 <script type="application/json" id="rd-boot">{}</script>
-<script>var urlargs = {};</script>
+<script>var urlargs = {};
+// MeshCentral's key handlers read a GLOBAL `desktop` (desktop.State); the page keeps it current below. A safe value until the first viewer exists.
+var desktop = { State: 0 };</script>
 <script src="scripts/common-0.0.1.js"></script><script src="scripts/agent-redir-ws-0.1.1.js"></script><script src="scripts/agent-desktop-0.0.2.js"></script>
 <script>
 (function () {
@@ -46,6 +48,8 @@
   try { boot = JSON.parse(document.getElementById('rd-boot').textContent) || {}; } catch (e) { boot = {}; }
   var $ = function (id) { return document.getElementById(id); };
   var live = true, desktop = null, tick = null;
+  // The viewer scripts read window.desktop (a bare global); keep it equal to the current viewer, or a harmless State 0 object when none.
+  function publish(d) { window.desktop = d || { State: 0 }; }
   var kb = $('kb'), canvas = $('Desk'), scroller = $('scroller'), bar = $('bar');
   $('name').textContent = boot.name || 'Computer';
   document.title = (boot.name || 'Desktop') + ' — My Maestro AI';
@@ -61,6 +65,7 @@
     live = false;
     clearInterval(tick);
     try { if (desktop) desktop.Stop(); } catch (e) {}
+    desktop = null; publish(null);
     scroller.style.display = 'none';
     $('ended').style.display = 'block';
     $('ended').textContent = why || 'The session has ended.';
@@ -79,7 +84,9 @@
   function start() {
     if (!live) return;
     try { if (desktop) desktop.Stop(); } catch (e) {}
+    publish(null);
     desktop = CreateAgentRedirect({ send: function () {} }, CreateAgentRemoteDesktop('Desk'), '', '', '', '/');
+    publish(desktop);
     desktop.m.UseExtendedKeyFlag = true;
     desktop.m.ImageType = 1; desktop.m.CompressionLevel = 40; desktop.m.ScalingLevel = 1024; desktop.m.FrameRateTimer = 50;
     desktop.onStateChanged = function (o, st) {

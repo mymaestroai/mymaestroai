@@ -327,6 +327,13 @@ function remoteDesktop() {
       identify: identifyReq,
       isAdmin: (u) => access.isAdmin(u),
       isOwner: (u) => hubAuth.isOwner(u),
+      // The current account record, not the one seen when the session opened: it still exists, is not disabled and is still an admin.
+      // (The legacy single-password sign-in has no account record: it counts while the hub has no accounts.)
+      stillAdmin: (userId) => {
+        if (String(userId) === 'legacy') return !hubAuth.hasUsers();
+        const u = hubAuth.getUser(String(userId));
+        return !!u && !u.disabled && access.isAdmin(u);
+      },
       tailnetOk: (req) => isTailnetUserAllowed(req, PORT),
       enabled: () => { try { return !!modsOf().detail('remote-computers').enabled; } catch { return false; } },
       settings: () => { try { return modsOf().detail('remote-computers').settings || {}; } catch { return {}; } },
@@ -342,6 +349,11 @@ function remoteDesktop() {
     });
   }
   return _remoteDesktop;
+}
+/** Ends desktop sessions that must no longer run, right after a change to the module (only when the desktop instance exists). Never throws. */
+function sweepRemoteDesktop(moduleId) {
+  if (moduleId !== 'remote-computers' || !_remoteDesktop) return;
+  try { _remoteDesktop.sweep().catch(() => {}); } catch { /* the 15 s sweep follows */ }
 }
 // Websocket upgrades: only the desktop relay is answered; every other path keeps today's behaviour (the socket is closed).
 server.on('upgrade', (req, socket, head) => {
@@ -2003,9 +2015,15 @@ async function handleHttpRequest(req, res) {
                   }
                 }
               }
-              return jsonResponse(res, 200, { ok: true, module: mods.saveSettings(id, b.values || {}) });
+              const saved = mods.saveSettings(id, b.values || {});
+              sweepRemoteDesktop(id);
+              return jsonResponse(res, 200, { ok: true, module: saved });
             }
-            if (act === 'enable' || act === 'disable') return jsonResponse(res, 200, { ok: true, module: mods.setEnabled(id, act === 'enable') });
+            if (act === 'enable' || act === 'disable') {
+              const changed = mods.setEnabled(id, act === 'enable');
+              sweepRemoteDesktop(id);
+              return jsonResponse(res, 200, { ok: true, module: changed });
+            }
           }
         }
         return jsonResponse(res, 404, { error: 'unknown modules route' });
@@ -3377,6 +3395,14 @@ server.listen(PORT, HOST, () => {
   try { require('./lib/transcript').getTranscript().migrate(); } catch (e) { console.error('[transcript] split not run:', e.message); }
   // A hub restart during the voice download leaves the setting on and nothing installing: pick the install up again.
   setTimeout(() => { try { require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
+  // After a restart the Remote computers module may still hold desktop sessions this hub no longer knows; they block agent input until ended.
+  // Once, 30 s after the start (the module is up by then), only while the module is on; never throws.
+  setTimeout(() => {
+    try {
+      if (!require('./lib/modules').getModules().detail('remote-computers').enabled) return;
+      remoteDesktop().reconcile().catch(() => {});
+    } catch { /* the Computers box ends them when it is opened */ }
+  }, 30000).unref();
   // A restored setup that has run for 30 s counts as healthy: its 7-day undo clock starts (lib/backup/apply).
   setTimeout(() => { try { if (require('./lib/backup/apply').markHealthy({ root: __dirname })) console.log('[restore] the restored setup started fine; it can be undone for 7 days'); } catch (e) { console.error('[restore]', e.message); } }, 30000).unref();
   // once a day: set-aside copies past their 7 days, a checked restore nobody confirmed, old uploads (not only at a start)

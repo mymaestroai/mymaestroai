@@ -58,7 +58,7 @@ const TOOLS = [
   { name: 'desktop_open', description: 'Used by the hub only. Opens a person\'s desktop session on one computer (one session per computer).', inputSchema: obj({ nodeid: { type: 'string' }, who: obj({ id: { type: 'string', maxLength: 100 }, name: { type: 'string', maxLength: 100 } }, ['id', 'name']), minutes: { type: 'integer', minimum: 5, maximum: 120 } }, ['nodeid', 'who']) },
   { name: 'desktop_endpoint', description: 'Used by the hub only. Where the desktop viewer reaches the server: port, certificate name and the certificate to trust.', inputSchema: obj({ session: { type: 'string' } }, ['session']) },
   { name: 'desktop_connect', description: 'Used by the hub only. Starts the desktop tunnel of a live session and returns the query for the viewer\'s connection.', inputSchema: obj({ session: { type: 'string' }, tunnelid: { type: 'string', pattern: '^[A-Za-z0-9]{6,64}$' } }, ['session', 'tunnelid']) },
-  { name: 'desktop_end', description: 'Used by the hub only. Ends a desktop session: by its session, or by the computer (nodeid) when the hub no longer knows the session, after a restart.', inputSchema: obj({ session: { type: 'string' }, nodeid: { type: 'string', maxLength: 300 }, reason: { type: 'string', maxLength: 40 } }) },
+  { name: 'desktop_end', description: 'Used by the hub only. Ends a desktop session: by its session, or by the computer (nodeid) and the start time of the session when the hub no longer knows the session, after a restart.', inputSchema: obj({ session: { type: 'string' }, nodeid: { type: 'string', maxLength: 300 }, start: { type: 'number' }, reason: { type: 'string', maxLength: 40 } }) },
   { name: 'health', description: 'Whether the server runs and its device group exists. Used by the nightly check.', inputSchema: obj() },
   { name: 'start', description: 'Starts the server (and makes it ready) if it is not running. Used by the setup only.', inputSchema: obj() },
   { name: 'installer_link', description: 'A one-time link to download the helper for a computer. Used by the setup only.', inputSchema: obj() },
@@ -693,7 +693,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
 
 
   // ── the open desktop: sessions, the person's account, the tunnel (hub-only tools: every answer is JSON, a failure is {"error": "..."}) ──
-  const desktop = deps.desktop || createDesktop({ file: home ? path.join(home, DESKTOP_FILE) : '', now });
+  const desktop = deps.desktop || createDesktop({ file: home ? path.join(home, DESKTOP_FILE) : '', now, log: (m) => log(m) });
   const desktopBusyText = (r) => `A person is using this computer's desktop until ${hhmm(r.until)}. Try again after that.`;
   const desktopRefuse = (pc) => { const r = desktop.forNode(pc.nodeid); if (r) throw new ToolError(desktopBusyText(r)); };
   const personStore = deps.personStore || { read: () => (mesh ? mesh.personAccount() : null), write: (pass) => mesh.savePersonAccount(pass) };
@@ -775,7 +775,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const reason = typeof a.reason === 'string' ? clean(a.reason, 40) : '';
     let r;
     if (a.session !== undefined) r = desktop.end(checkSession(a.session));
-    else if (typeof a.nodeid === 'string' && a.nodeid) r = desktop.endNode(a.nodeid);
+    else if (typeof a.nodeid === 'string' && a.nodeid) r = desktop.endNode(a.nodeid, a.start);
     else throw new DesktopError('session: give the session or the computer.');
     log(`desktop session on ${r.name} ended${reason ? ` (${reason})` : ''}`);
     return { nodeid: r.nodeid, name: r.name, who: r.who, start: r.start, until: r.until, ended: r.ended };

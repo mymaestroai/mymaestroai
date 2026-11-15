@@ -361,7 +361,7 @@ test('desktop_end: returns the session and frees the computer; a second end is a
 test('desktop_end by the computer alone (the hub restarted and no longer knows the session id); computers_status carries the node id', async () => {
   const t = setup();
   const r = await open(t);
-  const e = await t.call('desktop_end', { nodeid: NODE_A, reason: 'restart' });
+  const e = await t.call('desktop_end', { nodeid: NODE_A, start: START, reason: 'restart' });
   assert.strictEqual(e.nodeid, NODE_A); assert.strictEqual(e.name, 'demo-pc');
   assert.deepStrictEqual((await t.call('desktop_sessions', {})).sessions, []);
   assert.match((await t.call('desktop_end', { nodeid: NODE_A })).error, /not open/);
@@ -407,9 +407,39 @@ test('a module restart keeps the sessions (and the lock)', async () => {
   assert.match((await open(again, { who: { id: 'u2', name: 'Pat' } })).error, /in use by Sam until 09:35/);
   assert.deepStrictEqual(await again.call('desktop_endpoint', { session: r.session }), { port: 9971, servername: 'hub.example.ts.net', ca: 'CA-PEM' });
   assert.ok((await again.call('desktop_connect', { session: r.session, tunnelid: 'abcdef' })).query, 'the person connection is made again after a restart');
-  // a damaged file means no sessions, never a crash
+  // a damaged file never crashes, and the locks already known stay (fail closed)
   fs.writeFileSync(path.join(first.home, 'desktop-sessions.json'), '{ not json');
-  assert.deepStrictEqual((await again.call('desktop_sessions', {})).sessions, []);
+  assert.deepStrictEqual((await again.call('desktop_sessions', {})).sessions.map((s) => s.name), ['demo-pc']);
+});
+
+test('desktop_end by the computer needs the start of the session: a newer session on the same computer is never ended by an old one (restart race)', async () => {
+  const t = setup();
+  const r = await open(t);
+  const wrong = await t.call('desktop_end', { nodeid: NODE_A, start: START - 1000, reason: 'restart' });
+  assert.match(wrong.error, /That desktop session is not open\./);
+  assert.match((await t.call('desktop_end', { nodeid: NODE_A, reason: 'restart' })).error, /not open/, 'no start: no end');
+  assert.strictEqual((await t.call('desktop_sessions', {})).sessions.length, 1, 'the session is still there');
+  assert.ok((await t.call('desktop_endpoint', { session: r.session })).port);
+  assert.strictEqual((await t.call('desktop_end', { nodeid: NODE_A, start: START, reason: 'restart' })).nodeid, NODE_A);
+});
+
+test('desktop store: a sessions file that cannot be read keeps the last known locks (logged once); a missing file is empty', () => {
+  const file = path.join(tmp(), 'desktop-sessions.json');
+  let fail = null;
+  const logs = [];
+  const d = createDesktop({ file, now: () => START, log: (m) => logs.push(m), readFile: (f) => { if (fail) throw fail; return fs.readFileSync(f, 'utf8'); } });
+  assert.deepStrictEqual(d.list(), [], 'a missing file is empty');
+  const rec = d.open({ nodeid: NODE_A, name: 'demo-pc', who: SAM, minutes: 10 });
+  fail = Object.assign(new Error('no access'), { code: 'EACCES' });
+  assert.deepStrictEqual(d.list().map((r) => r.session), [rec.session], 'the live lock survives an unreadable file');
+  assert.throws(() => d.open({ nodeid: NODE_A, name: 'demo-pc', who: { id: 'u2', name: 'Pat' }, minutes: 10 }), /in use by Sam/);
+  d.list();
+  assert.strictEqual(logs.length, 1, 'logged once');
+  fail = null;
+  fs.writeFileSync(file, '{ not json');
+  assert.deepStrictEqual(d.list().map((r) => r.session), [rec.session], 'a damaged file too');
+  fail = Object.assign(new Error('gone'), { code: 'ENOENT' });
+  assert.deepStrictEqual(d.list(), [], 'a file that is gone is empty');
 });
 
 test('desktop store: the session file is only what this module wrote (no id outside the format, no half records)', () => {

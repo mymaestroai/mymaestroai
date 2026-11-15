@@ -17,7 +17,8 @@ test('modules.html: Computers box only for remote-computers, only when enabled',
 
 test('modules.html: uses the contract API paths and navigates this tab to the returned url', () => {
   assert.match(modules, /api\('GET', '\/api\/remote-desktop'\)/);
-  assert.match(modules, /api\('POST', '\/api\/remote-desktop\/open', \{ nodeid: c\.nodeid \}\)/);
+  assert.match(modules, /api\('POST', '\/api\/remote-desktop\/open', \{ nodeid \}\)/);
+  assert.match(modules, /data-nodeid="\$\{esc\(c\.nodeid\)\}" onclick="deskOpen\(this\)"/);
   assert.match(modules, /location\.assign\(r\.url\)/);
   assert.match(modules, /setMsg\('err', e\.message\)/);
 });
@@ -84,7 +85,8 @@ test('modules.html: the box runs correctly in a vm (states, escaping, navigation
   allowed = true;
   t.setCurrent(m);
   await t.loadDesktopBox();
-  await t.deskOpen(0, null);
+  const nid = els['desk-list'].innerHTML.match(/data-nodeid="([^"]*)"/)[1];
+  await t.deskOpen({ getAttribute: (k) => (k === 'data-nodeid' ? nid : null), disabled: false });
   assert.deepEqual(calls.filter(c => c[0] === 'POST')[0], ['POST', '/api/remote-desktop/open', JSON.stringify({ nodeid: 'n1' })]);
   assert.equal(nav, '/remote-desktop/s1/');
 });
@@ -176,4 +178,97 @@ test('remote-desktop.html runs: stops at until, state line, Reconnect only while
   assert.equal(r.els.reconnect.style.display, 'none');
   r.els.reconnect.listeners.click[0]();
   assert.equal(r.log.starts.length, n, 'nothing reconnects after the end');
+});
+
+test('modules.html: a stale list response changes nothing, and the click posts the visible row\'s nodeid', async () => {
+  const src = modules.match(/<script>([\s\S]*)<\/script>/)[1];
+  const els = {};
+  const el = (id) => els[id] || (els[id] = { id, innerHTML: '', textContent: '', className: '', classList: { add() {}, contains: () => true }, disabled: false });
+  const posts = [];
+  const pending = [];
+  const sandbox = {
+    document: { getElementById: el, addEventListener() {}, hidden: false },
+    location: { origin: 'https://hub.example.ts.net', search: '', hash: '', pathname: '/modules', assign() {} },
+    fetch: (url, opt) => {
+      if (opt.method === 'POST') { posts.push(JSON.parse(opt.body).nodeid); return Promise.resolve({ ok: true, json: async () => ({ url: '/remote-desktop/s/' }) }); }
+      return new Promise((res) => pending.push((computers) => res({ ok: true, json: async () => ({ allowed: true, computers }) })));
+    },
+    URLSearchParams, URL, history: { replaceState() {} }, localStorage: { getItem: () => null, setItem() {} }, setTimeout, clearTimeout, setInterval, clearInterval, console, Date, JSON, Math, String, Number, isNaN, Error,
+  };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(src + '\n;this.__t = { setCurrent(m){ current = m; selected = null; }, setSelected(v){ selected = v; }, loadDesktopBox, deskOpen };', sandbox);
+  const t = sandbox.__t;
+  const m = { id: 'remote-computers', enabled: true, settings: {}, finishedAt: 1, steps: [], agents: [], leads: [], manifest: {}, summary: 's', state: 'ready' };
+  t.setCurrent(m);
+  const row = (id, name) => ({ nodeid: id, name, online: true, busy: null });
+  const base = pending.length;   // requests the page itself made while loading
+  const older = t.loadDesktopBox();   // request 1 (slow)
+  const newer = t.loadDesktopBox();   // request 2 (fast)
+  pending[base + 1]([row('B1', 'second')]);
+  await newer;
+  pending[base]([row('A1', 'first'), row('A2', 'other')]);   // the older response arrives last
+  await older;
+  const html = els['desk-list'].innerHTML;
+  assert.ok(html.includes('second') && !html.includes('first'), 'old response did not repaint');
+  const button = { getAttribute: (k) => (k === 'data-nodeid' ? html.match(/data-nodeid="([^"]*)"/)[1] : null), disabled: false };
+  await t.deskOpen(button);
+  assert.deepEqual(posts, ['B1']);
+  // A response that lands after the panel moved on paints nothing.
+  els['desk-list'].innerHTML = 'kept';
+  const late = t.loadDesktopBox();
+  t.setSelected('some-step');
+  pending[base + 2]([row('C1', 'third')]);
+  await late;
+  assert.equal(els['desk-list'].innerHTML, 'kept');
+  // Hostile nodeids are escaped in the attribute.
+  t.setSelected(null);
+  const hostile = t.loadDesktopBox();
+  pending[base + 3]([row('x"><img src=1>', 'h')]);
+  await hostile;
+  assert.ok(!els['desk-list'].innerHTML.includes('<img'));
+});
+
+test('remote-desktop.html with the REAL MeshCentral viewer scripts: a key press reaches the key message, no ReferenceError, safe after stop', async (t) => {
+  const dir = '/opt/mymaestro-remote/runtime/node_modules/meshcentral/public/scripts/';
+  const files = ['common-0.0.1.js', 'agent-redir-ws-0.1.1.js', 'agent-desktop-0.0.2.js'].map(n => dir + n);
+  if (!files.every(f => fs.existsSync(f))) return t.skip('MeshCentral viewer scripts are not installed here');
+  const src = viewer.match(/<script>\n\(function[\s\S]*?<\/script>/)[0].replace(/^<script>|<\/script>$/g, '');
+  const pre = viewer.match(/<script>(var urlargs = \{\};[\s\S]*?)<\/script>/)[1];
+  const els = {};
+  const mk = (id) => ({ id, style: {}, textContent: '', disabled: false, value: '', offsetHeight: 40, listeners: {}, classList: { toggle() {}, add() {}, remove() {} },
+    addEventListener(n, f) { (this.listeners[n] = this.listeners[n] || []).push(f); }, setPointerCapture() {}, focus() {}, blur() {},
+    getContext: () => new Proxy({}, { get: () => () => {} }), width: 640, height: 480 });
+  const el = (id) => els[id] || (els[id] = mk(id));
+  el('rd-boot').textContent = JSON.stringify({ nodeid: 'n', name: 'pc', until: Date.now() + 600000, endUrl: '/e' });
+  const sandbox = { console, Date, JSON, Math, Number, isNaN, String, Uint8Array, Array, Object, Error, parseInt, setInterval, clearInterval, setTimeout, clearTimeout,
+    navigator: { platform: 'Linux' }, location: { protocol: 'https:', host: 'h', pathname: '/remote-desktop/s/' }, WebSocket: Object.assign(function () { this.readyState = 0; this.close = () => {}; this.send = () => {}; }, { OPEN: 1 }), fetch: () => Promise.resolve({ ok: true }) };
+  sandbox.window = sandbox; sandbox.addEventListener = () => {};
+  sandbox.document = { getElementById: el, addEventListener(n, f) { (el('doc').listeners[n] = el('doc').listeners[n] || []).push(f); }, querySelector: () => ({ setAttribute() {} }), title: '', activeElement: null };
+  vm.createContext(sandbox);
+  vm.runInContext(pre, sandbox);
+  for (const f of files) vm.runInContext(fs.readFileSync(f, 'utf8'), sandbox, { filename: f });
+  vm.runInContext(src, sandbox);
+  const keydown = () => el('doc').listeners.keydown[0]({ keyCode: 65, code: 'KeyA', key: 'a', ctrlKey: true, target: null, preventDefault() {}, stopPropagation() {} });
+  const first = vm.runInContext('desktop', sandbox);
+  assert.ok(first && first.m && typeof first.Start === 'function', 'global desktop is the current viewer');
+  assert.doesNotThrow(keydown, 'key before connect');
+  const sent = [];
+  first.send = (x) => sent.push(x);
+  first.State = 3; first.m.State = 3;
+  assert.doesNotThrow(keydown);
+  assert.ok(sent.length >= 1 && sent[0].charCodeAt(1) === first.m.InputType.KEY, 'a key message was sent');
+  // Reconnect makes a new viewer; the global follows it.
+  first.State = 0; first.onStateChanged(first, 0);
+  els.reconnect.listeners.click[0]();
+  const second = vm.runInContext('desktop', sandbox);
+  assert.notEqual(second, first);
+  // After the end, a late key does nothing and does not throw.
+  els.end.listeners.click[0]();
+  await new Promise(res => setImmediate(res));
+  assert.equal(els.ended.style.display, 'block', 'the session stopped');
+  assert.doesNotThrow(() => { for (const n of ['keydown', 'keyup', 'keypress']) el('doc').listeners[n][0]({ keyCode: 65, code: 'KeyA', key: 'a', target: null, preventDefault() {}, stopPropagation() {} }); });
+  assert.doesNotThrow(() => vm.runInContext('desktop.State', sandbox));
+  const x = sandbox.window.desktop;
+  assert.equal(x.State, 0);
 });
