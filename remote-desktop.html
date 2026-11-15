@@ -274,14 +274,16 @@ var rdView = (function () {
     endAll();
     try { if (desktop && desktop.m.handleReleaseKeys) desktop.m.handleReleaseKeys(); } catch (x) {}
   }
-  // Leaving and coming back. Closing the page (or the tab/app being discarded) says End, so the computer is not locked for the rest of
-  // the 30 minutes; the hub also ends a session that has had no connection for a minute. An app switch (visibilitychange) never ends it.
+  // Leaving and coming back. Closing the page (or the tab/app being discarded) says Leave, so the computer is not locked for the rest of
+  // the 30 minutes (the hub ends the session 10 s after the last connection closes); the hub also ends a session that has had no connection for a minute. An app switch (visibilitychange) never ends it.
   function sessionLive() { return live && Number(boot.until) > Date.now(); }
   window.addEventListener('pagehide', function (e) {
     if ((e && e.persisted === true) || !sessionLive()) return;   // back/forward cache: the page may return, the hub's grace covers it
+    // "Leave", not End: a reload or a second viewer of the same session must not cut it; the hub ends it after a short grace if nobody returns.
+    var leaveUrl = boot.leaveUrl || String(boot.endUrl || '').replace(/\/end$/, '/leave');
     var sent = false;
-    try { if (typeof navigator !== 'undefined' && navigator.sendBeacon) sent = !!navigator.sendBeacon(boot.endUrl); } catch (x) { sent = false; }
-    if (!sent) { try { fetch(boot.endUrl, { method: 'POST', credentials: 'include', keepalive: true }).then(function () {}, function () {}); } catch (x) {} }
+    try { if (typeof navigator !== 'undefined' && navigator.sendBeacon) sent = !!navigator.sendBeacon(leaveUrl); } catch (x) { sent = false; }
+    if (!sent) { try { fetch(leaveUrl, { method: 'POST', credentials: 'include', keepalive: true }).then(function () {}, function () {}); } catch (x) {} }
   });
   // Back on the page (or restored from the cache) with the connection gone: connect again while the hub still keeps the session.
   // At most 2 automatic restarts in 10 s (a session that has ended fails at once): after that the Reconnect button is the way.

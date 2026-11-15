@@ -101,6 +101,7 @@ test('every route refuses: no sign-in, a half-signed-in 2FA session, a token, th
     { method: 'GET', url: '/api/remote-desktop' },
     { method: 'POST', url: '/api/remote-desktop/open', body: { nodeid: 'node//pc1' } },
     { method: 'POST', url: `/api/remote-desktop/${SID}/end` },
+    { method: 'POST', url: `/api/remote-desktop/${SID}/leave` },
     { method: 'GET', url: `/remote-desktop/${SID}/` },
     { method: 'GET', url: `/remote-desktop/${SID}/scripts/common-0.0.1.js` },
   ];
@@ -295,7 +296,7 @@ test('the page: boot JSON injected with every "<" escaped; a hostile computer na
   assert.ok(m);
   assert.ok(!m[1].includes('<'), 'no raw < inside the boot JSON');
   assert.ok(m[1].includes('\\u003c/script>'));
-  assert.deepStrictEqual(JSON.parse(m[1]), { session: SID, nodeid: 'node//pc1', name: '</script><img src=x onerror=1>$&', until: T0 + 30 * MIN, endUrl: `/api/remote-desktop/${SID}/end` });
+  assert.deepStrictEqual(JSON.parse(m[1]), { session: SID, nodeid: 'node//pc1', name: '</script><img src=x onerror=1>$&', until: T0 + 30 * MIN, endUrl: `/api/remote-desktop/${SID}/end`, leaveUrl: `/api/remote-desktop/${SID}/leave` });
   assert.ok(!p.res.body.includes('onerror=1>$&</script>') && !p.res.body.includes('<img'));
   assert.strictEqual(p.res.body.split('rd-boot').length, 2);
   st.page = '<html>no marker</html>';
@@ -882,4 +883,115 @@ test('grace: the 30-minute expiry still ends a session that keeps its relay with
     assert.strictEqual(ended(x.st, 'left').length, 0);
     assert.strictEqual(x.st.logs.length, 1); assert.match(x.st.logs[0], /\(time\)$/);
   } finally { await x.close(); }
+});
+
+// ── leave: the page is going away (closed or reloaded); not an End ──
+const LEAVE = `/api/remote-desktop/${SID}/leave`;
+const leave = (rd, who = 'owner') => call(rd, { method: 'POST', url: LEAVE, who });
+
+test('leave: with no relay the session ends as "left" after 10 s, not 60 s (one log line); the never-loaded grace is replaced', async () => {
+  const { rd, st } = rig();
+  await open(rd, 'owner');
+  assert.strictEqual(graceTimers(st, 120000).length, 1);
+  const r = await leave(rd);
+  assert.strictEqual(r.res.code, 200); assert.deepStrictEqual(r.json(), { ok: true });
+  assert.strictEqual(graceTimers(st, 120000).length, 0, 'the long grace is cleared');
+  assert.strictEqual(graceTimers(st, 60000).length, 0);
+  assert.strictEqual(graceTimers(st, 10000).length, 1);
+  assert.strictEqual(rd.sessions.size, 1, 'not ended by the leave itself');
+  assert.strictEqual(ended(st, 'ended').length, 0);
+  st.now = T0 + 10000;
+  const g = graceTimers(st, 10000)[0]; g.fn(); g.live = false;
+  await new Promise((q) => setImmediate(q));
+  assert.strictEqual(ended(st, 'left').length, 1); assert.strictEqual(rd.sessions.size, 0);
+  assert.strictEqual(st.logs.length, 1); assert.match(st.logs[0], /\(left\)$/);
+  assert.strictEqual(st.audits.length, 1);
+});
+
+test('leave: leaveSoonMs is injectable; a second leave arms nothing more', async () => {
+  const { rd, st } = rig({ deps: { leaveSoonMs: 3000 } });
+  await open(rd, 'owner');
+  await leave(rd); await leave(rd);
+  assert.strictEqual(st.timers.filter((t) => t.live && t.ms === 3000).length, 1);
+});
+
+test('leave then a reconnect within 10 s (a reload) keeps the session', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const a = await connected(x);
+    a.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    await leave(x.rd);
+    assert.strictEqual(graceTimers(x.st, 60000).length, 0, 'the 60 s grace is replaced');
+    const soon = graceTimers(x.st, 10000)[0]; assert.ok(soon);
+    const b = await connected(x);
+    assert.strictEqual(soon.live, false, 'the new page connecting clears it');
+    soon.fn();   // even a timer that slipped through does nothing while a relay is up
+    await new Promise((q) => setTimeout(q, 30));
+    assert.strictEqual(x.rd.sessions.size, 1); assert.strictEqual(ended(x.st, 'left').length, 0); assert.strictEqual(x.st.logs.length, 0);
+    b.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0, 'the leave mark is gone: a later close gets the normal grace');
+  } finally { await x.close(); }
+});
+
+test('leave while another viewer\'s relay stays up ends nothing; when that relay later closes the normal 60 s grace applies', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const a = await connected(x); const b = await connected(x);
+    await leave(x.rd);
+    assert.strictEqual(x.rd.sessions.size, 1);
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0, 'relays remain: no grace yet');
+    a.sock.destroy();   // the leaving page's relay closes; the other viewer stays
+    await until(() => x.rd.sessions.get(SID).relays === 1);
+    await new Promise((q) => setTimeout(q, 30));
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0); assert.strictEqual(graceTimers(x.st, 60000).length, 0);
+    assert.strictEqual(ended(x.st, 'left').length, 0);
+    b.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0, 'normal grace, not the short one');
+  } finally { await x.close(); }
+});
+
+test('leave arriving before the leaving page\'s own relay closes: the 10 s grace arms when it closes', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const a = await connected(x);
+    await leave(x.rd);
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0); assert.strictEqual(x.rd.sessions.size, 1);
+    a.sock.destroy();
+    await until(() => graceTimers(x.st, 10000).length === 1);
+    assert.strictEqual(graceTimers(x.st, 60000).length, 0);
+    x.st.now = T0 + 10000;
+    const g = graceTimers(x.st, 10000)[0]; g.fn(); g.live = false;
+    await until(() => ended(x.st, 'left').length === 1);
+    assert.strictEqual(x.st.logs.length, 1);
+  } finally { await x.close(); }
+});
+
+test('leave: another person\'s, an unknown, a malformed and an ended session are 404; a token or the service is refused like End; a GET is not found; End is unchanged', async () => {
+  const { rd, st } = rig();
+  await open(rd, 'owner');
+  const timers = st.timers.length;
+  assert.strictEqual((await leave(rd, 'sam')).res.code, 404);
+  assert.strictEqual((await call(rd, { method: 'POST', url: `/api/remote-desktop/${SID2}/leave`, who: 'owner' })).res.code, 404);
+  assert.strictEqual((await call(rd, { method: 'POST', url: '/api/remote-desktop/short/leave', who: 'owner' })).res.code, 404);
+  for (const who of ['token', 'service', 'ann']) assert.strictEqual((await leave(rd, who)).res.code, 403, who);
+  assert.strictEqual((await leave(rd, 'pending')).res.code, 401);
+  assert.strictEqual((await call(rd, { method: 'POST', url: LEAVE })).res.code, 401, 'signed out');
+  assert.strictEqual((await call(rd, { url: LEAVE, who: 'owner' })).res.code, 404, 'GET');
+  assert.strictEqual(st.timers.length, timers, 'no refused leave arms anything');
+  assert.strictEqual(rd.sessions.size, 1);
+  // the opener whose role no longer allows opening may still leave
+  st.demoted.push('u1');
+  assert.strictEqual((await leave(rd, 'owner')).res.code, 200);
+  st.demoted.length = 0;
+  // End still ends at once
+  const e = await call(rd, { method: 'POST', url: `/api/remote-desktop/${SID}/end`, who: 'owner' });
+  assert.strictEqual(e.res.code, 200); assert.strictEqual(rd.sessions.size, 0);
+  assert.strictEqual(ended(st, 'ended').length, 1); assert.match(st.logs[0], /\(ended\)$/);
+  assert.strictEqual((await leave(rd)).res.code, 404, 'after the end');
 });

@@ -287,13 +287,13 @@ const beaconRig = (over = {}) => { const beacons = []; const navigator = { sendB
 
 test('remote-desktop.html: pagehide that is not a cache entry sends End once with sendBeacon; nothing for persisted, an ended or an expired session', async () => {
   const { beacons, navigator } = beaconRig();
-  const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end' }, { navigator });
+  const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end', leaveUrl: '/api/remote-desktop/s/leave' }, { navigator });
   r.fireWin('pagehide', { persisted: true });
   assert.equal(beacons.length, 0, 'back/forward cache: the hub grace covers it');
   r.vis('hidden');
   assert.equal(beacons.length, 0, 'an app switch never ends the session');
   r.fireWin('pagehide', { persisted: false });
-  assert.deepEqual(beacons.map(b => b[0]), ['/api/remote-desktop/s/end']);
+  assert.deepEqual(beacons.map(b => b[0]), ['/api/remote-desktop/s/leave'], 'the leave URL, never the end URL');
   assert.equal(r.log.fetches.length, 0, 'no fetch when the beacon was queued');
   // already ended (the End button): nothing more
   const e = beaconRig();
@@ -311,12 +311,25 @@ test('remote-desktop.html: pagehide that is not a cache entry sends End once wit
 
 test('remote-desktop.html: pagehide falls back to fetch with keepalive when sendBeacon is missing or refuses', () => {
   for (const navigator of [{}, beaconRig({ beaconOk: false }).navigator, undefined]) {
-    const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end' }, { navigator });
+    const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end', leaveUrl: '/api/remote-desktop/s/leave' }, { navigator });
     r.fireWin('pagehide', { persisted: false });
     assert.equal(r.log.fetches.length, 1);
-    assert.equal(r.log.fetches[0][0], '/api/remote-desktop/s/end');
+    assert.equal(r.log.fetches[0][0], '/api/remote-desktop/s/leave');
     assert.deepEqual({ ...r.log.fetches[0][1] }, { method: 'POST', credentials: 'include', keepalive: true });
   }
+});
+
+test('remote-desktop.html: pagehide without boot.leaveUrl derives it from endUrl (/end -> /leave); the End button still posts endUrl', async () => {
+  const { beacons, navigator } = beaconRig();
+  const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end' }, { navigator });
+  r.fireWin('pagehide', { persisted: false });
+  assert.deepEqual(beacons.map(b => b[0]), ['/api/remote-desktop/s/leave']);
+  const f = beaconRig({ beaconOk: false });
+  const r2 = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end', leaveUrl: '/api/remote-desktop/s/leave' }, { navigator: f.navigator });
+  r2.els.end.listeners.click[0](); await settle();
+  assert.equal(r2.log.fetches.length, 1);
+  assert.equal(r2.log.fetches[0][0], '/api/remote-desktop/s/end', 'End posts the end URL');
+  assert.equal(f.beacons.length, 0);
 });
 
 test('remote-desktop.html: back on the page with the viewer disconnected starts again while live; never after End or the end time; never while connected', async () => {
