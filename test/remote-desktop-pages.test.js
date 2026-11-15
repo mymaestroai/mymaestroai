@@ -123,17 +123,18 @@ function runViewer(boot, opts = {}) {
     addEventListener(n, f) { (this.listeners[n] = this.listeners[n] || []).push(f); }, setPointerCapture() {}, focus() {}, blur() {} });
   const el = (id) => els[id] || (els[id] = mk(id));
   el('rd-boot').textContent = JSON.stringify(boot);
-  const log = { starts: [], stops: 0, cad: 0, fetches: [], keys: [] };
+  const log = { starts: [], urlnames: [], stops: 0, cad: 0, fetches: [], keys: [] };
   const timers = [];
   const win = {};
   let now = opts.now || 1000000;
   const sandbox = {
     document: { getElementById: el, addEventListener(n, f) { (el('doc').listeners[n] = el('doc').listeners[n] || []).push(f); }, querySelector: () => ({ setAttribute() {} }), title: '', activeElement: null, visibilityState: 'visible' },
-    window: { addEventListener(n, f) { (win[n] = win[n] || []).push(f); } },
+    window: { addEventListener(n, f) { (win[n] = win[n] || []).push(f); }, ...(opts.crypto ? { crypto: opts.crypto } : {}) },
+    ...(opts.crypto ? { Uint8Array } : {}),
     ...(opts.navigator === undefined ? {} : { navigator: opts.navigator }),
     CreateAgentRemoteDesktop: () => ({}),
     CreateAgentRedirect: () => {
-      const d = { m: { SendCtrlAltDelMsg() { log.cad++; }, handleKeyDown(e) { log.keys.push(e.keyCode); }, handleKeyUp() {}, handleKeys() {} }, Start(id) { log.starts.push(id); }, Stop() { log.stops++; } };
+      const d = { m: { SendCtrlAltDelMsg() { log.cad++; }, handleKeyDown(e) { log.keys.push(e.keyCode); }, handleKeyUp() {}, handleKeys() {} }, Start(id) { log.starts.push(id); log.urlnames.push(d.urlname); }, Stop() { log.stops++; } };
       log.desktop = d; return d;
     },
     fetch: (u, o) => { log.fetches.push([u, o]); return Promise.resolve({ ok: true }); },
@@ -293,7 +294,8 @@ test('remote-desktop.html: pagehide that is not a cache entry sends End once wit
   r.vis('hidden');
   assert.equal(beacons.length, 0, 'an app switch never ends the session');
   r.fireWin('pagehide', { persisted: false });
-  assert.deepEqual(beacons.map(b => b[0]), ['/api/remote-desktop/s/leave'], 'the leave URL, never the end URL');
+  assert.equal(beacons.length, 1);
+  assert.match(beacons[0][0], /^\/api\/remote-desktop\/s\/leave\?viewer=[A-Za-z0-9_-]{22}$/, 'the leave URL with this page\'s viewer id, never the end URL');
   assert.equal(r.log.fetches.length, 0, 'no fetch when the beacon was queued');
   // already ended (the End button): nothing more
   const e = beaconRig();
@@ -309,12 +311,38 @@ test('remote-desktop.html: pagehide that is not a cache entry sends End once wit
   assert.equal(x.beacons.length, 0);
 });
 
+test('remote-desktop.html: the viewer id is 22 base64url characters (from crypto when there is one), the same for every Start; urlname is v/<id>/meshrelay.ashx and the beacon carries the same id', () => {
+  const crypto = { getRandomValues: (a) => { for (let i = 0; i < a.length; i++) a[i] = 250 - i * 7; return a; } };
+  for (const opts of [{ crypto }, {}]) {
+    const { beacons, navigator } = beaconRig();
+    const r = runViewer({ session: 's', nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end', leaveUrl: '/api/remote-desktop/s/leave' }, { navigator, ...opts });
+    r.log.desktop.State = 0; r.log.desktop.onStateChanged(r.log.desktop, 0);
+    r.els.reconnect.listeners.click[0]();   // a second Start of the same page
+    assert.equal(r.log.urlnames.length, 2);
+    const m = r.log.urlnames[0].match(/^v\/([A-Za-z0-9_-]{22})\/meshrelay\.ashx$/);
+    assert.ok(m, r.log.urlnames[0]);
+    assert.equal(r.log.urlnames[1], r.log.urlnames[0], 'the same id for the page\'s life');
+    r.fireWin('pagehide', { persisted: false });
+    assert.equal(beacons[0][0], `/api/remote-desktop/s/leave?viewer=${m[1]}`);
+    if (opts.crypto) {
+      const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+      assert.equal(m[1], Array.from({ length: 22 }, (_, i) => A[(250 - i * 7) & 63]).join(''), 'built from crypto.getRandomValues');
+    }
+  }
+});
+
+test('remote-desktop.html: two page loads get different viewer ids', () => {
+  const a = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/e' });
+  const b = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/e' });
+  assert.notEqual(a.log.urlnames[0], b.log.urlnames[0]);
+});
+
 test('remote-desktop.html: pagehide falls back to fetch with keepalive when sendBeacon is missing or refuses', () => {
   for (const navigator of [{}, beaconRig({ beaconOk: false }).navigator, undefined]) {
     const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end', leaveUrl: '/api/remote-desktop/s/leave' }, { navigator });
     r.fireWin('pagehide', { persisted: false });
     assert.equal(r.log.fetches.length, 1);
-    assert.equal(r.log.fetches[0][0], '/api/remote-desktop/s/leave');
+    assert.match(r.log.fetches[0][0], /^\/api\/remote-desktop\/s\/leave\?viewer=[A-Za-z0-9_-]{22}$/);
     assert.deepEqual({ ...r.log.fetches[0][1] }, { method: 'POST', credentials: 'include', keepalive: true });
   }
 });
@@ -323,7 +351,8 @@ test('remote-desktop.html: pagehide without boot.leaveUrl derives it from endUrl
   const { beacons, navigator } = beaconRig();
   const r = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end' }, { navigator });
   r.fireWin('pagehide', { persisted: false });
-  assert.deepEqual(beacons.map(b => b[0]), ['/api/remote-desktop/s/leave']);
+  assert.equal(beacons.length, 1);
+  assert.match(beacons[0][0], /^\/api\/remote-desktop\/s\/leave\?viewer=[A-Za-z0-9_-]{22}$/);
   const f = beaconRig({ beaconOk: false });
   const r2 = runViewer({ nodeid: 'n', name: 'pc', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end', leaveUrl: '/api/remote-desktop/s/leave' }, { navigator: f.navigator });
   r2.els.end.listeners.click[0](); await settle();

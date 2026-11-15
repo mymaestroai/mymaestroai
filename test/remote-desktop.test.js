@@ -889,59 +889,155 @@ test('grace: the 30-minute expiry still ends a session that keeps its relay with
 const LEAVE = `/api/remote-desktop/${SID}/leave`;
 const leave = (rd, who = 'owner') => call(rd, { method: 'POST', url: LEAVE, who });
 
-test('leave: with no relay the session ends as "left" after 10 s, not 60 s (one log line); the never-loaded grace is replaced', async () => {
-  const { rd, st } = rig();
-  await open(rd, 'owner');
-  assert.strictEqual(graceTimers(st, 120000).length, 1);
-  const r = await leave(rd);
-  assert.strictEqual(r.res.code, 200); assert.deepStrictEqual(r.json(), { ok: true });
-  assert.strictEqual(graceTimers(st, 120000).length, 0, 'the long grace is cleared');
-  assert.strictEqual(graceTimers(st, 60000).length, 0);
-  assert.strictEqual(graceTimers(st, 10000).length, 1);
-  assert.strictEqual(rd.sessions.size, 1, 'not ended by the leave itself');
-  assert.strictEqual(ended(st, 'ended').length, 0);
-  st.now = T0 + 10000;
-  const g = graceTimers(st, 10000)[0]; g.fn(); g.live = false;
-  await new Promise((q) => setImmediate(q));
-  assert.strictEqual(ended(st, 'left').length, 1); assert.strictEqual(rd.sessions.size, 0);
-  assert.strictEqual(st.logs.length, 1); assert.match(st.logs[0], /\(left\)$/);
-  assert.strictEqual(st.audits.length, 1);
+// Per-viewer ids: each page puts its own id in the relay address and in its leave call; a leave only ever speaks for that page's relays.
+const VA = 'viewerAAAAAAAAAAAAAAAA', VB = 'viewerBBBBBBBBBBBBBBBB';
+const connectedAs = async (x, v) => { const c = await wsClient(x.port, { url: `/remote-desktop/${SID}/v/${v}/meshrelay.ashx?id=tun12345`, headers: SAME }); await until(() => c.got.includes('hello-from-mesh')); return c; };
+const leaveAs = (rd, v, who = 'owner') => call(rd, { method: 'POST', url: `${LEAVE}?viewer=${v}`, who });
+
+test('leave: the page closed (its relay released) and then said so: the session ends as "left" after 10 s, not 60 s (one log line); the 60 s grace is replaced', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const a = await connectedAs(x, VA);
+    a.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    const r = await leaveAs(x.rd, VA);
+    assert.strictEqual(r.res.code, 200); assert.deepStrictEqual(r.json(), { ok: true });
+    assert.strictEqual(graceTimers(x.st, 60000).length, 0, 'the 60 s grace is replaced');
+    assert.strictEqual(graceTimers(x.st, 10000).length, 1);
+    assert.strictEqual(x.rd.sessions.size, 1, 'not ended by the leave itself');
+    assert.strictEqual(ended(x.st, 'ended').length, 0);
+    x.st.now = T0 + 10000;
+    const g = graceTimers(x.st, 10000)[0]; g.fn(); g.live = false;
+    await until(() => ended(x.st, 'left').length === 1);
+    assert.strictEqual(x.rd.sessions.size, 0);
+    assert.strictEqual(x.st.logs.length, 1); assert.match(x.st.logs[0], /\(left\)$/);
+    assert.strictEqual(x.st.audits.length, 1);
+  } finally { await x.close(); }
 });
 
-test('leave: leaveSoonMs is injectable; a second leave arms nothing more', async () => {
+test('leave: without a viewer (an old page) is ok and arms nothing; a malformed viewer is 400 and arms nothing', async () => {
   const { rd, st } = rig({ deps: { leaveSoonMs: 3000 } });
   await open(rd, 'owner');
-  await leave(rd); await leave(rd);
-  assert.strictEqual(st.timers.filter((t) => t.live && t.ms === 3000).length, 1);
+  const timers = st.timers.length;
+  const r = await leave(rd);
+  assert.strictEqual(r.res.code, 200); assert.deepStrictEqual(r.json(), { ok: true });
+  for (const bad of ['', 'short', 'a'.repeat(65), 'has space!', '..%2F..%2Fx12345', 'ab%0d%0acdefgh']) {
+    const q = await call(rd, { method: 'POST', url: `${LEAVE}?viewer=${bad}`, who: 'owner' });
+    assert.strictEqual(q.res.code, 400, JSON.stringify(bad)); assert.ok(q.json().error);
+  }
+  assert.strictEqual(st.timers.length, timers, 'nothing armed'); assert.strictEqual(rd.sessions.size, 1);
+});
+
+test('leave: leaveSoonMs is injectable; a second leave from the same page arms nothing more', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101, { deps: { leaveSoonMs: 3000 } });
+  try {
+    await open(x.rd, 'owner');
+    const a = await connectedAs(x, VA);
+    a.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    await leaveAs(x.rd, VA); await leaveAs(x.rd, VA);
+    assert.strictEqual(x.st.timers.filter((t) => t.live && t.ms === 3000).length, 1);
+  } finally { await x.close(); }
 });
 
 test('leave then a reconnect within 10 s (a reload) keeps the session', { skip: !CERT && 'openssl not available' }, async () => {
   const x = await relayRig(101);
   try {
     await open(x.rd, 'owner');
-    const a = await connected(x);
+    const a = await connectedAs(x, VA);
     a.sock.destroy();
     await until(() => graceTimers(x.st, 60000).length === 1);
-    await leave(x.rd);
+    await leaveAs(x.rd, VA);
     assert.strictEqual(graceTimers(x.st, 60000).length, 0, 'the 60 s grace is replaced');
     const soon = graceTimers(x.st, 10000)[0]; assert.ok(soon);
-    const b = await connected(x);
+    const b = await connectedAs(x, VB);
     assert.strictEqual(soon.live, false, 'the new page connecting clears it');
     soon.fn();   // even a timer that slipped through does nothing while a relay is up
     await new Promise((q) => setTimeout(q, 30));
     assert.strictEqual(x.rd.sessions.size, 1); assert.strictEqual(ended(x.st, 'left').length, 0); assert.strictEqual(x.st.logs.length, 0);
     b.sock.destroy();
     await until(() => graceTimers(x.st, 60000).length === 1);
-    assert.strictEqual(graceTimers(x.st, 10000).length, 0, 'the leave mark is gone: a later close gets the normal grace');
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0, 'a later close of the new page gets the normal grace');
   } finally { await x.close(); }
 });
 
-test('leave while another viewer\'s relay stays up ends nothing; when that relay later closes the normal 60 s grace applies', { skip: !CERT && 'openssl not available' }, async () => {
+test('leave: A and B share a session; A\'s relay closes first, then A\'s late leave: it is stale, and when B drops later B gets the 60 s grace', { skip: !CERT && 'openssl not available' }, async () => {
   const x = await relayRig(101);
   try {
     await open(x.rd, 'owner');
-    const a = await connected(x); const b = await connected(x);
-    await leave(x.rd);
+    const a = await connectedAs(x, VA); const b = await connectedAs(x, VB);
+    a.sock.destroy();
+    await until(() => x.rd.sessions.get(SID).relays === 1);
+    const r = await leaveAs(x.rd, VA);
+    assert.strictEqual(r.res.code, 200);
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0, 'B is connected: nothing armed');
+    b.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0, 'B closing without a leave of its own gets the normal grace');
+  } finally { await x.close(); }
+});
+
+test('leave: reload: the old page P1\'s relay closes, P2 connects, then P1\'s late leave is ignored; P2 dropping later gets 60 s', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const p1 = await connectedAs(x, VA);
+    p1.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    const p2 = await connectedAs(x, VB);
+    await leaveAs(x.rd, VA);   // the old page's beacon, late
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0);
+    p2.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0);
+  } finally { await x.close(); }
+});
+
+test('leave: a stale leave after a newer relay came and went (lastReleased is another page) is ignored', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const a = await connectedAs(x, VA); a.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+    const b = await connectedAs(x, VB); b.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1 && x.rd.sessions.get(SID).relays === 0);
+    await leaveAs(x.rd, VA);
+    assert.strictEqual(graceTimers(x.st, 10000).length, 0);
+    assert.strictEqual(graceTimers(x.st, 60000).length, 1);
+  } finally { await x.close(); }
+});
+
+test('leave: the old /meshrelay.ashx address (a page cached from before) still relays; its close gets the normal grace', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const c = await connected(x);
+    assert.strictEqual(x.rd.sessions.get(SID).relays, 1);
+    c.sock.destroy();
+    await until(() => graceTimers(x.st, 60000).length === 1);
+  } finally { await x.close(); }
+});
+
+test('leave: the relay address with a malformed viewer id is not a relay route', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    for (const v of ['short', 'a'.repeat(65), 'bad%20viewer1234']) {
+      const c = await wsClient(x.port, { url: `/remote-desktop/${SID}/v/${v}/meshrelay.ashx?id=tun12345`, headers: SAME });
+      await c.closedP;
+      assert.ok(!c.got.includes('hello-from-mesh'), v);
+    }
+    assert.strictEqual(x.rd.sessions.get(SID).relays, 0);
+  } finally { await x.close(); }
+});
+
+test('leave while another viewer\'s relay stays up ends nothing; the leaving page closing does not arm the short grace; when the other relay later closes the normal 60 s grace applies', { skip: !CERT && 'openssl not available' }, async () => {
+  const x = await relayRig(101);
+  try {
+    await open(x.rd, 'owner');
+    const a = await connectedAs(x, VA); const b = await connectedAs(x, VB);
+    await leaveAs(x.rd, VA);
     assert.strictEqual(x.rd.sessions.size, 1);
     assert.strictEqual(graceTimers(x.st, 10000).length, 0, 'relays remain: no grace yet');
     a.sock.destroy();   // the leaving page's relay closes; the other viewer stays
@@ -959,8 +1055,8 @@ test('leave arriving before the leaving page\'s own relay closes: the 10 s grace
   const x = await relayRig(101);
   try {
     await open(x.rd, 'owner');
-    const a = await connected(x);
-    await leave(x.rd);
+    const a = await connectedAs(x, VA);
+    await leaveAs(x.rd, VA);
     assert.strictEqual(graceTimers(x.st, 10000).length, 0); assert.strictEqual(x.rd.sessions.size, 1);
     a.sock.destroy();
     await until(() => graceTimers(x.st, 10000).length === 1);

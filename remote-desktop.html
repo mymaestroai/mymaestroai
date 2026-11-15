@@ -162,12 +162,21 @@ var rdView = (function () {
   }
   tick = setInterval(countdown, 1000); countdown();
 
+  // One random id per page load (22 base64url characters = 128 bits), the same for every Start of this page.
+  var viewerId = (function () {
+    var A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_', out = '', i, b = null;
+    try { if (window.crypto && window.crypto.getRandomValues) b = window.crypto.getRandomValues(new Uint8Array(22)); } catch (x) { b = null; }
+    for (i = 0; i < 22; i++) out += A.charAt((b ? b[i] : Math.floor(Math.random() * 64)) & 63);
+    return out;
+  })();
+
   function start() {
     if (!live) return;
     try { if (desktop) desktop.Stop(); } catch (e) {}
     publish(null);
     desktop = CreateAgentRedirect({ send: function () {} }, CreateAgentRemoteDesktop('Desk'), '', '', '', '/');
     publish(desktop);
+    desktop.urlname = 'v/' + viewerId + '/meshrelay.ashx';   // this page's id is in the relay address: the hub ties "I am leaving" to this page's relays only
     desktop.m.UseExtendedKeyFlag = true;
     desktop.m.ImageType = 1; desktop.m.CompressionLevel = 40; desktop.m.ScalingLevel = 1024; desktop.m.FrameRateTimer = 50;
     desktop.onStateChanged = function (o, st) {
@@ -281,6 +290,7 @@ var rdView = (function () {
     if ((e && e.persisted === true) || !sessionLive()) return;   // back/forward cache: the page may return, the hub's grace covers it
     // "Leave", not End: a reload or a second viewer of the same session must not cut it; the hub ends it after a short grace if nobody returns.
     var leaveUrl = boot.leaveUrl || String(boot.endUrl || '').replace(/\/end$/, '/leave');
+    leaveUrl += '?viewer=' + viewerId;
     var sent = false;
     try { if (typeof navigator !== 'undefined' && navigator.sendBeacon) sent = !!navigator.sendBeacon(leaveUrl); } catch (x) { sent = false; }
     if (!sent) { try { fetch(leaveUrl, { method: 'POST', credentials: 'include', keepalive: true }).then(function () {}, function () {}); } catch (x) {} }
