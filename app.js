@@ -12320,13 +12320,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }, VOICE_WATCHDOG_TICK_MS);
       }
       // Once per piece (the timer is gone first): say why, make the detector end the piece through the normal onSpeechEnd (what was heard is transcribed and
-      // sent), and when no end or misfire came, let the piece go. After lost frames the microphone is also opened again (its result goes through onMicChange).
+      // sent), and when no end or misfire came, let the piece go. After lost frames the microphone is also opened again (its result goes through onMicChange),
+      // and so it is when the detector could not end the piece and listen again (endPiece false): the reopen restarts a detector left paused, or the call
+      // says the microphone is lost, never "Listening" while nothing is heard.
       async function fireWatch(reason) {
         const id = pieceId;
         quiet(() => ui.toast(reason === 'frames' ? VOICE_FRAMES_LOST_LINE : VOICE_PIECE_LONG_LINE));
-        if (typeof vad.endPiece === 'function') { try { await vad.endPiece(); } catch { /* the detector's own problem */ } }
+        let listening = false;
+        if (typeof vad.endPiece === 'function') { try { listening = (await vad.endPiece()) !== false; } catch { listening = false; } }
         if (!ended && !muted && personSpeaking && pieceId === id) dropSpeech();
-        if (reason === 'frames' && !ended) { try { await retryMic(); } catch { /* retryMic never throws */ } }
+        if ((reason === 'frames' || !listening) && !ended) { try { await retryMic(); } catch { /* retryMic never throws */ } }
       }
       // A new speech segment begins. When the previous one ended less than 2 s ago and its transcript is not sent yet (still
       // being transcribed, or waiting in line), the previous one is held back: it is joined with this segment into one message.
@@ -13092,7 +13095,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         mdOff: null, devTimer: null, reopening: null, info: null, defSnap: null,
         unprocessed: !!o.unprocessed,   // the call's own microphone is opened with echo cancellation, noise suppression and auto gain off (a recorded call, mic 'unprocessed': the fallback)
         recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [],   // the recording's own second microphone track (openRecordingTap) and who follows the tap
-        muted: false };   // setMuted: every microphone track of the call is switched off
+        muted: false,   // setMuted: every microphone track of the call is switched off
+        paused: false };   // endPiece paused the detector and has not started it again (a failed start): reopen() starts it
       const win = () => o.win || window;
       const setT = o.setTimer || ((fn, ms) => { const w = win(); return (typeof w.setTimeout === 'function' ? w.setTimeout.bind(w) : setTimeout)(fn, ms); });
       const clearT = o.clearTimer || ((id) => { const w = win(); return (typeof w.clearTimeout === 'function' ? w.clearTimeout.bind(w) : clearTimeout)(id); });
@@ -13280,6 +13284,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             call('onMicChange', { ok: false, reason, error });
             return false;
           }
+          // A detector that endPiece left paused (its start failed) listens again here; one that cannot is a lost microphone, never a silent "Listening".
+          if (st.paused && st.vad) {
+            try { await st.vad.start(); } catch (error) { call('onMicChange', { ok: false, reason, error }); return false; }
+            if (st.gen !== my) return false;
+            st.paused = false;
+          }
           const info = micInfo(res.raw, res.fallback);
           st.info = info;
           snapDefault();
@@ -13372,6 +13382,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const src = st.src;
         flushOpen(false); dropRecording(); st.srcWatchers = [];
         st.vad = st.raw = st.dest = st.ctx = st.gain = st.src = st.defSnap = null;
+        st.paused = false;
         st.handlers = {};   // nothing the detector emits while it is destroyed (a last SpeechEnd from its pause) reaches the call
         if (src) { try { src.disconnect(); } catch { /* gone */ } }
         voiceStopStream(raw); voiceStopStream(dest);   // first, so the microphone is free even when the rest is slow
@@ -13406,6 +13417,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (!st.vad || !st.ctx) return false;
           const v = st.vad;
           try {
+            st.paused = true;   // set first: a start() on a detector that is still listening does nothing, so reopen() may always try it
             await v.pause();
             if (v !== st.vad || !st.ctx) return false;   // stopped meanwhile
             const ctx = st.ctx;
@@ -13416,6 +13428,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (v !== st.vad) return false;
             }
             await v.start();
+            if (v === st.vad) st.paused = false;
             return true;
           } catch { return false; }
         },

@@ -229,6 +229,39 @@ test('adapter: a SpeechEnd the detector emits while it is destroyed (stop) never
   assert.deepStrictEqual(got, [['end', 'live']]);
 });
 
+test('watchdog: a long piece whose endPiece could not restart the detector (false) -> the microphone is reopened', async () => {
+  const box = { log: [] };
+  const h = await started({ vad: { start: async (hd) => { box.handlers = hd; }, stop() {}, setPlaybackActive() {}, setMuted() {},
+    endPiece: async () => { box.log.push('endPiece'); return false; }, reopen: async () => { box.log.push('reopen'); return true; } } });
+  h.handlers = box.handlers; h.log = box.log;
+  speak(h);
+  for (let i = 0; i < 122; i++) { await advance(h, 500); h.handlers.onFrame(-30, {}); }   // 61 s, frames all along
+  assert.deepStrictEqual(h.toasts, [LONG]);
+  assert.deepStrictEqual(h.log.filter(x => x === 'endPiece' || x === 'reopen'), ['endPiece', 'reopen']);
+  assert.strictEqual(h.call.state, 'listening');
+});
+
+test('adapter: a detector endPiece left paused (its start failed) is started again by reopen; when it cannot start, the microphone is reported lost', async () => {
+  const a = vadWorld();
+  const changes = [];
+  await a.vad.start({ onMicChange: (ev) => changes.push(ev.ok) });
+  let fail = true;
+  a.w.inst.start = async () => { a.w.calls.push('start'); if (fail) throw new Error('no'); };
+  a.w.calls.length = 0;
+  assert.strictEqual(await a.vad.endPiece(), false);
+  assert.deepStrictEqual(a.w.calls, ['pause', 'start']);
+  assert.strictEqual(await a.vad.reopen(), false, 'still cannot start: lost');
+  assert.deepStrictEqual(changes, [false]);
+  fail = false; a.w.calls.length = 0;
+  assert.strictEqual(await a.vad.reopen(), true);
+  assert.deepStrictEqual(a.w.calls, ['start']);
+  assert.deepStrictEqual(changes, [false, true]);
+  a.w.calls.length = 0;
+  assert.strictEqual(await a.vad.reopen(), true);
+  assert.deepStrictEqual(a.w.calls, [], 'listening again: a later reopen does not start it');
+  await a.vad.stop();
+});
+
 // ── stricter talk-over ──
 function thr(w) { const x = w.setOpts[w.setOpts.length - 1]; return { positiveSpeechThreshold: x.positiveSpeechThreshold, negativeSpeechThreshold: x.negativeSpeechThreshold, minSpeechFrames: x.minSpeechMs / 32 }; }
 
