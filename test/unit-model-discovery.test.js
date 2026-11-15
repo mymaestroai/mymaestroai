@@ -216,6 +216,16 @@ test('discoverSdkModels is single-flight: concurrent calls run one discovery; a 
   } finally { md._setSdkDiscoverForTest(null); }
 });
 
+test('discoverSdkModels gives up after its deadline (a client call that never settles), frees the shared slot, and a retry runs again', async () => {
+  let calls = 0;
+  md._setSdkDiscoverForTest(() => { calls++; return calls === 1 ? new Promise(() => {}) : Promise.resolve([{ id: 'ok' }]); }, 50);
+  try {
+    assert.deepStrictEqual(await md.discoverSdkModels(), [], 'the stuck call is given up: no models this time');
+    assert.deepStrictEqual(await md.discoverSdkModels(), [{ id: 'ok' }], 'the slot was freed: a retry runs and succeeds');
+    assert.strictEqual(calls, 2);
+  } finally { md._setSdkDiscoverForTest(null); }
+});
+
 test('startDiscovery runs immediately and schedules a 6 h interval; stopDiscovery clears it', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   const runs = () => urls().filter(u => u.includes('lmstudio')).length;
