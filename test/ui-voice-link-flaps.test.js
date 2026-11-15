@@ -317,6 +317,25 @@ test('flaps: unknown results within the grace after an alive() are not lost; an 
   await runUnknown(w, 8000);                        // now more than 12 s since the last alive
   assert.ok(states(w).some(e => e.startsWith('lost@')), 'after the grace runs out with nothing good, it is lost');
 });
+test('flaps: progress() (a transfer of the call started) makes the grace count from then: one long upload on a slow link is not an outage; a hung one still is', async () => {
+  const w = watch(); w.watch.start();
+  await runUnknown(w, 10000);
+  w.watch.progress();                               // t = 10000: a 25 s upload starts on a slow link; every probe behind it is unknown
+  await runUnknown(w, 11000);                       // t = 21000: 21 s since the start, 11 s since the transfer began
+  assert.deepStrictEqual(states(w), [], 'the grace counts from the transfer start, not from the call start');
+  w.watch.alive();                                  // the upload's answer arrives
+  assert.deepStrictEqual(states(w), []);
+  const h = watch(); h.watch.start();
+  await h.c.advance(3000); h.watch.progress();      // t = 3000: an upload starts and hangs; the link is silently dead
+  await runUnknown(h, 30000);
+  const lost = states(h).find(e => e.startsWith('lost@'));
+  assert.ok(lost && Number(lost.slice(5)) > 15000 && Number(lost.slice(5)) <= 3000 + 12000 + 2 * 5000, 'the hung transfer runs out the grace from its start: ' + states(h));
+  const l = watch(); l.watch.start();
+  await runUnknown(l, 30000);                       // lost by now
+  assert.ok(l.watch.lost); l.watch.progress(); assert.ok(l.watch.lost, 'progress() never brings a lost link back');
+  l.watch.stop();
+});
+
 test('flaps: unknownGraceMs is an option (a short one marks lost sooner) and a good probe resets the grace', async () => {
   const w = watch({ unknownGraceMs: 2000 }); w.watch.start();
   await runUnknown(w, 12000);

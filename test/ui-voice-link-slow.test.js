@@ -380,3 +380,16 @@ test('desktop: audio asked for in call A, answered after call B started, is neve
   await playOnly(S, e.voicePlay, { AudioContext: FakeCtx }, async () => e2buf)('a', ['From call A.'], undefined, 4);
   assert.strictEqual(recB.got.length, 0, 'B\'s recorder gets nothing'); assert.strictEqual(recA.got.length, 0);
 });
+
+test('slow: each tracked transfer tells the call\'s link watch it started (progress(): the unknown grace counts from then), on both pages, with an older library tolerated', async () => {
+  const mobFn = between(mob, 'async function voiceUpTrack(run) {', '\n}\n');
+  const run = (vcArg, upArg) => new Function('voiceCall', 'voiceUp', mobFn + '\n}\nreturn voiceUpTrack;')(vcArg, upArg);
+  const seen = []; const up = { n: 0, seq: 0 };
+  const vc = { link: { progress: () => seen.push('progress') } };
+  assert.strictEqual(await run(vc, up)(async () => { seen.push('run'); return 7; }), 7);
+  assert.deepStrictEqual(seen, ['progress', 'run'], 'phone: progress before the transfer');
+  assert.strictEqual(await run({ link: {} }, up)(async () => 8), 8, 'phone: an older library (no progress) is fine');
+  assert.strictEqual(await run(null, up)(async () => 9), 9, 'phone: no call is fine');
+  const appFn = between(app, '    async function voiceUpTrack(run) {', '\n    }\n');
+  assert.ok(/voiceCallS\.link[\s\S]*typeof l\.progress === 'function'\) l\.progress\(\)/.test(appFn), 'desktop: progress() on the call\'s link');
+});

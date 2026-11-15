@@ -12749,7 +12749,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // suspicion and pushes the next routine probe to everyMs from now; lost (within giveUpMs) -> back at once (onBack, normal rhythm), even if the request was sent
     // before the loss (a response arriving now proves the server answers now); after give-up or stop() -> nothing.
     // One probe is in flight at a time; after stop() nothing fires, and a probe that resolves late is ignored.
-    // -> { start(), stop(), report(), offline(), online() (probe at once), alive(), get lost() }
+    // -> { start(), stop(), report(), offline(), online() (probe at once), alive(), progress() (a transfer of the call started: the grace counts from now), get lost() }
     function voiceCreateLinkWatch(o) {
       const c = o || {};
       const setT = c.setTimeout, clrT = c.clearTimeout, clock = typeof c.now === 'function' ? c.now : Date.now;
@@ -12826,6 +12826,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           fails = 0;
           if (!probing) schedule(every);
         },
+        // progress(): one of the call's own transfers just started. While the link is not lost the unknown grace counts from now, so one long upload on a
+        // slow link is not taken for an outage; a transfer that then hangs still runs out the grace from its start. Lost: nothing (only an answer brings it back).
+        progress() { if (running && !lost) lastGood = Math.max(lastGood, clock()); },
         get lost() { return lost; },
       };
     }
@@ -15256,6 +15259,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const voiceUp = { n: 0, seq: 0 };
     async function voiceUpTrack(run) {
       voiceUp.n++; voiceUp.seq++;
+      try { const l = voiceCallS.link; if (l && typeof l.progress === 'function') l.progress(); } catch { /* an older library */ }   // the link watch's grace counts from this transfer's start
       try { return await run(); } finally { voiceUp.n--; }
     }
     function voiceLinkProbe() {
