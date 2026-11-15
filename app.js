@@ -12739,10 +12739,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // probe(opts) resolves true (reachable), 'down' (a HARD failure: the request failed with a network error, or a 5xx such as a proxy's 502 for a dead hub),
     // false (it TIMED OUT with no transfer of ours in flight: slow or silent) or null/undefined (UNKNOWN: it timed out behind our own upload, so it proves
     // nothing either way). opts is { confirm: true } for the probe that confirms a first false (the page then gives it a shorter limit), else {}.
-    // While the link is fine it probes every everyMs. 'down' marks the link LOST at once (like report()); while already lost it is just a failed probe.
+    // While the link is fine it probes every everyMs (the pages pass 2500). 'down' is a failed probe like false, it just arrives at once: its confirming probe (sent at
+    // once) settles a refused link within milliseconds, and a single blip (a network switch) is not an outage.
     // ONE false does not mark the link lost: it makes the watch SUSPECT and it probes again AT ONCE (confirm probe, { confirm: true }); a SECOND consecutive
     // false marks it LOST (onLost, once per outage). A successful probe or alive() clears the suspicion. So with no transfer of ours in flight a refused
-    // connection is found at the first probe, and a silently dead link after everyMs + the probe limit + the confirm limit (5 + 4 + 2.5 s on the pages).
+    // connection is found at the first probe (within everyMs, 2.5 s on the pages), and a silently dead link within everyMs + the probe limit + the confirm
+    // limit (2.5 + 4 + 2.5 = 9 s on the pages: no slower than one 4 s probe every 5 s).
     // An unknown result changes nothing while the link was last known good recently: it never marks lost, never clears the suspicion (the failure count stays)
     // and never counts as back; the next probe follows after lostEveryMs while suspect or lost, else everyMs. A probe that failed while a real response arrived
     // (alive()) after it left counts as unknown. But a hung upload must not hide a real outage: lastGood = the time of start(), of every successful probe and of
@@ -12807,10 +12809,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           probing = false;
           if ((ok === false || ok === 'down') && myAlive !== aliveSeq) ok = null;   // a real response came in while it was out: its failure is not trusted
           else if (ok === null && myAlive === aliveSeq && clock() - lastGood > grace) ok = false;   // unknown for too long: a hung upload must not hide an outage
-          if (ok === 'down') {
-            if (lost) schedule(lostEvery);   // already lost: just a failed probe
-            else markLost();                 // a hard failure: lost at once
-          } else if (ok === true) {
+          if (ok === 'down') ok = false;   // a hard failure (network error, 5xx) is a failed probe like a timeout; it just arrives at once, so its confirming probe
+                                           // (sent at once) settles a refused link within milliseconds, and one blip (a network switch) does not drop the call
+          if (ok === true) {
             lastGood = lastAnswer = clock();
             if (lost) {
               if (myOutage !== outage) { schedule(0); return; }   // it left before the loss: it proves nothing, so ask again at once (the deadline stands)
@@ -15326,7 +15327,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const tone = (up) => { if (typeof voiceLinkTone === 'function') voiceLinkTone(voicePlay.ctx, up); };
       const setLost = (on) => { if (typeof call.setLinkLost === 'function') call.setLinkLost(on); };
       return voiceCreateLinkWatch({
-        probe: (o) => voiceLinkProbe(o),
+        probe: (o) => voiceLinkProbe(o), everyMs: 2500,   // every 2.5 s: a silent outage is found within 2.5 + 4 + 2.5 = 9 s (the confirming probe has a 2.5 s limit)
         setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (t) => clearTimeout(t),
         onLost: () => { if (S.call !== call) return; setLost(true); tone(false); voiceLinkPaint(true); },
         onBack: () => { if (S.call !== call) return; voiceLinkPaint(false); tone(true); setLost(false); },

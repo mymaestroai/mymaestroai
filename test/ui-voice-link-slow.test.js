@@ -435,3 +435,9 @@ test('slow: each tracked transfer tells the call\'s link watch it started (progr
   const appFn = between(app, '    async function voiceUpTrack(run) {', '\n    }\n');
   assert.ok(/voiceCallS\.link[\s\S]*typeof l\.progress === 'function'\) l\.progress\(\)/.test(appFn), 'desktop: progress() on the call\'s link');
 });
+
+test('slow: both pages probe every 2.5 s, so a silent outage is found within 2.5 + 4 + 2.5 = 9 s, no slower than before the branch', () => {
+  for (const [name, src] of [['phone', mob], ['desktop', app]]) {
+    assert.ok(/probe: \(o\) => voiceLinkProbe\(o\), everyMs: 2500,/.test(src), name + ': everyMs 2500 passed to the link watch');
+  }
+});

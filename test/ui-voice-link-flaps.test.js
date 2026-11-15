@@ -74,17 +74,23 @@ test('flaps: false then true is not lost (the confirm probe answers; the suspici
   w.watch.stop();
 });
 
-test("flaps: 'down' marks lost at once (like report()), also as the confirm probe; no confirm probe is made", async () => {
+// review r3: 'down' was "lost at once"; it is now a failed probe whose confirming probe goes out at once (a refused link still fails within milliseconds,
+// and one blip such as a network switch is not an outage).
+test("flaps: 'down' is a failed probe confirmed at once: down + down -> lost at the same moment; down + true -> not lost", async () => {
   const w = watch(); w.watch.start();
   await w.c.advance(5000); await w.answer('down');
-  assert.deepStrictEqual(states(w), ['lost@5000']); assert.strictEqual(w.watch.lost, true);
-  await w.c.advance(0); assert.strictEqual(w.probes.length, 0, 'the next probe is the lost rhythm (1 s), not at once');
-  await w.c.advance(1000); assert.strictEqual(w.probes.length, 1);
+  assert.deepStrictEqual(states(w), [], 'one blip is not an outage');
+  await w.c.advance(0); assert.strictEqual(w.probes.length, 1, 'the confirming probe goes out at once');
+  await w.answer('down');
+  assert.deepStrictEqual(states(w), ['lost@5000'], 'a refused link is lost within the same moment');
   w.watch.stop();
   const v = watch(); v.watch.start();
-  await v.c.advance(5000); await v.answer(false); await v.c.advance(0); await v.answer('down');
-  assert.deepStrictEqual(states(v), ['lost@5000']);
-  v.watch.stop();
+  await v.c.advance(5000); await v.answer('down'); await v.c.advance(0); await v.answer(true);
+  assert.deepStrictEqual(states(v), [], 'a blip followed by an answer: not lost');
+  const u = watch(); u.watch.start();
+  await u.c.advance(5000); await u.answer(false); await u.c.advance(0); await u.answer('down');
+  assert.deepStrictEqual(states(u), ['lost@5000'], 'a timeout confirmed by a hard failure: lost');
+  v.watch.stop(); u.watch.stop();
 });
 
 test("flaps: while lost, 'down' is just a failed probe: it does not end the outage early, the give-up stays at giveUpMs", async () => {
@@ -114,6 +120,7 @@ function dying(mode) {
   w.watch.stop();
   const c = w.c; let lostAt = -1;
   const v = voiceCreateLinkWatch({
+    everyMs: 2500,   // as the pages pass it
     probe: (o) => new Promise((resolve) => {
       if (diedAt.t < 0 || c.t < diedAt.t) { resolve(true); return; }
       if (mode === 'down') resolve('down'); else c.setTimeout(() => resolve(false), o && o.confirm ? 2500 : 4000);
@@ -122,10 +129,11 @@ function dying(mode) {
   });
   return { c, v, died(at) { diedAt.t = at; }, get lostAt() { return lostAt; } };
 }
-for (const [mode, limit] of [['silent', 11500], ['down', 5000]]) {
-  test(`flaps: a link that dies right after a good probe is lost within ${limit} ms (${mode}: no transfer in flight)`, async () => {
+// Before this branch: one failed probe = lost, every 5 s with a 4 s limit: a silent outage within 9 s, a refused link within 5 s. Never slower than that.
+for (const [mode, limit] of [['silent', 9000], ['down', 2500]]) {
+  test(`flaps: a link that dies right after a good probe is lost within ${limit} ms (${mode}: no transfer in flight), as fast as before the branch`, async () => {
     const d = dying(mode); d.v.start();
-    await d.c.advance(5000);                // the probe at 5000 is good
+    await d.c.advance(2500);                // the probe at 2500 is good
     const death = d.c.t + 1; d.died(death);   // dies right after it
     await d.c.advance(30000);
     assert.ok(d.lostAt > 0, 'lost at all');
