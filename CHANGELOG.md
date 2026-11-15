@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Calls show who you're talking to.** The call screen now shows the agent's name and emoji in a small label at the top, beside Listening, Thinking or Speaking, with the owl, the orb or no picture, and in the call bar after Back to chat. A long name is shortened with "…" so the status always stays readable.
 - **Turn voice on from your phone.** If you're an admin of your Maestro, the Voice sheet on your phone now has an Enable voice button, with a progress bar while the speech recognition and voices install. Anyone else is told that an admin can turn it on, and a Maestro on a computer where voice can't run yet says so plainly.
 - **Calls no longer get stuck on "Hearing you".** If the microphone stops sending sound in the middle of what you're saying (an iPhone can interrupt it), the call sends what it heard, restarts the microphone and tells you. Anything you say for longer than a minute is sent at that point, and listening carries on.
 - **"I didn't catch that."** When your Maestro hears you speak but can't make out any words, it now says so on screen instead of silently doing nothing.
