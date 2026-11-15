@@ -35,29 +35,114 @@ function watch(over) {
 const states = (w) => w.ev.filter(e => !e.startsWith('probe'));
 const probeTimes = (w) => w.ev.filter(e => e.startsWith('probe')).map(e => Number(e.slice(6)));
 
-test('flaps: one failed probe is not lost; it probes again after 1 s (suspect)', async () => {
+// Detection speed: the confirming probe after a first false goes out AT ONCE (it used to wait lostEveryMs = 1 s), so the suspect lasts no longer than the probe itself.
+test('flaps: one failed probe is not lost; it probes again AT ONCE with { confirm: true } (suspect)', async () => {
   const w = watch(); w.watch.start();
   await w.c.advance(5000); await w.answer(false);
   assert.strictEqual(w.watch.lost, false); assert.deepStrictEqual(states(w), []);
-  await w.c.advance(999); assert.strictEqual(w.probes.length, 0);
-  await w.c.advance(1); assert.strictEqual(w.probes.length, 1, 'the next probe after lostEveryMs');
+  assert.strictEqual(w.probes.length, 0, 'the confirm probe is scheduled, not yet started');
+  await w.c.advance(0); assert.strictEqual(w.probes.length, 1, 'the confirm probe goes out at the same clock time');
+  assert.deepStrictEqual(probeTimes(w), [5000, 5000]);
   w.watch.stop();
 });
 
-test('flaps: two failed probes in a row are lost (once), 1 s apart', async () => {
+test('flaps: the probe option is { confirm: true } only for the confirming probe, {} otherwise', async () => {
+  const seen = [];
+  const w = watch({ probe: (o) => { seen.push(o); return new Promise((resolve) => { w.probes.push(resolve); w.ev.push('probe@' + w.c.t); }); } });
+  w.watch.start();
+  await w.c.advance(5000); await w.answer(false);
+  await w.c.advance(0); await w.answer(true);
+  await w.c.advance(5000); await w.answer(true);
+  assert.deepStrictEqual(seen, [{}, { confirm: true }, {}]);
+  w.watch.stop();
+});
+
+test('flaps: two failed probes in a row are lost (once), the second one at once', async () => {
   const w = watch(); w.watch.start();
-  await w.c.advance(5000); await w.answer(false); await w.c.advance(1000); await w.answer(false);
-  assert.deepStrictEqual(states(w), ['lost@6000']); assert.strictEqual(w.watch.lost, true);
+  await w.c.advance(5000); await w.answer(false); await w.c.advance(0); await w.answer(false);
+  assert.deepStrictEqual(states(w), ['lost@5000']); assert.strictEqual(w.watch.lost, true);
   w.watch.stop();
 });
 
-test('flaps: fail, ok, fail is not lost (a success clears the suspicion; the next failure is the first again)', async () => {
+test('flaps: false then true is not lost (the confirm probe answers; the suspicion is cleared and the rhythm is 5 s)', async () => {
   const w = watch(); w.watch.start();
   await w.c.advance(5000); await w.answer(false);
-  await w.c.advance(1000); await w.answer(true);
+  await w.c.advance(0); await w.answer(true);
   await w.c.advance(5000); await w.answer(false);
   assert.strictEqual(w.watch.lost, false); assert.deepStrictEqual(states(w), []);
-  assert.deepStrictEqual(probeTimes(w).slice(0, 3), [5000, 6000, 11000], 'back to the 5 s rhythm after the ok');
+  assert.deepStrictEqual(probeTimes(w).slice(0, 3), [5000, 5000, 10000], 'back to the 5 s rhythm after the ok');
+  w.watch.stop();
+});
+
+test("flaps: 'down' marks lost at once (like report()), also as the confirm probe; no confirm probe is made", async () => {
+  const w = watch(); w.watch.start();
+  await w.c.advance(5000); await w.answer('down');
+  assert.deepStrictEqual(states(w), ['lost@5000']); assert.strictEqual(w.watch.lost, true);
+  await w.c.advance(0); assert.strictEqual(w.probes.length, 0, 'the next probe is the lost rhythm (1 s), not at once');
+  await w.c.advance(1000); assert.strictEqual(w.probes.length, 1);
+  w.watch.stop();
+  const v = watch(); v.watch.start();
+  await v.c.advance(5000); await v.answer(false); await v.c.advance(0); await v.answer('down');
+  assert.deepStrictEqual(states(v), ['lost@5000']);
+  v.watch.stop();
+});
+
+test("flaps: while lost, 'down' is just a failed probe: it does not end the outage early, the give-up stays at giveUpMs", async () => {
+  const w = watch(); w.watch.start(); w.watch.offline();
+  for (let i = 0; i < 9; i++) { await w.c.advance(1000); await w.answer('down'); }
+  assert.deepStrictEqual(states(w), ['lost@0']);
+  await w.c.advance(1000);
+  assert.deepStrictEqual(states(w), ['lost@0', 'giveup@10000']);
+});
+
+test('flaps: an unknown promoted to a failure after the grace follows the confirm path (confirm probe at once, a second one = lost)', async () => {
+  const seen = [];
+  const w = watch({ unknownGraceMs: 2000, probe: (o) => { seen.push(o); return new Promise((resolve) => { w.probes.push(resolve); w.ev.push('probe@' + w.c.t); }); } });
+  w.watch.start();
+  await w.c.advance(5000); await w.answer(null);        // 5000 > the grace since the start: counts as false (suspect)
+  assert.strictEqual(w.watch.lost, false);
+  await w.c.advance(0); assert.strictEqual(w.probes.length, 1, 'the confirm probe at once');
+  assert.deepStrictEqual(seen, [{}, { confirm: true }]);
+  await w.answer(null);                                  // unknown again, past the grace: the second failure
+  assert.deepStrictEqual(states(w), ['lost@5000']);
+  w.watch.stop();
+});
+
+// Detection time with no transfer of ours in flight (a fake clock; the probe's own limits are simulated as the page does: 4000 ms, 2500 ms for confirm).
+function dying(mode) {
+  const w = watch(); const diedAt = { t: -1 };
+  w.watch.stop();
+  const c = w.c; let lostAt = -1;
+  const v = voiceCreateLinkWatch({
+    probe: (o) => new Promise((resolve) => {
+      if (diedAt.t < 0 || c.t < diedAt.t) { resolve(true); return; }
+      if (mode === 'down') resolve('down'); else c.setTimeout(() => resolve(false), o && o.confirm ? 2500 : 4000);
+    }),
+    setTimeout: c.setTimeout, clearTimeout: c.clearTimeout, now: c.now, onLost: () => { if (lostAt < 0) lostAt = c.t; },
+  });
+  return { c, v, died(at) { diedAt.t = at; }, get lostAt() { return lostAt; } };
+}
+for (const [mode, limit] of [['silent', 11500], ['down', 5000]]) {
+  test(`flaps: a link that dies right after a good probe is lost within ${limit} ms (${mode}: no transfer in flight)`, async () => {
+    const d = dying(mode); d.v.start();
+    await d.c.advance(5000);                // the probe at 5000 is good
+    const death = d.c.t + 1; d.died(death);   // dies right after it
+    await d.c.advance(30000);
+    assert.ok(d.lostAt > 0, 'lost at all');
+    assert.ok(d.lostAt - death <= limit, `lost ${d.lostAt - death} ms after the death, limit ${limit}`);
+    d.v.stop();
+  });
+}
+
+test('flaps: alive() clears a pending confirm probe (the next probe is the routine one, 5 s from now, without { confirm: true })', async () => {
+  const seen = [];
+  const w = watch({ probe: (o) => { seen.push(o); return new Promise((resolve) => { w.probes.push(resolve); w.ev.push('probe@' + w.c.t); }); } });
+  w.watch.start();
+  await w.c.advance(5000); await w.answer(false);        // suspect: the confirm probe is scheduled for now
+  w.watch.alive();
+  await w.c.advance(4999); assert.strictEqual(w.probes.length, 0);
+  await w.c.advance(1); assert.strictEqual(w.probes.length, 1);
+  assert.deepStrictEqual(seen, [{}, {}]);
   w.watch.stop();
 });
 
@@ -71,12 +156,12 @@ test('flaps: unknown results never mark lost and never clear the suspicion', asy
   assert.deepStrictEqual(probeTimes(w).slice(0, 3), [5000, 10000, 15000], 'unknown while fine: still every 5 s');
   w.watch.stop();
   const v = watch(); v.watch.start();
-  await v.c.advance(5000); await v.answer(false);                       // suspect
-  await v.c.advance(1000); await v.answer(null);                        // unknown: nothing changes, still suspect
+  await v.c.advance(5000); await v.answer(false);                       // suspect (the confirm probe goes out at once)
+  await v.c.advance(0); await v.answer(null);                           // unknown: nothing changes, still suspect
   assert.strictEqual(v.watch.lost, false);
   await v.c.advance(1000); assert.strictEqual(v.probes.length, 1, 'suspect: probe again after 1 s');
   await v.answer(false);
-  assert.deepStrictEqual(states(v), ['lost@7000'], 'fail, unknown, fail = two failures in a row');
+  assert.deepStrictEqual(states(v), ['lost@6000'], 'fail, unknown, fail = two failures in a row');
   v.watch.stop();
 });
 
@@ -102,13 +187,13 @@ test('flaps: a probe that failed while a real response arrived (alive) after it 
 
 test('flaps: alive() while fine clears the suspicion and pushes the next probe to 5 s from now', async () => {
   const w = watch(); w.watch.start();
-  await w.c.advance(5000); await w.answer(false);          // suspect
-  await w.c.advance(500); w.watch.alive();                  // t = 5500
-  await w.c.advance(4999); assert.strictEqual(w.probes.length, 0, 'the suspect probe at 6000 is pushed out');
-  await w.c.advance(1); assert.strictEqual(w.probes.length, 1, 'at 5500 + 5000 = 10500');
-  assert.strictEqual(w.c.t, 10500);
-  await w.answer(false); await w.c.advance(1000); await w.answer(false);
-  assert.deepStrictEqual(states(w), ['lost@11500'], 'the suspicion was cleared: it takes two new failures');
+  await w.c.advance(5000); await w.answer(false);          // suspect (the confirm probe is due at once)
+  w.watch.alive();                                          // t = 5000, before it goes out: it is cancelled (it used to wait 1 s; alive() at 5500 pushed it out)
+  await w.c.advance(4999); assert.strictEqual(w.probes.length, 0, 'the confirm probe is pushed out');
+  await w.c.advance(1); assert.strictEqual(w.probes.length, 1, 'at 5000 + 5000 = 10000');
+  assert.strictEqual(w.c.t, 10000);
+  await w.answer(false); await w.c.advance(0); await w.answer(false);
+  assert.deepStrictEqual(states(w), ['lost@10000'], 'the suspicion was cleared: it takes two new failures');
   w.watch.stop();
 });
 

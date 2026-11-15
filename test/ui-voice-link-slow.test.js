@@ -37,11 +37,53 @@ function probeEnv(page, fetchImpl, owner) {
 }
 
 for (const page of ['phone', 'desktop']) {
-  test(`${page}: probe resolves true on 200 and below 500, false on 503 and on a network error`, async () => {
-    for (const [st, want] of [[200, true], [404, true], [503, false], [500, false]]) {
+  // Detection speed: a HARD failure (a 5xx, a network error) is 'down' (the watch marks lost at once); false is now only a timeout without a transfer of ours.
+  test(`${page}: probe resolves true on 200 and below 500, 'down' on 503 / 500 / 502 and on a network error`, async () => {
+    for (const [st, want] of [[200, true], [404, true], [503, 'down'], [500, 'down'], [502, 'down']]) {
       assert.strictEqual(await probeEnv(page, async () => resp(st)).f.voiceLinkProbe(), want, `status ${st}`);
     }
-    assert.strictEqual(await probeEnv(page, async () => { throw new TypeError('Failed to fetch'); }).f.voiceLinkProbe(), false);
+    assert.strictEqual(await probeEnv(page, async () => { throw new TypeError('Failed to fetch'); }).f.voiceLinkProbe(), 'down');
+    assert.strictEqual(await probeEnv(page, () => { throw new TypeError('sync'); }).f.voiceLinkProbe(), 'down', 'fetch throwing at once');
+  });
+
+  test(`${page}: the probe limit is 4000 ms, or 2500 ms when called with { confirm: true }`, async () => {
+    for (const [arg, ms] of [[undefined, 4000], [{}, 4000], [{ confirm: false }, 4000], [{ confirm: true }, 2500]]) {
+      const { t, f } = probeEnv(page, () => new Promise(() => {}));
+      const p = f.voiceLinkProbe(arg);
+      assert.deepStrictEqual(t.list.map(x => x.ms), [ms], `limit for ${JSON.stringify(arg)}`);
+      t.fire(ms);
+      assert.strictEqual(await p, false);
+    }
+  });
+
+  test(`${page}: the timer's own abort can never make the probe 'down' (it resolves first, the rejection that follows is ignored)`, async () => {
+    // (the fake abort rejects the fetch the way a real one does; the timer must already have resolved the probe, so the rejection finds it settled)
+    let rejectFetch;
+    const t = timers(); let order = [];
+    class Ab { constructor() { this.signal = {}; } abort() { order.push('abort'); rejectFetch(new TypeError('The operation was aborted')); } }
+    const fetchImpl = () => new Promise((_, rej) => { rejectFetch = rej; });
+    let f;
+    if (page === 'phone') {
+      const src = between(mob, 'const voiceUp = {', 'function voiceLinkNetFail(');
+      f = new Function('fetch', 'setTimeout', 'clearTimeout', 'AbortController', 'voiceCall', src + '\nreturn { voiceLinkProbe };')(fetchImpl, t.setTimeout, t.clearTimeout, Ab, null);
+    } else {
+      const src = between(app, '    const voiceUp = {', '    function voiceLinkNetFail(');
+      f = new Function('fetch', 'setTimeout', 'clearTimeout', 'AbortController', 'voiceCallS', src + '\nreturn { voiceLinkProbe };')(fetchImpl, t.setTimeout, t.clearTimeout, Ab, {});
+    }
+    const p = f.voiceLinkProbe({ confirm: true }).then((r) => { order.push('resolved ' + r); return r; });
+    t.fire(2500);
+    assert.strictEqual(await p, false, 'a timeout, not a network error');
+    assert.deepStrictEqual(order, ['abort', 'resolved false'], 'abort ran, yet the answer is the timeout');
+    const src = (page === 'phone' ? mob : app);
+    assert.match(src, /setTimeout\(\(\) => \{ resolve\(voiceUp\.n > 0 \|\| voiceUp\.seq !== seq0 \? null : false\); try \{ if \(ac\) ac\.abort\(\)/, 'resolve first, then abort');
+  });
+
+  test(`${page}: a timeout with a transfer of ours in flight is null, also for the confirm probe`, async () => {
+    const { t, f } = probeEnv(page, () => new Promise(() => {}));
+    let release; const up = f.voiceUpTrack(() => new Promise((r) => { release = r; }));
+    const p = f.voiceLinkProbe({ confirm: true }); t.fire(2500);
+    assert.strictEqual(await p, null);
+    release(); await up;
   });
 
   test(`${page}: probe asks for high fetch priority`, async () => {
@@ -74,10 +116,10 @@ for (const page of ['phone', 'desktop']) {
     assert.strictEqual(f.voiceUp.n, 0);
   });
 
-  test(`${page}: a network error with an upload in flight is still false (an outage is reported at once)`, async () => {
+  test(`${page}: a network error with an upload in flight is still 'down' (an outage is reported at once)`, async () => {
     const { f } = probeEnv(page, async () => { throw new TypeError('Failed to fetch'); });
     let release; const up = f.voiceUpTrack(() => new Promise((r) => { release = r; }));
-    assert.strictEqual(await f.voiceLinkProbe(), false);
+    assert.strictEqual(await f.voiceLinkProbe(), 'down');
     release(); await up;
   });
 

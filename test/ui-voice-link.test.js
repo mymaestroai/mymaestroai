@@ -48,17 +48,18 @@ test('link watch: probes every 5 s while the link is fine, and a good answer cha
 });
 
 // Review note (link flaps): ONE failed probe used to mark the link lost; now it takes two in a row (the first only makes the watch suspect).
+// Changed again (detection speed): the confirming probe goes out AT ONCE (it used to wait 1 s), so the second false is at 5000, not 6000.
 test('link watch: two failed probes in a row are lost once, then 1 s probes; a success within 10 s is back once and the rhythm returns to 5 s', async () => {
   const w = watch(); w.watch.start();
   await w.c.advance(5000); await w.answer(false);
   assert.deepStrictEqual(w.ev, ['probe@5000']); assert.strictEqual(w.watch.lost, false, 'one failure: suspect only');
-  await w.c.advance(1000); await w.answer(false);
-  assert.deepStrictEqual(w.ev, ['probe@5000', 'probe@6000', 'lost@6000']); assert.strictEqual(w.watch.lost, true);
+  await w.c.advance(0); await w.answer(false);
+  assert.deepStrictEqual(w.ev, ['probe@5000', 'probe@5000', 'lost@5000']); assert.strictEqual(w.watch.lost, true);
   await w.c.advance(1000); await w.answer(false);
   await w.c.advance(1000); await w.answer(false);
   await w.c.advance(1000); await w.answer(true);
-  assert.deepStrictEqual(nonProbe(w), ['lost@6000', 'back@9000']);
-  assert.deepStrictEqual(w.ev.filter(e => e.startsWith('probe')), ['probe@5000', 'probe@6000', 'probe@7000', 'probe@8000', 'probe@9000']);
+  assert.deepStrictEqual(nonProbe(w), ['lost@5000', 'back@8000']);
+  assert.deepStrictEqual(w.ev.filter(e => e.startsWith('probe')), ['probe@5000', 'probe@5000', 'probe@6000', 'probe@7000', 'probe@8000']);
   assert.strictEqual(w.watch.lost, false);
   await w.c.advance(4999); assert.strictEqual(w.probes.length, 0);
   await w.c.advance(1); assert.strictEqual(w.probes.length, 1, 'back to 5 s');
@@ -124,8 +125,8 @@ test('link watch: stop() silences everything, including a probe that resolves la
 
 test('link watch: a probe that throws counts as failed; a listener that throws does not break it', async () => {
   const w = watch({ probe: () => { throw new Error('x'); }, onLost: () => { throw new Error('listener'); } });
-  w.watch.start(); await w.c.advance(5000); assert.strictEqual(w.watch.lost, false, 'one throw: suspect');
-  await w.c.advance(1000);
+  // (the confirming probe is at once now, so both throws happen within the 5000 step)
+  w.watch.start(); await w.c.advance(5000);
   assert.strictEqual(w.watch.lost, true);
   w.watch.stop();
 });
