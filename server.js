@@ -2322,7 +2322,7 @@ async function handleHttpRequest(req, res) {
       const next = { ...cur, ...require('./lib/openrouter').cleanOpenRouterSettings(b) };
       if (next.models === null) delete next.models;   // back to the default offer
       hubSettings.updateSettings({ openrouter: next });
-      try { require('./lib/model-discovery').runDiscovery({ again: true }); } catch {}   // the pickers follow the new offer (a run already going may predate it: one more run)
+      try { require('./lib/model-discovery').runDiscovery({ again: true }).catch(() => {}); } catch {}   // the pickers follow the new offer (a run already going may predate it: one more run)
       return jsonResponse(res, 200, { ok: true, ...require('./lib/openrouter').getOpenRouter().view() });
     }
 
