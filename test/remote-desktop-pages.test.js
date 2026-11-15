@@ -100,12 +100,12 @@ test('remote-desktop.html: boot marker once, urlargs then the three relative scr
   assert.ok(!/(https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,}/i.test(viewer.replace(/<!DOCTYPE[^>]*>/, '')), 'no external URL');
   assert.ok(!/\son[a-z]+\s*=\s*["']/i.test(viewer), 'no inline event attributes');
   assert.match(viewer, /name="viewport"[^>]*user-scalable=no/);
-  assert.ok(viewer.split('\n').length < 400);
+  assert.ok(viewer.split('\n').length < 500);
 });
 
 test('remote-desktop.html: toolbar and viewer wiring', () => {
-  for (const id of ['fit', 'keyboard', 'cad', 'end', 'reconnect']) assert.match(viewer, new RegExp(`id="${id}"`));
-  for (const s of ['>Fit<', '>Keyboard<', '>Ctrl+Alt+Del<', '>End<', '>Reconnect<']) assert.ok(viewer.includes(s), s);
+  for (const id of ['zout', 'zin', 'fit', 'keyboard', 'cad', 'end', 'reconnect']) assert.match(viewer, new RegExp(`id="${id}"`));
+  for (const s of ['aria-label="Zoom out"', 'aria-label="Zoom in"', '>Fit<', '>Keyboard<', '>Ctrl+Alt+Del<', '>End<', '>Reconnect<']) assert.ok(viewer.includes(s), s);
   assert.match(viewer, /CreateAgentRedirect\(\{ send: function \(\) \{\} \}, CreateAgentRemoteDesktop\('Desk'\), '', '', '', '\/'\)/);
   assert.match(viewer, /desktop\.Start\(boot\.nodeid\)/);
   assert.match(viewer, /SendCtrlAltDelMsg\(\)/);
@@ -117,6 +117,7 @@ test('remote-desktop.html: toolbar and viewer wiring', () => {
 
 function runViewer(boot, opts = {}) {
   const src = viewer.match(/<script>\n\(function[\s\S]*?<\/script>/)[0].replace(/^<script>|<\/script>$/g, '');
+  const math = viewer.match(/<script>\n(var rdView[\s\S]*?)<\/script>/)[1];
   const els = {};
   const mk = (id) => ({ id, style: {}, textContent: '', disabled: false, value: '', offsetHeight: 40, listeners: {}, classList: { toggle() {}, add() {} },
     addEventListener(n, f) { (this.listeners[n] = this.listeners[n] || []).push(f); }, setPointerCapture() {}, focus() {}, blur() {} });
@@ -138,6 +139,7 @@ function runViewer(boot, opts = {}) {
     Date: { now: () => now }, JSON, Math, Number, isNaN, console,
   };
   vm.createContext(sandbox);
+  vm.runInContext(math, sandbox);
   vm.runInContext(src, sandbox);
   return { els, log, el, tick: () => timers.forEach(f => f()), setNow: (n) => { now = n; }, sandbox };
 }
@@ -235,6 +237,7 @@ test('remote-desktop.html with the REAL MeshCentral viewer scripts: a key press 
   if (!files.every(f => fs.existsSync(f))) return t.skip('MeshCentral viewer scripts are not installed here');
   const src = viewer.match(/<script>\n\(function[\s\S]*?<\/script>/)[0].replace(/^<script>|<\/script>$/g, '');
   const pre = viewer.match(/<script>(var urlargs = \{\};[\s\S]*?)<\/script>/)[1];
+  const math = viewer.match(/<script>\n(var rdView[\s\S]*?)<\/script>/)[1];
   const els = {};
   const mk = (id) => ({ id, style: {}, textContent: '', disabled: false, value: '', offsetHeight: 40, listeners: {}, classList: { toggle() {}, add() {}, remove() {} },
     addEventListener(n, f) { (this.listeners[n] = this.listeners[n] || []).push(f); }, setPointerCapture() {}, focus() {}, blur() {},
@@ -248,6 +251,7 @@ test('remote-desktop.html with the REAL MeshCentral viewer scripts: a key press 
   vm.createContext(sandbox);
   vm.runInContext(pre, sandbox);
   for (const f of files) vm.runInContext(fs.readFileSync(f, 'utf8'), sandbox, { filename: f });
+  vm.runInContext(math, sandbox);
   vm.runInContext(src, sandbox);
   const keydown = () => el('doc').listeners.keydown[0]({ keyCode: 65, code: 'KeyA', key: 'a', ctrlKey: true, target: null, preventDefault() {}, stopPropagation() {} });
   const first = vm.runInContext('desktop', sandbox);

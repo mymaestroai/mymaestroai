@@ -14,10 +14,9 @@
   button { font: inherit; font-size: 13px; min-height: 36px; padding: 5px 12px; border-radius: 4px; border: 1px solid #333846; background: transparent; color: #F3F4F6; cursor: pointer; }
   button:hover { border-color: #3D7BFF; }
   button.danger { color: #FF4C4C; border-color: rgba(255, 76, 76, .5); }
-  #scroller { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: auto; background: #000; }
-  #scroller.fit { overflow: hidden; }
-  #Desk { display: block; touch-action: none; user-select: none; -webkit-user-select: none; background: #000; }
-  #scroller.fit #Desk { width: 100%; height: auto; }
+  #scroller { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: auto; display: flex; background: #000; touch-action: none; scrollbar-width: none; }
+  #scroller::-webkit-scrollbar { display: none; }
+  #Desk { display: block; flex: none; margin: auto; touch-action: none; user-select: none; -webkit-user-select: none; background: #000; }
   #ended { display: none; padding: 30px 16px; text-align: center; font-size: 16px; color: #9CA3AF; }
   #kb { position: fixed; left: 0; bottom: 0; opacity: 0; width: 1px; height: 1px; border: 0; padding: 0; }
 </style>
@@ -29,19 +28,64 @@
   <span class="sp"></span>
   <span id="state">Connecting</span>
   <button id="reconnect" type="button" style="display:none">Reconnect</button>
+  <button id="zout" type="button" aria-label="Zoom out">−</button>
+  <button id="zin" type="button" aria-label="Zoom in">+</button>
   <button id="fit" type="button">Fit</button>
   <button id="keyboard" type="button">Keyboard</button>
   <button id="cad" type="button">Ctrl+Alt+Del</button>
   <button id="end" type="button" class="danger">End</button>
 </div>
 <div id="ended">The session has ended.</div>
-<div id="scroller" class="fit"><canvas id="Desk" width="640" height="480"></canvas></div>
+<div id="scroller"><canvas id="Desk" width="640" height="480"></canvas></div>
 <input id="kb" type="text" autocapitalize="off" autocomplete="off" autocorrect="off" inputmode="text" spellcheck="false">
 <script type="application/json" id="rd-boot">{}</script>
 <script>var urlargs = {};
 // MeshCentral's key handlers read a GLOBAL `desktop` (desktop.State); the page keeps it current below. A safe value until the first viewer exists.
 var desktop = { State: 0 };</script>
 <script src="scripts/common-0.0.1.js"></script><script src="scripts/agent-redir-ws-0.1.1.js"></script><script src="scripts/agent-desktop-0.0.2.js"></script>
+<script>
+var rdView = (function () {
+  // Pure view math (no DOM), so it can be tested on its own. Sizes are CSS px; desktop pixels are the canvas's own pixels.
+  var clamp = function (v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; };
+  var num = function (v, d) { return typeof v === 'number' && isFinite(v) ? v : d; };
+  // Client point -> desktop pixel (integers, clamped to 0..size-1). rect = canvas.getBoundingClientRect() (already includes zoom and scroll).
+  function toDesktop(rect, cw, ch, clientX, clientY) {
+    var rw = num(rect.width, 0) || 1, rh = num(rect.height, 0) || 1;
+    return { x: clamp(Math.floor((clientX - rect.left) * cw / rw), 0, Math.max(0, cw - 1)), y: clamp(Math.floor((clientY - rect.top) * ch / rh), 0, Math.max(0, ch - 1)) };
+  }
+  // Desktop pixel -> the pageX/pageY that agent-desktop's SendMouseMsg turns back into the same pixel (it ignores scroll and transforms).
+  // Aims at the pixel's centre so rounding can never land on the neighbour.
+  function toPage(off, clientW, clientH, cw, ch, x, y) {
+    return { pageX: off[0] + (x + 0.5) * clientW / cw, pageY: off[1] + (y + 0.5) * clientH / ch };
+  }
+  // The whole desktop inside the view ('contain').
+  function fitSize(vw, vh, dw, dh) {
+    if (!(vw > 0 && vh > 0 && dw > 0 && dh > 0)) return { w: 0, h: 0 };
+    var s = Math.min(vw / dw, vh / dh);
+    return { w: dw * s, h: dh * s };
+  }
+  // Up to 4x, or twice actual size if that is more.
+  function maxZoom(vw, vh, dw, dh) {
+    var f = fitSize(vw, vh, dw, dh);
+    return f.w > 0 ? Math.max(4, 2 * dw / f.w) : 4;
+  }
+  // The point at view position (px,py) is moved to (qx,qy) (default: stays) at the new zoom. view = { w, h, fitW, fitH, max, oldW?, oldH? };
+  // oldW/oldH = the content size the state was measured at (when the fit size itself changed).
+  function zoomAbout(state, newZoom, px, py, view, qx, qy) {
+    var z = clamp(num(newZoom, state.zoom), 1, Math.max(1, view.max || 4));
+    if (qx == null) qx = px;
+    if (qy == null) qy = py;
+    function axis(scroll, p, q, vs, fit, old) {
+      var c = old > 0 ? old : fit * state.zoom, ox = Math.max(0, (vs - c) / 2);
+      var f = c > 0 ? clamp((scroll + p - ox) / c, 0, 1) : 0;
+      var c2 = fit * z, ox2 = Math.max(0, (vs - c2) / 2);
+      return clamp(f * c2 - q + ox2, 0, Math.max(0, c2 - vs));
+    }
+    return { zoom: z, scrollLeft: axis(state.scrollLeft, px, qx, view.w, view.fitW, view.oldW), scrollTop: axis(state.scrollTop, py, qy, view.h, view.fitH, view.oldH) };
+  }
+  return { toDesktop: toDesktop, toPage: toPage, fitSize: fitSize, maxZoom: maxZoom, zoomAbout: zoomAbout };
+})();
+</script>
 <script>
 (function () {
   var boot = {};
@@ -54,8 +98,26 @@ var desktop = { State: 0 };</script>
   $('name').textContent = boot.name || 'Computer';
   document.title = (boot.name || 'Desktop') + ' — My Maestro AI';
 
-  function layout() { scroller.style.top = bar.offsetHeight + 'px'; }
-  window.addEventListener('resize', layout); layout();
+  // View: zoom 1 = the whole desktop visible; the canvas's CSS size is the fit size x zoom, pan = the scroller's scroll position.
+  var zoom = 1;
+  var vw = function () { return scroller.clientWidth || 0; }, vh = function () { return scroller.clientHeight || 0; };
+  function place(z, px, py, qx, qy, oldW, oldH) {
+    var w = vw(), h = vh(), dw = canvas.width, dh = canvas.height, f = rdView.fitSize(w, h, dw, dh);
+    if (!(f.w > 0)) return;
+    var r = rdView.zoomAbout({ zoom: zoom, scrollLeft: scroller.scrollLeft || 0, scrollTop: scroller.scrollTop || 0 }, z, px, py,
+      { w: w, h: h, fitW: f.w, fitH: f.h, max: rdView.maxZoom(w, h, dw, dh), oldW: oldW, oldH: oldH }, qx, qy);
+    zoom = r.zoom;
+    canvas.style.width = f.w * zoom + 'px'; canvas.style.height = f.h * zoom + 'px';
+    scroller.scrollLeft = r.scrollLeft; scroller.scrollTop = r.scrollTop;
+  }
+  // Re-fit (resize, rotation, remote screen change), keeping the point under the view centre.
+  function refit() {
+    var w = vw(), h = vh();
+    if (w > 0 && h > 0) place(zoom, w / 2, h / 2, w / 2, h / 2, parseFloat(canvas.style.width) || canvas.clientWidth, parseFloat(canvas.style.height) || canvas.clientHeight);
+  }
+  function zoomBy(k) { place(zoom * k, vw() / 2, vh() / 2); }
+  function layout() { scroller.style.top = bar.offsetHeight + 'px'; refit(); }
+  window.addEventListener('resize', layout); window.addEventListener('orientationchange', layout); layout();
 
   function setState(text) { $('state').textContent = text; }
   function showReconnect() { $('reconnect').style.display = live ? '' : 'none'; }
@@ -70,7 +132,7 @@ var desktop = { State: 0 };</script>
     $('ended').style.display = 'block';
     $('ended').textContent = why || 'The session has ended.';
     setState('Ended'); $('left').textContent = '';
-    ['reconnect', 'fit', 'keyboard', 'cad', 'end'].forEach(function (id) { $(id).style.display = 'none'; });
+    ['reconnect', 'zout', 'zin', 'fit', 'keyboard', 'cad', 'end'].forEach(function (id) { $(id).style.display = 'none'; });
     document.querySelector('meta[name=viewport]').setAttribute('content', 'width=device-width, initial-scale=1');
   }
 
@@ -101,7 +163,9 @@ var desktop = { State: 0 };</script>
   }
   $('reconnect').addEventListener('click', function () { $('reconnect').style.display = 'none'; start(); });
 
-  $('fit').addEventListener('click', function () { scroller.classList.toggle('fit'); });
+  $('zout').addEventListener('click', function () { zoomBy(1 / 1.5); });
+  $('zin').addEventListener('click', function () { zoomBy(1.5); });
+  $('fit').addEventListener('click', function () { place(1, vw() / 2, vh() / 2); });
   $('cad').addEventListener('click', function () { if (desktop) desktop.m.SendCtrlAltDelMsg(); });
   $('keyboard').addEventListener('click', function () { if (document.activeElement === kb) kb.blur(); else kb.focus(); });
   $('end').addEventListener('click', function () {
@@ -137,52 +201,114 @@ var desktop = { State: 0 };</script>
   kb.addEventListener('keydown', special(true));
   kb.addEventListener('keyup', special(false));
 
+  // Mouse and touch positions are mapped by the page: the viewer script's SendMouseMsg ignores scroll and zoom, so each event is
+  // turned into a desktop pixel from the canvas's real on-screen rectangle, then into the pageX/pageY SendMouseMsg maps back to that pixel.
+  function send(name, cx, cy, button, buttons, which, wheel) {
+    if (!live || !desktop) return;
+    var rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: canvas.clientWidth || canvas.width, height: canvas.clientHeight || canvas.height };
+    var d = rdView.toDesktop(rect, canvas.width, canvas.height, cx, cy);
+    var off = desktop.m.GetPositionOfControl ? desktop.m.GetPositionOfControl(canvas) : [0, 0];
+    var p = rdView.toPage(off, canvas.clientWidth || rect.width, canvas.clientHeight || rect.height, canvas.width, canvas.height, d.x, d.y);
+    desktop.m[name]({ pageX: p.pageX, pageY: p.pageY, clientX: cx, clientY: cy, button: button, buttons: buttons, which: which,
+      wheelDelta: wheel ? wheel.wheelDelta : 0, detail: wheel ? wheel.detail : 0, preventDefault: function () {}, stopPropagation: function () {}, target: canvas });
+  }
+  var sendBtn = function (name, x, y, button) { send(name, x, y, button, button === 2 ? 2 : 1, button + 1); };
+
   // Mouse
   ['mousedown', 'mouseup', 'mousemove'].forEach(function (n) {
-    canvas.addEventListener(n, function (e) { if (live && desktop && !e.__touch) { desktop.m[n](e); e.preventDefault(); } });
+    canvas.addEventListener(n, function (e) { if (live && desktop && !e.__touch) { send(n, e.clientX, e.clientY, e.button, e.buttons, e.which); e.preventDefault(); } });
   });
-  canvas.addEventListener('dblclick', function (e) { if (live && desktop) { desktop.m.mousedblclick(e); e.preventDefault(); } });
-  canvas.addEventListener('wheel', function (e) { if (live && desktop) { desktop.m.mousewheel(e); e.preventDefault(); } }, { passive: false });
+  canvas.addEventListener('dblclick', function (e) { if (live && desktop) { send('mousedblclick', e.clientX, e.clientY, e.button, e.buttons, e.which); e.preventDefault(); } });
+  canvas.addEventListener('wheel', function (e) {
+    if (!live || !desktop) return;
+    var box = scroller.getBoundingClientRect ? scroller.getBoundingClientRect() : { left: 0, top: 0 };
+    var k = e.deltaMode === 1 ? 16 : 1, dy = (e.deltaY || 0) * k, dx = (e.deltaX || 0) * k;
+    if (e.ctrlKey) place(zoom * Math.exp(-Math.max(-60, Math.min(60, dy)) * 0.01), e.clientX - box.left, e.clientY - box.top);
+    else if (zoom > 1.0001) { scroller.scrollLeft += dx; scroller.scrollTop += dy; }
+    else send('mousewheel', e.clientX, e.clientY, 0, 0, 0, { wheelDelta: typeof e.wheelDelta === 'number' ? e.wheelDelta : (dy > 0 ? -120 : dy < 0 ? 120 : 0), detail: e.detail || 0 });
+    e.preventDefault();
+  }, { passive: false });
   canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
-  // Touch (Pointer Events): tap = left click, drag = move with the left button held, long press = right click.
-  var touch = null;
-  function ev(e, button) {
-    return { pageX: e.pageX, pageY: e.pageY, clientX: e.clientX, clientY: e.clientY, button: button, buttons: button === 2 ? 2 : 1, which: button + 1, preventDefault: function () {}, stopPropagation: function () {}, target: canvas };
+  // Touch (Pointer Events). One finger: tap = left click, drag = move with the left button held, long press = right click.
+  // Two fingers: pinch zooms about the midpoint, moving the midpoint pans; a two-finger double tap toggles 1x / 2x.
+  var pts = {}, touch = null, pinch = null, pendingTap = null, lastTap = null;
+  var count = function () { return Object.keys(pts).length; };
+  var dist = function (a, b) { return Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)); };
+  function inCanvas(e) { var r = canvas.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.left + r.width && e.clientY >= r.top && e.clientY <= r.top + r.height; }
+  function pair() { var k = Object.keys(pts); return [pts[k[0]], pts[k[1]]]; }
+  function mid(p) { return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 }; }
+  function cancelTouch() {
+    if (!touch) return;
+    clearTimeout(touch.timer);
+    if (touch.dragging && desktop) sendBtn('mouseup', touch.last.x, touch.last.y, 0);
+    touch = null;
   }
-  canvas.addEventListener('pointerdown', function (e) {
-    if (e.pointerType === 'mouse' || !live || !desktop) return;
-    if (touch) return;
-    touch = { id: e.pointerId, x: e.pageX, y: e.pageY, moved: false, dragging: false, right: false, last: e };
-    try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
+  scroller.addEventListener('pointerdown', function (e) {
+    if (e.pointerType === 'mouse' || !live || !desktop || pts[e.pointerId]) return;
+    var n = count();
+    if (n >= 2 || (n === 0 && !inCanvas(e))) return;
+    pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+    try { scroller.setPointerCapture(e.pointerId); } catch (x) {}
+    e.preventDefault();
+    if (n === 1) {
+      cancelTouch();
+      var p = pair(), m = mid(p);
+      pendingTap = null;
+      pinch = { t: Date.now(), d: dist(p[0], p[1]), mx: m.x, my: m.y, a: { x: p[0].x, y: p[0].y }, b: { x: p[1].x, y: p[1].y }, tapOk: true };
+      return;
+    }
+    touch = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, dragging: false, right: false, last: { x: e.clientX, y: e.clientY } };
     touch.timer = setTimeout(function () {
       if (!touch || touch.moved) return;
       touch.right = true;
-      desktop.m.mousedown(ev(touch.last, 2)); desktop.m.mouseup(ev(touch.last, 2));
+      sendBtn('mousedown', touch.last.x, touch.last.y, 2); sendBtn('mouseup', touch.last.x, touch.last.y, 2);
     }, 600);
-    e.preventDefault();
   });
-  canvas.addEventListener('pointermove', function (e) {
-    if (!touch || e.pointerId !== touch.id || !desktop) return;
-    touch.last = e;
-    if (!touch.moved && Math.abs(e.pageX - touch.x) + Math.abs(e.pageY - touch.y) < 8) return;
+  scroller.addEventListener('pointermove', function (e) {
+    var q = pts[e.pointerId];
+    if (!q || !desktop) return;
+    var before = pinch && mid(pair()), d0 = pinch && dist.apply(null, pair());
+    q.x = e.clientX; q.y = e.clientY;
+    if (pinch && count() === 2) {
+      var p = pair(), m = mid(p), d = dist(p[0], p[1]), box = scroller.getBoundingClientRect();
+      if (dist(p[0], pinch.a) > 12 || dist(p[1], pinch.b) > 12) pinch.tapOk = false;
+      if (d0 > 0) place(zoom * d / d0, before.x - box.left, before.y - box.top, m.x - box.left, m.y - box.top);
+      e.preventDefault(); return;
+    }
+    if (!touch || e.pointerId !== touch.id) return;
+    touch.last = { x: e.clientX, y: e.clientY };
+    if (!touch.moved && Math.abs(e.clientX - touch.x) + Math.abs(e.clientY - touch.y) < 8) return;
     if (touch.right) return;
     touch.moved = true; clearTimeout(touch.timer);
-    if (!touch.dragging) { touch.dragging = true; desktop.m.mousemove(ev({ pageX: touch.x, pageY: touch.y, clientX: touch.x, clientY: touch.y }, 0)); desktop.m.mousedown(ev({ pageX: touch.x, pageY: touch.y, clientX: touch.x, clientY: touch.y }, 0)); }
-    desktop.m.mousemove(ev(e, 0));
+    if (!touch.dragging) { touch.dragging = true; sendBtn('mousemove', touch.x, touch.y, 0); sendBtn('mousedown', touch.x, touch.y, 0); }
+    sendBtn('mousemove', e.clientX, e.clientY, 0);
     e.preventDefault();
   });
   function pointerEnd(e) {
-    if (!touch || e.pointerId !== touch.id) return;
-    clearTimeout(touch.timer);
-    var t = touch; touch = null;
-    if (!desktop || !live || t.right) return;
-    if (t.dragging) desktop.m.mouseup(ev(e, 0));
-    else if (e.type === 'pointerup') { desktop.m.mousemove(ev(e, 0)); desktop.m.mousedown(ev(e, 0)); desktop.m.mouseup(ev(e, 0)); }
+    if (!pts[e.pointerId]) return;
+    delete pts[e.pointerId];
     e.preventDefault();
+    if (pinch) {
+      var g = pinch; pinch = null;
+      if (g.tapOk && e.type === 'pointerup' && Date.now() - g.t < 250) pendingTap = { t: Date.now(), x: g.mx, y: g.my };
+    } else if (touch && e.pointerId === touch.id) {
+      clearTimeout(touch.timer);
+      var t = touch; touch = null;
+      if (!desktop || !live || t.right) return;
+      if (t.dragging) sendBtn('mouseup', e.type === 'pointerup' ? e.clientX : t.last.x, e.type === 'pointerup' ? e.clientY : t.last.y, 0);
+      else if (e.type === 'pointerup') { sendBtn('mousemove', e.clientX, e.clientY, 0); sendBtn('mousedown', e.clientX, e.clientY, 0); sendBtn('mouseup', e.clientX, e.clientY, 0); }
+    }
+    if (count() === 0 && pendingTap) {
+      var tap = pendingTap; pendingTap = null;
+      if (lastTap && tap.t - lastTap.t <= 300 && dist(tap, lastTap) < 40) {
+        var box = scroller.getBoundingClientRect();
+        place(zoom < 1.5 ? 2 : 1, tap.x - box.left, tap.y - box.top); lastTap = null;
+      } else lastTap = tap;
+    }
   }
-  canvas.addEventListener('pointerup', pointerEnd);
-  canvas.addEventListener('pointercancel', pointerEnd);
+  scroller.addEventListener('pointerup', pointerEnd);
+  scroller.addEventListener('pointercancel', pointerEnd);
 
   start();
 })();
