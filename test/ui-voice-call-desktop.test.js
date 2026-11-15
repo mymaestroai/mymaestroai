@@ -8,6 +8,15 @@ const fs = require('fs');
 const path = require('path');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const app = read('app.js');
+
+// The shared device helpers of the library (the real ones) and the page's own voiceMarkDeviceChanged, taken from app.js.
+const DEV = (() => {
+  const LL = require('../lib/ui-voice');
+  const i = app.indexOf('    function voiceMarkDeviceChanged('), j = app.indexOf('    function voiceMicLevelNow()', i);
+  if (!(i > 0 && j > i)) throw new Error('voiceMarkDeviceChanged not found in app.js');
+  const voiceMarkDeviceChanged = new Function('VOICE_DEVICE_DEFAULT_KEYS', 'voiceMarkDeviceSet', app.slice(i, j) + '\nreturn voiceMarkDeviceChanged;')(LL.VOICE_DEVICE_DEFAULT_KEYS, LL.voiceMarkDeviceSet);
+  return { ...LL, voiceMarkDeviceChanged };
+})();
 const html = read('index.html');
 const CALL = require('../lib/ui-voice-call');
 
@@ -144,7 +153,7 @@ function makeEnv(opts = {}) {
       if (opts.sendFails) o.onSendResult(new Error('HTTP 500: Internal'));
       else if (opts.sendOk) o.onSendResult(null);
     },
-    voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...require('../lib/ui-voice').VOICE_DEFAULT_PREFS, ...prefs }), voiceSpeedFor: () => prefs.voiceSpeed || 1, voiceFollowLine: () => '', voiceMarkChosen: require('../lib/ui-voice').voiceMarkChosen, voiceEffectivePrefs: require('../lib/ui-voice').voiceEffectivePrefs, VOICE_AGENT_DEFAULT_KEYS: require('../lib/ui-voice').VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: require('../lib/ui-voice').VOICE_DEFAULT_PREFS, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
+    voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...require('../lib/ui-voice').VOICE_DEFAULT_PREFS, ...prefs }), voiceSpeedFor: () => prefs.voiceSpeed || 1, voiceFollowLine: () => '', voiceMarkChosen: require('../lib/ui-voice').voiceMarkChosen, voiceIsIOSNav: DEV.voiceIsIOSNav, voiceEchoHoldOk: DEV.voiceEchoHoldOk, voiceEchoChoices: DEV.voiceEchoChoices, VOICE_DEVICE_DEFAULT_KEYS: DEV.VOICE_DEVICE_DEFAULT_KEYS, voiceMarkDeviceSet: DEV.voiceMarkDeviceSet, voiceDevicePrefs: DEV.voiceDevicePrefs, VOICE_ECHO_HOLD_IOS: DEV.VOICE_ECHO_HOLD_IOS, voiceMarkDeviceChanged: DEV.voiceMarkDeviceChanged, voiceEffectivePrefs: require('../lib/ui-voice').voiceEffectivePrefs, VOICE_AGENT_DEFAULT_KEYS: require('../lib/ui-voice').VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: require('../lib/ui-voice').VOICE_DEFAULT_PREFS, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
     // voice fixes 1: pause before done, voice speed (the real ones are in app.js outside the wiring block)
     voiceEndPauseNow: () => prefs.endPause || 1200, voiceSpeedNow: () => prefs.voiceSpeed || 1, voiceSpeedLabel: (v) => Number(v).toFixed(2) + 'x',
     voiceCleanSpeed: (v) => Math.round(Math.max(0.75, Math.min(1.5, Number(v))) * 20) / 20,
@@ -191,7 +200,7 @@ test('start: deps contract, VAD options from prefs, bar above the box, button be
   const { api, calls, fakeCall, get } = makeEnv();
   await api.voiceCallStart('c1');
   assert.strictEqual(fakeCall.started, 1);
-  assert.deepStrictEqual({ ...calls.vadOpts }, { baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40, endPause: 1200, echoHoldMs: 600 });   // + the end-of-turn pause (voice fixes 1)
+  assert.deepStrictEqual({ ...calls.vadOpts }, { baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40, endPause: 1200, echoHoldMs: 600, strictTalkOver: false });   // strictTalkOver: only on an iPhone or iPad   // + the end-of-turn pause (voice fixes 1)
   const d = calls.created[0];
   for (const k of ['agent', 'now', 'setTimer', 'clearTimer', 'prefs', 'vad', 'stt', 'isTurnRunning', 'send', 'interject', 'stop', 'speak', 'cancelSpeech', 'answerAsk', 'server', 'ui']) assert.ok(k in d, k);
   for (const k of ['start', 'heartbeat', 'mode', 'end', 'decide']) assert.strictEqual(typeof d.server[k], 'function', 'server.' + k);

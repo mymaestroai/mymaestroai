@@ -119,7 +119,7 @@ test('phone: the focus is created and started in the tap before any await, stopp
   const aw = body.search(/\bawait +[\w(]/), create = body.indexOf('voiceCreateAudioFocus({ doc: document, URL, Blob })'), start = body.indexOf('vc.focus.start()');
   assert.ok(create > 0 && start > create, 'created then started');
   assert.ok(aw < 0 || start < aw, 'before the first await');
-  assert.ok(body.indexOf('typeof voiceCreateAudioFocus') >= 0 && /voiceFocusHint\(!ok \|\| /.test(body) && body.includes('voiceIsIOS()'));
+  assert.ok(body.indexOf('typeof voiceCreateAudioFocus') >= 0 && /voiceFocusHint\(!ok\)/.test(body) && body.includes('voiceIsIOS()'));   // iOS: no focus element, the hint is shown without it (ui-voice-ios-pages.test.js)
   const t = js.indexOf('function voiceCallTeardown(vc)'), tb = js.slice(t, js.indexOf('\n}\n', t));
   assert.ok(/if \(vc\.focus\) \{ try \{ vc\.focus\.stop\(\); \} catch \{\} \}/.test(tb)); assert.ok(tb.includes('voiceFocusHint(false)'));
   assert.ok(/function voiceFocusHint\(show\)/.test(js));

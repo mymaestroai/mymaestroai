@@ -22,7 +22,7 @@ function sheetHtml() {
   const start = sheetSrc.indexOf("sh.innerHTML = ") + 'sh.innerHTML = '.length;
   const end = sheetSrc.indexOf("</button></div>';", start) + "</button></div>'".length;
   const expr = sheetSrc.slice(start, end);
-  const consts = { VOICE_LOUDNESS_OPTIONS: OPTIONS, VOICE_INTERRUPT_HINT: '', VOICE_END_PAUSES: [800, 1200, 2000], VOICE_SPEED_HINT: '', VOICE_ECHO_HOLDS: [400, 600], VOICE_ECHO_LABELS: ['a', 'b'], VOICE_KEEPALIVE_HINT: '', VOICE_ECHO_HINT: '' };
+  const consts = { VOICE_LOUDNESS_OPTIONS: OPTIONS, VOICE_INTERRUPT_HINT: '', VOICE_END_PAUSES: [800, 1200, 2000], VOICE_SPEED_HINT: '', voiceEchoOptionsHtml: () => '<option value="600">0.6 s</option>', VOICE_KEEPALIVE_HINT: '', VOICE_ECHO_HINT: '' };
   return new Function(...Object.keys(consts), 'return ' + expr + ';')(...Object.values(consts));
 }
 const selectOf = (h, id) => { const m = h.match(new RegExp('<select id="' + id + '"[^>]*>(.*?)</select>')); assert.ok(m, id + ' select'); return m[1]; };
@@ -48,8 +48,8 @@ function paint(prefs) {
   const sel = (id) => (els[id] = els[id] || { value: '', id });
   const dummy = new Proxy({}, { get: (t, k) => (k === 'classList' ? { toggle() {}, contains: () => true } : k === 'querySelector' ? () => dummy : k === 'textContent' || k === 'value' || k === 'checked' ? t[k] : t[k]), set: (t, k, v) => { t[k] = v; return true; } });
   const sh = { classList: { contains: () => true }, querySelector: (s) => (s === '#vs-loudness' ? sel('vs-loudness') : s === '#vs-loudness-bt' ? sel('vs-loudness-bt') : s === '#vs-interrupt' ? null : dummy), querySelectorAll: () => [] };
-  const fn = new Function('$', 'voicePrefsNow', 'voiceEndPauseNow', 'voiceSpeedNow', 'voiceSpeedLabel', 'document', 'CallDisplay', 'voiceOn', 'voiceStatus', 'VOICE_CALL_HELP', 'voiceLoudnessFor',
-    paintSrc + '\nreturn paintVoiceSheet;')((id) => (id === 'voice-sheet' ? sh : null), () => prefs, () => 1200, () => 1, () => '1x', { activeElement: null }, undefined, () => true, {}, '', (p, k) => voiceLoudnessForReal(p, k));
+  const fn = new Function('$', 'voicePrefsNow', 'voiceEndPauseNow', 'voiceSpeedNow', 'voiceSpeedLabel', 'document', 'CallDisplay', 'voiceOn', 'voiceStatus', 'VOICE_CALL_HELP', 'voiceLoudnessFor', 'hubMe', 'setTimeout', 'clearTimeout',
+    paintSrc + '\nreturn paintVoiceSheet;')((id) => (id === 'voice-sheet' ? sh : null), () => prefs, () => 1200, () => 1, () => '1x', { activeElement: null }, undefined, () => true, {}, '', (p, k) => voiceLoudnessForReal(p, k), null, () => 0, () => {});
   fn();
   return els;
 }

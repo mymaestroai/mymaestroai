@@ -33,7 +33,7 @@ function callEnv(over) {
   const created = { kaCtx: [], vadOpts: null, deps: null, ka: null, vad: null, call: null };
   const env = {
     window: win, current: 'bob', toast: (t) => log.push('toast:' + t), voiceOn: () => true, voiceRec: { state: 'idle' }, voiceMicCancel() {}, voiceTest: { handle: null }, voiceTestStop() {}, voiceRoomStop() {},
-    voiceStopPlayback() {}, voiceUnlockAudio() {}, voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...prefs, endPause: 1200 }), voiceEndPauseNow: () => 1200, voiceEndedBar() {}, voiceCallBgNote: false,
+    voiceStopPlayback() {}, voiceUnlockAudio() {}, voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...prefs, endPause: 1200 }), voiceEndPauseNow: () => 1200, voiceEndedBar() {}, voiceCallBgNote: false, voiceIsIOS: () => false, voiceEchoHoldOk: V.voiceEchoHoldOk,
     voiceCreateVad: (opts) => { created.vadOpts = opts; created.vad = { setMicLevel() {}, setInterruptSensitivity() {}, setEndPause() {}, setEchoHold: (ms) => log.push('setEchoHold:' + ms), setPlaybackActive() {}, stop() {} }; return created.vad; },
     voiceCreateCall: (deps) => { created.deps = deps; created.call = { start: () => new Promise(() => {}), retryMic: () => { log.push('retryMic'); return Promise.resolve(true); }, hangUp: () => { log.push('hangUp'); return Promise.resolve([]); }, setPrefs() {} }; return created.call; },
     voiceCreateKeepAlive: (opts) => { created.kaCtx.push(opts.ctx); created.kaAllow = opts.allow; created.ka = { running: false, start() { this.running = true; log.push('ka.start'); }, stop() { this.running = false; log.push('ka.stop'); }, refresh() { log.push('ka.refresh'); } }; return created.ka; },
@@ -227,7 +227,7 @@ test('settings: the Voice sheet and the chat panel show Echo guard and Keep Blue
     'While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.', 'Car or Bluetooth check', 'id="vp-car"', 'vs-car-out']) assert.ok(panel.includes(s), 'panel: ' + s);
   assert.match(panel, /class="vs-car-out"[^>]*aria-live="polite"|aria-live="polite"[^>]*class="vs-car-out"/);
   assert.ok(sheet.includes("aria-live=\"polite\"") );
-  assert.match(js, /const VOICE_ECHO_LABELS = \['Off', '0\.6 s', '1 s', '1\.5 s'\]/);
+  assert.match(js, /function voiceEchoLabel\(ms\) \{ return ms === 0 \? 'Off' : voiceEchoHoldLabel\(ms\); \}/);   // labels follow the values (1.2 s exists on iOS only)
 });
 
 test('settings: both places save echoHold / keepAlive and stay in step', () => {
@@ -240,7 +240,7 @@ test('settings: both places save echoHold / keepAlive and stay in step', () => {
   assert.match(wire, /\$\('vp-echo'\)\?\.addEventListener\('change', \(\) => save\(\{ echoHold: Number\(echo\.value\) \}\)\)/);
   assert.match(wire, /\$\('vp-keepalive'\)\?\.addEventListener\('change', \(e\) => save\(\{ keepAlive: !!e\.target\.checked \}\)\)/);
   assert.match(wire, /\$\('vp-car'\)\?\.addEventListener\('click', voiceCarRun\)/);
-  assert.match(wire, /VOICE_ECHO_HOLDS\.map\(/);
+  assert.match(wire, /echo\.innerHTML = voiceEchoOptionsHtml\(\)/);
   const paintSheet = sliceBetween('function paintVoiceSheet()', 'function openVoiceSheet()');
   assert.match(paintSheet, /\.vs-echo/); assert.match(paintSheet, /\.vs-keepalive/);
   const paintPanel = sliceBetween('function voicePanelPaint()', 'function voicePanelShow(show)');
