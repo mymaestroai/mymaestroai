@@ -15189,8 +15189,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceCallTeardown() {
       const S = voiceCallS, chatId = S.chatId, vad = S.vad, thinking = S.thinking, keepAlive = S.keepAlive, focus = S.focus;
-      if (typeof voicePrefetchClear === 'function') voicePrefetchClear();   // audio fetched ahead for a line of the call that is over
       for (const c of Object.values(chats)) if (c) { c.voiceTurn = false; c.voiceDictated = false; }   // nothing dictated before the call is read aloud after Hang up
+      if (typeof voicePrefetchClear === 'function') voicePrefetchClear();   // audio fetched ahead for a line of the call that is over
       if (S.link) { try { S.link.stop(); } catch { /* gone */ } S.link = null; }
       S.linkLost = false;
       const rec = S.rec; S.rec = null;
