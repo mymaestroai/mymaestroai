@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Setup offers every AI you connect.** When you connect both a Claude subscription and a ChatGPT subscription during setup, the model choice for Maestro now lists the Claude models (such as Opus and Sonnet) and the ChatGPT models together, with Claude as the default. Before, only the last one connected was listed, and Claude's models did not appear in your Maestro's model lists until hours later.
 ## [5.10.0] - 2026-11-11
 
 What's new since 5.9.1: data connectors for your Ring cameras, Oura Ring and Google Drive (a copy of every backup there), Remote computers for a computer you set aside for your agents, the wallet unlocked with Face ID or a fingerprint, Maestro building new agents with you, consultations and scheduled tasks folded into cards in the chat, a Workers list, a memory check for every agent, an updated Claude client that can run Fable 5.2, an easier question card, and fixes for the phone keyboard, agent sandboxes and Claude extra usage.
