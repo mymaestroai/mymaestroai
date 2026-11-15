@@ -694,7 +694,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
 
   // ── the open desktop: sessions, the person's account, the tunnel (hub-only tools: every answer is JSON, a failure is {"error": "..."}) ──
   const desktop = deps.desktop || createDesktop({ file: home ? path.join(home, DESKTOP_FILE) : '', now, log: (m) => log(m) });
-  const desktopBusyText = (r) => `A person is using this computer's desktop until ${hhmm(r.until)}. Try again after that.`;
+  const desktopBusyText = (r) => (r.unknown ? 'Whether a person is using this computer\'s desktop cannot be read right now, so typing, clicking and commands wait. Try again in a minute.' : `A person is using this computer's desktop until ${hhmm(r.until)}. Try again after that.`);
   const desktopRefuse = (pc) => { const r = desktop.forNode(pc.nodeid); if (r) throw new ToolError(desktopBusyText(r)); };
   const personStore = deps.personStore || { read: () => (mesh ? mesh.personAccount() : null), write: (pass) => mesh.savePersonAccount(pass) };
   const NOT_READY_DESKTOP = 'The desktop is not ready: the person account could not be set up. Try again in a minute.';

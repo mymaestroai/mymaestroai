@@ -39,6 +39,7 @@ function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.
   let memory = {};
   let lastGood = {};      // the last map read or written successfully: what is used while the file cannot be read (fail closed: known locks stay)
   let warned = false;
+  let unknown = false;    // the file exists but could not be read or made no sense: input and new sessions are refused until it reads again
   function readRaw() {
     if (!file) return { ...memory };
     let raw;
@@ -47,13 +48,13 @@ function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.
       if (typeof txt !== 'string' || txt.length > MAX_FILE_BYTES) throw new Error('unreadable');
       raw = JSON.parse(txt);
     } catch (e) {
-      if (e && e.code === 'ENOENT') { lastGood = {}; warned = false; return {}; }   // no file: no sessions
-      if (!warned) { warned = true; try { log('the desktop sessions file cannot be read; the sessions already known stay locked'); } catch { /* none */ } }
-      return { ...lastGood };
+      if (e && e.code === 'ENOENT') { lastGood = {}; warned = false; unknown = false; return {}; }   // no file: no sessions
+      return failed();
     }
-    warned = false;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !raw.sessions || typeof raw.sessions !== 'object' || Array.isArray(raw.sessions)) return failed();   // not our file: unknown, not empty
+    warned = false; unknown = false;
     const out = {};
-    const src = raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object' && !Array.isArray(raw.sessions) ? raw.sessions : {};
+    const src = raw.sessions;
     for (const [id, r] of Object.entries(src)) {
       if (!SESSION_RE.test(id) || !r || typeof r !== 'object') continue;
       const start = Number(r.start), until = Number(r.until);
@@ -63,10 +64,16 @@ function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.
     lastGood = { ...out };
     return out;
   }
+  // The file exists but cannot be used: the sessions known so far stay, and the state counts as unknown (fail closed, also in a fresh process).
+  function failed() {
+    unknown = true;
+    if (!warned) { warned = true; try { log('the desktop sessions file cannot be read; typing, clicking and commands stay refused until it can'); } catch { /* none */ } }
+    return { ...lastGood };
+  }
   function writeRaw(map) {
     if (!file) { memory = { ...map }; return; }
     writeFileAtomic(file, JSON.stringify({ sessions: map }, null, 2) + '\n');
-    lastGood = { ...map };
+    lastGood = { ...map }; unknown = false;
   }
   // Drops what ran out more than the grace ago; the file is rewritten only when something was dropped.
   function load() {
@@ -80,13 +87,17 @@ function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.
 
   const list = () => Object.values(load()).filter(live).sort((a, b) => a.start - b.start);
   const get = (session) => { const r = load()[checkSession(session)]; return r && live(r) ? r : null; };
-  const forNode = (nodeid) => Object.values(load()).find((r) => live(r) && r.nodeid === nodeid) || null;
+  // While the state is unknown every computer counts as locked (a record with unknown: true, no person or end time).
+  const UNKNOWN = () => ({ unknown: true, session: '', nodeid: '', name: '', who: { id: '', name: '' }, start: 0, until: now() + 60000 });
+  const forNode = (nodeid) => { const m = load(); if (unknown) return UNKNOWN(); return Object.values(m).find((r) => live(r) && r.nodeid === nodeid) || null; };
   // The live session of a computer given as the agent wrote it: its name (any case), its short id or the start of it.
   const forQuery = (q) => {
     const want = typeof q === 'string' ? q.trim() : '';
     if (!want || want.length > 200) return null;
     const low = want.toLowerCase();
-    return Object.values(load()).find((r) => {
+    const m = load();
+    if (unknown) return UNKNOWN();
+    return Object.values(m).find((r) => {
       if (!live(r)) return false;
       const short = r.nodeid.split('/').pop();
       return r.name.toLowerCase() === low || short === want || (want.length >= 6 && short.startsWith(want)) || r.nodeid === want;
@@ -97,6 +108,7 @@ function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.
     if (typeof nodeid !== 'string' || !NODEID_RE.test(nodeid)) throw new DesktopError('nodeid: not a valid computer id.');
     const person = cleanWho(who);
     const map = load();
+    if (unknown) throw new DesktopError('The desktop sessions cannot be read right now. Try again in a minute.');
     const taken = Object.values(map).find((r) => live(r) && r.nodeid === nodeid);
     if (taken) throw new DesktopError(`${taken.name} is in use by ${taken.who.name} until ${hhmm(taken.until)}.`, { busy: { who: { name: taken.who.name }, until: taken.until } });
     if (Object.values(map).filter(live).length >= MAX_SESSIONS) throw new DesktopError('Too many desktop sessions are open.');
@@ -118,8 +130,8 @@ function createDesktop({ file = '', now = Date.now, randomBytes = (n) => crypto.
   // The same by computer, only while the stored record has exactly that start (a newer session opened since is never ended by an old orphan check).
   function endNode(nodeid, start) {
     const map = load();
-    const r = Object.values(map).find((x) => x.nodeid === nodeid);
-    if (!r || typeof start !== 'number' || r.start !== start) throw new DesktopError('That desktop session is not open.');
+    const r = typeof start === 'number' ? Object.values(map).find((x) => x.nodeid === nodeid && x.start === start) : null;   // both fields: an expired predecessor never hides the match
+    if (!r) throw new DesktopError('That desktop session is not open.');
     return end(r.session);
   }
   return { list, get, forNode, forQuery, open, end, endNode, hhmm };

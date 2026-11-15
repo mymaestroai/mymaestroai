@@ -535,6 +535,25 @@ test('sweep: ends a session when the module is off ("disabled"), when desktop_wh
   assert.strictEqual(thr.rd.sessions.size, 0);
 });
 
+test('sweep: every revoked session is cut at once, even while the module is slow to answer desktop_end', async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const { rd, st } = rig({ callTool: async (tool) => { if (tool === 'desktop_end') await held; } });
+  await open(rd, 'sam', 'node//pc1');
+  await open(rd, 'sam', 'node//pc2');
+  assert.strictEqual(rd.sessions.size, 2);
+  const cut = [];
+  for (const [id, s] of rd.sessions) s.sockets.add({ destroy() { cut.push(id); } });
+  st.settings.desktop_who = 'owner';
+  const sweeping = rd.sweep();
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(cut.length, 2, 'both desktops are cut before any desktop_end answers');
+  assert.strictEqual(rd.sessions.size, 0);
+  release();
+  await sweeping;
+  assert.strictEqual(st.calls.filter((c) => c.tool === 'desktop_end').length, 2);
+});
+
 test('sweep runs every 15 s on an injected timer', async () => {
   const { rd, st } = rig();
   assert.strictEqual(st.repeats.length, 1); assert.strictEqual(st.repeats[0].ms, 15000);

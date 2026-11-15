@@ -432,7 +432,8 @@ test('desktop store: a sessions file that cannot be read keeps the last known lo
   const rec = d.open({ nodeid: NODE_A, name: 'demo-pc', who: SAM, minutes: 10 });
   fail = Object.assign(new Error('no access'), { code: 'EACCES' });
   assert.deepStrictEqual(d.list().map((r) => r.session), [rec.session], 'the live lock survives an unreadable file');
-  assert.throws(() => d.open({ nodeid: NODE_A, name: 'demo-pc', who: { id: 'u2', name: 'Pat' }, minutes: 10 }), /in use by Sam/);
+  assert.throws(() => d.open({ nodeid: NODE_A, name: 'demo-pc', who: { id: 'u2', name: 'Pat' }, minutes: 10 }), /cannot be read right now/);
+  assert.ok(d.forNode(NODE_A) && d.forNode(NODE_A).unknown, 'while unreadable every computer counts as locked');
   d.list();
   assert.strictEqual(logs.length, 1, 'logged once');
   fail = null;
@@ -440,6 +441,38 @@ test('desktop store: a sessions file that cannot be read keeps the last known lo
   assert.deepStrictEqual(d.list().map((r) => r.session), [rec.session], 'a damaged file too');
   fail = Object.assign(new Error('gone'), { code: 'ENOENT' });
   assert.deepStrictEqual(d.list(), [], 'a file that is gone is empty');
+});
+
+test('desktop store: a FRESH process with an unreadable or malformed file fails closed (state unknown), and reads normally again once it can', () => {
+  const file = path.join(tmp(), 'desktop-sessions.json');
+  let fail = Object.assign(new Error('io'), { code: 'EIO' });
+  const read = (f) => { if (fail) throw fail; return fs.readFileSync(f, 'utf8'); };
+  const fresh = createDesktop({ file, now: () => START, readFile: read });
+  assert.ok(fresh.forNode(NODE_A).unknown, 'unreadable in a fresh process: locked');
+  assert.ok(fresh.forQuery('demo-pc').unknown);
+  assert.throws(() => fresh.open({ nodeid: NODE_A, name: 'demo-pc', who: SAM, minutes: 10 }), /cannot be read right now/);
+  fail = null;
+  for (const bad of ['{"x":1}', '[]', '{"sessions":[]}', 'null']) {
+    fs.writeFileSync(file, bad);
+    const d = createDesktop({ file, now: () => START, readFile: read });
+    assert.ok(d.forNode(NODE_A) && d.forNode(NODE_A).unknown, `malformed ${bad}: unknown, not empty`);
+  }
+  fs.writeFileSync(file, '{"sessions":{}}\n');
+  const ok = createDesktop({ file, now: () => START, readFile: read });
+  assert.strictEqual(ok.forNode(NODE_A), null, 'a valid empty file: no lock');
+  assert.ok(ok.open({ nodeid: NODE_A, name: 'demo-pc', who: SAM, minutes: 10 }).session);
+});
+
+test('desktop store: ending by computer and start finds the exact session even when an expired predecessor is still in the file', () => {
+  let t = START;
+  const d = createDesktop({ file: path.join(tmp(), 'desktop-sessions.json'), now: () => t });
+  const a = d.open({ nodeid: NODE_A, name: 'demo-pc', who: SAM, minutes: 5 });
+  t += 5 * 60000 + 1000;   // A ran out; it stays in the file for the grace
+  const b = d.open({ nodeid: NODE_A, name: 'demo-pc', who: SAM, minutes: 10 });
+  assert.notStrictEqual(a.start, b.start);
+  const e = d.endNode(NODE_A, b.start);
+  assert.strictEqual(e.session, b.session, 'B, the exact match, is ended');
+  assert.strictEqual(d.forNode(NODE_A), null);
 });
 
 test('desktop store: the session file is only what this module wrote (no id outside the format, no half records)', () => {
