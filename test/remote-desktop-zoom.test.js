@@ -101,7 +101,9 @@ test('rdView.zoomAbout: the anchor stays fixed, zoom clamps to 1..max, scroll cl
 
 // ---- the page with the real viewer scripts ----
 function boot(opts = {}) {
-  const dw = 1920, dh = 1080, VW = opts.vw || 800, VH = opts.vh || 600, BAR = 40;
+  const dw = 1920, dh = 1080, BAR = 40;
+  let VW = opts.vw || 800, VH = opts.vh || 600, roCb = null;
+  const docL = {};
   const els = {};
   const sent = [];
   let now = 5000;
@@ -116,6 +118,8 @@ function boot(opts = {}) {
   Object.defineProperty(scroller, 'clientHeight', { get: () => VH });
   Object.defineProperty(scroller, 'scrollLeft', { get: () => sl, set: (v) => { sl = Math.max(0, Math.min(v, Math.max(0, cw() - VW))); } });
   Object.defineProperty(scroller, 'scrollTop', { get: () => st, set: (v) => { st = Math.max(0, Math.min(v, Math.max(0, ch() - VH))); } });
+  Object.defineProperty(scroller, 'scrollWidth', { get: () => Math.max(cw(), VW) });
+  Object.defineProperty(scroller, 'scrollHeight', { get: () => Math.max(ch(), VH) });
   scroller.getBoundingClientRect = () => ({ left: 0, top: BAR, width: VW, height: VH });
   canvas.width = dw; canvas.height = dh;
   Object.defineProperty(canvas, 'clientWidth', { get: cw });
@@ -128,7 +132,8 @@ function boot(opts = {}) {
     Date: { now: () => now }, setTimeout: (f, ms) => { timers.push({ f, ms, live: true }); return timers.length; }, clearTimeout: (i) => { if (timers[i - 1]) timers[i - 1].live = false; },
     navigator: { platform: 'Linux' }, location: { protocol: 'https:', host: 'h', pathname: '/remote-desktop/s/' }, WebSocket: Object.assign(function () { this.readyState = 0; this.close = () => {}; this.send = () => {}; }, { OPEN: 1 }), fetch: () => Promise.resolve({ ok: true }) };
   sandbox.window = sandbox; sandbox.addEventListener = (n, f) => { (el('win').listeners[n] = el('win').listeners[n] || []).push(f); };
-  sandbox.document = { getElementById: el, addEventListener() {}, querySelector: () => ({ setAttribute() {} }), title: '', activeElement: null };
+  sandbox.ResizeObserver = function (cb) { roCb = cb; this.observe = () => {}; };
+  sandbox.document = { getElementById: el, addEventListener(n, f) { (docL[n] = docL[n] || []).push(f); }, querySelector: () => ({ setAttribute() {} }), title: '', activeElement: null, visibilityState: 'visible' };
   vm.createContext(sandbox);
   vm.runInContext(pre, sandbox);
   for (const f of scripts) vm.runInContext(fs.readFileSync(f, 'utf8'), sandbox, { filename: f });
@@ -139,7 +144,10 @@ function boot(opts = {}) {
   const decode = (s) => ({ type: s.charCodeAt(1), len: s.charCodeAt(3), b: s.charCodeAt(5), x: s.charCodeAt(6) * 256 + s.charCodeAt(7), y: s.charCodeAt(8) * 256 + s.charCodeAt(9), dh: s.charCodeAt(10), dl: s.charCodeAt(11) });
   const fire = (target, type, e) => (target.listeners[type] || []).forEach(f => f({ preventDefault() {}, stopPropagation() {}, type, ...e }));
   const ptr = (type, id, x, y) => fire(scroller, type, { pointerType: 'touch', pointerId: id, clientX: x, clientY: y });
-  return { els, sent, d, decode, fire, ptr, scroller, canvas, rect: () => canvas.getBoundingClientRect(), setNow: (n) => { now = n; }, timers, click: (id) => el(id).listeners.click[0](), size: () => [cw(), ch()], scrollPos: () => [sl, st] };
+  const ptrE = (type, id, x, y, extra) => fire(scroller, type, { pointerType: 'touch', pointerId: id, clientX: x, clientY: y, ...extra });
+  const hide = () => { sandbox.document.visibilityState = 'hidden'; (docL.visibilitychange || []).forEach(f => f({})); };
+  const setView = (w, h) => { VW = w; VH = h; };
+  return { ptrE, hide, setView, ro: () => roCb && roCb(), docL, sandbox, els, sent, d, decode, fire, ptr, scroller, canvas, rect: () => canvas.getBoundingClientRect(), setNow: (n) => { now = n; }, timers, click: (id) => el(id).listeners.click[0](), size: () => [cw(), ch()], scrollPos: () => [sl, st] };
 }
 const skip = haveScripts ? false : 'MeshCentral viewer scripts are not installed here';
 
@@ -256,7 +264,7 @@ test('page: long press = right click; a two-finger double tap toggles 1x <-> 2x'
 
 test('page: wheel — Ctrl+wheel zooms about the cursor and is not sent; plain wheel pans when zoomed; at zoom 1 it goes to the PC', { skip }, () => {
   const p = boot();
-  const w = (e) => { let prevented = false; p.fire(p.canvas, 'wheel', { clientX: 300, clientY: 200, deltaY: 0, deltaX: 0, deltaMode: 0, preventDefault() { prevented = true; }, ...e }); return prevented; };
+  const w = (e) => { let prevented = false; p.fire(p.scroller, 'wheel', { clientX: 300, clientY: 200, deltaY: 0, deltaX: 0, deltaMode: 0, preventDefault() { prevented = true; }, ...e }); return prevented; };
   assert.ok(w({ deltaY: 100, wheelDelta: -120 }));
   assert.equal(p.sent.length, 1);
   const m = p.decode(p.sent[0]); assert.equal(m.len, 0x0C);
@@ -300,4 +308,156 @@ test('page text: bar buttons, viewport lock, touch-action, no inline handlers, l
   assert.ok(!/\son[a-z]+\s*=\s*["']/i.test(viewer));
   assert.ok(viewer.split('\n').length < 500);
   assert.ok(viewer.indexOf('var rdView') < viewer.indexOf('<script>\n(function'));
+});
+
+// ---- review r1 fixes ----
+const bandY = 40 + 20, canvasY = 40 + 75 + 225, lowBandY = 40 + 75 + 450 + 30;   // black band above, the canvas middle, the band below (zoom 1, 800x600 view)
+const noMouse = (p) => assert.equal(p.sent.length, 0, 'nothing is sent to the PC');
+const fireTimers = (p) => p.timers.filter(t => t.live && t.ms === 600).forEach(t => t.f());
+
+test('page: a pinch with the first finger in the black band and the second on the canvas zooms and sends no mouse message', { skip }, () => {
+  const p = boot();
+  p.ptr('pointerdown', 1, 300, bandY); p.ptr('pointerdown', 2, 500, canvasY);
+  fireTimers(p);
+  p.ptr('pointermove', 2, 700, canvasY + 100);
+  assert.ok(p.size()[0] > 900, 'zoomed');
+  p.ptr('pointerup', 2, 700, canvasY + 100); p.ptr('pointerup', 1, 300, bandY);
+  noMouse(p);
+});
+
+test('page: a pinch with the first finger on the canvas and the second in the band zooms and sends no mouse message', { skip }, () => {
+  const p = boot();
+  p.ptr('pointerdown', 1, 300, canvasY); p.ptr('pointerdown', 2, 500, lowBandY);
+  fireTimers(p);
+  p.ptr('pointermove', 2, 700, lowBandY + 50);
+  assert.ok(p.size()[0] > 900, 'zoomed');
+  p.ptr('pointerup', 1, 300, canvasY); p.ptr('pointerup', 2, 700, lowBandY + 50);
+  noMouse(p);
+});
+
+test('page: a pinch with both fingers in the bands zooms at zoom 1; a lone finger in a band does nothing', { skip }, () => {
+  const p = boot();
+  p.ptr('pointerdown', 1, 300, bandY); p.ptr('pointerdown', 2, 500, lowBandY);
+  p.ptr('pointermove', 2, 700, lowBandY + 60); p.ptr('pointermove', 1, 100, bandY - 10);
+  assert.ok(p.size()[0] > 900, 'zoomed');
+  p.ptr('pointerup', 1, 100, bandY); p.ptr('pointerup', 2, 700, lowBandY);
+  noMouse(p);
+  p.click('fit');
+  p.ptr('pointerdown', 3, 300, bandY); fireTimers(p); p.ptr('pointermove', 3, 400, bandY + 5); p.ptr('pointerup', 3, 400, bandY);
+  noMouse(p);
+});
+
+test('page: a new primary finger ends ghost pointers: a held button is released and the old state is cleared', { skip }, () => {
+  const p = boot();
+  p.ptr('pointerdown', 1, 300, 300); p.ptr('pointermove', 1, 340, 330);
+  const n = p.sent.length;
+  p.ptrE('pointerdown', 7, 400, canvasY, { isPrimary: true });
+  const rel = p.sent.slice(n).map(p.decode);
+  assert.deepEqual(rel.map(x => x.b), [4], 'LEFT released by the ghost cleanup');
+  p.sent.length = 0;
+  p.ptr('pointerup', 7, 400, canvasY);
+  assert.equal(p.sent.length, 3, 'the new finger is a normal tap');
+  p.sent.length = 0;
+  // an old finger whose up never came would make the next finger a "second finger"; a primary down starts clean
+  p.ptr('pointerdown', 8, 300, 300);
+  p.ptrE('pointerdown', 9, 400, canvasY, { isPrimary: true }); p.ptr('pointerup', 9, 400, canvasY);
+  assert.equal(p.sent.length, 3);
+  assert.equal(p.size()[0], 800, 'no pinch started');
+});
+
+test('page: hidden page, window blur and lost pointer capture release the held button; hidden/blur also release held keys', { skip }, () => {
+  const drag = (p) => { p.ptr('pointerdown', 1, 300, 300); p.ptr('pointermove', 1, 340, 330); const n = p.sent.length; p.sent.length = 0; return n; };
+  let p = boot(); let rel = 0; p.d.m.handleReleaseKeys = () => { rel++; };
+  drag(p); p.hide();
+  assert.deepEqual(p.sent.map(s => p.decode(s).b), [4]); assert.equal(rel, 1);
+  p.sent.length = 0; p.ptr('pointerup', 1, 340, 330); assert.equal(p.sent.length, 0, 'the finger is forgotten');
+  p = boot(); rel = 0; p.d.m.handleReleaseKeys = () => { rel++; };
+  drag(p); p.fire(p.els.win, 'blur', {});
+  assert.deepEqual(p.sent.map(s => p.decode(s).b), [4]); assert.equal(rel, 1);
+  p = boot();
+  drag(p); p.ptr('lostpointercapture', 1, 340, 330);
+  assert.deepEqual(p.sent.map(s => p.decode(s).b), [4]);
+  p.sent.length = 0; p.ptr('pointerup', 1, 340, 330); p.ptr('lostpointercapture', 1, 340, 330);
+  assert.equal(p.sent.length, 0, 'no click from the late up');
+  // a plain tap: the capture release that follows pointerup does nothing
+  p = boot(); p.ptr('pointerdown', 1, 300, 300); p.ptr('pointerup', 1, 300, 300); p.ptr('lostpointercapture', 1, 300, 300);
+  assert.equal(p.sent.length, 3);
+});
+
+test('page: a real viewport size change (800x400 -> 400x800) keeps the desktop pixel at the view centre, at zoom 1 and zoomed', { skip }, () => {
+  for (const zin of [0, 4]) {   // 4 clicks: zoomed enough to fill the narrow view on both axes, so the centre pixel can be kept
+    const p = boot({ vw: 800, vh: 400 });
+    for (let i = 0; i < zin; i++) p.click('zin');
+    if (zin) { p.scroller.scrollLeft = 1000; p.scroller.scrollTop = 800; }
+    const px = () => { const r = p.rect(); return [(p.scroller.getBoundingClientRect().left + p.scroller.clientWidth / 2 - r.left) * 1920 / r.width, (p.scroller.getBoundingClientRect().top + p.scroller.clientHeight / 2 - r.top) * 1080 / r.height]; };
+    const before = px();
+    p.setView(400, 800);
+    (p.els.win.listeners.resize || []).forEach(g => g());
+    const after = px();
+    assert.ok(Math.abs(after[0] - before[0]) <= 1 && Math.abs(after[1] - before[1]) <= 1, `zin=${zin}: ${before} -> ${after}`);
+    assert.equal(p.sent.length, 0);
+  }
+});
+
+test('page: wheel on the scroller — Ctrl+wheel over the black band zooms, a plain wheel there never reaches the PC; zoom within 4% of 1 snaps to 1', { skip }, () => {
+  const p = boot();
+  const w = (e) => { let prevented = false; p.fire(p.scroller, 'wheel', { clientX: 300, clientY: canvasY, deltaY: 0, deltaX: 0, deltaMode: 0, preventDefault() { prevented = true; }, ...e }); return prevented; };
+  assert.ok(w({ ctrlKey: true, clientY: bandY, deltaY: -50 }));
+  assert.ok(p.size()[0] > 800, 'zoomed from the band');
+  assert.equal(p.sent.length, 0);
+  p.click('fit');
+  assert.ok(w({ clientY: bandY, deltaY: 100, wheelDelta: -120 }));
+  assert.equal(p.sent.length, 0, 'plain wheel over the band is not sent');
+  assert.ok(w({ clientY: canvasY, deltaY: 100, wheelDelta: -120 }));
+  assert.equal(p.sent.length, 1, 'over the canvas with nothing to scroll it goes to the PC');
+  w({ ctrlKey: true, deltaY: -3 });   // exp(.03) = 1.03: snaps
+  assert.equal(p.size()[0], 800);
+  w({ ctrlKey: true, deltaY: -5 });   // 1.051: does not
+  assert.ok(p.size()[0] > 800);
+  // the view can scroll in one direction only: still a pan, not the PC
+  p.click('fit'); p.sent.length = 0;
+  p.setView(800, 450); p.click('zin');
+  assert.ok(p.scroller.scrollWidth > p.scroller.clientWidth);
+  w({ deltaY: 30 }); assert.equal(p.sent.length, 0);
+});
+
+test('page: Safari gesture events zoom about the gesture point by scale relative to the start; the pointer pinch does not double it', { skip }, () => {
+  const p = boot();
+  let prevented = 0;
+  const g = (n, e) => p.fire(p.scroller, n, { preventDefault() { prevented++; }, clientX: 400, clientY: 40 + 300, ...e });
+  const u0 = (400 - p.rect().left) / p.rect().width;
+  g('gesturestart', { scale: 1 });
+  g('gesturechange', { scale: 2 });
+  near(p.size()[0], 1600, 1);
+  near((400 - p.rect().left) / p.rect().width, u0, 1e-3);
+  g('gesturechange', { scale: 1.5 }); near(p.size()[0], 1200, 1);
+  g('gestureend', { scale: 1.5 });
+  assert.equal(prevented, 4);
+  // with the pointer pinch running at the same time, only the gesture zooms
+  const q = boot();
+  q.ptr('pointerdown', 1, 300, 300); q.ptr('pointerdown', 2, 500, 300);
+  q.fire(q.scroller, 'gesturestart', { scale: 1, clientX: 400, clientY: 340 });
+  q.ptr('pointermove', 2, 700, 300);
+  near(q.size()[0], 800, 1e-6);
+  q.fire(q.scroller, 'gesturechange', { scale: 2, clientX: 400, clientY: 340 });
+  near(q.size()[0], 1600, 1);
+  assert.equal(q.sent.length, 0);
+});
+
+test('page: the scroller follows the bar height (ResizeObserver on #bar)', { skip }, () => {
+  const p = boot();
+  assert.equal(p.scroller.style.top, '40px');
+  p.els.bar.offsetHeight = 92; p.ro();
+  assert.equal(p.scroller.style.top, '92px');
+  p.els.bar.offsetHeight = 40; p.ro();
+  assert.equal(p.scroller.style.top, '40px');
+});
+
+test('page text: iOS and mouse-user CSS (touch-action on body, no callout, scrollbars for fine pointers)', () => {
+  assert.match(viewer, /body \{ touch-action: manipulation; \}/);
+  assert.match(viewer, /#scroller \{[^}]*-webkit-touch-callout: none/);
+  assert.match(viewer, /#Desk \{[^}]*-webkit-touch-callout: none/);
+  assert.match(viewer, /#scroller \{[^}]*scrollbar-width: none/);
+  assert.match(viewer, /@media \(pointer: fine\) \{[^}]*scrollbar-width: auto[^}]*\}[^}]*::-webkit-scrollbar \{ display: block/);
+  assert.match(viewer, /gesturestart/); assert.match(viewer, /lostpointercapture/); assert.match(viewer, /visibilitychange/);
 });
