@@ -1963,6 +1963,7 @@ test('call name: the CSS cuts a long name with an ellipsis, keeps the head clear
   assert.match(css, /\.ucd-who\[hidden\] \{ display: none; \}/);
   assert.match(css, /\.ucd-head \{[^}]*position: absolute[^}]*max-width: calc\(100% - 24px - 9\.5em\)/);
   assert.match(css, /\.ucd-head \.ucd-status \{ position: static;[^}]*min-width: 0;[^}]*text-overflow: ellipsis; \}/, 'a long status is cut too (review r1)');
+  assert.match(css, /\.ucd-head \.ucd-status \{ position: static; flex: 0 0 auto;[^}]*max-width: 11em;/, 'the status keeps its full width and only the name shrinks; a wake phrase is cut at 11em');
   assert.match(css, /\.ucd-who \{[^}]*min-width: 4\.5em;[^}]*max-width: 22em;/, 'the name keeps a few letters and stays small (review r1)');
   assert.match(css, /\.ucd-docked \.ucd-head \{ position: static; max-width: 60%; \}/);
   assert.doesNotMatch(css, /\.ucd-docked \.ucd-host[^{]*ucd-head[^{]*\{/, 'the docked rule that hides parts does not hide the head');
