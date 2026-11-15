@@ -336,6 +336,17 @@ test('flaps: progress() (a transfer of the call started) makes the grace count f
   l.watch.stop();
 });
 
+test('flaps: transfers that keep starting on a dead link cannot postpone detection forever (progress() moves the grace at most one grace past the last answer)', async () => {
+  const w = watch(); w.watch.start();               // the last real answer: the start, t = 0
+  for (let t = 0; t < 60000; t += 1000) {
+    if (t % 4000 === 0) w.watch.progress();         // a new upload starts every 4 s and hangs; nothing ever answers
+    await w.c.advance(1000); while (w.probes.length) await w.answer(null);
+  }
+  const lost = states(w).find(e => e.startsWith('lost@'));
+  assert.ok(lost, 'a dead link is still found: ' + states(w));
+  assert.ok(Number(lost.slice(5)) <= 12000 + 12000 + 2 * 5000, 'lost within two graces of the last answer plus two probes, got ' + lost);
+});
+
 test('flaps: unknownGraceMs is an option (a short one marks lost sooner) and a good probe resets the grace', async () => {
   const w = watch({ unknownGraceMs: 2000 }); w.watch.start();
   await runUnknown(w, 12000);

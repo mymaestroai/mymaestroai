@@ -4077,7 +4077,8 @@ function voiceCreateLinkWatch(o) {
   const lostEvery = Number.isFinite(Number(c.lostEveryMs)) ? Number(c.lostEveryMs) : 1000;
   const giveUp = Number.isFinite(Number(c.giveUpMs)) ? Number(c.giveUpMs) : 10000;
   const grace = Number.isFinite(Number(c.unknownGraceMs)) ? Number(c.unknownGraceMs) : 12000;
-  let lastGood = 0; // the last time the server was known to answer (start, a successful probe, alive())
+  let lastGood = 0; // the last time the server was known to answer (start, a successful probe, alive()), moved later by progress() up to one grace past lastAnswer
+  let lastAnswer = 0;   // the last real answer (start, a successful probe, alive()): progress() may never push lastGood more than one grace past it
   let running = false, lost = false, lostAt = 0, probing = false, gen = 0, timer = null, giveTimer = null;
   let outage = 0;   // each loss adds one: only a probe started after the loss can say the link is back
   let fails = 0;    // consecutive failed probes while the link is not lost (1 = suspect; 2 = lost)
@@ -4120,7 +4121,7 @@ function voiceCreateLinkWatch(o) {
       if (ok === false && myAlive !== aliveSeq) ok = null;   // a real response came in while it was out: its failure is not trusted
       else if (ok === null && myAlive === aliveSeq && clock() - lastGood > grace) ok = false;   // unknown for too long: a hung upload must not hide an outage
       if (ok === true) {
-        lastGood = clock();
+        lastGood = lastAnswer = clock();
         if (lost) {
           if (myOutage !== outage) { schedule(0); return; }   // it left before the loss: it proves nothing, so ask again at once (the deadline stands)
           if (clock() - lostAt > giveUp) return;   // too late: the give-up timer ends the call
@@ -4134,21 +4135,22 @@ function voiceCreateLinkWatch(o) {
     });
   }
   return {
-    start() { if (running) return; running = true; lost = false; fails = 0; probing = false; gen++; lastGood = clock(); schedule(every); },
+    start() { if (running) return; running = true; lost = false; fails = 0; probing = false; gen++; lastGood = lastAnswer = clock(); schedule(every); },
     stop() { running = false; gen++; probing = false; lost = false; fails = 0; timer = clear(timer); giveTimer = clear(giveTimer); },
     report() { markLost(); },
     offline() { markLost(); },
     online() { if (running) probeNow(); },
     alive() {
       if (!running) return;
-      aliveSeq++; lastGood = clock();
+      aliveSeq++; lastGood = lastAnswer = clock();
       if (lost) { if (clock() - lostAt <= giveUp) comeBack(); return; }
       fails = 0;
       if (!probing) schedule(every);
     },
     // progress(): one of the call's own transfers just started. While the link is not lost the unknown grace counts from now, so one long upload on a
-    // slow link is not taken for an outage; a transfer that then hangs still runs out the grace from its start. Lost: nothing (only an answer brings it back).
-    progress() { if (running && !lost) lastGood = Math.max(lastGood, clock()); },
+    // slow link is not taken for an outage; a transfer that then hangs still runs out the grace from its start. Transfers that keep starting while nothing
+    // answers move it at most one grace past the last real answer, so a dead link is still found. Lost: nothing (only an answer brings it back).
+    progress() { if (running && !lost) lastGood = Math.max(lastGood, Math.min(clock(), lastAnswer + grace)); },
     get lost() { return lost; },
   };
 }
