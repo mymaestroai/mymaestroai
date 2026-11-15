@@ -599,10 +599,13 @@
   });
   // <models-select>
   // Every connected provider's models, one group each; Claude (the recommended lead model) keeps the default once connected.
+  let manualPick = '';         // the model the person chose in #m-model themselves
   const offered = new Map();   // 'claude' | 'chatgpt' | 'key:<provider>' | 'local' -> { label, models, selected }
   function offerModels(source, label, models, selected) {
     offered.set(source, { label, models: [...new Set(models.filter(Boolean))], selected });
-    const pick = offered.has('claude') ? offered.get('claude').selected : selected;
+    // An explicit choice in the select wins while some source still offers it; otherwise Claude's suggestion, else the latest source's.
+    const stillOffered = manualPick && [...offered.values()].some(g => g.models.includes(manualPick));
+    const pick = stillOffered ? manualPick : offered.has('claude') ? offered.get('claude').selected : selected;
     const sel = $('m-model'); sel.replaceChildren();
     const seen = new Set();
     for (const key of ['claude', ...[...offered.keys()].filter(k => k !== 'claude')]) {
@@ -616,6 +619,7 @@
     }
     return pick;
   }
+  $('m-model').addEventListener('change', () => { const v = $('m-model').value; manualPick = v; chosenModel = v; });
   function addModelOnTop(model) {
     const sel = $('m-model'); const o = document.createElement('option'); o.value = model; o.textContent = model; o.selected = true;
     sel.insertBefore(o, sel.firstChild);

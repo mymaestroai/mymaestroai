@@ -121,9 +121,12 @@ function modelSelect() {
     get firstChild() { return this.children[0] || null; },
     get options() { return this.children.flatMap(c => c.tag === 'optgroup' ? c.children : [c]); } });
   const sel = el('select');
+  const handlers = {}; sel.addEventListener = (ev, fn) => { handlers[ev] = fn; };
   Object.defineProperty(sel, 'selectedValue', { get() { const o = sel.options; return (o.find(x => x.selected) || o[0] || {}).value; } });
-  const api = new Function('$', 'document', `${src}; return { offerModels, addModelOnTop };`)(() => sel, { createElement: el });
-  return { sel, ...api, groups: () => sel.children.map(g => [g.label, g.children.map(o => o.value)]) };
+  const api = new Function('$', 'document', `let chosenModel = ''; ${src}; return { offerModels, addModelOnTop, chosen: () => chosenModel };`)(() => sel, { createElement: el });
+  // The person picks a model in the select: select it (as the browser would), then fire 'change'.
+  const choose = (v) => { sel.options.forEach(o => { o.selected = o.value === v; }); sel.value = v; handlers.change(); };
+  return { sel, ...api, choose, groups: () => sel.children.map(g => [g.label, g.children.map(o => o.value)]) };
 }
 const CLAUDE = ['claude-sdk/default', 'claude-sdk/opus', 'claude-sdk/sonnet'];
 const CODEX = ['codex-cli/gpt-top', 'codex-cli/gpt-next'];
@@ -178,4 +181,34 @@ test('Welcome: the Claude check adds Claude\'s models; the Meet step never wipes
   m.offerModels('claude', 'Claude (subscription)', CLAUDE, 'claude-sdk/default');
   m.addModelOnTop('custom/model');
   assert.strictEqual(m.sel.options.length, 4); assert.strictEqual(m.sel.selectedValue, 'custom/model');
+});
+
+test('Welcome model select: a delayed Claude check does not overwrite the person\'s explicit ChatGPT choice', () => {
+  const m = modelSelect();
+  m.offerModels('chatgpt', 'ChatGPT (subscription)', CODEX, 'codex-cli/gpt-top');
+  m.choose('codex-cli/gpt-next');
+  assert.strictEqual(m.chosen(), 'codex-cli/gpt-next');
+  const pick = m.offerModels('claude', 'Claude (subscription)', CLAUDE, 'claude-sdk/default');
+  assert.strictEqual(m.sel.selectedValue, 'codex-cli/gpt-next');
+  assert.strictEqual(pick, 'codex-cli/gpt-next');
+  // the source reconnecting keeps the pick while it is still offered
+  assert.strictEqual(m.offerModels('chatgpt', 'ChatGPT (subscription)', CODEX, 'codex-cli/gpt-top'), 'codex-cli/gpt-next');
+  assert.strictEqual(m.sel.selectedValue, 'codex-cli/gpt-next');
+});
+
+test('Welcome model select: with no explicit choice Claude still becomes the default', () => {
+  const m = modelSelect();
+  m.offerModels('chatgpt', 'ChatGPT (subscription)', CODEX, 'codex-cli/gpt-top');
+  assert.strictEqual(m.offerModels('claude', 'Claude (subscription)', CLAUDE, 'claude-sdk/default'), 'claude-sdk/default');
+  assert.strictEqual(m.sel.selectedValue, 'claude-sdk/default');
+});
+
+test('Welcome model select: a manual pick that disappears falls back to the default rule', () => {
+  const m = modelSelect();
+  m.offerModels('claude', 'Claude (subscription)', CLAUDE, 'claude-sdk/default');
+  m.offerModels('chatgpt', 'ChatGPT (subscription)', CODEX, 'codex-cli/gpt-top');
+  m.choose('codex-cli/gpt-next');
+  const pick = m.offerModels('chatgpt', 'ChatGPT (subscription)', ['codex-cli/gpt-top'], 'codex-cli/gpt-top');
+  assert.strictEqual(pick, 'claude-sdk/default');
+  assert.strictEqual(m.sel.selectedValue, 'claude-sdk/default');
 });
