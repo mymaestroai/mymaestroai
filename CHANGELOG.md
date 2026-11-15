@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Setup offers every AI you connect.** When you connect both a Claude subscription and a ChatGPT subscription during setup, the model choice for Maestro now lists the Claude models (such as Opus and Sonnet) and the ChatGPT models together, with Claude as the default. Before, only the last one connected was listed, and Claude's models did not appear in your Maestro's model lists until hours later.
 - **Zoom and pan on a remote computer's desktop.** On a phone, pinch with two fingers to zoom in on any part of the screen and drag with two fingers to move around; a two-finger double tap zooms to 2x and back. One finger still clicks and drags on the computer, at the right spot at every zoom level. The bar has − and + buttons and Fit to see the whole screen again. On a computer, Ctrl with the scroll wheel (or a trackpad pinch) zooms, and the wheel moves around while zoomed in.
 - **Calls on a slow connection stay connected.** On a slow or relayed connection, a call no longer drops to "Connection lost" and says "Reconnected." while it is busy sending what you said, and what you said is never thrown away once your Maestro has heard it. A real loss of connection is still noticed within seconds.
 - **Smoother read-back on calls.** While your Maestro speaks one sentence of a reply, it already fetches the next one, so the sentences follow each other without long pauses on a slow connection.
