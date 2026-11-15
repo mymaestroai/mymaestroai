@@ -47,15 +47,18 @@ test('link watch: probes every 5 s while the link is fine, and a good answer cha
   w.watch.stop();
 });
 
-test('link watch: a failed probe is lost once, then 1 s probes; a success within 10 s is back once and the rhythm returns to 5 s', async () => {
+// Review note (link flaps): ONE failed probe used to mark the link lost; now it takes two in a row (the first only makes the watch suspect).
+test('link watch: two failed probes in a row are lost once, then 1 s probes; a success within 10 s is back once and the rhythm returns to 5 s', async () => {
   const w = watch(); w.watch.start();
   await w.c.advance(5000); await w.answer(false);
-  assert.deepStrictEqual(w.ev, ['probe@5000', 'lost@5000']); assert.strictEqual(w.watch.lost, true);
+  assert.deepStrictEqual(w.ev, ['probe@5000']); assert.strictEqual(w.watch.lost, false, 'one failure: suspect only');
+  await w.c.advance(1000); await w.answer(false);
+  assert.deepStrictEqual(w.ev, ['probe@5000', 'probe@6000', 'lost@6000']); assert.strictEqual(w.watch.lost, true);
   await w.c.advance(1000); await w.answer(false);
   await w.c.advance(1000); await w.answer(false);
   await w.c.advance(1000); await w.answer(true);
-  assert.deepStrictEqual(nonProbe(w), ['lost@5000', 'back@8000']);
-  assert.deepStrictEqual(w.ev.filter(e => e.startsWith('probe')), ['probe@5000', 'probe@6000', 'probe@7000', 'probe@8000']);
+  assert.deepStrictEqual(nonProbe(w), ['lost@6000', 'back@9000']);
+  assert.deepStrictEqual(w.ev.filter(e => e.startsWith('probe')), ['probe@5000', 'probe@6000', 'probe@7000', 'probe@8000', 'probe@9000']);
   assert.strictEqual(w.watch.lost, false);
   await w.c.advance(4999); assert.strictEqual(w.probes.length, 0);
   await w.c.advance(1); assert.strictEqual(w.probes.length, 1, 'back to 5 s');
@@ -65,10 +68,11 @@ test('link watch: a failed probe is lost once, then 1 s probes; a success within
 test('link watch: no success for 10 s gives up once and never probes again', async () => {
   const w = watch(); w.watch.start();
   await w.c.advance(5000); await w.answer(false);
+  await w.c.advance(1000); await w.answer(false);   // the second failure: lost at 6000
   for (let i = 0; i < 9; i++) { await w.c.advance(1000); await w.answer(false); }
-  assert.deepStrictEqual(nonProbe(w), ['lost@5000'], 'not yet: 9 s');
+  assert.deepStrictEqual(nonProbe(w), ['lost@6000'], 'not yet: 9 s');
   await w.c.advance(1000);
-  assert.deepStrictEqual(nonProbe(w), ['lost@5000', 'giveup@15000']);
+  assert.deepStrictEqual(nonProbe(w), ['lost@6000', 'giveup@16000']);
   const n = w.ev.length; w.probes.length = 0;
   await w.c.advance(60000);
   assert.strictEqual(w.ev.length, n, 'nothing runs after the give-up');
@@ -100,8 +104,9 @@ test('link watch: never two probes at once (a slow probe), and a second outage a
   w.watch.online(); w.watch.online(); await w.c.advance(2000);   // the first probe has not answered
   assert.strictEqual(w.probes.length, 1, 'one in flight');
   await w.answer(true);
-  await w.c.advance(5000); await w.answer(false); await w.c.advance(1000); await w.answer(true); await w.c.advance(5000); await w.answer(false);
-  assert.deepStrictEqual(nonProbe(w), ['lost@12000', 'back@13000', 'lost@18000']);
+  await w.c.advance(5000); await w.answer(false); await w.c.advance(1000); await w.answer(false); await w.c.advance(1000); await w.answer(true);
+  await w.c.advance(5000); await w.answer(false); await w.c.advance(1000); await w.answer(false);
+  assert.deepStrictEqual(nonProbe(w), ['lost@13000', 'back@14000', 'lost@20000']);
   w.watch.stop();
 });
 
@@ -119,7 +124,8 @@ test('link watch: stop() silences everything, including a probe that resolves la
 
 test('link watch: a probe that throws counts as failed; a listener that throws does not break it', async () => {
   const w = watch({ probe: () => { throw new Error('x'); }, onLost: () => { throw new Error('listener'); } });
-  w.watch.start(); await w.c.advance(5000);
+  w.watch.start(); await w.c.advance(5000); assert.strictEqual(w.watch.lost, false, 'one throw: suspect');
+  await w.c.advance(1000);
   assert.strictEqual(w.watch.lost, true);
   w.watch.stop();
 });
@@ -156,13 +162,15 @@ function harness(over) {
   return h;
 }
 
-test('controller: setLinkLost(true) drops what is heard (not transcribed, not sent) and speaks nothing', async () => {
+// Review note (link flaps): used to pin "dropped, not even uploaded" while marked lost. Now the upload is the test: speech heard while the link is marked
+// lost is still sent to d.stt, and a transcript that arrives is sent as usual.
+test('controller: setLinkLost(true) still uploads what is heard; the transcript that arrives is sent; nothing is spoken', async () => {
   const h = harness(); await h.call.start();
   await h.say('hello there'); assert.deepStrictEqual(h.sent, ['hello there'], 'baseline: sent while the link is fine');
   h.call.setLinkLost(true);
   await h.say('are you still there'); await h.c.advance(3000);
-  assert.deepStrictEqual(h.sent, ['hello there'], 'dropped');
-  assert.strictEqual(h.sttCalls, 1, 'not even uploaded');
+  assert.deepStrictEqual(h.sent, ['hello there', 'are you still there'], 'the transcript arrived: sent');
+  assert.strictEqual(h.sttCalls, 2, 'uploaded');
   assert.deepStrictEqual(h.spoken, []); assert.deepStrictEqual(h.toasts, []);
 });
 
@@ -268,7 +276,8 @@ test('link watch: a fresh probe that keeps failing still gives up 10 s after the
   assert.ok(nonProbe(w).includes('giveup@15000'), JSON.stringify(nonProbe(w)));
 });
 
-test('controller: speech heard during an outage is never sent, even when an earlier transcript was still pending when the link came back', async () => {
+// Review note (link flaps): used to assert that nothing heard around an outage is sent. Now every transcript that arrives is sent (in order).
+test('controller: speech heard during an outage is sent when its transcript arrives, also when an earlier transcript was still pending when the link came back', async () => {
   let release = null;
   const h = harness({ stt: (audio) => { h.sttCalls++; if (audio.text === 'first words') return new Promise((r) => { release = () => r(audio.text); }); return Promise.resolve(audio.text); } });
   await h.call.start();
@@ -277,8 +286,7 @@ test('controller: speech heard during an outage is never sent, even when an earl
   await h.say('private words during outage');    // heard while the link is down
   h.call.setLinkLost(false);                     // back before the first transcript arrives
   release(); await tick(); await h.c.advance(3000);
-  assert.ok(!h.sent.some((t) => /private words/.test(t)), 'nothing heard during the outage is sent: ' + JSON.stringify(h.sent));
-  assert.ok(!h.sent.some((t) => /first words/.test(t)), 'a piece whose transcript straddled the outage is dropped too: ' + JSON.stringify(h.sent));
+  assert.deepStrictEqual(h.sent.slice(0, 1), ['first words private words during outage'], 'both transcripts arrived: sent as usual (the second joined the first, as when the link is up): ' + JSON.stringify(h.sent));
   await h.say('after the outage'); await h.c.advance(3000);
   assert.ok(h.sent.includes('after the outage'), 'speech after the link is back is sent: ' + JSON.stringify(h.sent));
 });
