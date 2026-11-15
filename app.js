@@ -9722,6 +9722,11 @@
           return;
         }
         chat.bounced409 = false;
+        if (chat.voiceSend && typeof voiceLinkOwner === 'function' && typeof voiceLinkAlive === 'function') {   // a call's own message: its answer proves the link, and so does every piece of data after it
+          const owner = voiceLinkOwner();
+          if (response.status < 500) voiceLinkAlive(owner);
+          chat.onStreamData = () => voiceLinkAlive(owner);
+        } else chat.onStreamData = null;
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
@@ -10636,6 +10641,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           break;
         }
         lastDataTime = Date.now(); // reset watchdog on any data
+        { const ch = chats[chatId]; if (ch && ch.onStreamData) ch.onStreamData(); }   // a call's message: data arriving proves the link
 
         sseBuffer += decoder.decode(value, { stream: true });
         const parts = sseBuffer.split('\n');
@@ -14205,6 +14211,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       btn.textContent = on ? (btn.classList.contains('msg-speak') ? '■' : 'Stop') : btn.dataset.idle;
     }
     function voiceStopPlayback() {
+      if (typeof voicePrefetchClear === 'function') voicePrefetchClear();   // audio fetched ahead for a line that will not play now
       if (typeof voiceDisplayHook === 'function') { voiceDisplayHook('audioStop'); voiceDisplayHook('clearCaption'); }   // the beak closes at once
       voicePlay.token++;
       const src = voicePlay.source;
@@ -14214,12 +14221,37 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voicePlayState(voicePlay.btn, false);
       voicePlay.btn = null;
     }
+    // The next line of a call is fetched while the current one plays (the controller's prefetch dep): its first sentence (the rest of a line is already fetched one ahead
+    // by voicePlayHub). At most 2 entries, keyed by agent + cleaned sentence, each remembering the playback token it was started under. voiceCallSpeak takes a matching
+    // entry (and removes it) before voiceSpeakText raises the token; anything else that raises the token clears them all.
+    const voicePre = [];
+    function voicePrefetchFirst(rawText) {
+      try { return voiceSentences(voiceSpeechText(String(rawText || ''))).map((x) => voiceSpeechText(x)).filter(Boolean)[0] || ''; } catch { return ''; }
+    }
+    function voicePrefetch(agent, rawText) {
+      try {
+        if (!voiceReady()) return;
+        const first = voicePrefetchFirst(rawText), token = voicePlay.token;
+        if (!first || voicePre.some((e) => e.agent === agent && e.text === first && e.token === token)) return;
+        const p = voiceFetchTts(agent, first, undefined);
+        p.catch(() => {});   // a failed prefetch: the line is fetched normally when it is spoken
+        voicePre.push({ agent, text: first, token, p });
+        while (voicePre.length > 2) voicePre.shift();
+      } catch { /* a normal fetch happens when the line is spoken */ }
+    }
+    function voicePrefetchTake(agent, rawText) {
+      const first = voicePrefetchFirst(rawText), token = voicePlay.token;
+      const i = voicePre.findIndex((e) => e.agent === agent && e.text === first && e.token === token);
+      return i < 0 ? null : voicePre.splice(i, 1)[0].p;
+    }
+    function voicePrefetchClear() { voicePre.length = 0; }
     async function voiceFetchTts(agent, text, voice) {
       const body = { agent, text, speed: voiceSpeedFor(agent) };
       if (voice) body.voice = voice;
       const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
       let r;
       try { r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost (text-to-speech)
+      if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner);   // a real answer proves the link
       if (!r.ok) {
         let m = '';
         try { m = (await r.json()).error; } catch {}
@@ -14240,7 +14272,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!voicePlay.ctx || voicePlay.ctx.state === 'closed') voicePlay.ctx = new AC();
       const ctx = voicePlay.ctx;
       if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
-      let next = voiceFetchTts(agent, sentences[0], voice);
+      const pre = voicePlay.pre && voicePlay.pre.token === my ? voicePlay.pre.p : null;   // the first sentence fetched ahead (voiceCallSpeak), set by voiceSpeakText for this very playback
+      voicePlay.pre = null;
+      let next = pre ? Promise.resolve(pre).catch(() => voiceFetchTts(agent, sentences[0], voice)) : voiceFetchTts(agent, sentences[0], voice);   // a prefetched first sentence, else (or when it failed) fetched now
       next.catch(() => {});
       for (let i = 0; i < sentences.length; i++) {
         let buf, ab;
@@ -14294,6 +14328,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const sentences = opts.sentences ? opts.sentences.map(s => voiceSpeechText(s)).filter(Boolean) : voiceSentences(voiceSpeechText(md));
       if (!sentences || !sentences.length) return;
       voicePlay.btn = btn || null; voicePlayState(btn, true);
+      voicePlay.pre = opts.pre ? { token: my, p: opts.pre } : null;
       try {
         let from = 0, useDevice = false;
         if (voiceReady()) {
@@ -14726,6 +14761,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
       let r;
       try { r = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: !!(opts && opts.keepalive) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure (the heartbeat, interjections) marks the link lost
+      if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner);   // a real answer (the heartbeat, an interjection) proves the link
       let j = {};
       try { j = await r.json(); } catch {}
       if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
@@ -14736,7 +14772,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const wav = voiceEncodeWav(audio, 16000);
       const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
       let r;
-      try { r = await fetch(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost
+      try { r = await voiceUpTrack(() => fetch(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav })); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost
+      if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner);   // a real answer proves the link
       let j = {};
       try { j = await r.json(); } catch {}
       if (!r.ok) { if (voiceBusyToast(r.status) && r.status === 409) voiceRefreshStatus(); throw new Error(j.error || `HTTP ${r.status}`); }
@@ -14746,8 +14783,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     async function voiceCallSpeak(agent, text) {
       const sentences = voiceSentences(voiceSpeechText(String(text || ''))).filter(Boolean);
       if (!sentences.length) return true;
+      const pre = typeof voicePrefetchTake === 'function' ? voicePrefetchTake(agent, text) : null;   // taken before voiceSpeakText raises the token (which clears the cache)
       const mine = voicePlay.token + 1;   // voiceSpeakText stops the previous one first: one step on the token
-      await voiceSpeakText(agent, text, null, { sentences });
+      await voiceSpeakText(agent, text, null, { sentences, pre });
       return voicePlay.token === mine;
     }
     // The recording's consent line: true only when it was played to the end (hub voice, or the device voice where that is on).
@@ -14950,7 +14988,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // with recording off has no start-body device, no recorder, no upload and no badge. wired: the controller was given the recorder (false: a stale agent list).
     function voiceRecMake(agent, vad, cfg, wired) {
       return voiceCreateRecordingSession({ agent, userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '', vad, wired, unprocessed: cfg.mic === 'unprocessed', nav: navigator,
-        fetch: (...a) => fetch(...a),   // the same fetch the call's other requests use: the sign-in cookie and the Origin header go with it
+        fetch: (...a) => voiceUpTrack(() => fetch(...a)),   // counted as an upload in flight (voiceLinkProbe); the same fetch the call's other requests use: the sign-in cookie and the Origin header go with it
         speak: (line) => voiceCallSpeakLine(agent, line),   // the consent line: the agent's voice, the replies' own TTS path; true only when it really played
         playback: (on) => { try { vad.setPlaybackActive(on); } catch { /* the line is heard anyway */ } },
         badge: (state) => voiceDisplayHook('setRecording', { state }), toast: (m) => hubToast(m),
@@ -14976,6 +15014,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         interject: (text) => voiceCallInterject(chatId, text),
         stop: () => stopAgentTurn(agent),
         speak: (text) => voiceCallSpeak(agent, text),
+        prefetch: (text) => voicePrefetch(agent, text),   // the next line's first sentence is fetched while this one plays
         cancelSpeech: () => voiceStopPlayback(),
         answerAsk: (id, text) => voiceCallAnswerAsk(agent, id, text),
         speakActivity: () => !!voicePrefsNow().speakActivity,   // off by default: what the agent is doing is shown in the bar, not spoken
@@ -15134,6 +15173,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceCallTeardown() {
       const S = voiceCallS, chatId = S.chatId, vad = S.vad, thinking = S.thinking, keepAlive = S.keepAlive, focus = S.focus;
+      if (typeof voicePrefetchClear === 'function') voicePrefetchClear();   // audio fetched ahead for a line of the call that is over
       for (const c of Object.values(chats)) if (c) { c.voiceTurn = false; c.voiceDictated = false; }   // nothing dictated before the call is read aloud after Hang up
       if (S.link) { try { S.link.stop(); } catch { /* gone */ } S.link = null; }
       S.linkLost = false;
@@ -15195,19 +15235,33 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // While a call is up the page asks /health every 5 s (4 s limit); a failed probe, a network failure on the call's own requests (heartbeat, speech-to-text,
     // sending, text-to-speech) or the offline event marks the link LOST: a falling two-tone, "Connection lost" in the call bar and the display, speech heard
     // meanwhile is dropped, probes every 1 s. Back within 10 s: a rising two-tone and "Reconnected." Not back: the call ends cleanly and the chat says so.
+    // The call's own uploads in flight (the speech-to-text POST and the recorder's uploads): on a slow link /health queues behind them on the one connection, so a probe
+    // that times out while one is going proves nothing (null), not a lost link. seq counts uploads started, to tell "one was in flight at some time during the probe".
+    const voiceUp = { n: 0, seq: 0 };
+    async function voiceUpTrack(run) {
+      voiceUp.n++; voiceUp.seq++;
+      try { return await run(); } finally { voiceUp.n--; }
+    }
     function voiceLinkProbe() {
       return new Promise((resolve) => {
         let ac = null;
         try { ac = typeof AbortController === 'function' ? new AbortController() : null; } catch { ac = null; }
-        const timer = setTimeout(() => { try { if (ac) ac.abort(); } catch { /* done */ } resolve(false); }, 4000);
+        const seq0 = voiceUp.seq;
+        const timer = setTimeout(() => { try { if (ac) ac.abort(); } catch { /* done */ } resolve(voiceUp.n > 0 || voiceUp.seq !== seq0 ? null : false); }, 4000);   // null: unknown (our own upload was in the way)
         let p;
-        try { p = fetch('/health', { cache: 'no-store', credentials: 'include', ...(ac ? { signal: ac.signal } : {}) }); } catch { clearTimeout(timer); resolve(false); return; }
+        try { p = fetch('/health', { cache: 'no-store', credentials: 'include', priority: 'high', ...(ac ? { signal: ac.signal } : {}) }); } catch { clearTimeout(timer); resolve(false); return; }
         Promise.resolve(p).then((r) => { clearTimeout(timer); resolve(!!r && !(r.status >= 500)); }, () => { clearTimeout(timer); resolve(false); });   // a server error from a proxy in front of a dead hub counts as unreachable
       });
     }
     // A network failure (fetch threw a TypeError; not an HTTP error status) seen on one of the active call's requests.
     // The call that is up now (null if none), taken when a request starts: a failure is charged only to that call, never to a newer one.
     function voiceLinkOwner() { try { return voiceCallS.call || null; } catch { return null; } }
+    // A real answer (status below 500) to one of the call's own requests proves the link: the watch is told (only the call that made the request; an older library has no alive()).
+    function voiceLinkAlive(owner) {
+      const S = voiceCallS;
+      if (!owner || S.call !== owner || !S.link || typeof S.link.alive !== 'function') return;
+      try { S.link.alive(); } catch { /* gone */ }
+    }
     function voiceLinkNetFail(e, owner) {
       if (!e || e.name !== 'TypeError') return;
       const S = voiceCallS;

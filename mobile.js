@@ -8009,17 +8009,37 @@ function voiceMarkPlaying(el) {
 }
 function voiceStopPlayback() {
   voicePlay.token++;
+  if (typeof voicePrefetchClear === 'function') voicePrefetchClear();   // audio fetched ahead for a line that will not play now
   if (typeof voiceDisplayHook === 'function') { voiceDisplayHook('audioStop'); voiceDisplayHook('clearCaption'); }   // the beak closes at once
   try { if (voicePlay.audio) { voicePlay.audio.pause(); voicePlay.audio.onended = null; voicePlay.audio.onerror = null; } } catch { /* nothing playing */ }
   if (voicePlay.cancel) { const c = voicePlay.cancel; voicePlay.cancel = null; c(); }   // settles the waiting voicePlayBlob (not played to the end) and frees its blob URL
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch { /* no device voice */ }
   if (voicePlay.el) { voicePlay.el.classList.remove('speaking'); const s = voicePlay.el.querySelector('.speak'); if (s) s.textContent = '\u{1F50A}'; voicePlay.el = null; }
 }
+// The next line of a call is fetched while the current one plays (the controller's prefetch dep): at most 2 entries, keyed by agent + cleaned text, each remembering the
+// playback token it was started under. voiceCallSpeak takes a matching entry (and removes it); anything that raises the token clears them all.
+const voicePre = [];
+function voicePrefetch(agent, rawText) {
+  try {
+    const text = voiceSpeechText(String(rawText || ''));
+    if (!text || !voiceOn()) return;
+    const token = voicePlay.token;
+    if (voicePre.some((e) => e.agent === agent && e.text === text && e.token === token)) return;
+    voicePre.push({ agent, text, token, p: voiceTtsBlob(agent, text) });   // never throws: null when the hub cannot say it
+    while (voicePre.length > 2) voicePre.shift();
+  } catch { /* a normal fetch happens when the line is spoken */ }
+}
+function voicePrefetchTake(agent, text, token) {
+  const i = voicePre.findIndex((e) => e.agent === agent && e.text === text && e.token === token);
+  return i < 0 ? null : voicePre.splice(i, 1)[0].p;
+}
+function voicePrefetchClear() { voicePre.length = 0; }
 async function voiceTtsBlob(agent, text) {   // null when the hub cannot say it (never throws)
   if (!voiceOn()) return null;
   const linkOwner = typeof voiceCall !== 'undefined' ? voiceCall : null;   // a failure is charged only to the call that made the request
   try {
     const r = await api('/api/voice/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent, text, speed: voiceSpeedFor(agent) }) });
+    if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner, agent);   // a real answer proves the link
     if (r.status === 409 || r.status === 503) { voicePlay.told = true; toast(r.status === 409 ? 'Voice is turned off' : 'Voice is busy, try again in a few seconds', 4000); }
     if (!r.ok) return null;
     const b = await r.blob();
@@ -8426,6 +8446,7 @@ async function voiceWakeAcquire(vc) {   // the screen stays on during a call; as
 function voiceCallTeardown(vc) {
   if (voiceCall !== vc) return;
   voiceCall = null;
+  if (typeof voicePrefetchClear === 'function') voicePrefetchClear();
   if (vc.rec) { try { vc.rec.stop(); } catch { /* already stopped */ } }   // a recorded call: the recorder lets go of its tap (uploads in flight finish)
   if (typeof voiceAutoReadReset === 'function') voiceAutoReadReset();   // nor after the call has ended
   if (typeof voiceDispEnd === 'function') voiceDispEnd(false);   // a call that ended some other way: the display goes at once (hang-up has already started its goodbye)
@@ -8475,6 +8496,7 @@ function voiceCallServer(agent, getVc) {
     async heartbeat(callId) {
       let r;
       try { r = await voiceCallPost(url, { agent, action: 'heartbeat', callId }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, getVc()); throw e; }   // a network failure marks the link lost
+      if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(getVc());
       if (r.status === 409 || r.status === 403) { const vc = getVc(); if (vc && voiceCall === vc) { toast('The call ended.'); voiceCallHangUp(); } return null; }
       const j = await voiceCallJson(r);
       return { callId: j.call && j.call.callId, held: (j.call && Array.isArray(j.call.held)) ? j.call.held : [] };
@@ -8495,7 +8517,8 @@ async function voiceCallStt(agent, f32) {
   const wav = new Blob([voiceEncodeWav(f32, 16000)], { type: 'audio/wav' });
   const linkOwner = typeof voiceCall !== 'undefined' ? voiceCall : null;   // a failure is charged only to the call that made the request
   let r;
-  try { r = await api(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner, agent); throw e; }   // a network failure marks the link lost
+  try { r = await voiceUpTrack(() => api(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav })); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner, agent); throw e; }   // a network failure marks the link lost
+  if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner, agent);   // a real answer proves the link
   if (r.status === 409) throw new Error('Voice is turned off');
   if (r.status === 503) throw new Error('Voice is busy');
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -8508,7 +8531,9 @@ async function voiceCallSpeak(agent, rawText) {
   if (!text) return true;
   const my = voicePlay.token;
   if (voiceOn()) {
-    const blob = await voiceTtsBlob(agent, text);
+    const pre = typeof voicePrefetchTake === 'function' ? voicePrefetchTake(agent, text, my) : null;   // fetched while the line before played
+    let blob = pre ? await pre : null;
+    if (!blob && (!pre || my === voicePlay.token)) blob = await voiceTtsBlob(agent, text);   // no (or a failed) prefetch: fetched now
     if (my !== voicePlay.token) return false;
     if (blob) {
       const ok = await voicePlayBlob(blob, my, { text });
@@ -8566,6 +8591,7 @@ async function voiceCallInterject(vc, text) {
   let result;
   try {
     const r = await voiceCallPost('/api/chat/interject', { agent: vc.agent, message: text });
+    if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(vc);
     result = await r.json().catch(() => ({ success: false, error: `HTTP ${r.status}` }));
   } catch (e) { result = { success: false, error: e.message || 'request failed' }; if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, vc); }
   if (result && result.success) return;
@@ -8748,7 +8774,7 @@ function voiceWakeSave() {
 function voiceRecMake(vc, cfg, wired) {
   const agent = vc.agent;
   return voiceCreateRecordingSession({ agent, userId: hubMe && hubMe.user ? hubMe.user.id : '', vad: vc.vad, wired, unprocessed: cfg.mic === 'unprocessed', nav: navigator,
-    fetch: (url, init) => api(url, init),   // the page's usual helper: the sign-in cookie, the Origin header and the redirect to sign-in come with it
+    fetch: (url, init) => voiceUpTrack(() => api(url, init)),   // counted as an upload in flight (voiceLinkProbe); the page's usual helper: the sign-in cookie, the Origin header and the redirect to sign-in come with it
     speak: (line) => voiceCallSpeakLine(agent, line),   // the consent line: the agent's voice, the replies' own TTS path; true only when it really played
     playback: (on) => { try { vc.vad.setPlaybackActive(on); } catch { /* the line is heard anyway */ } },
     badge: (state) => voiceDisplayHook('setRecording', { state }), toast: (m) => toast(m, 4000),
@@ -8776,6 +8802,7 @@ function voiceCallDeps(vc) {
     interject: (text) => voiceCallInterject(vc, text),
     stop: () => stopTurn(agent),
     speak: (text) => voiceCallSpeak(agent, text),
+    prefetch: (text) => voicePrefetch(agent, text),   // the next line's audio is fetched while this one plays
     cancelSpeech: () => voiceStopPlayback(),
     answerAsk: (id, text) => voiceCallAnswerAsk(vc, id, text),
     speakActivity: () => !!voicePrefsNow().speakActivity,   // off by default: what the agent is doing is shown in the panel, not spoken
@@ -8811,13 +8838,27 @@ function voiceCallDeps(vc) {
 // While a call is up the page asks /health every 5 s (4 s limit); a failed probe, a network failure on the call's own requests (heartbeat, speech-to-text,
 // sending, text-to-speech) or the offline event marks the link LOST: a falling two-tone, "Connection lost" on the screens, speech heard meanwhile is dropped,
 // probes every 1 s. Back within 10 s: a rising two-tone and "Reconnected." Not back: the call ends cleanly and the chat says so.
+// The call's own uploads in flight (the speech-to-text POST and the recorder's uploads): on a slow link /health queues behind them on the one connection, so a probe that
+// times out while one is going proves nothing (null), not a lost link. seq counts uploads started, to tell "one was in flight at some time during the probe".
+const voiceUp = { n: 0, seq: 0 };
+async function voiceUpTrack(run) {
+  voiceUp.n++; voiceUp.seq++;
+  try { return await run(); } finally { voiceUp.n--; }
+}
+// A real answer (status below 500) to one of the call's own requests proves the link: the watch is told (only the call that made the request; an older library has no alive()).
+function voiceLinkAlive(vc, agent) {
+  if (!vc || !vc.link || typeof vc.link.alive !== 'function' || (agent && vc.agent !== agent)) return;
+  if (typeof voiceCall !== 'undefined' && voiceCall !== vc) return;
+  try { vc.link.alive(); } catch { /* gone */ }
+}
 function voiceLinkProbe() {
   return new Promise((resolve) => {
     let ac = null;
     try { ac = typeof AbortController === 'function' ? new AbortController() : null; } catch { ac = null; }
-    const timer = setTimeout(() => { try { if (ac) ac.abort(); } catch { /* done */ } resolve(false); }, 4000);
+    const seq0 = voiceUp.seq;
+    const timer = setTimeout(() => { try { if (ac) ac.abort(); } catch { /* done */ } resolve(voiceUp.n > 0 || voiceUp.seq !== seq0 ? null : false); }, 4000);   // null: unknown (our own upload was in the way)
     let p;
-    try { p = fetch('/health', { cache: 'no-store', credentials: 'include', ...(ac ? { signal: ac.signal } : {}) }); } catch { clearTimeout(timer); resolve(false); return; }
+    try { p = fetch('/health', { cache: 'no-store', credentials: 'include', priority: 'high', ...(ac ? { signal: ac.signal } : {}) }); } catch { clearTimeout(timer); resolve(false); return; }
     Promise.resolve(p).then((r) => { clearTimeout(timer); resolve(!!r && !(r.status >= 500)); }, () => { clearTimeout(timer); resolve(false); });   // a server error from a proxy in front of a dead hub counts as unreachable
   });
 }
@@ -9649,6 +9690,10 @@ async function sendMessage(fallback) {
       signal: controller.signal,
       body: JSON.stringify({ agent, message: text, images, confirm_tools: false, ...(fallback && fallback.voice ? { voice: true } : {}), ...(fallback && fallback.voice && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {}) }),   // facePack only while a character with reactions is on screen   // voice: the message came from a hands-free call
     });
+    if (linkOwner && fallback && fallback.voice) {   // a call's own message: its answer proves the link, and so does every piece of data after it
+      if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner, agent);
+      rec.onData = () => { if (typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner, agent); };
+    }
     if (r.status === 409) {
       sent = false;
       rec.bubble.el.remove();
@@ -9991,6 +10036,7 @@ async function readStream(response, rec) {
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
+    if (rec.onData) rec.onData();   // a call's message: data arriving proves the link
     buffer += decoder.decode(value, { stream: true });
     const parts = buffer.split('\n');
     buffer = parts.pop();
