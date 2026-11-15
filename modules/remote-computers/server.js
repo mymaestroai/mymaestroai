@@ -7,7 +7,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { createMeshServer, redact, VERSION, DEFAULT_SERVICE_NAME, SERVICE_NAME_RE } = require('./lib/meshserver');
 const { createMeshClient, MeshError } = require('./lib/meshclient');
-const { ensureGroup } = require('./lib/setupgroup');
+const { ensureGroup, ensurePerson } = require('./lib/setupgroup');
+const { createDesktop, DesktopError, hhmm, cleanWho, checkSession, checkTunnel, clampMinutes } = require('./lib/desktop');
 const { createGate, GateError } = require('./lib/gate');
 const win = require('./lib/windows');
 const { createShotStore } = require('./lib/shots');
@@ -35,6 +36,9 @@ const NEW_SHOT = 'Take a new screenshot and use its shot id.';
 const CHECK_FIRST = 'Check its effect first, for example with a screenshot or a read-only command.';
 const RUNCOMMANDS_ERRORS = new Set(['Invalid nodeid', 'Invalid domain', 'Access denied', 'Agent not connected', 'Invalid command type']);
 const PS_PREFIX = '$ProgressPreference = \'SilentlyContinue\'\n[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n';   // no progress noise in the output, UTF-8 text back
+const DESKTOP_FILE = 'desktop-sessions.json';
+const INPUT_TOOLS = ['run', 'click', 'type', 'key', 'scroll'];
+const COOKIE_RE = /^[A-Za-z0-9@$_.=+\/-]{8,4000}$/;   // what MeshCentral's encodeCookie makes: base64 with @ and $
 const AGENT_TOOLS = ['computers', 'info', 'screenshot', 'run', 'click', 'type', 'key', 'scroll'];
 
 const obj = (properties = {}, required) => ({ type: 'object', properties, ...(required ? { required } : {}), additionalProperties: false });
@@ -50,6 +54,11 @@ const TOOLS = [
   { name: 'type', description: 'Drive level. Types text (up to 2000 characters) into whatever has the focus on one computer. A new line presses Enter. Click the field first.' + ASK, inputSchema: obj({ ...computerArg, text: { type: 'string', minLength: 1, maxLength: 2000 } }, ['computer', 'text']) },
   { name: 'key', description: 'Drive level. Presses a key or a combination on one computer, for example "enter", "ctrl+c", "alt+tab", "win+r", "ctrl+shift+esc", "f5", "pagedown", or a single letter or digit. Only these names work: enter, esc, tab, space, backspace, delete, insert, home, end, pageup, pagedown, up, down, left, right, f1 to f12, a to z, 0 to 9, with ctrl, alt, shift and win in front.' + ASK, inputSchema: obj({ ...computerArg, keys: { type: 'string', maxLength: 60 } }, ['computer', 'keys']) },
   { name: 'scroll', description: 'Drive level. Turns the mouse wheel on one computer: amount is -20 to 20 notches (positive scrolls up, negative down). Give x and y (pixels in a screenshot) together with that screenshot\'s shot id to scroll over a particular place (the same rules as click); without them it scrolls where the pointer is and needs no shot id.' + ASK, inputSchema: obj({ ...computerArg, shot: shotArg, x: { type: 'integer', minimum: 0 }, y: { type: 'integer', minimum: 0 }, amount: { type: 'integer', minimum: -20, maximum: 20 } }, ['computer', 'amount']) },
+  { name: 'desktop_sessions', description: 'Used by the hub only. The live desktop sessions: computer, who and until when.', inputSchema: obj() },
+  { name: 'desktop_open', description: 'Used by the hub only. Opens a person\'s desktop session on one computer (one session per computer).', inputSchema: obj({ nodeid: { type: 'string' }, who: obj({ id: { type: 'string', maxLength: 100 }, name: { type: 'string', maxLength: 100 } }, ['id', 'name']), minutes: { type: 'integer', minimum: 5, maximum: 120 } }, ['nodeid', 'who']) },
+  { name: 'desktop_endpoint', description: 'Used by the hub only. Where the desktop viewer reaches the server: port, certificate name and the certificate to trust.', inputSchema: obj({ session: { type: 'string' } }, ['session']) },
+  { name: 'desktop_connect', description: 'Used by the hub only. Starts the desktop tunnel of a live session and returns the query for the viewer\'s connection.', inputSchema: obj({ session: { type: 'string' }, tunnelid: { type: 'string', pattern: '^[A-Za-z0-9]{6,64}$' } }, ['session', 'tunnelid']) },
+  { name: 'desktop_end', description: 'Used by the hub only. Ends a desktop session: by its session, or by the computer (nodeid) when the hub no longer knows the session, after a restart.', inputSchema: obj({ session: { type: 'string' }, nodeid: { type: 'string', maxLength: 300 }, reason: { type: 'string', maxLength: 40 } }) },
   { name: 'health', description: 'Whether the server runs and its device group exists. Used by the nightly check.', inputSchema: obj() },
   { name: 'start', description: 'Starts the server (and makes it ready) if it is not running. Used by the setup only.', inputSchema: obj() },
   { name: 'installer_link', description: 'A one-time link to download the helper for a computer. Used by the setup only.', inputSchema: obj() },
@@ -244,6 +253,9 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     });
   }
   const agent = () => { if (!agentClient) agentClient = clientFor(mesh.accounts().agent); return agentClient; };
+  // The person's own control connection (the desktop): opened on the first use, kept, and opened again by the client when it was closed.
+  let personClient = null, personReady = false, personP = null;
+  const closePerson = () => { personReady = false; if (personClient) { try { personClient.close(); } catch { /* closed */ } personClient = null; } };
 
   // The whole start: config, first accounts, process, device group. Safe to call again: it joins a start in progress.
   function startSequence() {
@@ -300,7 +312,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (mode === 'service' && coversMagicDns(settings.agent_allowed)) out.warnings.push(MAGIC_DNS_WARNING);
     if (mode === 'service' && serviceNow) {
       if (!serviceNow.ready) {
-        if (state.phase === 'ready') { state.phase = 'service-wait'; if (agentClient) { try { agentClient.close(); } catch { /* closed */ } agentClient = null; } }
+        if (state.phase === 'ready') { state.phase = 'service-wait'; if (agentClient) { try { agentClient.close(); } catch { /* closed */ } agentClient = null; } closePerson(); }
         state.service = { reason: serviceNow.reason, message: serviceNow.message, command: serviceNow.command };
         Object.assign(out, { reason: serviceNow.reason, message: serviceNow.message, command: serviceNow.command });
         return out;
@@ -486,7 +498,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   // left, which is never longer than the command's own wait; under MIN_WAIT_MS nothing is sent.
   function sendCheck({ who, pc, need, as, deadline, tool, timeoutMs }) {
     return () => {
-      if (need) beforeSend(who, pc, need, as);
+      if (need) { desktopRefuse(pc); beforeSend(who, pc, need, as); }   // a person may have opened the desktop while the owner was asked
       const left = deadline - now() - SEND_MARGIN_MS;
       if (left < MIN_WAIT_MS) throw new ToolError(`Call ${tool} again; this call is out of time.`);
       return Math.min(timeoutMs, left);
@@ -556,6 +568,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const timeoutSec = a.timeoutSec === undefined ? 60 : a.timeoutSec;
     if (!Number.isInteger(timeoutSec) || timeoutSec < 5 || timeoutSec > 300) throw new ToolError('timeoutSec must be a whole number from 5 to 300.');
     const pc = await resolve(a.computer);
+    desktopRefuse(pc);
     mustBeOnline(pc);
     if (as === 'user') needSignedIn(pc);
     const windows = isWindows(pc);
@@ -592,6 +605,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
 
   async function toolClick(a, who, call, deadline) {
     const pc = await resolve(a.computer);
+    desktopRefuse(pc);
     windowsOnly(pc);
     mustBeOnline(pc);
     needSignedIn(pc);
@@ -604,6 +618,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   }
   async function toolType(a, who, call, deadline) {
     const pc = await resolve(a.computer);
+    desktopRefuse(pc);
     windowsOnly(pc);
     mustBeOnline(pc);
     needSignedIn(pc);
@@ -614,6 +629,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   }
   async function toolKey(a, who, call, deadline) {
     const pc = await resolve(a.computer);
+    desktopRefuse(pc);
     windowsOnly(pc);
     mustBeOnline(pc);
     needSignedIn(pc);
@@ -624,6 +640,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   }
   async function toolScroll(a, who, call, deadline) {
     const pc = await resolve(a.computer);
+    desktopRefuse(pc);
     windowsOnly(pc);
     mustBeOnline(pc);
     needSignedIn(pc);
@@ -666,7 +683,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     }
     return installer.link();
   };
-  const toolComputersStatus = async () => (await listComputers()).map((pc) => ({ name: pc.name, os: pc.os, online: pc.online }));   // for the setup check: no agent is involved, so no gate
+  const toolComputersStatus = async () => (await listComputers()).map((pc) => ({ nodeid: pc.nodeid, name: pc.name, os: pc.os, online: pc.online }));   // for the setup check and the hub's Computers box: no agent is involved, so no gate
   async function receive(params) {
     try { return await installer.receive(params); } catch (e) {
       log('receiver failed:', clean(e && (e.code || e.message), 80));
@@ -674,8 +691,98 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     }
   }
 
+
+  // ── the open desktop: sessions, the person's account, the tunnel (hub-only tools: every answer is JSON, a failure is {"error": "..."}) ──
+  const desktop = deps.desktop || createDesktop({ file: home ? path.join(home, DESKTOP_FILE) : '', now });
+  const desktopBusyText = (r) => `A person is using this computer's desktop until ${hhmm(r.until)}. Try again after that.`;
+  const desktopRefuse = (pc) => { const r = desktop.forNode(pc.nodeid); if (r) throw new ToolError(desktopBusyText(r)); };
+  const personStore = deps.personStore || { read: () => (mesh ? mesh.personAccount() : null), write: (pass) => mesh.savePersonAccount(pass) };
+  const NOT_READY_DESKTOP = 'The desktop is not ready: the person account could not be set up. Try again in a minute.';
+  function ensurePersonReady() {
+    if (personReady) return Promise.resolve();
+    if (personP) return personP;
+    personP = (async () => {
+      let admin = deps.adminClient || null;
+      const own = !admin;
+      try {
+        if (!admin) { if (!mesh) throw new Error('no server'); admin = clientFor(mesh.accounts().admin); }
+        await ensurePerson(admin, groupId(), personStore);
+        personReady = true;
+      } catch (e) {
+        log('the desktop account could not be set up:', clean(e && (e.code || e.message), 120));
+        throw new ToolError(NOT_READY_DESKTOP);
+      } finally { if (own && admin) { try { admin.close(); } catch { /* closed */ } } }
+    })();
+    const clear = () => { personP = null; };
+    personP.then(clear, clear);
+    return personP;
+  }
+  function person() {
+    if (deps.personClient) return deps.personClient;
+    if (!personClient) {
+      const acct = personStore.read();
+      if (!acct) throw new ToolError(NOT_READY_DESKTOP);
+      personClient = clientFor(acct);
+    }
+    return personClient;
+  }
+  function desktopEndpoint() {
+    if (deps.endpoint) return deps.endpoint();
+    if (!mesh) throw new ToolError('The Remote computers server is not ready yet. Try again in a minute.');
+    const cfg = mesh.configFor(settings);
+    return { port: cfg.settings.port, servername: cfg.settings.cert, ca: fs.readFileSync(mesh.paths.rootCert, 'utf8') };
+  }
+  const desktopTool = (fn) => async (a) => {
+    try { return await fn(a && typeof a === 'object' ? a : {}); } catch (e) {
+      if (e instanceof DesktopError) return { error: e.message, ...(e.extra || {}) };
+      if (e instanceof ToolError) return { error: e.message };
+      log('desktop tool failed:', clean(e && (e.code || e.message), 80));
+      return { error: 'The desktop could not be reached. Try again in a moment.' };
+    }
+  };
+  const liveSession = (id) => { const r = desktop.get(id); if (!r) throw new DesktopError('That desktop session is not open.'); return r; };
+  const toolDesktopSessions = desktopTool(async () => ({ sessions: desktop.list().map((r) => ({ nodeid: r.nodeid, name: r.name, who: r.who, start: r.start, until: r.until })) }));
+  const toolDesktopOpen = desktopTool(async (a) => {
+    if (typeof a.nodeid !== 'string' || !a.nodeid || a.nodeid.length > 300) throw new DesktopError('nodeid: give the computer\'s id.');
+    const who = cleanWho(a.who);
+    if (a.minutes !== undefined && (typeof a.minutes !== 'number' || !Number.isFinite(a.minutes))) throw new DesktopError('minutes: give a number from 5 to 120.');
+    const pc = (await listComputers()).find((c) => c.nodeid === a.nodeid);
+    if (!pc) throw new DesktopError('That computer is not in the list.');
+    if (!pc.online) throw new DesktopError(`${pc.name} is offline. It has to be switched on and connected to the tailnet.`);
+    const taken = desktop.forNode(pc.nodeid);
+    if (taken) throw new DesktopError(`${taken.name} is in use by ${taken.who.name} until ${hhmm(taken.until)}.`, { busy: { who: { name: taken.who.name }, until: taken.until } });
+    await ensurePersonReady();
+    const r = desktop.open({ nodeid: pc.nodeid, name: pc.name, who, minutes: a.minutes === undefined ? undefined : clampMinutes(a.minutes), defaultMinutes: clampMinutes(settings.desktop_minutes) });
+    return { session: r.session, nodeid: r.nodeid, name: r.name, start: r.start, until: r.until };
+  });
+  const toolDesktopEndpoint = desktopTool(async (a) => { liveSession(checkSession(a.session)); return desktopEndpoint(); });
+  const toolDesktopConnect = desktopTool(async (a) => {
+    const r = liveSession(checkSession(a.session));
+    const tunnelid = checkTunnel(a.tunnelid);
+    ensureReady();
+    const c = person();
+    let f;
+    try { f = await c.exchange('authcookie', {}, { timeoutMs: 10000 }); } catch (e) { throw meshFail(e); }   // the reply has no responseid
+    if (!f || typeof f.cookie !== 'string' || !COOKIE_RE.test(f.cookie) || typeof f.rcookie !== 'string' || !COOKIE_RE.test(f.rcookie)) throw new ToolError('The server did not give a desktop cookie. Try again in a moment.');
+    // The same message MeshCentral's own page sends (public/scripts/agent-redir-ws-0.1.1.js:75-77): `*` is replaced by the agent with its server address.
+    const value = `*/meshrelay.ashx?p=2&nodeid=${r.nodeid}&id=${tunnelid}&rauth=${f.rcookie}`;
+    try { await c.request('msg', { type: 'tunnel', nodeid: r.nodeid, value, usage: 2 }, { timeoutMs: 10000 }); } catch (e) {
+      throw new ToolError(e && e.code === 'EMESH' ? `${r.name}: the server could not reach the computer (${clean(e.message, 60)}).` : 'The Remote computers server did not answer. Try again in a moment.');
+    }
+    return { query: `browser=1&p=2&nodeid=${r.nodeid}&id=${tunnelid}&auth=${f.cookie}` };
+  });
+  const toolDesktopEnd = desktopTool(async (a) => {
+    const reason = typeof a.reason === 'string' ? clean(a.reason, 40) : '';
+    let r;
+    if (a.session !== undefined) r = desktop.end(checkSession(a.session));
+    else if (typeof a.nodeid === 'string' && a.nodeid) r = desktop.endNode(a.nodeid);
+    else throw new DesktopError('session: give the session or the computer.');
+    log(`desktop session on ${r.name} ended${reason ? ` (${reason})` : ''}`);
+    return { nodeid: r.nodeid, name: r.name, who: r.who, start: r.start, until: r.until, ended: r.ended };
+  });
+
   const AGENT_HANDLERS = { computers: toolComputers, info: toolInfo, screenshot: toolScreenshot, run: toolRun, click: toolClick, type: toolType, key: toolKey, scroll: toolScroll };
-  const HANDLERS = { health: toolHealth, start: toolStart, installer_link: toolInstallerLink, computers_status: toolComputersStatus };
+  const HANDLERS = { health: toolHealth, start: toolStart, installer_link: toolInstallerLink, computers_status: toolComputersStatus, desktop_sessions: toolDesktopSessions, desktop_open: toolDesktopOpen, desktop_endpoint: toolDesktopEndpoint, desktop_connect: toolDesktopConnect, desktop_end: toolDesktopEnd };
   async function agentTool(name, a) {
     const who = typeof a.__agent === 'string' ? a.__agent.trim() : '';
     const call = typeof a.__call === 'string' ? a.__call.trim().slice(0, 200) : '';   // the hub's id for this tool call; the owner's question is tied to it
@@ -683,6 +790,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const deadline = now() + CALL_DEADLINE_MS;   // one absolute deadline for the whole call, approval included
     try {
       await gate.require(who, 'look');   // who is calling: without it nothing is allowed
+      if (INPUT_TOOLS.includes(name)) { const live = desktop.forQuery(args.computer); if (live) throw new ToolError(desktopBusyText(live)); }   // before anything is asked or sent
       return await AGENT_HANDLERS[name](args, who, call, deadline);
     } catch (e) {
       if (e instanceof GateError) throw new ToolError(e.message);
@@ -705,6 +813,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   async function stop() {
     stopped = true; gen += 1;
     if (agentClient) { try { agentClient.close(); } catch { /* closed */ } }
+    closePerson();
     const seq = startP;
     if (mesh) await mesh.stop().catch(() => {});
     if (seq) await seq.catch(() => {});

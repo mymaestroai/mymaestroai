@@ -55,10 +55,17 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
   if (!url || !user || !pass || typeof WebSocket !== 'function') throw new Error('createMeshClient needs url, user, pass and WebSocket');
   let ws = null, readyP = null;
   const pending = new Map();   // id -> { req, action, sock, sent, resolve, reject, timer }
+  const waiters = [];   // { action, sock, resolve, reject, timer }: callers that wait for the next frame of an action that has no responseid (authcookie)
   const retired = new WeakSet();   // sockets that are given up: nothing they say is believed any more
 
   // Fails the requests that were sent on one socket (or all of them). Each gets its own error, marked sent: true because the request already went out.
   function failSock(sock, err) {
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      const w = waiters[i];
+      if (sock && w.sock !== sock) continue;
+      waiters.splice(i, 1); clearTimeout(w.timer);
+      w.reject(Object.assign(new MeshError(err.message, err.code), { sent: true }));
+    }
     for (const [id, p] of pending) {
       if (sock && p.sock !== sock) continue;
       clearTimeout(p.timer); pending.delete(id);
@@ -73,7 +80,9 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
     failSock(sock, err);
   }
 
-  function onFrame(frame) {
+  function onFrame(frame, sock) {
+    const wi = waiters.findIndex((w) => w.action === frame.action && w.sock === sock);
+    if (wi >= 0) { const [w] = waiters.splice(wi, 1); clearTimeout(w.timer); w.resolve(frame); return; }   // the oldest waiter for this action gets it
     for (const [id, p] of pending) {
       const m = matchReply(p.action, p.req, frame);
       if (!m) continue;
@@ -115,7 +124,7 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
           if (!settled) settle(new MeshError(`The server refused the login (${oneLine(frame.cause || 'closed', 60)}${frame.msg ? `: ${oneLine(frame.msg, 100)}` : ''}).`, 'EAUTH'));
           return;
         }
-        if (settled) onFrame(frame);
+        if (settled) onFrame(frame, sock);
       });
       sock.on('error', (e) => { settle(new MeshError(`Could not reach the server (${oneLine((e && (e.code || e.message)) || 'error', 100)}).`, (e && e.code) || 'ECONN')); });
       sock.on('close', () => {
@@ -188,6 +197,28 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
     return send(action, fields, opts);
   }
 
+  // exchange(action, fields, { timeoutMs }) -> the next frame whose action is `action`. For replies that carry no responseid (authcookie): the request
+  // is sent as {action, ...fields} and the first frame of that action that arrives afterwards answers it (callers are answered in the order they asked).
+  async function exchange(action, fields = {}, opts = {}) {
+    if (typeof action !== 'string' || !action) throw new MeshError('An action is needed.', 'EBADARG');
+    try { await connect(); } catch (e) { if (e && typeof e === 'object') e.sent = false; throw e; }
+    const sock = ws;
+    if (!sock) throw Object.assign(new MeshError('The connection to the server closed.', 'ECLOSED'), { sent: false });
+    const ms = (opts && opts.timeoutMs) || timeoutMs;
+    return new Promise((resolve, reject) => {
+      const w = { action, sock, resolve, reject, timer: null };
+      w.timer = setTimeout(() => {
+        const i = waiters.indexOf(w); if (i >= 0) waiters.splice(i, 1);
+        reject(Object.assign(new MeshError(`${action} timed out after ${Math.round(ms / 1000)} s.`, 'ETIMEDOUT'), { sent: true, waitMs: ms }));
+      }, ms);
+      waiters.push(w);
+      try { sock.send(JSON.stringify({ ...fields, action })); } catch (e) {
+        clearTimeout(w.timer); const i = waiters.indexOf(w); if (i >= 0) waiters.splice(i, 1);
+        reject(Object.assign(new MeshError(`Could not send (${oneLine(e && e.message, 80)}).`, 'ECLOSED'), { sent: false }));
+      }
+    });
+  }
+
   function close() {
     const sock = ws;
     ws = null; readyP = null;
@@ -196,7 +227,7 @@ function createMeshClient({ url, ca, servername, user, pass, WebSocket, timeoutM
     if (sock) { try { sock.close(); } catch { /* closed */ } }
   }
 
-  return { ready, request, close, isOpen: () => !!ws };
+  return { ready, request, exchange, close, isOpen: () => !!ws };
 }
 
 module.exports = { createMeshClient, matchReply, b64, MeshError, MAX_PAYLOAD, MAX_STRING };

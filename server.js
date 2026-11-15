@@ -305,6 +305,50 @@ const server = http.createServer((req, res) => {
     } catch { /* socket gone */ }
   });
 });
+// Open desktop (Remote computers): routes, session map and the websocket relay (lib/remote-desktop). Only while the module is on.
+let _remoteDesktop = null;
+function remoteDesktop() {
+  if (!_remoteDesktop) {
+    const modsOf = () => require('./lib/modules').getModules();
+    const identifyReq = (req) => {
+      // A request that went through the gate in handleHttpRequest already carries its identity; an upgrade does not, so it is worked out here.
+      if (req.hubIdentKind !== undefined) return { user: req.hubUser, pendingTotp: req.hubPendingTotp, service: req.hubService, token: req.hubToken };
+      const ident = hubAuth.identify(req, { legacyCheck: (r) => !!AUTH_USERNAME && !hubAuth.hasUsers() && checkAuth(r) });
+      return {
+        user: ident && (ident.kind === 'user' || ident.kind === 'legacy') ? ident.user : null,
+        pendingTotp: !!(ident && ident.kind === 'user' && ident.pendingTotp),
+        service: !!(ident && ident.kind === 'service'),
+        token: ident && ident.kind === 'token' ? ident.token : null,
+      };
+    };
+    _remoteDesktop = require('./lib/remote-desktop').createRemoteDesktop({
+      callTool: (tool, args) => require('./lib/connectors').getConnectors().callTool('remote-computers', tool, args, { hub: true, timeoutMs: 30000 }),
+      parse: (t) => require('./lib/modules').parseToolText(t),
+      identify: identifyReq,
+      isAdmin: (u) => access.isAdmin(u),
+      isOwner: (u) => hubAuth.isOwner(u),
+      tailnetOk: (req) => isTailnetUserAllowed(req, PORT),
+      enabled: () => { try { return !!modsOf().detail('remote-computers').enabled; } catch { return false; } },
+      settings: () => { try { return modsOf().detail('remote-computers').settings || {}; } catch { return {}; } },
+      readPage: () => fs.readFileSync(path.join(__dirname, 'remote-desktop.html'), 'utf8'),
+      log: (line) => console.log(line),
+      audit: (rec) => {
+        try {
+          const dir = path.join(__dirname, 'data', 'modules', 'remote-computers');
+          fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+          fs.appendFileSync(path.join(dir, 'audit.jsonl'), JSON.stringify(rec) + '\n', { mode: 0o600 });
+        } catch (e) { console.error('[remote-desktop] audit:', e.message); }
+      },
+    });
+  }
+  return _remoteDesktop;
+}
+// Websocket upgrades: only the desktop relay is answered; every other path keeps today's behaviour (the socket is closed).
+server.on('upgrade', (req, socket, head) => {
+  let handled = false;
+  try { handled = remoteDesktop().upgrade(req, socket, head); } catch (e) { console.error('[remote-desktop] upgrade:', e && e.message ? e.message : e); }
+  if (!handled) { try { socket.destroy(); } catch { /* gone */ } }
+});
 // Public receivers (/hooks/<id>/<sub>): lib/modules/receivers checks every request itself, so they are answered before the tailnet gate.
 let _receivers = null;
 function receivers() {
@@ -1949,12 +1993,28 @@ async function handleHttpRequest(req, res) {
             const b = await bodyJson();
             if (act === 'step') return jsonResponse(res, 200, await mods.runStep(id, String(b.step || ''), b.input || {}));
             if (act === 'check') return jsonResponse(res, 200, { ok: true, check: await mods.check(id, b.check), module: mods.detail(id) });
-            if (act === 'settings') return jsonResponse(res, 200, { ok: true, module: mods.saveSettings(id, b.values || {}) });
+            if (act === 'settings') {
+              // Who may open a computer's desktop, and the address it opens at, are the owner's to change (compared with what is stored now).
+              if (id === 'remote-computers' && b.values && typeof b.values === 'object' && !(req.hubUser && !req.hubService && !req.hubToken && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser))) {
+                const cur = mods.detail(id).settings || {};
+                for (const k of ['desktop_who', 'desktop_address']) {
+                  if (Object.prototype.hasOwnProperty.call(b.values, k) && String(b.values[k] === null || b.values[k] === undefined ? '' : b.values[k]) !== String(cur[k] === undefined || cur[k] === null ? '' : cur[k])) {
+                    return jsonResponse(res, 403, { error: 'Only the owner can change who may open a desktop and its address.' });
+                  }
+                }
+              }
+              return jsonResponse(res, 200, { ok: true, module: mods.saveSettings(id, b.values || {}) });
+            }
             if (act === 'enable' || act === 'disable') return jsonResponse(res, 200, { ok: true, module: mods.setEnabled(id, act === 'enable') });
           }
         }
         return jsonResponse(res, 404, { error: 'unknown modules route' });
       } catch (e) { return fail(e); }
+    }
+
+    // ── Open desktop (Remote computers): /api/remote-desktop and /remote-desktop/<session>/ (lib/remote-desktop checks sign-in, role, session and origin itself) ──
+    if (pathname === '/api/remote-desktop' || pathname.startsWith('/api/remote-desktop/') || pathname.startsWith('/remote-desktop/')) {
+      if (await remoteDesktop().handle(req, res)) return;
     }
 
     if (pathname.startsWith('/api/connector')) {
