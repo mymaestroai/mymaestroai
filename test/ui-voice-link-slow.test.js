@@ -259,3 +259,124 @@ test('both pages: the controller gets prefetch, the recorder and speech-to-text 
   assert.match(between(mob, 'async function voiceCallInterject(', 'async function voiceCallAnswerAsk('), /voiceLinkAlive\(vc\)/);
   assert.match(between(mob, 'async heartbeat(callId) {', 'async mode('), /voiceLinkAlive\(getVc\(\)\)/);
 });
+
+// ── review r1 fixes: read-back downloads count as the call's traffic; read-back audio is copied into the recording only when it really starts playing, in the call that asked ──
+const gate = () => { let res; const p = new Promise((r) => { res = r; }); return { p, res }; };
+const upStub = () => { const u = { n: 0, max: 0 }; u.track = async (run) => { u.n++; u.max = Math.max(u.max, u.n); try { return await run(); } finally { u.n--; } }; return u; };
+const recStub = () => { const r = { got: [] }; r.replyAudio = (b) => { r.got.push(b); }; return r; };
+
+function phoneRecEnv(first) {
+  const src = between(mob, 'async function voiceTtsBlob(', 'function voiceDeviceSpeak(');
+  const holder = { call: first }, up = upStub(), hold = { gate: null };
+  const mkResp = () => ({ status: 200, ok: true, headers: { get: () => null }, blob: async () => ({ size: 3, arrayBuffer: async () => new ArrayBuffer(3) }) });
+  const api = async () => { if (hold.gate) await hold.gate.p; return mkResp(); };
+  const voicePlay = { token: 1, audio: null, url: null, cancel: null };
+  class FakeAudio { play() { return Promise.resolve(); } }
+  const f = new Function('state', 'voiceOn', 'api', 'voiceSpeedFor', 'voicePlay', 'toast', 'voiceUpTrack', 'Audio', 'URL',
+    'let voiceCall = state.call;\n' + src + '\nreturn { voiceTtsBlob, voicePlayBlob, setCall(c) { voiceCall = c; } };')(
+    holder, () => true, api, () => 1, voicePlay, () => {}, up.track, FakeAudio, { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} });
+  return Object.assign(f, { up, hold, voicePlay });
+}
+// Plays a blob to its start and ends it (the fake element never ends by itself: the stop settles it).
+async function phonePlay(e, blob, my) { const p = e.voicePlayBlob(blob, my, {}); await tick(); e.voicePlay.token++; if (e.voicePlay.cancel) e.voicePlay.cancel(); return p; }
+
+test('phone: a text-to-speech download (body read included) is counted as the call\'s own traffic in flight', async () => {
+  const e = phoneRecEnv({ agent: 'a', rec: null });
+  e.hold.gate = gate();
+  const p = e.voiceTtsBlob('a', 'hello'); await tick();
+  assert.strictEqual(e.up.n, 1, 'in flight while the request is out');
+  e.hold.gate.res(); await p; assert.strictEqual(e.up.n, 0);
+  assert.match(between(mob, '// The call\'s own uploads and', 'const voiceUp = {'), /read-back downloads in flight/);
+});
+
+test('phone: read-back audio is copied to the recording only when it starts playing (a prefetch that is cancelled records nothing)', async () => {
+  const rec = recStub(), call = { agent: 'a', rec };
+  const e = phoneRecEnv(call);
+  const blob = await e.voiceTtsBlob('a', 'Hello.');           // the prefetch arrives
+  await tick(); assert.strictEqual(rec.got.length, 0, 'nothing is copied on arrival');
+  assert.strictEqual(Object.keys(blob).includes('__voiceRec'), false, 'the tag is not enumerable');
+  e.voicePlay.token++;                                        // barge-in: the token moves on before it plays
+  assert.strictEqual(await e.voicePlayBlob(blob, 1, {}), false);
+  await tick(); assert.strictEqual(rec.got.length, 0, 'audio that never played is never recorded');
+});
+
+test('phone: a normally played sentence is copied to its call\'s recorder exactly once', async () => {
+  const rec = recStub(), call = { agent: 'a', rec };
+  const e = phoneRecEnv(call);
+  const blob = await e.voiceTtsBlob('a', 'Hello.');
+  await phonePlay(e, blob, 1); await tick();
+  assert.strictEqual(rec.got.length, 1); assert.ok(rec.got[0] instanceof ArrayBuffer);
+  e.voicePlay.token = 1; await phonePlay(e, blob, 1); await tick();
+  assert.strictEqual(rec.got.length, 1, 'the same audio is copied once');
+  const none = phoneRecEnv({ agent: 'a', rec: null });
+  const b2 = await none.voiceTtsBlob('a', 'Hi.'); await phonePlay(none, b2, 1);   // no recorder: nothing to copy, nothing breaks
+  const bad = recStub(); bad.replyAudio = () => { throw new Error('boom'); };
+  const e3 = phoneRecEnv({ agent: 'a', rec: bad });
+  assert.strictEqual(await phonePlay(e3, await e3.voiceTtsBlob('a', 'x'), 1), false, 'a throwing recorder never breaks the playback');
+});
+
+test('phone: audio asked for in call A, answered after call B started, is never copied into B\'s recording', async () => {
+  const recA = recStub(), recB = recStub(), callA = { agent: 'a', rec: recA }, callB = { agent: 'a', rec: recB };
+  const e = phoneRecEnv(callA);
+  e.hold.gate = gate();
+  const late = e.voiceTtsBlob('a', 'From call A.'); await tick();   // call A's request is still out
+  e.setCall(callB);                                                  // hang up; call B starts with its own recorder
+  e.hold.gate.res(); const blob = await late;
+  await phonePlay(e, blob, 1); await tick();                         // it even plays
+  assert.strictEqual(recB.got.length, 0, 'B\'s recorder gets nothing');
+  assert.strictEqual(recA.got.length, 0, 'A is not current any more: nothing either');
+  e.setCall(null); const e2 = phoneRecEnv(null); assert.ok(await e2.voiceTtsBlob('a', 'no call'), 'no call: still fetched, nothing to copy');
+});
+
+function deskRecEnv(S) {
+  const src = between(app, '    async function voiceFetchTts(', '    // The device voice is used only');
+  const up = upStub(), hold = { gate: null }, log = [];
+  const fetchImpl = async () => { if (hold.gate) await hold.gate.p; return { status: 200, ok: true, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(3) }; };
+  const voicePlay = { token: 1, ctx: null };
+  class FakeCtx { constructor() { this.state = 'running'; this.destination = {}; } async decodeAudioData(b) { return { len: b.byteLength }; } createBufferSource() { const s = { connect() {}, start() { log.push('start'); setImmediate(() => s.onended && s.onended()); } }; return s; } }
+  const f = new Function('fetch', 'voiceSpeedFor', 'voiceLinkOwner', 'voiceLinkNetFail', 'voiceLinkAlive', 'voiceBusyToast', 'voiceCallS', 'voicePlay', 'window', 'voiceUpTrack',
+    src + '\nreturn { voiceFetchTts, voicePlayHub };')(fetchImpl, () => 1, () => 'owner', () => {}, () => {}, () => false, S, voicePlay, { AudioContext: FakeCtx }, up.track);
+  return Object.assign(f, { up, hold, voicePlay, log });
+}
+
+test('desktop: a text-to-speech download (body read included) is counted as the call\'s own traffic in flight', async () => {
+  const e = deskRecEnv({ call: {}, rec: null });
+  e.hold.gate = gate();
+  const p = e.voiceFetchTts('a', 'hello'); await tick();
+  assert.strictEqual(e.up.n, 1);
+  e.hold.gate.res(); await p; assert.strictEqual(e.up.n, 0);
+  assert.match(between(app, "    // The call's own uploads and", '    const voiceUp = {'), /read-back downloads in flight/);
+});
+
+test('desktop: a prefetched sentence that is cancelled before it plays is never recorded; a played one is recorded once', async () => {
+  const rec = recStub(), S = { call: { id: 1 }, rec };
+  const e = deskRecEnv(S);
+  const buf = await e.voiceFetchTts('a', 'Hello.');
+  await tick(); assert.strictEqual(rec.got.length, 0, 'nothing is copied on arrival');
+  assert.strictEqual(Object.keys(buf).includes('__voiceRec'), false, 'the tag is not enumerable');
+  e.voicePlay.token = 2;                                                 // barge-in: the playback that wanted it is gone
+  await e.voicePlayHub('a', ['Hello.'], undefined, 1);                   // (fetches its own copy, then sees the stale token)
+  assert.strictEqual(rec.got.length, 0, 'audio that never played is never recorded');
+  e.voicePlay.token = 3;
+  await e.voicePlayHub('a', ['Hello.'], undefined, 3);
+  assert.strictEqual(rec.got.length, 1, 'a normally played sentence: one copy'); assert.ok(rec.got[0] instanceof ArrayBuffer);
+  assert.strictEqual(e.log.length, 1);
+  const bad = recStub(); bad.replyAudio = () => { throw new Error('boom'); };
+  const e2 = deskRecEnv({ call: {}, rec: bad }); e2.voicePlay.token = 3;
+  await e2.voicePlayHub('a', ['x'], undefined, 3); assert.strictEqual(e2.log.length, 1, 'a throwing recorder never breaks the playback');
+});
+
+test('desktop: audio asked for in call A, answered after call B started, is never copied into B\'s recording even when it plays', async () => {
+  const recA = recStub(), recB = recStub(), S = { call: { id: 'A' }, rec: recA };
+  const e = deskRecEnv(S);
+  e.hold.gate = gate();
+  const late = e.voiceFetchTts('a', 'From call A.'); await tick();
+  S.call = { id: 'B' }; S.rec = recB;                                    // hang up; call B starts with its recorder
+  e.hold.gate.res(); const buf = await late;
+  e.hold.gate = null;
+  const e2buf = buf; e.voicePlay.token = 4;
+  const playOnly = new Function('voiceCallS', 'voicePlay', 'window', 'voiceFetchTts', between(app, '    async function voicePlayHub(', '    // The device voice is used only') + '\nreturn voicePlayHub;');
+  class FakeCtx { constructor() { this.state = 'running'; this.destination = {}; } async decodeAudioData(b) { return {}; } createBufferSource() { const s = { connect() {}, start() { setImmediate(() => s.onended && s.onended()); } }; return s; } }
+  await playOnly(S, e.voicePlay, { AudioContext: FakeCtx }, async () => e2buf)('a', ['From call A.'], undefined, 4);
+  assert.strictEqual(recB.got.length, 0, 'B\'s recorder gets nothing'); assert.strictEqual(recA.got.length, 0);
+});

@@ -12739,8 +12739,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // probe() resolves true (reachable), false (failed) or null/undefined (UNKNOWN: it timed out behind our own upload, so it proves nothing either way).
     // While the link is fine it probes every everyMs. ONE failed probe does not mark the link lost: it makes the watch SUSPECT and it probes again after
     // lostEveryMs; a SECOND consecutive failed probe marks it LOST (onLost, once per outage). A successful probe or alive() clears the suspicion.
-    // An unknown result changes nothing: it never marks lost, never clears the suspicion (the failure count stays) and never counts as back; the next probe
-    // follows after lostEveryMs while suspect or lost, else everyMs. A probe that failed while a real response arrived (alive()) after it left counts as unknown.
+    // An unknown result changes nothing while the link was last known good recently: it never marks lost, never clears the suspicion (the failure count stays)
+    // and never counts as back; the next probe follows after lostEveryMs while suspect or lost, else everyMs. A probe that failed while a real response arrived
+    // (alive()) after it left counts as unknown. But a hung upload must not hide a real outage: lastGood = the time of start(), of every successful probe and of
+    // every alive(); an unknown result when clock() - lastGood > unknownGraceMs (default 12000) counts as a FAILED probe (the same two-in-a-row rule).
     // report() (a hard network error on one of the call's own requests) and offline() mark it LOST at once. Lost, it probes every lostEveryMs. A probe that
     // succeeds within giveUpMs of the loss -> onBack (once) and the normal rhythm; no success within giveUpMs -> onGiveUp (once), and nothing runs any more
     // (the deadline runs from the moment of loss). alive(): a real response from the server just arrived on one of the call's own requests: not lost -> clears the
@@ -12754,6 +12756,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const every = Number.isFinite(Number(c.everyMs)) ? Number(c.everyMs) : 5000;
       const lostEvery = Number.isFinite(Number(c.lostEveryMs)) ? Number(c.lostEveryMs) : 1000;
       const giveUp = Number.isFinite(Number(c.giveUpMs)) ? Number(c.giveUpMs) : 10000;
+      const grace = Number.isFinite(Number(c.unknownGraceMs)) ? Number(c.unknownGraceMs) : 12000;
+      let lastGood = 0; // the last time the server was known to answer (start, a successful probe, alive())
       let running = false, lost = false, lostAt = 0, probing = false, gen = 0, timer = null, giveTimer = null;
       let outage = 0;   // each loss adds one: only a probe started after the loss can say the link is back
       let fails = 0;    // consecutive failed probes while the link is not lost (1 = suspect; 2 = lost)
@@ -12794,7 +12798,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (my !== gen || !running) return;
           probing = false;
           if (ok === false && myAlive !== aliveSeq) ok = null;   // a real response came in while it was out: its failure is not trusted
+          else if (ok === null && myAlive === aliveSeq && clock() - lastGood > grace) ok = false;   // unknown for too long: a hung upload must not hide an outage
           if (ok === true) {
+            lastGood = clock();
             if (lost) {
               if (myOutage !== outage) { schedule(0); return; }   // it left before the loss: it proves nothing, so ask again at once (the deadline stands)
               if (clock() - lostAt > giveUp) return;   // too late: the give-up timer ends the call
@@ -12808,14 +12814,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         });
       }
       return {
-        start() { if (running) return; running = true; lost = false; fails = 0; probing = false; gen++; schedule(every); },
+        start() { if (running) return; running = true; lost = false; fails = 0; probing = false; gen++; lastGood = clock(); schedule(every); },
         stop() { running = false; gen++; probing = false; lost = false; fails = 0; timer = clear(timer); giveTimer = clear(giveTimer); },
         report() { markLost(); },
         offline() { markLost(); },
         online() { if (running) probeNow(); },
         alive() {
           if (!running) return;
-          aliveSeq++;
+          aliveSeq++; lastGood = clock();
           if (lost) { if (clock() - lostAt <= giveUp) comeBack(); return; }
           fails = 0;
           if (!probing) schedule(every);
@@ -14249,22 +14255,26 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const body = { agent, text, speed: voiceSpeedFor(agent) };
       if (voice) body.voice = voice;
       const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
-      let r;
-      try { r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost (text-to-speech)
-      if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner);   // a real answer proves the link
-      if (!r.ok) {
-        let m = '';
-        try { m = (await r.json()).error; } catch {}
-        const e = new Error(m || `HTTP ${r.status}`); e.status = r.status;
-        e.toasted = voiceBusyToast(r.status);   // 409 voice_off / 503 voice_busy: the short toast is shown once, here
-        throw e;
-      }
-      let norm = false;
-      try { norm = !!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1'); } catch { norm = false; }
-      const buf = await r.arrayBuffer();
-      try { buf.__voiceNorm = norm; } catch { /* the flag is applied only when this audio starts playing (voicePlayHub) */ }
-      try { if (voiceCallS.rec) voiceCallS.rec.replyAudio(buf.slice(0)); } catch { /* a recorded call keeps this sentence's audio only when the agent keeps replies; never breaks the reading */ }   // a copy: decodeAudioData takes the original
-      return buf;
+      let tag = null;   // the call + recorder at request start (copied only when the audio plays: voicePlayHub)
+      try { if (voiceCallS.rec) tag = { call: voiceCallS.call || null, rec: voiceCallS.rec }; } catch { tag = null; }
+      return (typeof voiceUpTrack === 'function' ? voiceUpTrack : (f) => f())(async () => {
+        let r;
+        try { r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost (text-to-speech)
+        if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner);   // a real answer proves the link
+        if (!r.ok) {
+          let m = '';
+          try { m = (await r.json()).error; } catch {}
+          const e = new Error(m || `HTTP ${r.status}`); e.status = r.status;
+          e.toasted = voiceBusyToast(r.status);   // 409 voice_off / 503 voice_busy: the short toast is shown once, here
+          throw e;
+        }
+        let norm = false;
+        try { norm = !!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1'); } catch { norm = false; }
+        const buf = await r.arrayBuffer();
+        try { buf.__voiceNorm = norm; } catch { /* the flag is applied only when this audio starts playing (voicePlayHub) */ }
+        try { if (tag) Object.defineProperty(buf, '__voiceRec', { value: tag, enumerable: false, writable: true, configurable: true }); } catch { /* not kept */ }
+        return buf;
+      });
     }
     // Play sentences with the hub voice; on a failure throws an Error whose .at is the sentence that could not be played.
     async function voicePlayHub(agent, sentences, voice, my) {
@@ -14282,6 +14292,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (voicePlay.token !== my) return;
         if (i + 1 < sentences.length) { next = voiceFetchTts(agent, sentences[i + 1], voice); next.catch(() => {}); }
         const norm = !!(buf && buf.__voiceNorm === true);   // read before decoding (decodeAudioData detaches the buffer)
+        const recTag = buf && buf.__voiceRec ? buf.__voiceRec : null;   // the call and recorder that asked for this audio
+        let recCopy = null;
+        try { if (recTag) recCopy = buf.slice(0); } catch { recCopy = null; }   // a copy: decodeAudioData takes the original
         try { ab = await ctx.decodeAudioData(buf); } catch (e) { e.at = i; throw e; }
         if (voicePlay.token !== my) return;
         // The loudness follows the audio that is about to play, never a response that merely arrived (a prefetch or a cancelled request).
@@ -14293,6 +14306,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           src.onended = () => { if (typeof voiceDisplayHook === 'function') voiceDisplayHook('audioEnd'); res(); };
           voicePlay.source = src;
           src.start();
+          // A recorded call that keeps replies gets this sentence's audio only now that it starts playing, and only if the call that asked is still the current call
+          // with the same recorder (best-effort; never breaks the reading).
+          try { if (recTag && recCopy && recTag.rec && voiceCallS.rec === recTag.rec && (voiceCallS.call || null) === recTag.call) recTag.rec.replyAudio(recCopy); } catch { /* not kept */ }
           if (typeof voiceDisplayHook === 'function') { voiceDisplayHook('audioStart'); voiceDisplayHook('caption', sentences[i]); }   // the sentence really playing
         });
         if (voicePlay.token !== my) return;
@@ -15235,7 +15251,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // While a call is up the page asks /health every 5 s (4 s limit); a failed probe, a network failure on the call's own requests (heartbeat, speech-to-text,
     // sending, text-to-speech) or the offline event marks the link LOST: a falling two-tone, "Connection lost" in the call bar and the display, speech heard
     // meanwhile is dropped, probes every 1 s. Back within 10 s: a rising two-tone and "Reconnected." Not back: the call ends cleanly and the chat says so.
-    // The call's own uploads in flight (the speech-to-text POST and the recorder's uploads): on a slow link /health queues behind them on the one connection, so a probe
+    // The call's own uploads and read-back downloads in flight (the speech-to-text POST, the recorder's uploads, the text-to-speech downloads): on a slow link /health queues behind them on the one connection, so a probe
     // that times out while one is going proves nothing (null), not a lost link. seq counts uploads started, to tell "one was in flight at some time during the probe".
     const voiceUp = { n: 0, seq: 0 };
     async function voiceUpTrack(run) {

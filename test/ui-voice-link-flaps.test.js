@@ -64,7 +64,7 @@ test('flaps: fail, ok, fail is not lost (a success clears the suspicion; the nex
 // Decision: an unknown result (null / undefined) changes nothing. It never marks lost, never clears the suspicion (a failure then an unknown then a
 // failure is still two failures in a row), and while suspect or lost the next probe follows after lostEveryMs, else after everyMs.
 test('flaps: unknown results never mark lost and never clear the suspicion', async () => {
-  const w = watch(); w.watch.start();
+  const w = watch({ unknownGraceMs: 1e9 }); w.watch.start();   // (the grace is tested below: unknowns alone are not lost only while the link was last known good)
   for (let i = 0; i < 6; i++) { await w.c.advance(5000); await w.answer(null); }
   await w.c.advance(5000); await w.answer(undefined);
   assert.strictEqual(w.watch.lost, false); assert.deepStrictEqual(states(w), [], 'unknowns alone never mark lost');
@@ -290,4 +290,40 @@ test('flaps prefetch: a line added while another is spoken and that becomes the 
   const h2 = harness(); await h2.call.start();
   h2.call.setLinkLost(true); h2.call.setLinkLost(false); await tick();
   assert.deepStrictEqual(h2.spoken, ['Reconnected.'], 'no d.prefetch: nothing breaks');
+});
+
+// ── a hung upload must not hide a real outage (review r1 fix): unknown for longer than unknownGraceMs counts as a failed probe ──
+async function runUnknown(w, ms, step = 1000) {   // every probe the watch makes is answered "unknown"; time moves in steps
+  for (let t = 0; t < ms; t += step) { await w.c.advance(step); while (w.probes.length) await w.answer(null); }
+}
+test('flaps: every probe unknown (a hung upload, a silently dead link) -> lost after the grace, then give-up', async () => {
+  const w = watch(); w.watch.start();
+  await runUnknown(w, 40000);
+  const lost = states(w).find(e => e.startsWith('lost@'));
+  assert.ok(lost, 'a real outage behind a hung upload is noticed: ' + states(w));
+  const at = Number(lost.slice(5));
+  assert.ok(at > 12000 && at <= 12000 + 2 * 5000, 'lost within about the grace + 2 probe intervals, got ' + at);
+  assert.deepStrictEqual(states(w), ['lost@' + at, 'giveup@' + (at + 10000)], 'then the give-up after giveUpMs');
+});
+test('flaps: unknown results within the grace after an alive() are not lost; an alive() resets the grace', async () => {
+  const w = watch(); w.watch.start();
+  await runUnknown(w, 11000);
+  w.watch.alive();                                  // t = 11000: the link answered
+  await runUnknown(w, 11000);                       // t = 22000: 11 s after the alive, 22 s after the start
+  assert.deepStrictEqual(states(w), [], 'within the grace of the last alive(): still unknown, not lost');
+  w.watch.alive();                                  // t = 22000 again resets it
+  await runUnknown(w, 11000);
+  assert.deepStrictEqual(states(w), []);
+  await runUnknown(w, 8000);                        // now more than 12 s since the last alive
+  assert.ok(states(w).some(e => e.startsWith('lost@')), 'after the grace runs out with nothing good, it is lost');
+});
+test('flaps: unknownGraceMs is an option (a short one marks lost sooner) and a good probe resets the grace', async () => {
+  const w = watch({ unknownGraceMs: 2000 }); w.watch.start();
+  await runUnknown(w, 12000);
+  const at = Number((states(w).find(e => e.startsWith('lost@')) || 'lost@-1').slice(5));
+  assert.ok(at > 2000 && at <= 2000 + 2 * 5000 + 1000, 'short grace: lost at ' + at);
+  const v = watch(); v.watch.start();
+  await v.c.advance(5000); await v.answer(true);    // good at 5000
+  await runUnknown(v, 10000);                       // 10 s after the good probe, inside the grace
+  assert.deepStrictEqual(states(v), []);
 });
