@@ -1969,6 +1969,20 @@ test('call name: the CSS cuts a long name with an ellipsis, keeps the head clear
   assert.doesNotMatch(css, /\.ucd-docked \.ucd-host[^{]*ucd-head[^{]*\{/, 'the docked rule that hides parts does not hide the head');
 });
 
+test('call bar: Mute and Hang up are equal halves of a full-width row; the slot is its own row above and takes no space when off', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ui-call-display.css'), 'utf8');
+  const outside = css.replace(/@media[^{]*\{(?:[^{}]*\{[^}]*\})*[^}]*\}/g, '');
+  assert.match(outside, /\.ucd-main \{[^}]*flex-wrap: wrap[^}]*flex: 1 1 100%/, '.ucd-main: a full row at every width, wrapping (outside any media query)');
+  assert.match(css, /\.ucd-bar \.ucd-mute, \.ucd-bar \.ucd-hang \{ flex: 1 1 0; min-width: 0; \}/, 'Mute and Hang up: equal widths');
+  assert.doesNotMatch(css, /\.ucd-mute \{[^}]*(min-width: 100px|flex: 0 0 auto)/, 'no fixed-width Mute');
+  assert.match(css, /\.ucd-bar \.ucd-talk \{ flex: 1 1 100%;/, 'the slot is a full-width row when shown');
+  assert.match(css, /\.ucd-bar \.ucd-talk\[data-ucd-off\] \{ display: none; \}/, 'the off slot takes no space');
+  assert.doesNotMatch(css, /\.ucd-talk\[data-ucd-off\][^}]*visibility: hidden/);
+  assert.match(css, /\.ucd-bar \.ucd-talk, \.ucd-bar \.ucd-hang \{ min-height: 64px;/, 'Hang up keeps the 64 px tap target');
+  assert.match(css, /\.ucd-bar \.ucd-hang \{ background: var\(--error, #e5484d\);/, 'Hang up stays red');
+  assert.match(css, /\.ucd-side \{[^}]*justify-content: flex-end; width: 100%;/, 'the side buttons wrap to their own row');
+});
+
 test('call name: both pages pass agentLabel to the call display', () => {
   const root = path.join(__dirname, '..');
   const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8'), mob = fs.readFileSync(path.join(root, 'mobile.js'), 'utf8');
