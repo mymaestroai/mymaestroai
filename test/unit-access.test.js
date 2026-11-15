@@ -150,6 +150,15 @@ test('ownerEntries counts agents per owner for the admin switcher', () => {
   assert.deepStrictEqual(X.ownerEntries([{ name: 'x', owner: 7 }], [{ id: '7', name: 'Seven', role: 'member' }]).owners[0].count, 1, 'numeric owner matches string id');
 });
 
+test('the open-desktop pages are admin pages (members never get them); its API is admin; no API token reaches it', () => {
+  for (const p of ['/remote-desktop/abc123/', '/remote-desktop/abc123', '/remote-desktop/abc123/scripts/common-0.0.1.js', '/remote-desktop/abc123/meshrelay.ashx']) {
+    assert.deepStrictEqual(X.classifyRoute(p), { kind: 'admin', page: true }, p);
+  }
+  for (const p of ['/api/remote-desktop', '/api/remote-desktop/open', '/api/remote-desktop/abc123/end']) assert.deepStrictEqual(X.classifyRoute(p, 'POST'), { kind: 'admin' }, p);
+  const tok = { scopes: ['chat', 'interject', 'status', 'wallet-executor', 'openai-api'], agents: ['maestro'] };
+  for (const p of ['/api/remote-desktop', '/api/remote-desktop/open', '/remote-desktop/abc123/']) assert.strictEqual(X.tokenAllows(tok, p, 'POST').ok, false, p);
+});
+
 test('the memory check is for admins only: its stored result and a new check', () => {
   for (const p of ['/api/memory-health', '/api/memory-health/run', '/api/memory-health/action']) assert.deepStrictEqual(X.classifyRoute(p), { kind: 'admin' }, p);
 });

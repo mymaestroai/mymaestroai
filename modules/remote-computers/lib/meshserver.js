@@ -356,6 +356,20 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     return a;
   }
 
+  // The desktop's person account (made lazily by the first desktop_open): kept in the same accounts file, beside admin and agent, which stay as they are.
+  const PERSON_USER = 'person';
+  function personAccount() {
+    let a = null;
+    try { a = readJsonFile(paths.accountsFile); } catch { return null; }
+    const p = a && a.person;
+    return p && typeof p.pass === 'string' && p.pass ? { user: PERSON_USER, pass: p.pass } : null;
+  }
+  function savePersonAccount(pass) {
+    const a = readJsonFile(paths.accountsFile);
+    if (!a || !a.admin || !a.agent) throw new Error('The server accounts have not been made yet.');
+    writeFileAtomic(paths.accountsFile, JSON.stringify({ ...a, person: { user: PERSON_USER, pass } }, null, 2) + '\n');
+  }
+
   // The remembered device group (and anything else that must survive a restart).
   const state = {
     read() { try { return readJsonFile(paths.stateFile) || {}; } catch { return {}; } },
@@ -615,7 +629,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     };
   }
 
-  return { paths, mode: service ? 'service' : 'hub', configFor, writeConfig, npmGuardArgs, bootstrap, accounts, state, start, stop, status, isRunning, logTail, checkService };
+  return { paths, mode: service ? 'service' : 'hub', configFor, writeConfig, npmGuardArgs, bootstrap, accounts, personAccount, savePersonAccount, state, start, stop, status, isRunning, logTail, checkService };
 }
 
 module.exports = { createMeshServer, DEFAULT_SERVICE_NAME, SERVICE_NAME_RE, REPROBE_MS, writeFileAtomic, tlsProbe, hashPassword, redact, VERSION, GROUP_NAME, RESTART_DELAYS_MS, NPM_GUARD, DNS_RE, IPV4_RE, LOG_ROTATE_BYTES };

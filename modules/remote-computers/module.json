@@ -18,13 +18,17 @@
     { "key": "no_ask_agents", "type": "list", "label": "Agents that are not asked", "default": [], "pattern": "^[a-z][a-z0-9_-]{0,63}$", "help": "Agents listed here start an Act or Drive session on a computer without asking you each time, but only up to the level set above; you still get a notice on that computer and every action is logged. Leave empty to be asked for every session." },
     { "key": "session_minutes", "type": "number", "label": "Approved session length (minutes)", "default": 30, "min": 5, "max": 120, "help": "How long one approval of act or drive lasts." },
     { "key": "run_as", "type": "string", "label": "Run as", "default": "auto", "pattern": "^(auto|service|hub)$", "help": "auto, service or hub. On Linux with systemd, MeshCentral runs as its own locked-down system service (service), which you install once with a command that needs an administrator password. hub runs it under My Maestro's own account and is only for computers without systemd. auto picks service when My Maestro's computer has systemd." },
-    { "key": "service_name", "type": "string", "label": "Service name", "default": "mymaestro-remote", "pattern": "^mymaestro-remote(-[a-z0-9]{1,16})?$", "help": "The name of the system service and of its account when Run as is service. Leave it as it is unless you need a second copy." }
+    { "key": "service_name", "type": "string", "label": "Service name", "default": "mymaestro-remote", "pattern": "^mymaestro-remote(-[a-z0-9]{1,16})?$", "help": "The name of the system service and of its account when Run as is service. Leave it as it is unless you need a second copy." },
+    { "key": "desktop_who", "type": "choice", "label": "Who may open a computer's desktop", "default": "admins", "options": ["admins", "owner"], "help": "Admins = every administrator may press Open desktop; owner = only the owner. Only the owner can change this." },
+    { "key": "desktop_minutes", "type": "number", "label": "Desktop session length (minutes)", "default": 30, "min": 5, "max": 120, "help": "How long one desktop session lasts. The person can end it sooner. Agents cannot click or type on that computer meanwhile." },
+    { "key": "desktop_address", "type": "string", "label": "Desktop address", "default": "", "pattern": "^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$", "help": "Leave empty to use the address the page was opened on. Otherwise an https address with no path, for example https://hub.example.ts.net. Only the owner can change this." }
   ],
   "levels": { "setting": "levels", "choices": ["look", "act", "drive"], "default": "look", "sessionApproval": { "setting": "no_ask_agents", "levels": ["act", "drive"] } },
   "tools": {
     "computers": "read", "info": "read", "screenshot": "read",
     "run": "write", "click": "write", "type": "write", "key": "write", "scroll": "write",
-    "health": "hub", "start": "hub", "installer_link": "hub", "computers_status": "hub"
+    "health": "hub", "start": "hub", "installer_link": "hub", "computers_status": "hub",
+    "desktop_sessions": "hub", "desktop_open": "hub", "desktop_endpoint": "hub", "desktop_connect": "hub", "desktop_end": "hub"
   },
   "docs": { "guide": "guide.md" }
 }

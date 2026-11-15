@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Desktop — My Maestro AI</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #090B0F; color: #F3F4F6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; overflow: hidden; }
+  #bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; background: #14171F; border-bottom: 1px solid #222632; }
+  #bar b { font-size: 15px; word-break: break-word; }
+  #bar .sp { flex: 1; }
+  #left, #state { color: #9CA3AF; font-size: 13px; }
+  button { font: inherit; font-size: 13px; min-height: 36px; padding: 5px 12px; border-radius: 4px; border: 1px solid #333846; background: transparent; color: #F3F4F6; cursor: pointer; }
+  button:hover { border-color: #3D7BFF; }
+  button.danger { color: #FF4C4C; border-color: rgba(255, 76, 76, .5); }
+  #scroller { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: auto; background: #000; }
+  #scroller.fit { overflow: hidden; }
+  #Desk { display: block; touch-action: none; user-select: none; -webkit-user-select: none; background: #000; }
+  #scroller.fit #Desk { width: 100%; height: auto; }
+  #ended { display: none; padding: 30px 16px; text-align: center; font-size: 16px; color: #9CA3AF; }
+  #kb { position: fixed; left: 0; bottom: 0; opacity: 0; width: 1px; height: 1px; border: 0; padding: 0; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <b id="name"></b>
+  <span id="left"></span>
+  <span class="sp"></span>
+  <span id="state">Connecting</span>
+  <button id="reconnect" type="button" style="display:none">Reconnect</button>
+  <button id="fit" type="button">Fit</button>
+  <button id="keyboard" type="button">Keyboard</button>
+  <button id="cad" type="button">Ctrl+Alt+Del</button>
+  <button id="end" type="button" class="danger">End</button>
+</div>
+<div id="ended">The session has ended.</div>
+<div id="scroller" class="fit"><canvas id="Desk" width="640" height="480"></canvas></div>
+<input id="kb" type="text" autocapitalize="off" autocomplete="off" autocorrect="off" inputmode="text" spellcheck="false">
+<script type="application/json" id="rd-boot">{}</script>
+<script>var urlargs = {};
+// MeshCentral's key handlers read a GLOBAL `desktop` (desktop.State); the page keeps it current below. A safe value until the first viewer exists.
+var desktop = { State: 0 };</script>
+<script src="scripts/common-0.0.1.js"></script><script src="scripts/agent-redir-ws-0.1.1.js"></script><script src="scripts/agent-desktop-0.0.2.js"></script>
+<script>
+(function () {
+  var boot = {};
+  try { boot = JSON.parse(document.getElementById('rd-boot').textContent) || {}; } catch (e) { boot = {}; }
+  var $ = function (id) { return document.getElementById(id); };
+  var live = true, desktop = null, tick = null;
+  // The viewer scripts read window.desktop (a bare global); keep it equal to the current viewer, or a harmless State 0 object when none.
+  function publish(d) { window.desktop = d || { State: 0 }; }
+  var kb = $('kb'), canvas = $('Desk'), scroller = $('scroller'), bar = $('bar');
+  $('name').textContent = boot.name || 'Computer';
+  document.title = (boot.name || 'Desktop') + ' — My Maestro AI';
+
+  function layout() { scroller.style.top = bar.offsetHeight + 'px'; }
+  window.addEventListener('resize', layout); layout();
+
+  function setState(text) { $('state').textContent = text; }
+  function showReconnect() { $('reconnect').style.display = live ? '' : 'none'; }
+
+  function stop(why) {
+    if (!live) return;
+    live = false;
+    clearInterval(tick);
+    try { if (desktop) desktop.Stop(); } catch (e) {}
+    desktop = null; publish(null);
+    scroller.style.display = 'none';
+    $('ended').style.display = 'block';
+    $('ended').textContent = why || 'The session has ended.';
+    setState('Ended'); $('left').textContent = '';
+    ['reconnect', 'fit', 'keyboard', 'cad', 'end'].forEach(function (id) { $(id).style.display = 'none'; });
+    document.querySelector('meta[name=viewport]').setAttribute('content', 'width=device-width, initial-scale=1');
+  }
+
+  function countdown() {
+    var s = Math.ceil((Number(boot.until) - Date.now()) / 1000);
+    if (!(s > 0)) { stop('The session has ended.'); return; }
+    $('left').textContent = s > 60 ? Math.ceil(s / 60) + ' min left' : s + ' s left';
+  }
+  tick = setInterval(countdown, 1000); countdown();
+
+  function start() {
+    if (!live) return;
+    try { if (desktop) desktop.Stop(); } catch (e) {}
+    publish(null);
+    desktop = CreateAgentRedirect({ send: function () {} }, CreateAgentRemoteDesktop('Desk'), '', '', '', '/');
+    publish(desktop);
+    desktop.m.UseExtendedKeyFlag = true;
+    desktop.m.ImageType = 1; desktop.m.CompressionLevel = 40; desktop.m.ScalingLevel = 1024; desktop.m.FrameRateTimer = 50;
+    desktop.onStateChanged = function (o, st) {
+      if (!live) return;
+      if (st === 3) { setState('Connected'); $('reconnect').style.display = 'none'; }
+      else if (st === 0) { setState('Disconnected'); showReconnect(); }
+      else setState('Connecting');
+    };
+    desktop.m.onScreenSizeChange = function () { layout(); };
+    setState('Connecting');
+    desktop.Start(boot.nodeid);
+  }
+  $('reconnect').addEventListener('click', function () { $('reconnect').style.display = 'none'; start(); });
+
+  $('fit').addEventListener('click', function () { scroller.classList.toggle('fit'); });
+  $('cad').addEventListener('click', function () { if (desktop) desktop.m.SendCtrlAltDelMsg(); });
+  $('keyboard').addEventListener('click', function () { if (document.activeElement === kb) kb.blur(); else kb.focus(); });
+  $('end').addEventListener('click', function () {
+    var b = $('end'); b.disabled = true;
+    fetch(boot.endUrl, { method: 'POST', credentials: 'include' }).then(function (r) {
+      if (r.ok) stop('The session has ended.'); else { b.disabled = false; setState('Could not end the session'); }
+    }, function () { b.disabled = false; setState('Could not end the session'); });
+  });
+
+  // Phones: no page zoom while the desktop is shown (set in the viewport meta above); the soft keyboard is a hidden input.
+  var keyEvt = function (name) {
+    return function (e) {
+      if (!live || !desktop || document.activeElement === kb) return;
+      if (e.target && e.target.closest && e.target.closest('#bar')) return;
+      desktop.m[name](e);
+      e.preventDefault();
+    };
+  };
+  document.addEventListener('keydown', keyEvt('handleKeyDown'));
+  document.addEventListener('keyup', keyEvt('handleKeyUp'));
+  document.addEventListener('keypress', keyEvt('handleKeys'));
+
+  kb.addEventListener('input', function () {
+    if (desktop && kb.value) desktop.m.SendStringUnicode(kb.value);
+    kb.value = '';
+  });
+  var special = function (down) {
+    return function (e) {
+      if (!desktop || (e.keyCode !== 8 && e.keyCode !== 13)) return;
+      desktop.m[down ? 'handleKeyDown' : 'handleKeyUp'](e); e.preventDefault();
+    };
+  };
+  kb.addEventListener('keydown', special(true));
+  kb.addEventListener('keyup', special(false));
+
+  // Mouse
+  ['mousedown', 'mouseup', 'mousemove'].forEach(function (n) {
+    canvas.addEventListener(n, function (e) { if (live && desktop && !e.__touch) { desktop.m[n](e); e.preventDefault(); } });
+  });
+  canvas.addEventListener('dblclick', function (e) { if (live && desktop) { desktop.m.mousedblclick(e); e.preventDefault(); } });
+  canvas.addEventListener('wheel', function (e) { if (live && desktop) { desktop.m.mousewheel(e); e.preventDefault(); } }, { passive: false });
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  // Touch (Pointer Events): tap = left click, drag = move with the left button held, long press = right click.
+  var touch = null;
+  function ev(e, button) {
+    return { pageX: e.pageX, pageY: e.pageY, clientX: e.clientX, clientY: e.clientY, button: button, buttons: button === 2 ? 2 : 1, which: button + 1, preventDefault: function () {}, stopPropagation: function () {}, target: canvas };
+  }
+  canvas.addEventListener('pointerdown', function (e) {
+    if (e.pointerType === 'mouse' || !live || !desktop) return;
+    if (touch) return;
+    touch = { id: e.pointerId, x: e.pageX, y: e.pageY, moved: false, dragging: false, right: false, last: e };
+    try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
+    touch.timer = setTimeout(function () {
+      if (!touch || touch.moved) return;
+      touch.right = true;
+      desktop.m.mousedown(ev(touch.last, 2)); desktop.m.mouseup(ev(touch.last, 2));
+    }, 600);
+    e.preventDefault();
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!touch || e.pointerId !== touch.id || !desktop) return;
+    touch.last = e;
+    if (!touch.moved && Math.abs(e.pageX - touch.x) + Math.abs(e.pageY - touch.y) < 8) return;
+    if (touch.right) return;
+    touch.moved = true; clearTimeout(touch.timer);
+    if (!touch.dragging) { touch.dragging = true; desktop.m.mousemove(ev({ pageX: touch.x, pageY: touch.y, clientX: touch.x, clientY: touch.y }, 0)); desktop.m.mousedown(ev({ pageX: touch.x, pageY: touch.y, clientX: touch.x, clientY: touch.y }, 0)); }
+    desktop.m.mousemove(ev(e, 0));
+    e.preventDefault();
+  });
+  function pointerEnd(e) {
+    if (!touch || e.pointerId !== touch.id) return;
+    clearTimeout(touch.timer);
+    var t = touch; touch = null;
+    if (!desktop || !live || t.right) return;
+    if (t.dragging) desktop.m.mouseup(ev(e, 0));
+    else if (e.type === 'pointerup') { desktop.m.mousemove(ev(e, 0)); desktop.m.mousedown(ev(e, 0)); desktop.m.mouseup(ev(e, 0)); }
+    e.preventDefault();
+  }
+  canvas.addEventListener('pointerup', pointerEnd);
+  canvas.addEventListener('pointercancel', pointerEnd);
+
+  start();
+})();
+</script>
+</body>
+</html>
