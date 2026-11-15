@@ -380,6 +380,7 @@ test('page: hidden page, window blur and lost pointer capture release the held b
   p.sent.length = 0; p.ptr('pointerup', 1, 340, 330); p.ptr('lostpointercapture', 1, 340, 330);
   assert.equal(p.sent.length, 0, 'no click from the late up');
   // a plain tap: the capture release that follows pointerup does nothing
+  { const q = boot(); q.ptr('pointerdown', 1, 300, 300); q.fire(q.scroller, 'lostpointercapture', { pointerType: 'touch', pointerId: 1, clientX: 300, clientY: 300, target: { id: 'Desk' } }); q.ptr('pointermove', 1, 360, 300); assert.ok(q.sent.length > 0, 'a lostpointercapture bubbling from the canvas does not end the finger: the drag still runs'); }
   p = boot(); p.ptr('pointerdown', 1, 300, 300); p.ptr('pointerup', 1, 300, 300); p.ptr('lostpointercapture', 1, 300, 300);
   assert.equal(p.sent.length, 3);
 });
@@ -399,7 +400,7 @@ test('page: a real viewport size change (800x400 -> 400x800) keeps the desktop p
   }
 });
 
-test('page: wheel on the scroller — Ctrl+wheel over the black band zooms, a plain wheel there never reaches the PC; zoom within 4% of 1 snaps to 1', { skip }, () => {
+test('page: wheel on the scroller — Ctrl+wheel over the black band zooms, a plain wheel there never reaches the PC; small steps leave Fit, near 1 on the way out snaps, a mouse notch is 1.15x', { skip }, () => {
   const p = boot();
   const w = (e) => { let prevented = false; p.fire(p.scroller, 'wheel', { clientX: 300, clientY: canvasY, deltaY: 0, deltaX: 0, deltaMode: 0, preventDefault() { prevented = true; }, ...e }); return prevented; };
   assert.ok(w({ ctrlKey: true, clientY: bandY, deltaY: -50 }));
@@ -410,10 +411,15 @@ test('page: wheel on the scroller — Ctrl+wheel over the black band zooms, a pl
   assert.equal(p.sent.length, 0, 'plain wheel over the band is not sent');
   assert.ok(w({ clientY: canvasY, deltaY: 100, wheelDelta: -120 }));
   assert.equal(p.sent.length, 1, 'over the canvas with nothing to scroll it goes to the PC');
-  w({ ctrlKey: true, deltaY: -3 });   // exp(.03) = 1.03: snaps
-  assert.equal(p.size()[0], 800);
-  w({ ctrlKey: true, deltaY: -5 });   // 1.051: does not
-  assert.ok(p.size()[0] > 800);
+  // small trackpad steps must leave Fit (no snap on the way in): 100 events of deltaY -3 zoom in well past 1.5x
+  for (let i = 0; i < 100; i++) w({ ctrlKey: true, deltaY: -3 });
+  assert.ok(p.size()[0] > 1200, 'repeated small steps zoom in');
+  // on the way back out, close to 1 snaps to exactly 1
+  p.click('fit'); w({ ctrlKey: true, deltaY: -5 }); assert.ok(p.size()[0] > 800);
+  w({ ctrlKey: true, deltaY: 4.9 }); assert.equal(p.size()[0], 800, 'zooming out near 1 snaps to Fit');
+  // a mouse notch (line mode, or a pixel step of 50 or more) is one step of 1.15x
+  w({ ctrlKey: true, deltaY: -1, deltaMode: 1 }); assert.ok(Math.abs(p.size()[0] - 920) < 1, 'line-mode notch: 1.15x');
+  p.click('fit'); w({ ctrlKey: true, deltaY: -100 }); assert.ok(Math.abs(p.size()[0] - 920) < 1, 'a 100 px notch: 1.15x, not 1.8x');
   // the view can scroll in one direction only: still a pan, not the PC
   p.click('fit'); p.sent.length = 0;
   p.setView(800, 450); p.click('zin');

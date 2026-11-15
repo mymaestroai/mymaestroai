@@ -107,12 +107,25 @@ var rdView = (function () {
   function place(z, px, py, qx, qy, oldW, oldH, oldVW, oldVH) {
     var w = vw(), h = vh(), dw = canvas.width, dh = canvas.height, f = rdView.fitSize(w, h, dw, dh);
     if (!(f.w > 0)) return;
-    if (Math.abs(z - 1) < 0.04) z = 1;   // close to 1 snaps to exactly 1
-    var r = rdView.zoomAbout({ zoom: zoom, scrollLeft: scroller.scrollLeft || 0, scrollTop: scroller.scrollTop || 0 }, z, px, py,
-      { w: w, h: h, fitW: f.w, fitH: f.h, max: rdView.maxZoom(w, h, dw, dh), oldW: oldW, oldH: oldH, oldVW: oldVW, oldVH: oldVH }, qx, qy);
+    if (z < zoom && Math.abs(z - 1) < 0.04) z = 1;   // zooming back out close to 1 snaps to exactly 1 (never on the way in: small trackpad steps must leave Fit)
+    // The content's real size now (the fit base can change between calls, e.g. when a mouse user's scrollbars come or go).
+    if (!(oldW > 0)) oldW = parseFloat(canvas.style.width) || canvas.clientWidth || 0;
+    if (!(oldH > 0)) oldH = parseFloat(canvas.style.height) || canvas.clientHeight || 0;
+    var s0 = { zoom: zoom, scrollLeft: scroller.scrollLeft || 0, scrollTop: scroller.scrollTop || 0 }, mx = rdView.maxZoom(w, h, dw, dh);
+    var r = rdView.zoomAbout(s0, z, px, py, { w: w, h: h, fitW: f.w, fitH: f.h, max: mx, oldW: oldW, oldH: oldH, oldVW: oldVW, oldVH: oldVH }, qx, qy);
     zoom = r.zoom; lastW = w; lastH = h;
     canvas.style.width = f.w * zoom + 'px'; canvas.style.height = f.h * zoom + 'px';
     scroller.scrollLeft = r.scrollLeft; scroller.scrollTop = r.scrollTop;
+    // A mouse user's scrollbars can appear or go with the new size and change the view: anchor again in the view as it is now.
+    var w2 = vw(), h2 = vh();
+    if (w2 > 0 && h2 > 0 && (w2 !== w || h2 !== h)) {
+      var r2 = rdView.zoomAbout(s0, zoom, px, py, { w: w2, h: h2, fitW: f.w, fitH: f.h, max: mx, oldW: oldW, oldH: oldH, oldVW: oldVW || w, oldVH: oldVH || h }, qx, qy);
+      scroller.scrollLeft = r2.scrollLeft; scroller.scrollTop = r2.scrollTop; lastW = w2; lastH = h2;
+    }
+    if (zoom === 1) {   // at Fit the scrollbars a mouse user had go away: measure again so the whole space is used
+      var f2 = rdView.fitSize(vw(), vh(), dw, dh);
+      if (f2.w > 0 && (Math.abs(f2.w - f.w) > 0.5 || Math.abs(f2.h - f.h) > 0.5)) { canvas.style.width = f2.w + 'px'; canvas.style.height = f2.h + 'px'; lastW = vw(); lastH = vh(); }
+    }
   }
   // Re-fit (resize, rotation, remote screen change): the point that was under the previous view centre goes under the new view centre.
   function refit() {
@@ -231,7 +244,9 @@ var rdView = (function () {
     if (!live || !desktop) return;
     var box = scroller.getBoundingClientRect ? scroller.getBoundingClientRect() : { left: 0, top: 0 };
     var k = e.deltaMode === 1 ? 16 : 1, dy = (e.deltaY || 0) * k, dx = (e.deltaX || 0) * k;
-    if (e.ctrlKey) place(zoom * Math.exp(-Math.max(-60, Math.min(60, dy)) * 0.01), e.clientX - box.left, e.clientY - box.top);
+    // A mouse notch (line mode, or a pixel step of 100 or more, which is what a mouse wheel notch reports) zooms one step of 1.15x; a trackpad's small steps zoom smoothly.
+    var notch = e.deltaMode === 1 || Math.abs(e.deltaY || 0) >= 100;
+    if (e.ctrlKey) place(zoom * (notch ? (dy < 0 ? 1.15 : dy > 0 ? 1 / 1.15 : 1) : Math.exp(-dy * 0.01)), e.clientX - box.left, e.clientY - box.top);
     else if (!(inCanvas(e) && scroller.scrollWidth <= scroller.clientWidth && scroller.scrollHeight <= scroller.clientHeight)) { scroller.scrollLeft += dx; scroller.scrollTop += dy; }
     else send('mousewheel', e.clientX, e.clientY, 0, 0, 0, { wheelDelta: typeof e.wheelDelta === 'number' ? e.wheelDelta : (dy > 0 ? -120 : dy < 0 ? 120 : 0), detail: e.detail || 0 });
     e.preventDefault();
@@ -339,7 +354,7 @@ var rdView = (function () {
   }
   scroller.addEventListener('pointerup', pointerEnd);
   scroller.addEventListener('pointercancel', pointerEnd);
-  scroller.addEventListener('lostpointercapture', pointerEnd);
+  scroller.addEventListener('lostpointercapture', function (e) { if (e.target && e.target !== scroller) return; pointerEnd(e); });   // only the scroller's own capture, not one bubbling from the canvas
 
   start();
 })();
