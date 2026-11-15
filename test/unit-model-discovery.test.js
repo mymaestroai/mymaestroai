@@ -220,10 +220,22 @@ test('discoverSdkModels gives up after its deadline (a client call that never se
   let calls = 0;
   md._setSdkDiscoverForTest(() => { calls++; return calls === 1 ? new Promise(() => {}) : Promise.resolve([{ id: 'ok' }]); }, 50);
   try {
-    assert.deepStrictEqual(await md.discoverSdkModels(), [], 'the stuck call is given up: no models this time');
+    assert.strictEqual(await md.discoverSdkModels(), null, 'the stuck call is given up: unknown this time (null, not an empty list)');
     assert.deepStrictEqual(await md.discoverSdkModels(), [{ id: 'ok' }], 'the slot was freed: a retry runs and succeeds');
     assert.strictEqual(calls, 2);
   } finally { md._setSdkDiscoverForTest(null); }
+});
+
+test('a discovery run whose SDK part times out keeps the last good Claude list in the cache (never empties it)', async () => {
+  fs.mkdirSync(DATA, { recursive: true });
+  fs.writeFileSync(CACHE, JSON.stringify({ 'claude-sdk': ['kept-1', 'kept-2'], 'claude-sdk-info': [{ id: 'kept-1' }, { id: 'kept-2' }] }));
+  const creds = st.sdkCreds; st.sdkCreds = true;
+  md._setSdkDiscoverForTest(() => new Promise(() => {}), 50);
+  try {
+    const r = await md.runDiscovery();
+    assert.deepStrictEqual(r['claude-sdk'], ['kept-1', 'kept-2']);
+    assert.deepStrictEqual(r['claude-sdk-info'], [{ id: 'kept-1' }, { id: 'kept-2' }]);
+  } finally { md._setSdkDiscoverForTest(null); st.sdkCreds = creds; }
 });
 
 test('startDiscovery runs immediately and schedules a 6 h interval; stopDiscovery clears it', async (t) => {
