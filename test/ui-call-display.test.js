@@ -84,7 +84,7 @@ function world(o) {
   if (o.winEvents) { win.added = []; win.removed = []; win.addEventListener = (t, f) => win.added.push([t, f]); win.removeEventListener = (t, f) => win.removed.push([t, f]); }
   const display = CD.createCallDisplay({
     window: win, ResizeObserver: o.ResizeObserver, document: dom.doc, storage, fetch: o.fetch || jsonFetch(PACKS), setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout,
-    reopenHost: o.reopenHost, dock: o.dock, needsContext: !!o.needsContext, shared: o.shared, onRoutesLost: o.onRoutesLost, agentDefault: () => (o.agentDefault === undefined ? 'none' : o.agentDefault), adopt: o.adopt,
+    agentLabel: o.agentLabel, reopenHost: o.reopenHost, dock: o.dock, needsContext: !!o.needsContext, shared: o.shared, onRoutesLost: o.onRoutesLost, agentDefault: () => (o.agentDefault === undefined ? 'none' : o.agentDefault), adopt: o.adopt,
     onRetryMic: o.retry ? () => { log.retry++; } : undefined,
     onMute: o.mute ? (v) => { log.mute.push(v); } : undefined,
     onTalk: () => { log.talk++; }, onHangUp: () => { log.hang++; }, onChange: () => { log.changes++; },
@@ -1918,4 +1918,58 @@ test('Mute: the docked bar (display None) has the same Mute button between the s
   assert.strictEqual(m.textContent, 'Mute'); assert.strictEqual(m.attrs['aria-pressed'], 'false');
   w.display.setMuted(true); assert.strictEqual(m.textContent, 'Unmute'); assert.strictEqual(m.attrs['aria-pressed'], 'true');
   w.display.release();
+});
+
+// ── the called agent's name beside the status (agentLabel) ──
+test('call name: the view shows the agent name (text and title) before the status, inside the head row', async () => {
+  const w = world({ prefs: { choice: 'orb' }, agentLabel: 'Sam the owner' });
+  w.display.start(); await flushP();
+  const who = w.dom.find('ucd-who')[0], head = w.dom.find('ucd-head')[0], status = w.dom.find('ucd-status')[0];
+  assert.ok(who && head && status);
+  assert.strictEqual(who.textContent, 'Sam the owner'); assert.strictEqual(who.title, 'Sam the owner'); assert.strictEqual(who.hidden, false);
+  assert.deepStrictEqual(head.children.map(c => c.className), ['ucd-who', 'ucd-status'], 'the name first, then the status');
+  assert.strictEqual(head.parentNode, w.dom.find('ucd-stage')[0]);
+  w.display.release();
+});
+
+test('call name: a function label is read again on every repaint; an empty label hides it; setAgentLabel updates it', async () => {
+  let n = 'robin';
+  const w = world({ prefs: { choice: 'orb' }, agentLabel: () => n });
+  w.display.start(); await flushP();
+  const who = w.dom.find('ucd-who')[0];
+  assert.strictEqual(who.textContent, 'robin');
+  n = 'Robin 2'; w.display.setState('thinking'); assert.strictEqual(who.textContent, 'Robin 2', 'read on the repaint');
+  n = ''; w.display.setState('listening'); assert.strictEqual(who.hidden, true, 'empty: nothing shown');
+  w.display.setAgentLabel('sam'); assert.strictEqual(who.textContent, 'sam'); assert.strictEqual(who.hidden, false);
+  w.display.setAgentLabel(() => { throw new Error('boom'); }); assert.strictEqual(who.hidden, true, 'an error in the label is ignored');
+  w.display.release();
+});
+
+test('call name: the status keeps role=status / aria-live and does not contain the name; docked keeps the head with the name', async () => {
+  const { w, dom } = dockedWorld({ choice: 'none' });
+  w.display.setAgentLabel('owner');
+  w.display.start(); await flushP();
+  assert.ok(isDocked(dom));
+  const status = dom.find('ucd-status')[0], who = dom.find('ucd-who')[0], head = dom.find('ucd-head')[0];
+  assert.strictEqual(status.attrs.role, 'status'); assert.strictEqual(status.attrs['aria-live'], 'polite');
+  assert.ok(!status.textContent.includes('owner') && !status.contains(who), 'the name is outside the live region');
+  assert.strictEqual(who.textContent, 'owner'); assert.ok(head.contains(who) && dom.overlay().contains(head), 'the docked bar shows the name');
+  w.display.release();
+});
+
+test('call name: the CSS cuts a long name with an ellipsis, keeps the head clear of the recording badge and shows it docked', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ui-call-display.css'), 'utf8');
+  assert.match(css, /\.ucd-who \{[^}]*overflow: hidden[^}]*white-space: nowrap[^}]*text-overflow: ellipsis/);
+  assert.match(css, /\.ucd-who\[hidden\] \{ display: none; \}/);
+  assert.match(css, /\.ucd-head \{[^}]*position: absolute[^}]*max-width: calc\(100% - 24px - 9\.5em\)/);
+  assert.match(css, /\.ucd-head \.ucd-status \{ position: static; flex: none; \}/);
+  assert.match(css, /\.ucd-docked \.ucd-head \{ position: static; max-width: 60%; \}/);
+  assert.doesNotMatch(css, /\.ucd-docked \.ucd-host[^{]*ucd-head[^{]*\{/, 'the docked rule that hides parts does not hide the head');
+});
+
+test('call name: both pages pass agentLabel to the call display', () => {
+  const root = path.join(__dirname, '..');
+  const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8'), mob = fs.readFileSync(path.join(root, 'mobile.js'), 'utf8');
+  assert.match(app, /CallDisplay\.createCallDisplay\(\{[^\n]*agentLabel: \(\) =>/);
+  assert.match(mob, /CallDisplay\.createCallDisplay\(\{[^\n]*agentLabel: \(\) =>/);
 });

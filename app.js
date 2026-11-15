@@ -14547,7 +14547,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceDisp.turnSeq.clear();
       let d = null;
       try {
-        d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), output: (ctx) => voiceOutNode(ctx), agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
+        d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), output: (ctx) => voiceOutNode(ctx), agentLabel: () => { const c = chats[chatId]; const a = AGENTS.find(x => x.name === agent); const icon = (c && c.icon) || (a && a.icon) || ''; const nm = (c && c.display) || (a && a.display) || capName(String(agent || '')); return (icon ? icon + ' ' : '') + nm; }, agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
           dock: () => { const i = voiceById(`input-${chatId}`); return i ? i.closest('.input-area') : null; },   // whenever no full view is shown (None, Back to chat, a character loading) the call screen's bar takes the message box's place in this chat; the call bar lives in its Controls drawer
           onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(chatId),
           onRecordingToggle: (wantPaused) => (voiceCallS.rec ? voiceCallS.rec.togglePause(wantPaused) : undefined),   // the Pause / Resume recording button of a recorded call

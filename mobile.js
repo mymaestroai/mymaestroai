@@ -8243,7 +8243,7 @@ function voiceDispBegin(vc) {
   voiceDisp.turnSeq.clear();
   let d = null;
   try {
-    d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), needsContext: true, shared: voiceDisp.shared, onRoutesLost: voiceDispRoutesLost, agentDefault: () => voiceDispAgentDefault(vc.agent), adopt: voiceDispAdopt,
+    d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), needsContext: true, agentLabel: () => { const a = agentByName(vc.agent); return ((a && a.icon) ? a.icon + ' ' : '') + ((a && (a.display || a.name)) || vc.agent || ''); }, shared: voiceDisp.shared, onRoutesLost: voiceDispRoutesLost, agentDefault: () => voiceDispAgentDefault(vc.agent), adopt: voiceDispAdopt,
       output: (ctx) => voiceOutNode(ctx),   // reply audio ends in the loudness chain
       dock: () => $('composer'),   // whenever no full view is shown (None, Back to chat, a character loading) the call screen's bar takes the composer's place; the call panel lives in its Controls drawer
       onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(),
