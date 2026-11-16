@@ -878,6 +878,12 @@ test('tools: a capture that failed on one of its own checks says which, in plain
     assert.ok(t.logs.some((l) => l.includes(`(${code}: ${why})`)), `${code}: logged with the reason`);
     assert.doesNotMatch(r.error, /EKVM/);
   }
+  // An unexpected failure: the fixed sentence for the agent, its own text only in the log.
+  const t = setup();
+  t.shot.failWith = Object.assign(new KvmError('EKVMFAIL', 'The screen capture failed.'), { detail: 'private detail 42' });
+  const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
+  assert.strictEqual(r.error, 'demo-pc did not send a usable picture of its screen: the screen capture failed. Try again in a moment; if it keeps happening, tell the owner.');
+  assert.ok(t.logs.some((l) => l.includes('(EKVMFAIL: the screen capture failed) [private detail 42]')));
 });
 
 test('tools: screenshot failures before the capture: a bad cookie, a websocket that does not open, a tunnel message that fails; the websocket is closed and the computer is not busy', async () => {

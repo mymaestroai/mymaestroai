@@ -679,6 +679,28 @@ test('a tile reaching 64 px or more past the right or bottom edge -> EKVMTILE wi
   const r = await ok.promise;
   assert.equal(r.screenWidth, 64);
   assert.equal(r.screenHeight, 48);
+  // Away from the corner too, and each half of the check on its own: a tile at (40, 24) on 64x48.
+  for (const [w, h, refused] of [[87, 87, false], [88, 24, true], [24, 88, true], [88, 88, true]]) {
+    const s = begin();
+    s.bin(cmdScreen(64, 48));
+    s.bin(cmdTile(0, 0, solid(64, 48, BLUE)));
+    s.bin(cmdTile(40, 24, solid(w, h, GREEN)));
+    if (refused) {
+      await assert.rejects(s.promise, (e) => e instanceof KvmError && e.code === 'EKVMTILE' && e.message === 'A piece of the screen reached past its edge.', `${w}x${h}`);
+    } else {
+      s.timers.fire(50);
+      const rr = await s.promise;
+      near(px(dec(rr), 50, 30), GREEN);
+      near(px(dec(rr), 10, 10), BLUE);
+    }
+  }
+});
+
+test('an unexpected error inside the capture keeps a fixed sentence; its own text is only in detail', async () => {
+  const s = start({ observe: () => { throw new TypeError('private detail 42'); } });
+  s.text('c');   // the handshake asks the observe function, which throws
+  await assert.rejects(s.promise, (e) => e instanceof KvmError && e.code === 'EKVMFAIL' && e.message === 'The screen capture failed.' && e.detail === 'private detail 42');
+  assert.equal(s.ws.closed, 1);
 });
 
 // The real agent's frame, rebuilt with synthetic pixels: a 1920x1080 screen sent as ONE JPEG of 1920x1088 (its capture buffer padded

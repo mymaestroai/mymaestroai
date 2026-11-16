@@ -615,7 +615,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
         // kvmshot's own fixed sentence ("A piece of the screen was outside the screen."), as a lower-case clause without its full stop.
         const said = e && e.name === 'KvmError' && typeof e.message === 'string' ? clean(e.message, 120).replace(/\.\s*$/, '') : '';
         const why = said ? said.charAt(0).toLowerCase() + said.slice(1) : '';
-        log(`screenshot of ${pc.name} failed (${clean(code, 20)}${why ? `: ${why}` : ''})`);
+        log(`screenshot of ${pc.name} failed (${clean(code, 20)}${why ? `: ${why}` : ''})${e && typeof e.detail === 'string' ? ` [${clean(e.detail, 120)}]` : ''}`);
         const liveNow = live || desktop.forNode(pc.nodeid);   // a session may have opened during the capture
         if (code === 'EKVMTIMEOUT' && liveNow && !liveNow.unknown) throw new ToolError(`${pc.name}'s desktop is open for ${liveNow.who.name} and did not send a picture to share. Try again after their session, or ask them.`);
         if (code === 'EKVMPRIMARY') throw new ToolError(`${pc.name} shows all its screens together and the main one could not be picked, so no picture was taken.`);

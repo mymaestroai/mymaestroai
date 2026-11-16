@@ -23,7 +23,8 @@ const ALL_DISPLAYS = 65535;
 // Memory: the canvas is 4 bytes a pixel (4*P), the coverage map 1 byte (P), and one tile decode
 // (with 4:4:4 colour about 12 B/px of coefficients, 3 B/px of colour planes and 4 B/px of RGBA output) stays within
 // 24 B/px of that tile, and a tile is at most (w + 64) x (h + 64) (edge padding, see edgePad). So with P <= 16.8 MP the
-// worst case (one full-screen 4:4:4 tile) is about 29*P, near 500 MB; a typical 1920x1080 frame (one 4:2:0 tile) needs
+// worst case (one full-screen 4:4:4 tile, with up to about 2 MP of padding on a very wide or tall screen) is about 515 MB;
+// a typical 1920x1080 frame (one 4:2:0 tile) needs
 // about 60 MB. A dual 4K screen (7680x2160 = 16.6 MP) and 5K (5120x2880) fit; 8K does not.
 const LIMITS = Object.freeze({
   maxSide: 16384,
@@ -334,7 +335,8 @@ function captureDesktop(ws, options) {
       try {
         fn();
       } catch (e) {
-        fail(e instanceof KvmError ? e : new KvmError('EKVMFAIL', 'The screen capture failed: ' + ((e && e.message) || 'unknown error')));
+        // An unexpected error keeps a fixed sentence (it reaches the agent); its own text goes only to `detail`, for the log.
+        fail(e instanceof KvmError ? e : Object.assign(new KvmError('EKVMFAIL', 'The screen capture failed.'), { detail: String((e && e.message) || 'unknown error').slice(0, 200) }));
       }
     }
     function send(data) {
