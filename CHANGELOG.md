@@ -6,6 +6,12 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.10.2] - 2026-11-16
+
+What's new since 5.10.1: phones always open the phone layout, in the browser and as an app on the home screen. For a hub on 5.10.1, this is the only change.
+
+- **Phones always open the phone layout.** Opening your Maestro on a phone now goes straight to the phone layout, in the phone's browser and in an app on its home screen. An app that was added to the home screen while the computer layout was showing switches by itself the next time it opens, so there is no need to remove it and add it again. Tablets, an unfolded Fold and touchscreen laptops keep the full site. To keep the computer layout on a phone, choose "Use the full site" in the phone layout's ⋮ menu; "Open the phone layout" at the top of the computer layout goes back.
+
 ## [5.10.1] - 2026-11-15
 
 What's new since 5.10.0: setup lists every AI you connect, so a Claude subscription's models (such as Opus) show up next to ChatGPT's. For a hub on 5.10.0, this is the only change.
@@ -1219,7 +1225,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.10.1...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.10.2...dev
+[5.10.2]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.2
 [5.10.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.1
 [5.10.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.0
 [5.9.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.9.1
