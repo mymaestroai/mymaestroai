@@ -18,11 +18,13 @@ const ROUTE_SRC = () => sliceBetween('const VOICE_ROUTE_TOAST', 'function voiceT
 function env(over) {
   const o = over || {};
   const log = [], timers = [];
-  class AC { constructor() { this.state = 'running'; AC.made.push(this); } resume() { return Promise.resolve(); } close() { this.closed = true; log.push('closed'); return Promise.resolve(); } }
+  class AC { constructor() { this.state = o.wake === false ? 'suspended' : 'running'; AC.made.push(this); } resume() { return Promise.resolve(); } close() { this.closed = true; log.push('closed'); return Promise.resolve(); } }
   AC.made = [];
   const e = {
     window: { AudioContext: AC },
     voiceIsIOS: () => !!o.ios,
+    navigator: { userAgent: o.android === false ? 'Mozilla/5.0 (X11; Linux x86_64)' : 'Mozilla/5.0 (Linux; Android 14; Pixel Fold)' },
+    voiceIsAndroidNav: require('../lib/ui-voice').voiceIsAndroidNav,
     voicePlay: o.voicePlay || { audio: null, cancel: null },
     voiceDisp: o.voiceDisp || { cur: null, shared: { ctx: null, routed: 0, routes: new WeakMap() } },
     voiceDispRoutesLost: () => log.push('routesLost'),
@@ -44,6 +46,7 @@ const makeVc = (extra) => Object.assign({ thinkCtx: { closed: false, close() { t
 test('voiceCallStart gives voiceCreateVad micChoice: voiceMicChoiceId; the id comes from the prefs micDevice', () => {
   const start = sliceBetween('function voiceCallStart()', 'function voiceCallWire()');
   assert.match(start, /voiceCreateVad\(\{[^}]*micChoice: voiceMicChoiceId[^}]*\}\)/);
+  assert.match(start, /voiceCreateVad\(\{[^}]*bluetoothFirst: voiceIsAndroidNav\(navigator\)[^}]*\}\)/);
   const t = env({ prefsNow: () => ({ micDevice: { id: 'dev-a', label: 'Mic A' } }) });
   assert.strictEqual(t.fns.voiceMicChoiceId(), 'dev-a');
   assert.strictEqual(env({ prefsNow: () => ({}) }).fns.voiceMicChoiceId(), null);
@@ -276,10 +279,66 @@ test('Sound devices and Test sound keep to the same guards as the car check; the
   const test = sliceBetween('async function voiceRouteTest(', 'function voiceRouteWire(');
   assert.ok(test.indexOf('voiceOpenMicStream(navigator, { deviceId: id || undefined })') > 0);
   assert.ok(test.indexOf('voiceOpenMicStream(') < test.indexOf('createOscillator'), 'microphone first, beeps after');
-  assert.ok(test.includes('new AC()') && test.indexOf('voiceOpenMicStream(') < test.indexOf('new AC()'), 'the context is made after the microphone');
+  assert.ok(test.includes('new AC()') && test.lastIndexOf('new AC()') > test.indexOf('voiceOpenMicStream('), 'elsewhere the context is made after the microphone');
+  assert.match(test, /if \(voiceIsIOS\(\)\) \{ ctx = new AC\(\);[^\n]*\n\s*const r = await voiceOpenMicStream/, 'on iOS the context is made first, inside the tap');
+  assert.ok(test.indexOf('if (!ctx) { ctx = new AC()') > test.indexOf('voiceOpenMicStream('));
   assert.ok(test.includes('[440, 660]') && test.includes('Math.pow(10, -12 / 20)') && test.includes('0.25'));
   assert.ok(test.includes("if (voiceCall) { toast('Hang up first"), 'not during a call');
   assert.ok(sliceBetween('async function voiceCarRun()', 'voiceStopPlayback();').includes('voiceRoute.busy'), 'a car check does not start while a Sound route action holds the microphone');
   assert.ok(sliceBetween('async function voiceRoomRun()', 'voiceStopPlayback();').includes('voiceRoute.busy'));
   assert.ok(sliceBetween('function voiceRoomStop()', 'async function voiceRoomRun()').includes('voiceRouteStop()'), 'closing the sheet lets go of a test');
+});
+
+// ── review r1 ──
+test('outputs renew: only on Android (user agent, or a list that looks like Chrome Android\'s); iOS never', async () => {
+  const d = env({ android: false }); const vc = makeVc(); d.fns.setCall(vc);
+  assert.strictEqual(await d.fns.voiceCallOutputsRenew(vc), false); assert.strictEqual(d.AC.made.length, 0);
+  vc.route = { label: 'Built-in microphone', bluetoothListed: false };
+  assert.strictEqual(await d.fns.voiceCallOutputsRenew(vc), false); assert.strictEqual(d.AC.made.length, 0);
+  for (const route of [{ label: 'Speakerphone' }, { label: 'USB audio' }, { label: 'x', bluetoothListed: true }]) {
+    const t = env({ android: false }); const v = makeVc({ route }); t.fns.setCall(v);
+    assert.strictEqual(await t.fns.voiceCallOutputsRenew(v), true, JSON.stringify(route));
+  }
+  const i = env({ android: true, ios: true }); const vi = makeVc({ route: { label: 'Speakerphone', bluetoothListed: true } }); i.fns.setCall(vi);
+  assert.strictEqual(await i.fns.voiceCallOutputsRenew(vi), false);
+});
+
+test('onRoute: a deviceId that differs from the previous route renews again; the same one does not', async () => {
+  const t = env({ els: { 'cp-mic': { textContent: '' } } }); const vc = makeVc({ micInfo: { label: 'Speakerphone', deviceId: 'spk' } }); t.fns.setCall(vc);
+  t.fns.voiceCallOnRoute(vc, { label: 'Speakerphone', deviceId: 'spk' }); await flush(); assert.strictEqual(vc.outputsRenewed, 1);
+  t.fns.voiceCallOnRoute(vc, { label: 'Speakerphone', deviceId: 'spk' }); await flush(); assert.strictEqual(vc.outputsRenewed, 1);
+  t.fns.voiceCallOnRoute(vc, { label: 'Bluetooth headset', deviceId: 'bt', bluetooth: true }); await flush(); assert.strictEqual(vc.outputsRenewed, 2, 'the microphone moved to the car');
+});
+
+test('F2: the thinking sound counts as playing: a renewal waits while vc.thinkOn', async () => {
+  const t = env(); const vc = makeVc({ thinkOn: true }); t.fns.setCall(vc);
+  assert.strictEqual(await t.fns.voiceCallOutputsRenew(vc), false); assert.strictEqual(vc.renewPending, true); assert.strictEqual(t.AC.made.length, 0);
+  vc.thinkOn = false;
+  assert.strictEqual(await t.fns.voiceCallOutputsRenew(vc), true);
+});
+
+test('F3: a fresh context that is not running after the cap is closed, the old ones stay, it is tried again; 5 tries at most', async () => {
+  const t = env({ wake: false }); const vc = makeVc(); t.fns.setCall(vc);
+  const old = vc.thinkCtx;
+  assert.strictEqual(await t.fns.voiceCallOutputsRenew(vc), false);
+  assert.strictEqual(vc.thinkCtx, old); assert.strictEqual(vc.renewPending, true); assert.ok(!vc.outputsRenewed);
+  assert.ok(t.AC.made.every((c) => c.closed), 'the fresh one is closed');
+  for (let i = 0; i < 6; i++) await t.fns.voiceCallOutputsRenew(vc);
+  assert.strictEqual(vc.renewPending, false, 'stopped trying');
+  assert.strictEqual(vc.renewFails, 5);
+  const made = t.AC.made.length;
+  await t.fns.voiceCallOutputsRenew(vc);
+  assert.strictEqual(t.AC.made.length, made, 'no more tries in this call');
+});
+
+test('F4: when the display refuses renewContext (false) its old context is not closed and the fresh one is', async () => {
+  const sharedOld = { closed: false, close() { this.closed = true; return Promise.resolve(); } };
+  const disp = { cur: { renewContext: () => false }, shared: { ctx: sharedOld, routed: 1, routes: new WeakMap() } };
+  const t = env({ voiceDisp: disp }); const vc = makeVc(); t.fns.setCall(vc);
+  const oldThink = vc.thinkCtx;
+  assert.strictEqual(await t.fns.voiceCallOutputsRenew(vc), true);
+  assert.strictEqual(t.AC.made.length, 2);
+  t.timers.filter((x) => x.ms === 300)[0].f(); await flush();
+  assert.ok(!sharedOld.closed, 'the display still uses it');
+  assert.ok(oldThink.closed); assert.ok(t.AC.made[1].closed, 'the unused fresh display context is closed'); assert.ok(!t.AC.made[0].closed);
 });

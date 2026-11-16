@@ -31,9 +31,9 @@ function makeRoute(o = {}) {
   const voicePlay = { token: 0, ctx: new Ctx(), source: null, btn: null, busy: 0 };
   const win = { AudioContext: o.noAC ? undefined : Ctx, speechSynthesis: { speaking: false } };
   const src = routeBlock().replace(/^[\s\S]*?(?=    function voiceMicChoiceId)/, '');
-  const make = new Function('voiceCallS', 'voicePlay', 'window', 'navigator', 'voiceIsIOSNav', 'voiceById', 'voiceMicLineText', 'hubToast', 'voiceLoudApply', 'voicePrefsNow',
-    src + '\nreturn { voiceMicChoiceId, voiceRouteSuffix, voiceCallVadFor, voiceCallOnRoute, voiceCallOnMicChange, voiceCallSounding, voiceCallOutputsRenew, VOICE_ROUTE_PLAIN_LINE };');
-  const api = make(S, voicePlay, win, {}, () => !!o.ios, () => bar, (i) => 'Microphone: ' + (i.label || 'default'), (t, ms) => log.toasts.push([t, ms]),
+  const make = new Function('voiceCallS', 'voicePlay', 'window', 'navigator', 'voiceIsIOSNav', 'voiceIsAndroidNav', 'voiceById', 'voiceMicLineText', 'hubToast', 'voiceLoudApply', 'voicePrefsNow',
+    src + '\nreturn { voiceRenewApplies, voiceMicChoiceId, voiceRouteSuffix, voiceCallVadFor, voiceCallOnRoute, voiceCallOnMicChange, voiceCallSounding, voiceCallOutputsRenew, VOICE_ROUTE_PLAIN_LINE };');
+  const api = make(S, voicePlay, win, { userAgent: o.android === false ? 'Mozilla/5.0 (X11; Linux x86_64)' : 'Mozilla/5.0 (Linux; Android 14; Pixel Fold)' }, () => !!o.ios, require('../lib/ui-voice').voiceIsAndroidNav, () => bar, (i) => 'Microphone: ' + (i.label || 'default'), (t, ms) => log.toasts.push([t, ms]),
     () => { log.loud++; }, () => ({ micDevice: o.choice || undefined }));
   return { api, S, voicePlay, win, log, bar, Ctx };
 }
@@ -41,6 +41,7 @@ function makeRoute(o = {}) {
 test('voiceCreateVad gets micChoice in voiceCallStart; voiceMicChoiceId reads prefs.micDevice', () => {
   const start = between('    async function voiceCallStart(chatId)', '    function voiceCallSseMood');
   assert.match(start, /voiceCreateVad\(\{[^\n]*micChoice: voiceMicChoiceId/);
+  assert.match(start, /voiceCreateVad\(\{[^\n]*bluetoothFirst: voiceIsAndroidNav\(navigator\)/);
   assert.match(start, /voiceCallVadFor\(vad\)/);
   assert.strictEqual(makeRoute({ choice: { id: 'dev-9', label: 'Headset' } }).api.voiceMicChoiceId(), 'dev-9');
   assert.strictEqual(makeRoute().api.voiceMicChoiceId(), null);
@@ -246,4 +247,70 @@ test('Test sound opens the microphone first, then the context, plays two beeps, 
   const call = makeDom({ AC, call: {} });
   await call.api.voiceRouteTest();
   assert.strictEqual(call.outs[0].textContent, 'Not during a call.');
+});
+
+// ── review r1 ──
+test('renewal only on Android (user agent, or a device list that looks like Chrome Android\'s); iOS never', async () => {
+  const d = makeRoute({ android: false });
+  assert.strictEqual(await d.api.voiceCallOutputsRenew(), false); assert.strictEqual(d.log.made.length, 1, 'a plain desktop: nothing is made');
+  d.S.route = { label: 'Built-in microphone', bluetoothListed: false };
+  assert.strictEqual(d.api.voiceRenewApplies(), false);
+  for (const route of [{ label: 'Speakerphone' }, { label: 'Headset earpiece' }, { label: 'Wired headset' }, { label: 'USB audio' }, { label: 'x', bluetoothListed: true }]) {
+    d.S.route = route; assert.strictEqual(d.api.voiceRenewApplies(), true, JSON.stringify(route));
+  }
+  const i = makeRoute({ ios: true }); i.S.route = { label: 'Speakerphone', bluetoothListed: true };
+  assert.strictEqual(i.api.voiceRenewApplies(), false);
+});
+
+test('a route whose deviceId differs from the previous one renews again; the same id does not; a mic change before the first route does not', async () => {
+  const t = makeRoute();
+  const vad = { start() {} }; t.S.vad = vad;
+  t.api.voiceCallOnMicChange(vad, { ok: true, changed: true });   // before the first route
+  await wait(20); assert.strictEqual(t.S.outputsRenewed, 0);
+  t.api.voiceCallOnRoute(vad, { deviceId: 'spk', label: 'Speakerphone' }); await wait(20);
+  assert.strictEqual(t.S.outputsRenewed, 1);
+  t.api.voiceCallOnRoute(vad, { deviceId: 'spk', label: 'Speakerphone' }); await wait(20);
+  assert.strictEqual(t.S.outputsRenewed, 1, 'same microphone');
+  t.api.voiceCallOnRoute(vad, { deviceId: 'bt', label: 'Bluetooth headset', bluetooth: true }); await wait(20);
+  assert.strictEqual(t.S.outputsRenewed, 2, 'the microphone moved to the car');
+});
+
+test('F3: a context that is not running after the cap is closed, the old one stays, and it is tried again; at most 5 tries', async () => {
+  const t = makeRoute();
+  t.Ctx.prototype.resume = function () { return Promise.resolve(); };   // never reaches running
+  const old = t.voicePlay.ctx; old.state = 'running';
+  assert.strictEqual(await t.api.voiceCallOutputsRenew(), false);
+  assert.strictEqual(t.voicePlay.ctx, old); assert.strictEqual(t.S.outputsRenewed, 0);
+  assert.strictEqual(t.S.renewPending, true);
+  assert.strictEqual(t.log.made[1].state, 'closed', 'the fresh one is closed');
+  clearTimeout(t.S.renewTimer); t.S.renewTimer = null;
+  for (let i = 0; i < 6; i++) await t.api.voiceCallOutputsRenew();
+  assert.strictEqual(t.S.renewPending, false, 'stopped trying');
+  const made = t.log.made.length;
+  assert.strictEqual(t.S.renewFails, 5);
+  assert.ok(made <= 7, 'no endless tries: ' + made);
+  clearTimeout(t.S.renewTimer);
+});
+
+test('F4: a trigger during an active renewal sets renewPending and the retry timer; renewing is cleared only by its own call', async () => {
+  const t = makeRoute();
+  const first = t.api.voiceCallOutputsRenew();
+  assert.strictEqual(t.S.renewing, t.S.call);
+  assert.strictEqual(await t.api.voiceCallOutputsRenew(), false);
+  assert.strictEqual(t.S.renewPending, true); assert.ok(t.S.renewTimer, 'a retry is scheduled');
+  clearTimeout(t.S.renewTimer); t.S.renewTimer = null;
+  await first;
+  assert.strictEqual(t.S.renewing, false);
+  // a renewal of an earlier call ending does not clear the flag of the current one
+  const u = makeRoute(); const oldCall = u.S.call;
+  const p = u.api.voiceCallOutputsRenew();
+  u.S.call = { id: 'c2' }; u.S.renewing = u.S.call;
+  await p;
+  assert.strictEqual(u.S.renewing, u.S.call, 'the new call keeps its own flag');
+});
+
+test('the thinking sound counts as sounding: a renewal waits', async () => {
+  const t = makeRoute(); t.S.thinking = { busy: () => true };
+  assert.strictEqual(await t.api.voiceCallOutputsRenew(), false); assert.strictEqual(t.S.renewPending, true); assert.strictEqual(t.log.made.length, 1);
+  clearTimeout(t.S.renewTimer);
 });

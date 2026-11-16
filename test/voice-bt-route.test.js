@@ -138,7 +138,7 @@ test('VAD: Bluetooth listed, the default opened Speakerphone: exactly one reopen
   assert.strictEqual(exactOf(w.opens[0]), undefined);
   assert.strictEqual(exactOf(w.opens[1]), 'bt');
   assert.strictEqual(w.opens[1].audio.echoCancellation, true);
-  assert.ok(changes.some(c => c.ok && c.reason === 'bluetooth'));
+  assert.ok(!changes.some(c => c.reason === 'bluetooth'), 'a Bluetooth open never reaches onMicChange');
   const last = routes[routes.length - 1];
   assert.strictEqual(last.bluetooth, true); assert.strictEqual(last.bluetoothListed, true); assert.strictEqual(last.deviceId, 'bt'); assert.strictEqual(last.chosen, null); assert.strictEqual(last.fellBack, false);
   assert.strictEqual(vad.info().bluetooth, true); assert.strictEqual(vad.info().deviceId, 'bt');
@@ -148,8 +148,8 @@ test('VAD: Bluetooth listed, the default opened Speakerphone: exactly one reopen
 
 test('VAD: no second Bluetooth reopen while the list is unchanged; a devicechange allows one more try', async () => {
   const w = world(PHONE);
-  // Chrome keeps giving the speaker whatever is asked: the try must not loop.
-  w.nav.mediaDevices.getUserMedia = async (c) => { w.opens.push(c); const tr = { enabled: true, readyState: 'live', label: 'Speakerphone', getSettings: () => ({ deviceId: 'spk' }), stop() {}, addEventListener() {}, removeEventListener() {} }; return { getTracks: () => [tr], getAudioTracks: () => [tr] }; };
+  // The Bluetooth input cannot be opened (a refusal): the try must not loop.
+  w.nav.mediaDevices.getUserMedia = async (c) => { w.opens.push(c); if (exactOf(c)) throw err('NotAllowedError'); const tr = { enabled: true, readyState: 'live', label: 'Speakerphone', getSettings: () => ({ deviceId: 'spk' }), stop() {}, addEventListener() {}, removeEventListener() {} }; return { getTracks: () => [tr], getAudioTracks: () => [tr] }; };
   const timers = [];
   const vad = voiceCreateVad({ win: w.win, nav: w.nav, loadScript: async () => {}, setTimer: (fn) => { timers.push(fn); return timers.length; }, clearTimer() {} });
   await vad.start({}); await tick();
@@ -325,4 +325,119 @@ test('voiceCleanPrefs: micDevice { id, label } is kept; a missing, empty or malf
   for (const bad of [null, undefined, 'bt', [], {}, { id: '' }, { id: 5 }, { id: 'a'.repeat(513) }]) assert.ok(!('micDevice' in V.voiceCleanPrefs({ micDevice: bad })), JSON.stringify(bad));
   assert.ok(!('micDevice' in V.voiceCleanPrefs(null)));
   assert.strictEqual(V.voiceCleanPrefs({ micDevice: { id: 'y', label: 'L'.repeat(300) } }).micDevice.label.length, 120);
+});
+
+// ── review r1: quiet Bluetooth opens, Android only, caps ──
+const timersOf = () => { const t = []; return { t, setTimer: (fn) => { t.push(fn); return t.length; }, clearTimer() {} }; };
+const DESKTOP = [{ id: 'mic1', label: 'Built-in microphone' }, { id: 'bt', label: 'Bluetooth headset' }];
+const iosNav = (w) => { w.nav.userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'; };
+
+test('B1: a failing Bluetooth reopen from a devicechange says nothing through onMicChange and the old track stays attached', async () => {
+  const w = world([{ id: 'spk', label: 'Speakerphone' }]);
+  const tm = timersOf(), infos = [], changes = [];
+  const vad = voiceCreateVad({ win: w.win, nav: w.nav, loadScript: async () => {}, bluetoothFirst: true, setTimer: tm.setTimer, clearTimer: tm.clearTimer });
+  await vad.start({ onMicInfo: (i) => infos.push(i), onMicChange: (c) => changes.push(c) }); await tick();
+  assert.strictEqual(w.opens.length, 1);
+  const old = w.tracks[0];
+  w.devices = [...w.devices, { id: 'bt', label: 'Bluetooth headset' }];   // the car connects ...
+  const gum = w.nav.mediaDevices.getUserMedia;
+  w.nav.mediaDevices.getUserMedia = async (c) => { if (exactOf(c) === 'bt') { w.opens.push(c); throw err('NotAllowedError'); } return gum(c); };   // ... and cannot be opened
+  w.changeFns.forEach(f => f()); tm.t.splice(0).forEach(f => f()); await tick(80);
+  assert.strictEqual(exactOf(w.opens[w.opens.length - 1]), 'bt', 'the Bluetooth reopen was tried');
+  assert.deepStrictEqual(changes, [], 'no onMicChange at all, never ok:false');
+  assert.strictEqual(old.readyState, 'live'); assert.strictEqual(vad.info().deviceId, 'spk');
+  await vad.stop();
+});
+
+test('B1b: a working Bluetooth open: no onMicChange; onMicInfo and onRoute yes', async () => {
+  const w = world(PHONE), infos = [], changes = [], routes = [];
+  const vad = voiceCreateVad({ win: w.win, nav: w.nav, loadScript: async () => {}, bluetoothFirst: true });
+  await vad.start({ onMicInfo: (i) => infos.push(i), onMicChange: (c) => changes.push(c), onRoute: (r) => routes.push(r) }); await tick();
+  assert.strictEqual(exactOf(w.opens[1]), 'bt');
+  assert.deepStrictEqual(changes, []);
+  assert.strictEqual(infos.length, 2); assert.strictEqual(infos[1].deviceId, 'bt');
+  assert.strictEqual(routes.length, 1); assert.strictEqual(routes[0].deviceId, 'bt'); assert.strictEqual(routes[0].bluetooth, true);
+  await vad.reopen(); await tick();   // a manual reopen still reports as before
+  assert.ok(changes.some(c => c.ok && c.reason === 'manual'));
+  await vad.stop();
+});
+
+test('B2: no Bluetooth try on a plain desktop-like list without bluetoothFirst; one with it; one without it when the list has Speakerphone; none on iOS', async () => {
+  const a = await started(DESKTOP);
+  assert.strictEqual(a.w.opens.length, 1, 'desktop list, no option: no try'); assert.strictEqual(a.routes.length, 1);
+  await a.vad.stop();
+  const b = await started(DESKTOP, { bluetoothFirst: true });
+  assert.strictEqual(b.w.opens.length, 2); assert.strictEqual(exactOf(b.w.opens[1]), 'bt');
+  await b.vad.stop();
+  const c = await started(PHONE);
+  assert.strictEqual(c.w.opens.length, 2, 'Chrome Android list on a desktop user agent'); assert.strictEqual(exactOf(c.w.opens[1]), 'bt');
+  await c.vad.stop();
+  const d = await started([{ id: 'ear', label: 'Headset earpiece' }, { id: 'bt', label: 'Bluetooth headset' }]);
+  assert.strictEqual(d.w.opens.length, 2, 'Headset earpiece too');
+  await d.vad.stop();
+  for (const opts of [{ bluetoothFirst: true }, {}]) {
+    const w = world(PHONE); iosNav(w);
+    const vad = voiceCreateVad({ win: w.win, nav: w.nav, loadScript: async () => {}, ...opts });
+    const routes = [];
+    await vad.start({ onRoute: (r) => routes.push(r) }); await tick();
+    assert.strictEqual(w.opens.length, 1, 'iOS: never Bluetooth first, whatever the list says'); assert.strictEqual(routes.length, 1);
+    await vad.stop();
+  }
+  // a person's choice still opens with its deviceId
+  const e = await started(DESKTOP, { micChoice: () => 'bt' });
+  assert.strictEqual(exactOf(e.w.opens[0]), 'bt');
+  await e.vad.stop();
+});
+
+test('voiceIsAndroidNav: userAgentData platform or user agent; false on errors', () => {
+  const { voiceIsAndroidNav } = require('../lib/ui-voice');
+  assert.strictEqual(voiceIsAndroidNav({ userAgentData: { platform: 'Android' }, userAgent: 'x' }), true);
+  assert.strictEqual(voiceIsAndroidNav({ userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel Fold)' }), true);
+  assert.strictEqual(voiceIsAndroidNav({ userAgentData: { platform: 'Windows' }, userAgent: 'Mozilla/5.0 (Windows NT 10.0)' }), false);
+  assert.strictEqual(voiceIsAndroidNav(null), false); assert.strictEqual(voiceIsAndroidNav({}), false);
+  assert.strictEqual(voiceIsAndroidNav({ get userAgentData() { throw new Error('x'); } }), false);
+});
+
+test('F1: at most 3 Bluetooth tries per start; a new start() resets the count', async () => {
+  const w = world(PHONE), tm = timersOf();
+  w.nav.mediaDevices.getUserMedia = async (c) => { w.opens.push(c); if (exactOf(c)) throw err('NotAllowedError'); const tr = { enabled: true, readyState: 'live', label: 'Speakerphone', getSettings: () => ({ deviceId: 'spk' }), stop() {}, addEventListener() {}, removeEventListener() {} }; return { getTracks: () => [tr], getAudioTracks: () => [tr] }; };
+  const vad = voiceCreateVad({ win: w.win, nav: w.nav, loadScript: async () => {}, setTimer: tm.setTimer, clearTimer: tm.clearTimer });
+  const tries = () => w.opens.filter(c => exactOf(c) === 'bt').length;
+  await vad.start({}); await tick();
+  assert.strictEqual(tries(), 1);
+  for (let i = 0; i < 4; i++) { await vad.reopen(); await tick(); }
+  assert.strictEqual(tries(), 3, 'capped at 3');
+  w.changeFns.forEach(f => f()); tm.t.splice(0).forEach(f => f()); await tick(80);
+  assert.strictEqual(tries(), 3);
+  await vad.stop(); await vad.start({}); await tick();
+  assert.strictEqual(tries(), 4, 'a new start counts again');
+  await vad.stop();
+});
+
+test('F1: an exact open of the Bluetooth id that worked counts as on it, whatever the track reports', async () => {
+  const w = world(PHONE), tm = timersOf();
+  w.nav.mediaDevices.getUserMedia = async (c) => { w.opens.push(c); const tr = { enabled: true, readyState: 'live', label: 'Speakerphone', getSettings: () => ({ deviceId: 'spk' }), stop() {}, addEventListener() {}, removeEventListener() {} }; return { getTracks: () => [tr], getAudioTracks: () => [tr] }; };
+  const vad = voiceCreateVad({ win: w.win, nav: w.nav, loadScript: async () => {}, setTimer: tm.setTimer, clearTimer: tm.clearTimer });
+  await vad.start({}); await tick();
+  const n = w.opens.length;
+  w.changeFns.forEach(f => f()); tm.t.splice(0).forEach(f => f()); await tick(80);
+  assert.strictEqual(w.opens.length, n, 'a devicechange does not try again: the exact open of bt counts');
+  await vad.stop();
+});
+
+test('F1: a devicechange that arrives while the first route step runs is remembered and handled once when it ends', async () => {
+  const w = world(PHONE), tm = timersOf();
+  let release; const gate = new Promise((r) => { release = r; });
+  const enumerate = w.nav.mediaDevices.enumerateDevices;
+  let hold = true;
+  w.nav.mediaDevices.enumerateDevices = async () => { if (hold) await gate; return enumerate(); };
+  const vad = voiceCreateVad({ win: w.win, nav: w.nav, loadScript: async () => {}, bluetoothFirst: true, setTimer: tm.setTimer, clearTimer: tm.clearTimer });
+  await vad.start({}); await tick();   // the route step is waiting on the list
+  w.changeFns.forEach(f => f()); await tick();
+  assert.strictEqual(tm.t.length, 0, 'no check is scheduled while settling');
+  hold = false; release(); await tick(80);
+  assert.strictEqual(tm.t.length, 1, 'one re-run of the device change after settling');
+  tm.t.splice(0).forEach(f => f()); await tick(80);
+  assert.strictEqual(w.tracks.length >= 2, true);
+  await vad.stop();
 });
