@@ -12699,7 +12699,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             catch (e) {
               // The hub refused it as busy (a turn it started had just begun and the page had not seen it yet): his words are kept and sent
               // when that work is over, as if he had spoken during it; never dropped.
-              if (e && e.refused === true && !ended) { awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity('')); quiet(() => ui.reply('drop')); bgKeepRefused(t); return; }
+              if (ended) { quiet(() => d.keepWords && d.keepWords(t)); return; }   // hung up while it was being sent: never dropped, never resent; the message box keeps them
+              if (e && e.refused === true) { awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity('')); quiet(() => ui.reply('drop')); bgKeepRefused(t); return; }
               throw e;
             }
           }
@@ -12709,6 +12710,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // knows about the agent yet; the check or the idle hook sends them.
       function bgKeepRefused(t) {
         const first = !bgWords.length;
+        if (first) bgRefusals = 1;   // this refusal counts toward BG_MAX_REFUSALS: three refusals in all
         bgWords.push(t);
         if (first) { if (bgMode() === 'say') enqueue(VOICE_BACKGROUND_LINE, 'status'); bgArm(); }
         settle();

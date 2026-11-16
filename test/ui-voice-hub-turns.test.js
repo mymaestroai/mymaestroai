@@ -1084,3 +1084,29 @@ test('r4-1 controller: a normal send that fails without a refusal still says "Th
   assert.strictEqual(h.call.background, false);
   assert.ok(h.spoken.includes('That did not go through.'), JSON.stringify(h.spoken));
 });
+
+// review r5: a send refused (or failing) after the caller hung up; the first refusal counts toward the cap
+test('r5-1 controller: hung up while his send was in flight, then a 409: the words go to the message box, are not resent, nothing is said', async () => {
+  let reject;
+  const h = await started({ keepWords: (t, note) => { h.plain.push([t, note]); }, send: (t) => { h.sent.push(t); return new Promise((res, rej) => { reject = rej; }); } });
+  h.bg = false;
+  const said = h.say('call me back');
+  await h.finish();
+  h.call.hangUp();
+  reject(Object.assign(new Error('busy'), { refused: true }));
+  await said; await h.finish();
+  assert.deepStrictEqual(h.sent, ['call me back'], 'sent once, never again');
+  assert.deepStrictEqual(h.plain, [['call me back', undefined]], 'kept in the message box');
+  assert.ok(!h.spoken.includes('That did not go through.'), JSON.stringify(h.spoken));
+});
+test('r5-2 controller: a refused first send counts toward the cap: two more refusals and the words go to the message box (three in all)', async () => {
+  const h = await started({ keepWords: (t, note) => { h.plain.push([t, note]); }, send: async (t) => { h.sent.push(t); throw Object.assign(new Error('busy'), { refused: true }); } });
+  h.bg = false;
+  await h.say('try again later');
+  await h.finish();
+  await h.call.backgroundDone();
+  assert.deepStrictEqual(h.plain, [], 'after two refusals: still waiting');
+  await h.call.backgroundDone();
+  assert.deepStrictEqual(h.sent, ['try again later', 'try again later', 'try again later'], 'three sends in all');
+  assert.deepStrictEqual(h.plain, [['try again later', undefined]]);
+});
