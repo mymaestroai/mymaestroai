@@ -2,7 +2,8 @@
 // One view-only screenshot of a computer through MeshCentral's remote-desktop (KVM) relay.
 // The caller opens the websocket; this file speaks the viewer side of the protocol and
 // NEVER sends keyboard, mouse, touch or clipboard messages. The only things it sends are:
-// the text '2', the compression command, the unpause command and SETDISPLAY.
+// the text '2', the compression command, the unpause command, SETDISPLAY and (observe mode) REFRESH.
+// In observe mode (a person already views the desktop) it sends only '2' and REFRESH.
 
 const jpegjs = require('jpeg-js');
 
@@ -10,6 +11,7 @@ const CMD = Object.freeze({
   TILE: 3,
   COPYRECT: 4,
   COMPRESSION: 5,
+  REFRESH: 6,
   SCREEN: 7,
   PAUSE: 8,
   DISPLAYS: 11,
@@ -20,10 +22,14 @@ const CMD = Object.freeze({
 const ALL_DISPLAYS = 65535;
 const LIMITS = Object.freeze({
   maxSide: 16384,
-  maxPixels: 40000000,
+  maxPixels: 36000000,   // 8K (7680x4320 = 33.2 MP) fits
   maxBytes: 128 * 1024 * 1024,
-  maxTiles: 50000,
+  maxTiles: 50000,       // the least; a screen may allow more (see tileLimit)
+  areaSlack: 4 * 1024 * 1024,
 });
+// Claimed tile area allowed since the latest SCREEN, and tiles allowed per SCREEN.
+const areaLimit = (w, h) => 4 * w * h + LIMITS.areaSlack;
+const tileLimit = (w, h) => Math.max(LIMITS.maxTiles, 2 * Math.ceil(w / 16) * Math.ceil(h / 16));
 
 class KvmError extends Error {
   constructor(code, message) {
@@ -42,6 +48,9 @@ function buildUnpause() {
 }
 function buildSetDisplay(id) {
   return Buffer.from([0x00, CMD.SETDISPLAY, 0x00, 0x06, (id >> 8) & 255, id & 255]);
+}
+function buildRefresh() {
+  return Buffer.from([0x00, CMD.REFRESH, 0x00, 0x04]);
 }
 
 function toBuffer(data) {
@@ -178,24 +187,36 @@ function boxScale(src, w, h, ow, oh) {
   return out;
 }
 
-// tiles: [{x, y, jpeg}] in arrival order. Returns { width, height, jpeg }.
-function composeFrame(width, height, tiles, { maxWidth, quality, decode, encode }) {
-  const canvas = Buffer.alloc(width * height * 4);
-  for (const t of tiles) {
-    let img;
-    try {
-      img = decode(t.jpeg, { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 512, maxResolutionInMP: 64 });
-    } catch (e) {
-      throw new KvmError('EKVMTILE', 'A piece of the screen could not be decoded.');
-    }
-    const cw = Math.min(img.width, width - t.x);
-    const ch = Math.min(img.height, height - t.y);
-    for (let row = 0; row < ch; row++) {
-      const from = row * img.width * 4;
-      const to = ((t.y + row) * width + t.x) * 4;
-      Buffer.from(img.data.buffer, img.data.byteOffset + from, cw * 4).copy(canvas, to);
-    }
+// Decode one tile JPEG with limits taken from its own header size.
+function decodeTile(jpeg, size, decode) {
+  const area = size.width * size.height;
+  const opts = {
+    useTArray: true,
+    formatAsRGBA: true,
+    maxResolutionInMP: Math.max(0.01, Math.ceil(area / 10000) / 100),
+    maxMemoryUsageInMB: Math.ceil((area * 4 * 2) / 1048576) + 16,
+  };
+  try {
+    return decode(jpeg, opts);
+  } catch (e) {
+    throw new KvmError('EKVMTILE', 'A piece of the screen could not be decoded.');
   }
+}
+
+// Draw a decoded tile into the RGBA canvas at (x, y), clipped to the screen. Returns the clipped size.
+function drawTile(canvas, width, height, x, y, img, maxW, maxH) {
+  const cw = Math.max(0, Math.min(img.width, maxW, width - x));
+  const ch = Math.max(0, Math.min(img.height, maxH, height - y));
+  for (let row = 0; row < ch; row++) {
+    const from = row * img.width * 4;
+    const to = ((y + row) * width + x) * 4;
+    Buffer.from(img.data.buffer, img.data.byteOffset + from, cw * 4).copy(canvas, to);
+  }
+  return { cw, ch };
+}
+
+// canvas: the finished RGBA screen. Scales (box filter) to maxWidth and encodes. Returns { width, height, jpeg }.
+function scaleAndEncode(canvas, width, height, { maxWidth, quality, encode }) {
   const outWidth = Math.min(width, maxWidth);
   const outHeight = Math.max(1, Math.round((height * outWidth) / width));
   const pixels = outWidth === width && outHeight === height ? canvas : boxScale(canvas, width, height, outWidth, outHeight);
@@ -215,6 +236,7 @@ function captureDesktop(ws, options) {
   const quality = o.quality === undefined ? 70 : o.quality;
   const timeoutMs = o.timeoutMs === undefined ? 25000 : o.timeoutMs;
   const infoGraceMs = o.infoGraceMs === undefined ? 700 : o.infoGraceMs;
+  const observe = o.observe === true;   // join a desktop a person already views: never change what they see
   const decode = o.decode || jpegjs.decode;
   const encode = o.encode || jpegjs.encode;
   const setT = o.setTimeout || global.setTimeout;
@@ -227,18 +249,23 @@ function captureDesktop(ws, options) {
     return Promise.reject(new KvmError('EBADARG', 'quality must be a whole number from 10 to 100.'));
   }
 
+  if (typeof ws.readyState === 'number' && ws.readyState > 1) {
+    return Promise.reject(new KvmError('EKVMCLOSED', 'The remote screen connection was already closed.'));
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false;
     let handshake = false;
     const reader = new CommandReader();
     let totalBytes = 0;
-    let tileCount = 0;
+    let tileCount = 0;   // since the latest SCREEN
 
     // frame
     let screen = null; // { w, h }
-    let tiles = [];
+    let canvas = null; // RGBA, filled tile by tile as they arrive
     let cov = null;
     let covered = 0;
+    let area = 0;      // claimed tile area (header size, before clipping) since the latest SCREEN
     let discard = false; // after SETDISPLAY: ignore the old display until the next 7
 
     // displays
@@ -302,9 +329,11 @@ function captureDesktop(ws, options) {
 
     function resetFrame(w, h) {
       screen = w ? { w, h } : null;
-      tiles = [];
+      canvas = w ? Buffer.alloc(w * h * 4) : null;
       cov = w ? new Uint8Array(w * h) : null;
       covered = 0;
+      area = 0;
+      tileCount = 0;
     }
     function realCount() {
       return ids ? ids.filter((i) => i !== ALL_DISPLAYS).length : entryCount;
@@ -320,7 +349,7 @@ function captureDesktop(ws, options) {
 
     // Send SETDISPLAY(primary) once when the selected display is not the primary.
     function checkSwitch() {
-      if (switchSent || primary === undefined || selected === undefined || selected === primary) return false;
+      if (observe || switchSent || primary === undefined || selected === undefined || selected === primary) return false;
       if (realCount() <= 1) return false;   // one display (or a list that names none): nothing to switch, and a switch might never be answered
       switchSent = true;
       send(buildSetDisplay(primary));
@@ -333,12 +362,13 @@ function captureDesktop(ws, options) {
     function evaluate() {
       if (settled || !screen || discard || covered < screen.w * screen.h) return;
       if (checkSwitch()) return;
-      const multi = realCount() > 1;
+      const count = realCount();
+      const multi = count > 1;
       let ready;
-      if (selected === undefined) ready = graceExpired;
+      if (selected === undefined) ready = count === 1 || graceExpired;
       else if (!multi || primary !== undefined) ready = true;
       else if (graceExpired) {
-        if (selected === ALL_DISPLAYS) {
+        if (selected === ALL_DISPLAYS && !observe) {
           throw new KvmError('EKVMPRIMARY', 'Could not tell which display is the main one on this computer.');
         }
         ready = true;
@@ -347,16 +377,19 @@ function captureDesktop(ws, options) {
         startGrace();
         return;
       }
-      const picture = composeFrame(screen.w, screen.h, tiles, { maxWidth, quality, decode, encode });
+      const picture = scaleAndEncode(canvas, screen.w, screen.h, { maxWidth, quality, encode });
+      const onePrimary = count <= 1;   // one display, or none listed: MeshCentral's viewer reads a list of 0 (or no list) as "no multiple displays"
+      const selectedIsPrimary = primary !== undefined && selected === primary;
       succeed({
         width: picture.width,
         height: picture.height,
         screenWidth: screen.w,
         screenHeight: screen.h,
         jpeg: picture.jpeg,
-        primaryKnown: primary !== undefined || !multi,
+        primaryKnown: observe ? (onePrimary || selectedIsPrimary) : (primary !== undefined || !multi),
+        onPrimary: onePrimary || selectedIsPrimary,
         display: selected === undefined ? null : selected,
-        tiles: tiles.length,
+        tiles: tileCount,
       });
     }
 
@@ -367,33 +400,40 @@ function captureDesktop(ws, options) {
       if (w < 1 || h < 1 || w > LIMITS.maxSide || h > LIMITS.maxSide || w * h > LIMITS.maxPixels) {
         throw new KvmError('EKVMSIZE', 'The remote screen size is not usable (' + w + 'x' + h + ').');
       }
+      if (screen && !discard && screen.w === w && screen.h === h) return;   // same size while collecting: ignored, as MeshCentral's viewer does (no ping-pong)
       discard = false;
       if (graceTimer) clearT(graceTimer);
       graceTimer = null;
       graceExpired = false;
       resetFrame(w, h);
+      if (observe) return;
       send(buildCompression(quality));
       send(buildUnpause());
       checkSwitch();
     }
 
     function handleTile(c) {
+      if (!screen || discard) {
+        tileCount++;
+        if (tileCount > LIMITS.maxTiles) throw new KvmError('EKVMBIG', 'The remote screen sent too many pieces.');
+        return;
+      }
       tileCount++;
-      if (tileCount > LIMITS.maxTiles) throw new KvmError('EKVMBIG', 'The remote screen sent too many pieces.');
-      if (!screen || discard) return;
+      if (tileCount > tileLimit(screen.w, screen.h)) throw new KvmError('EKVMBIG', 'The remote screen sent too many pieces.');
       if (c.data.length < 9) throw new KvmError('EKVMTILE', 'A piece of the screen was empty.');
       const x = c.data.readUInt16BE(4);
       const y = c.data.readUInt16BE(6);
       const jpeg = c.data.subarray(8);
       const size = jpegSize(jpeg);
       if (!size) throw new KvmError('EKVMTILE', 'A piece of the screen was not a readable picture.');
-      if (x + size.width > screen.w || y + size.height > screen.h) {
-        throw new KvmError('EKVMTILE', 'A piece of the screen was outside the screen.');
-      }
-      tiles.push({ x, y, jpeg: Buffer.from(jpeg) });
-      for (let row = y; row < y + size.height; row++) {
+      if (x >= screen.w || y >= screen.h) throw new KvmError('EKVMTILE', 'A piece of the screen was outside the screen.');
+      area += size.width * size.height;
+      if (area > areaLimit(screen.w, screen.h)) throw new KvmError('EKVMBIG', 'The remote screen sent far more picture than its size.');
+      const img = decodeTile(jpeg, size, decode);
+      const { cw, ch } = drawTile(canvas, screen.w, screen.h, x, y, img, size.width, size.height);
+      for (let row = y; row < y + ch; row++) {
         const base = row * screen.w;
-        for (let col = x; col < x + size.width; col++) {
+        for (let col = x; col < x + cw; col++) {
           if (!cov[base + col]) {
             cov[base + col] = 1;
             covered++;
@@ -437,10 +477,8 @@ function captureDesktop(ws, options) {
           evaluate();
           break;
         case CMD.COPYRECT:
-          if (screen && !discard && covered < screen.w * screen.h) {
-            throw new KvmError('EKVMCOPY', 'The remote screen sent a copy command before the picture was complete.');
-          }
-          break;
+          // MeshCentral's own viewer has no handler for it, so the agent never sends it: a picture must never be stale.
+          throw new KvmError('EKVMCOPY', 'The remote screen sent a copy command, so the picture could not be trusted.');
         case CMD.DISPLAYS:
           handleDisplays(c);
           checkSwitch();
@@ -465,6 +503,7 @@ function captureDesktop(ws, options) {
         if (text === 'c' || text === 'cr') {
           handshake = true;
           send('2');
+          if (observe) send(buildRefresh());   // asks the agent to resend the whole screen; harmless to other viewers
         }
         return;
       }
@@ -498,8 +537,11 @@ module.exports = {
   parseCommands,
   jpegSize,
   boxScale,
-  composeFrame,
+  decodeTile,
+  drawTile,
+  scaleAndEncode,
   buildCompression,
   buildUnpause,
   buildSetDisplay,
+  buildRefresh,
 };

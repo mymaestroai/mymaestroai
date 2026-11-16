@@ -559,3 +559,30 @@ test('look tools are not affected by a live desktop session: info and screenshot
   assert.strictEqual(shot.content[1].type, 'image');
   assert.strictEqual((await t.call('computers', AGENT))[0].name, 'demo-pc');
 });
+
+test('a screenshot of a computer whose desktop a person has open joins it in observe mode, waits at most 15 s, and names the person on a timeout', async () => {
+  const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('a picture')]);
+  class OpenSocket extends EventEmitter { constructor() { super(); setImmediate(() => this.emit('open')); } close() { this.closed = true; } send() {} }
+  const captures = [];
+  let fail = null;
+  const deps = { WebSocket: OpenSocket, captureDesktop: async (ws, opts) => {
+    captures.push(opts);
+    if (fail) throw Object.assign(new Error('x'), { code: fail });
+    return { width: 1600, height: 900, screenWidth: 1920, screenHeight: 1080, jpeg: JPEG, primaryKnown: false, onPrimary: false, display: 1, tiles: 4 };
+  } };
+  const t = setup({ handlers: { getsysinfo: async () => ({ action: 'getsysinfo', hardware: {} }) }, deps });
+  // No one has the desktop open: the normal mode.
+  const plainShot = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });
+  assert.ok(!plainShot.isError);
+  assert.strictEqual(captures[0].observe, undefined);
+  await open(t);
+  const shot = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });
+  assert.ok(!shot.isError, JSON.stringify(shot).slice(0, 200));
+  assert.strictEqual(captures[1].observe, true);
+  assert.ok(captures[1].timeoutMs <= 15000);
+  assert.match(shot.content[0].text, /more than one screen/, 'the note for a picture not known to be the main screen');
+  fail = 'EKVMTIMEOUT';
+  const r = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });
+  assert.strictEqual(r.isError, true);
+  assert.strictEqual(r.content[0].text, "demo-pc's desktop is open for Sam and did not send a picture to share. Try again after their session, or ask them.");
+});

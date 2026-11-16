@@ -95,7 +95,7 @@ function assertOnlyAllowed(sent) {
     if (m === '2') continue;
     assert.ok(Buffer.isBuffer(m), 'binary sends are Buffers');
     const cmd = (m[0] << 8) | m[1];
-    assert.ok([5, 8, 12].includes(cmd), 'unexpected command ' + cmd);
+    assert.ok([5, 6, 8, 12].includes(cmd), 'unexpected command ' + cmd);
     assert.equal((m[2] << 8) | m[3], m.length);
   }
 }
@@ -377,12 +377,12 @@ test('bad tiles -> EKVMTILE', async () => {
 
   const b = begin();
   b.bin(cmdScreen(64, 48));
-  b.bin(cmdTile(40, 0, solid(32, 24, RED))); // 72 > 64
+  b.bin(cmdTile(64, 0, solid(32, 24, RED))); // starts at the right edge
   await rejectsWith(b.promise, 'EKVMTILE');
 
   const c = begin();
   c.bin(cmdScreen(64, 48));
-  c.bin(cmdTile(0, 30, solid(32, 24, RED))); // 54 > 48
+  c.bin(cmdTile(0, 48, solid(32, 24, RED))); // starts at the bottom edge
   await rejectsWith(c.promise, 'EKVMTILE');
 });
 
@@ -463,4 +463,225 @@ test('bad maxWidth or quality are rejected', async () => {
     await rejectsWith(captureDesktop(ws, o), 'EBADARG');
   }
   assert.equal(ws.listenerCount('message'), 0);
+});
+
+// ---------- r2 additions ----------
+test('tiles are decoded when they arrive, with limits from the tile header', async () => {
+  const calls = [];
+  const s = begin({ decode: (buf, opts) => { calls.push(opts); return jpeg.decode(buf, opts); } });
+  s.bin(cmdScreen(64, 48));
+  s.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  assert.equal(calls.length, 1, 'decoded at once, before the frame is complete');
+  assert.deepEqual(calls[0], { useTArray: true, formatAsRGBA: true, maxResolutionInMP: 0.01, maxMemoryUsageInMB: 17 });
+  s.bin(cmdTile(32, 0, solid(32, 24, GREEN)));
+  s.bin(cmdTile(0, 24, solid(32, 24, BLUE)));
+  s.bin(cmdTile(32, 24, solid(32, 24, YELLOW)));
+  s.bin(cmdDisplays([1], 1));
+  const r = await s.promise;
+  assert.equal(calls.length, 4, 'not decoded again at completion');
+  near(px(dec(r), 48, 36), YELLOW);
+
+  const big = [];
+  const t = begin({ decode: (buf, opts) => { big.push(opts); return jpeg.decode(buf, opts); } });
+  t.bin(cmdScreen(480, 540));
+  t.bin(cmdTile(0, 0, solid(480, 540, RED)));
+  assert.equal(big[0].maxResolutionInMP, 0.26);
+  assert.equal(big[0].maxMemoryUsageInMB, 18);
+  t.ws.emit('close');
+  await rejectsWith(t.promise, 'EKVMCLOSED');
+  // A tile that cannot be decoded within its own limits is a bad tile.
+  const u = begin({ decode: () => { throw new Error('over the limit'); } });
+  u.bin(cmdScreen(64, 48));
+  u.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  await rejectsWith(u.promise, 'EKVMTILE');
+});
+
+test('overlap bomb: tiles that re-cover the same area beyond the budget -> EKVMBIG quickly', async () => {
+  let decoded = 0;
+  const s = begin({ decode: (buf, opts) => { decoded++; return jpeg.decode(buf, opts); } });
+  s.bin(cmdScreen(64, 48));
+  const t = cmdTile(0, 0, solid(1000, 1000, RED));   // clipped to 64x48, but it claims 1 MP each time
+  for (let i = 0; i < 10 && s.ws.closed === 0; i++) s.bin(t);
+  await assert.rejects(s.promise, (e) => e.code === 'EKVMBIG' && /far more picture/.test(e.message));
+  assert.ok(decoded <= 5, 'stopped after ' + decoded);
+  assert.equal(s.ws.closed, 1);
+});
+
+test('a tile that overhangs the right or bottom edge is clipped, not refused', async () => {
+  const s = begin();
+  s.bin(cmdScreen(64, 48));
+  s.bin(cmdTile(0, 0, solid(64, 24, RED)));
+  s.bin(cmdTile(40, 24, solid(32, 40, BLUE)));   // 72 > 64 and 64 > 48
+  s.bin(cmdTile(0, 24, solid(40, 24, GREEN)));
+  s.bin(cmdDisplays([1], 1));
+  const r = await s.promise;
+  const img = dec(r);
+  near(px(img, 60, 40), BLUE);
+  near(px(img, 63, 47), BLUE);
+  near(px(img, 10, 40), GREEN);
+  near(px(img, 10, 10), RED);
+});
+
+test('a tile that starts at or beyond the edge -> EKVMTILE', async () => {
+  for (const [x, y] of [[64, 0], [0, 48], [100, 100]]) {
+    const s = begin();
+    s.bin(cmdScreen(64, 48));
+    s.bin(cmdTile(x, y, solid(8, 8, RED)));
+    await rejectsWith(s.promise, 'EKVMTILE');
+  }
+});
+
+test('COPYRECT is refused at any time: before any screen, mid-frame, and after full coverage during the display grace', async () => {
+  const copy = Buffer.from([0, 4, 0, 12, 0, 0, 0, 0, 0, 8, 0, 8]);
+  const a = begin();
+  a.bin(copy);
+  await rejectsWith(a.promise, 'EKVMCOPY');
+  const b = begin();
+  b.bin(cmdScreen(32, 24));
+  b.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  b.bin(cmdDisplays([1, 2], 1));   // complete, but waiting for display info
+  assert.equal(b.timers.list.some((t) => t.ms === 50 && !t.cleared), true, 'in the grace');
+  b.bin(copy);
+  await rejectsWith(b.promise, 'EKVMCOPY');
+  assert.equal(b.ws.closed, 1);
+});
+
+test('a SCREEN of the same size while collecting is ignored: no reset and no sends', async () => {
+  const s = begin();
+  s.bin(cmdScreen(64, 48));
+  s.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  s.bin(cmdTile(32, 0, solid(32, 24, GREEN)));
+  const sent = s.ws.sent.length;
+  s.bin(cmdScreen(64, 48));
+  s.bin(cmdScreen(64, 48));
+  assert.equal(s.ws.sent.length, sent);
+  s.bin(cmdTile(0, 24, solid(32, 24, BLUE)));
+  s.bin(cmdTile(32, 24, solid(32, 24, YELLOW)));
+  s.bin(cmdDisplays([1], 1));
+  const r = await s.promise;
+  near(px(dec(r), 16, 12), RED);   // the earlier tiles were kept
+  near(px(dec(r), 48, 36), YELLOW);
+  assert.equal(s.ws.sent.filter((m) => Buffer.isBuffer(m) && m[1] === 5).length, 1);
+});
+
+test('one display known from 82 or from 11 alone: the frame is ready without the grace', async () => {
+  const a = begin();
+  a.bin(cmdScreen(32, 24));
+  a.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  a.bin(cmdInfo([{ id: 1, x: 0, y: 0, w: 32, h: 24 }]));
+  const ra = await a.promise;
+  assert.equal(ra.onPrimary, true);
+  assert.equal(ra.primaryKnown, true);
+  assert.equal(a.timers.list.some((t) => t.ms === 50 && t.fired), false);
+
+  const b = begin();
+  b.bin(cmdScreen(32, 24));
+  b.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  b.bin(Buffer.from([0, 11, 0, 8, 0, 1, 0, 7]));   // one display, no selected id
+  const rb = await b.promise;
+  assert.equal(rb.onPrimary, true);
+  assert.equal(rb.display, null);
+});
+
+test('a socket that is already closing or closed -> EKVMCLOSED at once', async () => {
+  for (const state of [2, 3]) {
+    const ws = new FakeWs();
+    ws.readyState = state;
+    await rejectsWith(captureDesktop(ws, { timeoutMs: 5000 }), 'EKVMCLOSED');
+    assert.equal(ws.listenerCount('message'), 0);
+  }
+  const ok = new FakeWs();
+  ok.readyState = 1;
+  const p = captureDesktop(ok, { timeoutMs: 5000 });
+  ok.emit('close');
+  await rejectsWith(p, 'EKVMCLOSED');
+});
+
+test('onPrimary: true for the primary or a single display, false otherwise', async () => {
+  const a = begin();
+  a.bin(cmdScreen(32, 24));
+  a.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  a.bin(cmdDisplays([1, 2], 2));
+  a.bin(cmdInfo([{ id: 2, x: 0, y: 0, w: 32, h: 24 }, { id: 1, x: 32, y: 0, w: 32, h: 24 }]));
+  const ra = await a.promise;
+  assert.equal(ra.onPrimary, true);
+  const b = begin();
+  b.bin(cmdScreen(32, 24));
+  b.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  b.bin(cmdDisplays([1, 2], 2));
+  b.timers.fire(50);
+  const rb = await b.promise;
+  assert.equal(rb.primaryKnown, false);
+  assert.equal(rb.onPrimary, false);
+  // No display list at all, or a list naming no display (MeshCentral's viewer reads both as "no multiple displays"): one screen, clickable.
+  for (const info of [null, cmdDisplays([], 0)]) {
+    const c = begin();
+    c.bin(cmdScreen(32, 24));
+    c.bin(cmdTile(0, 0, solid(32, 24, RED)));
+    if (info) c.bin(info);
+    c.timers.fire(50);
+    const rc = await c.promise;
+    assert.equal(rc.onPrimary, true, info ? 'list of 0' : 'no list');
+    assert.equal(rc.primaryKnown, true);
+  }
+});
+
+test('an 8K screen (7680x4320) is accepted; 36 MP is the limit', async () => {
+  assert.equal(kvm.LIMITS.maxPixels, 36000000);
+  const s = begin();
+  s.bin(cmdScreen(7680, 4320));
+  assert.equal(s.ws.sent.length, 3);
+  s.ws.emit('close');
+  await rejectsWith(s.promise, 'EKVMCLOSED');
+  const t = begin();
+  t.bin(cmdScreen(7000, 5200));   // 36.4 MP
+  await rejectsWith(t.promise, 'EKVMSIZE');
+});
+
+test('observe mode: sends only 2 and REFRESH, never switches, and says whether the picture is the primary display', async () => {
+  const REFRESH = [0, 6, 0, 4];
+  // two displays, selected is not the primary: no SETDISPLAY, no compression, no unpause
+  const a = begin({ observe: true });
+  assert.equal(a.ws.sent.length, 2);
+  assert.equal(a.ws.sent[0], '2');
+  assert.deepEqual([...a.ws.sent[1]], REFRESH);
+  a.bin(cmdScreen(32, 24));
+  a.bin(cmdScreen(32, 24));
+  a.bin(cmdDisplays([1, 2], 1));
+  a.bin(cmdInfo([{ id: 2, x: 0, y: 0, w: 32, h: 24 }, { id: 1, x: 32, y: 0, w: 32, h: 24 }]));
+  a.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  const ra = await a.promise;
+  assert.equal(ra.primaryKnown, false);
+  assert.equal(ra.onPrimary, false);
+  assert.equal(ra.display, 1);
+  assert.equal(a.ws.sent.length, 2);
+  assertOnlyAllowed(a.ws.sent);
+
+  // selected is the primary: proven
+  const b = begin({ observe: true });
+  b.bin(cmdScreen(32, 24));
+  b.bin(cmdDisplays([1, 2], 2));
+  b.bin(cmdInfo([{ id: 2, x: 0, y: 0, w: 32, h: 24 }, { id: 1, x: 32, y: 0, w: 32, h: 24 }]));
+  b.bin(cmdTile(0, 0, solid(32, 24, GREEN)));
+  const rb = await b.promise;
+  assert.equal(rb.primaryKnown, true);
+  assert.equal(rb.onPrimary, true);
+  assert.deepEqual(b.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6]);
+
+  // one display: proven; two displays and nothing known: not proven, after the grace, even for All displays
+  const c = begin({ observe: true });
+  c.bin(cmdScreen(32, 24));
+  c.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  c.bin(cmdDisplays([1], 1));
+  const rc = await c.promise;
+  assert.equal(rc.primaryKnown, true);
+  const d = begin({ observe: true });
+  d.bin(cmdScreen(32, 24));
+  d.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  d.bin(cmdDisplays([1, 2, 65535], 65535));
+  d.timers.fire(50);
+  const rd = await d.promise;
+  assert.equal(rd.primaryKnown, false);
+  assert.equal(rd.onPrimary, false);
+  assert.deepEqual(d.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6]);
 });

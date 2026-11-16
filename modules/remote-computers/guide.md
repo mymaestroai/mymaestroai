@@ -96,7 +96,7 @@ Status and limits (Save permissions).
 - **"Waiting for setup":** the tailnet name or address is not saved yet. Fill in the settings step.
 - **"The antivirus ... blocked this click / typing / command":** the PC's antivirus stopped it. The message names the
   detection when Microsoft Defender reports one, and Windows Security > Protection history on the PC shows the block.
-  Screenshots come through the same channel as Open desktop, so they do not run any script on the PC. Do not turn
+  Screenshots come through the same channel as Open desktop, so they do not run any script on the PC. Agent screenshots show no notice on the PC, the same as before; a screenshot taken while a person has the desktop open cannot be used to click. Do not turn
   the antivirus off or add an exclusion for My Maestro.
 - **No screenshot, or "did not confirm the input":** nobody is signed in on the PC, or the screen is locked or showing
   a secure screen. Set Windows to sign in automatically and never lock, then try again.

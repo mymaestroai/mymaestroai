@@ -386,6 +386,13 @@ test('windows: blockedByAntivirus spots Defender\'s refusal and nothing else', (
   assert.strictEqual(win.blockedByAntivirus('\u001b[31;1mScriptContained\u001b[0mMaliciousContent'), true);
   for (const quoted of ['x ScriptContainedMaliciousContent', 'Message: This script contains malicious content and has been blocked by your antivirus software.', 'Id : ScriptContainedMaliciousContent'])
     assert.strictEqual(win.blockedByAntivirus(quoted, { strict: true }), false, quoted);
+  // The exception form of [scriptblock]::Create counts in strict mode only at the start of a line (ANSI stripped).
+  const CREATE = 'Exception calling "Create" with "1" argument(s): "This script contains malicious content and has been blocked by your antivirus software.';
+  assert.strictEqual(win.blockedByAntivirus(CREATE, { strict: true }), true);
+  assert.strictEqual(win.blockedByAntivirus('some output\r\n' + CREATE + '\r\nAt line:1', { strict: true }), true);
+  assert.strictEqual(win.blockedByAntivirus('\u001b[31;1m' + CREATE + '\u001b[0m', { strict: true }), true);
+  assert.strictEqual(win.blockedByAntivirus('The log says: ' + CREATE, { strict: true }), false, 'a quoted copy not at line start');
+  assert.strictEqual(win.blockedByAntivirus(CREATE.toLowerCase(), { strict: true }), false, 'case as written');
 });
 
 test('windows: every line is printable ASCII only, so the console code page cannot change it', () => {
@@ -457,7 +464,7 @@ test('windows: every script ends with MMOK and is built from a short fixed text'
 test('windows: the threat-name line is one read-only query and its answer is parsed strictly', () => {
   const line = win.threatNameLine();
   // Only a detection of the last 2 minutes is named: an older one is not this block (another antivirus may have blocked it).
-  assert.strictEqual(line, "$ErrorActionPreference = 'Stop'; $mmsince = (Get-Date).AddMinutes(-2); $d = Get-MpThreatDetection | Where-Object { $_.InitialDetectionTime -gt $mmsince } | Sort-Object InitialDetectionTime -Descending | Select-Object -First 1; if ($d) { Write-Output ('MMTHREAT ' + (Get-MpThreat -ThreatID $d.ThreatID).ThreatName) }");
+  assert.strictEqual(line, "$ErrorActionPreference = 'Stop'; $mmsince = (Get-Date).AddMinutes(-2); $d = Get-MpThreatDetection | Where-Object { $_.InitialDetectionTime -gt $mmsince -and ((($_.Resources -join ' ') -match 'amsi:') -or ($_.ProcessName -match 'powershell')) } | Sort-Object InitialDetectionTime -Descending | Select-Object -First 1; if ($d) { Write-Output ('MMTHREAT ' + (Get-MpThreat -ThreatID $d.ThreatID).ThreatName) }");
   assert.strictEqual(win.plainLine(line), line);
   const NAME = 'HackTool:PowerShell/EmpireGetScreenshot.C';
   assert.strictEqual(win.parseThreatName(`MMTHREAT ${NAME}\r\n`), NAME);
@@ -577,7 +584,7 @@ function setup(over = {}) {
   };
   // The desktop channel for screenshots: a fake websocket, the Open desktop account's client, and a fake kvmshot.captureDesktop. `events` keeps the order of ws and tunnel.
   const events = [], personCalls = [], sockets = [], captures = [];
-  const shot = { width: 1600, height: 900, screenWidth: 1920, screenHeight: 1080, primaryKnown: true, jpeg: JPEG, fail: null, wsMode: 'open', cookie: { cookie: 'CooKie$1@x', rcookie: 'rCooKie$2@y' } };
+  const shot = { width: 1600, height: 900, screenWidth: 1920, screenHeight: 1080, primaryKnown: true, onPrimary: true, jpeg: JPEG, fail: null, wsMode: 'open', cookie: { cookie: 'CooKie$1@x', rcookie: 'rCooKie$2@y' } };
   class FakeWS extends EventEmitter {
     constructor(url, opts) {
       super(); this.url = url; this.opts = opts; this.closed = 0; sockets.push(this); events.push('ws');
@@ -594,7 +601,7 @@ function setup(over = {}) {
   const captureDesktop = async (ws, opts) => {
     captures.push({ ws, opts });
     if (shot.fail) throw Object.assign(new Error('capture failed'), { code: shot.fail });
-    return { width: shot.width, height: shot.height, screenWidth: shot.screenWidth, screenHeight: shot.screenHeight, jpeg: shot.jpeg, primaryKnown: shot.primaryKnown, display: 0, tiles: 4 };
+    return { width: shot.width, height: shot.height, screenWidth: shot.screenWidth, screenHeight: shot.screenHeight, jpeg: shot.jpeg, primaryKnown: shot.primaryKnown, onPrimary: shot.onPrimary, display: 0, tiles: 4 };
   };
   const desktopDeps = {
     WebSocket: FakeWS, captureDesktop, personClient: person, adminClient: { request: async () => ({ success: 1 }) },
@@ -873,7 +880,7 @@ test('tools: screenshot failures before the capture: a bad cookie, a websocket t
   const c = setup({ tunnelFails: new MeshError('Unable to contact node', 'EMESH') });
   assert.strictEqual((await c.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, 'demo-pc: the server could not reach the computer (Unable to contact node).');
   assert.strictEqual(c.sockets[0].closed, 1);
-  assert.strictEqual(c.captures.length, 0);
+  assert.strictEqual(c.captures.length, 1, 'the capture starts before the tunnel request');
   const d = setup({ tunnelFails: new MeshError('timed out', 'ETIMEDOUT') });
   assert.strictEqual((await d.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, 'The Remote computers server did not answer. Try again in a moment.');
   assert.strictEqual(d.sockets[0].closed, 1);
@@ -1860,4 +1867,48 @@ test('tools: the shell\'s echo of the sent line never makes a false result: not 
   blocking(t, 'nothing\r\n', coloured);
   assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'whoami' })).error, avText('command'));
   assert.strictEqual((await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'enter' })).error, avText('key press'));
+});
+
+test('tools: the capture is running before the tunnel request is sent', async () => {
+  const t = setup();
+  const order = [];
+  const real = t.captures;
+  real.push = function (e) { order.push('capture'); return Array.prototype.push.call(this, e); };
+  const origEvents = t.events;
+  origEvents.push = function (e) { order.push(e); return Array.prototype.push.call(this, e); };
+  await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
+  assert.ok(order.indexOf('capture') >= 0 && order.indexOf('capture') < order.indexOf('tunnel'), order.join(','));
+});
+
+test('tools: closing a socket that is still connecting (its close emits error, it never opens) is a plain error, not a crash', async () => {
+  class Stuck extends EventEmitter {
+    constructor() { super(); this.closed = 0; }
+    close() { this.closed++; this.emit('error', new Error('WebSocket was closed before the connection was established')); }
+  }
+  const t = setup({ deps: { WebSocket: Stuck, openTimeoutMs: 20 } });
+  const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
+  assert.strictEqual(r.error, "The connection to demo-pc's screen could not be opened. Try again in a moment.");
+  assert.strictEqual(t.captures.length, 0);
+});
+
+test('tools: a click or a positioned scroll with a screenshot not known to show the main screen is refused and sends nothing', async () => {
+  const t = setup();
+  t.handlers.runcommands = async () => ({ result: 'MMOK\r\n' });
+  const sent = () => t.calls.filter((c) => c.action === 'runcommands').length;
+  t.shot.onPrimary = false;
+  const bad = await shotOf(t);
+  const NOTE = "That screenshot may not show demo-pc's main screen, so it cannot be used to click or scroll there. Take a new screenshot when no one else has the desktop open.";
+  assert.strictEqual((await t.call('click', { ...AGENT, computer: 'demo-pc', shot: bad, x: 10, y: 10 })).error, NOTE);
+  assert.strictEqual((await t.call('scroll', { ...AGENT, computer: 'demo-pc', shot: bad, x: 10, y: 10, amount: 3 })).error, NOTE);
+  assert.strictEqual(sent(), 0);
+  // An unpositioned scroll does not use a shot.
+  assert.deepStrictEqual(await t.call('scroll', { ...AGENT, computer: 'demo-pc', amount: 3 }), { ok: true });
+  assert.strictEqual(sent(), 1);
+  const note = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
+  assert.match(note.note, /more than one screen/, 'the note for a picture not known to be the main screen');
+  t.shot.onPrimary = true;
+  const good = await shotOf(t);
+  assert.deepStrictEqual(await t.call('click', { ...AGENT, computer: 'demo-pc', shot: good, x: 10, y: 10 }), { ok: true });
+  assert.deepStrictEqual(await t.call('scroll', { ...AGENT, computer: 'demo-pc', shot: good, x: 10, y: 10, amount: 3 }), { ok: true });
+  assert.strictEqual(sent(), 3);
 });

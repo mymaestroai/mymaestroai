@@ -58,10 +58,11 @@ function runLine(command) {
 // True when Defender (AMSI) blocked what was sent. strict (for run, whose output is the caller's own and may quote the message, for example while
 // reading Defender's logs): only PowerShell's own error record for the block counts.
 const AV_RECORD = /(?:^|\n)[ \t]*\+[ \t]*FullyQualifiedErrorId[ \t]*:[ \t]*ScriptContainedMaliciousContent\b/;
+const STRICT_CREATE = /(?:^|\n)Exception calling "Create" with "1" argument\(s\): "This script contains malicious content and has been blocked by your antivirus software/;
 function blockedByAntivirus(output, { strict = false } = {}) {
   const s = String(output == null ? '' : output).replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, '');   // colour codes around the error record
   if (AV_RECORD.test(s)) return true;
-  if (strict) return false;
+  if (strict) return STRICT_CREATE.test(s);
   return s.includes('ScriptContainedMaliciousContent') || /contains malicious content and has been blocked by your antivirus software/i.test(s);
 }
 
@@ -108,7 +109,7 @@ const script = (...parts) => [...head, ...parts, ...tail].join('; ');
 const THREAT_PREFIX = 'MMTHREAT ';
 const THREAT_NAME = /^[A-Za-z0-9:\/._!#()-]{1,120}$/;
 function threatNameLine() {
-  return "$ErrorActionPreference = 'Stop'; $mmsince = (Get-Date).AddMinutes(-2); $d = Get-MpThreatDetection | Where-Object { $_.InitialDetectionTime -gt $mmsince } | Sort-Object InitialDetectionTime -Descending | Select-Object -First 1; if ($d) { Write-Output ('MMTHREAT ' + (Get-MpThreat -ThreatID $d.ThreatID).ThreatName) }";
+  return "$ErrorActionPreference = 'Stop'; $mmsince = (Get-Date).AddMinutes(-2); $d = Get-MpThreatDetection | Where-Object { $_.InitialDetectionTime -gt $mmsince -and ((($_.Resources -join ' ') -match 'amsi:') -or ($_.ProcessName -match 'powershell')) } | Sort-Object InitialDetectionTime -Descending | Select-Object -First 1; if ($d) { Write-Output ('MMTHREAT ' + (Get-MpThreat -ThreatID $d.ThreatID).ThreatName) }";
 }
 // The name after "MMTHREAT " when it looks like a detection name, else null. The shell's echo of the sent line is removed first (it holds "MMTHREAT " too).
 function parseThreatName(output) {

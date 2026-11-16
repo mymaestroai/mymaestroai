@@ -515,6 +515,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   }
   // After a block: ONE read-only question to Defender, as the system account, for the name of the newest detection. Any failure is ignored.
   const THREAT_WAIT_MS = 10000;
+  const OBSERVE_WAIT_MS = 15000;   // a screenshot of a desktop a person has open waits this long at most
   async function threatName(pc, deadline) {
     if (deadline - now() < THREAT_WAIT_MS) return null;
     try {
@@ -582,24 +583,31 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       try {
         ws = new (WebSocket())(`wss://127.0.0.1:${ep.port}/meshrelay.ashx?browser=1&p=2&nodeid=${pc.nodeid}&id=${tunnelid}&auth=${f.cookie}`, { ca: ep.ca, servername: ep.servername, rejectUnauthorized: true, maxPayload: 64 * 1024 * 1024 });
       } catch { throw noOpen(); }
+      ws.on('error', () => {});   // at once: closing a socket that is still connecting emits 'error', which must never be unhandled
       await new Promise((resolve, reject) => {
         let timer;
         const done = (fn, v) => { clearTimeout(timer); ws.removeListener('open', onOpen); ws.removeListener('error', onBad); ws.removeListener('close', onBad); fn(v); };
         const onOpen = () => done(resolve);
         const onBad = () => done(reject, noOpen());
-        timer = setTimeout(() => done(reject, noOpen()), 10000);
+        timer = setTimeout(() => done(reject, noOpen()), deps.openTimeoutMs || 10000);
         ws.on('open', onOpen); ws.on('error', onBad); ws.on('close', onBad);
       });
-      ws.on('error', () => {});   // a late error must never be unhandled
+      const left = waitMs();   // what is left now, after the setup
+      if (left < MIN_WAIT_MS) throw outOfTime();
+      // A person has the desktop open on this computer: join their view without changing anything on it (no compression, no display switch).
+      const live = desktop.forNode(pc.nodeid);
+      const timeoutMs = live ? Math.min(left, OBSERVE_WAIT_MS) : left;
+      // The capture starts BEFORE the tunnel request, so the relay's first text ('c') can never arrive before its listeners are there.
+      const p = Promise.resolve(capture(ws, { maxWidth, quality: 70, timeoutMs, ...(live ? { observe: true } : {}) }));
+      p.catch(() => {});   // no unhandled rejection when the request below fails first
       const value = `*/meshrelay.ashx?p=2&nodeid=${pc.nodeid}&id=${tunnelid}&rauth=${f.rcookie}`;
       try { await c.request('msg', { type: 'tunnel', nodeid: pc.nodeid, value, usage: 2 }, { timeoutMs: 10000 }); } catch (e) {
         throw new ToolError(e && e.code === 'EMESH' ? `${pc.name}: the server could not reach the computer (${clean(e.message, 60)}).` : 'The Remote computers server did not answer. Try again in a moment.');
       }
-      const timeoutMs = waitMs();   // what is left now, after the setup
-      if (timeoutMs < MIN_WAIT_MS) throw outOfTime();
-      try { return await capture(ws, { maxWidth, quality: 70, timeoutMs }); } catch (e) {
+      try { return await p; } catch (e) {
         const code = e && typeof e.code === 'string' ? e.code : 'EKVM';
         log(`screenshot of ${pc.name} failed (${clean(code, 20)})`);
+        if (code === 'EKVMTIMEOUT' && live && !live.unknown) throw new ToolError(`${pc.name}'s desktop is open for ${live.who.name} and did not send a picture to share. Try again after their session, or ask them.`);
         if (code === 'EKVMPRIMARY') throw new ToolError(`${pc.name} shows all its screens together and the main one could not be picked, so no picture was taken.`);
         if (code === 'EKVMTIMEOUT') throw new ToolError(`${pc.name} did not send a picture of its screen in time. Try again in a moment.`);
         if (code === 'EKVMCLOSED') throw new ToolError(`The connection to ${pc.name}'s screen closed before a picture arrived. Try again in a moment.`);
@@ -629,9 +637,9 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const takenAt = new Date(now()).toISOString();
     let id;
     do { id = newShotId(); } while ((shotsOf.get(who) || []).some((s) => s.id === id));
-    rememberShot(who, { id, agent: who, computerId: pc.id, width: shot.width, height: shot.height, screenWidth: shot.screenWidth, screenHeight: shot.screenHeight, sx: shot.screenWidth / shot.width, sy: shot.screenHeight / shot.height, takenAt, at: now() });
+    rememberShot(who, { id, agent: who, computerId: pc.id, width: shot.width, height: shot.height, screenWidth: shot.screenWidth, screenHeight: shot.screenHeight, sx: shot.screenWidth / shot.width, sy: shot.screenHeight / shot.height, onPrimary: shot.onPrimary === true, takenAt, at: now() });
     log(`screenshot of ${pc.name} for ${who} (${shot.width}x${shot.height}, ${shot.jpeg.length} bytes)`);
-    const meta = { shot: id, width: shot.width, height: shot.height, screen: { width: shot.screenWidth, height: shot.screenHeight }, takenAt, computer: pc.name, ...(shot.primaryKnown === false ? { note: 'This computer has more than one screen; the picture shows the one the computer chose.' } : {}) };
+    const meta = { shot: id, width: shot.width, height: shot.height, screen: { width: shot.screenWidth, height: shot.screenHeight }, takenAt, computer: pc.name, ...(shot.primaryKnown === false || shot.onPrimary === false ? { note: 'This computer has more than one screen; the picture shows the one the computer chose.' } : {}) };
     return new Rich([{ type: 'text', text: JSON.stringify(meta) }, { type: 'image', data: shot.jpeg.toString('base64'), mimeType: 'image/jpeg' }]);
   }
 
@@ -674,6 +682,10 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (!s || s.agent !== who || s.computerId !== pc.id) throw new ToolError(NEW_SHOT);
     return s;
   }
+  // A click or a positioned scroll is aimed with the primary display's coordinates: a picture not known to be that display cannot be used for it.
+  function needPrimary(s, pc) {
+    if (s.onPrimary !== true) throw new ToolError(`That screenshot may not show ${pc.name}'s main screen, so it cannot be used to click or scroll there. Take a new screenshot when no one else has the desktop open.`);
+  }
   function toScreen(s, x, y) {
     if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= s.width || y >= s.height) throw new ToolError(`x and y must be whole numbers inside that screenshot (0 to ${s.width - 1} across, 0 to ${s.height - 1} down).`);
     return { x: Math.min(s.screenWidth - 1, Math.round(x * s.sx)), y: Math.min(s.screenHeight - 1, Math.round(y * s.sy)) };
@@ -687,6 +699,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     mustBeOnline(pc);
     needSignedIn(pc);
     const s = useShot(who, pc, a.shot);
+    needPrimary(s, pc);
     const p = toScreen(s, a.x, a.y);
     const script = scriptOrError(() => win.clickScript({ x: p.x, y: p.y, screenWidth: s.screenWidth, screenHeight: s.screenHeight, button: a.button === undefined ? 'left' : a.button, double: a.double === undefined ? false : a.double }));
     await authorize(who, 'drive', pc, call, deadline, 'click', INPUT_TIMEOUT_MS);
@@ -725,6 +738,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (a.x !== undefined || a.y !== undefined) {
       if (a.x === undefined || a.y === undefined) throw new ToolError('Give both x and y, or neither.');
       const s = useShot(who, pc, a.shot);
+      needPrimary(s, pc);
       where = { ...toScreen(s, a.x, a.y), screenWidth: s.screenWidth, screenHeight: s.screenHeight };
     }
     const script = scriptOrError(() => win.scrollScript({ ...where, amount: a.amount }));
