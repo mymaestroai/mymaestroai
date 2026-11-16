@@ -647,7 +647,9 @@
   #call-panel .cp-focus-hint[hidden] { display: none; }
   .vs-seg { display: flex; gap: 8px; }
   .vs-opt { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); }
-  .vs-room-out, .vs-car-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
+  .vs-room-out, .vs-car-out, .vs-route-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
+  .vs-route-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 15px; }
+  .vs-route-row .vs-btn { flex: none; }
   #cp-mic { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
   #cp-mic:empty { display: none; }
   #cp-mic.cp-mic-lost { font-size: 15px; font-weight: 600; color: var(--danger, #e5484d); }
@@ -858,6 +860,7 @@
         <p class="vs-hint vp-hint">While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.</p>
         <button type="button" class="vs-btn vs-car" id="vp-car">Car or Bluetooth check</button>
         <div class="vs-car-out" role="status" aria-live="polite"></div>
+        <div id="vp-route"></div>
         <div id="vp-wake-box">
           <label class="vs-check"><input type="checkbox" id="vp-wake"> <span>Wait for the wake phrase</span></label>
           <input type="text" id="vp-wake-phrase" class="vs-btn" maxlength="60" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Wake phrase" placeholder="Hey">

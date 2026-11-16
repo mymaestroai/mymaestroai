@@ -8942,6 +8942,81 @@ function voiceThinkingCtxMake(vc) {
     try { if (vc.thinkCtx.resume) Promise.resolve(vc.thinkCtx.resume()).catch(() => {}); } catch { /* resumes later */ }
   } catch { /* no sound: the wait is just quiet */ }
 }
+// ── The call's sound follows the chosen microphone (Android) ──
+// On Android Chrome the first microphone opened with processing puts the phone in call mode and picks the call device (the car, when Chrome lists it). A sound
+// output keeps the type it had when it was made, and ours are made inside the tap, before the microphone: media outputs, which do not reach a car while its
+// hands-free link is on. So once the microphone is open the call's outputs are made again (voiceCallOutputsRenew; not on iOS).
+const VOICE_ROUTE_TOAST = 'Your car or Bluetooth device is connected, but this call is using the phone. Voice settings → Sound route can switch it.';
+function voiceMicChoiceId() { try { const m = voicePrefsNow().micDevice; return m && typeof m.id === 'string' && m.id ? m.id : null; } catch { return null; } }   // the microphone chosen in Sound route, or null (automatic)
+function voiceRouteSuffix(r) {   // what the microphone line says about the route
+  if (!r) return '';
+  let s = '';
+  if (r.bluetooth) s += ' · car or Bluetooth';
+  else if (r.bluetoothListed && !r.chosen) s += ' · a car or Bluetooth device is connected but not used';
+  if (r.fellBack) s += ' · the chosen microphone is not available';
+  return s;
+}
+function voiceCallPlayingNow() {   // a sentence is playing or about to: nothing may be cut
+  try { if (typeof voicePlay === 'undefined') return false; const a = voicePlay.audio; return !!voicePlay.cancel || !!(a && !a.paused && !a.ended); } catch { return false; }
+}
+function voiceResumeCapped(ctx, ms) {
+  return new Promise((res) => {
+    let t = null; const fin = () => { if (t !== null) { clearTimeout(t); t = null; } res(); };
+    t = setTimeout(fin, ms || 1000);
+    try { if (ctx.state === 'running') { fin(); return; } Promise.resolve(ctx.resume()).then(fin, fin); } catch { fin(); }
+  });
+}
+function voiceCloseCtxLater(list, ms) {   // the old contexts are closed after the new ones run
+  const l = list.filter(Boolean); if (!l.length) return;
+  setTimeout(() => { for (const c of l) { try { Promise.resolve(c.close()).catch(() => {}); } catch { /* closed */ } } }, ms);
+}
+async function voiceCallOutputsRenew(vc) {
+  try {
+    if (!vc || voiceCall !== vc) return false;
+    if (vc.renewing) { vc.renewPending = true; return false; }   // one at a time; the beat runs it again
+    if (voiceIsIOS()) { vc.renewPending = false; return false; }   // iOS: contexts must be made inside the tap
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) { vc.renewPending = false; return false; }
+    if (voiceCallPlayingNow()) { vc.renewPending = true; return false; }   // run from the beat as soon as nothing plays
+    vc.renewPending = false; vc.renewing = true;
+    let fresh = null, freshD = null;
+    try {
+      const ds = typeof voiceDisp !== 'undefined' ? voiceDisp : null, shared = ds && ds.shared;
+      const withDisp = !!(ds && ds.cur && shared && shared.ctx && typeof ds.cur.renewContext === 'function');
+      fresh = new AC(); await voiceResumeCapped(fresh, 1000);
+      if (withDisp) { freshD = new AC(); await voiceResumeCapped(freshD, 1000); }
+      if (voiceCall !== vc || voiceCallPlayingNow()) {   // a sentence began while the new contexts woke: nothing is changed, it is tried again
+        vc.renewPending = voiceCall === vc;
+        for (const c of [fresh, freshD]) { try { Promise.resolve(c && c.close()).catch(() => {}); } catch { /* closed */ } }
+        return false;
+      }
+      const old = [vc.thinkCtx];
+      vc.thinkCtx = fresh;
+      try { if (vc.keepAlive && typeof vc.keepAlive.moveTo === 'function') vc.keepAlive.moveTo(fresh); } catch { /* the hiss stays where it was */ }
+      try { const s = vc.thinkSnd; vc.thinkSnd = null; if (s) s.stop(); } catch { /* stopped */ }   // made again on the new context when the next wait needs it
+      try { if (typeof voiceOwnCtx === 'function' && old[0] && voiceOwnCtx() === old[0]) voiceDispRoutesLost(); } catch { /* the next sentence replaces it */ }   // an element the page routed through the old context
+      if (withDisp) {
+        old.push(shared.ctx);
+        try { ds.cur.renewContext(freshD); } catch { /* the display keeps its context */ }
+      } else if (!(ds && ds.cur) && shared && shared.ctx) {   // a context left from an earlier call: replies route through the fresh call context
+        old.push(shared.ctx); shared.ctx = null; shared.routed = 0; shared.routes = new WeakMap();
+        try { voiceDispRoutesLost(); } catch { /* nothing playing */ }
+      }
+      vc.outputsRenewed = (vc.outputsRenewed || 0) + 1;
+      voiceCloseCtxLater(old.filter((c) => c && c !== fresh && c !== freshD), 300);
+      return true;
+    } finally { vc.renewing = false; }
+  } catch { return false; }   // a failure leaves the call as it was
+}
+function voiceCallOnRoute(vc, r) {   // handlers.onRoute: after every open and reopen of the microphone
+  if (!vc || voiceCall !== vc || !r) return;
+  vc.route = r;
+  try { const m = $('cp-mic'); if (m && !vc.micLostOn && vc.micInfo) m.textContent = voiceMicLine(vc.micInfo, r); } catch { /* the line is a courtesy */ }
+  if (r.bluetoothListed && !r.bluetooth && !r.chosen && !vc.routeToasted) { vc.routeToasted = true; try { toast(VOICE_ROUTE_TOAST, 5000); } catch { /* no toast */ } }
+  if (!vc.routeSeen) { vc.routeSeen = true; voiceCallOutputsRenew(vc); }
+}
+function voiceCallOnMicChange(vc, ev) {   // the microphone moved (a car connected mid-call): the outputs follow it
+  if (vc && voiceCall === vc && vc.routeSeen && ev && ev.ok === true && ev.changed === true) voiceCallOutputsRenew(vc);
+}
 function voiceThinkingVolume() { const v = Number(voicePrefsNow().thinkingVolume); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5; }
 function voiceThinkingDeps(vc) {
   return {
@@ -9004,10 +9079,10 @@ function voiceKeepAliveAllowed() {
   return voiceOutputKind(i && typeof i.label === 'string' ? i.label : voiceLastMicLabel) === 'bluetooth';
 }
 // The call panel's microphone line: plain text only (the label comes from the device).
-function voiceMicLine(info) {
+function voiceMicLine(info, route) {
   const i = info || {};
   const rate = Number(i.sampleRate);
-  return 'Microphone: ' + (i.label ? String(i.label) : 'default') + (rate > 0 ? ' · ' + Math.round(rate / 100) / 10 + ' kHz' : '') + (i.fallback ? ' · basic mode' : '');
+  return 'Microphone: ' + (i.label ? String(i.label) : 'default') + (rate > 0 ? ' · ' + Math.round(rate / 100) / 10 + ' kHz' : '') + (i.fallback ? ' · basic mode' : '') + voiceRouteSuffix(route);
 }
 // ── Wake phrase standby: allowed only with a ready local recognizer (the server rule is engineFor in lib/voice/routes.js) ──
 function voiceWakeAllowed(agent) {
@@ -9102,7 +9177,7 @@ function voiceCallDeps(vc) {
     prefs: () => voiceEffNow(agent),   // this agent's voice defaults for any setting the person has not set on this device
     // Everything the controller uses passes through: the "now" of setPlaybackActive (a cut by the person drops the echo guard at once),
     // reopen ("Try the microphone again" after a lost microphone), info, setMuted (the call bar's Mute) and endPiece (the frame watchdog ends a piece).
-    vad: { start: (h) => vc.vad.start(typeof voiceDisp !== 'undefined' && voiceDisp.floor ? voiceDisp.floor.wrap(h) : h), stop: () => vc.vad.stop(),
+    vad: { start: (h) => { const w = typeof voiceDisp !== 'undefined' && voiceDisp.floor ? voiceDisp.floor.wrap(h) : h; return vc.vad.start({ ...w, onRoute: (r) => voiceCallOnRoute(vc, r), onMicChange: (ev) => { try { voiceCallOnMicChange(vc, ev); } catch { /* the outputs stay as they were */ } return w && w.onMicChange ? w.onMicChange(ev) : undefined; } }); }, stop: () => vc.vad.stop(),
       setPlaybackActive: (on, now) => vc.vad.setPlaybackActive(on, now), reopen: () => vc.vad.reopen(), info: () => vc.vad.info(), setMuted: (on) => vc.vad.setMuted(on), endPiece: () => vc.vad.endPiece() },
     stt: (f32) => voiceCallStt(agent, f32),
     isTurnRunning: () => isBusy(agent) || ownTurnFor(agent),
@@ -9119,12 +9194,12 @@ function voiceCallDeps(vc) {
     server: voiceCallServer(agent, () => vc),
     ...(vc.keepAlive ? { keepAlive: vc.keepAlive } : {}),   // the controller starts it with the call and stops it with the call
     ui: {
-      mic: (info) => { if (voiceCall !== vc) return; vc.micInfo = info || null; if (info && typeof info.label === 'string') voiceLastMicLabel = info.label; try { voiceLoudSync(); } catch { /* the next sentence syncs it */ } try { if (vc.keepAlive && vc.keepAlive.refresh) vc.keepAlive.refresh(); } catch { /* not playing */ } const m = $('cp-mic'); if (m && !vc.micLostOn) m.textContent = voiceMicLine(info); },   // while it is lost the line keeps saying so
+      mic: (info) => { if (voiceCall !== vc) return; vc.micInfo = info || null; if (info && typeof info.label === 'string') voiceLastMicLabel = info.label; try { voiceLoudSync(); } catch { /* the next sentence syncs it */ } try { if (vc.keepAlive && vc.keepAlive.refresh) vc.keepAlive.refresh(); } catch { /* not playing */ } const m = $('cp-mic'); if (m && !vc.micLostOn) m.textContent = voiceMicLine(info, vc.route && info && vc.route.deviceId === info.deviceId ? vc.route : null); },   // while it is lost the line keeps saying so
       micLost: (on) => {   // the call goes on; the line says the microphone is lost, the meter is empty and a tap tries it again
         if (voiceCall !== vc) return;
         vc.micLostOn = !!on;
         const b = $('cp-retry-mic'); if (b) b.hidden = !on;
-        const m = $('cp-mic'); if (m) { m.textContent = on ? 'Microphone lost' : (vc.micInfo ? voiceMicLine(vc.micInfo) : ''); m.classList.toggle('cp-mic-lost', !!on); }
+        const m = $('cp-mic'); if (m) { m.textContent = on ? 'Microphone lost' : (vc.micInfo ? voiceMicLine(vc.micInfo, vc.route && vc.route.deviceId === vc.micInfo.deviceId ? vc.route : null) : ''); m.classList.toggle('cp-mic-lost', !!on); }
         if (on) voiceCallPaintMeter(-Infinity);
         if (typeof voiceDisplayHook === 'function') voiceDisplayHook('micLost', !!on);
       },
@@ -9229,7 +9304,7 @@ function voiceCallStart() {
   const prefs = voiceEffNow(agent);   // this agent's voice defaults for any setting the person has not set on this device
   voiceEndedBar(false); voiceCallBgNote = false;   // a new call: the "call ended" bar goes away
   const vc = { agent, call: null, vad: null, callTurns: new Set(), hubTurns: new Map(), asks: new Map(), lastText: '', sendSeq: 0, expecting: false, wake: null, startedAt: Date.now(), lastFrame: Date.now(), lastTick: Date.now(), beatTimer: null, thinkSnd: null, thinkCtx: null, thinkOn: false };
-  vc.vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: prefs.micLevel, interruptSensitivity: prefs.interruptSensitivity, endPause: prefs.endPause, echoHoldMs: prefs.echoHold, strictTalkOver: voiceIsIOS() });
+  vc.vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: prefs.micLevel, interruptSensitivity: prefs.interruptSensitivity, endPause: prefs.endPause, echoHoldMs: prefs.echoHold, strictTalkOver: voiceIsIOS(), micChoice: voiceMicChoiceId });
   voiceThinkingCtxMake(vc);   // iOS: the thinking sound's AudioContext is made and resumed inside this tap, before any await
   if (vc.thinkCtx && typeof voiceCreateKeepAlive === 'function') vc.keepAlive = voiceCreateKeepAlive({ ctx: vc.thinkCtx, allow: voiceKeepAliveAllowed });   // the Bluetooth / car route stays awake; the controller starts it, it sounds only while allowed
   if (voiceIsIOS()) {   // iPhone: no looping focus element (the page cannot pause other apps); the person is told to pause music
@@ -9244,7 +9319,7 @@ function voiceCallStart() {
   vc.call = voiceCreateCall(voiceCallDeps(vc));
   voiceCall = vc;
   if (typeof voiceLinkMake === 'function') voiceLinkMake(vc);   // is the server still there? a lost connection ends the call
-  try { window.__voiceBt = { keepAliveRunning: () => !!(vc.keepAlive && vc.keepAlive.running), micInfo: () => vc.micInfo || null, micLost: () => !!vc.micLostOn, echoHold: () => voicePrefsNow().echoHold }; } catch { /* a test hook only */ }
+  try { window.__voiceBt = { keepAliveRunning: () => !!(vc.keepAlive && vc.keepAlive.running), micInfo: () => vc.micInfo || null, micLost: () => !!vc.micLostOn, echoHold: () => voicePrefsNow().echoHold, outputsRenewed: () => vc.outputsRenewed || 0 }; } catch { /* a test hook only */ }
   voiceMediaSession(vc, true);   // Android Chrome: a playing media session is what lets a call go on while the page is hidden
   vc.beatTimer = setInterval(voiceCallBeat, 1000);
   if (vc.link) vc.link.start();
@@ -9343,6 +9418,7 @@ const voiceRoom = { running: false, handle: null, tick: null, guard: voiceMicGua
 // The Room check can be run from the chat's voice panel or from the Voice sheet: whichever is open shows its progress.
 function voiceRoomRoot() { const p = $('voice-panel'); return p && !p.hidden ? p : $('voice-sheet'); }
 function voiceRoomStop() {
+  voiceRouteStop();   // a Sound route test lets go too
   voiceCarStop();   // wherever a Room check lets go of the mic (sheet or panel closed, call started, page hidden), a Car or Bluetooth check does too
   voiceRoom.guard.cancel();
   clearInterval(voiceRoom.tick); voiceRoom.tick = null;
@@ -9355,7 +9431,7 @@ async function voiceRoomRun() {
   const sh = voiceRoomRoot(); if (!sh || voiceRoom.running) return;
   const out = sh.querySelector('.vs-room-out'), btn = sh.querySelector('.vs-room'), meter = sh.querySelector('.vs-meter i');
   if (voiceCall) { toast('Hang up first: the call is using the microphone'); return; }
-  if (voiceRec.state !== 'idle' || voiceRec.guard.pending || voiceTest.guard.pending || voiceTest.handle || voiceCar.running) { toast('The mic is already in use'); return; }
+  if (voiceRec.state !== 'idle' || voiceRec.guard.pending || voiceTest.guard.pending || voiceTest.handle || voiceCar.running || voiceRoute.busy) { toast('The mic is already in use'); return; }
   voiceStopPlayback();
   const start = voicePrefsNow();
   const speech = [], quiet = [];
@@ -9441,7 +9517,7 @@ async function voiceCarRun() {
   const out = sh.querySelector('.vs-car-out'), btn = sh.querySelector('.vs-car');
   if (!out || !btn) return;
   if (voiceCall) { toast('Hang up first: the call is using the microphone'); return; }
-  if (voiceRec.state !== 'idle' || voiceRec.guard.pending || voiceTest.guard.pending || voiceTest.handle || voiceRoom.running) { toast('The mic is already in use'); return; }
+  if (voiceRec.state !== 'idle' || voiceRec.guard.pending || voiceTest.guard.pending || voiceTest.handle || voiceRoom.running || voiceRoute.busy) { toast('The mic is already in use'); return; }
   voiceStopPlayback();
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) { toast('This browser cannot use the microphone here (it needs https)', 4500); return; }
@@ -9478,6 +9554,117 @@ async function voiceCarRun() {
   } catch (e) { out.textContent = ''; toast(voiceErr(e), 4500); }
 }
 
+// ── Sound route: which microphone the call uses (on Android the call's sound follows it) ──
+const VOICE_ROUTE_NEARBY = 'No car or Bluetooth microphone is visible to the browser. If one is connected: Android Settings → Apps → Chrome → Permissions → Nearby devices → Allow, then start the call again.';
+const VOICE_ROUTE_FOLLOWS = 'On Android the call\'s sound follows the microphone chosen here.';
+const VOICE_ROUTE_HEARD = 'Where did you hear it? In the car: calls will be heard there too. On the phone: choose the car above, or check Nearby devices.';
+const voiceRoute = { busy: false, ctx: null, stream: null, gen: 0, last: null };
+function voiceRouteHtml() {
+  return '<div class="vs-route">' +
+    '<div class="vs-row"><span>Sound route</span></div>' +
+    '<button type="button" class="vs-btn vs-route-list">Sound devices</button>' +
+    '<div class="vs-route-rows"></div>' +
+    '<p class="vs-hint vs-route-nearby" hidden>' + VOICE_ROUTE_NEARBY + '</p>' +
+    '<p class="vs-hint">' + VOICE_ROUTE_FOLLOWS.replace(/'/g, '&#39;') + '</p>' +
+    '<button type="button" class="vs-btn vs-route-test">Test sound</button>' +
+    '<div class="vs-route-out" role="status" aria-live="polite"></div></div>';
+}
+function voiceRouteInUse() { return voiceRec.state !== 'idle' || voiceRec.guard.pending || voiceTest.guard.pending || voiceTest.handle || voiceRoom.running || voiceCar.running || voiceRoute.busy; }
+function voiceRouteStopTracks(stream) { try { if (stream) for (const t of stream.getTracks()) { try { t.stop(); } catch { /* stopped */ } } } catch { /* no tracks */ } }
+function voiceRouteStop() {   // the sheet or panel closed, a call started, the page was hidden: let go of the microphone and the context
+  voiceRoute.gen++;
+  const c = voiceRoute.ctx, st = voiceRoute.stream; voiceRoute.ctx = null; voiceRoute.stream = null;
+  voiceRouteStopTracks(st);
+  if (c) { try { Promise.resolve(c.close()).catch(() => {}); } catch { /* closed */ } }
+  voiceRoute.busy = false;
+}
+// The microphones the browser offers: during a call the call's own list; otherwise enumerateDevices (the labels are empty before the microphone permission,
+// so the microphone is opened once with processing, the list read again and every track stopped at once).
+async function voiceRouteDevices() {
+  if (voiceCall && voiceCall.vad && typeof voiceCall.vad.routes === 'function') return voiceCall.vad.routes();
+  const md = navigator.mediaDevices;
+  if (!md || typeof md.enumerateDevices !== 'function') return voiceAudioRoutes([], null);
+  let list = await md.enumerateDevices();
+  const noLabels = (l) => !(l || []).some((d) => d && d.kind === 'audioinput' && d.label);
+  if (noLabels(list)) {
+    let r = null;
+    try { r = await voiceOpenMicStream(navigator); } finally { if (r) voiceRouteStopTracks(r.stream); }
+    list = await md.enumerateDevices();
+  }
+  return voiceAudioRoutes(list, null);
+}
+function voiceRoutePaint(root, routes) {
+  const rows = root.querySelector('.vs-route-rows'), note = root.querySelector('.vs-route-nearby');
+  if (!rows) return;
+  voiceRoute.last = routes;
+  const chosen = voiceMicChoiceId();
+  while (rows.firstChild) rows.removeChild(rows.firstChild);
+  const add = (id, label, marks, use) => {
+    const row = document.createElement('div'); row.className = 'vs-route-row';
+    const t = document.createElement('span'); t.textContent = label + marks; row.appendChild(t);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'vs-btn vs-route-use'; b.textContent = use; b.dataset.id = id || ''; b.dataset.label = label; row.appendChild(b);
+    rows.appendChild(row);
+  };
+  add('', 'Automatic (car or Bluetooth first)', chosen ? '' : ' · chosen', 'Use');
+  const inputs = ((routes && routes.inputs) || []).filter((e) => e && !e.pseudo);
+  for (const e of inputs) add(e.id, e.label || 'Microphone', (e.inUse ? ' · in use' : '') + (e.bluetooth ? ' · Bluetooth' : '') + (chosen && e.id === chosen ? ' · chosen' : ''), 'Use');
+  if (note) note.hidden = inputs.some((e) => e.bluetooth);
+}
+async function voiceRouteList(root) {
+  if (!root || voiceRoute.busy) return;
+  if (!voiceCall && voiceRouteInUse()) { toast('The mic is already in use'); return; }
+  const btn = root.querySelector('.vs-route-list'), out = root.querySelector('.vs-route-out');
+  voiceRoute.busy = true; if (btn) btn.disabled = true;
+  const my = ++voiceRoute.gen;
+  try {
+    const routes = await voiceRouteDevices();
+    if (voiceRoute.gen === my) voiceRoutePaint(root, routes);
+  } catch (e) { if (out) out.textContent = ''; toast(voiceErr(e), 4500); }
+  finally { if (voiceRoute.gen === my) voiceRoute.busy = false; if (btn) btn.disabled = false; }
+}
+async function voiceRouteUse(root, id, label) {
+  voicePrefsSave({ micDevice: id ? { id, label: String(label || '') } : null });
+  if (voiceCall && voiceCall.vad && typeof voiceCall.vad.useMic === 'function') { try { await Promise.resolve(voiceCall.vad.useMic(id || null)); } catch { /* the call keeps its microphone */ } }
+  if (voiceCall) { voiceRoute.busy = false; await voiceRouteList(root); }
+  else voiceRoutePaint(root, voiceRoute.last);
+}
+async function voiceRouteTest(root) {
+  if (!root || voiceRoute.busy) return;
+  if (voiceCall) { toast('Hang up first: the call is using the microphone'); return; }
+  if (voiceRouteInUse()) { toast('The mic is already in use'); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { toast('This browser cannot use the microphone here (it needs https)', 4500); return; }
+  const btn = root.querySelector('.vs-route-test'), out = root.querySelector('.vs-route-out');
+  voiceStopPlayback();
+  voiceRoute.busy = true; if (btn) btn.disabled = true; if (out) out.textContent = 'Playing two short beeps…';
+  const my = ++voiceRoute.gen;
+  try {
+    const id = voiceMicChoiceId();
+    const r = await voiceOpenMicStream(navigator, { deviceId: id || undefined });   // the microphone first: the call route is the one the beeps use
+    if (voiceRoute.gen !== my) { voiceRouteStopTracks(r.stream); return; }
+    voiceRoute.stream = r.stream;
+    const ctx = new AC(); voiceRoute.ctx = ctx;
+    await voiceResumeCapped(ctx, 1000);
+    if (voiceRoute.gen !== my) return;
+    const t0 = ctx.currentTime + 0.05, g = ctx.createGain(); g.gain.value = Math.pow(10, -12 / 20); g.connect(ctx.destination);
+    [440, 660].forEach((hz, i) => { const o = ctx.createOscillator(); o.frequency.value = hz; o.connect(g); o.start(t0 + i * 0.25); o.stop(t0 + i * 0.25 + 0.25); });
+    await new Promise((res) => setTimeout(res, 750));
+    if (voiceRoute.gen !== my) return;
+    if (out) out.textContent = VOICE_ROUTE_HEARD;
+  } catch (e) { if (voiceRoute.gen === my) { if (out) out.textContent = ''; toast(voiceErr(e), 4500); } }
+  finally { if (voiceRoute.gen === my) { voiceRouteStop(); if (btn) btn.disabled = false; } }
+}
+function voiceRouteWire(root) {
+  if (!root || root.__voiceRouteWired) return;
+  root.__voiceRouteWired = true;
+  root.addEventListener('click', (e) => {
+    const t = e.target && e.target.closest ? e.target : null; if (!t) return;
+    const use = t.closest('.vs-route-use'); if (use) { voiceRouteUse(root, use.dataset.id || '', use.dataset.label || ''); return; }
+    if (t.closest('.vs-route-list')) { voiceRouteList(root); return; }
+    if (t.closest('.vs-route-test')) voiceRouteTest(root);
+  });
+}
+
 // ── Leaving the app (round 2, item 8) ──
 // iPhone/iPad (every browser there is WebKit) suspend a hidden page, so the call is released the moment the page is
 // hidden. Android Chrome can keep a call going while hidden when Media Session is there (the call holds the mic and
@@ -9509,6 +9696,7 @@ function voiceCallBeat() {   // once a second while a call is up: a gap of 10 s 
   const gap = now - (vc.lastTick || now);
   if (gap > VOICE_STALL_MS && voiceCallStalled({ lastFrame: vc.lastFrame, lastTick: 0 }, now)) { voiceCallRelease('stall'); if (!document.hidden) voiceEndedBar(true); return; }
   vc.lastTick = now;
+  if (vc.renewPending) voiceCallOutputsRenew(vc);   // the outputs are made again as soon as no sentence plays
 }
 // Immediate hang-up without waiting for the hub: everything is let go and the person is told when they are back.
 function voiceCallRelease(reason) {
@@ -9618,6 +9806,7 @@ function voiceSheet() {
     '<p class="vs-hint">' + VOICE_KEEPALIVE_HINT + '</p>' +
     '<button type="button" class="vs-btn vs-car">Car or Bluetooth check</button>' +
     '<div class="vs-car-out" role="status" aria-live="polite"></div>' +
+    voiceRouteHtml() +
     '<label class="vs-check"><input type="checkbox" class="vs-read"> <span>Read replies aloud</span></label>' +
     '<p class="vs-hint">After a message you dictated with the mic, the reply is read when it ends. The speaker on a reply reads it any time.</p>' +
     '<label class="vs-check"><input type="checkbox" class="vs-activity"> <span>Say what the agent is doing</span></label>' +
@@ -9648,6 +9837,7 @@ function voiceSheet() {
   for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { voicePrefsSave({ mode: e.target.value }); voiceMicPaint(); paintVoiceSheet(); } });
   sh.querySelector('.vs-room').addEventListener('click', voiceRoomRun);
   sh.querySelector('.vs-car').addEventListener('click', voiceCarRun);
+  voiceRouteWire(sh);
   const echo = sh.querySelector('.vs-echo');
   echo.addEventListener('change', () => { voicePrefsSave({ echoHold: Number(echo.value) }); voiceCallApplyPrefs(); voicePanelPaint(); });   // a call that is up takes it at once
   sh.querySelector('.vs-keepalive').addEventListener('change', (e) => { voicePrefsSave({ keepAlive: !!e.target.checked }); voiceCallApplyPrefs(); voicePanelPaint(); });
@@ -9897,6 +10087,7 @@ function voicePanelWire() {
   $('vp-echo')?.addEventListener('change', () => save({ echoHold: Number(echo.value) }));   // save() reaches a call that is up (voiceCallApplyPrefs)
   $('vp-keepalive')?.addEventListener('change', (e) => save({ keepAlive: !!e.target.checked }));
   $('vp-car')?.addEventListener('click', voiceCarRun);
+  { const slot = $('vp-route'); if (slot) { slot.innerHTML = voiceRouteHtml(); voiceRouteWire(slot); } }
   const wq = $('vp-wake-quiet');
   if (wq) wq.innerHTML = VOICE_WAKE_QUIET_MS.map((ms) => '<option value="' + ms + '">' + ms / 1000 + ' s</option>').join('');
   for (const id of ['vp-wake', 'vp-wake-phrase', 'vp-wake-quiet']) $(id)?.addEventListener('change', () => voiceWakeSave());
