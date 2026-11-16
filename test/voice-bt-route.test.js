@@ -317,3 +317,12 @@ test('display.renewContext: without needsContext it does nothing and returns fal
   assert.strictEqual(d.renewContext({ state: 'running' }), false);
   assert.strictEqual(shared.ctx, keep); assert.strictEqual(shared.routes, keepRoutes); assert.strictEqual(shared.routed, 2); assert.strictEqual(lost, 0);
 });
+
+test('voiceCleanPrefs: micDevice { id, label } is kept; a missing, empty or malformed one means automatic (no key)', () => {
+  const V = require('../lib/ui-voice');
+  assert.deepStrictEqual(V.voiceCleanPrefs({ micDevice: { id: 'bt-1', label: 'Bluetooth headset' } }).micDevice, { id: 'bt-1', label: 'Bluetooth headset' });
+  assert.deepStrictEqual(V.voiceCleanPrefs({ micDevice: { id: 'x' } }).micDevice, { id: 'x', label: '' });
+  for (const bad of [null, undefined, 'bt', [], {}, { id: '' }, { id: 5 }, { id: 'a'.repeat(513) }]) assert.ok(!('micDevice' in V.voiceCleanPrefs({ micDevice: bad })), JSON.stringify(bad));
+  assert.ok(!('micDevice' in V.voiceCleanPrefs(null)));
+  assert.strictEqual(V.voiceCleanPrefs({ micDevice: { id: 'y', label: 'L'.repeat(300) } }).micDevice.label.length, 120);
+});
