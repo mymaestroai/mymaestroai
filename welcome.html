@@ -539,7 +539,7 @@
     busy('claude-msg', note || 'Asking Claude a one-word question… this can take up to a minute the first time.');
     const res = await api('POST', '/api/welcome/claude-check', {});
     claudeBusy = false; $('claude-check').disabled = false;
-    if (res.body && res.body.ok) { claudeOk = true; say('claude-msg', '✓ Claude is connected through your subscription.', 'ok'); aiReady(res.body.model || 'claude-sdk/default'); }
+    if (res.body && res.body.ok) { claudeOk = true; say('claude-msg', '✓ Claude is connected through your subscription.', 'ok'); aiReady(offerModels('claude', 'Claude (subscription)', res.body.models || [res.body.model || 'claude-sdk/default'], res.body.suggested || res.body.model || 'claude-sdk/default')); }
     else say('claude-msg', adviceText(res, 'Claude did not answer.'), res.body && res.body.state === 'limit' ? 'warn' : 'err', res.body && res.body.detail);
   }
   $('claude-check').addEventListener('click', () => claudeCheck());
@@ -550,7 +550,7 @@
     busy('chatgpt-msg', note || 'Asking ChatGPT a one-word question… this can take up to a minute the first time.');
     const res = await api('POST', '/api/welcome/chatgpt-check', {});
     chatgptBusy = false; $('chatgpt-check').disabled = false;
-    if (res.body && res.body.ok) { chatgptOk = true; say('chatgpt-msg', '✓ ChatGPT is connected through your subscription.', 'ok'); fillModels(res.body.models, res.body.suggested); aiReady(res.body.suggested); }
+    if (res.body && res.body.ok) { chatgptOk = true; say('chatgpt-msg', '✓ ChatGPT is connected through your subscription.', 'ok'); aiReady(offerModels('chatgpt', 'ChatGPT (subscription)', res.body.models, res.body.suggested)); }
     else say('chatgpt-msg', adviceText(res, 'ChatGPT did not answer.'), res.body && res.body.state === 'limit' ? 'warn' : 'err', res.body && res.body.detail);
   }
   $('chatgpt-check').addEventListener('click', () => chatgptCheck());
@@ -570,7 +570,7 @@
     $('k-go').disabled = true; busy('key-msg', 'Checking the key…');
     const res = await api('POST', '/api/welcome/api-key', { provider: $('k-provider').value, apiKey: $('k-key').value });
     $('k-go').disabled = false;
-    if (res.body && res.body.ok) { $('k-key').value = ''; say('key-msg', `✓ ${res.body.label} is connected: ${res.body.models.length} models available.`, 'ok'); fillModels(res.body.models, res.body.suggested); aiReady(res.body.suggested); }
+    if (res.body && res.body.ok) { $('k-key').value = ''; say('key-msg', `✓ ${res.body.label} is connected: ${res.body.models.length} models available.`, 'ok'); aiReady(offerModels('key:' + (res.body.provider || ''), `${res.body.label} (API key)`, res.body.models, res.body.suggested)); }
     else say('key-msg', adviceText(res, 'The key did not work.'), 'err', res.body && res.body.detail);
   });
   $('local-find').addEventListener('click', async () => {
@@ -592,15 +592,39 @@
     use.addEventListener('click', async () => {
       const r = document.querySelector('input[name=local]:checked'); if (!r) return;
       const res2 = await api('POST', '/api/welcome/local', { provider: r.dataset.provider, url: r.dataset.url });
-      if (res2.body && res2.body.ok) { say('local-msg', `✓ ${r.value.split('/').slice(1).join('/')} is connected.`, 'ok'); fillModels([...document.querySelectorAll('input[name=local]')].map(x => x.value), r.value); aiReady(r.value); }
+      if (res2.body && res2.body.ok) { say('local-msg', `✓ ${r.value.split('/').slice(1).join('/')} is connected.`, 'ok'); aiReady(offerModels('local', 'This computer', [...document.querySelectorAll('input[name=local]')].map(x => x.value), r.value)); }
       else say('local-msg', errText(res2, 'Could not use that engine.'));
     });
     $('engines').appendChild(use);
   });
-  function fillModels(models, selected) {
+  // <models-select>
+  // Every connected provider's models, one group each; Claude (the recommended lead model) keeps the default once connected.
+  let manualPick = '';         // the model the person chose in #m-model themselves
+  const offered = new Map();   // 'claude' | 'chatgpt' | 'key:<provider>' | 'local' -> { label, models, selected }
+  function offerModels(source, label, models, selected) {
+    offered.set(source, { label, models: [...new Set(models.filter(Boolean))], selected });
+    // An explicit choice in the select wins while some source still offers it; otherwise Claude's suggestion, else the latest source's.
+    const stillOffered = manualPick && [...offered.values()].some(g => g.models.includes(manualPick));
+    const pick = stillOffered ? manualPick : offered.has('claude') ? offered.get('claude').selected : selected;
     const sel = $('m-model'); sel.replaceChildren();
-    for (const m of models) { const o = document.createElement('option'); o.value = m; o.textContent = m; if (m === selected) o.selected = true; sel.appendChild(o); }
+    const seen = new Set();
+    for (const key of ['claude', ...[...offered.keys()].filter(k => k !== 'claude')]) {
+      const g = offered.get(key); if (!g) continue;
+      const group = document.createElement('optgroup'); group.label = g.label;
+      for (const m of g.models) {
+        if (seen.has(m)) continue; seen.add(m);
+        const o = document.createElement('option'); o.value = m; o.textContent = m; if (m === pick) o.selected = true; group.appendChild(o);
+      }
+      if (group.children.length) sel.appendChild(group);
+    }
+    return pick;
   }
+  $('m-model').addEventListener('change', () => { const v = $('m-model').value; manualPick = v; chosenModel = v; });
+  function addModelOnTop(model) {
+    const sel = $('m-model'); const o = document.createElement('option'); o.value = model; o.textContent = model; o.selected = true;
+    sel.insertBefore(o, sel.firstChild);
+  }
+  // </models-select>
   $('ai-go').addEventListener('click', () => startMeet());
   $('m-change').addEventListener('click', () => startAi());
 
@@ -610,9 +634,8 @@
     const lead = (state && state.lead) || { name: 'maestro', display: 'Maestro', model: 'claude-sdk/default' };
     document.querySelectorAll('.lead-name').forEach(s => { s.textContent = lead.display || lead.name; });
     const sel = $('m-model');
-    if (!sel.options.length) fillModels([chosenModel || lead.model].filter(Boolean), chosenModel || lead.model);
-    if (chosenModel && ![...sel.options].some(o => o.value === chosenModel)) fillModels([chosenModel, ...[...sel.options].map(o => o.value)], chosenModel);
-    if (!chosenModel && lead.model && ![...sel.options].some(o => o.value === lead.model)) fillModels([lead.model], lead.model);
+    const want = chosenModel || lead.model;
+    if (want && ![...sel.options].some(o => o.value === want)) addModelOnTop(want);
     show('s-meet', 3);
   }
   $('hello').addEventListener('click', async () => {
