@@ -15,12 +15,45 @@ const { createRemote, TOOLS, APPROVE_HUB_TIMEOUT_MS } = require('../modules/remo
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'rc-tools-'));
 const flush = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r)); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
-const decodeLine = (line) => {
-  const m = /^iex \(\[Text\.Encoding\]::Unicode\.GetString\(\[Convert\]::FromBase64String\('([A-Za-z0-9+/=]+)'\)\)\)$/.exec(line);
-  assert.ok(m, 'a single iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(...))) line');
-  assert.ok(line.length <= 60000 && !/[\r\n]/.test(line));
-  return Buffer.from(m[1], 'base64').toString('utf16le');
+// A line sent to a Windows computer: ONE line of plain PowerShell. Nothing in it is decoded or evaluated by iex, and nothing is encoded for the command line.
+const FORBIDDEN = [/\biex\b/i, /Invoke-Expression/i, /FromBase64String/, /EncodedCommand|\s-enc\b/i, /[\r\n]/];
+const plain = (line) => {
+  assert.strictEqual(typeof line, 'string');
+  assert.ok(line.length > 0 && line.length <= 60000, `line length ${line.length}`);
+  for (const re of FORBIDDEN) assert.doesNotMatch(line, re);
+  if (!/MMSHOT/.test(line)) assert.doesNotMatch(line, /ToBase64String/);
+  return line;
 };
+// Evaluates psLiteral's grammar and nothing else: ('' then +'...' (with '' for a quote) or +[char]0xHHHH, then ). The whole string has to be consumed.
+const evalLiteral = (src) => {
+  let i = 0;
+  const bad = (why) => { throw new Error(`not a psLiteral (${why}) at ${i}: ${src.slice(0, 60)}`); };
+  if (!src.startsWith("(''")) bad('start');
+  i = 3;
+  let out = '';
+  while (i < src.length && src[i] !== ')') {
+    if (src[i] !== '+') bad('plus');
+    i++;
+    if (src[i] === "'") {
+      i++;
+      for (;;) {
+        if (i >= src.length) bad('unterminated');
+        if (src[i] === "'") { if (src[i + 1] === "'") { out += "'"; i += 2; continue; } i++; break; }
+        const c = src.charCodeAt(i);
+        if (c < 0x20 || c > 0x7e) bad('not printable ASCII');
+        out += src[i++];
+      }
+    } else {
+      const m = /^\[char\]0x([0-9A-F]{4})/.exec(src.slice(i));
+      if (!m) bad('char');
+      out += String.fromCharCode(parseInt(m[1], 16));
+      i += m[0].length;
+    }
+  }
+  if (src[i] !== ')' || i !== src.length - 1) bad('end');
+  return out;
+};
+const MALICIOUS = 'At line:1 char:1\r\n+ iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(\' ...\r\nThis script contains malicious content and has been blocked by your antivirus software.\r\n    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException\r\n    + FullyQualifiedErrorId : ScriptContainedMaliciousContent';
 const rejects = async (p, code, re) => {
   try { await p; } catch (e) {
     if (code) assert.strictEqual(e.code, code, e.message);
@@ -274,44 +307,110 @@ test('gate: a toast that fails is logged and never stops the work; a question th
 });
 
 // ── windows.js ───────────────────────────────────────────────────────────────────────────────────
-test('windows: encodePs makes ONE iex line (runcommands type 2) that decodes to the script, and refuses a line over 60000 characters', () => {
-  const script = 'Write-Output "h\u00e9llo \u2603"';
-  const line = win.encodePs(script);
-  assert.ok(line.startsWith('iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(\''));
-  assert.ok(line.endsWith('\')))'));
-  assert.doesNotMatch(line, /[\r\n]/);
-  assert.doesNotMatch(line, /powershell\.exe|EncodedCommand/, 'no second process and no command-line option');
-  assert.strictEqual(decodeLine(line), script);
+test('windows: plainLine returns the one-line script unchanged and refuses empty, a line break and a line over 60000 characters', () => {
+  const line = 'Write-Output "héllo ☃"';
+  assert.strictEqual(win.plainLine(line), line);
+  assert.strictEqual(win.encodePs, undefined, 'encodePs is gone');
   assert.strictEqual(win.MAX_LINE, 60000);
-  // 60000 characters of line: the base64 of the UTF-16LE script is 8/3 characters per script character, plus the 70 of the wrapper.
-  const fits = 'x'.repeat(22400), tooLong = 'x'.repeat(22500);
-  assert.ok(win.encodePs(fits).length <= 60000);
-  const e = assert.throws(() => win.encodePs(tooLong), (err) => err.code === 'ETOOLONG');
-  assert.strictEqual(e, undefined);
-  assert.throws(() => win.encodePs(''), win.WindowsError);
-  assert.doesNotThrow(() => win.encodePs('a'.repeat(9000)));
+  assert.strictEqual(win.plainLine('a'.repeat(60000)).length, 60000);
+  assert.throws(() => win.plainLine('a'.repeat(60001)), (err) => err instanceof win.WindowsError && err.code === 'ETOOLONG' && err.message === 'That is too long to send in one command.');
+  for (const bad of ['', null, undefined, 5]) assert.throws(() => win.plainLine(bad), (err) => err instanceof win.WindowsError && err.message === 'A script is needed.');
+  for (const bad of ['a\nb', 'a\r\nb', 'a\rb']) assert.throws(() => win.plainLine(bad), (err) => err.code === 'EBADARG' && err.message === 'A script line must not contain a line break.');
+});
+
+test('windows: psLiteral builds string concatenation from printable ASCII runs and [char] pieces; the grammar evaluator reads back every string', () => {
+  assert.strictEqual(win.psLiteral("it's\n"), "(''+'it''s'+[char]0x000A)");
+  assert.strictEqual(win.psLiteral(''), "('')");
+  assert.strictEqual(win.psLiteral('abc'), "(''+'abc')");
+  assert.strictEqual(win.psLiteral('‘'), "(''+[char]0x2018)");
+  const cases = ['', "it's", '‘a’ ‚b‛', '$(Remove-Item x)', '`n', '#c', 'a\nb\r\nc\t', '\u0000', '\u{1F600}', '\ud800', "'", "''", "'''", '"', '\u007f', ' '];
+  for (const c of cases) assert.strictEqual(evalLiteral(win.psLiteral(c)), c, JSON.stringify(c));
+  // Curly quotes never appear raw: PowerShell would read them as single quotes.
+  assert.doesNotMatch(win.psLiteral('‘’‚‛'), /[^\x20-\x7e]/);
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed >>> 4; };
+  for (let n = 0; n < 300; n++) {
+    let str = '';
+    const len = rnd() % 40;
+    for (let k = 0; k < len; k++) str += String.fromCharCode(rnd() % 3 === 0 ? 0x20 + (rnd() % 95) : rnd() % 0x10000);
+    const lit = win.psLiteral(str);
+    assert.doesNotMatch(lit, /[^\x20-\x7e]/, 'the literal itself is printable ASCII');
+    assert.strictEqual(evalLiteral(lit), str);   // consuming the WHOLE string means no stray quote could have ended it early
+  }
+  // The evaluator is strict.
+  for (const bad of ["('' + 'a')", "(''+'a'+'b)", "(''+'a')x", "(''+$x)", "(''+[char]0x41)", "(''+'a''')'", "(''+'a'); calc", "('')+('')"]) assert.throws(() => evalLiteral(bad), /not a psLiteral/, bad);
+});
+
+test('windows: runLine dot-sources the command as a literal script block; no iex; refuses over 60000 characters', () => {
+  const line = win.runLine('Get-Date -Format "o"; "it\'s $x"');
+  plain(line);
+  assert.ok(line.startsWith("$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; . ([scriptblock]::Create("));
+  const m = /\. \(\[scriptblock\]::Create\((.*)\)\)$/.exec(line);
+  assert.ok(m, 'ends with . ([scriptblock]::Create(<literal>))');
+  assert.strictEqual(evalLiteral(m[1]), 'Get-Date -Format "o"; "it\'s $x"');
+  const multi = 'a\r\nb\n\tc ☃';
+  assert.strictEqual(evalLiteral(/Create\((.*)\)\)$/.exec(win.runLine(multi))[1]), multi);
+  assert.ok(win.runLine('x'.repeat(8000)).length <= 60000);
+  assert.throws(() => win.runLine('☃'.repeat(5000)), (err) => err.code === 'ETOOLONG');
+});
+
+test('windows: blockedByAntivirus spots Defender\'s refusal and nothing else', () => {
+  assert.strictEqual(win.blockedByAntivirus(MALICIOUS), true);
+  assert.strictEqual(win.blockedByAntivirus('x ScriptContainedMaliciousContent'), true);
+  assert.strictEqual(win.blockedByAntivirus('It CONTAINS MALICIOUS CONTENT and has been blocked by your antivirus software'), true);
+  for (const ok of ['hello', 'MMOK\r\n', '', null, undefined, 'Access is denied.']) assert.strictEqual(win.blockedByAntivirus(ok), false, String(ok));
+  // strict (run): only PowerShell's error record counts, so a command that prints the message (reading Defender's logs) keeps its output.
+  assert.strictEqual(win.blockedByAntivirus(MALICIOUS, { strict: true }), true);
+  for (const quoted of ['x ScriptContainedMaliciousContent', 'Message: This script contains malicious content and has been blocked by your antivirus software.', 'Id : ScriptContainedMaliciousContent'])
+    assert.strictEqual(win.blockedByAntivirus(quoted, { strict: true }), false, quoted);
+});
+
+test('windows: every line is printable ASCII only, so the console code page cannot change it', () => {
+  const S = { screenWidth: 1920, screenHeight: 1080 };
+  const odd = String.fromCharCode(0x63, 0x61, 0x66, 0xe9, 0x20, 0x2018, 0x71, 0x2019, 0x20, 0xd83d, 0xde00, 0x20, 0x00, 0x20, 0xa0, 0x20, 0x2028, 0x20, 0x200b, 0x20, 0xfeff, 0x20, 0x74, 0x09, 0x6e, 0x0a);
+  const lines = [win.screenshotScript({}), win.clickScript({ x: 1, y: 2, ...S }), win.typeScript({ text: odd }), win.keyScript({ keys: 'win+r' }), win.scrollScript({ amount: -1 }), win.runLine(odd)];
+  for (const line of lines) assert.match(line, /^[\x20-\x7e]+$/);
 });
 
 test('windows: the longest text the type tool takes (2000 characters) and the longest run command (8000) fit on the line, with room to spare (measured)', () => {
-  const typed = win.encodePs(win.typeScript({ text: 'a'.repeat(2000) }));
-  const typedNl = win.encodePs(win.typeScript({ text: 'line\n'.repeat(400) }));
-  const typedWide = win.encodePs(win.typeScript({ text: '\u2603'.repeat(2000) }));
-  const run = win.encodePs('$ProgressPreference = \'SilentlyContinue\'\n[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n' + '\u2603'.repeat(8000));
-  for (const [name, line] of Object.entries({ typed, typedNl, typedWide, run })) {
+  const typed = win.plainLine(win.typeScript({ text: 'a'.repeat(2000) }));
+  const typedNl = win.plainLine(win.typeScript({ text: 'line\n'.repeat(400) }));
+  const typedWide = win.plainLine(win.typeScript({ text: '☃'.repeat(2000) }));
+  const typedEmoji = win.plainLine(win.typeScript({ text: '\u{1F600}'.repeat(1000) }));
+  const run = win.runLine('x'.repeat(8000));
+  for (const [name, line] of Object.entries({ typed, typedNl, typedWide, typedEmoji, run })) {
     assert.ok(line.length < 60000, `${name}: ${line.length}`);
     assert.doesNotMatch(line, /[\r\n]/);
   }
-  assert.ok(typed.length < 30000, `type of 2000 characters is ${typed.length} characters on the line`);
-  assert.ok(run.length < 30000, `run of 8000 characters is ${run.length} characters on the line`);
-  // The old cmd.exe route would have broken the 8191-character limit with the same type text.
-  assert.ok(typed.length > 8191);
+  assert.ok(typed.length < 10000, `type of 2000 characters is ${typed.length} characters on the line`);
+  assert.ok(run.length < 10000, `run of 8000 characters is ${run.length} characters on the line`);
+  assert.ok(typedWide.length < 40000, `2000 wide characters: ${typedWide.length}`);
+});
+
+test('windows: every builder makes ONE plain line: no iex, no Base64 decoding, no encoded command, no line break; ToBase64String only in the screenshot', () => {
+  const S = { screenWidth: 1920, screenHeight: 1080 };
+  const lines = {
+    shot: win.screenshotScript({}), click: win.clickScript({ x: 1, y: 2, double: true, ...S }), type: win.typeScript({ text: 'hi\nthere\ttab' }),
+    key: win.keyScript({ keys: 'ctrl+c' }), scroll: win.scrollScript({ amount: 3 }), scrollAt: win.scrollScript({ x: 1, y: 2, amount: -3, ...S }), run: win.runLine('whoami'),
+  };
+  for (const [name, line] of Object.entries(lines)) {
+    for (const re of FORBIDDEN) assert.doesNotMatch(line, re, name);
+    assert.doesNotMatch(line, /\{\s*$/, `${name}: no dangling brace`);
+    assert.strictEqual(win.plainLine(line), line);
+    if (name === 'shot') assert.strictEqual(line.match(/ToBase64String/g).length, 1);
+    else assert.doesNotMatch(line, /ToBase64String/, name);
+    assert.doesNotMatch(line, /Out-File|Set-Content|\[IO\.File\]|WriteAll/i, `${name}: nothing is written to disk`);
+  }
+  for (const name of ['click', 'type', 'key', 'scroll', 'scrollAt']) assert.match(lines[name], /; Write-Output 'MMOK'$/, name);
+  assert.match(lines.shot, /MMSHOT \$nw \$nh/);
+  assert.match(lines.shot, /^\$ErrorActionPreference = 'Stop'; \$ProgressPreference = 'SilentlyContinue'; Add-Type -AssemblyName System\.Windows\.Forms, System\.Drawing; Add-Type -TypeDefinition \(''\+'/);
 });
 
 test('windows: every script ends with MMOK and is built from a short fixed text', () => {
   const scripts = [win.clickScript({ x: 10, y: 20, screenWidth: 1920, screenHeight: 1080 }), win.typeScript({ text: 'hi' }), win.keyScript({ keys: 'ctrl+c' }), win.scrollScript({ amount: 3 })];
   for (const s of scripts) {
-    assert.match(s, /\nWrite-Output 'MMOK'$/);
-    assert.ok(win.encodePs(s).length < 30000);
+    assert.match(s, /; Write-Output 'MMOK'$/);
+    assert.ok(win.plainLine(s).length < 30000);
     assert.match(s, /\$ErrorActionPreference = 'Stop'/);
   }
   assert.ok(win.sawOk('Microsoft Windows\r\nC:\\>x\r\nMMOK\r\nC:\\>exit\r\n'));
@@ -332,7 +431,7 @@ test('windows: the screenshot script takes the primary screen with DPI awareness
   assert.match(small, /\$nw -gt 800/);
   assert.match(small, /\[long\]55/);
   for (const bad of [{ maxWidth: 100 }, { maxWidth: 5000 }, { maxWidth: 800.5 }, { maxWidth: '800' }, { quality: 0 }, { quality: '70; calc' }]) assert.throws(() => win.screenshotScript(bad), win.WindowsError);
-  win.encodePs(s);
+  win.plainLine(s);
 });
 
 test('windows: parseScreenshot reads a good line (even around a cmd banner or a broken line) and throws with the start of anything else', () => {
@@ -356,23 +455,18 @@ test('windows: parseScreenshot reads a good line (even around a cmd banner or a 
   assert.throws(() => win.parseScreenshot(null), win.WindowsError);
 });
 
-test('windows: typed text travels only as base64 (UTF-16LE); nothing of it appears in the script or the command line', () => {
-  const nasty = 'He said "hi" & \'bye\'; $env:USERNAME `n $(calc) | whoami > x\r\nline2\t\u2603\ud83d\ude00 %PATH% ^& \\';
+test('windows: typed text travels only as a quoted literal (never decoded, never evaluated); the text reaches the script exactly', () => {
+  const nasty = 'He said "hi" & \'bye\'; $env:USERNAME `n $(calc) | whoami > x\r\nline2\t☃😀 %PATH% ^& \\ ‘q’';
   const s = win.typeScript({ text: nasty });
   const norm = nasty.replace(/\r\n?/g, '\n');
-  const b64 = Buffer.from(norm, 'utf16le').toString('base64');
-  assert.ok(s.includes(`FromBase64String('${b64}')`));
-  for (const frag of ['whoami', 'calc', 'USERNAME', 'He said', 'bye', 'line2', '%PATH%']) assert.ok(!s.includes(frag), `raw ${frag} in script`);
-  const line = win.encodePs(s);
-  for (const frag of ['whoami', 'calc', 'He said']) assert.ok(!line.includes(frag));
-  assert.strictEqual(decodeLine(line), s);
-  // The text decodes back to what was asked, with new lines as \n.
-  const back = Buffer.from(/FromBase64String\('([^']+)'\)/.exec(decodeLine(line))[1], 'base64').toString('utf16le');
-  assert.strictEqual(back, norm);
-  // Every line of the script is fixed text (no caller text) except the one base64 line.
-  const variable = s.split('\n').filter((l) => l.includes(b64));
-  assert.strictEqual(variable.length, 1);
+  const m = /\$mmt = (\(''.*?\)); foreach \(\$c in \$mmt\.ToCharArray\(\)\) \{/.exec(s);
+  assert.ok(m, 'the literal sits in one statement before the loop');
+  assert.strictEqual(evalLiteral(m[1]), norm);
+  plain(win.plainLine(s));
+  assert.doesNotMatch(s, /[‘-‛]/, 'no raw curly quote in the line');
+  assert.strictEqual(evalLiteral(/\$mmt = (\(''.*?\)); foreach/.exec(win.typeScript({ text: 'a\r\nb\rc' }))[1]), 'a\nb\nc');
   assert.match(s, /\[MMIn\]::Key\(13, 0\)/, 'a new line is Enter');
+  assert.ok(s.endsWith("[MMIn]::Pause(4) }; Write-Output 'MMOK'"));
   // Limits.
   assert.doesNotThrow(() => win.typeScript({ text: 'a'.repeat(2000) }));
   assert.throws(() => win.typeScript({ text: 'a'.repeat(2001) }), win.WindowsError);
@@ -399,9 +493,10 @@ test('windows: keys come from an allow-list; presses go modifiers first and rele
     assert.throws(() => win.keyScript({ keys: bad }), win.WindowsError, String(bad));
   }
   // The only things in a key script are numbers.
-  const lines = s.split('\n').filter((l) => l.startsWith('[MMIn]::Key'));
+  const lines = s.split('; ').filter((l) => l.startsWith('[MMIn]::Key'));
+  assert.strictEqual(lines.length, 4);
   for (const l of lines) assert.match(l, /^\[MMIn\]::Key\(\d+, \d\)$/);
-  win.encodePs(s);
+  win.plainLine(s);
 });
 
 test('windows: click and scroll only take whole numbers and fixed words', () => {
@@ -629,7 +724,7 @@ test('tools: screenshot runs the script as the signed-in user, returns the JPEG 
   assert.ok(!raw.content[0].text.includes(t.mediaDir) && !/\.jpg|screens/.test(raw.content[0].text), 'no path to the private copy');
   const run = t.calls.find((c) => c.action === 'runcommands');
   assert.deepStrictEqual({ ids: run.fields.nodeids, type: run.fields.type, as: run.fields.runAsUser, ms: run.opts.timeoutMs }, { ids: [`node//${ID_A}`], type: 2, as: 2, ms: 30000 });
-  assert.match(decodeLine(run.fields.cmds), /\$nw -gt 1280/);
+  assert.match(plain(run.fields.cmds), /\$nw -gt 1280/);
   assert.deepStrictEqual(t.gateCalls.map((g) => g.need), ['look', 'look']);
   // The private copy: <data folder>/screens/<short id>/<yyyy-mm-dd>/<hhmmss>-<4 hex>.jpg, folders 0700, file 0600.
   const comp = folderOf(ID_A);
@@ -651,7 +746,7 @@ test('tools: screenshot runs the script as the signed-in user, returns the JPEG 
   const r2 = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
   assert.notStrictEqual(r2.shot, r.shot);
   assert.strictEqual(fs.readdirSync(dayDir).length, 2);
-  assert.match(decodeLine(t.calls.filter((c) => c.action === 'runcommands')[1].fields.cmds), /\$nw -gt 1600/);
+  assert.match(plain(t.calls.filter((c) => c.action === 'runcommands')[1].fields.cmds), /\$nw -gt 1600/);
   // Refusals.
   assert.match((await t.call('screenshot', { ...AGENT, computer: 'Laptop' })).error, /Laptop is offline/);
   assert.match((await t.call('screenshot', { ...AGENT, computer: 'demo-pc', maxWidth: 100 })).error, /maxWidth/);
@@ -730,16 +825,16 @@ test('tools: the private pictures kept per computer are the newest 200; a link i
   assert.throws(() => createShotStore({ home: '' }).save('pc-x', JPEG), (e) => e.code === 'ENOHOME');
 });
 
-test('tools: run is an act tool; PowerShell travels encoded, cmd as typed; as picks the session; output is capped at 64 KB', async () => {
+test('tools: run is an act tool; PowerShell travels as one plain line, cmd as typed; as picks the session; output is capped at 64 KB', async () => {
   const t = setup();
   t.handlers.runcommands = async () => ({ result: 'Microsoft Windows [Version 10.0.22631]\r\n(c) Microsoft Corporation. All rights reserved.\r\n\r\nC:\\Windows\\system32>\r\nhello\r\nC:\\Windows\\system32>exit\r\n' });
   const r = await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'Get-Date -Format "o"; "it\'s $x"' });
   assert.deepStrictEqual(t.gateCalls.slice(-1)[0], { agent: 'sam', need: 'act', pc: { id: ID_A, name: 'demo-pc' } });
   const c = t.calls.find((x) => x.action === 'runcommands');
   assert.deepStrictEqual({ type: c.fields.type, as: c.fields.runAsUser, ms: c.opts.timeoutMs }, { type: 2, as: 0, ms: 60000 });
-  const script = decodeLine(c.fields.cmds);
-  assert.ok(script.endsWith('Get-Date -Format "o"; "it\'s $x"'));
-  assert.ok(!c.fields.cmds.includes('Get-Date'), 'the caller\'s text travels only as base64');
+  const script = plain(c.fields.cmds);
+  assert.strictEqual(evalLiteral(/\. \(\[scriptblock\]::Create\((.*)\)\)$/.exec(script)[1]), 'Get-Date -Format "o"; "it\'s $x"', 'the command is a quoted literal that becomes a script block');
+  assert.strictEqual(script, win.runLine('Get-Date -Format "o"; "it\'s $x"'));
   assert.strictEqual(r.output, 'hello');
   assert.strictEqual(typeof r.took_ms, 'number');
   assert.deepStrictEqual(t.gateOpts.filter(Boolean).slice(-1)[0], { call: 'call-1', as: 'system' }, 'the hub\'s call id and the account go to the gate');
@@ -950,7 +1045,7 @@ test('tools: run that failed BEFORE sending frees the computer and may say try a
 
 test('tools: screenshot and input follow the same rule: before sending frees the computer, after sending holds it 60 seconds and says it may still be running', async () => {
   const t = setup();
-  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' });
   const shot = await shotOf(t);
   for (const name of ['screenshot', 'click', 'type', 'key', 'scroll']) {
     const args = { ...AGENT, computer: 'demo-pc', ...({ screenshot: {}, click: { shot, x: 5, y: 5 }, type: { text: 'a' }, key: { keys: 'a' }, scroll: { amount: 1 } })[name] };
@@ -958,7 +1053,7 @@ test('tools: screenshot and input follow the same rule: before sending frees the
     t.handlers.runcommands = failing('ECLOSED', false);
     const before = await t.call(name, args);
     assert.strictEqual(before.error, 'The Remote computers server did not answer. Try again in a moment.', name);
-    t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+    t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' });
     assert.ok(!(await t.call(name, args)).error, `${name}: not busy after a failure before sending`);
     // After sending: held for 60 s.
     t.handlers.runcommands = failing('ETIMEDOUT', true);
@@ -966,7 +1061,7 @@ test('tools: screenshot and input follow the same rule: before sending frees the
     assert.match(after.error, new RegExp(`^No reply from demo-pc within ${name === 'screenshot' ? 30 : 20} seconds\\. `), name);
     assert.match(after.error, /The command may still be running on it and must not be repeated blindly\./);
     assert.match(after.error, CHECK_FIRST);
-    t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+    t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' });
     assert.match((await t.call(name, args)).error, /busy, try again in a moment/, name);
     t.time.t += 59000;
     assert.match((await t.call(name, args)).error, /busy/, name);
@@ -975,7 +1070,7 @@ test('tools: screenshot and input follow the same rule: before sending frees the
     // A connection lost after sending says so too.
     t.handlers.runcommands = failing('ECLOSED', true);
     assert.match((await t.call(name, args)).error, /^The connection to the server was lost after the command was sent to demo-pc\. The command may still be running/, name);
-    t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+    t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' });
     t.time.t += 61000;
   }
 });
@@ -1012,7 +1107,7 @@ test('tools: errors say what happened without the server\'s own words, a passwor
 
 test('tools: click needs the shot id of a screenshot, checks the place is inside it, and scales to screen pixels', async () => {
   const t = setup();
-  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply(1600, 900, 1920, 1080) : 'C:\\>x\r\nMMOK\r\nC:\\>exit\r\n' });
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply(1600, 900, 1920, 1080) : 'C:\\>x\r\nMMOK\r\nC:\\>exit\r\n' });
   const before = await t.call('click', { ...AGENT, computer: 'demo-pc', shot: 'abcd1234', x: 10, y: 10 });
   assert.strictEqual(before.error, 'Take a new screenshot and use its shot id.');
   assert.strictEqual(t.calls.filter((c) => c.action === 'runcommands').length, 0);
@@ -1023,13 +1118,13 @@ test('tools: click needs the shot id of a screenshot, checks the place is inside
   assert.deepStrictEqual(ok, { ok: true });
   const c = t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0];
   assert.deepStrictEqual({ type: c.fields.type, as: c.fields.runAsUser, ms: c.opts.timeoutMs }, { type: 2, as: 2, ms: 20000 });
-  const script = decodeLine(c.fields.cmds);
+  const script = plain(c.fields.cmds);
   assert.match(script, /\$mmx = 960; \$mmy = 540/);
   assert.strictEqual(script.match(/Mouse\(2, 0\)/g).length, 2);
   // The script gets the screenshot's screen size and refuses when the live screen is another size.
   assert.match(script, /if \(\$mmb\.Width -ne 1920 -or \$mmb\.Height -ne 1080\) \{ throw "The screen changed since that screenshot; take a new one\." \}/);
   await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 1599, y: 899, button: 'right' });
-  assert.match(decodeLine(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds), /\$mmx = 1919; \$mmy = 1079/);
+  assert.match(plain(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds), /\$mmx = 1919; \$mmy = 1079/);
   const nCalls = t.calls.length;
   for (const [x, y] of [[1600, 10], [10, 900], [-1, 5], [1.5, 5], ['5', 5]]) assert.match((await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x, y })).error, /inside that screenshot/, `${x},${y}`);
   assert.match((await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 1, y: 1, button: 'back' })).error, /button/);
@@ -1043,19 +1138,19 @@ test('tools: click needs the shot id of a screenshot, checks the place is inside
   assert.match(unconfirmed.error, /did not confirm the input/);
   assert.doesNotMatch(unconfirmed.error, /says no/);
   // A different picture size gives a different scale (a 4K screen shown at 1600 wide), and each shot keeps its own.
-  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply(1600, 900, 3840, 2160) : 'MMOK\r\n' });
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply(1600, 900, 3840, 2160) : 'MMOK\r\n' });
   const shot4k = await shotOf(t);
   await t.call('click', { ...AGENT, computer: 'demo-pc', shot: shot4k, x: 100, y: 100 });
-  const last = decodeLine(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds);
+  const last = plain(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds);
   assert.match(last, /\$mmx = 240; \$mmy = 240/);
   assert.match(last, /\$mmb\.Width -ne 3840 -or \$mmb\.Height -ne 2160/);
   await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 100, y: 100 });
-  assert.match(decodeLine(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds), /\$mmx = 120; \$mmy = 120[\s\S]*Width -ne 1920/);
+  assert.match(plain(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds), /\$mmx = 120; \$mmy = 120[\s\S]*Width -ne 1920/);
 });
 
 test('tools: a shot id is refused when unknown, expired (10 minutes), another agent\'s or another computer\'s; an agent keeps its last 20', async () => {
   const t = setup({ settings: { levels: ['sam:drive', 'pat:drive'] } });
-  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' });
   const NEW = 'Take a new screenshot and use its shot id.';
   const click = (who, over) => t.call('click', { __agent: who, __call: `c-${who}`, computer: 'demo-pc', x: 5, y: 5, ...over });
   const shot = await shotOf(t, 'sam');
@@ -1092,12 +1187,11 @@ test('tools: a shot id is refused when unknown, expired (10 minutes), another ag
 
 test('tools: type, key and scroll are drive tools that wait for MMOK', async () => {
   const t = setup();
-  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply(1600, 900, 1920, 1080) : 'Microsoft Windows\r\nMMOK\r\nC:\\>exit\r\n' });
-  const last = () => decodeLine(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds);
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply(1600, 900, 1920, 1080) : 'Microsoft Windows\r\nMMOK\r\nC:\\>exit\r\n' });
+  const last = () => plain(t.calls.filter((x) => x.action === 'runcommands').slice(-1)[0].fields.cmds);
   assert.deepStrictEqual(await t.call('type', { ...AGENT, computer: 'demo-pc', text: 'hello "world"; $x\nnext' }), { ok: true });
   const typed = last();
-  assert.ok(!typed.includes('hello') && !typed.includes('world'));
-  assert.strictEqual(Buffer.from(/FromBase64String\('([^']+)'\)/.exec(typed)[1], 'base64').toString('utf16le'), 'hello "world"; $x\nnext');
+  assert.strictEqual(evalLiteral(/\$mmt = (\(''.*?\)); foreach/.exec(typed)[1]), 'hello "world"; $x\nnext');
   assert.deepStrictEqual(await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'alt+tab' }), { ok: true });
   assert.match(last(), /Key\(18, 0\)[\s\S]*Key\(9, 0\)[\s\S]*Key\(9, 2\)[\s\S]*Key\(18, 2\)/);
   assert.deepStrictEqual(await t.call('scroll', { ...AGENT, computer: 'demo-pc', amount: -5 }), { ok: true });
@@ -1186,7 +1280,7 @@ test('tools: a run as user that gets no reply says no one may be signed in and h
 
 test('tools: every act and drive tool asks the gate for the right level with the agent the hub named', async () => {
   const t = setup();
-  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' });
   t.handlers.getsysinfo = async () => ({ hardware: {} });
   const plan = [
     ['computers', {}, 'look'], ['info', { computer: 'demo-pc' }, 'look'], ['screenshot', { computer: 'demo-pc' }, 'look'],
@@ -1210,7 +1304,7 @@ test('tools: every act and drive tool asks the gate for the right level with the
   // The gate's refusal is the answer, in its own words, and nothing is sent to the computer.
   const refused = setup({ gateRefuses: 'sam may only look.' });
   refused.handlers.runcommands = async () => { throw new Error('must not run'); };
-  refused.handlers.runcommands = async (f) => { if (/MMSHOT/.test(decodeLine(f.cmds))) return { result: shotReply() }; throw new Error('must not run'); };
+  refused.handlers.runcommands = async (f) => { if (/MMSHOT/.test(plain(f.cmds))) return { result: shotReply() }; throw new Error('must not run'); };
   const refusedShot = await shotOf(refused, 'sam');
   for (const [name, args] of plan.slice(3)) {
     const r = await refused.call(name, { ...args, ...(name === 'click' ? { shot: refusedShot } : {}), __agent: 'sam', __call: 'call-1' });
@@ -1321,7 +1415,7 @@ test('tools: one deadline per call (start + 290 s): an approval that leaves less
   }
   // Click too (with a shot id).
   const c = setup({ realGate: true });
-  c.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  c.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' });
   const shot = await shotOf(c, 'pat');
   assert.strictEqual((await approvedAfter(c, 270000, 'click', { shot, x: 5, y: 5 }, 'pat')).error, 'Approved for 30 minutes. Call click again to run it now.');
   assert.strictEqual(c.calls.filter((x) => x.action === 'runcommands').length, 1, 'only the screenshot was sent');
@@ -1336,7 +1430,7 @@ test('tools: one deadline per call (start + 290 s): an approval that leaves less
 test('tools: immediately before sending an act or drive command the session is checked again; an ended one sends nothing and frees the computer', async () => {
   let valid = true;
   const t = setup({ stillValid: () => valid });
-  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  t.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' });
   const shot = await shotOf(t);
   const checks0 = t.stillValidCalls.length;
   assert.ok(!(await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'x' })).error);
@@ -1408,7 +1502,7 @@ function reconnecting(t, delayMs) {
     t.time.t += delayMs;   // the connection took this long
     try { opts.beforeSend(); } catch (e) { state.checkError = e; throw Object.assign(e, { sent: false }); }
     state.sent++;
-    return { result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' };
+    return { result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' };
   };
   return state;
 }
@@ -1464,7 +1558,7 @@ test('tools: every command waits at most what the call has left; under 5 s left 
 
   // Screenshot (a look tool) and the drive tools have the same deadline.
   const d = setup({ realGate: true });
-  d.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(decodeLine(f.cmds)) ? shotReply() : 'MMOK\r\n' });
+  d.handlers.runcommands = async (f) => ({ result: /MMSHOT/.test(plain(f.cmds)) ? shotReply() : 'MMOK\r\n' });
   const shot = await shotOf(d, 'pat');
   await approvedAfter(d, 0, 'key', { keys: 'a' }, 'pat');
   assert.strictEqual(lastRun(d).opts.timeoutMs, 20000);
@@ -1511,4 +1605,43 @@ test('tools: a computer that connected less than 10 s ago has unknown users; lat
   assert.ok((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot, 'a screenshot is tried right after the connect');
   t.handlers.nodes = nodesWith(t.time.t - 60000);
   assert.match((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).error, /^No one is signed in/);
+});
+
+test('tools: when Defender blocks the line, screenshot, click, type, key, scroll and run answer with the antivirus text and never the raw PowerShell error', async () => {
+  const t = setup();
+  t.handlers.runcommands = async () => ({ result: shotReply() });
+  const shot = await shotOf(t);
+  t.handlers.runcommands = async () => ({ result: MALICIOUS });
+  const text = (what) => `The antivirus on demo-pc (Microsoft Defender) blocked this ${what} as a precaution, ${what === 'command' ? 'so it did not run, or stopped where it was blocked. Check its effect first' : 'so nothing was done on the computer'}. Try again in a few minutes. If it keeps happening, tell the owner that the Remote computers connector may need an update. Do not turn off the antivirus or add an exclusion for this.`;
+  const answers = {
+    screenshot: await t.call('screenshot', { ...AGENT, computer: 'demo-pc' }),
+    click: await t.call('click', { ...AGENT, computer: 'demo-pc', shot, x: 5, y: 5 }),
+    typing: await t.call('type', { ...AGENT, computer: 'demo-pc', text: 'hello' }),
+    'key press': await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'enter' }),
+    scroll: await t.call('scroll', { ...AGENT, computer: 'demo-pc', amount: 2 }),
+    command: await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'whoami' }),
+  };
+  for (const [what, r] of Object.entries(answers)) {
+    assert.strictEqual(r.error, text(what), what);
+    const flat = JSON.stringify(r);
+    assert.doesNotMatch(flat, /iex|CategoryInfo|ScriptContained|FromBase64/i, what);
+  }
+  assert.match(answers.screenshot.error, /blocked this screenshot as a precaution/);
+  // What was sent: one plain line each, with no iex and no FromBase64String.
+  const sent = t.calls.filter((c) => c.action === 'runcommands');
+  assert.ok(sent.length >= 6);
+  for (const c of sent) {
+    for (const re of [/\biex\b/i, /Invoke-Expression/i, /FromBase64String/, /[\r\n]/]) assert.doesNotMatch(c.fields.cmds, re);
+  }
+  assert.match(sent[0].fields.cmds, /MMSHOT/);
+  assert.match(sent[sent.length - 1].fields.cmds, /\. \(\[scriptblock\]::Create\(/);
+  // Normal output still works.
+  t.handlers.runcommands = async () => ({ result: 'MMOK\r\n' });
+  assert.deepStrictEqual(await t.call('key', { ...AGENT, computer: 'demo-pc', keys: 'enter' }), { ok: true });
+  // A run whose own output only quotes the message (no error record) keeps its output; cmd gets the same check.
+  const quoted = 'TimeCreated : 11/16/2026\r\nMessage : This script contains malicious content and has been blocked by your antivirus software.';
+  t.handlers.runcommands = async () => ({ result: quoted });
+  assert.match((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'Get-WinEvent -LogName x' })).output, /has been blocked by your antivirus software/);
+  t.handlers.runcommands = async () => ({ result: MALICIOUS });
+  assert.strictEqual((await t.call('run', { ...AGENT, computer: 'demo-pc', command: 'dir', shell: 'cmd' })).error, text('command'));
 });

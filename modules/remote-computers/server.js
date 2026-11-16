@@ -35,7 +35,6 @@ const SHOT_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const NEW_SHOT = 'Take a new screenshot and use its shot id.';
 const CHECK_FIRST = 'Check its effect first, for example with a screenshot or a read-only command.';
 const RUNCOMMANDS_ERRORS = new Set(['Invalid nodeid', 'Invalid domain', 'Access denied', 'Agent not connected', 'Invalid command type']);
-const PS_PREFIX = '$ProgressPreference = \'SilentlyContinue\'\n[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n';   // no progress noise in the output, UTF-8 text back
 const DESKTOP_FILE = 'desktop-sessions.json';
 const INPUT_TOOLS = ['run', 'click', 'type', 'key', 'scroll'];
 const COOKIE_RE = /^[A-Za-z0-9@$_.=+\/-]{8,4000}$/;   // what MeshCentral's encodeCookie makes: base64 with @ and $
@@ -504,15 +503,23 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       return Math.min(timeoutMs, left);
     };
   }
-  // A screen script (picture or input) runs as the signed-in user, as one PowerShell line (runcommands type 2).
+  // A screen script (picture or input) runs as the signed-in user, as one line of plain PowerShell (runcommands type 2): no iex, no Base64 decoding of
+  // text, nothing written to disk, because the antivirus (AMSI) blocks those patterns. Caller text is a quoted literal in the line (win.psLiteral).
   async function onScreen(pc, script, timeoutMs, check) {
-    const cmds = win.encodePs(script);
+    const cmds = win.plainLine(script);
     try { return await exclusive(pc, BUSY_AFTER_SCREEN_TIMEOUT_MS, () => runOn(pc, cmds, 2, 2, timeoutMs, check)); } catch (e) {
       throw sendFail(pc, e, { kind: 'screen', timeoutSec: Math.round(timeoutMs / 1000) });
     }
   }
-  async function drive(pc, script, who, deadline, tool) {
+  // The antivirus (Microsoft Defender) refused the line. The raw PowerShell error is never given to the agent.
+  const avBlocked = (pc, what) => {
+    log(`the antivirus on ${pc.name} blocked the ${what}`);
+    const done = what === 'command' ? 'so it did not run, or stopped where it was blocked. Check its effect first' : 'so nothing was done on the computer';
+    return new ToolError(`The antivirus on ${pc.name} (Microsoft Defender) blocked this ${what} as a precaution, ${done}. Try again in a few minutes. If it keeps happening, tell the owner that the Remote computers connector may need an update. Do not turn off the antivirus or add an exclusion for this.`);
+  };
+  async function drive(pc, script, who, deadline, tool, what) {
     const out = await onScreen(pc, script, INPUT_TIMEOUT_MS, sendCheck({ who, pc, need: 'drive', deadline, tool, timeoutMs: INPUT_TIMEOUT_MS }));
+    if (win.blockedByAntivirus(out)) throw avBlocked(pc, what);
     if (!win.sawOk(out)) {
       if (out.includes(win.SCREEN_CHANGED)) throw new ToolError(win.SCREEN_CHANGED);
       throw new ToolError(`${pc.name} did not confirm the input. It may be locked, showing a secure screen, or no one is signed in.`);
@@ -545,6 +552,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     await gate.require(who, 'look', pc);
     mustBeOnline(pc);
     const out = await onScreen(pc, win.screenshotScript({ maxWidth }), SHOT_TIMEOUT_MS, sendCheck({ who, pc, deadline: deadline === undefined ? now() + CALL_DEADLINE_MS : deadline, tool: 'screenshot', timeoutMs: SHOT_TIMEOUT_MS }));
+    if (win.blockedByAntivirus(out)) throw avBlocked(pc, 'screenshot');
     let shot;
     try { shot = win.parseScreenshot(out); } catch (e) { throw new ToolError(e instanceof win.WindowsError ? e.message : 'The computer did not return a picture.'); }
     try { shots.save(pc.id, shot.jpeg); } catch (e) {   // the private copy is for troubleshooting: the agent gets its picture without it
@@ -577,7 +585,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     if (!windows && shell !== 'sh') throw new ToolError(`${pc.name} is not a Windows computer: use sh (the default), not ${shell}.`);
     if (shell === 'cmd' && command.length > MAX_CMD_CHARS) throw new ToolError(`That command is too long for cmd (${MAX_CMD_CHARS} characters at most; it has ${command.length}). Use PowerShell, or split it up.`);
     let cmds;
-    try { cmds = shell === 'sh' ? `${command}\n` : shell === 'cmd' ? `${command}\r\n` : win.encodePs(PS_PREFIX + command); } catch (e) { throw new ToolError(e instanceof win.WindowsError ? e.message : 'That command could not be sent.'); }
+    try { cmds = shell === 'sh' ? `${command}\n` : shell === 'cmd' ? `${command}\r\n` : win.runLine(command); } catch (e) { throw new ToolError(e instanceof win.WindowsError ? e.message : 'That command could not be sent.'); }
     await authorize(who, 'act', pc, call, deadline, 'run', timeoutSec * 1000, as);
     log(`run on ${pc.name} for ${who} (${shell}, as ${as}, ${command.length} characters)`);
     const t0 = now();
@@ -585,6 +593,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     try { out = await exclusive(pc, as === 'user' ? BUSY_AFTER_SCREEN_TIMEOUT_MS : BUSY_AFTER_RUN_TIMEOUT_MS, () => runOn(pc, cmds, shell === 'sh' ? 3 : shell === 'cmd' ? 1 : 2, as === 'user' ? 2 : 0, timeoutSec * 1000, sendCheck({ who, pc, need: 'act', as, deadline, tool: 'run', timeoutMs: timeoutSec * 1000 }))); } catch (e) {
       throw sendFail(pc, e, { kind: as === 'user' ? 'user' : 'run', timeoutSec });
     }
+    if (shell !== 'sh' && win.blockedByAntivirus(out, { strict: true })) throw avBlocked(pc, 'command');
     return { output: capOutput(tidyOutput(out, cmds)), took_ms: now() - t0 };
   }
 
@@ -614,7 +623,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const script = scriptOrError(() => win.clickScript({ x: p.x, y: p.y, screenWidth: s.screenWidth, screenHeight: s.screenHeight, button: a.button === undefined ? 'left' : a.button, double: a.double === undefined ? false : a.double }));
     await authorize(who, 'drive', pc, call, deadline, 'click', INPUT_TIMEOUT_MS);
     log(`click on ${pc.name} for ${who}`);
-    return drive(pc, script, who, deadline, 'click');
+    return drive(pc, script, who, deadline, 'click', 'click');
   }
   async function toolType(a, who, call, deadline) {
     const pc = await resolve(a.computer);
@@ -625,7 +634,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const script = scriptOrError(() => win.typeScript({ text: a.text }));
     await authorize(who, 'drive', pc, call, deadline, 'type', INPUT_TIMEOUT_MS);
     log(`type on ${pc.name} for ${who} (${a.text.length} characters)`);
-    return drive(pc, script, who, deadline, 'type');
+    return drive(pc, script, who, deadline, 'type', 'typing');
   }
   async function toolKey(a, who, call, deadline) {
     const pc = await resolve(a.computer);
@@ -636,7 +645,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const script = scriptOrError(() => win.keyScript({ keys: a.keys }));
     await authorize(who, 'drive', pc, call, deadline, 'key', INPUT_TIMEOUT_MS);
     log(`key on ${pc.name} for ${who}`);
-    return drive(pc, script, who, deadline, 'key');
+    return drive(pc, script, who, deadline, 'key', 'key press');
   }
   async function toolScroll(a, who, call, deadline) {
     const pc = await resolve(a.computer);
@@ -653,7 +662,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     const script = scriptOrError(() => win.scrollScript({ ...where, amount: a.amount }));
     await authorize(who, 'drive', pc, call, deadline, 'scroll', INPUT_TIMEOUT_MS);
     log(`scroll on ${pc.name} for ${who}`);
-    return drive(pc, script, who, deadline, 'scroll');
+    return drive(pc, script, who, deadline, 'scroll', 'scroll');
   }
 
   // ── the one-time installer link and the page behind it ──

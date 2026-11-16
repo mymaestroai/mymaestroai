@@ -1,10 +1,13 @@
 'use strict';
-// PowerShell for Windows computers, as pure functions. Every script travels as ONE line, sent with runcommands type 2: the agent starts
-// powershell.exe -noprofile -nologo -command - and writes "<cmds>\r\nexit\r\n" to its stdin (agents/meshcore.js:1974-2038, the type 2 branch at :2005-2018),
-// so the line is
-//   iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('<base64 of the UTF-16LE script>')))
-// There is no cmd.exe in the way (cmd takes about 8191 characters per line) and no multi-line quirks. Caller text never goes into a script as text:
-// it is either base64 that the script decodes (type, run) or an integer / a fixed word from a list that this file checks first (everything else).
+// PowerShell for Windows computers, as pure functions. Every action is ONE line of plain, readable PowerShell (statements joined with "; "), sent with
+// runcommands type 2: the agent starts powershell.exe -noprofile -nologo -command - and writes "<cmds>\r\nexit\r\n" to its stdin
+// (agents/meshcore.js:1974-2038, the type 2 branch at :2005-2018). There is no cmd.exe in the way (cmd takes about 8191 characters per line), nothing is
+// written to disk, and the line has no line break.
+// Why plain: Microsoft Defender's AMSI blocks "iex over Base64-decoded text" (an old obfuscation pattern) intermittently, with
+// ScriptContainedMaliciousContent. So there is no iex, no Invoke-Expression, no FromBase64String and no -EncodedCommand here. Caller text becomes a quoted
+// literal built from plain pieces (psLiteral): it is never decoded and never evaluated. The one exception is run's own command, which the caller wants
+// executed: it is a literal too, handed to [scriptblock]::Create and dot-sourced (runLine). Everything else is an integer or a fixed word that this file
+// checks first. The one ToBase64String is the screenshot's output statement (the picture going back).
 
 const MAX_LINE = 60000;
 const MAX_TYPE_CHARS = 2000;
@@ -14,11 +17,42 @@ class WindowsError extends Error {
   constructor(message, code) { super(message); this.name = 'WindowsError'; this.code = code || 'EBADARG'; }
 }
 
-function encodePs(script) {
+// A PowerShell expression whose value is exactly `text`: ('' then +'printable ASCII run' (with ' doubled) or +[char]0xHHHH for any other UTF-16 code unit).
+// It starts from '' so the whole thing is string concatenation, never char arithmetic. Curly quotes, $, backtick, # and line breaks all travel as [char].
+function psLiteral(text) {
+  const s = String(text);
+  let out = "(''", run = '';
+  const flush = () => { if (run) { out += "+'" + run.replace(/'/g, "''") + "'"; run = ''; } };
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0x20 && c <= 0x7e) run += s[i];
+    else { flush(); out += '+[char]0x' + c.toString(16).toUpperCase().padStart(4, '0'); }
+  }
+  flush();
+  return out + ')';
+}
+
+// The line to send: the script already joined into one line. Nothing is changed.
+function plainLine(script) {
   if (typeof script !== 'string' || !script) throw new WindowsError('A script is needed.');
-  const line = `iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(script, 'utf16le').toString('base64')}')))`;
-  if (line.length > MAX_LINE) throw new WindowsError('That is too long to send in one command.', 'ETOOLONG');
-  return line;
+  if (/[\r\n]/.test(script)) throw new WindowsError('A script line must not contain a line break.', 'EBADARG');
+  if (script.length > MAX_LINE) throw new WindowsError('That is too long to send in one command.', 'ETOOLONG');
+  return script;
+}
+
+// The line for the run tool: the caller's command is a literal that becomes a script block and is dot-sourced (the scope iex used to give).
+function runLine(command) {
+  return plainLine(`$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; . ([scriptblock]::Create(${psLiteral(command)}))`);
+}
+
+// True when Defender (AMSI) blocked what was sent. strict (for run, whose output is the caller's own and may quote the message, for example while
+// reading Defender's logs): only PowerShell's own error record for the block counts.
+const AV_RECORD = /(?:^|\n)[ \t]*\+[ \t]*FullyQualifiedErrorId[ \t]*:[ \t]*ScriptContainedMaliciousContent\b/;
+function blockedByAntivirus(output, { strict = false } = {}) {
+  const s = String(output == null ? '' : output);
+  if (AV_RECORD.test(s)) return true;
+  if (strict) return false;
+  return s.includes('ScriptContainedMaliciousContent') || /contains malicious content and has been blocked by your antivirus software/i.test(s);
 }
 
 const int = (v, name, min, max) => {
@@ -48,18 +82,20 @@ public class MMIn {
   public static void Pause(int ms) { Thread.Sleep(ms); }
 }
 `;
-const here = (cs) => `Add-Type -TypeDefinition @'\n${cs.trim()}\n'@`;
+const here = (cs) => `Add-Type -TypeDefinition ${psLiteral(cs.replace(/\s+/g, ' ').trim())}`;
 
 const SCREEN_CHANGED = 'The screen changed since that screenshot; take a new one.';
 // The live primary screen must be the size it was when the screenshot was taken (the click position was worked out from that size).
-const screenCheck = (sw, sh) => `Add-Type -AssemblyName System.Windows.Forms
-$mmb = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-if ($mmb.Width -ne ${sw} -or $mmb.Height -ne ${sh}) { throw "${SCREEN_CHANGED}" }
-if ($mmx -lt 0 -or $mmy -lt 0 -or $mmx -ge $mmb.Width -or $mmy -ge $mmb.Height) { throw "That place is outside the screen." }`;
+const screenCheck = (sw, sh) => [
+  'Add-Type -AssemblyName System.Windows.Forms',
+  '$mmb = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds',
+  `if ($mmb.Width -ne ${sw} -or $mmb.Height -ne ${sh}) { throw "${SCREEN_CHANGED}" }`,
+  'if ($mmx -lt 0 -or $mmy -lt 0 -or $mmx -ge $mmb.Width -or $mmy -ge $mmb.Height) { throw "That place is outside the screen." }',
+].join('; ');
 
 const head = ['$ErrorActionPreference = \'Stop\'', '$ProgressPreference = \'SilentlyContinue\''];
 const tail = ['Write-Output \'' + OK_LINE + '\''];
-const script = (...parts) => [...head, ...parts, ...tail].join('\n');
+const script = (...parts) => [...head, ...parts, ...tail].join('; ');
 
 function screenshotScript({ maxWidth = 1600, quality = 70 } = {}) {
   const mw = int(maxWidth, 'maxWidth', 320, 1920), q = int(quality, 'quality', 10, 100);
@@ -85,7 +121,7 @@ function screenshotScript({ maxWidth = 1600, quality = 70 } = {}) {
     '$ms = New-Object System.IO.MemoryStream',
     '$pic.Save($ms, $codec, $ep)',
     'Write-Output ("MMSHOT $nw $nh $($b.Width) $($b.Height) " + [Convert]::ToBase64String($ms.ToArray()) + " MMEND")',
-  ].join('\n');
+  ].join('; ');
 }
 
 function parseScreenshot(output) {
@@ -123,16 +159,10 @@ function clickScript({ x, y, screenWidth, screenHeight, button = 'left', double 
 function typeScript({ text } = {}) {
   if (typeof text !== 'string' || !text) throw new WindowsError('There is no text to type.');
   if (text.length > MAX_TYPE_CHARS) throw new WindowsError(`Type at most ${MAX_TYPE_CHARS} characters at a time.`);
-  const b64 = Buffer.from(text.replace(/\r\n?/g, '\n'), 'utf16le').toString('base64');
   return script(
     here(INPUT_CS),
-    `$mmt = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${b64}'))`,
-    'foreach ($c in $mmt.ToCharArray()) {',
-    '  if ($c -eq [char]10) { [MMIn]::Key(13, 0); [MMIn]::Key(13, 2) }',
-    '  elseif ($c -eq [char]9) { [MMIn]::Key(9, 0); [MMIn]::Key(9, 2) }',
-    '  else { [MMIn]::Uni([uint16]$c, $false); [MMIn]::Uni([uint16]$c, $true) }',
-    '  [MMIn]::Pause(4)',
-    '}',
+    `$mmt = ${psLiteral(text.replace(/\r\n?/g, '\n'))}`,
+    'foreach ($c in $mmt.ToCharArray()) { if ($c -eq [char]10) { [MMIn]::Key(13, 0); [MMIn]::Key(13, 2) } elseif ($c -eq [char]9) { [MMIn]::Key(9, 0); [MMIn]::Key(9, 2) } else { [MMIn]::Uni([uint16]$c, $false); [MMIn]::Uni([uint16]$c, $true) }; [MMIn]::Pause(4) }',
   );
 }
 
@@ -191,4 +221,4 @@ function scrollScript({ x, y, screenWidth, screenHeight, amount } = {}) {
 // (PowerShell reading stdin may put its "PS C:\...> " prompt in front of it).
 const sawOk = (output) => /(?:^|\n)(?:PS [^\n>]*> ?)?MMOK\r?(?:\n|$)/.test(String(output == null ? '' : output));
 
-module.exports = { encodePs, screenshotScript, parseScreenshot, clickScript, typeScript, keyScript, scrollScript, parseKeys, sawOk, WindowsError, SCREEN_CHANGED, MAX_LINE, MAX_TYPE_CHARS, OK_LINE, KEYS };
+module.exports = { psLiteral, plainLine, runLine, blockedByAntivirus, screenshotScript, parseScreenshot, clickScript, typeScript, keyScript, scrollScript, parseKeys, sawOk, WindowsError, SCREEN_CHANGED, MAX_LINE, MAX_TYPE_CHARS, OK_LINE, KEYS };
