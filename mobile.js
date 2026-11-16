@@ -4325,26 +4325,30 @@ function voiceLiveTracks() {
 // try with plain { audio: true }; when that fails too, the FIRST error is thrown. -> Promise of { stream, fallback }.
 // o.unprocessed (a call whose voice is recorded, mic 'unprocessed'): the first try asks for echo cancellation, noise suppression and auto gain OFF; the ladder is the same after that.
 // o.deviceId (a string): the choice of microphone. On Android Chrome the microphone opened with processing is also the call's "communication device", and the
-// sound output follows it. The first try adds deviceId: { exact: id }; when that fails with OverconstrainedError or NotFoundError (the device is gone) the whole
-// ladder starts again WITHOUT deviceId and the result has deviceFallback: true (with a deviceId the result always has deviceFallback). Refusals still throw at once.
+// sound output follows it. The ladder with a deviceId: (1) processing plus deviceId { exact }; (2) a refusal throws at once; (3) any other failure tries { deviceId: { exact } }
+// alone (the browser's default processing: fallback true, deviceFallback false); (4) when that fails too (a refusal throws) the ladder above starts again WITHOUT deviceId and the
+// result has deviceFallback: true; (5) when all of it fails the FIRST error is thrown. With a deviceId the result always has deviceFallback.
 async function voiceOpenMicStream(nav, o) {
   const md = nav.mediaDevices, on = !(o && o.unprocessed);
   const dev = o && typeof o.deviceId === 'string' && o.deviceId ? o.deviceId : '';
   const audio = { echoCancellation: on, noiseSuppression: on, autoGainControl: on };
   if (dev) audio.deviceId = { exact: dev };
+  const refusal = (e) => { const n = e && e.name; return n === 'NotAllowedError' || n === 'SecurityError' || n === 'AbortError'; };
   try {
     const r = { stream: await md.getUserMedia({ audio }), fallback: false };
     if (dev) r.deviceFallback = false;
     return r;
   } catch (first) {
-    const name = first && first.name;
-    if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'AbortError') throw first;
-    if (dev && (name === 'OverconstrainedError' || name === 'NotFoundError')) {
-      const r = await voiceOpenMicStream(nav, { unprocessed: !on });
-      r.deviceFallback = true;
-      return r;
+    if (refusal(first)) throw first;
+    if (dev) {
+      try { return { stream: await md.getUserMedia({ audio: { deviceId: { exact: dev } } }), fallback: true, deviceFallback: false }; } catch (e2) { if (refusal(e2)) throw e2; }
+      try {
+        const r = await voiceOpenMicStream(nav, { unprocessed: !on });
+        r.deviceFallback = true;
+        return r;
+      } catch (e3) { if (refusal(e3)) throw e3; throw first; }
     }
-    try { const r = { stream: await md.getUserMedia({ audio: true }), fallback: true }; if (dev) r.deviceFallback = false; return r; } catch { throw first; }
+    try { return { stream: await md.getUserMedia({ audio: true }), fallback: true }; } catch { throw first; }
   }
 }
 // Is a device label a Bluetooth / car / hands-free device? Chrome's Android labels: "Bluetooth headset", "Speakerphone", "Wired headset", "Headset earpiece", "USB audio".
@@ -4810,7 +4814,7 @@ function voiceCreateVad(opts) {
   // current track ended, its device is no longer listed, or the 'default' input moved to another device or name.
   function deviceChanged() {
     if (!st.ctx) return;
-    if (st.settling) { st.devPending = true; return; }   // the first route step is still running: remembered, run once when it ends
+    if (st.settling || st.reopening) { st.devPending = true; return; }   // the first route step or a reopen is still running: remembered, run once when it ends
     st.btTried = false;   // the device list changed: Bluetooth first may try once more
     if (st.devTimer !== null) { try { clearT(st.devTimer); } catch { /* gone */ } }
     st.devTimer = setT(() => { st.devTimer = null; checkDevices().catch(() => {}); }, 700);
@@ -4819,7 +4823,7 @@ function voiceCreateVad(opts) {
     const my = st.gen;
     if (!st.ctx) return;
     if (st.settling) { st.devPending = true; return; }
-    if (st.reopening) return;
+    if (st.reopening) { st.devPending = true; return; }   // remembered: run once when that reopen ends
     let need = !!(st.track && st.track.readyState === 'ended');
     if (!need) {
       const md = st.nav.mediaDevices;
@@ -4835,7 +4839,7 @@ function voiceCreateVad(opts) {
       if (!need && def && st.defSnap && (def.groupId !== st.defSnap.groupId || def.label !== st.defSnap.label)) need = true;
       if (!need && !st.btTried && !chosenId()) {   // a Bluetooth input appeared and the open microphone is not on it: Bluetooth first
         const bt = voiceAudioRoutes(list, id).bluetoothInput;
-        if (bt && !onBluetooth(bt) && btMayTry(list)) { st.btTries++; await reopen('bluetooth', false, bt.id); return; }
+        if (bt && !onBluetooth(bt) && btMayTry(list)) { await reopen('bluetooth', false, bt.id); return; }
       }
     }
     if (need) await reopen('devicechange');
@@ -4860,6 +4864,7 @@ function voiceCreateVad(opts) {
     const quiet = quietFail === true || reason === 'bluetooth';   // a Bluetooth try never says anything: the microphone that was open stays open
     const fail = (error) => { if (!quiet && st.gen === my) call('onMicChange', { ok: false, reason, error }); };
     let res;
+    if (reason === 'bluetooth') st.btTries++;   // a Bluetooth try is counted when its open really runs
     try { res = await openMic(dev); } catch (error) { fail(error); return false; }
     voiceTrackLive(res.raw);
     if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }   // stopped meanwhile: let go of it
@@ -4880,14 +4885,21 @@ function voiceCreateVad(opts) {
     }
     // A detector that endPiece left paused (its start failed) listens again here; one that cannot is a lost microphone, never a silent "Listening".
     if (st.paused && st.vad) {
-      try { await st.vad.start(); } catch (error) { fail(error); return false; }
+      try { await st.vad.start(); } catch (error) { if (st.gen === my) call('onMicChange', { ok: false, reason, error }); return false; }   // a lost microphone: reported even for 'bluetooth'
       if (st.gen !== my) return false;
       st.paused = false;
     }
-    const info = micInfo(res.raw, res.fallback, !!dev && !res.deviceFallback);
+    // A Bluetooth open counts as on that device only when it was not a fallback and the track reports that device (or none).
+    let onDev = !!dev && !res.deviceFallback;
+    if (onDev) {
+      let tid;
+      try { const t = rawTrack(res.raw); tid = t && typeof t.getSettings === 'function' ? t.getSettings().deviceId : undefined; } catch { tid = undefined; }
+      if (typeof tid === 'string' && tid && tid !== dev) onDev = false;
+    }
+    const info = micInfo(res.raw, res.fallback, onDev);
     st.info = info;
     if (reason !== 'bluetooth') st.fellBack = res.deviceFallback;
-    else if (!res.deviceFallback) st.btAuto = dev;   // the Bluetooth try worked: automatic opens stay on it (see openMic)
+    else if (onDev) st.btAuto = dev;   // the Bluetooth try worked: automatic opens stay on it (see openMic)
     snapDefault();
     call('onMicInfo', info);
     if (reason !== 'bluetooth') call('onMicChange', { ok: true, reason, info, changed: (info.label || '') !== (prev || '') });   // the pages learn of a Bluetooth move from onRoute
@@ -4914,7 +4926,7 @@ function voiceCreateVad(opts) {
         }
       }
       if (bt && !skipBt && !st.btTried && !chosenId() && !onBluetooth(bt) && btMayTry(listed)) {
-        st.btTried = true; st.btTries++;
+        st.btTried = true;
         await openOnce('bluetooth', silent, bt.id, true);
         if (st.gen !== my || !st.ctx) return;
       }
@@ -4939,7 +4951,7 @@ function voiceCreateVad(opts) {
       const ok = await openOnce(reason, silent, dev, false);
       if (ok) await routeStep(my, silent, reason === 'bluetooth');
       return ok;
-    })().finally(() => { st.reopening = null; });
+    })().finally(() => { st.reopening = null; if (st.devPending && st.ctx && !st.settling) { st.devPending = false; deviceChanged(); } });
     return st.reopening;
   }
   // The first open's route step (Bluetooth first, onRoute). A reopen asked meanwhile waits for it (see reopen).
@@ -8374,7 +8386,6 @@ function voicePlayBlob(blob, my, meta) {
   return new Promise((resolve) => {
     if (my !== voicePlay.token) { resolve(false); return; }
     // Before the element is chosen: a closed context is replaced (a captured element is silent for good), a suspended one is resumed for a moment (display or not).
-    const wait = typeof voiceDispPagePrep === 'function' ? voiceDispPagePrep(my) : null;
     const begin = () => {
     if (my !== voicePlay.token) { resolve(false); return; }
     const a = voicePlay.audio || (voicePlay.audio = new Audio());
@@ -8427,7 +8438,14 @@ function voicePlayBlob(blob, my, meta) {
     if (p && typeof p.then === 'function') p.then(() => { applyNorm(); recordCopy(); }, () => done(false));
     else { applyNorm(); recordCopy(); }   // old browsers: play() is not a promise
     };
-    if (wait) wait.then(begin, begin); else begin();
+    // On Android the first sentences of a call wait (at most 2500 ms from the call's start) for the call's first route; then the display's context is prepared.
+    const go = () => {
+      if (my !== voicePlay.token) { resolve(false); return; }
+      const wait = typeof voiceDispPagePrep === 'function' ? voiceDispPagePrep(my) : null;
+      if (wait) wait.then(begin, begin); else begin();
+    };
+    const rw = typeof voiceCall !== 'undefined' && voiceCall && typeof voiceRouteWait === 'function' ? voiceRouteWait(voiceCall) : null;
+    if (rw) rw.then(go, go); else go();
   });
 }
 // report (optional): report.spoke is set true only when every sentence ended normally (no speech engine, no offline voice, an
@@ -8778,6 +8796,7 @@ async function voiceWakeAcquire(vc) {   // the screen stays on during a call; as
 function voiceCallTeardown(vc) {
   if (voiceCall !== vc) return;
   voiceCall = null;
+  if (typeof voiceRouteDone === 'function') voiceRouteDone(vc);   // a sentence waiting for the first route goes on
   if (typeof voicePrefetchClear === 'function') voicePrefetchClear();
   if (vc.rec) { try { vc.rec.stop(); } catch { /* already stopped */ } }   // a recorded call: the recorder lets go of its tap (uploads in flight finish)
   if (typeof voiceAutoReadReset === 'function') voiceAutoReadReset();   // nor after the call has ended
@@ -9000,8 +9019,32 @@ function voiceRenewApplies(vc) {   // only where Android's call routing applies:
     if (voiceIsIOS()) return false;
     if (voiceIsAndroidNav(navigator)) return true;
     const r = vc && vc.route;
-    return !!r && (r.bluetoothListed === true || VOICE_ROUTE_ANDROID_LABELS.test(String(r.label || '')));
+    return !!r && VOICE_ROUTE_ANDROID_LABELS.test(String(r.label || ''));
   } catch { return false; }
+}
+// The call's first route (Android only): vc.routeReady settles when the first renewal of the outputs has finished (any way), or the call ends. Never on iOS.
+// The first sentences of a call wait for it (voicePlayBlob), at most 2500 ms from the call's start.
+function voiceRouteReadyMake(vc) {
+  vc.routeDone = false; vc.routeResolve = null;
+  if (voiceIsIOS() || !voiceIsAndroidNav(navigator)) { vc.routeDone = true; vc.routeReady = Promise.resolve(); return; }
+  vc.routeReady = new Promise((r) => { vc.routeResolve = r; });
+}
+function voiceRouteDone(vc) {
+  if (!vc || vc.routeDone) return;
+  vc.routeDone = true;
+  const r = vc.routeResolve; vc.routeResolve = null;
+  if (r) r();
+}
+function voiceRouteSettle(vc) {   // the first route is ready once the renewal is not waiting to run again (success, failure, not applicable, given up)
+  if (vc && !vc.renewPending && !vc.renewing) voiceRouteDone(vc);
+}
+function voiceRouteWait(vc) {   // null: play now; else a promise that ends when the route is ready or 2500 ms after the call started, whichever is first
+  try {
+    if (!vc || vc.routeDone || !vc.routeReady) return null;
+    const left = 2500 - (Date.now() - (vc.startedAt || Date.now()));
+    if (left <= 0) return null;
+    return new Promise((res) => { const t = setTimeout(res, left); vc.routeReady.then(() => { clearTimeout(t); res(); }); });
+  } catch { return null; }
 }
 async function voiceCallOutputsRenew(vc) {
   try {
@@ -9039,9 +9082,10 @@ async function voiceCallOutputsRenew(vc) {
         try { voiceDispRoutesLost(); } catch { /* nothing playing */ }
       }
       vc.outputsRenewed = (vc.outputsRenewed || 0) + 1;
+      vc.renewPending = false;   // a trigger that came during this renewal is answered by it
       voiceCloseCtxLater(old.filter((c) => c && c !== fresh && c !== freshD).concat(toClose), 300);
       return true;
-    } finally { vc.renewing = false; }
+    } finally { vc.renewing = false; if (vc.routeSeen) voiceRouteSettle(vc); }
   } catch { return false; }   // a failure leaves the call as it was
 }
 function voiceCallOnRoute(vc, r) {   // handlers.onRoute: after every open and reopen of the microphone
@@ -9050,7 +9094,8 @@ function voiceCallOnRoute(vc, r) {   // handlers.onRoute: after every open and r
   vc.route = r;
   try { const m = $('cp-mic'); if (m && !vc.micLostOn && vc.micInfo) m.textContent = voiceMicLine(vc.micInfo, r); } catch { /* the line is a courtesy */ }
   if (r.bluetoothListed && !r.bluetooth && !r.chosen && !vc.routeToasted) { vc.routeToasted = true; try { toast(VOICE_ROUTE_TOAST, 5000); } catch { /* no toast */ } }
-  if (!vc.routeSeen) { vc.routeSeen = true; voiceCallOutputsRenew(vc); }
+  if (r.deviceId && r.deviceId !== prevDev) vc.renewFails = 0;   // a new move gets fresh tries
+  if (!vc.routeSeen) { vc.routeSeen = true; const done = () => voiceRouteSettle(vc); Promise.resolve(voiceCallOutputsRenew(vc)).then(done, done); }
   else if (r.deviceId && r.deviceId !== prevDev) voiceCallOutputsRenew(vc);   // the microphone moved (for example to the car): the outputs follow it
 }
 function voiceCallOnMicChange(vc, ev) {   // the microphone moved (a car connected mid-call): the outputs follow it
@@ -9344,6 +9389,7 @@ function voiceCallStart() {
   voiceEndedBar(false); voiceCallBgNote = false;   // a new call: the "call ended" bar goes away
   const vc = { agent, call: null, vad: null, callTurns: new Set(), hubTurns: new Map(), asks: new Map(), lastText: '', sendSeq: 0, expecting: false, wake: null, startedAt: Date.now(), lastFrame: Date.now(), lastTick: Date.now(), beatTimer: null, thinkSnd: null, thinkCtx: null, thinkOn: false };
   vc.vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: prefs.micLevel, interruptSensitivity: prefs.interruptSensitivity, endPause: prefs.endPause, echoHoldMs: prefs.echoHold, strictTalkOver: voiceIsIOS(), micChoice: voiceMicChoiceId, bluetoothFirst: voiceIsAndroidNav(navigator) });
+  if (typeof voiceRouteReadyMake === 'function') voiceRouteReadyMake(vc);
   voiceThinkingCtxMake(vc);   // iOS: the thinking sound's AudioContext is made and resumed inside this tap, before any await
   if (vc.thinkCtx && typeof voiceCreateKeepAlive === 'function') vc.keepAlive = voiceCreateKeepAlive({ ctx: vc.thinkCtx, allow: voiceKeepAliveAllowed });   // the Bluetooth / car route stays awake; the controller starts it, it sounds only while allowed
   if (voiceIsIOS()) {   // iPhone: no looping focus element (the page cannot pause other apps); the person is told to pause music
@@ -9738,6 +9784,7 @@ function voiceCallBeat() {   // once a second while a call is up: a gap of 10 s 
   if (gap > VOICE_STALL_MS && voiceCallStalled({ lastFrame: vc.lastFrame, lastTick: 0 }, now)) { voiceCallRelease('stall'); if (!document.hidden) voiceEndedBar(true); return; }
   vc.lastTick = now;
   if (vc.renewPending) voiceCallOutputsRenew(vc);   // the outputs are made again as soon as no sentence plays
+  if (vc.routeSeen) voiceRouteSettle(vc);
 }
 // Immediate hang-up without waiting for the hub: everything is let go and the person is told when they are back.
 function voiceCallRelease(reason) {

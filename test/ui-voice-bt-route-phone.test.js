@@ -33,11 +33,12 @@ function env(over) {
     clearTimeout() {},
     toast: (t, ms) => log.push('toast:' + ms + ':' + t),
     $: (id) => (o.els || {})[id] || null,
+    Date: o.Date || Date,
     voiceCall: undefined,
   };
   const names = Object.keys(e).filter((n) => n !== 'voiceCall');
   const prefsNow = o.prefsNow || (() => ({}));
-  const body = 'let voiceCall = null;\nconst voicePrefsNow = __p;\n' + ROUTE_SRC() + '\nreturn { voiceCallOutputsRenew, voiceCallOnRoute, voiceCallOnMicChange, voiceMicChoiceId, voiceMicLine, setCall: (c) => { voiceCall = c; } };';
+  const body = 'let voiceCall = null;\nconst voicePrefsNow = __p;\n' + ROUTE_SRC() + '\nreturn { voiceCallOutputsRenew, voiceCallOnRoute, voiceCallOnMicChange, voiceMicChoiceId, voiceMicLine, voiceRouteReadyMake, voiceRouteDone, voiceRouteWait, voiceRouteSettle, setCall: (c) => { voiceCall = c; } };';
   const fns = new Function(...names, '__p', body)(...names.map((n) => e[n]), prefsNow);
   return { fns, log, timers, AC, e };
 }
@@ -295,9 +296,13 @@ test('outputs renew: only on Android (user agent, or a list that looks like Chro
   assert.strictEqual(await d.fns.voiceCallOutputsRenew(vc), false); assert.strictEqual(d.AC.made.length, 0);
   vc.route = { label: 'Built-in microphone', bluetoothListed: false };
   assert.strictEqual(await d.fns.voiceCallOutputsRenew(vc), false); assert.strictEqual(d.AC.made.length, 0);
-  for (const route of [{ label: 'Speakerphone' }, { label: 'USB audio' }, { label: 'x', bluetoothListed: true }]) {
+  for (const route of [{ label: 'Speakerphone' }, { label: 'USB audio' }, { label: 'Bluetooth headset' }]) {
     const t = env({ android: false }); const v = makeVc({ route }); t.fns.setCall(v);
     assert.strictEqual(await t.fns.voiceCallOutputsRenew(v), true, JSON.stringify(route));
+  }
+  for (const route of [{ label: 'x', bluetoothListed: true }, { label: 'Speakerphone (2)' }]) {   // r2 FU1: a listed Bluetooth input alone, or a name that is not exactly Chrome's
+    const t = env({ android: false }); const v = makeVc({ route }); t.fns.setCall(v);
+    assert.strictEqual(await t.fns.voiceCallOutputsRenew(v), false, JSON.stringify(route)); assert.strictEqual(t.AC.made.length, 0);
   }
   const i = env({ android: true, ios: true }); const vi = makeVc({ route: { label: 'Speakerphone', bluetoothListed: true } }); i.fns.setCall(vi);
   assert.strictEqual(await i.fns.voiceCallOutputsRenew(vi), false);
@@ -341,4 +346,101 @@ test('F4: when the display refuses renewContext (false) its old context is not c
   t.timers.filter((x) => x.ms === 300)[0].f(); await flush();
   assert.ok(!sharedOld.closed, 'the display still uses it');
   assert.ok(oldThink.closed); assert.ok(t.AC.made[1].closed, 'the unused fresh display context is closed'); assert.ok(!t.AC.made[0].closed);
+});
+
+// ── review r2 ──
+test('r2 FU2: after a successful renewal renewPending is false (a trigger that came during it does not run a second one)', async () => {
+  const t = env(); const vc = makeVc(); t.fns.setCall(vc);
+  const p = t.fns.voiceCallOutputsRenew(vc);
+  assert.strictEqual(vc.renewing, true);
+  const q = t.fns.voiceCallOutputsRenew(vc);   // the trigger during it
+  assert.strictEqual(vc.renewPending, true);
+  assert.strictEqual(await q, false);
+  assert.strictEqual(await p, true);
+  assert.strictEqual(vc.renewPending, false);
+});
+
+test('r2 FU3: the failure count starts again when the microphone\'s deviceId changes', async () => {
+  const t = env({ els: { 'cp-mic': { textContent: '' } } }); const vc = makeVc({ routeSeen: true, route: { deviceId: 'a', label: 'Speakerphone' }, renewFails: 5 }); t.fns.setCall(vc);
+  t.fns.voiceCallOnRoute(vc, { deviceId: 'a', label: 'Speakerphone' }); await flush();
+  assert.strictEqual(vc.renewFails, 5, 'the same microphone: no fresh tries');
+  t.fns.voiceCallOnRoute(vc, { deviceId: 'b', label: 'Bluetooth headset', bluetooth: true }); await flush();
+  assert.strictEqual(vc.renewFails, 0); assert.strictEqual(vc.outputsRenewed, 1, 'and the move renews');
+});
+
+test('r2 B: Android: the call has a pending routeReady; iOS and other browsers have none (resolved at once)', async () => {
+  const a = env(); const va = makeVc(); a.fns.voiceRouteReadyMake(va);
+  assert.strictEqual(va.routeDone, false);
+  va.startedAt = Date.now();
+  assert.ok(a.fns.voiceRouteWait(va), 'a sentence waits');
+  const i = env({ ios: true }); const vi = makeVc({ startedAt: Date.now() }); i.fns.voiceRouteReadyMake(vi);
+  assert.strictEqual(vi.routeDone, true); assert.strictEqual(i.fns.voiceRouteWait(vi), null);
+  const d = env({ android: false }); const vd = makeVc({ startedAt: Date.now() }); d.fns.voiceRouteReadyMake(vd);
+  assert.strictEqual(d.fns.voiceRouteWait(vd), null);
+  assert.strictEqual(vd.routeDone, true);
+});
+
+test('r2 B: the wait is bounded: 2500 ms from the call\'s start, never longer; none once that has passed', async () => {
+  const t = env(); const vc = makeVc({ startedAt: Date.now() - 1000 }); t.fns.voiceRouteReadyMake(vc);
+  const w = t.fns.voiceRouteWait(vc);
+  const tm = t.timers[t.timers.length - 1];
+  assert.ok(tm.ms <= 1500 && tm.ms > 1400, 'the rest of 2500 ms: ' + tm.ms);
+  tm.f(); await w;   // the timer ends the wait without the route
+  assert.strictEqual(vc.routeDone, false);
+  vc.startedAt = Date.now() - 2600;
+  assert.strictEqual(t.fns.voiceRouteWait(vc), null, 'past 2500 ms: plays at once');
+});
+
+test('r2 B: the first renewal finishing (success, not applicable) or the call ending settles routeReady; a deferred one keeps it waiting', async () => {
+  const t = env({ els: { 'cp-mic': { textContent: '' } } }); const vc = makeVc({ startedAt: Date.now() }); t.fns.setCall(vc); t.fns.voiceRouteReadyMake(vc);
+  let woke = false; const w = t.fns.voiceRouteWait(vc); w.then(() => { woke = true; });
+  await flush(); assert.strictEqual(woke, false, 'nothing yet: no route');
+  t.fns.voiceCallOnRoute(vc, { deviceId: 'spk', label: 'Speakerphone' }); await flush(40);
+  assert.strictEqual(vc.outputsRenewed, 1); assert.strictEqual(vc.routeDone, true); assert.strictEqual(woke, true);
+  // deferred: a sentence sounds, so the first renewal waits; the route is not ready yet
+  const d = env({ voicePlay: { audio: { paused: false, ended: false }, cancel: null }, els: { 'cp-mic': { textContent: '' } } }); const vd = makeVc({ startedAt: Date.now() }); d.fns.setCall(vd); d.fns.voiceRouteReadyMake(vd);
+  d.fns.voiceCallOnRoute(vd, { deviceId: 'spk', label: 'Speakerphone' }); await flush(40);
+  assert.strictEqual(vd.renewPending, true); assert.strictEqual(vd.routeDone, false);
+  // the call ends
+  d.fns.voiceRouteDone(vd); assert.strictEqual(vd.routeDone, true);
+  // not applicable: the renewal does not apply, the route is ready at once
+  const n = env({ android: false, els: { 'cp-mic': { textContent: '' } } }); const vn = makeVc({ startedAt: Date.now() }); n.fns.setCall(vn); n.fns.voiceRouteReadyMake(vn);
+  assert.strictEqual(vn.routeDone, true);
+});
+
+test('r2 B: voicePlayBlob (phone) waits for the first route during a call, only then plays; a stop during the wait means nothing plays; no call: no wait', async () => {
+  const src = sliceBetween('function voicePlayBlob(blob, my, meta)', '// report (optional)');
+  const make = (o) => {
+    const log = { play: 0, urls: 0 };
+    const routeWaits = [];
+    const voicePlay = { token: 1, audio: null, url: null, cancel: null };
+    class Audio { constructor() { voicePlay.audioMade = true; } play() { log.play++; return Promise.resolve(); } }
+    const URLf = { createObjectURL: () => { log.urls++; return 'blob:x'; }, revokeObjectURL() {} };
+    const fns = new Function('voicePlay', 'Audio', 'URL', 'voiceCall', 'voiceRouteWait', 'voiceDispPagePrep', 'voiceDisplayRoute', 'voiceDisplayHook', 'voiceNoteNormalized',
+      src + '\nreturn voicePlayBlob;')(voicePlay, Audio, URLf, o.call, (vc) => { routeWaits.push(vc); return o.wait ? o.wait() : null; }, undefined, undefined, undefined, undefined);
+    return { fns, log, voicePlay, routeWaits };
+  };
+  let release; const gate = new Promise((r) => { release = r; });
+  const t = make({ call: { id: 1 }, wait: () => gate });
+  const p = t.fns({ size: 3 }, 1, null);
+  await flush(); assert.strictEqual(t.log.play, 0, 'waiting for the route');
+  release(); await flush(); assert.strictEqual(t.log.play, 1, 'plays after it');
+  t.voicePlay.cancel && t.voicePlay.cancel(); await p;
+  // a stop during the wait
+  let rel2; const g2 = new Promise((r) => { rel2 = r; });
+  const u = make({ call: { id: 1 }, wait: () => g2 });
+  const q = u.fns({ size: 3 }, 1, null); await flush();
+  u.voicePlay.token = 2;   // voiceStopPlayback
+  rel2(); assert.strictEqual(await q, false); assert.strictEqual(u.log.play, 0);
+  // no call: the wait is not even asked for
+  const n = make({ call: null, wait: () => gate });
+  const r = n.fns({ size: 3 }, 1, null); await flush();
+  assert.strictEqual(n.routeWaits.length, 0); assert.strictEqual(n.log.play, 1);
+  n.voicePlay.cancel && n.voicePlay.cancel(); await r;
+});
+
+test('r2 B: voiceCallStart makes the call\'s routeReady and the teardown settles it', () => {
+  const start = sliceBetween('function voiceCallStart()', 'function voiceCallWire()');
+  assert.match(start, /voiceRouteReadyMake\(vc\)/);
+  assert.match(sliceBetween('function voiceCallTeardown(vc)', 'function voiceCallRelease'), /voiceRouteDone\(vc\)/);
 });

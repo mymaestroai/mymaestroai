@@ -19,7 +19,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The call's route functions run against fakes. Names the page provides are passed in.
 function makeRoute(o = {}) {
-  const log = { toasts: [], moved: [], loud: 0, made: [] };
+  const log = { toasts: [], moved: [], loud: 0, made: [], timeouts: [] };
   class Ctx {
     constructor() { this.state = 'suspended'; this.n = Ctx.n = (Ctx.n || 0) + 1; log.made.push(this); }
     resume() { this.state = 'running'; return Promise.resolve(); }
@@ -31,10 +31,10 @@ function makeRoute(o = {}) {
   const voicePlay = { token: 0, ctx: new Ctx(), source: null, btn: null, busy: 0 };
   const win = { AudioContext: o.noAC ? undefined : Ctx, speechSynthesis: { speaking: false } };
   const src = routeBlock().replace(/^[\s\S]*?(?=    function voiceMicChoiceId)/, '');
-  const make = new Function('voiceCallS', 'voicePlay', 'window', 'navigator', 'voiceIsIOSNav', 'voiceIsAndroidNav', 'voiceById', 'voiceMicLineText', 'hubToast', 'voiceLoudApply', 'voicePrefsNow',
-    src + '\nreturn { voiceRenewApplies, voiceMicChoiceId, voiceRouteSuffix, voiceCallVadFor, voiceCallOnRoute, voiceCallOnMicChange, voiceCallSounding, voiceCallOutputsRenew, VOICE_ROUTE_PLAIN_LINE };');
+  const make = new Function('voiceCallS', 'voicePlay', 'window', 'navigator', 'voiceIsIOSNav', 'voiceIsAndroidNav', 'voiceById', 'voiceMicLineText', 'hubToast', 'voiceLoudApply', 'voicePrefsNow', 'setTimeout',
+    src + '\nreturn { voiceRenewApplies, voiceMicChoiceId, voiceRouteSuffix, voiceCallVadFor, voiceCallOnRoute, voiceCallOnMicChange, voiceCallSounding, voiceCallOutputsRenew, VOICE_ROUTE_PLAIN_LINE, voiceRouteReadyMake, voiceRouteDone, voiceRouteSettle, voiceRouteWait };');
   const api = make(S, voicePlay, win, { userAgent: o.android === false ? 'Mozilla/5.0 (X11; Linux x86_64)' : 'Mozilla/5.0 (Linux; Android 14; Pixel Fold)' }, () => !!o.ios, require('../lib/ui-voice').voiceIsAndroidNav, () => bar, (i) => 'Microphone: ' + (i.label || 'default'), (t, ms) => log.toasts.push([t, ms]),
-    () => { log.loud++; }, () => ({ micDevice: o.choice || undefined }));
+    () => { log.loud++; }, () => ({ micDevice: o.choice || undefined }), (f, ms) => { log.timeouts.push({ f, ms }); return o.holdTimers ? 0 : setTimeout(f, ms); });
   return { api, S, voicePlay, win, log, bar, Ctx };
 }
 
@@ -255,9 +255,13 @@ test('renewal only on Android (user agent, or a device list that looks like Chro
   assert.strictEqual(await d.api.voiceCallOutputsRenew(), false); assert.strictEqual(d.log.made.length, 1, 'a plain desktop: nothing is made');
   d.S.route = { label: 'Built-in microphone', bluetoothListed: false };
   assert.strictEqual(d.api.voiceRenewApplies(), false);
-  for (const route of [{ label: 'Speakerphone' }, { label: 'Headset earpiece' }, { label: 'Wired headset' }, { label: 'USB audio' }, { label: 'x', bluetoothListed: true }]) {
+  for (const route of [{ label: 'Speakerphone' }, { label: 'Headset earpiece' }, { label: 'Wired headset' }, { label: 'USB audio' }, { label: 'Bluetooth headset' }]) {
     d.S.route = route; assert.strictEqual(d.api.voiceRenewApplies(), true, JSON.stringify(route));
   }
+  d.S.route = { label: 'x', bluetoothListed: true };   // r2 FU1: a listed Bluetooth input alone does not make it Android
+  assert.strictEqual(d.api.voiceRenewApplies(), false);
+  d.S.route = { label: 'Speakerphone (2)' };
+  assert.strictEqual(d.api.voiceRenewApplies(), false, 'only the exact names');
   const i = makeRoute({ ios: true }); i.S.route = { label: 'Speakerphone', bluetoothListed: true };
   assert.strictEqual(i.api.voiceRenewApplies(), false);
 });
@@ -313,4 +317,84 @@ test('the thinking sound counts as sounding: a renewal waits', async () => {
   const t = makeRoute(); t.S.thinking = { busy: () => true };
   assert.strictEqual(await t.api.voiceCallOutputsRenew(), false); assert.strictEqual(t.S.renewPending, true); assert.strictEqual(t.log.made.length, 1);
   clearTimeout(t.S.renewTimer);
+});
+
+// ── review r2 ──
+test('r2 FU3: the failure count starts again when the microphone\'s deviceId changes', async () => {
+  const t = makeRoute({ S: { renewFails: 5 } });
+  const vad = { start() {} }; t.S.vad = vad;
+  t.api.voiceCallOnRoute(vad, { deviceId: 'a', label: 'Speakerphone' }); await wait(20);
+  assert.strictEqual(t.S.renewFails, 0, 'the first microphone is a new device too');
+  t.S.renewFails = 5;
+  t.api.voiceCallOnRoute(vad, { deviceId: 'a', label: 'Speakerphone' }); await wait(20);
+  assert.strictEqual(t.S.renewFails, 5, 'the same microphone: no fresh tries');
+  t.api.voiceCallOnRoute(vad, { deviceId: 'b', label: 'Bluetooth headset', bluetooth: true }); await wait(20);
+  assert.strictEqual(t.S.renewFails, 0); assert.strictEqual(t.S.outputsRenewed, 2, 'the first route renewed, and the move renews again');
+});
+
+test('r2 B: Android: the call has a pending routeReady; iOS and other browsers have none', () => {
+  const a = makeRoute({ holdTimers: true }); a.S.callStartedAt = Date.now(); a.api.voiceRouteReadyMake();
+  assert.strictEqual(a.S.routeDone, false);
+  assert.ok(a.api.voiceRouteWait(), 'a sentence waits');
+  const i = makeRoute({ ios: true }); i.S.callStartedAt = Date.now(); i.api.voiceRouteReadyMake();
+  assert.strictEqual(i.S.routeDone, true); assert.strictEqual(i.api.voiceRouteWait(), null);
+  const d = makeRoute({ android: false }); d.S.callStartedAt = Date.now(); d.api.voiceRouteReadyMake();
+  assert.strictEqual(d.S.routeDone, true); assert.strictEqual(d.api.voiceRouteWait(), null);
+});
+
+test('r2 B: the wait is bounded: 2500 ms from the call\'s start; none once that has passed or when no call is up', async () => {
+  const t = makeRoute({ holdTimers: true }); t.S.callStartedAt = Date.now() - 1000; t.api.voiceRouteReadyMake();
+  const w = t.api.voiceRouteWait();
+  const tm = t.log.timeouts[t.log.timeouts.length - 1];
+  assert.ok(tm.ms <= 1500 && tm.ms > 1400, 'the rest of 2500 ms: ' + tm.ms);
+  tm.f(); await w;
+  assert.strictEqual(t.S.routeDone, false);
+  t.S.callStartedAt = Date.now() - 2600;
+  assert.strictEqual(t.api.voiceRouteWait(), null);
+  t.S.callStartedAt = Date.now(); t.S.call = null;
+  assert.strictEqual(t.api.voiceRouteWait(), null, 'outside a call');
+});
+
+test('r2 B: the first renewal finishing settles routeReady; a deferred one keeps it waiting; the call ending settles it', async () => {
+  const t = makeRoute(); t.S.callStartedAt = Date.now(); t.api.voiceRouteReadyMake();
+  const vad = { start() {} }; t.S.vad = vad;
+  let woke = false; t.api.voiceRouteWait().then(() => { woke = true; });
+  await wait(5); assert.strictEqual(woke, false);
+  t.api.voiceCallOnRoute(vad, { deviceId: 'spk', label: 'Speakerphone' }); await wait(30);
+  assert.strictEqual(t.S.outputsRenewed, 1); assert.strictEqual(t.S.routeDone, true); assert.strictEqual(woke, true);
+  const d = makeRoute({ holdTimers: true }); d.S.callStartedAt = Date.now(); d.api.voiceRouteReadyMake(); d.voicePlay.busy = 1;   // a sentence sounds
+  const vd = { start() {} }; d.S.vad = vd;
+  d.api.voiceCallOnRoute(vd, { deviceId: 'spk', label: 'Speakerphone' }); await wait(30);
+  assert.strictEqual(d.S.renewPending, true); assert.strictEqual(d.S.routeDone, false, 'deferred: still waiting');
+  d.api.voiceRouteDone(); assert.strictEqual(d.S.routeDone, true);
+  const n = makeRoute({ android: false }); n.S.callStartedAt = Date.now(); n.api.voiceRouteReadyMake();
+  assert.strictEqual(n.S.routeDone, true, 'not applicable: ready at once');
+});
+
+test('r2 B: voiceSpeakText waits for the first route during a call before it plays; a stop during the wait plays nothing; no wait outside a call', async () => {
+  const src = between('    async function voiceSpeakText(agent, md, btn', '    document.addEventListener(\'click\'');
+  const make = (o) => {
+    const log = { hub: 0, waits: 0 };
+    const voicePlay = { token: 1, btn: null, busy: 0, pre: null };
+    const fn = new Function('voicePlay', 'voiceStopPlayback', 'voiceSpeechText', 'voiceSentences', 'voicePlayState', 'voiceReady', 'voicePlayHub', 'voiceDeviceFallback', 'hubToast', 'voiceCallS', 'voiceRouteWait', 'voicePlayDevice',
+      src + '\nreturn voiceSpeakText;')(voicePlay, () => {}, (s) => s, (s) => [s], () => {}, () => true, async () => { log.hub++; }, () => false, () => {}, { linkLost: false }, () => { log.waits++; return o.wait ? o.wait() : null; }, async () => {});
+    return { fn, log, voicePlay };
+  };
+  let release; const gate = new Promise((r) => { release = r; });
+  const t = make({ wait: () => gate });
+  const p = t.fn('a', 'Hello.', null, {}); await wait(5);
+  assert.strictEqual(t.log.hub, 0, 'waiting for the route'); assert.strictEqual(t.voicePlay.busy, 0, 'not counted as sounding while it waits, so the renewal can run');
+  release(); await p; assert.strictEqual(t.log.hub, 1);
+  let rel2; const g2 = new Promise((r) => { rel2 = r; });
+  const u = make({ wait: () => g2 });
+  const q = u.fn('a', 'Hello.', null, {}); await wait(5);
+  u.voicePlay.token = 2;   // a stop
+  rel2(); await q; assert.strictEqual(u.log.hub, 0);
+  const n = make({});
+  await n.fn('a', 'Hello.', null, {}); assert.strictEqual(n.log.hub, 1);
+});
+
+test('r2 B: voiceCallStart makes the call\'s routeReady; the call ending settles it', () => {
+  assert.match(app, /S\.callStartedAt = Date\.now\(\); if \(typeof voiceRouteReadyMake === 'function'\) voiceRouteReadyMake\(\);/);
+  assert.match(between('      S.renewPending = false; S.renewFails = 0; S.route = null;', 'S.call = null; S.vad = null;'), /voiceRouteDone\(\)/);
 });
