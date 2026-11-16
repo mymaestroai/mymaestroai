@@ -315,14 +315,29 @@ test('setAgentPermissions: an agent that loses the module loses its trust entrie
   await r.finish(['sam', 'helper']);
   r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam', 'helper'] }));
   r.set(withAck({ computer: PC2, mode: 'session', trusted: ['sam'] }));
-  const perms = { owner: { level: 'look', askEachSession: true }, helper: { level: 'look', askEachSession: true } };
-  const out = r.mods.setAgentPermissions('poldemo', { agents: ['helper'], permissions: perms }, ADMIN);   // sam is revoked
+  const perms = { owner: { level: 'look', askEachSession: true }, helper: { level: 'act', askEachSession: true } };
+  const out = r.mods.setAgentPermissions('poldemo', { agents: ['helper'], permissions: perms }, ADMIN);   // sam is revoked; helper stays at Act
   assert.strictEqual(out.changed, true);
   assert.deepStrictEqual(r.policy().slice().sort(), [`${PC}:day`, `${PC}:trust:helper`].sort());
   assert.deepStrictEqual(r.mods.approvalPolicy('poldemo').policy, { [PC]: { mode: 'day', trusted: ['helper'] } });
   // giving it back does not revive the entry
   r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: { ...perms, sam: { level: 'look', askEachSession: true } } }, ADMIN);
   assert.ok(!r.policy().some(e => e.endsWith(':trust:sam')));
+});
+
+test('setAgentPermissions: an agent set to Look loses its trust entries, and raising it again later does not bring them back', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish(['sam', 'helper']);
+  const act = { owner: { level: 'look', askEachSession: true }, helper: { level: 'act', askEachSession: true }, sam: { level: 'act', askEachSession: true } };
+  r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: act }, ADMIN);
+  r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam', 'helper'] }));
+  r.set(withAck({ computer: PC2, mode: 'session', trusted: ['sam'] }));
+  r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: { ...act, sam: { level: 'look', askEachSession: true } } }, ADMIN);
+  assert.ok(!r.policy().some(e => e.endsWith(':trust:sam')), 'sam at Look keeps no trust entry');
+  assert.ok(r.policy().includes(`${PC}:trust:helper`) && r.policy().includes(`${PC}:day`), 'helper and the day mode stay');
+  r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: act }, ADMIN);   // back to Act, asked
+  assert.ok(!r.policy().some(e => e.endsWith(':trust:sam')), 'raising it again does not revive the old trust');
+  assert.deepStrictEqual(r.mods.approvalPolicy('poldemo').policy[PC], { mode: 'day', trusted: ['helper'] });
 });
 
 test('the generic grant (setAgents) and identity changes also drop trust entries of an agent that loses the module', async (t) => {
@@ -495,6 +510,7 @@ test('server.js: the approval-policy routes sit behind the same admin-browser ch
   assert.match(block, /'computers_status', \{\}, \{ hub: true, timeoutMs \}/);
   assert.match(block, /computersOf\(30000\)/);
   assert.match(block, /Could not load the computers\./);
+  assert.match(block, /if \(listed && !known\) return jsonResponse\(res, 400, \{ error: 'That computer is not set up here\.' \}\);/, 'a computer the module does not list is refused');
   assert.match(block, /id: x\.nodeid\.split\('\/'\)\.pop\(\), nodeid: x\.nodeid, name: String\(x\.name \|\| ''\)/);
   assert.match(block, /403/);
 });

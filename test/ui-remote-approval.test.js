@@ -211,3 +211,16 @@ test('a stale (older generation) answer paints nothing', async () => {
   assert.ok(!w.els['appr-list'].innerHTML.includes('OLD'));
   assert.match(w.els['appr-list'].innerHTML, /PC-A/);
 });
+
+test('Save anyway posts what the row shows now, not what it showed when the warning appeared', async () => {
+  const w = await loaded();
+  const ov = {};
+  w.rows = rowsFrom(w.els['appr-list'].innerHTML, ov);
+  w.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true } });
+  ov.trusted = ['sam', 'helper'];
+  await w.t.apprSave(w.rows['pc-a-1'].button);
+  assert.deepStrictEqual(w.calls[0].body, { computer: 'pc-a-1', mode: 'day', trusted: ['helper', 'sam'] });
+  ov.mode = 'session'; ov.trusted = ['helper'];   // changed while the warning shows
+  await w.t.apprAck(w.rows['pc-a-1'].button);
+  assert.deepStrictEqual(w.calls[1].body, { computer: 'pc-a-1', mode: 'session', trusted: ['helper'], acknowledged: true });
+});

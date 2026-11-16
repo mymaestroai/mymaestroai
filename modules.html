@@ -304,8 +304,9 @@ async function apprSave(btn) {
 }
 async function apprAck(btn) {
   const row = apprRowOf(btn); if (!row) return;
-  const body = apprPending[row.getAttribute('data-computer')]; if (!body) return;
-  await apprPost(btn, Object.assign({}, body, { acknowledged: true }));
+  if (!apprPending[row.getAttribute('data-computer')]) return;
+  // What is on screen now, not what was there when the warning appeared: the person may have changed the row meanwhile.
+  await apprPost(btn, Object.assign(apprRead(row), { acknowledged: true }));
 }
 function apprCancel(btn) {
   const row = apprRowOf(btn); if (!row) return;

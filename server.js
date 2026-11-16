@@ -2012,7 +2012,10 @@ async function handleHttpRequest(req, res) {
           };
           if (req.method === 'POST') {
             const body = await bodyJson();
-            const known = body && typeof body.computer === 'string' ? ((await computersOf(10000)) || []).find((x) => x.id === body.computer) : null;
+            const listed = body && typeof body.computer === 'string' ? await computersOf(10000) : null;
+            const known = listed ? listed.find((x) => x.id === body.computer) : null;
+            // A computer the module doesn't list is refused; when the list can't be read, the change still goes through (by id only), so asking more is never blocked.
+            if (listed && !known) return jsonResponse(res, 400, { error: 'That computer is not set up here.' });
             return jsonResponse(res, 200, mods.setApprovalPolicy(m[1], body, { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined }, { computerName: known ? known.name : '' }));
           }
           const out = { ok: true, ...mods.approvalPolicy(m[1]), computers: [] };
