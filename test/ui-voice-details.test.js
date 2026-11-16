@@ -197,7 +197,7 @@ test('voiceSpeechText is unchanged: tables and code still add the details note',
 test('the page copies carry the same code, the notes and the settings controls', () => {
   const lib = read('lib/ui-voice-call.js'), app = read('app.js'), mob = read('mobile.js');
   for (const [name, src] of [['app.js', app], ['mobile.js', mob]]) {
-    for (const s of ['function voiceRestAnalysis(rest, extra, readWords, openTail) {', 'function voiceReplySentences(markdown, done, readWords) {',
+    for (const s of ['function voiceRestAnalysis(rest, extra, readWords, openTail, extraRaw) {', 'function voiceReplySentences(markdown, done, readWords) {',
       'const VOICE_NOTE_LIST = ', 'const VOICE_NOTE_TABLE = ', 'const VOICE_NOTE_CODE = ', 'const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];', 'detailsReadWords: 40 };',
       'Read short extra parts aloud', 'voiceReplySentences(lastText, !!done, readWords())', 'enqueue(r.note, \'reply\', null, null, false, true)', '!i.note)',
       'Longer lists, tables and code stay in the chat.']) assert.ok(src.includes(s), name + ': ' + s);
@@ -205,7 +205,7 @@ test('the page copies carry the same code, the notes and the settings controls',
     assert.ok(!src.includes('voiceIsNoteText'), name + ': notes are recognised by a flag, not by their text');
     assert.ok(!src.includes("const noteText = voiceSpeechText('| a |');"), name + ': the old single-note check is gone');
   }
-  assert.ok(lib.includes('function voiceRestAnalysis(rest, extra, readWords, openTail) {'));
+  assert.ok(lib.includes('function voiceRestAnalysis(rest, extra, readWords, openTail, extraRaw) {'));
   assert.ok(app.includes('id="st-voice-details"') || app.includes("'st-voice-details'"), 'desktop select');
   assert.ok(app.includes('prefs.detailsReadWords = Number(details.value)'), 'desktop saves it');
   assert.ok(mob.includes("voicePrefsSave({ detailsReadWords: Number(details.value) })"), 'phone sheet saves it');
@@ -296,4 +296,67 @@ test('once done was processed, a later done for the same reply never lowers what
   const before = said().length;
   h.call.onReplyText(FOUR, true); await tick(); await h.drain();
   assert.deepStrictEqual(said().slice(before), ['One is here.', 'Two is here.', 'Three is here.', NOTE]);
+});
+
+// ── review round 2 ──
+test('22. an indented YAML list after a blank line or a heading is code, not a nested list (spaces and a tab)', () => {
+  const spaces = 'Here is the config.\n\n## YAML\n\n    - alpha: 1\n    - beta: 2';
+  const tab = 'Here is the config.\n\n## YAML\n\n\t- alpha: 1\n\t- beta: 2';
+  for (const md of [spaces, tab]) {
+    const r = voiceReplySentences(md, true);
+    assert.deepStrictEqual(r, { sentences: ['Here is the config.'], note: NOTE_CODE }, JSON.stringify(md));
+    assert.ok(!/alpha|beta/.test(r.sentences.join(' ')), 'the code is never read');
+  }
+  // the rest starting with an indented list, and one after a fence close, are code too
+  assert.strictEqual(voiceReplySentences('Here it is.\n\n    - alpha: 1\n    - beta: 2', true).note, NOTE_CODE);
+  // a nested item inside a real list stays a list item, also after a blank line (a loose list)
+  assert.strictEqual(voiceReplySentences(LEAD + '\n\n- Check the disk\n\n    - the first disk\n- Check the logs', true).note, '');
+  assert.strictEqual(voiceReplySentences(LEAD + '\n\n1. Check the disk\n    - the first disk\n    - the second disk\n2. Check the logs', true).note, '');
+});
+
+test('23. indented code directly after a heading (no blank line) is code', () => {
+  assert.deepStrictEqual(voiceReplySentences('Here is the answer.\n\n## Command\n    npm run build', true), { sentences: [LEAD], note: NOTE_CODE });
+  assert.deepStrictEqual(voiceReplySentences('Here is the answer.\n\n## Command\n\tnpm run build', true), { sentences: [LEAD], note: NOTE_CODE });
+});
+
+test('24. the words "a link" / "a file path" in prose are not a raw link or path; a real one still is', () => {
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. This creates a link between the two ideas.', true),
+    { sentences: ['One.', 'Two.', 'Three.', 'This creates a link between the two ideas.'], note: '' });
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. Pick a file path that you like.', true),
+    { sentences: ['One.', 'Two.', 'Three.', 'Pick a file path that you like.'], note: '' });
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. Visit https://a.com.', true), { sentences: ['One.', 'Two.', 'Three.'], note: NOTE });
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. Open /etc/app/x.conf.', true), { sentences: ['One.', 'Two.', 'Three.'], note: NOTE });
+  // ordinary words in the rest are not raw either
+  assert.deepStrictEqual(voiceReplySentences('Here it is.\n\n## Notes\nThis creates a link and a file path for you.', true),
+    { sentences: ['Here it is.', 'Notes.', 'This creates a link and a file path for you.'], note: '' });
+  assert.strictEqual(voiceReplySentences('Here it is.\n\n## Notes\nSee /etc/app/x.conf for you.', true).note, NOTE);
+  assert.strictEqual(V.voicePathsToWords('See /etc/app/x.conf now'), 'See a file path now', 'the default word is unchanged');
+  assert.strictEqual(V.voicePathsToWords('See /etc/app/x.conf now', 'PATH'), 'See PATH now');
+  assert.strictEqual(voiceSpeechText('See /etc/app/x.conf now and https://a.com'), 'See a file path now and a link.');
+});
+
+test('25. an interjection starts a new reply: a done that arrives alone with fewer sentences than were spoken is spoken, with its own note', async () => {
+  const h = await startedCall();
+  const sendTurn = async () => { h.t += 20000; for (let k = 0; k < 3; k++) for (const t of h.timers.filter(x => x.at <= h.t)) { h.timers = h.timers.filter(x => x !== t); t.fn(); await tick(40); } await h.drain(); };
+  await sendTurn();
+  assert.strictEqual(h.sent.length, 1);
+  const said = () => h.spoken.filter(s => !/considering/.test(s));
+  h.call.onReplyText(TWO_ITEMS, false); await tick(); await h.drain();
+  h.call.onReplyText(TWO_ITEMS, true); await tick(); await h.drain();   // done processed: three sentences spoken
+  assert.strictEqual(said().length, 3);
+  // the turn is still running; the person interjects (it is sent as an interjection, not a new turn)
+  h.running = true;
+  h.hd.onSpeechStart(); h.hd.onSpeechEnd({ text: 'and one more thing' }); await tick();
+  await sendTurn();
+  assert.strictEqual(h.sent.length, 1, 'an interjection, not a new turn');
+  const before = said().length;
+  h.call.onReplyText('Fine.', true); await tick(); await h.drain();   // the new reply arrives only as done, one sentence
+  assert.deepStrictEqual(said().slice(before), ['Fine.']);
+  // and it says its own note once
+  const mid = said().length;
+  h.running = true;
+  h.hd.onSpeechStart(); h.hd.onSpeechEnd({ text: 'again please' }); await tick();
+  await sendTurn();
+  h.call.onReplyText(CODE, true); await tick(); await h.drain();
+  assert.strictEqual(said().slice(mid).filter(s => s === NOTE_CODE).length, 1, 'the new reply says its own note, once');
 });
