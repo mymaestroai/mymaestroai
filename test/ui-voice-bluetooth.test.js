@@ -265,7 +265,7 @@ test('fallback: the first call is exactly as before and info reports the track',
   const { b, vad, events } = await liveVad();
   assert.strictEqual(b.gums.length, 1);
   assert.deepStrictEqual(b.gums[0], { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-  assert.deepStrictEqual(events.info[0], { label: 'Mic A', sampleRate: 48000, channelCount: 1, echoCancellation: true, fallback: false });
+  assert.deepStrictEqual(events.info[0], { label: 'Mic A', sampleRate: 48000, channelCount: 1, echoCancellation: true, fallback: false, deviceId: 'dev-a', bluetooth: false });
   assert.deepStrictEqual(vad.info(), events.info[0]);
   await vad.stop();
 });
