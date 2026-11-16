@@ -558,8 +558,8 @@ test('remote-desktop.html: pageshow with persisted reloads after the leave beaco
   assert.equal(b.log.starts.length, starts, 'no reconnect');
 });
 
-test('modules.html: a pageshow listener with persisted calls loadDesktopBox', async () => {
-  assert.match(modules, /window\.addEventListener\('pageshow', \(e\) => \{ if \(e && e\.persisted === true\) loadDesktopBox\(\); \}\);/);
+test('modules.html: a pageshow listener with persisted calls loadDesktopBox (and loadApprovals, the Agent approvals box)', async () => {
+  assert.match(modules, /window\.addEventListener\('pageshow', \(e\) => \{ if \(e && e\.persisted === true\) \{ loadDesktopBox\(\); loadApprovals\(\); \} \}\);/);
   const src = modules.match(/<script>([\s\S]*)<\/script>/)[1];
   const els = {}; const calls = [];
   const el = (id) => els[id] || (els[id] = { id, innerHTML: '', textContent: '', className: '', classList: { add() {}, contains: () => true }, disabled: false });
@@ -578,6 +578,7 @@ test('modules.html: a pageshow listener with persisted calls loadDesktopBox', as
   sandbox.__wl.pageshow.forEach(f => f({ persisted: true }));
   await settle();
   assert.equal(calls.filter(c => c === '/api/remote-desktop').length, before + 1, 'persisted reloads the computers');
+  assert.ok(calls.includes('/api/modules/remote-computers/approval-policy'), 'persisted reloads the approvals too');
 });
 
 // Review r1 (Sentinel): when Back's End fails, hangs or is refused, the page says Leave before going, because a history step may keep it in

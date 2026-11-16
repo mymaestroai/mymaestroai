@@ -27,7 +27,7 @@ function load() {
     const r = state.posts.shift() || { status: 200, json: { ok: true } };
     return { ok: r.status < 400, status: r.status, json: async () => r.json };
   };
-  const ctx = vm.createContext({ document, fetch, location: { origin: 'http://hub', search: '', hash: '', pathname: '/modules' }, history: { replaceState() {} }, navigator: {}, setTimeout, clearTimeout, setInterval, clearInterval, Date, console, URLSearchParams });
+  const ctx = vm.createContext({ document, fetch, location: { origin: 'http://hub', search: '', hash: '', pathname: '/modules' }, history: { replaceState() {} }, navigator: {}, window: { addEventListener() {} }, setTimeout, clearTimeout, setInterval, clearInterval, Date, console, URLSearchParams });
   vm.runInContext(script + '\nthis.t = { loadApprovals, apprSave, apprAck, apprCancel, overviewHtml, setCurrent(m, sel) { current = m; selected = sel === undefined ? null : sel; } };', ctx);
   return { t: ctx.t, calls, state, els };
 }
