@@ -3259,26 +3259,38 @@ function voiceSpokenLead(markdown, done) {
   }
   return { lead: text, cut: false };
 }
-// Every note the call can say about what it left out (trimmed, as it is queued): the generic one and the three that name the kind.
-function voiceNoteTexts() { return [VOICE_DETAILS_NOTE, VOICE_NOTE_LIST, VOICE_NOTE_TABLE, VOICE_NOTE_CODE].map(n => n.trim()); }
-function voiceIsNoteText(text) { return voiceNoteTexts().includes(text); }
 // What the lead leaves out, judged at the end of a reply. rest: the markdown after the cut; extra: the lead's sentences beyond the cap.
-// -> { substantial, kind: 'list' | 'table' | 'code' | '', sentences }: substantial when it holds a code block, a table, or 3+ raw links / file paths,
-// or is more than readWords spoken words; sentences: what is read when it is short.
+// -> { substantial, kind: 'table' | 'code' | 'list' | '', sentences }: substantial when it holds a code block (fenced, or indented), a table, any raw link
+// or file path (they are never read out), or is more than readWords spoken words; sentences: what is read when it is short. Blockquote markers
+// are looked through (a fence or a table row inside a quote counts). The kind: table first, then code, then list (items outside code), else ''.
 function voiceRestAnalysis(rest, extra, readWords, openTail) {
-  const lines = String(rest).split('\n');
-  const hasCode = /(^|\n)[ \t]*(```|~~~)/.test(rest);
+  const lines = String(rest).split('\n').map(l => l.replace(/^[ \t]*(?:>[ \t]?)+/, ''));   // each line without its blockquote markers
+  const itemRe = /^[ \t]*(?:[-*+•◦▪‣]|\d+[.)])[ \t]+/;
+  // code lines: inside a fence (fence lines too), or indented 4+ spaces / a tab (not a list item) after a blank line or another such line
+  const code = []; let fence = '', prevBlank = true, prevCode = false;
+  for (const l of lines) {
+    const f = /^[ \t]*(```|~~~)/.exec(l);
+    let isCode = false;
+    if (fence) { isCode = true; if (f && f[1] === fence) fence = ''; }
+    else if (f) { isCode = true; fence = f[1]; }
+    else if (/^(?: {4}|\t)/.test(l) && l.trim() && !itemRe.test(l) && (prevBlank || prevCode)) isCode = true;
+    code.push(isCode);
+    prevBlank = !l.trim(); prevCode = isCode;
+  }
+  const hasCode = code.some(Boolean);
   const hasTable = !!openTail || lines.some(l => /^\s*\|/.test(l) || VOICE_TABLE_RULE_RE.test(l));
   const plain = String(rest).replace(/!?\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');   // a link with a label is read by its label
+  // the lead's extra sentences are already cleaned: a raw link / path in them shows as its spoken placeholder
+  const placeholders = extra.join(' ').match(/\ba link\b|\ba file path\b/g) || [];
   const raw = (plain.match(/(?:https?:\/\/|www\.)[^\s<>)\]]*[^\s<>)\].,;:!?'"]/gi) || []).length
-    + (voicePathsToWords(plain.replace(/(?:https?:\/\/|www\.)\S+/gi, ' ')).match(/a file path/g) || []).length;
+    + (voicePathsToWords(plain.replace(/(?:https?:\/\/|www\.)\S+/gi, ' ')).match(/a file path/g) || []).length + placeholders.length;
   const body = lines.filter(l => l.trim());
-  const items = body.filter(l => /^[ \t]*(?:[-*+•◦▪‣]|\d+[.)])[ \t]+/.test(l)).length;
-  const kind = body.length && items * 2 >= body.length ? 'list' : hasTable ? 'table' : hasCode ? 'code' : '';
+  const items = lines.filter((l, i) => !code[i] && itemRe.test(l)).length;
+  const kind = hasTable ? 'table' : hasCode ? 'code' : body.length && items * 2 >= body.length ? 'list' : '';
   const spoken = voiceSpeechText(rest);
   const sentences = extra.concat(voiceSentences(spoken).filter(Boolean));
   const words = extra.concat(spoken).join(' ').split(/\s+/).filter(Boolean).length;
-  return { substantial: hasCode || hasTable || raw >= 3 || words > readWords, kind, sentences };
+  return { substantial: hasCode || hasTable || raw >= 1 || words > readWords, kind, sentences };
 }
 // voiceReplySentences(markdown, done, readWords = 40) -> { sentences, note }. While the reply streams only the spoken lead counts (at most
 // VOICE_LEAD_MAX_SENTENCES sentences); anything left out is held. At done what the lead left out is judged: short (at most readWords spoken
@@ -3315,7 +3327,7 @@ function voiceCreateCall(deps) {
   const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
   let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
   let personSpeaking = false, speechEndAt = null, awaitingReply = false, cutSkip = false;
-  let lastText = '', spokenCount = 0, noteSpoken = false, lastStatusAt = null;
+  let lastText = '', spokenCount = 0, noteSpoken = false, doneSeen = false, lastStatusAt = null;
   let queue = [], current = null, speaking = false, gen = 0;
   let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
   let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
@@ -3506,9 +3518,9 @@ function voiceCreateCall(deps) {
     if (awaitingReply && !speaking && !personSpeaking && !standby) armThinking();   // a long quiet stretch inside a running turn gets the sound too
   }
   function runAfter(item) { if (item && item.after) { const f = item.after; item.after = null; quiet(f); } }
-  function enqueue(text, kind, after, onStart, again) {
+  function enqueue(text, kind, after, onStart, again, note) {   // note: the line is a note about what was left out (not one of a reply's counted sentences)
     if (ended || !text) return;
-    const item = { text, kind, after, onStart, again };
+    const item = { text, kind, after, onStart, again, note: !!note };
     queue.push(item);
     if (current && queue[0] === item) prefetchNext();   // a line is being spoken and this one is the next
     if (!speaking && !personSpeaking) runQueue();   // never start reading while the person is speaking: the line waits
@@ -3594,14 +3606,18 @@ function voiceCreateCall(deps) {
     lastText = String(full == null ? '' : full); lastDone = !!done;
     if (!done) replyRecorded = false;   // a reply is being written: its text is saved once, when complete
     if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
+    if (!done) doneSeen = false;   // a reply being written: a done seen before belonged to an earlier one
     const r = voiceReplySentences(lastText, !!done, readWords());
-    if (r.sentences.length < spokenCount) spokenCount = 0;
-    if (cutSkip) spokenCount = r.sentences.length;
-    else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
+    // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken
+    if (!(doneSeen && r.sentences.length < spokenCount)) {
+      if (r.sentences.length < spokenCount) spokenCount = 0;
+      if (cutSkip) spokenCount = r.sentences.length;
+      else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
+    }
     if (done) {
       if (recorder && !replyRecorded && lastText.trim()) { replyRecorded = true; quiet(() => d.recordReplyText(lastText)); }
-      if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply');
-      noteSpoken = true; awaitingReply = false;
+      if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply', null, null, false, true);
+      noteSpoken = true; awaitingReply = false; doneSeen = true;
       clearStill(); stopThinking(); quiet(() => ui.activity(''));
       if (!speaking) { maybeReplyEnd(); settle(); }
     }
@@ -3783,9 +3799,9 @@ function voiceCreateCall(deps) {
     recBegin();   // no onSpeechBegin came first (a begin already decided this speech)
     if (!standby) queue = queue.filter(i => !i.again);   // already repeating themselves: a queued "Say that again." is dropped, never read
     if (!standby && (speaking || queue.length)) {   // in standby a sound does not cut the reading ("<phrase>, stop" does, once heard)
-      const items = (current ? [current] : []).concat(queue);   // a note (the details note or one naming the kind) is a reply item but not one of the counted sentences
-      const n = items.filter(i => i.kind === 'reply' && !voiceIsNoteText(i.text)).length;
-      const noteCut = items.some(i => i.kind === 'reply' && voiceIsNoteText(i.text));   // a false start puts the note back too
+      const items = (current ? [current] : []).concat(queue);   // a note (flagged when queued) is a reply item but not one of the counted sentences
+      const n = items.filter(i => i.kind === 'reply' && !i.note).length;
+      const noteCut = items.some(i => i.kind === 'reply' && i.note);   // a false start puts the note back too
       const cutReply = cancelSpeaking(true);
       const setSkip = cutReply && awaitingReply && !cutSkip;
       if (setSkip) cutSkip = true;
@@ -3947,7 +3963,7 @@ function voiceCreateCall(deps) {
         awaitingReply = true; replyEnded = false; replyRecorded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
         await d.interject(t);
       } else {
-        awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+        awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; doneSeen = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
         quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
         await d.send(t);
       }
@@ -9401,7 +9417,7 @@ function voiceSheet() {
     '<p class="vs-hint">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s. A short pause can cut you off mid-sentence.</p>' +
     '<label class="vs-row" for="vs-details"><span>Read short extra parts aloud</span></label>' +
     '<select id="vs-details" class="vs-details vs-btn"><option value="0">Off</option><option value="20">Up to 20 words</option><option value="40">Up to 40 words</option><option value="80">Up to 80 words</option></select>' +
-    '<p class="vs-hint">On a call, what the agent would only put in the chat is read out when it is this short. Longer parts, lists, tables and code stay in the chat.</p>' +
+    '<p class="vs-hint">When a reply has only a little more than what is read on a call, read that too. Longer lists, tables and code stay in the chat.</p>' +
     '<label class="vs-row" for="vs-speed"><span>Voice speed</span><b class="vs-speed-val"></b></label>' +
     '<input type="range" id="vs-speed" class="vs-level vs-speed" min="0.75" max="1.5" step="0.05">' +
     '<p class="vs-hint">' + VOICE_SPEED_HINT + '</p>' +

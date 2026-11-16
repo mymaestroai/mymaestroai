@@ -102,15 +102,15 @@ test('long plain text (8 sentences, 90 words): the first 3, then the generic not
   assert.deepStrictEqual(spoken, r.sentences.concat(NOTE));
 });
 
-test('three or more raw links or file paths in the rest are never read, even when short', () => {
+test('any raw link or file path in the rest is never read, even when short (the owner\'s rule)', () => {
   const links = 'Here is where to look.\n\n- https://example.com/a\n- https://example.com/b\n- https://example.com/c';
   assert.deepStrictEqual(voiceReplySentences(links, true), { sentences: ['Here is where to look.'], note: NOTE_LIST });
   const paths = 'Here is where to look.\n\n## Files\nSee /etc/app/one.conf and /etc/app/two.conf and /var/log/app/three.log for it.';
   assert.deepStrictEqual(voiceReplySentences(paths, true), { sentences: ['Here is where to look.'], note: NOTE });
-  const two = 'Here is where to look.\n\n## Files\nSee /etc/app/one.conf and /etc/app/two.conf for it.';
-  const r = voiceReplySentences(two, true);
-  assert.strictEqual(r.note, '', 'two paths are read');
-  assert.strictEqual(r.sentences.length, 3);
+  const one = 'Here is where to look.\n\n## Files\nSee /etc/app/one.conf for it.';
+  assert.deepStrictEqual(voiceReplySentences(one, true), { sentences: ['Here is where to look.'], note: NOTE }, 'one path is enough');
+  const link = 'Here is where to look.\n\n## Docs\nSee https://example.com/a for it.';
+  assert.deepStrictEqual(voiceReplySentences(link, true), { sentences: ['Here is where to look.'], note: NOTE }, 'one link is enough');
 });
 
 test('readWords 0 is today\'s behaviour: the lead only (at most 3 sentences) and the note', async () => {
@@ -197,9 +197,12 @@ test('voiceSpeechText is unchanged: tables and code still add the details note',
 test('the page copies carry the same code, the notes and the settings controls', () => {
   const lib = read('lib/ui-voice-call.js'), app = read('app.js'), mob = read('mobile.js');
   for (const [name, src] of [['app.js', app], ['mobile.js', mob]]) {
-    for (const s of ['function voiceRestAnalysis(rest, extra, readWords, openTail) {', 'function voiceIsNoteText(text) {', 'function voiceReplySentences(markdown, done, readWords) {',
+    for (const s of ['function voiceRestAnalysis(rest, extra, readWords, openTail) {', 'function voiceReplySentences(markdown, done, readWords) {',
       'const VOICE_NOTE_LIST = ', 'const VOICE_NOTE_TABLE = ', 'const VOICE_NOTE_CODE = ', 'const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];', 'detailsReadWords: 40 };',
-      'Read short extra parts aloud', 'voiceReplySentences(lastText, !!done, readWords())', '!voiceIsNoteText(i.text)']) assert.ok(src.includes(s), name + ': ' + s);
+      'Read short extra parts aloud', 'voiceReplySentences(lastText, !!done, readWords())', 'enqueue(r.note, \'reply\', null, null, false, true)', '!i.note)',
+      'Longer lists, tables and code stay in the chat.']) assert.ok(src.includes(s), name + ': ' + s);
+    assert.ok(!src.includes('Longer parts, lists, tables and code stay in the chat.'), name + ': the old help text (lists stay in the chat) is gone');
+    assert.ok(!src.includes('voiceIsNoteText'), name + ': notes are recognised by a flag, not by their text');
     assert.ok(!src.includes("const noteText = voiceSpeechText('| a |');"), name + ': the old single-note check is gone');
   }
   assert.ok(lib.includes('function voiceRestAnalysis(rest, extra, readWords, openTail) {'));
@@ -209,4 +212,88 @@ test('the page copies carry the same code, the notes and the settings controls',
   assert.ok(mob.includes("save({ detailsReadWords: Number(details.value) })"), 'phone panel saves it');
   assert.ok(read('mobile.html').includes('id="vp-details"'));
   assert.ok(!read('agent-settings.html').includes('detailsReadWords'), 'the agent-level defaults are not extended');
+});
+
+// ── review round 1 ──
+const LEAD = 'Here is the answer.';
+const NEVER = /rm_all|npm run|alpha|echo|force|build/i;
+test('code and tables inside a Markdown container are never read: a quoted fence, indented code, a quoted table', () => {
+  const quotedFence = LEAD + '\n\n## Command\n> ```sh\n> rm_all --force now\n> ```';
+  const indented = LEAD + '\n\n## Command\n\n    npm run build\n    npm test';
+  const tabbed = LEAD + '\n\n## Command\n\n\tnpm run build';
+  const quotedTable = LEAD + '\n\n## Scores\n> | Name | Score |\n> |---|---|\n> | Alpha | 10 |';
+  const quotedIndented = LEAD + '\n\n## Command\n>\n>     npm run build';
+  for (const [md, note] of [[quotedFence, NOTE_CODE], [indented, NOTE_CODE], [tabbed, NOTE_CODE], [quotedTable, NOTE_TABLE], [quotedIndented, NOTE_CODE]]) {
+    const r = voiceReplySentences(md, true);
+    assert.deepStrictEqual(r, { sentences: [LEAD], note }, JSON.stringify(md));
+    assert.ok(!NEVER.test(r.sentences.join(' ')), 'no code or cell is read');
+  }
+  // an indented list item (nested) is not code
+  const nested = LEAD + '\n\n- Check the disk\n    - the first disk\n- Check the logs';
+  assert.strictEqual(voiceReplySentences(nested, true).note, '');
+  // a table with outer pipes missing is caught by its delimiter row, also in a quote
+  assert.strictEqual(voiceReplySentences(LEAD + '\n\n## Scores\n> Name | Score\n> --- | ---\n> Alpha | 10', true).note, NOTE_TABLE);
+});
+
+test('raw links and file paths are never read: in the lead\'s extra sentences, and any single one in the rest', async () => {
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. Visit https://a.com.', true), { sentences: ['One.', 'Two.', 'Three.'], note: NOTE });
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. Open /etc/app/x.conf.', true), { sentences: ['One.', 'Two.', 'Three.'], note: NOTE });
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. Visit www.example.com now.', true), { sentences: ['One.', 'Two.', 'Three.'], note: NOTE });
+  // a labelled link is read by its label and does not count
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. See [the docs](https://a.com).', true), { sentences: ['One.', 'Two.', 'Three.', 'See the docs.'], note: '' });
+  assert.deepStrictEqual(voiceReplySentences('Here it is.\n\n## Docs\nSee [the docs](https://a.com) now.', true), { sentences: ['Here it is.', 'Docs.', 'See the docs now.'], note: '' });
+  assert.deepStrictEqual(await speakReply('One. Two. Three. Visit https://a.com.'), ['One.', 'Two.', 'Three.', NOTE]);
+});
+
+test('the note\'s kind: table first, then code, then list, then generic; a fenced block of "- " lines is code, not a list', () => {
+  const yaml = 'Here is the config.\n\n```yaml\n- a: 1\n- b: 2\n- c: 3\n```';
+  assert.deepStrictEqual(voiceReplySentences(yaml, true), { sentences: ['Here is the config.'], note: NOTE_CODE });
+  const indentedYaml = 'Here is the config.\n\n## File\n\n    a: 1\n    b: 2\n    c: 3';
+  assert.strictEqual(voiceReplySentences(indentedYaml, true).note, NOTE_CODE);
+  const listAndTable = 'Here it is.\n\n- a\n- b\n- c\n\n| x | y |\n|---|---|\n| 1 | 2 |';
+  assert.strictEqual(voiceReplySentences(listAndTable, true).note, NOTE_TABLE);
+  const listAndCode = 'Here it is.\n\n- a\n- b\n- c\n\n```sh\nls\n```';
+  assert.strictEqual(voiceReplySentences(listAndCode, true).note, NOTE_CODE);
+  assert.strictEqual(voiceReplySentences(LIST12, true).note, NOTE_LIST);
+  assert.strictEqual(voiceReplySentences(LONG, true).note, NOTE);
+});
+
+test('a note is recognised by its flag, not its text: an agent sentence equal to a note is counted as a sentence', async () => {
+  const md = 'I\'ve put the table in the chat. Two is here. Three is here. Four is here.';
+  const h = await startedCall();
+  h.call.onReplyText(md, true); await tick();
+  h.hd.onSpeechStart();   // barge-in: the first line is playing, three wait
+  await tick();
+  h.hd.onMisfire && h.hd.onMisfire();   // a false start: all four are read again, none skipped
+  await tick(); await h.drain();
+  const spoken = h.spoken.slice(1);
+  assert.deepStrictEqual(spoken, ['I\'ve put the table in the chat.', 'Two is here.', 'Three is here.', 'Four is here.']);
+  // a real note cut by a false start is read again once
+  const g = await startedCall();
+  g.call.onReplyText(TABLE10, true); await tick(); await g.drain();
+  g.hd.onSpeechStart(); await tick(); g.hd.onMisfire && g.hd.onMisfire(); await tick(); await g.drain();
+  assert.strictEqual(g.spoken.filter(s => /in the chat/.test(s)).length >= 1, true);
+});
+
+test('once done was processed, a later done for the same reply never lowers what was spoken: nothing is read twice', async () => {
+  const prefs = { detailsReadWords: 40 };
+  const h = await startedCall(prefs);
+  const sendTurn = async () => { h.t += 20000; for (let k = 0; k < 3; k++) for (const t of h.timers.filter(x => x.at <= h.t)) { h.timers = h.timers.filter(x => x !== t); t.fn(); await tick(40); } await h.drain(); };
+  await sendTurn();   // the first turn is sent
+  assert.strictEqual(h.sent.length, 1);
+  const said = () => h.spoken.filter(s => !/considering/.test(s));   // not the thinking line
+  h.call.onReplyText(TWO_ITEMS, false); await tick(); await h.drain();
+  h.call.onReplyText(TWO_ITEMS, true); await tick(); await h.drain();
+  assert.deepStrictEqual(said(), ['Here are the two checks.', 'Check the disk.', 'Check the logs.']);
+  prefs.detailsReadWords = 0;   // the pref changed: the sentence count is lower now
+  h.call.onReplyText(TWO_ITEMS, true); await tick(); await h.drain();
+  assert.deepStrictEqual(said(), ['Here are the two checks.', 'Check the disk.', 'Check the logs.'], 'no re-queue, no duplicate');
+  // a new reply starts afresh
+  h.running = false;   // the turn is over
+  h.hd.onSpeechStart(); h.hd.onSpeechEnd({ text: 'and more' }); await tick();
+  await sendTurn();   // the pause ends: the second turn is sent
+  assert.strictEqual(h.sent.length, 2, 'the second turn was sent');
+  const before = said().length;
+  h.call.onReplyText(FOUR, true); await tick(); await h.drain();
+  assert.deepStrictEqual(said().slice(before), ['One is here.', 'Two is here.', 'Three is here.', NOTE]);
 });
