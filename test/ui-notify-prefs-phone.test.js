@@ -117,6 +117,7 @@ function requestHarness() {
   const ctx = {
     api: (url, o) => new Promise((res) => calls.push({ url, method: (o && o.method) || 'GET', body: o && o.body, answer: (prefs) => res({ ok: true, json: async () => ({ ok: true, prefs }) }) })),
     toast() {}, paintNotifyBtn() {},
+    notifyServerMode: {},   // adoptNotifyPrefs (in this block) drops the modes remembered from bell taps
   };
   vm.createContext(ctx);
   vm.runInContext(js.slice(a, b) + '\nthis.load = loadNotifyPrefs; this.save = saveNotifyPrefs; this.cache = () => notifyPrefs;', ctx);
@@ -365,4 +366,23 @@ test('the agent sheet qualifies the armed item when Requests you made is Off or 
   assert.ok(el.innerHTML.includes('(only when you are away)'));
   ctx.notifyServerMode.helper = 'off'; ctx.notifyPrefs = null; ctx.paint();   // the hub's last answer wins over a missing or stale cache
   assert.ok(el.innerHTML.includes('(Requests you made is Off: no notification)'));
+});
+
+// Review r5: settings that arrive after a bell tap (a save in the sheet, or a newer load) are newer than the mode the
+// hub reported with that tap, so the remembered mode is dropped and the sheet reads the settings again.
+test('newer settings replace the mode remembered from a bell tap (On -> Off and Off -> On while armed)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
+  const a = src.indexOf('function adoptNotifyPrefs(prefs) {');
+  assert.ok(a > 0, 'adoptNotifyPrefs exists');
+  const body = src.slice(a, src.indexOf('\n}\n', a) + 2);
+  const ctx = { notifyPrefs: null, notifyServerMode: { helper: 'on', coach: 'off' } };
+  vm.createContext(ctx);
+  vm.runInContext(`${body}; this.adopt = adoptNotifyPrefs;`, ctx);
+  ctx.adopt({ default: { requested: 'off' }, agents: {} });
+  assert.deepStrictEqual(ctx.notifyPrefs, { default: { requested: 'off' }, agents: {} });
+  assert.deepStrictEqual(Object.keys(ctx.notifyServerMode), [], 'every remembered mode is dropped');
+  // Both places that take new settings go through it; nothing assigns them around it.
+  assert.ok(/notifyPrefsPending === 0\) adoptNotifyPrefs\(d\.prefs\);/.test(src), 'a load');
+  assert.ok(/if \(d\.prefs\) adoptNotifyPrefs\(d\.prefs\);/.test(src), 'a save');
+  assert.ok(!/notifyPrefs = d\.prefs/.test(src), 'no direct assignment left');
 });

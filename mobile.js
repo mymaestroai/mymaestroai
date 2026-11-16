@@ -1799,10 +1799,16 @@ async function loadNotifyPrefs() {
   try {
     const r = await api('/api/notify/prefs');
     const d = r.ok ? await r.json().catch(() => null) : null;
-    if (d && d.prefs && !busy && seen === notifyPrefsWrites && notifyPrefsPending === 0) notifyPrefs = d.prefs;   // a save started meanwhile: this answer may be older than it
+    if (d && d.prefs && !busy && seen === notifyPrefsWrites && notifyPrefsPending === 0) adoptNotifyPrefs(d.prefs);   // a save started meanwhile: this answer may be older than it
   } catch { /* keep the last */ }
   paintNotifyBtn();
   return notifyPrefs;
+}
+// Settings newer than the hub's answer to a bell tap: the mode that answer carried is out of date for every agent, so
+// the sheet goes back to reading these settings.
+function adoptNotifyPrefs(prefs) {
+  notifyPrefs = prefs;
+  for (const a of Object.keys(notifyServerMode)) delete notifyServerMode[a];
 }
 // PUT one change; true when saved (the answer replaces notifyPrefs), else toasts why. Changes are saved one after the other.
 function saveNotifyPrefs(body) {
@@ -1818,7 +1824,7 @@ async function saveNotifyPrefsNow(body) {
     d = await r.json().catch(() => ({}));
   } catch { toast('Could not reach the hub'); return false; }
   if (!r.ok) { toast(d.error || d.detail || 'Could not save the notification setting'); return false; }
-  if (d.prefs) notifyPrefs = d.prefs;
+  if (d.prefs) adoptNotifyPrefs(d.prefs);
   paintNotifyBtn();
   return true;
 }
