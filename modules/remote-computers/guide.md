@@ -94,6 +94,10 @@ Status and limits (Save permissions).
 - **"Reinstall needed: open Data connectors and run Install again":** the server program is missing. Run the Install
   step again.
 - **"Waiting for setup":** the tailnet name or address is not saved yet. Fill in the settings step.
+- **"The antivirus ... blocked this click / typing / command":** the PC's antivirus stopped it. The message names the
+  detection when Microsoft Defender reports one, and Windows Security > Protection history on the PC shows the block.
+  Screenshots come through the same channel as Open desktop, so they do not run any script on the PC. Do not turn
+  the antivirus off or add an exclusion for My Maestro.
 - **No screenshot, or "did not confirm the input":** nobody is signed in on the PC, or the screen is locked or showing
   a secure screen. Set Windows to sign in automatically and never lock, then try again.
 - **The PC is offline:** it is switched off or asleep, or Tailscale is not running on it. Switch it on, check

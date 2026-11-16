@@ -546,10 +546,12 @@ test('input tools: a session that starts while the owner is being asked stops th
 
 test('look tools are not affected by a live desktop session: info and screenshot still work', async () => {
   const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('a picture')]);
+  // The picture comes through the desktop channel (a stand-in socket that opens, and a stand-in capture), never through runcommands.
+  class OpenSocket extends EventEmitter { constructor() { super(); setImmediate(() => this.emit('open')); } close() { this.closed = true; } send() {} }
   const t = setup({ handlers: {
     getsysinfo: async () => ({ action: 'getsysinfo', hardware: {} }),
-    runcommands: async () => ({ action: 'runcommands', result: `MMSHOT 1600 900 1920 1080 ${JPEG.toString('base64')} MMEND\r\n` }),
-  } });
+    runcommands: async () => { throw new Error('a screenshot must not use runcommands'); },
+  }, deps: { WebSocket: OpenSocket, captureDesktop: async () => ({ width: 1600, height: 900, screenWidth: 1920, screenHeight: 1080, jpeg: JPEG, primaryKnown: true, display: 1, tiles: 4 }) } });
   await open(t);
   assert.strictEqual((await t.call('info', { ...AGENT, computer: 'demo-pc' })).name, 'demo-pc');
   const shot = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });

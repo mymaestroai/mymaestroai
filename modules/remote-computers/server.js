@@ -503,23 +503,45 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       return Math.min(timeoutMs, left);
     };
   }
-  // A screen script (picture or input) runs as the signed-in user, as one line of plain PowerShell (runcommands type 2): no iex, no Base64 decoding of
-  // text, nothing written to disk, because the antivirus (AMSI) blocks those patterns. Caller text is a quoted literal in the line (win.psLiteral).
+  // An input script (click, type, key, scroll) runs as the signed-in user, as one line of plain PowerShell (runcommands type 2): no iex, no Base64 decoding of
+  // text, no script file of ours, because the antivirus (AMSI) blocks those patterns. Caller text is a quoted literal in the line (win.psLiteral).
+  // The screenshot is NOT done here: Defender flags a PowerShell screenshot script (it looks like PowerShell Empire's Get-Screenshot), so the picture comes
+  // through MeshCentral's own remote-desktop channel (toolScreenshot, lib/kvmshot.js) and no PowerShell runs for it.
   async function onScreen(pc, script, timeoutMs, check) {
     const cmds = win.plainLine(script);
     try { return await exclusive(pc, BUSY_AFTER_SCREEN_TIMEOUT_MS, () => runOn(pc, cmds, 2, 2, timeoutMs, check)); } catch (e) {
       throw sendFail(pc, e, { kind: 'screen', timeoutSec: Math.round(timeoutMs / 1000) });
     }
   }
+  // After a block: ONE read-only question to Defender, as the system account, for the name of the newest detection. Any failure is ignored.
+  const THREAT_WAIT_MS = 10000;
+  async function threatName(pc, deadline) {
+    if (deadline - now() < THREAT_WAIT_MS) return null;
+    try {
+      const out = await exclusive(pc, BUSY_AFTER_SCREEN_TIMEOUT_MS, () => runOn(pc, win.plainLine(win.threatNameLine()), 2, 0, THREAT_WAIT_MS));
+      return win.parseThreatName(out);
+    } catch (e) {
+      log(`the detection name on ${pc.name} could not be read:`, clean(e && (e.code || e.message), 80));
+      return null;
+    }
+  }
   // The antivirus (Microsoft Defender) refused the line. The raw PowerShell error is never given to the agent.
-  const avBlocked = (pc, what) => {
-    log(`the antivirus on ${pc.name} blocked the ${what}`);
-    const done = what === 'command' ? 'so it did not run, or stopped where it was blocked. Check its effect first' : 'so nothing was done on the computer';
-    return new ToolError(`The antivirus on ${pc.name} (Microsoft Defender) blocked this ${what} as a precaution, ${done}. Try again in a few minutes. If it keeps happening, tell the owner that the Remote computers connector may need an update. Do not turn off the antivirus or add an exclusion for this.`);
+  const avBlocked = async (pc, what, deadline) => {
+    const name = await threatName(pc, deadline);
+    log(`the antivirus on ${pc.name} blocked the ${what}${name ? ` (${name})` : ''}`);
+    const run = what === 'command';
+    const done = run ? 'it did not run, or stopped where it was blocked; check its effect first' : 'nothing was done on the computer';
+    const lead = name ? `Microsoft Defender on ${pc.name} blocked this ${what} as "${name}", so ${done}. ` : `The antivirus on ${pc.name} blocked this ${what} as a precaution, so ${done}. `;
+    const tail = run
+      ? 'Do not run it again unchanged. Tell the owner; Windows Security > Protection history on that computer shows the block. Do not turn off the antivirus or add an exclusion for this.'
+      : 'Try once more in a few minutes. If it is blocked again, stop and tell the owner; Windows Security > Protection history on that computer shows the block. Do not turn off the antivirus or add an exclusion for this.';
+    return new ToolError(lead + tail);
   };
   async function drive(pc, script, who, deadline, tool, what) {
-    const out = await onScreen(pc, script, INPUT_TIMEOUT_MS, sendCheck({ who, pc, need: 'drive', deadline, tool, timeoutMs: INPUT_TIMEOUT_MS }));
-    if (win.blockedByAntivirus(out)) throw avBlocked(pc, what);
+    const line = win.plainLine(script);
+    const raw = await onScreen(pc, line, INPUT_TIMEOUT_MS, sendCheck({ who, pc, need: 'drive', deadline, tool, timeoutMs: INPUT_TIMEOUT_MS }));
+    const out = raw.split(line).join('');   // the shell may echo the line, which is readable text now and quotes the typed text and the messages checked below
+    if (win.blockedByAntivirus(out)) throw await avBlocked(pc, what, deadline);
     if (!win.sawOk(out)) {
       if (out.includes(win.SCREEN_CHANGED)) throw new ToolError(win.SCREEN_CHANGED);
       throw new ToolError(`${pc.name} did not confirm the input. It may be locked, showing a secure screen, or no one is signed in.`);
@@ -543,6 +565,51 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     return summarize(pc, sys);
   }
 
+  // The picture comes through MeshCentral's remote-desktop channel with the Open desktop account (lib/kvmshot.js only views: it never sends input).
+  // The websocket is opened first, then the computer's agent is asked to connect to the same tunnel id; the agent needs no busy-lock for this.
+  async function shootDesktop(pc, maxWidth, waitMs, outOfTime) {
+    await ensurePersonReady();
+    const c = person();
+    let f;
+    try { f = await c.exchange('authcookie', {}, { timeoutMs: 10000 }); } catch (e) { throw meshFail(e, pc); }
+    if (!f || typeof f.cookie !== 'string' || !COOKIE_RE.test(f.cookie) || typeof f.rcookie !== 'string' || !COOKIE_RE.test(f.rcookie)) throw new ToolError('The server did not give a desktop cookie. Try again in a moment.');
+    const tunnelid = crypto.randomBytes(16).toString('hex');   // 32 hex characters: passes checkTunnel
+    const ep = desktopEndpoint();
+    const capture = deps.captureDesktop || require('./lib/kvmshot').captureDesktop;
+    let ws = null;
+    try {
+      const noOpen = () => new ToolError(`The connection to ${pc.name}'s screen could not be opened. Try again in a moment.`);
+      try {
+        ws = new (WebSocket())(`wss://127.0.0.1:${ep.port}/meshrelay.ashx?browser=1&p=2&nodeid=${pc.nodeid}&id=${tunnelid}&auth=${f.cookie}`, { ca: ep.ca, servername: ep.servername, rejectUnauthorized: true, maxPayload: 64 * 1024 * 1024 });
+      } catch { throw noOpen(); }
+      await new Promise((resolve, reject) => {
+        let timer;
+        const done = (fn, v) => { clearTimeout(timer); ws.removeListener('open', onOpen); ws.removeListener('error', onBad); ws.removeListener('close', onBad); fn(v); };
+        const onOpen = () => done(resolve);
+        const onBad = () => done(reject, noOpen());
+        timer = setTimeout(() => done(reject, noOpen()), 10000);
+        ws.on('open', onOpen); ws.on('error', onBad); ws.on('close', onBad);
+      });
+      ws.on('error', () => {});   // a late error must never be unhandled
+      const value = `*/meshrelay.ashx?p=2&nodeid=${pc.nodeid}&id=${tunnelid}&rauth=${f.rcookie}`;
+      try { await c.request('msg', { type: 'tunnel', nodeid: pc.nodeid, value, usage: 2 }, { timeoutMs: 10000 }); } catch (e) {
+        throw new ToolError(e && e.code === 'EMESH' ? `${pc.name}: the server could not reach the computer (${clean(e.message, 60)}).` : 'The Remote computers server did not answer. Try again in a moment.');
+      }
+      const timeoutMs = waitMs();   // what is left now, after the setup
+      if (timeoutMs < MIN_WAIT_MS) throw outOfTime();
+      try { return await capture(ws, { maxWidth, quality: 70, timeoutMs }); } catch (e) {
+        const code = e && typeof e.code === 'string' ? e.code : 'EKVM';
+        log(`screenshot of ${pc.name} failed (${clean(code, 20)})`);
+        if (code === 'EKVMPRIMARY') throw new ToolError(`${pc.name} shows all its screens together and the main one could not be picked, so no picture was taken.`);
+        if (code === 'EKVMTIMEOUT') throw new ToolError(`${pc.name} did not send a picture of its screen in time. Try again in a moment.`);
+        if (code === 'EKVMCLOSED') throw new ToolError(`The connection to ${pc.name}'s screen closed before a picture arrived. Try again in a moment.`);
+        throw new ToolError(`${pc.name} did not send a usable picture of its screen (${clean(code, 20)}).`);
+      }
+    } finally {
+      if (ws) { try { ws.close(); } catch { /* closed */ } }
+    }
+  }
+
   async function toolScreenshot(a, who, call, deadline) {
     let maxWidth = 1600;
     if (a.maxWidth !== undefined) { maxWidth = a.maxWidth; if (!Number.isInteger(maxWidth) || maxWidth < 320 || maxWidth > 1920) throw new ToolError('maxWidth must be a whole number from 320 to 1920.'); }
@@ -551,10 +618,11 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     needSignedIn(pc);
     await gate.require(who, 'look', pc);
     mustBeOnline(pc);
-    const out = await onScreen(pc, win.screenshotScript({ maxWidth }), SHOT_TIMEOUT_MS, sendCheck({ who, pc, deadline: deadline === undefined ? now() + CALL_DEADLINE_MS : deadline, tool: 'screenshot', timeoutMs: SHOT_TIMEOUT_MS }));
-    if (win.blockedByAntivirus(out)) throw avBlocked(pc, 'screenshot');
-    let shot;
-    try { shot = win.parseScreenshot(out); } catch (e) { throw new ToolError(e instanceof win.WindowsError ? e.message : 'The computer did not return a picture.'); }
+    const limit = deadline === undefined ? now() + CALL_DEADLINE_MS : deadline;
+    const outOfTime = () => new ToolError('Call screenshot again; this call is out of time.');
+    const waitMs = () => Math.min(SHOT_TIMEOUT_MS, limit - now() - SEND_MARGIN_MS);
+    if (waitMs() < MIN_WAIT_MS) throw outOfTime();
+    const shot = await shootDesktop(pc, maxWidth, waitMs, outOfTime);
     try { shots.save(pc.id, shot.jpeg); } catch (e) {   // the private copy is for troubleshooting: the agent gets its picture without it
       log('could not keep a private copy of a picture:', clean(e && (e.code || e.message), 80));
     }
@@ -563,7 +631,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     do { id = newShotId(); } while ((shotsOf.get(who) || []).some((s) => s.id === id));
     rememberShot(who, { id, agent: who, computerId: pc.id, width: shot.width, height: shot.height, screenWidth: shot.screenWidth, screenHeight: shot.screenHeight, sx: shot.screenWidth / shot.width, sy: shot.screenHeight / shot.height, takenAt, at: now() });
     log(`screenshot of ${pc.name} for ${who} (${shot.width}x${shot.height}, ${shot.jpeg.length} bytes)`);
-    const meta = { shot: id, width: shot.width, height: shot.height, screen: { width: shot.screenWidth, height: shot.screenHeight }, takenAt, computer: pc.name };
+    const meta = { shot: id, width: shot.width, height: shot.height, screen: { width: shot.screenWidth, height: shot.screenHeight }, takenAt, computer: pc.name, ...(shot.primaryKnown === false ? { note: 'This computer has more than one screen; the picture shows the one the computer chose.' } : {}) };
     return new Rich([{ type: 'text', text: JSON.stringify(meta) }, { type: 'image', data: shot.jpeg.toString('base64'), mimeType: 'image/jpeg' }]);
   }
 
@@ -593,7 +661,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     try { out = await exclusive(pc, as === 'user' ? BUSY_AFTER_SCREEN_TIMEOUT_MS : BUSY_AFTER_RUN_TIMEOUT_MS, () => runOn(pc, cmds, shell === 'sh' ? 3 : shell === 'cmd' ? 1 : 2, as === 'user' ? 2 : 0, timeoutSec * 1000, sendCheck({ who, pc, need: 'act', as, deadline, tool: 'run', timeoutMs: timeoutSec * 1000 }))); } catch (e) {
       throw sendFail(pc, e, { kind: as === 'user' ? 'user' : 'run', timeoutSec });
     }
-    if (shell !== 'sh' && win.blockedByAntivirus(out, { strict: true })) throw avBlocked(pc, 'command');
+    if (shell !== 'sh' && win.blockedByAntivirus(out.split(cmds).join(''), { strict: true })) throw await avBlocked(pc, 'command', deadline);
     return { output: capOutput(tidyOutput(out, cmds)), took_ms: now() - t0 };
   }
 
