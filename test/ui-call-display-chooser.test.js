@@ -204,6 +204,7 @@ function popHtml() {
     voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceMicLevelNow: () => 50, voiceSensNow: () => 50, voiceSpeedNow: () => 1, voiceSpeedLabel: () => '1x',
     voiceThinkingOnNow: () => true, voiceThinkingVolNow: () => 0.5, voiceLoudnessSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceEchoSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, VOICE_ECHO_HINT: 'echo', VOICE_KEEP_HINT: 'keep', voiceKeepAliveNow: () => true,
     voiceWakeRowsHtml: () => '',   // the wake rows have their own tests (ui-voice-wake-pages)
+    voiceRouteBlockHtml: () => '',   // the Sound route block has its own tests (ui-voice-bt-route-desktop)
     chats: { c1: { agent: 'alice' } }, voiceFollowLine: () => '',   // agent voice defaults (part 6)
   };
   const names = Object.keys(stubs);

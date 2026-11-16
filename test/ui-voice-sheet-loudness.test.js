@@ -22,7 +22,7 @@ function sheetHtml() {
   const start = sheetSrc.indexOf("sh.innerHTML = ") + 'sh.innerHTML = '.length;
   const end = sheetSrc.indexOf("</button></div>';", start) + "</button></div>'".length;
   const expr = sheetSrc.slice(start, end);
-  const consts = { VOICE_LOUDNESS_OPTIONS: OPTIONS, VOICE_INTERRUPT_HINT: '', VOICE_END_PAUSES: [800, 1200, 2000], VOICE_SPEED_HINT: '', voiceEchoOptionsHtml: () => '<option value="600">0.6 s</option>', VOICE_KEEPALIVE_HINT: '', VOICE_ECHO_HINT: '' };
+  const consts = { voiceRouteHtml: () => '', VOICE_LOUDNESS_OPTIONS: OPTIONS, VOICE_INTERRUPT_HINT: '', VOICE_END_PAUSES: [800, 1200, 2000], VOICE_SPEED_HINT: '', voiceEchoOptionsHtml: () => '<option value="600">0.6 s</option>', VOICE_KEEPALIVE_HINT: '', VOICE_ECHO_HINT: '' };
   return new Function(...Object.keys(consts), 'return ' + expr + ';')(...Object.values(consts));
 }
 const selectOf = (h, id) => { const m = h.match(new RegExp('<select id="' + id + '"[^>]*>(.*?)</select>')); assert.ok(m, id + ' select'); return m[1]; };
