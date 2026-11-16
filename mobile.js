@@ -1645,14 +1645,41 @@ async function onAgentUpdated(ev) {
   }, 1000);
 }
 
+// What the agent is doing in full words, for a tap on the name or the status under it (on a narrow phone the line under
+// the name shows only its first letters): who, what and for how long.
+function chatStatusFull(name) {
+  const s = live[name] || {};
+  const who = displayName(name);
+  const since = Date.parse(s.busySince) || null;
+  const took = (t) => (t ? ` · ${chatViewElapsed(t, Date.now())}` : '');
+  if (s.pendingQuestion) return `${who} is waiting for your answer${took(since)}`;
+  const info = busyCardInfo(name);
+  if (info) return `${who}: ${info.text}${took(info.since)}`;
+  return `${who}: ${s.activity || (streams.has(name) ? 'replying to you' : 'working')}${took(since)}`;
+}
+function showChatStatus() {
+  if (!current || !isBusy(current) || ownTurnFor(current)) return;
+  toast(chatStatusFull(current), 6000);
+}
+
 function paintChatStatus() {
   const sub = $('chat-model');
   if (!current || !sub) return;
   const a = agentByName(current);
   const own = ownTurnFor(current);
   const working = isBusy(current) && !own;
-  sub.textContent = working ? busyText(current) : modelText(a);
-  sub.classList.toggle('working', working);
+  // The model keeps its own place (the row under the header), busy or idle; what the agent is doing goes under the
+  // name, only while it works on a turn this device did not start (this device's own reply streams in the chat).
+  sub.textContent = modelText(a);
+  const busy = $('chat-busy');
+  if (busy) {
+    const question = working && !!(live[current] && live[current].pendingQuestion);
+    busy.textContent = working ? busyText(current) : '';
+    busy.hidden = !working;
+    busy.classList.toggle('question', question);
+    busy.setAttribute('aria-label', working ? chatStatusFull(current) : '');
+  }
+  $('chat-title')?.classList.toggle('busy', working);
   // Stop lives in the header whenever the agent is busy: for a turn this device did not start
   // (e.g. launched on the laptop; the hub keeps turns running through disconnects) and for one
   // this device is streaming. The send button is then Interject rather than Stop.
@@ -10938,6 +10965,7 @@ function connectEvents() {
   on('compaction_end', onCompactionEnd);
   on('agent_updated', onAgentUpdated);
   $('chat-model-pick')?.addEventListener('change', changeModelFromPick);
+  $('chat-title')?.addEventListener('click', showChatStatus);   // the name or the status under it: what the agent is doing, in full
   $('chat-effort-pick')?.addEventListener('change', changeEffortFromPick);
   on('model_fallback', (ev) => toast(`${displayName(ev.agent)}: ${String(ev.from || '').split('/').pop()} at its weekly limit; running on ${String(ev.to || '').split('/').pop()} until ${ev.resetsAt ? new Date(ev.resetsAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'it resets'}`));
   // Plan warnings and refusals (lib/plan-usage): no pop-up over the input; the usage in the chat header updates.

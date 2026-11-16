@@ -101,7 +101,6 @@
     #working-chip { display: none; margin: 8px 14px 0; padding: 6px 12px; border-radius: 16px; font-size: 13px; color: var(--warning); background: rgba(245, 166, 35, 0.14); width: fit-content; max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #working-chip.on { display: block; }
     #working-chip.filtering { background: var(--warning); color: #000; }
-    #chat-head .sub.working { color: var(--warning); }
     .reattach { font-size: 12px; color: var(--warning); margin-top: 6px; }
     /* Provider pacing: slim amber bar under the header of every screen (tap to resume full parallel) */
     .pacing-bar { display: none; width: 100%; flex-shrink: 0; padding: 4px 12px; background: #b26a00; color: #fff; font-size: 12px; font-weight: 600; text-align: left; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -124,16 +123,21 @@
     /* Chat */
     #chat-head .agent-icon { width: auto; font-size: 24px; }
     #chat-head .sub { font-size: 12px; color: var(--text-dim); font-weight: 400; }
-    /* Model picker: the phone's own list opens when the model line is tapped (a transparent select over it). */
-    #chat-title .sub-wrap { position: relative; display: flex; min-width: 0; }
-    #chat-title .sub-wrap .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-    #chat-title .sub-wrap.pickable::after { content: '\25BE'; flex: none; margin-left: 4px; font-size: 12px; line-height: 1.4; color: var(--accent, #3d7bff); }
+    /* Under the name, while the agent works: what it is doing (amber; a question in blue). A tap shows it in full. */
     #chat-title .sub-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-    #chat-title .sub-row > .sub-wrap:first-child { flex: 0 1 auto; min-width: 0; }
     #chat-title { overflow: hidden; }   /* nothing under the name paints over the header buttons */
-    #chat-meta { display: flex; align-items: center; gap: 14px; padding: 2px 12px 5px 60px; font-size: 12px; color: var(--text-dim);
+    #chat-title #chat-busy { min-width: 0; max-width: 100%; min-height: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; line-height: 1.4; text-align: left;
+      color: var(--warning); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    #chat-title #chat-busy.question { color: var(--accent-hover); }
+    #chat-busy[hidden] { display: none; }
+    #chat-title.busy { cursor: pointer; }
+    #chat-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; padding: 2px 12px 5px 60px; font-size: 12px; color: var(--text-dim);
       background: var(--bg-card); border-bottom: 1px solid var(--border); flex-shrink: 0; overflow: hidden; white-space: nowrap; }
-    #chat-meta:not(:has(> :not([hidden]))) { display: none; }   /* nothing to show (a model without effort, plan or reading) */
+    /* The model picker is the row's first item; the phone's own list opens when the model is tapped (a transparent select
+       over it). The row wraps, so the model shows whole; only a model name wider than the row itself is cut. */
+    #chat-meta > .sub-wrap:first-child { flex: 0 1 auto; max-width: 100%; }
+    #chat-meta #chat-model { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    #chat-meta:not(:has(> :not([hidden]))) { display: none; }   /* nothing to show */
     #chat-meta .sub { font-size: 12px; color: var(--text-dim); font-weight: 400; }
     #chat-meta .sub-wrap { position: relative; display: flex; min-width: 0; }
     #chat-meta .sub-wrap.pickable::after { content: '\25BE'; flex: none; margin-left: 4px; font-size: 12px; line-height: 1.4; color: var(--accent, #3d7bff); }
@@ -778,15 +782,16 @@
     <div class="topbar" id="chat-head">
       <button class="iconbtn" id="chat-back" aria-label="Back">&#x2190;</button>
       <span class="agent-icon" id="chat-icon"></span>
-      <div id="chat-title"><b id="chat-name">Chat</b><span class="sub-row"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span></span></div>
+      <div id="chat-title"><b id="chat-name">Chat</b><span class="sub-row"><button type="button" class="sub" id="chat-busy" hidden></button></span></div>
       <button class="iconbtn" id="chat-resync" aria-label="Re-sync" title="Re-sync with the hub">&#x21BB;</button>
       <button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
       <button class="iconbtn stop-remote" id="chat-stop-btn" aria-label="Stop this agent" title="Stop this agent's current turn" hidden>&#x25A0;<span class="stop-label"> Stop</span></button>
       <button class="iconbtn" id="chat-menu-btn" aria-label="Menu">&#x22EE;</button>
     </div>
-    <!-- Effort, plan usage and context size get their own thin row: under the name, the model (or what the agent is
-         doing right now) keeps the whole line, also while the Stop button takes room in the header. -->
-    <div id="chat-meta"><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
+    <!-- The model, effort, plan usage and context size get their own thin row, which wraps rather than cutting anything
+         off: the model stays in view busy or idle (the bell and Stop buttons leave the name a 46 px column on a 360 px
+         phone). Under the name, only what the agent is doing right now, while it works; a tap tells it in full. -->
+    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>

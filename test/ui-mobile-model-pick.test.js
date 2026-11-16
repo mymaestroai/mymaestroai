@@ -10,7 +10,7 @@ const html = read('mobile.html'), js = read('mobile.js');
 test('the model line carries a transparent native select (16px so iOS does not zoom)', () => {
   assert.match(html, /<span class="sub-wrap"><span class="sub" id="chat-model"><\/span><select id="chat-model-pick" aria-label="Change this agent's model" hidden><\/select><\/span>/);
   assert.match(html, /#chat-model-pick \{ position: absolute; inset: 0;[^}]*opacity: 0; font-size: 16px;/);
-  assert.match(html, /#chat-title \.sub-wrap\.pickable::after \{ content: '\\25BE'; flex: none;/, 'the arrow sits outside the truncated text, so it always shows');
+  assert.match(html, /#chat-meta \.sub-wrap\.pickable::after \{ content: '\\25BE'; flex: none;/, 'the arrow sits outside the truncated text, so it always shows');
 });
 
 test('filled from /api/models, grouped by vendor and who pays; admins only; refreshed on open and on agent_updated', () => {

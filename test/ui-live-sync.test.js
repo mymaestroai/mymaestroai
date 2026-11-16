@@ -44,8 +44,8 @@ test('phone: turn_progress, polling without a stream, one bubble for the turn', 
   assert.ok(mjs.includes("if (reply.content.length > (ra.partial || '').length) ra.partial = reply.content;"));
 });
 
-test('phone header: the line under the name keeps its room; effort, plan and context have their own row', () => {
-  assert.ok(mhtml.includes('<div id="chat-meta"><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden>'), 'own row');
+test('phone header: the line under the name keeps its room; model, effort, plan and context have their own row', () => {
+  assert.ok(mhtml.includes('<div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span>') && mhtml.includes('</select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden>'), 'own row, the model first');
   assert.ok(!/id="chat-title"[^\n]*chat-plan/.test(mhtml), 'not under the name any more');
   assert.ok(mhtml.includes('#chat-title { overflow: hidden; }'), 'nothing paints over the header buttons');
   assert.ok(mhtml.includes('#chat-meta:not(:has(> :not([hidden]))) { display: none; }'), 'no empty row');
