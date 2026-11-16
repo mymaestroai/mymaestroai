@@ -40,12 +40,13 @@ function make(over = {}) {
 }
 const settle = () => new Promise(r => setImmediate(r));
 
-test('mobile.html: the menu has "↻ Reload app" right after Open full UI, always shown (no chat-only)', () => {
+test('mobile.html: the menu has "↻ Reload app" after Open full UI and Use the full site, always shown (no chat-only)', () => {
   const i = html.indexOf('<a href="/?desktop=once">Open full UI</a>');
   assert.ok(i > 0);
   const rest = html.slice(i).split('\n');
-  assert.strictEqual(rest[1].trim(), '<button id="menu-reload">&#x21BB; Reload app</button>');
-  assert.doesNotMatch(rest[1], /chat-only/);
+  assert.strictEqual(rest[1].trim(), '<a id="use-full-site" href="/?desktop=1">Use the full site</a>');
+  assert.strictEqual(rest[2].trim(), '<button id="menu-reload">&#x21BB; Reload app</button>');
+  assert.doesNotMatch(rest[2], /chat-only/);
 });
 
 test('wire(): the menu entry click is wired with ?. , closes the menu and calls reloadApp', () => {

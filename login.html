@@ -130,10 +130,10 @@
   const token = params.get('token') || '';
   const next = params.get('next') || '';
 
-  // Where to go after a successful sign-in: the requested page, else the hub (phone users get the mobile app).
+  // Where to go after a successful sign-in: the requested page, else the hub (a phone is sent on to the phone layout by the script on "/", which respects "Use the full site").
   function destination() {
     if (next && next.startsWith('/') && !next.startsWith('//')) return next;
-    return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ? '/mobile' : '/';
+    return '/';
   }
 
   function show(formId) {
