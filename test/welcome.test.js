@@ -94,7 +94,7 @@ test('the Claude check reads the client\'s own answer: signed out, limit, missin
   assert.strictEqual(w.classifyClaude('getaddrinfo ENOTFOUND api.anthropic.com').state, 'network');
   let seen = null;
   const sdkOk = { loadSdk: async () => ({ query: ({ options }) => { seen = options; return (async function* () { yield { type: 'result', is_error: false, result: 'OK' }; })(); } }), cliOptions: () => ({}) };
-  const ok = await createWelcome({ dataDir: tmp(), env: { ANTHROPIC_API_KEY: 'sk-should-be-stripped', PATH: '/bin' }, settings: fakeSettings(), claudeAuth: noClaude, sdkLoader: sdkOk }).checkClaude();
+  const ok = await createWelcome({ dataDir: tmp(), env: { ANTHROPIC_API_KEY: 'sk-should-be-stripped', PATH: '/bin' }, settings: fakeSettings(), claudeAuth: noClaude, sdkLoader: sdkOk, sdkModels: async () => [], runDiscovery: () => {} }).checkClaude();
   assert.strictEqual(ok.ok, true);
   assert.ok(seen && !seen.env.ANTHROPIC_API_KEY && seen.env.PATH === '/bin', 'the subscription, never the API key');
   assert.deepStrictEqual([seen.model, seen.maxTurns, seen.tools], ['haiku', 1, []], 'one tiny question, no tools');
@@ -185,7 +185,7 @@ test('Claude counts as ready only when really signed in or a Welcome check passe
   assert.strictEqual(w.claudeReady(), false);
   assert.deepStrictEqual([w.providerSummary().claude, w.providerSummary().claudeReady], [true, false], 'the card opens (and checks) because Claude Code is here');
   const sdk = { query: () => (async function* () { yield { type: 'result', is_error: false, result: 'OK' }; })() };
-  const w2 = createWelcome({ dataDir: dir, env: {}, settings: fakeSettings(), claudeAuth: signedOut, sdkLoader: { loadSdk: async () => sdk, cliOptions: () => ({}) }, clientEnv: (e) => e });
+  const w2 = createWelcome({ dataDir: dir, env: {}, settings: fakeSettings(), claudeAuth: signedOut, sdkLoader: { loadSdk: async () => sdk, cliOptions: () => ({}) }, clientEnv: (e) => e, sdkModels: async () => [], runDiscovery: () => {} });
   const r = await w2.checkClaude({ timeoutMs: 5000 });
   assert.strictEqual(r.ok, true, JSON.stringify(r));
   assert.ok(w2.progress().claudeOkAt, 'a passed check is remembered');
@@ -285,4 +285,41 @@ test('ChatGPT status for Settings spends nothing; only a passed check counts as 
   assert.deepStrictEqual([removed.chatgptReady(), removed.hasProvider()], [false, false], 'Codex removed since: no longer a way to think');
   const absent = createWelcome({ dataDir: tmp(), env: { HOME: '/home/x' }, settings: fakeSettings(), claudeAuth: noClaude, codex: fakeCodex({ resolveBinary: () => null }) });
   assert.deepStrictEqual([absent.providerSummary().chatgpt, absent.providerSummary().chatgptReady], [false, false]);
+});
+
+// ── The Claude check offers the Claude models (the Welcome page's model select) ──
+function claudeWelcome(extra = {}) {
+  const sdk = { query: () => (async function* () { yield { type: 'result', is_error: false, result: 'OK' }; })() };
+  const bad = { query: () => (async function* () { yield { type: 'result', is_error: true, result: 'Invalid API key · Please run /login' }; })() };
+  return createWelcome({ dataDir: tmp(), env: {}, settings: fakeSettings(), claudeAuth: noClaude, sdkLoader: { loadSdk: async () => (extra.fail ? bad : sdk), cliOptions: () => ({}) }, clientEnv: (e) => e, ...extra.deps });
+}
+const FALLBACK = ['claude-sdk/default', 'claude-sdk/opus', 'claude-sdk/sonnet', 'claude-sdk/haiku'];
+
+test('Claude check: offers the models the client lists (default first, no duplicates) and refreshes the pickers once', async () => {
+  let discovered = 0;
+  const w = claudeWelcome({ deps: { sdkModels: async () => [{ id: 'opus' }, { id: 'default' }, { id: 'opus' }, { id: 'claude-opus-5-5' }], runDiscovery: () => { discovered++; } } });
+  const r = await w.checkClaude({ timeoutMs: 5000 });
+  assert.deepStrictEqual(r, { ok: true, state: 'ready', model: 'claude-sdk/default', suggested: 'claude-sdk/default', models: ['claude-sdk/default', 'claude-sdk/opus', 'claude-sdk/claude-opus-5-5'] });
+  assert.strictEqual(discovered, 1);
+  const w2 = claudeWelcome({ deps: { sdkModels: async () => [{ id: 'default' }, { id: 'opus' }, { id: 'claude-opus-5-5' }], runDiscovery: () => {} } });
+  assert.deepStrictEqual((await w2.checkClaude({ timeoutMs: 5000 })).models, ['claude-sdk/default', 'claude-sdk/opus', 'claude-sdk/claude-opus-5-5']);
+});
+
+test('Claude check: a model list that throws, hangs, or is empty gives the short fallback list; a rejecting refresh is harmless', async () => {
+  for (const sdkModels of [async () => { throw new Error('no list'); }, () => new Promise(() => {}), async () => [], async () => null]) {
+    const w = claudeWelcome({ deps: { sdkModels, runDiscovery: async () => { throw new Error('refresh failed'); } } });
+    const r = await w.checkClaude({ timeoutMs: 5000, sdkModelsTimeoutMs: 30 });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(r.models, FALLBACK);
+    assert.strictEqual(r.suggested, 'claude-sdk/default');
+  }
+});
+
+test('Claude check: a failed check refreshes nothing and offers no models', async () => {
+  let discovered = 0, asked = 0;
+  const w = claudeWelcome({ fail: true, deps: { sdkModels: async () => { asked++; return []; }, runDiscovery: () => { discovered++; } } });
+  const r = await w.checkClaude({ timeoutMs: 5000 });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.models, undefined);
+  assert.deepStrictEqual([discovered, asked], [0, 0]);
 });
