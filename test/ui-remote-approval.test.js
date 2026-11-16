@@ -48,7 +48,9 @@ function rowsFrom(markup, overrides = {}) {
     const row = {
       warn: { innerHTML: '' },
       getAttribute: (n) => (n === 'data-computer' ? id : null),
-      querySelector: (s) => (s === 'select.appr-mode' ? { value: overrides.mode || (sel ? sel[1] : 'session') } : s === '.appr-warn' ? row.warn : null),
+      pass: { value: '' }, code: { value: '' },
+      querySelector: (s) => (s === 'select.appr-mode' ? { value: overrides.mode || (sel ? sel[1] : 'session') } : s === '.appr-warn' ? row.warn
+        : s === 'input.appr-pass' && /class="appr-pass /.test(row.warn.innerHTML) ? row.pass : s === 'input.appr-code' && /class="appr-code /.test(row.warn.innerHTML) ? row.code : null),
       querySelectorAll: (s) => s === 'input.appr-trust'
         ? [...inner.matchAll(/<input type="checkbox" class="appr-trust" data-agent="([^"]*)" (checked)?>/g)].map(x => ({ checked: overrides.trusted ? overrides.trusted.includes(unesc(x[1])) : !!x[2], getAttribute: () => unesc(x[1]) }))
         : [],
@@ -177,9 +179,10 @@ test('409 needsAck shows the warning; Save anyway re-posts with acknowledged: tr
   assert.match(warn, /Cancel/);
   assert.strictEqual(w.calls.length, 1);
   assert.ok(!('acknowledged' in w.calls[0].body));
+  w.rows['pc-a-1'].pass.value = 'pw';
   await w.t.apprAck(w.rows['pc-a-1'].button);
   assert.strictEqual(w.calls.length, 2);
-  assert.deepStrictEqual(w.calls[1].body, { computer: 'pc-a-1', mode: 'day', trusted: ['sam'], acknowledged: true });
+  assert.deepStrictEqual(w.calls[1].body, { computer: 'pc-a-1', mode: 'day', trusted: ['sam'], acknowledged: true, password: 'pw', code: '' }, 'the answer did not say whether there is two-factor: the code field is there');
 });
 
 test('Cancel sends nothing and clears the warning; a later Save anyway does nothing', async () => {
@@ -222,5 +225,68 @@ test('Save anyway posts what the row shows now, not what it showed when the warn
   assert.deepStrictEqual(w.calls[0].body, { computer: 'pc-a-1', mode: 'day', trusted: ['helper', 'sam'] });
   ov.mode = 'session'; ov.trusted = ['helper'];   // changed while the warning shows
   await w.t.apprAck(w.rows['pc-a-1'].button);
-  assert.deepStrictEqual(w.calls[1].body, { computer: 'pc-a-1', mode: 'session', trusted: ['helper'], acknowledged: true });
+  assert.deepStrictEqual(w.calls[1].body, { computer: 'pc-a-1', mode: 'session', trusted: ['helper'], acknowledged: true, password: '', code: '' });
+});
+
+// ── step-up: the account password (and two-factor code) before asking is reduced ──
+test('the 409 box shows the password field; the code field only when the answer says totp: true', async () => {
+  const w = await loaded();
+  w.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true, needsStepUp: true, totp: false } });
+  await w.t.apprSave(w.rows['pc-a-1'].button);
+  let warn = w.rows['pc-a-1'].warn.innerHTML;
+  assert.match(warn, /Your account password(?! and two-factor)/);
+  assert.match(warn, /<input type="password" class="appr-pass su-pass" autocomplete="current-password" placeholder="account password">/);
+  assert.ok(!/appr-code|one-time-code/.test(warn));
+  assert.match(warn, /Save anyway/); assert.match(warn, /Cancel/);
+  w.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true, needsStepUp: true, totp: true } });
+  await w.t.apprSave(w.rows['pc-b-2'].button);
+  warn = w.rows['pc-b-2'].warn.innerHTML;
+  assert.match(warn, /Your account password and two-factor code/);
+  assert.match(warn, /<input type="text" class="appr-code su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">/);
+});
+
+test('Save anyway posts acknowledged + password + code (code only when its field exists), reading the password at click time and clearing the field', async () => {
+  const w = await loaded();
+  w.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true, needsStepUp: true, totp: true } });
+  await w.t.apprSave(w.rows['pc-a-1'].button);
+  w.rows['pc-a-1'].pass.value = 's3cret'; w.rows['pc-a-1'].code.value = '123 456';
+  await w.t.apprAck(w.rows['pc-a-1'].button);
+  assert.deepStrictEqual(w.calls[1].body, { computer: 'pc-a-1', mode: 'day', trusted: ['sam'], acknowledged: true, password: 's3cret', code: '123 456' });
+  assert.strictEqual(w.rows['pc-a-1'].pass.value, '');
+  // no two-factor: no code key at all
+  const v = await loaded();
+  v.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true, needsStepUp: true, totp: false } });
+  await v.t.apprSave(v.rows['pc-a-1'].button);
+  v.rows['pc-a-1'].pass.value = 'pw';
+  await v.t.apprAck(v.rows['pc-a-1'].button);
+  assert.deepStrictEqual(v.calls[1].body, { computer: 'pc-a-1', mode: 'day', trusted: ['sam'], acknowledged: true, password: 'pw' });
+});
+
+test('a 403 stepUp shows the error and keeps the box open (password cleared); the next Save anyway tries again', async () => {
+  const w = await loaded();
+  w.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true, needsStepUp: true, totp: false } });
+  await w.t.apprSave(w.rows['pc-a-1'].button);
+  w.state.posts.push({ status: 403, json: { error: 'That password is not right.', stepUp: true } });
+  w.rows['pc-a-1'].pass.value = 'wrong';
+  await w.t.apprAck(w.rows['pc-a-1'].button);
+  assert.strictEqual(w.els['step-msg'].className, 'msg show err');
+  assert.strictEqual(w.els['step-msg'].textContent, 'That password is not right.');
+  assert.match(w.rows['pc-a-1'].warn.innerHTML, /Save anyway/, 'the box is still open');
+  assert.strictEqual(w.rows['pc-a-1'].pass.value, '');
+  w.rows['pc-a-1'].pass.value = 'right';
+  await w.t.apprAck(w.rows['pc-a-1'].button);
+  assert.strictEqual(w.calls.length, 3);
+  assert.strictEqual(w.calls[2].body.password, 'right');
+  assert.strictEqual(w.calls[2].body.acknowledged, true);
+});
+
+test('Cancel with a typed password sends nothing and drops the box', async () => {
+  const w = await loaded();
+  w.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true, needsStepUp: true, totp: false } });
+  await w.t.apprSave(w.rows['pc-a-1'].button);
+  w.rows['pc-a-1'].pass.value = 'typed';
+  w.t.apprCancel(w.rows['pc-a-1'].button);
+  assert.strictEqual(w.rows['pc-a-1'].warn.innerHTML, '');
+  await w.t.apprAck(w.rows['pc-a-1'].button);
+  assert.strictEqual(w.calls.length, 1);
 });

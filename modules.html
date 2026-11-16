@@ -97,6 +97,9 @@
   .appr-agents { display: flex; gap: 6px 14px; flex-wrap: wrap; }
   .appr-agents label.chk { margin: 0; font-size: 13px; word-break: break-word; }
   .appr-warn:empty { display: none; }
+  .su-fields { margin: 8px 0; }
+  .su-lbl { display: block; margin: 4px 0; font-size: 13px; }
+  .su-lbl input { display: block; margin-top: 2px; max-width: 260px; }
   .ready-box { display: flex; flex-direction: column; gap: 10px; }
   .card .meta { color: var(--text-tertiary); font-size: 12px; line-height: 1.4; }
   .card .check { font-size: 12px; color: var(--success); }
@@ -279,6 +282,10 @@ function apprRead(row) {
   const trusted = Array.from(row.querySelectorAll('input.appr-trust')).filter(c => c.checked).map(c => c.getAttribute('data-agent'));
   return { computer: row.getAttribute('data-computer'), mode: sel && sel.value === 'day' ? 'day' : 'session', trusted };
 }
+// The warning box of one computer: the warning, the step-up fields (code field when totp is true; "if you use one" when unknown), the two buttons.
+function apprWarnHtml(computer, totp) {
+  return `<div class="msg warn show">${esc(APPR_WARNING)}${stepUpFieldsHtml('appr', totp)}<div class="actions"><button class="danger" data-computer="${esc(computer)}" onclick="apprAck(this)">Save anyway</button><button data-computer="${esc(computer)}" onclick="apprCancel(this)">Cancel</button></div></div>`;
+}
 async function apprPost(btn, body) {
   const row = apprRowOf(btn);
   await busy(btn, async () => {
@@ -288,10 +295,14 @@ async function apprPost(btn, body) {
       setMsg('ok', 'Saved. Agents on this computer start new sessions under the new setting.');
       loadApprovals();
     } catch (e) {
+      if (e.data && e.data.stepUp && body.acknowledged) {
+        setMsg('err', e.message);   // wrong password or code: the box stays open (password already cleared) to try again
+        return;
+      }
       if (e.data && e.data.needsAck && !body.acknowledged && row) {
         apprPending[body.computer] = body;
         const w = row.querySelector('.appr-warn');
-        if (w) w.innerHTML = `<div class="msg warn show">${esc(APPR_WARNING)}<div class="actions"><button class="danger" data-computer="${esc(body.computer)}" onclick="apprAck(this)">Save anyway</button><button data-computer="${esc(body.computer)}" onclick="apprCancel(this)">Cancel</button></div></div>`;
+        if (w) w.innerHTML = apprWarnHtml(body.computer, typeof e.data.totp === 'boolean' ? e.data.totp : null);
         return;
       }
       setMsg('err', e.message);
@@ -306,7 +317,12 @@ async function apprAck(btn) {
   const row = apprRowOf(btn); if (!row) return;
   if (!apprPending[row.getAttribute('data-computer')]) return;
   // What is on screen now, not what was there when the warning appeared: the person may have changed the row meanwhile.
-  await apprPost(btn, Object.assign(apprRead(row), { acknowledged: true }));
+  // The password is read from its field now, the field is emptied, and it is not kept anywhere else.
+  const body = Object.assign(apprRead(row), { acknowledged: true });
+  const pass = row.querySelector('input.appr-pass'), code = row.querySelector('input.appr-code');
+  if (pass) { body.password = String(pass.value || ''); pass.value = ''; }
+  if (code) body.code = String(code.value || '');
+  await apprPost(btn, body);
 }
 function apprCancel(btn) {
   const row = apprRowOf(btn); if (!row) return;
@@ -491,33 +507,73 @@ function readPermissions() {
   return out;
 }
 const permsNeedWarning = (permissions) => Object.values(permissions).some(p => p.askEachSession === false);
+// Asking less needs the account password (and the two-factor code, when the account has one), as the backup settings do.
+// totp: true / false when known, null when not. The password is read from its field at click time and goes only into that one request.
+function stepUpFieldsHtml(cls, totp) {
+  const code = totp === false ? ''
+    : `<label class="su-lbl">${totp === true ? '' : 'two-factor code, if you use one'}<input type="text" class="${cls}-code su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456"></label>`;
+  return `<div class="su-fields"><label class="su-lbl">Your account password${totp === true ? ' and two-factor code' : ''}<input type="password" class="${cls}-pass su-pass" autocomplete="current-password" placeholder="account password"></label>${code}</div>`;
+}
+let meTotp = null, meTotpTried = false;   // whether the signed-in account has two-factor (GET /api/me, read once); null = not known
+function loadMeTotp() {
+  if (meTotpTried) return;
+  meTotpTried = true;
+  api('GET', '/api/me').then((r) => {
+    if (r && r.user && typeof r.user.totpEnabled === 'boolean') {
+      meTotp = r.user.totpEnabled;
+      // The box is already open with nothing typed: show it again with the right fields.
+      const box = document.getElementById('perm-warning'), pass = box && box.querySelector ? box.querySelector('input.perm-pass') : null;
+      if (permPending && box && pass && !pass.value) showPermWarning(permPending);
+    }
+  }).catch(() => { /* unknown: the code field says "if you use one" */ });
+}
 let permPending = null;   // the save that waits for the person to accept the warning
 function showPermWarning(run) {
   permPending = run;
+  loadMeTotp();
   const box = document.getElementById('perm-warning');
-  if (box) box.innerHTML = `<div class="msg warn show">${esc(PERM_WARNING)}<div class="actions"><button class="danger" onclick="permWarnConfirm()">Save with asking off</button><button onclick="permWarnCancel()">Cancel</button></div></div>`;
+  if (box) box.innerHTML = `<div class="msg warn show">${esc(PERM_WARNING)}${stepUpFieldsHtml('perm', meTotp)}<div class="actions"><button class="danger" onclick="permWarnConfirm()">Save with asking off</button><button onclick="permWarnCancel()">Cancel</button></div></div>`;
 }
 function clearPermWarning() { permPending = null; const box = document.getElementById('perm-warning'); if (box) box.innerHTML = ''; }
 function permWarnCancel() { clearPermWarning(); }   // nothing is sent; the ticked and unticked boxes stay as they are
-async function permWarnConfirm() { const run = permPending; clearPermWarning(); if (run) await run(); }
-// Posts the levels (acknowledged only when the warning was accepted). Returns true when the hub saved them.
-async function postPermissions(agents, permissions, acknowledged, btn) {
+// Reads what was typed now, empties the password field, and runs the waiting save with it. The box stays open until the hub accepts or refuses for another reason.
+async function permWarnConfirm() {
+  const run = permPending; if (!run) return;
+  const box = document.getElementById('perm-warning');
+  const pass = box && box.querySelector ? box.querySelector('input.perm-pass') : null;
+  const code = box && box.querySelector ? box.querySelector('input.perm-code') : null;
+  const stepUp = { password: pass ? String(pass.value || '') : '' };
+  if (code) stepUp.code = String(code.value || '');
+  if (pass) pass.value = '';
+  await run(stepUp);
+}
+// Posts the levels (acknowledged and the step-up only when the warning was accepted). Returns true when the hub saved them.
+async function postPermissions(agents, permissions, acknowledged, btn, stepUp) {
   let ok = false;
   await busy(btn, async () => {
     try {
       const body = { agents, permissions };
-      if (acknowledged && permsNeedWarning(permissions)) body.acknowledged = true;
+      if (acknowledged && permsNeedWarning(permissions)) {
+        body.acknowledged = true;
+        if (stepUp) { body.password = stepUp.password; if (stepUp.code !== undefined) body.code = stepUp.code; }
+      }
       current = (await api('POST', `/api/modules/${current.id}/agent-permissions`, body)).module;
       ok = true;
-    } catch (e) { setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message); }
+      clearPermWarning();
+    } catch (e) {
+      if (e.data && e.data.stepUp) { setMsg('err', e.message); return; }   // wrong password or code: the box stays open to try again
+      if (e.data && e.data.needsStepUp && typeof e.data.totp === 'boolean') meTotp = e.data.totp;
+      clearPermWarning();
+      setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message);
+    }
   });
   return ok;
 }
-async function savePermissions(btn, acknowledged) {
+async function savePermissions(btn, acknowledged, stepUp) {
   const permissions = readPermissions();
-  if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(() => savePermissions(btn, true)); return; }
+  if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning((su) => savePermissions(btn, true, su)); return; }
   const agents = current.agents.filter(n => !leadsLocked(current) || !(current.leads || []).includes(n));
-  if (!(await postPermissions(agents, permissions, acknowledged, btn))) return;
+  if (!(await postPermissions(agents, permissions, acknowledged, btn, stepUp))) return;
   render(); loadList();
   setMsg('ok', 'Saved. The new levels apply to the next call.');
 }
@@ -699,14 +755,14 @@ function onPermChange(el) {
   if (cl.contains('grant') || cl.contains('perm-level') || cl.contains('perm-ask')) clearPermWarning();
 }
 document.addEventListener('change', (e) => { if (e.target && e.target.classList) onPermChange(e.target); });
-async function saveGrant(stepId, btn, acknowledged) {
+async function saveGrant(stepId, btn, acknowledged, stepUp) {
   const agents = [...document.querySelectorAll('input.grant:checked')].map(i => i.value);
   const sel = document.getElementById('notice-agent');
   const agent = sel ? sel.value : null;
   if (levelsConfig(current)) {
     const permissions = readPermissions();
-    if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(() => saveGrant(stepId, btn, true)); return; }
-    if (!(await postPermissions(agents, permissions, acknowledged, btn))) return;
+    if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning((su) => saveGrant(stepId, btn, true, su)); return; }
+    if (!(await postPermissions(agents, permissions, acknowledged, btn, stepUp))) return;
   }
   const ok = await doStep(stepId, { agents }, btn);
   if (!ok || !agent) return;

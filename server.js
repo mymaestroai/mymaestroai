@@ -195,6 +195,16 @@ const PORT = parseInt(process.env.PORT || '8888', 10);
 // Security check (lib/security-check): the hub reviews its own security configuration (Settings → Security check,
 // GET /api/security-check, nightly). Wired with how this process actually listens.
 function securityCheck() { return require('./lib/security-check').getSecurityCheck({ exposed: () => !!BIND.exposed, port: PORT, host: HOST }); }
+/** The step-up: this signed-in account's password (and two-factor code when the account has it) from a request body.
+ *  Returns null when right, else the message to show. Used by the backup routes and the module permission routes. */
+function accountStepUp(user, b, ip) {
+  const u = user;
+  b = b && typeof b === 'object' ? b : {};
+  const r = hubAuth.login(u.login, String(b.password || ''), { ip });
+  if (!r.ok) return r.locked ? r.error : 'That password is not right.';
+  if (r.needsTotp) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return 'That two-factor code is not right.'; }
+  return null;
+}
 // Backups (lib/backup/service): one instance for the routes; download links last two minutes and work once.
 let backupSvc = null;
 const backupDownloads = new Map();
@@ -1956,7 +1966,20 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/modules' || pathname.startsWith('/api/modules/')) {
       const mods = require('./lib/modules').getModules();
       const bodyJson = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
-      const fail = (e) => jsonResponse(res, [403, 409, 500].includes(e.status) ? e.status : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}) });
+      const userHasTotp = () => !!(req.hubUser && ((req.hubUser.totp && req.hubUser.totp.enabled) || req.hubUser.totpEnabled));
+      const fail = (e) => jsonResponse(res, [403, 409, 500].includes(e.status) ? e.status : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}), ...(e.needsStepUp ? { needsStepUp: true, totp: e.totp !== undefined ? !!e.totp : userHasTotp() } : {}) });
+      // Asking less needs the account password (and code) in the body. They are taken out before the module sees the input; steppedUp comes only from this check.
+      const takeStepUp = (b) => {
+        const input = b && typeof b === 'object' && !Array.isArray(b) ? { ...b } : b;
+        if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.password !== 'string') {
+          if (input && typeof input === 'object' && !Array.isArray(input)) { delete input.password; delete input.code; }
+          return { input, steppedUp: false, denied: null };
+        }
+        const given = { password: input.password, code: input.code };
+        delete input.password; delete input.code;
+        const no = accountStepUp(req.hubUser, given, req.socket && req.socket.remoteAddress);
+        return no ? { input, steppedUp: false, denied: no } : { input, steppedUp: true, denied: null };
+      };
       // Changes come from a person on the page, never from the hub's internal service identity (agents' calls back into the hub).
       if (req.method !== 'GET' && req.hubService) return jsonResponse(res, 403, { error: 'Module changes need a signed-in admin.' });
       try {
@@ -1993,7 +2016,9 @@ async function handleHttpRequest(req, res) {
           // What agents may do on a module (and whether each session is asked): a signed-in admin's own browser session only. Never the hub service,
           // an API token, a session still owing its two-factor code, a member or the legacy single password; nothing in the body says who is asking.
           if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change agent permissions.' });
-          return jsonResponse(res, 200, mods.setAgentPermissions(m[1], await bodyJson(), { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined }));
+          const su = takeStepUp(await bodyJson());
+          if (su.denied) return jsonResponse(res, 403, { error: su.denied, stepUp: true });
+          return jsonResponse(res, 200, mods.setAgentPermissions(m[1], su.input, { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined, steppedUp: su.steppedUp }));
         }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/approval-policy$/);
         if (m && (req.method === 'GET' || req.method === 'POST')) {
@@ -2011,12 +2036,14 @@ async function handleHttpRequest(req, res) {
             } catch { return null; }
           };
           if (req.method === 'POST') {
-            const body = await bodyJson();
+            const su = takeStepUp(await bodyJson());
+            if (su.denied) return jsonResponse(res, 403, { error: su.denied, stepUp: true });
+            const body = su.input;
             const listed = body && typeof body.computer === 'string' ? await computersOf(10000) : null;
             const known = listed ? listed.find((x) => x.id === body.computer) : null;
             // A computer the module doesn't list is refused; when the list can't be read, the change still goes through (by id only), so asking more is never blocked.
             if (listed && !known) return jsonResponse(res, 400, { error: 'That computer is not set up here.' });
-            return jsonResponse(res, 200, mods.setApprovalPolicy(m[1], body, { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined }, { computerName: known ? known.name : '' }));
+            return jsonResponse(res, 200, mods.setApprovalPolicy(m[1], body, { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined, steppedUp: su.steppedUp }, { computerName: known ? known.name : '' }));
           }
           const out = { ok: true, ...mods.approvalPolicy(m[1]), computers: [] };
           const list = await computersOf(30000);
@@ -2563,13 +2590,7 @@ async function handleHttpRequest(req, res) {
       if (!access.isAdmin(req.hubUser) || req.hubPendingTotp) return jsonResponse(res, 403, { error: 'admin_only' });
       const svc = backupService();
       const body = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
-      const stepUp = (b) => {
-        const u = req.hubUser;
-        const r = hubAuth.login(u.login, String(b.password || ''), { ip: req.socket && req.socket.remoteAddress });
-        if (!r.ok) return r.locked ? r.error : 'That password is not right.';
-        if (r.needsTotp) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return 'That two-factor code is not right.'; }
-        return null;
-      };
+      const stepUp = (b) => accountStepUp(req.hubUser, b, req.socket && req.socket.remoteAddress);
       try {
         if (pathname === '/api/backups' && req.method === 'GET') { const st = svc.status(); const sch = require('./lib/backup/schedule').current(); return jsonResponse(res, 200, { ...st, nightly: sch ? sch.info(st) : null, backups: await svc.list() }); }
         // Nightly backups: turning them off or keeping fewer would let older backups go, so the step-up first

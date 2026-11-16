@@ -35,7 +35,8 @@ const SETUP = { steps: [
   { id: 'done', type: 'finish', title: 'Done' },
 ] };
 const AGENTS = [{ name: 'owner', lead: true }, { name: 'sam' }, { name: 'helper' }, { name: 'scout' }, { name: 'kid', owner: 'u_member' }, { name: 'tw-1' }];
-const ADMIN = { adminBrowser: true, userId: 'u_admin', name: 'Jo' };
+const ADMIN = { adminBrowser: true, userId: 'u_admin', name: 'Jo', steppedUp: true };   // the server sets steppedUp after the account password was checked
+const ADMIN_NO_STEP = { adminBrowser: true, userId: 'u_admin', name: 'Jo' };
 const PC = 'abc$@x-1';          // a computer id (the last part of a node id)
 const PC2 = 'zzzzzzzz9';
 
@@ -528,4 +529,69 @@ test('setApprovalPolicy: the notice, the 409 and the audit record name the compu
   assert.strictEqual(r.pushes.at(-1).body, 'Jo set PC-A (abc$@x) to ask once a day; not asked: sam.');
   const recs = r.audit().filter((x) => x.action === 'approval-policy');
   assert.ok(recs.length >= 2 && recs.every((x) => x.computerName === 'PC-A' && x.computer === PC));
+});
+
+test('setApprovalPolicy: loosening needs the account password (steppedUp) as well as the acknowledgement; tightening needs neither', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish();
+  const day = { computer: PC, mode: 'day', trusted: [] };
+  const trust = { computer: PC, mode: 'session', trusted: ['sam'] };
+  for (const input of [day, trust]) {
+    // acknowledged, not stepped up
+    let e = null;
+    try { r.set(withAck(input), ADMIN_NO_STEP); } catch (x) { e = x; }
+    assert.ok(e && e.status === 409 && e.needsAck === true && e.needsStepUp === true, JSON.stringify(input));
+    for (const bogus of ['yes', 1, 'true', {}, null]) refused(() => r.set(withAck(input), { ...ADMIN_NO_STEP, steppedUp: bogus }), 409);
+    // stepped up, not acknowledged
+    try { e = null; r.set(input, ADMIN); } catch (x) { e = x; }
+    assert.ok(e && e.status === 409 && e.needsAck === true && e.needsStepUp === true);
+  }
+  refused(() => r.set({ ...withAck(day), steppedUp: true }, ADMIN_NO_STEP), 400, /Unknown field "steppedUp"/);
+  assert.deepStrictEqual(r.policy(), []);
+  assert.deepStrictEqual(r.audit(), [], 'a refused change leaves no record and no push');
+  assert.strictEqual(r.pushes.length, 0);
+  // both: allowed, and the audit record says steppedUp
+  assert.strictEqual(r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam', 'helper'] }), ADMIN).changed, true);
+  assert.ok(r.audit().length > 0 && r.audit().every(x => x.steppedUp === true));
+  // tightening needs neither
+  const n = r.audit().length;
+  assert.strictEqual(r.set({ computer: PC, mode: 'day', trusted: ['sam'] }, ADMIN_NO_STEP).changed, true);
+  assert.strictEqual(r.set({ computer: PC, mode: 'session', trusted: ['sam'] }, ADMIN_NO_STEP).changed, true);
+  assert.strictEqual(r.set({ computer: PC, mode: 'session', trusted: [] }, ADMIN_NO_STEP).changed, true);
+  assert.ok(r.audit().slice(n).length > 0 && r.audit().slice(n).every(x => !('steppedUp' in x)), 'tightening is not marked');
+});
+
+test('server.js: both routes take password and code out of the body, check them with the shared helper, and set steppedUp only from that result', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  // the one helper, used by the backups routes too
+  assert.match(src, /\nfunction accountStepUp\(user, b, ip\) \{/);
+  assert.strictEqual((src.match(/String\(b\.password \|\| ''\)/g) || []).length, 1, 'the step-up password check lives in one place');
+  const backups = src.slice(src.indexOf("pathname === '/api/backups' || pathname.startsWith"));
+  assert.match(backups.slice(0, 1500), /const stepUp = \(b\) => accountStepUp\(req\.hubUser, b, req\.socket && req\.socket\.remoteAddress\);/);
+  assert.ok(!/const stepUp = \(b\) => \{/.test(src));
+  assert.match(src, /return r\.locked \? r\.error : 'That password is not right\.';/);
+  assert.match(src, /'That two-factor code is not right\.'/);
+  // the modules routes
+  const take = src.slice(src.indexOf('const takeStepUp = (b) =>'), src.indexOf('// Changes come from a person on the page'));
+  assert.match(take, /typeof input\.password !== 'string'/, 'present means a string, even an empty one');
+  assert.match(take, /delete input\.password; delete input\.code;/);
+  assert.match(take, /accountStepUp\(req\.hubUser, given, /);
+  assert.match(take, /steppedUp: true/);
+  assert.ok(!/steppedUp: true/.test(take.replace(/\{ input, steppedUp: true, denied: null \}/, '')), 'steppedUp true only on the helper success');
+  const perms = src.slice(src.indexOf('/agent-permissions$/'), src.indexOf('/approval-policy$/'));
+  const pol = src.slice(src.indexOf('/approval-policy$/'), src.indexOf('/help$/'));
+  for (const [name, block, call] of [['agent-permissions', perms, 'mods.setAgentPermissions'], ['approval-policy', pol, 'mods.setApprovalPolicy']]) {
+    assert.match(block, /const su = takeStepUp\(await bodyJson\(\)\);/, name);
+    assert.match(block, /if \(su\.denied\) return jsonResponse\(res, 403, \{ error: su\.denied, stepUp: true \}\);/, name);
+    assert.ok(block.indexOf('takeStepUp') < block.indexOf(call), `${name}: the check comes before the change`);
+    assert.match(block, /steppedUp: su\.steppedUp \}/, name);
+    assert.ok(!/b(ody)?\.steppedUp|req\.body/.test(block), `${name}: steppedUp never comes from the body`);
+  }
+  assert.match(perms, /mods\.setAgentPermissions\(m\[1\], su\.input,/);
+  assert.match(pol, /const body = su\.input;/);
+  // fail() forwards the flags
+  const fail = src.slice(src.indexOf('const userHasTotp = '), src.indexOf('const takeStepUp'));
+  assert.match(fail, /e\.needsAck \? \{ needsAck: true \}/);
+  assert.match(fail, /e\.needsStepUp \? \{ needsStepUp: true, totp: /);
+  assert.match(fail, /req\.hubUser\.totp && req\.hubUser\.totp\.enabled/, "the signed-in account's own flag");
 });
