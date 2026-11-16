@@ -163,7 +163,7 @@ test('voiceReplySentences and voiceJoinOr', () => {
   assert.strictEqual(code.note, 'I have put the details in the chat.');
   const done = voiceReplySentences('Here is code.\n```js\nlet a\n```\nAll set.', true);
   assert.deepStrictEqual(done.sentences, ['Here is code.']);   // on a call only the spoken lead (before the first code/table/list/heading line) is read; the note says the rest is in the chat
-  assert.strictEqual(done.note, 'I have put the details in the chat.');
+  assert.strictEqual(done.note, 'I\'ve put the code in the chat.');   // changed: at the end of the reply the note names a code block (read-short-extras rule)
   assert.deepStrictEqual(voiceReplySentences('', true), { sentences: [], note: '' });
   assert.strictEqual(voiceJoinOr(['A']), 'A');
   assert.strictEqual(voiceJoinOr(['A', 'B']), 'A or B');
@@ -277,7 +277,7 @@ test('routing order: stop beats a pending announcement and a pending ask', async
 });
 
 test('barge-in: speech start while speaking cuts the audio before transcription', async () => {
-  const h = await started();
+  const h = await started({ prefs: () => ({ micLevel: 50, interruptSensitivity: 50, continueWait: 0, detailsReadWords: 0 }) });   // changed: the cut mechanics are tested with 'read short extra parts' off (the 4th and 5th short sentences would be read now)
   await h.say('read it');
   h.call.onReplyText('Sentence one. Sentence two. Sentence three. ', false);
   assert.strictEqual(h.last(), 'speaking');
@@ -317,10 +317,10 @@ test('reply reading: sentences as they arrive, code and tables skipped, note onc
   h.call.onReplyText('Here is the plan. Step one is easy. Step two:\n```js\nrun();\n```\n| a | b |\n|--|--|\n| 1 | 2 |\nDone.', true);
   await h.finish();
   // only the lead before the first code fence is read now: the text after the code and the table ('Done.') stays in the chat
-  assert.deepStrictEqual(h.spoken.slice(2), ['Step two:', 'I have put the details in the chat.']);
+  assert.deepStrictEqual(h.spoken.slice(2), ['Step two:', 'I\'ve put the table in the chat.']);   // changed: the rest holds a code block and a table; the note names the kind (table wins over code)
   await h.finish(); await h.finish();
   assert.strictEqual(h.last(), 'listening');
-  assert.strictEqual(h.spoken.filter(s => /details/.test(s)).length, 1);
+  assert.strictEqual(h.spoken.filter(s => /put the/.test(s)).length, 1);
   assert.ok(!h.spoken.join(' ').includes('run();'));
 });
 

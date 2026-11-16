@@ -11093,13 +11093,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // ── voice helpers (begin) ──
     const VOICE_STORE_KEY = 'hub-voice';
     const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
+    // On a call the note names the kind of what was left out when it is clear (see voiceReplySentences in ui-voice-call.js).
+    const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat.';
+    const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat.';
+    const VOICE_NOTE_CODE = ' I\'ve put the code in the chat.';
+    const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];   // 'Read short extra parts aloud': Off / up to 20 / 40 / 80 words (pref detailsReadWords, default 40; 0 = never read the rest)
     const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
     const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
     const VOICE_END_PAUSES = [800, 1200, 2000, 4000];   // 'Pause before I'm done': short / normal / long / very long, in ms
     const VOICE_CONTINUE_WAITS = [1500, 3000, 5000, 8000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
     const VOICE_ECHO_HOLDS = [0, 600, 1000, 1500];   // 'Echo guard': how long the raised barge-in thresholds stay after playback stops, in ms (0 = off)
     const VOICE_WAKE_QUIET_MS = [10000, 20000, 45000];   // 'Go back to standby after': how long a quiet call stays awake (default 20000)
-    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder', loudnessBt: 'normal' };
+    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder', loudnessBt: 'normal', detailsReadWords: 40 };
     function voiceCleanSpeed(v) {
       const n = Number(v);
       return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
@@ -11357,6 +11362,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof raw.voiceSpeed === 'number' && Number.isFinite(raw.voiceSpeed)) p.voiceSpeed = voiceCleanSpeed(raw.voiceSpeed);
       if (VOICE_CONTINUE_WAITS.includes(raw.continueWait)) p.continueWait = raw.continueWait;
       if (voiceEchoHoldOk(raw.echoHold)) p.echoHold = raw.echoHold;
+      if (VOICE_DETAILS_READ_WORDS.includes(raw.detailsReadWords)) p.detailsReadWords = raw.detailsReadWords;
       if (typeof raw.thinkingVolume === 'number' && Number.isFinite(raw.thinkingVolume)) p.thinkingVolume = Math.round(Math.max(0, Math.min(1, raw.thinkingVolume)) * 100) / 100;
       for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity', 'thinkingSound', 'keepAlive']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
       if (typeof raw.loudness === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, raw.loudness)) p.loudness = raw.loudness;
@@ -11913,19 +11919,53 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return { lead: text, cut: false };
     }
-    function voiceReplySentences(markdown, done) {
+    // Every note the call can say about what it left out (trimmed, as it is queued): the generic one and the three that name the kind.
+    function voiceNoteTexts() { return [VOICE_DETAILS_NOTE, VOICE_NOTE_LIST, VOICE_NOTE_TABLE, VOICE_NOTE_CODE].map(n => n.trim()); }
+    function voiceIsNoteText(text) { return voiceNoteTexts().includes(text); }
+    // What the lead leaves out, judged at the end of a reply. rest: the markdown after the cut; extra: the lead's sentences beyond the cap.
+    // -> { substantial, kind: 'list' | 'table' | 'code' | '', sentences }: substantial when it holds a code block, a table, or 3+ raw links / file paths,
+    // or is more than readWords spoken words; sentences: what is read when it is short.
+    function voiceRestAnalysis(rest, extra, readWords, openTail) {
+      const lines = String(rest).split('\n');
+      const hasCode = /(^|\n)[ \t]*(```|~~~)/.test(rest);
+      const hasTable = !!openTail || lines.some(l => /^\s*\|/.test(l) || VOICE_TABLE_RULE_RE.test(l));
+      const plain = String(rest).replace(/!?\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');   // a link with a label is read by its label
+      const raw = (plain.match(/(?:https?:\/\/|www\.)[^\s<>)\]]*[^\s<>)\].,;:!?'"]/gi) || []).length
+        + (voicePathsToWords(plain.replace(/(?:https?:\/\/|www\.)\S+/gi, ' ')).match(/a file path/g) || []).length;
+      const body = lines.filter(l => l.trim());
+      const items = body.filter(l => /^[ \t]*(?:[-*+•◦▪‣]|\d+[.)])[ \t]+/.test(l)).length;
+      const kind = body.length && items * 2 >= body.length ? 'list' : hasTable ? 'table' : hasCode ? 'code' : '';
+      const spoken = voiceSpeechText(rest);
+      const sentences = extra.concat(voiceSentences(spoken).filter(Boolean));
+      const words = extra.concat(spoken).join(' ').split(/\s+/).filter(Boolean).length;
+      return { substantial: hasCode || hasTable || raw >= 3 || words > readWords, kind, sentences };
+    }
+    // voiceReplySentences(markdown, done, readWords = 40) -> { sentences, note }. While the reply streams only the spoken lead counts (at most
+    // VOICE_LEAD_MAX_SENTENCES sentences); anything left out is held. At done what the lead left out is judged: short (at most readWords spoken
+    // words, nothing unspeakable) -> its sentences follow the lead's (so the sentences already returned stay a prefix), no note; substantial -> the lead only
+    // and ONE note naming the kind (list, table, code, else the details note). readWords 0 never reads the rest.
+    function voiceReplySentences(markdown, done, readWords) {
       const note = voiceSpeechText('| a |');
+      const limit = Number.isFinite(Number(readWords)) && readWords !== null && readWords !== '' && Number(readWords) >= 0 ? Number(readWords) : 40;
       const sp = voiceSpokenLead(markdown, done);
       const finished = (!!done || sp.cut) && !sp.openTail;   // a cut lead is complete; an uncut reply may still be streaming; text before a table header's pipe is read as typed
       let lead = sp.lead;
       // While streaming, a last line that is only the start of a detail line (a lone marker, digits, an unclosed bold) is not lead text yet.
       if (!finished) lead = lead.replace(/(^|\n)[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?|(?:\*\*|__)[^\n]*)$/, '$1');
       let t = voiceSpeechText(lead, !finished), hasNote = sp.cut;
-      if (t === note) { t = ''; hasNote = true; } else if (t.endsWith(' ' + note)) { t = t.slice(0, -note.length).trim(); hasNote = true; }
+      let leadNote = false;   // the lead itself held something unspeakable: always a note
+      if (t === note) { t = ''; hasNote = leadNote = true; } else if (t.endsWith(' ' + note)) { t = t.slice(0, -note.length).trim(); hasNote = leadNote = true; }
       let sentences = voiceSentences(t).filter(Boolean);
       if (!finished && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(lead))) sentences.pop();
-      if (sentences.length > VOICE_LEAD_MAX_SENTENCES) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
-      return { sentences, note: hasNote ? note : '' };
+      const extra = sentences.slice(VOICE_LEAD_MAX_SENTENCES);
+      if (extra.length) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
+      if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? note : '' };
+      // The reply is complete and the lead left something out: the markdown after the cut, and the lead's sentences beyond the cap.
+      const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+      const rest = sp.cut ? text.slice(sp.lead.length) : '';
+      const a = voiceRestAnalysis(rest, extra, limit, sp.openTail);
+      if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : note };
+      return { sentences: sentences.concat(a.sentences), note: '' };
     }
     function voiceCreateCall(deps) {
       const d = deps || {};
@@ -12198,7 +12238,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return hadReply;
       }
 
-      function completeCount() { return voiceReplySentences(lastText, false).sentences.length; }
+      const readWords = () => prefs().detailsReadWords;   // 'Read short extra parts aloud' (undefined: the default, 40)
+      function completeCount() { return voiceReplySentences(lastText, false, readWords()).sentences.length; }
       // The whole reply is over, reported ONCE (ui.reply('end')) for the display's reaction: its text is complete AND nothing is read or waiting to be
       // read (so a gap between two sentences of a growing reply is not the end) AND the person is not speaking. With no speech (voice off, a failed
       // line) that is the moment the text is complete; otherwise right after the last line ended, before the call returns to listening.
@@ -12213,7 +12254,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         lastText = String(full == null ? '' : full); lastDone = !!done;
         if (!done) replyRecorded = false;   // a reply is being written: its text is saved once, when complete
         if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
-        const r = voiceReplySentences(lastText, !!done);
+        const r = voiceReplySentences(lastText, !!done, readWords());
         if (r.sentences.length < spokenCount) spokenCount = 0;
         if (cutSkip) spokenCount = r.sentences.length;
         else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
@@ -12402,10 +12443,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         recBegin();   // no onSpeechBegin came first (a begin already decided this speech)
         if (!standby) queue = queue.filter(i => !i.again);   // already repeating themselves: a queued "Say that again." is dropped, never read
         if (!standby && (speaking || queue.length)) {   // in standby a sound does not cut the reading ("<phrase>, stop" does, once heard)
-          const noteText = voiceSpeechText('| a |');   // the details note is a reply item but not one of the counted sentences
-          const items = (current ? [current] : []).concat(queue);
-          const n = items.filter(i => i.kind === 'reply' && i.text !== noteText).length;
-          const noteCut = items.some(i => i.kind === 'reply' && i.text === noteText);   // a false start puts the note back too
+          const items = (current ? [current] : []).concat(queue);   // a note (the details note or one naming the kind) is a reply item but not one of the counted sentences
+          const n = items.filter(i => i.kind === 'reply' && !voiceIsNoteText(i.text)).length;
+          const noteCut = items.some(i => i.kind === 'reply' && voiceIsNoteText(i.text));   // a false start puts the note back too
           const cutReply = cancelSpeaking(true);
           const setSkip = cutReply && awaitingReply && !cutSkip;
           if (setSkip) cutSkip = true;
@@ -14424,6 +14464,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Talk mode', `<select id="st-voice-mode" onchange="voiceSettingsSavePrefs()" style="padding:4px"><option value="handsfree" ${p.mode !== 'tap' ? 'selected' : ''}>Hands-free</option><option value="tap" ${p.mode === 'tap' ? 'selected' : ''}>Tap to talk</option></select>`);
       h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs('interruptSensitivity')" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
       h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs(\'endPause\')"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s.</span>`);
+      h += row('Read short extra parts aloud', `<select id="st-voice-details" onchange="voiceSettingsSavePrefs()" style="padding:4px">${VOICE_DETAILS_READ_WORDS.map(n => `<option value="${n}"${n === (p.detailsReadWords == null ? 40 : p.detailsReadWords) ? ' selected' : ''}>${n ? 'Up to ' + n + ' words' : 'Off'}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">On a call, what the agent would only put in the chat is read out when it is this short. Longer parts, lists, tables and code stay in the chat.</span>`);
       h += row('Voice speed', `<input type="range" min="0.75" max="1.5" step="0.05" id="st-voice-speed" value="${voiceSpeedNow()}" oninput="voiceSettingSpeedInput(this)" onchange="voiceSettingsSavePrefs('voiceSpeed')" style="width:180px"> <span id="st-voice-speed-val" style="min-width:3.5em;display:inline-block">${voiceSpeedLabel(voiceSpeedNow())}</span> <span class="st-hint" style="margin:0 0 0 8px">${VOICE_SPEED_HINT}</span>`);
       h += row('Voice loudness, speaker', `${voiceLoudnessSelectHtml('st-voice-loudness', 'onchange="voiceSettingsSavePrefs()"', 'loudness')} <span class="st-hint" style="margin:0 0 0 8px">Makes the agent's voice louder during calls on the computer's speaker.</span>`);
       h += row('Voice loudness, Bluetooth / car', `${voiceLoudnessSelectHtml('st-voice-loudness-bt', 'onchange="voiceSettingsSavePrefs()"', 'loudnessBt')} <span class="st-hint" style="margin:0 0 0 8px">Used while a Bluetooth headset or a car is the call's microphone. A car has its own amplifier, so Normal is usually right.</span>`);
@@ -14521,13 +14562,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const mode = voiceById('st-voice-mode'), sens = voiceById('st-voice-sens');
       const pause = voiceById('st-voice-pause'), speed = voiceById('st-voice-speed'), act = voiceById('st-voice-speakactivity');
       if (!mic || !ra || !fb || !mode || !sens || !pause || !speed || !act) return;
+      const details = voiceById('st-voice-details');
       const echo = voiceById('st-voice-echo'), keep = voiceById('st-voice-keepalive'), loud = voiceById('st-voice-loudness'), loudBt = voiceById('st-voice-loudness-bt');
-      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, speed, act, echo, keep, loud, loudBt].filter(Boolean));
+      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, details, speed, act, echo, keep, loud, loudBt].filter(Boolean));
       const echoNow = echo && voiceEchoHoldOk(Number(echo.value)) ? Number(echo.value) : voiceEchoHoldNow();
       let prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
         endPause: Number(pause.value), voiceSpeed: voiceCleanSpeed(speed.value), speakActivity: act.checked, echoHold: echoNow, keepAlive: keep ? !!keep.checked : voiceKeepAliveNow(),
         loudness: loud && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loud.value) ? loud.value : voiceLoudnessFor(voicePrefsNow(), 'speaker'),
         loudnessBt: loudBt && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loudBt.value) ? loudBt.value : voiceLoudnessFor(voicePrefsNow(), 'bluetooth') };
+      if (details && details.value !== '' && VOICE_DETAILS_READ_WORDS.includes(Number(details.value))) prefs.detailsReadWords = Number(details.value);   // 'Read short extra parts aloud'
       if (VOICE_AGENT_DEFAULT_KEYS.includes(changed)) prefs = voiceMarkChosen(prefs, [changed]);   // the person set it here: an agent's default no longer applies to it
       prefs = voiceMarkDeviceChanged(prefs, voicePrefsNow());   // an iPhone default the person changed is theirs from now on
       voiceSavePrefs(localStorage, prefs);
