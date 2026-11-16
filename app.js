@@ -5519,16 +5519,19 @@
       const pl = window.hubPhoneLayout || {};
       if (pl.moving) return;
       if (!(pl.offer === true || (window.innerWidth < 700 && !pl.keepDesktop))) return;
-      // A phone that chose "Use the full site" has its own close switch, so a bar closed before that choice still shows the way back.
+      // On a phone that chose "Use the full site" the bar is the way back, so closing it lasts until the browser or app
+      // is closed (sessionStorage), and a bar closed for good before that choice still shows.
       const closeKey = pl.phone && pl.keepDesktop ? 'hub-mobile-banner-kept' : 'hub-mobile-banner';
-      try { if (localStorage.getItem(closeKey) === 'off') return; } catch (e) { /* storage blocked: show it */ }
+      let closeStore = null;
+      try { closeStore = closeKey === 'hub-mobile-banner-kept' ? sessionStorage : localStorage; } catch (e) { /* storage blocked */ }
+      try { if (closeStore && closeStore.getItem(closeKey) === 'off') return; } catch (e) { /* storage blocked: show it */ }
       const bar = document.createElement('div');
       bar.id = 'hub-phone-layout-notice';   // first in the notice stack (layoutBanners): the notices and the page move down below it
       bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#14171F;border-bottom:1px solid #222632;color:#F3F4F6;font-size:13px;box-sizing:border-box';
       bar.innerHTML = '<span><span style="color:#C3C2B7">This is the computer layout.</span> <a id="hub-phone-layout-open" href="/mobile" style="color:#5A93FF;text-decoration:none">Open the phone layout</a></span><button aria-label="Dismiss" style="background:none;border:0;color:#9CA3AF;font-size:16px;padding:4px 8px">\u2715</button>';
       // Choosing the phone layout again also undoes "Use the full site"; the link still navigates by itself.
       bar.querySelector('#hub-phone-layout-open').addEventListener('click', () => { try { localStorage.removeItem('hub-keep-desktop'); } catch (e) { /* storage blocked */ } });
-      bar.querySelector('button').addEventListener('click', () => { try { localStorage.setItem(closeKey, 'off'); } catch (e) { /* storage blocked: close it for now */ } bar.remove(); layoutBanners(); });
+      bar.querySelector('button').addEventListener('click', () => { try { closeStore.setItem(closeKey, 'off'); } catch (e) { /* storage blocked: close it for now */ } bar.remove(); layoutBanners(); });
       document.body.appendChild(bar);
       layoutBanners();
     }
