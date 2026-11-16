@@ -46,7 +46,7 @@ function rig({ manifest = baseManifest(), agents = AGENTS, auditFile = null, pus
   fs.writeFileSync(path.join(root, 'poldemo', 'module.json'), JSON.stringify(manifest));
   fs.writeFileSync(path.join(root, 'poldemo', 'setup.json'), JSON.stringify(SETUP));
   fs.writeFileSync(path.join(root, 'poldemo', 'server.js'), '// not run\n');
-  const conns = new Map(); const stopped = []; const pushes = [];
+  const conns = new Map(); const stopped = []; const pushes = []; const logs = [];
   const connectors = {
     list: () => ({ connectors: [...conns.values()].map(c => ({ ...c, secretNames: [] })) }),
     upsert: (spec) => { const c = { agents: [], enabled: false, ...(conns.get(spec.id) || {}), ...spec }; conns.set(spec.id, c); return c; },
@@ -56,7 +56,7 @@ function rig({ manifest = baseManifest(), agents = AGENTS, auditFile = null, pus
   const mods = createModules({
     root, dataDir: path.join(dir, 'modules'), stateFile: path.join(dir, 'modules.json'), connectorsFile: path.join(dir, 'connectors.json'), connectors,
     isWalletAgent: () => false, isMemberOwned: (a) => a.owner === 'u_member', isVirtual: (n) => n.startsWith('tw-'), isAdminUser: (u) => u === 'u_admin',
-    listAgents: () => agents, publish: () => {}, log: () => {}, auditFile: aFile,
+    listAgents: () => agents, publish: () => {}, log: (m) => logs.push(String(m)), auditFile: aFile,
     pushAdmins: (p) => { pushes.push(p); if (pushThrows) throw new Error('push down'); return Promise.resolve(); },
   });
   const stateFile = path.join(dir, 'modules.json');
@@ -65,7 +65,7 @@ function rig({ manifest = baseManifest(), agents = AGENTS, auditFile = null, pus
   const audit = () => { try { return fs.readFileSync(aFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse); } catch { return []; } };
   const finish = async (grant = ['sam', 'helper']) => { await mods.runStep('poldemo', 'install', {}); await mods.runStep('poldemo', 'agents', { agents: grant }); await mods.runStep('poldemo', 'done', {}); };
   const set = (input, who = ADMIN) => mods.setApprovalPolicy('poldemo', input, who);
-  return { dir, root, mods, conns, stopped, pushes, state, policy, audit, finish, set, stateFile, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { dir, root, mods, conns, stopped, pushes, logs, state, policy, audit, finish, set, stateFile, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 const refused = (fn, status, re) => assert.throws(fn, (e) => e.status === status && (!re || re.test(e.message)), `${status} ${re || ''}`);
 const withAck = (o) => ({ ...o, acknowledged: true });
@@ -507,11 +507,12 @@ test('server.js: the approval-policy routes sit behind the same admin-browser ch
   assert.ok(block.indexOf(check) < block.indexOf('mods.approvalPolicy') && block.indexOf(check) < block.indexOf('mods.setApprovalPolicy'), 'the check comes first');
   assert.match(block, /req\.method === 'GET' \|\| req\.method === 'POST'/);
   assert.match(block, /mods\.setApprovalPolicy\(m\[1\], body, \{ adminBrowser: true, userId: String\(req\.hubUser\.id\)/);
-  assert.match(block, /\{ computerName: known \? known\.name : '' \}/, 'the name for the notice comes from the module, not the request');
+  assert.match(block, /\{ computerName: known \? known\.name : '', computerKnown \}/, 'the name for the notice comes from the module, not the request');
+  assert.match(block, /const computerKnown = listed && listed\.length \? !!known : null;/, 'true / false when the list was read and is not empty, null otherwise');
   assert.match(block, /'computers_status', \{\}, \{ hub: true, timeoutMs \}/);
   assert.match(block, /computersOf\(30000\)/);
   assert.match(block, /Could not load the computers\./);
-  assert.match(block, /if \(listed && !known\) return jsonResponse\(res, 400, \{ error: 'That computer is not set up here\.' \}\);/, 'a computer the module does not list is refused');
+  assert.ok(!/if \(listed && !known\)/.test(block), 'the route no longer refuses an unknown computer by itself: setApprovalPolicy decides (only when the change asks less)');
   assert.match(block, /id: x\.nodeid\.split\('\/'\)\.pop\(\), nodeid: x\.nodeid, name: String\(x\.name \|\| ''\)/);
   assert.match(block, /403/);
 });
@@ -594,4 +595,96 @@ test('server.js: both routes take password and code out of the body, check them 
   assert.match(fail, /e\.needsAck \? \{ needsAck: true \}/);
   assert.match(fail, /e\.needsStepUp \? \{ needsStepUp: true, totp: /);
   assert.match(fail, /req\.hubUser\.totp && req\.hubUser\.totp\.enabled/, "the signed-in account's own flag");
+});
+
+// ── review fixes ──
+test('setApprovalPolicy: an unknown computer is refused only when the change asks less; clearing a stale computer always works', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish();
+  const unknown = { computerKnown: false };
+  // asks less (a day-long approval, a newly trusted agent): 400, before the step-up rules, nothing recorded
+  refused(() => r.mods.setApprovalPolicy('poldemo', { computer: PC, mode: 'day', trusted: [] }, ADMIN, unknown), 400, /That computer is not set up here\./);
+  refused(() => r.mods.setApprovalPolicy('poldemo', withAck({ computer: PC, mode: 'session', trusted: ['sam'] }), ADMIN, unknown), 400, /That computer is not set up here\./);
+  assert.deepStrictEqual(r.policy(), []);
+  assert.deepStrictEqual(r.audit(), []);
+  // a computer that is gone but still has entries: asking more (back to every session, nobody trusted) is saved
+  r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam', 'helper'] }));
+  assert.strictEqual(r.mods.setApprovalPolicy('poldemo', { computer: PC, mode: 'day', trusted: ['sam'] }, ADMIN_NO_STEP, unknown).changed, true, 'tightening');
+  assert.strictEqual(r.mods.setApprovalPolicy('poldemo', { computer: PC, mode: 'session', trusted: [] }, ADMIN_NO_STEP, unknown).changed, true, 'cleared');
+  assert.deepStrictEqual(r.policy(), []);
+});
+
+test('setApprovalPolicy: a computer that is known, or whose list could not be read (computerKnown true / null / absent), goes on to the normal step-up rules', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish();
+  const loosen = { computer: PC, mode: 'day', trusted: ['sam'] };
+  for (const opts of [{ computerKnown: null }, { computerKnown: true }, {}, undefined]) {
+    let e = null;
+    try { r.mods.setApprovalPolicy('poldemo', loosen, ADMIN, opts); } catch (x) { e = x; }
+    assert.ok(e && e.status === 409 && e.needsAck === true && e.needsStepUp === true, JSON.stringify(opts));
+  }
+  assert.strictEqual(r.mods.setApprovalPolicy('poldemo', withAck(loosen), ADMIN, { computerKnown: null }).changed, true, 'unreadable list: saved by id with the acknowledgement and the password');
+});
+
+const ACT = { owner: { level: 'look', askEachSession: true }, helper: { level: 'act', askEachSession: true }, sam: { level: 'act', askEachSession: true } };
+const policyPushes = (r) => r.pushes.filter(p => p.title === 'Remote computer approvals changed');
+
+test('setAgentPermissions: entries that go are recorded as policyRemoved and admins get one notice naming the agents and the computers', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish(['sam', 'helper']);
+  r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: ACT }, ADMIN);
+  r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam', 'helper'] }));
+  r.set(withAck({ computer: PC2, mode: 'session', trusted: ['sam'] }));
+  const n0 = r.pushes.length, a0 = r.audit().length;
+  r.mods.setAgentPermissions('poldemo', { agents: ['helper'], permissions: { owner: ACT.owner, helper: ACT.helper } }, ADMIN);   // sam is revoked
+  const recs = r.audit().slice(a0).filter(x => x.action === 'permissions');
+  assert.ok(recs.length >= 2);
+  for (const x of recs) assert.deepStrictEqual([...x.policyRemoved].sort(), [`${PC}:trust:sam`, `${PC2}:trust:sam`].sort());
+  const sent = r.pushes.slice(n0);
+  assert.strictEqual(sent.length, 1);
+  assert.deepStrictEqual(sent[0], { title: 'Remote computer approvals changed', body: 'Jo: sam will be asked again on 2 computers.', url: '/modules#poldemo' });
+  // one computer, one agent, set to Look
+  const n1 = r.pushes.length;
+  r.mods.setAgentPermissions('poldemo', { agents: ['helper'], permissions: { owner: ACT.owner, helper: { level: 'look', askEachSession: true } } }, ADMIN);
+  assert.strictEqual(r.pushes[n1].body, 'Jo: helper will be asked again on 1 computer.');
+  assert.deepStrictEqual(r.audit().filter(x => x.action === 'permissions').at(-1).policyRemoved, [`${PC}:trust:helper`]);
+});
+
+test('setAgentPermissions: no policyRemoved and no policy notice when no entry goes', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish(['sam', 'helper']);
+  r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam'] }));
+  const before = policyPushes(r).length, a0 = r.audit().length;
+  r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: ACT }, ADMIN);   // both are raised to Act; sam's entry stays
+  assert.ok(r.audit().slice(a0).filter(x => x.action === 'permissions').length >= 2);
+  assert.ok(r.audit().slice(a0).filter(x => x.action === 'permissions').every(x => !('policyRemoved' in x)));
+  assert.strictEqual(policyPushes(r).length, before);
+});
+
+test('setAgentPermissions: the same save that turns asking off keeps its own notice too; a failing push undoes nothing', async (t) => {
+  const r = rig({ pushThrows: true }); t.after(r.cleanup);
+  await r.finish(['sam', 'helper']);
+  r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: ACT }, ADMIN);
+  r.set(withAck({ computer: PC, mode: 'session', trusted: ['sam'] }));
+  const n0 = r.pushes.length;
+  const perms = { owner: ACT.owner, helper: { level: 'act', askEachSession: false }, sam: { level: 'look', askEachSession: true } };   // helper not asked, sam to Look
+  const out = r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: perms, acknowledged: true }, ADMIN);
+  assert.strictEqual(out.changed, true);
+  assert.deepStrictEqual(r.pushes.slice(n0).map(p => p.title).sort(), ['An agent can now work without asking', 'Remote computer approvals changed']);
+  assert.ok(!r.policy().some(e => e.endsWith(':trust:sam')), 'saved although the notices threw');
+  assert.strictEqual(r.audit().filter(x => x.action === 'permissions').at(-1).state, 'done');
+});
+
+test('forgetPermissions (setAgents, forgetAgentPermissions): a log line says which agents lose "don\'t ask" and on how many computers', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish(['sam', 'helper']);
+  r.set(withAck({ computer: PC, mode: 'session', trusted: ['sam', 'helper'] }));
+  r.set(withAck({ computer: PC2, mode: 'session', trusted: ['sam'] }));
+  r.mods.setAgents('poldemo', ['helper']);   // sam loses the module
+  assert.ok(r.logs.includes('poldemo: approval policy: sam lose "don\'t ask" on 2 computer(s) (access changed)'), r.logs.join('\n'));
+  r.mods.forgetAgentPermissions(['helper']);
+  assert.ok(r.logs.includes('poldemo: approval policy: helper lose "don\'t ask" on 1 computer(s) (access changed)'), r.logs.join('\n'));
+  const before = r.logs.filter(l => l.includes('approval policy:')).length;
+  r.mods.forgetAgentPermissions(['scout']);
+  assert.strictEqual(r.logs.filter(l => l.includes('approval policy:')).length, before, 'nothing went: no line');
 });

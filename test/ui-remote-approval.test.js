@@ -23,6 +23,7 @@ function load() {
     if (url === URL_POLICY && method === 'GET') { const r = state.get; return { ok: r.status < 400, status: r.status, json: async () => r.json }; }
     const body = opts && opts.body ? JSON.parse(opts.body) : undefined;
     calls.push({ method, url, body });
+    if (state.gate) await state.gate;   // a slow request, for the double-click test
     const r = state.posts.shift() || { status: 200, json: { ok: true } };
     return { ok: r.status < 400, status: r.status, json: async () => r.json };
   };
@@ -224,8 +225,9 @@ test('Save anyway posts what the row shows now, not what it showed when the warn
   await w.t.apprSave(w.rows['pc-a-1'].button);
   assert.deepStrictEqual(w.calls[0].body, { computer: 'pc-a-1', mode: 'day', trusted: ['helper', 'sam'] });
   ov.mode = 'session'; ov.trusted = ['helper'];   // changed while the warning shows
+  w.rows['pc-a-1'].pass.value = 'pw';
   await w.t.apprAck(w.rows['pc-a-1'].button);
-  assert.deepStrictEqual(w.calls[1].body, { computer: 'pc-a-1', mode: 'session', trusted: ['helper'], acknowledged: true, password: '', code: '' });
+  assert.deepStrictEqual(w.calls[1].body, { computer: 'pc-a-1', mode: 'session', trusted: ['helper'], acknowledged: true, password: 'pw', code: '' });
 });
 
 // ── step-up: the account password (and two-factor code) before asking is reduced ──
@@ -289,4 +291,37 @@ test('Cancel with a typed password sends nothing and drops the box', async () =>
   assert.strictEqual(w.rows['pc-a-1'].warn.innerHTML, '');
   await w.t.apprAck(w.rows['pc-a-1'].button);
   assert.strictEqual(w.calls.length, 1);
+});
+
+test('Save anyway with an empty password sends nothing and says so; the box stays open', async () => {
+  const w = await loaded();
+  w.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true, needsStepUp: true, totp: false } });
+  await w.t.apprSave(w.rows['pc-a-1'].button);
+  w.rows['pc-a-1'].pass.value = '';
+  await w.t.apprAck(w.rows['pc-a-1'].button);
+  assert.strictEqual(w.calls.length, 1);
+  assert.strictEqual(w.els['step-msg'].className, 'msg show err');
+  assert.strictEqual(w.els['step-msg'].textContent, 'Enter your account password.');
+  assert.match(w.rows['pc-a-1'].warn.innerHTML, /Save anyway/);
+  w.rows['pc-a-1'].pass.value = 'pw';   // and the next click still works
+  await w.t.apprAck(w.rows['pc-a-1'].button);
+  assert.strictEqual(w.calls.length, 2);
+  assert.strictEqual(w.calls[1].body.password, 'pw');
+});
+
+test('a second Save anyway click while the first request is in flight does nothing', async () => {
+  const w = await loaded();
+  w.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true, needsStepUp: true, totp: false } });
+  await w.t.apprSave(w.rows['pc-a-1'].button);
+  let release; w.state.gate = new Promise((r) => { release = r; });
+  w.rows['pc-a-1'].pass.value = 'pw';
+  const first = w.t.apprAck(w.rows['pc-a-1'].button);
+  await new Promise((r) => setImmediate(r));
+  w.rows['pc-a-1'].pass.value = 'pw-again';
+  const second = w.t.apprAck(w.rows['pc-a-1'].button);
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(w.calls.length, 2, 'one save, one confirm');
+  w.state.gate = null; release();
+  await Promise.all([first, second]);
+  assert.strictEqual(w.calls.length, 2);
 });

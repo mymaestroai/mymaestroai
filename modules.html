@@ -315,15 +315,19 @@ async function apprSave(btn) {
 }
 async function apprAck(btn) {
   const row = apprRowOf(btn); if (!row) return;
-  if (!apprPending[row.getAttribute('data-computer')]) return;
+  const computer = row.getAttribute('data-computer');
+  if (!apprPending[computer] || apprConfirming[computer]) return;   // nothing waits, or a confirm is already in flight
+  const pass = row.querySelector('input.appr-pass'), code = row.querySelector('input.appr-code');
+  if (pass && !String(pass.value || '')) { setMsg('err', 'Enter your account password.'); return; }
   // What is on screen now, not what was there when the warning appeared: the person may have changed the row meanwhile.
   // The password is read from its field now, the field is emptied, and it is not kept anywhere else.
   const body = Object.assign(apprRead(row), { acknowledged: true });
-  const pass = row.querySelector('input.appr-pass'), code = row.querySelector('input.appr-code');
   if (pass) { body.password = String(pass.value || ''); pass.value = ''; }
   if (code) body.code = String(code.value || '');
-  await apprPost(btn, body);
+  apprConfirming[computer] = true;
+  try { await apprPost(btn, body); } finally { delete apprConfirming[computer]; }
 }
+const apprConfirming = {};   // computer id -> a confirm request is in flight
 function apprCancel(btn) {
   const row = apprRowOf(btn); if (!row) return;
   delete apprPending[row.getAttribute('data-computer')];
@@ -397,7 +401,8 @@ function levelsConfig(m) {
 function protectedSettingKeys(m) {
   const lv = levelsConfig(m);
   if (!lv) return [];
-  return [lv.setting, lv.sessionApproval && lv.sessionApproval.setting].filter(Boolean);
+  const sa = lv.sessionApproval;
+  return [lv.setting, sa && sa.setting, sa && typeof sa.policy === 'string' ? sa.policy : null].filter(Boolean);   // the approval policy has its own route
 }
 const visibleSettings = (m) => (m.manifest.settings || []).filter(st => !protectedSettingKeys(m).includes(st.key));
 function readSettings(keys) {
@@ -506,7 +511,18 @@ function readPermissions() {
   }
   return out;
 }
-const permsNeedWarning = (permissions) => Object.values(permissions).some(p => p.askEachSession === false);
+// Warn only when the save really asks less than what is saved now: an agent that is not asked and (a) was asked before,
+// (b) could not use the module before, or (c) gets a higher level than before. The server still decides (409 needsAck).
+function permsNeedWarning(permissions) {
+  const lv = levelsConfig(current);
+  const lookup = permissionLookup(current);
+  const was = new Set([...(current.agents || []), ...(leadsLocked(current) ? (current.leads || []) : [])]);
+  return Object.entries(permissions).some(([name, p]) => {
+    if (!p || p.askEachSession !== false) return false;
+    const old = lookup(name);
+    return old.askEachSession === true || !was.has(name) || lv.choices.indexOf(p.level) > lv.choices.indexOf(old.level);
+  });
+}
 // Asking less needs the account password (and the two-factor code, when the account has one), as the backup settings do.
 // totp: true / false when known, null when not. The password is read from its field at click time and goes only into that one request.
 function stepUpFieldsHtml(cls, totp) {
@@ -537,23 +553,27 @@ function showPermWarning(run) {
 function clearPermWarning() { permPending = null; const box = document.getElementById('perm-warning'); if (box) box.innerHTML = ''; }
 function permWarnCancel() { clearPermWarning(); }   // nothing is sent; the ticked and unticked boxes stay as they are
 // Reads what was typed now, empties the password field, and runs the waiting save with it. The box stays open until the hub accepts or refuses for another reason.
+let permConfirming = false;   // a confirm request is in flight: a second click does nothing
 async function permWarnConfirm() {
-  const run = permPending; if (!run) return;
+  const run = permPending; if (!run || permConfirming) return;
   const box = document.getElementById('perm-warning');
   const pass = box && box.querySelector ? box.querySelector('input.perm-pass') : null;
   const code = box && box.querySelector ? box.querySelector('input.perm-code') : null;
+  if (pass && !String(pass.value || '')) { setMsg('err', 'Enter your account password.'); return; }
   const stepUp = { password: pass ? String(pass.value || '') : '' };
   if (code) stepUp.code = String(code.value || '');
   if (pass) pass.value = '';
-  await run(stepUp);
+  permConfirming = true;
+  try { await run(stepUp); } finally { permConfirming = false; }
 }
 // Posts the levels (acknowledged and the step-up only when the warning was accepted). Returns true when the hub saved them.
-async function postPermissions(agents, permissions, acknowledged, btn, stepUp) {
+// rerun(stepUp): the save to repeat with the warning accepted, so a 409 needsAck from the hub opens the warning instead of leaving the person stuck.
+async function postPermissions(agents, permissions, acknowledged, btn, stepUp, rerun) {
   let ok = false;
   await busy(btn, async () => {
     try {
       const body = { agents, permissions };
-      if (acknowledged && permsNeedWarning(permissions)) {
+      if (acknowledged) {
         body.acknowledged = true;
         if (stepUp) { body.password = stepUp.password; if (stepUp.code !== undefined) body.code = stepUp.code; }
       }
@@ -563,6 +583,7 @@ async function postPermissions(agents, permissions, acknowledged, btn, stepUp) {
     } catch (e) {
       if (e.data && e.data.stepUp) { setMsg('err', e.message); return; }   // wrong password or code: the box stays open to try again
       if (e.data && e.data.needsStepUp && typeof e.data.totp === 'boolean') meTotp = e.data.totp;
+      if (e.data && e.data.needsAck && !acknowledged && typeof rerun === 'function') { showPermWarning(rerun); return; }
       clearPermWarning();
       setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message);
     }
@@ -571,9 +592,10 @@ async function postPermissions(agents, permissions, acknowledged, btn, stepUp) {
 }
 async function savePermissions(btn, acknowledged, stepUp) {
   const permissions = readPermissions();
-  if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning((su) => savePermissions(btn, true, su)); return; }
+  const rerun = (su) => savePermissions(btn, true, su);
+  if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(rerun); return; }
   const agents = current.agents.filter(n => !leadsLocked(current) || !(current.leads || []).includes(n));
-  if (!(await postPermissions(agents, permissions, acknowledged, btn, stepUp))) return;
+  if (!(await postPermissions(agents, permissions, acknowledged, btn, stepUp, rerun))) return;
   render(); loadList();
   setMsg('ok', 'Saved. The new levels apply to the next call.');
 }
@@ -761,8 +783,9 @@ async function saveGrant(stepId, btn, acknowledged, stepUp) {
   const agent = sel ? sel.value : null;
   if (levelsConfig(current)) {
     const permissions = readPermissions();
-    if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning((su) => saveGrant(stepId, btn, true, su)); return; }
-    if (!(await postPermissions(agents, permissions, acknowledged, btn, stepUp))) return;
+    const rerun = (su) => saveGrant(stepId, btn, true, su);
+    if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(rerun); return; }
+    if (!(await postPermissions(agents, permissions, acknowledged, btn, stepUp, rerun))) return;
   }
   const ok = await doStep(stepId, { agents }, btn);
   if (!ok || !agent) return;

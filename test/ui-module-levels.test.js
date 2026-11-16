@@ -39,11 +39,12 @@ function load() {
     if (url === '/api/me') { state.meCalls++; const r = state.me; return { ok: r.status < 400, status: r.status, json: async () => r.json }; }
     const body = opts && opts.body ? JSON.parse(opts.body) : undefined;
     calls.push({ method: opts && opts.method, url, body });
+    if (state.gate) await state.gate;   // a slow request, for the double-click tests
     const r = state.responses.shift() || { status: 200, json: {} };
     return { ok: r.status < 400, status: r.status, json: async () => r.json };
   };
   const ctx = vm.createContext({ document, window: { addEventListener() {} }, fetch, location: { origin: 'http://hub', search: '', hash: '', pathname: '/modules' }, history: { replaceState() {} }, navigator: {}, setTimeout, clearTimeout, setInterval, clearInterval, Date, console, URLSearchParams });
-  vm.runInContext(script + '\nthis.t = { levelsConfig, protectedSettingKeys, visibleSettings, readSettings, settingField, permissionLookup, permControlsHtml, readPermissions, permsNeedWarning, savePermissions, saveGrant, permWarnConfirm, permWarnCancel, onPermChange, showPermWarning, stepHtml, overviewHtml, leadRows, setCurrent(m) { current = m; }, getCurrent() { return current; }, pending() { return permPending; } };', ctx);
+  vm.runInContext(script + '\nthis.t = { levelsConfig, protectedSettingKeys, visibleSettings, readSettings, settingField, permissionLookup, permControlsHtml, readPermissions, permsNeedWarning, savePermissions, saveGrant, postPermissions, permWarnConfirm, permWarnCancel, onPermChange, showPermWarning, stepHtml, overviewHtml, leadRows, setCurrent(m) { current = m; }, getCurrent() { return current; }, pending() { return permPending; } };', ctx);
   return { t: ctx.t, calls, state, els };
 }
 
@@ -57,6 +58,12 @@ function controlsFrom(markup, ticked) {
   for (const m of markup.matchAll(/<input type="checkbox" class="perm-ask" data-agent="([^"]*)" (checked)?>/g)) out.push({ kind: 'ask', dataset: { agent: unesc(m[1]) }, checked: !!m[2] });
   for (const m of markup.matchAll(/<input type="checkbox" class="grant" value="([^"]*)"[^>]*?>/g)) out.push({ kind: 'grant', value: unesc(m[1]), checked: / checked/.test(m[0]) });
   return out;
+}
+// The page as the owner leaves it when asking is turned off for sam: starts from controls built from what is saved, then unticks sam's ask box and sets the level.
+function turnOff(controls, name = 'sam', level) {
+  const ask = controls.find(c => c.kind === 'ask' && c.dataset.agent === name); if (ask) ask.checked = false;
+  if (level) controls.find(c => c.kind === 'level' && c.dataset.agent === name).value = level;
+  return controls;
 }
 const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
@@ -147,8 +154,8 @@ test('readSettings skips protected keys even when asked for them, and with no li
 
 test('Act/Drive without a yes: warning first (exact text), nothing sent; Cancel keeps the unchecked state and sends nothing', async () => {
   const { t, calls, state, els } = load();
-  const m = detail({ settings: { tiers: ['sam:edit'], quiet: ['sam'] } }); t.setCurrent(m);
-  state.controls = controlsFrom(t.stepHtml(m.steps[0]));
+  const m = detail({ settings: { tiers: ['sam:edit'], quiet: [] } }); t.setCurrent(m);
+  state.controls = turnOff(controlsFrom(t.stepHtml(m.steps[0])));
   const perms = t.readPermissions();
   assert.deepStrictEqual(JSON.parse(JSON.stringify(perms)), { owner: { level: 'view', askEachSession: true }, sam: { level: 'edit', askEachSession: false } }, 'unticked ray is not sent');
   assert.ok(t.permsNeedWarning(perms));
@@ -164,19 +171,21 @@ test('Act/Drive without a yes: warning first (exact text), nothing sent; Cancel 
 });
 
 test('accepting the warning posts agent-permissions with acknowledged:true, then marks the grant step through the generic step', async () => {
-  const { t, calls, state } = load();
-  const m = detail({ settings: { tiers: ['sam:admin'], quiet: ['sam'] } }); t.setCurrent(m);
-  state.controls = controlsFrom(t.stepHtml(m.steps[0]));
-  state.pass.value = 'pw-1';
+  const { t, calls, state, els } = load();
+  const m = detail({ settings: { tiers: ['sam:edit'], quiet: [] } }); t.setCurrent(m);
+  state.controls = turnOff(controlsFrom(t.stepHtml(m.steps[0])), 'sam', 'admin');
   const saved = detail({ settings: { tiers: ['sam:admin'], quiet: ['sam'] } });
   const after = detail({ settings: { tiers: ['sam:admin'], quiet: ['sam'] } }); after.steps[0].done = true;
   state.responses.push({ status: 200, json: { ok: true, module: saved } }, { status: 200, json: { ok: true, module: after } });
   await t.saveGrant('g', null);
+  await tick();   // /api/me answers first (no two-factor on this account): the box is drawn again without a code field
+  assert.ok(!/perm-code/.test(els['perm-warning'].innerHTML), 'no code field for an account without two-factor');
+  state.pass.value = 'pw-1';
   await t.permWarnConfirm();
   assert.strictEqual(calls.length, 2);
   assert.strictEqual(calls[0].url, '/api/modules/demo/agent-permissions');
   assert.strictEqual(calls[0].method, 'POST');
-  assert.deepStrictEqual(calls[0].body, { agents: ['sam'], permissions: { owner: { level: 'view', askEachSession: true }, sam: { level: 'admin', askEachSession: false } }, acknowledged: true, password: 'pw-1', code: '' }, 'the code field is shown while the account is not yet known; empty is sent as empty');
+  assert.deepStrictEqual(calls[0].body, { agents: ['sam'], permissions: { owner: { level: 'view', askEachSession: true }, sam: { level: 'admin', askEachSession: false } }, acknowledged: true, password: 'pw-1' }, 'the account has no two-factor, so no code is sent');
   assert.strictEqual(calls[1].url, '/api/modules/demo/step');
   assert.deepStrictEqual(calls[1].body, { step: 'g', input: { agents: ['sam'] } }, 'permissions never travel in the generic step');
 });
@@ -259,12 +268,13 @@ test('remote-computers setup: id levels kept, session length only; grant step ex
 
 // ── step-up: the account password (and two-factor code) before asking is turned off ──
 const tick = () => new Promise((r) => setImmediate(r));
-const askOff = () => detail({ settings: { tiers: ['sam:admin'], quiet: ['sam'] } });
+const askOff = () => detail({ settings: { tiers: ['sam:edit'], quiet: [] } });   // saved: sam is asked
+const offControls = (markup) => turnOff(controlsFrom(markup), 'sam', 'admin');   // what the owner leaves on screen: sam not asked, at admin
 
 test('the warning asks for the account password: label, password input, no code field when the account has no two-factor', async () => {
   const { t, calls, state, els } = load();
   const m = askOff(); t.setCurrent(m);
-  state.controls = controlsFrom(t.stepHtml(m.steps[0]));
+  state.controls = offControls(t.stepHtml(m.steps[0]));
   await t.saveGrant('g', null);
   await tick();
   const h = els['perm-warning'].innerHTML;
@@ -281,7 +291,7 @@ test('two-factor account (from /api/me): the label and a numeric one-time-code f
   const { t, state, els } = load();
   state.me = { status: 200, json: { user: { totpEnabled: true } } };
   const m = askOff(); t.setCurrent(m);
-  state.controls = controlsFrom(t.stepHtml(m.steps[0]));
+  state.controls = offControls(t.stepHtml(m.steps[0]));
   await t.saveGrant('g', null);
   await tick();
   const h = els['perm-warning'].innerHTML;
@@ -296,7 +306,7 @@ test('when /api/me cannot be read the code field is shown anyway, labelled "if y
   const { t, state, els } = load();
   state.me = { status: 500, json: {} };
   const m = askOff(); t.setCurrent(m);
-  state.controls = controlsFrom(t.stepHtml(m.steps[0]));
+  state.controls = offControls(t.stepHtml(m.steps[0]));
   await t.saveGrant('g', null);
   await tick();
   const h = els['perm-warning'].innerHTML;
@@ -308,7 +318,7 @@ test('confirm posts acknowledged + password + code, read from the fields at clic
   const { t, calls, state } = load();
   state.me = { status: 200, json: { user: { totpEnabled: true } } };
   const m = askOff(); t.setCurrent(m);
-  state.controls = controlsFrom(t.stepHtml(m.steps[0]));
+  state.controls = offControls(t.stepHtml(m.steps[0]));
   const after = askOff(); after.steps[0].done = true;
   state.responses.push({ status: 200, json: { ok: true, module: askOff() } }, { status: 200, json: { ok: true, module: after } });
   await t.saveGrant('g', null);
@@ -326,7 +336,7 @@ test('confirm posts acknowledged + password + code, read from the fields at clic
 test('a 403 with stepUp shows the error, keeps the box open with the password field cleared, and the next try posts again', async () => {
   const { t, calls, state, els } = load();
   const m = askOff(); t.setCurrent(m);
-  state.controls = controlsFrom(t.stepHtml(m.steps[0]));
+  state.controls = offControls(t.stepHtml(m.steps[0]));
   els['step-msg'] = { className: '', textContent: '' };
   state.responses.push({ status: 403, json: { error: 'That password is not right.', stepUp: true } });
   await t.saveGrant('g', null);
@@ -353,7 +363,7 @@ test('a 403 with stepUp shows the error, keeps the box open with the password fi
 test('Cancel sends nothing and leaves no password anywhere', async () => {
   const { t, calls, state, els } = load();
   const m = askOff(); t.setCurrent(m);
-  state.controls = controlsFrom(t.stepHtml(m.steps[0]));
+  state.controls = offControls(t.stepHtml(m.steps[0]));
   await t.saveGrant('g', null);
   await tick();
   state.pass.value = 'typed';
@@ -375,8 +385,8 @@ test('tightening and asking left on never show the password fields', async () =>
 
 test('Status and limits: Save permissions with asking off goes through the same box and sends the password', async () => {
   const { t, calls, state, els } = load();
-  const m = detail({ finishedAt: 'x', agents: ['sam'], settings: { tiers: ['sam:admin'], quiet: ['sam'] } }); t.setCurrent(m);
-  state.controls = controlsFrom(t.overviewHtml());
+  const m = detail({ finishedAt: 'x', agents: ['sam'], settings: { tiers: ['sam:edit'], quiet: [] } }); t.setCurrent(m);
+  state.controls = offControls(t.overviewHtml());
   els['step-msg'] = { className: '', textContent: '' };
   els.panel = { classList: { add() {}, remove() {}, contains() { return true; } }, innerHTML: '' };
   await t.savePermissions(null);
@@ -388,4 +398,104 @@ test('Status and limits: Save permissions with asking off goes through the same 
   await t.permWarnConfirm();
   assert.strictEqual(calls[0].body.password, 'pw');
   assert.strictEqual(calls[0].body.acknowledged, true);
+});
+
+// ── review fixes: the approval policy has its own route; warn only when the save really asks less; no double confirm ──
+const overviewSetup = (els) => { els['step-msg'] = { className: '', textContent: '' }; els.panel = { classList: { add() {}, remove() {}, contains() { return true; } }, innerHTML: '' }; };
+
+test('the approval policy setting (levels.sessionApproval.policy) is protected: not a "Limits and settings" field and never sent by Save settings', () => {
+  const { t, els } = load();
+  const m = detail({ finishedAt: 'x' });
+  m.manifest.settings.push({ key: 'approval_policy', type: 'list', label: 'Approval policy' });
+  m.manifest.levels = { ...GENERIC.levels, sessionApproval: { setting: 'quiet', levels: ['edit', 'admin'], policy: 'approval_policy' } };
+  m.settings.approval_policy = ['pc1:day'];
+  t.setCurrent(m);
+  assert.deepStrictEqual([...t.protectedSettingKeys(m)], ['tiers', 'quiet', 'approval_policy']);
+  assert.deepStrictEqual(t.visibleSettings(m).map(x => x.key), ['minutes']);
+  assert.ok(!t.overviewHtml().includes('set-approval_policy'), 'no raw field');
+  els['set-minutes'] = { value: '45' };
+  assert.deepStrictEqual({ ...t.readSettings() }, { minutes: '45' });
+});
+
+test('an unchanged save with an agent that is already not asked posts directly: no warning, no acknowledged, no password', async () => {
+  const { t, calls, state, els } = load();
+  const m = detail({ finishedAt: 'x', agents: ['sam'], settings: { tiers: ['sam:edit'], quiet: ['sam'] } }); t.setCurrent(m);
+  state.controls = controlsFrom(t.overviewHtml());
+  overviewSetup(els);
+  state.responses.push({ status: 200, json: { ok: true, module: m } });
+  await t.savePermissions(null);
+  assert.strictEqual(calls.length, 1);
+  assert.ok(!('acknowledged' in calls[0].body) && !('password' in calls[0].body));
+  assert.ok(!els['perm-warning'] || els['perm-warning'].innerHTML === '');
+});
+
+test('the warning opens for an agent that was asked, one that could not use the module, or one that gets a higher level (all not asked now)', () => {
+  const { t } = load();
+  const m = detail({ agents: ['sam'], settings: { tiers: ['sam:edit', 'ray:view'], quiet: ['sam'] } }); t.setCurrent(m);
+  const need = (p) => t.permsNeedWarning(p);
+  assert.strictEqual(need({ sam: { level: 'edit', askEachSession: false } }), false, 'unchanged');
+  assert.strictEqual(need({ sam: { level: 'view', askEachSession: false } }), false, 'a lower level');
+  assert.strictEqual(need({ sam: { level: 'admin', askEachSession: false } }), true, 'higher level');
+  assert.strictEqual(need({ sam: { level: 'edit', askEachSession: true } }), false, 'asked');
+  assert.strictEqual(need({ ray: { level: 'edit', askEachSession: false } }), true, 'ray could not use the module (and was asked)');
+  const n = detail({ agents: ['sam'], settings: { tiers: ['sam:edit', 'ray:edit'], quiet: ['sam', 'ray', 'owner'] } }); t.setCurrent(n);
+  assert.strictEqual(need({ ray: { level: 'edit', askEachSession: false } }), true, 'a stale entry of an agent that has no grant does not count');
+  assert.strictEqual(need({ owner: { level: 'view', askEachSession: false } }), false, 'a lead could use it and was not asked');
+  const o = detail({ agents: ['sam'], settings: { tiers: ['sam:edit'], quiet: [] } }); t.setCurrent(o);
+  assert.strictEqual(need({ sam: { level: 'edit', askEachSession: false } }), true, 'asking turned off');
+});
+
+test('a 409 needsAck from the hub opens the warning (the hub decides); confirming resends with acknowledged and the password', async () => {
+  const { t, calls, state, els } = load();
+  const m = detail({ finishedAt: 'x', agents: ['sam'], settings: { tiers: ['sam:edit'], quiet: ['sam'] } }); t.setCurrent(m);
+  state.controls = controlsFrom(t.overviewHtml());
+  overviewSetup(els);
+  state.responses.push({ status: 409, json: { error: 'sam would start edit sessions without asking.', needsAck: true, needsStepUp: true, totp: false } });
+  await t.savePermissions(null);
+  await tick();
+  assert.strictEqual(calls.length, 1);
+  assert.ok(els['perm-warning'].innerHTML.includes(WARNING), 'the warning is open, not just a message');
+  assert.ok(t.pending());
+  state.responses.push({ status: 200, json: { ok: true, module: m } });
+  state.pass.value = 'pw';
+  await t.permWarnConfirm();
+  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(calls[1].body.acknowledged, true);
+  assert.strictEqual(calls[1].body.password, 'pw');
+});
+
+test('confirm with an empty password sends nothing and says so; the box stays open', async () => {
+  const { t, calls, state, els } = load();
+  const m = askOff(); t.setCurrent(m);
+  state.controls = offControls(t.stepHtml(m.steps[0]));
+  els['step-msg'] = { className: '', textContent: '' };
+  await t.saveGrant('g', null);
+  await tick();
+  state.pass.value = '';
+  await t.permWarnConfirm();
+  assert.strictEqual(calls.length, 0);
+  assert.strictEqual(els['step-msg'].className, 'msg show err');
+  assert.strictEqual(els['step-msg'].textContent, 'Enter your account password.');
+  assert.ok(t.pending());
+});
+
+test('a second click on Save with asking off while the first request is in flight does nothing', async () => {
+  const { t, calls, state, els } = load();
+  const m = askOff(); t.setCurrent(m);
+  state.controls = offControls(t.stepHtml(m.steps[0]));
+  els['step-msg'] = { className: '', textContent: '' };
+  await t.saveGrant('g', null);
+  await tick();
+  let release; state.gate = new Promise((r) => { release = r; });
+  state.responses.push({ status: 200, json: { ok: true, module: askOff() } });
+  state.pass.value = 'pw';
+  const first = t.permWarnConfirm();
+  await tick();
+  state.pass.value = 'pw-again';
+  const second = t.permWarnConfirm();
+  await tick();
+  assert.strictEqual(calls.filter(c => c.url.endsWith('/agent-permissions')).length, 1, 'only one request');
+  state.gate = null; release();
+  await Promise.all([first, second]);
+  assert.strictEqual(calls.filter(c => c.url.endsWith('/agent-permissions')).length, 1);
 });
