@@ -1531,7 +1531,7 @@ test('tools: one deadline per call (start + 290 s): an approval that leaves less
   const late = setup({ realGate: true });
   late.handlers.runcommands = async () => ({ result: 'ran' });
   const r = await approvedAfter(late, 226000, 'run', { command: 'x', timeoutSec: 60 });
-  assert.strictEqual(r.error, 'Approved for 30 minutes. Call run again to run it now.');
+  assert.strictEqual(r.error, 'Approved. Call run again to run it now.');
   assert.ok(!late.calls.some((c) => c.action === 'runcommands'), 'nothing was sent');
   // The owner said yes, so calling again needs no new question and runs at once (a new call has a new deadline).
   assert.strictEqual((await late.call('run', { ...AGENT, computer: 'demo-pc', command: 'x', timeoutSec: 60 })).output, 'ran');
@@ -1539,11 +1539,11 @@ test('tools: one deadline per call (start + 290 s): an approval that leaves less
   // The default wait is 60 s; a 300 s wait needs 305 s, which no approval can leave.
   const long = setup({ realGate: true });
   long.handlers.runcommands = async () => ({ result: 'ran' });
-  assert.match((await approvedAfter(long, 1, 'run', { command: 'x', timeoutSec: 300 })).error, /^Approved for 30 minutes\. Call run again to run it now\.$/);
-  // The session length in the message is the setting.
+  assert.match((await approvedAfter(long, 1, 'run', { command: 'x', timeoutSec: 300 })).error, /^Approved\. Call run again to run it now\.$/);
+  // The message no longer names a length: it is not always the session setting.
   const s5 = setup({ realGate: true, settings: { session_minutes: 45 } });
   s5.handlers.runcommands = async () => ({ result: 'ran' });
-  assert.match((await approvedAfter(s5, 280000, 'run', { command: 'x' })).error, /^Approved for 45 minutes\./);
+  assert.match((await approvedAfter(s5, 280000, 'run', { command: 'x' })).error, /^Approved\. Call run again/);
   // The drive tools wait 20 s: they need 25 s. After an approval at 266 s only 24 s are left.
   for (const [name, args] of [['key', { keys: 'a' }], ['type', { text: 'a' }], ['scroll', { amount: 1 }]]) {
     const d = setup({ realGate: true });
@@ -1551,14 +1551,14 @@ test('tools: one deadline per call (start + 290 s): an approval that leaves less
     assert.deepStrictEqual(await approvedAfter(d, 265000, name, args, 'pat'), { ok: true }, `${name}: 25 s left still runs`);
     const e = setup({ realGate: true });
     e.handlers.runcommands = async () => ({ result: 'MMOK\r\n' });
-    assert.strictEqual((await approvedAfter(e, 266000, name, args, 'pat')).error, `Approved for 30 minutes. Call ${name} again to run it now.`, name);
+    assert.strictEqual((await approvedAfter(e, 266000, name, args, 'pat')).error, `Approved. Call ${name} again to run it now.`, name);
     assert.ok(!e.calls.some((c) => c.action === 'runcommands'));
   }
   // Click too (with a shot id).
   const c = setup({ realGate: true });
   c.handlers.runcommands = async (f) => ({ result: 'MMOK\r\n' });
   const shot = await shotOf(c, 'pat');
-  assert.strictEqual((await approvedAfter(c, 270000, 'click', { shot, x: 5, y: 5 }, 'pat')).error, 'Approved for 30 minutes. Call click again to run it now.');
+  assert.strictEqual((await approvedAfter(c, 270000, 'click', { shot, x: 5, y: 5 }, 'pat')).error, 'Approved. Call click again to run it now.');
   assert.strictEqual(c.calls.filter((x) => x.action === 'runcommands').length, 0, 'the screenshot sends nothing through runcommands, and the click was not sent');
   // A live session is not an approval: a call that finds one is not refused for the time spent before it.
   const live = setup({ realGate: true });

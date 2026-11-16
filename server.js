@@ -1995,6 +1995,31 @@ async function handleHttpRequest(req, res) {
           if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change agent permissions.' });
           return jsonResponse(res, 200, mods.setAgentPermissions(m[1], await bodyJson(), { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined }));
         }
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/approval-policy$/);
+        if (m && (req.method === 'GET' || req.method === 'POST')) {
+          // How long one approval lasts and which agents are never asked, per computer: the same signed-in admin's own browser as the permission editor.
+          if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change agent permissions.' });
+          // The computers as the module reports them (never names from the request), or null when they can't be read.
+          const computersOf = async (timeoutMs) => {
+            try {
+              const raw = await require('./lib/connectors').getConnectors().callTool(m[1], 'computers_status', {}, { hub: true, timeoutMs });
+              const parsed = require('./lib/modules').parseToolText(raw);
+              const rows = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.computers) ? parsed.computers : null);
+              if (!rows || (parsed && !Array.isArray(parsed) && parsed.error)) return null;
+              return rows.filter((x) => x && typeof x === 'object' && typeof x.nodeid === 'string' && x.nodeid)
+                .map((x) => ({ id: x.nodeid.split('/').pop(), nodeid: x.nodeid, name: String(x.name || '').replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim().slice(0, 80), online: !!x.online }));
+            } catch { return null; }
+          };
+          if (req.method === 'POST') {
+            const body = await bodyJson();
+            const known = body && typeof body.computer === 'string' ? ((await computersOf(10000)) || []).find((x) => x.id === body.computer) : null;
+            return jsonResponse(res, 200, mods.setApprovalPolicy(m[1], body, { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined }, { computerName: known ? known.name : '' }));
+          }
+          const out = { ok: true, ...mods.approvalPolicy(m[1]), computers: [] };
+          const list = await computersOf(30000);
+          if (list) out.computers = list; else out.computersError = 'Could not load the computers.';
+          return jsonResponse(res, 200, out);
+        }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
         if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(step|check|settings|enable|disable|audit)$/);

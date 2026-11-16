@@ -22,9 +22,11 @@ const text = (s, max) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u007
  *   levels: ["agent:level", ...] from the settings; noAskAgents: ["agent", ...] from the trusted settings only (never a tool argument): for these agents a session
  *   at act or drive (within their level) starts without asking the owner, with the same toast and a log line; everything else is as for an asked session; approve({ call, title, detail, minutes }) -> 'allow' | 'deny' | 'timeout'
  *   (call: the hub's id of the tool call that needs the yes; the hub knows the agent from it, so no agent is sent);
+ *   approvalPolicy: the approval_policy setting (trusted settings only): '<computer>:day' (one approval lasts until the owner's midnight) and '<computer>:trust:<agent>' (that agent is not asked on that computer).
+ *   approve may answer a string or { decision, dayEnds } (dayEnds: when the owner's day ends, in ms, at most 25 h ahead).
  *   toast(computerId, title, message) -> void (a failure is logged, never fatal).
  */
-function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approve, toast = async () => {}, now = Date.now, log = () => {} } = {}) {
+function createGate({ levels = [], noAskAgents = [], approvalPolicy = [], sessionMinutes = 30, approve, toast = async () => {}, now = Date.now, log = () => {} } = {}) {
   const table = new Map();   // agent -> level (when an agent is listed twice the lower level counts)
   for (const entry of Array.isArray(levels) ? levels : []) {
     const m = /^([^:\s]{1,64}):(look|act|drive)$/.exec(String(entry).trim());
@@ -37,13 +39,21 @@ function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approv
     const name = typeof entry === 'string' ? entry.trim() : '';
     if (/^[^:\s]{1,64}$/.test(name)) noAsk.add(name);
   }
-  // 'agent|computer id' -> { agent, computer: {id, name}, scopes: Map of act-user / act-system / drive -> the time that scope's own approval ends }
+  const dayComputers = new Set();   // computers where one approval lasts until the end of the owner's day
+  const trustedOn = new Map();      // computer id -> Set of agents that are not asked on that computer
+  for (const entry of Array.isArray(approvalPolicy) ? approvalPolicy : []) {
+    const m = /^([A-Za-z0-9@$_-]{1,100}):(day|trust:([^:\s]{1,64}))$/.exec(typeof entry === 'string' ? entry.trim() : '');
+    if (!m) continue;
+    if (m[2] === 'day') dayComputers.add(m[1]);
+    else { if (!trustedOn.has(m[1])) trustedOn.set(m[1], new Set()); trustedOn.get(m[1]).add(m[3]); }
+  }
+  // 'agent|computer id' -> { agent, computer: {id, name}, scopes: Map of act-user / act-system / drive -> { until: when that scope's own approval ends, basis: 'trusted' | 'trusted-here' | 'asked' | 'asked-day' } }
   const sessions = new Map();
   const denied = new Map();     // key -> time until which the owner is not asked again
   const pending = new Map();    // key -> { level, promise }
 
   const levelOf = (agent) => table.get(agent) || 'look';
-  const liveScopes = (s) => (s ? [...s.scopes].filter(([, until]) => until > now()).map(([scope]) => scope) : []);
+  const liveScopes = (s) => (s ? [...s.scopes].filter(([, v]) => v.until > now()).map(([scope]) => scope) : []);
   const live = (s) => liveScopes(s).length > 0;
   // Covered only by a scope whose own approval has not ended: a later approval of another scope does not stretch this one.
   const covered = (s, want) => coveredBy(liveScopes(s), want);
@@ -53,13 +63,14 @@ function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approv
     if (scope === 'drive') return 'use the mouse and keyboard';
     return scope === 'act-user' ? 'run commands as the signed-in user' : 'run commands as the system account (full control)';
   }
-  function ask(agent, scope, computer, call) {
+  function ask(agent, scope, computer, call, day) {
     const name = `${text(computer.name, 60) || 'this computer'} (${text(computer.id, 6)})`;
     const who = text(agent, 40);
     const title = `${who} wants to use ${name}`.slice(0, 80);
-    const detail = `For ${sessionMinutes} minutes ${who} may ${can(scope)} on ${name}. Every action is logged. Say no if you did not expect this.`;
-    return Promise.resolve().then(() => approve({ call, title, detail, minutes: APPROVE_MINUTES })).then((d) => {
-      if (d === 'allow' || d === 'deny' || d === 'timeout') return d;
+    const detail = day ? `For the rest of today ${who} may ${can(scope)} on ${name}. Every action is logged. Say no if you did not expect this.` : `For ${sessionMinutes} minutes ${who} may ${can(scope)} on ${name}. Every action is logged. Say no if you did not expect this.`;
+    return Promise.resolve().then(() => approve({ call, title, detail, minutes: APPROVE_MINUTES })).then((r) => {
+      const d = r && typeof r === 'object' ? r.decision : r;
+      if (d === 'allow' || d === 'deny' || d === 'timeout') return { decision: d, dayEnds: r && typeof r === 'object' ? r.dayEnds : undefined };
       throw new GateError('The owner could not be asked right now. Try again in a moment.', 'EAPPROVE');
     }, (e) => {
       if (e instanceof GateError) throw e;
@@ -75,7 +86,7 @@ function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approv
     const as = opts && opts.as === 'user' ? 'user' : 'system';
     if (!who) throw new GateError('The hub did not say which agent is calling, so nothing is allowed.', 'EIDENT');
     if (!(need in RANK)) throw new Error('unknown level');
-    if (need === 'look') return;
+    if (need === 'look') return 'look';
     if (!computer || typeof computer.id !== 'string' || !computer.id) throw new Error('a computer is needed');
     const have = levelOf(who);
     if (RANK[have] < RANK[need]) {
@@ -85,40 +96,58 @@ function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approv
     const key = `${who}|${computer.id}`;
     for (;;) {
       const s = sessions.get(key);
-      if (covered(s, want)) return;
+      if (covered(s, want)) return basisOf(s, want);
       if (s && !live(s)) sessions.delete(key);
-      const quiet = noAsk.has(who);   // set by the settings only; an owner's earlier no does not apply to an agent the owner has set not to be asked
+      const global = noAsk.has(who);
+      const here = !global && trustedOn.has(computer.id) && trustedOn.get(computer.id).has(who);
+      const quiet = global || here;   // set by the settings only; an owner's earlier no does not apply to an agent the owner has set not to be asked
       const cool = quiet ? null : denied.get(key);
       if (cool && cool > now()) throw new GateError('The owner said no a moment ago. Do not ask again for a couple of minutes.', 'EDENIED');
       if (cool) denied.delete(key);
       const p = pending.get(key);
       if (p) {
         // One question at a time per agent and computer. A question that covers this need is shared; a smaller one is waited out, then asked again.
-        if (coveredBy([p.scope], want)) { await p.promise; return; }
+        if (coveredBy([p.scope], want)) { await p.promise; return p.basis; }
         await p.promise.catch(() => {});
         continue;
       }
       if (!call && !quiet) throw new GateError('The hub did not say which call this is, so the owner cannot be asked and nothing is allowed.', 'EIDENT');
-      const entry = { scope: want, promise: null };
+      const entry = { scope: want, promise: null, basis: null };
+      const day = dayComputers.has(computer.id);
       entry.promise = (async () => {
         try {
-          if (quiet) log(`session started without asking the owner (no-ask agent): ${text(who, 40)}, ${want}, computer ${text(computer.id, 6)}`);
-          const d = quiet ? 'allow' : await ask(who, want, computer, call);
+          if (quiet) log(`session started without asking the owner (${global ? 'no-ask agent' : 'trusted on this computer'}): ${text(who, 40)}, ${want}, computer ${text(computer.id, 6)}`);
+          const a = quiet ? { decision: 'allow' } : await ask(who, want, computer, call, day);
+          const d = a.decision;
           if (d === 'deny') { denied.set(key, now() + DENY_COOLDOWN_MS); throw new GateError('The owner said no.', 'EDENIED'); }
           if (d === 'timeout') throw new GateError('The owner did not answer in time.', 'ETIMEOUT');
           const prior = sessions.get(key);   // an approval adds its own scope and its own expiry; the other scopes keep theirs
           const scopes = new Map(liveScopes(prior).map((sc) => [sc, prior.scopes.get(sc)]));
-          scopes.set(want, now() + sessionMinutes * 60000);
+          let until = now() + sessionMinutes * 60000;
+          let basis = global ? 'trusted' : here ? 'trusted-here' : 'asked';
+          if (!quiet && day) {
+            const e = a.dayEnds;
+            if (typeof e === 'number' && Number.isFinite(e) && e > now() && e <= now() + 25 * 3600000) { until = e; basis = 'asked-day'; }
+            else log(`day approval for computer ${text(computer.id, 6)} had no usable end of day; it lasts ${sessionMinutes} minutes`);
+          }
+          entry.basis = basis;
+          scopes.set(want, { until, basis });
           sessions.set(key, { agent: who, computer: { id: computer.id, name: text(computer.name, 80) }, scopes });
           try {
-            await toast(computer.id, 'My Maestro', `${text(who, 40)} is using this computer for the next ${sessionMinutes} minutes.`);
+            await toast(computer.id, 'My Maestro', basis === 'asked-day' ? `${text(who, 40)} is using this computer until midnight.` : `${text(who, 40)} is using this computer for the next ${sessionMinutes} minutes.`);
           } catch (e) { log('toast failed:', text(e && (e.code || e.message), 80)); }
         } finally { pending.delete(key); }
       })();
       pending.set(key, entry);
       await entry.promise;
-      return;
+      return entry.basis;
     }
+  }
+  // The basis of the live scope that covers this need (the one with the latest end when several do), or null.
+  function basisOf(s, want) {
+    let best = null;
+    for (const [sc, v] of s.scopes) if (v.until > now() && COVERS[sc].includes(want) && (!best || v.until > best.until)) best = v;
+    return best ? best.basis : null;
   }
 
   function list() {
@@ -126,7 +155,7 @@ function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approv
     for (const [key, s] of sessions) {
       if (!live(s)) { sessions.delete(key); continue; }
       const alive = liveScopes(s);
-      out.push({ agent: s.agent, computer: { ...s.computer }, level: alive.includes('drive') ? 'drive' : 'act', expiresAt: Math.max(...alive.map((sc) => s.scopes.get(sc))) });
+      out.push({ agent: s.agent, computer: { ...s.computer }, level: alive.includes('drive') ? 'drive' : 'act', expiresAt: Math.max(...alive.map((sc) => s.scopes.get(sc).until)) });
     }
     return out;
   }
@@ -141,7 +170,17 @@ function createGate({ levels = [], noAskAgents = [], sessionMinutes = 30, approv
     return covered(s, scopeOf(need, as === 'user' ? 'user' : 'system')) && RANK[levelOf(who)] >= RANK[need];
   }
 
-  return { require, levelOf, sessions: list, end, stillValid };
+  // The basis that allows this need right now (live covering scope and a level that allows it), or null.
+  function allowedBy(agent, computerId, need, as) {
+    const who = typeof agent === 'string' ? agent.trim() : '';
+    if (!who || !(need in RANK)) return null;
+    if (need === 'look') return 'look';
+    const s = sessions.get(`${who}|${computerId}`);
+    if (!s || !live(s) || RANK[levelOf(who)] < RANK[need]) return null;
+    return basisOf(s, scopeOf(need, as === 'user' ? 'user' : 'system'));
+  }
+
+  return { require, levelOf, sessions: list, end, stillValid, allowedBy };
 }
 
 module.exports = { createGate, GateError, RANK, DENY_COOLDOWN_MS };

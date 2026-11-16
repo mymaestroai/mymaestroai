@@ -75,6 +75,7 @@ Status and limits (Save permissions).
 - **Computer port** (default 9972): the port on the tailnet address that the PCs connect to.
 - **Run as** (default auto): `service` runs MeshCentral as its own system service (see "Its own service (Linux)").
   `hub` runs it under My Maestro's own account. `auto` uses `service` when My Maestro's computer has systemd.
+- **Asking per computer:** You can also choose, for each computer on the Computers box in this connector's page, between asking every session, asking once a day, or not asking chosen agents on that computer.
 - **Approved session length:** how long one yes for Act or Drive lasts (5 to 120 minutes).
 - **Each agent's level and Ask me:** set in the agent list, not as a typed setting, and saved with Save.
 
@@ -110,7 +111,7 @@ Status and limits (Save permissions).
 - **"Take a new screenshot and use its shot id":** the shot id is unknown, older than 10 minutes, or belongs to
   another agent or computer.
 - **"The screen changed since that screenshot":** the screen size is different now. Take a new screenshot.
-- **"Approved for N minutes. Call ... again":** your yes came late in the call, so nothing was sent. The agent calls
+- **"Approved. Call ... again":** your yes came late in the call, so nothing was sent. The agent calls
   the tool again and it runs at once.
 - **The owner said no:** you declined the question on your phone. The agent is not asked again for a couple of
   minutes. Ask the agent to try again when you are ready.

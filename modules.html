@@ -90,6 +90,13 @@
   .desk-box { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
   .desk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0; border-bottom: 1px solid var(--border); }
   .desk-name { font-weight: 600; word-break: break-word; }
+  .desk-box[hidden] { display: none; }
+  .appr-row { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+  .appr-row .desk-row { border-bottom: 0; padding: 0; }
+  .appr-row select { width: auto; max-width: 100%; }
+  .appr-agents { display: flex; gap: 6px 14px; flex-wrap: wrap; }
+  .appr-agents label.chk { margin: 0; font-size: 13px; word-break: break-word; }
+  .appr-warn:empty { display: none; }
   .ready-box { display: flex; flex-direction: column; gap: 10px; }
   .card .meta { color: var(--text-tertiary); font-size: 12px; line-height: 1.4; }
   .card .check { font-size: 12px; color: var(--success); }
@@ -158,7 +165,7 @@ function md(text) {
 async function api(method, url, body) {
   const r = await fetch(url, { method, credentials: 'include', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   let j = {}; try { j = await r.json(); } catch {}
-  if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.data = j; throw e; }
+  if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.data = j; e.status = r.status; throw e; }
   return j;
 }
 
@@ -222,6 +229,88 @@ function render() {
       <div id="step-area">${selected ? stepHtml(m.steps.find(s => s.id === selected)) : overviewHtml()}</div>
     </div>`;
   if (!selected) loadDesktopBox();
+  if (!selected) loadApprovals();
+}
+
+// ── Agent approvals (remote-computers only, admins only): how often agents must ask before controlling each computer ──
+let apprGen = 0, apprPending = {};
+const APPR_WARNING = 'An agent can be misled by a web page or an email. With asking reduced, it could then use this computer without you knowing in time.';
+const APPR_HELP = "Every session: you approve each agent's first Act or Drive in a session. Once a day: one approval lasts until midnight. Agents you tick are never asked on that computer. Everything is still logged, and the computer still shows a notice when an agent takes control.";
+function apprRow(c, pol, agents) {
+  const mode = pol && pol.mode === 'day' ? 'day' : 'session';
+  const trusted = new Set(pol && Array.isArray(pol.trusted) ? pol.trusted : []);
+  const acting = agents.filter(a => a && (a.level === 'act' || a.level === 'drive'));
+  const boxes = acting.length
+    ? acting.map(a => `<label class="chk"><input type="checkbox" class="appr-trust" data-agent="${esc(a.name)}" ${trusted.has(a.name) ? 'checked' : ''}><span>${esc(a.name)}</span></label>`).join('')
+    : '<span class="dim">No agent here can act or drive.</span>';
+  return `<div class="appr-row" data-computer="${esc(c.id)}">
+    <div class="desk-row"><span class="desk-name">${esc(c.name)}</span><span class="pill ${c.online ? 'ready' : ''}">${c.online ? 'Online' : 'Offline'}</span></div>
+    <div class="appr-controls"><select class="appr-mode" aria-label="${esc(`How often agents must ask on ${c.name}`)}"><option value="session" ${mode === 'session' ? 'selected' : ''}>Every session</option><option value="day" ${mode === 'day' ? 'selected' : ''}>Once a day</option></select></div>
+    <div class="dim">Don't ask these agents on this computer:</div>
+    <div class="appr-agents">${boxes}</div>
+    <div class="appr-warn"></div>
+    <div class="actions"><button class="primary" data-computer="${esc(c.id)}" onclick="apprSave(this)">Save</button></div>
+  </div>`;
+}
+async function loadApprovals() {
+  const m = current;
+  const box = document.getElementById('appr-box');
+  if (!m || m.id !== 'remote-computers' || !m.enabled || !box) return;
+  const gen = ++apprGen;
+  const fresh = () => gen === apprGen && current === m && selected === null;
+  const paint = (html, show) => { if (!fresh()) return; const el = document.getElementById('appr-list'); if (el) el.innerHTML = html; box.hidden = !show; };
+  const refresh = '<div class="actions"><a class="open-link" href="#" onclick="loadApprovals(); return false">Refresh</a></div>';
+  try {
+    const r = await api('GET', '/api/modules/remote-computers/approval-policy');
+    if (!fresh()) return;
+    apprPending = {};
+    const computers = r.computers || [], agents = r.agents || [], policy = r.policy || {};
+    const err = r.computersError ? `<p class="dim">${esc(r.computersError)}</p>` : '';
+    paint(`<p class="dim">${esc(APPR_HELP)}</p>` + err + (computers.length ? computers.map(c => apprRow(c, policy[c.id], agents)).join('') : '<p class="dim">No computers are connected yet.</p>') + refresh, true);
+  } catch (e) {
+    if (!fresh()) return;
+    if (e.status === 403) { paint('', false); return; }   // not an admin: the section stays hidden
+    paint(`<p class="dim">Could not load the approval settings.</p>${refresh}`, true);
+  }
+}
+function apprRowOf(btn) { return btn && btn.closest ? btn.closest('.appr-row') : null; }
+function apprRead(row) {
+  const sel = row.querySelector('select.appr-mode');
+  const trusted = Array.from(row.querySelectorAll('input.appr-trust')).filter(c => c.checked).map(c => c.getAttribute('data-agent'));
+  return { computer: row.getAttribute('data-computer'), mode: sel && sel.value === 'day' ? 'day' : 'session', trusted };
+}
+async function apprPost(btn, body) {
+  const row = apprRowOf(btn);
+  await busy(btn, async () => {
+    try {
+      await api('POST', '/api/modules/remote-computers/approval-policy', body);
+      delete apprPending[body.computer];
+      setMsg('ok', 'Saved. Agents on this computer start new sessions under the new setting.');
+      loadApprovals();
+    } catch (e) {
+      if (e.data && e.data.needsAck && !body.acknowledged && row) {
+        apprPending[body.computer] = body;
+        const w = row.querySelector('.appr-warn');
+        if (w) w.innerHTML = `<div class="msg warn show">${esc(APPR_WARNING)}<div class="actions"><button class="danger" data-computer="${esc(body.computer)}" onclick="apprAck(this)">Save anyway</button><button data-computer="${esc(body.computer)}" onclick="apprCancel(this)">Cancel</button></div></div>`;
+        return;
+      }
+      setMsg('err', e.message);
+    }
+  });
+}
+async function apprSave(btn) {
+  const row = apprRowOf(btn); if (!row) return;
+  await apprPost(btn, apprRead(row));
+}
+async function apprAck(btn) {
+  const row = apprRowOf(btn); if (!row) return;
+  const body = apprPending[row.getAttribute('data-computer')]; if (!body) return;
+  await apprPost(btn, Object.assign({}, body, { acknowledged: true }));
+}
+function apprCancel(btn) {
+  const row = apprRowOf(btn); if (!row) return;
+  delete apprPending[row.getAttribute('data-computer')];
+  const w = row.querySelector('.appr-warn'); if (w) w.innerHTML = '';
 }
 
 // ── Computers box (remote-computers only): open a computer's desktop in this tab ──
@@ -250,10 +339,10 @@ async function loadDesktopBox() {
     deskComputers = r.computers || [];
     const ownerOnly = m.settings && m.settings.desktop_who === 'owner';
     const note = r.allowed ? '' : `<p class="dim">${ownerOnly ? "Only the owner can open a computer's desktop." : "You can't open a computer's desktop here."}</p>`;
-    paint(note + (deskComputers.length ? deskComputers.map(c => deskRow(c, r.allowed)).join('') : '<p class="dim">No computers are connected yet.</p>') + '<div class="actions"><a class="open-link" href="#" onclick="loadDesktopBox(); return false">Refresh</a></div>');
+    paint(note + (deskComputers.length ? deskComputers.map(c => deskRow(c, r.allowed)).join('') : '<p class="dim">No computers are connected yet.</p>') + '<div class="actions"><a class="open-link" href="#" onclick="loadDesktopBox(); loadApprovals(); return false">Refresh</a></div>');
   } catch (e) {
     if (!fresh()) return;
-    paint(`<p class="dim">Could not load the computers.</p><div class="actions"><a class="open-link" href="#" onclick="loadDesktopBox(); return false">Refresh</a></div>`);
+    paint(`<p class="dim">Could not load the computers.</p><div class="actions"><a class="open-link" href="#" onclick="loadDesktopBox(); loadApprovals(); return false">Refresh</a></div>`);
     setMsg('err', e.message);
   }
 }
@@ -455,7 +544,7 @@ function overviewHtml() {
       <button onclick="showAudit(this)">Activity log</button>${ask}
       <button class="danger" onclick="removeModule(this)">Remove</button>
     </div>
-    ${m.id === 'remote-computers' && m.enabled ? '<div class="desk-box" id="desk-box"><h3 style="font-size:14px">Computers</h3><div id="desk-list" class="dim">Loading…</div></div>' : ''}
+    ${m.id === 'remote-computers' && m.enabled ? '<div class="desk-box" id="desk-box"><h3 style="font-size:14px">Computers</h3><div id="desk-list" class="dim">Loading…</div></div><div class="desk-box" id="appr-box" hidden><h3 style="font-size:14px">Agent approvals</h3><div id="appr-list" class="dim">Loading…</div></div>' : ''}
     <h3 style="font-size:14px;margin-top:8px">Limits and settings</h3>
     ${visibleSettings(m).map(st => settingField(st, m.settings[st.key])).join('')}
     <div class="actions"><button class="primary" onclick="saveAll(this)">Save settings</button></div>

@@ -34,7 +34,7 @@ function newGate(over = {}) {
 const PC1 = { id: 'pc1', name: 'demo-pc' }, PC2 = { id: 'pc2', name: 'other-pc' };
 
 test('manifest: levels declaration and the no_ask_agents list', () => {
-  assert.deepStrictEqual(manifest.levels, { setting: 'levels', choices: ['look', 'act', 'drive'], default: 'look', sessionApproval: { setting: 'no_ask_agents', levels: ['act', 'drive'] } });
+  assert.deepStrictEqual(manifest.levels, { setting: 'levels', choices: ['look', 'act', 'drive'], default: 'look', sessionApproval: { setting: 'no_ask_agents', levels: ['act', 'drive'], policy: 'approval_policy' } });
   const s = manifest.settings.find((x) => x.key === 'no_ask_agents');
   assert.deepStrictEqual([s.type, s.default], ['list', []]);
   assert.ok(new RegExp(s.pattern).test('sam') && !new RegExp(s.pattern).test('sam:act') && !new RegExp(s.pattern).test('Sam'));
