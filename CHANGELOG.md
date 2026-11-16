@@ -89,6 +89,12 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 - **On a Mac, a backup no longer fails just because Docker isn't running.** On a Mac with Docker Desktop installed but not open, the backup stopped with "The agents' boxes could not be checked … Is Docker running?", even with no agent boxes at all. Now, when Docker on the Mac isn't running, there are no running agent boxes to pause and a backup made from Settings → Backups goes ahead: it still waits for any agent that is starting, and checks Docker again when the copy is done. If Docker started during the copy, that backup is not kept and you are asked to try again. Whether Docker is stopped is worked out from the Docker the Mac is set up to use and whether anything answers there, not from the wording of an error. On Linux and Windows, and for a backup started from a terminal, Docker still has to be running when agents run in boxes. Other Docker problems still stop the backup, and now say what to do: permission denied on Docker's socket, a remote Docker host that doesn't answer, or Docker not answering in time. (`lib/backup/create.js`)
 
+## [5.10.2] - 2026-11-16
+
+What's new since 5.10.1: phones always open the phone layout, in the browser and as an app on the home screen. For a hub on 5.10.1, this is the only change.
+
+- **Phones always open the phone layout.** Opening your Maestro on a phone now goes straight to the phone layout, in the phone's browser and in an app on its home screen. An app that was added to the home screen while the computer layout was showing switches by itself the next time it opens, so there is no need to remove it and add it again. Tablets, an unfolded Fold and touchscreen laptops keep the full site. To keep the computer layout on a phone, choose "Use the full site" in the phone layout's ⋮ menu; "Open the phone layout" at the top of the computer layout goes back.
+
 ## [5.10.1] - 2026-11-15
 
 What's new since 5.10.0: setup lists every AI you connect, so a Claude subscription's models (such as Opus) show up next to ChatGPT's. For a hub on 5.10.0, this is the only change.
@@ -1302,7 +1308,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.10.1...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.10.2...dev
+[5.10.2]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.2
 [5.10.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.1
 [5.10.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.0
 [5.9.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.9.1

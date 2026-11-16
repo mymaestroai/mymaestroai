@@ -29,7 +29,7 @@ test('login.html: needsTotp shows the code step, recovery codes widen the input,
   assert.ok(login.includes('id="totp-trust"') && login.includes('Trust this browser for 30 days'));
   assert.ok(login.includes('id="totp-recovery"') && login.includes("inp.placeholder = 'ab12-cd34'"), 'recovery link widens the input');
   assert.ok(login.includes("params.get('next')"));
-  assert.ok(login.includes("'/mobile' : '/'"), 'phones land on the mobile app');
+  assert.ok(!/Android\|iPhone/.test(login) && !login.includes("'/mobile' : '/'"), 'the destination does not test the user agent: the phone-layout script on "/" moves phones');
   assert.ok(login.includes("needsTotpEnrol ? '/?security=1'"), 'admin invitees enrol a second factor');
   assert.ok(login.includes('at least 12 characters') && login.includes('minlength="12"'));
   assert.match(login, /btn\.disabled = true;[\s\S]*finally \{ btn\.disabled = false; \}/, 'submit disabled while a request is in flight');
