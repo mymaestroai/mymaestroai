@@ -254,3 +254,27 @@ test('the ⋯ menu has "Notifications for this agent", which opens the bell menu
   assert.match(f, /activeChat/);
   assert.match(f, /notifyBellToggle\(id\)/);
 });
+
+// Round 4: the Notify me toast follows the "Requests you made" setting.
+async function desktopToasts(prefs) {
+  const a = app.indexOf('async function toggleNotifyDone('), b = app.indexOf('// Ask the hub to stop the agent');
+  assert.ok(a >= 0 && b > a);
+  const toasts = [];
+  const h = lift();
+  const ctx = {
+    chats: { c1: { agent: 'helper', display: 'Helper' } }, notifyArmed: {}, notifyPrefsCache: prefs, notifyEffective: h.notifyEffective,
+    paintNotifyBtns() {}, showNotifyBtn() {}, hubToast: (t) => toasts.push(t), capName: (n) => n,
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({ on: true, turnId: 't1', devices: 1 }) }),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(a, b) + '\nthis.go = toggleNotifyDone;', ctx);
+  await ctx.go('c1');
+  return toasts;
+}
+test('Notify me toast: on / off / away for Requests you made; not loaded counts as on', async () => {
+  assert.deepStrictEqual(await desktopToasts(null), ['You will get a notification when Helper is done.']);
+  assert.deepStrictEqual(await desktopToasts({ default: { requested: 'on' }, agents: {} }), ['You will get a notification when Helper is done.']);
+  assert.deepStrictEqual(await desktopToasts({ default: { requested: 'off' }, agents: {} }), ['Requests you made is Off for Helper, so no notification will come.']);
+  assert.deepStrictEqual(await desktopToasts({ default: { requested: 'on' }, agents: { helper: { requested: 'off' } } }), ['Requests you made is Off for Helper, so no notification will come.']);
+  assert.deepStrictEqual(await desktopToasts({ default: { requested: 'away' }, agents: {} }), ["You'll get a notification when Helper is done if none of your pages is open."]);
+});

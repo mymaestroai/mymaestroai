@@ -1740,8 +1740,12 @@ async function toggleNotifyDone(withLink = false) {
   paintNotifyBtn();
   repaintNotifyAgentSheet(agent);
   // One toast; from the bell it carries a link to the agent's notification settings.
-  const say = (text, ms) => withLink ? toast(`${text} · Notification settings`, Math.max(ms, 5000), () => openNotifyAgentSheet()) : toast(text, ms);
+  // The link opens the sheet of the agent this toast is about (only while that chat is still the open one).
+  const say = (text, ms) => withLink ? toast(`${text} · Notification settings`, Math.max(ms, 5000), () => { if (agent === current) openNotifyAgentSheet(agent); }) : toast(text, ms);
+  const mode = notifyEffective(notifyPrefs, agent, 'requested');   // not loaded yet: treated as on
   if (d.on && !d.devices) say('Notifications are off on this phone: turn them on in the ⋮ menu first', 6000);
+  else if (d.on && mode === 'off') say(`Requests you made is Off for ${displayName(agent)}, so no notification will come`, 4000);
+  else if (d.on && mode === 'away') say(`You'll get a notification when ${displayName(agent)} is done if none of your pages is open`, 4000);
   else say(d.on ? `🔔 You will get a notification when ${displayName(agent)} is done` : 'Notification cancelled', 3000);
 }
 function onTurnNotify(ev) {
@@ -1826,6 +1830,8 @@ function paintNotifyAgentSheet() {
   if (!d || !agent) return;
   const replying = isBusy(agent) || !!ownTurnFor(agent);
   const armed = !!notifyArmed[agent];
+  const reqMode = notifyEffective(notifyPrefs, agent, 'requested');
+  const armedNote = reqMode === 'off' ? ' (Requests you made is Off: no notification)' : reqMode === 'away' ? ' (only when you are away)' : '';
   const kinds = NOTIFY_AGENT_KINDS.map(k => {
     const own = notifyPrefs && notifyPrefs.agents && notifyPrefs.agents[agent] ? notifyPrefs.agents[agent][k.kind] : null;
     const sel = NOTIFY_MODES.includes(own) ? own : '';
@@ -1833,18 +1839,18 @@ function paintNotifyAgentSheet() {
       <select data-nk="${k.kind}" aria-label="${esc(k.label)} for ${esc(displayName(agent))}">${notifyOptionsHtml(sel, notifyModeLabel(notifyPrefs && notifyPrefs.default && NOTIFY_MODES.includes(notifyPrefs.default[k.kind]) ? notifyPrefs.default[k.kind] : 'on'))}</select></div>`;
   }).join('');
   d.innerHTML = `<h3>${esc(`Notifications for ${displayName(agent)}`)}</h3>
-    ${replying ? `<div class="sec-section"><button type="button" data-nk="done" class="${armed ? 'on' : ''}">${armed ? '🔔 You will be told when this reply is done (tap to cancel)' : '🔔 Notify me when this reply is done'}</button></div>` : ''}
+    ${replying ? `<div class="sec-section"><button type="button" data-nk="done" class="${armed ? 'on' : ''}">${armed ? '🔔 You will be told when this reply is done' + armedNote + ' (tap to cancel)' : '🔔 Notify me when this reply is done'}</button></div>` : ''}
     ${kinds}
     <div class="sec-hint" style="margin-top:8px">Applies to all your devices. Change what you get for every agent in the ⋮ menu → Notification settings.</div>
     <div class="sec-actions" style="margin-top:10px"><button type="button" data-nk="close">Close</button></div>`;
 }
-function openNotifyAgentSheet() {
-  if (!current) return;
+function openNotifyAgentSheet(agent = current) {
+  if (!agent || !current) return;
   const d = $('notify-agent-sheet');
-  d._agent = current;
+  d._agent = agent;
   paintNotifyAgentSheet();
   if (!d.open) d.showModal();
-  loadNotifyPrefs().then(() => { if (d.open && d._agent === current) paintNotifyAgentSheet(); });
+  loadNotifyPrefs().then(() => { if (d.open && d._agent === agent) paintNotifyAgentSheet(); });
 }
 async function onNotifyAgentSheetClick(e) {
   const d = $('notify-agent-sheet');

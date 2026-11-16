@@ -825,6 +825,7 @@ async function handleHttpRequest(req, res) {
         method: req.method, pathname, body, service: req.hubService, token: req.hubToken,
         userId: !accounts ? '*' : (who ? String(who.id) : null),
         prefs: require('./lib/notify-prefs').getNotifyPrefs(),
+        beforeSecurityOff: (uid) => { require('./lib/push').getPush().notifyUsers({ title: 'Security and access notifications turned off', body: 'Changed from a signed-in page. Turn them back on in Notification settings.', url: '/mobile', tag: 'security-off' }, [uid], { kind: 'security' }).catch(() => {}); },   // one last notice to the person's own devices, sent before the setting is saved
         agentExists: (n) => all.some(a => a.name === n),
         agentVisible: (n) => !who || access.isAdmin(who) || access.canAccessAgent(who, n, { agents: all, resolveVirtual: (v) => temporalWorkersLib.getVirtual(v) }),
       });

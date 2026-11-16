@@ -9166,7 +9166,12 @@
       notifyArmed[agent] = d.on ? d.turnId : null;
       paintNotifyBtns(agent);
       if (d.on && !d.devices) hubToast('No device of yours has notifications turned on yet. On the phone: the ⋮ menu, Notifications.', 9000);
-      else if (d.on) hubToast(`You will get a notification when ${who} is done.`);
+      else if (d.on) {
+        const mode = notifyEffective(notifyPrefsCache, agent, 'requested');   // not loaded yet: treated as on
+        if (mode === 'off') hubToast(`Requests you made is Off for ${who}, so no notification will come.`);
+        else if (mode === 'away') hubToast(`You'll get a notification when ${who} is done if none of your pages is open.`);
+        else hubToast(`You will get a notification when ${who} is done.`);
+      }
       else hubToast('Notification cancelled.');
     }
 

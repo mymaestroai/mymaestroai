@@ -138,3 +138,37 @@ test('kinds: the default row takes all four, an agent row takes three; security 
   assert.equal(call('owner', 'PUT', P, { default: { security: null } }).status, 400);
   assert.deepEqual(call('owner', 'GET', P, {}).json.prefs.agents.helper, { requested: 'away', questions: 'off', other: 'off' }, 'refused changes changed nothing');
 });
+
+test('beforeSecurityOff: called once when security moves on -> off/away, before the save; not otherwise; a throwing hook does not block the save', (t) => {
+  const { call, prefs } = rig(t);
+  const seen = [];
+  const hook = (u) => seen.push([u, prefs.mode(u, null, 'security')]);   // the value at call time: still the old one
+  const put = (u, body) => call(u, 'PUT', P, body, { beforeSecurityOff: hook });
+  assert.equal(put('owner', { default: { security: 'off' } }).status, 200);
+  assert.deepEqual(seen, [['owner', 'on']], 'called once, before saving');
+  assert.equal(prefs.mode('owner', null, 'security'), 'off');
+  put('owner', { default: { security: 'away' } });                  // off -> away: already not on
+  put('owner', { default: { security: 'on' } });                    // off/away -> on
+  put('owner', { default: { questions: 'off' } });                  // another kind
+  put('owner', { agent: 'helper', prefs: { other: 'off' } });       // an agent PUT
+  put('owner', { default: { security: 'on' } });                    // on -> on
+  assert.equal(seen.length, 1, 'no other change calls it');
+  put('owner', { default: { security: 'away' } });                  // on -> away
+  assert.equal(seen.length, 2);
+  assert.equal(put('*', { default: { security: 'off' } }).status, 200);
+  assert.equal(seen.length, 2, 'not for the no-accounts person');
+  assert.equal(prefs.mode('*', null, 'security'), 'off');
+  const r = call('sam', 'PUT', P, { default: { security: 'off' } }, { beforeSecurityOff: () => { throw new Error('boom'); } });
+  assert.equal(r.status, 200);
+  assert.equal(prefs.mode('sam', null, 'security'), 'off', 'saved anyway');
+  assert.equal(call('sam', 'PUT', P, { default: { security: 'bad' } }, { beforeSecurityOff: hook }).status, 400);
+  assert.equal(seen.length, 2, 'a bad mode never reaches the hook');
+});
+
+test('server.js wires beforeSecurityOff to push.notifyUsers with the security-off notice', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const i = src.indexOf('beforeSecurityOff:');
+  assert.ok(i > 0);
+  const line = src.slice(i, src.indexOf('\n', i));
+  assert.ok(line.includes("notifyUsers({ title: 'Security and access notifications turned off', body: 'Changed from a signed-in page. Turn them back on in Notification settings.', url: '/mobile', tag: 'security-off' }, [uid], { kind: 'security' })"));
+});

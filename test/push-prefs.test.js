@@ -328,21 +328,21 @@ test('Notify me follows "requests you made" fully: off blocks, away applies; "ev
 test('for_owner requested: its own setting, its own payload; other off or questions off do not block it', async (t) => {
   const r = gated(t, (p) => { p.setDefault('u_admin', { other: 'off', questions: 'off' }); });
   const ev = (id, extra = {}) => ({ type: 'for_owner', agent: 'helper', turnId: id, reason: 'Done: all work finished, good time to reboot', requested: true, ...extra });
-  assert.deepEqual(await fire(r, ev('q1')), ['admin|Helper: Done: all work finished, good time to reboot', 'legacy|Helper: Done: all work finished, good time to reboot']);
-  assert.deepEqual(await fire(r, ev('q2', { asks: true })), ['admin|Helper: Done: all work finished, good time to reboot', 'legacy|Helper: Done: all work finished, good time to reboot'], 'requested wins over asks');
+  assert.deepEqual(await fire(r, ev('q1')), ['admin|Helper: something you asked to hear about', 'legacy|Helper: something you asked to hear about']);
+  assert.deepEqual(await fire(r, ev('q2', { asks: true })), ['admin|Helper: something you asked to hear about', 'legacy|Helper: something you asked to hear about'], 'requested wins over asks');
   r.prefs.setDefault('u_admin', { requested: 'off' });
-  assert.deepEqual(await fire(r, ev('q3')), ['legacy|Helper: Done: all work finished, good time to reboot']);
+  assert.deepEqual(await fire(r, ev('q3')), ['legacy|Helper: something you asked to hear about']);
   r.prefs.setDefault('u_admin', { requested: 'away' });
   r.prefs.touch('u_admin', 'tab', true);
-  assert.deepEqual(await fire(r, ev('q4')), ['legacy|Helper: Done: all work finished, good time to reboot']);
+  assert.deepEqual(await fire(r, ev('q4')), ['legacy|Helper: something you asked to hear about']);
   r.clock.t += 151000;
   assert.equal((await fire(r, ev('q5'))).length, 2, 'away and no page in view: it goes');
   r.prefs.setAgent('u_admin', 'helper', { requested: 'off' });
   r.prefs.setDefault('u_admin', { requested: 'on' });
-  assert.deepEqual(await fire(r, ev('q6')), ['legacy|Helper: Done: all work finished, good time to reboot'], 'a per-agent override applies');
+  assert.deepEqual(await fire(r, ev('q6')), ['legacy|Helper: something you asked to hear about'], 'a per-agent override applies');
 });
 
-test('for_owner requested payload: title cut at 140, fixed body, chat url, requested tag; others unchanged', async (t) => {
+test('for_owner requested payload: fixed title without the agent text, reason in the body (cut at 120), chat url, requested tag; others unchanged', async (t) => {
   const bodies = [];
   const root = tmpRoot(t);
   const push = createPush({ dir: path.join(root, 'push'), now: () => 1, displayName: (a) => NAMES[a] || a, webpush: { generateVAPIDKeys: () => ({ publicKey: 'K', privateKey: 'P' }) }, sender: async (s, body) => { bodies.push(JSON.parse(body)); } });
@@ -350,15 +350,13 @@ test('for_owner requested payload: title cut at 140, fixed body, chat url, reque
   push.onEvent({ type: 'for_owner', agent: 'helper', turnId: 'p1', reason: 'x'.repeat(200), requested: true });
   push.onEvent({ type: 'for_owner', agent: 'helper', turnId: 'p2', reason: 'plain reason' });
   await wait();
-  assert.equal(bodies[0].title.length, 140);
-  assert.ok(bodies[0].title.startsWith('Helper: xxx'));
-  assert.deepEqual({ ...bodies[0], title: undefined }, { title: undefined, body: 'You asked to be told. Tap to open', url: '/mobile#chat=helper', tag: 'requested-helper', ts: 1 });
+  assert.deepEqual(bodies[0], { title: 'Helper: something you asked to hear about', body: 'x'.repeat(120) + ' · Tap to open', url: '/mobile#chat=helper', tag: 'requested-helper', ts: 1 });
   assert.deepEqual(bodies[1], { title: 'Helper has something for you', body: 'plain reason · Tap to open', url: '/mobile#chat=helper', tag: 'for-owner-helper', ts: 1 });
 });
 
 test('hub notices without an agent follow the person\'s default for everything else (halted follows security)', async (t) => {
   const r = gated(t, (p) => { p.setDefault('u_admin', { other: 'off' }); p.setDefault('u_sam', { other: 'off' }); });
-  assert.deepEqual(await fire(r, { type: 'agent_request', id: 'x', byAgent: 'helper', kind: 'agent', description: '' }), ['legacy|Helper asks for a new agent']);
+  assert.deepEqual(await fire(r, { type: 'agent_request', id: 'x', byAgent: 'helper', kind: 'agent', description: '' }), ['admin|Helper asks for a new agent', 'legacy|Helper asks for a new agent', 'sam|Helper asks for a new agent'], 'an agent asking for a new agent is a question: other off does not block it');
   assert.deepEqual(await fire(r, { type: 'provider_paced', provider: 'google', reason: 'timeout' }), ['legacy|My Maestro AI pacing: Gemini']);
   assert.deepEqual(await fire(r, { type: 'hub_halted' }), ['admin|My Maestro AI halted', 'legacy|My Maestro AI halted', 'sam|My Maestro AI halted'], 'halted is a security notice: other off does not block it');
   await r.push.notify({ title: 'Plan limit' }, { adminsOnly: true });
@@ -448,4 +446,9 @@ test('wiring: security, access and data-safety callers pass kind: \'security\'; 
   assert.match(read('lib/recordings/trouble.js'), /\}, ids, \{ kind: 'security' \}\)/);
   for (const f of ['lib/plan-usage.js', 'lib/memory-health.js', 'lib/update-check.js', 'lib/modules/health.js']) assert.ok(!/kind: 'security'/.test(read(f)), `${f} stays a normal notice`);
   assert.match(read('lib/push.js'), /prefs: require\('\.\/notify-prefs'\)\.getNotifyPrefs\(\)/);
+});
+
+test('agent_request follows the questions setting (default row), not everything else', async (t) => {
+  const r = gated(t, (p) => { p.setDefault('u_admin', { questions: 'off' }); p.setDefault('u_sam', { other: 'off' }); });
+  assert.deepEqual(await fire(r, { type: 'agent_request', id: 'aq', byAgent: 'helper', kind: 'team', description: 'd' }), ['legacy|Helper asks for a new team', 'sam|Helper asks for a new team']);
 });
