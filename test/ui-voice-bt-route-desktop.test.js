@@ -19,7 +19,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The call's route functions run against fakes. Names the page provides are passed in.
 function makeRoute(o = {}) {
-  const log = { toasts: [], moved: [], loud: 0, made: [], timeouts: [] };
+  const log = { toasts: [], moved: [], loud: 0, made: [], timeouts: [], posts: [] };
   class Ctx {
     constructor() { this.state = 'suspended'; this.n = Ctx.n = (Ctx.n || 0) + 1; log.made.push(this); }
     resume() { this.state = 'running'; return Promise.resolve(); }
@@ -31,10 +31,11 @@ function makeRoute(o = {}) {
   const voicePlay = { token: 0, ctx: new Ctx(), source: null, btn: null, busy: 0 };
   const win = { AudioContext: o.noAC ? undefined : Ctx, speechSynthesis: { speaking: false } };
   const src = routeBlock().replace(/^[\s\S]*?(?=    function voiceMicChoiceId)/, '');
-  const make = new Function('voiceCallS', 'voicePlay', 'window', 'navigator', 'voiceIsIOSNav', 'voiceIsAndroidNav', 'voiceById', 'voiceMicLineText', 'hubToast', 'voiceLoudApply', 'voicePrefsNow', 'setTimeout',
-    src + '\nreturn { voiceRenewApplies, voiceMicChoiceId, voiceRouteSuffix, voiceCallVadFor, voiceCallOnRoute, voiceCallOnMicChange, voiceCallSounding, voiceCallOutputsRenew, VOICE_ROUTE_PLAIN_LINE, voiceRouteReadyMake, voiceRouteDone, voiceRouteSettle, voiceRouteWait };');
+  const make = new Function('voiceCallS', 'voicePlay', 'window', 'navigator', 'voiceIsIOSNav', 'voiceIsAndroidNav', 'voiceById', 'voiceMicLineText', 'hubToast', 'voiceLoudApply', 'voicePrefsNow', 'setTimeout', 'voiceCallApi', 'Date',
+    src + '\nreturn { voiceRenewApplies, voiceMicChoiceId, voiceRouteSuffix, voiceCallVadFor, voiceCallOnRoute, voiceCallOnMicChange, voiceCallSounding, voiceCallOutputsRenew, VOICE_ROUTE_PLAIN_LINE, voiceRouteReadyMake, voiceRouteDone, voiceRouteSettle, voiceRouteWait, voiceRouteReport };');
   const api = make(S, voicePlay, win, { userAgent: o.android === false ? 'Mozilla/5.0 (X11; Linux x86_64)' : 'Mozilla/5.0 (Linux; Android 14; Pixel Fold)' }, () => !!o.ios, require('../lib/ui-voice').voiceIsAndroidNav, () => bar, (i) => 'Microphone: ' + (i.label || 'default'), (t, ms) => log.toasts.push([t, ms]),
-    () => { log.loud++; }, () => ({ micDevice: o.choice || undefined }), (f, ms) => { log.timeouts.push({ f, ms }); return o.holdTimers ? 0 : setTimeout(f, ms); });
+    () => { log.loud++; }, () => ({ micDevice: o.choice || undefined }), (f, ms) => { log.timeouts.push({ f, ms }); return o.holdTimers ? 0 : setTimeout(f, ms); },
+    (url, body) => { log.posts.push({ url, body }); return o.postFails ? Promise.reject(new Error('offline')) : Promise.resolve({ ok: true }); }, o.Date || Date);
   return { api, S, voicePlay, win, log, bar, Ctx };
 }
 
@@ -439,4 +440,61 @@ test('r2 B: voiceSpeakText waits for the first route during a call before it pla
 test('r2 B: voiceCallStart makes the call\'s routeReady; the call ending settles it', () => {
   assert.match(app, /S\.callStartedAt = Date\.now\(\); if \(typeof voiceRouteReadyMake === 'function'\) voiceRouteReadyMake\(\);/);
   assert.match(between('      S.renewPending = false; S.renewFails = 0; S.route = null;', 'S.call = null; S.vad = null;'), /voiceRouteDone\(\)/);
+});
+
+// ── the route report to the hub: names and flags only ──
+const RV = () => ({ routes: async () => ({ inputs: [{ id: 'default', label: 'Default', pseudo: true }, { id: 'a', label: 'Car Kit' }, { id: 'b', label: 'Phone mic' }], outputs: [] }) });
+const RS = (extra) => ({ call: { id: 'c', callId: 'call-1' }, agent: 'sam', vad: RV(), ...(extra || {}) });
+const R1 = { label: 'Car Kit', deviceId: 'a', bluetooth: true, bluetoothListed: true, chosen: 'a', fellBack: false };
+
+test('route report: sent once after the first route settles, with the right body', async () => {
+  const t = makeRoute({ S: RS() }); t.api.voiceRouteReadyMake();
+  t.api.voiceCallOnRoute(t.S.vad, R1);
+  await wait(40);
+  assert.strictEqual(t.S.outputsRenewed, 1);
+  assert.strictEqual(t.log.posts.length, 1);
+  assert.strictEqual(t.log.posts[0].url, '/api/voice/call');
+  assert.deepStrictEqual(t.log.posts[0].body, { agent: 'sam', callId: 'call-1', action: 'route', route: { label: 'Car Kit', bluetooth: true, bluetoothListed: true, chosen: true, fellBack: false, renewed: 1, android: true, inputs: ['Car Kit', 'Phone mic'] } });
+  t.api.voiceCallOnRoute(t.S.vad, R1);   // the same route again: nothing more
+  await wait(40);
+  assert.strictEqual(t.log.posts.length, 1);
+});
+
+test('route report: also when the renewal is not applicable (not Android), once', async () => {
+  const t = makeRoute({ android: false, S: RS() }); t.api.voiceRouteReadyMake();
+  t.api.voiceCallOnRoute(t.S.vad, { label: 'Phone mic', deviceId: 'b' });
+  await wait(40);
+  assert.strictEqual(t.log.posts.length, 1);
+  assert.strictEqual(t.log.posts[0].body.route.android, false);
+  assert.strictEqual(t.log.posts[0].body.route.renewed, 0);
+});
+
+test('route report: again after a later renewal that moved the outputs; not twice within 2 s', async () => {
+  let now = 1000000;
+  const t = makeRoute({ Date: { now: () => now }, S: RS() }); t.api.voiceRouteReadyMake();
+  t.api.voiceCallOnRoute(t.S.vad, R1);
+  await wait(40);
+  assert.strictEqual(t.log.posts.length, 1);
+  now += 500;
+  t.api.voiceCallOnRoute(t.S.vad, { ...R1, deviceId: 'b', label: 'Phone mic', bluetooth: false });
+  await wait(40);
+  assert.strictEqual(t.S.outputsRenewed, 2);
+  assert.strictEqual(t.log.posts.length, 1, 'not twice within 2 s');
+  now += 3000;
+  t.api.voiceCallOnRoute(t.S.vad, { ...R1, deviceId: 'c', label: 'Car Kit', bluetooth: true });
+  await wait(40);
+  assert.strictEqual(t.S.outputsRenewed, 3);
+  assert.strictEqual(t.log.posts.length, 2);
+  assert.strictEqual(t.log.posts[1].body.route.renewed, 3);
+});
+
+test('route report: a failing POST or a failing device list does not throw; no call id sends nothing', async () => {
+  const t = makeRoute({ postFails: true, S: RS({ vad: { routes: async () => { throw new Error('no list'); } }, route: R1 }) });
+  await t.api.voiceRouteReport();
+  await wait(20);
+  assert.strictEqual(t.log.posts.length, 1);
+  assert.deepStrictEqual(t.log.posts[0].body.route.inputs, []);
+  const t2 = makeRoute({ S: RS({ call: { id: 'c' }, route: R1 }) });
+  await t2.api.voiceRouteReport();
+  assert.strictEqual(t2.log.posts.length, 0);
 });

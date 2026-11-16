@@ -17,7 +17,7 @@ const ROUTE_SRC = () => sliceBetween('const VOICE_ROUTE_TOAST', 'function voiceT
 
 function env(over) {
   const o = over || {};
-  const log = [], timers = [];
+  const log = [], timers = [], posts = [];
   class AC { constructor() { this.state = o.wake === false ? 'suspended' : 'running'; AC.made.push(this); } resume() { return Promise.resolve(); } close() { this.closed = true; log.push('closed'); return Promise.resolve(); } }
   AC.made = [];
   const e = {
@@ -34,13 +34,14 @@ function env(over) {
     toast: (t, ms) => log.push('toast:' + ms + ':' + t),
     $: (id) => (o.els || {})[id] || null,
     Date: o.Date || Date,
+    voiceCallPost: (url, body) => { posts.push({ url, body }); return o.postFails ? Promise.reject(new Error('offline')) : Promise.resolve({ ok: true }); },
     voiceCall: undefined,
   };
   const names = Object.keys(e).filter((n) => n !== 'voiceCall');
   const prefsNow = o.prefsNow || (() => ({}));
-  const body = 'let voiceCall = null;\nconst voicePrefsNow = __p;\n' + ROUTE_SRC() + '\nreturn { voiceCallOutputsRenew, voiceCallOnRoute, voiceCallOnMicChange, voiceMicChoiceId, voiceMicLine, voiceRouteReadyMake, voiceRouteDone, voiceRouteWait, voiceRouteSettle, setCall: (c) => { voiceCall = c; } };';
+  const body = 'let voiceCall = null;\nconst voicePrefsNow = __p;\n' + ROUTE_SRC() + '\nreturn { voiceCallOutputsRenew, voiceCallOnRoute, voiceCallOnMicChange, voiceMicChoiceId, voiceMicLine, voiceRouteReadyMake, voiceRouteDone, voiceRouteWait, voiceRouteSettle, voiceRouteReport, setCall: (c) => { voiceCall = c; } };';
   const fns = new Function(...names, '__p', body)(...names.map((n) => e[n]), prefsNow);
-  return { fns, log, timers, AC, e };
+  return { fns, log, timers, AC, e, posts };
 }
 const makeVc = (extra) => Object.assign({ thinkCtx: { closed: false, close() { this.closed = true; return Promise.resolve(); }, state: 'running' }, thinkSnd: null, keepAlive: null }, extra || {});
 
@@ -527,4 +528,63 @@ test('r3 FU3: after the wait, a call that is no longer the one that was current 
   assert.strictEqual(other.r, false); assert.strictEqual(other.plays, 0, 'another call began during the wait');
   const same = await run(() => {});
   assert.strictEqual(same.plays, 1, 'the same call: it plays');
+});
+
+// ── the route report to the hub: names and flags only ──
+const routeVc = (extra) => makeVc(Object.assign({ agent: 'sam', call: { callId: 'call-1' }, vad: { routes: async () => ({ inputs: [{ id: 'default', label: 'Default', pseudo: true }, { id: 'a', label: 'Car Kit' }, { id: 'b', label: 'Phone mic' }], outputs: [] }) } }, extra || {}));
+const R1 = { label: 'Car Kit', deviceId: 'a', bluetooth: true, bluetoothListed: true, chosen: 'a', fellBack: false };
+
+test('route report: sent once after the first route settles, with the right body', async () => {
+  const t = env(); const vc = routeVc(); t.fns.setCall(vc); t.fns.voiceRouteReadyMake(vc);
+  t.fns.voiceCallOnRoute(vc, R1);
+  await flush(60);
+  assert.strictEqual(vc.outputsRenewed, 1);
+  assert.strictEqual(t.posts.length, 1);
+  assert.strictEqual(t.posts[0].url, '/api/voice/call');
+  assert.deepStrictEqual(t.posts[0].body, { agent: 'sam', callId: 'call-1', action: 'route', route: { label: 'Car Kit', bluetooth: true, bluetoothListed: true, chosen: true, fellBack: false, renewed: 1, android: true, inputs: ['Car Kit', 'Phone mic'] } });
+  t.fns.voiceCallOnRoute(vc, R1);   // the same route again: nothing more
+  await flush(60);
+  assert.strictEqual(t.posts.length, 1);
+});
+
+test('route report: also when the renewal is not applicable (not Android), once', async () => {
+  const t = env({ android: false }); const vc = routeVc(); t.fns.setCall(vc); t.fns.voiceRouteReadyMake(vc);
+  t.fns.voiceCallOnRoute(vc, { label: 'Phone mic', deviceId: 'b' });
+  await flush(60);
+  assert.strictEqual(t.posts.length, 1);
+  assert.strictEqual(t.posts[0].body.route.android, false);
+  assert.strictEqual(t.posts[0].body.route.renewed, 0);
+});
+
+test('route report: again after a later renewal that moved the outputs; not twice within 2 s', async () => {
+  let now = 1000000;
+  const t = env({ Date: { now: () => now } }); const vc = routeVc(); t.fns.setCall(vc); t.fns.voiceRouteReadyMake(vc);
+  t.fns.voiceCallOnRoute(vc, R1);
+  await flush(60);
+  assert.strictEqual(t.posts.length, 1);
+  now += 500;   // the microphone moves 0.5 s later: the renewal succeeds but the report waits out the 2 s
+  t.fns.voiceCallOnRoute(vc, { ...R1, deviceId: 'b', label: 'Phone mic', bluetooth: false });
+  await flush(60);
+  assert.strictEqual(vc.outputsRenewed, 2);
+  assert.strictEqual(t.posts.length, 1, 'not twice within 2 s');
+  now += 3000;
+  t.fns.voiceCallOnRoute(vc, { ...R1, deviceId: 'c', label: 'Car Kit', bluetooth: true });
+  await flush(60);
+  assert.strictEqual(vc.outputsRenewed, 3);
+  assert.strictEqual(t.posts.length, 2);
+  assert.strictEqual(t.posts[1].body.route.renewed, 3);
+  assert.strictEqual(t.posts[1].body.route.label, 'Car Kit');
+});
+
+test('route report: a failing POST or a failing device list does not throw; no call id sends nothing', async () => {
+  const t = env({ postFails: true }); const vc = routeVc({ vad: { routes: async () => { throw new Error('no list'); } } }); t.fns.setCall(vc); t.fns.voiceRouteReadyMake(vc);
+  vc.route = R1;
+  await t.fns.voiceRouteReport(vc);
+  await flush(20);
+  assert.strictEqual(t.posts.length, 1);
+  assert.deepStrictEqual(t.posts[0].body.route.inputs, []);
+  const t2 = env(); const vc2 = routeVc({ call: {} }); t2.fns.setCall(vc2); vc2.route = R1;
+  await t2.fns.voiceRouteReport(vc2);
+  assert.strictEqual(t2.posts.length, 0);
+  await t2.fns.voiceRouteReport(null);
 });

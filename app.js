@@ -15270,7 +15270,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (r.bluetoothListed && !r.bluetooth && !r.chosen && !S.routeToasted) { S.routeToasted = true; hubToast(VOICE_ROUTE_PLAIN_LINE, 5000); }
       if (r.deviceId && r.deviceId !== prevDev) S.renewFails = 0;   // a new move gets fresh tries
       if (S.routeSeen === 1) {
-        const call = S.call, settle = () => voiceRouteSettle(call);   // the call that asked: a renewal that ends after a new call began never settles the new call's gate
+        const call = S.call, settle = () => { voiceRouteSettle(call); if (S.call === call) voiceRouteReportFirst(); };   // the call that asked: a renewal that ends after a new call began never settles the new call's gate
         if (!S.outputsRenewed && !S.renewPending && !S.renewing) Promise.resolve(voiceCallOutputsRenew()).then(settle, settle);
         else settle();
       }
@@ -15318,6 +15318,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       S.routeDone = true;
       const r = S.routeResolve; S.routeResolve = null;
       if (r) r();
+      voiceRouteReportFirst();
     }
     function voiceRouteSettle(call) { const S = voiceCallS; if (call && S.call === call && !S.renewPending && !S.renewing) voiceRouteDone(); }   // only for the call that is still the current one
     function voiceRouteWait() {   // null: go on now; else a promise that ends when the route is ready or 2500 ms after the first sentence that waited, whichever is first
@@ -15329,6 +15330,33 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (left <= 0) return null;
         return new Promise((res) => { const t = setTimeout(res, left); S.routeReady.then(() => { clearTimeout(t); res(); }); });
       } catch { return null; }
+    }
+    // The route report: names and flags only, never audio. The hub logs one line, so a car call that went wrong shows which device the browser picked.
+    // Once after the first route settles, again after a later renewal that moved the outputs; never twice within 2 s from this page. Never throws.
+    async function voiceRouteReport() {
+      try {
+        const S = voiceCallS, call = S.call, r = S.route;
+        if (!call || !r || !S.agent) return;
+        const now = Date.now();
+        if (S.routeReportAt && now - S.routeReportAt < 2000) return;
+        const callId = call.callId;
+        if (!callId) return;
+        S.routeReportAt = now;
+        let inputs = [];
+        try {
+          const rt = await S.vad.routes();
+          inputs = Array.from((rt && rt.inputs) || []).filter((d) => d && !d.pseudo).map((d) => String(d.label || '')).slice(0, 8);
+        } catch { inputs = []; }
+        let android = false;
+        try { android = voiceIsAndroidNav(navigator); } catch { android = false; }
+        Promise.resolve(voiceCallApi('/api/voice/call', { agent: S.agent, callId, action: 'route', route: { label: String(r.label || ''), bluetooth: r.bluetooth === true, bluetoothListed: r.bluetoothListed === true, chosen: !!r.chosen, fellBack: r.fellBack === true, renewed: S.outputsRenewed || 0, android, inputs } })).catch(() => {});
+      } catch { /* a report is a courtesy */ }
+    }
+    function voiceRouteReportFirst() {   // once per call, when the first route is ready (renewed, not applicable or given up)
+      const S = voiceCallS;
+      if (!S.call || !S.routeSeen || !S.routeDone || S.routeFirstSent) return;
+      S.routeFirstSent = true;
+      voiceRouteReport();
     }
     async function voiceCallOutputsRenew() {
       const S = voiceCallS, call = S.call;
@@ -15357,6 +15385,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try { if (S.keepAlive && typeof S.keepAlive.moveTo === 'function') S.keepAlive.moveTo(fresh); } catch { /* the hiss stays on the old context until it closes */ }
         S.outputsRenewed = (S.outputsRenewed || 0) + 1; S.renewPending = false;
         if (old && old !== fresh) setTimeout(() => { try { const p = old.close(); if (p && p.catch) p.catch(() => {}); } catch { /* closed */ } }, 300);
+        if (S.routeFirstSent) voiceRouteReport();   // a later renewal that moved the outputs (the first one is reported when the route settles)
         return true;
       } catch {
         if (fresh && voicePlay.ctx !== fresh) { try { fresh.close(); } catch { /* gone */ } }
@@ -15795,7 +15824,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof voiceRecResendPending === 'function') voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '' }).catch(() => {});   // pieces left from an earlier call or page are sent while this one starts
       const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, voiceCallVadFor(vad), thinking, keepAlive, rec));
       voiceLeftNoticeHide(); S.leftChat = null;
-      S.rec = rec; S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.route = null; S.routeToasted = false; S.routeSeen = 0; S.outputsRenewed = 0; S.renewPending = false; S.renewing = false; S.renewFails = 0; S.callStartedAt = Date.now(); if (typeof voiceRouteReadyMake === 'function') voiceRouteReadyMake(); S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
+      S.rec = rec; S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.route = null; S.routeToasted = false; S.routeSeen = 0; S.routeFirstSent = false; S.routeReportAt = 0; S.outputsRenewed = 0; S.renewPending = false; S.renewing = false; S.renewFails = 0; S.callStartedAt = Date.now(); if (typeof voiceRouteReadyMake === 'function') voiceRouteReadyMake(); S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
       window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow(), outputsRenewed: () => S.outputsRenewed || 0, route: () => S.route || null };   // read-only hooks for the browser proof
       voiceLoudApply();   // the reply loudness chain, at the level of the pref
       voiceCallPaintBtn(chatId, true);

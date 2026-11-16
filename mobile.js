@@ -9053,6 +9053,7 @@ function voiceRouteDone(vc) {
   vc.routeDone = true;
   const r = vc.routeResolve; vc.routeResolve = null;
   if (r) r();
+  voiceRouteReportFirst(vc);
 }
 function voiceRouteSettle(vc) {   // the first route is ready once the renewal is not waiting to run again (success, failure, not applicable, given up)
   if (vc && !vc.renewPending && !vc.renewing) voiceRouteDone(vc);
@@ -9065,6 +9066,31 @@ function voiceRouteWait(vc) {   // null: play now; else a promise that ends when
     if (left <= 0) return null;
     return new Promise((res) => { const t = setTimeout(res, left); vc.routeReady.then(() => { clearTimeout(t); res(); }); });
   } catch { return null; }
+}
+// The route report: names and flags only, never audio. The hub logs one line, so a car call that went wrong shows which device the browser picked.
+// Once after the first route settles, again after a later renewal that moved the outputs; never twice within 2 s from this page. Never throws.
+async function voiceRouteReport(vc) {
+  try {
+    if (!vc || voiceCall !== vc || !vc.route) return;
+    const now = Date.now();
+    if (vc.routeReportAt && now - vc.routeReportAt < 2000) return;
+    const callId = vc.call && vc.call.callId;
+    if (!callId) return;
+    vc.routeReportAt = now;
+    let inputs = [];
+    try {
+      const rt = await vc.vad.routes();
+      inputs = Array.from((rt && rt.inputs) || []).filter((d) => d && !d.pseudo).map((d) => String(d.label || '')).slice(0, 8);
+    } catch { inputs = []; }
+    const r = vc.route;
+    const p = voiceCallPost('/api/voice/call', { agent: vc.agent, callId, action: 'route', route: { label: String(r.label || ''), bluetooth: r.bluetooth === true, bluetoothListed: r.bluetoothListed === true, chosen: !!r.chosen, fellBack: r.fellBack === true, renewed: vc.outputsRenewed || 0, android: voiceIsAndroidNav(navigator), inputs } });
+    Promise.resolve(p).catch(() => {});
+  } catch { /* a report is a courtesy */ }
+}
+function voiceRouteReportFirst(vc) {   // once per call, when the first route is ready (renewed, not applicable or given up)
+  if (!vc || !vc.routeSeen || !vc.routeDone || vc.routeFirstSent) return;
+  vc.routeFirstSent = true;
+  voiceRouteReport(vc);
 }
 async function voiceCallOutputsRenew(vc) {
   try {
@@ -9104,6 +9130,7 @@ async function voiceCallOutputsRenew(vc) {
       vc.outputsRenewed = (vc.outputsRenewed || 0) + 1;
       vc.renewPending = false;   // a trigger that came during this renewal is answered by it
       voiceCloseCtxLater(old.filter((c) => c && c !== fresh && c !== freshD).concat(toClose), 300);
+      if (vc.routeFirstSent) voiceRouteReport(vc);   // a later renewal that moved the outputs (the first one is reported when the route settles)
       return true;
     } finally { vc.renewing = false; if (vc.routeSeen) voiceRouteSettle(vc); }
   } catch { return false; }   // a failure leaves the call as it was
@@ -9115,7 +9142,7 @@ function voiceCallOnRoute(vc, r) {   // handlers.onRoute: after every open and r
   try { const m = $('cp-mic'); if (m && !vc.micLostOn && vc.micInfo) m.textContent = voiceMicLine(vc.micInfo, r); } catch { /* the line is a courtesy */ }
   if (r.bluetoothListed && !r.bluetooth && !r.chosen && !vc.routeToasted) { vc.routeToasted = true; try { toast(VOICE_ROUTE_TOAST, 5000); } catch { /* no toast */ } }
   if (r.deviceId && r.deviceId !== prevDev) vc.renewFails = 0;   // a new move gets fresh tries
-  if (!vc.routeSeen) { vc.routeSeen = true; const done = () => voiceRouteSettle(vc); Promise.resolve(voiceCallOutputsRenew(vc)).then(done, done); }
+  if (!vc.routeSeen) { vc.routeSeen = true; const done = () => { voiceRouteSettle(vc); voiceRouteReportFirst(vc); }; Promise.resolve(voiceCallOutputsRenew(vc)).then(done, done); }
   else if (r.deviceId && r.deviceId !== prevDev) voiceCallOutputsRenew(vc);   // the microphone moved (for example to the car): the outputs follow it
 }
 function voiceCallOnMicChange(vc, ev) {   // the microphone moved (a car connected mid-call): the outputs follow it
