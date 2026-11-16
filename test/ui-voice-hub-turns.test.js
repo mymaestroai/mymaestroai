@@ -211,19 +211,28 @@ test('a stop command while waiting drops the kept words and says nothing more ab
   assert.deepStrictEqual(h.sent, [], 'the words are gone');
 });
 
-test('hanging up while waiting sends the kept words as a plain message so they land in the chat', async () => {
-  const h = await started({ sendPlain: async (t) => { h.plain.push(t); } });
+test('hanging up while waiting hands the kept words to the page\'s message box: never sent, never interjected', async () => {
+  const h = await started({ keepWords: (t) => { h.plain.push(t); } });
   h.bg = true;
   await h.say('first words');
   await h.say('more words');
   await h.call.hangUp();
   assert.deepStrictEqual(h.plain, ['first words more words']);
-  assert.deepStrictEqual(h.sent, [], 'not a voice turn');
-  const g = await started();   // a page without sendPlain: the ordinary send
+  assert.deepStrictEqual(h.sent, [], 'no POST');
+  assert.deepStrictEqual(h.interjected, [], 'no interjection into the hub turn');
+  const g = await started({ keepWords: (t) => { g.plain.push(t); } });
   g.bg = true;
   await g.say('only words');
   g.call.release('pagehide');
-  assert.deepStrictEqual(g.sent, ['only words']);
+  assert.deepStrictEqual(g.plain, ['only words']);
+  assert.deepStrictEqual(g.sent, []);
+  assert.deepStrictEqual(g.interjected, []);
+  const n = await started();   // a page without keepWords: nothing is sent either
+  n.bg = true;
+  await n.say('lost but not sent');
+  n.call.release('pagehide');
+  assert.deepStrictEqual(n.sent, []);
+  assert.deepStrictEqual(n.interjected, []);
 });
 
 // ── prefs ──
@@ -253,12 +262,12 @@ function deskEnv(over) {
   const calls = { replies: [], activities: [], owners: 0, bgDone: 0 };
   S.call = { callId: 'c-1', onReplyText: (t, d) => calls.replies.push([t, d]), onActivity: (i) => calls.activities.push(i), onHubOwner: () => { calls.owners++; }, backgroundDone: () => { calls.bgDone++; } };
   const st = Object.assign({ voiceCallS: S, voiceDisp: { turnSeq: new Map() }, hubOriginLabel: (o) => 'label of ' + (o && o.kind), hubToast() {}, voiceDispMood() {}, voiceCallHangUp() {},
-    voiceCallRunning: () => true, chats: { c1: { agent: 'alice', status: 'thinking' } }, voiceSentences: V.voiceSentences, voiceSpeechText: V.voiceSpeechText, Date: { now: () => clock } }, over || {});
+    voiceCallRunning: () => true, busyRun: {}, agentStatus: { alice: { busy: true } }, chats: { c1: { agent: 'alice', status: 'thinking' } }, voiceSentences: V.voiceSentences, voiceSpeechText: V.voiceSpeechText, Date: { now: () => clock } }, over || {});
   const a = app.indexOf('    // A turn the hub started runs (a scheduled task, a consultation'), b = app.indexOf("    document.addEventListener('visibilitychange'", a);
   assert.ok(a > 0 && b > a, 'hub event block of app.js found');
   const names = Object.keys(st);
-  const f = new Function(...names, app.slice(a, b) + '\nreturn { voiceCallHubEvent, voiceCallBackgroundBusy, voiceCallHubIdle };')(...names.map(n => st[n]));
-  return { f, S, calls, setClock: (t) => { clock = t; } };
+  const f = new Function(...names, app.slice(a, b) + '\nreturn { voiceCallHubEvent, voiceCallBackgroundBusy, voiceCallHubIdle, voiceCallSeedHub };')(...names.map(n => st[n]));
+  return { f, S, st, calls, setClock: (t) => { clock = t; } };
 }
 
 test('desktop: a scheduled-task turn ends during a call: nothing is spoken', () => {
@@ -313,10 +322,11 @@ test('desktop: for_owner marks a hub turn; its end gives the cue; one marked jus
 });
 
 test('desktop: the caller\'s words wait only while a hub-started turn runs and none of his own; they are released at its end or when the agent is idle', () => {
-  let running = true;
+  let running = false;
   const { f, S, calls } = deskEnv({ voiceCallRunning: () => running });
   const ev = f.voiceCallHubEvent;
   assert.strictEqual(f.voiceCallBackgroundBusy(), false, 'nothing runs');
+  running = true;
   ev('turn_start', { agent: 'alice', turnId: 'h1', origin: { kind: 'schedule' } });
   assert.strictEqual(f.voiceCallBackgroundBusy(), true);
   S.expecting = true;
@@ -328,7 +338,12 @@ test('desktop: the caller\'s words wait only while a hub-started turn runs and n
   assert.strictEqual(calls.bgDone, 0, 'a turn of his own ending does not release anything');
   assert.strictEqual(f.voiceCallBackgroundBusy(), true);
   ev('turn_end', { agent: 'alice', turnId: 'h1', ok: true, reply: 'Done.' });
-  assert.strictEqual(calls.bgDone, 1, 'released at its end');
+  assert.strictEqual(calls.bgDone, 0, 'its end alone does not release while the page still sees the agent busy');
+  running = false;
+  ev('turn_start', { agent: 'alice', turnId: 'h3', origin: { kind: 'schedule' } });
+  ev('turn_end', { agent: 'alice', turnId: 'h3', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.bgDone, 1, 'released at its end when the page sees the agent idle');
+  running = true;
   ev('turn_start', { agent: 'alice', turnId: 'h4', origin: { kind: 'schedule' } });
   running = false;
   f.voiceCallHubIdle('alice');   // the status feed says idle before any turn_end came
@@ -345,12 +360,12 @@ function phoneEnv(over) {
     onHubOwner: () => { calls.owners++; }, backgroundDone: () => { calls.bgDone++; } };
   const vc = { agent: 'bob', call, callTurns: new Set(), hubTurns: new Map(), hubOwner: new Set(), hubEnded: new Map(), asks: new Map(), lastText: '', expecting: false, startedAt: 0 };
   const st = Object.assign({ voiceCall: vc, voiceSentences: V.voiceSentences, voiceSpeechText: V.voiceSpeechText, originLabel: (o) => (o && o.kind) || '', voiceCallHangUp() {}, toast() {},
-    voiceDisp: { turnSeq: new Map() }, voiceDispMood() {}, ownTurnFor: () => false, isBusy: () => true, Date: { now: () => clock } }, over || {});
+    voiceDisp: { turnSeq: new Map() }, voiceDispMood() {}, ownTurnFor: () => false, isBusy: () => true, turnOrigins: {}, Date: { now: () => clock } }, over || {});
   const a = mob.indexOf('function voiceCallTurnStart(ev)'), b = mob.indexOf('// ── Room check (5 s)', a);
   assert.ok(a > 0 && b > a, 'hub event block of mobile.js found');
   const names = Object.keys(st);
-  const f = new Function(...names, mob.slice(a, b) + '\nreturn { voiceCallTurnStart, voiceCallTurnDelta, voiceCallTurnActivity, voiceCallTurnEnd, voiceCallForOwner, voiceCallBackgroundBusy, voiceCallHubIdle };')(...names.map(n => st[n]));
-  return { f, vc, calls, setClock: (t) => { clock = t; } };
+  const f = new Function(...names, mob.slice(a, b) + '\nreturn { voiceCallTurnStart, voiceCallTurnDelta, voiceCallTurnActivity, voiceCallTurnEnd, voiceCallForOwner, voiceCallBackgroundBusy, voiceCallHubIdle, voiceCallSeedHub };')(...names.map(n => st[n]));
+  return { f, vc, st, calls, setClock: (t) => { clock = t; } };
 }
 
 test('phone: a scheduled-task turn and a consultation end during a call: nothing is spoken', () => {
@@ -376,9 +391,16 @@ test('phone: for_owner cue, late for_owner, unmarked turns, and the release of t
   assert.strictEqual(calls.owners, 0);
   f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h1', ok: true, reply: 'Done.' });
   assert.strictEqual(calls.owners, 1);
+  assert.strictEqual(calls.bgDone, 0, 'the page still sees the agent busy: the idle hook releases the words later');
+  busy = false;
+  f.voiceCallHubIdle('bob');
   assert.strictEqual(calls.bgDone, 1, 'the kept words are released');
+  busy = true;
   f.voiceCallTurnStart({ agent: 'bob', turnId: 'h2', origin: { kind: 'schedule' } });
+  busy = false;
   f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h2', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.bgDone, 2, 'released at its end when the page sees the agent idle');
+  busy = true;
   assert.strictEqual(calls.owners, 1, 'unmarked: nothing');
   setClock(3000);
   f.voiceCallForOwner({ agent: 'bob', reason: 'late', turnId: 'h2', origin: { kind: 'schedule' } });
@@ -399,7 +421,8 @@ test('both pages wire for_owner, the deps, the idle hook, the state text and the
   assert.ok(mob.includes("on('for_owner', voiceCallForOwner);"));
   for (const [name, src] of [['app.js', app], ['mobile.js', mob]]) {
     assert.ok(src.includes('backgroundBusy: ('), name + ': dep backgroundBusy');
-    assert.ok(src.includes('sendPlain: ('), name + ': dep sendPlain');
+    assert.ok(src.includes('keepWords: ('), name + ': dep keepWords');
+    assert.ok(!src.includes('sendPlain'), name + ': nothing is sent at hang-up any more');
     assert.ok(src.includes('voiceCallHubIdle(name)'), name + ': the status feed tells the call the agent is idle');
     assert.ok(src.includes("background: 'Working in the background'"), name + ': state text');
     assert.ok(src.includes("hubCue: 'cue', backgroundCue: 'say' };"), name + ': defaults');
@@ -431,4 +454,280 @@ test('agents on a call: held items, announcements and decisions are not changed 
   await h.advance(2000);
   assert.deepStrictEqual(h.spoken, ['Nightly job finished. Now, or after we\'re done?']);
   assert.strictEqual(h.chimes, 0);
+});
+
+// ═══ review round 1 fixes ═══
+// The code between two markers of a page source, run against stubs (a Proxy scope: names the test does not define are no-ops).
+function scoped(src, from, to, base, exportsList) {
+  const a = src.indexOf(from), b = src.indexOf(to, a);
+  assert.ok(a >= 0 && b > a, 'found: ' + from);
+  const scope = new Proxy(base, { has: (t, k) => typeof k === 'string' && (k in t || !(k in globalThis)), get: (t, k) => (k in t ? t[k] : (typeof k === 'string' ? () => undefined : undefined)), set: (t, k, v) => { t[k] = v; return true; } });
+  return new Function('scope', 'with (scope) { ' + src.slice(a, b) + '\nreturn { ' + exportsList + ' }; }')(scope);
+}
+
+// 1. words kept at hang-up: into the message box, never sent
+test('desktop: kept words at hang-up go to the chat\'s input after what is typed there, with the toast; nothing is sent', () => {
+  const toasts = [], sentTo = [];
+  const input = { value: 'half typed ', dispatched: 0, dispatchEvent() { this.dispatched++; return true; } };
+  const f = scoped(app, 'function voiceCallKeepWords(chatId, text) {', 'async function voiceCallInterject', {
+    document: { getElementById: (id) => (id === 'input-c1' ? input : null) }, chats: { c1: { agent: 'alice' } }, hubToast: (t) => toasts.push(t),
+    sendSoloMessage: (...a) => { sentTo.push(a); }, Event: class { constructor(t) { this.type = t; } } }, 'voiceCallKeepWords');
+  f.voiceCallKeepWords('c1', 'first words more words');
+  assert.strictEqual(input.value, 'half typed first words more words');
+  assert.deepStrictEqual(toasts, ['What you said is in the message box.']);
+  assert.deepStrictEqual(sentTo, [], 'no POST, no interjection');
+  assert.ok(input.dispatched >= 1, 'the box is told it changed');
+  input.value = '';
+  f.voiceCallKeepWords('c1', 'alone');
+  assert.strictEqual(input.value, 'alone', 'an empty box: no leading space');
+  f.voiceCallKeepWords('gone', 'x');   // a closed chat: nothing happens
+  assert.deepStrictEqual(toasts.length, 2);
+});
+
+test('phone: kept words at hang-up go to the composer and its saved draft after what is there, with the toast; nothing is sent', () => {
+  const toasts = [], drafts = {}, sent = [];
+  const input = { value: 'typed', style: {}, scrollHeight: 30 };
+  const base = { current: 'bob', $: (id) => (id === 'msg-input' ? input : null), draftsAll: () => ({ cat: { text: 'cat draft' } }), saveDraft: (a, t) => { drafts[a] = t; }, composerTypingPaint() {}, toast: (t) => toasts.push(t), sendMessage: (...a) => { sent.push(a); } };
+  const f = scoped(mob, 'function voiceCallKeepWords(vc, text) {', '// A spoken correction while the agent works', base, 'voiceCallKeepWords');
+  f.voiceCallKeepWords({ agent: 'bob' }, 'say this');
+  assert.strictEqual(input.value, 'typed say this');
+  assert.deepStrictEqual(drafts, { bob: 'typed say this' }, 'the saved draft: a reload keeps them');
+  assert.deepStrictEqual(toasts, ['What you said is in the message box.']);
+  assert.deepStrictEqual(sent, []);
+  f.voiceCallKeepWords({ agent: 'cat' }, 'for the cat');   // another chat (bob's) is open: the call's agent's draft
+  assert.strictEqual(input.value, 'typed say this', 'the open composer is not touched when it is another chat');
+  assert.strictEqual(drafts.cat, 'cat draft for the cat');
+});
+
+test('controller: hanging up while the words are on their way and the hub refuses them puts them in the message box', async () => {
+  let rejectSend;
+  const h = await started({ keepWords: (t) => { h.plain.push(t); }, send: (t) => { h.sent.push(t); return new Promise((_, rej) => { rejectSend = rej; }); } });
+  h.bg = true;
+  await h.say('slow words');
+  h.bg = false;
+  const p = h.call.backgroundDone();
+  await tick();
+  await h.call.hangUp();
+  rejectSend(new Error('409'));
+  await p; await tick();
+  assert.deepStrictEqual(h.plain, ['slow words']);
+  assert.deepStrictEqual(h.interjected, []);
+});
+
+// 2. a hub turn that already runs when the call starts
+test('desktop: a scheduled task already running when the call starts: speaking is kept, not interjected; its for_owner mark still gives the cue at its end', () => {
+  const { f, S, st, calls } = deskEnv();
+  st.busyRun.alice = { turnId: 's1', origin: { kind: 'schedule', label: 'Morning report' }, since: 1, own: false };
+  assert.strictEqual(S.hub.size, 0, 'the call has not seen turn_start');
+  f.voiceCallSeedHub();
+  assert.deepStrictEqual([...S.hub.keys()], ['s1']);
+  assert.strictEqual(f.voiceCallBackgroundBusy(), true, 'his words are kept');
+  f.voiceCallHubEvent('for_owner', { agent: 'alice', reason: 'needs you', turnId: 's1', origin: { kind: 'schedule' } });
+  assert.strictEqual(calls.owners, 0);
+  f.voiceCallHubEvent('turn_end', { agent: 'alice', turnId: 's1', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.owners, 1);
+  assert.deepStrictEqual(calls.replies, []);
+});
+
+test('desktop: an own turn already running is not background; an agent busy with an unknown turn counts as background until identified', () => {
+  const { f, S, st } = deskEnv();
+  st.busyRun.alice = { turnId: 'u1', origin: { kind: 'user' }, since: 1, own: true };
+  f.voiceCallSeedHub();
+  assert.strictEqual(S.hub.size, 0);
+  assert.strictEqual(f.voiceCallBackgroundBusy(), false, 'a turn of the person\'s own: interjection as today');
+  delete st.busyRun.alice;
+  assert.strictEqual(f.voiceCallBackgroundBusy(), true, 'busy, nobody has said whose turn it is');
+  f.voiceCallHubEvent('turn_start', { agent: 'alice', turnId: 'u2', origin: { kind: 'user' } });
+  assert.strictEqual(f.voiceCallBackgroundBusy(), false, 'identified as his own');
+  const idle = deskEnv({ voiceCallRunning: () => false });
+  idle.st.busyRun.alice = { turnId: 's1', origin: { kind: 'schedule' }, since: 1, own: false };
+  idle.st.agentStatus.alice = { busy: false };
+  idle.f.voiceCallSeedHub();
+  assert.strictEqual(idle.S.hub.size, 0, 'a stale record of an agent that is idle is not a running turn');
+});
+
+test('phone: a scheduled task already running when the call starts: kept, not interjected; its for_owner mark still gives the cue', () => {
+  const { f, vc, st, calls } = phoneEnv();
+  st.turnOrigins.bob = { turnId: 's1', origin: { kind: 'schedule', label: 'Morning report' }, hub: true, since: 1 };
+  assert.strictEqual(vc.hubTurns.size, 0);
+  f.voiceCallSeedHub(vc);
+  assert.deepStrictEqual([...vc.hubTurns.keys()], ['s1']);
+  assert.strictEqual(f.voiceCallBackgroundBusy(vc), true);
+  f.voiceCallForOwner({ agent: 'bob', reason: 'needs you', turnId: 's1', origin: { kind: 'schedule' } });
+  f.voiceCallTurnEnd({ agent: 'bob', turnId: 's1', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.owners, 1);
+  assert.deepStrictEqual(calls.replies, []);
+});
+
+test('phone: an own turn already running is not background; a busy agent with no known turn counts as background', () => {
+  const { f, vc, st } = phoneEnv();
+  st.turnOrigins.bob = { turnId: 'u1', origin: { kind: 'user' }, hub: false, since: 1 };
+  f.voiceCallSeedHub(vc);
+  assert.strictEqual(vc.hubTurns.size, 0);
+  assert.strictEqual(f.voiceCallBackgroundBusy(vc), false);
+  delete st.turnOrigins.bob;
+  assert.strictEqual(f.voiceCallBackgroundBusy(vc), true);
+});
+
+test('both pages seed the call from what they know when it starts and when the link comes back', () => {
+  assert.ok(app.includes("voiceCallSeedHub();   // a hub-started turn that already runs"));
+  assert.ok(/onBack: \(\) => \{[^}]*voiceCallSeedHub\(\); \}/.test(app));
+  assert.ok(mob.includes("voiceCallSeedHub(vc);   // a hub-started turn that already runs"));
+  assert.ok(/onBack: \(\) => \{[^}]*voiceCallSeedHub\(vc\); \}/.test(mob));
+});
+
+// 3. back-to-back hub turns; a refused send
+test('desktop: back-to-back hub turns: the words wait for the second and are released once, at idle', () => {
+  let running = true;
+  const { f, calls } = deskEnv({ voiceCallRunning: () => running });
+  const ev = f.voiceCallHubEvent;
+  ev('turn_start', { agent: 'alice', turnId: 'h1', origin: { kind: 'schedule' } });
+  ev('turn_end', { agent: 'alice', turnId: 'h1', ok: true, reply: 'Done.' });   // the agent still shows busy
+  assert.strictEqual(calls.bgDone, 0);
+  ev('turn_start', { agent: 'alice', turnId: 'h2', origin: { kind: 'consultation' } });
+  assert.strictEqual(f.voiceCallBackgroundBusy(), true);
+  ev('turn_end', { agent: 'alice', turnId: 'h2', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.bgDone, 0, 'the second one ended too but the agent still shows busy');
+  running = false;
+  f.voiceCallHubIdle('alice');
+  assert.strictEqual(calls.bgDone, 1, 'sent once, at idle');
+  f.voiceCallHubIdle('alice');
+  assert.strictEqual(calls.bgDone, 2, '(a second idle report asks again; the controller has nothing left to send then)');
+});
+
+test('phone: back-to-back hub turns: the words wait for the second and are released at idle', () => {
+  let busy = true;
+  const { f, calls } = phoneEnv({ isBusy: () => busy });
+  f.voiceCallTurnStart({ agent: 'bob', turnId: 'h1', origin: { kind: 'schedule' } });
+  f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h1', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.bgDone, 0);
+  f.voiceCallTurnStart({ agent: 'bob', turnId: 'h2', origin: { kind: 'schedule' } });
+  f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h2', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.bgDone, 0);
+  busy = false;
+  f.voiceCallHubIdle('bob');
+  assert.strictEqual(calls.bgDone, 1);
+});
+
+test('controller: a send the hub refuses puts the words back at the front; nothing extra is said; the next idle sends them with what came after', async () => {
+  let fail = true; const toasts = [];
+  const h = await started({ send: async (t) => { h.sent.push(t); if (fail) throw new Error('409'); h.running = true; }, ui: { state: (n) => h.states.push(n), heard() {}, held() {}, toast: (t) => toasts.push(t), summary() {} } });
+  h.bg = true;
+  await h.say('first');
+  await h.finish();
+  h.bg = false;
+  await h.call.backgroundDone();
+  assert.deepStrictEqual(h.sent, ['first']);
+  assert.strictEqual(h.call.background, true, 'the words are kept again');
+  assert.deepStrictEqual(h.spoken, [LINE], 'nothing extra said (no "That did not go through.")');
+  assert.deepStrictEqual(toasts, []);
+  h.bg = true;   // another hub turn
+  await h.say('second');
+  assert.deepStrictEqual(h.spoken, [LINE]);
+  h.bg = false; fail = false;
+  await h.call.backgroundDone();
+  assert.deepStrictEqual(h.sent, ['first', 'first second'], 'the old words first');
+  assert.strictEqual(h.call.background, false);
+});
+
+test('phone: the call\'s send is refused with a 409: the controller is told (the real sendMessage and voiceCallSend)', async () => {
+  const toasts = [];
+  let status = 409;
+  const base = { current: 'bob', plusSheetShow() {}, toast: (t) => toasts.push(t), displayName: (n) => n, isBusy: () => false, ownTurnFor: () => false, streams: new Map(), reattaches: new Map(), live: {}, recentOwn: new Map(), pendingImages: [],
+    api: async () => ({ status, ok: status < 400, json: async () => ({}) }), zoneHeader: () => ({}), voiceTakeDictated: () => false, newFeed: () => ({}), bubbleLive: () => false, readStream: async () => {},
+    addUserBubble: () => ({ remove() {} }), addAssistantBubble: () => ({ el: { remove() {}, classList: { add() {} } }, body: {} }), setTimeout: () => 0,
+    voiceCall: null, stick: false, tzSentAt: 0, voiceAutoReadGen: 0 };
+  const f = scoped(mob, 'function voiceCallSend(vc, text, userEl) {', '// The words kept for the background work', Object.assign(base, {}), 'voiceCallSend');
+  const g = scoped(mob, 'async function sendMessage(fallback) {', '// ── Re-attach after a lost connection', base, 'sendMessage');
+  base.sendMessage = g.sendMessage;
+  const vc = { agent: 'bob', sendSeq: 0, expecting: false, call: { onReplyText() {} }, lastText: '' };
+  base.voiceCall = vc;
+  await assert.rejects(f.voiceCallSend(vc, 'kept words'), /busy/, 'a 409 for a busy agent is a failure to the controller');
+  assert.deepStrictEqual(toasts, [], 'no toast of the page: the controller decides what is said');
+  status = 200;
+  await f.voiceCallSend(vc, 'more words');   // taken: resolved without waiting for the reply
+});
+
+// 4. the 30 s re-check in every mode; a queued line dropped
+test('backgroundCue "show" with a missed turn_end: the 30 s check finds the agent idle and sends', async () => {
+  const h = await started(null, { backgroundCue: 'show' });
+  h.bg = true;
+  await h.say('words for later');
+  assert.deepStrictEqual(h.sent, []);
+  await h.advance(20000);
+  h.bg = false; h.running = false;   // it ended; the page never told the call
+  await h.advance(11000);
+  assert.deepStrictEqual(h.sent, ['words for later']);
+  assert.deepStrictEqual(h.spoken, [], 'nothing said in "show"');
+  const o = await started(null, { backgroundCue: 'off' });
+  o.bg = true;
+  await o.say('off words');
+  o.bg = false; o.running = false;
+  await o.advance(31000);
+  assert.deepStrictEqual(o.sent, ['off words'], '"off" re-checks too');
+});
+
+test('a background line still queued, not yet spoken, is dropped when the work is over', async () => {
+  const h = await started();
+  h.bg = true;
+  await h.say('wait');
+  await h.finish();                 // the first line is spoken
+  await h.advance(30500);           // the repeat starts to be spoken (not finished)
+  await h.advance(30000);           // another repeat is queued behind it
+  assert.deepStrictEqual(h.spoken, [LINE, LINE]);
+  h.bg = false;
+  await h.call.backgroundDone();
+  await h.finish();
+  assert.deepStrictEqual(h.spoken, [LINE, LINE], 'the queued one is never spoken');
+  assert.deepStrictEqual(h.sent, ['wait']);
+});
+
+// 5. the cue waits for the reply stream; an old cue is not given
+test('a cue during a reply stream is not given between its sentences; it comes after the reply', async () => {
+  const h = await started();
+  await h.say('tell me');
+  h.call.onReplyText('First sentence. Second sen', false);
+  await tick();
+  assert.deepStrictEqual(h.spoken, ['First sentence.']);
+  await h.finish();                 // between two sentences: nothing queued, nothing playing
+  h.call.onHubOwner(); await tick();
+  assert.strictEqual(h.chimes, 0, 'not between the sentences of a reply');
+  h.call.onReplyText('First sentence. Second sentence.', true);
+  await tick();
+  await h.finish();
+  assert.deepStrictEqual(h.spoken, ['First sentence.', 'Second sentence.', CUE].slice(0, h.spoken.length));
+  assert.strictEqual(h.spoken[h.spoken.length - 1], CUE, 'after the reply');
+  assert.strictEqual(h.chimes, 1);
+});
+
+test('a pending cue expires after 10 s and is not given later', async () => {
+  const h = await started();
+  await h.say('question');          // a reply is awaited
+  h.call.onHubOwner(); await tick();
+  assert.strictEqual(h.chimes, 0);
+  await h.advance(12000);
+  h.call.onReplyText('Answer.', true);
+  await tick(); await h.finish();
+  assert.strictEqual(h.chimes, 0, 'too old: dropped');
+  assert.ok(!h.spoken.includes(CUE));
+  // a fresh one still works
+  await h.advance(31000);
+  h.call.onHubOwner(); await tick();
+  assert.strictEqual(h.chimes, 1);
+});
+
+// 6. "stop" while only a hub-started turn runs
+test('"stop" while only a hub-started turn runs (nothing kept, no own turn): says nothing and does not stop it', async () => {
+  const h = await started();
+  h.bg = true;
+  await h.say('stop');
+  assert.strictEqual(h.stops, 0, 'd.stop() is not called');
+  assert.deepStrictEqual(h.spoken, [], 'nothing said, not even "Stopped."');
+  assert.deepStrictEqual(h.sent, []);
+  assert.deepStrictEqual(h.interjected, []);
+  // with a turn of his own running, stop works as today
+  const g = await started();
+  await g.say('do a thing');
+  await g.say('stop');
+  assert.strictEqual(g.stops, 1);
 });

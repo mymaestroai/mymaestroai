@@ -206,7 +206,8 @@ test('the message box keeps a draft per agent: saved as you type, restored when 
   assert.ok(js.includes("const DRAFTS_KEY = 'hub-mobile-drafts';") && js.includes('function saveDraft(agent, text)') && js.includes('function restoreDraft(agent)'));
   assert.ok(js.includes('saveDraft(current, input.value); });'), 'every keystroke is kept');
   assert.ok(js.includes('if (!same) restoreDraft(name);'), 'opening a chat brings its draft back (also after a reload)');
-  const send = js.slice(js.indexOf('async function sendMessage('), js.indexOf('async function sendMessage(') + 1400);
+  // 2000: sendMessage grew (a call's onSendResult report, hub-started-turns change); the draft clear is still in its first part
+  const send = js.slice(js.indexOf('async function sendMessage('), js.indexOf('async function sendMessage(') + 2000);
   assert.ok(send.includes("input.style.height = 'auto';\n    saveDraft(agent, '');"), 'a send clears the draft');
   assert.ok(js.includes("input.value = text;\n        saveDraft(agent, text);"), 'a refused send (409) puts the text back and keeps it');
   const inter = js.slice(js.indexOf('async function sendInterjection('), js.indexOf('async function sendInterjection(') + 3200);
