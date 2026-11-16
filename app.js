@@ -13001,12 +13001,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       } catch (first) {
         if (refusal(first)) throw first;
         if (dev) {
+          // Step 3: the device alone uses the browser's default processing for an unprocessed call too, like the plain { audio: true } fallback.
           try { return { stream: await md.getUserMedia({ audio: { deviceId: { exact: dev } } }), fallback: true, deviceFallback: false }; } catch (e2) { if (refusal(e2)) throw e2; }
           try {
             const r = await voiceOpenMicStream(nav, { unprocessed: !on });
             r.deviceFallback = true;
             return r;
-          } catch (e3) { if (refusal(e3)) throw e3; throw first; }
+          } catch (e3) {
+            // A device-lookup error means the chosen device is gone: report the first error. Any other (the default microphone is busy, say) is the news.
+            const n3 = e3 && e3.name;
+            if (refusal(e3) || !(n3 === 'OverconstrainedError' || n3 === 'NotFoundError')) throw e3;
+            throw first;
+          }
         }
         try { return { stream: await md.getUserMedia({ audio: true }), fallback: true }; } catch { throw first; }
       }
@@ -14642,7 +14648,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Every spoken string goes through the cleaner (voiceSpeechText): replies, call lines, the sample.
       const sentences = opts.sentences ? opts.sentences.map(s => voiceSpeechText(s)).filter(Boolean) : voiceSentences(voiceSpeechText(md));
       if (!sentences || !sentences.length) return;
-      // During a call on Android the first sentences wait (at most 2500 ms from the call's start) for the call's first route; a stop meanwhile means nothing plays.
+      // During a call on Android the first sentences wait (at most 2500 ms from the first sentence that waited) for the call's first route; a stop meanwhile means nothing plays.
       const routeWait = typeof voiceRouteWait === 'function' ? voiceRouteWait() : null;
       if (routeWait) { await routeWait; if (voicePlay.token !== my) return; }
       voicePlay.btn = btn || null; voicePlayState(btn, true);
@@ -15260,8 +15266,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (r.bluetoothListed && !r.bluetooth && !r.chosen && !S.routeToasted) { S.routeToasted = true; hubToast(VOICE_ROUTE_PLAIN_LINE, 5000); }
       if (r.deviceId && r.deviceId !== prevDev) S.renewFails = 0;   // a new move gets fresh tries
       if (S.routeSeen === 1) {
-        if (!S.outputsRenewed && !S.renewPending && !S.renewing) Promise.resolve(voiceCallOutputsRenew()).then(voiceRouteSettle, voiceRouteSettle);
-        else voiceRouteSettle();
+        const call = S.call, settle = () => voiceRouteSettle(call);   // the call that asked: a renewal that ends after a new call began never settles the new call's gate
+        if (!S.outputsRenewed && !S.renewPending && !S.renewing) Promise.resolve(voiceCallOutputsRenew()).then(settle, settle);
+        else settle();
       }
       else if (S.routeSeen > 1 && r.deviceId && r.deviceId !== prevDev) voiceCallOutputsRenew();   // the microphone moved (for example to the car): the outputs follow it
     }
@@ -15292,10 +15299,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       } catch { return false; }
     }
     // The call's first route (Android only): S.routeReady settles when the first renewal of the outputs is over (any way: done, failed, not applicable, given up) or the call ends.
-    // Never on iOS. The first sentences of a call wait for it, at most 2500 ms from the call's start.
+    // Never on iOS. The first sentences of a call wait for it, at most 2500 ms from the first sentence that had to wait (a slow start does not use the wait up).
     function voiceRouteReadyMake() {
       const S = voiceCallS;
-      S.routeDone = false; S.routeResolve = null;
+      S.routeDone = false; S.routeResolve = null; S.routeWaitFrom = 0;
       let android = false;
       try { android = !voiceIsIOSNav(navigator) && voiceIsAndroidNav(navigator); } catch { android = false; }
       if (!android) { S.routeDone = true; S.routeReady = Promise.resolve(); return; }
@@ -15308,12 +15315,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const r = S.routeResolve; S.routeResolve = null;
       if (r) r();
     }
-    function voiceRouteSettle() { const S = voiceCallS; if (S.call && !S.renewPending && !S.renewing) voiceRouteDone(); }
-    function voiceRouteWait() {   // null: go on now; else a promise that ends when the route is ready or 2500 ms after the call started, whichever is first
+    function voiceRouteSettle(call) { const S = voiceCallS; if (call && S.call === call && !S.renewPending && !S.renewing) voiceRouteDone(); }   // only for the call that is still the current one
+    function voiceRouteWait() {   // null: go on now; else a promise that ends when the route is ready or 2500 ms after the first sentence that waited, whichever is first
       const S = voiceCallS;
       try {
         if (!S.call || S.routeDone || !S.routeReady) return null;
-        const left = 2500 - (Date.now() - (S.callStartedAt || Date.now()));
+        if (!S.routeWaitFrom) S.routeWaitFrom = Date.now();
+        const left = 2500 - (Date.now() - S.routeWaitFrom);
         if (left <= 0) return null;
         return new Promise((res) => { const t = setTimeout(res, left); S.routeReady.then(() => { clearTimeout(t); res(); }); });
       } catch { return null; }
@@ -15321,7 +15329,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     async function voiceCallOutputsRenew() {
       const S = voiceCallS, call = S.call;
       if (!call || !voiceRenewApplies() || (S.renewFails || 0) >= 5) return false;
-      const later = () => { S.renewPending = true; if (!S.renewTimer) S.renewTimer = setTimeout(() => { S.renewTimer = null; if (S.renewPending && S.call === call) Promise.resolve(voiceCallOutputsRenew()).then(voiceRouteSettle, voiceRouteSettle); }, 1000); return false; };
+      const later = () => { S.renewPending = true; if (!S.renewTimer) S.renewTimer = setTimeout(() => { S.renewTimer = null; if (S.renewPending && S.call === call) { const settle = () => voiceRouteSettle(call); Promise.resolve(voiceCallOutputsRenew()).then(settle, settle); } }, 1000); return false; };
       if (S.renewing === call) return later();   // one at a time: this trigger runs again when the renewal in progress is over
       if (voiceCallSounding()) return later();
       const AC = window.AudioContext || window.webkitAudioContext;

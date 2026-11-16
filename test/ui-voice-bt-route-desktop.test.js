@@ -342,17 +342,50 @@ test('r2 B: Android: the call has a pending routeReady; iOS and other browsers h
   assert.strictEqual(d.S.routeDone, true); assert.strictEqual(d.api.voiceRouteWait(), null);
 });
 
-test('r2 B: the wait is bounded: 2500 ms from the call\'s start; none once that has passed or when no call is up', async () => {
+test('r2 B / r3: the wait is bounded: 2500 ms from the first sentence that waited; none once that has passed or when no call is up', async () => {
   const t = makeRoute({ holdTimers: true }); t.S.callStartedAt = Date.now() - 1000; t.api.voiceRouteReadyMake();
   const w = t.api.voiceRouteWait();
   const tm = t.log.timeouts[t.log.timeouts.length - 1];
-  assert.ok(tm.ms <= 1500 && tm.ms > 1400, 'the rest of 2500 ms: ' + tm.ms);
+  assert.ok(tm.ms <= 2500 && tm.ms > 2400, 'the whole window from the first sentence: ' + tm.ms);
   tm.f(); await w;
   assert.strictEqual(t.S.routeDone, false);
-  t.S.callStartedAt = Date.now() - 2600;
+  t.S.routeWaitFrom = Date.now() - 2600;
   assert.strictEqual(t.api.voiceRouteWait(), null);
-  t.S.callStartedAt = Date.now(); t.S.call = null;
+  t.S.call = null;
   assert.strictEqual(t.api.voiceRouteWait(), null, 'outside a call');
+});
+
+test('r3 BLOCK 1: a slow start does not use the wait up: the first sentence asked 3 s after the call began still waits; the next waits only for the rest', async () => {
+  const t = makeRoute({ holdTimers: true }); t.S.callStartedAt = Date.now() - 3000; t.api.voiceRouteReadyMake();
+  const w1 = t.api.voiceRouteWait();
+  assert.ok(w1, 'the first sentence waits although the call began 3 s ago');
+  const t1 = t.log.timeouts[t.log.timeouts.length - 1];
+  assert.ok(t1.ms <= 2500 && t1.ms > 2400, 'a whole window: ' + t1.ms);
+  await wait(80);
+  const w2 = t.api.voiceRouteWait();
+  assert.ok(w2, 'the second sentence waits too');
+  const t2 = t.log.timeouts[t.log.timeouts.length - 1];
+  assert.ok(t2.ms < t1.ms - 50 && t2.ms > 2300, 'only the rest of the same window: ' + t1.ms + ' then ' + t2.ms);
+  t.S.routeWaitFrom = Date.now() - 2600;
+  assert.strictEqual(t.api.voiceRouteWait(), null, 'a sentence after the window plays at once');
+  const n = makeRoute({ android: false }); n.S.callStartedAt = Date.now() - 3000; n.api.voiceRouteReadyMake();
+  assert.strictEqual(n.api.voiceRouteWait(), null, 'not Android: never waits');
+});
+
+test('r3 BLOCK 2: call A\'s renewal finishing after call B started does not settle B\'s gate', async () => {
+  const t = makeRoute({ holdTimers: true }); const callA = { id: 'A' }; t.S.call = callA; t.api.voiceRouteReadyMake();
+  const vadA = { start() {} }; t.S.vad = vadA;
+  // A's renewal is in flight when a new call starts (the new call has a new gate and a new Ctx never settled)
+  let resume; const slow = new t.Ctx(); slow.resume = () => new Promise((r) => { resume = () => { slow.state = 'running'; r(); }; });
+  t.win.AudioContext = function () { return slow; };
+  t.api.voiceCallOnRoute(vadA, { deviceId: 'spk', label: 'Speakerphone' }); await wait(10);
+  const callB = { id: 'B' }; t.S.call = callB; t.S.vad = null; t.S.renewing = false; t.S.renewPending = false; t.S.routeSeen = 0; t.api.voiceRouteReadyMake();
+  assert.strictEqual(t.S.routeDone, false);
+  resume(); await wait(30);
+  assert.strictEqual(t.S.routeDone, false, 'A finishing did not settle B\'s gate');
+  assert.strictEqual(t.api.voiceRouteWait() !== null, true, 'B\'s first sentences still wait');
+  // the call's own settle still works
+  t.api.voiceRouteSettle(callB); assert.strictEqual(t.S.routeDone, true);
 });
 
 test('r2 B: the first renewal finishing settles routeReady; a deferred one keeps it waiting; the call ending settles it', async () => {

@@ -465,7 +465,7 @@ test('r2 A: both device calls fail: the ladder without the device runs, deviceFa
   assert.strictEqual(r.deviceFallback, true);
   let n = 0;
   const bad = { mediaDevices: { getUserMedia: async () => { n++; throw err(n === 1 ? 'NotReadableError' : 'TypeError'); } } };
-  await assert.rejects(() => voiceOpenMicStream(bad, { deviceId: 'bt' }), (e) => e.name === 'NotReadableError');
+  await assert.rejects(() => voiceOpenMicStream(bad, { deviceId: 'bt' }), (e) => e.name === 'TypeError', 'r3 FU1: the last failure is not a device lookup, so it is the one reported');
   let m = 0;
   const refuse = { mediaDevices: { getUserMedia: async () => { m++; throw err(m === 1 ? 'NotReadableError' : 'NotAllowedError'); } } };
   await assert.rejects(() => voiceOpenMicStream(refuse, { deviceId: 'bt' }), (e) => e.name === 'NotAllowedError');
@@ -524,4 +524,29 @@ test('r2 FU6: a devicechange during a reopen is remembered and run once when it 
   gate = null; rel(); await p; await tick(80);
   assert.strictEqual(tm.t.length, 1, 'one check after it ends');
   await vad.stop();
+});
+
+test('r3 FU1: the chosen device is gone and the default microphone is busy: the busy microphone is reported', async () => {
+  const nav = { mediaDevices: { getUserMedia: async (c) => { if (c.audio && c.audio.deviceId) throw err('OverconstrainedError'); throw err('NotReadableError'); } } };
+  await assert.rejects(() => voiceOpenMicStream(nav, { deviceId: 'gone' }), (e) => e.name === 'NotReadableError');
+});
+
+test('r3 FU1: when the ladder without the device fails with a device-lookup error, the FIRST error is thrown; a refusal still throws as it is', async () => {
+  for (const name of ['OverconstrainedError', 'NotFoundError']) {
+    let n = 0;
+    const nav = { mediaDevices: { getUserMedia: async () => { n++; throw err(n === 1 ? 'NotReadableError' : name); } } };
+    await assert.rejects(() => voiceOpenMicStream(nav, { deviceId: 'bt' }), (e) => e.name === 'NotReadableError', name);
+  }
+  let m = 0;
+  const refuse = { mediaDevices: { getUserMedia: async (c) => { m++; if (c.audio && c.audio.deviceId) throw err('NotReadableError'); throw err('NotAllowedError'); } } };
+  await assert.rejects(() => voiceOpenMicStream(refuse, { deviceId: 'bt' }), (e) => e.name === 'NotAllowedError');
+});
+
+test('r3 FU1: for an unprocessed call the device-alone step uses the browser\'s default processing (no processing keys)', async () => {
+  const calls = [];
+  const nav = { mediaDevices: { getUserMedia: async (c) => { calls.push(c); if (calls.length === 1) throw err('NotReadableError'); return { id: 's' }; } } };
+  const r = await voiceOpenMicStream(nav, { deviceId: 'bt', unprocessed: true });
+  assert.deepStrictEqual(calls[0].audio.echoCancellation, false);
+  assert.deepStrictEqual(calls[1], { audio: { deviceId: { exact: 'bt' } } });
+  assert.strictEqual(r.deviceFallback, false);
 });

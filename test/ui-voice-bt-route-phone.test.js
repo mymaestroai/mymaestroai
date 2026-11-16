@@ -380,15 +380,39 @@ test('r2 B: Android: the call has a pending routeReady; iOS and other browsers h
   assert.strictEqual(vd.routeDone, true);
 });
 
-test('r2 B: the wait is bounded: 2500 ms from the call\'s start, never longer; none once that has passed', async () => {
+test('r2 B / r3: the wait is bounded: 2500 ms from the first sentence that waited, never longer; none once that has passed', async () => {
   const t = env(); const vc = makeVc({ startedAt: Date.now() - 1000 }); t.fns.voiceRouteReadyMake(vc);
   const w = t.fns.voiceRouteWait(vc);
   const tm = t.timers[t.timers.length - 1];
-  assert.ok(tm.ms <= 1500 && tm.ms > 1400, 'the rest of 2500 ms: ' + tm.ms);
+  assert.ok(tm.ms <= 2500 && tm.ms > 2400, 'the whole window from the first sentence: ' + tm.ms);
   tm.f(); await w;   // the timer ends the wait without the route
   assert.strictEqual(vc.routeDone, false);
-  vc.startedAt = Date.now() - 2600;
+  vc.routeWaitFrom = Date.now() - 2600;
   assert.strictEqual(t.fns.voiceRouteWait(vc), null, 'past 2500 ms: plays at once');
+});
+
+test('r3 BLOCK 1: a slow start does not use the wait up: the first sentence asked 3 s after the call began still waits; the next waits only for the rest', async () => {
+  let now = 1000000;
+  const t = env({ Date: { now: () => now } }); const vc = makeVc({ startedAt: now }); t.fns.voiceRouteReadyMake(vc);
+  now += 3000;
+  assert.ok(t.fns.voiceRouteWait(vc), 'the first sentence waits although the call began 3 s ago');
+  assert.strictEqual(t.timers[t.timers.length - 1].ms, 2500, 'a whole window');
+  now += 1000;
+  assert.ok(t.fns.voiceRouteWait(vc), 'the second sentence waits too');
+  assert.strictEqual(t.timers[t.timers.length - 1].ms, 1500, 'only the rest of the same window');
+  now += 1500;
+  assert.strictEqual(t.fns.voiceRouteWait(vc), null, 'after the window it plays at once');
+});
+
+test('r3 BLOCK 2 (phone): the renewal keeps its state on the call object, so an old call\'s renewal never settles a new call\'s gate', async () => {
+  const t = env({ els: { 'cp-mic': { textContent: '' } } });
+  const a = makeVc({ startedAt: Date.now() }); t.fns.setCall(a); t.fns.voiceRouteReadyMake(a);
+  const b = makeVc({ startedAt: Date.now() });
+  t.fns.voiceCallOnRoute(a, { deviceId: 'spk', label: 'Speakerphone' });
+  t.fns.setCall(b); t.fns.voiceRouteReadyMake(b);   // a new call began before A's renewal finished
+  await flush(40);
+  assert.strictEqual(b.routeDone, false, 'B is untouched by A\'s renewal');
+  assert.strictEqual(a.routeDone, true);
 });
 
 test('r2 B: the first renewal finishing (success, not applicable) or the call ending settles routeReady; a deferred one keeps it waiting', async () => {
@@ -443,4 +467,63 @@ test('r2 B: voiceCallStart makes the call\'s routeReady and the teardown settles
   const start = sliceBetween('function voiceCallStart()', 'function voiceCallWire()');
   assert.match(start, /voiceRouteReadyMake\(vc\)/);
   assert.match(sliceBetween('function voiceCallTeardown(vc)', 'function voiceCallRelease'), /voiceRouteDone\(vc\)/);
+});
+
+test('r3 FU2: voiceStopPlayback settles a voicePlayBlob that waits for the route at once, and the wait\'s cancel is cleared', async () => {
+  assert.match(sliceBetween('function voiceStopPlayback()', 'const voicePre'), /voicePlay\.cancelWait/);
+  const src = sliceBetween('function voicePlayBlob(blob, my, meta)', '// report (optional)');
+  const log = { play: 0 };
+  const voicePlay = { token: 1, audio: null, url: null, cancel: null };
+  class Audio { play() { log.play++; return Promise.resolve(); } }
+  const call = { id: 1 };
+  const never = new Promise(() => {});
+  const fn = new Function('voicePlay', 'Audio', 'URL', 'voiceCall', 'voiceRouteWait', 'voiceDispPagePrep', 'voiceDisplayRoute', 'voiceDisplayHook', 'voiceNoteNormalized',
+    src + '\nreturn voicePlayBlob;')(voicePlay, Audio, { createObjectURL: () => 'blob:x', revokeObjectURL() {} }, call, () => never, undefined, undefined, undefined, undefined);
+  let result = 'pending'; fn({ size: 3 }, 1, null).then((v) => { result = v; });
+  await flush(); assert.strictEqual(result, 'pending', 'waiting');
+  assert.strictEqual(typeof voicePlay.cancelWait, 'function', 'a cancel is kept for the wait');
+  voicePlay.cancelWait();   // what voiceStopPlayback does
+  await flush(); assert.strictEqual(result, false, 'settled at once without the wait ending');
+  assert.strictEqual(voicePlay.cancelWait, null, 'cleared'); assert.strictEqual(log.play, 0);
+});
+
+test('r3 FU2: a normal end of the wait clears the wait\'s cancel', async () => {
+  const src = sliceBetween('function voicePlayBlob(blob, my, meta)', '// report (optional)');
+  const voicePlay = { token: 1, audio: null, url: null, cancel: null };
+  class Audio { play() { return Promise.resolve(); } }
+  let release; const gate = new Promise((r) => { release = r; });
+  const call = { id: 1 };
+  const fn = new Function('voicePlay', 'Audio', 'URL', 'voiceCall', 'voiceRouteWait', 'voiceDispPagePrep', 'voiceDisplayRoute', 'voiceDisplayHook', 'voiceNoteNormalized',
+    src + '\nreturn voicePlayBlob;')(voicePlay, Audio, { createObjectURL: () => 'blob:x', revokeObjectURL() {} }, call, () => gate, undefined, undefined, undefined, undefined);
+  const p = fn({ size: 3 }, 1, null); await flush();
+  assert.strictEqual(typeof voicePlay.cancelWait, 'function');
+  release(); await flush();
+  assert.ok(!voicePlay.cancelWait, 'cleared when the wait ended');
+  voicePlay.cancel && voicePlay.cancel(); await p;
+});
+
+test('r3 FU3: after the wait, a call that is no longer the one that was current when the wait began plays nothing', async () => {
+  const src = sliceBetween('function voicePlayBlob(blob, my, meta)', '// report (optional)');
+  const run = async (endCall) => {
+    const log = { play: 0 };
+    const voicePlay = { token: 1, audio: null, url: null, cancel: null };
+    class Audio { play() { log.play++; return Promise.resolve(); } }
+    let release; const gate = new Promise((r) => { release = r; });
+    // voiceCall is a variable of the page: here a holder the function reads through a getter-like closure
+    const holder = { v: { id: 'A' } };
+    const fn = new Function('voicePlay', 'Audio', 'URL', 'H', 'voiceRouteWait', 'voiceDispPagePrep', 'voiceDisplayRoute', 'voiceDisplayHook', 'voiceNoteNormalized',
+      'let voiceCall = H.v; H.set = (x) => { voiceCall = x; };\n' + src + '\nreturn voicePlayBlob;')(voicePlay, Audio, { createObjectURL: () => 'blob:x', revokeObjectURL() {} }, holder, () => gate, undefined, undefined, undefined, undefined);
+    const p = fn({ size: 3 }, 1, null); await flush();
+    endCall(holder);
+    release(); await flush();
+    const r = await Promise.race([p, new Promise((x) => setTimeout(() => x('pending'), 20))]);
+    if (voicePlay.cancel) voicePlay.cancel();
+    return { r, plays: log.play };
+  };
+  const ended = await run((h) => h.set(null));
+  assert.strictEqual(ended.r, false); assert.strictEqual(ended.plays, 0, 'the call ended during the wait');
+  const other = await run((h) => h.set({ id: 'B' }));
+  assert.strictEqual(other.r, false); assert.strictEqual(other.plays, 0, 'another call began during the wait');
+  const same = await run(() => {});
+  assert.strictEqual(same.plays, 1, 'the same call: it plays');
 });

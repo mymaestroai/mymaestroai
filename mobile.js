@@ -4341,12 +4341,18 @@ async function voiceOpenMicStream(nav, o) {
   } catch (first) {
     if (refusal(first)) throw first;
     if (dev) {
+      // Step 3: the device alone uses the browser's default processing for an unprocessed call too, like the plain { audio: true } fallback.
       try { return { stream: await md.getUserMedia({ audio: { deviceId: { exact: dev } } }), fallback: true, deviceFallback: false }; } catch (e2) { if (refusal(e2)) throw e2; }
       try {
         const r = await voiceOpenMicStream(nav, { unprocessed: !on });
         r.deviceFallback = true;
         return r;
-      } catch (e3) { if (refusal(e3)) throw e3; throw first; }
+      } catch (e3) {
+        // A device-lookup error means the chosen device is gone: report the first error. Any other (the default microphone is busy, say) is the news.
+        const n3 = e3 && e3.name;
+        if (refusal(e3) || !(n3 === 'OverconstrainedError' || n3 === 'NotFoundError')) throw e3;
+        throw first;
+      }
     }
     try { return { stream: await md.getUserMedia({ audio: true }), fallback: true }; } catch { throw first; }
   }
@@ -8337,6 +8343,7 @@ function voiceStopPlayback() {
   if (typeof voicePrefetchClear === 'function') voicePrefetchClear();   // audio fetched ahead for a line that will not play now
   if (typeof voiceDisplayHook === 'function') { voiceDisplayHook('audioStop'); voiceDisplayHook('clearCaption'); }   // the beak closes at once
   try { if (voicePlay.audio) { voicePlay.audio.pause(); voicePlay.audio.onended = null; voicePlay.audio.onerror = null; } } catch { /* nothing playing */ }
+  if (voicePlay.cancelWait) { const w = voicePlay.cancelWait; voicePlay.cancelWait = null; w(); }   // a sentence waiting for the call's first route settles at once
   if (voicePlay.cancel) { const c = voicePlay.cancel; voicePlay.cancel = null; c(); }   // settles the waiting voicePlayBlob (not played to the end) and frees its blob URL
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch { /* no device voice */ }
   if (voicePlay.el) { voicePlay.el.classList.remove('speaking'); const s = voicePlay.el.querySelector('.speak'); if (s) s.textContent = '\u{1F50A}'; voicePlay.el = null; }
@@ -8438,14 +8445,26 @@ function voicePlayBlob(blob, my, meta) {
     if (p && typeof p.then === 'function') p.then(() => { applyNorm(); recordCopy(); }, () => done(false));
     else { applyNorm(); recordCopy(); }   // old browsers: play() is not a promise
     };
-    // On Android the first sentences of a call wait (at most 2500 ms from the call's start) for the call's first route; then the display's context is prepared.
+    // On Android the first sentences of a call wait (at most 2500 ms from the first sentence that waited) for the call's first route; then the display's context is prepared.
     const go = () => {
       if (my !== voicePlay.token) { resolve(false); return; }
       const wait = typeof voiceDispPagePrep === 'function' ? voiceDispPagePrep(my) : null;
       if (wait) wait.then(begin, begin); else begin();
     };
-    const rw = typeof voiceCall !== 'undefined' && voiceCall && typeof voiceRouteWait === 'function' ? voiceRouteWait(voiceCall) : null;
-    if (rw) rw.then(go, go); else go();
+    const vc0 = typeof voiceCall !== 'undefined' && voiceCall ? voiceCall : null;   // the call that was current when the wait began
+    const rw = vc0 && typeof voiceRouteWait === 'function' ? voiceRouteWait(vc0) : null;
+    if (rw) {
+      let over = false;
+      const cancelWait = () => { if (over) return; over = true; if (voicePlay.cancelWait === cancelWait) voicePlay.cancelWait = null; resolve(false); };   // voiceStopPlayback: settles at once
+      voicePlay.cancelWait = cancelWait;
+      const after = () => {
+        if (over) return;
+        over = true; if (voicePlay.cancelWait === cancelWait) voicePlay.cancelWait = null;
+        if (voiceCall !== vc0) { resolve(false); return; }   // the call that was waiting for its route is over (or another began): nothing plays
+        go();
+      };
+      rw.then(after, after);
+    } else go();
   });
 }
 // report (optional): report.spoke is set true only when every sentence ended normally (no speech engine, no offline voice, an
@@ -9023,9 +9042,9 @@ function voiceRenewApplies(vc) {   // only where Android's call routing applies:
   } catch { return false; }
 }
 // The call's first route (Android only): vc.routeReady settles when the first renewal of the outputs has finished (any way), or the call ends. Never on iOS.
-// The first sentences of a call wait for it (voicePlayBlob), at most 2500 ms from the call's start.
+// The first sentences of a call wait for it (voicePlayBlob), at most 2500 ms from the first sentence that waited (a slow start does not use the wait up).
 function voiceRouteReadyMake(vc) {
-  vc.routeDone = false; vc.routeResolve = null;
+  vc.routeDone = false; vc.routeResolve = null; vc.routeWaitFrom = 0;
   if (voiceIsIOS() || !voiceIsAndroidNav(navigator)) { vc.routeDone = true; vc.routeReady = Promise.resolve(); return; }
   vc.routeReady = new Promise((r) => { vc.routeResolve = r; });
 }
@@ -9038,10 +9057,11 @@ function voiceRouteDone(vc) {
 function voiceRouteSettle(vc) {   // the first route is ready once the renewal is not waiting to run again (success, failure, not applicable, given up)
   if (vc && !vc.renewPending && !vc.renewing) voiceRouteDone(vc);
 }
-function voiceRouteWait(vc) {   // null: play now; else a promise that ends when the route is ready or 2500 ms after the call started, whichever is first
+function voiceRouteWait(vc) {   // null: play now; else a promise that ends when the route is ready or 2500 ms after the first sentence that waited, whichever is first
   try {
     if (!vc || vc.routeDone || !vc.routeReady) return null;
-    const left = 2500 - (Date.now() - (vc.startedAt || Date.now()));
+    if (!vc.routeWaitFrom) vc.routeWaitFrom = Date.now();
+    const left = 2500 - (Date.now() - vc.routeWaitFrom);
     if (left <= 0) return null;
     return new Promise((res) => { const t = setTimeout(res, left); vc.routeReady.then(() => { clearTimeout(t); res(); }); });
   } catch { return null; }
