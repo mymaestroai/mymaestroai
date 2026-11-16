@@ -121,3 +121,14 @@ test('route: garbage fields do not throw', async () => {
   assert.strictEqual(lines[0], '[voice] route sam_assistant: mic "5" bluetooth=no listed=no chosen=no fellBack=no renewed=0 android=no inputs=');
   assert.strictEqual(lines[1], '[voice] route sam_assistant: mic "" bluetooth=no listed=no chosen=no fellBack=no renewed=0 android=no inputs=ok');
 });
+
+test('route: C1 controls, line and paragraph separators are removed, and a bar inside an input label becomes a slash', async () => {
+  const r = rig(); const id = await startCall(r);
+  const lines = await withLog(async () => {
+    await post(r.deps, '/api/voice/call', body(id, { label: 'A\u0085B\u2028C\u2029D\u009fE', inputs: ['Mic|One', 'Two\u0085x'] }));
+  });
+  assert.strictEqual(lines.length, 1);
+  assert.match(lines[0], /mic "ABCDE"/);
+  assert.strictEqual(lines[0].split('inputs=')[1], 'Mic/One|Twox');
+  assert.ok(!/[\u0080-\u009f\u2028\u2029]/.test(lines[0]));
+});

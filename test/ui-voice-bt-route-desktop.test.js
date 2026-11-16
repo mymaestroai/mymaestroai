@@ -31,11 +31,11 @@ function makeRoute(o = {}) {
   const voicePlay = { token: 0, ctx: new Ctx(), source: null, btn: null, busy: 0 };
   const win = { AudioContext: o.noAC ? undefined : Ctx, speechSynthesis: { speaking: false } };
   const src = routeBlock().replace(/^[\s\S]*?(?=    function voiceMicChoiceId)/, '');
-  const make = new Function('voiceCallS', 'voicePlay', 'window', 'navigator', 'voiceIsIOSNav', 'voiceIsAndroidNav', 'voiceById', 'voiceMicLineText', 'hubToast', 'voiceLoudApply', 'voicePrefsNow', 'setTimeout', 'voiceCallApi', 'Date',
-    src + '\nreturn { voiceRenewApplies, voiceMicChoiceId, voiceRouteSuffix, voiceCallVadFor, voiceCallOnRoute, voiceCallOnMicChange, voiceCallSounding, voiceCallOutputsRenew, VOICE_ROUTE_PLAIN_LINE, voiceRouteReadyMake, voiceRouteDone, voiceRouteSettle, voiceRouteWait, voiceRouteReport };');
+  const make = new Function('voiceCallS', 'voicePlay', 'window', 'navigator', 'voiceIsIOSNav', 'voiceIsAndroidNav', 'voiceById', 'voiceMicLineText', 'hubToast', 'voiceLoudApply', 'voicePrefsNow', 'setTimeout', 'voiceCallApi', 'Date', 'clearTimeout',
+    src + '\nreturn { voiceRenewApplies, voiceMicChoiceId, voiceRouteSuffix, voiceCallVadFor, voiceCallOnRoute, voiceCallOnMicChange, voiceCallSounding, voiceCallOutputsRenew, VOICE_ROUTE_PLAIN_LINE, voiceRouteReadyMake, voiceRouteDone, voiceRouteSettle, voiceRouteWait, voiceRouteReport, voiceRouteReportFirst };');
   const api = make(S, voicePlay, win, { userAgent: o.android === false ? 'Mozilla/5.0 (X11; Linux x86_64)' : 'Mozilla/5.0 (Linux; Android 14; Pixel Fold)' }, () => !!o.ios, require('../lib/ui-voice').voiceIsAndroidNav, () => bar, (i) => 'Microphone: ' + (i.label || 'default'), (t, ms) => log.toasts.push([t, ms]),
-    () => { log.loud++; }, () => ({ micDevice: o.choice || undefined }), (f, ms) => { log.timeouts.push({ f, ms }); return o.holdTimers ? 0 : setTimeout(f, ms); },
-    (url, body) => { log.posts.push({ url, body }); return o.postFails ? Promise.reject(new Error('offline')) : Promise.resolve({ ok: true }); }, o.Date || Date);
+    () => { log.loud++; }, () => ({ micDevice: o.choice || undefined }), (f, ms) => { log.timeouts.push({ f, ms }); return o.holdTimers ? (o.ids ? log.timeouts.length : 0) : setTimeout(f, ms); },
+    (url, body) => { log.posts.push({ url, body }); return o.postFails ? Promise.reject(new Error('offline')) : Promise.resolve({ ok: true }); }, o.Date || Date, (id) => { (log.cleared = log.cleared || []).push(id); });
   return { api, S, voicePlay, win, log, bar, Ctx };
 }
 
@@ -496,5 +496,81 @@ test('route report: a failing POST or a failing device list does not throw; no c
   assert.deepStrictEqual(t.log.posts[0].body.route.inputs, []);
   const t2 = makeRoute({ S: RS({ call: { id: 'c' }, route: R1 }) });
   await t2.api.voiceRouteReport();
+  assert.strictEqual(t2.log.posts.length, 0);
+});
+
+// ── r5 fixes: the first report waits for the call id; a report dropped by the 2 s limit goes out once at the end of the window; a changed call sends nothing ──
+test('r5 first report: the route settles before the call has its id: nothing is posted, the flag stays clear, a 1 s retry sends it once the id arrives', async () => {
+  const t = makeRoute({ holdTimers: true, ids: true, S: RS({ call: { id: 'c' }, callStartedAt: Date.now() - 2000 }) }); t.api.voiceRouteReadyMake();
+  t.api.voiceCallOnRoute(t.S.vad, R1);
+  await wait(40);
+  assert.strictEqual(t.S.routeDone, true);
+  assert.strictEqual(t.log.posts.length, 0);
+  assert.ok(!t.S.routeFirstSent, 'the first report is not used up');
+  assert.ok(t.S.routeFirstTimer, 'a retry is waiting');
+  const retry = t.log.timeouts[t.S.routeFirstTimer - 1];
+  assert.strictEqual(retry.ms, 1000);
+  t.S.call.callId = 'call-1';
+  retry.f(); await wait(40);
+  assert.strictEqual(t.log.posts.length, 1);
+  assert.strictEqual(t.log.posts[0].body.callId, 'call-1');
+  assert.strictEqual(t.S.routeFirstSent, true);
+  t.api.voiceRouteReportFirst(); await wait(20);
+  assert.strictEqual(t.log.posts.length, 1);
+});
+
+test('r5 first report: no retry once 30 s have passed since the call started', async () => {
+  const t = makeRoute({ holdTimers: true, ids: true, Date: { now: () => 100000 }, S: RS({ call: { id: 'c' }, callStartedAt: 100000 - 31000 }) }); t.api.voiceRouteReadyMake();
+  t.api.voiceCallOnRoute(t.S.vad, R1);
+  await wait(40);
+  assert.ok(!t.S.routeFirstTimer, 'no retry after 30 s');
+  const u = makeRoute({ holdTimers: true, ids: true, Date: { now: () => 100000 }, S: RS({ call: { id: 'c' }, callStartedAt: 100000 - 29000 }) }); u.api.voiceRouteReadyMake();
+  u.api.voiceCallOnRoute(u.S.vad, R1);
+  await wait(40);
+  assert.ok(u.S.routeFirstTimer, 'at 29 s it still retries');
+  assert.strictEqual(t.log.posts.length, 0);
+});
+
+test('r5 trailing report: a second report within 2 s goes out once at the end of the window with the latest route', async () => {
+  let now = 1000000;
+  const t = makeRoute({ holdTimers: true, ids: true, Date: { now: () => now }, S: RS() }); t.api.voiceRouteReadyMake();
+  t.api.voiceCallOnRoute(t.S.vad, R1);
+  await wait(40);
+  assert.strictEqual(t.log.posts.length, 1);
+  const before = t.log.timeouts.length;
+  now += 500; t.S.route = { ...R1, label: 'Phone mic', bluetooth: false };
+  await t.api.voiceRouteReport();
+  now += 300; t.S.route = { ...R1, label: 'Speaker', bluetooth: false };
+  await t.api.voiceRouteReport(); await wait(20);
+  assert.strictEqual(t.log.posts.length, 1);
+  assert.strictEqual(t.log.timeouts.length - before, 1, 'one trailing timer per call');
+  const tr = t.log.timeouts[t.log.timeouts.length - 1];
+  assert.strictEqual(tr.ms, 1505, 'the end of the window');
+  now += 1500; tr.f(); await wait(40);
+  assert.strictEqual(t.log.posts.length, 2, 'once, not twice');
+  assert.strictEqual(t.log.posts[1].body.route.label, 'Speaker');
+  assert.strictEqual(t.S.routeTrail, null);
+});
+
+test('r5 trailing report: the call ending cancels it', async () => {
+  assert.match(between('    function voiceCallTeardown() {', 'S.call = null; S.vad = null;'), /\['routeTrail', 'routeFirstTimer'\][^\n]*clearTimeout\(S\[k\]\)/);
+  let now = 1000000;
+  const t = makeRoute({ holdTimers: true, ids: true, Date: { now: () => now }, S: RS({ route: R1 }) });
+  await t.api.voiceRouteReport(); now += 100; await t.api.voiceRouteReport();
+  assert.ok(t.S.routeTrail);
+  t.S.call = null; now += 3000; t.log.timeouts[t.log.timeouts.length - 1].f(); await wait(20);
+  assert.strictEqual(t.log.posts.length, 1);
+});
+
+test('r5 report: a call change while the devices are listed sends nothing', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  const t = makeRoute({ S: RS({ vad: { routes: () => gate }, route: R1 }) });
+  const p = t.api.voiceRouteReport();
+  t.S.call = { id: 'd', callId: 'call-2' };
+  release({ inputs: [] }); await p; await wait(20);
+  assert.strictEqual(t.log.posts.length, 0);
+  const t2 = makeRoute({ S: RS({ vad: { routes: () => gate2() }, route: R1 }) });
+  function gate2() { return new Promise((r) => { setTimeout(() => { t2.S.route = null; r({ inputs: [] }); }, 5); }); }
+  await t2.api.voiceRouteReport(); await wait(20);
   assert.strictEqual(t2.log.posts.length, 0);
 });

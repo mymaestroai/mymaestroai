@@ -17,7 +17,7 @@ const ROUTE_SRC = () => sliceBetween('const VOICE_ROUTE_TOAST', 'function voiceT
 
 function env(over) {
   const o = over || {};
-  const log = [], timers = [], posts = [];
+  const log = [], timers = [], posts = [], cleared = [];
   class AC { constructor() { this.state = o.wake === false ? 'suspended' : 'running'; AC.made.push(this); } resume() { return Promise.resolve(); } close() { this.closed = true; log.push('closed'); return Promise.resolve(); } }
   AC.made = [];
   const e = {
@@ -30,7 +30,7 @@ function env(over) {
     voiceDispRoutesLost: () => log.push('routesLost'),
     voiceOwnCtx: () => null,
     setTimeout: (f, ms) => { timers.push({ f, ms }); return timers.length; },
-    clearTimeout() {},
+    clearTimeout: (id) => { cleared.push(id); },
     toast: (t, ms) => log.push('toast:' + ms + ':' + t),
     $: (id) => (o.els || {})[id] || null,
     Date: o.Date || Date,
@@ -39,9 +39,9 @@ function env(over) {
   };
   const names = Object.keys(e).filter((n) => n !== 'voiceCall');
   const prefsNow = o.prefsNow || (() => ({}));
-  const body = 'let voiceCall = null;\nconst voicePrefsNow = __p;\n' + ROUTE_SRC() + '\nreturn { voiceCallOutputsRenew, voiceCallOnRoute, voiceCallOnMicChange, voiceMicChoiceId, voiceMicLine, voiceRouteReadyMake, voiceRouteDone, voiceRouteWait, voiceRouteSettle, voiceRouteReport, setCall: (c) => { voiceCall = c; } };';
+  const body = 'let voiceCall = null;\nconst voicePrefsNow = __p;\n' + ROUTE_SRC() + '\nreturn { voiceCallOutputsRenew, voiceCallOnRoute, voiceCallOnMicChange, voiceMicChoiceId, voiceMicLine, voiceRouteReadyMake, voiceRouteDone, voiceRouteWait, voiceRouteSettle, voiceRouteReport, voiceRouteReportFirst, setCall: (c) => { voiceCall = c; } };';
   const fns = new Function(...names, '__p', body)(...names.map((n) => e[n]), prefsNow);
-  return { fns, log, timers, AC, e, posts };
+  return { fns, log, timers, AC, e, posts, cleared };
 }
 const makeVc = (extra) => Object.assign({ thinkCtx: { closed: false, close() { this.closed = true; return Promise.resolve(); }, state: 'running' }, thinkSnd: null, keepAlive: null }, extra || {});
 
@@ -587,4 +587,75 @@ test('route report: a failing POST or a failing device list does not throw; no c
   await t2.fns.voiceRouteReport(vc2);
   assert.strictEqual(t2.posts.length, 0);
   await t2.fns.voiceRouteReport(null);
+});
+
+// ── r5 fixes: the first report waits for the call id; a report dropped by the 2 s limit goes out once at the end of the window; a changed call sends nothing ──
+test('r5 first report: the route settles before the call has its id: nothing is posted and the flag stays clear; once the id arrives the beat sends it once', async () => {
+  const t = env(); const vc = routeVc({ call: {} }); t.fns.setCall(vc); t.fns.voiceRouteReadyMake(vc);
+  t.fns.voiceCallOnRoute(vc, R1);
+  await flush(60);
+  assert.strictEqual(vc.routeDone, true);
+  assert.strictEqual(t.posts.length, 0);
+  assert.ok(!vc.routeFirstSent, 'the first report is not used up');
+  t.fns.voiceRouteReportFirst(vc);   // the beat, still no id
+  await flush(40);
+  assert.strictEqual(t.posts.length, 0); assert.ok(!vc.routeFirstSent);
+  vc.call.callId = 'call-1';
+  t.fns.voiceRouteReportFirst(vc);   // the beat once the start answer arrived
+  await flush(60);
+  assert.strictEqual(t.posts.length, 1);
+  assert.strictEqual(t.posts[0].body.callId, 'call-1');
+  assert.strictEqual(vc.routeFirstSent, true);
+  t.fns.voiceRouteReportFirst(vc); await flush(40);
+  assert.strictEqual(t.posts.length, 1);
+});
+
+test('r5 first report: the beat retries it until sent, for at most 30 s after the call started', () => {
+  const beat = sliceBetween('function voiceCallBeat()', 'function voiceCallRelease(');
+  assert.match(beat, /vc\.routeSeen && vc\.routeDone && !vc\.routeFirstSent && now - \(vc\.startedAt \|\| now\) <= 30000\) voiceRouteReportFirst\(vc\)/);
+});
+
+test('r5 trailing report: a second report within 2 s goes out once at the end of the window with the latest route; a newer one does not add a timer', async () => {
+  let now = 1000000;
+  const t = env({ Date: { now: () => now } }); const vc = routeVc(); t.fns.setCall(vc); t.fns.voiceRouteReadyMake(vc);
+  t.fns.voiceCallOnRoute(vc, R1);
+  await flush(60);
+  assert.strictEqual(t.posts.length, 1);
+  const before = t.timers.length;
+  now += 500; vc.route = { ...R1, label: 'Phone mic', bluetooth: false };
+  await t.fns.voiceRouteReport(vc);
+  now += 300; vc.route = { ...R1, label: 'Speaker', bluetooth: false };
+  await t.fns.voiceRouteReport(vc);
+  await flush(40);
+  assert.strictEqual(t.posts.length, 1, 'nothing inside the window');
+  assert.strictEqual(t.timers.length - before, 1, 'one trailing timer per call');
+  const tr = t.timers[t.timers.length - 1];
+  assert.strictEqual(tr.ms, 1505, 'the end of the window');
+  now += 1500; tr.f();
+  await flush(60);
+  assert.strictEqual(t.posts.length, 2, 'once, not twice');
+  assert.strictEqual(t.posts[1].body.route.label, 'Speaker');
+  assert.strictEqual(vc.routeTrail, null);
+});
+
+test('r5 trailing report: the call ending cancels it', async () => {
+  assert.match(sliceBetween('function voiceCallTeardown(vc)', 'function voiceCallRelease'), /clearTimeout\(vc\.routeTrail\)/);
+  let now = 1000000;
+  const t = env({ Date: { now: () => now } }); const vc = routeVc(); t.fns.setCall(vc); vc.route = R1;
+  await t.fns.voiceRouteReport(vc); now += 100; await t.fns.voiceRouteReport(vc);
+  assert.ok(vc.routeTrail);
+  t.fns.setCall(null); now += 3000; t.timers[t.timers.length - 1].f(); await flush(40);   // it fires after the call is gone
+  assert.strictEqual(t.posts.length, 1);
+});
+
+test('r5 report: a call change while the devices are listed sends nothing', async () => {
+  const t = env(); let release; const gate = new Promise((r) => { release = r; });
+  const vc = routeVc({ vad: { routes: () => gate } }); t.fns.setCall(vc); vc.route = R1;
+  const p = t.fns.voiceRouteReport(vc);
+  t.fns.setCall(makeVc({ agent: 'sam', call: { callId: 'call-2' } }));
+  release({ inputs: [] }); await p; await flush(20);
+  assert.strictEqual(t.posts.length, 0);
+  const t2 = env(); let rel2; const vc2 = routeVc({ vad: { routes: () => new Promise((r) => { rel2 = r; }) } }); t2.fns.setCall(vc2); vc2.route = R1;
+  const p2 = t2.fns.voiceRouteReport(vc2); vc2.call = { callId: 'call-3' }; rel2({ inputs: [] }); await p2; await flush(20);
+  assert.strictEqual(t2.posts.length, 0);
 });

@@ -8823,6 +8823,7 @@ function voiceCallTeardown(vc) {
   const lock = vc.wake; vc.wake = null;
   try { if (lock) Promise.resolve(lock.release()).catch(() => {}); } catch { /* already released */ }
   clearInterval(vc.beatTimer); vc.beatTimer = null;
+  if (vc.routeTrail) { clearTimeout(vc.routeTrail); vc.routeTrail = null; }
   if (vc.link) { try { vc.link.stop(); } catch { /* gone */ } vc.link = null; }
   try { if (vc.vad && typeof vc.vad.stop === 'function') Promise.resolve(vc.vad.stop()).catch(() => {}); } catch { /* the mic is never left held: stop() is safe to repeat */ }
   voiceMediaSession(vc, false);
@@ -9069,26 +9070,32 @@ function voiceRouteWait(vc) {   // null: play now; else a promise that ends when
 }
 // The route report: names and flags only, never audio. The hub logs one line, so a car call that went wrong shows which device the browser picked.
 // Once after the first route settles, again after a later renewal that moved the outputs; never twice within 2 s from this page. Never throws.
-async function voiceRouteReport(vc) {
+async function voiceRouteReport(vc, trailing) {
   try {
     if (!vc || voiceCall !== vc || !vc.route) return;
     const now = Date.now();
-    if (vc.routeReportAt && now - vc.routeReportAt < 2000) return;
+    if (!trailing && vc.routeReportAt && now - vc.routeReportAt < 2000) {   // dropped by the limit: one trailing report at the end of the window carries the latest route
+      if (!vc.routeTrail) vc.routeTrail = setTimeout(() => { vc.routeTrail = null; voiceRouteReport(vc, true); }, Math.max(1, 2000 - (now - vc.routeReportAt)) + 5);
+      return;
+    }
     const callId = vc.call && vc.call.callId;
     if (!callId) return;
     vc.routeReportAt = now;
+    if (vc.routeTrail) { clearTimeout(vc.routeTrail); vc.routeTrail = null; }
     let inputs = [];
     try {
       const rt = await vc.vad.routes();
       inputs = Array.from((rt && rt.inputs) || []).filter((d) => d && !d.pseudo).map((d) => String(d.label || '')).slice(0, 8);
     } catch { inputs = []; }
+    if (voiceCall !== vc || !vc.route || !vc.call || vc.call.callId !== callId) return;   // the call changed while the devices were listed
     const r = vc.route;
     const p = voiceCallPost('/api/voice/call', { agent: vc.agent, callId, action: 'route', route: { label: String(r.label || ''), bluetooth: r.bluetooth === true, bluetoothListed: r.bluetoothListed === true, chosen: !!r.chosen, fellBack: r.fellBack === true, renewed: vc.outputsRenewed || 0, android: voiceIsAndroidNav(navigator), inputs } });
     Promise.resolve(p).catch(() => {});
   } catch { /* a report is a courtesy */ }
 }
-function voiceRouteReportFirst(vc) {   // once per call, when the first route is ready (renewed, not applicable or given up)
+function voiceRouteReportFirst(vc) {   // once per call, when the first route is ready (renewed, not applicable or given up) and the call has its id; the beat tries again until then (30 s)
   if (!vc || !vc.routeSeen || !vc.routeDone || vc.routeFirstSent) return;
+  if (!(vc.call && vc.call.callId)) return;
   vc.routeFirstSent = true;
   voiceRouteReport(vc);
 }
@@ -9832,6 +9839,7 @@ function voiceCallBeat() {   // once a second while a call is up: a gap of 10 s 
   vc.lastTick = now;
   if (vc.renewPending) voiceCallOutputsRenew(vc);   // the outputs are made again as soon as no sentence plays
   if (vc.routeSeen) voiceRouteSettle(vc);
+  if (vc.routeSeen && vc.routeDone && !vc.routeFirstSent && now - (vc.startedAt || now) <= 30000) voiceRouteReportFirst(vc);   // the route settled before the call had its id
 }
 // Immediate hang-up without waiting for the hub: everything is let go and the person is told when they are back.
 function voiceCallRelease(reason) {
