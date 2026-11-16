@@ -14,7 +14,7 @@ const settle = () => new Promise((res) => setImmediate(res));
 
 // Reload stays right after About (test/ui-reload-desktop.test.js pins that); the two new items follow it.
 test('index.html: ⋯ menu has Data connectors (→ /modules) right after About and Reload, then Remote computers hidden by default', () => {
-  assert.match(index, /id="about-btn"[^>]*>[^<]*About My Maestro AI<\/button>\s*<button id="reload-app-item"[^>]*>↻ Reload<\/button>\s*<button id="more-modules-item" class="more-item" role="menuitem"[^>]*onclick="closeMoreMenu\(\); location\.href = '\/modules'">🔌 Data connectors<\/button>\s*<button id="more-remote-item" class="more-item" role="menuitem"[^>]*style="display:none"[^>]*onclick="closeMoreMenu\(\); location\.href = '\/modules#remote-computers'">🖥 Remote computers<\/button>/);
+  assert.match(index, /id="about-btn"[^>]*>[^<]*About My Maestro AI<\/button>\s*<button id="reload-app-item"[^>]*>↻ Reload<\/button>\s*<button id="more-modules-item" class="more-item" role="menuitem"[^>]*onclick="closeMoreMenu\(\); location\.href = '\/modules'">🔌 Data connectors<\/button>\s*<button id="more-remote-item" class="more-item" role="menuitem"[^>]*style="display:none"[^>]*onclick="closeMoreMenu\(\); location\.href = '\/modules#remote-computers'">💻 Remote computers<\/button>/);
 });
 
 test('index.html: the account menu has Remote computers right after Data connectors, hidden by default', () => {
@@ -66,14 +66,14 @@ test('app.js: applyMemberView hides the two new ⋯ items', () => {
 });
 
 test('app.js: Settings has the Go to line for admins (Data connectors always, Remote computers when the check passed); the old section stays', () => {
-  assert.match(app, /window\.hubMe && window\.hubMe\.isAdmin \? `<div id="st-quick-links"[^`]*Go to: <a href="\/modules"[^>]*>🔌 Data connectors<\/a><a href="\/modules#remote-computers" id="st-remote-link"[^>]*display:\$\{remoteComputersOk === true \? '' : 'none'\}[^>]*>🖥 Remote computers<\/a><\/div>` : ''\)\s*\+ ST_GROUPS\.map/);
+  assert.match(app, /window\.hubMe && window\.hubMe\.isAdmin \? `<div id="st-quick-links"[^`]*Go to: <a href="\/modules"[^>]*>🔌 Data connectors<\/a><a href="\/modules#remote-computers" id="st-remote-link"[^>]*display:\$\{remoteComputersOk === true \? '' : 'none'\}[^>]*>💻 Remote computers<\/a><\/div>` : ''\)\s*\+ ST_GROUPS\.map/);
   assert.ok(app.indexOf('st-quick-links') < app.indexOf('ST_GROUPS.map(g =>'), 'above the groups');
   assert.match(app, /id="st-connectors-link"/);
   assert.ok(/Data connectors/.test(app.slice(app.indexOf('ST_GROUPS = ['))), 'the Tools and data section is still there');
 });
 
 test('mobile.html: menu-remote follows menu-connectors, hidden by default, no variation selector', () => {
-  assert.ok(mobileHtml.includes('<a id="menu-connectors" href="/modules" hidden>&#x1F50C; Data connectors</a>\n    <a id="menu-remote" href="/modules#remote-computers" hidden>&#x1F5A5; Remote computers</a>'));
+  assert.ok(mobileHtml.includes('<a id="menu-connectors" href="/modules" hidden>&#x1F50C; Data connectors</a>\n    <a id="menu-remote" href="/modules#remote-computers" hidden>&#x1F4BB; Remote computers</a>'));
   assert.ok(!/menu-remote[^\n]*&#xFE0F;/.test(mobileHtml));
 });
 

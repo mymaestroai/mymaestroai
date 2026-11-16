@@ -579,3 +579,27 @@ test('modules.html: a pageshow listener with persisted calls loadDesktopBox', as
   await settle();
   assert.equal(calls.filter(c => c === '/api/remote-desktop').length, before + 1, 'persisted reloads the computers');
 });
+
+// Review r1 (Sentinel): when Back's End fails, hangs or is refused, the page says Leave before going, because a history step may keep it in
+// the back/forward cache where pagehide sends nothing; a confirmed End sends no Leave. While Back is ending the session, no Reconnect.
+test('remote-desktop.html: Back sends Leave when End fails, is refused or hangs; not when End succeeds; no Reconnect while leaving', async () => {
+  const ok = beaconRig();
+  const a = runViewer(LIVE, { navigator: ok.navigator });
+  a.els.back.listeners.click[0](); await settle();
+  assert.equal(ok.beacons.length, 0, 'End confirmed: no Leave');
+  for (const [label, fetchImpl] of [['network error', () => Promise.reject(new Error('offline'))], ['refused 500', () => Promise.resolve({ ok: false, status: 500 })]]) {
+    const rig = beaconRig();
+    const r = runViewer(LIVE, { navigator: rig.navigator, fetch: fetchImpl });
+    r.els.back.listeners.click[0](); await settle();
+    assert.equal(rig.beacons.length, 1, label);
+    assert.match(rig.beacons[0][0], /^\/api\/remote-desktop\/s\/leave\?viewer=/, label);
+    assert.deepEqual(r.nav.replaced, [REMOTE], label);
+  }
+  const hang = beaconRig();
+  const h = runViewer(LIVE, { navigator: hang.navigator, fetch: () => new Promise(() => {}) });
+  h.els.back.listeners.click[0]();
+  h.log.desktop.onStateChanged(h.log.desktop, 0);
+  assert.notEqual(h.els.reconnect.style.display, '', 'no Reconnect while Back is ending the session');
+  h.timeouts.find(x => x.ms === 3000).f();
+  assert.equal(hang.beacons.length, 1, 'hung End: Leave');
+});

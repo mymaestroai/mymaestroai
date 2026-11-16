@@ -163,7 +163,7 @@ var rdNav = (function () {
   if (window.ResizeObserver) new window.ResizeObserver(function () { if (scroller.style.top !== bar.offsetHeight + 'px') layout(); }).observe(bar);
 
   function setState(text) { $('state').textContent = text; }
-  function showReconnect() { $('reconnect').style.display = live ? '' : 'none'; }
+  function showReconnect() { $('reconnect').style.display = live && !leaving ? '' : 'none'; }   // not while Back is ending the session
 
   function stop(why) {
     if (!live) return;
@@ -213,15 +213,17 @@ var rdNav = (function () {
     if (returnTimer) { clearInterval(returnTimer); returnTimer = null; }
     $('ended-count').style.display = 'none'; $('ended-stay').style.display = 'none';
   });
-  // Back while the session is live: end it (3 s at most), then go; a failed or hung End is covered by the leave beacon's grace.
+  // Back while the session is live: end it (3 s at most), then go. A failed or hung End says Leave first: the history step may keep this
+  // page in the back/forward cache, where pagehide sends nothing, and the computer must not stay locked for the hub's no-connection minute.
+  var leaving = false;
   $('back').addEventListener('click', function () {
     if (!sessionLive()) { goBack(REMOTE_URL); return; }
-    var b = $('back'); b.disabled = true;
+    var b = $('back'); b.disabled = true; leaving = true;
     var gone = false, ctl = null, t = null;
-    var go = function () { if (gone) return; gone = true; if (t) clearTimeout(t); leaveSent = true; goBack(REMOTE_URL); };   // ended here: a Forward from the cache reloads, never reconnects
+    var go = function (ok) { if (gone) return; gone = true; if (t) clearTimeout(t); if (!ok) sendLeave(); leaveSent = true; goBack(REMOTE_URL); };   // a Forward from the cache reloads, never reconnects
     try { if (typeof AbortController !== 'undefined') ctl = new AbortController(); } catch (x) { ctl = null; }
-    t = setTimeout(function () { try { if (ctl) ctl.abort(); } catch (x) {} go(); }, 3000);
-    try { fetch(boot.endUrl, ctl ? { method: 'POST', credentials: 'include', signal: ctl.signal } : { method: 'POST', credentials: 'include' }).then(go, go); } catch (x) { go(); }
+    t = setTimeout(function () { try { if (ctl) ctl.abort(); } catch (x) {} go(false); }, 3000);
+    try { fetch(boot.endUrl, ctl ? { method: 'POST', credentials: 'include', signal: ctl.signal } : { method: 'POST', credentials: 'include' }).then(function (r) { go(!!(r && r.ok)); }, function () { go(false); }); } catch (x) { go(false); }
   });
 
   function countdown() {
@@ -356,8 +358,7 @@ var rdNav = (function () {
   // the 30 minutes (the hub ends the session 10 s after the last connection closes); the hub also ends a session that has had no connection for a minute. An app switch (visibilitychange) never ends it.
   function sessionLive() { return live && Number(boot.until) > Date.now(); }
   var leaveSent = false;
-  window.addEventListener('pagehide', function (e) {
-    if ((e && e.persisted === true) || !sessionLive()) return;   // back/forward cache: the page may return, the hub's grace covers it
+  function sendLeave() {
     // "Leave", not End: a reload or a second viewer of the same session must not cut it; the hub ends it after a short grace if nobody returns.
     var leaveUrl = boot.leaveUrl || String(boot.endUrl || '').replace(/\/end$/, '/leave');
     leaveUrl += '?viewer=' + viewerId;
@@ -365,6 +366,10 @@ var rdNav = (function () {
     var sent = false;
     try { if (typeof navigator !== 'undefined' && navigator.sendBeacon) sent = !!navigator.sendBeacon(leaveUrl); } catch (x) { sent = false; }
     if (!sent) { try { fetch(leaveUrl, { method: 'POST', credentials: 'include', keepalive: true }).then(function () {}, function () {}); } catch (x) {} }
+  }
+  window.addEventListener('pagehide', function (e) {
+    if ((e && e.persisted === true) || !sessionLive()) return;   // back/forward cache: the page may return, the hub's grace covers it
+    sendLeave();
   });
   // Back on the page (or restored from the cache) with the connection gone: connect again while the hub still keeps the session.
   // At most 2 automatic restarts in 10 s (a session that has ended fails at once): after that the Reconnect button is the way.

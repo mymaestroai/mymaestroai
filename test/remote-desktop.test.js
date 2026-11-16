@@ -1097,6 +1097,7 @@ const NOSNIFF_HTML = (x) => {
   assert.match(x.res.headers['Content-Type'], /^text\/html; charset=utf-8$/);
   assert.strictEqual(x.res.headers['Cache-Control'], 'no-store');
   assert.strictEqual(x.res.headers['X-Content-Type-Options'], 'nosniff');
+  assert.strictEqual(x.res.headers['Content-Security-Policy'], "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'", 'review r1: no framing, nothing loads');
   assert.ok(x.res.body.includes('href="/modules#remote-computers"') && x.res.body.includes('>Back to Remote computers<'), 'link to Remote computers');
   assert.ok(x.res.body.includes('href="/"') && x.res.body.includes('>Back to chat<'), 'link to chat');
   assert.ok(x.res.body.includes('Open the computer again from Remote computers.'));
