@@ -776,9 +776,9 @@ test('r2-1 controller: a confirmed refusal (409) is put back and sent once at th
   assert.strictEqual(h.sent.length, 2);
 });
 
-test('r2-1 pages: the call send rejects with refused: true for a 409 and another non-2xx, not for a network failure (desktop source and phone sendMessage)', async () => {
+test('r2-1 pages: the call send rejects with refused: true for a 409 only, not for another non-2xx or a network failure (desktop source and phone sendMessage)', async () => {
   assert.ok(app.includes("notify(Object.assign(new Error('busy'), { refused: true }))"));
-  assert.ok(app.includes('`HTTP ${response.status}: ${response.statusText}`), { refused: true })'));
+  assert.ok(!app.includes('`HTTP ${response.status}: ${response.statusText}`), { refused: true })'), 'r3: only a 409 is a refusal');
   assert.ok(mob.includes("notify(Object.assign(new Error('busy'), { refused: true }))"));
   let status = 409, boom = null;
   const base = { current: 'bob', plusSheetShow() {}, toast() {}, displayName: (n) => n, isBusy: () => false, ownTurnFor: () => false, streams: new Map(), reattaches: new Map(), live: {}, recentOwn: new Map(), pendingImages: [],
@@ -787,8 +787,11 @@ test('r2-1 pages: the call send rejects with refused: true for a 409 and another
   const g = scoped(mob, 'async function sendMessage(fallback) {', '// ── Re-attach after a lost connection', base, 'sendMessage');
   const errOf = async () => { let err = null; await g.sendMessage({ agent: 'bob', text: 'hi', userEl: null, noteEl: null, voice: true, onSendResult: (e) => { err = e; } }); return err; };
   assert.strictEqual((await errOf()).refused, true, '409');
-  status = 500;
-  assert.strictEqual((await errOf()).refused, true, 'another non-2xx');
+  for (const s of [500, 502, 503, 504]) {   // r3: a 5xx may have been taken by the hub: uncertain, never a refusal
+    status = s;
+    const e5 = await errOf();
+    assert.ok(e5 && e5.refused !== true, 'HTTP ' + s + ' is an uncertain delivery');
+  }
   status = 200; boom = new TypeError('Failed to fetch');
   const net = await errOf();
   assert.ok(net && net.refused !== true, 'a network failure is uncertain');
@@ -945,4 +948,114 @@ test('r2-6 desktop: kept words with the chat or its input gone are shown in a to
   f.voiceCallKeepWords('c1', 'in the box', NOT_SURE);
   assert.strictEqual(input.value, 'in the box');
   assert.strictEqual(toasts[2], NOT_SURE);
+});
+
+// ═══ review round 3 fixes ═══
+// The real desktop send path (sendSoloMessage), against stubs.
+function deskRealSend(status, statusText) {
+  const interjections = [], results = [];
+  const input = { value: 'hello there', style: {}, placeholder: '' };
+  const chats = { c1: { agent: 'alice', status: 'idle', messages: [], pendingImages: [] } };
+  const base = { chats, agentStatus: {}, skipInterjectOnce: new Set(), pendingImages: [], tzSentAt: 0, sentAt: 0,
+    document: { getElementById: (id) => (id === 'input-c1' ? input : null) },
+    fetch: async () => ({ status, ok: status >= 200 && status < 300, statusText: statusText || '' }),
+    setStatus: (id, s) => { chats[id].status = s; }, sendInterjection: async (id) => { interjections.push(id); }, enterReattach() {},
+    zoneHeader: () => ({}), appendMessage: () => 'm1', appendMessageWithImages() {}, elapsedLabel: () => '' };
+  const f = scoped(app, 'async function sendSoloMessage(chatId, retryCount = 0, sendOpts = null) {', 'async function streamResponseSolo(', base, 'sendSoloMessage');
+  return { f, interjections, results, input, chats, call: () => f.sendSoloMessage('c1', 0, { voice: true, onSendResult: (e) => results.push(e) }), typed: () => f.sendSoloMessage('c1', 0, { onSendResult: (e) => results.push(e) }) };
+}
+test('r3-1 desktop (real send): a 409 to a call\'s own send rejects at once with refused: true and is not bounced into an interjection', async () => {
+  const e = deskRealSend(409, 'Conflict');
+  await e.call();
+  assert.deepStrictEqual(e.interjections, [], 'no interjection');
+  assert.strictEqual(e.results.length, 1);
+  assert.strictEqual(e.results[0] && e.results[0].refused, true);
+  assert.strictEqual(e.chats.c1.bounced409, false);
+});
+test('r3-1 desktop (real send): a typed message that gets a 409 is still bounced into an interjection once', async () => {
+  const e = deskRealSend(409, 'Conflict');
+  await e.typed();
+  assert.deepStrictEqual(e.interjections, ['c1']);
+  assert.deepStrictEqual(e.results, [null], 'delivered into the running turn');
+});
+for (const s of [500, 502, 503, 504]) {
+  test('r3-2 desktop (real send): HTTP ' + s + ' to a call\'s send is an uncertain delivery: not refused, no resend', async () => {
+    const e = deskRealSend(s, 'Bad');
+    await e.call();
+    assert.deepStrictEqual(e.interjections, []);
+    assert.strictEqual(e.results.length, 1);
+    assert.ok(e.results[0] instanceof Error && e.results[0].refused !== true, 'uncertain, not refused');
+  });
+}
+test('r3-2 controller: an uncertain failure (a 502/503/504, not refused) is never resent; the words go to the message box with the note', async () => {
+  for (const code of [502, 503, 504]) {
+    const h = await started({ keepWords: (t, note) => { h.plain.push([t, note]); }, send: async (t) => { h.sent.push(t); throw new Error('HTTP ' + code); } });
+    h.bg = true;
+    await h.say('careful words');
+    await h.finish();
+    h.bg = false;
+    await h.call.backgroundDone();
+    await h.call.backgroundDone();
+    await h.advance(61000);
+    assert.deepStrictEqual(h.sent, ['careful words'], 'HTTP ' + code + ': sent once');
+    assert.strictEqual(h.plain.length, 1, 'words in the box');
+    assert.strictEqual(h.plain[0][0], 'careful words');
+    assert.ok(h.plain[0][1], 'with the note that delivery is unconfirmed');
+  }
+});
+
+// 3. a for_owner for a turn the call never saw
+test('r3-3 desktop: for_owner for an unseen turn: idle gives the cue at once; busy keeps the mark until the turn ends or the agent goes idle', () => {
+  let running = false;
+  const { f, calls, S } = deskEnv({ voiceCallRunning: () => running });
+  f.voiceCallHubEvent('for_owner', { agent: 'alice', reason: 'x', turnId: 'z1', origin: { kind: 'schedule' } });
+  assert.strictEqual(calls.owners, 1, 'idle: the cue now');
+  assert.strictEqual(S.owner.size, 0);
+  running = true;
+  f.voiceCallHubEvent('for_owner', { agent: 'alice', reason: 'x', turnId: 'z2', origin: { kind: 'schedule' } });
+  assert.strictEqual(calls.owners, 1, 'busy: not yet');
+  assert.ok(S.owner.has('z2'), 'the mark is kept');
+  f.voiceCallHubEvent('turn_end', { agent: 'alice', turnId: 'z2', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.owners, 2, 'the turn\'s end cues');
+  assert.strictEqual(S.owner.size, 0);
+  f.voiceCallHubEvent('for_owner', { agent: 'alice', reason: 'x', turnId: 'z3', origin: { kind: 'schedule' } });
+  running = false;
+  f.voiceCallHubIdle('alice');
+  assert.strictEqual(calls.owners, 3, 'the idle hook cues');
+  assert.strictEqual(S.owner.size, 0);
+  f.voiceCallHubIdle('alice');
+  assert.strictEqual(calls.owners, 3, 'once');
+  // a turn the call did see is unchanged: marked while it runs, cue at its end
+  running = true;
+  f.voiceCallHubEvent('turn_start', { agent: 'alice', turnId: 'h1', origin: { kind: 'schedule' } });
+  f.voiceCallHubEvent('for_owner', { agent: 'alice', reason: 'x', turnId: 'h1', origin: { kind: 'schedule' } });
+  assert.strictEqual(calls.owners, 3);
+  f.voiceCallHubEvent('turn_end', { agent: 'alice', turnId: 'h1', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.owners, 4);
+});
+test('r3-3 phone: for_owner for an unseen turn: idle gives the cue at once; busy keeps the mark until the turn ends or the agent goes idle', () => {
+  let busy = false;
+  const { f, calls, vc } = phoneEnv({ isBusy: () => busy });
+  f.voiceCallForOwner({ agent: 'bob', reason: 'x', turnId: 'z1', origin: { kind: 'schedule' } });
+  assert.strictEqual(calls.owners, 1, 'idle: the cue now');
+  assert.strictEqual(vc.hubOwner.size, 0);
+  busy = true;
+  f.voiceCallForOwner({ agent: 'bob', reason: 'x', turnId: 'z2', origin: { kind: 'schedule' } });
+  assert.strictEqual(calls.owners, 1, 'busy: not yet');
+  assert.ok(vc.hubOwner.has('z2'));
+  f.voiceCallTurnEnd({ agent: 'bob', turnId: 'z2', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.owners, 2, 'the turn\'s end cues');
+  f.voiceCallForOwner({ agent: 'bob', reason: 'x', turnId: 'z3', origin: { kind: 'schedule' } });
+  busy = false;
+  f.voiceCallHubIdle('bob');
+  assert.strictEqual(calls.owners, 3, 'the idle hook cues');
+  assert.strictEqual(vc.hubOwner.size, 0);
+  f.voiceCallHubIdle('bob');
+  assert.strictEqual(calls.owners, 3, 'once');
+  busy = true;
+  f.voiceCallTurnStart({ agent: 'bob', turnId: 'h1', origin: { kind: 'schedule' } });
+  f.voiceCallForOwner({ agent: 'bob', reason: 'x', turnId: 'h1', origin: { kind: 'schedule' } });
+  assert.strictEqual(calls.owners, 3);
+  f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h1', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.owners, 4);
 });

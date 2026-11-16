@@ -9637,7 +9637,10 @@ function voiceCallTurnEnd(ev) {
     vc.call.onReplyText(ev.ok === false ? vc.lastText : String(ev.reply || vc.lastText || ''), true);
     return;
   }
-  if (!vc.hubTurns.has(ev.turnId)) return;
+  if (!vc.hubTurns.has(ev.turnId)) {
+    if (vc.hubOwner.has(ev.turnId)) { vc.hubOwner.delete(ev.turnId); vc.call.onHubOwner(); }   // a turn the call never saw, marked while busy: its end gives the cue
+    return;
+  }
   // A turn the hub started (a scheduled task, a consultation, a job report, a held item allowed with Now ...): its reply and its input are never read aloud
   // and never shown as heard or spoken on the call; they land in the chat. What it may do on the call: the cue when it was marked for the owner (for_owner),
   // and the caller's words that waited for it are sent now (call.backgroundDone).
@@ -9650,7 +9653,8 @@ function voiceCallForOwner(ev) {   // for_owner { agent, reason, turnId, origin 
   const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !ev.turnId || (ev.origin && ev.origin.kind === 'user')) return;
   const at = vc.hubEnded.get(ev.turnId);
   if (at !== undefined) { vc.hubEnded.delete(ev.turnId); if (Date.now() - at <= VOICE_HUB_OWNER_LATE_MS) vc.call.onHubOwner(); }   // marked just after it ended
-  else { vc.hubOwner.add(ev.turnId); if (vc.hubOwner.size > 32) vc.hubOwner.delete(vc.hubOwner.keys().next().value); }   // marked while it runs: the cue comes when it ends
+  else if (!vc.hubTurns.has(ev.turnId) && !isBusy(vc.agent) && !ownTurnFor(vc.agent)) vc.call.onHubOwner();   // a turn the call never saw, and the agent is idle: the cue now (the controller keeps its own 30 s gap)
+  else { vc.hubOwner.add(ev.turnId); if (vc.hubOwner.size > 32) vc.hubOwner.delete(vc.hubOwner.keys().next().value); }   // marked while it runs (or a turn never seen while the agent is busy): the cue comes when it ends or the agent goes idle
 }
 const VOICE_HUB_OWNER_LATE_MS = 5000;   // a for_owner this soon after the turn ended still gives the cue
 const VOICE_OWN_END_GRACE_MS = 3000;   // busy with no known turn is not background this soon after the caller's own turn ended
@@ -9683,6 +9687,7 @@ function voiceCallHubIdle(agent) {
     else { vc.hubEnded.set(id, Date.now()); if (vc.hubEnded.size > 32) vc.hubEnded.delete(vc.hubEnded.keys().next().value); }
   }
   vc.hubTurns.clear();
+  if (vc.hubOwner.size > 0) { vc.hubOwner.clear(); cue = true; }   // a mark for a turn the call never saw (kept while the agent was busy): the idle gives its cue
   if (cue && vc.call && typeof vc.call.onHubOwner === 'function') vc.call.onHubOwner();
   if (vc.call && typeof vc.call.backgroundDone === 'function') vc.call.backgroundDone();
 }
@@ -10555,7 +10560,7 @@ async function sendMessage(fallback) {
         toast(`${displayName(agent)} is busy; your message was not sent`);
       }
     } else if (!r.ok) {
-      throw Object.assign(new Error(`HTTP ${r.status}`), { refused: true });   // an answer that is not accepted: a call knows it was refused
+      throw new Error(`HTTP ${r.status}`);   // not the hub's busy refusal (409, handled above): a proxy's 502/503/504 or a restarting hub may still have taken the message, so delivery is uncertain and a call never resends it
     } else {
       notify(null);   // the hub took it
       await readStream(r, rec);

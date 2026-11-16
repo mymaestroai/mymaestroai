@@ -9712,6 +9712,11 @@
           delete chat.lastMsgId;
           chat.controller = null;
           if (fallback) chat.bounced409 = true;   // a fallback send is not bounced into an interjection again: it goes back to the composer below
+          if (chat.voiceSend) {   // a call's own message is never bounced into an interjection: it is refused at once, and the controller keeps the words for the next idle (as on the phone)
+            chat.bounced409 = false;
+            notify(Object.assign(new Error('busy'), { refused: true }));
+            return;
+          }
           if (!chat.bounced409) {
             chat.bounced409 = true;
             setAgentLive(chat.agent, { busy: true });
@@ -9736,7 +9741,7 @@
           chat.onStreamData = () => voiceLinkAlive(owner);
         } else chat.onStreamData = null;
         if (!response.ok) {
-          throw Object.assign(new Error(`HTTP ${response.status}: ${response.statusText}`), { refused: true });   // an answer that is not accepted: a call knows it was refused
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);   // not the hub's busy refusal (409, handled above): a proxy's 502/503/504 or a restarting hub may still have taken the message, so delivery is uncertain and a call never resends it
         }
         notify(null);
 
@@ -16010,6 +16015,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         else { S.hubEnded.set(id, Date.now()); if (S.hubEnded.size > 32) S.hubEnded.delete(S.hubEnded.keys().next().value); }
       }
       S.hub.clear();
+      if (S.owner.size > 0) { S.owner.clear(); cue = true; }   // a mark for a turn the call never saw (kept while the agent was busy): the idle gives its cue
       if (cue && typeof S.call.onHubOwner === 'function') S.call.onHubOwner();
       if (typeof S.call.backgroundDone === 'function') S.call.backgroundDone();
     }
@@ -16042,14 +16048,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             if (S.owner.has(ev.turnId)) { S.owner.delete(ev.turnId); call.onHubOwner(); }
             else { S.hubEnded.set(ev.turnId, Date.now()); if (S.hubEnded.size > 32) S.hubEnded.delete(S.hubEnded.keys().next().value); }   // a for_owner may follow within a few seconds
             if (!voiceCallRunning(S.chatId, S.agent)) call.backgroundDone();   // only when the page also sees the agent idle; else the idle hook sends later (a second hub turn may follow at once)
-          }
+          } else if (S.owner.has(ev.turnId)) { S.owner.delete(ev.turnId); call.onHubOwner(); }   // a turn the call never saw, marked while busy: its end gives the cue
           return;
         }
         case 'for_owner': {   // { agent, reason, turnId, origin }: the agent marked a turn's reply for the owner
           if (!ev.turnId || (ev.origin && ev.origin.kind === 'user')) return;
           const at = S.hubEnded.get(ev.turnId);
           if (at !== undefined) { S.hubEnded.delete(ev.turnId); if (Date.now() - at <= VOICE_HUB_OWNER_LATE_MS) call.onHubOwner(); }   // marked just after it ended
-          else { S.owner.add(ev.turnId); if (S.owner.size > 32) S.owner.delete(S.owner.keys().next().value); }   // marked while it runs: the cue comes when it ends
+          else if (!S.hub.has(ev.turnId) && !voiceCallRunning(S.chatId, S.agent)) call.onHubOwner();   // a turn the call never saw, and the agent is idle: the cue now (the controller keeps its own 30 s gap)
+          else { S.owner.add(ev.turnId); if (S.owner.size > 32) S.owner.delete(S.owner.keys().next().value); }   // marked while it runs (or a turn never seen while the agent is busy): the cue comes when it ends or the agent goes idle
           return;
         }
         case 'ask_user': {

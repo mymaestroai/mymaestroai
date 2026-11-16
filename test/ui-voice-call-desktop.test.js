@@ -494,8 +494,8 @@ test('P-i: a voice send the hub did not take rejects to the controller; a taken 
 test('P-i: sendSoloMessage tells a voice caller whether the hub took the message (accepted, interjected, refused, network error)', () => {
   const s = app.slice(app.indexOf('async function sendSoloMessage('), app.indexOf('// Group chat - free flowing'));
   assert.match(s, /const notify = \(err\) => \{ if \(notified \|\| !sendOpts \|\| !sendOpts\.onSendResult\) return;/);
-  // changed (voice hub-turns r2): an answer that is not accepted carries refused: true (the controller retries only a confirmed refusal)
-  assert.match(s, /throw Object\.assign\(new Error\(`HTTP \$\{response\.status\}: \$\{response\.statusText\}`\), \{ refused: true \}\);[^\n]*\s*\}\s*notify\(null\);/, 'accepted');
+  // changed (voice hub-turns r3): only the hub's busy refusal (409) carries refused: true; any other non-2xx answer (a proxy's 502/503/504 ...) is an uncertain delivery and carries no flag
+  assert.match(s, /throw new Error\(`HTTP \$\{response\.status\}: \$\{response\.statusText\}`\);[^\n]*\s*\}\s*notify\(null\);/, 'accepted');
   assert.match(s, /\} catch \(err\) \{\s*notify\(err\);/, 'network error or a non-2xx answer');
   assert.match(s, /notify\(Object\.assign\(new Error\('busy'\), \{ refused: true \}\)\);/, 'refused');
 });
