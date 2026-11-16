@@ -200,7 +200,8 @@ test('start: deps contract, VAD options from prefs, bar above the box, button be
   const { api, calls, fakeCall, get } = makeEnv();
   await api.voiceCallStart('c1');
   assert.strictEqual(fakeCall.started, 1);
-  assert.deepStrictEqual({ ...calls.vadOpts }, { baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40, endPause: 1200, echoHoldMs: 600, strictTalkOver: false });   // strictTalkOver: only on an iPhone or iPad   // + the end-of-turn pause (voice fixes 1)
+  assert.strictEqual(typeof calls.vadOpts.micChoice, 'function');   // the microphone the person chose (voiceMicChoiceId)
+  assert.deepStrictEqual({ ...calls.vadOpts, micChoice: undefined }, { micChoice: undefined, baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40, endPause: 1200, echoHoldMs: 600, strictTalkOver: false });   // strictTalkOver: only on an iPhone or iPad   // + the end-of-turn pause (voice fixes 1)
   const d = calls.created[0];
   for (const k of ['agent', 'now', 'setTimer', 'clearTimer', 'prefs', 'vad', 'stt', 'isTurnRunning', 'send', 'interject', 'stop', 'speak', 'cancelSpeech', 'answerAsk', 'server', 'ui']) assert.ok(k in d, k);
   for (const k of ['start', 'heartbeat', 'mode', 'end', 'decide']) assert.strictEqual(typeof d.server[k], 'function', 'server.' + k);

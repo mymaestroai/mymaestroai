@@ -381,10 +381,10 @@ test('desktop: a mid-call switch - ui.mic with a Bluetooth label drops the chain
   const ctx = fakeCtx();
   const S = { call: {}, micLabel: '', micLine: '', vad: null };
   const prefs = { loudness: 'louder', loudnessBt: 'normal' };
-  const micFn = between(app, '          mic: (info) => { const t = voiceMicLineText(info);', '   // which microphone is open').trim().replace(/,\s*$/, '');
-  const env = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window', 'voiceMicLineText', 'barEl',
+  const micFn = between(app, '          mic: (info) => { const t = voiceMicLineText(info) + voiceRouteSuffix(voiceCallS.route);', '   // which microphone is open').trim().replace(/,\s*$/, '');
+  const env = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window', 'voiceMicLineText', 'barEl', 'voiceRouteSuffix',
     desk() + '; return { voiceOutNode, voiceLoudApply, voiceLoudnessNow, voiceOutputNow, voiceOutputOnDeviceChange, ui: { ' + micFn + ' } };')(
-    S, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {}, (i) => (i && i.label) || '', () => null);
+    S, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {}, (i) => (i && i.label) || '', () => null, () => '');
   env.voiceOutNode(ctx);
   const chain = ctx.__voiceLoudness;
   assert.strictEqual(chain.gainDb, 9, 'unknown mic: the speaker level');

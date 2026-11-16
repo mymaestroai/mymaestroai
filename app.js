@@ -14472,7 +14472,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     // Read aloud. One playback at a time: the hub voice sentence by sentence through one AudioContext (the next sentence is
     // fetched while this one plays), or the device voice (speechSynthesis) when the hub voice fails or is off and the device asks for it.
-    const voicePlay = { token: 0, ctx: null, source: null, btn: null };
+    const voicePlay = { token: 0, ctx: null, source: null, btn: null, busy: 0 };   // busy: playbacks in progress (voiceSpeakText): the call's outputs are never made again while one runs
     function voicePlayState(btn, on) {
       if (!btn) return;
       if (btn.dataset.idle === undefined) btn.dataset.idle = btn.textContent;
@@ -14608,6 +14608,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!sentences || !sentences.length) return;
       voicePlay.btn = btn || null; voicePlayState(btn, true);
       voicePlay.pre = opts.pre ? { token: my, p: opts.pre } : null;
+      voicePlay.busy++;
       try {
         let from = 0, useDevice = false;
         if (voiceReady()) {
@@ -14621,6 +14622,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
         if (useDevice) { const rep = {}; await voicePlayDevice(sentences, from, my, agent, rep); if (opts.out) opts.out.played = rep.spoke === true && voicePlay.token === my; }
       } finally {
+        voicePlay.busy = Math.max(0, voicePlay.busy - 1);
         if (voicePlay.token === my) { voicePlayState(btn, false); voicePlay.btn = null; }
       }
     }
@@ -14674,6 +14676,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Bluetooth', `<label style="${CHK}"><input type="checkbox" id="st-voice-keepalive" ${voiceKeepAliveNow() ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Keep Bluetooth awake during calls</label><span class="st-hint" style="margin:0 0 0 8px;flex:1;min-width:0">${VOICE_KEEP_HINT}</span>`);
       h += row('Interrupt button', `<label style="${CHK}"><input type="checkbox" id="st-voice-interrupt" ${voiceInterruptNow() ? 'checked' : ''} onchange="voiceDispSetInterrupt(null, this.checked)"> Show an Interrupt button</label><span class="st-hint" style="margin:0 0 0 8px;flex:1;min-width:0">${VOICE_INTERRUPT_HINT}</span>`);
       h += row('Car or Bluetooth check', `<button class="st-test-btn" id="st-voice-car" type="button" onclick="voiceCarCheckRun()">Car or Bluetooth check</button> <span id="st-voice-car-out" class="st-hint" style="margin:0 0 0 8px" aria-live="polite">Plays three short sounds and listens for the echo. It sets the echo guard.</span>`);
+      h += row('Sound route', voiceRouteBlockHtml());
       h += row('Replies', `<label style="${CHK}"><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
       h += row('Fallback', `<label style="${CHK}"><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use this device's own offline voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
       return h + `</div>`;
@@ -15174,6 +15177,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (!voicePlay.source) quiet(() => vad.setPlaybackActive(false));   // reply audio already playing keeps the flag
         },
         setVolume(v) { quiet(() => { if (snd) snd.setVolume(v); }); },
+        busy() { return on; },   // the pulse is sounding: the call's outputs are not made again now
         close() { on = false; quiet(() => { if (snd) snd.stop(); }); ctx = null; snd = null; },   // the shared output context stays: replies still use it
       };
     }
@@ -15185,6 +15189,79 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (Number.isFinite(rate) && rate > 0) t += ' · ' + (Math.round(rate / 100) / 10) + ' kHz';
       if (i.fallback) t += ' · basic mode';
       return t;
+    }
+    // ── Call sound route: the microphone choice, the route words of the call bar's microphone line, and the call's outputs made again once the microphone is open ──
+    // On Android Chrome the first microphone stream opened with processing puts the phone in call mode and picks the call device (the car, when Chrome lists it).
+    // An output keeps the type it had when it was CREATED, and this page makes its outputs inside the tap, before the microphone opens (media, not call): while
+    // the car's hands-free link is on, media does not reach the car. So once the microphone is open the reply context and the keep-alive are made again.
+    function voiceMicChoiceId() { try { const m = voicePrefsNow().micDevice; return m && typeof m.id === 'string' && m.id ? m.id : null; } catch { return null; } }
+    // The words after the microphone's name: ' · car or Bluetooth', ' · a car or Bluetooth device is connected but not used', ' · the chosen microphone is not available'.
+    function voiceRouteSuffix(r) {
+      if (!r || typeof r !== 'object') return '';
+      let t = '';
+      if (r.bluetooth) t += ' · car or Bluetooth';
+      else if (r.bluetoothListed && !r.chosen) t += ' · a car or Bluetooth device is connected but not used';
+      if (r.fellBack) t += ' · the chosen microphone is not available';
+      return t;
+    }
+    const VOICE_ROUTE_PLAIN_LINE = 'Your car or Bluetooth device is connected, but this call is using the phone. Voice settings → Sound route can switch it.';
+    // The controller hands the VAD only onMicInfo / onMicChange; onRoute and the page's own look at a changed microphone ride on the same start() through this view of the VAD.
+    function voiceCallVadFor(vad) {
+      return { ...vad, start: (h) => vad.start({ ...(h || {}),
+        onRoute: (r) => { try { voiceCallOnRoute(vad, r); } catch { /* never breaks the microphone */ } },
+        onMicChange: (ev) => { try { if (h && h.onMicChange) h.onMicChange(ev); } finally { try { voiceCallOnMicChange(vad, ev); } catch { /* the call goes on */ } } } }) };
+    }
+    function voiceCallOnRoute(vad, r) {
+      const S = voiceCallS;
+      if (!r || S.vad !== vad || !S.call) return;
+      S.route = r; S.routeSeen = (S.routeSeen || 0) + 1;
+      S.micLine = voiceMicLineText({ label: S.micLabel }) + voiceRouteSuffix(r);   // the label and the route words; the sample rate part comes back with the next onMicInfo
+      const m = voiceCallBarEl('micinfo'); if (m && !S.micLost) m.textContent = S.micLine;
+      if (r.bluetoothListed && !r.bluetooth && !r.chosen && !S.routeToasted) { S.routeToasted = true; hubToast(VOICE_ROUTE_PLAIN_LINE, 5000); }
+      if (S.routeSeen === 1 && !S.outputsRenewed && !S.renewPending && !S.renewing) voiceCallOutputsRenew();
+    }
+    function voiceCallOnMicChange(vad, ev) {
+      const S = voiceCallS;
+      if (S.vad !== vad || !S.call || !ev || ev.ok !== true || ev.changed !== true) return;
+      voiceCallOutputsRenew();
+    }
+    function voiceCallBarEl(n) { const id = voiceCallS.chatId; return id ? voiceById(`vcb-${n}-${id}`) : null; }
+    // Is a sentence (or the thinking pulse, or the device voice) sounding now?
+    function voiceCallSounding() {
+      const S = voiceCallS;
+      if (voicePlay.busy > 0 || voicePlay.source) return true;
+      try { if (S.thinking && typeof S.thinking.busy === 'function' && S.thinking.busy()) return true; } catch { /* not counted */ }
+      try { if (window.speechSynthesis && window.speechSynthesis.speaking) return true; } catch { /* not counted */ }
+      return false;
+    }
+    // The call's sound outputs made again: a new reply context (resumed, 1 s at most) becomes voicePlay.ctx, the keep-alive moves to it, and the old context is
+    // closed 300 ms later. Not on iOS (contexts must be made inside the tap there). While a sentence sounds it waits (checked every second); it never cuts one.
+    // Never throws: a failure leaves the call as it was.
+    async function voiceCallOutputsRenew() {
+      const S = voiceCallS, call = S.call;
+      if (!call || S.renewing || voiceIsIOSNav(navigator)) return false;
+      const later = () => { S.renewPending = true; if (!S.renewTimer) S.renewTimer = setTimeout(() => { S.renewTimer = null; if (S.renewPending && S.call === call) voiceCallOutputsRenew(); }, 1000); return false; };
+      if (voiceCallSounding()) return later();
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) { S.renewPending = false; return false; }
+      S.renewing = true;
+      let fresh = null;
+      try {
+        fresh = new AC();
+        try { let w = null; await Promise.race([Promise.resolve(fresh.resume && fresh.resume()), new Promise((r) => { w = setTimeout(r, 1000); })]); if (w !== null) clearTimeout(w); } catch { /* it runs when it can */ }
+        if (S.call !== call) { try { fresh.close(); } catch { /* gone */ } return false; }
+        if (voiceCallSounding()) { try { fresh.close(); } catch { /* gone */ } fresh = null; S.renewing = false; return later(); }   // a sentence began while it resumed
+        const old = voicePlay.ctx;
+        voicePlay.ctx = fresh;   // replies (voicePlayHub), the thinking pulse (voiceOutputCtx), the wake chime and the link tone read it when they play
+        try { voiceLoudApply(); } catch { /* the chain is made at the next use */ }
+        try { if (S.keepAlive && typeof S.keepAlive.moveTo === 'function') S.keepAlive.moveTo(fresh); } catch { /* the hiss stays on the old context until it closes */ }
+        S.outputsRenewed = (S.outputsRenewed || 0) + 1; S.renewPending = false;
+        if (old && old !== fresh) setTimeout(() => { try { const p = old.close(); if (p && p.catch) p.catch(() => {}); } catch { /* closed */ } }, 300);
+        return true;
+      } catch {
+        if (fresh && voicePlay.ctx !== fresh) { try { fresh.close(); } catch { /* gone */ } }
+        return false;
+      } finally { S.renewing = false; }
     }
     // ── Wake phrase standby: allowed only with a ready local recognizer (the server rule is engineFor in lib/voice/routes.js) ──
     function voiceWakeAllowed(agent) {
@@ -15331,7 +15408,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           thinkingPulse: (ev) => { voiceDisplayHook('thinkingPulse', ev); },
           reply: (kind) => { voiceDisplayHook('reply', kind, 'seq:' + voiceCallS.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
           thinkingWanted: () => voiceDisplayHook('showsPulse') === true,   // no view shown (None, hidden): the call's thinking sound is exactly the plain one
-          mic: (info) => { const t = voiceMicLineText(info); voiceCallS.micLine = t; voiceCallS.micLabel = info && typeof info.label === 'string' ? info.label : ''; voiceOutputChanged(); const m = barEl('micinfo'); if (m && !voiceCallS.micLost) m.textContent = t; },   // which microphone is open (while it is lost the line keeps saying so)
+          mic: (info) => { const t = voiceMicLineText(info) + voiceRouteSuffix(voiceCallS.route); voiceCallS.micLine = t; voiceCallS.micLabel = info && typeof info.label === 'string' ? info.label : ''; voiceOutputChanged(); const m = barEl('micinfo'); if (m && !voiceCallS.micLost) m.textContent = t; },   // which microphone is open (while it is lost the line keeps saying so)
           micLost: (on) => {   // the call goes on; the line says the microphone is lost, the meter is empty and a tap tries it again
             voiceCallS.micLost = !!on;
             const b = barEl('retry'); if (b) b.hidden = !on;
@@ -15461,6 +15538,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       S.linkLost = false;
       const rec = S.rec; S.rec = null;
       if (rec) { try { rec.stop(); } catch { /* already stopped */ } }   // a recorded call: the recorder lets go of its tap (uploads in flight finish)
+      if (S.renewTimer) { clearTimeout(S.renewTimer); S.renewTimer = null; }
+      S.renewPending = false; S.route = null;
       S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.focus = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
       S.own.clear(); S.hub.clear(); S.asks.clear();
       voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
@@ -15593,7 +15672,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceRec.guard.cancel(); if (voiceRec.chatId) voiceMicStop(false);   // dictation ends, nothing uploaded
       voiceStopPlayback();
       const eff = voiceEffNow(chat.agent);   // this agent's voice defaults for any setting the person has not set on this device
-      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow(), strictTalkOver: voiceIsIOSNav(navigator) });
+      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow(), strictTalkOver: voiceIsIOSNav(navigator), micChoice: voiceMicChoiceId });
       const thinking = voiceCallThinking(vad);   // makes / resumes the reply playback context (voicePlay.ctx) inside the tap
       // Keep Bluetooth awake: a very quiet hiss on the same output context as the replies; the controller starts and stops it, and it sounds
       // only while the switch is on (a change applies at once, mid-call).
@@ -15613,10 +15692,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const recCfg = typeof voiceRecSettings === 'function' ? voiceRecSettings((typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(x => x && x.name === chat.agent)) : { keep: false, mic: 'processed' };
       const rec = recCfg.keep ? voiceRecMake(chat.agent, vad, recCfg, true) : null;
       if (typeof voiceRecResendPending === 'function') voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '' }).catch(() => {});   // pieces left from an earlier call or page are sent while this one starts
-      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad, thinking, keepAlive, rec));
+      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, voiceCallVadFor(vad), thinking, keepAlive, rec));
       voiceLeftNoticeHide(); S.leftChat = null;
-      S.rec = rec; S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
-      window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow() };   // read-only hooks for the browser proof
+      S.rec = rec; S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.route = null; S.routeToasted = false; S.routeSeen = 0; S.outputsRenewed = 0; S.renewPending = false; S.renewing = false; S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
+      window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow(), outputsRenewed: () => S.outputsRenewed || 0, route: () => S.route || null };   // read-only hooks for the browser proof
       voiceLoudApply();   // the reply loudness chain, at the level of the pref
       voiceCallPaintBtn(chatId, true);
       voiceCallShowBar(chatId);
@@ -15721,6 +15800,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <label class="vp-row"><span class="vp-label">Keep Bluetooth awake during calls</span><input type="checkbox" id="${id('keep')}" data-vp="keep"${voiceKeepAliveNow() ? ' checked' : ''}></label>
         <div class="vp-display-note">${VOICE_KEEP_HINT}</div>
         <div class="vp-row"><button type="button" class="st-test-btn" data-vp="car" id="${id('car')}">Car or Bluetooth check</button> <span class="st-hint vp-car-out" id="${id('car-out')}" aria-live="polite" style="margin:0"></span></div>
+        <div class="vp-row" style="display:block"><div class="vp-label">Sound route</div>${voiceRouteBlockHtml()}</div>
         ${voiceWakeRowsHtml(chatId)}`;
     }
     function voicePopClose() {
@@ -15904,6 +15984,115 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         for (const b of btns()) b.disabled = false;
       }
     }
+
+    // Sound route (Settings, Voices, and the chat's voice panel, below the Car or Bluetooth check): the microphones the browser offers, one of them chosen (or Automatic: car or
+    // Bluetooth first). On Android the call's sound follows the microphone. On a computer the browser may also list sound outputs: they are shown as text only.
+    const VOICE_ROUTE_NEARBY_LINE = 'No car or Bluetooth microphone is visible to the browser. If one is connected: Android Settings → Apps → Chrome → Permissions → Nearby devices → Allow, then start the call again.';
+    const VOICE_ROUTE_FOLLOWS_LINE = 'On Android the call\'s sound follows the microphone chosen here.';
+    const VOICE_ROUTE_TEST_AFTER = 'Where did you hear it? In the car: calls will be heard there too. On the phone: choose the car above, or check Nearby devices.';
+    const voiceRouteUi = { routes: null, busy: false };
+    function voiceRouteBlockHtml() {
+      return `<div class="voice-route"><button type="button" class="st-test-btn" data-route="list">Sound devices</button> <button type="button" class="st-test-btn" data-route="test">Test sound</button> <span class="st-hint voice-route-out" aria-live="polite" style="margin:0"></span>
+        <div class="voice-route-list" style="margin-top:6px"></div>
+        <div class="st-hint voice-route-note" style="margin:4px 0 0">${VOICE_ROUTE_FOLLOWS_LINE}</div></div>`;
+    }
+    function voiceRouteSay(t) { for (const o of document.querySelectorAll('.voice-route-out')) o.textContent = t; }
+    function voiceRouteMicBusy() { return !!(voiceRoom.active || voiceRec.chatId || voiceRec.busy || voiceRec.guard.pending || voiceTest.mic || voiceTest.guard.pending); }
+    // The rows: Automatic first, then one per microphone (the browser's pseudo 'default' / 'communications' entries are skipped).
+    function voiceRoutePaint() {
+      const r = voiceRouteUi.routes;
+      for (const box of document.querySelectorAll('.voice-route-list')) {
+        box.textContent = '';
+        if (!r) continue;
+        const choice = voiceMicChoiceId();
+        const add = (label, tags, id, mic) => {
+          const row = document.createElement('div'); row.className = 'st-hint voice-route-row'; row.style.margin = '2px 0';
+          row.appendChild(document.createTextNode(label + tags + ' '));
+          const b = document.createElement('button'); b.type = 'button'; b.className = 'st-test-btn'; b.dataset.route = 'use'; b.dataset.id = id || ''; b.dataset.label = mic ? mic.label || '' : ''; b.textContent = 'Use';
+          row.appendChild(b); box.appendChild(row);
+        };
+        add('Automatic (car or Bluetooth first)', choice ? '' : ' · chosen', '', null);
+        for (const m of r.inputs || []) {
+          if (!m || m.pseudo) continue;
+          add(m.label || 'Microphone', (m.inUse ? ' · in use' : '') + (m.bluetooth ? ' · Bluetooth' : '') + (choice && choice === m.id ? ' · chosen' : ''), m.id, m);
+        }
+        if (!r.bluetoothInput) { const n = document.createElement('div'); n.className = 'st-hint'; n.style.margin = '4px 0 0'; n.textContent = VOICE_ROUTE_NEARBY_LINE; box.appendChild(n); }
+        const outs = (r.outputs || []).filter((o) => o && !o.pseudo && o.label).map((o) => o.label);
+        if (outs.length) { const n = document.createElement('div'); n.className = 'st-hint'; n.style.margin = '4px 0 0'; n.textContent = 'The browser also lists these sound outputs: ' + outs.join(', ') + '.'; box.appendChild(n); }
+      }
+    }
+    async function voiceRouteList() {
+      if (voiceRouteUi.busy) return;
+      const S = voiceCallS;
+      if (!S.call && voiceRouteMicBusy()) { hubToast('The microphone is in use.'); return; }
+      voiceRouteUi.busy = true;
+      let held = false;
+      try {
+        let routes = null;
+        if (S.call && S.vad && typeof S.vad.routes === 'function') routes = await S.vad.routes();
+        else {
+          const md = navigator.mediaDevices;
+          if (!md || typeof md.enumerateDevices !== 'function') { voiceRouteSay('This browser cannot list its sound devices.'); return; }
+          let list = await md.enumerateDevices();
+          if (!list.some((d) => d && d.kind === 'audioinput' && d.label)) {   // no labels until the microphone has been allowed once: it is opened for a moment, then let go
+            voiceRoom.active = true; held = true;
+            let got = null;
+            try { got = await voiceOpenMicStream(navigator); } catch (e) { voiceRouteSay(voiceMicError(e)); return; }
+            try { for (const t of got.stream.getTracks()) t.stop(); } catch { /* ended */ }
+            list = await md.enumerateDevices();
+          }
+          routes = voiceAudioRoutes(list, null);
+        }
+        voiceRouteUi.routes = routes; voiceRoutePaint(); voiceRouteSay('');
+      } catch (e) { voiceRouteSay('Could not list the sound devices: ' + ((e && e.message) || 'unknown error')); }
+      finally { if (held) voiceRoom.active = false; voiceRouteUi.busy = false; }
+    }
+    // Use / Automatic: saved on this device (micDevice { id, label }; Automatic removes it) and, in a call, applied at once (the microphone is opened again).
+    async function voiceRouteUse(id, label) {
+      const prefs = { ...voicePrefsNow() };
+      if (id) prefs.micDevice = { id, label: String(label || '').slice(0, 120) }; else delete prefs.micDevice;
+      voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
+      const S = voiceCallS;
+      if (S.call && S.vad && typeof S.vad.useMic === 'function') { try { await S.vad.useMic(id || null); } catch { /* the call keeps its microphone */ } }
+      voiceRoutePaint();
+      if (S.call && S.vad && typeof S.vad.routes === 'function') { try { voiceRouteUi.routes = await S.vad.routes(); voiceRoutePaint(); } catch { /* the list stays */ } }
+    }
+    // Test sound: the microphone is opened with processing first (that is what a call does), THEN a new audio context plays two beeps (440 Hz, 660 Hz, 0.25 s each, -12 dBFS).
+    async function voiceRouteTest() {
+      if (voiceCallS.call) { voiceRouteSay('Not during a call.'); return; }
+      if (voiceRouteMicBusy()) { hubToast('The microphone is in use.'); return; }
+      const btns = [...document.querySelectorAll('.voice-route [data-route="test"]')];
+      voiceRoom.active = true; for (const b of btns) b.disabled = true;
+      let got = null, ctx = null;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) { voiceRouteSay('This browser cannot play the test sound.'); return; }
+        try { got = await voiceOpenMicStream(navigator, { deviceId: voiceMicChoiceId() || undefined }); } catch (e) { voiceRouteSay(voiceMicError(e)); return; }
+        ctx = new AC();
+        try { await Promise.race([Promise.resolve(ctx.resume()), new Promise((r) => setTimeout(r, 1000))]); } catch { /* it plays when it can */ }
+        const t0 = ctx.currentTime + 0.05, amp = Math.pow(10, -12 / 20);
+        [440, 660].forEach((hz, i) => {
+          const o = ctx.createOscillator(), g = ctx.createGain();
+          o.frequency.value = hz; g.gain.value = amp; o.connect(g); g.connect(ctx.destination);
+          o.start(t0 + i * 0.25); o.stop(t0 + i * 0.25 + 0.25);
+        });
+        voiceRouteSay('Playing two short sounds.');
+        await new Promise((r) => setTimeout(r, 700));
+        voiceRouteSay(VOICE_ROUTE_TEST_AFTER);
+      } catch (e) { voiceRouteSay('The test sound could not play: ' + ((e && e.message) || 'unknown error')); }
+      finally {
+        if (ctx) { try { const p = ctx.close(); if (p && p.catch) p.catch(() => {}); } catch { /* closed */ } }
+        if (got && got.stream) { try { for (const t of got.stream.getTracks()) t.stop(); } catch { /* ended */ } }
+        voiceRoom.active = false; for (const b of btns) b.disabled = false;
+      }
+    }
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest ? e.target.closest('[data-route]') : null;
+      if (!t || !t.closest('.voice-route')) return;
+      if (t.dataset.route === 'list') voiceRouteList();
+      else if (t.dataset.route === 'use') voiceRouteUse(t.dataset.id || '', t.dataset.label || '');
+      else if (t.dataset.route === 'test') voiceRouteTest();
+    });
 
     // Message rendering
     // Copy button on every message bubble: copies the original text/markdown, not the rendered HTML.

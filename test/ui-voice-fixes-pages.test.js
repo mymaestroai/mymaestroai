@@ -61,7 +61,7 @@ test('desktop call bar: pause select and speed slider, no spoken-activity switch
   assert.match(slider, /speed: 'voiceSpeed', pause: 'endPause'/);
   assert.match(app, /activity: \(text\) => \{ const a = barEl\('activity'\); if \(a\) a\.textContent = text \|\| ''; \}/);
   assert.match(app, /speakActivity: \(\) => !!voicePrefsNow\(\)\.speakActivity/);
-  assert.match(app, /interruptSensitivity: eff\.interruptSensitivity, endPause: eff\.endPause, echoHoldMs: voiceEchoHoldNow\(\), strictTalkOver: voiceIsIOSNav\(navigator\) \}\)/);
+  assert.match(app, /interruptSensitivity: eff\.interruptSensitivity, endPause: eff\.endPause, echoHoldMs: voiceEchoHoldNow\(\), strictTalkOver: voiceIsIOSNav\(navigator\), micChoice: voiceMicChoiceId \}\)/);
   assert.match(idx, /\.voice-callbar \.vcb-activity \{/);
 });
 
