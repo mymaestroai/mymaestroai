@@ -63,8 +63,18 @@ function rig({ manifest = baseManifest(), agents = AGENTS, auditFile = null, pus
   const state = () => JSON.parse(fs.readFileSync(stateFile, 'utf8')).modules.poldemo;
   const policy = () => (state().settings || {}).approval_policy || [];
   const audit = () => { try { return fs.readFileSync(aFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse); } catch { return []; } };
-  const finish = async (grant = ['sam', 'helper']) => { await mods.runStep('poldemo', 'install', {}); await mods.runStep('poldemo', 'agents', { agents: grant }); await mods.runStep('poldemo', 'done', {}); };
-  const set = (input, who = ADMIN) => mods.setApprovalPolicy('poldemo', input, who);
+  // The granted agents are raised to `level` (default Act, asked each session): only an agent at an asked level can be trusted on a computer.
+  // The set-up leaves no audit record and no notice behind, so the tests count only their own. level null: leave them at the default (Look).
+  const finish = async (grant = ['sam', 'helper'], level = 'act') => {
+    await mods.runStep('poldemo', 'install', {}); await mods.runStep('poldemo', 'agents', { agents: grant }); await mods.runStep('poldemo', 'done', {});
+    if (!level) return;
+    const permissions = { owner: { level: 'look', askEachSession: true } };
+    for (const n of grant) permissions[n] = { level, askEachSession: true };
+    mods.setAgentPermissions('poldemo', { agents: grant, permissions }, ADMIN);
+    fs.writeFileSync(aFile, ''); pushes.length = 0;
+  };
+  // The computer counts as listed by the module (computerKnown: true) unless a test says otherwise.
+  const set = (input, who = ADMIN, opts = {}) => mods.setApprovalPolicy('poldemo', input, who, { computerKnown: true, ...opts });
   return { dir, root, mods, conns, stopped, pushes, logs, state, policy, audit, finish, set, stateFile, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 const refused = (fn, status, re) => assert.throws(fn, (e) => e.status === status && (!re || re.test(e.message)), `${status} ${re || ''}`);
@@ -146,7 +156,7 @@ test('approvalPolicy: nothing set by default; lists the policy and the agents th
   const d = r.mods.approvalPolicy('poldemo');
   assert.deepStrictEqual(d.policy, {});
   assert.deepStrictEqual(d.agents.map(a => a.name).sort(), ['helper', 'owner', 'sam']);
-  assert.ok(d.agents.every(a => a.level === 'look'));
+  assert.deepStrictEqual(d.agents.map(a => `${a.name}:${a.level}`).sort(), ['helper:act', 'owner:look', 'sam:act']);   // the rig raises the granted agents to Act
   r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam'] }));
   assert.deepStrictEqual(r.mods.approvalPolicy('poldemo').policy, { [PC]: { mode: 'day', trusted: ['sam'] } });
 });
@@ -251,9 +261,10 @@ test('setApprovalPolicy: the audit record is written before the setting is saved
 test('setApprovalPolicy: a failed audit write refuses with 500 and changes nothing', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pol-badaudit-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dir, 'afile'), 'not a folder');
   const r = rig({ auditFile: path.join(dir, 'afile', 'log.jsonl') }); t.after(r.cleanup);
-  await r.finish();
+  await r.finish();   // the set-up writes its own record, so the audit folder is broken only afterwards
+  fs.rmSync(path.join(dir, 'afile'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(dir, 'afile'), 'not a folder');
   const stoppedBefore = r.stopped.length;
   refused(() => r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam'] })), 500, /nothing changed/);
   assert.deepStrictEqual(r.policy(), []);
@@ -523,10 +534,10 @@ test('setApprovalPolicy: the notice, the 409 and the audit record name the compu
   const mods = r.mods;
   const auth = { ...ADMIN, name: 'Jo' };
   let e = null;
-  try { mods.setApprovalPolicy('poldemo', { computer: PC, mode: 'day', trusted: ['sam'] }, auth, { computerName: 'PC-A\u0007' }); } catch (x) { e = x; }
+  try { mods.setApprovalPolicy('poldemo', { computer: PC, mode: 'day', trusted: ['sam'] }, auth, { computerName: 'PC-A\u0007', computerKnown: true }); } catch (x) { e = x; }
   assert.ok(e && e.status === 409);
   assert.strictEqual(e.message, 'On PC-A (abc$@x), one approval would last until midnight, and sam would never be asked. Confirm that you understand this to continue.');
-  mods.setApprovalPolicy('poldemo', { computer: PC, mode: 'day', trusted: ['sam'], acknowledged: true }, auth, { computerName: 'PC-A' });
+  mods.setApprovalPolicy('poldemo', { computer: PC, mode: 'day', trusted: ['sam'], acknowledged: true }, auth, { computerName: 'PC-A', computerKnown: true });
   assert.strictEqual(r.pushes.at(-1).body, 'Jo set PC-A (abc$@x) to ask once a day; not asked: sam.');
   const recs = r.audit().filter((x) => x.action === 'approval-policy');
   assert.ok(recs.length >= 2 && recs.every((x) => x.computerName === 'PC-A' && x.computer === PC));
@@ -614,16 +625,72 @@ test('setApprovalPolicy: an unknown computer is refused only when the change ask
   assert.deepStrictEqual(r.policy(), []);
 });
 
-test('setApprovalPolicy: a computer that is known, or whose list could not be read (computerKnown true / null / absent), goes on to the normal step-up rules', async (t) => {
+test('setApprovalPolicy: asking less needs computerKnown === true (known: the normal step-up rules; unreadable list or absent: refused, "try again"); asking more always works', async (t) => {
   const r = rig(); t.after(r.cleanup);
   await r.finish();
   const loosen = { computer: PC, mode: 'day', trusted: ['sam'] };
-  for (const opts of [{ computerKnown: null }, { computerKnown: true }, {}, undefined]) {
-    let e = null;
-    try { r.mods.setApprovalPolicy('poldemo', loosen, ADMIN, opts); } catch (x) { e = x; }
-    assert.ok(e && e.status === 409 && e.needsAck === true && e.needsStepUp === true, JSON.stringify(opts));
+  // known: the normal step-up rules
+  let e = null;
+  try { r.mods.setApprovalPolicy('poldemo', loosen, ADMIN, { computerKnown: true }); } catch (x) { e = x; }
+  assert.ok(e && e.status === 409 && e.needsAck === true && e.needsStepUp === true, 'computerKnown true');
+  // list unreadable (null) or no answer at all ({}, undefined): asking less is refused, even with the acknowledgement and the password
+  for (const opts of [{ computerKnown: null }, {}, undefined, { computerKnown: undefined }, { computerKnown: 'true' }]) {
+    refused(() => r.mods.setApprovalPolicy('poldemo', withAck(loosen), ADMIN, opts), 400, /^Couldn't confirm that computer right now, so asking less was not saved\. Try again in a moment\.$/);
+    refused(() => r.mods.setApprovalPolicy('poldemo', { computer: PC, mode: 'day', trusted: [] }, ADMIN, opts), 400, /Couldn't confirm that computer/);
   }
-  assert.strictEqual(r.mods.setApprovalPolicy('poldemo', withAck(loosen), ADMIN, { computerKnown: null }).changed, true, 'unreadable list: saved by id with the acknowledgement and the password');
+  assert.deepStrictEqual(r.policy(), []);
+  assert.deepStrictEqual(r.audit(), [], 'a refused change leaves no record and no push');
+  assert.strictEqual(r.pushes.length, 0);
+  assert.strictEqual(r.mods.setApprovalPolicy('poldemo', withAck(loosen), ADMIN, { computerKnown: true }).changed, true, 'known: saved with the acknowledgement and the password');
+  // asking more is saved whatever computerKnown says
+  const more = [{ computer: PC, mode: 'session', trusted: ['sam'] }, { computer: PC, mode: 'session', trusted: [] }];
+  assert.strictEqual(r.mods.setApprovalPolicy('poldemo', more[0], ADMIN_NO_STEP, { computerKnown: null }).changed, true, 'day to session, list unreadable');
+  assert.strictEqual(r.mods.setApprovalPolicy('poldemo', more[1], ADMIN_NO_STEP, undefined).changed, true, 'untrusting, no answer');
+  assert.deepStrictEqual(r.policy(), []);
+});
+
+test('setApprovalPolicy: an agent at Look (not an asked level) cannot be trusted, even acknowledged, stepped up and on a known computer', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish(['sam', 'helper'], null);   // everyone stays at the default level, Look
+  const a0 = r.audit().length;
+  for (const input of [withAck({ computer: PC, mode: 'day', trusted: ['sam'] }), withAck({ computer: PC, mode: 'session', trusted: ['helper', 'sam'] })]) {
+    refused(() => r.mods.setApprovalPolicy('poldemo', input, ADMIN, { computerKnown: true }), 400, /^(sam|helper) is at look on Policy demo\. Set it to act or drive first; only those levels are asked\.$/);
+  }
+  refused(() => r.set(withAck({ computer: PC, mode: 'session', trusted: ['owner'] })), 400, /^owner is at look on Policy demo\. Set it to act or drive first/);
+  assert.deepStrictEqual(r.policy(), []);
+  assert.strictEqual(r.audit().length, a0, 'nothing recorded');
+  assert.strictEqual(r.pushes.length, 0);
+  // once raised to Act it can be trusted; sam stays refused while at Look
+  r.mods.setAgentPermissions('poldemo', { agents: ['sam', 'helper'], permissions: { owner: ACT.owner, helper: ACT.helper, sam: { level: 'look', askEachSession: true } } }, ADMIN);
+  assert.strictEqual(r.set(withAck({ computer: PC, mode: 'session', trusted: ['helper'] })).changed, true);
+  refused(() => r.set(withAck({ computer: PC, mode: 'session', trusted: ['helper', 'sam'] })), 400, /^sam is at look on Policy demo\./);
+  assert.deepStrictEqual(r.policy(), [`${PC}:trust:helper`]);
+});
+
+test('setAgentPermissions: a stored trust entry of an agent at Look (left by a hand edit or an old version) is dropped when it is raised, and the audit and the notice name it', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish(['sam', 'helper'], null);   // both at Look
+  // write the entry straight into the state file, as the old rules could have left it
+  const file = JSON.parse(fs.readFileSync(r.stateFile, 'utf8'));
+  file.modules.poldemo.settings = { ...(file.modules.poldemo.settings || {}), approval_policy: [`${PC}:day`, `${PC}:trust:sam`, `${PC2}:trust:sam`] };
+  fs.writeFileSync(r.stateFile, JSON.stringify(file));
+  assert.strictEqual(r.policy().length, 3, 'the hand-written entries are in force');
+  // sam only is raised (helper stays at Look): sam's entries go on both computers
+  const a0 = r.audit().length, n0 = r.pushes.length;
+  const out = r.mods.setAgentPermissions('poldemo', { agents: ['sam', 'helper'], permissions: { owner: ACT.owner, helper: { level: 'look', askEachSession: true }, sam: { level: 'act', askEachSession: true } } }, ADMIN);
+  assert.strictEqual(out.changed, true);
+  assert.deepStrictEqual(r.policy().slice().sort(), [`${PC}:day`], 'sam raised from Look: no old "don\'t ask" comes back');
+  const recs = r.audit().slice(a0).filter(x => x.action === 'permissions');
+  assert.ok(recs.length >= 2);
+  for (const x of recs) assert.deepStrictEqual([...x.policyRemoved].sort(), [`${PC}:trust:sam`, `${PC2}:trust:sam`].sort());
+  const sent = r.pushes.slice(n0);
+  assert.strictEqual(sent.length, 1);
+  assert.deepStrictEqual(sent[0], { title: 'Remote computer approvals changed', body: 'Jo: sam will be asked again on 2 computers.', url: '/modules#poldemo' });
+  assert.deepStrictEqual(r.mods.approvalPolicy('poldemo').policy, { [PC]: { mode: 'day', trusted: [] } });
+  // sam is now at Act and trusted again by the owner; raised to Drive (asked at both levels) the entry stays
+  r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam'] }));
+  r.mods.setAgentPermissions('poldemo', { agents: ['sam', 'helper'], permissions: { owner: ACT.owner, helper: { level: 'look', askEachSession: true }, sam: { level: 'drive', askEachSession: true } } }, ADMIN);
+  assert.ok(r.policy().includes(`${PC}:trust:sam`), 'Act to Drive keeps an entry');
 });
 
 const ACT = { owner: { level: 'look', askEachSession: true }, helper: { level: 'act', askEachSession: true }, sam: { level: 'act', askEachSession: true } };
@@ -655,7 +722,8 @@ test('setAgentPermissions: no policyRemoved and no policy notice when no entry g
   await r.finish(['sam', 'helper']);
   r.set(withAck({ computer: PC, mode: 'day', trusted: ['sam'] }));
   const before = policyPushes(r).length, a0 = r.audit().length;
-  r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: ACT }, ADMIN);   // both are raised to Act; sam's entry stays
+  const drive = { owner: ACT.owner, helper: { level: 'drive', askEachSession: true }, sam: { level: 'drive', askEachSession: true } };
+  r.mods.setAgentPermissions('poldemo', { agents: ['helper', 'sam'], permissions: drive }, ADMIN);   // both go from Act to Drive (still asked); sam's entry stays
   assert.ok(r.audit().slice(a0).filter(x => x.action === 'permissions').length >= 2);
   assert.ok(r.audit().slice(a0).filter(x => x.action === 'permissions').every(x => !('policyRemoved' in x)));
   assert.strictEqual(policyPushes(r).length, before);
