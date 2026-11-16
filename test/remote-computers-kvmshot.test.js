@@ -487,7 +487,7 @@ test('tiles are decoded when they arrive, with limits from the tile header', asy
   t.bin(cmdScreen(480, 540));
   t.bin(cmdTile(0, 0, solid(480, 540, RED)));
   assert.equal(big[0].maxResolutionInMP, 0.26);
-  assert.equal(big[0].maxMemoryUsageInMB, 19);   // ceil(259200 * 12 / 1048576) + 16
+  assert.equal(big[0].maxMemoryUsageInMB, 22);   // ceil(259200 * 24 / 1048576) + 16
   t.ws.emit('close');
   await rejectsWith(t.promise, 'EKVMCLOSED');
   // A tile that cannot be decoded within its own limits is a bad tile.
@@ -661,22 +661,69 @@ test('memory ceiling: 16.8 MP at most; dual 4K and 5K fit, 8K and 36 MP do not',
   }
 });
 
-test('a single tile claiming more pixels than the screen -> EKVMTILE, before any decode', async () => {
-  let decoded = 0;
-  const s = begin({ decode: (buf, opts) => { decoded++; return jpeg.decode(buf, opts); } });
-  s.bin(cmdScreen(64, 48));
-  s.bin(cmdTile(0, 0, solid(100, 100, RED)));   // 10000 > 3072
-  await rejectsWith(s.promise, 'EKVMTILE');
-  assert.equal(decoded, 0);
-  assert.equal(s.ws.closed, 1);
+test('a tile reaching 64 px or more past the right or bottom edge -> EKVMTILE with a plain reason, before any decode', async () => {
+  for (const [w, h] of [[128, 48], [64, 112], [200, 200]]) {   // screen 64x48: 64 + 64 = 128 wide, 48 + 64 = 112 high
+    let decoded = 0;
+    const s = begin({ decode: (buf, opts) => { decoded++; return jpeg.decode(buf, opts); } });
+    s.bin(cmdScreen(64, 48));
+    s.bin(cmdTile(0, 0, solid(w, h, RED)));
+    await assert.rejects(s.promise, (e) => e instanceof KvmError && e.code === 'EKVMTILE' && e.message === 'A piece of the screen reached past its edge.');
+    assert.equal(decoded, 0, `${w}x${h}`);
+    assert.equal(s.ws.closed, 1);
+  }
+  // 63 px past the edge is still padding: cropped
+  const ok = begin();
+  ok.bin(cmdScreen(64, 48));
+  ok.bin(cmdTile(0, 0, solid(127, 111, GREEN)));
+  ok.timers.fire(50);   // no display list: the grace decides
+  const r = await ok.promise;
+  assert.equal(r.screenWidth, 64);
+  assert.equal(r.screenHeight, 48);
 });
 
-test('decode memory limit follows the tile area: ceil(area * 12 / 1 MiB) + 16', async () => {
+// The real agent's frame, rebuilt with synthetic pixels: a 1920x1080 screen sent as ONE JPEG of 1920x1088 (its capture buffer padded
+// to a multiple of 16), in the agent's own message order: SCREEN, display info (one display, id 1, at 0,0, 1920x1080) and a display
+// list of 0 (8 bytes, selected 0), each repeated, a second same-size SCREEN, then commands 88 and 18 (5 bytes) before the tile.
+test('a full-screen tile padded past the bottom edge (1920x1088 on 1920x1080) is cropped; the real message order gives a clickable picture', async () => {
+  const W = 1920, H = 1080, PAD_H = 1088;
+  const data = Buffer.alloc(W * PAD_H * 4);
+  for (let y = 0; y < PAD_H; y++) {
+    const c = y >= H ? RED : (y < H / 2 ? BLUE : GREEN);   // the padding rows are red and must never show
+    for (let x = 0; x < W; x++) { const i = (y * W + x) * 4; data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 255; }
+  }
+  const tile = Buffer.from(jpeg.encode({ data, width: W, height: PAD_H }, 80).data);
+  assert.deepEqual(kvm.jpegSize(tile), { width: W, height: PAD_H });
+  const info = Buffer.from([0x00, 0x52, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, 0x80, 0x04, 0x38]);
+  const list0 = Buffer.from([0x00, 0x0b, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00]);
+  const s = begin({ maxWidth: 1920 });
+  s.bin(cmdScreen(W, H));
+  s.bin(info); s.bin(info); s.bin(list0);
+  s.bin(cmdScreen(W, H));
+  s.bin(info); s.bin(list0); s.bin(info); s.bin(list0);
+  s.bin(Buffer.from([0x00, 0x58, 0x00, 0x05, 0x00]));
+  s.bin(Buffer.from([0x00, 0x12, 0x00, 0x05, 0x00]));
+  s.bin(Buffer.from([0x00, 0x58, 0x00, 0x05, 0x0e]));
+  s.bin(jumbo(cmdTile(0, 0, tile)));
+  const r = await s.promise;
+  assert.equal(r.width, W);
+  assert.equal(r.height, H);
+  assert.equal(r.screenWidth, W);
+  assert.equal(r.screenHeight, H);
+  assert.equal(r.onPrimary, true, 'one display at the origin, list of 0: clickable');
+  assert.equal(r.primaryKnown, true);
+  assert.equal(s.ws.sent.filter((m) => Buffer.isBuffer(m) && m[1] === 12).length, 0, 'no SETDISPLAY');
+  assertOnlyAllowed(s.ws.sent);
+  const img = dec(r);
+  near(px(img, 100, 10), BLUE);
+  near(px(img, 100, H - 2), GREEN, 40);   // the last real row is green, not the red padding
+});
+
+test('decode memory limit follows the tile area: ceil(area * 24 / 1 MiB) + 16 (enough for 4:4:4 colour)', async () => {
   const seen = [];
   const s = begin({ decode: (buf, opts) => { seen.push(opts); return jpeg.decode(buf, opts); } });
   s.bin(cmdScreen(1000, 1000));
   s.bin(cmdTile(0, 0, solid(1000, 1000, RED)));
-  assert.equal(seen[0].maxMemoryUsageInMB, Math.ceil((1000 * 1000 * 12) / 1048576) + 16);
+  assert.equal(seen[0].maxMemoryUsageInMB, Math.ceil((1000 * 1000 * 24) / 1048576) + 16);
   assert.equal(seen[0].maxResolutionInMP, 1);
   s.ws.emit('close');
   await rejectsWith(s.promise, 'EKVMCLOSED');

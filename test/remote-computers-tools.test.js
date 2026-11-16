@@ -600,6 +600,7 @@ function setup(over = {}) {
   };
   const captureDesktop = async (ws, opts) => {
     captures.push({ ws, opts });
+    if (shot.failWith) throw shot.failWith;
     if (shot.fail) throw Object.assign(new Error('capture failed'), { code: shot.fail });
     return { width: shot.width, height: shot.height, screenWidth: shot.screenWidth, screenHeight: shot.screenHeight, jpeg: shot.jpeg, primaryKnown: shot.primaryKnown, onPrimary: shot.onPrimary, display: 0, tiles: 4 };
   };
@@ -858,6 +859,24 @@ test('tools: every KvmError code becomes a plain text, is logged with its code, 
     // Nothing keeps the computer busy: the next try works.
     t.shot.fail = null;
     assert.ok((await t.call('screenshot', { ...AGENT, computer: 'demo-pc' })).shot, `${code}: not busy afterwards`);
+  }
+});
+
+test('tools: a capture that failed on one of its own checks says which, in plain words, to the agent and in the log', async () => {
+  const { KvmError } = require('../modules/remote-computers/lib/kvmshot');
+  const cases = [
+    ['EKVMTILE', 'A piece of the screen reached past its edge.', 'a piece of the screen reached past its edge'],
+    ['EKVMTILE', 'A piece of the screen was outside the screen.', 'a piece of the screen was outside the screen'],
+    ['EKVMCOPY', 'The remote screen sent a copy command, so the picture could not be trusted.', 'the remote screen sent a copy command, so the picture could not be trusted'],
+    ['EKVMBIG', 'The remote screen changed size too often.', 'the remote screen changed size too often'],
+  ];
+  for (const [code, message, why] of cases) {
+    const t = setup();
+    t.shot.failWith = new KvmError(code, message);
+    const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
+    assert.strictEqual(r.error, `demo-pc did not send a usable picture of its screen: ${why}. Try again in a moment; if it keeps happening, tell the owner.`);
+    assert.ok(t.logs.some((l) => l.includes(`(${code}: ${why})`)), `${code}: logged with the reason`);
+    assert.doesNotMatch(r.error, /EKVM/);
   }
 });
 

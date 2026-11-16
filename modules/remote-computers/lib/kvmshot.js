@@ -21,14 +21,19 @@ const CMD = Object.freeze({
 });
 const ALL_DISPLAYS = 65535;
 // Memory: the canvas is 4 bytes a pixel (4*P), the coverage map 1 byte (P), and one tile decode
-// (coefficients about 6 B/px plus RGBA output) stays within 12*P, so with P <= 16.8 MP the peak is about
-// 290 MB in the worst case. A dual 4K screen (7680x2160 = 16.6 MP) and 5K (5120x2880) fit; 8K does not.
+// (with 4:4:4 colour about 12 B/px of coefficients, 3 B/px of colour planes and 4 B/px of RGBA output) stays within
+// 24 B/px of that tile, and a tile is at most (w + 64) x (h + 64) (edge padding, see edgePad). So with P <= 16.8 MP the
+// worst case (one full-screen 4:4:4 tile) is about 29*P, near 500 MB; a typical 1920x1080 frame (one 4:2:0 tile) needs
+// about 60 MB. A dual 4K screen (7680x2160 = 16.6 MP) and 5K (5120x2880) fit; 8K does not.
 const LIMITS = Object.freeze({
   maxSide: 16384,
   maxPixels: 16800000,
   maxBytes: 128 * 1024 * 1024,
   maxTiles: 50000,       // the least; a screen may allow more (see tileLimit)
   areaSlack: 4 * 1024 * 1024,
+  // A tile may reach past the right or bottom edge by less than this: the agent encodes its padded capture buffer (a real 1920x1080
+  // screen came as one 1920x1088 JPEG), so the extra rows or columns are cropped away. Anything further out is refused.
+  edgePad: 64,
 });
 // Claimed tile area allowed since the latest SCREEN, and tiles allowed per SCREEN.
 const MAX_RESETS = 4;   // frame resets allowed in one capture
@@ -201,7 +206,7 @@ function decodeTile(jpeg, size, decode) {
     useTArray: true,
     formatAsRGBA: true,
     maxResolutionInMP: Math.max(0.01, Math.ceil(area / 10000) / 100),
-    maxMemoryUsageInMB: Math.ceil((area * 12) / 1048576) + 16,
+    maxMemoryUsageInMB: Math.ceil((area * 24) / 1048576) + 16,
   };
   try {
     return decode(jpeg, opts);
@@ -468,7 +473,11 @@ function captureDesktop(ws, options) {
       const size = jpegSize(jpeg);
       if (!size) throw new KvmError('EKVMTILE', 'A piece of the screen was not a readable picture.');
       if (x >= screen.w || y >= screen.h) throw new KvmError('EKVMTILE', 'A piece of the screen was outside the screen.');
-      if (size.width * size.height > screen.w * screen.h) throw new KvmError('EKVMTILE', 'A piece of the screen was larger than the screen.');
+      // Edge padding (less than edgePad past the right or bottom edge) is cropped when drawn; a tile reaching further is refused before
+      // any budget or decode, which also keeps every tile within (w + edgePad) x (h + edgePad).
+      if (x + size.width >= screen.w + LIMITS.edgePad || y + size.height >= screen.h + LIMITS.edgePad) {
+        throw new KvmError('EKVMTILE', 'A piece of the screen reached past its edge.');
+      }
       area += size.width * size.height;
       if (area > areaLimit(screen.w, screen.h)) throw new KvmError('EKVMBIG', 'The remote screen sent far more picture than its size.');
       const img = decodeTile(jpeg, size, decode);

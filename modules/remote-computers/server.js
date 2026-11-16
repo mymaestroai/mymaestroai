@@ -612,13 +612,16 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       }
       try { return await p; } catch (e) {
         const code = e && typeof e.code === 'string' ? e.code : 'EKVM';
-        log(`screenshot of ${pc.name} failed (${clean(code, 20)})`);
+        // kvmshot's own fixed sentence ("A piece of the screen was outside the screen."), as a lower-case clause without its full stop.
+        const said = e && e.name === 'KvmError' && typeof e.message === 'string' ? clean(e.message, 120).replace(/\.\s*$/, '') : '';
+        const why = said ? said.charAt(0).toLowerCase() + said.slice(1) : '';
+        log(`screenshot of ${pc.name} failed (${clean(code, 20)}${why ? `: ${why}` : ''})`);
         const liveNow = live || desktop.forNode(pc.nodeid);   // a session may have opened during the capture
         if (code === 'EKVMTIMEOUT' && liveNow && !liveNow.unknown) throw new ToolError(`${pc.name}'s desktop is open for ${liveNow.who.name} and did not send a picture to share. Try again after their session, or ask them.`);
         if (code === 'EKVMPRIMARY') throw new ToolError(`${pc.name} shows all its screens together and the main one could not be picked, so no picture was taken.`);
         if (code === 'EKVMTIMEOUT') throw new ToolError(`${pc.name} did not send a picture of its screen in time. Try again in a moment.`);
         if (code === 'EKVMCLOSED') throw new ToolError(`The connection to ${pc.name}'s screen closed before a picture arrived. Try again in a moment.`);
-        throw new ToolError(`${pc.name} did not send a usable picture of its screen (${clean(code, 20)}).`);
+        throw new ToolError(why ? `${pc.name} did not send a usable picture of its screen: ${why}. Try again in a moment; if it keeps happening, tell the owner.` : `${pc.name} did not send a usable picture of its screen (${clean(code, 20)}).`);
       }
     } finally {
       if (ws) { try { ws.close(); } catch { /* closed */ } }
