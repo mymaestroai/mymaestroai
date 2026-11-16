@@ -12695,9 +12695,23 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             await d.interject(t);
           } else {
             beginOwnTurn();
-            await d.send(t);
+            try { await d.send(t); }
+            catch (e) {
+              // The hub refused it as busy (a turn it started had just begun and the page had not seen it yet): his words are kept and sent
+              // when that work is over, as if he had spoken during it; never dropped.
+              if (e && e.refused === true && !ended) { awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity('')); quiet(() => ui.reply('drop')); bgKeepRefused(t); return; }
+              throw e;
+            }
           }
         } catch { sendFailed(); }
+      }
+      // Words the hub refused as busy: kept like words spoken during background work (the line, the state, the 30 s check), whatever the page
+      // knows about the agent yet; the check or the idle hook sends them.
+      function bgKeepRefused(t) {
+        const first = !bgWords.length;
+        bgWords.push(t);
+        if (first) { if (bgMode() === 'say') enqueue(VOICE_BACKGROUND_LINE, 'status'); bgArm(); }
+        settle();
       }
       function beginOwnTurn() {
         awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; doneSeen = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];

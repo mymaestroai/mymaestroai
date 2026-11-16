@@ -1059,3 +1059,28 @@ test('r3-3 phone: for_owner for an unseen turn: idle gives the cue at once; busy
   f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h1', ok: true, reply: 'Done.' });
   assert.strictEqual(calls.owners, 4);
 });
+
+// review r4 (Sonnet follow-up 1): the hub refuses his normal send as busy before the page has seen the background turn
+test('r4-1 controller: a normal send the hub refuses as busy (409) keeps his words, says the background line, and sends them when the work is over', async () => {
+  let n = 0;
+  const h = await started({ keepWords: (t, note) => { h.plain.push([t, note]); }, send: async (t) => { h.sent.push(t); n++; if (n === 1) throw Object.assign(new Error('busy'), { refused: true }); } });
+  h.bg = false;   // the page has not seen the hub-started turn yet
+  await h.say('what is on today');
+  await h.finish();
+  assert.deepStrictEqual(h.sent, ['what is on today'], 'sent once, refused');
+  assert.strictEqual(h.call.background, true, 'his words are kept, not dropped');
+  assert.deepStrictEqual(h.spoken, [LINE], 'the background line, not "That did not go through."');
+  await h.call.backgroundDone();
+  assert.deepStrictEqual(h.sent, ['what is on today', 'what is on today'], 'sent again once the work is over');
+  assert.deepStrictEqual(h.plain, []);
+  assert.strictEqual(h.call.background, false);
+});
+test('r4-1 controller: a normal send that fails without a refusal still says "That did not go through." and keeps nothing', async () => {
+  const h = await started({ keepWords: (t, note) => { h.plain.push([t, note]); }, send: async (t) => { h.sent.push(t); throw new Error('HTTP 500'); } });
+  h.bg = false;
+  await h.say('hello there');
+  await h.finish();
+  assert.deepStrictEqual(h.sent, ['hello there']);
+  assert.strictEqual(h.call.background, false);
+  assert.ok(h.spoken.includes('That did not go through.'), JSON.stringify(h.spoken));
+});
