@@ -469,7 +469,7 @@ function scoped(src, from, to, base, exportsList) {
 test('desktop: kept words at hang-up go to the chat\'s input after what is typed there, with the toast; nothing is sent', () => {
   const toasts = [], sentTo = [];
   const input = { value: 'half typed ', dispatched: 0, dispatchEvent() { this.dispatched++; return true; } };
-  const f = scoped(app, 'function voiceCallKeepWords(chatId, text) {', 'async function voiceCallInterject', {
+  const f = scoped(app, 'function voiceCallKeepWords(chatId, text, note) {', 'async function voiceCallInterject', {
     document: { getElementById: (id) => (id === 'input-c1' ? input : null) }, chats: { c1: { agent: 'alice' } }, hubToast: (t) => toasts.push(t),
     sendSoloMessage: (...a) => { sentTo.push(a); }, Event: class { constructor(t) { this.type = t; } } }, 'voiceCallKeepWords');
   f.voiceCallKeepWords('c1', 'first words more words');
@@ -480,15 +480,16 @@ test('desktop: kept words at hang-up go to the chat\'s input after what is typed
   input.value = '';
   f.voiceCallKeepWords('c1', 'alone');
   assert.strictEqual(input.value, 'alone', 'an empty box: no leading space');
-  f.voiceCallKeepWords('gone', 'x');   // a closed chat: nothing happens
-  assert.deepStrictEqual(toasts.length, 2);
+  f.voiceCallKeepWords('gone', 'x');   // a closed chat: the words are shown in a toast (round 2), not lost silently
+  assert.deepStrictEqual(toasts.length, 3);
+  assert.strictEqual(toasts[2], 'What you said: x');
 });
 
 test('phone: kept words at hang-up go to the composer and its saved draft after what is there, with the toast; nothing is sent', () => {
   const toasts = [], drafts = {}, sent = [];
   const input = { value: 'typed', style: {}, scrollHeight: 30 };
   const base = { current: 'bob', $: (id) => (id === 'msg-input' ? input : null), draftsAll: () => ({ cat: { text: 'cat draft' } }), saveDraft: (a, t) => { drafts[a] = t; }, composerTypingPaint() {}, toast: (t) => toasts.push(t), sendMessage: (...a) => { sent.push(a); } };
-  const f = scoped(mob, 'function voiceCallKeepWords(vc, text) {', '// A spoken correction while the agent works', base, 'voiceCallKeepWords');
+  const f = scoped(mob, 'function voiceCallKeepWords(vc, text, note) {', '// A spoken correction while the agent works', base, 'voiceCallKeepWords');
   f.voiceCallKeepWords({ agent: 'bob' }, 'say this');
   assert.strictEqual(input.value, 'typed say this');
   assert.deepStrictEqual(drafts, { bob: 'typed say this' }, 'the saved draft: a reload keeps them');
@@ -611,7 +612,7 @@ test('phone: back-to-back hub turns: the words wait for the second and are relea
 
 test('controller: a send the hub refuses puts the words back at the front; nothing extra is said; the next idle sends them with what came after', async () => {
   let fail = true; const toasts = [];
-  const h = await started({ send: async (t) => { h.sent.push(t); if (fail) throw new Error('409'); h.running = true; }, ui: { state: (n) => h.states.push(n), heard() {}, held() {}, toast: (t) => toasts.push(t), summary() {} } });
+  const h = await started({ send: async (t) => { h.sent.push(t); if (fail) throw Object.assign(new Error('409'), { refused: true }); h.running = true; }, ui: { state: (n) => h.states.push(n), heard() {}, held() {}, toast: (t) => toasts.push(t), summary() {} } });
   h.bg = true;
   await h.say('first');
   await h.finish();
@@ -730,4 +731,218 @@ test('"stop" while only a hub-started turn runs (nothing kept, no own turn): say
   await g.say('do a thing');
   await g.say('stop');
   assert.strictEqual(g.stops, 1);
+});
+
+// ═══ review round 2 fixes ═══
+const MAY_NOT = 'That may not have gone through. It\'s in the message box.';
+const DID_NOT = 'That did not go through. It\'s in the message box.';
+const NOT_SURE = 'I couldn\'t confirm that went through. What you said is in the message box.';
+
+// 1. an uncertain delivery is never retried
+test('r2-1 controller: a network failure after the POST: no second send, the words in the message box with the toast text, the line once', async () => {
+  const h = await started({ keepWords: (t, note) => { h.plain.push([t, note]); }, send: async (t) => { h.sent.push(t); throw new Error('network error'); } });
+  h.bg = true;
+  await h.say('please do it');
+  await h.finish();
+  h.bg = false;
+  await h.call.backgroundDone();
+  await h.advance(100);
+  assert.deepStrictEqual(h.sent, ['please do it'], 'sent once');
+  assert.deepStrictEqual(h.plain, [['please do it', NOT_SURE]]);
+  assert.deepStrictEqual(h.spoken, [LINE, MAY_NOT], 'the line once');
+  await h.finish();
+  assert.strictEqual(h.call.background, false, 'nothing is waiting any more');
+  await h.call.backgroundDone();
+  h.bg = true; h.bg = false;
+  await h.advance(61000);
+  assert.deepStrictEqual(h.sent, ['please do it'], 'never retried, at the next idle or later');
+  assert.deepStrictEqual(h.spoken, [LINE, MAY_NOT]);
+});
+
+test('r2-1 controller: a confirmed refusal (409) is put back and sent once at the next idle', async () => {
+  let fail = true;
+  const h = await started({ send: async (t) => { h.sent.push(t); if (fail) throw Object.assign(new Error('busy'), { refused: true }); h.running = true; } });
+  h.bg = true;
+  await h.say('again please');
+  await h.finish();
+  h.bg = false;
+  await h.call.backgroundDone();
+  assert.deepStrictEqual(h.sent, ['again please']);
+  assert.strictEqual(h.call.background, true, 'back to wait');
+  fail = false;
+  await h.call.backgroundDone();
+  assert.deepStrictEqual(h.sent, ['again please', 'again please'], 'sent once more, at the next idle');
+  await h.call.backgroundDone();
+  assert.strictEqual(h.sent.length, 2);
+});
+
+test('r2-1 pages: the call send rejects with refused: true for a 409 and another non-2xx, not for a network failure (desktop source and phone sendMessage)', async () => {
+  assert.ok(app.includes("notify(Object.assign(new Error('busy'), { refused: true }))"));
+  assert.ok(app.includes('`HTTP ${response.status}: ${response.statusText}`), { refused: true })'));
+  assert.ok(mob.includes("notify(Object.assign(new Error('busy'), { refused: true }))"));
+  let status = 409, boom = null;
+  const base = { current: 'bob', plusSheetShow() {}, toast() {}, displayName: (n) => n, isBusy: () => false, ownTurnFor: () => false, streams: new Map(), reattaches: new Map(), live: {}, recentOwn: new Map(), pendingImages: [],
+    api: async () => { if (boom) throw boom; return { status, ok: status < 400, json: async () => ({}) }; }, zoneHeader: () => ({}), voiceTakeDictated: () => false, newFeed: () => ({}), bubbleLive: () => false, readStream: async () => {}, enterReattach() {},
+    addUserBubble: () => ({ remove() {} }), addAssistantBubble: () => ({ el: { remove() {}, classList: { add() {} } }, body: {} }), voiceCall: null, stick: false, tzSentAt: 0, voiceAutoReadGen: 0 };
+  const g = scoped(mob, 'async function sendMessage(fallback) {', '// ── Re-attach after a lost connection', base, 'sendMessage');
+  const errOf = async () => { let err = null; await g.sendMessage({ agent: 'bob', text: 'hi', userEl: null, noteEl: null, voice: true, onSendResult: (e) => { err = e; } }); return err; };
+  assert.strictEqual((await errOf()).refused, true, '409');
+  status = 500;
+  assert.strictEqual((await errOf()).refused, true, 'another non-2xx');
+  status = 200; boom = new TypeError('Failed to fetch');
+  const net = await errOf();
+  assert.ok(net && net.refused !== true, 'a network failure is uncertain');
+});
+
+// 2. the idle report comes before the hub turn's turn_end
+test('r2-2 desktop: the real event order (idle first, then turn_end): a for_owner-marked hub turn gives the cue once', () => {
+  let running = true;
+  const { f, calls, S } = deskEnv({ voiceCallRunning: () => running });
+  const ev = f.voiceCallHubEvent;
+  ev('turn_start', { agent: 'alice', turnId: 'h1', origin: { kind: 'schedule' } });
+  ev('for_owner', { agent: 'alice', reason: 'needs you', turnId: 'h1', origin: { kind: 'schedule' } });
+  running = false;
+  f.voiceCallHubIdle('alice');          // onHubTurnEnd -> setAgentLive -> idle hook runs first
+  assert.strictEqual(calls.owners, 1, 'the cue at idle');
+  ev('turn_end', { agent: 'alice', turnId: 'h1', ok: true, reply: 'Done.' });   // then its turn_end
+  assert.strictEqual(calls.owners, 1, 'once');
+  assert.strictEqual(S.owner.size, 0);
+  // an unmarked turn: nothing at idle; marked just after, still within 5 s: the cue
+  running = true;
+  ev('turn_start', { agent: 'alice', turnId: 'h2', origin: { kind: 'schedule' } });
+  running = false;
+  f.voiceCallHubIdle('alice');
+  ev('turn_end', { agent: 'alice', turnId: 'h2', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.owners, 1);
+  ev('for_owner', { agent: 'alice', reason: 'late', turnId: 'h2', origin: { kind: 'schedule' } });
+  assert.strictEqual(calls.owners, 2, 'marked up to 5 s after it ended still works');
+});
+
+test('r2-2 phone: the real event order (idle first, then turn_end): a for_owner-marked hub turn gives the cue once', () => {
+  let busy = true;
+  const { f, calls, vc } = phoneEnv({ isBusy: () => busy });
+  f.voiceCallTurnStart({ agent: 'bob', turnId: 'h1', origin: { kind: 'schedule' } });
+  f.voiceCallForOwner({ agent: 'bob', reason: 'needs you', turnId: 'h1', origin: { kind: 'schedule' } });
+  busy = false;
+  f.voiceCallHubIdle('bob');            // onTurnEnd -> setLive -> idle hook runs first
+  assert.strictEqual(calls.owners, 1, 'the cue at idle');
+  f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h1', ok: true, reply: 'Done.' });   // then voiceCallTurnEnd
+  assert.strictEqual(calls.owners, 1, 'once');
+  assert.strictEqual(vc.hubOwner.size, 0);
+  busy = true;
+  f.voiceCallTurnStart({ agent: 'bob', turnId: 'h2', origin: { kind: 'schedule' } });
+  busy = false;
+  f.voiceCallHubIdle('bob');
+  f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h2', ok: true, reply: 'Done.' });
+  assert.strictEqual(calls.owners, 1);
+  f.voiceCallForOwner({ agent: 'bob', reason: 'late', turnId: 'h2', origin: { kind: 'schedule' } });
+  assert.strictEqual(calls.owners, 2, 'marked up to 5 s after it ended still works');
+});
+
+// 3. at most three confirmed refusals
+test('r2-3 controller: the third confirmed refusal sends the words to the message box and says so once; nothing is retried', async () => {
+  const h = await started({ ...{}, keepWords: (t, note) => { h.plain.push([t, note]); }, send: async (t) => { h.sent.push(t); throw Object.assign(new Error('busy'), { refused: true }); } });
+  h.bg = true;
+  await h.say('stubborn words');
+  await h.finish();
+  h.bg = false;
+  await h.call.backgroundDone();
+  assert.strictEqual(h.call.background, true, 'after the first: waiting');
+  await h.call.backgroundDone();
+  assert.strictEqual(h.call.background, true, 'after the second: waiting');
+  assert.deepStrictEqual(h.plain, []);
+  await h.call.backgroundDone();
+  assert.deepStrictEqual(h.sent, ['stubborn words', 'stubborn words', 'stubborn words'], 'three tries in all');
+  assert.deepStrictEqual(h.plain, [['stubborn words', undefined]], 'the page\'s own toast: "What you said is in the message box."');
+  assert.deepStrictEqual(h.spoken, [LINE, DID_NOT]);
+  assert.strictEqual(h.call.background, false);
+  await h.call.backgroundDone();
+  await h.advance(61000);
+  assert.strictEqual(h.sent.length, 3);
+  assert.deepStrictEqual(h.spoken, [LINE, DID_NOT]);
+});
+
+// 4. a rejected send: expecting is cleared at once, no 2.5 s release
+function deskSendEnv(sendImpl) {
+  const timers = [], replies = [], input = { value: 'half' };
+  const S = { call: { onReplyText: (t, d) => replies.push([t, d]) }, sendSeq: 0, expecting: false, own: new Map(), hub: new Map(), owner: new Set(), hubEnded: new Map(), agent: 'alice', chatId: 'c1' };
+  const base = { document: { getElementById: () => input }, chats: { c1: { agent: 'alice', status: 'idle' } }, voiceCallS: S, voiceDisplayHook() {}, sendSoloMessage: sendImpl, setTimeout: (fn, ms) => { timers.push([fn, ms]); return timers.length; }, voiceLinkNetFail() {} };
+  const f = scoped(app, 'function voiceCallSend(chatId, text) {', '// The words kept for the background work', base, 'voiceCallSend');
+  return { f, S, timers, replies, input };
+}
+test('r2-4 desktop: a rejected call send clears expecting at once and its 2.5 s release says nothing', async () => {
+  const e = deskSendEnv((chatId, n, o) => { o.onSendResult(Object.assign(new Error('busy'), { refused: true })); return Promise.resolve(); });
+  await assert.rejects(e.f.voiceCallSend('c1', 'words'), /busy/);
+  await tick();
+  assert.strictEqual(e.S.expecting, false, 'cleared at once: words spoken next are not taken for the reply of a send that never went out (they are kept as background, not interjected)');
+  for (const [fn] of e.timers) fn();
+  assert.deepStrictEqual(e.replies, [], 'no onReplyText(\'\', true) for the send that never went out');
+  assert.strictEqual(e.input.value, 'half', 'the typed text stays');
+  // an accepted send still releases
+  const ok = deskSendEnv((chatId, n, o) => { o.onSendResult(null); return Promise.resolve(); });
+  await ok.f.voiceCallSend('c1', 'words'); await tick();
+  assert.strictEqual(ok.S.expecting, true);
+  for (const [fn] of ok.timers) fn();
+  assert.deepStrictEqual(ok.replies, [['', true]]);
+});
+test('r2-4 phone: a rejected call send clears expecting at once and its 2.5 s release says nothing', async () => {
+  const timers = [], replies = [];
+  const vc = { agent: 'bob', sendSeq: 0, expecting: false, lastText: '', call: { onReplyText: (t, d) => replies.push([t, d]) } };
+  const base = { voiceCall: vc, stick: false, setTimeout: (fn) => { timers.push(fn); return timers.length; }, sendMessage: async (o) => { o.onSendResult(Object.assign(new Error('busy'), { refused: true })); } };
+  const f = scoped(mob, 'function voiceCallSend(vc, text, userEl) {', '// The words kept for the background work', base, 'voiceCallSend');
+  await assert.rejects(f.voiceCallSend(vc, 'words'), /busy/);
+  await tick();
+  assert.strictEqual(vc.expecting, false);
+  for (const fn of timers) fn();
+  assert.deepStrictEqual(replies, []);
+  const vc2 = { agent: 'bob', sendSeq: 0, expecting: false, lastText: '', call: { onReplyText: (t, d) => replies.push([t, d]) } };
+  base.voiceCall = vc2; base.sendMessage = async (o) => { o.onSendResult(null); };
+  await f.voiceCallSend(vc2, 'words'); await tick();
+  for (const fn of timers) fn();
+  assert.deepStrictEqual(replies, [['', true]], 'an accepted send still releases');
+});
+
+// 5. a stale busy report right after his own turn ended
+test('r2-5 desktop: his own turn ends, a stale busy report within 3 s, he speaks: a normal send, not kept as background; after 3 s it counts again', () => {
+  const { f, setClock, S, st } = deskEnv({ busyRun: {} });
+  setClock(1000);
+  f.voiceCallHubEvent('turn_start', { agent: 'alice', turnId: 'u1', origin: { kind: 'user' } });
+  f.voiceCallHubEvent('turn_end', { agent: 'alice', turnId: 'u1', ok: true, reply: 'ok' });
+  setClock(2500);
+  assert.strictEqual(f.voiceCallBackgroundBusy(), false, '1.5 s after: the status feed lags');
+  setClock(4500);
+  assert.strictEqual(f.voiceCallBackgroundBusy(), true, '3.5 s after, still busy with no known turn: background');
+  const fresh = deskEnv({ busyRun: {} });
+  assert.strictEqual(fresh.f.voiceCallBackgroundBusy(), true, 'no turn of his own ended: unchanged');
+});
+test('r2-5 phone: his own turn ends, a stale busy report within 3 s, he speaks: a normal send, not kept as background; after 3 s it counts again', () => {
+  const { f, vc, setClock } = phoneEnv();
+  setClock(1000);
+  f.voiceCallTurnStart({ agent: 'bob', turnId: 'u1', origin: { kind: 'user' } });
+  f.voiceCallTurnEnd({ agent: 'bob', turnId: 'u1', ok: true, reply: 'ok' });
+  setClock(2500);
+  assert.strictEqual(f.voiceCallBackgroundBusy(vc), false);
+  setClock(4500);
+  assert.strictEqual(f.voiceCallBackgroundBusy(vc), true);
+  const fresh = phoneEnv();
+  assert.strictEqual(fresh.f.voiceCallBackgroundBusy(fresh.vc), true);
+});
+
+// 6. desktop keepWords with the chat gone
+test('r2-6 desktop: kept words with the chat or its input gone are shown in a toast, at most 200 characters; the note replaces the default toast', () => {
+  const toasts = [];
+  const input = { value: '', dispatchEvent() { return true; } };
+  let chats = { c1: { agent: 'alice' } }, el = input;
+  const f = scoped(app, 'function voiceCallKeepWords(chatId, text, note) {', 'async function voiceCallInterject', {
+    document: { getElementById: () => el }, get chats() { return chats; }, hubToast: (t) => toasts.push(t), Event: class {} }, 'voiceCallKeepWords');
+  el = null;
+  f.voiceCallKeepWords('c1', 'x'.repeat(300));
+  assert.deepStrictEqual(toasts, ['What you said: ' + 'x'.repeat(200)]);
+  el = input; chats = {};
+  f.voiceCallKeepWords('c1', 'my words');
+  assert.strictEqual(toasts[1], 'What you said: my words');
+  chats = { c1: {} };
+  f.voiceCallKeepWords('c1', 'in the box', NOT_SURE);
+  assert.strictEqual(input.value, 'in the box');
+  assert.strictEqual(toasts[2], NOT_SURE);
 });

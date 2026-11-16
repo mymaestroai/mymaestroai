@@ -86,7 +86,7 @@ test('voice: true goes only with messages that came from a call; the 409 path le
   assert.match(js, /\.\.\.\(fallback && fallback\.voice \? \{ voice: true \} : \{\}\)/);
   assert.match(js, /sendMessage\(\{ agent: vc\.agent, text, userEl, noteEl: null, voice: true, onSendResult: accepted \}\)/);   // changed: the controller hears whether the hub took the message (a 409 is a refusal)
   assert.match(js, /body: JSON\.stringify\(\{ agent, message: text, images, confirm_tools: false, \.\.\./);
-  assert.match(js, /notify\(new Error\('busy'\)\);[\s\S]{0,200}if \(fallback && fallback\.voice\) \{\n\s*\/\/ a call keeps the composer as it was/);   // changed: no toast of the page; the controller is told (notify) and says or keeps the words itself
+  assert.match(js, /notify\(Object\.assign\(new Error\('busy'\), \{ refused: true \}\)\);[\s\S]{0,300}if \(fallback && fallback\.voice\) \{\n\s*\/\/ a call keeps the composer as it was/);   // changed: no toast of the page; the controller is told (notify) and says or keeps the words itself
   assert.ok(!/voice: true/.test(sliceBetween('async function sendInterjection(agent)', 'function stopTurn(agent)')), 'typed sends are unchanged');
 });
 

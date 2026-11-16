@@ -9721,7 +9721,7 @@
             notify(null);   // delivered into the running turn instead
             return sendInterjection(chatId);
           }
-          notify(new Error('busy'));
+          notify(Object.assign(new Error('busy'), { refused: true }));   // the hub answered: it did not take the message
           chat.bounced409 = false;
           if (!input.value) input.value = content;
           chat.pendingImages = fallback ? [...imagesToSend, ...(chat.pendingImages || [])] : imagesToSend;   // a fallback send: in front of what was attached since
@@ -9736,7 +9736,7 @@
           chat.onStreamData = () => voiceLinkAlive(owner);
         } else chat.onStreamData = null;
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          throw Object.assign(new Error(`HTTP ${response.status}: ${response.statusText}`), { refused: true });   // an answer that is not accepted: a call knows it was refused
         }
         notify(null);
 
@@ -12056,7 +12056,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
       // Hub-started turns (see VOICE_BACKGROUND_LINE): bgWords = what the person said while one runs (kept in order, sent as one message when it is over; d.backgroundBusy()
       // says whether a hub-started turn runs and none of his own), bgTimer = the repeat of the spoken line; cuePending = the cue that waits for the speaking to be over.
-      let bgWords = [], bgTimer = null, cuePending = '', cueAt = null, cuePendingAt = 0;
+      let bgWords = [], bgTimer = null, bgRefusals = 0, cuePending = '', cueAt = null, cuePendingAt = 0;
       // Recording (deps.recorder, only for an agent that keeps recordings; without it none of this acts). recDecided: the decision for the speech now
       // under way was made (at its begin); recOn: it is being recorded. Nothing said in standby is ever recorded: the decision is made at speech begin.
       // deps.recordTranscript(seq, text) and deps.recordReplyText(text) hand the saved text to the page.
@@ -12737,15 +12737,26 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!bgWords.length) { settle(); return Promise.resolve(); }
         bgUnsay();
         const kept = bgWords; bgWords = [];
-        return (async () => { try { beginOwnTurn(); await d.send(kept.join(' ')); } catch { bgBack(kept); } })();
+        return (async () => { try { beginOwnTurn(); await d.send(kept.join(' ')); bgRefusals = 0; } catch (e) { bgBack(kept, e); } })();
       }
-      // The hub did not take the kept words (the agent was busy again, or a network failure): they go back to the front of what is kept and wait for the next idle;
-      // nothing extra is said. Hung up meanwhile: they go to the message box.
-      function bgBack(kept) {
+      // The hub did not take the kept words. Only a confirmed refusal (err.refused === true: an HTTP answer that is not accepted, such as 409 busy) puts them back at the front of
+      // what is kept to wait for the next idle, nothing extra said; after the third refusal they go to the message box. An uncertain delivery (a network error, anything before an
+      // answer) may have reached the hub: they are never sent again, they go to the message box. Hung up meanwhile: they go to the message box.
+      const BG_MAX_REFUSALS = 3;
+      function bgBack(kept, err) {
         awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity(''));
-        if (ended) { quiet(() => d.keepWords && d.keepWords(kept.join(' '))); return; }
-        bgWords = kept.concat(bgWords);
-        bgArm(); settle();
+        const words = kept.join(' ');
+        if (ended) { quiet(() => d.keepWords && d.keepWords(words)); return; }
+        if (err && err.refused === true && ++bgRefusals < BG_MAX_REFUSALS) {
+          bgWords = kept.concat(bgWords);
+          bgArm(); settle();
+          return;
+        }
+        const refused = !!(err && err.refused === true);
+        bgRefusals = 0;
+        quiet(() => d.keepWords && (refused ? d.keepWords(words) : d.keepWords(words, 'I couldn\'t confirm that went through. What you said is in the message box.')));
+        enqueue(refused ? 'That did not go through. It\'s in the message box.' : 'That may not have gone through. It\'s in the message box.', 'status');
+        settle();
       }
       // A hub-started turn that needs the person ended (the page: for_owner). The pref hubCue: 'off' nothing, 'chime' the soft chime, 'cue' the chime and one spoken line.
       // At most one per 30 s; never over the person speaking or a reply being read: it waits (settle) until that is over.
@@ -15244,11 +15255,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       S.expecting = true;
       const prev = input.value;
       input.value = text;
-      let accepted;
-      const result = new Promise((resolve, reject) => { accepted = (err) => { if (err && typeof voiceLinkNetFail === 'function') voiceLinkNetFail(err, linkOwner); err ? reject(err) : resolve(); }; });   // a network failure on the message marks the link lost
+      let accepted, rejected = false, answered = false;
+      // The first answer counts. A rejected send clears the expecting flag at once and its 2.5 s release says nothing: the words spoken next are not taken for the reply of a send that never went out.
+      const result = new Promise((resolve, reject) => { accepted = (err) => { if (answered) return; answered = true; if (err) { rejected = true; if (S.sendSeq === seq) S.expecting = false; if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(err, linkOwner); reject(err); } else resolve(); }; });   // a network failure on the message marks the link lost
       const release = () => {
         setTimeout(() => {
-          if (!S.call || S.sendSeq !== seq || !S.expecting) return;
+          if (rejected || !S.call || S.sendSeq !== seq || !S.expecting) return;
           S.expecting = false;
           let last = ''; for (const v of S.own.values()) last = v;
           S.own.clear();
@@ -15262,14 +15274,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // The words kept for the background work, when the call is hung up before they could go out: never sent (the agent is busy: the message would be interjected into
     // its work), but put in the chat's message box after whatever is already typed there, and the person is told.
-    function voiceCallKeepWords(chatId, text) {
+    function voiceCallKeepWords(chatId, text, note) {
       const input = document.getElementById(`input-${chatId}`);
       const words = String(text || '').trim();
-      if (!input || !chats[chatId] || !words) return;
+      if (!words) return;
+      if (!input || !chats[chatId]) { hubToast('What you said: ' + words.slice(0, 200)); return; }   // the chat is gone: the words are shown so they are not lost silently
       const prev = String(input.value || '').replace(/\s+$/, '');
       input.value = prev ? prev + ' ' + words : words;
       try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch { /* the box is filled all the same */ }
-      hubToast('What you said is in the message box.');
+      hubToast(typeof note === 'string' && note ? note : 'What you said is in the message box.');
     }
     async function voiceCallInterject(chatId, text) {
       const chat = chats[chatId];
@@ -15619,7 +15632,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         stt: (audio) => voiceCallStt(audio, agent),
         isTurnRunning: () => voiceCallRunning(chatId, agent),
         send: (text) => voiceCallSend(chatId, text),
-        keepWords: (text) => voiceCallKeepWords(chatId, text),   // the words kept for a hub-started turn, at hang-up: into the message box, never sent
+        keepWords: (text, note) => voiceCallKeepWords(chatId, text, note),   // the words kept for a hub-started turn, at hang-up: into the message box, never sent
         backgroundBusy: () => voiceCallBackgroundBusy(),   // a turn the hub started runs and none of his own: his words wait for his own turn
         interject: (text) => voiceCallInterject(chatId, text),
         stop: () => stopAgentTurn(agent),
@@ -15967,6 +15980,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // A turn the hub started runs (a scheduled task, a consultation, a job report ...) and none of the caller's own: his words are kept for his own turn (the controller's backgroundBusy).
     // Also false when this page streams a reply of its own (typed in this chat during the call) or an own turn of the call has not ended.
     const VOICE_HUB_OWNER_LATE_MS = 5000;   // a for_owner this soon after the turn ended still gives the cue
+    const VOICE_OWN_END_GRACE_MS = 3000;   // busy with no known turn is not background this soon after the caller's own turn ended
     // Whose turn runs is known from turn_start. A call that starts (or comes back after a lost link) while a hub-started turn already runs has not seen it: voiceCallSeedHub
     // reads what the page knows (busyRun, the agent's running turn) and counts a running turn whose origin is not 'user' as a hub-started one. An agent that is busy with
     // no turn known at all (the page opened mid-turn) counts as busy with background work until a turn_start or the idle status says otherwise.
@@ -15981,13 +15995,22 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!(S.call && S.own.size === 0 && !S.expecting && !(chat && chat.controller) && voiceCallRunning(S.chatId, S.agent))) return false;
       if (S.hub.size > 0) return true;
       const run = typeof busyRun !== 'undefined' ? busyRun[S.agent] : null;
-      return !run || !!(run.origin && run.origin.kind !== 'user');   // no turn known: background until identified; one that is not of the person's own: background
+      if (!run) return !(S.ownEndedAt && Date.now() - S.ownEndedAt < VOICE_OWN_END_GRACE_MS);   // no turn known: background until identified, unless his own turn has just ended (the status feed lags its turn_end)
+      return !!(run.origin && run.origin.kind !== 'user');   // one that is not of the person's own: background
     }
     // The agent went idle (the status feed): no hub-started turn runs any more, whatever turn_end events were missed; the caller's kept words go out.
     function voiceCallHubIdle(agent) {
       const S = voiceCallS;
       if (!S.call || S.agent !== agent || voiceCallRunning(S.chatId, S.agent)) return;
+      // The idle report comes before the hub turn's own turn_end: a turn marked for the owner gives its cue here (once; the controller keeps one per 30 s) and is forgotten, so the
+      // turn_end that follows finds nothing to do. One not marked yet may still be marked within VOICE_HUB_OWNER_LATE_MS (hubEnded).
+      let cue = false;
+      for (const id of S.hub.keys()) {
+        if (S.owner.has(id)) { S.owner.delete(id); cue = true; }
+        else { S.hubEnded.set(id, Date.now()); if (S.hubEnded.size > 32) S.hubEnded.delete(S.hubEnded.keys().next().value); }
+      }
       S.hub.clear();
+      if (cue && typeof S.call.onHubOwner === 'function') S.call.onHubOwner();
       if (typeof S.call.backgroundDone === 'function') S.call.backgroundDone();
     }
     // Hub events of the call's agent -> the controller.
@@ -16010,7 +16033,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           return;
         }
         case 'turn_end': {
-          if (S.own.has(ev.turnId)) { const last = S.own.get(ev.turnId); S.own.delete(ev.turnId); S.expecting = false; call.onReplyText(ev.reply || last || '', true); }
+          if (S.own.has(ev.turnId)) { const last = S.own.get(ev.turnId); S.own.delete(ev.turnId); S.expecting = false; S.ownEndedAt = Date.now(); call.onReplyText(ev.reply || last || '', true); }
           else if (S.hub.has(ev.turnId)) {
             // A turn the hub started (a scheduled task, a consultation, a job report ...): its reply and its input are never read aloud and never shown as
             // heard or spoken on the call; they land in the chat. What it may do on the call: the cue when it was marked for the owner (for_owner),
