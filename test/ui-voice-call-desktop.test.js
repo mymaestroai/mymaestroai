@@ -50,7 +50,7 @@ test('send path: voice: true only for messages that came from a call', () => {
 });
 
 test('hub events: the call listens to turn, ask and voice events on the one EventSource', () => {
-  assert.match(app, /for \(const t of \['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call'\]\) \{\s*source\.addEventListener\(t, e => \{ const ev = parse\(e\); if \(ev\) voiceCallHubEvent\(t, ev\); \}\);/);
+  assert.match(app, /for \(const t of \['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'for_owner', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call'\]\) \{\s*source\.addEventListener\(t, e => \{ const ev = parse\(e\); if \(ev\) voiceCallHubEvent\(t, ev\); \}\);/);
 });
 
 test('settings: Talk mode, Interrupt sensitivity, Room check; the phase-1 hint is replaced', () => {
@@ -129,6 +129,7 @@ function makeEnv(opts = {}) {
     onReplyText(t, d) { fakeCall.replies.push([t, d]); }, onActivity(i) { fakeCall.activities.push(i); },
     onAsk(a) { fakeCall.asks.push(a); }, onAskDone(id) { fakeCall.askDone.push(id); },
     onHeld(i, q) { fakeCall.held.push([i, q]); }, onHeldDone(id, choice) { fakeCall.heldDone.push([id, choice]); },
+    owners: 0, bgDone: 0, onHubOwner() { fakeCall.owners++; }, backgroundDone() { fakeCall.bgDone++; },   // hub-started turns (test/ui-voice-hub-turns.test.js): the cue, the kept words released
     setMode(m) { fakeCall.modes.push(m); }, decide(id, c) { fakeCall.decisions.push([id, c]); },
   };
   const vad = { setMicLevel(v) { calls.vadCalls.push(['mic', v]); }, setInterruptSensitivity(v) { calls.vadCalls.push(['sens', v]); }, setEndPause(v) { calls.vadCalls.push(['pause', v]); } };
@@ -361,7 +362,7 @@ test('events: replies of turns the call started feed onReplyText; other agents a
   assert.deepStrictEqual(fakeCall.replies.slice(-1), [['Partial.', true]]);
 });
 
-test('events: a hub-started turn speaks only "<label>: <first sentence>" at its end', async () => {
+test('events: a hub-started turn is never spoken (it used to say "<label>: <first sentence>"); it only releases words kept for it', async () => {
   const { api, fakeCall } = makeEnv();
   await api.voiceCallStart('c1');
   const ev = api.voiceCallHubEvent;
@@ -369,10 +370,10 @@ test('events: a hub-started turn speaks only "<label>: <first sentence>" at its 
   ev('turn_delta', { agent: 'alice', turnId: 'h1', text: 'It finished. Details follow.' });
   assert.deepStrictEqual(fakeCall.replies, [], 'nothing while it runs');
   ev('turn_end', { agent: 'alice', turnId: 'h1', ok: true, reply: 'It finished. Details follow.' });
-  assert.deepStrictEqual(fakeCall.replies, [['Nightly job: It finished.', true]]);
+  assert.deepStrictEqual(fakeCall.replies, [], 'nothing at its end either');
   ev('turn_start', { agent: 'alice', turnId: 'h2', origin: { kind: 'consultation', from: 'bob' } });
   ev('turn_end', { agent: 'alice', turnId: 'h2', ok: true, reply: 'Sure thing! More.' });
-  assert.deepStrictEqual(fakeCall.replies.slice(-1), [['bob: Sure thing!', true]]);
+  assert.deepStrictEqual(fakeCall.replies, []);
 });
 
 test('events: ask_user, ask_user_done, voice_held, voice_held_done reach the controller; the answer is posted', async () => {

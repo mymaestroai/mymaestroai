@@ -7121,6 +7121,7 @@
       if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
+      if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
       paintAgentStatus(name);
       paintAgentsWorking();
       { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
@@ -8457,7 +8458,7 @@
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev && ev.request_id) closeQuestion(ev.request_id); });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev) setAgentLive(ev.agent, { pendingQuestion: false }); });
       // A hands-free call (voice phase 2) follows the events of its agent: replies, tool activity, questions, held items.
-      for (const t of ['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call']) {
+      for (const t of ['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'for_owner', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call']) {
         source.addEventListener(t, e => { const ev = parse(e); if (ev) voiceCallHubEvent(t, ev); });
       }
       source.addEventListener('turn_mood', e => { const ev = parse(e); if (ev) voiceCallHubEvent('turn_mood', ev); });
@@ -11098,13 +11099,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat.';
     const VOICE_NOTE_CODE = ' I\'ve put the code in the chat.';
     const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];   // 'Read short extra parts aloud': Off / up to 20 / 40 / 80 words (pref detailsReadWords, default 40; 0 = never read the rest)
+    const VOICE_HUB_CUES = ['off', 'chime', 'cue'];   // 'When something comes in during a call': Off / Chime / Short cue (pref hubCue, default 'cue')
+    const VOICE_BACKGROUND_CUES = ['off', 'show', 'say'];   // 'While I finish something in the background': Off / Show it / Say it (pref backgroundCue, default 'say')
     const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
     const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
     const VOICE_END_PAUSES = [800, 1200, 2000, 4000];   // 'Pause before I'm done': short / normal / long / very long, in ms
     const VOICE_CONTINUE_WAITS = [1500, 3000, 5000, 8000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
     const VOICE_ECHO_HOLDS = [0, 600, 1000, 1500];   // 'Echo guard': how long the raised barge-in thresholds stay after playback stops, in ms (0 = off)
     const VOICE_WAKE_QUIET_MS = [10000, 20000, 45000];   // 'Go back to standby after': how long a quiet call stays awake (default 20000)
-    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder', loudnessBt: 'normal', detailsReadWords: 40 };
+    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder', loudnessBt: 'normal', detailsReadWords: 40, hubCue: 'cue', backgroundCue: 'say' };
     function voiceCleanSpeed(v) {
       const n = Number(v);
       return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
@@ -11372,6 +11375,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (VOICE_CONTINUE_WAITS.includes(raw.continueWait)) p.continueWait = raw.continueWait;
       if (voiceEchoHoldOk(raw.echoHold)) p.echoHold = raw.echoHold;
       if (VOICE_DETAILS_READ_WORDS.includes(raw.detailsReadWords)) p.detailsReadWords = raw.detailsReadWords;
+      if (VOICE_HUB_CUES.includes(raw.hubCue)) p.hubCue = raw.hubCue;
+      if (VOICE_BACKGROUND_CUES.includes(raw.backgroundCue)) p.backgroundCue = raw.backgroundCue;
       if (typeof raw.thinkingVolume === 'number' && Number.isFinite(raw.thinkingVolume)) p.thinkingVolume = Math.round(Math.max(0, Math.min(1, raw.thinkingVolume)) * 100) / 100;
       for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity', 'thinkingSound', 'keepAlive']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
       if (typeof raw.loudness === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, raw.loudness)) p.loudness = raw.loudness;
@@ -11842,6 +11847,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
     // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
     const VOICE_THINKING_LINES = ['I\'m considering what you just said.', 'Still thinking about that.', 'Give me a moment, I\'m working through it.'];
+    // A turn the hub started (a scheduled task, a consultation, a job report) is never read aloud on a call. When one needs the person (the page tells the
+    // controller: onHubOwner) the call gives the cue of the pref hubCue ('off' | 'chime' | 'cue'; the spoken line never says what came in), at most once per
+    // 30 s. While one runs, what the person says is kept (not interjected) and sent as his own message when it is over (backgroundDone): the call says the
+    // line below at once and again every 30 s while it runs, and shows the state 'background' (the pref backgroundCue: 'off' | 'show' | 'say').
+    const VOICE_BACKGROUND_LINE = 'One moment, I\'m finishing something in the background.';
+    const VOICE_HUB_CUE_LINE = 'Something came in for you; it\'s in the chat.';
+    const VOICE_BACKGROUND_REPEAT_MS = 30000, VOICE_HUB_CUE_GAP_MS = 30000;
     const VOICE_CALL_FILLERS = new Set(['uh', 'um', 'umm', 'uhh', 'er', 'erm', 'ah', 'hmm', 'hm', 'mm', 'mmm', 'huh']);
     const VOICE_CALL_ORDINALS = [['first', '1st', 'one', '1'], ['second', '2nd', 'two', '2'], ['third', '3rd', 'three', '3'], ['fourth', '4th', 'four', '4'], ['fifth', '5th', 'five', '5']];
     function voiceCallNorm(text) {
@@ -12042,6 +12054,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
       let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0, thinkDueAt = 0, thinkSeed = 0;
       let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
+      // Hub-started turns (see VOICE_BACKGROUND_LINE): bgWords = what the person said while one runs (kept in order, sent as one message when it is over; d.backgroundBusy()
+      // says whether a hub-started turn runs and none of his own), bgTimer = the repeat of the spoken line; cuePending = the cue that waits for the speaking to be over.
+      let bgWords = [], bgTimer = null, cuePending = '', cueAt = null;
       // Recording (deps.recorder, only for an agent that keeps recordings; without it none of this acts). recDecided: the decision for the speech now
       // under way was made (at its begin); recOn: it is being recorded. Nothing said in standby is ever recorded: the decision is made at speech begin.
       // deps.recordTranscript(seq, text) and deps.recordReplyText(text) hand the saved text to the page.
@@ -12185,7 +12200,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const wakePhrase = () => { const w = wake(); return w && typeof w.phrase === 'string' ? w.phrase : ''; };
       let standby = false, wakeMode = false, wakeSeq = 0, quietTimer = null, chimeTimer = null, statePhrase = '';
       let capWake = null, heardShown = false;   // heardShown: a 'Heard' line is on screen (cleared when the call goes back to standby)   // { sb, seq } taken when the person starts to speak: what counts is whether the call was in standby then
-      const wakeIdle = () => !awaitingReply && !speaking && !personSpeaking && !sttPending && !queue.length && !current && !pendingAsk && !pendingAnnounce;
+      const wakeIdle = () => !awaitingReply && !bgWords.length && !speaking && !personSpeaking && !sttPending && !queue.length && !current && !pendingAsk && !pendingAnnounce;
       function clearQuiet() { if (quietTimer !== null) { quiet(() => d.clearTimer(quietTimer)); quietTimer = null; } }
       function enterStandby() {
         if (ended) return;
@@ -12194,6 +12209,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!speaking) setState('standby');
       }
       function leaveStandby() { standby = false; clearQuiet(); settle(); }
+      // The soft chime (deps.chime, the page's own short tone): the wake phrase heard, and the cue of something that came in for the person.
+      function playChime() {
+        quiet(() => d.chime && d.chime());
+        quiet(() => vad.setPlaybackActive(true));   // the chime is playback: it must not be taken as speech
+        if (chimeTimer !== null) quiet(() => d.clearTimer(chimeTimer));
+        chimeTimer = d.setTimer(() => { chimeTimer = null; if (!ended && !speaking) quiet(() => vad.setPlaybackActive(false)); }, 700);
+      }
       function setState(name) {
         const phrase = name === 'standby' ? wakePhrase() : '';
         if (name === state && phrase === statePhrase) return;   // (the phrase of a standby can change with the setting)
@@ -12212,8 +12234,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       function settle() {
         if (ended) return;
+        if (cuePending) tryCue();   // a cue that waited for the speaking to be over
         if (!speaking && !personSpeaking && queue.length) { clearQuiet(); runQueue(); return; }   // lines that waited while the person spoke are read now
-        setState(speaking ? 'speaking' : standby ? 'standby' : personSpeaking ? 'hearing' : awaitingReply ? 'thinking' : 'listening');
+        setState(speaking ? 'speaking' : standby ? 'standby' : personSpeaking ? 'hearing' : bgWords.length && bgMode() !== 'off' ? 'background' : awaitingReply ? 'thinking' : 'listening');
         armQuiet();
         pumpAnnounce();
         armStill();
@@ -12590,10 +12613,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               const m = voiceWakeMatch(t, w.phrase);
               if (!m.match) return;
               standby = false; wakeSeq++;
-              quiet(() => d.chime && d.chime());
-              quiet(() => vad.setPlaybackActive(true));   // the chime is playback: it must not be taken as speech
-              if (chimeTimer !== null) quiet(() => d.clearTimer(chimeTimer));
-              chimeTimer = d.setTimer(() => { chimeTimer = null; if (!ended && !speaking) quiet(() => vad.setPlaybackActive(false)); }, 700);
+              playChime();
               if (!m.rest) { settle(); return; }   // the next utterance is the message
               t = m.rest;
             }
@@ -12643,6 +12663,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       async function route(t, ann) {
         if (voiceIsStopCommand(t)) {
+          if (bgWords.length) { bgDrop(); cancelSpeaking(); settle(); return; }   // waiting for the background work: the kept words are dropped and nothing more is said about it (the work itself is not stopped)
           cancelSpeaking(); cutSkip = true; awaitingReply = false; stopThinking(); clearStill();
           quiet(() => d.stop()); enqueue('Stopped.', 'stop'); settle();
           return;
@@ -12659,6 +12680,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           else if (!a.tapped) { a.tapped = true; enqueue('Please tap one of the options on the screen.', 'ask'); }
           return;
         }
+        // A turn the hub started runs and none of his own: his words are kept and sent as his own message when it is over (not interjected into it).
+        if (bgWords.length || (!awaitingReply && bgBusy())) { bgKeep(t); return; }
         try {
           if (quiet(() => d.isTurnRunning())) {
             if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
@@ -12666,15 +12689,67 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             awaitingReply = true; replyEnded = false; replyRecorded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
             await d.interject(t);
           } else {
-            awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; doneSeen = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
-            quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
+            beginOwnTurn();
             await d.send(t);
           }
-        } catch {
-          awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity(''));
-          if (!linkLost) { quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); }   // a lost connection is reported by the link watch, not as an error line
-          settle();
-        }
+        } catch { sendFailed(); }
+      }
+      function beginOwnTurn() {
+        awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; doneSeen = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+        quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
+      }
+      function sendFailed() {
+        awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity(''));
+        if (!linkLost) { quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); }   // a lost connection is reported by the link watch, not as an error line
+        settle();
+      }
+      // ── hub-started turns: the person's words wait for his own turn (VOICE_BACKGROUND_LINE); the cue when one needs him ──
+      const bgMode = () => { const v = prefs().backgroundCue; return v === 'off' || v === 'show' ? v : 'say'; };   // 'While I finish something in the background' (default 'say')
+      const bgBusy = () => !!(d.backgroundBusy && quiet(() => d.backgroundBusy()));
+      function bgClearTimer() { if (bgTimer !== null) { quiet(() => d.clearTimer(bgTimer)); bgTimer = null; } }
+      function bgDrop() { bgWords = []; bgClearTimer(); }
+      // The line is repeated at most every 30 s, only while the background turn still runs.
+      function bgArm() {
+        bgClearTimer();
+        if (ended || !bgWords.length || bgMode() !== 'say') return;
+        bgTimer = d.setTimer(() => {
+          bgTimer = null;
+          if (ended || !bgWords.length) return;
+          if (!bgBusy()) { backgroundDone(); return; }
+          enqueue(VOICE_BACKGROUND_LINE, 'status'); bgArm();
+        }, VOICE_BACKGROUND_REPEAT_MS);
+      }
+      function bgKeep(t) {
+        const first = !bgWords.length;
+        bgWords.push(t);
+        if (!bgBusy()) { backgroundDone(); return; }   // it ended while the words were being heard
+        if (first && bgMode() === 'say') { enqueue(VOICE_BACKGROUND_LINE, 'status'); bgArm(); }
+        settle();
+      }
+      // The page: no hub-started turn runs any more (its turn_end, or the agent went idle). The kept words go out as his own message (voice: true).
+      function backgroundDone() {
+        if (ended) return Promise.resolve();
+        bgClearTimer();
+        if (!bgWords.length) { settle(); return Promise.resolve(); }
+        const t = bgWords.join(' '); bgWords = [];
+        return (async () => { try { beginOwnTurn(); await d.send(t); } catch { sendFailed(); } })();
+      }
+      // A hub-started turn that needs the person ended (the page: for_owner). The pref hubCue: 'off' nothing, 'chime' the soft chime, 'cue' the chime and one spoken line.
+      // At most one per 30 s; never over the person speaking or a reply being read: it waits (settle) until that is over.
+      function onHubOwner() {
+        if (ended) return;
+        const v = prefs().hubCue, mode = v === 'off' || v === 'chime' ? v : 'cue';
+        if (mode === 'off') return;
+        const t = now();
+        if (cueAt !== null && t - cueAt < VOICE_HUB_CUE_GAP_MS) return;
+        cueAt = t; cuePending = mode;
+        tryCue();
+      }
+      function tryCue() {
+        if (!cuePending || ended || personSpeaking || speaking || current || queue.length) return;
+        const mode = cuePending; cuePending = '';
+        playChime();
+        if (mode === 'cue') enqueue(VOICE_HUB_CUE_LINE, 'cue');
       }
       // The connection to the server was lost (on) or is back (!on). While lost no error is spoken or shown; what is heard is still transcribed and a
       // transcript that arrives is handled as usual (see linkGen above). When it is back after a real outage, "Reconnected." is spoken (kind 'mic':
@@ -12786,6 +12861,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Everything the call holds is let go at once: timers, the thinking sound, the microphone and the speaking.
       function teardown() {
         ended = true; capWake = null;
+        const kept = bgWords.join(' '); bgDrop(); cuePending = '';   // words kept for the background work are sent below as a plain message, so they land in the chat
         for (const t of [hbTimer, pumpTimer, quietTimer, chimeTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
         hbTimer = pumpTimer = quietTimer = chimeTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); disarmWatch(); clearStill(); stopThinking();
         for (const s of [lastSeg, curCand]) if (s) { if (s.hold) s.hold.resolve(null); if (s.onJoin) { const f = s.onJoin; s.onJoin = null; quiet(f); } }   // a held or waiting transcript is let go with the call
@@ -12793,6 +12869,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
         if (recorder) { recOn = false; quiet(() => recorder.stop()); }
         if (keepAliveOn) { keepAliveOn = false; quiet(() => d.keepAlive.stop()); }
+        if (kept) quiet(() => { const r = (d.sendPlain || d.send)(kept); if (r && typeof r.catch === 'function') r.catch(() => {}); });
       }
       // Immediate hang-up, for a page that is being hidden, frozen or closed (reason: 'hidden', 'pagehide', 'freeze', ...): everything is
       // released now and the server is told in the background; nothing is waited for and nothing is read out.
@@ -12836,7 +12913,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       return {
-        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
+        get background() { return bgWords.length > 0; },
         get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
       };
     }
@@ -14716,6 +14794,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs('interruptSensitivity')" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
       h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs(\'endPause\')"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s.</span>`);
       h += row('Read short extra parts aloud', `<select id="st-voice-details" onchange="voiceSettingsSavePrefs()" style="padding:4px">${VOICE_DETAILS_READ_WORDS.map(n => `<option value="${n}"${n === (p.detailsReadWords == null ? 40 : p.detailsReadWords) ? ' selected' : ''}>${n ? 'Up to ' + n + ' words' : 'Off'}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">When a reply has only a little more than what is read on a call, read that too. Longer lists, tables and code stay in the chat.</span>`);
+      h += row('When something comes in during a call', `<select id="st-voice-hubcue" onchange="voiceSettingsSavePrefs()" style="padding:4px">${[['off', 'Off'], ['chime', 'Chime'], ['cue', 'Short cue']].map(([v, l]) => `<option value="${v}"${v === (p.hubCue || 'cue') ? ' selected' : ''}>${l}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">A scheduled task or another agent's request is never read out on a call. When one needs you: nothing, a soft chime, or the chime and “Something came in for you; it's in the chat.”</span>`);
+      h += row('While I finish something in the background', `<select id="st-voice-bgcue" onchange="voiceSettingsSavePrefs()" style="padding:4px">${[['off', 'Off'], ['show', 'Show it'], ['say', 'Say it']].map(([v, l]) => `<option value="${v}"${v === (p.backgroundCue || 'say') ? ' selected' : ''}>${l}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">When you speak while the agent is busy with something of its own, your words wait for your turn. Show it: “Working in the background” on the call; Say it: the agent also says so.</span>`);
       h += row('Voice speed', `<input type="range" min="0.75" max="1.5" step="0.05" id="st-voice-speed" value="${voiceSpeedNow()}" oninput="voiceSettingSpeedInput(this)" onchange="voiceSettingsSavePrefs('voiceSpeed')" style="width:180px"> <span id="st-voice-speed-val" style="min-width:3.5em;display:inline-block">${voiceSpeedLabel(voiceSpeedNow())}</span> <span class="st-hint" style="margin:0 0 0 8px">${VOICE_SPEED_HINT}</span>`);
       h += row('Voice loudness, speaker', `${voiceLoudnessSelectHtml('st-voice-loudness', 'onchange="voiceSettingsSavePrefs()"', 'loudness')} <span class="st-hint" style="margin:0 0 0 8px">Makes the agent's voice louder during calls on the computer's speaker.</span>`);
       h += row('Voice loudness, Bluetooth / car', `${voiceLoudnessSelectHtml('st-voice-loudness-bt', 'onchange="voiceSettingsSavePrefs()"', 'loudnessBt')} <span class="st-hint" style="margin:0 0 0 8px">Used while a Bluetooth headset or a car is the call's microphone. A car has its own amplifier, so Normal is usually right.</span>`);
@@ -14814,15 +14894,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const mode = voiceById('st-voice-mode'), sens = voiceById('st-voice-sens');
       const pause = voiceById('st-voice-pause'), speed = voiceById('st-voice-speed'), act = voiceById('st-voice-speakactivity');
       if (!mic || !ra || !fb || !mode || !sens || !pause || !speed || !act) return;
-      const details = voiceById('st-voice-details');
+      const details = voiceById('st-voice-details'), hubCue = voiceById('st-voice-hubcue'), bgCue = voiceById('st-voice-bgcue');
       const echo = voiceById('st-voice-echo'), keep = voiceById('st-voice-keepalive'), loud = voiceById('st-voice-loudness'), loudBt = voiceById('st-voice-loudness-bt');
-      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, details, speed, act, echo, keep, loud, loudBt].filter(Boolean));
+      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, details, hubCue, bgCue, speed, act, echo, keep, loud, loudBt].filter(Boolean));
       const echoNow = echo && voiceEchoHoldOk(Number(echo.value)) ? Number(echo.value) : voiceEchoHoldNow();
       let prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
         endPause: Number(pause.value), voiceSpeed: voiceCleanSpeed(speed.value), speakActivity: act.checked, echoHold: echoNow, keepAlive: keep ? !!keep.checked : voiceKeepAliveNow(),
         loudness: loud && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loud.value) ? loud.value : voiceLoudnessFor(voicePrefsNow(), 'speaker'),
         loudnessBt: loudBt && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loudBt.value) ? loudBt.value : voiceLoudnessFor(voicePrefsNow(), 'bluetooth') };
       if (details && details.value !== '' && VOICE_DETAILS_READ_WORDS.includes(Number(details.value))) prefs.detailsReadWords = Number(details.value);   // 'Read short extra parts aloud'
+      if (hubCue && ['off', 'chime', 'cue'].includes(hubCue.value)) prefs.hubCue = hubCue.value;   // 'When something comes in during a call'
+      if (bgCue && ['off', 'show', 'say'].includes(bgCue.value)) prefs.backgroundCue = bgCue.value;   // 'While I finish something in the background'
       if (VOICE_AGENT_DEFAULT_KEYS.includes(changed)) prefs = voiceMarkChosen(prefs, [changed]);   // the person set it here: an agent's default no longer applies to it
       prefs = voiceMarkDeviceChanged(prefs, voicePrefsNow());   // an iPhone default the person changed is theirs from now on
       voiceSavePrefs(localStorage, prefs);
@@ -14885,7 +14967,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     // ── Hands-free call (voice phase 2): the controller (voice call block above) wired to this page ──
     // One call at a time. voiceCallS holds it; the call bar sits above the message box of the call's chat.
-    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false, thinking: null, leftChat: null, link: null, linkLost: false, rec: null };   // rec: the recorded call's page side (voiceCreateRecordingSession), only when the agent keeps recordings
+    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), owner: new Set(), hubEnded: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false, thinking: null, leftChat: null, link: null, linkLost: false, rec: null };   // rec: the recorded call's page side (voiceCreateRecordingSession), only when the agent keeps recordings
     const voiceRoom = { active: false };
     // ── Call display: None / Orb / an installed character (lib/ui-call-display.js; the choice is per device, the agent only has a default) ──
     // Everything here is a no-op unless a display exists for the running call, so reading aloud and the call without a display are unchanged.
@@ -15088,7 +15170,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const e of document.querySelectorAll('.voice-pop [data-vp="echo"]')) e.value = hold;
       for (const e of document.querySelectorAll('.voice-pop [data-vp="keep"]')) e.checked = keep;
     }
-    const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', hearing: 'Hearing you', thinking: 'Thinking', speaking: 'Speaking', ended: 'Ended' };
+    const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', hearing: 'Hearing you', thinking: 'Thinking', speaking: 'Speaking', background: 'Working in the background', ended: 'Ended' };
     const VOICE_LINK_LOST_TEXT = 'Connection lost', VOICE_LINK_ENDED_TEXT = 'Call ended: connection lost';
     const VOICE_HANGUP_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 14c5-4 13-4 18 0l-2.5 3-3-1.5v-2.5c-2-.8-4-.8-6 0v2.5L5.5 17z"></path></svg>';
     async function voiceCallApi(path, body, opts) {
@@ -15162,6 +15244,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       input.value = prev;
       Promise.resolve(run).then(() => accepted(null), (e) => accepted(e || new Error('send failed'))).then(release);
       return result;
+    }
+    // The words kept for the background work, when the call is hung up before it ended: an ordinary message (not a voice turn: nothing is read aloud afterwards), so they land in the chat.
+    function voiceCallSendPlain(chatId, text) {
+      const input = document.getElementById(`input-${chatId}`);
+      if (!input || !chats[chatId]) return Promise.resolve();
+      const prev = input.value;
+      input.value = text;
+      const run = sendSoloMessage(chatId, 0, null);
+      input.value = prev;
+      return Promise.resolve(run).catch(() => {});
     }
     async function voiceCallInterject(chatId, text) {
       const chat = chats[chatId];
@@ -15511,6 +15603,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         stt: (audio) => voiceCallStt(audio, agent),
         isTurnRunning: () => voiceCallRunning(chatId, agent),
         send: (text) => voiceCallSend(chatId, text),
+        sendPlain: (text) => voiceCallSendPlain(chatId, text),   // the words kept for a hub-started turn, at hang-up
+        backgroundBusy: () => voiceCallBackgroundBusy(),   // a turn the hub started runs and none of his own: his words wait for his own turn
         interject: (text) => voiceCallInterject(chatId, text),
         stop: () => stopAgentTurn(agent),
         speak: (text) => voiceCallSpeak(agent, text),
@@ -15684,7 +15778,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof voiceRouteDone === 'function') voiceRouteDone();   // a sentence waiting for the first route goes on (it finds the call gone)
       for (const k of ['routeTrail', 'routeFirstTimer']) if (S[k]) { clearTimeout(S[k]); S[k] = null; }
       S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.focus = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
-      S.own.clear(); S.hub.clear(); S.asks.clear();
+      S.own.clear(); S.hub.clear(); S.owner.clear(); S.hubEnded.clear(); S.asks.clear(); S.expecting = false;
       voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
       // Whatever way the call ended, nothing is left holding the microphone or a speaker: the VAD (mic tracks, processed stream,
       // AudioContext) and the thinking sound's context are let go here too; both are safe to stop twice.
@@ -15853,6 +15947,20 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       S.starting = false; S.active = true;
     }
     function voiceCallSseMood(chatId, mood) { const S = voiceCallS; if (S.call && S.chatId === chatId) voiceDispMood(S.sendSeq, mood); }
+    // A turn the hub started runs (a scheduled task, a consultation, a job report ...) and none of the caller's own: his words are kept for his own turn (the controller's backgroundBusy).
+    // Also false when this page streams a reply of its own (typed in this chat during the call) or an own turn of the call has not ended.
+    const VOICE_HUB_OWNER_LATE_MS = 5000;   // a for_owner this soon after the turn ended still gives the cue
+    function voiceCallBackgroundBusy() {
+      const S = voiceCallS, chat = S.chatId ? chats[S.chatId] : null;
+      return !!(S.call && S.hub.size > 0 && S.own.size === 0 && !S.expecting && !(chat && chat.controller) && voiceCallRunning(S.chatId, S.agent));
+    }
+    // The agent went idle (the status feed): no hub-started turn runs any more, whatever turn_end events were missed; the caller's kept words go out.
+    function voiceCallHubIdle(agent) {
+      const S = voiceCallS;
+      if (!S.call || S.agent !== agent || voiceCallRunning(S.chatId, S.agent)) return;
+      S.hub.clear();
+      if (typeof S.call.backgroundDone === 'function') S.call.backgroundDone();
+    }
     // Hub events of the call's agent -> the controller.
     function voiceCallHubEvent(type, ev) {
       const S = voiceCallS, call = S.call;
@@ -15875,10 +15983,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         case 'turn_end': {
           if (S.own.has(ev.turnId)) { const last = S.own.get(ev.turnId); S.own.delete(ev.turnId); S.expecting = false; call.onReplyText(ev.reply || last || '', true); }
           else if (S.hub.has(ev.turnId)) {
-            const label = S.hub.get(ev.turnId); S.hub.delete(ev.turnId);
-            const first = ev.ok === false ? '' : (voiceSentences(voiceSpeechText(ev.reply || ''))[0] || '');
-            if (first) call.onReplyText(`${label}: ${first}`, true);
+            // A turn the hub started (a scheduled task, a consultation, a job report ...): its reply and its input are never read aloud and never shown as
+            // heard or spoken on the call; they land in the chat. What it may do on the call: the cue when it was marked for the owner (for_owner),
+            // and the caller's words that waited for it are sent now (call.backgroundDone).
+            S.hub.delete(ev.turnId);
+            if (S.owner.has(ev.turnId)) { S.owner.delete(ev.turnId); call.onHubOwner(); }
+            else { S.hubEnded.set(ev.turnId, Date.now()); if (S.hubEnded.size > 32) S.hubEnded.delete(S.hubEnded.keys().next().value); }   // a for_owner may follow within a few seconds
+            if (!voiceCallBackgroundBusy()) call.backgroundDone();
           }
+          return;
+        }
+        case 'for_owner': {   // { agent, reason, turnId, origin }: the agent marked a turn's reply for the owner
+          if (!ev.turnId || (ev.origin && ev.origin.kind === 'user')) return;
+          const at = S.hubEnded.get(ev.turnId);
+          if (at !== undefined) { S.hubEnded.delete(ev.turnId); if (Date.now() - at <= VOICE_HUB_OWNER_LATE_MS) call.onHubOwner(); }   // marked just after it ended
+          else { S.owner.add(ev.turnId); if (S.owner.size > 32) S.owner.delete(S.owner.keys().next().value); }   // marked while it runs: the cue comes when it ends
           return;
         }
         case 'ask_user': {

@@ -163,7 +163,7 @@ test('keep-alive: made for every call, sounds while the switch is on (the label 
   off.api.voiceCtlSet('keep', false, true);
   assert.ok(off.log.ka.includes('refresh'), 'the chat\'s voice popover switch reaches the running call at once');
   assert.strictEqual(off.log.kaAllow(), false);
-  const src = app.slice(app.indexOf('function voiceSettingsSavePrefs('), app.indexOf('function voiceSettingsSavePrefs(') + 2500);
+  const src = app.slice(app.indexOf('function voiceSettingsSavePrefs('), app.indexOf('function voiceSettingsSavePrefs(') + 3000);   // (3000: the hub-cue and background-cue lines sit before it)
   assert.ok(src.includes('voiceKeepAliveRefresh();'), 'the settings save applies the switch to a running call at once');
   assert.match(app, /function voiceOutputChanged\(\) \{[^\n]*voiceKeepAliveRefresh\(\); \}/, 'a new microphone label re-checks it at once');
   const on = makeEnv();

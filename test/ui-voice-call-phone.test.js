@@ -104,14 +104,15 @@ function runEvents(overrides) {
     onReplyText: (t, d) => calls.push(['reply', t, d]), onActivity: (i) => calls.push(['activity', i]),
     onAsk: (a) => calls.push(['ask', a]), onAskDone: (id) => calls.push(['askDone', id]),
     onHeld: (i, q) => calls.push(['held', i, q]), onHeldDone: (id, choice) => calls.push(['heldDone', id, choice]),
+    owners: 0, bgDone: 0, onHubOwner() { call.owners++; }, backgroundDone() { call.bgDone++; },   // hub-started turns: the cue, the kept words released (not in `calls`: they are not speech)
   };
-  const vc = { agent: 'bob', call, callTurns: new Set(), hubTurns: new Map(), asks: new Map(), lastText: '', expecting: true, startedAt: 0 };
+  const vc = { agent: 'bob', call, callTurns: new Set(), hubTurns: new Map(), hubOwner: new Set(), hubEnded: new Map(), asks: new Map(), lastText: '', expecting: true, startedAt: 0 };
   const src = js.slice(js.indexOf('function voiceCallTurnStart(ev)'), js.indexOf('// ── Room check (5 s)'));
   const hung = [], toasts = [];
   const env = Object.assign({ voiceCall: vc, voiceSentences: C.voiceReplySentences ? require('../lib/ui-voice').voiceSentences : null, voiceSpeechText: require('../lib/ui-voice').voiceSpeechText,
-    originLabel: (o) => (o && o.kind) || '', voiceCallHangUp: () => hung.push(1), toast: (t) => toasts.push(t), Date }, overrides || {});
+    originLabel: (o) => (o && o.kind) || '', voiceCallHangUp: () => hung.push(1), toast: (t) => toasts.push(t), Date, ownTurnFor: () => false, isBusy: () => false }, overrides || {});
   const names = Object.keys(env);
-  const f = new Function(...names, src + '\nreturn { voiceCallTurnStart, voiceCallTurnDelta, voiceCallTurnActivity, voiceCallTurnEnd, voiceCallAsk, voiceCallAskDone, voiceCallHeld, voiceCallHeldDone, voiceCallState };')(...names.map(n => env[n]));
+  const f = new Function(...names, src + '\nreturn { voiceCallTurnStart, voiceCallTurnDelta, voiceCallTurnActivity, voiceCallTurnEnd, voiceCallAsk, voiceCallAskDone, voiceCallHeld, voiceCallHeldDone, voiceCallState, voiceCallForOwner, voiceCallBackgroundBusy, voiceCallHubIdle };')(...names.map(n => env[n]));
   return { f, calls, vc, hung, toasts };
 }
 
@@ -129,14 +130,14 @@ test('a turn the call started: deltas (cumulative) and the end go to onReplyText
   assert.strictEqual(vc.callTurns.size, 0);
 });
 
-test('a hub-started turn during the call: only "<label>: <first sentence>" is spoken at turn_end', () => {
+test('a hub-started turn during the call: never spoken (it used to say "<label>: <first sentence>" at turn_end)', () => {
   const { f, calls } = runEvents();
   f.voiceCallTurnStart({ agent: 'bob', turnId: 'h1', origin: { kind: 'schedule', label: 'Morning report' } });
   f.voiceCallTurnStart({ agent: 'bob', turnId: 'h2', origin: { kind: 'consult', from: 'Alice' } });
   f.voiceCallTurnDelta({ agent: 'bob', turnId: 'h1', text: 'streaming' });   // not read
   f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h1', ok: true, reply: 'Sales are up. Details follow in a table.\n\n| a | b |\n|---|---|\n| 1 | 2 |' });
   f.voiceCallTurnEnd({ agent: 'bob', turnId: 'h2', ok: true, reply: 'Ready when you are. More.' });
-  assert.deepStrictEqual(calls, [['reply', '', false], ['reply', 'Morning report: Sales are up.', true], ['reply', '', false], ['reply', 'Alice: Ready when you are.', true]]);
+  assert.deepStrictEqual(calls, []);
 });
 
 test('a hub turn is not spoken while the call is busy or when it failed', () => {
