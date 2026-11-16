@@ -781,7 +781,10 @@ test('tools: screenshot goes through the desktop channel (authcookie, websocket 
   // The capture gets that very socket, the width, quality 70 and a timeout of at most 30 s (the call has 290 s).
   assert.strictEqual(t.captures.length, 1);
   assert.strictEqual(t.captures[0].ws, ws);
-  assert.deepStrictEqual(t.captures[0].opts, { maxWidth: 1280, quality: 70, timeoutMs: 30000 });
+  const { observe, ...plainOpts } = t.captures[0].opts;
+  assert.deepStrictEqual(plainOpts, { maxWidth: 1280, quality: 70, timeoutMs: 30000 });
+  assert.strictEqual(typeof observe, 'function');
+  assert.strictEqual(observe(), false, 'no person has the desktop open');
   assert.strictEqual(ws.closed, 1, 'the websocket is closed at the end');
   assert.deepStrictEqual(t.gateCalls.map((g) => g.need), ['look', 'look']);
   // The private copy: <data folder>/screens/<short id>/<yyyy-mm-dd>/<hhmmss>-<4 hex>.jpg, folders 0700, file 0600.
@@ -818,7 +821,7 @@ test('tools: a screenshot of a computer with several screens says so when the ca
   assert.ok(!('note' in same));
   t.shot.primaryKnown = false;
   const r = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
-  assert.strictEqual(r.note, 'This computer has more than one screen; the picture shows the one the computer chose.');
+  assert.strictEqual(r.note, 'The main screen of this computer could not be confirmed in this picture, so it cannot be used to click.');
   assert.ok(r.shot);
 });
 
@@ -1897,7 +1900,7 @@ test('tools: a click or a positioned scroll with a screenshot not known to show 
   const sent = () => t.calls.filter((c) => c.action === 'runcommands').length;
   t.shot.onPrimary = false;
   const bad = await shotOf(t);
-  const NOTE = "That screenshot may not show demo-pc's main screen, so it cannot be used to click or scroll there. Take a new screenshot when no one else has the desktop open.";
+  const NOTE = "That screenshot may not show demo-pc's main screen (it could not be confirmed), so it cannot be used to click or scroll there. Take a new screenshot; if a person has the desktop open, try again after they close it.";
   assert.strictEqual((await t.call('click', { ...AGENT, computer: 'demo-pc', shot: bad, x: 10, y: 10 })).error, NOTE);
   assert.strictEqual((await t.call('scroll', { ...AGENT, computer: 'demo-pc', shot: bad, x: 10, y: 10, amount: 3 })).error, NOTE);
   assert.strictEqual(sent(), 0);
@@ -1905,7 +1908,7 @@ test('tools: a click or a positioned scroll with a screenshot not known to show 
   assert.deepStrictEqual(await t.call('scroll', { ...AGENT, computer: 'demo-pc', amount: 3 }), { ok: true });
   assert.strictEqual(sent(), 1);
   const note = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });
-  assert.match(note.note, /more than one screen/, 'the note for a picture not known to be the main screen');
+  assert.match(note.note, /could not be confirmed in this picture/, 'the note for a picture not known to be the main screen');
   t.shot.onPrimary = true;
   const good = await shotOf(t);
   assert.deepStrictEqual(await t.call('click', { ...AGENT, computer: 'demo-pc', shot: good, x: 10, y: 10 }), { ok: true });

@@ -2,8 +2,8 @@
 // One view-only screenshot of a computer through MeshCentral's remote-desktop (KVM) relay.
 // The caller opens the websocket; this file speaks the viewer side of the protocol and
 // NEVER sends keyboard, mouse, touch or clipboard messages. The only things it sends are:
-// the text '2', the compression command, the unpause command, SETDISPLAY and (observe mode) REFRESH.
-// In observe mode (a person already views the desktop) it sends only '2' and REFRESH.
+// the text '2', the compression command, the unpause command, get-displays (11), SETDISPLAY and (observe mode) REFRESH.
+// In observe mode (a person already views the desktop) it sends only '2', REFRESH and get-displays.
 
 const jpegjs = require('jpeg-js');
 
@@ -20,14 +20,18 @@ const CMD = Object.freeze({
   DISPLAY_INFO: 82,
 });
 const ALL_DISPLAYS = 65535;
+// Memory: the canvas is 4 bytes a pixel (4*P), the coverage map 1 byte (P), and one tile decode
+// (coefficients about 6 B/px plus RGBA output) stays within 12*P, so with P <= 16.8 MP the peak is about
+// 290 MB in the worst case. A dual 4K screen (7680x2160 = 16.6 MP) and 5K (5120x2880) fit; 8K does not.
 const LIMITS = Object.freeze({
   maxSide: 16384,
-  maxPixels: 36000000,   // 8K (7680x4320 = 33.2 MP) fits
+  maxPixels: 16800000,
   maxBytes: 128 * 1024 * 1024,
   maxTiles: 50000,       // the least; a screen may allow more (see tileLimit)
   areaSlack: 4 * 1024 * 1024,
 });
 // Claimed tile area allowed since the latest SCREEN, and tiles allowed per SCREEN.
+const MAX_RESETS = 4;   // frame resets allowed in one capture
 const areaLimit = (w, h) => 4 * w * h + LIMITS.areaSlack;
 const tileLimit = (w, h) => Math.max(LIMITS.maxTiles, 2 * Math.ceil(w / 16) * Math.ceil(h / 16));
 
@@ -48,6 +52,9 @@ function buildUnpause() {
 }
 function buildSetDisplay(id) {
   return Buffer.from([0x00, CMD.SETDISPLAY, 0x00, 0x06, (id >> 8) & 255, id & 255]);
+}
+function buildGetDisplays() {
+  return Buffer.from([0x00, CMD.DISPLAYS, 0x00, 0x04]);
 }
 function buildRefresh() {
   return Buffer.from([0x00, CMD.REFRESH, 0x00, 0x04]);
@@ -194,7 +201,7 @@ function decodeTile(jpeg, size, decode) {
     useTArray: true,
     formatAsRGBA: true,
     maxResolutionInMP: Math.max(0.01, Math.ceil(area / 10000) / 100),
-    maxMemoryUsageInMB: Math.ceil((area * 4 * 2) / 1048576) + 16,
+    maxMemoryUsageInMB: Math.ceil((area * 12) / 1048576) + 16,
   };
   try {
     return decode(jpeg, opts);
@@ -236,7 +243,9 @@ function captureDesktop(ws, options) {
   const quality = o.quality === undefined ? 70 : o.quality;
   const timeoutMs = o.timeoutMs === undefined ? 25000 : o.timeoutMs;
   const infoGraceMs = o.infoGraceMs === undefined ? 700 : o.infoGraceMs;
-  const observe = o.observe === true;   // join a desktop a person already views: never change what they see
+  // observe: true, or a function asked before each send that would change what a person sees (true = observe from then on)
+  const observeFn = typeof o.observe === 'function' ? o.observe : null;
+  let observing = o.observe === true;   // join a desktop a person already views: never change what they see
   const decode = o.decode || jpegjs.decode;
   const encode = o.encode || jpegjs.encode;
   const setT = o.setTimeout || global.setTimeout;
@@ -265,11 +274,14 @@ function captureDesktop(ws, options) {
     let canvas = null; // RGBA, filled tile by tile as they arrive
     let cov = null;
     let covered = 0;
+    let resets = 0;    // frame resets in this capture
     let area = 0;      // claimed tile area (header size, before clipping) since the latest SCREEN
     let discard = false; // after SETDISPLAY: ignore the old display until the next 7
 
     // displays
-    let ids = null; // from 11
+    let ids = null; // from 11 (valid messages only)
+    let infoSeen = false; // a valid 82 arrived
+    let displaysAsked = false;
     let selected; // from 11 (or the one we switched to)
     let primary; // from 82
     let entryCount = 0;
@@ -327,16 +339,29 @@ function captureDesktop(ws, options) {
       }
     }
 
+    // True when the capture must not change what a person sees; asked right before such a send.
+    function observeNow() {
+      if (!observing && observeFn && observeFn() === true) observing = true;
+      return observing;
+    }
+    // A new frame: the canvas and the coverage map are allocated at its first tile, not here.
     function resetFrame(w, h) {
+      resets++;
+      if (resets > MAX_RESETS) throw new KvmError('EKVMBIG', 'The remote screen changed size too often.');
       screen = w ? { w, h } : null;
-      canvas = w ? Buffer.alloc(w * h * 4) : null;
-      cov = w ? new Uint8Array(w * h) : null;
+      canvas = null;
+      cov = null;
       covered = 0;
       area = 0;
       tileCount = 0;
     }
     function realCount() {
-      return ids ? ids.filter((i) => i !== ALL_DISPLAYS).length : entryCount;
+      return Math.max(ids ? ids.filter((i) => i !== ALL_DISPLAYS).length : 0, entryCount);
+    }
+    // One display proven by the agent itself: a valid list naming at most one real display, or a valid 82 with one entry.
+    function singleProven() {
+      if (realCount() > 1) return false;
+      return (ids !== null) || (infoSeen && entryCount === 1);
     }
     function startGrace() {
       if (graceTimer || graceExpired) return;
@@ -349,13 +374,15 @@ function captureDesktop(ws, options) {
 
     // Send SETDISPLAY(primary) once when the selected display is not the primary.
     function checkSwitch() {
-      if (observe || switchSent || primary === undefined || selected === undefined || selected === primary) return false;
+      if (observing || switchSent || primary === undefined || selected === undefined || selected === primary) return false;
       if (realCount() <= 1) return false;   // one display (or a list that names none): nothing to switch, and a switch might never be answered
+      if (observeNow()) return false;
       switchSent = true;
-      send(buildSetDisplay(primary));
-      selected = primary;
+      const target = primary;
+      selected = target;
       discard = true;
       resetFrame(0, 0);
+      send(buildSetDisplay(target));
       return true;
     }
 
@@ -365,10 +392,11 @@ function captureDesktop(ws, options) {
       const count = realCount();
       const multi = count > 1;
       let ready;
-      if (selected === undefined) ready = count === 1 || graceExpired;
+      const single = singleProven();
+      if (selected === undefined) ready = single || graceExpired;
       else if (!multi || primary !== undefined) ready = true;
       else if (graceExpired) {
-        if (selected === ALL_DISPLAYS && !observe) {
+        if (selected === ALL_DISPLAYS && !observing) {
           throw new KvmError('EKVMPRIMARY', 'Could not tell which display is the main one on this computer.');
         }
         ready = true;
@@ -378,16 +406,17 @@ function captureDesktop(ws, options) {
         return;
       }
       const picture = scaleAndEncode(canvas, screen.w, screen.h, { maxWidth, quality, encode });
-      const onePrimary = count <= 1;   // one display, or none listed: MeshCentral's viewer reads a list of 0 (or no list) as "no multiple displays"
+      // No list and no info at all is UNKNOWN: the picture is returned, but never as proven main screen.
       const selectedIsPrimary = primary !== undefined && selected === primary;
+      const onPrimary = single || selectedIsPrimary;
       succeed({
         width: picture.width,
         height: picture.height,
         screenWidth: screen.w,
         screenHeight: screen.h,
         jpeg: picture.jpeg,
-        primaryKnown: observe ? (onePrimary || selectedIsPrimary) : (primary !== undefined || !multi),
-        onPrimary: onePrimary || selectedIsPrimary,
+        primaryKnown: observing ? onPrimary : (single || primary !== undefined),
+        onPrimary,
         display: selected === undefined ? null : selected,
         tiles: tileCount,
       });
@@ -406,9 +435,14 @@ function captureDesktop(ws, options) {
       graceTimer = null;
       graceExpired = false;
       resetFrame(w, h);
-      if (observe) return;
-      send(buildCompression(quality));
-      send(buildUnpause());
+      if (!observeNow()) {
+        send(buildCompression(quality));
+        if (!observeNow()) send(buildUnpause());
+      }
+      if (!displaysAsked) {   // like MeshCentral's viewer: ask for the display list once; it only asks
+        displaysAsked = true;
+        send(buildGetDisplays());
+      }
       checkSwitch();
     }
 
@@ -427,9 +461,14 @@ function captureDesktop(ws, options) {
       const size = jpegSize(jpeg);
       if (!size) throw new KvmError('EKVMTILE', 'A piece of the screen was not a readable picture.');
       if (x >= screen.w || y >= screen.h) throw new KvmError('EKVMTILE', 'A piece of the screen was outside the screen.');
+      if (size.width * size.height > screen.w * screen.h) throw new KvmError('EKVMTILE', 'A piece of the screen was larger than the screen.');
       area += size.width * size.height;
       if (area > areaLimit(screen.w, screen.h)) throw new KvmError('EKVMBIG', 'The remote screen sent far more picture than its size.');
       const img = decodeTile(jpeg, size, decode);
+      if (!canvas) {
+        canvas = Buffer.alloc(screen.w * screen.h * 4);
+        cov = new Uint8Array(screen.w * screen.h);
+      }
       const { cw, ch } = drawTile(canvas, screen.w, screen.h, x, y, img, size.width, size.height);
       for (let row = y; row < y + ch; row++) {
         const base = row * screen.w;
@@ -446,11 +485,14 @@ function captureDesktop(ws, options) {
       const d = c.data;
       if (d.length < 6) return;
       const count = d.readUInt16BE(4);
+      // A list of 0 may come without a selected id (MeshCentral's viewer reads the selected id only when the count is above 0).
+      if (count === 0 && d.length === 6) { ids = []; return; }
+      if (d.length !== 4 + 2 + 2 * count + 2) return;   // malformed: ignored
       const list = [];
       let p = 6;
-      for (let n = 0; n < count && p + 2 <= d.length; n++, p += 2) list.push(d.readUInt16BE(p));
+      for (let n = 0; n < count; n++, p += 2) list.push(d.readUInt16BE(p));
       ids = list;
-      if (p + 2 <= d.length && !discard) selected = d.readUInt16BE(p);
+      if (!discard) selected = d.readUInt16BE(p);
     }
 
     function handleDisplayInfo(c) {
@@ -458,6 +500,7 @@ function captureDesktop(ws, options) {
       if ((d.length - 4) % 10 !== 0) return;
       const n = (d.length - 4) / 10;
       entryCount = n;
+      infoSeen = true;
       for (let k = 0; k < n; k++) {
         const p = 4 + k * 10;
         if (d.readInt16BE(p + 2) === 0 && d.readInt16BE(p + 4) === 0) {
@@ -503,7 +546,7 @@ function captureDesktop(ws, options) {
         if (text === 'c' || text === 'cr') {
           handshake = true;
           send('2');
-          if (observe) send(buildRefresh());   // asks the agent to resend the whole screen; harmless to other viewers
+          if (observing) send(buildRefresh());   // asks the agent to resend the whole screen; harmless to other viewers
         }
         return;
       }

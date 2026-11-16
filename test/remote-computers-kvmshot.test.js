@@ -90,12 +90,12 @@ const dec = (r) => jpeg.decode(r.jpeg, { useTArray: true, formatAsRGBA: true });
 async function rejectsWith(promise, code) {
   await assert.rejects(promise, (e) => e instanceof KvmError && e.code === code && e.name === 'KvmError');
 }
-function assertOnlyAllowed(sent) {
+function assertOnlyAllowed(sent, observe = false) {
   for (const m of sent) {
     if (m === '2') continue;
     assert.ok(Buffer.isBuffer(m), 'binary sends are Buffers');
     const cmd = (m[0] << 8) | m[1];
-    assert.ok([5, 6, 8, 12].includes(cmd), 'unexpected command ' + cmd);
+    assert.ok((observe ? [6, 11] : [5, 8, 11, 12]).includes(cmd), 'unexpected command ' + cmd);
     assert.equal((m[2] << 8) | m[3], m.length);
   }
 }
@@ -130,9 +130,10 @@ test('handshake: c and cr both answer with text 2; other text is ignored first',
 test('screen command is answered with exact compression and unpause bytes', async () => {
   const s = begin({ quality: 70 });
   s.bin(cmdScreen(64, 48));
-  assert.equal(s.ws.sent.length, 3);
+  assert.equal(s.ws.sent.length, 4);
   assert.deepEqual([...s.ws.sent[1]], [0x00, 0x05, 0x00, 0x0a, 1, 70, 0x04, 0x00, 0x00, 100]);
   assert.deepEqual([...s.ws.sent[2]], [0x00, 0x08, 0x00, 0x05, 0x00]);
+  assert.deepEqual([...s.ws.sent[3]], [0x00, 0x0b, 0x00, 0x04], 'get-displays, like the MeshCentral viewer');
   s.ws.emit('close');
   await rejectsWith(s.promise, 'EKVMCLOSED');
 });
@@ -278,7 +279,7 @@ test('two displays: selected is not the primary -> SETDISPLAY once, completes on
   s.bin(cmdScreen(32, 24));
   s.bin(cmdTile(0, 0, solid(32, 24, RED))); // display 1 frame (complete, but wrong display)
   s.bin(cmdDisplays([1, 2], 1));
-  assert.equal(s.ws.sent.length, 3); // '2', compression, unpause
+  assert.equal(s.ws.sent.length, 4); // '2', compression, unpause, get-displays
   s.bin(cmdInfo([{ id: 1, x: -1920, y: 0, w: 1920, h: 1080 }, { id: 2, x: 0, y: 0, w: 32, h: 24 }]));
   const sets = s.ws.sent.filter((m) => Buffer.isBuffer(m) && m[1] === 12);
   assert.equal(sets.length, 1);
@@ -444,7 +445,7 @@ test('after settling: listeners removed, timers cleared, settles once, further t
   assert.equal(s.ws.closed, 1);
 });
 
-test('only 2, compression, unpause and SETDISPLAY are ever sent (no input commands)', async () => {
+test('only 2, compression, unpause, get-displays and SETDISPLAY are ever sent (no input commands)', async () => {
   const s = begin();
   s.bin(cmdScreen(32, 24));
   s.bin(cmdDisplays([1, 2], 1));
@@ -452,7 +453,7 @@ test('only 2, compression, unpause and SETDISPLAY are ever sent (no input comman
   s.bin(cmdScreen(32, 24));
   s.bin(cmdTile(0, 0, solid(32, 24, RED)));
   await s.promise;
-  assert.deepEqual(s.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 5, 8, 12, 5, 8]);
+  assert.deepEqual(s.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 5, 8, 11, 12, 5, 8]);
   assertOnlyAllowed(s.ws.sent);
   for (const m of s.ws.sent) if (m !== '2') assert.ok(![1, 2, 6, 10, 15, 16].includes(m[1]));
 });
@@ -486,7 +487,7 @@ test('tiles are decoded when they arrive, with limits from the tile header', asy
   t.bin(cmdScreen(480, 540));
   t.bin(cmdTile(0, 0, solid(480, 540, RED)));
   assert.equal(big[0].maxResolutionInMP, 0.26);
-  assert.equal(big[0].maxMemoryUsageInMB, 18);
+  assert.equal(big[0].maxMemoryUsageInMB, 19);   // ceil(259200 * 12 / 1048576) + 16
   t.ws.emit('close');
   await rejectsWith(t.promise, 'EKVMCLOSED');
   // A tile that cannot be decoded within its own limits is a bad tile.
@@ -499,11 +500,11 @@ test('tiles are decoded when they arrive, with limits from the tile header', asy
 test('overlap bomb: tiles that re-cover the same area beyond the budget -> EKVMBIG quickly', async () => {
   let decoded = 0;
   const s = begin({ decode: (buf, opts) => { decoded++; return jpeg.decode(buf, opts); } });
-  s.bin(cmdScreen(64, 48));
-  const t = cmdTile(0, 0, solid(1000, 1000, RED));   // clipped to 64x48, but it claims 1 MP each time
-  for (let i = 0; i < 10 && s.ws.closed === 0; i++) s.bin(t);
+  s.bin(cmdScreen(1000, 1000));
+  const t = cmdTile(0, 0, solid(1000, 1000, RED));   // the whole screen, claimed again and again: 4 screens + slack are allowed
+  for (let i = 0; i < 12 && s.ws.closed === 0; i++) s.bin(t);
   await assert.rejects(s.promise, (e) => e.code === 'EKVMBIG' && /far more picture/.test(e.message));
-  assert.ok(decoded <= 5, 'stopped after ' + decoded);
+  assert.ok(decoded <= 9, 'stopped after ' + decoded);
   assert.equal(s.ws.closed, 1);
 });
 
@@ -577,10 +578,11 @@ test('one display known from 82 or from 11 alone: the frame is ready without the
   const b = begin();
   b.bin(cmdScreen(32, 24));
   b.bin(cmdTile(0, 0, solid(32, 24, RED)));
-  b.bin(Buffer.from([0, 11, 0, 8, 0, 1, 0, 7]));   // one display, no selected id
+  b.bin(Buffer.from([0, 11, 0, 8, 0, 1, 0, 7]));   // malformed (no selected id): ignored, so nothing is known yet
+  b.bin(cmdDisplays([7], 7));
   const rb = await b.promise;
   assert.equal(rb.onPrimary, true);
-  assert.equal(rb.display, null);
+  assert.equal(rb.display, 7);
 });
 
 test('a socket that is already closing or closed -> EKVMCLOSED at once', async () => {
@@ -613,32 +615,177 @@ test('onPrimary: true for the primary or a single display, false otherwise', asy
   const rb = await b.promise;
   assert.equal(rb.primaryKnown, false);
   assert.equal(rb.onPrimary, false);
-  // No display list at all, or a list naming no display (MeshCentral's viewer reads both as "no multiple displays"): one screen, clickable.
-  for (const info of [null, cmdDisplays([], 0)]) {
+  // An explicit list naming no display or one display (MeshCentral's viewer reads a count of 0 as "no multiple displays"): one screen, clickable.
+  // The bare 6-byte form of a list of 0 (no selected id) counts too.
+  for (const info of [cmdDisplays([], 0), Buffer.from([0, 11, 0, 6, 0, 0]), cmdDisplays([1], 1), cmdDisplays([1, 65535], 1)]) {
     const c = begin();
     c.bin(cmdScreen(32, 24));
     c.bin(cmdTile(0, 0, solid(32, 24, RED)));
-    if (info) c.bin(info);
+    c.bin(info);
     c.timers.fire(50);
     const rc = await c.promise;
-    assert.equal(rc.onPrimary, true, info ? 'list of 0' : 'no list');
+    assert.equal(rc.onPrimary, true);
     assert.equal(rc.primaryKnown, true);
+  }
+  // No display message at all: unknown. The picture is returned but never as the proven main screen.
+  const u = begin();
+  u.bin(cmdScreen(32, 24));
+  u.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  u.timers.fire(50);
+  const ru = await u.promise;
+  assert.equal(ru.onPrimary, false);
+  assert.equal(ru.primaryKnown, false);
+  // A 82 with one entry proves one display, wherever it is; two entries do not.
+  const v = begin();
+  v.bin(cmdScreen(32, 24));
+  v.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  v.bin(cmdInfo([{ id: 3, x: 0, y: 0, w: 32, h: 24 }]));
+  const rv = await v.promise;
+  assert.equal(rv.onPrimary, true);
+  assert.equal(rv.primaryKnown, true);
+});
+
+test('memory ceiling: 16.8 MP at most; dual 4K and 5K fit, 8K and 36 MP do not', async () => {
+  assert.equal(kvm.LIMITS.maxPixels, 16800000);
+  for (const [w, h] of [[7680, 2160], [5120, 2880]]) {   // 16.6 MP and 14.7 MP
+    const s = begin();
+    s.bin(cmdScreen(w, h));
+    assert.equal(s.ws.sent.length, 4);
+    s.ws.emit('close');
+    await rejectsWith(s.promise, 'EKVMCLOSED');
+  }
+  for (const [w, h] of [[7680, 4320], [6000, 6000], [7000, 5200]]) {
+    const s = begin();
+    s.bin(cmdScreen(w, h));
+    await rejectsWith(s.promise, 'EKVMSIZE');
   }
 });
 
-test('an 8K screen (7680x4320) is accepted; 36 MP is the limit', async () => {
-  assert.equal(kvm.LIMITS.maxPixels, 36000000);
-  const s = begin();
-  s.bin(cmdScreen(7680, 4320));
-  assert.equal(s.ws.sent.length, 3);
-  s.ws.emit('close');
-  await rejectsWith(s.promise, 'EKVMCLOSED');
-  const t = begin();
-  t.bin(cmdScreen(7000, 5200));   // 36.4 MP
-  await rejectsWith(t.promise, 'EKVMSIZE');
+test('a single tile claiming more pixels than the screen -> EKVMTILE, before any decode', async () => {
+  let decoded = 0;
+  const s = begin({ decode: (buf, opts) => { decoded++; return jpeg.decode(buf, opts); } });
+  s.bin(cmdScreen(64, 48));
+  s.bin(cmdTile(0, 0, solid(100, 100, RED)));   // 10000 > 3072
+  await rejectsWith(s.promise, 'EKVMTILE');
+  assert.equal(decoded, 0);
+  assert.equal(s.ws.closed, 1);
 });
 
-test('observe mode: sends only 2 and REFRESH, never switches, and says whether the picture is the primary display', async () => {
+test('decode memory limit follows the tile area: ceil(area * 12 / 1 MiB) + 16', async () => {
+  const seen = [];
+  const s = begin({ decode: (buf, opts) => { seen.push(opts); return jpeg.decode(buf, opts); } });
+  s.bin(cmdScreen(1000, 1000));
+  s.bin(cmdTile(0, 0, solid(1000, 1000, RED)));
+  assert.equal(seen[0].maxMemoryUsageInMB, Math.ceil((1000 * 1000 * 12) / 1048576) + 16);
+  assert.equal(seen[0].maxResolutionInMP, 1);
+  s.ws.emit('close');
+  await rejectsWith(s.promise, 'EKVMCLOSED');
+});
+
+test('frame resets: more than 4 in one capture -> EKVMBIG, and a SCREEN alone allocates nothing', async () => {
+  const s = begin();
+  const t0 = Date.now();
+  let n = 0;
+  // 16.6 MP and 16.5 MP alternately: a canvas for each would be hundreds of MB and seconds of work.
+  for (; n < 1000 && s.ws.closed === 0; n++) s.bin(n % 2 ? cmdScreen(7680, 2160) : cmdScreen(7680, 2150));
+  await assert.rejects(s.promise, (e) => e.code === 'EKVMBIG' && /changed size too often/.test(e.message));
+  assert.equal(n, 5, 'the fifth reset is the one refused');
+  assert.ok(Date.now() - t0 < 1000, 'no canvas was allocated');
+  // SETDISPLAY switches count too.
+  const d = begin();
+  d.bin(cmdScreen(32, 24));                                   // 1
+  d.bin(cmdDisplays([1, 2], 1));
+  d.bin(cmdInfo([{ id: 2, x: 0, y: 0, w: 32, h: 24 }, { id: 1, x: 32, y: 0, w: 32, h: 24 }]));   // 2 (switch)
+  d.bin(cmdScreen(32, 24));                                   // 3
+  d.bin(cmdScreen(16, 12));                                   // 4
+  d.bin(cmdScreen(32, 24));                                   // 5
+  await rejectsWith(d.promise, 'EKVMBIG');
+});
+
+test('get-displays is sent once, after the first SCREEN, in both modes', async () => {
+  const GET = [0, 11, 0, 4];
+  const a = begin();
+  a.bin(cmdScreen(32, 24));
+  a.bin(cmdScreen(16, 12));
+  a.bin(cmdScreen(32, 24));
+  assert.equal(a.ws.sent.filter((m) => Buffer.isBuffer(m) && m[1] === 11).length, 1);
+  assert.deepEqual([...a.ws.sent.find((m) => Buffer.isBuffer(m) && m[1] === 11)], GET);
+  a.ws.emit('close');
+  await rejectsWith(a.promise, 'EKVMCLOSED');
+  const b = begin({ observe: true });
+  assert.equal(b.ws.sent.length, 2, 'not before the first SCREEN');
+  b.bin(cmdScreen(32, 24));
+  b.bin(cmdScreen(16, 12));
+  assert.deepEqual(b.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6, 11]);
+  assert.deepEqual([...b.ws.sent[2]], GET);
+  b.ws.emit('close');
+  await rejectsWith(b.promise, 'EKVMCLOSED');
+});
+
+test('a malformed display list (11) is ignored; a valid one is exact in size', async () => {
+  const s = begin();
+  s.bin(cmdScreen(32, 24));
+  s.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  s.bin(Buffer.from([0, 11, 0, 10, 0, 2, 0, 1, 0, 2]));          // count 2 but only room for 1 id and no selected
+  s.bin(Buffer.from([0, 11, 0, 12, 0, 1, 0, 1, 0, 1, 0, 9]));    // too long for count 1
+  let done = false;
+  s.promise.then(() => { done = true; }, () => { done = true; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(done, false, 'nothing was learnt from them');
+  s.timers.fire(50);
+  const r = await s.promise;
+  assert.equal(r.display, null);
+  assert.equal(r.onPrimary, false);
+  assert.equal(r.primaryKnown, false);
+});
+
+test('an observe function that turns true after the SCREEN: nothing that changes the view is sent afterwards', async () => {
+  let calls = 0;
+  let flip = false;
+  const s = begin({ observe: () => { calls++; return flip; } });
+  s.bin(cmdScreen(32, 24));
+  assert.ok(calls >= 2, 'asked before compression and unpause');
+  assert.deepEqual(s.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 5, 8, 11]);
+  flip = true;
+  s.bin(cmdDisplays([1, 2], 1));
+  s.bin(cmdInfo([{ id: 2, x: 0, y: 0, w: 32, h: 24 }, { id: 1, x: 32, y: 0, w: 32, h: 24 }]));   // would switch to 2
+  s.bin(cmdScreen(16, 12));   // would send compression and unpause
+  s.bin(cmdTile(0, 0, solid(16, 12, GREEN)));
+  const r = await s.promise;
+  assert.deepEqual(s.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 5, 8, 11]);
+  assert.equal(r.display, 1);
+  assert.equal(r.onPrimary, false, 'from then on only a proven primary counts');
+  assert.equal(r.primaryKnown, false);
+  // flipping before the SCREEN's own compression: nothing is sent but the display list
+  const t = begin({ observe: () => true });
+  t.bin(cmdScreen(32, 24));
+  assert.deepEqual(t.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 11]);
+  t.ws.emit('close');
+  await rejectsWith(t.promise, 'EKVMCLOSED');
+  // a function that stays false behaves as the normal mode
+  const u = begin({ observe: () => false });
+  u.bin(cmdScreen(32, 24));
+  assert.deepEqual(u.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 5, 8, 11]);
+  u.ws.emit('close');
+  await rejectsWith(u.promise, 'EKVMCLOSED');
+});
+
+test('a same-size SCREEN after SETDISPLAY (selected is now the primary) is processed, not ignored', async () => {
+  const s = begin();
+  s.bin(cmdScreen(32, 24));
+  s.bin(cmdTile(0, 0, solid(32, 24, RED)));
+  s.bin(cmdDisplays([1, 2], 1));
+  s.bin(cmdInfo([{ id: 2, x: 0, y: 0, w: 32, h: 24 }, { id: 1, x: 32, y: 0, w: 32, h: 24 }]));
+  assert.equal(s.ws.sent.filter((m) => Buffer.isBuffer(m) && m[1] === 12).length, 1);
+  s.bin(cmdScreen(32, 24));   // the new display, same size
+  s.bin(cmdTile(0, 0, solid(32, 24, BLUE)));
+  const r = await s.promise;
+  assert.equal(r.display, 2);
+  assert.equal(r.onPrimary, true);
+  near(px(dec(r), 16, 12), BLUE);
+});
+
+test('observe mode: sends only 2, REFRESH and get-displays, never switches, and says whether the picture is the primary display', async () => {
   const REFRESH = [0, 6, 0, 4];
   // two displays, selected is not the primary: no SETDISPLAY, no compression, no unpause
   const a = begin({ observe: true });
@@ -654,8 +801,8 @@ test('observe mode: sends only 2 and REFRESH, never switches, and says whether t
   assert.equal(ra.primaryKnown, false);
   assert.equal(ra.onPrimary, false);
   assert.equal(ra.display, 1);
-  assert.equal(a.ws.sent.length, 2);
-  assertOnlyAllowed(a.ws.sent);
+  assert.equal(a.ws.sent.length, 3);   // '2', REFRESH, get-displays (once)
+  assertOnlyAllowed(a.ws.sent, true);
 
   // selected is the primary: proven
   const b = begin({ observe: true });
@@ -666,7 +813,7 @@ test('observe mode: sends only 2 and REFRESH, never switches, and says whether t
   const rb = await b.promise;
   assert.equal(rb.primaryKnown, true);
   assert.equal(rb.onPrimary, true);
-  assert.deepEqual(b.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6]);
+  assert.deepEqual(b.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6, 11]);
 
   // one display: proven; two displays and nothing known: not proven, after the grace, even for All displays
   const c = begin({ observe: true });
@@ -683,5 +830,5 @@ test('observe mode: sends only 2 and REFRESH, never switches, and says whether t
   const rd = await d.promise;
   assert.equal(rd.primaryKnown, false);
   assert.equal(rd.onPrimary, false);
-  assert.deepEqual(d.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6]);
+  assert.deepEqual(d.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6, 11]);
 });

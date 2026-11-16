@@ -574,15 +574,35 @@ test('a screenshot of a computer whose desktop a person has open joins it in obs
   // No one has the desktop open: the normal mode.
   const plainShot = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });
   assert.ok(!plainShot.isError);
-  assert.strictEqual(captures[0].observe, undefined);
+  assert.strictEqual(typeof captures[0].observe, 'function');
+  assert.strictEqual(captures[0].observe(), false, 'no one has the desktop open');
+  assert.ok(captures[0].timeoutMs > 15000, 'the full wait without a live session');
   await open(t);
   const shot = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });
   assert.ok(!shot.isError, JSON.stringify(shot).slice(0, 200));
-  assert.strictEqual(captures[1].observe, true);
+  assert.strictEqual(typeof captures[1].observe, 'function');
+  assert.strictEqual(captures[1].observe(), true);
   assert.ok(captures[1].timeoutMs <= 15000);
-  assert.match(shot.content[0].text, /more than one screen/, 'the note for a picture not known to be the main screen');
+  assert.match(shot.content[0].text, /could not be confirmed in this picture/, 'the note for a picture not known to be the main screen');
   fail = 'EKVMTIMEOUT';
   const r = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });
   assert.strictEqual(r.isError, true);
   assert.strictEqual(r.content[0].text, "demo-pc's desktop is open for Sam and did not send a picture to share. Try again after their session, or ask them.");
+});
+
+test('a desktop session opened after the capture started: the observe function passed to the capture turns true', async () => {
+  const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('a picture')]);
+  class OpenSocket extends EventEmitter { constructor() { super(); setImmediate(() => this.emit('open')); } close() { this.closed = true; } send() {} }
+  let t;
+  const seen = [];
+  const deps = { WebSocket: OpenSocket, captureDesktop: async (ws, opts) => {
+    seen.push(opts.observe());   // before the session opens
+    await open(t);               // a person opens the desktop while the capture runs
+    seen.push(opts.observe());
+    return { width: 1600, height: 900, screenWidth: 1920, screenHeight: 1080, jpeg: JPEG, primaryKnown: false, onPrimary: false, display: 1, tiles: 4 };
+  } };
+  t = setup({ handlers: { getsysinfo: async () => ({ action: 'getsysinfo', hardware: {} }) }, deps });
+  const shot = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });
+  assert.ok(!shot.isError, JSON.stringify(shot).slice(0, 200));
+  assert.deepStrictEqual(seen, [false, true]);
 });

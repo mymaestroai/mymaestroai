@@ -598,7 +598,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       const live = desktop.forNode(pc.nodeid);
       const timeoutMs = live ? Math.min(left, OBSERVE_WAIT_MS) : left;
       // The capture starts BEFORE the tunnel request, so the relay's first text ('c') can never arrive before its listeners are there.
-      const p = Promise.resolve(capture(ws, { maxWidth, quality: 70, timeoutMs, ...(live ? { observe: true } : {}) }));
+      const p = Promise.resolve(capture(ws, { maxWidth, quality: 70, timeoutMs, observe: () => !!desktop.forNode(pc.nodeid) }));   // asked again before anything is sent: a person who opens the desktop meanwhile is never disturbed
       p.catch(() => {});   // no unhandled rejection when the request below fails first
       const value = `*/meshrelay.ashx?p=2&nodeid=${pc.nodeid}&id=${tunnelid}&rauth=${f.rcookie}`;
       try { await c.request('msg', { type: 'tunnel', nodeid: pc.nodeid, value, usage: 2 }, { timeoutMs: 10000 }); } catch (e) {
@@ -639,7 +639,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     do { id = newShotId(); } while ((shotsOf.get(who) || []).some((s) => s.id === id));
     rememberShot(who, { id, agent: who, computerId: pc.id, width: shot.width, height: shot.height, screenWidth: shot.screenWidth, screenHeight: shot.screenHeight, sx: shot.screenWidth / shot.width, sy: shot.screenHeight / shot.height, onPrimary: shot.onPrimary === true, takenAt, at: now() });
     log(`screenshot of ${pc.name} for ${who} (${shot.width}x${shot.height}, ${shot.jpeg.length} bytes)`);
-    const meta = { shot: id, width: shot.width, height: shot.height, screen: { width: shot.screenWidth, height: shot.screenHeight }, takenAt, computer: pc.name, ...(shot.primaryKnown === false || shot.onPrimary === false ? { note: 'This computer has more than one screen; the picture shows the one the computer chose.' } : {}) };
+    const meta = { shot: id, width: shot.width, height: shot.height, screen: { width: shot.screenWidth, height: shot.screenHeight }, takenAt, computer: pc.name, ...(shot.primaryKnown === false || shot.onPrimary === false ? { note: 'The main screen of this computer could not be confirmed in this picture, so it cannot be used to click.' } : {}) };
     return new Rich([{ type: 'text', text: JSON.stringify(meta) }, { type: 'image', data: shot.jpeg.toString('base64'), mimeType: 'image/jpeg' }]);
   }
 
@@ -684,7 +684,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   }
   // A click or a positioned scroll is aimed with the primary display's coordinates: a picture not known to be that display cannot be used for it.
   function needPrimary(s, pc) {
-    if (s.onPrimary !== true) throw new ToolError(`That screenshot may not show ${pc.name}'s main screen, so it cannot be used to click or scroll there. Take a new screenshot when no one else has the desktop open.`);
+    if (s.onPrimary !== true) throw new ToolError(`That screenshot may not show ${pc.name}'s main screen (it could not be confirmed), so it cannot be used to click or scroll there. Take a new screenshot; if a person has the desktop open, try again after they close it.`);
   }
   function toScreen(s, x, y) {
     if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= s.width || y >= s.height) throw new ToolError(`x and y must be whole numbers inside that screenshot (0 to ${s.width - 1} across, 0 to ${s.height - 1} down).`);
