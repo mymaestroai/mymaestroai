@@ -825,7 +825,7 @@ async function handleHttpRequest(req, res) {
         method: req.method, pathname, body, service: req.hubService, token: req.hubToken,
         userId: !accounts ? '*' : (who ? String(who.id) : null),
         prefs: require('./lib/notify-prefs').getNotifyPrefs(),
-        beforeSecurityOff: (uid) => { require('./lib/push').getPush().notifyUsers({ title: 'Security and access notifications turned off', body: 'Changed from a signed-in page. Turn them back on in Notification settings.', url: '/mobile', tag: 'security-off' }, [uid], { kind: 'security' }).catch(() => {}); },   // one last notice to the person's own devices, sent before the setting is saved
+        beforeSecurityOff: (uid) => { require('./lib/push').getPush().notifyUsers({ title: 'Security and access notifications turned off', body: 'Changed from a signed-in page. Turn them back on in Notification settings.', url: '/mobile', tag: 'security-off' }, [uid], { kind: 'security', ignorePrefs: true }).catch(() => {}); },   // one last notice to the person's own devices, sent before the setting is saved
         agentExists: (n) => all.some(a => a.name === n),
         agentVisible: (n) => !who || access.isAdmin(who) || access.canAccessAgent(who, n, { agents: all, resolveVirtual: (v) => temporalWorkersLib.getVirtual(v) }),
       });
@@ -846,7 +846,10 @@ async function handleHttpRequest(req, res) {
         if (!r) return jsonResponse(res, 409, { error: 'not_running', detail: `${agentName} is not working on a reply right now` });
         let devices = 0;
         try { devices = require('./lib/push').getPush().devicesFor(user); } catch {}
-        return jsonResponse(res, 200, { ok: true, agent: agentName, turnId: r.turnId, on: r.on, devices });
+        // The person's effective "Requests you made" mode for this agent, from the server's own settings (a page's cached copy may be stale).
+        let requested;
+        try { requested = require('./lib/notify-prefs').getNotifyPrefs().mode(!hubAuth.hasUsers() ? '*' : (who ? String(who.id) : null), agentName, 'requested'); } catch { requested = undefined; }
+        return jsonResponse(res, 200, { ok: true, agent: agentName, turnId: r.turnId, on: r.on, devices, ...(requested ? { requested } : {}) });
       }
     }
     {

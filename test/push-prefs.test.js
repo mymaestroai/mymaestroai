@@ -367,6 +367,14 @@ test('hub notices without an agent follow the person\'s default for everything e
   assert.deepEqual(take(r.sent), ['admin|Question-ish', 'legacy|Question-ish', 'sam|Question-ish']);
 });
 
+test('notifyUsers ignorePrefs: delivered to the named person even with security Off; not without it', async (t) => {
+  const r = gated(t, (p) => { for (const u of ['u_admin', 'u_sam']) p.setDefault(u, { security: 'off' }); });
+  await r.push.notifyUsers({ title: 'Turned off' }, ['u_sam'], { kind: 'security' });
+  assert.deepEqual(take(r.sent), [], 'held by the setting');
+  await r.push.notifyUsers({ title: 'Turned off' }, ['u_sam'], { kind: 'security', ignorePrefs: true });
+  assert.deepEqual(take(r.sent), ['sam|Turned off'], 'delivered despite Off, and only to the named person');
+});
+
 test('security notices follow the security setting (notify, notifyEach, notifyUsers default, halted); other kinds do not touch them; test() is never gated', async (t) => {
   const r = gated(t, (p) => { for (const u of ['u_admin', 'u_sam']) p.setDefault(u, { questions: 'off', other: 'off', requested: 'off' }); });
   // security is still On: the other three being Off does not silence it

@@ -165,10 +165,24 @@ test('beforeSecurityOff: called once when security moves on -> off/away, before 
   assert.equal(seen.length, 2, 'a bad mode never reaches the hook');
 });
 
+test('a { default } patch that fails validation never reaches beforeSecurityOff', (t) => {
+  const { call, prefs } = rig(t);
+  const seen = [];
+  const hook = (u) => seen.push(u);
+  for (const d of [{ security: 'off', other: 'bogus' }, { security: 'off', nonsense: 'on' }, { other: 'bogus', security: 'off' }]) {
+    assert.equal(call('sam', 'PUT', P, { default: d }, { beforeSecurityOff: hook }).status, 400);
+  }
+  assert.equal(call('sam', 'PUT', P, { default: [] }, { beforeSecurityOff: hook }).status, 400);
+  assert.deepEqual(seen, [], 'no notice for a request that fails');
+  assert.equal(prefs.mode('sam', null, 'security'), 'on', 'nothing saved');
+  assert.equal(call('sam', 'PUT', P, { default: { security: 'off', other: 'away' } }, { beforeSecurityOff: hook }).status, 200);
+  assert.deepEqual(seen, ['sam']);
+});
+
 test('server.js wires beforeSecurityOff to push.notifyUsers with the security-off notice', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const i = src.indexOf('beforeSecurityOff:');
   assert.ok(i > 0);
   const line = src.slice(i, src.indexOf('\n', i));
-  assert.ok(line.includes("notifyUsers({ title: 'Security and access notifications turned off', body: 'Changed from a signed-in page. Turn them back on in Notification settings.', url: '/mobile', tag: 'security-off' }, [uid], { kind: 'security' })"));
+  assert.ok(line.includes("notifyUsers({ title: 'Security and access notifications turned off', body: 'Changed from a signed-in page. Turn them back on in Notification settings.', url: '/mobile', tag: 'security-off' }, [uid], { kind: 'security', ignorePrefs: true })"));;
 });

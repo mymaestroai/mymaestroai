@@ -256,7 +256,7 @@ test('the ⋯ menu has "Notifications for this agent", which opens the bell menu
 });
 
 // Round 4: the Notify me toast follows the "Requests you made" setting.
-async function desktopToasts(prefs) {
+async function desktopToasts(prefs, requested) {
   const a = app.indexOf('async function toggleNotifyDone('), b = app.indexOf('// Ask the hub to stop the agent');
   assert.ok(a >= 0 && b > a);
   const toasts = [];
@@ -264,15 +264,20 @@ async function desktopToasts(prefs) {
   const ctx = {
     chats: { c1: { agent: 'helper', display: 'Helper' } }, notifyArmed: {}, notifyPrefsCache: prefs, notifyEffective: h.notifyEffective,
     paintNotifyBtns() {}, showNotifyBtn() {}, hubToast: (t) => toasts.push(t), capName: (n) => n,
-    fetch: async () => ({ ok: true, status: 200, json: async () => ({ on: true, turnId: 't1', devices: 1 }) }),
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({ on: true, turnId: 't1', devices: 1, ...(requested ? { requested } : {}) }) }),
   };
   vm.createContext(ctx);
   vm.runInContext(app.slice(a, b) + '\nthis.go = toggleNotifyDone;', ctx);
   await ctx.go('c1');
   return toasts;
 }
-test('Notify me toast: on / off / away for Requests you made; not loaded counts as on', async () => {
-  assert.deepStrictEqual(await desktopToasts(null), ['You will get a notification when Helper is done.']);
+test('Notify me toast: on / off / away for Requests you made; the hub\'s answer wins; not loaded and no answer is neutral', async () => {
+  assert.deepStrictEqual(await desktopToasts(null), ['Notification requested for Helper; it follows your notification settings.']);
+  assert.deepStrictEqual(await desktopToasts(null, 'off'), ['Requests you made is Off for Helper, so no notification will come.']);
+  assert.deepStrictEqual(await desktopToasts(null, 'away'), ["You'll get a notification when Helper is done if none of your pages is open."]);
+  assert.deepStrictEqual(await desktopToasts(null, 'on'), ['You will get a notification when Helper is done.']);
+  assert.deepStrictEqual(await desktopToasts({ default: { requested: 'on' }, agents: {} }, 'off'), ['Requests you made is Off for Helper, so no notification will come.']);
+  assert.deepStrictEqual(await desktopToasts({ default: { requested: 'off' }, agents: {} }, 'on'), ['You will get a notification when Helper is done.']);
   assert.deepStrictEqual(await desktopToasts({ default: { requested: 'on' }, agents: {} }), ['You will get a notification when Helper is done.']);
   assert.deepStrictEqual(await desktopToasts({ default: { requested: 'off' }, agents: {} }), ['Requests you made is Off for Helper, so no notification will come.']);
   assert.deepStrictEqual(await desktopToasts({ default: { requested: 'on' }, agents: { helper: { requested: 'off' } } }), ['Requests you made is Off for Helper, so no notification will come.']);

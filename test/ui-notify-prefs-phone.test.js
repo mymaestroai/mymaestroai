@@ -207,7 +207,7 @@ function bellHarness({ busy, own, apiBody }) {
   assert.ok(a >= 0 && b > a);
   const calls = { api: [], toasts: [], sheet: 0 };
   const ctx = {
-    current: 'helper', notifyArmed: {}, hubMe: null,
+    current: 'helper', notifyArmed: {}, notifyServerMode: {}, NOTIFY_MODES: ['on', 'off', 'away'], hubMe: null,
     isBusy: () => busy, ownTurnFor: () => own,
     displayName: (n) => n, paintNotifyBtn() {}, repaintNotifyAgentSheet() {},
     openNotifyAgentSheet() { calls.sheet++; }, notifyPrefs: null, notifyEffective: helpers().notifyEffective,
@@ -221,7 +221,7 @@ function bellHarness({ busy, own, apiBody }) {
 
 test('onNotifyBellTap: a reply running -> Notify me (same API) and one toast whose tap opens the sheet', async () => {
   for (const [busy, own] of [[true, false], [false, true]]) {
-    const { ctx, calls } = bellHarness({ busy, own, apiBody: { on: true, turnId: 't1', devices: 1 } });
+    const { ctx, calls } = bellHarness({ busy, own, apiBody: { on: true, turnId: 't1', devices: 1, requested: 'on' } });
     await ctx.bell();
     assert.strictEqual(calls.api.length, 1);
     assert.ok(calls.api[0].url.endsWith('/api/agents/helper/notify') && calls.api[0].o.method === 'POST' && JSON.parse(calls.api[0].o.body).on === true);
@@ -293,7 +293,7 @@ test('the agent sheet paints three rows (no security) and keeps Notify me while 
   const h = helpers();
   const el = { _agent: 'helper', innerHTML: '' };
   let busy = false;
-  const ctx = { notifyPrefs: { default: { questions: 'on', requested: 'off', other: 'on' }, agents: {} }, notifyArmed: {}, $: () => el, esc: (s) => String(s), displayName: (n) => n, isBusy: () => busy, ownTurnFor: () => false, notifyOptionsHtml: (sel, l) => `[${sel}|${l}]`, notifyModeLabel: h.notifyModeLabel, notifyEffective: h.notifyEffective, NOTIFY_AGENT_KINDS: h.NOTIFY_AGENT_KINDS, NOTIFY_MODES: h.NOTIFY_MODES };
+  const ctx = { notifyPrefs: { default: { questions: 'on', requested: 'off', other: 'on' }, agents: {} }, notifyServerMode: {}, notifyArmed: {}, $: () => el, esc: (s) => String(s), displayName: (n) => n, isBusy: () => busy, ownTurnFor: () => false, notifyOptionsHtml: (sel, l) => `[${sel}|${l}]`, notifyModeLabel: h.notifyModeLabel, notifyEffective: h.notifyEffective, NOTIFY_AGENT_KINDS: h.NOTIFY_AGENT_KINDS, NOTIFY_MODES: h.NOTIFY_MODES };
   vm.createContext(ctx);
   vm.runInContext(js.slice(a, b) + '\nthis.paint = paintNotifyAgentSheet;', ctx);
   ctx.paint();
@@ -305,8 +305,8 @@ test('the agent sheet paints three rows (no security) and keeps Notify me while 
 });
 
 // Round 4: the Notify me toast follows the "Requests you made" setting, and its link is bound to the agent it was about.
-function toastHarness(prefs, { current = 'helper', agent = 'helper' } = {}) {
-  const h = bellHarness({ busy: true, own: false, apiBody: { on: true, turnId: 't1', devices: 1 } });
+function toastHarness(prefs, { current = 'helper', agent = 'helper', requested } = {}) {
+  const h = bellHarness({ busy: true, own: false, apiBody: { on: true, turnId: 't1', devices: 1, ...(requested ? { requested } : {}) } });
   const a = js.indexOf('function notifyEffective('), b = js.indexOf('// 🔕 when all three');
   h.ctx.notifyPrefs = prefs;
   h.ctx.current = current;
@@ -315,20 +315,26 @@ function toastHarness(prefs, { current = 'helper', agent = 'helper' } = {}) {
   vm.runInContext(js.slice(a, b), h.ctx);
   return h;
 }
-test('Notify me toast: on / off / away for Requests you made (per-agent override wins; not loaded counts as on)', async () => {
+test('Notify me toast: the hub\'s answer (requested) wins over cached prefs; without it the cache, else a neutral line', async () => {
   const cases = [
-    [null, 'You will get a notification when helper is done'],
-    [{ default: { requested: 'on' }, agents: {} }, 'You will get a notification when helper is done'],
-    [{ default: { requested: 'off' }, agents: {} }, 'Requests you made is Off for helper, so no notification will come'],
-    [{ default: { requested: 'on' }, agents: { helper: { requested: 'off' } } }, 'Requests you made is Off for helper, so no notification will come'],
-    [{ default: { requested: 'away' }, agents: {} }, "You'll get a notification when helper is done if none of your pages is open"],
-    [{ default: { requested: 'off', other: 'on' }, agents: { helper: { requested: 'on' } } }, 'You will get a notification when helper is done'],
+    [null, undefined, 'Notification requested for helper; it follows your notification settings'],
+    [{ default: { requested: 'on' }, agents: {} }, undefined, 'You will get a notification when helper is done'],
+    [{ default: { requested: 'off' }, agents: {} }, undefined, 'Requests you made is Off for helper, so no notification will come'],
+    [{ default: { requested: 'on' }, agents: { helper: { requested: 'off' } } }, undefined, 'Requests you made is Off for helper, so no notification will come'],
+    [{ default: { requested: 'away' }, agents: {} }, undefined, "You'll get a notification when helper is done if none of your pages is open"],
+    [{ default: { requested: 'off', other: 'on' }, agents: { helper: { requested: 'on' } } }, undefined, 'You will get a notification when helper is done'],
+    [null, 'off', 'Requests you made is Off for helper, so no notification will come'],
+    [null, 'away', "You'll get a notification when helper is done if none of your pages is open"],
+    [null, 'on', 'You will get a notification when helper is done'],
+    [{ default: { requested: 'on' }, agents: {} }, 'off', 'Requests you made is Off for helper, so no notification will come'],
+    [{ default: { requested: 'off' }, agents: {} }, 'on', 'You will get a notification when helper is done'],
   ];
-  for (const [prefs, text] of cases) {
-    const { ctx, calls } = toastHarness(prefs);
+  for (const [prefs, requested, text] of cases) {
+    const { ctx, calls } = toastHarness(prefs, { requested });
     await ctx.bell();
-    assert.ok(calls.toasts[0].text.includes(text), `${JSON.stringify(prefs)} -> ${calls.toasts[0].text}`);
+    assert.ok(calls.toasts[0].text.includes(text), `${JSON.stringify(prefs)} ${requested} -> ${calls.toasts[0].text}`);
     assert.ok(calls.toasts[0].text.includes('Notification settings'), 'the link stays');
+    if (requested) assert.strictEqual(ctx.notifyServerMode.helper, requested, 'kept for the sheet');
   }
 });
 test('Notify me toast link: opens the sheet of the agent the toast was about, and does nothing once another chat is open', async () => {
@@ -348,7 +354,7 @@ test('the agent sheet qualifies the armed item when Requests you made is Off or 
   const a = js.indexOf('function paintNotifyAgentSheet('), b = js.indexOf('\n}\n', a) + 2;
   const h = helpers();
   const el = { _agent: 'helper', innerHTML: '' };
-  const ctx = { notifyPrefs: null, notifyArmed: { helper: 't1' }, $: () => el, esc: (s) => String(s), displayName: (n) => n, isBusy: () => true, ownTurnFor: () => false, notifyOptionsHtml: () => '', notifyModeLabel: h.notifyModeLabel, notifyEffective: h.notifyEffective, NOTIFY_AGENT_KINDS: h.NOTIFY_AGENT_KINDS, NOTIFY_MODES: h.NOTIFY_MODES };
+  const ctx = { notifyPrefs: null, notifyServerMode: {}, notifyArmed: { helper: 't1' }, $: () => el, esc: (s) => String(s), displayName: (n) => n, isBusy: () => true, ownTurnFor: () => false, notifyOptionsHtml: () => '', notifyModeLabel: h.notifyModeLabel, notifyEffective: h.notifyEffective, NOTIFY_AGENT_KINDS: h.NOTIFY_AGENT_KINDS, NOTIFY_MODES: h.NOTIFY_MODES };
   vm.createContext(ctx);
   vm.runInContext(js.slice(a, b) + '\nthis.paint = paintNotifyAgentSheet;', ctx);
   ctx.paint();
@@ -357,4 +363,6 @@ test('the agent sheet qualifies the armed item when Requests you made is Off or 
   assert.ok(el.innerHTML.includes('(Requests you made is Off: no notification)'));
   ctx.notifyPrefs = { default: { requested: 'away' }, agents: {} }; ctx.paint();
   assert.ok(el.innerHTML.includes('(only when you are away)'));
+  ctx.notifyServerMode.helper = 'off'; ctx.notifyPrefs = null; ctx.paint();   // the hub's last answer wins over a missing or stale cache
+  assert.ok(el.innerHTML.includes('(Requests you made is Off: no notification)'));
 });

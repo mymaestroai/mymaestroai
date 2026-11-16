@@ -1697,6 +1697,7 @@ function paintChatStatus() {
 // ── "Notify me when done" (the 🔔 next to Interject while a reply runs): the hub keeps who asked on the running turn and
 // sends one notification to that person's devices when it ends (lib/push); turn_notify keeps every page in step. ──
 const notifyArmed = {};   // agent -> turnId this person asked to be notified about
+const notifyServerMode = {};   // agent -> the "Requests you made" mode the hub last reported when the bell was tapped
 function myNotifyId() { return (hubMe && hubMe.user && hubMe.user.id) ? String(hubMe.user.id) : '*'; }
 function paintNotifyBtn() {
   const bell = $('chat-notify-btn');
@@ -1715,6 +1716,7 @@ function repaintNotifyAgentSheet(agent) {
 function applyTurnNotify(agent, turn) {
   if (!agent || !turn) return;
   notifyArmed[agent] = (turn.active !== false && !turn.ended && Array.isArray(turn.notify) && turn.notify.includes(myNotifyId())) ? turn.turnId : null;
+  if (!notifyArmed[agent]) delete notifyServerMode[agent];
   if (agent === current) paintNotifyBtn();
   repaintNotifyAgentSheet(agent);
 }
@@ -1742,8 +1744,12 @@ async function toggleNotifyDone(withLink = false) {
   // One toast; from the bell it carries a link to the agent's notification settings.
   // The link opens the sheet of the agent this toast is about (only while that chat is still the open one).
   const say = (text, ms) => withLink ? toast(`${text} · Notification settings`, Math.max(ms, 5000), () => { if (agent === current) openNotifyAgentSheet(agent); }) : toast(text, ms);
-  const mode = notifyEffective(notifyPrefs, agent, 'requested');   // not loaded yet: treated as on
+  // The hub says what this person's "Requests you made" is for this agent (d.requested): a page's cached settings may be missing or stale.
+  // An older hub sends none: the cached settings, and when there are none either, a neutral line that promises nothing.
+  if (d.on && NOTIFY_MODES.includes(d.requested)) { notifyServerMode[agent] = d.requested; repaintNotifyAgentSheet(agent); }
+  const mode = NOTIFY_MODES.includes(d.requested) ? d.requested : (notifyPrefs ? notifyEffective(notifyPrefs, agent, 'requested') : null);
   if (d.on && !d.devices) say('Notifications are off on this phone: turn them on in the ⋮ menu first', 6000);
+  else if (d.on && mode === null) say(`Notification requested for ${displayName(agent)}; it follows your notification settings`, 4000);
   else if (d.on && mode === 'off') say(`Requests you made is Off for ${displayName(agent)}, so no notification will come`, 4000);
   else if (d.on && mode === 'away') say(`You'll get a notification when ${displayName(agent)} is done if none of your pages is open`, 4000);
   else say(d.on ? `🔔 You will get a notification when ${displayName(agent)} is done` : 'Notification cancelled', 3000);
@@ -1830,7 +1836,7 @@ function paintNotifyAgentSheet() {
   if (!d || !agent) return;
   const replying = isBusy(agent) || !!ownTurnFor(agent);
   const armed = !!notifyArmed[agent];
-  const reqMode = notifyEffective(notifyPrefs, agent, 'requested');
+  const reqMode = notifyServerMode[agent] || (notifyPrefs ? notifyEffective(notifyPrefs, agent, 'requested') : 'on');   // the hub's last answer, else the cached settings
   const armedNote = reqMode === 'off' ? ' (Requests you made is Off: no notification)' : reqMode === 'away' ? ' (only when you are away)' : '';
   const kinds = NOTIFY_AGENT_KINDS.map(k => {
     const own = notifyPrefs && notifyPrefs.agents && notifyPrefs.agents[agent] ? notifyPrefs.agents[agent][k.kind] : null;
