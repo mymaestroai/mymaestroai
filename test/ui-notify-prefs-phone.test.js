@@ -15,7 +15,7 @@ function helpers() {
   assert.ok(a >= 0 && b > a, 'the delimited helper block exists');
   const ctx = {};
   vm.createContext(ctx);
-  vm.runInContext(js.slice(a, b) + '\nthis.h = { notifyModeLabel, notifyEffective, notifyBellIcon, NOTIFY_MODES };', ctx);
+  vm.runInContext(js.slice(a, b) + '\nthis.h = { notifyModeLabel, notifyEffective, notifyBellIcon, NOTIFY_MODES, NOTIFY_KINDS, NOTIFY_AGENT_KINDS, NOTIFY_SECURITY_WARNING };', ctx);
   return ctx.h;
 }
 const fn = (name) => { const a = js.indexOf(`function ${name}(`); assert.ok(a >= 0, name); const b = js.indexOf('\n}\n', a); return js.slice(a, b + 2); };
@@ -41,14 +41,15 @@ test('notifyEffective: the agent\'s own value, else my default, else On', () => 
   assert.strictEqual(h.notifyEffective({ default: { questions: 'bogus' } }, 'helper', 'questions'), 'on');
 });
 
-test('notifyBellIcon: 🔕 only when both kinds resolve to Off for the agent', () => {
+test('notifyBellIcon: 🔕 only when all three agent kinds resolve to Off for the agent', () => {
   const h = helpers();
-  const prefs = { default: { questions: 'on', other: 'on' }, agents: { helper: { questions: 'off', other: 'off' }, coach: { other: 'off' } } };
+  const prefs = { default: { questions: 'on', requested: 'on', other: 'on' }, agents: { helper: { questions: 'off', requested: 'off', other: 'off' }, coach: { other: 'off' }, pal: { questions: 'off', other: 'off' } } };
+  assert.strictEqual(h.notifyBellIcon(prefs, 'pal'), '🔔', 'requested still On');
   assert.strictEqual(h.notifyBellIcon(prefs, 'helper'), '🔕');
   assert.strictEqual(h.notifyBellIcon(prefs, 'coach'), '🔔');
   assert.strictEqual(h.notifyBellIcon(prefs, 'sam'), '🔔');
-  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'off', other: 'off' }, agents: { coach: { other: 'on' } } }, 'sam'), '🔕');
-  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'off', other: 'off' }, agents: { coach: { other: 'on' } } }, 'coach'), '🔔');
+  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'off', requested: 'off', other: 'off' }, agents: { coach: { other: 'on' } } }, 'sam'), '🔕');
+  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'off', requested: 'off', other: 'off' }, agents: { coach: { other: 'on' } } }, 'coach'), '🔔');
   assert.strictEqual(h.notifyBellIcon(null, 'sam'), '🔔');
 });
 
@@ -67,7 +68,8 @@ test('presence heartbeat: one page id per load; on load, visibilitychange, every
 test('the header bell: always shown with a chat open, opens the agent sheet, keeps its size and the .on look', () => {
   assert.ok(js.includes("if (bell) { bell.hidden = false; paintNotifyBtn(); }"), 'no longer hidden when idle');
   assert.ok(!js.includes('bell.hidden = !working && !own'));
-  assert.ok(js.includes("onComposerTap($('chat-notify-btn'), openNotifyAgentSheet);"));
+  assert.ok(js.includes("onComposerTap($('chat-notify-btn'), onNotifyBellTap);"), 'the bell runs onNotifyBellTap');
+  assert.ok(!js.includes("onComposerTap($('chat-notify-btn'), openNotifyAgentSheet)"));
   const tag = html.match(/<button class="iconbtn notify-chip" id="chat-notify-btn"[^>]*>/)[0];
   assert.ok(tag.includes('aria-label="Notifications for this agent"') && !/\bhidden\b/.test(tag), tag);
   assert.ok(html.includes('#chat-head .notify-chip.on {'), 'armed look kept');
@@ -83,8 +85,7 @@ test('the agent sheet: titled for the agent; Notify me only while a reply runs a
   assert.ok(paint.indexOf('${replying ?') < paint.indexOf('${kinds}'), 'it is the first item');
   assert.ok(js.includes("if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }"), 'same function the bell used');
   assert.ok(fn('notifyOptionsHtml').includes('My default: ${defaultLabel}'), 'default option (short enough for a 360 px select)');
-  assert.ok(paint.includes("NOTIFY_KINDS.map"), 'Questions and Everything else rows');
-  assert.ok(js.includes("{ kind: 'questions', label: 'Questions'") && js.includes("{ kind: 'other', label: 'Everything else'"));
+  assert.ok(paint.includes('NOTIFY_AGENT_KINDS.map'), 'the three agent kinds, no security row');
   const chg = fn('onNotifyAgentSheetChange');
   assert.ok(chg.includes("s.value || null") && chg.includes('saveNotifyPrefs({ agent, prefs: { [s.dataset.nk]: value } })') && chg.includes('toast('), 'null = back to my default; toasts');
   assert.ok(fn('saveNotifyPrefsNow').includes("'/api/notify/prefs', { method: 'PUT'"));
@@ -105,7 +106,7 @@ test('the ⋮ menu: a Notifications item next to the test item opens the default
   assert.ok(paint.includes('Applies to all your devices') && paint.includes('Agents with their own setting') && paint.includes('data-nd="${k.kind}"') && paint.includes('Reset'));
   assert.ok(fn('onNotifyPrefsSheetClick').includes('saveNotifyPrefs({ agent: name, prefs: null })'), 'Reset removes the override');
   assert.ok(fn('onNotifyPrefsSheetChange').includes('saveNotifyPrefs({ default: { [s.dataset.nd]: s.value } })'));
-  assert.ok(js.includes("'When an agent needs your answer or approval'") && js.includes("'Finished replies you asked about, reports and notices'"), 'hints from the contract');
+  assert.ok(js.includes("'When an agent needs your answer or approval'") && js.includes("'Things you asked an agent to tell you about, and replies you asked to hear about'") && js.includes("'Reports and other notices'"), 'hints from the contract');
 });
 
 // ── the request layer: a stale read never overwrites a saved choice; saves run in the order they were made ──
@@ -188,4 +189,117 @@ test('the agent sheet acts only for the chat that is open: a changed chat closes
 test('an open agent sheet repaints when its agent\'s reply ends or its notify state changes', () => {
   assert.ok(fn('repaintNotifyAgentSheet').includes('d.open && d._agent === agent) paintNotifyAgentSheet()'));
   for (const name of ['applyTurnNotify', 'onTurnNotify', 'toggleNotifyDone', 'onTurnEnd']) assert.ok(fn(name).includes('repaintNotifyAgentSheet('), name);
+});
+
+// ── round 2: four kinds, one-tap bell, ⋮ item, security warning ──
+test('four kinds in order; the agent sheet and the per-agent list use the three agent kinds', () => {
+  const h = helpers();
+  assert.deepStrictEqual([...h.NOTIFY_KINDS.map(k => k.kind)], ['questions', 'requested', 'other', 'security']);
+  assert.deepStrictEqual([...h.NOTIFY_KINDS.map(k => k.label)], ['Questions', 'Requests you made', 'Everything else', 'Security and access']);
+  assert.deepStrictEqual([...h.NOTIFY_AGENT_KINDS.map(k => k.kind)], ['questions', 'requested', 'other']);
+  assert.ok(fn('paintNotifyAgentSheet').includes('NOTIFY_AGENT_KINDS.map'));
+  assert.ok(fn('paintNotifyPrefsSheet').includes('NOTIFY_KINDS.map') && fn('paintNotifyPrefsSheet').includes('NOTIFY_AGENT_KINDS.some') && fn('paintNotifyPrefsSheet').includes('NOTIFY_AGENT_KINDS.filter'));
+});
+
+// Lift the real functions and run them with stubs.
+function bellHarness({ busy, own, apiBody }) {
+  const a = js.indexOf('function onNotifyBellTap('), b = js.indexOf('function onTurnNotify(');
+  assert.ok(a >= 0 && b > a);
+  const calls = { api: [], toasts: [], sheet: 0 };
+  const ctx = {
+    current: 'helper', notifyArmed: {}, hubMe: null,
+    isBusy: () => busy, ownTurnFor: () => own,
+    displayName: (n) => n, paintNotifyBtn() {}, repaintNotifyAgentSheet() {},
+    openNotifyAgentSheet() { calls.sheet++; },
+    api: async (url, o) => { calls.api.push({ url, o }); return { ok: true, status: 200, json: async () => apiBody }; },
+    toast: (text, ms, onTap) => calls.toasts.push({ text, ms, onTap }),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(js.slice(a, b) + '\nthis.bell = onNotifyBellTap;', ctx);
+  return { ctx, calls };
+}
+
+test('onNotifyBellTap: a reply running -> Notify me (same API) and one toast whose tap opens the sheet', async () => {
+  for (const [busy, own] of [[true, false], [false, true]]) {
+    const { ctx, calls } = bellHarness({ busy, own, apiBody: { on: true, turnId: 't1', devices: 1 } });
+    await ctx.bell();
+    assert.strictEqual(calls.api.length, 1);
+    assert.ok(calls.api[0].url.endsWith('/api/agents/helper/notify') && calls.api[0].o.method === 'POST' && JSON.parse(calls.api[0].o.body).on === true);
+    assert.strictEqual(ctx.notifyArmed.helper, 't1');
+    assert.strictEqual(calls.sheet, 0, 'the sheet is not opened by the tap itself');
+    assert.strictEqual(calls.toasts.length, 1, 'one toast');
+    assert.ok(calls.toasts[0].text.includes('You will get a notification') && calls.toasts[0].text.includes('Notification settings'));
+    assert.strictEqual(typeof calls.toasts[0].onTap, 'function');
+    calls.toasts[0].onTap();
+    assert.strictEqual(calls.sheet, 1, 'the toast link opens the agent sheet');
+  }
+});
+
+test('onNotifyBellTap: the no-device warning is kept and carries the link; cancelling too', async () => {
+  const { ctx, calls } = bellHarness({ busy: true, own: false, apiBody: { on: true, turnId: 't1', devices: 0 } });
+  await ctx.bell();
+  assert.ok(calls.toasts[0].text.includes('Notifications are off on this phone') && typeof calls.toasts[0].onTap === 'function');
+  const c = bellHarness({ busy: true, own: false, apiBody: { on: false } });
+  c.ctx.notifyArmed.helper = 't1';
+  await c.ctx.bell();
+  assert.ok(c.calls.toasts[0].text.startsWith('Notification cancelled') && typeof c.calls.toasts[0].onTap === 'function');
+});
+
+test('onNotifyBellTap: nothing running -> the agent sheet, no request, no toast', async () => {
+  const { ctx, calls } = bellHarness({ busy: false, own: false, apiBody: {} });
+  await ctx.bell();
+  assert.strictEqual(calls.sheet, 1);
+  assert.strictEqual(calls.api.length, 0);
+  assert.strictEqual(calls.toasts.length, 0);
+});
+
+test('the sheet\'s own Notify me item still toasts without a link', () => {
+  assert.ok(js.includes("if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }"));
+  assert.ok(fn('toggleNotifyDone').includes('withLink ?'));
+});
+
+test('the ⋮ menu: "Notifications for this agent" is chat-only, opens the agent sheet; the settings item stays', () => {
+  const tag = html.match(/<button id="menu-notify-agent"[^>]*>[^<]*/)[0];
+  assert.ok(/class="chat-only"/.test(tag) && tag.includes('Notifications for this agent'), tag);
+  assert.ok(html.includes('#menu.no-chat .chat-only { display: none; }'), 'hidden when no chat is open');
+  assert.ok(html.includes('id="menu-notify-prefs"') && html.includes('Notification settings&hellip;'));
+  assert.ok(/\$\('menu-notify-agent'\)\?\.addEventListener\('click', \(e\) => \{[^}]*openNotifyAgentSheet\(\);/.test(js));
+});
+
+test('the defaults sheet: a plain warning under Security and access only when it is Off', () => {
+  const a = js.indexOf('function paintNotifyPrefsSheet('), b = js.indexOf('\n}\n', a) + 2;
+  const h = helpers();
+  const ctx = { notifyPrefs: null, $: () => el, esc: (s) => String(s), displayName: (n) => n, notifyOptionsHtml: () => '', notifyEffective: h.notifyEffective, NOTIFY_KINDS: h.NOTIFY_KINDS, NOTIFY_AGENT_KINDS: h.NOTIFY_AGENT_KINDS, NOTIFY_MODES: h.NOTIFY_MODES, NOTIFY_SECURITY_WARNING: h.NOTIFY_SECURITY_WARNING, notifyModeLabel: h.notifyModeLabel };
+  const el = { innerHTML: '' };
+  vm.createContext(ctx);
+  vm.runInContext(js.slice(a, b) + '\nthis.paint = paintNotifyPrefsSheet;', ctx);
+  ctx.notifyPrefs = { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} };
+  ctx.paint();
+  assert.ok(!el.innerHTML.includes("You won't be told"), 'no warning while On');
+  const order = ['questions', 'requested', 'other', 'security'].map(k => el.innerHTML.indexOf(`data-nd="${k}"`));
+  assert.ok(order.every((x, i) => x > 0 && (i === 0 || x > order[i - 1])), 'four rows in order');
+  ctx.notifyPrefs = { default: { questions: 'on', requested: 'on', other: 'on', security: 'off' }, agents: {} };
+  ctx.paint();
+  const w = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.";
+  assert.ok(el.innerHTML.includes(w), 'warning shown');
+  assert.ok(el.innerHTML.indexOf(w) > el.innerHTML.indexOf('data-nd="security"') && el.innerHTML.indexOf(w) < el.innerHTML.indexOf('Agents with their own setting'), 'right under the security row');
+  ctx.notifyPrefs = { default: { security: 'away' }, agents: {} };
+  ctx.paint();
+  assert.ok(!el.innerHTML.includes("You won't be told"), 'not for away');
+});
+
+test('the agent sheet paints three rows (no security) and keeps Notify me while a reply runs', () => {
+  const a = js.indexOf('function paintNotifyAgentSheet('), b = js.indexOf('\n}\n', a) + 2;
+  const h = helpers();
+  const el = { _agent: 'helper', innerHTML: '' };
+  let busy = false;
+  const ctx = { notifyPrefs: { default: { questions: 'on', requested: 'off', other: 'on' }, agents: {} }, notifyArmed: {}, $: () => el, esc: (s) => String(s), displayName: (n) => n, isBusy: () => busy, ownTurnFor: () => false, notifyOptionsHtml: (sel, l) => `[${sel}|${l}]`, notifyModeLabel: h.notifyModeLabel, NOTIFY_AGENT_KINDS: h.NOTIFY_AGENT_KINDS, NOTIFY_MODES: h.NOTIFY_MODES };
+  vm.createContext(ctx);
+  vm.runInContext(js.slice(a, b) + '\nthis.paint = paintNotifyAgentSheet;', ctx);
+  ctx.paint();
+  assert.deepStrictEqual([...el.innerHTML.matchAll(/data-nk="(questions|requested|other|security)"/g)].map(m => m[1]), ['questions', 'requested', 'other']);
+  assert.ok(el.innerHTML.includes('[|Off]'), 'My default shows the default of Requests you made');
+  assert.ok(!el.innerHTML.includes('Notify me when this reply is done'));
+  busy = true; ctx.paint();
+  assert.ok(el.innerHTML.includes('Notify me when this reply is done'));
 });

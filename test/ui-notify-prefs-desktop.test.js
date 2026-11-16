@@ -13,7 +13,7 @@ function lift() {
   assert.ok(a >= 0 && b > a, 'the helper block is delimited in app.js');
   const ctx = {};
   vm.createContext(ctx);
-  vm.runInContext(app.slice(a, b) + '\nthis.notifyModeLabel = notifyModeLabel; this.notifyEffective = notifyEffective; this.notifyBellIcon = notifyBellIcon;', ctx);
+  vm.runInContext(app.slice(a, b) + '\nthis.notifyModeLabel = notifyModeLabel; this.notifyEffective = notifyEffective; this.notifyBellIcon = notifyBellIcon; this.notifySecurityWarning = notifySecurityWarning; this.NOTIFY_KINDS = NOTIFY_KINDS; this.NOTIFY_AGENT_KINDS = NOTIFY_AGENT_KINDS;', ctx);
   return ctx;
 }
 
@@ -37,13 +37,14 @@ test('resolution: the agent override, else the default, else on', () => {
   assert.strictEqual(h.notifyEffective({ default: {}, agents: {} }, 'coach', 'questions'), 'on');
 });
 
-test('bell icon is muted only when both kinds are off', () => {
+test('bell icon is muted only when all three agent kinds are off', () => {
   const h = lift();
+  const o = (extra) => ({ questions: 'off', requested: 'off', other: 'off', ...extra });
   assert.strictEqual(h.notifyBellIcon(null, 'coach'), '🔔');
-  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'off', other: 'off' }, agents: {} }, 'coach'), '🔕');
-  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'off', other: 'off' }, agents: { coach: { other: 'away' } } }, 'coach'), '🔔');
-  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'on', other: 'on' }, agents: { coach: { questions: 'off', other: 'off' } } }, 'coach'), '🔕');
-  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'off', other: 'on' }, agents: {} }, 'coach'), '🔔');
+  assert.strictEqual(h.notifyBellIcon({ default: o(), agents: {} }, 'coach'), '🔕');
+  assert.strictEqual(h.notifyBellIcon({ default: o(), agents: { coach: { other: 'away' } } }, 'coach'), '🔔');
+  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'on', requested: 'on', other: 'on' }, agents: { coach: o() } }, 'coach'), '🔕');
+  assert.strictEqual(h.notifyBellIcon({ default: o({ questions: 'on' }), agents: {} }, 'coach'), '🔔');
 });
 
 test('presence heartbeat: load, visibilitychange, interval, pagehide beacon', () => {
@@ -61,12 +62,10 @@ test('presence heartbeat: load, visibilitychange, interval, pagehide beacon', ()
   assert.strictEqual(app.split(/(?<!function )startNotifyPresence\(\)/).length - 1, 1);
 });
 
-test('settings: Your notifications block with both selects, overrides and Reset', () => {
+test('settings: Your notifications block with its selects, overrides and Reset', () => {
   assert.match(app, /id="st-notify-mine" role="group" aria-label="Your notifications"/);
   assert.match(app, /Your notifications<\/h5>/);
   assert.match(app, /Agents with their own setting/);
-  assert.match(app, /\['questions', 'Questions', 'when an agent needs your answer or approval'\]/);
-  assert.match(app, /\['other', 'Everything else', 'finished replies you asked about, reports and notices'\]/);
   assert.match(app, /body: body \? JSON\.stringify\(body\)/);
   assert.match(app, /notifyPrefsRequest\('PUT', \{ default: \{ \[kind\]: sel\.value \} \}\)/);
   assert.match(app, /notifyPrefsRequest\('PUT', \{ agent, prefs: null \}\)/);
@@ -174,4 +173,84 @@ test('the bell menu does not repaint over a change made after it opened', () => 
   const s = app.indexOf('async function notifyBellToggle');
   const body = app.slice(s, s + 4500);
   assert.match(body, /const writesAtOpen = notifyPrefsWrites;[^]*await notifyPrefsLoad\(\);[^]*notifyPrefsWrites === writesAtOpen/);
+});
+
+// ── four kinds ──
+test('four kinds in order, labels and hints; the agent kinds are the first three', () => {
+  const h = lift();
+  assert.deepStrictEqual([...h.NOTIFY_KINDS.map(k => k[0])], ['questions', 'requested', 'other', 'security']);
+  assert.deepStrictEqual([...h.NOTIFY_KINDS.map(k => k[1])], ['Questions', 'Requests you made', 'Everything else', 'Security and access']);
+  assert.strictEqual(h.NOTIFY_KINDS[0][2], 'When an agent needs your answer or approval');
+  assert.strictEqual(h.NOTIFY_KINDS[1][2], 'Things you asked an agent to tell you about, and replies you asked to hear about');
+  assert.strictEqual(h.NOTIFY_KINDS[2][2], 'Reports and other notices');
+  assert.strictEqual(h.NOTIFY_KINDS[3][2], 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub');
+  assert.deepStrictEqual([...h.NOTIFY_AGENT_KINDS.map(k => k[0])], ['questions', 'requested', 'other']);
+});
+
+test('resolution for requested and security', () => {
+  const h = lift();
+  const prefs = { default: { questions: 'on', requested: 'away', other: 'on', security: 'off' }, agents: { coach: { requested: 'off' } } };
+  assert.strictEqual(h.notifyEffective(prefs, 'coach', 'requested'), 'off');
+  assert.strictEqual(h.notifyEffective(prefs, 'helper', 'requested'), 'away');
+  assert.strictEqual(h.notifyEffective(prefs, 'coach', 'security'), 'off');
+  assert.strictEqual(h.notifyEffective({ default: {}, agents: {} }, 'coach', 'requested'), 'on');
+  assert.strictEqual(h.notifyEffective(null, 'coach', 'security'), 'on');
+});
+
+test('bell icon with three kinds: muted only when all three are off; security does not count', () => {
+  const h = lift();
+  const off3 = { questions: 'off', requested: 'off', other: 'off' };
+  assert.strictEqual(h.notifyBellIcon({ default: off3, agents: {} }, 'coach'), '🔕');
+  assert.strictEqual(h.notifyBellIcon({ default: { ...off3, requested: 'on' }, agents: {} }, 'coach'), '🔔');
+  assert.strictEqual(h.notifyBellIcon({ default: { ...off3, requested: 'on' }, agents: { coach: { requested: 'off' } } }, 'coach'), '🔕');
+  assert.strictEqual(h.notifyBellIcon({ default: { ...off3, security: 'on' }, agents: {} }, 'coach'), '🔕');
+  assert.strictEqual(h.notifyBellIcon({ default: { questions: 'off', other: 'off' }, agents: {} }, 'coach'), '🔔', 'an unset requested counts as on');
+});
+
+test('security off shows one plain warning line; on and away show none', () => {
+  const h = lift();
+  const w = h.notifySecurityWarning('off');
+  assert.ok(w.includes("You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub."));
+  assert.strictEqual(h.notifySecurityWarning('on'), '');
+  assert.strictEqual(h.notifySecurityWarning('away'), '');
+  assert.strictEqual(h.notifySecurityWarning(undefined), '');
+  // the settings page puts it right under the security row
+  assert.match(app, /\$\{k === 'security' \? notifySecurityWarning\(p\.default && p\.default\[k\]\) : ''\}/);
+});
+
+test('settings rows come from the four kinds; overrides and the bell menu list only the three agent kinds', () => {
+  const s = app.indexOf('function notifySettingsPaint');
+  const paint = app.slice(s, s + 2600);
+  assert.match(paint, /NOTIFY_KINDS\.map\(\(\[k, label, hint\]\)/);
+  assert.match(paint, /NOTIFY_AGENT_KINDS\.some\(/);
+  assert.match(paint, /NOTIFY_AGENT_KINDS\.map\(\(\[k, label\]\) => `\$\{label\}: /);
+  const m = app.slice(app.indexOf('function notifyBellMenuHtml'), app.indexOf('async function notifyBellToggle'));
+  assert.match(m, /NOTIFY_AGENT_KINDS\.map\(/);
+  assert.doesNotMatch(m, /NOTIFY_KINDS/);
+});
+
+test('the household reminder row is "Question reminders"; no second "Questions" label in the section', () => {
+  const a = app.indexOf('id="st-notify-section"');
+  const b = app.indexOf('id="st-chat-section"');
+  const sec = app.slice(a, b);
+  assert.match(sec, /<label>Question reminders<\/label>\s*<select id="st-question-after" onchange="saveQuestionAfter\(this\.value\)"/);
+  assert.doesNotMatch(sec, /<label[^>]*>Questions<\/label>/);
+  // the per-person rows are labelled from NOTIFY_KINDS, so "Questions" appears there once
+  assert.strictEqual(app.split("['questions', 'Questions',").length - 1, 1);
+});
+
+test('the bell menu closes when the visible chat tab changes', () => {
+  const s = app.indexOf('function switchToChat(chatId)');
+  const body = app.slice(s, app.indexOf('async function closeChat'));
+  assert.match(body, /notifyBellClose\(false\);/);
+  assert.ok(body.indexOf('notifyBellClose(false)') < body.indexOf("classList.add('active')"));
+});
+
+test('the ⋯ menu has "Notifications for this agent", which opens the bell menu of the visible chat', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const menu = html.slice(html.indexOf('id="more-menu"'), html.indexOf('id="more-menu"') + 3000);
+  assert.match(menu, /id="notify-agent-item" class="more-item" role="menuitem"[^>]*onclick="closeMoreMenu\(\); notifyBellOpenVisible\(\)">🔔 Notifications for this agent<\/button>/);
+  const f = app.slice(app.indexOf('function notifyBellOpenVisible'), app.indexOf('// Presence: tells the hub'));
+  assert.match(f, /activeChat/);
+  assert.match(f, /notifyBellToggle\(id\)/);
 });

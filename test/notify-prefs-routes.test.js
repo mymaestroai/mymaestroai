@@ -28,15 +28,15 @@ test('GET returns the caller\'s own settings with defaults filled and the away s
   const { call } = rig(t);
   const r = call('owner', 'GET', P, {});
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { ok: true, prefs: { default: { questions: 'on', other: 'on' }, agents: {} }, away: true });
+  assert.deepEqual(r.json, { ok: true, prefs: { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} }, away: true });
 });
 
 test('PUT by one person is never visible to another', (t) => {
   const { call } = rig(t);
   assert.equal(call('owner', 'PUT', P, { default: { questions: 'off' } }).status, 200);
   assert.equal(call('owner', 'PUT', P, { agent: 'helper', prefs: { other: 'away' } }).status, 200);
-  assert.deepEqual(call('owner', 'GET', P, {}).json.prefs, { default: { questions: 'off', other: 'on' }, agents: { helper: { other: 'away' } } });
-  assert.deepEqual(call('sam', 'GET', P, {}).json.prefs, { default: { questions: 'on', other: 'on' }, agents: {} });
+  assert.deepEqual(call('owner', 'GET', P, {}).json.prefs, { default: { questions: 'off', requested: 'on', other: 'on', security: 'on' }, agents: { helper: { other: 'away' } } });
+  assert.deepEqual(call('sam', 'GET', P, {}).json.prefs, { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} });
 });
 
 test('the person comes from the session: a user id in the body or URL is ignored', (t) => {
@@ -67,7 +67,7 @@ test('bad mode, kind or body is 400 and changes nothing', (t) => {
     assert.equal(typeof r.json.error, 'string');
   }
   assert.equal(call('owner', 'PUT', P, null).status, 400);              // unparseable JSON
-  assert.deepEqual(call('owner', 'GET', P, {}).json.prefs, { default: { questions: 'on', other: 'on' }, agents: {} });
+  assert.deepEqual(call('owner', 'GET', P, {}).json.prefs, { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} });
 });
 
 test('an agent that does not exist or that the caller cannot see is 404 (and sets nothing)', (t) => {
@@ -119,4 +119,22 @@ test('wiring: both routes are session routes (any signed-in person) and server.j
   assert.match(block, /const all = \(req\.method === 'PUT' && \(who \|\| !accounts\)\) \? await getAgents\(\) : \[\];/);
   assert.match(block, /service: req\.hubService, token: req\.hubToken/);
   assert.ok(!/body\.(userId|user)\b/.test(block), 'never a user id from the request');
+});
+
+test('kinds: the default row takes all four, an agent row takes three; security for an agent is a 400', (t) => {
+  const { call } = rig(t);
+  let r = call('owner', 'PUT', P, { default: { requested: 'off', security: 'away' } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.prefs.default, { questions: 'on', requested: 'off', other: 'on', security: 'away' });
+  r = call('owner', 'PUT', P, { agent: 'helper', prefs: { requested: 'away', questions: 'off', other: 'off' } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.prefs.agents.helper, { requested: 'away', questions: 'off', other: 'off' });
+  for (const prefs of [{ security: 'off' }, { security: null }, { other: 'on', security: 'on' }]) {
+    r = call('owner', 'PUT', P, { agent: 'helper', prefs });
+    assert.equal(r.status, 400, JSON.stringify(prefs));
+    assert.equal(r.json.error, 'security is set for all agents at once');
+  }
+  assert.equal(call('owner', 'PUT', P, { agent: 'helper', prefs: { nope: 'on' } }).status, 400);
+  assert.equal(call('owner', 'PUT', P, { default: { security: null } }).status, 400);
+  assert.deepEqual(call('owner', 'GET', P, {}).json.prefs.agents.helper, { requested: 'away', questions: 'off', other: 'off' }, 'refused changes changed nothing');
 });

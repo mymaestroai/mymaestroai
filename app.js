@@ -2811,7 +2811,7 @@
         </div>
         <div class="st-hint" id="st-push-hint">Notifications on this computer as well as the phone, even with this tab closed.</div>
         <div class="st-row">
-          <label>Questions</label>
+          <label>Question reminders</label>
           <select id="st-question-after" onchange="saveQuestionAfter(this.value)">${qaOpts.map(([v, l]) => `<option value="${v}"${v === qaVal ? ' selected' : ''}>${l}</option>`).join('')}</select>
         </div>
         <div class="st-hint">A notification when an agent's question (or an approval) is still unanswered after this long. Finished replies notify only when you click 🔔 Notify me next to Cancel while the reply is running.</div>
@@ -4087,9 +4087,19 @@
     }
 
     // ── notify prefs (begin) ──
-    // Per person, per agent: when a notification may reach this person. Modes on | off | away; kinds questions | other.
-    // Resolution: the agent's own value, else the person's default, else on. Server contract: /api/notify/prefs.
-    const NOTIFY_KINDS = [['questions', 'Questions', 'when an agent needs your answer or approval'], ['other', 'Everything else', 'finished replies you asked about, reports and notices']];
+    // Per person, per agent: when a notification may reach this person. Modes on | off | away; kinds questions | requested | other | security.
+    // Resolution: the agent's own value, else the person's default, else on. security has a default only (no per-agent value).
+    // Server contract: /api/notify/prefs.
+    const NOTIFY_KINDS = [
+      ['questions', 'Questions', 'When an agent needs your answer or approval'],
+      ['requested', 'Requests you made', 'Things you asked an agent to tell you about, and replies you asked to hear about'],
+      ['other', 'Everything else', 'Reports and other notices'],
+      ['security', 'Security and access', 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub'],
+    ];
+    const NOTIFY_AGENT_KINDS = NOTIFY_KINDS.filter(k => k[0] !== 'security');   // the kinds an agent can have its own setting for
+    function notifySecurityWarning(mode) {
+      return mode === 'off' ? `<div class="st-hint notify-security-warning" role="note">You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.</div>` : '';
+    }
     function notifyModeLabel(mode) { return mode === 'off' ? 'Off' : mode === 'away' ? "Only when I'm away" : 'On'; }
     function notifyEffective(prefs, agent, kind) {
       const own = prefs && prefs.agents && agent && prefs.agents[agent] ? prefs.agents[agent][kind] : undefined;
@@ -4098,7 +4108,7 @@
       return def === 'off' || def === 'away' ? def : 'on';
     }
     function notifyBellIcon(prefs, agent) {
-      return notifyEffective(prefs, agent, 'questions') === 'off' && notifyEffective(prefs, agent, 'other') === 'off' ? '🔕' : '🔔';
+      return NOTIFY_AGENT_KINDS.every(k => notifyEffective(prefs, agent, k[0]) === 'off') ? '🔕' : '🔔';
     }
     // ── notify prefs (end) ──
 
@@ -4147,12 +4157,12 @@
       const p = notifyPrefsCache;
       const rows = NOTIFY_KINDS.map(([k, label, hint]) => `<div class="st-row"><label for="st-np-${k}">${label}</label>
           <select id="st-np-${k}" data-np-kind="${k}" onchange="notifyDefaultSave('${k}', this)">${notifyModeOptions(p.default && p.default[k] || 'on', false)}</select></div>
-        <div class="st-hint">${hint[0].toUpperCase() + hint.slice(1)}.</div>`).join('');
-      const names = Object.keys(p.agents || {}).filter(a => p.agents[a] && (p.agents[a].questions || p.agents[a].other)).sort();
+        <div class="st-hint">${hint}.</div>${k === 'security' ? notifySecurityWarning(p.default && p.default[k]) : ''}`).join('');
+      const names = Object.keys(p.agents || {}).filter(a => p.agents[a] && NOTIFY_AGENT_KINDS.some(([k]) => p.agents[a][k])).sort();
       const list = names.length ? names.map(a => {
         const ag = (typeof AGENTS !== 'undefined' && AGENTS.find(x => x.name === a)) || null;
         const shown = (ag && (ag.display || ag.displayName)) || capName(a);
-        return `<div class="st-row"><label>${esc(shown)}</label><span class="st-hint" style="margin:0;flex:1">Questions: ${p.agents[a].questions ? notifyModeLabel(p.agents[a].questions) : 'my default'} · Everything else: ${p.agents[a].other ? notifyModeLabel(p.agents[a].other) : 'my default'}</span>
+        return `<div class="st-row"><label>${esc(shown)}</label><span class="st-hint" style="margin:0;flex:1">${NOTIFY_AGENT_KINDS.map(([k, label]) => `${label}: ${p.agents[a][k] ? notifyModeLabel(p.agents[a][k]) : 'my default'}`).join(' · ')}</span>
           <button class="st-test-btn" onclick="notifyAgentReset(${esc(JSON.stringify(a)).replace(/'/g, '&#39;')})" aria-label="Reset ${esc(shown)} to my default">Reset</button></div>`;
       }).join('') : '<div class="st-hint" style="margin-left:0">None. Use the 🔔 in an agent\'s chat header to give one its own setting.</div>';
       box.innerHTML = `<h5 style="margin:10px 0 6px">Your notifications</h5>
@@ -4169,7 +4179,7 @@
       sel.disabled = true;   // one change at a time per select, until the save answers
       try {
         await notifyPrefsRequest('PUT', { default: { [kind]: sel.value } });
-        hubToast(`${kind === 'questions' ? 'Questions' : 'Everything else'}: ${notifyModeLabel(sel.value)}.`);
+        hubToast(`${(NOTIFY_KINDS.find(k => k[0] === kind) || [0, kind])[1]}: ${notifyModeLabel(sel.value)}.`);
         notifySettingsPaint();
       } catch (e) { sel.value = before; hubToast('Could not save: ' + e.message); }
       finally { sel.disabled = false; }
@@ -4192,7 +4202,7 @@
     function notifyBellKey(e) { if (e.key === 'Escape') { e.stopPropagation(); notifyBellClose(true); } }
     function notifyBellMenuHtml(agent, display) {
       const p = notifyPrefsCache;
-      return `<div class="notify-bell-title" id="notify-bell-title">Notifications for ${esc(display)}</div>` + NOTIFY_KINDS.map(([k, label]) => {
+      return `<div class="notify-bell-title" id="notify-bell-title">Notifications for ${esc(display)}</div>` + NOTIFY_AGENT_KINDS.map(([k, label]) => {
         const own = p && p.agents && p.agents[agent] ? p.agents[agent][k] : undefined;
         const defMode = p && p.default && p.default[k] || 'on';
         return `<label class="notify-bell-row">${label}<select data-nb-kind="${k}" aria-label="${label}">${notifyModeOptions(own || '', true, defMode)}</select></label>`;
@@ -4224,7 +4234,7 @@
         sel.disabled = true;   // until the save answers
         try {
           await notifyPrefsRequest('PUT', { agent, prefs: { [kind]: sel.value === '' ? null : sel.value } });
-          hubToast(`${display}: ${kind === 'questions' ? 'Questions' : 'Everything else'} ${sel.value === '' ? 'follows your default' : notifyModeLabel(sel.value)}.`);
+          hubToast(`${display}: ${(NOTIFY_AGENT_KINDS.find(k => k[0] === kind) || [0, kind])[1]} ${sel.value === '' ? 'follows your default' : notifyModeLabel(sel.value)}.`);
         } catch (err) { hubToast('Could not save: ' + err.message); }
         finally { sel.disabled = false; }
         if (document.getElementById('notify-bell-menu') === menu) { menu.innerHTML = notifyBellMenuHtml(agent, display); const again = menu.querySelector(`select[data-nb-kind="${kind}"]`); if (again) again.focus(); }
@@ -4234,6 +4244,13 @@
         await notifyPrefsLoad();   // refreshed when the menu opens; repainted only while the person has not touched it yet
         if (notifyPrefsWrites === writesAtOpen && document.getElementById('notify-bell-menu') === menu && document.activeElement === first) { menu.innerHTML = notifyBellMenuHtml(agent, display); const f = menu.querySelector('select'); if (f) f.focus(); }
       } catch { /* the cached values stay */ }
+    }
+
+    // ⋯ header menu, "Notifications for this agent": opens the bell menu of the chat on screen.
+    function notifyBellOpenVisible() {
+      const id = typeof activeChat !== 'undefined' ? activeChat : null;
+      if (id && document.getElementById(`notify-bell-${id}`)) { notifyBellToggle(id); return; }
+      hubToast('Open a chat with an agent first.');
     }
 
     // Presence: tells the hub whether any page of this person is in front, so "Only when I'm away" can be judged.
@@ -8986,6 +9003,7 @@
 
     function switchToChat(chatId) {
       try { workerHistory.openSeq++; } catch { /* not set up yet while the page script loads */ }   // a pending "Open full run" no longer takes the screen
+      notifyBellClose(false);   // the bell menu belongs to the chat it was opened for
       const empty = document.getElementById('empty-state');
       if (empty && chats[chatId]) empty.style.display = 'none';
       const opened = chats[chatId];

@@ -1718,7 +1718,14 @@ function applyTurnNotify(agent, turn) {
   if (agent === current) paintNotifyBtn();
   repaintNotifyAgentSheet(agent);
 }
-async function toggleNotifyDone() {
+// The header bell: while a reply runs one tap is "Notify me" (as before) and its toast links to the agent's sheet;
+// with nothing running it opens the sheet.
+function onNotifyBellTap() {
+  if (!current) return;
+  if (isBusy(current) || ownTurnFor(current)) return toggleNotifyDone(true);
+  openNotifyAgentSheet();
+}
+async function toggleNotifyDone(withLink = false) {
   const agent = current;
   if (!agent) return;
   const on = !notifyArmed[agent];
@@ -1732,8 +1739,10 @@ async function toggleNotifyDone() {
   notifyArmed[agent] = d.on ? d.turnId : null;
   paintNotifyBtn();
   repaintNotifyAgentSheet(agent);
-  if (d.on && !d.devices) toast('Notifications are off on this phone: turn them on in the ⋮ menu first', 6000);
-  else toast(d.on ? `🔔 You will get a notification when ${displayName(agent)} is done` : 'Notification cancelled');
+  // One toast; from the bell it carries a link to the agent's notification settings.
+  const say = (text, ms) => withLink ? toast(`${text} · Notification settings`, Math.max(ms, 5000), () => openNotifyAgentSheet()) : toast(text, ms);
+  if (d.on && !d.devices) say('Notifications are off on this phone: turn them on in the ⋮ menu first', 6000);
+  else say(d.on ? `🔔 You will get a notification when ${displayName(agent)} is done` : 'Notification cancelled', 3000);
 }
 function onTurnNotify(ev) {
   if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;   // someone else's bell
@@ -1746,8 +1755,13 @@ function onTurnNotify(ev) {
 const NOTIFY_MODES = ['on', 'off', 'away'];
 const NOTIFY_KINDS = [
   { kind: 'questions', label: 'Questions', hint: 'When an agent needs your answer or approval' },
-  { kind: 'other', label: 'Everything else', hint: 'Finished replies you asked about, reports and notices' },
+  { kind: 'requested', label: 'Requests you made', hint: 'Things you asked an agent to tell you about, and replies you asked to hear about' },
+  { kind: 'other', label: 'Everything else', hint: 'Reports and other notices' },
+  { kind: 'security', label: 'Security and access', hint: 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub' },
 ];
+// The kinds an agent can have its own setting for (security is a default only).
+const NOTIFY_AGENT_KINDS = NOTIFY_KINDS.filter(k => k.kind !== 'security');
+const NOTIFY_SECURITY_WARNING = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.";
 function notifyModeLabel(mode) {
   if (mode === 'off') return 'Off';
   if (mode === 'away') return "Only when I'm away";
@@ -1760,9 +1774,9 @@ function notifyEffective(prefs, agent, kind) {
   const def = prefs && prefs.default ? prefs.default[kind] : null;
   return NOTIFY_MODES.includes(def) ? def : 'on';
 }
-// 🔕 when both kinds are Off for this agent, else 🔔.
+// 🔕 when all three agent kinds are Off for this agent, else 🔔.
 function notifyBellIcon(prefs, agent) {
-  return notifyEffective(prefs, agent, 'questions') === 'off' && notifyEffective(prefs, agent, 'other') === 'off' ? '\u{1F515}' : '\u{1F514}';
+  return ['questions', 'requested', 'other'].every(k => notifyEffective(prefs, agent, k) === 'off') ? '\u{1F515}' : '\u{1F514}';
 }
 // ── notify prefs (end) ──
 
@@ -1805,14 +1819,14 @@ function notifyOptionsHtml(selected, defaultLabel) {
 }
 
 // The header 🔔: this agent's sheet. While a reply runs its first item is "Notify me when this reply is done" (the same
-// toggleNotifyDone the bell tap ran before); then Questions and Everything else, each "My default: …" / On / Off / Only when I'm away.
+// toggleNotifyDone the bell tap ran before); then Questions, Requests you made and Everything else, each "My default: …" / On / Off / Only when I'm away.
 function paintNotifyAgentSheet() {
   const d = $('notify-agent-sheet');
   const agent = d && d._agent;
   if (!d || !agent) return;
   const replying = isBusy(agent) || !!ownTurnFor(agent);
   const armed = !!notifyArmed[agent];
-  const kinds = NOTIFY_KINDS.map(k => {
+  const kinds = NOTIFY_AGENT_KINDS.map(k => {
     const own = notifyPrefs && notifyPrefs.agents && notifyPrefs.agents[agent] ? notifyPrefs.agents[agent][k.kind] : null;
     const sel = NOTIFY_MODES.includes(own) ? own : '';
     return `<div class="sec-section"><div class="sec-title">${esc(k.label)}</div><div class="sec-hint">${esc(k.hint)}</div>
@@ -1863,10 +1877,10 @@ function paintNotifyPrefsSheet() {
   if (!d) return;
   const p = notifyPrefs;
   const defaults = NOTIFY_KINDS.map(k => `<div class="sec-section"><div class="sec-title">${esc(k.label)}</div><div class="sec-hint">${esc(k.hint)}</div>
-      <select data-nd="${k.kind}" aria-label="${esc(k.label)}, my default">${notifyOptionsHtml(notifyEffective(p, null, k.kind), '')}</select></div>`).join('');
-  const own = Object.entries((p && p.agents) || {}).filter(([, v]) => v && NOTIFY_KINDS.some(k => NOTIFY_MODES.includes(v[k.kind])));
+      <select data-nd="${k.kind}" aria-label="${esc(k.label)}, my default">${notifyOptionsHtml(notifyEffective(p, null, k.kind), '')}</select>${k.kind === 'security' && notifyEffective(p, null, 'security') === 'off' ? `<div class="sec-hint" data-warn="security">${esc(NOTIFY_SECURITY_WARNING)}</div>` : ''}</div>`).join('');
+  const own = Object.entries((p && p.agents) || {}).filter(([, v]) => v && NOTIFY_AGENT_KINDS.some(k => NOTIFY_MODES.includes(v[k.kind])));
   const rows = own.length ? own.map(([name, v]) => {
-    const vals = NOTIFY_KINDS.filter(k => NOTIFY_MODES.includes(v[k.kind])).map(k => `${k.label}: ${notifyModeLabel(v[k.kind])}`).join(' · ');
+    const vals = NOTIFY_AGENT_KINDS.filter(k => NOTIFY_MODES.includes(v[k.kind])).map(k => `${k.label}: ${notifyModeLabel(v[k.kind])}`).join(' · ');
     return `<div class="np-row"><div><div class="sec-title">${esc(displayName(name))}</div><div class="sec-hint">${esc(vals)}</div></div><button type="button" data-nr="${esc(name)}" aria-label="Reset ${esc(displayName(name))} to my defaults">Reset</button></div>`;
   }).join('') : '<div class="sec-hint">None. Open an agent and tap its 🔔 to give it one.</div>';
   d.innerHTML = `<h3>Notifications</h3>
@@ -12606,6 +12620,7 @@ function wire() {
   paintActiveMenu();
   $('menu-notify').addEventListener('click', togglePush);
   $('menu-notify-test')?.addEventListener('click', testPush);
+  $('menu-notify-agent')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); openNotifyAgentSheet(); });
   $('menu-notify-prefs')?.addEventListener('click', (e) => { e.stopPropagation(); openNotifyPrefsSheet(); });
   $('messages').addEventListener('click', onMessagesClick);
   $('messages').addEventListener('pointerdown', onReasoningGrip);
@@ -12666,7 +12681,7 @@ function wire() {
   // Send, and the 🔔 beside it, act on the touch itself (onComposerTap). Once a send has taken the text,
   // sendAndClose lets go of the box so the keyboard goes away.
   onComposerTap($('send-btn'), sendAndClose);
-  onComposerTap($('chat-notify-btn'), openNotifyAgentSheet);   // the bell opens this agent's notification sheet
+  onComposerTap($('chat-notify-btn'), onNotifyBellTap);   // the bell: Notify me while a reply runs (toast links to the sheet), else this agent's notification sheet
   $('notify-agent-sheet').addEventListener('click', onNotifyAgentSheetClick);
   $('notify-agent-sheet').addEventListener('change', onNotifyAgentSheetChange);
   $('notify-prefs-sheet').addEventListener('click', onNotifyPrefsSheetClick);

@@ -310,22 +310,57 @@ test('away: a visible page of the person silences it, no page lets it through', 
   assert.deepEqual(await fire(r, { type: 'ask_user', agent: 'helper', request_id: 'p3' }), ['admin|Helper has a question', 'legacy|Helper has a question']);
 });
 
-test('Notify me: still sends when "everything else" is off, not when away and present', async (t) => {
+test('Notify me follows "requests you made" fully: off blocks, away applies; "everything else" does not matter', async (t) => {
   const r = gated(t, (p) => { p.setDefault('u_admin', { other: 'off' }); });
   const done = (id) => ({ type: 'turn_end', agent: 'helper', turnId: id, ok: true, notify: [{ id: 'u_admin', role: 'admin' }] });
-  assert.deepEqual(await fire(r, done('n1')), ['admin|Helper is done', 'legacy|Helper is done']);
-  r.prefs.setDefault('u_admin', { other: 'away' });
+  assert.deepEqual(await fire(r, done('n1')), ['admin|Helper is done', 'legacy|Helper is done'], 'other off does not stop a requested notice');
+  r.prefs.setDefault('u_admin', { requested: 'off' });
+  assert.deepEqual(await fire(r, done('n1b')), ['legacy|Helper is done'], 'requested off blocks Notify me (no Off exception any more)');
+  r.prefs.setDefault('u_admin', { requested: 'away' });
   r.prefs.touch('u_admin', 'tab', true);
   assert.deepEqual(await fire(r, done('n2')), ['legacy|Helper is done']);
   r.clock.t += 151000;
   assert.deepEqual(await fire(r, done('n3')), ['admin|Helper is done', 'legacy|Helper is done']);
+  r.prefs.setAgent('u_admin', 'helper', { requested: 'off' });
+  assert.deepEqual(await fire(r, done('n4')), ['legacy|Helper is done'], 'a per-agent override applies');
 });
 
-test('hub notices without an agent follow the person\'s default for everything else', async (t) => {
+test('for_owner requested: its own setting, its own payload; other off or questions off do not block it', async (t) => {
+  const r = gated(t, (p) => { p.setDefault('u_admin', { other: 'off', questions: 'off' }); });
+  const ev = (id, extra = {}) => ({ type: 'for_owner', agent: 'helper', turnId: id, reason: 'Done: all work finished, good time to reboot', requested: true, ...extra });
+  assert.deepEqual(await fire(r, ev('q1')), ['admin|Helper: Done: all work finished, good time to reboot', 'legacy|Helper: Done: all work finished, good time to reboot']);
+  assert.deepEqual(await fire(r, ev('q2', { asks: true })), ['admin|Helper: Done: all work finished, good time to reboot', 'legacy|Helper: Done: all work finished, good time to reboot'], 'requested wins over asks');
+  r.prefs.setDefault('u_admin', { requested: 'off' });
+  assert.deepEqual(await fire(r, ev('q3')), ['legacy|Helper: Done: all work finished, good time to reboot']);
+  r.prefs.setDefault('u_admin', { requested: 'away' });
+  r.prefs.touch('u_admin', 'tab', true);
+  assert.deepEqual(await fire(r, ev('q4')), ['legacy|Helper: Done: all work finished, good time to reboot']);
+  r.clock.t += 151000;
+  assert.equal((await fire(r, ev('q5'))).length, 2, 'away and no page in view: it goes');
+  r.prefs.setAgent('u_admin', 'helper', { requested: 'off' });
+  r.prefs.setDefault('u_admin', { requested: 'on' });
+  assert.deepEqual(await fire(r, ev('q6')), ['legacy|Helper: Done: all work finished, good time to reboot'], 'a per-agent override applies');
+});
+
+test('for_owner requested payload: title cut at 140, fixed body, chat url, requested tag; others unchanged', async (t) => {
+  const bodies = [];
+  const root = tmpRoot(t);
+  const push = createPush({ dir: path.join(root, 'push'), now: () => 1, displayName: (a) => NAMES[a] || a, webpush: { generateVAPIDKeys: () => ({ publicKey: 'K', privateKey: 'P' }) }, sender: async (s, body) => { bodies.push(JSON.parse(body)); } });
+  push.subscribe(sub(EP.admin, 1), null, { id: 'u_admin', role: 'admin' });
+  push.onEvent({ type: 'for_owner', agent: 'helper', turnId: 'p1', reason: 'x'.repeat(200), requested: true });
+  push.onEvent({ type: 'for_owner', agent: 'helper', turnId: 'p2', reason: 'plain reason' });
+  await wait();
+  assert.equal(bodies[0].title.length, 140);
+  assert.ok(bodies[0].title.startsWith('Helper: xxx'));
+  assert.deepEqual({ ...bodies[0], title: undefined }, { title: undefined, body: 'You asked to be told. Tap to open', url: '/mobile#chat=helper', tag: 'requested-helper', ts: 1 });
+  assert.deepEqual(bodies[1], { title: 'Helper has something for you', body: 'plain reason · Tap to open', url: '/mobile#chat=helper', tag: 'for-owner-helper', ts: 1 });
+});
+
+test('hub notices without an agent follow the person\'s default for everything else (halted follows security)', async (t) => {
   const r = gated(t, (p) => { p.setDefault('u_admin', { other: 'off' }); p.setDefault('u_sam', { other: 'off' }); });
   assert.deepEqual(await fire(r, { type: 'agent_request', id: 'x', byAgent: 'helper', kind: 'agent', description: '' }), ['legacy|Helper asks for a new agent']);
   assert.deepEqual(await fire(r, { type: 'provider_paced', provider: 'google', reason: 'timeout' }), ['legacy|My Maestro AI pacing: Gemini']);
-  assert.deepEqual(await fire(r, { type: 'hub_halted' }), ['legacy|My Maestro AI halted']);
+  assert.deepEqual(await fire(r, { type: 'hub_halted' }), ['admin|My Maestro AI halted', 'legacy|My Maestro AI halted', 'sam|My Maestro AI halted'], 'halted is a security notice: other off does not block it');
   await r.push.notify({ title: 'Plan limit' }, { adminsOnly: true });
   assert.deepEqual(take(r.sent), ['legacy|Plan limit']);
   await r.push.notifyEach({ title: 'Update' }, { adminsOnly: true });
@@ -334,18 +369,43 @@ test('hub notices without an agent follow the person\'s default for everything e
   assert.deepEqual(take(r.sent), ['admin|Question-ish', 'legacy|Question-ish', 'sam|Question-ish']);
 });
 
-test('always notices ignore "off"; notifyUsers without a kind goes; test() is never gated', async (t) => {
-  const r = gated(t, (p) => { for (const u of ['u_admin', 'u_sam']) p.setDefault(u, { questions: 'off', other: 'off' }); });
-  await r.push.notify({ title: 'Security' }, { adminsOnly: true, always: true });
+test('security notices follow the security setting (notify, notifyEach, notifyUsers default, halted); other kinds do not touch them; test() is never gated', async (t) => {
+  const r = gated(t, (p) => { for (const u of ['u_admin', 'u_sam']) p.setDefault(u, { questions: 'off', other: 'off', requested: 'off' }); });
+  // security is still On: the other three being Off does not silence it
+  await r.push.notify({ title: 'Security' }, { adminsOnly: true, kind: 'security' });
   assert.deepEqual(take(r.sent), ['admin|Security', 'legacy|Security']);
-  await r.push.notifyEach({ title: 'Backup failed' }, { adminsOnly: true, always: true });
+  await r.push.notifyEach({ title: 'Backup failed' }, { adminsOnly: true, kind: 'security' });
   assert.deepEqual(take(r.sent), ['admin|Backup failed', 'legacy|Backup failed']);
   await r.push.notifyUsers({ title: 'Recording access changed' }, ['u_sam']);
-  assert.deepEqual(take(r.sent), ['sam|Recording access changed']);
+  assert.deepEqual(take(r.sent), ['sam|Recording access changed'], 'notifyUsers defaults to security');
   await r.push.notifyUsers({ title: 'Gated' }, ['u_sam'], { kind: 'other' });
   assert.deepEqual(take(r.sent), []);
+  // security Off: all four paths hold for that person; the test push still goes
+  for (const u of ['u_admin', 'u_sam']) r.prefs.setDefault(u, { security: 'off' });
+  await r.push.notify({ title: 'Security' }, { adminsOnly: true, kind: 'security' });
+  assert.deepEqual(take(r.sent), ['legacy|Security']);
+  await r.push.notifyEach({ title: 'Backup failed' }, { adminsOnly: true, kind: 'security' });
+  assert.deepEqual(take(r.sent), ['legacy|Backup failed']);
+  await r.push.notifyUsers({ title: 'Recording access changed' }, ['u_sam']);
+  assert.deepEqual(take(r.sent), [], 'notifyUsers with no kind is security');
+  await r.push.notifyUsers({ title: 'Recording access changed' }, ['u_sam'], { kind: 'security' });
+  assert.deepEqual(take(r.sent), []);
+  assert.deepEqual(await fire(r, { type: 'hub_halted' }), ['legacy|My Maestro AI halted']);
   await r.push.test();
-  assert.equal(take(r.sent).length, 3);
+  assert.equal(take(r.sent).length, 3, 'test() is never gated');
+  // security away
+  for (const u of ['u_admin']) r.prefs.setDefault(u, { security: 'away' });
+  r.prefs.touch('u_admin', 'tab', true);
+  assert.deepEqual(await fire(r, { type: 'hub_halted' }), ['legacy|My Maestro AI halted']);
+  r.clock.t += 151000;
+  assert.deepEqual(await fire(r, { type: 'hub_halted' }), ['admin|My Maestro AI halted', 'legacy|My Maestro AI halted']);
+});
+
+test('push no longer has an always option: a notice with no kind is "other"', async (t) => {
+  const r = gated(t, (p) => { p.setDefault('u_admin', { other: 'off' }); });
+  await r.push.notify({ title: 'Plain' }, { adminsOnly: true, always: true });   // ignored now
+  assert.deepEqual(take(r.sent), ['legacy|Plain']);
+  assert.ok(!/always/.test(require('node:fs').readFileSync(path.join(__dirname, '..', 'lib', 'push.js'), 'utf8').replace(/as it always did/g, '')));
 });
 
 test('a device without an account follows the settings stored under "*"; with nothing set for "*" it hears everything', async (t) => {
@@ -358,14 +418,14 @@ test('a device without an account follows the settings stored under "*"; with no
   assert.deepEqual(await fire(r, { type: 'agent_request', id: 'l3', byAgent: 'helper', kind: 'agent', description: '' }), []);
   await r.push.notify({ title: 'Plan limit' }, { adminsOnly: true });
   assert.deepEqual(take(r.sent), []);
-  await r.push.notify({ title: 'Security' }, { adminsOnly: true, always: true });
+  await r.push.notify({ title: 'Security' }, { adminsOnly: true, kind: 'security' });   // security is still On for admin and for '*'
   assert.deepEqual(take(r.sent), ['admin|Security', 'legacy|Security']);
-  r.prefs.setDefault('*', { other: 'away' });                                 // Notify me: Off is overridden, away is not
+  r.prefs.setDefault('*', { requested: 'away' });                             // Notify me follows "requests you made": away is held while a page is in view
   r.prefs.touch('*', 'tab', true);
   const done = (id) => ({ type: 'turn_end', agent: 'helper', turnId: id, ok: true, notify: [{ id: '*', role: 'admin' }] });
-  assert.deepEqual(await fire(r, done('l4')), ['admin|Helper is done', 'sam|Helper is done']);   // admin and sam are Off (overridden by the tap); the no-account device is away and present, so it is held
-  r.prefs.setDefault('*', { other: 'off' });
-  assert.deepEqual(await fire(r, done('l5')), ['admin|Helper is done', 'legacy|Helper is done', 'sam|Helper is done']);
+  assert.deepEqual(await fire(r, done('l4')), ['admin|Helper is done', 'sam|Helper is done']);   // admin and sam have nothing set for requested (On); the no-account device is away and present, so it is held
+  r.prefs.setDefault('*', { requested: 'off' });
+  assert.deepEqual(await fire(r, done('l5')), ['admin|Helper is done', 'sam|Helper is done']);   // off now blocks the no-account device too
 });
 
 test('a broken store never silences or breaks a send', async (t) => {
@@ -374,15 +434,18 @@ test('a broken store never silences or breaks a send', async (t) => {
   assert.deepEqual(await fire(r, { type: 'ask_user', agent: 'helper', request_id: 'z' }), ['admin|Helper has a question', 'legacy|Helper has a question']);
 });
 
-test('wiring: security, access and data-safety callers pass always: true; plain notices keep the default', () => {
+// Round 2: the old `always: true` option became kind: 'security' (the person's "Security and access" setting, default On).
+test('wiring: security, access and data-safety callers pass kind: \'security\'; plain notices keep the default', () => {
   const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
   const server = read('server.js');
-  assert.match(server, /admin2fa = [\s\S]{0,400}getPush\(\)\.notify\(p, \{ adminsOnly: true, always: true \}\)/);
-  assert.match(server, /createPasskeyRoutes\([\s\S]{0,400}notifyEach\(p, \{ adminsOnly: true, urgency: 'high', always: true \}\)/);
-  assert.match(server, /createScheduler\([\s\S]{0,400}notifyEach\(p, \{ adminsOnly: true, urgency: 'high', always: true \}\)/);
-  assert.match(server, /walletLockedNotice\([\s\S]{0,400}notifyEach\(p, \{ \.\.\.o, always: true \}\)/);
-  assert.match(read('lib/connector-access.js'), /adminsOnly: true, always: true/);
-  assert.match(read('lib/modules/index.js'), /notify\(payload, \{ adminsOnly: true, always: true \}\)/);
-  for (const f of ['lib/plan-usage.js', 'lib/memory-health.js', 'lib/update-check.js', 'lib/modules/health.js']) assert.ok(!/always: true/.test(read(f)), `${f} stays a normal notice`);
+  assert.match(server, /admin2fa = [\s\S]{0,400}getPush\(\)\.notify\(p, \{ adminsOnly: true, kind: 'security' \}\)/);
+  assert.match(server, /createPasskeyRoutes\([\s\S]{0,400}notifyEach\(p, \{ adminsOnly: true, urgency: 'high', kind: 'security' \}\)/);
+  assert.match(server, /createScheduler\([\s\S]{0,400}notifyEach\(p, \{ adminsOnly: true, urgency: 'high', kind: 'security' \}\)/);
+  assert.match(server, /walletLockedNotice\([\s\S]{0,400}notifyEach\(p, \{ \.\.\.o, kind: 'security' \}\)/);
+  assert.match(read('lib/connector-access.js'), /adminsOnly: true, kind: 'security'/);
+  assert.match(read('lib/modules/index.js'), /notify\(payload, \{ adminsOnly: true, kind: 'security' \}\)/);
+  assert.match(server, /notifyUsers\(\{\s*title: 'Recording access changed'[\s\S]{0,400}\{ kind: 'security' \}\)/);
+  assert.match(read('lib/recordings/trouble.js'), /\}, ids, \{ kind: 'security' \}\)/);
+  for (const f of ['lib/plan-usage.js', 'lib/memory-health.js', 'lib/update-check.js', 'lib/modules/health.js']) assert.ok(!/kind: 'security'/.test(read(f)), `${f} stays a normal notice`);
   assert.match(read('lib/push.js'), /prefs: require\('\.\/notify-prefs'\)\.getNotifyPrefs\(\)/);
 });

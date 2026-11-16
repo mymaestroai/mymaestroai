@@ -15,7 +15,7 @@ const badRequest = (fn) => assert.throws(fn, (e) => e.code === 'bad_request');
 
 test('an unknown user reads all "on" and no agents', (t) => {
   const p = createNotifyPrefs({ file: tmp(t).file });
-  assert.deepEqual(p.get('owner'), { default: { questions: 'on', other: 'on' }, agents: {} });
+  assert.deepEqual(p.get('owner'), { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} });
   assert.equal(p.mode('owner', 'helper', 'questions'), 'on');
   assert.equal(p.mode('owner', null, 'other'), 'on');
 });
@@ -28,7 +28,7 @@ test('resolution: agent kind, then default kind, then on', (t) => {
   assert.equal(p.mode('owner', 'helper', 'other'), 'away');      // falls to the default
   assert.equal(p.mode('owner', 'coach', 'questions'), 'on');     // no default for questions
   assert.equal(p.mode('owner', null, 'other'), 'away');
-  assert.deepEqual(p.get('owner'), { default: { questions: 'on', other: 'away' }, agents: { helper: { questions: 'off' } } });
+  assert.deepEqual(p.get('owner'), { default: { questions: 'on', requested: 'on', other: 'away', security: 'on' }, agents: { helper: { questions: 'off' } } });
 });
 
 test('null removes a kind, an emptied agent entry goes, prefs null removes the agent', (t) => {
@@ -61,7 +61,7 @@ test('validation: modes, kinds, ids and names', (t) => {
   badRequest(() => p.touch('owner', '', true));
   badRequest(() => p.touch('owner', 'p'.repeat(65), true));
   badRequest(() => p.touch('owner', 'page', 'yes'));
-  assert.deepEqual(p.get('owner'), { default: { questions: 'on', other: 'on' }, agents: {} });   // nothing half-applied
+  assert.deepEqual(p.get('owner'), { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} });   // nothing half-applied
 });
 
 test('at most 500 agent entries per user', (t) => {
@@ -95,12 +95,12 @@ test('a corrupt or foreign file reads as empty and is replaced on the next save'
   fs.mkdirSync(f.dir, { recursive: true });
   fs.writeFileSync(f.file, '{ not json');
   const p = createNotifyPrefs({ file: f.file });
-  assert.deepEqual(p.get('owner'), { default: { questions: 'on', other: 'on' }, agents: {} });
+  assert.deepEqual(p.get('owner'), { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} });
   p.setDefault('owner', { other: 'off' });
   assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).owner.default.other, 'off');
   fs.writeFileSync(f.file, JSON.stringify({ sam: { default: { other: 'bogus', secret: 'x' }, agents: { 'bad name': { other: 'on' }, helper: { other: 'away', extra: 1 } }, token: 'x' } }));
   const q = createNotifyPrefs({ file: f.file });
-  assert.deepEqual(q.get('sam'), { default: { questions: 'on', other: 'on' }, agents: { helper: { other: 'away' } } });
+  assert.deepEqual(q.get('sam'), { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: { helper: { other: 'away' } } });
 });
 
 test('isolation: one person never changes another\'s settings', (t) => {
@@ -112,7 +112,7 @@ test('isolation: one person never changes another\'s settings', (t) => {
   assert.equal(p.mode('sam', 'helper', 'other'), 'on');
   p.setAgent('sam', 'helper', { other: 'on' });
   assert.equal(p.mode('owner', 'helper', 'other'), 'away');
-  assert.deepEqual(p.get('owner').default, { questions: 'off', other: 'off' });
+  assert.deepEqual(p.get('owner').default, { questions: 'off', requested: 'on', other: 'off', security: 'on' });
 });
 
 test('get() returns copies: editing the result does not change the store', (t) => {
@@ -193,7 +193,7 @@ test('a real failing rename (read-only directory) changes nothing', (t) => {
     assert.throws(() => p.setAgent('owner', 'helper', { questions: 'off' }));
     assert.throws(() => p.setDefault('owner', { other: 'off' }));
   } finally { fs.chmodSync(f.dir, 0o700); }
-  assert.deepEqual(p.get('owner'), { default: { questions: 'away', other: 'on' }, agents: {} });
+  assert.deepEqual(p.get('owner'), { default: { questions: 'away', requested: 'on', other: 'on', security: 'on' }, agents: {} });
   assert.equal(p.mode('owner', 'helper', 'questions'), 'away');
 });
 
@@ -230,7 +230,7 @@ test('any other read error is not cached: reads say "on", writes throw without w
   const p = createNotifyPrefs({ file: f.file });
   try {
     assert.equal(p.mode('sam', null, 'other'), 'on');
-    assert.deepEqual(p.get('sam'), { default: { questions: 'on', other: 'on' }, agents: {} });
+    assert.deepEqual(p.get('sam'), { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} });
     const noCode = (e) => e instanceof Error && e.code === undefined;
     assert.throws(() => p.setDefault('sam', { questions: 'off' }), noCode);
     assert.throws(() => p.setAgent('sam', 'helper', { other: 'off' }), noCode);
@@ -240,4 +240,32 @@ test('any other read error is not cached: reads say "on", writes throw without w
   assert.equal(p.mode('sam', null, 'other'), 'off');                          // readable again: the real values, not a cached empty
   p.setDefault('sam', { questions: 'off' });
   assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).sam.default.other, 'off');   // the earlier settings survived the change
+});
+
+test('four kinds, all on by default; security only in the default row', (t) => {
+  const p = createNotifyPrefs({ file: tmp(t).file });
+  assert.deepEqual(p.KINDS, ['questions', 'requested', 'other', 'security']);
+  assert.deepEqual(p.get('owner').default, { questions: 'on', requested: 'on', other: 'on', security: 'on' });
+  for (const k of p.KINDS) assert.equal(p.mode('owner', 'helper', k), 'on');
+  p.setDefault('owner', { security: 'off', requested: 'away' });
+  assert.equal(p.mode('owner', null, 'security'), 'off');
+  assert.equal(p.mode('owner', 'helper', 'security'), 'off', 'every agent follows the default for security');
+  assert.equal(p.mode('owner', 'helper', 'requested'), 'away');
+  p.setAgent('owner', 'helper', { requested: 'off', other: 'away', questions: 'on' });
+  assert.equal(p.mode('owner', 'helper', 'requested'), 'off');
+  assert.equal(p.mode('owner', 'coach', 'requested'), 'away');
+  for (const patch of [{ security: 'off' }, { security: null }, { questions: 'off', security: 'on' }]) {
+    assert.throws(() => p.setAgent('owner', 'helper', patch), (e) => e.code === 'bad_request' && e.message === 'security is set for all agents at once');
+  }
+  assert.deepEqual(p.get('owner').agents.helper, { requested: 'off', other: 'away', questions: 'on' }, 'nothing half-applied');
+  badRequest(() => p.setDefault('owner', { security: null }));
+});
+
+test('a stored file keeps the new kinds in the default and drops security from agent entries', (t) => {
+  const f = tmp(t);
+  fs.mkdirSync(f.dir, { recursive: true });
+  fs.writeFileSync(f.file, JSON.stringify({ sam: { default: { requested: 'off', security: 'away', other: 'bogus' }, agents: { helper: { requested: 'away', security: 'off' }, coach: { security: 'off' } } } }));
+  const q = createNotifyPrefs({ file: f.file });
+  assert.deepEqual(q.get('sam'), { default: { questions: 'on', requested: 'off', other: 'on', security: 'away' }, agents: { helper: { requested: 'away' } } });
+  assert.equal(q.mode('sam', 'helper', 'security'), 'away');
 });

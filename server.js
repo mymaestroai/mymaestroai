@@ -116,7 +116,7 @@ const hubSettings = require('./lib/settings');
 const hubAuth = require('./lib/auth').getAuth();          // accounts, sessions, TOTP, invites (lib/auth)
 const admin2fa = require('./lib/admin-2fa').createAdmin2fa({   // "Require two-factor sign-in for admins" (lib/admin-2fa)
   getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, auth: hubAuth,
-  notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true, always: true }), log: (m) => console.log(m),   // a security notice: never silenced by notification settings
+  notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true, kind: 'security' }), log: (m) => console.log(m),   // a security notice (the person's Security and access setting)
 });
 const access = require('./lib/access');                   // route classes + agent ownership/sharing (lib/access)
 const temporalWorkersLib = require('./lib/temporal-workers');
@@ -388,7 +388,7 @@ function receivers() {
 }
 // Passkey (Face ID / fingerprint) unlock of the wallet keystore (lib/wallet/passkey-routes).
 let _pkRoutes = null;
-const passkeyRoutes = () => _pkRoutes || (_pkRoutes = require('./lib/wallet/passkey-routes').createPasskeyRoutes({ svc: require('./lib/wallet/service').getWalletService(), getSetting: (k) => hubSettings.getSetting(k), notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high', always: true }) }));   // passkey added/removed: always goes
+const passkeyRoutes = () => _pkRoutes || (_pkRoutes = require('./lib/wallet/passkey-routes').createPasskeyRoutes({ svc: require('./lib/wallet/service').getWalletService(), getSetting: (k) => hubSettings.getSetting(k), notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high', kind: 'security' }) }));   // passkey added/removed: a security notice
 // Notices from data connectors to their notice agent (lib/modules/notices); registered with the connectors at start-up.
 let _notices = null;
 function notices() {
@@ -1347,7 +1347,7 @@ async function handleHttpRequest(req, res) {
               title: 'Recording access changed',
               body: `${(rec && rec.display) || name}: the list of people who can download its recordings was changed.`,
               tag: `rec-access-${name}`,
-            }, [...new Set([...allowedBefore, ...allowedAfter])]);
+            }, [...new Set([...allowedBefore, ...allowedAfter])], { kind: 'security' });
           }
         } catch {}
       }
@@ -3478,7 +3478,7 @@ server.listen(PORT, HOST, () => {
   // when one fails or none was made for 3 days (lib/backup/schedule). Nothing runs until backups are set up.
   try {
     require('./lib/backup/schedule').createScheduler({ service: backupService(), root: __dirname, zone: () => require('./lib/timezone').hubZone(),
-      notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high', always: true }), log: (m) => console.log(m) }).start();   // data safety: always goes
+      notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high', kind: 'security' }), log: (m) => console.log(m) }).start();   // data safety: a security notice
   } catch (e) { console.error('[backup] nightly backups not started:', e.message); }
   // Maestro is the lead agent. New installs are seeded with the mark; an older install that marks no lead (and so
   // counted every admin-side primary agent as one) gets maestro marked once (lib/agents ensureMaestroLead). It runs
@@ -3527,7 +3527,7 @@ server.listen(PORT, HOST, () => {
 
   // The keystore is locked after every restart: a minute later the admins' phones get "Your wallet is locked" (Settings turns it off).
   try {
-    setTimeout(() => { require('./lib/wallet/locked-notice').walletLockedNotice({ getSetting: (k) => hubSettings.getSetting(k), keystore: require('./lib/wallet/service').getWalletService().keystore, notifyEach: (p, o) => require('./lib/push').getPush().notifyEach(p, { ...o, always: true }) }).catch(() => {}); }, require('./lib/wallet/locked-notice').LOCKED_NOTICE_DELAY_MS).unref();
+    setTimeout(() => { require('./lib/wallet/locked-notice').walletLockedNotice({ getSetting: (k) => hubSettings.getSetting(k), keystore: require('./lib/wallet/service').getWalletService().keystore, notifyEach: (p, o) => require('./lib/push').getPush().notifyEach(p, { ...o, kind: 'security' }) }).catch(() => {}); }, require('./lib/wallet/locked-notice').LOCKED_NOTICE_DELAY_MS).unref();
   } catch (e) { console.warn(`[wallet] locked notice not scheduled: ${e.message}`); }
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one

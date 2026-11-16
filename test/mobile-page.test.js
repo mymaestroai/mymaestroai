@@ -179,7 +179,7 @@ test('send and notify buttons take the whole touch: touch-action none, touchstar
   assert.match(html, /#chat-head \.notify-chip \{[^}]*touch-action: none;/);
   const fn = js.slice(js.indexOf('function onComposerTap(btn, act)'), js.indexOf('function sendAndClose()'));
   assert.ok(fn.includes("btn.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });"));
-  assert.ok(js.includes("onComposerTap($('send-btn'), sendAndClose);") && js.includes("onComposerTap($('chat-notify-btn'), openNotifyAgentSheet);"), 'both buttons');   // changed on purpose: the bell opens the agent's notification sheet
+  assert.ok(js.includes("onComposerTap($('send-btn'), sendAndClose);") && js.includes("onComposerTap($('chat-notify-btn'), onNotifyBellTap);"), 'both buttons');   // changed on purpose: the bell runs onNotifyBellTap (Notify me while a reply runs, else the agent's notification sheet)
 });
 
 test('a press only acts as a tap: primary button, same pointer, released near where the button was; a cancel forgets it', () => {

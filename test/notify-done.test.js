@@ -94,7 +94,8 @@ test('phone: the bell sits in the chat header before Stop, shows exactly while a
   assert.ok(m.includes('applyTurnNotify(ra.agent, turn);') && m.includes('applyTurnNotify(agent, d.turn);'), 'the turn view says whether it is on');
   // Like Send: the tap acts on pointerup and pointerdown keeps the message box focused, so the layout does not jump
   // under the finger (a plain click missed on the first try in the test with the box focused).
-  assert.ok(m.includes("onComposerTap($('chat-notify-btn'), openNotifyAgentSheet);") && m.includes('function onComposerTap(btn, act)'), 'the bell shares the Send button\'s tap handling');
+  // changed on purpose: the bell runs onNotifyBellTap (Notify me while a reply runs, else the agent sheet)
+  assert.ok(m.includes("onComposerTap($('chat-notify-btn'), onNotifyBellTap);") && m.includes('function onComposerTap(btn, act)'), 'the bell shares the Send button\'s tap handling');
   assert.ok(m.includes("if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }"), 'the sheet\'s Notify me item runs the same toggle');
   assert.ok(m.includes('Notifications are off on this phone: turn them on in the ⋮ menu first'), 'says when no device would hear it');
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v69'/);
