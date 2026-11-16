@@ -607,7 +607,8 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       try { return await p; } catch (e) {
         const code = e && typeof e.code === 'string' ? e.code : 'EKVM';
         log(`screenshot of ${pc.name} failed (${clean(code, 20)})`);
-        if (code === 'EKVMTIMEOUT' && live && !live.unknown) throw new ToolError(`${pc.name}'s desktop is open for ${live.who.name} and did not send a picture to share. Try again after their session, or ask them.`);
+        const liveNow = live || desktop.forNode(pc.nodeid);   // a session may have opened during the capture
+        if (code === 'EKVMTIMEOUT' && liveNow && !liveNow.unknown) throw new ToolError(`${pc.name}'s desktop is open for ${liveNow.who.name} and did not send a picture to share. Try again after their session, or ask them.`);
         if (code === 'EKVMPRIMARY') throw new ToolError(`${pc.name} shows all its screens together and the main one could not be picked, so no picture was taken.`);
         if (code === 'EKVMTIMEOUT') throw new ToolError(`${pc.name} did not send a picture of its screen in time. Try again in a moment.`);
         if (code === 'EKVMCLOSED') throw new ToolError(`The connection to ${pc.name}'s screen closed before a picture arrived. Try again in a moment.`);

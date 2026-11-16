@@ -246,6 +246,7 @@ function captureDesktop(ws, options) {
   // observe: true, or a function asked before each send that would change what a person sees (true = observe from then on)
   const observeFn = typeof o.observe === 'function' ? o.observe : null;
   let observing = o.observe === true;   // join a desktop a person already views: never change what they see
+  let refreshSent = false;              // REFRESH goes out once, when observing starts
   const decode = o.decode || jpegjs.decode;
   const encode = o.encode || jpegjs.encode;
   const setT = o.setTimeout || global.setTimeout;
@@ -340,9 +341,15 @@ function captureDesktop(ws, options) {
     }
 
     // True when the capture must not change what a person sees; asked right before such a send.
+    // Observing starts at the handshake or later; either way the agent is asked once to resend the whole screen (harmless to other viewers).
     function observeNow() {
-      if (!observing && observeFn && observeFn() === true) observing = true;
+      if (!observing && observeFn && observeFn() === true) { observing = true; if (handshake) sendRefreshOnce(); }
       return observing;
+    }
+    function sendRefreshOnce() {
+      if (refreshSent) return;
+      refreshSent = true;
+      send(buildRefresh());
     }
     // A new frame: the canvas and the coverage map are allocated at its first tile, not here.
     function resetFrame(w, h) {
@@ -546,7 +553,7 @@ function captureDesktop(ws, options) {
         if (text === 'c' || text === 'cr') {
           handshake = true;
           send('2');
-          if (observing) send(buildRefresh());   // asks the agent to resend the whole screen; harmless to other viewers
+          if (observeNow()) sendRefreshOnce();   // a person already views the desktop: ask for the whole screen (a function is asked here too)
         }
         return;
       }

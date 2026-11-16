@@ -752,14 +752,19 @@ test('an observe function that turns true after the SCREEN: nothing that changes
   s.bin(cmdScreen(16, 12));   // would send compression and unpause
   s.bin(cmdTile(0, 0, solid(16, 12, GREEN)));
   const r = await s.promise;
-  assert.deepEqual(s.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 5, 8, 11]);
+  // the flip is noticed before the switch: no SETDISPLAY, no compression, no unpause; one REFRESH asks for the whole screen
+  assert.deepEqual(s.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 5, 8, 11, 6]);
   assert.equal(r.display, 1);
   assert.equal(r.onPrimary, false, 'from then on only a proven primary counts');
   assert.equal(r.primaryKnown, false);
-  // flipping before the SCREEN's own compression: nothing is sent but the display list
+  // a person already views the desktop (the function is true from the start, as server.js passes it): REFRESH right after the
+  // handshake, then only the display-list question
   const t = begin({ observe: () => true });
+  assert.deepEqual(t.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6]);
   t.bin(cmdScreen(32, 24));
-  assert.deepEqual(t.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 11]);
+  assert.deepEqual(t.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6, 11]);
+  t.bin(cmdScreen(16, 12));
+  assert.deepEqual(t.ws.sent.map((m) => (m === '2' ? '2' : m[1])), ['2', 6, 11], 'REFRESH only once');
   t.ws.emit('close');
   await rejectsWith(t.promise, 'EKVMCLOSED');
   // a function that stays false behaves as the normal mode
