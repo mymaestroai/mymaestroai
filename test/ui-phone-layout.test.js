@@ -206,6 +206,7 @@ test('runner: ?desktop=1 is stored, stripped from the address, no move', () => {
   const r = L.startPhoneLayout(win);
   assert.strictEqual(replaceCalls.length, 0);
   assert.deepStrictEqual(win.localStorage.calls.set, [[L.KEEP_DESKTOP_KEY, '1']]);
+  assert.deepStrictEqual(win.sessionStorage.calls.remove, ['hub-mobile-banner-kept'], 'choosing the full site again brings back a bar closed this session');
   assert.strictEqual(stateCalls.length, 1);
   assert.strictEqual(stateCalls[0][2], '/');
   assert.strictEqual(r.keepDesktop, true);
@@ -262,6 +263,17 @@ test('desktopOnlyLink: the computer layout panels the phone page lacks', () => {
   assert.deepStrictEqual(L.DESKTOP_ONLY_PARAMS, ['memory', 'connectors', 'backups']);
   for (const s of ['?memory=1', '?connectors=1', '?backups=1', '?a=2&memory=1']) assert.strictEqual(L.desktopOnlyLink(s), true, s);
   for (const s of ['', '?memory=0', '?update=1', '?security=1', '?wallet=unlock', '?agent=sam', null, undefined]) assert.strictEqual(L.desktopOnlyLink(s), false, String(s));
+});
+
+test('every target the computer layout opens is either kept on it or handled by the phone page', () => {
+  // A new computer-only panel added to parseOpenTarget must be added to DESKTOP_ONLY_PARAMS (or to the phone page),
+  // or a phone would move to /mobile and show nothing.
+  const { parseOpenTarget } = require('../lib/ui-open-target');
+  const keys = Object.keys(parseOpenTarget({ type: 'open-target', url: '/' }, 'http://x'));
+  const PHONE_HANDLES = ['agent', 'update', 'security', 'wallet'];   // mobile.js: #chat (from ?agent), ?update, ?security, ?wallet
+  const js = read('mobile.js');
+  for (const k of ['update', 'security', 'wallet']) assert.ok(js.includes(`.get('${k}')`), `mobile.js reads ?${k}`);
+  for (const k of keys) assert.ok(L.DESKTOP_ONLY_PARAMS.includes(k) || PHONE_HANDLES.includes(k), `open target "${k}" is neither kept on the computer layout nor handled by the phone page`);
 });
 
 test('runner: a phone tab opening a computer-layout panel link stays, with the bar', () => {
