@@ -86,7 +86,7 @@ test('audit lines (mode 0600) and one admin notice per change', async () => {
   assert.equal(lines[3].state, 'done');
   assert.equal(fs.statSync(auditFile).mode & 0o777, 0o600);
   assert.equal(calls.push.length, 2);
-  assert.deepEqual(calls.push[0], [{ title: 'Data connector access changed', body: 'owner gave scout access to Notes', url: '/?connectors=1' }, { adminsOnly: true }]);
+  assert.deepEqual(calls.push[0], [{ title: 'Data connector access changed', body: 'owner gave scout access to Notes', url: '/?connectors=1' }, { adminsOnly: true, always: true }]);   // an access change is never silenced by notification settings
   assert.equal(calls.push[1][0].body, "owner removed scout's access to Notes");
 });
 

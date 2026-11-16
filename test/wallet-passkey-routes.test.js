@@ -469,5 +469,6 @@ test('server.js wires the passkey routes, status, setting and start-up notice', 
   assert.match(src, /require\('\.\/lib\/wallet\/locked-notice'\)\.walletLockedNotice\(/);
   assert.match(src, /LOCKED_NOTICE_DELAY_MS\)\.unref\(\)/);
   assert.match(src, /createPasskeyRoutes\(\{ svc: require\('\.\/lib\/wallet\/service'\)\.getWalletService\(\)/);
-  assert.match(src, /notify: \(p\) => require\('\.\/lib\/push'\)\.getPush\(\)\.notifyEach\(p, \{ adminsOnly: true, urgency: 'high' \}\)/);
+  // A passkey change is a security notice: it always goes, whatever the person's notification settings (always: true).
+  assert.match(src, /notify: \(p\) => require\('\.\/lib\/push'\)\.getPush\(\)\.notifyEach\(p, \{ adminsOnly: true, urgency: 'high', always: true \}\)/);
 });

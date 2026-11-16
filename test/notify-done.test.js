@@ -80,20 +80,22 @@ test('desktop: the bell sits next to Send/Interject, shows exactly while a reply
 test('phone: the bell sits in the chat header before Stop, shows exactly while a reply runs, toggles on the hub and follows other devices', () => {
   // changed on purpose (owner: the bottom of the phone screen was too busy): the bell moved from the composer row to the header, before Stop
   const m = read('mobile.js'), html = read('mobile.html');
-  assert.ok(html.includes(`<button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
+  // changed on purpose (notifications per agent): the bell is always shown and opens the agent's sheet, whose first item (while a reply runs) is Notify me
+  assert.ok(html.includes(`<button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-haspopup="dialog" aria-label="Notifications for this agent" title="Notifications for this agent"><span class="bicon">&#x1F514;</span><span class="nlabel"> Notify</span></button>
       <button class="iconbtn stop-remote" id="chat-stop-btn"`), 'right before the Stop button in the header');
   const head = html.slice(html.indexOf('id="chat-head"'), html.indexOf('id="chat-scroll"'));
   assert.ok(head.includes('chat-notify-btn'), 'in the header');
   assert.ok(!html.slice(html.indexOf('id="composer"'), html.indexOf('id="file-input"')).includes('chat-notify-btn'), 'not in the composer');
   assert.ok(html.includes('#chat-head .notify-chip {') && html.includes('#chat-head .notify-chip.on {') && html.includes('#chat-head .notify-chip .nlabel { display: none; }') && html.includes('#chat-head .notify-chip[hidden] { display: none; }'));
-  assert.ok(m.includes("if (bell) { bell.hidden = !working && !own; paintNotifyBtn(); }"), 'same condition as Stop: only while a reply runs');
+  assert.ok(m.includes("if (bell) { bell.hidden = false; paintNotifyBtn(); }"), 'always shown with a chat open');
   assert.ok(m.includes("r = await api(`/api/agents/${encodeURIComponent(agent)}/notify`, { method: 'POST'"));
   assert.ok(m.includes("on('turn_notify', onTurnNotify);") && m.includes("if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;"));
   assert.ok(m.includes("if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }"), 'cleared when the turn ends');
   assert.ok(m.includes('applyTurnNotify(ra.agent, turn);') && m.includes('applyTurnNotify(agent, d.turn);'), 'the turn view says whether it is on');
   // Like Send: the tap acts on pointerup and pointerdown keeps the message box focused, so the layout does not jump
   // under the finger (a plain click missed on the first try in the test with the box focused).
-  assert.ok(m.includes("onComposerTap($('chat-notify-btn'), toggleNotifyDone);") && m.includes('function onComposerTap(btn, act)'), 'the bell shares the Send button\'s tap handling');
+  assert.ok(m.includes("onComposerTap($('chat-notify-btn'), openNotifyAgentSheet);") && m.includes('function onComposerTap(btn, act)'), 'the bell shares the Send button\'s tap handling');
+  assert.ok(m.includes("if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }"), 'the sheet\'s Notify me item runs the same toggle');
   assert.ok(m.includes('Notifications are off on this phone: turn them on in the ⋮ menu first'), 'says when no device would hear it');
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v69'/);
 });

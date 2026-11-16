@@ -41,6 +41,7 @@ test('for_owner is on the gateway tool list at depth 0 and absent when consulted
   assert.ok(t, 'offered on its own turn');
   assert.strictEqual(t.description, FOR_OWNER_DESC);
   assert.deepStrictEqual(t.parameters.required, ['reason']);
+  assert.strictEqual(t.parameters.properties.asks.type, 'boolean', 'asks is an optional boolean');
   assert.ok(!getWorkspaceTools(AGENT, fakeRes(), 1).some(x => x.name === 'for_owner'), 'withheld when another agent consults it');
 });
 
@@ -49,8 +50,9 @@ test('for_owner is in the hub MCP server (Claude and Codex clients) at depth 0 a
   const t = own.tools.find(x => x.name === 'for_owner');
   assert.ok(t, 'registered');
   assert.strictEqual(t.description, FOR_OWNER_DESC);
-  assert.deepStrictEqual(Object.keys(t.shape), ['reason']);
+  assert.deepStrictEqual(Object.keys(t.shape), ['reason', 'asks']);   // asks: optional, added with per-agent notification settings
   assert.ok(!t.shape.reason.isOptional(), 'reason is required');
+  assert.ok(t.shape.asks.isOptional(), 'asks is optional');
   const consulted = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 1 });
   assert.ok(!consulted.tools.some(x => x.name === 'for_owner'));
 });
@@ -88,6 +90,20 @@ test('an automatic turn: the handler stores the mark for that turn and publishes
   assert.strictEqual(seen[0].origin.kind, 'schedule');
   tap.finish(true, null);
   if (typeof off === 'function') off();
+});
+
+test('asks: true is published only for a strict boolean true', () => {
+  const seen = [];
+  const off = hubEvents.events.onPublish(ev => { if (ev.type === 'for_owner') seen.push(ev); });
+  for (const [i, asks] of [[1, true], [2, 'true'], [3, 1], [4, false], [5, undefined]]) {
+    forOwnerMarks.clear();
+    const tap = startTurn({ kind: 'schedule', label: 'check' }, 'fo-asks-' + i);
+    handleForOwner(AGENT, { reason: 'r', asks });
+    tap.finish(true, null);
+  }
+  if (typeof off === 'function') off();
+  assert.deepStrictEqual(seen.map(e => e.asks), [true, undefined, undefined, undefined, undefined]);
+  assert.ok(!('asks' in seen[1]));
 });
 
 test('a turn the owner started: nothing is stored, and no turn running stores nothing either', () => {

@@ -606,6 +606,12 @@
     .header-btn:hover { background: rgba(255,255,255,0.15); color: var(--text-primary); }
     .header-btn.restarting { opacity: 0.5; pointer-events: none; animation: pulse 1s infinite; }
     .chat-actions .resync-btn { font-size: 1rem; line-height: 1; padding: 6px 10px; }
+    .chat-actions .notify-bell-btn { font-size: 1rem; line-height: 1; padding: 6px 10px; }
+    .chat-actions .notify-bell-btn[aria-expanded="true"] { border-color: var(--accent); }
+    .notify-bell-menu { position: fixed; z-index: 1300; width: 290px; max-width: calc(100vw - 16px); box-sizing: border-box; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 0.85rem; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
+    .notify-bell-menu .notify-bell-title { font-weight: 600; }
+    .notify-bell-menu .notify-bell-row { display: flex; flex-direction: column; gap: 3px; color: var(--text-dim); font-size: 0.78rem; }
+    .notify-bell-menu select { font-size: 0.8rem; padding: 4px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
     /* "Notify me when done": next to Interject while a reply runs; filled once clicked. */
     .input-area .notify-done-btn { border: 1px solid var(--accent); color: var(--accent); background: rgba(61,123,255,.10); font-weight: 600; white-space: nowrap; cursor: pointer; }
     .input-area .notify-done-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }

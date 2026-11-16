@@ -531,6 +531,17 @@
   #about-sheet .about-chip { margin-left: 6px; padding: 0 7px; border: 1px solid currentColor; border-radius: 8px; }
   #about-sheet .about-chip.stable { color: var(--success); }
   #about-sheet .about-warn { color: var(--warning); display: inline-flex; align-items: center; gap: 4px; }
+  #notify-agent-sheet, #notify-prefs-sheet { width: min(94vw, 420px); max-height: 88vh; overflow-y: auto; }
+  #notify-agent-sheet h3, #notify-prefs-sheet h3 { margin-bottom: 8px; }
+  #notify-agent-sheet .sec-section, #notify-prefs-sheet .sec-section { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+  #notify-agent-sheet .sec-title, #notify-prefs-sheet .sec-title { font-weight: 600; }
+  #notify-agent-sheet .sec-hint, #notify-prefs-sheet .sec-hint { font-size: 13px; color: var(--text-dim); }
+  #notify-agent-sheet select, #notify-prefs-sheet select { width: 100%; min-height: 44px; padding: 0 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; font-size: 16px; }
+  #notify-agent-sheet button, #notify-prefs-sheet button { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); }
+  #notify-agent-sheet button.on { background: var(--accent); color: #fff; }
+  #notify-agent-sheet .sec-actions, #notify-prefs-sheet .sec-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #notify-prefs-sheet .np-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+  #notify-prefs-sheet .np-row button { min-height: 36px; padding: 0 12px; flex: none; }
   #security-sheet, #profile-sheet { width: min(94vw, 420px); max-height: 88vh; overflow-y: auto; }
   #security-sheet h3, #profile-sheet h3 { margin-bottom: 8px; }
   #security-sheet .sec-section, #profile-sheet .sec-section { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
@@ -786,7 +797,7 @@
       <span class="agent-icon" id="chat-icon"></span>
       <div id="chat-title"><b id="chat-name">Chat</b><span class="sub-row"><button type="button" class="sub" id="chat-busy" hidden></button></span></div>
       <button class="iconbtn" id="chat-resync" aria-label="Re-sync" title="Re-sync with the hub">&#x21BB;</button>
-      <button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
+      <button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-haspopup="dialog" aria-label="Notifications for this agent" title="Notifications for this agent"><span class="bicon">&#x1F514;</span><span class="nlabel"> Notify</span></button>
       <button class="iconbtn stop-remote" id="chat-stop-btn" aria-label="Stop this agent" title="Stop this agent's current turn" hidden>&#x25A0;<span class="stop-label"> Stop</span></button>
       <button class="iconbtn" id="chat-menu-btn" aria-label="Menu">&#x22EE;</button>
     </div>
@@ -917,6 +928,7 @@
     <a id="menu-recordings" href="/recordings?from=mobile" hidden>&#x1F399; Recordings</a>
     <button id="menu-notify">&#x1F514; Notifications</button>
     <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
+    <button id="menu-notify-prefs">&#x1F514; Notification settings&hellip;</button>
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
     <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
     <button id="menu-agentwork" class="chat-only">&#x1F9F0; Show agent work</button>
@@ -949,6 +961,8 @@
   <dialog id="pacing-confirm"><p id="pacing-text"></p><div class="btns"><button id="pacing-no">Cancel</button><button id="pacing-yes" class="go accent">Resume</button></div></dialog>
   <dialog id="approval-sheet"></dialog>
   <dialog id="profile-sheet"></dialog>
+  <dialog id="notify-agent-sheet" aria-label="Notifications for this agent"></dialog>
+  <dialog id="notify-prefs-sheet" aria-label="Notifications"></dialog>
   <dialog id="security-sheet"></dialog>
   <dialog id="files-sheet" data-no-dirty></dialog>
   <dialog id="recall-sheet" data-no-dirty></dialog>

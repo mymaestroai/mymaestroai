@@ -2815,7 +2815,9 @@
           <select id="st-question-after" onchange="saveQuestionAfter(this.value)">${qaOpts.map(([v, l]) => `<option value="${v}"${v === qaVal ? ' selected' : ''}>${l}</option>`).join('')}</select>
         </div>
         <div class="st-hint">A notification when an agent's question (or an approval) is still unanswered after this long. Finished replies notify only when you click 🔔 Notify me next to Cancel while the reply is running.</div>
+        <div id="st-notify-mine" role="group" aria-label="Your notifications"><div class="st-hint" style="margin-left:0">Loading…</div></div>
       </div>`;
+        setTimeout(loadNotifySettings, 0);
       }
 
       html += `<div class="st-section" id="st-chat-section"><h4>Chat</h4>
@@ -4082,6 +4084,151 @@
         hubToast(r.ok ? (questionAfterMinutes === null ? 'Questions will not send notifications.' : questionAfterMinutes === 0 ? 'Questions notify right away.' : `Questions notify after ${questionAfterMinutes} min unanswered.`) : 'Could not save.');
         if (r.ok) stSum('notify', 'q', stQuestionsText(questionAfterMinutes));
       } catch (e) { alert('Could not save: ' + e.message); }
+    }
+
+    // ── notify prefs (begin) ──
+    // Per person, per agent: when a notification may reach this person. Modes on | off | away; kinds questions | other.
+    // Resolution: the agent's own value, else the person's default, else on. Server contract: /api/notify/prefs.
+    const NOTIFY_KINDS = [['questions', 'Questions', 'when an agent needs your answer or approval'], ['other', 'Everything else', 'finished replies you asked about, reports and notices']];
+    function notifyModeLabel(mode) { return mode === 'off' ? 'Off' : mode === 'away' ? "Only when I'm away" : 'On'; }
+    function notifyEffective(prefs, agent, kind) {
+      const own = prefs && prefs.agents && agent && prefs.agents[agent] ? prefs.agents[agent][kind] : undefined;
+      if (own === 'on' || own === 'off' || own === 'away') return own;
+      const def = prefs && prefs.default ? prefs.default[kind] : undefined;
+      return def === 'off' || def === 'away' ? def : 'on';
+    }
+    function notifyBellIcon(prefs, agent) {
+      return notifyEffective(prefs, agent, 'questions') === 'off' && notifyEffective(prefs, agent, 'other') === 'off' ? '🔕' : '🔔';
+    }
+    // ── notify prefs (end) ──
+
+    let notifyPrefsCache = null;
+    async function notifyPrefsRequest(method, body) {
+      const r = await fetch('/api/notify/prefs', { method, credentials: 'include', headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok || !j.prefs) throw new Error(j.error || 'Could not save.');
+      notifyPrefsCache = j.prefs;
+      notifyBellsPaint();
+      return j.prefs;
+    }
+    const notifyPrefsLoad = () => notifyPrefsRequest('GET');
+    function notifyModeOptions(sel, withDefault, defMode) {
+      const opts = withDefault ? [['', `Use my default (${notifyModeLabel(defMode)})`]] : [];
+      for (const m of ['on', 'off', 'away']) opts.push([m, notifyModeLabel(m)]);
+      return opts.map(([v, l]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`).join('');
+    }
+    function notifyBellsPaint() {
+      for (const btn of document.querySelectorAll('.notify-bell-btn[data-agent]')) btn.textContent = notifyBellIcon(notifyPrefsCache, btn.dataset.agent);
+    }
+    // Settings -> Notifications: the person's two defaults and the agents with a setting of their own.
+    function notifySettingsPaint() {
+      const box = document.getElementById('st-notify-mine');
+      if (!box || !notifyPrefsCache) return;
+      const p = notifyPrefsCache;
+      const rows = NOTIFY_KINDS.map(([k, label, hint]) => `<div class="st-row"><label for="st-np-${k}">${label}</label>
+          <select id="st-np-${k}" data-np-kind="${k}" onchange="notifyDefaultSave('${k}', this)">${notifyModeOptions(p.default && p.default[k] || 'on', false)}</select></div>
+        <div class="st-hint">${hint[0].toUpperCase() + hint.slice(1)}.</div>`).join('');
+      const names = Object.keys(p.agents || {}).filter(a => p.agents[a] && (p.agents[a].questions || p.agents[a].other)).sort();
+      const list = names.length ? names.map(a => {
+        const ag = (typeof AGENTS !== 'undefined' && AGENTS.find(x => x.name === a)) || null;
+        const shown = (ag && (ag.display || ag.displayName)) || capName(a);
+        return `<div class="st-row"><label>${esc(shown)}</label><span class="st-hint" style="margin:0;flex:1">Questions: ${p.agents[a].questions ? notifyModeLabel(p.agents[a].questions) : 'my default'} · Everything else: ${p.agents[a].other ? notifyModeLabel(p.agents[a].other) : 'my default'}</span>
+          <button class="st-test-btn" onclick="notifyAgentReset(${esc(JSON.stringify(a)).replace(/'/g, '&#39;')})" aria-label="Reset ${esc(shown)} to my default">Reset</button></div>`;
+      }).join('') : '<div class="st-hint" style="margin-left:0">None. Use the 🔔 in an agent\'s chat header to give one its own setting.</div>';
+      box.innerHTML = `<h5 style="margin:10px 0 6px">Your notifications</h5>
+        <div class="st-hint" style="margin-left:0">For you, on all your devices.</div>${rows}
+        <h5 style="margin:10px 0 6px">Agents with their own setting</h5>${list}`;
+    }
+    async function loadNotifySettings() {
+      const box = document.getElementById('st-notify-mine');
+      if (!box) return;
+      try { await notifyPrefsLoad(); notifySettingsPaint(); } catch (e) { box.innerHTML = '<div class="st-hint" style="margin-left:0">Could not load your notification settings.</div>'; }
+    }
+    async function notifyDefaultSave(kind, sel) {
+      const before = (notifyPrefsCache && notifyPrefsCache.default && notifyPrefsCache.default[kind]) || 'on';
+      try {
+        await notifyPrefsRequest('PUT', { default: { [kind]: sel.value } });
+        hubToast(`${kind === 'questions' ? 'Questions' : 'Everything else'}: ${notifyModeLabel(sel.value)}.`);
+        notifySettingsPaint();
+      } catch (e) { sel.value = before; hubToast('Could not save: ' + e.message); }
+    }
+    async function notifyAgentReset(agent) {
+      try { await notifyPrefsRequest('PUT', { agent, prefs: null }); hubToast('Back to your default.'); notifySettingsPaint(); } catch (e) { hubToast('Could not save: ' + e.message); }
+    }
+    // Chat header bell: a small menu for this agent.
+    function notifyBellClose(refocus) {
+      const m = document.getElementById('notify-bell-menu');
+      if (!m) return;
+      const btn = document.querySelector('.notify-bell-btn[aria-expanded="true"]');
+      m.remove();
+      document.removeEventListener('mousedown', notifyBellOutside, true);
+      document.removeEventListener('keydown', notifyBellKey, true);
+      for (const b of document.querySelectorAll('.notify-bell-btn')) b.setAttribute('aria-expanded', 'false');
+      if (refocus && btn) btn.focus();
+    }
+    function notifyBellOutside(e) { const m = document.getElementById('notify-bell-menu'); if (m && !m.contains(e.target) && !e.target.closest('.notify-bell-btn')) notifyBellClose(false); }
+    function notifyBellKey(e) { if (e.key === 'Escape') { e.stopPropagation(); notifyBellClose(true); } }
+    function notifyBellMenuHtml(agent, display) {
+      const p = notifyPrefsCache;
+      return `<div class="notify-bell-title" id="notify-bell-title">Notifications for ${esc(display)}</div>` + NOTIFY_KINDS.map(([k, label]) => {
+        const own = p && p.agents && p.agents[agent] ? p.agents[agent][k] : undefined;
+        const defMode = p && p.default && p.default[k] || 'on';
+        return `<label class="notify-bell-row">${label}<select data-nb-kind="${k}" aria-label="${label}">${notifyModeOptions(own || '', true, defMode)}</select></label>`;
+      }).join('');
+    }
+    async function notifyBellToggle(chatId) {
+      const btn = document.getElementById(`notify-bell-${chatId}`);
+      if (!btn) return;
+      const wasOpen = !!document.getElementById('notify-bell-menu');
+      const same = wasOpen && btn.getAttribute('aria-expanded') === 'true';
+      notifyBellClose(false);
+      if (same) { btn.focus(); return; }
+      const agent = btn.dataset.agent, chat = chats[chatId];
+      const display = (chat && (chat.display || capName(chat.agent))) || capName(agent);
+      const menu = document.createElement('div');
+      menu.id = 'notify-bell-menu'; menu.className = 'notify-bell-menu'; menu.setAttribute('role', 'dialog'); menu.setAttribute('aria-labelledby', 'notify-bell-title');
+      document.body.appendChild(menu);
+      const r = btn.getBoundingClientRect();
+      menu.style.top = `${Math.round(r.bottom + 6)}px`;
+      menu.style.left = `${Math.max(8, Math.min(Math.round(r.left), window.innerWidth - 300))}px`;
+      btn.setAttribute('aria-expanded', 'true');
+      menu.innerHTML = notifyBellMenuHtml(agent, display);   // the cached values now; refreshed below
+      document.addEventListener('mousedown', notifyBellOutside, true);
+      document.addEventListener('keydown', notifyBellKey, true);
+      const first = menu.querySelector('select'); if (first) first.focus();
+      menu.addEventListener('change', async (e) => {
+        const sel = e.target.closest('select[data-nb-kind]'); if (!sel) return;
+        const kind = sel.dataset.nbKind;
+        try {
+          await notifyPrefsRequest('PUT', { agent, prefs: { [kind]: sel.value === '' ? null : sel.value } });
+          hubToast(`${display}: ${kind === 'questions' ? 'Questions' : 'Everything else'} ${sel.value === '' ? 'follows your default' : notifyModeLabel(sel.value)}.`);
+        } catch (err) { hubToast('Could not save: ' + err.message); }
+        if (document.getElementById('notify-bell-menu') === menu) { menu.innerHTML = notifyBellMenuHtml(agent, display); const again = menu.querySelector(`select[data-nb-kind="${kind}"]`); if (again) again.focus(); }
+      });
+      try {
+        await notifyPrefsLoad();   // refreshed when the menu opens; repainted only while the person has not touched it yet
+        if (document.getElementById('notify-bell-menu') === menu && document.activeElement === first) { menu.innerHTML = notifyBellMenuHtml(agent, display); const f = menu.querySelector('select'); if (f) f.focus(); }
+      } catch { /* the cached values stay */ }
+    }
+
+    // Presence: tells the hub whether any page of this person is in front, so "Only when I'm away" can be judged.
+    const notifyPageId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `p${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    function notifyPresenceSend() {
+      try {
+        fetch('/api/notify/presence', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page: notifyPageId, visible: document.visibilityState === 'visible' }), keepalive: true }).catch(() => {});
+      } catch { /* silent */ }
+    }
+    let notifyPresenceStarted = false;
+    function startNotifyPresence() {
+      if (notifyPresenceStarted) return;
+      notifyPresenceStarted = true;
+      notifyPresenceSend();
+      notifyPrefsLoad().catch(() => {});   // the header bells show 🔕 from the start
+      document.addEventListener('visibilitychange', notifyPresenceSend);
+      setInterval(() => { if (document.visibilityState === 'visible') notifyPresenceSend(); }, 60000);
+      window.addEventListener('pagehide', () => {
+        try { navigator.sendBeacon('/api/notify/presence', new Blob([JSON.stringify({ page: notifyPageId, visible: false })], { type: 'application/json' })); } catch { /* silent */ }
+      });
     }
 
     async function saveApprovalClasses() {
@@ -5523,6 +5670,7 @@
       setupConfigListeners();
       startHubHealthMonitor();
       startHubEventMonitor();
+      startNotifyPresence();
       refreshSpendToday();
       refreshPlanChip();
       showMobileBanner();
@@ -8690,6 +8838,7 @@
         </div>
         <div class="chat-actions">
           <button onclick="resyncClick()" class="resync-btn" id="resync-btn-${chatId}" title="Re-sync with the hub" aria-label="Re-sync with the hub">↻</button>
+          <button type="button" class="notify-bell-btn" id="notify-bell-${chatId}" data-agent="${esc(chat.agent)}" onclick="notifyBellToggle('${chatId}')" aria-label="Notifications for this agent" title="Notifications for this agent" aria-haspopup="dialog" aria-expanded="false">${notifyBellIcon(notifyPrefsCache, chat.agent)}</button>
           <button onclick="newSession('${chatId}')" title="Clear agent memory and start fresh">🔄 New Session</button>
           <button onclick="clearChat('${chatId}')">🗑️ Clear</button>
           <button onclick="saveChat('${chatId}')">💾 Save</button>

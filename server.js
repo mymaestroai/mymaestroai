@@ -116,7 +116,7 @@ const hubSettings = require('./lib/settings');
 const hubAuth = require('./lib/auth').getAuth();          // accounts, sessions, TOTP, invites (lib/auth)
 const admin2fa = require('./lib/admin-2fa').createAdmin2fa({   // "Require two-factor sign-in for admins" (lib/admin-2fa)
   getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, auth: hubAuth,
-  notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true }), log: (m) => console.log(m),
+  notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true, always: true }), log: (m) => console.log(m),   // a security notice: never silenced by notification settings
 });
 const access = require('./lib/access');                   // route classes + agent ownership/sharing (lib/access)
 const temporalWorkersLib = require('./lib/temporal-workers');
@@ -388,7 +388,7 @@ function receivers() {
 }
 // Passkey (Face ID / fingerprint) unlock of the wallet keystore (lib/wallet/passkey-routes).
 let _pkRoutes = null;
-const passkeyRoutes = () => _pkRoutes || (_pkRoutes = require('./lib/wallet/passkey-routes').createPasskeyRoutes({ svc: require('./lib/wallet/service').getWalletService(), getSetting: (k) => hubSettings.getSetting(k), notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high' }) }));
+const passkeyRoutes = () => _pkRoutes || (_pkRoutes = require('./lib/wallet/passkey-routes').createPasskeyRoutes({ svc: require('./lib/wallet/service').getWalletService(), getSetting: (k) => hubSettings.getSetting(k), notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high', always: true }) }));   // passkey added/removed: always goes
 // Notices from data connectors to their notice agent (lib/modules/notices); registered with the connectors at start-up.
 let _notices = null;
 function notices() {
@@ -811,6 +811,22 @@ async function handleHttpRequest(req, res) {
         }
         return jsonResponse(res, 200, { ok: true, agent: agentName, active: !!(turn && turn.active), turn });
       }
+    }
+    // Notification settings per person and agent, and the presence pings that decide "only when I'm away" (lib/notify-prefs-routes).
+    // The person is always the signed-in user ('*' on a hub without accounts), never a parameter.
+    if (pathname === '/api/notify/prefs' || pathname === '/api/notify/presence') {
+      const body = req.method === 'GET' ? {} : await authJson();   // a beacon's Blob body arrives as plain text: JSON either way
+      const accounts = hubAuth.hasUsers();
+      const who = req.hubUser || null;
+      const all = (who && req.method === 'PUT') ? await getAgents() : [];
+      const out = require('./lib/notify-prefs-routes').handle({
+        method: req.method, pathname, body, service: req.hubService, token: req.hubToken,
+        userId: who ? String(who.id) : (accounts ? null : '*'),
+        prefs: require('./lib/notify-prefs').getNotifyPrefs(),
+        agentExists: (n) => all.some(a => a.name === n),
+        agentVisible: (n) => !who || access.isAdmin(who) || access.canAccessAgent(who, n, { agents: all, resolveVirtual: (v) => temporalWorkersLib.getVirtual(v) }),
+      });
+      return jsonResponse(res, out.status, out.json);
     }
     // "Notify me when done": the 🔔 next to Stop while a reply runs. One push to this person's devices when that turn
     // ends (lib/push); every page of theirs shows the bell's state (turn_notify). A person on a page, not a program.
@@ -3460,7 +3476,7 @@ server.listen(PORT, HOST, () => {
   // when one fails or none was made for 3 days (lib/backup/schedule). Nothing runs until backups are set up.
   try {
     require('./lib/backup/schedule').createScheduler({ service: backupService(), root: __dirname, zone: () => require('./lib/timezone').hubZone(),
-      notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high' }), log: (m) => console.log(m) }).start();
+      notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high', always: true }), log: (m) => console.log(m) }).start();   // data safety: always goes
   } catch (e) { console.error('[backup] nightly backups not started:', e.message); }
   // Maestro is the lead agent. New installs are seeded with the mark; an older install that marks no lead (and so
   // counted every admin-side primary agent as one) gets maestro marked once (lib/agents ensureMaestroLead). It runs
@@ -3509,7 +3525,7 @@ server.listen(PORT, HOST, () => {
 
   // The keystore is locked after every restart: a minute later the admins' phones get "Your wallet is locked" (Settings turns it off).
   try {
-    setTimeout(() => { require('./lib/wallet/locked-notice').walletLockedNotice({ getSetting: (k) => hubSettings.getSetting(k), keystore: require('./lib/wallet/service').getWalletService().keystore, notifyEach: (p, o) => require('./lib/push').getPush().notifyEach(p, o) }).catch(() => {}); }, require('./lib/wallet/locked-notice').LOCKED_NOTICE_DELAY_MS).unref();
+    setTimeout(() => { require('./lib/wallet/locked-notice').walletLockedNotice({ getSetting: (k) => hubSettings.getSetting(k), keystore: require('./lib/wallet/service').getWalletService().keystore, notifyEach: (p, o) => require('./lib/push').getPush().notifyEach(p, { ...o, always: true }) }).catch(() => {}); }, require('./lib/wallet/locked-notice').LOCKED_NOTICE_DELAY_MS).unref();
   } catch (e) { console.warn(`[wallet] locked notice not scheduled: ${e.message}`); }
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one

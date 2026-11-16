@@ -1686,9 +1686,10 @@ function paintChatStatus() {
   // this device is streaming. The send button is then Interject rather than Stop.
   const stopBtn = $('chat-stop-btn');
   if (stopBtn) stopBtn.hidden = !working && !own;
-  // "Notify me when done": next to the Interject button, shown exactly while a reply runs (gone when it is done).
+  // The 🔔 opens this agent's notification sheet: shown whenever a chat is open (its first item, "Notify me when this
+  // reply is done", only while a reply runs).
   const bell = $('chat-notify-btn');
-  if (bell) { bell.hidden = !working && !own; paintNotifyBtn(); }
+  if (bell) { bell.hidden = false; paintNotifyBtn(); }
   setSendMode(own);
   paintBusyCard();
 }
@@ -1702,8 +1703,9 @@ function paintNotifyBtn() {
   if (!bell) return;
   const on = !!(current && notifyArmed[current]);
   bell.classList.toggle('on', on);
-  bell.setAttribute('aria-pressed', on ? 'true' : 'false');
-  bell.title = on ? 'You will get a notification when this reply is done. Tap to cancel.' : 'Get a notification when this reply is done';
+  bell.title = on ? 'You will get a notification when this reply is done. Notifications for this agent: tap to change.' : 'Notifications for this agent';
+  const icon = bell.querySelector('.bicon');
+  if (icon) icon.textContent = notifyBellIcon(notifyPrefs, current);
 }
 function applyTurnNotify(agent, turn) {
   if (!agent || !turn) return;
@@ -1730,6 +1732,167 @@ function onTurnNotify(ev) {
   if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;   // someone else's bell
   notifyArmed[ev.agent] = ev.on ? ev.turnId : null;
   if (ev.agent === current) paintNotifyBtn();
+}
+
+// ── notify prefs (begin) ── pure helpers: no page state, no DOM
+const NOTIFY_MODES = ['on', 'off', 'away'];
+const NOTIFY_KINDS = [
+  { kind: 'questions', label: 'Questions', hint: 'When an agent needs your answer or approval' },
+  { kind: 'other', label: 'Everything else', hint: 'Finished replies you asked about, reports and notices' },
+];
+function notifyModeLabel(mode) {
+  if (mode === 'off') return 'Off';
+  if (mode === 'away') return "Only when I'm away";
+  return 'On';
+}
+// What applies to this agent and kind: its own setting, else the person's default, else On.
+function notifyEffective(prefs, agent, kind) {
+  const own = prefs && prefs.agents && agent && prefs.agents[agent] ? prefs.agents[agent][kind] : null;
+  if (NOTIFY_MODES.includes(own)) return own;
+  const def = prefs && prefs.default ? prefs.default[kind] : null;
+  return NOTIFY_MODES.includes(def) ? def : 'on';
+}
+// 🔕 when both kinds are Off for this agent, else 🔔.
+function notifyBellIcon(prefs, agent) {
+  return notifyEffective(prefs, agent, 'questions') === 'off' && notifyEffective(prefs, agent, 'other') === 'off' ? '\u{1F515}' : '\u{1F514}';
+}
+// ── notify prefs (end) ──
+
+let notifyPrefs = null;   // the last GET/PUT /api/notify/prefs answer's prefs: { default, agents }
+async function loadNotifyPrefs() {
+  try {
+    const r = await api('/api/notify/prefs');
+    const d = r.ok ? await r.json().catch(() => null) : null;
+    if (d && d.prefs) notifyPrefs = d.prefs;
+  } catch { /* keep the last */ }
+  paintNotifyBtn();
+  return notifyPrefs;
+}
+// PUT one change; true when saved (the answer replaces notifyPrefs), else toasts why.
+async function saveNotifyPrefs(body) {
+  let r, d = {};
+  try {
+    r = await api('/api/notify/prefs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    d = await r.json().catch(() => ({}));
+  } catch { toast('Could not reach the hub'); return false; }
+  if (!r.ok) { toast(d.error || d.detail || 'Could not save the notification setting'); return false; }
+  if (d.prefs) notifyPrefs = d.prefs;
+  paintNotifyBtn();
+  return true;
+}
+function notifyOptionsHtml(selected, defaultLabel) {
+  const opt = (v, l) => `<option value="${v}"${v === selected ? ' selected' : ''}>${esc(l)}</option>`;
+  return (defaultLabel ? opt('', `Use my default (${defaultLabel})`) : '') + NOTIFY_MODES.map(m => opt(m, notifyModeLabel(m))).join('');
+}
+
+// The header 🔔: this agent's sheet. While a reply runs its first item is "Notify me when this reply is done" (the same
+// toggleNotifyDone the bell tap ran before); then Questions and Everything else, each "Use my default" / On / Off / Only when I'm away.
+function paintNotifyAgentSheet() {
+  const d = $('notify-agent-sheet');
+  const agent = d && d._agent;
+  if (!d || !agent) return;
+  const replying = isBusy(agent) || !!ownTurnFor(agent);
+  const armed = !!notifyArmed[agent];
+  const kinds = NOTIFY_KINDS.map(k => {
+    const own = notifyPrefs && notifyPrefs.agents && notifyPrefs.agents[agent] ? notifyPrefs.agents[agent][k.kind] : null;
+    const sel = NOTIFY_MODES.includes(own) ? own : '';
+    return `<div class="sec-section"><div class="sec-title">${esc(k.label)}</div><div class="sec-hint">${esc(k.hint)}</div>
+      <select data-nk="${k.kind}" aria-label="${esc(k.label)} for ${esc(displayName(agent))}">${notifyOptionsHtml(sel, notifyModeLabel(notifyPrefs && notifyPrefs.default && NOTIFY_MODES.includes(notifyPrefs.default[k.kind]) ? notifyPrefs.default[k.kind] : 'on'))}</select></div>`;
+  }).join('');
+  d.innerHTML = `<h3>${esc(`Notifications for ${displayName(agent)}`)}</h3>
+    ${replying ? `<div class="sec-section"><button type="button" data-nk="done" class="${armed ? 'on' : ''}">${armed ? '🔔 You will be told when this reply is done (tap to cancel)' : '🔔 Notify me when this reply is done'}</button></div>` : ''}
+    ${kinds}
+    <div class="sec-hint" style="margin-top:8px">Applies to all your devices. Change what you get for every agent in the ⋮ menu → Notification settings.</div>
+    <div class="sec-actions" style="margin-top:10px"><button type="button" data-nk="close">Close</button></div>`;
+}
+function openNotifyAgentSheet() {
+  if (!current) return;
+  const d = $('notify-agent-sheet');
+  d._agent = current;
+  paintNotifyAgentSheet();
+  if (!d.open) d.showModal();
+  loadNotifyPrefs().then(() => { if (d.open && d._agent === current) paintNotifyAgentSheet(); });
+}
+async function onNotifyAgentSheetClick(e) {
+  const d = $('notify-agent-sheet');
+  const b = e.target.closest('button[data-nk]');
+  if (!b) return;
+  if (b.dataset.nk === 'close') { d.close(); return; }
+  if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }
+}
+async function onNotifyAgentSheetChange(e) {
+  const d = $('notify-agent-sheet');
+  const s = e.target.closest('select[data-nk]');
+  const agent = d._agent;
+  if (!s || !agent) return;
+  const value = s.value || null;   // '' = back to my default
+  const ok = await saveNotifyPrefs({ agent, prefs: { [s.dataset.nk]: value } });
+  if (ok) {
+    const label = NOTIFY_KINDS.find(k => k.kind === s.dataset.nk).label;
+    toast(value ? `${label} from ${displayName(agent)}: ${notifyModeLabel(value)}` : `${label} from ${displayName(agent)}: using your default`);
+  }
+  if (d.open) paintNotifyAgentSheet();
+}
+
+// ⋮ menu → Notification settings: the person's defaults and the agents with a setting of their own.
+function paintNotifyPrefsSheet() {
+  const d = $('notify-prefs-sheet');
+  if (!d) return;
+  const p = notifyPrefs;
+  const defaults = NOTIFY_KINDS.map(k => `<div class="sec-section"><div class="sec-title">${esc(k.label)}</div><div class="sec-hint">${esc(k.hint)}</div>
+      <select data-nd="${k.kind}" aria-label="${esc(k.label)}, my default">${notifyOptionsHtml(notifyEffective(p, null, k.kind), '')}</select></div>`).join('');
+  const own = Object.entries((p && p.agents) || {}).filter(([, v]) => v && NOTIFY_KINDS.some(k => NOTIFY_MODES.includes(v[k.kind])));
+  const rows = own.length ? own.map(([name, v]) => {
+    const vals = NOTIFY_KINDS.filter(k => NOTIFY_MODES.includes(v[k.kind])).map(k => `${k.label}: ${notifyModeLabel(v[k.kind])}`).join(' · ');
+    return `<div class="np-row"><div><div class="sec-title">${esc(displayName(name))}</div><div class="sec-hint">${esc(vals)}</div></div><button type="button" data-nr="${esc(name)}" aria-label="Reset ${esc(displayName(name))} to my defaults">Reset</button></div>`;
+  }).join('') : '<div class="sec-hint">None. Open an agent and tap its 🔔 to give it one.</div>';
+  d.innerHTML = `<h3>Notifications</h3>
+    <div class="sec-hint">Applies to all your devices.</div>
+    ${defaults}
+    <div class="sec-section"><div class="sec-title">Agents with their own setting</div>${rows}</div>
+    <div class="sec-actions" style="margin-top:10px"><button type="button" data-nr="">Close</button></div>`;
+}
+function openNotifyPrefsSheet() {
+  $('menu').classList.remove('open');
+  const d = $('notify-prefs-sheet');
+  paintNotifyPrefsSheet();
+  if (!d.open) d.showModal();
+  loadNotifyPrefs().then(() => { if (d.open) paintNotifyPrefsSheet(); });
+}
+async function onNotifyPrefsSheetClick(e) {
+  const b = e.target.closest('button[data-nr]');
+  if (!b) return;
+  const d = $('notify-prefs-sheet');
+  if (!b.dataset.nr) { d.close(); return; }
+  const name = b.dataset.nr;
+  if (await saveNotifyPrefs({ agent: name, prefs: null })) toast(`${displayName(name)} now follows your defaults`);
+  if (d.open) paintNotifyPrefsSheet();
+}
+async function onNotifyPrefsSheetChange(e) {
+  const d = $('notify-prefs-sheet');
+  const s = e.target.closest('select[data-nd]');
+  if (!s) return;
+  const ok = await saveNotifyPrefs({ default: { [s.dataset.nd]: s.value } });
+  if (ok) toast(`${NOTIFY_KINDS.find(k => k.kind === s.dataset.nd).label}: ${notifyModeLabel(s.value)}`);
+  if (d.open) paintNotifyPrefsSheet();
+}
+
+// ── Presence: the hub judges "Only when I'm away" from these. One random id per page load; visible on load, on
+// visibilitychange and every 60 s while visible; a beacon at pagehide says hidden. Silent on failure. ──
+const presencePage = 'p' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+function sendPresence(visible) {
+  if (!hubMe) return;
+  try {
+    api('/api/notify/presence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page: presencePage, visible: !!visible }) }).catch(() => {});
+  } catch { /* silent */ }
+}
+function presenceStart() {
+  sendPresence(!document.hidden);
+  document.addEventListener('visibilitychange', () => sendPresence(!document.hidden));
+  setInterval(() => { if (!document.hidden) sendPresence(true); }, 60000);
+  window.addEventListener('pagehide', () => {
+    try { if (hubMe && navigator.sendBeacon) navigator.sendBeacon('/api/notify/presence', new Blob([JSON.stringify({ page: presencePage, visible: false })], { type: 'application/json' })); } catch { /* silent */ }
+  });
 }
 
 // Stop for a reply this device is streaming (or re-attaching) for the given agent only;
@@ -12417,6 +12580,7 @@ function wire() {
   paintActiveMenu();
   $('menu-notify').addEventListener('click', togglePush);
   $('menu-notify-test')?.addEventListener('click', testPush);
+  $('menu-notify-prefs')?.addEventListener('click', (e) => { e.stopPropagation(); openNotifyPrefsSheet(); });
   $('messages').addEventListener('click', onMessagesClick);
   $('messages').addEventListener('pointerdown', onReasoningGrip);
   $('messages').addEventListener('pointerdown', onToolsGrip);
@@ -12476,7 +12640,11 @@ function wire() {
   // Send, and the 🔔 beside it, act on the touch itself (onComposerTap). Once a send has taken the text,
   // sendAndClose lets go of the box so the keyboard goes away.
   onComposerTap($('send-btn'), sendAndClose);
-  onComposerTap($('chat-notify-btn'), toggleNotifyDone);
+  onComposerTap($('chat-notify-btn'), openNotifyAgentSheet);   // the bell opens this agent's notification sheet
+  $('notify-agent-sheet').addEventListener('click', onNotifyAgentSheetClick);
+  $('notify-agent-sheet').addEventListener('change', onNotifyAgentSheetChange);
+  $('notify-prefs-sheet').addEventListener('click', onNotifyPrefsSheetClick);
+  $('notify-prefs-sheet').addEventListener('change', onNotifyPrefsSheetChange);
   // The mic acts on the touch itself too (the box keeps its state, no keyboard opens). Its status is polled every 60 s while the page is visible.
   if ($('mic-btn')) onComposerTap($('mic-btn'), voiceMicTap);
   voiceCallWire();
@@ -13326,6 +13494,7 @@ async function init() {
   await loadMe();
   applyMultiUser();
   refreshPlanUsage();
+  if (hubMe) { presenceStart(); loadNotifyPrefs(); }   // signed in: tell the hub this page is open; the bell shows 🔕 for an agent set to Off
   if (new URLSearchParams(location.search).get('security') === '1') openSecuritySheet();
   await loadAgents();
   activeJobsSync();
