@@ -158,3 +158,86 @@ test('presence is memory only: a new store knows nothing', (t) => {
   a.touch('owner', 'p', true);
   assert.equal(createNotifyPrefs({ file: f.file }).isAway('owner'), true);
 });
+
+// ---- write and read failures ----
+const failingWrite = () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); };
+
+test('a failed write leaves the cache unchanged for setDefault and setAgent, and the error propagates', (t) => {
+  const f = tmp(t);
+  let failing = false;
+  const p = createNotifyPrefs({ file: f.file, write: (file, obj) => { if (failing) failingWrite(); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(obj)); } });
+  p.setDefault('owner', { other: 'away' });
+  p.setAgent('owner', 'helper', { questions: 'off' });
+  const before = JSON.stringify([p.get('owner'), p.get('other-person'), p.mode('owner', 'helper', 'questions'), p.mode('owner', null, 'other')]);
+  const onDisk = fs.readFileSync(f.file, 'utf8');
+  failing = true;
+  assert.throws(() => p.setDefault('owner', { other: 'off', questions: 'off' }), (e) => e.code === 'ENOSPC');
+  assert.throws(() => p.setAgent('owner', 'helper', { questions: 'on', other: 'off' }), (e) => e.code === 'ENOSPC');
+  assert.throws(() => p.setAgent('owner', 'helper', null), (e) => e.code === 'ENOSPC');
+  assert.throws(() => p.setDefault('newcomer', { other: 'off' }), (e) => e.code === 'ENOSPC');
+  assert.equal(JSON.stringify([p.get('owner'), p.get('other-person'), p.mode('owner', 'helper', 'questions'), p.mode('owner', null, 'other')]), before);
+  assert.equal(p.mode('newcomer', null, 'other'), 'on');
+  assert.equal(fs.readFileSync(f.file, 'utf8'), onDisk);
+  failing = false;
+  p.setDefault('owner', { other: 'off' });                                  // and it recovers
+  assert.equal(p.mode('owner', null, 'other'), 'off');
+});
+
+test('a real failing rename (read-only directory) changes nothing', (t) => {
+  if (process.getuid && process.getuid() === 0) return t.skip('root ignores directory permissions');
+  const f = tmp(t);
+  const p = createNotifyPrefs({ file: f.file });
+  p.setDefault('owner', { questions: 'away' });
+  fs.chmodSync(f.dir, 0o500);
+  try {
+    assert.throws(() => p.setAgent('owner', 'helper', { questions: 'off' }));
+    assert.throws(() => p.setDefault('owner', { other: 'off' }));
+  } finally { fs.chmodSync(f.dir, 0o700); }
+  assert.deepEqual(p.get('owner'), { default: { questions: 'away', other: 'on' }, agents: {} });
+  assert.equal(p.mode('owner', 'helper', 'questions'), 'away');
+});
+
+test('a missing file reads as empty and is cached', (t) => {
+  const f = tmp(t);
+  const p = createNotifyPrefs({ file: f.file });
+  assert.equal(p.mode('owner', null, 'other'), 'on');
+  p.setDefault('owner', { other: 'off' });
+  assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).owner.default.other, 'off');
+});
+
+test('a file that is not JSON is kept as <file>.corrupt-<time> (0600), then reads as empty', (t) => {
+  const f = tmp(t);
+  fs.mkdirSync(f.dir, { recursive: true });
+  fs.writeFileSync(f.file, '{ not json');
+  const p = createNotifyPrefs({ file: f.file, now: () => 1234567 });
+  assert.equal(p.mode('owner', null, 'other'), 'on');
+  const copy = `${f.file}.corrupt-1234567`;
+  assert.equal(fs.readFileSync(copy, 'utf8'), '{ not json');
+  assert.equal(fs.statSync(copy).mode & 0o777, 0o600);
+  p.setDefault('owner', { other: 'off' });
+  assert.equal(fs.readFileSync(copy, 'utf8'), '{ not json');                 // the copy stays
+  assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).owner.default.other, 'off');
+});
+
+test('any other read error is not cached: reads say "on", writes throw without writing, and it recovers', (t) => {
+  if (process.getuid && process.getuid() === 0) return t.skip('root can read a file with mode 000');
+  const f = tmp(t);
+  const seed = createNotifyPrefs({ file: f.file });
+  seed.setDefault('sam', { other: 'off' });
+  seed.setAgent('sam', 'helper', { questions: 'away' });
+  const original = fs.readFileSync(f.file, 'utf8');
+  fs.chmodSync(f.file, 0o000);
+  const p = createNotifyPrefs({ file: f.file });
+  try {
+    assert.equal(p.mode('sam', null, 'other'), 'on');
+    assert.deepEqual(p.get('sam'), { default: { questions: 'on', other: 'on' }, agents: {} });
+    const noCode = (e) => e instanceof Error && e.code === undefined;
+    assert.throws(() => p.setDefault('sam', { questions: 'off' }), noCode);
+    assert.throws(() => p.setAgent('sam', 'helper', { other: 'off' }), noCode);
+  } finally { fs.chmodSync(f.file, 0o600); }
+  assert.equal(fs.readdirSync(f.dir).filter(n => n !== 'prefs.json').length, 0);   // no temp or corrupt copy left behind
+  assert.equal(fs.readFileSync(f.file, 'utf8'), original);                    // nothing was written
+  assert.equal(p.mode('sam', null, 'other'), 'off');                          // readable again: the real values, not a cached empty
+  p.setDefault('sam', { questions: 'off' });
+  assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).sam.default.other, 'off');   // the earlier settings survived the change
+});

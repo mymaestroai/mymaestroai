@@ -87,7 +87,7 @@ test('the agent sheet: titled for the agent; Notify me only while a reply runs a
   assert.ok(js.includes("{ kind: 'questions', label: 'Questions'") && js.includes("{ kind: 'other', label: 'Everything else'"));
   const chg = fn('onNotifyAgentSheetChange');
   assert.ok(chg.includes("s.value || null") && chg.includes('saveNotifyPrefs({ agent, prefs: { [s.dataset.nk]: value } })') && chg.includes('toast('), 'null = back to my default; toasts');
-  assert.ok(fn('saveNotifyPrefs').includes("'/api/notify/prefs', { method: 'PUT'"));
+  assert.ok(fn('saveNotifyPrefsNow').includes("'/api/notify/prefs', { method: 'PUT'"));
   assert.ok(html.includes('<dialog id="notify-agent-sheet"'));
 });
 
@@ -106,4 +106,86 @@ test('the ⋮ menu: a Notifications item next to the test item opens the default
   assert.ok(fn('onNotifyPrefsSheetClick').includes('saveNotifyPrefs({ agent: name, prefs: null })'), 'Reset removes the override');
   assert.ok(fn('onNotifyPrefsSheetChange').includes('saveNotifyPrefs({ default: { [s.dataset.nd]: s.value } })'));
   assert.ok(js.includes("'When an agent needs your answer or approval'") && js.includes("'Finished replies you asked about, reports and notices'"), 'hints from the contract');
+});
+
+// ── the request layer: a stale read never overwrites a saved choice; saves run in the order they were made ──
+function requestHarness() {
+  const a = js.indexOf('let notifyPrefs = null;'), b = js.indexOf('function notifyOptionsHtml');
+  assert.ok(a >= 0 && b > a, 'the request block is in mobile.js');
+  const calls = [];
+  const ctx = {
+    api: (url, o) => new Promise((res) => calls.push({ url, method: (o && o.method) || 'GET', body: o && o.body, answer: (prefs) => res({ ok: true, json: async () => ({ ok: true, prefs }) }) })),
+    toast() {}, paintNotifyBtn() {},
+  };
+  vm.createContext(ctx);
+  vm.runInContext(js.slice(a, b) + '\nthis.load = loadNotifyPrefs; this.save = saveNotifyPrefs; this.cache = () => notifyPrefs;', ctx);
+  return { ctx, calls };
+}
+const tick = () => new Promise((r) => setImmediate(r));
+const P = (q) => ({ default: {}, agents: { helper: { questions: q } } });
+
+test('a GET that began before a save and answers after it does not replace the saved choice', async () => {
+  const { ctx, calls } = requestHarness();
+  const get = ctx.load();
+  await tick();
+  const put = ctx.save({ agent: 'helper', prefs: { questions: 'off' } });
+  await tick();
+  assert.strictEqual(calls.length, 2);
+  calls[1].answer(P('off')); assert.strictEqual(await put, true);
+  assert.strictEqual(ctx.cache().agents.helper.questions, 'off');
+  calls[0].answer(P('on')); await get;
+  assert.strictEqual(ctx.cache().agents.helper.questions, 'off', 'the stale read was dropped');
+});
+
+test('a GET that started while a save was running does not replace the saved choice either', async () => {
+  const { ctx, calls } = requestHarness();
+  const put = ctx.save({ agent: 'helper', prefs: { questions: 'off' } });
+  await tick();
+  const get = ctx.load();
+  await tick();
+  calls[0].answer(P('off')); await put;
+  calls[1].answer(P('on')); await get;
+  assert.strictEqual(ctx.cache().agents.helper.questions, 'off');
+});
+
+test('a GET with no save around still fills the cache', async () => {
+  const { ctx, calls } = requestHarness();
+  const get = ctx.load();
+  await tick();
+  calls[0].answer(P('away')); await get;
+  assert.strictEqual(ctx.cache().agents.helper.questions, 'away');
+});
+
+test('two quick saves run one after the other and the last answer is the cache', async () => {
+  const { ctx, calls } = requestHarness();
+  const p1 = ctx.save({ default: { questions: 'off' } });
+  const p2 = ctx.save({ default: { questions: 'away' } });
+  await tick();
+  assert.strictEqual(calls.length, 1, 'the second save waits for the first');
+  calls[0].answer({ default: { questions: 'off' }, agents: {} }); await p1;
+  await tick();
+  assert.strictEqual(calls.length, 2);
+  assert.deepStrictEqual(JSON.parse(calls[1].body), { default: { questions: 'away' } });
+  calls[1].answer({ default: { questions: 'away' }, agents: {} }); await p2;
+  assert.strictEqual(ctx.cache().default.questions, 'away');
+});
+
+test('a select is disabled while its save runs, and enabled again after', () => {
+  for (const name of ['onNotifyAgentSheetChange', 'onNotifyPrefsSheetChange']) {
+    const f = fn(name);
+    assert.ok(/s\.disabled = true;[^]*await saveNotifyPrefs\([^]*finally \{ s\.disabled = false; \}/.test(f), name);
+  }
+});
+
+test('the agent sheet acts only for the chat that is open: a changed chat closes it and does nothing', () => {
+  const click = fn('onNotifyAgentSheetClick'), chg = fn('onNotifyAgentSheetChange');
+  assert.ok(click.includes('if (d._agent !== current) { d.close(); return; }'));
+  assert.ok(click.indexOf('d._agent !== current') < click.indexOf('toggleNotifyDone()'));
+  assert.ok(chg.includes('if (agent !== current) { d.close(); return; }'));
+  assert.ok(chg.indexOf('agent !== current') < chg.indexOf('saveNotifyPrefs('));
+});
+
+test('an open agent sheet repaints when its agent\'s reply ends or its notify state changes', () => {
+  assert.ok(fn('repaintNotifyAgentSheet').includes('d.open && d._agent === agent) paintNotifyAgentSheet()'));
+  for (const name of ['applyTurnNotify', 'onTurnNotify', 'toggleNotifyDone', 'onTurnEnd']) assert.ok(fn(name).includes('repaintNotifyAgentSheet('), name);
 });

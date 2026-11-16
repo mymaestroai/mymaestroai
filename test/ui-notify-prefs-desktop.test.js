@@ -86,3 +86,92 @@ test('header bell: aria attributes, menu title, default option, Escape, focus ba
   // the existing Notify me button near Send is untouched
   assert.match(app, /onclick="toggleNotifyDone\('\$\{chatId\}'\)" id="notify-\$\{chatId\}" class="notify-done-btn"/);
 });
+
+// ── the request layer: a stale read never overwrites a saved choice; saves run in the order they were made ──
+function requestHarness() {
+  const a = app.indexOf('let notifyPrefsCache = null;'), b = app.indexOf('function notifyModeOptions');
+  assert.ok(a >= 0 && b > a, 'the request block is in app.js');
+  const calls = [];
+  const ctx = {
+    fetch: (url, o) => new Promise((res) => calls.push({ url, method: o.method, body: o.body, answer: (prefs) => res({ ok: true, json: async () => ({ ok: true, prefs }) }), fail: () => res({ ok: false, json: async () => ({ ok: false, error: 'nope' }) }) })),
+    notifyBellsPaint() {},
+  };
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(a, b) + '\nthis.req = notifyPrefsRequest; this.load = notifyPrefsLoad; this.cache = () => notifyPrefsCache;', ctx);
+  return { ctx, calls };
+}
+const tick = () => new Promise((r) => setImmediate(r));
+const P = (q) => ({ default: {}, agents: { coach: { questions: q } } });
+
+test('a GET that began before a save and answers after it does not replace the saved choice', async () => {
+  const { ctx, calls } = requestHarness();
+  const get = ctx.load();                               // the bell menu opens and reads
+  await tick();
+  const put = ctx.req('PUT', { agent: 'coach', prefs: { questions: 'off' } });
+  await tick();
+  assert.strictEqual(calls.length, 2);
+  calls[1].answer(P('off')); await put;
+  assert.strictEqual(ctx.cache().agents.coach.questions, 'off');
+  calls[0].answer(P('on')); await get;                 // the earlier read answers late, with the old value
+  assert.strictEqual(ctx.cache().agents.coach.questions, 'off', 'the stale read was dropped');
+});
+
+test('a GET that started while a save was running does not replace the saved choice either', async () => {
+  const { ctx, calls } = requestHarness();
+  const put = ctx.req('PUT', { agent: 'coach', prefs: { questions: 'off' } });
+  await tick();
+  const get = ctx.load();
+  await tick();
+  calls[0].answer(P('off')); await put;
+  calls[1].answer(P('on')); await get;
+  assert.strictEqual(ctx.cache().agents.coach.questions, 'off');
+});
+
+test('a GET with no save around still fills the cache', async () => {
+  const { ctx, calls } = requestHarness();
+  const get = ctx.load();
+  await tick();
+  calls[0].answer(P('away')); await get;
+  assert.strictEqual(ctx.cache().agents.coach.questions, 'away');
+});
+
+test('two quick saves run one after the other and the last answer is the cache', async () => {
+  const { ctx, calls } = requestHarness();
+  const p1 = ctx.req('PUT', { default: { questions: 'off' } });
+  const p2 = ctx.req('PUT', { default: { questions: 'away' } });
+  await tick();
+  assert.strictEqual(calls.length, 1, 'the second save waits for the first');
+  calls[0].answer({ default: { questions: 'off' }, agents: {} }); await p1;
+  await tick();
+  assert.strictEqual(calls.length, 2);
+  assert.deepStrictEqual(JSON.parse(calls[1].body), { default: { questions: 'away' } });
+  calls[1].answer({ default: { questions: 'away' }, agents: {} }); await p2;
+  assert.strictEqual(ctx.cache().default.questions, 'away');
+});
+
+test('a failed save does not stop the next one', async () => {
+  const { ctx, calls } = requestHarness();
+  const p1 = ctx.req('PUT', { default: { questions: 'off' } });
+  const p2 = ctx.req('PUT', { default: { questions: 'away' } });
+  await tick();
+  calls[0].fail();
+  await assert.rejects(p1, /nope/);
+  await tick();
+  assert.strictEqual(calls.length, 2);
+  calls[1].answer({ default: { questions: 'away' }, agents: {} }); await p2;
+  assert.strictEqual(ctx.cache().default.questions, 'away');
+});
+
+test('a select is disabled while its save runs, and enabled again after success or failure', () => {
+  const grab = (name) => { const s = app.indexOf(name); assert.ok(s > 0, name); return app.slice(s, s + 900); };
+  const d = grab('async function notifyDefaultSave');
+  assert.ok(/sel\.disabled = true;[^]*await notifyPrefsRequest\('PUT'[^]*finally \{ sel\.disabled = false; \}/.test(d), 'settings select');
+  const m = grab("menu.addEventListener('change'");
+  assert.ok(/sel\.disabled = true;[^]*await notifyPrefsRequest\('PUT'[^]*finally \{ sel\.disabled = false; \}/.test(m), 'bell menu select');
+});
+
+test('the bell menu does not repaint over a change made after it opened', () => {
+  const s = app.indexOf('async function notifyBellToggle');
+  const body = app.slice(s, s + 4500);
+  assert.match(body, /const writesAtOpen = notifyPrefsWrites;[^]*await notifyPrefsLoad\(\);[^]*notifyPrefsWrites === writesAtOpen/);
+});

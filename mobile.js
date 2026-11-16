@@ -1707,10 +1707,16 @@ function paintNotifyBtn() {
   const icon = bell.querySelector('.bicon');
   if (icon) icon.textContent = notifyBellIcon(notifyPrefs, current);
 }
+// The agent's open sheet shows "Notify me" and its armed state: repaint it when either changes.
+function repaintNotifyAgentSheet(agent) {
+  const d = $('notify-agent-sheet');
+  if (d && d.open && d._agent === agent) paintNotifyAgentSheet();
+}
 function applyTurnNotify(agent, turn) {
   if (!agent || !turn) return;
   notifyArmed[agent] = (turn.active !== false && !turn.ended && Array.isArray(turn.notify) && turn.notify.includes(myNotifyId())) ? turn.turnId : null;
   if (agent === current) paintNotifyBtn();
+  repaintNotifyAgentSheet(agent);
 }
 async function toggleNotifyDone() {
   const agent = current;
@@ -1725,6 +1731,7 @@ async function toggleNotifyDone() {
   if (!r.ok) { toast(d.detail || d.error || 'Could not change the notification'); return; }
   notifyArmed[agent] = d.on ? d.turnId : null;
   paintNotifyBtn();
+  repaintNotifyAgentSheet(agent);
   if (d.on && !d.devices) toast('Notifications are off on this phone: turn them on in the ⋮ menu first', 6000);
   else toast(d.on ? `🔔 You will get a notification when ${displayName(agent)} is done` : 'Notification cancelled');
 }
@@ -1732,6 +1739,7 @@ function onTurnNotify(ev) {
   if (!ev || !ev.agent || String(ev.userId) !== myNotifyId()) return;   // someone else's bell
   notifyArmed[ev.agent] = ev.on ? ev.turnId : null;
   if (ev.agent === current) paintNotifyBtn();
+  repaintNotifyAgentSheet(ev.agent);
 }
 
 // ── notify prefs (begin) ── pure helpers: no page state, no DOM
@@ -1759,17 +1767,27 @@ function notifyBellIcon(prefs, agent) {
 // ── notify prefs (end) ──
 
 let notifyPrefs = null;   // the last GET/PUT /api/notify/prefs answer's prefs: { default, agents }
+let notifyPrefsWrites = 0;      // PUTs started so far: a GET that began before the latest one is stale and is dropped
+let notifyPrefsPending = 0;     // PUTs started and not finished
+let notifyPrefsChain = Promise.resolve();   // PUTs run one after the other, so their answers land in the order the changes were made
 async function loadNotifyPrefs() {
+  const seen = notifyPrefsWrites, busy = notifyPrefsPending > 0;
   try {
     const r = await api('/api/notify/prefs');
     const d = r.ok ? await r.json().catch(() => null) : null;
-    if (d && d.prefs) notifyPrefs = d.prefs;
+    if (d && d.prefs && !busy && seen === notifyPrefsWrites && notifyPrefsPending === 0) notifyPrefs = d.prefs;   // a save started meanwhile: this answer may be older than it
   } catch { /* keep the last */ }
   paintNotifyBtn();
   return notifyPrefs;
 }
-// PUT one change; true when saved (the answer replaces notifyPrefs), else toasts why.
-async function saveNotifyPrefs(body) {
+// PUT one change; true when saved (the answer replaces notifyPrefs), else toasts why. Changes are saved one after the other.
+function saveNotifyPrefs(body) {
+  notifyPrefsWrites++; notifyPrefsPending++;
+  const run = notifyPrefsChain.then(() => saveNotifyPrefsNow(body)).finally(() => { notifyPrefsPending--; });
+  notifyPrefsChain = run.catch(() => {});
+  return run;
+}
+async function saveNotifyPrefsNow(body) {
   let r, d = {};
   try {
     r = await api('/api/notify/prefs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -1819,6 +1837,7 @@ async function onNotifyAgentSheetClick(e) {
   const b = e.target.closest('button[data-nk]');
   if (!b) return;
   if (b.dataset.nk === 'close') { d.close(); return; }
+  if (d._agent !== current) { d.close(); return; }   // the open chat changed while the sheet was open: do not act on another agent
   if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }
 }
 async function onNotifyAgentSheetChange(e) {
@@ -1826,8 +1845,11 @@ async function onNotifyAgentSheetChange(e) {
   const s = e.target.closest('select[data-nk]');
   const agent = d._agent;
   if (!s || !agent) return;
+  if (agent !== current) { d.close(); return; }
   const value = s.value || null;   // '' = back to my default
-  const ok = await saveNotifyPrefs({ agent, prefs: { [s.dataset.nk]: value } });
+  s.disabled = true;   // until the save answers
+  let ok;
+  try { ok = await saveNotifyPrefs({ agent, prefs: { [s.dataset.nk]: value } }); } finally { s.disabled = false; }
   if (ok) {
     const label = NOTIFY_KINDS.find(k => k.kind === s.dataset.nk).label;
     toast(value ? `${label} from ${displayName(agent)}: ${notifyModeLabel(value)}` : `${label} from ${displayName(agent)}: using your default`);
@@ -1873,7 +1895,9 @@ async function onNotifyPrefsSheetChange(e) {
   const d = $('notify-prefs-sheet');
   const s = e.target.closest('select[data-nd]');
   if (!s) return;
-  const ok = await saveNotifyPrefs({ default: { [s.dataset.nd]: s.value } });
+  s.disabled = true;   // until the save answers
+  let ok;
+  try { ok = await saveNotifyPrefs({ default: { [s.dataset.nd]: s.value } }); } finally { s.disabled = false; }
   if (ok) toast(`${NOTIFY_KINDS.find(k => k.kind === s.dataset.nd).label}: ${notifyModeLabel(s.value)}`);
   if (d.open) paintNotifyPrefsSheet();
 }
@@ -12285,6 +12309,7 @@ function onTurnEnd(ev) {
   delete hubTurns[ev.turnId];
   const to = turnOrigins[ev.agent];
   if (to && (!ev.turnId || !to.turnId || to.turnId === ev.turnId)) delete turnOrigins[ev.agent];   // the busy card goes with paintStatus below
+  if (ev.agent) repaintNotifyAgentSheet(ev.agent);   // an open agent sheet drops its "Notify me" item when the reply ends
   const ownTurn = ev.origin?.kind === 'user';
   // Hub-started: by the turn_start this page saw (read before it was cleared above) or by the end event's origin.
   const hubStarted = chatViewIsHubOrigin(ev.origin) || !!(to && to.hub && (!ev.turnId || !to.turnId || to.turnId === ev.turnId));

@@ -4103,13 +4103,33 @@
     // ── notify prefs (end) ──
 
     let notifyPrefsCache = null;
-    async function notifyPrefsRequest(method, body) {
+    let notifyPrefsWrites = 0;      // PUTs started so far: a GET that began before the latest one is stale and is dropped
+    let notifyPrefsPending = 0;     // PUTs started and not finished
+    let notifyPrefsChain = Promise.resolve();   // PUTs run one after the other, so their answers land in the order the changes were made
+    async function notifyPrefsFetch(method, body) {
       const r = await fetch('/api/notify/prefs', { method, credentials: 'include', headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok || !j.prefs) throw new Error(j.error || 'Could not save.');
-      notifyPrefsCache = j.prefs;
-      notifyBellsPaint();
       return j.prefs;
+    }
+    function notifyPrefsRequest(method, body) {
+      if (method !== 'PUT') {
+        const seen = notifyPrefsWrites, busy = notifyPrefsPending > 0;
+        return notifyPrefsFetch(method, body).then((prefs) => {
+          if (busy || seen !== notifyPrefsWrites || notifyPrefsPending > 0) return notifyPrefsCache || prefs;   // a save started meanwhile: this answer may be older than it
+          notifyPrefsCache = prefs;
+          notifyBellsPaint();
+          return prefs;
+        });
+      }
+      notifyPrefsWrites++; notifyPrefsPending++;
+      const run = notifyPrefsChain.then(() => notifyPrefsFetch(method, body)).then((prefs) => {
+        notifyPrefsCache = prefs;   // the last PUT's answer is the cache
+        notifyBellsPaint();
+        return prefs;
+      }).finally(() => { notifyPrefsPending--; });
+      notifyPrefsChain = run.catch(() => {});
+      return run;
     }
     const notifyPrefsLoad = () => notifyPrefsRequest('GET');
     function notifyModeOptions(sel, withDefault, defMode) {
@@ -4146,11 +4166,13 @@
     }
     async function notifyDefaultSave(kind, sel) {
       const before = (notifyPrefsCache && notifyPrefsCache.default && notifyPrefsCache.default[kind]) || 'on';
+      sel.disabled = true;   // one change at a time per select, until the save answers
       try {
         await notifyPrefsRequest('PUT', { default: { [kind]: sel.value } });
         hubToast(`${kind === 'questions' ? 'Questions' : 'Everything else'}: ${notifyModeLabel(sel.value)}.`);
         notifySettingsPaint();
       } catch (e) { sel.value = before; hubToast('Could not save: ' + e.message); }
+      finally { sel.disabled = false; }
     }
     async function notifyAgentReset(agent) {
       try { await notifyPrefsRequest('PUT', { agent, prefs: null }); hubToast('Back to your default.'); notifySettingsPaint(); } catch (e) { hubToast('Could not save: ' + e.message); }
@@ -4199,15 +4221,18 @@
       menu.addEventListener('change', async (e) => {
         const sel = e.target.closest('select[data-nb-kind]'); if (!sel) return;
         const kind = sel.dataset.nbKind;
+        sel.disabled = true;   // until the save answers
         try {
           await notifyPrefsRequest('PUT', { agent, prefs: { [kind]: sel.value === '' ? null : sel.value } });
           hubToast(`${display}: ${kind === 'questions' ? 'Questions' : 'Everything else'} ${sel.value === '' ? 'follows your default' : notifyModeLabel(sel.value)}.`);
         } catch (err) { hubToast('Could not save: ' + err.message); }
+        finally { sel.disabled = false; }
         if (document.getElementById('notify-bell-menu') === menu) { menu.innerHTML = notifyBellMenuHtml(agent, display); const again = menu.querySelector(`select[data-nb-kind="${kind}"]`); if (again) again.focus(); }
       });
+      const writesAtOpen = notifyPrefsWrites;
       try {
         await notifyPrefsLoad();   // refreshed when the menu opens; repainted only while the person has not touched it yet
-        if (document.getElementById('notify-bell-menu') === menu && document.activeElement === first) { menu.innerHTML = notifyBellMenuHtml(agent, display); const f = menu.querySelector('select'); if (f) f.focus(); }
+        if (notifyPrefsWrites === writesAtOpen && document.getElementById('notify-bell-menu') === menu && document.activeElement === first) { menu.innerHTML = notifyBellMenuHtml(agent, display); const f = menu.querySelector('select'); if (f) f.focus(); }
       } catch { /* the cached values stay */ }
     }
 

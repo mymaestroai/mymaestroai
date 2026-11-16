@@ -23,7 +23,7 @@ function rig(t, { prefs = null, clock = { t: 1_000_000 } } = {}) {
     dir: path.join(root, 'push'), now: () => clock.t, questionDelayMs: () => 0, prefs,
     ownerOf: (a) => OWNERS[a] || null, displayName: (a) => NAMES[a] || a,
     webpush: { generateVAPIDKeys: () => ({ publicKey: 'PUBKEY', privateKey: 'PRIVKEY' }) },
-    sender: async (s, body) => { sent.push({ who: Object.keys(EP).find(k => EP[k] === s.endpoint), title: JSON.parse(body).title }); },
+    sender: async (s, body, opts) => { sent.push({ who: Object.keys(EP).find(k => EP[k] === s.endpoint), title: JSON.parse(body).title, urgency: opts.urgency }); },
   });
   push.subscribe(sub(EP.admin, 1), null, { id: 'u_admin', role: 'admin' });
   push.subscribe(sub(EP.sam, 2), null, { id: 'u_sam', role: 'member' });
@@ -31,20 +31,25 @@ function rig(t, { prefs = null, clock = { t: 1_000_000 } } = {}) {
   return { push, sent, clock, root };
 }
 const take = (sent) => sent.splice(0).map(s => `${s.who}|${s.title}`).sort();
+const takeU = (sent) => sent.splice(0).map(s => `${s.who}|${s.title}|${s.urgency}`).sort();
+const idOf = (ep) => require('node:crypto').createHash('sha256').update(ep).digest('hex').slice(0, 16);
 
-// The same fixed script of events; returns what each step sent (device + title).
+// The same fixed script of events; returns what each step sent (device + title + urgency).
+// Kept in step with /tmp/anvil-golden.js, which produced GOLDEN by running this script against the base branch's lib/push.js.
 async function script(push, sent) {
   const log = [];
-  const step = async (name, fn) => { await fn(); await wait(); log.push([name, take(sent)]); };
+  const step = async (name, fn) => { await fn(); await wait(); log.push([name, takeU(sent)]); };
   await step('ask_user + fire (household agent)', () => push.onEvent({ type: 'ask_user', agent: 'helper', request_id: 'r1' }));
   await step('ask_user + fire (member agent)', () => push.onEvent({ type: 'ask_user', agent: 'coach', request_id: 'r2' }));
   await step('ask_user_done', () => { push.onEvent({ type: 'ask_user', agent: 'helper', request_id: 'r3' }); });   // fires at once (delay 0); done after is a no-op
   await step('ask_user_done after', () => push.onEvent({ type: 'ask_user_done', agent: 'helper', request_id: 'r3' }));
   await step('approval_request + fire', () => push.onEvent({ type: 'approval_request', id: 'ap1', agent: 'helper', cls: 'send', summary: 's' }));
   await step('approval_request member agent', () => push.onEvent({ type: 'approval_request', id: 'ap2', agent: 'coach', cls: 'admin', summary: 's' }));
+  await step('approval_request module', () => push.onEvent({ type: 'approval_request', id: 'ap3', agent: 'helper', cls: 'module', detail: { module: 'ledger' }, summary: 's' }));
   await step('approval_resolved', () => push.onEvent({ type: 'approval_resolved', id: 'ap1' }));
   await step('for_owner household', () => push.onEvent({ type: 'for_owner', agent: 'helper', turnId: 't1', reason: 'x' }));
   await step('for_owner member agent', () => push.onEvent({ type: 'for_owner', agent: 'coach', turnId: 't2', reason: 'x' }));
+  await step('for_owner asks', () => push.onEvent({ type: 'for_owner', agent: 'helper', turnId: 't3', reason: 'x', asks: true }));
   await step('turn_end notify by admin', () => push.onEvent({ type: 'turn_end', agent: 'helper', turnId: 'e1', ok: true, notify: [{ id: 'u_admin', role: 'admin' }] }));
   await step('turn_end notify by member', () => push.onEvent({ type: 'turn_end', agent: 'coach', turnId: 'e2', ok: true, notify: [{ id: 'u_sam', role: 'member' }] }));
   await step('turn_end failed', () => push.onEvent({ type: 'turn_end', agent: 'helper', turnId: 'e3', ok: false, notify: [{ id: 'u_admin', role: 'admin' }] }));
@@ -56,31 +61,200 @@ async function script(push, sent) {
   await step('notify adminsOnly', () => push.notify({ title: 'Admin notice' }, { adminsOnly: true }));
   await step('notify everyone', () => push.notify({ title: 'Everyone notice' }));
   await step('notifyEach adminsOnly', () => push.notifyEach({ title: 'Each notice' }, { adminsOnly: true }));
+  await step('notifyEach skip one device', () => push.notifyEach({ title: 'Skip notice' }, { skip: (id) => id === idOf(EP.sam) }));
   await step('notifyUsers', () => push.notifyUsers({ title: 'Users notice' }, ['u_sam']));
+  await step('notifyUsers two people, no kind', () => push.notifyUsers({ title: 'Two notice' }, ['u_sam', 'u_admin']));
   await step('test()', () => push.test());
   return log;
 }
 
-test('PARITY: no settings send exactly what the code sent before settings existed', async (t) => {
+// What the base branch's createPush sent for the script above (step, then device|title|urgency, sorted).
+const GOLDEN = [
+ [
+  "ask_user + fire (household agent)",
+  [
+   "admin|Helper has a question|high",
+   "legacy|Helper has a question|high"
+  ]
+ ],
+ [
+  "ask_user + fire (member agent)",
+  [
+   "sam|Coach has a question|high"
+  ]
+ ],
+ [
+  "ask_user_done",
+  [
+   "admin|Helper has a question|high",
+   "legacy|Helper has a question|high"
+  ]
+ ],
+ [
+  "ask_user_done after",
+  []
+ ],
+ [
+  "approval_request + fire",
+  [
+   "admin|Helper wants to send something|high",
+   "legacy|Helper wants to send something|high"
+  ]
+ ],
+ [
+  "approval_request member agent",
+  [
+   "sam|Coach wants to change hub data|high"
+  ]
+ ],
+ [
+  "approval_request module",
+  [
+   "admin|Helper needs your OK|high",
+   "legacy|Helper needs your OK|high"
+  ]
+ ],
+ [
+  "approval_resolved",
+  []
+ ],
+ [
+  "for_owner household",
+  [
+   "admin|Helper has something for you|high",
+   "legacy|Helper has something for you|high"
+  ]
+ ],
+ [
+  "for_owner member agent",
+  [
+   "sam|Coach has something for you|high"
+  ]
+ ],
+ [
+  "for_owner asks",
+  [
+   "admin|Helper has something for you|high",
+   "legacy|Helper has something for you|high"
+  ]
+ ],
+ [
+  "turn_end notify by admin",
+  [
+   "admin|Helper is done|high",
+   "legacy|Helper is done|high"
+  ]
+ ],
+ [
+  "turn_end notify by member",
+  [
+   "sam|Coach is done|high"
+  ]
+ ],
+ [
+  "turn_end failed",
+  [
+   "admin|Helper stopped with an error|high",
+   "legacy|Helper stopped with an error|high"
+  ]
+ ],
+ [
+  "turn_end stopped",
+  []
+ ],
+ [
+  "turn_end nobody asked",
+  []
+ ],
+ [
+  "agent_request",
+  [
+   "admin|Helper asks for a new agent|normal",
+   "legacy|Helper asks for a new agent|normal",
+   "sam|Helper asks for a new agent|normal"
+  ]
+ ],
+ [
+  "provider_paced",
+  [
+   "admin|My Maestro AI pacing: OpenAI|high",
+   "legacy|My Maestro AI pacing: OpenAI|high",
+   "sam|My Maestro AI pacing: OpenAI|high"
+  ]
+ ],
+ [
+  "hub_halted",
+  [
+   "admin|My Maestro AI halted|high",
+   "legacy|My Maestro AI halted|high",
+   "sam|My Maestro AI halted|high"
+  ]
+ ],
+ [
+  "notify adminsOnly",
+  [
+   "admin|Admin notice|normal",
+   "legacy|Admin notice|normal"
+  ]
+ ],
+ [
+  "notify everyone",
+  [
+   "admin|Everyone notice|normal",
+   "legacy|Everyone notice|normal",
+   "sam|Everyone notice|normal"
+  ]
+ ],
+ [
+  "notifyEach adminsOnly",
+  [
+   "admin|Each notice|normal",
+   "legacy|Each notice|normal"
+  ]
+ ],
+ [
+  "notifyEach skip one device",
+  [
+   "admin|Skip notice|normal",
+   "legacy|Skip notice|normal"
+  ]
+ ],
+ [
+  "notifyUsers",
+  [
+   "sam|Users notice|high"
+  ]
+ ],
+ [
+  "notifyUsers two people, no kind",
+  [
+   "admin|Two notice|high",
+   "sam|Two notice|high"
+  ]
+ ],
+ [
+  "test()",
+  [
+   "admin|My Maestro AI test|normal",
+   "legacy|My Maestro AI test|normal",
+   "sam|My Maestro AI test|normal"
+  ]
+ ]
+];
+
+test('PARITY (golden, from the base branch): no settings send exactly what the code sent before settings existed', async (t) => {
   const a = rig(t);                                                         // (a) no prefs at all
   const b = rig(t, { prefs: createNotifyPrefs({ file: path.join(tmpRoot(t), 'prefs.json') }) });   // (b) a real, empty store
   const la = await script(a.push, a.sent);
   const lb = await script(b.push, b.sent);
-  assert.deepEqual(lb, la);
-  const flat = Object.fromEntries(la);
-  // Sanity: the script really exercised the sends (not two empty lists).
-  assert.deepEqual(flat['ask_user + fire (household agent)'], ['admin|Helper has a question', 'legacy|Helper has a question']);
-  assert.deepEqual(flat['ask_user + fire (member agent)'], ['sam|Coach has a question']);
-  assert.deepEqual(flat['for_owner household'], ['admin|Helper has something for you', 'legacy|Helper has something for you']);
-  assert.deepEqual(flat['turn_end notify by admin'], ['admin|Helper is done', 'legacy|Helper is done']);
-  assert.deepEqual(flat['turn_end notify by member'], ['sam|Coach is done']);
-  assert.deepEqual(flat['turn_end failed'], ['admin|Helper stopped with an error', 'legacy|Helper stopped with an error']);
-  assert.deepEqual(flat['turn_end stopped'], []);
-  assert.deepEqual(flat['notify adminsOnly'], ['admin|Admin notice', 'legacy|Admin notice']);
-  assert.equal(flat['notify everyone'].length, 3);
-  assert.equal(flat['agent_request'].length, 3);
-  assert.equal(flat['test()'].length, 3);
-  assert.deepEqual(flat['notifyUsers'], ['sam|Users notice']);
+  assert.equal(la.length, GOLDEN.length);
+  for (let i = 0; i < GOLDEN.length; i++) {
+    assert.deepEqual(la[i], GOLDEN[i], `no prefs, step "${GOLDEN[i][0]}"`);
+    assert.deepEqual(lb[i], GOLDEN[i], `empty store, step "${GOLDEN[i][0]}"`);
+  }
+  // Sanity: the golden really holds sends (not a list of empty steps).
+  assert.ok(GOLDEN.reduce((n, g) => n + g[1].length, 0) >= 40);
+  assert.deepEqual(Object.fromEntries(GOLDEN)['turn_end stopped'], []);
 });
 
 function gated(t, setup) {
@@ -174,10 +348,24 @@ test('always notices ignore "off"; notifyUsers without a kind goes; test() is ne
   assert.equal(take(r.sent).length, 3);
 });
 
-test('a device registered before accounts always gets everything, whatever anyone set', async (t) => {
-  const r = gated(t, (p) => { for (const u of ['u_admin', 'u_sam', '*']) p.setDefault(u, { questions: 'off', other: 'off' }); });
-  assert.deepEqual(await fire(r, { type: 'ask_user', agent: 'helper', request_id: 'l1' }), ['legacy|Helper has a question']);
-  assert.deepEqual(await fire(r, { type: 'for_owner', agent: 'helper', turnId: 'l2', reason: '' }), ['legacy|Helper has something for you']);
+test('a device without an account follows the settings stored under "*"; with nothing set for "*" it hears everything', async (t) => {
+  const r = gated(t, (p) => { for (const u of ['u_admin', 'u_sam']) p.setDefault(u, { questions: 'off', other: 'off' }); });   // nothing for '*'
+  assert.deepEqual(await fire(r, { type: 'ask_user', agent: 'helper', request_id: 'l0' }), ['legacy|Helper has a question']);
+  assert.deepEqual(await fire(r, { type: 'for_owner', agent: 'helper', turnId: 'l00', reason: '' }), ['legacy|Helper has something for you']);
+  r.prefs.setDefault('*', { questions: 'off', other: 'off' });
+  assert.deepEqual(await fire(r, { type: 'ask_user', agent: 'helper', request_id: 'l1' }), []);
+  assert.deepEqual(await fire(r, { type: 'for_owner', agent: 'helper', turnId: 'l2', reason: '' }), []);
+  assert.deepEqual(await fire(r, { type: 'agent_request', id: 'l3', byAgent: 'helper', kind: 'agent', description: '' }), []);
+  await r.push.notify({ title: 'Plan limit' }, { adminsOnly: true });
+  assert.deepEqual(take(r.sent), []);
+  await r.push.notify({ title: 'Security' }, { adminsOnly: true, always: true });
+  assert.deepEqual(take(r.sent), ['admin|Security', 'legacy|Security']);
+  r.prefs.setDefault('*', { other: 'away' });                                 // Notify me: Off is overridden, away is not
+  r.prefs.touch('*', 'tab', true);
+  const done = (id) => ({ type: 'turn_end', agent: 'helper', turnId: id, ok: true, notify: [{ id: '*', role: 'admin' }] });
+  assert.deepEqual(await fire(r, done('l4')), ['admin|Helper is done', 'sam|Helper is done']);   // admin and sam are Off (overridden by the tap); the no-account device is away and present, so it is held
+  r.prefs.setDefault('*', { other: 'off' });
+  assert.deepEqual(await fire(r, done('l5')), ['admin|Helper is done', 'legacy|Helper is done', 'sam|Helper is done']);
 });
 
 test('a broken store never silences or breaks a send', async (t) => {
