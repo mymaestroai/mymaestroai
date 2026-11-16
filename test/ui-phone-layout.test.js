@@ -18,12 +18,15 @@ const DEVICES = [
   { name: 'iPhone landscape', screenWidth: 844, screenHeight: 390, maxTouchPoints: 5, coarsePointer: true, phone: true },
   { name: 'iPad', screenWidth: 820, screenHeight: 1180, maxTouchPoints: 5, coarsePointer: true, phone: false },
   { name: 'touch laptop', screenWidth: 1920, screenHeight: 1080, maxTouchPoints: 10, coarsePointer: false, phone: false },
+  // 1920x1080 at 200 % display scaling reports a 960x540 screen; its main pointer is the trackpad (pointer: fine).
+  { name: 'touch laptop at 200 % scaling', screenWidth: 960, screenHeight: 540, maxTouchPoints: 10, coarsePointer: false, finePointer: true, phone: false },
+  { name: 'phone with a fine pointer as well as touch (coarse wins)', screenWidth: 390, screenHeight: 844, maxTouchPoints: 5, coarsePointer: true, finePointer: true, phone: true },
   { name: 'desktop (a small window is not an input)', screenWidth: 1920, screenHeight: 1080, maxTouchPoints: 0, coarsePointer: false, phone: false },
 ];
 
 for (const d of DEVICES) {
   test(`device: ${d.name}`, () => {
-    const base = { screenWidth: d.screenWidth, screenHeight: d.screenHeight, maxTouchPoints: d.maxTouchPoints, coarsePointer: d.coarsePointer, param: null, keepDesktop: false, movedAt: null, now: 1e12 };
+    const base = { screenWidth: d.screenWidth, screenHeight: d.screenHeight, maxTouchPoints: d.maxTouchPoints, coarsePointer: d.coarsePointer, finePointer: d.finePointer, param: null, keepDesktop: false, movedAt: null, now: 1e12 };
     assert.strictEqual(L.isPhoneScreen(base), d.phone);
     const inApp = L.phoneLayoutDecision({ ...base, standalone: true });
     assert.deepStrictEqual(inApp, { phone: d.phone, keepDesktop: false, standalone: true, move: d.phone, offer: false });
@@ -121,6 +124,7 @@ function fakeWin(o) {
     navigator: { maxTouchPoints: o.touch === undefined ? 5 : o.touch, standalone: o.navStandalone },
     matchMedia(q) {
       if (q.includes('pointer: coarse')) return { matches: o.coarse === undefined ? true : o.coarse };
+      if (q.includes('pointer: fine')) return { matches: !!o.fine };
       if (q.includes('display-mode: standalone')) return { matches: !!o.standalone };
       return { matches: false };
     },
@@ -254,6 +258,34 @@ test('runner: a location.replace that throws restores the page and does not thro
   assert.strictEqual(win.hubPhoneLayout.offer, true, 'so the bar offers the phone layout');
 });
 
+test('desktopOnlyLink: the computer layout panels the phone page lacks', () => {
+  assert.deepStrictEqual(L.DESKTOP_ONLY_PARAMS, ['memory', 'connectors', 'backups']);
+  for (const s of ['?memory=1', '?connectors=1', '?backups=1', '?a=2&memory=1']) assert.strictEqual(L.desktopOnlyLink(s), true, s);
+  for (const s of ['', '?memory=0', '?update=1', '?security=1', '?wallet=unlock', '?agent=sam', null, undefined]) assert.strictEqual(L.desktopOnlyLink(s), false, String(s));
+});
+
+test('runner: a phone tab opening a computer-layout panel link stays, with the bar', () => {
+  for (const search of ['?memory=1', '?connectors=1', '?backups=1']) {
+    const { win, replaceCalls } = fakeWin({ standalone: false, search });
+    const r = L.startPhoneLayout(win);
+    assert.strictEqual(replaceCalls.length, 0, search);
+    assert.strictEqual(r.moving, false);
+    assert.strictEqual(r.offer, true, 'the bar still offers the phone layout');
+  }
+  // Links the phone page handles still move.
+  const { win, replaceCalls } = fakeWin({ standalone: false, search: '?update=1' });
+  L.startPhoneLayout(win);
+  assert.deepStrictEqual(replaceCalls, ['/mobile?update=1']);
+});
+
+test('runner: a touchscreen laptop at high scaling (fine main pointer) stays on the full site', () => {
+  const { win, replaceCalls } = fakeWin({ screen: { width: 960, height: 540 }, touch: 10, coarse: false, fine: true });
+  const r = L.startPhoneLayout(win);
+  assert.strictEqual(replaceCalls.length, 0);
+  assert.strictEqual(r.phone, false);
+  assert.strictEqual(r.offer, false);
+});
+
 test('runner: a desktop computer does nothing', () => {
   const { win, replaceCalls, stateCalls, timeouts } = fakeWin({ standalone: true, screen: { width: 1920, height: 1080 }, touch: 0, coarse: false });
   const r = L.startPhoneLayout(win);
@@ -313,10 +345,11 @@ test('wiring: mobile page links to the desktop with ?desktop=once and never send
 test('wiring: the desktop banner and the help text', () => {
   const app = read('app.js');
   assert.ok(app.includes('This is the computer layout.'));
-  assert.ok(app.includes("try { localStorage.setItem(closeKey, 'off'); }"), 'the bar closes even when storage is blocked');
-  // A phone on the full site by choice has its own close switch: a bar closed before that choice still shows the way back.
+  assert.ok(app.includes("try { closeStore.setItem(closeKey, 'off'); }"), 'the bar closes even when storage is blocked');
+  // A phone on the full site by choice has its own close switch, kept only for the session: the way back never goes for good.
   assert.ok(app.includes("const closeKey = pl.phone && pl.keepDesktop ? 'hub-mobile-banner-kept' : 'hub-mobile-banner';"));
-  assert.ok(app.includes("if (localStorage.getItem(closeKey) === 'off') return;"));
+  assert.ok(app.includes("closeStore = closeKey === 'hub-mobile-banner-kept' ? sessionStorage : localStorage;"));
+  assert.ok(app.includes("if (closeStore && closeStore.getItem(closeKey) === 'off') return;"));
   assert.ok(app.includes("for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice',"), 'the bar is the first notice in the stack, so it covers none of them');
   const fn = app.slice(app.indexOf('function showMobileBanner()'), app.indexOf('// ── Hub Health Monitor'));
   assert.ok(fn.includes("bar.id = 'hub-phone-layout-notice'") && fn.includes('bar.remove(); layoutBanners();') && /appendChild\(bar\);\n\s*layoutBanners\(\);/.test(fn), 'drawn and dismissed through layoutBanners');
