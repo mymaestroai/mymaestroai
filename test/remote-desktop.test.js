@@ -1091,3 +1091,53 @@ test('leave: another person\'s, an unknown, a malformed and an ended session are
   assert.strictEqual(ended(st, 'ended').length, 1); assert.match(st.logs[0], /\(ended\)$/);
   assert.strictEqual((await leave(rd)).res.code, 404, 'after the end');
 });
+
+// ── a gone or refused desktop page is a page with a way out, not plain text ──
+const NOSNIFF_HTML = (x) => {
+  assert.match(x.res.headers['Content-Type'], /^text\/html; charset=utf-8$/);
+  assert.strictEqual(x.res.headers['Cache-Control'], 'no-store');
+  assert.strictEqual(x.res.headers['X-Content-Type-Options'], 'nosniff');
+  assert.ok(x.res.body.includes('href="/modules#remote-computers"') && x.res.body.includes('>Back to Remote computers<'), 'link to Remote computers');
+  assert.ok(x.res.body.includes('href="/"') && x.res.body.includes('>Back to chat<'), 'link to chat');
+  assert.ok(x.res.body.includes('Open the computer again from Remote computers.'));
+  assert.ok(!/<script/i.test(x.res.body), 'no scripts');
+};
+
+test('desktop page of an unknown or ended session: 404 as an HTML page with both links; /api stays JSON', async () => {
+  const { rd } = rig();
+  await open(rd, 'owner');
+  for (const url of [`/remote-desktop/${SID2}/`, `/remote-desktop/${SID2}`, `/remote-desktop/${SID2}/other`]) {
+    const x = await call(rd, { url, who: 'owner' });
+    assert.strictEqual(x.res.code, 404, url);
+    NOSNIFF_HTML(x);
+    assert.ok(x.res.body.includes('This desktop session has ended'));
+  }
+  const api = await call(rd, { method: 'POST', url: `/api/remote-desktop/${SID2}/end`, who: 'owner' });
+  assert.strictEqual(api.res.code, 404);
+  assert.match(api.res.headers['Content-Type'], /^application\/json/);
+  assert.deepStrictEqual(api.json(), { error: 'That desktop session is not open.' });
+  const leave = await call(rd, { method: 'POST', url: `/api/remote-desktop/${SID2}/leave`, who: 'owner' });
+  assert.match(leave.res.headers['Content-Type'], /^application\/json/);
+  // the scripts route and the relay's 400 are unchanged plain text
+  const sc = await call(rd, { url: `/remote-desktop/${SID2}/scripts/common-0.0.1.js`, who: 'owner' });
+  assert.strictEqual(sc.res.code, 404); assert.strictEqual(sc.res.body, 'Not found'); assert.match(sc.res.headers['Content-Type'], /^text\/plain/);
+  const rl = await call(rd, { url: `/remote-desktop/${SID}/meshrelay.ashx`, who: 'owner' });
+  assert.strictEqual(rl.res.code, 400); assert.match(rl.res.headers['Content-Type'], /^text\/plain/);
+});
+
+test('desktop page: a forbidden request (member) and a refused tailnet user get the HTML page with both links, same status; the module off too', async () => {
+  const { rd, st } = rig();
+  await open(rd, 'owner');
+  const mem = await call(rd, { url: `/remote-desktop/${SID}/`, who: 'ann' });
+  assert.strictEqual(mem.res.code, 403); NOSNIFF_HTML(mem); assert.ok(mem.res.body.includes('<h1>Forbidden</h1>'));
+  const api = await call(rd, { url: '/api/remote-desktop', who: 'ann' });
+  assert.strictEqual(api.res.code, 403); assert.deepStrictEqual(api.json(), { error: 'admin_only' });
+  const anon = await call(rd, { url: `/remote-desktop/${SID}/` });
+  assert.strictEqual(anon.res.code, 302, 'the login redirect is unchanged');
+  st.tailnet = false;
+  const tn = await call(rd, { url: `/remote-desktop/${SID}/`, who: 'owner' });
+  assert.strictEqual(tn.res.code, 403); NOSNIFF_HTML(tn); assert.ok(tn.res.body.includes('Forbidden: this Tailscale user is not allowed on this hub.'));
+  st.tailnet = true; st.enabled = false;
+  const off = await call(rd, { url: `/remote-desktop/${SID}/`, who: 'owner' });
+  assert.strictEqual(off.res.code, 404); NOSNIFF_HTML(off);
+});

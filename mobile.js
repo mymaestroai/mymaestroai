@@ -12588,6 +12588,10 @@ function applyMultiUser() {
   if (hubMe) {
     $('menu-users').hidden = !hubMe.isAdmin;
     if ($('menu-connectors')) $('menu-connectors').hidden = !hubMe.isAdmin;   // admins only; a page cached from before has no such item
+    if ($('menu-remote')) {   // admins only, and only while the Remote computers connector is on (its list route answers 200 only then)
+      $('menu-remote').hidden = true;
+      if (hubMe.isAdmin) fetch('/api/remote-desktop', { credentials: 'include' }).then((r) => { if (r.status === 200 && hubMe.isAdmin) $('menu-remote').hidden = false; }, () => {});
+    }
     if ($('menu-wallet')) $('menu-wallet').hidden = !hubMe.isAdmin;   // admins only
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);

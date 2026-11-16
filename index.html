@@ -2657,6 +2657,7 @@
         <button class="account-item" role="menuitem" onclick="openSecurityDialog()">Security</button>
         <a class="account-item" role="menuitem" id="account-users" href="/users" style="display:none">Users</a>
         <a class="account-item" role="menuitem" id="account-modules" href="/modules" style="display:none">Data connectors</a>
+        <a class="account-item" role="menuitem" id="account-remote" href="/modules#remote-computers" style="display:none">Remote computers</a>
         <a class="account-item" role="menuitem" id="account-local-models" href="/local-models" style="display:none">Local models</a>
         <button class="account-item" role="menuitem" onclick="signOut()">Sign out</button>
       </div>
@@ -2685,6 +2686,8 @@
           <div id="more-menu" class="more-menu" role="menu" aria-label="More options">
             <button id="about-btn" class="more-item" role="menuitem" title="Version, channel, commit and update status of this hub" onclick="closeMoreMenu(); openAboutDialog()">ℹ️ About My Maestro AI</button>
             <button id="reload-app-item" class="more-item" role="menuitem" title="Reload the app" onclick="closeMoreMenu(); reloadApp()">↻ Reload</button>
+            <button id="more-modules-item" class="more-item" role="menuitem" title="Data connectors" onclick="closeMoreMenu(); location.href = '/modules'">🔌 Data connectors</button>
+            <button id="more-remote-item" class="more-item" role="menuitem" title="Open a computer's desktop" style="display:none" onclick="closeMoreMenu(); location.href = '/modules#remote-computers'">🖥 Remote computers</button>
             <button id="recordings-item" class="more-item" role="menuitem" title="Call recordings you may open" style="display:none" onclick="closeMoreMenu(); location.href = '/recordings'">🎙 Recordings</button>
             <button id="comms-btn" class="more-item" role="menuitem" title="Messaging channels (Telegram etc)" onclick="closeMoreMenu(); openCommsPanel()">💬 Messaging</button>
             <button id="wallet-btn" class="more-item" role="menuitem" title="Trading wallets (on-chain)" onclick="closeMoreMenu(); openWalletPanel()">👛 Wallets</button>

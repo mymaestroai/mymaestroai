@@ -20,12 +20,18 @@
   @media (pointer: fine) { #scroller { scrollbar-width: auto; } #scroller::-webkit-scrollbar { display: block; } }
   #Desk { display: block; flex: none; margin: auto; touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; background: #000; }
   #ended { display: none; padding: 30px 16px; text-align: center; font-size: 16px; color: #9CA3AF; }
+  #ended-text { margin-bottom: 16px; }
+  #ended .row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 14px; }
+  #ended button { min-height: 44px; font-size: 14px; padding: 8px 16px; }
+  #ended button.primary { border-color: #3D7BFF; background: #3D7BFF; color: #fff; }
+  #ended-count { margin-bottom: 10px; font-size: 14px; }
+  #back { max-width: 100%; text-align: left; word-break: break-word; }
   #kb { position: fixed; left: 0; bottom: 0; opacity: 0; width: 1px; height: 1px; border: 0; padding: 0; }
 </style>
 </head>
 <body>
 <div id="bar">
-  <b id="name"></b>
+  <button id="back" type="button" aria-label="Back to Remote computers" title="End the session and go back to Remote computers">←&nbsp;<b id="name"></b></button>
   <span id="left"></span>
   <span class="sp"></span>
   <span id="state">Connecting</span>
@@ -37,7 +43,12 @@
   <button id="cad" type="button">Ctrl+Alt+Del</button>
   <button id="end" type="button" class="danger">End</button>
 </div>
-<div id="ended">The session has ended.</div>
+<div id="ended">
+  <div id="ended-text">The session has ended.</div>
+  <div class="row"><button id="ended-remote" type="button" class="primary">Back to Remote computers</button><button id="ended-chat" type="button">Back to chat</button></div>
+  <div id="ended-count"></div>
+  <button id="ended-stay" type="button">Stay here</button>
+</div>
 <div id="scroller"><canvas id="Desk" width="640" height="480"></canvas></div>
 <input id="kb" type="text" autocapitalize="off" autocomplete="off" autocorrect="off" inputmode="text" spellcheck="false">
 <script type="application/json" id="rd-boot">{}</script>
@@ -86,6 +97,19 @@ var rdView = (function () {
     return { zoom: z, scrollLeft: axis(state.scrollLeft, px, qx, view.w, view.fitW, view.oldW, view.oldVW), scrollTop: axis(state.scrollTop, py, qy, view.h, view.fitH, view.oldH, view.oldVH) };
   }
   return { toDesktop: toDesktop, toPage: toPage, fitSize: fitSize, maxZoom: maxZoom, zoomAbout: zoomAbout };
+})();
+var rdNav = (function () {
+  // Pure: how to leave for `url`. 'history' only when the page was opened from the Modules page (same origin, /modules), there is
+  // something to go back to, and the target is Remote computers; every other case replaces this page so Back never returns to a dead desktop.
+  var REMOTE = '/modules#remote-computers';
+  function backPlan(referrer, origin, historyLength, url) {
+    referrer = String(referrer || ''); origin = String(origin || '');
+    if (url !== REMOTE || !origin || !(historyLength > 1)) return 'replace';
+    if (referrer.indexOf(origin + '/modules') !== 0) return 'replace';
+    var rest = referrer.slice(origin.length + '/modules'.length);
+    return rest === '' || rest.charAt(0) === '?' || rest.charAt(0) === '#' ? 'history' : 'replace';
+  }
+  return { REMOTE: REMOTE, backPlan: backPlan };
 })();
 </script>
 <script>
@@ -149,11 +173,56 @@ var rdView = (function () {
     desktop = null; publish(null);
     scroller.style.display = 'none';
     $('ended').style.display = 'block';
-    $('ended').textContent = why || 'The session has ended.';
+    $('ended-text').textContent = why || 'The session has ended.';
     setState('Ended'); $('left').textContent = '';
-    ['reconnect', 'zout', 'zin', 'fit', 'keyboard', 'cad', 'end'].forEach(function (id) { $(id).style.display = 'none'; });
+    ['reconnect', 'zout', 'zin', 'fit', 'keyboard', 'cad', 'end'].forEach(function (id) { $(id).style.display = 'none'; });   // the Back button stays in every state
     document.querySelector('meta[name=viewport]').setAttribute('content', 'width=device-width, initial-scale=1');
+    startReturn();
   }
+
+  // Leaving this page. Back to Remote computers uses the browser history when the page was opened from there (so the Modules page comes back
+  // as it was), otherwise replaces this page: a dead desktop must never be what Back returns to.
+  var REMOTE_URL = '/modules#remote-computers', CHAT_URL = '/';
+  var backTimer = null;
+  function goBack(url) {
+    var plan = rdNav.backPlan(typeof document !== 'undefined' ? document.referrer : '', typeof location !== 'undefined' ? location.origin : '', typeof history !== 'undefined' ? history.length : 0, url);
+    if (plan === 'history') {
+      history.back();
+      backTimer = setTimeout(function () { location.replace(url); }, 800);   // the history step did not happen (cleared on pagehide)
+    } else location.replace(url);
+  }
+  window.addEventListener('pagehide', function () { if (backTimer) { clearTimeout(backTimer); backTimer = null; } });
+
+  // The ended panel: Back buttons, and a 5 s countdown back to Remote computers that Stay cancels.
+  var returnTimer = null, returnLeft = 0, returnStarted = false;
+  function startReturn() {
+    if (returnStarted) return;
+    returnStarted = true; returnLeft = 5;
+    var paint = function () { $('ended-count').textContent = 'Returning to Remote computers in ' + returnLeft + ' s'; };
+    paint();
+    returnTimer = setInterval(function () {
+      if (!returnTimer) return;
+      returnLeft--;
+      if (returnLeft <= 0) { clearInterval(returnTimer); returnTimer = null; goBack(REMOTE_URL); return; }
+      paint();
+    }, 1000);
+  }
+  $('ended-remote').addEventListener('click', function () { goBack(REMOTE_URL); });
+  $('ended-chat').addEventListener('click', function () { location.replace(CHAT_URL); });
+  $('ended-stay').addEventListener('click', function () {
+    if (returnTimer) { clearInterval(returnTimer); returnTimer = null; }
+    $('ended-count').style.display = 'none'; $('ended-stay').style.display = 'none';
+  });
+  // Back while the session is live: end it (3 s at most), then go; a failed or hung End is covered by the leave beacon's grace.
+  $('back').addEventListener('click', function () {
+    if (!sessionLive()) { goBack(REMOTE_URL); return; }
+    var b = $('back'); b.disabled = true;
+    var gone = false, ctl = null, t = null;
+    var go = function () { if (gone) return; gone = true; if (t) clearTimeout(t); leaveSent = true; goBack(REMOTE_URL); };   // ended here: a Forward from the cache reloads, never reconnects
+    try { if (typeof AbortController !== 'undefined') ctl = new AbortController(); } catch (x) { ctl = null; }
+    t = setTimeout(function () { try { if (ctl) ctl.abort(); } catch (x) {} go(); }, 3000);
+    try { fetch(boot.endUrl, ctl ? { method: 'POST', credentials: 'include', signal: ctl.signal } : { method: 'POST', credentials: 'include' }).then(go, go); } catch (x) { go(); }
+  });
 
   function countdown() {
     var s = Math.ceil((Number(boot.until) - Date.now()) / 1000);
@@ -286,11 +355,13 @@ var rdView = (function () {
   // Leaving and coming back. Closing the page (or the tab/app being discarded) says Leave, so the computer is not locked for the rest of
   // the 30 minutes (the hub ends the session 10 s after the last connection closes); the hub also ends a session that has had no connection for a minute. An app switch (visibilitychange) never ends it.
   function sessionLive() { return live && Number(boot.until) > Date.now(); }
+  var leaveSent = false;
   window.addEventListener('pagehide', function (e) {
     if ((e && e.persisted === true) || !sessionLive()) return;   // back/forward cache: the page may return, the hub's grace covers it
     // "Leave", not End: a reload or a second viewer of the same session must not cut it; the hub ends it after a short grace if nobody returns.
     var leaveUrl = boot.leaveUrl || String(boot.endUrl || '').replace(/\/end$/, '/leave');
     leaveUrl += '?viewer=' + viewerId;
+    leaveSent = true;
     var sent = false;
     try { if (typeof navigator !== 'undefined' && navigator.sendBeacon) sent = !!navigator.sendBeacon(leaveUrl); } catch (x) { sent = false; }
     if (!sent) { try { fetch(leaveUrl, { method: 'POST', credentials: 'include', keepalive: true }).then(function () {}, function () {}); } catch (x) {} }
@@ -308,7 +379,13 @@ var rdView = (function () {
     start();
   }
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') lostFocus(); else if (document.visibilityState === 'visible') comeBack(); });
-  window.addEventListener('pageshow', function (e) { if (e && e.persisted === true) comeBack(); });
+  // Restored from the cache after it had said Leave (or after the session ended): load the page again, the hub then serves the live
+  // page (within its grace) or the ended page, never a frozen one.
+  window.addEventListener('pageshow', function (e) {
+    if (!(e && e.persisted === true)) return;
+    if (leaveSent || !sessionLive()) { location.reload(); return; }
+    comeBack();
+  });
   window.addEventListener('blur', lostFocus);
   var gesturing = false, gz = 1;   // Safari's own pinch events; while one runs the pointer pinch must not zoom a second time
   scroller.addEventListener('gesturestart', function (e) { e.preventDefault(); gesturing = true; gz = zoom; cancelTouch(); });

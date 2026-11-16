@@ -469,6 +469,8 @@ const SIGNIN_HIDDEN_LIMIT_MS = 10 * 60 * 1000;
 let signin = null;           // { moduleId, stepId, pollTimer, tick, expiresAt } while a sign-in is waiting
 let hiddenSince = null;      // when the page was last hidden (null while it is visible)
 document.addEventListener('visibilitychange', () => { hiddenSince = document.hidden ? Date.now() : null; });
+// Back from the desktop page restores this page from the cache: the computers' busy/online state is old, load it again.
+window.addEventListener('pageshow', (e) => { if (e && e.persisted === true) loadDesktopBox(); });
 
 function signinIdleHtml(note) {
   return `${note ? `<p class="dim">${esc(note)}</p>` : ''}<div class="actions"><button class="primary" onclick="signinStart(this)">${note ? 'Start again' : `Sign in with ${esc(current.name)}`}</button></div>`;

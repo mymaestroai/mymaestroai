@@ -153,7 +153,7 @@
       if (!me || me.isAdmin) return;
       document.body.classList.add('member-view');
       // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
-      for (const id of ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
+      for (const id of ['more-modules-item', 'more-remote-item', 'comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
                         'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
         const el = document.getElementById(id);
         if (!el) continue;
@@ -187,8 +187,26 @@
       if (modulesItem) modulesItem.style.display = me.isAdmin ? '' : 'none';
       const localItem = document.getElementById('account-local-models');
       if (localItem) localItem.style.display = me.isAdmin ? '' : 'none';
+      checkRemoteComputers();
       const note = document.getElementById('account-2fa-note');
       if (note) note.style.display = (me.isAdmin && !me.user.totpEnabled && me.admin2faRequired !== false) ? '' : 'none';
+    }
+    // Remote computers links (⋯ menu, account menu, Settings): only for an admin, and only while the connector is on (its routes answer 200 only then).
+    let remoteComputersOk = null, remoteComputersChecking = false;
+    function applyRemoteComputersLinks() {
+      const show = !!(window.hubMe && window.hubMe.isAdmin && remoteComputersOk === true);
+      for (const id of ['more-remote-item', 'account-remote', 'st-remote-link']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? '' : 'none';
+      }
+    }
+    function checkRemoteComputers() {
+      const me = window.hubMe;
+      if (!me || !me.isAdmin || remoteComputersOk !== null || remoteComputersChecking) { applyRemoteComputersLinks(); return; }
+      remoteComputersChecking = true;
+      fetch('/api/remote-desktop', { credentials: 'include' })
+        .then((r) => { remoteComputersOk = r.status === 200; }, () => { remoteComputersOk = false; })
+        .then(() => { remoteComputersChecking = false; applyRemoteComputersLinks(); });
     }
     function toggleAccountMenu(force) {
       const menu = document.getElementById('account-menu');
@@ -2554,6 +2572,7 @@
       const wrap = document.createElement('div');
       wrap.id = 'st-groups';
       wrap.innerHTML = `<div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
+        + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">🖥 Remote computers</a></div>` : '')
         + ST_GROUPS.map(g => `<details class="st-group" id="st-group-${g.id}" data-group="${g.id}"${saved[g.id] ? ' open' : ''}><summary><span class="st-group-title">${esc(g.title)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></summary><div class="st-group-body"></div></details>`).join('');
       modal.insertBefore(wrap, sections[0]);
       const body = (id) => wrap.querySelector(`#st-group-${id} .st-group-body`);

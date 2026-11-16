@@ -53,7 +53,7 @@ test('modules.html: the box runs correctly in a vm (states, escaping, navigation
     fetch: async (url, opt) => { calls.push([opt.method, url, opt.body]); const j = url === '/api/remote-desktop' ? { allowed, computers: comps } : { url: '/remote-desktop/s1/' }; return { ok: true, json: async () => j }; },
     URLSearchParams, URL, history: { replaceState() {} }, localStorage: { getItem: () => null, setItem() {} }, setTimeout, clearTimeout, setInterval, clearInterval, console, Date, JSON, Math, String, Number, isNaN, Error,
   };
-  sandbox.window = sandbox;
+  sandbox.window = sandbox; sandbox.__wl = {}; sandbox.addEventListener = (n, f) => { (sandbox.__wl[n] = sandbox.__wl[n] || []).push(f); };
   vm.createContext(sandbox);
   vm.runInContext(src + '\n;this.__t = { setCurrent(m){ current = m; selected = null; }, loadDesktopBox, deskOpen, overviewHtml };', sandbox);
   const t = sandbox.__t;
@@ -127,8 +127,12 @@ function runViewer(boot, opts = {}) {
   const timers = [];
   const win = {};
   let now = opts.now || 1000000;
+  const nav = { replaced: [], reloads: 0, back: 0 };
+  const timeouts = [];
   const sandbox = {
-    document: { getElementById: el, addEventListener(n, f) { (el('doc').listeners[n] = el('doc').listeners[n] || []).push(f); }, querySelector: () => ({ setAttribute() {} }), title: '', activeElement: null, visibilityState: 'visible' },
+    location: { origin: 'https://hub.example.ts.net', replace: (u) => nav.replaced.push(u), reload: () => { nav.reloads++; } },
+    history: { length: opts.historyLength === undefined ? 1 : opts.historyLength, back: () => { nav.back++; } },
+    document: { getElementById: el, addEventListener(n, f) { (el('doc').listeners[n] = el('doc').listeners[n] || []).push(f); }, querySelector: () => ({ setAttribute() {} }), title: '', referrer: opts.referrer || '', activeElement: null, visibilityState: 'visible' },
     window: { addEventListener(n, f) { (win[n] = win[n] || []).push(f); }, ...(opts.crypto ? { crypto: opts.crypto } : {}) },
     ...(opts.crypto ? { Uint8Array } : {}),
     ...(opts.navigator === undefined ? {} : { navigator: opts.navigator }),
@@ -137,16 +141,18 @@ function runViewer(boot, opts = {}) {
       const d = { m: { SendCtrlAltDelMsg() { log.cad++; }, handleKeyDown(e) { log.keys.push(e.keyCode); }, handleKeyUp() {}, handleKeys() {} }, Start(id) { log.starts.push(id); log.urlnames.push(d.urlname); }, Stop() { log.stops++; } };
       log.desktop = d; return d;
     },
-    fetch: (u, o) => { log.fetches.push([u, o]); return Promise.resolve({ ok: true }); },
-    setInterval: (f) => { timers.push(f); return timers.length; }, clearInterval() {}, setTimeout: () => 0, clearTimeout() {},
+    fetch: (u, o) => { log.fetches.push([u, o]); return opts.fetch ? opts.fetch(u, o) : Promise.resolve({ ok: true }); },
+    setInterval: (f) => { timers.push(f); return timers.length; }, clearInterval(h) { if (timers[h - 1]) timers[h - 1] = () => {}; },
+    setTimeout: (f, ms) => { timeouts.push({ f, ms, live: true }); return timeouts.length; }, clearTimeout(h) { if (timeouts[h - 1]) timeouts[h - 1].live = false; },
     Date: { now: () => now }, JSON, Math, Number, isNaN, console,
+    ...(opts.abort ? { AbortController: opts.abort } : {}),
   };
   vm.createContext(sandbox);
   vm.runInContext(math, sandbox);
   vm.runInContext(src, sandbox);
   const fireWin = (n, e) => (win[n] || []).forEach(f => f({ ...e }));
   const vis = (v) => { sandbox.document.visibilityState = v; (els.doc.listeners.visibilitychange || []).forEach(f => f({})); };
-  return { els, log, el, tick: () => timers.forEach(f => f()), setNow: (n) => { now = n; }, sandbox, fireWin, vis };
+  return { els, log, el, tick: () => timers.forEach(f => f()), setNow: (n) => { now = n; }, sandbox, fireWin, vis, nav, timeouts, win };
 }
 
 test('remote-desktop.html runs: starts, countdown, Ctrl+Alt+Del, End posts to endUrl then stops', async () => {
@@ -163,7 +169,7 @@ test('remote-desktop.html runs: starts, countdown, Ctrl+Alt+Del, End posts to en
   assert.equal(r.log.fetches[0][0], '/api/remote-desktop/s/end');
   assert.equal(r.log.fetches[0][1].method, 'POST');
   assert.equal(r.log.fetches[0][1].credentials, 'include');
-  assert.equal(r.els.ended.textContent, 'The session has ended.');
+  assert.equal(r.els['ended-text'].textContent, 'The session has ended.');
   assert.equal(r.els.ended.style.display, 'block');
   assert.ok(r.log.stops >= 1);
 });
@@ -178,7 +184,7 @@ test('remote-desktop.html runs: stops at until, state line, Reconnect only while
   r.els.reconnect.listeners.click[0]();
   assert.equal(r.log.starts.length, 2);
   r.setNow(1005000); r.tick();
-  assert.equal(r.els.ended.textContent, 'The session has ended.');
+  assert.equal(r.els['ended-text'].textContent, 'The session has ended.');
   assert.ok(r.log.stops >= 1);
   const n = r.log.starts.length;
   r.log.desktop.onStateChanged(r.log.desktop, 0);
@@ -202,7 +208,7 @@ test('modules.html: a stale list response changes nothing, and the click posts t
     },
     URLSearchParams, URL, history: { replaceState() {} }, localStorage: { getItem: () => null, setItem() {} }, setTimeout, clearTimeout, setInterval, clearInterval, console, Date, JSON, Math, String, Number, isNaN, Error,
   };
-  sandbox.window = sandbox;
+  sandbox.window = sandbox; sandbox.addEventListener = () => {};
   vm.createContext(sandbox);
   vm.runInContext(src + '\n;this.__t = { setCurrent(m){ current = m; selected = null; }, setSelected(v){ selected = v; }, loadDesktopBox, deskOpen };', sandbox);
   const t = sandbox.__t;
@@ -250,7 +256,7 @@ test('remote-desktop.html with the REAL MeshCentral viewer scripts: a key press 
   const el = (id) => els[id] || (els[id] = mk(id));
   el('rd-boot').textContent = JSON.stringify({ nodeid: 'n', name: 'pc', until: Date.now() + 600000, endUrl: '/e' });
   const sandbox = { console, Date, JSON, Math, Number, isNaN, String, Uint8Array, Array, Object, Error, parseInt, setInterval, clearInterval, setTimeout, clearTimeout,
-    navigator: { platform: 'Linux' }, location: { protocol: 'https:', host: 'h', pathname: '/remote-desktop/s/' }, WebSocket: Object.assign(function () { this.readyState = 0; this.close = () => {}; this.send = () => {}; }, { OPEN: 1 }), fetch: () => Promise.resolve({ ok: true }) };
+    navigator: { platform: 'Linux' }, location: { protocol: 'https:', host: 'h', pathname: '/remote-desktop/s/', replace() {}, reload() {} }, history: { length: 1, back() {} }, WebSocket: Object.assign(function () { this.readyState = 0; this.close = () => {}; this.send = () => {}; }, { OPEN: 1 }), fetch: () => Promise.resolve({ ok: true }) };
   sandbox.window = sandbox; sandbox.addEventListener = () => {};
   sandbox.document = { getElementById: el, addEventListener(n, f) { (el('doc').listeners[n] = el('doc').listeners[n] || []).push(f); }, querySelector: () => ({ setAttribute() {} }), title: '', activeElement: null };
   vm.createContext(sandbox);
@@ -397,4 +403,179 @@ test('remote-desktop.html: back on the page with the viewer disconnected starts 
   t.log.desktop.State = 0; t.setNow(1005000);
   t.vis('visible');
   assert.equal(t.log.starts.length, 1, 'after the end time nothing restarts');
+});
+
+// ── Back control, the ended panel, bfcache ──
+const LIVE = { session: 's', nodeid: 'n', name: 'Office PC', until: 1000000 + 600000, endUrl: '/api/remote-desktop/s/end', leaveUrl: '/api/remote-desktop/s/leave' };
+const REMOTE = '/modules#remote-computers';
+
+test('remote-desktop.html: #back is the first item of #bar, holds #name, has its labels, and stop() never hides it', () => {
+  assert.match(viewer, /<div id="bar">\s*<button id="back" type="button" aria-label="Back to Remote computers" title="End the session and go back to Remote computers">←[^<]*<b id="name"><\/b><\/button>/);
+  const hide = viewer.match(/\['reconnect'[^\]]*\]\.forEach\(function \(id\) \{ \$\(id\)\.style\.display = 'none'; \}\)/)[0];
+  assert.ok(!hide.includes("'back'"), 'the Back button is not in the hidden list');
+  const r = runViewer(LIVE);
+  assert.equal(r.els.name.textContent, 'Office PC');
+  r.els.end.listeners.click[0]();
+  return settle().then(() => { assert.notEqual(r.els.back.style.display, 'none'); assert.equal(r.els.ended.style.display, 'block'); });
+});
+
+test('remote-desktop.html: the ended panel has the reason, two Back buttons and the countdown with Stay; 44 px buttons; accent on the primary', () => {
+  for (const s of ['id="ended-text"', 'id="ended-remote"', '>Back to Remote computers<', 'id="ended-chat"', '>Back to chat<', 'id="ended-count"', 'id="ended-stay"', '>Stay here<']) assert.ok(viewer.includes(s), s);
+  assert.match(viewer, /#ended button \{ min-height: 44px/);
+  assert.match(viewer, /#ended button\.primary \{ border-color: #3D7BFF; background: #3D7BFF/);
+  assert.match(viewer, /var REMOTE_URL = '\/modules#remote-computers', CHAT_URL = '\/';/);
+});
+
+test('rdNav.backPlan: same-origin /modules referrer with history -> history; anything else -> replace', () => {
+  const sb = { }; vm.createContext(sb);
+  vm.runInContext(viewer.match(/<script>\n(var rdView[\s\S]*?)<\/script>/)[1], sb);
+  const O = 'https://hub.example.ts.net';
+  const plan = (ref, o, len, url) => vm.runInContext(`rdNav.backPlan(${JSON.stringify(ref)}, ${JSON.stringify(o)}, ${len}, ${JSON.stringify(url)})`, sb);
+  assert.equal(plan(O + '/modules', O, 3, REMOTE), 'history');
+  assert.equal(plan(O + '/modules#remote-computers', O, 2, REMOTE), 'history');
+  assert.equal(plan(O + '/modules?x=1', O, 2, REMOTE), 'history');
+  assert.equal(plan('https://other.example.net/modules', O, 3, REMOTE), 'replace', 'another origin');
+  assert.equal(plan(O + '/', O, 3, REMOTE), 'replace', 'the chat page');
+  assert.equal(plan(O + '/modules-x', O, 3, REMOTE), 'replace', 'a longer path');
+  assert.equal(plan('', O, 3, REMOTE), 'replace', 'no referrer');
+  assert.equal(plan(O + '/modules', O, 1, REMOTE), 'replace', 'nothing to go back to');
+  assert.equal(plan(O + '/modules', O, 3, '/'), 'replace', 'only Remote computers uses history');
+});
+
+test('remote-desktop.html: Back while live POSTs endUrl (credentials include), disables itself, then replaces with Remote computers', async () => {
+  const r = runViewer(LIVE);
+  r.els.back.listeners.click[0]();
+  assert.equal(r.els.back.disabled, true);
+  assert.equal(r.log.fetches[0][0], '/api/remote-desktop/s/end');
+  assert.equal(r.log.fetches[0][1].method, 'POST');
+  assert.equal(r.log.fetches[0][1].credentials, 'include');
+  assert.deepEqual(r.nav.replaced, [], 'not before the answer');
+  await settle();
+  assert.deepEqual(r.nav.replaced, [REMOTE]);
+  assert.equal(r.nav.back, 0);
+});
+
+test('remote-desktop.html: Back still goes when the POST fails, and when it hangs past 3 s (aborted)', async () => {
+  const r = runViewer(LIVE, { fetch: () => Promise.reject(new Error('offline')) });
+  r.els.back.listeners.click[0](); await settle();
+  assert.deepEqual(r.nav.replaced, [REMOTE], 'a failed POST');
+  let aborted = 0;
+  function AC() { this.signal = { s: 1 }; this.abort = () => { aborted++; }; }
+  const h = runViewer(LIVE, { fetch: () => new Promise(() => {}), abort: AC });
+  h.els.back.listeners.click[0]();
+  assert.ok(h.log.fetches[0][1].signal, 'the request carries an abort signal');
+  await settle();
+  assert.deepEqual(h.nav.replaced, [], 'still waiting');
+  const t = h.timeouts.find(x => x.ms === 3000);
+  assert.ok(t, 'a 3 second timeout');
+  t.f();
+  assert.equal(aborted, 1);
+  assert.deepEqual(h.nav.replaced, [REMOTE], 'after 3 s it goes');
+  const n = runViewer(LIVE, { fetch: () => new Promise(() => {}) });   // no AbortController at all
+  n.els.back.listeners.click[0]();
+  n.timeouts.find(x => x.ms === 3000).f();
+  assert.deepEqual(n.nav.replaced, [REMOTE]);
+});
+
+test('remote-desktop.html: Back when not live goes at once, with no POST; from the Modules page it uses history with an 800 ms fallback', async () => {
+  const r = runViewer(LIVE);
+  r.els.end.listeners.click[0](); await settle();
+  const posts = r.log.fetches.length;
+  r.els.back.listeners.click[0]();
+  assert.equal(r.log.fetches.length, posts, 'no second POST');
+  assert.deepEqual(r.nav.replaced, [REMOTE]);
+  const h = runViewer(LIVE, { referrer: 'https://hub.example.ts.net/modules', historyLength: 3 });
+  h.els.back.listeners.click[0](); await settle();
+  assert.equal(h.nav.back, 1);
+  assert.deepEqual(h.nav.replaced, [], 'history first');
+  const t = h.timeouts.find(x => x.ms === 800);
+  assert.ok(t && t.live);
+  h.fireWin('pagehide', { persisted: false });
+  assert.equal(t.live, false, 'the fallback is cleared on pagehide');
+});
+
+test('remote-desktop.html: after stop() the panel counts down from 5 once, Stay cancels, 0 goes to Remote computers; the two buttons navigate', async () => {
+  const r = runViewer(LIVE);
+  r.els.end.listeners.click[0](); await settle();
+  assert.equal(r.els['ended-count'].textContent, 'Returning to Remote computers in 5 s');
+  r.tick(); r.tick();
+  assert.equal(r.els['ended-count'].textContent, 'Returning to Remote computers in 3 s');
+  r.setNow(1000000 + 700000); r.tick();   // the time also runs out: stop() runs again, the countdown is not started twice
+  assert.equal(r.els['ended-count'].textContent, 'Returning to Remote computers in 2 s');
+  r.tick();
+  assert.equal(r.els['ended-count'].textContent, 'Returning to Remote computers in 1 s');
+  assert.deepEqual(r.nav.replaced, []);
+  r.tick();
+  assert.deepEqual(r.nav.replaced, [REMOTE], 'at 0 it goes once');
+  r.tick();
+  assert.equal(r.nav.replaced.length, 1);
+  // Stay
+  const s = runViewer(LIVE);
+  s.els.end.listeners.click[0](); await settle();
+  s.tick();
+  s.els['ended-stay'].listeners.click[0]();
+  assert.equal(s.els['ended-count'].style.display, 'none');
+  assert.equal(s.els['ended-stay'].style.display, 'none');
+  for (let i = 0; i < 10; i++) s.tick();
+  assert.deepEqual(s.nav.replaced, [], 'Stay stops the countdown');
+  assert.notEqual(s.els['ended-remote'].style.display, 'none');
+  assert.notEqual(s.els['ended-chat'].style.display, 'none');
+  s.els['ended-remote'].listeners.click[0]();
+  assert.deepEqual(s.nav.replaced, [REMOTE]);
+  s.els['ended-chat'].listeners.click[0]();
+  assert.deepEqual(s.nav.replaced, [REMOTE, '/']);
+  // time runs out: the same panel
+  const t = runViewer({ ...LIVE, until: 1005000 });
+  t.setNow(1005000); t.tick();
+  assert.equal(t.els['ended-count'].textContent, 'Returning to Remote computers in 5 s');
+});
+
+test('remote-desktop.html: pageshow with persisted reloads after the leave beacon or when the session is no longer live; not otherwise', async () => {
+  const { navigator } = beaconRig();
+  const r = runViewer(LIVE, { navigator });
+  r.fireWin('pageshow', { persisted: true });
+  assert.equal(r.nav.reloads, 0, 'no leave sent, still live');
+  r.fireWin('pagehide', { persisted: true });
+  r.fireWin('pageshow', { persisted: true });
+  assert.equal(r.nav.reloads, 0, 'a persisted pagehide sends nothing');
+  r.fireWin('pagehide', { persisted: false });
+  r.fireWin('pageshow', { persisted: false });
+  assert.equal(r.nav.reloads, 0, 'not from the cache');
+  r.fireWin('pageshow', { persisted: true });
+  assert.equal(r.nav.reloads, 1, 'leave was sent');
+  const e = runViewer(LIVE);
+  e.els.end.listeners.click[0](); await settle();
+  e.fireWin('pageshow', { persisted: true });
+  assert.equal(e.nav.reloads, 1, 'the session is gone');
+  // Left with Back while live (the page ended the session itself), then kept in the cache by a persisted pagehide:
+  // Forward must load the page again, never reconnect to the ended session.
+  const b = runViewer(LIVE);
+  b.els.back.listeners.click[0](); await settle();
+  b.fireWin('pagehide', { persisted: true });
+  const starts = b.log.starts.length;
+  b.fireWin('pageshow', { persisted: true });
+  assert.equal(b.nav.reloads, 1, 'left by Back: reload');
+  assert.equal(b.log.starts.length, starts, 'no reconnect');
+});
+
+test('modules.html: a pageshow listener with persisted calls loadDesktopBox', async () => {
+  assert.match(modules, /window\.addEventListener\('pageshow', \(e\) => \{ if \(e && e\.persisted === true\) loadDesktopBox\(\); \}\);/);
+  const src = modules.match(/<script>([\s\S]*)<\/script>/)[1];
+  const els = {}; const calls = [];
+  const el = (id) => els[id] || (els[id] = { id, innerHTML: '', textContent: '', className: '', classList: { add() {}, contains: () => true }, disabled: false });
+  const sandbox = { document: { getElementById: el, addEventListener() {}, hidden: false }, location: { origin: 'https://hub.example.ts.net', search: '', hash: '', pathname: '/modules', assign() {} },
+    fetch: async (url, opt) => { calls.push(url); return { ok: true, json: async () => ({ allowed: true, computers: [] }) }; },
+    URLSearchParams, URL, history: { replaceState() {} }, localStorage: { getItem: () => null, setItem() {} }, setTimeout, clearTimeout, setInterval, clearInterval, console, Date, JSON, Math, String, Number, isNaN, Error };
+  sandbox.window = sandbox; sandbox.__wl = {}; sandbox.addEventListener = (n, f) => { (sandbox.__wl[n] = sandbox.__wl[n] || []).push(f); };
+  vm.createContext(sandbox);
+  vm.runInContext(src + '\n;this.__t = { setCurrent(m){ current = m; selected = null; } };', sandbox);
+  sandbox.__t.setCurrent({ id: 'remote-computers', enabled: true, settings: {}, finishedAt: 1, steps: [], agents: [], leads: [], manifest: {}, summary: 's', state: 'ready' });
+  const before = calls.filter(c => c === '/api/remote-desktop').length;
+  assert.ok((sandbox.__wl.pageshow || []).length >= 1, 'listener registered');
+  sandbox.__wl.pageshow.forEach(f => f({ persisted: false }));
+  await settle();
+  assert.equal(calls.filter(c => c === '/api/remote-desktop').length, before, 'a plain load does nothing');
+  sandbox.__wl.pageshow.forEach(f => f({ persisted: true }));
+  await settle();
+  assert.equal(calls.filter(c => c === '/api/remote-desktop').length, before + 1, 'persisted reloads the computers');
 });
