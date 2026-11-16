@@ -818,10 +818,12 @@ async function handleHttpRequest(req, res) {
       const body = req.method === 'GET' ? {} : await authJson();   // a beacon's Blob body arrives as plain text: JSON either way
       const accounts = hubAuth.hasUsers();
       const who = req.hubUser || null;
-      const all = (who && req.method === 'PUT') ? await getAgents() : [];
+      // A hub without accounts (also its single-password sign-in, whose session user is 'legacy') has one person, '*':
+      // lib/push maps devices without an account to '*', so the settings must be kept there too.
+      const all = (req.method === 'PUT' && (who || !accounts)) ? await getAgents() : [];
       const out = require('./lib/notify-prefs-routes').handle({
         method: req.method, pathname, body, service: req.hubService, token: req.hubToken,
-        userId: who ? String(who.id) : (accounts ? null : '*'),
+        userId: !accounts ? '*' : (who ? String(who.id) : null),
         prefs: require('./lib/notify-prefs').getNotifyPrefs(),
         agentExists: (n) => all.some(a => a.name === n),
         agentVisible: (n) => !who || access.isAdmin(who) || access.canAccessAgent(who, n, { agents: all, resolveVirtual: (v) => temporalWorkersLib.getVirtual(v) }),

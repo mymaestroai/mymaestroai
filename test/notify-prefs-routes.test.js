@@ -113,7 +113,10 @@ test('wiring: both routes are session routes (any signed-in person) and server.j
   const at = src.indexOf("pathname === '/api/notify/prefs'");
   assert.ok(at > 0, 'server.js handles the routes');
   const block = src.slice(at, at + 1400);
-  assert.match(block, /userId: who \? String\(who\.id\) : \(accounts \? null : '\*'\)/);
+  // With accounts: the session user; without (also the single-password sign-in): '*', where lib/push puts devices
+  // without an account; and the agent list is read for a PUT in both cases (a per-agent setting needs it).
+  assert.match(block, /userId: !accounts \? '\*' : \(who \? String\(who\.id\) : null\)/);
+  assert.match(block, /const all = \(req\.method === 'PUT' && \(who \|\| !accounts\)\) \? await getAgents\(\) : \[\];/);
   assert.match(block, /service: req\.hubService, token: req\.hubToken/);
   assert.ok(!/body\.(userId|user)\b/.test(block), 'never a user id from the request');
 });
