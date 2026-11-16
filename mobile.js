@@ -8460,7 +8460,7 @@ function voicePlayBlob(blob, my, meta) {
       const after = () => {
         if (over) return;
         over = true; if (voicePlay.cancelWait === cancelWait) voicePlay.cancelWait = null;
-        if (voiceCall !== vc0) { resolve(false); return; }   // the call that was waiting for its route is over (or another began): nothing plays
+        if (voiceCall !== vc0) { if (my === voicePlay.token) voicePlay.token++; resolve(false); return; }   // the call that was waiting for its route is over (or another began): nothing plays, and the token moves on so no fallback voice reads the line either
         go();
       };
       rw.then(after, after);

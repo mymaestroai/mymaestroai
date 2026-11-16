@@ -14650,7 +14650,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!sentences || !sentences.length) return;
       // During a call on Android the first sentences wait (at most 2500 ms from the first sentence that waited) for the call's first route; a stop meanwhile means nothing plays.
       const routeWait = typeof voiceRouteWait === 'function' ? voiceRouteWait() : null;
-      if (routeWait) { await routeWait; if (voicePlay.token !== my) return; }
+      if (routeWait) {
+        const call0 = voiceCallS.call;   // the call that was current when the wait began
+        await routeWait;
+        if (voicePlay.token !== my || voiceCallS.call !== call0) return;   // stopped, or that call ended (or another began) meanwhile: nothing plays
+      }
       voicePlay.btn = btn || null; voicePlayState(btn, true);
       voicePlay.pre = opts.pre ? { token: my, p: opts.pre } : null;
       voicePlay.busy++;

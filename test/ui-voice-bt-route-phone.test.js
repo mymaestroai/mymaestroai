@@ -518,10 +518,11 @@ test('r3 FU3: after the wait, a call that is no longer the one that was current 
     release(); await flush();
     const r = await Promise.race([p, new Promise((x) => setTimeout(() => x('pending'), 20))]);
     if (voicePlay.cancel) voicePlay.cancel();
-    return { r, plays: log.play };
+    return { r, plays: log.play, token: voicePlay.token };
   };
   const ended = await run((h) => h.set(null));
   assert.strictEqual(ended.r, false); assert.strictEqual(ended.plays, 0, 'the call ended during the wait');
+  assert.strictEqual(ended.token, 2, 'the token moved on: no fallback voice reads the line after the call');
   const other = await run((h) => h.set({ id: 'B' }));
   assert.strictEqual(other.r, false); assert.strictEqual(other.plays, 0, 'another call began during the wait');
   const same = await run(() => {});

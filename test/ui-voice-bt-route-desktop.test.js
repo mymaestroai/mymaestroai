@@ -409,10 +409,19 @@ test('r2 B: voiceSpeakText waits for the first route during a call before it pla
   const make = (o) => {
     const log = { hub: 0, waits: 0 };
     const voicePlay = { token: 1, btn: null, busy: 0, pre: null };
+    const S = { linkLost: false, call: o.call || null };
     const fn = new Function('voicePlay', 'voiceStopPlayback', 'voiceSpeechText', 'voiceSentences', 'voicePlayState', 'voiceReady', 'voicePlayHub', 'voiceDeviceFallback', 'hubToast', 'voiceCallS', 'voiceRouteWait', 'voicePlayDevice',
-      src + '\nreturn voiceSpeakText;')(voicePlay, () => {}, (s) => s, (s) => [s], () => {}, () => true, async () => { log.hub++; }, () => false, () => {}, { linkLost: false }, () => { log.waits++; return o.wait ? o.wait() : null; }, async () => {});
-    return { fn, log, voicePlay };
+      src + '\nreturn voiceSpeakText;')(voicePlay, () => {}, (s) => s, (s) => [s], () => {}, () => true, async () => { log.hub++; }, () => false, () => {}, S, () => { log.waits++; return o.wait ? o.wait() : null; }, async () => {});
+    return { fn, log, voicePlay, S };
   };
+  // r4: the call that was waiting ended (or another began) during the wait: nothing plays.
+  for (const next of [null, { id: 'B' }]) {
+    let relC; const gC = new Promise((r) => { relC = r; });
+    const c = make({ wait: () => gC, call: { id: 'A' } });
+    const pc = c.fn('a', 'Hello.', null, {}); await wait(5);
+    c.S.call = next;
+    relC(); await pc; assert.strictEqual(c.log.hub, 0, next ? 'another call began during the wait' : 'the call ended during the wait');
+  }
   let release; const gate = new Promise((r) => { release = r; });
   const t = make({ wait: () => gate });
   const p = t.fn('a', 'Hello.', null, {}); await wait(5);
