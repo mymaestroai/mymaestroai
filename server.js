@@ -2041,7 +2041,7 @@ async function handleHttpRequest(req, res) {
             const body = su.input;
             const listed = body && typeof body.computer === 'string' ? await computersOf(10000) : null;
             const known = listed ? listed.find((x) => x.id === body.computer) : null;
-            // A computer the module doesn't list is refused only when the change asks less (setApprovalPolicy decides); when the list can't be read or is empty, the change goes through by id only.
+            // Asking less needs a computer the module lists right now (computerKnown true); an unlisted one (false) or an unreadable or empty list (null) is refused then. Asking more works for any id (setApprovalPolicy decides).
             const computerKnown = listed && listed.length ? !!known : null;
             return jsonResponse(res, 200, mods.setApprovalPolicy(m[1], body, { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined, steppedUp: su.steppedUp }, { computerName: known ? known.name : '', computerKnown }));
           }

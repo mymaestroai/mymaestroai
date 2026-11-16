@@ -756,3 +756,17 @@ test('forgetPermissions (setAgents, forgetAgentPermissions): a log line says whi
   r.mods.forgetAgentPermissions(['scout']);
   assert.strictEqual(r.logs.filter(l => l.includes('approval policy:')).length, before, 'nothing went: no line');
 });
+
+test('setApprovalPolicy: an older entry for an agent below Act never blocks a change that asks more; it is dropped, and newly trusting such an agent is still refused', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish(['sam', 'helper'], null);   // both at Look
+  const file = JSON.parse(fs.readFileSync(r.stateFile, 'utf8'));
+  file.modules.poldemo.settings = { ...(file.modules.poldemo.settings || {}), approval_policy: [`${PC}:day`, `${PC}:trust:sam`] };
+  fs.writeFileSync(r.stateFile, JSON.stringify(file));
+  // back to every session, the page or a client echoing the stale sam: saved (asks more), and sam's entry goes
+  const out = r.set({ computer: PC, mode: 'session', trusted: ['sam'] }, ADMIN, { computerKnown: null });
+  assert.strictEqual(out.changed, true);
+  assert.deepStrictEqual(r.policy(), []);
+  // newly trusting an agent at Look is still refused
+  assert.throws(() => r.set({ computer: PC, mode: 'session', trusted: ['helper'], acknowledged: true }), (e) => e.status === 400 && /helper is at look/.test(e.message));
+});
