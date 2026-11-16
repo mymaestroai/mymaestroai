@@ -82,7 +82,7 @@ test('the agent sheet: titled for the agent; Notify me only while a reply runs a
   assert.ok(/\$\{replying \? `[^`]*data-nk="done"[^`]*Notify me when this reply is done[^`]*` : ''\}/.test(paint), 'Notify me item only while replying');
   assert.ok(paint.indexOf('${replying ?') < paint.indexOf('${kinds}'), 'it is the first item');
   assert.ok(js.includes("if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }"), 'same function the bell used');
-  assert.ok(fn('notifyOptionsHtml').includes('Use my default ('), 'default option');
+  assert.ok(fn('notifyOptionsHtml').includes('My default: ${defaultLabel}'), 'default option (short enough for a 360 px select)');
   assert.ok(paint.includes("NOTIFY_KINDS.map"), 'Questions and Everything else rows');
   assert.ok(js.includes("{ kind: 'questions', label: 'Questions'") && js.includes("{ kind: 'other', label: 'Everything else'"));
   const chg = fn('onNotifyAgentSheetChange');

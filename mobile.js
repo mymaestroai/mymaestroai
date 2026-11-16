@@ -1782,11 +1782,12 @@ async function saveNotifyPrefs(body) {
 }
 function notifyOptionsHtml(selected, defaultLabel) {
   const opt = (v, l) => `<option value="${v}"${v === selected ? ' selected' : ''}>${esc(l)}</option>`;
-  return (defaultLabel ? opt('', `Use my default (${defaultLabel})`) : '') + NOTIFY_MODES.map(m => opt(m, notifyModeLabel(m))).join('');
+  // "My default: …" (not "Use my default (…)"): the longest, "My default: Only when I'm away", fits a 360 px phone's select.
+  return (defaultLabel ? opt('', `My default: ${defaultLabel}`) : '') + NOTIFY_MODES.map(m => opt(m, notifyModeLabel(m))).join('');
 }
 
 // The header 🔔: this agent's sheet. While a reply runs its first item is "Notify me when this reply is done" (the same
-// toggleNotifyDone the bell tap ran before); then Questions and Everything else, each "Use my default" / On / Off / Only when I'm away.
+// toggleNotifyDone the bell tap ran before); then Questions and Everything else, each "My default: …" / On / Off / Only when I'm away.
 function paintNotifyAgentSheet() {
   const d = $('notify-agent-sheet');
   const agent = d && d._agent;
