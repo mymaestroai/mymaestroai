@@ -10,10 +10,10 @@ const fs = require('fs');
 const path = require('path');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 
-test('runDiscovery: a caller during a run joins it (same promise), and isDiscovering is exported', () => {
+test('runDiscovery: a caller during a run waits for one extra run, and isDiscovering is exported', () => {
   const src = read('lib/model-discovery.js');
-  assert.match(src, /if \(_inflight\) \{[\s\S]*?return _inflight;/);
-  assert.match(src, /_inflight = _runDiscovery\(\)\.finally\(\(\) => \{ _inflight = null; \}\)/);
+  assert.match(src, /if \(_inflight\) \{[\s\S]*?_again = _inflight\.catch[\s\S]*?return _again;/);
+  assert.match(src, /_inflight = _runImpl\(\)\.finally\(\(\) => \{ _inflight = null; \}\)/);
   assert.ok(!/Already running, skipping[\s\S]*?return loadCache\(\)/.test(src), 'the old "skip and return the stale cache" path is gone');
   assert.match(src, /function isDiscovering\(\) \{ return !!_inflight; \}/);
   assert.match(src, /module\.exports = \{[\s\S]*isDiscovering,/);

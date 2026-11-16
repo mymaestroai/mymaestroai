@@ -173,20 +173,69 @@ test('Claude SDK fallback: /v1/models down -> probe candidates plus models confi
   assert.strictEqual('claude-sdk-info' in r, false);
 });
 
-test('runDiscovery re-entrancy: a second call while one runs JOINS that run (same fresh result, one probe), never the stale cache', async () => {
+test('runDiscovery re-entrancy: a plain call during a run joins it; calls with { again: true } (a provider was just connected) share ONE extra run, never the stale cache', async () => {
   fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(CACHE, JSON.stringify({ lmstudio: ['cached-one'] }));
-  let release; st.routes['lmstudio.test'] = () => new Promise(r => { release = () => r(json(200, { data: [{ id: 'fresh' }] })); });
+  const releases = []; let n = 0;
+  st.routes['lmstudio.test'] = () => new Promise(r => { const id = 'fresh' + (++n); releases.push(() => r(json(200, { data: [{ id }] }))); });
   const first = md.runDiscovery();
   await new Promise(r => setTimeout(r, 10));
   assert.strictEqual(md.isDiscovering(), true);
-  const second = md.runDiscovery();
-  assert.strictEqual(second, first, 'the very same promise');
-  release();
-  const [a, b] = await Promise.all([first, second]);
-  assert.deepStrictEqual(a.lmstudio, ['fresh']);
-  assert.strictEqual(b, a);
+  assert.strictEqual(md.runDiscovery(), first, 'a plain caller joins the run in progress (cold start: no second wait)');
+  const second = md.runDiscovery({ again: true }), third = md.runDiscovery({ again: true });
+  assert.strictEqual(second, third, 'late callers share the same extra run');
+  assert.notStrictEqual(second, first);
+  releases[0]();
+  const a = await first;
+  assert.deepStrictEqual(a.lmstudio, ['fresh1']);
+  await until(() => releases.length === 2);
+  assert.strictEqual(n, 2, 'exactly one extra run started');
+  releases[1]();
+  const [b, c] = await Promise.all([second, third]);
+  assert.deepStrictEqual(b.lmstudio, ['fresh2']);
+  assert.strictEqual(c, b);
   assert.strictEqual(md.isDiscovering(), false);
-  assert.strictEqual(urls().filter(u => u.includes('lmstudio')).length, 1, 'one probe for both callers');
+  assert.strictEqual(urls().filter(u => u.includes('lmstudio')).length, 2, 'two probes in total');
+  delete st.routes['lmstudio.test'];
+});
+
+test('discoverSdkModels is single-flight: concurrent calls run one discovery; a later call runs it again', async () => {
+  let calls = 0, release;
+  md._setSdkDiscoverForTest(() => { calls++; return new Promise(r => { release = () => r([{ id: 'x' + calls }]); }); });
+  try {
+    const p1 = md.discoverSdkModels(), p2 = md.discoverSdkModels();
+    await until(() => calls === 1);
+    assert.strictEqual(p1, p2);
+    release();
+    assert.deepStrictEqual(await p1, [{ id: 'x1' }]);
+    assert.deepStrictEqual(await p2, [{ id: 'x1' }]);
+    assert.strictEqual(calls, 1);
+    const p3 = md.discoverSdkModels();
+    await until(() => calls === 2);
+    release();
+    assert.deepStrictEqual(await p3, [{ id: 'x2' }]);
+  } finally { md._setSdkDiscoverForTest(null); }
+});
+
+test('discoverSdkModels gives up after its deadline (a client call that never settles), frees the shared slot, and a retry runs again', async () => {
+  let calls = 0;
+  md._setSdkDiscoverForTest(() => { calls++; return calls === 1 ? new Promise(() => {}) : Promise.resolve([{ id: 'ok' }]); }, 50);
+  try {
+    assert.strictEqual(await md.discoverSdkModels(), null, 'the stuck call is given up: unknown this time (null, not an empty list)');
+    assert.deepStrictEqual(await md.discoverSdkModels(), [{ id: 'ok' }], 'the slot was freed: a retry runs and succeeds');
+    assert.strictEqual(calls, 2);
+  } finally { md._setSdkDiscoverForTest(null); }
+});
+
+test('a discovery run whose SDK part times out keeps the last good Claude list in the cache (never empties it)', async () => {
+  fs.mkdirSync(DATA, { recursive: true });
+  fs.writeFileSync(CACHE, JSON.stringify({ 'claude-sdk': ['kept-1', 'kept-2'], 'claude-sdk-info': [{ id: 'kept-1' }, { id: 'kept-2' }] }));
+  const creds = st.sdkCreds; st.sdkCreds = true;
+  md._setSdkDiscoverForTest(() => new Promise(() => {}), 50);
+  try {
+    const r = await md.runDiscovery();
+    assert.deepStrictEqual(r['claude-sdk'], ['kept-1', 'kept-2']);
+    assert.deepStrictEqual(r['claude-sdk-info'], [{ id: 'kept-1' }, { id: 'kept-2' }]);
+  } finally { md._setSdkDiscoverForTest(null); st.sdkCreds = creds; }
 });
 
 test('startDiscovery runs immediately and schedules a 6 h interval; stopDiscovery clears it', async (t) => {
