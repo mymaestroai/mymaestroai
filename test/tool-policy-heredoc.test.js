@@ -557,3 +557,18 @@ test('review r4: the single-literal exemption holds only for a plain command; po
   assert.ok(SEV(c(big)) >= SEV('admin'));
   assert.ok(Date.now() - t < 3000, 'bounded');
 });
+
+test('review r5: here-strings anywhere, . fed a here-string, ${c[0]:=}, printf -vNAME, $_, a total substitution budget', () => {
+  isDestroy("<<<'rm -rf ~/projects' bash", 'a here-string before the program');
+  isDestroy(". /dev/stdin <<<'c=rm'; $c -rf ~/projects", 'a here-string sourced by . assigns c');
+  for (const cmd of [': ${c[0]:=rm}; $c -rf ~/projects', "printf -vc '%s' rm; $c -rf ~/projects", ': rm; $_ -rf ~/projects']) {
+    assert.ok(SEV(c(cmd)) >= SEV('admin'), cmd);
+  }
+  // an arithmetic command is no program (its `>2` still reads as a redirect, as before this change: below admin)
+  assert.ok(SEV(c('(($1>2)) && echo big')) < SEV('admin'));
+  // 5000 segments of 16 references to a 4000-char value: bounded memory and time, and never lower than admin
+  const big = 'c=' + 'x'.repeat(4000) + '; ' + Array.from({ length: 5000 }, () => '$c'.repeat(16)).join('; ');
+  const t = Date.now();
+  assert.ok(SEV(c(big)) >= SEV('admin'));
+  assert.ok(Date.now() - t < 10000, `bounded (${Date.now() - t} ms)`);
+});
