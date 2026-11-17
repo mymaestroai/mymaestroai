@@ -13503,7 +13503,12 @@ function shareLinkDefaultHours(s) {
   const below = c.filter(h => h <= want);
   return below.length ? below[below.length - 1] : c[0];
 }
-function shareLinkWhen(t) { const d = new Date(t); return isNaN(d) ? String(t || '') : d.toLocaleString(); }
+// the same form as the link page ("Nov 18, 2026, 5:32 AM EST"), in this device's time zone
+function shareLinkWhen(t) {
+  const d = new Date(t);
+  if (isNaN(d)) return String(t || '');
+  try { return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d); } catch { return d.toLocaleString(); }
+}
 async function shareLinksJson(url, body) {
   let r;
   try { r = await fetch(url, body === undefined ? { credentials: 'include' } : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }

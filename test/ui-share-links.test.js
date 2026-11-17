@@ -24,7 +24,7 @@ function load(env = {}) {
   const vals = [escapeHtml, wrapped, env.navigator || { clipboard: { writeText: async () => {} } }, { origin: 'https://hub.example' }, env.document || { execCommand: () => true },
     (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, () => {}];
   const api = new Function(...names, `${block(env.src || app)}
-    return { shareLinksState, shareLinkLabel, shareLinkDefaultHours, shareLinksLoad, shareLinksOn, shareLinkRequest, shareLinkFormHtml, shareLinkResultHtml, shareLinkCopy, shareLinkWire, shareLinksListHtml, shareRevokeClick, shareLinksListFill, shareSettingsHtml, shareSettingsSave, shareSettingsMount };`)(...vals);
+    return { shareLinkWhen, shareLinksState, shareLinkLabel, shareLinkDefaultHours, shareLinksLoad, shareLinksOn, shareLinkRequest, shareLinkFormHtml, shareLinkResultHtml, shareLinkCopy, shareLinkWire, shareLinksListHtml, shareRevokeClick, shareLinksListFill, shareSettingsHtml, shareSettingsSave, shareSettingsMount };`)(...vals);
   return { api, calls, timers };
 }
 // A tiny stand-in for an element tree: querySelector gives the same fake for a selector.
@@ -310,4 +310,18 @@ test('phone: a failed refresh keeps the settings already loaded; a first failure
   assert.strictEqual(r.state.settings, null); assert.strictEqual(r.btn.hidden, true);
   r = await run(null, false);
   assert.strictEqual(r.state.settings, SETTINGS);
+});
+
+test('expiry reads like the link page on both pages ("Nov 18, 2026, 5:32 AM EST"): no seconds, a zone name', () => {
+  const like = /^[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2}\s?[AP]M \S+$/;
+  for (const src of [app, mjs]) {
+    const { api } = load({ src });
+    for (const t of ['2026-11-18T10:32:10.000Z', Date.UTC(2026, 0, 2, 3, 4, 59)]) {
+      const s = api.shareLinkWhen(t);
+      assert.match(s, like, s);
+      assert.ok(!/:\d{2}:\d{2}/.test(s), 'no seconds: ' + s);
+    }
+    assert.strictEqual(api.shareLinkWhen('not a date'), 'not a date');
+    assert.strictEqual(api.shareLinkWhen(undefined), '');
+  }
 });
