@@ -48,7 +48,7 @@ test('relaunch mode (no supervisor): scripts/relaunch.js spawned detached with t
 test('launchd mode (macOS service): the label from XPC_SERVICE_NAME or launchctl print; kickstart -k after the delay', () => {
   assert.strictEqual(R.launchdLabel({ platform: 'linux', env: { XPC_SERVICE_NAME: 'com.agent-hub' } }), null);
   assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: 'com.agent-hub' }, execImpl: () => { throw new Error('no'); } }), 'com.agent-hub');
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: '0' }, execImpl: () => '' }), 'com.agent-hub', 'launchctl print found the job');
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: '0' }, execImpl: () => '' }), 'ai.mymaestro.hub', 'launchctl print found the job (installer label probed first)');
   assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, execImpl: () => { throw new Error('no such job'); } }), null);
   const calls = []; let scheduled = null;
   const r = R.requestRestart({ projectDir: '/nowhere', env: { XPC_SERVICE_NAME: 'com.agent-hub' }, platform: 'darwin', execImpl: (c, a) => { calls.push([c, ...a]); }, setTimeoutImpl: (fn, ms) => { scheduled = { fn, ms }; return { unref() {} }; }, log: () => {} });
@@ -90,4 +90,43 @@ test('wiring: server handles SIGUSR2 with exit 75 and the button uses lib/restar
   const ss = read('scripts/safe-restart.sh');
   assert.match(ss, /data\/restart\.log/); assert.match(ss, /agent-hub-restart\.log/); assert.match(ss, /restart\.sh FAILED/);
   assert.ok(!/^\s*set -e/m.test(ss), 'a failed redirect no longer kills the script silently');
+});
+
+test('launchdLabel on macOS: installer label first, older label second, null when neither is loaded', () => {
+  const loaded = (...labels) => { const calls = []; const fn = (c, a) => { calls.push([c, ...a]); if (!labels.some(l => a[1] === `gui/501/${l}`)) throw new Error('not loaded'); }; fn.calls = calls; return fn; };
+  const a = loaded('ai.mymaestro.hub');
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, execImpl: a }), 'ai.mymaestro.hub');
+  const b = loaded('com.agent-hub');
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, execImpl: b }), 'com.agent-hub');
+  const c = loaded();
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, execImpl: c }), null);
+  assert.deepStrictEqual(c.calls.map(x => x[2]), ['gui/501/ai.mymaestro.hub', 'gui/501/com.agent-hub']);
+  assert.deepStrictEqual(c.calls[0].slice(0, 2), ['launchctl', 'print']);
+  const d = loaded();
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: 'ai.mymaestro.hub' }, uid: 501, execImpl: d }), 'ai.mymaestro.hub');
+  assert.strictEqual(d.calls.length, 0, 'the env label needs no probe');
+  const e = loaded();
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: 'com.example.other' }, uid: 501, execImpl: e }), null);
+  assert.strictEqual(e.calls.length, 2, 'an unrelated service name falls back to probing');
+  const f = loaded('ai.mymaestro.hub');
+  assert.strictEqual(R.launchdLabel({ platform: 'linux', env: {}, uid: 501, execImpl: f }), null);
+  assert.strictEqual(f.calls.length, 0);
+  assert.deepStrictEqual(R.LAUNCHD_LABELS, ['ai.mymaestro.hub', 'com.agent-hub']);
+});
+
+test('requestRestart under the installer launchd label kickstarts it and never spawns a second server', () => {
+  const calls = []; const spawned = [];
+  const r = R.requestRestart({ projectDir: '/nowhere', env: {}, platform: 'darwin', uid: 501,
+    execImpl: (c, a) => { calls.push([c, ...a]); if (a[0] === 'print' && a[1] !== 'gui/501/ai.mymaestro.hub') throw new Error('not loaded'); },
+    spawnImpl: (...a) => { spawned.push(a); return { unref() {} }; },
+    setTimeoutImpl: (fn) => { fn(); return { unref() {} }; }, log: () => {} });
+  assert.strictEqual(r.mode, 'launchd');
+  assert.strictEqual(spawned.length, 0);
+  assert.deepStrictEqual(calls[calls.length - 1], ['launchctl', 'kickstart', '-k', 'gui/501/ai.mymaestro.hub']);
+});
+
+test('restart.sh tries ai.mymaestro.hub before com.agent-hub on macOS', () => {
+  const rs = read('scripts/restart.sh');
+  assert.match(rs, /for _label in ai\.mymaestro\.hub com\.agent-hub; do/);
+  assert.match(rs, /launchctl kickstart -k "gui\/\$\(id -u\)\/\$_label"/);
 });
