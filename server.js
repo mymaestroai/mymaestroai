@@ -118,6 +118,16 @@ const admin2fa = require('./lib/admin-2fa').createAdmin2fa({   // "Require two-f
   getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, auth: hubAuth,
   notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true, kind: 'security' }), log: (m) => console.log(m),   // a security notice (the person's Security and access setting)
 });
+// Five wrong second-factor codes lock that account's codes for a minute (lib/auth): one security notice to that person and every admin.
+hubAuth.setTotpLockNotifier(({ user }) => {
+  const ids = [...new Set([user.id, ...hubAuth.admins().map(a => a.id)].filter(Boolean).map(String))];
+  console.log(`[auth] two-factor locked for a minute: ${user.login}`);
+  Promise.resolve(require('./lib/push').getPush().notifyUsers({
+    title: 'Two-factor sign-in locked for a minute',
+    body: `5 wrong two-factor codes for ${user.name || user.login}. Codes are refused for a minute.`,
+    url: '/', tag: 'totp-lock',
+  }, ids, { kind: 'security' })).catch(() => {});
+});
 const access = require('./lib/access');                   // route classes + agent ownership/sharing (lib/access)
 const temporalWorkersLib = require('./lib/temporal-workers');
 
@@ -202,7 +212,7 @@ function accountStepUp(user, b, ip) {
   b = b && typeof b === 'object' ? b : {};
   const r = hubAuth.login(u.login, String(b.password || ''), { ip });
   if (!r.ok) return r.locked ? r.error : 'That password is not right.';
-  if (r.needsTotp) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return 'That two-factor code is not right.'; }
+  if (r.needsTotp) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return (t && t.locked) ? t.error : 'That two-factor code is not right.'; }
   return null;
 }
 // Backups (lib/backup/service): one instance for the routes; download links last two minutes and work once.
@@ -674,6 +684,7 @@ async function handleHttpRequest(req, res) {
       const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
       const user = hubAuth.getUser(sess.user_id);
       const r = hubAuth.totpCheck(user.id, b.code);
+      if (!r.ok && r.locked) return jsonResponse(res, 429, { ok: false, locked: true, error: r.error });
       if (!r.ok) return jsonResponse(res, 401, { ok: false, error: r.error });
       hubAuth.markTotpOk(sess.id);
       const cookiesOut = [];
@@ -718,7 +729,7 @@ async function handleHttpRequest(req, res) {
       const adminAccount = access.isAdmin(u);   // the account as stored now, read after the body arrived
       if (adminAccount && admin2fa.required()) return jsonResponse(res, 403, { error: require('./lib/admin-2fa').REQUIRED_MESSAGE, code: 'admin_2fa_required' });
       if (!hubAuth.login(u.login, b.password).ok) return jsonResponse(res, 401, { error: 'password check failed' });
-      if (adminAccount && u.totp && u.totp.enabled) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return jsonResponse(res, 403, { error: 'That two-factor code is not right.' }); }
+      if (adminAccount && u.totp && u.totp.enabled) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return jsonResponse(res, (t && t.locked) ? 429 : 403, { error: (t && t.locked) ? t.error : 'That two-factor code is not right.' }); }
       return jsonResponse(res, 200, hubAuth.totpDisable(u.id));
     }
     if (pathname === '/api/auth/password' && req.method === 'POST') {

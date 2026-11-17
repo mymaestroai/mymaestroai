@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Two-factor codes lock for a minute after five wrong tries.** After 5 wrong two-factor or recovery codes for an account, your Maestro refuses every code for that account for 60 seconds and says "Too many wrong codes. Try again in a minute." This covers sign-in and every place that asks for your password and a code. Each lock sends a notice to that person and the admins under Security and access. Passwords keep their own limit as before.
 - **Local models can write longer answers.** When an agent on a local model (LM Studio, Ollama, oMLX, NInfer or your Maestro's own local models) has its own Max output tokens set, your Maestro now honours it up to what the model's context window leaves room for, instead of stopping at 32,000 tokens. A reasoning model no longer spends its whole allowance thinking before it writes. Hosted models keep their limits, and the log shows the limit used for each call.
 - **Restart works on a Mac installed with the installer.** Restarting your Maestro on a Mac now restarts its background service, instead of starting a second copy that clashed with the first.
 - **Stuck commands are cleaned up on a Mac too.** On macOS, commands an agent left running after its reply, and everything under a stopped reply, are now ended as they already were on Linux.
