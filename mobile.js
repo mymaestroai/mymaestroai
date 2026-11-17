@@ -1051,9 +1051,11 @@ function originLabel(origin) {
   switch (origin?.kind) {
     case 'user': return origin.label || 'replying to you';
     case 'consultation': return `consulted by ${origin.from || 'another agent'}`;
-    case 'job_notice': return `job finished${origin.jobName ? `: ${origin.jobName}` : ''}`;
+    case 'job_notice': return `your job finished${origin.jobName ? `: ${origin.jobName}` : ''}`;
     case 'job_report': return `job report from ${origin.from || 'a worker'}${origin.jobName ? ` (${origin.jobName})` : ''}`;
-    case 'schedule': return `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
+    case 'schedule': return origin.by ? `scheduled task set by ${origin.by === 'owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
+    case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
+    case 'alert': return `alert from ${origin.from || 'a monitor'}`;
     case 'consult_reply': return 'queued consultation reply delivered';
     case 'comms': return 'message from a messaging channel';
     default: return 'hub turn';
