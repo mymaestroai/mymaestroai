@@ -15,7 +15,8 @@ const path = require('node:path');
 const REAL = path.join(__dirname, '..', '..');
 
 function makeIsolatedInstall(prefix = 'isolated-install-', { copy = [] } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  // Fully resolved: on macOS os.tmpdir() is under /var, a symlink to /private/var, and path assertions compare real paths.
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
   const inst = path.join(root, 'inst');
   const home = path.join(root, 'home');
   const data = path.join(inst, 'data');

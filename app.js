@@ -1097,11 +1097,14 @@
       if (!document.getElementById('files-panel')) {
         gsModal(`<div id="files-panel" data-no-dirty>
           <div class="files-root" id="files-root"></div>
+          <div class="files-recent" id="files-recent" hidden></div>
           <div class="files-crumbs" id="files-crumbs"></div>
           <div class="files-tools">
             <button class="gs-btn" onclick="document.getElementById('files-upload-input').click()">⬆ Upload</button>
             <button class="gs-btn secondary" onclick="filesNewFolder()">New folder</button>
+            <button class="gs-btn secondary" id="files-zip-btn" onclick="filesZip(filesState.path)" title="Download the folder being shown as one zip file">Download as zip</button>
             <button class="gs-btn secondary" onclick="filesRefresh()">Refresh</button>
+            <button class="gs-btn secondary" id="files-shared-btn" onclick="shareLinksListOpen()" hidden>Shared links</button>
             <input type="file" id="files-upload-input" multiple style="display:none" onchange="filesUploadFiles(this.files); this.value = ''">
             <span class="gs-sub" style="margin:0" id="files-limit"></span>
           </div>
@@ -1117,6 +1120,7 @@
         drop.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; drop.classList.remove('over'); } });
         drop.addEventListener('drop', (e) => { e.preventDefault(); depth = 0; drop.classList.remove('over'); if (e.dataTransfer && e.dataTransfer.files.length) filesUploadFiles(e.dataTransfer.files); });
       }
+      shareLinksInit();
       await filesRefresh();
     }
     // Also called when the active chat changes: a different agent means a different root, so start at its top.
@@ -1134,6 +1138,61 @@
       filesState.root = data.root || null; filesState.entries = data.entries || []; filesState.maxUploadBytes = data.maxUploadBytes || 0;
       filesState.path = data.path || '';
       filesRenderHeader(); filesRenderList();
+      filesLoadRecent();
+    }
+    // "Recent from agents": the newest files agents wrote under this root. Hidden when empty; a failure shows nothing.
+    async function filesLoadRecent() {
+      const box = document.getElementById('files-recent'); if (!box) return;
+      const agentAtStart = filesState.agent;
+      let data = null;
+      try { data = await filesApi(filesUrl('/recent', { limit: 10 })); } catch (e) { data = null; }
+      if (!document.getElementById('files-recent') || filesState.agent !== agentAtStart) return;
+      const files = data && Array.isArray(data.files) ? data.files : [];
+      if (!files.length) { box.hidden = true; box.innerHTML = ''; return; }
+      box.hidden = false;
+      // Only the newest 5 until "Show all (N)" is pressed; the choice is kept for this browser session only.
+      const FR_KEY = 'hub-files-recent-all', FR_FEW = 5;
+      let all = false;
+      try { all = sessionStorage.getItem(FR_KEY) === '1'; } catch (e) { all = false; }
+      const draw = () => {
+        const shown = all ? files : files.slice(0, FR_FEW);
+        box.innerHTML = '<h4>Recent from agents</h4>' + shown.map((f) => {
+          const url = typeof f.download === 'string' && f.download.startsWith('/api/files/') ? f.download : '';
+          const info = [humanSize(f.size), f.folder || '', filesAgo(f.mtime)].filter(Boolean).join(' · ');
+          return `<div class="fr-row"><span class="fr-name" title="${esc(f.path || f.name || '').replace(/"/g, '&quot;')}">${esc(f.name || '')}</span><span class="fr-info">${esc(info)}</span>${url ? `<a class="fr-dl" href="${esc(url).replace(/"/g, '&quot;')}" download="${esc(f.name || 'file').replace(/"/g, '&quot;')}">Download</a>` : ''}</div>`;
+        }).join('') + (!all && files.length > FR_FEW ? `<button type="button" class="fr-all" aria-expanded="false">Show all (${files.length})</button>` : '');
+      };
+      box.onclick = (e) => {
+        const b = e.target && e.target.closest ? e.target.closest('button.fr-all') : null;
+        if (!b) return;
+        all = true;
+        try { sessionStorage.setItem(FR_KEY, '1'); } catch (err) { /* not remembered */ }
+        draw();
+      };
+      draw();
+    }
+    function filesAgo(t) {
+      const ms = Date.parse(t); if (isNaN(ms)) return '';
+      const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+      if (s < 60) return 'just now';
+      if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+      if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+      return `${Math.floor(s / 86400)} d ago`;
+    }
+    // Download a folder as one zip. The same URL with &check=1 first: the hub refuses a too-big folder in plain words
+    // (413 with a message); only an ok answer starts the real download, a normal browser download (never held in page memory).
+    async function filesZip(rel) {
+      rel = typeof rel === 'string' ? rel : filesState.path;
+      const url = filesUrl('/zip', { path: rel });
+      const folder = (rel ? rel.split('/').pop() : '') || (filesState.root && filesState.root.label) || 'files';
+      filesStatus('Checking the folder…');
+      let data;
+      try { data = await filesApi(url + '&check=1', { credentials: 'same-origin' }); }
+      catch (e) { filesStatus(e.message, 'error'); return; }
+      const a = document.createElement('a');
+      a.href = url; a.download = `${folder}.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      filesStatus(`Downloading ${folder}.zip (${data.files} file${data.files === 1 ? '' : 's'}, ${humanSize(data.bytes)})`, 'ok');
     }
     function filesRenderHeader() {
       const root = filesState.root || {};
@@ -1170,7 +1229,8 @@
           <td class="num">${isDir ? '' : humanSize(e.size)}</td>
           <td class="num">${when(e.mtime)}</td>
           <td><div class="files-acts">
-            ${isDir ? '' : `<button onclick="filesDownload(${i})" title="Download to this computer">Download</button>`}
+            ${isDir ? `<button onclick="filesZip(filesJoin(filesState.path, filesState.entries[${i}].name))" title="Download this folder as one zip file">Download as zip</button>` : `<button onclick="filesDownload(${i})" title="Download to this computer">Download</button>`}
+            ${isDir || !shareLinksOn() ? '' : `<button onclick="shareLinkOpen(${i})">Share link</button>`}
             <button onclick="filesUseInChat(${i})" title="Put the server path of this ${isDir ? 'folder' : 'file'} into the open chat">Use in chat</button>
             <button onclick="filesRename(${i})">Rename</button>
             <button class="danger" onclick="filesDelete(${i})">Delete</button>
@@ -1235,6 +1295,191 @@
       if (!confirm(msg)) return;
       try { await filesApi(filesUrl('', { path: filesJoin(filesState.path, e.name) }), { method: 'DELETE' }); filesStatus(`Deleted "${e.name}"`, 'ok'); await filesRefresh(); }
       catch (err) { filesStatus(err.message, 'error'); }
+    }
+    // ── share links (begin): a short link to one file (server: /api/share-links*); this block is the same in app.js and mobile.js ──
+    const shareLinksState = { settings: null };
+    function shareLinkLabel(h) { h = Number(h); return h === 1 ? '1 hour' : h === 24 ? '24 hours' : h === 168 ? '7 days' : `${h} hours`; }
+    // The server default when offered; else the largest choice not above it (the smallest when none is).
+    function shareLinkDefaultHours(s) {
+      const c = ((s && s.choices) || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b), want = Number(s && s.defaultHours);
+      if (!c.length) return undefined;
+      const below = c.filter(h => h <= want);
+      return below.length ? below[below.length - 1] : c[0];
+    }
+    // the same form as the link page ("Nov 18, 2026, 5:32 AM EST"), in this device's time zone
+    function shareLinkWhen(t) {
+      const d = new Date(t);
+      if (isNaN(d)) return String(t || '');
+      try { return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d); } catch { return d.toLocaleString(); }
+    }
+    async function shareLinksJson(url, body) {
+      let r;
+      try { r = await fetch(url, body === undefined ? { credentials: 'include' } : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+      catch { throw new Error('Could not reach the hub.'); }
+      let d = {}; try { d = await r.json(); } catch { /* no body */ }
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+      return d;
+    }
+    // Loaded once when the Files panel opens; null (action hidden) when the call fails.
+    async function shareLinksLoad() {
+      try { const d = await shareLinksJson('/api/share-links'); shareLinksState.settings = d.settings || null; return d; }
+      catch { shareLinksState.settings = null; return null; }
+    }
+    function shareLinksOn() { return !!(shareLinksState.settings && shareLinksState.settings.enabled); }
+    // identity = the panel's own folder identity ({ owner?, agent? }), as it sends it with rename and mkdir.
+    function shareLinkRequest(identity, path, hours, oneTime) { return { ...identity, path, hours: Number(hours), oneTime: !!oneTime }; }
+    function shareLinkFormHtml(name, s) {
+      const def = shareLinkDefaultHours(s);
+      const opts = ((s && s.choices) || []).map(h => `<option value="${Number(h)}"${h === def ? ' selected' : ''}>${escapeHtml(shareLinkLabel(h))}</option>`).join('');
+      return `<div class="sec-section" data-no-dirty><div class="sec-title">${escapeHtml(name)}</div>
+        <label class="sec-hint" for="sl-hours">Link works for</label><select class="sl-hours" id="sl-hours">${opts}</select>
+        <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-once" style="width:auto"> Only one download</label>
+        <div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div></div>
+        <div class="sec-actions"><button type="button" class="sec-btn sl-cancel">Cancel</button><button type="button" class="sec-btn sl-create">Create link</button></div>`;
+    }
+    function shareLinkResultHtml(link, origin) {
+      return `<div class="sec-section" data-no-dirty><input type="text" class="sl-url" readonly aria-label="Link" value="${escapeHtml(origin + link.path)}">
+        <div class="sec-hint">Expires ${escapeHtml(shareLinkWhen(link.expiresAt))}</div>
+        <div class="sec-hint">Opens for you when you're signed in to your Maestro.</div></div>
+        <div class="sec-actions"><button type="button" class="sec-btn sl-copy">Copy</button><button type="button" class="sec-btn sl-done">Done</button></div>`;
+    }
+    async function shareLinkCopy(text, btn, input) {
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; } catch { /* no clipboard on an http:// address */ }
+      if (!ok && input) { try { input.focus(); input.select(); ok = document.execCommand('copy'); } catch { ok = false; } }
+      if (!ok && input) { try { input.select(); } catch { /* nothing to select */ } }
+      if (btn) { const old = btn.textContent; btn.textContent = ok ? 'Copied' : 'Select and copy'; setTimeout(() => { btn.textContent = old; }, 1500); }
+      return ok;
+    }
+    // root holds the form (class sl-body); o = { identity, path, close }.
+    function shareLinkWire(root, o) {
+      const q = (s) => root.querySelector(s);
+      q('.sl-cancel').onclick = o.close;
+      q('.sl-create').onclick = async () => {
+        const btn = q('.sl-create'); btn.disabled = true; q('.sl-msg').textContent = '';
+        let d;
+        try { d = await shareLinksJson('/api/share-links', shareLinkRequest(o.identity, o.path, q('.sl-hours').value, q('.sl-once').checked)); }
+        catch (e) { q('.sl-msg').textContent = e.message; btn.disabled = false; return; }
+        q('.sl-body').innerHTML = shareLinkResultHtml(d, location.origin);
+        const url = q('.sl-url');
+        q('.sl-copy').onclick = () => shareLinkCopy(url.value, q('.sl-copy'), url);
+        q('.sl-done').onclick = o.close;
+        try { url.select(); } catch { /* ok */ }
+      };
+    }
+    function shareLinksListHtml(links, admin) {
+      if (!links || !links.length) return 'No shared links.';
+      return links.map(l => {
+        const bits = [`expires ${shareLinkWhen(l.expiresAt)}`];
+        if (l.oneTime) bits.push('one download');
+        bits.push(`${Number(l.downloads) || 0} download${Number(l.downloads) === 1 ? '' : 's'}`);
+        if (admin && !l.mine && l.creator && l.creator.name) bits.push(`by ${l.creator.name}`);
+        return `<div class="sl-row" style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+          <div style="min-width:0"><div class="sec-title" style="overflow-wrap:anywhere">${escapeHtml(l.name)}</div><div class="sec-hint">${escapeHtml(bits.join(' · '))}</div></div>
+          <button type="button" class="sec-btn" data-sl-revoke data-id="${escapeHtml(l.id)}">Revoke</button></div>`;
+      }).join('');
+    }
+    // First press arms the button for 3 s ("Revoke?"); a second press inside that time calls revoke(id).
+    function shareRevokeClick(btn, revoke) {
+      if (btn.dataset.armed === '1') { clearTimeout(btn._slTimer); btn.dataset.armed = ''; btn.disabled = true; return revoke(btn.dataset.id); }
+      btn.dataset.armed = '1'; btn.textContent = 'Revoke?';
+      btn._slTimer = setTimeout(() => { btn.dataset.armed = ''; btn.textContent = 'Revoke'; }, 3000);
+    }
+    async function shareLinksListFill(root, admin) {
+      const box = root.querySelector('.sl-list'), msg = root.querySelector('.sl-msg');
+      box.textContent = 'Loading…';
+      let d;
+      try { d = await shareLinksJson('/api/share-links'); } catch (e) { box.textContent = e.message; return; }
+      shareLinksState.settings = d.settings || shareLinksState.settings;
+      box.innerHTML = shareLinksListHtml(d.links, admin);
+      box.onclick = (ev) => {
+        const b = ev.target.closest && ev.target.closest('button[data-sl-revoke]'); if (!b) return;
+        shareRevokeClick(b, async (id) => {
+          try {
+            const done = await shareLinksJson(`/api/share-links/${encodeURIComponent(id)}/revoke`, {});
+            const row = b.closest('.sl-row'); if (row) row.remove();
+            if (!box.querySelector('.sl-row')) box.textContent = 'No shared links.';
+            if (msg) msg.textContent = (done && typeof done.warning === 'string') ? done.warning : '';   // revoked, but not saved yet
+          } catch (e) { b.disabled = false; b.textContent = 'Revoke'; if (msg) msg.textContent = e.message; }
+        });
+      };
+    }
+    // Settings (admins): the three values of settings.shareLinks.
+    const SHARE_DEFAULT_CHOICES = [1, 24, 168], SHARE_MAX_CHOICES = [1, 24, 72, 168];
+    // The listed hours as <option>s; a stored value that is not listed (say 72 as the default) is added so it shows and is kept.
+    function shareSettingsOptions(list, extra) {
+      const all = [...list]; const x = Number(extra);
+      if (extra != null && Number.isFinite(x) && x > 0 && !all.includes(x)) all.push(x);
+      return all.sort((a, b) => a - b).map(h => `<option value="${h}">${escapeHtml(shareLinkLabel(h))}</option>`).join('');
+    }
+    function shareSettingsHtml() {
+      return `<h4>Share links</h4>
+        <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-set-on" style="width:auto"> Allow share links</label>
+        <label class="sec-hint">Default time</label><select class="sl-set-def"></select>
+        <label class="sec-hint">Longest allowed</label><select class="sl-set-max">${shareSettingsOptions(SHARE_MAX_CHOICES)}</select>
+        <div class="sec-actions" style="justify-content:flex-start"><button type="button" class="sec-btn sl-set-list">Shared links</button></div>
+        <div class="sec-msg sl-set-msg" role="status"></div>`;
+    }
+    function shareSettingsDefaults(root, want) {
+      const max = Number(root.querySelector('.sl-set-max').value) || 168;
+      const w = Number(want), keep = Number.isFinite(w) && w > 0 && w <= max;
+      const list = SHARE_DEFAULT_CHOICES.filter(h => h <= max);
+      if (keep && !list.includes(w)) list.push(w);
+      list.sort((a, b) => a - b);
+      const sel = root.querySelector('.sl-set-def');
+      sel.innerHTML = shareSettingsOptions(list);
+      sel.value = String(keep ? w : list[list.length - 1]);
+    }
+    async function shareSettingsSave(root) {
+      const msg = root.querySelector('.sl-set-msg');
+      const shareLinks = { enabled: root.querySelector('.sl-set-on').checked, defaultHours: Number(root.querySelector('.sl-set-def').value), maxHours: Number(root.querySelector('.sl-set-max').value) };
+      try { await shareLinksJson('/api/settings', { shareLinks }); shareLinksState.settings = { ...(shareLinksState.settings || {}), ...shareLinks }; msg.textContent = 'Saved.'; }
+      catch (e) { msg.textContent = 'Could not save: ' + e.message; }
+    }
+    // root = the block holding shareSettingsHtml(); openList opens the list dialog.
+    async function shareSettingsMount(root, openList) {
+      if (!root) return;
+      const d = await shareLinksLoad();
+      // Hidden with style.display (the block may carry its own inline display, which hidden would not beat); shown again as it was.
+      if (!d || !d.settings) { if (root.style.display !== 'none') root._slDisplay = root.style.display; root.style.display = 'none'; return; }
+      if (root._slDisplay !== undefined) root.style.display = root._slDisplay;
+      const s = d.settings;
+      root.querySelector('.sl-set-on').checked = !!s.enabled;
+      const max = root.querySelector('.sl-set-max'), mh = Number(s.maxHours), mx = Number.isFinite(mh) && mh > 0 ? mh : 168;
+      max.innerHTML = shareSettingsOptions(SHARE_MAX_CHOICES, mx); max.value = String(mx);
+      shareSettingsDefaults(root, s.defaultHours);
+      root.querySelector('.sl-set-on').onchange = () => shareSettingsSave(root);
+      root.querySelector('.sl-set-def').onchange = () => shareSettingsSave(root);
+      max.onchange = () => { shareSettingsDefaults(root, root.querySelector('.sl-set-def').value); shareSettingsSave(root); };
+      root.querySelector('.sl-set-list').onclick = openList;
+    }
+    // ── share links (end) ──
+    // Files panel hooks (share links): the load on open, the dialogs, and the Settings block. Core: the share links block above.
+    function shareLinksInit() {
+      shareLinksLoad().then(() => {
+        const b = document.getElementById('files-shared-btn'); if (b) b.hidden = !shareLinksState.settings;
+        if (document.getElementById('files-list') && filesState.entries.length) filesRenderList();
+      });
+    }
+    function shareOverlay(id, title, inner) {
+      document.getElementById(id)?.remove();
+      const ov = document.createElement('div'); ov.className = 'question-overlay'; ov.id = id;
+      ov.innerHTML = `<div class="question-modal security-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}"><h3>${escapeHtml(title)}</h3>${inner}</div>`;
+      ov.__dialogClose = () => ov.remove();
+      document.body.appendChild(ov);
+      return ov;
+    }
+    function shareLinkOpen(i) {
+      const e = filesState.entries[i];
+      if (!e || e.type === 'dir' || !shareLinksOn()) return;
+      const ov = shareOverlay('share-link-overlay', 'Share link', `<div class="sl-body">${shareLinkFormHtml(e.name, shareLinksState.settings)}</div>`);
+      shareLinkWire(ov, { identity: filesOwnerBody(), path: filesJoin(filesState.path, e.name), close: () => dialogRequestClose(ov) });
+      ov.querySelector('.sl-create').focus();
+    }
+    function shareLinksListOpen() {
+      const ov = shareOverlay('share-list-overlay', 'Shared links', `<div class="sl-list sec-section">Loading…</div><div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div><div class="sec-actions"><button type="button" class="sec-btn sl-close">Close</button></div>`);
+      ov.querySelector('.sl-close').onclick = () => dialogRequestClose(ov);
+      shareLinksListFill(ov, isHubAdmin());
     }
     // One request per file, raw bytes in the body, with upload progress. Resolves { entry, path, absPath }.
     function uploadFileToHub(file, dir, { overwrite = false, onProgress, agent = filesState.agent } = {}) {
@@ -2714,8 +2959,10 @@
         <div class="st-hint" style="color:var(--text-dim)">Opening My Maestro directly to your network still needs an admin with two-factor. Members choose for themselves.</div>
         <div id="st-a2fa-confirm"></div>
         <div class="st-hint" id="st-a2fa-msg" role="status"></div>
+        <div id="st-share-block" style="display:flex;flex-direction:column;gap:6px;margin-top:10px">${shareSettingsHtml()}</div>
       </div>`;
         setTimeout(stAdmin2faPaint, 0);
+        setTimeout(() => shareSettingsMount(document.getElementById('st-share-block'), shareLinksListOpen), 0);
       }
       html += voiceSettingsHtml(data);
       setTimeout(voiceSettingsInit, 0);
@@ -6936,6 +7183,7 @@
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
+              if (msg.role === 'assistant') attachFileCards(document.getElementById(hid));   // a saved reply's download cards
               // An archived entry is text only (the hub saved no tool calls or reasoning for it) and says where it comes from.
               if (msg.archived) {
                 setMessageTime(document.getElementById(hid), times[i] ? `${times[i]} · from the archive` : 'from the archive');
@@ -8534,6 +8782,7 @@
       // is shown below it, so the line comes from the prompt instead.
       if (t.card) t.card.setLine(t.card.moved ? foldPromptLine(ev.message || t.prompt) : autoFirstLine(reply));
       setMessageTime(document.getElementById(t.msgId), msgTimeLine(Date.parse(ev.endedAt) || Date.now(), t.startedAt));
+      attachFileCards(document.getElementById(t.msgId));   // the turn ended: download cards for the files it names
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
       for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
       const last = chat.messages[chat.messages.length - 1];
@@ -9589,6 +9838,7 @@
       if (existingIdx >= 0) chat.messages.splice(existingIdx, 1);
       if (ok) chat.messages.push({ role: 'assistant', content: text });
       if (ok) setMessageTime(document.getElementById(ra.msgId), msgTimeLine(Date.now(), ra.sentAt || Date.parse(ra.since)));
+      if (ok) attachFileCards(document.getElementById(ra.msgId));   // the turn ended: download cards
       setStatus(chatId, ok ? 'idle' : 'error', ok ? null : 'Reply lost');
       setAgentStatus(chat.agent, '');
       delete chat.lastMsgId;
@@ -9965,6 +10215,7 @@
 
         const { text: fullResponse, images: responseImages, toolActivity, partial, steps: responseSteps } = await streamResponseSolo(response, msgId, chatId, chat.agent);
         if (!partial) setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), chat.sentAtMs));
+        if (!partial) attachFileCards(document.getElementById(msgId));   // the turn ended: download cards
         if (!partial && chat.voiceTurn) { chat.voiceTurn = false; voiceAutoRead(chat, msgId, fullResponse); }
 
         // Success! Save response and clean up
@@ -10815,6 +11066,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (chatId) updateThinkingPanel(chatId, '', agentName, false);
       finalizeTokenUsage(msgId);
       setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), startedMs));
+      attachFileCards(document.getElementById(msgId));   // the reply is final: download cards
 
       return fullResponse;
     }
@@ -11297,6 +11549,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       clearLiveActivity(msgId);
       finalizeTokenUsage(msgId);
       setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), startedMs));
+      attachFileCards(document.getElementById(msgId));   // the reply is final: download cards
 
       console.log(`[${agentName}] Stream complete, response length: ${fullResponse.length}`);
       console.log(`[${agentName}] Raw response:`, fullResponse.substring(0, 200));
@@ -16697,6 +16950,29 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       e.preventDefault(); e.stopPropagation();
       copyMessageText(b.closest('.message'));
     });
+
+    // Download cards: after a reply is final (the turn ended, or a saved reply drawn from history) the files it names
+    // (links to /api/files/download, absolute paths) get a card each in a .file-cards box right after the message.
+    // Never on a streaming chunk; no candidates means no request; nothing here may throw into the chat code.
+    async function attachFileCards(el) {
+      try {
+        const H = window.hubFileCard;
+        if (!H || !el || !el.isConnected || !el.classList.contains('assistant')) return;
+        const scan = el.cloneNode(true);   // the reply's own text: not the tool panel or the reasoning panel
+        scan.querySelectorAll('.tool-stream, .reason-stream, .inline-thinking, .msg-copy, .msg-speak').forEach((n) => n.remove());
+        const cands = H.candidatesFrom(scan);
+        if (!cands.length) return;
+        const results = await H.resolveBatch((u, o) => fetch(u, o), cands);
+        if (!el.isConnected) return;
+        const html = results.map((r) => (r && r.ok ? H.cardHtml(r, { esc, phone: false }) : '')).join('');
+        const old = el.nextElementSibling;
+        if (old && old.classList.contains('file-cards') && old.dataset.for === el.id) old.remove();
+        if (!html) return;
+        const box = document.createElement('div');
+        box.className = 'file-cards'; box.dataset.for = el.id; box.innerHTML = html;
+        el.after(box);
+      } catch (e) { /* the cards are a convenience: the reply itself is already shown */ }
+    }
 
     // into: an element to draw the bubble in instead of the chat's panel (the body of an automatic-turn card).
     function appendMessage(chatId, role, content, into) {

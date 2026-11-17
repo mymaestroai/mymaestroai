@@ -23,11 +23,15 @@ echo "[restart] Hub port: $HUB_PORT"
 # ── Installed as a launchd service (setup.sh)? Let launchd restart it ──
 # Killing the server ourselves would race KeepAlive's respawn against the
 # nohup copy below.
-if [ "$(uname)" = "Darwin" ] && launchctl print "gui/$(id -u)/com.agent-hub" >/dev/null 2>&1; then
-  echo "[restart] Restarting launchd service com.agent-hub..."
-  launchctl kickstart -k "gui/$(id -u)/com.agent-hub"
-  echo "✅ Service restarted"
-  exit 0
+if [ "$(uname)" = "Darwin" ]; then
+  for _label in ai.mymaestro.hub com.agent-hub; do
+    if launchctl print "gui/$(id -u)/$_label" >/dev/null 2>&1; then
+      echo "[restart] Restarting launchd service $_label..."
+      launchctl kickstart -k "gui/$(id -u)/$_label"
+      echo "✅ Service restarted"
+      exit 0
+    fi
+  done
 fi
 
 # ── Find process listening on the hub port ──

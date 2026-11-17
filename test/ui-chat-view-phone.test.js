@@ -439,11 +439,12 @@ test('archived entries are drawn as text, with " · from the archive" after the 
   const painted = [];
   const mkBubble = () => ({ line: null, querySelector() { return this.line; } });
   const run = (m, time) => {
-    const f = new Function('addNote', 'originLabel', 'timeLabel', 'addUserBubble', 'addAssistantBubble', 'setBubbleTime', 'document', `${src}; return renderArchived;`)(
+    // attachFileCards (download cards for files a saved reply names) is a no-op stub here: this test is about the text drawing.
+    const f = new Function('addNote', 'originLabel', 'timeLabel', 'addUserBubble', 'addAssistantBubble', 'setBubbleTime', 'document', 'attachFileCards', `${src}; return renderArchived;`)(
       (t) => painted.push(['note', t]), () => 'Scheduled', () => 'T',
       (c) => { painted.push(['user', c]); return mkBubble(); }, (c) => { painted.push(['assistant', c]); return { el: mkBubble() }; },
       (el, text) => { el.line = { text, kids: [], appendChild(c) { this.kids.push(c); } }; },
-      { createElement: () => ({ className: '', textContent: '' }) });
+      { createElement: () => ({ className: '', textContent: '' }) }, () => {});
     painted.length = 0;
     let line = null;
     const orig = mkBubble;

@@ -87,3 +87,56 @@ test('hub Bash kills the whole process group on timeout, so nothing outlives the
   const ok = await runShell('echo hi; echo err 1>&2; exit 2', { timeoutMs: 5000 });
   assert.deepStrictEqual([ok.stdout.trim(), ok.stderr.trim(), ok.code, ok.timedOut], ['hi', 'err', 2, false]);
 });
+
+test('parseEtime: [[dd-]hh:]mm:ss to seconds, null when malformed', () => {
+  assert.strictEqual(W.parseEtime('05:07'), 307);
+  assert.strictEqual(W.parseEtime('1:02:03'), 3723);
+  assert.strictEqual(W.parseEtime('2-03:04:05'), 2 * 86400 + 3 * 3600 + 4 * 60 + 5);
+  assert.strictEqual(W.parseEtime('  05:07\n'), 307);
+  for (const bad of ['61:00', '00:60', '1-24:00:00', 'abc', '1:2:3:4', '', '99999999999999999999:00']) {
+    assert.strictEqual(W.parseEtime(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('processTable on darwin asks ps for etime, converts it, and skips malformed rows', async () => {
+  let seen = null;
+  const exec = async (cmd, args) => {
+    seen = { cmd, args };
+    return { stdout: [
+      '  100     1 2-03:04:05 /usr/bin/node server.js --port 8888',
+      '  101   100    1:02:03 bash -c sleep 5',
+      '  102   100      05:07 grep -r some pattern here',
+      '  103   100    99:99 broken row',
+      '  104   100  notatime weird',
+      ''].join('\n') };
+  };
+  const rows = await W.processTable(exec, 'darwin');
+  assert.strictEqual(seen.cmd, 'ps');
+  assert.deepStrictEqual(seen.args, ['-eo', 'pid=,ppid=,etime=,args=']);
+  assert.deepStrictEqual(rows, [
+    { pid: 100, ppid: 1, etimes: 2 * 86400 + 3 * 3600 + 4 * 60 + 5, args: '/usr/bin/node server.js --port 8888' },
+    { pid: 101, ppid: 100, etimes: 3723, args: 'bash -c sleep 5' },
+    { pid: 102, ppid: 100, etimes: 307, args: 'grep -r some pattern here' },
+  ]);
+});
+
+test('processTable on linux keeps asking for etimes and parses as before', async () => {
+  let seen = null;
+  const exec = async (cmd, args) => { seen = args; return { stdout: '  10     1   42 node a b\n  11    10    7 sleep 1\n' }; };
+  const rows = await W.processTable(exec, 'linux');
+  assert.deepStrictEqual(seen, ['-eo', 'pid=,ppid=,etimes=,args=']);
+  assert.deepStrictEqual(rows, [{ pid: 10, ppid: 1, etimes: 42, args: 'node a b' }, { pid: 11, ppid: 10, etimes: 7, args: 'sleep 1' }]);
+});
+
+test('descendants and killTree on darwin walk a fake table and kill deepest first', async () => {
+  const exec = async (cmd, args) => {
+    assert.deepStrictEqual(args, ['-eo', 'pid=,ppid=,etime=,args=']);
+    return { stdout: ' 500 1 10:00 client\n 501 500 00:30 child\n 502 501 00:05 grandchild\n 900 1 01:00 unrelated\n' };
+  };
+  const list = await W.descendants(500, exec, 'darwin');
+  assert.deepStrictEqual(list.map(r => r.pid), [501, 502]);
+  const order = [];
+  const killed = await W.killTree(500, { exec, platform: 'darwin', includeSelf: true, kill: (p) => order.push(p) });
+  assert.deepStrictEqual(order, [502, 501, 500]);
+  assert.strictEqual(killed.length, 3);
+});

@@ -179,6 +179,7 @@ test('job runner: run() refuses while halted, cancelAll stops only running jobs'
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-halt-jobs-'));
   let refusal = null;
   const runner = new JobRunner({ dataDir, spawnMode: 'setsid', pollMs: 100, log: () => {}, notify: async () => {}, isAgentActive: () => false, agentExists: async () => true, defaultCwd: async () => dataDir, haltRefusal: () => refusal });
+  runner.start();   // as the running hub does: reconcile, then poll. Without it a job's first tick can race the cancel.
   const waitFor = async (cond, ms = 10000) => { const end = Date.now() + ms; while (!cond() && Date.now() < end) await new Promise(r => setTimeout(r, 25)); return cond(); };
   const pidOf = (id) => { try { return parseInt(fs.readFileSync(path.join(path.dirname(runner.status(id).log), 'pid'), 'utf8'), 10) || null; } catch { return null; } };
   const groupAlive = (pid) => { try { process.kill(-pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };

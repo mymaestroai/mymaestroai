@@ -53,7 +53,7 @@ async function backupOf(name, agents, { beforeBackup } = {}) {
   if (agents) writeAgents(inst, agents);
   const sid = await record(inst);
   if (beforeBackup) beforeBackup(inst);
-  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1', channel: 'experimental' } });
+  const r = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1', channel: 'experimental' } });
   return { inst, file: r.places[0].file, sid };
 }
 async function restoreAndApply(inst, file) {

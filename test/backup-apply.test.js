@@ -25,7 +25,7 @@ async function ready(name) {
   const inst = makeInstall(TMP, name);
   const settings = memSettings();
   await keys.setup(PW, { settings, logN: 15 });
-  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
+  const r = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
   w(path.join(inst.root, 'workspaces', 'doc', 'after.md'), 'made after the backup');
   fs.appendFileSync(path.join(inst.root, 'data', 'conversations', 'doc.jsonl'), 'later\n');
   w(path.join(inst.hubHome, 'share', 'common', 'f.txt'), 'changed after');
@@ -231,7 +231,7 @@ test('a second restore within 7 days: the first one\'s set-aside copies are kept
   const first = apply.lastRestore({ root: inst.root });
   // a second restore of the same backup, a day later
   const settings = memSettings(); await keys.setup(PW, { settings, logN: 15 });
-  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
+  const r = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
   const p = await restore.prepare({ file: r.places[0].file, password: PW, ...inst, platform: 'linux', mode: 'existing' });
   apply.confirm({ ...inst, platform: 'linux', id: p.id });
   apply.applyAtBoot({ root: inst.root }); apply.markHealthy({ root: inst.root });
@@ -270,7 +270,7 @@ test('round 3: no cleanup while a restore waits; staging judged by its age; undo
   const undoRec = JSON.parse(read(path.join(c.root, '.restore', 'last-restore.json')));
   assert.strictEqual(undoRec.kind, 'undo');
   const settings = memSettings(); await keys.setup(PW, { settings, logN: 15 });
-  const r = await createBackup({ ...c, platform: 'linux', settings, places: [places.localPlace(c.hubHome)], hub: { version: '5.8.1' } });
+  const r = await createBackup({ ...c, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(c.hubHome)], hub: { version: '5.8.1' } });
   const p = await restore.prepare({ file: r.places[0].file, password: PW, ...c, platform: 'linux', mode: 'existing' });
   apply.confirm({ ...c, platform: 'linux', id: p.id }); apply.applyAtBoot({ root: c.root }); apply.markHealthy({ root: c.root });
   assert.deepStrictEqual(JSON.parse(read(path.join(c.root, '.restore', 'asides.json'))).entries.map(e => e.id), [undoRec.id]);
@@ -278,7 +278,7 @@ test('round 3: no cleanup while a restore waits; staging judged by its age; undo
   if (fs.statSync('/dev/shm').dev !== fs.statSync(TMP).dev) {
     const d = makeInstall(TMP, 'other-disk');
     const settings2 = memSettings(); await keys.setup(PW, { settings: settings2, logN: 15 });
-    const r2 = await createBackup({ ...d, platform: 'linux', settings: settings2, places: [places.localPlace(d.hubHome)], hub: { version: '5.8.1' } });
+    const r2 = await createBackup({ ...d, platform: 'linux', _holdBoxes: () => () => {}, settings: settings2, places: [places.localPlace(d.hubHome)], hub: { version: '5.8.1' } });
     const p2 = await restore.prepare({ file: r2.places[0].file, password: PW, ...d, platform: 'linux', mode: 'existing' });
     const shm = fs.mkdtempSync('/dev/shm/backup-apply-');
     process.env.CLAUDE_CONFIG_DIR = shm;
@@ -293,7 +293,7 @@ test('a record of set-aside copies stays until they are really removed', async (
   apply.applyAtBoot({ root: inst.root }); apply.markHealthy({ root: inst.root });
   const first = apply.lastRestore({ root: inst.root });
   const settings = memSettings(); await keys.setup(PW, { settings, logN: 15 });
-  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
+  const r = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
   const p = await restore.prepare({ file: r.places[0].file, password: PW, ...inst, platform: 'linux', mode: 'existing' });
   apply.confirm({ ...inst, platform: 'linux', id: p.id }); apply.applyAtBoot({ root: inst.root }); apply.markHealthy({ root: inst.root });
   // something inside the first restore's copies can't be removed (a folder without write permission)
@@ -326,7 +326,7 @@ test('a backup taken with the admin two-factor switch off never turns it off her
     delete today.requireAdmin2fa;
     fs.writeFileSync(sf, JSON.stringify({ ...today, requireAdmin2fa: false }));   // the backup is taken with the switch off
     const settings = memSettings(); await keys.setup(PW, { settings, logN: 15 });
-    const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
+    const r = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
     fs.writeFileSync(sf, JSON.stringify(today));   // today the switch is on (no key)
     const p = await restore.prepare({ file: r.places[0].file, password: PW, ...inst, platform: 'linux', mode: 'existing' });
     apply.confirm({ ...inst, platform: 'linux', id: p.id });
@@ -354,7 +354,7 @@ test('a restored modules.json never brings back "run without asking", and today\
     plain: { settings: { no_ask_agents: ['sam'] } },
   } });
   const settings = memSettings(); await keys.setup(PW, { settings, logN: 15 });
-  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
+  const r = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
   // today: different, lower levels and a different, non-empty no-ask list in every place
   const today = { modules: {
     levdemo: { steps: {}, settings: { levels: ['sam:look'], no_ask_agents: ['owner'], note: 'today' } },

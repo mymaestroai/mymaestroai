@@ -61,7 +61,8 @@ test('the system tar lists and unpacks our archives the same way', async () => {
   assert.strictEqual(list.status, 0, list.stderr);
   // GNU tar prints bytes outside ASCII as \ooo escapes when the locale isn't UTF-8 (as under env -i): decode them
   const unescape = (line) => { const bytes = []; for (let i = 0; i < line.length; i++) { const m = /^\\([0-7]{3})/.exec(line.slice(i)); if (m) { bytes.push(parseInt(m[1], 8)); i += 3; } else bytes.push(...Buffer.from(line[i], 'utf8')); } return Buffer.from(bytes).toString('utf8'); };
-  assert.deepStrictEqual(list.stdout.trim().split('\n').map(unescape), ['a/', 'a/one.txt', longName, 'a/ln']);
+  // macOS (APFS) hands back decomposed (NFD) file names: compare both sides in NFC
+  assert.deepStrictEqual(list.stdout.trim().split('\n').map(unescape).map(n => n.normalize('NFC')), ['a/', 'a/one.txt', longName, 'a/ln'].map(n => n.normalize('NFC')));
   const out = path.join(TMP, 'sys-out'); fs.mkdirSync(out);
   assert.strictEqual(spawnSync('tar', ['-xf', file, '-C', out]).status, 0);
   assert.strictEqual(fs.readFileSync(path.join(out, longName), 'utf8'), 'two');
