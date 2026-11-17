@@ -354,7 +354,8 @@ test('review r2: quoted data is not read as an option; literal assignments reach
   isDestroy('c=bash; $c -c "r\'\'m -rf ~/projects"');
   isDestroy(L('c=rm', '$c -rf ~/projects'));
   assert.strictEqual(cr('PY=python3; "$PY" /tmp/x.py'), 'read');
-  assert.strictEqual(cr('c=rm; c=ls; $c -la /tmp'), 'read');
+  // Two assignments: bash may skip either (false && c=ls), so every value counts and the program is computed (review r3).
+  assert.strictEqual(c('c=rm; c=ls; $c -la /tmp'), 'admin');
   const r = tp.classifyCommand('s=sudo; $s ls /root', o);
   assert.strictEqual(r.cls, 'admin');
   assert.strictEqual(r.sudo, true);
@@ -422,4 +423,111 @@ test('hostile nesting never throws; the checker falls back to its strictest read
     const r = tp.classifyCommand(cmd + '\n' + RM, o);
     assert.strictEqual(r.cls, 'destroy');
   }
+});
+
+const atLeastAdmin = (cmd) => assert.ok(SEV(c(cmd)) >= SEV('admin'), `${JSON.stringify(cmd)} -> ${c(cmd)}`);
+
+test('review r3 1: brace sequences past the safe integers classify fast, and count as a computed program', () => {
+  for (const cmd of ['{9007199254740992..9007199254740992} x', '{1..9007199254740993} x', '{1..5..9007199254740993} x']) {
+    const t0 = Date.now();
+    atLeastAdmin(cmd);
+    assert.ok(Date.now() - t0 < 1000, `${cmd}: ${Date.now() - t0} ms`);
+  }
+});
+
+test('review r3 2: esac after the in-branch, a case inside a substitution', () => {
+  isDestroy(`(case x in esac; ${RM})`);
+  isDestroy(`case x in esac; ${RM}`);
+  isDestroy(L('case x in', 'esac', RM));
+  isDestroy(`case x in a) :;; esac; ${RM}`);
+  const r = tp.classifyCommand("A=$(case x in a) :;; esac) r''m -rf ~/projects", o);
+  assert.strictEqual(r.uncertain, true, 'a case inside a substitution fails closed');
+  assert.strictEqual(tp.classifyCommand('case x in a) :;;', o).uncertain, true, 'an open case at the top level');
+  assert.strictEqual(cr('case "$1" in a) ls;; esac'), 'read');
+  isDestroy(L('case $x in', '  a) rm -rf ~/projects;;', 'esac'));
+});
+
+test('review r3 3: a program named by a variable the command assigns is at least admin; candidates are classified', () => {
+  isDestroy('c=rm; false && c=ls; $c -rf ~/projects');
+  isDestroy('c=rm; false && c=echo; $c -rf ~/projects');
+  isDestroy('c=rm; (c=echo); $c -rf ~/projects');
+  isDestroy('c=rm; c=echo | true; $c -rf ~/projects');
+  isDestroy('c=rm; x=$(c=echo); $c -rf ~/projects');
+  isDestroy('c=rm; if false; then c=echo; fi; $c -rf ~/projects');
+  isDestroy('a=r; ${a}m -rf ~/projects');
+  isDestroy('a=r; b=m; $a$b -rf ~/projects');
+  isDestroy('a=r; "${a}m" -rf ~/projects');
+  isDestroy('declare c=rm; $c -rf ~/projects');
+  isDestroy('export c=rm; $c -rf ~/projects');
+  isDestroy('readonly c=rm; $c -rf ~/projects');
+  isDestroy('local c=rm; $c -rf ~/projects');
+  isDestroy('c=r; c+=m; $c -rf ~/projects');
+  isDestroy('c=ls; c=rm; $c -rf ~/projects');
+  isDestroy('for c in rm ls; do true; done; c=rm; c=ls; $c -rf ~/projects');
+  for (const cmd of ['a=rm; b=a; ${!b} -rf ~/projects', 'c=xrm; ${c:1} -rf ~/projects', 'c=RM; ${c,,} -rf ~/projects', 'c=rX; ${c/X/m} -rf ~/projects',
+    'c=xrm; ${c#x} -rf ~/projects', 'c=rmx; ${c%x} -rf ~/projects', 'c=rm; ${c^} -rf ~/projects', 'c=rm; c=ls; $c -la /tmp', 'read c; $c x',
+    'for c in rm ls; do $c -rf ~/projects; done', 'printf -v c rm; $c x', 'mapfile c < /tmp/f; $c x', 'getopts ab c; $c x', 'c=$(echo rm); $c x', 'c=(rm); $c x']) {
+    atLeastAdmin(cmd);
+  }
+  // one literal assignment used as a whole word resolves to its value and is not computed
+  assert.strictEqual(cr('PY=python3; "$PY" /tmp/x.py'), 'read');
+  assert.strictEqual(cr('PY=python3; $PY /tmp/x.py'), 'read');
+  assert.strictEqual(cr('PY=python3; "${PY}" /tmp/x.py'), 'read');
+  assert.strictEqual(cr('"$PY" /tmp/x.py'), 'read', 'a variable the command does not assign stays out of scope');
+  assert.strictEqual(cr('$PY /tmp/x.py'), 'read');
+  // ordinary commands stay reads
+  for (const cmd of ['for f in /tmp/*.txt; do wc -l "$f"; done', 'x=$(git rev-parse HEAD); echo $x', 'for i in 1 2 3; do echo $i; done', 'read -r line < /tmp/f; echo "$line"',
+    'case "$1" in a) ls;; esac', 'n=3; echo $n', 'f=/tmp/a; ls "$f"; cat "${f}"']) {
+    assert.strictEqual(cr(cmd), 'read', cmd);
+  }
+});
+
+test('review r3 4-6: code strings of the normalized segment, aliases, here-strings to a shell', () => {
+  isDestroy("b{a..a}sh -c 'r\"\"m -rf ~/projects'");
+  isDestroy("ba''sh -c 'r\"\"m -rf ~/projects'");
+  isDestroy("shopt -s expand_aliases; alias z='rm -rf ~/projects'; z");
+  isDestroy("alias z='r\"\"m -rf ~/projects' y='ls'");
+  isDestroy('bash <<< "r\'\'m -rf ~/projects"');
+  isDestroy('bash <<<"r\'\'m -rf ~/projects"');
+  isDestroy("sh <<<'rm -rf ~/projects'");
+  assert.strictEqual(cr("alias ll='ls -la'"), 'read');
+  assert.strictEqual(cr('bash <<< "ls /tmp"'), 'read');
+  assert.strictEqual(cr('cat <<< "rm -rf ~/projects"'), 'read', 'only a shell runs the string');
+});
+
+test('review r3 7: rm takes any unambiguous prefix of --recursive and --force', () => {
+  for (const f of ['--r', '--re', '--rec', '--recu', '--recur', '--recurs', '--recursi', '--recursiv', '--recursive', '--f', '--fo', '--for', '--forc', '--force']) {
+    isDestroy(`rm ${f} ~/projects`, f);
+    isDestroy(`rm ~/projects ${f}`, `${f} after the operand`);
+  }
+  notDestroy('rm --one-file-system ~/projects/x');
+  notDestroy('rm --verbose ~/projects/x');
+  notDestroy('rm --dir ~/projects/x');
+  notDestroy('rm --fo2 ~/projects/x');
+  notDestroy('rm -- --r');
+});
+
+test('review r3 8: an arithmetic command is read; a computed program next to it is still admin', () => {
+  assert.strictEqual(cr('((n*2))'), 'read');
+  assert.strictEqual(cr('((a?b:c))'), 'read');
+  assert.strictEqual(cr('n=3; ((n*2)); echo done'), 'read');
+  atLeastAdmin('((n*2)); $(echo rm) x');
+});
+
+test('review r3 9: a chain of wrappers is bounded; a 200 KB chain classifies in under 2 s', () => {
+  const t0 = Date.now();
+  const r = tp.classifyCommand('flock x '.repeat(25000), o);
+  assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+  assert.strictEqual(r.uncertain, true, 'too many wrappers fails closed');
+  assert.ok(SEV(r.cls) >= 0);
+  isDestroy(L('flock x '.repeat(40) + 'ls', RM));
+  const t1 = Date.now();
+  tp.classifyCommand('c=rm; $c x; '.repeat(3000), o);
+  assert.ok(Date.now() - t1 < 5000, `${Date.now() - t1} ms`);
+});
+
+test('lead, review r3: a one-line command the lexer cannot read is also read as bash runs it (quotes removed)', () => {
+  const r = tp.classifyCommand("A=$(case x in a) :;; esac) r''m -rf ~/projects", o);
+  assert.strictEqual(r.uncertain, true);
+  assert.strictEqual(r.cls, 'destroy');
 });
