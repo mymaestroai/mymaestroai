@@ -33,7 +33,15 @@ test('envKeep grants reach store-held secrets (exact names only); client exclusi
   assert.strictEqual(cl.ANTHROPIC_API_KEY, undefined);
   assert.strictEqual(cl.CLAUDE_CODE_OAUTH_TOKEN, 'oat-test', 'claude gets its sign-in token from the store');
   assert.strictEqual(cl.OTHER_SECRET, undefined);
-  assert.strictEqual(envForAgent(a, { base: { GITHUB_TOKEN: 'ghp-test-2' }, secrets }).GITHUB_TOKEN, 'ghp-test-2', 'the process environment wins');
+  assert.strictEqual(envForAgent(a, { base: { GITHUB_TOKEN: 'ghp-test-2' }, secrets }).GITHUB_TOKEN, 'ghp-test-1', 'the .env value in the store wins over a launch-time one, as for the hub itself');
+  assert.strictEqual(envForAgent(a, { base: { GITHUB_TOKEN: 'ghp-test-2' }, secrets: () => undefined }).GITHUB_TOKEN, 'ghp-test-2', 'a launch-time value passes when the store has none');
+  for (const n of ['HUB_AUTH_PASSWORD', 'HUB_WALLET_OWNER', 'HUB_SETUP_TOKEN', 'MYMAESTRO_HUB_SECRET', 'CLAUDE_CODE_OAUTH_TOKEN', 'hub_auth_username']) {
+    const r2 = ce.cleanEnvKeep([n]);
+    assert.strictEqual(r2.ok, false, n);
+    assert.match(r2.error, /belongs to the hub itself/);
+  }
+  assert.deepStrictEqual(ce.cleanEnvKeep(['GITHUB_TOKEN']).value, ['GITHUB_TOKEN'], 'an ordinary secret name stays grantable');
+  assert.deepStrictEqual(envForAgent({ name: 'sam', envKeep: ['HUB_AUTH_PASSWORD'] }, { base: {}, secrets: () => 'pw-test-1' }).HUB_AUTH_PASSWORD, undefined, 'a stored reserved grant gives nothing');
   assert.deepStrictEqual(envForAgent({ name: 'maestro', lead: true }, { base, secrets }), base, 'the lead path is unchanged');
   assert.ok(ce.CLIENT_EXCLUDE.codex.includes('OPENAI_BASE_URL') && ce.CLIENT_EXCLUDE.claude.includes('ANTHROPIC_AUTH_TOKEN'));
 });

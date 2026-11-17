@@ -8,16 +8,17 @@ const B = require('../lib/billing');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 
-test('claudeClientEnv: no API key, plus the .env-held sign-in token from the store when base lacks it', () => {
+test('claudeClientEnv: no API key, plus the .env-held sign-in token from the store (which wins over a launch-time one)', () => {
   const hsPath = require.resolve('../lib/hub-secrets');
   const saved = require.cache[hsPath];
   const store = { CLAUDE_CODE_OAUTH_TOKEN: 'oat-test', OTHER_TOKEN: 'ghp-test-1' };
   require.cache[hsPath] = { id: hsPath, filename: hsPath, loaded: true, exports: { has: (n) => n in store, get: (n) => store[n] } };
   try {
     assert.deepStrictEqual(B.claudeClientEnv({ PATH: '/bin', ANTHROPIC_API_KEY: 'sk-test-123' }), { PATH: '/bin', CLAUDE_CODE_OAUTH_TOKEN: 'oat-test' });
-    assert.strictEqual(B.claudeClientEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'mine' }).CLAUDE_CODE_OAUTH_TOKEN, 'mine');
+    assert.strictEqual(B.claudeClientEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'launch-old' }).CLAUDE_CODE_OAUTH_TOKEN, 'oat-test', 'the .env value wins, as everywhere in the hub');
     delete store.CLAUDE_CODE_OAUTH_TOKEN;
     assert.strictEqual('CLAUDE_CODE_OAUTH_TOKEN' in B.claudeClientEnv({ PATH: '/bin' }), false);
+    assert.strictEqual(B.claudeClientEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'launch-old' }).CLAUDE_CODE_OAUTH_TOKEN, 'launch-old', 'a launch-time token passes when .env has none');
   } finally { if (saved) require.cache[hsPath] = saved; else delete require.cache[hsPath]; }
 });
 

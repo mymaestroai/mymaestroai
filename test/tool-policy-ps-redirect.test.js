@@ -12,4 +12,6 @@ test('ps: a redirection target containing "e" is not the BSD e option; a real e 
   const c = (cmd) => tp.classifyCommand(cmd, o).cls;
   for (const cmd of ['ps aux > events', 'ps aux >events.txt', 'ps aux 2> errors', 'ps aux > events 2>&1']) assert.notStrictEqual(c(cmd), 'admin', cmd);
   for (const cmd of ['ps eww > out', 'ps auxe >out', 'ps e > out']) assert.strictEqual(c(cmd), 'admin', cmd);
+  for (const cmd of ['ps eww>out', 'ps auxe>out', 'ps e2>err']) assert.strictEqual(c(cmd), 'admin', 'a redirect attached to the option word: ' + cmd);
+  for (const cmd of ['ps aux &> events', 'ps aux>events', 'ps aux 2>err']) assert.notStrictEqual(c(cmd), 'admin', cmd);
 });
