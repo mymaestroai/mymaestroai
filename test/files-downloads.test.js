@@ -90,8 +90,8 @@ const NOT_FOUND = { ok: false, error: 'not found' };
 
 /** Every produced zip: no two entries equal ignoring case, no file entry is also the parent folder of another entry, no segment ends in "." or " ", no "\" or ":". */
 function assertSafeNames(names) {
-  const lower = names.map(n => n.toLowerCase());
-  assert.strictEqual(new Set(lower).size, lower.length, `no two entries equal ignoring case: ${JSON.stringify(names)}`);
+  const lower = names.map(n => n.normalize('NFC').toLowerCase());   // as Windows and macOS compare names
+  assert.strictEqual(new Set(lower).size, lower.length, `no two entries equal ignoring case and Unicode normalisation: ${JSON.stringify(names)}`);
   for (const a of lower) for (const b of lower) assert.ok(a === b || !b.startsWith(a + '/'), `no entry is a prefix-folder of another entry: ${JSON.stringify(a)} / ${JSON.stringify(b)}`);
   for (const n of names) {
     assert.ok(!n.includes('\\') && !n.includes(':'), `no backslash or colon: ${JSON.stringify(n)}`);
@@ -701,6 +701,23 @@ test('zip: entry names are safe to extract anywhere (backslash, colon, control c
   assert.ok(z['x_.._.._evil.bat'].equals(evil));
   assert.ok(z['a_b.txt'].equals(colon) && z['a_b (2).txt'].equals(under), 'bytes intact, each under its own entry');
   assert.deepStrictEqual(['', '.', '..'].map(filesLib.sanitizeSegment), ['_', '_', '_']);
+});
+
+// Review r3 (GPT-5.6, Sentinel, Sonnet): Windows ignores spaces before the extension ("CON .txt" is CON) and reserves the
+// superscript COM/LPT forms; macOS treats the NFC and NFD spellings of a name as one file.
+test('zip names: "CON .txt" and superscript COM/LPT are prefixed; NFC and NFD spellings of one name stay two entries', async (t) => {
+  assert.strictEqual(filesLib.sanitizeSegment('CON .txt'), '_CON .txt');
+  assert.strictEqual(filesLib.sanitizeSegment('COM\u00b9.txt'), '_COM\u00b9.txt');
+  assert.strictEqual(filesLib.sanitizeSegment('lpt\u00b3'), '_lpt\u00b3');
+  assert.strictEqual(filesLib.sanitizeSegment('CONX.txt'), 'CONX.txt');
+  const w = await world(); t.after(() => w.close());
+  const nfc = 'caf\u00e9.txt', nfd = 'cafe\u0301.txt';
+  w.write('share/helper-agent/uni/' + nfc, 'composed'); w.write('share/helper-agent/uni/' + nfd, 'decomposed');
+  const r = await w.req('u_owner', 'GET', '/api/files/zip?agent=helper-agent&path=uni');
+  assert.strictEqual(r.status, 200);
+  const z = readZip(r.body), names = Object.keys(z);
+  assert.strictEqual(names.length, 2, `both spellings kept: ${JSON.stringify(names)}`);
+  assert.deepStrictEqual(Object.values(z).map(b => b.toString()).sort(), ['composed', 'decomposed']);
 });
 
 test('zip names: Windows and macOS safe, unique ignoring case, files and folders in one namespace per folder', async (t) => {
