@@ -101,6 +101,7 @@ function harness(opts = {}) {
     settings: () => h.settingsRaw, runTurn,
     models: async () => opts.models || ['claude-sdk/claude-sonnet-4-5', 'claude-sdk/claude-haiku-4-5', 'claude-sdk/claude-haiku-3-5', 'openai/gpt-5'],
     leadModel: async () => opts.leadModel || null,
+    realAgentNames: async () => opts.realAgentNames || [],
     sandboxAvailable: async () => (opts.boxed === false ? { ok: false } : { ok: true }),
     notify: async (payload) => { h.pushes.push(payload); return typeof h.notifyResult === 'function' ? h.notifyResult() : h.notifyResult; },
     halted: () => h.halt, zone: () => 'UTC', random,
@@ -418,6 +419,15 @@ test('r2: a read-only command on bash.txt after the scripted one does not fail t
   both2('Bash', { command: 'echo other > /w/ws/bash.txt' });
   const v2 = verifyClass({ events: ev2, reply: '', fixtures: { install: fx, home: fx }, folders, refusePath: '/w/rec/x.txt', scriptedBash, readFile: () => 'b0b0', bashWritePaths: shellWritePaths });
   assert.strictEqual(v2.actions['bash@install'].ok, false);
+});
+
+test('a real agent named like a check agent: that kind is skipped with a note, and no turn runs for it', async () => {
+  const h = harness({ settings: { classes: ['host', 'lead'] }, realAgentNames: ['main', 'selfcheck-host'] });
+  const lr = await h.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr.classes.host.status, 'skipped');
+  assert.match(lr.classes.host.note, /^An agent named selfcheck-host is in your agent list, so this kind wasn't checked\./);
+  assert.strictEqual(lr.classes.lead.status, 'pass');
+  assert.deepStrictEqual(h.turns.map(t => t.name), ['selfcheck-lead']);
 });
 
 test('r2: a halt during the retry keeps what the first turn already settled', async () => {

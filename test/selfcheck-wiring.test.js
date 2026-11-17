@@ -333,6 +333,23 @@ test('tools: the disallow list for the Claude client and the hands server leave 
   assert.deepStrictEqual([...tw.SELFCHECK_TOOLS].sort(), [...SIX].sort());
 });
 
+test('gate: a check agent may call only the six tools (built-in or hub hands) and ToolSearch, even with the policy switched off', async () => {
+  for (const enabled of [() => true, () => false]) {
+    const s = stubGate({ enabled });
+    for (const t of ['mcp__agent-hub__consult_agent', 'mcp__agent-hub__write_memory', 'WebFetch', 'Task', 'NotebookEdit', 'SomeFutureTool']) {
+      const r = await s.gate.check({ agentName: 'selfcheck-lead', tool: t, input: {}, cwd: ROOT });
+      assert.strictEqual(r.allowed, false, `${t} refused (policy ${enabled() ? 'on' : 'off'})`);
+      assert.strictEqual(r.decision.reason, 'a self-check agent has only Read, Write, Edit, Glob, Grep and Bash');
+    }
+    for (const t of ['Read', 'mcp__hub__Read', 'ToolSearch']) {
+      const r = await s.gate.check({ agentName: 'selfcheck-lead', tool: t, input: { file_path: path.join(ROOT, 'package.json') }, cwd: ROOT });
+      assert.strictEqual(r.allowed, true, `${t} allowed (policy ${enabled() ? 'on' : 'off'})`);
+    }
+    // a real agent is untouched
+    assert.strictEqual((await s.gate.check({ agentName: 'real-lead', tool: 'WebFetch', input: { url: 'https://example.com' }, cwd: ROOT })).allowed, true);
+  }
+});
+
 test('gate: the observer hears the outcome, not the rule: an approved card is allow, a refused or timed-out one deny', async () => {
   for (const [answer, want] of [[{ decision: 'allow', by: 'owner' }, 'allow'], [{ decision: 'deny', by: 'owner' }, 'deny'], [{ decision: 'deny', by: 'timeout' }, 'deny']]) {
     const s = stubGate({ approvals: { request: () => ({ id: 'a1', promise: Promise.resolve(answer) }), timeoutMs: 1000 } });
