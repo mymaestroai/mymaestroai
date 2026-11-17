@@ -149,3 +149,21 @@ test('relocating options and package-manager destinations are judged', () => {
     `export CD''PATH=/etc; cd ${FX} && cd sub && echo hi > f`]) refused(cmd);
   inside(`cd ${FX} && python3 -m pip install x`);
 });
+
+// Review r2 (Sentinel 1, Sonnet 1-5): tilde forms, brace expansion, combined and shortened options, arithmetic that
+// assigns, quoted pieces of a target, rm, and a package manager behind a wrapper option.
+test('round 2: ~-, ~user, ~+/.., risky braces, -rt, --target-d=, x[B=1], $[ ], ${v:B=1}, [[ ]], \'\'$HOME, rm $HOME, env -i npm', () => {
+  for (const cmd of [`cd ${FX} && echo hi > ~-/x`, `cd ${FX} && echo x > ~root/.bashrc`, `cd ${FX} && echo x > ~+/../y`,
+    `cd ${FX} && cp a {/etc/cron.d,/x}/job`, `cd ${FX} && touch {/etc/cron.d/x,y}`, `cd ${FX} && cp a {.,x}./y`, `cd ${FX} && echo x > {a,../b}`,
+    `cd ${FX} && cp -rt /etc/cron.d job`, `cd ${FX} && mv -vt /home/u/Documents report.txt`, `cd ${FX} && cp --target-d=/etc/cron.d job`, `cd ${FX} && ln -sft /etc x`,
+    `B=${FX}; x[B=1]=y; echo hi > $B/f`, `B=${FX}; : $[B=1]; echo hi > $B/f`, `B=${FX}; echo \${v:B=1}; echo hi > $B/f`, `B=${FX}; [[ 1 -eq B=1 ]]; echo hi > $B/f`,
+    'env -i npm install']) refused(cmd);
+  for (const cmd of ["echo k >> ''$HOME/.ssh/authorized_keys", 'echo k >> "$HOME"/.ssh/authorized_keys', 'rm $HOME/.ssh/authorized_keys', 'rm $(echo /etc/passwd)']) {
+    assert.strictEqual(c(cmd, { ...o, cwd: FX }), 'admin', cmd);
+  }
+  // still plain: a numeric or letter range, a comma group of names, two dots inside a name
+  inside(`cd ${FX} && touch a{1..3}.txt b{a..c}`);
+  inside(`cd ${FX} && touch x.{js,ts}`);
+  inside(`cd ${FX} && echo x > report..md`);
+  inside(`cd ${FX} && env -i npm install`);
+});
