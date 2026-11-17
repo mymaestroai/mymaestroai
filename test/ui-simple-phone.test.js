@@ -204,3 +204,46 @@ test('Advanced is untouched: without mm-simple, or without hubSimple, the gate i
   const none = sandbox({ window: {} });
   assert.strictEqual(none.h.simpleOn(), false);
 });
+
+// ── hub-started turns, one mic and one call button ──
+test('Simple reads the chat view as "all" without writing localStorage; Advanced keeps the stored choice', () => {
+  const chatViewGet = (st) => (st && st.getItem('hub-chat-view') === 'all' ? 'all' : 'main');
+  const { ctx, classes, store } = sandbox({ chatViewGet });
+  assert.strictEqual(ctx.chatViewGet(ctx.window.localStorage), 'all');
+  assert.strictEqual(store.size, 0, 'nothing was written');
+  classes.delete('mm-simple');
+  assert.strictEqual(ctx.chatViewGet(ctx.window.localStorage), 'main');
+  store.set('hub-chat-view', 'all');
+  assert.strictEqual(ctx.chatViewGet(ctx.window.localStorage), 'all');
+});
+
+test('Simple hides the page\'s "⚡ Scheduled task" note, Advanced keeps it', () => {
+  const mk = (text) => { const set = new Set(); return { text, set, classList: { add: (c) => set.add(c) } }; };
+  const { ctx, classes } = sandbox({ addNote: mk });
+  assert.ok(ctx.addNote('⚡ Scheduled task: water the plants — 9:00').set.has('simple-auto-hide'));
+  assert.ok(ctx.addNote('⚡ Job finished — 9:01').set.has('simple-auto-hide'));
+  assert.ok(!ctx.addNote('⚡ sent from another device — 9:02').set.has('simple-auto-hide'));
+  assert.ok(!ctx.addNote('No messages yet').set.has('simple-auto-hide'));
+  classes.delete('mm-simple');
+  assert.ok(!ctx.addNote('⚡ Scheduled task: x — 9:00').set.has('simple-auto-hide'));
+});
+
+test('Simple: #mic-btn always dictates (never starts a call), the call button is the only call button', () => {
+  const seen = [];
+  const voicePrefsNow = () => ({ mode: 'handsfree', micLevel: 50 });
+  let ctx;   // the page's functions call each other through the global binding, which the Simple block replaced
+  const voiceMicTap = () => { seen.push(['tap', ctx.voicePrefsNow().mode]); };
+  const voiceMicPaint = () => { seen.push(['paint', ctx.voicePrefsNow().mode]); };
+  const sb = sandbox({ voicePrefsNow, voiceMicTap, voiceMicPaint });
+  ctx = sb.ctx; const classes = sb.classes;
+  ctx.voiceMicTap(); ctx.voiceMicPaint();
+  assert.deepStrictEqual(seen, [['tap', 'tap'], ['paint', 'tap']]);
+  assert.strictEqual(ctx.voicePrefsNow().mode, 'handsfree', 'the call itself still reads the real mode');
+  seen.length = 0;
+  classes.delete('mm-simple');   // Advanced
+  ctx.voiceMicTap(); ctx.voiceMicPaint();
+  assert.deepStrictEqual(seen, [['tap', 'handsfree'], ['paint', 'handsfree']]);
+  const css = /<style id="simple-css">([\s\S]*?)<\/style>/.exec(html)[1];
+  assert.match(css, /html\.mm-simple #mic-btn\.call \{ display: none; \}/);   // during a call only #simple-call-btn is left
+  assert.match(css, /html\.mm-simple #simple-call-btn \{ order: 5; display: grid/);
+});

@@ -270,7 +270,12 @@
       document.addEventListener('click', (e) => { if (!e.target.closest || !e.target.closest('.simple-lvl')) document.querySelectorAll('.simple-lvl-menu').forEach(m => { m.hidden = true; }); });
       const panels = document.getElementById('chat-panels');
       if (panels && typeof MutationObserver === 'function') new MutationObserver(simpleScanSoon).observe(panels, { childList: true, subtree: true });
-      setInterval(() => { for (const id of Object.keys(chats)) simpleLvlRefresh(id); }, 2500);
+      // Simple shows hub-started turns as short ordinary messages: the chat view is 'all' here, and nothing is written to localStorage (Advanced keeps the person's own choice).
+      if (typeof chatViewGet === 'function') { const viewWas = chatViewGet; chatViewGet = function (storage) { return simpleOn() ? 'all' : viewWas(storage); }; }
+      // The reasoning-level button follows the model and the agent: refreshed when the page refreshes its own effort picker (chat open, model pick change, model list), and when the agent list reloads.
+      if (typeof refreshEffortPick === 'function') { const pickWas = refreshEffortPick; refreshEffortPick = function (chat) { const r = pickWas.apply(this, arguments); if (chat && chat.id) simpleLvlRefresh(chat.id); return r; }; }
+      if (typeof switchToChat === 'function') { const switchWas = switchToChat; switchToChat = function (chatId) { const r = switchWas.apply(this, arguments); simpleLvlRefresh(chatId); return r; }; }
+      if (typeof loadAgents === 'function') { const loadWas = loadAgents; loadAgents = async function () { const r = await loadWas.apply(this, arguments); for (const id of Object.keys(chats)) simpleLvlRefresh(id); return r; }; }
       // Open the first agent so there is always a chat (greeting + starters) to look at.
       let tries = 0;
       const t = setInterval(() => {

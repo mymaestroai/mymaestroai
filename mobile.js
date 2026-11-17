@@ -14370,6 +14370,34 @@ function simpleRoute(route) {
   if (route.screen === 'agents') { const a = simpleStartAgent(agents, localStorage.getItem('hub-mobile-last')); if (a) { route.screen = 'chat'; route.agent = a; } }
   simpleTopPaint();
 }
+// Simple shows hub-started turns as short ordinary messages: the chat view is 'all' here, and nothing is written to localStorage.
+if (typeof chatViewGet === 'function') { const viewWas = chatViewGet; chatViewGet = function (storage) { return simpleOn() ? 'all' : viewWas(storage); }; }
+// A live hub-started turn: the page's "⚡ Scheduled task …" note is skipped (hidden), only Simple's muted label shows.
+if (typeof addNote === 'function') {
+  const noteWas = addNote;
+  addNote = function (text) {
+    const d = noteWas.apply(this, arguments);
+    if (simpleOn() && typeof text === 'string' && text.startsWith('\u26A1 ') && !text.startsWith('\u26A1 sent from another device')) d.classList.add('simple-auto-hide');
+    return d;
+  };
+}
+// One dictation mic and one voice-call button in every voice mode: in Simple #mic-btn always dictates (in hands-free mode the page's
+// own mic would start a call; here it reads the mode as 'tap'), and #simple-call-btn is the only call button (it hangs up during a call).
+let simpleDictating = false;
+if (typeof voicePrefsNow === 'function' && typeof voiceMicTap === 'function' && typeof voiceMicPaint === 'function') {
+  const prefsWas = voicePrefsNow; const tapWas = voiceMicTap; const paintWas = voiceMicPaint;
+  voicePrefsNow = function () { const p = prefsWas.apply(this, arguments); return simpleOn() && simpleDictating && p && p.mode !== 'tap' ? Object.assign({}, p, { mode: 'tap' }) : p; };
+  voiceMicTap = function () {
+    if (!simpleOn()) return tapWas.apply(this, arguments);
+    simpleDictating = true;
+    try { return tapWas.apply(this, arguments); } finally { simpleDictating = false; }   // the mode is read before the first await
+  };
+  voiceMicPaint = function () {
+    if (!simpleOn()) return paintWas.apply(this, arguments);
+    simpleDictating = true;
+    try { return paintWas.apply(this, arguments); } finally { simpleDictating = false; }
+  };
+}
 // Advanced: the ⋮ menu's "Switch to Simple".
 {
   const ms = document.getElementById('menu-simple');
