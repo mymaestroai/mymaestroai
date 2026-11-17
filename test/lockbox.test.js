@@ -104,12 +104,41 @@ test('buildProfile for a worker', () => {
   assert.strictEqual(lb.buildProfile({ agent, policy, mode: 'watch', tool: 'run_job', command: 'x'.repeat(500), ...base(w) }).label.length, 300);
 });
 
-test('buildProfile refuses a root that would cover the lockbox folders', () => {
+test('a root that contains the lockbox folders (an agent granted the whole hub home) builds a box laid out around them', () => {
   const w = world();
   const agent = { name: 'agent-a' };
-  for (const root of [w.hubHome, path.join(w.hubHome, 'lockbox'), path.dirname(w.hubHome) === '/' ? '/' : path.dirname(w.hubHome)]) {
-    assert.throws(() => lb.buildProfile({ agent, policy: policyOf(agent, [root], w), mode: 'enforce', tool: 'Bash', command: 'x', ...base(w) }), /would cover other agents' lockbox folders/, root);
-  }
+  lb.prepareAgentDirs('agent-a', { hubHome: w.hubHome });
+  lb.prepareAgentDirs('agent-b', { hubHome: w.hubHome });
+  const p = lb.buildProfile({ agent, policy: policyOf(agent, [w.hubHome], w), mode: 'enforce', tool: 'Bash', command: 'x', ...base(w) });
+  const lockboxDir = path.join(w.hubHome, 'lockbox');
+  assert.ok(p.writes.includes(fs.realpathSync(w.hubHome)), 'the hub home root is granted');
+  assert.ok(p.writes.includes(path.join(lockboxDir, 'agent-a')), 'its own folder too');
+  assert.ok(p.writeHoles.includes(lockboxDir) && p.readHoles.includes(lockboxDir), 'other agents\' folders are holes inside it');
+  const q = lb.buildProfile({ agent, policy: policyOf(agent, [lockboxDir], w), mode: 'enforce', tool: 'Bash', command: 'x', ...base(w) });
+  assert.ok(!q.writes.includes(lockboxDir), 'a root inside the lockbox folders is not granted');
+});
+
+test('a root whose real path lands inside a hole is not granted (a shared parent bent elsewhere)', () => {
+  const w = world();
+  const agent = { name: 'agent-a' };
+  fs.mkdirSync(path.join(w.hubRoot, 'data', 'ws'));
+  const team = tmpRoot();
+  fs.symlinkSync(path.join(w.hubRoot, 'data'), path.join(team, 'a'));
+  const root = path.join(team, 'a', 'ws');
+  const p = lb.buildProfile({ agent, policy: policyOf(agent, [root], w), mode: 'enforce', tool: 'Bash', command: 'x', ...base(w) });
+  assert.ok(!p.writes.some(x => x.startsWith(path.join(w.hubRoot, 'data'))), JSON.stringify(p.writes));
+  assert.ok(p.skipped.includes(root));
+});
+
+test('readAllow: Claude tool-results folders for boxed agents with read holes, none for the lead', () => {
+  const w = world();
+  const home = tmpRoot();
+  const worker = { name: 'agent-a' };
+  const p = lb.buildProfile({ agent: worker, policy: policyOf(worker, [], w), mode: 'enforce', tool: 'Bash', command: 'x', home, ...base(w) });
+  assert.deepStrictEqual(p.readAllow, [path.join(home, '.claude', 'projects', '*', 'tool-results'), path.join(home, '.claude', 'projects', '*', '*', 'tool-results')]);
+  const lead = { name: 'lead-a', lead: true, category: 'primary' };
+  const q = lb.buildProfile({ agent: lead, policy: toolPolicy.policyFor(lead), mode: 'enforce', tool: 'Bash', command: 'x', home, ...base(w) });
+  assert.deepStrictEqual(q.readAllow, []);
 });
 
 test('buildProfile for the lead: hubHome and /tmp, no holes, no env', () => {

@@ -118,7 +118,7 @@ def validate(prof):
         out[k] = prof.get(k, "")
         if not isinstance(out[k], str) or "\0" in out[k]:
             raise Fail("bad profile: " + k)
-    for k in ("writes", "writeHoles", "readHoles", "devWrites"):
+    for k in ("writes", "writeHoles", "readHoles", "readAllow", "devWrites"):
         out[k] = str_list(prof.get(k, []), k)
     env = prof.get("env")
     out["env"] = None
@@ -252,6 +252,29 @@ class Ruleset:
         if r < 0:
             raise Fail("landlock_restrict_self failed: " + errname(e))
 
+def expand_allow(patterns, limit=2000):
+    """Read-only grants: each "*" stands for one folder name; links are never followed, missing paths are dropped."""
+    out = []
+    for pat in patterns:
+        level = ["/"]
+        for part in [x for x in os.path.normpath(pat).split("/") if x]:
+            nxt = []
+            for base in level:
+                if part != "*":
+                    p = os.path.join(base, part)
+                    if os.path.isdir(p) and not os.path.islink(p):
+                        nxt.append(p)
+                    continue
+                try:
+                    for ent in os.scandir(base):
+                        if ent.is_dir(follow_symlinks=False):
+                            nxt.append(ent.path)
+                except OSError:
+                    pass
+            level = nxt[:limit]
+        out.extend(level)
+    return out[:limit]
+
 def build_ruleset(prof):
     rs = Ruleset()
     holes = [real(h) for h in prof["writeHoles"] + prof["readHoles"]]
@@ -264,6 +287,8 @@ def build_ruleset(prof):
         if os.path.exists(p):
             rs.add(real(p), WRITE_ALL, follow=True)
     rs.grant(FS_READ_FILE, "/", rholes)
+    for p in expand_allow(prof["readAllow"]):
+        rs.add(p, FS_READ_FILE, follow=False)   # read-only, even inside a hole
     return rs
 
 # ---------------------------------------------------------------- enforce: seccomp
@@ -439,6 +464,7 @@ class Judge:
         self.writes = [real(w) for w in prof["writes"]]
         self.holes = [real(h) for h in prof["writeHoles"] + prof["readHoles"]]
         self.rholes = [real(h) for h in prof["readHoles"]]
+        self.allow = expand_allow(prof["readAllow"])
         self.dev = [real(d) for d in prof["devWrites"]]
         self.cwds, self.pending, self.seen, self.entries, self.rcache = {}, {}, set(), [], {}
         self.more = 0
@@ -467,6 +493,8 @@ class Judge:
     def read_refused(self, p):
         p = self.parent_real(p)
         if not any(inside(p, h) for h in self.rholes):
+            return False
+        if any(inside(p, a) for a in self.allow):
             return False
         for w in self.writes:
             if inside(p, w) and any(inside(w, h) for h in self.rholes if inside(p, h)):

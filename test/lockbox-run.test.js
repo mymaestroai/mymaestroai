@@ -308,6 +308,24 @@ describe('lockbox-run', { skip }, () => {
     assert.ok(!fs.existsSync(path.join(fx.B, 'x.txt')));
   });
 
+  it('18. readAllow opens one folder pattern inside a read hole, read-only', () => {
+    const fx = fixture();
+    const tr = path.join(fx.H, 'proj', 'tool-results');
+    fs.mkdirSync(tr, { recursive: true });
+    fs.writeFileSync(path.join(tr, 'out.txt'), 'long output\n');
+    const prof = profile(fx, { readAllow: [path.join(fx.H, '*', 'tool-results')] });
+    let r = box(fx, prof, 'cat "$FX_H/proj/tool-results/out.txt"');
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(r.stdout, 'long output\n');
+    r = box(fx, prof, 'cat "$FX_H/secret.txt"');
+    assert.notStrictEqual(r.status, 0, 'the rest of the hole stays closed');
+    r = box(fx, prof, 'echo x > "$FX_H/proj/tool-results/new.txt"');
+    assert.notStrictEqual(r.status, 0, 'read-only');
+    const w = box(fx, { ...prof, mode: 'watch' }, 'cat "$FX_H/proj/tool-results/out.txt" > /dev/null');
+    assert.strictEqual(w.status, 0, w.stderr);
+    assert.ok(!fs.existsSync(fx.log) || !readLog(fx).some(e => e.rule === 'secret-read'), 'watch does not flag an allowed read');
+  });
+
   it('15. --probe reports what the machine can do', () => {
     assert.ok(PROBE, 'the helper printed a JSON line');
     assert.strictEqual(PROBE.ok, true);
