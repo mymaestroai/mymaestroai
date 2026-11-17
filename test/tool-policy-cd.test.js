@@ -167,3 +167,15 @@ test('round 2: ~-, ~user, ~+/.., risky braces, -rt, --target-d=, x[B=1], $[ ], $
   inside(`cd ${FX} && echo x > report..md`);
   inside(`cd ${FX} && env -i npm install`);
 });
+
+// Review r3 (Sonnet A, B and follow-ups): a package manager behind a wrapper the scanner doesn't model; braces expanded
+// and each result judged (ordinary scaffolding stays allowed, empty alternatives that make .. or / don't); -t DIR;
+// backslashes; variables kept for [ "$a" = b ] and ${x:-y}.
+test('round 3: uv pip --target, brace results judged one by one, cp -t DIR, .\\./y, narrower variable switch-off', () => {
+  for (const cmd of ['uv pip install --target /etc/cron.d x', 'eatmydata npm install --prefix /etc/x pkg', `cd ${FX} && touch .{,}./x`,
+    `cd ${FX} && touch ..{,}/x`, `cd ${FX} && touch {,}/etc/cron.d/x`, `cd ${FX} && echo x > .\\./y`]) refused(cmd);
+  refused(`cp -t /etc/cron.d job`, { ...o, cwd: FX });   // DIR judged even where the working folder is inside the roots
+  for (const cmd of [`cd ${FX} && touch src/{index.js,app.js}`, `cd ${FX} && touch {README.md,LICENSE}`, `cd ${FX} && cp config{,.bak}`,
+    `cd ${FX} && mkdir -p proj/{src/lib,test}`, `cd ${FX} && uv pip install x`, `B=${FX}; [ "$a" = b ] && cat > $B/f`, `B=${FX}; x=\${y:-z}; cat > $B/f`]) inside(cmd);
+  refused(`B=${FX}; a[0]=1; cat > $B/f`);
+});
