@@ -885,30 +885,91 @@ async function handleHttpRequest(req, res) {
 
     // ── Files area: upload / download / browse one folder per owner (lib/files) ──
     if (pathname === '/api/files' || pathname.startsWith('/api/files/')) {
-      const files = require('./lib/files').getFiles({ getUser: (id) => hubAuth.getUser(id), isAdminUser: (u) => access.isAdmin(u),
-        maxUploadBytes: () => Math.max(1, Number(hubSettings.getSetting('filesMaxUploadMb')) || 512) * 1048576 });
+      const filesLib = require('./lib/files');
+      const files = filesLib.getFiles({ getUser: (id) => hubAuth.getUser(id), isAdminUser: (u) => access.isAdmin(u),
+        maxUploadBytes: () => Math.max(1, Number(hubSettings.getSetting('filesMaxUploadMb')) || 512) * 1048576, dataDir: path.join(__dirname, 'data') });
       const q = new URL(req.url, 'http://x').searchParams;
       let jsonBody = null;
       if (req.method === 'POST' && pathname !== '/api/files/upload') { jsonBody = await authJson(); if (!jsonBody) return jsonResponse(res, 400, { error: 'invalid JSON' }); }
       const want = (k) => (jsonBody && jsonBody[k] !== undefined) ? jsonBody[k] : q.get(k);
       const who = req.hubUser || { id: 'service', role: 'admin' };
-      // Per agent when the page names the active chat's agent (the user must be allowed that agent);
-      // otherwise the owner's general folder.
-      let own = null;
-      const agentName = want('agent');
-      if (agentName) {
+      // Per agent when the page names an agent (the person must be allowed that agent); otherwise the owner's general folder.
+      // scopeFor(agentName, ownerReq, agents?) -> { own } | { code, error }: the one owner/agent rule, run once per request here
+      // and per item in /resolve.
+      const scopeFor = async (agentName, ownerReq, agentsList) => {
+        if (agentName) {
+          const agents = agentsList || await getAgents();
+          const rec = agents.find(a => a.name === String(agentName));
+          if (!rec) return { code: 404, error: 'no such agent' };
+          if (!access.isAdmin(who) && !access.canAccessAgent(who, rec.name, { agents })) return { code: 403, error: 'no_access_to_agent' };
+          const memberOwned = !!(rec.owner && !hubAuth.listUsers().some(u => u.id === String(rec.owner) && u.role === 'admin'));
+          return { own: files.resolveAgent(who, rec, { memberOwned }) };
+        }
+        const own = files.resolveOwner(who, ownerReq);
+        return own ? { own } : { code: 403, error: 'no such owner' };
+      };
+      // POST /api/files/resolve { items }: Files-folder paths an agent wrote (abs) or download links ({agent|owner, path}) -> file facts + download URLs.
+      // Anything outside the folders this person may read answers { ok:false, error:'not found' }, same as a missing file.
+      if (pathname === '/api/files/resolve' && req.method === 'POST') {
+        const items = jsonBody && jsonBody.items;
+        if (!Array.isArray(items) || items.length > 12) return jsonResponse(res, 400, { error: 'items must be a list of at most 12' });
+        const nf = { ok: false, error: 'not found' };
         const agents = await getAgents();
-        const rec = agents.find(a => a.name === String(agentName));
-        if (!rec) return jsonResponse(res, 404, { error: 'no such agent' });
-        if (!access.isAdmin(who) && !access.canAccessAgent(who, rec.name, { agents })) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
-        const memberOwned = !!(rec.owner && !hubAuth.listUsers().some(u => u.id === String(rec.owner) && u.role === 'admin'));
-        own = files.resolveAgent(who, rec, { memberOwned });
-      } else {
-        own = files.resolveOwner(who, want('owner'));
+        let roots = null;   // the roots this person may read, agent roots first, then their folders: built once, only for { abs } items
+        const rootsFor = async () => {
+          if (roots) return roots;
+          roots = [];
+          for (const a of agents) {
+            const s = await scopeFor(a.name, null, agents);
+            if (s.own) roots.push({ root: s.own.root, agent: s.own.agent, owner: null });
+          }
+          const owners = access.isAdmin(who) ? ['mine', ...hubAuth.listUsers().map(u => u.id)] : [null];
+          for (const o of owners) { const s = await scopeFor(null, o, agents); if (s.own) roots.push({ root: s.own.root, agent: null, owner: s.own.ownerId }); }
+          return roots;
+        };
+        const out = [];
+        for (const it of items) {
+          if (!it || typeof it !== 'object' || Array.isArray(it)) { out.push(nf); continue; }
+          let r = null;
+          try {
+            if (typeof it.abs === 'string') {
+              for (const c of await rootsFor()) {
+                const hit = files.resolveAbs(c.root, it.abs);
+                const info = hit && files.fileInfo(c.root, hit.rel, c);
+                if (info) { r = info; break; }
+              }
+            } else if (typeof it.path === 'string') {
+              const s = await scopeFor(it.agent ? String(it.agent) : null, it.owner, agents);
+              if (s.own) r = files.fileInfo(s.own.root, it.path, { agent: s.own.agent || null, owner: s.own.ownerId });
+            }
+          } catch { r = null; }
+          out.push(r || nf);
+        }
+        return jsonResponse(res, 200, { ok: true, items: out });
       }
-      if (!own) return jsonResponse(res, 403, { error: 'no such owner' });
+      const sc = await scopeFor(want('agent'), want('owner'));
+      if (!sc.own) return jsonResponse(res, sc.code, { error: sc.error });
+      const own = sc.own;
       const rel = String(want('path') || '');
       const fail = (r) => jsonResponse(res, r.code || 400, { error: r.error });
+      // GET /api/files/recent: the newest files agents wrote under this folder (uploads left out).
+      if (pathname === '/api/files/recent' && req.method === 'GET') {
+        const r = files.recent(own.root, { limit: q.get('limit') });
+        const where = { agent: own.agent || null, owner: own.agent ? null : own.ownerId };
+        return jsonResponse(res, 200, { ok: true, truncated: r.truncated, files: r.files.map(f => ({ ...f,
+          download: filesLib.downloadUrl({ ...where, path: f.path }),
+          inline: filesLib.isActiveName(f.name) ? null : filesLib.downloadUrl({ ...where, path: f.path }, { inline: true }) })) });
+      }
+      // GET /api/files/zip: a folder as one .zip (check=1: only the access checks and the size scan, answered as JSON).
+      if (pathname === '/api/files/zip' && req.method === 'GET') {
+        const lim = filesLib.zipLimits(hubSettings.getSetting('filesZipMaxMb'), hubSettings.getSetting('filesZipMaxFiles'));
+        const plan = files.zipPlan(own.root, rel, lim);
+        if (!plan.ok) return fail(plan);
+        if (plan.tooBig) return jsonResponse(res, 413, { error: plan.error, files: plan.count, bytes: plan.bytes, maxFiles: plan.maxFiles, maxBytes: plan.maxBytes });
+        if (q.get('check') === '1') return jsonResponse(res, 200, { ok: true, files: plan.count, bytes: plan.bytes, maxFiles: plan.maxFiles, maxBytes: plan.maxBytes });
+        console.log(`[files] ${who.id} zipped ${rel || '(root)'} (${plan.count} files) from ${own.agent || (own.ownerId === 'mine' ? 'share' : own.ownerId)}`);
+        return files.streamZip(own.root, plan, res, { maxBytes: plan.maxBytes });
+      }
       if (pathname === '/api/files' && req.method === 'GET') {
         const r = files.list(own.root, rel);
         if (!r.ok) return fail(r);
