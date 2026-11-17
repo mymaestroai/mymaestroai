@@ -253,6 +253,20 @@ test('updateAgentField: allowed fields only, normalisation of owner / sharedWith
   assert.ok(!('contextBudget' in get()));
 });
 
+test('updateAgentField: envKeep is validated, stored cleaned, an empty list removes it, and the agent list carries it', async () => {
+  const a = load({ agents: [{ name: 'u1', owner: 'u_1' }] });
+  const get = () => a.readJson()[0];
+  assert.deepStrictEqual(await a.ag.updateAgentField('u1', { envKeep: ' NOPE' }), { success: false, error: 'envKeep must be a list of environment variable names' });
+  assert.strictEqual((await a.ag.updateAgentField('u1', { envKeep: ['A=1'] })).success, false);
+  assert.strictEqual((await a.ag.updateAgentField('u1', { envKeep: [5] })).error, 'envKeep holds names only');
+  assert.ok(!('envKeep' in get()));
+  assert.deepStrictEqual(await a.ag.updateAgentField('u1', { envKeep: [' FOO_TOKEN ', 'FOO_TOKEN', 'BAR'] }), { success: true });
+  assert.deepStrictEqual(get().envKeep, ['FOO_TOKEN', 'BAR']);
+  assert.deepStrictEqual((await a.ag.getAgents()).find(x => x.name === 'u1').envKeep, ['FOO_TOKEN', 'BAR']);
+  await a.ag.updateAgentField('u1', { envKeep: [] });
+  assert.ok(!('envKeep' in get()));
+});
+
 test('delete / clone / rename: main is protected, workspaces follow, name collisions are refused', async () => {
   const a = load({ agents: [{ name: 'main' }, { name: 'src', model: 'mm', category: 'worker', owner: 'u_1' }] });
   fs.mkdirSync(a.ws('src'), { recursive: true });

@@ -45,7 +45,7 @@ const ann = { id: 'u_ann1', login: 'Ann.Lee@example.com', name: 'Ann Lee' };
 
 function seedHub() {
   fs.mkdirSync(DATA, { recursive: true });
-  const list = [...T.TEMPLATES.medical.members, ...T.TEMPLATES.legal.members].map(n => ({ name: n, model: 'claude-sdk/x', category: n === 'gp' || n === 'counsel' ? 'primary' : 'specialist', lead: n === 'gp', sharedWith: ['u_x'], policy: { web: true }, display: n === 'gp' ? 'GP' : undefined }));
+  const list = [...T.TEMPLATES.medical.members, ...T.TEMPLATES.legal.members].map(n => ({ name: n, model: 'claude-sdk/x', category: n === 'gp' || n === 'counsel' ? 'primary' : 'specialist', lead: n === 'gp', sharedWith: ['u_x'], policy: { web: true }, envKeep: ['GITHUB_TOKEN'], display: n === 'gp' ? 'GP' : undefined }));
   list.push({ name: 'maestro', model: 'm' });
   real.writeFileSync(path.join(DATA, 'agents.json'), JSON.stringify(list));
   for (const n of T.TEMPLATES.medical.members) fs.mkdirSync(path.join(WS, n), { recursive: true });
@@ -137,7 +137,9 @@ test('createTeamForUser: copies .md files with names and folders rewritten, writ
   const all = readAgents();
   const doc = all.find(a => a.name === 'annlee_gp'); const labs = all.find(a => a.name === 'annlee_labs');
   assert.strictEqual(all.length, 20 + 10, 'template agents kept, ten added');
-  assert.deepStrictEqual(doc, { name: 'annlee_gp', model: 'claude-sdk/x', category: 'primary', owner: 'u_ann1', display: 'GP', box: doc.box }, 'lead/sharedWith/policy dropped, owner set');
+  assert.deepStrictEqual(doc, { name: 'annlee_gp', model: 'claude-sdk/x', category: 'primary', owner: 'u_ann1', display: 'GP', box: doc.box }, 'lead/sharedWith/policy/envKeep dropped, owner set');
+  assert.ok(!('envKeep' in doc) && !('envKeep' in labs), 'a member does not inherit the template\'s envKeep');
+  assert.deepStrictEqual(all.find(a => a.name === 'gp').envKeep, ['GITHUB_TOKEN'], 'template keeps its own');
   assert.ok(doc.box && doc.box !== labs.box, 'each member added through lib/agents, with a box of its own');
   assert.ok(cleared.includes('annlee_gp') && cleared.includes('annlee_wellness'), 'each name is cleared first');
   assert.strictEqual(labs.display, 'labs', 'display defaults to the template name');

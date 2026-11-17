@@ -21,13 +21,10 @@ try { restoredAtBoot = require('./lib/backup/apply').applyAtBoot({ root: __dirna
 catch (e) { console.error(`[restore] the restore could not be finished or rolled back, so My Maestro AI stops here to keep your data safe: ${e.message}`); process.exit(1); }
 
 // Load .env BEFORE any other requires — skill-manager reads env at import time
-try {
-  const envFile = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
-  for (const line of envFile.split('\n')) {
-    const match = line.match(/^([A-Z_]+)=(.*)$/);
-    if (match) process.env[match[1]] = match[2].trim();
-  }
-} catch {}
+// Secret values (keys, tokens, passwords) go to a private in-memory store (lib/hub-secrets), not process.env, so no
+// child process the hub starts carries them in its start environment.
+const hubSecrets = require('./lib/hub-secrets');
+try { hubSecrets.loadEnvFile(path.join(__dirname, '.env')); } catch {}
 
 // Agents' boxes a backup paused and couldn't let go (the process stopped mid-copy): let them go now, after .env (it may say
 // how to reach Docker). Their record sits in .restore/, which a restore never moves; it stays until each box is let go.
@@ -118,6 +115,16 @@ const admin2fa = require('./lib/admin-2fa').createAdmin2fa({   // "Require two-f
   getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, auth: hubAuth,
   notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true, kind: 'security' }), log: (m) => console.log(m),   // a security notice (the person's Security and access setting)
 });
+// Five wrong second-factor codes lock that account's codes for a minute (lib/auth): one security notice to that person and every admin.
+hubAuth.setTotpLockNotifier(({ user }) => {
+  const ids = [...new Set([user.id, ...hubAuth.admins().map(a => a.id)].filter(Boolean).map(String))];
+  console.log(`[auth] two-factor locked for a minute: ${user.login}`);
+  Promise.resolve(require('./lib/push').getPush().notifyUsers({
+    title: 'Two-factor sign-in locked for a minute',
+    body: `5 wrong two-factor codes for ${user.name || user.login}. Codes are refused for a minute. If this wasn't ${user.name || user.login}, someone knows the password: change it.`,
+    url: '/', tag: 'totp-lock',
+  }, ids, { kind: 'security' })).catch(() => {});
+});
 const access = require('./lib/access');                   // route classes + agent ownership/sharing (lib/access)
 const temporalWorkersLib = require('./lib/temporal-workers');
 
@@ -184,7 +191,7 @@ process.on('exit', () => {
 // (HUB_BIND_HOST) that is refused unless Basic auth is configured — see
 // lib/bind-host.js.
 const { isSameOriginStreamRequest, isTailnetUserAllowed } = require('./lib/bind-host');
-const BIND = require('./lib/bind-host').resolveBindHost(process.env, {
+const BIND = require('./lib/bind-host').resolveBindHost(hubSecrets.envView(), {
   hasUsers: () => hubAuth.hasUsers(),
   hasSecuredAdmin: () => hubAuth.admins().some(u => u.totp && u.totp.enabled),
 });
@@ -202,7 +209,7 @@ function accountStepUp(user, b, ip) {
   b = b && typeof b === 'object' ? b : {};
   const r = hubAuth.login(u.login, String(b.password || ''), { ip });
   if (!r.ok) return r.locked ? r.error : 'That password is not right.';
-  if (r.needsTotp) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return 'That two-factor code is not right.'; }
+  if (r.needsTotp) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return (t && t.locked) ? t.error : 'That two-factor code is not right.'; }
   return null;
 }
 // Backups (lib/backup/service): one instance for the routes; download links last two minutes and work once.
@@ -234,8 +241,8 @@ const _modelHealthCache = {};
 let _modelHealthLastRun = 0;
 
 // Basic Auth (optional)
-const AUTH_USERNAME = process.env.HUB_AUTH_USERNAME || '';
-const AUTH_PASSWORD = process.env.HUB_AUTH_PASSWORD || '';
+const AUTH_USERNAME = hubSecrets.get('HUB_AUTH_USERNAME') || '';
+const AUTH_PASSWORD = hubSecrets.get('HUB_AUTH_PASSWORD') || '';
 if (AUTH_USERNAME && hubAuth.hasUsers()) console.warn('[auth] HUB_AUTH_USERNAME/HUB_AUTH_PASSWORD are set but accounts exist: the old password login is ignored. Remove the two lines from .env; scripts and bots use API tokens (Users page).');
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -674,6 +681,7 @@ async function handleHttpRequest(req, res) {
       const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
       const user = hubAuth.getUser(sess.user_id);
       const r = hubAuth.totpCheck(user.id, b.code);
+      if (!r.ok && r.locked) return jsonResponse(res, 429, { ok: false, locked: true, error: r.error });
       if (!r.ok) return jsonResponse(res, 401, { ok: false, error: r.error });
       hubAuth.markTotpOk(sess.id);
       const cookiesOut = [];
@@ -718,7 +726,7 @@ async function handleHttpRequest(req, res) {
       const adminAccount = access.isAdmin(u);   // the account as stored now, read after the body arrived
       if (adminAccount && admin2fa.required()) return jsonResponse(res, 403, { error: require('./lib/admin-2fa').REQUIRED_MESSAGE, code: 'admin_2fa_required' });
       if (!hubAuth.login(u.login, b.password).ok) return jsonResponse(res, 401, { error: 'password check failed' });
-      if (adminAccount && u.totp && u.totp.enabled) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return jsonResponse(res, 403, { error: 'That two-factor code is not right.' }); }
+      if (adminAccount && u.totp && u.totp.enabled) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return jsonResponse(res, (t && t.locked) ? 429 : 403, { error: (t && t.locked) ? t.error : 'That two-factor code is not right.' }); }
       return jsonResponse(res, 200, hubAuth.totpDisable(u.id));
     }
     if (pathname === '/api/auth/password' && req.method === 'POST') {
@@ -1109,7 +1117,7 @@ async function handleHttpRequest(req, res) {
       // Call recordings: a signed-in admin sees the whole setting; everybody else (members, the hub's own service calls that agents' tools use) gets it without the allowed list. canDownload: is this caller on the list.
       const recView = { admin: access.isAdmin(req.hubUser) && !req.hubPendingTotp, userId: req.hubUser && !req.hubPendingTotp ? String(req.hubUser.id) : '' };
       const recordingsFor = require('./lib/recordings/settings').recordingsForViewer;
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {
@@ -1413,6 +1421,8 @@ async function handleHttpRequest(req, res) {
       // Only the owner (the earliest admin) does: who may download a family's recordings is not any admin's call.
       const recordingsChange = !!body && typeof body === 'object' && 'recordings' in body;
       if (recordingsChange && (req.hubService || req.hubToken || !req.hubUser || !hubAuth.isOwner(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only the owner can change: recordings' });
+      // Which environment variables an agent's commands keep is a signed-in admin's call: never a member, and never the hub's own service calls (an agent could widen itself).
+      if (body && typeof body === 'object' && 'envKeep' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only an admin can change: envKeep' });
       const recSettings = require('./lib/recordings/settings');
       const allowedBefore = recordingsChange ? recSettings.recordingsOf((await getAgents()).find(a => a.name === name)).allowed : [];
       if (!req.hubService && !access.isAdmin(req.hubUser)) {
@@ -3638,6 +3648,18 @@ server.listen(PORT, HOST, () => {
   // A deleted agent whose things were not all moved into its bundle (a stop part-way, Docker not answering) is finished
   // now (lib/agent-archive); after the scheduler, so the tasks that would wake it can leave the list too.
   require('./lib/agents').finishArchivingAgents().catch((e) => console.error('[agents] unfinished removals:', e.message));
+  // The owner's Claude sign-in is never copied into an agent's box any more. Earlier versions did: remove the copies they
+  // left in the agents' home volumes (lib/sandbox sweepCredentials), and the old client wrapper scripts in data/sandbox.
+  // Asynchronous and never awaited here: starting the hub does not wait for Docker. Only the agents listed in agents.json.
+  try {
+    const n = require('./lib/sandbox').removeOldWrappers();
+    if (n) console.log(`[sandbox] removed ${n} old client wrapper script(s) from data/sandbox`);
+  } catch (e) { console.warn(`[sandbox] old wrapper scripts not removed: ${e.message}`); }
+  (async () => {
+    const sb = require('./lib/sandbox').getSandbox();
+    if (!(await sb.available())) return;
+    await sb.sweepCredentials(await getAgents());
+  })().catch((e) => console.error('[sandbox] sign-in copy sweep failed:', e.message));
 
   // Messaging channels (Telegram etc): opt out with HUB_COMMS_DISABLED=1.
   if (process.env.HUB_COMMS_DISABLED !== '1') {

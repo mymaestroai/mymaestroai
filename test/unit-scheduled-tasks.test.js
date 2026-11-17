@@ -194,7 +194,7 @@ test('firing a one-off: nothing before due, message labelled as scheduler, statu
   const v = await mkTask(st, 'alice', 'in 30 minutes', { label: 'Check logs' });
   clock.t = due(v) - 1; await st.tick(); assert.strictEqual(calls.length, 0);
   clock.t = due(v); await st.tick();
-  assert.deepStrictEqual([calls.length, calls[0].agent, calls[0].meta], [1, 'alice', { kind: 'schedule', from: 'Check logs', taskId: v.id }]);
+  assert.deepStrictEqual([calls.length, calls[0].agent, calls[0].meta], [1, 'alice', { kind: 'schedule', from: 'Check logs', taskId: v.id, by: 'alice' }]);
   assert.match(calls[0].msg, /^\[Scheduled task — started by the hub scheduler, NOT a message typed by the owner\] "Check logs" \(id st-/);
   assert.match(calls[0].msg, /One-off: it will not repeat\.[\s\S]*Task:\ndo the thing[\s\S]*You scheduled this yourself/);
   let t = st.list('alice', { includeDone: true })[0];

@@ -282,7 +282,9 @@ test('review r2: words with expansions and blanks, the dot command, redirections
     isDestroy(head + body, head);
   }
   // a substitution with blanks in a redirection target is not the command word
-  assert.strictEqual(c(L('cat > $(dirname "$0")/x.md <<\'EOF\'', RM, 'EOF')), 'write_inside', 'the false positive of the old split');
+  // The old split's false positive (the heredoc body read as commands) stays gone: no destroy. Its target $(dirname "$0")/x.md
+  // is computed when the command runs, so it is a write outside the folders (policy-cd review: $HOME/.bashrc was write_inside).
+  assert.strictEqual(c(L('cat > $(dirname "$0")/x.md <<\'EOF\'', RM, 'EOF')), 'write_outside', 'the false positive of the old split');
 });
 
 test('review r2: heredoc delimiters bash groups across blanks, and a missing terminator, fail closed', () => {

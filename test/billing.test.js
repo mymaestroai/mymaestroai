@@ -37,7 +37,8 @@ test('clientEnvWithoutApiKey strips only the Anthropic key and token', () => {
 
 test('wiring: the Claude client env has no API key; /api/models carries billing; pickers and the agent list label it', () => {
   const sdk = read('lib/sdk-chat.js');
-  assert.match(sdk, /: \{ \.\.\.require\('\.\/billing'\)\.clientEnvWithoutApiKey\(process\.env\), CLAUDE_CODE_AUTO_COMPACT_WINDOW: String\(autoCompactWindow\) \},/);
+  // The client's environment starts from the hub's without the API keys (then lib/child-env's allow-list for a non-lead).
+  assert.match(sdk, /: childEnv\.envForAgent\(hands\.agent, \{ base: require\('\.\/billing'\)\.clientEnvWithoutApiKey\(process\.env\), client: 'claude',/);
   const server = read('server.js');
   assert.match(server, /billing\[m\] = require\('\.\/lib\/billing'\)\.billingOf\(m\);/);
   assert.match(server, /billing,\s+\/\/ \{ modelId: \{ kind/);

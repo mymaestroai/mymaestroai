@@ -47,10 +47,9 @@ function rig(o = {}) {
     return { stdout: '', stderr: '' };
   };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-'));
-  const creds = path.join(dir, '.credentials.json'); fs.writeFileSync(creds, '{"tok":1}');
   const ws = (a) => path.join(dir, 'workspaces', a.name);
   const sb = createSandbox({
-    docker, wrapperDir: path.join(dir, 'wrappers'), credentialsFile: creds, uid: 1000, gid: 1000, image: 'agent-hub-sandbox:test', log: o.log || (() => {}),
+    docker, uid: 1000, gid: 1000, image: 'agent-hub-sandbox:test', log: o.log || (() => {}),
     getSetting: (k) => (o.settings || {})[k],
     isMemberOwned: (a) => !!(a && a.owner && a.owner !== 'admin1'),
     rootsFor: o.rootsFor || ((a) => [os.tmpdir(), '/tmp', path.join(require('../lib/tool-policy').HUB_HOME, 'share'), ws(a), path.join(dir, 'users', String(a.owner || 'x')), path.join(require('../lib/tool-policy').HUB_HOME, 'agent-hub-5.1.0')]),
@@ -342,30 +341,9 @@ test('ensure: the "made without an init process; making it again" line is writte
   assert.ok(ok.logs.includes(`${ok.name} was made without an init process; making it again`));
 });
 
-test('wrapper: the SDK launches a script that execs the client inside the box forwarding only the listed variables', () => {
-  const { sb } = rig();
-  const file = sb.wrapperPath(member);
-  const body = fs.readFileSync(file, 'utf8');
-  assert.ok(body.startsWith('#!/bin/sh'));
-  assert.ok(body.includes("docker exec -i -w") && body.includes("'hub-agent-boxed' claude \"$@\""));
-  assert.ok(body.includes('-e CLAUDE_CODE_AUTO_COMPACT_WINDOW') && !body.includes('OPENAI') && !body.includes('ANTHROPIC_API_KEY'));
-  assert.equal((fs.statSync(file).mode & 0o777).toString(8), '700');
-});
-
-test('prepare: null when Docker or the image is missing (caller withholds the shell); otherwise container + credentials + wrapper + cwd', async () => {
-  const none = rig({ noImage: true });
-  assert.equal(await none.sb.prepare(member), null);
-  const { sb, calls, ws } = rig();
-  fs.mkdirSync(ws(member), { recursive: true });
-  const p = await sb.prepare(member);
-  assert.ok(p.pathToClaudeCodeExecutable.endsWith('boxed.sh'));
-  assert.equal(p.cwd, ws(member));
-  assert.ok(calls.some(a => a[0] === 'cp' && a[2] === 'hub-agent-boxed:/home/agent/.claude/.credentials.json'), 'credentials copied into the box');
-  assert.ok(calls.some(a => a[0] === 'exec' && a.includes('chmod')), 'and made private');
-  const fresh = rig({ credStale: false }); fs.mkdirSync(fresh.ws(member), { recursive: true });
-  await fresh.sb.prepare(member);
-  assert.ok(!fresh.calls.some(a => a[0] === 'cp'), 'not copied again when the box already has a current copy');
-});
+// R2 (security): the wrapper and prepare tests that stood here pinned the Claude client running inside the box with a
+// copy of the owner's sign-in. That code is gone (the client runs on the host; a boxed agent uses the hub's tools in
+// the box). Their replacements are in test/sandbox-r2.test.js.
 
 test('exec: shell commands run with docker exec in the agent\'s workspace; failures return the exit code instead of throwing', async () => {
   const { sb, calls, ws } = rig({ execResult: (cmd) => { if (cmd.includes('fail')) { const e = new Error('boom'); e.code = 2; e.stdout = ''; e.stderr = 'nope'; throw e; } return { stdout: 'ok\n', stderr: '' }; } });
@@ -386,10 +364,9 @@ test('status: reports Docker, image and containers; wiring exists on both dispat
   assert.equal(st.docker, true); assert.equal(st.imageReady, true); assert.deepEqual(st.containers, [{ agent: 'boxed', container: 'hub-agent-boxed', status: 'Up 2 minutes' }]);
   const down = rig({ noDocker: true, noImage: true }); const sd = await down.sb.status(); assert.equal(sd.docker, false); assert.match(sd.error, /Docker/);
   const sdk = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
-  assert.ok(sdk.includes("sandboxOpts = await sb.prepare(recSb)"), 'SDK path prepares the box');
-  assert.ok(sdk.includes("pathToClaudeCodeExecutable: sandboxOpts.pathToClaudeCodeExecutable, cwd: sandboxOpts.cwd"), 'SDK launches the wrapper in the workspace');
+  // (R2: the SDK no longer prepares a box or launches a wrapper for the client; test/sandbox-r2.test.js pins that it never does)
   assert.ok(sdk.includes("sandboxWithheld ? ['mcp__agent-hub__*'] : ["), 'shell withheld when no box');
-  assert.ok(sdk.includes("? { PATH: process.env.PATH, HOME: process.env.HOME,"), 'minimal environment for a boxed client');
+  // (R2: no client runs in a box, so there is no "minimal environment for a boxed client" to pin any more)
   assert.ok(sdk.includes("box = { exec: (cmd, o) => sb.exec(agent, cmd, o), mounts: sb.mountsFor(agent) }") && sdk.includes("if (hands.withheld) {"), 'gateway Bash runs in the box through the per-turn hands; withheld without one');
   const srv = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   for (const r of ["'/api/sandbox/status'", "'/api/sandbox/build'", "(reset|stop)"]) assert.ok(srv.includes(r), r);

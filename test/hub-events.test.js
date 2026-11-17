@@ -117,7 +117,7 @@ test('wiring: chat handler taps hub-initiated turns and every hub caller tags it
   const jobs = read('lib/jobs.js');
   assert.match(jobs, /kind: p\.kind === 'report' \? 'job_report' : 'job_notice'/);
   const sched = read('lib/scheduler.js');
-  assert.match(sched, /origin: \{ kind: 'schedule', from: taskId \}/);
+  assert.match(sched, /origin: \{ kind: 'schedule', from: taskId, by: 'TASKS\.md' \}/);   // names who started it (R6)
   const server = read('server.js');
   assert.match(server, /pathname === '\/api\/events' && req\.method === 'GET'/);
   assert.match(server, /require\('\.\/lib\/hub-events'\)\.events\.subscribe\(req, res\)/);
