@@ -170,9 +170,9 @@ test('skill manager builds a filtered env for stdio skills', () => {
 test('sdk-chat: hands, the Claude client, the Codex client and jobs use childEnv.envForAgent', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(src, /const childEnv = require\('\.\/child-env'\)/);
-  assert.match(src, /createHubTools\(\{[^\n]*env: childEnv\.envForAgent\(agent, \{ isLead: childEnv\.leadCheck\(\) \}\)/);
-  assert.match(src, /childEnv\.envForAgent\(hands\.agent, \{ base: require\('\.\/billing'\)\.clientEnvWithoutApiKey\(process\.env\), client: 'claude', isLead: childEnv\.leadCheck\(\), set: \{ CLAUDE_CODE_AUTO_COMPACT_WINDOW: String\(autoCompactWindow\) \} \}\)/);
-  assert.match(src, /const env = childEnv\.envForAgent\(hands\.agent, \{ base: codexBase, client: 'codex', isLead: childEnv\.leadCheck\(\) \}\)/);
+  assert.match(src, /createHubTools\(\{[^\n]*env: childEnv\.envForAgent\(agent, \{ isLead: leadFor\(agentName\) \}\)/);
+  assert.match(src, /childEnv\.envForAgent\(hands\.agent, \{ base: require\('\.\/billing'\)\.clientEnvWithoutApiKey\(process\.env\), client: 'claude', isLead: leadFor\(agentName\), set: \{ CLAUDE_CODE_AUTO_COMPACT_WINDOW: String\(autoCompactWindow\) \} \}\)/);
+  assert.match(src, /const env = childEnv\.envForAgent\(hands\.agent, \{ base: codexBase, client: 'codex', isLead: leadFor\(agentName\) \}\)/);
   assert.ok(!/const env = \{ \.\.\.process\.env \};/.test(src), 'the old full copy at the Codex site is gone');
   assert.ok(/delete codexBase\.OPENAI_API_KEY; delete codexBase\.CODEX_API_KEY; delete codexBase\.OPENAI_BASE_URL;/.test(src));
   assert.match(src, /envFor: \(owner\) =>[\s\S]{0,700}childEnv\.buildChildEnv\(process\.env\)/);
@@ -181,4 +181,87 @@ test('sdk-chat: hands, the Claude client, the Codex client and jobs use childEnv
 test('server.js: envKeep changes are refused for members and service calls', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /'envKeep' in body && \(req\.hubService \|\| req\.hubToken \|\| !req\.hubUser \|\| !access\.isAdmin\(req\.hubUser\)/);
+});
+
+// ── Round 5 fixes ────────────────────────────────────────────────────────────────────────────────────────────
+test('DOCKER_KEEP lists the Docker endpoint names and the filter still drops them', () => {
+  assert.deepStrictEqual(ce.DOCKER_KEEP, ['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_CERT_PATH', 'DOCKER_TLS_VERIFY']);
+  assert.ok(!('DOCKER_HOST' in buildChildEnv({ PATH: '/bin', DOCKER_HOST: 'tcp://192.0.2.7:2375' })));
+});
+
+test('jobs: a boxed job\'s wrapper gets the Docker endpoint on top of envFor (and no hub secret)', async () => {
+  const { JobRunner } = require('../lib/jobs.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'childenv-box-'));
+  const bin = path.join(dir, 'bin'); fs.mkdirSync(bin);
+  const out = path.join(dir, 'docker-env.txt');
+  // a fake docker: records the endpoint it was started with, then exits
+  fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/bash\necho "[$DOCKER_HOST][$DOCKER_CONTEXT][$HUB_SECRET_X]" >> ${out}\n`, { mode: 0o755 });
+  const saved = { h: process.env.DOCKER_HOST, c: process.env.DOCKER_CONTEXT, s: process.env.HUB_SECRET_X };
+  process.env.DOCKER_HOST = 'tcp://192.0.2.7:2375'; process.env.DOCKER_CONTEXT = 'ctx-test'; process.env.HUB_SECRET_X = 'sk-test-123';
+  try {
+    const r = new JobRunner({ dataDir: path.join(dir, 'a'), spawnMode: 'setsid', pollMs: 50, log: () => {}, defaultCwd: async () => dir, notify: async () => {}, agentExists: async () => true,
+      boxFor: async () => ({ name: 'box-test', mounts: [dir] }), envFor: () => ({ PATH: `${bin}:${process.env.PATH}` }) });
+    await r.run({ owner: 'sam', name: 'b', command: 'true', cwd: dir });
+    for (let i = 0; i < 100 && !fs.existsSync(out); i++) await new Promise(x => setTimeout(x, 50));
+    assert.strictEqual(fs.readFileSync(out, 'utf8').trim().split('\n')[0], '[tcp://192.0.2.7:2375][ctx-test][]', 'endpoint kept, hub secret not');
+    r.cancelAll && r.cancelAll();
+  } finally {
+    for (const [k, v] of [['DOCKER_HOST', saved.h], ['DOCKER_CONTEXT', saved.c], ['HUB_SECRET_X', saved.s]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('URL credentials: a proxy or registry URL carrying user:pass is dropped unless granted by exact name', () => {
+  const base = {
+    PATH: '/bin', HTTPS_PROXY: 'http://sam:pw-test@192.0.2.9:8080', HTTP_PROXY: 'http://192.0.2.9:8080', no_proxy: 'localhost',
+    npm_config_registry: 'https://sam:pw-test@192.0.2.10/', npm_config_cache: '/tmp/npm', ALL_PROXY: 'socks5://tok@192.0.2.9:1080',
+  };
+  const out = buildChildEnv(base);
+  assert.ok(!('HTTPS_PROXY' in out) && !('npm_config_registry' in out) && !('ALL_PROXY' in out), 'credentialed URLs dropped');
+  assert.strictEqual(out.HTTP_PROXY, 'http://192.0.2.9:8080', 'a proxy without credentials stays');
+  assert.strictEqual(out.npm_config_cache, '/tmp/npm');
+  assert.strictEqual(buildChildEnv({ HTTPS_PROXY: 'https://192.0.2.9/a@b' }).HTTPS_PROXY, 'https://192.0.2.9/a@b', '@ after the authority is not userinfo');
+  assert.strictEqual(buildChildEnv(base, { keep: ['HTTPS_PROXY'] }).HTTPS_PROXY, base.HTTPS_PROXY, 'an exact grant keeps it');
+  assert.strictEqual(envForAgent({ name: 'sam', envKeep: ['HTTPS_PROXY'] }, { base }).HTTPS_PROXY, base.HTTPS_PROXY);
+  assert.ok(!('HTTPS_PROXY' in envForAgent({ name: 'sam' }, { base })));
+});
+
+test('leadCheck uses the owner-lead rule (admin-owned flagged leads only)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'child-env.js'), 'utf8');
+  assert.match(src, /ag\.ownerLeadNames\(ag\.getAgentsSync\(\)\)\.includes\(agent\.name\)/);
+  assert.ok(!/isLeadAgent/.test(src));
+  assert.strictEqual(ce.leadCheck()({ name: 'no-such-agent-zz' }), false);
+});
+
+test('sdk-chat: a temporary worker never gets the lead\'s environment, at every call site', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  assert.match(src, /const leadFor = \(name\) => \{[^\n]*temporalWorkers\.getVirtual\(name\)[^\n]*\(\) => false : childEnv\.leadCheck\(\)/);
+  assert.match(src, /childEnv\.envForAgent\(rec, \{ isLead: leadFor\(owner\) \}\)/);
+  assert.ok(!/isLead: childEnv\.leadCheck\(\)/.test(src), 'no call site uses the bare lead check');
+});
+
+test('hub tools: rg, pdftotext and pdftoppm get the given env (and none when no env was given)', async () => {
+  const { createHubTools } = require('../lib/hub-tools.js');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'childenv-rg-'));
+  try {
+    fs.writeFileSync(path.join(d, 'a.txt'), 'needle\n');
+    const calls = [];
+    const exec = async (cmd, args, opts) => { calls.push({ cmd, opts }); if (cmd === 'rg' && args[0] !== '--version') return { stdout: `${path.join(d, 'a.txt')}:1:needle\n` }; return { stdout: '' }; };
+    const t = createHubTools({ cwd: d, log: () => {}, exec, env: { PATH: '/bin', KEEP_ME: 'yes-123' } });
+    await t.call('Grep', { pattern: 'needle', path: d });
+    assert.ok(calls.length >= 2 && calls.every(c => c.cmd === 'rg' && c.opts.env && c.opts.env.KEEP_ME === 'yes-123'), JSON.stringify(calls.map(c => [c.cmd, !!c.opts.env])));
+    fs.writeFileSync(path.join(d, 'x.pdf'), '%PDF-1.4');
+    calls.length = 0;
+    await t.call('Read', { file_path: path.join(d, 'x.pdf'), pages: '1' }).catch(() => {});
+    assert.ok(calls.some(c => c.cmd === 'pdftotext') && calls.every(c => c.opts.env && c.opts.env.KEEP_ME === 'yes-123'));
+    const t2 = createHubTools({ cwd: d, log: () => {}, exec });
+    calls.length = 0;
+    await t2.call('Grep', { pattern: 'needle', path: d });
+    assert.ok(calls.length >= 1 && calls.every(c => !('env' in c.opts)), 'no env given: unchanged');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('sdk-chat: a throw while building the hands drops the module-level shell and file tools', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  assert.match(src, /catch \(e\) \{\s*console\.warn\(`\[hub-tools\] \$\{agentName\}: \$\{e\.message\}`\);[\s\S]{0,500}for \(const name of hubToolsLib\.TOOL_NAMES\) \{[\s\S]{0,400}handlers\.delete\(name\);/);
 });

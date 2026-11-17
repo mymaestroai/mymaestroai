@@ -339,3 +339,17 @@ test('reboot words: reading the reboot-required file is not a reboot; real reboo
     'systemd-run --property=SuccessAction=reboot-force /usr/bin/true', 'systemd-run -p FailureAction=poweroff-immediate false',
     'busctl call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager Reboot b false', 'echo b > /proc/sysrq-trigger']) assert.strictEqual(cls(c), 'destroy', c);
 });
+
+test('another process\'s start environment counts like .env: /proc/<x>/environ and ps with the e option are admin', () => {
+  const o = { cwd: path.join(HUB, 'workspaces', 'haiku'), roots: [path.join(HUB, 'workspaces', 'haiku')], agentName: 'haiku' };
+  const c = (cmd) => tp.classifyCommand(cmd, o).cls;
+  for (const cmd of ['cat /proc/123/environ', "tr '\\0' '\\n' < /proc/self/environ", 'cat /proc/thread-self/environ', 'cat /proc/1/task/1/environ',
+    'cat /proc/*/environ', 'ps eww', 'ps e', 'ps auxe', 'ps axeww', '/bin/ps aux e']) assert.strictEqual(c(cmd), 'admin', cmd);
+  for (const cmd of ['ps -ef', 'ps aux', 'ps -e', 'ps -u sam', 'ps', 'cat /proc/cpuinfo', 'cat /proc/self/status']) assert.notStrictEqual(c(cmd), 'admin', cmd);
+  assert.strictEqual(tp.isSensitiveRead('/proc/1/environ'), true);
+  assert.strictEqual(tp.isSensitiveRead('/proc/self/environ'), true);
+  assert.strictEqual(tp.isSensitiveRead('/proc/cpuinfo'), false);
+  assert.strictEqual(tp.isSensitiveRead('/proc/1/status'), false);
+  assert.strictEqual(tp.classifyReadPath('/proc/1/environ', { roots: o.roots, agentName: 'haiku' }), 'admin');
+  assert.strictEqual(tp.classifyTool({ tool: 'Read', input: { file_path: '/proc/1/environ' }, agentName: 'haiku', policy: tp.policyFor(worker) }).cls, 'admin');
+});
