@@ -21,13 +21,10 @@ try { restoredAtBoot = require('./lib/backup/apply').applyAtBoot({ root: __dirna
 catch (e) { console.error(`[restore] the restore could not be finished or rolled back, so My Maestro AI stops here to keep your data safe: ${e.message}`); process.exit(1); }
 
 // Load .env BEFORE any other requires — skill-manager reads env at import time
-try {
-  const envFile = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
-  for (const line of envFile.split('\n')) {
-    const match = line.match(/^([A-Z_]+)=(.*)$/);
-    if (match) process.env[match[1]] = match[2].trim();
-  }
-} catch {}
+// Secret values (keys, tokens, passwords) go to a private in-memory store (lib/hub-secrets), not process.env, so no
+// child process the hub starts carries them in its start environment.
+const hubSecrets = require('./lib/hub-secrets');
+try { hubSecrets.loadEnvFile(path.join(__dirname, '.env')); } catch {}
 
 // Agents' boxes a backup paused and couldn't let go (the process stopped mid-copy): let them go now, after .env (it may say
 // how to reach Docker). Their record sits in .restore/, which a restore never moves; it stays until each box is let go.
@@ -184,7 +181,7 @@ process.on('exit', () => {
 // (HUB_BIND_HOST) that is refused unless Basic auth is configured — see
 // lib/bind-host.js.
 const { isSameOriginStreamRequest, isTailnetUserAllowed } = require('./lib/bind-host');
-const BIND = require('./lib/bind-host').resolveBindHost(process.env, {
+const BIND = require('./lib/bind-host').resolveBindHost(hubSecrets.envView(), {
   hasUsers: () => hubAuth.hasUsers(),
   hasSecuredAdmin: () => hubAuth.admins().some(u => u.totp && u.totp.enabled),
 });
@@ -234,8 +231,8 @@ const _modelHealthCache = {};
 let _modelHealthLastRun = 0;
 
 // Basic Auth (optional)
-const AUTH_USERNAME = process.env.HUB_AUTH_USERNAME || '';
-const AUTH_PASSWORD = process.env.HUB_AUTH_PASSWORD || '';
+const AUTH_USERNAME = hubSecrets.get('HUB_AUTH_USERNAME') || '';
+const AUTH_PASSWORD = hubSecrets.get('HUB_AUTH_PASSWORD') || '';
 if (AUTH_USERNAME && hubAuth.hasUsers()) console.warn('[auth] HUB_AUTH_USERNAME/HUB_AUTH_PASSWORD are set but accounts exist: the old password login is ignored. Remove the two lines from .env; scripts and bots use API tokens (Users page).');
 
 // ── Helpers ─────────────────────────────────────────────────────────────
