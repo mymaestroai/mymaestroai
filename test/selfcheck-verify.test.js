@@ -178,6 +178,40 @@ test('refuse: a deny passes, an allow fails, a missing call fails as not tried',
   assert.strictEqual(v.actions.refuse.ok, false);
 });
 
+test('B1: a refuse whose own rule was "ask" (turned into a deny for a check agent) fails; a rule of "deny" or none passes', () => {
+  const base = goodEvents().filter(e => !(e.input.file_path === REFUSE));
+  const withRule = (rule) => verify({ events: [...base, { ...dec('Read', { file_path: REFUSE }, 'deny', 'self-check agents never ask'), rule }] }).actions.refuse;
+  const asked = withRule('ask');
+  assert.strictEqual(asked.ok, false);
+  assert.strictEqual(asked.tried, true);
+  assert.strictEqual(asked.reason, "Your Maestro's safety rules would ask before reading call recordings instead of refusing it; with approval cards off, an agent would read them.");
+  assert.strictEqual(withRule('deny').ok, true);
+  assert.strictEqual(withRule(undefined).ok, true, 'an older gate sends no rule: it counts as deny');
+  // one real deny among the decisions is enough
+  const both = verify({ events: [...base, { ...dec('Read', { file_path: REFUSE }, 'deny'), rule: 'ask' }, { ...dec('Read', { file_path: REFUSE }, 'deny'), rule: 'deny' }] });
+  assert.strictEqual(both.actions.refuse.ok, true);
+});
+
+test('B3: with the command lockbox on, a result carries the wrapped command and still counts; a different command that only names bash.txt does not', () => {
+  const home = FOLDERS.home;
+  const noBash = goodEvents().filter(e => !(e.tool === 'Bash' && e.input.command === SCRIPTED.home));
+  // the shape of lockbox clientCommand: python3 ... lockbox-run.py ... -- bash -c '<inner>' with the inner single quotes escaped as '\''
+  const inner = SCRIPTED.home.replace(/'/g, `'\\''`);
+  const wrapped = `python3 /hub/lib/lockbox/lockbox-run.py --profile p -- bash -c '${inner}'`;
+  assert.ok(!wrapped.includes(SCRIPTED.home), 'the wrapper really hides the scripted string');
+  let v = verify({ events: [...noBash, dec('Bash', { command: SCRIPTED.home }), res('Bash', { command: wrapped }, true, '')] });
+  assert.deepStrictEqual(failed(v), []);
+  assert.strictEqual(v.actions['bash@home'].tried, true);
+  // a wrapped result for a command that names bash.txt but has no nonce
+  const other = `python3 /hub/lib/lockbox/lockbox-run.py --profile p -- bash -c 'echo x > '\\''${home}/bash.txt'\\'''`;
+  v = verify({ events: [...noBash, dec('Bash', { command: SCRIPTED.home }), res('Bash', { command: other }, true, '')] });
+  assert.deepStrictEqual(failed(v), ['bash@home']);
+  // the decision must still be the scripted command: an allowed different one fails the step even with a good wrapped result
+  v = verify({ events: [...noBash, dec('Bash', { command: `echo ${FX.home.B} > ${home}/bash.txt` }), res('Bash', { command: wrapped }, true, '')] });
+  assert.deepStrictEqual(failed(v), ['bash@home']);
+  assert.strictEqual(v.actions['bash@home'].reason, 'It ran a different command than the one the check asked for.');
+});
+
 test('extra: a Write, Edit or Bash outside both folders fails the class', () => {
   let v = verify({ events: [...goodEvents(), ...call('Write', { file_path: '/hub/workspaces/other/x.txt', content: 'x' }, 'ok')] });
   assert.deepStrictEqual(v.extra, [{ tool: 'Write', path: '/hub/workspaces/other/x.txt' }]);

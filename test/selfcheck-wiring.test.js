@@ -171,6 +171,31 @@ test('gate: onDecision hears every decision (allow, deny, ask-turned-deny, polic
   assert.strictEqual((await bad.gate.check({ agentName: 'selfcheck-lead', tool: 'Read', input: { file_path: path.join(home, 'x') }, cwd: ROOT })).allowed, true);
 });
 
+test('B1: the observer also hears the policy\'s own rule: ask for a check agent\'s ask (turned into a deny), allow and deny as they are', async () => {
+  const s = stubGate();
+  const home = path.join(HOME, 'selfcheck', 'lead');
+  await s.gate.check({ agentName: 'selfcheck-lead', tool: 'Read', input: { file_path: path.join(home, 'read.txt') }, cwd: ROOT });
+  await s.gate.check({ agentName: 'selfcheck-lead', tool: 'Read', input: { file_path: path.join(HOME, 'call-recordings', 'selfcheck-n.txt') }, cwd: ROOT });
+  await s.gate.check({ agentName: 'selfcheck-lead', tool: 'Write', input: { file_path: '/opt/zz-selfcheck-outside.txt' }, cwd: ROOT });
+  assert.deepStrictEqual(s.decisions.map(d => [d.decision, d.rule]), [['allow', 'allow'], ['deny', 'deny'], ['deny', 'ask']]);
+  // a real agent's approved card: the outcome is allow, the rule was ask... for it the policy's decision is the plain "ask" too
+  const real = stubGate();
+  await real.gate.check({ agentName: 'real-lead', tool: 'Write', input: { file_path: '/opt/zz-selfcheck-outside.txt' }, cwd: ROOT });
+  assert.deepStrictEqual(real.decisions.map(d => [d.decision, d.rule]), [['allow', 'ask']]);
+});
+
+test('B1: sdk-chat forwards the rule to the check agent\'s observer', async () => {
+  cleanup();
+  const events = [];
+  mkVirtual('lead', (e) => events.push(e));
+  try {
+    const gate = sdkChat.__selfcheck.gate;
+    await gate.check({ agentName: 'selfcheck-lead', tool: 'Write', input: { file_path: '/opt/zz-selfcheck-outside.txt' }, cwd: ROOT });
+    await gate.check({ agentName: 'selfcheck-lead', tool: 'mcp__hub__Read', input: { file_path: path.join(HOME, 'selfcheck', 'lead', 'read.txt') }, cwd: ROOT });
+    assert.deepStrictEqual(events.map(e => [e.decision, e.rule]), [['deny', 'ask'], ['allow', 'allow']]);
+  } finally { cleanup(); }
+});
+
 test('gate: the PreToolUse hook gives a check agent the same explicit allow for a client Write as a real one', async () => {
   const s = stubGate();
   const hook = s.gate.sdkHook({ agentName: 'selfcheck-lead', cwd: ROOT });

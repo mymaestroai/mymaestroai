@@ -104,6 +104,34 @@ test('schedule(): a tick runs a nightly once, and respects enabled and running',
   assert.deepStrictEqual(m.runs, ['nightly'], 'stopped');
 });
 
+test('F6: a store that cannot be written does not start a run every tick: one launch per 60 minutes', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+  const m = make({ now: at('2026-11-17T09:00:00Z'), stored: { lastRun: { startedAt: '2026-11-16T09:00:00Z' } } });
+  // a store that cannot be written: the stored date never holds, so only the launch memory in the scheduler can stop a repeat
+  const forgetful = createScheduler({ now: () => m.clock.now, zone: () => 'America/New_York', settings: () => m.s, getStored: () => m.st, setStored: () => {}, isRunning: () => false, run: (a) => { m.runs.push(a.trigger); return Promise.resolve(); } });
+  const tick = forgetful.schedule({ tickMs: 300000 });
+  for (let i = 0; i < 12; i++) { tick(); m.clock.now += 5 * 60000; }   // an hour of ticks
+  assert.deepStrictEqual(m.runs, ['nightly'], 'one launch in the first hour');
+  m.clock.now += 5 * 60000; tick();
+  assert.strictEqual(m.runs.length, 2, 'and one more after the 60 minutes are over');
+  forgetful.stop();
+});
+
+test('F6: onStarted counts as a launch too: no tick launches within 60 minutes of the start run', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+  const m = make({ now: at('2026-11-17T09:00:00Z'), stored: { lastRun: { startedAt: '2026-11-16T09:00:00Z' } } });
+  m.sched.onStarted();
+  t.mock.timers.tick(60000);
+  assert.deepStrictEqual(m.runs, ['start']);
+  m.clock.now += 5 * 60000;
+  const tick = m.sched.schedule({ tickMs: 300000 });
+  tick();
+  assert.deepStrictEqual(m.runs, ['start'], 'the nightly slot is due, but a run was just launched');
+  m.clock.now += 60 * 60000; tick();
+  assert.deepStrictEqual(m.runs, ['start', 'nightly']);
+  m.sched.stop();
+});
+
 test('onStarted: runs 60 s later, unless it ran in the last 30 minutes, or is off', (t) => {
   t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
   const now = at('2026-11-17T12:00:00Z');
