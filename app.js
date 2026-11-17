@@ -6852,8 +6852,8 @@
       });
       activeWireHold();
       paintAllAgentStatus();
-      if (typeof simpleAgentsSoon === 'function') simpleAgentsSoon();   // Simple: Primary agents and "More agents"
       paintActiveSection(true);
+      if (typeof simpleAgentsSoon === 'function') simpleAgentsSoon();   // Simple: Primary agents and "More agents"
       renderAgentPicker();
     }
 
