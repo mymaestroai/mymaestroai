@@ -2676,6 +2676,8 @@
     html.mm-simple .simple-think .st-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--sm-muted); margin-bottom: 6px; }
     html.mm-simple .simple-think .st-dot { width: 8px; height: 8px; border-radius: 50%; background: #8b6fd6; animation: simple-pulse 1.4s ease-in-out infinite; }
     html.mm-simple .simple-think .st-body { font-size: 13px; line-height: 1.55; color: var(--sm-muted); border-left: 1px solid var(--sm-border); padding-left: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+      /* never taller than five lines, however the text wraps: the newest text stays at the bottom, the top is cut and faded */
+      max-height: calc(1.55em * 5); overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end;
       -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 60%); mask-image: linear-gradient(to bottom, transparent 0, #000 60%); }
     html.mm-simple .simple-think .st-body:empty { display: none; }
     html.mm-simple .simple-think .st-consult { font-size: 13px; color: var(--sm-sec); margin-top: 6px; }
