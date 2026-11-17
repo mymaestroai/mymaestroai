@@ -40,11 +40,11 @@ test('both pages carry the same shared block between the share links markers', (
   assert.ok(block(app).includes('async function shareLinksJson('));
 });
 
-test('labels and default: 1 hour, 24 hours, 7 days, N hours; default = the server default when offered, else the first', () => {
+test('labels and default: 1 hour, 24 hours, 7 days, N hours; default = the server default when offered, else the largest choice below it', () => {
   const { api } = load();
   assert.deepStrictEqual([1, 24, 168, 72].map(api.shareLinkLabel), ['1 hour', '24 hours', '7 days', '72 hours']);
   assert.strictEqual(api.shareLinkDefaultHours(SETTINGS), 24);
-  assert.strictEqual(api.shareLinkDefaultHours({ defaultHours: 72, choices: [1, 24] }), 1);
+  assert.strictEqual(api.shareLinkDefaultHours({ defaultHours: 72, choices: [1, 24] }), 24);
   const html = api.shareLinkFormHtml('notes.txt', SETTINGS);
   assert.match(html, /<option value="24" selected>24 hours<\/option>/);
   assert.match(html, /<option value="168">7 days<\/option>/);
@@ -210,11 +210,104 @@ test('Settings block posts shareLinks { enabled, defaultHours, maxHours }; admin
   assert.strictEqual(els['.sl-set-msg'].textContent, 'Saved.');
   assert.match(app, /id="st-security-section" data-no-dirty>[\s\S]*?id="st-share-block"[^\n]*\$\{shareSettingsHtml\(\)\}/);
   assert.match(app, /shareSettingsMount\(document\.getElementById\('st-share-block'\), shareLinksListOpen\)/);
-  assert.match(mjs, /hubMe && hubMe\.isAdmin \? `<div class="sec-section" id="sec-share">\$\{shareSettingsHtml\(\)\}/);
+  assert.match(mjs, /hubMe && hubMe\.isAdmin \? `<div class="sec-section" id="sec-share" data-no-dirty>\$\{shareSettingsHtml\(\)\}/);
   assert.match(mjs, /shareSettingsMount\(\$\('sec-share'\), shareLinksListOpen\)/);
 });
 test('desktop and phone both have the row action, the Shared links entry and the load on open', () => {
   assert.ok(app.includes('onclick="shareLinkOpen(${i})">Share link</button>') && app.includes('id="files-shared-btn" onclick="shareLinksListOpen()"') && app.includes('      shareLinksInit();\n      await filesRefresh();'));
-  assert.ok(mjs.includes('<button id="fs-shared" hidden>Shared links</button>') && mjs.includes("$('fs-shared').addEventListener('click', shareLinksListOpen)") && mjs.includes('  shareLinksInit();\n  filesRefresh();'));
+  assert.ok(mjs.includes('<button id="fs-shared" hidden>Shared links</button>') && mjs.includes("$('fs-shared').addEventListener('click', shareLinksListOpen)") && mjs.includes('  if (!wasOpen) shareLinksInit();'));
   assert.ok(app.includes('function shareLinksListOpen()') && mjs.includes('function shareLinksListOpen()'));
+});
+
+// ── review follow-ups ──
+test('the phone Security share block and both Share link forms opt out of the discard guard', () => {
+  assert.match(mjs, /id="sec-share" data-no-dirty>/);
+  assert.match(app, /id="st-security-section" data-no-dirty>/);
+  const { api } = load();
+  assert.match(api.shareLinkFormHtml('a.txt', SETTINGS), /^<div class="sec-section" data-no-dirty>/);
+  assert.match(api.shareLinkResultHtml({ path: '/s/x', expiresAt: '2026-11-18T10:00:00Z' }, 'https://hub.example'), /^<div class="sec-section" data-no-dirty>/);
+});
+
+test('default hours: the largest choice not above the stored default, else the smallest', () => {
+  for (const src of [app, mjs]) {
+    const { api } = load({ src });
+    assert.strictEqual(api.shareLinkDefaultHours({ defaultHours: 72, choices: [1, 24, 168] }), 24);
+    assert.strictEqual(api.shareLinkDefaultHours({ defaultHours: 24, choices: [1, 24, 168] }), 24);
+    assert.strictEqual(api.shareLinkDefaultHours({ defaultHours: 0.5, choices: [24, 1, 168] }), 1);
+    assert.strictEqual(api.shareLinkDefaultHours({ defaultHours: 500, choices: [1, 24, 168] }), 168);
+    assert.match(api.shareLinkFormHtml('a', { defaultHours: 72, choices: [1, 24, 168] }), /<option value="24" selected>/);
+  }
+});
+
+// A root with the selects, like the real one: the value is whatever was set last.
+function settingsRoot() {
+  const mk = () => ({ innerHTML: '', value: '', onchange: null });
+  const els = { '.sl-set-on': { checked: false, onchange: null }, '.sl-set-def': mk(), '.sl-set-max': mk(), '.sl-set-list': {}, '.sl-set-msg': { textContent: '' } };
+  return { els, style: { display: 'flex' }, querySelector: (s) => els[s] };
+}
+const optValues = (el) => [...el.innerHTML.matchAll(/value="(\d+)"/g)].map(m => Number(m[1]));
+test('Settings: a stored maxHours or defaultHours that is not listed is added as an option and kept', async () => {
+  for (const src of [app, mjs]) {
+    const lo = load({ src, fetch: async () => ({ ok: true, json: async () => ({ links: [], settings: { enabled: true, defaultHours: 72, maxHours: 100, choices: [1, 24] } }) }) });
+    const root = settingsRoot();
+    await lo.api.shareSettingsMount(root, () => {});
+    assert.deepStrictEqual(optValues(root.els['.sl-set-max']), [1, 24, 72, 100, 168]);
+    assert.strictEqual(root.els['.sl-set-max'].value, '100');
+    assert.deepStrictEqual(optValues(root.els['.sl-set-def']), [1, 24, 72]);
+    assert.strictEqual(root.els['.sl-set-def'].value, '72');
+    assert.ok(root.els['.sl-set-max'].innerHTML.includes('>72 hours<') && root.els['.sl-set-max'].innerHTML.includes('>100 hours<'));
+    // listed values stay as they were
+    const lo2 = load({ src, fetch: async () => ({ ok: true, json: async () => ({ links: [], settings: { enabled: true, defaultHours: 24, maxHours: 72, choices: [1, 24] } }) }) });
+    const r2 = settingsRoot(); await lo2.api.shareSettingsMount(r2, () => {});
+    assert.deepStrictEqual(optValues(r2.els['.sl-set-max']), [1, 24, 72, 168]);
+    assert.deepStrictEqual(optValues(r2.els['.sl-set-def']), [1, 24]); assert.strictEqual(r2.els['.sl-set-def'].value, '24');
+    // lowering the longest time below an odd default drops it from the list
+    const r3 = settingsRoot(); await lo.api.shareSettingsMount(r3, () => {});
+    r3.els['.sl-set-max'].value = '24'; r3.els['.sl-set-max'].onchange();
+    assert.deepStrictEqual(optValues(r3.els['.sl-set-def']), [1, 24]); assert.strictEqual(r3.els['.sl-set-def'].value, '24');
+  }
+});
+
+test('Settings block is hidden with style.display (an inline display:flex beats hidden) and shown again as it was', async () => {
+  for (const src of [app, mjs]) {
+    let ok = false;
+    const lo = load({ src, fetch: async () => (ok ? { ok: true, json: async () => ({ links: [], settings: SETTINGS }) } : { ok: false, status: 500, json: async () => ({}) }) });
+    const root = settingsRoot();
+    await lo.api.shareSettingsMount(root, () => {});
+    assert.strictEqual(root.style.display, 'none'); assert.ok(!root.hidden);
+    await lo.api.shareSettingsMount(root, () => {});   // still failing: stays hidden and remembers the original
+    ok = true;
+    await lo.api.shareSettingsMount(root, () => {});
+    assert.strictEqual(root.style.display, 'flex');
+  }
+  assert.match(app, /id="st-share-block" style="display:flex/);
+});
+
+// ── phone: the settings load once per sheet opening ──
+test('phone: openFilesSheet loads the share settings only when the sheet goes from closed to open', () => {
+  const src = cut(mjs, 'function openFilesSheet(path)', '\n}\n') + '\n}';
+  let inits = 0, refreshes = 0;
+  const sheet = { open: false, dataset: { ready: '1' }, showModal() { this.open = true; } };
+  const open = new Function('$', 'filesState', 'shareLinksInit', 'filesRefresh', `${src}; return openFilesSheet;`)(
+    (id) => (id === 'files-sheet' ? sheet : { classList: { remove() {} } }), { path: '', openRow: 0 }, () => { inits++; }, () => { refreshes++; });
+  open(); open('docs'); open('docs/sub');
+  assert.deepStrictEqual([inits, refreshes], [1, 3], 'one settings load, a refresh per tap');
+  sheet.open = false; open();
+  assert.strictEqual(inits, 2, 'a new opening loads again');
+});
+test('phone: a failed refresh keeps the settings already loaded; a first failure leaves them null', async () => {
+  const src = cut(mjs, 'function shareLinksInit()', '\n}\n') + '\n}';
+  const run = async (settings, fail) => {
+    const state = { settings }, btn = { hidden: true };
+    const load_ = async () => { if (fail) { state.settings = null; return null; } state.settings = SETTINGS; return { settings: SETTINGS }; };
+    new Function('shareLinksState', 'shareLinksLoad', '$', 'filesState', `${src}; shareLinksInit();`)(state, load_, () => btn, { entries: [] });
+    await new Promise(x => setImmediate(x));
+    return { state, btn };
+  };
+  let r = await run(SETTINGS, true);
+  assert.strictEqual(r.state.settings, SETTINGS); assert.strictEqual(r.btn.hidden, false);
+  r = await run(null, true);
+  assert.strictEqual(r.state.settings, null); assert.strictEqual(r.btn.hidden, true);
+  r = await run(null, false);
+  assert.strictEqual(r.state.settings, SETTINGS);
 });

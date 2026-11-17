@@ -13101,7 +13101,7 @@ function openSecuritySheet() {
       <div class="sec-title">Sessions</div>
       <div class="sec-actions"><button id="sec-revoke" class="danger">Sign out everywhere</button></div>
     </div>
-    ${hubMe && hubMe.isAdmin ? `<div class="sec-section" id="sec-share">${shareSettingsHtml()}</div>` : ''}
+    ${hubMe && hubMe.isAdmin ? `<div class="sec-section" id="sec-share" data-no-dirty>${shareSettingsHtml()}</div>` : ''}
     <div class="sec-actions" style="margin-top:10px"><button id="sec-close">Close</button></div>`;
   $('sec-pw-go').addEventListener('click', changePassword);
   $('sec-revoke').addEventListener('click', signOutEverywhere);
@@ -13488,14 +13488,21 @@ function openFilesSheet(path) {
     $('fs-crumbs').addEventListener('click', (e) => { const b = e.target.closest('button[data-path]'); if (b) openFilesSheet(b.dataset.path); });
     sheet.dataset.ready = '1';
   }
-  if (!sheet.open) sheet.showModal();
-  shareLinksInit();
+  const wasOpen = sheet.open;
+  if (!wasOpen) sheet.showModal();
+  if (!wasOpen) shareLinksInit();   // the settings once per opening, not on every folder or crumb tap
   filesRefresh();
 }
 // ── share links (begin): a short link to one file (server: /api/share-links*); this block is the same in app.js and mobile.js ──
 const shareLinksState = { settings: null };
 function shareLinkLabel(h) { h = Number(h); return h === 1 ? '1 hour' : h === 24 ? '24 hours' : h === 168 ? '7 days' : `${h} hours`; }
-function shareLinkDefaultHours(s) { const c = (s && s.choices) || []; return c.includes(s.defaultHours) ? s.defaultHours : c[0]; }
+// The server default when offered; else the largest choice not above it (the smallest when none is).
+function shareLinkDefaultHours(s) {
+  const c = ((s && s.choices) || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b), want = Number(s && s.defaultHours);
+  if (!c.length) return undefined;
+  const below = c.filter(h => h <= want);
+  return below.length ? below[below.length - 1] : c[0];
+}
 function shareLinkWhen(t) { const d = new Date(t); return isNaN(d) ? String(t || '') : d.toLocaleString(); }
 async function shareLinksJson(url, body) {
   let r;
@@ -13516,14 +13523,14 @@ function shareLinkRequest(identity, path, hours, oneTime) { return { ...identity
 function shareLinkFormHtml(name, s) {
   const def = shareLinkDefaultHours(s);
   const opts = ((s && s.choices) || []).map(h => `<option value="${Number(h)}"${h === def ? ' selected' : ''}>${escapeHtml(shareLinkLabel(h))}</option>`).join('');
-  return `<div class="sec-section"><div class="sec-title">${escapeHtml(name)}</div>
+  return `<div class="sec-section" data-no-dirty><div class="sec-title">${escapeHtml(name)}</div>
     <label class="sec-hint" for="sl-hours">Link works for</label><select class="sl-hours" id="sl-hours">${opts}</select>
     <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-once" style="width:auto"> Only one download</label>
     <div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div></div>
     <div class="sec-actions"><button type="button" class="sec-btn sl-cancel">Cancel</button><button type="button" class="sec-btn sl-create">Create link</button></div>`;
 }
 function shareLinkResultHtml(link, origin) {
-  return `<div class="sec-section"><input type="text" class="sl-url" readonly aria-label="Link" value="${escapeHtml(origin + link.path)}">
+  return `<div class="sec-section" data-no-dirty><input type="text" class="sl-url" readonly aria-label="Link" value="${escapeHtml(origin + link.path)}">
     <div class="sec-hint">Expires ${escapeHtml(shareLinkWhen(link.expiresAt))}</div>
     <div class="sec-hint">Opens for you when you're signed in to your Maestro.</div></div>
     <div class="sec-actions"><button type="button" class="sec-btn sl-copy">Copy</button><button type="button" class="sec-btn sl-done">Done</button></div>`;
@@ -13590,21 +13597,29 @@ async function shareLinksListFill(root, admin) {
 }
 // Settings (admins): the three values of settings.shareLinks.
 const SHARE_DEFAULT_CHOICES = [1, 24, 168], SHARE_MAX_CHOICES = [1, 24, 72, 168];
+// The listed hours as <option>s; a stored value that is not listed (say 72 as the default) is added so it shows and is kept.
+function shareSettingsOptions(list, extra) {
+  const all = [...list]; const x = Number(extra);
+  if (extra != null && Number.isFinite(x) && x > 0 && !all.includes(x)) all.push(x);
+  return all.sort((a, b) => a - b).map(h => `<option value="${h}">${escapeHtml(shareLinkLabel(h))}</option>`).join('');
+}
 function shareSettingsHtml() {
-  const opts = (list) => list.map(h => `<option value="${h}">${escapeHtml(shareLinkLabel(h))}</option>`).join('');
   return `<h4>Share links</h4>
     <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-set-on" style="width:auto"> Allow share links</label>
     <label class="sec-hint">Default time</label><select class="sl-set-def"></select>
-    <label class="sec-hint">Longest allowed</label><select class="sl-set-max">${opts(SHARE_MAX_CHOICES)}</select>
+    <label class="sec-hint">Longest allowed</label><select class="sl-set-max">${shareSettingsOptions(SHARE_MAX_CHOICES)}</select>
     <div class="sec-actions" style="justify-content:flex-start"><button type="button" class="sec-btn sl-set-list">Shared links</button></div>
     <div class="sec-msg sl-set-msg" role="status"></div>`;
 }
 function shareSettingsDefaults(root, want) {
   const max = Number(root.querySelector('.sl-set-max').value) || 168;
+  const w = Number(want), keep = Number.isFinite(w) && w > 0 && w <= max;
   const list = SHARE_DEFAULT_CHOICES.filter(h => h <= max);
+  if (keep && !list.includes(w)) list.push(w);
+  list.sort((a, b) => a - b);
   const sel = root.querySelector('.sl-set-def');
-  sel.innerHTML = list.map(h => `<option value="${h}">${escapeHtml(shareLinkLabel(h))}</option>`).join('');
-  sel.value = String(list.includes(Number(want)) ? Number(want) : list[list.length - 1]);
+  sel.innerHTML = shareSettingsOptions(list);
+  sel.value = String(keep ? w : list[list.length - 1]);
 }
 async function shareSettingsSave(root) {
   const msg = root.querySelector('.sl-set-msg');
@@ -13616,10 +13631,13 @@ async function shareSettingsSave(root) {
 async function shareSettingsMount(root, openList) {
   if (!root) return;
   const d = await shareLinksLoad();
-  if (!d || !d.settings) { root.hidden = true; return; }
+  // Hidden with style.display (the block may carry its own inline display, which hidden would not beat); shown again as it was.
+  if (!d || !d.settings) { if (root.style.display !== 'none') root._slDisplay = root.style.display; root.style.display = 'none'; return; }
+  if (root._slDisplay !== undefined) root.style.display = root._slDisplay;
   const s = d.settings;
   root.querySelector('.sl-set-on').checked = !!s.enabled;
-  const max = root.querySelector('.sl-set-max'); max.value = String(SHARE_MAX_CHOICES.includes(Number(s.maxHours)) ? Number(s.maxHours) : 168);
+  const max = root.querySelector('.sl-set-max'), mh = Number(s.maxHours), mx = Number.isFinite(mh) && mh > 0 ? mh : 168;
+  max.innerHTML = shareSettingsOptions(SHARE_MAX_CHOICES, mx); max.value = String(mx);
   shareSettingsDefaults(root, s.defaultHours);
   root.querySelector('.sl-set-on').onchange = () => shareSettingsSave(root);
   root.querySelector('.sl-set-def').onchange = () => shareSettingsSave(root);
@@ -13629,7 +13647,9 @@ async function shareSettingsMount(root, openList) {
 // ── share links (end) ──
 // Files sheet hooks (share links): the load on open, the dialogs, and the Security block.
 function shareLinksInit() {
-  shareLinksLoad().then(() => {
+  const before = shareLinksState.settings;
+  shareLinksLoad().then((d) => {
+    if (!d) shareLinksState.settings = before;   // a failed refresh keeps what was loaded
     const b = $('fs-shared'); if (b) b.hidden = !shareLinksState.settings;
     if ($('fs-list') && filesState.entries.length) filesRenderList();
   });
