@@ -112,3 +112,40 @@ test('the shell scanner reports the top-level order: segments and separators, no
   const shape = s.flow.map(e => (e.op !== undefined ? e.op : 'S'));
   assert.deepStrictEqual(shape, ['S', '&&', 'S', ';', '(', 'S', ')', '|', 'S']);
 });
+
+// Review r1 (Sentinel B1, also a gap of the old reading): a target still holding $NAME, $( ) or backticks is computed
+// when it runs, never a relative file in the folder followed (or in the working folder).
+test('a computed write target is at least a write outside the folders, wherever the command runs', () => {
+  for (const cmd of [`cd ${FX} && echo hi > $HOME/.bashrc`, `cd ${FX} && echo hi > \${HOME}/.bashrc`, `cd ${FX} && echo hi > $X/.bashrc`,
+    `cd ${FX} && echo hi > $(echo /home/u/.bashrc)`, `cd ${FX} && echo hi > \`echo /x\``]) refused(cmd);
+  refused('echo hi > $HOME/.bashrc', { ...o, cwd: FX });   // the old gap: working folder inside the roots
+  assert.strictEqual(c('echo k >> $HOME/.ssh/authorized_keys', { ...o, cwd: FX }), 'admin', '$HOME judged as the home folder too');
+});
+
+// Review r1 (Sentinel B2, Sonnet B1): a variable changed by something other than a counted NAME= is not put in.
+test('variables: unset, let, (( )), read, printf -v, declare, export, IFS and the shell\'s own names are never put in', () => {
+  for (const cmd of [`B=${FX}; unset B; echo hi >> $B/home/u/.bashrc`, `((B=0)); B=${FX}; cp a $B/x`, `B=${FX}; let "B=0"; echo x > $B/f`,
+    `N=B; read $N <<< zz; B=${FX}; cp a $B/x`, `B=${FX}; printf -v B x; echo x > $B/f`, `N=B; declare $N=/etc; B=${FX}; cp a $B/x`,
+    `IFS=x; B=${FX}/xlib; cp /etc/hostname $B`, `PWD=${FX}; cd /etc && echo key >> $PWD/authorized_keys`,
+    `OLDPWD=${FX}; cd /etc && echo x > $OLDPWD/f`]) refused(cmd);
+});
+
+// Review r1 (Sentinel B3): bash's cd is logical (.. comes off the path as written); the folder through a link is also judged.
+test('a cd .. after a link is judged at the logical and the physical parent', () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-cd-out-'));
+  try {
+    // a link outside the roots that leads into them: physically .. is FX (inside), logically it is out (outside)
+    fs.symlinkSync(path.join(FX, 'sub'), path.join(out, 'L'));
+    refused(`cd ${out}/L && cd .. && echo hi > x`);
+    inside(`cd ${FX}/sub && cd .. && echo hi > x`);
+    inside(`cd ${out}/L && echo hi > x`, { ...o, roots: [FX, path.join(out, 'L')] });
+  } finally { fs.rmSync(out, { recursive: true, force: true }); }
+});
+
+// Review r1 (Sonnet B2, B3): options that move where operands land are judged as before; a package manager's --prefix counts.
+test('relocating options and package-manager destinations are judged', () => {
+  for (const cmd of [`cd ${FX} && cp -t /etc/cron.d job`, `cd ${FX} && mv -t /home/u/Documents report.txt`, `cd ${FX} && env -C /home/u touch .bashrc`,
+    `cd ${FX} && npm install pkg --prefix /home/u/other`, `cd ${FX} && pip install --target=/etc/x y`, `cd ${FX} && env -u npm install /dev/null /etc/cron.d/x`,
+    `export CD''PATH=/etc; cd ${FX} && cd sub && echo hi > f`]) refused(cmd);
+  inside(`cd ${FX} && python3 -m pip install x`);
+});
