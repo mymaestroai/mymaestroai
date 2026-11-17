@@ -14416,10 +14416,21 @@ function simpleSideEnsure() {
   s.querySelector('.ssd-me').addEventListener('click', simpleSettingsOpen);
   return s;
 }
+// Rebuilds the rows only when what they show changes (agents, names, icons, the open chat, "More agents"); a status
+// change only repaints the dots, so a row under a finger is never replaced and the list keeps its scroll position.
 function simpleSidePaint() {
   if (!simpleOn()) return;
   const s = simpleSideEnsure();
-  simpleAgentListFill(s.querySelector('.ssd-list'), {});
+  const listEl = s.querySelector('.ssd-list');
+  const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy);
+  const rowSig = (a) => [a.name, a.display || '', a.icon || ''];
+  const sig = JSON.stringify([m.primary.map(rowSig), m.groups.map((g) => [g.key, g.items.map(rowSig)]), m.hasMore, m.open, current, agents.length]);
+  if (listEl.dataset.sig !== sig) {
+    const top = listEl.scrollTop;
+    simpleAgentListFill(listEl, {});
+    listEl.dataset.sig = sig;
+    listEl.scrollTop = top;
+  } else simpleDotsIn(s);
   s.querySelector('.ssd-av').textContent = simpleInitial(hubMe);
   s.querySelector('.ssd-name').textContent = (hubMe && hubMe.user && (hubMe.user.name || hubMe.user.login)) || '';
 }
