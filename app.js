@@ -1148,11 +1148,26 @@
       const files = data && Array.isArray(data.files) ? data.files : [];
       if (!files.length) { box.hidden = true; box.innerHTML = ''; return; }
       box.hidden = false;
-      box.innerHTML = '<h4>Recent from agents</h4>' + files.map((f) => {
-        const url = typeof f.download === 'string' && f.download.startsWith('/api/files/') ? f.download : '';
-        const info = [humanSize(f.size), f.folder || '', filesAgo(f.mtime)].filter(Boolean).join(' · ');
-        return `<div class="fr-row"><span class="fr-name" title="${esc(f.path || f.name || '').replace(/"/g, '&quot;')}">${esc(f.name || '')}</span><span class="fr-info">${esc(info)}</span>${url ? `<a class="fr-dl" href="${esc(url).replace(/"/g, '&quot;')}" download="${esc(f.name || 'file').replace(/"/g, '&quot;')}">Download</a>` : ''}</div>`;
-      }).join('');
+      // Only the newest 5 until "Show all (N)" is pressed; the choice is kept for this browser session only.
+      const FR_KEY = 'hub-files-recent-all', FR_FEW = 5;
+      let all = false;
+      try { all = sessionStorage.getItem(FR_KEY) === '1'; } catch (e) { all = false; }
+      const draw = () => {
+        const shown = all ? files : files.slice(0, FR_FEW);
+        box.innerHTML = '<h4>Recent from agents</h4>' + shown.map((f) => {
+          const url = typeof f.download === 'string' && f.download.startsWith('/api/files/') ? f.download : '';
+          const info = [humanSize(f.size), f.folder || '', filesAgo(f.mtime)].filter(Boolean).join(' · ');
+          return `<div class="fr-row"><span class="fr-name" title="${esc(f.path || f.name || '').replace(/"/g, '&quot;')}">${esc(f.name || '')}</span><span class="fr-info">${esc(info)}</span>${url ? `<a class="fr-dl" href="${esc(url).replace(/"/g, '&quot;')}" download="${esc(f.name || 'file').replace(/"/g, '&quot;')}">Download</a>` : ''}</div>`;
+        }).join('') + (!all && files.length > FR_FEW ? `<button type="button" class="fr-all" aria-expanded="false">Show all (${files.length})</button>` : '');
+      };
+      box.onclick = (e) => {
+        const b = e.target && e.target.closest ? e.target.closest('button.fr-all') : null;
+        if (!b) return;
+        all = true;
+        try { sessionStorage.setItem(FR_KEY, '1'); } catch (err) { /* not remembered */ }
+        draw();
+      };
+      draw();
     }
     function filesAgo(t) {
       const ms = Date.parse(t); if (isNaN(ms)) return '';

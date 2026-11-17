@@ -13412,10 +13412,25 @@ async function filesLoadRecent() {
   filesState.recent = files;
   if (!files.length) { box.hidden = true; box.innerHTML = ''; return; }
   box.hidden = false;
-  box.innerHTML = '<h4>Recent from agents</h4>' + files.map((f, i) => {
-    const info = [humanSize(f.size), f.folder || '', filesAgo(f.mtime)].filter(Boolean).join(' · ');
-    return `<div class="fr-row"><div class="fr-text"><span class="fr-name">${esc(f.name || '')}</span><span class="fr-info">${esc(info)}</span></div><button type="button" class="fr-dl" data-r="${i}" aria-label="Download ${esc(f.name || 'file')}">Download</button></div>`;
-  }).join('');
+  // Only the newest 3 until "Show all (N)" is pressed; the choice is kept for this browser session only.
+  const FR_KEY = 'hub-files-recent-all', FR_FEW = 3;
+  let all = false;
+  try { all = sessionStorage.getItem(FR_KEY) === '1'; } catch { all = false; }
+  const draw = () => {
+    const shown = all ? files : files.slice(0, FR_FEW);
+    box.innerHTML = '<h4>Recent from agents</h4>' + shown.map((f, i) => {
+      const info = [humanSize(f.size), f.folder || '', filesAgo(f.mtime)].filter(Boolean).join(' · ');
+      return `<div class="fr-row"><div class="fr-text"><span class="fr-name">${esc(f.name || '')}</span><span class="fr-info">${esc(info)}</span></div><button type="button" class="fr-dl" data-r="${i}" aria-label="Download ${esc(f.name || 'file')}">Download</button></div>`;
+    }).join('') + (!all && files.length > FR_FEW ? `<button type="button" class="fr-all" aria-expanded="false">Show all (${files.length})</button>` : '');
+  };
+  box.onclick = (e) => {
+    const b = e.target && e.target.closest ? e.target.closest('button.fr-all') : null;
+    if (!b) return;
+    all = true;
+    try { sessionStorage.setItem(FR_KEY, '1'); } catch { /* not remembered */ }
+    draw();
+  };
+  draw();
 }
 function onFilesRecentClick(e) {
   const b = e.target.closest('button[data-r]');

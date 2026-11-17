@@ -89,3 +89,61 @@ test('Files panel: Download as zip (toolbar and folder rows) checks first and sh
   assert.ok(!/check=1/.test(ok.clicks[0].href) && ok.clicks[0].href.includes('/api/files/zip?') && ok.clicks[0].download === 'q1.zip', 'a plain link download of the real URL');
   assert.strictEqual(ok.status.text, 'Downloading q1.zip (3 files, 5.0 MB)');
 });
+
+// Recent: only the newest 5, then a link-styled "Show all (N)" that expands in place and is remembered for the session.
+async function recentKit(n, storage) {
+  const fn = /async function filesLoadRecent\(\) \{[\s\S]*?\n    \}\n/.exec(app)[0];
+  const box = { hidden: true, innerHTML: '', onclick: null };
+  const files = Array.from({ length: n }, (_, i) => ({ name: `f${i}.txt`, size: 10, folder: 'out', mtime: new Date().toISOString(), download: `/api/files/download?path=f${i}` }));
+  const ctx = {
+    document: { getElementById: () => box }, filesState: { agent: 'bob' }, filesApi: async () => ({ files }), filesUrl: () => '/x',
+    esc: (s) => String(s), humanSize: () => '10 B', filesAgo: () => 'just now', ...(storage ? { sessionStorage: storage } : {}),
+  };
+  vm.createContext(ctx); vm.runInContext(fn + '\nthis.filesLoadRecent = filesLoadRecent;', ctx);
+  await ctx.filesLoadRecent();
+  const rows = () => (box.innerHTML.match(/class="fr-row"/g) || []).length;
+  const press = () => box.onclick({ target: { closest: (sel) => (sel === 'button.fr-all' && /class="fr-all"/.test(box.innerHTML) ? {} : null) } });
+  return { box, rows, press };
+}
+const memStore = (init = {}) => { const d = { ...init }; return { d, getItem: (k) => (k in d ? d[k] : null), setItem: (k, v) => { d[k] = String(v); } }; };
+
+test('Recent: with 10 files the desktop draws 5 rows and a "Show all (10)" button (a real button, aria-expanded=false)', async () => {
+  const { box, rows } = await recentKit(10, memStore());
+  assert.strictEqual(rows(), 5);
+  assert.match(box.innerHTML, /<button type="button" class="fr-all" aria-expanded="false">Show all \(10\)<\/button>/);
+  assert.match(box.innerHTML, /f4\.txt/); assert.doesNotMatch(box.innerHTML, /f5\.txt/);
+  assert.match(html, /#files-panel \.files-recent button\.fr-all \{[^}]*color: var\(--accent\)/, 'link-styled in the accent colour');
+});
+
+test('Recent: pressing "Show all" draws all 10 in place, drops the button and stores 1 in sessionStorage', async () => {
+  const st = memStore();
+  const { box, rows, press } = await recentKit(10, st);
+  press();
+  assert.strictEqual(rows(), 10);
+  assert.doesNotMatch(box.innerHTML, /fr-all/);
+  assert.strictEqual(st.d['hub-files-recent-all'], '1');
+});
+
+test('Recent: with the stored choice all 10 are drawn and there is no button; 5 files never show one', async () => {
+  const a = await recentKit(10, memStore({ 'hub-files-recent-all': '1' }));
+  assert.strictEqual(a.rows(), 10);
+  assert.doesNotMatch(a.box.innerHTML, /fr-all/);
+  const b = await recentKit(6, memStore());
+  assert.strictEqual(b.rows(), 5);
+  assert.match(b.box.innerHTML, /Show all \(6\)/);
+  const c = await recentKit(5, memStore());
+  assert.strictEqual(c.rows(), 5);
+  assert.doesNotMatch(c.box.innerHTML, /fr-all/);
+});
+
+test('Recent: sessionStorage that throws (or is missing) still works, the choice just is not remembered', async () => {
+  const bad = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+  for (const storage of [bad, null]) {
+    const { box, rows, press } = await recentKit(10, storage);
+    assert.strictEqual(rows(), 5);
+    assert.match(box.innerHTML, /Show all \(10\)/);
+    press();
+    assert.strictEqual(rows(), 10);
+    assert.doesNotMatch(box.innerHTML, /fr-all/);
+  }
+});

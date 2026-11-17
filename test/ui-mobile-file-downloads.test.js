@@ -393,3 +393,63 @@ test('nothing added here carries an emoji variation selector (U+FE0F)', () => {
   const cssEnd = html.indexOf('/* Recall sheet');
   assert.ok(cssStart > 0 && cssEnd > cssStart && !html.slice(cssStart, cssEnd).includes('\uFE0F'));
 });
+
+// Recent: only the newest 3, then a link-styled "Show all (N)" that expands in place and is remembered for the session.
+function recentKit(n, storage) {
+  const box = { hidden: true, innerHTML: '', onclick: null };
+  const files = Array.from({ length: n }, (_, i) => ({ name: `f${i}.txt`, size: 10, folder: 'out', mtime: new Date().toISOString(), download: `/api/files/download?path=f${i}` }));
+  const kit = load([grab('humanSize'), grab('filesAgo'), grab('filesLoadRecent')], ['filesLoadRecent'], {
+    $: () => box, filesState: { agent: 'bob', recent: [] }, filesApi: async () => ({ files }), filesUrl: () => '/x', esc: (s) => String(s),
+    ...(storage ? { sessionStorage: storage } : {}),
+  });
+  const rows = () => (box.innerHTML.match(/class="fr-row"/g) || []).length;
+  const press = () => box.onclick({ target: { closest: (sel) => (sel === 'button.fr-all' && /class="fr-all"/.test(box.innerHTML) ? {} : null) } });
+  return { box, kit, rows, press };
+}
+const memStore = (init = {}) => { const d = { ...init }; return { d, getItem: (k) => (k in d ? d[k] : null), setItem: (k, v) => { d[k] = String(v); } }; };
+
+test('Recent: with 10 files the phone draws 3 rows and a "Show all (10)" button (a real button, aria-expanded=false)', async () => {
+  const { box, kit, rows } = recentKit(10, memStore());
+  await kit.filesLoadRecent();
+  assert.strictEqual(rows(), 3);
+  assert.match(box.innerHTML, /<button type="button" class="fr-all" aria-expanded="false">Show all \(10\)<\/button>/);
+  assert.match(box.innerHTML, /f0\.txt/); assert.doesNotMatch(box.innerHTML, /f3\.txt/);
+});
+
+test('Recent: pressing "Show all" draws all 10 in place, drops the button and stores 1 in sessionStorage', async () => {
+  const st = memStore();
+  const { box, kit, rows, press } = recentKit(10, st);
+  await kit.filesLoadRecent();
+  press();
+  assert.strictEqual(rows(), 10);
+  assert.doesNotMatch(box.innerHTML, /fr-all/);
+  assert.strictEqual(st.d['hub-files-recent-all'], '1');
+});
+
+test('Recent: with the stored choice all 10 are drawn and there is no button; 3 files never show one', async () => {
+  const a = recentKit(10, memStore({ 'hub-files-recent-all': '1' }));
+  await a.kit.filesLoadRecent();
+  assert.strictEqual(a.rows(), 10);
+  assert.doesNotMatch(a.box.innerHTML, /fr-all/);
+  const b = recentKit(4, memStore());
+  await b.kit.filesLoadRecent();
+  assert.strictEqual(b.rows(), 3);
+  assert.match(b.box.innerHTML, /Show all \(4\)/);
+  const c = recentKit(3, memStore());
+  await c.kit.filesLoadRecent();
+  assert.strictEqual(c.rows(), 3);
+  assert.doesNotMatch(c.box.innerHTML, /fr-all/);
+});
+
+test('Recent: sessionStorage that throws (or is missing) still works, the choice just is not remembered', async () => {
+  const bad = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+  for (const storage of [bad, null]) {
+    const { box, kit, rows, press } = recentKit(10, storage);
+    await kit.filesLoadRecent();
+    assert.strictEqual(rows(), 3);
+    assert.match(box.innerHTML, /Show all \(10\)/);
+    press();
+    assert.strictEqual(rows(), 10);
+    assert.doesNotMatch(box.innerHTML, /fr-all/);
+  }
+});
