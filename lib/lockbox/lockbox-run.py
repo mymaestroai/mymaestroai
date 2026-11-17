@@ -41,8 +41,7 @@ RET_ERRNO = 0x00050000
 ARCHES = {"x86_64": (0xC000003E, 41), "aarch64": (0xC00000B7, 198)}  # audit arch, __NR_socket
 STRACE = "/usr/bin/strace"
 TRACE_SET = ("open,openat,openat2,creat,mkdir,mkdirat,rmdir,unlink,unlinkat,rename,renameat,renameat2,link,"
-             "linkat,symlink,symlinkat,truncate,mknod,mknodat,chdir,fchdir,clone,clone3,fork,vfork,socket,"
-             "connect,io_uring_setup")
+             "linkat,symlink,symlinkat,truncate,mknod,mknodat,chdir,fchdir,clone,clone3,fork,vfork,connect")
 
 class Fail(Exception):
     pass
@@ -532,16 +531,16 @@ class Judge:
                 self.judge(pid, name, args, di, pi, False)
             for di, pi in ws:
                 self.judge(pid, name, args, di, pi, True)
-        elif name == "socket" and self.p["blockUnixSockets"]:
-            if args and args[0] in ("AF_UNIX", "AF_LOCAL"):
-                self.add("unix-socket", "socket", "")
+        # Only a unix-socket connect that SUCCEEDED is logged: glibc opens one to ask nscd or systemd about users
+        # (bash does with no USER in its environment), fails to connect and carries on; enforce refusing that
+        # socket changes nothing, so logging its creation would only be noise.
         elif name == "connect" and self.p["blockUnixSockets"]:
             if "sa_family=AF_UNIX" in argstr or "sa_family=AF_LOCAL" in argstr:
                 sm = SUN_RE.search(argstr)
                 path = (sm.group(1) + (unquote(sm.group(2)) or "")) if sm else ""
                 self.add("unix-socket", "connect", path)
-        elif name == "io_uring_setup" and self.p["blockIoUring"]:
-            self.add("io_uring", "io_uring_setup", "")
+        # io_uring_setup is not traced or logged: enforce refuses it with ENOSYS and libuv (every Node program,
+        # which probes it at start) falls back to threads, so a line per Node command would only be noise.
 
     def judge(self, pid, name, args, di, pi, is_write, override=None):
         if pi >= len(args):

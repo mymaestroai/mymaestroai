@@ -246,7 +246,7 @@ describe('lockbox-run', { skip }, () => {
     assert.ok(has('write-outside', path.join(fx.B, 'x.txt')), JSON.stringify(log));
     assert.ok(has('secret-read', path.join(fx.H, 'secret.txt')), JSON.stringify(log));
     assert.ok(has('unix-socket'), JSON.stringify(log));
-    assert.ok(has('io_uring'), JSON.stringify(log));
+    assert.ok(!has('io_uring'), 'io_uring is refused in enforce but not logged in watch: every Node program probes it and falls back');
     assert.ok(!log.some((e) => e.path.startsWith(fx.A + path.sep) && e.rule !== 'unix-socket'), 'A writes are not logged');
     assert.ok(!log.some((e) => e.path.startsWith(fx.S)), 'S reads are not logged');
     for (const e of log) {
