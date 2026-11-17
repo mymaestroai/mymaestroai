@@ -48,7 +48,7 @@ test('relaunch mode (no supervisor): scripts/relaunch.js spawned detached with t
 test('launchd mode (macOS service): the label from XPC_SERVICE_NAME or launchctl print; kickstart -k after the delay', () => {
   assert.strictEqual(R.launchdLabel({ platform: 'linux', env: { XPC_SERVICE_NAME: 'com.agent-hub' } }), null);
   assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: 'com.agent-hub' }, execImpl: () => { throw new Error('no'); } }), 'com.agent-hub');
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: '0' }, execImpl: () => '' }), 'ai.mymaestro.hub', 'launchctl print found the job (installer label probed first)');
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: '0' }, pid: 4242, execImpl: () => '\tpid = 4242\n' }), 'ai.mymaestro.hub', 'launchctl print found this process as the job (installer label probed first)');
   assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, execImpl: () => { throw new Error('no such job'); } }), null);
   const calls = []; let scheduled = null;
   const r = R.requestRestart({ projectDir: '/nowhere', env: { XPC_SERVICE_NAME: 'com.agent-hub' }, platform: 'darwin', execImpl: (c, a) => { calls.push([c, ...a]); }, setTimeoutImpl: (fn, ms) => { scheduled = { fn, ms }; return { unref() {} }; }, log: () => {} });
@@ -93,31 +93,48 @@ test('wiring: server handles SIGUSR2 with exit 75 and the button uses lib/restar
 });
 
 test('launchdLabel on macOS: installer label first, older label second, null when neither is loaded', () => {
-  const loaded = (...labels) => { const calls = []; const fn = (c, a) => { calls.push([c, ...a]); if (!labels.some(l => a[1] === `gui/501/${l}`)) throw new Error('not loaded'); }; fn.calls = calls; return fn; };
-  const a = loaded('ai.mymaestro.hub');
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, execImpl: a }), 'ai.mymaestro.hub');
-  const b = loaded('com.agent-hub');
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, execImpl: b }), 'com.agent-hub');
-  const c = loaded();
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, execImpl: c }), null);
+  // launchctl print stand-in: the listed labels are loaded; jobPid is the pid launchctl reports for them (null: loaded, not running)
+  const loaded = (labels, jobPid = 4242) => { const calls = []; const fn = (c, a) => { calls.push([c, ...a]); if (!labels.some(l => a[1] === `gui/501/${l}`)) throw new Error('not loaded'); return `${a[1]} = {\n\tactive count = 1\n\tstate = ${jobPid ? 'running' : 'not running'}\n${jobPid ? `\tpid = ${jobPid}\n` : ''}}\n`; }; fn.calls = calls; return fn; };
+  const me = { pid: 4242, ppid: 1 };
+  const a = loaded(['ai.mymaestro.hub']);
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, execImpl: a, ...me }), 'ai.mymaestro.hub');
+  const b = loaded(['com.agent-hub']);
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, execImpl: b, ...me }), 'com.agent-hub');
+  const c = loaded([]);
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, execImpl: c, ...me }), null);
   assert.deepStrictEqual(c.calls.map(x => x[2]), ['gui/501/ai.mymaestro.hub', 'gui/501/com.agent-hub']);
   assert.deepStrictEqual(c.calls[0].slice(0, 2), ['launchctl', 'print']);
-  const d = loaded();
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: 'ai.mymaestro.hub' }, uid: 501, execImpl: d }), 'ai.mymaestro.hub');
+  const d = loaded([]);
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: 'ai.mymaestro.hub' }, uid: 501, execImpl: d, ...me }), 'ai.mymaestro.hub');
   assert.strictEqual(d.calls.length, 0, 'the env label needs no probe');
-  const e = loaded();
-  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: 'com.example.other' }, uid: 501, execImpl: e }), null);
+  const e = loaded([]);
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: { XPC_SERVICE_NAME: 'com.example.other' }, uid: 501, execImpl: e, ...me }), null);
   assert.strictEqual(e.calls.length, 2, 'an unrelated service name falls back to probing');
-  const f = loaded('ai.mymaestro.hub');
-  assert.strictEqual(R.launchdLabel({ platform: 'linux', env: {}, uid: 501, execImpl: f }), null);
+  const f = loaded(['ai.mymaestro.hub']);
+  assert.strictEqual(R.launchdLabel({ platform: 'linux', env: {}, uid: 501, execImpl: f, ...me }), null);
   assert.strictEqual(f.calls.length, 0);
   assert.deepStrictEqual(R.LAUNCHD_LABELS, ['ai.mymaestro.hub', 'com.agent-hub']);
 });
 
+test('launchdLabel: a loaded job counts only when it is this process (or its wrapper), so a hand-started hub never kickstarts another copy', () => {
+  const job = (jobPid) => () => `gui/501/ai.mymaestro.hub = {\n\tstate = ${jobPid ? 'running' : 'not running'}\n${jobPid ? `\tpid = ${jobPid}\n` : ''}}\n`;
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, pid: 4242, ppid: 77, execImpl: job(9999) }), null, 'another copy runs the job');
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, pid: 4242, ppid: 77, execImpl: job(null) }), null, 'loaded but stopped');
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, pid: 4242, ppid: 77, execImpl: job(77) }), 'ai.mymaestro.hub', 'the job starts node through a wrapper');
+  assert.strictEqual(R.launchdLabel({ platform: 'darwin', env: {}, uid: 501, pid: 4242, ppid: 77, execImpl: () => '' }), null, 'no pid line');
+  // requestRestart from a hand-started hub while the service is loaded for another copy: no kickstart, the relaunch path
+  const calls = [];
+  const r = R.requestRestart({ projectDir: '/nowhere', env: {}, platform: 'darwin', uid: 501, pid: 4242,
+    execImpl: (c, a) => { calls.push(a); return job(9999)(); }, fsImpl: { existsSync: () => false },
+    setTimeoutImpl: (fn) => { fn(); return { unref() {} }; }, log: () => {} });
+  assert.strictEqual(r.mode, 'relaunch');
+  assert.ok(!calls.some(a => a[0] === 'kickstart'), 'never kickstarts a job that is not this hub');
+});
+
 test('requestRestart under the installer launchd label kickstarts it and never spawns a second server', () => {
   const calls = []; const spawned = [];
-  const r = R.requestRestart({ projectDir: '/nowhere', env: {}, platform: 'darwin', uid: 501,
-    execImpl: (c, a) => { calls.push([c, ...a]); if (a[0] === 'print' && a[1] !== 'gui/501/ai.mymaestro.hub') throw new Error('not loaded'); },
+  const r = R.requestRestart({ projectDir: '/nowhere', env: {}, platform: 'darwin', uid: 501, pid: 4242,
+    execImpl: (c, a) => { calls.push([c, ...a]); if (a[0] === 'print' && a[1] !== 'gui/501/ai.mymaestro.hub') throw new Error('not loaded'); return a[0] === 'print' ? 'state = running\n\tpid = 4242\n' : ''; },
     spawnImpl: (...a) => { spawned.push(a); return { unref() {} }; },
     setTimeoutImpl: (fn) => { fn(); return { unref() {} }; }, log: () => {} });
   assert.strictEqual(r.mode, 'launchd');
