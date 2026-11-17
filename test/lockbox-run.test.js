@@ -254,11 +254,15 @@ describe('lockbox-run', { skip }, () => {
       assert.match(e.ts, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/);
     }
     assert.strictEqual(fs.statSync(fx.log).mode & 0o777, 0o600);
-    // an env profile still hides the variable; exit codes and signals pass through
+    // watch runs the command as today: the helper's own environment comes through (plus UV_USE_IO_URING=0), even with an env profile
     const envRun = box(fx, profile(fx, { mode: 'watch', env: { keep: ['PATH'], set: {} } }), 'env', { LOCKBOX_TEST_SECRET: 's3cr3t' });
     assert.strictEqual(envRun.status, 0, envRun.stderr);
-    assert.ok(!envRun.stdout.includes('LOCKBOX_TEST_SECRET'));
+    assert.ok(envRun.stdout.split('\n').includes('LOCKBOX_TEST_SECRET=s3cr3t'), 'watch passes today\'s environment');
     assert.ok(envRun.stdout.includes('UV_USE_IO_URING=0'));
+    // enforce with an env profile still hides it
+    const enfEnv = box(fx, profile(fx, { env: { keep: ['PATH'], set: {} } }), 'env', { LOCKBOX_TEST_SECRET: 's3cr3t' });
+    assert.strictEqual(enfEnv.status, 0, enfEnv.stderr);
+    assert.ok(!enfEnv.stdout.includes('LOCKBOX_TEST_SECRET'));
     assert.strictEqual(box(fx, prof, 'exit 7').status, 7);
     assert.strictEqual(box(fx, prof, 'kill -TERM $$').signal, 'SIGTERM');
   });
@@ -281,6 +285,27 @@ describe('lockbox-run', { skip }, () => {
     const r = box(fx, profile(fx, { mode: 'watch' }), 'echo ok > "$FX_A/sub/ok.txt"; cat "$FX_S/plain.txt"');
     assert.strictEqual(r.status, 0, r.stderr);
     assert.ok(!fs.existsSync(fx.log));
+  });
+
+  it('16. SIGPIPE has its default action inside the box (enforce and watch)', () => {
+    const fx = fixture();
+    for (const mode of ['enforce', 'watch']) {
+      const r = box(fx, profile(fx, { mode }), 'yes | head -1 > /dev/null; echo "${PIPESTATUS[0]}"');
+      assert.strictEqual(r.status, 0, mode + ': ' + r.stderr);
+      assert.strictEqual(r.stdout.trim(), '141', mode);
+      assert.ok(!/Broken pipe/.test(r.stderr), mode + ': ' + r.stderr);
+    }
+  });
+
+  it('17. a writes entry that is a symlink is not granted', () => {
+    const fx = fixture();
+    const link = path.join(fx.A, 'link');
+    fs.symlinkSync(fx.B, link);
+    const r = box(fx, profile(fx, { writes: [link] }), 'echo hi > "$FX_A/link/x.txt"');
+    assert.notStrictEqual(r.status, 0);
+    assert.match(r.stderr, /Permission denied/);
+    assert.deepStrictEqual(fs.readdirSync(fx.B), []);
+    assert.ok(!fs.existsSync(path.join(fx.B, 'x.txt')));
   });
 
   it('15. --probe reports what the machine can do', () => {

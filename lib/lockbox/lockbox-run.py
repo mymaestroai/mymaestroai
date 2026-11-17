@@ -33,6 +33,7 @@ SCOPED = SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL
 WRITE_ALL = HANDLED_FS
 FILE_RIGHTS = FS_READ_FILE | FS_WRITE_FILE | FS_TRUNCATE
 MAX_RULES = 20000
+SKIP_ERRNOS = (errno.EACCES, errno.EPERM, errno.ENOTCONN, errno.ESTALE, errno.ELOOP)
 O_PATH = getattr(os, "O_PATH", 0o10000000)
 
 PR_GET_SECCOMP, PR_SET_NO_NEW_PRIVS, PR_SET_SECCOMP, SECCOMP_MODE_FILTER = 21, 38, 22, 2
@@ -197,10 +198,19 @@ class Ruleset:
         except FileNotFoundError:
             return
         except OSError as ex:
+            if ex.errno in SKIP_ERRNOS:
+                return   # an entry we can't open gets no rule: the box only gets tighter
             raise Fail("cannot open %s: %s" % (path, errname(ex.errno)))
         try:
             st = os.fstat(fd)
             if stat.S_ISLNK(st.st_mode):
+                return
+            # The folder actually opened must be the one named: a link swapped in on the way (by another command of
+            # the same agent) would otherwise turn a rule for a root into a rule for wherever the link points.
+            try:
+                if os.readlink("/proc/self/fd/%d" % fd) != path:
+                    return
+            except OSError:
                 return
             if not stat.S_ISDIR(st.st_mode):
                 rights &= FILE_RIGHTS
@@ -225,6 +235,8 @@ class Ruleset:
         try:
             entries = list(os.scandir(root))
         except OSError as ex:
+            if ex.errno in SKIP_ERRNOS:
+                return   # a folder we can't list gets no rules: tighter, never wider
             raise Fail("cannot list %s: %s" % (root, errname(ex.errno)))
         for ent in entries:
             p = ent.path
@@ -245,10 +257,12 @@ def build_ruleset(prof):
     holes = [real(h) for h in prof["writeHoles"] + prof["readHoles"]]
     rholes = [real(h) for h in prof["readHoles"]]
     for p in prof["writes"]:
-        rs.grant(WRITE_ALL, real(p), holes)
+        # Granted as given (the hub sends real paths); a root that no longer resolves to itself is skipped.
+        if real(p) == os.path.normpath(p):
+            rs.grant(WRITE_ALL, os.path.normpath(p), holes)
     for p in prof["devWrites"]:
         if os.path.exists(p):
-            rs.add(p, WRITE_ALL, follow=True)
+            rs.add(real(p), WRITE_ALL, follow=True)
     rs.grant(FS_READ_FILE, "/", rholes)
     return rs
 
@@ -318,6 +332,13 @@ def close_inherited():
             top = 1 << 20
         os.closerange(3, max(65536, top))
 
+def restore_signals():
+    """Python ignores SIGPIPE and SIGXFSZ, and an ignored signal stays ignored across exec: put back what bash would
+    have got, so `git log | head` ends quietly as it does without the box."""
+    for s in (signal.SIGPIPE, signal.SIGXFSZ):
+        signal.signal(s, signal.SIG_DFL)
+    signal.pthread_sigmask(signal.SIG_SETMASK, [])
+
 def run_enforce(prof, argv):
     machine = os.uname().machine
     if machine not in ARCHES or not sys.platform.startswith("linux"):
@@ -332,6 +353,7 @@ def run_enforce(prof, argv):
     install_seccomp(machine, prof["blockUnixSockets"], prof["blockIoUring"])
     rs.restrict()
     close_inherited()
+    restore_signals()
     try:
         os.execvpe(argv[0], argv, env)
     except OSError as ex:
@@ -587,6 +609,11 @@ def write_log(prof, entries, more):
     try:
         path = prof["log"]["path"]
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        try:
+            if os.stat(path).st_size > 5 * 1024 * 1024:
+                os.replace(path, path + ".1")   # one older file kept; the log never grows without end
+        except OSError:
+            pass
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_CLOEXEC, 0o600)
         try:
             data = ("\n".join(lines) + "\n").encode("utf-8", "surrogateescape")
@@ -625,11 +652,16 @@ def exit_like(status):
     sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
 
 def run_watch(prof, argv):
-    env = make_env(prof)
+    # Watch runs the command as today: today's environment, not the allow-list enforce would use (UV_USE_IO_URING=0
+    # only keeps Node's file work visible to the trace).
+    env = dict(os.environ)
+    if prof["cwdFile"]:
+        env["LOCKBOX_CWD_FILE"] = prof["cwdFile"]
     env["UV_USE_IO_URING"] = "0"
     if not strace_works():
         write_log(prof, [{"op": "watch", "path": "", "rule": "watch-unavailable"}], 0)
         sys.stdout.flush()
+        restore_signals()
         try:
             os.execvpe(argv[0], argv, env)
         except OSError as ex:
@@ -654,6 +686,7 @@ def run_watch(prof, argv):
     if pid == 0:
         try:
             os.close(r)
+            restore_signals()
             os.execve(STRACE, cmd, env)
         finally:
             os._exit(127)

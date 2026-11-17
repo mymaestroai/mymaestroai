@@ -158,7 +158,7 @@ test('wire: a temporary worker takes its parent\'s mode and folder, and the rule
   assert.strictEqual(seen[0].virtualOf, 'agent-a');
   assert.ok(d.profile.writes.includes(path.join(w.hubRoot, 'workspaces', 'tw-1')) || !fs.existsSync(path.join(w.hubRoot, 'workspaces', 'tw-1')), 'roots of the worker record');
   assert.strictEqual(wire.lockboxFor({ agentName: 'tw-2', tool: 'Bash', command: 'ls' }).mode, 'off', 'a parent set to off');
-  assert.deepStrictEqual(wire.lockboxFor({ agentName: 'tw-3', tool: 'Bash', command: 'ls' }), { mode: 'off' }, 'a parent that is gone');
+  assert.deepStrictEqual(wire.lockboxFor({ agentName: 'tw-3', tool: 'Bash', command: 'ls' }), { mode: 'watch', plain: true }, 'a parent that is gone: the hub default (watch here) decides');
   assert.strictEqual(wire.folderNameFor('tw-1'), 'agent-a');
   assert.strictEqual(wire.folderNameFor('agent-c'), 'agent-c');
   assert.strictEqual(wire.approvalNameFor('tw-1'), 'agent-a');
@@ -195,6 +195,30 @@ test('wire: an exception inside never escapes: enforce refuses, watch runs plain
   const wire = mk(boom);
   assert.ok(wire.lockboxFor({ agentName: 'agent-a', tool: 'Bash', command: 'ls' }).refuse);
   assert.deepStrictEqual(wire.lockboxFor({ agentName: 'agent-w', tool: 'Bash', command: 'ls' }), { mode: 'watch', plain: true });
+});
+
+test('wire: an unknown agent name follows the hub default (enforce refuses, watch runs plainly, off is off)', () => {
+  const w = world();
+  const withDefault = (v) => wireFor(w, { agents: [AGENT_OFF], setting: (k) => (k === 'lockboxDefault' ? v : undefined), probe: okProbe });
+  const ask = (wire) => wire.lockboxFor({ agentName: 'nobody', tool: 'Bash', command: 'ls' });
+  const enforce = ask(withDefault('enforce'));
+  assert.strictEqual(enforce.mode, 'enforce');
+  assert.ok(typeof enforce.refuse === 'string' && enforce.refuse.length > 0, JSON.stringify(enforce));
+  assert.ok(!enforce.profile && !enforce.plain);
+  assert.deepStrictEqual(ask(withDefault('watch')), { mode: 'watch', plain: true });
+  assert.deepStrictEqual(ask(withDefault('off')), { mode: 'off' });
+});
+
+test('sdkHook: a clientCommand that throws blocks in enforce and lets the call through in watch', async () => {
+  const w = world();
+  const stub = { clientCommand: () => { throw new Error('cannot wrap'); } };
+  const hookInput = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'echo hi' } };
+  const hookFor = (mode) => createGate({ getAgent: async () => AGENT_OFF, approvals: null, lockbox: stub, log: () => {},
+    lockboxFor: () => ({ mode, profile: { v: 1 } }) }).sdkHook({ agentName: 'agent-a', cwd: w.ws });
+  const blocked = await hookFor('enforce')(hookInput);
+  assert.strictEqual(blocked.decision, 'block');
+  assert.match(blocked.reason, /cannot wrap/);
+  assert.deepStrictEqual(await hookFor('watch')(hookInput), {});
 });
 
 // ── hub Bash, enforce ────────────────────────────────────────────────

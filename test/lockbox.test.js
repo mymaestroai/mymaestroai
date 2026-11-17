@@ -73,8 +73,9 @@ test('buildProfile for a worker', () => {
   const agent = { name: 'agent-a', lockboxEnv: ['MY_TOKEN', 'bad name', '1X', 'GOOD_2'] };
   const outsideRoot = path.join(toolPolicy.HUB_ROOT, 'data', 'inner');
   const policy = policyOf(agent, [outsideRoot], w);
-  const p = lb.buildProfile({ agent, policy, mode: 'enforce', tool: 'Bash', command: 'echo   hi\nthere', ...base(w) });
   const dirs = lb.agentDirs('agent-a', { hubHome: w.hubHome });
+  lb.prepareAgentDirs('agent-a', { hubHome: w.hubHome });   // a root that does not exist is not granted
+  const p = lb.buildProfile({ agent, policy, mode: 'enforce', tool: 'Bash', command: 'echo   hi\nthere', ...base(w) });
   assert.strictEqual(p.v, 1);
   assert.strictEqual(p.mode, 'enforce');
   assert.strictEqual(p.agent, 'agent-a');
@@ -88,12 +89,12 @@ test('buildProfile for a worker', () => {
   assert.ok(p.writeHoles.includes(path.join(w.hubHome, 'lockbox')));
   assert.ok(p.readHoles.includes(path.join(toolPolicy.HUB_ROOT, 'data', 'users.json')));
   assert.ok(p.readHoles.includes(path.join(w.hubRoot, 'data', 'wallet-keystore.json')));
-  assert.ok(p.readHoles.includes(path.join(w.hubRoot, 'data', 'sub', 'agent-key')));
-  assert.ok(!p.readHoles.includes(path.join(w.hubRoot, 'data', 'notes.txt')));
+  assert.ok(p.readHoles.includes(path.join(w.hubRoot, 'data', 'sub')), 'a sub folder of data/ is hidden whole (what is inside it is covered by it)');
+  assert.ok(p.readHoles.includes(path.join(w.hubRoot, 'data', 'notes.txt')), 'every entry of data/ is a read hole');
   assert.ok(p.readHoles.includes(path.join(w.hubHome, 'lockbox')));
   assert.deepStrictEqual(p.env.keep, [...lb.ENV_KEEP, 'MY_TOKEN', 'GOOD_2']);
   assert.deepStrictEqual(p.env.set, { TMPDIR: dirs.tmp, npm_config_cache: dirs.npm });
-  assert.deepStrictEqual(p.devWrites, ['/dev/null', '/dev/zero', '/dev/full', '/dev/tty', '/dev/pts', '/dev/shm']);
+  assert.deepStrictEqual(p.devWrites, ['/dev/null', '/dev/zero', '/dev/full', '/dev/tty', '/dev/ptmx', '/dev/pts', '/dev/shm']);
   assert.strictEqual(p.cwdFile, null);
   assert.strictEqual(p.blockUnixSockets, true);
   assert.strictEqual(p.blockIoUring, true);
@@ -149,24 +150,25 @@ test('widen: an approval adds a write path and lifts a read hole, once, for 15 m
   const agent = { name: 'agent-a' };
   const readOk = path.join(w.hubRoot, 'data', 'wallet-keystore.json');
   const t0 = 1_700_000_000_000;
-  lb.noteApproval({ agent: 'agent-a', command: 'echo hi', writes: ['/var/extra-w', 'relative/path'], reads: [readOk], now: t0 });
+  const extraW = fs.realpathSync(tmpRoot());   // a widened path that is missing is not granted, so it must exist
+  lb.noteApproval({ agent: 'agent-a', command: 'echo hi', writes: [extraW, 'relative/path'], reads: [readOk], now: t0 });
   const first = lb.decide(decideArgs(w, agent, { now: t0 + 1000 }));
   assert.ok(first.profile);
-  assert.ok(first.profile.writes.includes('/var/extra-w'));
+  assert.ok(first.profile.writes.includes(extraW));
   assert.ok(!first.profile.writes.includes(path.resolve('relative/path')));
   assert.ok(!first.profile.readHoles.includes(readOk));
   const second = lb.decide(decideArgs(w, agent, { now: t0 + 2000 }));
-  assert.ok(!second.profile.writes.includes('/var/extra-w'));
+  assert.ok(!second.profile.writes.includes(extraW));
   assert.ok(second.profile.readHoles.includes(readOk));
   // expiry
-  lb.noteApproval({ agent: 'agent-a', command: 'echo hi', writes: ['/var/extra-w'], now: t0 });
+  lb.noteApproval({ agent: 'agent-a', command: 'echo hi', writes: [extraW], now: t0 });
   const late = lb.decide(decideArgs(w, agent, { now: t0 + 15 * 60 * 1000 + 1 }));
-  assert.ok(!late.profile.writes.includes('/var/extra-w'));
+  assert.ok(!late.profile.writes.includes(extraW));
   // another agent or command does not take it
-  lb.noteApproval({ agent: 'agent-a', command: 'echo hi', writes: ['/var/extra-w'], now: t0 });
+  lb.noteApproval({ agent: 'agent-a', command: 'echo hi', writes: [extraW], now: t0 });
   assert.deepStrictEqual(lb.takeApproval('agent-b', 'echo hi', { now: t0 }), { writes: [], reads: [] });
   assert.deepStrictEqual(lb.takeApproval('agent-a', 'echo other', { now: t0 }), { writes: [], reads: [] });
-  assert.deepStrictEqual(lb.takeApproval('agent-a', 'echo hi', { now: t0 + 1 }).writes, ['/var/extra-w']);
+  assert.deepStrictEqual(lb.takeApproval('agent-a', 'echo hi', { now: t0 + 1 }).writes, [extraW]);
 });
 
 test('decide: off and sandboxed run today\'s code', () => {
@@ -352,18 +354,118 @@ test('statusFor: coverage values', () => {
   assert.strictEqual(lb.statusFor({ agents: [], getSetting: settingOf('nope'), probe: okProbe }).default, 'off');
 });
 
-test('the data/ scan skips job folders, and hides all of data/ when it cannot finish', () => {
+test('read holes: every entry of data/ but jobs/, the marker, and .env files', () => {
   const agent = { name: 'agent-a', category: 'worker' };
   const w = world();
   const jobs = path.join(w.hubRoot, 'data', 'jobs');
   fs.mkdirSync(jobs);
-  for (let i = 0; i < 5100; i++) fs.writeFileSync(path.join(jobs, 'j' + i), '');
-  let p = lb.buildProfile({ agent, policy: policyOf(agent, [], w), mode: 'enforce', tool: 'Bash', command: 'ls', ...base(w) });
-  assert.ok(p.readHoles.includes(path.join(w.hubRoot, 'data', 'wallet-keystore.json')), 'a keystore past a crowded jobs folder is still found');
-  assert.ok(!p.readHoles.includes(path.join(w.hubRoot, 'data')), 'job folders alone do not hide data/');
-  const bulk = path.join(w.hubRoot, 'data', 'bulk');
-  fs.mkdirSync(bulk);
-  for (let i = 0; i < 5100; i++) fs.writeFileSync(path.join(bulk, 'f' + i), '');
-  p = lb.buildProfile({ agent, policy: policyOf(agent, [], w), mode: 'enforce', tool: 'Bash', command: 'ls', ...base(w) });
-  assert.ok(p.readHoles.includes(path.join(w.hubRoot, 'data')), 'a scan that cannot finish hides all of data/');
+  for (let i = 0; i < 5100; i++) fs.writeFileSync(path.join(jobs, 'j' + i), '');   // a crowded jobs folder no longer matters
+  fs.writeFileSync(path.join(w.hubRoot, '.env.local'), 'x');
+  const p = lb.buildProfile({ agent, policy: policyOf(agent, [], w), mode: 'enforce', tool: 'Bash', command: 'ls', ...base(w) });
+  const d = (...n) => path.join(w.hubRoot, 'data', ...n);
+  for (const n of ['users.json', 'auth.db', 'wallet-keystore.json', 'notes.txt', 'sub']) assert.ok(p.readHoles.includes(d(n)), n);
+  assert.ok(!p.readHoles.includes(jobs), 'jobs/ is not a hole');
+  assert.ok(!p.readHoles.some(h => h.startsWith(jobs + path.sep)), 'nothing inside jobs/ is listed');
+  assert.ok(p.readHoles.includes(d('.lockbox-hidden')), 'the marker keeps later entries hidden');
+  assert.ok(p.readHoles.includes(path.join(w.hubRoot, '.env.local')), '.env files of the install');
+  assert.ok(!p.readHoles.includes(d()), 'data/ itself is not listed when it can be read');
+});
+
+/** A hub root whose workspace for agent-a is a link to another temp folder. */
+function linkedWorld() {
+  const w = world();
+  const hubRoot = tmpRoot();
+  const target = tmpRoot();
+  fs.mkdirSync(path.join(hubRoot, 'workspaces'));
+  fs.symlinkSync(target, path.join(hubRoot, 'workspaces', 'agent-a'));
+  return { ...w, hubRoot, target, ws: path.join(hubRoot, 'workspaces', 'agent-a') };
+}
+
+test('buildProfile: a workspace root that is a link gets no write rule and is listed in skipped', () => {
+  const agent = { name: 'agent-a', category: 'worker' };
+  const w = linkedWorld();
+  lb.prepareAgentDirs('agent-a', { hubHome: w.hubHome });
+  const p = lb.buildProfile({ agent, policy: policyOf(agent, [], w), mode: 'enforce', tool: 'Bash', command: 'ls', ...base(w) });
+  assert.ok(!p.writes.includes(w.ws), 'the link itself is not granted');
+  assert.ok(!p.writes.includes(w.target), 'neither is where it points');
+  assert.deepStrictEqual(p.skipped, [w.ws]);
+  assert.ok(p.writes.includes(path.join(w.hubHome, 'share')), 'the other roots stay');
+  assert.ok(p.writes.includes(lb.agentDirs('agent-a', { hubHome: w.hubHome }).dir));
+});
+
+test('buildProfile: a root under the share root whose parent folder became a link is skipped; a missing root is neither granted nor listed', () => {
+  const agent = { name: 'agent-a', category: 'worker' };
+  const w = world();
+  lb.prepareAgentDirs('agent-a', { hubHome: w.hubHome });
+  const share = path.join(w.hubHome, 'share');
+  const elsewhere = tmpRoot();
+  fs.mkdirSync(path.join(elsewhere, 'proj'));
+  fs.symlinkSync(elsewhere, path.join(share, 'bent'));
+  const bentRoot = path.join(share, 'bent', 'proj');
+  const missing = path.join(share, 'not-there');
+  const p = lb.buildProfile({ agent, policy: policyOf(agent, [bentRoot, missing], w), mode: 'enforce', tool: 'Bash', command: 'ls', ...base(w) });
+  assert.ok(!p.writes.includes(bentRoot));
+  assert.ok(!p.writes.includes(path.join(elsewhere, 'proj')));
+  assert.deepStrictEqual(p.skipped, [bentRoot]);
+  assert.ok(!p.writes.includes(missing));
+  assert.ok(!p.skipped.includes(missing));
+  assert.ok(p.writes.includes(share), 'the share root itself is fine');
+  // a profile for a lead and one with nothing bent have an empty skipped list
+  const ok = lb.buildProfile({ agent, policy: policyOf(agent, [], w), mode: 'enforce', tool: 'Bash', command: 'ls', ...base(w) });
+  assert.deepStrictEqual(ok.skipped, []);
+});
+
+test('decide: a skipped root is logged as root-is-link (watch)', () => {
+  const agent = { name: 'agent-a', category: 'worker' };
+  const w = linkedWorld();
+  const r = lb.decide(decideArgs(w, agent, { getSetting: settingOf('watch'), now: 1_700_000_000_000 }));
+  assert.ok(r.profile);
+  assert.deepStrictEqual(r.profile.skipped, [w.ws]);
+  const lines = lb.readLog({ hubRoot: w.hubRoot }).filter(l => l.rule === 'root-is-link');
+  assert.strictEqual(lines.length, 1, JSON.stringify(lines));
+  assert.strictEqual(lines[0].path, w.ws);
+  assert.strictEqual(lines[0].agent, 'agent-a');
+  assert.strictEqual(lines[0].mode, 'watch');
+  assert.strictEqual(lines[0].op, 'run');
+});
+
+test('buildProfile for the lead: policy.roots are writable too', () => {
+  const w = world();
+  const agent = { name: 'lead-a', lead: true };
+  const extra = fs.realpathSync(tmpRoot());
+  const policy = { ...toolPolicy.policyFor(agent), roots: [extra] };
+  const p = lb.buildProfile({ agent, policy, mode: 'enforce', tool: 'Bash', command: 'ls', ...base(w) });
+  assert.ok(p.writes.includes(extra), 'an extra folder granted to the lead');
+  assert.deepStrictEqual(p.skipped, []);
+});
+
+test('clientCommand: the cwd file lives in the worker\'s own TMPDIR, in /tmp for the lead', () => {
+  const w = world();
+  const cwdOf = (profile) => decode(/--profile-b64 '([^']+)'/.exec(lb.clientCommand(profile, 'ls'))[1]).cwdFile;
+  const agent = { name: 'agent-a', category: 'worker' };
+  const worker = lb.buildProfile({ agent, policy: policyOf(agent, [], w), mode: 'enforce', tool: 'Bash', command: 'ls', ...base(w) });
+  assert.ok(worker.env && worker.env.set.TMPDIR);
+  assert.ok(cwdOf(worker).startsWith(worker.env.set.TMPDIR + path.sep + 'lockbox-cwd-'), cwdOf(worker));
+  const lead = { name: 'lead-a', lead: true };
+  const leadProfile = lb.buildProfile({ agent: lead, policy: toolPolicy.policyFor(lead), mode: 'enforce', tool: 'Bash', command: 'ls', ...base(w) });
+  assert.strictEqual(leadProfile.env, null);
+  assert.ok(cwdOf(leadProfile).startsWith('/tmp/lockbox-cwd-'), cwdOf(leadProfile));
+});
+
+test('DEV_WRITES includes /dev/ptmx', () => {
+  assert.ok(lb.DEV_WRITES.includes('/dev/ptmx'));
+});
+
+test('appendLog: a log past 5 MiB moves to watch.jsonl.1', () => {
+  const w = world();
+  const file = path.join(w.hubRoot, 'data', 'lockbox', 'watch.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, 'x'.repeat(5 * 1024 * 1024 + 10) + '\n');
+  lb.appendLog({ ts: 't', agent: 'agent-a', tool: 'Bash', mode: 'watch', cmd: 'c', op: 'run', path: '', rule: 'r' }, { hubRoot: w.hubRoot });
+  assert.ok(fs.statSync(file + '.1').size > 5 * 1024 * 1024, 'the old log was moved');
+  assert.ok(fs.statSync(file).size < 1000, 'a fresh log');
+  assert.deepStrictEqual(lb.readLog({ hubRoot: w.hubRoot }).map(e => e.cmd), ['c']);
+  // a small log stays
+  lb.appendLog({ ts: 't', agent: 'agent-a', tool: 'Bash', mode: 'watch', cmd: 'd', op: 'run', path: '', rule: 'r' }, { hubRoot: w.hubRoot });
+  assert.deepStrictEqual(lb.readLog({ hubRoot: w.hubRoot }).map(e => e.cmd), ['d', 'c']);
 });
