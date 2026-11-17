@@ -88,6 +88,17 @@ async function world({ settings = {}, fsImpl = fs, entryCap } = {}) {
 }
 const NOT_FOUND = { ok: false, error: 'not found' };
 
+/** Every produced zip: no two entries equal ignoring case, no file entry is also the parent folder of another entry, no segment ends in "." or " ", no "\" or ":". */
+function assertSafeNames(names) {
+  const lower = names.map(n => n.toLowerCase());
+  assert.strictEqual(new Set(lower).size, lower.length, `no two entries equal ignoring case: ${JSON.stringify(names)}`);
+  for (const a of lower) for (const b of lower) assert.ok(a === b || !b.startsWith(a + '/'), `no entry is a prefix-folder of another entry: ${JSON.stringify(a)} / ${JSON.stringify(b)}`);
+  for (const n of names) {
+    assert.ok(!n.includes('\\') && !n.includes(':'), `no backslash or colon: ${JSON.stringify(n)}`);
+    assert.ok(!n.split('/').some(s => /[. ]$/.test(s)), `no segment ends with a dot or a space: ${JSON.stringify(n)}`);
+  }
+}
+
 // ── a zip reader that checks the format, not just that "some unzip accepts it" ──
 function readZip(buf) {
   const eocd = buf.length - 22;
@@ -117,6 +128,7 @@ function readZip(buf) {
     p += 46 + nlen + xlen + clen;
   }
   assert.strictEqual(Object.keys(out).length, count, 'no duplicate names');
+  assertSafeNames(Object.keys(out));
   return out;
 }
 
@@ -557,23 +569,28 @@ test('zip: a file whose opened descriptor is outside the root is skipped (Linux 
 
 // ───────────────────────────── review round 1 (F1): bound walks, no silent holes, safe names ─────────────────────────────
 /** An fs whose lstat/open/readdir/stat/realpath of a path ending in "/sub" swaps that folder (once): it moves away and a symlink to an outside folder takes its place. */
-function swappingFs(swap) {
+function swappingFs(swap, { fallback = false, child = false } = {}) {
   const f = Object.create(fs); const calls = { readdir: [] }; let done = false;
-  const fire = (p) => { if (!done && /[\\/]sub$/.test(String(p))) { done = true; swap(); } };
+  // child: the swap fires only on the first lstat of a child of "sub" (after every folder check passed). fallback: no /proc/self/fd.
+  const fire = (p) => { if (!done && (child ? /[\\/]sub[\\/][^\\/]+$/ : /[\\/]sub$/).test(String(p))) { done = true; swap(); } };
   f.lstatSync = (p, ...a) => { const r = fs.lstatSync(p, ...a); fire(p); return r; };   // after the lstat: the check passed, then the swap
-  f.openSync = (p, ...a) => { fire(p); return fs.openSync(p, ...a); };
-  f.readdirSync = (p, ...a) => { calls.readdir.push(String(p)); fire(p); return fs.readdirSync(p, ...a); };
-  f.statSync = (p, ...a) => { fire(p); return fs.statSync(p, ...a); };
-  f.realpathSync = (p, ...a) => { fire(p); return fs.realpathSync(p, ...a); };
+  if (!child) {
+    f.openSync = (p, ...a) => { fire(p); return fs.openSync(p, ...a); };
+    f.readdirSync = (p, ...a) => { calls.readdir.push(String(p)); fire(p); return fs.readdirSync(p, ...a); };
+    f.statSync = (p, ...a) => { fire(p); return fs.statSync(p, ...a); };
+    f.realpathSync = (p, ...a) => { fire(p); return fs.realpathSync(p, ...a); };
+  }
+  if (fallback) f.existsSync = (p, ...a) => (String(p) === '/proc/self/fd' ? false : fs.existsSync(p, ...a));
   f.swapped = () => done; f.calls = calls;
   return f;
 }
-for (const which of ['recent', 'zipPlan']) {
-  test(`${which}: a folder swapped for a symlink between the check and the read is never listed (no outside name, size or count)`, async (t) => {
+const SWAP_MODES = process.platform === 'linux' ? [false, true] : [true];
+for (const fallback of SWAP_MODES) for (const which of ['recent', 'zipPlan']) {
+  test(`${which}${fallback ? ' (no /proc fallback)' : ''}: a folder swapped for a symlink between the check and the read is never listed (no outside name, size or count)`, async (t) => {
     let w; const fsx = swappingFs(() => {
       fs.renameSync(w.root('share/helper-agent/race/sub'), w.root('share/helper-agent/race/sub-moved-away'));
       fs.symlinkSync(w.root('elsewhere/out'), w.root('share/helper-agent/race/sub'));
-    });
+    }, { fallback });
     w = await world({ fsImpl: fsx }); t.after(() => w.close());
     w.write('share/helper-agent/race/top.txt', 'top');
     w.write('share/helper-agent/race/sub/inner.txt', 'inner');
@@ -585,8 +602,35 @@ for (const which of ['recent', 'zipPlan']) {
     assert.strictEqual(fsx.swapped(), true, 'the swap happened during the walk');
     assert.ok(!names.some(n => n.includes('secret-outside')), `no outside name: ${names}`);
     assert.ok(count <= 1 && bytes <= 3, `no outside count or size: ${count} files, ${bytes} bytes`);
-    if (process.platform === 'linux') assert.ok(fsx.calls.readdir.every(p => p.startsWith('/proc/self/fd/') || p === fs.realpathSync(root) || p === root || !/[\\/]sub$/.test(p)),
+    if (process.platform === 'linux' && !fallback) assert.ok(fsx.calls.readdir.every(p => p.startsWith('/proc/self/fd/') || p === fs.realpathSync(root) || p === root || !/[\\/]sub$/.test(p)),
       `every folder read is bound to an opened descriptor, never the path "sub": ${fsx.calls.readdir}`);
+  });
+}
+
+// No /proc/self/fd: the folder checks pass, then "sub" is swapped for a symlink right at the first lstat of one of its children.
+for (const which of ['recent', 'zipPlan']) {
+  test(`${which} (no /proc fallback): a folder swapped for a symlink right after its checks, at the lstat of a child, shows no outside file`, async (t) => {
+    let w; const fsx = swappingFs(() => {
+      fs.renameSync(w.root('share/helper-agent/race/sub'), w.root('share/helper-agent/race/sub-moved-away'));
+      fs.symlinkSync(w.root('elsewhere/out'), w.root('share/helper-agent/race/sub'));
+    }, { fallback: true, child: true });
+    w = await world({ fsImpl: fsx }); t.after(() => w.close());
+    w.write('share/helper-agent/race/top.txt', 'top');
+    w.write('share/helper-agent/race/sub/inner.txt', 'inner');
+    w.write('elsewhere/out/inner.txt', 'O'.repeat(500));
+    w.write('elsewhere/out/secret-outside.txt', 'S'.repeat(777));
+    const root = w.root('share/helper-agent/race');
+    if (which === 'recent') {
+      const r = w.files.recent(root, { limit: 30 });
+      assert.strictEqual(fsx.swapped(), true, 'the swap happened at the child lstat');
+      assert.deepStrictEqual(r.files.map(f => f.path), ['top.txt'], 'the child seen through the swap is not listed');
+    } else {
+      const p = w.files.zipPlan(root, '', { maxFiles: 10, maxBytes: 1e6 });
+      assert.strictEqual(fsx.swapped(), true, 'the swap happened at the child lstat');
+      assert.strictEqual(p.incomplete, true, 'the zip is refused as incomplete');
+      assert.strictEqual(p.tooBig, true);
+      assert.ok(!p.files.some(f => /inner|secret-outside/.test(f.name)), `no outside file in the list: ${p.files.map(f => f.name)}`);
+    }
   });
 }
 
@@ -656,7 +700,57 @@ test('zip: entry names are safe to extract anywhere (backslash, colon, control c
   }
   assert.ok(z['x_.._.._evil.bat'].equals(evil));
   assert.ok(z['a_b.txt'].equals(colon) && z['a_b (2).txt'].equals(under), 'bytes intact, each under its own entry');
-  assert.deepStrictEqual(['', '.', '..', 'a/./b', '/x'].map(filesLib.zipEntryName), ['_', '_', '_', 'a/_/b', '_/x']);
+  assert.deepStrictEqual(['', '.', '..'].map(filesLib.sanitizeSegment), ['_', '_', '_']);
+});
+
+test('zip names: Windows and macOS safe, unique ignoring case, files and folders in one namespace per folder', async (t) => {
+  const w = await world(); t.after(() => w.close());
+  const base = 'share/helper-agent/win/';
+  w.write(base + 'A.txt', 'upper'); w.write(base + 'a.txt', 'lower');
+  w.write(base + 'x.txt ', 'with space'); w.write(base + 'x.txt', 'plain');
+  w.write(base + 'CON.txt', 'reserved'); w.write(base + 'dir./in.txt', 'dotdir');
+  w.write(base + 'a:/b.txt', 'colon folder'); w.write(base + 'a_', 'file a_');
+  w.write(base + 'Docs/one.txt', '1'); w.write(base + 'docs/two.txt', '2');
+  const r = await w.req('u_owner', 'GET', '/api/files/zip?agent=helper-agent&path=win');
+  assert.strictEqual(r.status, 200);
+  const z = readZip(r.body), names = Object.keys(z);
+  const lc = (s) => s.toLowerCase();
+  const atxt = names.filter(n => lc(n).startsWith('a') && /^a( \(\d+\))?\.txt$/i.test(n));
+  assert.strictEqual(atxt.length, 2, `both A.txt and a.txt are kept: ${names}`);
+  assert.ok(names.includes('A.txt') && names.includes('a (2).txt'), `A.txt first (sorted), a.txt numbered: ${names}`);
+  assert.ok(z['A.txt'].equals(Buffer.from('upper')) && z['a (2).txt'].equals(Buffer.from('lower')));
+  assert.ok(names.includes('x.txt') && names.includes('x.txt_'), `"x.txt " and "x.txt" stay distinct: ${names}`);
+  assert.ok(z['x.txt_'].equals(Buffer.from('with space')));
+  assert.ok(names.includes('_CON.txt'), `reserved name prefixed: ${names}`);
+  assert.ok(names.includes('dir_/in.txt'), `trailing dot in a folder name: ${names}`);
+  // "a:" (folder) and "a_" (file) both sanitise to "a_": one of them is numbered, nothing is both a file and a parent.
+  const colon = names.find(n => n.endsWith('/b.txt') && lc(n).startsWith('a_'));
+  assert.ok(colon, `the colon folder's file is in the zip: ${names}`);
+  assert.ok(z[colon].equals(Buffer.from('colon folder')));
+  const plainA = names.find(n => lc(n).startsWith('a_') && !n.includes('/'));
+  assert.ok(plainA && z[plainA].equals(Buffer.from('file a_')), `the file a_ is in the zip: ${names}`);
+  assert.notStrictEqual(lc(colon.split('/')[0]), lc(plainA), 'file and folder have different names');
+  // "Docs" and "docs" folders merge into one case-insensitive namespace: two folders, two distinct names.
+  const docsDirs = new Set(names.filter(n => /^docs/i.test(n)).map(n => n.split('/')[0].toLowerCase()));
+  assert.strictEqual(docsDirs.size, 2, `Docs and docs are different folders after sanitising: ${names}`);
+  assert.deepStrictEqual(['CON', 'con.txt', 'Lpt9.log', 'NUL', 'COM1', 'com10', 'x.', 'y ', 'ok'].map(filesLib.sanitizeSegment),
+    ['_CON', '_con.txt', '_Lpt9.log', '_NUL', '_COM1', 'com10', 'x_', 'y_', 'ok']);
+});
+
+test('zip names: a name over 65535 bytes makes the zip incomplete, never silently skipped', async (t) => {
+  const w = await world(); t.after(() => w.close());
+  w.write('share/helper-agent/long/ok.txt', 'ok');
+  const plan0 = w.files.zipPlan(w.root('share/helper-agent'), 'long', { maxFiles: 10, maxBytes: 1e6 });
+  assert.strictEqual(plan0.incomplete, undefined);
+  // Fake a very deep path through an fs whose directory listing returns an over-long name.
+  const fsx = Object.create(fs); const long = 'n'.repeat(70000);
+  fsx.readdirSync = (p, ...a) => { const r = fs.readdirSync(p, ...a); return String(p).endsWith('long') || /\/proc\/self\/fd\//.test(String(p)) ? [...r, long] : r; };
+  fsx.lstatSync = (p, ...a) => (String(p).endsWith(long) ? fs.lstatSync(w.root('share/helper-agent/long/ok.txt')) : fs.lstatSync(p, ...a));
+  const w2 = await world({ fsImpl: fsx }); t.after(() => w2.close());
+  w2.write('share/helper-agent/long/ok.txt', 'ok');
+  const plan = w2.files.zipPlan(w2.root('share/helper-agent'), 'long', { maxFiles: 10, maxBytes: 1e6 });
+  assert.strictEqual(plan.incomplete, true, 'the over-long name makes the plan incomplete');
+  assert.strictEqual(plan.tooBig, true);
 });
 
 test('zip: files are opened with O_NONBLOCK, the JS CRC-32 matches zlib.crc32 (and a zip is still correct without zlib.crc32), the walk cap is 20,000', async (t) => {
