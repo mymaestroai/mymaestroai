@@ -190,3 +190,14 @@ test('round 4: wait -p, absolute targets past the brace bound, xvfb-run -a npm -
   inside(`cd ${FX} && cp a b`);
   inside(`cd ${FX} && npm install`);
 });
+
+// Review r5 (Sonnet A, B): every path inside a computed target is judged (~/ in a substitution, an escaped or braced
+// path, a path after a leading /); a manager word that is only an option's value keeps the copy reading's -t DIR.
+test('round 5: paths inside a computed target, env -u npm install -t DIR', () => {
+  for (const cmd of [`cd ${FX} && cp k.pub $(echo ~/.ssh/authorized_keys)`, `cd ${FX} && tee \`echo ~/.ssh/authorized_keys\``,
+    `cd ${FX} && touch $(echo \\/etc/cron.d/x)`, `cd ${FX} && touch $(echo {/etc/cron.d/x,y})`, `cd ${FX} && touch /$(echo /etc/cron.d/x)`,
+    `cd ${FX} && env -u npm install -t/etc/cron.d a`, `cd ${FX} && env -u npm install --target-directory=/etc/cron.d a`]) {
+    assert.strictEqual(c(cmd), 'admin', cmd);
+  }
+  inside(`cd ${FX} && pip install requests`);
+});
