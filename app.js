@@ -78,6 +78,15 @@
       if (input) input.placeholder = 'Add something while it works…';
       if (cancelBtn) cancelBtn.textContent = 'Stop';
     }
+    // The composer's voice button is the voice call only in Simple (no dictation): the sound-wave icon and "Voice call";
+    // during a call it stays the red Hang up (voiceCallPaintBtn).
+    function simpleCallLook(b, on) {
+      if (!simpleOn() || !b) return;
+      b.classList.toggle('simple-call', true);
+      if (on) return;
+      if (typeof VOICE_LEVELS_SVG === 'string') b.innerHTML = VOICE_LEVELS_SVG;
+      b.setAttribute('aria-label', 'Voice call'); b.title = 'Start a voice call';
+    }
     // A saved question and its answer, in plain words (hubSimple.askText).
     function simpleAskText(role, content) {
       return simpleOn() && typeof window.hubSimple.askText === 'function' ? window.hubSimple.askText(role, content) : content;
@@ -216,6 +225,7 @@
       });
       const mic = document.getElementById(`mic-${chatId}`);
       if (mic && mic.parentNode === area) area.insertBefore(wrap, mic); else area.appendChild(wrap);
+      if (mic) simpleCallLook(mic, mic.classList.contains('call'));   // the voice call button, not a dictation mic
       simpleLvlRefresh(chatId);
     }
 
@@ -15532,6 +15542,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (voiceRec.busy || voiceRec.guard.pending) return;   // a second tap while the microphone is still being asked for is ignored
       if (voiceRec.chatId) { await voiceMicStop(true); return; }   // a second tap, or a tap in another chat: end this recording
       if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); voiceRefreshStatus(); return; }
+      if (typeof simpleOn === 'function' && simpleOn()) { voiceCallStart(chatId); return; }   // Simple: the button is the voice call only (no dictation)
       if (voicePrefsNow().mode !== 'tap') { voiceCallStart(chatId); return; }   // hands-free is the default; 'tap' keeps dictation
       if (voiceTest.mic || voiceTest.guard.pending) { hubToast('The microphone is in use in Settings.'); return; }
       voiceStopPlayback();   // do not record the hub talking
@@ -16748,6 +16759,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       b.setAttribute('aria-label', on ? 'Hang up' : 'Dictate');
       b.title = on ? 'Hang up' : 'Talk (tap to start, tap to stop)';
       b.innerHTML = on ? VOICE_HANGUP_SVG : VOICE_MIC_SVG;
+      if (typeof simpleCallLook === 'function') simpleCallLook(b, on);   // Simple: a voice-call button, not a dictation mic
     }
     async function voiceCallWake(on) {
       const S = voiceCallS;

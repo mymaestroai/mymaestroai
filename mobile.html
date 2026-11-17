@@ -952,6 +952,7 @@ html.mm-simple #simple-call-btn { order: 5; display: grid; place-items: center; 
 html.mm-simple #composer .row:has(#mic-btn[hidden]) #simple-call-btn { display: none; }
 html.mm-simple #simple-call-btn.in-call { background: var(--error, #e5484d); box-shadow: 0 0 0 3px rgba(229, 72, 77, .35); }   /* a call is up: tap to hang up */
 html.mm-simple #mic-btn.call { display: none; }   /* during a call the red hang-up is #simple-call-btn: one call button */
+html.mm-simple #mic-btn { display: none !important; }   /* no dictation in Simple (the phone keyboard has its own): the call button is the only voice control; its [hidden] still says whether voice is on */
 html.mm-simple #send-btn { order: 6; min-width: 52px; min-height: 52px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 20px; }
 html.mm-simple #send-btn.stop { background: var(--error); }
 html.mm-simple #send-btn.interject { background: #8b6fd6; color: #fff; }
