@@ -4022,9 +4022,15 @@
       }
       const hist = Array.isArray(v.history) ? v.history : [];
       if (hist.length) html += `<details class="sc-hist"><summary>Earlier checks</summary>${hist.map(h => `<div class="sc-h">${esc(scWhen(h.at))} · ${esc(SC_TRIGGER[h.trigger] || h.trigger || '')}: ${esc(h.summary || '')}</div>`).join('')}</details>`;
+      // A person may have "Earlier checks" open: keep it open when the page is redrawn (a poll does that every 3 s).
+      const wasOpen = !!(el.querySelector && el.querySelector('details.sc-hist') && el.querySelector('details.sc-hist').open);
       el.innerHTML = html;
+      if (wasOpen) { const dt = el.querySelector && el.querySelector('details.sc-hist'); if (dt) dt.setAttribute('open', ''); }
       const st = Object.values(classes).map(c => c && c.status);
-      stSum('status', 'selfcheck', !run ? 'Self-check: not checked yet' : st.includes('fail') ? 'Self-check: problem found' : st.includes('error') ? "Self-check: couldn't run" : 'Self-check: all fine', st.includes('fail'));
+      const stuckBad = Object.values(v.stuck || {}).some(x => x && x.count >= 3);
+      const problem = st.includes('fail') || stuckBad || Object.keys(since).length > 0;
+      const worked = st.includes('pass') || st.includes('fail');
+      stSum('status', 'selfcheck', !run && !problem ? 'Self-check: not checked yet' : problem ? 'Self-check: problem found' : !worked ? "Self-check: couldn't run" : 'Self-check: all fine', problem);
     }
     function scMsg(text, bad = true) {
       const m = document.getElementById('st-sc-msg'); if (!m) return;
@@ -4047,7 +4053,7 @@
       for (const k of SC_CLASSES) if ($(`st-sc-c-${k}`)) $(`st-sc-c-${k}`).checked = (s.classes || SC_CLASSES).includes(k);
     }
     // Last result, or a new run (POST) that is then followed every 3 s while the hub says it runs, for up to 6 minutes.
-    async function loadSelfCheck(runNow = false) {
+    async function loadSelfCheck(runNow = false, poll = false) {
       if (!document.getElementById('st-sc-list')) return;
       const mine = ++scLoad;
       const json = async (r) => { try { return await r.json(); } catch { return {}; } };
@@ -4071,7 +4077,10 @@
         scRender(v);
         scFillSettingsOnce(v.settings);
         scRunning(!!v.running);
-        if (v.running && Date.now() < scPollUntil) setTimeout(() => { if (mine === scLoad) loadSelfCheck(false); }, SC_POLL_MS);
+        // A page opened (or left alone) while a run is going follows it, for as long as a Run now would.
+        // (Not for our own poll: that one has to run out, so the 6-minute limit still holds.)
+        if (!runNow && !poll && v.running && scPollUntil <= Date.now()) scPollUntil = Date.now() + SC_POLL_MAX_MS;
+        if (v.running && Date.now() < scPollUntil) setTimeout(() => { if (mine === scLoad) loadSelfCheck(false, true); }, SC_POLL_MS);
         else if (v.running) scMsg("Still running after 6 minutes; check back later.", false);
         else { const m = document.getElementById('st-sc-msg'); if (m && m.textContent === 'A check is already running.') scMsg(''); }   // it finished: the note is old
       } catch (e) {

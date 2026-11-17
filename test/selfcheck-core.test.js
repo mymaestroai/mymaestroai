@@ -24,7 +24,7 @@ function harness(opts = {}) {
   const root = path.join(TMP, `h${++seq}`);
   const hubRoot = path.join(root, 'hub'), hubHome = path.join(root, 'home'), dataDir = path.join(hubRoot, 'data');
   for (const d of [path.join(hubRoot, 'workspaces'), hubHome, dataDir]) fs.mkdirSync(d, { recursive: true });
-  const h = { root, hubRoot, hubHome, dataDir, turns: [], pushes: [], clock: { t: NOON }, eights: [], settingsRaw: opts.settings, halt: null, notifyResult: { sent: 1, failed: 0 }, turnError: opts.turnError };
+  const h = { root, hubRoot, hubHome, dataDir, turns: [], pushes: [], clock: { t: NOON }, eights: [], settingsRaw: opts.settings, halt: null, notifyResult: { sent: 1, failed: 0 }, turnError: opts.turnError, errorKind: opts.errorKind || null };
   const random = (n) => { const v = [...Array(n)].map(() => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join(''); if (n === 8) h.eights.push(v); return v; };
   const D = (idx) => String(1000 + (parseInt(h.eights[h.eights.length - 2 + idx], 16) % 9000));
 
@@ -32,6 +32,7 @@ function harness(opts = {}) {
     const turnNo = h.turns.length;
     h.turns.push(args);
     if (h.turnError) return { reply: '', error: h.turnError, errorKind: 'model' };
+    if (h.errorKind) { if (opts.abortFirst) h.sc.stop(); return { reply: '', error: 'stopped', errorKind: h.errorKind }; }
     if (opts.block) await opts.block;
     const { observe, prompt } = args;
     const steps = [];
@@ -89,6 +90,7 @@ function harness(opts = {}) {
     // an agent that wrote outside its folders
     if (opts.behave && opts.behave('outside', turnNo) === 'outside') { const p = path.join(hubRoot, 'workspaces', 'elsewhere.txt'); dec('Write', { file_path: p, content: 'x' }); res('Write', { file_path: p }, true, 'created'); }
     h.steps = steps;
+    if (opts.errorAfter) return { reply: reply.join('\n'), error: opts.errorAfter, errorKind: 'model' };   // the turn did its steps, then the provider failed
     return { reply: reply.join('\n'), error: null, errorKind: null };
   }
 
@@ -224,9 +226,10 @@ test('a model error is "couldn\'t run" with no push, and the class\'s earlier fa
   assert.strictEqual(lr.classes.host.note, "Couldn't run: plan limit reached");
   assert.strictEqual(h.pushes.length, 1, 'no push for a run that could not run');
   assert.deepStrictEqual([h.sc.stored().failingSince, h.sc.stored().notified], [was, told]);
+  // the standing failure still warns (F3): the class that couldn't run says nothing about it
   const [item] = h.sc.readinessItems();
-  assert.strictEqual(item.level, 'info');
-  assert.match(item.title, /^Self-check couldn't run: plan limit reached/);
+  assert.strictEqual(item.level, 'warn');
+  assert.match(item.title, /^Self-check: ordinary agents on this computer can't write files in the install folder/);
   // and a clean harness with only the error: no failures at all
   const e = harness({ settings: { classes: ['host'] }, turnError: 'provider down' });
   await e.sc.run({ trigger: 'manual' });
@@ -297,12 +300,122 @@ test('retry: only the steps the model skipped are asked again; the union of both
   const h2 = harness({ settings: { classes: ['host'] }, behave: (kind) => (kind === 'write@home' ? 'noresult' : undefined) });
   await h2.sc.run({ trigger: 'manual' });
   assert.strictEqual(h2.turns.length, 1);
-  // still skipped after the retry: a failure, "didn't do it"
+  // still not tried after the retry: the class couldn't run (F1), not a failure, and no push
   const h3 = harness({ settings: { classes: ['host'] }, behave: (kind) => (kind === 'grep@home' ? 'skip' : undefined) });
   const r3 = await h3.sc.run({ trigger: 'manual' });
   assert.strictEqual(h3.turns.length, 2);
-  assert.deepStrictEqual(r3.classes.host.actions['grep@home'], { ok: false, reason: "The agent didn't do it." });
-  assert.strictEqual(r3.classes.host.status, 'fail');
+  assert.strictEqual(r3.classes.host.status, 'error');
+  assert.strictEqual(r3.classes.host.note, "The agent didn't do every step (1 not tried: search files outside the install folder)");
+  assert.deepStrictEqual([h3.pushes, h3.sc.stored().failingSince], [[], {}]);
+  assert.strictEqual(h3.sc.stored().stuck.host.count, 1);
+});
+
+test('F1: not-tried steps next to a real failure: the class fails with the tried steps only; three untried runs in a row push once', async () => {
+  const h = harness({ settings: { classes: ['host'] }, behave: (kind) => (kind === 'grep@home' || kind === 'glob@home' ? 'skip' : kind === 'write@install' ? 'noresult' : undefined) });
+  const lr = await h.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr.classes.host.status, 'fail');
+  assert.ok(!('grep@home' in lr.classes.host.actions) && !('glob@home' in lr.classes.host.actions), 'untried steps are left out');
+  assert.strictEqual(lr.classes.host.actions['write@install'].ok, false);
+  assert.strictEqual(h.pushes.length, 1);
+  const g = harness({ settings: { classes: ['host'] }, behave: (kind) => (kind === 'grep@home' ? 'skip' : undefined) });
+  for (let i = 0; i < 2; i++) { await g.sc.run({ trigger: 'nightly' }); g.clock.t += 3600000; }
+  assert.deepStrictEqual(g.pushes, [], 'two in a row: quiet');
+  await g.sc.run({ trigger: 'nightly' });
+  assert.strictEqual(g.pushes.length, 1);
+  assert.match(g.pushes[0].body, /hasn't been able to run since/);
+});
+
+test('B2: a model error after steps that already failed keeps them: fail and a push; an error with only passing steps is error and no push', async () => {
+  // the turn does an allowed refuse and a Write that never comes back, then the harness reports a model error
+  const wrapped = harness({ settings: { classes: ['host'] }, behave: (kind) => (kind === 'refuse' ? 'allow' : kind === 'write@install' ? 'noresult' : undefined), errorAfter: 'provider hiccup' });
+  const lr = await wrapped.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr.classes.host.status, 'fail');
+  assert.match(lr.classes.host.note, /^The turn stopped early \(provider hiccup\), but these had already failed\./);
+  assert.strictEqual(lr.classes.host.actions.refuse.ok, false);
+  assert.strictEqual(lr.classes.host.actions['write@install'].ok, false);
+  assert.ok(!('bash@home' in lr.classes.host.actions) || lr.classes.host.actions['bash@home'].ok === true, 'only tried steps are listed');
+  assert.strictEqual(wrapped.pushes.length, 1);
+  assert.strictEqual(wrapped.turns.length, 1, 'no retry after an error');
+  // only passing steps, then the error: error, no push
+  const ok = harness({ settings: { classes: ['host'] }, errorAfter: 'provider hiccup', behave: (kind) => (kind === 'grep@home' || kind === 'glob@home' ? 'skip' : undefined) });
+  const lr2 = await ok.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr2.classes.host.status, 'error');
+  assert.strictEqual(lr2.classes.host.note, "Couldn't run: provider hiccup");
+  assert.deepStrictEqual([ok.pushes, ok.sc.stored().failingSince], [[], {}]);
+});
+
+test('B2: a turn cut off by an error right after an allowed call does not call that call refused; the same shape without an error does', async () => {
+  // the Write in the install folder is allowed and is the last thing the turn does; every later step is skipped
+  const ORDER = ['read@install', 'image@install', 'write@install'];
+  const behave = (kind) => (kind === 'write@install' ? 'noresult' : ORDER.includes(kind) ? undefined : 'skip');
+  const cut = harness({ settings: { classes: ['host'] }, behave, errorAfter: 'connection reset' });
+  const lr = await cut.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr.classes.host.status, 'error', 'cut off: not a refusal');
+  assert.strictEqual(lr.classes.host.note, "Couldn't run: connection reset");
+  assert.deepStrictEqual(cut.pushes, []);
+  // without the error the client did end the turn there: that is a refusal (after the retry turn)
+  const plain = harness({ settings: { classes: ['host'] }, behave: (kind, turnNo) => (turnNo > 1 ? 'skip' : behave(kind)) });
+  const lr2 = await plain.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr2.classes.host.status, 'fail');
+  assert.match(lr2.classes.host.actions['write@install'].reason, /allowed it, but the Claude client refused it|allowed it, but the tool refused it/);
+});
+
+test('F2/F5: a halted turn, or an unavailable one after our own stop(), is skipped and never counts toward the streak; other errors still count', async () => {
+  const h = harness({ settings: { classes: ['host'] }, errorKind: 'halted' });
+  for (let i = 0; i < 4; i++) { const lr = await h.sc.run({ trigger: 'nightly' }); h.clock.t += 3600000; assert.strictEqual(lr.classes.host.status, 'skipped'); }
+  assert.strictEqual(h.pushes.length, 0);
+  assert.deepStrictEqual(h.sc.stored().stuck, {});
+  assert.strictEqual(h.sc.stored().lastRun.classes.host.note, 'Your Maestro was halted during the check.');
+  // a mid-run halt after two errors does not move the count
+  const g = harness({ settings: { classes: ['host'] }, turnError: 'x' });
+  await g.sc.run({ trigger: 'nightly' }); g.clock.t += 3600000;
+  g.turnError = null; g.errorKind = 'halted';
+  await g.sc.run({ trigger: 'nightly' });
+  assert.strictEqual(g.sc.stored().stuck.host.count, 1);
+  // unavailable with our own abort: skipped; without it: error
+  const u = harness({ settings: { classes: ['host'] }, errorKind: 'unavailable' });
+  const lr = await u.sc.run({ trigger: 'nightly' });
+  assert.strictEqual(lr.classes.host.status, 'error');
+  const s = harness({ settings: { classes: ['host'] }, errorKind: 'unavailable', abortFirst: true });
+  const lr2 = await s.sc.run({ trigger: 'nightly' });
+  assert.strictEqual(lr2.classes.host.status, 'skipped');
+  assert.strictEqual(lr2.classes.host.note, 'The check was stopped.');
+  assert.deepStrictEqual(s.sc.stored().stuck, {});
+});
+
+test('F3: a halted run only adds a history line; the last result, failingSince and notified stay, and readiness still warns', async () => {
+  const h = harness({ settings: { classes: ['host'] }, behave: (kind) => (kind === 'write@install' ? 'noresult' : undefined) });
+  const lr = await h.sc.run({ trigger: 'manual' });
+  const before = h.sc.stored();
+  h.halt = 'hub is halted'; h.clock.t += 3600000;
+  await h.sc.run({ trigger: 'nightly' });
+  const after = h.sc.stored();
+  assert.strictEqual(after.lastRun.id, lr.id);
+  assert.deepStrictEqual([after.failingSince, after.notified, after.stuck || {}], [before.failingSince, before.notified, before.stuck || {}]);
+  assert.strictEqual(after.history[0].summary, 'skipped (halted)');
+  assert.strictEqual(after.history.length, 2);
+  assert.strictEqual(h.sc.readinessItems()[0].level, 'warn');
+  // standing keys warn even when the stored last run has no failing class
+  const k = harness({ settings: { classes: ['host'] } });
+  await k.sc.run({ trigger: 'manual' });
+  const { createStore } = L('store.js');
+  const st = createStore({ dir: k.dataDir, now: () => k.clock.t, log: () => {} });
+  st.set({ failingSince: { 'host/read@home': '2026-11-16T03:45:00.000Z' } });
+  const [item] = createSelfCheck({ hubRoot: k.hubRoot, hubHome: k.hubHome, dataDir: k.dataDir, now: () => k.clock.t, zone: () => 'UTC' }).readinessItems();
+  assert.strictEqual(item.level, 'warn');
+  assert.match(item.title, /ordinary agents on this computer can't read files in the install folder|can't read files outside the install folder/);
+  assert.match(item.detail, /since /);
+});
+
+test('F8: one unknown or bad key does not reset the other settings; the problem is logged once', () => {
+  const h = harness({ settings: { enabled: false, foo: 1 } });
+  assert.strictEqual(h.sc.settings().enabled, false);
+  assert.strictEqual(h.sc.settings().nightlyAt, DEFAULTS.nightlyAt);
+  const g = harness({ settings: { enabled: false, nightlyAt: 'x', afterStart: false } });
+  assert.deepStrictEqual([g.sc.settings().enabled, g.sc.settings().afterStart, g.sc.settings().nightlyAt], [false, false, DEFAULTS.nightlyAt]);
+  g.sc.settings(); g.sc.settings();
+  assert.strictEqual((g.logs || []).filter(l => /nightlyAt/.test(l)).length, 1, 'logged once');
+  assert.strictEqual(validateSettings({ foo: 1 }).ok, false, 'the PUT check still refuses an unknown key');
 });
 
 test('the Nov 10 fallback is caught end to end: a Bash printf standing in for a broken Write fails the class', async () => {
@@ -345,7 +458,7 @@ test('settings: disabled -> null for start/nightly, a coded throw for manual; ha
   const lr = await g.sc.run({ trigger: 'nightly' });
   assert.strictEqual(lr.note, "Your Maestro was halted; the check didn't run.");
   assert.deepStrictEqual([g.turns.length, g.pushes.length], [0, 0]);
-  assert.strictEqual(g.sc.stored().history[0].summary, 'skipped');
+  assert.strictEqual(g.sc.stored().history[0].summary, 'skipped (halted)');
 
   let release; const block = new Promise(r => { release = r; });
   const b = harness({ settings: { classes: ['lead'] }, block });

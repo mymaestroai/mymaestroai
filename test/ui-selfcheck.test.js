@@ -21,8 +21,14 @@ function makePage(ids) {
   const els = {};
   for (const id of ids) {
     const classes = new Set();
-    els[id] = { id, innerHTML: '', textContent: '', value: '', checked: false, disabled: false,
-      classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)), has: (c) => classes.has(c) } };
+    let html = '';
+    els[id] = { id, textContent: '', value: '', checked: false, disabled: false,
+      classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)), has: (c) => classes.has(c) },
+      // like a page: writing innerHTML makes a new, closed <details>; querySelector finds it while the markup has one
+      get innerHTML() { return html; },
+      set innerHTML(v) { html = String(v); this.det = /<details class="sc-hist"/.test(html) ? { open: false, setAttribute(n) { if (n === 'open') this.open = true; } } : null; },
+      querySelector(sel) { return sel === 'details.sc-hist' ? this.det || null : null; } };
+    els[id].det = null;
   }
   return { els, document: { getElementById: (id) => els[id] || null } };
 }
@@ -108,8 +114,65 @@ test('a skipped boxed kind says "not checked" with its note; an errored kind say
   const h = t.els['st-sc-list'].innerHTML;
   assert.match(h, /agents in a box<\/b> <span class="sc-chip sc-idle">not checked<\/span><\/div><div class="sc-note">Docker or the sandbox image is not there</);
   assert.match(h, /agents shared with a member<\/b> <span class="sc-chip sc-idle">couldn't run<\/span><\/div><div class="sc-note">the plan limit was reached</);
+  assert.strictEqual(t.sums.at(-1).text, 'Self-check: all fine', 'two kinds passed and nothing failed');
+  // no kind passed or failed: "couldn't run"
+  v.lastRun.classes.lead = { status: 'error', note: 'x', actions: {} };
+  v.lastRun.classes.host = { status: 'skipped', note: 'y', actions: {} };
+  t.S.scRender(v);
   assert.strictEqual(t.sums.at(-1).text, "Self-check: couldn't run");
   assert.strictEqual(t.sums.at(-1).crit, false);
+});
+
+test('F3: the summary says "problem found" for a stuck count of 3 or a standing failingSince, even when no kind failed in the last run', () => {
+  const t = build({});
+  const stuck = allPass(); stuck.stuck = { host: { count: 3, since: T0, reason: 'x' } };
+  t.S.scRender(stuck);
+  assert.deepStrictEqual(t.sums.at(-1), { g: 'status', k: 'selfcheck', text: 'Self-check: problem found', crit: true });
+  const standing = allPass(); standing.failingSince = { 'host/read@home': T0 };
+  t.S.scRender(standing);
+  assert.deepStrictEqual(t.sums.at(-1), { g: 'status', k: 'selfcheck', text: 'Self-check: problem found', crit: true });
+  const two = allPass(); two.stuck = { host: { count: 2, since: T0 } };
+  t.S.scRender(two);
+  assert.strictEqual(t.sums.at(-1).text, 'Self-check: all fine');
+  // a halted run left everything skipped: couldn't run, not "all fine"
+  const none = allPass();
+  for (const k of Object.keys(none.lastRun.classes)) none.lastRun.classes[k] = { status: 'skipped', note: 'halted', actions: {} };
+  t.S.scRender(none);
+  assert.strictEqual(t.sums.at(-1).text, "Self-check: couldn't run");
+});
+
+test('F4: a page opened during a run follows it for up to 6 minutes; "Earlier checks" stays open across a redraw', async () => {
+  const running = { ...allPass(), running: true };
+  const t = build({ 'GET /api/selfcheck': () => ({ status: 200, body: running }) });
+  await t.S.loadSelfCheck();   // opened, not Run now
+  assert.strictEqual(t.timers.at(-1) && t.timers.at(-1).ms, 3000, 'polls while the hub says it runs');
+  assert.strictEqual(t.els['st-sc-run'].disabled, true);
+  // it keeps going on its own poll...
+  t.timers.at(-1).fn(); await new Promise(r => setImmediate(r));
+  assert.strictEqual(t.timers.length, 2);
+  // ...and the open panel survives the redraw
+  t.els['st-sc-list'].det.open = true;
+  t.timers.at(-1).fn(); await new Promise(r => setImmediate(r));
+  assert.strictEqual(t.els['st-sc-list'].det.open, true, 'still open after the poll redrew the list');
+  // a closed one stays closed
+  t.els['st-sc-list'].det.open = false;
+  t.timers.at(-1).fn(); await new Promise(r => setImmediate(r));
+  assert.strictEqual(t.els['st-sc-list'].det.open, false);
+});
+
+test('F4: the poll still stops after 6 minutes of a run that does not end', async () => {
+  const running = { ...allPass(), running: true };
+  const t = build({ 'GET /api/selfcheck': () => ({ status: 200, body: running }) });
+  const realNow = Date.now; let now = realNow();
+  Date.now = () => now;
+  try {
+    await t.S.loadSelfCheck();
+    const n0 = t.timers.length;
+    now += t.S.SC_POLL_MAX_MS + 1000;
+    t.timers.at(-1).fn(); await new Promise(r => setImmediate(r));
+    assert.strictEqual(t.timers.length, n0, 'no further poll');
+    assert.match(t.els['st-sc-msg'].textContent, /Still running after 6 minutes/);
+  } finally { Date.now = realNow; }
 });
 
 test('a check that hasn\'t been able to run 3 times in a row is shown as a problem; fewer, and nothing is added', () => {
