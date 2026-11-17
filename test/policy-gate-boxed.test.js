@@ -243,7 +243,7 @@ test('client reads through a symlink: the real file or folder is judged; a link 
 test('Glob patterns: a ".." anywhere after the literal start, or an absolute or ~ path inside braces, is refused; plain patterns judged by their folder', async () => {
   const lead = { name: 'lead-g', category: 'primary', lead: true };
   const hook = gateFor(lead).sdkHook({ agentName: 'lead-g', cwd: '/opt/fake-install' });
-  for (const pattern of ['{ordinary,../../data}/**/*', '{x,/proc/self/environ}', '{a,~/.ssh}/*', 'docs/{..,x}/y', '*/x/../../z', '{.,x}./data/*', '@(..|x)/y', '{a,{b,../../data}}/*', 'a/+(..)/b', '{a,\\},../..}/x', '\\.\\./\\.\\./data/*', '{{a,../..}}/x', '{'.repeat(100000), 'x'.repeat(1025)]) {
+  for (const pattern of ['{ordinary,../../data}/**/*', '{x,/proc/self/environ}', '{a,~/.ssh}/*', 'docs/{..,x}/y', '*/x/../../z', '{.,x}./data/*', '@(..|x)/y', '{a,{b,../../data}}/*', 'a/+(..)/b', '{a,\\},../..}/x', '\\.\\./\\.\\./data/*', '{{a,../..}}/x', '{'.repeat(100000), 'x'.repeat(1025), '.{.}/x', '{.}{.}/x', '.{{.}}/x', '.{{.,x}}/x', '{a,b}'.repeat(8) + '{'.repeat(980), '{a,b}'.repeat(33)]) {
     const d = await hook(pre('Glob', { pattern, path: '/opt/fake-home/share/lead-g' }));
     assert.strictEqual(d.decision, 'block', `${pattern}: blocked`);
     assert.ok(!d.hookSpecificOutput);
