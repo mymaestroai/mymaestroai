@@ -93,7 +93,7 @@ test('create: a person on a full browser session gets the link; the answer carri
   const a = actions(r, 'share.create');
   assert.equal(a.length, 1);
   assert.equal(a[0].userId, 'owner');
-  assert.equal(a[0].detail, `link ${j.id} folder mine file report.txt hours 24 oneTime true`);
+  assert.equal(a[0].detail, `link ${j.id} folder "mine" file "report.txt" hours 24 oneTime true`);
   assert.equal(a[0].ip, '192.0.2.10');
   assert.ok(!JSON.stringify(r.audits).includes(tokenOf(res)));
 });
@@ -136,7 +136,7 @@ test('create: the notice goes to every admin; a member creator does not get one,
   assert.equal(res.status, 200);
   assert.deepEqual(r.pushes[1].ids, ['admin-b', 'member-a', 'owner']);
   assert.equal(r.pushes[1].payload.body, 'Owner created a share link for theirs.txt, valid for 1 hours.');
-  assert.equal(actions(r, 'share.create')[1].detail.startsWith(`link ${res.json().id} folder member-a file theirs.txt hours 1`), true);
+  assert.equal(actions(r, 'share.create')[1].detail.startsWith(`link ${res.json().id} folder "member-a" file "theirs.txt" hours 1`), true);
   // an admin sharing from the admin folder tells admins only
   r.ownerFile('own.txt');
   await r.create(r.as('owner'), { path: 'own.txt', hours: 1 });
@@ -580,21 +580,42 @@ test('the descriptor is closed when the client leaves before the end of a downlo
   assert.ok(closed.length <= 1);
 });
 
-test('revoke: a failed save answers 500 and the link stays live; a failed save refuses the download and keeps it live', async (t) => {
+test('revoke: a failed save still revokes (200 with a warning, link gone at once); a failed save refuses the download and keeps it live', async (t) => {
   const flag = { fail: false };
   const failingFs = { ...fs, writeFileSync: (...a) => { if (flag.fail) throw new Error('disk full'); return fs.writeFileSync(...a); } };
-  const r = rig(t, { storeFs: failingFs }); r.ownerFile('once.txt', 'payload');
+  const r = rig(t, { storeFs: failingFs }); r.ownerFile('once.txt', 'payload'); r.ownerFile('two.txt', 'x');
   const c = await r.create(r.as('owner'), { path: 'once.txt', hours: 1, oneTime: true });
+  const d = await r.create(r.as('owner'), { path: 'two.txt', hours: 1 });
   flag.fail = true;
-  const bad = await r.call(r.as('owner'), 'POST', `/api/share-links/${c.json().id}/revoke`);
-  assert.equal(bad.status, 500);
-  assert.deepEqual(bad.json(), { error: 'Could not save. Try again.' });
-  assert.equal(actions(r, 'share.revoke').length, 0);
+  // the download-save-failure half: gone page, the link stays live
   const dl = await r.call(r.as('owner'), 'POST', c.json().path);
   assert.equal(dl.status, 404); assert.ok(dl.text.includes(GONE_TEXT));
   assert.equal(r.store.get(c.json().id).usedAt, null);
+  assert.ok(r.store.findLive(tokenOf(c)));
+  // the revoke half
+  const rev = await r.call(r.as('owner'), 'POST', `/api/share-links/${d.json().id}/revoke`);
+  assert.equal(rev.status, 200);
+  assert.deepEqual(rev.json(), { ok: true, warning: 'Revoked. It could not be saved yet, so it might work again if your Maestro restarts before it is saved.' });
+  const a = actions(r, 'share.revoke');
+  assert.equal(a.length, 1);
+  assert.ok(a[0].detail.includes(d.json().id) && a[0].detail.endsWith('(not saved yet)'));
+  const gone = await r.call(r.as('owner'), 'GET', d.json().path);
+  assert.equal(gone.status, 404); assert.ok(gone.text.includes(GONE_TEXT));
   flag.fail = false;
   assert.equal((await r.call(r.as('owner'), 'POST', c.json().path)).text, 'payload', 'still live once saving works');
+});
+
+test('create: the audit detail JSON-quotes the folder and file name, so a control character cannot split or forge a line', async (t) => {
+  const r = rig(t);
+  const weird = 'a\nb\u0007 "q".txt';
+  r.put('share', weird);
+  const res = await r.create(r.as('owner'), { path: weird, hours: 1 });
+  assert.equal(res.status, 200, res.text);
+  const a = actions(r, 'share.create');
+  assert.equal(a.length, 1);
+  assert.ok(!/[\x00-\x1f]/.test(a[0].detail), 'no raw control character');
+  assert.ok(a[0].detail.includes('file ' + JSON.stringify(res.json().name)));
+  assert.ok(a[0].detail.includes('\\n') && a[0].detail.includes('\\u0007'));
 });
 
 test('a throw inside open() answers the gone page and logs no token', async (t) => {
@@ -616,4 +637,28 @@ test('a throw whose message holds the token still logs no token', async (t) => {
   const got = await r.call(r.as('owner'), 'GET', c.json().path);
   assert.equal(got.status, 404);
   assert.ok(logs.length === 1 && !logs[0].includes(tok));
+});
+
+test('server.js: both catch-all error lines redact the share token in the message as well as the URL', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const lines = server.split('\n').filter(l => l.includes('console.error(`[server] ${req.method}'));
+  assert.equal(lines.length, 2);
+  assert.ok(/redactShareToken\(String\(req\.url \|\| ''\)\)/.test(lines[0]));
+  assert.ok(/: \$\{redactShareToken\(err && err\.message \? err\.message : err\)\}/.test(lines[0]));
+  assert.ok(/redactShareToken\(pathname\)/.test(lines[1]));
+  assert.ok(/: \$\{redactShareToken\(err\.message\)\}/.test(lines[1]));
+});
+
+test('server.js redactShareToken: hides a token in a path and in a percent-encoded path, leaves other text alone', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const line = server.split('\n').find(l => l.startsWith('const redactShareToken = '));
+  assert.ok(line, 'one-line const');
+  const redact = new Function(`${line}; return redactShareToken;`)();
+  const tok = 'Ab1_-'.repeat(8) + 'xyz';   // 43 characters
+  assert.equal(tok.length, 43);
+  assert.equal(redact(`failed for /s/${tok}`), 'failed for /s/<token>');
+  assert.equal(redact(`x%2Fs%2F${tok}y`.replace('y', '')), 'x%2Fs%2F<token>');
+  assert.equal(redact(`x%2fs%2f${tok}`), 'x%2Fs%2F<token>');
+  assert.equal(redact('/s/short'), '/s/short');
+  assert.equal(redact(new Error('plain')), 'Error: plain');
 });

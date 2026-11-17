@@ -93,10 +93,10 @@ test('findLive: pattern check, unknown token, expiry, revoke', (t) => {
   clock.t += 1;
   assert.equal(store.findLive(token), null, 'expired');
   const b = store.create(base);
-  assert.equal(store.revoke(b.record.id), true);
+  assert.deepEqual(store.revoke(b.record.id), { ok: true, saved: true });
   assert.equal(store.findLive(b.token), null, 'revoked');
-  assert.equal(store.revoke(b.record.id), false, 'revoking twice');
-  assert.equal(store.revoke('0000000000000000'), false);
+  assert.equal(store.revoke(b.record.id).ok, false, 'revoking twice');
+  assert.equal(store.revoke('0000000000000000').ok, false);
 });
 
 test('hours: an integer from 1 to the maximum, else EBADARG', (t) => {
@@ -316,18 +316,36 @@ test('limiter: a sliding window per key, and blocks that run out', () => {
   assert.equal(lim.isBlocked('b'), false);
 });
 
-test('revoke: a failed save changes nothing and answers false', (t) => {
+test('revoke: a failed save still revokes in memory, answers saved:false, and is saved again by prune', (t) => {
   const flag = { fail: false };
   const bad = { ...fs, writeFileSync: (...a) => { if (flag.fail) throw new Error('disk full'); return fs.writeFileSync(...a); } };
-  const { store, base } = rig(t, { fsImpl: bad });
+  const { store, base, file, make } = rig(t, { fsImpl: bad });
   const { token, record } = store.create(base);
   flag.fail = true;
-  assert.equal(store.revoke(record.id), false);
-  assert.equal(store.get(record.id).revokedAt, null);
-  assert.ok(store.findLive(token), 'still live');
+  assert.deepEqual(store.revoke(record.id), { ok: true, saved: false });
+  assert.equal(store.findLive(token), null, 'not live any more');
+  assert.notEqual(store.get(record.id).revokedAt, null);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).links[0].revokedAt, null, 'the file still says live');
+  assert.equal(store.revoke(record.id).ok, false, 'already revoked');
   flag.fail = false;
-  assert.equal(store.revoke(record.id), true);
-  assert.equal(store.findLive(token), null);
+  store.prune();
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8')).links;
+  assert.equal(saved.length, 1);
+  assert.notEqual(saved[0].revokedAt, null, 'prune wrote the revoke');
+  assert.equal(make().findLive(token), null, 'a restart keeps it revoked');
+});
+
+test('revoke: an unsaved revoke is also written by the next create', (t) => {
+  const flag = { fail: false };
+  const bad = { ...fs, writeFileSync: (...a) => { if (flag.fail) throw new Error('disk full'); return fs.writeFileSync(...a); } };
+  const { store, base, file } = rig(t, { fsImpl: bad });
+  const a = store.create(base);
+  flag.fail = true;
+  assert.equal(store.revoke(a.record.id).saved, false);
+  flag.fail = false;
+  store.create(base);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8')).links;
+  assert.equal(saved.find(r => r.id === a.record.id).revokedAt != null, true);
 });
 
 test('markDownload: a failed save undoes the use and refuses the download', (t) => {
@@ -368,4 +386,37 @@ test('a missing file is not set aside', (t) => {
   const { file, make } = rig(t);
   make();
   assert.deepEqual(fs.existsSync(path.dirname(file)) ? fs.readdirSync(path.dirname(file)).filter(n => n.includes('unreadable')) : [], []);
+});
+
+test('an unreadable file that cannot be set aside makes the store read-only: nothing is ever written over it', (t) => {
+  const { file, base, logs } = rig(t);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const original = JSON.stringify({ links: [] });
+  fs.writeFileSync(file, original);
+  const writes = [];
+  const locked = {
+    ...fs,
+    readFileSync: (f, ...a) => { if (f === file) { const e = new Error('EACCES: permission denied'); e.code = 'EACCES'; throw e; } return fs.readFileSync(f, ...a); },
+    renameSync: () => { throw new Error('rename refused'); },
+    writeFileSync: (f, ...a) => { writes.push(f); return fs.writeFileSync(f, ...a); },
+  };
+  const s = SL.createStore({ file, fsImpl: locked, now: () => 1_800_000_000_000, log: (m) => logs.push(m) });
+  assert.ok(logs.some(l => /could not set .* aside/.test(l)));
+  assert.throws(() => s.create(base), (e) => e.code === 'EREADONLY');
+  assert.deepEqual(s.list(), []);
+  assert.equal(writes.length, 0, 'nothing written, not even a temp file');
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['share-links.json']);
+});
+
+test('a damaged file that cannot be set aside is read-only too: markDownload false, revoke ok but unsaved', (t) => {
+  const { file } = rig(t);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const id = 'a'.repeat(16);
+  fs.writeFileSync(file, '{ not json');
+  const locked = { ...fs, renameSync: () => { throw new Error('rename refused'); } };
+  const s = SL.createStore({ file, fsImpl: locked, now: () => 1_800_000_000_000, log: () => {} });
+  assert.equal(s.markDownload(id), false);
+  assert.deepEqual(s.revoke(id), { ok: false, saved: false });
+  assert.equal(fs.readFileSync(file, 'utf8'), '{ not json');
 });

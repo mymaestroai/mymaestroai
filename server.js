@@ -330,7 +330,7 @@ const redactShareToken = (s) => String(s).replace(/\/s\/[A-Za-z0-9_-]{43}/g, '/s
 // or URL decoding, identity, the bridge) answers 400 and the hub carries on (review F07).
 const server = http.createServer((req, res) => {
   handleHttpRequest(req, res).catch((err) => {
-    console.error(`[server] ${req.method} ${redactShareToken(String(req.url || '')).slice(0, 200)}: ${err && err.message ? err.message : err}`);
+    console.error(`[server] ${req.method} ${redactShareToken(String(req.url || '')).slice(0, 200)}: ${redactShareToken(err && err.message ? err.message : err)}`);
     try {
       if (!res.headersSent) res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'bad_request' }));
@@ -3518,7 +3518,7 @@ async function handleHttpRequest(req, res) {
     jsonResponse(res, 404, { error: 'Not found' });
 
   } catch (err) {
-    console.error(`[server] ${req.method} ${redactShareToken(pathname)}: ${err.message}`);
+    console.error(`[server] ${req.method} ${redactShareToken(pathname)}: ${redactShareToken(err.message)}`);
     if (!res.headersSent) {
       jsonResponse(res, 500, { error: err.message });
     }
