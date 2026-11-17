@@ -24,17 +24,39 @@ test('agentGroups: Primary agents first; Specialists, Helpers and Experimental u
     { name: 'w1', category: 'worker' }, { name: 'guide', category: 'primary' }, { name: 'x', category: 'experimental' },
   ];
   const g = S.agentGroups(list);
-  assert.deepStrictEqual(g.primary.map((a) => a.name), ['lead', 'guide']);
+  assert.deepStrictEqual(g.primary.map((a) => a.name), ['guide', 'lead']);   // alphabetical (no lead flag here)
   assert.deepStrictEqual(g.more.map((m) => [m.label, m.items.map((a) => a.name)]), [['Specialists', ['doc']], ['Helpers', ['w1']], ['Experimental', ['x']]]);
   assert.deepStrictEqual(S.agentGroups([{ name: 'a', category: 'primary' }, { name: 'b', category: 'worker' }]).more.map((m) => m.label), ['Helpers']);
 });
 
 test('agentGroups: with no Primary agent, everything shows and nothing is folded away', () => {
   const g = S.agentGroups([{ name: 'helper', category: 'specialist' }, { name: 'guide' }]);
-  assert.deepStrictEqual(g.primary.map((a) => a.name), ['helper', 'guide']);
+  assert.deepStrictEqual(g.primary.map((a) => a.name), ['guide', 'helper']);
   assert.deepStrictEqual(g.more, []);
   assert.deepStrictEqual(S.agentGroups([]), { primary: [], more: [] });
   assert.deepStrictEqual(S.agentGroups(null), { primary: [], more: [] });
+});
+
+test('agentGroups: the lead agent comes first, then the rest alphabetically by the name shown (case-insensitive)', () => {
+  const g = S.agentGroups([
+    { name: 'zeta', display: 'Zeta', category: 'primary' }, { name: 'boss', display: 'Maestro', category: 'primary', lead: true },
+    { name: 'b', display: 'biographer', category: 'primary' }, { name: 'c', display: 'CNC', category: 'primary' },
+    { name: 'h2', display: 'Helper B', category: 'worker' }, { name: 'h1', display: 'Helper A', category: 'worker' },
+  ]);
+  assert.deepStrictEqual(g.primary.map((a) => a.display), ['Maestro', 'biographer', 'CNC', 'Zeta']);
+  assert.deepStrictEqual(g.more[0].items.map((a) => a.display), ['Helper A', 'Helper B']);
+});
+
+test('agentGroups: a lead agent filed under another category is still shown first, never folded away', () => {
+  const g = S.agentGroups([{ name: 'p', category: 'primary' }, { name: 'boss', category: 'specialist', lead: true }, { name: 's', category: 'specialist' }]);
+  assert.deepStrictEqual(g.primary.map((a) => a.name), ['boss', 'p']);
+  assert.deepStrictEqual(g.more.map((m) => [m.label, m.items.map((a) => a.name)]), [['Specialists', ['s']]]);
+});
+
+test('agentGroups does not reorder the list it was given', () => {
+  const list = [{ name: 'b', category: 'primary' }, { name: 'a', category: 'primary' }];
+  S.agentGroups(list);
+  assert.deepStrictEqual(list.map((a) => a.name), ['b', 'a']);
 });
 
 test('agentGroups: a missing category counts as specialist, an unknown one joins Specialists; a custom category reader is used', () => {
