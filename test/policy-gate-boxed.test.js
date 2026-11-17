@@ -105,7 +105,8 @@ test('client Write/Edit outside the working folder: an allowed call answers perm
     assert.deepStrictEqual(r.hookSpecificOutput && r.hookSpecificOutput.permissionDecision, 'allow', `${tool}: explicit allow`);
     assert.strictEqual(r.hookSpecificOutput.hookEventName, 'PreToolUse');
   }
-  assert.deepStrictEqual(await hook(pre('Read', { file_path: '/opt/fake-home/share/lead-a/out.txt' })), {}, 'other tools: no explicit decision, as before');
+  // (Read was here: the readers now get the same explicit allow, see the reader tests below)
+  assert.deepStrictEqual(await hook(pre('WebSearch', { query: 'x' })), {}, 'other tools: no explicit decision, as before');
   assert.deepStrictEqual(await hook(pre('mcp__hub__Write', { file_path: '/opt/fake-home/share/lead-a/out.txt', content: 'x' })), {}, 'the hub\'s own Write never needed it');
   // a worker writing into another agent's workspace: still blocked by the policy
   const worker = { name: 'w-1', category: 'worker' };
@@ -156,4 +157,137 @@ test('policy off is a flag on the check result, not the reason text', async () =
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'policy-gate.js'), 'utf8');
   assert.match(src, /r\.policyOff !== true/);
   assert.doesNotMatch(src, /reason === 'policy disabled'/);
+});
+
+// The client's readers (Read, Glob, Grep, NotebookRead) ask for any path outside the working folder, like the writers: an
+// allowed read answers allow explicitly; a refused one is still a block; the real file or folder walked is judged too.
+const isAllow = (r) => !!(r && r.hookSpecificOutput && r.hookSpecificOutput.permissionDecision === 'allow' && r.hookSpecificOutput.hookEventName === 'PreToolUse');
+
+test('client readers outside the working folder: an allowed read answers allow; secrets still blocked for a worker; policy off unchanged', async () => {
+  const os = require('os');
+  const lead = { name: 'lead-r', category: 'primary', lead: true };
+  const hook = gateFor(lead).sdkHook({ agentName: 'lead-r', cwd: '/opt/fake-install' });
+  assert.ok(isAllow(await hook(pre('Read', { file_path: '/opt/fake-home/share/lead-r/scan.png' }))), 'Read of an image outside');
+  assert.ok(isAllow(await hook(pre('NotebookRead', { notebook_path: '/opt/fake-home/share/lead-r/n.ipynb' }))), 'NotebookRead');
+  assert.ok(isAllow(await hook(pre('Glob', { pattern: '**/*.pdf', path: '/opt/fake-home/share/lead-r' }))), 'Glob with a path');
+  assert.ok(isAllow(await hook(pre('Grep', { pattern: 'dose', path: '/opt/fake-home/share/lead-r', glob: '*.md' }))), 'Grep with a path');
+  assert.ok(isAllow(await hook(pre('Glob', { pattern: '/opt/fake-home/share/lead-r/*.md' }))), 'Glob with an absolute pattern');
+  assert.deepStrictEqual(await hook(pre('mcp__hub__Read', { file_path: '/opt/fake-home/share/lead-r/x' })), {}, 'the hub\'s own Read: unchanged');
+  const wh = gateFor({ name: 'w-r', category: 'worker' }).sdkHook({ agentName: 'w-r', cwd: '/opt/fake-install' });
+  for (const [tool, input] of [
+    ['Read', { file_path: path.join(tp.HUB_ROOT, '.env') }],
+    ['Read', { file_path: path.join(tp.HUB_ROOT, 'data', 'auth.db') }],
+    ['Read', { file_path: path.join(os.homedir(), '.claude', '.credentials.json') }],
+    ['Read', { file_path: '~/.ssh/id_ed25519' }],
+    ['Grep', { pattern: 'token', path: path.join(os.homedir(), '.ssh') }],
+    ['Glob', { pattern: path.join(os.homedir(), '.claude', '*') }],
+    ['Glob', { pattern: '~/.ssh/*' }],
+  ]) {
+    const d = await wh(pre(tool, input));
+    assert.strictEqual(d.decision, 'block', `${tool} ${JSON.stringify(input)}: blocked`);
+    assert.ok(!d.hookSpecificOutput, `${tool}: never an allow`);
+  }
+  const off = createGate({ getAgent: async () => lead, approvalsOn: () => false, log: () => {}, enabled: () => false });
+  assert.deepStrictEqual(await off.sdkHook({ agentName: 'lead-r', cwd: '/opt/fake-install' })(pre('Read', { file_path: '/opt/fake-home/x.png' })), {}, 'policy off: unchanged');
+});
+
+test('client searches: a folder holding protected files is not searched whole outside the working folder; inside it the client decides as before; ".." after a wildcard and /proc refused', async () => {
+  const os = require('os');
+  const lead = { name: 'lead-s', category: 'primary', lead: true };
+  const hook = gateFor(lead).sdkHook({ agentName: 'lead-s', cwd: '/opt/fake-install' });
+  for (const [tool, input] of [
+    ['Grep', { pattern: 'x', path: tp.HUB_ROOT }],
+    ['Glob', { pattern: '**/*', path: os.homedir() }],
+    ['Grep', { pattern: 'x', path: '/' }],
+    ['Grep', { pattern: 'KEY', path: '/proc/self' }],
+    ['Glob', { pattern: '/proc/*/environ' }],
+    ['Glob', { pattern: 'a/*/../../../x', path: '/opt/fake-home' }],
+  ]) {
+    const d = await hook(pre(tool, input));
+    assert.strictEqual(d.decision, 'block', `${tool} ${JSON.stringify(input)}: blocked`);
+    assert.ok(!d.hookSpecificOutput);
+  }
+  // a search of the working folder (no path), which holds hub data: no explicit decision, the client's own rule as before
+  fs.mkdirSync(path.join(tp.HUB_ROOT, 'data'), { recursive: true });
+  const inHome = gateFor(lead).sdkHook({ agentName: 'lead-s', cwd: tp.HUB_ROOT });
+  assert.deepStrictEqual(await inHome(pre('Grep', { pattern: 'x' })), {});
+  assert.deepStrictEqual(await inHome(pre('Glob', { pattern: '**/*.js' })), {});
+});
+
+test('client reads through a symlink: the real file or folder is judged; a link into hub data is blocked; a dangling link is blocked', async () => {
+  const os = require('os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-rlink-'));
+  try {
+    fs.mkdirSync(path.join(tp.HUB_ROOT, 'data'), { recursive: true });
+    fs.symlinkSync(path.join(tp.HUB_ROOT, 'data'), path.join(root, 'link'));
+    fs.writeFileSync(path.join(root, 'notes.md'), 'x');
+    const hook = gateFor({ name: 'w-s', category: 'worker', policy: { roots: [root] } }).sdkHook({ agentName: 'w-s', cwd: root });
+    for (const [tool, input] of [
+      ['Read', { file_path: path.join(root, 'link', 'auth.db') }],
+      ['Read', { file_path: 'link/users.json' }],
+      ['Grep', { pattern: 'x', path: path.join(root, 'link') }],
+      ['Glob', { pattern: 'link/*.json' }],
+    ]) {
+      const d = await hook(pre(tool, input));
+      assert.strictEqual(d.decision, 'block', `${tool} ${JSON.stringify(input)}: blocked through the link`);
+      assert.ok(!d.hookSpecificOutput);
+    }
+    assert.ok(isAllow(await hook(pre('Read', { file_path: path.join(root, 'notes.md') }))), 'a plain file: allowed');
+    fs.symlinkSync(path.join(tp.HUB_ROOT, 'data', 'not-there.png'), path.join(root, 'dangling.png'));
+    assert.strictEqual((await hook(pre('Read', { file_path: path.join(root, 'dangling.png') }))).decision, 'block', 'a dangling link is refused');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// Review r1 (GPT-5.6 BLOCK): brace alternatives expand to literal paths, so a '..' or an absolute or '~' path inside braces
+// escapes the folder that was judged.
+test('Glob patterns: a ".." anywhere after the literal start, or an absolute or ~ path inside braces, is refused; plain patterns judged by their folder', async () => {
+  const lead = { name: 'lead-g', category: 'primary', lead: true };
+  const hook = gateFor(lead).sdkHook({ agentName: 'lead-g', cwd: '/opt/fake-install' });
+  for (const pattern of ['{ordinary,../../data}/**/*', '{x,/proc/self/environ}', '{a,~/.ssh}/*', 'docs/{..,x}/y', '*/x/../../z', '{ a, /etc}/*']) {
+    const d = await hook(pre('Glob', { pattern, path: '/opt/fake-home/share/lead-g' }));
+    assert.strictEqual(d.decision, 'block', `${pattern}: blocked`);
+    assert.ok(!d.hookSpecificOutput);
+  }
+  // still allowed: braces and classes that stay inside, a pattern with no wildcard, a leading '..' that lands in an
+  // allowed folder, a '~' pattern for the lead
+  for (const [pattern, p] of [['{a,b}/*.{md,txt}', '/opt/fake-home/share/lead-g'], ['[ab]*.md', '/opt/fake-home/share/lead-g'],
+    ['/opt/fake-home/share/lead-g/a.md', undefined], ['../fake-home/share/lead-g/*.md', undefined], ['~/projects/*.md', undefined]]) {
+    assert.ok(isAllow(await hook(pre('Glob', p ? { pattern, path: p } : { pattern }))), `${pattern}: allowed`);
+  }
+  // a leading '..' that lands on a protected folder is judged there
+  const wh = gateFor({ name: 'w-g', category: 'worker' }).sdkHook({ agentName: 'w-g', cwd: path.join(tp.HUB_ROOT, 'workspaces', 'w-g') });
+  assert.strictEqual((await wh(pre('Glob', { pattern: '../../data/*.json' }))).decision, 'block', 'a leading .. into hub data');
+});
+
+// Review r1 (GPT-5.6 BLOCK; Sentinel FOLLOW-UP, reproduced on the copy: a worker's Grep with no path returned .env lines):
+// a Grep opens every file in its folder, so an agent whose policy refuses protected reads may not Grep a folder holding any.
+test('Grep: a worker may not search a folder holding files protected by name or hub data (inside the working folder too); the lead may; Glob unchanged', async () => {
+  const os = require('os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-grep-'));
+  try {
+    for (const d of ['keys', 'envs', 'plain/sub']) fs.mkdirSync(path.join(root, d), { recursive: true });
+    fs.writeFileSync(path.join(root, 'keys', 'private.key'), 'x');
+    fs.writeFileSync(path.join(root, 'envs', '.env.production'), 'x');
+    fs.writeFileSync(path.join(root, 'plain', 'sub', 'notes.md'), 'x');
+    fs.symlinkSync(path.join(root, 'keys', 'private.key'), path.join(root, 'plain', 'link.key'));   // a link: not followed by Grep
+    const worker = { name: 'w-q', category: 'worker', policy: { roots: [root] } };
+    const wh = gateFor(worker).sdkHook({ agentName: 'w-q', cwd: '/opt/fake-install' });
+    for (const p of [path.join(root, 'keys'), path.join(root, 'envs'), root]) {
+      const d = await wh(pre('Grep', { pattern: 'x', path: p }));
+      assert.strictEqual(d.decision, 'block', `worker Grep ${p}: blocked`);
+      assert.match(d.reason, /protected file/);
+    }
+    assert.ok(isAllow(await wh(pre('Grep', { pattern: 'x', path: path.join(root, 'plain') }))), 'a folder with no protected file: allowed');
+    assert.ok(isAllow(await wh(pre('Glob', { pattern: '**/*', path: root }))), 'Glob lists names only: allowed');
+    const lh = gateFor({ name: 'lead-q', category: 'primary', lead: true }).sdkHook({ agentName: 'lead-q', cwd: '/opt/fake-install' });
+    assert.ok(isAllow(await lh(pre('Grep', { pattern: 'x', path: root }))), 'the lead may (its policy allows protected reads)');
+    // inside the working folder (the install root, which holds .env and data/): the worker's Grep is refused, its Glob and
+    // the lead's Grep keep the client's own rule (no decision), as before
+    fs.mkdirSync(path.join(tp.HUB_ROOT, 'data'), { recursive: true });
+    const wIn = gateFor(worker).sdkHook({ agentName: 'w-q', cwd: tp.HUB_ROOT });
+    assert.strictEqual((await wIn(pre('Grep', { pattern: 'PORT' }))).decision, 'block', 'worker Grep of the install root');
+    assert.deepStrictEqual(await wIn(pre('Glob', { pattern: '**/*.js' })), {}, 'worker Glob there: as before');
+    const lIn = gateFor({ name: 'lead-q', category: 'primary', lead: true }).sdkHook({ agentName: 'lead-q', cwd: tp.HUB_ROOT });
+    assert.deepStrictEqual(await lIn(pre('Grep', { pattern: 'PORT' })), {}, 'lead Grep there: as before');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

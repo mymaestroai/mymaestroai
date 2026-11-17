@@ -54,7 +54,9 @@ test('gate: allow passes, deny returns policy text, ask waits for the owner and 
 test('gate: SDK hook denies with a PreToolUse permissionDecision; Codex approval requests map to accept/decline', async () => {
   const g = gateWith({ name: 'haiku', category: 'worker' });
   const hook = g.sdkHook({ agentName: 'haiku', cwd: '/tmp' });
-  assert.deepStrictEqual(await hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/x' } }), {});
+  // an allowed client Read answers allow explicitly (r2-read-fix: the client otherwise asks for paths outside its cwd)
+  assert.strictEqual((await hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/x' } })).hookSpecificOutput.permissionDecision, 'allow');
+  assert.deepStrictEqual(await hook({ hook_event_name: 'PreToolUse', tool_name: 'WebSearch', tool_input: { query: 'x' } }), {}, 'other allowed tools: no decision');
   const out = await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push origin main' } });
   assert.strictEqual(out.decision, 'block', 'a refusal blocks the call, it does not end the turn');
   assert.match(out.reason, /DENIED BY POLICY/);
