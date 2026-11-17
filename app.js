@@ -469,6 +469,8 @@
       if (modulesItem) modulesItem.style.display = me.isAdmin ? '' : 'none';
       const localItem = document.getElementById('account-local-models');
       if (localItem) localItem.style.display = me.isAdmin ? '' : 'none';
+      const simpleItem = document.getElementById('account-simple');   // "Switch to Simple", easy to find (Settings has it too)
+      if (simpleItem) simpleItem.style.display = typeof simpleAccountOk === 'function' && simpleAccountOk(me) ? '' : 'none';
       checkRemoteComputers();
       const note = document.getElementById('account-2fa-note');
       if (note) note.style.display = (me.isAdmin && !me.user.totpEnabled && me.admin2faRequired !== false) ? '' : 'none';

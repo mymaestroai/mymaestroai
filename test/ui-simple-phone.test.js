@@ -93,7 +93,7 @@ test('mobile.html: the script tag, the Switch to Simple item and one Simple styl
   assert.ok(a > html.indexOf('<script src="/ui-file-card.js"></script>'));
   assert.ok(a < html.indexOf('<script src="mobile.js"></script>'));
   assert.strictEqual(html.split('<style id="simple-css">').length, 2);
-  assert.match(html, /<button id="menu-simple">Switch to Simple<\/button>\n    <button id="menu-signout">/);
+  assert.match(html, /<span id="menu-version" class="menu-version"><\/span><\/button>\n    <button id="menu-simple">Switch to Simple<\/button>\n/);   // near the top, right after About
 });
 
 function simpleCss() {
