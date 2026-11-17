@@ -11255,7 +11255,8 @@ function showQuestion(data, onAnswered) {
     api('/api/ask_response', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ request_id, answers }),
+      // The asking agent goes with the answer: the route's access check needs it to let a member answer (it was refused).
+      body: JSON.stringify({ request_id, answers, ...(data.agent ? { agent: data.agent } : {}) }),
     }).then(r => { if (r.ok) { questionBoxes.delete(request_id); retireSoon(box); } })   // the hub has the answer: the box can go
       .catch(err => toast(`Could not send answer: ${err.message}`));
     box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
