@@ -81,10 +81,27 @@
       if (!n) return 'none';
       return n.label ? { label: String(n.label) } : 'hide';
     }
-    function simpleEffortBody(hs, agent) { return hs && typeof hs.effortFor === 'function' ? { effort: hs.effortFor(agent) } : {}; }
+    // The chat POST's effort: only when the level button is shown (show !== false) AND the person picked a level for this agent;
+    // never picked: nothing is sent and the agent's own setting applies.
+    function simpleEffortBody(hs, agent, show) {
+      if (show === false || !hs) return {};
+      const lv = typeof hs.pickedEffort === 'function' ? hs.pickedEffort(agent) : null;
+      return lv ? { effort: lv } : {};
+    }
+    // The button's label: the picked level, else the agent's own effort in plain words.
+    function simpleEffortLabel(hs, agent, agentEffort) {
+      const lv = typeof hs.pickedEffort === 'function' ? hs.pickedEffort(agent) : null;
+      return lv ? hs.labelFor(lv) : (typeof hs.labelForAgentEffort === 'function' ? hs.labelForAgentEffort(agentEffort) : 'Balanced');
+    }
+    // 'Switch to Simple' needs a real account (the legacy single-password login has none to save the preference on).
+    function simpleAccountOk(me) { return !!(me && me.user && me.user.id && String(me.user.id) !== 'legacy'); }
 
-    // The reasoning box: "Thinking…" and the last lines, above the reply; one per chat, gone at the first reply text.
-    const simpleReplied = new Set();   // reply bubbles whose first text has arrived: their reasoning never shows the box again
+    // The reasoning box: "Thinking…" and the last lines, above the reply; one per chat. Two separate states feed it:
+    // the reasoning lines (only before the first reply text of that reply, never again for it) and the active consults
+    // (a map keyed by worker_id; the box may show with only the consult line while one runs). All of it clears at turn end, error and stop.
+    const simpleReplied = new Set();   // reply bubbles whose first text has arrived: their reasoning never shows again
+    const simpleLines = new Map();     // chatId -> the reasoning text shown now
+    const simpleConsults = new Map();  // chatId -> Map(worker_id -> "Asking <Name>…")
     function simpleThinkRoot(el) { return el ? (el.closest('.messages') || el.parentElement) : null; }
     function simpleThinkBox(root, before, create) {
       if (!root) return null;
@@ -98,32 +115,61 @@
       return box;
     }
     function simpleThinkDrop(root) { if (root) root.querySelectorAll('.simple-think').forEach(b => b.remove()); }
-    function simpleThinkClear(chatId) { if (simpleOn()) simpleThinkDrop(document.getElementById(`messages-${chatId}`)); }
-    function simpleFirstReply(chatId, msgId) {   // the first reply text arrived: the box goes
+    function simpleConsultText(chatId) {   // the most recent active consult; "… and N more" when several run
+      const m = simpleConsults.get(chatId);
+      if (!m || !m.size) return '';
+      const lines = [...m.values()];
+      return lines.length > 1 ? `${lines[lines.length - 1]} and ${lines.length - 1} more` : lines[0];
+    }
+    function simpleThinkSync(chatId, before) {   // the box shows while there are reasoning lines OR an active consult
+      const root = document.getElementById(`messages-${chatId}`);
+      if (!root) return;
+      const text = simpleLines.get(chatId) || '';
+      const consult = simpleConsultText(chatId);
+      if (!text && !consult) { simpleThinkDrop(root); return; }
+      const box = simpleThinkBox(root, before, true);
+      box.querySelector('.st-body').textContent = text;
+      box.querySelector('.st-consult').textContent = consult;
+    }
+    function simpleThinkClear(chatId) {
+      if (!simpleOn()) return;
+      simpleLines.delete(chatId); simpleConsults.delete(chatId);
+      simpleThinkDrop(document.getElementById(`messages-${chatId}`));
+    }
+    function simpleFirstReply(chatId, msgId) {   // the first reply text arrived: the reasoning goes (an active consult line stays)
       if (!simpleOn()) return;
       if (msgId) { simpleReplied.add(msgId); if (simpleReplied.size > 300) simpleReplied.delete(simpleReplied.values().next().value); }
-      simpleThinkClear(chatId);
+      simpleLines.delete(chatId);
+      simpleThinkSync(chatId, null);
     }
     function simpleThinkPaint(msgId, st) {   // called from paintReasoning
       if (!simpleOn() || !st) return;
       const host = document.getElementById(msgId);
       const root = simpleThinkRoot(host);
       if (!host || !root) return;
-      if (!st.live || simpleReplied.has(msgId)) { if (!st.live) simpleThinkDrop(root); return; }   // reasoning of a history reload is never shown
-      const box = simpleThinkBox(root, host, true);
-      box.querySelector('.st-body').textContent = simpleTailText(window.hubSimple, st.text, 5);
+      const chatId = String(root.id || '').replace(/^messages-/, '');
+      if (!st.live) simpleLines.delete(chatId);   // reasoning of a history reload is never shown
+      else if (!simpleReplied.has(msgId)) simpleLines.set(chatId, simpleTailText(window.hubSimple, st.text, 5));
+      simpleThinkSync(chatId, host);
     }
-    function simpleConsultNote(chatId, oc) {   // a consult: one line "Asking <Name>…" in the same box
+    function simpleConsultNote(chatId, oc) {   // a consult: one line "Asking <Name>…" in the same box, kept per worker_id
       if (!simpleOn() || !oc) return;
       const root = document.getElementById(`messages-${chatId}`);
       if (!root) return;
-      if (oc.type === 'worker_completed' || oc.type === 'worker_failed') { const b = simpleThinkBox(root, null, false); if (b) b.querySelector('.st-consult').textContent = ''; return; }
+      if (oc.type === 'worker_completed' || oc.type === 'worker_failed') {
+        const m = simpleConsults.get(chatId);
+        if (m && m.delete(String(oc.worker_id))) { if (!m.size) simpleConsults.delete(chatId); simpleThinkSync(chatId, null); }
+        return;
+      }
       if (oc.type !== 'worker_started') return;
       const line = window.hubSimple.consultLine(oc);
       if (!line) return;
+      let m = simpleConsults.get(chatId);
+      if (!m) { m = new Map(); simpleConsults.set(chatId, m); }
+      m.delete(String(oc.worker_id)); m.set(String(oc.worker_id), line);   // re-added last: the most recent
       const last = root.lastElementChild;
       const before = last && last.classList.contains('message') && last.classList.contains('assistant') ? last : null;
-      simpleThinkBox(root, before, true).querySelector('.st-consult').textContent = line;
+      simpleThinkSync(chatId, before);
     }
 
     // The reasoning level in the composer, in plain words
@@ -133,9 +179,9 @@
       if (!chat || !wrap || !simpleOn()) return;
       const show = effortSupported(chatModelOf(chat)) && !chat.autoModel;   // the same rule the page uses for its own picker
       wrap.classList.toggle('on', !!show);
-      const level = window.hubSimple.effortFor(chat.agent);
-      wrap.querySelector('.sl-btn').innerHTML = `${hubEsc(window.hubSimple.labelFor(level))} ${SIMPLE_CHEV}`;
-      wrap.querySelectorAll('.simple-lvl-menu button').forEach(b => b.classList.toggle('on', b.dataset.level === level));
+      const label = simpleEffortLabel(window.hubSimple, chat.agent, chat.effort || (typeof agentEffortOf === 'function' ? agentEffortOf(chat.agent) : ''));   // never picked: the agent's own level
+      wrap.querySelector('.sl-btn').innerHTML = `${hubEsc(label)} ${SIMPLE_CHEV}`;
+      wrap.querySelectorAll('.simple-lvl-menu button').forEach(b => b.classList.toggle('on', window.hubSimple.labelFor(b.dataset.level) === label));
     }
     function simpleComposerInit(chatId) {
       if (!simpleOn()) return;
@@ -174,6 +220,10 @@
         if (st === 'none') return;
         if (st === 'hide') { el.classList.add('simple-auto-hide'); return; }
         el.classList.add('simple-auto'); el.setAttribute('data-note', st.label);
+      });
+      panels.querySelectorAll('.message.assistant').forEach(el => {   // the old "⏳ Thinking..." placeholder: the box above replaces it (CSS hides .simple-wait)
+        const wait = (el.textContent || '').trim() === '⏳ Thinking...';
+        if (wait !== el.classList.contains('simple-wait')) el.classList.toggle('simple-wait', wait);
       });
       const cont = panels.querySelector('.chat-container.active');
       if (!cont) return;
@@ -3295,8 +3345,8 @@
           <label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show active agents at the top of the agent list</label>
         </div>
         <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
-        <div class="st-row"><button type="button" id="st-switch-simple" onclick="simpleSwitchMode('simple')">Switch to Simple</button></div>
-        <div class="st-hint">The calm view: just the conversation, with the tools and settings out of sight. You can switch back here.</div>
+        ${simpleAccountOk(window.hubMe) ? `<div class="st-row"><button type="button" id="st-switch-simple" onclick="simpleSwitchMode('simple')">Switch to Simple</button></div>
+        <div class="st-hint">The calm view: just the conversation, with the tools and settings out of sight. You can switch back here.</div>` : ''}
       </div>`;
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
@@ -10386,7 +10436,7 @@
           headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controller.signal,
           body: JSON.stringify({
-            ...(simpleOn() ? simpleEffortBody(window.hubSimple, chat.agent) : {}),   // Simple: this chat's reasoning level
+            ...(simpleOn() ? simpleEffortBody(window.hubSimple, chat.agent, effortSupported(chatModelOf(chat)) && !chat.autoModel) : {}),   // Simple: this chat's reasoning level
             agent: chat.agent,
             message: content,
             images: imagesToSend,

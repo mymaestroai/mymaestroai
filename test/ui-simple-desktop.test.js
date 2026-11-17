@@ -67,7 +67,7 @@ test('app.js: every Simple entry point is gated by simpleOn (mm-simple + hubSimp
 });
 
 test('app.js: hook points are in place', () => {
-  assert.match(app, /\.\.\.\(simpleOn\(\) \? simpleEffortBody\(window\.hubSimple, chat\.agent\) : \{\}\)/);   // effort in the chat POST body, Simple only
+  assert.match(app, /\.\.\.\(simpleOn\(\) \? simpleEffortBody\(window\.hubSimple, chat\.agent, effortSupported\(chatModelOf\(chat\)\) && !chat\.autoModel\) : \{\}\)/);   // effort in the chat POST body, Simple only, only when the level button is shown
   assert.match(app, /if \(delta\) \{\n\s+if \(simpleOn\(\)\) simpleFirstReply\(chatId, msgId\);/);   // first reply text
   assert.match(app, /simpleThinkPaint\(msgId, st\);/);   // paintReasoning
   assert.match(app, /function handleWorkerEvent\(chatId, oc\) \{\n\s+simpleConsultNote\(chatId, oc\);/);   // consult line
@@ -136,13 +136,131 @@ test('simpleNoteState: hub-started prompts become a label, a hidden line, or sta
   assert.strictEqual(sandbox.simpleNoteState({ autoNote: () => ({ label: null }) }, 'x'), 'hide');
 });
 
-test('simpleEffortBody: the chat POST carries the level of that agent', () => {
+test('simpleEffortBody: sent only for a level the person picked, and only when the button is shown', () => {
   const store = {};
-  const hs = { effortFor: (a) => store[a] || 'medium' };
+  const hs = { pickedEffort: (a) => store[a] || null };
   store['agent-a'] = 'max';
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(sandbox.simpleEffortBody(hs, 'agent-a'))), { effort: 'max' });
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(sandbox.simpleEffortBody(hs, 'agent-b'))), { effort: 'medium' });
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(sandbox.simpleEffortBody(null, 'agent-a'))), {});
+  const j = (x) => JSON.parse(JSON.stringify(x));
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(hs, 'agent-a', true)), { effort: 'max' });
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(hs, 'agent-b', true)), {});   // never picked: the agent's own setting applies
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(hs, 'agent-a', false)), {});   // no button (model without effort, or Auto model): nothing
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(null, 'agent-a', true)), {});
+  // with the real helper and a real storage
+  const mem = new Map();
+  const storage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, v) };
+  const real = { pickedEffort: (a) => hubSimple.pickedEffort(a, storage) };
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(real, 'agent-a', true)), {});
+  hubSimple.setEffort('agent-a', 'high', storage);
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(real, 'agent-a', true)), { effort: 'high' });
+});
+
+test('simpleEffortLabel: the pick, else the agent\'s own effort in plain words', () => {
+  const store = { 'agent-a': 'low' };
+  const hs = Object.assign({}, hubSimple, { pickedEffort: (a) => store[a] || null });
+  assert.strictEqual(sandbox.simpleEffortLabel(hs, 'agent-a', 'max'), 'Quick');
+  assert.strictEqual(sandbox.simpleEffortLabel(hs, 'agent-b', 'max'), 'Deepest');
+  assert.strictEqual(sandbox.simpleEffortLabel(hs, 'agent-b', 'xhigh'), 'Thorough');
+  assert.strictEqual(sandbox.simpleEffortLabel(hs, 'agent-b', 'default'), 'Balanced');
+  assert.strictEqual(sandbox.simpleEffortLabel(hs, 'agent-b', undefined), 'Balanced');
+});
+
+test('simpleAccountOk: no Switch to Simple without a real account (legacy single password, accounts off)', () => {
+  assert.strictEqual(sandbox.simpleAccountOk({ user: { id: 'u1' } }), true);
+  assert.strictEqual(sandbox.simpleAccountOk({ user: { id: 'legacy' } }), false);
+  assert.strictEqual(sandbox.simpleAccountOk({}), false);
+  assert.strictEqual(sandbox.simpleAccountOk(null), false);
+  assert.match(app, /\$\{simpleAccountOk\(window\.hubMe\) \? `<div class="st-row"><button type="button" id="st-switch-simple"/);
+});
+
+test('Simple hides the old "Thinking..." placeholder (the box replaces it)', () => {
+  assert.match(app, /=== '⏳ Thinking\.\.\.';\n\s+if \(wait !== el\.classList\.contains\('simple-wait'\)\)/);
+  assert.match(cssBlock, /html\.mm-simple \.message\.simple-wait \{ display: none; \}/);
+});
+
+// ── the Thinking box: reasoning lines before the first reply text, consults by worker id, run on a tiny fake DOM ──
+const boxSrc = (() => {
+  const a = app.indexOf('    // The reasoning box:');
+  const b = app.indexOf('    // The reasoning level in the composer');
+  assert.ok(a > 0 && b > a);
+  return app.slice(a, b);
+})();
+function boxWorld() {
+  const els = {};
+  const mk = (id) => {
+    const root = { id, kids: [], parentNode: null };
+    root.appendChild = (n) => { n.parentNode = root; root.kids.push(n); };
+    root.insertBefore = (n, ref) => { n.parentNode = root; const i = root.kids.indexOf(ref); root.kids.splice(i < 0 ? root.kids.length : i, 0, n); };
+    root.querySelector = (sel) => root.kids.find((k) => k.className === 'simple-think') || null;
+    root.querySelectorAll = (sel) => root.kids.filter((k) => k.className === 'simple-think');
+    Object.defineProperty(root, 'lastElementChild', { get: () => root.kids[root.kids.length - 1] || null });
+    els[id] = root;
+    return root;
+  };
+  const doc = {
+    getElementById: (id) => els[id] || null,
+    createElement: () => {
+      const box = { className: '', classList: { contains: () => false }, parentNode: null, parts: { '.st-body': { textContent: '' }, '.st-consult': { textContent: '' } } };
+      box.querySelector = (sel) => box.parts[sel];
+      box.remove = () => { if (box.parentNode) { const k = box.parentNode.kids; k.splice(k.indexOf(box), 1); box.parentNode = null; } };
+      return box;
+    },
+  };
+  const room = mk('messages-c1');
+  const host = { id: 'msg-1', classList: { contains: () => false }, closest: () => room, parentElement: room, parentNode: null };
+  room.appendChild(host); els['msg-1'] = host;
+  const ctx = vm.createContext({ window: { hubSimple }, document: doc, simpleOn: () => true });
+  vm.runInContext(helperSrc + '\n' + boxSrc + '\nthis.__api = { simpleThinkPaint, simpleFirstReply, simpleConsultNote, simpleThinkClear };', ctx);
+  const api = ctx.__api;
+  const box = () => room.kids.find((k) => k.className === 'simple-think') || null;
+  const body = () => (box() ? box().parts['.st-body'].textContent : null);
+  const consult = () => (box() ? box().parts['.st-consult'].textContent : null);
+  return { api, room, host, box, body, consult };
+}
+const startEvt = (id, name) => ({ type: 'worker_started', worker_id: id, agent_type: 'agent-' + name, description: 'Worker: Agent ' + name });
+
+test('the Thinking box: reasoning shows before the first reply text, never again for that reply', () => {
+  const w = boxWorld();
+  w.api.simpleThinkPaint('msg-1', { live: true, text: 'one\ntwo' });
+  assert.strictEqual(w.body(), 'one\ntwo');
+  w.api.simpleFirstReply('c1', 'msg-1');
+  assert.strictEqual(w.box(), null, 'gone at the first reply text');
+  w.api.simpleThinkPaint('msg-1', { live: true, text: 'late reasoning' });
+  assert.strictEqual(w.box(), null, 'reasoning of that reply never shows again');
+  w.api.simpleConsultNote('c1', startEvt('w1', 'Health Helper'));
+  assert.strictEqual(w.box() !== null, true, 'a consult that starts after the reply text shows the box');
+  assert.strictEqual(w.body(), '', 'with the consult line only');
+  assert.strictEqual(w.consult(), 'Asking Health Helper…');
+});
+
+test('the Thinking box: consults are a map by worker_id; a completed one does not clear another', () => {
+  const w = boxWorld();
+  w.api.simpleConsultNote('c1', startEvt('w1', 'Health Helper'));
+  w.api.simpleConsultNote('c1', startEvt('w2', 'Travel Helper'));
+  assert.strictEqual(w.consult(), 'Asking Travel Helper… and 1 more');   // the most recent, one line
+  w.api.simpleConsultNote('c1', { type: 'worker_completed', worker_id: 'w2' });
+  assert.strictEqual(w.consult(), 'Asking Health Helper…', 'the other consult still runs');
+  w.api.simpleConsultNote('c1', { type: 'worker_completed', worker_id: 'nobody' });
+  assert.strictEqual(w.consult(), 'Asking Health Helper…', 'an unknown id changes nothing');
+  w.api.simpleThinkPaint('msg-1', { live: true, text: 'thinking about it' });
+  assert.strictEqual(w.body(), 'thinking about it');
+  assert.strictEqual(w.consult(), 'Asking Health Helper…');
+  w.api.simpleConsultNote('c1', { type: 'worker_failed', worker_id: 'w1' });
+  assert.strictEqual(w.consult(), '');
+  assert.strictEqual(w.box() !== null, true, 'reasoning lines keep it up');
+  w.api.simpleFirstReply('c1', 'msg-1');
+  assert.strictEqual(w.box(), null, 'no reasoning and no consult: gone');
+});
+
+test('the Thinking box: turn end, error and stop clear everything (consults too)', () => {
+  const w = boxWorld();
+  w.api.simpleThinkPaint('msg-1', { live: true, text: 'a' });
+  w.api.simpleConsultNote('c1', startEvt('w1', 'Health Helper'));
+  w.api.simpleThinkClear('c1');
+  assert.strictEqual(w.box(), null);
+  w.api.simpleThinkPaint('msg-1', { live: false, text: 'history' });
+  assert.strictEqual(w.box(), null, 'a history reload never shows reasoning');
+  w.api.simpleConsultNote('c1', { type: 'worker_completed', worker_id: 'w1' });
+  assert.strictEqual(w.box(), null, 'a late completion does not bring anything back');
 });
 
 // ── hub-started turns in Simple; the reasoning level refreshes at the moments that matter ──
