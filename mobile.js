@@ -2239,6 +2239,7 @@ function activeJobsRelabel() {
 document.addEventListener('visibilitychange', activeJobsSync);
 
 function renderAgents() {
+  if (typeof simpleSidePaint === 'function') simpleSidePaint();   // Simple, wide screen: the sidebar's agent list follows
   const list = $('agents-list');
   // While a finger is on the list (switch on), no redraw from any source (status events, the linger ticker): it would
   // replace the touched row before its click. The redraw happens after release (activeRelease).
@@ -14303,6 +14304,7 @@ function simpleTopPaint() {
   if (nm) nm.textContent = a ? (a.display || a.name) : 'Choose';
   $('simple-avatar').textContent = simpleInitial(hubMe);
   simpleToggleSync();
+  simpleSidePaint();
 }
 function simpleDialog(id) {
   let d = $(id);
@@ -14338,36 +14340,48 @@ function simpleDotClass(name) {
   const s = live[name];
   return s && s.pendingQuestion ? 'question' : isBusy(name) ? 'busy' : '';
 }
-function simpleAgentsFill(d) {
-  const list = d.querySelector('.sa-list');
+// One agent row, shared by the sheet and the wide sidebar: icon, name, (blurb and tick in the sheet), the busy/question dot.
+// opts.blurb adds the agent's blurb and the tick; opts.onPick runs on a tap (the chat opens after it).
+function simpleAgentRow(a, opts) {
+  opts = opts || {};
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'sa-row'; if (a.name === current) b.classList.add('sel');
+  b.dataset.agent = a.name;
+  b.innerHTML = '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span><span class="sa-tick"></span><span class="sa-dot"></span>';
+  b.querySelector('.sa-ic').textContent = a.icon || '🤖';
+  b.querySelector('b').textContent = a.display || a.name;
+  b.querySelector('small').textContent = opts.blurb ? (a.blurb || '') : '';
+  b.querySelector('.sa-tick').textContent = opts.blurb && a.name === current ? '✓' : '';
+  b.querySelector('.sa-dot').className = 'sa-dot ' + simpleDotClass(a.name);
+  b.addEventListener('click', () => { if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
+  return b;
+}
+// Fill a container with the agent rows from the one model: Primary first, the "More agents" row, then the open groups.
+function simpleAgentListFill(list, opts) {
   list.textContent = '';
   if (!agents.length) { list.textContent = 'No agents yet.'; return; }
   const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy);
-  const row = (a) => {
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'sa-row'; if (a.name === current) b.classList.add('sel');
-    b.dataset.agent = a.name;
-    b.innerHTML = '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span><span class="sa-tick"></span><span class="sa-dot"></span>';
-    b.querySelector('.sa-ic').textContent = a.icon || '🤖';
-    b.querySelector('b').textContent = a.display || a.name;
-    b.querySelector('small').textContent = a.blurb || '';
-    b.querySelector('.sa-tick').textContent = a.name === current ? '✓' : '';
-    b.querySelector('.sa-dot').className = 'sa-dot ' + simpleDotClass(a.name);
-    b.addEventListener('click', () => { d.close(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
-    return b;
-  };
-  for (const a of m.primary) list.appendChild(row(a));
+  for (const a of m.primary) list.appendChild(simpleAgentRow(a, opts));
   if (m.hasMore) {
     const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.setAttribute('aria-expanded', String(m.open));
     mb.innerHTML = '<span class="sa-txt"><b>More agents</b></span><span class="sa-chev" aria-hidden="true"></span><span class="sa-dot"></span>';
     mb.querySelector('.sa-chev').textContent = m.open ? '⌃' : '⌄';
     mb.querySelector('.sa-dot').className = 'sa-dot ' + (m.hiddenBusy ? 'busy' : '');
-    mb.addEventListener('click', () => { simpleMoreSet(!m.open); simpleAgentsFill(d); });
+    mb.addEventListener('click', () => { simpleMoreSet(!m.open); simpleAgentListsRepaint(); });
     list.appendChild(mb);
   }
   for (const grp of m.groups) {
     const h = document.createElement('div'); h.className = 'sa-head'; h.textContent = grp.label; list.appendChild(h);
-    for (const a of grp.items) list.appendChild(row(a));
+    for (const a of grp.items) list.appendChild(simpleAgentRow(a, opts));
   }
+}
+// "More agents" toggled (or the list changed): repaint the open sheet and the sidebar.
+function simpleAgentListsRepaint() {
+  const d = document.getElementById('simple-agents-sheet');
+  if (d && d.open) simpleAgentsFill(d);
+  if (typeof simpleSidePaint === 'function') simpleSidePaint();
+}
+function simpleAgentsFill(d) {
+  simpleAgentListFill(d.querySelector('.sa-list'), { blurb: true, onPick: () => d.close() });
 }
 function simpleAgentsOpen() {
   if (!simpleOn()) return;
@@ -14377,14 +14391,48 @@ function simpleAgentsOpen() {
   simpleAgentsFill(d);
   if (!d.open) d.showModal();
 }
-// Live status changed: repaint the open sheet's dots in place (no rebuild, so a tap in progress is not lost).
+// Live status changed: repaint the dots in place (no rebuild, so a tap in progress is not lost): the open sheet and the sidebar.
+function simpleDotsIn(box) {
+  box.querySelectorAll('.sa-row[data-agent]').forEach((b) => { const dot = b.querySelector('.sa-dot'); if (dot) dot.className = 'sa-dot ' + simpleDotClass(b.dataset.agent); });
+  const mb = box.querySelector('.sa-more .sa-dot');
+  if (mb) mb.className = 'sa-dot ' + (simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy).hiddenBusy ? 'busy' : '');
+}
 function simpleAgentsDots() {
   if (!simpleOn()) return;
   const d = document.getElementById('simple-agents-sheet');
-  if (!d || !d.open) return;
-  d.querySelectorAll('.sa-row[data-agent]').forEach((b) => { const dot = b.querySelector('.sa-dot'); if (dot) dot.className = 'sa-dot ' + simpleDotClass(b.dataset.agent); });
-  const mb = d.querySelector('.sa-more .sa-dot');
-  if (mb) mb.className = 'sa-dot ' + (simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy).hiddenBusy ? 'busy' : '');
+  if (d && d.open) simpleDotsIn(d);
+  const s = document.getElementById('simple-side');
+  if (s) simpleDotsIn(s);
+}
+// The wide-screen sidebar (phone page, 700px and up; hidden by CSS below that): brand, "Chats", the agent rows, the person at the bottom.
+function simpleSideEnsure() {
+  let s = $('simple-side');
+  if (s) return s;
+  s = document.createElement('nav');
+  s.id = 'simple-side'; s.setAttribute('aria-label', 'Chats');
+  s.innerHTML = '<div class="ssd-brand">My Maestro AI</div><div class="ssd-lab">Chats</div><div class="ssd-list sa-list"></div>' +
+    '<button type="button" class="ssd-me" aria-label="Settings" aria-haspopup="dialog"><span class="st-avatar ssd-av"></span><span class="ssd-name"></span></button>';
+  document.body.insertBefore(s, document.body.firstChild);
+  s.querySelector('.ssd-me').addEventListener('click', simpleSettingsOpen);
+  return s;
+}
+function simpleSidePaint() {
+  if (!simpleOn()) return;
+  const s = simpleSideEnsure();
+  simpleAgentListFill(s.querySelector('.ssd-list'), {});
+  s.querySelector('.ssd-av').textContent = simpleInitial(hubMe);
+  s.querySelector('.ssd-name').textContent = (hubMe && hubMe.user && (hubMe.user.name || hubMe.user.login)) || '';
+}
+// Folding or rotating to a wide screen: the narrow layout's agent sheet is not needed there.
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+  const wide = window.matchMedia('(min-width: 700px)');
+  const wideChange = () => {
+    if (!wide.matches) return;
+    const d = document.getElementById('simple-agents-sheet');
+    if (d && d.open) d.close();
+  };
+  if (typeof wide.addEventListener === 'function') wide.addEventListener('change', wideChange);
+  else if (typeof wide.addListener === 'function') wide.addListener(wideChange);
 }
 // The Simple view switch (Advanced top bars and Simple's top bar) and Simple's theme button: only for a real account.
 function simpleToggleSync() {
