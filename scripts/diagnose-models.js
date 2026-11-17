@@ -125,7 +125,7 @@ const head = (m) => console.log(`\n\x1b[1m${m}\x1b[0m`);
     const sdk = await loadSdk();
     q = sdk.query({
       prompt: (async function* () { await new Promise(r => setTimeout(r, 30000)); })(),
-      options: { maxTurns: 1, permissionMode: 'acceptEdits', tools: [] },
+      options: require('../lib/client-isolation').mergeInto({ maxTurns: 1, permissionMode: 'acceptEdits', tools: [] }, require('../lib/client-isolation').isolationFor({ internal: true })),
     });
     const models = await q.supportedModels();
     ok(`${models.length} aliases`);

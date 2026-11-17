@@ -64,8 +64,10 @@ test('Claude client path: tools=hub disallows the client built-ins, allows only 
   assert.match(sdk, /if \(hubHands && !sandboxWithheld\) \{\s*\n\s*queryOptions\.mcpServers\.hub = buildHandsMcpServer\(sdk, hands\.tools, \{ blocked: blockedTools, signal: abortController\.signal \}\);/);
   assert.match(sdk, /append: agentContext \+ workerPolicyText \+ jobsPolicyText \+ visualsText \+ handsNote \+ `/);
   assert.match(sdk, /## YOUR HANDS\nYour shell, file and web tools are the hub's/);
-  // with tools=hub a sandboxed agent's client is NOT launched through the wrapper: prepare() only runs on the client path
-  assert.match(sdk, /if \(hubHands\) \{\s*\n\s*sandboxWithheld = hands\.withheld;[\s\S]*?\} else \{\s*\n\s*sandboxOpts = await sb\.prepare\(recSb\)/);
+  // Security R2: the client never runs in a box, so there is no in-box client branch any more (it used sb.prepare and copied the
+  // sign-in into the container): a sandboxed agent is always the hub-hands branch, withheld when the box cannot be used.
+  assert.match(sdk, /if \(recSb && sb\.isSandboxed\(recSb\)\) \{\s*\n\s*sandboxWithheld = hands\.withheld;/);
+  assert.ok(!/sb\.prepare\(/.test(sdk) && !sdk.includes('sandboxOpts'), 'no in-box client path');
 });
 
 test('Codex path: tools=hub appends the hands to the bridge list, confines its own shell to read-only, and says so', () => {

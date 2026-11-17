@@ -3638,6 +3638,18 @@ server.listen(PORT, HOST, () => {
   // A deleted agent whose things were not all moved into its bundle (a stop part-way, Docker not answering) is finished
   // now (lib/agent-archive); after the scheduler, so the tasks that would wake it can leave the list too.
   require('./lib/agents').finishArchivingAgents().catch((e) => console.error('[agents] unfinished removals:', e.message));
+  // The owner's Claude sign-in is never copied into an agent's box any more. Earlier versions did: remove the copies they
+  // left in the agents' home volumes (lib/sandbox sweepCredentials), and the old client wrapper scripts in data/sandbox.
+  // Asynchronous and never awaited here: starting the hub does not wait for Docker. Only the agents listed in agents.json.
+  try {
+    const n = require('./lib/sandbox').removeOldWrappers();
+    if (n) console.log(`[sandbox] removed ${n} old client wrapper script(s) from data/sandbox`);
+  } catch (e) { console.warn(`[sandbox] old wrapper scripts not removed: ${e.message}`); }
+  (async () => {
+    const sb = require('./lib/sandbox').getSandbox();
+    if (!(await sb.available())) return;
+    await sb.sweepCredentials(await getAgents());
+  })().catch((e) => console.error('[sandbox] sign-in copy sweep failed:', e.message));
 
   // Messaging channels (Telegram etc): opt out with HUB_COMMS_DISABLED=1.
   if (process.env.HUB_COMMS_DISABLED !== '1') {
