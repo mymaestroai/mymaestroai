@@ -140,7 +140,7 @@ function sandbox(extra = {}) {
     agents: [], ...extra,
   };
   vm.createContext(ctx);
-  vm.runInContext(block + '\nthis.__h = { simpleOn, simpleThinkModel, simpleAutoOf, simpleStartAgent, simpleInitial, simpleChatExtra, simpleEffortOk };', ctx);
+  vm.runInContext(block + '\nthis.__h = { simpleOn, simpleThinkModel, simpleAutoOf, simpleStartAgent, simpleInitial, simpleChatExtra, simpleEffortOk, simpleThinkPaint, simpleThinkEnd, simpleTurnOver, simpleConsultSet, simpleConsultText, simpleEffortLabelOf, simpleAccountOk, simpleMenuHide, simpleCallPaint };', ctx);
   return { ctx, h: ctx.__h, classes, store };
 }
 
@@ -185,7 +185,7 @@ test('simpleChatExtra: effort only in Simple, only for a model where it does som
   ctx.agents = [{ name: 'agent-a', model: 'claude-sdk/x' }, { name: 'agent-b', model: 'local/y' }, { name: 'agent-c', model: 'claude-sdk/x', autoModel: true }];
   global.window = ctx.window;   // lib/ui-simple.js reads the page's localStorage through window, as in the browser
   try {
-    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, { effort: 'medium' });   // the default level
+    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, {});   // never picked: the agent's own setting applies, nothing is sent
     assert.strictEqual(hubSimple.setEffort('agent-a', 'high', ctx.window.localStorage), true);
     assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, { effort: 'high' });
   } finally { delete global.window; }
@@ -246,4 +246,97 @@ test('Simple: #mic-btn always dictates (never starts a call), the call button is
   const css = /<style id="simple-css">([\s\S]*?)<\/style>/.exec(html)[1];
   assert.match(css, /html\.mm-simple #mic-btn\.call \{ display: none; \}/);   // during a call only #simple-call-btn is left
   assert.match(css, /html\.mm-simple #simple-call-btn \{ order: 5; display: grid/);
+});
+
+// ── Thinking box: reasoning before the first reply text; consults by worker id; call button; account gate ──
+function fakeHolder() {
+  const kids = [];
+  const mkBox = () => {
+    const parts = { '.st-lab': {}, '.st-lines': { dataset: {}, hidden: false, textContent: '', appendChild() {} }, '.st-consult': { textContent: '', hidden: true } };
+    const b = { className: '', innerHTML: '', setAttribute() {}, querySelector: (sel) => parts[sel], remove() { const i = kids.indexOf(b); if (i >= 0) kids.splice(i, 1); }, parts };
+    return b;
+  };
+  const el = { isConnected: true, querySelector: () => kids[0] || null, insertBefore: (n) => { kids.unshift(n); }, firstChild: null };
+  const doc = { documentElement: { classList: { contains: () => true } }, getElementById: () => null, createElement: () => (kids.__make = mkBox()) };
+  return { holder: { agent: 'agent-a', bubble: { el } }, kids, doc };
+}
+function thinkWorld() {
+  const f = fakeHolder();
+  const w = sandbox({ current: 'agent-b', scrollChat() {} });
+  w.ctx.document.createElement = f.doc.createElement;
+  const origIns = f.holder.bubble.el.insertBefore;
+  f.holder.bubble.el.insertBefore = (n) => { f.kids.unshift(f.kids.__make); };
+  w.f = f;
+  w.box = () => f.kids[0] || null;
+  return w;
+}
+test('simple think: after the first reply text a consult still shows (alone), reasoning never again', () => {
+  const w = thinkWorld(); const { h, f } = w; const hd = f.holder;
+  hd.rsn = { live: true, text: 'a\nb' };
+  h.simpleThinkPaint(hd);
+  assert.ok(w.box(), 'box while reasoning');
+  h.simpleThinkEnd(hd, true);   // the first reply text
+  assert.strictEqual(w.box(), null);
+  hd.rsn = { live: true, text: 'late' };
+  h.simpleThinkPaint(hd);
+  assert.strictEqual(w.box(), null, 'reasoning never shows again for that reply');
+  h.simpleConsultSet(hd, 'Asking Health Helper…', 'w1');
+  assert.ok(w.box(), 'a consult that starts after intro text shows');
+  assert.strictEqual(w.box().parts['.st-consult'].textContent, 'Asking Health Helper…');
+  assert.strictEqual(w.box().parts['.st-lines'].textContent, '', 'no reasoning lines');
+  h.simpleConsultSet(hd, null, 'w1');
+  assert.strictEqual(w.box(), null, 'consult over, box gone');
+});
+test('simple think: consults are a map by worker id; the turn end clears them', () => {
+  const w = thinkWorld(); const { h, f } = w; const hd = f.holder;
+  h.simpleConsultSet(hd, 'Asking Health Helper…', 'w1');
+  h.simpleConsultSet(hd, 'Asking Travel Helper…', 'w2');
+  assert.strictEqual(h.simpleConsultText(hd), 'Asking Travel Helper… and 1 more');
+  h.simpleConsultSet(hd, null, 'w2');
+  assert.strictEqual(h.simpleConsultText(hd), 'Asking Health Helper…');
+  h.simpleConsultSet(hd, null, 'zzz');
+  assert.strictEqual(h.simpleConsultText(hd), 'Asking Health Helper…');
+  h.simpleTurnOver(hd);
+  assert.strictEqual(w.box(), null);
+  assert.strictEqual(h.simpleConsultText(hd), '');
+  h.simpleConsultSet(hd, 'Asking X…', 'w9');
+  assert.strictEqual(w.box(), null, 'nothing comes back after the turn');
+});
+test('simple think: wiring - turn end also calls simpleTurnOver', () => {
+  assert.match(js, /simpleThinkEnd\(holder, true\);   \/\/ Simple: the turn is over, no Thinking box\n  if \(typeof simpleTurnOver === 'function'\) simpleTurnOver\(holder\);/);
+});
+test('effort: label is the pick, else the agent\'s own effort; nothing sent until picked', () => {
+  const { ctx, h } = sandbox();
+  ctx.agents = [{ name: 'agent-a', model: 'claude-sdk/x', effort: 'xhigh' }, { name: 'agent-b', model: 'claude-sdk/x' }];
+  global.window = ctx.window;
+  try {
+    assert.strictEqual(h.simpleEffortLabelOf(ctx.agents[0]), 'Thorough');
+    assert.strictEqual(h.simpleEffortLabelOf(ctx.agents[1]), 'Balanced');
+    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, {});
+    hubSimple.setEffort('agent-a', 'low', ctx.window.localStorage);
+    assert.strictEqual(h.simpleEffortLabelOf(ctx.agents[0]), 'Quick');
+    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, { effort: 'low' });
+  } finally { delete global.window; }
+});
+test('Switch to Simple is hidden without a real account', () => {
+  const ms = { hidden: false };
+  const w = sandbox({ hubMe: { user: { id: 'legacy' } } });
+  w.ctx.document.getElementById = (id) => (id === 'menu-simple' ? ms : null);
+  assert.strictEqual(w.h.simpleAccountOk({ user: { id: 'u1' } }), true);
+  assert.strictEqual(w.h.simpleAccountOk({ user: { id: 'legacy' } }), false);
+  assert.strictEqual(w.h.simpleAccountOk({}), false);
+  w.h.simpleMenuHide(); assert.strictEqual(ms.hidden, true);
+  assert.match(js, /simpleMenuHide\(\);   \/\/ "Switch to Simple" only for a real account/);
+});
+test('call and effort buttons use onComposerTap; the call button has an in-call state', () => {
+  assert.match(js, /onComposerTap\(eb, \(\) => simpleEffortSheet\(sheet\.hidden\)\)/);
+  assert.match(js, /onComposerTap\(cb, \(\) => \{ if \(typeof voiceCall/);
+  assert.ok(!/eb\.addEventListener\('click'/.test(block) && !/cb\.addEventListener\('click'/.test(block));
+  const cl = new Set(); const cb = { classList: { toggle: (c, on) => (on ? cl.add(c) : cl.delete(c)) }, setAttribute() {}, title: '' };
+  const w = sandbox({ voiceCall: null });
+  w.ctx.document.getElementById = (id) => (id === 'simple-call-btn' ? cb : null);
+  w.h.simpleCallPaint(); assert.ok(!cl.has('in-call'));
+  vm.runInContext('voiceCall = {};', w.ctx); w.h.simpleCallPaint(); assert.ok(cl.has('in-call'));
+  const css = /<style id="simple-css">([\s\S]*?)<\/style>/.exec(html)[1];
+  assert.match(css, /html\.mm-simple #simple-call-btn\.in-call \{/);
 });

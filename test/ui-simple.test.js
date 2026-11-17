@@ -187,6 +187,22 @@ test('STARTERS', () => {
   assert.deepStrictEqual(S.STARTERS, ['What can you help me with?', 'Help me plan my day', 'Explain something in plain words']);
 });
 
+test('pickedEffort: the stored level, or null when never picked', () => {
+  const mem = new Map();
+  const st = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, v) };
+  assert.strictEqual(S.pickedEffort('agent-a', st), null);
+  assert.strictEqual(S.effortFor('agent-a', st), 'medium');   // effortFor keeps its default
+  S.setEffort('agent-a', 'high', st);
+  assert.strictEqual(S.pickedEffort('agent-a', st), 'high');
+  mem.set('hub-simple-effort:agent-b', 'bogus');
+  assert.strictEqual(S.pickedEffort('agent-b', st), null);
+  assert.strictEqual(S.pickedEffort('agent-a', { getItem() { throw new Error('no'); } }), null);
+});
+
+test('labelForAgentEffort: the agent\'s own effort in plain words', () => {
+  for (const [e, l] of [['low', 'Quick'], ['medium', 'Balanced'], ['default', 'Balanced'], [undefined, 'Balanced'], ['', 'Balanced'], ['high', 'Thorough'], ['xhigh', 'Thorough'], ['max', 'Deepest'], ['weird', 'Balanced']]) assert.strictEqual(S.labelForAgentEffort(e), l, String(e));
+});
+
 test('/ui-simple.js is served by lib/static-files from lib/ui-simple.js', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-simple-static-'));
   fs.mkdirSync(path.join(root, 'lib'));

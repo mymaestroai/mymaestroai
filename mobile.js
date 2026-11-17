@@ -7400,6 +7400,7 @@ function paintFeedRow(feed, it, list = null) {
 // its workers then keep running here until the hub's record says how they ended.
 function feedEnd(holder, how = 'sure') {
   if (typeof simpleThinkEnd === 'function') simpleThinkEnd(holder, true);   // Simple: the turn is over, no Thinking box
+  if (typeof simpleTurnOver === 'function') simpleTurnOver(holder);   // Simple: ...and no consult line either
   const feed = holder && holder.feed;
   if (holder && holder.bubble) attachFileCards(holder.bubble.el, holder.bubble.body);   // the reply is final: download cards
   if (!feed) return;
@@ -12809,6 +12810,7 @@ async function loadMe() {
     if (r.ok) {
       hubMe = await r.json();
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
+      if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
       if (hubMe && hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, { credentials: 'include', ...i }), { userId: hubMe.user.id }); } catch { /* the call code is not up yet */ } }, 0);
     }
@@ -14122,7 +14124,7 @@ function simpleChatExtra(agent) {
   if (!simpleOn()) return {};
   const a = agentByName(agent);
   if (!simpleEffortOk(a)) return {};
-  const level = window.hubSimple.effortFor(agent);
+  const level = window.hubSimple.pickedEffort ? window.hubSimple.pickedEffort(agent) : null;   // never picked: the agent's own setting applies
   return level ? { effort: level } : {};
 }
 // A mode switch reloads the page (a plain function: the page's own reload sites are counted by a test).
@@ -14138,7 +14140,10 @@ function simpleThinkPaint(holder) {
   const el = holder.bubble && holder.bubble.el;
   if (!el || !el.isConnected) return;
   const r = holder.rsn;
-  const show = !!(holder.simpleWaiting || holder.simpleConsult || (r && r.live));
+  const consult = simpleConsultText(holder);
+  // Reasoning shows only before the first reply text (holder.simpleReplied); a running consult keeps the box up after it, alone.
+  const reasoning = !holder.simpleReplied && !!(holder.simpleWaiting || (r && r.live));
+  const show = reasoning || !!consult;
   let box = el.querySelector(':scope > .simple-think');
   if (!show) { if (box) box.remove(); return; }
   if (!box) {
@@ -14148,7 +14153,7 @@ function simpleThinkPaint(holder) {
     box.innerHTML = '<div class="st-lab"><span class="st-dot"></span>Thinking…</div><div class="st-lines"></div><div class="st-consult" hidden></div>';
     el.insertBefore(box, el.firstChild);
   }
-  const m = simpleThinkModel(r ? r.text : '', holder.simpleConsult);
+  const m = simpleThinkModel(r && reasoning ? r.text : '', consult);
   const ln = box.querySelector('.st-lines');
   const sig = m.lines.join('\n');
   if (ln.dataset.sig !== sig) {
@@ -14171,15 +14176,32 @@ function simpleThinkStart(rec) {
 function simpleThinkEnd(holder, final) {
   if (!holder || !simpleOn() || holder.simpleThinkDone) return;
   holder.simpleWaiting = false;
-  if (final) { holder.simpleThinkDone = true; holder.simpleConsult = null; }
+  if (final) holder.simpleReplied = true;   // the first reply text: no reasoning lines again for this reply; a consult line may stay
   const el = holder.bubble && holder.bubble.el;
   const box = el && el.querySelector ? el.querySelector(':scope > .simple-think') : null;
-  if (box && (final || !holder.simpleConsult)) box.remove();
+  if (box && !simpleConsultText(holder)) box.remove();
+  else if (box && final) simpleThinkPaint(holder);   // only the consult line is left
+}
+// The turn is over (or errored or stopped): everything goes, the consults too.
+function simpleTurnOver(holder) {
+  if (!holder || !simpleOn()) return;
+  holder.simpleWaiting = false; holder.simpleReplied = true; holder.simpleThinkDone = true; holder.simpleConsults = null;
+  const el = holder.bubble && holder.bubble.el;
+  const box = el && el.querySelector ? el.querySelector(':scope > .simple-think') : null;
+  if (box) box.remove();
+}
+// The active consults of a reply, by worker id: the line shown is the most recent one ("… and N more" when several run).
+function simpleConsultText(holder) {
+  const m = holder && holder.simpleConsults;
+  if (!m || !m.size) return '';
+  const lines = [...m.values()];
+  return lines.length > 1 ? lines[lines.length - 1] + ' and ' + (lines.length - 1) + ' more' : lines[0];
 }
 function simpleConsultSet(holder, line, id) {
-  if (!holder) return;
-  if (line) { holder.simpleConsult = line; holder.simpleConsultId = String(id); }
-  else if (holder.simpleConsult && String(holder.simpleConsultId) === String(id)) holder.simpleConsult = null;
+  if (!holder || holder.simpleThinkDone) return;
+  const key = String(id);
+  if (line) { if (!holder.simpleConsults) holder.simpleConsults = new Map(); holder.simpleConsults.delete(key); holder.simpleConsults.set(key, line); }
+  else if (holder.simpleConsults && holder.simpleConsults.delete(key)) { /* that consult is over */ }
   else return;
   simpleThinkPaint(holder);
 }
@@ -14330,8 +14352,8 @@ function simpleComposerEnsure() {
   const sheet = document.createElement('div');
   sheet.id = 'simple-effort-sheet'; sheet.setAttribute('role', 'menu'); sheet.setAttribute('aria-label', 'Reasoning level'); sheet.hidden = true;
   $('composer').appendChild(sheet);
-  eb.addEventListener('click', () => simpleEffortSheet(sheet.hidden));
-  cb.addEventListener('click', () => { if (typeof voiceCall !== 'undefined' && voiceCall) voiceCallHangUp(); else voiceCallStart(); });
+  onComposerTap(eb, () => simpleEffortSheet(sheet.hidden));   // acts on the touch like the other composer buttons (the keyboard stays)
+  onComposerTap(cb, () => { if (typeof voiceCall !== 'undefined' && voiceCall) voiceCallHangUp(); else voiceCallStart(); simpleCallPaint(); });
   sheet.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-level]'); if (!b || !current) return;
     window.hubSimple.setEffort(current, b.dataset.level);
@@ -14342,7 +14364,8 @@ function simpleComposerEnsure() {
 function simpleEffortSheet(open) {
   const sheet = $('simple-effort-sheet'); const eb = $('simple-effort-btn'); if (!sheet || !eb) return;
   if (open) {
-    const cur = window.hubSimple.effortFor(current);
+    const label = simpleEffortLabelOf(agentByName(current));
+    const cur = (window.hubSimple.EFFORTS.find(x => x.label === label) || {}).level;   // never picked: the agent's own level is the ticked one
     sheet.innerHTML = '';
     for (const e of window.hubSimple.EFFORTS) {
       const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitemradio'); b.dataset.level = e.level;
@@ -14362,7 +14385,21 @@ function simpleEffortPaint() {
   const ok = simpleEffortOk(a);
   eb.hidden = !ok;
   if (!ok) { simpleEffortSheet(false); return; }
-  eb.querySelector('.lvl-label').textContent = window.hubSimple.labelFor(window.hubSimple.effortFor(a.name));
+  eb.querySelector('.lvl-label').textContent = simpleEffortLabelOf(a);
+}
+// The button's name for the level: the person's pick, else the agent's own effort in plain words (nothing is sent until they pick).
+function simpleEffortLabelOf(a) {
+  const H = window.hubSimple;
+  const lv = a && H.pickedEffort ? H.pickedEffort(a.name) : null;
+  return lv ? H.labelFor(lv) : H.labelForAgentEffort ? H.labelForAgentEffort(a && a.effort) : 'Balanced';
+}
+// #simple-call-btn shows a call that is up (class in-call), the way the page knows it: voiceCall is set.
+function simpleCallPaint() {
+  const cb = document.getElementById('simple-call-btn'); if (!cb) return;
+  const up = typeof voiceCall !== 'undefined' && !!voiceCall;
+  cb.classList.toggle('in-call', up);
+  cb.setAttribute('aria-pressed', String(up));
+  cb.setAttribute('aria-label', up ? 'Hang up' : 'Voice call'); cb.title = up ? 'End the voice call' : 'Start a voice call';
 }
 function simpleRoute(route) {
   if (!simpleOn() || !route) return;
@@ -14395,12 +14432,16 @@ if (typeof voicePrefsNow === 'function' && typeof voiceMicTap === 'function' && 
   voiceMicPaint = function () {
     if (!simpleOn()) return paintWas.apply(this, arguments);
     simpleDictating = true;
-    try { return paintWas.apply(this, arguments); } finally { simpleDictating = false; }
+    try { return paintWas.apply(this, arguments); } finally { simpleDictating = false; simpleCallPaint(); }
   };
 }
+// A real account is needed to save the choice: not the legacy single-password login ({id:'legacy'}) nor accounts off (no user).
+function simpleAccountOk(me) { return !!(me && me.user && me.user.id && String(me.user.id) !== 'legacy'); }
+function simpleMenuHide(ms) { ms = ms || document.getElementById('menu-simple'); if (ms) ms.hidden = !simpleAccountOk(hubMe); }
 // Advanced: the ⋮ menu's "Switch to Simple".
 {
   const ms = document.getElementById('menu-simple');
+  if (ms) simpleMenuHide(ms);   // a single-password install has no account to save the choice on: the item stays hidden
   if (ms) ms.addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'simple' })) simpleReload(); else toast('Could not switch'); });
 }
 // ── end Simple mode: phone ──
