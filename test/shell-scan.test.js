@@ -196,7 +196,10 @@ test('problems: unterminated quotes and expansions, missing words, arithmetic ac
 });
 
 test('well-formed constructs are ok', () => {
-  for (const good of ['echo "a $(ls) `pwd` ${x:-y} $((1+2))"', 'echo $(case x in a) ls;; esac)', 'echo $(a $(b $(c)))', 'cat <<EOF\n$(date)\nEOF', 'ls\\\n -l']) {
+  // A case inside $( ) is not among them any more: its pattern ) can't be told from the closing one without a full
+  // parser, so it fails closed (review r3).
+  assert.strictEqual(ok('echo $(case x in a) ls;; esac)'), false);
+  for (const good of ['echo "a $(ls) `pwd` ${x:-y} $((1+2))"', 'echo $(a $(b $(c)))', 'cat <<EOF\n$(date)\nEOF', 'ls\\\n -l']) {
     assert.strictEqual(ok(good), true, good);
   }
 });
@@ -488,7 +491,8 @@ test('review r2 5d: literal assignments are put into later command words', () =>
   assert.ok(x('c=rm && $c -rf /tmp/x').includes('rm -rf /tmp/x'));
   assert.ok(x('echo $(c=rm; $c -rf /tmp/x)').includes('rm -rf /tmp/x'));
   assert.ok(x('c=ls; c=rm; $c -rf /tmp/x').includes('rm -rf /tmp/x'), 'the last assignment wins');
-  assert.ok(!x('c=rm; c=ls; $c -rf /tmp/x').includes('rm -rf /tmp/x'));
+  // Every literal value is tried (a branch, subshell or pipeline may skip an assignment), not only the last one.
+  assert.ok(x('c=rm; c=ls; $c -rf /tmp/x').includes('rm -rf /tmp/x'));
   assert.ok(x('s=sudo; $s ls /root').includes('sudo ls /root'));
   assert.ok(x('s=sudo; c=rm; $s $c -rf /tmp/x').includes('sudo rm -rf /tmp/x'));
   assert.ok(x("c='rm -rf'; $c /tmp/x").includes('rm -rf /tmp/x'), 'an unquoted expansion is split into words');
@@ -497,7 +501,8 @@ test('review r2 5d: literal assignments are put into later command words', () =>
   // not substituted: a value with an expansion, an argument word, another command (c=rm $c is one command)
   assert.ok(!x('c=$(echo rm); $c -rf /tmp/x').includes('rm -rf /tmp/x'));
   assert.deepStrictEqual(x('c=rm; echo $c'), ['c=rm', 'echo $c']);
-  assert.deepStrictEqual(x('c=rm $c -rf /tmp/x'), ['c=rm $c -rf /tmp/x']);
+  // A prefix assignment does not reach its own command's words in bash; trying its value anyway only reads stricter (review r3).
+  assert.strictEqual(x('c=rm $c -rf /tmp/x')[0], 'c=rm $c -rf /tmp/x');
   assert.deepStrictEqual(x('echo hi; $c -rf'), ['echo hi', '$c -rf']);
 });
 
@@ -535,4 +540,144 @@ test('review r2: hostile new constructs stay linear and do not throw', () => {
     assert.doesNotThrow(() => scanCommand(bad));
   }
   assert.ok(Date.now() - t0 < 10000, `${Date.now() - t0} ms`);
+});
+
+// ── review r3 ────────────────────────────────────────────────────────
+const { computedProgram, codeStrings, assignmentSegments } = require('../lib/shell-scan');
+const computedIn = (text) => { const r = scanCommand(text); return r.segments.some(s => computedProgram(s, r.assigned)); };
+
+test('review r3 1: brace sequences past the safe integers do not hang', () => {
+  for (const w of ['{9007199254740992..9007199254740992}', '{1..9007199254740993}', '{9007199254740991..9007199254740995}', '{1..5..9007199254740993}', '{1..' + '9'.repeat(40) + '}']) {
+    const t0 = Date.now();
+    assert.strictEqual(braceExpandRaw(w), null, w);
+    assert.ok(computedIn(w + ' x'), `${w}: computed`);
+    assert.ok(Date.now() - t0 < 1000, `${w}: ${Date.now() - t0} ms`);
+  }
+  assert.deepStrictEqual(braceExpandRaw('{1..3}'), ['1', '2', '3']);
+  assert.strictEqual(braceExpandRaw('{1..65}'), null, 'past 64 results');
+  assert.strictEqual(braceExpandRaw('{1..64}').length, 64);
+});
+
+test('review r3 2a: esac ends a case whatever the command position, and an open case is a problem at the top too', () => {
+  assert.ok(segs('(case x in esac; rm -rf ~/projects)').includes('rm -rf ~/projects'));
+  assert.ok(segs('case x in esac; rm -rf ~/projects').includes('rm -rf ~/projects'));
+  assert.ok(segs('case x in a) :;; esac; rm -rf ~/projects').includes('rm -rf ~/projects'));
+  assert.deepStrictEqual(segs('case x in a) b;; c) d;; esac'), ['case x in', 'b', 'd', 'esac']);
+  assert.strictEqual(ok('case x in a) :;;'), false);
+  assert.strictEqual(ok('case x in'), false);
+  assert.strictEqual(ok('case "$1" in a) ls;; esac'), true);
+  assert.strictEqual(ok('case x in a|esac) ls;; esac'), true, 'esac as a later alternative is a pattern');
+});
+
+test('review r3 2b: a case inside a substitution is a problem (the skipping scanners do not know patterns)', () => {
+  for (const t of ['A=$(case x in a) :;; esac) r\'\'m -rf ~/projects', 'echo `case x in a) :;; esac`', 'cat <(case x in a) :;; esac)', 'tee >(case x in a) :;; esac)', 'echo "$(case x in a) :;; esac)"']) {
+    const r = scanCommand(t);
+    assert.strictEqual(r.ok, false, t);
+    assert.ok(r.problems.includes('case inside a substitution'), t + ' ' + JSON.stringify(r.problems));
+  }
+});
+
+test('review r3 3: assigned names, from every kind of assignment, at every level', () => {
+  const names = (t) => [...scanCommand(t).assigned].sort();
+  assert.deepStrictEqual(names('a=1; b+=2 c[3]=4'), ['a', 'b', 'c']);
+  assert.deepStrictEqual(names('echo x y=1'), ['y'], 'a NAME= word in any position');
+  assert.deepStrictEqual(names('declare -r a=1 b; export c=2 d; readonly e=3; local f=4; typeset -i g=5'), ['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+  assert.deepStrictEqual(names('for f in a b; do :; done'), ['f']);
+  assert.deepStrictEqual(names('read -r -p "x" a b; read'), ['REPLY', 'a', 'b']);
+  assert.deepStrictEqual(names('printf -v out "%s" x'), ['out']);
+  assert.deepStrictEqual(names('mapfile -t lines < /tmp/f; readarray -d "" z'), ['lines', 'z']);
+  assert.deepStrictEqual(names('getopts ab opt'), ['OPTARG', 'OPTIND', 'opt']);
+  assert.deepStrictEqual(names('x=$(y=1; echo $y)'), ['x', 'y'], 'inside a substitution');
+  assert.deepStrictEqual(names("bash -c 'q=1'"), ['q'], 'inside a code string');
+  assert.deepStrictEqual(names("bash <<'EOF'\nw=1\nEOF"), ['w'], 'inside a heredoc body run by a shell');
+  assert.deepStrictEqual(names('echo "$HOME"; ls /tmp'), []);
+});
+
+test('review r3 3: a program named by an assigned variable is computed, except one literal assignment used as a whole word', () => {
+  for (const t of ['c=rm; false && c=ls; $c -rf x', 'a=r; ${a}m -rf x', 'a=r; b=m; $a$b -rf x', 'a=r; "${a}"m -rf x', 'c=r; c+=m; $c x', 'declare c=rm; export c=ls; $c x',
+    'readonly c=rm; c=ls; $c x', 'for c in rm ls; do $c x; done', 'read c; $c x', 'printf -v c rm; $c x', 'c=$(echo rm); $c x', 'c=rm; ${c:1} x', 'c=rm; ${c,,} x', 'c=rm; ${c/x/y} x',
+    'c=rm; ${c#x} x', 'c=rm; ${c%x} x', 'c=rm; ${c^} x', 'a=rm; b=a; ${!b} x', 'c=rm; c=echo | true; $c x', 'c=rm; (c=echo); $c x', 'c=rm; x=$(c=echo); $c x',
+    'c=(rm); $c x', 'c[0]=rm; $c x', 'sudo $c x; c=rm; c=ls', 'c=rm; env $c x; c=ls']) {
+    assert.ok(computedIn(t), t);
+  }
+  for (const t of ['declare c=rm; $c x', 'export c=rm; $c x', 'readonly c=rm; $c x', 'PY=python3; "$PY" /tmp/x.py', 'PY=python3; $PY /tmp/x.py', 'PY=python3; ${PY} /tmp/x.py', 'PY=python3; "${PY}" /tmp/x.py', '"$PY" /tmp/x.py', '$X y', 'echo $c; c=rm',
+    'for f in /tmp/*.txt; do wc -l "$f"; done', 'x=$(git rev-parse HEAD); echo $x', 'for i in 1 2 3; do echo $i; done', 'read -r line < /tmp/f; echo "$line"', 'case "$1" in a) ls;; esac']) {
+    assert.strictEqual(computedIn(t), false, t);
+  }
+  // used without the second argument, an assigned name list makes every use computed
+  assert.strictEqual(computedProgram('$c x', ['c']), true);
+  assert.strictEqual(computedProgram('$c x'), false);
+});
+
+test('review r3 3: every literal value of a program variable becomes a segment', () => {
+  const has = (t, s) => assert.ok(segs(t).includes(s), `${t} -> ${s}`);
+  has('c=rm; false && c=ls; $c -rf x', 'rm -rf x');
+  has('c=rm; false && c=ls; $c -rf x', 'ls -rf x');
+  has('a=r; ${a}m -rf x', 'rm -rf x');
+  has('a=r; b=m; $a$b -rf x', 'rm -rf x');
+  has('declare c=rm; $c -rf x', 'rm -rf x');
+  has('export c=rm; $c -rf x', 'rm -rf x');
+  has('readonly c=rm; $c -rf x', 'rm -rf x');
+  has('local c=rm; $c -rf x', 'rm -rf x');
+  has('c=r; c+=m; $c -rf x', 'rm -rf x');
+  has('c=rm; (c=echo); $c -rf x', 'rm -rf x');
+  has('c=rm; (c=echo); $c -rf x', 'echo -rf x');
+  has('PY=python3; "$PY" /tmp/x.py', 'python3 /tmp/x.py');
+  has('c=rm; c=ls; $c -rf x', 'rm -rf x');
+  assert.ok(!segs('c=rm; echo $c').some(s => s === 'rm'), 'only command words');
+  // bounds: 16 values per name, 4096 chars per value, 64 combinations per segment
+  const many = Array.from({ length: 40 }, (_, i) => `c=v${i}`).join('; ');
+  const got = segs(many + '; $c x').filter(s => /^v\d+ x$/.test(s));
+  assert.strictEqual(got.length, 16);
+  assert.strictEqual(segs('c=' + 'a'.repeat(4097) + '; $c x').filter(s => s.endsWith(' x') && s.length > 4000).length, 0);
+  assert.strictEqual(segs('c=' + 'a'.repeat(4096) + '; $c x').filter(s => s.endsWith(' x') && s.length > 4000).length, 1);
+  const two = Array.from({ length: 10 }, (_, i) => `a=x${i}; b=y${i}`).join('; ');
+  assert.ok(segs(two + '; $a$b z').filter(s => /^x\d+y\d+ z$/.test(s)).length <= 64);
+  assert.ok(assignmentSegments(['$c x'], new Map([['c', { n: 1, lits: ['rm'], nonlit: false }]])).includes('rm x'));
+});
+
+test('review r3 4: code strings are read on the segment as bash will run it', () => {
+  assert.ok(segs("b{a..a}sh -c 'r\"\"m -rf ~/projects'").some(s => s.includes('rm -rf ~/projects') || s.includes('r""m -rf ~/projects')));
+  assert.deepStrictEqual(codeStrings("b{a..a}sh -c 'x'"), []);
+  const r = scanCommand("b{a..a}sh -c 'r\"\"m -rf ~/projects'");
+  assert.ok(r.segments.includes('r""m -rf ~/projects'));
+  // dedupe: the same string from both readings is scanned once
+  assert.strictEqual(scanCommand("bash -c 'echo hi'").segments.filter(s => s === 'echo hi').length, 1);
+  assert.strictEqual(scanCommand("ba''sh -c 'echo hi'").segments.filter(s => s === 'echo hi').length, 1);
+});
+
+test('review r3 5: an alias value is a code string', () => {
+  assert.deepStrictEqual(codeStrings("alias z='rm -rf ~/projects'"), ['rm -rf ~/projects']);
+  assert.deepStrictEqual(codeStrings("alias a='ls' b=\"echo hi\""), ['ls', 'echo hi']);
+  assert.deepStrictEqual(codeStrings('alias -p'), []);
+  assert.ok(segs("shopt -s expand_aliases; alias z='rm -rf ~/projects'; z").includes('rm -rf ~/projects'));
+});
+
+test('review r3 6: a here-string to a shell is a code string', () => {
+  assert.deepStrictEqual(codeStrings('bash <<< "r\'\'m -rf ~/projects"'), ["r''m -rf ~/projects"]);
+  assert.deepStrictEqual(codeStrings('sh <<<"rm -rf x"'), ['rm -rf x']);
+  assert.deepStrictEqual(codeStrings("zsh <<<'ls'"), ['ls']);
+  assert.deepStrictEqual(codeStrings('cat <<< "rm -rf x"'), [], 'only a shell runs it');
+  assert.ok(segs("bash <<< \"r''m -rf ~/projects\"").includes("r''m -rf ~/projects"));
+});
+
+test('review r3 8: an arithmetic command is not a computed program', () => {
+  for (const t of ['((n*2))', '((a?b:c))', '(( n * 2 ))', 'echo hi; ((i++))']) assert.strictEqual(computedIn(t), false, t);
+  assert.strictEqual(computedIn('((n*2)); $(echo rm) x'), true);
+  assert.strictEqual(computedIn('((a=$(echo 1)))'), true, 'a substitution still runs');
+});
+
+test('review r3 9: a chain of wrappers is bounded and reported', () => {
+  const problems = [];
+  const chain = 'flock x '.repeat(40) + 'ls';
+  codeStrings(chain, problems);
+  assert.deepStrictEqual(problems, ['too many wrappers']);
+  const few = [];
+  codeStrings('flock x '.repeat(10) + 'ls', few);
+  assert.deepStrictEqual(few, []);
+  const t0 = Date.now();
+  const big = scanCommand('flock x '.repeat(25000));
+  assert.strictEqual(big.ok, false);
+  assert.ok(big.problems.includes('too many wrappers'));
+  assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
 });
