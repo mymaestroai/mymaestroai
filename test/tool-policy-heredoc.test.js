@@ -531,3 +531,29 @@ test('lead, review r3: a one-line command the lexer cannot read is also read as 
   assert.strictEqual(r.uncertain, true);
   assert.strictEqual(r.cls, 'destroy');
 });
+
+test('review r4: the single-literal exemption holds only for a plain command; positional, indirect and shadowed programs', () => {
+  const H = os.homedir() + '/projects';
+  // at least admin (destroy where a value is known)
+  for (const cmd of [
+    `IFS=,; c=rm,-rf,${H}; $c`, `IFS=:; c=rm:-rf:${H}; $c`, `: \${c:=rm}; $c -rf ~/projects`, `c=echo; unset c; : \${c:=rm}; $c -rf ~/projects`,
+    `c=echo; declare -n r=c; r=rm; $c -rf ~/projects`, `c=echo; . /dev/stdin <<<'c=rm'; $c -rf ~/projects`,
+    'set -- rm; $1 -rf ~/projects', 'f(){ $1 -rf ~/projects; }; f rm', 'hash -p /bin/rm x; x -rf ~/projects',
+    "shopt -s expand_aliases; BASH_ALIASES[z]='rm -rf ~/projects'; z", 'ls(){ command rm "$@"; }; ls -rf ~/projects',
+    "eval 'c=rm'; $c -rf ~/projects", "c='/bin/r[m]'; $c -rf ~/projects", 'c=rm; eval "$c -rf ~/projects"', "c=rm; eval '$c -rf ~/projects'",
+    "export c=rm; bash -c '$c -rf ~/projects'", 'c=rm; find ~/projects -exec $c -rf {} +', L('c=rm', 'bash <<EOF', '$c -rf ~/projects', 'EOF'),
+  ]) assert.ok(SEV(c(cmd)) >= SEV('admin'), cmd);
+  isDestroy("eval 'c=rm'; $c -rf ~/projects", 'the value from the code string is tried once it is known');
+  isDestroy('c=rm; eval "$c -rf ~/projects"', 'and inside the code string');
+  isDestroy("shopt -s expand_aliases; BASH_ALIASES[z]='rm -rf ~/projects'; z", 'a BASH_ALIASES value is code');
+  // the plain command keeps its exemption; values as arguments are untouched
+  assert.strictEqual(cr('PY=python3; "$PY" /tmp/x.py'), 'read');
+  assert.strictEqual(cr('D=/tmp/r; ls $D'), 'read');
+  assert.strictEqual(cr('for i in 1 2 3; do echo $i; done'), 'read');
+  assert.strictEqual(cr('while read -r line; do echo "$line"; done < /tmp/f'), 'read');
+  // $c$c$c... is not expanded (memory), it is computed
+  const big = 'c=' + 'x'.repeat(4000) + '; ' + '$c'.repeat(30000);
+  const t = Date.now();
+  assert.ok(SEV(c(big)) >= SEV('admin'));
+  assert.ok(Date.now() - t < 3000, 'bounded');
+});
