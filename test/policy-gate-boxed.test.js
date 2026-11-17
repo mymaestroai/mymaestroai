@@ -243,7 +243,7 @@ test('client reads through a symlink: the real file or folder is judged; a link 
 test('Glob patterns: a ".." anywhere after the literal start, or an absolute or ~ path inside braces, is refused; plain patterns judged by their folder', async () => {
   const lead = { name: 'lead-g', category: 'primary', lead: true };
   const hook = gateFor(lead).sdkHook({ agentName: 'lead-g', cwd: '/opt/fake-install' });
-  for (const pattern of ['{ordinary,../../data}/**/*', '{x,/proc/self/environ}', '{a,~/.ssh}/*', 'docs/{..,x}/y', '*/x/../../z', '{ a, /etc}/*']) {
+  for (const pattern of ['{ordinary,../../data}/**/*', '{x,/proc/self/environ}', '{a,~/.ssh}/*', 'docs/{..,x}/y', '*/x/../../z', '{.,x}./data/*', '@(..|x)/y', '{a,{b,../../data}}/*', 'a/+(..)/b']) {
     const d = await hook(pre('Glob', { pattern, path: '/opt/fake-home/share/lead-g' }));
     assert.strictEqual(d.decision, 'block', `${pattern}: blocked`);
     assert.ok(!d.hookSpecificOutput);
@@ -251,7 +251,7 @@ test('Glob patterns: a ".." anywhere after the literal start, or an absolute or 
   // still allowed: braces and classes that stay inside, a pattern with no wildcard, a leading '..' that lands in an
   // allowed folder, a '~' pattern for the lead
   for (const [pattern, p] of [['{a,b}/*.{md,txt}', '/opt/fake-home/share/lead-g'], ['[ab]*.md', '/opt/fake-home/share/lead-g'],
-    ['/opt/fake-home/share/lead-g/a.md', undefined], ['../fake-home/share/lead-g/*.md', undefined], ['~/projects/*.md', undefined]]) {
+    ['/opt/fake-home/share/lead-g/a.md', undefined], ['../fake-home/share/lead-g/*.md', undefined], ['~/projects/*.md', undefined], ['report..md', '/opt/fake-home/share/lead-g'], ['{1..3}.md', '/opt/fake-home/share/lead-g'], ['notes/v1..2/*.md', '/opt/fake-home/share/lead-g'], ['{ a, /etc}/*', '/opt/fake-home/share/lead-g']]) {
     assert.ok(isAllow(await hook(pre('Glob', p ? { pattern, path: p } : { pattern }))), `${pattern}: allowed`);
   }
   // a leading '..' that lands on a protected folder is judged there
@@ -303,5 +303,40 @@ test('Grep: a worker may not search a folder holding files protected by name or 
     }
     const headOff = gateFor(head).sdkHook({ agentName: 'head-q', cwd: tp.HUB_ROOT });
     assert.deepStrictEqual(await headOff(pre('Grep', { pattern: 'PORT' })), {}, 'admin agent, cards off: as before');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// r2-read-fix2: a worker's Grep of a repository clone must work. A template (.env.example) is not a secret; the wallet
+// code is not a keystore; installed dependencies, version control and tool caches are not scanned (and don't count
+// towards the limit); a real .env or key file in the clone itself is still refused.
+test('Grep of a clone-shaped folder: .env.example, wallet code and a large node_modules are allowed; a real .env or key is refused', async () => {
+  const os = require('os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-clone-'));
+  try {
+    const w = (rel, body = 'x') => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), body); };
+    for (const f of ['.env.example', 'config/app.env.sample', 'keys/signing.key.template', 'lib/wallet/keystore.js', 'test/wallet-keystore.test.js', 'README.md']) w(f);
+    // dependencies and version control: their own test keys and sample .env files, and more entries than the limit
+    for (const f of ['node_modules/pkg-a/test/fixtures/private.key', 'node_modules/pkg-a/.env', '.git/config', 'venv/lib/site/x.pem', '__pycache__/m.pyc']) w(f);
+    const many = path.join(root, 'node_modules', 'big');
+    fs.mkdirSync(many, { recursive: true });
+    for (let i = 0; i < 51000; i++) fs.writeFileSync(path.join(many, `f${i}.js`), '');
+    const worker = { name: 'w-c', category: 'worker', policy: { roots: [root] } };
+    const wh = gateFor(worker).sdkHook({ agentName: 'w-c', cwd: '/opt/fake-install' });
+    assert.ok(isAllow(await wh(pre('Grep', { pattern: 'x', path: root }))), 'a clone with templates, wallet code and dependencies: allowed');
+    assert.ok(isAllow(await wh(pre('Read', { file_path: path.join(root, '.env.example') }))), 'a template can be read');
+    assert.ok(isAllow(await wh(pre('Read', { file_path: path.join(root, 'lib', 'wallet', 'keystore.js') }))), 'the wallet code can be read');
+    for (const real of ['.env', 'config/.env.local', 'deploy/.env.production', 'keys/deploy.pem', 'data/wallet-keystore.json']) {
+      w(real);
+      const d = await wh(pre('Grep', { pattern: 'x', path: root }));
+      assert.strictEqual(d.decision, 'block', `${real} in the clone: refused`);
+      assert.match(d.reason, /protected file/);
+      assert.strictEqual((await wh(pre('Read', { file_path: path.join(root, real) }))).decision, 'block', `${real}: Read refused`);
+      fs.rmSync(path.join(root, real));
+    }
+    // more than the limit outside the skipped folders: still refused, with its own message
+    const lots = path.join(root, 'assets');
+    fs.mkdirSync(lots);
+    for (let i = 0; i < 50001; i++) fs.writeFileSync(path.join(lots, `a${i}`), '');
+    assert.match((await wh(pre('Grep', { pattern: 'x', path: root }))).reason || '', /too large/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
