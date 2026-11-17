@@ -922,6 +922,7 @@ html.mm-simple #simple-effort-btn { order: 2; display: flex; align-items: center
 html.mm-simple #mic-btn { order: 4; min-width: 48px; min-height: 48px; color: var(--text-dim); }
 html.mm-simple #simple-call-btn { order: 5; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: var(--accent); color: #fff; }
 html.mm-simple #composer .row:has(#mic-btn[hidden]) #simple-call-btn { display: none; }
+html.mm-simple #mic-btn.call { display: none; }   /* during a call the red hang-up is #simple-call-btn: one call button */
 html.mm-simple #send-btn { order: 6; min-width: 52px; min-height: 52px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 20px; }
 html.mm-simple #send-btn.stop { background: var(--error); }
 html.mm-simple #send-btn.interject { background: var(--warning); color: #000; }

@@ -144,3 +144,44 @@ test('simpleEffortBody: the chat POST carries the level of that agent', () => {
   assert.deepStrictEqual(JSON.parse(JSON.stringify(sandbox.simpleEffortBody(hs, 'agent-b'))), { effort: 'medium' });
   assert.deepStrictEqual(JSON.parse(JSON.stringify(sandbox.simpleEffortBody(null, 'agent-a'))), {});
 });
+
+// ── hub-started turns in Simple; the reasoning level refreshes at the moments that matter ──
+const bootSrc = (() => {
+  const a = app.indexOf('      // Simple shows hub-started turns as short ordinary messages');
+  const b = app.indexOf('      // Open the first agent so there is always a chat', a);
+  assert.ok(a > 0 && b > a);
+  return app.slice(a, b);
+})();
+function bootRun() {
+  let on = true;
+  const refreshed = [];
+  const ctx = vm.createContext({
+    simpleOn: () => on, simpleLvlRefresh: (id) => refreshed.push(id), chats: { c1: {}, c2: {} },
+    chatViewGet: (st) => (st && st.v === 'all' ? 'all' : 'main'),
+    refreshEffortPick: function () { return 'picked'; }, switchToChat: function () { return 'switched'; }, loadAgents: async function () { return 'loaded'; },
+  });
+  vm.runInContext(bootSrc, ctx);
+  return { ctx, refreshed, off: () => { on = false; } };
+}
+test('Simple reads the chat view as "all" and writes nothing; Advanced keeps the stored choice', () => {
+  const st = { v: 'main', setItem() { throw new Error('written'); } };
+  const { ctx, off } = bootRun();
+  assert.strictEqual(ctx.chatViewGet(st), 'all');
+  off();
+  assert.strictEqual(ctx.chatViewGet(st), 'main');
+  assert.strictEqual(ctx.chatViewGet({ v: 'all' }), 'all');
+});
+test('the reasoning level refreshes on chat open, model pick change and agent list reload, with no poll', async () => {
+  assert.ok(!/setInterval\(\(\) => \{ for \(const id of Object\.keys\(chats\)\) simpleLvlRefresh/.test(app));
+  const { ctx, refreshed } = bootRun();
+  assert.strictEqual(ctx.switchToChat('c1'), 'switched');
+  assert.deepStrictEqual(refreshed, ['c1']);
+  assert.strictEqual(ctx.refreshEffortPick({ id: 'c2' }), 'picked');   // the page calls it after a model change
+  assert.deepStrictEqual(refreshed, ['c1', 'c2']);
+  refreshed.length = 0;
+  assert.strictEqual(await ctx.loadAgents(), 'loaded');
+  assert.deepStrictEqual(refreshed.sort(), ['c1', 'c2']);
+});
+test('the chat-view switch is hidden in Simple', () => {
+  assert.match(cssBlock, /html\.mm-simple \.chat-view-btn/);
+});
