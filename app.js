@@ -1097,10 +1097,12 @@
       if (!document.getElementById('files-panel')) {
         gsModal(`<div id="files-panel" data-no-dirty>
           <div class="files-root" id="files-root"></div>
+          <div class="files-recent" id="files-recent" hidden></div>
           <div class="files-crumbs" id="files-crumbs"></div>
           <div class="files-tools">
             <button class="gs-btn" onclick="document.getElementById('files-upload-input').click()">⬆ Upload</button>
             <button class="gs-btn secondary" onclick="filesNewFolder()">New folder</button>
+            <button class="gs-btn secondary" id="files-zip-btn" onclick="filesZip(filesState.path)" title="Download the folder being shown as one zip file">Download as zip</button>
             <button class="gs-btn secondary" onclick="filesRefresh()">Refresh</button>
             <input type="file" id="files-upload-input" multiple style="display:none" onchange="filesUploadFiles(this.files); this.value = ''">
             <span class="gs-sub" style="margin:0" id="files-limit"></span>
@@ -1134,6 +1136,46 @@
       filesState.root = data.root || null; filesState.entries = data.entries || []; filesState.maxUploadBytes = data.maxUploadBytes || 0;
       filesState.path = data.path || '';
       filesRenderHeader(); filesRenderList();
+      filesLoadRecent();
+    }
+    // "Recent from agents": the newest files agents wrote under this root. Hidden when empty; a failure shows nothing.
+    async function filesLoadRecent() {
+      const box = document.getElementById('files-recent'); if (!box) return;
+      const agentAtStart = filesState.agent;
+      let data = null;
+      try { data = await filesApi(filesUrl('/recent', { limit: 10 })); } catch (e) { data = null; }
+      if (!document.getElementById('files-recent') || filesState.agent !== agentAtStart) return;
+      const files = data && Array.isArray(data.files) ? data.files : [];
+      if (!files.length) { box.hidden = true; box.innerHTML = ''; return; }
+      box.hidden = false;
+      box.innerHTML = '<h4>Recent from agents</h4>' + files.map((f) => {
+        const url = typeof f.download === 'string' && f.download.startsWith('/api/files/') ? f.download : '';
+        const info = [humanSize(f.size), f.folder || '', filesAgo(f.mtime)].filter(Boolean).join(' · ');
+        return `<div class="fr-row"><span class="fr-name" title="${esc(f.path || f.name || '').replace(/"/g, '&quot;')}">${esc(f.name || '')}</span><span class="fr-info">${esc(info)}</span>${url ? `<a class="fr-dl" href="${esc(url).replace(/"/g, '&quot;')}" download="${esc(f.name || 'file').replace(/"/g, '&quot;')}">Download</a>` : ''}</div>`;
+      }).join('');
+    }
+    function filesAgo(t) {
+      const ms = Date.parse(t); if (isNaN(ms)) return '';
+      const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+      if (s < 60) return 'just now';
+      if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+      if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+      return `${Math.floor(s / 86400)} d ago`;
+    }
+    // Download a folder as one zip. The same URL with &check=1 first: the hub refuses a too-big folder in plain words
+    // (413 with a message); only an ok answer starts the real download, a normal browser download (never held in page memory).
+    async function filesZip(rel) {
+      rel = typeof rel === 'string' ? rel : filesState.path;
+      const url = filesUrl('/zip', { path: rel });
+      const folder = (rel ? rel.split('/').pop() : '') || (filesState.root && filesState.root.label) || 'files';
+      filesStatus('Checking the folder…');
+      let data;
+      try { data = await filesApi(url + '&check=1', { credentials: 'same-origin' }); }
+      catch (e) { filesStatus(e.message, 'error'); return; }
+      const a = document.createElement('a');
+      a.href = url; a.download = `${folder}.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      filesStatus(`Downloading ${folder}.zip (${data.files} file${data.files === 1 ? '' : 's'}, ${humanSize(data.bytes)})`, 'ok');
     }
     function filesRenderHeader() {
       const root = filesState.root || {};
@@ -1170,7 +1212,7 @@
           <td class="num">${isDir ? '' : humanSize(e.size)}</td>
           <td class="num">${when(e.mtime)}</td>
           <td><div class="files-acts">
-            ${isDir ? '' : `<button onclick="filesDownload(${i})" title="Download to this computer">Download</button>`}
+            ${isDir ? `<button onclick="filesZip(filesJoin(filesState.path, filesState.entries[${i}].name))" title="Download this folder as one zip file">Download as zip</button>` : `<button onclick="filesDownload(${i})" title="Download to this computer">Download</button>`}
             <button onclick="filesUseInChat(${i})" title="Put the server path of this ${isDir ? 'folder' : 'file'} into the open chat">Use in chat</button>
             <button onclick="filesRename(${i})">Rename</button>
             <button class="danger" onclick="filesDelete(${i})">Delete</button>
@@ -6936,6 +6978,7 @@
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
+              if (msg.role === 'assistant') attachFileCards(document.getElementById(hid));   // a saved reply's download cards
               // An archived entry is text only (the hub saved no tool calls or reasoning for it) and says where it comes from.
               if (msg.archived) {
                 setMessageTime(document.getElementById(hid), times[i] ? `${times[i]} · from the archive` : 'from the archive');
@@ -8534,6 +8577,7 @@
       // is shown below it, so the line comes from the prompt instead.
       if (t.card) t.card.setLine(t.card.moved ? foldPromptLine(ev.message || t.prompt) : autoFirstLine(reply));
       setMessageTime(document.getElementById(t.msgId), msgTimeLine(Date.parse(ev.endedAt) || Date.now(), t.startedAt));
+      attachFileCards(document.getElementById(t.msgId));   // the turn ended: download cards for the files it names
       if (tokenUsageState.has(t.msgId)) finalizeTokenUsage(t.msgId);
       for (const id of t.workers || []) { const w = workerRunOf(id); if (w && w.run.status === 'running') handleWorkerEvent(t.chatId, { type: 'worker_completed', worker_id: id }); }
       const last = chat.messages[chat.messages.length - 1];
@@ -9589,6 +9633,7 @@
       if (existingIdx >= 0) chat.messages.splice(existingIdx, 1);
       if (ok) chat.messages.push({ role: 'assistant', content: text });
       if (ok) setMessageTime(document.getElementById(ra.msgId), msgTimeLine(Date.now(), ra.sentAt || Date.parse(ra.since)));
+      if (ok) attachFileCards(document.getElementById(ra.msgId));   // the turn ended: download cards
       setStatus(chatId, ok ? 'idle' : 'error', ok ? null : 'Reply lost');
       setAgentStatus(chat.agent, '');
       delete chat.lastMsgId;
@@ -9965,6 +10010,7 @@
 
         const { text: fullResponse, images: responseImages, toolActivity, partial, steps: responseSteps } = await streamResponseSolo(response, msgId, chatId, chat.agent);
         if (!partial) setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), chat.sentAtMs));
+        if (!partial) attachFileCards(document.getElementById(msgId));   // the turn ended: download cards
         if (!partial && chat.voiceTurn) { chat.voiceTurn = false; voiceAutoRead(chat, msgId, fullResponse); }
 
         // Success! Save response and clean up
@@ -10815,6 +10861,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (chatId) updateThinkingPanel(chatId, '', agentName, false);
       finalizeTokenUsage(msgId);
       setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), startedMs));
+      attachFileCards(document.getElementById(msgId));   // the reply is final: download cards
 
       return fullResponse;
     }
@@ -11297,6 +11344,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       clearLiveActivity(msgId);
       finalizeTokenUsage(msgId);
       setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), startedMs));
+      attachFileCards(document.getElementById(msgId));   // the reply is final: download cards
 
       console.log(`[${agentName}] Stream complete, response length: ${fullResponse.length}`);
       console.log(`[${agentName}] Raw response:`, fullResponse.substring(0, 200));
@@ -16697,6 +16745,29 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       e.preventDefault(); e.stopPropagation();
       copyMessageText(b.closest('.message'));
     });
+
+    // Download cards: after a reply is final (the turn ended, or a saved reply drawn from history) the files it names
+    // (links to /api/files/download, absolute paths) get a card each in a .file-cards box right after the message.
+    // Never on a streaming chunk; no candidates means no request; nothing here may throw into the chat code.
+    async function attachFileCards(el) {
+      try {
+        const H = window.hubFileCard;
+        if (!H || !el || !el.isConnected || !el.classList.contains('assistant')) return;
+        const scan = el.cloneNode(true);   // the reply's own text: not the tool panel or the reasoning panel
+        scan.querySelectorAll('.tool-stream, .reason-stream, .inline-thinking, .msg-copy, .msg-speak').forEach((n) => n.remove());
+        const cands = H.candidatesFrom(scan);
+        if (!cands.length) return;
+        const results = await H.resolveBatch((u, o) => fetch(u, o), cands);
+        if (!el.isConnected) return;
+        const html = results.map((r) => (r && r.ok ? H.cardHtml(r, { esc, phone: false }) : '')).join('');
+        const old = el.nextElementSibling;
+        if (old && old.classList.contains('file-cards') && old.dataset.for === el.id) old.remove();
+        if (!html) return;
+        const box = document.createElement('div');
+        box.className = 'file-cards'; box.dataset.for = el.id; box.innerHTML = html;
+        el.after(box);
+      } catch (e) { /* the cards are a convenience: the reply itself is already shown */ }
+    }
 
     // into: an element to draw the bubble in instead of the chat's panel (the body of an automatic-turn card).
     function appendMessage(chatId, role, content, into) {
