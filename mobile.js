@@ -6467,7 +6467,37 @@ function renderEntry(m, time = '') {
     if (saved) paintSaved(b, m);
     if (typeof m.reasoning === 'string' && m.reasoning) reasoningSet({ agent: current, bubble: b }, m.reasoning, { total: Number(m.reasoningChars) });
     setBubbleTime(b.el, time);
+    attachFileCards(b.el, b.body);   // a saved reply: download cards for the files it names
   }
+}
+
+// Download cards: after a reply is final (the turn ended, or a saved reply drawn from history) the files it names
+// (links to /api/files/download, absolute paths) get a card each in a .file-cards box right after the reply body.
+// Never on a streaming chunk; no candidates means no request; nothing here may throw into the chat code.
+async function attachFileCards(el, body) {
+  try {
+    const H = window.hubFileCard;
+    if (!el || !el.classList || !el.classList.contains('assistant')) return;
+    if (!body) body = el.querySelector(':scope > .body');
+    if (!H || !body || !el.isConnected) return;
+    const scan = body.cloneNode(true);   // the reply's own text: not the tool panel, the reasoning panel or the notes
+    scan.querySelectorAll('.feed, .tsn, .rsn, .reattach, .copy, .note').forEach((n) => n.remove());
+    const cands = H.candidatesFrom(scan);
+    if (!cands.length) return;
+    const results = await H.resolveBatch((u, o) => fetch(u, o), cands);
+    if (!el.isConnected) return;
+    const html = results.map((r) => (r && r.ok ? H.cardHtml(r, { esc, phone: true }) : '')).join('');
+    const old = el.querySelector(':scope > .file-cards');
+    const sig = html;
+    if (old && old.dataset.sig === sig) return;   // already drawn (a turn view that ends again): no flicker
+    if (old) old.remove();
+    if (!html) return;
+    const box = document.createElement('div');
+    box.className = 'file-cards';
+    box.dataset.sig = sig;
+    box.innerHTML = html;
+    body.after(box);
+  } catch (e) { /* the cards are a convenience: the reply itself is already shown */ }
 }
 
 // An entry from the transcript archive: text only (no tool panel, no reasoning), its time line ends " · from the archive".
@@ -6477,7 +6507,9 @@ function renderArchived(m, time) {
     if (m.origin?.kind) addNote(`⚡ ${originLabel(m.origin)} — ${timeLabel(m.ts)}`);
     el = addUserBubble(m.content, null);
   } else if (m.role === 'assistant') {
-    el = addAssistantBubble(m.content).el;
+    const b = addAssistantBubble(m.content);
+    el = b.el;
+    attachFileCards(b.el, b.body);
   }
   if (el) markArchived(el, time);
 }
@@ -7358,6 +7390,7 @@ function paintFeedRow(feed, it, list = null) {
 // its workers then keep running here until the hub's record says how they ended.
 function feedEnd(holder, how = 'sure') {
   const feed = holder && holder.feed;
+  if (holder && holder.bubble) attachFileCards(holder.bubble.el, holder.bubble.body);   // the reply is final: download cards
   if (!feed) return;
   feed.ended = true;
   for (const x of feed.items.values()) {
@@ -13068,11 +13101,13 @@ function openSecuritySheet() {
       <div class="sec-title">Sessions</div>
       <div class="sec-actions"><button id="sec-revoke" class="danger">Sign out everywhere</button></div>
     </div>
+    ${hubMe && hubMe.isAdmin ? `<div class="sec-section" id="sec-share" data-no-dirty>${shareSettingsHtml()}</div>` : ''}
     <div class="sec-actions" style="margin-top:10px"><button id="sec-close">Close</button></div>`;
   $('sec-pw-go').addEventListener('click', changePassword);
   $('sec-revoke').addEventListener('click', signOutEverywhere);
   $('sec-close').addEventListener('click', () => dialogRequestClose(sheet));
   paintTwoFactor();
+  if ($('sec-share')) shareSettingsMount($('sec-share'), shareLinksListOpen);
   if (!sheet.open) sheet.showModal();
 }
 
@@ -13080,7 +13115,7 @@ function openSecuritySheet() {
 // The sheet is rooted on the files folder of the agent whose chat is open (`current`, sent as agent=);
 // with no chat open it falls back to the owner's general folder. `owner` is who the owner switcher
 // shows (admins, infra mapped to mine); members omit it.
-const filesState = { path: '', root: null, entries: [], maxUploadBytes: 0, openRow: -1, agent: '' };
+const filesState = { path: '', root: null, entries: [], maxUploadBytes: 0, openRow: -1, agent: '', recent: [] };
 function filesOwner() {
   if (!hubMe || !hubMe.isAdmin) return null;
   const v = ownerView();
@@ -13164,6 +13199,263 @@ async function uploadFileForChat(file) {
     toast(`Could not upload ${file.name}: ${e.message}`);
   }
 }
+// ── Save / Share sheet: the phone's Download ──
+// A download card's button and the Files rows open this sheet. "Save / Share" fetches the file with the app's own session
+// (never an open URL), then hands it to the phone's share sheet as a File (or, where files cannot be shared, saves the blob
+// through a temporary link). The private URL is never shared and never put in a link. A folder's zip comes through here too
+// (up to 100 MiB; its size is shown as "about N" because the zip is compressed): the phone never navigates to the zip URL.
+const DL_MAX_BYTES = 100 * 1024 * 1024;
+const DL_TIMEOUT_MS = 120000;
+const DL_TOO_BIG = 'This file is larger than 100 MB. Open the hub on a computer to download it.';
+const DL_ZIP_TOO_BIG = 'This folder is larger than 100 MB. Download it as a zip on a computer.';
+const DL_FAILED = "The download didn't finish. Try again.";
+// The File's type without MIME parameters ("text/plain; charset=utf-8" -> "text/plain"): iOS canShare refuses a type with parameters.
+function dlFileType(mime, blobType) {
+  const t = String(mime || blobType || '').split(';')[0].trim();
+  return t || 'application/octet-stream';
+}
+function dlStatusMessage(status) {
+  if (status === 401) return 'Sign in again, then try once more.';
+  if (status === 403) return "You can't open this file.";
+  if (status === 404) return 'The file is no longer there.';
+  return DL_FAILED;
+}
+function dlProgressText(done, total) {
+  return total > 0 ? `Preparing… ${humanSize(done)} of ${humanSize(total)}` : `Preparing… ${humanSize(done)}`;
+}
+// What to do next. Before sharing: { canShareFiles } -> 'share' or 'fallback'. After navigator.share threw: { errorName }
+// -> 'tap' (the tap went stale while the file was prepared: ask for a fresh one), 'close' (the person cancelled: not an error)
+// or 'failed'.
+function dlNextStep({ canShareFiles, errorName } = {}) {
+  if (errorName === 'AbortError') return 'close';
+  if (errorName === 'NotAllowedError') return 'tap';
+  if (errorName) return 'failed';
+  return canShareFiles ? 'share' : 'fallback';
+}
+// The inline (preview) address of a download URL, only for pictures and PDFs; the hub serves no inline form of an svg.
+function dlPreviewUrl(url, name) {
+  const kind = window.hubFileCard ? window.hubFileCard.kindOf(name) : 'other';
+  if (kind !== 'image' && kind !== 'pdf') return '';
+  if (/\.svg$/i.test(String(name || ''))) return '';
+  return typeof url === 'string' && url.startsWith('/api/files/download?') ? `${url}&inline=1` : '';
+}
+// Reads the whole file into a Blob: own session (same-origin cookies), no redirects, no cache, abortable, with a 120 s limit,
+// progress, and a 100 MiB ceiling checked on Content-Length first and again while reading. Failures throw an Error whose
+// userMessage is the plain sentence to show; a close by the person throws a quiet AbortError.
+async function dlReadFile(url, { ctl, fetchFn, onProgress, maxBytes } = {}) {
+  const doFetch = fetchFn || ((u, init) => fetch(u, init));
+  const max = maxBytes || DL_MAX_BYTES;
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, DL_TIMEOUT_MS);
+  const fail = (message, extra) => Object.assign(new Error(message), { userMessage: message }, extra || {});
+  try {
+    const r = await doFetch(url, { credentials: 'same-origin', redirect: 'error', cache: 'no-store', signal: ctl.signal });
+    if (!r.ok) throw fail(dlStatusMessage(r.status));
+    const hdr = (n) => (r.headers && typeof r.headers.get === 'function' ? r.headers.get(n) : null);
+    const len = Number(hdr('content-length'));
+    const total = isFinite(len) && len > 0 ? len : 0;
+    if (total > max) { try { ctl.abort(); } catch { /* already over */ } throw fail(DL_TOO_BIG, { tooBig: true }); }
+    const chunks = [];
+    let got = 0;
+    if (r.body && typeof r.body.getReader === 'function') {
+      const reader = r.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        got += value.byteLength;
+        if (got > max) { try { await reader.cancel(); } catch { /* nothing to cancel */ } try { ctl.abort(); } catch { /* already over */ } throw fail(DL_TOO_BIG, { tooBig: true }); }
+        chunks.push(value);
+        if (onProgress) onProgress(got, total);
+      }
+    } else {
+      const b = await r.blob();
+      if (b.size > max) throw fail(DL_TOO_BIG, { tooBig: true });
+      chunks.push(b); got = b.size;
+    }
+    if (total && got !== total && !hdr('content-encoding')) throw fail(DL_FAILED);   // cut short
+    return { blob: new Blob(chunks, { type: hdr('content-type') || '' }), size: got, total };
+  } catch (e) {
+    if (e && e.userMessage) throw e;
+    if (ctl.signal.aborted && !timedOut) throw Object.assign(new Error('closed'), { name: 'AbortError', quiet: true });
+    throw fail(DL_FAILED);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+// Called inside the tap itself (no await before it), with the file only: never a url or a text.
+function dlShareFiles(nav, file) {
+  try { return Promise.resolve(nav.share({ files: [file] })); } catch (e) { return Promise.reject(e); }
+}
+function dlCanShareFile(nav, file) {
+  try { return !!(nav.canShare && nav.canShare({ files: [file] }) && nav.share); } catch { return false; }
+}
+// No file sharing here: the blob's own object URL through a temporary link, revoked after a minute.
+function dlSaveViaLink(file, env) {
+  const doc = (env && env.document) || document, U = (env && env.URL) || URL, later = (env && env.setTimeout) || setTimeout;
+  const href = U.createObjectURL(file);
+  const a = doc.createElement('a');
+  a.href = href; a.download = file.name; a.rel = 'noopener';
+  doc.body.appendChild(a); a.click(); a.remove();
+  later(() => U.revokeObjectURL(href), 60000);
+}
+const dlState = { ctl: null, file: null, tap: false, busy: false, url: '', name: '', size: 0, mime: '', approx: false, blocked: '' };
+function dlSay(text, kind) {
+  const el = $('dl-msg');
+  if (el) { el.textContent = text || ''; el.className = 'dl-msg' + (kind ? ' ' + kind : ''); }
+}
+function dlGoPaint() {
+  const b = $('dl-go');
+  if (!b) return;
+  b.disabled = !!dlState.busy || !!dlState.blocked;
+  b.textContent = dlState.tap ? 'Tap to save' : 'Save / Share';
+}
+function dlClose() {
+  if (dlState.ctl) { try { dlState.ctl.abort(); } catch { /* already over */ } dlState.ctl = null; }   // closing stops the fetch
+  const sh = $('dl-sheet');
+  if (sh) { if (sh.open) sh.close(); dialogGuard.closed(sh); }
+  dlState.file = null; dlState.tap = false; dlState.busy = false;
+}
+function openDownloadSheet(o) {
+  const url = o && typeof o.url === 'string' && o.url.startsWith('/api/files/') ? o.url : '';
+  const sh = $('dl-sheet');
+  if (!url || !sh) { toast('That file cannot be downloaded'); return; }
+  if (dlState.ctl) { try { dlState.ctl.abort(); } catch { /* already over */ } }
+  Object.assign(dlState, { ctl: null, file: null, tap: false, busy: false, url, name: String(o.name || 'file'), size: Number(o.size) || 0, mime: String(o.mime || ''), approx: !!o.approx, blocked: typeof o.blocked === 'string' ? o.blocked : '' });
+  const preview = dlPreviewUrl(url, dlState.name);
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-labelledby', 'dl-title');
+  sh.setAttribute('aria-describedby', 'dl-msg');
+  sh.innerHTML = `<h3 id="dl-title">${esc(dlState.name)}</h3>
+    <div class="dl-size">${dlState.size ? esc((dlState.approx ? 'about ' : '') + humanSize(dlState.size)) : ''}</div>
+    <div class="dl-msg" id="dl-msg" role="status" aria-live="polite"></div>
+    <div class="dl-btns">
+      <button type="button" class="go" id="dl-go">Save / Share</button>
+      ${preview ? '<button type="button" id="dl-preview">Preview</button>' : ''}
+      <button type="button" id="dl-close">Close</button>
+    </div>`;
+  $('dl-go').addEventListener('click', () => { if (dlState.tap && dlState.file) dlTapSave(); else dlStart(); });
+  if (preview) $('dl-preview').addEventListener('click', () => window.open(preview, '_blank', 'noopener'));
+  $('dl-close').addEventListener('click', () => dialogRequestClose(sh, 'close'));
+  if (!sh.open) sh.showModal();
+  dialogGuard.open(sh, { close: dlClose });   // Back, Escape and Close all come here
+  if (dlState.blocked) { dlSay(dlState.blocked, 'err'); dlGoPaint(); }   // e.g. a folder too big for the phone: the message, no Save / Share
+  $('dl-go').focus();
+}
+async function dlStart() {
+  if (dlState.busy || dlState.blocked) return;
+  dlState.busy = true; dlGoPaint();
+  const sizeHint = dlState.approx ? 0 : dlState.size;   // a compressed zip's size is only a guess: no "of N"
+  dlSay(dlProgressText(0, sizeHint));
+  const ctl = new AbortController();
+  dlState.ctl = ctl;
+  let file;
+  try {
+    const got = await dlReadFile(dlState.url, { ctl, onProgress: (done, total) => dlSay(dlProgressText(done, total || sizeHint)) });
+    if (dlState.ctl !== ctl) return;   // the sheet was closed or reopened meanwhile
+    file = new File([got.blob], dlState.name, { type: dlFileType(dlState.mime, got.blob.type) });
+  } catch (e) {
+    if (dlState.ctl !== ctl) return;
+    dlState.ctl = null; dlState.busy = false; dlGoPaint();
+    if (e && e.quiet) { dlClose(); return; }
+    dlSay((e && e.userMessage) || DL_FAILED, 'err');
+    return;
+  }
+  dlState.ctl = null;
+  dlState.file = file;
+  const step = dlNextStep({ canShareFiles: dlCanShareFile(navigator, file) });
+  if (step === 'share') {
+    dlSay('Opening the share sheet…');
+    dlShareFiles(navigator, file).then(() => dlClose(), dlOnShareError);
+  } else {
+    try { dlSaveViaLink(file); dlState.busy = false; dlGoPaint(); dlSay('Saved. Look in your downloads.', 'ok'); }
+    catch { dlState.busy = false; dlGoPaint(); dlSay(DL_FAILED, 'err'); }
+  }
+}
+function dlOnShareError(e) {
+  const step = dlNextStep({ canShareFiles: true, errorName: e && e.name });
+  if (step === 'close') { dlClose(); return; }   // the person cancelled the share sheet
+  dlState.busy = false;
+  if (step === 'tap') { dlState.tap = true; dlGoPaint(); dlSay('Ready. Tap to save.'); return; }   // the first tap went stale while preparing
+  dlGoPaint();
+  dlSay(DL_FAILED, 'err');
+}
+// The fresh tap: share is called right here, in the click handler, before anything is awaited.
+function dlTapSave() {
+  const file = dlState.file;
+  if (!file) return;
+  const p = dlShareFiles(navigator, file);
+  dlState.busy = true; dlGoPaint();
+  p.then(() => dlClose(), dlOnShareError);
+}
+// A card's Download button (phone form of lib/ui-file-card.js).
+document.addEventListener('click', (e) => {
+  const b = e.target && e.target.closest ? e.target.closest('button.fc-download') : null;
+  if (!b) return;
+  openDownloadSheet({ url: b.dataset.download, name: b.dataset.name, size: Number(b.dataset.size) || 0, mime: b.dataset.mime || '' });
+});
+
+function filesAgo(t) {
+  const ms = Date.parse(t); if (isNaN(ms)) return '';
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+// "Recent from agents": the newest files agents wrote under this root. Hidden when empty; a failure shows nothing.
+async function filesLoadRecent() {
+  const box = $('fs-recent'); if (!box) return;
+  const agentAtStart = filesState.agent;
+  let data = null;
+  try { data = await filesApi(filesUrl('/recent', { limit: 10 })); } catch { data = null; }
+  if (!$('fs-recent') || filesState.agent !== agentAtStart) return;
+  const files = (data && Array.isArray(data.files) ? data.files : []).filter(f => f && typeof f.download === 'string' && f.download.startsWith('/api/files/'));
+  filesState.recent = files;
+  if (!files.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  // Only the newest 3 until "Show all (N)" is pressed; the choice is kept for this browser session only.
+  const FR_KEY = 'hub-files-recent-all', FR_FEW = 3;
+  let all = false;
+  try { all = sessionStorage.getItem(FR_KEY) === '1'; } catch { all = false; }
+  const draw = () => {
+    const shown = all ? files : files.slice(0, FR_FEW);
+    box.innerHTML = '<h4>Recent from agents</h4>' + shown.map((f, i) => {
+      const info = [humanSize(f.size), f.folder || '', filesAgo(f.mtime)].filter(Boolean).join(' · ');
+      return `<div class="fr-row"><div class="fr-text"><span class="fr-name">${esc(f.name || '')}</span><span class="fr-info">${esc(info)}</span></div><button type="button" class="fr-dl" data-r="${i}" aria-label="Download ${esc(f.name || 'file')}">Download</button></div>`;
+    }).join('') + (!all && files.length > FR_FEW ? `<button type="button" class="fr-all" aria-expanded="false">Show all (${files.length})</button>` : '');
+  };
+  box.onclick = (e) => {
+    const b = e.target && e.target.closest ? e.target.closest('button.fr-all') : null;
+    if (!b) return;
+    all = true;
+    try { sessionStorage.setItem(FR_KEY, '1'); } catch { /* not remembered */ }
+    draw();
+  };
+  draw();
+}
+function onFilesRecentClick(e) {
+  const b = e.target.closest('button[data-r]');
+  const f = b && (filesState.recent || [])[Number(b.dataset.r)];
+  if (f) openDownloadSheet({ url: f.download, name: f.name, size: f.size, mime: f.mime || '' });
+}
+// A folder as one zip. The same URL with &check=1 first: the hub refuses a too-big folder in plain words (its JSON error is
+// shown on the sheet's message line). An ok answer up to 100 MiB opens the Save / Share sheet on the zip URL (the app's own
+// session fetches it; the page never navigates to the zip URL, which in the installed iPhone app opens an out-of-scope Safari
+// view that asks to sign in again); a larger folder shows DL_ZIP_TOO_BIG on the sheet's message line.
+async function filesZip(rel) {
+  rel = typeof rel === 'string' ? rel : filesState.path;
+  const url = filesUrl('/zip', { path: rel });
+  const folder = (rel ? rel.split('/').pop() : '') || (filesState.root && filesState.root.label) || 'files';
+  filesMsg('Checking the folder…');
+  let data;
+  try { data = await filesApi(url + '&check=1', { credentials: 'same-origin' }); }
+  catch (e) { filesMsg(e.message, 'err'); return; }
+  const bytes = Number(data && data.bytes) || 0;
+  filesMsg('');
+  if (bytes <= DL_MAX_BYTES) openDownloadSheet({ url, name: `${folder}.zip`, size: bytes, mime: 'application/zip', approx: true });
+  else openDownloadSheet({ url, name: `${folder}.zip`, size: 0, mime: 'application/zip', blocked: DL_ZIP_TOO_BIG });
+}
 function openFilesSheet(path) {
   $('menu').classList.remove('open');
   if (typeof path === 'string') filesState.path = path;
@@ -13173,25 +13465,221 @@ function openFilesSheet(path) {
     sheet.innerHTML = `
       <h3 id="fs-title">Files</h3>
       <div class="fs-root" id="fs-root"></div>
+      <div class="fs-recent" id="fs-recent" hidden></div>
       <div class="fs-crumbs" id="fs-crumbs"></div>
       <div class="fs-tools">
         <button class="go" id="fs-upload">&#x2B06; Upload</button>
         <button id="fs-mkdir">New folder</button>
+        <button id="fs-zip" title="Download the folder being shown as one zip file">Download as zip</button>
         <button id="fs-refresh">&#x21BB;</button>
+        <button id="fs-shared" hidden>Shared links</button>
       </div>
       <div class="fs-msg" id="fs-msg"></div>
       <div class="fs-list" id="fs-list"><div class="fs-empty">Loading…</div></div>
       <div class="fs-close"><button id="fs-close">Close</button></div>`;
     $('fs-upload').addEventListener('click', () => $('files-upload-input').click());
     $('fs-mkdir').addEventListener('click', filesMkdir);
+    $('fs-zip').addEventListener('click', () => filesZip(filesState.path));
+    $('fs-recent').addEventListener('click', onFilesRecentClick);
     $('fs-refresh').addEventListener('click', () => filesRefresh());
+    $('fs-shared').addEventListener('click', shareLinksListOpen);
     $('fs-close').addEventListener('click', () => sheet.close());
     $('fs-list').addEventListener('click', onFilesListClick);
     $('fs-crumbs').addEventListener('click', (e) => { const b = e.target.closest('button[data-path]'); if (b) openFilesSheet(b.dataset.path); });
     sheet.dataset.ready = '1';
   }
-  if (!sheet.open) sheet.showModal();
+  const wasOpen = sheet.open;
+  if (!wasOpen) sheet.showModal();
+  if (!wasOpen) shareLinksInit();   // the settings once per opening, not on every folder or crumb tap
   filesRefresh();
+}
+// ── share links (begin): a short link to one file (server: /api/share-links*); this block is the same in app.js and mobile.js ──
+const shareLinksState = { settings: null };
+function shareLinkLabel(h) { h = Number(h); return h === 1 ? '1 hour' : h === 24 ? '24 hours' : h === 168 ? '7 days' : `${h} hours`; }
+// The server default when offered; else the largest choice not above it (the smallest when none is).
+function shareLinkDefaultHours(s) {
+  const c = ((s && s.choices) || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b), want = Number(s && s.defaultHours);
+  if (!c.length) return undefined;
+  const below = c.filter(h => h <= want);
+  return below.length ? below[below.length - 1] : c[0];
+}
+// the same form as the link page ("Nov 18, 2026, 5:32 AM EST"), in this device's time zone
+function shareLinkWhen(t) {
+  const d = new Date(t);
+  if (isNaN(d)) return String(t || '');
+  try { return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d); } catch { return d.toLocaleString(); }
+}
+async function shareLinksJson(url, body) {
+  let r;
+  try { r = await fetch(url, body === undefined ? { credentials: 'include' } : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+  catch { throw new Error('Could not reach the hub.'); }
+  let d = {}; try { d = await r.json(); } catch { /* no body */ }
+  if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+  return d;
+}
+// Loaded once when the Files panel opens; null (action hidden) when the call fails.
+async function shareLinksLoad() {
+  try { const d = await shareLinksJson('/api/share-links'); shareLinksState.settings = d.settings || null; return d; }
+  catch { shareLinksState.settings = null; return null; }
+}
+function shareLinksOn() { return !!(shareLinksState.settings && shareLinksState.settings.enabled); }
+// identity = the panel's own folder identity ({ owner?, agent? }), as it sends it with rename and mkdir.
+function shareLinkRequest(identity, path, hours, oneTime) { return { ...identity, path, hours: Number(hours), oneTime: !!oneTime }; }
+function shareLinkFormHtml(name, s) {
+  const def = shareLinkDefaultHours(s);
+  const opts = ((s && s.choices) || []).map(h => `<option value="${Number(h)}"${h === def ? ' selected' : ''}>${escapeHtml(shareLinkLabel(h))}</option>`).join('');
+  return `<div class="sec-section" data-no-dirty><div class="sec-title">${escapeHtml(name)}</div>
+    <label class="sec-hint" for="sl-hours">Link works for</label><select class="sl-hours" id="sl-hours">${opts}</select>
+    <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-once" style="width:auto"> Only one download</label>
+    <div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div></div>
+    <div class="sec-actions"><button type="button" class="sec-btn sl-cancel">Cancel</button><button type="button" class="sec-btn sl-create">Create link</button></div>`;
+}
+function shareLinkResultHtml(link, origin) {
+  return `<div class="sec-section" data-no-dirty><input type="text" class="sl-url" readonly aria-label="Link" value="${escapeHtml(origin + link.path)}">
+    <div class="sec-hint">Expires ${escapeHtml(shareLinkWhen(link.expiresAt))}</div>
+    <div class="sec-hint">Opens for you when you're signed in to your Maestro.</div></div>
+    <div class="sec-actions"><button type="button" class="sec-btn sl-copy">Copy</button><button type="button" class="sec-btn sl-done">Done</button></div>`;
+}
+async function shareLinkCopy(text, btn, input) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch { /* no clipboard on an http:// address */ }
+  if (!ok && input) { try { input.focus(); input.select(); ok = document.execCommand('copy'); } catch { ok = false; } }
+  if (!ok && input) { try { input.select(); } catch { /* nothing to select */ } }
+  if (btn) { const old = btn.textContent; btn.textContent = ok ? 'Copied' : 'Select and copy'; setTimeout(() => { btn.textContent = old; }, 1500); }
+  return ok;
+}
+// root holds the form (class sl-body); o = { identity, path, close }.
+function shareLinkWire(root, o) {
+  const q = (s) => root.querySelector(s);
+  q('.sl-cancel').onclick = o.close;
+  q('.sl-create').onclick = async () => {
+    const btn = q('.sl-create'); btn.disabled = true; q('.sl-msg').textContent = '';
+    let d;
+    try { d = await shareLinksJson('/api/share-links', shareLinkRequest(o.identity, o.path, q('.sl-hours').value, q('.sl-once').checked)); }
+    catch (e) { q('.sl-msg').textContent = e.message; btn.disabled = false; return; }
+    q('.sl-body').innerHTML = shareLinkResultHtml(d, location.origin);
+    const url = q('.sl-url');
+    q('.sl-copy').onclick = () => shareLinkCopy(url.value, q('.sl-copy'), url);
+    q('.sl-done').onclick = o.close;
+    try { url.select(); } catch { /* ok */ }
+  };
+}
+function shareLinksListHtml(links, admin) {
+  if (!links || !links.length) return 'No shared links.';
+  return links.map(l => {
+    const bits = [`expires ${shareLinkWhen(l.expiresAt)}`];
+    if (l.oneTime) bits.push('one download');
+    bits.push(`${Number(l.downloads) || 0} download${Number(l.downloads) === 1 ? '' : 's'}`);
+    if (admin && !l.mine && l.creator && l.creator.name) bits.push(`by ${l.creator.name}`);
+    return `<div class="sl-row" style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+      <div style="min-width:0"><div class="sec-title" style="overflow-wrap:anywhere">${escapeHtml(l.name)}</div><div class="sec-hint">${escapeHtml(bits.join(' · '))}</div></div>
+      <button type="button" class="sec-btn" data-sl-revoke data-id="${escapeHtml(l.id)}">Revoke</button></div>`;
+  }).join('');
+}
+// First press arms the button for 3 s ("Revoke?"); a second press inside that time calls revoke(id).
+function shareRevokeClick(btn, revoke) {
+  if (btn.dataset.armed === '1') { clearTimeout(btn._slTimer); btn.dataset.armed = ''; btn.disabled = true; return revoke(btn.dataset.id); }
+  btn.dataset.armed = '1'; btn.textContent = 'Revoke?';
+  btn._slTimer = setTimeout(() => { btn.dataset.armed = ''; btn.textContent = 'Revoke'; }, 3000);
+}
+async function shareLinksListFill(root, admin) {
+  const box = root.querySelector('.sl-list'), msg = root.querySelector('.sl-msg');
+  box.textContent = 'Loading…';
+  let d;
+  try { d = await shareLinksJson('/api/share-links'); } catch (e) { box.textContent = e.message; return; }
+  shareLinksState.settings = d.settings || shareLinksState.settings;
+  box.innerHTML = shareLinksListHtml(d.links, admin);
+  box.onclick = (ev) => {
+    const b = ev.target.closest && ev.target.closest('button[data-sl-revoke]'); if (!b) return;
+    shareRevokeClick(b, async (id) => {
+      try {
+        const done = await shareLinksJson(`/api/share-links/${encodeURIComponent(id)}/revoke`, {});
+        const row = b.closest('.sl-row'); if (row) row.remove();
+        if (!box.querySelector('.sl-row')) box.textContent = 'No shared links.';
+        if (msg) msg.textContent = (done && typeof done.warning === 'string') ? done.warning : '';   // revoked, but not saved yet
+      } catch (e) { b.disabled = false; b.textContent = 'Revoke'; if (msg) msg.textContent = e.message; }
+    });
+  };
+}
+// Settings (admins): the three values of settings.shareLinks.
+const SHARE_DEFAULT_CHOICES = [1, 24, 168], SHARE_MAX_CHOICES = [1, 24, 72, 168];
+// The listed hours as <option>s; a stored value that is not listed (say 72 as the default) is added so it shows and is kept.
+function shareSettingsOptions(list, extra) {
+  const all = [...list]; const x = Number(extra);
+  if (extra != null && Number.isFinite(x) && x > 0 && !all.includes(x)) all.push(x);
+  return all.sort((a, b) => a - b).map(h => `<option value="${h}">${escapeHtml(shareLinkLabel(h))}</option>`).join('');
+}
+function shareSettingsHtml() {
+  return `<h4>Share links</h4>
+    <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-set-on" style="width:auto"> Allow share links</label>
+    <label class="sec-hint">Default time</label><select class="sl-set-def"></select>
+    <label class="sec-hint">Longest allowed</label><select class="sl-set-max">${shareSettingsOptions(SHARE_MAX_CHOICES)}</select>
+    <div class="sec-actions" style="justify-content:flex-start"><button type="button" class="sec-btn sl-set-list">Shared links</button></div>
+    <div class="sec-msg sl-set-msg" role="status"></div>`;
+}
+function shareSettingsDefaults(root, want) {
+  const max = Number(root.querySelector('.sl-set-max').value) || 168;
+  const w = Number(want), keep = Number.isFinite(w) && w > 0 && w <= max;
+  const list = SHARE_DEFAULT_CHOICES.filter(h => h <= max);
+  if (keep && !list.includes(w)) list.push(w);
+  list.sort((a, b) => a - b);
+  const sel = root.querySelector('.sl-set-def');
+  sel.innerHTML = shareSettingsOptions(list);
+  sel.value = String(keep ? w : list[list.length - 1]);
+}
+async function shareSettingsSave(root) {
+  const msg = root.querySelector('.sl-set-msg');
+  const shareLinks = { enabled: root.querySelector('.sl-set-on').checked, defaultHours: Number(root.querySelector('.sl-set-def').value), maxHours: Number(root.querySelector('.sl-set-max').value) };
+  try { await shareLinksJson('/api/settings', { shareLinks }); shareLinksState.settings = { ...(shareLinksState.settings || {}), ...shareLinks }; msg.textContent = 'Saved.'; }
+  catch (e) { msg.textContent = 'Could not save: ' + e.message; }
+}
+// root = the block holding shareSettingsHtml(); openList opens the list dialog.
+async function shareSettingsMount(root, openList) {
+  if (!root) return;
+  const d = await shareLinksLoad();
+  // Hidden with style.display (the block may carry its own inline display, which hidden would not beat); shown again as it was.
+  if (!d || !d.settings) { if (root.style.display !== 'none') root._slDisplay = root.style.display; root.style.display = 'none'; return; }
+  if (root._slDisplay !== undefined) root.style.display = root._slDisplay;
+  const s = d.settings;
+  root.querySelector('.sl-set-on').checked = !!s.enabled;
+  const max = root.querySelector('.sl-set-max'), mh = Number(s.maxHours), mx = Number.isFinite(mh) && mh > 0 ? mh : 168;
+  max.innerHTML = shareSettingsOptions(SHARE_MAX_CHOICES, mx); max.value = String(mx);
+  shareSettingsDefaults(root, s.defaultHours);
+  root.querySelector('.sl-set-on').onchange = () => shareSettingsSave(root);
+  root.querySelector('.sl-set-def').onchange = () => shareSettingsSave(root);
+  max.onchange = () => { shareSettingsDefaults(root, root.querySelector('.sl-set-def').value); shareSettingsSave(root); };
+  root.querySelector('.sl-set-list').onclick = openList;
+}
+// ── share links (end) ──
+// Files sheet hooks (share links): the load on open, the dialogs, and the Security block.
+function shareLinksInit() {
+  const before = shareLinksState.settings;
+  shareLinksLoad().then((d) => {
+    if (!d) shareLinksState.settings = before;   // a failed refresh keeps what was loaded
+    const b = $('fs-shared'); if (b) b.hidden = !shareLinksState.settings;
+    if ($('fs-list') && filesState.entries.length) filesRenderList();
+  });
+}
+function shareDialog(id, title, inner) {
+  const old = $(id); if (old) { try { old.close(); } catch {} old.remove(); }
+  const d = document.createElement('dialog'); d.id = id; d.setAttribute('aria-label', title);
+  d.style.cssText = 'width:min(94vw,460px);max-height:88vh;overflow-y:auto';
+  d.innerHTML = `<h3>${escapeHtml(title)}</h3>${inner}`;
+  d.addEventListener('close', () => d.remove());
+  document.body.appendChild(d);
+  d.showModal();
+  return d;
+}
+function shareLinkOpen(entry, rel) {
+  if (!entry || entry.type === 'dir' || !shareLinksOn()) return;
+  const d = shareDialog('share-link-dialog', 'Share link', `<div class="sl-body">${shareLinkFormHtml(entry.name, shareLinksState.settings)}</div>`);
+  const identity = { ...(filesOwner() ? { owner: filesOwner() } : {}), ...(filesState.agent ? { agent: filesState.agent } : {}) };
+  shareLinkWire(d, { identity, path: rel, close: () => dialogRequestClose(d) });
+}
+function shareLinksListOpen() {
+  const d = shareDialog('share-list-dialog', 'Shared links', `<div class="sl-list">Loading…</div><div class="sec-msg sl-msg" role="alert" style="color:var(--error)"></div><div class="sec-actions"><button type="button" class="sec-btn sl-close">Close</button></div>`);
+  d.querySelector('.sl-close').onclick = () => dialogRequestClose(d);
+  shareLinksListFill(d, isAdmin());
 }
 // ── Recall sheet: search the open agent's transcript archive (server: /api/recall, /api/recall/context) ──
 // Hits come newest-first with [brackets] around matched words; they become <mark> after escaping.
@@ -13332,6 +13820,7 @@ async function filesRefresh() {
     return `<span class="sep">/</span>` + (i === parts.length - 1 ? `<span>${esc(p)}</span>` : `<button data-path="${esc(acc)}">${esc(p)}</button>`);
   }).join('');
   filesRenderList();
+  filesLoadRecent();   // refreshed on open and after an upload, rename or delete (each ends in filesRefresh)
 }
 function filesRenderList() {
   const list = $('fs-list');
@@ -13346,7 +13835,8 @@ function filesRenderList() {
     </div>`;
     if (filesState.openRow !== i) return row;
     return row + `<div class="fs-acts" data-i="${i}">
-      ${isDir ? '' : `<button data-act="download">Download</button>`}
+      ${isDir ? `<button data-act="zip">Download as zip</button>` : `<button data-act="download">Download</button>`}
+      ${isDir || !shareLinksOn() ? '' : `<button data-act="share">Share link</button>`}
       <button data-act="use">Use in chat</button>
       <button data-act="rename">Rename</button>
       <button data-act="delete" class="danger">Delete</button>
@@ -13364,7 +13854,9 @@ async function onFilesListClick(e) {
   const act = btn.dataset.act;
   if (act === 'open') return openFilesSheet(rel);
   if (act === 'more') { filesState.openRow = filesState.openRow === i ? -1 : i; return filesRenderList(); }
-  if (act === 'download') { window.open(filesUrl('/download', { path: rel }), '_blank'); return; }
+  if (act === 'download') { openDownloadSheet({ url: filesUrl('/download', { path: rel }), name: entry.name, size: entry.size, mime: '' }); return; }
+  if (act === 'zip') { filesZip(rel); return; }
+  if (act === 'share') return shareLinkOpen(entry, rel);
   if (act === 'use') {
     insertFileTag(filesAbs(rel), entry.type === 'dir');
     $('files-sheet').close();

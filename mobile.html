@@ -715,6 +715,36 @@
   #files-sheet .fs-acts button.danger { color: var(--error); }
   #files-sheet .fs-empty { padding: 24px 0; text-align: center; color: var(--text-dim); font-size: 14px; }
   #files-sheet .fs-close { display: flex; justify-content: flex-end; margin-top: 10px; }
+  /* Recent from agents, and the zip buttons */
+  #files-sheet .fs-recent { margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  #files-sheet .fs-recent h4 { font-size: 13px; color: var(--text-dim); margin: 0 0 4px; font-weight: 600; }
+  #files-sheet .fs-recent .fr-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+  #files-sheet .fs-recent .fr-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  #files-sheet .fs-recent .fr-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #files-sheet .fs-recent .fr-info { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #files-sheet .fs-recent .fr-all { background: none; border: 0; padding: 8px 0; margin: 0; min-height: 44px; font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; }
+  #files-sheet .fs-recent .fr-dl { min-height: 44px; padding: 0 14px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; }
+  /* Download cards under an agent's reply (lib/ui-file-card.js, phone form) */
+  .file-cards { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; max-width: 100%; }
+  .file-card { background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .file-card .fc-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .file-card .fc-icon { font-size: 24px; flex: none; }
+  .file-card .fc-meta { min-width: 0; flex: 1; }
+  .file-card .fc-name { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+  .file-card .fc-sub { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+  .file-card .fc-preview { max-height: 160px; max-width: 100%; object-fit: contain; border-radius: 6px; align-self: flex-start; }
+  .file-card .fc-preview-link { color: var(--accent); font-size: 14px; padding: 6px 0; align-self: flex-start; }
+  .file-card .fc-download { width: 100%; min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 16px; font-weight: 600; }
+  /* The Save / Share sheet */
+  #dl-sheet { width: min(94vw, 380px); }
+  #dl-sheet h3 { margin: 0 0 6px; font-size: 16px; overflow-wrap: anywhere; }
+  #dl-sheet .dl-size { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+  #dl-sheet .dl-msg { min-height: 1.4em; font-size: 14px; color: var(--text-dim); margin-bottom: 10px; white-space: pre-wrap; }
+  #dl-sheet .dl-msg.err { color: var(--error); }
+  #dl-sheet .dl-btns { display: flex; flex-direction: column; gap: 8px; }
+  #dl-sheet .dl-btns button { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); font-size: 16px; }
+  #dl-sheet .dl-btns button.go { background: var(--accent); color: #fff; font-weight: 600; }
+  #dl-sheet .dl-btns button:disabled { opacity: .6; }
   /* Recall sheet (transcript search for the open agent) */
   #recall-sheet { width: min(94vw, 460px); max-height: 88vh; overflow-y: auto; }
   #recall-sheet h3 { margin-bottom: 6px; }
@@ -780,6 +810,27 @@
   .visual-html iframe.visual-frame { display: block; width: 100%; height: 280px; border: 0; background: #1a1a19; }
   .visual-html.expanded iframe.visual-frame { height: 80vh; }
   .visual .visual-note { padding: 4px 8px; font-size: 12px; color: var(--error); border-bottom: 1px solid var(--border); }
+/* share links: the share dialogs and the phone Security block, styled like the phone's own sheets */
+  #share-link-dialog, #share-list-dialog { width: min(94vw, 460px); }
+  #share-link-dialog h3, #share-list-dialog h3 { margin-bottom: 8px; }
+  #share-link-dialog .sec-section, #share-list-dialog .sec-section, #sec-share { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+  #sec-share { border-bottom: 0; }
+  #share-link-dialog .sec-title, #share-list-dialog .sec-title, #sec-share .sec-title, #sec-share h4 { font-weight: 600; }
+  #share-link-dialog .sec-hint, #share-list-dialog .sec-hint, #sec-share .sec-hint { font-size: 13px; color: var(--text-dim); }
+  #share-link-dialog .sec-msg, #share-list-dialog .sec-msg, #sec-share .sec-msg { min-height: 1em; margin: 0; font-size: 13px; color: var(--error); }
+  #sec-share .sec-msg.sl-set-msg { color: var(--text-dim); }
+  #share-link-dialog select, #sec-share select { width: 100%; min-height: 44px; padding: 0 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; font-size: 16px; }
+  #share-link-dialog input[type="text"] { width: 100%; min-height: 44px; padding: 0 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; font-size: 16px; }
+  #share-link-dialog input[type="checkbox"], #sec-share input[type="checkbox"] { width: 22px; height: 22px; flex: none; }
+  #share-link-dialog .sec-actions, #share-list-dialog .sec-actions, #sec-share .sec-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+  #sec-share .sec-actions { margin-top: 0; justify-content: flex-start; }
+  #share-link-dialog .sec-btn, #share-list-dialog .sec-btn, #sec-share .sec-btn { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); font-size: 16px; }
+  #share-link-dialog .sl-create, #share-link-dialog .sl-copy, #share-list-dialog .sl-close { background: var(--accent); color: #fff; }
+  #share-link-dialog .sl-done { background: var(--accent); color: #fff; }
+  #share-link-dialog .sl-copy { background: var(--border); color: var(--text); }
+  #share-list-dialog .sl-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  #share-list-dialog .sl-row .sec-title { font-size: 15px; overflow-wrap: anywhere; }
+  #share-list-dialog .sl-row .sec-btn { min-height: 40px; padding: 0 14px; flex: none; color: var(--error); }
 </style>
 </head>
 <body>
@@ -966,6 +1017,7 @@
   <dialog id="notify-prefs-sheet" aria-label="Notifications"></dialog>
   <dialog id="security-sheet"></dialog>
   <dialog id="files-sheet" data-no-dirty></dialog>
+  <dialog id="dl-sheet" data-no-dirty></dialog>
   <dialog id="recall-sheet" data-no-dirty></dialog>
   <dialog id="or-sheet" data-no-dirty></dialog>
   <input type="file" id="files-upload-input" multiple hidden>
@@ -974,6 +1026,7 @@
   <script src="/ui-voice-orb.js"></script>
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
+  <script src="/ui-file-card.js"></script>
   <script src="mobile.js"></script>
 </body>
 </html>

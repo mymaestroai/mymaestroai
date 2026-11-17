@@ -2357,6 +2357,29 @@
     #files-panel .files-progress { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
     #files-panel .files-progress .bar { height: 4px; background: var(--bg-input); border-radius: 2px; overflow: hidden; }
     #files-panel .files-progress .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .15s; }
+    /* Recent from agents (the newest files agents wrote here) */
+    #files-panel .files-recent { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+    #files-panel .files-recent h4 { margin: 0 0 2px; font-size: 12px; font-weight: 600; color: var(--text-dim); }
+    #files-panel .files-recent .fr-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-width: 0; }
+    #files-panel .files-recent .fr-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #files-panel .files-recent .fr-info { flex: 0 1 auto; color: var(--text-dim); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+    #files-panel .files-recent a.fr-dl { color: var(--accent); text-decoration: none; font-size: 12px; white-space: nowrap; }
+    #files-panel .files-recent a.fr-dl:hover { text-decoration: underline; }
+    #files-panel .files-recent button.fr-all { align-self: flex-start; background: none; border: 0; padding: 2px 0; margin: 0; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; }
+    #files-panel .files-recent button.fr-all:hover { text-decoration: underline; }
+    /* Download cards under an agent's reply (lib/ui-file-card.js) */
+    .file-cards { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
+    .file-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-width: 420px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; background: var(--bg-input); }
+    .file-card .fc-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .file-card .fc-icon { font-size: 24px; line-height: 1; flex: 0 0 auto; }
+    .file-card .fc-meta { min-width: 0; flex: 1 1 auto; }
+    .file-card .fc-name { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-card .fc-sub { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-card .fc-preview { max-width: 100%; max-height: 160px; object-fit: contain; border-radius: 6px; align-self: flex-start; }
+    .file-card .fc-preview-link { color: var(--accent); font-size: 13px; text-decoration: none; align-self: flex-start; }
+    .file-card .fc-download { display: block; text-align: center; background: var(--accent); border: none; border-radius: 6px; padding: 10px 16px; color: #fff; cursor: pointer; font-size: 0.95rem; font-weight: 600; text-decoration: none; }
+    .file-card .fc-download:hover { background: var(--accent-hover); }
+    @media (max-width: 480px) { .file-card { max-width: 100%; } }
     /* Context compression line under a chat's toolbar (see compactionRefresh in app.js) */
     .compaction-line { padding: 3px 20px; font-size: 0.72rem; color: var(--text-dim); border-bottom: 1px solid var(--border); background: rgba(245, 166, 35, 0.04); }
     .compaction-line.hot { color: #f5a623; }
@@ -2503,7 +2526,15 @@
     .visual-html iframe.visual-frame { display: block; width: 100%; height: 360px; border: 0; background: #1a1a19; }
     .visual-html.expanded iframe.visual-frame { height: 80vh; }
     .visual .visual-note { padding: 4px 10px; font-size: 0.75rem; color: var(--error); border-bottom: 1px solid var(--border); }
-  </style>
+      /* share links: Settings, Security block (#st-share-block) matches the other Settings rows, selects and buttons */
+    #st-share-block label.sec-hint { font-size: 0.8rem; color: var(--text-secondary); margin: 0; }
+    #st-share-block select { width: 100%; padding: 6px 10px; font-size: 0.8rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+    #st-share-block select:focus { border-color: var(--accent); outline: none; }
+    #st-share-block .sec-actions { display: flex; gap: 8px; }
+    #st-share-block .sec-btn { padding: 5px 10px; font-size: 0.72rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer; }
+    #st-share-block .sec-btn:hover { border-color: var(--accent); }
+    #st-share-block .sec-msg { font-size: 0.68rem; color: var(--text-dim); min-height: 1em; }
+</style>
 </head>
 <body>
   <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()">&#9776;</button>
@@ -2797,6 +2828,7 @@
   <script src="/ui-voice-orb.js"></script>
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
+  <script src="/ui-file-card.js"></script>
   <script src="app.js"></script>
   <script src="comms-panel.js"></script>
   <!-- Image Modal -->

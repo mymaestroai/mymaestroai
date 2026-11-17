@@ -304,11 +304,33 @@ function stripHubOnlyChatFields(body, req) {
   return body;
 }
 
+// Share links: the store and the routes are made once, on first use (the store loads data/share-links.json and prunes daily).
+let _shareLinkRoutes = null;
+function shareLinkRoutes() {
+  if (!_shareLinkRoutes) {
+    const SL = require('./lib/share-links');
+    const store = SL.createStore({ file: path.join(__dirname, 'data', 'share-links.json'), log: (m) => console.warn(m) });
+    store.startPruneTimer();
+    _shareLinkRoutes = require('./lib/share-links-routes').createShareLinkRoutes({
+      store, access, hubAuth, log: (m) => console.warn(m),
+      getFiles: () => require('./lib/files').getFiles({ getUser: (id) => hubAuth.getUser(id), isAdminUser: (u) => access.isAdmin(u),
+        maxUploadBytes: () => Math.max(1, Number(hubSettings.getSetting('filesMaxUploadMb')) || 512) * 1048576 }),
+      getAgents: () => getAgents(),
+      settings: () => hubSettings.getSetting('shareLinks'),
+      push: () => require('./lib/push').getPush(),
+    });
+  }
+  return _shareLinkRoutes;
+}
+
+// A share token must never reach a log line (also when URL-encoded inside next=).
+const redactShareToken = (s) => String(s).replace(/\/s\/[A-Za-z0-9_-]{43}/g, '/s/<token>').replace(/%2[Ff]s%2[Ff][A-Za-z0-9_-]{43}/g, '%2Fs%2F<token>');
+
 // A request can never take the process down: whatever throws before or outside the route try-block below (cookie
 // or URL decoding, identity, the bridge) answers 400 and the hub carries on (review F07).
 const server = http.createServer((req, res) => {
   handleHttpRequest(req, res).catch((err) => {
-    console.error(`[server] ${req.method} ${String(req.url || '').slice(0, 200)}: ${err && err.message ? err.message : err}`);
+    console.error(`[server] ${req.method} ${redactShareToken(String(req.url || '')).slice(0, 200)}: ${redactShareToken(err && err.message ? err.message : err)}`);
     try {
       if (!res.headersSent) res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'bad_request' }));
@@ -497,6 +519,10 @@ async function handleHttpRequest(req, res) {
   }
 
   try {
+    // ── Share links (lib/share-links, lib/share-links-routes): /api/share-links*, /s/<token>. A person on a browser session only. ──
+    if (pathname.startsWith('/api/share-links') || pathname.startsWith('/s/')) {
+      if (await shareLinkRoutes().handle(req, res, pathname)) return;
+    }
     // ── OpenAI-Compatible Routes ────────────────────────────────────
     if (pathname === '/v1/chat/completions' && req.method === 'POST') {
       return openaiCompat.handleChatCompletion(req, res);
@@ -885,30 +911,91 @@ async function handleHttpRequest(req, res) {
 
     // ── Files area: upload / download / browse one folder per owner (lib/files) ──
     if (pathname === '/api/files' || pathname.startsWith('/api/files/')) {
-      const files = require('./lib/files').getFiles({ getUser: (id) => hubAuth.getUser(id), isAdminUser: (u) => access.isAdmin(u),
-        maxUploadBytes: () => Math.max(1, Number(hubSettings.getSetting('filesMaxUploadMb')) || 512) * 1048576 });
+      const filesLib = require('./lib/files');
+      const files = filesLib.getFiles({ getUser: (id) => hubAuth.getUser(id), isAdminUser: (u) => access.isAdmin(u),
+        maxUploadBytes: () => Math.max(1, Number(hubSettings.getSetting('filesMaxUploadMb')) || 512) * 1048576, dataDir: path.join(__dirname, 'data') });
       const q = new URL(req.url, 'http://x').searchParams;
       let jsonBody = null;
       if (req.method === 'POST' && pathname !== '/api/files/upload') { jsonBody = await authJson(); if (!jsonBody) return jsonResponse(res, 400, { error: 'invalid JSON' }); }
       const want = (k) => (jsonBody && jsonBody[k] !== undefined) ? jsonBody[k] : q.get(k);
       const who = req.hubUser || { id: 'service', role: 'admin' };
-      // Per agent when the page names the active chat's agent (the user must be allowed that agent);
-      // otherwise the owner's general folder.
-      let own = null;
-      const agentName = want('agent');
-      if (agentName) {
+      // Per agent when the page names an agent (the person must be allowed that agent); otherwise the owner's general folder.
+      // scopeFor(agentName, ownerReq, agents?) -> { own } | { code, error }: the one owner/agent rule, run once per request here
+      // and per item in /resolve.
+      const scopeFor = async (agentName, ownerReq, agentsList) => {
+        if (agentName) {
+          const agents = agentsList || await getAgents();
+          const rec = agents.find(a => a.name === String(agentName));
+          if (!rec) return { code: 404, error: 'no such agent' };
+          if (!access.isAdmin(who) && !access.canAccessAgent(who, rec.name, { agents })) return { code: 403, error: 'no_access_to_agent' };
+          const memberOwned = !!(rec.owner && !hubAuth.listUsers().some(u => u.id === String(rec.owner) && u.role === 'admin'));
+          return { own: files.resolveAgent(who, rec, { memberOwned }) };
+        }
+        const own = files.resolveOwner(who, ownerReq);
+        return own ? { own } : { code: 403, error: 'no such owner' };
+      };
+      // POST /api/files/resolve { items }: Files-folder paths an agent wrote (abs) or download links ({agent|owner, path}) -> file facts + download URLs.
+      // Anything outside the folders this person may read answers { ok:false, error:'not found' }, same as a missing file.
+      if (pathname === '/api/files/resolve' && req.method === 'POST') {
+        const items = jsonBody && jsonBody.items;
+        if (!Array.isArray(items) || items.length > 12) return jsonResponse(res, 400, { error: 'items must be a list of at most 12' });
+        const nf = { ok: false, error: 'not found' };
         const agents = await getAgents();
-        const rec = agents.find(a => a.name === String(agentName));
-        if (!rec) return jsonResponse(res, 404, { error: 'no such agent' });
-        if (!access.isAdmin(who) && !access.canAccessAgent(who, rec.name, { agents })) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
-        const memberOwned = !!(rec.owner && !hubAuth.listUsers().some(u => u.id === String(rec.owner) && u.role === 'admin'));
-        own = files.resolveAgent(who, rec, { memberOwned });
-      } else {
-        own = files.resolveOwner(who, want('owner'));
+        let roots = null;   // the roots this person may read, agent roots first, then their folders: built once, only for { abs } items
+        const rootsFor = async () => {
+          if (roots) return roots;
+          roots = [];
+          for (const a of agents) {
+            const s = await scopeFor(a.name, null, agents);
+            if (s.own) roots.push({ root: s.own.root, agent: s.own.agent, owner: null });
+          }
+          const owners = access.isAdmin(who) ? ['mine', ...hubAuth.listUsers().map(u => u.id)] : [null];
+          for (const o of owners) { const s = await scopeFor(null, o, agents); if (s.own) roots.push({ root: s.own.root, agent: null, owner: s.own.ownerId }); }
+          return roots;
+        };
+        const out = [];
+        for (const it of items) {
+          if (!it || typeof it !== 'object' || Array.isArray(it)) { out.push(nf); continue; }
+          let r = null;
+          try {
+            if (typeof it.abs === 'string') {
+              for (const c of await rootsFor()) {
+                const hit = files.resolveAbs(c.root, it.abs);
+                const info = hit && files.fileInfo(c.root, hit.rel, c);
+                if (info) { r = info; break; }
+              }
+            } else if (typeof it.path === 'string') {
+              const s = await scopeFor(it.agent ? String(it.agent) : null, it.owner, agents);
+              if (s.own) r = files.fileInfo(s.own.root, it.path, { agent: s.own.agent || null, owner: s.own.ownerId });
+            }
+          } catch { r = null; }
+          out.push(r || nf);
+        }
+        return jsonResponse(res, 200, { ok: true, items: out });
       }
-      if (!own) return jsonResponse(res, 403, { error: 'no such owner' });
+      const sc = await scopeFor(want('agent'), want('owner'));
+      if (!sc.own) return jsonResponse(res, sc.code, { error: sc.error });
+      const own = sc.own;
       const rel = String(want('path') || '');
       const fail = (r) => jsonResponse(res, r.code || 400, { error: r.error });
+      // GET /api/files/recent: the newest files agents wrote under this folder (uploads left out).
+      if (pathname === '/api/files/recent' && req.method === 'GET') {
+        const r = files.recent(own.root, { limit: q.get('limit') });
+        const where = { agent: own.agent || null, owner: own.agent ? null : own.ownerId };
+        return jsonResponse(res, 200, { ok: true, truncated: r.truncated, files: r.files.map(f => ({ ...f,
+          download: filesLib.downloadUrl({ ...where, path: f.path }),
+          inline: filesLib.isActiveName(f.name) ? null : filesLib.downloadUrl({ ...where, path: f.path }, { inline: true }) })) });
+      }
+      // GET /api/files/zip: a folder as one .zip (check=1: only the access checks and the size scan, answered as JSON).
+      if (pathname === '/api/files/zip' && req.method === 'GET') {
+        const lim = filesLib.zipLimits(hubSettings.getSetting('filesZipMaxMb'), hubSettings.getSetting('filesZipMaxFiles'));
+        const plan = files.zipPlan(own.root, rel, lim);
+        if (!plan.ok) return fail(plan);
+        if (plan.tooBig) return jsonResponse(res, 413, { error: plan.error, files: plan.count, bytes: plan.bytes, maxFiles: plan.maxFiles, maxBytes: plan.maxBytes });
+        if (q.get('check') === '1') return jsonResponse(res, 200, { ok: true, files: plan.count, bytes: plan.bytes, maxFiles: plan.maxFiles, maxBytes: plan.maxBytes });
+        console.log(`[files] ${who.id} zipped ${rel || '(root)'} (${plan.count} files) from ${own.agent || (own.ownerId === 'mine' ? 'share' : own.ownerId)}`);
+        return files.streamZip(own.root, plan, res, { maxBytes: plan.maxBytes });
+      }
       if (pathname === '/api/files' && req.method === 'GET') {
         const r = files.list(own.root, rel);
         if (!r.ok) return fail(r);
@@ -2442,6 +2529,8 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.openrouter !== undefined) patch.openrouter = require('./lib/openrouter').cleanOpenRouterSettings(patch.openrouter);
           if (patch && patch.planFallback !== undefined) patch.planFallback = require('./lib/plan-usage').cleanPolicy(patch.planFallback, hubSettings.getSetting('planFallback'));
           // The reasoning panel (lib/sdk-chat showReasoning): on unless turned off.
+          // Share links: enabled, defaultHours, maxHours (hard maximum 168), merged onto the stored value (lib/share-links cleanSettings).
+          if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
@@ -3419,6 +3508,7 @@ async function handleHttpRequest(req, res) {
       };
       const headers = { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' };
       if (ext === '.html') headers['Cache-Control'] = 'no-store, no-cache, must-revalidate';
+      if (pathname === '/login' || pathname === '/invite') headers['Referrer-Policy'] = 'no-referrer';   // a share link's token rides in ?next=: it never goes to another site
       res.writeHead(200, headers);
       fs.createReadStream(filePath).pipe(res);
       return;
@@ -3428,7 +3518,7 @@ async function handleHttpRequest(req, res) {
     jsonResponse(res, 404, { error: 'Not found' });
 
   } catch (err) {
-    console.error(`[server] ${req.method} ${pathname}: ${err.message}`);
+    console.error(`[server] ${req.method} ${redactShareToken(pathname)}: ${redactShareToken(err.message)}`);
     if (!res.headersSent) {
       jsonResponse(res, 500, { error: err.message });
     }
