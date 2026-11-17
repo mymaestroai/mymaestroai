@@ -161,7 +161,10 @@ test('policy gate: boxed blocks every other tool before any other check; unboxed
     assert.deepStrictEqual(out, {}, `${t} is allowed`);
   }
   // unboxed agents: the same hook without `boxed` does not apply the box rule
-  assert.deepStrictEqual(await call(plain, 'Read', { file_path: '/tmp/x' }), {});
+  // (an allowed client Read now answers allow explicitly, r2-read-fix; the point here is that the box rule doesn't apply)
+  const plainRead = await call(plain, 'Read', { file_path: '/tmp/x' });
+  assert.notStrictEqual(plainRead.decision, 'block', 'not blocked by the box rule');
+  assert.strictEqual(plainRead.hookSpecificOutput && plainRead.hookSpecificOutput.permissionDecision, 'allow');
   assert.deepStrictEqual(await call(plain, 'Skill', {}), {}, 'not blocked by the box rule');
   assert.deepStrictEqual(await call(boxed, 'mcp__hub__Bash', { command: 'pwd' }), {});
   assert.deepStrictEqual(await boxed({ hook_event_name: 'Other', tool_name: 'Bash' }), {}, 'other hook events untouched');
