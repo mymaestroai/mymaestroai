@@ -489,3 +489,20 @@ test('pathsOf: the outside write path and an admin read path; nothing for inside
   const admin = toolPolicy.pathsOf('touch ' + secret, opts);
   assert.deepStrictEqual(admin.writes, [secret], 'a write to hub data is above every baseline too');
 });
+
+test('a self-check agent (selfcheck-<kind>, no parent) is boxed by its own record and its own folder; a worker still by its parent', () => {
+  const tw = require('../lib/temporal-workers');
+  const wire = createWire({ getAgents: () => [{ name: 'main', category: 'primary' }], getVirtual: (n) => tw.getVirtual(n), getSetting: () => undefined });
+  assert.strictEqual(wire.resolveAgent('selfcheck-boxed'), null, 'nothing before the check agent exists');
+  const record = { name: 'selfcheck-boxed', model: 'm', category: 'specialist', owner: null, sandbox: 'container', policy: { roots: ['/srv/hub-home/selfcheck/boxed'] } };
+  tw.createVirtual({ selfCheck: true, id: 'selfcheck-boxed', record, model: 'm', observe: () => {} });
+  try {
+    const r = wire.resolveAgent('selfcheck-boxed');
+    assert.strictEqual(r.modeRecord, tw.getVirtual('selfcheck-boxed').record);
+    assert.strictEqual(r.rulesRecord, r.modeRecord);
+    assert.strictEqual(r.folderName, 'selfcheck-boxed');
+    assert.strictEqual(wire.folderNameFor('selfcheck-boxed'), 'selfcheck-boxed');
+  } finally { tw.releaseVirtual('selfcheck-boxed'); }
+  const w = tw.createVirtual({ parent: 'main', model: 'm', toolScope: 'read' });
+  try { assert.strictEqual(wire.resolveAgent(w.id).folderName, 'main'); } finally { tw.releaseVirtual(w.id); }
+});
