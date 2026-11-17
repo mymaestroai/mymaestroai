@@ -930,8 +930,12 @@ html.mm-simple .simple-think { display: flex; flex-direction: column; gap: 6px; 
 html.mm-simple .st-lab { display: flex; align-items: center; gap: 10px; color: var(--text-tertiary); font-size: 14px; }
 html.mm-simple .st-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: simple-pulse 1.6s ease-in-out infinite; }
 @keyframes simple-pulse { 50% { opacity: .3; transform: scale(.7); } }
-html.mm-simple .st-lines { color: var(--text-tertiary); font-size: 14px; line-height: 1.55; padding-left: 18px; border-left: 2px solid var(--border); overflow-wrap: anywhere; }
-html.mm-simple .st-lines > div:first-child { -webkit-mask-image: linear-gradient(transparent, #000); mask-image: linear-gradient(transparent, #000); opacity: .7; }
+html.mm-simple .st-lines { color: var(--text-tertiary); font-size: 14px; line-height: 1.55; padding-left: 18px; border-left: 2px solid var(--border); overflow-wrap: anywhere;
+  /* never taller than five lines, however the text wraps: the newest text stays at the bottom, the top is cut and faded */
+  max-height: calc(1.55em * 5); overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 60%); mask-image: linear-gradient(to bottom, transparent 0, #000 60%); }
+html.mm-simple .st-lines[hidden] { display: none; }
+html.mm-simple .st-lines > div { flex: none; }
 html.mm-simple .st-consult { color: var(--text-dim); font-size: 14px; padding-left: 18px; font-style: italic; }
 @media (prefers-reduced-motion: reduce) { html.mm-simple .st-dot { animation: none; } }
 
