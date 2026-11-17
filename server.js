@@ -21,13 +21,10 @@ try { restoredAtBoot = require('./lib/backup/apply').applyAtBoot({ root: __dirna
 catch (e) { console.error(`[restore] the restore could not be finished or rolled back, so My Maestro AI stops here to keep your data safe: ${e.message}`); process.exit(1); }
 
 // Load .env BEFORE any other requires — skill-manager reads env at import time
-try {
-  const envFile = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
-  for (const line of envFile.split('\n')) {
-    const match = line.match(/^([A-Z_]+)=(.*)$/);
-    if (match) process.env[match[1]] = match[2].trim();
-  }
-} catch {}
+// Secret values (keys, tokens, passwords) go to a private in-memory store (lib/hub-secrets), not process.env, so no
+// child process the hub starts carries them in its start environment.
+const hubSecrets = require('./lib/hub-secrets');
+try { hubSecrets.loadEnvFile(path.join(__dirname, '.env')); } catch {}
 
 // Agents' boxes a backup paused and couldn't let go (the process stopped mid-copy): let them go now, after .env (it may say
 // how to reach Docker). Their record sits in .restore/, which a restore never moves; it stays until each box is let go.
@@ -194,7 +191,7 @@ process.on('exit', () => {
 // (HUB_BIND_HOST) that is refused unless Basic auth is configured — see
 // lib/bind-host.js.
 const { isSameOriginStreamRequest, isTailnetUserAllowed } = require('./lib/bind-host');
-const BIND = require('./lib/bind-host').resolveBindHost(process.env, {
+const BIND = require('./lib/bind-host').resolveBindHost(hubSecrets.envView(), {
   hasUsers: () => hubAuth.hasUsers(),
   hasSecuredAdmin: () => hubAuth.admins().some(u => u.totp && u.totp.enabled),
 });
@@ -244,8 +241,8 @@ const _modelHealthCache = {};
 let _modelHealthLastRun = 0;
 
 // Basic Auth (optional)
-const AUTH_USERNAME = process.env.HUB_AUTH_USERNAME || '';
-const AUTH_PASSWORD = process.env.HUB_AUTH_PASSWORD || '';
+const AUTH_USERNAME = hubSecrets.get('HUB_AUTH_USERNAME') || '';
+const AUTH_PASSWORD = hubSecrets.get('HUB_AUTH_PASSWORD') || '';
 if (AUTH_USERNAME && hubAuth.hasUsers()) console.warn('[auth] HUB_AUTH_USERNAME/HUB_AUTH_PASSWORD are set but accounts exist: the old password login is ignored. Remove the two lines from .env; scripts and bots use API tokens (Users page).');
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -1120,7 +1117,7 @@ async function handleHttpRequest(req, res) {
       // Call recordings: a signed-in admin sees the whole setting; everybody else (members, the hub's own service calls that agents' tools use) gets it without the allowed list. canDownload: is this caller on the list.
       const recView = { admin: access.isAdmin(req.hubUser) && !req.hubPendingTotp, userId: req.hubUser && !req.hubPendingTotp ? String(req.hubUser.id) : '' };
       const recordingsFor = require('./lib/recordings/settings').recordingsForViewer;
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {
@@ -1424,6 +1421,8 @@ async function handleHttpRequest(req, res) {
       // Only the owner (the earliest admin) does: who may download a family's recordings is not any admin's call.
       const recordingsChange = !!body && typeof body === 'object' && 'recordings' in body;
       if (recordingsChange && (req.hubService || req.hubToken || !req.hubUser || !hubAuth.isOwner(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only the owner can change: recordings' });
+      // Which environment variables an agent's commands keep is a signed-in admin's call: never a member, and never the hub's own service calls (an agent could widen itself).
+      if (body && typeof body === 'object' && 'envKeep' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only an admin can change: envKeep' });
       const recSettings = require('./lib/recordings/settings');
       const allowedBefore = recordingsChange ? recSettings.recordingsOf((await getAgents()).find(a => a.name === name)).allowed : [];
       if (!req.hubService && !access.isAdmin(req.hubUser)) {

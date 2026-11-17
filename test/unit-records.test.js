@@ -85,6 +85,32 @@ test('targetAllowed confines record symlinks to the hub home and workspaces, nev
   assert.ok(!rec.targetAllowed(path.join(REAL, 'lib', 'sdk-chat.js')), 'a link to the hub code is refused');
 });
 
+test('insideInstallRefused: on both layouts only workspaces/ and an in-install hub home are open inside the install folder', () => {
+  const rec = require(path.join(REAL, 'lib', 'records.js'));
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rec-layout-')));   // real paths, as targetAllowed gets
+  const make = (...p) => { const d = path.join(base, ...p); fs.mkdirSync(d, { recursive: true }); return d; };
+  // Old layout: the hub home is the install folder's parent (share/ and users/ sit beside the install).
+  const oldHome = make('old');
+  const oldRoot = make('old', 'install');
+  make('old', 'install', 'workspaces', 'sam'); make('old', 'install', 'lib'); make('old', 'install', 'data'); make('old', 'share', 'common');
+  // New layout: the hub home is a folder inside the install.
+  const newRoot = make('new', 'install');
+  const newHome = make('new', 'install', 'home');
+  make('new', 'install', 'workspaces', 'sam'); make('new', 'install', 'lib'); make('new', 'install', 'home', 'share', 'common');
+  for (const [label, root, hubHome] of [['old', oldRoot, oldHome], ['new', newRoot, newHome]]) {
+    const o = { root, hubHome };
+    assert.ok(rec.insideInstallRefused(path.join(root, 'lib', 'sdk-chat.js'), o), `${label}: code is refused`);
+    assert.ok(rec.insideInstallRefused(path.join(root, 'data', 'settings.json'), o), `${label}: data/ is refused`);
+    assert.ok(rec.insideInstallRefused(path.join(root, '.env'), o), `${label}: .env is refused`);
+    assert.ok(rec.insideInstallRefused(path.join(root, 'node_modules', 'x', 'index.js'), o), `${label}: node_modules is refused`);
+    assert.ok(rec.insideInstallRefused(root, o), `${label}: the install folder itself is refused`);
+    assert.ok(!rec.insideInstallRefused(path.join(root, 'workspaces', 'sam', 'notes.md'), o), `${label}: workspaces/ is open`);
+    assert.ok(!rec.insideInstallRefused(path.join(hubHome, 'share', 'common', 'plan.md'), o), `${label}: the hub home is open`);
+    assert.ok(!rec.insideInstallRefused(path.join(base, 'elsewhere', 'x.md'), o), `${label}: outside the install is not this check's call`);
+  }
+  assert.ok(rec.insideInstallRefused(path.join(newRoot, 'homework', 'x.md'), { root: newRoot, hubHome: newHome }), 'a sibling sharing the hub home\'s prefix is refused');
+});
+
 test('contextSection: every record in full, cap by bytes (agent field, settings, default 256 KB), files index appended', () => {
   const { rec } = load();
   assert.strictEqual(rec.contextSection('nobody'), '');
