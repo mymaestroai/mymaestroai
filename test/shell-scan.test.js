@@ -600,7 +600,9 @@ test('review r3 3: a program named by an assigned variable is computed, except o
     'c=(rm); $c x', 'c[0]=rm; $c x', 'sudo $c x; c=rm; c=ls', 'c=rm; env $c x; c=ls']) {
     assert.ok(computedIn(t), t);
   }
-  for (const t of ['declare c=rm; $c x', 'export c=rm; $c x', 'readonly c=rm; $c x', 'PY=python3; "$PY" /tmp/x.py', 'PY=python3; $PY /tmp/x.py', 'PY=python3; ${PY} /tmp/x.py', 'PY=python3; "${PY}" /tmp/x.py', '"$PY" /tmp/x.py', '$X y', 'echo $c; c=rm',
+  // declare/export/readonly are not plain NAME=literal commands, so their variables count as computed (review r4).
+  for (const t of ['declare c=rm; $c x', 'export c=rm; $c x', 'readonly c=rm; $c x']) assert.ok(computedIn(t), t);
+  for (const t of ['PY=python3; "$PY" /tmp/x.py', 'PY=python3; $PY /tmp/x.py', 'PY=python3; ${PY} /tmp/x.py', 'PY=python3; "${PY}" /tmp/x.py', '"$PY" /tmp/x.py', '$X y', 'echo $c; c=rm',
     'for f in /tmp/*.txt; do wc -l "$f"; done', 'x=$(git rev-parse HEAD); echo $x', 'for i in 1 2 3; do echo $i; done', 'read -r line < /tmp/f; echo "$line"', 'case "$1" in a) ls;; esac']) {
     assert.strictEqual(computedIn(t), false, t);
   }
