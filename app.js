@@ -284,12 +284,21 @@
       return { hasMore, open: isOpen, hidden, groups: gs, dot: hasMore && hidden.some(isBusy) };
     }
     // Paints that state on the sidebar; changes the DOM only where it differs (it runs on every scan and status paint).
+    let simpleMoreMem = null;   // the choice made on this page, kept even when localStorage refuses it
+    function simpleMoreOpen() {
+      if (simpleMoreMem !== null) return simpleMoreMem;
+      try { return localStorage.getItem(window.hubSimple.MORE_KEY) === '1'; } catch { return false; }
+    }
+    function simpleMoreToggle() {
+      simpleMoreMem = !simpleMoreOpen();
+      try { localStorage.setItem(window.hubSimple.MORE_KEY, simpleMoreMem ? '1' : '0'); } catch { /* kept for this page only */ }
+    }
     function simpleAgentsSync() {
       if (!simpleOn() || typeof window.hubSimple.agentGroups !== 'function') return;
       const list = document.getElementById('agent-list');
       if (!list || typeof AGENTS === 'undefined' || !Array.isArray(AGENTS)) return;
       const hs = window.hubSimple;
-      let open = false; try { open = localStorage.getItem(hs.MORE_KEY) === '1'; } catch { /* private mode: closed */ }
+      const open = simpleMoreOpen();
       const busy = new Set([...list.querySelectorAll('.agent-btn.is-busy')].map(b => b.dataset.agent));
       const cont = document.querySelector('#chat-panels .chat-container.active');
       const cid = cont ? String(cont.id || '').replace(/^panel-/, '') : '';
@@ -375,14 +384,19 @@
         if (hc && tog.parentNode !== hc) hc.insertBefore(tog, files);
       }
     }
+    // One theme save at a time (the button and the settings sheet): a tap while one is saving is ignored, so a late
+    // failure can never roll back over a newer choice.
+    let simpleThemeSaving = false;
     async function simpleThemeNext() {
       const me = window.hubMe;
       const hs = window.hubSimple;
-      if (!me || !hs || typeof hs.nextTheme !== 'function') return;
+      if (!me || !hs || typeof hs.nextTheme !== 'function' || simpleThemeSaving) return;
+      simpleThemeSaving = true;
       const before = me.theme; const next = hs.nextTheme(before);
       me.theme = next;
       try { hs.apply(me); simpleTopSync(); await simplePrefs({ theme: next }); }
       catch (err) { me.theme = before; try { hs.apply(me); simpleTopSync(); } catch { /* keep the page as it was */ } hubToast(`Could not save: ${err.message}`); }
+      finally { simpleThemeSaving = false; }
     }
 
     // Settings
@@ -391,9 +405,12 @@
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json().catch(() => ({}));
     }
+    let simpleSwitching = false;   // one switch at a time (a second tap while saving does nothing)
     async function simpleSwitchMode(mode) {
+      if (simpleSwitching) return;
+      simpleSwitching = true;
       try { await simplePrefs({ uiMode: mode }); location.reload(); }
-      catch (e) { hubToast(`Could not switch: ${e.message}`); }
+      catch (e) { simpleSwitching = false; hubToast(`Could not switch: ${e.message}`); }
     }
     function simpleCloseSettings() { const o = document.getElementById('simple-settings'); if (o) o.remove(); }
     function openSimpleSettings() {
@@ -417,9 +434,12 @@
         if (e.target === overlay || e.target.closest('.sm-x')) { simpleCloseSettings(); return; }
         const t = e.target.closest('.sm-seg button');
         if (t) {
+          if (simpleThemeSaving) return;   // one theme save at a time (shared with the theme button)
+          simpleThemeSaving = true;
           const before = me.theme; me.theme = t.dataset.theme; paintSeg();
-          try { window.hubSimple && window.hubSimple.apply(me); await simplePrefs({ theme: t.dataset.theme }); }
-          catch (err) { me.theme = before; paintSeg(); try { window.hubSimple && window.hubSimple.apply(me); } catch { /* keep the page as it was */ } hubToast(`Could not save: ${err.message}`); }
+          try { window.hubSimple && window.hubSimple.apply(me); simpleTopSync(); await simplePrefs({ theme: t.dataset.theme }); }
+          catch (err) { me.theme = before; paintSeg(); try { window.hubSimple && window.hubSimple.apply(me); simpleTopSync(); } catch { /* keep the page as it was */ } hubToast(`Could not save: ${err.message}`); }
+          finally { simpleThemeSaving = false; }
           return;
         }
         const a = e.target.closest('[data-act]');
@@ -446,8 +466,7 @@
       if (agentListEl) agentListEl.addEventListener('click', (e) => {   // "More agents" opens and closes; the choice is kept per device
         const b = e.target.closest ? e.target.closest('.simple-more') : null;
         if (!b) return;
-        let open = false; try { open = localStorage.getItem(window.hubSimple.MORE_KEY) === '1'; } catch { /* closed */ }
-        try { localStorage.setItem(window.hubSimple.MORE_KEY, open ? '0' : '1'); } catch { /* not saved: still opens for now */ }
+        simpleMoreToggle();
         simpleAgentsSync();
       });
       simpleTopSync(); simpleAgentsSync();

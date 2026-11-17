@@ -14330,8 +14330,9 @@ function simpleAgentSheetModel(list, cur, open, busyOf) {
     hiddenBusy: !isOpen && hidden.some((a) => !!busyOf(a.name)),
   };
 }
-function simpleMoreGet() { try { return localStorage.getItem(window.hubSimple.MORE_KEY) === '1'; } catch { return false; } }
-function simpleMoreSet(open) { try { localStorage.setItem(window.hubSimple.MORE_KEY, open ? '1' : '0'); } catch { /* not remembered */ } }
+let simpleMoreMem = null;   // the choice made on this page, kept even when localStorage refuses it
+function simpleMoreGet() { if (simpleMoreMem !== null) return simpleMoreMem; try { return localStorage.getItem(window.hubSimple.MORE_KEY) === '1'; } catch { return false; } }
+function simpleMoreSet(open) { simpleMoreMem = !!open; try { localStorage.setItem(window.hubSimple.MORE_KEY, open ? '1' : '0'); } catch { /* kept for this page only */ } }
 // The dot's class for an agent: question (waiting for the person), busy (working) or none.
 function simpleDotClass(name) {
   const s = live[name];
@@ -14414,14 +14415,19 @@ async function simpleModeTap() {
   toast('Could not switch');
 }
 // The theme button: Light, Dark, Match device in turn; applied at once, saved, put back if the save fails.
+// One theme save at a time (the button and the settings sheet): a tap while one is saving is ignored, so a late
+// failure can never roll back over a newer choice.
+let simpleThemeSaving = false;
 async function simpleThemeTap() {
-  if (!simpleOn() || !hubMe) return;
+  if (!simpleOn() || !hubMe || simpleThemeSaving) return;
+  simpleThemeSaving = true;
   const was = hubMe.theme;
   hubMe.theme = window.hubSimple.nextTheme(was);
   try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ }
   simpleToggleSync();
   let ok = false;
   try { ok = await simplePrefsPost({ theme: hubMe.theme }); } catch { ok = false; }
+  simpleThemeSaving = false;
   if (ok) return;
   hubMe.theme = was;
   try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ }
@@ -14444,10 +14450,16 @@ function simpleSettingsOpen() {
   const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
   paint();
   d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {
+    if (simpleThemeSaving) return;   // one theme save at a time (shared with the theme button)
+    simpleThemeSaving = true;
     const v = b.dataset.theme;
-    if (!(await simplePrefsPost({ theme: v }))) { toast('Could not save that'); return; }
+    let ok = false;
+    try { ok = await simplePrefsPost({ theme: v }); } catch { ok = false; }
+    simpleThemeSaving = false;
+    if (!ok) { toast('Could not save that'); return; }
     if (hubMe) hubMe.theme = v;
     try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ }
+    simpleToggleSync();
     paint();
   }));
   $('ss-adv').addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'advanced' })) simpleReload(); else toast('Could not switch'); });

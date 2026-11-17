@@ -71,7 +71,7 @@ function sandbox(me, opts) {
     toast: (m) => calls.toasts.push(m),
   };
   vm.createContext(ctx);
-  vm.runInContext('let simpleSwitching = false;\n' + ['simpleToggleSync', 'simpleModeTap', 'simpleThemeTap'].map(fnSource).join('\n') +
+  vm.runInContext('let simpleSwitching = false;\nlet simpleThemeSaving = false;\n' + ['simpleToggleSync', 'simpleModeTap', 'simpleThemeTap'].map(fnSource).join('\n') +
     '\nthis.__h = { simpleToggleSync, simpleModeTap, simpleThemeTap };', ctx);
   return { ctx, toggles, calls, h: ctx.__h };
 }

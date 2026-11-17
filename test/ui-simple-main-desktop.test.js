@@ -167,11 +167,12 @@ test('More agents: no Primary agent means every agent shows and there is no cont
 
 test('More agents: wiring (localStorage MORE_KEY, one control after the primary group, guarded hooks)', () => {
   const sync = fnSrc('simpleAgentsSync');
-  assert.match(sync, /localStorage\.getItem\(hs\.MORE_KEY\) === '1'/);
+  assert.match(sync, /const open = simpleMoreOpen\(\);/);
+  assert.match(fnSrc('simpleMoreOpen'), /if \(simpleMoreMem !== null\) return simpleMoreMem;[\s\S]*localStorage\.getItem\(window\.hubSimple\.MORE_KEY\) === '1'/);
   assert.match(sync, /hs\.agentGroups\(AGENTS\)/);
   assert.match(sync, /prim\.after\(btn\)/);
   assert.match(sync, /More agents/);
-  assert.match(app, /localStorage\.setItem\(window\.hubSimple\.MORE_KEY, open \? '0' : '1'\)/);
+  assert.match(fnSrc('simpleMoreToggle'), /simpleMoreMem = !simpleMoreOpen\(\);[\s\S]*localStorage\.setItem\(window\.hubSimple\.MORE_KEY, simpleMoreMem \? '1' : '0'\)/);
   assert.match(app, /if \(typeof simpleAgentsSoon === 'function'\) simpleAgentsSoon\(\);/);
   assert.match(fnSrc('simpleScan'), /simpleAgentsSync\(\); simpleTopSync\(\);/);
   assert.match(fnSrc('simpleAgentsSync'), /if \(!simpleOn\(\)/);   // Advanced never runs it
