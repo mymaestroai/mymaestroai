@@ -303,3 +303,29 @@ test('the reasoning level refreshes on chat open, model pick change and agent li
 test('the chat-view switch is hidden in Simple', () => {
   assert.match(cssBlock, /html\.mm-simple \.chat-view-btn/);
 });
+
+test('r3: the "⏳ Thinking..." placeholder is found by its own text, not the play/copy glyphs, and hidden only in Simple', () => {
+  const i = app.indexOf("panels.querySelectorAll('.message.assistant').forEach");
+  assert.ok(i > 0);
+  const seg = app.slice(i, i + 900);
+  assert.match(seg, /msg-copy/); assert.match(seg, /msg-speak/); assert.match(seg, /msg-time/);   // those children are left out of the text
+  assert.match(seg, /own\.trim\(\) === '⏳ Thinking\.\.\.'/);
+  assert.match(seg, /classList\.toggle\('simple-wait', wait\)/);   // removed again when the real reply replaces it
+  const fn = app.lastIndexOf('function simpleScan()', i);
+  assert.ok(fn > 0 && /if \(!simpleOn\(\)\) return;/.test(app.slice(fn, i)));
+  assert.match(cssBlock, /html\.mm-simple \.message\.simple-wait \{ display: none; \}/);
+});
+
+test('r3: the play and copy buttons sit below a reply / beside a user bubble in Simple, never on the text', () => {
+  assert.match(cssBlock, /html\.mm-simple \.message > \.msg-copy, html\.mm-simple \.message > \.msg-speak \{[^}]*top: 100%[^}]*left: 0[^}]*opacity: 0/);
+  assert.match(cssBlock, /html\.mm-simple \.message\.user > \.msg-copy \{[^}]*right: calc\(100% \+ 4px\)/);
+  assert.match(cssBlock, /html\.mm-simple \.message:hover > \.msg-copy/);
+  assert.match(cssBlock, /@media \(hover: none\) \{ html\.mm-simple \.message\.assistant > \.msg-copy/);
+  assert.match(html, /\.message > \.msg-copy \{\s*\n?\s*position: absolute; top: 4px; right: 6px;/);   // Advanced rule unchanged
+});
+
+test('r3: while a turn runs, Interject and Cancel use the Simple colours (accent / neutral), both themes via variables', () => {
+  assert.match(cssBlock, /html\.mm-simple \.input-area \[id\^="send-"\]\[style\*="--warning"\] \{ background: #8b6fd6 !important; color: #fff !important; \}/);
+  assert.match(cssBlock, /html\.mm-simple \.chat-actions \[id\^="cancel-"\] \{ background: var\(--sm-raised\) !important; color: var\(--sm-sec\) !important; border: 1px solid var\(--sm-border\) !important/);
+  assert.match(app, /sendBtn\.style\.background = 'var\(--warning\)'/);   // the page's inline orange is what the selector matches
+});

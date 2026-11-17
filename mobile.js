@@ -6467,6 +6467,7 @@ function renderEntry(m, time = '') {
     const ij = interjectionView(m);   // an interjection: the person's words, then the note the live send shows
     setBubbleTime(addUserBubble(ij ? ij.text : m.content, savedImageUrls(m.images)), time);   // the pictures the line was sent with come back as bubble images
     if (ij) addNote(ij.emergency ? '🚨 emergency interjection' : '⤵ interjection').classList.add('interject');
+    if (ij && typeof simpleOn === 'function' && simpleOn()) { const ijNote = bubbleHost().lastElementChild; if (ijNote && ijNote.classList.contains('interject')) ijNote.classList.add('simple-auto-hide'); }   // Simple: a saved interjection is an ordinary user bubble, no note
   } else if (m.role === 'assistant') {
     const saved = Array.isArray(m.activity) && m.activity.length;
     const b = addAssistantBubble(saved ? undefined : m.content);

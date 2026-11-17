@@ -222,7 +222,9 @@
         el.classList.add('simple-auto'); el.setAttribute('data-note', st.label);
       });
       panels.querySelectorAll('.message.assistant').forEach(el => {   // the old "⏳ Thinking..." placeholder: the box above replaces it (CSS hides .simple-wait)
-        const wait = (el.textContent || '').trim() === '⏳ Thinking...';
+        let own = '';   // the message's own text: the play and copy buttons and the time line add glyphs to textContent
+        el.childNodes.forEach(n => { if (n.nodeType === 3 || !(n.classList && (n.classList.contains('msg-copy') || n.classList.contains('msg-speak') || n.classList.contains('msg-time')))) own += n.textContent || ''; });
+        const wait = own.trim() === '⏳ Thinking...';
         if (wait !== el.classList.contains('simple-wait')) el.classList.toggle('simple-wait', wait);
       });
       const cont = panels.querySelector('.chat-container.active');
