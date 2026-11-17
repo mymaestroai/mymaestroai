@@ -119,7 +119,7 @@ test('purgeCredentials script: removes, then checks again and exits 3 (still-pre
   fs.rmSync(d, { recursive: true, force: true });
 });
 
-test('ensure removes an old copy after a create, after a start every time, and for an already-running box once per process; a failing call never stops the turn', async () => {
+test('ensure removes an old copy after a create, after a start every time, and for an already-running box once per process; a failure rejects ensure with ECREDPURGE and is retried', async () => {
   const purges = (calls) => calls.filter(c => c[0] === 'exec' && c.some(a => String(a).includes('.credentials.json'))).length;
   // a new box: purged
   const a = rig(); await a.sb.ensure(agent);

@@ -95,9 +95,10 @@ test('wiring: admin route, Settings checklist, admin banner, Users page note, ch
   assert.match(users, /id="invite-readiness"/);
   assert.match(users, /fetch\('\/api\/readiness'/);
   const sdk = read('lib/sdk-chat.js');
-  assert.match(sdk, /function sandboxWithheldNotice\(\)[\s\S]*Install Docker Desktop for Mac[\s\S]*Setup checklist/);
-  assert.match(sdk, /if \(sandboxWithheld\) sendSSE\(res, makeChunk\(sandboxWithheldNotice\(\), sdkModel\)\);/);
-  assert.match(sdk, /if \(sseRes\) sendSSE\(sseRes, makeChunk\(sandboxWithheldNotice\(\), 'gateway'\)\);/, 'gateway agents are told too');
+  // security R2: the notice takes the reason the box was withheld (ECREDPURGE has its own text); the Docker notice is unchanged
+  assert.match(sdk, /function sandboxWithheldNotice\(code = null\)[\s\S]*Install Docker Desktop for Mac[\s\S]*Setup checklist/);
+  assert.match(sdk, /if \(sandboxWithheld\) sendSSE\(res, makeChunk\(sandboxWithheldNotice\(hands\.withheldCode\), sdkModel\)\);/);
+  assert.match(sdk, /if \(sseRes\) sendSSE\(sseRes, makeChunk\(sandboxWithheldNotice\(hands\.withheldCode\), 'gateway'\)\);/, 'gateway agents are told too');
 });
 
 test('agents on ChatGPT with Codex signed out: critical, with the command that fixes it; signed in or no such agents: quiet', async () => {

@@ -68,3 +68,27 @@ test('lib/sdk-chat.js: the SDK hook gets the hands\' directory (the workspace fo
   assert.ok(sdk.includes('gate.sdkHook({ agentName, cwd: hubHands ? hands.tools.cwd : process.cwd(), boxed: !!hands.sandboxed,'), 'cwd follows the hands');
   assert.ok(!sdk.includes('gate.sdkHook({ agentName, cwd: process.cwd()'), 'no longer the install root unconditionally');
 });
+
+// Review r2 (GPT-5.6): the turn's boxed flag must reach the policy on every path that runs hands in a box, not only the
+// Claude client's hook: the gateway pre-step and the Codex bridge's beforeCall (a temporary worker on those models runs
+// in its parent's box while its own record has no sandbox field).
+test('gateway and Codex paths pass the turn\'s boxed flag (and the hands\' folder) to the policy gate', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  assert.match(src, /handlers\.__boxed = !!hands\.sandboxed;/, 'the gateway handlers carry the turn\'s boxed flag');
+  assert.match(src, /gate\.check\(\{ agentName, tool: toolName, input: parsedArgs, cwd: \(handlers && handlers\.__cwd\) \|\| process\.cwd\(\), boxed: !!\(handlers && handlers\.__boxed\),/);
+  assert.match(src, /beforeCall: \(name, args\) => gate\.check\(\{ agentName, tool: name, input: args, cwd: hubHands \? hands\.tools\.cwd : cwd, boxed: !!hands\.sandboxed,/);
+  const checks = src.match(/gate\.check\(\{[^}]*\}/g) || [];
+  assert.ok(checks.length >= 2 && checks.every(c => /boxed:/.test(c)), `every gate.check in sdk-chat passes boxed: ${checks.length}`);
+});
+
+test('a box that may still hold an old sign-in copy gets its own notice, not the Docker one', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  const start = src.indexOf('function sandboxWithheldNotice(');
+  const body = src.slice(start, src.indexOf('\n}\n', start));
+  const f = new Function(`${body}\n}; return sandboxWithheldNotice;`)();
+  assert.match(f('ECREDPURGE'), /old copy of your Claude sign-in could not be removed/);
+  assert.doesNotMatch(f('ECREDPURGE'), /Install Docker/);
+  assert.match(f(null), /Docker or the sandbox image is missing/);
+  assert.match(src, /withheldCode = \(e && e\.code\) \|\| null;/);
+  assert.match(src, /sandboxWithheldNotice\(hands\.withheldCode\)/);
+});
