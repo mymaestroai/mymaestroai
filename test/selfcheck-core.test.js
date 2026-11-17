@@ -33,6 +33,7 @@ function harness(opts = {}) {
     h.turns.push(args);
     if (h.turnError) return { reply: '', error: h.turnError, errorKind: 'model' };
     if (h.errorKind) { if (opts.abortFirst) h.sc.stop(); return { reply: '', error: 'stopped', errorKind: h.errorKind }; }
+    if (opts.haltOnTurn && turnNo === opts.haltOnTurn) return { reply: '', error: 'halted', errorKind: 'halted' };
     if (opts.block) await opts.block;
     const { observe, prompt } = args;
     const steps = [];
@@ -90,7 +91,8 @@ function harness(opts = {}) {
     // an agent that wrote outside its folders
     if (opts.behave && opts.behave('outside', turnNo) === 'outside') { const p = path.join(hubRoot, 'workspaces', 'elsewhere.txt'); dec('Write', { file_path: p, content: 'x' }); res('Write', { file_path: p }, true, 'created'); }
     h.steps = steps;
-    if (opts.errorAfter) return { reply: reply.join('\n'), error: opts.errorAfter, errorKind: 'model' };   // the turn did its steps, then the provider failed
+    // the turn did its steps, then the provider failed: as in the hub, an errored turn brings back no reply
+    if (opts.errorAfter) return { reply: '', error: opts.errorAfter, errorKind: 'model' };
     return { reply: reply.join('\n'), error: null, errorKind: null };
   }
 
@@ -358,6 +360,78 @@ test('B2: a turn cut off by an error right after an allowed call does not call t
   const lr2 = await plain.sc.run({ trigger: 'manual' });
   assert.strictEqual(lr2.classes.host.status, 'fail');
   assert.match(lr2.classes.host.actions['write@install'].reason, /allowed it, but the Claude client refused it|allowed it, but the tool refused it/);
+});
+
+test('r2: a turn that broke off before its answer does not fail the picture step for want of digits', async () => {
+  // every step works, then the provider fails: the reply (and so the digits) never comes
+  const h = harness({ settings: { classes: ['host'] }, errorAfter: 'stream closed' });
+  const lr = await h.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr.classes.host.status, 'error', 'nothing settled failed');
+  assert.deepStrictEqual(h.pushes, []);
+  // ...but with a settled failure beside it, the picture step is left out, not listed as failed
+  const g = harness({ settings: { classes: ['host'] }, errorAfter: 'stream closed', behave: (kind) => (kind === 'grep@home' ? 'badtext' : undefined) });
+  const lr2 = await g.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr2.classes.host.status, 'fail');
+  assert.ok(!('image@install' in lr2.classes.host.actions) && !('image@home' in lr2.classes.host.actions));
+  assert.deepStrictEqual(Object.entries(lr2.classes.host.actions).filter(([, a]) => !a.ok).map(([k]) => k), ['grep@home']);
+});
+
+test('r2: an old failure stays until that same step is checked and passes; a run that never reached it keeps it (and its notice)', async () => {
+  // one harness; its options are read at run time, so the second run can behave differently
+  let phase = 1;
+  const o = { settings: { classes: ['host'] }, behave: (kind) => (phase === 1 ? (kind === 'grep@home' ? 'badtext' : undefined) : (kind === 'grep@home' ? 'skip' : kind === 'write@install' ? 'noresult' : undefined)) };
+  const h = harness(o);
+  await h.sc.run({ trigger: 'nightly' }); h.clock.t += 3600000;
+  const since0 = h.sc.stored().failingSince['host/grep@home'];
+  assert.ok(since0); assert.strictEqual(h.pushes.length, 1);
+  // next night: write@install fails, grep@home is never reached, then the provider fails
+  phase = 2; o.errorAfter = 'stream closed';
+  const lr = await h.sc.run({ trigger: 'nightly' });
+  assert.strictEqual(lr.classes.host.status, 'fail', 'write@install settled as failed');
+  assert.ok(!('grep@home' in lr.classes.host.actions), 'grep@home was not settled this time');
+  const st = h.sc.stored();
+  assert.strictEqual(st.failingSince['host/grep@home'], since0, 'never reached this time: still failing since the first time');
+  assert.ok(st.notified.includes('host/grep@home'), 'and still counted as told');
+  assert.strictEqual(h.pushes.length, 2, 'one new push, for write@install only');
+  assert.doesNotMatch(h.pushes[1].body, /search files outside/);
+  // a later run that checks read@home and passes ends it
+  phase = 3; o.errorAfter = null; o.behave = () => undefined;
+  await h.sc.run({ trigger: 'manual' });
+  assert.deepStrictEqual(h.sc.stored().failingSince, {});
+});
+
+test('r2: a read-only command on bash.txt after the scripted one does not fail the Bash step', async () => {
+  const { verifyClass, shellWritePaths } = L('verify.js');
+  const folders = { install: '/w/ws', home: '/w/home' };
+  const fx = { R: 'r', D: '1234', E: 'e', G: 'g', K: 'k', W: 'w', B: 'b0b0' };
+  const scriptedBash = { install: "printf %s b0b0 > '/w/ws/bash.txt'", home: "printf %s b0b0 > '/w/home/bash.txt'" };
+  const ev = [];
+  const both = (tool, input, text = '') => { ev.push({ type: 'decision', tool, input, decision: 'allow', rule: 'allow' }); ev.push({ type: 'result', tool, input, ok: true, text }); };
+  both('Bash', { command: scriptedBash.install });
+  both('Bash', { command: 'cat /w/ws/bash.txt' }, 'b0b0');
+  const v = verifyClass({ events: ev, reply: '', fixtures: { install: fx, home: fx }, folders, refusePath: '/w/rec/x.txt', scriptedBash, readFile: (p) => (p === '/w/ws/bash.txt' ? 'b0b0' : null), bashWritePaths: shellWritePaths });
+  assert.strictEqual(v.actions['bash@install'].ok, true, v.actions['bash@install'].reason);
+  // a second command that WRITES bash.txt still fails the step
+  const ev2 = [];
+  const both2 = (tool, input) => { ev2.push({ type: 'decision', tool, input, decision: 'allow', rule: 'allow' }); ev2.push({ type: 'result', tool, input, ok: true, text: '' }); };
+  both2('Bash', { command: scriptedBash.install });
+  both2('Bash', { command: 'echo other > /w/ws/bash.txt' });
+  const v2 = verifyClass({ events: ev2, reply: '', fixtures: { install: fx, home: fx }, folders, refusePath: '/w/rec/x.txt', scriptedBash, readFile: () => 'b0b0', bashWritePaths: shellWritePaths });
+  assert.strictEqual(v2.actions['bash@install'].ok, false);
+});
+
+test('r2: a halt during the retry keeps what the first turn already settled', async () => {
+  // turn 0: write@install fails (no result) and glob@home is skipped, so a retry follows; the retry is halted
+  const h = harness({ settings: { classes: ['host'] }, haltOnTurn: 1, behave: (kind) => (kind === 'glob@home' ? 'skip' : kind === 'write@install' ? 'noresult' : undefined) });
+  const lr = await h.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr.classes.host.status, 'fail');
+  assert.strictEqual(lr.classes.host.actions['write@install'].ok, false);
+  assert.match(lr.classes.host.note, /halted during the check/);
+  assert.strictEqual(h.pushes.length, 1);
+  // with nothing settled, the same halt is a plain skip
+  const g = harness({ settings: { classes: ['host'] }, haltOnTurn: 1, behave: (kind) => (kind === 'glob@home' ? 'skip' : undefined) });
+  const lr2 = await g.sc.run({ trigger: 'manual' });
+  assert.strictEqual(lr2.classes.host.status, 'skipped');
 });
 
 test('F2/F5: a halted turn, or an unavailable one after our own stop(), is skipped and never counts toward the streak; other errors still count', async () => {
