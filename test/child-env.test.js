@@ -171,7 +171,7 @@ test('sdk-chat: hands, the Claude client, the Codex client and jobs use childEnv
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(src, /const childEnv = require\('\.\/child-env'\)/);
   assert.match(src, /createHubTools\(\{[^\n]*env: childEnv\.envForAgent\(agent, \{ isLead: leadFor\(agentName\) \}\)/);
-  assert.match(src, /childEnv\.envForAgent\(hands\.agent, \{ base: require\('\.\/billing'\)\.clientEnvWithoutApiKey\(process\.env\), client: 'claude', isLead: leadFor\(agentName\), set: \{ CLAUDE_CODE_AUTO_COMPACT_WINDOW: String\(autoCompactWindow\) \} \}\)/);
+  assert.match(src, /childEnv\.envForAgent\(hands\.agent, \{ base: require\('\.\/billing'\)\.clientEnvWithoutApiKey\(process\.env\), client: 'claude', isLead: leadFor\(agentName\), set: \{ CLAUDE_CODE_AUTO_COMPACT_WINDOW: String\(autoCompactWindow\),/);
   assert.match(src, /const env = childEnv\.envForAgent\(hands\.agent, \{ base: codexBase, client: 'codex', isLead: leadFor\(agentName\) \}\)/);
   assert.ok(!/const env = \{ \.\.\.process\.env \};/.test(src), 'the old full copy at the Codex site is gone');
   assert.ok(/delete codexBase\.OPENAI_API_KEY; delete codexBase\.CODEX_API_KEY; delete codexBase\.OPENAI_BASE_URL;/.test(src));
@@ -230,7 +230,20 @@ test('leadCheck uses the owner-lead rule (admin-owned flagged leads only)', () =
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'child-env.js'), 'utf8');
   assert.match(src, /ag\.ownerLeadNames\(ag\.getAgentsSync\(\)\)\.includes\(agent\.name\)/);
   assert.ok(!/isLeadAgent/.test(src));
-  assert.strictEqual(ce.leadCheck()({ name: 'no-such-agent-zz' }), false);
+  // A stand-in agent list: this test never reads the install's own data/ (the suite's data guard refuses it).
+  const agentsPath = require.resolve('../lib/agents.js');
+  const saved = require.cache[agentsPath];
+  require.cache[agentsPath] = { id: agentsPath, filename: agentsPath, loaded: true, exports: {
+    getAgentsSync: () => [{ name: 'lead-a', lead: true }, { name: 'lead-m', lead: true, owner: 'member-1' }, { name: 'sam' }],
+    ownerLeadNames: (list) => list.filter(a => a.lead && !a.owner).map(a => a.name),
+  } };
+  try {
+    const isLead = ce.leadCheck();
+    assert.strictEqual(isLead({ name: 'lead-a' }), true);
+    assert.strictEqual(isLead({ name: 'lead-m' }), false, 'a member-owned lead is not a lead here');
+    assert.strictEqual(isLead({ name: 'sam' }), false);
+    assert.strictEqual(isLead({ name: 'no-such-agent-zz' }), false);
+  } finally { if (saved) require.cache[agentsPath] = saved; else delete require.cache[agentsPath]; }
 });
 
 test('sdk-chat: a temporary worker never gets the lead\'s environment, at every call site', () => {

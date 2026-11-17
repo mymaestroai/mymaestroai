@@ -93,13 +93,24 @@ test('get falls back to process.env; envView merges and is a copy', withStore(()
   } finally { delete process.env.SOME_TEST_TOKEN; }
 }));
 
-test('settings: a provider key held only in the store is found', withStore(() => {
-  hs.loadEnvFile(envFile(), { env: {} });
-  const settings = require('../lib/settings');
-  if (settings.get().providers?.openai?.apiKey) return;   // a saved key would win; not the case in a clean checkout
+// settings.js reads data/settings.json beside it: these tests require a throwaway copy (settings, hub-secrets, child-env),
+// never the install's own data/ (the suite's data guard refuses that).
+function settingsCopy() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-secrets-settings-'));
+  fs.mkdirSync(path.join(dir, 'lib')); fs.mkdirSync(path.join(dir, 'data'));
+  for (const f of ['settings.js', 'hub-secrets.js', 'child-env.js']) fs.copyFileSync(path.join(__dirname, '..', 'lib', f), path.join(dir, 'lib', f));
+  fs.writeFileSync(path.join(dir, 'data', 'settings.json'), '{}');
+  const log = console.log; console.log = () => {};
+  try { return { dir, settings: require(path.join(dir, 'lib', 'settings.js')), store: require(path.join(dir, 'lib', 'hub-secrets.js')) }; }
+  finally { console.log = log; }
+}
+
+test('settings: a provider key held only in the store is found', () => {
+  const { settings, store } = settingsCopy();
+  store.loadEnvFile(envFile(), { env: {} });
   assert.equal(settings.getProviderKey('openai'), 'sk-test-123');
   assert.equal(settings.keySource('openai'), 'environment');
-}));
+});
 
 test('bind-host: legacy auth held only in the store lets a network bind through', withStore(() => {
   const { resolveBindHost } = require('../lib/bind-host');
@@ -116,14 +127,15 @@ test('bind-host: legacy auth held only in the store lets a network bind through'
   } finally { if (before === undefined) delete process.env.HUB_BIND_HOST; else process.env.HUB_BIND_HOST = before; }
 }));
 
-test('readiness: legacyAuth sees the pair held only in the store', withStore(async () => {
-  const { getReadiness } = require('../lib/readiness');
-  const r0 = getReadiness({ hasUsers: () => true });
-  const ids = async () => (await r0.check()).items.map(i => i.id);
-  assert.equal((await ids()).includes('legacy-auth'), false);
-  hs.loadEnvFile(envFile(), { env: {} });
-  assert.equal((await ids()).includes('legacy-auth'), true);
-}));
+test('readiness and server read the legacy sign-in pair from the store (the singleton reads the real install, so a source check)', () => {
+  const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+  assert.match(read('lib/readiness.js'), /legacyAuth: \(\) => \(\(\) => \{ const hs = require\('\.\/hub-secrets'\); return !!\(hs\.get\('HUB_AUTH_USERNAME'\) && hs\.get\('HUB_AUTH_PASSWORD'\)\); \}\)\(\)/);
+  const srv = read('server.js');
+  assert.match(srv, /const AUTH_USERNAME = hubSecrets\.get\('HUB_AUTH_USERNAME'\) \|\| '';/);
+  assert.match(srv, /const AUTH_PASSWORD = hubSecrets\.get\('HUB_AUTH_PASSWORD'\) \|\| '';/);
+  assert.match(srv, /hubSecrets\.loadEnvFile\(path\.join\(__dirname, '\.env'\)\)/);
+  assert.ok(!/process\.env\[match\[1\]\] = match\[2\]/.test(srv), 'the old loader that put every .env value into process.env is gone');
+});
 
 test('welcome: the setup token held only in the store is the code', withStore(() => {
   hs.loadEnvFile(envFile(), { env: {} });
@@ -133,12 +145,12 @@ test('welcome: the setup token held only in the store is the code', withStore(()
   assert.equal(w.readToken(), 'setup-test-123');
 }));
 
-test('settings adoptEnvFileKeys sees HUB_KEEP_ENV_KEYS held in the store', withStore(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adopt-hs-'));
+test('settings adoptEnvFileKeys sees HUB_KEEP_ENV_KEYS held in the store', () => {
+  const { dir, settings, store } = settingsCopy();
   const f = path.join(dir, '.env');
   fs.writeFileSync(f, 'HUB_KEEP_ENV_KEYS=1\nOPENAI_API_KEY=sk-test-123\n');
-  hs.loadEnvFile(f, { env: {} });
-  const r = require('../lib/settings').adoptEnvFileKeys({ envFile: f });
+  store.loadEnvFile(f, { env: {} });
+  const r = settings.adoptEnvFileKeys({ envFile: f });
   assert.equal(r.kept, true);
   assert.equal(fs.readFileSync(f, 'utf8').includes('sk-test-123'), true, 'the file is left alone');
-}));
+});
