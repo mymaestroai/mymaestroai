@@ -138,6 +138,13 @@ test('client Write through a symlink: the real target is judged too; a link into
     assert.strictEqual(plain.hookSpecificOutput && plain.hookSpecificOutput.permissionDecision, 'allow', 'a plain path inside the roots: explicit allow');
     const rel = await hook(pre('Edit', { file_path: 'link/settings.json', old_string: 'a', new_string: 'b' }));
     assert.strictEqual(rel.decision, 'block', 'a relative path through the link: blocked too');
+    // Review r2 (GPT-5.6): a dangling link (its target does not exist yet) is refused, not judged by the path as written
+    fs.symlinkSync(path.join(tp.HUB_ROOT, 'data', 'not-there-yet.json'), path.join(root, 'dangling.json'));
+    const dangling = await hook(pre('Write', { file_path: path.join(root, 'dangling.json'), content: 'x' }));
+    assert.strictEqual(dangling.decision, 'block', 'a dangling link is refused');
+    fs.symlinkSync(path.join(root, 'nowhere-dir'), path.join(root, 'dangling-dir'));
+    const viaDir = await hook(pre('Write', { file_path: path.join(root, 'dangling-dir', 'x.txt'), content: 'x' }));
+    assert.strictEqual(viaDir.decision, 'block', 'a path through a dangling folder link is refused');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
